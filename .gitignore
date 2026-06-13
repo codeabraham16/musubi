@@ -11,6 +11,9 @@
 *.db-wal
 .musubi/memory.db
 
+# Artefactos de release (cross-compilados)
+dist/
+
 # Cobertura de tests
 coverage.out
 coverage.html

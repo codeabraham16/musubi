@@ -10,10 +10,38 @@ obligatorios; los embeddings son opcionales.
 
 ## Requisitos
 
-- Go 1.26+
 - (Opcional) [Ollama](https://ollama.com) local para búsqueda semántica.
+- Go 1.26+ solo si compilás desde fuente.
 
-## Build
+## Instalación
+
+### Una línea (binario precompilado)
+
+Windows (PowerShell):
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.ps1 | iex
+```
+
+Linux / macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.sh | bash
+```
+
+El instalador descarga el binario de la última release, lo deja en una carpeta de tu PATH y
+te queda el comando `musubi` disponible.
+
+> Repo privado: para que la descarga anónima funcione, las releases deben ser accesibles
+> públicamente. Si el repo es privado, instalá [gh CLI](https://cli.github.com) y autenticate
+> (`gh auth login`) — el instalador usa `gh` como fallback.
+
+### Doble clic (sin terminal)
+
+Copiá `musubi-setup.bat` (y, si no tenés `musubi` en el PATH, también `musubi.exe`) en la raíz
+de tu proyecto y hacé **doble clic**. Prepara el entorno en esa carpeta.
+
+### Desde fuente
 
 ```bash
 go build -o musubi ./cmd/musubi
