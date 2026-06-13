@@ -1,0 +1,9 @@
+name: go-rules
+description: "Reglas para desarrollo en Go"
+triggers:
+  - "*.go"
+capabilities:
+  - "go"
+rules: |
+  - Escribe código limpio aplicando principios SOLID.
+  - Asegura que go test pase antes de cada confirmación.

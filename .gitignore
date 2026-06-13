@@ -1,0 +1,21 @@
+# Binarios compilados (anclados a la raíz para no excluir cmd/musubi/)
+/musubi
+/musubi.exe
+/mcp-musubi
+/mcp-musubi.exe
+*.exe
+
+# Base de datos local de Musubi (estado runtime, no se versiona)
+*.db
+*.db-shm
+*.db-wal
+.musubi/memory.db
+
+# Cobertura de tests
+coverage.out
+coverage.html
+
+# Artefactos de editores / SO
+.DS_Store
+.idea/
+.vscode/
