@@ -13,4 +13,14 @@ const (
 
 	// ConfigFile es el nombre del archivo de configuración del workspace.
 	ConfigFile = "config.yaml"
+
+	// SentinelFile marca que las skills ya fueron auto-generadas para este proyecto.
+	// Vive en DirName/SkillsDir. Borrarlo manualmente permite re-generar.
+	SentinelFile = ".skills-generated"
+
+	// ClaudeDir es la carpeta de configuración de Claude Code en el proyecto.
+	ClaudeDir = ".claude"
+
+	// ClaudeSettingsFile es el archivo de settings (hooks) de Claude Code.
+	ClaudeSettingsFile = "settings.json"
 )
