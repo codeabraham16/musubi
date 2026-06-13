@@ -19,18 +19,39 @@ obligatorios; los embeddings son opcionales.
 go build -o musubi ./cmd/musubi
 ```
 
-## Uso
+## Uso rápido: inyectar en un proyecto
+
+Un solo comando deja cualquier proyecto listo con Musubi:
 
 ```bash
-# 1. Inicializar el workspace (crea .musubi/ con config.yaml y memory.db)
+cd mi-proyecto
+musubi setup
+```
+
+`musubi setup` inyecta todo de punta a punta:
+
+- Crea el workspace `.musubi/` (config + base de datos) en el proyecto.
+- Escribe un skill de arranque en `.musubi/skills/`.
+- Genera/mergea `.mcp.json` en la raíz, de modo que **Claude Code carga el servidor
+  `musubi` automáticamente** al abrir el proyecto (con su propia memoria vía `MUSUBI_HOME`).
+- Agrega `.musubi/memory.db` al `.gitignore`.
+
+Reabrí el proyecto en Claude Code y las herramientas `musubi_*` quedan disponibles. Es
+idempotente: respeta `.mcp.json`, skills y `.gitignore` existentes.
+
+## Uso manual
+
+```bash
+# Inicializar solo el workspace (crea .musubi/ con config.yaml y memory.db)
 musubi init
 
-# 2. Arrancar el daemon MCP sobre stdin/stdout
+# Arrancar el daemon MCP sobre stdin/stdout
 musubi daemon
 ```
 
 `musubi daemon` habla JSON-RPC 2.0 por stdin/stdout, listo para conectarse como servidor MCP
-desde Claude Code, Cursor u otro cliente.
+desde Claude Code, Cursor u otro cliente. Respeta la variable de entorno `MUSUBI_HOME` para
+fijar el directorio del workspace (por defecto, el directorio actual).
 
 ## Configuración (`.musubi/config.yaml`)
 
