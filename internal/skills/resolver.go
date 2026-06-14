@@ -73,15 +73,22 @@ func (r *Resolver) ResolveSkills(modifiedFiles []string) ([]Skill, error) {
 	return active, nil
 }
 
+// MatchGlob indica si file coincide con glob por nombre base o ruta completa.
+// Soporta los patrones de filepath.Match (*, ?, rangos de caracteres).
+// Un patrón inválido devuelve false sin hacer panic.
+func MatchGlob(glob, file string) bool {
+	base := filepath.Base(file)
+	mb, _ := filepath.Match(glob, base)
+	mp, _ := filepath.Match(glob, file)
+	return mb || mp
+}
+
 // matchTriggers comprueba si alguno de los archivos coincide con los globs declarados en la skill.
 func (r *Resolver) matchTriggers(skill Skill, files []string) bool {
 	for _, file := range files {
-		base := filepath.Base(file)
 		for _, trigger := range skill.Triggers {
-			// Soporta matching tanto por nombre de archivo base como ruta completa
-			matchedBase, _ := filepath.Match(trigger, base)
-			matchedPath, _ := filepath.Match(trigger, file)
-			if matchedBase || matchedPath {
+			// Delega en MatchGlob para mantener una única implementación de glob.
+			if MatchGlob(trigger, file) {
 				return true
 			}
 		}
