@@ -162,6 +162,159 @@ func TestIsApplicableCapabilityAusente(t *testing.T) {
 	}
 }
 
+// TestIsApplicableDepSubstringNoMatch verifica que el matching de deps es por
+// igualdad exacta (case-insensitive), NO por substring. Una entrada que requiere
+// "react" NO debe aplicar a un proyecto cuyas deps son "react-native"/"react-dom"
+// (no contiene "react" exacta). Esto previene falsos positivos.
+func TestIsApplicableDepSubstringNoMatch(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "react-skill",
+		Stacks:   []string{"Node.js"},
+		Deps:     []string{"react"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/react.md",
+	}
+
+	stacks := []detector.StackResult{{Ecosystem: "Node.js"}}
+	// El proyecto NO tiene "react" exacta, solo variantes hifenadas.
+	deps := map[string][]string{"Node.js": {"react-native", "react-dom"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if ok {
+		t.Errorf("esperaba IsApplicable=false (dep 'react' no presente exacta), obtuve true; evidencia: %+v", ev)
+	}
+}
+
+// TestIsApplicableDepExactMatch verifica que cuando la dep exacta sí está presente
+// la entrada aplica y MatchedDeps reporta la dep coincidente.
+func TestIsApplicableDepExactMatch(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "react-skill",
+		Stacks:   []string{"Node.js"},
+		Deps:     []string{"react"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/react.md",
+	}
+
+	stacks := []detector.StackResult{{Ecosystem: "Node.js"}}
+	deps := map[string][]string{"Node.js": {"react", "react-dom"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if !ok {
+		t.Fatalf("esperaba IsApplicable=true (dep 'react' presente exacta), obtuve false; evidencia: %+v", ev)
+	}
+	if len(ev.MatchedDeps) != 1 || ev.MatchedDeps[0] != "react" {
+		t.Errorf("MatchedDeps: esperaba [\"react\"], obtuve %v", ev.MatchedDeps)
+	}
+}
+
+// TestIsApplicableScopedDepNoSubstring verifica el caso "tailwindcss" contra
+// "@tailwindcss/vite": substring coincidiría (falso positivo), igualdad exacta no.
+func TestIsApplicableScopedDepNoSubstring(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "tailwind-skill",
+		Stacks:   []string{"Node.js"},
+		Deps:     []string{"tailwindcss"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/tw.md",
+	}
+
+	stacks := []detector.StackResult{{Ecosystem: "Node.js"}}
+	deps := map[string][]string{"Node.js": {"@tailwindcss/vite"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if ok {
+		t.Errorf("esperaba IsApplicable=false ('tailwindcss' != '@tailwindcss/vite'), obtuve true; evidencia: %+v", ev)
+	}
+}
+
+// TestIsApplicableGoModulePathExact verifica que una ruta de módulo Go completa
+// coincide por igualdad exacta.
+func TestIsApplicableGoModulePathExact(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "pq-skill",
+		Stacks:   []string{"Go"},
+		Deps:     []string{"github.com/lib/pq"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/pq.md",
+	}
+
+	stacks := []detector.StackResult{{Ecosystem: "Go"}}
+	deps := map[string][]string{"Go": {"github.com/lib/pq"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if !ok {
+		t.Fatalf("esperaba IsApplicable=true (módulo Go exacto), obtuve false; evidencia: %+v", ev)
+	}
+	if len(ev.MatchedDeps) != 1 || ev.MatchedDeps[0] != "github.com/lib/pq" {
+		t.Errorf("MatchedDeps: esperaba [\"github.com/lib/pq\"], obtuve %v", ev.MatchedDeps)
+	}
+}
+
+// TestIsApplicableNoCrossEcosystemFallback verifica que NO hay fallback
+// cross-ecosistema: una entrada Node.js con dep "react" NO debe coincidir si el
+// proyecto solo tiene esa dep bajo el ecosistema Python.
+func TestIsApplicableNoCrossEcosystemFallback(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "react-skill",
+		Stacks:   []string{"Node.js"},
+		Deps:     []string{"react"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/react.md",
+	}
+
+	// El proyecto detecta Node.js (para pasar el paso 1) pero las deps de Node.js
+	// están ausentes; "react" solo existe bajo Python. No debe haber fallback.
+	stacks := []detector.StackResult{{Ecosystem: "Node.js"}}
+	deps := map[string][]string{"Python": {"react-something"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if ok {
+		t.Errorf("esperaba IsApplicable=false (sin fallback cross-ecosistema), obtuve true; evidencia: %+v", ev)
+	}
+}
+
+// TestIsApplicableDepCaseInsensitive verifica que la igualdad de deps es
+// case-insensitive: entry "React" coincide con project "react".
+func TestIsApplicableDepCaseInsensitive(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "main.go"), "package main")
+
+	entrada := CatalogEntry{
+		ID:       "react-skill",
+		Stacks:   []string{"Node.js"},
+		Deps:     []string{"React"},
+		Triggers: []string{"*.go"},
+		RulesURL: "https://example.com/react.md",
+	}
+
+	stacks := []detector.StackResult{{Ecosystem: "Node.js"}}
+	deps := map[string][]string{"Node.js": {"react"}}
+
+	ok, ev := IsApplicable(entrada, root, deps, stacks)
+	if !ok {
+		t.Fatalf("esperaba IsApplicable=true (igualdad case-insensitive), obtuve false; evidencia: %+v", ev)
+	}
+	if len(ev.MatchedDeps) != 1 || ev.MatchedDeps[0] != "react" {
+		t.Errorf("MatchedDeps: esperaba [\"react\"], obtuve %v", ev.MatchedDeps)
+	}
+}
+
 // TestIsApplicableWalkOmiteDirectoriosRuidosos verifica que el bounded walk
 // no visita node_modules, .git, vendor ni archivos a profundidad > depthCap.
 func TestIsApplicableWalkOmiteDirectoriosRuidosos(t *testing.T) {
