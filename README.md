@@ -62,10 +62,36 @@ musubi setup
 - Escribe un skill de arranque en `.musubi/skills/`.
 - Genera/mergea `.mcp.json` en la raíz, de modo que **Claude Code carga el servidor
   `musubi` automáticamente** al abrir el proyecto (con su propia memoria vía `MUSUBI_HOME`).
+- Inyecta un **hook `SessionStart`** en `.claude/settings.json` para el auto-descubrimiento
+  de skills (ver sección siguiente).
 - Agrega `.musubi/memory.db` al `.gitignore`.
 
 Reabrí el proyecto en Claude Code y las herramientas `musubi_*` quedan disponibles. Es
-idempotente: respeta `.mcp.json`, skills y `.gitignore` existentes.
+idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json` existentes.
+
+## Auto-descubrimiento de skills
+
+Al abrir el proyecto por primera vez en Claude Code, Musubi detecta automáticamente el
+stack tecnológico y genera skills personalizadas sin que debas escribir YAML manualmente.
+
+**Flujo completo:**
+
+1. `musubi setup` inyecta en `.claude/settings.json` un hook `SessionStart` que ejecuta
+   `musubi detect --hook-mode` al inicio de cada sesión.
+2. Al abrir el proyecto, Claude Code ejecuta ese hook. Si el sentinel
+   `.musubi/skills/.skills-generated` **no existe**, el hook emite instrucciones JSON
+   que Claude recibe como contexto adicional.
+3. Claude llama a `musubi_detect_stack` (detecta ecosistemas y frameworks inspeccionando
+   manifests: `go.mod`, `package.json`, `Cargo.toml`, etc.).
+4. Claude investiga la documentación **oficial** del stack detectado (`pkg.go.dev`,
+   `react.dev`, `docs.python.org`, etc.) y sintetiza reglas.
+5. Claude **confirma las reglas con el usuario** antes de guardar.
+6. Por cada skill aprobada, Claude llama a `musubi_save_skill`, que escribe el archivo
+   `.musubi/skills/{name}.yaml` y el sentinel. A partir de ahí el hook es silencioso
+   (no vuelve a disparar hasta que borres el sentinel).
+
+**Para regenerar las skills:** borrar `.musubi/skills/.skills-generated` y reabrir
+el proyecto.
 
 ## Uso manual
 
@@ -73,9 +99,22 @@ idempotente: respeta `.mcp.json`, skills y `.gitignore` existentes.
 # Inicializar solo el workspace (crea .musubi/ con config.yaml y memory.db)
 musubi init
 
+# Detectar el stack del proyecto (imprime JSON en stdout)
+musubi detect
+
+# Modo hook interno (usado por Claude Code al iniciar sesión)
+musubi detect --hook-mode
+
 # Arrancar el daemon MCP sobre stdin/stdout
 musubi daemon
 ```
+
+`musubi detect` inspecciona el directorio actual (o `MUSUBI_HOME`) y devuelve un JSON con
+los ecosistemas y frameworks detectados. Es de solo lectura: no crea ni modifica archivos.
+
+`musubi detect --hook-mode` es el modo que Claude Code invoca automáticamente al abrir el
+proyecto. Si el sentinel `.musubi/skills/.skills-generated` existe, no produce output (silencioso).
+Si no existe, emite el JSON de guía para que Claude inicie el flujo de auto-descubrimiento.
 
 `musubi daemon` habla JSON-RPC 2.0 por stdin/stdout, listo para conectarse como servidor MCP
 desde Claude Code, Cursor u otro cliente. Respeta la variable de entorno `MUSUBI_HOME` para
@@ -116,6 +155,8 @@ ollama pull nomic-embed-text
 | `musubi_log_error` | Registra un error de compilación/test para telemetría. |
 | `musubi_resolve_telemetry` | Marca un log de telemetría como resuelto (`id`). |
 | `musubi_resolve_skills` | Resuelve skills activas según `modified_files` + telemetría sin resolver. |
+| `musubi_detect_stack` | Detecta el stack del proyecto (ecosistemas + frameworks) inspeccionando manifests. Sin parámetros. |
+| `musubi_save_skill` | Guarda una skill generada como `{name}.yaml` en `.musubi/skills/` y crea el sentinel. Requiere `name`, `triggers`, `rules`. Parámetro opcional `overwrite` (por defecto `false`). |
 
 ## Tests
 
@@ -127,12 +168,14 @@ go test -race ./...      # con detector de carreras (como en CI)
 ## Arquitectura
 
 ```
-cmd/musubi/        # CLI: init, daemon
+cmd/musubi/        # CLI: setup, detect, init, daemon
 internal/
+  bootstrap/       # inyección: MergeMCPServer + MergeClaudeSettings (hooks)
   config/          # constantes de rutas + carga de config.yaml
+  detector/        # DetectStack: inspección de manifests sin deps externas
   embedding/       # Provider (interfaz) + Ollama + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 y herramientas
+  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP
   memory/          # SQLite: observaciones, embeddings, FTS5, telemetría, vectores
   skills/          # resolver dinámico de skills (triggers + capabilities)
 ```
