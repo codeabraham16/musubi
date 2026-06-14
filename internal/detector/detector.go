@@ -115,7 +115,30 @@ var detectores = []detectorDef{
 	},
 }
 
-// DetectStack inspecciona root y devuelve los ecosistemas detectados.
+// maxDepth es la profundidad máxima (relativa a root) que el walk recursivo
+// explora al buscar manifests en un monorepo. root está a profundidad 0.
+const maxDepth = 4
+
+// dirsExcluidos son los directorios que el walk recursivo nunca desciende.
+// Mantenerlos fuera del recorrido evita explosión de costo (node_modules, etc.)
+// y resultados ruidosos (dependencias vendoreadas, artefactos de build).
+var dirsExcluidos = map[string]bool{
+	"node_modules": true,
+	"vendor":       true,
+	".git":         true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	"__pycache__":  true,
+	".musubi":      true,
+}
+
+// DetectStack inspecciona root (y sus subdirectorios, hasta maxDepth) y devuelve
+// los ecosistemas detectados. Es RECURSIVO: en un monorepo sin manifest en la
+// raíz pero con manifests en subdirectorios (ej. admin/package.json,
+// backend/go.mod) produce un StackResult por cada directorio con manifest, con
+// ManifestPath RELATIVO a root. Un paquete único en la raíz conserva el
+// comportamiento original (ManifestPath == "go.mod", etc.).
 // NUNCA es fatal: errores de parseo de un manifest se degradan a un StackResult
 // mínimo (solo ecosystem+manifest) y se loguean con logx.Warn.
 // error != nil solo para fallos sistémicos (root inaccesible).
@@ -129,10 +152,60 @@ func DetectStack(root string) ([]StackResult, error) {
 
 	var resultados []StackResult
 
+	// Recorrer root y subdirectorios (hasta maxDepth), detectando en cada uno.
+	caminarDirectorios(root, func(dir string, depth int) {
+		resultados = append(resultados, detectarEnDirectorio(root, dir)...)
+	})
+
+	// Garantizar slice no-nil para proyectos sin manifests conocidos.
+	if resultados == nil {
+		return []StackResult{}, nil
+	}
+	return resultados, nil
+}
+
+// caminarDirectorios recorre dir y sus subdirectorios hasta maxDepth (relativo a
+// dir, que está a profundidad 0), invocando fn por cada directorio visitado
+// (incluido dir mismo). Omite los directorios de dirsExcluidos sin descender en
+// ellos. El skip-list + maxDepth mantienen el recorrido barato.
+func caminarDirectorios(dir string, fn func(dir string, depth int)) {
+	var recorrer func(actual string, depth int)
+	recorrer = func(actual string, depth int) {
+		fn(actual, depth)
+		if depth >= maxDepth {
+			return
+		}
+		entradas, err := os.ReadDir(actual)
+		if err != nil {
+			// Directorio ilegible: degradar silenciosamente, no es fatal.
+			return
+		}
+		for _, e := range entradas {
+			if !e.IsDir() {
+				continue
+			}
+			nombre := e.Name()
+			if dirsExcluidos[nombre] {
+				continue
+			}
+			recorrer(filepath.Join(actual, nombre), depth+1)
+		}
+	}
+	recorrer(dir, 0)
+}
+
+// detectarEnDirectorio aplica todos los detectores a un único directorio dir y
+// devuelve los StackResult encontrados. El ManifestPath se expresa relativo a
+// root (ej. "admin/package.json"); para dir == root queda solo el nombre del
+// manifest (ej. "go.mod"), preservando el comportamiento original.
+func detectarEnDirectorio(root, dir string) []StackResult {
+	var resultados []StackResult
+
 	for _, det := range detectores {
 		// .NET es un caso especial: usa glob para encontrar *.csproj/*.fsproj.
 		if det.ecosystem == ".NET" {
-			if r, ok := detectarDotNet(root); ok {
+			if r, ok := detectarDotNet(dir); ok {
+				r.ManifestPath = rutaRelativaManifest(root, dir, r.ManifestPath)
 				resultados = append(resultados, r)
 			}
 			continue
@@ -140,22 +213,24 @@ func DetectStack(root string) ([]StackResult, error) {
 
 		// Para el resto de ecosistemas, probar cada manifest en orden.
 		for _, manifest := range det.manifests {
-			candidato := filepath.Join(root, manifest)
+			candidato := filepath.Join(dir, manifest)
 			info, err := os.Stat(candidato)
 			if err != nil {
 				// Manifest no existe: probar el siguiente.
 				continue
 			}
 
+			rutaRel := rutaRelativaManifest(root, dir, manifest)
+
 			if info.IsDir() {
 				// El manifest es un directorio (no un archivo): degradar sin error.
 				logx.Warn("manifest es un directorio, se omite el parseo",
-					"ecosistema", det.ecosystem, "manifest", manifest)
+					"ecosistema", det.ecosystem, "manifest", rutaRel)
 				// Agregar resultado mínimo para indicar presencia detectada.
 				resultados = append(resultados, StackResult{
 					Ecosystem:    det.ecosystem,
 					Frameworks:   nil,
-					ManifestPath: manifest,
+					ManifestPath: rutaRel,
 					ModuleName:   "",
 				})
 				break
@@ -164,11 +239,11 @@ func DetectStack(root string) ([]StackResult, error) {
 			data, err := os.ReadFile(candidato)
 			if err != nil {
 				logx.Warn("no se pudo leer el manifest, se usa resultado mínimo",
-					"ecosistema", det.ecosystem, "manifest", manifest, "error", err)
+					"ecosistema", det.ecosystem, "manifest", rutaRel, "error", err)
 				resultados = append(resultados, StackResult{
 					Ecosystem:    det.ecosystem,
 					Frameworks:   nil,
-					ManifestPath: manifest,
+					ManifestPath: rutaRel,
 					ModuleName:   "",
 				})
 				break
@@ -178,18 +253,26 @@ func DetectStack(root string) ([]StackResult, error) {
 			resultados = append(resultados, StackResult{
 				Ecosystem:    det.ecosystem,
 				Frameworks:   frameworks,
-				ManifestPath: manifest,
+				ManifestPath: rutaRel,
 				ModuleName:   moduleName,
 			})
 			break // Solo se usa el primer manifest encontrado por ecosistema.
 		}
 	}
 
-	// Garantizar slice no-nil para proyectos sin manifests conocidos.
-	if resultados == nil {
-		return []StackResult{}, nil
+	return resultados
+}
+
+// rutaRelativaManifest construye el ManifestPath relativo a root para un manifest
+// ubicado en dir. Si dir == root, devuelve solo el nombre del manifest
+// (comportamiento original); de lo contrario, prefija la ruta relativa del
+// subdirectorio (ej. "admin/package.json").
+func rutaRelativaManifest(root, dir, manifest string) string {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." {
+		return manifest
 	}
-	return resultados, nil
+	return filepath.Join(rel, manifest)
 }
 
 // detectarDotNet busca archivos *.csproj o *.fsproj en el root.

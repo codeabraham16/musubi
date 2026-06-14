@@ -24,10 +24,15 @@ type depsCacheEntry struct {
 // de manifest principal. Evita re-parsear manifests sin cambios en sucesivas llamadas.
 var depsCache sync.Map
 
-// ExtractDeps inspecciona root y devuelve un mapa de ecosystem→[]rawDepKey.
+// ExtractDeps inspecciona root (y sus subdirectorios, hasta maxDepth) y devuelve
+// un mapa de ecosystem→[]rawDepKey. Es RECURSIVO/AGREGADO: en un monorepo parsea
+// cada manifest encontrado y hace la UNIÓN deduplicada de las deps por ecosistema.
+// Un paquete único en la raíz conserva el comportamiento original.
 // Es best-effort y nunca fatal: manifests ausentes o malformados generan logx.Warn
 // y producen un slice vacío para ese ecosistema.
 // El único error posible es cuando root es inaccesible.
+// Omite los directorios de dirsExcluidos (node_modules, vendor, etc.) sin descender,
+// lo que mantiene el recorrido barato.
 func ExtractDeps(root string) (map[string][]string, error) {
 	// Verificar que el directorio raíz sea accesible
 	if _, err := os.ReadDir(root); err != nil {
@@ -36,25 +41,26 @@ func ExtractDeps(root string) (map[string][]string, error) {
 
 	resultado := make(map[string][]string)
 
-	// Go: go.mod
-	if goDeps := extraerDepsGo(root); goDeps != nil {
-		resultado["Go"] = goDeps
+	// agregar hace la unión deduplicada de deps en el ecosistema dado.
+	agregar := func(ecosistema string, deps []string) {
+		if deps == nil {
+			return
+		}
+		actual := resultado[ecosistema]
+		for _, d := range deps {
+			actual = appendIfMissing(actual, d)
+		}
+		resultado[ecosistema] = actual
 	}
 
-	// Node.js: package.json
-	if nodeDeps := extraerDepsNode(root); nodeDeps != nil {
-		resultado["Node.js"] = nodeDeps
-	}
-
-	// Python: requirements.txt o pyproject.toml
-	if pyDeps := extraerDepsPython(root); pyDeps != nil {
-		resultado["Python"] = pyDeps
-	}
-
-	// Rust: Cargo.toml
-	if rustDeps := extraerDepsRust(root); rustDeps != nil {
-		resultado["Rust"] = rustDeps
-	}
+	// Recorrer root y subdirectorios (hasta maxDepth), agregando por directorio.
+	// Cada extractor por ecosistema conserva su caché por archivo (mtime).
+	caminarDirectorios(root, func(dir string, depth int) {
+		agregar("Go", extraerDepsGo(dir))
+		agregar("Node.js", extraerDepsNode(dir))
+		agregar("Python", extraerDepsPython(dir))
+		agregar("Rust", extraerDepsRust(dir))
+	})
 
 	return resultado, nil
 }
