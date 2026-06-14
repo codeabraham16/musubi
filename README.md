@@ -15,12 +15,25 @@ obligatorios; los embeddings son opcionales.
 
 ## Instalación
 
-### Una línea (binario precompilado)
+El instalador te deja **elegir el alcance**:
+
+- **Local al repo**: el binario queda en `<repo>/.musubi/bin/`, el `.mcp.json` apunta ahí y
+  **no se toca el PATH ni la PC**. Borrás la carpeta `.musubi/` y no queda rastro. Ideal para
+  probar Musubi sin "infectar" tu máquina.
+- **Global**: el binario va al PATH del usuario (sin admin); después usás `musubi setup` en
+  cualquier otro repo.
+
+### Doble clic (Windows, sin terminal) — recomendado
+
+Descargá **`install.bat`**, copialo en la raíz de tu repo y hacé **doble clic**. Te pregunta
+`[L]` local o `[G]` global, baja el binario de la última release y deja todo listo.
+
+### Una línea (interactivo: pregunta local/global)
 
 Windows (PowerShell):
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.ps1 | iex
+irm -useb https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.ps1 | iex
 ```
 
 Linux / macOS:
@@ -29,17 +42,25 @@ Linux / macOS:
 curl -fsSL https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.sh | bash
 ```
 
-El instalador descarga el binario de la última release, lo deja en una carpeta de tu PATH y
-te queda el comando `musubi` disponible.
+No interactivo (elegís el alcance por variable):
+
+```powershell
+$env:MUSUBI_SCOPE='global'; irm -useb .../scripts/install.ps1 | iex   # o 'local'
+```
+```bash
+curl -fsSL .../scripts/install.sh | MUSUBI_SCOPE=local bash           # o global
+```
+
+Variables reconocidas por el instalador: `MUSUBI_SCOPE` (local|global), `MUSUBI_DIR` (carpeta
+del proyecto), `MUSUBI_NOSETUP=1` (no correr setup), `MUSUBI_BINARY` (usar un binario ya
+descargado en vez de bajarlo).
 
 > Repo privado: para que la descarga anónima funcione, las releases deben ser accesibles
 > públicamente. Si el repo es privado, instalá [gh CLI](https://cli.github.com) y autenticate
 > (`gh auth login`) — el instalador usa `gh` como fallback.
 
-### Doble clic (sin terminal)
-
-Copiá `musubi-setup.bat` (y, si no tenés `musubi` en el PATH, también `musubi.exe`) en la raíz
-de tu proyecto y hacé **doble clic**. Prepara el entorno en esa carpeta.
+> `musubi-setup.bat` sigue disponible para el caso "ya tengo el binario y solo quiero correr
+> `setup` en este repo" (no instala nada, solo prepara el entorno).
 
 ### Desde fuente
 
