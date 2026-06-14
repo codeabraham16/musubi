@@ -46,10 +46,13 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 }
 
 type McpServer struct {
-	engine   *memory.DbEngine
-	resolver *skills.Resolver
-	embedder embedding.Provider
-	out      io.Writer
+	engine      *memory.DbEngine
+	resolver    *skills.Resolver
+	embedder    embedding.Provider
+	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
+	// La usan los handlers de detect_stack y save_skill para resolver rutas.
+	projectPath string
+	out         io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -59,10 +62,11 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		embedder = embedding.NoopProvider{}
 	}
 	return &McpServer{
-		engine:   engine,
-		resolver: skills.NewResolver(projectPath),
-		embedder: embedder,
-		out:      os.Stdout,
+		engine:      engine,
+		resolver:    skills.NewResolver(projectPath),
+		embedder:    embedder,
+		projectPath: projectPath,
+		out:         os.Stdout,
 	}
 }
 
