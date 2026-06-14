@@ -83,15 +83,68 @@ stack tecnológico y genera skills personalizadas sin que debas escribir YAML ma
    que Claude recibe como contexto adicional.
 3. Claude llama a `musubi_detect_stack` (detecta ecosistemas y frameworks inspeccionando
    manifests: `go.mod`, `package.json`, `Cargo.toml`, etc.).
-4. Claude investiga la documentación **oficial** del stack detectado (`pkg.go.dev`,
-   `react.dev`, `docs.python.org`, etc.) y sintetiza reglas.
-5. Claude **confirma las reglas con el usuario** antes de guardar.
-6. Por cada skill aprobada, Claude llama a `musubi_save_skill`, que escribe el archivo
+4. Claude llama a `musubi_search_skills` para obtener candidatas del catálogo curado,
+   ya pre-filtradas por relevancia técnica (stack, deps y triggers). Evalúa valor, rankea
+   y descarta las redundantes con skills existentes.
+5. Claude investiga la documentación **oficial** del stack detectado (`pkg.go.dev`,
+   `react.dev`, `docs.python.org`, etc.) y sintetiza reglas. Para skills del catálogo,
+   descarga `rules_url` para obtener las reglas completas.
+6. Claude **confirma las reglas con el usuario** antes de guardar.
+7. Por cada skill aprobada, Claude llama a `musubi_save_skill`, que escribe el archivo
    `.musubi/skills/{name}.yaml` y el sentinel. A partir de ahí el hook es silencioso
    (no vuelve a disparar hasta que borres el sentinel).
+8. (Opcional) Claude registra sus decisiones sobre las candidatas del catálogo llamando a
+   `musubi_log_skill_decision` (accepted / rejected con razón).
 
 **Para regenerar las skills:** borrar `.musubi/skills/.skills-generated` y reabrir
 el proyecto.
+
+## Sourcing de skills (catálogo)
+
+Musubi incluye un catálogo curado de skills que Claude consulta automáticamente para
+proponer reglas relevantes para tu proyecto.
+
+### Cómo funciona
+
+1. Al inicio del flujo de auto-descubrimiento, Claude llama a `musubi_search_skills`
+   (sin parámetros). Musubi descarga el catálogo, aplica un **gate de aplicabilidad duro**
+   y devuelve solo las candidatas que pasan los cuatro filtros:
+   - **Stack**: el ecosistema de la entrada coincide con el stack detectado (`Go`, `Node.js`, `Python`, etc.).
+   - **Deps**: si la entrada tiene deps declaradas, al menos una está presente en los manifests del proyecto.
+   - **Triggers**: al menos un archivo del proyecto coincide con los globs de la entrada.
+   - **Capabilities**: todas las herramientas declaradas en `capabilities` están en el PATH.
+2. Claude evalúa el **valor** de cada candidata (no la relevancia — eso lo hizo el gate).
+   Ordena por valor, descarta las redundantes con skills ya guardadas.
+3. Para las skills seleccionadas, Claude descarga `rules_url` para leer las reglas completas.
+4. Claude confirma las rules con el usuario antes de guardar con `musubi_save_skill`.
+
+### Configuración
+
+Las claves de sourcing viven en `.musubi/config.yaml`:
+
+```yaml
+sourcing:
+  enabled: true                   # activar / desactivar el sourcing
+  catalog_url: https://raw.githubusercontent.com/codeabraham16/musubi/main/catalog/index.json
+  max_candidates: 20              # máximo de candidatas retornadas por musubi_search_skills
+  cache_seconds: 3600             # reservado para futura caché persistente
+```
+
+Para apuntar a un catálogo propio:
+
+```yaml
+sourcing:
+  catalog_url: https://raw.githubusercontent.com/mi-org/mi-repo/main/catalog/index.json
+```
+
+El catálogo debe ser un JSON con el esquema `{ "catalog_version": 1, "entries": [...] }`.
+Ver `catalog/index.json` en este repositorio como referencia.
+
+### Catálogo incluido
+
+El repositorio incluye un catálogo seed en `catalog/index.json` con entradas para los
+stacks más comunes: Go, React, Next.js, Vue, Express, TypeScript, Python, Django,
+FastAPI, Rust y Docker. Cada entrada apunta a la documentación oficial del ecosistema.
 
 ## Uso manual
 
@@ -147,6 +200,8 @@ ollama pull nomic-embed-text
 
 ## Herramientas MCP
 
+El servidor expone 10 herramientas:
+
 | Herramienta | Descripción |
 |-------------|-------------|
 | `musubi_save_observation` | Guarda una observación (`topic_key`, `content`, `id` opcional). Si hay embeddings, indexa para búsqueda semántica. |
@@ -157,6 +212,8 @@ ollama pull nomic-embed-text
 | `musubi_resolve_skills` | Resuelve skills activas según `modified_files` + telemetría sin resolver. |
 | `musubi_detect_stack` | Detecta el stack del proyecto (ecosistemas + frameworks) inspeccionando manifests. Sin parámetros. |
 | `musubi_save_skill` | Guarda una skill generada como `{name}.yaml` en `.musubi/skills/` y crea el sentinel. Requiere `name`, `triggers`, `rules`. Parámetro opcional `overwrite` (por defecto `false`). |
+| `musubi_search_skills` | Descarga el catálogo de skills, aplica el gate de aplicabilidad duro y devuelve candidatas relevantes para el proyecto. Parámetros opcionales: `query` (texto libre), `stack` (filtro de ecosistema), `limit` (número máximo). |
+| `musubi_log_skill_decision` | Registra la decisión de Claude sobre una candidata del catálogo. Parámetros: `skill_id` (requerido), `decision` (`accepted` \| `rejected`, requerido), `name`, `reason` (opcionales). |
 
 ## Tests
 
@@ -169,15 +226,18 @@ go test -race ./...      # con detector de carreras (como en CI)
 
 ```
 cmd/musubi/        # CLI: setup, detect, init, daemon
+catalog/
+  index.json       # catálogo seed de skills curadas (13 entradas, docs oficiales)
 internal/
   bootstrap/       # inyección: MergeMCPServer + MergeClaudeSettings (hooks)
-  config/          # constantes de rutas + carga de config.yaml
-  detector/        # DetectStack: inspección de manifests sin deps externas
+  config/          # constantes de rutas + carga de config.yaml + SourcingConfig
+  detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider (interfaz) + Ollama + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP
-  memory/          # SQLite: observaciones, embeddings, FTS5, telemetría, vectores
-  skills/          # resolver dinámico de skills (triggers + capabilities)
+  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP (10 tools)
+  memory/          # SQLite: observaciones, embeddings, FTS5, telemetría, skill_decisions
+  skills/          # resolver dinámico de skills (triggers + capabilities + MatchGlob)
+  skillsource/     # catálogo HTTP: FetchCatalog, IsApplicable, FilterCatalog
 ```
 
 ## Estado y roadmap
