@@ -22,3 +22,7 @@ coverage.html
 .DS_Store
 .idea/
 .vscode/
+
+# Artefactos de "musubi setup" corrido dentro de este repo (no versionar)
+/.mcp.json
+.musubi/skills/starter.yaml

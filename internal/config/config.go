@@ -9,7 +9,7 @@ import (
 )
 
 // defaultCatalogURL es la URL del catálogo de skills por defecto alojado en este repositorio.
-const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musubi/main/catalog/index.json"
+const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musubi-skills/main/index.json"
 
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
