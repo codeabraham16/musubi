@@ -14,12 +14,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - { goos: windows, goarch: amd64, ext: .exe }
-          - { goos: windows, goarch: arm64, ext: .exe }
-          - { goos: linux,   goarch: amd64, ext: '' }
-          - { goos: linux,   goarch: arm64, ext: '' }
-          - { goos: darwin,  goarch: amd64, ext: '' }
-          - { goos: darwin,  goarch: arm64, ext: '' }
+          - { goos: windows, goarch: amd64, asset: Musubi.exe }
+          - { goos: windows, goarch: arm64, asset: Musubi-arm64.exe }
+          - { goos: linux,   goarch: amd64, asset: musubi-linux-amd64 }
+          - { goos: linux,   goarch: arm64, asset: musubi-linux-arm64 }
+          - { goos: darwin,  goarch: amd64, asset: musubi-darwin-amd64 }
+          - { goos: darwin,  goarch: arm64, asset: musubi-darwin-arm64 }
     steps:
       - uses: actions/checkout@v6
 
@@ -32,9 +32,9 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
-        run: go build -trimpath -o "musubi-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/musubi
+        run: go build -trimpath -o "${{ matrix.asset }}" ./cmd/musubi
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: musubi-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          files: ${{ matrix.asset }}

@@ -44,9 +44,8 @@ if ([string]::IsNullOrWhiteSpace($dir)) { $dir = (Get-Location).Path }
 $dir = (Resolve-Path $dir).Path
 
 # --- Detectar arquitectura / asset ---
-$arch = 'amd64'
-if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
-$asset = "musubi-windows-$arch.exe"
+$asset = 'Musubi.exe'
+if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $asset = 'Musubi-arm64.exe' }
 
 # --- Obtener el binario (MUSUBI_BINARY o descarga del release) ---
 $tmp = Join-Path $env:TEMP ("musubi-dl-{0}.exe" -f $PID)
