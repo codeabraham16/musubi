@@ -93,26 +93,24 @@ func matchEcosistema(entryStacks []string, stacks []detector.StackResult) (strin
 }
 
 // matchDeps busca al menos una dep de entryDeps en las deps del proyecto.
-// Busca en deps[ecosistema] primero; si no hay entrada para ese ecosistema,
-// busca en todos los ecosistemas. La comparación es case-insensitive por substring.
+// Solo considera las deps bajo el ecosistema coincidente (sin fallback
+// cross-ecosistema): si deps[ecosistema] está ausente o vacío, no hay match.
+// La comparación es por igualdad exacta case-insensitive (no substring), para
+// evitar falsos positivos como "react" ⊂ "react-native" o "tailwindcss" ⊂
+// "@tailwindcss/vite". Todas las entradas del catálogo usan identificadores de
+// paquete exactos (nombres npm, rutas completas de módulo Go incl. /vN).
 // Devuelve las deps del proyecto que coincidieron.
 func matchDeps(entryDeps []string, deps map[string][]string, ecosistema string) []string {
-	// Intentar primero con el ecosistema coincidente
-	proyectoDeps, ok := deps[ecosistema]
-	if !ok || len(proyectoDeps) == 0 {
-		// Fallback: buscar en todos los ecosistemas
-		var todas []string
-		for _, dd := range deps {
-			todas = append(todas, dd...)
-		}
-		proyectoDeps = todas
+	// Solo el ecosistema coincidente; sin fallback cross-ecosistema.
+	proyectoDeps := deps[ecosistema]
+	if len(proyectoDeps) == 0 {
+		return nil
 	}
 
 	var matched []string
 	for _, entryDep := range entryDeps {
-		entryDepLower := strings.ToLower(entryDep)
 		for _, pd := range proyectoDeps {
-			if strings.Contains(strings.ToLower(pd), entryDepLower) {
+			if strings.EqualFold(pd, entryDep) {
 				matched = appendIfMissingStr(matched, pd)
 				break
 			}
