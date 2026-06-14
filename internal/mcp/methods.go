@@ -13,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/embedding"
+	"musubi/internal/skillsource"
 	"musubi/internal/skills"
 
 	"github.com/google/uuid"
@@ -157,6 +158,32 @@ func (s *McpServer) handleToolsList() interface{} {
 				Required: []string{"name", "triggers", "rules"},
 			},
 		},
+		{
+			Name:        "musubi_search_skills",
+			Description: "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities. Devuelve candidatos con evidencia de aplicabilidad.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"query": {Type: "string", Description: "Texto libre para filtrar candidatos por nombre o descripción (opcional)"},
+					"stack": {Type: "string", Description: "Filtrar por ecosistema específico (ej. 'Go', 'Node.js') (opcional)"},
+					"limit": {Type: "number", Description: "Cantidad máxima de resultados (usa MaxCandidates de la config por defecto)"},
+				},
+			},
+		},
+		{
+			Name:        "musubi_log_skill_decision",
+			Description: "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"skill_id": {Type: "string", Description: "Identificador slug de la skill (ej. 'go-gin')"},
+					"name":     {Type: "string", Description: "Nombre legible de la skill (opcional si se provee skill_id)"},
+					"decision": {Type: "string", Description: "Decisión tomada: 'accepted' o 'rejected'"},
+					"reason":   {Type: "string", Description: "Justificación de la decisión (opcional)"},
+				},
+				Required: []string{"skill_id", "decision"},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -221,6 +248,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolDetectStack(callReq.Arguments)
 	case "musubi_save_skill":
 		return s.toolSaveSkill(callReq.Arguments)
+	case "musubi_search_skills":
+		return s.toolSearchSkills(callReq.Arguments)
+	case "musubi_log_skill_decision":
+		return s.toolLogSkillDecision(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -447,6 +478,117 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 	}
 
 	return textResult(fmt.Sprintf("skill %q guardada en %s", args.Name, skillPath)), nil
+}
+
+// toolSearchSkills busca skills aplicables al proyecto desde el catálogo remoto.
+// Inputs opcionales: query (string), stack (string), limit (int).
+// Degradación graciosa: catálogo caído → textResult con guía, sin RpcError.
+func (s *McpServer) toolSearchSkills(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Query string `json:"query"`
+		Stack string `json:"stack"`
+		Limit int    `json:"limit"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	// Si el sourcing está deshabilitado, guiar al fallback sin tocar el catálogo.
+	if !s.sourcing.Enabled {
+		return textResult("El sourcing de skills está deshabilitado en la configuración de Musubi. " +
+			"Para buscar skills manualmente, investigá la documentación oficial del stack detectado " +
+			"y usá musubi_save_skill para guardar las reglas."), nil
+	}
+
+	// Obtener el catálogo con timeout vía contexto (5 segundos).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cat, err := skillsource.FetchCatalog(ctx, s.sourcing.CatalogURL)
+	if err != nil {
+		// Degradación graciosa: catálogo inaccesible → texto explicativo, no RpcError.
+		return textResult(fmt.Sprintf(
+			"El catálogo de skills no está disponible en este momento (%v). "+
+				"Podés buscar skills manualmente en la documentación oficial del stack detectado "+
+				"y guardarlas con musubi_save_skill.", err)), nil
+	}
+
+	// Detectar stack y dependencias del proyecto actual.
+	stacks, _ := detector.DetectStack(s.projectPath)
+	deps, _ := detector.ExtractDeps(s.projectPath)
+
+	// Determinar límite efectivo.
+	maxCands := s.sourcing.MaxCandidates
+	if args.Limit > 0 && args.Limit < maxCands {
+		maxCands = args.Limit
+	}
+
+	// Filtrar candidatos aplicables.
+	candidatos := skillsource.FilterCatalog(cat, s.projectPath, deps, stacks, maxCands)
+
+	// Filtro adicional en memoria por stack (si se especificó).
+	if args.Stack != "" {
+		filtrados := candidatos[:0]
+		for _, c := range candidatos {
+			for _, st := range c.Entry.Stacks {
+				if strings.EqualFold(st, args.Stack) {
+					filtrados = append(filtrados, c)
+					break
+				}
+			}
+		}
+		candidatos = filtrados
+	}
+
+	// Filtro adicional por query (nombre o descripción).
+	if args.Query != "" {
+		q := strings.ToLower(args.Query)
+		filtrados := candidatos[:0]
+		for _, c := range candidatos {
+			if strings.Contains(strings.ToLower(c.Entry.Name), q) ||
+				strings.Contains(strings.ToLower(c.Entry.Description), q) {
+				filtrados = append(filtrados, c)
+			}
+		}
+		candidatos = filtrados
+	}
+
+	return jsonResult(candidatos)
+}
+
+// toolLogSkillDecision registra una decisión de skill (accepted/rejected) en SQLite.
+// Inputs: skill_id (requerido), decision (requerido, "accepted"|"rejected"),
+// name (opcional), reason (opcional).
+func (s *McpServer) toolLogSkillDecision(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		SkillID  string `json:"skill_id"`
+		Name     string `json:"name"`
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+	}
+
+	// Validar skill_id: requerido y debe ser slug válido.
+	if strings.TrimSpace(args.SkillID) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "skill_id es obligatorio")
+	}
+	if !slugRegex.MatchString(args.SkillID) {
+		return nil, rpcErrorf(codeInvalidParams, "skill_id debe ser un slug válido (solo letras minúsculas, números y guiones): %q", args.SkillID)
+	}
+
+	// Validar decision: debe ser "accepted" o "rejected".
+	if args.Decision != "accepted" && args.Decision != "rejected" {
+		return nil, rpcErrorf(codeInvalidParams, "decision debe ser 'accepted' o 'rejected', se recibió: %q", args.Decision)
+	}
+
+	if err := s.engine.SaveSkillDecision(args.SkillID, args.Name, args.Decision, args.Reason); err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al guardar decisión de skill: %v", err)
+	}
+	return textResult(fmt.Sprintf("Decisión '%s' para skill '%s' registrada con éxito.", args.Decision, args.SkillID)), nil
 }
 
 func (s *McpServer) toolResolveSkills(raw json.RawMessage) (interface{}, *RpcError) {
