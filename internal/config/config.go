@@ -8,6 +8,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// defaultCatalogURL es la URL del catálogo de skills por defecto alojado en este repositorio.
+const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musubi/main/catalog/index.json"
+
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
 	Provider   string `yaml:"provider"`   // none | ollama
@@ -16,12 +19,26 @@ type EmbeddingConfig struct {
 	Dimensions int    `yaml:"dimensions"` // dimensión del vector que produce el modelo
 }
 
+// SourcingConfig controla la obtención automática de skills desde un catálogo remoto.
+type SourcingConfig struct {
+	// Enabled activa o desactiva el sourcing de skills desde el catálogo.
+	Enabled bool `yaml:"enabled"`
+	// CatalogURL es la URL del índice de catálogo de skills en formato JSON.
+	CatalogURL string `yaml:"catalog_url"`
+	// MaxCandidates limita la cantidad máxima de skills candidatas retornadas por musubi_search_skills.
+	MaxCandidates int `yaml:"max_candidates"`
+	// CacheSeconds es la duración (en segundos) del caché en memoria de la respuesta del catálogo.
+	CacheSeconds int `yaml:"cache_seconds"`
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string          `yaml:"version"`
 	Mode              string          `yaml:"mode"`
 	SkillsAutoResolve bool            `yaml:"skills_auto_resolve"`
 	Embedding         EmbeddingConfig `yaml:"embedding"`
+	// Sourcing configura el comportamiento de sourcing de skills desde catálogos remotos.
+	Sourcing SourcingConfig `yaml:"sourcing,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -35,6 +52,12 @@ func Default() Config {
 			Model:      "nomic-embed-text",
 			BaseURL:    "http://localhost:11434",
 			Dimensions: 768,
+		},
+		Sourcing: SourcingConfig{
+			Enabled:       true,
+			CatalogURL:    defaultCatalogURL,
+			MaxCandidates: 20,
+			CacheSeconds:  3600,
 		},
 	}
 }
@@ -80,5 +103,24 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Embedding.Dimensions == 0 {
 		c.Embedding.Dimensions = d.Embedding.Dimensions
+	}
+
+	// Aplicar defaults de Sourcing.
+	// Si CatalogURL y MaxCandidates son cero-valor, el bloque sourcing estaba ausente
+	// en el YAML: activar Enabled por defecto también.
+	bloqueSourcingAusente := c.Sourcing.CatalogURL == "" && c.Sourcing.MaxCandidates == 0
+	if c.Sourcing.CatalogURL == "" {
+		c.Sourcing.CatalogURL = d.Sourcing.CatalogURL
+	}
+	if c.Sourcing.MaxCandidates == 0 {
+		c.Sourcing.MaxCandidates = d.Sourcing.MaxCandidates
+	}
+	if c.Sourcing.CacheSeconds == 0 {
+		c.Sourcing.CacheSeconds = d.Sourcing.CacheSeconds
+	}
+	// Solo forzar Enabled=true cuando el bloque completo estaba ausente.
+	// Si el usuario escribió enabled: false explícitamente, lo respetamos.
+	if bloqueSourcingAusente {
+		c.Sourcing.Enabled = true
 	}
 }
