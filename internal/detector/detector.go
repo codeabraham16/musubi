@@ -272,7 +272,8 @@ func rutaRelativaManifest(root, dir, manifest string) string {
 	if err != nil || rel == "." {
 		return manifest
 	}
-	return filepath.Join(rel, manifest)
+	// Normalizar a "/" para consistencia entre SO (Windows usa "\").
+	return filepath.ToSlash(filepath.Join(rel, manifest))
 }
 
 // detectarDotNet busca archivos *.csproj o *.fsproj en el root.
