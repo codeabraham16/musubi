@@ -102,6 +102,8 @@ Por favor realizá los siguientes pasos ANTES de responder al usuario:
 
 1. Llamar a la herramienta musubi_detect_stack para obtener el análisis completo del stack del proyecto (ecosistemas, frameworks, manifests).
 
+1.5. Llamar a musubi_search_skills (sin parámetros) para obtener candidatos del catálogo ya filtrados por relevancia técnica (triggers, deps y capabilities del proyecto). Tu trabajo es evaluar VALOR, no relevancia. Ordená los candidatos por valor para este proyecto, descartá los que sean redundantes con skills existentes. Podés complementar con búsqueda web solo para llenar gaps. Fetchá rules_url únicamente de las skills que vayas a guardar. Opcionalmente registrá decisiones con musubi_log_skill_decision.
+
 2. Investigar la documentación OFICIAL del stack detectado:
    - Go → pkg.go.dev
    - Node.js / React / Next.js → react.dev, nextjs.org

@@ -109,4 +109,7 @@ func TestDetectOutputHookModeSentinelAusente(t *testing.T) {
 	if !strings.Contains(ctx, "musubi_save_skill") {
 		t.Error("additionalContext no menciona 'musubi_save_skill'")
 	}
+	if !strings.Contains(ctx, "musubi_search_skills") {
+		t.Error("additionalContext no menciona 'musubi_search_skills'")
+	}
 }
