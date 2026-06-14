@@ -83,6 +83,16 @@ func (e *DbEngine) initSchema() error {
 		`CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
 			DELETE FROM observations_fts WHERE id = old.id;
 		END;`,
+
+		// Tabla de decisiones de skills (log append-only).
+		`CREATE TABLE IF NOT EXISTS skill_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id TEXT NOT NULL,
+			name TEXT,
+			decision TEXT NOT NULL,
+			reason TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {
