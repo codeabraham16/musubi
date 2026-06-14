@@ -1,6 +1,9 @@
 package skillsource
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func entradaValida() CatalogEntry {
 	return CatalogEntry{
@@ -37,6 +40,39 @@ func TestValidateCatalogStackDesconocido(t *testing.T) {
 	if errs := ValidateCatalog(cat); len(errs) == 0 {
 		t.Fatal("esperaba error por stack desconocido")
 	}
+}
+
+func TestValidateCatalogExcerptLargoEnRunas(t *testing.T) {
+	// El esquema enforce maxLength: 600, contado en CARACTERES (runas Unicode),
+	// no en bytes. Estos casos prueban que el validador Go cuenta runas.
+	t.Run("exactamente 600 runas ascii es válido", func(t *testing.T) {
+		e := entradaValida()
+		e.Excerpt = strings.Repeat("a", 600)
+		cat := Catalog{CatalogVersion: 1, Entries: []CatalogEntry{e}}
+		if errs := ValidateCatalog(cat); len(errs) != 0 {
+			t.Fatalf("esperaba 0 errores con 600 runas, obtuve %v", errs)
+		}
+	})
+
+	t.Run("601 runas es error", func(t *testing.T) {
+		e := entradaValida()
+		e.Excerpt = strings.Repeat("a", 601)
+		cat := Catalog{CatalogVersion: 1, Entries: []CatalogEntry{e}}
+		if errs := ValidateCatalog(cat); len(errs) == 0 {
+			t.Fatal("esperaba error por excerpt de 601 runas")
+		}
+	})
+
+	t.Run("600 runas multibyte es válido (cuenta runas, no bytes)", func(t *testing.T) {
+		// 600 'é' = 1200 bytes en UTF-8. Si el validador usara len() (bytes),
+		// rechazaría falsamente esta entrada válida.
+		e := entradaValida()
+		e.Excerpt = strings.Repeat("é", 600)
+		cat := Catalog{CatalogVersion: 1, Entries: []CatalogEntry{e}}
+		if errs := ValidateCatalog(cat); len(errs) != 0 {
+			t.Fatalf("esperaba 0 errores con 600 runas multibyte, obtuve %v", errs)
+		}
+	})
 }
 
 func TestValidateCatalogCamposFaltantes(t *testing.T) {

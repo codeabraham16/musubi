@@ -3,10 +3,16 @@ package skillsource
 import (
 	"fmt"
 	"regexp"
+	"unicode/utf8"
 )
 
 // slugPattern valida el id de una entrada del catálogo.
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// maxExcerptLen es el largo máximo del excerpt en CARACTERES (runas Unicode),
+// para coincidir con maxLength: 600 del esquema JSON. Se cuenta en runas y no en
+// bytes porque los excerpts en español usan caracteres multibyte (á, í, ñ, —).
+const maxExcerptLen = 600
 
 // KnownStacks son los ecosistemas que el detector de Musubi reconoce.
 // Deben coincidir con detector.StackResult.Ecosystem (capitalización exacta);
@@ -63,6 +69,9 @@ func ValidateCatalog(cat Catalog) []error {
 		}
 		if e.Excerpt == "" {
 			errs = append(errs, fmt.Errorf("%s: excerpt vacío", ref))
+		}
+		if n := utf8.RuneCountInString(e.Excerpt); n > maxExcerptLen {
+			errs = append(errs, fmt.Errorf("%s: excerpt demasiado largo (%d caracteres > %d)", ref, n, maxExcerptLen))
 		}
 	}
 

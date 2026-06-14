@@ -45,6 +45,7 @@ func printUsage() {
 	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
 	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
 	fmt.Println("  catalog validate  Valida un index.json de catálogo de skills")
+	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
 	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
 }
