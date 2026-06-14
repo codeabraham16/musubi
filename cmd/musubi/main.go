@@ -138,12 +138,20 @@ func setupProject() {
 	}
 	fmt.Println("  ✓ .mcp.json (Claude Code cargará 'musubi' al abrir el proyecto)")
 
-	// 4. Proteger la base de datos de runtime en git.
+	// 4. Hook SessionStart en .claude/settings.json para auto-descubrimiento de skills.
+	if err := writeClaudeHook(root, exePath); err != nil {
+		fmt.Printf("  ! No se pudo registrar el hook SessionStart: %v\n", err)
+	} else {
+		fmt.Println("  ✓ Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
+	}
+
+	// 5. Proteger la base de datos de runtime en git.
 	if err := ensureGitignore(root); err == nil {
 		fmt.Println("  ✓ .gitignore actualizado (.musubi/memory.db)")
 	}
 
 	fmt.Println("\nListo. Reabrí el proyecto en Claude Code y el servidor 'musubi' estará disponible.")
+	fmt.Println("En la primera sesión, Claude detectará el stack y generará skills personalizadas automáticamente.")
 }
 
 func writeStarterSkill(root string) error {
@@ -165,6 +173,31 @@ rules: |
   - Antes de empezar algo, buscá contexto previo con musubi_search_keyword.
 `
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento
+// de skills en {root}/.claude/settings.json usando bootstrap.MergeClaudeSettings.
+// Si el archivo no existe, lo crea. Si ya contiene el hook de Musubi, no lo duplica.
+func writeClaudeHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: exePath + " detect --hook-mode",
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "startup", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
 }
 
 func writeMCPConfig(root, exePath string) error {
