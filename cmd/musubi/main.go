@@ -25,6 +25,8 @@ func main() {
 		initProject()
 	case "setup":
 		setupProject()
+	case "detect":
+		runDetect()
 	case "daemon":
 		runDaemon()
 	default:
@@ -37,9 +39,11 @@ func main() {
 func printUsage() {
 	fmt.Println("Uso: musubi <comando> [argumentos]")
 	fmt.Println("Comandos disponibles:")
-	fmt.Println("  setup    Inyecta Musubi en el proyecto actual (workspace + .mcp.json, listo para usar)")
-	fmt.Println("  init     Inicializa solo el workspace .musubi/ (config + base de datos)")
-	fmt.Println("  daemon   Arranca el servidor MCP sobre stdin/stdout")
+	fmt.Println("  setup             Inyecta Musubi en el proyecto actual (workspace + .mcp.json + hook SessionStart)")
+	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
+	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
+	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
+	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
 }
 
 // workspaceDir resuelve el directorio de trabajo de Musubi.
