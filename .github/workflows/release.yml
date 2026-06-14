@@ -34,7 +34,12 @@ jobs:
           CGO_ENABLED: '0'
         run: go build -trimpath -o "${{ matrix.asset }}" ./cmd/musubi
 
+      - name: Checksum (SHA-256)
+        run: sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
