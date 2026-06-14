@@ -2,6 +2,7 @@ package detector
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -206,6 +207,31 @@ func TestDetectStackProfundidadDentroDelLimite(t *testing.T) {
 
 	if !manifestPathPresente(resultados, "a/b/c/go.mod") {
 		t.Errorf("esperaba ManifestPath 'a/b/c/go.mod' dentro del límite, resultados: %+v", resultados)
+	}
+}
+
+// TestDetectStackManifestPathNormalizadoSlash verifica que el ManifestPath de un
+// subpaquete use siempre "/" como separador (consistencia cross-OS), sin importar
+// el separador del sistema operativo donde corra el detector.
+func TestDetectStackManifestPathNormalizadoSlash(t *testing.T) {
+	root := t.TempDir()
+	escribirArchivo(t, filepath.Join(root, "admin", "package.json"),
+		`{"name":"admin","dependencies":{"react":"18.0.0"}}`)
+
+	resultados, err := DetectStack(root)
+	if err != nil {
+		t.Fatalf("DetectStack error inesperado: %v", err)
+	}
+	if len(resultados) != 1 {
+		t.Fatalf("esperaba 1 resultado, obtuve %d: %+v", len(resultados), resultados)
+	}
+
+	mp := resultados[0].ManifestPath
+	if strings.ContainsRune(mp, '\\') {
+		t.Errorf("ManifestPath no debe contener separador Windows '\\': %q", mp)
+	}
+	if mp != "admin/package.json" {
+		t.Errorf("esperaba ManifestPath 'admin/package.json' (slash literal), obtuve %q", mp)
 	}
 }
 
