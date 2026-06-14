@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
 	"musubi/internal/skills"
@@ -45,6 +46,15 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 	return &RpcError{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
+// Option es una función de configuración funcional para McpServer.
+// Se usa en NewMcpServer para configuración aditiva sin romper callers existentes.
+type Option func(*McpServer)
+
+// WithSourcing devuelve un Option que configura el campo sourcing del servidor.
+func WithSourcing(c config.SourcingConfig) Option {
+	return func(s *McpServer) { s.sourcing = c }
+}
+
 type McpServer struct {
 	engine      *memory.DbEngine
 	resolver    *skills.Resolver
@@ -52,22 +62,31 @@ type McpServer struct {
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
-	out         io.Writer
+	// sourcing contiene la configuración de sourcing de skills desde catálogo remoto.
+	sourcing config.SourcingConfig
+	out      io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
 // texto; usá embedding.NoopProvider{} para desactivar la búsqueda semántica.
-func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embedding.Provider) *McpServer {
+// opts son opciones funcionales aditivas (ej. WithSourcing); los callers existentes
+// de 3 argumentos compilan sin cambios.
+func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embedding.Provider, opts ...Option) *McpServer {
 	if embedder == nil {
 		embedder = embedding.NoopProvider{}
 	}
-	return &McpServer{
+	s := &McpServer{
 		engine:      engine,
 		resolver:    skills.NewResolver(projectPath),
 		embedder:    embedder,
 		projectPath: projectPath,
+		sourcing:    config.Default().Sourcing,
 		out:         os.Stdout,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Start arranca el servidor sobre stdin/stdout (modo daemon).
