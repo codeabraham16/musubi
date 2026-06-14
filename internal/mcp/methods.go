@@ -3,11 +3,20 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
+	"musubi/internal/config"
+	"musubi/internal/detector"
 	"musubi/internal/embedding"
+	"musubi/internal/skills"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -124,6 +133,30 @@ func (s *McpServer) handleToolsList() interface{} {
 				Required: []string{"modified_files"},
 			},
 		},
+		{
+			Name:        "musubi_detect_stack",
+			Description: "Detecta el stack/ecosistema del proyecto actual (lenguajes y frameworks) inspeccionando archivos de manifiesto. No recibe parámetros. Devuelve JSON para que el agente investigue mejores prácticas oficiales y luego guarde skills con musubi_save_skill.",
+			InputSchema: InputSchema{
+				Type:       "object",
+				Properties: map[string]Property{},
+			},
+		},
+		{
+			Name:        "musubi_save_skill",
+			Description: "Guarda una skill generada como {name}.yaml en .musubi/skills/ y crea el sentinel para no re-generar. IMPORTANTE: usar solo después de confirmar las reglas con el usuario. Por defecto NO sobrescribe skills existentes (pasa overwrite=true para forzar).",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name":         {Type: "string", Description: "Nombre slug de la skill (solo letras minúsculas, números y guiones)"},
+					"description":  {Type: "string", Description: "Descripción breve de la skill (opcional)"},
+					"triggers":     {Type: "array", Description: "Globs que activan la skill (ej. '*.go')", Items: &Property{Type: "string"}},
+					"capabilities": {Type: "array", Description: "Herramientas requeridas en PATH (opcional)", Items: &Property{Type: "string"}},
+					"rules":        {Type: "string", Description: "Reglas de la skill en texto plano (mínimo 20 caracteres)"},
+					"overwrite":    {Type: "boolean", Description: "Si es true, sobrescribe una skill existente (por defecto false)"},
+				},
+				Required: []string{"name", "triggers", "rules"},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -184,6 +217,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolResolveTelemetry(callReq.Arguments)
 	case "musubi_resolve_skills":
 		return s.toolResolveSkills(callReq.Arguments)
+	case "musubi_detect_stack":
+		return s.toolDetectStack(callReq.Arguments)
+	case "musubi_save_skill":
+		return s.toolSaveSkill(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -306,6 +343,110 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: %v", err)
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
+}
+
+// slugRegex valida que el nombre de una skill sea un slug seguro para usar como nombre de archivo.
+var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9\-]{0,62}$`)
+
+// toolDetectStack detecta el ecosistema del proyecto usando el projectPath del servidor.
+// No requiere parámetros; devuelve el slice []StackResult serializado como JSON.
+func (s *McpServer) toolDetectStack(raw json.RawMessage) (interface{}, *RpcError) {
+	results, err := detector.DetectStack(s.projectPath)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al detectar stack: %v", err)
+	}
+	return jsonResult(results)
+}
+
+// argsGuardarSkill contiene los parámetros del tool musubi_save_skill.
+type argsGuardarSkill struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Triggers     []string `json:"triggers"`
+	Capabilities []string `json:"capabilities"`
+	Rules        string   `json:"rules"`
+	Overwrite    bool     `json:"overwrite"`
+}
+
+// toolSaveSkill valida los argumentos y guarda la skill como YAML en .musubi/skills/.
+// También escribe el sentinel de manera best-effort.
+func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) {
+	var args argsGuardarSkill
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+	}
+
+	// Validar nombre: no vacío y slug-safe (previene path traversal).
+	if strings.TrimSpace(args.Name) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "name es obligatorio")
+	}
+	if !slugRegex.MatchString(args.Name) {
+		return nil, rpcErrorf(codeInvalidParams, "name debe ser un slug válido (solo letras minúsculas, números y guiones, ej. 'mi-skill'): %q", args.Name)
+	}
+
+	// Validar triggers: al menos uno y cada uno debe ser un glob válido.
+	if len(args.Triggers) == 0 {
+		return nil, rpcErrorf(codeInvalidParams, "triggers no puede estar vacío")
+	}
+	for _, t := range args.Triggers {
+		if _, err := filepath.Match(t, ""); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "trigger inválido %q: %v", t, err)
+		}
+	}
+
+	// Validar rules: no vacío y mínimo 20 caracteres.
+	if len(strings.TrimSpace(args.Rules)) < 20 {
+		return nil, rpcErrorf(codeInvalidParams, "rules debe tener al menos 20 caracteres (actual: %d)", len(strings.TrimSpace(args.Rules)))
+	}
+
+	// Construir ruta y aplicar defensa de path traversal adicional.
+	skillsDir := filepath.Join(s.projectPath, config.DirName, config.SkillsDir)
+	skillPath := filepath.Join(skillsDir, args.Name+".yaml")
+	// Verificar que la ruta resultante está bajo el directorio de skills (cinturón y tirantes).
+	if !strings.HasPrefix(filepath.Clean(skillPath), filepath.Clean(skillsDir)) {
+		return nil, rpcErrorf(codeInvalidParams, "nombre de skill no permitido: %q", args.Name)
+	}
+
+	// Puerta de sobrescritura: rechazar si el archivo existe y overwrite=false.
+	if _, err := os.Stat(skillPath); err == nil && !args.Overwrite {
+		return nil, rpcErrorf(codeInvalidParams, "la skill %q ya existe; pasa overwrite=true para reemplazarla", args.Name)
+	}
+
+	// Construir la skill con campos de procedencia.
+	sk := skills.Skill{
+		Name:         args.Name,
+		Description:  args.Description,
+		Triggers:     args.Triggers,
+		Capabilities: args.Capabilities,
+		Rules:        args.Rules,
+		GeneratedBy:  "auto-discovery",
+		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Serializar a YAML.
+	data, err := yaml.Marshal(sk)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al serializar skill: %v", err)
+	}
+
+	// Crear el directorio de skills si no existe.
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al crear directorio de skills: %v", err)
+	}
+
+	// Escribir el archivo YAML de la skill.
+	if err := os.WriteFile(skillPath, data, 0644); err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al escribir skill: %v", err)
+	}
+
+	// Escribir el sentinel (best-effort: fallo no cancela el guardado de la skill).
+	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	if err := os.WriteFile(sentinelPath, []byte(timestamp), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: advertencia: no se pudo escribir el sentinel: %v\n", err)
+	}
+
+	return textResult(fmt.Sprintf("skill %q guardada en %s", args.Name, skillPath)), nil
 }
 
 func (s *McpServer) toolResolveSkills(raw json.RawMessage) (interface{}, *RpcError) {
