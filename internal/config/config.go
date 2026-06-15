@@ -68,6 +68,13 @@ type GraphConfig struct {
 	MaxObservations int `yaml:"max_observations"`
 }
 
+// UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
+type UpdateConfig struct {
+	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
+	// versión nueva y avisa por stderr (default 24). Un valor negativo lo desactiva.
+	CheckIntervalHours float64 `yaml:"check_interval_hours"`
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string          `yaml:"version"`
@@ -82,6 +89,8 @@ type Config struct {
 	Maintenance MaintenanceConfig `yaml:"maintenance,omitempty"`
 	// Graph configura la memoria estructurada en grafo.
 	Graph GraphConfig `yaml:"graph,omitempty"`
+	// Update configura el chequeo de nuevas versiones del binario.
+	Update UpdateConfig `yaml:"update,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -118,6 +127,9 @@ func Default() Config {
 			MaxHops:         2,
 			MaxFacts:        50,
 			MaxObservations: 5,
+		},
+		Update: UpdateConfig{
+			CheckIntervalHours: 24,
 		},
 	}
 }
@@ -227,5 +239,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Graph.MaxObservations == 0 {
 		c.Graph.MaxObservations = d.Graph.MaxObservations
+	}
+
+	// Default de Update: 0 (ausente) -> 24h. Un valor negativo desactiva el chequeo.
+	if c.Update.CheckIntervalHours == 0 {
+		c.Update.CheckIntervalHours = d.Update.CheckIntervalHours
 	}
 }
