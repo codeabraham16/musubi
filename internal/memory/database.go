@@ -191,6 +191,26 @@ func (e *DbEngine) initSchema() error {
 			INSERT INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
 		END;`,
 
+		// Grafo de conocimiento: entidades (nodos) deduplicadas por nombre normalizado.
+		`CREATE TABLE IF NOT EXISTS entities (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			norm TEXT NOT NULL UNIQUE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		// Grafo de conocimiento: relaciones (aristas) sujeto-predicado-objeto, únicas.
+		`CREATE TABLE IF NOT EXISTS relations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_id INTEGER NOT NULL,
+			predicate TEXT NOT NULL,
+			to_id INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(from_id, predicate, to_id),
+			FOREIGN KEY(from_id) REFERENCES entities(id) ON DELETE CASCADE,
+			FOREIGN KEY(to_id) REFERENCES entities(id) ON DELETE CASCADE
+		);`,
+
 		// Tabla de decisiones de skills (log append-only).
 		`CREATE TABLE IF NOT EXISTS skill_decisions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

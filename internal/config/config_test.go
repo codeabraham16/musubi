@@ -106,6 +106,28 @@ func TestLoadMaintenanceDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadGraphDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Graph.MaxHops != 2 || cfg.Graph.MaxFacts != 50 {
+		t.Errorf("defaults de graph no aplicados: %+v", cfg.Graph)
+	}
+}
+
+func TestLoadParsesGraphBlock(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\ngraph:\n  max_hops: 3\n  max_facts: 100\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Graph.MaxHops != 3 || cfg.Graph.MaxFacts != 100 {
+		t.Errorf("bloque graph no parseado: %+v", cfg.Graph)
+	}
+}
+
 func TestLoadParsesMaintenanceBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmaintenance:\n  dedup_threshold: 0.9\n  decay_half_life_days: 60\n  decay_min_salience: 0.1\n  decay_min_age_days: 7\n")
 	cfg, err := Load(root)

@@ -196,6 +196,43 @@ func TestMemoryExpandRequiresIds(t *testing.T) {
 	}
 }
 
+func TestSaveAndRecallFactsTools(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+
+	for _, f := range [][3]string{
+		{"Alice", "works_at", "ACME"},
+		{"Alice", "knows", "Bob"},
+		{"ACME", "located_in", "NYC"},
+	} {
+		if _, e := call(t, s, "musubi_save_fact", map[string]interface{}{"subject": f[0], "predicate": f[1], "object": f[2]}); e != nil {
+			t.Fatalf("save_fact error: %+v", e)
+		}
+	}
+
+	res, e := call(t, s, "musubi_recall_facts", map[string]interface{}{"entity": "Alice", "max_hops": 2})
+	if e != nil {
+		t.Fatalf("recall_facts error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "works_at") || !strings.Contains(txt, "located_in") {
+		t.Errorf("esperaba hechos a 2 hops (incluye located_in), obtuve %s", txt)
+	}
+}
+
+func TestSaveFactRequiresFields(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_fact", map[string]interface{}{"subject": "A", "predicate": "p"}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por object faltante, obtuve %+v", e)
+	}
+}
+
+func TestRecallFactsRequiresEntity(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_recall_facts", map[string]interface{}{"entity": "  "}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por entity vacío, obtuve %+v", e)
+	}
+}
+
 func TestMaintainTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Dos casi-duplicados (no exactos): el maintain debe consolidarlos.

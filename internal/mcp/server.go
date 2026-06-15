@@ -65,6 +65,11 @@ func WithMaintenance(c config.MaintenanceConfig) Option {
 	return func(s *McpServer) { s.maintenance = c }
 }
 
+// WithGraph devuelve un Option que configura la memoria en grafo.
+func WithGraph(c config.GraphConfig) Option {
+	return func(s *McpServer) { s.graph = c }
+}
+
 type McpServer struct {
 	engine   *memory.DbEngine
 	resolver *skills.Resolver
@@ -78,7 +83,9 @@ type McpServer struct {
 	memory config.MemoryConfig
 	// maintenance contiene los parámetros del auto-mantenimiento (consolidar + olvidar).
 	maintenance config.MaintenanceConfig
-	out         io.Writer
+	// graph contiene los parámetros de la memoria estructurada en grafo.
+	graph config.GraphConfig
+	out   io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -97,6 +104,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		sourcing:    config.Default().Sourcing,
 		memory:      config.Default().Memory,
 		maintenance: config.Default().Maintenance,
+		graph:       config.Default().Graph,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {
