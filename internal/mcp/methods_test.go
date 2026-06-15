@@ -219,6 +219,32 @@ func TestSaveAndRecallFactsTools(t *testing.T) {
 	}
 }
 
+func TestEntityContextTool(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "o1", "topic_key": "infra", "content": "desplegamos kubernetes en produccion"}); e != nil {
+		t.Fatalf("save obs error: %+v", e)
+	}
+	if _, e := call(t, s, "musubi_save_fact", map[string]interface{}{"subject": "kubernetes", "predicate": "corre_en", "object": "cloud"}); e != nil {
+		t.Fatalf("save fact error: %+v", e)
+	}
+
+	res, e := call(t, s, "musubi_entity_context", map[string]interface{}{"entity": "kubernetes"})
+	if e != nil {
+		t.Fatalf("entity_context error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "corre_en") || !strings.Contains(txt, "observations") {
+		t.Errorf("esperaba hechos + observaciones en el contexto, obtuve %s", txt)
+	}
+}
+
+func TestEntityContextRequiresEntity(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_entity_context", map[string]interface{}{"entity": " "}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por entity vacío, obtuve %+v", e)
+	}
+}
+
 func TestSaveFactRequiresFields(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_save_fact", map[string]interface{}{"subject": "A", "predicate": "p"}); e == nil || e.Code != codeInvalidParams {

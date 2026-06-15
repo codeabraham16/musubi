@@ -63,6 +63,9 @@ type GraphConfig struct {
 	MaxHops int `yaml:"max_hops"`
 	// MaxFacts es el tope de hechos devueltos por musubi_recall_facts.
 	MaxFacts int `yaml:"max_facts"`
+	// MaxObservations es el tope de observaciones (gists) que ensambla
+	// musubi_entity_context al unir grafo + prosa.
+	MaxObservations int `yaml:"max_observations"`
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).
@@ -112,8 +115,9 @@ func Default() Config {
 			AutoIntervalHours: 24,
 		},
 		Graph: GraphConfig{
-			MaxHops:  2,
-			MaxFacts: 50,
+			MaxHops:         2,
+			MaxFacts:        50,
+			MaxObservations: 5,
 		},
 	}
 }
@@ -220,5 +224,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Graph.MaxFacts == 0 {
 		c.Graph.MaxFacts = d.Graph.MaxFacts
+	}
+	if c.Graph.MaxObservations == 0 {
+		c.Graph.MaxObservations = d.Graph.MaxObservations
 	}
 }
