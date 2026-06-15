@@ -13,10 +13,10 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/embedding"
-	"musubi/internal/skillsource"
+	"musubi/internal/memory"
 	"musubi/internal/skills"
+	"musubi/internal/skillsource"
 
-	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,11 +64,39 @@ func (s *McpServer) handleToolsList() interface{} {
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"topic_key": {Type: "string", Description: "Clave de agrupación temática (ej. architecture/auth)"},
-					"content":   {Type: "string", Description: "Contenido completo de la observación o lección"},
-					"id":        {Type: "string", Description: "Identificador único opcional; si se omite se genera un UUID"},
+					"topic_key":  {Type: "string", Description: "Clave de agrupación temática (ej. architecture/auth)"},
+					"content":    {Type: "string", Description: "Contenido completo de la observación o lección"},
+					"id":         {Type: "string", Description: "Identificador único opcional; si se omite se genera un UUID y se deduplica por contenido"},
+					"importance": {Type: "number", Description: "Peso opcional (>0, default 1.0) que prioriza la observación en el recall"},
 				},
 				Required: []string{"topic_key", "content"},
+			},
+		},
+		{
+			Name:        "musubi_recall",
+			Description: "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"query":        {Type: "string", Description: "Texto de la consulta"},
+					"token_budget": {Type: "number", Description: "Techo de tokens del resultado (opcional; usa el default de la config)"},
+				},
+				Required: []string{"query"},
+			},
+		},
+		{
+			Name:        "musubi_memory_expand",
+			Description: "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"ids": {
+						Type:        "array",
+						Description: "Lista de ids de observaciones a expandir",
+						Items:       &Property{Type: "string", Description: "id de observación"},
+					},
+				},
+				Required: []string{"ids"},
 			},
 		},
 		{
@@ -238,6 +266,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolSearchSemantic(callReq.Arguments)
 	case "musubi_search_keyword":
 		return s.toolSearchKeyword(callReq.Arguments)
+	case "musubi_recall":
+		return s.toolRecall(callReq.Arguments)
+	case "musubi_memory_expand":
+		return s.toolMemoryExpand(callReq.Arguments)
 	case "musubi_log_error":
 		return s.toolLogError(callReq.Arguments)
 	case "musubi_resolve_telemetry":
@@ -259,9 +291,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 
 func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		ID       string `json:"id"`
-		TopicKey string `json:"topic_key"`
-		Content  string `json:"content"`
+		ID         string  `json:"id"`
+		TopicKey   string  `json:"topic_key"`
+		Content    string  `json:"content"`
+		Importance float64 `json:"importance"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -272,8 +305,9 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	if strings.TrimSpace(args.Content) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "content es obligatorio")
 	}
-	if strings.TrimSpace(args.ID) == "" {
-		args.ID = uuid.NewString()
+	importance := args.Importance
+	if importance <= 0 {
+		importance = 1.0
 	}
 
 	var emb []float32
@@ -285,10 +319,75 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		emb = vec
 	}
 
-	if err := s.engine.SaveObservation(args.ID, args.TopicKey, args.Content, emb); err != nil {
+	// Sin id explícito: deduplicar por contenido y autogenerar UUID.
+	if strings.TrimSpace(args.ID) == "" {
+		id, deduped, err := s.engine.SaveObservationDeduped(args.TopicKey, args.Content, importance, emb)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
+		}
+		if deduped {
+			return textResult("Observación ya existente, no se duplicó (id: " + id + ")."), nil
+		}
+		return textResult("Observación guardada con éxito (id: " + id + ")."), nil
+	}
+
+	// Con id explícito: upsert por id.
+	if err := s.engine.SaveObservationWithImportance(args.ID, args.TopicKey, args.Content, importance, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")."), nil
+}
+
+// maxRecallBudget acota el presupuesto pedido por el cliente a un rango sano.
+const maxRecallBudget = 8000
+
+func (s *McpServer) toolRecall(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Query       string `json:"query"`
+		TokenBudget int    `json:"token_budget"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "query es obligatorio")
+	}
+
+	opts := memory.RecallOptions{
+		TokenBudget:   s.memory.RecallTokenBudget,
+		CandidatePool: s.memory.CandidatePool,
+		GistMaxTokens: s.memory.GistMaxTokens,
+	}
+	if args.TokenBudget > 0 {
+		opts.TokenBudget = args.TokenBudget
+		if opts.TokenBudget > maxRecallBudget {
+			opts.TokenBudget = maxRecallBudget
+		}
+	}
+
+	res, err := s.engine.Recall(args.Query, opts)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
+	}
+	return jsonResult(res)
+}
+
+func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if len(args.IDs) == 0 {
+		return nil, rpcErrorf(codeInvalidParams, "ids no puede estar vacío")
+	}
+
+	res, err := s.engine.GetObservations(args.IDs)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al expandir memorias: %v", err)
+	}
+	return jsonResult(res)
 }
 
 func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcError) {

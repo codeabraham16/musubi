@@ -62,3 +62,32 @@ func TestLoadAppliesDefaultsForAbsentKeys(t *testing.T) {
 		t.Errorf("defaults no aplicados: %+v", cfg.Embedding)
 	}
 }
+
+func TestLoadMemoryDefaults(t *testing.T) {
+	// Config legacy sin bloque memory: deben aplicarse los defaults.
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallTokenBudget != 400 {
+		t.Errorf("esperaba recall_token_budget 400 por defecto, obtuve %d", cfg.Memory.RecallTokenBudget)
+	}
+	if cfg.Memory.GistMaxTokens != 24 {
+		t.Errorf("esperaba gist_max_tokens 24 por defecto, obtuve %d", cfg.Memory.GistMaxTokens)
+	}
+	if cfg.Memory.CandidatePool != 50 {
+		t.Errorf("esperaba candidate_pool 50 por defecto, obtuve %d", cfg.Memory.CandidatePool)
+	}
+}
+
+func TestLoadParsesMemoryBlock(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n  gist_max_tokens: 32\n  candidate_pool: 100\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallTokenBudget != 800 || cfg.Memory.GistMaxTokens != 32 || cfg.Memory.CandidatePool != 100 {
+		t.Errorf("bloque memory no parseado: %+v", cfg.Memory)
+	}
+}

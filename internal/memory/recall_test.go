@@ -1,0 +1,123 @@
+package memory
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestRecallBudgetRespected(t *testing.T) {
+	e := newTestEngine(t)
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("obs%d", i)
+		content := fmt.Sprintf("observacion numero %d con bastante texto para ocupar varios tokens", i)
+		if err := e.SaveObservation(id, "t", content, nil); err != nil {
+			t.Fatalf("save error: %v", err)
+		}
+	}
+
+	res, err := e.Recall("observacion", RecallOptions{TokenBudget: 30})
+	if err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+	if res.UsedTokens > 30 {
+		t.Errorf("used_tokens %d excede el presupuesto 30", res.UsedTokens)
+	}
+	if res.Count < 1 || res.Count >= 10 {
+		t.Errorf("esperaba un recorte por presupuesto (1..9), obtuve count=%d", res.Count)
+	}
+	if res.Count != len(res.Items) {
+		t.Errorf("count=%d no coincide con len(items)=%d", res.Count, len(res.Items))
+	}
+}
+
+func TestRecallReturnsGistsNotFullContent(t *testing.T) {
+	e := newTestEngine(t)
+	long := "Resumen corto. " + strings.Repeat("relleno ", 100)
+	if err := e.SaveObservation("g1", "t", long, nil); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+
+	res, err := e.Recall("resumen", RecallOptions{})
+	if err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+	if res.Count != 1 {
+		t.Fatalf("esperaba 1 item, obtuve %d", res.Count)
+	}
+	it := res.Items[0]
+	if it.Gist != "Resumen corto." {
+		t.Errorf("esperaba gist extractivo 'Resumen corto.', obtuve %q", it.Gist)
+	}
+	if it.FullTokens <= EstimateTokens(it.Gist) {
+		t.Errorf("full_tokens (%d) debería ser mayor que los del gist (%d)", it.FullTokens, EstimateTokens(it.Gist))
+	}
+}
+
+func TestRecallBumpsAccess(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservation("a1", "t", "alpha beta", nil); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+
+	if _, err := e.Recall("alpha", RecallOptions{}); err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+
+	var count int
+	if err := e.db.QueryRow(`SELECT access_count FROM observations WHERE id=?`, "a1").Scan(&count); err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	if count < 1 {
+		t.Errorf("esperaba access_count >= 1 tras recall, obtuve %d", count)
+	}
+}
+
+func TestRecallImportanceBoost(t *testing.T) {
+	e := newTestEngine(t)
+	// Mismo contenido (igual relevancia keyword), distinta importancia.
+	if err := e.SaveObservationWithImportance("low", "t", "alpha beta gamma", 1.0, nil); err != nil {
+		t.Fatalf("save low error: %v", err)
+	}
+	if err := e.SaveObservationWithImportance("high", "t", "alpha beta gamma", 5.0, nil); err != nil {
+		t.Fatalf("save high error: %v", err)
+	}
+
+	res, err := e.Recall("alpha", RecallOptions{})
+	if err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+	if res.Count < 1 || res.Items[0].ID != "high" {
+		t.Errorf("esperaba que el de mayor importancia rankee primero, obtuve %+v", res.Items)
+	}
+}
+
+func TestRecallNoMatchEmpty(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservation("x", "t", "alpha", nil); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+	res, err := e.Recall("zzzznomatch", RecallOptions{})
+	if err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+	if res.Count != 0 {
+		t.Errorf("esperaba 0 resultados sin match, obtuve %d", res.Count)
+	}
+}
+
+func TestScoreCandidatesFusion(t *testing.T) {
+	// 'c' tiene la peor posición keyword pero importancia alta: debe ganar.
+	cands := []candidate{
+		{id: "a", accessCount: 0, importance: 1},
+		{id: "b", accessCount: 100, importance: 1},
+		{id: "c", accessCount: 0, importance: 10},
+	}
+	scored := scoreCandidates(cands)
+	if len(scored) != 3 {
+		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
+	}
+	if scored[0].id != "c" {
+		t.Errorf("esperaba 'c' primero por importancia, obtuve %s", scored[0].id)
+	}
+}

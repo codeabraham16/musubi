@@ -414,7 +414,7 @@ func runDaemon() {
 	}
 	defer engine.Close()
 
-	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing configurado.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing))
+	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory))
 	server.Start()
 }

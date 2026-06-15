@@ -31,6 +31,16 @@ type SourcingConfig struct {
 	CacheSeconds int `yaml:"cache_seconds"`
 }
 
+// MemoryConfig controla el recall por presupuesto de tokens (memoria eficiente).
+type MemoryConfig struct {
+	// RecallTokenBudget es el techo de tokens por defecto de musubi_recall.
+	RecallTokenBudget int `yaml:"recall_token_budget"`
+	// GistMaxTokens es el tope de tokens de un gist (titular extractivo).
+	GistMaxTokens int `yaml:"gist_max_tokens"`
+	// CandidatePool es la cantidad de candidatos a rankear antes de empaquetar.
+	CandidatePool int `yaml:"candidate_pool"`
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string          `yaml:"version"`
@@ -39,6 +49,8 @@ type Config struct {
 	Embedding         EmbeddingConfig `yaml:"embedding"`
 	// Sourcing configura el comportamiento de sourcing de skills desde catálogos remotos.
 	Sourcing SourcingConfig `yaml:"sourcing,omitempty"`
+	// Memory configura el recall por presupuesto de tokens.
+	Memory MemoryConfig `yaml:"memory,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -58,6 +70,11 @@ func Default() Config {
 			CatalogURL:    defaultCatalogURL,
 			MaxCandidates: 20,
 			CacheSeconds:  3600,
+		},
+		Memory: MemoryConfig{
+			RecallTokenBudget: 400,
+			GistMaxTokens:     24,
+			CandidatePool:     50,
 		},
 	}
 }
@@ -122,5 +139,16 @@ func (c *Config) applyDefaults() {
 	// Si el usuario escribió enabled: false explícitamente, lo respetamos.
 	if bloqueSourcingAusente {
 		c.Sourcing.Enabled = true
+	}
+
+	// Defaults de Memory.
+	if c.Memory.RecallTokenBudget == 0 {
+		c.Memory.RecallTokenBudget = d.Memory.RecallTokenBudget
+	}
+	if c.Memory.GistMaxTokens == 0 {
+		c.Memory.GistMaxTokens = d.Memory.GistMaxTokens
+	}
+	if c.Memory.CandidatePool == 0 {
+		c.Memory.CandidatePool = d.Memory.CandidatePool
 	}
 }
