@@ -77,24 +77,31 @@ func runMaintain() {
 	}
 	defer engine.Close()
 
-	cons, err := engine.Consolidate(cfg.Maintenance.DedupThreshold)
+	cons, dec, err := maintenanceCycle(engine, cfg.Maintenance)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error al consolidar: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error en el mantenimiento: %v\n", err)
 		os.Exit(1)
 	}
-	dec, err := engine.Decay(memory.DecayOptions{
-		HalfLifeDays: cfg.Maintenance.DecayHalfLifeDays,
-		MinSalience:  cfg.Maintenance.DecayMinSalience,
-		MinAgeDays:   cfg.Maintenance.DecayMinAgeDays,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error en decay: %v\n", err)
-		os.Exit(1)
-	}
+	_ = engine.MarkMaintenanceNow()
 
 	fmt.Printf("Mantenimiento de memoria completo:\n")
 	fmt.Printf("  Consolidación: %d fusionadas de %d escaneadas\n", cons.Merged, cons.Scanned)
 	fmt.Printf("  Olvido: %d archivadas de %d escaneadas\n", dec.Archived, dec.Scanned)
+}
+
+// maintenanceCycle corre consolidación + olvido con la config dada. Lo usan el
+// subcomando `maintain` y el auto-mantenimiento del daemon.
+func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memory.ConsolidateResult, memory.DecayResult, error) {
+	cons, err := engine.Consolidate(m.DedupThreshold)
+	if err != nil {
+		return cons, memory.DecayResult{}, err
+	}
+	dec, err := engine.Decay(memory.DecayOptions{
+		HalfLifeDays: m.DecayHalfLifeDays,
+		MinSalience:  m.DecayMinSalience,
+		MinAgeDays:   m.DecayMinAgeDays,
+	})
+	return cons, dec, err
 }
 
 // noArgs maneja la invocación sin comando. Si se ejecuta en una consola
@@ -456,6 +463,21 @@ func runDaemon() {
 		os.Exit(1)
 	}
 	defer engine.Close()
+
+	// Auto-mantenimiento throttled: si está activado y corresponde según el
+	// intervalo, corre una vez en este arranque (consolidar + olvidar). Todo a
+	// stderr y best-effort: nunca bloquea ni rompe el arranque del daemon.
+	if cfg.Maintenance.AutoIntervalHours > 0 {
+		if due, derr := engine.MaintenanceDue(cfg.Maintenance.AutoIntervalHours); derr == nil && due {
+			cons, dec, mErr := maintenanceCycle(engine, cfg.Maintenance)
+			if mErr != nil {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento falló: %v\n", mErr)
+			} else {
+				_ = engine.MarkMaintenanceNow()
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas\n", cons.Merged, dec.Archived)
+			}
+		}
+	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph))
