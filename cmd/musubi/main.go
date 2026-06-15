@@ -12,9 +12,13 @@ import (
 
 	"musubi/internal/bootstrap"
 	"musubi/internal/config"
+	"musubi/internal/detector"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
 	"musubi/internal/memory"
+	"musubi/internal/skills"
+
+	"gopkg.in/yaml.v3"
 )
 
 // version es la versión del binario. Se inyecta en el release vía
@@ -368,16 +372,78 @@ func writeStarterSkill(root string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil // ya existe, no sobrescribir
 	}
-	content := `name: starter
-description: "Skill de arranque generado por 'musubi setup'. Editalo para tu proyecto."
-triggers:
-  - "*"
-capabilities: []
-rules: |
-  - Guardá decisiones y aprendizajes con musubi_save_observation.
-  - Antes de empezar algo, buscá contexto previo con musubi_search_keyword.
-`
-	return os.WriteFile(path, []byte(content), 0644)
+	stack, _ := detector.DetectStack(root)
+	return os.WriteFile(path, []byte(starterSkillContent(stack)), 0644)
+}
+
+// ecosystemGlobs mapea cada ecosistema a los globs de archivo que lo representan.
+// Se usan como triggers del starter skill para que matchee los archivos reales
+// del proyecto en vez del genérico "*".
+var ecosystemGlobs = map[string][]string{
+	"Go":      {"*.go"},
+	"Node.js": {"*.js", "*.ts", "*.tsx", "*.jsx"},
+	"Python":  {"*.py"},
+	"Rust":    {"*.rs"},
+	"Java":    {"*.java", "*.kt"},
+	"Ruby":    {"*.rb"},
+	"PHP":     {"*.php"},
+	".NET":    {"*.cs"},
+	"Dart":    {"*.dart"},
+	"Elixir":  {"*.ex", "*.exs"},
+	"C/C++":   {"*.c", "*.cc", "*.cpp", "*.h", "*.hpp"},
+	"Docker":  {"Dockerfile"},
+}
+
+// starterSkillContent genera el YAML del starter skill adaptado al stack
+// detectado: triggers derivados de los ecosistemas presentes y una descripción
+// que los nombra. Sin stack reconocido, cae al trigger genérico "*".
+func starterSkillContent(stack []detector.StackResult) string {
+	var triggers []string
+	var ecos []string
+	vistos := map[string]bool{}
+	for _, r := range stack {
+		if vistos[r.Ecosystem] {
+			continue
+		}
+		vistos[r.Ecosystem] = true
+		ecos = append(ecos, r.Ecosystem)
+		for _, g := range ecosystemGlobs[r.Ecosystem] {
+			triggers = appendUnique(triggers, g)
+		}
+	}
+
+	descripcion := "Skill de arranque generado por 'musubi setup'. Editalo para tu proyecto."
+	if len(ecos) > 0 {
+		descripcion = "Skill de arranque para " + strings.Join(ecos, ", ") + ". Editalo para tu proyecto."
+	}
+	if len(triggers) == 0 {
+		triggers = []string{"*"}
+	}
+
+	sk := skills.Skill{
+		Name:         "starter",
+		Description:  descripcion,
+		Triggers:     triggers,
+		Capabilities: []string{},
+		Rules: "- Guardá decisiones y aprendizajes con musubi_save_observation.\n" +
+			"- Antes de empezar algo, recuperá contexto con musubi_recall (eficiente) o musubi_search_keyword.\n",
+	}
+	data, err := yaml.Marshal(sk)
+	if err != nil {
+		// Fallback defensivo: nunca debería fallar al serializar una struct simple.
+		return "name: starter\ndescription: \"" + descripcion + "\"\ntriggers:\n  - \"*\"\ncapabilities: []\n"
+	}
+	return string(data)
+}
+
+// appendUnique agrega elem a slice si no está presente.
+func appendUnique(slice []string, elem string) []string {
+	for _, e := range slice {
+		if e == elem {
+			return slice
+		}
+	}
+	return append(slice, elem)
 }
 
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento

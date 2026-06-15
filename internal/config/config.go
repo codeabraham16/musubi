@@ -68,6 +68,20 @@ type GraphConfig struct {
 	MaxObservations int `yaml:"max_observations"`
 }
 
+// StartupConfig controla el comportamiento del arranque de sesión (hook
+// SessionStart): el priming de memoria y la re-generación de skills cuando el
+// stack del proyecto cambia.
+type StartupConfig struct {
+	// PrimeMemory inyecta un recall compacto del contexto del proyecto al
+	// arrancar cada sesión (default true).
+	PrimeMemory bool `yaml:"prime_memory"`
+	// RecallBudget es el techo de tokens del priming de memoria (default 300).
+	RecallBudget int `yaml:"recall_budget"`
+	// AutoRegen re-dispara la generación de skills cuando el stack crece respecto
+	// de la huella guardada (default true). Si es false, la generación es one-shot.
+	AutoRegen bool `yaml:"auto_regen"`
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
@@ -91,6 +105,8 @@ type Config struct {
 	Graph GraphConfig `yaml:"graph,omitempty"`
 	// Update configura el chequeo de nuevas versiones del binario.
 	Update UpdateConfig `yaml:"update,omitempty"`
+	// Startup configura el priming de memoria y la re-generación de skills al arrancar.
+	Startup StartupConfig `yaml:"startup,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -130,6 +146,11 @@ func Default() Config {
 		},
 		Update: UpdateConfig{
 			CheckIntervalHours: 24,
+		},
+		Startup: StartupConfig{
+			PrimeMemory:  true,
+			RecallBudget: 300,
+			AutoRegen:    true,
 		},
 	}
 }
@@ -244,5 +265,17 @@ func (c *Config) applyDefaults() {
 	// Default de Update: 0 (ausente) -> 24h. Un valor negativo desactiva el chequeo.
 	if c.Update.CheckIntervalHours == 0 {
 		c.Update.CheckIntervalHours = d.Update.CheckIntervalHours
+	}
+
+	// Defaults de Startup. El bloque se considera ausente cuando todos sus campos
+	// están en cero-valor (RecallBudget 0 y ambos bool false): ahí aplicamos los
+	// defaults completos (priming y auto-regen activos). Si el bloque está
+	// presente (init escribe recall_budget), respetamos los bool tal cual,
+	// permitiendo desactivar prime_memory/auto_regen explícitamente.
+	bloqueStartupAusente := c.Startup.RecallBudget == 0 && !c.Startup.PrimeMemory && !c.Startup.AutoRegen
+	if bloqueStartupAusente {
+		c.Startup = d.Startup
+	} else if c.Startup.RecallBudget == 0 {
+		c.Startup.RecallBudget = d.Startup.RecallBudget
 	}
 }

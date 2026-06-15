@@ -32,6 +32,47 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadStartupDefaults(t *testing.T) {
+	// Config legacy sin bloque startup: deben aplicarse los defaults.
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Startup.PrimeMemory {
+		t.Error("esperaba prime_memory true por defecto")
+	}
+	if !cfg.Startup.AutoRegen {
+		t.Error("esperaba auto_regen true por defecto")
+	}
+	if cfg.Startup.RecallBudget != 300 {
+		t.Errorf("esperaba recall_budget 300 por defecto, obtuve %v", cfg.Startup.RecallBudget)
+	}
+}
+
+func TestLoadStartupPrimeDisableRespected(t *testing.T) {
+	// Bloque presente (recall_budget seteado por init) con prime_memory: false explícito.
+	root := writeConfig(t, "version: \"1.0\"\nstartup:\n  prime_memory: false\n  recall_budget: 300\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Startup.PrimeMemory {
+		t.Error("prime_memory: false explícito debería respetarse")
+	}
+}
+
+func TestLoadParsesStartupBlock(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nstartup:\n  prime_memory: true\n  recall_budget: 150\n  auto_regen: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Startup.RecallBudget != 150 || cfg.Startup.AutoRegen {
+		t.Errorf("bloque startup no parseado: %+v", cfg.Startup)
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 

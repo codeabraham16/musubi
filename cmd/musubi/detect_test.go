@@ -8,7 +8,165 @@ import (
 	"testing"
 
 	"musubi/internal/config"
+	"musubi/internal/detector"
+	"musubi/internal/memory"
 )
+
+// fakeStore implementa startupStore para tests deterministas del hook, sin DB real.
+type fakeStore struct {
+	meta  map[string]string
+	prime memory.RecallResult
+}
+
+func newFakeStore() *fakeStore { return &fakeStore{meta: map[string]string{}} }
+
+func (f *fakeStore) GetMeta(key string) (string, bool, error) {
+	v, ok := f.meta[key]
+	return v, ok, nil
+}
+func (f *fakeStore) SetMeta(key, value string) error { f.meta[key] = value; return nil }
+func (f *fakeStore) PrimeContext(budget int) (memory.RecallResult, error) {
+	return f.prime, nil
+}
+
+// crearGoNodeProject crea un proyecto políglota (Go + Node.js con React).
+func crearGoNodeProject(t *testing.T) string {
+	t.Helper()
+	dir := crearGoProject(t)
+	pkg := `{"name":"app","dependencies":{"react":"^18.0.0"}}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkg), 0644); err != nil {
+		t.Fatalf("no se pudo crear package.json: %v", err)
+	}
+	return dir
+}
+
+func defaultStartup() config.StartupConfig {
+	return config.StartupConfig{PrimeMemory: true, RecallBudget: 300, AutoRegen: true}
+}
+
+func TestHookFullGenerationPrimeraVez(t *testing.T) {
+	dir := crearGoProject(t)
+	store := newFakeStore() // sin huella, sin sentinel
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("primera vez debe disparar generación completa, obtuve: %q", out)
+	}
+}
+
+func TestHookDeltaRegeneracion(t *testing.T) {
+	dir := crearGoNodeProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	// La huella guardada solo cubría Go; ahora hay Node.js (delta).
+	store.meta["skills_stack"] = detector.StackFingerprint([]detector.StackResult{{Ecosystem: "Go"}})
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("un delta de stack debe disparar generación, obtuve: %q", out)
+	}
+	if !strings.Contains(out, "Node.js") {
+		t.Errorf("la generación del delta debe mencionar lo nuevo (Node.js), obtuve: %q", out)
+	}
+}
+
+func TestHookSinCambiosNiMemoria(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Errorf("sin cambios de stack ni memoria, el hook debe ser silencioso, obtuve: %q", out)
+	}
+}
+
+func TestHookPrimingInyectado(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	store.prime = memory.RecallResult{
+		Count:      1,
+		UsedTokens: 10,
+		Items:      []memory.RecallItem{{ID: "1", TopicKey: "arch/db", Gist: "Usamos SQLite con FTS5"}},
+	}
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "recuerda") {
+		t.Errorf("el priming debe inyectar contexto recordado, obtuve: %q", out)
+	}
+	if !strings.Contains(out, "SQLite con FTS5") {
+		t.Errorf("el priming debe incluir el gist, obtuve: %q", out)
+	}
+	if strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("sin cambios de stack no debe haber instrucciones de generación, obtuve: %q", out)
+	}
+}
+
+func TestHookMigracionBackfill(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir) // proyecto viejo: sentinel pero sin huella en meta
+	store := newFakeStore()
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("la migración no debe re-generar skills, obtuve: %q", out)
+	}
+	if _, ok := store.meta["skills_stack"]; !ok {
+		t.Error("la migración debe backfillear la huella del stack en meta")
+	}
+}
+
+func TestHookAutoRegenDesactivado(t *testing.T) {
+	dir := crearGoNodeProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	store.meta["skills_stack"] = detector.StackFingerprint([]detector.StackResult{{Ecosystem: "Go"}})
+	cfg := defaultStartup()
+	cfg.AutoRegen = false
+	out, err := buildHookOutput(dir, store, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("con auto_regen=false un delta no debe re-generar, obtuve: %q", out)
+	}
+}
+
+func TestHookStoreNilFallback(t *testing.T) {
+	dir := crearGoProject(t)
+	// Sin sentinel + store nil → comportamiento viejo: generación completa.
+	out, err := buildHookOutput(dir, nil, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("store nil sin sentinel debe caer al flujo viejo de generación, obtuve: %q", out)
+	}
+	// Con sentinel + store nil → silencioso.
+	crearSentinel(t, dir)
+	out, err = buildHookOutput(dir, nil, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Errorf("store nil con sentinel debe ser silencioso, obtuve: %q", out)
+	}
+}
 
 // crearGoProject crea un directorio temporal con go.mod para simular un proyecto Go.
 func crearGoProject(t *testing.T) string {
