@@ -11,6 +11,11 @@ import (
 
 const metaLastMaintenance = "last_maintenance"
 
+// MetaStackFingerprint es la clave de meta donde se guarda la huella del stack
+// para el cual ya se generaron skills. La comparten el hook SessionStart (que
+// detecta drift del stack) y musubi_save_skill (que la actualiza al guardar).
+const MetaStackFingerprint = "skills_stack"
+
 // GetMeta devuelve el valor de una clave de metadatos (ok=false si no existe).
 func (e *DbEngine) GetMeta(key string) (string, bool, error) {
 	var v string

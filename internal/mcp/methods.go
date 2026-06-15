@@ -719,6 +719,16 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 		fmt.Fprintf(os.Stderr, "musubi: advertencia: no se pudo escribir el sentinel: %v\n", err)
 	}
 
+	// Actualizar la huella del stack (best-effort): marca que las skills cubren el
+	// stack actual, así el hook SessionStart no vuelve a pedir generación hasta que
+	// el stack realmente cambie.
+	if s.engine != nil {
+		stack, _ := detector.DetectStack(s.projectPath)
+		if err := s.engine.SetMeta(memory.MetaStackFingerprint, detector.StackFingerprint(stack)); err != nil {
+			fmt.Fprintf(os.Stderr, "musubi: advertencia: no se pudo actualizar la huella del stack: %v\n", err)
+		}
+	}
+
 	return textResult(fmt.Sprintf("skill %q guardada en %s", args.Name, skillPath)), nil
 }
 

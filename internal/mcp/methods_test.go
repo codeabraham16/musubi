@@ -41,6 +41,40 @@ func newTestServer(t *testing.T, embedder embedding.Provider) *McpServer {
 	return NewMcpServer(engine, t.TempDir(), embedder)
 }
 
+func TestSaveSkillActualizaHuellaDeStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module ej\n\ngo 1.26\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngine error: %v", err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	s := NewMcpServer(engine, dir, embedding.NoopProvider{})
+
+	_, rpcErr := call(t, s, "musubi_save_skill", map[string]interface{}{
+		"name":        "mi-skill",
+		"description": "una skill de prueba",
+		"triggers":    []string{"*.go"},
+		"rules":       "Regla suficientemente larga para pasar la validación.",
+	})
+	if rpcErr != nil {
+		t.Fatalf("save_skill devolvió error: %+v", rpcErr)
+	}
+
+	fp, ok, err := engine.GetMeta(memory.MetaStackFingerprint)
+	if err != nil {
+		t.Fatalf("GetMeta error: %v", err)
+	}
+	if !ok || fp == "" {
+		t.Errorf("save_skill debe persistir la huella del stack en meta, obtuve ok=%v fp=%q", ok, fp)
+	}
+	if !strings.Contains(fp, "Go") {
+		t.Errorf("la huella debe reflejar el stack Go detectado, obtuve %q", fp)
+	}
+}
+
 func call(t *testing.T, s *McpServer, name string, args map[string]interface{}) (interface{}, *RpcError) {
 	t.Helper()
 	argBytes, _ := json.Marshal(args)

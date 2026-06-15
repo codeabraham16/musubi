@@ -322,11 +322,11 @@ func setupProjectWith(exeOverride string) {
 	engine.Close()
 	fmt.Println("  ✓ Workspace .musubi/ (config + memoria) listo")
 
-	// 2. Skill de arranque (solo si no hay ninguno).
-	if err := writeStarterSkill(root); err != nil {
-		fmt.Printf("  ! No se pudo escribir el skill de arranque: %v\n", err)
+	// 2. Bundle de skills cognitivas de arranque (analizar/deducir/planear + perfil).
+	if err := writeCognitiveSkills(root); err != nil {
+		fmt.Printf("  ! No se pudieron escribir las skills cognitivas: %v\n", err)
 	} else {
-		fmt.Println("  ✓ Skill de arranque en .musubi/skills/")
+		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile)")
 	}
 
 	// 3. Registrar el servidor en .mcp.json para carga automática.
@@ -357,27 +357,6 @@ func setupProjectWith(exeOverride string) {
 
 	fmt.Println("\nListo. Reabrí el proyecto en Claude Code y el servidor 'musubi' estará disponible.")
 	fmt.Println("En la primera sesión, Claude detectará el stack y generará skills personalizadas automáticamente.")
-}
-
-func writeStarterSkill(root string) error {
-	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return err
-	}
-	path := filepath.Join(skillsDir, "starter.yaml")
-	if _, err := os.Stat(path); err == nil {
-		return nil // ya existe, no sobrescribir
-	}
-	content := `name: starter
-description: "Skill de arranque generado por 'musubi setup'. Editalo para tu proyecto."
-triggers:
-  - "*"
-capabilities: []
-rules: |
-  - Guardá decisiones y aprendizajes con musubi_save_observation.
-  - Antes de empezar algo, buscá contexto previo con musubi_search_keyword.
-`
-	return os.WriteFile(path, []byte(content), 0644)
 }
 
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento
