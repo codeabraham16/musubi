@@ -54,6 +54,14 @@ type MaintenanceConfig struct {
 	DecayMinAgeDays float64 `yaml:"decay_min_age_days"`
 }
 
+// GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
+type GraphConfig struct {
+	// MaxHops es la profundidad por defecto del recorrido BFS en musubi_recall_facts.
+	MaxHops int `yaml:"max_hops"`
+	// MaxFacts es el tope de hechos devueltos por musubi_recall_facts.
+	MaxFacts int `yaml:"max_facts"`
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string          `yaml:"version"`
@@ -66,6 +74,8 @@ type Config struct {
 	Memory MemoryConfig `yaml:"memory,omitempty"`
 	// Maintenance configura el auto-mantenimiento (consolidación + olvido).
 	Maintenance MaintenanceConfig `yaml:"maintenance,omitempty"`
+	// Graph configura la memoria estructurada en grafo.
+	Graph GraphConfig `yaml:"graph,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -96,6 +106,10 @@ func Default() Config {
 			DecayHalfLifeDays: 30,
 			DecayMinSalience:  0.2,
 			DecayMinAgeDays:   14,
+		},
+		Graph: GraphConfig{
+			MaxHops:  2,
+			MaxFacts: 50,
 		},
 	}
 }
@@ -185,5 +199,13 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Maintenance.DecayMinAgeDays == 0 {
 		c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
+	}
+
+	// Defaults de Graph.
+	if c.Graph.MaxHops == 0 {
+		c.Graph.MaxHops = d.Graph.MaxHops
+	}
+	if c.Graph.MaxFacts == 0 {
+		c.Graph.MaxFacts = d.Graph.MaxFacts
 	}
 }

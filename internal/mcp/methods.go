@@ -108,6 +108,31 @@ func (s *McpServer) handleToolsList() interface{} {
 			},
 		},
 		{
+			Name:        "musubi_save_fact",
+			Description: "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT').",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"subject":   {Type: "string", Description: "Entidad sujeto (ej. 'auth')"},
+					"predicate": {Type: "string", Description: "Relación (ej. 'usa', 'depende_de')"},
+					"object":    {Type: "string", Description: "Entidad objeto (ej. 'JWT')"},
+				},
+				Required: []string{"subject", "predicate", "object"},
+			},
+		},
+		{
+			Name:        "musubi_recall_facts",
+			Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"entity":   {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
+					"max_hops": {Type: "number", Description: "Profundidad del recorrido (opcional; usa el default de la config)"},
+				},
+				Required: []string{"entity"},
+			},
+		},
+		{
 			Name:        "musubi_search_semantic",
 			Description: "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
 			InputSchema: InputSchema{
@@ -280,6 +305,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolMemoryExpand(callReq.Arguments)
 	case "musubi_maintain":
 		return s.toolMaintain(callReq.Arguments)
+	case "musubi_save_fact":
+		return s.toolSaveFact(callReq.Arguments)
+	case "musubi_recall_facts":
+		return s.toolRecallFacts(callReq.Arguments)
 	case "musubi_log_error":
 		return s.toolLogError(callReq.Arguments)
 	case "musubi_resolve_telemetry":
@@ -378,6 +407,53 @@ func (s *McpServer) toolRecall(raw json.RawMessage) (interface{}, *RpcError) {
 	res, err := s.engine.Recall(args.Query, opts)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
+	}
+	return jsonResult(res)
+}
+
+func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Subject   string `json:"subject"`
+		Predicate string `json:"predicate"`
+		Object    string `json:"object"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Subject) == "" || strings.TrimSpace(args.Predicate) == "" || strings.TrimSpace(args.Object) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "subject, predicate y object son obligatorios")
+	}
+
+	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al guardar hecho: %v", err)
+	}
+	if res.Created {
+		return textResult(fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)), nil
+	}
+	return textResult("El hecho ya existía, no se duplicó."), nil
+}
+
+func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Entity  string `json:"entity"`
+		MaxHops int    `json:"max_hops"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Entity) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "entity es obligatorio")
+	}
+
+	maxHops := s.graph.MaxHops
+	if args.MaxHops > 0 {
+		maxHops = args.MaxHops
+	}
+
+	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
 	}
 	return jsonResult(res)
 }
