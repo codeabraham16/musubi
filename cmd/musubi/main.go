@@ -17,6 +17,10 @@ import (
 	"musubi/internal/memory"
 )
 
+// version es la versión del binario. Se inyecta en el release vía
+// -ldflags "-X main.version=<tag>"; en builds locales queda "dev".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		noArgs()
@@ -37,6 +41,10 @@ func main() {
 		runDaemon()
 	case "maintain":
 		runMaintain()
+	case "version", "--version", "-v":
+		fmt.Printf("musubi %s\n", version)
+	case "update":
+		runUpdate()
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -55,6 +63,8 @@ func printUsage() {
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
 	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
 	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
+	fmt.Println("  update            Descarga el último release, verifica el checksum y se auto-reemplaza")
+	fmt.Println("  version           Muestra la versión del binario")
 }
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
@@ -476,6 +486,16 @@ func runDaemon() {
 				_ = engine.MarkMaintenanceNow()
 				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas\n", cons.Merged, dec.Archived)
 			}
+		}
+	}
+
+	// Chequeo de versión throttled: avisa por stderr si hay una versión nueva
+	// (no descarga ni reemplaza nada). Corre en goroutine para no demorar el
+	// arranque. CheckIntervalHours <= 0 lo desactiva.
+	if cfg.Update.CheckIntervalHours > 0 {
+		if due, derr := engine.MetaDue(metaLastUpdateCheck, cfg.Update.CheckIntervalHours); derr == nil && due {
+			_ = engine.MarkMetaNow(metaLastUpdateCheck)
+			go notifyIfOutdated()
 		}
 	}
 

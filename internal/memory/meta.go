@@ -37,10 +37,10 @@ func (e *DbEngine) SetMeta(key, value string) error {
 	return nil
 }
 
-// MaintenanceDue indica si corresponde correr el auto-mantenimiento: true si no
-// hay marca previa, si no se puede parsear, o si pasaron >= intervalHours.
-func (e *DbEngine) MaintenanceDue(intervalHours float64) (bool, error) {
-	v, ok, err := e.GetMeta(metaLastMaintenance)
+// MetaDue indica si corresponde correr una tarea throttled identificada por key:
+// true si no hay marca previa, si no se puede parsear, o si pasaron >= intervalHours.
+func (e *DbEngine) MetaDue(key string, intervalHours float64) (bool, error) {
+	v, ok, err := e.GetMeta(key)
 	if err != nil {
 		return false, err
 	}
@@ -54,7 +54,17 @@ func (e *DbEngine) MaintenanceDue(intervalHours float64) (bool, error) {
 	return time.Since(last).Hours() >= intervalHours, nil
 }
 
+// MarkMetaNow registra que una tarea throttled acaba de correr.
+func (e *DbEngine) MarkMetaNow(key string) error {
+	return e.SetMeta(key, time.Now().UTC().Format(time.RFC3339))
+}
+
+// MaintenanceDue indica si corresponde correr el auto-mantenimiento.
+func (e *DbEngine) MaintenanceDue(intervalHours float64) (bool, error) {
+	return e.MetaDue(metaLastMaintenance, intervalHours)
+}
+
 // MarkMaintenanceNow registra que el mantenimiento acaba de correr.
 func (e *DbEngine) MarkMaintenanceNow() error {
-	return e.SetMeta(metaLastMaintenance, time.Now().UTC().Format(time.RFC3339))
+	return e.MarkMetaNow(metaLastMaintenance)
 }

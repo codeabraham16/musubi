@@ -132,6 +132,28 @@ func TestLoadGraphDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadUpdateDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Update.CheckIntervalHours != 24 {
+		t.Errorf("esperaba check_interval_hours 24 por defecto, obtuve %v", cfg.Update.CheckIntervalHours)
+	}
+}
+
+func TestLoadUpdateDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nupdate:\n  check_interval_hours: -1\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Update.CheckIntervalHours != -1 {
+		t.Errorf("valor negativo (desactivado) debería respetarse, obtuve %v", cfg.Update.CheckIntervalHours)
+	}
+}
+
 func TestLoadParsesGraphBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\ngraph:\n  max_hops: 3\n  max_facts: 100\n")
 	cfg, err := Load(root)
