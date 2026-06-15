@@ -52,6 +52,9 @@ type MaintenanceConfig struct {
 	DecayMinSalience float64 `yaml:"decay_min_salience"`
 	// DecayMinAgeDays es la edad mínima para que una memoria pueda archivarse.
 	DecayMinAgeDays float64 `yaml:"decay_min_age_days"`
+	// AutoIntervalHours es cada cuántas horas corre el auto-mantenimiento al
+	// arrancar el daemon (0 = desactivado; el mantenimiento manual sigue disponible).
+	AutoIntervalHours float64 `yaml:"auto_interval_hours"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
@@ -106,6 +109,7 @@ func Default() Config {
 			DecayHalfLifeDays: 30,
 			DecayMinSalience:  0.2,
 			DecayMinAgeDays:   14,
+			AutoIntervalHours: 24,
 		},
 		Graph: GraphConfig{
 			MaxHops:  2,
@@ -188,6 +192,12 @@ func (c *Config) applyDefaults() {
 	}
 
 	// Defaults de Maintenance.
+	// Si el bloque entero estaba ausente, también aplicamos el intervalo de
+	// auto-mantenimiento; si el usuario escribió el bloque, respetamos
+	// auto_interval_hours tal cual (0 = desactivado explícito).
+	bloqueMaintAusente := c.Maintenance.DedupThreshold == 0 && c.Maintenance.DecayHalfLifeDays == 0 &&
+		c.Maintenance.DecayMinSalience == 0 && c.Maintenance.DecayMinAgeDays == 0 &&
+		c.Maintenance.AutoIntervalHours == 0
 	if c.Maintenance.DedupThreshold == 0 {
 		c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold
 	}
@@ -199,6 +209,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Maintenance.DecayMinAgeDays == 0 {
 		c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
+	}
+	if bloqueMaintAusente {
+		c.Maintenance.AutoIntervalHours = d.Maintenance.AutoIntervalHours
 	}
 
 	// Defaults de Graph.

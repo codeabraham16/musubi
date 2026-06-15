@@ -211,6 +211,13 @@ func (e *DbEngine) initSchema() error {
 			FOREIGN KEY(to_id) REFERENCES entities(id) ON DELETE CASCADE
 		);`,
 
+		// Metadatos clave/valor (ej. timestamp del último auto-mantenimiento).
+		`CREATE TABLE IF NOT EXISTS meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
 		// Tabla de decisiones de skills (log append-only).
 		`CREATE TABLE IF NOT EXISTS skill_decisions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -104,6 +104,21 @@ func TestLoadMaintenanceDefaults(t *testing.T) {
 	if cfg.Maintenance.DecayHalfLifeDays != 30 || cfg.Maintenance.DecayMinSalience != 0.2 || cfg.Maintenance.DecayMinAgeDays != 14 {
 		t.Errorf("defaults de maintenance no aplicados: %+v", cfg.Maintenance)
 	}
+	if cfg.Maintenance.AutoIntervalHours != 24 {
+		t.Errorf("esperaba auto_interval_hours 24 por defecto, obtuve %v", cfg.Maintenance.AutoIntervalHours)
+	}
+}
+
+func TestLoadMaintenanceAutoDisableRespected(t *testing.T) {
+	// Bloque presente con auto_interval_hours: 0 -> se respeta (desactivado).
+	root := writeConfig(t, "version: \"1.0\"\nmaintenance:\n  dedup_threshold: 0.85\n  auto_interval_hours: 0\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Maintenance.AutoIntervalHours != 0 {
+		t.Errorf("auto_interval_hours: 0 explícito debería respetarse, obtuve %v", cfg.Maintenance.AutoIntervalHours)
+	}
 }
 
 func TestLoadGraphDefaults(t *testing.T) {
