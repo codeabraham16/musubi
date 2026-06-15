@@ -133,6 +133,18 @@ func (s *McpServer) handleToolsList() interface{} {
 			},
 		},
 		{
+			Name:        "musubi_entity_context",
+			Description: "Ensambla TODO el contexto de una entidad en una sola consulta barata en tokens: sus HECHOS del grafo + los GISTS de las observaciones (prosa) que la mencionan. Es el puente grafo<->prosa; para el contenido completo de una observación usá musubi_memory_expand.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"entity":   {Type: "string", Description: "Entidad cuyo contexto se quiere reconstruir"},
+					"max_hops": {Type: "number", Description: "Profundidad del grafo (opcional; usa el default de la config)"},
+				},
+				Required: []string{"entity"},
+			},
+		},
+		{
 			Name:        "musubi_search_semantic",
 			Description: "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
 			InputSchema: InputSchema{
@@ -309,6 +321,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolSaveFact(callReq.Arguments)
 	case "musubi_recall_facts":
 		return s.toolRecallFacts(callReq.Arguments)
+	case "musubi_entity_context":
+		return s.toolEntityContext(callReq.Arguments)
 	case "musubi_log_error":
 		return s.toolLogError(callReq.Arguments)
 	case "musubi_resolve_telemetry":
@@ -454,6 +468,30 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
+	}
+	return jsonResult(res)
+}
+
+func (s *McpServer) toolEntityContext(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Entity  string `json:"entity"`
+		MaxHops int    `json:"max_hops"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Entity) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "entity es obligatorio")
+	}
+
+	maxHops := s.graph.MaxHops
+	if args.MaxHops > 0 {
+		maxHops = args.MaxHops
+	}
+
+	res, err := s.engine.EntityContext(args.Entity, maxHops, s.graph.MaxFacts, s.graph.MaxObservations)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al ensamblar contexto de entidad: %v", err)
 	}
 	return jsonResult(res)
 }

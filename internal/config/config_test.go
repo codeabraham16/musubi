@@ -127,7 +127,7 @@ func TestLoadGraphDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.Graph.MaxHops != 2 || cfg.Graph.MaxFacts != 50 {
+	if cfg.Graph.MaxHops != 2 || cfg.Graph.MaxFacts != 50 || cfg.Graph.MaxObservations != 5 {
 		t.Errorf("defaults de graph no aplicados: %+v", cfg.Graph)
 	}
 }
