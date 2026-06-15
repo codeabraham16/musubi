@@ -140,6 +140,76 @@ func TestToolNotFound(t *testing.T) {
 	}
 }
 
+// textOf extrae el texto de una respuesta de tool.
+func textOf(t *testing.T, res interface{}) string {
+	t.Helper()
+	resp, ok := res.(CallToolResponse)
+	if !ok || len(resp.Content) == 0 {
+		t.Fatalf("respuesta inesperada: %+v", res)
+	}
+	return resp.Content[0].Text
+}
+
+func TestRecallToolReturnsBudgetedItems(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "patrón observer en Go para eventos"}); e != nil {
+		t.Fatalf("save error: %+v", e)
+	}
+	res, e := call(t, s, "musubi_recall", map[string]interface{}{"query": "observer", "token_budget": 50})
+	if e != nil {
+		t.Fatalf("recall error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "\"budget\": 50") {
+		t.Errorf("esperaba budget 50 en la respuesta, obtuve %s", txt)
+	}
+	if !strings.Contains(txt, "items") {
+		t.Errorf("esperaba 'items' en la respuesta, obtuve %s", txt)
+	}
+}
+
+func TestRecallToolRequiresQuery(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_recall", map[string]interface{}{"query": "   "}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por query vacío, obtuve %+v", e)
+	}
+}
+
+func TestMemoryExpandTool(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "x1", "topic_key": "t", "content": "contenido completo para expandir"}); e != nil {
+		t.Fatalf("save error: %+v", e)
+	}
+	res, e := call(t, s, "musubi_memory_expand", map[string]interface{}{"ids": []string{"x1"}})
+	if e != nil {
+		t.Fatalf("expand error: %+v", e)
+	}
+	if !strings.Contains(textOf(t, res), "contenido completo para expandir") {
+		t.Errorf("esperaba el contenido completo en la respuesta, obtuve %s", textOf(t, res))
+	}
+}
+
+func TestMemoryExpandRequiresIds(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_memory_expand", map[string]interface{}{"ids": []string{}}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por ids vacío, obtuve %+v", e)
+	}
+}
+
+func TestSaveObservationDedupViaTool(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "memoria única"}); e != nil {
+		t.Fatalf("save 1 error: %+v", e)
+	}
+	res, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "memoria única"})
+	if e != nil {
+		t.Fatalf("save 2 error: %+v", e)
+	}
+	if !strings.Contains(textOf(t, res), "ya existente") {
+		t.Errorf("esperaba mensaje de dedup, obtuve %s", textOf(t, res))
+	}
+}
+
 // newTestServerWithPath construye un McpServer con un projectPath explícito.
 func newTestServerWithPath(t *testing.T, projectPath string) *McpServer {
 	t.Helper()

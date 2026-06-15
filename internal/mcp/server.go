@@ -55,16 +55,23 @@ func WithSourcing(c config.SourcingConfig) Option {
 	return func(s *McpServer) { s.sourcing = c }
 }
 
+// WithMemory devuelve un Option que configura los parámetros del recall eficiente.
+func WithMemory(c config.MemoryConfig) Option {
+	return func(s *McpServer) { s.memory = c }
+}
+
 type McpServer struct {
-	engine      *memory.DbEngine
-	resolver    *skills.Resolver
-	embedder    embedding.Provider
+	engine   *memory.DbEngine
+	resolver *skills.Resolver
+	embedder embedding.Provider
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
 	// sourcing contiene la configuración de sourcing de skills desde catálogo remoto.
 	sourcing config.SourcingConfig
-	out      io.Writer
+	// memory contiene los parámetros del recall por presupuesto de tokens.
+	memory config.MemoryConfig
+	out    io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -81,6 +88,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		embedder:    embedder,
 		projectPath: projectPath,
 		sourcing:    config.Default().Sourcing,
+		memory:      config.Default().Memory,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {
