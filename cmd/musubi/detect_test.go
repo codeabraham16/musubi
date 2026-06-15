@@ -14,11 +14,14 @@ import (
 
 // fakeStore implementa startupStore para tests deterministas del hook, sin DB real.
 type fakeStore struct {
-	meta  map[string]string
-	prime memory.RecallResult
+	meta   map[string]string
+	prime  memory.RecallResult
+	topics map[string]bool
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{meta: map[string]string{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{meta: map[string]string{}, topics: map[string]bool{}}
+}
 
 func (f *fakeStore) GetMeta(key string) (string, bool, error) {
 	v, ok := f.meta[key]
@@ -27,6 +30,9 @@ func (f *fakeStore) GetMeta(key string) (string, bool, error) {
 func (f *fakeStore) SetMeta(key, value string) error { f.meta[key] = value; return nil }
 func (f *fakeStore) PrimeContext(budget int) (memory.RecallResult, error) {
 	return f.prime, nil
+}
+func (f *fakeStore) TopicExists(topicKey string) (bool, error) {
+	return f.topics[topicKey], nil
 }
 
 // crearGoNodeProject crea un proyecto políglota (Go + Node.js con React).
@@ -41,7 +47,59 @@ func crearGoNodeProject(t *testing.T) string {
 }
 
 func defaultStartup() config.StartupConfig {
-	return config.StartupConfig{PrimeMemory: true, RecallBudget: 300, AutoRegen: true}
+	return config.StartupConfig{PrimeMemory: true, RecallBudget: 300, AutoRegen: true, CognitiveBootstrap: true}
+}
+
+func TestHookCognitivoEnBootstrapping(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir) // skills ya generadas: aislar el bloque cognitivo de la generación
+	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	// Sin perfil → debe inyectar el bloque cognitivo.
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "autoconocimiento") {
+		t.Errorf("sin perfil debe inyectar el bloque cognitivo, obtuve: %q", out)
+	}
+	if !strings.Contains(out, "project/profile") {
+		t.Errorf("el bloque cognitivo debe apuntar al topic_key del perfil, obtuve: %q", out)
+	}
+}
+
+func TestHookCognitivoSilenciadoConPerfil(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	store.topics["project/profile"] = true // ya perfilado
+	out, err := buildHookOutput(dir, store, defaultStartup())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "autoconocimiento") {
+		t.Errorf("con perfil existente NO debe inyectar el bloque cognitivo, obtuve: %q", out)
+	}
+}
+
+func TestHookCognitivoRespetaToggle(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir)
+	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	cfg := defaultStartup()
+	cfg.CognitiveBootstrap = false
+	out, err := buildHookOutput(dir, store, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "autoconocimiento") {
+		t.Errorf("con cognitive_bootstrap=false no debe inyectar el bloque, obtuve: %q", out)
+	}
 }
 
 func TestHookFullGenerationPrimeraVez(t *testing.T) {
@@ -80,6 +138,7 @@ func TestHookSinCambiosNiMemoria(t *testing.T) {
 	store := newFakeStore()
 	stack, _ := detector.DetectStack(dir)
 	store.meta["skills_stack"] = detector.StackFingerprint(stack)
+	store.topics["project/profile"] = true // ya perfilado: nada que inyectar
 	out, err := buildHookOutput(dir, store, defaultStartup())
 	if err != nil {
 		t.Fatal(err)
@@ -214,18 +273,31 @@ func TestDetectOutputModoNormal(t *testing.T) {
 	}
 }
 
-// TestDetectOutputHookModeSentinelPresente verifica que si el sentinel existe,
-// detectOutput devuelve string vacío y nil (operación silenciosa idempotente).
+// TestDetectOutputHookModeSentinelPresente verifica que con skills generadas
+// (sentinel) y stack sin cambios, detectOutput NO re-genera skills ni inyecta el
+// bloque cognitivo (el proyecto ya está perfilado). El priming puede aparecer.
 func TestDetectOutputHookModeSentinelPresente(t *testing.T) {
 	dir := crearGoProject(t)
 	crearSentinel(t, dir)
+	// Perfilar el proyecto para silenciar el bloque cognitivo de arranque.
+	engine, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveObservation("prof", "project/profile", "Perfil: proyecto Go de prueba.", nil); err != nil {
+		t.Fatal(err)
+	}
+	engine.Close()
 
 	out, err := detectOutput(dir, true)
 	if err != nil {
 		t.Fatalf("error inesperado con sentinel presente: %v", err)
 	}
-	if out != "" {
-		t.Errorf("se esperaba string vacío (sentinel presente), obtuve: %q", out)
+	if strings.Contains(out, "musubi_save_skill") {
+		t.Errorf("con sentinel presente y stack sin cambios no debe re-generar skills, obtuve: %q", out)
+	}
+	if strings.Contains(out, "autoconocimiento") {
+		t.Errorf("proyecto ya perfilado no debe inyectar el bloque cognitivo, obtuve: %q", out)
 	}
 }
 

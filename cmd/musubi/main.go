@@ -12,13 +12,9 @@ import (
 
 	"musubi/internal/bootstrap"
 	"musubi/internal/config"
-	"musubi/internal/detector"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
 	"musubi/internal/memory"
-	"musubi/internal/skills"
-
-	"gopkg.in/yaml.v3"
 )
 
 // version es la versión del binario. Se inyecta en el release vía
@@ -326,11 +322,11 @@ func setupProjectWith(exeOverride string) {
 	engine.Close()
 	fmt.Println("  ✓ Workspace .musubi/ (config + memoria) listo")
 
-	// 2. Skill de arranque (solo si no hay ninguno).
-	if err := writeStarterSkill(root); err != nil {
-		fmt.Printf("  ! No se pudo escribir el skill de arranque: %v\n", err)
+	// 2. Bundle de skills cognitivas de arranque (analizar/deducir/planear + perfil).
+	if err := writeCognitiveSkills(root); err != nil {
+		fmt.Printf("  ! No se pudieron escribir las skills cognitivas: %v\n", err)
 	} else {
-		fmt.Println("  ✓ Skill de arranque en .musubi/skills/")
+		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile)")
 	}
 
 	// 3. Registrar el servidor en .mcp.json para carga automática.
@@ -361,89 +357,6 @@ func setupProjectWith(exeOverride string) {
 
 	fmt.Println("\nListo. Reabrí el proyecto en Claude Code y el servidor 'musubi' estará disponible.")
 	fmt.Println("En la primera sesión, Claude detectará el stack y generará skills personalizadas automáticamente.")
-}
-
-func writeStarterSkill(root string) error {
-	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return err
-	}
-	path := filepath.Join(skillsDir, "starter.yaml")
-	if _, err := os.Stat(path); err == nil {
-		return nil // ya existe, no sobrescribir
-	}
-	stack, _ := detector.DetectStack(root)
-	return os.WriteFile(path, []byte(starterSkillContent(stack)), 0644)
-}
-
-// ecosystemGlobs mapea cada ecosistema a los globs de archivo que lo representan.
-// Se usan como triggers del starter skill para que matchee los archivos reales
-// del proyecto en vez del genérico "*".
-var ecosystemGlobs = map[string][]string{
-	"Go":      {"*.go"},
-	"Node.js": {"*.js", "*.ts", "*.tsx", "*.jsx"},
-	"Python":  {"*.py"},
-	"Rust":    {"*.rs"},
-	"Java":    {"*.java", "*.kt"},
-	"Ruby":    {"*.rb"},
-	"PHP":     {"*.php"},
-	".NET":    {"*.cs"},
-	"Dart":    {"*.dart"},
-	"Elixir":  {"*.ex", "*.exs"},
-	"C/C++":   {"*.c", "*.cc", "*.cpp", "*.h", "*.hpp"},
-	"Docker":  {"Dockerfile"},
-}
-
-// starterSkillContent genera el YAML del starter skill adaptado al stack
-// detectado: triggers derivados de los ecosistemas presentes y una descripción
-// que los nombra. Sin stack reconocido, cae al trigger genérico "*".
-func starterSkillContent(stack []detector.StackResult) string {
-	var triggers []string
-	var ecos []string
-	vistos := map[string]bool{}
-	for _, r := range stack {
-		if vistos[r.Ecosystem] {
-			continue
-		}
-		vistos[r.Ecosystem] = true
-		ecos = append(ecos, r.Ecosystem)
-		for _, g := range ecosystemGlobs[r.Ecosystem] {
-			triggers = appendUnique(triggers, g)
-		}
-	}
-
-	descripcion := "Skill de arranque generado por 'musubi setup'. Editalo para tu proyecto."
-	if len(ecos) > 0 {
-		descripcion = "Skill de arranque para " + strings.Join(ecos, ", ") + ". Editalo para tu proyecto."
-	}
-	if len(triggers) == 0 {
-		triggers = []string{"*"}
-	}
-
-	sk := skills.Skill{
-		Name:         "starter",
-		Description:  descripcion,
-		Triggers:     triggers,
-		Capabilities: []string{},
-		Rules: "- Guardá decisiones y aprendizajes con musubi_save_observation.\n" +
-			"- Antes de empezar algo, recuperá contexto con musubi_recall (eficiente) o musubi_search_keyword.\n",
-	}
-	data, err := yaml.Marshal(sk)
-	if err != nil {
-		// Fallback defensivo: nunca debería fallar al serializar una struct simple.
-		return "name: starter\ndescription: \"" + descripcion + "\"\ntriggers:\n  - \"*\"\ncapabilities: []\n"
-	}
-	return string(data)
-}
-
-// appendUnique agrega elem a slice si no está presente.
-func appendUnique(slice []string, elem string) []string {
-	for _, e := range slice {
-		if e == elem {
-			return slice
-		}
-	}
-	return append(slice, elem)
 }
 
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento

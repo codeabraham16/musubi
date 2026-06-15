@@ -50,6 +50,28 @@ func TestLoadStartupDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadStartupCognitiveDefault(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Startup.CognitiveBootstrap {
+		t.Error("esperaba cognitive_bootstrap true por defecto")
+	}
+}
+
+func TestLoadStartupCognitiveDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nstartup:\n  cognitive_bootstrap: false\n  recall_budget: 300\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Startup.CognitiveBootstrap {
+		t.Error("cognitive_bootstrap: false explícito debería respetarse")
+	}
+}
+
 func TestLoadStartupPrimeDisableRespected(t *testing.T) {
 	// Bloque presente (recall_budget seteado por init) con prime_memory: false explícito.
 	root := writeConfig(t, "version: \"1.0\"\nstartup:\n  prime_memory: false\n  recall_budget: 300\n")

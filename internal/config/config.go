@@ -80,6 +80,9 @@ type StartupConfig struct {
 	// AutoRegen re-dispara la generación de skills cuando el stack crece respecto
 	// de la huella guardada (default true). Si es false, la generación es one-shot.
 	AutoRegen bool `yaml:"auto_regen"`
+	// CognitiveBootstrap inyecta el bloque de skills cognitivas (analizar/deducir/
+	// planear + perfil) al arrancar, hasta que el proyecto tenga perfil (default true).
+	CognitiveBootstrap bool `yaml:"cognitive_bootstrap"`
 }
 
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
@@ -148,9 +151,10 @@ func Default() Config {
 			CheckIntervalHours: 24,
 		},
 		Startup: StartupConfig{
-			PrimeMemory:  true,
-			RecallBudget: 300,
-			AutoRegen:    true,
+			PrimeMemory:        true,
+			RecallBudget:       300,
+			AutoRegen:          true,
+			CognitiveBootstrap: true,
 		},
 	}
 }
@@ -272,7 +276,8 @@ func (c *Config) applyDefaults() {
 	// defaults completos (priming y auto-regen activos). Si el bloque está
 	// presente (init escribe recall_budget), respetamos los bool tal cual,
 	// permitiendo desactivar prime_memory/auto_regen explícitamente.
-	bloqueStartupAusente := c.Startup.RecallBudget == 0 && !c.Startup.PrimeMemory && !c.Startup.AutoRegen
+	bloqueStartupAusente := c.Startup.RecallBudget == 0 && !c.Startup.PrimeMemory &&
+		!c.Startup.AutoRegen && !c.Startup.CognitiveBootstrap
 	if bloqueStartupAusente {
 		c.Startup = d.Startup
 	} else if c.Startup.RecallBudget == 0 {

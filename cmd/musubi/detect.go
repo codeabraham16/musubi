@@ -20,6 +20,7 @@ type startupStore interface {
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
 	PrimeContext(budget int) (memory.RecallResult, error)
+	TopicExists(topicKey string) (bool, error)
 }
 
 // detectOutput implementa la lógica central del comando 'musubi detect'.
@@ -76,8 +77,23 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig) 
 	if store != nil && cfg.PrimeMemory {
 		priming = buildPrimingContext(store, cfg.RecallBudget)
 	}
+	cognitive := ""
+	if store != nil && cfg.CognitiveBootstrap && bootstrappingAutoconocimiento(store) {
+		cognitive = buildCognitiveContext()
+	}
 
-	return assembleHookContext(priming, generation), nil
+	return assembleHookContext(priming, cognitive, generation), nil
+}
+
+// bootstrappingAutoconocimiento indica si el proyecto AÚN no tiene perfil: en ese
+// caso el hook inyecta el bloque cognitivo con fuerza. Una vez que existe el
+// perfil (project/profile), deja de inyectarlo y se apoya en el priming.
+func bootstrappingAutoconocimiento(store startupStore) bool {
+	profiled, err := store.TopicExists(profileTopicKey)
+	if err != nil {
+		return false // ante la duda, no molestar
+	}
+	return !profiled
 }
 
 // decideGeneration devuelve el bloque de instrucciones de generación de skills, o
@@ -136,15 +152,14 @@ func resumirStack(resultados []detector.StackResult) string {
 	return resumen
 }
 
-// assembleHookContext combina priming y generación en el envelope JSON de
-// hookSpecificOutput. Devuelve "" si no hay nada que inyectar.
-func assembleHookContext(priming, generation string) string {
+// assembleHookContext combina los bloques no vacíos (en orden) en el envelope
+// JSON de hookSpecificOutput. Devuelve "" si no hay nada que inyectar.
+func assembleHookContext(bloques ...string) string {
 	var partes []string
-	if strings.TrimSpace(priming) != "" {
-		partes = append(partes, priming)
-	}
-	if strings.TrimSpace(generation) != "" {
-		partes = append(partes, generation)
+	for _, b := range bloques {
+		if strings.TrimSpace(b) != "" {
+			partes = append(partes, b)
+		}
 	}
 	if len(partes) == 0 {
 		return ""
@@ -182,6 +197,21 @@ func buildPrimingContext(store startupStore, budget int) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// buildCognitiveContext arma el bloque de autoconocimiento que activa las skills
+// cognitivas: que el agente analice el proyecto, deduzca convenciones, planee y
+// arme el PERFIL. Se inyecta mientras el proyecto no tenga perfil; una vez creado,
+// el priming lo lleva barato y este bloque deja de aparecer.
+func buildCognitiveContext() string {
+	return fmt.Sprintf(`[Musubi — autoconocimiento] Este proyecto todavía no tiene perfil. ANTES de avanzar con lo que pida el usuario, dedicá un momento a conocerlo usando las skills cognitivas de .musubi/skills/:
+
+- analyze-project: mapeá estructura, manifests y entrypoints (usá musubi_detect_stack) y capturá hallazgos no obvios con musubi_save_observation.
+- deduce-conventions: deducí convenciones (naming, tests, manejo de errores) del código existente y guardalas como hechos con musubi_save_fact.
+- plan-ahead: recuperá contexto con musubi_recall / musubi_recall_facts antes de actuar.
+- project-profile: consolidá un perfil conciso del proyecto con musubi_save_observation usando el topic_key exacto '%s' (propósito, stack, arquitectura, convenciones, decisiones).
+
+Cuando el perfil exista, Musubi te lo recordará automáticamente al arrancar y este paso dejará de aparecer. No dupliques lo que ya esté en memoria: recuperá primero.`, profileTopicKey)
 }
 
 // buildAdditionalContext construye las instrucciones de generación COMPLETA de
