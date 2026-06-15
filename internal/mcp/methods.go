@@ -100,6 +100,14 @@ func (s *McpServer) handleToolsList() interface{} {
 			},
 		},
 		{
+			Name:        "musubi_maintain",
+			Description: "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. No recibe parámetros (usa la config de maintenance). Devuelve un resumen.",
+			InputSchema: InputSchema{
+				Type:       "object",
+				Properties: map[string]Property{},
+			},
+		},
+		{
 			Name:        "musubi_search_semantic",
 			Description: "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
 			InputSchema: InputSchema{
@@ -270,6 +278,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolRecall(callReq.Arguments)
 	case "musubi_memory_expand":
 		return s.toolMemoryExpand(callReq.Arguments)
+	case "musubi_maintain":
+		return s.toolMaintain(callReq.Arguments)
 	case "musubi_log_error":
 		return s.toolLogError(callReq.Arguments)
 	case "musubi_resolve_telemetry":
@@ -370,6 +380,25 @@ func (s *McpServer) toolRecall(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
 	}
 	return jsonResult(res)
+}
+
+func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
+	cons, err := s.engine.Consolidate(s.maintenance.DedupThreshold)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al consolidar: %v", err)
+	}
+	dec, err := s.engine.Decay(memory.DecayOptions{
+		HalfLifeDays: s.maintenance.DecayHalfLifeDays,
+		MinSalience:  s.maintenance.DecayMinSalience,
+		MinAgeDays:   s.maintenance.DecayMinAgeDays,
+	})
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error en decay: %v", err)
+	}
+	return jsonResult(map[string]interface{}{
+		"consolidate": cons,
+		"decay":       dec,
+	})
 }
 
 func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {

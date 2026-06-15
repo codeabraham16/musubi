@@ -83,6 +83,7 @@ func (e *DbEngine) migrateObservations() error {
 		{"last_accessed", "last_accessed DATETIME"},
 		{"access_count", "access_count INTEGER NOT NULL DEFAULT 0"},
 		{"importance", "importance REAL NOT NULL DEFAULT 1.0"},
+		{"archived", "archived INTEGER NOT NULL DEFAULT 0"},
 	}
 	existing, err := e.observationColumns()
 	if err != nil {
@@ -179,10 +180,15 @@ func (e *DbEngine) initSchema() error {
 			DELETE FROM observations_fts WHERE id = old.id;
 		END;`,
 
-		// El UPSERT de saveObservation actualiza filas existentes; este trigger
-		// mantiene el índice FTS sincronizado en ese caso (AFTER INSERT no dispara).
-		`CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
-			INSERT OR REPLACE INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
+		// El UPSERT de saveObservation (y cualquier UPDATE, ej. bumpAccess) actualiza
+		// filas existentes; este trigger mantiene el índice FTS sincronizado.
+		// DELETE+INSERT (no INSERT OR REPLACE): observations_fts no tiene clave única
+		// en id, así que un OR REPLACE duplicaría la fila en cada UPDATE.
+		// Se recrea para reemplazar la versión previa (con bug) en bases existentes.
+		`DROP TRIGGER IF EXISTS observations_au;`,
+		`CREATE TRIGGER observations_au AFTER UPDATE ON observations BEGIN
+			DELETE FROM observations_fts WHERE id = old.id;
+			INSERT INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
 		END;`,
 
 		// Tabla de decisiones de skills (log append-only).

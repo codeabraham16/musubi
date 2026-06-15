@@ -54,7 +54,7 @@ func TestMigrationAddsColumnsAndBackfills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{"gist", "content_hash", "tokens", "last_accessed", "access_count", "importance"} {
+	for _, c := range []string{"gist", "content_hash", "tokens", "last_accessed", "access_count", "importance", "archived"} {
 		if !cols[c] {
 			t.Errorf("columna %q no fue agregada por la migración", c)
 		}

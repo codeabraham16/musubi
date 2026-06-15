@@ -106,6 +106,40 @@ func TestRecallNoMatchEmpty(t *testing.T) {
 	}
 }
 
+func TestArchivedExcludedFromRecallAndSearch(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservation("vis", "t", "memoria visible sobre kubernetes", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SaveObservation("arc", "t", "memoria archivada sobre kubernetes", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET archived=1 WHERE id='arc'`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := e.Recall("kubernetes", RecallOptions{})
+	if err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+	if res.Count != 1 {
+		t.Errorf("esperaba 1 item (solo visible), obtuve %d", res.Count)
+	}
+	for _, it := range res.Items {
+		if it.ID == "arc" {
+			t.Error("recall no debería devolver memorias archivadas")
+		}
+	}
+
+	fts, err := e.SearchObservationsFTS("kubernetes", 10)
+	if err != nil {
+		t.Fatalf("fts error: %v", err)
+	}
+	if len(fts) != 1 || fts[0].ID != "vis" {
+		t.Errorf("keyword debería excluir archivadas, obtuve %+v", fts)
+	}
+}
+
 func TestScoreCandidatesFusion(t *testing.T) {
 	// 'c' tiene la peor posición keyword pero importancia alta: debe ganar.
 	cands := []candidate{

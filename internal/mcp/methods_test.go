@@ -196,6 +196,29 @@ func TestMemoryExpandRequiresIds(t *testing.T) {
 	}
 }
 
+func TestMaintainTool(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	// Dos casi-duplicados (no exactos): el maintain debe consolidarlos.
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "el patron observer en go sirve para eventos"}); e != nil {
+		t.Fatalf("save 1 error: %+v", e)
+	}
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "el patron observer en go sirve para eventos."}); e != nil {
+		t.Fatalf("save 2 error: %+v", e)
+	}
+
+	res, e := call(t, s, "musubi_maintain", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("maintain error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "consolidate") || !strings.Contains(txt, "decay") {
+		t.Errorf("esperaba resumen con consolidate y decay, obtuve %s", txt)
+	}
+	if !strings.Contains(txt, "\"merged\": 1") {
+		t.Errorf("esperaba 1 merge de casi-duplicados, obtuve %s", txt)
+	}
+}
+
 func TestSaveObservationDedupViaTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "memoria única"}); e != nil {

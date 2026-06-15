@@ -60,6 +60,11 @@ func WithMemory(c config.MemoryConfig) Option {
 	return func(s *McpServer) { s.memory = c }
 }
 
+// WithMaintenance devuelve un Option que configura el auto-mantenimiento.
+func WithMaintenance(c config.MaintenanceConfig) Option {
+	return func(s *McpServer) { s.maintenance = c }
+}
+
 type McpServer struct {
 	engine   *memory.DbEngine
 	resolver *skills.Resolver
@@ -71,7 +76,9 @@ type McpServer struct {
 	sourcing config.SourcingConfig
 	// memory contiene los parámetros del recall por presupuesto de tokens.
 	memory config.MemoryConfig
-	out    io.Writer
+	// maintenance contiene los parámetros del auto-mantenimiento (consolidar + olvidar).
+	maintenance config.MaintenanceConfig
+	out         io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -89,6 +96,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		projectPath: projectPath,
 		sourcing:    config.Default().Sourcing,
 		memory:      config.Default().Memory,
+		maintenance: config.Default().Maintenance,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {
