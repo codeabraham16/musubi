@@ -35,6 +35,8 @@ func main() {
 		runCatalog(os.Args[2:])
 	case "daemon":
 		runDaemon()
+	case "maintain":
+		runMaintain()
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -52,6 +54,47 @@ func printUsage() {
 	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
 	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
+	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
+}
+
+// runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
+// como proceso one-shot e imprime un resumen en stdout.
+func runMaintain() {
+	root := workspaceDir()
+	if err := ensureWorkspace(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
+		os.Exit(1)
+	}
+	engine, err := memory.NewDbEngine(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
+		os.Exit(1)
+	}
+	defer engine.Close()
+
+	cons, err := engine.Consolidate(cfg.Maintenance.DedupThreshold)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al consolidar: %v\n", err)
+		os.Exit(1)
+	}
+	dec, err := engine.Decay(memory.DecayOptions{
+		HalfLifeDays: cfg.Maintenance.DecayHalfLifeDays,
+		MinSalience:  cfg.Maintenance.DecayMinSalience,
+		MinAgeDays:   cfg.Maintenance.DecayMinAgeDays,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error en decay: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Mantenimiento de memoria completo:\n")
+	fmt.Printf("  Consolidación: %d fusionadas de %d escaneadas\n", cons.Merged, cons.Scanned)
+	fmt.Printf("  Olvido: %d archivadas de %d escaneadas\n", dec.Archived, dec.Scanned)
 }
 
 // noArgs maneja la invocación sin comando. Si se ejecuta en una consola
@@ -415,6 +458,6 @@ func runDaemon() {
 	defer engine.Close()
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance))
 	server.Start()
 }

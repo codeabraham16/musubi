@@ -114,9 +114,10 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 // SearchObservations realiza una búsqueda semántica comparando el vector query con la BD.
 func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]SearchResult, error) {
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector 
+		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
 		JOIN embeddings e ON o.id = e.observation_id
+		WHERE o.archived = 0
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error al consultar observaciones: %w", err)
@@ -171,7 +172,7 @@ func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observa
 		SELECT f.id, f.topic_key, f.content, o.created_at
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ?
+		WHERE observations_fts MATCH ? AND o.archived = 0
 		ORDER BY rank
 		LIMIT ?
 	`, queryText, limit)

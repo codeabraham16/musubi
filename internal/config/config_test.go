@@ -91,3 +91,29 @@ func TestLoadParsesMemoryBlock(t *testing.T) {
 		t.Errorf("bloque memory no parseado: %+v", cfg.Memory)
 	}
 }
+
+func TestLoadMaintenanceDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Maintenance.DedupThreshold != 0.85 {
+		t.Errorf("esperaba dedup_threshold 0.85 por defecto, obtuve %v", cfg.Maintenance.DedupThreshold)
+	}
+	if cfg.Maintenance.DecayHalfLifeDays != 30 || cfg.Maintenance.DecayMinSalience != 0.2 || cfg.Maintenance.DecayMinAgeDays != 14 {
+		t.Errorf("defaults de maintenance no aplicados: %+v", cfg.Maintenance)
+	}
+}
+
+func TestLoadParsesMaintenanceBlock(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmaintenance:\n  dedup_threshold: 0.9\n  decay_half_life_days: 60\n  decay_min_salience: 0.1\n  decay_min_age_days: 7\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Maintenance.DedupThreshold != 0.9 || cfg.Maintenance.DecayHalfLifeDays != 60 ||
+		cfg.Maintenance.DecayMinSalience != 0.1 || cfg.Maintenance.DecayMinAgeDays != 7 {
+		t.Errorf("bloque maintenance no parseado: %+v", cfg.Maintenance)
+	}
+}

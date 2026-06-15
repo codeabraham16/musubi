@@ -41,6 +41,19 @@ type MemoryConfig struct {
 	CandidatePool int `yaml:"candidate_pool"`
 }
 
+// MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
+// de casi-duplicados y olvido por saliencia).
+type MaintenanceConfig struct {
+	// DedupThreshold es la similitud mínima (0..1) para fusionar casi-duplicados.
+	DedupThreshold float64 `yaml:"dedup_threshold"`
+	// DecayHalfLifeDays es la vida media de la recencia en el cálculo de saliencia.
+	DecayHalfLifeDays float64 `yaml:"decay_half_life_days"`
+	// DecayMinSalience es el umbral por debajo del cual una memoria fría se archiva.
+	DecayMinSalience float64 `yaml:"decay_min_salience"`
+	// DecayMinAgeDays es la edad mínima para que una memoria pueda archivarse.
+	DecayMinAgeDays float64 `yaml:"decay_min_age_days"`
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string          `yaml:"version"`
@@ -51,6 +64,8 @@ type Config struct {
 	Sourcing SourcingConfig `yaml:"sourcing,omitempty"`
 	// Memory configura el recall por presupuesto de tokens.
 	Memory MemoryConfig `yaml:"memory,omitempty"`
+	// Maintenance configura el auto-mantenimiento (consolidación + olvido).
+	Maintenance MaintenanceConfig `yaml:"maintenance,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -75,6 +90,12 @@ func Default() Config {
 			RecallTokenBudget: 400,
 			GistMaxTokens:     24,
 			CandidatePool:     50,
+		},
+		Maintenance: MaintenanceConfig{
+			DedupThreshold:    0.85,
+			DecayHalfLifeDays: 30,
+			DecayMinSalience:  0.2,
+			DecayMinAgeDays:   14,
 		},
 	}
 }
@@ -150,5 +171,19 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Memory.CandidatePool == 0 {
 		c.Memory.CandidatePool = d.Memory.CandidatePool
+	}
+
+	// Defaults de Maintenance.
+	if c.Maintenance.DedupThreshold == 0 {
+		c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold
+	}
+	if c.Maintenance.DecayHalfLifeDays == 0 {
+		c.Maintenance.DecayHalfLifeDays = d.Maintenance.DecayHalfLifeDays
+	}
+	if c.Maintenance.DecayMinSalience == 0 {
+		c.Maintenance.DecayMinSalience = d.Maintenance.DecayMinSalience
+	}
+	if c.Maintenance.DecayMinAgeDays == 0 {
+		c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
 	}
 }
