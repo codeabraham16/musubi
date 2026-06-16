@@ -137,6 +137,10 @@ func (e *DbEngine) backupDB() (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
+	// Con WAL, los commits viven en el archivo -wal hasta el checkpoint. Forzar un
+	// checkpoint para que el backup (que copia solo memory.db) quede completo.
+	_, _ = e.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+
 	ts := time.Now().UTC().Format("20060102-150405")
 	dest := filepath.Join(dir, "memory.db."+ts)
 	in, err := os.Open(e.path)

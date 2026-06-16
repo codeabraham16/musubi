@@ -117,6 +117,17 @@ type PipelineConfig struct {
 	Phases []string `yaml:"phases"`
 }
 
+// MultiAgentConfig controla la pizarra compartida del multi-agente (musubi_work
+// + recordatorio de batch por turno).
+type MultiAgentConfig struct {
+	// Enabled activa el recordatorio de batch por turno (default true). La tool
+	// musubi_work siempre está disponible.
+	Enabled bool `yaml:"enabled"`
+	// MaxBatchUnits es el tope de unidades por batch, como cota de seguridad
+	// (default 50).
+	MaxBatchUnits int `yaml:"max_batch_units"`
+}
+
 // ConflictConfig controla la detección de relaciones semánticas entre
 // observaciones (resolución de conflictos model-free).
 type ConflictConfig struct {
@@ -163,6 +174,8 @@ type Config struct {
 	Loop LoopConfig `yaml:"loop,omitempty"`
 	// Pipeline configura el pipeline por fases del loop dirigido.
 	Pipeline PipelineConfig `yaml:"pipeline,omitempty"`
+	// MultiAgent configura la pizarra compartida del multi-agente.
+	MultiAgent MultiAgentConfig `yaml:"multiagent,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -225,6 +238,10 @@ func Default() Config {
 		Pipeline: PipelineConfig{
 			Enabled: true,
 			Phases:  []string{"explore", "plan", "code", "verify"},
+		},
+		MultiAgent: MultiAgentConfig{
+			Enabled:       true,
+			MaxBatchUnits: 50,
 		},
 	}
 }
@@ -395,5 +412,14 @@ func (c *Config) applyDefaults() {
 		c.Pipeline = d.Pipeline
 	} else if len(c.Pipeline.Phases) == 0 {
 		c.Pipeline.Phases = d.Pipeline.Phases
+	}
+
+	// Defaults de MultiAgent. Bloque ausente = enabled false y sin tope: aplicar
+	// defaults completos. Si está presente, respetar enabled y completar el tope.
+	bloqueMultiAgentAusente := !c.MultiAgent.Enabled && c.MultiAgent.MaxBatchUnits == 0
+	if bloqueMultiAgentAusente {
+		c.MultiAgent = d.MultiAgent
+	} else if c.MultiAgent.MaxBatchUnits == 0 {
+		c.MultiAgent.MaxBatchUnits = d.MultiAgent.MaxBatchUnits
 	}
 }

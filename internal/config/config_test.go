@@ -209,6 +209,34 @@ func TestLoadPipelineDisableRespected(t *testing.T) {
 	}
 }
 
+func TestLoadMultiAgentDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.MultiAgent.Enabled {
+		t.Error("esperaba multiagent.enabled true por defecto")
+	}
+	if cfg.MultiAgent.MaxBatchUnits != 50 {
+		t.Errorf("esperaba max_batch_units 50 por defecto, obtuve %d", cfg.MultiAgent.MaxBatchUnits)
+	}
+}
+
+func TestLoadMultiAgentDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmultiagent:\n  enabled: false\n  max_batch_units: 10\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.MultiAgent.Enabled {
+		t.Error("multiagent.enabled: false explícito debería respetarse")
+	}
+	if cfg.MultiAgent.MaxBatchUnits != 10 {
+		t.Errorf("max_batch_units personalizado no parseado: %d", cfg.MultiAgent.MaxBatchUnits)
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 
