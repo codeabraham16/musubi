@@ -29,6 +29,13 @@ func runDoctor(args []string) {
 	check := parseFlagValue(args, "--check")
 	asJSON := hasFlag(args, "--json")
 
+	// --check presente pero sin valor: error explícito en vez de caer en silencio
+	// al diagnóstico completo.
+	if check == "" && hasFlag(args, "--check") {
+		fmt.Fprintln(os.Stderr, "doctor: --check requiere un código (ej. --check fts_consistency)")
+		os.Exit(1)
+	}
+
 	if check != "" {
 		res, err := engine.RunCheck(check)
 		if err != nil {

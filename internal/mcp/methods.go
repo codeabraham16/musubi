@@ -686,7 +686,7 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'id'")
 		}
-		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status); err != nil {
+		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo completar: %v", err)
 		}
 		return textResult("Unidad completada."), nil

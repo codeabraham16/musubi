@@ -112,8 +112,9 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string) (WorkUnit, bool, error) 
 }
 
 // CompleteWorkUnit cierra una unidad con su resultado. status debe ser done o
-// failed (vacío = done).
-func (e *DbEngine) CompleteWorkUnit(id, result, status string) error {
+// failed (vacío = done). Si agent != "", exige además que sea quien la reclamó
+// (claimed_by), de modo que un agente no cierre la unidad de otro.
+func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string) error {
 	if status == "" {
 		status = WorkDone
 	}
@@ -122,15 +123,18 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status string) error {
 	}
 	// Guarda de estado: solo una unidad RECLAMADA puede cerrarse. Evita cerrar una
 	// open nunca reclamada y re-cerrar/sobrescribir una ya done/failed.
-	res, err := e.db.Exec(
-		`UPDATE work_units SET status=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?`,
-		status, result, id, WorkClaimed,
-	)
+	query := `UPDATE work_units SET status=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?`
+	args := []interface{}{status, result, id, WorkClaimed}
+	if agent != "" {
+		query += ` AND claimed_by=?`
+		args = append(args, agent)
+	}
+	res, err := e.db.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("error al completar unidad: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("la unidad %q no existe o no está reclamada (no se puede completar)", id)
+		return fmt.Errorf("la unidad %q no existe, no está reclamada, o fue reclamada por otro agente", id)
 	}
 	return nil
 }

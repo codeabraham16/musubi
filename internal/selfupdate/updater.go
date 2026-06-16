@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// maxDownloadBytes es el tope de tamaño de un asset descargado (backstop anti-DoS
+// de memoria). 512 MiB cubre con holgura cualquier binario de Musubi.
+const maxDownloadBytes = 512 << 20
+
 // Updater consulta releases en GitHub y descarga assets. Las bases son
 // configurables para poder testear con httptest.
 type Updater struct {
@@ -76,7 +80,8 @@ func (u *Updater) Download(ctx context.Context, tag, asset string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d al descargar %s", resp.StatusCode, asset)
 	}
-	return io.ReadAll(resp.Body)
+	// Tope de tamaño: backstop ante un server/MITM que intente agotar memoria.
+	return io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes))
 }
 
 // Apply reemplaza el ejecutable en exePath por newBinary. En Windows no se puede
