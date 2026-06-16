@@ -142,6 +142,78 @@ func TestTurnInjectsRelevantMemory(t *testing.T) {
 	}
 }
 
+// deltaLoop es defaultLoop con la inyección diferencial activada.
+func deltaLoop() config.LoopConfig {
+	l := defaultLoop()
+	l.DeltaInjection = true
+	return l
+}
+
+func TestTurnDeltaInjectsOnlyNew(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+		Count: 2,
+		Items: []memory.RecallItem{
+			{ID: "x1", TopicKey: "t", Gist: "memoria uno", ContentHash: "h1"},
+			{ID: "x2", TopicKey: "t", Gist: "memoria dos", ContentHash: "h2"},
+		},
+	}}
+	in := `{"prompt":"qué sabemos","session_id":"s1"}`
+
+	first := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	if !strings.Contains(first, "x1") || !strings.Contains(first, "x2") {
+		t.Fatalf("el primer turno debe inyectar ambas memorias, obtuve: %q", first)
+	}
+
+	// Segundo turno, misma sesión y misma memoria: nada nuevo -> silencio.
+	second := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	if second != "" {
+		t.Errorf("sin memoria nueva el delta no debe inyectar nada, obtuve: %q", second)
+	}
+}
+
+func TestTurnDeltaReinjectsChanged(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+		Count: 1,
+		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "versión vieja", ContentHash: "h1"}},
+	}}
+	in := `{"prompt":"q","session_id":"s1"}`
+	turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in)) // inyecta x1
+
+	// La memoria cambió (otro hash): debe re-inyectarse marcada como actualizada.
+	store.recall.Items[0] = memory.RecallItem{ID: "x1", TopicKey: "t", Gist: "versión nueva", ContentHash: "h2"}
+	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	if !strings.Contains(out, "x1") || !strings.Contains(out, "actualizado") {
+		t.Errorf("una memoria modificada debe re-inyectarse marcada 'actualizado', obtuve: %q", out)
+	}
+}
+
+func TestTurnDeltaResetsOnNewSession(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+		Count: 1,
+		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
+	}}
+	turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"q","session_id":"s1"}`))
+	// Nueva sesión: el delta se reinicia, debe volver a inyectar.
+	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"q","session_id":"s2"}`))
+	if !strings.Contains(out, "x1") {
+		t.Errorf("una sesión nueva debe reiniciar el delta y re-inyectar, obtuve: %q", out)
+	}
+}
+
+func TestTurnDeltaDisabledReinjectsEveryTurn(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+		Count: 1,
+		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
+	}}
+	in := `{"prompt":"q","session_id":"s1"}`
+	// defaultLoop tiene DeltaInjection=false: ambos turnos re-inyectan.
+	turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	if !strings.Contains(out, "x1") {
+		t.Errorf("con delta apagado cada turno debe re-inyectar, obtuve: %q", out)
+	}
+}
+
 func TestTurnRecallAccountsTokensInLedger(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{
 		Count:      1,
@@ -281,7 +353,7 @@ func TestTurnCaptureReminderResetsOnSave(t *testing.T) {
 	in := `{"prompt":"trabajando"}`
 
 	turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)) // base
-	store.obsCount = 2                                         // el agente guardó algo
+	store.obsCount = 2                                                 // el agente guardó algo
 	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
 		t.Fatalf("guardar algo debe reiniciar el contador (sin recordatorio), obtuve: %q", out)
 	}

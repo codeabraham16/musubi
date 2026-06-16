@@ -31,11 +31,12 @@ type RecallOptions struct {
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
 type RecallItem struct {
-	ID         string  `json:"id"`
-	TopicKey   string  `json:"topic_key"`
-	Gist       string  `json:"gist"`
-	Score      float64 `json:"score"`
-	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	ID          string  `json:"id"`
+	TopicKey    string  `json:"topic_key"`
+	Gist        string  `json:"gist"`
+	Score       float64 `json:"score"`
+	FullTokens  int     `json:"full_tokens"`  // costo de hidratar el contenido completo
+	ContentHash string  `json:"content_hash"` // huella del contenido (para inyección diferencial)
 }
 
 // RecallResult es la respuesta del recall, con presupuesto y consumo reales.
@@ -51,6 +52,7 @@ type candidate struct {
 	topicKey     string
 	gist         string
 	content      string
+	contentHash  string
 	fullTokens   int
 	createdAt    string
 	lastAccessed string
@@ -132,11 +134,12 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 		}
 
 		result.Items = append(result.Items, RecallItem{
-			ID:         c.id,
-			TopicKey:   c.topicKey,
-			Gist:       gist,
-			Score:      c.score,
-			FullTokens: c.fullTokens,
+			ID:          c.id,
+			TopicKey:    c.topicKey,
+			Gist:        gist,
+			Score:       c.score,
+			FullTokens:  c.fullTokens,
+			ContentHash: c.contentHash,
 		})
 		result.UsedTokens += cost
 		if result.UsedTokens >= budget {
@@ -213,7 +216,7 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 		return e.recentCandidates(limit)
 	}
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
+		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
@@ -231,7 +234,7 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).
 func (e *DbEngine) recentCandidates(limit int) ([]candidate, error) {
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
+		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
 		WHERE o.archived = 0 AND o.superseded_by IS NULL
@@ -249,7 +252,7 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 	var out []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.fullTokens,
+		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
 			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance); err != nil {
 			return nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}
