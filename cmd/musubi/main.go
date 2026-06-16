@@ -37,6 +37,8 @@ func main() {
 		runDetect()
 	case "turn":
 		runTurn()
+	case "precheck":
+		runPrecheck()
 	case "catalog":
 		runCatalog(os.Args[2:])
 	case "daemon":
@@ -65,6 +67,7 @@ func printUsage() {
 	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
 	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
 	fmt.Println("  turn --hook-mode  Modo hook UserPromptSubmit: inyecta contexto relevante al prompt del usuario")
+	fmt.Println("  precheck --hook-mode  Modo hook PreToolUse(Read): surface el gist de un archivo en memoria de código antes de leerlo")
 	fmt.Println("  catalog validate  Valida un index.json de catálogo de skills")
 	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
@@ -364,6 +367,11 @@ func setupProjectWith(exeOverride string) {
 	} else {
 		fmt.Println("  ✓ Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
 	}
+	if err := writeCodeMemoryHook(root, exePath); err != nil {
+		fmt.Printf("  ! No se pudo registrar el hook PreToolUse(Read): %v\n", err)
+	} else {
+		fmt.Println("  ✓ Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
+	}
 
 	// 5. Proteger la base de datos de runtime en git.
 	if err := ensureGitignore(root); err == nil {
@@ -428,6 +436,32 @@ func writeTurnHook(root, exePath string) error {
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "UserPromptSubmit", "", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
+// writeCodeMemoryHook inyecta (idempotente) el hook PreToolUse con matcher "Read"
+// en {root}/.claude/settings.json: antes de cada lectura de archivo, Musubi
+// surface el gist en memoria de código (o recuerda guardarlo). Hace automático el
+// uso de la memoria de código sin que el agente deba acordarse.
+func writeCodeMemoryHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: quoteExe(exePath) + " precheck --hook-mode",
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "PreToolUse", "Read", hook)
 	if err != nil {
 		return fmt.Errorf("error al mergear settings.json: %w", err)
 	}

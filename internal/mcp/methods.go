@@ -2,8 +2,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -994,11 +992,12 @@ func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInvalidParams, "path y gist son obligatorios")
 	}
 
-	// Fingerprint del contenido actual (best-effort: si el archivo no se puede
-	// leer, se guarda igual con fingerprint vacío y el recall lo marcará no-fresco).
-	fp, _ := fileFingerprint(s.projectPath, args.Path)
+	// Clave normalizada (relativa a la raíz) para que el hook PreToolUse encuentre
+	// lo que guarda la tool. Fingerprint best-effort del contenido actual.
+	key := memory.NormalizeCodePath(s.projectPath, args.Path)
+	fp, _ := memory.FileFingerprint(s.projectPath, args.Path)
 	cm := memory.CodeMemory{
-		Path:        args.Path,
+		Path:        key,
 		Gist:        args.Gist,
 		Symbols:     args.Symbols,
 		Fingerprint: fp,
@@ -1021,16 +1020,17 @@ func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError)
 		return nil, rpcErrorf(codeInvalidParams, "path es obligatorio")
 	}
 
-	cm, ok, err := s.engine.GetCodeMemory(args.Path)
+	key := memory.NormalizeCodePath(s.projectPath, args.Path)
+	cm, ok, err := s.engine.GetCodeMemory(key)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al leer memoria de código: %v", err)
 	}
 	if !ok {
-		return jsonResult(map[string]interface{}{"found": false, "path": args.Path})
+		return jsonResult(map[string]interface{}{"found": false, "path": key})
 	}
 
 	// Frescura: el gist sirve si el archivo no cambió desde que se guardó.
-	current, ferr := fileFingerprint(s.projectPath, args.Path)
+	current, ferr := memory.FileFingerprint(s.projectPath, args.Path)
 	fresh := ferr == nil && current != "" && current == cm.Fingerprint
 	_, _ = s.engine.LedgerAdd("", "code_recall", cm.Tokens)
 	return jsonResult(map[string]interface{}{
@@ -1041,22 +1041,6 @@ func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError)
 		"tokens":  cm.Tokens,
 		"fresh":   fresh,
 	})
-}
-
-// fileFingerprint devuelve el sha256 (hex) del contenido actual del archivo,
-// resolviendo path relativo contra root. Es la señal de frescura de la memoria de
-// código: si cambia el contenido, cambia el fingerprint.
-func fileFingerprint(root, path string) (string, error) {
-	full := path
-	if !filepath.IsAbs(full) {
-		full = filepath.Join(root, path)
-	}
-	data, err := os.ReadFile(full)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcError) {
