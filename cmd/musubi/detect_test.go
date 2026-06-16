@@ -17,6 +17,9 @@ type fakeStore struct {
 	meta   map[string]string
 	prime  memory.RecallResult
 	topics map[string]bool
+
+	ledger        map[string]int
+	ledgerSession string
 }
 
 func newFakeStore() *fakeStore {
@@ -33,6 +36,42 @@ func (f *fakeStore) PrimeContext(budget int) (memory.RecallResult, error) {
 }
 func (f *fakeStore) TopicExists(topicKey string) (bool, error) {
 	return f.topics[topicKey], nil
+}
+func (f *fakeStore) LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error) {
+	if f.ledger == nil {
+		f.ledger = map[string]int{}
+	}
+	f.ledger[surface] += tokens
+	f.ledgerSession = sessionID
+	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
+}
+
+func TestPrimingAccountsTokensInLedger(t *testing.T) {
+	store := newFakeStore()
+	store.prime = memory.RecallResult{
+		Count:      1,
+		UsedTokens: 30,
+		Items:      []memory.RecallItem{{ID: "x", TopicKey: "t", Gist: "contexto del proyecto"}},
+	}
+	out := buildPrimingContext(store, 300, "sess-9")
+	if out == "" {
+		t.Fatal("esperaba un bloque de priming no vacío")
+	}
+	if store.ledger["startup_priming"] != 30 {
+		t.Errorf("el priming debe contabilizar 30 tokens, obtuve %d", store.ledger["startup_priming"])
+	}
+	if store.ledgerSession != "sess-9" {
+		t.Errorf("el ledger debe usar el session_id del SessionStart, obtuve %q", store.ledgerSession)
+	}
+}
+
+func TestReadSessionID(t *testing.T) {
+	if got := readSessionID(strings.NewReader(`{"session_id":"abc","hook_event_name":"SessionStart"}`)); got != "abc" {
+		t.Errorf("esperaba 'abc', obtuve %q", got)
+	}
+	if got := readSessionID(strings.NewReader(`no es json`)); got != "" {
+		t.Errorf("entrada inválida debe dar \"\", obtuve %q", got)
+	}
 }
 
 // crearGoNodeProject crea un proyecto políglota (Go + Node.js con React).
@@ -57,7 +96,7 @@ func TestHookCognitivoEnBootstrapping(t *testing.T) {
 	stack, _ := detector.DetectStack(dir)
 	store.meta["skills_stack"] = detector.StackFingerprint(stack)
 	// Sin perfil → debe inyectar el bloque cognitivo.
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +115,7 @@ func TestHookCognitivoSilenciadoConPerfil(t *testing.T) {
 	stack, _ := detector.DetectStack(dir)
 	store.meta["skills_stack"] = detector.StackFingerprint(stack)
 	store.topics["project/profile"] = true // ya perfilado
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +132,7 @@ func TestHookCognitivoRespetaToggle(t *testing.T) {
 	store.meta["skills_stack"] = detector.StackFingerprint(stack)
 	cfg := defaultStartup()
 	cfg.CognitiveBootstrap = false
-	out, err := buildHookOutput(dir, store, cfg)
+	out, err := buildHookOutput(dir, store, cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +144,7 @@ func TestHookCognitivoRespetaToggle(t *testing.T) {
 func TestHookFullGenerationPrimeraVez(t *testing.T) {
 	dir := crearGoProject(t)
 	store := newFakeStore() // sin huella, sin sentinel
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +159,7 @@ func TestHookDeltaRegeneracion(t *testing.T) {
 	store := newFakeStore()
 	// La huella guardada solo cubría Go; ahora hay Node.js (delta).
 	store.meta["skills_stack"] = detector.StackFingerprint([]detector.StackResult{{Ecosystem: "Go"}})
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +178,7 @@ func TestHookSinCambiosNiMemoria(t *testing.T) {
 	stack, _ := detector.DetectStack(dir)
 	store.meta["skills_stack"] = detector.StackFingerprint(stack)
 	store.topics["project/profile"] = true // ya perfilado: nada que inyectar
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +198,7 @@ func TestHookPrimingInyectado(t *testing.T) {
 		UsedTokens: 10,
 		Items:      []memory.RecallItem{{ID: "1", TopicKey: "arch/db", Gist: "Usamos SQLite con FTS5"}},
 	}
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +217,7 @@ func TestHookMigracionBackfill(t *testing.T) {
 	dir := crearGoProject(t)
 	crearSentinel(t, dir) // proyecto viejo: sentinel pero sin huella en meta
 	store := newFakeStore()
-	out, err := buildHookOutput(dir, store, defaultStartup())
+	out, err := buildHookOutput(dir, store, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +236,7 @@ func TestHookAutoRegenDesactivado(t *testing.T) {
 	store.meta["skills_stack"] = detector.StackFingerprint([]detector.StackResult{{Ecosystem: "Go"}})
 	cfg := defaultStartup()
 	cfg.AutoRegen = false
-	out, err := buildHookOutput(dir, store, cfg)
+	out, err := buildHookOutput(dir, store, cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +248,7 @@ func TestHookAutoRegenDesactivado(t *testing.T) {
 func TestHookStoreNilFallback(t *testing.T) {
 	dir := crearGoProject(t)
 	// Sin sentinel + store nil → comportamiento viejo: generación completa.
-	out, err := buildHookOutput(dir, nil, defaultStartup())
+	out, err := buildHookOutput(dir, nil, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +257,7 @@ func TestHookStoreNilFallback(t *testing.T) {
 	}
 	// Con sentinel + store nil → silencioso.
 	crearSentinel(t, dir)
-	out, err = buildHookOutput(dir, nil, defaultStartup())
+	out, err = buildHookOutput(dir, nil, defaultStartup(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +294,7 @@ func crearSentinel(t *testing.T, root string) {
 // un JSON válido representando el slice de StackResult con al menos "ecosystem".
 func TestDetectOutputModoNormal(t *testing.T) {
 	dir := crearGoProject(t)
-	out, err := detectOutput(dir, false)
+	out, err := detectOutput(dir, false, "")
 	if err != nil {
 		t.Fatalf("error en modo normal: %v", err)
 	}
@@ -289,7 +328,7 @@ func TestDetectOutputHookModeSentinelPresente(t *testing.T) {
 	}
 	engine.Close()
 
-	out, err := detectOutput(dir, true)
+	out, err := detectOutput(dir, true, "")
 	if err != nil {
 		t.Fatalf("error inesperado con sentinel presente: %v", err)
 	}
@@ -308,7 +347,7 @@ func TestDetectOutputHookModeSentinelAusente(t *testing.T) {
 	dir := crearGoProject(t)
 	// No creamos sentinel.
 
-	out, err := detectOutput(dir, true)
+	out, err := detectOutput(dir, true, "")
 	if err != nil {
 		t.Fatalf("error inesperado sin sentinel: %v", err)
 	}
