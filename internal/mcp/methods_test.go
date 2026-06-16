@@ -230,6 +230,46 @@ func TestMemoryExpandRequiresIds(t *testing.T) {
 	}
 }
 
+func TestTokensToolTracksHydration(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "h1", "topic_key": "t", "content": "contenido razonablemente largo para gastar varios tokens al hidratar"}); e != nil {
+		t.Fatalf("save error: %+v", e)
+	}
+	if _, e := call(t, s, "musubi_memory_expand", map[string]interface{}{"ids": []string{"h1"}}); e != nil {
+		t.Fatalf("expand error: %+v", e)
+	}
+	res, e := call(t, s, "musubi_tokens", map[string]interface{}{"action": "status"})
+	if e != nil {
+		t.Fatalf("tokens status error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "\"total\"") || !strings.Contains(txt, "hydration") {
+		t.Errorf("esperaba total y la superficie hydration en el ledger, obtuve %s", txt)
+	}
+}
+
+func TestTokensToolReset(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "h2", "topic_key": "t", "content": "algo para hidratar y contar"}); e != nil {
+		t.Fatalf("save error: %+v", e)
+	}
+	call(t, s, "musubi_memory_expand", map[string]interface{}{"ids": []string{"h2"}})
+	if _, e := call(t, s, "musubi_tokens", map[string]interface{}{"action": "reset"}); e != nil {
+		t.Fatalf("tokens reset error: %+v", e)
+	}
+	res, _ := call(t, s, "musubi_tokens", map[string]interface{}{"action": "status"})
+	if !strings.Contains(textOf(t, res), "\"total\": 0") {
+		t.Errorf("tras reset el total debe ser 0, obtuve %s", textOf(t, res))
+	}
+}
+
+func TestTokensToolInvalidAction(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_tokens", map[string]interface{}{"action": "raro"}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por action inválida, obtuve %+v", e)
+	}
+}
+
 func TestSaveAndRecallFactsTools(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 

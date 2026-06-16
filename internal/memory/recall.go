@@ -31,11 +31,12 @@ type RecallOptions struct {
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
 type RecallItem struct {
-	ID         string  `json:"id"`
-	TopicKey   string  `json:"topic_key"`
-	Gist       string  `json:"gist"`
-	Score      float64 `json:"score"`
-	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	ID          string  `json:"id"`
+	TopicKey    string  `json:"topic_key"`
+	Gist        string  `json:"gist"`
+	Score       float64 `json:"score"`
+	FullTokens  int     `json:"full_tokens"`  // costo de hidratar el contenido completo
+	ContentHash string  `json:"content_hash"` // huella del contenido (para inyección diferencial)
 }
 
 // RecallResult es la respuesta del recall, con presupuesto y consumo reales.
@@ -51,6 +52,7 @@ type candidate struct {
 	topicKey     string
 	gist         string
 	content      string
+	contentHash  string
 	fullTokens   int
 	createdAt    string
 	lastAccessed string
@@ -93,8 +95,30 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 	keywordMeaningful := buildFTSQuery(query) != ""
 	scored := scoreCandidates(cands, keywordMeaningful)
 
-	var chosen []string
-	for _, c := range scored {
+	result = packByBudget(scored, budget, gistMax)
+
+	// Recall read-only (ej. inyección por turno): no contar como acceso para no
+	// distorsionar el ranking por frecuencia con accesos que el agente no pidió.
+	if opts.NoBump {
+		return result, nil
+	}
+	chosen := make([]string, 0, len(result.Items))
+	for _, it := range result.Items {
+		chosen = append(chosen, it.ID)
+	}
+	if err := e.bumpAccess(chosen); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// packByBudget empaqueta gists en orden de score hasta llenar budget tokens,
+// garantizando el top-1 (truncado si hace falta). Es el núcleo compartido por el
+// recall por query y el priming de arranque: un único lugar donde vive la lógica
+// de presupuesto y el estimador de tokens. Determinista, sin LLM.
+func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
+	result := RecallResult{Budget: budget, Items: []RecallItem{}}
+	for _, c := range ranked {
 		gist := c.gist
 		if strings.TrimSpace(gist) == "" {
 			gist = Gist(c.content, gistMax)
@@ -110,30 +134,20 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 		}
 
 		result.Items = append(result.Items, RecallItem{
-			ID:         c.id,
-			TopicKey:   c.topicKey,
-			Gist:       gist,
-			Score:      c.score,
-			FullTokens: c.fullTokens,
+			ID:          c.id,
+			TopicKey:    c.topicKey,
+			Gist:        gist,
+			Score:       c.score,
+			FullTokens:  c.fullTokens,
+			ContentHash: c.contentHash,
 		})
 		result.UsedTokens += cost
-		chosen = append(chosen, c.id)
-
 		if result.UsedTokens >= budget {
 			break
 		}
 	}
 	result.Count = len(result.Items)
-
-	// Recall read-only (ej. inyección por turno): no contar como acceso para no
-	// distorsionar el ranking por frecuencia con accesos que el agente no pidió.
-	if opts.NoBump {
-		return result, nil
-	}
-	if err := e.bumpAccess(chosen); err != nil {
-		return result, err
-	}
-	return result, nil
+	return result
 }
 
 // scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía
@@ -202,7 +216,7 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 		return e.recentCandidates(limit)
 	}
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
+		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
@@ -220,7 +234,7 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).
 func (e *DbEngine) recentCandidates(limit int) ([]candidate, error) {
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
+		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
 		WHERE o.archived = 0 AND o.superseded_by IS NULL
@@ -238,7 +252,7 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 	var out []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.fullTokens,
+		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
 			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance); err != nil {
 			return nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}

@@ -74,3 +74,45 @@ func TestMigrationAddsColumnsAndBackfills(t *testing.T) {
 		t.Error("tokens no fue backfilleado")
 	}
 }
+
+// TestRecomputeTokensWhenEstimatorChanges verifica que, si la versión del
+// estimador de tokens cambió, NewDbEngine recompute la columna `tokens` de TODAS
+// las filas (no solo las sin gist) y deje la versión actualizada.
+func TestRecomputeTokensWhenEstimatorChanges(t *testing.T) {
+	root := t.TempDir()
+
+	e, err := NewDbEngine(root)
+	if err != nil {
+		t.Fatalf("NewDbEngine error: %v", err)
+	}
+	content := "func add(a, b int) int { return a + b }" // código: estimador ≠ runas/4
+	if err := e.SaveObservation("c1", "t", content, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Simular que la fila quedó con tokens de un estimador viejo y forzar versión vieja.
+	if _, err := e.db.Exec(`UPDATE observations SET tokens=1 WHERE id=?`, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetMeta(metaTokenEstimatorVersion, "estimador-viejo"); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+
+	// Reabrir: debe detectar el cambio de versión y recomputar.
+	e2, err := NewDbEngine(root)
+	if err != nil {
+		t.Fatalf("reabrir error: %v", err)
+	}
+	defer e2.Close()
+
+	var tokens int
+	if err := e2.db.QueryRow(`SELECT tokens FROM observations WHERE id=?`, "c1").Scan(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	if want := EstimateTokens(content); tokens != want {
+		t.Errorf("tokens=%d no fue recomputado al estimador actual (%d)", tokens, want)
+	}
+	if v, _, _ := e2.GetMeta(metaTokenEstimatorVersion); v != tokenEstimatorVersion {
+		t.Errorf("la versión del estimador debió actualizarse a %q, quedó %q", tokenEstimatorVersion, v)
+	}
+}

@@ -72,6 +72,13 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig) 
 
 	current, _ := detector.DetectStack(root)
 
+	// SessionStart (arranque o compactación) = contexto fresco: limpiar el estado
+	// de inyección diferencial para que la memoria relevante se re-inyecte por turno.
+	if store != nil {
+		_ = store.SetMeta(metaDeltaInjected, "")
+		_ = store.SetMeta(metaDeltaSession, "")
+	}
+
 	generation := decideGeneration(root, store, cfg, current, sentinelExists)
 	priming := ""
 	if store != nil && cfg.PrimeMemory {

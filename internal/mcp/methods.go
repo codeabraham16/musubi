@@ -95,6 +95,7 @@ func (s *McpServer) handleToolsList() interface{} {
 						Description: "Lista de ids de observaciones a expandir",
 						Items:       &Property{Type: "string", Description: "id de observación"},
 					},
+					"max_tokens": {Type: "integer", Description: "Techo opcional de tokens a hidratar; recorta para no desbordar el contexto (0 = sin límite)"},
 				},
 				Required: []string{"ids"},
 			},
@@ -318,6 +319,16 @@ func (s *McpServer) handleToolsList() interface{} {
 				},
 			},
 		},
+		{
+			Name:        "musubi_tokens",
+			Description: "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto (priming de arranque + recall por turno + hidratación), por superficie. action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"action": {Type: "string", Description: "status | reset (default status)"},
+				},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -408,6 +419,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolPhase(callReq.Arguments)
 	case "musubi_work":
 		return s.toolWork(callReq.Arguments)
+	case "musubi_tokens":
+		return s.toolTokens(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -893,7 +906,8 @@ func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
 
 func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		IDs []string `json:"ids"`
+		IDs       []string `json:"ids"`
+		MaxTokens int      `json:"max_tokens"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -902,11 +916,39 @@ func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcErro
 		return nil, rpcErrorf(codeInvalidParams, "ids no puede estar vacío")
 	}
 
-	res, err := s.engine.GetObservations(args.IDs)
+	res, used, err := s.engine.GetObservationsBudget(args.IDs, args.MaxTokens)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al expandir memorias: %v", err)
 	}
+	// Contabilizar la hidratación en el ledger de la sesión activa (best-effort).
+	_, _ = s.engine.LedgerAdd("", "hydration", used)
 	return jsonResult(res)
+}
+
+func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Action string `json:"action"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+		}
+	}
+	switch strings.TrimSpace(args.Action) {
+	case "reset":
+		if err := s.engine.LedgerReset(); err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al reiniciar el ledger: %v", err)
+		}
+		return jsonResult(memory.TokenLedger{Surfaces: map[string]int{}})
+	case "", "status":
+		l, err := s.engine.LedgerStatus()
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al leer el ledger: %v", err)
+		}
+		return jsonResult(l)
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "action inválida: %q (status | reset)", args.Action)
+	}
 }
 
 func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcError) {

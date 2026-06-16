@@ -30,6 +30,7 @@ type turnStore interface {
 	ActiveBatch() (memory.WorkBatch, bool, error)
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
+	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 }
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
@@ -40,7 +41,8 @@ const (
 
 // turnInput es el subconjunto del JSON de stdin de UserPromptSubmit que usamos.
 type turnInput struct {
-	Prompt string `json:"prompt"`
+	Prompt    string `json:"prompt"`
+	SessionID string `json:"session_id"`
 }
 
 // turnOutput arma el additionalContext del hook UserPromptSubmit a partir del
@@ -52,7 +54,8 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	if store == nil {
 		return ""
 	}
-	prompt := readPrompt(stdin)
+	in := readTurnInput(stdin)
+	prompt := in.Prompt
 	if prompt == "" {
 		return ""
 	}
@@ -65,7 +68,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		blocks = append(blocks, buildTurnBatch(store))
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, buildTurnRecall(store, prompt, loopCfg.RecallBudget))
+		blocks = append(blocks, buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection))
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -152,29 +155,116 @@ func readIntMeta(store turnStore, key string) (int, bool) {
 	return n, true
 }
 
-// readPrompt extrae y normaliza el prompt del JSON de stdin. Tolera entrada
-// inválida o vacía devolviendo "".
-func readPrompt(stdin io.Reader) string {
+// readTurnInput extrae prompt y session_id del JSON de stdin, normalizando el
+// prompt. Tolera entrada inválida o vacía devolviendo un turnInput vacío.
+func readTurnInput(stdin io.Reader) turnInput {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		return ""
+		return turnInput{}
 	}
 	var in turnInput
 	if err := json.Unmarshal(data, &in); err != nil {
-		return ""
+		return turnInput{}
 	}
-	return strings.TrimSpace(in.Prompt)
+	in.Prompt = strings.TrimSpace(in.Prompt)
+	return in
 }
 
+// Claves de meta del estado de inyección diferencial (delta) por sesión.
+const (
+	metaDeltaSession  = "loop_delta_session"  // sesión a la que pertenece el estado delta
+	metaDeltaInjected = "loop_delta_injected" // JSON {id -> content_hash} ya inyectado
+)
+
 // buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
-// Devuelve "" si no hay memoria relevante.
-func buildTurnRecall(store turnStore, prompt string, budget int) string {
+// Con deltaEnabled, inyecta SOLO la memoria nueva o modificada respecto de lo ya
+// inyectado en la sesión (cache-considerate): si no hay nada nuevo, devuelve ""
+// (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
+func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool) string {
 	res, err := store.Recall(prompt, memory.RecallOptions{TokenBudget: budget, NoBump: true})
 	if err != nil || res.Count == 0 {
 		return ""
 	}
+
+	items := res.Items
+	var updated []bool
+	used := res.UsedTokens
+
+	if deltaEnabled {
+		seen := loadDeltaState(store, sessionID)
+		var keep []memory.RecallItem
+		used = 0
+		for _, it := range res.Items {
+			prev, known := seen[it.ID]
+			switch {
+			case !known:
+				keep = append(keep, it)
+				updated = append(updated, false)
+				used += memory.EstimateTokens(it.Gist)
+			case prev != it.ContentHash:
+				keep = append(keep, it)
+				updated = append(updated, true)
+				used += memory.EstimateTokens(it.Gist)
+			}
+			seen[it.ID] = it.ContentHash
+		}
+		saveDeltaState(store, sessionID, seen)
+		items = keep
+	}
+
+	if len(items) == 0 {
+		return "" // nada nuevo este turno: no re-inyectar (preserva contexto/caché)
+	}
+
+	// Contabilizar lo inyectado (session_id resetea el ledger por sesión).
+	_, _ = store.LedgerAdd(sessionID, "turn_recall", used)
 	header := "[Musubi — memoria relevante] Lo que Musubi ya sabe sobre lo que pediste (gists; usá musubi_memory_expand con el id para el detalle completo):"
-	return formatGists(header, res)
+	return formatDeltaGists(header, items, updated)
+}
+
+// loadDeltaState devuelve el conjunto {id -> content_hash} ya inyectado en la
+// sesión sessionID. Si el estado pertenece a otra sesión, arranca vacío (reset).
+func loadDeltaState(store turnStore, sessionID string) map[string]string {
+	prevSession, _, _ := store.GetMeta(metaDeltaSession)
+	if prevSession != sessionID {
+		return map[string]string{}
+	}
+	raw, ok, _ := store.GetMeta(metaDeltaInjected)
+	m := map[string]string{}
+	if ok && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &m)
+	}
+	return m
+}
+
+// saveDeltaState persiste el estado delta para la sesión.
+func saveDeltaState(store turnStore, sessionID string, m map[string]string) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = store.SetMeta(metaDeltaInjected, string(data))
+	_ = store.SetMeta(metaDeltaSession, sessionID)
+}
+
+// formatDeltaGists arma el bloque de gists del turno, marcando como "actualizado"
+// los items cuyo content_hash cambió (updated[i] == true). updated puede ser nil.
+func formatDeltaGists(header string, items []memory.RecallItem, updated []bool) string {
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString("\n")
+	for i, it := range items {
+		suffix := ""
+		if i < len(updated) && updated[i] {
+			suffix = " (actualizado)"
+		}
+		if it.TopicKey != "" {
+			fmt.Fprintf(&b, "- (%s) %s%s [id:%s]\n", it.TopicKey, it.Gist, suffix, it.ID)
+		} else {
+			fmt.Fprintf(&b, "- %s%s [id:%s]\n", it.Gist, suffix, it.ID)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // buildTurnConflicts agrega una línea compacta cuando hay relaciones de memoria

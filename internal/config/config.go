@@ -103,6 +103,10 @@ type LoopConfig struct {
 	// ReminderAfterTurns es la cantidad de turnos sin guardar tras la cual se inyecta
 	// el recordatorio de captura (default 5).
 	ReminderAfterTurns int `yaml:"reminder_after_turns"`
+	// DeltaInjection inyecta por turno SOLO la memoria nueva o modificada respecto
+	// de lo ya inyectado en la sesión (en vez de re-inyectar todo cada turno).
+	// Ahorra tokens y evita churnear el contexto (cache-considerate) (default true).
+	DeltaInjection bool `yaml:"delta_injection"`
 }
 
 // PipelineConfig controla el pipeline por fases del loop dirigido: Musubi mantiene
@@ -234,6 +238,7 @@ func Default() Config {
 			SurfaceConflicts:   true,
 			CaptureReminder:    true,
 			ReminderAfterTurns: 5,
+			DeltaInjection:     true,
 		},
 		Pipeline: PipelineConfig{
 			Enabled: true,

@@ -49,8 +49,53 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		db.Close()
 		return nil, err
 	}
+	// Si el estimador de tokens cambió de versión, recomputar la columna `tokens`
+	// de las filas existentes (el presupuesto se mide con el estimador actual).
+	if err := engine.recomputeTokensIfEstimatorChanged(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	return engine, nil
+}
+
+// recomputeTokensIfEstimatorChanged recomputa gist/tokens de TODAS las filas
+// cuando la versión del estimador difiere de la guardada en meta, y actualiza la
+// marca. Es idempotente: si la versión coincide, no hace nada.
+func (e *DbEngine) recomputeTokensIfEstimatorChanged() error {
+	v, _, err := e.GetMeta(metaTokenEstimatorVersion)
+	if err != nil {
+		return err
+	}
+	if v == tokenEstimatorVersion {
+		return nil
+	}
+
+	rows, err := e.db.Query(`SELECT id, content FROM observations`)
+	if err != nil {
+		return fmt.Errorf("error al consultar filas para recompute: %w", err)
+	}
+	type fila struct{ id, content string }
+	var filas []fila
+	for rows.Next() {
+		var f fila
+		if err := rows.Scan(&f.id, &f.content); err != nil {
+			rows.Close()
+			return fmt.Errorf("error al escanear recompute: %w", err)
+		}
+		filas = append(filas, f)
+	}
+	rows.Close()
+
+	for _, f := range filas {
+		if _, err := e.db.Exec(
+			`UPDATE observations SET gist=?, tokens=? WHERE id=?`,
+			Gist(f.content, defaultGistMaxTokens), EstimateTokens(f.content), f.id,
+		); err != nil {
+			return fmt.Errorf("error al recomputar tokens de %s: %w", f.id, err)
+		}
+	}
+	return e.SetMeta(metaTokenEstimatorVersion, tokenEstimatorVersion)
 }
 
 // observationColumns devuelve el conjunto de columnas presentes hoy en la tabla
