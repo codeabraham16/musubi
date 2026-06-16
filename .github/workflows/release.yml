@@ -9,9 +9,23 @@ permissions:
   contents: write
 
 jobs:
+  # Crea el release UNA sola vez antes del matrix. Evita la carrera donde los 6
+  # jobs de build intentan crearlo en paralelo (uno fallaba con "Not Found").
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+
   build:
+    needs: create-release
     runs-on: ubuntu-latest
     strategy:
+      # Un fallo transitorio en una plataforma no debe cancelar las demás ni dejar
+      # el release con assets faltantes.
+      fail-fast: false
       matrix:
         include:
           - { goos: windows, goarch: amd64, asset: Musubi.exe }
