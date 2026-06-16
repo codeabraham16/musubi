@@ -264,6 +264,19 @@ func TestTurnCaptureReminderResetsOnSave(t *testing.T) {
 	}
 }
 
+func TestTurnConflictsWithoutRecall(t *testing.T) {
+	// SurfaceConflicts es independiente de PerTurnRecall: si el recall está apagado
+	// pero hay conflictos pendientes y surface está prendido, deben mostrarse.
+	store := newFakeTurnStore()
+	store.pending = []memory.ObsRelation{{ID: "r1"}}
+	loop := config.LoopConfig{PerTurnRecall: false, SurfaceConflicts: true}
+	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	_, ctx := hookAdditionalContext(t, out)
+	if !strings.Contains(ctx, "musubi_judge") {
+		t.Errorf("con recall off pero surface_conflicts on, los conflictos deben mostrarse, obtuve: %q", ctx)
+	}
+}
+
 func TestTurnConflictsToggleOff(t *testing.T) {
 	store := &fakeTurnStore{
 		recall:  memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", Gist: "gist"}}},

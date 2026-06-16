@@ -66,9 +66,11 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	}
 	if loopCfg.PerTurnRecall {
 		blocks = append(blocks, buildTurnRecall(store, prompt, loopCfg.RecallBudget))
-		if loopCfg.SurfaceConflicts {
-			blocks = append(blocks, buildTurnConflicts(store))
-		}
+	}
+	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
+	// conviene avisarlas aunque el recall por turno esté apagado.
+	if loopCfg.SurfaceConflicts {
+		blocks = append(blocks, buildTurnConflicts(store))
 	}
 	if loopCfg.CaptureReminder {
 		blocks = append(blocks, buildCaptureReminder(store, loopCfg))
