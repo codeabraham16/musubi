@@ -24,7 +24,12 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		return nil, fmt.Errorf("no se pudo crear la carpeta .musubi: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// WAL + busy_timeout vía DSN para que apliquen a TODA conexión del pool:
+	// lectores concurrentes y un escritor a la vez, con espera en vez de
+	// "database is locked". Necesario para que varios sub-agentes coordinen sobre
+	// la misma pizarra (work_units) sin colisionar.
+	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
 	}
@@ -236,6 +241,24 @@ func (e *DbEngine) initSchema() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(source_id, target_id)
 		);`,
+
+		// Pizarra compartida del multi-agente: unidades de trabajo que el agente
+		// principal postea y los sub-agentes reclaman (claim atómico), ejecutan y
+		// completan. Es el ÚNICO canal de coordinación entre agentes (no comparten
+		// conversación). Coordinación determinista, model-free.
+		`CREATE TABLE IF NOT EXISTS work_units (
+			id TEXT PRIMARY KEY,
+			batch_id TEXT NOT NULL,
+			seq INTEGER NOT NULL DEFAULT 0,
+			title TEXT,
+			spec TEXT,
+			status TEXT NOT NULL DEFAULT 'open',
+			claimed_by TEXT,
+			result TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_batch_status ON work_units(batch_id, status);`,
 
 		// Tabla de decisiones de skills (log append-only).
 		`CREATE TABLE IF NOT EXISTS skill_decisions (

@@ -302,6 +302,22 @@ func (s *McpServer) handleToolsList() interface{} {
 				},
 			},
 		},
+		{
+			Name:        "musubi_work",
+			Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action ∈ {plan, claim, complete, status, clear}.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"action": {Type: "string", Description: "plan | claim | complete | status | clear"},
+					"batch":  {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
+					"units":  {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
+					"agent":  {Type: "string", Description: "Para claim: etiqueta del sub-agente que reclama"},
+					"id":     {Type: "string", Description: "Para complete: ID de la unidad a cerrar"},
+					"result": {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
+					"status": {Type: "string", Description: "Para complete: done | failed (default done)"},
+				},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -390,6 +406,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolDoctor(callReq.Arguments)
 	case "musubi_phase":
 		return s.toolPhase(callReq.Arguments)
+	case "musubi_work":
+		return s.toolWork(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -619,6 +637,81 @@ func (s *McpServer) toolPhase(raw json.RawMessage) (interface{}, *RpcError) {
 
 	default:
 		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá status|start|advance|set|clear)", action)
+	}
+}
+
+// toolWork maneja la pizarra compartida del multi-agente (plan/claim/complete/
+// status/clear).
+func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Action string                `json:"action"`
+		Batch  string                `json:"batch"`
+		Units  []memory.WorkUnitSpec `json:"units"`
+		Agent  string                `json:"agent"`
+		ID     string                `json:"id"`
+		Result string                `json:"result"`
+		Status string                `json:"status"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	switch action := strings.TrimSpace(args.Action); action {
+	case "plan":
+		if len(args.Units) == 0 {
+			return nil, rpcErrorf(codeInvalidParams, "plan requiere 'units' (al menos una)")
+		}
+		if max := s.multiagent.MaxBatchUnits; max > 0 && len(args.Units) > max {
+			return nil, rpcErrorf(codeInvalidParams, "el batch excede el tope de %d unidades", max)
+		}
+		b, err := s.engine.CreateWorkBatch(args.Batch, args.Units)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo crear el batch: %v", err)
+		}
+		return jsonResult(b)
+
+	case "claim":
+		u, ok, err := s.engine.ClaimWorkUnit(args.Batch, args.Agent)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo reclamar: %v", err)
+		}
+		if !ok {
+			return jsonResult(map[string]interface{}{"claimed": false})
+		}
+		return jsonResult(map[string]interface{}{"claimed": true, "unit": u})
+
+	case "complete":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'id'")
+		}
+		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo completar: %v", err)
+		}
+		return textResult("Unidad completada."), nil
+
+	case "status":
+		if strings.TrimSpace(args.Batch) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "status requiere 'batch'")
+		}
+		b, err := s.engine.WorkBatchStatus(args.Batch)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo leer el batch: %v", err)
+		}
+		return jsonResult(b)
+
+	case "clear":
+		if strings.TrimSpace(args.Batch) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "clear requiere 'batch'")
+		}
+		if err := s.engine.ClearWorkBatch(args.Batch); err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo limpiar el batch: %v", err)
+		}
+		return textResult("Batch limpiado."), nil
+
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|complete|status|clear)", action)
 	}
 }
 

@@ -82,6 +82,12 @@ func WithPipeline(c config.PipelineConfig) Option {
 	return func(s *McpServer) { s.pipeline = c }
 }
 
+// WithMultiAgent devuelve un Option que configura la pizarra compartida del
+// multi-agente (musubi_work).
+func WithMultiAgent(c config.MultiAgentConfig) Option {
+	return func(s *McpServer) { s.multiagent = c }
+}
+
 type McpServer struct {
 	engine   *memory.DbEngine
 	resolver *skills.Resolver
@@ -101,7 +107,9 @@ type McpServer struct {
 	conflicts config.ConflictConfig
 	// pipeline contiene los parámetros del pipeline por fases del loop dirigido.
 	pipeline config.PipelineConfig
-	out      io.Writer
+	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
+	multiagent config.MultiAgentConfig
+	out        io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -123,6 +131,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		graph:       config.Default().Graph,
 		conflicts:   config.Default().Conflicts,
 		pipeline:    config.Default().Pipeline,
+		multiagent:  config.Default().MultiAgent,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {

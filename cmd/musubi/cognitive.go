@@ -101,6 +101,18 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"- Actualizalo cuando descubras algo nuevo o cambie una decisión; mantenelo conciso.\n" +
 				"- Este perfil es lo que Musubi recuerda al arrancar cada sesión, así que mantenelo al día.\n",
 		},
+		{
+			Name:         "orchestrate-multiagent",
+			Description:  "Orquesta sub-agentes en paralelo usando la pizarra compartida de Musubi.",
+			Triggers:     []string{"*"},
+			Capabilities: []string{},
+			Rules: "Cuando una tarea sea grande y paralelizable (varios archivos/áreas independientes), orquestá sub-agentes con la pizarra compartida en vez de hacerlo todo en serie:\n" +
+				"1. Descomponé la tarea y posteá las unidades con musubi_work action=plan (cada unidad: title + spec claro y autónomo). Guardá el batch_id que devuelve.\n" +
+				"2. Lanzá N sub-agentes con el Task tool. En CADA uno: pasá mcpServers:[musubi] e instruí el protocolo: hacer musubi_work action=claim batch=<id> agent=<etiqueta>, ejecutar la unidad, y cerrarla con musubi_work action=complete id=<id> result=<resumen>. El claim es atómico: dos sub-agentes nunca toman la misma unidad.\n" +
+				"3. Monitoreá con musubi_work action=status batch=<id>. Cuando todas estén done, leé los results y CONSOLIDÁ una respuesta única.\n" +
+				"- La descomposición y la consolidación son tuyas (la inteligencia); Musubi solo garantiza coordinación sin colisiones.\n" +
+				"- Guardá las decisiones/aprendizajes del trabajo con musubi_save_observation.\n",
+		},
 	}
 }
 

@@ -24,9 +24,23 @@ func skillsByName(sks []skills.Skill) map[string]skills.Skill {
 func TestCognitiveSkillsBundleCompleto(t *testing.T) {
 	sks := cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}})
 	m := skillsByName(sks)
-	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile"} {
+	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile", "orchestrate-multiagent"} {
 		if _, ok := m[name]; !ok {
 			t.Errorf("falta la skill cognitiva %q en el bundle: %v", name, m)
+		}
+	}
+}
+
+func TestOrchestrateSkillDocumentaProtocolo(t *testing.T) {
+	m := skillsByName(cognitiveSkills(nil))
+	sk, ok := m["orchestrate-multiagent"]
+	if !ok {
+		t.Fatal("falta la skill orchestrate-multiagent")
+	}
+	// Debe documentar las tres patas del protocolo y pasar mcpServers a los sub-agentes.
+	for _, must := range []string{"musubi_work", "claim", "mcpServers"} {
+		if !strings.Contains(sk.Rules, must) {
+			t.Errorf("la skill debe mencionar %q en sus reglas: %q", must, sk.Rules)
 		}
 	}
 }

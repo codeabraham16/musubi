@@ -20,6 +20,8 @@ type fakeTurnStore struct {
 	obsCount    int
 	phase       memory.PhaseState
 	phaseActive bool
+	batch       memory.WorkBatch
+	batchActive bool
 	meta        map[string]string
 }
 
@@ -41,6 +43,10 @@ func (f *fakeTurnStore) CountObservations() (int, error) { return f.obsCount, ni
 
 func (f *fakeTurnStore) PhaseStatus() (memory.PhaseState, bool, error) {
 	return f.phase, f.phaseActive, nil
+}
+
+func (f *fakeTurnStore) ActiveBatch() (memory.WorkBatch, bool, error) {
+	return f.batch, f.batchActive, nil
 }
 
 func (f *fakeTurnStore) GetMeta(key string) (string, bool, error) {
@@ -71,6 +77,10 @@ func defaultPipe() config.PipelineConfig {
 	return config.PipelineConfig{Enabled: true, Phases: []string{"explore", "plan", "code", "verify"}}
 }
 
+func maOff() config.MultiAgentConfig { return config.MultiAgentConfig{Enabled: false} }
+
+func maOn() config.MultiAgentConfig { return config.MultiAgentConfig{Enabled: true, MaxBatchUnits: 50} }
+
 // hookAdditionalContext extrae el additionalContext del envelope JSON de un hook.
 func hookAdditionalContext(t *testing.T, out string) (string, string) {
 	t.Helper()
@@ -96,7 +106,7 @@ func TestTurnInjectsRelevantMemory(t *testing.T) {
 	}}
 	in := strings.NewReader(`{"prompt":"cómo está configurada la base de datos","hook_event_name":"UserPromptSubmit"}`)
 
-	out := turnOutput(store, defaultLoop(), pipeOff(), in)
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), in)
 
 	event, ctx := hookAdditionalContext(t, out)
 	if event != "UserPromptSubmit" {
@@ -122,7 +132,7 @@ func TestTurnInjectsRelevantMemory(t *testing.T) {
 
 func TestTurnSilentWithoutPrompt(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x", Gist: "algo"}}}}
-	out := turnOutput(store, defaultLoop(), pipeOff(), strings.NewReader(`{"prompt":"   "}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"   "}`))
 	if out != "" {
 		t.Errorf("sin prompt útil el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -132,14 +142,14 @@ func TestTurnSilentWhenDisabled(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x", Gist: "algo"}}}}
 	cfg := defaultLoop()
 	cfg.PerTurnRecall = false
-	out := turnOutput(store, cfg, pipeOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(store, cfg, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("con per_turn_recall=false el hook debe ser silencioso, obtuve: %q", out)
 	}
 }
 
 func TestTurnSilentNilStore(t *testing.T) {
-	out := turnOutput(nil, defaultLoop(), pipeOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(nil, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("sin memoria disponible el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -147,7 +157,7 @@ func TestTurnSilentNilStore(t *testing.T) {
 
 func TestTurnSilentNoMatch(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 0}}
-	out := turnOutput(store, defaultLoop(), pipeOff(), strings.NewReader(`{"prompt":"algo sin memoria relacionada"}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"algo sin memoria relacionada"}`))
 	if out != "" {
 		t.Errorf("sin memoria relevante el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -158,7 +168,7 @@ func TestTurnSurfacesPendingConflicts(t *testing.T) {
 		recall:  memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", Gist: "gist"}}},
 		pending: []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}},
 	}
-	out := turnOutput(store, defaultLoop(), pipeOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "musubi_judge") {
 		t.Errorf("con conflictos pendientes el contexto debe invitar a resolverlos, obtuve: %q", ctx)
@@ -169,10 +179,32 @@ func TestTurnPhaseInjected(t *testing.T) {
 	store := newFakeTurnStore()
 	store.phaseActive = true
 	store.phase = memory.PhaseState{Task: "refactor", Phase: "plan", Index: 1, Total: 4}
-	out := turnOutput(store, defaultLoop(), defaultPipe(), strings.NewReader(`{"prompt":"sigamos con la tarea"}`))
+	out := turnOutput(store, defaultLoop(), defaultPipe(), maOff(), strings.NewReader(`{"prompt":"sigamos con la tarea"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "refactor") || !strings.Contains(ctx, "plan (2/4)") {
 		t.Errorf("debe inyectar la fase activa con tarea y posición, obtuve: %q", ctx)
+	}
+}
+
+func TestTurnBatchInjected(t *testing.T) {
+	store := newFakeTurnStore()
+	store.batchActive = true
+	store.batch = memory.WorkBatch{BatchID: "b1", Total: 5, Done: 3, Open: 1, Claimed: 1}
+	loop := config.LoopConfig{} // aislar: solo el batch
+	out := turnOutput(store, loop, pipeOff(), maOn(), strings.NewReader(`{"prompt":"como va el batch"}`))
+	_, ctx := hookAdditionalContext(t, out)
+	if !strings.Contains(ctx, "Batch activo") || !strings.Contains(ctx, "3/5") {
+		t.Errorf("debe inyectar el estado del batch activo, obtuve: %q", ctx)
+	}
+}
+
+func TestTurnBatchSilentWhenDisabled(t *testing.T) {
+	store := newFakeTurnStore()
+	store.batchActive = true
+	store.batch = memory.WorkBatch{BatchID: "b1", Total: 2, Open: 2}
+	out := turnOutput(store, config.LoopConfig{}, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
+	if out != "" {
+		t.Errorf("con multiagent desactivado no debe inyectar el batch, obtuve: %q", out)
 	}
 }
 
@@ -184,7 +216,7 @@ func TestTurnPhaseSilentWhenDisabled(t *testing.T) {
 	loop := defaultLoop()
 	loop.PerTurnRecall = false
 	loop.CaptureReminder = false
-	out := turnOutput(store, loop, pipeOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("con pipeline desactivado no debe inyectar fase, obtuve: %q", out)
 	}
@@ -197,15 +229,15 @@ func TestTurnCaptureReminderAfterNTurns(t *testing.T) {
 	in := `{"prompt":"seguimos trabajando"}`
 
 	// Turno 1: fija la línea base, sin recordatorio.
-	if out := turnOutput(store, loop, pipeOff(), strings.NewReader(in)); out != "" {
+	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
 		t.Fatalf("el primer turno no debe recordar nada, obtuve: %q", out)
 	}
 	// Turno 2: acumula (turns=1), todavía sin recordar (umbral 2).
-	if out := turnOutput(store, loop, pipeOff(), strings.NewReader(in)); out != "" {
+	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
 		t.Fatalf("aún no debe recordar antes del umbral, obtuve: %q", out)
 	}
 	// Turno 3: turns alcanza el umbral → recordatorio.
-	out := turnOutput(store, loop, pipeOff(), strings.NewReader(in))
+	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "captura") {
 		t.Errorf("al alcanzar el umbral de turnos sin guardar debe recordar la captura, obtuve: %q", ctx)
@@ -218,14 +250,14 @@ func TestTurnCaptureReminderResetsOnSave(t *testing.T) {
 	loop := config.LoopConfig{CaptureReminder: true, ReminderAfterTurns: 2}
 	in := `{"prompt":"trabajando"}`
 
-	turnOutput(store, loop, pipeOff(), strings.NewReader(in)) // base
+	turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)) // base
 	store.obsCount = 2                                         // el agente guardó algo
-	if out := turnOutput(store, loop, pipeOff(), strings.NewReader(in)); out != "" {
+	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
 		t.Fatalf("guardar algo debe reiniciar el contador (sin recordatorio), obtuve: %q", out)
 	}
 	// Ahora estable de nuevo: el contador arranca de cero.
-	turnOutput(store, loop, pipeOff(), strings.NewReader(in))
-	out := turnOutput(store, loop, pipeOff(), strings.NewReader(in))
+	turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
+	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "captura") {
 		t.Errorf("tras reiniciar y pasar 2 turnos sin guardar, debe recordar, obtuve: %q", ctx)
@@ -239,7 +271,7 @@ func TestTurnConflictsToggleOff(t *testing.T) {
 	}
 	cfg := defaultLoop()
 	cfg.SurfaceConflicts = false
-	out := turnOutput(store, cfg, pipeOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	out := turnOutput(store, cfg, pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if strings.Contains(ctx, "musubi_judge") {
 		t.Errorf("con surface_conflicts=false no debe mencionar conflictos, obtuve: %q", ctx)

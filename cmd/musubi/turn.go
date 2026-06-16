@@ -27,6 +27,7 @@ type turnStore interface {
 	PendingObsRelations() ([]memory.ObsRelation, error)
 	CountObservations() (int, error)
 	PhaseStatus() (memory.PhaseState, bool, error)
+	ActiveBatch() (memory.WorkBatch, bool, error)
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
 }
@@ -47,7 +48,7 @@ type turnInput struct {
 // pipeline, la memoria relevante, los conflictos pendientes y el recordatorio de
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
-func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, stdin io.Reader) string {
+func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -59,6 +60,9 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	var blocks []string
 	if pipeCfg.Enabled {
 		blocks = append(blocks, buildTurnPhase(store))
+	}
+	if maCfg.Enabled {
+		blocks = append(blocks, buildTurnBatch(store))
 	}
 	if loopCfg.PerTurnRecall {
 		blocks = append(blocks, buildTurnRecall(store, prompt, loopCfg.RecallBudget))
@@ -81,6 +85,18 @@ func buildTurnPhase(store turnStore) string {
 	}
 	return fmt.Sprintf("[Musubi — fase] Tarea «%s» — fase %s (%d/%d). %s",
 		st.Task, st.Phase, st.Index+1, st.Total, memory.PhaseDirective(st.Phase))
+}
+
+// buildTurnBatch inyecta el estado de un batch de trabajo en curso, para que el
+// agente principal recuerde monitorearlo y consolidar. Devuelve "" si no hay batch
+// activo.
+func buildTurnBatch(store turnStore) string {
+	b, ok, err := store.ActiveBatch()
+	if err != nil || !ok {
+		return ""
+	}
+	return fmt.Sprintf("[Musubi — multi-agente] Batch activo «%s»: %d/%d unidades done (%d open, %d en curso). Monitoreá con musubi_work action=status batch=%s y consolidá los resultados cuando estén todas.",
+		b.BatchID, b.Done, b.Total, b.Open, b.Claimed, b.BatchID)
 }
 
 // buildCaptureReminder cierra el loop: cuando pasaron varios turnos sin que se
@@ -210,7 +226,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, os.Stdin)
+	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}
