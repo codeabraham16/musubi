@@ -30,6 +30,60 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
+func TestClassifyContent(t *testing.T) {
+	cases := []struct {
+		in   string
+		want contentKind
+	}{
+		{"Esto es una oración normal en prosa, sin nada raro.", kindProse},
+		{"hola mundo", kindProse},
+		{`{"name":"x","age":3,"items":[1,2,3]}`, kindJSON},
+		{"  [\n  {\"a\": 1},\n  {\"b\": 2}\n]", kindJSON},
+		{"func add(a, b int) int { return a + b }", kindCode},
+		{"if (x > 0 && y < 10) { return x * y; }", kindCode},
+	}
+	for _, c := range cases {
+		if got := classifyContent(c.in); got != c.want {
+			t.Errorf("classifyContent(%q) = %v, quiero %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestEstimateTokensByContentTypeIsConservative(t *testing.T) {
+	// A igualdad de texto, código y JSON deben estimar MÁS tokens que prosa
+	// (densidad de símbolos): nunca subcontamos los payloads densos.
+	const sample = "abcdefghij klmnopqrst uvwxyzabcd efghijklmn"
+	prose := estimateTokensFor(sample, kindProse)
+	code := estimateTokensFor(sample, kindCode)
+	json := estimateTokensFor(sample, kindJSON)
+	if !(json >= code && code >= prose) {
+		t.Errorf("esperaba json>=code>=prose, obtuve prose=%d code=%d json=%d", prose, code, json)
+	}
+	if code <= prose {
+		t.Errorf("código debe estimar más tokens que prosa: code=%d prose=%d", code, prose)
+	}
+}
+
+func TestEstimateTokensCodeNotUnderBudgeted(t *testing.T) {
+	// Un bloque de código real no debe estimarse por debajo de runas/3.4
+	// (el viejo runas/4 lo subcontaba sistemáticamente).
+	code := "for (let i = 0; i < items.length; i++) { total += items[i].price * qty; }"
+	got := EstimateTokens(code)
+	floor := int(float64(len([]rune(code))) / 3.5)
+	if got < floor {
+		t.Errorf("EstimateTokens(code)=%d subcuenta; esperaba >= %d", got, floor)
+	}
+}
+
+func TestEstimateTokensCJK(t *testing.T) {
+	// Cada carácter CJK pesa ~1 token; runas/4 lo subcontaría 4x.
+	cjk := "你好世界你好世界" // 8 ideogramas
+	got := EstimateTokens(cjk)
+	if got < 6 {
+		t.Errorf("EstimateTokens(CJK)=%d subcuenta; esperaba ~8 (>=6)", got)
+	}
+}
+
 func TestContentHashStableAndNormalized(t *testing.T) {
 	a := ContentHash("hola mundo")
 	b := ContentHash("  hola   mundo  ") // mismo contenido tras normalizar espacios

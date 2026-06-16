@@ -3,31 +3,122 @@ package memory
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 )
 
 // digest.go contiene utilidades MODEL-FREE (deterministas, sin LLM) para la
 // memoria eficiente de Musubi: estimación de tokens, gist extractivo y hash de
 // contenido para deduplicar. Son la base del recall por presupuesto.
 
-// charsPerToken es la heurística de conversión caracteres->tokens (~4 chars/token).
+// charsPerToken es el divisor caracteres->tokens por defecto (prosa). El
+// tokenizador real de Claude es propietario; usamos una heurística calibrada por
+// TIPO de contenido (prosa/código/JSON) derivada de mediciones públicas, sesgada
+// a NO subcontar: presupuestar de menos desborda el contexto real, presupuestar
+// de más solo deja algo de margen.
 const charsPerToken = 4
+
+// Divisores chars/token por tipo de contenido (ASCII). Cuanto más denso en
+// símbolos, menor el divisor (más tokens por carácter). Calibrados conservadores.
+const (
+	divProse = 4.0 // prosa natural ~4 chars/token
+	divCode  = 3.4 // código fuente ~3.4 (símbolos, identificadores cortados)
+	divJSON  = 2.6 // JSON ~2.6 (comillas, llaves, dos puntos, comas)
+)
 
 // defaultGistMaxTokens es el tope de tokens de un gist cuando no se configura otro
 // (usado por el backfill y como valor por defecto del recall).
 const defaultGistMaxTokens = 24
 
-// EstimateTokens estima de forma determinista cuántos tokens ocupa un texto
-// (~1 token cada 4 runas, redondeo hacia arriba). Es una aproximación suficiente
-// para presupuestar recalls sin depender de un tokenizador real.
+// tokenEstimatorVersion identifica la versión del estimador de tokens. Al
+// cambiar (nuevos divisores/heurística), la migración recomputa la columna
+// `tokens` de las filas existentes para que el presupuesto siga siendo coherente.
+const tokenEstimatorVersion = "v2-bytype"
+
+// metaTokenEstimatorVersion es la clave de meta donde se persiste la versión con
+// la que se computó por última vez la columna `tokens`.
+const metaTokenEstimatorVersion = "token_estimator_version"
+
+// contentKind clasifica el contenido para elegir el divisor de tokens adecuado.
+type contentKind int
+
+const (
+	kindProse contentKind = iota
+	kindCode
+	kindJSON
+)
+
+// classifyContent infiere el tipo de contenido con features baratas y
+// deterministas (sin LLM): JSON si abre con {/[ y tiene estructura de objeto;
+// código si la densidad de símbolos es alta o hay fences; si no, prosa.
+func classifyContent(s string) contentKind {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return kindProse
+	}
+	// JSON: arranca como objeto/array y contiene comillas + separadores.
+	if c := t[0]; (c == '{' || c == '[') && strings.ContainsRune(t, '"') &&
+		(strings.ContainsRune(t, ':') || strings.ContainsRune(t, ',')) {
+		return kindJSON
+	}
+	if strings.Contains(t, "```") {
+		return kindCode
+	}
+	// Densidad de símbolos típicos de código sobre el total de runas.
+	const codeSymbols = "{}()[];=<>/\\|&*+_$#@"
+	var sym, total int
+	for _, r := range t {
+		total++
+		if strings.ContainsRune(codeSymbols, r) {
+			sym++
+		}
+	}
+	if total > 0 && float64(sym)/float64(total) >= 0.06 {
+		return kindCode
+	}
+	return kindProse
+}
+
+// EstimateTokens estima de forma determinista cuántos tokens ocupa un texto,
+// clasificándolo por tipo y aplicando el divisor calibrado correspondiente. Es
+// una aproximación model-free sesgada a no subcontar.
 func EstimateTokens(s string) int {
+	return estimateTokensFor(s, classifyContent(s))
+}
+
+// estimateTokensFor estima tokens para un tipo de contenido dado. Los caracteres
+// CJK pesan ~1 token cada uno (no se dividen); el resto usa el divisor del tipo.
+func estimateTokensFor(s string, kind contentKind) int {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0
 	}
-	n := utf8.RuneCountInString(s)
-	return (n + charsPerToken - 1) / charsPerToken // ceil(n/4)
+	var cjk, other int
+	for _, r := range s {
+		if isCJK(r) {
+			cjk++
+		} else {
+			other++
+		}
+	}
+	div := divProse
+	switch kind {
+	case kindCode:
+		div = divCode
+	case kindJSON:
+		div = divJSON
+	}
+	tokens := float64(other)/div + float64(cjk)
+	return int(math.Ceil(tokens))
+}
+
+// isCJK indica si la runa es un ideograma/silabario CJK (cada uno ~1 token).
+func isCJK(r rune) bool {
+	return unicode.Is(unicode.Han, r) ||
+		unicode.Is(unicode.Hiragana, r) ||
+		unicode.Is(unicode.Katakana, r) ||
+		unicode.Is(unicode.Hangul, r)
 }
 
 // ContentHash devuelve el sha256 (hex) del contenido normalizado por espacios,
@@ -78,22 +169,32 @@ func firstSentence(norm string) string {
 	return norm
 }
 
-// truncateToTokens recorta s a ~maxTokens, en límite de palabra y de runa,
-// dejando lugar para la elipsis final.
+// truncateToTokens recorta s para que EstimateTokens(resultado) <= maxTokens, en
+// límite de palabra y de runa, dejando lugar para la elipsis. Usa el mismo
+// estimador (por tipo) que el presupuesto, achicando hasta entrar; determinista.
 func truncateToTokens(s string, maxTokens int) string {
-	limit := maxTokens * charsPerToken
-	runes := []rune(s)
-	if len(runes) <= limit {
+	if maxTokens <= 0 {
+		return "…"
+	}
+	if EstimateTokens(s) <= maxTokens {
 		return s
 	}
-
-	cut := limit - 1 // reservar una runa para la elipsis
-	if cut < 1 {
-		cut = 1
+	runes := []rune(s)
+	// Cota superior de runas: el divisor más grande (prosa) maximiza chars/token.
+	cut := int(float64(maxTokens) * divProse)
+	if cut >= len(runes) {
+		cut = len(runes) - 1
 	}
-	trunc := string(runes[:cut])
-	if idx := strings.LastIndex(trunc, " "); idx > 0 {
-		trunc = trunc[:idx]
+	for cut > 0 {
+		trunc := string(runes[:cut])
+		if idx := strings.LastIndex(trunc, " "); idx > 0 {
+			trunc = trunc[:idx]
+		}
+		cand := strings.TrimRight(trunc, " ") + "…"
+		if EstimateTokens(cand) <= maxTokens {
+			return cand
+		}
+		cut = cut * 3 / 4 // achicar y reintentar
 	}
-	return strings.TrimRight(trunc, " ") + "…"
+	return "…"
 }

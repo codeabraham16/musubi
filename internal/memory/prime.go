@@ -3,7 +3,6 @@ package memory
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -37,53 +36,20 @@ func (e *DbEngine) PrimeContext(budget int) (RecallResult, error) {
 		return RecallResult{}, err
 	}
 
-	result := RecallResult{Budget: budget, Items: []RecallItem{}}
 	if len(cands) == 0 {
-		return result, nil
+		return RecallResult{Budget: budget, Items: []RecallItem{}}, nil
 	}
 
-	// Rankear por saliencia (determinista, sin LLM).
+	// Rankear por saliencia (determinista, sin LLM) y empaquetar con el núcleo
+	// compartido packByBudget (mismo estimador y lógica de presupuesto que el recall).
 	now := time.Now().UTC()
-	type ranked struct {
-		c   candidate
-		sal float64
-	}
-	rs := make([]ranked, len(cands))
+	ranked := make([]scoredCandidate, len(cands))
 	for i, c := range cands {
-		rs[i] = ranked{c: c, sal: candidateSalience(c, now)}
+		ranked[i] = scoredCandidate{candidate: c, score: candidateSalience(c, now)}
 	}
-	sort.SliceStable(rs, func(i, j int) bool { return rs[i].sal > rs[j].sal })
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 
-	// Empaquetar gists hasta llenar el presupuesto (garantiza el top-1).
-	for _, r := range rs {
-		c := r.c
-		gist := c.gist
-		if strings.TrimSpace(gist) == "" {
-			gist = Gist(c.content, defaultGistMaxTokens)
-		}
-		cost := EstimateTokens(gist)
-
-		if len(result.Items) == 0 && cost > budget {
-			gist = truncateToTokens(gist, budget)
-			cost = EstimateTokens(gist)
-		} else if result.UsedTokens+cost > budget {
-			continue
-		}
-
-		result.Items = append(result.Items, RecallItem{
-			ID:         c.id,
-			TopicKey:   c.topicKey,
-			Gist:       gist,
-			Score:      r.sal,
-			FullTokens: c.fullTokens,
-		})
-		result.UsedTokens += cost
-		if result.UsedTokens >= budget {
-			break
-		}
-	}
-	result.Count = len(result.Items)
-	return result, nil
+	return packByBudget(ranked, budget, defaultGistMaxTokens), nil
 }
 
 // candidateSalience calcula la saliencia de un candidato usando la edad derivada
