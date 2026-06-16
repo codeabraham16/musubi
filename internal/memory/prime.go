@@ -26,7 +26,7 @@ func (e *DbEngine) PrimeContext(budget int) (RecallResult, error) {
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
-		WHERE o.archived = 0
+		WHERE o.archived = 0 AND o.superseded_by IS NULL
 	`)
 	if err != nil {
 		return RecallResult{}, fmt.Errorf("error al listar observaciones para priming: %w", err)

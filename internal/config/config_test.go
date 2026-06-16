@@ -95,6 +95,31 @@ func TestLoadParsesStartupBlock(t *testing.T) {
 	}
 }
 
+func TestLoadConflictsDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Conflicts.Enabled {
+		t.Error("esperaba conflicts.enabled true por defecto")
+	}
+	if cfg.Conflicts.SimilarityFloor != 0.3 || cfg.Conflicts.AutoResolveThreshold != 0.7 || cfg.Conflicts.CandidatePool != 10 {
+		t.Errorf("defaults de conflicts no aplicados: %+v", cfg.Conflicts)
+	}
+}
+
+func TestLoadConflictsDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nconflicts:\n  enabled: false\n  similarity_floor: 0.3\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Conflicts.Enabled {
+		t.Error("conflicts.enabled: false explícito debería respetarse")
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 

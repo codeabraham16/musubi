@@ -84,6 +84,7 @@ func (e *DbEngine) migrateObservations() error {
 		{"access_count", "access_count INTEGER NOT NULL DEFAULT 0"},
 		{"importance", "importance REAL NOT NULL DEFAULT 1.0"},
 		{"archived", "archived INTEGER NOT NULL DEFAULT 0"},
+		{"superseded_by", "superseded_by TEXT"},
 	}
 	existing, err := e.observationColumns()
 	if err != nil {
@@ -216,6 +217,23 @@ func (e *DbEngine) initSchema() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		// Relaciones semánticas entre observaciones (resolución de conflictos
+		// model-free): detecta cuándo una memoria reemplaza/contradice/se relaciona
+		// con otra. Único por par (source, target).
+		`CREATE TABLE IF NOT EXISTS observation_relations (
+			id TEXT PRIMARY KEY,
+			source_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'pending',
+			resolved_by TEXT,
+			reason TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(source_id, target_id)
 		);`,
 
 		// Tabla de decisiones de skills (log append-only).

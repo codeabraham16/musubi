@@ -70,6 +70,12 @@ func WithGraph(c config.GraphConfig) Option {
 	return func(s *McpServer) { s.graph = c }
 }
 
+// WithConflicts devuelve un Option que configura la detección de relaciones
+// semánticas entre observaciones (resolución de conflictos model-free).
+func WithConflicts(c config.ConflictConfig) Option {
+	return func(s *McpServer) { s.conflicts = c }
+}
+
 type McpServer struct {
 	engine   *memory.DbEngine
 	resolver *skills.Resolver
@@ -85,7 +91,9 @@ type McpServer struct {
 	maintenance config.MaintenanceConfig
 	// graph contiene los parámetros de la memoria estructurada en grafo.
 	graph config.GraphConfig
-	out   io.Writer
+	// conflicts contiene los parámetros de la detección de relaciones semánticas.
+	conflicts config.ConflictConfig
+	out       io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -105,6 +113,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		memory:      config.Default().Memory,
 		maintenance: config.Default().Maintenance,
 		graph:       config.Default().Graph,
+		conflicts:   config.Default().Conflicts,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {
