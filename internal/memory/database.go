@@ -11,7 +11,8 @@ import (
 )
 
 type DbEngine struct {
-	db *sql.DB
+	db   *sql.DB
+	path string // ruta del archivo SQLite (para backups del doctor)
 }
 
 func NewDbEngine(projectPath string) (*DbEngine, error) {
@@ -28,7 +29,7 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
 	}
 
-	engine := &DbEngine{db: db}
+	engine := &DbEngine{db: db, path: dbPath}
 	if err := engine.initSchema(); err != nil {
 		db.Close()
 		return nil, err

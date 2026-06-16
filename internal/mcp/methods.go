@@ -278,6 +278,18 @@ func (s *McpServer) handleToolsList() interface{} {
 				Required: []string{"relation_id", "relation"},
 			},
 		},
+		{
+			Name:        "musubi_doctor",
+			Description: "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"check":  {Type: "string", Description: "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."},
+					"repair": {Type: "boolean", Description: "Si es true, repara el check indicado (requiere 'check')."},
+					"mode":   {Type: "string", Description: "Modo de reparación: plan | dry-run | apply (default dry-run)."},
+				},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -362,6 +374,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolConflicts(callReq.Arguments)
 	case "musubi_judge":
 		return s.toolJudge(callReq.Arguments)
+	case "musubi_doctor":
+		return s.toolDoctor(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -460,6 +474,49 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 		}
 	}
 	return b.String()
+}
+
+// toolDoctor diagnostica o repara la base de memoria.
+func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Check  string `json:"check"`
+		Repair bool   `json:"repair"`
+		Mode   string `json:"mode"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	if args.Repair {
+		if strings.TrimSpace(args.Check) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "repair requiere 'check' (qué reparar)")
+		}
+		mode := args.Mode
+		if mode == "" {
+			mode = "dry-run" // seguro por defecto: 'apply' debe ser explícito
+		}
+		res, err := s.engine.Repair(args.Check, mode)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo reparar: %v", err)
+		}
+		return jsonResult(res)
+	}
+
+	if strings.TrimSpace(args.Check) != "" {
+		res, err := s.engine.RunCheck(args.Check)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(res)
+	}
+
+	rep, err := s.engine.Diagnose()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
+	}
+	return jsonResult(rep)
 }
 
 // toolConflicts lista las relaciones pendientes de veredicto.
