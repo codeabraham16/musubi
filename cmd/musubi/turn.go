@@ -222,9 +222,17 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 	return formatDeltaGists(header, items, updated)
 }
 
+// metaStore es lo mínimo que necesita el estado del delta: leer/escribir meta.
+// Lo satisfacen tanto turnStore (por turno) como startupStore (priming), de modo
+// que el priming pueda SEMBRAR el delta y el recall por turno leerlo.
+type metaStore interface {
+	GetMeta(key string) (string, bool, error)
+	SetMeta(key, value string) error
+}
+
 // loadDeltaState devuelve el conjunto {id -> content_hash} ya inyectado en la
 // sesión sessionID. Si el estado pertenece a otra sesión, arranca vacío (reset).
-func loadDeltaState(store turnStore, sessionID string) map[string]string {
+func loadDeltaState(store metaStore, sessionID string) map[string]string {
 	prevSession, _, _ := store.GetMeta(metaDeltaSession)
 	if prevSession != sessionID {
 		return map[string]string{}
@@ -238,7 +246,7 @@ func loadDeltaState(store turnStore, sessionID string) map[string]string {
 }
 
 // saveDeltaState persiste el estado delta para la sesión.
-func saveDeltaState(store turnStore, sessionID string, m map[string]string) {
+func saveDeltaState(store metaStore, sessionID string, m map[string]string) {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return

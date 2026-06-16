@@ -210,6 +210,16 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 	// SessionStart abre la sesión: contabilizar el priming (con session_id, que
 	// reinicia el ledger por sesión) para que el gasto de Musubi sea medible.
 	_, _ = store.LedgerAdd(sessionID, "startup_priming", res.UsedTokens)
+
+	// SEMBRAR el delta con lo que el priming ya inyectó: así el recall por turno
+	// no repite estos mismos gists en la sesión (evita la doble inyección
+	// priming↔turno). El estado se reinicia por sesión, igual que el delta.
+	seed := make(map[string]string, len(res.Items))
+	for _, it := range res.Items {
+		seed[it.ID] = it.ContentHash
+	}
+	saveDeltaState(store, sessionID, seed)
+
 	header := "[Musubi — memoria] Contexto que Musubi recuerda de este proyecto (gists; usá musubi_memory_expand con el id para el detalle completo):"
 	return formatGists(header, res)
 }

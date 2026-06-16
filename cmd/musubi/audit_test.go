@@ -70,11 +70,10 @@ func TestTokenConsumptionAudit(t *testing.T) {
 		t.Errorf("el priming excede su budget: %d > %d", primeRes.UsedTokens, startup.RecallBudget)
 	}
 
-	// 2) Recall por turno: turno 1 vs turno 2 (delta) -----------------------
-	const query = "cómo está la autenticación y la base de datos"
-	in := `{"prompt":"` + query + `","session_id":"` + sess + `"}`
-
-	recall, err := eng.Recall(query, memory.RecallOptions{TokenBudget: loop.RecallBudget, NoBump: true})
+	// 2) Recall por turno ---------------------------------------------------
+	// El recall (pre-delta) debe respetar su budget.
+	const primedQuery = "cómo está la autenticación y la base de datos"
+	recall, err := eng.Recall(primedQuery, memory.RecallOptions{TokenBudget: loop.RecallBudget, NoBump: true})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -82,15 +81,31 @@ func TestTokenConsumptionAudit(t *testing.T) {
 		t.Errorf("el recall por turno excede su budget: %d > %d", recall.UsedTokens, loop.RecallBudget)
 	}
 
-	_, ctx1 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), strings.NewReader(in)))
-	_, ctx2 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), strings.NewReader(in)))
-	t1, t2 := memory.EstimateTokens(ctx1), memory.EstimateTokens(ctx2)
-	t.Logf("Recall por turno: turno1=%d tokens, turno2 (delta, misma memoria)=%d tokens, ahorro=%d.", t1, t2, t1-t2)
-	if t1 == 0 {
-		t.Error("el primer turno debería inyectar memoria relevante")
+	// 2a) Turno sobre memoria YA primeada: el priming sembró el delta, así que NO
+	//     debe repetirse (fin de la doble inyección priming↔turno).
+	inPrimed := `{"prompt":"` + primedQuery + `","session_id":"` + sess + `"}`
+	_, ctxP := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), strings.NewReader(inPrimed)))
+	tP := memory.EstimateTokens(ctxP)
+	t.Logf("Turno sobre memoria YA primeada: %d tokens (debería ser ~0: el priming ya la mostró).", tP)
+	if tP != 0 {
+		t.Errorf("el priming ya cubrió esto; el turno no debería repetirlo, inyectó %d tokens", tP)
 	}
-	if t2 != 0 {
-		t.Errorf("el segundo turno no debería re-inyectar nada (delta), inyectó %d tokens", t2)
+
+	// 2b) Memoria NUEVA (posterior al priming): su turno SÍ la inyecta; el segundo
+	//     turno ya no (delta).
+	if err := eng.SaveObservation("n1", "feature/ratelimit", "Implementamos rate limiting por IP con ventana deslizante en Redis para frenar fuerza bruta en el login.", nil); err != nil {
+		t.Fatal(err)
+	}
+	inNew := `{"prompt":"rate limiting","session_id":"` + sess + `"}`
+	_, ctxN1 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), strings.NewReader(inNew)))
+	_, ctxN2 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), strings.NewReader(inNew)))
+	tN1, tN2 := memory.EstimateTokens(ctxN1), memory.EstimateTokens(ctxN2)
+	t.Logf("Memoria NUEVA: turno1=%d tokens, turno2 (delta)=%d tokens.", tN1, tN2)
+	if tN1 == 0 {
+		t.Error("una memoria nueva (no primeada) debería inyectarse en su turno")
+	}
+	if tN2 != 0 {
+		t.Errorf("el segundo turno no debería repetir la memoria nueva (delta), inyectó %d tokens", tN2)
 	}
 
 	// 3) Hidratación: completa vs con tope ----------------------------------
@@ -126,10 +141,11 @@ func TestTokenConsumptionAudit(t *testing.T) {
 		t.Errorf("el total del ledger (%d) no coincide con la suma por superficie (%d)", led.Total, sum)
 	}
 
-	// Resumen del ahorro vs inyectar todo el contenido completo.
-	musubiInjected := primeRes.UsedTokens + t1
-	t.Logf("RESUMEN: Musubi inyectó ~%d tokens (priming %d + turno1 %d) en lugar de %d (todo el contenido). Ahorro ≈ %d%%.",
-		musubiInjected, primeRes.UsedTokens, t1, totalFull, savingsPct(musubiInjected, totalFull))
+	// Resumen del ahorro vs inyectar todo el contenido completo. Con el sembrado,
+	// el turno sobre memoria primeada no suma nada; lo nuevo sí (tN1).
+	musubiInjected := primeRes.UsedTokens + tN1
+	t.Logf("RESUMEN: Musubi inyectó ~%d tokens (priming %d + memoria nueva %d; sin doble inyección) en lugar de %d (todo el contenido). Ahorro ≈ %d%%.",
+		musubiInjected, primeRes.UsedTokens, tN1, totalFull, savingsPct(musubiInjected, totalFull))
 }
 
 // savingsPct devuelve el % ahorrado de inyectar injected en vez de full.
