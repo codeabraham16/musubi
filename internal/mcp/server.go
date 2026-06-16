@@ -76,6 +76,12 @@ func WithConflicts(c config.ConflictConfig) Option {
 	return func(s *McpServer) { s.conflicts = c }
 }
 
+// WithPipeline devuelve un Option que configura el pipeline por fases del loop
+// dirigido (musubi_phase + recordatorio de fase por turno).
+func WithPipeline(c config.PipelineConfig) Option {
+	return func(s *McpServer) { s.pipeline = c }
+}
+
 type McpServer struct {
 	engine   *memory.DbEngine
 	resolver *skills.Resolver
@@ -93,7 +99,9 @@ type McpServer struct {
 	graph config.GraphConfig
 	// conflicts contiene los parámetros de la detección de relaciones semánticas.
 	conflicts config.ConflictConfig
-	out       io.Writer
+	// pipeline contiene los parámetros del pipeline por fases del loop dirigido.
+	pipeline config.PipelineConfig
+	out      io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -114,6 +122,7 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 		maintenance: config.Default().Maintenance,
 		graph:       config.Default().Graph,
 		conflicts:   config.Default().Conflicts,
+		pipeline:    config.Default().Pipeline,
 		out:         os.Stdout,
 	}
 	for _, opt := range opts {

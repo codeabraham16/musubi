@@ -290,6 +290,18 @@ func (s *McpServer) handleToolsList() interface{} {
 				},
 			},
 		},
+		{
+			Name:        "musubi_phase",
+			Description: "Pipeline por fases del loop dirigido (model-free): Musubi secuencia la tarea por fases (explore→plan→code→verify) y te recuerda la fase actual en cada turno. action ∈ {status, start, advance, set, clear}. 'start' requiere 'task'; 'set' requiere 'phase'. Llamá action=advance al terminar cada fase.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"action": {Type: "string", Description: "status | start | advance | set | clear (default status)"},
+					"task":   {Type: "string", Description: "Nombre de la tarea (requerido para start)"},
+					"phase":  {Type: "string", Description: "Fase destino dentro de la secuencia (requerido para set)"},
+				},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -376,6 +388,8 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolJudge(callReq.Arguments)
 	case "musubi_doctor":
 		return s.toolDoctor(callReq.Arguments)
+	case "musubi_phase":
+		return s.toolPhase(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -517,6 +531,95 @@ func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
 	}
 	return jsonResult(rep)
+}
+
+// phaseView es la respuesta de musubi_phase: el estado actual + su directiva.
+type phaseView struct {
+	Active    bool   `json:"active"`
+	Task      string `json:"task,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	Index     int    `json:"index,omitempty"`
+	Total     int    `json:"total,omitempty"`
+	Directive string `json:"directive,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+func phaseViewFrom(st memory.PhaseState, active bool, message string) phaseView {
+	v := phaseView{Active: active, Message: message}
+	if active {
+		v.Task = st.Task
+		v.Phase = st.Phase
+		v.Index = st.Index
+		v.Total = st.Total
+		v.Directive = memory.PhaseDirective(st.Phase)
+	}
+	return v
+}
+
+// toolPhase maneja el pipeline por fases (status/start/advance/set/clear).
+func (s *McpServer) toolPhase(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Action string `json:"action"`
+		Task   string `json:"task"`
+		Phase  string `json:"phase"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+	phases := s.pipeline.Phases
+
+	switch action := strings.TrimSpace(args.Action); action {
+	case "", "status":
+		st, ok, err := s.engine.PhaseStatus()
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al leer la fase: %v", err)
+		}
+		if !ok {
+			return jsonResult(phaseViewFrom(memory.PhaseState{}, false, "No hay pipeline activo. Iniciá uno con action=start y task=<nombre>."))
+		}
+		return jsonResult(phaseViewFrom(st, true, ""))
+
+	case "start":
+		if strings.TrimSpace(args.Task) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "start requiere 'task'")
+		}
+		st, err := s.engine.StartPhase(args.Task, phases)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo iniciar el pipeline: %v", err)
+		}
+		return jsonResult(phaseViewFrom(st, true, "Pipeline iniciado."))
+
+	case "advance":
+		st, done, err := s.engine.AdvancePhase(phases)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo avanzar: %v", err)
+		}
+		if done {
+			return jsonResult(phaseViewFrom(memory.PhaseState{}, false, "Pipeline completado. La tarea se cerró."))
+		}
+		return jsonResult(phaseViewFrom(st, true, "Avanzaste de fase."))
+
+	case "set":
+		if strings.TrimSpace(args.Phase) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "set requiere 'phase'")
+		}
+		st, err := s.engine.SetPhase(args.Phase, phases)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo fijar la fase: %v", err)
+		}
+		return jsonResult(phaseViewFrom(st, true, "Fase fijada."))
+
+	case "clear":
+		if err := s.engine.ClearPhase(); err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo cerrar el pipeline: %v", err)
+		}
+		return jsonResult(phaseViewFrom(memory.PhaseState{}, false, "Pipeline cerrado."))
+
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá status|start|advance|set|clear)", action)
+	}
 }
 
 // toolConflicts lista las relaciones pendientes de veredicto.

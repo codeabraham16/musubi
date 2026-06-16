@@ -120,6 +120,95 @@ func TestLoadConflictsDisableRespected(t *testing.T) {
 	}
 }
 
+func TestLoadLoopDefaults(t *testing.T) {
+	// Config legacy sin bloque loop: deben aplicarse los defaults.
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Loop.PerTurnRecall {
+		t.Error("esperaba per_turn_recall true por defecto")
+	}
+	if cfg.Loop.RecallBudget != 250 {
+		t.Errorf("esperaba recall_budget 250 por defecto, obtuve %d", cfg.Loop.RecallBudget)
+	}
+	if !cfg.Loop.SurfaceConflicts {
+		t.Error("esperaba surface_conflicts true por defecto")
+	}
+}
+
+func TestLoadLoopDisableRespected(t *testing.T) {
+	// Bloque presente (recall_budget seteado) con per_turn_recall: false explícito.
+	root := writeConfig(t, "version: \"1.0\"\nloop:\n  per_turn_recall: false\n  recall_budget: 250\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Loop.PerTurnRecall {
+		t.Error("per_turn_recall: false explícito debería respetarse")
+	}
+}
+
+func TestLoadParsesLoopBlock(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nloop:\n  per_turn_recall: true\n  recall_budget: 120\n  surface_conflicts: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Loop.RecallBudget != 120 || cfg.Loop.SurfaceConflicts {
+		t.Errorf("bloque loop no parseado: %+v", cfg.Loop)
+	}
+}
+
+func TestLoadLoopCaptureDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Loop.CaptureReminder {
+		t.Error("esperaba capture_reminder true por defecto")
+	}
+	if cfg.Loop.ReminderAfterTurns != 5 {
+		t.Errorf("esperaba reminder_after_turns 5 por defecto, obtuve %d", cfg.Loop.ReminderAfterTurns)
+	}
+}
+
+func TestLoadPipelineDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Pipeline.Enabled {
+		t.Error("esperaba pipeline.enabled true por defecto")
+	}
+	want := []string{"explore", "plan", "code", "verify"}
+	if len(cfg.Pipeline.Phases) != len(want) {
+		t.Fatalf("esperaba %d fases por defecto, obtuve %v", len(want), cfg.Pipeline.Phases)
+	}
+	for i, p := range want {
+		if cfg.Pipeline.Phases[i] != p {
+			t.Errorf("fase %d: esperaba %q, obtuve %q", i, p, cfg.Pipeline.Phases[i])
+		}
+	}
+}
+
+func TestLoadPipelineDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\npipeline:\n  enabled: false\n  phases: [diseno, build]\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Pipeline.Enabled {
+		t.Error("pipeline.enabled: false explícito debería respetarse")
+	}
+	if len(cfg.Pipeline.Phases) != 2 || cfg.Pipeline.Phases[0] != "diseno" {
+		t.Errorf("phases personalizadas no parseadas: %v", cfg.Pipeline.Phases)
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 
