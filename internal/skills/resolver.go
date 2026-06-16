@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -74,12 +75,16 @@ func (r *Resolver) ResolveSkills(modifiedFiles []string) ([]Skill, error) {
 }
 
 // MatchGlob indica si file coincide con glob por nombre base o ruta completa.
-// Soporta los patrones de filepath.Match (*, ?, rangos de caracteres).
+// Soporta los patrones de path.Match (*, ?, rangos de caracteres). Normaliza los
+// separadores ('\' -> '/') de forma determinista para que un trigger estilo ruta
+// con '/' matchee en Windows (donde WalkDir entrega paths con '\').
 // Un patrón inválido devuelve false sin hacer panic.
 func MatchGlob(glob, file string) bool {
-	base := filepath.Base(file)
-	mb, _ := filepath.Match(glob, base)
-	mp, _ := filepath.Match(glob, file)
+	glob = strings.ReplaceAll(glob, "\\", "/")
+	file = strings.ReplaceAll(file, "\\", "/")
+	base := path.Base(file)
+	mb, _ := path.Match(glob, base)
+	mp, _ := path.Match(glob, file)
 	return mb || mp
 }
 

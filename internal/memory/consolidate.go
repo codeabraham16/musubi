@@ -34,9 +34,11 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		threshold = defaultDedupThreshold
 	}
 
+	// Solo memorias VIVAS: excluir archivadas y superseded (coherente con recall,
+	// prime, context y conflicts). No tocar una observación ya oculta del recall.
 	rows, err := e.db.Query(`
 		SELECT id, content, access_count, importance, COALESCE(created_at,'')
-		FROM observations WHERE archived = 0
+		FROM observations WHERE archived = 0 AND superseded_by IS NULL
 	`)
 	if err != nil {
 		return ConsolidateResult{}, fmt.Errorf("error al listar observaciones: %w", err)
@@ -95,6 +97,15 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		}
 		if _, err := tx.Exec(`DELETE FROM observations WHERE id=?`, o.id); err != nil {
 			return ConsolidateResult{}, fmt.Errorf("error al borrar duplicado: %w", err)
+		}
+		// Limpiar referencias colgantes al id borrado: observation_relations no tiene
+		// FK, y superseded_by es TEXT sin FK. Sin esto quedarían punteros a un id
+		// inexistente.
+		if _, err := tx.Exec(`DELETE FROM observation_relations WHERE source_id=? OR target_id=?`, o.id, o.id); err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al limpiar relaciones del duplicado: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE observations SET superseded_by=NULL WHERE superseded_by=?`, o.id); err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al limpiar punteros superseded_by: %w", err)
 		}
 		merged++
 	}

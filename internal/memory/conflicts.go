@@ -95,25 +95,32 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 	return out, nil
 }
 
-// decideRelation aplica la heurística determinista a un par (nuevo, candidato).
+// decideRelation aplica la heurística determinista a un par (src=recién guardada,
+// candidato). src es la observación sobre la que corre DetectRelations.
 func decideRelation(src, cand obsRow, sim, autoThreshold float64) ObsRelation {
-	// newer supersede a older.
-	newer, older := src, cand
-	if cand.createdAt > src.createdAt {
-		newer, older = cand, src
-	}
-
 	switch {
-	case sim >= autoThreshold && src.topicKey == cand.topicKey:
-		// Mismo tema + casi duplicado: el más nuevo reemplaza al más viejo.
+	case sim >= autoThreshold && src.topicKey == cand.topicKey && src.createdAt > cand.createdAt:
+		// Mismo tema + casi duplicado + la recién guardada es ESTRICTAMENTE más
+		// nueva: reemplaza a la anterior. Solo auto-supersede en esta dirección, así
+		// nunca ocultamos la observación recién guardada ni contenido más nuevo.
 		return ObsRelation{
-			SourceID:   newer.id,
-			TargetID:   older.id,
+			SourceID:   src.id,
+			TargetID:   cand.id,
 			Relation:   RelSupersedes,
 			Confidence: sim,
 			Status:     RelStatusResolved,
 			ResolvedBy: "heuristic",
 			Reason:     "mismo topic_key y similitud alta; la observación más reciente reemplaza a la anterior",
+		}
+	case sim >= autoThreshold && src.topicKey == cand.topicKey:
+		// Mismo tema + alta similitud, pero la candidata es igual o más nueva: no
+		// auto-ocultar nada; que el agente decida.
+		return ObsRelation{
+			SourceID:   src.id,
+			TargetID:   cand.id,
+			Relation:   RelPending,
+			Confidence: sim,
+			Status:     RelStatusPending,
 		}
 	case sim >= autoThreshold:
 		// Alto solape pero distinto tema: relacionadas, sin contradicción deducible.

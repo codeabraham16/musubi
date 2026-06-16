@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // HookCommand describe un hook tipo command de Claude Code.
 type HookCommand struct {
-	Type    string `json:"type"`              // "command"
+	Type    string `json:"type"` // "command"
 	Command string `json:"command"`
 	Timeout int    `json:"timeout,omitempty"` // segundos; 0 = sin límite explícito
 }
@@ -54,13 +55,21 @@ func MergeClaudeSettings(existing []byte, event, matcher string, hook HookComman
 		}
 	}
 
-	// Paso 4: idempotencia — si el Command ya está presente en cualquier entrada
-	// del evento, devolver el contenido existente sin modificar.
-	for _, entrada := range entries {
-		for _, h := range entrada.Hooks {
-			if h.Command == hook.Command {
-				return existing, nil
+	// Paso 4: dedup por FIRMA (el subcomando, ignorando la ruta del ejecutable).
+	// - Si ya existe un hook con la misma firma y Command idéntico -> idempotente.
+	// - Si existe con la misma firma pero distinta ruta -> reemplazar (evita dejar
+	//   un hook duplicado apuntando a un binario viejo al re-instalar/mover).
+	sig := hookSignature(hook.Command)
+	for i := range entries {
+		for j := range entries[i].Hooks {
+			if hookSignature(entries[i].Hooks[j].Command) != sig {
+				continue
 			}
+			if entries[i].Hooks[j].Command == hook.Command {
+				return existing, nil // idéntico: nada que hacer
+			}
+			entries[i].Hooks[j] = hook // misma firma, otra ruta: reemplazar
+			return reserialize(root, hooksMap, event, entries)
 		}
 	}
 
@@ -82,6 +91,12 @@ func MergeClaudeSettings(existing []byte, event, matcher string, hook HookComman
 	}
 
 	// Paso 6: re-serializar evento → hooksMap → root.
+	return reserialize(root, hooksMap, event, entries)
+}
+
+// reserialize vuelca las entradas del evento al hooksMap y al root, devolviendo el
+// settings.json indentado.
+func reserialize(root, hooksMap map[string]json.RawMessage, event string, entries []hookEntry) ([]byte, error) {
 	evBytes, err := json.Marshal(entries)
 	if err != nil {
 		return nil, fmt.Errorf("error al serializar hooks.%s: %w", event, err)
@@ -99,4 +114,21 @@ func MergeClaudeSettings(existing []byte, event, matcher string, hook HookComman
 		return nil, fmt.Errorf("error al serializar settings.json: %w", err)
 	}
 	return out, nil
+}
+
+// hookSignature devuelve la parte estable de un Command de hook: el subcomando tras
+// la ruta del ejecutable (citada o no). Permite deduplicar/reemplazar el hook de
+// Musubi aunque cambie la ruta del binario.
+func hookSignature(cmd string) string {
+	s := strings.TrimSpace(cmd)
+	if strings.HasPrefix(s, "\"") {
+		if i := strings.Index(s[1:], "\""); i >= 0 {
+			return strings.TrimSpace(s[i+2:]) // tras la comilla de cierre
+		}
+		return s
+	}
+	if i := strings.IndexByte(s, ' '); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
+	}
+	return s
 }

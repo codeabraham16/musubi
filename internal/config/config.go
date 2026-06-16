@@ -269,12 +269,29 @@ func Load(projectPath string) (Config, error) {
 		return cfg, fmt.Errorf("error al parsear config.yaml: %w", err)
 	}
 
-	cfg.applyDefaults()
+	cfg.applyDefaults(presentBlocks(data))
 	return cfg, nil
 }
 
-// applyDefaults rellena campos vacíos con sus valores por defecto.
-func (c *Config) applyDefaults() {
+// presentBlocks devuelve el conjunto de claves top-level presentes en el YAML.
+// Permite distinguir "bloque ausente" de "bloque presente con enabled:false",
+// que con un bool puro es indistinguible por su cero-valor.
+func presentBlocks(data []byte) map[string]bool {
+	present := map[string]bool{}
+	var raw map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &raw); err == nil {
+		for k := range raw {
+			present[k] = true
+		}
+	}
+	return present
+}
+
+// applyDefaults rellena campos vacíos con sus valores por defecto. present indica
+// qué bloques top-level estaban en el YAML: un bloque ausente toma el default
+// completo; uno presente conserva sus bool (incluido enabled:false) y solo rellena
+// los numéricos en cero.
+func (c *Config) applyDefaults(present map[string]bool) {
 	d := Default()
 	if c.Embedding.Provider == "" {
 		c.Embedding.Provider = d.Embedding.Provider
@@ -289,23 +306,20 @@ func (c *Config) applyDefaults() {
 		c.Embedding.Dimensions = d.Embedding.Dimensions
 	}
 
-	// Aplicar defaults de Sourcing.
-	// Si CatalogURL y MaxCandidates son cero-valor, el bloque sourcing estaba ausente
-	// en el YAML: activar Enabled por defecto también.
-	bloqueSourcingAusente := c.Sourcing.CatalogURL == "" && c.Sourcing.MaxCandidates == 0
-	if c.Sourcing.CatalogURL == "" {
-		c.Sourcing.CatalogURL = d.Sourcing.CatalogURL
-	}
-	if c.Sourcing.MaxCandidates == 0 {
-		c.Sourcing.MaxCandidates = d.Sourcing.MaxCandidates
-	}
-	if c.Sourcing.CacheSeconds == 0 {
-		c.Sourcing.CacheSeconds = d.Sourcing.CacheSeconds
-	}
-	// Solo forzar Enabled=true cuando el bloque completo estaba ausente.
-	// Si el usuario escribió enabled: false explícitamente, lo respetamos.
-	if bloqueSourcingAusente {
-		c.Sourcing.Enabled = true
+	// Sourcing: ausente -> default completo (Enabled true); presente -> respetar
+	// Enabled y rellenar numéricos.
+	if !present["sourcing"] {
+		c.Sourcing = d.Sourcing
+	} else {
+		if c.Sourcing.CatalogURL == "" {
+			c.Sourcing.CatalogURL = d.Sourcing.CatalogURL
+		}
+		if c.Sourcing.MaxCandidates == 0 {
+			c.Sourcing.MaxCandidates = d.Sourcing.MaxCandidates
+		}
+		if c.Sourcing.CacheSeconds == 0 {
+			c.Sourcing.CacheSeconds = d.Sourcing.CacheSeconds
+		}
 	}
 
 	// Defaults de Memory.
@@ -319,27 +333,23 @@ func (c *Config) applyDefaults() {
 		c.Memory.CandidatePool = d.Memory.CandidatePool
 	}
 
-	// Defaults de Maintenance.
-	// Si el bloque entero estaba ausente, también aplicamos el intervalo de
-	// auto-mantenimiento; si el usuario escribió el bloque, respetamos
-	// auto_interval_hours tal cual (0 = desactivado explícito).
-	bloqueMaintAusente := c.Maintenance.DedupThreshold == 0 && c.Maintenance.DecayHalfLifeDays == 0 &&
-		c.Maintenance.DecayMinSalience == 0 && c.Maintenance.DecayMinAgeDays == 0 &&
-		c.Maintenance.AutoIntervalHours == 0
-	if c.Maintenance.DedupThreshold == 0 {
-		c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold
-	}
-	if c.Maintenance.DecayHalfLifeDays == 0 {
-		c.Maintenance.DecayHalfLifeDays = d.Maintenance.DecayHalfLifeDays
-	}
-	if c.Maintenance.DecayMinSalience == 0 {
-		c.Maintenance.DecayMinSalience = d.Maintenance.DecayMinSalience
-	}
-	if c.Maintenance.DecayMinAgeDays == 0 {
-		c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
-	}
-	if bloqueMaintAusente {
-		c.Maintenance.AutoIntervalHours = d.Maintenance.AutoIntervalHours
+	// Maintenance: ausente -> default completo; presente -> rellenar numéricos y
+	// respetar auto_interval_hours tal cual (0 = desactivado explícito).
+	if !present["maintenance"] {
+		c.Maintenance = d.Maintenance
+	} else {
+		if c.Maintenance.DedupThreshold == 0 {
+			c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold
+		}
+		if c.Maintenance.DecayHalfLifeDays == 0 {
+			c.Maintenance.DecayHalfLifeDays = d.Maintenance.DecayHalfLifeDays
+		}
+		if c.Maintenance.DecayMinSalience == 0 {
+			c.Maintenance.DecayMinSalience = d.Maintenance.DecayMinSalience
+		}
+		if c.Maintenance.DecayMinAgeDays == 0 {
+			c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
+		}
 	}
 
 	// Defaults de Graph.
@@ -358,24 +368,17 @@ func (c *Config) applyDefaults() {
 		c.Update.CheckIntervalHours = d.Update.CheckIntervalHours
 	}
 
-	// Defaults de Startup. El bloque se considera ausente cuando todos sus campos
-	// están en cero-valor (RecallBudget 0 y ambos bool false): ahí aplicamos los
-	// defaults completos (priming y auto-regen activos). Si el bloque está
-	// presente (init escribe recall_budget), respetamos los bool tal cual,
-	// permitiendo desactivar prime_memory/auto_regen explícitamente.
-	bloqueStartupAusente := c.Startup.RecallBudget == 0 && !c.Startup.PrimeMemory &&
-		!c.Startup.AutoRegen && !c.Startup.CognitiveBootstrap
-	if bloqueStartupAusente {
+	// Startup: ausente -> default completo; presente -> respetar los bool tal cual
+	// y rellenar recall_budget.
+	if !present["startup"] {
 		c.Startup = d.Startup
 	} else if c.Startup.RecallBudget == 0 {
 		c.Startup.RecallBudget = d.Startup.RecallBudget
 	}
 
-	// Defaults de Conflicts. Bloque ausente = todo en cero-valor: aplicar defaults
-	// completos (incluido Enabled=true). Si está presente, respetar Enabled tal cual.
-	bloqueConflictsAusente := !c.Conflicts.Enabled && c.Conflicts.SimilarityFloor == 0 &&
-		c.Conflicts.AutoResolveThreshold == 0 && c.Conflicts.CandidatePool == 0
-	if bloqueConflictsAusente {
+	// Conflicts: ausente -> default completo (Enabled true); presente -> respetar
+	// enabled (incluido false) y rellenar numéricos.
+	if !present["conflicts"] {
 		c.Conflicts = d.Conflicts
 	} else {
 		if c.Conflicts.SimilarityFloor == 0 {
@@ -389,12 +392,8 @@ func (c *Config) applyDefaults() {
 		}
 	}
 
-	// Defaults de Loop. Bloque ausente = todo en cero-valor: aplicar defaults
-	// completos (per_turn_recall y surface_conflicts activos). Si está presente,
-	// respetar los bool tal cual (permite desactivarlos explícitamente).
-	bloqueLoopAusente := !c.Loop.PerTurnRecall && c.Loop.RecallBudget == 0 &&
-		!c.Loop.SurfaceConflicts && !c.Loop.CaptureReminder && c.Loop.ReminderAfterTurns == 0
-	if bloqueLoopAusente {
+	// Loop: ausente -> default completo; presente -> respetar bool y rellenar numéricos.
+	if !present["loop"] {
 		c.Loop = d.Loop
 	} else {
 		if c.Loop.RecallBudget == 0 {
@@ -405,19 +404,17 @@ func (c *Config) applyDefaults() {
 		}
 	}
 
-	// Defaults de Pipeline. Bloque ausente = enabled false y sin fases: aplicar
-	// defaults completos. Si está presente, respetar enabled y completar las fases.
-	bloquePipelineAusente := !c.Pipeline.Enabled && len(c.Pipeline.Phases) == 0
-	if bloquePipelineAusente {
+	// Pipeline: ausente -> default completo; presente -> respetar enabled y
+	// completar las fases.
+	if !present["pipeline"] {
 		c.Pipeline = d.Pipeline
 	} else if len(c.Pipeline.Phases) == 0 {
 		c.Pipeline.Phases = d.Pipeline.Phases
 	}
 
-	// Defaults de MultiAgent. Bloque ausente = enabled false y sin tope: aplicar
-	// defaults completos. Si está presente, respetar enabled y completar el tope.
-	bloqueMultiAgentAusente := !c.MultiAgent.Enabled && c.MultiAgent.MaxBatchUnits == 0
-	if bloqueMultiAgentAusente {
+	// MultiAgent: ausente -> default completo; presente -> respetar enabled y
+	// completar el tope.
+	if !present["multiagent"] {
 		c.MultiAgent = d.MultiAgent
 	} else if c.MultiAgent.MaxBatchUnits == 0 {
 		c.MultiAgent.MaxBatchUnits = d.MultiAgent.MaxBatchUnits

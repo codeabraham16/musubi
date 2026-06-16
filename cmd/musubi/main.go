@@ -371,6 +371,16 @@ func setupProjectWith(exeOverride string) {
 	fmt.Println("En la primera sesión, Claude detectará el stack y generará skills personalizadas automáticamente.")
 }
 
+// quoteExe entrecomilla la ruta del ejecutable para el comando del hook (string de
+// shell), de modo que una ruta con espacios (ej. "C:\Users\First Last\...") no se
+// parta. Idempotente: no re-entrecomilla si ya viene citada.
+func quoteExe(exePath string) string {
+	if strings.HasPrefix(exePath, "\"") {
+		return exePath
+	}
+	return "\"" + exePath + "\""
+}
+
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento
 // de skills en {root}/.claude/settings.json usando bootstrap.MergeClaudeSettings.
 // Si el archivo no existe, lo crea. Si ya contiene el hook de Musubi, no lo duplica.
@@ -386,7 +396,7 @@ func writeClaudeHook(root, exePath string) error {
 	}
 	hook := bootstrap.HookCommand{
 		Type:    "command",
-		Command: exePath + " detect --hook-mode",
+		Command: quoteExe(exePath) + " detect --hook-mode",
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "SessionStart", "startup", hook)
@@ -411,7 +421,7 @@ func writeTurnHook(root, exePath string) error {
 	}
 	hook := bootstrap.HookCommand{
 		Type:    "command",
-		Command: exePath + " turn --hook-mode",
+		Command: quoteExe(exePath) + " turn --hook-mode",
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "UserPromptSubmit", "", hook)

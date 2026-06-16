@@ -178,7 +178,13 @@ func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]Se
 }
 
 // SearchObservationsFTS realiza una búsqueda por palabras clave utilizando FTS5 de SQLite.
+// Sanea la query del usuario (buildFTSQuery) para que caracteres especiales de FTS5
+// no produzcan un error de sintaxis; una query sin términos útiles devuelve vacío.
 func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observation, error) {
+	ftsQuery := buildFTSQuery(queryText)
+	if ftsQuery == "" {
+		return []Observation{}, nil
+	}
 	rows, err := e.db.Query(`
 		SELECT f.id, f.topic_key, f.content, o.created_at
 		FROM observations_fts f
@@ -186,7 +192,7 @@ func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observa
 		WHERE observations_fts MATCH ? AND o.archived = 0 AND o.superseded_by IS NULL
 		ORDER BY rank
 		LIMIT ?
-	`, queryText, limit)
+	`, ftsQuery, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error en búsqueda FTS5: %w", err)
 	}

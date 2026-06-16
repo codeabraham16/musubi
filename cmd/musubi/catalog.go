@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"musubi/internal/skillsource"
 )
@@ -105,8 +106,9 @@ func runMerge(args []string) error {
 		return fmt.Errorf("leer catálogo base de %s: %w", target, err)
 	}
 
-	// Obtener catálogo remoto.
-	ctx := context.Background()
+	// Obtener catálogo remoto (con timeout para no colgarse ante un server lento).
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	incoming, err := skillsource.FetchCatalog(ctx, url)
 	if err != nil {
 		return fmt.Errorf("obtener catálogo de %s: %w", url, err)

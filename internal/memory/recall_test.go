@@ -73,6 +73,21 @@ func TestRecallBumpsAccess(t *testing.T) {
 	}
 }
 
+func TestSearchObservationsFTSHandlesSpecialChars(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservation("a", "t", "postgres y redis en produccion", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Caracteres que romperían la sintaxis de FTS5 si se pasaran crudos.
+	res, err := e.SearchObservationsFTS(`postgres "y (redis`, 10)
+	if err != nil {
+		t.Fatalf("la búsqueda keyword no debe fallar con caracteres especiales: %v", err)
+	}
+	if len(res) == 0 {
+		t.Error("debería encontrar la observación pese a los caracteres especiales")
+	}
+}
+
 func TestCountObservations(t *testing.T) {
 	e := newTestEngine(t)
 	if n, err := e.CountObservations(); err != nil || n != 0 {

@@ -28,7 +28,7 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	// lectores concurrentes y un escritor a la vez, con espera en vez de
 	// "database is locked". Necesario para que varios sub-agentes coordinen sobre
 	// la misma pizarra (work_units) sin colisionar.
-	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
