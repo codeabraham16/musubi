@@ -270,6 +270,62 @@ func TestTokensToolInvalidAction(t *testing.T) {
 	}
 }
 
+func TestCodeMemoryFreshAndStale(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(file, []byte("package foo\n\nfunc Bar() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServerWithPath(t, dir)
+
+	// Guardar el gist del archivo.
+	if _, e := call(t, s, "musubi_save_code", map[string]interface{}{
+		"path": "foo.go", "gist": "Paquete foo con Bar().", "symbols": "Bar() L3",
+	}); e != nil {
+		t.Fatalf("save_code error: %+v", e)
+	}
+
+	// Recall: el archivo no cambió -> fresh.
+	res, e := call(t, s, "musubi_recall_code", map[string]interface{}{"path": "foo.go"})
+	if e != nil {
+		t.Fatalf("recall_code error: %+v", e)
+	}
+	txt := textOf(t, res)
+	if !strings.Contains(txt, "\"fresh\": true") {
+		t.Errorf("el archivo sin cambios debe ser fresh, obtuve %s", txt)
+	}
+	if !strings.Contains(txt, "Paquete foo con Bar().") {
+		t.Errorf("el recall debe devolver el gist, obtuve %s", txt)
+	}
+
+	// Modificar el archivo -> stale.
+	if err := os.WriteFile(file, []byte("package foo\n\nfunc Bar() {}\nfunc Baz() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	res2, _ := call(t, s, "musubi_recall_code", map[string]interface{}{"path": "foo.go"})
+	if !strings.Contains(textOf(t, res2), "\"fresh\": false") {
+		t.Errorf("tras modificar el archivo el gist debe quedar no-fresco, obtuve %s", textOf(t, res2))
+	}
+}
+
+func TestRecallCodeNotFound(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	res, e := call(t, s, "musubi_recall_code", map[string]interface{}{"path": "no/existe.go"})
+	if e != nil {
+		t.Fatalf("recall_code error: %+v", e)
+	}
+	if !strings.Contains(textOf(t, res), "\"found\": false") {
+		t.Errorf("un path sin memoria debe devolver found:false, obtuve %s", textOf(t, res))
+	}
+}
+
+func TestSaveCodeRequiresPathAndGist(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_save_code", map[string]interface{}{"path": "x.go"}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por gist faltante, obtuve %+v", e)
+	}
+}
+
 func TestSaveAndRecallFactsTools(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 

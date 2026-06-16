@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -329,6 +331,30 @@ func (s *McpServer) handleToolsList() interface{} {
 				},
 			},
 		},
+		{
+			Name:        "musubi_save_code",
+			Description: "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"path":    {Type: "string", Description: "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"},
+					"gist":    {Type: "string", Description: "Resumen corto de qué hace el archivo"},
+					"symbols": {Type: "string", Description: "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"},
+				},
+				Required: []string{"path", "gist"},
+			},
+		},
+		{
+			Name:        "musubi_recall_code",
+			Description: "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Devuelve fresh=true si el archivo no cambió desde que se guardó el gist, o fresh=false si conviene re-leerlo (o leer solo los símbolos que necesitás). Llamala ANTES de leer un archivo grande.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"path": {Type: "string", Description: "Ruta del archivo a recordar"},
+				},
+				Required: []string{"path"},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -421,6 +447,10 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolWork(callReq.Arguments)
 	case "musubi_tokens":
 		return s.toolTokens(callReq.Arguments)
+	case "musubi_save_code":
+		return s.toolSaveCode(callReq.Arguments)
+	case "musubi_recall_code":
+		return s.toolRecallCode(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -949,6 +979,84 @@ func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
 	default:
 		return nil, rpcErrorf(codeInvalidParams, "action inválida: %q (status | reset)", args.Action)
 	}
+}
+
+func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Path    string `json:"path"`
+		Gist    string `json:"gist"`
+		Symbols string `json:"symbols"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Path) == "" || strings.TrimSpace(args.Gist) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "path y gist son obligatorios")
+	}
+
+	// Fingerprint del contenido actual (best-effort: si el archivo no se puede
+	// leer, se guarda igual con fingerprint vacío y el recall lo marcará no-fresco).
+	fp, _ := fileFingerprint(s.projectPath, args.Path)
+	cm := memory.CodeMemory{
+		Path:        args.Path,
+		Gist:        args.Gist,
+		Symbols:     args.Symbols,
+		Fingerprint: fp,
+		Tokens:      memory.EstimateTokens(args.Gist),
+	}
+	if err := s.engine.SaveCodeMemory(cm); err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
+	}
+	return jsonResult(map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens})
+}
+
+func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Path) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "path es obligatorio")
+	}
+
+	cm, ok, err := s.engine.GetCodeMemory(args.Path)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer memoria de código: %v", err)
+	}
+	if !ok {
+		return jsonResult(map[string]interface{}{"found": false, "path": args.Path})
+	}
+
+	// Frescura: el gist sirve si el archivo no cambió desde que se guardó.
+	current, ferr := fileFingerprint(s.projectPath, args.Path)
+	fresh := ferr == nil && current != "" && current == cm.Fingerprint
+	_, _ = s.engine.LedgerAdd("", "code_recall", cm.Tokens)
+	return jsonResult(map[string]interface{}{
+		"found":   true,
+		"path":    cm.Path,
+		"gist":    cm.Gist,
+		"symbols": cm.Symbols,
+		"tokens":  cm.Tokens,
+		"fresh":   fresh,
+	})
+}
+
+// fileFingerprint devuelve el sha256 (hex) del contenido actual del archivo,
+// resolviendo path relativo contra root. Es la señal de frescura de la memoria de
+// código: si cambia el contenido, cambia el fingerprint.
+func fileFingerprint(root, path string) (string, error) {
+	full := path
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(root, path)
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcError) {

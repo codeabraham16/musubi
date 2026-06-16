@@ -227,6 +227,18 @@ func (e *DbEngine) initSchema() error {
 			INSERT INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
 		END;`,
 
+		// Memoria de código: gist + símbolos de un archivo ya leído, con un
+		// fingerprint del contenido para saber si sigue fresco. Permite recordar la
+		// estructura de un archivo sin re-leerlo entero (ahorro de tokens).
+		`CREATE TABLE IF NOT EXISTS code_memory (
+			path TEXT PRIMARY KEY,
+			gist TEXT NOT NULL,
+			symbols TEXT,
+			fingerprint TEXT,
+			tokens INTEGER NOT NULL DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
 		// Grafo de conocimiento: entidades (nodos) deduplicadas por nombre normalizado.
 		`CREATE TABLE IF NOT EXISTS entities (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
