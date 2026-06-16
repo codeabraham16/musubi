@@ -65,32 +65,6 @@ func ExtractDeps(root string) (map[string][]string, error) {
 	return resultado, nil
 }
 
-// leerConCache lee el contenido de un archivo con invalidación por mtime.
-// Si el archivo no existe, devuelve nil, nil (no error).
-// Si falla la lectura, loguea y devuelve nil, nil.
-func leerConCache(ruta string) ([]byte, bool) {
-	info, err := os.Stat(ruta)
-	if err != nil {
-		// Archivo ausente: no es error
-		return nil, false
-	}
-
-	// Comprobar si el caché sigue vigente
-	if entrada, ok := depsCache.Load(ruta); ok {
-		cached := entrada.(depsCacheEntry)
-		if cached.mtime.Equal(info.ModTime()) {
-			return nil, true // cache hit; el llamador usa cached.deps
-		}
-	}
-
-	data, err := os.ReadFile(ruta)
-	if err != nil {
-		logx.Warn("no se pudo leer manifest para ExtractDeps", "path", ruta, "error", err)
-		return nil, false
-	}
-	return data, false
-}
-
 // cargarDesdeCache devuelve las deps cacheadas para un manifest dado, si existen y siguen vigentes.
 func cargarDesdeCache(ruta string) (map[string][]string, bool) {
 	info, err := os.Stat(ruta)

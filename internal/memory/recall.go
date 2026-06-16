@@ -88,7 +88,10 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 		return result, nil
 	}
 
-	scored := scoreCandidates(cands)
+	// El ranking keyword solo es significativo si la query tiene términos FTS; sin
+	// ellos (fallback por recencia) sumarlo doble-contaría la recencia.
+	keywordMeaningful := buildFTSQuery(query) != ""
+	scored := scoreCandidates(cands, keywordMeaningful)
 
 	var chosen []string
 	for _, c := range scored {
@@ -133,9 +136,11 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 	return result, nil
 }
 
-// scoreCandidates fusiona tres rankings (relevancia keyword, recencia, frecuencia)
-// vía RRF y pondera por importancia. Determinista, sin LLM.
-func scoreCandidates(cands []candidate) []scoredCandidate {
+// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía
+// RRF y pondera por importancia. Determinista, sin LLM. Si keywordMeaningful es
+// false (fallback sin query), omite el término keyword para no doble-contar la
+// recencia (el orden de entrada ya viene por recencia en ese caso).
+func scoreCandidates(cands []candidate, keywordMeaningful bool) []scoredCandidate {
 	n := len(cands)
 
 	// Ranking keyword: el orden de entrada ya viene por rank de FTS.
@@ -153,9 +158,11 @@ func scoreCandidates(cands []candidate) []scoredCandidate {
 
 	out := make([]scoredCandidate, n)
 	for i, c := range cands {
-		rrf := 1.0/float64(rrfK+keywordRank[c.id]) +
-			1.0/float64(rrfK+recencyRank[c.id]) +
+		rrf := 1.0/float64(rrfK+recencyRank[c.id]) +
 			1.0/float64(rrfK+freqRank[c.id])
+		if keywordMeaningful {
+			rrf += 1.0 / float64(rrfK+keywordRank[c.id])
+		}
 		imp := c.importance
 		if imp <= 0 {
 			imp = 1.0

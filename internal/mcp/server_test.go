@@ -93,3 +93,12 @@ func TestServeNotificationNoResponse(t *testing.T) {
 		t.Fatalf("esperaba 0 respuestas para notificación, obtuve %+v", resps)
 	}
 }
+
+func TestServeNotificationKnownMethodNoResponse(t *testing.T) {
+	// Per JSON-RPC 2.0, tampoco se responde a una notificación de un método conocido
+	// (sin id), como tools/list.
+	resps := runRequests(t, `{"jsonrpc":"2.0","method":"tools/list"}`)
+	if len(resps) != 0 {
+		t.Fatalf("esperaba 0 respuestas para notificación tools/list, obtuve %+v", resps)
+	}
+}

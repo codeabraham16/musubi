@@ -21,6 +21,9 @@ const defaultMaxCandidates = 20
 // catalogVersionSoportada es la versión de catálogo que este código soporta plenamente.
 const catalogVersionSoportada = 1
 
+// maxCatalogBytes es el tope de tamaño del catálogo remoto (backstop anti-DoS).
+const maxCatalogBytes = 32 << 20
+
 // CatalogEntry representa una entrada del catálogo de skills.
 type CatalogEntry struct {
 	// ID es el identificador único de la skill (slug: [a-z0-9][a-z0-9-]{0,63}).
@@ -100,7 +103,8 @@ func FetchCatalog(ctx context.Context, url string) (Catalog, error) {
 		return Catalog{}, fmt.Errorf("skillsource: GET %s devolvió HTTP %d", url, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Tope de tamaño: backstop ante un endpoint que intente agotar memoria.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes))
 	if err != nil {
 		return Catalog{}, fmt.Errorf("skillsource: leer body de %s: %w", url, err)
 	}

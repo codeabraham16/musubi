@@ -198,7 +198,7 @@ func TestScoreCandidatesFusion(t *testing.T) {
 		{id: "b", accessCount: 100, importance: 1},
 		{id: "c", accessCount: 0, importance: 10},
 	}
-	scored := scoreCandidates(cands)
+	scored := scoreCandidates(cands, true)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}

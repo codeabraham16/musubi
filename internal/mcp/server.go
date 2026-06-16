@@ -173,6 +173,11 @@ func (s *McpServer) Serve(in io.Reader, out io.Writer) {
 }
 
 func (s *McpServer) handleRequest(req JsonRpcRequest) {
+	// Per JSON-RPC 2.0, una notificación (sin id) NUNCA recibe respuesta, ni
+	// siquiera para métodos conocidos.
+	if req.ID == nil {
+		return
+	}
 	switch req.Method {
 	case "initialize":
 		s.sendResult(req.ID, s.handleInitialize())
@@ -186,10 +191,7 @@ func (s *McpServer) handleRequest(req JsonRpcRequest) {
 		}
 		s.sendResult(req.ID, result)
 	default:
-		// Las notificaciones (sin id) no requieren respuesta.
-		if req.ID != nil {
-			s.sendError(req.ID, rpcErrorf(codeMethodNotFound, "Method not found: %s", req.Method))
-		}
+		s.sendError(req.ID, rpcErrorf(codeMethodNotFound, "Method not found: %s", req.Method))
 	}
 }
 

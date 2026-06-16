@@ -75,7 +75,7 @@ func TestCompleteWorkUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _, _ := e.ClaimWorkUnit("b", "a")
-	if err := e.CompleteWorkUnit(u.ID, "resultado A", WorkDone); err != nil {
+	if err := e.CompleteWorkUnit(u.ID, "resultado A", WorkDone, ""); err != nil {
 		t.Fatalf("CompleteWorkUnit error: %v", err)
 	}
 	b, _ := e.WorkBatchStatus("b")
@@ -102,18 +102,34 @@ func TestCompleteWorkUnitRequiresClaimed(t *testing.T) {
 	openID := b.Units[0].ID
 
 	// Completar una unidad OPEN (nunca reclamada) debe fallar.
-	if err := e.CompleteWorkUnit(openID, "x", WorkDone); err == nil {
+	if err := e.CompleteWorkUnit(openID, "x", WorkDone, ""); err == nil {
 		t.Error("completar una unidad no reclamada debe fallar")
 	}
 
 	// Reclamar y completar funciona.
 	u, _, _ := e.ClaimWorkUnit("b", "a")
-	if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone); err != nil {
+	if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone, ""); err != nil {
 		t.Fatalf("completar una unidad reclamada debe funcionar: %v", err)
 	}
 	// Re-completar una unidad ya done debe fallar (no re-cerrar/sobrescribir).
-	if err := e.CompleteWorkUnit(u.ID, "otra vez", WorkDone); err == nil {
+	if err := e.CompleteWorkUnit(u.ID, "otra vez", WorkDone, ""); err == nil {
 		t.Error("re-completar una unidad ya cerrada debe fallar")
+	}
+}
+
+func TestCompleteWorkUnitOwnership(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.CreateWorkBatch("b", twoUnits()); err != nil {
+		t.Fatal(err)
+	}
+	u, _, _ := e.ClaimWorkUnit("b", "agente-1")
+	// Otro agente NO puede cerrar la unidad de 'agente-1'.
+	if err := e.CompleteWorkUnit(u.ID, "x", WorkDone, "agente-2"); err == nil {
+		t.Error("un agente distinto no debe poder cerrar la unidad de otro")
+	}
+	// El dueño sí.
+	if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone, "agente-1"); err != nil {
+		t.Errorf("el dueño debe poder cerrar su unidad: %v", err)
 	}
 }
 
@@ -137,7 +153,7 @@ func TestActiveBatchPrefiereMasReciente(t *testing.T) {
 func TestCompleteWorkUnitStatusInvalido(t *testing.T) {
 	e := newTestEngine(t)
 	b, _ := e.CreateWorkBatch("b", twoUnits())
-	if err := e.CompleteWorkUnit(b.Units[0].ID, "x", "raro"); err == nil {
+	if err := e.CompleteWorkUnit(b.Units[0].ID, "x", "raro", ""); err == nil {
 		t.Error("un status de cierre inválido debe fallar")
 	}
 }
@@ -146,7 +162,7 @@ func TestWorkBatchStatusCounts(t *testing.T) {
 	e := newTestEngine(t)
 	e.CreateWorkBatch("b", twoUnits())
 	u, _, _ := e.ClaimWorkUnit("b", "a")
-	e.CompleteWorkUnit(u.ID, "ok", WorkDone)
+	e.CompleteWorkUnit(u.ID, "ok", WorkDone, "")
 	b, err := e.WorkBatchStatus("b")
 	if err != nil {
 		t.Fatalf("WorkBatchStatus error: %v", err)
@@ -184,7 +200,7 @@ func TestActiveBatch(t *testing.T) {
 		if !claimed {
 			break
 		}
-		if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone); err != nil {
+		if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone, ""); err != nil {
 			t.Fatalf("CompleteWorkUnit error: %v", err)
 		}
 	}
