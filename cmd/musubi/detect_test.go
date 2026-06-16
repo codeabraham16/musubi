@@ -65,6 +65,29 @@ func TestPrimingAccountsTokensInLedger(t *testing.T) {
 	}
 }
 
+func TestPrimingSeedsDeltaState(t *testing.T) {
+	store := newFakeStore()
+	store.prime = memory.RecallResult{
+		Count: 2,
+		Items: []memory.RecallItem{
+			{ID: "a", TopicKey: "t", Gist: "uno", ContentHash: "h1"},
+			{ID: "b", TopicKey: "t", Gist: "dos", ContentHash: "h2"},
+		},
+	}
+	if buildPrimingContext(store, 300, "s1") == "" {
+		t.Fatal("esperaba bloque de priming")
+	}
+	// El priming debe sembrar el estado del delta con lo que inyectó, para que el
+	// recall por turno no repita esos gists en la misma sesión.
+	if store.meta[metaDeltaSession] != "s1" {
+		t.Errorf("el priming debe fijar la sesión del delta, obtuve %q", store.meta[metaDeltaSession])
+	}
+	raw := store.meta[metaDeltaInjected]
+	if !strings.Contains(raw, "\"a\"") || !strings.Contains(raw, "\"b\"") {
+		t.Errorf("el delta debe quedar sembrado con a y b, obtuve %q", raw)
+	}
+}
+
 func TestReadSessionID(t *testing.T) {
 	if got := readSessionID(strings.NewReader(`{"session_id":"abc","hook_event_name":"SessionStart"}`)); got != "abc" {
 		t.Errorf("esperaba 'abc', obtuve %q", got)
