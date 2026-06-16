@@ -237,6 +237,50 @@ func TestLoadMultiAgentDisableRespected(t *testing.T) {
 	}
 }
 
+func TestLoadConflictsEnabledOnlyFalse(t *testing.T) {
+	// Bloque con SOLO enabled:false (sin campos numéricos): debe respetarse y NO
+	// re-habilitarse; los numéricos toman default.
+	root := writeConfig(t, "version: \"1.0\"\nconflicts:\n  enabled: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Conflicts.Enabled {
+		t.Error("conflicts.enabled:false (solo) NO debe re-habilitarse")
+	}
+	if cfg.Conflicts.SimilarityFloor != 0.3 || cfg.Conflicts.CandidatePool != 10 {
+		t.Errorf("los numéricos deben tomar default: %+v", cfg.Conflicts)
+	}
+}
+
+func TestLoadPipelineEnabledOnlyFalse(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\npipeline:\n  enabled: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Pipeline.Enabled {
+		t.Error("pipeline.enabled:false (solo) NO debe re-habilitarse")
+	}
+	if len(cfg.Pipeline.Phases) == 0 {
+		t.Error("las phases deben tomar default")
+	}
+}
+
+func TestLoadMultiAgentEnabledOnlyFalse(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmultiagent:\n  enabled: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.MultiAgent.Enabled {
+		t.Error("multiagent.enabled:false (solo) NO debe re-habilitarse")
+	}
+	if cfg.MultiAgent.MaxBatchUnits != 50 {
+		t.Errorf("max_batch_units debe tomar default, obtuve %d", cfg.MultiAgent.MaxBatchUnits)
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 

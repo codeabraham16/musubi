@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestMatchGlobNormalizesSeparators(t *testing.T) {
+	// En Windows WalkDir entrega paths con '\'; un trigger estilo ruta con '/' debe
+	// matchear igual. Normalizamos separadores de forma determinista (cross-OS).
+	if !MatchGlob("cmd/*", `cmd\main.go`) {
+		t.Error(`cmd/* debe matchear cmd\main.go (normalización de separadores)`)
+	}
+	if !MatchGlob(`cmd\*`, "cmd/main.go") {
+		t.Error(`cmd\* debe matchear cmd/main.go (normalización de separadores)`)
+	}
+	if MatchGlob("cmd/*", "internal/main.go") {
+		t.Error("cmd/* NO debe matchear internal/main.go")
+	}
+}
+
 // setupSkillsDir crea un proyecto temporal con .musubi/skills y escribe los archivos dados.
 // files es un mapa nombre->contenido.
 func setupSkillsDir(t *testing.T, files map[string]string) string {

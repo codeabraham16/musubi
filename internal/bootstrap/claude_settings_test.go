@@ -168,6 +168,37 @@ func TestMergeClaudeSettingsUserPromptSubmit(t *testing.T) {
 	}
 }
 
+// TestMergeClaudeSettingsReemplazaRutaVieja verifica que re-registrar el mismo
+// subcomando con OTRA ruta del binario reemplaza el hook viejo en vez de duplicarlo.
+func TestMergeClaudeSettingsReemplazaRutaVieja(t *testing.T) {
+	vieja := HookCommand{Type: "command", Command: `"/old/path/musubi" detect --hook-mode`, Timeout: 10}
+	out, err := MergeClaudeSettings(nil, "SessionStart", "startup", vieja)
+	if err != nil {
+		t.Fatalf("primer merge: %v", err)
+	}
+	nueva := HookCommand{Type: "command", Command: `"/new/path/musubi" detect --hook-mode`, Timeout: 10}
+	out, err = MergeClaudeSettings(out, "SessionStart", "startup", nueva)
+	if err != nil {
+		t.Fatalf("segundo merge: %v", err)
+	}
+
+	entradas := parsearHooksSessionStart(t, out)
+	total := 0
+	var cmd string
+	for _, e := range entradas {
+		for _, h := range e.Hooks {
+			total++
+			cmd = h.Command
+		}
+	}
+	if total != 1 {
+		t.Fatalf("esperaba 1 hook (reemplazo, no duplicado), obtuve %d", total)
+	}
+	if cmd != nueva.Command {
+		t.Errorf("debe quedar la ruta nueva, obtuve %q", cmd)
+	}
+}
+
 // TestMergeClaudeSettingsJSONInvalido verifica que un input malformado retorna error.
 func TestMergeClaudeSettingsJSONInvalido(t *testing.T) {
 	_, err := MergeClaudeSettings([]byte("{no es json"), "SessionStart", "startup", HookCommand{Command: "x"})

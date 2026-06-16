@@ -44,6 +44,30 @@ func TestDetectRelationsSupersedeMismoTopic(t *testing.T) {
 	}
 }
 
+func TestDetectRelationsNoAutoSupersedeNueva(t *testing.T) {
+	e := newTestEngine(t)
+	// 'src' (la que pasamos a DetectRelations, p.ej. re-guardada por id) es MÁS VIEJA
+	// que la candidata. Auto-superseder ocultaría 'src' pese a ser la recién tocada,
+	// o peor, ocultaría contenido más nuevo. Debe quedar pending.
+	saveAt(t, e, "src", "arch/db", "Usamos PostgreSQL como base de datos principal del sistema.", "2026-01-01 10:00:00")
+	saveAt(t, e, "cand", "arch/db", "Usamos PostgreSQL como base de datos principal del sistema productivo.", "2026-06-01 10:00:00")
+
+	rels, err := e.DetectRelations("src", ConflictOptions{})
+	if err != nil {
+		t.Fatalf("DetectRelations error: %v", err)
+	}
+	for _, r := range rels {
+		if r.Relation == RelSupersedes && r.Status == RelStatusResolved {
+			t.Errorf("no debe auto-superseder cuando la candidata es más nueva: %+v", r)
+		}
+	}
+	var sup string
+	e.db.QueryRow(`SELECT COALESCE(superseded_by,'') FROM observations WHERE id='src'`).Scan(&sup)
+	if sup != "" {
+		t.Errorf("la observación 'src' no debe quedar oculta, superseded_by=%q", sup)
+	}
+}
+
 func TestDetectRelationsMediaSimilitudQuedaPending(t *testing.T) {
 	e := newTestEngine(t)
 	saveAt(t, e, "a", "arch/api", "El servicio de autenticación valida tokens JWT con expiración corta.", "2026-01-01 10:00:00")
