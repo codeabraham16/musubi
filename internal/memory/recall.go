@@ -23,9 +23,10 @@ const (
 
 // RecallOptions configura un recall. Los ceros usan los defaults.
 type RecallOptions struct {
-	TokenBudget   int // techo de tokens del payload devuelto
-	CandidatePool int // candidatos a rankear antes de empaquetar
-	GistMaxTokens int // tope de un gist generado al vuelo
+	TokenBudget   int  // techo de tokens del payload devuelto
+	CandidatePool int  // candidatos a rankear antes de empaquetar
+	GistMaxTokens int  // tope de un gist generado al vuelo
+	NoBump        bool // si true, no actualiza stats de acceso (recall read-only)
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -121,6 +122,11 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 	}
 	result.Count = len(result.Items)
 
+	// Recall read-only (ej. inyección por turno): no contar como acceso para no
+	// distorsionar el ranking por frecuencia con accesos que el agente no pidió.
+	if opts.NoBump {
+		return result, nil
+	}
 	if err := e.bumpAccess(chosen); err != nil {
 		return result, err
 	}

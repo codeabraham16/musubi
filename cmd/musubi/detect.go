@@ -82,7 +82,7 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig) 
 		cognitive = buildCognitiveContext()
 	}
 
-	return assembleHookContext(priming, cognitive, generation), nil
+	return assembleHookContext("SessionStart", priming, cognitive, generation), nil
 }
 
 // bootstrappingAutoconocimiento indica si el proyecto AÚN no tiene perfil: en ese
@@ -153,8 +153,9 @@ func resumirStack(resultados []detector.StackResult) string {
 }
 
 // assembleHookContext combina los bloques no vacíos (en orden) en el envelope
-// JSON de hookSpecificOutput. Devuelve "" si no hay nada que inyectar.
-func assembleHookContext(bloques ...string) string {
+// JSON de hookSpecificOutput para el evento eventName (ej. "SessionStart" o
+// "UserPromptSubmit"). Devuelve "" si no hay nada que inyectar.
+func assembleHookContext(eventName string, bloques ...string) string {
 	var partes []string
 	for _, b := range bloques {
 		if strings.TrimSpace(b) != "" {
@@ -168,7 +169,7 @@ func assembleHookContext(bloques ...string) string {
 
 	envelope := map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{
-			"hookEventName":     "SessionStart",
+			"hookEventName":     eventName,
 			"additionalContext": contexto,
 		},
 	}
@@ -187,16 +188,8 @@ func buildPrimingContext(store startupStore, budget int) string {
 	if err != nil || res.Count == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("[Musubi — memoria] Contexto que Musubi recuerda de este proyecto (gists; usá musubi_memory_expand con el id para el detalle completo):\n")
-	for _, it := range res.Items {
-		if it.TopicKey != "" {
-			fmt.Fprintf(&b, "- (%s) %s [id:%s]\n", it.TopicKey, it.Gist, it.ID)
-		} else {
-			fmt.Fprintf(&b, "- %s [id:%s]\n", it.Gist, it.ID)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
+	header := "[Musubi — memoria] Contexto que Musubi recuerda de este proyecto (gists; usá musubi_memory_expand con el id para el detalle completo):"
+	return formatGists(header, res)
 }
 
 // buildCognitiveContext arma el bloque de autoconocimiento que activa las skills

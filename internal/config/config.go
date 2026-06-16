@@ -85,6 +85,38 @@ type StartupConfig struct {
 	CognitiveBootstrap bool `yaml:"cognitive_bootstrap"`
 }
 
+// LoopConfig controla el loop de trabajo dirigido: la inyección de contexto por
+// turno (hook UserPromptSubmit). Extiende el priming de arranque a cada prompt.
+type LoopConfig struct {
+	// PerTurnRecall inyecta, antes de cada prompt, un recall acotado relevante a lo
+	// que el usuario acaba de pedir (default true).
+	PerTurnRecall bool `yaml:"per_turn_recall"`
+	// RecallBudget es el techo de tokens del recall por turno (default 250).
+	RecallBudget int `yaml:"recall_budget"`
+	// SurfaceConflicts agrega, cuando hay relaciones de memoria sin resolver, una
+	// línea que invita a resolverlas con musubi_conflicts/musubi_judge (default true).
+	SurfaceConflicts bool `yaml:"surface_conflicts"`
+	// CaptureReminder recuerda persistir aprendizajes cuando pasaron varios turnos
+	// sin guardar nada en memoria (default true). Cierra el loop: contexto antes,
+	// captura después.
+	CaptureReminder bool `yaml:"capture_reminder"`
+	// ReminderAfterTurns es la cantidad de turnos sin guardar tras la cual se inyecta
+	// el recordatorio de captura (default 5).
+	ReminderAfterTurns int `yaml:"reminder_after_turns"`
+}
+
+// PipelineConfig controla el pipeline por fases del loop dirigido: Musubi mantiene
+// el estado de la fase actual de la tarea (explorar→planear→codear→verificar) y se
+// lo recuerda a Claude en cada turno. Determinista y model-free: Claude hace el
+// trabajo, Musubi secuencia.
+type PipelineConfig struct {
+	// Enabled activa el recordatorio de fase por turno y la herramienta musubi_phase
+	// (default true). Sin una tarea activa no inyecta nada.
+	Enabled bool `yaml:"enabled"`
+	// Phases es la secuencia de fases por defecto al iniciar una tarea.
+	Phases []string `yaml:"phases"`
+}
+
 // ConflictConfig controla la detección de relaciones semánticas entre
 // observaciones (resolución de conflictos model-free).
 type ConflictConfig struct {
@@ -127,6 +159,10 @@ type Config struct {
 	Startup StartupConfig `yaml:"startup,omitempty"`
 	// Conflicts configura la detección de relaciones semánticas entre observaciones.
 	Conflicts ConflictConfig `yaml:"conflicts,omitempty"`
+	// Loop configura el loop de trabajo dirigido (inyección de contexto por turno).
+	Loop LoopConfig `yaml:"loop,omitempty"`
+	// Pipeline configura el pipeline por fases del loop dirigido.
+	Pipeline PipelineConfig `yaml:"pipeline,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -178,6 +214,17 @@ func Default() Config {
 			SimilarityFloor:      0.3,
 			AutoResolveThreshold: 0.7,
 			CandidatePool:        10,
+		},
+		Loop: LoopConfig{
+			PerTurnRecall:      true,
+			RecallBudget:       250,
+			SurfaceConflicts:   true,
+			CaptureReminder:    true,
+			ReminderAfterTurns: 5,
+		},
+		Pipeline: PipelineConfig{
+			Enabled: true,
+			Phases:  []string{"explore", "plan", "code", "verify"},
 		},
 	}
 }
@@ -323,5 +370,30 @@ func (c *Config) applyDefaults() {
 		if c.Conflicts.CandidatePool == 0 {
 			c.Conflicts.CandidatePool = d.Conflicts.CandidatePool
 		}
+	}
+
+	// Defaults de Loop. Bloque ausente = todo en cero-valor: aplicar defaults
+	// completos (per_turn_recall y surface_conflicts activos). Si está presente,
+	// respetar los bool tal cual (permite desactivarlos explícitamente).
+	bloqueLoopAusente := !c.Loop.PerTurnRecall && c.Loop.RecallBudget == 0 &&
+		!c.Loop.SurfaceConflicts && !c.Loop.CaptureReminder && c.Loop.ReminderAfterTurns == 0
+	if bloqueLoopAusente {
+		c.Loop = d.Loop
+	} else {
+		if c.Loop.RecallBudget == 0 {
+			c.Loop.RecallBudget = d.Loop.RecallBudget
+		}
+		if c.Loop.ReminderAfterTurns == 0 {
+			c.Loop.ReminderAfterTurns = d.Loop.ReminderAfterTurns
+		}
+	}
+
+	// Defaults de Pipeline. Bloque ausente = enabled false y sin fases: aplicar
+	// defaults completos. Si está presente, respetar enabled y completar las fases.
+	bloquePipelineAusente := !c.Pipeline.Enabled && len(c.Pipeline.Phases) == 0
+	if bloquePipelineAusente {
+		c.Pipeline = d.Pipeline
+	} else if len(c.Pipeline.Phases) == 0 {
+		c.Pipeline.Phases = d.Pipeline.Phases
 	}
 }

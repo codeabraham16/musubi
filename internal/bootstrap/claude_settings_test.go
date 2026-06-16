@@ -6,26 +6,30 @@ import (
 	"testing"
 )
 
-// parsearHooksSessionStart decodifica el output de MergeClaudeSettings y extrae
-// las entradas de hooks.SessionStart para verificación.
-func parsearHooksSessionStart(t *testing.T, data []byte) []sessionStartEntry {
+// parsearHooksEvento decodifica el output de MergeClaudeSettings y extrae las
+// entradas de hooks.<event> para verificación.
+func parsearHooksEvento(t *testing.T, data []byte, event string) []hookEntry {
 	t.Helper()
 	var root struct {
-		Hooks struct {
-			SessionStart []sessionStartEntry `json:"SessionStart"`
-		} `json:"hooks"`
+		Hooks map[string][]hookEntry `json:"hooks"`
 	}
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("output no es JSON válido: %v\n%s", err, data)
 	}
-	return root.Hooks.SessionStart
+	return root.Hooks[event]
+}
+
+// parsearHooksSessionStart es un atajo para el evento SessionStart.
+func parsearHooksSessionStart(t *testing.T, data []byte) []hookEntry {
+	t.Helper()
+	return parsearHooksEvento(t, data, "SessionStart")
 }
 
 // TestMergeClaudeSettingsVacio verifica que un input vacío produce la estructura
 // con hooks.SessionStart conteniendo la nueva entrada.
 func TestMergeClaudeSettingsVacio(t *testing.T) {
 	hook := HookCommand{Type: "command", Command: "/usr/bin/musubi detect --hook-mode", Timeout: 10}
-	out, err := MergeClaudeSettings(nil, "startup", hook)
+	out, err := MergeClaudeSettings(nil, "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -53,7 +57,7 @@ func TestMergeClaudeSettingsPreservaHooksExistentes(t *testing.T) {
 		}
 	}`)
 	hook := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode", Timeout: 10}
-	out, err := MergeClaudeSettings(existing, "startup", hook)
+	out, err := MergeClaudeSettings(existing, "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -88,12 +92,12 @@ func TestMergeClaudeSettingsPreservaHooksExistentes(t *testing.T) {
 func TestMergeClaudeSettingsIdempotente(t *testing.T) {
 	hook := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode", Timeout: 10}
 	// Primera inserción.
-	out1, err := MergeClaudeSettings(nil, "startup", hook)
+	out1, err := MergeClaudeSettings(nil, "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("primera inserción: %v", err)
 	}
 	// Segunda inserción (misma operación sobre el resultado previo).
-	out2, err := MergeClaudeSettings(out1, "startup", hook)
+	out2, err := MergeClaudeSettings(out1, "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("segunda inserción: %v", err)
 	}
@@ -109,7 +113,7 @@ func TestMergeClaudeSettingsIdempotente(t *testing.T) {
 // TestMergeClaudeSettingsSalidaEsJSONValido verifica que el output siempre es JSON válido.
 func TestMergeClaudeSettingsSalidaEsJSONValido(t *testing.T) {
 	hook := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode"}
-	out, err := MergeClaudeSettings([]byte(`{}`), "startup", hook)
+	out, err := MergeClaudeSettings([]byte(`{}`), "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -124,7 +128,7 @@ func TestMergeClaudeSettingsSalidaEsJSONValido(t *testing.T) {
 func TestMergeClaudeSettingsPreservaClavesSuperiores(t *testing.T) {
 	existing := []byte(`{"permissions":{"allow":["read"]},"hooks":{}}`)
 	hook := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode"}
-	out, err := MergeClaudeSettings(existing, "startup", hook)
+	out, err := MergeClaudeSettings(existing, "SessionStart", "startup", hook)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -133,9 +137,40 @@ func TestMergeClaudeSettingsPreservaClavesSuperiores(t *testing.T) {
 	}
 }
 
+// TestMergeClaudeSettingsUserPromptSubmit verifica que se puede registrar un hook
+// UserPromptSubmit (sin matcher) y que coexiste con uno de SessionStart existente.
+func TestMergeClaudeSettingsUserPromptSubmit(t *testing.T) {
+	ss := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode", Timeout: 10}
+	out, err := MergeClaudeSettings(nil, "SessionStart", "startup", ss)
+	if err != nil {
+		t.Fatalf("SessionStart: %v", err)
+	}
+	ups := HookCommand{Type: "command", Command: "/bin/musubi turn --hook-mode", Timeout: 10}
+	out, err = MergeClaudeSettings(out, "UserPromptSubmit", "", ups)
+	if err != nil {
+		t.Fatalf("UserPromptSubmit: %v", err)
+	}
+
+	// SessionStart se preserva.
+	if entradas := parsearHooksEvento(t, out, "SessionStart"); len(entradas) != 1 || len(entradas[0].Hooks) != 1 {
+		t.Fatalf("SessionStart debe seguir teniendo 1 hook, obtuve %+v", entradas)
+	}
+	// UserPromptSubmit queda registrado, sin matcher.
+	ups2 := parsearHooksEvento(t, out, "UserPromptSubmit")
+	if len(ups2) != 1 || len(ups2[0].Hooks) != 1 {
+		t.Fatalf("esperaba 1 hook UserPromptSubmit, obtuve %+v", ups2)
+	}
+	if ups2[0].Matcher != "" {
+		t.Errorf("UserPromptSubmit no debe llevar matcher, obtuve %q", ups2[0].Matcher)
+	}
+	if ups2[0].Hooks[0].Command != ups.Command {
+		t.Errorf("Command incorrecto en UserPromptSubmit: %q", ups2[0].Hooks[0].Command)
+	}
+}
+
 // TestMergeClaudeSettingsJSONInvalido verifica que un input malformado retorna error.
 func TestMergeClaudeSettingsJSONInvalido(t *testing.T) {
-	_, err := MergeClaudeSettings([]byte("{no es json"), "startup", HookCommand{Command: "x"})
+	_, err := MergeClaudeSettings([]byte("{no es json"), "SessionStart", "startup", HookCommand{Command: "x"})
 	if err == nil {
 		t.Fatal("esperaba error con JSON inválido")
 	}

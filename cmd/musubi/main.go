@@ -35,6 +35,8 @@ func main() {
 		setupProject()
 	case "detect":
 		runDetect()
+	case "turn":
+		runTurn()
 	case "catalog":
 		runCatalog(os.Args[2:])
 	case "daemon":
@@ -57,9 +59,10 @@ func main() {
 func printUsage() {
 	fmt.Println("Uso: musubi <comando> [argumentos]")
 	fmt.Println("Comandos disponibles:")
-	fmt.Println("  setup             Inyecta Musubi en el proyecto actual (workspace + .mcp.json + hook SessionStart)")
+	fmt.Println("  setup             Inyecta Musubi en el proyecto actual (workspace + .mcp.json + hooks SessionStart/UserPromptSubmit)")
 	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
 	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
+	fmt.Println("  turn --hook-mode  Modo hook UserPromptSubmit: inyecta contexto relevante al prompt del usuario")
 	fmt.Println("  catalog validate  Valida un index.json de catálogo de skills")
 	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
@@ -346,11 +349,17 @@ func setupProjectWith(exeOverride string) {
 	}
 	fmt.Println("  ✓ .mcp.json (Claude Code cargará 'musubi' al abrir el proyecto)")
 
-	// 4. Hook SessionStart en .claude/settings.json para auto-descubrimiento de skills.
+	// 4. Hooks en .claude/settings.json: SessionStart (arranque) + UserPromptSubmit
+	//    (loop dirigido: contexto por turno).
 	if err := writeClaudeHook(root, exePath); err != nil {
 		fmt.Printf("  ! No se pudo registrar el hook SessionStart: %v\n", err)
 	} else {
 		fmt.Println("  ✓ Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
+	}
+	if err := writeTurnHook(root, exePath); err != nil {
+		fmt.Printf("  ! No se pudo registrar el hook UserPromptSubmit: %v\n", err)
+	} else {
+		fmt.Println("  ✓ Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
 	}
 
 	// 5. Proteger la base de datos de runtime en git.
@@ -380,7 +389,32 @@ func writeClaudeHook(root, exePath string) error {
 		Command: exePath + " detect --hook-mode",
 		Timeout: 10,
 	}
-	merged, err := bootstrap.MergeClaudeSettings(existing, "startup", hook)
+	merged, err := bootstrap.MergeClaudeSettings(existing, "SessionStart", "startup", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
+// writeTurnHook inyecta (idempotente) el hook UserPromptSubmit del loop dirigido
+// en {root}/.claude/settings.json: antes de cada prompt, Musubi inyecta el
+// contexto relevante a lo que el usuario pidió. UserPromptSubmit no usa matcher.
+func writeTurnHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: exePath + " turn --hook-mode",
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "UserPromptSubmit", "", hook)
 	if err != nil {
 		return fmt.Errorf("error al mergear settings.json: %w", err)
 	}
@@ -482,6 +516,6 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline))
 	server.Start()
 }

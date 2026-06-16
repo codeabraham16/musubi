@@ -73,6 +73,42 @@ func TestRecallBumpsAccess(t *testing.T) {
 	}
 }
 
+func TestCountObservations(t *testing.T) {
+	e := newTestEngine(t)
+	if n, err := e.CountObservations(); err != nil || n != 0 {
+		t.Fatalf("DB vacía debe contar 0, obtuve %d (err=%v)", n, err)
+	}
+	if err := e.SaveObservation("a", "t", "uno", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SaveObservation("b", "t", "dos", nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.CountObservations(); err != nil || n != 2 {
+		t.Fatalf("esperaba 2 observaciones, obtuve %d (err=%v)", n, err)
+	}
+}
+
+func TestRecallNoBumpKeepsStats(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservation("a1", "t", "alpha beta", nil); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+
+	// Recall read-only (inyección por turno): no debe contar como acceso.
+	if _, err := e.Recall("alpha", RecallOptions{NoBump: true}); err != nil {
+		t.Fatalf("Recall error: %v", err)
+	}
+
+	var count int
+	if err := e.db.QueryRow(`SELECT access_count FROM observations WHERE id=?`, "a1").Scan(&count); err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("recall con NoBump no debe incrementar access_count, obtuve %d", count)
+	}
+}
+
 func TestRecallImportanceBoost(t *testing.T) {
 	e := newTestEngine(t)
 	// Mismo contenido (igual relevancia keyword), distinta importancia.

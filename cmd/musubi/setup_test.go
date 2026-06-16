@@ -78,6 +78,90 @@ func TestWriteClaudeHookCreaArchivo(t *testing.T) {
 	}
 }
 
+// TestWriteTurnHookRegistraUserPromptSubmit verifica que writeTurnHook agrega un
+// hook UserPromptSubmit (sin matcher) cuyo command termina en "turn --hook-mode",
+// y que preserva el hook SessionStart escrito por writeClaudeHook.
+func TestWriteTurnHookRegistraUserPromptSubmit(t *testing.T) {
+	root := t.TempDir()
+	exePath := "/usr/local/bin/musubi"
+
+	if err := writeClaudeHook(root, exePath); err != nil {
+		t.Fatalf("writeClaudeHook falló: %v", err)
+	}
+	if err := writeTurnHook(root, exePath); err != nil {
+		t.Fatalf("writeTurnHook falló: %v", err)
+	}
+
+	// SessionStart sigue presente.
+	if n := contarHooksDetect(parseClaudeSettings(t, root)); n != 1 {
+		t.Errorf("se esperaba 1 hook detect tras writeTurnHook, encontré %d", n)
+	}
+
+	// UserPromptSubmit registra el comando 'turn --hook-mode'.
+	settingsPath := filepath.Join(root, config.ClaudeDir, config.ClaudeSettingsFile)
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer settings.json: %v", err)
+	}
+	var parsed struct {
+		Hooks struct {
+			UserPromptSubmit []map[string]interface{} `json:"UserPromptSubmit"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("settings.json no es JSON válido: %v\n%s", err, data)
+	}
+	if len(parsed.Hooks.UserPromptSubmit) != 1 {
+		t.Fatalf("esperaba 1 entrada UserPromptSubmit, obtuve %d", len(parsed.Hooks.UserPromptSubmit))
+	}
+	entrada := parsed.Hooks.UserPromptSubmit[0]
+	if m, ok := entrada["matcher"].(string); ok && m != "" {
+		t.Errorf("UserPromptSubmit no debe llevar matcher, obtuve %q", m)
+	}
+	hooksRaw, _ := entrada["hooks"].([]interface{})
+	if len(hooksRaw) != 1 {
+		t.Fatalf("esperaba 1 hook en UserPromptSubmit, obtuve %d", len(hooksRaw))
+	}
+	cmd, _ := hooksRaw[0].(map[string]interface{})["command"].(string)
+	if !strings.HasSuffix(cmd, "turn --hook-mode") {
+		t.Errorf("el command de UserPromptSubmit debe terminar en 'turn --hook-mode', obtuve %q", cmd)
+	}
+}
+
+// TestWriteTurnHookIdempotente verifica que llamar a writeTurnHook dos veces no
+// duplica el hook UserPromptSubmit.
+func TestWriteTurnHookIdempotente(t *testing.T) {
+	root := t.TempDir()
+	exePath := "/usr/local/bin/musubi"
+
+	if err := writeTurnHook(root, exePath); err != nil {
+		t.Fatalf("primera llamada falló: %v", err)
+	}
+	if err := writeTurnHook(root, exePath); err != nil {
+		t.Fatalf("segunda llamada falló: %v", err)
+	}
+
+	settingsPath := filepath.Join(root, config.ClaudeDir, config.ClaudeSettingsFile)
+	data, _ := os.ReadFile(settingsPath)
+	var parsed struct {
+		Hooks struct {
+			UserPromptSubmit []map[string]interface{} `json:"UserPromptSubmit"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("settings.json no es JSON válido: %v", err)
+	}
+	total := 0
+	for _, e := range parsed.Hooks.UserPromptSubmit {
+		if h, ok := e["hooks"].([]interface{}); ok {
+			total += len(h)
+		}
+	}
+	if total != 1 {
+		t.Errorf("esperaba 1 hook UserPromptSubmit (idempotente), obtuve %d", total)
+	}
+}
+
 // TestWriteClaudeHookIdempotente verifica que llamar a writeClaudeHook dos veces
 // con el mismo exePath no duplica el hook.
 func TestWriteClaudeHookIdempotente(t *testing.T) {
