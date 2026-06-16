@@ -67,6 +67,22 @@ func TestPhaseAdvance(t *testing.T) {
 	}
 }
 
+func TestPhaseAdvanceUsesStoredSequence(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.StartPhase("t", testPhases); err != nil { // [explore plan code verify]
+		t.Fatal(err)
+	}
+	// Avanzar pasando una secuencia DISTINTA (simula config cambiada): debe usar la
+	// secuencia guardada en el estado, no la nueva, para no desalinear el índice.
+	st, done, err := e.AdvancePhase([]string{"otra", "cosa"})
+	if err != nil || done {
+		t.Fatalf("no debe terminar usando la secuencia guardada, done=%v err=%v", done, err)
+	}
+	if st.Phase != "plan" || st.Index != 1 || st.Total != 4 {
+		t.Errorf("debe avanzar según la secuencia guardada (plan, idx 1, total 4), obtuve %+v", st)
+	}
+}
+
 func TestPhaseAdvanceSinTareaActiva(t *testing.T) {
 	e := newTestEngine(t)
 	if _, _, err := e.AdvancePhase(testPhases); err == nil {

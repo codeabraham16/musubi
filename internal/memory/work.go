@@ -59,13 +59,23 @@ func (e *DbEngine) CreateWorkBatch(batchID string, specs []WorkUnitSpec) (WorkBa
 	if batchID == "" {
 		batchID = uuid.NewString()
 	}
+	// Transaccional: o se postean todas las unidades o ninguna (sin huérfanas si
+	// falla a mitad de camino).
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkBatch{}, fmt.Errorf("error al iniciar la transacción del batch: %w", err)
+	}
 	for i, s := range specs {
-		if _, err := e.db.Exec(
+		if _, err := tx.Exec(
 			`INSERT INTO work_units (id, batch_id, seq, title, spec, status) VALUES (?, ?, ?, ?, ?, ?)`,
 			uuid.NewString(), batchID, i, s.Title, s.Spec, WorkOpen,
 		); err != nil {
+			tx.Rollback()
 			return WorkBatch{}, fmt.Errorf("error al crear unidad %d: %w", i, err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkBatch{}, fmt.Errorf("error al confirmar el batch: %w", err)
 	}
 	return e.WorkBatchStatus(batchID)
 }
@@ -82,7 +92,7 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string) (WorkUnit, bool, error) 
 	if batchID == "" {
 		row = e.db.QueryRow(`
 			UPDATE work_units SET status=?, claimed_by=?, updated_at=CURRENT_TIMESTAMP
-			WHERE id = (SELECT id FROM work_units WHERE status=? ORDER BY created_at, seq LIMIT 1)
+			WHERE id = (SELECT id FROM work_units WHERE status=? ORDER BY created_at, seq, rowid LIMIT 1)
 			RETURNING `+cols, WorkClaimed, agent, WorkOpen)
 	} else {
 		row = e.db.QueryRow(`
@@ -110,15 +120,17 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status string) error {
 	if status != WorkDone && status != WorkFailed {
 		return fmt.Errorf("status de cierre inválido %q (usá done|failed)", status)
 	}
+	// Guarda de estado: solo una unidad RECLAMADA puede cerrarse. Evita cerrar una
+	// open nunca reclamada y re-cerrar/sobrescribir una ya done/failed.
 	res, err := e.db.Exec(
-		`UPDATE work_units SET status=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		status, result, id,
+		`UPDATE work_units SET status=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?`,
+		status, result, id, WorkClaimed,
 	)
 	if err != nil {
 		return fmt.Errorf("error al completar unidad: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("no existe la unidad %q", id)
+		return fmt.Errorf("la unidad %q no existe o no está reclamada (no se puede completar)", id)
 	}
 	return nil
 }
@@ -172,7 +184,7 @@ func (e *DbEngine) ActiveBatch() (WorkBatch, bool, error) {
 	err := e.db.QueryRow(`
 		SELECT batch_id FROM work_units
 		WHERE status IN (?, ?)
-		ORDER BY created_at DESC, seq DESC LIMIT 1`, WorkOpen, WorkClaimed).Scan(&batchID)
+		ORDER BY created_at DESC, rowid DESC LIMIT 1`, WorkOpen, WorkClaimed).Scan(&batchID)
 	if err == sql.ErrNoRows {
 		return WorkBatch{}, false, nil
 	}

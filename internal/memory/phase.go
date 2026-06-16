@@ -19,10 +19,20 @@ const metaPhaseState = "loop_phase"
 
 // PhaseState describe la tarea y la fase en curso.
 type PhaseState struct {
-	Task  string `json:"task"`
-	Phase string `json:"phase"`
-	Index int    `json:"index"` // posición 0-based en la secuencia
-	Total int    `json:"total"` // cantidad de fases de la secuencia
+	Task   string   `json:"task"`
+	Phase  string   `json:"phase"`
+	Index  int      `json:"index"`            // posición 0-based en la secuencia
+	Total  int      `json:"total"`            // cantidad de fases de la secuencia
+	Phases []string `json:"phases,omitempty"` // secuencia con la que se inició (fuente de verdad)
+}
+
+// seqFor devuelve la secuencia a usar: la guardada en el estado (fuente de verdad)
+// o, si el estado es viejo y no la tiene, el fallback pasado por el caller.
+func seqFor(st PhaseState, fallback []string) []string {
+	if len(st.Phases) > 0 {
+		return st.Phases
+	}
+	return fallback
 }
 
 // PhaseStatus devuelve el pipeline activo (ok=false si no hay ninguno).
@@ -51,7 +61,8 @@ func (e *DbEngine) StartPhase(task string, phases []string) (PhaseState, error) 
 	if len(phases) == 0 {
 		return PhaseState{}, fmt.Errorf("la secuencia de fases no puede estar vacía")
 	}
-	st := PhaseState{Task: task, Phase: phases[0], Index: 0, Total: len(phases)}
+	seq := append([]string(nil), phases...) // copia defensiva
+	st := PhaseState{Task: task, Phase: seq[0], Index: 0, Total: len(seq), Phases: seq}
 	if err := e.savePhase(st); err != nil {
 		return PhaseState{}, err
 	}
@@ -68,19 +79,21 @@ func (e *DbEngine) AdvancePhase(phases []string) (PhaseState, bool, error) {
 	if !ok {
 		return PhaseState{}, false, fmt.Errorf("no hay un pipeline activo que avanzar")
 	}
-	if len(phases) == 0 {
+	seq := seqFor(st, phases)
+	if len(seq) == 0 {
 		return PhaseState{}, false, fmt.Errorf("la secuencia de fases no puede estar vacía")
 	}
 	next := st.Index + 1
-	if next >= len(phases) {
+	if next >= len(seq) {
 		if err := e.ClearPhase(); err != nil {
 			return PhaseState{}, false, err
 		}
 		return PhaseState{}, true, nil
 	}
 	st.Index = next
-	st.Phase = phases[next]
-	st.Total = len(phases)
+	st.Phase = seq[next]
+	st.Total = len(seq)
+	st.Phases = seq
 	if err := e.savePhase(st); err != nil {
 		return PhaseState{}, false, err
 	}
@@ -96,19 +109,21 @@ func (e *DbEngine) SetPhase(phase string, phases []string) (PhaseState, error) {
 	if !ok {
 		return PhaseState{}, fmt.Errorf("no hay un pipeline activo")
 	}
+	seq := seqFor(st, phases)
 	idx := -1
-	for i, p := range phases {
+	for i, p := range seq {
 		if p == phase {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		return PhaseState{}, fmt.Errorf("la fase %q no está en la secuencia %v", phase, phases)
+		return PhaseState{}, fmt.Errorf("la fase %q no está en la secuencia %v", phase, seq)
 	}
 	st.Phase = phase
 	st.Index = idx
-	st.Total = len(phases)
+	st.Total = len(seq)
+	st.Phases = seq
 	if err := e.savePhase(st); err != nil {
 		return PhaseState{}, err
 	}

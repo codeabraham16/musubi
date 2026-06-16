@@ -96,6 +96,44 @@ func TestCompleteWorkUnit(t *testing.T) {
 	}
 }
 
+func TestCompleteWorkUnitRequiresClaimed(t *testing.T) {
+	e := newTestEngine(t)
+	b, _ := e.CreateWorkBatch("b", twoUnits())
+	openID := b.Units[0].ID
+
+	// Completar una unidad OPEN (nunca reclamada) debe fallar.
+	if err := e.CompleteWorkUnit(openID, "x", WorkDone); err == nil {
+		t.Error("completar una unidad no reclamada debe fallar")
+	}
+
+	// Reclamar y completar funciona.
+	u, _, _ := e.ClaimWorkUnit("b", "a")
+	if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone); err != nil {
+		t.Fatalf("completar una unidad reclamada debe funcionar: %v", err)
+	}
+	// Re-completar una unidad ya done debe fallar (no re-cerrar/sobrescribir).
+	if err := e.CompleteWorkUnit(u.ID, "otra vez", WorkDone); err == nil {
+		t.Error("re-completar una unidad ya cerrada debe fallar")
+	}
+}
+
+func TestActiveBatchPrefiereMasReciente(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.CreateWorkBatch("b1", twoUnits()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CreateWorkBatch("b2", twoUnits()); err != nil {
+		t.Fatal(err)
+	}
+	b, ok, err := e.ActiveBatch()
+	if err != nil || !ok {
+		t.Fatalf("debe haber un batch activo, ok=%v err=%v", ok, err)
+	}
+	if b.BatchID != "b2" {
+		t.Errorf("ActiveBatch debe preferir el batch más reciente (b2), obtuve %q", b.BatchID)
+	}
+}
+
 func TestCompleteWorkUnitStatusInvalido(t *testing.T) {
 	e := newTestEngine(t)
 	b, _ := e.CreateWorkBatch("b", twoUnits())
@@ -140,9 +178,15 @@ func TestActiveBatch(t *testing.T) {
 	if err != nil || !ok || b.BatchID != "b" {
 		t.Fatalf("debe reportar el batch con unidades pendientes, ok=%v b=%+v err=%v", ok, b, err)
 	}
-	// Completar todo → ya no hay batch activo.
-	for _, u := range b.Units {
-		e.CompleteWorkUnit(u.ID, "ok", WorkDone)
+	// Reclamar y completar todo → ya no hay batch activo.
+	for {
+		u, claimed, _ := e.ClaimWorkUnit("b", "a")
+		if !claimed {
+			break
+		}
+		if err := e.CompleteWorkUnit(u.ID, "ok", WorkDone); err != nil {
+			t.Fatalf("CompleteWorkUnit error: %v", err)
+		}
 	}
 	if _, ok, _ := e.ActiveBatch(); ok {
 		t.Error("con todas las unidades completas no debe haber batch activo")
