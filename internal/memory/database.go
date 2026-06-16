@@ -45,6 +45,12 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		db.Close()
 		return nil, err
 	}
+	// Aplicar los divisores de tokens calibrados de esta DB (o defaults) ANTES de
+	// backfillear/recomputar, para que los tokens se calculen con el divisor activo.
+	if err := engine.applyCalibratedDivisors(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := engine.backfillDigests(); err != nil {
 		db.Close()
 		return nil, err
@@ -70,30 +76,8 @@ func (e *DbEngine) recomputeTokensIfEstimatorChanged() error {
 	if v == tokenEstimatorVersion {
 		return nil
 	}
-
-	rows, err := e.db.Query(`SELECT id, content FROM observations`)
-	if err != nil {
-		return fmt.Errorf("error al consultar filas para recompute: %w", err)
-	}
-	type fila struct{ id, content string }
-	var filas []fila
-	for rows.Next() {
-		var f fila
-		if err := rows.Scan(&f.id, &f.content); err != nil {
-			rows.Close()
-			return fmt.Errorf("error al escanear recompute: %w", err)
-		}
-		filas = append(filas, f)
-	}
-	rows.Close()
-
-	for _, f := range filas {
-		if _, err := e.db.Exec(
-			`UPDATE observations SET gist=?, tokens=? WHERE id=?`,
-			Gist(f.content, defaultGistMaxTokens), EstimateTokens(f.content), f.id,
-		); err != nil {
-			return fmt.Errorf("error al recomputar tokens de %s: %w", f.id, err)
-		}
+	if err := e.RecomputeTokens(); err != nil {
+		return err
 	}
 	return e.SetMeta(metaTokenEstimatorVersion, tokenEstimatorVersion)
 }

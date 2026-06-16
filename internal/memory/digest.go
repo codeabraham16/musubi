@@ -19,13 +19,45 @@ import (
 // de más solo deja algo de margen.
 const charsPerToken = 4
 
-// Divisores chars/token por tipo de contenido (ASCII). Cuanto más denso en
-// símbolos, menor el divisor (más tokens por carácter). Calibrados conservadores.
+// Divisores chars/token por tipo de contenido (ASCII) por defecto. Cuanto más
+// denso en símbolos, menor el divisor (más tokens por carácter). Conservadores.
 const (
-	divProse = 4.0 // prosa natural ~4 chars/token
-	divCode  = 3.4 // código fuente ~3.4 (símbolos, identificadores cortados)
-	divJSON  = 2.6 // JSON ~2.6 (comillas, llaves, dos puntos, comas)
+	defaultDivProse = 4.0 // prosa natural ~4 chars/token
+	defaultDivCode  = 3.4 // código fuente ~3.4 (símbolos, identificadores cortados)
+	defaultDivJSON  = 2.6 // JSON ~2.6 (comillas, llaves, dos puntos, comas)
 )
+
+// Divisores activos. Son los defaults salvo que una calibración opt-in
+// (musubi calibrate --apply, vía count_tokens) los ajuste y persista. Se cargan
+// desde la DB al abrir el motor; nunca cambian en el camino del server.
+var (
+	divProse = defaultDivProse
+	divCode  = defaultDivCode
+	divJSON  = defaultDivJSON
+)
+
+// ConfigureDivisors ajusta los divisores activos (ignora valores <= 0).
+func ConfigureDivisors(prose, code, jsn float64) {
+	if prose > 0 {
+		divProse = prose
+	}
+	if code > 0 {
+		divCode = code
+	}
+	if jsn > 0 {
+		divJSON = jsn
+	}
+}
+
+// ResetDivisors restaura los divisores por defecto.
+func ResetDivisors() {
+	divProse, divCode, divJSON = defaultDivProse, defaultDivCode, defaultDivJSON
+}
+
+// CurrentDivisors devuelve los divisores activos (prose, code, json).
+func CurrentDivisors() (float64, float64, float64) {
+	return divProse, divCode, divJSON
+}
 
 // defaultGistMaxTokens es el tope de tokens de un gist cuando no se configura otro
 // (usado por el backfill y como valor por defecto del recall).
@@ -94,7 +126,14 @@ func estimateTokensFor(s string, kind contentKind) int {
 	if s == "" {
 		return 0
 	}
-	var cjk, other int
+	other, cjk := countChars(s)
+	div := divisorFor(kind)
+	tokens := float64(other)/div + float64(cjk)
+	return int(math.Ceil(tokens))
+}
+
+// countChars cuenta runas no-CJK (other) y CJK por separado.
+func countChars(s string) (other, cjk int) {
 	for _, r := range s {
 		if isCJK(r) {
 			cjk++
@@ -102,15 +141,19 @@ func estimateTokensFor(s string, kind contentKind) int {
 			other++
 		}
 	}
-	div := divProse
+	return other, cjk
+}
+
+// divisorFor devuelve el divisor activo del tipo de contenido.
+func divisorFor(kind contentKind) float64 {
 	switch kind {
 	case kindCode:
-		div = divCode
+		return divCode
 	case kindJSON:
-		div = divJSON
+		return divJSON
+	default:
+		return divProse
 	}
-	tokens := float64(other)/div + float64(cjk)
-	return int(math.Ceil(tokens))
 }
 
 // isCJK indica si la runa es un ideograma/silabario CJK (cada uno ~1 token).
