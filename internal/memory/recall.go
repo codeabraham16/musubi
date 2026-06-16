@@ -193,7 +193,7 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ? AND o.archived = 0
+		WHERE observations_fts MATCH ? AND o.archived = 0 AND o.superseded_by IS NULL
 		ORDER BY rank
 		LIMIT ?
 	`, ftsQuery, limit)
@@ -210,7 +210,7 @@ func (e *DbEngine) recentCandidates(limit int) ([]candidate, error) {
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
-		WHERE o.archived = 0
+		WHERE o.archived = 0 AND o.superseded_by IS NULL
 		ORDER BY COALESCE(o.last_accessed, o.created_at) DESC
 		LIMIT ?
 	`, limit)

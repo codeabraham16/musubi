@@ -85,6 +85,21 @@ type StartupConfig struct {
 	CognitiveBootstrap bool `yaml:"cognitive_bootstrap"`
 }
 
+// ConflictConfig controla la detección de relaciones semánticas entre
+// observaciones (resolución de conflictos model-free).
+type ConflictConfig struct {
+	// Enabled activa la detección al guardar observaciones (default true).
+	Enabled bool `yaml:"enabled"`
+	// SimilarityFloor es el piso (Jaccard de trigramas) para considerar dos
+	// observaciones relacionadas (default 0.3).
+	SimilarityFloor float64 `yaml:"similarity_floor"`
+	// AutoResolveThreshold es la similitud a partir de la cual se auto-resuelve
+	// (supersede/related) sin preguntar al agente (default 0.7).
+	AutoResolveThreshold float64 `yaml:"auto_resolve_threshold"`
+	// CandidatePool es la cantidad de candidatas por FTS a evaluar (default 10).
+	CandidatePool int `yaml:"candidate_pool"`
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
@@ -110,6 +125,8 @@ type Config struct {
 	Update UpdateConfig `yaml:"update,omitempty"`
 	// Startup configura el priming de memoria y la re-generación de skills al arrancar.
 	Startup StartupConfig `yaml:"startup,omitempty"`
+	// Conflicts configura la detección de relaciones semánticas entre observaciones.
+	Conflicts ConflictConfig `yaml:"conflicts,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -155,6 +172,12 @@ func Default() Config {
 			RecallBudget:       300,
 			AutoRegen:          true,
 			CognitiveBootstrap: true,
+		},
+		Conflicts: ConflictConfig{
+			Enabled:              true,
+			SimilarityFloor:      0.3,
+			AutoResolveThreshold: 0.7,
+			CandidatePool:        10,
 		},
 	}
 }
@@ -282,5 +305,23 @@ func (c *Config) applyDefaults() {
 		c.Startup = d.Startup
 	} else if c.Startup.RecallBudget == 0 {
 		c.Startup.RecallBudget = d.Startup.RecallBudget
+	}
+
+	// Defaults de Conflicts. Bloque ausente = todo en cero-valor: aplicar defaults
+	// completos (incluido Enabled=true). Si está presente, respetar Enabled tal cual.
+	bloqueConflictsAusente := !c.Conflicts.Enabled && c.Conflicts.SimilarityFloor == 0 &&
+		c.Conflicts.AutoResolveThreshold == 0 && c.Conflicts.CandidatePool == 0
+	if bloqueConflictsAusente {
+		c.Conflicts = d.Conflicts
+	} else {
+		if c.Conflicts.SimilarityFloor == 0 {
+			c.Conflicts.SimilarityFloor = d.Conflicts.SimilarityFloor
+		}
+		if c.Conflicts.AutoResolveThreshold == 0 {
+			c.Conflicts.AutoResolveThreshold = d.Conflicts.AutoResolveThreshold
+		}
+		if c.Conflicts.CandidatePool == 0 {
+			c.Conflicts.CandidatePool = d.Conflicts.CandidatePool
+		}
 	}
 }

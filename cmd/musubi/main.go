@@ -41,6 +41,8 @@ func main() {
 		runDaemon()
 	case "maintain":
 		runMaintain()
+	case "doctor":
+		runDoctor(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("musubi %s\n", version)
 	case "update":
@@ -63,6 +65,7 @@ func printUsage() {
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
 	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
 	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
+	fmt.Println("  doctor            Diagnostica la memoria; 'doctor repair --check X --apply' repara (con backup)")
 	fmt.Println("  update            Descarga el último release, verifica el checksum y se auto-reemplaza")
 	fmt.Println("  version           Muestra la versión del binario")
 }
@@ -479,6 +482,6 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts))
 	server.Start()
 }

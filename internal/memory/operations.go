@@ -117,7 +117,7 @@ func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]Se
 		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
 		JOIN embeddings e ON o.id = e.observation_id
-		WHERE o.archived = 0
+		WHERE o.archived = 0 AND o.superseded_by IS NULL
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error al consultar observaciones: %w", err)
@@ -172,7 +172,7 @@ func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observa
 		SELECT f.id, f.topic_key, f.content, o.created_at
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ? AND o.archived = 0
+		WHERE observations_fts MATCH ? AND o.archived = 0 AND o.superseded_by IS NULL
 		ORDER BY rank
 		LIMIT ?
 	`, queryText, limit)

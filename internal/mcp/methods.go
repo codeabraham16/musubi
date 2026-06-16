@@ -257,6 +257,39 @@ func (s *McpServer) handleToolsList() interface{} {
 				Required: []string{"skill_id", "decision"},
 			},
 		},
+		{
+			Name:        "musubi_conflicts",
+			Description: "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge.",
+			InputSchema: InputSchema{
+				Type:       "object",
+				Properties: map[string]Property{},
+			},
+		},
+		{
+			Name:        "musubi_judge",
+			Description: "Emite el veredicto de una relación entre dos observaciones (resolución de conflictos model-free). relation ∈ {related, compatible, scoped, conflicts_with, supersedes, not_conflict}. Si es 'supersedes', la observación target queda oculta del recall.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"relation_id": {Type: "string", Description: "ID de la relación a juzgar (de musubi_conflicts o de la respuesta de save)"},
+					"relation":    {Type: "string", Description: "Veredicto: related | compatible | scoped | conflicts_with | supersedes | not_conflict"},
+					"reason":      {Type: "string", Description: "Justificación breve (opcional)"},
+				},
+				Required: []string{"relation_id", "relation"},
+			},
+		},
+		{
+			Name:        "musubi_doctor",
+			Description: "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"check":  {Type: "string", Description: "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."},
+					"repair": {Type: "boolean", Description: "Si es true, repara el check indicado (requiere 'check')."},
+					"mode":   {Type: "string", Description: "Modo de reparación: plan | dry-run | apply (default dry-run)."},
+				},
+			},
+		},
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -337,6 +370,12 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 		return s.toolSearchSkills(callReq.Arguments)
 	case "musubi_log_skill_decision":
 		return s.toolLogSkillDecision(callReq.Arguments)
+	case "musubi_conflicts":
+		return s.toolConflicts(callReq.Arguments)
+	case "musubi_judge":
+		return s.toolJudge(callReq.Arguments)
+	case "musubi_doctor":
+		return s.toolDoctor(callReq.Arguments)
 	default:
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
@@ -381,14 +420,155 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		if deduped {
 			return textResult("Observación ya existente, no se duplicó (id: " + id + ")."), nil
 		}
-		return textResult("Observación guardada con éxito (id: " + id + ")."), nil
+		return textResult("Observación guardada con éxito (id: " + id + ")." + s.detectAndSurface(id)), nil
 	}
 
 	// Con id explícito: upsert por id.
 	if err := s.engine.SaveObservationWithImportance(args.ID, args.TopicKey, args.Content, importance, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
-	return textResult("Observación guardada con éxito (id: " + args.ID + ")."), nil
+	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
+}
+
+// detectAndSurface corre la detección de conflictos para la observación recién
+// guardada y devuelve un texto a anexar a la respuesta: anuncia los supersede
+// auto-resueltos y pide veredicto (musubi_judge) para las relaciones pendientes.
+// Si la detección está deshabilitada o no hay nada, devuelve "".
+func (s *McpServer) detectAndSurface(obsID string) string {
+	if !s.conflicts.Enabled {
+		return ""
+	}
+	rels, err := s.engine.DetectRelations(obsID, memory.ConflictOptions{
+		SimilarityFloor:      s.conflicts.SimilarityFloor,
+		AutoResolveThreshold: s.conflicts.AutoResolveThreshold,
+		CandidatePool:        s.conflicts.CandidatePool,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: advertencia: detección de conflictos falló: %v\n", err)
+		return ""
+	}
+
+	var auto, pending []memory.ObsRelation
+	for _, r := range rels {
+		if r.Status == memory.RelStatusResolved {
+			auto = append(auto, r)
+		} else {
+			pending = append(pending, r)
+		}
+	}
+
+	var b strings.Builder
+	supersedes := 0
+	for _, r := range auto {
+		if r.Relation == memory.RelSupersedes {
+			supersedes++
+		}
+	}
+	if supersedes > 0 {
+		fmt.Fprintf(&b, "\n[conflictos] Esta observación reemplaza (supersede) a %d anterior(es); quedaron ocultas del recall.", supersedes)
+	}
+	if len(pending) > 0 {
+		b.WriteString("\n[conflictos] Detecté relación(es) que requieren tu veredicto (usá musubi_judge con el relation_id):")
+		for _, r := range pending {
+			fmt.Fprintf(&b, "\n- relation_id=%s target=%s (similitud %.2f): ¿se contradicen, una reemplaza a la otra, o son compatibles?", r.ID, r.TargetID, r.Confidence)
+		}
+	}
+	return b.String()
+}
+
+// toolDoctor diagnostica o repara la base de memoria.
+func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Check  string `json:"check"`
+		Repair bool   `json:"repair"`
+		Mode   string `json:"mode"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	if args.Repair {
+		if strings.TrimSpace(args.Check) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "repair requiere 'check' (qué reparar)")
+		}
+		mode := args.Mode
+		if mode == "" {
+			mode = "dry-run" // seguro por defecto: 'apply' debe ser explícito
+		}
+		res, err := s.engine.Repair(args.Check, mode)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo reparar: %v", err)
+		}
+		return jsonResult(res)
+	}
+
+	if strings.TrimSpace(args.Check) != "" {
+		res, err := s.engine.RunCheck(args.Check)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(res)
+	}
+
+	rep, err := s.engine.Diagnose()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
+	}
+	return jsonResult(rep)
+}
+
+// toolConflicts lista las relaciones pendientes de veredicto.
+func (s *McpServer) toolConflicts(_ json.RawMessage) (interface{}, *RpcError) {
+	rels, err := s.engine.PendingObsRelations()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al listar conflictos: %v", err)
+	}
+	if rels == nil {
+		rels = []memory.ObsRelation{}
+	}
+	return jsonResult(map[string]interface{}{
+		"count":     len(rels),
+		"relations": rels,
+	})
+}
+
+// validJudgeRelations son los veredictos que el agente puede emitir (pending no
+// es un veredicto válido).
+var validJudgeRelations = map[string]bool{
+	memory.RelRelated:       true,
+	memory.RelCompatible:    true,
+	memory.RelScoped:        true,
+	memory.RelConflictsWith: true,
+	memory.RelSupersedes:    true,
+	memory.RelNotConflict:   true,
+}
+
+// toolJudge emite el veredicto de una relación entre observaciones.
+func (s *McpServer) toolJudge(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		RelationID string `json:"relation_id"`
+		Relation   string `json:"relation"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+	}
+	if strings.TrimSpace(args.RelationID) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "relation_id es obligatorio")
+	}
+	if !validJudgeRelations[args.Relation] {
+		return nil, rpcErrorf(codeInvalidParams, "relation inválida %q (usá related|compatible|scoped|conflicts_with|supersedes|not_conflict)", args.Relation)
+	}
+	if err := s.engine.ResolveObsRelation(args.RelationID, args.Relation, "agent", args.Reason); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "no se pudo juzgar la relación: %v", err)
+	}
+	msg := fmt.Sprintf("Veredicto registrado: %s (relación %s).", args.Relation, args.RelationID)
+	if args.Relation == memory.RelSupersedes {
+		msg += " La observación target quedó oculta del recall."
+	}
+	return textResult(msg), nil
 }
 
 // maxRecallBudget acota el presupuesto pedido por el cliente a un rango sano.
