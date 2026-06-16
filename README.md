@@ -181,6 +181,10 @@ musubi detect --hook-mode
 
 # Arrancar el daemon MCP sobre stdin/stdout
 musubi daemon
+
+# (Opcional, gratis) Calibrar el estimador de tokens contra count_tokens
+musubi calibrate            # diagnóstico
+musubi calibrate --apply    # persiste los divisores ajustados a tu corpus
 ```
 
 `musubi detect` inspecciona el directorio actual (o `MUSUBI_HOME`) y devuelve un JSON con
@@ -218,6 +222,41 @@ Para activar embeddings con Ollama:
 ollama pull nomic-embed-text
 # editar .musubi/config.yaml -> embedding.provider: ollama
 ```
+
+## Eficiencia de tokens (model-free)
+
+Musubi mide y minimiza cuántos tokens inyecta en el contexto del agente. Todo el
+núcleo es **automático, local y offline** — no requiere API key ni gasta dinero:
+
+- **Estimador por tipo de contenido**: calcula el costo en tokens clasificando el
+  texto (prosa / código / JSON) con divisores calibrados, sesgado a no subcontar
+  los payloads densos. Corre solo en cada guardado y recall.
+- **Recall por presupuesto**: cada recuperación devuelve *gists* dentro de un techo
+  de tokens; el contenido completo se hidrata aparte y también con tope.
+- **Inyección diferencial (delta)**: por turno se inyecta **solo la memoria nueva o
+  modificada** respecto de lo ya inyectado en la sesión, en vez de repetir todo cada
+  turno. Ahorra tokens y evita "ensuciar" el contexto. Se reinicia al arrancar la
+  sesión (o tras una compactación). Configurable con `loop.delta_injection` (default `true`).
+- **Ledger de tokens por sesión**: el server contabiliza lo inyectado por superficie
+  (priming de arranque + recall por turno + hidratación). Lo inspeccionás con la
+  herramienta `musubi_tokens` (`action: status | reset`).
+
+### `musubi calibrate` — opcional y gratis
+
+El estimador trae divisores calibrados de fábrica que funcionan bien sin tocar nada.
+Si querés afinarlos a tu corpus real, `musubi calibrate` los mide contra el endpoint
+**`count_tokens` de Anthropic**:
+
+- **Es gratis**: `count_tokens` *cuenta* tokens, no genera texto (no hay inferencia de
+  un modelo), y Anthropic **no lo factura**. No hay costo por token.
+- **Es opt-in**: requiere una API key de Anthropic (`ANTHROPIC_API_KEY`, gratis desde
+  [console.anthropic.com](https://console.anthropic.com)). Es la **única** parte de
+  Musubi que hace red a Anthropic, y solo cuando vos corrés el comando a mano.
+- **Es de una sola vez**: con `--apply`, los divisores ajustados quedan persistidos en
+  el proyecto y se aplican automáticamente en cada arranque. No hay que repetirlo.
+
+El **server MCP nunca llama a la API**: sigue 100% offline y model-free. Si no tenés
+API key, no pasa nada — Musubi funciona completo con los divisores por defecto.
 
 ## Herramientas MCP
 
