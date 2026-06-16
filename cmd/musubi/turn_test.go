@@ -23,6 +23,9 @@ type fakeTurnStore struct {
 	batch       memory.WorkBatch
 	batchActive bool
 	meta        map[string]string
+
+	ledger        map[string]int
+	ledgerSession string
 }
 
 func newFakeTurnStore() *fakeTurnStore {
@@ -63,6 +66,15 @@ func (f *fakeTurnStore) SetMeta(key, value string) error {
 	}
 	f.meta[key] = value
 	return nil
+}
+
+func (f *fakeTurnStore) LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error) {
+	if f.ledger == nil {
+		f.ledger = map[string]int{}
+	}
+	f.ledger[surface] += tokens
+	f.ledgerSession = sessionID
+	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
 }
 
 func defaultLoop() config.LoopConfig {
@@ -127,6 +139,24 @@ func TestTurnInjectsRelevantMemory(t *testing.T) {
 	}
 	if store.lastOpts.TokenBudget != 250 {
 		t.Errorf("el recall debe respetar el budget de loop, obtuve %d", store.lastOpts.TokenBudget)
+	}
+}
+
+func TestTurnRecallAccountsTokensInLedger(t *testing.T) {
+	store := &fakeTurnStore{recall: memory.RecallResult{
+		Count:      1,
+		UsedTokens: 42,
+		Items:      []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "algo relevante"}},
+	}}
+	in := strings.NewReader(`{"prompt":"qué sabemos","session_id":"sess-123"}`)
+
+	turnOutput(store, defaultLoop(), pipeOff(), maOff(), in)
+
+	if store.ledger["turn_recall"] != 42 {
+		t.Errorf("el recall por turno debe contabilizar 42 tokens, obtuve %d", store.ledger["turn_recall"])
+	}
+	if store.ledgerSession != "sess-123" {
+		t.Errorf("el ledger debe usar el session_id del hook, obtuve %q", store.ledgerSession)
 	}
 }
 

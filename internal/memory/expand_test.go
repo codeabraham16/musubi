@@ -39,6 +39,37 @@ func TestGetObservationsSkipsMissing(t *testing.T) {
 	}
 }
 
+func TestGetObservationsBudgetCaps(t *testing.T) {
+	e := newTestEngine(t)
+	long := "contenido bastante largo numero "
+	for _, id := range []string{"a", "b", "c"} {
+		if err := e.SaveObservation(id, "t", long+id+" con relleno para ocupar tokens", nil); err != nil {
+			t.Fatalf("save %s error: %v", id, err)
+		}
+	}
+
+	// Budget chico: no deben entrar las 3.
+	res, used, err := e.GetObservationsBudget([]string{"a", "b", "c"}, 20)
+	if err != nil {
+		t.Fatalf("GetObservationsBudget error: %v", err)
+	}
+	if len(res) == 0 || len(res) >= 3 {
+		t.Errorf("esperaba un recorte por presupuesto (1..2), obtuve %d", len(res))
+	}
+	if used > 20 {
+		t.Errorf("used_tokens %d excede el presupuesto 20", used)
+	}
+
+	// Budget 0 (sin límite): trae todo, como GetObservations.
+	all, _, err := e.GetObservationsBudget([]string{"a", "b", "c"}, 0)
+	if err != nil {
+		t.Fatalf("GetObservationsBudget(0) error: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("budget 0 debe traer todo (3), obtuve %d", len(all))
+	}
+}
+
 func TestGetObservationsBumpsAccess(t *testing.T) {
 	e := newTestEngine(t)
 	if err := e.SaveObservation("a", "t", "algo", nil); err != nil {

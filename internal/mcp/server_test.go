@@ -53,8 +53,8 @@ func TestServeToolsListCountsAllTools(t *testing.T) {
 	resps := runRequests(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	result := resps[0].Result.(map[string]interface{})
 	tools := result["tools"].([]interface{})
-	if len(tools) != 21 {
-		t.Fatalf("esperaba 21 herramientas, obtuve %d", len(tools))
+	if len(tools) != 22 {
+		t.Fatalf("esperaba 22 herramientas, obtuve %d", len(tools))
 	}
 }
 

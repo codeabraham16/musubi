@@ -30,6 +30,7 @@ type turnStore interface {
 	ActiveBatch() (memory.WorkBatch, bool, error)
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
+	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 }
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
@@ -40,7 +41,8 @@ const (
 
 // turnInput es el subconjunto del JSON de stdin de UserPromptSubmit que usamos.
 type turnInput struct {
-	Prompt string `json:"prompt"`
+	Prompt    string `json:"prompt"`
+	SessionID string `json:"session_id"`
 }
 
 // turnOutput arma el additionalContext del hook UserPromptSubmit a partir del
@@ -52,7 +54,8 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	if store == nil {
 		return ""
 	}
-	prompt := readPrompt(stdin)
+	in := readTurnInput(stdin)
+	prompt := in.Prompt
 	if prompt == "" {
 		return ""
 	}
@@ -65,7 +68,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		blocks = append(blocks, buildTurnBatch(store))
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, buildTurnRecall(store, prompt, loopCfg.RecallBudget))
+		blocks = append(blocks, buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget))
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -152,27 +155,31 @@ func readIntMeta(store turnStore, key string) (int, bool) {
 	return n, true
 }
 
-// readPrompt extrae y normaliza el prompt del JSON de stdin. Tolera entrada
-// inválida o vacía devolviendo "".
-func readPrompt(stdin io.Reader) string {
+// readTurnInput extrae prompt y session_id del JSON de stdin, normalizando el
+// prompt. Tolera entrada inválida o vacía devolviendo un turnInput vacío.
+func readTurnInput(stdin io.Reader) turnInput {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		return ""
+		return turnInput{}
 	}
 	var in turnInput
 	if err := json.Unmarshal(data, &in); err != nil {
-		return ""
+		return turnInput{}
 	}
-	return strings.TrimSpace(in.Prompt)
+	in.Prompt = strings.TrimSpace(in.Prompt)
+	return in
 }
 
-// buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
-// Devuelve "" si no hay memoria relevante.
-func buildTurnRecall(store turnStore, prompt string, budget int) string {
+// buildTurnRecall hace un recall read-only acotado al prompt, contabiliza los
+// tokens inyectados en el ledger de la sesión y formatea los gists. Devuelve ""
+// si no hay memoria relevante.
+func buildTurnRecall(store turnStore, sessionID, prompt string, budget int) string {
 	res, err := store.Recall(prompt, memory.RecallOptions{TokenBudget: budget, NoBump: true})
 	if err != nil || res.Count == 0 {
 		return ""
 	}
+	// Contabilizar el recall por turno (session_id resetea el ledger por sesión).
+	_, _ = store.LedgerAdd(sessionID, "turn_recall", res.UsedTokens)
 	header := "[Musubi — memoria relevante] Lo que Musubi ya sabe sobre lo que pediste (gists; usá musubi_memory_expand con el id para el detalle completo):"
 	return formatGists(header, res)
 }
