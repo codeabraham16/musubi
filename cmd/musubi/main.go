@@ -49,6 +49,8 @@ func main() {
 		fmt.Printf("musubi %s\n", version)
 	case "update":
 		runUpdate()
+	case "calibrate":
+		runCalibrate(os.Args[2:])
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -70,6 +72,7 @@ func printUsage() {
 	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
 	fmt.Println("  doctor            Diagnostica la memoria; 'doctor repair --check X --apply' repara (con backup)")
 	fmt.Println("  update            Descarga el último release, verifica el checksum y se auto-reemplaza")
+	fmt.Println("  calibrate         (opt-in) Mide el estimador de tokens vs count_tokens; --apply persiste divisores. Requiere ANTHROPIC_API_KEY")
 	fmt.Println("  version           Muestra la versión del binario")
 }
 

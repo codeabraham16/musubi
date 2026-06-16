@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,16 @@ import (
 	"musubi/internal/detector"
 	"musubi/internal/memory"
 )
+
+// readSessionID extrae session_id del JSON del evento de hook (stdin). Tolera
+// entrada vacía o inválida devolviendo "".
+func readSessionID(stdin io.Reader) string {
+	var in struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.NewDecoder(stdin).Decode(&in)
+	return strings.TrimSpace(in.SessionID)
+}
 
 // startupStore abstrae lo que el hook necesita del motor de memoria: leer/guardar
 // la huella del stack (meta) y traer el contexto de priming. *memory.DbEngine lo
@@ -21,6 +32,7 @@ type startupStore interface {
 	SetMeta(key, value string) error
 	PrimeContext(budget int) (memory.RecallResult, error)
 	TopicExists(topicKey string) (bool, error)
+	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 }
 
 // detectOutput implementa la lógica central del comando 'musubi detect'.
@@ -30,7 +42,7 @@ type startupStore interface {
 //   - hookMode=true: abre la memoria (best-effort), carga config y delega en
 //     buildHookOutput, que decide qué generación de skills hace falta (completa,
 //     incremental por delta de stack, o ninguna) e inyecta el priming de memoria.
-func detectOutput(root string, hookMode bool) (string, error) {
+func detectOutput(root string, hookMode bool, sessionID string) (string, error) {
 	if !hookMode {
 		resultados, err := detector.DetectStack(root)
 		if err != nil {
@@ -54,7 +66,7 @@ func detectOutput(root string, hookMode bool) (string, error) {
 		defer engine.Close()
 		store = engine
 	}
-	return buildHookOutput(root, store, cfg.Startup)
+	return buildHookOutput(root, store, cfg.Startup, sessionID)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -64,7 +76,7 @@ func detectOutput(root string, hookMode bool) (string, error) {
 //     sea completa (primera vez) o incremental (delta del stack).
 //
 // Si ambas partes quedan vacías, devuelve "" (hook silencioso e idempotente).
-func buildHookOutput(root string, store startupStore, cfg config.StartupConfig) (string, error) {
+func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, sessionID string) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
@@ -82,7 +94,7 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig) 
 	generation := decideGeneration(root, store, cfg, current, sentinelExists)
 	priming := ""
 	if store != nil && cfg.PrimeMemory {
-		priming = buildPrimingContext(store, cfg.RecallBudget)
+		priming = buildPrimingContext(store, cfg.RecallBudget, sessionID)
 	}
 	cognitive := ""
 	if store != nil && cfg.CognitiveBootstrap && bootstrappingAutoconocimiento(store) {
@@ -190,11 +202,14 @@ func assembleHookContext(eventName string, bloques ...string) string {
 
 // buildPrimingContext arma el bloque de "memoria recordada" del proyecto a partir
 // de un recall por presupuesto de tokens. Devuelve "" si no hay memoria.
-func buildPrimingContext(store startupStore, budget int) string {
+func buildPrimingContext(store startupStore, budget int, sessionID string) string {
 	res, err := store.PrimeContext(budget)
 	if err != nil || res.Count == 0 {
 		return ""
 	}
+	// SessionStart abre la sesión: contabilizar el priming (con session_id, que
+	// reinicia el ledger por sesión) para que el gasto de Musubi sea medible.
+	_, _ = store.LedgerAdd(sessionID, "startup_priming", res.UsedTokens)
 	header := "[Musubi — memoria] Contexto que Musubi recuerda de este proyecto (gists; usá musubi_memory_expand con el id para el detalle completo):"
 	return formatGists(header, res)
 }
@@ -272,7 +287,14 @@ func runDetect() {
 		}
 	}
 
-	out, err := detectOutput(root, hookMode)
+	// En hook-mode, Claude Code envía el JSON del evento por stdin; extraemos el
+	// session_id para contabilizar el ledger por sesión. Tolera ausencia (== "").
+	sessionID := ""
+	if hookMode {
+		sessionID = readSessionID(os.Stdin)
+	}
+
+	out, err := detectOutput(root, hookMode, sessionID)
 	if err != nil {
 		// En hook-mode, un error no debe romper la sesión: loguear a stderr y salir 0.
 		fmt.Fprintf(os.Stderr, "musubi detect: %v\n", err)
