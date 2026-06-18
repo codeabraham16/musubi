@@ -1,5 +1,11 @@
 # Musubi
 
+[![CI](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml/badge.svg)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver)](https://github.com/codeabraham16/musubi/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Changelog](https://img.shields.io/badge/changelog-keep--a--changelog-orange.svg)](CHANGELOG.md)
+
 Servidor **MCP (Model Context Protocol)** en Go que funciona como **memoria persistente para
 agentes de IA** — al estilo de Engram / Gentle AI. Guarda observaciones, las recupera por
 palabra clave (FTS5) o por similitud semántica, resuelve skills dinámicamente según los archivos

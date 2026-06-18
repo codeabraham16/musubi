@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Pregunta o discusión
+    url: https://github.com/codeabraham16/musubi/discussions
+    about: Para preguntas de uso o ideas abiertas, usá Discussions en vez de un issue.
