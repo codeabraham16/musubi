@@ -53,5 +53,8 @@ func (e *DbEngine) GetSkillDecisions() ([]SkillDecision, error) {
 		}
 		decisiones = append(decisiones, d)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar decisiones de skills: %w", err)
+	}
 	return decisiones, nil
 }

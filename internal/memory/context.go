@@ -77,5 +77,8 @@ func (e *DbEngine) observationGists(query string, limit int) ([]ObsGist, error) 
 		}
 		out = append(out, g)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar gists de entidad: %w", err)
+	}
 	return out, nil
 }

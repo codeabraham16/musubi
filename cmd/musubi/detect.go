@@ -57,7 +57,11 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 
 	// Modo hook: cargar config y abrir memoria (best-effort; si falla, store nil
 	// y se cae al flujo basado solo en el sentinel).
-	cfg, _ := config.Load(root)
+	cfg, err := config.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi detect: config no disponible, usando defaults: %v\n", err)
+		cfg = config.Default()
+	}
 	var store startupStore
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {

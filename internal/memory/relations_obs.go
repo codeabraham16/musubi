@@ -136,6 +136,9 @@ func (e *DbEngine) queryObsRelations(where string, args ...interface{}) ([]ObsRe
 		}
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar relaciones de observaciones: %w", err)
+	}
 	return out, nil
 }
 

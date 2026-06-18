@@ -67,7 +67,10 @@ func (e *DbEngine) SaveFact(subject, predicate, object string) (SaveFactResult, 
 	if err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al guardar relación: %w", err)
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return SaveFactResult{}, fmt.Errorf("error al contar filas afectadas: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al commitear hecho: %w", err)
@@ -185,6 +188,9 @@ func (e *DbEngine) expandFrontier(frontier []int64, visited, includedRel map[int
 		if len(result.Facts) >= maxFacts {
 			return next, true, nil
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("error al iterar relaciones del grafo: %w", err)
 	}
 	return next, false, nil
 }

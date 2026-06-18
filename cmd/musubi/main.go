@@ -6,9 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"musubi/internal/bootstrap"
 	"musubi/internal/config"
@@ -321,6 +323,18 @@ func setupProjectWith(exeOverride string) {
 	}
 	fmt.Printf("Inyectando Musubi en %s\n", root)
 
+	// Detectar si .musubi/ ya existe para poder hacer rollback atómico en proyectos
+	// nuevos: si creamos el workspace y luego falla un paso crítico, lo eliminamos
+	// para dejar el proyecto limpio (re-ejecutar setup funciona sin estado parcial).
+	musubiDir := filepath.Join(root, config.DirName)
+	_, statErr := os.Stat(musubiDir)
+	freshWorkspace := os.IsNotExist(statErr)
+	rollback := func() {
+		if freshWorkspace {
+			os.RemoveAll(musubiDir)
+		}
+	}
+
 	// 1. Workspace + base de datos.
 	if err := ensureWorkspace(root); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -328,6 +342,7 @@ func setupProjectWith(exeOverride string) {
 	}
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
+		rollback()
 		fmt.Printf("Error al inicializar la base de datos: %v\n", err)
 		os.Exit(1)
 	}
@@ -350,6 +365,7 @@ func setupProjectWith(exeOverride string) {
 		}
 	}
 	if err := writeMCPConfig(root, exePath); err != nil {
+		rollback()
 		fmt.Printf("Error al escribir .mcp.json: %v\n", err)
 		os.Exit(1)
 	}
@@ -564,5 +580,22 @@ func runDaemon() {
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent))
-	server.Start()
+
+	// Capturar SIGINT/SIGTERM para graceful shutdown: el select espera hasta que el
+	// servidor termine (EOF de stdin) o llegue una señal. En ambos casos se retorna
+	// de runDaemon y el defer engine.Close() cierra la DB limpiamente.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.Start()
+	}()
+
+	select {
+	case sig := <-sigs:
+		fmt.Fprintf(os.Stderr, "musubi: señal %v recibida, cerrando\n", sig)
+	case <-done:
+	}
 }

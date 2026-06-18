@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -123,8 +124,8 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 }
 
 // SearchObservations realiza una búsqueda semántica comparando el vector query con la BD.
-func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]SearchResult, error) {
-	rows, err := e.db.Query(`
+func (e *DbEngine) SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error) {
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
 		JOIN embeddings e ON o.id = e.observation_id
@@ -163,6 +164,9 @@ func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]Se
 		res.Similarity = similarity
 		results = append(results, res)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar observaciones semánticas: %w", err)
+	}
 
 	// Ordenar descendentemente por similitud de coseno
 	sort.Slice(results, func(i, j int) bool {
@@ -180,12 +184,12 @@ func (e *DbEngine) SearchObservations(queryEmbedding []float32, limit int) ([]Se
 // SearchObservationsFTS realiza una búsqueda por palabras clave utilizando FTS5 de SQLite.
 // Sanea la query del usuario (buildFTSQuery) para que caracteres especiales de FTS5
 // no produzcan un error de sintaxis; una query sin términos útiles devuelve vacío.
-func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observation, error) {
+func (e *DbEngine) SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error) {
 	ftsQuery := buildFTSQuery(queryText)
 	if ftsQuery == "" {
 		return []Observation{}, nil
 	}
-	rows, err := e.db.Query(`
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT f.id, f.topic_key, f.content, o.created_at
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
@@ -205,6 +209,9 @@ func (e *DbEngine) SearchObservationsFTS(queryText string, limit int) ([]Observa
 			return nil, fmt.Errorf("error al escanear fila FTS5: %w", err)
 		}
 		results = append(results, obs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar resultados FTS5: %w", err)
 	}
 
 	return results, nil

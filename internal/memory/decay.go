@@ -95,6 +95,10 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 			toArchive = append(toArchive, id)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return DecayResult{}, fmt.Errorf("error al iterar observaciones para decay: %w", err)
+	}
 	rows.Close()
 
 	if len(toArchive) > 0 {

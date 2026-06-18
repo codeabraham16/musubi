@@ -50,6 +50,10 @@ func (r *Resolver) LoadSkills() ([]Skill, error) {
 			logx.Warn("skill omitida: YAML inválido", "path", path, "error", err)
 			continue
 		}
+		if skill.Name == "" {
+			logx.Warn("skill omitida: campo 'name' vacío", "path", path)
+			continue
+		}
 
 		loaded = append(loaded, skill)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestTokenConsumptionAudit(t *testing.T) {
 	// 2) Recall por turno ---------------------------------------------------
 	// El recall (pre-delta) debe respetar su budget.
 	const primedQuery = "cómo está la autenticación y la base de datos"
-	recall, err := eng.Recall(primedQuery, memory.RecallOptions{TokenBudget: loop.RecallBudget, NoBump: true})
+	recall, err := eng.Recall(context.Background(), primedQuery, memory.RecallOptions{TokenBudget: loop.RecallBudget, NoBump: true})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}

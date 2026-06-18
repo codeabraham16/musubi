@@ -104,6 +104,9 @@ func (e *DbEngine) observationColumns() (map[string]bool, error) {
 		}
 		cols[name] = true
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar columnas del esquema: %w", err)
+	}
 	return cols, nil
 }
 
@@ -155,6 +158,10 @@ func (e *DbEngine) backfillDigests() error {
 			return fmt.Errorf("error al escanear backfill: %w", err)
 		}
 		pendientes = append(pendientes, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error al iterar filas para backfill: %w", err)
 	}
 	rows.Close()
 

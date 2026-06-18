@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestSaveObservationWithoutEmbedding(t *testing.T) {
 	}
 
 	// Debe encontrarse por FTS pero NO tener embedding (búsqueda semántica vacía).
-	fts, err := e.SearchObservationsFTS("prueba", 5)
+	fts, err := e.SearchObservationsFTS(context.Background(), "prueba", 5)
 	if err != nil {
 		t.Fatalf("SearchObservationsFTS error: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestSaveObservationWithoutEmbedding(t *testing.T) {
 		t.Fatalf("esperaba 1 resultado FTS obs1, obtuve %+v", fts)
 	}
 
-	sem, err := e.SearchObservations([]float32{1, 0, 0}, 5)
+	sem, err := e.SearchObservations(context.Background(), []float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("SearchObservations error: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestSaveObservationUpsertByID(t *testing.T) {
 		t.Fatalf("save 2 error: %v", err)
 	}
 
-	res, err := e.SearchObservations([]float32{0, 1}, 5)
+	res, err := e.SearchObservations(context.Background(), []float32{0, 1}, 5)
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestSearchObservationsOrderingAndLimit(t *testing.T) {
 	mustSave(t, e, "bajo", []float32{0, 1})      // cos = 0
 	mustSave(t, e, "negativo", []float32{-1, 0}) // cos = -1
 
-	res, err := e.SearchObservations([]float32{1, 0}, 2)
+	res, err := e.SearchObservations(context.Background(), []float32{1, 0}, 2)
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestSearchObservationsSkipsDimensionMismatch(t *testing.T) {
 	mustSave(t, e, "dim3", []float32{1, 0, 0})
 
 	// Query de dimensión 3: solo "dim3" es comparable; "dim2" se ignora.
-	res, err := e.SearchObservations([]float32{1, 0, 0}, 5)
+	res, err := e.SearchObservations(context.Background(), []float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestSearchObservationsNegativeLimitNoPanic(t *testing.T) {
 	mustSave(t, e, "x", []float32{1, 0})
 
 	// limit negativo no debe panic: se interpreta como "sin límite".
-	res, err := e.SearchObservations([]float32{1, 0}, -1)
+	res, err := e.SearchObservations(context.Background(), []float32{1, 0}, -1)
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestFTSDeleteTriggerRemovesIndex(t *testing.T) {
 		t.Fatalf("delete error: %v", err)
 	}
 
-	fts, err := e.SearchObservationsFTS("contenido", 5)
+	fts, err := e.SearchObservationsFTS(context.Background(), "contenido", 5)
 	if err != nil {
 		t.Fatalf("fts error: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestSearchFTSOrdersByRelevance(t *testing.T) {
 		t.Fatalf("save irrel error: %v", err)
 	}
 
-	res, err := e.SearchObservationsFTS("singleton", 5)
+	res, err := e.SearchObservationsFTS(context.Background(), "singleton", 5)
 	if err != nil {
 		t.Fatalf("fts error: %v", err)
 	}

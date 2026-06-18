@@ -148,6 +148,9 @@ func (e *DbEngine) SampleContents(limit int) ([]string, error) {
 		}
 		out = append(out, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar contenidos para calibración: %w", err)
+	}
 	return out, nil
 }
 
@@ -216,6 +219,10 @@ func (e *DbEngine) RecomputeTokens() error {
 			return fmt.Errorf("error al escanear recompute: %w", err)
 		}
 		filas = append(filas, f)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error al iterar filas para recompute: %w", err)
 	}
 	rows.Close()
 

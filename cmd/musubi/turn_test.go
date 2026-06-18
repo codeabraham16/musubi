@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func newFakeTurnStore() *fakeTurnStore {
 	return &fakeTurnStore{meta: map[string]string{}}
 }
 
-func (f *fakeTurnStore) Recall(query string, opts memory.RecallOptions) (memory.RecallResult, error) {
+func (f *fakeTurnStore) Recall(ctx context.Context, query string, opts memory.RecallOptions) (memory.RecallResult, error) {
 	f.lastQuery = query
 	f.lastOpts = opts
 	return f.recall, nil
