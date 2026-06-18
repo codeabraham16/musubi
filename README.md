@@ -129,6 +129,7 @@ musubi setup
 
 - Crea el workspace `.musubi/` (config + base de datos) en el proyecto.
 - Escribe un skill de arranque en `.musubi/skills/`.
+- Deja templates de artefactos SDD en `.musubi/templates/sdd/` (proposal, spec, design, tasks).
 - Genera/mergea `.mcp.json` en la raíz, de modo que **Claude Code carga el servidor
   `musubi` automáticamente** al abrir el proyecto (con su propia memoria vía `MUSUBI_HOME`).
 - Inyecta un **hook `SessionStart`** en `.claude/settings.json` para el auto-descubrimiento
@@ -417,4 +418,5 @@ Núcleo endurecido y cubierto con tests. Diferido a propósito:
 - [CHANGELOG.md](CHANGELOG.md) — historial de versiones (Keep a Changelog).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup de desarrollo, checks de CI, convenciones y flujo de release.
 - [docs/MCP_SDK_Evaluation.md](docs/MCP_SDK_Evaluation.md) — por qué el server usa JSON-RPC a mano y no el SDK oficial de MCP.
+- [docs/Roadmap_spec-kit_adoption.md](docs/Roadmap_spec-kit_adoption.md) — plan de orquestación DAG, multi-agente y templates SDD.
 - [LICENSE](LICENSE) — MIT.

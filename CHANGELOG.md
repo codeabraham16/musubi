@@ -7,6 +7,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- Templates de artefactos SDD (`proposal`/`spec`/`design`/`tasks`) versionados: `musubi setup`
+  los deja en `.musubi/templates/sdd/`. Scaffold con `schema_version`, idempotente.
+- `docs/Roadmap_spec-kit_adoption.md`: plan de orquestación DAG, multi-agente y templates SDD
+  (inspirado en spec-kit, adaptado a local-first/model-free).
+
 ## [0.12.0] - 2026-06-18
 
 ### Added

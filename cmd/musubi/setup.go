@@ -111,6 +111,13 @@ func setupProjectWith(exeOverride string) {
 		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile, orchestrate, audit)")
 	}
 
+	// 2b. Templates de artefactos SDD (proposal/spec/design/tasks) — scaffold versionado.
+	if err := writeSddTemplates(root); err != nil {
+		fmt.Printf("  ! No se pudieron escribir los templates SDD: %v\n", err)
+	} else {
+		fmt.Println("  ✓ Templates SDD en .musubi/templates/sdd/ (proposal, spec, design, tasks)")
+	}
+
 	// 3. Registrar el servidor en .mcp.json para carga automática.
 	exePath := exeOverride
 	if exePath == "" {
