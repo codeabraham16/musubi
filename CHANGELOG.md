@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-18
+
 ### Added
 - Soporte multi-agente en `musubi setup`: `--agent <claude|cursor>` registra el servidor MCP
   en la config del agente (`.mcp.json` para Claude, `.cursor/mcp.json` para Cursor). Abstracción
@@ -181,7 +183,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/codeabraham16/musubi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/codeabraham16/musubi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/codeabraham16/musubi/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/codeabraham16/musubi/compare/v0.10.0...v0.11.0
