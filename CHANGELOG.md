@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-18
+
+### Added
+- Skill cognitiva `audit-structure-flow` en el bundle de arranque: cada `musubi setup`
+  la escribe en `.musubi/skills/`. Audita estructura y flujo del codebase (organización,
+  acoplamiento, capas, ciclos, código muerto, propagación de context/errores) con
+  hallazgos priorizados. También publicada en el catálogo de skills (#47, #48).
+- VERSIONINFO del `.exe` reproducible: `cmd/musubi/versioninfo.json` + `go:generate`
+  como única fuente de verdad (antes se editaban los `.syso` a mano) (#43).
+- README con banner SVG animado y diagramas Mermaid (arquitectura, auto-descubrimiento,
+  loop por turno) (#45).
+
+### Changed
+- Higiene de estructura (sin cambio de comportamiento): eliminado el paquete huérfano
+  `internal/telemetry`; `methods.go` partido (1386→1073) extrayendo el catálogo de tools;
+  `main.go` partido (601→207) a `setup.go` e `install.go` (#46).
+- Más cobertura de tests en `cmd/musubi` (helpers de setup, calibrate, doctor, catalog) (#44).
+
 ## [0.11.0] - 2026-06-18
 
 ### Added
@@ -137,7 +155,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/codeabraham16/musubi/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/codeabraham16/musubi/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/codeabraham16/musubi/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/codeabraham16/musubi/compare/v0.9.0...v0.9.1
