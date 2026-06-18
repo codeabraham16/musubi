@@ -317,9 +317,9 @@ internal/
   bootstrap/       # inyección: MergeMCPServer + MergeClaudeSettings (hooks)
   config/          # constantes de rutas + carga de config.yaml + SourcingConfig
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
-  embedding/       # Provider (interfaz) + Ollama + Noop
+  embedding/       # Provider (interfaz) + Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP (10 tools)
+  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP (24 tools)
   memory/          # SQLite: observaciones, embeddings, FTS5, telemetría, skill_decisions
   skills/          # resolver dinámico de skills (triggers + capabilities + MatchGlob)
   skillsource/     # catálogo HTTP: FetchCatalog, IsApplicable, FilterCatalog
@@ -334,3 +334,10 @@ Núcleo endurecido y cubierto con tests. Diferido a propósito:
   registro y la resolución manual de telemetría.
 - Escalado del índice vectorial: la búsqueda semántica recorre todos los vectores en memoria
   (O(n)), suficiente para volúmenes de prototipo.
+
+## Documentación
+
+- [CHANGELOG.md](CHANGELOG.md) — historial de versiones (Keep a Changelog).
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup de desarrollo, checks de CI, convenciones y flujo de release.
+- [docs/MCP_SDK_Evaluation.md](docs/MCP_SDK_Evaluation.md) — por qué el server usa JSON-RPC a mano y no el SDK oficial de MCP.
+- [LICENSE](LICENSE) — MIT.
