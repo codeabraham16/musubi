@@ -1,10 +1,18 @@
-# Musubi
+<div align="center">
+
+![Musubi — servidor MCP de memoria persistente](.github/assets/banner.svg)
+
+<h1>Musubi</h1>
+
+<p><strong>Memoria persistente para agentes de IA · servidor MCP en Go · local-first &amp; model-free</strong></p>
 
 [![CI](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml/badge.svg)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver)](https://github.com/codeabraham16/musubi/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Changelog](https://img.shields.io/badge/changelog-keep--a--changelog-orange.svg)](CHANGELOG.md)
+
+</div>
 
 Servidor **MCP (Model Context Protocol)** en Go que funciona como **memoria persistente para
 agentes de IA** — al estilo de Engram / Gentle AI. Guarda observaciones, las recupera por
@@ -13,6 +21,40 @@ en juego y registra telemetría de errores.
 
 Local-first: todo vive en una base SQLite dentro de `.musubi/`. Sin servicios externos
 obligatorios; los embeddings son opcionales.
+
+## Cómo encaja
+
+```mermaid
+flowchart LR
+    subgraph CC["Claude Code"]
+        direction TB
+        H1["SessionStart"]
+        H2["UserPromptSubmit"]
+        H3["PreToolUse(Read)"]
+    end
+    subgraph M["Musubi · daemon Go"]
+        direction TB
+        RPC["JSON-RPC 2.0 / stdio<br/>24 tools"]
+        COG["resolver de skills<br/>eficiencia de tokens<br/>conflictos · grafo"]
+    end
+    DB[("SQLite<br/>local-first")]
+
+    H1 -- "detect" --> RPC
+    H2 -- "turn" --> RPC
+    H3 -- "precheck" --> RPC
+    RPC --> COG
+    COG -- "save / recall" --> DB
+    DB -- "gist · delta" --> CC
+
+    classDef cc fill:#0d1422,stroke:#2dd4bf,color:#adbac7;
+    classDef mm fill:#120e22,stroke:#a78bfa,color:#adbac7;
+    classDef db fill:#0d1422,stroke:#4ade80,color:#adbac7;
+    class CC cc; class M mm; class DB db;
+```
+
+Tres hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve
+al agente (gist de código, contexto por turno) se mide y se inyecta como **delta** — solo lo
+nuevo respecto del turno anterior.
 
 ## Requisitos
 
@@ -100,6 +142,28 @@ idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json`
 
 Al abrir el proyecto por primera vez en Claude Code, Musubi detecta automáticamente el
 stack tecnológico y genera skills personalizadas sin que debas escribir YAML manualmente.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CC as Claude Code
+    participant MU as Musubi
+    participant CAT as Catálogo
+    CC->>MU: SessionStart → detect --hook-mode
+    alt sentinel ausente
+        MU-->>CC: instrucciones JSON (guía)
+        CC->>MU: musubi_detect_stack
+        MU-->>CC: ecosistemas + frameworks
+        CC->>MU: musubi_search_skills
+        MU->>CAT: gate de aplicabilidad (stack·deps·triggers·caps)
+        CAT-->>CC: candidatas pre-filtradas
+        CC->>CC: rankea por valor · descarta redundantes
+        CC->>MU: musubi_save_skill (tras confirmar con el usuario)
+        MU-->>MU: escribe .yaml + sentinel
+    else sentinel presente
+        MU-->>CC: silencio (no re-dispara)
+    end
+```
 
 **Flujo completo:**
 
@@ -252,6 +316,19 @@ autenticación, la env var puede quedar vacía.
 
 Musubi mide y minimiza cuántos tokens inyecta en el contexto del agente. Todo el
 núcleo es **automático, local y offline** — no requiere API key ni gasta dinero:
+
+```mermaid
+flowchart TD
+    P["prompt del usuario"] --> T["turn --hook-mode"]
+    T --> R["recall por presupuesto<br/>(techo de tokens)"]
+    R --> D{"¿memoria nueva o<br/>modificada vs la sesión?"}
+    D -- "delta" --> I["inyecta solo lo nuevo"]
+    D -- "nada nuevo" --> S["bloque silencioso"]
+    I --> L["contabiliza en el ledger"]
+    S --> L
+    L --> A(["contexto del agente"])
+```
+
 
 - **Estimador por tipo de contenido**: calcula el costo en tokens clasificando el
   texto (prosa / código / JSON) con divisores calibrados, sesgado a no subcontar
