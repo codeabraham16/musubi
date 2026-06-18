@@ -33,6 +33,18 @@ statements and lower the confidence of affected findings.
 - Dependencies & cycles: `jdeps -verify -recursive <jars/classes>` · architecture rules: ArchUnit
   tests. Unused/dead: IDE inspections or `jdeps` summary.
 
+## C# / .NET
+- Graph/cycles: `dotnet tool install -g NDepend.Console` or `roslynator analyze`; project refs:
+  `dotnet list reference`. Dead code: `dotnet build` warnings + analyzers (IDE0051/CS0169).
+
+## PHP
+- Cycles/coupling: `composer require --dev phpat` (PHPArkitect/phpat) or `deptrac analyse`.
+  Dead code: `phpstan` (with `--level`) and `composer unused`.
+
+## Ruby
+- Dependencies/cycles: `packwerk check` (Packwerk) for modular boundaries; `bundle exec rubocop`
+  for structure. Dead code: `debride` or `rubocop -r rubocop-rails Lint/UselessMethodDefinition`.
+
 ## Reading the graph
 - Direction: edges should point from outer (entrypoints, transport) toward inner (domain, core),
   never the reverse. An inner module importing an outer one is an **inversion (HIGH)**.

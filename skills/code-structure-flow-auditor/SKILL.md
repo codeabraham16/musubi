@@ -3,8 +3,8 @@ name: code-structure-flow-auditor
 description: "Trigger: audit structure, audit flow, architecture review, dependency audit, coupling, cycles, dead code, auditar estructura, auditar flujo. Audits structure and data/control flow across any stack; emits prioritized, evidence-backed findings."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
-  version: "2.0"
+  author: Musubi
+  version: "2.1"
 ---
 
 ## Activation Contract
@@ -47,6 +47,9 @@ hunting (that is code review) or for style/lint nits.
 | Flow | input → transform → output | state mutated at a distance, shared globals |
 | Boundaries | encapsulation / public surface | internals exported widely, no anti-corruption layer |
 | Context/errors | explicit propagation | errors swallowed, context/cancellation not threaded |
+| Concurrency/state | shared mutable state across goroutines/threads | data races, locks held across IO, globals |
+| Testability | seams & injection points | hard-wired deps (clock, net, fs) that block testing |
+| Config flow | where config/secrets enter and spread | config read deep in the core, secrets in source |
 
 ## Execution Steps
 

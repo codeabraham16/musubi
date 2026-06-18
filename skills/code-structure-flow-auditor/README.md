@@ -41,4 +41,4 @@ a Top-3 action list.
 | `assets/report-template.md` | Output shape for consistent reports. |
 | `references/evidence-commands.md` | Per-ecosystem commands to gather real evidence. |
 
-License: Apache-2.0.
+Author: Musubi · License: Apache-2.0.

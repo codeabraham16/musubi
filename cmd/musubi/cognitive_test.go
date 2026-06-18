@@ -24,9 +24,25 @@ func skillsByName(sks []skills.Skill) map[string]skills.Skill {
 func TestCognitiveSkillsBundleCompleto(t *testing.T) {
 	sks := cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}})
 	m := skillsByName(sks)
-	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile", "orchestrate-multiagent"} {
+	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile", "orchestrate-multiagent", "audit-structure-flow"} {
 		if _, ok := m[name]; !ok {
 			t.Errorf("falta la skill cognitiva %q en el bundle: %v", name, m)
+		}
+	}
+}
+
+func TestAuditSkillEnBundle(t *testing.T) {
+	m := skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}))
+	sk, ok := m["audit-structure-flow"]
+	if !ok {
+		t.Fatal("audit-structure-flow debe estar en el bundle cognitivo")
+	}
+	if len(sk.Triggers) == 0 || sk.Triggers[0] != "*" {
+		t.Errorf("audit-structure-flow debe disparar siempre (*), obtuve %v", sk.Triggers)
+	}
+	for _, must := range []string{"ALTO", "código muerto", "musubi_save_observation"} {
+		if !strings.Contains(sk.Rules, must) {
+			t.Errorf("las reglas de audit-structure-flow deben mencionar %q", must)
 		}
 	}
 }
