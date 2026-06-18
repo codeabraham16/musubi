@@ -364,3 +364,52 @@ func TestMergeValidRoundTrip(t *testing.T) {
 		t.Errorf("catálogo de salida no es válido: %v", errs)
 	}
 }
+
+func TestValidateCatalogFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Catálogo válido.
+	okPath := filepath.Join(dir, "ok.json")
+	escribirCatalogEnDisco(t, okPath, skillsource.Catalog{
+		CatalogVersion: 1,
+		Entries:        []skillsource.CatalogEntry{entradaCLI("a-skill", "A"), entradaCLI("b-skill", "B")},
+	})
+	entries, verrs, err := validateCatalogFile(okPath)
+	if err != nil {
+		t.Fatalf("error inesperado en catálogo válido: %v", err)
+	}
+	if len(verrs) != 0 {
+		t.Errorf("catálogo válido no debería tener errores: %v", verrs)
+	}
+	if entries != 2 {
+		t.Errorf("esperaba 2 entradas, obtuve %d", entries)
+	}
+
+	// Archivo inexistente -> err de lectura.
+	if _, _, err := validateCatalogFile(filepath.Join(dir, "no-existe.json")); err == nil {
+		t.Error("esperaba error para archivo inexistente")
+	}
+
+	// JSON inválido -> err de parseo.
+	badPath := filepath.Join(dir, "bad.json")
+	if werr := os.WriteFile(badPath, []byte("{ no es json"), 0o644); werr != nil {
+		t.Fatalf("preparando bad.json: %v", werr)
+	}
+	if _, _, err := validateCatalogFile(badPath); err == nil {
+		t.Error("esperaba error para JSON inválido")
+	}
+
+	// Catálogo inválido (entrada sin campos requeridos) -> sin err, pero verrs > 0.
+	invPath := filepath.Join(dir, "inv.json")
+	escribirCatalogEnDisco(t, invPath, skillsource.Catalog{
+		CatalogVersion: 1,
+		Entries:        []skillsource.CatalogEntry{{ID: "", Name: ""}},
+	})
+	_, verrs, err = validateCatalogFile(invPath)
+	if err != nil {
+		t.Fatalf("catálogo inválido no debería dar err de ejecución: %v", err)
+	}
+	if len(verrs) == 0 {
+		t.Error("esperaba errores de validación para entrada incompleta")
+	}
+}

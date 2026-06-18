@@ -63,19 +63,25 @@ func runDoctor(args []string) {
 	} else {
 		fmt.Printf("Diagnóstico: %s\n", rep.Status)
 		for _, c := range rep.Checks {
-			mark := "✓"
-			if c.Status == "warning" {
-				mark = "!"
-			} else if c.Status == "error" {
-				mark = "✗"
-			}
-			repair := ""
-			if c.Repairable && c.Status != "ok" {
-				repair = "  (reparable: musubi doctor repair --check " + c.Code + " --apply)"
-			}
-			fmt.Printf("  %s %s — %s%s\n", mark, c.Code, c.Message, repair)
+			fmt.Println(formatCheckLine(c))
 		}
 	}
+}
+
+// formatCheckLine arma la línea legible de un check del diagnóstico: marca según
+// estado (✓/!/✗) y, si es reparable y no está OK, la pista del comando de repair.
+func formatCheckLine(c memory.CheckResult) string {
+	mark := "✓"
+	if c.Status == "warning" {
+		mark = "!"
+	} else if c.Status == "error" {
+		mark = "✗"
+	}
+	repair := ""
+	if c.Repairable && c.Status != "ok" {
+		repair = "  (reparable: musubi doctor repair --check " + c.Code + " --apply)"
+	}
+	return fmt.Sprintf("  %s %s — %s%s", mark, c.Code, c.Message, repair)
 }
 
 func runDoctorRepair(engine *memory.DbEngine, args []string) {
