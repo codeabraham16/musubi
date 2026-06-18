@@ -1,0 +1,49 @@
+{
+  "id": "code-structure-flow-auditor",
+  "name": "Code Structure & Flow Auditor",
+  "description": "Audits codebase structure (organization, cohesion, coupling, layering, dead code) and data/control flow (dependency direction, cycles, context/error propagation) and emits prioritized, evidence-backed findings.",
+  "stacks": [
+    "Go",
+    "Node.js",
+    "Python",
+    "Rust",
+    "Java",
+    "Ruby",
+    "PHP",
+    ".NET",
+    "C/C++",
+    "Dart",
+    "Elixir"
+  ],
+  "deps": [],
+  "triggers": [
+    "*.go",
+    "*.ts",
+    "*.tsx",
+    "*.js",
+    "*.py",
+    "*.rs",
+    "*.java",
+    "*.kt",
+    "*.cs",
+    "*.php",
+    "*.rb",
+    "*.dart",
+    "*.ex",
+    "*.cpp",
+    "*.c"
+  ],
+  "capabilities": [],
+  "tags": [
+    "architecture",
+    "audit",
+    "structure",
+    "flow",
+    "coupling",
+    "dead-code",
+    "tech-debt"
+  ],
+  "rules_url": "https://raw.githubusercontent.com/codeabraham16/musubi/main/skills/code-structure-flow-auditor/SKILL.md",
+  "excerpt": "Audit structure (module organization, cohesion, coupling, layering, dead code/orphans) and flow (one-way dependency DAG, cycles, inversions, context/error propagation). Build the dep graph with real tooling per stack. Severity: HIGH = cycle/inversion, global mutable state, swallowed errors; MEDIUM = god-file, grab-bag module, dead code; LOW = cosmetic. Do not flag normal wiring hubs or large-but-cohesive modules. Output: Summary, Structure, Flow, Top 3 actions.",
+  "source": "musubi-skills"
+}

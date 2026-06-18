@@ -41,4 +41,18 @@ a Top-3 action list.
 | `assets/report-template.md` | Output shape for consistent reports. |
 | `references/evidence-commands.md` | Per-ecosystem commands to gather real evidence. |
 
+## Publishing to the Musubi catalog
+
+[`catalog-entry.json`](catalog-entry.json) is the ready-to-publish catalog entry for the
+distributable Musubi catalog (repo `codeabraham16/musubi-skills`, `index.json`). To publish:
+
+1. Append the object in `catalog-entry.json` to the `entries` array of that repo's `index.json`.
+2. Validate: `musubi catalog validate index.json` (must print `Catalogo valido`).
+3. Commit & push in `musubi-skills`.
+
+Validated against the live catalog (38 entries) with `musubi catalog validate`. The entry is
+language-agnostic (lists all programming stacks) and `rules_url` points at this skill's `SKILL.md`.
+
+---
+
 Author: Musubi · License: Apache-2.0.
