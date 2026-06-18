@@ -280,6 +280,22 @@ func (s *McpServer) handleToolsList() interface{} {
 			},
 		},
 		{
+			Name:        "musubi_workflow",
+			Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo. Un step queda listo solo cuando todas sus dependencias (needs) están done. action ∈ {start, next, complete, status}.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"action":     {Type: "string", Description: "start | next | complete | status"},
+					"workflow":   {Type: "string", Description: "Para start: id del workflow en .musubi/workflows/<id>.yaml"},
+					"definition": {Type: "string", Description: "Para start: definición YAML inline (alternativa a 'workflow')"},
+					"run_id":     {Type: "string", Description: "Identificador del run (lo elegís vos; persiste y permite resume)"},
+					"step":       {Type: "string", Description: "Para complete: id del step que terminaste"},
+					"result":     {Type: "string", Description: "Para complete: resultado/resumen del step"},
+					"status":     {Type: "string", Description: "Para complete: done | failed (default done)"},
+				},
+			},
+		},
+		{
 			Name:        "musubi_tokens",
 			Description: "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto (priming de arranque + recall por turno + hidratación), por superficie. action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
 			InputSchema: InputSchema{

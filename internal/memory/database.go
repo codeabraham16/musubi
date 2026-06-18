@@ -317,6 +317,20 @@ func (e *DbEngine) initSchema() error {
 			reason TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		// Motor de orquestación DAG (model-free): estado persistido de cada run de
+		// workflow. Musubi NO ejecuta los steps; guarda la definición + el estado por
+		// step para decir qué está listo y ser resumible entre sesiones.
+		`CREATE TABLE IF NOT EXISTS workflow_runs (
+			run_id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			definition TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'running',
+			step_status TEXT NOT NULL DEFAULT '{}',
+			step_results TEXT NOT NULL DEFAULT '{}',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {
