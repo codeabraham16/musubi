@@ -8,8 +8,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- Proveedor de embeddings `openai`: usa la API de OpenAI o cualquier servidor
+  compatible con su esquema (LM Studio, vLLM, LocalAI…). La API key se lee de una
+  env var (`api_key_env`, default `OPENAI_API_KEY`) y nunca se guarda en el yaml.
 - `LICENSE` (MIT) y este `CHANGELOG.md`.
 - Badges de CI, release y licencia en el README.
+
+### Changed
+- Hardening de robustez: propagación de `context.Context` con timeouts en la capa
+  de memoria/embeddings, chequeo de `rows.Err()`, graceful shutdown del daemon
+  (SIGINT/SIGTERM), recuperación de panics en los handlers JSON-RPC y validación
+  del campo `jsonrpc`.
+
+### Fixed
+- `extract_deps`: parseo correcto de dependencias tipo `pydantic[extras]>=2.0`.
 
 ## [0.10.0] - 2026-06-16
 

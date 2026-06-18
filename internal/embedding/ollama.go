@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// defaultOllamaBaseURL es el base_url por defecto que config.Default() asigna.
+// El factory lo usa para detectar que un usuario de "openai" no cambió el base_url.
+const defaultOllamaBaseURL = "http://localhost:11434"
+
 // OllamaProvider genera embeddings llamando a una instancia local de Ollama.
 // Endpoint: POST {base_url}/api/embeddings  body {"model","prompt"} -> {"embedding":[...]}
 type OllamaProvider struct {

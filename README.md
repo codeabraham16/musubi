@@ -211,23 +211,42 @@ version: "1.0"
 mode: local
 skills_auto_resolve: true
 embedding:
-  provider: none          # none | ollama
+  provider: none          # none | ollama | openai
   model: nomic-embed-text
   base_url: http://localhost:11434
   dimensions: 768
+  api_key_env: OPENAI_API_KEY   # nombre de la env var con la API key (solo openai)
 ```
 
 - `provider: none` (por defecto): la búsqueda semántica queda desactivada y `musubi_search_semantic`
   responde con un error explícito sugiriendo usar la búsqueda por palabra clave.
 - `provider: ollama`: el servidor genera embeddings llamando a Ollama
   (`POST {base_url}/api/embeddings`). Los agentes pasan **texto**, no vectores.
+- `provider: openai`: usa la API de OpenAI o **cualquier servidor compatible** con su
+  esquema (LM Studio, vLLM, LocalAI, Together…) vía `POST {base_url}/embeddings`. La API
+  key se lee de la env var nombrada en `api_key_env` (default `OPENAI_API_KEY`) — **nunca
+  se guarda en el yaml**.
 
-Para activar embeddings con Ollama:
+Para activar embeddings con Ollama (local, sin API key):
 
 ```bash
 ollama pull nomic-embed-text
 # editar .musubi/config.yaml -> embedding.provider: ollama
 ```
+
+Para activar embeddings con OpenAI:
+
+```bash
+export OPENAI_API_KEY=sk-...
+# en .musubi/config.yaml:
+#   embedding.provider: openai
+#   embedding.model: text-embedding-3-small
+#   embedding.dimensions: 1536
+```
+
+Para un servidor local compatible con OpenAI (sin tocar la nube), dejá `provider: openai`
+y apuntá `base_url` a tu servidor (ej. `http://localhost:1234/v1`). Si no exige
+autenticación, la env var puede quedar vacía.
 
 ## Eficiencia de tokens (model-free)
 
