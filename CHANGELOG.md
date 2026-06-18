@@ -7,18 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-18
+
 ### Added
 - Proveedor de embeddings `openai`: usa la API de OpenAI o cualquier servidor
   compatible con su esquema (LM Studio, vLLM, LocalAI…). La API key se lee de una
   env var (`api_key_env`, default `OPENAI_API_KEY`) y nunca se guarda en el yaml.
-- `LICENSE` (MIT) y este `CHANGELOG.md`.
-- Badges de CI, release y licencia en el README.
+- `LICENSE` (MIT), este `CHANGELOG.md` y `CONTRIBUTING.md`.
+- Plantillas de issue/PR en `.github/` y badges de CI, release y licencia en el README.
 
 ### Changed
 - Hardening de robustez: propagación de `context.Context` con timeouts en la capa
   de memoria/embeddings, chequeo de `rows.Err()`, graceful shutdown del daemon
   (SIGINT/SIGTERM), recuperación de panics en los handlers JSON-RPC y validación
   del campo `jsonrpc`.
+- Cobertura de tests: `internal/mcp` a 75.8% y `cmd/musubi` a 45.6%.
 
 ### Fixed
 - `extract_deps`: parseo correcto de dependencias tipo `pydantic[extras]>=2.0`.
@@ -134,7 +137,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/codeabraham16/musubi/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/codeabraham16/musubi/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/codeabraham16/musubi/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/codeabraham16/musubi/compare/v0.8.0...v0.9.0
