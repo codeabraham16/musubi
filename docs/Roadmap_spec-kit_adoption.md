@@ -67,4 +67,6 @@ resumible entre sesiones y compactaciones. Musubi lo hace mejor en su propio ter
 - [x] A1 — motor DAG MVP (`musubi_workflow` start/next/complete/status + `workflow_runs` en SQLite)
 - [x] A2 — resume + control de flujo (`when` → gate/if_then/switch, estado `skipped`) + evaluador de expresiones model-free
 - [x] A3 — loops (`repeat_while` + `max_iterations`) + validación expuesta (`validate`) + `list` runs → **Track A completo**
-- [ ] B1 · B2 · B3 — multi-agente
+- [x] B1 · B2 · B3 — multi-agente: abstracción `AgentTarget`, target Cursor (`.cursor/mcp.json`), detección + flag `--agent` → **Track B completo**
+
+**Plan completo.** Pendiente solo: release con Track B.

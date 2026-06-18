@@ -110,7 +110,7 @@ func installGlobalWindows() {
 	}
 
 	// Setup del proyecto actual apuntando al binario instalado (ruta estable).
-	setupProjectWith(dest)
+	setupProjectWith(dest, "")
 	fmt.Println("\nGlobal listo. Abri una terminal NUEVA para usar el comando 'musubi'.")
 }
 

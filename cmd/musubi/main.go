@@ -27,7 +27,7 @@ func main() {
 	case "init":
 		initProject()
 	case "setup":
-		setupProject()
+		runSetup(os.Args[2:])
 	case "detect":
 		runDetect()
 	case "turn":
@@ -58,7 +58,7 @@ func main() {
 func printUsage() {
 	fmt.Println("Uso: musubi <comando> [argumentos]")
 	fmt.Println("Comandos disponibles:")
-	fmt.Println("  setup             Inyecta Musubi en el proyecto actual (workspace + .mcp.json + hooks SessionStart/UserPromptSubmit)")
+	fmt.Println("  setup [--agent <claude|cursor>]  Inyecta Musubi en el proyecto actual (workspace + config MCP del agente + hooks si los soporta)")
 	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
 	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
 	fmt.Println("  turn --hook-mode  Modo hook UserPromptSubmit: inyecta contexto relevante al prompt del usuario")

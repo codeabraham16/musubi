@@ -7,6 +7,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- Soporte multi-agente en `musubi setup`: `--agent <claude|cursor>` registra el servidor MCP
+  en la config del agente (`.mcp.json` para Claude, `.cursor/mcp.json` para Cursor). Abstracción
+  `AgentTarget` + detección de agentes presentes en el proyecto. Los hooks siguen siendo
+  específicos de Claude Code. Track B del roadmap.
+
 ## [0.13.0] - 2026-06-18
 
 ### Added

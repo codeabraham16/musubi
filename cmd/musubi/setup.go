@@ -64,19 +64,50 @@ func initProject() {
 // setupProject inyecta Musubi en el proyecto actual de punta a punta:
 // crea el workspace, un skill de arranque, registra el servidor en .mcp.json
 // (para que Claude Code lo cargue solo) y protege la base de datos en .gitignore.
-func setupProject() { setupProjectWith("") }
+func setupProject() { setupProjectWith("", "") }
 
-// setupProjectWith inyecta Musubi en el directorio actual. Si exeOverride no está
-// vacía, usa esa ruta para el comando en .mcp.json y el hook (útil para el modo
-// global, donde el binario se copia a una ubicación estable del PATH); si está
-// vacía, usa os.Executable() (el binario que está corriendo).
-func setupProjectWith(exeOverride string) {
+// runSetup maneja `musubi setup [--agent <nombre>]`. Sin --agent usa Claude Code.
+// Sugiere los agentes detectados en el proyecto si hay alguno además del elegido.
+func runSetup(args []string) {
+	agent := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--agent":
+			if i+1 < len(args) {
+				agent = args[i+1]
+				i++
+			}
+		default:
+			if strings.HasPrefix(args[i], "--agent=") {
+				agent = strings.TrimPrefix(args[i], "--agent=")
+			}
+		}
+	}
+	if root, err := filepath.Abs("."); err == nil {
+		if detected := bootstrap.DetectAgents(root); len(detected) > 0 {
+			fmt.Printf("Agentes detectados en el proyecto: %s\n", strings.Join(detected, ", "))
+		}
+	}
+	setupProjectWith("", agent)
+}
+
+// setupProjectWith inyecta Musubi en el directorio actual para el agente dado
+// (agent vacío → Claude Code, el default histórico). Si exeOverride no está vacía,
+// usa esa ruta para el comando en la config MCP y los hooks (útil para el modo
+// global); si está vacía, usa os.Executable() (el binario que está corriendo).
+func setupProjectWith(exeOverride, agent string) {
+	target, ok := bootstrap.ResolveAgent(agent)
+	if !ok {
+		fmt.Printf("Agente desconocido: %q. Soportados: %s\n", agent, strings.Join(bootstrap.KnownAgentNames(), ", "))
+		os.Exit(1)
+	}
+
 	root, err := filepath.Abs(".")
 	if err != nil {
 		fmt.Printf("Error al resolver el directorio del proyecto: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Inyectando Musubi en %s\n", root)
+	fmt.Printf("Inyectando Musubi en %s (agente: %s)\n", root, target.Name)
 
 	// Detectar si .musubi/ ya existe para poder hacer rollback atómico en proyectos
 	// nuevos: si creamos el workspace y luego falla un paso crítico, lo eliminamos
@@ -126,29 +157,33 @@ func setupProjectWith(exeOverride string) {
 			exePath = "musubi"
 		}
 	}
-	if err := writeMCPConfig(root, exePath); err != nil {
+	if err := writeMCPConfigAt(root, exePath, target.MCPPath); err != nil {
 		rollback()
-		fmt.Printf("Error al escribir .mcp.json: %v\n", err)
+		fmt.Printf("Error al escribir %s: %v\n", target.MCPPath, err)
 		os.Exit(1)
 	}
-	fmt.Println("  ✓ .mcp.json (Claude Code cargará 'musubi' al abrir el proyecto)")
+	fmt.Printf("  ✓ %s (%s cargará 'musubi' al abrir el proyecto)\n", target.MCPPath, target.Name)
 
-	// 4. Hooks en .claude/settings.json: SessionStart (arranque) + UserPromptSubmit
-	//    (loop dirigido: contexto por turno).
-	if err := writeClaudeHook(root, exePath); err != nil {
-		fmt.Printf("  ! No se pudo registrar el hook SessionStart: %v\n", err)
+	// 4. Hooks: solo para agentes que tienen sistema de hooks (Claude Code). Otros
+	//    agentes registran el MCP pero no hooks (no existe el mecanismo).
+	if target.SupportsHooks {
+		if err := writeClaudeHook(root, exePath); err != nil {
+			fmt.Printf("  ! No se pudo registrar el hook SessionStart: %v\n", err)
+		} else {
+			fmt.Println("  ✓ Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
+		}
+		if err := writeTurnHook(root, exePath); err != nil {
+			fmt.Printf("  ! No se pudo registrar el hook UserPromptSubmit: %v\n", err)
+		} else {
+			fmt.Println("  ✓ Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
+		}
+		if err := writeCodeMemoryHook(root, exePath); err != nil {
+			fmt.Printf("  ! No se pudo registrar el hook PreToolUse(Read): %v\n", err)
+		} else {
+			fmt.Println("  ✓ Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
+		}
 	} else {
-		fmt.Println("  ✓ Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
-	}
-	if err := writeTurnHook(root, exePath); err != nil {
-		fmt.Printf("  ! No se pudo registrar el hook UserPromptSubmit: %v\n", err)
-	} else {
-		fmt.Println("  ✓ Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
-	}
-	if err := writeCodeMemoryHook(root, exePath); err != nil {
-		fmt.Printf("  ! No se pudo registrar el hook PreToolUse(Read): %v\n", err)
-	} else {
-		fmt.Println("  ✓ Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
+		fmt.Printf("  · %s no tiene sistema de hooks; se registró solo el servidor MCP.\n", target.Name)
 	}
 
 	// 5. Proteger la base de datos de runtime en git.
@@ -156,8 +191,7 @@ func setupProjectWith(exeOverride string) {
 		fmt.Println("  ✓ .gitignore actualizado (.musubi/memory.db)")
 	}
 
-	fmt.Println("\nListo. Reabrí el proyecto en Claude Code y el servidor 'musubi' estará disponible.")
-	fmt.Println("En la primera sesión, Claude detectará el stack y generará skills personalizadas automáticamente.")
+	fmt.Printf("\nListo. Reabrí el proyecto en %s y el servidor 'musubi' estará disponible.\n", target.Name)
 }
 
 // quoteExe entrecomilla la ruta del ejecutable para el comando del hook (string de
@@ -246,8 +280,22 @@ func writeCodeMemoryHook(root, exePath string) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
+// writeMCPConfig registra el servidor en .mcp.json (Claude Code). Envoltorio de
+// writeMCPConfigAt para compatibilidad.
 func writeMCPConfig(root, exePath string) error {
-	mcpPath := filepath.Join(root, ".mcp.json")
+	return writeMCPConfigAt(root, exePath, ".mcp.json")
+}
+
+// writeMCPConfigAt registra (idempotente) el servidor musubi en el archivo de config
+// MCP del agente (relPath relativo a root, ej. ".mcp.json" o ".cursor/mcp.json").
+// Crea el directorio padre si hace falta. El esquema mcpServers es común a los agentes.
+func writeMCPConfigAt(root, exePath, relPath string) error {
+	mcpPath := filepath.Join(root, relPath)
+	if dir := filepath.Dir(mcpPath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("no se pudo crear %s: %w", dir, err)
+		}
+	}
 	existing, err := os.ReadFile(mcpPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
