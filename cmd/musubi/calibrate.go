@@ -22,10 +22,13 @@ import (
 // los divisores sugeridos y recomputa la columna tokens.
 
 const (
-	countTokensURL        = "https://api.anthropic.com/v1/messages/count_tokens"
 	anthropicVersion      = "2023-06-01"
 	defaultCalibrateModel = "claude-opus-4-8"
 )
+
+// countTokensURL es el endpoint de count_tokens. Es var (no const) para poder
+// apuntarlo a un server de prueba en los tests.
+var countTokensURL = "https://api.anthropic.com/v1/messages/count_tokens"
 
 func runCalibrate(args []string) {
 	apply := false

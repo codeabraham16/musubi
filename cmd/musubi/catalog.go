@@ -38,34 +38,41 @@ func runCatalog(args []string) {
 	}
 }
 
-// runValidate implementa `musubi catalog validate [ruta]`.
+// runValidate implementa `musubi catalog validate [ruta]`: envoltorio fino sobre
+// validateCatalogFile que traduce el resultado a stdout/stderr + os.Exit.
 func runValidate(args []string) {
 	path := "index.json"
 	if len(args) >= 1 {
 		path = args[0]
 	}
-
-	data, err := os.ReadFile(path)
+	entries, errs, err := validateCatalogFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error al leer %s: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "Error al validar %s: %v\n", path, err)
 		os.Exit(1)
 	}
-
-	var cat skillsource.Catalog
-	if err := json.Unmarshal(data, &cat); err != nil {
-		fmt.Fprintf(os.Stderr, "Error al parsear %s: %v\n", path, err)
-		os.Exit(1)
-	}
-
-	if errs := skillsource.ValidateCatalog(cat); len(errs) > 0 {
+	if len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "Catalogo INVALIDO (%d error(es)):\n", len(errs))
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "  - %v\n", e)
 		}
 		os.Exit(1)
 	}
+	fmt.Printf("Catalogo valido: %d entradas.\n", entries)
+}
 
-	fmt.Printf("Catalogo valido: %d entradas.\n", len(cat.Entries))
+// validateCatalogFile lee y valida un catálogo en path. Devuelve la cantidad de
+// entradas y los errores de validación del catálogo (catálogo inválido, no de
+// ejecución). err != nil solo ante fallo de lectura o de parseo del archivo.
+func validateCatalogFile(path string) (entries int, validationErrs []error, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, nil, fmt.Errorf("leer %s: %w", path, err)
+	}
+	var cat skillsource.Catalog
+	if err := json.Unmarshal(data, &cat); err != nil {
+		return 0, nil, fmt.Errorf("parsear %s: %w", path, err)
+	}
+	return len(cat.Entries), skillsource.ValidateCatalog(cat), nil
 }
 
 // runMerge implementa `musubi catalog merge <url> [--output <ruta>]`.
