@@ -23,6 +23,8 @@ coverage.html
 .idea/
 .vscode/
 
-# Artefactos de "musubi setup" corrido dentro de este repo (no versionar)
+# Artefactos de "musubi setup" corrido dentro de este repo (no versionar):
+# .mcp.json, settings/hooks de Claude y las skills que el propio setup genera.
 /.mcp.json
-.musubi/skills/starter.yaml
+/.claude/
+.musubi/skills/*.yaml
