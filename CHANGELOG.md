@@ -8,6 +8,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Motor de orquestación DAG (model-free)** — tool `musubi_workflow` (`start`/`next`/`complete`/`status`).
+  Musubi define el grafo (`.musubi/workflows/<id>.yaml`), persiste el estado del run en SQLite
+  (tabla `workflow_runs`, **resumible entre sesiones**) y devuelve los steps listos; el agente
+  ejecuta. Un step queda listo cuando todas sus `needs` están `done`. Track A1 del roadmap.
 - Templates de artefactos SDD (`proposal`/`spec`/`design`/`tasks`) versionados: `musubi setup`
   los deja en `.musubi/templates/sdd/`. Scaffold con `schema_version`, idempotente.
 - `docs/Roadmap_spec-kit_adoption.md`: plan de orquestación DAG, multi-agente y templates SDD

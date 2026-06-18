@@ -363,7 +363,7 @@ API key, no pasa nada — Musubi funciona completo con los divisores por defecto
 
 ## Herramientas MCP
 
-El servidor expone 10 herramientas:
+El servidor expone 25 herramientas; las principales:
 
 | Herramienta | Descripción |
 |-------------|-------------|
@@ -377,6 +377,31 @@ El servidor expone 10 herramientas:
 | `musubi_save_skill` | Guarda una skill generada como `{name}.yaml` en `.musubi/skills/` y crea el sentinel. Requiere `name`, `triggers`, `rules`. Parámetro opcional `overwrite` (por defecto `false`). |
 | `musubi_search_skills` | Descarga el catálogo de skills, aplica el gate de aplicabilidad duro y devuelve candidatas relevantes para el proyecto. Parámetros opcionales: `query` (texto libre), `stack` (filtro de ecosistema), `limit` (número máximo). |
 | `musubi_log_skill_decision` | Registra la decisión de Claude sobre una candidata del catálogo. Parámetros: `skill_id` (requerido), `decision` (`accepted` \| `rejected`, requerido), `name`, `reason` (opcionales). |
+| `musubi_workflow` | **Motor de orquestación DAG (model-free).** Musubi define el grafo y persiste el estado del run en SQLite (resumible); el agente ejecuta. `action` ∈ `start` \| `next` \| `complete` \| `status`. Los workflows viven en `.musubi/workflows/<id>.yaml` (o `definition` YAML inline). Un step queda listo cuando todas sus `needs` están `done`. |
+
+## Orquestación de workflows (model-free)
+
+Musubi puede coordinar un DAG de pasos sin ejecutarlos: vos definís el grafo, Musubi
+te dice qué está listo y **recuerda el progreso entre sesiones**. Ejemplo
+`.musubi/workflows/feature.yaml`:
+
+```yaml
+id: feature
+schema_version: "1.0"
+steps:
+  - id: explore
+  - id: implement
+    needs: [explore]
+  - id: docs
+    needs: [explore]
+  - id: verify
+    needs: [implement, docs]
+```
+
+Flujo: `musubi_workflow action=start run_id=... workflow=feature` → devuelve los steps
+listos (`explore`); ejecutás y hacés `action=complete step=explore` → devuelve los
+nuevos listos (`implement`, `docs`); y así hasta que el run queda `done`. Como el estado
+vive en SQLite, podés retomar un run en otra sesión.
 
 ## Tests
 

@@ -131,6 +131,8 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		return s.toolPhase(callReq.Arguments)
 	case "musubi_work":
 		return s.toolWork(callReq.Arguments)
+	case "musubi_workflow":
+		return s.toolWorkflow(callReq.Arguments)
 	case "musubi_tokens":
 		return s.toolTokens(callReq.Arguments)
 	case "musubi_save_code":
@@ -443,6 +445,93 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 
 	default:
 		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|complete|status|clear)", action)
+	}
+}
+
+// toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
+// Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
+// steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
+func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Action     string `json:"action"`
+		Workflow   string `json:"workflow"`   // id → .musubi/workflows/<id>.yaml
+		Definition string `json:"definition"` // YAML inline (alternativa a 'workflow')
+		RunID      string `json:"run_id"`
+		Step       string `json:"step"`
+		Result     string `json:"result"`
+		Status     string `json:"status"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	switch action := strings.TrimSpace(args.Action); action {
+	case "start":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "start requiere 'run_id'")
+		}
+		var data []byte
+		if strings.TrimSpace(args.Definition) != "" {
+			data = []byte(args.Definition)
+		} else if strings.TrimSpace(args.Workflow) != "" {
+			path := filepath.Join(s.projectPath, config.DirName, "workflows", args.Workflow+".yaml")
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return nil, rpcErrorf(codeInvalidParams, "no se pudo leer el workflow %q: %v", args.Workflow, err)
+			}
+			data = b
+		} else {
+			return nil, rpcErrorf(codeInvalidParams, "start requiere 'workflow' (id en .musubi/workflows/) o 'definition' (YAML)")
+		}
+		def, perr := memory.ParseWorkflowDef(data)
+		if perr != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", perr)
+		}
+		run, err := s.engine.StartWorkflowRun(args.RunID, def)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		ready, _ := s.engine.WorkflowReady(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+
+	case "next":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "next requiere 'run_id'")
+		}
+		ready, err := s.engine.WorkflowReady(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"ready": ready})
+
+	case "complete":
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'run_id' y 'step'")
+		}
+		run, err := s.engine.CompleteWorkflowStep(args.RunID, args.Step, args.Result, args.Status)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		ready, _ := s.engine.WorkflowReady(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+
+	case "status":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "status requiere 'run_id'")
+		}
+		run, ok, err := s.engine.WorkflowRunStatus(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		if !ok {
+			return nil, rpcErrorf(codeInvalidParams, "run %q no existe", args.RunID)
+		}
+		return jsonResult(run)
+
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status)", action)
 	}
 }
 
