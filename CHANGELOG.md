@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-18
+
 ### Added
 - **Motor de orquestación DAG (model-free)** — tool `musubi_workflow` (`start`/`next`/`complete`/`status`/`resume`).
   Musubi define el grafo (`.musubi/workflows/<id>.yaml`), persiste el estado del run en SQLite
@@ -173,7 +175,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/codeabraham16/musubi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/codeabraham16/musubi/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/codeabraham16/musubi/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/codeabraham16/musubi/compare/v0.9.1...v0.10.0
