@@ -132,7 +132,7 @@ func TestSetupProjectWithInyectaTodo(t *testing.T) {
 
 	// exePath ficticio: setup solo lo escribe como string en .mcp.json/hooks,
 	// no lo ejecuta, así que no necesita existir.
-	setupProjectWith(filepath.Join(root, "musubi-fake"))
+	setupProjectWith(filepath.Join(root, "musubi-fake"), "")
 
 	checks := []string{
 		filepath.Join(config.DirName, config.ConfigFile),
@@ -168,5 +168,20 @@ func TestMaintenanceCycleDBVacia(t *testing.T) {
 	}
 	if cons.Merged != 0 || dec.Archived != 0 {
 		t.Errorf("en DB vacía no debería fusionar ni archivar: merged=%d archived=%d", cons.Merged, dec.Archived)
+	}
+}
+
+func TestWriteMCPConfigAtCursorPath(t *testing.T) {
+	root := t.TempDir()
+	rel := filepath.Join(".cursor", "mcp.json")
+	if err := writeMCPConfigAt(root, "/ruta/musubi", rel); err != nil {
+		t.Fatalf("writeMCPConfigAt error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("esperaba %s creado (con su dir padre): %v", rel, err)
+	}
+	if s := string(data); !strings.Contains(s, "musubi") || !strings.Contains(s, "daemon") {
+		t.Errorf("%s no registró el servidor musubi: %s", rel, s)
 	}
 }

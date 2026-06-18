@@ -139,6 +139,23 @@ musubi setup
 Reabrí el proyecto en Claude Code y las herramientas `musubi_*` quedan disponibles. Es
 idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json` existentes.
 
+### Otros agentes
+
+`musubi setup --agent <agente>` registra el servidor MCP en la config del agente elegido:
+
+| Agente | Config MCP | Hooks |
+|--------|-----------|-------|
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse(Read) |
+| `cursor` | `.cursor/mcp.json` | — (Cursor no tiene sistema de hooks) |
+
+```bash
+musubi setup --agent cursor
+```
+
+`setup` también detecta y avisa qué agentes ya están presentes en el proyecto (ej. si
+hay un `.cursor/`). El esquema `mcpServers` es común; los hooks de contexto por turno y
+auto-descubrimiento son específicos de Claude Code.
+
 ## Auto-descubrimiento de skills
 
 Al abrir el proyecto por primera vez en Claude Code, Musubi detecta automáticamente el
