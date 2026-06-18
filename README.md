@@ -401,7 +401,23 @@ steps:
 Flujo: `musubi_workflow action=start run_id=... workflow=feature` → devuelve los steps
 listos (`explore`); ejecutás y hacés `action=complete step=explore` → devuelve los
 nuevos listos (`implement`, `docs`); y así hasta que el run queda `done`. Como el estado
-vive en SQLite, podés retomar un run en otra sesión.
+vive en SQLite, `action=resume run_id=...` retoma un run en otra sesión.
+
+**Control de flujo (`when`):** un step puede llevar una condición model-free; si es
+falsa, el step se salta (`skipped`) — así se expresan gate / if-then / switch sin tipos
+de step aparte:
+
+```yaml
+  - id: deploy
+    needs: [build]
+    when: step.build.result contains "ok"
+  - id: rollback
+    needs: [build]
+    when: not (step.build.result contains "ok")
+```
+
+Operadores soportados: `==`, `!=`, `contains`, `and`, `or`, `not`, paréntesis; las
+referencias `step.<id>.status` y `step.<id>.result` se resuelven del estado del run.
 
 ## Tests
 

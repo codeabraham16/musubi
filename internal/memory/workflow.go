@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,17 +20,21 @@ const (
 	StepPending = "pending"
 	StepDone    = "done"
 	StepFailed  = "failed"
+	StepSkipped = "skipped"
 
 	RunRunning = "running"
 	RunDone    = "done"
 	RunAborted = "aborted"
 )
 
-// WorkflowStep es un nodo del DAG: un id y sus dependencias (needs).
+// WorkflowStep es un nodo del DAG: un id, sus dependencias (needs) y, opcionalmente,
+// una condición `when` (expresión model-free). Un step con `when` falso se salta
+// (gate/if_then/switch se expresan con `when`, sin tipos de step separados).
 type WorkflowStep struct {
 	ID    string   `yaml:"id" json:"id"`
 	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
 	Title string   `yaml:"title,omitempty" json:"title,omitempty"`
+	When  string   `yaml:"when,omitempty" json:"when,omitempty"`
 }
 
 // WorkflowDef es la definición declarativa de un workflow (parseada de YAML).
@@ -87,6 +92,11 @@ func (d WorkflowDef) Validate() []error {
 				errs = append(errs, fmt.Errorf("step %q depende de %q que no existe", s.ID, n))
 			}
 		}
+		if strings.TrimSpace(s.When) != "" {
+			if _, err := EvalCondition(s.When, map[string]string{}); err != nil {
+				errs = append(errs, fmt.Errorf("step %q: condición when inválida: %v", s.ID, err))
+			}
+		}
 	}
 	if cyc := d.findCycle(); len(cyc) > 0 {
 		errs = append(errs, fmt.Errorf("ciclo de dependencias: %v", cyc))
@@ -135,27 +145,55 @@ func (d WorkflowDef) findCycle() []string {
 	return nil
 }
 
-// ReadySteps devuelve los ids de step listos para ejecutar: no completados y con
-// TODAS sus dependencias en estado done. Es la decisión central del scheduler,
-// model-free.
+// terminalStep indica si un estado de step es terminal a efectos de dependencias
+// (done o skipped satisfacen una dependencia; failed la bloquea).
+func terminalStep(status string) bool {
+	return status == StepDone || status == StepSkipped
+}
+
+// ReadySteps devuelve los ids de step candidatos a ejecutar: pendientes y con TODAS
+// sus dependencias satisfechas (done o skipped). Una dependencia failed bloquea al
+// step. No evalúa `when` (eso lo hace el engine al avanzar, porque persiste skips).
+// Es la decisión central del scheduler, model-free.
 func (d WorkflowDef) ReadySteps(stepStatus map[string]string) []string {
 	var ready []string
 	for _, s := range d.Steps {
-		if stepStatus[s.ID] == StepDone {
+		st := stepStatus[s.ID]
+		if st == StepDone || st == StepSkipped {
 			continue
 		}
-		allDone := true
+		satisfied := true
 		for _, n := range s.Needs {
-			if stepStatus[n] != StepDone {
-				allDone = false
+			if !terminalStep(stepStatus[n]) {
+				satisfied = false
 				break
 			}
 		}
-		if allDone {
+		if satisfied {
 			ready = append(ready, s.ID)
 		}
 	}
 	return ready
+}
+
+// evalContext arma el contexto para las expresiones `when`: claves
+// "step.<id>.status" y "step.<id>.result".
+func evalContext(run WorkflowRun) map[string]string {
+	ctx := map[string]string{}
+	for _, s := range run.Def.Steps {
+		ctx["step."+s.ID+".status"] = run.StepStatus[s.ID]
+		ctx["step."+s.ID+".result"] = run.StepResults[s.ID]
+	}
+	return ctx
+}
+
+// whenByID devuelve el mapa stepID -> expresión when.
+func (d WorkflowDef) whenByID() map[string]string {
+	m := map[string]string{}
+	for _, s := range d.Steps {
+		m[s.ID] = s.When
+	}
+	return m
 }
 
 // --- Persistencia en SQLite ---
@@ -216,7 +254,10 @@ func (e *DbEngine) WorkflowRunStatus(runID string) (WorkflowRun, bool, error) {
 	return run, true, nil
 }
 
-// WorkflowReady devuelve los step ids listos para ejecutar en el run dado.
+// WorkflowReady devuelve los step ids listos para ejecutar. Antes de devolver,
+// "avanza" el run: los candidatos cuya condición `when` es falsa se marcan skipped
+// y se persisten (lo que puede destrabar o saltar dependientes), iterando hasta
+// estabilizar. Si al saltar quedan todos los steps terminales, cierra el run.
 func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	run, ok, err := e.WorkflowRunStatus(runID)
 	if err != nil {
@@ -225,7 +266,68 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("run %q no existe", runID)
 	}
-	return run.Def.ReadySteps(run.StepStatus), nil
+	whens := run.Def.whenByID()
+	changed := false
+	var ready []string
+	for {
+		candidates := run.Def.ReadySteps(run.StepStatus)
+		skippedThisPass := false
+		ready = ready[:0]
+		for _, id := range candidates {
+			expr := whens[id]
+			if strings.TrimSpace(expr) == "" {
+				ready = append(ready, id)
+				continue
+			}
+			pass, eerr := EvalCondition(expr, evalContext(run))
+			if eerr != nil {
+				return nil, fmt.Errorf("condición when inválida en step %q: %w", id, eerr)
+			}
+			if pass {
+				ready = append(ready, id)
+			} else {
+				run.StepStatus[id] = StepSkipped
+				changed = true
+				skippedThisPass = true
+			}
+		}
+		if !skippedThisPass {
+			break
+		}
+	}
+	if changed {
+		if _, perr := e.persistRunStatus(run); perr != nil {
+			return nil, perr
+		}
+	}
+	return ready, nil
+}
+
+// persistRunStatus guarda step_status/step_results y recalcula si el run quedó done
+// (todos los steps terminales: done o skipped).
+func (e *DbEngine) persistRunStatus(run WorkflowRun) (WorkflowRun, error) {
+	status := run.Status
+	allTerminal := true
+	for _, s := range run.Def.Steps {
+		if !terminalStep(run.StepStatus[s.ID]) {
+			allTerminal = false
+			break
+		}
+	}
+	if allTerminal {
+		status = RunDone
+	}
+	statusJSON, _ := json.Marshal(run.StepStatus)
+	resultsJSON, _ := json.Marshal(run.StepResults)
+	_, err := e.db.Exec(`
+		UPDATE workflow_runs SET status=?, step_status=?, step_results=?, updated_at=CURRENT_TIMESTAMP
+		WHERE run_id=?;`,
+		status, string(statusJSON), string(resultsJSON), run.RunID)
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+	}
+	run.Status = status
+	return run, nil
 }
 
 // CompleteWorkflowStep marca un step como done (o failed) con su resultado y, si
@@ -249,30 +351,7 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus string
 	}
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
-
-	// ¿Quedó el run completo? (todos done). Un step failed deja el run running para
-	// que el agente decida; el run se cierra solo cuando todos están done.
-	runStatus := run.Status
-	allDone := true
-	for _, s := range run.Def.Steps {
-		if run.StepStatus[s.ID] != StepDone {
-			allDone = false
-			break
-		}
-	}
-	if allDone {
-		runStatus = RunDone
-	}
-
-	statusJSON, _ := json.Marshal(run.StepStatus)
-	resultsJSON, _ := json.Marshal(run.StepResults)
-	_, err = e.db.Exec(`
-		UPDATE workflow_runs SET status=?, step_status=?, step_results=?, updated_at=CURRENT_TIMESTAMP
-		WHERE run_id=?;`,
-		runStatus, string(statusJSON), string(resultsJSON), runID)
-	if err != nil {
-		return WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
-	}
-	run.Status = runStatus
-	return run, nil
+	// El run se cierra (done) cuando todos los steps son terminales (done o skipped).
+	// Un step failed lo deja running para que el agente decida.
+	return e.persistRunStatus(run)
 }

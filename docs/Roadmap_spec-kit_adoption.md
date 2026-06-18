@@ -65,5 +65,6 @@ resumible entre sesiones y compactaciones. Musubi lo hace mejor en su propio ter
 - [x] Fase 0 — groundwork (este doc)
 - [x] C1 — templates SDD
 - [x] A1 — motor DAG MVP (`musubi_workflow` start/next/complete/status + `workflow_runs` en SQLite)
-- [ ] A2 · A3 — resume/control de flujo · loops/validación
+- [x] A2 — resume + control de flujo (`when` → gate/if_then/switch, estado `skipped`) + evaluador de expresiones model-free
+- [ ] A3 — loops + validación estática + list_runs
 - [ ] B1 · B2 · B3 — multi-agente

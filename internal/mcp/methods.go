@@ -517,9 +517,11 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
-	case "status":
+	case "status", "resume":
+		// status: estado completo. resume: lo mismo + steps listos, para retomar un
+		// run en otra sesión (el estado vive en SQLite).
 		if strings.TrimSpace(args.RunID) == "" {
-			return nil, rpcErrorf(codeInvalidParams, "status requiere 'run_id'")
+			return nil, rpcErrorf(codeInvalidParams, "%s requiere 'run_id'", action)
 		}
 		run, ok, err := s.engine.WorkflowRunStatus(args.RunID)
 		if err != nil {
@@ -528,10 +530,17 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if !ok {
 			return nil, rpcErrorf(codeInvalidParams, "run %q no existe", args.RunID)
 		}
-		return jsonResult(run)
+		if action == "status" {
+			return jsonResult(run)
+		}
+		ready, rerr := s.engine.WorkflowReady(args.RunID)
+		if rerr != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", rerr)
+		}
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume)", action)
 	}
 }
 
