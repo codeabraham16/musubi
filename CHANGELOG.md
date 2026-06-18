@@ -16,6 +16,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `step.build.result contains ok`); si es falsa el step se salta (`skipped`), expresando
   gate/if_then/switch sin tipos de step separados. Evaluador de expresiones seguro (sin eval).
 - `musubi_workflow action=resume` para retomar un run en otra sesión (estado + steps listos).
+- Loops en workflows: un step con `repeat_while` (+ `max_iterations`, cota anti-infinito) se
+  re-ejecuta mientras la condición sea verdadera. Tracks A3.
+- `musubi_workflow action=validate` (valida una definición sin correrla) y `action=list`
+  (lista los runs con su progreso). Con esto Track A (motor DAG) queda completo.
 - Templates de artefactos SDD (`proposal`/`spec`/`design`/`tasks`) versionados: `musubi setup`
   los deja en `.musubi/templates/sdd/`. Scaffold con `schema_version`, idempotente.
 - `docs/Roadmap_spec-kit_adoption.md`: plan de orquestación DAG, multi-agente y templates SDD

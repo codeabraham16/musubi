@@ -281,11 +281,11 @@ func (s *McpServer) handleToolsList() interface{} {
 		},
 		{
 			Name:        "musubi_workflow",
-			Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). action ∈ {start, next, complete, status, resume}.",
+			Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). Un step con `repeat_while` (+ `max_iterations`) se re-ejecuta como loop mientras la condición sea verdadera. action=validate valida una definición sin correrla; action=list lista los runs. action ∈ {start, next, complete, status, resume, validate, list}.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"action":     {Type: "string", Description: "start | next | complete | status | resume"},
+					"action":     {Type: "string", Description: "start | next | complete | status | resume | validate | list"},
 					"workflow":   {Type: "string", Description: "Para start: id del workflow en .musubi/workflows/<id>.yaml"},
 					"definition": {Type: "string", Description: "Para start: definición YAML inline (alternativa a 'workflow')"},
 					"run_id":     {Type: "string", Description: "Identificador del run (lo elegís vos; persiste y permite resume)"},

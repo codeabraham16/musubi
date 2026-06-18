@@ -467,11 +467,9 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 	}
 
-	switch action := strings.TrimSpace(args.Action); action {
-	case "start":
-		if strings.TrimSpace(args.RunID) == "" {
-			return nil, rpcErrorf(codeInvalidParams, "start requiere 'run_id'")
-		}
+	// loadDef carga la definición desde 'definition' (YAML inline) o
+	// .musubi/workflows/<workflow>.yaml. Reusado por start y validate.
+	loadDef := func() (memory.WorkflowDef, *RpcError) {
 		var data []byte
 		if strings.TrimSpace(args.Definition) != "" {
 			data = []byte(args.Definition)
@@ -479,15 +477,27 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 			path := filepath.Join(s.projectPath, config.DirName, "workflows", args.Workflow+".yaml")
 			b, err := os.ReadFile(path)
 			if err != nil {
-				return nil, rpcErrorf(codeInvalidParams, "no se pudo leer el workflow %q: %v", args.Workflow, err)
+				return memory.WorkflowDef{}, rpcErrorf(codeInvalidParams, "no se pudo leer el workflow %q: %v", args.Workflow, err)
 			}
 			data = b
 		} else {
-			return nil, rpcErrorf(codeInvalidParams, "start requiere 'workflow' (id en .musubi/workflows/) o 'definition' (YAML)")
+			return memory.WorkflowDef{}, rpcErrorf(codeInvalidParams, "se requiere 'workflow' (id en .musubi/workflows/) o 'definition' (YAML)")
 		}
 		def, perr := memory.ParseWorkflowDef(data)
 		if perr != nil {
-			return nil, rpcErrorf(codeInvalidParams, "%v", perr)
+			return memory.WorkflowDef{}, rpcErrorf(codeInvalidParams, "%v", perr)
+		}
+		return def, nil
+	}
+
+	switch action := strings.TrimSpace(args.Action); action {
+	case "start":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "start requiere 'run_id'")
+		}
+		def, rerr := loadDef()
+		if rerr != nil {
+			return nil, rerr
 		}
 		run, err := s.engine.StartWorkflowRun(args.RunID, def)
 		if err != nil {
@@ -495,6 +505,25 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+
+	case "validate":
+		def, rerr := loadDef()
+		if rerr != nil {
+			return nil, rerr
+		}
+		errs := def.Validate()
+		msgs := make([]string, 0, len(errs))
+		for _, e := range errs {
+			msgs = append(msgs, e.Error())
+		}
+		return jsonResult(map[string]interface{}{"valid": len(errs) == 0, "errors": msgs})
+
+	case "list":
+		runs, err := s.engine.WorkflowListRuns()
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"runs": runs})
 
 	case "next":
 		if strings.TrimSpace(args.RunID) == "" {
@@ -540,7 +569,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list)", action)
 	}
 }
 

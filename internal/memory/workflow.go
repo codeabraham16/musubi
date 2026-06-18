@@ -35,7 +35,15 @@ type WorkflowStep struct {
 	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
 	Title string   `yaml:"title,omitempty" json:"title,omitempty"`
 	When  string   `yaml:"when,omitempty" json:"when,omitempty"`
+	// RepeatWhile, si no está vacío, re-abre el step (lo vuelve a ofrecer) tras
+	// completarlo mientras la expresión sea verdadera — un loop de un solo step.
+	// MaxIterations es la cota de seguridad anti-infinito (default defaultMaxIters).
+	RepeatWhile   string `yaml:"repeat_while,omitempty" json:"repeat_while,omitempty"`
+	MaxIterations int    `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 }
+
+// defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
+const defaultMaxIters = 100
 
 // WorkflowDef es la definición declarativa de un workflow (parseada de YAML).
 type WorkflowDef struct {
@@ -53,7 +61,17 @@ type WorkflowRun struct {
 	Status      string            `json:"status"`
 	StepStatus  map[string]string `json:"step_status"`
 	StepResults map[string]string `json:"step_results"`
+	StepIters   map[string]int    `json:"step_iters,omitempty"`
 	Def         WorkflowDef       `json:"definition"`
+}
+
+// WorkflowRunSummary es una vista liviana de un run para listados.
+type WorkflowRunSummary struct {
+	RunID      string `json:"run_id"`
+	WorkflowID string `json:"workflow_id"`
+	Status     string `json:"status"`
+	Total      int    `json:"total"`
+	Done       int    `json:"done"`
 }
 
 // ParseWorkflowDef parsea un workflow YAML.
@@ -95,6 +113,11 @@ func (d WorkflowDef) Validate() []error {
 		if strings.TrimSpace(s.When) != "" {
 			if _, err := EvalCondition(s.When, map[string]string{}); err != nil {
 				errs = append(errs, fmt.Errorf("step %q: condición when inválida: %v", s.ID, err))
+			}
+		}
+		if strings.TrimSpace(s.RepeatWhile) != "" {
+			if _, err := EvalCondition(s.RepeatWhile, map[string]string{}); err != nil {
+				errs = append(errs, fmt.Errorf("step %q: condición repeat_while inválida: %v", s.ID, err))
 			}
 		}
 	}
@@ -228,12 +251,12 @@ func (e *DbEngine) StartWorkflowRun(runID string, def WorkflowDef) (WorkflowRun,
 
 // WorkflowRunStatus carga el estado de un run. El segundo valor es false si no existe.
 func (e *DbEngine) WorkflowRunStatus(runID string) (WorkflowRun, bool, error) {
-	var defJSON, statusJSON, resultsJSON string
+	var defJSON, statusJSON, resultsJSON, itersJSON string
 	run := WorkflowRun{RunID: runID}
 	err := e.db.QueryRow(`
-		SELECT workflow_id, definition, status, step_status, step_results
+		SELECT workflow_id, definition, status, step_status, step_results, step_iters
 		FROM workflow_runs WHERE run_id=?;`, runID).
-		Scan(&run.WorkflowID, &defJSON, &run.Status, &statusJSON, &resultsJSON)
+		Scan(&run.WorkflowID, &defJSON, &run.Status, &statusJSON, &resultsJSON, &itersJSON)
 	if err == sql.ErrNoRows {
 		return WorkflowRun{}, false, nil
 	}
@@ -245,11 +268,15 @@ func (e *DbEngine) WorkflowRunStatus(runID string) (WorkflowRun, bool, error) {
 	}
 	_ = json.Unmarshal([]byte(statusJSON), &run.StepStatus)
 	_ = json.Unmarshal([]byte(resultsJSON), &run.StepResults)
+	_ = json.Unmarshal([]byte(itersJSON), &run.StepIters)
 	if run.StepStatus == nil {
 		run.StepStatus = map[string]string{}
 	}
 	if run.StepResults == nil {
 		run.StepResults = map[string]string{}
+	}
+	if run.StepIters == nil {
+		run.StepIters = map[string]int{}
 	}
 	return run, true, nil
 }
@@ -319,10 +346,11 @@ func (e *DbEngine) persistRunStatus(run WorkflowRun) (WorkflowRun, error) {
 	}
 	statusJSON, _ := json.Marshal(run.StepStatus)
 	resultsJSON, _ := json.Marshal(run.StepResults)
+	itersJSON, _ := json.Marshal(run.StepIters)
 	_, err := e.db.Exec(`
-		UPDATE workflow_runs SET status=?, step_status=?, step_results=?, updated_at=CURRENT_TIMESTAMP
+		UPDATE workflow_runs SET status=?, step_status=?, step_results=?, step_iters=?, updated_at=CURRENT_TIMESTAMP
 		WHERE run_id=?;`,
-		status, string(statusJSON), string(resultsJSON), run.RunID)
+		status, string(statusJSON), string(resultsJSON), string(itersJSON), run.RunID)
 	if err != nil {
 		return WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
 	}
@@ -351,7 +379,70 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus string
 	}
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
+
+	// Loop de un step: si quedó done y declara repeat_while verdadero (bajo la cota
+	// de iteraciones), se RE-ABRE (vuelve a pending) para ejecutarse otra vez. El
+	// ctx ya refleja el done + result recién seteados.
+	if stepStatus == StepDone {
+		if step, ok := stepByID(run.Def, stepID); ok && strings.TrimSpace(step.RepeatWhile) != "" {
+			max := step.MaxIterations
+			if max <= 0 {
+				max = defaultMaxIters
+			}
+			again, eerr := EvalCondition(step.RepeatWhile, evalContext(run))
+			if eerr != nil {
+				return WorkflowRun{}, fmt.Errorf("repeat_while inválido en %q: %w", stepID, eerr)
+			}
+			if again && run.StepIters[stepID] < max {
+				run.StepIters[stepID]++
+				run.StepStatus[stepID] = StepPending // re-abrir para otra iteración
+			}
+		}
+	}
+
 	// El run se cierra (done) cuando todos los steps son terminales (done o skipped).
 	// Un step failed lo deja running para que el agente decida.
 	return e.persistRunStatus(run)
+}
+
+// stepByID devuelve el step con ese id (y true) de la definición.
+func stepByID(def WorkflowDef, id string) (WorkflowStep, bool) {
+	for _, s := range def.Steps {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return WorkflowStep{}, false
+}
+
+// WorkflowListRuns devuelve un resumen de todos los runs, del más reciente al más viejo.
+func (e *DbEngine) WorkflowListRuns() ([]WorkflowRunSummary, error) {
+	rows, err := e.db.Query(`
+		SELECT run_id, workflow_id, status, step_status
+		FROM workflow_runs ORDER BY updated_at DESC;`)
+	if err != nil {
+		return nil, fmt.Errorf("error listando runs: %w", err)
+	}
+	defer rows.Close()
+	var out []WorkflowRunSummary
+	for rows.Next() {
+		var s WorkflowRunSummary
+		var statusJSON string
+		if err := rows.Scan(&s.RunID, &s.WorkflowID, &s.Status, &statusJSON); err != nil {
+			return nil, fmt.Errorf("error leyendo run: %w", err)
+		}
+		var st map[string]string
+		_ = json.Unmarshal([]byte(statusJSON), &st)
+		s.Total = len(st)
+		for _, v := range st {
+			if v == StepDone {
+				s.Done++
+			}
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterando runs: %w", err)
+	}
+	return out, nil
 }

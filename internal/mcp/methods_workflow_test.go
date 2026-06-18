@@ -105,3 +105,43 @@ func TestWorkflowToolErrorPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowToolValidateAndList(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+
+	// validate de una definición buena
+	res, e := call(t, s, "musubi_workflow", map[string]interface{}{"action": "validate", "definition": wfYAML})
+	if e != nil {
+		t.Fatalf("validate: %+v", e)
+	}
+	var v struct {
+		Valid  bool     `json:"valid"`
+		Errors []string `json:"errors"`
+	}
+	json.Unmarshal([]byte(textOf(t, res)), &v)
+	if !v.Valid {
+		t.Fatalf("definición válida marcada inválida: %v", v.Errors)
+	}
+
+	// validate de una definición con ciclo → inválida
+	cyc := "id: c\nsteps:\n  - id: a\n    needs: [b]\n  - id: b\n    needs: [a]\n"
+	res, _ = call(t, s, "musubi_workflow", map[string]interface{}{"action": "validate", "definition": cyc})
+	json.Unmarshal([]byte(textOf(t, res)), &v)
+	if v.Valid || len(v.Errors) == 0 {
+		t.Fatalf("ciclo debería ser inválido, obtuve valid=%v errs=%v", v.Valid, v.Errors)
+	}
+
+	// list tras arrancar un run
+	call(t, s, "musubi_workflow", map[string]interface{}{"action": "start", "run_id": "lr", "definition": wfYAML})
+	res, e = call(t, s, "musubi_workflow", map[string]interface{}{"action": "list"})
+	if e != nil {
+		t.Fatalf("list: %+v", e)
+	}
+	var l struct {
+		Runs []map[string]interface{} `json:"runs"`
+	}
+	json.Unmarshal([]byte(textOf(t, res)), &l)
+	if len(l.Runs) < 1 {
+		t.Fatalf("list debería incluir el run arrancado, obtuve %v", l.Runs)
+	}
+}

@@ -328,6 +328,7 @@ func (e *DbEngine) initSchema() error {
 			status TEXT NOT NULL DEFAULT 'running',
 			step_status TEXT NOT NULL DEFAULT '{}',
 			step_results TEXT NOT NULL DEFAULT '{}',
+			step_iters TEXT NOT NULL DEFAULT '{}',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,

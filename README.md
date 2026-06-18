@@ -419,6 +419,18 @@ de step aparte:
 Operadores soportados: `==`, `!=`, `contains`, `and`, `or`, `not`, paréntesis; las
 referencias `step.<id>.status` y `step.<id>.result` se resuelven del estado del run.
 
+**Loops:** un step con `repeat_while` (+ `max_iterations`, cota de seguridad) se vuelve a
+ofrecer mientras la condición sea verdadera:
+
+```yaml
+  - id: refine
+    repeat_while: step.refine.result contains "retry"
+    max_iterations: 5
+```
+
+Otras acciones: `action=validate` valida una definición sin correrla; `action=list` lista
+los runs con su progreso.
+
 ## Tests
 
 ```bash
