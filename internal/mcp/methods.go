@@ -13,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/embedding"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 	"musubi/internal/skills"
 	"musubi/internal/skillsource"
@@ -394,7 +395,7 @@ func clampLimit(limit int) int {
 	return limit
 }
 
-func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage) (interface{}, *RpcError) {
 	var callReq CallToolRequest
 	if err := json.Unmarshal(params, &callReq); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid params: %v", err)
@@ -404,11 +405,11 @@ func (s *McpServer) handleToolsCall(params json.RawMessage) (interface{}, *RpcEr
 	case "musubi_save_observation":
 		return s.toolSaveObservation(callReq.Arguments)
 	case "musubi_search_semantic":
-		return s.toolSearchSemantic(callReq.Arguments)
+		return s.toolSearchSemantic(ctx, callReq.Arguments)
 	case "musubi_search_keyword":
-		return s.toolSearchKeyword(callReq.Arguments)
+		return s.toolSearchKeyword(ctx, callReq.Arguments)
 	case "musubi_recall":
-		return s.toolRecall(callReq.Arguments)
+		return s.toolRecall(ctx, callReq.Arguments)
 	case "musubi_memory_expand":
 		return s.toolMemoryExpand(callReq.Arguments)
 	case "musubi_maintain":
@@ -477,7 +478,9 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 
 	var emb []float32
 	if embedding.Enabled(s.embedder) {
-		vec, err := s.embedder.Embed(context.Background(), args.Content)
+		embCtx, embCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer embCancel()
+		vec, err := s.embedder.Embed(embCtx, args.Content)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al generar embedding: %v", err)
 		}
@@ -517,7 +520,7 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 		CandidatePool:        s.conflicts.CandidatePool,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi: advertencia: detección de conflictos falló: %v\n", err)
+		logx.Warn("detección de conflictos falló", "error", err)
 		return ""
 	}
 
@@ -811,7 +814,7 @@ func (s *McpServer) toolJudge(raw json.RawMessage) (interface{}, *RpcError) {
 // maxRecallBudget acota el presupuesto pedido por el cliente a un rango sano.
 const maxRecallBudget = 8000
 
-func (s *McpServer) toolRecall(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query       string `json:"query"`
 		TokenBudget int    `json:"token_budget"`
@@ -835,7 +838,7 @@ func (s *McpServer) toolRecall(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 	}
 
-	res, err := s.engine.Recall(args.Query, opts)
+	res, err := s.engine.Recall(ctx, args.Query, opts)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
 	}
@@ -1043,7 +1046,7 @@ func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError)
 	})
 }
 
-func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
@@ -1058,19 +1061,21 @@ func (s *McpServer) toolSearchSemantic(raw json.RawMessage) (interface{}, *RpcEr
 		return nil, rpcErrorf(codeInvalidParams, "búsqueda semántica no disponible: no hay proveedor de embeddings configurado. Usá musubi_search_keyword o configurá embedding.provider en .musubi/config.yaml")
 	}
 
-	vec, err := s.embedder.Embed(context.Background(), args.Query)
+	embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer embCancel()
+	vec, err := s.embedder.Embed(embCtx, args.Query)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al generar embedding de la consulta: %v", err)
 	}
 
-	results, err := s.engine.SearchObservations(vec, clampLimit(args.Limit))
+	results, err := s.engine.SearchObservations(ctx, vec, clampLimit(args.Limit))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda semántica: %v", err)
 	}
 	return jsonResult(results)
 }
 
-func (s *McpServer) toolSearchKeyword(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSearchKeyword(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		QueryText string `json:"query_text"`
 		Limit     int    `json:"limit"`
@@ -1082,7 +1087,7 @@ func (s *McpServer) toolSearchKeyword(raw json.RawMessage) (interface{}, *RpcErr
 		return nil, rpcErrorf(codeInvalidParams, "query_text es obligatorio")
 	}
 
-	results, err := s.engine.SearchObservationsFTS(args.QueryText, clampLimit(args.Limit))
+	results, err := s.engine.SearchObservationsFTS(ctx, args.QueryText, clampLimit(args.Limit))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda por palabra clave: %v", err)
 	}
@@ -1226,7 +1231,7 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	if err := os.WriteFile(sentinelPath, []byte(timestamp), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "musubi: advertencia: no se pudo escribir el sentinel: %v\n", err)
+		logx.Warn("no se pudo escribir el sentinel", "error", err)
 	}
 
 	// Actualizar la huella del stack (best-effort): marca que las skills cubren el
@@ -1235,7 +1240,7 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 	if s.engine != nil {
 		stack, _ := detector.DetectStack(s.projectPath)
 		if err := s.engine.SetMeta(memory.MetaStackFingerprint, detector.StackFingerprint(stack)); err != nil {
-			fmt.Fprintf(os.Stderr, "musubi: advertencia: no se pudo actualizar la huella del stack: %v\n", err)
+			logx.Warn("no se pudo actualizar la huella del stack", "error", err)
 		}
 	}
 

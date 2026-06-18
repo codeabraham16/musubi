@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ import (
 // *memory.DbEngine lo satisface. Se inyecta para testear de forma determinista y
 // para degradar con gracia si la DB no abre (store == nil → hook silencioso).
 type turnStore interface {
-	Recall(query string, opts memory.RecallOptions) (memory.RecallResult, error)
+	Recall(ctx context.Context, query string, opts memory.RecallOptions) (memory.RecallResult, error)
 	PendingObsRelations() ([]memory.ObsRelation, error)
 	CountObservations() (int, error)
 	PhaseStatus() (memory.PhaseState, bool, error)
@@ -181,7 +182,7 @@ const (
 // inyectado en la sesión (cache-considerate): si no hay nada nuevo, devuelve ""
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
 func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool) string {
-	res, err := store.Recall(prompt, memory.RecallOptions{TokenBudget: budget, NoBump: true})
+	res, err := store.Recall(context.Background(), prompt, memory.RecallOptions{TokenBudget: budget, NoBump: true})
 	if err != nil || res.Count == 0 {
 		return ""
 	}

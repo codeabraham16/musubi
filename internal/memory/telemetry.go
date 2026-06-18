@@ -62,5 +62,8 @@ func (e *DbEngine) GetUnresolvedTelemetryLogs() ([]TelemetryLog, error) {
 		log.Resolved = resolvedInt == 1
 		logs = append(logs, log)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar logs de telemetría: %w", err)
+	}
 	return logs, nil
 }

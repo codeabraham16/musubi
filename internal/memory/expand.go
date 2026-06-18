@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -48,6 +49,9 @@ func (e *DbEngine) GetObservationsBudget(ids []string, budget int) ([]Observatio
 		}
 		byID[o.ID] = o
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error al iterar observaciones: %w", err)
+	}
 
 	out := make([]Observation, 0, len(ids))
 	found := make([]string, 0, len(ids))
@@ -75,7 +79,7 @@ func (e *DbEngine) GetObservationsBudget(ids []string, budget int) ([]Observatio
 		}
 	}
 
-	if err := e.bumpAccess(found); err != nil {
+	if err := e.bumpAccess(context.Background(), found); err != nil {
 		return out, used, err
 	}
 	return out, used, nil

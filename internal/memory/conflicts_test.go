@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // saveAt guarda una observación con un created_at explícito (para controlar quién
 // es "más nuevo" en los tests de supersede).
@@ -111,7 +114,7 @@ func TestRecallExcluyeSuperseded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := e.Recall("PostgreSQL base de datos", RecallOptions{TokenBudget: 500})
+	res, err := e.Recall(context.Background(), "PostgreSQL base de datos", RecallOptions{TokenBudget: 500})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -139,7 +142,7 @@ func TestKeywordSearchExcluyeSuperseded(t *testing.T) {
 	if _, err := e.DetectRelations("new", ConflictOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	results, err := e.SearchObservationsFTS("PostgreSQL", 20)
+	results, err := e.SearchObservationsFTS(context.Background(), "PostgreSQL", 20)
 	if err != nil {
 		t.Fatalf("SearchObservationsFTS error: %v", err)
 	}

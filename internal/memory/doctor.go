@@ -317,6 +317,9 @@ func applyDeleteOrphans(e *DbEngine) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("error al borrar relaciones huérfanas: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("error al contar filas borradas: %w", err)
+	}
 	return int(n), nil
 }

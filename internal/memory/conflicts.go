@@ -192,6 +192,9 @@ func (e *DbEngine) conflictCandidates(src obsRow, limit int) ([]obsRow, error) {
 		}
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar candidatas de conflicto: %w", err)
+	}
 	return out, nil
 }
 

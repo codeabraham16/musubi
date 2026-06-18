@@ -72,7 +72,10 @@ func cargarDesdeCache(ruta string) (map[string][]string, bool) {
 		return nil, false
 	}
 	if entrada, ok := depsCache.Load(ruta); ok {
-		cached := entrada.(depsCacheEntry)
+		cached, ok := entrada.(depsCacheEntry)
+		if !ok {
+			return nil, false
+		}
 		if cached.mtime.Equal(info.ModTime()) {
 			return cached.deps, true
 		}
@@ -251,13 +254,15 @@ func extraerDepsPython(root string) []string {
 // normalizarDepPython elimina especificadores de versión y extras de un nombre de dep Python.
 // Ej: "fastapi>=0.110.0" → "fastapi", "pydantic[extras]>=2.0" → "pydantic"
 func normalizarDepPython(linea string) string {
-	// Separadores de versión en requirements.txt
+	// Tomar el primer separador que aparezca (menor índice) para manejar
+	// casos como "pydantic[extras]>=2.0" → "pydantic" correctamente.
+	minIdx := len(linea)
 	for _, sep := range []string{">=", "==", "~=", "!=", "<=", ">", "<", "["} {
-		if idx := strings.Index(linea, sep); idx >= 0 {
-			linea = linea[:idx]
+		if idx := strings.Index(linea, sep); idx >= 0 && idx < minIdx {
+			minIdx = idx
 		}
 	}
-	return strings.TrimSpace(linea)
+	return strings.TrimSpace(linea[:minIdx])
 }
 
 // extraerDepsPyproject hace un escaneo línea a línea de pyproject.toml

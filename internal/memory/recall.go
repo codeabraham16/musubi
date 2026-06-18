@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -66,7 +67,7 @@ type scoredCandidate struct {
 }
 
 // Recall devuelve los gists más útiles para query que entren en TokenBudget.
-func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error) {
+func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions) (RecallResult, error) {
 	budget := opts.TokenBudget
 	if budget <= 0 {
 		budget = defaultRecallBudget
@@ -80,7 +81,7 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 		gistMax = defaultGistMaxTokens
 	}
 
-	cands, err := e.recallCandidates(query, pool)
+	cands, err := e.recallCandidates(ctx, query, pool)
 	if err != nil {
 		return RecallResult{}, err
 	}
@@ -106,7 +107,7 @@ func (e *DbEngine) Recall(query string, opts RecallOptions) (RecallResult, error
 	for _, it := range result.Items {
 		chosen = append(chosen, it.ID)
 	}
-	if err := e.bumpAccess(chosen); err != nil {
+	if err := e.bumpAccess(ctx, chosen); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -210,12 +211,12 @@ func effectiveRecency(c candidate) string {
 
 // recallCandidates obtiene candidatos por FTS (ordenados por rank). Si la query
 // no tiene términos utilizables, cae a las observaciones más recientes.
-func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error) {
+func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int) ([]candidate, error) {
 	ftsQuery := buildFTSQuery(query)
 	if ftsQuery == "" {
-		return e.recentCandidates(limit)
+		return e.recentCandidates(ctx, limit)
 	}
-	rows, err := e.db.Query(`
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations_fts f
@@ -232,8 +233,8 @@ func (e *DbEngine) recallCandidates(query string, limit int) ([]candidate, error
 }
 
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).
-func (e *DbEngine) recentCandidates(limit int) ([]candidate, error) {
-	rows, err := e.db.Query(`
+func (e *DbEngine) recentCandidates(ctx context.Context, limit int) ([]candidate, error) {
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
@@ -258,6 +259,9 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 		}
 		out = append(out, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error al iterar candidatos: %w", err)
+	}
 	return out, nil
 }
 
@@ -276,7 +280,7 @@ func buildFTSQuery(q string) string {
 }
 
 // bumpAccess actualiza recencia y frecuencia de las observaciones devueltas.
-func (e *DbEngine) bumpAccess(ids []string) error {
+func (e *DbEngine) bumpAccess(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -289,7 +293,7 @@ func (e *DbEngine) bumpAccess(ids []string) error {
 	q := `UPDATE observations
 	      SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
 	      WHERE id IN (` + strings.Join(placeholders, ",") + `)`
-	if _, err := e.db.Exec(q, args...); err != nil {
+	if _, err := e.db.ExecContext(ctx, q, args...); err != nil {
 		return fmt.Errorf("error al actualizar stats de acceso: %w", err)
 	}
 	return nil

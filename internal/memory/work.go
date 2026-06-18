@@ -133,7 +133,11 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string) error {
 	if err != nil {
 		return fmt.Errorf("error al completar unidad: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error al verificar unidad completada: %w", err)
+	}
+	if n == 0 {
 		return fmt.Errorf("la unidad %q no existe, no está reclamada, o fue reclamada por otro agente", id)
 	}
 	return nil
@@ -169,6 +173,9 @@ func (e *DbEngine) WorkBatchStatus(batchID string) (WorkBatch, error) {
 		case WorkFailed:
 			b.Failed++
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return WorkBatch{}, fmt.Errorf("error al iterar unidades del batch: %w", err)
 	}
 	return b, nil
 }

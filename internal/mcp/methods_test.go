@@ -79,7 +79,7 @@ func call(t *testing.T, s *McpServer, name string, args map[string]interface{}) 
 	t.Helper()
 	argBytes, _ := json.Marshal(args)
 	params, _ := json.Marshal(CallToolRequest{Name: name, Arguments: argBytes})
-	return s.handleToolsCall(params)
+	return s.handleToolsCall(context.Background(), params)
 }
 
 func TestSaveObservationRequiresFields(t *testing.T) {

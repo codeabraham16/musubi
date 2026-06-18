@@ -3,13 +3,16 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 	"musubi/internal/skills"
 )
@@ -17,6 +20,7 @@ import (
 // Códigos de error JSON-RPC 2.0 estándar usados por el servidor.
 const (
 	codeParseError     = -32700
+	codeInvalidRequest = -32600
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 	codeInternalError  = -32603
@@ -159,32 +163,46 @@ func (s *McpServer) Serve(in io.Reader, out io.Writer) {
 			if jerr := json.Unmarshal(line, &req); jerr != nil {
 				s.send(JsonRpcResponse{JsonRpc: "2.0", Error: rpcErrorf(codeParseError, "Parse error")})
 			} else {
-				s.handleRequest(req)
+				reqCtx, reqCancel := context.WithTimeout(context.Background(), 60*time.Second)
+				s.handleRequest(reqCtx, req)
+				reqCancel()
 			}
 		}
 
 		if err != nil {
 			if err != io.EOF {
-				fmt.Fprintf(os.Stderr, "musubi: error leyendo entrada: %v\n", err)
+				logx.Error("error leyendo entrada JSON-RPC", "error", err)
 			}
 			return
 		}
 	}
 }
 
-func (s *McpServer) handleRequest(req JsonRpcRequest) {
+func (s *McpServer) handleRequest(ctx context.Context, req JsonRpcRequest) {
 	// Per JSON-RPC 2.0, una notificación (sin id) NUNCA recibe respuesta, ni
 	// siquiera para métodos conocidos.
 	if req.ID == nil {
 		return
 	}
+	if req.JsonRpc != "2.0" {
+		s.sendError(req.ID, rpcErrorf(codeInvalidRequest, "jsonrpc field must be \"2.0\""))
+		return
+	}
+	// Recover de cualquier panic en handlers o en la capa de memoria/embedder,
+	// para que un crash interno no mate el servidor sino que devuelva un error al cliente.
+	defer func() {
+		if r := recover(); r != nil {
+			logx.Error("panic en handler", "method", req.Method, "panic", r)
+			s.sendError(req.ID, rpcErrorf(codeInternalError, "error interno inesperado"))
+		}
+	}()
 	switch req.Method {
 	case "initialize":
 		s.sendResult(req.ID, s.handleInitialize())
 	case "tools/list":
 		s.sendResult(req.ID, s.handleToolsList())
 	case "tools/call":
-		result, rpcErr := s.handleToolsCall(req.Params)
+		result, rpcErr := s.handleToolsCall(ctx, req.Params)
 		if rpcErr != nil {
 			s.sendError(req.ID, rpcErr)
 			return
@@ -208,7 +226,7 @@ func (s *McpServer) sendError(id interface{}, rpcErr *RpcError) {
 func (s *McpServer) send(res JsonRpcResponse) {
 	data, err := json.Marshal(res)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi: error serializando respuesta: %v\n", err)
+		logx.Error("error serializando respuesta JSON-RPC", "error", err)
 		return
 	}
 	fmt.Fprintf(s.out, "%s\n", data)

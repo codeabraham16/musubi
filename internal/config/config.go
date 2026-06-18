@@ -13,10 +13,11 @@ const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musub
 
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
-	Provider   string `yaml:"provider"`   // none | ollama
-	Model      string `yaml:"model"`      // ej. nomic-embed-text
-	BaseURL    string `yaml:"base_url"`   // ej. http://localhost:11434
-	Dimensions int    `yaml:"dimensions"` // dimensión del vector que produce el modelo
+	Provider   string `yaml:"provider"`    // none | ollama | openai
+	Model      string `yaml:"model"`       // ej. nomic-embed-text, text-embedding-3-small
+	BaseURL    string `yaml:"base_url"`    // ej. http://localhost:11434, https://api.openai.com/v1
+	Dimensions int    `yaml:"dimensions"`  // dimensión del vector que produce el modelo
+	APIKeyEnv  string `yaml:"api_key_env"` // nombre de la env var con la API key (openai); el secreto NO se guarda en el yaml
 }
 
 // SourcingConfig controla la obtención automática de skills desde un catálogo remoto.
@@ -193,6 +194,7 @@ func Default() Config {
 			Model:      "nomic-embed-text",
 			BaseURL:    "http://localhost:11434",
 			Dimensions: 768,
+			APIKeyEnv:  "OPENAI_API_KEY",
 		},
 		Sourcing: SourcingConfig{
 			Enabled:       true,
@@ -309,6 +311,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 	}
 	if c.Embedding.Dimensions == 0 {
 		c.Embedding.Dimensions = d.Embedding.Dimensions
+	}
+	if c.Embedding.APIKeyEnv == "" {
+		c.Embedding.APIKeyEnv = d.Embedding.APIKeyEnv
 	}
 
 	// Sourcing: ausente -> default completo (Enabled true); presente -> respetar

@@ -52,6 +52,10 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		}
 		all = append(all, o)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ConsolidateResult{}, fmt.Errorf("error al iterar observaciones para consolidar: %w", err)
+	}
 	rows.Close()
 
 	// Procesar de más fuerte a más débil para que el canónico sea el mejor.

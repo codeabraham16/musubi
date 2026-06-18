@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func TestRecallBudgetRespected(t *testing.T) {
 		}
 	}
 
-	res, err := e.Recall("observacion", RecallOptions{TokenBudget: 30})
+	res, err := e.Recall(context.Background(), "observacion", RecallOptions{TokenBudget: 30})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestRecallReturnsGistsNotFullContent(t *testing.T) {
 		t.Fatalf("save error: %v", err)
 	}
 
-	res, err := e.Recall("resumen", RecallOptions{})
+	res, err := e.Recall(context.Background(), "resumen", RecallOptions{})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestRecallBumpsAccess(t *testing.T) {
 		t.Fatalf("save error: %v", err)
 	}
 
-	if _, err := e.Recall("alpha", RecallOptions{}); err != nil {
+	if _, err := e.Recall(context.Background(), "alpha", RecallOptions{}); err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
 
@@ -79,7 +80,7 @@ func TestSearchObservationsFTSHandlesSpecialChars(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Caracteres que romperían la sintaxis de FTS5 si se pasaran crudos.
-	res, err := e.SearchObservationsFTS(`postgres "y (redis`, 10)
+	res, err := e.SearchObservationsFTS(context.Background(), `postgres "y (redis`, 10)
 	if err != nil {
 		t.Fatalf("la búsqueda keyword no debe fallar con caracteres especiales: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestRecallNoBumpKeepsStats(t *testing.T) {
 	}
 
 	// Recall read-only (inyección por turno): no debe contar como acceso.
-	if _, err := e.Recall("alpha", RecallOptions{NoBump: true}); err != nil {
+	if _, err := e.Recall(context.Background(), "alpha", RecallOptions{NoBump: true}); err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
 
@@ -134,7 +135,7 @@ func TestRecallImportanceBoost(t *testing.T) {
 		t.Fatalf("save high error: %v", err)
 	}
 
-	res, err := e.Recall("alpha", RecallOptions{})
+	res, err := e.Recall(context.Background(), "alpha", RecallOptions{})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestRecallNoMatchEmpty(t *testing.T) {
 	if err := e.SaveObservation("x", "t", "alpha", nil); err != nil {
 		t.Fatalf("save error: %v", err)
 	}
-	res, err := e.Recall("zzzznomatch", RecallOptions{})
+	res, err := e.Recall(context.Background(), "zzzznomatch", RecallOptions{})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestArchivedExcludedFromRecallAndSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := e.Recall("kubernetes", RecallOptions{})
+	res, err := e.Recall(context.Background(), "kubernetes", RecallOptions{})
 	if err != nil {
 		t.Fatalf("Recall error: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestArchivedExcludedFromRecallAndSearch(t *testing.T) {
 		}
 	}
 
-	fts, err := e.SearchObservationsFTS("kubernetes", 10)
+	fts, err := e.SearchObservationsFTS(context.Background(), "kubernetes", 10)
 	if err != nil {
 		t.Fatalf("fts error: %v", err)
 	}
