@@ -64,6 +64,30 @@ func TestWorkflowToolStartNextComplete(t *testing.T) {
 	}
 }
 
+func TestWorkflowToolResume(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_workflow", map[string]interface{}{
+		"action": "start", "run_id": "r2", "definition": wfYAML,
+	}); e != nil {
+		t.Fatalf("start: %+v", e)
+	}
+	// resume devuelve estado + ready (para retomar en otra sesión)
+	res, e := call(t, s, "musubi_workflow", map[string]interface{}{"action": "resume", "run_id": "r2"})
+	if e != nil {
+		t.Fatalf("resume: %+v", e)
+	}
+	var out struct {
+		Ready []string `json:"ready"`
+		Run   struct {
+			Status string `json:"status"`
+		} `json:"run"`
+	}
+	json.Unmarshal([]byte(textOf(t, res)), &out)
+	if out.Run.Status != "running" || len(out.Ready) != 1 || out.Ready[0] != "a" {
+		t.Fatalf("resume inesperado: status=%q ready=%v", out.Run.Status, out.Ready)
+	}
+}
+
 func TestWorkflowToolErrorPaths(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	cases := []map[string]interface{}{
