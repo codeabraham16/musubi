@@ -121,3 +121,95 @@ func TestCompleteStepRechazaStepDesconocido(t *testing.T) {
 		t.Error("esperaba error por step inexistente")
 	}
 }
+
+func TestWorkflowRepeatWhileLoop(t *testing.T) {
+	engine, _ := NewDbEngine(t.TempDir())
+	defer engine.Close()
+	yaml := `
+id: loopy
+schema_version: "1.0"
+steps:
+  - id: iterate
+    repeat_while: step.iterate.result != "stop"
+    max_iterations: 10
+  - id: after
+    needs: [iterate]
+`
+	def, err := ParseWorkflowDef([]byte(yaml))
+	if err != nil || len(def.Validate()) != 0 {
+		t.Fatalf("parse/validate: %v / %v", err, def.Validate())
+	}
+	engine.StartWorkflowRun("L", def)
+
+	// dos iteraciones con result != stop → se re-abre, 'after' NO listo aún
+	engine.CompleteWorkflowStep("L", "iterate", "go", StepDone)
+	run, _, _ := engine.WorkflowRunStatus("L")
+	if run.StepStatus["iterate"] != StepPending || run.StepIters["iterate"] != 1 {
+		t.Fatalf("tras iter1: status=%q iters=%d", run.StepStatus["iterate"], run.StepIters["iterate"])
+	}
+	ready, _ := engine.WorkflowReady("L")
+	if len(ready) != 1 || ready[0] != "iterate" {
+		t.Fatalf("durante el loop solo 'iterate' está listo: %v", ready)
+	}
+
+	// result == stop → repeat_while falso → queda done, 'after' se libera
+	engine.CompleteWorkflowStep("L", "iterate", "stop", StepDone)
+	run, _, _ = engine.WorkflowRunStatus("L")
+	if run.StepStatus["iterate"] != StepDone {
+		t.Fatalf("tras stop, iterate debería estar done, está %q", run.StepStatus["iterate"])
+	}
+	ready, _ = engine.WorkflowReady("L")
+	if len(ready) != 1 || ready[0] != "after" {
+		t.Fatalf("tras cerrar el loop esperaba [after], obtuve %v", ready)
+	}
+}
+
+func TestWorkflowRepeatWhileRespectaCap(t *testing.T) {
+	engine, _ := NewDbEngine(t.TempDir())
+	defer engine.Close()
+	yaml := `
+id: capped
+schema_version: "1.0"
+steps:
+  - id: spin
+    repeat_while: spin == spin
+    max_iterations: 2
+`
+	def, perr := ParseWorkflowDef([]byte(yaml))
+	if perr != nil || len(def.Validate()) != 0 {
+		t.Fatalf("parse/validate: %v / %v", perr, def.Validate())
+	}
+	if got := def.Steps[0].MaxIterations; got != 2 {
+		t.Fatalf("max_iterations debía parsear a 2, fue %d", got)
+	}
+	engine.StartWorkflowRun("C", def)
+	// repeat_while siempre true; debería re-abrir hasta el cap (2) y luego quedar done
+	for i := 0; i < 5; i++ {
+		run, _ := engine.CompleteWorkflowStep("C", "spin", "x", StepDone)
+		if run.StepStatus["spin"] == StepDone {
+			if run.StepIters["spin"] != 2 {
+				t.Fatalf("esperaba parar en 2 iteraciones, paró en %d", run.StepIters["spin"])
+			}
+			return
+		}
+	}
+	t.Fatal("el loop no respetó max_iterations")
+}
+
+func TestWorkflowListRuns(t *testing.T) {
+	engine, _ := NewDbEngine(t.TempDir())
+	defer engine.Close()
+	def, _ := ParseWorkflowDef([]byte(sampleWorkflowYAML))
+	engine.StartWorkflowRun("a", def)
+	engine.StartWorkflowRun("b", def)
+	runs, err := engine.WorkflowListRuns()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("esperaba 2 runs, obtuve %d", len(runs))
+	}
+	if runs[0].Total != 4 {
+		t.Errorf("Total esperado 4, obtuve %d", runs[0].Total)
+	}
+}
