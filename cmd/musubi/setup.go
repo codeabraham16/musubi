@@ -108,7 +108,7 @@ func setupProjectWith(exeOverride string) {
 	if err := writeCognitiveSkills(root); err != nil {
 		fmt.Printf("  ! No se pudieron escribir las skills cognitivas: %v\n", err)
 	} else {
-		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile)")
+		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile, orchestrate, audit)")
 	}
 
 	// 3. Registrar el servidor en .mcp.json para carga automática.

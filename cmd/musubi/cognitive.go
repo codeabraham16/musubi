@@ -113,6 +113,18 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"- La descomposición y la consolidación son tuyas (la inteligencia); Musubi solo garantiza coordinación sin colisiones.\n" +
 				"- Guardá las decisiones/aprendizajes del trabajo con musubi_save_observation.\n",
 		},
+		{
+			Name:         "audit-structure-flow",
+			Description:  "Audita la estructura y el flujo del codebase y emite hallazgos priorizados con evidencia.",
+			Triggers:     []string{"*"},
+			Capabilities: []string{},
+			Rules: "Cuando se pida auditar la ESTRUCTURA (organización, cohesión, acoplamiento, capas, código muerto) o el FLUJO (dirección de dependencias, ciclos, entrada→salida, propagación de context/errores) del proyecto:\n" +
+				"1. Mapeá módulos/paquetes (tamaño + responsabilidad) y construí el grafo de dependencias con la herramienta del stack (go list, madge, pydeps, cargo modules, jdeps). Verificá cada afirmación contra el código; no asumas por los nombres.\n" +
+				"2. Severidad — ALTO: ciclo o inversión (módulo core que importa IO/transporte), estado global mutable, errores tragados. MEDIO: smell con costo real (god-file, módulo grab-bag, código muerto/huérfano). BAJO: cosmético.\n" +
+				"3. Corré SIEMPRE el chequeo de código muerto/huérfanos (módulo importado por nadie y sin tests).\n" +
+				"4. No marques patrones normales (un hub de wiring, un archivo grande pero cohesivo, un entrypoint con IO) salvo que tengan costo concreto. Nunca propongas reescrituras: la acción más chica de mayor impacto.\n" +
+				"5. Separá estructura (forma estática) de flujo (recorrido dinámico). Cada hallazgo: severidad + evidencia (ruta:símbolo) + acción. Guardá el resultado con musubi_save_observation (topic_key 'audit/...') e incluí un Top 3 de acciones.\n",
+		},
 	}
 }
 
