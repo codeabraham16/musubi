@@ -49,6 +49,27 @@ El proyecto sigue [Versionado Semántico](https://semver.org/lang/es/). Si tu ca
 visible para el usuario, agregá una entrada en la sección `[Unreleased]` de
 [CHANGELOG.md](CHANGELOG.md).
 
+## Publicar un release
+
+1. Pasá el contenido de `[Unreleased]` a una sección `[X.Y.Z]` con fecha en `CHANGELOG.md`
+   y actualizá los links de comparación al final del archivo.
+2. Actualizá la versión embebida en el `.exe` de Windows: editá
+   [`cmd/musubi/versioninfo.json`](cmd/musubi/versioninfo.json) (campos `FileVersion`,
+   `ProductVersion`, `FileVersion`/`ProductVersion` de `StringFileInfo`) y regenerá los
+   recursos:
+
+   ```bash
+   go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest  # una vez
+   cd cmd/musubi && go generate ./...   # regenera rsrc_windows_*.syso
+   ```
+
+   `versioninfo.json` es la única fuente de verdad: **no edites los `.syso` a mano.** La
+   versión que reporta `musubi version` se inyecta aparte desde el tag de git, así que es
+   correcta aunque el `.syso` quede desactualizado (solo afecta las propiedades del `.exe`).
+3. Commiteá, mergeá a `main` y creá el tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+   El workflow [`release.yml`](.github/workflows/release.yml) compila los binarios
+   cross-platform (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256 y publica el release.
+
 ## Licencia
 
 Al contribuir aceptás que tu aporte se publique bajo la licencia [MIT](LICENSE) del proyecto.
