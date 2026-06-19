@@ -74,6 +74,19 @@ func (ix *ivfIndex) Trained() bool { ix.mu.RLock(); defer ix.mu.RUnlock(); retur
 // Dirty es la cantidad de altas/bajas desde el último rebuild (dispara re-entrenar).
 func (ix *ivfIndex) Dirty() int { ix.mu.RLock(); defer ix.mu.RUnlock(); return ix.dirty }
 
+// seedDirty fija `dirty` al conteo dado mientras el índice NO esté entrenado, para
+// que el disparador de entrenamiento (dirty >= ExactThreshold) refleje el conteo
+// ABSOLUTO de embeddings y no solo las altas de este proceso. Sin esto, una base que
+// cruza el umbral incrementalmente entre reinicios nunca se entrenaría (el contador
+// dirty arranca en 0 cada proceso).
+func (ix *ivfIndex) seedDirty(n int) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if !ix.trained {
+		ix.dirty = n
+	}
+}
+
 // Add asigna (o reasigna) el vector de una observación a su centroide más cercano.
 // Si el índice no está entrenado o la dim no coincide, no lo indexa (el full-scan
 // exacto lo cubre) pero cuenta el alta como dirty para el próximo rebuild.
@@ -477,8 +490,16 @@ func (e *DbEngine) loadActiveVectors() ([]idVec, error) {
 	return out, nil
 }
 
-// rebuildVectorIndex reconstruye el índice IVF desde los embeddings activos (síncrono).
+// rebuildVectorIndex reconstruye el índice IVF desde los embeddings activos (síncrono),
+// con la config del engine. Solo desde la goroutine dueña del engine (NewDbEngine, tests).
 func (e *DbEngine) rebuildVectorIndex() error {
+	return e.rebuildVectorIndexWith(e.vindexCfg)
+}
+
+// rebuildVectorIndexWith reconstruye el índice con una config dada. Las goroutines de
+// fondo reciben una copia (snapshot) y usan esta variante para NO leer e.vindexCfg de
+// forma concurrente con un posible ajuste de config en la goroutine dueña.
+func (e *DbEngine) rebuildVectorIndexWith(cfg config.VectorIndexConfig) error {
 	if e.index == nil {
 		return nil
 	}
@@ -486,7 +507,7 @@ func (e *DbEngine) rebuildVectorIndex() error {
 	if err != nil {
 		return err
 	}
-	e.index.Rebuild(data, e.vindexCfg, vectorIndexSeed)
+	e.index.Rebuild(data, cfg, vectorIndexSeed)
 	return nil
 }
 
@@ -504,21 +525,28 @@ func (e *DbEngine) countActiveEmbeddings() (int, error) {
 	return n, nil
 }
 
-// autoBuildVectorIndex entrena el índice al arrancar si ya hay suficientes
-// embeddings (>= ExactThreshold), en segundo plano y con guard para no solapar.
-func (e *DbEngine) autoBuildVectorIndex() {
+// autoBuildVectorIndex entrena el índice al arrancar si ya hay suficientes embeddings
+// (>= ExactThreshold). Recibe la config por copia (snapshot) para no leer e.vindexCfg
+// desde esta goroutine de fondo. Si todavía no alcanza el umbral, siembra `dirty` con
+// el conteo absoluto para que un crecimiento incremental posterior dispare el train.
+func (e *DbEngine) autoBuildVectorIndex(cfg config.VectorIndexConfig) {
 	if e.index == nil {
 		return
 	}
 	n, err := e.countActiveEmbeddings()
-	if err != nil || n < e.vindexCfg.ExactThreshold {
+	if err != nil {
+		logx.Warn("no se pudo contar embeddings al arrancar el índice vectorial", "error", err)
+		return
+	}
+	if n < cfg.ExactThreshold {
+		e.index.seedDirty(n)
 		return
 	}
 	if !e.rebuilding.CompareAndSwap(false, true) {
 		return
 	}
 	defer e.rebuilding.Store(false)
-	if err := e.rebuildVectorIndex(); err != nil {
+	if err := e.rebuildVectorIndexWith(cfg); err != nil {
 		logx.Warn("no se pudo construir el índice vectorial al arrancar", "error", err)
 		return
 	}
@@ -533,15 +561,16 @@ func (e *DbEngine) maybeRebuildVectorIndex() {
 	if e.index == nil || !e.vindexCfg.Enabled {
 		return
 	}
+	cfg := e.vindexCfg // snapshot en la goroutine del caller, para pasar a la de fondo
 	trained := e.index.Trained()
 	dirty := e.index.Dirty()
-	needTrain := !trained && dirty >= e.vindexCfg.ExactThreshold
-	needRebuild := trained && dirty >= e.vindexCfg.RebuildEvery
+	needTrain := !trained && dirty >= cfg.ExactThreshold
+	needRebuild := trained && dirty >= cfg.RebuildEvery
 	if !needTrain && !needRebuild {
 		return
 	}
 	if needRebuild {
-		due, err := e.MetaDue(metaVectorIndexRebuild, e.vindexCfg.RebuildMinHours)
+		due, err := e.MetaDue(metaVectorIndexRebuild, cfg.RebuildMinHours)
 		if err != nil || !due {
 			return
 		}
@@ -549,12 +578,16 @@ func (e *DbEngine) maybeRebuildVectorIndex() {
 	if !e.rebuilding.CompareAndSwap(false, true) {
 		return
 	}
-	go func() {
+	launched := e.spawnBackground(func() {
 		defer e.rebuilding.Store(false)
-		if err := e.rebuildVectorIndex(); err != nil {
+		if err := e.rebuildVectorIndexWith(cfg); err != nil {
 			logx.Warn("rebuild del índice vectorial falló", "error", err)
 			return
 		}
 		_ = e.MarkMetaNow(metaVectorIndexRebuild)
-	}()
+	})
+	if !launched {
+		// El engine se está cerrando: liberar el guard que tomamos recién.
+		e.rebuilding.Store(false)
+	}
 }
