@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-19
+
+### Added
+- **Índice vectorial IVF para búsqueda semántica a escala** (Track 1 / T1.2). Reemplaza el
+  full-scan O(n) de la búsqueda semántica (que cargaba y deserializaba **todos** los embeddings
+  por query y se degradaba a ~10k observaciones) por un índice invertido por centroides k-means,
+  **model-free y en Go puro** (sin dependencias nuevas, sin CGo). Diseño elegido por un panel
+  multi-agente (IVF sobre HNSW/SQ8) y validado con verificación adversarial:
+  - **No retiene vectores en RAM**: solo centroides + la membresía de cada celda (ids). Footprint
+    residente ~10-90 MB incluso a 1M de observaciones; los vectores se cargan de SQLite **solo**
+    para las celdas sondeadas.
+  - **Exacto por debajo del umbral**: con menos de `exact_threshold` embeddings (o índice sin
+    entrenar, o dimensión incompatible) la búsqueda es el full-scan exacto de siempre. Por encima,
+    el IVF solo **acota** candidatos y el ranking final sigue siendo coseno **exacto**, re-filtrado
+    `archived=0 AND superseded_by IS NULL` contra SQLite: el índice nunca compromete la correctitud
+    (a lo sumo, el recall entre rebuilds). Test de regresión exige **recall@10 ≥ 0.92**.
+  - k-means++ (sembrado D²) + reseed de centroides muertos; manejo de drift de dimensión
+    (entrena con la dim mayoritaria); updates incrementales (`Add`/`Remove`) y re-entrenamiento
+    throttled en segundo plano.
+  - Bloque de config `vector_index` (`enabled`, `exact_threshold`, `nprobe`, `rebuild_*`, `kmeans_*`).
+
+### Changed
+- `internal/memory`: `SearchObservations` ahora despacha entre el camino IVF y el full-scan exacto
+  (conservado intacto como `searchExactFullScan`). `saveObservation` mantiene el índice al día
+  post-commit; `Decay` y la marca de superseded lo sincronizan.
+- Lifecycle del `DbEngine`: `Close()` espera a las tareas de índice en segundo plano antes de
+  cerrar la base (evita use-after-close del `*sql.DB`).
+
 ## [0.15.0] - 2026-06-19
 
 ### Added
@@ -201,7 +229,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/codeabraham16/musubi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/codeabraham16/musubi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/codeabraham16/musubi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/codeabraham16/musubi/compare/v0.12.0...v0.13.0
