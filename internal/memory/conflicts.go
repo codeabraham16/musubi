@@ -206,5 +206,10 @@ func (e *DbEngine) markSuperseded(targetID, bySourceID string) error {
 	); err != nil {
 		return fmt.Errorf("error al marcar superseded %q: %w", targetID, err)
 	}
+	// La superseded deja de ser elegible: sacarla del índice vectorial (el re-filtro
+	// SQL ya la excluiría, pero esto evita que ocupe un slot de candidato).
+	if e.index != nil {
+		e.index.Remove(targetID)
+	}
 	return nil
 }

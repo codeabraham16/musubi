@@ -148,6 +148,34 @@ type ConflictConfig struct {
 	CandidatePool int `yaml:"candidate_pool"`
 }
 
+// VectorIndexConfig configura el índice vectorial ANN (IVF) para la búsqueda
+// semántica a escala. Por debajo de ExactThreshold (o con el índice sin entrenar)
+// la búsqueda es el full-scan exacto de siempre; por encima, IVF acota candidatos
+// y el ranking final sigue siendo coseno exacto sobre filas re-filtradas en SQLite.
+// Bloque YAML: vector_index.
+type VectorIndexConfig struct {
+	// Enabled activa el índice IVF (default true). false => siempre full-scan exacto.
+	Enabled bool `yaml:"enabled"`
+	// ExactThreshold es la cantidad de observaciones con embedding a partir de la
+	// cual se entrena y usa el índice IVF (default 10000). Debajo, exacto puro.
+	ExactThreshold int `yaml:"exact_threshold"`
+	// NProbe es la cantidad de celdas (centroides) más cercanas que se sondean por
+	// query (default 8). Es el dial directo de recall vs latencia.
+	NProbe int `yaml:"nprobe"`
+	// NumCentroids fija la cantidad de centroides; 0 => auto = round(sqrt(N)) (default 0).
+	NumCentroids int `yaml:"num_centroids"`
+	// RebuildEvery es la cantidad de altas/bajas tras la cual se re-entrena el índice
+	// (re-k-means) para corregir el drift de centroides (default 5000).
+	RebuildEvery int `yaml:"rebuild_every"`
+	// RebuildMinHours es el piso temporal entre re-entrenamientos (default 6).
+	RebuildMinHours float64 `yaml:"rebuild_min_hours"`
+	// KMeansIters son las iteraciones de Lloyd al entrenar centroides (default 10).
+	KMeansIters int `yaml:"kmeans_iters"`
+	// KMeansSample es el tope de vectores muestreados para entrenar centroides
+	// (default 50000); por encima se entrena sobre una muestra y se asigna todo.
+	KMeansSample int `yaml:"kmeans_sample"`
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
@@ -181,6 +209,8 @@ type Config struct {
 	Pipeline PipelineConfig `yaml:"pipeline,omitempty"`
 	// MultiAgent configura la pizarra compartida del multi-agente.
 	MultiAgent MultiAgentConfig `yaml:"multiagent,omitempty"`
+	// VectorIndex configura el índice vectorial ANN (IVF) para búsqueda semántica a escala.
+	VectorIndex VectorIndexConfig `yaml:"vector_index,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -249,6 +279,16 @@ func Default() Config {
 		MultiAgent: MultiAgentConfig{
 			Enabled:       true,
 			MaxBatchUnits: 50,
+		},
+		VectorIndex: VectorIndexConfig{
+			Enabled:         true,
+			ExactThreshold:  10000,
+			NProbe:          8,
+			NumCentroids:    0,
+			RebuildEvery:    5000,
+			RebuildMinHours: 6,
+			KMeansIters:     10,
+			KMeansSample:    50000,
 		},
 	}
 }
@@ -428,5 +468,30 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		c.MultiAgent = d.MultiAgent
 	} else if c.MultiAgent.MaxBatchUnits == 0 {
 		c.MultiAgent.MaxBatchUnits = d.MultiAgent.MaxBatchUnits
+	}
+
+	// VectorIndex: ausente -> default completo (Enabled true); presente -> respetar
+	// enabled (incluido false) y rellenar numéricos. NumCentroids 0 = auto (válido).
+	if !present["vector_index"] {
+		c.VectorIndex = d.VectorIndex
+	} else {
+		if c.VectorIndex.ExactThreshold == 0 {
+			c.VectorIndex.ExactThreshold = d.VectorIndex.ExactThreshold
+		}
+		if c.VectorIndex.NProbe == 0 {
+			c.VectorIndex.NProbe = d.VectorIndex.NProbe
+		}
+		if c.VectorIndex.RebuildEvery == 0 {
+			c.VectorIndex.RebuildEvery = d.VectorIndex.RebuildEvery
+		}
+		if c.VectorIndex.RebuildMinHours == 0 {
+			c.VectorIndex.RebuildMinHours = d.VectorIndex.RebuildMinHours
+		}
+		if c.VectorIndex.KMeansIters == 0 {
+			c.VectorIndex.KMeansIters = d.VectorIndex.KMeansIters
+		}
+		if c.VectorIndex.KMeansSample == 0 {
+			c.VectorIndex.KMeansSample = d.VectorIndex.KMeansSample
+		}
 	}
 }

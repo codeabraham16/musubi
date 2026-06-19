@@ -6,6 +6,7 @@ import (
 	"musubi/internal/config"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 )
@@ -13,6 +14,13 @@ import (
 type DbEngine struct {
 	db   *sql.DB
 	path string // ruta del archivo SQLite (para backups del doctor)
+	// index es el índice vectorial IVF para búsqueda semántica a escala (nil si
+	// está desactivado por config). Es un caché reconstruible desde SQLite.
+	index *ivfIndex
+	// vindexCfg es la config del índice vectorial, leída de .musubi/config.yaml.
+	vindexCfg config.VectorIndexConfig
+	// rebuilding es el guard que evita rebuilds del índice solapados.
+	rebuilding atomic.Bool
 }
 
 func NewDbEngine(projectPath string) (*DbEngine, error) {
@@ -60,6 +68,18 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	if err := engine.recomputeTokensIfEstimatorChanged(); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// Índice vectorial IVF para búsqueda semántica a escala (T1.2). Se configura
+	// desde .musubi/config.yaml (defaults si está ausente). El índice es un caché
+	// reconstruible desde SQLite; si ya hay suficientes embeddings se entrena en
+	// segundo plano para no demorar el arranque (las búsquedas caen al full-scan
+	// exacto hasta que esté listo).
+	cfg, _ := config.Load(projectPath)
+	engine.vindexCfg = cfg.VectorIndex
+	if engine.vindexCfg.Enabled {
+		engine.index = newIVFIndex()
+		go engine.autoBuildVectorIndex()
 	}
 
 	return engine, nil

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 
 	"musubi/internal/logx"
 
@@ -120,11 +121,108 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear observación: %w", err)
+	}
+
+	// Post-commit (SQLite ya es la verdad): mantener el índice IVF al día. Add es
+	// O(C) y no toca disco; el rebuild eventual (throttled, en segundo plano) corrige
+	// el drift de centroides. Sin embedding no hay nada que indexar.
+	if e.index != nil && e.vindexCfg.Enabled && len(embedding) > 0 {
+		e.index.Add(id, embedding)
+		e.maybeRebuildVectorIndex()
+	}
+
+	return nil
 }
 
-// SearchObservations realiza una búsqueda semántica comparando el vector query con la BD.
+// SearchObservations realiza una búsqueda semántica. Si el índice IVF está entrenado
+// y la dimensión coincide, lo usa para ACOTAR los candidatos (sublineal) y luego
+// rankea EXACTO sobre ellos; si no, cae al full-scan exacto de siempre. En ambos
+// caminos el ranking final es coseno exacto y se re-filtra archived/superseded contra
+// SQLite, así que el índice nunca compromete la correctitud (a lo sumo, el recall).
 func (e *DbEngine) SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error) {
+	if e.index != nil && e.vindexCfg.Enabled {
+		if ids, ok := e.index.Search(queryEmbedding, e.vindexCfg.NProbe); ok && len(ids) > 0 {
+			return e.searchExactByIDs(ctx, queryEmbedding, ids, limit)
+		}
+	}
+	return e.searchExactFullScan(ctx, queryEmbedding, limit)
+}
+
+// searchExactByIDs rankea exactamente por coseno SOLO el conjunto de ids candidato
+// (las celdas IVF sondeadas), re-filtrando archived/superseded contra SQLite. El
+// IN(...) se trocea para respetar el tope de parámetros de SQLite. Misma semántica de
+// dim-mismatch (warn+skip) y de limit (<=0 => sin límite) que el full-scan.
+func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float32, ids []string, limit int) ([]SearchResult, error) {
+	seen := make(map[string]bool, len(ids))
+	uniq := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			uniq = append(uniq, id)
+		}
+	}
+
+	var results []SearchResult
+	for _, chunk := range chunkStrings(uniq, maxSQLParams) {
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		q := `SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
+			FROM observations o
+			JOIN embeddings e ON o.id = e.observation_id
+			WHERE o.archived = 0 AND o.superseded_by IS NULL
+			  AND o.id IN (` + strings.Join(placeholders, ",") + `)`
+		rows, err := e.db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, fmt.Errorf("error al consultar candidatos: %w", err)
+		}
+		for rows.Next() {
+			var res SearchResult
+			var vectorBytes []byte
+			if err := rows.Scan(&res.ID, &res.TopicKey, &res.Content, &res.CreatedAt, &vectorBytes); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("error al escanear candidato: %w", err)
+			}
+			stored, err := BytesToFloat32(vectorBytes)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("error al deserializar vector de candidato: %w", err)
+			}
+			sim, err := CosineSimilarity(queryEmbedding, stored)
+			if err != nil {
+				// Dim incompatible (drift de modelo): se omite, igual que el full-scan.
+				logx.Warn("candidato omitido en búsqueda semántica por dimensión incompatible",
+					"id", res.ID, "error", err)
+				continue
+			}
+			res.Similarity = sim
+			results = append(results, res)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("error al iterar candidatos: %w", err)
+		}
+		rows.Close()
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+// searchExactFullScan es la búsqueda semántica exacta original: escanea TODOS los
+// embeddings activos y rankea por coseno. Es el camino por defecto para DBs por
+// debajo del umbral (o con el índice sin entrenar) y la red de seguridad de exactitud.
+func (e *DbEngine) searchExactFullScan(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
