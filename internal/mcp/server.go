@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"musubi/internal/config"
@@ -121,6 +122,13 @@ type McpServer struct {
 	// una vez en NewMcpServer desde buildRegistry.
 	tools     []toolEntry
 	toolIndex map[string]toolHandler
+	// toolReadOnly[name]=true si la tool no muta estado: corre bajo RLock (concurrente
+	// con otras lecturas). Las demás corren bajo Lock exclusivo.
+	toolReadOnly map[string]bool
+	// dispatchMu hace seguro el dispatch concurrente (transporte HTTP): las tools que
+	// mutan toman Lock (serializadas, RMW-safe); las de solo-lectura toman RLock
+	// (concurrentes entre sí). En stdio (un goroutine) está siempre libre, costo nulo.
+	dispatchMu sync.RWMutex
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -151,8 +159,12 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	// tiempo de llamada, así que el orden respecto de las opciones no importa).
 	s.tools = s.buildRegistry()
 	s.toolIndex = make(map[string]toolHandler, len(s.tools))
+	s.toolReadOnly = make(map[string]bool, len(s.tools))
 	for i := range s.tools {
 		s.toolIndex[s.tools[i].Name] = s.tools[i].handler
+		if s.tools[i].readOnly {
+			s.toolReadOnly[s.tools[i].Name] = true
+		}
 	}
 	return s
 }

@@ -44,7 +44,6 @@ type Property struct {
 	Items       *Property `json:"items,omitempty"`
 }
 
-
 type CallToolRequest struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -91,6 +90,15 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	handler, ok := s.toolIndex[callReq.Name]
 	if !ok {
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
+	}
+	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
+	// toman el lock exclusivo (serializadas, sin lost-updates de read-modify-write).
+	if s.toolReadOnly[callReq.Name] {
+		s.dispatchMu.RLock()
+		defer s.dispatchMu.RUnlock()
+	} else {
+		s.dispatchMu.Lock()
+		defer s.dispatchMu.Unlock()
 	}
 	return handler(ctx, callReq.Arguments)
 }

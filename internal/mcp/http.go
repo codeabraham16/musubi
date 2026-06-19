@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"musubi/internal/config"
@@ -53,7 +52,6 @@ type httpOptions struct {
 // request JSON-RPC y responde el resultado; GET /mcp (upgrade SSE) queda reservado
 // (405) porque Musubi no emite mensajes server-initiated todavía.
 func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
-	var mu sync.Mutex // serializa el dispatch: línea base segura (sin RMW concurrente).
 	metrics := &httpMetrics{}
 	mux := http.NewServeMux()
 
@@ -103,14 +101,9 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), opt.reqTimeout)
 		defer cancel()
 
-		// Sección crítica acotada al dispatch; defer garantiza el unlock aunque
-		// Dispatch paniquee (no debería: recupera internamente), evitando un deadlock
-		// que colgaría todas las peticiones siguientes.
-		resp, ok := func() (JsonRpcResponse, bool) {
-			mu.Lock()
-			defer mu.Unlock()
-			return s.Dispatch(ctx, req)
-		}()
+		// Dispatch es seguro para llamarse concurrentemente: serializa internamente las
+		// tools que mutan (Lock) y deja correr en paralelo las de solo-lectura (RLock).
+		resp, ok := s.Dispatch(ctx, req)
 
 		if !ok {
 			// Notificación (sin id): por JSON-RPC no hay respuesta. 202 sin cuerpo.
