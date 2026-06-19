@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-06-19
+
+### Added
+- **Modo servicio: transporte HTTP** (Track 4 / T4.2). Nuevo subcomando `musubi serve` que expone
+  el servidor MCP sobre HTTP (`POST /mcp`, JSON-RPC 2.0) además del stdio por defecto. Mismo dispatch,
+  mismas tools, misma config del motor — corre sobre el seam `Dispatch` de v0.20.0.
+  - **Opt-in y seguro por defecto**: bloque de config `service:` con `enabled: false` por defecto; un
+    workspace existente sin ese bloque no abre ningún puerto. `musubi serve` se niega a arrancar sin
+    `service.enabled: true` (o un `--addr host:port` / `--enable` explícito).
+  - **Solo loopback en este release**: bind a `127.0.0.1:7717` por defecto; un `addr` no-loopback es
+    error de arranque (la autenticación y el bind remoto llegan en el próximo slice). Defensa de
+    superficie: validación de `Host` loopback + rechazo de `Origin` cross-site (mitiga DNS-rebinding),
+    techo de body (4 MiB), y timeouts de lectura/escritura/idle contra slow-loris.
+  - **Concurrencia serializada**: las peticiones HTTP se serializan sobre un mutex (línea base segura,
+    sin riesgo de read-modify-write en el motor). La concurrencia real es un slice posterior, tras la
+    auditoría RMW; el seam `Dispatch` ya la deja lista.
+  - `GET /mcp` (upgrade SSE) reservado (405): Musubi no emite mensajes server-initiated todavía.
+  - **Cero dependencias nuevas**: todo `net/http` + stdlib.
+- Tests del transporte HTTP (`http_test.go`): tools/list, initialize, tool-call, notificación→202,
+  errores parse/method, `GET`→405, rechazo cross-origin, rechazo de bind no-loopback, y la tabla de
+  `isLoopbackHost`.
+
 ## [0.20.0] - 2026-06-19
 
 ### Changed

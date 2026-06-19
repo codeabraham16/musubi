@@ -3,9 +3,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"musubi/internal/config"
@@ -40,6 +42,8 @@ func main() {
 		runCatalog(os.Args[2:])
 	case "daemon":
 		runDaemon()
+	case "serve":
+		runServe(os.Args[2:])
 	case "maintain":
 		runMaintain()
 	case "doctor":
@@ -69,6 +73,7 @@ func printUsage() {
 	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
 	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
 	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
+	fmt.Println("  serve [--addr host:port]  Arranca el servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
 	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
 	fmt.Println("  doctor            Diagnostica la memoria; 'doctor repair --check X --apply' repara (con backup)")
 	fmt.Println("  update            Descarga el último release, verifica el checksum y se auto-reemplaza")
@@ -123,7 +128,71 @@ func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memo
 	})
 }
 
+// runServe arranca el servidor MCP sobre HTTP (modo servicio, Track 4). Es opt-in:
+// requiere service.enabled en la config o un --addr explícito. Solo bind a loopback.
+// Comparte toda la configuración del motor y las tools con el modo daemon (stdio).
+func runServe(args []string) {
+	root := workspaceDir()
+	if err := ensureWorkspace(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
+		os.Exit(1)
+	}
 
+	// Overrides por flag: --addr <host:port> (o --addr=...) habilita el modo servicio
+	// con esa dirección; --enable lo habilita con la addr de la config.
+	svc := cfg.Service
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--addr" && i+1 < len(args):
+			svc.Addr = args[i+1]
+			svc.Enabled = true
+			i++
+		case strings.HasPrefix(args[i], "--addr="):
+			svc.Addr = strings.TrimPrefix(args[i], "--addr=")
+			svc.Enabled = true
+		case args[i] == "--enable":
+			svc.Enabled = true
+		}
+	}
+	if !svc.Enabled {
+		fmt.Fprintln(os.Stderr, "musubi serve: el modo servicio está desactivado. Activá 'service.enabled: true' en .musubi/config.yaml o pasá --addr <host:port>.")
+		os.Exit(1)
+	}
+	if svc.Addr == "" {
+		svc.Addr = config.Default().Service.Addr
+	}
+	if svc.RequestTimeoutSeconds == 0 {
+		svc.RequestTimeoutSeconds = config.Default().Service.RequestTimeoutSeconds
+	}
+
+	embedder, err := embedding.NewProvider(cfg.Embedding)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al configurar embeddings: %v\n", err)
+		os.Exit(1)
+	}
+	engine, err := memory.NewDbEngine(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
+		os.Exit(1)
+	}
+	defer engine.Close()
+
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent))
+
+	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := server.ListenAndServeHTTP(ctx, svc); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
+		os.Exit(1)
+	}
+}
 
 func runDaemon() {
 	root := workspaceDir()
