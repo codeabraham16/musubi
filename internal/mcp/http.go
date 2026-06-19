@@ -1,9 +1,13 @@
 package mcp
 
-// Transporte HTTP del servidor MCP (Track 4 / T4.2): expone el mismo dispatch que el
-// stdio sobre un endpoint HTTP, para usar Musubi como servicio. Es OPT-IN
-// (config.Service.Enabled) y por seguridad SOLO admite bind a loopback en este release;
-// la autenticación y el bind remoto llegan en un slice posterior.
+// Transporte HTTP del servidor MCP (Track 4): expone el mismo dispatch que el stdio
+// sobre un endpoint HTTP, para usar Musubi como servicio. Es OPT-IN
+// (config.Service.Enabled). Seguridad por capas:
+//   - Bind loopback (default): sin auth obligatoria; defensa anti DNS-rebinding por
+//     validación de Host loopback + Origin local.
+//   - Bind no-loopback (remoto): EXIGE un bearer token (service.auth_token_env); sin él
+//     `serve` se niega a arrancar. El token es el gate de autenticación.
+//   - TLS opcional (service.tls_cert_file + tls_key_file).
 //
 // Modelo de concurrencia: las peticiones se SERIALIZAN sobre un mutex (línea base
 // segura, sin riesgo de read-modify-write en el motor). La concurrencia real es un
@@ -12,12 +16,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -31,22 +38,41 @@ const (
 	maxRequestBody = 4 << 20 // 4 MiB: techo del body JSON-RPC entrante.
 )
 
+// httpOptions configura el handler HTTP.
+type httpOptions struct {
+	reqTimeout time.Duration
+	// token, si no es vacío, exige Authorization: Bearer <token> en cada request.
+	token string
+	// loopbackOnly activa la defensa anti DNS-rebinding (Host loopback + Origin local).
+	// Se usa en modo loopback; en modo remoto el bearer token es el gate y estos checks
+	// romperían a clientes legítimos (que usan un Host no-loopback).
+	loopbackOnly bool
+}
+
 // HTTPHandler devuelve el http.Handler que sirve MCP sobre HTTP. POST /mcp recibe un
 // request JSON-RPC y responde el resultado; GET /mcp (upgrade SSE) queda reservado
-// (405) porque Musubi no emite mensajes server-initiated todavía. reqTimeout acota
-// cada request (espejo del deadline de 60s del stdio).
-func (s *McpServer) HTTPHandler(reqTimeout time.Duration) http.Handler {
+// (405) porque Musubi no emite mensajes server-initiated todavía.
+func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	var mu sync.Mutex // serializa el dispatch: línea base segura (sin RMW concurrente).
 	mux := http.NewServeMux()
 	mux.HandleFunc(mcpHTTPPath, func(w http.ResponseWriter, r *http.Request) {
-		// Defensa de superficie de red (guía de seguridad del transporte HTTP de MCP):
-		// solo loopback y sin Origin cross-site, aunque el bind ya esté forzado a loopback.
-		if !isLoopbackHost(r.Host) {
-			http.Error(w, "forbidden: non-loopback host", http.StatusForbidden)
-			return
+		// Defensa anti DNS-rebinding SOLO en modo loopback (guía de seguridad del
+		// transporte HTTP de MCP). En remoto, el bearer token es el gate.
+		if opt.loopbackOnly {
+			if !isLoopbackHost(r.Host) {
+				http.Error(w, "forbidden: non-loopback host", http.StatusForbidden)
+				return
+			}
+			if o := r.Header.Get("Origin"); o != "" && !isLocalOrigin(o) {
+				http.Error(w, "forbidden: cross-origin", http.StatusForbidden)
+				return
+			}
 		}
-		if o := r.Header.Get("Origin"); o != "" && !isLocalOrigin(o) {
-			http.Error(w, "forbidden: cross-origin", http.StatusForbidden)
+		// Autenticación: si hay token configurado, exigir Bearer válido (comparación
+		// en tiempo constante para no filtrar el token por timing).
+		if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if r.Method == http.MethodGet {
@@ -71,7 +97,7 @@ func (s *McpServer) HTTPHandler(reqTimeout time.Duration) http.Handler {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), reqTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), opt.reqTimeout)
 		defer cancel()
 
 		// Sección crítica acotada al dispatch; defer garantiza el unlock aunque
@@ -106,19 +132,62 @@ func writeHTTPJSON(w http.ResponseWriter, resp JsonRpcResponse) {
 	_, _ = w.Write(data)
 }
 
+// resolveServiceAuth resuelve el token (desde la env var nombrada) y si el bind es
+// loopback, aplicando el gating de seguridad: un bind NO-loopback exige token. Devuelve
+// error si la combinación es insegura. Es la lógica crítica de seguridad, aislada para
+// poder testearla sin abrir un socket.
+func resolveServiceAuth(cfg config.ServiceConfig) (token string, loopback bool, err error) {
+	loopback = isLoopbackHost(cfg.Addr)
+	if cfg.AuthTokenEnv != "" {
+		token = strings.TrimSpace(os.Getenv(cfg.AuthTokenEnv))
+		// Nombrar la env var señala intención de exigir auth. Si está vacía/ausente,
+		// fail-closed: arrancar sin auth violaría esa intención en silencio.
+		if token == "" {
+			return "", loopback, fmt.Errorf("service.auth_token_env apunta a %q pero esa variable de entorno está vacía o no existe: exportala con el bearer token, o quitá auth_token_env para correr sin auth (solo válido en loopback)", cfg.AuthTokenEnv)
+		}
+	}
+	if !loopback && token == "" {
+		return "", loopback, fmt.Errorf("service.addr %q es no-loopback pero no hay token: seteá service.auth_token_env apuntando a una variable de entorno con el bearer token, o usá una dirección loopback (127.0.0.1)", cfg.Addr)
+	}
+	return token, loopback, nil
+}
+
+// validBearer compara en tiempo constante el header Authorization contra el token
+// esperado (formato "Bearer <token>").
+func validBearer(authHeader, want string) bool {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return false
+	}
+	got := strings.TrimSpace(authHeader[len(prefix):])
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
 // ListenAndServeHTTP arranca el servidor HTTP en cfg.Addr y BLOQUEA hasta que ctx se
-// cancela (shutdown graceful). En este release solo admite bind a loopback.
+// cancela (shutdown graceful). Aplica el gating de auth (un bind no-loopback exige
+// token) y TLS si está configurado.
 func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceConfig) error {
-	if !isLoopbackHost(cfg.Addr) {
-		return fmt.Errorf("service.addr %q no es loopback: el bind remoto requiere autenticación (slice posterior); usá 127.0.0.1", cfg.Addr)
+	token, loopback, err := resolveServiceAuth(cfg)
+	if err != nil {
+		return err
 	}
 	timeout := time.Duration(cfg.RequestTimeoutSeconds * float64(time.Second))
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	// TLS medio-seteado (solo cert o solo key) es error, no un downgrade silencioso.
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return fmt.Errorf("config TLS incompleta: seteá AMBOS service.tls_cert_file y service.tls_key_file (o ninguno)")
+	}
+	useTLS := cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
+	if !loopback && !useTLS && !cfg.AllowInsecureToken {
+		// Bind remoto con token pero sin TLS: el token viajaría en texto plano.
+		// Fail-closed: hay que optar explícitamente (típico tras un proxy que termina TLS).
+		return fmt.Errorf("bind no-loopback %q sin TLS: el bearer token viajaría en texto plano. Configurá service.tls_cert_file/tls_key_file, o seteá service.allow_insecure_token: true si un proxy termina TLS por delante", cfg.Addr)
+	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(timeout),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -126,10 +195,20 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		WriteTimeout:      timeout + 30*time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	if useTLS {
+		// Pinear el piso de TLS explícitamente en vez de heredar el default del stdlib.
+		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 
-	logx.Info("musubi: servidor HTTP escuchando", "addr", cfg.Addr, "path", mcpHTTPPath)
+	logx.Info("musubi: servidor HTTP escuchando", "addr", cfg.Addr, "path", mcpHTTPPath, "tls", useTLS, "auth", token != "")
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() {
+		if useTLS {
+			serveErr <- srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			serveErr <- srv.ListenAndServe()
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -138,7 +217,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	case err := <-serveErr:
-		// ListenAndServe retornó por sí solo (típicamente un fallo de bind). El
+		// ListenAndServe(TLS) retornó por sí solo (típicamente un fallo de bind). El
 		// goroutine no queda colgado: ya envió a serveErr (buffer 1) y termina.
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
