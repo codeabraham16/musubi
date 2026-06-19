@@ -7,6 +7,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-06-19
+
+### Added
+- **Modo servicio: autenticación, bind remoto y TLS** (Track 4 / T4.3). Habilita exponer el
+  servidor MCP más allá de loopback, de forma segura:
+  - **Bearer token** (`service.auth_token_env`): nombra una variable de entorno con el token (nunca
+    en el YAML, patrón de `embedding.api_key_env`). Si hay token, todo request exige
+    `Authorization: Bearer <token>`, comparado en **tiempo constante** (`crypto/subtle`).
+  - **Gating de bind**: un `service.addr` **no-loopback exige token** — `musubi serve` se niega a
+    arrancar si no lo hay. El bind loopback puede seguir sin auth (default de desarrollo) con la
+    defensa anti DNS-rebinding (Host + Origin) ya existente.
+  - **TLS opcional** (`service.tls_cert_file` + `service.tls_key_file`): si ambos están, sirve HTTPS.
+    Un bind remoto sin TLS **avisa** que el token viaja en texto plano (no bloquea: un proxy que
+    termina TLS es válido).
+  - La defensa anti DNS-rebinding (Host loopback + Origin local) aplica solo en modo loopback; en
+    remoto el token es el gate (los checks de Host romperían clientes legítimos).
+- Tests: auth requerido/aceptado/rechazado, `resolveServiceAuth` (matriz loopback × token), y
+  `validBearer` (prefijo/trim/constant-time). Cero dependencias nuevas (`crypto/subtle`, stdlib).
+
+### Security
+- Endurecimientos fail-closed (de una revisión de seguridad adversarial de la superficie remota):
+  - `auth_token_env` nombrada pero con la env var vacía/ausente ahora es **error de arranque** (antes
+    deshabilitaba la auth en silencio, contra la intención del operador).
+  - Config TLS medio-seteada (solo `tls_cert_file` o solo `tls_key_file`) es **error** (antes
+    degradaba a HTTP en texto plano en silencio).
+  - Bind remoto con token pero **sin TLS** ahora **falla** salvo `service.allow_insecure_token: true`
+    explícito (para deploys con un proxy que termina TLS). Antes solo avisaba.
+  - Piso de TLS pineado explícitamente a 1.2 (`tls.Config{MinVersion}`).
+
 ## [0.21.0] - 2026-06-19
 
 ### Added

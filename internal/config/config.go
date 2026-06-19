@@ -198,6 +198,19 @@ type ServiceConfig struct {
 	// RequestTimeoutSeconds es el timeout por request HTTP (default 60), espejo del
 	// deadline de 60s del transporte stdio.
 	RequestTimeoutSeconds float64 `yaml:"request_timeout_seconds"`
+	// AuthTokenEnv es el nombre de la variable de entorno que contiene el bearer token
+	// requerido (patrón de EmbeddingConfig.APIKeyEnv: el secreto NUNCA va en el YAML).
+	// Vacío => sin autenticación (solo válido para bind loopback). Un bind no-loopback
+	// EXIGE un token (si no, `serve` se niega a arrancar).
+	AuthTokenEnv string `yaml:"auth_token_env,omitempty"`
+	// TLSCertFile y TLSKeyFile habilitan TLS (HTTPS) cuando AMBOS están seteados. Setear
+	// solo uno es error de arranque (no un downgrade silencioso a texto plano).
+	TLSCertFile string `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile  string `yaml:"tls_key_file,omitempty"`
+	// AllowInsecureToken permite arrancar con un bind no-loopback + token PERO sin TLS
+	// (el token viajaría en texto plano). Default false => fail-closed: hay que optar
+	// explícitamente (p.ej. cuando un proxy termina TLS por delante).
+	AllowInsecureToken bool `yaml:"allow_insecure_token,omitempty"`
 }
 
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
