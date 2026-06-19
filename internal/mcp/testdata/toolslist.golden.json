@@ -1,0 +1,559 @@
+{
+  "tools": [
+    {
+      "name": "musubi_save_observation",
+      "description": "Guarda una observación persistente o lección de aprendizaje. Si hay un proveedor de embeddings configurado, indexa el contenido para búsqueda semántica.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Contenido completo de la observación o lección"
+          },
+          "id": {
+            "type": "string",
+            "description": "Identificador único opcional; si se omite se genera un UUID y se deduplica por contenido"
+          },
+          "importance": {
+            "type": "number",
+            "description": "Peso opcional (\u003e0, default 1.0) que prioriza la observación en el recall"
+          },
+          "topic_key": {
+            "type": "string",
+            "description": "Clave de agrupación temática (ej. architecture/auth)"
+          }
+        },
+        "required": [
+          "topic_key",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall",
+      "description": "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Texto de la consulta"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "Techo de tokens del resultado (opcional; usa el default de la config)"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "musubi_memory_expand",
+      "description": "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "description": "Lista de ids de observaciones a expandir",
+            "items": {
+              "type": "string",
+              "description": "id de observación"
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "description": "Techo opcional de tokens a hidratar; recorta para no desbordar el contexto (0 = sin límite)"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      }
+    },
+    {
+      "name": "musubi_maintain",
+      "description": "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. No recibe parámetros (usa la config de maintenance). Devuelve un resumen.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_save_fact",
+      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT').",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Entidad objeto (ej. 'JWT')"
+          },
+          "predicate": {
+            "type": "string",
+            "description": "Relación (ej. 'usa', 'depende_de')"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Entidad sujeto (ej. 'auth')"
+          }
+        },
+        "required": [
+          "subject",
+          "predicate",
+          "object"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall_facts",
+      "description": "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "Entidad desde la que recorrer el grafo"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Profundidad del recorrido (opcional; usa el default de la config)"
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      }
+    },
+    {
+      "name": "musubi_entity_context",
+      "description": "Ensambla TODO el contexto de una entidad en una sola consulta barata en tokens: sus HECHOS del grafo + los GISTS de las observaciones (prosa) que la mencionan. Es el puente grafo\u003c-\u003eprosa; para el contenido completo de una observación usá musubi_memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "Entidad cuyo contexto se quiere reconstruir"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Profundidad del grafo (opcional; usa el default de la config)"
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_semantic",
+      "description": "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Número máximo de resultados (por defecto 5)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto de consulta a buscar semánticamente"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_keyword",
+      "description": "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Número máximo de resultados (por defecto 5)"
+          },
+          "query_text": {
+            "type": "string",
+            "description": "Texto o palabras clave a buscar"
+          }
+        },
+        "required": [
+          "query_text"
+        ]
+      }
+    },
+    {
+      "name": "musubi_log_error",
+      "description": "Registra un error de compilación o testeo capturado para el bucle de telemetría.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "error_message": {
+            "type": "string",
+            "description": "Detalle completo del compilador o linter"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Ruta del archivo que causó el error"
+          },
+          "suggested_patch": {
+            "type": "string",
+            "description": "Parche correctivo sugerido (opcional)"
+          }
+        },
+        "required": [
+          "file_path",
+          "error_message"
+        ]
+      }
+    },
+    {
+      "name": "musubi_resolve_telemetry",
+      "description": "Marca un log de telemetría como resuelto una vez corregido el error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "ID del log de telemetría a marcar como resuelto"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_resolve_skills",
+      "description": "Resuelve dinámicamente las reglas y skills activas según los archivos modificados, junto con la telemetría sin resolver.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "modified_files": {
+            "type": "array",
+            "description": "Listado de archivos que van a ser modificados o leídos",
+            "items": {
+              "type": "string",
+              "description": "Ruta o nombre del archivo"
+            }
+          }
+        },
+        "required": [
+          "modified_files"
+        ]
+      }
+    },
+    {
+      "name": "musubi_detect_stack",
+      "description": "Detecta el stack/ecosistema del proyecto actual (lenguajes y frameworks) inspeccionando archivos de manifiesto. No recibe parámetros. Devuelve JSON para que el agente investigue mejores prácticas oficiales y luego guarde skills con musubi_save_skill.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_save_skill",
+      "description": "Guarda una skill generada como {name}.yaml en .musubi/skills/ y crea el sentinel para no re-generar. IMPORTANTE: usar solo después de confirmar las reglas con el usuario. Por defecto NO sobrescribe skills existentes (pasa overwrite=true para forzar).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "description": "Herramientas requeridas en PATH (opcional)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Descripción breve de la skill (opcional)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre slug de la skill (solo letras minúsculas, números y guiones)"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Si es true, sobrescribe una skill existente (por defecto false)"
+          },
+          "rules": {
+            "type": "string",
+            "description": "Reglas de la skill en texto plano (mínimo 20 caracteres)"
+          },
+          "triggers": {
+            "type": "array",
+            "description": "Globs que activan la skill (ej. '*.go')",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          }
+        },
+        "required": [
+          "name",
+          "triggers",
+          "rules"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_skills",
+      "description": "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities. Devuelve candidatos con evidencia de aplicabilidad.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Cantidad máxima de resultados (usa MaxCandidates de la config por defecto)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto libre para filtrar candidatos por nombre o descripción (opcional)"
+          },
+          "stack": {
+            "type": "string",
+            "description": "Filtrar por ecosistema específico (ej. 'Go', 'Node.js') (opcional)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_log_skill_decision",
+      "description": "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "Decisión tomada: 'accepted' o 'rejected'"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre legible de la skill (opcional si se provee skill_id)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Justificación de la decisión (opcional)"
+          },
+          "skill_id": {
+            "type": "string",
+            "description": "Identificador slug de la skill (ej. 'go-gin')"
+          }
+        },
+        "required": [
+          "skill_id",
+          "decision"
+        ]
+      }
+    },
+    {
+      "name": "musubi_conflicts",
+      "description": "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_judge",
+      "description": "Emite el veredicto de una relación entre dos observaciones (resolución de conflictos model-free). relation ∈ {related, compatible, scoped, conflicts_with, supersedes, not_conflict}. Si es 'supersedes', la observación target queda oculta del recall.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Justificación breve (opcional)"
+          },
+          "relation": {
+            "type": "string",
+            "description": "Veredicto: related | compatible | scoped | conflicts_with | supersedes | not_conflict"
+          },
+          "relation_id": {
+            "type": "string",
+            "description": "ID de la relación a juzgar (de musubi_conflicts o de la respuesta de save)"
+          }
+        },
+        "required": [
+          "relation_id",
+          "relation"
+        ]
+      }
+    },
+    {
+      "name": "musubi_doctor",
+      "description": "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "check": {
+            "type": "string",
+            "description": "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Modo de reparación: plan | dry-run | apply (default dry-run)."
+          },
+          "repair": {
+            "type": "boolean",
+            "description": "Si es true, repara el check indicado (requiere 'check')."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_phase",
+      "description": "Pipeline por fases del loop dirigido (model-free): Musubi secuencia la tarea por fases (explore→plan→code→verify) y te recuerda la fase actual en cada turno. action ∈ {status, start, advance, set, clear}. 'start' requiere 'task'; 'set' requiere 'phase'. Llamá action=advance al terminar cada fase.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "status | start | advance | set | clear (default status)"
+          },
+          "phase": {
+            "type": "string",
+            "description": "Fase destino dentro de la secuencia (requerido para set)"
+          },
+          "task": {
+            "type": "string",
+            "description": "Nombre de la tarea (requerido para start)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_work",
+      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action ∈ {plan, claim, complete, status, clear}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "plan | claim | complete | status | clear"
+          },
+          "agent": {
+            "type": "string",
+            "description": "Para claim: etiqueta del sub-agente que reclama"
+          },
+          "batch": {
+            "type": "string",
+            "description": "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Para complete: ID de la unidad a cerrar"
+          },
+          "result": {
+            "type": "string",
+            "description": "Para complete: resultado/resumen producido por el sub-agente"
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "units": {
+            "type": "array",
+            "description": "Para plan: lista de unidades [{title, spec}] a postear"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_workflow",
+      "description": "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/\u003cid\u003e.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). Un step con `repeat_while` (+ `max_iterations`) se re-ejecuta como loop mientras la condición sea verdadera. action=validate valida una definición sin correrla; action=list lista los runs. action ∈ {start, next, complete, status, resume, validate, list}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "start | next | complete | status | resume | validate | list"
+          },
+          "definition": {
+            "type": "string",
+            "description": "Para start: definición YAML inline (alternativa a 'workflow')"
+          },
+          "result": {
+            "type": "string",
+            "description": "Para complete: resultado/resumen del step"
+          },
+          "run_id": {
+            "type": "string",
+            "description": "Identificador del run (lo elegís vos; persiste y permite resume)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "step": {
+            "type": "string",
+            "description": "Para complete: id del step que terminaste"
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Para start: id del workflow en .musubi/workflows/\u003cid\u003e.yaml"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_tokens",
+      "description": "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto (priming de arranque + recall por turno + hidratación), por superficie. action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "status | reset (default status)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_save_code",
+      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "gist": {
+            "type": "string",
+            "description": "Resumen corto de qué hace el archivo"
+          },
+          "path": {
+            "type": "string",
+            "description": "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"
+          },
+          "symbols": {
+            "type": "string",
+            "description": "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"
+          }
+        },
+        "required": [
+          "path",
+          "gist"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall_code",
+      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Devuelve fresh=true si el archivo no cambió desde que se guardó el gist, o fresh=false si conviene re-leerlo (o leer solo los símbolos que necesitás). Llamala ANTES de leer un archivo grande.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Ruta del archivo a recordar"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  ]
+}
