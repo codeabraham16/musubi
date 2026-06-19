@@ -35,7 +35,7 @@ jobs:
           - { goos: darwin,  goarch: amd64, asset: musubi-darwin-amd64 }
           - { goos: darwin,  goarch: arm64, asset: musubi-darwin-arm64 }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
