@@ -102,15 +102,21 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 	rows.Close()
 
 	if len(toArchive) > 0 {
-		placeholders := make([]string, len(toArchive))
-		args := make([]interface{}, len(toArchive))
-		for i, id := range toArchive {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		q := `UPDATE observations SET archived = 1 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
-		if _, err := e.db.Exec(q, args...); err != nil {
-			return DecayResult{}, fmt.Errorf("error al archivar memorias frías: %w", err)
+		// Trocear el IN(...) para respetar el tope de parámetros enlazados: un primer
+		// mantenimiento sobre una base grande puede archivar miles de filas de una sola
+		// pasada. Se marca archived_at = ahora para que la ventana de retención de la
+		// purga cuente DESDE el archivado (período de gracia), no desde el último acceso.
+		for _, chunk := range chunkStrings(toArchive, maxSQLParams) {
+			placeholders := make([]string, len(chunk))
+			args := make([]interface{}, len(chunk))
+			for i, id := range chunk {
+				placeholders[i] = "?"
+				args[i] = id
+			}
+			q := `UPDATE observations SET archived = 1, archived_at = CURRENT_TIMESTAMP WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+			if _, err := e.db.Exec(q, args...); err != nil {
+				return DecayResult{}, fmt.Errorf("error al archivar memorias frías: %w", err)
+			}
 		}
 		// Sacar del índice vectorial las que se archivaron (dejan de ser elegibles).
 		// El re-filtro SQL ya garantiza correctness; esto mantiene afilado el recall.

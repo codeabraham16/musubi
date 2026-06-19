@@ -94,7 +94,7 @@ func runMaintain() {
 	}
 	defer engine.Close()
 
-	cons, dec, err := maintenanceCycle(engine, cfg.Maintenance)
+	rep, err := maintenanceCycle(engine, cfg.Maintenance)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error en el mantenimiento: %v\n", err)
 		os.Exit(1)
@@ -102,23 +102,23 @@ func runMaintain() {
 	_ = engine.MarkMaintenanceNow()
 
 	fmt.Printf("Mantenimiento de memoria completo:\n")
-	fmt.Printf("  Consolidación: %d fusionadas de %d escaneadas\n", cons.Merged, cons.Scanned)
-	fmt.Printf("  Olvido: %d archivadas de %d escaneadas\n", dec.Archived, dec.Scanned)
+	fmt.Printf("  Consolidación: %d fusionadas de %d escaneadas\n", rep.Consolidate.Merged, rep.Consolidate.Scanned)
+	fmt.Printf("  Olvido: %d archivadas de %d escaneadas\n", rep.Decay.Archived, rep.Decay.Scanned)
+	fmt.Printf("  Retención: %d purgadas\n", rep.Purged)
 }
 
-// maintenanceCycle corre consolidación + olvido con la config dada. Lo usan el
+// maintenanceCycle corre el ciclo de mantenimiento completo (consolidar + olvidar +
+// purgar + compactar) con la config dada, delegando en engine.Maintain. Lo usan el
 // subcomando `maintain` y el auto-mantenimiento del daemon.
-func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memory.ConsolidateResult, memory.DecayResult, error) {
-	cons, err := engine.Consolidate(m.DedupThreshold)
-	if err != nil {
-		return cons, memory.DecayResult{}, err
-	}
-	dec, err := engine.Decay(memory.DecayOptions{
-		HalfLifeDays: m.DecayHalfLifeDays,
-		MinSalience:  m.DecayMinSalience,
-		MinAgeDays:   m.DecayMinAgeDays,
+func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memory.MaintenanceReport, error) {
+	return engine.Maintain(memory.MaintenanceOptions{
+		DedupThreshold:         m.DedupThreshold,
+		DecayHalfLifeDays:      m.DecayHalfLifeDays,
+		DecayMinSalience:       m.DecayMinSalience,
+		DecayMinAgeDays:        m.DecayMinAgeDays,
+		PurgeArchivedAfterDays: m.PurgeArchivedAfterDays,
+		Vacuum:                 m.Vacuum,
 	})
-	return cons, dec, err
 }
 
 
@@ -157,12 +157,12 @@ func runDaemon() {
 	// stderr y best-effort: nunca bloquea ni rompe el arranque del daemon.
 	if cfg.Maintenance.AutoIntervalHours > 0 {
 		if due, derr := engine.MaintenanceDue(cfg.Maintenance.AutoIntervalHours); derr == nil && due {
-			cons, dec, mErr := maintenanceCycle(engine, cfg.Maintenance)
+			rep, mErr := maintenanceCycle(engine, cfg.Maintenance)
 			if mErr != nil {
 				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento falló: %v\n", mErr)
 			} else {
 				_ = engine.MarkMaintenanceNow()
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas\n", cons.Merged, dec.Archived)
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Purged)
 			}
 		}
 	}

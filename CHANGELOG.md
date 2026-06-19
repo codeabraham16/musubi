@@ -7,6 +7,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-19
+
+### Added
+- **Retención y compactación de memoria** (Track 1 / T1.3, **cierra el track de cimientos de datos**).
+  Acota el crecimiento perpetuo de la base y reclama espacio, manteniéndose local-first y model-free:
+  - **Purga dura** (`PurgeArchived`): borra DEFINITIVAMENTE las observaciones archivadas cuyo
+    `archived_at` supera la ventana de retención (`maintenance.purge_archived_after_days`, default 90),
+    en una transacción que limpia embeddings (FK CASCADE), relaciones semánticas y punteros
+    `superseded_by`. El olvido (decay) solo marcaba `archived` sin borrar nunca; esto las elimina.
+  - **Compactación física** (`Compact`): `wal_checkpoint(TRUNCATE)` + `PRAGMA optimize` siempre, y
+    `VACUUM` tras una purga que borró filas (`maintenance.vacuum`, default true).
+  - **`engine.Maintain`** centraliza el ciclo (consolidar → olvidar → purgar → compactar); lo comparten
+    el subcomando `maintain`, el auto-mantenimiento del daemon y la tool MCP `musubi_maintain`.
+  - Columna `archived_at` (migración v3): la ventana de retención cuenta **desde el archivado**
+    (período de gracia), no desde el último acceso.
+  - Índice `idx_obs_archived` (migración v2) — primera migración post-baseline, sobre el framework de v0.15.0.
+
+### Changed
+- **Consolidación O(n²) → ~O(n)**: índice invertido de trigramas + bucket de igualdad exacta, en vez de
+  comparar cada observación contra todos los canónicos. Resultado idéntico al algoritmo previo (verificado
+  con un test diferencial); escala a bases grandes.
+- Tuning explícito del pool de conexiones SQLite (`SetMaxOpenConns`/`Idle`/`ConnMaxIdleTime`).
+- Hidratación de observaciones (`expand.go`) ahora respeta el `context` del caller (variantes `…Ctx`),
+  en vez de un `context.Background()` interno que ignoraba el deadline.
+
+### Fixed
+- La purga (hard-delete irreversible) **ya no se habilita por un upgrade silencioso**: un config sin bloque
+  `maintenance` queda con la purga desactivada; solo se activa con el campo explícito.
+- `Decay` trocea su `UPDATE … IN (…)` (antes podía superar el tope de parámetros y abortar el ciclo de
+  mantenimiento en bases grandes).
+- Al consolidar una observación que era fuente de un `supersede`, los punteros `superseded_by` se
+  re-apuntan al canónico (la observación ocultada sigue oculta, no reaparece en el recall).
+
 ## [0.16.0] - 2026-06-19
 
 ### Added
@@ -229,7 +262,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/codeabraham16/musubi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/codeabraham16/musubi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/codeabraham16/musubi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/codeabraham16/musubi/compare/v0.13.0...v0.14.0

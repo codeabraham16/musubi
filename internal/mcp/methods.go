@@ -731,22 +731,18 @@ func (s *McpServer) toolEntityContext(raw json.RawMessage) (interface{}, *RpcErr
 }
 
 func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
-	cons, err := s.engine.Consolidate(s.maintenance.DedupThreshold)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "error al consolidar: %v", err)
-	}
-	dec, err := s.engine.Decay(memory.DecayOptions{
-		HalfLifeDays: s.maintenance.DecayHalfLifeDays,
-		MinSalience:  s.maintenance.DecayMinSalience,
-		MinAgeDays:   s.maintenance.DecayMinAgeDays,
+	rep, err := s.engine.Maintain(memory.MaintenanceOptions{
+		DedupThreshold:         s.maintenance.DedupThreshold,
+		DecayHalfLifeDays:      s.maintenance.DecayHalfLifeDays,
+		DecayMinSalience:       s.maintenance.DecayMinSalience,
+		DecayMinAgeDays:        s.maintenance.DecayMinAgeDays,
+		PurgeArchivedAfterDays: s.maintenance.PurgeArchivedAfterDays,
+		Vacuum:                 s.maintenance.Vacuum,
 	})
 	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "error en decay: %v", err)
+		return nil, rpcErrorf(codeInternalError, "error en el mantenimiento: %v", err)
 	}
-	return jsonResult(map[string]interface{}{
-		"consolidate": cons,
-		"decay":       dec,
-	})
+	return jsonResult(rep)
 }
 
 func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {

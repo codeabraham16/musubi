@@ -52,6 +52,32 @@ func schemaMigrations() []migration {
 				return addObservationColumns(x)
 			},
 		},
+		{
+			version: 2,
+			name:    "idx_obs_archived",
+			// Índice por `archived`: acelera la purga de retención (WHERE archived=1)
+			// y el scan del olvido (WHERE archived=0). Primera migración post-baseline:
+			// alcanza también a bases ya migradas a v1 (que no re-ejecutan la baseline).
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_archived ON observations(archived)`)
+				return err
+			},
+		},
+		{
+			version: 3,
+			name:    "archived_at",
+			// Columna archived_at: marca CUÁNDO se archivó una observación, para que la
+			// purga de retención cuente la ventana DESDE el archivado (período de gracia
+			// real) y no desde el último acceso. Backfill de las ya archivadas con su
+			// último uso, para no cambiar su elegibilidad de purga retroactivamente.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`ALTER TABLE observations ADD COLUMN archived_at DATETIME`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`UPDATE observations SET archived_at = COALESCE(last_accessed, created_at) WHERE archived = 1 AND archived_at IS NULL`)
+				return err
+			},
+		},
 	}
 }
 
