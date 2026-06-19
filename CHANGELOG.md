@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-19
+
+### Added
+- **Esquema versionado con migraciones** (`PRAGMA user_version`): runner que aplica las
+  migraciones pendientes, **cada una en su propia transacción** (DDL + bump de versión atómicos;
+  si una falla, rollback y la versión no avanza). La migración `baseline` encapsula el esquema
+  histórico completo + las columnas de eficiencia de memoria; es idempotente sobre bases
+  preexistentes (una base v0.14 solo avanza su `user_version` sin reescribir nada). Track 1 (T1.1)
+  del rumbo de escalabilidad perpetua: habilita cambios de esquema NO aditivos (renames, tipos,
+  tablas nuevas con backfill) de forma ordenada y resumible, que antes no tenían camino de upgrade.
+
+### Changed
+- `internal/memory/database.go`: el esquema (`initSchema`/`migrateObservations`) se refactorizó
+  sobre una interfaz `execQuerier` (satisfecha por `*sql.DB` y `*sql.Tx`) para que la migración
+  baseline corra dentro de una transacción. Los métodos previos se conservan como wrappers (sin
+  cambio de comportamiento para el auto-repair del doctor ni los tests). Los backfills que dependen
+  de la versión del estimador de tokens siguen como pasos idempotentes post-migración.
+
 ## [0.14.0] - 2026-06-18
 
 ### Added
@@ -183,7 +201,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/codeabraham16/musubi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/codeabraham16/musubi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/codeabraham16/musubi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/codeabraham16/musubi/compare/v0.11.0...v0.12.0

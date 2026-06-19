@@ -34,17 +34,17 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
 	}
 
+	// Esquema versionado (PRAGMA user_version): runMigrations aplica las migraciones
+	// pendientes, cada una en su propia transacción. La migración baseline crea el
+	// esquema y agrega las columnas de eficiencia de memoria; es idempotente sobre
+	// bases preexistentes (todo CREATE ... IF NOT EXISTS / ADD COLUMN guardado), así
+	// que una base ya migrada solo avanza su user_version sin reescribir nada.
+	if err := runMigrations(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	engine := &DbEngine{db: db, path: dbPath}
-	if err := engine.initSchema(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	// Migración aditiva: agrega las columnas de eficiencia de memoria a bases
-	// preexistentes y backfillea gist/tokens/content_hash de filas viejas.
-	if err := engine.migrateObservations(); err != nil {
-		db.Close()
-		return nil, err
-	}
 	// Aplicar los divisores de tokens calibrados de esta DB (o defaults) ANTES de
 	// backfillear/recomputar, para que los tokens se calculen con el divisor activo.
 	if err := engine.applyCalibratedDivisors(); err != nil {
@@ -85,7 +85,13 @@ func (e *DbEngine) recomputeTokensIfEstimatorChanged() error {
 // observationColumns devuelve el conjunto de columnas presentes hoy en la tabla
 // observations (vía PRAGMA table_info), para hacer la migración idempotente.
 func (e *DbEngine) observationColumns() (map[string]bool, error) {
-	rows, err := e.db.Query(`PRAGMA table_info(observations)`)
+	return observationColumnsOn(e.db)
+}
+
+// observationColumnsOn lee las columnas de observations sobre cualquier ejecutor
+// (conexión o transacción), para que la migración baseline funcione dentro de tx.
+func observationColumnsOn(x execQuerier) (map[string]bool, error) {
+	rows, err := x.Query(`PRAGMA table_info(observations)`)
 	if err != nil {
 		return nil, fmt.Errorf("error al leer columnas de observations: %w", err)
 	}
@@ -111,9 +117,17 @@ func (e *DbEngine) observationColumns() (map[string]bool, error) {
 }
 
 // migrateObservations agrega de forma idempotente las columnas de eficiencia de
-// memoria (gist, content_hash, tokens, last_accessed, access_count, importance)
-// y el índice por content_hash. SQLite ADD COLUMN no reescribe la tabla.
+// memoria y el índice por content_hash. Se conserva como método para el auto-repair
+// del doctor (doctor.go); la migración baseline usa addObservationColumns directamente.
 func (e *DbEngine) migrateObservations() error {
+	return addObservationColumns(e.db)
+}
+
+// addObservationColumns agrega de forma idempotente las columnas de eficiencia de
+// memoria (gist, content_hash, tokens, last_accessed, access_count, importance,
+// archived, superseded_by) y el índice por content_hash, sobre cualquier ejecutor.
+// SQLite ADD COLUMN no reescribe la tabla.
+func addObservationColumns(x execQuerier) error {
 	wanted := []struct{ name, ddl string }{
 		{"gist", "gist TEXT"},
 		{"content_hash", "content_hash TEXT"},
@@ -124,7 +138,7 @@ func (e *DbEngine) migrateObservations() error {
 		{"archived", "archived INTEGER NOT NULL DEFAULT 0"},
 		{"superseded_by", "superseded_by TEXT"},
 	}
-	existing, err := e.observationColumns()
+	existing, err := observationColumnsOn(x)
 	if err != nil {
 		return err
 	}
@@ -132,11 +146,11 @@ func (e *DbEngine) migrateObservations() error {
 		if existing[c.name] {
 			continue
 		}
-		if _, err := e.db.Exec("ALTER TABLE observations ADD COLUMN " + c.ddl); err != nil {
+		if _, err := x.Exec("ALTER TABLE observations ADD COLUMN " + c.ddl); err != nil {
 			return fmt.Errorf("error al migrar columna %s: %w", c.name, err)
 		}
 	}
-	if _, err := e.db.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(content_hash)`); err != nil {
+	if _, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(content_hash)`); err != nil {
 		return fmt.Errorf("error al crear índice content_hash: %w", err)
 	}
 	return nil
@@ -180,7 +194,15 @@ func (e *DbEngine) Close() error {
 	return e.db.Close()
 }
 
+// initSchema crea el esquema base sobre la conexión del engine. Se conserva como
+// método para los tests de idempotencia; la migración baseline usa initSchemaOn.
 func (e *DbEngine) initSchema() error {
+	return initSchemaOn(e.db)
+}
+
+// initSchemaOn crea todas las tablas/índices/triggers base sobre cualquier ejecutor
+// (conexión o transacción). Todo es CREATE ... IF NOT EXISTS, así que es idempotente.
+func initSchemaOn(x execQuerier) error {
 	queries := []string{
 		// Tabla de observaciones de engram
 		`CREATE TABLE IF NOT EXISTS observations (
@@ -335,7 +357,7 @@ func (e *DbEngine) initSchema() error {
 	}
 
 	for _, query := range queries {
-		if _, err := e.db.Exec(query); err != nil {
+		if _, err := x.Exec(query); err != nil {
 			return fmt.Errorf("error ejecutando migración de esquema: %w", err)
 		}
 	}
