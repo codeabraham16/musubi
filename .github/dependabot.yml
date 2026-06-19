@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Dependencias Go (módulos directos: uuid, yaml.v3, modernc.org/sqlite).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+  # Acciones de GitHub usadas por los workflows de CI/release.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

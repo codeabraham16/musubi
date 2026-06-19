@@ -12,13 +12,6 @@ import (
 // memoria eficiente de Musubi: estimación de tokens, gist extractivo y hash de
 // contenido para deduplicar. Son la base del recall por presupuesto.
 
-// charsPerToken es el divisor caracteres->tokens por defecto (prosa). El
-// tokenizador real de Claude es propietario; usamos una heurística calibrada por
-// TIPO de contenido (prosa/código/JSON) derivada de mediciones públicas, sesgada
-// a NO subcontar: presupuestar de menos desborda el contexto real, presupuestar
-// de más solo deja algo de margen.
-const charsPerToken = 4
-
 // Divisores chars/token por tipo de contenido (ASCII) por defecto. Cuanto más
 // denso en símbolos, menor el divisor (más tokens por carácter). Conservadores.
 const (

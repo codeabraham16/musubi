@@ -7,6 +7,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **CI endurecido**: `golangci-lint` (gate con `.golangci.yml`: linters estándar + preset de
+  manejo de errores idiomático), **piso de cobertura** (CI falla si baja de 70%), `govulncheck`
+  (escaneo de vulnerabilidades) y **Dependabot** (módulos Go + GitHub Actions). Antes el CI solo
+  corría `vet`/`build`/`test -race`.
+
+### Fixed
+- Limpieza de lint: eliminado el `const charsPerToken` muerto; mensajes de error de Ollama en
+  minúscula (ST1005); comentarios de paquete en `memory`, `skills`, `mcp` y el comando `musubi`.
+
 ## [0.17.0] - 2026-06-19
 
 ### Added

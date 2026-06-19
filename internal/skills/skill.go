@@ -1,3 +1,5 @@
+// Package skills carga y resuelve las skills (reglas de comportamiento en YAML)
+// que Musubi inyecta según el contexto del proyecto.
 package skills
 
 // Skill representa una regla de comportamiento cargada desde un archivo YAML.
