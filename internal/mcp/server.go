@@ -121,7 +121,6 @@ type McpServer struct {
 	// una vez en NewMcpServer desde buildRegistry.
 	tools     []toolEntry
 	toolIndex map[string]toolHandler
-	out       io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -144,7 +143,6 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		conflicts:   config.Default().Conflicts,
 		pipeline:    config.Default().Pipeline,
 		multiagent:  config.Default().MultiAgent,
-		out:         os.Stdout,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -165,10 +163,10 @@ func (s *McpServer) Start() {
 }
 
 // Serve procesa pedidos JSON-RPC línea a línea desde in y escribe respuestas en out.
-// El loop es de un solo goroutine; *sql.DB es seguro pero las peticiones se
-// atienden de forma secuencial.
+// Es el transporte stdio (modo daemon): un solo goroutine, peticiones secuenciales.
+// Cada respuesta se escribe en el out local — Serve no comparte estado mutable, así
+// que Dispatch es seguro para usar concurrentemente desde otros transportes.
 func (s *McpServer) Serve(in io.Reader, out io.Writer) {
-	s.out = out
 	reader := bufio.NewReader(in)
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -176,10 +174,12 @@ func (s *McpServer) Serve(in io.Reader, out io.Writer) {
 		if len(bytes.TrimSpace(line)) > 0 {
 			var req JsonRpcRequest
 			if jerr := json.Unmarshal(line, &req); jerr != nil {
-				s.send(JsonRpcResponse{JsonRpc: "2.0", Error: rpcErrorf(codeParseError, "Parse error")})
+				writeResponse(out, JsonRpcResponse{JsonRpc: "2.0", Error: rpcErrorf(codeParseError, "Parse error")})
 			} else {
 				reqCtx, reqCancel := context.WithTimeout(context.Background(), 60*time.Second)
-				s.handleRequest(reqCtx, req)
+				if resp, ok := s.Dispatch(reqCtx, req); ok {
+					writeResponse(out, resp)
+				}
 				reqCancel()
 			}
 		}
@@ -193,56 +193,65 @@ func (s *McpServer) Serve(in io.Reader, out io.Writer) {
 	}
 }
 
-func (s *McpServer) handleRequest(ctx context.Context, req JsonRpcRequest) {
+// Dispatch procesa un request JSON-RPC y DEVUELVE la respuesta (sin escribir a ningún
+// writer). El segundo valor es false para notificaciones (sin id), que por spec no
+// reciben respuesta. Al no tocar estado mutable compartido y leer solo campos fijados
+// en NewMcpServer (toolIndex, engine, embedder), Dispatch es seguro para llamarse
+// concurrentemente: cada transporte (stdio, HTTP) serializa su propia escritura.
+func (s *McpServer) Dispatch(ctx context.Context, req JsonRpcRequest) (JsonRpcResponse, bool) {
 	// Per JSON-RPC 2.0, una notificación (sin id) NUNCA recibe respuesta, ni
 	// siquiera para métodos conocidos.
 	if req.ID == nil {
-		return
+		return JsonRpcResponse{}, false
 	}
 	if req.JsonRpc != "2.0" {
-		s.sendError(req.ID, rpcErrorf(codeInvalidRequest, "jsonrpc field must be \"2.0\""))
-		return
+		return errResponse(req.ID, rpcErrorf(codeInvalidRequest, "jsonrpc field must be \"2.0\"")), true
 	}
 	// Recover de cualquier panic en handlers o en la capa de memoria/embedder,
 	// para que un crash interno no mate el servidor sino que devuelva un error al cliente.
-	defer func() {
-		if r := recover(); r != nil {
-			logx.Error("panic en handler", "method", req.Method, "panic", r)
-			s.sendError(req.ID, rpcErrorf(codeInternalError, "error interno inesperado"))
+	resp := errResponse(req.ID, rpcErrorf(codeInternalError, "error interno inesperado"))
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logx.Error("panic en handler", "method", req.Method, "panic", r)
+				// resp ya quedó con el error interno por defecto.
+			}
+		}()
+		switch req.Method {
+		case "initialize":
+			resp = okResponse(req.ID, s.handleInitialize())
+		case "tools/list":
+			resp = okResponse(req.ID, s.handleToolsList())
+		case "tools/call":
+			result, rpcErr := s.handleToolsCall(ctx, req.Params)
+			if rpcErr != nil {
+				resp = errResponse(req.ID, rpcErr)
+			} else {
+				resp = okResponse(req.ID, result)
+			}
+		default:
+			resp = errResponse(req.ID, rpcErrorf(codeMethodNotFound, "Method not found: %s", req.Method))
 		}
 	}()
-	switch req.Method {
-	case "initialize":
-		s.sendResult(req.ID, s.handleInitialize())
-	case "tools/list":
-		s.sendResult(req.ID, s.handleToolsList())
-	case "tools/call":
-		result, rpcErr := s.handleToolsCall(ctx, req.Params)
-		if rpcErr != nil {
-			s.sendError(req.ID, rpcErr)
-			return
-		}
-		s.sendResult(req.ID, result)
-	default:
-		s.sendError(req.ID, rpcErrorf(codeMethodNotFound, "Method not found: %s", req.Method))
-	}
+	return resp, true
 }
 
-func (s *McpServer) sendResult(id interface{}, result interface{}) {
-	s.send(JsonRpcResponse{JsonRpc: "2.0", ID: id, Result: result})
+func okResponse(id interface{}, result interface{}) JsonRpcResponse {
+	return JsonRpcResponse{JsonRpc: "2.0", ID: id, Result: result}
 }
 
-func (s *McpServer) sendError(id interface{}, rpcErr *RpcError) {
-	s.send(JsonRpcResponse{JsonRpc: "2.0", ID: id, Error: rpcErr})
+func errResponse(id interface{}, rpcErr *RpcError) JsonRpcResponse {
+	return JsonRpcResponse{JsonRpc: "2.0", ID: id, Error: rpcErr}
 }
 
-// send serializa y emite una respuesta, reportando fallos de marshal a stderr
-// (nunca a stdout, que es el canal JSON-RPC).
-func (s *McpServer) send(res JsonRpcResponse) {
+// writeResponse serializa y emite una respuesta al writer dado, reportando fallos de
+// marshal a stderr (nunca a stdout, que es el canal JSON-RPC). Es stateless: el writer
+// lo provee el transporte que llama, no un campo compartido del servidor.
+func writeResponse(out io.Writer, res JsonRpcResponse) {
 	data, err := json.Marshal(res)
 	if err != nil {
 		logx.Error("error serializando respuesta JSON-RPC", "error", err)
 		return
 	}
-	fmt.Fprintf(s.out, "%s\n", data)
+	fmt.Fprintf(out, "%s\n", data)
 }

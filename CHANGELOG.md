@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-19
+
+### Changed
+- **Seam de dispatch** (Track 4 / T4.1, **abre el track de modo servicio**): se extrajo
+  `(*McpServer).Dispatch(ctx, req) (JsonRpcResponse, bool)` del viejo `handleRequest`. Ahora el
+  dispatch **devuelve** la respuesta en vez de escribirla a un campo compartido `s.out`; cada
+  transporte serializa su propia escritura (`writeResponse(out, resp)`). Esto **elimina el único
+  hazard de memoria** del servidor (la mutación de `s.out` + `send`) y deja a `Dispatch` seguro para
+  llamarse concurrentemente — el prerequisito para los transportes de red de Track 4 (HTTP en v0.21.0).
+  - El modo stdio (`musubi daemon`) queda **idéntico en comportamiento**: un goroutine, secuencial,
+    60s por request, shutdown graceful. Solo cambió la plomería interna.
+  - `Dispatch` lee únicamente estado fijado en `NewMcpServer` (registro de tools, motor, embedder,
+    config) y no muta nada compartido; los handlers no escriben campos del servidor.
+
+### Added
+- Test de concurrencia `TestDispatchConcurrentSafe`: 64 goroutines disparan lecturas y escrituras
+  en paralelo contra un servidor + motor compartidos (saves que ejercitan el `Add` al índice IVF y
+  el rebuild en background, búsquedas que toman el RLock, `tools/list`). Corre bajo `-race` en CI
+  como red de seguridad permanente de la concurrencia.
+
 ## [0.19.0] - 2026-06-19
 
 ### Added
