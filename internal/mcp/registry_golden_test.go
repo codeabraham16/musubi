@@ -6,12 +6,17 @@ package mcp
 // cambio intencional de tools: go test ./internal/mcp -run TestToolsListGolden -update
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// normalizeEOL quita los CR para que la comparación sea robusta al fin de línea del
+// working tree (git autocrlf en Windows deja CRLF aunque el repo guarde LF).
+func normalizeEOL(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
 
 var updateGolden = flag.Bool("update", false, "regenera los golden files de este paquete")
 
@@ -38,7 +43,7 @@ func TestToolsListGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leer golden (%s): %v — corré con -update para generarlo", golden, err)
 	}
-	if string(got) != string(want) {
+	if !bytes.Equal(normalizeEOL(got), normalizeEOL(want)) {
 		t.Errorf("la salida de tools/list cambió respecto del golden.\n" +
 			"Si el cambio es intencional, regenerá con:\n" +
 			"  go test ./internal/mcp -run TestToolsListGolden -update")

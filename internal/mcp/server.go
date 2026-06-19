@@ -96,7 +96,7 @@ func WithMultiAgent(c config.MultiAgentConfig) Option {
 }
 
 type McpServer struct {
-	engine   *memory.DbEngine
+	engine   memory.StorageBackend
 	resolver *skills.Resolver
 	embedder embedding.Provider
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
@@ -128,7 +128,7 @@ type McpServer struct {
 // texto; usá embedding.NoopProvider{} para desactivar la búsqueda semántica.
 // opts son opciones funcionales aditivas (ej. WithSourcing); los callers existentes
 // de 3 argumentos compilan sin cambios.
-func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embedding.Provider, opts ...Option) *McpServer {
+func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder embedding.Provider, opts ...Option) *McpServer {
 	if embedder == nil {
 		embedder = embedding.NoopProvider{}
 	}
