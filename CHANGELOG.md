@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-06-19
+
+### Added
+- **Interfaz `StorageBackend`** (Track 3 / T3.2): el contrato completo que un backend de memoria
+  debe cumplir para servir a la app (servidor MCP + CLI). `*memory.DbEngine` (SQLite local-first,
+  puro Go, model-free) es la implementación de referencia; un backend alternativo —p.ej. el modo
+  servicio de Track 4— implementa la misma interfaz **sin que los consumidores cambien**. Es el seam
+  de extensibilidad de Track 3.
+  - Compuesta de interfaces de rol chicas (idioma Go: "interfaces chicas, compuestas") —
+    `ObservationStore`, `GraphStore`, `RelationStore`, `WorkStore`, `WorkflowStore`, `LedgerStore`,
+    `MetaStore`, `PhaseStore`, `Maintainer`, `Doctor`, `Calibrator`, etc. — para que cada consumidor
+    dependa solo del subconjunto que usa.
+  - `internal/mcp` ahora depende de `memory.StorageBackend`, no de `*memory.DbEngine` concreto.
+    Esto **desacopla el layer MCP del motor** y habilita tests de handlers en aislamiento con un
+    backend falso (ver `TestStorageBackendSeam_ConflictsViaFake`).
+  - Aserción en tiempo de compilación `var _ StorageBackend = (*DbEngine)(nil)`: agregar un método al
+    contrato que el motor no implemente —o cambiar una firma— rompe la compilación de inmediato.
+
+### Fixed
+- El test golden de `tools/list` ahora normaliza el fin de línea (CRLF→LF) antes de comparar: era
+  frágil en working trees de Windows con `git autocrlf` (el repo guarda LF pero el checkout deja CRLF).
+  CI (Linux) no se veía afectado; el fix lo hace robusto en cualquier entorno.
+
 ## [0.18.0] - 2026-06-19
 
 ### Added
