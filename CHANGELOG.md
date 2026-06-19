@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-19
+
+### Added
+- **Modo servicio: observabilidad** (Track 4 / T4.4, **cierra el track de modo servicio**). Endpoints
+  operativos en el transporte HTTP, todo stdlib (+ el `uuid` ya presente), cero dependencias nuevas:
+  - **`GET /healthz`** — liveness (200 si el proceso responde). Sin auth.
+  - **`GET /readyz`** — readiness: sondea el motor con una lectura barata (`GetMeta`); 200 si responde,
+    503 si no, para que un orquestador no rutee tráfico hasta que la DB esté lista. Sin auth.
+  - **`GET /metrics`** — contadores en formato texto Prometheus (`musubi_http_requests_total` por
+    resultado: ok / client_error / unauthorized / server_error). Detrás de auth si hay token (datos
+    operativos); abierto en loopback sin token.
+  - **Correlation IDs**: cada request al MCP recibe un `X-Request-Id` (el entrante si viene, o uno
+    nuevo) que se devuelve en la respuesta, para trazar peticiones extremo a extremo.
+
 ## [0.22.0] - 2026-06-19
 
 ### Added
