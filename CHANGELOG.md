@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-06-19
+
+### Changed
+- **Concurrencia de lectura en el transporte HTTP** (Track 4 / T4.5): el dispatch ahora usa un
+  `sync.RWMutex` y clasifica cada tool por si muta estado. Las **7 tools de solo-lectura**
+  (`search_semantic`, `search_keyword`, `recall_facts`, `entity_context`, `conflicts`,
+  `detect_stack`, `search_skills`) corren **concurrentes entre sí** (RLock); las que mutan toman el
+  lock exclusivo (serializadas, sin lost-updates de read-modify-write). Se removió la serialización
+  global del handler HTTP: peticiones de lectura concurrentes ya no se encolan detrás de una sola.
+  - La clasificación es **fail-safe**: una tool es de-escritura por defecto; solo se marca
+    `readOnly` tras verificar que no escribe DB, ni índice, ni ledger, ni hace `bumpAccess`. (Por eso
+    `recall`/`memory_expand`/`recall_code` quedan como escritura: bumpean acceso o registran tokens.)
+  - El modo stdio (un goroutine) no cambia: el RWMutex queda siempre libre, costo nulo.
+
+### Added
+- `TestToolReadOnlyClassification`: congela el conjunto exacto de tools de solo-lectura y es un guard
+  de regresión contra marcar como `readOnly` una tool que muta (bug RMW que `-race` no detecta).
+  `TestConcurrentReadDispatch`: dispara tools de lectura en paralelo (corre bajo `-race` en CI).
+
 ## [0.23.0] - 2026-06-19
 
 ### Added

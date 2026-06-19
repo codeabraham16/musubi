@@ -20,9 +20,15 @@ type toolHandler func(ctx context.Context, raw json.RawMessage) (interface{}, *R
 
 // toolEntry liga el schema público de una tool (lo que ve tools/list) con su handler
 // (lo que ejecuta tools/call). Es la unidad atómica del registro.
+//
+// readOnly marca las tools que NO mutan estado (ni DB, ni índice, ni ledger, ni
+// bumpAccess): el dispatch las corre bajo RLock (concurrentes entre sí). El default es
+// false = se asume que muta y corre bajo Lock exclusivo (fail-safe: una tool nueva es
+// segura por defecto; recién marcás readOnly tras VERIFICAR que es pura lectura).
 type toolEntry struct {
 	Tool
-	handler toolHandler
+	handler  toolHandler
+	readOnly bool
 }
 
 // noCtx adapta un handler que no usa el contexto del request a la firma uniforme
@@ -152,7 +158,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"entity"},
 				},
 			},
-			handler: noCtx(s.toolRecallFacts),
+			handler:  noCtx(s.toolRecallFacts),
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -167,7 +174,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"entity"},
 				},
 			},
-			handler: noCtx(s.toolEntityContext),
+			handler:  noCtx(s.toolEntityContext),
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -182,7 +190,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"query"},
 				},
 			},
-			handler: s.toolSearchSemantic,
+			handler:  s.toolSearchSemantic,
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -197,7 +206,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"query_text"},
 				},
 			},
-			handler: s.toolSearchKeyword,
+			handler:  s.toolSearchKeyword,
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -256,7 +266,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{},
 				},
 			},
-			handler: noCtx(s.toolDetectStack),
+			handler:  noCtx(s.toolDetectStack),
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -290,7 +301,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					},
 				},
 			},
-			handler: noCtx(s.toolSearchSkills),
+			handler:  noCtx(s.toolSearchSkills),
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -318,7 +330,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{},
 				},
 			},
-			handler: noCtx(s.toolConflicts),
+			handler:  noCtx(s.toolConflicts),
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
