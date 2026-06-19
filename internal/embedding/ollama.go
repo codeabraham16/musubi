@@ -61,7 +61,7 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Ollama devolvió status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("ollama devolvió status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var out struct {
@@ -71,7 +71,7 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("error al decodificar respuesta de Ollama: %w", err)
 	}
 	if len(out.Embedding) == 0 {
-		return nil, fmt.Errorf("Ollama devolvió un embedding vacío (¿modelo %q instalado?)", o.model)
+		return nil, fmt.Errorf("ollama devolvió un embedding vacío (¿modelo %q instalado?)", o.model)
 	}
 	return out.Embedding, nil
 }

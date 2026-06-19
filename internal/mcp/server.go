@@ -1,3 +1,6 @@
+// Package mcp implementa el servidor MCP (Model Context Protocol) de Musubi:
+// un loop JSON-RPC 2.0 sobre stdin/stdout que expone las herramientas de memoria,
+// orquestación y skills. Coordina y persiste; el agente ejecuta.
 package mcp
 
 import (

@@ -1,3 +1,7 @@
+// Package memory es el núcleo de persistencia de Musubi: el motor SQLite local-first
+// (observaciones, embeddings, grafo, workflows), el recall por presupuesto de tokens,
+// el índice vectorial IVF y el mantenimiento (consolidación, olvido, retención). Todo
+// model-free.
 package memory
 
 import (

@@ -1,0 +1,32 @@
+# Configuración de golangci-lint (v2) para Musubi.
+# Objetivo: un gate de lint que atrape problemas REALES sin ruido por patrones
+# idiomáticos de Go (Close/Rollback en defer, cleanup con os.Remove, etc.).
+version: "2"
+
+linters:
+  # Conjunto estándar: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  settings:
+    staticcheck:
+      # Todos los checks de staticcheck MENOS las sugerencias de "quickfix" (QF*),
+      # que son refactors estilísticos opinables, no bugs.
+      checks:
+        - all
+        - -QF1001 # "could apply De Morgan's law" (estilo)
+        - -QF1003 # "could use tagged switch" (estilo)
+        - -ST1003 # iniciales (Db/Json/Rpc): convención de nombres ya establecida y
+          #          pervasiva en la API pública; renombrar sería un refactor aparte.
+    errcheck:
+      # Patrones idiomáticos donde no chequear el error es aceptable y habitual.
+      exclude-functions:
+        - (*database/sql.Tx).Rollback # defer tx.Rollback() tras Commit es no-op
+        - (*bufio.Reader).ReadString # lectura interactiva en el instalador
+  exclusions:
+    # Preset estándar: ignora errcheck en .Close/.Flush/os.Remove/fmt.Fprint*, etc.
+    presets:
+      - std-error-handling
+    rules:
+      # Los tests usan w.Write/Close/etc. de scaffolding sin chequear; es ruido.
+      - path: _test\.go
+        linters:
+          - errcheck

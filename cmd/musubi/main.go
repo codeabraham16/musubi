@@ -1,3 +1,5 @@
+// Command musubi es la CLI y el daemon MCP de Musubi: instala el binario, prepara
+// el workspace, corre mantenimiento y sirve el servidor MCP de memoria persistente.
 package main
 
 import (
