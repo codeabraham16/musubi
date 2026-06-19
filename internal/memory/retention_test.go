@@ -30,15 +30,15 @@ func TestPurgeArchivedDeletesOldKeepsRest(t *testing.T) {
 	if err := e.SaveObservation("old", "t", "viejo archivado", emb); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.db.Exec(`UPDATE observations SET archived=1, last_accessed=NULL, created_at=? WHERE id=?`,
+	if _, err := e.db.Exec(`UPDATE observations SET archived=1, archived_at=? WHERE id=?`,
 		sqliteTime(now.AddDate(0, 0, -100)), "old"); err != nil {
 		t.Fatal(err)
 	}
-	// archivada reciente (10 días) -> debe conservarse
+	// archivada reciente (10 días) -> debe conservarse (dentro de la ventana de gracia)
 	if err := e.SaveObservation("recent", "t", "reciente archivado", emb); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.db.Exec(`UPDATE observations SET archived=1, last_accessed=NULL, created_at=? WHERE id=?`,
+	if _, err := e.db.Exec(`UPDATE observations SET archived=1, archived_at=? WHERE id=?`,
 		sqliteTime(now.AddDate(0, 0, -10)), "recent"); err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +138,21 @@ func TestMaintainPipeline(t *testing.T) {
 	}
 	defer e.Close()
 
+	old := time.Now().UTC().AddDate(0, 0, -200)
 	// dos casi-duplicados (se consolidan)
 	_ = e.SaveObservation("d1", "t", "el patron observer en go sirve para eventos", nil)
 	_ = e.SaveObservation("d2", "t", "el patron observer en go sirve para eventos.", nil)
-	// una archivada vieja (se purga)
-	_ = e.SaveObservation("old", "t", "memoria fria vieja", nil)
-	if _, err := e.db.Exec(`UPDATE observations SET archived=1, created_at=? WHERE id=?`,
-		sqliteTime(time.Now().UTC().AddDate(0, 0, -200)), "old"); err != nil {
+	// ya archivada hace tiempo (archived_at viejo) -> se purga
+	_ = e.SaveObservation("old", "t", "memoria fria ya archivada", nil)
+	if _, err := e.db.Exec(`UPDATE observations SET archived=1, archived_at=? WHERE id=?`,
+		sqliteTime(old), "old"); err != nil {
+		t.Fatal(err)
+	}
+	// fría sin acceso: Decay la archiva EN ESTE ciclo (archived_at = ahora) -> NO debe
+	// purgarse en la misma corrida (período de gracia). Valida el fix del archived_at.
+	_ = e.SaveObservation("cold", "t", "memoria fria que se archiva ahora", nil)
+	if _, err := e.db.Exec(`UPDATE observations SET created_at=?, last_accessed=? WHERE id=?`,
+		sqliteTime(old), sqliteTime(old), "cold"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,11 +170,22 @@ func TestMaintainPipeline(t *testing.T) {
 	if rep.Consolidate.Merged != 1 {
 		t.Errorf("esperaba 1 fusión, fue %d", rep.Consolidate.Merged)
 	}
+	if rep.Decay.Archived != 1 {
+		t.Errorf("esperaba 1 archivada (cold), fue %d", rep.Decay.Archived)
+	}
 	if rep.Purged != 1 {
-		t.Errorf("esperaba 1 purga, fue %d", rep.Purged)
+		t.Errorf("esperaba 1 purga (old), fue %d", rep.Purged)
 	}
 	if !rep.Compacted {
 		t.Error("esperaba Compacted=true")
+	}
+	// 'cold' fue archivada en este ciclo: sigue existiendo (no purgada por gracia).
+	var coldArchived int
+	if err := e.db.QueryRow(`SELECT archived FROM observations WHERE id='cold'`).Scan(&coldArchived); err != nil {
+		t.Fatalf("'cold' no debería haberse purgado en el mismo ciclo en que se archivó: %v", err)
+	}
+	if coldArchived != 1 {
+		t.Errorf("'cold' debería estar archivada (=1), fue %d", coldArchived)
 	}
 }
 
@@ -306,5 +325,49 @@ func TestMigrationV2ArchivedIndex(t *testing.T) {
 	err = e.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_obs_archived'`).Scan(&name)
 	if err != nil {
 		t.Fatalf("no se encontró el índice idx_obs_archived: %v", err)
+	}
+	// Migración v3: columna archived_at presente.
+	cols, err := e.observationColumns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cols["archived_at"] {
+		t.Error("la migración v3 debió agregar la columna archived_at")
+	}
+}
+
+// TestConsolidateRepointsSupersededToCanonical valida el fix LOW: al consolidar una
+// observación que era FUENTE de un supersede, los punteros superseded_by se re-apuntan
+// al canónico (la oculta sigue oculta), en vez de quedar en NULL (que la resucitaría).
+func TestConsolidateRepointsSupersededToCanonical(t *testing.T) {
+	e, err := NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	// Z y X son casi-duplicados; Z más fuerte (más accesos) -> canónico. X supersede a Y.
+	_ = e.SaveObservation("Z", "t", "usamos postgresql para la base de datos del sistema", nil)
+	_ = e.SaveObservation("X", "t", "usamos postgresql para la base de datos del sistema.", nil)
+	_ = e.SaveObservation("Y", "t", "una observacion vieja distinta sobre la base", nil)
+	if _, err := e.db.Exec(`UPDATE observations SET access_count=10 WHERE id='Z'`); err != nil {
+		t.Fatal(err)
+	}
+	// X oculta a Y (Y.superseded_by = X). X queda viva (candidata a consolidar).
+	if err := e.markSuperseded("Y", "X"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.Consolidate(0.85); err != nil {
+		t.Fatalf("Consolidate: %v", err)
+	}
+
+	// X se fusionó en Z (borrada). Y debe seguir oculta, ahora apuntando a Z (no NULL, no X borrado).
+	var sup string
+	if err := e.db.QueryRow(`SELECT COALESCE(superseded_by,'') FROM observations WHERE id='Y'`).Scan(&sup); err != nil {
+		t.Fatalf("'Y' no debería haberse borrado: %v", err)
+	}
+	if sup != "Z" {
+		t.Errorf("Y.superseded_by debería re-apuntar al canónico 'Z', fue %q (NULL la resucitaría)", sup)
 	}
 }

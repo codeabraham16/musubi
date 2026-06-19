@@ -396,6 +396,12 @@ func (c *Config) applyDefaults(present map[string]bool) {
 	// respetar auto_interval_hours tal cual (0 = desactivado explícito).
 	if !present["maintenance"] {
 		c.Maintenance = d.Maintenance
+		// La purga (PurgeArchivedAfterDays) es hard-delete IRREVERSIBLE: NO se habilita
+		// por un upgrade silencioso. Un config sin bloque `maintenance` (minimal a mano,
+		// o anterior a la purga) queda con la purga DESACTIVADA; solo se activa cuando el
+		// campo está EXPLÍCITO en el yaml (lo escribe `musubi init` con el default 90,
+		// visible y editable). Así un upgrade nunca borra memorias sin opt-in del usuario.
+		c.Maintenance.PurgeArchivedAfterDays = 0
 	} else {
 		if c.Maintenance.DedupThreshold == 0 {
 			c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold

@@ -63,6 +63,21 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 3,
+			name:    "archived_at",
+			// Columna archived_at: marca CUÁNDO se archivó una observación, para que la
+			// purga de retención cuente la ventana DESDE el archivado (período de gracia
+			// real) y no desde el último acceso. Backfill de las ya archivadas con su
+			// último uso, para no cambiar su elegibilidad de purga retroactivamente.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`ALTER TABLE observations ADD COLUMN archived_at DATETIME`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`UPDATE observations SET archived_at = COALESCE(last_accessed, created_at) WHERE archived = 1 AND archived_at IS NULL`)
+				return err
+			},
+		},
 	}
 }
 

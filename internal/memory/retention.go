@@ -81,12 +81,13 @@ func (e *DbEngine) PurgeArchived(olderThanDays float64) (int, error) {
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(olderThanDays * 24 * float64(time.Hour))).Format(sqliteTimeLayout)
 
-	// Solo archivadas y con timestamp parseable más viejo que el corte. Si tanto
-	// last_accessed como created_at son NULL, COALESCE da NULL y la fila NO se purga
-	// (no borramos lo que no podemos datar).
+	// Solo archivadas cuyo archived_at (el momento en que se archivaron) es más viejo
+	// que el corte: la ventana cuenta DESDE el archivado, dando un período de gracia
+	// antes del borrado irreversible. archived_at NULL (archivadas por una vía que no lo
+	// setea) NO se purgan: no borramos lo que no podemos datar como archivado.
 	rows, err := e.db.Query(`
 		SELECT id FROM observations
-		WHERE archived = 1 AND COALESCE(last_accessed, created_at) < ?
+		WHERE archived = 1 AND archived_at IS NOT NULL AND archived_at < ?
 	`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("error al listar archivadas a purgar: %w", err)

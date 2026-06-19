@@ -147,8 +147,12 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		if _, err := tx.Exec(`DELETE FROM observation_relations WHERE source_id=? OR target_id=?`, o.id, o.id); err != nil {
 			return ConsolidateResult{}, fmt.Errorf("error al limpiar relaciones del duplicado: %w", err)
 		}
-		if _, err := tx.Exec(`UPDATE observations SET superseded_by=NULL WHERE superseded_by=?`, o.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al limpiar punteros superseded_by: %w", err)
+		// Re-apuntar (no NULear) los punteros superseded_by al canónico que absorbió al
+		// duplicado: una observación ocultada por resolución de conflictos sigue oculta
+		// (no resucita en el recall), apuntando ahora al canónico vivo en vez de a un id
+		// borrado. k.id sobrevive toda la consolidación.
+		if _, err := tx.Exec(`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, k.id, o.id); err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al re-apuntar punteros superseded_by: %w", err)
 		}
 		removed = append(removed, o.id)
 		merged++
