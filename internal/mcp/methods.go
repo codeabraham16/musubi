@@ -88,60 +88,11 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		return nil, rpcErrorf(codeInvalidParams, "Invalid params: %v", err)
 	}
 
-	switch callReq.Name {
-	case "musubi_save_observation":
-		return s.toolSaveObservation(callReq.Arguments)
-	case "musubi_search_semantic":
-		return s.toolSearchSemantic(ctx, callReq.Arguments)
-	case "musubi_search_keyword":
-		return s.toolSearchKeyword(ctx, callReq.Arguments)
-	case "musubi_recall":
-		return s.toolRecall(ctx, callReq.Arguments)
-	case "musubi_memory_expand":
-		return s.toolMemoryExpand(callReq.Arguments)
-	case "musubi_maintain":
-		return s.toolMaintain(callReq.Arguments)
-	case "musubi_save_fact":
-		return s.toolSaveFact(callReq.Arguments)
-	case "musubi_recall_facts":
-		return s.toolRecallFacts(callReq.Arguments)
-	case "musubi_entity_context":
-		return s.toolEntityContext(callReq.Arguments)
-	case "musubi_log_error":
-		return s.toolLogError(callReq.Arguments)
-	case "musubi_resolve_telemetry":
-		return s.toolResolveTelemetry(callReq.Arguments)
-	case "musubi_resolve_skills":
-		return s.toolResolveSkills(callReq.Arguments)
-	case "musubi_detect_stack":
-		return s.toolDetectStack(callReq.Arguments)
-	case "musubi_save_skill":
-		return s.toolSaveSkill(callReq.Arguments)
-	case "musubi_search_skills":
-		return s.toolSearchSkills(callReq.Arguments)
-	case "musubi_log_skill_decision":
-		return s.toolLogSkillDecision(callReq.Arguments)
-	case "musubi_conflicts":
-		return s.toolConflicts(callReq.Arguments)
-	case "musubi_judge":
-		return s.toolJudge(callReq.Arguments)
-	case "musubi_doctor":
-		return s.toolDoctor(callReq.Arguments)
-	case "musubi_phase":
-		return s.toolPhase(callReq.Arguments)
-	case "musubi_work":
-		return s.toolWork(callReq.Arguments)
-	case "musubi_workflow":
-		return s.toolWorkflow(callReq.Arguments)
-	case "musubi_tokens":
-		return s.toolTokens(callReq.Arguments)
-	case "musubi_save_code":
-		return s.toolSaveCode(callReq.Arguments)
-	case "musubi_recall_code":
-		return s.toolRecallCode(callReq.Arguments)
-	default:
+	handler, ok := s.toolIndex[callReq.Name]
+	if !ok {
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
+	return handler(ctx, callReq.Arguments)
 }
 
 func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcError) {

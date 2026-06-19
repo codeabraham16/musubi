@@ -116,7 +116,12 @@ type McpServer struct {
 	pipeline config.PipelineConfig
 	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
 	multiagent config.MultiAgentConfig
-	out        io.Writer
+	// tools es el catálogo ordenado de tools (fuente de tools/list); toolIndex es
+	// el mapa nombre→handler para el dispatch O(1) de tools/call. Ambos se construyen
+	// una vez en NewMcpServer desde buildRegistry.
+	tools     []toolEntry
+	toolIndex map[string]toolHandler
+	out       io.Writer
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
@@ -143,6 +148,13 @@ func NewMcpServer(engine *memory.DbEngine, projectPath string, embedder embeddin
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	// Construir el registro de tools una vez (los handlers leen la config de s en
+	// tiempo de llamada, así que el orden respecto de las opciones no importa).
+	s.tools = s.buildRegistry()
+	s.toolIndex = make(map[string]toolHandler, len(s.tools))
+	for i := range s.tools {
+		s.toolIndex[s.tools[i].Name] = s.tools[i].handler
 	}
 	return s
 }

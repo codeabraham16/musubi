@@ -7,11 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-19
+
 ### Added
+- **Registro de tools map-based** (Track 3 / T3.1, **abre el track de velocidad y extensibilidad**).
+  Agregar una herramienta MCP exigía mantener sincronizados TRES lugares (el schema en `tools/list`,
+  un `case` en el switch de `tools/call`, y un conteo manual en los tests). Ahora cada tool es una
+  sola `toolEntry` (`internal/mcp/registry.go`) que liga su schema con su handler; `tools/list` itera
+  el registro en orden y `tools/call` resuelve por mapa en O(1). **Agregar una tool = una entrada**.
+  Las firmas que no usan el `context` del request se adaptan con `noCtx` sin tocar el cuerpo del handler.
+- Test **golden** del catálogo (`TestToolsListGolden` + `testdata/toolslist.golden.json`): congela la
+  salida JSON exacta de `tools/list` (nombres, descripciones, schemas y orden) — el refactor quedó
+  probado byte-idéntico. Test de **consistencia estructural** (`TestRegistryConsistency`): garantiza que
+  la lista de schemas y el mapa de dispatch sean siempre el mismo conjunto (sin tools sin handler ni
+  handlers huérfanos).
 - **CI endurecido**: `golangci-lint` (gate con `.golangci.yml`: linters estándar + preset de
   manejo de errores idiomático), **piso de cobertura** (CI falla si baja de 70%), `govulncheck`
   (escaneo de vulnerabilidades) y **Dependabot** (módulos Go + GitHub Actions). Antes el CI solo
   corría `vet`/`build`/`test -race`.
+
+### Changed
+- El dispatch de `tools/call` pasó de un `switch` de 25 ramas a una búsqueda por mapa
+  (`s.toolIndex[name]`); la lista de `tools/list` pasó de un slice hand-mantenido a la iteración del
+  registro. Comportamiento idéntico (verificado con el golden + verificación adversarial del binding
+  nombre→handler contra el baseline).
 
 ### Fixed
 - Limpieza de lint: eliminado el `const charsPerToken` muerto; mensajes de error de Ollama en
