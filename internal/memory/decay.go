@@ -112,6 +112,13 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 		if _, err := e.db.Exec(q, args...); err != nil {
 			return DecayResult{}, fmt.Errorf("error al archivar memorias frías: %w", err)
 		}
+		// Sacar del índice vectorial las que se archivaron (dejan de ser elegibles).
+		// El re-filtro SQL ya garantiza correctness; esto mantiene afilado el recall.
+		if e.index != nil {
+			for _, id := range toArchive {
+				e.index.Remove(id)
+			}
+		}
 	}
 
 	return DecayResult{Scanned: scanned, Archived: len(toArchive)}, nil

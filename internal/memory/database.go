@@ -6,6 +6,8 @@ import (
 	"musubi/internal/config"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 )
@@ -13,6 +15,39 @@ import (
 type DbEngine struct {
 	db   *sql.DB
 	path string // ruta del archivo SQLite (para backups del doctor)
+	// index es el índice vectorial IVF para búsqueda semántica a escala (nil si
+	// está desactivado por config). Es un caché reconstruible desde SQLite.
+	index *ivfIndex
+	// vindexCfg es la config del índice vectorial. Se fija UNA vez en NewDbEngine;
+	// las goroutines de fondo reciben una COPIA (snapshot) y nunca leen este campo,
+	// para no acceder a él de forma concurrente.
+	vindexCfg config.VectorIndexConfig
+	// rebuilding es el guard que evita rebuilds del índice solapados.
+	rebuilding atomic.Bool
+	// lifecycleMu + closed + bgWG coordinan el cierre con las goroutines de fondo:
+	// una vez `closed`, spawnBackground no lanza nada y Close espera (bgWG) a las
+	// goroutines en vuelo antes de cerrar la base. Evita use-after-close del *sql.DB.
+	lifecycleMu sync.Mutex
+	closed      bool
+	bgWG        sync.WaitGroup
+}
+
+// spawnBackground lanza f como goroutine RASTREADA por bgWG, salvo que el engine ya
+// esté cerrado. Devuelve true si la lanzó. El registro en bgWG ocurre bajo
+// lifecycleMu (igual que Close marca `closed`), así que es imposible que una
+// goroutine arranque después de que Close empezó a esperar (no hay Add-after-Wait).
+func (e *DbEngine) spawnBackground(f func()) bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.closed {
+		return false
+	}
+	e.bgWG.Add(1)
+	go func() {
+		defer e.bgWG.Done()
+		f()
+	}()
+	return true
 }
 
 func NewDbEngine(projectPath string) (*DbEngine, error) {
@@ -60,6 +95,21 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	if err := engine.recomputeTokensIfEstimatorChanged(); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// Índice vectorial IVF para búsqueda semántica a escala (T1.2). Se configura
+	// desde .musubi/config.yaml (defaults si está ausente). El índice es un caché
+	// reconstruible desde SQLite; si ya hay suficientes embeddings se entrena en
+	// segundo plano para no demorar el arranque (las búsquedas caen al full-scan
+	// exacto hasta que esté listo).
+	cfg, _ := config.Load(projectPath)
+	engine.vindexCfg = cfg.VectorIndex
+	if engine.vindexCfg.Enabled {
+		engine.index = newIVFIndex()
+		// Snapshot de la config para la goroutine de fondo: no debe leer engine.vindexCfg
+		// (los tests pueden ajustarlo después de construir, lo que sería una carrera).
+		vcfg := engine.vindexCfg
+		engine.spawnBackground(func() { engine.autoBuildVectorIndex(vcfg) })
 	}
 
 	return engine, nil
@@ -190,7 +240,14 @@ func (e *DbEngine) backfillDigests() error {
 	return nil
 }
 
+// Close marca el engine como cerrado (para que no se lancen nuevas goroutines de
+// fondo), espera a que terminen las que estén en vuelo (rebuilds del índice) y recién
+// entonces cierra la base. Así ninguna goroutine consulta un *sql.DB ya cerrado.
 func (e *DbEngine) Close() error {
+	e.lifecycleMu.Lock()
+	e.closed = true
+	e.lifecycleMu.Unlock()
+	e.bgWG.Wait()
 	return e.db.Close()
 }
 
