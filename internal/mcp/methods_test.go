@@ -391,6 +391,11 @@ func TestRecallFactsRequiresEntity(t *testing.T) {
 
 func TestMaintainTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
+	// Aislar la consolidación de la detección de conflictos al guardar: el auto-supersede
+	// de casi-duplicados sólo dispara si la 2da observación es ESTRICTAMENTE más nueva
+	// (created_at con resolución de 1s), así que en CI lento podía ocultar una y dejar
+	// el consolidate con 1 sola viva (flaky). La consolidación es lo que se prueba acá.
+	s.conflicts.Enabled = false
 	// Dos casi-duplicados (no exactos): el maintain debe consolidarlos.
 	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "el patron observer en go sirve para eventos"}); e != nil {
 		t.Fatalf("save 1 error: %+v", e)
