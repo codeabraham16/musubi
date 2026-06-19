@@ -183,6 +183,23 @@ type VectorIndexConfig struct {
 	KMeansSample int `yaml:"kmeans_sample"`
 }
 
+// ServiceConfig configura el modo servicio (Track 4): exponer el servidor MCP sobre
+// HTTP además del stdio por defecto. Está DESACTIVADO por defecto (Enabled=false): un
+// workspace existente sin bloque `service:` mantiene intacto el comportamiento
+// local-first. Bloque YAML: service.
+type ServiceConfig struct {
+	// Enabled activa el transporte HTTP (default false). `musubi serve` se niega a
+	// arrancar si está en false (salvo override por flag explícito).
+	Enabled bool `yaml:"enabled"`
+	// Addr es la dirección de escucha (default 127.0.0.1:7717). Por seguridad, en este
+	// release SOLO se permite bind a loopback; un addr no-loopback es error de arranque
+	// (la autenticación llega en un slice posterior y habilita el bind remoto).
+	Addr string `yaml:"addr"`
+	// RequestTimeoutSeconds es el timeout por request HTTP (default 60), espejo del
+	// deadline de 60s del transporte stdio.
+	RequestTimeoutSeconds float64 `yaml:"request_timeout_seconds"`
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
@@ -218,6 +235,8 @@ type Config struct {
 	MultiAgent MultiAgentConfig `yaml:"multiagent,omitempty"`
 	// VectorIndex configura el índice vectorial ANN (IVF) para búsqueda semántica a escala.
 	VectorIndex VectorIndexConfig `yaml:"vector_index,omitempty"`
+	// Service configura el modo servicio (transporte HTTP); desactivado por defecto.
+	Service ServiceConfig `yaml:"service,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -298,6 +317,11 @@ func Default() Config {
 			RebuildMinHours: 6,
 			KMeansIters:     10,
 			KMeansSample:    50000,
+		},
+		Service: ServiceConfig{
+			Enabled:               false,
+			Addr:                  "127.0.0.1:7717",
+			RequestTimeoutSeconds: 60,
 		},
 	}
 }
@@ -507,6 +531,19 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.VectorIndex.KMeansSample == 0 {
 			c.VectorIndex.KMeansSample = d.VectorIndex.KMeansSample
+		}
+	}
+
+	// Service: ausente -> default completo (Enabled false); presente -> respetar
+	// enabled (incluido false) y rellenar los campos no fijados.
+	if !present["service"] {
+		c.Service = d.Service
+	} else {
+		if c.Service.Addr == "" {
+			c.Service.Addr = d.Service.Addr
+		}
+		if c.Service.RequestTimeoutSeconds == 0 {
+			c.Service.RequestTimeoutSeconds = d.Service.RequestTimeoutSeconds
 		}
 	}
 }
