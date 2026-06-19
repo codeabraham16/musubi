@@ -162,12 +162,12 @@ func TestMaintenanceCycleDBVacia(t *testing.T) {
 	}
 	defer engine.Close()
 
-	cons, dec, err := maintenanceCycle(engine, config.Default().Maintenance)
+	rep, err := maintenanceCycle(engine, config.Default().Maintenance)
 	if err != nil {
 		t.Fatalf("maintenanceCycle error: %v", err)
 	}
-	if cons.Merged != 0 || dec.Archived != 0 {
-		t.Errorf("en DB vacía no debería fusionar ni archivar: merged=%d archived=%d", cons.Merged, dec.Archived)
+	if rep.Consolidate.Merged != 0 || rep.Decay.Archived != 0 || rep.Purged != 0 {
+		t.Errorf("en DB vacía no debería fusionar/archivar/purgar: merged=%d archived=%d purged=%d", rep.Consolidate.Merged, rep.Decay.Archived, rep.Purged)
 	}
 }
 

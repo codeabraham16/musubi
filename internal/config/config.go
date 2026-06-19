@@ -56,6 +56,13 @@ type MaintenanceConfig struct {
 	// AutoIntervalHours es cada cuántas horas corre el auto-mantenimiento al
 	// arrancar el daemon (0 = desactivado; el mantenimiento manual sigue disponible).
 	AutoIntervalHours float64 `yaml:"auto_interval_hours"`
+	// PurgeArchivedAfterDays borra DEFINITIVAMENTE las observaciones archivadas que no
+	// se tocaron en esta cantidad de días (retención dura, acota el crecimiento). El
+	// olvido (decay) solo marca archived; esto las elimina de verdad. 0 = nunca purgar.
+	PurgeArchivedAfterDays float64 `yaml:"purge_archived_after_days"`
+	// Vacuum corre VACUUM tras una purga que borró filas, para reclamar espacio en
+	// disco (default true). El checkpoint del WAL y PRAGMA optimize corren siempre.
+	Vacuum bool `yaml:"vacuum"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
@@ -238,11 +245,13 @@ func Default() Config {
 			CandidatePool:     50,
 		},
 		Maintenance: MaintenanceConfig{
-			DedupThreshold:    0.85,
-			DecayHalfLifeDays: 30,
-			DecayMinSalience:  0.2,
-			DecayMinAgeDays:   14,
-			AutoIntervalHours: 24,
+			DedupThreshold:         0.85,
+			DecayHalfLifeDays:      30,
+			DecayMinSalience:       0.2,
+			DecayMinAgeDays:        14,
+			AutoIntervalHours:      24,
+			PurgeArchivedAfterDays: 90,
+			Vacuum:                 true,
 		},
 		Graph: GraphConfig{
 			MaxHops:         2,

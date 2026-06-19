@@ -75,22 +75,61 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	}
 	defer tx.Rollback()
 
+	// Bloqueo por trigramas para evitar el O(n²): en vez de comparar cada observación
+	// contra TODOS los canónicos, se indexan los trigramas de los canónicos y solo se
+	// computa el Jaccard exacto contra los que comparten al menos un trigrama. Saltear
+	// los de overlap 0 NO cambia el resultado: su Jaccard es 0 < threshold. `byNorm`
+	// cubre el atajo de igualdad exacta tras normalizar (incluye textos de <3 runas y
+	// vacíos, que pueden no tener trigramas). Mismo criterio de match que el original
+	// (el canónico más fuerte, es decir el de menor índice, gana).
 	var kept []consObs
+	keptTg := []map[string]bool{}  // trigramas de cada canónico (paralelo a kept)
+	byNorm := map[string]int{}     // contenido normalizado -> índice de canónico
+	inverted := map[string][]int{} // trigrama -> índices de canónicos que lo contienen
+	var removed []string           // ids de duplicados borrados (para el índice vectorial)
 	merged := 0
+
 	for _, o := range all {
-		idx := -1
-		for ki := range kept {
-			if Similarity(o.content, kept[ki].content) >= threshold {
-				idx = ki
-				break
+		norm := normalizeForSim(o.content)
+		tg := trigrams(norm)
+
+		matchIdx := -1
+		if ki, ok := byNorm[norm]; ok {
+			matchIdx = ki // igualdad exacta tras normalizar (Similarity == 1.0)
+		} else {
+			overlap := map[int]int{}
+			for g := range tg {
+				for _, ki := range inverted[g] {
+					overlap[ki]++
+				}
+			}
+			for ki, ov := range overlap {
+				denom := len(tg) + len(keptTg[ki]) - ov // |A| + |B| - |A∩B|
+				if denom <= 0 {
+					continue
+				}
+				if float64(ov)/float64(denom) >= threshold {
+					if matchIdx == -1 || ki < matchIdx {
+						matchIdx = ki
+					}
+				}
 			}
 		}
-		if idx == -1 {
+
+		if matchIdx == -1 {
+			ki := len(kept)
 			kept = append(kept, o)
+			keptTg = append(keptTg, tg)
+			if _, ok := byNorm[norm]; !ok {
+				byNorm[norm] = ki
+			}
+			for g := range tg {
+				inverted[g] = append(inverted[g], ki)
+			}
 			continue
 		}
 
-		k := &kept[idx]
+		k := &kept[matchIdx]
 		k.access += o.access
 		if o.importance > k.importance {
 			k.importance = o.importance
@@ -111,11 +150,20 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		if _, err := tx.Exec(`UPDATE observations SET superseded_by=NULL WHERE superseded_by=?`, o.id); err != nil {
 			return ConsolidateResult{}, fmt.Errorf("error al limpiar punteros superseded_by: %w", err)
 		}
+		removed = append(removed, o.id)
 		merged++
 	}
 
 	if err := tx.Commit(); err != nil {
 		return ConsolidateResult{}, fmt.Errorf("error al commitear consolidación: %w", err)
 	}
+
+	// Sacar los duplicados borrados del índice vectorial (post-commit).
+	if e.index != nil {
+		for _, id := range removed {
+			e.index.Remove(id)
+		}
+	}
+
 	return ConsolidateResult{Scanned: len(all), Merged: merged}, nil
 }

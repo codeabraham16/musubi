@@ -10,7 +10,13 @@ import (
 // (hidratación perezosa tras un Recall). Preserva el orden de ids, omite los que
 // no existan y actualiza las estadísticas de acceso de las encontradas.
 func (e *DbEngine) GetObservations(ids []string) ([]Observation, error) {
-	out, _, err := e.GetObservationsBudget(ids, 0)
+	return e.GetObservationsCtx(context.Background(), ids)
+}
+
+// GetObservationsCtx es como GetObservations pero respeta el contexto del caller
+// (timeout/cancelación) tanto en la query como en el bump de accesos.
+func (e *DbEngine) GetObservationsCtx(ctx context.Context, ids []string) ([]Observation, error) {
+	out, _, err := e.GetObservationsBudgetCtx(ctx, ids, 0)
 	return out, err
 }
 
@@ -20,6 +26,13 @@ func (e *DbEngine) GetObservations(ids []string) ([]Observation, error) {
 // budget). budget <= 0 significa sin límite. Devuelve también los tokens usados,
 // para contabilizarlos en el ledger. Actualiza stats de acceso de lo devuelto.
 func (e *DbEngine) GetObservationsBudget(ids []string, budget int) ([]Observation, int, error) {
+	return e.GetObservationsBudgetCtx(context.Background(), ids, budget)
+}
+
+// GetObservationsBudgetCtx es como GetObservationsBudget pero respeta el contexto del
+// caller (timeout/cancelación) en la query y en el bump de accesos, en vez de usar un
+// context.Background() interno que ignoraba el deadline del llamador.
+func (e *DbEngine) GetObservationsBudgetCtx(ctx context.Context, ids []string, budget int) ([]Observation, int, error) {
 	if len(ids) == 0 {
 		return []Observation{}, 0, nil
 	}
@@ -31,7 +44,7 @@ func (e *DbEngine) GetObservationsBudget(ids []string, budget int) ([]Observatio
 		args[i] = id
 	}
 
-	rows, err := e.db.Query(
+	rows, err := e.db.QueryContext(ctx,
 		`SELECT id, topic_key, content, COALESCE(created_at,'')
 		 FROM observations WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
 		args...,
@@ -79,7 +92,7 @@ func (e *DbEngine) GetObservationsBudget(ids []string, budget int) ([]Observatio
 		}
 	}
 
-	if err := e.bumpAccess(context.Background(), found); err != nil {
+	if err := e.bumpAccess(ctx, found); err != nil {
 		return out, used, err
 	}
 	return out, used, nil

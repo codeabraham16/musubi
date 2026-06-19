@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -68,6 +69,14 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
 	}
+
+	// Tuning explícito del pool: WAL admite muchos lectores + un escritor. Acotar las
+	// conexiones abiertas evita abrir demasiadas bajo concurrencia alta (cada una es un
+	// fd + memoria); el escritor se serializa de todos modos. Idle bajo libera recursos
+	// en reposo. Sin esto regían los defaults de database/sql (sin tope efectivo).
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	// Esquema versionado (PRAGMA user_version): runMigrations aplica las migraciones
 	// pendientes, cada una en su propia transacción. La migración baseline crea el

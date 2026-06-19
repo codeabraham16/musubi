@@ -52,6 +52,17 @@ func schemaMigrations() []migration {
 				return addObservationColumns(x)
 			},
 		},
+		{
+			version: 2,
+			name:    "idx_obs_archived",
+			// Índice por `archived`: acelera la purga de retención (WHERE archived=1)
+			// y el scan del olvido (WHERE archived=0). Primera migración post-baseline:
+			// alcanza también a bases ya migradas a v1 (que no re-ejecutan la baseline).
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_archived ON observations(archived)`)
+				return err
+			},
+		},
 	}
 }
 
