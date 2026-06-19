@@ -54,8 +54,11 @@ type httpOptions struct {
 // (405) porque Musubi no emite mensajes server-initiated todavía.
 func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	var mu sync.Mutex // serializa el dispatch: línea base segura (sin RMW concurrente).
+	metrics := &httpMetrics{}
 	mux := http.NewServeMux()
-	mux.HandleFunc(mcpHTTPPath, func(w http.ResponseWriter, r *http.Request) {
+
+	// Endpoint MCP, envuelto en observabilidad (correlation ID + métricas por resultado).
+	mux.Handle(mcpHTTPPath, withObservability(metrics, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Defensa anti DNS-rebinding SOLO en modo loopback (guía de seguridad del
 		// transporte HTTP de MCP). En remoto, el bearer token es el gate.
 		if opt.loopbackOnly {
@@ -115,6 +118,21 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			return
 		}
 		writeHTTPJSON(w, resp)
+	})))
+
+	// Liveness y readiness: sin auth (los sondea un orquestador/proxy; no exponen secretos).
+	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("/readyz", s.readyzHandler)
+
+	// Métricas: detrás de auth si hay token (son datos operativos).
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte(metrics.render()))
 	})
 	return mux
 }
