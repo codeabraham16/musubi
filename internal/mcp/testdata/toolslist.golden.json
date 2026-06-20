@@ -309,7 +309,7 @@
     },
     {
       "name": "musubi_search_skills",
-      "description": "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities. Devuelve candidatos con evidencia de aplicabilidad.",
+      "description": "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities, y EXCLUYE las skills que el usuario ya rechazó (aprende de musubi_log_skill_decision). Devuelve candidatos con evidencia de aplicabilidad.",
       "inputSchema": {
         "type": "object",
         "properties": {

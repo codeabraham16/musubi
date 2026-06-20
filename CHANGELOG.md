@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-06-19
+
+### Changed
+- **`musubi_search_skills` aprende de las decisiones** (Track 6 / T6.1, abre la observabilidad
+  activa): el listado de candidatos ahora **excluye las skills que el usuario ya rechazó**
+  (`musubi_log_skill_decision` con `decision: rejected`). Cierra el lazo de aprendizaje pasivo: hasta
+  ahora `skill_decisions` se escribía pero nadie la consumía, así que una skill rechazada se
+  re-proponía en cada sesión.
+  - **Last-write-wins**: una skill rechazada y luego aceptada vuelve a proponerse. Matchea por `id`
+    (slug), la misma clave que `log_skill_decision`. Best-effort: si la lectura de decisiones falla,
+    el listado se devuelve sin filtrar (nunca rompe la búsqueda).
+
+### Added
+- `TestExcludeRejectedSkills` (+ caso sin decisiones): valida la exclusión y el last-write-wins.
+
 ## [0.33.0] - 2026-06-19
 
 ### Added

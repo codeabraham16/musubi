@@ -293,7 +293,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_search_skills",
-				Description: "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities. Devuelve candidatos con evidencia de aplicabilidad.",
+				Description: "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities, y EXCLUYE las skills que el usuario ya rechazó (aprende de musubi_log_skill_decision). Devuelve candidatos con evidencia de aplicabilidad.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
