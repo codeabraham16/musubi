@@ -7,6 +7,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-06-19
+
+### Added
+- **Surfacing proactivo de errores conocidos** (Track 6 / T6.3): el hook `precheck` (PreToolUse Read)
+  ahora, ANTES de que el agente lea un archivo, también surfacea los **errores no resueltos** que
+  Musubi tiene registrados de ESE archivo (telemetría), con su `id` y el fix sugerido. "Este archivo
+  ya te dio este error, este fue el fix" — sin que el agente lo pida. Se combina con el aviso de
+  memoria de código existente; acotado a los 3 errores más recientes para no inundar el contexto.
+  - Reusa `GetUnresolvedTelemetryLogsForFiles` (T6.2). El hook sigue siendo best-effort y model-free.
+
+### Changed
+- `precheckOutput` se refactorizó en `codeMemoryMessage` + `telemetryMessage` (combina ambas
+  superficies); el interfaz `codeStore` del hook ahora también lee telemetría por archivo.
+
+### Notes
+- Test: `TestPrecheckSurfacesKnownErrors` (surfacea error + id + fix sugerido).
+
 ## [0.35.0] - 2026-06-19
 
 ### Changed
