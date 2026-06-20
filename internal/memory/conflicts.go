@@ -165,7 +165,7 @@ func (e *DbEngine) loadObsRow(id string) (obsRow, bool, error) {
 // conflictCandidates busca observaciones candidatas por FTS, excluyendo la propia,
 // las archivadas y las ya superseded.
 func (e *DbEngine) conflictCandidates(src obsRow, limit int) ([]obsRow, error) {
-	ftsQuery := buildFTSQuery(src.content)
+	ftsQuery := buildFTSQueryRanked(src.content)
 	if ftsQuery == "" {
 		return nil, nil
 	}

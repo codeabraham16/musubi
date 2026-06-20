@@ -279,6 +279,41 @@ func buildFTSQuery(q string) string {
 	return strings.Join(terms, " OR ")
 }
 
+// ftsStopwords son términos muy frecuentes (es/en) que no aportan señal de recall y solo
+// diluyen el OR del MATCH. Lista corta y determinista (model-free).
+var ftsStopwords = map[string]bool{
+	// Español
+	"el": true, "la": true, "los": true, "las": true, "un": true, "una": true, "unos": true,
+	"unas": true, "de": true, "del": true, "al": true, "en": true, "con": true, "por": true,
+	"para": true, "que": true, "como": true, "su": true, "sus": true,
+	// Inglés
+	"the": true, "an": true, "of": true, "in": true, "on": true, "at": true, "to": true,
+	"for": true, "with": true, "and": true, "or": true, "is": true, "are": true, "be": true,
+	"by": true, "as": true, "it": true,
+}
+
+// buildFTSQueryRanked es como buildFTSQuery pero descarta el ruido que diluye el OR:
+// stopwords (lista determinista) y tokens de una sola runa (p. ej. la 'N' y el '1' de
+// 'N+1'). Preserva entidades cortas significativas como 'Go', 'DB', 'API' (>= 2 runas y no
+// stopwords). Si tras filtrar no queda nada (consulta toda de ruido), cae a buildFTSQuery
+// para no perder recall. Proxy de IDF: lo corto/frecuente pesa menos.
+func buildFTSQueryRanked(q string) string {
+	fields := strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	terms := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if len([]rune(f)) <= 1 || ftsStopwords[strings.ToLower(f)] {
+			continue
+		}
+		terms = append(terms, `"`+f+`"`)
+	}
+	if len(terms) == 0 {
+		return buildFTSQuery(q) // fallback: no perder recall si todo era ruido
+	}
+	return strings.Join(terms, " OR ")
+}
+
 // bumpAccess actualiza recencia y frecuencia de las observaciones devueltas.
 func (e *DbEngine) bumpAccess(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
