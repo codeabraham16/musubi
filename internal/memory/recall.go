@@ -28,6 +28,11 @@ type RecallOptions struct {
 	CandidatePool int  // candidatos a rankear antes de empaquetar
 	GistMaxTokens int  // tope de un gist generado al vuelo
 	NoBump        bool // si true, no actualiza stats de acceso (recall read-only)
+	// QueryVector, si no es vacío, activa el recall HÍBRIDO (T5.7 R2): suma un pool de
+	// candidatos por similitud vectorial (coseno) al pool léxico (FTS), unidos por id, y
+	// agrega una 4ta señal RRF por rango vectorial. Lo computa la capa MCP con el embedder.
+	// Vacío ⇒ recall 100% léxico (idéntico al histórico).
+	QueryVector []float32
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -86,14 +91,25 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		return RecallResult{}, err
 	}
 
+	// Recall híbrido (T5.7 R2): si hay vector de query, unir el pool vectorial por id (trae
+	// también semánticamente-relacionadas que el léxico no encontró) y rankear por coseno.
+	var vecRank map[string]int
+	if len(opts.QueryVector) > 0 {
+		cands, vecRank, err = e.augmentWithVectorPool(ctx, cands, opts.QueryVector, pool)
+		if err != nil {
+			return RecallResult{}, err
+		}
+	}
+
 	result := RecallResult{Budget: budget, Items: []RecallItem{}}
 	if len(cands) == 0 {
 		return result, nil
 	}
 
 	// El ranking keyword (lexRank) solo existe si la query tuvo términos FTS; sin ellos
-	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia.
-	scored := scoreCandidates(cands, lexRank)
+	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia. vecRank
+	// solo existe en recall híbrido.
+	scored := scoreCandidates(cands, lexRank, vecRank)
 
 	result = packByBudget(scored, budget, gistMax)
 
@@ -153,10 +169,10 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 // scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía RRF y
 // pondera por importancia. Determinista, sin LLM. Los rankings por pool se pasan como mapas
 // id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
-// lexRank es el ranking keyword (FTS); nil ⇒ se omite (fallback por recencia, para no
-// doble-contar). Esta forma multi-pool deja listo sumar la señal vectorial (T5.7 R2) sin
-// cambiar el resto: con NoopProvider (solo lexRank) el resultado es idéntico al histórico.
-func scoreCandidates(cands []candidate, lexRank map[string]int) []scoredCandidate {
+// lexRank es el ranking keyword (FTS) y vecRank el ranking vectorial (coseno); cada uno
+// nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el resultado es idéntico al
+// histórico; vecRank lo activa el recall híbrido (T5.7 R2).
+func scoreCandidates(cands []candidate, lexRank, vecRank map[string]int) []scoredCandidate {
 	n := len(cands)
 
 	recencyRank := rankBy(cands, func(a, b candidate) bool {
@@ -173,6 +189,9 @@ func scoreCandidates(cands []candidate, lexRank map[string]int) []scoredCandidat
 		if r, ok := lexRank[c.id]; ok {
 			rrf += 1.0 / float64(rrfK+r)
 		}
+		if r, ok := vecRank[c.id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
+		}
 		imp := c.importance
 		if imp <= 0 {
 			imp = 1.0
@@ -181,6 +200,71 @@ func scoreCandidates(cands []candidate, lexRank map[string]int) []scoredCandidat
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
 	return out
+}
+
+// augmentWithVectorPool une al pool léxico (cands) el pool por similitud vectorial: rankea
+// por coseno (SearchObservations), trae el candidate completo de los ids que el léxico no
+// tenía (union, no intersección) y devuelve el ranking vectorial (id→posición). Best-effort
+// sobre el universo de candidatos: si no hay resultados vectoriales, deja cands intacto.
+func (e *DbEngine) augmentWithVectorPool(ctx context.Context, cands []candidate, queryVec []float32, limit int) ([]candidate, map[string]int, error) {
+	results, err := e.SearchObservations(ctx, queryVec, limit)
+	if err != nil {
+		return cands, nil, err
+	}
+	if len(results) == 0 {
+		return cands, nil, nil
+	}
+	have := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		have[c.id] = true
+	}
+	vecRank := make(map[string]int, len(results))
+	var missing []string
+	for i, r := range results {
+		vecRank[r.ID] = i
+		if !have[r.ID] {
+			missing = append(missing, r.ID)
+		}
+	}
+	if len(missing) > 0 {
+		extra, err := e.candidatesByIDs(ctx, missing)
+		if err != nil {
+			return cands, nil, err
+		}
+		cands = append(cands, extra...)
+	}
+	return cands, vecRank, nil
+}
+
+// candidatesByIDs trae los candidatos vivos (no archivados ni superseded) para los ids
+// dados, con las mismas columnas que scanCandidates. Trocea el IN(...) por el tope de
+// parámetros de SQLite. El orden del slice no importa: el ranking va por mapas.
+func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candidate, error) {
+	var out []candidate
+	for _, chunk := range chunkStrings(ids, maxSQLParams) {
+		ph := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			ph[i] = "?"
+			args[i] = id
+		}
+		rows, err := e.db.QueryContext(ctx, `
+			SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
+			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
+			FROM observations o
+			WHERE o.archived = 0 AND o.superseded_by IS NULL AND o.id IN (`+strings.Join(ph, ",")+`)
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("error al traer candidatos del pool vectorial: %w", err)
+		}
+		part, err := scanCandidates(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
 }
 
 // rankBy devuelve, para cada id, su posición (0 = mejor) según el orden less.

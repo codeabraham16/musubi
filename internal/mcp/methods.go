@@ -618,6 +618,19 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		}
 	}
 
+	// Recall híbrido (T5.7 R2): si hay embedder, embeber la query para sumar el pool
+	// vectorial. Best-effort: si falla, se sigue solo con el léxico (no rompe el recall).
+	if embedding.Enabled(s.embedder) {
+		embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
+		vec, eerr := s.embedder.Embed(embCtx, args.Query)
+		embCancel()
+		if eerr != nil {
+			logx.Error("recall: no se pudo embeber la query, sigo solo con léxico", "error", eerr)
+		} else {
+			opts.QueryVector = vec
+		}
+	}
+
 	res, err := s.engine.Recall(ctx, args.Query, opts)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)

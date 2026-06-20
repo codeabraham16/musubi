@@ -201,7 +201,7 @@ func TestScoreCandidatesFusion(t *testing.T) {
 	}
 	// lexRank por orden del slice = el comportamiento keyword-meaningful histórico.
 	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
-	scored := scoreCandidates(cands, lexRank)
+	scored := scoreCandidates(cands, lexRank, nil)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
@@ -221,7 +221,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	full := map[string]int{"a": 0, "b": 1, "c": 2}
 
-	withKeyword := scoreCandidates(cands, full)
+	withKeyword := scoreCandidates(cands, full, nil)
 	scoreOf := func(scored []scoredCandidate, id string) float64 {
 		for _, s := range scored {
 			if s.id == id {
@@ -232,7 +232,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Con lexRank completo, cada candidato suma su término keyword: score estrictamente
 	// mayor que sin él.
-	noKeyword := scoreCandidates(cands, nil)
+	noKeyword := scoreCandidates(cands, nil, nil)
 	for _, id := range []string{"a", "b", "c"} {
 		if scoreOf(withKeyword, id) <= scoreOf(noKeyword, id) {
 			t.Errorf("%s: con lexRank el score debe ser mayor que sin él (%v vs %v)",
@@ -241,7 +241,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Un id ausente del lexRank no recibe término keyword (igual que nil para ese id).
 	partial := map[string]int{"a": 0} // solo 'a' tiene rank keyword
-	mixed := scoreCandidates(cands, partial)
+	mixed := scoreCandidates(cands, partial, nil)
 	if scoreOf(mixed, "b") != scoreOf(noKeyword, "b") {
 		t.Errorf("'b' ausente del lexRank no debe sumar término keyword: %v vs %v",
 			scoreOf(mixed, "b"), scoreOf(noKeyword, "b"))
@@ -249,4 +249,74 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	if scoreOf(mixed, "a") <= scoreOf(noKeyword, "a") {
 		t.Errorf("'a' presente en lexRank sí debe sumar término keyword")
 	}
+}
+
+// TestScoreCandidatesVectorSignal verifica la 4ta señal RRF (T5.7 R2): un candidato con
+// rango vectorial suma ese término; uno ausente del vecRank no.
+func TestScoreCandidatesVectorSignal(t *testing.T) {
+	cands := []candidate{
+		{id: "a", importance: 1},
+		{id: "b", importance: 1},
+	}
+	scoreOf := func(scored []scoredCandidate, id string) float64 {
+		for _, s := range scored {
+			if s.id == id {
+				return s.score
+			}
+		}
+		return -1
+	}
+	base := scoreCandidates(cands, nil, nil)
+	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}) // solo 'a' tiene rango vectorial
+	if scoreOf(withVec, "a") <= scoreOf(base, "a") {
+		t.Errorf("'a' con rango vectorial debe sumar término RRF (%v vs %v)", scoreOf(withVec, "a"), scoreOf(base, "a"))
+	}
+	if scoreOf(withVec, "b") != scoreOf(base, "b") {
+		t.Errorf("'b' ausente del vecRank no debe cambiar (%v vs %v)", scoreOf(withVec, "b"), scoreOf(base, "b"))
+	}
+}
+
+// TestRecallHybridUnionViaVector verifica el recall híbrido end-to-end (T5.7 R2): una obs
+// que NO matchea la query léxica pero está cerca en el espacio vectorial entra al resultado
+// por el pool vectorial (union, no intersección).
+func TestRecallHybridUnionViaVector(t *testing.T) {
+	e := newTestEngine(t)
+	// 'a' matchea FTS "kubernetes"; 'b' no comparte palabras pero su vector == queryVec.
+	if err := e.SaveObservation("a", "t", "despliegue en kubernetes", []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SaveObservation("b", "t", "orquestacion de contenedores", []float32{0, 1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	queryVec := []float32{0, 1, 0} // coseno máximo con 'b'
+
+	// Sin vector: recall léxico solo encuentra 'a'.
+	lex, err := e.Recall(context.Background(), "kubernetes", RecallOptions{NoBump: true})
+	if err != nil {
+		t.Fatalf("Recall léxico error: %v", err)
+	}
+	if has(lex.Items, "b") {
+		t.Fatalf("sin vector, 'b' (sin match léxico) no debería aparecer: %+v", lex.Items)
+	}
+
+	// Híbrido: el pool vectorial trae 'b' aunque no matchee FTS.
+	hyb, err := e.Recall(context.Background(), "kubernetes", RecallOptions{QueryVector: queryVec, NoBump: true})
+	if err != nil {
+		t.Fatalf("Recall híbrido error: %v", err)
+	}
+	if !has(hyb.Items, "a") {
+		t.Errorf("el híbrido debe conservar el match léxico 'a': %+v", hyb.Items)
+	}
+	if !has(hyb.Items, "b") {
+		t.Errorf("el híbrido debe traer 'b' por el pool vectorial (union): %+v", hyb.Items)
+	}
+}
+
+func has(items []RecallItem, id string) bool {
+	for _, it := range items {
+		if it.ID == id {
+			return true
+		}
+	}
+	return false
 }
