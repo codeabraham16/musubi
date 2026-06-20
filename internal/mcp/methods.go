@@ -734,14 +734,7 @@ func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 	}
 
-	rep, err := s.engine.Maintain(memory.MaintenanceOptions{
-		DedupThreshold:         s.maintenance.DedupThreshold,
-		DecayHalfLifeDays:      s.maintenance.DecayHalfLifeDays,
-		DecayMinSalience:       s.maintenance.DecayMinSalience,
-		DecayMinAgeDays:        s.maintenance.DecayMinAgeDays,
-		PurgeArchivedAfterDays: s.maintenance.PurgeArchivedAfterDays,
-		Vacuum:                 s.maintenance.Vacuum,
-	})
+	rep, err := s.engine.Maintain(s.maintenanceOptions())
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en el mantenimiento: %v", err)
 	}
