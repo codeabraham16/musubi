@@ -1,6 +1,10 @@
 package memory
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+	"strings"
+)
 
 type TelemetryLog struct {
 	ID             int
@@ -36,6 +40,43 @@ func (e *DbEngine) ResolveTelemetryLog(id int) error {
 		return fmt.Errorf("no existe log de telemetría con id %d", id)
 	}
 	return nil
+}
+
+// telemetryPathKey normaliza una ruta para matchear telemetría: minúsculas y separadores
+// '/' (los triggers/paths llegan con '\' en Windows y '/' en otros). Determinista, model-free.
+func telemetryPathKey(p string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
+}
+
+// GetUnresolvedTelemetryLogsForFiles devuelve los logs de telemetría NO resueltos cuyo
+// file_path coincide —por ruta completa o por nombre base— con alguno de los archivos dados.
+// Es la telemetría RELEVANTE a lo que el agente está tocando (T6.2), en vez de TODA la
+// pendiente. La reusan resolve_skills (por turno) y el hook precheck (por archivo, T6.3).
+func (e *DbEngine) GetUnresolvedTelemetryLogsForFiles(files []string) ([]TelemetryLog, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	all, err := e.GetUnresolvedTelemetryLogs()
+	if err != nil {
+		return nil, err
+	}
+	want := make(map[string]bool, len(files)*2)
+	for _, f := range files {
+		k := telemetryPathKey(f)
+		if k == "" {
+			continue
+		}
+		want[k] = true
+		want[path.Base(k)] = true
+	}
+	var out []TelemetryLog
+	for _, l := range all {
+		lk := telemetryPathKey(l.FilePath)
+		if want[lk] || want[path.Base(lk)] {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }
 
 // GetUnresolvedTelemetryLogs obtiene logs de telemetría que aún no han sido resueltos.

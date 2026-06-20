@@ -70,6 +70,7 @@ type MetaStore interface {
 type TelemetryStore interface {
 	SaveTelemetryLog(filePath, errorMessage, suggestedPatch string) error
 	GetUnresolvedTelemetryLogs() ([]TelemetryLog, error)
+	GetUnresolvedTelemetryLogsForFiles(files []string) ([]TelemetryLog, error)
 	ResolveTelemetryLog(id int) error
 }
 

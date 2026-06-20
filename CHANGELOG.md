@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-06-19
+
+### Changed
+- **Telemetría relevante en `musubi_resolve_skills`** (Track 6 / T6.2): en vez de devolver TODA la
+  telemetría no resuelta, ahora devuelve solo los errores de los **archivos que el agente está
+  tocando** (`modified_files`), matcheando por ruta completa o por nombre base (tolera prefijos y
+  separadores `\`/`/` distintos). El error que viste antes en *este* archivo se surfacea; el ruido del
+  resto no.
+
+### Added
+- `GetUnresolvedTelemetryLogsForFiles(files)` en el motor (+ interfaz `TelemetryStore`): lookup de
+  errores no resueltos por archivo, reusable por el hook proactivo (T6.3).
+- `TestGetUnresolvedTelemetryLogsForFiles`: match por ruta/basename, exclusión de resueltos, vacío.
+
 ## [0.34.0] - 2026-06-19
 
 ### Changed

@@ -1226,7 +1226,9 @@ func (s *McpServer) toolResolveSkills(raw json.RawMessage) (interface{}, *RpcErr
 		return nil, rpcErrorf(codeInternalError, "error al resolver skills: %v", err)
 	}
 
-	telemetryLogs, err := s.engine.GetUnresolvedTelemetryLogs()
+	// Telemetría RELEVANTE (Track 6 / T6.2): solo los errores no resueltos de los archivos
+	// que el agente está tocando, no toda la telemetría pendiente.
+	telemetryLogs, err := s.engine.GetUnresolvedTelemetryLogsForFiles(args.ModifiedFiles)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al obtener telemetría: %v", err)
 	}
