@@ -12,11 +12,16 @@ import (
 // fakeCodeStore implementa codeStore para los tests del hook PreToolUse.
 type fakeCodeStore struct {
 	mem map[string]memory.CodeMemory
+	tel []memory.TelemetryLog
 }
 
 func (f *fakeCodeStore) GetCodeMemory(path string) (memory.CodeMemory, bool, error) {
 	cm, ok := f.mem[path]
 	return cm, ok, nil
+}
+
+func (f *fakeCodeStore) GetUnresolvedTelemetryLogsForFiles(files []string) ([]memory.TelemetryLog, error) {
+	return f.tel, nil
 }
 
 func writeFile(t *testing.T, root, rel, content string) {
@@ -76,6 +81,29 @@ func TestPrecheckNudgesSaveForBigUnknownFile(t *testing.T) {
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "musubi_save_code") {
 		t.Errorf("un archivo grande sin gist debe sugerir guardarlo, obtuve %q", ctx)
+	}
+}
+
+func TestPrecheckSurfacesKnownErrors(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "svc.go", "package svc\n") // chico y sin gist => sin aviso de código
+	store := &fakeCodeStore{
+		mem: map[string]memory.CodeMemory{},
+		tel: []memory.TelemetryLog{
+			{ID: 7, FilePath: "svc.go", ErrorMessage: "nil pointer en Handler", SuggestedPatch: "chequear req != nil"},
+		},
+	}
+	in := `{"tool_name":"Read","tool_input":{"file_path":"svc.go"},"session_id":"s"}`
+	out := precheckOutput(store, root, strings.NewReader(in))
+	_, ctx := hookAdditionalContext(t, out)
+	if !strings.Contains(ctx, "errores conocidos") || !strings.Contains(ctx, "nil pointer en Handler") {
+		t.Errorf("debe surfacear el error conocido del archivo, obtuve %q", ctx)
+	}
+	if !strings.Contains(ctx, "id 7") {
+		t.Errorf("debe incluir el id para resolverlo con musubi_resolve_telemetry, obtuve %q", ctx)
+	}
+	if !strings.Contains(ctx, "chequear req != nil") {
+		t.Errorf("debe incluir el fix sugerido, obtuve %q", ctx)
 	}
 }
 
