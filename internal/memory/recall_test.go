@@ -199,11 +199,54 @@ func TestScoreCandidatesFusion(t *testing.T) {
 		{id: "b", accessCount: 100, importance: 1},
 		{id: "c", accessCount: 0, importance: 10},
 	}
-	scored := scoreCandidates(cands, true)
+	// lexRank por orden del slice = el comportamiento keyword-meaningful histórico.
+	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
+	scored := scoreCandidates(cands, lexRank)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
 	if scored[0].id != "c" {
 		t.Errorf("esperaba 'c' primero por importancia, obtuve %s", scored[0].id)
+	}
+}
+
+// TestScoreCandidatesLexRankEquivalence verifica la equivalencia del refactor multi-pool
+// (T5.7 R1): pasar un lexRank por orden de slice == el viejo keywordMeaningful=true; pasar
+// nil == keywordMeaningful=false (omite el término keyword). Bit-idéntico al histórico.
+func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
+	cands := []candidate{
+		{id: "a", accessCount: 0, importance: 1},
+		{id: "b", accessCount: 5, importance: 1},
+		{id: "c", accessCount: 0, importance: 1},
+	}
+	full := map[string]int{"a": 0, "b": 1, "c": 2}
+
+	withKeyword := scoreCandidates(cands, full)
+	scoreOf := func(scored []scoredCandidate, id string) float64 {
+		for _, s := range scored {
+			if s.id == id {
+				return s.score
+			}
+		}
+		return -1
+	}
+	// Con lexRank completo, cada candidato suma su término keyword: score estrictamente
+	// mayor que sin él.
+	noKeyword := scoreCandidates(cands, nil)
+	for _, id := range []string{"a", "b", "c"} {
+		if scoreOf(withKeyword, id) <= scoreOf(noKeyword, id) {
+			t.Errorf("%s: con lexRank el score debe ser mayor que sin él (%v vs %v)",
+				id, scoreOf(withKeyword, id), scoreOf(noKeyword, id))
+		}
+	}
+	// Un id ausente del lexRank no recibe término keyword (igual que nil para ese id).
+	partial := map[string]int{"a": 0} // solo 'a' tiene rank keyword
+	mixed := scoreCandidates(cands, partial)
+	if scoreOf(mixed, "b") != scoreOf(noKeyword, "b") {
+		t.Errorf("'b' ausente del lexRank no debe sumar término keyword: %v vs %v",
+			scoreOf(mixed, "b"), scoreOf(noKeyword, "b"))
+	}
+	if scoreOf(mixed, "a") <= scoreOf(noKeyword, "a") {
+		t.Errorf("'a' presente en lexRank sí debe sumar término keyword")
 	}
 }
