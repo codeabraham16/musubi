@@ -63,6 +63,10 @@ type MaintenanceConfig struct {
 	// Vacuum corre VACUUM tras una purga que borró filas, para reclamar espacio en
 	// disco (default true). El checkpoint del WAL y PRAGMA optimize corren siempre.
 	Vacuum bool `yaml:"vacuum"`
+	// AutoAfterSaves dispara un mantenimiento (best-effort, respetando el throttle) tras
+	// esta cantidad de saves en la sesión, para que una sesión intensa no espere al próximo
+	// tick del scheduler. 0 = desactivado (default; opt-in consciente).
+	AutoAfterSaves int `yaml:"auto_after_saves"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
