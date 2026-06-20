@@ -89,6 +89,14 @@ func (s *McpServer) RunScheduledMaintenance() (ran bool, rep memory.MaintenanceR
 	if mErr := s.engine.MarkMaintenanceNow(); mErr != nil {
 		logx.Error("scheduler: no se pudo marcar last_maintenance", "error", mErr)
 	}
+	// Auto-curación (T5.4): el ciclo automático también se auto-cura. Repara solo los
+	// checks de bajo riesgo (apply con backup) y persiste el reporte para el hook de
+	// arranque. Best-effort: un fallo acá no invalida el mantenimiento ya hecho.
+	if health, hErr := s.engine.AutoHeal(); hErr != nil {
+		logx.Error("scheduler: auto-curación falló", "error", hErr)
+	} else if health.Status != "ok" {
+		logx.Info("scheduler: auto-curación dejó problemas no auto-reparables", "status", health.Status)
+	}
 	logx.Info("scheduler: mantenimiento",
 		"merged", rep.Consolidate.Merged, "archived", rep.Decay.Archived,
 		"purged", rep.Purged, "dur", time.Since(start).String())

@@ -46,6 +46,36 @@ func (f *fakeStore) LedgerAdd(sessionID, surface string, tokens int) (memory.Tok
 	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
 }
 
+func TestHealthContextSurfacesIssues(t *testing.T) {
+	store := newFakeStore()
+
+	// Sin reporte: silencioso.
+	if buildHealthContext(store) != "" {
+		t.Error("sin MetaLastHealth el bloque de salud debe ser vacío")
+	}
+
+	// Reporte sano: silencioso.
+	okRep, _ := json.Marshal(memory.DiagnoseReport{
+		Status: "ok",
+		Checks: []memory.CheckResult{{Code: "db_integrity", Status: "ok"}},
+	})
+	store.meta[memory.MetaLastHealth] = string(okRep)
+	if buildHealthContext(store) != "" {
+		t.Error("un reporte 'ok' no debe surfacearse")
+	}
+
+	// Reporte con problemas no auto-reparables: surfacea advertencia con el detalle.
+	badRep, _ := json.Marshal(memory.DiagnoseReport{
+		Status: "issues",
+		Checks: []memory.CheckResult{{Code: "db_integrity", Status: "error", Message: "integridad comprometida"}},
+	})
+	store.meta[memory.MetaLastHealth] = string(badRep)
+	out := buildHealthContext(store)
+	if !strings.Contains(out, "salud") || !strings.Contains(out, "db_integrity") {
+		t.Errorf("debe surfacear el problema con su código, obtuve %q", out)
+	}
+}
+
 func TestPrimingAccountsTokensInLedger(t *testing.T) {
 	store := newFakeStore()
 	store.prime = memory.RecallResult{

@@ -123,6 +123,7 @@ type Doctor interface {
 	Diagnose() (DiagnoseReport, error)
 	RunCheck(code string) (CheckResult, error)
 	Repair(code, mode string) (RepairResult, error)
+	AutoHeal() (DiagnoseReport, error)
 }
 
 // Calibrator — calibración (opt-in) del estimador de tokens.

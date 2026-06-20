@@ -11,6 +11,10 @@ import (
 
 const metaLastMaintenance = "last_maintenance"
 
+// MetaLastHealth es la clave de meta donde AutoHeal persiste el último DiagnoseReport
+// (post-repair), para que el hook de arranque pueda surfacear problemas no auto-reparables.
+const MetaLastHealth = "last_health"
+
 // MetaStackFingerprint es la clave de meta donde se guarda la huella del stack
 // para el cual ya se generaron skills. La comparten el hook SessionStart (que
 // detecta drift del stack) y musubi_save_skill (que la actualiza al guardar).

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,42 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
 	}
+}
+
+// autoHealCodes son los checks de BAJO riesgo que el auto-mantenimiento repara sin
+// supervisión: tienen apply mecánico con backup. schema_migrations y db_integrity quedan
+// FUERA a propósito (se reportan, no se auto-aplican: un cambio de esquema o de integridad
+// sin supervisión es demasiado riesgoso).
+var autoHealCodes = map[string]bool{
+	"fts_consistency":  true,
+	"missing_digests":  true,
+	"orphan_relations": true,
+}
+
+// AutoHeal diagnostica y repara automáticamente SOLO los checks de bajo riesgo
+// (autoHealCodes) en modo apply (con backup previo). Persiste el reporte final
+// (post-repair) en meta (MetaLastHealth) para que el hook de arranque lo surfacee.
+// Best-effort: el fallo de una reparación individual no aborta el resto. La usa el
+// scheduler de fondo (T5.4) para que el ciclo automático también se auto-cure.
+func (e *DbEngine) AutoHeal() (DiagnoseReport, error) {
+	rep, err := e.Diagnose()
+	if err != nil {
+		return rep, err
+	}
+	for _, c := range rep.Checks {
+		if c.Status == "ok" || !autoHealCodes[c.Code] {
+			continue
+		}
+		_, _ = e.Repair(c.Code, "apply") // best-effort
+	}
+	final, err := e.Diagnose()
+	if err != nil {
+		return rep, err
+	}
+	if data, mErr := json.Marshal(final); mErr == nil {
+		_ = e.SetMeta(MetaLastHealth, string(data))
+	}
+	return final, nil
 }
 
 // Diagnose corre todos los checks y resume el estado general.
