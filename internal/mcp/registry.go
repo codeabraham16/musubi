@@ -121,10 +121,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_maintain",
-				Description: "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. No recibe parámetros (usa la config de maintenance). Devuelve un resumen.",
+				Description: "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
 				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
+					Type: "object",
+					Properties: map[string]Property{
+						"force": {Type: "boolean", Description: "Si es true, corre el ciclo aunque el throttle indique que no toca todavía."},
+					},
 				},
 			},
 			handler: noCtx(s.toolMaintain),
