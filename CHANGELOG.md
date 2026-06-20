@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-06-19
+
+### Added
+- **`musubi_insights`** (Track 6 / T6.4, cierra Track 6): tool read-only que resume de un vistazo lo
+  que Musubi aprendió del proyecto — tamaño de la memoria (observaciones totales / activas /
+  archivadas), **hotspots** de archivos con más errores no resueltos, decisiones de skills
+  (aceptadas / rechazadas por su decisión más reciente, last-write-wins), último mantenimiento y
+  **salud** del ciclo. Es la cara "dashboard" de la observabilidad activa: todo agregación
+  SQL/aritmética determinista, sin LLM.
+- `(*DbEngine).Insights` + `InsightsReport` (en la interfaz `Insighter` de `StorageBackend`). La tool
+  cuenta como tool nº26, clasificada **read-only** (corre concurrente bajo RLock).
+
+### Notes
+- Tests: `TestInsights` (observaciones activas/archivadas, errores+hotspots, decisiones last-wins);
+  guard de clasificación read-only y golden de `tools/list` actualizados.
+
 ## [0.36.0] - 2026-06-19
 
 ### Added

@@ -134,6 +134,11 @@ type Calibrator interface {
 	RecomputeTokens() error
 }
 
+// Insighter — resumen agregado de observabilidad activa (estado de la memoria).
+type Insighter interface {
+	Insights() (InsightsReport, error)
+}
+
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo
 // debe satisfacer. Embebe io.Closer-equivalente vía Close.
 type StorageBackend interface {
@@ -153,6 +158,7 @@ type StorageBackend interface {
 	Maintainer
 	Doctor
 	Calibrator
+	Insighter
 
 	// Close libera los recursos del backend (espera trabajo en background y cierra
 	// la conexión subyacente).
