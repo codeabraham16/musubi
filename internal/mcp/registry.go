@@ -462,5 +462,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler: noCtx(s.toolRecallCode),
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_insights",
+				Description: "Resumen de observabilidad activa (model-free): estado de la memoria (observaciones totales/activas/archivadas), hotspots de archivos con más errores no resueltos, decisiones de skills (aceptadas/rechazadas por su decisión más reciente), último mantenimiento y salud del ciclo. Sin parámetros. Útil para ver de un vistazo qué aprendió Musubi del proyecto.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  noCtx(s.toolInsights),
+			readOnly: true,
+		},
 	}
 }

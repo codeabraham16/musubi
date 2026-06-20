@@ -27,6 +27,7 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_conflicts":       true,
 		"musubi_detect_stack":    true,
 		"musubi_search_skills":   true,
+		"musubi_insights":        true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

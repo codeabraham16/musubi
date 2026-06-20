@@ -957,6 +957,16 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }
 
+// toolInsights devuelve el resumen de observabilidad activa (Track 6 / T6.4): tamaño de la
+// memoria, hotspots de errores no resueltos, decisiones de skills y salud del ciclo. Read-only.
+func (s *McpServer) toolInsights(raw json.RawMessage) (interface{}, *RpcError) {
+	rep, err := s.engine.Insights()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al generar insights: %v", err)
+	}
+	return jsonResult(rep)
+}
+
 // slugRegex valida que el nombre de una skill sea un slug seguro para usar como nombre de archivo.
 var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9\-]{0,62}$`)
 
