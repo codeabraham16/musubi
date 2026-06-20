@@ -204,19 +204,7 @@ func (ix *ivfIndex) Rebuild(data []idVec, cfg config.VectorIndexConfig, seed int
 		return
 	}
 
-	k := cfg.NumCentroids
-	if k <= 0 {
-		k = int(math.Round(math.Sqrt(float64(n))))
-	}
-	if k < 1 {
-		k = 1
-	}
-	if k > n {
-		k = n
-	}
-	if k > maxCentroids {
-		k = maxCentroids
-	}
+	k := targetCentroidCount(n, cfg)
 
 	rng := rand.New(rand.NewSource(seed))
 
@@ -296,6 +284,29 @@ func nearestCentroid(centroids [][]float32, v []float32) int {
 		}
 	}
 	return best
+}
+
+// targetCentroidCount es la cantidad de centroides (celdas) apropiada para n vectores:
+// cfg.NumCentroids si está fijado, si no round(sqrt(n)); acotada a [1, n, maxCentroids]. La
+// comparten Rebuild y el guard del warm-start (T5.8), para que no diverjan.
+func targetCentroidCount(n int, cfg config.VectorIndexConfig) int {
+	if n <= 0 {
+		return 0
+	}
+	k := cfg.NumCentroids
+	if k <= 0 {
+		k = int(math.Round(math.Sqrt(float64(n))))
+	}
+	if k < 1 {
+		k = 1
+	}
+	if k > n {
+		k = n
+	}
+	if k > maxCentroids {
+		k = maxCentroids
+	}
+	return k
 }
 
 // majorityDim devuelve la dimensión más frecuente entre los vectores (desempate por
@@ -508,6 +519,7 @@ func (e *DbEngine) rebuildVectorIndexWith(cfg config.VectorIndexConfig) error {
 		return err
 	}
 	e.index.Rebuild(data, cfg, vectorIndexSeed)
+	e.saveVectorSnapshot() // persistir centroides para arranque caliente (T5.8)
 	return nil
 }
 
@@ -546,6 +558,12 @@ func (e *DbEngine) autoBuildVectorIndex(cfg config.VectorIndexConfig) {
 		return
 	}
 	defer e.rebuilding.Store(false)
+	// Arranque caliente (T5.8): si hay un snapshot válido, restaurar los centroides y
+	// reasignar (salta el k-means). Ante cualquier problema, re-entrenar de cero.
+	if e.tryWarmStartVectorIndex(cfg) {
+		_ = e.MarkMetaNow(metaVectorIndexRebuild)
+		return
+	}
 	if err := e.rebuildVectorIndexWith(cfg); err != nil {
 		logx.Warn("no se pudo construir el índice vectorial al arrancar", "error", err)
 		return

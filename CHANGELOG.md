@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-06-19
+
+### Added
+- **Persistencia del índice IVF (arranque caliente)** (Track 5 / T5.8, cierra Track 5): el índice
+  vectorial se serializa a un snapshot binario `<db>.vindex` (magic + dim + centroides, `encoding/binary`
+  stdlib) tras cada rebuild. Al arrancar, si el snapshot es válido se **restauran los centroides y se
+  reasignan los vectores activos saltando k-means** (el costo caro), en vez de re-entrenar desde cero.
+  - El `.vindex` es un **caché derivado y reconstruible**: ante cualquier problema (ausente, corrupto,
+    o incompatible) se cae al rebuild normal — nunca panic ni bloqueo de arranque, nunca compromete
+    correctness (el engine re-filtra y re-rankea exacto).
+  - **Endurecido por revisión adversarial** (16 agentes, 0 críticos/altos): escritura **atómica**
+    (tmp + `os.Rename`, sin `.vindex` truncado ante crash); **guard de `k`** que descarta el snapshot
+    si la cantidad de centroides diverge >2× de la natural para el `n` actual (dataset que cambió de
+    tamaño entre sesiones → evita degradar el recall con `NProbe` fijo); validación de dim (drift de
+    modelo) y de cotas (archivo corrupto no dispara asignaciones gigantes).
+
+### Notes
+- Tests: `TestVectorIndexWarmStart` (warm-start == rebuild), `TestVectorIndexWarmStartRejectsStaleK`,
+  `TestVectorIndexWarmStartDimMismatch`, `TestIndexSnapshotRoundTrip`, `TestReadIndexSnapshotRejectsCorrupt`.
+- Limitación conocida documentada: el snapshot no detecta un cambio de modelo de embeddings de la
+  misma dimensión (se refresca en el próximo rebuild; agregar un fingerprint cruzaría la capa
+  "model-free" del motor). `scoreCandidates`/`targetCentroidCount` ahora compartidos para no divergir.
+
 ## [0.32.0] - 2026-06-19
 
 ### Added
