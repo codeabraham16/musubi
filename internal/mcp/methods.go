@@ -1146,7 +1146,35 @@ func (s *McpServer) toolSearchSkills(raw json.RawMessage) (interface{}, *RpcErro
 		candidatos = filtrados
 	}
 
+	// Feedback de decisiones (Track 6 / T6.1): Musubi no re-propone las skills que el
+	// usuario ya rechazó. Best-effort: si la lectura falla, se devuelve sin filtrar.
+	if decisions, derr := s.engine.GetSkillDecisions(); derr == nil {
+		candidatos = excludeRejectedSkills(candidatos, decisions)
+	}
+
 	return jsonResult(candidatos)
+}
+
+// excludeRejectedSkills quita del listado los candidatos cuya decisión MÁS RECIENTE fue
+// "rejected": Musubi aprende de las decisiones y no re-propone lo descartado (T6.1).
+// Last-write-wins (GetSkillDecisions viene ordenado por id ASC): una skill rechazada y luego
+// aceptada vuelve a proponerse. Matchea por id (slug), la misma clave que log_skill_decision.
+func excludeRejectedSkills(cands []skillsource.Candidate, decisions []memory.SkillDecision) []skillsource.Candidate {
+	if len(decisions) == 0 {
+		return cands
+	}
+	latest := make(map[string]string, len(decisions))
+	for _, d := range decisions {
+		latest[d.SkillID] = d.Decision
+	}
+	out := make([]skillsource.Candidate, 0, len(cands))
+	for _, c := range cands {
+		if latest[c.Entry.ID] == "rejected" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // toolLogSkillDecision registra una decisión de skill (accepted/rejected) en SQLite.
