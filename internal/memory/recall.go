@@ -81,7 +81,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		gistMax = defaultGistMaxTokens
 	}
 
-	cands, err := e.recallCandidates(ctx, query, pool)
+	cands, lexRank, err := e.recallCandidates(ctx, query, pool)
 	if err != nil {
 		return RecallResult{}, err
 	}
@@ -91,10 +91,9 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		return result, nil
 	}
 
-	// El ranking keyword solo es significativo si la query tiene términos FTS; sin
-	// ellos (fallback por recencia) sumarlo doble-contaría la recencia.
-	keywordMeaningful := buildFTSQuery(query) != ""
-	scored := scoreCandidates(cands, keywordMeaningful)
+	// El ranking keyword (lexRank) solo existe si la query tuvo términos FTS; sin ellos
+	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia.
+	scored := scoreCandidates(cands, lexRank)
 
 	result = packByBudget(scored, budget, gistMax)
 
@@ -151,18 +150,14 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 	return result
 }
 
-// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía
-// RRF y pondera por importancia. Determinista, sin LLM. Si keywordMeaningful es
-// false (fallback sin query), omite el término keyword para no doble-contar la
-// recencia (el orden de entrada ya viene por recencia en ese caso).
-func scoreCandidates(cands []candidate, keywordMeaningful bool) []scoredCandidate {
+// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía RRF y
+// pondera por importancia. Determinista, sin LLM. Los rankings por pool se pasan como mapas
+// id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
+// lexRank es el ranking keyword (FTS); nil ⇒ se omite (fallback por recencia, para no
+// doble-contar). Esta forma multi-pool deja listo sumar la señal vectorial (T5.7 R2) sin
+// cambiar el resto: con NoopProvider (solo lexRank) el resultado es idéntico al histórico.
+func scoreCandidates(cands []candidate, lexRank map[string]int) []scoredCandidate {
 	n := len(cands)
-
-	// Ranking keyword: el orden de entrada ya viene por rank de FTS.
-	keywordRank := make(map[string]int, n)
-	for i, c := range cands {
-		keywordRank[c.id] = i
-	}
 
 	recencyRank := rankBy(cands, func(a, b candidate) bool {
 		return effectiveRecency(a) > effectiveRecency(b)
@@ -175,8 +170,8 @@ func scoreCandidates(cands []candidate, keywordMeaningful bool) []scoredCandidat
 	for i, c := range cands {
 		rrf := 1.0/float64(rrfK+recencyRank[c.id]) +
 			1.0/float64(rrfK+freqRank[c.id])
-		if keywordMeaningful {
-			rrf += 1.0 / float64(rrfK+keywordRank[c.id])
+		if r, ok := lexRank[c.id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
 		}
 		imp := c.importance
 		if imp <= 0 {
@@ -209,12 +204,16 @@ func effectiveRecency(c candidate) string {
 	return c.createdAt
 }
 
-// recallCandidates obtiene candidatos por FTS (ordenados por rank). Si la query
-// no tiene términos utilizables, cae a las observaciones más recientes.
-func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int) ([]candidate, error) {
+// recallCandidates obtiene candidatos por FTS (ordenados por rank) y su ranking keyword
+// (lexRank, id→posición). Si la query no tiene términos utilizables, cae a las observaciones
+// más recientes y devuelve lexRank=nil (no hay señal keyword). Devolver el ranking acá (en
+// vez de derivarlo del orden del slice al scorear) es lo que deja unir varios pools sin
+// ambigüedad de rangos (T5.7).
+func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int) ([]candidate, map[string]int, error) {
 	ftsQuery := buildFTSQuery(query)
 	if ftsQuery == "" {
-		return e.recentCandidates(ctx, limit)
+		cands, err := e.recentCandidates(ctx, limit)
+		return cands, nil, err
 	}
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
@@ -226,10 +225,18 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 		LIMIT ?
 	`, ftsQuery, limit)
 	if err != nil {
-		return nil, fmt.Errorf("error en recall (FTS): %w", err)
+		return nil, nil, fmt.Errorf("error en recall (FTS): %w", err)
 	}
 	defer rows.Close()
-	return scanCandidates(rows)
+	cands, err := scanCandidates(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	lexRank := make(map[string]int, len(cands))
+	for i, c := range cands {
+		lexRank[c.id] = i
+	}
+	return cands, lexRank, nil
 }
 
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).

@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-06-19
+
+### Changed
+- **Recall multi-pool** (Track 5 / T5.7 R1, prepara el recall híbrido): `recallCandidates` devuelve
+  ahora el ranking keyword (`lexRank`, id→posición) por separado, y `scoreCandidates` toma mapas de
+  rank por pool en vez de derivar el rango keyword del orden del slice. Un candidato ausente de un
+  pool simplemente no suma ese término RRF. Esto deja listo unir la señal vectorial (R2) sin
+  ambigüedad de rangos.
+  - **Bit-idéntico al histórico** con `NoopProvider` (solo el pool léxico): toda la batería de tests
+    de recall existente pasa sin cambios de comportamiento. `lexRank` nil (fallback por recencia)
+    omite el término keyword igual que antes.
+
+### Added
+- `TestScoreCandidatesLexRankEquivalence`: garantiza que `lexRank` por orden de slice == el viejo
+  `keywordMeaningful=true`, y que nil / id ausente omite el término keyword.
+
 ## [0.30.0] - 2026-06-19
 
 ### Changed
