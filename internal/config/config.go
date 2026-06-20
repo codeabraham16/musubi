@@ -67,6 +67,10 @@ type MaintenanceConfig struct {
 	// esta cantidad de saves en la sesión, para que una sesión intensa no espere al próximo
 	// tick del scheduler. 0 = desactivado (default; opt-in consciente).
 	AutoAfterSaves int `yaml:"auto_after_saves"`
+	// DecayProtectImportance protege del olvido (decay) a las observaciones con importance
+	// >= a este valor: conocimiento deliberado (decisiones, arquitectura) no se auto-archiva
+	// por más viejo/frío que esté. 0 = sin protección (default; opt-in).
+	DecayProtectImportance float64 `yaml:"decay_protect_importance"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
