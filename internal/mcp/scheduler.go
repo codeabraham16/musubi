@@ -9,11 +9,49 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
+
+// countingSave envuelve un handler de save para contar las corridas exitosas y, al cruzar
+// el umbral maintenance.AutoAfterSaves, disparar un mantenimiento (T5.3). El conteo va por
+// el wrapper para no instrumentar cada return de éxito de los handlers.
+func (s *McpServer) countingSave(h func(json.RawMessage) (interface{}, *RpcError)) func(json.RawMessage) (interface{}, *RpcError) {
+	return func(raw json.RawMessage) (interface{}, *RpcError) {
+		res, rpcErr := h(raw)
+		if rpcErr == nil {
+			s.maybeTriggerMaintenance()
+		}
+		return res, rpcErr
+	}
+}
+
+// maybeTriggerMaintenance incrementa el contador de saves y, si cruza el umbral, dispara
+// un mantenimiento en goroutine (async) — NO inline: el handler de save ya tiene el
+// write-lock de dispatchMu, así que correr el ciclo acá re-entraría el lock (deadlock). La
+// goroutine lo toma cuando el handler lo libera. maintBusy mantiene un solo ciclo en vuelo.
+func (s *McpServer) maybeTriggerMaintenance() {
+	threshold := s.maintenance.AutoAfterSaves
+	if threshold <= 0 {
+		return // desactivado (opt-in)
+	}
+	if s.saveCount.Add(1) < int64(threshold) {
+		return
+	}
+	s.saveCount.Store(0)
+	if !s.maintBusy.CompareAndSwap(false, true) {
+		return // ya hay un mantenimiento en vuelo
+	}
+	go func() {
+		defer s.maintBusy.Store(false)
+		if _, _, err := s.RunScheduledMaintenance(); err != nil {
+			logx.Error("auto-mantenimiento por volumen de saves falló", "error", err)
+		}
+	}()
+}
 
 // maintenanceOptions arma las opciones del ciclo desde la config del server. La comparten
 // la tool musubi_maintain y el scheduler de fondo, para no duplicar el mapeo.

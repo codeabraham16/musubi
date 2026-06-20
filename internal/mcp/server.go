@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"musubi/internal/config"
@@ -129,6 +130,10 @@ type McpServer struct {
 	// mutan toman Lock (serializadas, RMW-safe); las de solo-lectura toman RLock
 	// (concurrentes entre sí). En stdio (un goroutine) está siempre libre, costo nulo.
 	dispatchMu sync.RWMutex
+	// saveCount cuenta saves desde el último disparo; al cruzar maintenance.AutoAfterSaves
+	// dispara un mantenimiento async (T5.3). maintBusy garantiza un solo ciclo en vuelo.
+	saveCount atomic.Int64
+	maintBusy atomic.Bool
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de

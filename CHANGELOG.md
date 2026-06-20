@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-06-19
+
+### Added
+- **Trigger de mantenimiento por volumen de saves** (Track 5 / T5.3): además del ticker temporal de
+  T5.2, el daemon dispara ahora un mantenimiento tras `maintenance.auto_after_saves` saves
+  (observaciones / hechos / código), para que una sesión intensa no espere al próximo tick. Es
+  **opt-in**: `0` = desactivado (default).
+  - El disparo es **async** (goroutine): el handler de save ya sostiene el write-lock de `dispatchMu`,
+    así que correr el ciclo inline lo re-entraría (deadlock); la goroutine toma el lock al liberarse.
+    Respeta el throttle (`MaintenanceDue`) y mantiene **un solo ciclo en vuelo** (`atomic.Bool` CAS);
+    el contador es un `atomic.Int64` que se resetea al disparar.
+  - Nuevo campo de config `maintenance.auto_after_saves` (int, default 0).
+- `TestAutoMaintainAfterSaves`: verifica que cruzar el umbral dispara el mantenimiento y que por
+  debajo no.
+
 ## [0.26.0] - 2026-06-19
 
 ### Added

@@ -82,7 +82,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"topic_key", "content"},
 				},
 			},
-			handler: noCtx(s.toolSaveObservation),
+			handler: noCtx(s.countingSave(s.toolSaveObservation)),
 		},
 		{
 			Tool: Tool{
@@ -145,7 +145,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"subject", "predicate", "object"},
 				},
 			},
-			handler: noCtx(s.toolSaveFact),
+			handler: noCtx(s.countingSave(s.toolSaveFact)),
 		},
 		{
 			Tool: Tool{
@@ -446,7 +446,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"path", "gist"},
 				},
 			},
-			handler: noCtx(s.toolSaveCode),
+			handler: noCtx(s.countingSave(s.toolSaveCode)),
 		},
 		{
 			Tool: Tool{
