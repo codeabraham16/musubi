@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-06-19
+
+### Changed
+- **Throttle + `force` en `musubi_maintain`** (Track 5 / T5.1, abre la ola de autonomía del daemon):
+  la tool consulta ahora el throttle del auto-mantenimiento (`MaintenanceDue`) antes de correr. Si el
+  último mantenimiento fue hace menos del intervalo configurado (`maintenance.auto_interval_hours`),
+  devuelve un no-op informativo (`{skipped: true, reason, last_maintenance}`) en vez de re-disparar
+  consolidación + VACUUM. Pasá `force: true` para ignorar el throttle (mantenimiento on-demand
+  explícito). Tras correr, marca `last_maintenance`.
+  - Protege contra que un agente dispare el ciclo en loop, y establece el contrato `force` que
+    reusará el scheduler de fondo (T5.2). `auto_interval_hours: 0` ⇒ sin throttle (siempre corre).
+- `musubi_doctor` expone ahora `last_maintenance` para visibilidad del estado del ciclo, sin cambiar
+  el contrato `DiagnoseReport` (el campo se suma; los existentes se preservan).
+
+### Added
+- `TestMaintainThrottleAndForce` y `TestDoctorExposesLastMaintenance`: guardas del throttle, del
+  override por `force` y de la visibilidad de `last_maintenance`.
+
 ## [0.24.0] - 2026-06-19
 
 ### Changed

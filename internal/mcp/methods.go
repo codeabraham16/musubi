@@ -240,7 +240,14 @@ func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
 	}
-	return jsonResult(rep)
+	// Exponer last_maintenance para visibilidad del ciclo (T5.1). El struct embebido
+	// promueve los campos de DiagnoseReport, así que el contrato existente no cambia;
+	// solo se suma un campo extra.
+	last, _, _ := s.engine.GetMeta("last_maintenance")
+	return jsonResult(struct {
+		memory.DiagnoseReport
+		LastMaintenance string `json:"last_maintenance,omitempty"`
+	}{DiagnoseReport: rep, LastMaintenance: last})
 }
 
 // phaseView es la respuesta de musubi_phase: el estado actual + su directiva.
@@ -689,7 +696,44 @@ func (s *McpServer) toolEntityContext(raw json.RawMessage) (interface{}, *RpcErr
 	return jsonResult(res)
 }
 
+// maintainResponse es la respuesta de musubi_maintain. Cuando el throttle saltea
+// el ciclo, Skipped=true y Report queda nil; cuando corre, Report trae el resumen.
+// LastMaintenance refleja la marca tras la corrida (o la existente si se salteó).
+type maintainResponse struct {
+	Skipped         bool                      `json:"skipped"`
+	Reason          string                    `json:"reason,omitempty"`
+	LastMaintenance string                    `json:"last_maintenance,omitempty"`
+	Report          *memory.MaintenanceReport `json:"report,omitempty"`
+}
+
 func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Force bool `json:"force"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	// Throttle del ciclo on-demand: sin force, no corre si no pasó el intervalo de
+	// auto-mantenimiento. Protege contra disparar consolidación + VACUUM en loop.
+	// (AutoIntervalHours=0 ⇒ siempre "due", sin throttle.)
+	if !args.Force {
+		due, err := s.engine.MaintenanceDue(s.maintenance.AutoIntervalHours)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al consultar el throttle: %v", err)
+		}
+		if !due {
+			last, _, _ := s.engine.GetMeta("last_maintenance")
+			return jsonResult(maintainResponse{
+				Skipped:         true,
+				Reason:          fmt.Sprintf("último mantenimiento hace menos de %.0fh; pasá force=true para correr igual", s.maintenance.AutoIntervalHours),
+				LastMaintenance: last,
+			})
+		}
+	}
+
 	rep, err := s.engine.Maintain(memory.MaintenanceOptions{
 		DedupThreshold:         s.maintenance.DedupThreshold,
 		DecayHalfLifeDays:      s.maintenance.DecayHalfLifeDays,
@@ -701,7 +745,12 @@ func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en el mantenimiento: %v", err)
 	}
-	return jsonResult(rep)
+	// Marcar la corrida para que el throttle (y el scheduler de T5.2) la respeten.
+	if mErr := s.engine.MarkMaintenanceNow(); mErr != nil {
+		logx.Error("no se pudo marcar last_maintenance", "error", mErr)
+	}
+	last, _, _ := s.engine.GetMeta("last_maintenance")
+	return jsonResult(maintainResponse{Skipped: false, LastMaintenance: last, Report: &rep})
 }
 
 func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {
