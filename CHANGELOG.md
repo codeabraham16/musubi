@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-06-19
+
+### Added
+- **Recall híbrido** (Track 5 / T5.7 R2, la pieza de mayor impacto de la ola): cuando hay un proveedor
+  de embeddings, `musubi_recall` suma un **pool de candidatos por similitud vectorial** (coseno) al
+  pool léxico (FTS), **unidos por id** (union, no intersección), y agrega una **4ta señal RRF** por
+  rango vectorial. Así una consulta como "fixed N+1 query" puede recuperar "database performance
+  regression" aunque no compartan palabras. La query se embebe en la capa MCP (best-effort: si el
+  embedder falla, el recall sigue 100% léxico).
+- `augmentWithVectorPool` + `candidatesByIDs` en el motor; `RecallOptions.QueryVector`.
+
+### Changed
+- `scoreCandidates` suma el término vectorial detrás de `vecRank` (mismo patrón que `lexRank`).
+  **Sin proveedor de embeddings (`NoopProvider`) el comportamiento es idéntico al histórico** —
+  `QueryVector` vacío ⇒ `vecRank` nil ⇒ recall 100% léxico.
+
+### Notes
+- Tests: `TestRecallHybridUnionViaVector` (el pool vectorial trae una obs sin match léxico),
+  `TestScoreCandidatesVectorSignal`. Cierra T5.7 (el slice de mayor impacto y riesgo de Track 5).
+
 ## [0.31.0] - 2026-06-19
 
 ### Changed
