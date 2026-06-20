@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-06-19
+
+### Added
+- **Scheduler de auto-mantenimiento de fondo** (Track 5 / T5.2, corazón de la ola de autonomía): el
+  daemon corre ahora el ciclo de mantenimiento (consolidar + olvidar + purgar + compactar) de forma
+  recurrente vía un `time.Ticker`, no solo una vez al arrancar. Un daemon long-running se mantiene
+  solo, sin necesidad de reinicio.
+  - La corrida de arranque pasó a una goroutine best-effort: un `VACUUM` grande ya **no bloquea** el
+    primer pedido del daemon.
+  - El ticker y la corrida de arranque se **serializan contra el dispatch de tools** tomando el
+    write-lock del server (`dispatchMu`, de T4.5) y respetan el throttle de T5.1 (`MaintenanceDue`).
+    El ciclo se detiene limpio en el shutdown (cancelación de contexto por señal o EOF de stdin).
+  - Métodos nuevos del server: `RunScheduledMaintenance` (una corrida throttled, bajo lock) y
+    `RunMaintenanceScheduler` (loop por ticker hasta cancelar el contexto).
+- `TestMaintenanceSchedulerRunsAndStops` (corre bajo `-race` en CI: ticker + dispatch concurrente de
+  lecturas y escrituras contra el lock exclusivo del mantenimiento) y
+  `TestRunScheduledMaintenanceThrottle`.
+
 ## [0.25.0] - 2026-06-19
 
 ### Changed

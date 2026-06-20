@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
@@ -223,21 +224,6 @@ func runDaemon() {
 	}
 	defer engine.Close()
 
-	// Auto-mantenimiento throttled: si está activado y corresponde según el
-	// intervalo, corre una vez en este arranque (consolidar + olvidar). Todo a
-	// stderr y best-effort: nunca bloquea ni rompe el arranque del daemon.
-	if cfg.Maintenance.AutoIntervalHours > 0 {
-		if due, derr := engine.MaintenanceDue(cfg.Maintenance.AutoIntervalHours); derr == nil && due {
-			rep, mErr := maintenanceCycle(engine, cfg.Maintenance)
-			if mErr != nil {
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento falló: %v\n", mErr)
-			} else {
-				_ = engine.MarkMaintenanceNow()
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Purged)
-			}
-		}
-	}
-
 	// Chequeo de versión throttled: avisa por stderr si hay una versión nueva
 	// (no descarga ni reemplaza nada). Corre en goroutine para no demorar el
 	// arranque. CheckIntervalHours <= 0 lo desactiva.
@@ -250,6 +236,25 @@ func runDaemon() {
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent))
+
+	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el
+	// ciclo cognitivo (consolidar/olvidar/purgar) solo correría una vez al arrancar. Dos
+	// goroutines best-effort que serializan contra el dispatch vía el write-lock del server:
+	//   (1) una corrida de arranque NO bloqueante (un VACUUM grande no demora el primer pedido);
+	//   (2) un ticker periódico que repite el ciclo intra-sesión.
+	// El ctx se cancela al retornar de runDaemon (señal o EOF de stdin), parando el ticker.
+	maintCtx, stopMaint := context.WithCancel(context.Background())
+	defer stopMaint()
+	if cfg.Maintenance.AutoIntervalHours > 0 {
+		go func() {
+			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
+			} else if ran {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Purged)
+			}
+		}()
+		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
+	}
 
 	// Capturar SIGINT/SIGTERM para graceful shutdown: el select espera hasta que el
 	// servidor termine (EOF de stdin) o llegue una señal. En ambos casos se retorna
