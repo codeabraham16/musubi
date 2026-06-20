@@ -61,6 +61,7 @@ func (s *McpServer) maintenanceOptions() memory.MaintenanceOptions {
 		DecayHalfLifeDays:      s.maintenance.DecayHalfLifeDays,
 		DecayMinSalience:       s.maintenance.DecayMinSalience,
 		DecayMinAgeDays:        s.maintenance.DecayMinAgeDays,
+		DecayProtectImportance: s.maintenance.DecayProtectImportance,
 		PurgeArchivedAfterDays: s.maintenance.PurgeArchivedAfterDays,
 		Vacuum:                 s.maintenance.Vacuum,
 	}

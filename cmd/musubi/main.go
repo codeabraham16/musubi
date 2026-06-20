@@ -124,6 +124,7 @@ func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memo
 		DecayHalfLifeDays:      m.DecayHalfLifeDays,
 		DecayMinSalience:       m.DecayMinSalience,
 		DecayMinAgeDays:        m.DecayMinAgeDays,
+		DecayProtectImportance: m.DecayProtectImportance,
 		PurgeArchivedAfterDays: m.PurgeArchivedAfterDays,
 		Vacuum:                 m.Vacuum,
 	})

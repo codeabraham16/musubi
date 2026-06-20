@@ -26,7 +26,14 @@ type DecayOptions struct {
 	HalfLifeDays float64 // vida media de la recencia (días)
 	MinSalience  float64 // por debajo de esto, una memoria fría se archiva
 	MinAgeDays   float64 // nunca archivar memorias más nuevas que esto
+	// ProtectImportance protege del olvido a las observaciones con importance >= a este
+	// valor (conocimiento deliberado). 0 = sin protección.
+	ProtectImportance float64
 }
+
+// decayBatchSize es el tamaño de página del scan de olvido. Es var (no const) para que
+// los tests puedan forzar múltiples páginas con pocos datos.
+var decayBatchSize = 1000
 
 // DecayResult resume una corrida de olvido.
 type DecayResult struct {
@@ -55,51 +62,69 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 		opts.MinAgeDays = defaultMinAgeDays
 	}
 
-	rows, err := e.db.Query(`
-		SELECT id, access_count, importance, COALESCE(created_at,''), COALESCE(last_accessed,'')
-		FROM observations WHERE archived = 0
-	`)
-	if err != nil {
-		return DecayResult{}, fmt.Errorf("error al listar observaciones: %w", err)
-	}
-
+	// Scan paginado por keyset (id > lastID): acota la memoria en bases grandes en vez de
+	// cargar TODO el set activo de una. La saliencia se computa en Go con la MISMA fórmula
+	// de siempre (no se mueve a SQL): así el conjunto archivado es idéntico al histórico,
+	// sin riesgo de regresión por diferencias de float/timestamps entre Go y SQLite.
 	now := time.Now().UTC()
 	var toArchive []string
 	scanned := 0
-	for rows.Next() {
-		var (
-			id                    string
-			access                int
-			importance            float64
-			createdAt, lastAccess string
-		)
-		if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess); err != nil {
-			rows.Close()
-			return DecayResult{}, fmt.Errorf("error al escanear observación: %w", err)
+	lastID := ""
+	for {
+		rows, err := e.db.Query(`
+			SELECT id, access_count, importance, COALESCE(created_at,''), COALESCE(last_accessed,'')
+			FROM observations WHERE archived = 0 AND id > ?
+			ORDER BY id LIMIT ?
+		`, lastID, decayBatchSize)
+		if err != nil {
+			return DecayResult{}, fmt.Errorf("error al listar observaciones: %w", err)
 		}
-		scanned++
+		batch := 0
+		for rows.Next() {
+			var (
+				id                    string
+				access                int
+				importance            float64
+				createdAt, lastAccess string
+			)
+			if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess); err != nil {
+				rows.Close()
+				return DecayResult{}, fmt.Errorf("error al escanear observación: %w", err)
+			}
+			lastID = id
+			batch++
+			scanned++
 
-		ts := lastAccess
-		if strings.TrimSpace(ts) == "" {
-			ts = createdAt
+			// Protección por importancia: el conocimiento deliberado no se auto-archiva.
+			if opts.ProtectImportance > 0 && importance >= opts.ProtectImportance {
+				continue
+			}
+
+			ts := lastAccess
+			if strings.TrimSpace(ts) == "" {
+				ts = createdAt
+			}
+			t, perr := time.Parse(sqliteTimeLayout, ts)
+			if perr != nil {
+				continue // sin timestamp parseable: no se archiva
+			}
+			ageDays := now.Sub(t).Hours() / 24
+			if ageDays < opts.MinAgeDays {
+				continue
+			}
+			if salience(importance, access, ageDays, opts.HalfLifeDays) < opts.MinSalience {
+				toArchive = append(toArchive, id)
+			}
 		}
-		t, perr := time.Parse(sqliteTimeLayout, ts)
-		if perr != nil {
-			continue // sin timestamp parseable: no se archiva
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return DecayResult{}, fmt.Errorf("error al iterar observaciones para decay: %w", err)
 		}
-		ageDays := now.Sub(t).Hours() / 24
-		if ageDays < opts.MinAgeDays {
-			continue
-		}
-		if salience(importance, access, ageDays, opts.HalfLifeDays) < opts.MinSalience {
-			toArchive = append(toArchive, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		return DecayResult{}, fmt.Errorf("error al iterar observaciones para decay: %w", err)
+		if batch < decayBatchSize {
+			break // última página
+		}
 	}
-	rows.Close()
 
 	if len(toArchive) > 0 {
 		// Trocear el IN(...) para respetar el tope de parámetros enlazados: un primer

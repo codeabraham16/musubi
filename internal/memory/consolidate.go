@@ -28,7 +28,8 @@ type consObs struct {
 
 // Consolidate fusiona observaciones cuya similitud supere threshold. El más
 // "fuerte" (más accesos, luego más importante, luego más nuevo) queda como
-// canónico; los duplicados se borran acumulando sus accesos y la importancia máxima.
+// canónico; los duplicados se ARCHIVAN (soft-delete reversible) acumulando sus accesos
+// y la importancia máxima en el canónico.
 func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	if threshold <= 0 {
 		threshold = defaultDedupThreshold
@@ -86,7 +87,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	keptTg := []map[string]bool{}  // trigramas de cada canónico (paralelo a kept)
 	byNorm := map[string]int{}     // contenido normalizado -> índice de canónico
 	inverted := map[string][]int{} // trigrama -> índices de canónicos que lo contienen
-	var removed []string           // ids de duplicados borrados (para el índice vectorial)
+	var removed []string           // ids de duplicados archivados (para sacar del índice vectorial)
 	merged := 0
 
 	for _, o := range all {
@@ -138,19 +139,17 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 			k.access, k.importance, k.id); err != nil {
 			return ConsolidateResult{}, fmt.Errorf("error al actualizar canónico: %w", err)
 		}
-		if _, err := tx.Exec(`DELETE FROM observations WHERE id=?`, o.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al borrar duplicado: %w", err)
+		// Soft-delete reversible (T5.5): en vez de borrar físicamente el duplicado, se
+		// archiva y se apunta al canónico. Queda oculto del recall (archived + superseded)
+		// pero recuperable; el borrado definitivo lo hace PurgeArchived tras el período de
+		// gracia de retención, que limpia relaciones y embeddings. Así una fusión por falso
+		// positivo de trigramas no pierde datos. archived_at = ahora arranca la ventana de
+		// gracia desde el archivado.
+		if _, err := tx.Exec(`UPDATE observations SET archived=1, archived_at=CURRENT_TIMESTAMP, superseded_by=? WHERE id=?`, k.id, o.id); err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al archivar duplicado: %w", err)
 		}
-		// Limpiar referencias colgantes al id borrado: observation_relations no tiene
-		// FK, y superseded_by es TEXT sin FK. Sin esto quedarían punteros a un id
-		// inexistente.
-		if _, err := tx.Exec(`DELETE FROM observation_relations WHERE source_id=? OR target_id=?`, o.id, o.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al limpiar relaciones del duplicado: %w", err)
-		}
-		// Re-apuntar (no NULear) los punteros superseded_by al canónico que absorbió al
-		// duplicado: una observación ocultada por resolución de conflictos sigue oculta
-		// (no resucita en el recall), apuntando ahora al canónico vivo en vez de a un id
-		// borrado. k.id sobrevive toda la consolidación.
+		// Re-apuntar los punteros superseded_by que apuntaban al duplicado hacia el canónico
+		// vivo (aplana la cadena; el duplicado ya quedó apuntando a k.id arriba).
 		if _, err := tx.Exec(`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, k.id, o.id); err != nil {
 			return ConsolidateResult{}, fmt.Errorf("error al re-apuntar punteros superseded_by: %w", err)
 		}

@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-06-19
+
+### Changed
+- **Olvido reversible** (Track 5 / T5.5, cierra la ola de autonomía): la consolidación de
+  casi-duplicados ahora **archiva** el duplicado (soft-delete: `archived=1` + `archived_at` +
+  `superseded_by` al canónico) en vez de **borrarlo físicamente**. Queda oculto del recall pero
+  **recuperable**; el borrado definitivo lo hace `PurgeArchived` tras el período de gracia de
+  retención (que limpia relaciones y embeddings). Así una fusión por falso positivo de trigramas no
+  pierde datos.
+- **Decay paginado**: el olvido escanea por **keyset paginado** (`id > lastID`) en vez de cargar todo
+  el set activo en RAM, acotando la memoria en bases grandes. La saliencia se sigue computando en Go
+  con la **misma fórmula** (no se movió a SQL): el conjunto archivado es **idéntico** al histórico,
+  sin riesgo de regresión por diferencias de float/timestamps.
+
+### Added
+- **Protección por importancia en el decay**: `maintenance.decay_protect_importance` (float, default 0
+  = off). Las observaciones con `importance >=` a ese valor (conocimiento deliberado: decisiones,
+  arquitectura) **no se auto-archivan** por más viejas/frías que estén. Nota: Musubi no tiene columna
+  `type`; la protección usa `importance`, la señal de "conocimiento deliberado" del esquema real.
+- Tests: `TestDecayPaginationEquivalence` (paginado == una-pasada, garantía de no-regresión),
+  `TestDecayProtectsHighImportance`, `TestConsolidateSoftDeletesDuplicate`.
+
 ## [0.28.0] - 2026-06-19
 
 ### Added

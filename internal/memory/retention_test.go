@@ -284,9 +284,10 @@ func TestConsolidateInvertedIndexMatchesBruteForce(t *testing.T) {
 		t.Fatalf("merged=%d, brute-force esperaba %d", res.Merged, wantMerged)
 	}
 
-	// Los sobrevivientes en la DB deben ser EXACTAMENTE el set predicho.
+	// Los sobrevivientes VIVOS en la DB deben ser EXACTAMENTE el set predicho. (Soft-delete:
+	// los duplicados quedan archived=1, no borrados; los vivos son los canónicos.)
 	survivors := map[string]bool{}
-	srows, err := e.db.Query(`SELECT id FROM observations`)
+	srows, err := e.db.Query(`SELECT id FROM observations WHERE archived = 0`)
 	if err != nil {
 		t.Fatal(err)
 	}

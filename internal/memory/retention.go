@@ -19,6 +19,7 @@ type MaintenanceOptions struct {
 	DecayHalfLifeDays      float64
 	DecayMinSalience       float64
 	DecayMinAgeDays        float64
+	DecayProtectImportance float64
 	PurgeArchivedAfterDays float64
 	Vacuum                 bool
 }
@@ -45,9 +46,10 @@ func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) 
 	rep.Consolidate = cons
 
 	dec, err := e.Decay(DecayOptions{
-		HalfLifeDays: opts.DecayHalfLifeDays,
-		MinSalience:  opts.DecayMinSalience,
-		MinAgeDays:   opts.DecayMinAgeDays,
+		HalfLifeDays:      opts.DecayHalfLifeDays,
+		MinSalience:       opts.DecayMinSalience,
+		MinAgeDays:        opts.DecayMinAgeDays,
+		ProtectImportance: opts.DecayProtectImportance,
 	})
 	if err != nil {
 		return rep, err

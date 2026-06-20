@@ -2,16 +2,12 @@ package memory
 
 import "testing"
 
-func TestConsolidateCleansDanglingRefs(t *testing.T) {
+func TestConsolidateSoftDeletesDuplicate(t *testing.T) {
 	e := newTestEngine(t)
 	saveAt(t, e, "a", "arch/db", "Usamos PostgreSQL para la base de datos del sistema.", "2026-01-01 10:00:00")
 	saveAt(t, e, "b", "arch/db", "Usamos PostgreSQL para la base de datos del sistema productivo.", "2026-01-02 10:00:00")
-	// 'a' más fuerte (más accesos) → canónico; 'b' se borra como duplicado.
+	// 'a' más fuerte (más accesos) → canónico; 'b' se archiva como duplicado (soft-delete).
 	if _, err := e.db.Exec(`UPDATE observations SET access_count=10 WHERE id='a'`); err != nil {
-		t.Fatal(err)
-	}
-	// Relación que referencia a 'b' (la que se borrará): no debe quedar huérfana.
-	if _, err := e.UpsertObsRelation(ObsRelation{SourceID: "b", TargetID: "a", Relation: RelPending, Status: RelStatusPending}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -23,14 +19,26 @@ func TestConsolidateCleansDanglingRefs(t *testing.T) {
 		t.Fatalf("esperaba al menos 1 fusión, obtuve %+v", res)
 	}
 
-	var n int
-	e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id='b'`).Scan(&n)
-	if n != 0 {
-		t.Errorf("'b' debió borrarse como duplicado")
+	// El duplicado NO se borra: queda archivado (reversible) y apuntando al canónico.
+	var archived int
+	var supersededBy, archivedAt string
+	if err := e.db.QueryRow(`SELECT archived, COALESCE(superseded_by,''), COALESCE(archived_at,'') FROM observations WHERE id='b'`).
+		Scan(&archived, &supersededBy, &archivedAt); err != nil {
+		t.Fatalf("'b' no debió borrarse físicamente (soft-delete): %v", err)
 	}
-	e.db.QueryRow(`SELECT COUNT(*) FROM observation_relations WHERE source_id='b' OR target_id='b'`).Scan(&n)
-	if n != 0 {
-		t.Errorf("quedaron %d relaciones huérfanas referenciando 'b'", n)
+	if archived != 1 {
+		t.Errorf("'b' debió quedar archivado (archived=1), obtuve %d", archived)
+	}
+	if supersededBy != "a" {
+		t.Errorf("'b' debió apuntar al canónico 'a', obtuve superseded_by=%q", supersededBy)
+	}
+	if archivedAt == "" {
+		t.Errorf("'b' debió tener archived_at seteado (arranca la ventana de gracia)")
+	}
+	// El canónico sobrevive vivo.
+	var canonArch int
+	if err := e.db.QueryRow(`SELECT archived FROM observations WHERE id='a'`).Scan(&canonArch); err != nil || canonArch != 0 {
+		t.Errorf("el canónico 'a' debe seguir vivo (archived=0), obtuve archived=%d err=%v", canonArch, err)
 	}
 }
 
@@ -83,12 +91,13 @@ func TestConsolidateMergesNearDuplicates(t *testing.T) {
 		t.Errorf("esperaba 1 merge, obtuve %d", res.Merged)
 	}
 
+	// Soft-delete: la fila del duplicado persiste pero archivada; quedan 2 VIVAS.
 	var n int
-	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE archived=0`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 2 {
-		t.Errorf("esperaba 2 filas tras consolidar, obtuve %d", n)
+		t.Errorf("esperaba 2 filas vivas tras consolidar, obtuve %d", n)
 	}
 
 	// El canónico 'a' sobrevive y acumula los accesos del duplicado.
