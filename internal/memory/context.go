@@ -51,7 +51,7 @@ func (e *DbEngine) EntityContext(entity string, maxHops, maxFacts, maxObs int) (
 // observationGists devuelve los gists de las observaciones (no archivadas) que
 // mencionan el texto dado, ordenadas por relevancia FTS.
 func (e *DbEngine) observationGists(query string, limit int) ([]ObsGist, error) {
-	ftsQuery := buildFTSQuery(query)
+	ftsQuery := buildFTSQueryRanked(query)
 	if ftsQuery == "" {
 		return []ObsGist{}, nil
 	}

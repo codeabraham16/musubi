@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-06-19
+
+### Changed
+- **FTS ponderado por IDF-aproximado** (Track 5 / T5.6, abre la ola de recall): nueva
+  `buildFTSQueryRanked` que descarta el ruido que diluye el `OR` del `MATCH` — stopwords (lista
+  determinista es/en) y tokens de una sola runa (p. ej. la `N` y el `1` de `N+1`) — pero **preserva
+  entidades cortas** significativas (`Go`, `DB`, `API`). Si la consulta es toda ruido, cae a
+  `buildFTSQuery` para no perder recall. Proxy de IDF determinista, sin LLM.
+  - Adoptada en `conflictCandidates` (detección de conflictos) y `EntityContext` (grafo): menos
+    ramas `OR`, candidatos más limpios. El path de `musubi_recall` se mantiene en `buildFTSQuery`
+    hasta el recall híbrido (T5.7), para no calibrar el RRF sobre un pool que aún cambia.
+
+### Added
+- `TestBuildFTSQueryRanked`: descarta stopwords y tokens de 1 runa, preserva `Go`/`DB`/`API`,
+  fallback no vacío ante consulta toda de ruido.
+
 ## [0.29.0] - 2026-06-19
 
 ### Changed
