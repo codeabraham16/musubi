@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-06-19
+
+### Added
+- **Auto-curación en el ciclo de mantenimiento** (Track 5 / T5.4): el scheduler de fondo ahora también
+  se auto-cura. Tras cada mantenimiento corre `AutoHeal`: diagnostica y **repara automáticamente solo
+  los checks de bajo riesgo** (`fts_consistency`, `missing_digests`, `orphan_relations`) en modo apply
+  (con backup previo). `db_integrity` y `schema_migrations` quedan **fuera a propósito**: se reportan,
+  no se auto-aplican.
+- **Salud surfaceada en el arranque**: `AutoHeal` persiste el último `DiagnoseReport` (post-repair) en
+  meta (`last_health`); el hook `SessionStart` lo lee (lectura barata, no re-diagnostica) e inyecta una
+  advertencia con los problemas **no auto-reparables** si la base no está sana. Si está sana, silencioso.
+- `(*DbEngine).AutoHeal` (+ en la interfaz `Doctor`), `buildHealthContext` en el hook de arranque.
+- Tests: `TestAutoHealRepairsLowRisk`, `TestHealthContextSurfacesIssues`.
+
 ## [0.27.0] - 2026-06-19
 
 ### Added

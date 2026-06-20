@@ -104,8 +104,42 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 	if store != nil && cfg.CognitiveBootstrap && bootstrappingAutoconocimiento(store) {
 		cognitive = buildCognitiveContext()
 	}
+	health := buildHealthContext(store)
 
-	return assembleHookContext("SessionStart", priming, cognitive, generation), nil
+	return assembleHookContext("SessionStart", priming, health, cognitive, generation), nil
+}
+
+// buildHealthContext surfacea (T5.4) los problemas que la auto-curación NO pudo reparar
+// sola, leyendo el último DiagnoseReport persistido por AutoHeal (MetaLastHealth). Si la
+// base está sana o no hay reporte, devuelve "" (silencioso). Es una lectura barata de
+// meta: no re-diagnostica.
+func buildHealthContext(store startupStore) string {
+	if store == nil {
+		return ""
+	}
+	raw, ok, err := store.GetMeta(memory.MetaLastHealth)
+	if err != nil || !ok || strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var rep memory.DiagnoseReport
+	if jerr := json.Unmarshal([]byte(raw), &rep); jerr != nil {
+		return ""
+	}
+	if rep.Status == "ok" {
+		return ""
+	}
+	var problemas []string
+	for _, c := range rep.Checks {
+		if c.Status != "ok" {
+			problemas = append(problemas, fmt.Sprintf("%s — %s", c.Code, c.Message))
+		}
+	}
+	if len(problemas) == 0 {
+		return ""
+	}
+	return "[Musubi — salud] El auto-mantenimiento detectó problemas en la base de memoria que no se auto-reparan:\n- " +
+		strings.Join(problemas, "\n- ") +
+		"\nCorré musubi_doctor para el detalle; los reparables se arreglan con musubi_doctor {check, repair:true, mode:\"apply\"}."
 }
 
 // bootstrappingAutoconocimiento indica si el proyecto AÚN no tiene perfil: en ese
