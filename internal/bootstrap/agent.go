@@ -21,13 +21,19 @@ type AgentTarget struct {
 	MCPPath string
 	// SupportsHooks indica si el agente tiene un sistema de hooks que Musubi inyecta.
 	SupportsHooks bool
+	// PortableConfig indica si el agente soporta una config MCP portable: expande
+	// ${VAR} en .mcp.json e inyecta CLAUDE_PROJECT_DIR en el entorno del server (es el
+	// caso de Claude Code). Si es true, setup escribe un command resoluble por la env
+	// var MUSUBI_BIN y NO hardcodea la ruta del proyecto; si es false, usa rutas
+	// absolutas (compatibilidad con agentes que no expanden variables, ej. Cursor).
+	PortableConfig bool
 	// detectDir es un directorio cuya presencia sugiere que el agente se usa en el repo.
 	detectDir string
 }
 
 // claudeTarget: Claude Code — .mcp.json en la raíz + hooks en .claude/settings.json.
 func claudeTarget() AgentTarget {
-	return AgentTarget{Name: "claude", MCPPath: ".mcp.json", SupportsHooks: true, detectDir: ".claude"}
+	return AgentTarget{Name: "claude", MCPPath: ".mcp.json", SupportsHooks: true, PortableConfig: true, detectDir: ".claude"}
 }
 
 // cursorTarget: Cursor — .cursor/mcp.json (mismo esquema mcpServers); sin hooks.

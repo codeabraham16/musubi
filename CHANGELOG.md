@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-06-20
+
+### Changed
+- **`.mcp.json` y hooks portables** (sobreviven a formateos, cambios de usuario y clones en otra
+  máquina): `musubi setup` ya no hardcodea la ruta absoluta del binario ni del proyecto para Claude
+  Code. El `command` del server se escribe como `${MUSUBI_BIN:-<ruta>}` (resoluble por la env var
+  `MUSUBI_BIN`, con la ruta actual como fallback) y se **omite** `MUSUBI_HOME`: el daemon toma la raíz
+  del proyecto de `CLAUDE_PROJECT_DIR`, que Claude Code inyecta automáticamente en el entorno del
+  server. Los hooks invocan `musubi` por PATH cuando está instalado global. Resultado: el `.mcp.json`
+  se vuelve commiteable y no se rompe al reinstalar o mover el proyecto. Cursor y otros agentes que no
+  expanden `${VAR}` mantienen rutas absolutas (`AgentTarget.PortableConfig`).
+- El instalador **global** (doble-clic, `install.ps1`, `install.sh`) ahora exporta `MUSUBI_BIN` con la
+  ruta del binario instalado, además del PATH: al reinstalar tras un formateo, **todos** los proyectos
+  con `.mcp.json` portable vuelven a resolver el binario sin tocar ninguno.
+
+### Added
+- `workspaceDir` resuelve la raíz con la cadena `MUSUBI_HOME → CLAUDE_PROJECT_DIR → cwd`.
+- `AgentTarget.PortableConfig` distingue agentes que soportan config portable (Claude Code) de los que
+  no (Cursor).
+
+### Notes
+- Tests: `.mcp.json` portable vs absoluto; `workspaceDir` con `CLAUDE_PROJECT_DIR` y su prioridad.
+
 ## [0.37.0] - 2026-06-19
 
 ### Added

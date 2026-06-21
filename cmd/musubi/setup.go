@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -13,10 +14,16 @@ import (
 
 // workspaceDir resuelve el directorio de trabajo de Musubi.
 // Prioriza la variable de entorno MUSUBI_HOME (útil para correr como servidor
-// MCP global con una memoria estable), y cae al directorio actual.
+// MCP global con una memoria estable). Si falta, usa CLAUDE_PROJECT_DIR —que Claude
+// Code inyecta automáticamente en el entorno del server MCP con la raíz del proyecto—,
+// de modo que el .mcp.json no necesita hardcodear la ruta del proyecto. Cae al
+// directorio actual como último recurso.
 func workspaceDir() string {
 	if home := os.Getenv("MUSUBI_HOME"); home != "" {
 		return home
+	}
+	if proj := os.Getenv("CLAUDE_PROJECT_DIR"); proj != "" {
+		return proj
 	}
 	return "."
 }
@@ -157,7 +164,7 @@ func setupProjectWith(exeOverride, agent string) {
 			exePath = "musubi"
 		}
 	}
-	if err := writeMCPConfigAt(root, exePath, target.MCPPath); err != nil {
+	if err := writeMCPConfigAt(root, exePath, target.MCPPath, target.PortableConfig); err != nil {
 		rollback()
 		fmt.Printf("Error al escribir %s: %v\n", target.MCPPath, err)
 		os.Exit(1)
@@ -204,6 +211,28 @@ func quoteExe(exePath string) string {
 	return "\"" + exePath + "\""
 }
 
+// exeInPath devuelve true si "musubi" se resuelve en el PATH al MISMO binario que
+// exePath. Cuando es así, los hooks pueden invocar el nombre corto "musubi" (que el
+// shell resuelve por PATH), independiente de la ruta absoluta —portable ante
+// reinstalaciones y cambios de usuario.
+func exeInPath(exePath string) bool {
+	p, err := exec.LookPath("musubi")
+	if err != nil {
+		return false
+	}
+	return sameFile(p, exePath)
+}
+
+// hookExeCommand construye el comando de un hook de Claude Code. Si el binario está
+// instalado en el PATH como "musubi", usa el nombre corto (portable); si no (modo
+// local-al-repo o binario suelto), usa la ruta absoluta entrecomillada.
+func hookExeCommand(exePath, sub string) string {
+	if exeInPath(exePath) {
+		return "musubi " + sub
+	}
+	return quoteExe(exePath) + " " + sub
+}
+
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento
 // de skills en {root}/.claude/settings.json usando bootstrap.MergeClaudeSettings.
 // Si el archivo no existe, lo crea. Si ya contiene el hook de Musubi, no lo duplica.
@@ -219,7 +248,7 @@ func writeClaudeHook(root, exePath string) error {
 	}
 	hook := bootstrap.HookCommand{
 		Type:    "command",
-		Command: quoteExe(exePath) + " detect --hook-mode",
+		Command: hookExeCommand(exePath, "detect --hook-mode"),
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "SessionStart", "startup", hook)
@@ -244,7 +273,7 @@ func writeTurnHook(root, exePath string) error {
 	}
 	hook := bootstrap.HookCommand{
 		Type:    "command",
-		Command: quoteExe(exePath) + " turn --hook-mode",
+		Command: hookExeCommand(exePath, "turn --hook-mode"),
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "UserPromptSubmit", "", hook)
@@ -270,7 +299,7 @@ func writeCodeMemoryHook(root, exePath string) error {
 	}
 	hook := bootstrap.HookCommand{
 		Type:    "command",
-		Command: quoteExe(exePath) + " precheck --hook-mode",
+		Command: hookExeCommand(exePath, "precheck --hook-mode"),
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "PreToolUse", "Read", hook)
@@ -280,16 +309,24 @@ func writeCodeMemoryHook(root, exePath string) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
-// writeMCPConfig registra el servidor en .mcp.json (Claude Code). Envoltorio de
-// writeMCPConfigAt para compatibilidad.
+// writeMCPConfig registra el servidor en .mcp.json (Claude Code, config portable).
+// Envoltorio de writeMCPConfigAt para compatibilidad.
 func writeMCPConfig(root, exePath string) error {
-	return writeMCPConfigAt(root, exePath, ".mcp.json")
+	return writeMCPConfigAt(root, exePath, ".mcp.json", true)
 }
 
 // writeMCPConfigAt registra (idempotente) el servidor musubi en el archivo de config
 // MCP del agente (relPath relativo a root, ej. ".mcp.json" o ".cursor/mcp.json").
 // Crea el directorio padre si hace falta. El esquema mcpServers es común a los agentes.
-func writeMCPConfigAt(root, exePath, relPath string) error {
+//
+// Si portable es true (agentes que expanden ${VAR}, ej. Claude Code), escribe un
+// command resoluble por la env var MUSUBI_BIN —con la ruta absoluta actual como
+// fallback— y OMITE MUSUBI_HOME: el daemon toma la raíz del proyecto de
+// CLAUDE_PROJECT_DIR, que Claude Code inyecta automáticamente. Así el .mcp.json no
+// queda atado a la ruta del binario ni del proyecto (sobrevive formateos, cambios de
+// usuario y clones, y se vuelve commiteable). Si portable es false, usa la ruta
+// absoluta del binario y MUSUBI_HOME=root (compat con agentes que no expanden ${VAR}).
+func writeMCPConfigAt(root, exePath, relPath string, portable bool) error {
 	mcpPath := filepath.Join(root, relPath)
 	if dir := filepath.Dir(mcpPath); dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -300,11 +337,16 @@ func writeMCPConfigAt(root, exePath, relPath string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	merged, err := bootstrap.MergeMCPServer(existing, "musubi", bootstrap.MCPServerEntry{
+	entry := bootstrap.MCPServerEntry{
 		Command: exePath,
 		Args:    []string{"daemon"},
 		Env:     map[string]string{"MUSUBI_HOME": root},
-	})
+	}
+	if portable {
+		entry.Command = "${MUSUBI_BIN:-" + exePath + "}"
+		entry.Env = nil
+	}
+	merged, err := bootstrap.MergeMCPServer(existing, "musubi", entry)
 	if err != nil {
 		return err
 	}

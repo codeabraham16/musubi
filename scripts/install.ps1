@@ -82,6 +82,9 @@ if ($scope -eq 'global') {
         [Environment]::SetEnvironmentVariable('Path', "$userPath;$installDir", 'User')
         Write-Host "PATH del usuario actualizado (abri una terminal nueva para que tome efecto)."
     }
+    # MUSUBI_BIN permite que el .mcp.json portable resuelva el binario tras reinstalar
+    # (aunque cambie la ruta o el usuario) sin tocar el .mcp.json de cada proyecto.
+    [Environment]::SetEnvironmentVariable('MUSUBI_BIN', $exe, 'User')
     Write-Host "Musubi (GLOBAL) instalado en $exe"
 } else {
     $binDir = Join-Path $dir '.musubi\bin'
