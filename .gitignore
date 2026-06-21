@@ -24,7 +24,8 @@ coverage.html
 .vscode/
 
 # Artefactos de "musubi setup" corrido dentro de este repo (no versionar):
-# .mcp.json, settings/hooks de Claude y las skills que el propio setup genera.
+# .mcp.json, settings/hooks de Claude y todo lo que el propio setup/auto-discovery
+# genera en .musubi/skills/ (skills .yaml + el sentinel .skills-generated).
 /.mcp.json
 /.claude/
-.musubi/skills/*.yaml
+.musubi/skills/
