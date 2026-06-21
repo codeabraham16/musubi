@@ -46,7 +46,11 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
-        run: go build -trimpath -ldflags "-X main.version=${{ github.ref_name }}" -o "${{ matrix.asset }}" ./cmd/musubi
+        # -s -w quita la symbol table y la info DWARF del binario distribuido: ~31%
+        # menos de tamaño (ej. Windows amd64 18.1MB -> 12.5MB), sin afectar la
+        # funcionalidad (los panics siguen mostrando nombres de función). -trimpath
+        # ya garantizaba builds reproducibles sin rutas absolutas.
+        run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "${{ matrix.asset }}" ./cmd/musubi
 
       - name: Checksum (SHA-256)
         run: sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
