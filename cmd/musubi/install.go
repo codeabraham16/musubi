@@ -98,12 +98,16 @@ func installGlobalWindows() {
 	}
 	fmt.Printf("  ✓ Binario instalado en %s\n", dest)
 
-	// Agregar installDir al PATH del usuario (sin admin) vía PowerShell.
+	// Agregar installDir al PATH del usuario (sin admin) y exponer MUSUBI_BIN (la ruta
+	// del binario) vía PowerShell. MUSUBI_BIN hace que el .mcp.json portable resuelva el
+	// binario aunque cambie la ruta o el usuario: al reinstalar se re-setea y todos los
+	// proyectos vuelven a funcionar sin tocar sus .mcp.json.
 	psDir := "'" + strings.ReplaceAll(installDir, "'", "''") + "'"
-	ps := fmt.Sprintf(`$d=%s; $p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike "*$d*") { [Environment]::SetEnvironmentVariable('Path', "$p;$d", 'User'); 'PATH actualizado' } else { 'PATH ya incluia el directorio' }`, psDir)
+	psBin := "'" + strings.ReplaceAll(dest, "'", "''") + "'"
+	ps := fmt.Sprintf(`$d=%s; $p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike "*$d*") { [Environment]::SetEnvironmentVariable('Path', "$p;$d", 'User') }; [Environment]::SetEnvironmentVariable('MUSUBI_BIN', %s, 'User'); 'PATH y MUSUBI_BIN actualizados'`, psDir, psBin)
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
-		fmt.Printf("  ! No se pudo actualizar el PATH automaticamente: %v\n", err)
+		fmt.Printf("  ! No se pudo actualizar PATH/MUSUBI_BIN automaticamente: %v\n", err)
 		fmt.Printf("    Agregalo manualmente al PATH: %s\n", installDir)
 	} else {
 		fmt.Printf("  ✓ %s", string(out))

@@ -94,6 +94,13 @@ if [ "$SCOPE" = "global" ]; then
     *":$INSTALL_DIR:"*) ;;
     *) echo "Agrega $INSTALL_DIR a tu PATH." ;;
   esac
+  # Persistir MUSUBI_BIN: hace que el .mcp.json portable resuelva el binario aunque
+  # cambie la ruta o el usuario. Al reinstalar se re-evalua y todos los proyectos siguen.
+  PROFILE="${HOME}/.profile"
+  if [ ! -f "$PROFILE" ] || ! grep -q 'MUSUBI_BIN=' "$PROFILE"; then
+    printf 'export MUSUBI_BIN="%s"\n' "$EXE" >> "$PROFILE"
+    echo "MUSUBI_BIN agregado a $PROFILE (abri una shell nueva para que tome efecto)."
+  fi
 else
   BIN_DIR="$DIR/.musubi/bin"
   mkdir -p "$BIN_DIR"

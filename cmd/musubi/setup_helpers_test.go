@@ -86,6 +86,7 @@ func TestWriteCodeMemoryHookRegistraPrecheck(t *testing.T) {
 }
 
 func TestWorkspaceDirHonraMusubiHome(t *testing.T) {
+	t.Setenv("CLAUDE_PROJECT_DIR", "")
 	t.Setenv("MUSUBI_HOME", "/un/home/explicito")
 	if got := workspaceDir(); got != "/un/home/explicito" {
 		t.Errorf("esperaba el valor de MUSUBI_HOME, obtuve %q", got)
@@ -93,7 +94,22 @@ func TestWorkspaceDirHonraMusubiHome(t *testing.T) {
 
 	t.Setenv("MUSUBI_HOME", "")
 	if got := workspaceDir(); got != "." {
-		t.Errorf("sin MUSUBI_HOME esperaba %q, obtuve %q", ".", got)
+		t.Errorf("sin MUSUBI_HOME ni CLAUDE_PROJECT_DIR esperaba %q, obtuve %q", ".", got)
+	}
+}
+
+// TestWorkspaceDirUsaClaudeProjectDir verifica el fallback portable: sin MUSUBI_HOME,
+// la raíz del proyecto se toma de CLAUDE_PROJECT_DIR (que Claude Code inyecta), y
+// MUSUBI_HOME mantiene prioridad cuando está presente.
+func TestWorkspaceDirUsaClaudeProjectDir(t *testing.T) {
+	t.Setenv("MUSUBI_HOME", "")
+	t.Setenv("CLAUDE_PROJECT_DIR", "/proj/inyectado")
+	if got := workspaceDir(); got != "/proj/inyectado" {
+		t.Errorf("esperaba CLAUDE_PROJECT_DIR, obtuve %q", got)
+	}
+	t.Setenv("MUSUBI_HOME", "/home/explicito")
+	if got := workspaceDir(); got != "/home/explicito" {
+		t.Errorf("MUSUBI_HOME debe primar sobre CLAUDE_PROJECT_DIR, obtuve %q", got)
 	}
 }
 
@@ -174,7 +190,7 @@ func TestMaintenanceCycleDBVacia(t *testing.T) {
 func TestWriteMCPConfigAtCursorPath(t *testing.T) {
 	root := t.TempDir()
 	rel := filepath.Join(".cursor", "mcp.json")
-	if err := writeMCPConfigAt(root, "/ruta/musubi", rel); err != nil {
+	if err := writeMCPConfigAt(root, "/ruta/musubi", rel, false); err != nil {
 		t.Fatalf("writeMCPConfigAt error: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, rel))
@@ -183,5 +199,48 @@ func TestWriteMCPConfigAtCursorPath(t *testing.T) {
 	}
 	if s := string(data); !strings.Contains(s, "musubi") || !strings.Contains(s, "daemon") {
 		t.Errorf("%s no registró el servidor musubi: %s", rel, s)
+	}
+}
+
+// TestWriteMCPConfigPortable verifica que el modo portable (Claude) escribe un command
+// resoluble por MUSUBI_BIN y NO hardcodea MUSUBI_HOME (la raíz la da CLAUDE_PROJECT_DIR).
+func TestWriteMCPConfigPortable(t *testing.T) {
+	root := t.TempDir()
+	if err := writeMCPConfigAt(root, `C:\bin\musubi.exe`, ".mcp.json", true); err != nil {
+		t.Fatalf("writeMCPConfigAt error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("esperaba .mcp.json: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "${MUSUBI_BIN:-") {
+		t.Errorf("command portable debería usar ${MUSUBI_BIN:-...}: %s", s)
+	}
+	if strings.Contains(s, "MUSUBI_HOME") {
+		t.Errorf("modo portable no debería hardcodear MUSUBI_HOME: %s", s)
+	}
+	if !strings.Contains(s, "daemon") {
+		t.Errorf("falta el arg daemon: %s", s)
+	}
+}
+
+// TestWriteMCPConfigAbsoluto verifica que el modo no-portable (ej. Cursor) usa la ruta
+// absoluta del binario y MUSUBI_HOME con la raíz del proyecto.
+func TestWriteMCPConfigAbsoluto(t *testing.T) {
+	root := t.TempDir()
+	if err := writeMCPConfigAt(root, `C:\bin\musubi.exe`, ".mcp.json", false); err != nil {
+		t.Fatalf("writeMCPConfigAt error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("esperaba .mcp.json: %v", err)
+	}
+	s := string(data)
+	if strings.Contains(s, "${MUSUBI_BIN") {
+		t.Errorf("modo absoluto no debería usar ${MUSUBI_BIN}: %s", s)
+	}
+	if !strings.Contains(s, "MUSUBI_HOME") {
+		t.Errorf("modo absoluto debería incluir MUSUBI_HOME: %s", s)
 	}
 }
