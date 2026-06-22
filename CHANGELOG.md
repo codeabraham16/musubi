@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-06-22
+
+### Added
+- **Cosechador del marketplace** (Track 8 / T8.3, Palanca 3): nuevo subcomando
+  **`musubi catalog harvest`** que arma un **catálogo estático** de Agent Skills del marketplace,
+  curado por *seeds* (stacks/keywords) y estrellas. La idea del trayecto: en vez de que cada usuario
+  pegue a la API en vivo (y choque con el rate limit de 50/día anónimo), un cosechador central corre
+  de vez en cuando y publica este JSON; el descubrimiento lo leerá de un archivo (cero rate limit,
+  llega en T8.4). No se mirrorea el 1.7M: se cura un subconjunto por relevancia y popularidad.
+  Flags: `--seeds a,b,c` (default: Go, Python, Node.js, Rust, …), `--top N` por seed, `--min-stars N`,
+  `--out ruta`, `--api-key-env NOMBRE` (default `SKILLSMP_API_KEY`; vacío ⇒ tier anónimo), `--url`.
+- **`skillsource.HarvestMarketplace`**: núcleo cosechable y testeable — recibe un `fetch` inyectable
+  (sin acoplar a la red), consulta cada seed, **deduplica por id** (gana la de más estrellas), filtra
+  por `min-stars` y ordena por estrellas desc (desempate estable por id). Best-effort: una seed que
+  falla se omite con warn y la cosecha sigue. `MarketplaceCatalog` es el formato de salida
+  (`version`, `generated`, `seeds`, `skills`); el timestamp lo setea el CLI (núcleo determinista).
+
+### Notes
+- El cosechador usa **solo metadatos de skillsmp** en esta etapa (id/name/description/githubUrl/stars);
+  la validación/enriquecimiento contra GitHub como fuente de verdad queda para un PR siguiente. El
+  `discover_skills` sigue en vivo por ahora; T8.4 lo conmuta a leer el catálogo estático por default.
+- Un ejemplo del formato vive en `internal/skillsource/testdata/marketplace-index.example.json`
+  (validado por test). Escritura **atómica** (temp + rename) reusando el patrón de `catalog merge`.
+
 ## [0.41.0] - 2026-06-22
 
 ### Added
@@ -744,7 +768,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/codeabraham16/musubi/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/codeabraham16/musubi/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/codeabraham16/musubi/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/codeabraham16/musubi/compare/v0.38.0...v0.39.0
