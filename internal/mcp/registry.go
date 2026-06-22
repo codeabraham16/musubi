@@ -309,7 +309,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_discover_skills",
-				Description: "Descubre Agent Skills (SKILL.md) de la comunidad en un marketplace externo, filtradas por el stack del proyecto. Si no se pasa 'query', la deriva del stack detectado. Devuelve candidatos con su 'githubUrl' para que el usuario los REVISE e instale: Musubi NO instala ni ejecuta nada (contenido no confiable). Opt-in (sourcing.marketplace_enabled); degrada con gracia si está deshabilitado o la red cae.",
+				Description: "Descubre Agent Skills (SKILL.md) de la comunidad, filtradas por el stack del proyecto. Si no se pasa 'query', la deriva del stack detectado. Lee un catálogo curado y estático por default (cero rate limit) y cae a la API del marketplace en vivo si el catálogo no está disponible. Devuelve candidatos con su 'githubUrl' para que el usuario los REVISE e instale: Musubi NO instala ni ejecuta nada (contenido no confiable). Opt-in (sourcing.marketplace_enabled); degrada con gracia si está deshabilitado o la red cae.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

@@ -2,7 +2,10 @@ package skillsource
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -92,4 +95,69 @@ func HarvestMarketplace(ctx context.Context, fetch MarketplaceFetchFunc, seeds [
 		Seeds:   usedSeeds,
 		Skills:  out,
 	}, nil
+}
+
+// FetchMarketplaceCatalog lee el catálogo ESTÁTICO cosechado desde una URL (el JSON que
+// publica el cosechador central). Es lo que sirve al descubrimiento sin pegar a la API en
+// vivo (cero rate limit). Mismo patrón que FetchCatalog: timeout por contexto, backstop
+// anti-DoS de tamaño, error no-fatal para que el llamador caiga al modo live.
+func FetchMarketplaceCatalog(ctx context.Context, url string) (MarketplaceCatalog, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return MarketplaceCatalog{}, fmt.Errorf("skillsource: construir request del catálogo de marketplace: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "musubi/skillsource")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return MarketplaceCatalog{}, fmt.Errorf("skillsource: GET catálogo de marketplace %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return MarketplaceCatalog{}, fmt.Errorf("skillsource: catálogo de marketplace %s devolvió HTTP %d", url, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes))
+	if err != nil {
+		return MarketplaceCatalog{}, fmt.Errorf("skillsource: leer catálogo de marketplace %s: %w", url, err)
+	}
+	var cat MarketplaceCatalog
+	if err := json.Unmarshal(body, &cat); err != nil {
+		return MarketplaceCatalog{}, fmt.Errorf("skillsource: decodificar catálogo de marketplace %s: %w", url, err)
+	}
+	return cat, nil
+}
+
+// FilterMarketplaceSkills filtra las skills del catálogo por la query (texto libre): una
+// skill matchea si ALGÚN término de la query aparece en su nombre, descripción o id (case
+// insensitive). Query vacía ⇒ todas. Preserva el orden de entrada (el catálogo ya viene
+// ordenado por estrellas) y acota a limit. Es el filtrado local que reemplaza la búsqueda
+// del marketplace cuando se sirve desde el catálogo estático.
+func FilterMarketplaceSkills(skills []MarketplaceSkill, query string, limit int) []MarketplaceSkill {
+	if limit <= 0 {
+		limit = defaultMarketplaceLimit
+	}
+	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	out := make([]MarketplaceSkill, 0, limit)
+	for _, sk := range skills {
+		if len(out) >= limit {
+			break
+		}
+		if len(terms) == 0 || skillMatchesAny(sk, terms) {
+			out = append(out, sk)
+		}
+	}
+	return out
+}
+
+// skillMatchesAny indica si algún término aparece en nombre+descripción+id (lowercased).
+func skillMatchesAny(sk MarketplaceSkill, terms []string) bool {
+	hay := strings.ToLower(sk.Name + " " + sk.Description + " " + sk.ID)
+	for _, t := range terms {
+		if strings.Contains(hay, t) {
+			return true
+		}
+	}
+	return false
 }

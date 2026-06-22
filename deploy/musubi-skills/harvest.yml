@@ -1,0 +1,65 @@
+# Cosecha periódica del catálogo de Agent Skills del marketplace (Track 8 / T8.4).
+#
+# DÓNDE VA: este archivo NO corre desde el repo de Musubi. Copialo al repo que hostea el
+# catálogo —musubi-skills— en `.github/workflows/harvest.yml`, y agregá el secret
+# SKILLSMP_API_KEY (Settings → Secrets and variables → Actions). Sin el secret igual corre,
+# pero en el tier anónimo (límite bajo): conviene la key para cosechar más.
+#
+# QUÉ HACE: instala el binario de Musubi, corre `musubi catalog harvest` para regenerar
+# `marketplace-index.json`, y lo commitea si cambió. Los usuarios de Musubi leen ese JSON
+# por `raw.githubusercontent` (config sourcing.marketplace_catalog_url) → cero rate limit.
+
+name: Harvest marketplace catalog
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # cada lunes 06:00 UTC
+  workflow_dispatch: # permite correrlo a mano
+    inputs:
+      seeds:
+        description: "Lista de seeds separadas por coma (vacío = defaults de Musubi)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write # para commitear el catálogo regenerado
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+
+      - name: Instalar musubi
+        run: go install github.com/codeabraham16/musubi/cmd/musubi@latest
+
+      - name: Cosechar el catálogo
+        env:
+          SKILLSMP_API_KEY: ${{ secrets.SKILLSMP_API_KEY }}
+        run: |
+          SEEDS_ARG=""
+          if [ -n "${{ github.event.inputs.seeds }}" ]; then
+            SEEDS_ARG="--seeds ${{ github.event.inputs.seeds }}"
+          fi
+          "$(go env GOPATH)/bin/musubi" catalog harvest \
+            $SEEDS_ARG \
+            --top 50 \
+            --min-stars 1 \
+            --out marketplace-index.json
+
+      - name: Commitear si cambió
+        run: |
+          if git diff --quiet -- marketplace-index.json; then
+            echo "Sin cambios en el catálogo."
+            exit 0
+          fi
+          git config user.name  "musubi-harvest-bot"
+          git config user.email "actions@github.com"
+          git add marketplace-index.json
+          git commit -m "chore: refrescar marketplace-index.json (cosecha automática)"
+          git push

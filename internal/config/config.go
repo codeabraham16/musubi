@@ -15,6 +15,11 @@ const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musub
 // que usa el descubrimiento opt-in (musubi_discover_skills).
 const defaultMarketplaceURL = "https://skillsmp.com"
 
+// defaultMarketplaceCatalogURL es la URL del catálogo estático cosechado, publicado por el
+// cosechador central en el repo musubi-skills. El descubrimiento lee de acá por default
+// (cero rate limit); si el archivo aún no existe, cae con gracia a la API en vivo.
+const defaultMarketplaceCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musubi-skills/main/marketplace-index.json"
+
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
 	Provider   string `yaml:"provider"`    // none | ollama | openai
@@ -43,6 +48,11 @@ type SourcingConfig struct {
 	// MarketplaceAPIKeyEnv es el NOMBRE de la env var con la API key del marketplace (sube el
 	// rate limit). El secreto NO se guarda en el yaml. Vacío => se usa el tier anónimo.
 	MarketplaceAPIKeyEnv string `yaml:"marketplace_api_key_env,omitempty"`
+	// MarketplaceCatalogURL es la URL del catálogo ESTÁTICO cosechado (marketplace-index.json
+	// publicado por el cosechador central). Si está seteada, musubi_discover_skills lee de ahí
+	// (cero rate limit) y solo cae a la API en vivo si el catálogo no está disponible. Vacío =>
+	// siempre en vivo.
+	MarketplaceCatalogURL string `yaml:"marketplace_catalog_url,omitempty"`
 }
 
 // MemoryConfig controla el recall por presupuesto de tokens (memoria eficiente).
@@ -287,11 +297,12 @@ func Default() Config {
 			APIKeyEnv:  "OPENAI_API_KEY",
 		},
 		Sourcing: SourcingConfig{
-			Enabled:        true,
-			CatalogURL:     defaultCatalogURL,
-			MaxCandidates:  20,
-			CacheSeconds:   3600,
-			MarketplaceURL: defaultMarketplaceURL,
+			Enabled:               true,
+			CatalogURL:            defaultCatalogURL,
+			MaxCandidates:         20,
+			CacheSeconds:          3600,
+			MarketplaceURL:        defaultMarketplaceURL,
+			MarketplaceCatalogURL: defaultMarketplaceCatalogURL,
 			// MarketplaceEnabled queda en false: el descubrimiento desde el marketplace
 			// externo es opt-in (contenido no confiable de GitHub arbitrario).
 		},
@@ -442,6 +453,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Sourcing.MarketplaceURL == "" {
 			c.Sourcing.MarketplaceURL = d.Sourcing.MarketplaceURL
+		}
+		if c.Sourcing.MarketplaceCatalogURL == "" {
+			c.Sourcing.MarketplaceCatalogURL = d.Sourcing.MarketplaceCatalogURL
 		}
 	}
 
