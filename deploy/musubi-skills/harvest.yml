@@ -30,13 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.x"
-
-      - name: Instalar musubi
-        run: go install github.com/codeabraham16/musubi/cmd/musubi@latest
+      # El módulo declara su path como `musubi` (no la URL de GitHub), así que NO es
+      # `go install`-able por su URL: bajamos el binario de Linux del último release.
+      - name: Bajar el binario de musubi (último release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo codeabraham16/musubi \
+            --pattern musubi-linux-amd64 --output /tmp/musubi --clobber
+          chmod +x /tmp/musubi
+          /tmp/musubi version
 
       - name: Cosechar el catálogo
         env:
@@ -46,7 +49,7 @@ jobs:
           if [ -n "${{ github.event.inputs.seeds }}" ]; then
             SEEDS_ARG="--seeds ${{ github.event.inputs.seeds }}"
           fi
-          "$(go env GOPATH)/bin/musubi" catalog harvest \
+          /tmp/musubi catalog harvest \
             $SEEDS_ARG \
             --top 50 \
             --min-stars 1 \

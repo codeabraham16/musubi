@@ -16,6 +16,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   hacía fallar el decode de **toda la respuesta de esa seed** → en la cosecha real se perdían
   seeds enteras (Go y Node.js, las más importantes). Ahora un tipo tolerante (`flexString`)
   normaliza ambos a string. Detectado al generar el catálogo inicial de producción.
+- **El Action de cosecha baja el binario del release en vez de `go install`** (`deploy/musubi-skills/`):
+  el `go.mod` declara el módulo como `musubi` (no la URL de GitHub), así que `go install
+  github.com/codeabraham16/musubi/cmd/musubi@latest` falla ("module declares its path as: musubi").
+  El workflow ahora descarga `musubi-linux-amd64` del último release con `gh release download`.
+  Detectado al correr el Action central por primera vez.
 
 ## [0.43.0] - 2026-06-22
 
