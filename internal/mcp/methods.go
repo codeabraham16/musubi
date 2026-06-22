@@ -1234,7 +1234,19 @@ func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcEr
 			"Pasá un 'query' explícito a musubi_discover_skills (ej. el lenguaje o framework)."), nil
 	}
 
-	// API key opcional vía env var (sube el rate limit); vacío => tier anónimo.
+	// 1) Catálogo ESTÁTICO cosechado (default): cero rate limit. Si está configurado y se
+	// puede leer (cacheado), se sirve de ahí. Ante cualquier fallo, se cae al modo live.
+	if s.sourcing.MarketplaceCatalogURL != "" {
+		if results, ok := s.discoverFromStaticCatalog(query, args.Limit); ok {
+			return jsonResult(map[string]interface{}{
+				"source": "catalog", "query": query, "count": len(results),
+				"skills": results, "note": discoverSkillsNote,
+			})
+		}
+	}
+
+	// 2) Modo LIVE (fallback): pega a la API del marketplace. API key opcional vía env var
+	// (sube el rate limit); vacío => tier anónimo.
 	var apiKey string
 	if s.sourcing.MarketplaceAPIKeyEnv != "" {
 		apiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)
@@ -1262,12 +1274,37 @@ func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcEr
 	}
 
 	return jsonResult(map[string]interface{}{
-		"query":  query,
-		"count":  len(results),
-		"skills": results,
-		"note": "Resultados de descubrimiento: Musubi NO instala estas skills. Revisá el código en " +
-			"'githubUrl' antes de adoptarlas e instalalas vos mismo.",
+		"source": "live", "query": query, "count": len(results),
+		"skills": results, "note": discoverSkillsNote,
 	})
+}
+
+// discoverSkillsNote es el recordatorio que acompaña todo resultado de descubrimiento:
+// Musubi solo enlaza, el usuario revisa e instala.
+const discoverSkillsNote = "Resultados de descubrimiento: Musubi NO instala estas skills. " +
+	"Revisá el código en 'githubUrl' antes de adoptarlas e instalalas vos mismo."
+
+// discoverFromStaticCatalog intenta servir el descubrimiento desde el catálogo estático
+// cosechado (cacheado con TTL). Devuelve ok=false ante cualquier problema (URL inaccesible,
+// JSON inválido) para que el caller caiga al modo live. Cero rate limit del marketplace.
+func (s *McpServer) discoverFromStaticCatalog(query string, limit int) ([]skillsource.MarketplaceSkill, bool) {
+	url := s.sourcing.MarketplaceCatalogURL
+	cacheKey := "mpcatalog:" + url
+	var cat skillsource.MarketplaceCatalog
+	if v, ok := s.sourceCache.get(cacheKey); ok {
+		cat = v.(skillsource.MarketplaceCatalog)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		fetched, err := skillsource.FetchMarketplaceCatalog(ctx, url)
+		if err != nil {
+			logx.Warn("discover: catálogo estático inaccesible, fallback a live", "error", err)
+			return nil, false
+		}
+		cat = fetched
+		s.sourceCache.set(cacheKey, cat)
+	}
+	return skillsource.FilterMarketplaceSkills(cat.Skills, query, limit), true
 }
 
 // marketplaceQueryFromStack arma una query de búsqueda para el marketplace a partir del

@@ -7,6 +7,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-06-22
+
+### Added
+- **`musubi_discover_skills` lee un catálogo estático por default** (Track 8 / T8.4, cierra el ciclo):
+  el descubrimiento ya **no pega a la API del marketplace en vivo** salvo como fallback. Sirve desde un
+  catálogo **curado y estático** (`marketplace-index.json` publicado por el cosechador central),
+  cacheado con TTL → **cero rate limit para el usuario** (el límite de 50/día deja de aplicar). Si el
+  catálogo no está configurado o no está disponible, cae con gracia a la API en vivo (transición sin
+  fricción mientras el archivo aún no existe). La respuesta incluye `"source": "catalog" | "live"`.
+- Config `sourcing.marketplace_catalog_url` (default: el `marketplace-index.json` en el repo
+  `musubi-skills`). `skillsource.FetchMarketplaceCatalog` (lee el catálogo estático) y
+  `skillsource.FilterMarketplaceSkills` (filtra local por query: algún término en nombre/desc/id,
+  preservando el orden por estrellas).
+- **Workflow del cosechador central** en `deploy/musubi-skills/` (`harvest.yml` + `README.md`): un
+  GitHub Action listo para copiar al repo `musubi-skills` que corre `musubi catalog harvest`
+  semanalmente (con `SKILLSMP_API_KEY` como secret) y publica el catálogo. Es lo que hace que un solo
+  cosechador toque la API y todos los usuarios lean el archivo estático.
+
+### Notes
+- Con esto el plan de "las 3 palancas" queda cerrado: API key (T8.1) + caché (T8.2) son el pipeline de
+  ingesta que alimenta el catálogo cosechado (T8.3) que se sirve estático (T8.4). El modo live persiste
+  como fallback y para `marketplace_catalog_url` vacío.
+- Tests: `discover_skills` desde catálogo estático (no toca la API live) y fallback a live cuando el
+  catálogo falla; `FetchMarketplaceCatalog` (parseo + error no-fatal) y `FilterMarketplaceSkills`.
+
 ## [0.42.0] - 2026-06-22
 
 ### Added
@@ -768,7 +793,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/codeabraham16/musubi/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/codeabraham16/musubi/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/codeabraham16/musubi/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/codeabraham16/musubi/compare/v0.39.0...v0.40.0

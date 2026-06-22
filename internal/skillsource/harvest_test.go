@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,6 +76,61 @@ func TestHarvestMarketplace(t *testing.T) {
 func TestHarvestMarketplaceFetchNulo(t *testing.T) {
 	if _, err := HarvestMarketplace(context.Background(), nil, []string{"go"}, 50, 0); err == nil {
 		t.Error("esperaba error con fetch nulo")
+	}
+}
+
+// TestFilterMarketplaceSkills cubre el filtrado local por query (algún término en
+// nombre/desc/id), query vacía (todas), preservación del orden y el límite.
+func TestFilterMarketplaceSkills(t *testing.T) {
+	skills := []MarketplaceSkill{
+		{ID: "go-http", Name: "go-http", Description: "patrones HTTP en Go", Stars: 10},
+		{ID: "py-flask", Name: "py-flask", Description: "Flask para Python", Stars: 8},
+		{ID: "go-test", Name: "golang-testing", Description: "testing", Stars: 5},
+	}
+	// query "go" matchea go-http (nombre) y go-test (golang-testing contiene "go").
+	got := FilterMarketplaceSkills(skills, "go", 10)
+	if len(got) != 2 || got[0].ID != "go-http" || got[1].ID != "go-test" {
+		t.Errorf("filtro 'go': esperaba [go-http go-test] en orden, obtuve %+v", ids(got))
+	}
+	// query vacía => todas.
+	if len(FilterMarketplaceSkills(skills, "", 10)) != 3 {
+		t.Error("query vacía debería devolver todas")
+	}
+	// límite respetado.
+	if len(FilterMarketplaceSkills(skills, "", 1)) != 1 {
+		t.Error("el límite debería acotar a 1")
+	}
+}
+
+func ids(skills []MarketplaceSkill) []string {
+	out := make([]string, len(skills))
+	for i, s := range skills {
+		out[i] = s.ID
+	}
+	return out
+}
+
+// TestFetchMarketplaceCatalog verifica el fetch del catálogo estático y el error no-fatal
+// ante HTTP ≠ 200 (para que el caller caiga a live).
+func TestFetchMarketplaceCatalog(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"version":1,"seeds":["Go"],"skills":[{"id":"a-skill-md","name":"a","githubUrl":"https://github.com/x/a","stars":3}]}`)
+	}))
+	defer ok.Close()
+	cat, err := FetchMarketplaceCatalog(context.Background(), ok.URL)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if cat.Version != 1 || len(cat.Skills) != 1 || cat.Skills[0].ID != "a-skill-md" {
+		t.Errorf("catálogo mal parseado: %+v", cat)
+	}
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer bad.Close()
+	if _, err := FetchMarketplaceCatalog(context.Background(), bad.URL); err == nil {
+		t.Error("esperaba error ante HTTP 404")
 	}
 }
 
