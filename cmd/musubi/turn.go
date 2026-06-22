@@ -32,12 +32,14 @@ type turnStore interface {
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
+	LedgerStatus() (memory.TokenLedger, error)
 }
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
 const (
-	metaLoopObsSeen = "loop_obs_seen"         // conteo de observaciones del turno previo
-	metaLoopTurns   = "loop_turns_since_save" // turnos consecutivos sin guardar nada
+	metaLoopObsSeen   = "loop_obs_seen"         // conteo de observaciones del turno previo
+	metaLoopTurns     = "loop_turns_since_save" // turnos consecutivos sin guardar nada
+	metaBudgetAlerted = "loop_budget_alerted"   // sesión ya avisada de exceso de presupuesto
 )
 
 // turnInput es el subconjunto del JSON de stdin de UserPromptSubmit que usamos.
@@ -51,7 +53,7 @@ type turnInput struct {
 // pipeline, la memoria relevante, los conflictos pendientes y el recordatorio de
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
-func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, stdin io.Reader) string {
+func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, budget int, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -65,6 +67,9 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	// contabiliza TODOS los no vacíos (fase, batch, recall, conflictos, captura),
 	// no solo el recall como antes. Así el ledger refleja el gasto real por turno.
 	var blocks []accountedBlock
+	// Alerta proactiva del gobernador: si el gasto de la sesión ya cruzó el techo
+	// blando, avisar UNA vez (no naggear). Va primero por prominencia.
+	blocks = append(blocks, accountedBlock{"budget_alert", buildBudgetAlert(store, in.SessionID, budget)})
 	if pipeCfg.Enabled {
 		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store)})
 	}
@@ -83,6 +88,26 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, loopCfg)})
 	}
 	return assembleAccounted(store, "UserPromptSubmit", in.SessionID, blocks)
+}
+
+// buildBudgetAlert es la alerta PROACTIVA del gobernador (T9.3): cuando el gasto
+// acumulado de la sesión cruza el presupuesto blando, inyecta UNA línea avisando —una
+// sola vez por sesión, para no convertir el aviso en ruido—. budget<=0 lo desactiva.
+// Lee el ledger ANTES de contabilizar este turno, así que puede atrasarse un turno
+// respecto del cruce exacto; alcanza para que el aviso sea oportuno sin ser molesto.
+func buildBudgetAlert(store turnStore, sessionID string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	l, err := store.LedgerStatus()
+	if err != nil || l.Total < budget {
+		return ""
+	}
+	if prev, ok, _ := store.GetMeta(metaBudgetAlerted); ok && prev == sessionID {
+		return "" // ya avisado en esta sesión
+	}
+	_ = store.SetMeta(metaBudgetAlerted, sessionID)
+	return fmt.Sprintf("[Musubi — presupuesto] El contexto que Musubi inyectó esta sesión (%d tokens) superó el presupuesto blando (%d). Mirá el desglose por superficie con musubi_tokens; si querés bajar el ruido, ajustá memory.session_token_budget o apagá superficies en loop/startup.", l.Total, budget)
 }
 
 // buildTurnPhase inyecta la fase activa del pipeline y su directiva. Devuelve ""
@@ -326,7 +351,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, os.Stdin)
+	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory.SessionTokenBudget, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}

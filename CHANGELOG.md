@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-06-22
+
+### Added
+- **Alerta proactiva del gobernador por turno** (Track 9 / T9.3): cuando el gasto acumulado de la sesión
+  cruza el presupuesto blando (`memory.session_token_budget`), el hook por turno (UserPromptSubmit) inyecta
+  **una** línea avisando —**una sola vez por sesión** (throttle por `session_id`), para no convertir el
+  aviso en ruido—. Cierra el lazo del gobernador: T9.2 lo mostraba **si el agente consultaba**
+  `musubi_tokens`; ahora el aviso es **proactivo**, con el desglose a un comando de distancia. Sigue siendo
+  **blando** (no recorta nada) y model-free. Con `session_token_budget: 0` queda desactivado.
+
+### Notes
+- El aviso vive en `buildBudgetAlert` (lee el ledger ANTES de contabilizar el turno, así que puede atrasarse
+  un turno respecto del cruce exacto: oportuno sin ser molesto) y se contabiliza como la superficie
+  `budget_alert` del propio ledger. Throttle vía meta `loop_budget_alerted`. `turnOutput` recibe el
+  presupuesto desde `cfg.Memory.SessionTokenBudget`.
+
 ## [0.46.0] - 2026-06-22
 
 ### Added

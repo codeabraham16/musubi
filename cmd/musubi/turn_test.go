@@ -78,6 +78,14 @@ func (f *fakeTurnStore) LedgerAdd(sessionID, surface string, tokens int) (memory
 	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
 }
 
+func (f *fakeTurnStore) LedgerStatus() (memory.TokenLedger, error) {
+	total := 0
+	for _, v := range f.ledger {
+		total += v
+	}
+	return memory.TokenLedger{SessionID: f.ledgerSession, Total: total, Surfaces: f.ledger}, nil
+}
+
 func defaultLoop() config.LoopConfig {
 	return config.LoopConfig{PerTurnRecall: true, RecallBudget: 250, SurfaceConflicts: true, CaptureReminder: true, ReminderAfterTurns: 5}
 }
@@ -119,7 +127,7 @@ func TestTurnInjectsRelevantMemory(t *testing.T) {
 	}}
 	in := strings.NewReader(`{"prompt":"cómo está configurada la base de datos","hook_event_name":"UserPromptSubmit"}`)
 
-	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), in)
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, in)
 
 	event, ctx := hookAdditionalContext(t, out)
 	if event != "UserPromptSubmit" {
@@ -160,13 +168,13 @@ func TestTurnDeltaInjectsOnlyNew(t *testing.T) {
 	}}
 	in := `{"prompt":"qué sabemos","session_id":"s1"}`
 
-	first := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	first := turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(in))
 	if !strings.Contains(first, "x1") || !strings.Contains(first, "x2") {
 		t.Fatalf("el primer turno debe inyectar ambas memorias, obtuve: %q", first)
 	}
 
 	// Segundo turno, misma sesión y misma memoria: nada nuevo -> silencio.
-	second := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	second := turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(in))
 	if second != "" {
 		t.Errorf("sin memoria nueva el delta no debe inyectar nada, obtuve: %q", second)
 	}
@@ -178,11 +186,11 @@ func TestTurnDeltaReinjectsChanged(t *testing.T) {
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "versión vieja", ContentHash: "h1"}},
 	}}
 	in := `{"prompt":"q","session_id":"s1"}`
-	turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in)) // inyecta x1
+	turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(in)) // inyecta x1
 
 	// La memoria cambió (otro hash): debe re-inyectarse marcada como actualizada.
 	store.recall.Items[0] = memory.RecallItem{ID: "x1", TopicKey: "t", Gist: "versión nueva", ContentHash: "h2"}
-	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(in))
 	if !strings.Contains(out, "x1") || !strings.Contains(out, "actualizado") {
 		t.Errorf("una memoria modificada debe re-inyectarse marcada 'actualizado', obtuve: %q", out)
 	}
@@ -193,9 +201,9 @@ func TestTurnDeltaResetsOnNewSession(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
 	}}
-	turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"q","session_id":"s1"}`))
+	turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"q","session_id":"s1"}`))
 	// Nueva sesión: el delta se reinicia, debe volver a inyectar.
-	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"q","session_id":"s2"}`))
+	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"q","session_id":"s2"}`))
 	if !strings.Contains(out, "x1") {
 		t.Errorf("una sesión nueva debe reiniciar el delta y re-inyectar, obtuve: %q", out)
 	}
@@ -208,8 +216,8 @@ func TestTurnDeltaDisabledReinjectsEveryTurn(t *testing.T) {
 	}}
 	in := `{"prompt":"q","session_id":"s1"}`
 	// defaultLoop tiene DeltaInjection=false: ambos turnos re-inyectan.
-	turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(in))
-	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(in))
+	turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(in))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(in))
 	if !strings.Contains(out, "x1") {
 		t.Errorf("con delta apagado cada turno debe re-inyectar, obtuve: %q", out)
 	}
@@ -223,7 +231,7 @@ func TestTurnRecallAccountsTokensInLedger(t *testing.T) {
 	}}
 	in := strings.NewReader(`{"prompt":"qué sabemos","session_id":"sess-123"}`)
 
-	turnOutput(store, defaultLoop(), pipeOff(), maOff(), in)
+	turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, in)
 
 	// El ledger holístico estima el bloque FINAL inyectado (header + ids incluidos),
 	// no solo el contenido de los gists: debe ser > 0 (no necesariamente == UsedTokens).
@@ -250,7 +258,7 @@ func TestTurnAccountsAllSurfaces(t *testing.T) {
 
 	loop := config.LoopConfig{PerTurnRecall: true, RecallBudget: 250, SurfaceConflicts: true, CaptureReminder: true, ReminderAfterTurns: 2}
 	in := strings.NewReader(`{"prompt":"seguimos con la tarea","session_id":"sess-7"}`)
-	turnOutput(store, loop, defaultPipe(), maOff(), in)
+	turnOutput(store, loop, defaultPipe(), maOff(), 0, in)
 
 	for _, surface := range []string{"turn_phase", "turn_recall", "turn_conflicts", "capture_reminder"} {
 		if store.ledger[surface] <= 0 {
@@ -262,9 +270,52 @@ func TestTurnAccountsAllSurfaces(t *testing.T) {
 	}
 }
 
+func TestTurnBudgetAlertFiresOnceWhenOverBudget(t *testing.T) {
+	store := newFakeTurnStore()
+	store.recall = memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", Gist: "algo"}}}
+	store.ledger = map[string]int{"startup_cognitive": 9000} // gasto previo ya sobre el techo
+	store.ledgerSession = "sess-b"
+	loop := config.LoopConfig{PerTurnRecall: true, RecallBudget: 250}
+	in := `{"prompt":"seguimos","session_id":"sess-b"}`
+
+	// Primer turno sobre presupuesto (budget 8000): debe avisar.
+	out := turnOutput(store, loop, pipeOff(), maOff(), 8000, strings.NewReader(in))
+	_, ctx := hookAdditionalContext(t, out)
+	if !strings.Contains(ctx, "presupuesto") || !strings.Contains(ctx, "musubi_tokens") {
+		t.Errorf("estando sobre el techo, el turno debe avisar del presupuesto, obtuve: %q", ctx)
+	}
+	// Segundo turno misma sesión: NO debe repetir el aviso (throttle por sesión).
+	out2 := turnOutput(store, loop, pipeOff(), maOff(), 8000, strings.NewReader(in))
+	_, ctx2 := hookAdditionalContext(t, out2)
+	if strings.Contains(ctx2, "presupuesto") {
+		t.Errorf("el aviso de presupuesto debe darse una sola vez por sesión, se repitió: %q", ctx2)
+	}
+}
+
+func TestTurnBudgetAlertSilentWhenDisabledOrUnder(t *testing.T) {
+	store := newFakeTurnStore()
+	store.recall = memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", Gist: "algo"}}}
+	store.ledger = map[string]int{"startup_cognitive": 9000}
+	store.ledgerSession = "sess-c"
+	loop := config.LoopConfig{PerTurnRecall: true, RecallBudget: 250}
+	in := `{"prompt":"seguimos","session_id":"sess-c"}`
+
+	// budget 0 = gobernador desactivado: nunca avisa aunque el gasto sea alto.
+	_, ctx := hookAdditionalContext(t, turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)))
+	if strings.Contains(ctx, "presupuesto") {
+		t.Errorf("con budget 0 no debe avisar, obtuve: %q", ctx)
+	}
+	// Gasto por debajo del techo: no avisa.
+	store.ledger = map[string]int{"startup_priming": 100}
+	_, ctx2 := hookAdditionalContext(t, turnOutput(store, loop, pipeOff(), maOff(), 8000, strings.NewReader(in)))
+	if strings.Contains(ctx2, "presupuesto") {
+		t.Errorf("por debajo del techo no debe avisar, obtuve: %q", ctx2)
+	}
+}
+
 func TestTurnSilentWithoutPrompt(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x", Gist: "algo"}}}}
-	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"   "}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"   "}`))
 	if out != "" {
 		t.Errorf("sin prompt útil el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -274,14 +325,14 @@ func TestTurnSilentWhenDisabled(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x", Gist: "algo"}}}}
 	cfg := defaultLoop()
 	cfg.PerTurnRecall = false
-	out := turnOutput(store, cfg, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(store, cfg, pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("con per_turn_recall=false el hook debe ser silencioso, obtuve: %q", out)
 	}
 }
 
 func TestTurnSilentNilStore(t *testing.T) {
-	out := turnOutput(nil, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(nil, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("sin memoria disponible el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -289,7 +340,7 @@ func TestTurnSilentNilStore(t *testing.T) {
 
 func TestTurnSilentNoMatch(t *testing.T) {
 	store := &fakeTurnStore{recall: memory.RecallResult{Count: 0}}
-	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"algo sin memoria relacionada"}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"algo sin memoria relacionada"}`))
 	if out != "" {
 		t.Errorf("sin memoria relevante el hook debe ser silencioso, obtuve: %q", out)
 	}
@@ -300,7 +351,7 @@ func TestTurnSurfacesPendingConflicts(t *testing.T) {
 		recall:  memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", Gist: "gist"}}},
 		pending: []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}},
 	}
-	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"seguimos"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "musubi_judge") {
 		t.Errorf("con conflictos pendientes el contexto debe invitar a resolverlos, obtuve: %q", ctx)
@@ -311,7 +362,7 @@ func TestTurnPhaseInjected(t *testing.T) {
 	store := newFakeTurnStore()
 	store.phaseActive = true
 	store.phase = memory.PhaseState{Task: "refactor", Phase: "plan", Index: 1, Total: 4}
-	out := turnOutput(store, defaultLoop(), defaultPipe(), maOff(), strings.NewReader(`{"prompt":"sigamos con la tarea"}`))
+	out := turnOutput(store, defaultLoop(), defaultPipe(), maOff(), 0, strings.NewReader(`{"prompt":"sigamos con la tarea"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "refactor") || !strings.Contains(ctx, "plan (2/4)") {
 		t.Errorf("debe inyectar la fase activa con tarea y posición, obtuve: %q", ctx)
@@ -323,7 +374,7 @@ func TestTurnBatchInjected(t *testing.T) {
 	store.batchActive = true
 	store.batch = memory.WorkBatch{BatchID: "b1", Total: 5, Done: 3, Open: 1, Claimed: 1}
 	loop := config.LoopConfig{} // aislar: solo el batch
-	out := turnOutput(store, loop, pipeOff(), maOn(), strings.NewReader(`{"prompt":"como va el batch"}`))
+	out := turnOutput(store, loop, pipeOff(), maOn(), 0, strings.NewReader(`{"prompt":"como va el batch"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "Batch activo") || !strings.Contains(ctx, "3/5") {
 		t.Errorf("debe inyectar el estado del batch activo, obtuve: %q", ctx)
@@ -334,7 +385,7 @@ func TestTurnBatchSilentWhenDisabled(t *testing.T) {
 	store := newFakeTurnStore()
 	store.batchActive = true
 	store.batch = memory.WorkBatch{BatchID: "b1", Total: 2, Open: 2}
-	out := turnOutput(store, config.LoopConfig{}, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(store, config.LoopConfig{}, pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("con multiagent desactivado no debe inyectar el batch, obtuve: %q", out)
 	}
@@ -348,7 +399,7 @@ func TestTurnPhaseSilentWhenDisabled(t *testing.T) {
 	loop := defaultLoop()
 	loop.PerTurnRecall = false
 	loop.CaptureReminder = false
-	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(`{"prompt":"hola"}`))
+	out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"hola"}`))
 	if out != "" {
 		t.Errorf("con pipeline desactivado no debe inyectar fase, obtuve: %q", out)
 	}
@@ -361,15 +412,15 @@ func TestTurnCaptureReminderAfterNTurns(t *testing.T) {
 	in := `{"prompt":"seguimos trabajando"}`
 
 	// Turno 1: fija la línea base, sin recordatorio.
-	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
+	if out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)); out != "" {
 		t.Fatalf("el primer turno no debe recordar nada, obtuve: %q", out)
 	}
 	// Turno 2: acumula (turns=1), todavía sin recordar (umbral 2).
-	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
+	if out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)); out != "" {
 		t.Fatalf("aún no debe recordar antes del umbral, obtuve: %q", out)
 	}
 	// Turno 3: turns alcanza el umbral → recordatorio.
-	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
+	out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "captura") {
 		t.Errorf("al alcanzar el umbral de turnos sin guardar debe recordar la captura, obtuve: %q", ctx)
@@ -382,14 +433,14 @@ func TestTurnCaptureReminderResetsOnSave(t *testing.T) {
 	loop := config.LoopConfig{CaptureReminder: true, ReminderAfterTurns: 2}
 	in := `{"prompt":"trabajando"}`
 
-	turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)) // base
-	store.obsCount = 2                                                 // el agente guardó algo
-	if out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in)); out != "" {
+	turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)) // base
+	store.obsCount = 2                                                    // el agente guardó algo
+	if out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)); out != "" {
 		t.Fatalf("guardar algo debe reiniciar el contador (sin recordatorio), obtuve: %q", out)
 	}
 	// Ahora estable de nuevo: el contador arranca de cero.
-	turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
-	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(in))
+	turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in))
+	out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "captura") {
 		t.Errorf("tras reiniciar y pasar 2 turnos sin guardar, debe recordar, obtuve: %q", ctx)
@@ -402,7 +453,7 @@ func TestTurnConflictsWithoutRecall(t *testing.T) {
 	store := newFakeTurnStore()
 	store.pending = []memory.ObsRelation{{ID: "r1"}}
 	loop := config.LoopConfig{PerTurnRecall: false, SurfaceConflicts: true}
-	out := turnOutput(store, loop, pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	out := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"seguimos"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "musubi_judge") {
 		t.Errorf("con recall off pero surface_conflicts on, los conflictos deben mostrarse, obtuve: %q", ctx)
@@ -416,7 +467,7 @@ func TestTurnConflictsToggleOff(t *testing.T) {
 	}
 	cfg := defaultLoop()
 	cfg.SurfaceConflicts = false
-	out := turnOutput(store, cfg, pipeOff(), maOff(), strings.NewReader(`{"prompt":"seguimos"}`))
+	out := turnOutput(store, cfg, pipeOff(), maOff(), 0, strings.NewReader(`{"prompt":"seguimos"}`))
 	_, ctx := hookAdditionalContext(t, out)
 	if strings.Contains(ctx, "musubi_judge") {
 		t.Errorf("con surface_conflicts=false no debe mencionar conflictos, obtuve: %q", ctx)
