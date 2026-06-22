@@ -263,6 +263,28 @@ func TestTokensToolReset(t *testing.T) {
 	}
 }
 
+func TestTokensToolReportsBudget(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	// El test server usa la config por defecto (session_token_budget=8000): el status
+	// debe traer el estado del gobernador y el desglose por superficie.
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "b1", "topic_key": "t", "content": "algo para hidratar y contar tokens"}); e != nil {
+		t.Fatalf("save error: %+v", e)
+	}
+	call(t, s, "musubi_memory_expand", map[string]interface{}{"ids": []string{"b1"}})
+	res, e := call(t, s, "musubi_tokens", map[string]interface{}{"action": "status"})
+	if e != nil {
+		t.Fatalf("tokens status error: %+v", e)
+	}
+	txt := textOf(t, res)
+	// El reporte del gobernador incluye estado y presupuesto, no solo el total crudo.
+	if !strings.Contains(txt, "\"status\"") || !strings.Contains(txt, "\"budget\": 8000") {
+		t.Errorf("el status debe reportar estado y presupuesto, obtuve %s", txt)
+	}
+	if !strings.Contains(txt, "\"surface\": \"hydration\"") {
+		t.Errorf("el desglose debe listar superficies como objetos {surface,tokens,pct}, obtuve %s", txt)
+	}
+}
+
 func TestTokensToolInvalidAction(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_tokens", map[string]interface{}{"action": "raro"}); e == nil || e.Code != codeInvalidParams {
