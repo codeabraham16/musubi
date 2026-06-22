@@ -63,6 +63,12 @@ type MemoryConfig struct {
 	GistMaxTokens int `yaml:"gist_max_tokens"`
 	// CandidatePool es la cantidad de candidatos a rankear antes de empaquetar.
 	CandidatePool int `yaml:"candidate_pool"`
+	// SessionTokenBudget es el techo BLANDO de tokens que Musubi inyecta como contexto
+	// ambiente en una sesión (suma de todas las superficies del ledger). No recorta nada:
+	// el gobernador lo usa para reportar el uso (musubi_tokens) y avisar una vez por sesión
+	// cuando se cruza, para que el gasto de contexto sea visible y acotable. 0 = sin techo
+	// (default 8000).
+	SessionTokenBudget int `yaml:"session_token_budget"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -307,9 +313,10 @@ func Default() Config {
 			// externo es opt-in (contenido no confiable de GitHub arbitrario).
 		},
 		Memory: MemoryConfig{
-			RecallTokenBudget: 400,
-			GistMaxTokens:     24,
-			CandidatePool:     50,
+			RecallTokenBudget:  400,
+			GistMaxTokens:      24,
+			CandidatePool:      50,
+			SessionTokenBudget: 8000,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -459,15 +466,21 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 	}
 
-	// Defaults de Memory.
-	if c.Memory.RecallTokenBudget == 0 {
-		c.Memory.RecallTokenBudget = d.Memory.RecallTokenBudget
-	}
-	if c.Memory.GistMaxTokens == 0 {
-		c.Memory.GistMaxTokens = d.Memory.GistMaxTokens
-	}
-	if c.Memory.CandidatePool == 0 {
-		c.Memory.CandidatePool = d.Memory.CandidatePool
+	// Memory: ausente -> default completo; presente -> rellenar los numéricos del
+	// recall (0 nunca es un valor útil ahí) PERO respetar session_token_budget tal cual
+	// (0 = sin techo, opt-out explícito; no se pisa con el default).
+	if !present["memory"] {
+		c.Memory = d.Memory
+	} else {
+		if c.Memory.RecallTokenBudget == 0 {
+			c.Memory.RecallTokenBudget = d.Memory.RecallTokenBudget
+		}
+		if c.Memory.GistMaxTokens == 0 {
+			c.Memory.GistMaxTokens = d.Memory.GistMaxTokens
+		}
+		if c.Memory.CandidatePool == 0 {
+			c.Memory.CandidatePool = d.Memory.CandidatePool
+		}
 	}
 
 	// Maintenance: ausente -> default completo; presente -> rellenar numéricos y

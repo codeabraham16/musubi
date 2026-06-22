@@ -44,6 +44,44 @@ func TestLedgerEmptySessionKeepsCurrent(t *testing.T) {
 	}
 }
 
+func TestBudgetReport(t *testing.T) {
+	l := TokenLedger{
+		SessionID: "s1",
+		Total:     8000,
+		Surfaces:  map[string]int{"startup_cognitive": 5000, "turn_recall": 2000, "startup_priming": 1000},
+	}
+
+	// Con presupuesto excedido: estado "over", restante negativo, % usado 100.
+	b := l.Budget(8000)
+	if b.Status != "over" {
+		t.Errorf("8000/8000 debe ser 'over', obtuve %q", b.Status)
+	}
+	if b.Budget != 8000 || b.Remaining != 0 || b.PctUsed != 100 {
+		t.Errorf("budget/remaining/pct incorrectos: %+v", b)
+	}
+	// Desglose ordenado por gasto desc, con % del total.
+	if len(b.Surfaces) != 3 || b.Surfaces[0].Surface != "startup_cognitive" {
+		t.Fatalf("esperaba 3 superficies con la mayor primero, obtuve %+v", b.Surfaces)
+	}
+	if b.Surfaces[0].Pct != 63 { // 5000/8000 = 62.5 -> 63 (redondeo)
+		t.Errorf("pct de la superficie top: esperaba 63, obtuve %d", b.Surfaces[0].Pct)
+	}
+
+	// Estado "watch" a partir del 75%.
+	if got := l.Budget(10000).Status; got != "watch" { // 8000/10000 = 80%
+		t.Errorf("80%% debe ser 'watch', obtuve %q", got)
+	}
+	// Estado "ok" por debajo del 75%.
+	if got := l.Budget(16000).Status; got != "ok" { // 8000/16000 = 50%
+		t.Errorf("50%% debe ser 'ok', obtuve %q", got)
+	}
+	// Sin presupuesto (0): "unbudgeted", sin techo ni % pero con desglose.
+	un := l.Budget(0)
+	if un.Status != "unbudgeted" || un.Budget != 0 || len(un.Surfaces) != 3 {
+		t.Errorf("budget 0 debe dar 'unbudgeted' con desglose, obtuve %+v", un)
+	}
+}
+
 func TestLedgerReset(t *testing.T) {
 	e := newTestEngine(t)
 	e.LedgerAdd("s1", "turn_recall", 10)
