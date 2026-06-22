@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // marketplace.go implementa el DESCUBRIMIENTO de Agent Skills desde un marketplace
@@ -56,8 +57,27 @@ type MarketplaceSkill struct {
 	SkillURL string `json:"skillUrl"`
 	// Stars es la cantidad de estrellas del repo (señal de popularidad, no de calidad).
 	Stars int `json:"stars"`
-	// UpdatedAt es el timestamp Unix (string) de la última actualización.
-	UpdatedAt string `json:"updatedAt"`
+	// UpdatedAt es el timestamp Unix de la última actualización. El marketplace lo devuelve
+	// a veces como string ("1781667763") y a veces como número JSON (1781667763), así que
+	// usa un tipo tolerante que normaliza ambos a string (ver flexString).
+	UpdatedAt flexString `json:"updatedAt"`
+}
+
+// flexString es un string que tolera venir como string O como número JSON al deserializar
+// (el marketplace es inconsistente con updatedAt). Siempre serializa de vuelta como string,
+// para que el catálogo cosechado quede con un tipo consistente.
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" {
+		*f = ""
+		return nil
+	}
+	// Quitar comillas si vino como string JSON; si vino como número, queda tal cual.
+	s = strings.Trim(s, `"`)
+	*f = flexString(s)
+	return nil
 }
 
 // marketplaceResponse refleja el sobre JSON del endpoint de búsqueda del marketplace.

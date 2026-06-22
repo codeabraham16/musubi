@@ -26,6 +26,30 @@ const skillGolang = `{
 	"updatedAt":"1781667763"
 }`
 
+// TestFetchMarketplaceUpdatedAtFlexible verifica que updatedAt parsea tanto si viene como
+// string ("123") como si viene como número JSON (123) — el marketplace es inconsistente.
+func TestFetchMarketplaceUpdatedAtFlexible(t *testing.T) {
+	comoNumero := `{"id":"n-skill-md","name":"n","githubUrl":"https://github.com/x/n","stars":1,"updatedAt":1781667763}`
+	comoString := `{"id":"s-skill-md","name":"s","githubUrl":"https://github.com/x/s","stars":1,"updatedAt":"1781667763"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, respuestaMarketplace(comoNumero+","+comoString))
+	}))
+	defer srv.Close()
+
+	skills, err := FetchMarketplaceSkills(context.Background(), srv.URL, "", "x", 10)
+	if err != nil {
+		t.Fatalf("error inesperado (debe tolerar número y string): %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("esperaba 2 skills, obtuve %d", len(skills))
+	}
+	for _, s := range skills {
+		if s.UpdatedAt != "1781667763" {
+			t.Errorf("UpdatedAt normalizado esperaba 1781667763, obtuve %q", s.UpdatedAt)
+		}
+	}
+}
+
 // TestFetchMarketplaceSkillsParsea verifica el parseo del sobre y el mapeo de campos.
 func TestFetchMarketplaceSkillsParsea(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
