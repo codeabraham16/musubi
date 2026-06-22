@@ -198,7 +198,32 @@ func setupProjectWith(exeOverride, agent string) {
 		printOK(".gitignore actualizado (.musubi/memory.db)")
 	}
 
+	// Aviso de fragilidad (solo en modo local sin instalación global): el .mcp.json
+	// referencia el binario por su ruta absoluta como fallback de MUSUBI_BIN. Si el
+	// usuario no instaló global (MUSUBI_BIN seteada) ni tiene 'musubi' en el PATH,
+	// mover o borrar el binario rompe la carga. Lo avisamos con un tip hacia el global.
+	if exeOverride == "" && os.Getenv("MUSUBI_BIN") == "" && !exeInPath(exePath) {
+		printInfo("El proyecto referencia el binario por ruta: " + cDim(exePath))
+		printInfo("Si lo movés/borrás, reabrí con 'musubi setup'. Para una ruta estable en toda la PC, instalá Global.")
+	}
+
 	fmt.Printf("\n%s Reabrí el proyecto en %s y el servidor 'musubi' estará disponible.\n", cGreen("Listo."), target.Name)
+}
+
+// looksLikeProject indica si dir parece la raíz de un proyecto real (tiene algún
+// manifiesto o repo conocido). Lo usa la instalación local para no instalarse por
+// error en una carpeta cualquiera (ej. Descargas, al hacer doble clic en el .exe).
+func looksLikeProject(dir string) bool {
+	markers := []string{
+		"go.mod", "package.json", ".git", "Cargo.toml", "pyproject.toml",
+		"requirements.txt", "pom.xml", "build.gradle", "Gemfile", "composer.json",
+	}
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // quoteExe entrecomilla la ruta del ejecutable para el comando del hook (string de

@@ -64,22 +64,38 @@ func main() {
 
 func printUsage() {
 	fmt.Println(cBold("Uso:") + " musubi <comando> [argumentos]")
-	fmt.Println(cCyan("Comandos disponibles:"))
-	fmt.Println("  setup [--agent <claude|cursor>]  Inyecta Musubi en el proyecto actual (workspace + config MCP del agente + hooks si los soporta)")
-	fmt.Println("  detect            Detecta el stack del proyecto e imprime JSON en stdout")
-	fmt.Println("  detect --hook-mode  Modo hook de Claude Code: silencioso si el sentinel existe, JSON de guía si no")
-	fmt.Println("  turn --hook-mode  Modo hook UserPromptSubmit: inyecta contexto relevante al prompt del usuario")
-	fmt.Println("  precheck --hook-mode  Modo hook PreToolUse(Read): surface el gist de un archivo en memoria de código antes de leerlo")
-	fmt.Println("  catalog validate  Valida un index.json de catálogo de skills")
-	fmt.Println("  catalog merge <url> [--output <ruta>]  Obtiene y fusiona un catálogo remoto en index.json")
-	fmt.Println("  init              Inicializa solo el workspace .musubi/ (config + base de datos)")
-	fmt.Println("  daemon            Arranca el servidor MCP sobre stdin/stdout")
-	fmt.Println("  serve [--addr host:port]  Arranca el servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
-	fmt.Println("  maintain          Mantiene la memoria: fusiona casi-duplicados y archiva memorias frías")
-	fmt.Println("  doctor            Diagnostica la memoria; 'doctor repair --check X --apply' repara (con backup)")
-	fmt.Println("  update            Descarga el último release, verifica el checksum y se auto-reemplaza")
-	fmt.Println("  calibrate         (opt-in) Mide el estimador de tokens vs count_tokens; --apply persiste divisores. Requiere ANTHROPIC_API_KEY")
-	fmt.Println("  version           Muestra la versión del binario")
+
+	// section imprime un encabezado de grupo; cmd imprime un comando alineado. El
+	// padding se aplica ANTES de colorear, así las secuencias ANSI no descuadran la
+	// columna (cuando el color está apagado, queda igual de alineado).
+	section := func(title string) { fmt.Println("\n" + cCyan(title)) }
+	cmd := func(name, desc string) { fmt.Printf("  %s  %s\n", cBold(fmt.Sprintf("%-32s", name)), desc) }
+
+	section("Instalación")
+	cmd("setup [--agent <claude|cursor>]", "Inyecta Musubi en el proyecto actual (workspace + MCP + hooks)")
+	cmd("init", "Inicializa solo el workspace .musubi/ (config + base de datos)")
+
+	section("Servidor MCP")
+	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
+	cmd("serve [--addr host:port]", "Servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
+
+	section("Memoria")
+	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
+	cmd("doctor", "Diagnostica la memoria; 'doctor repair --check X --apply' repara")
+	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
+
+	section("Catálogo de skills")
+	cmd("catalog validate", "Valida un index.json de catálogo de skills")
+	cmd("catalog merge <url> [--output <ruta>]", "Obtiene y fusiona un catálogo remoto en index.json")
+
+	section("Binario")
+	cmd("update", "Descarga el último release, verifica el checksum y se auto-reemplaza")
+	cmd("version", "Muestra la versión del binario")
+
+	section("Hooks (uso interno de Claude Code)")
+	cmd("detect [--hook-mode]", "Detecta el stack / SessionStart: auto-descubrimiento + priming")
+	cmd("turn --hook-mode", "UserPromptSubmit: inyecta contexto relevante al prompt")
+	cmd("precheck --hook-mode", "PreToolUse(Read): gist de un archivo antes de leerlo")
 }
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)

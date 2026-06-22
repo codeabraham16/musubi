@@ -64,7 +64,9 @@ func runInteractiveMenu() {
 
 	switch menuAction(line) {
 	case "local":
-		setupProject()
+		if confirmLocalDir(reader) {
+			setupProject()
+		}
 	case "global":
 		installGlobalWindows()
 	default:
@@ -73,6 +75,38 @@ func runInteractiveMenu() {
 
 	fmt.Print("\nPresiona Enter para salir...")
 	reader.ReadString('\n')
+}
+
+// confirmLocalDir protege contra la "trampa del doble clic": si se eligió instalar
+// local en una carpeta que NO parece un proyecto (típico de hacer doble clic sobre el
+// .exe descargado en Descargas), avisa y pide confirmación explícita. En un proyecto
+// real (con go.mod/package.json/.git/...) procede sin molestar.
+func confirmLocalDir(reader *bufio.Reader) bool {
+	cwd, err := os.Getwd()
+	if err != nil || looksLikeProject(cwd) {
+		return true
+	}
+	fmt.Println("  " + cYellow("!") + " Esta carpeta no parece un proyecto (sin go.mod, package.json, .git, ...).")
+	fmt.Println("    " + cDim(cwd))
+	fmt.Println("    Si hiciste doble clic desde Descargas, Musubi se instalaria ACA.")
+	fmt.Println("    Para usar Musubi en toda la PC, mejor elegi la opcion " + cBold("[G] Global") + ".")
+	fmt.Print("  Instalar igual en esta carpeta? (s/N): ")
+	line, _ := reader.ReadString('\n')
+	if isYes(line) {
+		return true
+	}
+	fmt.Println(cDim("  Cancelado."))
+	return false
+}
+
+// isYes interpreta una respuesta afirmativa (s/si/sí/y/yes), case-insensitive.
+func isYes(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "s", "si", "sí", "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // installGlobalWindows copia el binario en ejecución a una carpeta del usuario,
