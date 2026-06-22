@@ -36,7 +36,7 @@ func TestHarvestMarketplace(t *testing.T) {
 		return porSeed[query], nil
 	}
 
-	cat, err := HarvestMarketplace(context.Background(), fetch, []string{"go", "python", "fail", "  "}, 50, 1)
+	cat, err := HarvestMarketplace(context.Background(), fetch, []string{"go", "python", "fail", "  "}, 50, 1, 0)
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -74,8 +74,71 @@ func TestHarvestMarketplace(t *testing.T) {
 
 // TestHarvestMarketplaceFetchNulo verifica el guard de fetch nulo.
 func TestHarvestMarketplaceFetchNulo(t *testing.T) {
-	if _, err := HarvestMarketplace(context.Background(), nil, []string{"go"}, 50, 0); err == nil {
+	if _, err := HarvestMarketplace(context.Background(), nil, []string{"go"}, 50, 0, 3); err == nil {
 		t.Error("esperaba error con fetch nulo")
+	}
+}
+
+// TestHarvestMarketplaceCapPorRepo verifica que maxPerRepo acota cuántas skills aporta un
+// mismo repo (las de mayor ranking), para que un monorepo no inunde el catálogo.
+func TestHarvestMarketplaceCapPorRepo(t *testing.T) {
+	repoSkill := func(id string, stars int, owner, repo string) MarketplaceSkill {
+		return MarketplaceSkill{
+			ID:        id,
+			Name:      id,
+			Stars:     stars,
+			GithubURL: "https://github.com/" + owner + "/" + repo + "/tree/main/skills/" + id,
+		}
+	}
+	skills := []MarketplaceSkill{
+		repoSkill("m1", 100, "mega", "mega"),
+		repoSkill("m2", 100, "mega", "mega"),
+		repoSkill("m3", 100, "mega", "mega"),
+		repoSkill("m4", 100, "mega", "mega"),
+		repoSkill("s1", 50, "small", "small"),
+	}
+	fetch := func(ctx context.Context, query string, limit int) ([]MarketplaceSkill, error) {
+		return skills, nil
+	}
+
+	cat, err := HarvestMarketplace(context.Background(), fetch, []string{"q"}, 50, 0, 2)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	// mega aporta a lo sumo 2 (de 4); small aporta su 1. Total 3.
+	if len(cat.Skills) != 3 {
+		t.Fatalf("con cap=2 esperaba 3 skills (2 mega + 1 small), obtuve %d: %v", len(cat.Skills), ids(cat.Skills))
+	}
+	megaCount := 0
+	for _, s := range cat.Skills {
+		if repoKey(s.GithubURL) == "mega/mega" {
+			megaCount++
+		}
+	}
+	if megaCount != 2 {
+		t.Errorf("el repo mega debería estar capeado a 2, obtuve %d", megaCount)
+	}
+
+	// Sin cap (0): entran las 5.
+	sinCap, _ := HarvestMarketplace(context.Background(), fetch, []string{"q"}, 50, 0, 0)
+	if len(sinCap.Skills) != 5 {
+		t.Errorf("sin cap esperaba 5, obtuve %d", len(sinCap.Skills))
+	}
+}
+
+// TestRepoKey verifica la extracción de owner/repo de una URL de GitHub.
+func TestRepoKey(t *testing.T) {
+	casos := map[string]string{
+		"https://github.com/openclaw/openclaw/tree/main/skills/gog": "openclaw/openclaw",
+		"https://github.com/a/b":                                    "a/b",
+		"https://gitlab.com/a/b":                                    "",
+		"no-es-url":                                                 "",
+		"https://github.com/soloowner":                              "",
+	}
+	for url, want := range casos {
+		if got := repoKey(url); got != want {
+			t.Errorf("repoKey(%q) = %q, esperaba %q", url, got, want)
+		}
 	}
 }
 

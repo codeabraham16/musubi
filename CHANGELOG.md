@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-06-22
+
+### Changed
+- **Mejor ranking del catálogo cosechado: tope de skills por repo** (Track 8 / T8.5): el cosechador
+  (`musubi catalog harvest`) ahora acota cuántas skills aporta un mismo repo de GitHub (flag
+  `--max-per-repo`, default **3**). Las estrellas que reporta el marketplace son del **repo**, no de
+  la skill, así que un monorepo enorme y muy estrellado (ej. `openclaw/openclaw` con 379k) inundaba el
+  top con skills mediocres y tapaba otras más enfocadas. Con el cap se conservan las N mejores de cada
+  repo, dejando lugar a más variedad y relevancia. `--max-per-repo 0` desactiva el tope.
+
+### Notes
+- `HarvestMarketplace` aplica el cap sobre la lista ya ordenada por estrellas (se queda con las N de
+  mayor ranking por repo). `repoKey` extrae `owner/repo` de la URL de GitHub. Tests: cap por repo,
+  modo sin tope, y extracción de `repoKey`.
+
 ## [0.43.1] - 2026-06-22
 
 ### Fixed
@@ -808,7 +823,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.43.1...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/codeabraham16/musubi/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/codeabraham16/musubi/compare/v0.41.0...v0.42.0

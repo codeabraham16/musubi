@@ -44,9 +44,12 @@ type MarketplaceFetchFunc func(ctx context.Context, query string, limit int) ([]
 
 // HarvestMarketplace cosecha skills para cada seed y arma un catálogo curado: deduplica por
 // id (gana la de más estrellas), descarta las de menos de minStars y ordena por estrellas
-// desc. perSeed acota cuántas pedir por seed (≤0 ⇒ 50). Best-effort: si una seed falla, se
-// omite con warn y la cosecha sigue (una caída parcial no aborta todo). NO setea Generated.
-func HarvestMarketplace(ctx context.Context, fetch MarketplaceFetchFunc, seeds []string, perSeed, minStars int) (MarketplaceCatalog, error) {
+// desc. perSeed acota cuántas pedir por seed (≤0 ⇒ 50). maxPerRepo acota cuántas skills
+// puede aportar un mismo repo de GitHub (>0): evita que un monorepo enorme con muchas
+// estrellas (las estrellas son del REPO, no de la skill) inunde el top y tape skills más
+// enfocadas — se quedan las maxPerRepo de mayor ranking de cada repo (0 ⇒ sin tope).
+// Best-effort: si una seed falla, se omite con warn y la cosecha sigue. NO setea Generated.
+func HarvestMarketplace(ctx context.Context, fetch MarketplaceFetchFunc, seeds []string, perSeed, minStars, maxPerRepo int) (MarketplaceCatalog, error) {
 	if fetch == nil {
 		return MarketplaceCatalog{}, fmt.Errorf("skillsource: HarvestMarketplace requiere un fetch no nulo")
 	}
@@ -90,11 +93,44 @@ func HarvestMarketplace(ctx context.Context, fetch MarketplaceFetchFunc, seeds [
 		return out[i].ID < out[j].ID // desempate estable: salida determinista
 	})
 
+	// Cap por repo (sobre la lista ya ordenada por estrellas): se conservan las maxPerRepo
+	// mejores de cada repo. Como las estrellas son del repo, sin esto un monorepo gigante
+	// (ej. openclaw/openclaw con 379k) coparía el top con skills mediocres.
+	if maxPerRepo > 0 {
+		perRepo := make(map[string]int)
+		capped := out[:0]
+		for _, sk := range out {
+			rk := repoKey(sk.GithubURL)
+			if rk != "" && perRepo[rk] >= maxPerRepo {
+				continue
+			}
+			perRepo[rk]++
+			capped = append(capped, sk)
+		}
+		out = capped
+	}
+
 	return MarketplaceCatalog{
 		Version: marketplaceCatalogVersion,
 		Seeds:   usedSeeds,
 		Skills:  out,
 	}, nil
+}
+
+// repoKey extrae "owner/repo" de una URL de GitHub (ej. de
+// "https://github.com/openclaw/openclaw/tree/main/skills/gog" devuelve "openclaw/openclaw").
+// "" si la URL no tiene el formato esperado.
+func repoKey(githubURL string) string {
+	const marker = "github.com/"
+	i := strings.Index(githubURL, marker)
+	if i < 0 {
+		return ""
+	}
+	parts := strings.SplitN(githubURL[i+len(marker):], "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 // FetchMarketplaceCatalog lee el catálogo ESTÁTICO cosechado desde una URL (el JSON que

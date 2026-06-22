@@ -40,7 +40,7 @@ func runCatalog(args []string) {
 		fmt.Fprintf(os.Stderr, "Subcomando desconocido: %s\n", args[0])
 		fmt.Fprintln(os.Stderr, "Uso: musubi catalog validate [ruta]")
 		fmt.Fprintln(os.Stderr, "     musubi catalog merge <url> [--output <ruta>]")
-		fmt.Fprintln(os.Stderr, "     musubi catalog harvest [--seeds a,b,c] [--top N] [--min-stars N] [--out ruta]")
+		fmt.Fprintln(os.Stderr, "     musubi catalog harvest [--seeds a,b,c] [--top N] [--min-stars N] [--max-per-repo N] [--out ruta]")
 		os.Exit(1)
 	}
 }
@@ -64,6 +64,7 @@ func runHarvest(args []string) error {
 	seeds := defaultHarvestSeeds
 	top := 50
 	minStars := 0
+	maxPerRepo := 3
 	out := "marketplace-index.json"
 	apiKeyEnv := "SKILLSMP_API_KEY"
 	baseURL := defaultMarketplaceBaseURL
@@ -114,6 +115,19 @@ func runHarvest(args []string) error {
 				return fmt.Errorf("--min-stars debe ser un entero ≥ 0: %q", v)
 			}
 			minStars = n
+		case arg == "--max-per-repo" || strings.HasPrefix(arg, "--max-per-repo="):
+			v := strings.TrimPrefix(arg, "--max-per-repo=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return fmt.Errorf("--max-per-repo debe ser un entero ≥ 0 (0 = sin tope): %q", v)
+			}
+			maxPerRepo = n
 		case arg == "--out" || strings.HasPrefix(arg, "--out="):
 			v := strings.TrimPrefix(arg, "--out=")
 			if v == arg {
@@ -166,7 +180,7 @@ func runHarvest(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cat, err := skillsource.HarvestMarketplace(ctx, fetch, seeds, top, minStars)
+	cat, err := skillsource.HarvestMarketplace(ctx, fetch, seeds, top, minStars, maxPerRepo)
 	if err != nil {
 		return fmt.Errorf("cosechar el marketplace: %w", err)
 	}
