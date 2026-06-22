@@ -6,9 +6,13 @@ import (
 )
 
 // ledger.go lleva un LEDGER de tokens por sesión: cuántos tokens inyectó Musubi
-// en el contexto (priming de arranque + recall por turno + hidratación), para
-// medir y acotar el gasto real. Es model-free y se persiste como un único valor
-// JSON en la tabla meta. Se reinicia al cambiar de sesión.
+// en el contexto, desglosado por SUPERFICIE, para medir y acotar el gasto real.
+// La contabilidad es holística: cubre todas las superficies que inyectan contexto
+// —arranque (priming, salud, cognitivo, generación de skills), por turno (fase,
+// batch, recall, conflictos, captura), PreToolUse (código, telemetría) y las tools
+// (hidratación, recall de código)— no solo el recall. Es model-free (estima el
+// texto final con EstimateTokens) y se persiste como un único valor JSON en la
+// tabla meta. Se reinicia al cambiar de sesión.
 
 const metaTokenLedger = "token_ledger"
 

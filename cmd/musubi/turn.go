@@ -61,25 +61,28 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		return ""
 	}
 
-	var blocks []string
+	// Cada bloque se etiqueta con su superficie del ledger: assembleAccounted
+	// contabiliza TODOS los no vacíos (fase, batch, recall, conflictos, captura),
+	// no solo el recall como antes. Así el ledger refleja el gasto real por turno.
+	var blocks []accountedBlock
 	if pipeCfg.Enabled {
-		blocks = append(blocks, buildTurnPhase(store))
+		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store)})
 	}
 	if maCfg.Enabled {
-		blocks = append(blocks, buildTurnBatch(store))
+		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store)})
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection))
+		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection)})
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
 	if loopCfg.SurfaceConflicts {
-		blocks = append(blocks, buildTurnConflicts(store))
+		blocks = append(blocks, accountedBlock{"turn_conflicts", buildTurnConflicts(store)})
 	}
 	if loopCfg.CaptureReminder {
-		blocks = append(blocks, buildCaptureReminder(store, loopCfg))
+		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, loopCfg)})
 	}
-	return assembleHookContext("UserPromptSubmit", blocks...)
+	return assembleAccounted(store, "UserPromptSubmit", in.SessionID, blocks)
 }
 
 // buildTurnPhase inyecta la fase activa del pipeline y su directiva. Devuelve ""
@@ -189,23 +192,19 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 
 	items := res.Items
 	var updated []bool
-	used := res.UsedTokens
 
 	if deltaEnabled {
 		seen := loadDeltaState(store, sessionID)
 		var keep []memory.RecallItem
-		used = 0
 		for _, it := range res.Items {
 			prev, known := seen[it.ID]
 			switch {
 			case !known:
 				keep = append(keep, it)
 				updated = append(updated, false)
-				used += memory.EstimateTokens(it.Gist)
 			case prev != it.ContentHash:
 				keep = append(keep, it)
 				updated = append(updated, true)
-				used += memory.EstimateTokens(it.Gist)
 			}
 			seen[it.ID] = it.ContentHash
 		}
@@ -217,8 +216,8 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 		return "" // nada nuevo este turno: no re-inyectar (preserva contexto/caché)
 	}
 
-	// Contabilizar lo inyectado (session_id resetea el ledger por sesión).
-	_, _ = store.LedgerAdd(sessionID, "turn_recall", used)
+	// La contabilidad la hace assembleAccounted sobre el bloque final (header + ids
+	// incluidos); acá solo se construye el bloque con la memoria nueva del turno.
 	header := "[Musubi — memoria relevante] Lo que Musubi ya sabe sobre lo que pediste (gists; usá musubi_memory_expand con el id para el detalle completo):"
 	return formatDeltaGists(header, items, updated)
 }

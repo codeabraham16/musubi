@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-06-22
+
+### Changed
+- **Ledger holístico de tokens: medir TODAS las superficies, no solo el recall** (Track 9 / T9.1): el
+  ledger de tokens (`musubi_tokens`) ahora contabiliza **cada** superficie que inyecta contexto, no
+  solo el priming y el recall por turno. Antes quedaban **invisibles** —y por lo tanto sin medir ni
+  optimizar— el bloque cognitivo de arranque, las instrucciones de generación de skills, la salud, la
+  fase del pipeline, el batch multi-agente, los conflictos, el recordatorio de captura y las dos
+  superficies del PreToolUse (memoria de código y errores conocidos). El proyecto creció en superficies
+  de contexto pero el ledger seguía mirando solo una: "no podés optimizar lo que no medís". Es el
+  cimiento de la evolución del sistema de tokens (medir antes de optimizar, misma disciplina que Track 7).
+
+### Notes
+- La contabilidad se centraliza en el punto de **ensamblado** de cada hook (`assembleAccounted`), que
+  estima el texto FINAL de cada bloque —header, ids y formato incluidos, que es la huella real que entra
+  al contexto— en vez de que cada builder contabilice por su cuenta (la mayoría no lo hacía). Sigue siendo
+  model-free y determinista (`EstimateTokens`). Nuevas superficies en el ledger: `startup_health`,
+  `startup_cognitive`, `startup_skillgen`, `turn_phase`, `turn_batch`, `turn_conflicts`,
+  `capture_reminder`, `precheck_code`, `precheck_telemetry` (se suman a `startup_priming`, `turn_recall`,
+  `hydration`, `code_recall`). `startup_priming`/`turn_recall` pasan a medirse sobre el bloque final
+  (antes solo el contenido de los gists, sub-reportando el header).
+
 ## [0.44.0] - 2026-06-22
 
 ### Changed

@@ -13,6 +13,9 @@ import (
 type fakeCodeStore struct {
 	mem map[string]memory.CodeMemory
 	tel []memory.TelemetryLog
+
+	ledger        map[string]int
+	ledgerSession string
 }
 
 func (f *fakeCodeStore) GetCodeMemory(path string) (memory.CodeMemory, bool, error) {
@@ -22,6 +25,15 @@ func (f *fakeCodeStore) GetCodeMemory(path string) (memory.CodeMemory, bool, err
 
 func (f *fakeCodeStore) GetUnresolvedTelemetryLogsForFiles(files []string) ([]memory.TelemetryLog, error) {
 	return f.tel, nil
+}
+
+func (f *fakeCodeStore) LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error) {
+	if f.ledger == nil {
+		f.ledger = map[string]int{}
+	}
+	f.ledger[surface] += tokens
+	f.ledgerSession = sessionID
+	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
 }
 
 func writeFile(t *testing.T, root, rel, content string) {
@@ -104,6 +116,34 @@ func TestPrecheckSurfacesKnownErrors(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "chequear req != nil") {
 		t.Errorf("debe incluir el fix sugerido, obtuve %q", ctx)
+	}
+}
+
+func TestPrecheckAccountsTokensInLedger(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "svc.go", "package svc\nfunc Bar(){}\n")
+	fp, _ := memory.FileFingerprint(root, "svc.go")
+	store := &fakeCodeStore{
+		mem: map[string]memory.CodeMemory{
+			"svc.go": {Path: "svc.go", Gist: "Paquete svc con Bar().", Symbols: "Bar() L2", Fingerprint: fp},
+		},
+		tel: []memory.TelemetryLog{
+			{ID: 7, FilePath: "svc.go", ErrorMessage: "nil pointer en Handler", SuggestedPatch: "chequear req != nil"},
+		},
+	}
+	in := `{"tool_name":"Read","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(root, "svc.go")) + `"},"session_id":"sess-pc"}`
+	if out := precheckOutput(store, root, strings.NewReader(in)); out == "" {
+		t.Fatal("esperaba contexto inyectado (gist + telemetría)")
+	}
+	// Ambas superficies del PreToolUse (antes invisibles) deben contabilizarse.
+	if store.ledger["precheck_code"] <= 0 {
+		t.Errorf("el gist de código debe contabilizarse en el ledger, obtuve %d", store.ledger["precheck_code"])
+	}
+	if store.ledger["precheck_telemetry"] <= 0 {
+		t.Errorf("la telemetría debe contabilizarse en el ledger, obtuve %d", store.ledger["precheck_telemetry"])
+	}
+	if store.ledgerSession != "sess-pc" {
+		t.Errorf("el ledger debe usar el session_id del hook, obtuve %q", store.ledgerSession)
 	}
 }
 
