@@ -7,6 +7,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-06-22
+
+### Added
+- **`musubi_discover_skills`** (Track 8 / T8.1, tool nº27): descubre **Agent Skills** (formato
+  SKILL.md) de la comunidad en un marketplace externo (por defecto skillsmp.com, ~1.7M skills
+  indexadas de GitHub público), **filtradas por el stack del proyecto**. El marketplace tiene escala
+  pero no conoce tu proyecto; Musubi aporta la pieza que falta: si no pasás `query`, la deriva del
+  stack detectado (ecosistemas + frameworks). Es un canal **separado** del catálogo curado
+  (`musubi_search_skills`) y deliberadamente **solo de descubrimiento**: devuelve metadatos + el
+  `githubUrl` de cada skill para que el usuario los **revise e instale por su cuenta**. Musubi nunca
+  baja, ejecuta ni instala el SKILL.md (contenido no confiable de GitHub arbitrario; el propio
+  marketplace avisa "revisá el código antes de instalar"). Read-only.
+- **`skillsource.FetchMarketplaceSkills`**: cliente del endpoint de búsqueda del marketplace
+  (`GET /api/v1/skills/search`), con el mismo patrón que `FetchCatalog` (timeout por contexto,
+  backstop anti-DoS de tamaño, degradación graciosa). Acota `limit` a [1,100], ordena por estrellas
+  y, si hay API key, la envía como `Authorization: Bearer` (sube el rate limit; sin key usa el tier
+  anónimo). Omite entradas sin `id` o sin `githubUrl`.
+- Config: `sourcing.marketplace_enabled` (bool, **default false: opt-in**), `sourcing.marketplace_url`
+  (default `https://skillsmp.com`) y `sourcing.marketplace_api_key_env` (NOMBRE de la env var con la
+  API key; el secreto no se guarda en el yaml, mismo criterio que `embedding.api_key_env`).
+
+### Notes
+- **Por qué opt-in y solo descubrimiento**: indexar 1.7M SKILL.md de GitHub arbitrario es contenido
+  no confiable. Mantenerlo apagado por defecto y limitar a *recomendar + enlazar* (nunca instalar)
+  preserva las invariantes de Musubi: local-first (degradación graciosa, red opcional), model-free y
+  el modelo de confianza "revisá antes de instalar". No se mergea al gate de aplicabilidad (Hermes):
+  el marketplace no expone triggers/capabilities, así que se trata como canal aparte.
+- Tests: parseo/mapeo del adapter, armado del request (path, query escapada, `limit` acotado,
+  `Authorization` con/sin key), degradación (HTTP≠200, JSON inválido, `success=false`); a nivel tool:
+  deshabilitado→guía, query derivada del stack, query explícita con prioridad, marketplace caído→texto.
+
 ## [0.39.0] - 2026-06-22
 
 ### Changed
@@ -695,7 +726,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/codeabraham16/musubi/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/codeabraham16/musubi/compare/v0.38.0...v0.39.0
 [0.17.0]: https://github.com/codeabraham16/musubi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/codeabraham16/musubi/compare/v0.15.0...v0.16.0
