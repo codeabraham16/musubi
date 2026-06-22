@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-06-22
+
+### Added
+- **Pulido de la instalación y el `usage`** (Track 10 / T10.2): tres mejoras de UX del CLI surgidas de la
+  auditoría de primera experiencia:
+  - **Guardia anti "trampa del doble clic"**: si en el menú interactivo se elige instalar **local** en una
+    carpeta que NO parece un proyecto (sin `go.mod`/`package.json`/`.git`/…, típico de hacer doble clic
+    sobre el `.exe` en Descargas), Musubi avisa y pide confirmación explícita, sugiriendo la opción Global.
+    En un proyecto real procede sin molestar.
+  - **Aviso de fragilidad del modo local**: tras `setup` sin instalación global, si el `.mcp.json` queda
+    referenciando el binario por ruta absoluta (sin `MUSUBI_BIN` ni `musubi` en el PATH), avisa que mover
+    o borrar el binario rompe la carga, con un tip hacia el modo Global (ruta estable).
+  - **`usage` agrupado y alineado**: el muro de texto pasa a secciones (Instalación, Servidor MCP,
+    Memoria, Catálogo, Binario, Hooks) con columnas alineadas y headers en color.
+
+### Notes
+- Helpers `looksLikeProject` (heurística por manifiestos/`.git`), `isYes` (confirmación s/si/y/yes) y
+  `confirmLocalDir`. El padding del `usage` se aplica ANTES de colorear, así el alineado no se descuadra
+  con o sin ANSI. Tests: `TestLooksLikeProject`, `TestIsYes`.
+
 ## [0.49.0] - 2026-06-22
 
 ### Added
