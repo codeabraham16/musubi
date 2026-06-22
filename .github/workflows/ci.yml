@@ -39,6 +39,41 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+  bench-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+
+      - name: Maintain complexity guard (memoria sub-cuadrática)
+        # Corre BenchmarkMaintain a n=1k y n=10k y verifica que la MEMORIA asignada por
+        # corrida no escale de forma cuadrática con el tamaño de la base. Medimos memoria
+        # (B/op) y no tiempo a propósito: las asignaciones son deterministas y no dependen
+        # del hardware ni del scheduler del runner, así que el guard es estable en CI
+        # compartido (un guard por wall-time sería flaky). Antes de T7.1 el ratio
+        # B/op(10k)/B/op(1k) era ~69x —el O(n²) del map de overlap en Consolidate—; tras
+        # el fix denso es ~10x. Umbral 20: atrapa una regresión al patrón cuadrático sin
+        # falsos positivos por ruido. (El fix asintótico de las postings de trigramas
+        # —set-similarity-join— queda para T7.2; este guard protege lo ganado en T7.1.)
+        run: |
+          out=$(go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x ./internal/memory/)
+          echo "$out"
+          b1=$(echo "$out" | awk '/Maintain\/n=1000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b10=$(echo "$out" | awk '/Maintain\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          echo "B/op n=1000:  ${b1:-<vacío>}"
+          echo "B/op n=10000: ${b10:-<vacío>}"
+          awk -v a="$b1" -v b="$b10" 'BEGIN {
+            if (a+0 == 0 || b+0 == 0) { print "ERROR: no se pudo medir B/op de Maintain"; exit 1 }
+            r = (b+0)/(a+0)
+            printf "ratio B/op(10k)/B/op(1k) = %.1fx (umbral 20)\n", r
+            if (r > 20.0) { print "ERROR: Maintain volvió a escalar cuadráticamente en memoria (regresión de T7.1)"; exit 1 }
+            print "OK: Maintain escala sub-cuadráticamente en memoria"
+          }'
+
   lint:
     runs-on: ubuntu-latest
     steps:

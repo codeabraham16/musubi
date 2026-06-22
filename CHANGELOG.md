@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-06-22
+
+### Changed
+- **Mantenimiento ~9× más rápido y 18× menos memoria a escala** (Track 7 / T7.1): un harness de
+  benchmarks de escala (`internal/memory/bench_test.go`) reveló que `Maintain` escalaba de forma
+  cuadrática (10k observaciones: **37.5s y 3.27 GB**), y el profiler ubicó el cuello real en
+  `Consolidate`: el conteo de solapamiento de trigramas reconstruía un `map[int]int` por cada
+  observación (el 56% del tiempo se iba en `mapassign`). Como los índices de canónicos son densos, se
+  reemplazó ese mapa por un **slice reutilizado** (`overlap []int` + lista de tocados para resetear en
+  O(tocados)). Resultado, **a igualdad de resultado** (mismos tests): Maintain 10k baja a **3.97s y
+  181 MB** (9.4× / 18×). La super-linealidad asintótica residual (las postings de trigramas crecen con
+  n) queda para T7.2 como problema de *set-similarity-join*, con sus propios tests de equivalencia.
+
+### Added
+- **`(*ivfIndex).RemoveBatch(ids)`**: saca un lote de observaciones del índice vectorial bajo un único
+  `Lock`, agrupando por celda y filtrando cada celda tocada una sola vez (O(celdas tocadas) en vez de
+  O(borrados × celda) del loop de `Remove`). Idempotente con ids ausentes o repetidos; deja el índice
+  en el mismo estado que llamar `Remove` uno por uno (test de equivalencia). La consolidación, el decay
+  y la purga del mantenimiento lo usan en lugar del loop, para no re-tomar el lock por cada id cuando
+  hay embeddings. La correctitud del recall ya la garantiza el re-filtro SQL del engine.
+- **Job de CI `bench-guard`**: corre `BenchmarkMaintain` a 1k y 10k y falla si la **memoria asignada**
+  escala de forma cuadrática (ratio B/op(10k)/B/op(1k) > 20). Se mide memoria y no tiempo a propósito:
+  es determinista y estable en runners compartidos. Atrapa una regresión al patrón O(n²) sin falsos
+  positivos por ruido de scheduler.
+
+### Notes
+- `bench_test.go` usa datasets sintéticos deterministas (seed fija), sin red ni embeddings reales, solo
+  stdlib: mide cómo escala el motor (save, recall léxico/híbrido, FTS, vector, Maintain, prime) sin deps
+  nuevas. Es la base de medición de Track 7.
+
 ## [0.38.0] - 2026-06-20
 
 ### Changed
@@ -665,7 +695,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/codeabraham16/musubi/compare/v0.38.0...v0.39.0
 [0.17.0]: https://github.com/codeabraham16/musubi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/codeabraham16/musubi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/codeabraham16/musubi/compare/v0.14.0...v0.15.0

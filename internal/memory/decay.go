@@ -146,9 +146,7 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 		// Sacar del índice vectorial las que se archivaron (dejan de ser elegibles).
 		// El re-filtro SQL ya garantiza correctness; esto mantiene afilado el recall.
 		if e.index != nil {
-			for _, id := range toArchive {
-				e.index.Remove(id)
-			}
+			e.index.RemoveBatch(toArchive)
 		}
 	}
 

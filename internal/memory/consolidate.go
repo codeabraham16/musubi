@@ -90,6 +90,16 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	var removed []string           // ids de duplicados archivados (para sacar del índice vectorial)
 	merged := 0
 
+	// overlap[ki] = #trigramas compartidos con el canónico ki, para la observación actual.
+	// Como los ki son densos (0..len(kept)-1), usamos un slice REUTILIZADO entre
+	// observaciones en vez de un map[int]int nuevo por iteración: el `++` pasa de un
+	// mapassign con hash a un índice de array. `touched` lista los ki tocados para
+	// resetear a 0 en O(tocados) sin barrer todo el slice. Mismo resultado exacto que el
+	// map original (es solo la estructura de conteo), pero elimina el churn de mapas que
+	// dominaba la consolidación a escala (T7.1).
+	var overlap []int
+	var touched []int
+
 	for _, o := range all {
 		norm := normalizeForSim(o.content)
 		tg := trigrams(norm)
@@ -98,13 +108,21 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		if ki, ok := byNorm[norm]; ok {
 			matchIdx = ki // igualdad exacta tras normalizar (Similarity == 1.0)
 		} else {
-			overlap := map[int]int{}
+			if len(overlap) < len(kept) {
+				overlap = append(overlap, make([]int, len(kept)-len(overlap))...)
+			}
+			touched = touched[:0]
 			for g := range tg {
 				for _, ki := range inverted[g] {
+					if overlap[ki] == 0 {
+						touched = append(touched, ki)
+					}
 					overlap[ki]++
 				}
 			}
-			for ki, ov := range overlap {
+			for _, ki := range touched {
+				ov := overlap[ki]
+				overlap[ki] = 0                          // reset para la próxima observación
 				denom := len(tg) + len(keptTg[ki]) - ov // |A| + |B| - |A∩B|
 				if denom <= 0 {
 					continue
@@ -161,11 +179,10 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		return ConsolidateResult{}, fmt.Errorf("error al commitear consolidación: %w", err)
 	}
 
-	// Sacar los duplicados borrados del índice vectorial (post-commit).
+	// Sacar los duplicados borrados del índice vectorial (post-commit), en lote: un solo
+	// Lock y una pasada por celda, no un Remove por id (evita el O(n²) del mantenimiento).
 	if e.index != nil {
-		for _, id := range removed {
-			e.index.Remove(id)
-		}
+		e.index.RemoveBatch(removed)
 	}
 
 	return ConsolidateResult{Scanned: len(all), Merged: merged}, nil
