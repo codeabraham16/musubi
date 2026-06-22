@@ -3,6 +3,7 @@ package memory
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // ledger.go lleva un LEDGER de tokens por sesión: cuántos tokens inyectó Musubi
@@ -21,6 +22,74 @@ type TokenLedger struct {
 	SessionID string         `json:"session_id"`
 	Total     int            `json:"total"`
 	Surfaces  map[string]int `json:"surfaces"`
+}
+
+// SurfaceStat es el gasto de una superficie del ledger y su porcentaje del total.
+type SurfaceStat struct {
+	Surface string `json:"surface"`
+	Tokens  int    `json:"tokens"`
+	Pct     int    `json:"pct"`
+}
+
+// BudgetStatus es el reporte del gobernador: el ledger contra el presupuesto BLANDO
+// de sesión. Total y desglose por superficie (ordenado por gasto desc) más, si hay
+// presupuesto, restante, % usado y estado. Es lo que devuelve musubi_tokens.
+type BudgetStatus struct {
+	SessionID string        `json:"session_id"`
+	Total     int           `json:"total"`
+	Budget    int           `json:"budget,omitempty"`
+	Remaining int           `json:"remaining,omitempty"`
+	PctUsed   int           `json:"pct_used,omitempty"`
+	Status    string        `json:"status"` // unbudgeted | ok | watch | over
+	Surfaces  []SurfaceStat `json:"surfaces"`
+}
+
+// Umbrales del gobernador (porcentaje del presupuesto de sesión).
+const (
+	budgetWatchPct = 75  // a partir de acá conviene mirar el gasto
+	budgetOverPct  = 100 // presupuesto excedido
+)
+
+// Budget arma el reporte del ledger contra el presupuesto de sesión budget (0 = sin
+// techo => estado "unbudgeted", solo desglose). Las superficies se ordenan por tokens
+// desc (desempate por nombre, salida determinista) con su % del total. El estado es
+// ok (<75%), watch (>=75%) u over (>=100%).
+func (l TokenLedger) Budget(budget int) BudgetStatus {
+	st := BudgetStatus{
+		SessionID: l.SessionID,
+		Total:     l.Total,
+		Surfaces:  make([]SurfaceStat, 0, len(l.Surfaces)),
+	}
+	for surface, tokens := range l.Surfaces {
+		pct := 0
+		if l.Total > 0 {
+			pct = int(float64(tokens)*100/float64(l.Total) + 0.5)
+		}
+		st.Surfaces = append(st.Surfaces, SurfaceStat{Surface: surface, Tokens: tokens, Pct: pct})
+	}
+	sort.Slice(st.Surfaces, func(i, j int) bool {
+		if st.Surfaces[i].Tokens != st.Surfaces[j].Tokens {
+			return st.Surfaces[i].Tokens > st.Surfaces[j].Tokens
+		}
+		return st.Surfaces[i].Surface < st.Surfaces[j].Surface
+	})
+
+	if budget <= 0 {
+		st.Status = "unbudgeted"
+		return st
+	}
+	st.Budget = budget
+	st.Remaining = budget - l.Total
+	st.PctUsed = int(float64(l.Total) * 100 / float64(budget))
+	switch {
+	case st.PctUsed >= budgetOverPct:
+		st.Status = "over"
+	case st.PctUsed >= budgetWatchPct:
+		st.Status = "watch"
+	default:
+		st.Status = "ok"
+	}
+	return st
 }
 
 // LedgerStatus devuelve el ledger de la sesión activa (ceros si no hay).

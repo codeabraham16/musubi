@@ -437,7 +437,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_tokens",
-				Description: "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto (priming de arranque + recall por turno + hidratación), por superficie. action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
+				Description: "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación) y contra el presupuesto blando de sesión. Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

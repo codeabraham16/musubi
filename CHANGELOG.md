@@ -7,6 +7,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-06-22
+
+### Added
+- **Gobernador de sesión: presupuesto blando de tokens + reporte** (Track 9 / T9.2): nueva opción
+  `memory.session_token_budget` (default **8000**, `0` = sin techo) y `musubi_tokens` ahora devuelve el
+  reporte del **gobernador**: total, presupuesto, **restante**, **% usado**, **estado** (`ok` <75% ·
+  `watch` ≥75% · `over` ≥100%) y el **desglose por superficie ordenado por gasto** (cada una con su % del
+  total). Sobre el ledger holístico de T9.1, esto convierte los números crudos en una señal accionable:
+  de un vistazo se ve cuánto contexto consume Musubi y **qué superficie** lo domina. Es **blando**: no
+  recorta nada (eso arriesgaría eficiencia); solo mide y reporta para que el gasto sea visible y acotable.
+
+### Notes
+- El estado/umbrales viven en `TokenLedger.Budget(budget)` (model-free, determinista, testeable). El
+  presupuesto es del bloque `memory`; un `session_token_budget: 0` EXPLÍCITO se respeta (opt-out) y no se
+  pisa con el default. La alerta PROACTIVA por turno (avisar al cruzar el techo sin que el agente consulte)
+  queda para T9.3. Golden de `tools/list` regenerado por el cambio de descripción de `musubi_tokens`.
+
 ## [0.45.0] - 2026-06-22
 
 ### Changed

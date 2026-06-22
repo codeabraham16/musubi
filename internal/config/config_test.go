@@ -328,16 +328,40 @@ func TestLoadMemoryDefaults(t *testing.T) {
 	if cfg.Memory.CandidatePool != 50 {
 		t.Errorf("esperaba candidate_pool 50 por defecto, obtuve %d", cfg.Memory.CandidatePool)
 	}
+	if cfg.Memory.SessionTokenBudget != 8000 {
+		t.Errorf("esperaba session_token_budget 8000 por defecto, obtuve %d", cfg.Memory.SessionTokenBudget)
+	}
 }
 
 func TestLoadParsesMemoryBlock(t *testing.T) {
-	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n  gist_max_tokens: 32\n  candidate_pool: 100\n")
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n  gist_max_tokens: 32\n  candidate_pool: 100\n  session_token_budget: 12000\n")
 	cfg, err := Load(root)
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
 	if cfg.Memory.RecallTokenBudget != 800 || cfg.Memory.GistMaxTokens != 32 || cfg.Memory.CandidatePool != 100 {
 		t.Errorf("bloque memory no parseado: %+v", cfg.Memory)
+	}
+	if cfg.Memory.SessionTokenBudget != 12000 {
+		t.Errorf("esperaba session_token_budget 12000, obtuve %d", cfg.Memory.SessionTokenBudget)
+	}
+}
+
+// TestLoadMemorySessionBudgetZeroRespected verifica que un session_token_budget: 0
+// EXPLÍCITO (opt-out del gobernador) no se pisa con el default 8000, mientras que
+// los otros numéricos del bloque sí se rellenan.
+func TestLoadMemorySessionBudgetZeroRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  session_token_budget: 0\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.SessionTokenBudget != 0 {
+		t.Errorf("un session_token_budget 0 explícito debe respetarse (sin techo), obtuve %d", cfg.Memory.SessionTokenBudget)
+	}
+	// El resto del bloque sigue tomando defaults (0 no es valor útil ahí).
+	if cfg.Memory.RecallTokenBudget != 400 || cfg.Memory.GistMaxTokens != 24 || cfg.Memory.CandidatePool != 50 {
+		t.Errorf("los otros numéricos de memory deben rellenarse con defaults: %+v", cfg.Memory)
 	}
 }
 

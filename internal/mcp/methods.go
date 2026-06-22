@@ -794,13 +794,15 @@ func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
 		if err := s.engine.LedgerReset(); err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al reiniciar el ledger: %v", err)
 		}
-		return jsonResult(memory.TokenLedger{Surfaces: map[string]int{}})
+		return jsonResult(memory.TokenLedger{Surfaces: map[string]int{}}.Budget(s.memory.SessionTokenBudget))
 	case "", "status":
 		l, err := s.engine.LedgerStatus()
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al leer el ledger: %v", err)
 		}
-		return jsonResult(l)
+		// Reporte del gobernador: ledger contra el presupuesto blando de sesión
+		// (total, restante, % usado, estado y desglose por superficie).
+		return jsonResult(l.Budget(s.memory.SessionTokenBudget))
 	default:
 		return nil, rpcErrorf(codeInvalidParams, "action inválida: %q (status | reset)", args.Action)
 	}
