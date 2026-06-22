@@ -106,6 +106,9 @@ type McpServer struct {
 	projectPath string
 	// sourcing contiene la configuración de sourcing de skills desde catálogo remoto.
 	sourcing config.SourcingConfig
+	// sourceCache cachea las respuestas de red del sourcing (catálogo y marketplace) con
+	// TTL = sourcing.CacheSeconds, para no repetir el mismo GET en ventanas cortas.
+	sourceCache *sourcingCache
 	// memory contiene los parámetros del recall por presupuesto de tokens.
 	memory config.MemoryConfig
 	// maintenance contiene los parámetros del auto-mantenimiento (consolidar + olvidar).
@@ -160,6 +163,9 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	for _, opt := range opts {
 		opt(s)
 	}
+	// El caché de sourcing se crea tras aplicar las options: su TTL sale de la config
+	// (WithSourcing) que recién quedó fijada arriba.
+	s.sourceCache = newSourcingCache(s.sourcing.CacheSeconds)
 	// Construir el registro de tools una vez (los handlers leen la config de s en
 	// tiempo de llamada, así que el orden respecto de las opciones no importa).
 	s.tools = s.buildRegistry()

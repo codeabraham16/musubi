@@ -1103,17 +1103,25 @@ func (s *McpServer) toolSearchSkills(raw json.RawMessage) (interface{}, *RpcErro
 			"y usá musubi_save_skill para guardar las reglas."), nil
 	}
 
-	// Obtener el catálogo con timeout vía contexto (5 segundos).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cat, err := skillsource.FetchCatalog(ctx, s.sourcing.CatalogURL)
-	if err != nil {
-		// Degradación graciosa: catálogo inaccesible → texto explicativo, no RpcError.
-		return textResult(fmt.Sprintf(
-			"El catálogo de skills no está disponible en este momento (%v). "+
-				"Podés buscar skills manualmente en la documentación oficial del stack detectado "+
-				"y guardarlas con musubi_save_skill.", err)), nil
+	// Obtener el catálogo: primero del caché (TTL = CacheSeconds), si no, de la red con
+	// timeout vía contexto (5 segundos). Solo se cachean fetches exitosos.
+	cacheKey := "catalog:" + s.sourcing.CatalogURL
+	var cat skillsource.Catalog
+	if v, ok := s.sourceCache.get(cacheKey); ok {
+		cat = v.(skillsource.Catalog)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		fetched, err := skillsource.FetchCatalog(ctx, s.sourcing.CatalogURL)
+		if err != nil {
+			// Degradación graciosa: catálogo inaccesible → texto explicativo, no RpcError.
+			return textResult(fmt.Sprintf(
+				"El catálogo de skills no está disponible en este momento (%v). "+
+					"Podés buscar skills manualmente en la documentación oficial del stack detectado "+
+					"y guardarlas con musubi_save_skill.", err)), nil
+		}
+		cat = fetched
+		s.sourceCache.set(cacheKey, cat)
 	}
 
 	// Detectar stack y dependencias del proyecto actual.
@@ -1232,15 +1240,25 @@ func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcEr
 		apiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	results, err := skillsource.FetchMarketplaceSkills(ctx, s.sourcing.MarketplaceURL, apiKey, query, args.Limit)
-	if err != nil {
-		// Degradación graciosa: marketplace inaccesible → texto, no RpcError.
-		return textResult(fmt.Sprintf(
-			"El marketplace de skills no está disponible en este momento (%v). "+
-				"Volvé a intentar más tarde o buscá skills manualmente.", err)), nil
+	// Caché por (URL, query, limit): las queries de descubrimiento se repiten (la derivada
+	// del stack es estable), así que cachear el resultado ahorra llamadas a la API y su
+	// rate limit. Solo se cachean fetches exitosos.
+	cacheKey := fmt.Sprintf("marketplace:%s|%s|%d", s.sourcing.MarketplaceURL, query, args.Limit)
+	var results []skillsource.MarketplaceSkill
+	if v, ok := s.sourceCache.get(cacheKey); ok {
+		results = v.([]skillsource.MarketplaceSkill)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		fetched, err := skillsource.FetchMarketplaceSkills(ctx, s.sourcing.MarketplaceURL, apiKey, query, args.Limit)
+		if err != nil {
+			// Degradación graciosa: marketplace inaccesible → texto, no RpcError.
+			return textResult(fmt.Sprintf(
+				"El marketplace de skills no está disponible en este momento (%v). "+
+					"Volvé a intentar más tarde o buscá skills manualmente.", err)), nil
+		}
+		results = fetched
+		s.sourceCache.set(cacheKey, results)
 	}
 
 	return jsonResult(map[string]interface{}{
