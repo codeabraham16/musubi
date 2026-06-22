@@ -76,19 +76,34 @@ func TestHealthContextSurfacesIssues(t *testing.T) {
 	}
 }
 
-func TestPrimingAccountsTokensInLedger(t *testing.T) {
+// TestHookAccountsAllStartupSurfaces verifica el ledger HOLÍSTICO (T9.1): el
+// SessionStart contabiliza TODAS las superficies que inyecta —no solo el priming—
+// estimando el texto final de cada bloque. Acá conviven priming (memoria) y bloque
+// cognitivo (proyecto sin perfil); ambos deben quedar medidos bajo el session_id.
+func TestHookAccountsAllStartupSurfaces(t *testing.T) {
+	dir := crearGoProject(t)
+	crearSentinel(t, dir) // skills generadas: aísla priming + cognitivo de la generación
 	store := newFakeStore()
+	stack, _ := detector.DetectStack(dir)
+	store.meta["skills_stack"] = detector.StackFingerprint(stack)
 	store.prime = memory.RecallResult{
 		Count:      1,
 		UsedTokens: 30,
-		Items:      []memory.RecallItem{{ID: "x", TopicKey: "t", Gist: "contexto del proyecto"}},
+		Items:      []memory.RecallItem{{ID: "x", TopicKey: "arch/db", Gist: "Usamos SQLite con FTS5"}},
 	}
-	out := buildPrimingContext(store, 300, "sess-9")
+	// Sin perfil → el bloque cognitivo también se inyecta (y debe contabilizarse).
+	out, err := buildHookOutput(dir, store, defaultStartup(), "sess-9")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if out == "" {
-		t.Fatal("esperaba un bloque de priming no vacío")
+		t.Fatal("esperaba contexto de arranque no vacío")
 	}
-	if store.ledger["startup_priming"] != 30 {
-		t.Errorf("el priming debe contabilizar 30 tokens, obtuve %d", store.ledger["startup_priming"])
+	if store.ledger["startup_priming"] <= 0 {
+		t.Errorf("el priming debe contabilizarse, obtuve %d", store.ledger["startup_priming"])
+	}
+	if store.ledger["startup_cognitive"] <= 0 {
+		t.Errorf("el bloque cognitivo debe contabilizarse (antes invisible), obtuve %d", store.ledger["startup_cognitive"])
 	}
 	if store.ledgerSession != "sess-9" {
 		t.Errorf("el ledger debe usar el session_id del SessionStart, obtuve %q", store.ledgerSession)

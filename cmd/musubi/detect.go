@@ -106,7 +106,51 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 	}
 	health := buildHealthContext(store)
 
-	return assembleHookContext("SessionStart", priming, health, cognitive, generation), nil
+	// Contabilizar TODAS las superficies de arranque (no solo el priming): el bloque
+	// cognitivo y el de generación de skills son los que más tokens inyectan y antes
+	// eran invisibles en el ledger. Medirlos es el cimiento para optimizarlos.
+	return assembleAccounted(store, "SessionStart", sessionID, []accountedBlock{
+		{surface: "startup_priming", text: priming},
+		{surface: "startup_health", text: health},
+		{surface: "startup_cognitive", text: cognitive},
+		{surface: "startup_skillgen", text: generation},
+	}), nil
+}
+
+// ledgerStore es lo mínimo que la contabilidad holística necesita del motor:
+// imputar tokens a una superficie de la sesión. Lo satisfacen tanto startupStore
+// (arranque) como turnStore (por turno), de modo que el mismo helper de ensamblado
+// sirva a ambos hooks.
+type ledgerStore interface {
+	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
+}
+
+// accountedBlock asocia un bloque de contexto inyectado con la superficie del
+// ledger a la que se imputa su costo en tokens.
+type accountedBlock struct {
+	surface string
+	text    string
+}
+
+// assembleAccounted contabiliza en el ledger CADA bloque no vacío —estimando los
+// tokens de su texto FINAL (headers, ids y formato incluidos, que es la huella real
+// que entra al contexto)— y luego ensambla los no vacíos en el envelope del evento.
+// Centralizar la contabilidad acá garantiza que ninguna superficie inyectada quede
+// sin medir: antes cada builder contabilizaba (o no) por su cuenta y la mayoría no
+// lo hacía, así que el ledger sub-reportaba el gasto real de Musubi. Si store es nil
+// (memoria no disponible), solo ensambla sin contabilizar.
+func assembleAccounted(store ledgerStore, eventName, sessionID string, blocks []accountedBlock) string {
+	texts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if strings.TrimSpace(b.text) == "" {
+			continue
+		}
+		if store != nil {
+			_, _ = store.LedgerAdd(sessionID, b.surface, memory.EstimateTokens(b.text))
+		}
+		texts = append(texts, b.text)
+	}
+	return assembleHookContext(eventName, texts...)
 }
 
 // buildHealthContext surfacea (T5.4) los problemas que la auto-curación NO pudo reparar
@@ -245,9 +289,8 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 	if err != nil || res.Count == 0 {
 		return ""
 	}
-	// SessionStart abre la sesión: contabilizar el priming (con session_id, que
-	// reinicia el ledger por sesión) para que el gasto de Musubi sea medible.
-	_, _ = store.LedgerAdd(sessionID, "startup_priming", res.UsedTokens)
+	// La contabilidad del priming la hace assembleAccounted sobre el texto final
+	// (header incluido); acá solo construimos el bloque y sembramos el delta.
 
 	// SEMBRAR el delta con lo que el priming ya inyectó: así el recall por turno
 	// no repite estos mismos gists en la sesión (evita la doble inyección

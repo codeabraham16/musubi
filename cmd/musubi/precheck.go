@@ -23,10 +23,12 @@ import (
 const umbralArchivoGrande = 1500
 
 // codeStore es lo que el hook necesita del motor: leer la memoria de código y los errores
-// conocidos (telemetría) del archivo que se va a leer.
+// conocidos (telemetría) del archivo que se va a leer, y contabilizar en el ledger lo que
+// inyecta (estas dos superficies también gastan contexto y antes no se medían).
 type codeStore interface {
 	GetCodeMemory(path string) (memory.CodeMemory, bool, error)
 	GetUnresolvedTelemetryLogsForFiles(files []string) ([]memory.TelemetryLog, error)
+	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 }
 
 // maxPrecheckTelemetry acota cuántos errores conocidos se surfacean por lectura, para no
@@ -64,12 +66,16 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	key := memory.NormalizeCodePath(root, path)
 
 	// Dos superficies que se combinan: la memoria de código (gist) y los errores conocidos
-	// del archivo (telemetría, T6.3). Cualquiera puede estar vacía.
+	// del archivo (telemetría, T6.3). Cualquiera puede estar vacía. Cada una se contabiliza
+	// en el ledger por su huella real (model-free) para que el gasto del PreToolUse sea
+	// medible junto con el resto de las superficies de Musubi.
 	parts := make([]string, 0, 2)
 	if m := codeMemoryMessage(store, root, path, key); m != "" {
+		_, _ = store.LedgerAdd(in.SessionID, "precheck_code", memory.EstimateTokens(m))
 		parts = append(parts, m)
 	}
 	if m := telemetryMessage(store, key, path); m != "" {
+		_, _ = store.LedgerAdd(in.SessionID, "precheck_telemetry", memory.EstimateTokens(m))
 		parts = append(parts, m)
 	}
 	if len(parts) == 0 {

@@ -225,10 +225,39 @@ func TestTurnRecallAccountsTokensInLedger(t *testing.T) {
 
 	turnOutput(store, defaultLoop(), pipeOff(), maOff(), in)
 
-	if store.ledger["turn_recall"] != 42 {
-		t.Errorf("el recall por turno debe contabilizar 42 tokens, obtuve %d", store.ledger["turn_recall"])
+	// El ledger holístico estima el bloque FINAL inyectado (header + ids incluidos),
+	// no solo el contenido de los gists: debe ser > 0 (no necesariamente == UsedTokens).
+	if store.ledger["turn_recall"] <= 0 {
+		t.Errorf("el recall por turno debe contabilizar tokens, obtuve %d", store.ledger["turn_recall"])
 	}
 	if store.ledgerSession != "sess-123" {
+		t.Errorf("el ledger debe usar el session_id del hook, obtuve %q", store.ledgerSession)
+	}
+}
+
+// TestTurnAccountsAllSurfaces verifica el ledger HOLÍSTICO (T9.1) por turno: fase,
+// conflictos y captura —antes invisibles en el ledger— se contabilizan junto con el
+// recall. Antes solo se medía turn_recall.
+func TestTurnAccountsAllSurfaces(t *testing.T) {
+	store := newFakeTurnStore()
+	store.phaseActive = true
+	store.phase = memory.PhaseState{Task: "refactor", Phase: "plan", Index: 1, Total: 4}
+	store.pending = []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}}
+	store.recall = memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "algo relevante"}}}
+	store.obsCount = 3
+	store.meta[metaLoopObsSeen] = "5" // base previa alta → captura se dispara este turno
+	store.meta[metaLoopTurns] = "9"
+
+	loop := config.LoopConfig{PerTurnRecall: true, RecallBudget: 250, SurfaceConflicts: true, CaptureReminder: true, ReminderAfterTurns: 2}
+	in := strings.NewReader(`{"prompt":"seguimos con la tarea","session_id":"sess-7"}`)
+	turnOutput(store, loop, defaultPipe(), maOff(), in)
+
+	for _, surface := range []string{"turn_phase", "turn_recall", "turn_conflicts", "capture_reminder"} {
+		if store.ledger[surface] <= 0 {
+			t.Errorf("la superficie %q debe contabilizarse en el ledger, obtuve %d", surface, store.ledger[surface])
+		}
+	}
+	if store.ledgerSession != "sess-7" {
 		t.Errorf("el ledger debe usar el session_id del hook, obtuve %q", store.ledgerSession)
 	}
 }
