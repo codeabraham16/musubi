@@ -137,6 +137,58 @@ func (ix *ivfIndex) removeFromCellLocked(id string, c int) {
 	}
 }
 
+// RemoveBatch quita un CONJUNTO de observaciones del índice bajo un único Lock, en una
+// sola pasada por cada celda afectada. Equivale a llamar Remove(id) por cada id —misma
+// semántica, idempotente con ids ausentes o repetidos— pero sin re-tomar el lock ni
+// re-barrer la celda entera por cada id: agrupa los ids por celda y filtra cada celda
+// tocada UNA vez. Pasa el borrado de lotes de O(borrados × celda) a O(celdas tocadas),
+// que es lo que colapsa el O(n²) del mantenimiento (consolidación/decay/purga borran
+// lotes grandes de un saque). La correctitud del recall ya la garantiza el re-filtro
+// SQL del engine; esto solo mantiene el índice afilado más rápido.
+func (ix *ivfIndex) RemoveBatch(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	// Agrupar los ids PRESENTES por celda (los ausentes se ignoran). El set por celda
+	// deduplica ids repetidos, igual que dos Remove sobre el mismo id (el 2º es no-op).
+	byCell := make(map[int]map[string]struct{})
+	for _, id := range ids {
+		c, ok := ix.assign[id]
+		if !ok {
+			continue
+		}
+		set := byCell[c]
+		if set == nil {
+			set = make(map[string]struct{})
+			byCell[c] = set
+		}
+		set[id] = struct{}{}
+	}
+	for c, set := range byCell {
+		if c < 0 || c >= len(ix.cells) {
+			continue
+		}
+		cell := ix.cells[c]
+		kept := cell[:0] // filtrado in-place: kept nunca adelanta al índice de lectura
+		for _, v := range cell {
+			if _, drop := set[v]; drop {
+				continue
+			}
+			kept = append(kept, v)
+		}
+		for i := len(kept); i < len(cell); i++ {
+			cell[i] = "" // liberar referencias a los strings descartados en la cola
+		}
+		ix.cells[c] = kept
+		ix.dirty += len(set)
+		for id := range set {
+			delete(ix.assign, id)
+		}
+	}
+}
+
 // Search devuelve los ids de las nprobe celdas más cercanas al query (candidatos a
 // rankear exactamente por el caller). ok=false si el índice no sirve para esta query
 // (sin entrenar o dim incompatible) => el caller cae al full-scan exacto. Los ids se

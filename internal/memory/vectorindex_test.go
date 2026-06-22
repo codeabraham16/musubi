@@ -221,6 +221,94 @@ func TestIVFUpsertAndRemove(t *testing.T) {
 	ix.mu.RUnlock()
 }
 
+// snapshotIndexState devuelve el estado observable del índice como id->cellID, derivado
+// de las celdas (la fuente de membresía real), y verifica de paso que `assign` coincide
+// celda por celda con `cells` (invariante: assign[id]==c  <=>  id ∈ cells[c]).
+func snapshotIndexState(t *testing.T, ix *ivfIndex) map[string]int {
+	t.Helper()
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	state := make(map[string]int)
+	for c, cell := range ix.cells {
+		for _, id := range cell {
+			if prev, dup := state[id]; dup {
+				t.Fatalf("id %q aparece en celdas %d y %d", id, prev, c)
+			}
+			state[id] = c
+		}
+	}
+	if len(state) != len(ix.assign) {
+		t.Fatalf("celdas tienen %d ids pero assign tiene %d", len(state), len(ix.assign))
+	}
+	for id, c := range state {
+		if ix.assign[id] != c {
+			t.Fatalf("id %q en celda %d pero assign dice %d", id, c, ix.assign[id])
+		}
+	}
+	return state
+}
+
+// TestIVFRemoveBatchEquivalente es el test de equivalencia de T7.1: RemoveBatch debe
+// dejar el índice en el MISMO estado que llamar Remove id por id (esa es la garantía
+// que habilita reemplazar los loops de Remove del mantenimiento por una sola llamada).
+// Cubre además idempotencia: ids ausentes y repetidos no rompen nada.
+func TestIVFRemoveBatchEquivalente(t *testing.T) {
+	data := clusteredDataset(4, 600, 32, 21)
+	cfg := config.Default().VectorIndex
+
+	// Referencia: Remove uno por uno sobre una copia entrenada igual.
+	ref := newIVFIndex()
+	ref.Rebuild(data, cfg, vectorIndexSeed)
+	toRemove := make([]string, 0, 300)
+	for i := 0; i < len(data); i += 3 { // ~un tercio, repartido entre celdas
+		toRemove = append(toRemove, data[i].id)
+	}
+	for _, id := range toRemove {
+		ref.Remove(id)
+	}
+
+	// Candidato: mismo índice, pero un solo RemoveBatch con ruido (ausentes + repetidos).
+	got := newIVFIndex()
+	got.Rebuild(data, cfg, vectorIndexSeed)
+	batch := append([]string{}, toRemove...)
+	batch = append(batch, toRemove...)                 // repetidos: deben ser idempotentes
+	batch = append(batch, "fantasma-1", "fantasma-2")  // ausentes: deben ignorarse
+	got.RemoveBatch(batch)
+
+	refState := snapshotIndexState(t, ref)
+	gotState := snapshotIndexState(t, got)
+	if len(refState) != len(gotState) {
+		t.Fatalf("RemoveBatch dejó %d ids, Remove dejó %d", len(gotState), len(refState))
+	}
+	for id, c := range refState {
+		if gc, ok := gotState[id]; !ok || gc != c {
+			t.Fatalf("id %q: Remove->celda %d, RemoveBatch->celda %d (ok=%v)", id, c, gc, ok)
+		}
+	}
+	if ref.Len() != got.Len() {
+		t.Fatalf("Len difiere: Remove=%d RemoveBatch=%d", ref.Len(), got.Len())
+	}
+	// Los removidos no deben quedar en ninguna celda.
+	for _, id := range toRemove {
+		if _, still := gotState[id]; still {
+			t.Fatalf("id removido %q sigue en el índice tras RemoveBatch", id)
+		}
+	}
+}
+
+// TestIVFRemoveBatchVacio: borrar nada (slice vacío) es no-op.
+func TestIVFRemoveBatchVacio(t *testing.T) {
+	data := clusteredDataset(2, 100, 16, 4)
+	ix := newIVFIndex()
+	ix.Rebuild(data, config.Default().VectorIndex, vectorIndexSeed)
+	before := ix.Len()
+	ix.RemoveBatch(nil)
+	ix.RemoveBatch([]string{})
+	if ix.Len() != before {
+		t.Fatalf("RemoveBatch vacío cambió Len: %d -> %d", before, ix.Len())
+	}
+}
+
 // TestIVFConcurrentRace ejercita Search + Add + Remove + Rebuild en paralelo para
 // que `go test -race` detecte cualquier acceso sin sincronizar.
 func TestIVFConcurrentRace(t *testing.T) {

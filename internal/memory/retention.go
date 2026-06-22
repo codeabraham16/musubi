@@ -152,9 +152,7 @@ func (e *DbEngine) PurgeArchived(olderThanDays float64) (int, error) {
 	// Sacar del índice vectorial (defensivo: ya estaban archivadas y removidas al
 	// archivarse, pero un Remove idempotente cierra cualquier rastro).
 	if e.index != nil {
-		for _, id := range ids {
-			e.index.Remove(id)
-		}
+		e.index.RemoveBatch(ids)
 	}
 
 	return len(ids), nil
