@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-06-22
+
+### Changed
+- **Superficies por turno delta-aware: fase y conflictos solo se reinyectan al cambiar** (Track 9 / T9.4):
+  el recordatorio de fase del pipeline (`turn_phase`) y el aviso de conflictos (`turn_conflicts`) se
+  inyectaban **enteros cada turno**. Una simulación de sesión realista contra el ledger holístico
+  (`footprint_test.go`) mostró que `turn_phase` era el costo que **más escala**: ~58 tok/turno **sin
+  delta** → en una sesión de 40 turnos ≈ **2.300 tokens** repitiendo la misma línea, más que cualquier
+  costo de arranque (que es one-time). Ahora ambos siguen el mismo principio que `turn_recall`: se
+  inyectan completos **solo cuando cambian** (la fase al avanzar de fase/tarea; los conflictos al
+  cambiar la cantidad) y callan mientras tanto (el agente ya los tiene en contexto). Medido: `turn_phase`
+  232→58 (primera sesión) y 224→56 (establecida) sobre 4 turnos; el ahorro crece con la longitud de la sesión.
+
+### Notes
+- Helper `turnSurfaceChanged` (delta por superficie, con el `session_id` como prefijo para reiniciar al
+  cambiar de sesión, igual que el delta del recall). Estado en meta `loop_phase_injected` /
+  `loop_conflicts_injected`. Nuevo `footprint_test.go`: simula una primera sesión (proyecto nuevo: dispara
+  cognitivo + generación de skills) y una establecida (perfilada) y reporta el footprint por superficie —
+  auditoría reproducible que fundamentó esta decisión sobre datos, no intuición.
+
 ## [0.47.0] - 2026-06-22
 
 ### Added
