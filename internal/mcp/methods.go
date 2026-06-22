@@ -1187,6 +1187,94 @@ func excludeRejectedSkills(cands []skillsource.Candidate, decisions []memory.Ski
 	return out
 }
 
+// toolDiscoverSkills DESCUBRE Agent Skills (SKILL.md) en un marketplace externo, filtradas
+// por el stack del proyecto. Es un canal distinto de musubi_search_skills (catálogo curado):
+// el marketplace tiene escala (~1.7M skills de GitHub) pero no sabe del proyecto; Musubi
+// aporta lo que falta —arma la query desde el stack detectado— y devuelve candidatos con su
+// githubUrl para que el USUARIO los revise e instale. Solo descubre: nunca baja, ejecuta ni
+// instala el SKILL.md (contenido no confiable). Inputs opcionales: query (string), limit (int).
+// Opt-in: si el marketplace está deshabilitado → guía textual. Degradación graciosa ante red.
+func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	// Opt-in: el descubrimiento desde el marketplace externo es contenido no confiable, así
+	// que está apagado por defecto. Si está off, guiar sin tocar la red.
+	if !s.sourcing.MarketplaceEnabled {
+		return textResult("El descubrimiento de skills desde el marketplace está deshabilitado " +
+			"(sourcing.marketplace_enabled). Activalo en la config de Musubi para descubrir Agent " +
+			"Skills de la comunidad filtradas por tu stack. Recordá: Musubi solo las enlaza; revisá " +
+			"siempre el código en GitHub antes de instalar."), nil
+	}
+
+	// Construir la query: si el usuario no dio una, derivarla del stack detectado (la pieza
+	// que el marketplace no conoce). El endpoint exige una query no vacía (no soporta '*').
+	query := strings.TrimSpace(args.Query)
+	if query == "" {
+		stacks, _ := detector.DetectStack(s.projectPath)
+		query = marketplaceQueryFromStack(stacks)
+	}
+	if query == "" {
+		return textResult("No pude inferir el stack del proyecto para armar la búsqueda. " +
+			"Pasá un 'query' explícito a musubi_discover_skills (ej. el lenguaje o framework)."), nil
+	}
+
+	// API key opcional vía env var (sube el rate limit); vacío => tier anónimo.
+	var apiKey string
+	if s.sourcing.MarketplaceAPIKeyEnv != "" {
+		apiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	results, err := skillsource.FetchMarketplaceSkills(ctx, s.sourcing.MarketplaceURL, apiKey, query, args.Limit)
+	if err != nil {
+		// Degradación graciosa: marketplace inaccesible → texto, no RpcError.
+		return textResult(fmt.Sprintf(
+			"El marketplace de skills no está disponible en este momento (%v). "+
+				"Volvé a intentar más tarde o buscá skills manualmente.", err)), nil
+	}
+
+	return jsonResult(map[string]interface{}{
+		"query":  query,
+		"count":  len(results),
+		"skills": results,
+		"note": "Resultados de descubrimiento: Musubi NO instala estas skills. Revisá el código en " +
+			"'githubUrl' antes de adoptarlas e instalalas vos mismo.",
+	})
+}
+
+// marketplaceQueryFromStack arma una query de búsqueda para el marketplace a partir del
+// stack detectado: junta ecosistemas y frameworks (ej. "Go", "Node.js react"). Devuelve ""
+// si no se detectó nada, para que el llamador pida un query explícito.
+func marketplaceQueryFromStack(stacks []detector.StackResult) string {
+	seen := map[string]bool{}
+	var terms []string
+	add := func(t string) {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[strings.ToLower(t)] {
+			return
+		}
+		seen[strings.ToLower(t)] = true
+		terms = append(terms, t)
+	}
+	for _, st := range stacks {
+		add(st.Ecosystem)
+		for _, fw := range st.Frameworks {
+			add(fw)
+		}
+	}
+	return strings.Join(terms, " ")
+}
+
 // toolLogSkillDecision registra una decisión de skill (accepted/rejected) en SQLite.
 // Inputs: skill_id (requerido), decision (requerido, "accepted"|"rejected"),
 // name (opcional), reason (opcional).

@@ -11,6 +11,10 @@ import (
 // defaultCatalogURL es la URL del catálogo de skills por defecto alojado en este repositorio.
 const defaultCatalogURL = "https://raw.githubusercontent.com/codeabraham16/musubi-skills/main/index.json"
 
+// defaultMarketplaceURL es el host por defecto del marketplace de Agent Skills (SKILL.md)
+// que usa el descubrimiento opt-in (musubi_discover_skills).
+const defaultMarketplaceURL = "https://skillsmp.com"
+
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
 	Provider   string `yaml:"provider"`    // none | ollama | openai
@@ -30,6 +34,15 @@ type SourcingConfig struct {
 	MaxCandidates int `yaml:"max_candidates"`
 	// CacheSeconds es la duración (en segundos) del caché en memoria de la respuesta del catálogo.
 	CacheSeconds int `yaml:"cache_seconds"`
+	// MarketplaceEnabled activa el DESCUBRIMIENTO de Agent Skills (SKILL.md) desde un
+	// marketplace externo (musubi_discover_skills). Default false: es opt-in porque indexa
+	// contenido no confiable de GitHub arbitrario. Solo descubre y enlaza, nunca instala.
+	MarketplaceEnabled bool `yaml:"marketplace_enabled,omitempty"`
+	// MarketplaceURL es el host del marketplace de Agent Skills (ej. https://skillsmp.com).
+	MarketplaceURL string `yaml:"marketplace_url,omitempty"`
+	// MarketplaceAPIKeyEnv es el NOMBRE de la env var con la API key del marketplace (sube el
+	// rate limit). El secreto NO se guarda en el yaml. Vacío => se usa el tier anónimo.
+	MarketplaceAPIKeyEnv string `yaml:"marketplace_api_key_env,omitempty"`
 }
 
 // MemoryConfig controla el recall por presupuesto de tokens (memoria eficiente).
@@ -274,10 +287,13 @@ func Default() Config {
 			APIKeyEnv:  "OPENAI_API_KEY",
 		},
 		Sourcing: SourcingConfig{
-			Enabled:       true,
-			CatalogURL:    defaultCatalogURL,
-			MaxCandidates: 20,
-			CacheSeconds:  3600,
+			Enabled:        true,
+			CatalogURL:     defaultCatalogURL,
+			MaxCandidates:  20,
+			CacheSeconds:   3600,
+			MarketplaceURL: defaultMarketplaceURL,
+			// MarketplaceEnabled queda en false: el descubrimiento desde el marketplace
+			// externo es opt-in (contenido no confiable de GitHub arbitrario).
 		},
 		Memory: MemoryConfig{
 			RecallTokenBudget: 400,
@@ -423,6 +439,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Sourcing.CacheSeconds == 0 {
 			c.Sourcing.CacheSeconds = d.Sourcing.CacheSeconds
+		}
+		if c.Sourcing.MarketplaceURL == "" {
+			c.Sourcing.MarketplaceURL = d.Sourcing.MarketplaceURL
 		}
 	}
 

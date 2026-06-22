@@ -308,6 +308,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_discover_skills",
+				Description: "Descubre Agent Skills (SKILL.md) de la comunidad en un marketplace externo, filtradas por el stack del proyecto. Si no se pasa 'query', la deriva del stack detectado. Devuelve candidatos con su 'githubUrl' para que el usuario los REVISE e instale: Musubi NO instala ni ejecuta nada (contenido no confiable). Opt-in (sourcing.marketplace_enabled); degrada con gracia si está deshabilitado o la red cae.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"query": {Type: "string", Description: "Texto de búsqueda (opcional; por defecto se deriva del stack del proyecto)"},
+						"limit": {Type: "number", Description: "Cantidad máxima de resultados (1-100, por defecto 20)"},
+					},
+				},
+			},
+			handler:  noCtx(s.toolDiscoverSkills),
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_log_skill_decision",
 				Description: "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
 				InputSchema: InputSchema{
