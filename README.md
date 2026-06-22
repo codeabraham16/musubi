@@ -4,7 +4,7 @@
 
 <h1>Musubi</h1>
 
-<p><strong>Memoria persistente para agentes de IA · servidor MCP en Go · local-first &amp; model-free</strong></p>
+<p><strong>Memoria persistente para agentes de IA · servidor MCP en Go · local-first · model-free</strong></p>
 
 [![CI](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml/badge.svg)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver)](https://github.com/codeabraham16/musubi/releases)
@@ -14,15 +14,54 @@
 
 </div>
 
-Servidor **MCP (Model Context Protocol)** en Go que funciona como **memoria persistente para
-agentes de IA** — al estilo de Engram / Gentle AI. Guarda observaciones, las recupera por
-palabra clave (FTS5) o por similitud semántica, resuelve skills dinámicamente según los archivos
-en juego y registra telemetría de errores.
+**Musubi** es un servidor **MCP (Model Context Protocol)** escrito en Go que le da a un agente de IA
+una **memoria persistente y eficiente en tokens**. Guarda lo que el proyecto aprende —decisiones,
+convenciones, bugs, gists de código—, lo recupera por palabra clave, similitud semántica o grafo de
+conocimiento, y le inyecta al agente **solo lo relevante y solo lo nuevo** en cada turno.
 
-Local-first: todo vive en una base SQLite dentro de `.musubi/`. Sin servicios externos
-obligatorios; los embeddings son opcionales.
+Todo corre **local-first**: la memoria vive en una base SQLite dentro de `.musubi/`, sin servicios
+externos obligatorios. El núcleo es **model-free**: no hace inferencia ni gasta dinero — la
+optimización de tokens, el ranking y la resolución de skills son deterministas y offline.
 
-## Cómo encaja
+---
+
+## Tabla de contenidos
+
+- [Por qué Musubi](#por-qué-musubi)
+- [Arquitectura](#arquitectura)
+- [Inicio rápido](#inicio-rápido)
+- [Instalación](#instalación)
+- [Cómo funciona](#cómo-funciona)
+- [Capacidades](#capacidades)
+  - [Memoria y recuperación](#memoria-y-recuperación)
+  - [Gobernador de tokens](#gobernador-de-tokens)
+  - [Skills: proyecto + marketplace](#skills-proyecto--marketplace)
+  - [Orquestación de workflows](#orquestación-de-workflows)
+- [Herramientas MCP](#herramientas-mcp)
+- [Configuración](#configuración)
+- [Referencia de CLI](#referencia-de-cli)
+- [Búsqueda semántica (embeddings)](#búsqueda-semántica-embeddings)
+- [Desarrollo](#desarrollo)
+- [Estado y roadmap](#estado-y-roadmap)
+- [Documentación](#documentación)
+
+---
+
+## Por qué Musubi
+
+| | |
+|---|---|
+| 🧠 **Memoria persistente** | Observaciones, hechos (grafo) y gists de código que sobreviven entre sesiones, en SQLite local. |
+| 🔎 **Recuperación híbrida** | Texto completo (FTS5), similitud semántica (índice vectorial IVF a escala) y recorrido de grafo — combinables. |
+| 🪙 **Eficiente en tokens** | Gobernador de sesión: mide **todas** las superficies que inyecta, las acota por presupuesto e inyecta por **delta** (solo lo nuevo). Model-free. |
+| 🛠️ **Skills automáticas** | Detecta el stack y genera skills del proyecto; descubre Agent Skills de la comunidad filtradas por tu stack. |
+| 🔗 **Orquestación model-free** | Motor de workflows DAG resumible (condiciones, loops) y pizarra multi-agente — Musubi secuencia, el agente ejecuta. |
+| 🔒 **Local-first & privado** | Sin servicios externos obligatorios. Embeddings opcionales (Ollama local u OpenAI-compatible). El secreto nunca toca el YAML. |
+| ⚙️ **Cero fricción** | Un comando (`musubi setup`) deja cualquier proyecto listo: workspace, MCP y hooks. Idempotente. |
+
+---
+
+## Arquitectura
 
 ```mermaid
 flowchart LR
@@ -34,8 +73,8 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>24 tools"]
-        COG["resolver de skills<br/>eficiencia de tokens<br/>conflictos · grafo"]
+        RPC["JSON-RPC 2.0 / stdio<br/>27 herramientas MCP"]
+        COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
 
@@ -52,41 +91,50 @@ flowchart LR
     class CC cc; class M mm; class DB db;
 ```
 
-Tres hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve
-al agente (gist de código, contexto por turno) se mide y se inyecta como **delta** — solo lo
-nuevo respecto del turno anterior.
+Tres hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
+agente (gist de código, contexto por turno) se **mide** y se inyecta como **delta** — solo lo nuevo
+respecto del turno anterior.
 
-## Requisitos
+---
 
-- (Opcional) [Ollama](https://ollama.com) local para búsqueda semántica.
-- Go 1.26+ solo si compilás desde fuente.
+## Inicio rápido
+
+```bash
+cd mi-proyecto
+musubi setup        # inyecta Musubi en el proyecto (workspace + MCP + hooks)
+```
+
+Reabrí el proyecto en tu agente (Claude Code) y las herramientas `musubi_*` quedan disponibles.
+`setup` es idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json`
+existentes. ¿Todavía no tenés el binario? Ver [Instalación](#instalación).
+
+---
 
 ## Instalación
 
 El instalador te deja **elegir el alcance**:
 
-- **Local al repo**: el binario queda en `<repo>/.musubi/bin/`, el `.mcp.json` apunta ahí y
-  **no se toca el PATH ni la PC**. Borrás la carpeta `.musubi/` y no queda rastro. Ideal para
-  probar Musubi sin "infectar" tu máquina.
-- **Global**: el binario va al PATH del usuario (sin admin); después usás `musubi setup` en
-  cualquier otro repo.
+- **Local al repo** — el binario queda en `<repo>/.musubi/bin/`, el `.mcp.json` apunta ahí y
+  **no se toca el PATH ni la PC**. Borrás `.musubi/` y no queda rastro. Ideal para probar sin
+  "infectar" la máquina.
+- **Global** — el binario va al PATH del usuario (sin admin) y se expone `MUSUBI_BIN`; después
+  usás `musubi setup` en cualquier otro repo. Es el modo "ecosistema": todos los proyectos
+  resuelven el binario aunque cambie la ruta.
 
-### Doble clic (Windows, sin terminal) — recomendado
+### Doble clic (Windows, sin terminal)
 
-Descargá **`install.bat`**, copialo en la raíz de tu repo y hacé **doble clic**. Te pregunta
-`[L]` local o `[G]` global, baja el binario de la última release y deja todo listo.
+Descargá **`Musubi.exe`** de la [última release](https://github.com/codeabraham16/musubi/releases)
+y hacé **doble clic**. Un menú te pregunta `[L]` local o `[G]` global y deja todo listo.
 
 ### Una línea (interactivo: pregunta local/global)
 
-Windows (PowerShell):
-
 ```powershell
+# Windows (PowerShell)
 irm -useb https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.ps1 | iex
 ```
 
-Linux / macOS:
-
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/codeabraham16/musubi/main/scripts/install.sh | bash
 ```
 
@@ -99,16 +147,12 @@ $env:MUSUBI_SCOPE='global'; irm -useb .../scripts/install.ps1 | iex   # o 'local
 curl -fsSL .../scripts/install.sh | MUSUBI_SCOPE=local bash           # o global
 ```
 
-Variables reconocidas por el instalador: `MUSUBI_SCOPE` (local|global), `MUSUBI_DIR` (carpeta
-del proyecto), `MUSUBI_NOSETUP=1` (no correr setup), `MUSUBI_BINARY` (usar un binario ya
-descargado en vez de bajarlo).
+Variables del instalador: `MUSUBI_SCOPE` (local|global), `MUSUBI_DIR` (carpeta del proyecto),
+`MUSUBI_NOSETUP=1` (no correr setup), `MUSUBI_BINARY` (usar un binario ya descargado).
 
-> Repo privado: para que la descarga anónima funcione, las releases deben ser accesibles
-> públicamente. Si el repo es privado, instalá [gh CLI](https://cli.github.com) y autenticate
-> (`gh auth login`) — el instalador usa `gh` como fallback.
-
-> `musubi-setup.bat` sigue disponible para el caso "ya tengo el binario y solo quiero correr
-> `setup` en este repo" (no instala nada, solo prepara el entorno).
+> **Repo privado:** para que la descarga anónima funcione, las releases deben ser públicas. Si el
+> repo es privado, instalá [gh CLI](https://cli.github.com) y autenticate (`gh auth login`) — el
+> instalador lo usa como fallback.
 
 ### Desde fuente
 
@@ -116,32 +160,17 @@ descargado en vez de bajarlo).
 go build -o musubi ./cmd/musubi
 ```
 
-## Uso rápido: inyectar en un proyecto
+---
 
-Un solo comando deja cualquier proyecto listo con Musubi:
+## Cómo funciona
 
-```bash
-cd mi-proyecto
-musubi setup
-```
+`musubi setup` deja el proyecto listo de punta a punta:
 
-`musubi setup` inyecta todo de punta a punta:
-
-- Crea el workspace `.musubi/` (config + base de datos) en el proyecto.
-- Escribe un skill de arranque en `.musubi/skills/`.
-- Deja templates de artefactos SDD en `.musubi/templates/sdd/` (proposal, spec, design, tasks).
-- Genera/mergea `.mcp.json` en la raíz, de modo que **Claude Code carga el servidor
-  `musubi` automáticamente** al abrir el proyecto (con su propia memoria vía `MUSUBI_HOME`).
-- Inyecta un **hook `SessionStart`** en `.claude/settings.json` para el auto-descubrimiento
-  de skills (ver sección siguiente).
-- Agrega `.musubi/memory.db` al `.gitignore`.
-
-Reabrí el proyecto en Claude Code y las herramientas `musubi_*` quedan disponibles. Es
-idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json` existentes.
-
-### Otros agentes
-
-`musubi setup --agent <agente>` registra el servidor MCP en la config del agente elegido:
+- Crea el workspace `.musubi/` (config + base de datos).
+- Escribe las **skills cognitivas** de arranque en `.musubi/skills/` y los **templates SDD**
+  (proposal, spec, design, tasks) en `.musubi/templates/sdd/`.
+- Genera/mergea `.mcp.json` para que el agente **cargue el servidor `musubi` automáticamente**.
+- Inyecta tres **hooks** en `.claude/settings.json` (Claude Code) y protege la base en `.gitignore`.
 
 | Agente | Config MCP | Hooks |
 |--------|-----------|-------|
@@ -152,14 +181,10 @@ idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json`
 musubi setup --agent cursor
 ```
 
-`setup` también detecta y avisa qué agentes ya están presentes en el proyecto (ej. si
-hay un `.cursor/`). El esquema `mcpServers` es común; los hooks de contexto por turno y
-auto-descubrimiento son específicos de Claude Code.
+### Auto-descubrimiento de skills
 
-## Auto-descubrimiento de skills
-
-Al abrir el proyecto por primera vez en Claude Code, Musubi detecta automáticamente el
-stack tecnológico y genera skills personalizadas sin que debas escribir YAML manualmente.
+Al abrir el proyecto por primera vez, Musubi detecta el stack y guía la generación de skills
+personalizadas sin que escribas YAML a mano.
 
 ```mermaid
 sequenceDiagram
@@ -183,226 +208,86 @@ sequenceDiagram
     end
 ```
 
-**Flujo completo:**
+El hook `SessionStart` corre `musubi detect --hook-mode`. Si el sentinel
+`.musubi/skills/.skills-generated` no existe, emite instrucciones para que el agente detecte el
+stack, consulte el catálogo curado (pre-filtrado por relevancia técnica), investigue la
+documentación **oficial**, **confirme las reglas con vos** y guarde cada skill con
+`musubi_save_skill`. A partir de ahí el hook queda en silencio. Para regenerar: borrar el sentinel
+y reabrir el proyecto.
 
-1. `musubi setup` inyecta en `.claude/settings.json` un hook `SessionStart` que ejecuta
-   `musubi detect --hook-mode` al inicio de cada sesión.
-2. Al abrir el proyecto, Claude Code ejecuta ese hook. Si el sentinel
-   `.musubi/skills/.skills-generated` **no existe**, el hook emite instrucciones JSON
-   que Claude recibe como contexto adicional.
-3. Claude llama a `musubi_detect_stack` (detecta ecosistemas y frameworks inspeccionando
-   manifests: `go.mod`, `package.json`, `Cargo.toml`, etc.).
-4. Claude llama a `musubi_search_skills` para obtener candidatas del catálogo curado,
-   ya pre-filtradas por relevancia técnica (stack, deps y triggers). Evalúa valor, rankea
-   y descarta las redundantes con skills existentes.
-5. Claude investiga la documentación **oficial** del stack detectado (`pkg.go.dev`,
-   `react.dev`, `docs.python.org`, etc.) y sintetiza reglas. Para skills del catálogo,
-   descarga `rules_url` para obtener las reglas completas.
-6. Claude **confirma las reglas con el usuario** antes de guardar.
-7. Por cada skill aprobada, Claude llama a `musubi_save_skill`, que escribe el archivo
-   `.musubi/skills/{name}.yaml` y el sentinel. A partir de ahí el hook es silencioso
-   (no vuelve a disparar hasta que borres el sentinel).
-8. (Opcional) Claude registra sus decisiones sobre las candidatas del catálogo llamando a
-   `musubi_log_skill_decision` (accepted / rejected con razón).
+---
 
-**Para regenerar las skills:** borrar `.musubi/skills/.skills-generated` y reabrir
-el proyecto.
+## Capacidades
 
-## Sourcing de skills (catálogo)
+### Memoria y recuperación
 
-Musubi incluye un catálogo curado de skills que Claude consulta automáticamente para
-proponer reglas relevantes para tu proyecto.
+- **Observaciones** (`musubi_save_observation`) — prosa con `topic_key`; se indexan para FTS5 y,
+  si hay embeddings, para búsqueda semántica.
+- **Recuperación híbrida** — `musubi_recall` (por presupuesto de tokens), `musubi_search_keyword`
+  (FTS5, siempre disponible), `musubi_search_semantic` (similitud; requiere embeddings).
+- **Grafo de conocimiento** — hechos como tripletas (`musubi_save_fact`), recorrido por entidad
+  (`musubi_recall_facts`) y puente grafo↔prosa (`musubi_entity_context`). Recuperar hechos cuesta
+  muchísimos menos tokens que recuperar prosa.
+- **Memoria de código** — guardá un gist + símbolos de un archivo (`musubi_save_code`) para **no
+  re-leerlo entero** después; el hook `PreToolUse(Read)` lo surface automáticamente antes de leer.
+- **Mantenimiento automático** — consolidación de casi-duplicados y olvido por saliencia
+  (`musubi_maintain`), con auto-curación de la base (`musubi_doctor`).
+- **A escala** — la búsqueda semántica usa un índice vectorial **IVF** que se entrena solo por
+  encima de un umbral de volumen; debajo, full-scan exacto.
 
-### Cómo funciona
+### Gobernador de tokens
 
-1. Al inicio del flujo de auto-descubrimiento, Claude llama a `musubi_search_skills`
-   (sin parámetros). Musubi descarga el catálogo, aplica un **gate de aplicabilidad duro**
-   y devuelve solo las candidatas que pasan los cuatro filtros:
-   - **Stack**: el ecosistema de la entrada coincide con el stack detectado (`Go`, `Node.js`, `Python`, etc.).
-   - **Deps**: si la entrada tiene deps declaradas, al menos una está presente en los manifests del proyecto.
-   - **Triggers**: al menos un archivo del proyecto coincide con los globs de la entrada.
-   - **Capabilities**: todas las herramientas declaradas en `capabilities` están en el PATH.
-2. Claude evalúa el **valor** de cada candidata (no la relevancia — eso lo hizo el gate).
-   Ordena por valor, descarta las redundantes con skills ya guardadas.
-3. Para las skills seleccionadas, Claude descarga `rules_url` para leer las reglas completas.
-4. Claude confirma las rules con el usuario antes de guardar con `musubi_save_skill`.
-
-### Configuración
-
-Las claves de sourcing viven en `.musubi/config.yaml`:
-
-```yaml
-sourcing:
-  enabled: true                   # activar / desactivar el sourcing
-  catalog_url: https://raw.githubusercontent.com/codeabraham16/musubi/main/catalog/index.json
-  max_candidates: 20              # máximo de candidatas retornadas por musubi_search_skills
-  cache_seconds: 3600             # reservado para futura caché persistente
-```
-
-Para apuntar a un catálogo propio:
-
-```yaml
-sourcing:
-  catalog_url: https://raw.githubusercontent.com/mi-org/mi-repo/main/catalog/index.json
-```
-
-El catálogo debe ser un JSON con el esquema `{ "catalog_version": 1, "entries": [...] }`.
-Ver `catalog/index.json` en este repositorio como referencia.
-
-### Catálogo incluido
-
-El repositorio incluye un catálogo seed en `catalog/index.json` con entradas para los
-stacks más comunes: Go, React, Next.js, Vue, Express, TypeScript, Python, Django,
-FastAPI, Rust y Docker. Cada entrada apunta a la documentación oficial del ecosistema.
-
-## Uso manual
-
-```bash
-# Inicializar solo el workspace (crea .musubi/ con config.yaml y memory.db)
-musubi init
-
-# Detectar el stack del proyecto (imprime JSON en stdout)
-musubi detect
-
-# Modo hook interno (usado por Claude Code al iniciar sesión)
-musubi detect --hook-mode
-
-# Arrancar el daemon MCP sobre stdin/stdout
-musubi daemon
-
-# (Opcional, gratis) Calibrar el estimador de tokens contra count_tokens
-musubi calibrate            # diagnóstico
-musubi calibrate --apply    # persiste los divisores ajustados a tu corpus
-```
-
-`musubi detect` inspecciona el directorio actual (o `MUSUBI_HOME`) y devuelve un JSON con
-los ecosistemas y frameworks detectados. Es de solo lectura: no crea ni modifica archivos.
-
-`musubi detect --hook-mode` es el modo que Claude Code invoca automáticamente al abrir el
-proyecto. Si el sentinel `.musubi/skills/.skills-generated` existe, no produce output (silencioso).
-Si no existe, emite el JSON de guía para que Claude inicie el flujo de auto-descubrimiento.
-
-`musubi daemon` habla JSON-RPC 2.0 por stdin/stdout, listo para conectarse como servidor MCP
-desde Claude Code, Cursor u otro cliente. Respeta la variable de entorno `MUSUBI_HOME` para
-fijar el directorio del workspace (por defecto, el directorio actual).
-
-## Configuración (`.musubi/config.yaml`)
-
-```yaml
-version: "1.0"
-mode: local
-skills_auto_resolve: true
-embedding:
-  provider: none          # none | ollama | openai
-  model: nomic-embed-text
-  base_url: http://localhost:11434
-  dimensions: 768
-  api_key_env: OPENAI_API_KEY   # nombre de la env var con la API key (solo openai)
-```
-
-- `provider: none` (por defecto): la búsqueda semántica queda desactivada y `musubi_search_semantic`
-  responde con un error explícito sugiriendo usar la búsqueda por palabra clave.
-- `provider: ollama`: el servidor genera embeddings llamando a Ollama
-  (`POST {base_url}/api/embeddings`). Los agentes pasan **texto**, no vectores.
-- `provider: openai`: usa la API de OpenAI o **cualquier servidor compatible** con su
-  esquema (LM Studio, vLLM, LocalAI, Together…) vía `POST {base_url}/embeddings`. La API
-  key se lee de la env var nombrada en `api_key_env` (default `OPENAI_API_KEY`) — **nunca
-  se guarda en el yaml**.
-
-Para activar embeddings con Ollama (local, sin API key):
-
-```bash
-ollama pull nomic-embed-text
-# editar .musubi/config.yaml -> embedding.provider: ollama
-```
-
-Para activar embeddings con OpenAI:
-
-```bash
-export OPENAI_API_KEY=sk-...
-# en .musubi/config.yaml:
-#   embedding.provider: openai
-#   embedding.model: text-embedding-3-small
-#   embedding.dimensions: 1536
-```
-
-Para un servidor local compatible con OpenAI (sin tocar la nube), dejá `provider: openai`
-y apuntá `base_url` a tu servidor (ej. `http://localhost:1234/v1`). Si no exige
-autenticación, la env var puede quedar vacía.
-
-## Eficiencia de tokens (model-free)
-
-Musubi mide y minimiza cuántos tokens inyecta en el contexto del agente. Todo el
-núcleo es **automático, local y offline** — no requiere API key ni gasta dinero:
+Musubi **mide y acota** cuánto contexto inyecta. Todo el núcleo es automático, local y offline.
 
 ```mermaid
 flowchart TD
     P["prompt del usuario"] --> T["turn --hook-mode"]
-    T --> R["recall por presupuesto<br/>(techo de tokens)"]
+    T --> R["recall por presupuesto"]
     R --> D{"¿memoria nueva o<br/>modificada vs la sesión?"}
     D -- "delta" --> I["inyecta solo lo nuevo"]
     D -- "nada nuevo" --> S["bloque silencioso"]
-    I --> L["contabiliza en el ledger"]
+    I --> L["ledger holístico por superficie"]
     S --> L
-    L --> A(["contexto del agente"])
+    L --> G{"¿supera el<br/>presupuesto de sesión?"}
+    G -- "sí" --> A["alerta proactiva (1×)"]
+    G -- "no" --> C(["contexto del agente"])
+    A --> C
 ```
 
+- **Ledger holístico** — el server contabiliza **todas** las superficies que inyecta (priming de
+  arranque, recall por turno, fase del pipeline, conflictos, memoria de código y telemetría del
+  PreToolUse, hidratación, generación de skills…), no solo una. *No podés optimizar lo que no medís.*
+- **Presupuesto de sesión** — un techo blando (`memory.session_token_budget`, default `8000`;
+  `0` lo desactiva). `musubi_tokens` reporta total, restante, % usado, **estado**
+  (`ok` < 75 % · `watch` ≥ 75 % · `over` ≥ 100 %) y el **desglose por superficie**.
+- **Inyección diferencial (delta)** — por turno se inyecta solo la memoria/fase/conflictos **nuevos
+  o modificados** respecto de la sesión, en vez de repetir todo cada turno. Cache-considerate.
+- **Estimador por tipo de contenido** — clasifica el texto (prosa / código / JSON) con divisores
+  calibrados; opcionalmente afinables con `musubi calibrate` (gratis, opt-in, ver abajo).
 
-- **Estimador por tipo de contenido**: calcula el costo en tokens clasificando el
-  texto (prosa / código / JSON) con divisores calibrados, sesgado a no subcontar
-  los payloads densos. Corre solo en cada guardado y recall.
-- **Recall por presupuesto**: cada recuperación devuelve *gists* dentro de un techo
-  de tokens; el contenido completo se hidrata aparte y también con tope.
-- **Inyección diferencial (delta)**: por turno se inyecta **solo la memoria nueva o
-  modificada** respecto de lo ya inyectado en la sesión, en vez de repetir todo cada
-  turno. Ahorra tokens y evita "ensuciar" el contexto. Se reinicia al arrancar la
-  sesión (o tras una compactación). Configurable con `loop.delta_injection` (default `true`).
-- **Ledger de tokens por sesión**: el server contabiliza lo inyectado por superficie
-  (priming de arranque + recall por turno + hidratación). Lo inspeccionás con la
-  herramienta `musubi_tokens` (`action: status | reset`).
+Inspeccioná el gasto real con la herramienta `musubi_tokens` (`action: status | reset`).
 
-### `musubi calibrate` — opcional y gratis
+### Skills: proyecto + marketplace
 
-El estimador trae divisores calibrados de fábrica que funcionan bien sin tocar nada.
-Si querés afinarlos a tu corpus real, `musubi calibrate` los mide contra el endpoint
-**`count_tokens` de Anthropic**:
+Dos capas complementarias:
 
-- **Es gratis**: `count_tokens` *cuenta* tokens, no genera texto (no hay inferencia de
-  un modelo), y Anthropic **no lo factura**. No hay costo por token.
-- **Es opt-in**: requiere una API key de Anthropic (`ANTHROPIC_API_KEY`, gratis desde
-  [console.anthropic.com](https://console.anthropic.com)). Es la **única** parte de
-  Musubi que hace red a Anthropic, y solo cuando vos corrés el comando a mano.
-- **Es de una sola vez**: con `--apply`, los divisores ajustados quedan persistidos en
-  el proyecto y se aplican automáticamente en cada arranque. No hay que repetirlo.
+- **Skills del proyecto** (`.musubi/skills/*.yaml`) — reglas locales que el resolver activa según
+  los archivos en juego (triggers + capabilities). Se generan en el auto-descubrimiento.
+- **Catálogo curado** (`musubi_search_skills`) — candidatas pre-filtradas por un **gate de
+  aplicabilidad duro** (stack · deps · triggers · capabilities) desde el catálogo central.
+- **Marketplace de Agent Skills** (`musubi_discover_skills`) — descubre skills `SKILL.md` de la
+  comunidad (≈1.7 M indexadas) **filtradas por tu stack**. Lee de un catálogo estático cosechado
+  (cero rate limit) con fallback a la API en vivo. Es **solo de descubrimiento**: devuelve metadatos
+  y el enlace de GitHub para que los revises e instales por tu cuenta — Musubi **nunca** baja,
+  ejecuta ni instala el `SKILL.md`.
 
-El **server MCP nunca llama a la API**: sigue 100% offline y model-free. Si no tenés
-API key, no pasa nada — Musubi funciona completo con los divisores por defecto.
+### Orquestación de workflows
 
-## Herramientas MCP
-
-El servidor expone 25 herramientas; las principales:
-
-| Herramienta | Descripción |
-|-------------|-------------|
-| `musubi_save_observation` | Guarda una observación (`topic_key`, `content`, `id` opcional). Si hay embeddings, indexa para búsqueda semántica. |
-| `musubi_search_semantic` | Busca por similitud a partir de **texto** (`query`). Requiere proveedor de embeddings. |
-| `musubi_search_keyword` | Busca por texto completo FTS5 (`query_text`). Siempre disponible. |
-| `musubi_log_error` | Registra un error de compilación/test para telemetría. |
-| `musubi_resolve_telemetry` | Marca un log de telemetría como resuelto (`id`). |
-| `musubi_resolve_skills` | Resuelve skills activas según `modified_files` + telemetría sin resolver. |
-| `musubi_detect_stack` | Detecta el stack del proyecto (ecosistemas + frameworks) inspeccionando manifests. Sin parámetros. |
-| `musubi_save_skill` | Guarda una skill generada como `{name}.yaml` en `.musubi/skills/` y crea el sentinel. Requiere `name`, `triggers`, `rules`. Parámetro opcional `overwrite` (por defecto `false`). |
-| `musubi_search_skills` | Descarga el catálogo de skills, aplica el gate de aplicabilidad duro y devuelve candidatas relevantes para el proyecto. Parámetros opcionales: `query` (texto libre), `stack` (filtro de ecosistema), `limit` (número máximo). |
-| `musubi_log_skill_decision` | Registra la decisión de Claude sobre una candidata del catálogo. Parámetros: `skill_id` (requerido), `decision` (`accepted` \| `rejected`, requerido), `name`, `reason` (opcionales). |
-| `musubi_workflow` | **Motor de orquestación DAG (model-free).** Musubi define el grafo y persiste el estado del run en SQLite (resumible); el agente ejecuta. `action` ∈ `start` \| `next` \| `complete` \| `status`. Los workflows viven en `.musubi/workflows/<id>.yaml` (o `definition` YAML inline). Un step queda listo cuando todas sus `needs` están `done`. |
-
-## Orquestación de workflows (model-free)
-
-Musubi puede coordinar un DAG de pasos sin ejecutarlos: vos definís el grafo, Musubi
-te dice qué está listo y **recuerda el progreso entre sesiones**. Ejemplo
-`.musubi/workflows/feature.yaml`:
+Musubi coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está
+listo y **recuerda el progreso entre sesiones** (estado en SQLite, resumible).
 
 ```yaml
+# .musubi/workflows/feature.yaml
 id: feature
 schema_version: "1.0"
 steps:
@@ -415,78 +300,186 @@ steps:
     needs: [implement, docs]
 ```
 
-Flujo: `musubi_workflow action=start run_id=... workflow=feature` → devuelve los steps
-listos (`explore`); ejecutás y hacés `action=complete step=explore` → devuelve los
-nuevos listos (`implement`, `docs`); y así hasta que el run queda `done`. Como el estado
-vive en SQLite, `action=resume run_id=...` retoma un run en otra sesión.
+`musubi_workflow action=start … workflow=feature` → devuelve los steps listos; ejecutás y hacés
+`action=complete step=…` → devuelve los nuevos listos; y así hasta `done`. `action=resume` retoma
+un run en otra sesión.
 
-**Control de flujo (`when`):** un step puede llevar una condición model-free; si es
-falsa, el step se salta (`skipped`) — así se expresan gate / if-then / switch sin tipos
-de step aparte:
+- **Control de flujo (`when`)** — un step con una condición model-free se salta si es falsa
+  (gate / if-then / switch). Operadores: `==`, `!=`, `contains`, `and`, `or`, `not`, paréntesis;
+  referencias `step.<id>.status` / `step.<id>.result`.
+- **Loops (`repeat_while` + `max_iterations`)** — un step se re-ofrece mientras la condición sea
+  verdadera, con cota de seguridad.
+
+Para trabajo paralelo, la pizarra **multi-agente** (`musubi_work`) reparte unidades entre
+sub-agentes y consolida, y el **pipeline por fases** (`musubi_phase`) secuencia
+explorar → planear → codear → verificar recordándole la fase al agente cada turno.
+
+---
+
+## Herramientas MCP
+
+El servidor expone **27 herramientas**, agrupadas por dominio:
+
+| Dominio | Herramientas |
+|---------|--------------|
+| **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
+| **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
+| **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
+| **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
+| **Skills** | `musubi_detect_stack` · `musubi_search_skills` · `musubi_save_skill` · `musubi_resolve_skills` · `musubi_log_skill_decision` · `musubi_discover_skills` (marketplace) |
+| **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` |
+| **Conflictos de memoria** | `musubi_conflicts` · `musubi_judge` |
+| **Orquestación** | `musubi_workflow` (DAG) · `musubi_work` (multi-agente) · `musubi_phase` (pipeline) |
+
+---
+
+## Configuración
+
+El workspace se configura en `.musubi/config.yaml` (lo genera `musubi setup`/`init` con defaults
+sensatos). Bloques principales:
 
 ```yaml
-  - id: deploy
-    needs: [build]
-    when: step.build.result contains "ok"
-  - id: rollback
-    needs: [build]
-    when: not (step.build.result contains "ok")
+version: "1.0"
+mode: local
+skills_auto_resolve: true
+
+embedding:
+  provider: none            # none | ollama | openai (-compatible)
+  model: nomic-embed-text
+  base_url: http://localhost:11434
+  dimensions: 768
+  api_key_env: OPENAI_API_KEY   # nombre de la env var; el secreto NUNCA va en el yaml
+
+memory:
+  recall_token_budget: 400      # techo por defecto de musubi_recall
+  gist_max_tokens: 24           # tope de un gist (titular extractivo)
+  candidate_pool: 50            # candidatos a rankear antes de empaquetar
+  session_token_budget: 8000    # techo blando del gobernador (0 = sin techo)
+
+loop:
+  per_turn_recall: true         # inyectar contexto relevante por turno
+  recall_budget: 250
+  delta_injection: true         # inyectar solo lo nuevo/modificado (cache-considerate)
+  surface_conflicts: true
+  capture_reminder: true
+
+sourcing:
+  enabled: true
+  catalog_url: https://raw.githubusercontent.com/codeabraham16/musubi-skills/main/index.json
+  marketplace_enabled: false    # opt-in: descubrimiento de Agent Skills externas
 ```
 
-Operadores soportados: `==`, `!=`, `contains`, `and`, `or`, `not`, paréntesis; las
-referencias `step.<id>.status` y `step.<id>.result` se resuelven del estado del run.
+> El catálogo curado y el catálogo cosechado del marketplace viven en el repo
+> [`musubi-skills`](https://github.com/codeabraham16/musubi-skills); por eso el sourcing funciona
+> sin que mantengas un índice local. Apuntá `catalog_url` a tu propio repo para curar el tuyo.
 
-**Loops:** un step con `repeat_while` (+ `max_iterations`, cota de seguridad) se vuelve a
-ofrecer mientras la condición sea verdadera:
+Otros bloques disponibles (con defaults): `maintenance` (consolidación + olvido + retención),
+`graph`, `conflicts`, `pipeline`, `multiagent`, `vector_index` (índice IVF), `startup`, `update`
+y `service` (transporte HTTP opt-in, solo loopback).
 
-```yaml
-  - id: refine
-    repeat_while: step.refine.result contains "retry"
-    max_iterations: 5
+---
+
+## Referencia de CLI
+
+```
+Instalación
+  setup [--agent <claude|cursor>]   Inyecta Musubi en el proyecto (workspace + MCP + hooks)
+  init                              Inicializa solo el workspace .musubi/ (config + DB)
+
+Servidor MCP
+  daemon                            Servidor MCP sobre stdin/stdout (lo usa el agente)
+  serve [--addr host:port]          Servidor MCP sobre HTTP (opt-in; solo loopback)
+
+Memoria
+  maintain                          Fusiona casi-duplicados y archiva memorias frías
+  doctor                            Diagnostica/repara la base de memoria
+  calibrate [--apply]               (opt-in) Afina el estimador de tokens (requiere ANTHROPIC_API_KEY)
+
+Catálogo de skills
+  catalog validate                  Valida un index.json de catálogo
+  catalog merge <url>               Obtiene y fusiona un catálogo remoto
+  catalog harvest                   Cosecha un catálogo estático del marketplace
+
+Binario
+  update                            Descarga el último release, verifica checksum y se auto-reemplaza
+  version                           Muestra la versión del binario
 ```
 
-Otras acciones: `action=validate` valida una definición sin correrla; `action=list` lista
-los runs con su progreso.
+`musubi daemon` habla JSON-RPC 2.0 por stdin/stdout y respeta `MUSUBI_HOME` para fijar el
+workspace (por defecto, el directorio del proyecto vía `CLAUDE_PROJECT_DIR`).
 
-## Tests
+---
+
+## Búsqueda semántica (embeddings)
+
+La búsqueda semántica es **opcional**. Con `provider: none` (default), `musubi_search_semantic`
+responde con un error explícito sugiriendo la búsqueda por palabra clave; todo lo demás funciona.
+
+| Provider | Cómo |
+|----------|------|
+| `ollama` | Local, sin API key. `ollama pull nomic-embed-text` y poné `embedding.provider: ollama`. El server llama a `POST {base_url}/api/embeddings`. |
+| `openai` | API de OpenAI **o cualquier servidor compatible** (LM Studio, vLLM, LocalAI, Together…). `export OPENAI_API_KEY=…`, ajustá `model`/`dimensions` y apuntá `base_url`. |
+
+Los agentes siempre pasan **texto**, nunca vectores. La API key se lee de la env var nombrada en
+`api_key_env` y **nunca se guarda en el YAML**.
+
+### `musubi calibrate` — gratis y opcional
+
+El estimador de tokens trae divisores calibrados de fábrica. Si querés afinarlos a tu corpus,
+`musubi calibrate` los mide contra el endpoint **`count_tokens` de Anthropic**, que **no se
+factura** (cuenta tokens, no genera texto). Es opt-in (requiere `ANTHROPIC_API_KEY`), de una sola
+vez (`--apply` persiste los divisores) y es la **única** parte de Musubi que hace red a Anthropic.
+**El server MCP nunca llama a la API**: sigue 100 % offline y model-free.
+
+---
+
+## Desarrollo
 
 ```bash
-go test ./...            # suite completa
-go test -race ./...      # con detector de carreras (como en CI)
+go build -o musubi ./cmd/musubi   # compilar
+go test ./...                     # suite completa
+go test -race ./...               # con detector de carreras (como en CI)
 ```
 
-## Arquitectura
-
 ```
-cmd/musubi/        # CLI: setup, detect, init, daemon
-catalog/
-  index.json       # catálogo seed de skills curadas (13 entradas, docs oficiales)
+cmd/musubi/        # CLI + hooks: setup, init, detect, turn, precheck, daemon, doctor, update…
 internal/
   bootstrap/       # inyección: MergeMCPServer + MergeClaudeSettings (hooks)
-  config/          # constantes de rutas + carga de config.yaml + SourcingConfig
+  config/          # carga de config.yaml + defaults por bloque
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
-  embedding/       # Provider (interfaz) + Ollama + OpenAI-compatible + Noop
+  embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 y herramientas MCP (24 tools)
-  memory/          # SQLite: observaciones, embeddings, FTS5, telemetría, skill_decisions
-  skills/          # resolver dinámico de skills (triggers + capabilities + MatchGlob)
-  skillsource/     # catálogo HTTP: FetchCatalog, IsApplicable, FilterCatalog
+  mcp/             # servidor JSON-RPC 2.0 + las 27 herramientas MCP
+  memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
+                   #   telemetría, code memory, ledger de tokens, workflows
+  selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo
+  skills/          # resolver dinámico de skills (triggers + capabilities)
+  skillsource/     # catálogo curado + marketplace (fetch, gate de aplicabilidad, cosecha)
 ```
+
+Convenciones, checks de CI y flujo de release en [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
 
 ## Estado y roadmap
 
-Núcleo endurecido y cubierto con tests. Diferido a propósito:
+Núcleo maduro y cubierto con tests (`-race` en CI). Ya implementado y endurecido: memoria híbrida,
+grafo de conocimiento, memoria de código, índice vectorial IVF a escala, gobernador de tokens,
+auto-descubrimiento de skills, marketplace de Agent Skills, motor de workflows DAG, pizarra
+multi-agente y pipeline por fases.
 
-- Orquestador / motor DAG.
-- Loop de auto-corrección hot-patch (telemetría → parche automático → reintento). Hoy existe el
-  registro y la resolución manual de telemetría.
-- Escalado del índice vectorial: la búsqueda semántica recorre todos los vectores en memoria
-  (O(n)), suficiente para volúmenes de prototipo.
+Diferido a propósito (con base ya presente):
+
+- **Loop de auto-corrección hot-patch** (telemetría → parche automático → reintento). Hoy existe
+  el registro y la resolución de telemetría, surfaceada proactivamente antes de editar un archivo.
+- **Firma de código del binario** (eliminar el aviso de SmartScreen en Windows).
+
+---
 
 ## Documentación
 
 - [CHANGELOG.md](CHANGELOG.md) — historial de versiones (Keep a Changelog).
-- [CONTRIBUTING.md](CONTRIBUTING.md) — setup de desarrollo, checks de CI, convenciones y flujo de release.
-- [docs/MCP_SDK_Evaluation.md](docs/MCP_SDK_Evaluation.md) — por qué el server usa JSON-RPC a mano y no el SDK oficial de MCP.
-- [docs/Roadmap_spec-kit_adoption.md](docs/Roadmap_spec-kit_adoption.md) — plan de orquestación DAG, multi-agente y templates SDD.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup de desarrollo, checks de CI, convenciones y release.
+- [docs/MCP_SDK_Evaluation.md](docs/MCP_SDK_Evaluation.md) — por qué el server usa JSON-RPC a mano.
+- [docs/Roadmap_spec-kit_adoption.md](docs/Roadmap_spec-kit_adoption.md) — orquestación DAG, multi-agente y templates SDD.
 - [LICENSE](LICENSE) — MIT.
