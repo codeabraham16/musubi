@@ -369,6 +369,55 @@ func TestTurnPhaseInjected(t *testing.T) {
 	}
 }
 
+func TestTurnPhaseDeltaSilentWhenUnchanged(t *testing.T) {
+	store := newFakeTurnStore()
+	store.phaseActive = true
+	store.phase = memory.PhaseState{Task: "refactor", Phase: "plan", Index: 1, Total: 4}
+	loop := config.LoopConfig{} // aislar la fase
+	in := `{"prompt":"sigamos","session_id":"s1"}`
+
+	// Primer turno: inyecta la fase completa (con directiva).
+	_, ctx1 := hookAdditionalContext(t, turnOutput(store, loop, defaultPipe(), maOff(), 0, strings.NewReader(in)))
+	if !strings.Contains(ctx1, "plan (2/4)") {
+		t.Fatalf("el primer turno debe inyectar la fase, obtuve: %q", ctx1)
+	}
+	// Segundo turno, misma fase y sesión: silencio (no re-inyectar la directiva).
+	out2 := turnOutput(store, loop, defaultPipe(), maOff(), 0, strings.NewReader(in))
+	if out2 != "" {
+		t.Errorf("sin cambio de fase el turno no debe re-inyectarla, obtuve: %q", out2)
+	}
+	// La fase avanza: debe re-inyectarse.
+	store.phase = memory.PhaseState{Task: "refactor", Phase: "code", Index: 2, Total: 4}
+	_, ctx3 := hookAdditionalContext(t, turnOutput(store, loop, defaultPipe(), maOff(), 0, strings.NewReader(in)))
+	if !strings.Contains(ctx3, "code (3/4)") {
+		t.Errorf("al avanzar de fase debe re-inyectarse, obtuve: %q", ctx3)
+	}
+}
+
+func TestTurnConflictsDeltaSilentWhenUnchanged(t *testing.T) {
+	store := newFakeTurnStore()
+	store.pending = []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}}
+	loop := config.LoopConfig{SurfaceConflicts: true}
+	in := `{"prompt":"seguimos","session_id":"s1"}`
+
+	// Primer turno: avisa de los 2 conflictos.
+	_, ctx1 := hookAdditionalContext(t, turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)))
+	if !strings.Contains(ctx1, "musubi_judge") {
+		t.Fatalf("el primer turno debe avisar de conflictos, obtuve: %q", ctx1)
+	}
+	// Segundo turno, misma cantidad: silencio (ya avisado).
+	out2 := turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in))
+	if out2 != "" {
+		t.Errorf("sin cambio en la cantidad de conflictos no debe re-avisar, obtuve: %q", out2)
+	}
+	// Aparece un conflicto nuevo (cambia la cantidad): vuelve a avisar.
+	store.pending = []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}, {ID: "r3"}}
+	_, ctx3 := hookAdditionalContext(t, turnOutput(store, loop, pipeOff(), maOff(), 0, strings.NewReader(in)))
+	if !strings.Contains(ctx3, "3 relación") {
+		t.Errorf("al aparecer un conflicto nuevo debe re-avisar con la cuenta actualizada, obtuve: %q", ctx3)
+	}
+}
+
 func TestTurnBatchInjected(t *testing.T) {
 	store := newFakeTurnStore()
 	store.batchActive = true

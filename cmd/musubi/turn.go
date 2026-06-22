@@ -37,10 +37,26 @@ type turnStore interface {
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
 const (
-	metaLoopObsSeen   = "loop_obs_seen"         // conteo de observaciones del turno previo
-	metaLoopTurns     = "loop_turns_since_save" // turnos consecutivos sin guardar nada
-	metaBudgetAlerted = "loop_budget_alerted"   // sesión ya avisada de exceso de presupuesto
+	metaLoopObsSeen       = "loop_obs_seen"           // conteo de observaciones del turno previo
+	metaLoopTurns         = "loop_turns_since_save"   // turnos consecutivos sin guardar nada
+	metaBudgetAlerted     = "loop_budget_alerted"     // sesión ya avisada de exceso de presupuesto
+	metaPhaseInjected     = "loop_phase_injected"     // fingerprint de la fase ya inyectada (delta)
+	metaConflictsInjected = "loop_conflicts_injected" // cantidad de conflictos ya avisada (delta)
 )
+
+// turnSurfaceChanged indica si el payload de una superficie por turno difiere de lo
+// último inyectado en la sesión, y persiste el nuevo estado. La primera vez en una
+// sesión —o si cambió el session_id— cuenta como cambio (el valor guardado lleva el
+// session_id como prefijo, igual que el delta del recall). Es el mismo principio:
+// inyectar solo lo que cambió para no repetir el mismo bloque turno a turno.
+func turnSurfaceChanged(store turnStore, key, sessionID, payload string) bool {
+	want := sessionID + "\x00" + payload
+	if prev, ok, _ := store.GetMeta(key); ok && prev == want {
+		return false
+	}
+	_ = store.SetMeta(key, want)
+	return true
+}
 
 // turnInput es el subconjunto del JSON de stdin de UserPromptSubmit que usamos.
 type turnInput struct {
@@ -71,7 +87,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	// blando, avisar UNA vez (no naggear). Va primero por prominencia.
 	blocks = append(blocks, accountedBlock{"budget_alert", buildBudgetAlert(store, in.SessionID, budget)})
 	if pipeCfg.Enabled {
-		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store)})
+		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store, in.SessionID)})
 	}
 	if maCfg.Enabled {
 		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store)})
@@ -82,7 +98,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
 	if loopCfg.SurfaceConflicts {
-		blocks = append(blocks, accountedBlock{"turn_conflicts", buildTurnConflicts(store)})
+		blocks = append(blocks, accountedBlock{"turn_conflicts", buildTurnConflicts(store, in.SessionID)})
 	}
 	if loopCfg.CaptureReminder {
 		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, loopCfg)})
@@ -112,9 +128,17 @@ func buildBudgetAlert(store turnStore, sessionID string, budget int) string {
 
 // buildTurnPhase inyecta la fase activa del pipeline y su directiva. Devuelve ""
 // si no hay una tarea en curso.
-func buildTurnPhase(store turnStore) string {
+func buildTurnPhase(store turnStore, sessionID string) string {
 	st, ok, err := store.PhaseStatus()
 	if err != nil || !ok {
+		return ""
+	}
+	// Delta: la directiva de fase solo cambia al avanzar de fase/tarea. Re-inyectarla
+	// entera cada turno es el costo que más escala en una sesión larga (medido en
+	// footprint_test). Se inyecta completa solo cuando el estado de fase cambia (o
+	// arranca la sesión); mientras tanto, silencio: el agente ya la tiene en contexto.
+	payload := fmt.Sprintf("%s|%s|%d|%d", st.Task, st.Phase, st.Index, st.Total)
+	if !turnSurfaceChanged(store, metaPhaseInjected, sessionID, payload) {
 		return ""
 	}
 	return fmt.Sprintf("[Musubi — fase] Tarea «%s» — fase %s (%d/%d). %s",
@@ -302,9 +326,15 @@ func formatDeltaGists(header string, items []memory.RecallItem, updated []bool) 
 
 // buildTurnConflicts agrega una línea compacta cuando hay relaciones de memoria
 // sin resolver, invitando a resolverlas. Devuelve "" si no hay pendientes.
-func buildTurnConflicts(store turnStore) string {
+func buildTurnConflicts(store turnStore, sessionID string) string {
 	pending, err := store.PendingObsRelations()
 	if err != nil || len(pending) == 0 {
+		return ""
+	}
+	// Delta: avisar solo cuando la cantidad de conflictos cambia (aparecen nuevos o se
+	// resuelven), no cada turno. El nudge se ve una vez por cambio en vez de volverse
+	// ruido turno a turno.
+	if !turnSurfaceChanged(store, metaConflictsInjected, sessionID, strconv.Itoa(len(pending))) {
 		return ""
 	}
 	return fmt.Sprintf("[Musubi — conflictos] Hay %d relación(es) de memoria sin resolver. Revisalas con musubi_conflicts y resolvé cada una con musubi_judge.", len(pending))
