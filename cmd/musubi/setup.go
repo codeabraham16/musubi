@@ -114,7 +114,7 @@ func setupProjectWith(exeOverride, agent string) {
 		fmt.Printf("Error al resolver el directorio del proyecto: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Inyectando Musubi en %s (agente: %s)\n", root, target.Name)
+	fmt.Printf("%s %s (agente: %s)\n", cCyan("Inyectando Musubi en"), cBold(root), target.Name)
 
 	// Detectar si .musubi/ ya existe para poder hacer rollback atómico en proyectos
 	// nuevos: si creamos el workspace y luego falla un paso crítico, lo eliminamos
@@ -140,20 +140,20 @@ func setupProjectWith(exeOverride, agent string) {
 		os.Exit(1)
 	}
 	engine.Close()
-	fmt.Println("  ✓ Workspace .musubi/ (config + memoria) listo")
+	printOK("Workspace .musubi/ (config + memoria) listo")
 
 	// 2. Bundle de skills cognitivas de arranque (analizar/deducir/planear + perfil).
 	if err := writeCognitiveSkills(root); err != nil {
-		fmt.Printf("  ! No se pudieron escribir las skills cognitivas: %v\n", err)
+		printWarn(fmt.Sprintf("No se pudieron escribir las skills cognitivas: %v", err))
 	} else {
-		fmt.Println("  ✓ Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile, orchestrate, audit)")
+		printOK("Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile, orchestrate, audit)")
 	}
 
 	// 2b. Templates de artefactos SDD (proposal/spec/design/tasks) — scaffold versionado.
 	if err := writeSddTemplates(root); err != nil {
-		fmt.Printf("  ! No se pudieron escribir los templates SDD: %v\n", err)
+		printWarn(fmt.Sprintf("No se pudieron escribir los templates SDD: %v", err))
 	} else {
-		fmt.Println("  ✓ Templates SDD en .musubi/templates/sdd/ (proposal, spec, design, tasks)")
+		printOK("Templates SDD en .musubi/templates/sdd/ (proposal, spec, design, tasks)")
 	}
 
 	// 3. Registrar el servidor en .mcp.json para carga automática.
@@ -169,36 +169,36 @@ func setupProjectWith(exeOverride, agent string) {
 		fmt.Printf("Error al escribir %s: %v\n", target.MCPPath, err)
 		os.Exit(1)
 	}
-	fmt.Printf("  ✓ %s (%s cargará 'musubi' al abrir el proyecto)\n", target.MCPPath, target.Name)
+	printOK(fmt.Sprintf("%s (%s cargará 'musubi' al abrir el proyecto)", target.MCPPath, target.Name))
 
 	// 4. Hooks: solo para agentes que tienen sistema de hooks (Claude Code). Otros
 	//    agentes registran el MCP pero no hooks (no existe el mecanismo).
 	if target.SupportsHooks {
 		if err := writeClaudeHook(root, exePath); err != nil {
-			fmt.Printf("  ! No se pudo registrar el hook SessionStart: %v\n", err)
+			printWarn(fmt.Sprintf("No se pudo registrar el hook SessionStart: %v", err))
 		} else {
-			fmt.Println("  ✓ Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
+			printOK("Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
 		}
 		if err := writeTurnHook(root, exePath); err != nil {
-			fmt.Printf("  ! No se pudo registrar el hook UserPromptSubmit: %v\n", err)
+			printWarn(fmt.Sprintf("No se pudo registrar el hook UserPromptSubmit: %v", err))
 		} else {
-			fmt.Println("  ✓ Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
+			printOK("Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
 		}
 		if err := writeCodeMemoryHook(root, exePath); err != nil {
-			fmt.Printf("  ! No se pudo registrar el hook PreToolUse(Read): %v\n", err)
+			printWarn(fmt.Sprintf("No se pudo registrar el hook PreToolUse(Read): %v", err))
 		} else {
-			fmt.Println("  ✓ Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
+			printOK("Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
 		}
 	} else {
-		fmt.Printf("  · %s no tiene sistema de hooks; se registró solo el servidor MCP.\n", target.Name)
+		printInfo(fmt.Sprintf("%s no tiene sistema de hooks; se registró solo el servidor MCP.", target.Name))
 	}
 
 	// 5. Proteger la base de datos de runtime en git.
 	if err := ensureGitignore(root); err == nil {
-		fmt.Println("  ✓ .gitignore actualizado (.musubi/memory.db)")
+		printOK(".gitignore actualizado (.musubi/memory.db)")
 	}
 
-	fmt.Printf("\nListo. Reabrí el proyecto en %s y el servidor 'musubi' estará disponible.\n", target.Name)
+	fmt.Printf("\n%s Reabrí el proyecto en %s y el servidor 'musubi' estará disponible.\n", cGreen("Listo."), target.Name)
 }
 
 // quoteExe entrecomilla la ruta del ejecutable para el comando del hook (string de

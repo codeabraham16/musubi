@@ -48,17 +48,17 @@ func menuAction(raw string) string {
 // opción elegida. Mantiene la ventana abierta hasta que el usuario presiona Enter.
 func runInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("============================================")
-	fmt.Println("                 Musubi")
-	fmt.Println("============================================")
+	fmt.Println(cCyan("============================================"))
+	fmt.Println("                 " + cBold(cCyan("Musubi")))
+	fmt.Println(cCyan("============================================"))
 	fmt.Println()
-	fmt.Println("  Donde queres instalar Musubi?")
+	fmt.Println("  " + cBold("Donde queres instalar Musubi?"))
 	fmt.Println()
-	fmt.Println("    [L] Solo esta carpeta (local, NO toca la PC)")
-	fmt.Println("    [G] Global en la PC (PATH del usuario, sin admin)")
-	fmt.Println("    [Q] Salir")
+	fmt.Println("    [" + cBold("L") + "] Solo esta carpeta (local, NO toca la PC)")
+	fmt.Println("    [" + cBold("G") + "] Global en la PC (PATH del usuario, sin admin)")
+	fmt.Println("    [" + cBold("Q") + "] Salir")
 	fmt.Println()
-	fmt.Print("  Eleccion (L/G/Q): ")
+	fmt.Print("  Eleccion (" + cBold("L/G/Q") + "): ")
 	line, _ := reader.ReadString('\n')
 	fmt.Println()
 
@@ -68,7 +68,7 @@ func runInteractiveMenu() {
 	case "global":
 		installGlobalWindows()
 	default:
-		fmt.Println("Cancelado. No se instalo nada.")
+		fmt.Println(cDim("Cancelado. No se instalo nada."))
 	}
 
 	fmt.Print("\nPresiona Enter para salir...")
@@ -96,7 +96,7 @@ func installGlobalWindows() {
 			return
 		}
 	}
-	fmt.Printf("  ✓ Binario instalado en %s\n", dest)
+	printOK("Binario instalado en " + dest)
 
 	// Agregar installDir al PATH del usuario (sin admin) y exponer MUSUBI_BIN (la ruta
 	// del binario) vía PowerShell. MUSUBI_BIN hace que el .mcp.json portable resuelva el
@@ -107,15 +107,15 @@ func installGlobalWindows() {
 	ps := fmt.Sprintf(`$d=%s; $p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike "*$d*") { [Environment]::SetEnvironmentVariable('Path', "$p;$d", 'User') }; [Environment]::SetEnvironmentVariable('MUSUBI_BIN', %s, 'User'); 'PATH y MUSUBI_BIN actualizados'`, psDir, psBin)
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
-		fmt.Printf("  ! No se pudo actualizar PATH/MUSUBI_BIN automaticamente: %v\n", err)
-		fmt.Printf("    Agregalo manualmente al PATH: %s\n", installDir)
+		printWarn(fmt.Sprintf("No se pudo actualizar PATH/MUSUBI_BIN automaticamente: %v", err))
+		fmt.Println(cDim("    Agregalo manualmente al PATH: " + installDir))
 	} else {
-		fmt.Printf("  ✓ %s", string(out))
+		printOK(strings.TrimSpace(string(out)))
 	}
 
 	// Setup del proyecto actual apuntando al binario instalado (ruta estable).
 	setupProjectWith(dest, "")
-	fmt.Println("\nGlobal listo. Abri una terminal NUEVA para usar el comando 'musubi'.")
+	fmt.Println("\n" + cGreen("Global listo.") + " Abri una terminal NUEVA para usar el comando 'musubi'.")
 }
 
 // sameFile compara dos rutas resueltas (case-insensitive, para Windows).

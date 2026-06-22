@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-06-22
+
+### Added
+- **Consola de Windows en UTF-8 + color en el CLI** (Track 10 / T10.1, experiencia de instalación): al
+  arrancar, Musubi inicializa la consola de Windows (`SetConsoleOutputCP(CP_UTF8)` + habilita
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING`) — 100% Go vía syscall a kernel32, sin CGo. **Arregla el mojibake
+  del primer contacto**: en un cmd.exe fresco (codepage OEM 850/437) los `✓` y acentos que emite `setup`
+  salían como basura (`✓`→`Ô£ô`, `Reabrí`→`ReabrÝ`). Ahora renderizan bien y se desbloquea el color ANSI.
+  El menú de instalación por doble clic y la salida de `setup` ahora usan color (verde `✓`, headers en
+  cyan, énfasis en negrita).
+
+### Notes
+- El color es **seguro por defecto**: solo se emite cuando stdout es una TERMINAL real, el VT está
+  habilitado y `NO_COLOR` no está seteada. En los hooks, el daemon y los pipes/redirecciones (donde
+  stdout es el canal JSON-RPC o una captura) la salida queda **en texto plano** — verificado que
+  `setup` piped y `detect --hook-mode` no emiten ANSI y el JSON de hook sigue limpio. Archivos:
+  `console_windows.go` / `console_other.go` (build-tagged) y `style.go` (helper de estilo memoizado por TTY).
+
 ## [0.48.0] - 2026-06-22
 
 ### Changed
