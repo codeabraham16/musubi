@@ -7,6 +7,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-06-22
+
+### Fixed
+- **`updatedAt` del marketplace tolera número o string** (Track 8): el endpoint de skillsmp
+  devuelve `updatedAt` a veces como string (`"1781667763"`) y a veces como número JSON
+  (`1781667763`). El struct lo esperaba string, así que una sola entrada con formato numérico
+  hacía fallar el decode de **toda la respuesta de esa seed** → en la cosecha real se perdían
+  seeds enteras (Go y Node.js, las más importantes). Ahora un tipo tolerante (`flexString`)
+  normaliza ambos a string. Detectado al generar el catálogo inicial de producción.
+
 ## [0.43.0] - 2026-06-22
 
 ### Added
@@ -793,7 +803,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.43.1...HEAD
+[0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/codeabraham16/musubi/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/codeabraham16/musubi/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/codeabraham16/musubi/compare/v0.40.0...v0.41.0
