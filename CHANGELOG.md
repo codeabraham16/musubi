@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-06-22
+
+### Added
+- **Caché de sourcing con TTL** (Track 8 / T8.2): las respuestas de red del sourcing de skills
+  —catálogo curado (`musubi_search_skills`) y marketplace (`musubi_discover_skills`)— se cachean en
+  memoria con TTL = `sourcing.cache_seconds` (default 3600s). Una query repetida sale del caché en vez
+  de pegar de nuevo a la red: como la query de descubrimiento sin argumentos se deriva del stack y es
+  **estable**, esto convierte N llamadas en 1 fetch + (N-1) hits locales, **preservando el rate limit**
+  del marketplace (el tier anónimo es de 50/día). Es además la base de ingesta del futuro cosechador
+  del catálogo (un harvest re-consulta lo mismo entre corridas; el caché le ahorra presupuesto de API).
+  Solo se cachean fetches exitosos (un error transitorio reintenta). `cache_seconds: 0` lo desactiva.
+
+### Notes
+- El caché (`sourcingCache`) es seguro para concurrencia: las tools de sourcing son read-only y se
+  despachan en paralelo bajo RLock, así que el caché se protege con su propio mutex (limpieza perezosa
+  de entradas vencidas). Tests: hit/miss, expiración, modo inerte, y que dos `discover_skills` con la
+  misma query pegan al marketplace una sola vez.
+
 ## [0.40.0] - 2026-06-22
 
 ### Added
@@ -726,7 +744,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/codeabraham16/musubi/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/codeabraham16/musubi/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/codeabraham16/musubi/compare/v0.38.0...v0.39.0
 [0.17.0]: https://github.com/codeabraham16/musubi/compare/v0.16.0...v0.17.0
