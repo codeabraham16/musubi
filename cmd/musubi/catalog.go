@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,12 +31,199 @@ func runCatalog(args []string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "harvest":
+		if err := runHarvest(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Subcomando desconocido: %s\n", args[0])
 		fmt.Fprintln(os.Stderr, "Uso: musubi catalog validate [ruta]")
 		fmt.Fprintln(os.Stderr, "     musubi catalog merge <url> [--output <ruta>]")
+		fmt.Fprintln(os.Stderr, "     musubi catalog harvest [--seeds a,b,c] [--top N] [--min-stars N] [--out ruta]")
 		os.Exit(1)
 	}
+}
+
+// defaultHarvestSeeds son los stacks/keywords sembrados por defecto en la cosecha del
+// marketplace cuando no se pasa --seeds. Cubren los ecosistemas más comunes.
+var defaultHarvestSeeds = []string{
+	"Go", "Python", "Node.js", "TypeScript", "Rust", "Java",
+	"Ruby", "PHP", "C#", ".NET", "Kubernetes", "Docker", "SQL",
+}
+
+// defaultMarketplaceBaseURL es el host del marketplace por defecto para la cosecha.
+const defaultMarketplaceBaseURL = "https://skillsmp.com"
+
+// runHarvest implementa `musubi catalog harvest`: cosecha un catálogo estático de Agent
+// Skills del marketplace, curado por seeds (stacks) y estrellas. La API key se lee de una
+// env var (por defecto SKILLSMP_API_KEY); vacía ⇒ tier anónimo. Retorna error (no os.Exit)
+// para ser testeable. Pega a la red (skillsmp): no es un test unitario, es una herramienta.
+func runHarvest(args []string) error {
+	// Defaults.
+	seeds := defaultHarvestSeeds
+	top := 50
+	minStars := 0
+	out := "marketplace-index.json"
+	apiKeyEnv := "SKILLSMP_API_KEY"
+	baseURL := defaultMarketplaceBaseURL
+
+	// Parseo manual de flags (mismo estilo que runMerge): --flag valor o --flag=valor.
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		next := func() (string, error) {
+			if i+1 >= len(args) {
+				return "", fmt.Errorf("%s requiere un argumento", arg)
+			}
+			i++
+			return args[i], nil
+		}
+		switch {
+		case arg == "--seeds" || strings.HasPrefix(arg, "--seeds="):
+			v := strings.TrimPrefix(arg, "--seeds=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			seeds = splitSeeds(v)
+		case arg == "--top" || strings.HasPrefix(arg, "--top="):
+			v := strings.TrimPrefix(arg, "--top=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("--top debe ser un entero positivo: %q", v)
+			}
+			top = n
+		case arg == "--min-stars" || strings.HasPrefix(arg, "--min-stars="):
+			v := strings.TrimPrefix(arg, "--min-stars=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return fmt.Errorf("--min-stars debe ser un entero ≥ 0: %q", v)
+			}
+			minStars = n
+		case arg == "--out" || strings.HasPrefix(arg, "--out="):
+			v := strings.TrimPrefix(arg, "--out=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			out = v
+		case arg == "--api-key-env" || strings.HasPrefix(arg, "--api-key-env="):
+			v := strings.TrimPrefix(arg, "--api-key-env=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			apiKeyEnv = v
+		case arg == "--url" || strings.HasPrefix(arg, "--url="):
+			v := strings.TrimPrefix(arg, "--url=")
+			if v == arg {
+				var err error
+				if v, err = next(); err != nil {
+					return err
+				}
+			}
+			baseURL = v
+		default:
+			return fmt.Errorf("flag desconocido: %q", arg)
+		}
+	}
+
+	if len(seeds) == 0 {
+		return fmt.Errorf("no hay seeds para cosechar (usá --seeds a,b,c)")
+	}
+
+	apiKey := ""
+	if apiKeyEnv != "" {
+		apiKey = os.Getenv(apiKeyEnv)
+	}
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "Aviso: sin API key (env %s vacía); usando el tier anónimo (límite bajo).\n", apiKeyEnv)
+	}
+
+	// fetch ligado a baseURL+apiKey; el núcleo HarvestMarketplace es agnóstico de la red.
+	fetch := func(ctx context.Context, query string, limit int) ([]skillsource.MarketplaceSkill, error) {
+		return skillsource.FetchMarketplaceSkills(ctx, baseURL, apiKey, query, limit)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cat, err := skillsource.HarvestMarketplace(ctx, fetch, seeds, top, minStars)
+	if err != nil {
+		return fmt.Errorf("cosechar el marketplace: %w", err)
+	}
+	cat.Generated = time.Now().UTC().Format(time.RFC3339)
+
+	if err := writeJSONAtomic(out, cat); err != nil {
+		return fmt.Errorf("escribir catálogo en %s: %w", out, err)
+	}
+
+	fmt.Printf("Cosecha completa: %d skills curadas de %d seeds escritas en %s.\n",
+		len(cat.Skills), len(cat.Seeds), out)
+	return nil
+}
+
+// splitSeeds parte una lista de seeds separadas por coma, descartando vacías y espacios.
+func splitSeeds(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// writeJSONAtomic serializa v como JSON indentado y lo escribe atómicamente en path
+// (temp en el mismo dir + rename, evita fallos cross-device en Windows; limpia si falla).
+func writeJSONAtomic(path string, v any) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "*.tmp")
+	if err != nil {
+		return fmt.Errorf("crear archivo temporal en %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	success := false
+	defer func() {
+		if !success {
+			os.Remove(tmpName)
+		}
+	}()
+
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serializar JSON: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("escribir datos en temporal: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("cerrar archivo temporal: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("renombrar %s → %s: %w", tmpName, path, err)
+	}
+	success = true
+	return nil
 }
 
 // runValidate implementa `musubi catalog validate [ruta]`: envoltorio fino sobre
