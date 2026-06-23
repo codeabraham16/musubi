@@ -400,6 +400,7 @@ Servidor MCP
 Memoria
   maintain                          Fusiona casi-duplicados y archiva memorias frías
   doctor                            Diagnostica/repara la base de memoria
+  export [--out <ruta>]             Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards
   calibrate [--apply]               (opt-in) Afina el estimador de tokens (requiere ANTHROPIC_API_KEY)
 
 Catálogo de skills
