@@ -32,6 +32,37 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadBrevityModeDefaultsOff(t *testing.T) {
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if cfg.Memory.BrevityMode != "off" {
+		t.Errorf("esperaba brevity_mode 'off' por defecto, obtuve %q", cfg.Memory.BrevityMode)
+	}
+}
+
+func TestLoadBrevityModeNormalizes(t *testing.T) {
+	// Un valor válido con espacios/mayúsculas se normaliza.
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\nmemory:\n  brevity_mode: \"  FULL \"\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.BrevityMode != "full" {
+		t.Errorf("esperaba 'full' normalizado, obtuve %q", cfg.Memory.BrevityMode)
+	}
+	// Un valor inválido degrada a "off": un typo nunca enciende la directiva.
+	root2 := writeConfig(t, "version: \"1.0\"\nmode: local\nmemory:\n  brevity_mode: bogus\n")
+	cfg2, err := Load(root2)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg2.Memory.BrevityMode != "off" {
+		t.Errorf("un valor inválido debe degradar a 'off', obtuve %q", cfg2.Memory.BrevityMode)
+	}
+}
+
 func TestLoadStartupDefaults(t *testing.T) {
 	// Config legacy sin bloque startup: deben aplicarse los defaults.
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")

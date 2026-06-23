@@ -260,6 +260,11 @@ flowchart TD
 - **Presupuesto de sesión** — un techo blando (`memory.session_token_budget`, default `8000`;
   `0` lo desactiva). `musubi_tokens` reporta total, restante, % usado, **estado**
   (`ok` < 75 % · `watch` ≥ 75 % · `over` ≥ 100 %) y el **desglose por superficie**.
+- **Brevedad de salida** *(opt-in)* — `memory.brevity_mode` inyecta una directiva para que el agente
+  responda **conciso**, recortando los tokens de **salida** (lo demás solo acota la **entrada**).
+  `off` (default) no hace nada; `lite`/`full`/`ultra` fijan el nivel una vez por sesión; `auto` solo
+  dispara cuando el gasto cruza `session_token_budget` (costo cero por debajo). Siempre **preserva exacto**
+  código, comandos, rutas, versiones y flags.
 - **Inyección diferencial (delta)** — por turno se inyecta solo la memoria/fase/conflictos **nuevos
   o modificados** respecto de la sesión, en vez de repetir todo cada turno. Cache-considerate.
 - **Estimador por tipo de contenido** — clasifica el texto (prosa / código / JSON) con divisores
@@ -355,6 +360,8 @@ memory:
   gist_max_tokens: 24           # tope de un gist (titular extractivo)
   candidate_pool: 50            # candidatos a rankear antes de empaquetar
   session_token_budget: 8000    # techo blando del gobernador (0 = sin techo)
+  brevity_mode: off             # directiva de salida concisa: off|lite|full|ultra|auto
+                                #   auto = solo al cruzar session_token_budget (requiere techo > 0)
 
 loop:
   per_turn_recall: true         # inyectar contexto relevante por turno

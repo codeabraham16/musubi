@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,6 +70,13 @@ type MemoryConfig struct {
 	// cuando se cruza, para que el gasto de contexto sea visible y acotable. 0 = sin techo
 	// (default 8000).
 	SessionTokenBudget int `yaml:"session_token_budget"`
+	// BrevityMode controla la directiva de SALIDA del gobernador (T9.5): pide al agente
+	// responder conciso para recortar tokens de RESPUESTA, complementando las superficies
+	// que acotan la ENTRADA. Opt-in: "off" (default) no inyecta nada; "lite"/"full"/"ultra"
+	// fijan el nivel una vez por sesión; "auto" solo dispara cuando el gasto cruza
+	// session_token_budget (mismo umbral que la alerta), atando la brevedad al gobernador.
+	// Un valor inválido degrada a "off": un typo nunca activa la directiva.
+	BrevityMode string `yaml:"brevity_mode"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -317,6 +325,7 @@ func Default() Config {
 			GistMaxTokens:      24,
 			CandidatePool:      50,
 			SessionTokenBudget: 8000,
+			BrevityMode:        "off",
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -422,6 +431,23 @@ func presentBlocks(data []byte) map[string]bool {
 	return present
 }
 
+// normalizeBrevityMode acota brevity_mode al conjunto válido {lite,full,ultra,auto};
+// cualquier otro valor (incluido vacío o con espacios/mayúsculas) degrada a "off".
+func normalizeBrevityMode(m string) string {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "lite":
+		return "lite"
+	case "full":
+		return "full"
+	case "ultra":
+		return "ultra"
+	case "auto":
+		return "auto"
+	default:
+		return "off"
+	}
+}
+
 // applyDefaults rellena campos vacíos con sus valores por defecto. present indica
 // qué bloques top-level estaban en el YAML: un bloque ausente toma el default
 // completo; uno presente conserva sus bool (incluido enabled:false) y solo rellena
@@ -482,6 +508,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 			c.Memory.CandidatePool = d.Memory.CandidatePool
 		}
 	}
+	// brevity_mode se normaliza siempre (presente o no): un valor desconocido o vacío
+	// degrada a "off" para que un typo nunca encienda la directiva de salida.
+	c.Memory.BrevityMode = normalizeBrevityMode(c.Memory.BrevityMode)
 
 	// Maintenance: ausente -> default completo; presente -> rellenar numéricos y
 	// respetar auto_interval_hours tal cual (0 = desactivado explícito).

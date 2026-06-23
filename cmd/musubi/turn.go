@@ -40,6 +40,7 @@ const (
 	metaLoopObsSeen       = "loop_obs_seen"           // conteo de observaciones del turno previo
 	metaLoopTurns         = "loop_turns_since_save"   // turnos consecutivos sin guardar nada
 	metaBudgetAlerted     = "loop_budget_alerted"     // sesión ya avisada de exceso de presupuesto
+	metaBrevityInjected   = "loop_brevity_injected"   // sesión+modo ya inyectados de la directiva de brevedad
 	metaPhaseInjected     = "loop_phase_injected"     // fingerprint de la fase ya inyectada (delta)
 	metaConflictsInjected = "loop_conflicts_injected" // cantidad de conflictos ya avisada (delta)
 )
@@ -69,7 +70,7 @@ type turnInput struct {
 // pipeline, la memoria relevante, los conflictos pendientes y el recordatorio de
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
-func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, budget int, stdin io.Reader) string {
+func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, budget int, brevity string, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -86,6 +87,9 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	// Alerta proactiva del gobernador: si el gasto de la sesión ya cruzó el techo
 	// blando, avisar UNA vez (no naggear). Va primero por prominencia.
 	blocks = append(blocks, accountedBlock{"budget_alert", buildBudgetAlert(store, in.SessionID, budget)})
+	// Directiva de brevedad del gobernador (T9.5): recorta tokens de SALIDA. Opt-in;
+	// en "auto" solo aparece cuando el gasto ya cruzó el presupuesto, junto a la alerta.
+	blocks = append(blocks, accountedBlock{"turn_brevity", buildBrevityNudge(store, in.SessionID, brevity, budget)})
 	if pipeCfg.Enabled {
 		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store, in.SessionID)})
 	}
@@ -124,6 +128,52 @@ func buildBudgetAlert(store turnStore, sessionID string, budget int) string {
 	}
 	_ = store.SetMeta(metaBudgetAlerted, sessionID)
 	return fmt.Sprintf("[Musubi — presupuesto] El contexto que Musubi inyectó esta sesión (%d tokens) superó el presupuesto blando (%d). Mirá el desglose por superficie con musubi_tokens; si querés bajar el ruido, ajustá memory.session_token_budget o apagá superficies en loop/startup.", l.Total, budget)
+}
+
+// buildBrevityNudge es el escalón de SALIDA del gobernador (T9.5): inyecta UNA vez por
+// sesión una directiva para que el agente responda conciso, recortando los tokens de
+// RESPUESTA —complementa al resto de superficies, que solo acotan la ENTRADA—. Opt-in
+// vía memory.brevity_mode: "off"/"" no hace nada; "lite"/"full"/"ultra" fijan el nivel
+// siempre; "auto" solo dispara cuando el gasto de la sesión ya cruzó el presupuesto
+// blando (mismo umbral que la alerta), de modo que bajo presupuesto su costo es cero.
+func buildBrevityNudge(store turnStore, sessionID, mode string, budget int) string {
+	if mode == "" || mode == "off" {
+		return ""
+	}
+	if mode == "auto" {
+		if budget <= 0 {
+			return ""
+		}
+		l, err := store.LedgerStatus()
+		if err != nil || l.Total < budget {
+			return "" // todavía bajo presupuesto: no inyectar (costo cero)
+		}
+	}
+	// Una sola vez por sesión y modo: la directiva persiste en contexto, no hace falta
+	// repetirla turno a turno (y reinyectarla solo gastaría tokens). El estado lleva el
+	// modo, así que cambiarlo a mitad de sesión vuelve a inyectar.
+	want := sessionID + "\x00" + mode
+	if prev, ok, _ := store.GetMeta(metaBrevityInjected); ok && prev == want {
+		return ""
+	}
+	_ = store.SetMeta(metaBrevityInjected, want)
+	return brevityDirective(mode)
+}
+
+// brevityDirective devuelve el texto de la directiva por modo. Mantiene exacto lo que no
+// se puede comprimir sin romper precisión (código, rutas, versiones, flags).
+func brevityDirective(mode string) string {
+	const keep = "Mantené exacto el código, comandos, rutas, nombres de API, versiones y flags."
+	switch mode {
+	case "lite":
+		return "[Musubi — brevedad] Modo conciso (lite): respondé sin relleno ni hedging, manteniendo la gramática. " + keep
+	case "ultra":
+		return "[Musubi — brevedad] Modo conciso (ultra): máxima compresión, abreviá, solo lo esencial. " + keep
+	case "auto":
+		return "[Musubi — gobernador] La sesión cruzó el presupuesto de contexto; de acá en más respondé conciso: cortá relleno y hedging y priorizá la sustancia técnica. " + keep
+	default: // "full"
+		return "[Musubi — brevedad] Modo conciso (full): cortá relleno, cortesías y hedging; priorizá la sustancia técnica (fragmentos OK). " + keep
+	}
 }
 
 // buildTurnPhase inyecta la fase activa del pipeline y su directiva. Devuelve ""
@@ -381,7 +431,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory.SessionTokenBudget, os.Stdin)
+	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory.SessionTokenBudget, cfg.Memory.BrevityMode, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}

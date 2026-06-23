@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-06-22
+
+### Added
+- **Brevedad del gobernador** (Track 9 / T9.5): nueva superficie por turno `turn_brevity` que inyecta una
+  directiva para que el agente responda **conciso**, recortando los tokens de **SALIDA** (las respuestas
+  del modelo). Cierra el arco del gobernador de tokens: medir (T9.1) → avisar (T9.3) → **reducir la salida**.
+  Hasta ahora todas las superficies solo acotaban la **ENTRADA** (el contexto inyectado); esta toca el otro
+  lado del presupuesto. Inspirada en la skill de comunidad `caveman`, pero nativa y atada al gobernador.
+- **Config `memory.brevity_mode`** (opt-in, default `off`):
+  - `off` — no inyecta nada (sin cambios de comportamiento).
+  - `lite` / `full` / `ultra` — fija el nivel de concisión; se inyecta **una vez por sesión** (la directiva
+    persiste en contexto, no se repite turno a turno).
+  - `auto` — solo dispara cuando el gasto de la sesión cruza `session_token_budget` (mismo umbral que la
+    alerta proactiva), de modo que **bajo presupuesto su costo es cero**. Requiere `session_token_budget > 0`.
+  - Un valor inválido degrada a `off`: un typo nunca enciende la directiva. Toda directiva **preserva exacto**
+    el código, comandos, rutas, nombres de API, versiones y flags.
+
+### Notes
+- `buildBrevityNudge`/`brevityDirective` en `turn.go`; throttle por `session_id`+modo (`loop_brevity_injected`).
+  La superficie se contabiliza en el ledger holístico como `turn_brevity`. Tests: `TestTurnBrevityManual…`,
+  `TestTurnBrevityAuto…`, `TestTurnBrevityOffSilent`, `TestBrevityDirectiveLevelsDiffer`, `TestLoadBrevityMode…`.
+
 ## [0.50.0] - 2026-06-22
 
 ### Added
