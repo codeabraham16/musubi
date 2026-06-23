@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-06-23
+
+### Added
+- **Pulido visual + UX del dashboard** (Track 11): el dashboard local sube de nivel manteniendo la estructura,
+  los datos en vivo y el coste **0 tokens**:
+  - **Sistema visual refinado**: tokens de contraste/espaciado/radio/elevación, fondo con aura sutil de la
+    marca, cabeceras de sección con barra de acento y KPIs con franja superior de color por métrica.
+  - **Micro-interacciones**: los números de los KPIs y el gauge hacen *count-up* animado (easeOutCubic), el
+    gauge tiñe su halo según el estado del presupuesto, y los nodos del grafo aparecen con un *pop* suave.
+  - **Estados**: barra de carga indeterminada + *skeleton* shimmer mientras llega el primer snapshot (sin
+    parpadeo brusco), estados vacíos más claros y *hover* de las tarjetas de memoria.
+  - **Accesibilidad**: navegación por teclado del grafo (`Tab` + `Enter`/`Espacio`), `aria-label` y anillos de
+    foco en los nodos, mejor contraste de texto y todo el movimiento bajo `prefers-reduced-motion`.
+- **Path del proyecto en la cabecera**: el snapshot trae un campo `project` (nombre de la carpeta raíz) y el
+  dashboard lo muestra («proyecto X»), para no confundir de qué workspace son los datos.
+
+### Changed
+- El grafo solo se re-dibuja cuando cambian los datos o el estado (expandido/filtro) — antes se re-renderizaba
+  en cada *poll* de 4 s, re-animando los nodos y perdiendo el *hover*. Ahora una firma de render lo evita.
+
 ## [0.55.0] - 2026-06-23
 
 ### Added

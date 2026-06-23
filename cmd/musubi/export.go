@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"musubi/internal/config"
@@ -21,11 +22,25 @@ import (
 type exportSnapshot struct {
 	GeneratedAt string                `json:"generated_at"`
 	Version     string                `json:"version"`
+	Project     string                `json:"project,omitempty"`
 	Health      memory.DiagnoseReport `json:"health"`
 	Insights    memory.InsightsReport `json:"insights"`
 	Tokens      memory.BudgetStatus   `json:"tokens"`
 	Graph       exportGraph           `json:"graph"`
 	Recent      []memory.ObsCard      `json:"recent"`
+}
+
+// projectLabel deriva una etiqueta legible del proyecto (el nombre de la carpeta
+// raíz) para mostrar en la cabecera del dashboard. Best-effort: cae al path crudo.
+func projectLabel(root string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	if base := filepath.Base(abs); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
+	}
+	return abs
 }
 
 // exportGraph es el mapa de conocimiento: total de observaciones activas y el árbol
@@ -102,6 +117,7 @@ func runExport(args []string) {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
+	snap.Project = projectLabel(root)
 
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {

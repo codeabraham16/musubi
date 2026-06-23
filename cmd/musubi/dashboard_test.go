@@ -20,7 +20,7 @@ func TestDashboardSnapshotEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := dashboardHandler(engine, 8000)
+	h := dashboardHandler(engine, 8000, "proyecto-demo")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
 
@@ -40,6 +40,9 @@ func TestDashboardSnapshotEndpoint(t *testing.T) {
 	if snap.Health.Status == "" {
 		t.Error("el snapshot debe incluir el estado de salud")
 	}
+	if snap.Project != "proyecto-demo" {
+		t.Errorf("esperaba project=proyecto-demo, obtuve %q", snap.Project)
+	}
 }
 
 func TestDashboardIndexServesHTML(t *testing.T) {
@@ -49,7 +52,7 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 	}
 	defer engine.Close()
 
-	h := dashboardHandler(engine, 0)
+	h := dashboardHandler(engine, 0, "")
 
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
