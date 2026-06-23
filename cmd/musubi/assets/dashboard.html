@@ -105,6 +105,26 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 
 .loading{opacity:.35;}
 
+/* explicaciones en lenguaje claro */
+.explain{font-size:11px; color:var(--dim); margin:-10px 0 16px; line-height:1.55; max-width:760px;}
+
+/* "lo que Musubi recuerda" */
+.mem-list{display:flex; flex-direction:column; gap:10px;}
+.mem{border:1px solid var(--line); border-radius:8px; padding:11px 13px; background:rgba(255,255,255,.012);}
+.mem-top{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px;}
+.badge{font-size:10px; letter-spacing:.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line); color:var(--muted); white-space:nowrap;}
+.when{font-size:10px; color:var(--dim); white-space:nowrap;}
+.mem-gist{font-size:12px; color:#adbac7; line-height:1.55; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;}
+.empty{font-size:12px; color:var(--dim); padding:10px 2px;}
+
+/* actividad reciente (timeline) */
+.activity{display:flex; flex-direction:column;}
+.tl{display:flex; gap:10px; align-items:baseline; padding:8px 2px; border-bottom:1px solid var(--line2); font-size:12px;}
+.tl:last-child{border-bottom:none;}
+.tl .tl-when{color:var(--dim); font-size:10px; white-space:nowrap; flex:0 0 54px;}
+.tl .tl-topic{color:var(--teal); white-space:nowrap;}
+.tl .tl-snip{color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;}
+
 @media (prefers-reduced-motion: no-preference){
   .dot.live{animation:pulse 2.4s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
@@ -138,22 +158,22 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
   </header>
 
   <section class="kpis">
-    <div class="card">
+    <div class="card" title="¿La base de datos de la memoria está sana? Son chequeos automáticos de integridad/consistencia.">
       <span class="k">Salud</span>
       <span class="v green" id="kpi-health">—</span>
       <span class="foot" id="kpi-health-foot">—</span>
     </div>
-    <div class="card">
+    <div class="card" title="Cuántas cosas recuerda Musubi de este proyecto (memorias activas, sin contar las archivadas).">
       <span class="k">Observaciones</span>
       <span class="v teal"><span id="kpi-obs">—</span> <span class="u">activas</span></span>
       <span class="foot" id="kpi-obs-foot">—</span>
     </div>
-    <div class="card">
+    <div class="card" title="Qué porcentaje del «presupuesto de contexto» de la sesión usó Musubi. Menos = más barato y rápido.">
       <span class="k">Presupuesto de tokens</span>
       <span class="v"><span id="kpi-budget">—</span><span class="u">% usado</span></span>
       <span class="foot" id="kpi-budget-foot">—</span>
     </div>
-    <div class="card">
+    <div class="card" title="Skills de la comunidad que Musubi te propuso y vos aceptaste o rechazaste.">
       <span class="k">Decisiones de skills</span>
       <span class="v purple"><span id="kpi-skills">—</span> <span class="u">aceptadas</span></span>
       <span class="foot" id="kpi-skills-foot">—</span>
@@ -162,6 +182,7 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 
   <section class="panel">
     <div class="ph"><span class="tag teal">Gobernador de tokens</span><span class="hint" id="gov-hint">contexto inyectado por superficie</span></div>
+    <div class="explain">Cuánto «contexto» te inyectó Musubi en esta sesión (menos = más barato y rápido). El gobernador avisa al pasar <b>75%</b> (watch) y <b>100%</b> (over) del presupuesto. Cada barra es una «superficie»: un lugar por donde Musubi mete contexto.</div>
     <div class="gov">
       <div class="gauge">
         <svg width="160" height="160" viewBox="0 0 160 160">
@@ -191,12 +212,27 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
   <section class="grid2">
     <div class="panel">
       <div class="ph"><span class="tag green">Salud de la memoria</span><span class="hint" id="maint-hint">—</span></div>
+      <div class="explain">Chequeos automáticos de que la base de datos de la memoria está íntegra y consistente. Todo en verde = nada que arreglar.</div>
       <div class="checks" id="checks"></div>
     </div>
 
     <div class="panel p2">
       <div class="ph"><span class="tag purple">Mapa de conocimiento</span><span class="hint" id="graph-hint">—</span></div>
+      <div class="explain">De qué temas Musubi guardó cosas en este proyecto. El tamaño de cada nodo = cuántas memorias hay de ese tema.</div>
       <div class="graph" id="graph"></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <div class="ph"><span class="tag teal">Lo que Musubi recuerda</span><span class="hint" id="mem-hint">—</span></div>
+      <div class="explain">Las memorias reales que Musubi guardó de este proyecto, en lenguaje claro — no solo cuántas, sino el «qué».</div>
+      <div class="mem-list" id="mem-list"></div>
+    </div>
+    <div class="panel p2">
+      <div class="ph"><span class="tag purple">Actividad reciente</span></div>
+      <div class="explain">Lo último que Musubi guardó, de más nuevo a más viejo. Acá ves la memoria «creciendo» mientras trabajás.</div>
+      <div class="activity" id="activity"></div>
     </div>
   </section>
 
@@ -296,6 +332,9 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 
     // mapa de conocimiento (radial, proporcional)
     renderGraph((d.graph && d.graph.domains) || [], (d.graph && d.graph.total_observations) || 0);
+
+    // lo que recuerda + actividad reciente
+    renderRecent(d.recent || []);
   }
 
   function renderGraph(domains, total){
@@ -319,6 +358,48 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
     }
     g.innerHTML = '<svg class="edges" viewBox="0 0 100 100" preserveAspectRatio="none"><g stroke="#2a3350" stroke-width="0.22">' +
       lines + '</g></svg>' + nodes;
+  }
+
+  var memPalette = ["#2dd4bf", "#4ade80", "#fbbf24", "#a78bfa"];
+  function domainOf(t){ var i = (t || "").indexOf("/"); return i > 0 ? t.slice(0, i) : (t || "—"); }
+  function colorFor(s){
+    var h = 0; for(var i = 0; i < s.length; i++){ h = (h * 31 + s.charCodeAt(i)) >>> 0; }
+    return memPalette[h % memPalette.length];
+  }
+  function ago(s){
+    if(!s){ return ""; }
+    var iso = s.indexOf("T") < 0 ? s.replace(" ", "T") : s;
+    if(iso.indexOf("Z") < 0 && !/[+\-]\d\d:?\d\d$/.test(iso)){ iso += "Z"; }
+    var t = Date.parse(iso);
+    if(isNaN(t)){ return ""; }
+    var d = (Date.now() - t) / 1000;
+    if(d < 0){ d = 0; }
+    if(d < 60){ return "hace " + Math.round(d) + "s"; }
+    if(d < 3600){ return "hace " + Math.round(d / 60) + "m"; }
+    if(d < 86400){ return "hace " + Math.round(d / 3600) + "h"; }
+    return "hace " + Math.round(d / 86400) + "d";
+  }
+
+  function renderRecent(list){
+    txt("mem-hint", list.length + " memorias");
+    var memEl = $("mem-list"), actEl = $("activity");
+    if(!list.length){
+      memEl.innerHTML = '<div class="empty">Todavía no hay memorias guardadas en este proyecto.</div>';
+      actEl.innerHTML = '<div class="empty">Sin actividad aún.</div>';
+      return;
+    }
+    memEl.innerHTML = list.slice(0, 6).map(function(m){
+      var col = colorFor(domainOf(m.topic_key));
+      return '<div class="mem"><div class="mem-top">' +
+        '<span class="badge" style="color:' + col + '; border-color:' + col + '55;">' + esc(m.topic_key) + '</span>' +
+        '<span class="when">' + esc(ago(m.created_at)) + '</span></div>' +
+        '<div class="mem-gist">' + esc(m.gist) + '</div></div>';
+    }).join("");
+    actEl.innerHTML = list.map(function(m){
+      return '<div class="tl"><span class="tl-when">' + esc(ago(m.created_at)) + '</span>' +
+        '<span class="tl-topic">' + esc(domainOf(m.topic_key)) + '</span>' +
+        '<span class="tl-snip">' + esc(m.gist) + '</span></div>';
+    }).join("");
   }
 
   function load(){

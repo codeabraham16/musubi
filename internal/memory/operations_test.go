@@ -17,6 +17,49 @@ func newTestEngine(t *testing.T) *DbEngine {
 	return engine
 }
 
+func TestRecentObservations(t *testing.T) {
+	e := newTestEngine(t)
+	// DB vacía: lista vacía, sin error.
+	if got, err := e.RecentObservations(5); err != nil || len(got) != 0 {
+		t.Fatalf("DB vacía: esperaba [] sin error, obtuve %v / %v", got, err)
+	}
+
+	for _, s := range []struct{ id, topic, content string }{
+		{"a", "roadmap/track-11", "Track 11 — dashboard local en vivo de la memoria."},
+		{"b", "tokens/brevity", "Brevedad del gobernador: recorta tokens de salida."},
+		{"c", "audit/full", "Auditoría completa con el flujo multi-agente."},
+	} {
+		if err := e.SaveObservation(s.id, s.topic, s.content, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Una archivada no debe aparecer.
+	if _, err := e.db.Exec(`UPDATE observations SET archived = 1 WHERE id = 'c'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := e.RecentObservations(10)
+	if err != nil {
+		t.Fatalf("RecentObservations error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("esperaba 2 memorias activas, obtuve %d: %+v", len(got), got)
+	}
+	for _, c := range got {
+		if c.TopicKey == "" || c.Gist == "" || c.CreatedAt == "" {
+			t.Errorf("cada memoria debe traer tema, gist y fecha legibles, obtuve %+v", c)
+		}
+		if c.TopicKey == "audit/full" {
+			t.Error("una observación archivada no debe aparecer en las recientes")
+		}
+	}
+
+	// El límite recorta.
+	if lim, _ := e.RecentObservations(1); len(lim) != 1 {
+		t.Errorf("el límite debe recortar a 1, obtuve %d", len(lim))
+	}
+}
+
 func TestSaveObservationWithoutEmbedding(t *testing.T) {
 	e := newTestEngine(t)
 

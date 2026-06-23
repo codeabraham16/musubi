@@ -63,4 +63,13 @@ func TestBuildExportSnapshot(t *testing.T) {
 	if got["roadmap"] != 2 || got["audit"] != 1 {
 		t.Errorf("graph.domains: esperaba roadmap=2 audit=1, obtuve %+v", snap.Graph.Domains)
 	}
+	// Recent: las memorias legibles (las 3 guardadas, con tema + gist).
+	if len(snap.Recent) != 3 {
+		t.Errorf("recent: esperaba 3 memorias, obtuve %d", len(snap.Recent))
+	}
+	for _, m := range snap.Recent {
+		if m.TopicKey == "" || m.Gist == "" {
+			t.Errorf("cada memoria reciente debe traer tema y gist, obtuve %+v", m)
+		}
+	}
 }
