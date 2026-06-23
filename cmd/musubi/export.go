@@ -28,11 +28,11 @@ type exportSnapshot struct {
 	Recent      []memory.ObsCard      `json:"recent"`
 }
 
-// exportGraph es el mapa de conocimiento: total de observaciones activas y su
-// reparto por dominio de topic.
+// exportGraph es el mapa de conocimiento: total de observaciones activas y el árbol
+// dominio → temas (con conteos y última actividad por nodo) que dibuja el grafo.
 type exportGraph struct {
-	TotalObservations int                  `json:"total_observations"`
-	Domains           []memory.DomainCount `json:"domains"`
+	TotalObservations int                 `json:"total_observations"`
+	Domains           []memory.DomainNode `json:"domains"`
 }
 
 // buildExportSnapshot compone el snapshot read-only a partir del motor. budget es el
@@ -62,13 +62,13 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 	}
 	snap.Tokens = ledger.Budget(budget)
 
-	domains, err := engine.TopicDomainCounts()
+	domains, err := engine.TopicTree()
 	if err != nil {
-		return snap, fmt.Errorf("export: dominios: %w", err)
+		return snap, fmt.Errorf("export: árbol de temas: %w", err)
 	}
 	snap.Graph = exportGraph{TotalObservations: ins.Observations.Active, Domains: domains}
 
-	recent, err := engine.RecentObservations(12)
+	recent, err := engine.RecentObservations(20)
 	if err != nil {
 		return snap, fmt.Errorf("export: memorias recientes: %w", err)
 	}
