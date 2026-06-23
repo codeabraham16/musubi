@@ -51,6 +51,8 @@ func main() {
 		runDoctor(os.Args[2:])
 	case "export":
 		runExport(os.Args[2:])
+	case "dashboard":
+		runDashboard(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("musubi %s\n", version)
 	case "update":
@@ -85,6 +87,7 @@ func printUsage() {
 	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
 	cmd("doctor", "Diagnostica la memoria; 'doctor repair --check X --apply' repara")
 	cmd("export [--out <ruta>]", "Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards")
+	cmd("dashboard [--addr ...] [--no-open]", "UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)")
 	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
 
 	section("Catálogo de skills")

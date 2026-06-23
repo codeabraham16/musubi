@@ -7,6 +7,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-06-23
+
+### Added
+- **`musubi dashboard`** (UI local en vivo): nuevo subcomando que sirve una **interfaz web de solo lectura**
+  de la memoria —salud, gobernador de tokens (gauge + barras por superficie + umbrales watch/over), checks y
+  un **mapa de conocimiento** radial por dominio—. El HTML va **embebido en el binario** (`//go:embed`) y se
+  actualiza solo (polling a `/api/snapshot`, que reusa el snapshot de `export`).
+  - **Opt-in y cero tokens**: corre como proceso aparte, no se engancha a ningún hook ni inyecta nada al
+    contexto del agente. Los datos van de SQLite al navegador, sin LLM en el medio.
+  - **Solo loopback** (`127.0.0.1` por defecto, puerto `7777`): por diseño es de uso local; rechaza bind a
+    interfaces públicas. Flags: `--addr <host:port>`, `--no-open` (no abrir el navegador).
+
+### Notes
+- `dashboard.go` (`runDashboard`, `dashboardHandler`, `isLoopbackAddr`, `openBrowser`) + asset embebido en
+  `cmd/musubi/assets/dashboard.html` (data-driven: renderiza desde el JSON y hace polling). Tests:
+  `TestDashboardSnapshotEndpoint`, `TestDashboardIndexServesHTML`, `TestIsLoopbackAddr`.
+
 ## [0.52.0] - 2026-06-23
 
 ### Added

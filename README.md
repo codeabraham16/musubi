@@ -401,6 +401,7 @@ Memoria
   maintain                          Fusiona casi-duplicados y archiva memorias frías
   doctor                            Diagnostica/repara la base de memoria
   export [--out <ruta>]             Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards
+  dashboard [--addr ...] [--no-open] UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)
   calibrate [--apply]               (opt-in) Afina el estimador de tokens (requiere ANTHROPIC_API_KEY)
 
 Catálogo de skills
