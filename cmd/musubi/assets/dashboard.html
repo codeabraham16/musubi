@@ -87,17 +87,32 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 .check .s{display:inline-flex; align-items:center; gap:6px; font-size:11px; letter-spacing:1px;}
 .check .s.ok{color:var(--green);} .check .s.warning{color:var(--amber);} .check .s.error{color:var(--red);}
 
-.graph{position:relative; width:100%; flex:1; min-height:320px;}
-.graph svg.edges{position:absolute; inset:0; width:100%; height:100%;}
-.node{position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center;}
-.node .bub{display:flex; align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--line); background:var(--panel); font-weight:700; color:var(--txt); font-variant-numeric:tabular-nums;}
-.node .nm{font-size:10px; color:var(--muted); letter-spacing:1px;}
-.node.center .bub{border-color:rgba(167,139,250,.5); background:rgba(167,139,250,.08); flex-direction:column; gap:0; width:80px; height:80px;}
-.node.center .bub .big{font-size:23px; color:var(--purple);} .node.center .bub .sm{font-size:9px; color:var(--dim); letter-spacing:1px;}
-.node.c0 .bub{color:var(--teal); border-color:rgba(45,212,191,.5);}
-.node.c1 .bub{color:var(--green); border-color:rgba(74,222,128,.5);}
-.node.c2 .bub{color:var(--amber); border-color:rgba(251,191,36,.45);}
-.node.c3 .bub{color:var(--purple); border-color:rgba(167,139,250,.5);}
+.graph{position:relative; width:100%; flex:1; min-height:440px;}
+.graph svg.edges{position:absolute; inset:0; width:100%; height:100%; overflow:visible;}
+.gedge{fill:none; transition:stroke-opacity .35s ease, stroke-width .35s ease;}
+.gnode{position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:4px; cursor:pointer; z-index:2; transition:opacity .3s ease;}
+.gnode .gb{display:flex; align-items:center; justify-content:center; border-radius:50%; border:1.5px solid var(--line); background:#0d1422; font-weight:700; color:var(--txt); font-variant-numeric:tabular-nums; transition:box-shadow .35s ease, transform .2s cubic-bezier(.3,1.3,.5,1), border-color .2s ease;}
+.gnode .gl{font-size:10px; color:var(--muted); letter-spacing:.4px; white-space:nowrap; text-align:center; line-height:1.3;}
+.gnode .gl em{display:block; font-style:normal; color:var(--dim); font-size:9px; margin-top:1px;}
+.gnode:hover{z-index:9;}
+.gnode:hover .gb{transform:scale(1.1);}
+.gnode.center{cursor:default; z-index:3;}
+.gnode.center .gb{flex-direction:column; gap:0; border-color:rgba(167,139,250,.55); background:rgba(167,139,250,.08); width:78px; height:78px;}
+.gnode.center .gb b{font-size:23px; color:var(--purple); line-height:1;}
+.gnode.center .gb i{font-style:normal; font-size:9px; color:var(--dim); letter-spacing:1px;}
+.gnode.topic .gb{background:#0b0f17; border-style:dashed;}
+.gnode.faded{opacity:.28;}
+.gnode.sel .gl{color:var(--txt);}
+.gtip{position:absolute; z-index:30; pointer-events:none; max-width:248px; background:#0b0f17; border:1px solid var(--line); border-radius:8px; padding:9px 11px; box-shadow:0 10px 28px rgba(0,0,0,.55); opacity:0; transform:translateY(5px); transition:opacity .14s ease, transform .14s ease;}
+.gtip.show{opacity:1; transform:translateY(0);}
+.gtip .gtt{font-size:12px; font-weight:700; margin-bottom:3px;}
+.gtip .gtm{font-size:11px; color:var(--muted); line-height:1.5;}
+.gtip .gts{font-size:11px; color:var(--dim); margin-top:6px; line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+.glegend{display:flex; gap:18px; flex-wrap:wrap; font-size:10px; color:var(--dim); margin-top:8px; padding-top:11px; border-top:1px solid var(--line2);}
+.glegend b{color:var(--muted); font-weight:600;}
+.glegend .lg-dot{display:inline-block; width:7px; height:7px; border-radius:50%; vertical-align:middle; margin-right:4px;}
+.filterchip{display:inline-flex; align-items:center; gap:5px; font-size:10px; color:var(--teal); border:1px solid rgba(45,212,191,.4); background:rgba(45,212,191,.08); border-radius:10px; padding:2px 9px; cursor:pointer; transition:background .15s ease;}
+.filterchip:hover{background:rgba(45,212,191,.16);}
 
 .foot{display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--dim); padding-top:6px;}
 .foot .src{margin-left:auto;}
@@ -218,8 +233,16 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 
     <div class="panel p2">
       <div class="ph"><span class="tag purple">Mapa de conocimiento</span><span class="hint" id="graph-hint">—</span></div>
-      <div class="explain">De qué temas Musubi guardó cosas en este proyecto. El tamaño de cada nodo = cuántas memorias hay de ese tema.</div>
-      <div class="graph" id="graph"></div>
+      <div class="explain">De qué temas Musubi guardó cosas. <b>Tamaño</b> = nº de memorias, <b>brillo</b> = actividad reciente. <b>Hacé clic</b> en un dominio para abrir sus temas y filtrar las memorias de abajo.</div>
+      <div class="graph" id="graph">
+        <div id="graph-canvas" style="position:absolute; inset:0;"></div>
+        <div class="gtip" id="gtip"></div>
+      </div>
+      <div class="glegend">
+        <span><span class="lg-dot" style="background:var(--teal);"></span><b>tamaño</b> = nº de memorias</span>
+        <span><span class="lg-dot" style="background:var(--green); box-shadow:0 0 7px var(--green);"></span><b>brillo</b> = actividad reciente</span>
+        <span><b>clic</b> = abrir temas + filtrar</span>
+      </div>
     </div>
   </section>
 
@@ -249,6 +272,7 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
 (function(){
   "use strict";
   var C = 2 * Math.PI * 64; // circunferencia del arco del gauge
+  var gSnap = null, gRecent = [], gExpanded = null, gFilter = null; // estado del grafo interactivo
   var statusColor = { ok: "ok", watch: "warn", over: "err", unbudgeted: "ok" };
   var gaugeColor = { ok: "#4ade80", watch: "#fbbf24", over: "#f87171", unbudgeted: "#4ade80" };
 
@@ -330,34 +354,173 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
         esc(c.status) + '</span></div>';
     }).join("");
 
-    // mapa de conocimiento (radial, proporcional)
-    renderGraph((d.graph && d.graph.domains) || [], (d.graph && d.graph.total_observations) || 0);
-
-    // lo que recuerda + actividad reciente
-    renderRecent(d.recent || []);
+    // mapa de conocimiento (interactivo) + memorias legibles
+    gSnap = d;
+    gRecent = d.recent || [];
+    renderGraph(d);
+    renderRecent(gRecent);
   }
 
-  function renderGraph(domains, total){
-    var g = $("graph");
-    var show = domains.slice(0, 8);
+  // tsMillis parsea una fecha (RFC3339 o "YYYY-MM-DD HH:MM:SS" en UTC) a ms; 0 si no.
+  function tsMillis(s){
+    if(!s){ return 0; }
+    var iso = s.indexOf("T") < 0 ? s.replace(" ", "T") : s;
+    if(iso.indexOf("Z") < 0 && !/[+\-]\d\d:?\d\d$/.test(iso)){ iso += "Z"; }
+    var t = Date.parse(iso);
+    return isNaN(t) ? 0 : t;
+  }
+  // recencyLevel: 3=hoy/ayer, 2=esta quincena, 1=mes y medio, 0=viejo/sin fecha.
+  function recencyLevel(s){
+    var t = tsMillis(s);
+    if(!t){ return 0; }
+    var days = (Date.now() - t) / 86400000;
+    if(days < 2){ return 3; }
+    if(days < 14){ return 2; }
+    if(days < 45){ return 1; }
+    return 0;
+  }
+  function glowFor(level, color){
+    if(level >= 3){ return "0 0 18px " + color + "cc, 0 0 6px " + color; }
+    if(level === 2){ return "0 0 11px " + color + "88"; }
+    if(level === 1){ return "0 0 5px " + color + "55"; }
+    return "none";
+  }
+  // curve: bezier cuadrática con una leve curvatura perpendicular (hilos orgánicos).
+  function curve(x1, y1, x2, y2){
+    var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    var bow = 5;
+    var cx = mx + (-dy / len) * bow, cy = my + (dx / len) * bow;
+    return "M" + x1 + "," + y1 + " Q" + cx.toFixed(1) + "," + cy.toFixed(1) + " " + x2.toFixed(1) + "," + y2.toFixed(1);
+  }
+
+  // renderGraph dibuja el grafo de conocimiento de DOS NIVELES (dominios → temas) con
+  // tamaño por cantidad, brillo por recencia y aristas curvas con peso. El dominio en
+  // gExpanded muestra sus temas; gFilter atenúa el resto. Determinista (posiciones
+  // estables entre refrescos). El estado de hover/clic se re-engancha en cada render.
+  function renderGraph(snap){
+    var graph = snap.graph || {};
+    var domains = (graph.domains || []).slice(0, 8);
+    var total = graph.total_observations || 0;
     txt("graph-hint", total + " obs · " + domains.length + " dominios");
-    var max = show.reduce(function(m, d){ return Math.max(m, d.count); }, 1);
-    var n = show.length;
-    var lines = "", nodes = "";
-    nodes += '<div class="node center" style="left:50%; top:50%;"><div class="bub"><span class="big">結</span><span class="sm">' + total + ' obs</span></div></div>';
-    for(var i = 0; i < n; i++){
-      var ang = (-90 + i * (360 / Math.max(n, 1))) * Math.PI / 180;
-      var x = 50 + 37 * Math.cos(ang);
-      var y = 50 + 40 * Math.sin(ang);
-      var size = 34 + Math.round((show[i].count / max) * 30);
-      var fs = 12 + Math.round((show[i].count / max) * 9);
-      lines += '<line x1="50" y1="50" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '"></line>';
-      nodes += '<div class="node c' + (i % 4) + '" style="left:' + x.toFixed(1) + '%; top:' + y.toFixed(1) + '%;">' +
-        '<div class="bub" style="width:' + size + 'px; height:' + size + 'px; font-size:' + fs + 'px;">' + show[i].count + '</div>' +
-        '<span class="nm">' + esc(show[i].domain) + '</span></div>';
+    var canvas = $("graph-canvas");
+    if(!domains.length){
+      canvas.innerHTML = '<div class="empty" style="position:absolute; left:0; top:44%; width:100%; text-align:center;">Sin temas todavía — la memoria está vacía.</div>';
+      return;
     }
-    g.innerHTML = '<svg class="edges" viewBox="0 0 100 100" preserveAspectRatio="none"><g stroke="#2a3350" stroke-width="0.22">' +
-      lines + '</g></svg>' + nodes;
+    var names = domains.map(function(d){ return d.domain; });
+    if(gExpanded && names.indexOf(gExpanded) < 0){ gExpanded = null; }
+    if(gExpanded === null){ gExpanded = domains[0].domain; } // por defecto, el más activo
+
+    var maxC = domains.reduce(function(m, d){ return Math.max(m, d.count); }, 1);
+    var n = domains.length, edgeOp = [0.14, 0.26, 0.38, 0.55];
+    var edges = "", nodes = "";
+
+    nodes += '<div class="gnode center" style="left:50%; top:50%;" data-kind="center">' +
+      '<div class="gb"><b>結</b><i>' + total + ' obs</i></div></div>';
+
+    for(var i = 0; i < n; i++){
+      var dn = domains[i];
+      var ang = (-90 + i * (360 / n)) * Math.PI / 180;
+      var R = 26, x = 50 + R * Math.cos(ang), y = 50 + R * Math.sin(ang);
+      var ratio = Math.sqrt(dn.count / maxC);
+      var size = 32 + Math.round(ratio * 34), fs = 13 + Math.round(ratio * 7);
+      var col = colorFor(dn.domain), lvl = recencyLevel(dn.last_activity);
+      var sel = (dn.domain === gExpanded), faded = (gFilter && gFilter !== dn.domain) ? " faded" : "";
+      var ntopics = (dn.topics || []).length;
+
+      edges += '<path class="gedge" d="' + curve(50, 50, x, y) + '" stroke="' + col +
+        '" stroke-width="' + (0.25 + ratio * 1.0).toFixed(2) + '" stroke-opacity="' + (sel ? 0.7 : edgeOp[lvl]) + '"></path>';
+      nodes += '<div class="gnode' + faded + (sel ? ' sel' : '') + '" data-kind="domain" data-dom="' + esc(dn.domain) +
+        '" style="left:' + x.toFixed(1) + '%; top:' + y.toFixed(1) + '%;">' +
+        '<div class="gb" style="width:' + size + 'px; height:' + size + 'px; font-size:' + fs + 'px; color:' + col +
+        '; border-color:' + col + '; box-shadow:' + glowFor(lvl, col) + ';">' + dn.count + '</div>' +
+        '<span class="gl">' + esc(dn.domain) + '<em>' + ntopics + (ntopics === 1 ? ' tema' : ' temas') + '</em></span></div>';
+
+      if(sel && dn.topics && dn.topics.length){
+        var tops = dn.topics.slice(0, 5), k = tops.length;
+        var spread = Math.min(78, 20 + k * 12);
+        for(var j = 0; j < k; j++){
+          var off = (k === 1) ? 0 : (j - (k - 1) / 2) * (spread / (k - 1));
+          var tang = ang + off * Math.PI / 180, Rt = R + 14;
+          var tx = 50 + Rt * Math.cos(tang), ty = 50 + Rt * Math.sin(tang);
+          var tl = tops[j], tlvl = recencyLevel(tl.last_activity);
+          var tsize = 22 + Math.round(Math.sqrt(tl.count / dn.count) * 14);
+          edges += '<path class="gedge" d="' + curve(x, y, tx, ty) + '" stroke="' + col +
+            '" stroke-width="0.5" stroke-opacity="' + edgeOp[tlvl] + '"></path>';
+          nodes += '<div class="gnode topic" data-kind="topic" data-dom="' + esc(dn.domain) + '" data-topic="' + esc(tl.topic) +
+            '" style="left:' + tx.toFixed(1) + '%; top:' + ty.toFixed(1) + '%;">' +
+            '<div class="gb" style="width:' + tsize + 'px; height:' + tsize + 'px; font-size:11px; color:' + col +
+            '; border-color:' + col + '99; box-shadow:' + glowFor(Math.max(0, tlvl - 1), col) + ';">' + tl.count + '</div>' +
+            '<span class="gl" style="font-size:9px;">' + esc(tl.topic) + '</span></div>';
+        }
+      }
+    }
+    canvas.innerHTML = '<svg class="edges" viewBox="0 0 100 100" preserveAspectRatio="none">' + edges + '</svg>' + nodes;
+    attachGraphEvents(domains);
+  }
+
+  function findLeaf(dn, topic){
+    if(!dn || !dn.topics){ return null; }
+    for(var i = 0; i < dn.topics.length; i++){ if(dn.topics[i].topic === topic){ return dn.topics[i]; } }
+    return null;
+  }
+  // exampleGist busca en las memorias recientes un ejemplo legible del dominio/tema.
+  function exampleGist(domain, topic){
+    for(var i = 0; i < gRecent.length; i++){
+      var tk = gRecent[i].topic_key || "";
+      if(domainOf(tk) !== domain){ continue; }
+      if(topic){ var leaf = tk.indexOf("/") > 0 ? tk.slice(tk.indexOf("/") + 1) : tk; if(leaf !== topic){ continue; } }
+      return gRecent[i].gist;
+    }
+    return "";
+  }
+
+  function attachGraphEvents(domains){
+    var tip = $("gtip"), byDom = {};
+    domains.forEach(function(d){ byDom[d.domain] = d; });
+    var nodes = document.querySelectorAll('#graph-canvas .gnode[data-kind="domain"], #graph-canvas .gnode[data-kind="topic"]');
+    Array.prototype.forEach.call(nodes, function(el){
+      el.addEventListener("mouseenter", function(){ showTip(el, byDom, tip); });
+      el.addEventListener("mousemove", function(ev){ moveTip(ev, tip); });
+      el.addEventListener("mouseleave", function(){ tip.classList.remove("show"); });
+      el.addEventListener("click", function(){ onGraphClick(el); });
+    });
+  }
+  function showTip(el, byDom, tip){
+    var kind = el.getAttribute("data-kind"), dom = el.getAttribute("data-dom"), title, meta, snip;
+    if(kind === "domain"){
+      var d = byDom[dom] || { count: 0, topics: [], last_activity: "" };
+      title = dom;
+      meta = d.count + (d.count === 1 ? " memoria" : " memorias") + " · " + (d.topics || []).length + " temas<br>última actividad " + (ago(d.last_activity) || "—");
+      snip = exampleGist(dom, null);
+    } else {
+      var topic = el.getAttribute("data-topic"), leaf = findLeaf(byDom[dom], topic);
+      title = dom + " / " + topic;
+      meta = (leaf ? leaf.count : 0) + " memorias · última " + (leaf ? (ago(leaf.last_activity) || "—") : "—");
+      snip = exampleGist(dom, topic);
+    }
+    tip.innerHTML = '<div class="gtt">' + esc(title) + '</div><div class="gtm">' + meta + '</div>' +
+      (snip ? '<div class="gts">“' + esc(snip) + '”</div>' : '');
+    tip.classList.add("show");
+  }
+  function moveTip(ev, tip){
+    var host = $("graph"), r = host.getBoundingClientRect();
+    var x = ev.clientX - r.left + 14, y = ev.clientY - r.top + 14;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if(x + tw > r.width){ x = ev.clientX - r.left - tw - 14; }
+    if(y + th > r.height){ y = r.height - th - 4; }
+    if(x < 0){ x = 4; }
+    if(y < 0){ y = 4; }
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  function onGraphClick(el){
+    var dom = el.getAttribute("data-dom");
+    if(!dom){ return; }
+    gExpanded = dom;
+    gFilter = (gFilter === dom) ? null : dom; // segundo clic en el mismo dominio = quita el filtro
+    renderGraph(gSnap);
+    renderRecent(gRecent);
   }
 
   var memPalette = ["#2dd4bf", "#4ade80", "#fbbf24", "#a78bfa"];
@@ -367,11 +530,8 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
     return memPalette[h % memPalette.length];
   }
   function ago(s){
-    if(!s){ return ""; }
-    var iso = s.indexOf("T") < 0 ? s.replace(" ", "T") : s;
-    if(iso.indexOf("Z") < 0 && !/[+\-]\d\d:?\d\d$/.test(iso)){ iso += "Z"; }
-    var t = Date.parse(iso);
-    if(isNaN(t)){ return ""; }
+    var t = tsMillis(s);
+    if(!t){ return ""; }
     var d = (Date.now() - t) / 1000;
     if(d < 0){ d = 0; }
     if(d < 60){ return "hace " + Math.round(d) + "s"; }
@@ -381,21 +541,29 @@ body{background:var(--bg); color:var(--txt); font-family:var(--mono); -webkit-fo
   }
 
   function renderRecent(list){
-    txt("mem-hint", list.length + " memorias");
-    var memEl = $("mem-list"), actEl = $("activity");
-    if(!list.length){
-      memEl.innerHTML = '<div class="empty">Todavía no hay memorias guardadas en este proyecto.</div>';
-      actEl.innerHTML = '<div class="empty">Sin actividad aún.</div>';
+    var memEl = $("mem-list"), actEl = $("activity"), hintEl = $("mem-hint");
+    var data = gFilter ? list.filter(function(m){ return domainOf(m.topic_key) === gFilter; }) : list;
+    if(gFilter){
+      hintEl.innerHTML = '<span class="filterchip">' + esc(gFilter) + ' ✕</span>';
+      var chip = hintEl.querySelector(".filterchip");
+      if(chip){ chip.addEventListener("click", function(){ gFilter = null; renderGraph(gSnap); renderRecent(gRecent); }); }
+    } else {
+      hintEl.textContent = list.length + " memorias";
+    }
+    if(!data.length){
+      var msg = gFilter ? ('No hay memorias recientes de «' + esc(gFilter) + '» (puede haber más antiguas).') : 'Todavía no hay memorias guardadas en este proyecto.';
+      memEl.innerHTML = '<div class="empty">' + msg + '</div>';
+      actEl.innerHTML = '<div class="empty">Sin actividad' + (gFilter ? ' de este dominio.' : ' aún.') + '</div>';
       return;
     }
-    memEl.innerHTML = list.slice(0, 6).map(function(m){
+    memEl.innerHTML = data.slice(0, 6).map(function(m){
       var col = colorFor(domainOf(m.topic_key));
       return '<div class="mem"><div class="mem-top">' +
         '<span class="badge" style="color:' + col + '; border-color:' + col + '55;">' + esc(m.topic_key) + '</span>' +
         '<span class="when">' + esc(ago(m.created_at)) + '</span></div>' +
         '<div class="mem-gist">' + esc(m.gist) + '</div></div>';
     }).join("");
-    actEl.innerHTML = list.map(function(m){
+    actEl.innerHTML = data.map(function(m){
       return '<div class="tl"><span class="tl-when">' + esc(ago(m.created_at)) + '</span>' +
         '<span class="tl-topic">' + esc(domainOf(m.topic_key)) + '</span>' +
         '<span class="tl-snip">' + esc(m.gist) + '</span></div>';

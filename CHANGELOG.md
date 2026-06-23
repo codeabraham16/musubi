@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-06-23
+
+### Added
+- **Grafo de conocimiento interactivo** (Track 11): el mapa pasa de una «estrella» plana a un grafo de
+  **dos niveles, vivo y explorable**:
+  - **Drill-down**: cada dominio se abre en sus **sub-temas reales** (`roadmap` → `track-8`, `track-7`…);
+    arranca con el más activo ya expandido. Clic en un dominio lo abre **y filtra** las memorias de abajo.
+  - **Brillo por recencia**: los temas con actividad reciente brillan; los viejos se apagan.
+  - **Hover** → tooltip con conteo, «última actividad hace X» y un ejemplo de memoria.
+  - **Aristas curvas con peso** (grosor ∝ nº de memorias, opacidad ∝ recencia) + leyenda.
+- **`DbEngine.TopicTree()`** (`internal/memory/topics.go`): arma el árbol dominio → temas de las
+  observaciones activas, con conteo y última actividad por nodo (`DomainNode`/`TopicLeaf`). El snapshot de
+  `export` ahora expone ese árbol en `graph.domains` (antes solo `{domain, count}`).
+
+### Changed
+- `graph.domains` del snapshot ahora es el árbol enriquecido (cada dominio trae `last_activity` y `topics`).
+- Las memorias recientes del snapshot suben de 12 a 20 (mejor cobertura del filtro por dominio).
+
 ## [0.54.0] - 2026-06-23
 
 ### Added
