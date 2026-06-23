@@ -35,6 +35,46 @@ func (e *DbEngine) CountObservations() (int, error) {
 	return n, nil
 }
 
+// ObsCard es una memoria en forma LEGIBLE para humanos (dashboard/observabilidad):
+// su tema, el resumen (gist), cuándo se guardó y su importancia. Read-only.
+type ObsCard struct {
+	TopicKey   string  `json:"topic_key"`
+	Gist       string  `json:"gist"`
+	CreatedAt  string  `json:"created_at"`
+	Importance float64 `json:"importance"`
+}
+
+// RecentObservations devuelve las últimas observaciones NO archivadas (más nuevas
+// primero) en forma legible, para los paneles "lo que Musubi recuerda" y "actividad
+// reciente". Si una no tiene gist, cae a un recorte del contenido. limit<=0 usa 12.
+func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
+	if limit <= 0 {
+		limit = 12
+	}
+	rows, err := e.db.Query(`
+		SELECT topic_key,
+		       COALESCE(NULLIF(gist, ''), substr(content, 1, 160)) AS summary,
+		       COALESCE(created_at, ''),
+		       COALESCE(importance, 1.0)
+		FROM observations
+		WHERE archived = 0
+		ORDER BY created_at DESC, rowid DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("memorias recientes: %w", err)
+	}
+	defer rows.Close()
+	var out []ObsCard
+	for rows.Next() {
+		var c ObsCard
+		if err := rows.Scan(&c.TopicKey, &c.Gist, &c.CreatedAt, &c.Importance); err != nil {
+			return nil, fmt.Errorf("memorias recientes: escanear: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SaveObservation inserta o actualiza una observación y su vector. Computa de
 // forma model-free el gist, el content_hash y la estimación de tokens. La
 // importancia no se toca en updates (se preserva la existente).

@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-06-23
+
+### Added
+- **Dashboard legible** (Track 11): el dashboard deja de ser solo métricas técnicas y suma contenido que un
+  humano puede leer para familiarizarse con Musubi:
+  - **«Lo que Musubi recuerda»**: las memorias reales del proyecto en lenguaje claro (tema + resumen + hace
+    cuánto), no solo conteos.
+  - **«Actividad reciente»**: una línea de tiempo cronológica de lo último que se guardó (la memoria
+    «creciendo» mientras trabajás).
+  - **Explicaciones**: cada sección técnica con una línea que la traduce a lenguaje claro + tooltips en los
+    KPIs.
+- **`DbEngine.RecentObservations(limit)`** (`internal/memory/operations.go`): devuelve las últimas
+  observaciones NO archivadas en forma legible (`ObsCard`: tema, gist, fecha, importancia); cae al recorte
+  del contenido si falta el gist. El snapshot de `export` ahora incluye el campo `recent`.
+
+### Notes
+- Frontend en `cmd/musubi/assets/dashboard.html` (data-driven). Tests: `TestRecentObservations` y la
+  verificación de `recent` en `TestBuildExportSnapshot`.
+
 ## [0.53.0] - 2026-06-23
 
 ### Added

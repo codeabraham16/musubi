@@ -25,6 +25,7 @@ type exportSnapshot struct {
 	Insights    memory.InsightsReport `json:"insights"`
 	Tokens      memory.BudgetStatus   `json:"tokens"`
 	Graph       exportGraph           `json:"graph"`
+	Recent      []memory.ObsCard      `json:"recent"`
 }
 
 // exportGraph es el mapa de conocimiento: total de observaciones activas y su
@@ -66,6 +67,12 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 		return snap, fmt.Errorf("export: dominios: %w", err)
 	}
 	snap.Graph = exportGraph{TotalObservations: ins.Observations.Active, Domains: domains}
+
+	recent, err := engine.RecentObservations(12)
+	if err != nil {
+		return snap, fmt.Errorf("export: memorias recientes: %w", err)
+	}
+	snap.Recent = recent
 
 	return snap, nil
 }
