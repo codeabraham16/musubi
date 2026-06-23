@@ -1,6 +1,6 @@
 <div align="center">
 
-![Musubi — servidor MCP de memoria persistente](.github/assets/banner.svg)
+![Musubi — servidor MCP de memoria persistente](.github/assets/hero.svg)
 
 <h1>Musubi</h1>
 
