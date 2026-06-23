@@ -8,7 +8,7 @@
 :root{
   --bg:#0a0e16; --bg2:#0b0f17;
   --panel:#0e1524; --panelp:#13102330; --line:#1f2839; --line-hi:#33405a; --line2:#161d2b;
-  --txt:#e8eef5; --muted:#97a2b2; --dim:#6b7689;
+  --txt:#e8eef5; --muted:#9aa5b5; --dim:#79839a;
   --teal:#2dd4bf; --purple:#a78bfa; --green:#4ade80; --amber:#fbbf24; --red:#f87171;
   --teal-d:rgba(45,212,191,.5); --purple-d:rgba(167,139,250,.5); --green-d:rgba(74,222,128,.5);
   --mono:'SF Mono','Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;
@@ -144,9 +144,9 @@ body{
 .foot .src{margin-left:auto;}
 .foot code{color:var(--muted);}
 
-/* skeleton de carga — sin parpadeo brusco, todo legible apenas llega el snapshot */
-.loading .card .v, .loading .gauge .pct{color:transparent; position:relative;}
-.loading .card .v::after, .loading .gauge .pct::after{content:""; position:absolute; left:0; top:50%; transform:translateY(-50%); width:56px; height:.66em; border-radius:5px; background:linear-gradient(90deg,var(--line2),var(--line-hi),var(--line2)); background-size:200% 100%; animation:shimmer 1.3s linear infinite;}
+/* estado de carga: el valor placeholder se atenúa mientras llega el 1er snapshot
+   (la barra superior indeterminada es la señal de carga; sin ocultar contenido) */
+.loading .card .v, .loading .gauge .pct{opacity:.25;}
 
 /* explicaciones en lenguaje claro */
 .explain{font-size:11px; color:var(--dim); margin:0 0 16px; line-height:1.55; max-width:760px;}
@@ -171,11 +171,15 @@ body{
 .tl .tl-snip{color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;}
 
 @keyframes slide{0%{left:-40%;} 100%{left:100%;}}
-@keyframes shimmer{0%{background-position:200% 0;} 100%{background-position:-200% 0;}}
 @media (prefers-reduced-motion: no-preference){
   .dot.live{animation:pulse 2.4s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
   @keyframes pop{0%{opacity:0; transform:translate(-50%,-50%) scale(.6);} 100%{opacity:1; transform:translate(-50%,-50%) scale(1);}}
+}
+/* sin movimiento: los loaders decorativos quedan estáticos pero legibles */
+@media (prefers-reduced-motion: reduce){
+  .loadbar::before{animation:none; left:0; width:100%; opacity:.6;}
+  *{transition-duration:.01ms !important;}
 }
 @media (max-width:880px){ .kpis{grid-template-columns:repeat(2,1fr);} .grid2{grid-template-columns:1fr;} .gov{grid-template-columns:1fr; justify-items:center;} }
 </style>
@@ -335,7 +339,7 @@ body{
     var from = parseFloat(el.getAttribute("data-n"));
     if(isNaN(from)){ from = 0; }
     if(reduceMotion || from === to){ el.textContent = fmtFn(to); el.setAttribute("data-n", to); return; }
-    var start = null, dur = 620;
+    var start = null, dur = 400;
     requestAnimationFrame(function frame(ts){
       if(start === null){ start = ts; }
       var p = Math.min(1, (ts - start) / dur), e = 1 - Math.pow(1 - p, 3);
@@ -501,7 +505,7 @@ body{
         '" stroke-width="' + (0.25 + ratio * 1.0).toFixed(2) + '" stroke-opacity="' + (sel ? 0.7 : edgeOp[lvl]) + '"></path>';
       nodes += '<div class="gnode' + faded + (sel ? ' sel' : '') + '" data-kind="domain" data-dom="' + esc(dn.domain) +
         '" tabindex="0" role="button" aria-label="Dominio ' + esc(dn.domain) + ', ' + dn.count + ' memorias, ' + ntopics + ' temas. Abrir y filtrar."' +
-        ' style="left:' + x.toFixed(1) + '%; top:' + y.toFixed(1) + '%;">' +
+        ' style="left:' + x.toFixed(1) + '%; top:' + y.toFixed(1) + '%; animation-delay:' + (i * 35) + 'ms;">' +
         '<div class="gb" style="width:' + size + 'px; height:' + size + 'px; font-size:' + fs + 'px; color:' + col +
         '; border-color:' + col + '; box-shadow:' + glowFor(lvl, col) + ';">' + dn.count + '</div>' +
         '<span class="gl">' + esc(dn.domain) + '<em>' + ntopics + (ntopics === 1 ? ' tema' : ' temas') + '</em></span></div>';
@@ -519,7 +523,7 @@ body{
             '" stroke-width="0.5" stroke-opacity="' + edgeOp[tlvl] + '"></path>';
           nodes += '<div class="gnode topic" data-kind="topic" data-dom="' + esc(dn.domain) + '" data-topic="' + esc(tl.topic) +
             '" tabindex="0" role="button" aria-label="Tema ' + esc(dn.domain) + ' / ' + esc(tl.topic) + ', ' + tl.count + ' memorias."' +
-            ' style="left:' + tx.toFixed(1) + '%; top:' + ty.toFixed(1) + '%;">' +
+            ' style="left:' + tx.toFixed(1) + '%; top:' + ty.toFixed(1) + '%; animation-delay:' + ((n + j) * 35) + 'ms;">' +
             '<div class="gb" style="width:' + tsize + 'px; height:' + tsize + 'px; font-size:11px; color:' + col +
             '; border-color:' + col + '99; box-shadow:' + glowFor(Math.max(0, tlvl - 1), col) + ';">' + tl.count + '</div>' +
             '<span class="gl" style="font-size:9px;">' + esc(tl.topic) + '</span></div>';
@@ -628,9 +632,15 @@ body{
     var memEl = $("mem-list"), actEl = $("activity"), hintEl = $("mem-hint");
     var data = gFilter ? list.filter(function(m){ return domainOf(m.topic_key) === gFilter; }) : list;
     if(gFilter){
-      hintEl.innerHTML = '<span class="filterchip">' + esc(gFilter) + ' ✕</span>';
+      hintEl.innerHTML = '<span class="filterchip" role="button" tabindex="0" aria-label="Quitar el filtro ' + esc(gFilter) + '">' + esc(gFilter) + ' ✕</span>';
       var chip = hintEl.querySelector(".filterchip");
-      if(chip){ chip.addEventListener("click", function(){ gFilter = null; renderGraph(gSnap); renderRecent(gRecent); }); }
+      if(chip){
+        var clearFilter = function(){ gFilter = null; renderGraph(gSnap); renderRecent(gRecent); };
+        chip.addEventListener("click", clearFilter);
+        chip.addEventListener("keydown", function(ev){
+          if(ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar"){ ev.preventDefault(); clearFilter(); }
+        });
+      }
     } else {
       hintEl.textContent = list.length + " memorias";
     }

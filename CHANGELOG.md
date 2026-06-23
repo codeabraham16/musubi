@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-06-23
+
+### Added
+- **Auditoría UX del dashboard contra el skill `ui-ux-pro-max`** (Track 11): se aplicó el *pre-delivery
+  checklist* del skill (reglas de accesibilidad, timing de animación y contraste). El dashboard ya cumplía la
+  mayoría (focos visibles, teclado en el grafo, *skeleton*, cifras tabulares, formato locale, sin emojis como
+  iconos); esta release cierra los gaps detectados.
+
+### Changed
+- **Movimiento reducido**: la barra de carga deja de animarse bajo `prefers-reduced-motion: reduce` y se
+  acortan todas las transiciones — el movimiento es 100% opcional. El *placeholder* de carga pasa de un
+  *shimmer* de texto (que con `color:transparent` podía dejar los números de los KPIs invisibles en algunos
+  *frames*) a un simple atenuado por opacidad: la barra superior indeterminada es la única señal de carga y
+  nunca oculta contenido.
+- **Chip de filtro accesible**: el chip «dominio ✕» del panel de memorias pasa a ser un control de verdad
+  (`role="button"`, `tabindex`, `aria-label`) y se puede limpiar el filtro con `Enter`/`Espacio` (antes era
+  solo *click*).
+- **Timing de micro-interacción**: el *count-up* de KPIs y gauge baja de 620 ms a **400 ms** (regla del skill:
+  micro-interacciones ≤ 400 ms).
+- **Reveal escalonado**: los nodos del grafo aparecen con *stagger* de 35 ms por nodo (más natural; bajo
+  movimiento reducido aparecen al instante).
+- **Contraste AA**: el color de texto secundario `--dim` sube a ~4.6:1 sobre el fondo (antes ~4.2:1) para
+  cumplir el mínimo 4.5:1 de texto normal.
+
 ## [0.56.0] - 2026-06-23
 
 ### Added
