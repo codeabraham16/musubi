@@ -7,6 +7,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-06-23
+
+### Added
+- **`musubi export`** (observabilidad): nuevo subcomando CLI que vuelca un **snapshot JSON** del estado de
+  la memoria —salud (`doctor`), insights, ledger de tokens (`tokens`) y un **mapa de conocimiento** por
+  dominio de topic— en stdout o a un archivo (`--out <ruta>`). Read-only, model-free, una sola pasada.
+  Es la fuente de datos estable para dashboards y observabilidad externa: reúne las mismas vistas que las
+  tools MCP en un único documento con forma fija que consumen las UIs.
+- **`DbEngine.TopicDomainCounts()`** (`internal/memory/topics.go`): agrega las observaciones activas por el
+  **dominio** del topic (prefijo antes del primer `/`; `roadmap/track-7` → `roadmap`), ordenado por cantidad.
+  Alimenta el mapa de conocimiento sin LLM (agregación SQL determinista).
+
+### Notes
+- `buildExportSnapshot` (`cmd/musubi/export.go`) compone el documento reusando `Diagnose`/`Insights`/
+  `LedgerStatus().Budget`/`TopicDomainCounts`; sin duplicar lógica. Tests: `TestBuildExportSnapshot`,
+  `TestTopicDomainCounts`.
+
 ## [0.51.0] - 2026-06-22
 
 ### Added
