@@ -64,7 +64,7 @@ func runDashboard(args []string) {
 	}
 
 	srv := &http.Server{
-		Handler:           dashboardHandler(engine, cfg.Memory.SessionTokenBudget),
+		Handler:           dashboardHandler(engine, cfg.Memory.SessionTokenBudget, projectLabel(root)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -92,7 +92,7 @@ func runDashboard(args []string) {
 
 // dashboardHandler arma el router: el HTML embebido en / y el snapshot JSON en vivo
 // en /api/snapshot. Aislado para poder testearlo con httptest.
-func dashboardHandler(engine *memory.DbEngine, budget int) http.Handler {
+func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.Handler {
 	mux := http.NewServeMux()
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
 
@@ -102,6 +102,7 @@ func dashboardHandler(engine *memory.DbEngine, budget int) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		snap.Project = project
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(snap)
