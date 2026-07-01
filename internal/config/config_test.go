@@ -252,6 +252,12 @@ func TestLoadMultiAgentDefaults(t *testing.T) {
 	if cfg.MultiAgent.MaxBatchUnits != 50 {
 		t.Errorf("esperaba max_batch_units 50 por defecto, obtuve %d", cfg.MultiAgent.MaxBatchUnits)
 	}
+	if cfg.MultiAgent.AvoidedContextTokensPerUnit != 4000 {
+		t.Errorf("esperaba avoided_context_tokens_per_unit 4000 por defecto, obtuve %d", cfg.MultiAgent.AvoidedContextTokensPerUnit)
+	}
+	if cfg.MultiAgent.DelegationOverheadTokens != 2000 {
+		t.Errorf("esperaba delegation_overhead_tokens 2000 por defecto, obtuve %d", cfg.MultiAgent.DelegationOverheadTokens)
+	}
 }
 
 func TestLoadMultiAgentDisableRespected(t *testing.T) {

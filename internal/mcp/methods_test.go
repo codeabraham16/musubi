@@ -677,10 +677,11 @@ func TestSaveSkillExistingFileWithOverwrite(t *testing.T) {
 	}
 
 	_, e := call(t, s, "musubi_save_skill", map[string]interface{}{
-		"name":      "mi-skill",
-		"triggers":  []string{"*.go"},
-		"rules":     "Regla de prueba suficientemente larga para pasar validación.",
-		"overwrite": true,
+		"name":        "mi-skill",
+		"description": "Aplica convenciones de Go. Use when editando archivos .go.",
+		"triggers":    []string{"*.go"},
+		"rules":       "Regla de prueba suficientemente larga para pasar validación.",
+		"overwrite":   true,
 	})
 	if e != nil {
 		t.Errorf("esperaba éxito con overwrite=true, obtuve %+v", e)
@@ -693,9 +694,10 @@ func TestSaveSkillRoundTrip(t *testing.T) {
 	s := newTestServerWithPath(t, root)
 
 	_, e := call(t, s, "musubi_save_skill", map[string]interface{}{
-		"name":     "roundtrip-skill",
-		"triggers": []string{"*.go", "*.ts"},
-		"rules":    "Regla de prueba suficientemente larga para verificar el round-trip completo.",
+		"name":        "roundtrip-skill",
+		"description": "Aplica convenciones al editar. Use when trabajando con .go o .ts.",
+		"triggers":    []string{"*.go", "*.ts"},
+		"rules":       "Regla de prueba suficientemente larga para verificar el round-trip completo.",
 	})
 	if e != nil {
 		t.Fatalf("guardado falló: %+v", e)

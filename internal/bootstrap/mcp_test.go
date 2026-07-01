@@ -72,3 +72,43 @@ func TestMergeInvalidExisting(t *testing.T) {
 		t.Fatal("esperaba error con .mcp.json inválido")
 	}
 }
+
+func TestRemoteEntryTokenPorEnv(t *testing.T) {
+	e := RemoteEntry("https://box.tailnet:7717/mcp", "MUSUBI_TOKEN")
+	if e.Type != "http" || e.URL != "https://box.tailnet:7717/mcp" {
+		t.Fatalf("entrada remota mal formada: %+v", e)
+	}
+	// El secreto NO va en el archivo: solo una referencia ${ENV} que el cliente expande.
+	if got := e.Headers["Authorization"]; got != "Bearer ${MUSUBI_TOKEN}" {
+		t.Errorf("header Authorization = %q, quería referencia por env", got)
+	}
+	// Sin tokenEnv no hay headers (bind loopback/confiable).
+	if bare := RemoteEntry("http://127.0.0.1:7717/mcp", ""); len(bare.Headers) != 0 {
+		t.Errorf("sin tokenEnv no debería haber headers, obtuve %+v", bare.Headers)
+	}
+}
+
+func TestMergeRemotePreservaYReemplaza(t *testing.T) {
+	// Cerebro remoto conviviendo con un servidor stdio existente.
+	existing := []byte(`{"mcpServers":{"local":{"command":"musubi.exe","args":["daemon"]}}}`)
+	out, err := MergeRemoteMCPServer(existing, "musubi-brain", RemoteEntry("https://box:7717/mcp", "MUSUBI_TOKEN"))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	var root struct {
+		MCPServers map[string]map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatalf("salida inválida: %v\n%s", err, out)
+	}
+	if len(root.MCPServers) != 2 {
+		t.Fatalf("esperaba 2 servidores (local + musubi-brain), obtuve %d", len(root.MCPServers))
+	}
+	brain := root.MCPServers["musubi-brain"]
+	if string(brain["type"]) != `"http"` {
+		t.Errorf("el cerebro remoto debería ser type http, obtuve %s", brain["type"])
+	}
+	if _, ok := root.MCPServers["local"]["command"]; !ok {
+		t.Error("se perdió el servidor stdio 'local'")
+	}
+}
