@@ -24,7 +24,7 @@ func skillsByName(sks []skills.Skill) map[string]skills.Skill {
 func TestCognitiveSkillsBundleCompleto(t *testing.T) {
 	sks := cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}})
 	m := skillsByName(sks)
-	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile", "orchestrate-multiagent", "audit-structure-flow"} {
+	for _, name := range []string{"analyze-project", "deduce-conventions", "plan-ahead", "project-profile", "orchestrate-multiagent", "audit-structure-flow", "sdd-flow", "adversarial-review", "designing-web-ui"} {
 		if _, ok := m[name]; !ok {
 			t.Errorf("falta la skill cognitiva %q en el bundle: %v", name, m)
 		}
@@ -43,6 +43,57 @@ func TestAuditSkillEnBundle(t *testing.T) {
 	for _, must := range []string{"ALTO", "código muerto", "musubi_save_observation"} {
 		if !strings.Contains(sk.Rules, must) {
 			t.Errorf("las reglas de audit-structure-flow deben mencionar %q", must)
+		}
+	}
+}
+
+// TestCognitiveSkillsPasanElGateDeCalidad es DOGFOODING: las skills que Musubi
+// escribe en cada proyecto deben pasar su propio validador de calidad (sin errores).
+func TestCognitiveSkillsPasanElGateDeCalidad(t *testing.T) {
+	for _, sk := range cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}) {
+		report := skills.ValidateSkillQuality(sk)
+		if !report.OK() {
+			t.Errorf("la skill cognitiva %q no pasa el gate de calidad: %+v", sk.Name, report.Errors)
+		}
+	}
+}
+
+func TestWebUISkillEnBundle(t *testing.T) {
+	m := skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Node.js"}}))
+	sk, ok := m["designing-web-ui"]
+	if !ok {
+		t.Fatal("falta la skill designing-web-ui en el bundle cognitivo")
+	}
+	// Debe dispararse en archivos web y traer un ejemplo (bloque de código).
+	if len(sk.Triggers) == 0 || !strings.Contains(strings.Join(sk.Triggers, ","), "*.css") {
+		t.Errorf("designing-web-ui debe dispararse en archivos web, triggers=%v", sk.Triggers)
+	}
+	if !strings.Contains(sk.Rules, "```") {
+		t.Error("designing-web-ui debería incluir un ejemplo de código")
+	}
+}
+
+func TestSDDFlowYAdversarialReviewEnBundle(t *testing.T) {
+	m := skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}))
+
+	flow, ok := m["sdd-flow"]
+	if !ok {
+		t.Fatal("falta la skill sdd-flow en el bundle")
+	}
+	for _, must := range []string{"musubi_sdd", "action=start", "sdd/<change>"} {
+		if !strings.Contains(flow.Rules, must) {
+			t.Errorf("sdd-flow debe mencionar %q", must)
+		}
+	}
+
+	rev, ok := m["adversarial-review"]
+	if !ok {
+		t.Fatal("falta la skill adversarial-review en el bundle")
+	}
+	// Debe documentar el patrón judgment-day: escépticos, mayoría y cableado a musubi_judge.
+	for _, must := range []string{"musubi_work", "mayoría", "musubi_judge"} {
+		if !strings.Contains(rev.Rules, must) {
+			t.Errorf("adversarial-review debe mencionar %q", must)
 		}
 	}
 }

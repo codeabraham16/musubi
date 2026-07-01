@@ -125,6 +125,55 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"4. No marques patrones normales (un hub de wiring, un archivo grande pero cohesivo, un entrypoint con IO) salvo que tengan costo concreto. Nunca propongas reescrituras: la acción más chica de mayor impacto.\n" +
 				"5. Separá estructura (forma estática) de flujo (recorrido dinámico). Cada hallazgo: severidad + evidencia (ruta:símbolo) + acción. Guardá el resultado con musubi_save_observation (topic_key 'audit/...') e incluí un Top 3 de acciones.\n",
 		},
+		{
+			Name:         "sdd-flow",
+			Description:  "Conduce features medianas-grandes con Spec-Driven Development guiado (musubi_sdd), encarnando el rol de cada fase.",
+			Triggers:     []string{"*"},
+			Capabilities: []string{},
+			Rules: "Para un cambio no trivial (varias fases, 2+ archivos, decisiones de diseño), usá el flujo SDD guiado en vez de improvisar:\n" +
+				"1. Arrancá con musubi_sdd action=start change=<nombre>. Devuelve la fase activa, su ROL y su directiva; ENCARNÁ ese rol (proponente→especificador→diseñador→planificador→implementador→verificador→archivador).\n" +
+				"2. Trabajá la fase usando su plantilla (.musubi/templates/sdd/) y cerrala con musubi_sdd action=complete change=<c> phase=<f> summary=<resumen ejecutivo> [artifacts, risks, next_recommended]. Eso persiste el artefacto en memoria bajo sdd/<change>/<phase>.\n" +
+				"3. En implement NO releas lo ya visto: recuperá los artefactos previos con musubi_recall query='sdd/<change>' y los archivos con musubi_recall_code.\n" +
+				"4. En verify sé adversarial (ver la skill adversarial-review). Si una fase abarca trabajo paralelizable, delegá con la pizarra (orchestrate-multiagent) y medí el ahorro con musubi_work action=savings.\n" +
+				"5. El run es resumible: en otra sesión retomás con musubi_sdd action=status change=<c>.\n",
+		},
+		{
+			Name:         "adversarial-review",
+			Description:  "Revisión adversarial estilo juicio: verifica un cambio con escépticos independientes y veredicto por mayoría, con bucle de corrección.",
+			Triggers:     []string{"*"},
+			Capabilities: []string{},
+			Rules: "Antes de dar por bueno un cambio de riesgo (o en la fase verify de un flujo SDD), sometelo a una revisión ADVERSARIAL en vez de una sola lectura complaciente:\n" +
+				"1. Descomponé la revisión en unidades independientes y posteálas con musubi_work action=plan: una unidad por LENTE distinto (correctitud, seguridad, ¿reproduce el bug?, contrato de la spec). Guardá el batch_id.\n" +
+				"2. Lanzá N sub-agentes escépticos con el Task tool (mcpServers:[musubi]); a CADA uno instruílo a intentar REFUTAR el cambio desde su lente y devolver un veredicto {real|no_real + evidencia}, cerrando su unidad con musubi_work action=complete. Ante la duda, que falle.\n" +
+				"3. Aplicá VEREDICTO POR MAYORÍA sobre los results: si la mayoría refuta, hay que corregir. Iterá (fix → re-review) hasta que el cambio sobreviva o se descarte.\n" +
+				"4. Registrá el veredicto y lo aprendido con musubi_save_observation (topic_key 'review/<change>'); si el hallazgo contradice una memoria previa, resolvé la relación con musubi_judge.\n" +
+				"- La inteligencia (refutar, decidir) es tuya; Musubi coordina la pizarra sin colisiones y persiste el resultado.\n",
+		},
+		{
+			Name:         "designing-web-ui",
+			Description:  "Applies global web UI/UX design standards — visual hierarchy, spacing rhythm, typographic scale, accessible color contrast (WCAG AA), responsive layout and restrained motion. Use when editing HTML, CSS or component files or when building or restyling any user interface.",
+			Triggers:     []string{"*.html", "*.css", "*.tsx", "*.jsx", "*.vue", "*.svelte", "*.astro"},
+			Capabilities: []string{},
+			Rules: "Diseñá interfaces con jerarquía y ritmo, no por intuición. Reglas (derivadas de Refactoring UI + WCAG 2.1):\n" +
+				"1. Espaciado en escala 4/8px (4,8,12,16,24,32,48,64). Nunca valores arbitrarios: definí tokens y reusalos.\n" +
+				"2. Jerarquía por PESO y COLOR antes que por tamaño: texto principal alto contraste, secundario atenuado (mismo hue, menor lightness). Máximo 2-3 tamaños de fuente por vista.\n" +
+				"3. Escala tipográfica modular (12/14/16/20/24/32). line-height 1.5 en cuerpo, 1.2 en títulos.\n" +
+				"4. Contraste WCAG AA: >=4.5:1 texto normal, >=3:1 texto grande/íconos. Verificá siempre, no confíes en el ojo.\n" +
+				"5. Color: una familia neutra (grises) + 1 acento; estados semánticos (éxito/aviso/error) consistentes. Usá variables CSS, no hardcodees hex repetidos.\n" +
+				"6. Layout: grid/flex, ancho de lectura <=70ch, mobile-first con breakpoints, alineado a la grilla.\n" +
+				"7. Profundidad sutil: sombras suaves de una sola dirección (luz arriba), bordes de 1px de bajo contraste. Nada de sombras duras.\n" +
+				"8. Movimiento con propósito: transiciones 150-250ms ease-out; respetá prefers-reduced-motion.\n" +
+				"9. Accesibilidad: foco visible, labels/aria, targets >=44px, semántica HTML correcta.\n" +
+				"10. Consistencia: componentes reutilizables con tokens; nada de estilos ad-hoc por página.\n\n" +
+				"Ejemplo (tokens + jerarquía por color):\n" +
+				"```css\n" +
+				":root{ --space-4:16px; --text:#e8eaed; --muted:#9aa0a6; --accent:#4ade80; --line:#2a2d31; }\n" +
+				".card{ padding:var(--space-4); border:1px solid var(--line); border-radius:12px; }\n" +
+				".card .title{ font-size:20px; line-height:1.2; color:var(--text); font-weight:600; }\n" +
+				".card .meta{ font-size:13px; color:var(--muted); }\n" +
+				"```\n" +
+				"Antipatrón: 5 tamaños de fuente mezclados, hex repetidos, sombras duras, gris claro sobre blanco (<4.5:1).\n",
+		},
 	}
 }
 
