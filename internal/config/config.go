@@ -183,6 +183,16 @@ type MultiAgentConfig struct {
 	// MaxBatchUnits es el tope de unidades por batch, como cota de seguridad
 	// (default 50).
 	MaxBatchUnits int `yaml:"max_batch_units"`
+	// AvoidedContextTokensPerUnit estima el contexto intermedio (lecturas +
+	// razonamiento) que cada unidad delegada mantiene en el sub-agente y que NUNCA
+	// entra al contexto del orquestador. Es el motor del ahorro por delegación
+	// (default 4000). Model-free: parámetro del estimador, no una medición del
+	// sub-agente real.
+	AvoidedContextTokensPerUnit int `yaml:"avoided_context_tokens_per_unit"`
+	// DelegationOverheadTokens es el costo fijo de lanzar un sub-agente y correr el
+	// protocolo de la pizarra por unidad (default 2000). El ahorro neto por unidad es
+	// AvoidedContextTokensPerUnit - DelegationOverheadTokens.
+	DelegationOverheadTokens int `yaml:"delegation_overhead_tokens"`
 }
 
 // ConflictConfig controla la detección de relaciones semánticas entre
@@ -369,8 +379,10 @@ func Default() Config {
 			Phases:  []string{"explore", "plan", "code", "verify"},
 		},
 		MultiAgent: MultiAgentConfig{
-			Enabled:       true,
-			MaxBatchUnits: 50,
+			Enabled:                     true,
+			MaxBatchUnits:               50,
+			AvoidedContextTokensPerUnit: 4000,
+			DelegationOverheadTokens:    2000,
 		},
 		VectorIndex: VectorIndexConfig{
 			Enabled:         true,
@@ -601,8 +613,16 @@ func (c *Config) applyDefaults(present map[string]bool) {
 	// completar el tope.
 	if !present["multiagent"] {
 		c.MultiAgent = d.MultiAgent
-	} else if c.MultiAgent.MaxBatchUnits == 0 {
-		c.MultiAgent.MaxBatchUnits = d.MultiAgent.MaxBatchUnits
+	} else {
+		if c.MultiAgent.MaxBatchUnits == 0 {
+			c.MultiAgent.MaxBatchUnits = d.MultiAgent.MaxBatchUnits
+		}
+		if c.MultiAgent.AvoidedContextTokensPerUnit == 0 {
+			c.MultiAgent.AvoidedContextTokensPerUnit = d.MultiAgent.AvoidedContextTokensPerUnit
+		}
+		if c.MultiAgent.DelegationOverheadTokens == 0 {
+			c.MultiAgent.DelegationOverheadTokens = d.MultiAgent.DelegationOverheadTokens
+		}
 	}
 
 	// VectorIndex: ausente -> default completo (Enabled true); presente -> respetar
