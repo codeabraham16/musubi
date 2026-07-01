@@ -69,4 +69,55 @@ resumible entre sesiones y compactaciones. Musubi lo hace mejor en su propio ter
 - [x] A3 — loops (`repeat_while` + `max_iterations`) + validación expuesta (`validate`) + `list` runs → **Track A completo**
 - [x] B1 · B2 · B3 — multi-agente: abstracción `AgentTarget`, target Cursor (`.cursor/mcp.json`), detección + flag `--agent` → **Track B completo**
 
-**Plan completo.** Pendiente solo: release con Track B.
+**Tracks A/B/C completos.**
+
+---
+
+## Track O — Orquestación a paridad (Track 12: dos pilares)
+
+Extiende esta base para volver la orquestación un PILAR paritario con la memoria
+(decisión de trayecto 2026-06-30, ver memoria `roadmap/track-12-pilares`). No recorta
+nada; sube el nivel del pilar de orquestación y lo fusiona con la memoria.
+
+- [x] **O1 — `musubi_sdd`: flujo SDD guiado.** Genera el workflow canónico de un cambio
+  (proposal→spec→design→tasks→implement→verify→archive) sobre el motor DAG, sin YAML.
+  Surface por fase su directiva + plantilla; al cerrar una fase persiste su **contrato de
+  resultado** (summary/artifacts/risks/next_recommended) en memoria bajo
+  `sdd/<change>/<phase>` (upsert por id determinista). Las fases siguientes recuperan por
+  referencia barata. Es la fusión memoria↔orquestación.
+  Archivos: `internal/memory/sdd.go`, `internal/mcp/methods_sdd.go` (+ tests).
+- [x] **O2 — Medición de delegación** (token governor × pizarra): `musubi_work action=savings`
+  estima —model-free, con parámetros configurables (`avoided_context_tokens_per_unit`,
+  `delegation_overhead_tokens`)— los tokens ahorrados por delegar vs. inline. El ahorro es
+  lineal en unidades done (el contexto intermedio evitado − overhead), así que rinde con
+  volumen y no con tareas triviales. Archivos: `internal/memory/delegation.go`,
+  `internal/mcp/methods.go` (case savings), config `MultiAgentConfig` (+ tests).
+- [x] **O3 — Biblioteca de roles SDD** + revisión adversarial. Los 7 roles de fase son
+  first-class en `musubi_sdd` (campo `role` por fase activa, `internal/memory/sdd.go`), más
+  2 skills cognitivas transversales: `sdd-flow` (orquestador del flujo) y `adversarial-review`
+  (patrón judgment-day: escépticos por lente + veredicto por mayoría + fix-loop, cableado a
+  `musubi_work`/`musubi_judge`). Archivos: `internal/memory/sdd.go`, `cmd/musubi/cognitive.go` (+ tests).
+- [x] **O4 — Orquestación en el dashboard**: el snapshot (`buildExportSnapshot`) incluye
+  `orchestration` (runs de workflow con progreso por fases; los flujos SDD marcados; pizarra
+  multi-agente activa con conteos). El HTML del dashboard lo renderiza como segundo pilar,
+  read-only y 0 tokens. Archivos: `cmd/musubi/export.go`, `cmd/musubi/assets/dashboard.html` (+ test).
+
+## Track S — Servidor (bisagra)
+
+El transporte HTTP ya existía (Track 4). El hallazgo clave: como el daemon remoto sirve
+**todas** las tools, memoria y orquestación compartidas se logran apuntando el cliente al
+cerebro central — **configuración, no motor nuevo**. Runbook: `docs/Server_Brain_Onboarding.md`.
+
+- [x] **S1 — daemon HTTP multi-máquina**: `musubi serve` + `ListenAndServeHTTP` con bind
+  loopback/remoto, bearer token (fail-closed), TLS, `/healthz` `/readyz` `/metrics`, shutdown
+  graceful y defensa anti DNS-rebinding. Ya implementado en `internal/mcp/http.go`.
+- [x] **S2 + S3 — memoria y orquestación compartidas remotas**: entrada `.mcp.json` remota
+  (transporte HTTP) que apunta el cliente al cerebro central; el daemon sirve el catálogo
+  completo, así memoria, `workflow_runs` y pizarra quedan compartidos entre máquinas. Helper
+  `bootstrap.RemoteEntry` (token por `${ENV}`, el secreto no toca el archivo) +
+  `MergeRemoteMCPServer`. Archivos: `internal/bootstrap/mcp.go` (+ tests).
+- [x] **S4 — malla VPN + onboarding**: runbook completo de cutover (serve + WireGuard/
+  Tailscale + config de clientes + verificación) en `docs/Server_Brain_Onboarding.md`.
+
+**Nota de cutover**: la ejecución real (URL/token/TLS concretos, `musubi serve` en el fierro)
+se hace cuando el servidor esté activo; el código y la config ya están listos.
