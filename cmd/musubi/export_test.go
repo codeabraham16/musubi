@@ -73,3 +73,44 @@ func TestBuildExportSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildExportSnapshotOrchestration verifica que el snapshot incluya el pilar de
+// orquestación: los runs de workflow (incluidos los flujos SDD) y la pizarra activa.
+func TestBuildExportSnapshotOrchestration(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDbEngine error: %v", err)
+	}
+	defer engine.Close()
+
+	// Un flujo SDD arrancado (run_id sdd-add-auth, 7 fases).
+	if _, err := engine.StartWorkflowRun(memory.SDDRunID("Add Auth"), memory.SDDWorkflowDef("Add Auth")); err != nil {
+		t.Fatal(err)
+	}
+	// Una pizarra multi-agente con 2 unidades abiertas.
+	if _, err := engine.CreateWorkBatch("b-orq", []memory.WorkUnitSpec{{Title: "A", Spec: "a"}, {Title: "B", Spec: "b"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	snap, err := buildExportSnapshot(engine, "0.58.0", 8000, at)
+	if err != nil {
+		t.Fatalf("buildExportSnapshot error: %v", err)
+	}
+
+	var sdd *memory.WorkflowRunSummary
+	for i := range snap.Orchestration.Runs {
+		if snap.Orchestration.Runs[i].WorkflowID == "sdd-add-auth" {
+			sdd = &snap.Orchestration.Runs[i]
+		}
+	}
+	if sdd == nil {
+		t.Fatalf("el snapshot debería incluir el run SDD sdd-add-auth, obtuve %+v", snap.Orchestration.Runs)
+	}
+	if sdd.Total != len(memory.SDDPhases) || sdd.Status != "running" {
+		t.Errorf("run SDD: esperaba %d fases running, obtuve %d %q", len(memory.SDDPhases), sdd.Total, sdd.Status)
+	}
+	if snap.Orchestration.ActiveBatch == nil || snap.Orchestration.ActiveBatch.Total != 2 {
+		t.Errorf("el snapshot debería incluir la pizarra activa con 2 unidades, obtuve %+v", snap.Orchestration.ActiveBatch)
+	}
+}

@@ -161,6 +161,18 @@ body{
 .when{font-size:10px; color:var(--dim); white-space:nowrap;}
 .mem-gist{font-size:12px; color:#b6c2d0; line-height:1.55; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;}
 .empty{font-size:12px; color:var(--dim); padding:16px 2px; line-height:1.6;}
+.orow{padding:10px 0; border-bottom:1px solid var(--line);}
+.orow:last-child{border-bottom:none;}
+.ohead{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:6px;}
+.oname{font-size:13px; font-weight:600; letter-spacing:-.2px;}
+.oname .sdd{color:var(--purple); font-weight:700; margin-right:6px;}
+.ostat{font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--dim);}
+.ostat.done{color:var(--green);} .ostat.running{color:var(--teal);} .ostat.aborted{color:var(--amber);}
+.obadges{display:flex; flex-wrap:wrap; gap:7px; margin-top:10px;}
+.obadge{font-size:11px; padding:3px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted); font-variant-numeric:tabular-nums;}
+.obadge.ob-done{color:var(--green); border-color:var(--green);}
+.obadge.ob-claimed{color:var(--teal); border-color:var(--teal);}
+.obadge.ob-failed{color:var(--amber); border-color:var(--amber);}
 
 /* actividad reciente (timeline) */
 .activity{display:flex; flex-direction:column;}
@@ -298,6 +310,13 @@ body{
     </div>
   </section>
 
+  <section class="panel">
+    <div class="ph"><span class="tag purple">Orquestación</span><span class="hint" id="orch-hint">—</span></div>
+    <div class="explain">El segundo pilar: los flujos SDD y workflows que Musubi está secuenciando (resumibles entre sesiones) y la pizarra multi-agente en vivo. <em>Musubi orquesta y persiste; el agente ejecuta.</em></div>
+    <div class="mem-list" id="orch-runs"></div>
+    <div id="orch-batch"></div>
+  </section>
+
   <footer class="foot">
     <span class="pill">model-free</span>
     <span class="pill">local-first · SQLite + FTS5</span>
@@ -423,6 +442,7 @@ body{
     gRecent = d.recent || [];
     renderGraph(d);
     renderRecent(gRecent);
+    renderOrchestration(d);
   }
 
   // tsMillis parsea una fecha (RFC3339 o "YYYY-MM-DD HH:MM:SS" en UTC) a ms; 0 si no.
@@ -626,6 +646,47 @@ body{
     if(d < 3600){ return "hace " + Math.round(d / 60) + "m"; }
     if(d < 86400){ return "hace " + Math.round(d / 3600) + "h"; }
     return "hace " + Math.round(d / 86400) + "d";
+  }
+
+  // renderOrchestration pinta el PILAR de orquestación: los runs de workflow (los
+  // flujos SDD se marcan y muestran su progreso por fases) y, si hay, la pizarra
+  // multi-agente activa con sus conteos por estado. Read-only, del mismo snapshot.
+  function orchBadge(kind, n){ return '<span class="obadge ob-' + kind + '">' + kind + ' ' + fmt(n || 0) + '</span>'; }
+  function renderOrchestration(d){
+    var orch = d.orchestration || {};
+    var runs = orch.runs || [];
+    txt("orch-hint", runs.length ? (runs.length + " run" + (runs.length === 1 ? "" : "s")) : "sin runs todavía");
+
+    var rows = runs.map(function(r){
+      var wid = r.workflow_id || "";
+      var isSDD = wid.indexOf("sdd-") === 0;
+      var name = isSDD
+        ? '<span class="sdd">SDD</span>' + esc(wid.slice(4))
+        : esc(wid || "workflow");
+      var total = r.total || 0, done = r.done || 0;
+      var pct = total ? Math.round(done * 100 / total) : 0;
+      var st = esc(r.status || "");
+      return '<div class="orow">'
+        + '<div class="ohead"><span class="oname">' + name + '</span>'
+        + '<span class="ostat ' + st + '">' + st + '</span></div>'
+        + '<div class="track"><div class="fill" style="width:' + pct + '%;"></div></div>'
+        + '<div class="foot">' + done + '/' + total + ' fases · ' + pct + '%</div>'
+        + '</div>';
+    }).join("");
+    $("orch-runs").innerHTML = rows || '<div class="empty">Sin flujos activos. Arrancá uno con <code>musubi_sdd action=start</code> o <code>musubi_workflow</code>.</div>';
+
+    var batch = orch.active_batch, el = $("orch-batch");
+    if(batch){
+      var id = (batch.batch_id || "").slice(0, 8);
+      el.innerHTML = '<div class="ph" style="margin-top:16px"><span class="tag teal">Pizarra multi-agente</span>'
+        + '<span class="hint">batch ' + esc(id) + ' · ' + fmt(batch.total || 0) + ' unidades</span></div>'
+        + '<div class="obadges">'
+        + orchBadge("open", batch.open) + orchBadge("claimed", batch.claimed)
+        + orchBadge("done", batch.done) + orchBadge("failed", batch.failed)
+        + '</div>';
+    } else {
+      el.innerHTML = "";
+    }
   }
 
   function renderRecent(list){

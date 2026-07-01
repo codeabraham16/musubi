@@ -26,8 +26,17 @@ type exportSnapshot struct {
 	Health      memory.DiagnoseReport `json:"health"`
 	Insights    memory.InsightsReport `json:"insights"`
 	Tokens      memory.BudgetStatus   `json:"tokens"`
-	Graph       exportGraph           `json:"graph"`
-	Recent      []memory.ObsCard      `json:"recent"`
+	Graph         exportGraph         `json:"graph"`
+	Recent        []memory.ObsCard    `json:"recent"`
+	Orchestration exportOrchestration `json:"orchestration"`
+}
+
+// exportOrchestration es la vista del PILAR de orquestación en el dashboard: los runs
+// de workflow (incluidos los flujos SDD, con id sdd-<change>) y, si hay, la pizarra
+// multi-agente activa. Read-only, model-free, del mismo snapshot que la memoria.
+type exportOrchestration struct {
+	Runs        []memory.WorkflowRunSummary `json:"runs"`
+	ActiveBatch *memory.WorkBatch           `json:"active_batch,omitempty"`
 }
 
 // projectLabel deriva una etiqueta legible del proyecto (el nombre de la carpeta
@@ -88,6 +97,18 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 		return snap, fmt.Errorf("export: memorias recientes: %w", err)
 	}
 	snap.Recent = recent
+
+	runs, err := engine.WorkflowListRuns()
+	if err != nil {
+		return snap, fmt.Errorf("export: runs de workflow: %w", err)
+	}
+	orch := exportOrchestration{Runs: runs}
+	if batch, ok, err := engine.ActiveBatch(); err != nil {
+		return snap, fmt.Errorf("export: pizarra activa: %w", err)
+	} else if ok {
+		orch.ActiveBatch = &batch
+	}
+	snap.Orchestration = orch
 
 	return snap, nil
 }
