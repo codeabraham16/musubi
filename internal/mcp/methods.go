@@ -409,8 +409,20 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return textResult("Batch limpiado."), nil
 
+	case "savings":
+		if strings.TrimSpace(args.Batch) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "savings requiere 'batch'")
+		}
+		b, err := s.engine.WorkBatchStatus(args.Batch)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo leer el batch: %v", err)
+		}
+		ds := memory.EstimateDelegationSavings(b,
+			s.multiagent.AvoidedContextTokensPerUnit, s.multiagent.DelegationOverheadTokens)
+		return jsonResult(ds)
+
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|complete|status|clear)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|complete|status|savings|clear)", action)
 	}
 }
 
@@ -1000,40 +1012,10 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 	}
 
-	// Validar nombre: no vacío y slug-safe (previene path traversal).
-	if strings.TrimSpace(args.Name) == "" {
-		return nil, rpcErrorf(codeInvalidParams, "name es obligatorio")
-	}
-	if !slugRegex.MatchString(args.Name) {
-		return nil, rpcErrorf(codeInvalidParams, "name debe ser un slug válido (solo letras minúsculas, números y guiones, ej. 'mi-skill'): %q", args.Name)
-	}
-
-	// Validar triggers: al menos uno y cada uno debe ser un glob válido.
-	if len(args.Triggers) == 0 {
-		return nil, rpcErrorf(codeInvalidParams, "triggers no puede estar vacío")
-	}
-	for _, t := range args.Triggers {
-		if _, err := filepath.Match(t, ""); err != nil {
-			return nil, rpcErrorf(codeInvalidParams, "trigger inválido %q: %v", t, err)
-		}
-	}
-
-	// Validar rules: no vacío y mínimo 20 caracteres.
-	if len(strings.TrimSpace(args.Rules)) < 20 {
-		return nil, rpcErrorf(codeInvalidParams, "rules debe tener al menos 20 caracteres (actual: %d)", len(strings.TrimSpace(args.Rules)))
-	}
-
-	// Construir ruta y aplicar defensa de path traversal adicional.
-	skillsDir := filepath.Join(s.projectPath, config.DirName, config.SkillsDir)
-	skillPath := filepath.Join(skillsDir, args.Name+".yaml")
-	// Verificar que la ruta resultante está bajo el directorio de skills (cinturón y tirantes).
-	if !strings.HasPrefix(filepath.Clean(skillPath), filepath.Clean(skillsDir)) {
-		return nil, rpcErrorf(codeInvalidParams, "nombre de skill no permitido: %q", args.Name)
-	}
-
-	// Puerta de sobrescritura: rechazar si el archivo existe y overwrite=false.
-	if _, err := os.Stat(skillPath); err == nil && !args.Overwrite {
-		return nil, rpcErrorf(codeInvalidParams, "la skill %q ya existe; pasa overwrite=true para reemplazarla", args.Name)
+	// Validaciones estructurales (name slug, triggers, rules mínimas) — compartidas
+	// con musubi_author_skill.
+	if rerr := validateSkillStructural(args.Name, args.Triggers, args.Rules); rerr != nil {
+		return nil, rerr
 	}
 
 	// Construir la skill con campos de procedencia.
@@ -1047,40 +1029,163 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Serializar a YAML.
+	// GATE DE CALIDAD (model-free): bloquea si hay errores; los warnings avisan.
+	report := skills.ValidateSkillQuality(sk)
+	if !report.OK() {
+		return nil, rpcErrorf(codeInvalidParams, "la skill no pasa el gate de calidad:\n%s", formatIssues(report.Errors))
+	}
+
+	// Puerta de sobrescritura: rechazar si el archivo existe y overwrite=false.
+	skillsDir := filepath.Join(s.projectPath, config.DirName, config.SkillsDir)
+	skillPath := filepath.Join(skillsDir, args.Name+".yaml")
+	if _, err := os.Stat(skillPath); err == nil && !args.Overwrite {
+		return nil, rpcErrorf(codeInvalidParams, "la skill %q ya existe; pasa overwrite=true para reemplazarla", args.Name)
+	}
+
+	path, rerr := s.writeSkillFile(sk)
+	if rerr != nil {
+		return nil, rerr
+	}
+	return textResult(skillSaveMessage(args.Name, path, report)), nil
+}
+
+// validateSkillStructural aplica las validaciones estructurales de una skill
+// (name slug-safe, ≥1 trigger glob válido, rules ≥20 chars). Compartida por
+// toolSaveSkill y toolAuthorSkill para no duplicar ni desincronizar los checks.
+func validateSkillStructural(name string, triggers []string, rules string) *RpcError {
+	if strings.TrimSpace(name) == "" {
+		return rpcErrorf(codeInvalidParams, "name es obligatorio")
+	}
+	if !slugRegex.MatchString(name) {
+		return rpcErrorf(codeInvalidParams, "name debe ser un slug válido (solo letras minúsculas, números y guiones, ej. 'mi-skill'): %q", name)
+	}
+	if len(triggers) == 0 {
+		return rpcErrorf(codeInvalidParams, "triggers no puede estar vacío")
+	}
+	for _, t := range triggers {
+		if _, err := filepath.Match(t, ""); err != nil {
+			return rpcErrorf(codeInvalidParams, "trigger inválido %q: %v", t, err)
+		}
+	}
+	if len(strings.TrimSpace(rules)) < 20 {
+		return rpcErrorf(codeInvalidParams, "rules debe tener al menos 20 caracteres (actual: %d)", len(strings.TrimSpace(rules)))
+	}
+	return nil
+}
+
+// writeSkillFile serializa y persiste una skill en .musubi/skills/<name>.yaml, escribe
+// el sentinel y actualiza la huella del stack (best-effort). Incluye la defensa de path
+// traversal (cinturón y tirantes). Compartida por toolSaveSkill y toolAuthorSkill.
+func (s *McpServer) writeSkillFile(sk skills.Skill) (string, *RpcError) {
+	skillsDir := filepath.Join(s.projectPath, config.DirName, config.SkillsDir)
+	skillPath := filepath.Join(skillsDir, sk.Name+".yaml")
+	if !strings.HasPrefix(filepath.Clean(skillPath), filepath.Clean(skillsDir)) {
+		return "", rpcErrorf(codeInvalidParams, "nombre de skill no permitido: %q", sk.Name)
+	}
 	data, err := yaml.Marshal(sk)
 	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "error al serializar skill: %v", err)
+		return "", rpcErrorf(codeInternalError, "error al serializar skill: %v", err)
 	}
-
-	// Crear el directorio de skills si no existe.
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return nil, rpcErrorf(codeInternalError, "error al crear directorio de skills: %v", err)
+		return "", rpcErrorf(codeInternalError, "error al crear directorio de skills: %v", err)
 	}
-
-	// Escribir el archivo YAML de la skill.
 	if err := os.WriteFile(skillPath, data, 0644); err != nil {
-		return nil, rpcErrorf(codeInternalError, "error al escribir skill: %v", err)
+		return "", rpcErrorf(codeInternalError, "error al escribir skill: %v", err)
 	}
-
-	// Escribir el sentinel (best-effort: fallo no cancela el guardado de la skill).
+	// Sentinel (best-effort): marca que ya se generaron skills.
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
-	timestamp := time.Now().UTC().Format(time.RFC3339)
-	if err := os.WriteFile(sentinelPath, []byte(timestamp), 0644); err != nil {
+	if err := os.WriteFile(sentinelPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0644); err != nil {
 		logx.Warn("no se pudo escribir el sentinel", "error", err)
 	}
-
-	// Actualizar la huella del stack (best-effort): marca que las skills cubren el
-	// stack actual, así el hook SessionStart no vuelve a pedir generación hasta que
-	// el stack realmente cambie.
+	// Huella del stack (best-effort): el hook SessionStart no vuelve a pedir generación
+	// hasta que el stack realmente cambie.
 	if s.engine != nil {
 		stack, _ := detector.DetectStack(s.projectPath)
 		if err := s.engine.SetMeta(memory.MetaStackFingerprint, detector.StackFingerprint(stack)); err != nil {
 			logx.Warn("no se pudo actualizar la huella del stack", "error", err)
 		}
 	}
+	return skillPath, nil
+}
 
-	return textResult(fmt.Sprintf("skill %q guardada en %s", args.Name, skillPath)), nil
+// formatIssues renderiza una lista de hallazgos de calidad como líneas accionables.
+func formatIssues(issues []skills.QualityIssue) string {
+	var b strings.Builder
+	for _, i := range issues {
+		fmt.Fprintf(&b, "- [%s] %s → %s\n", i.Code, i.Message, i.Fix)
+	}
+	return b.String()
+}
+
+// skillSaveMessage arma el mensaje de éxito del guardado con el score y, si hay,
+// los avisos de calidad (que no bloquearon).
+func skillSaveMessage(name, path string, r skills.QualityReport) string {
+	msg := fmt.Sprintf("skill %q guardada en %s (calidad %d/100)", name, path, r.Score)
+	if len(r.Warnings) > 0 {
+		msg += fmt.Sprintf("\nAvisos de calidad (%d, no bloquean):\n%s", len(r.Warnings), formatIssues(r.Warnings))
+	}
+	return msg
+}
+
+// toolAuthorSkill es el SISTEMA DE CREACIÓN AVANZADO de skills: valida la calidad de
+// una skill y devuelve un reporte scoreado con fixes accionables SIN guardar (save=false,
+// default), para iterar; con save=true guarda solo si pasa el gate de calidad. Su guía
+// recomienda derivar las rules de fuentes confiables (doc oficial del stack + repos
+// reputados), y reporta el tier de confiabilidad de la fuente.
+func (s *McpServer) toolAuthorSkill(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Name         string   `json:"name"`
+		Description  string   `json:"description"`
+		Triggers     []string `json:"triggers"`
+		Capabilities []string `json:"capabilities"`
+		Rules        string   `json:"rules"`
+		SourceURL    string   `json:"source_url"`
+		Save         bool     `json:"save"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+	}
+
+	sk := skills.Skill{
+		Name:         args.Name,
+		Description:  args.Description,
+		Triggers:     args.Triggers,
+		Capabilities: args.Capabilities,
+		Rules:        args.Rules,
+		SourceURL:    args.SourceURL,
+	}
+	report := skills.ValidateSkillQuality(sk)
+	resp := map[string]interface{}{
+		"skill":        args.Name,
+		"score":        report.Score,
+		"ok":           report.OK(),
+		"errors":       report.Errors,
+		"warnings":     report.Warnings,
+		"source_trust": skills.SourceTrustTier(args.SourceURL),
+	}
+
+	if !args.Save {
+		resp["saved"] = false
+		resp["note"] = "Reporte de calidad (no guardado). Corregí los errores, derivá las rules de fuentes confiables (doc oficial del stack + repos reputados como anthropics/skills, awesome-cursorrules) y volvé a llamar con save=true."
+		return jsonResult(resp)
+	}
+
+	// save=true: estructural primero, luego el gate de calidad.
+	if rerr := validateSkillStructural(args.Name, args.Triggers, args.Rules); rerr != nil {
+		return nil, rerr
+	}
+	if !report.OK() {
+		return nil, rpcErrorf(codeInvalidParams, "la skill no pasa el gate de calidad:\n%s", formatIssues(report.Errors))
+	}
+	sk.GeneratedBy = "author"
+	sk.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	path, rerr := s.writeSkillFile(sk)
+	if rerr != nil {
+		return nil, rerr
+	}
+	resp["saved"] = true
+	resp["path"] = path
+	return jsonResult(resp)
 }
 
 // toolSearchSkills busca skills aplicables al proyecto desde el catálogo remoto.

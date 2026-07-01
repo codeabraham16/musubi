@@ -451,7 +451,7 @@
     },
     {
       "name": "musubi_work",
-      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action ∈ {plan, claim, complete, status, clear}.",
+      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (aislamiento de contexto; estimación model-free con parámetros configurables). action ∈ {plan, claim, complete, status, savings, clear}.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -583,6 +583,104 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "musubi_sdd",
+      "description": "Flujo SDD GUIADO (Spec-Driven Development) sobre el motor DAG (model-free). Genera por vos el workflow canónico de un cambio —proposal→spec→design→tasks→implement→verify→archive— sin escribir YAML, y te guía fase por fase: en cada una devuelve su directiva y la ruta de su plantilla (.musubi/templates/sdd/). Al cerrar una fase (action=complete) persiste su CONTRATO DE RESULTADO (summary + artifacts + risks + next_recommended) en memoria bajo sdd/\u003cchange\u003e/\u003cphase\u003e; las fases siguientes (sobre todo implement) recuperan esos artefactos por referencia barata con musubi_recall en vez de releer archivos. El run es resumible entre sesiones. Protocolo: action=start (change) → fase activa + directiva; ejecutás la fase y action=complete (change, phase, summary[, artifacts, risks, next_recommended]) → siguiente fase; action=next/status para reconsultar. action ∈ {start, next, complete, status}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "start | next | complete | status"
+          },
+          "artifacts": {
+            "type": "array",
+            "description": "Para complete: artefactos producidos (rutas/ids)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "change": {
+            "type": "string",
+            "description": "Nombre del cambio/feature (identifica el flujo; se normaliza a slug)"
+          },
+          "next_recommended": {
+            "type": "string",
+            "description": "Para complete: siguiente paso recomendado"
+          },
+          "phase": {
+            "type": "string",
+            "description": "Para complete: fase que cerrás (proposal|spec|design|tasks|implement|verify|archive)"
+          },
+          "risks": {
+            "type": "array",
+            "description": "Para complete: riesgos detectados",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Para complete: resumen ejecutivo del resultado de la fase (obligatorio)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_author_skill",
+      "description": "Sistema de creación AVANZADO de skills (model-free): valida la calidad de una skill contra las best-practices de Agent Skills (description como disparador en 3ª persona ≤1024 chars, name sin reservadas, triggers acotados, rules concisas con ejemplo, sin anti-patrones) y devuelve un REPORTE SCOREADO (score 0-100 + errores que bloquean + warnings + fixes accionables) SIN guardar (save=false, default) para iterar. Con save=true guarda la skill SOLO si pasa el gate. Recomendá derivar las rules de FUENTES CONFIABLES: doc oficial del stack + repos reputados (anthropics/skills, awesome-cursorrules, Gentleman-Skills); pasá source_url y reporta su tier de confiabilidad (official\u003ecurated\u003ecommunity). Usalo para crear skills eficientes y útiles antes de musubi_save_skill.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "description": "Herramientas requeridas en PATH (opcional)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Description en TERCERA persona que dice QUÉ hace + CUÁNDO usarla (cláusula 'Use when …'); es el disparador. ≤1024 chars."
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre slug de la skill (minúsculas, números y guiones; gerundio recomendado, ej. 'processing-go-files')"
+          },
+          "rules": {
+            "type": "string",
+            "description": "Reglas concisas y accionables, idealmente con un ejemplo (bloque de código). Derivalas de doc oficial del stack."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Si es true, guarda la skill si pasa el gate; si es false (default) solo devuelve el reporte de calidad"
+          },
+          "source_url": {
+            "type": "string",
+            "description": "URL de la fuente de la que derivaste la skill (para el tier de confiabilidad; opcional)"
+          },
+          "triggers": {
+            "type": "array",
+            "description": "Globs acotados que activan la skill (ej. '*.go'); evitá '*' (dispara siempre)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          }
+        },
+        "required": [
+          "name",
+          "rules"
+        ]
       }
     }
   ]
