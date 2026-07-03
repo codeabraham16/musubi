@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-07-03
+
+Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la memoria** (Track 12) y la
+**inteligencia de cambios de código** (`musubi_detect_changes`). El catálogo de tools pasó de 27 a 30.
+
 ### Added
 - **`musubi_detect_changes` — inteligencia de cambios de código (model-free, Go puro)**: nueva tool que corre
   `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido **actual** (`go/ast` para `.go`;
@@ -19,6 +24,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 - **`musubi_save_code` deriva símbolos automáticamente**: cuando no se pasa `symbols`, se extraen del contenido
   actual del archivo (anclados al mismo fingerprint), evitando el string manual que se desincronizaba. Si el
   llamador pasa `symbols` explícito, se respeta (compat hacia atrás).
+- **Flujo SDD guiado — `musubi_sdd`** (Track 12 O1): genera por vos el workflow canónico de un cambio
+  (`proposal→spec→design→tasks→implement→verify→archive`) sobre el motor DAG, sin escribir YAML, y guía fase
+  por fase; al cerrar cada fase persiste su contrato de resultado en memoria (`sdd/<change>/<phase>`) para que
+  las siguientes lo recuperen por referencia barata en vez de releer archivos. Resumible entre sesiones.
+- **Estimador de ahorro por delegación — `musubi_work action=savings`** (Track 12 O2): estimación model-free
+  de los tokens ahorrados al delegar en la pizarra vs. hacerlo inline (aislamiento de contexto), con
+  parámetros configurables.
+- **Sistema avanzado de creación de skills** (Track 12): validador de calidad model-free
+  (`internal/skills/quality.go`) que puntúa una skill contra las best-practices de Agent Skills (description
+  como disparador en 3ª persona ≤1024 chars, name sin reservadas, triggers acotados, rules con ejemplo) y
+  bloquea el guardado si tiene errores; nueva tool **`musubi_author_skill`** (reporte scoreado sin guardar, o
+  guardado tras pasar el gate; reporta el tier de confiabilidad de la fuente).
+- **Skills cognitivas embebidas**: `sdd-flow`, `adversarial-review` y `designing-web-ui` (WCAG AA + escala de
+  espaciado 4/8px), incluidas en el bundle de `musubi setup`.
+- **Cerebro remoto self-hosted** (Track 12 S): soporte para apuntar el MCP a una instancia central de Musubi
+  vía entrada remota con token por variable de entorno; incluye runbook de onboarding.
+
+### Changed
+- **Dashboard de la memoria**: nuevo pilar de orquestación (runs/batches) en el snapshot y la vista (Track 12
+  O4), y barrido completo a un sistema de espaciado 4/8px + escala tipográfica (skill `designing-web-ui`).
 
 ## [0.57.0] - 2026-06-23
 
