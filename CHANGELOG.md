@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`musubi_detect_changes` — inteligencia de cambios de código (model-free, Go puro)**: nueva tool que corre
+  `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido **actual** (`go/ast` para `.go`;
+  escáner liviano para `.ts/.tsx/.js/.jsx/.py`) en vez de confiar en datos guardados — así el diff y los
+  símbolos viven siempre en el mismo sistema de coordenadas y nunca se desalinean. Reporta, por archivo: el
+  tipo de cambio, los símbolos afectados por los hunks, si su gist de memoria de código quedó *stale*
+  (fingerprint) y qué observaciones/decisiones lo referencian. Es de solo-lectura y se engancha en la fase
+  `verify` del flujo SDD para acotar qué verificar y qué decisión quedó potencialmente obsoleta. Nuevo paquete
+  `internal/codeintel` (extractor de símbolos/imports + parser de diff unified), sin dependencias con cgo.
+- **`musubi_save_code` deriva símbolos automáticamente**: cuando no se pasa `symbols`, se extraen del contenido
+  actual del archivo (anclados al mismo fingerprint), evitando el string manual que se desincronizaba. Si el
+  llamador pasa `symbols` explícito, se respeta (compat hacia atrás).
+
 ## [0.57.0] - 2026-06-23
 
 ### Added

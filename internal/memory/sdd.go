@@ -100,8 +100,9 @@ func SDDPhaseDirective(phase, change string) string {
 			"Implementá según spec/design siguiendo las convenciones (musubi_resolve_skills). "+
 			"Guardá decisiones no obvias con musubi_save_observation.", slug)
 	case "verify":
-		return "Fase VERIFY. Verificá contra la spec: corré build/tests. Registrá los fallos con " +
-			"musubi_log_error. Si todo pasa, cerrá la fase para pasar a archive."
+		return "Fase VERIFY. Corré musubi_detect_changes para acotar qué símbolos tocaste y qué " +
+			"gists/decisiones quedaron stale. Verificá contra la spec: corré build/tests. Registrá los " +
+			"fallos con musubi_log_error. Si todo pasa, cerrá la fase para pasar a archive."
 	case "archive":
 		return fmt.Sprintf("Fase ARCHIVE. Fusioná los delta specs en las specs principales y archivá. "+
 			"Guardá el aprendizaje final con musubi_save_observation topic_key='sdd/%s/archive'.", slug)

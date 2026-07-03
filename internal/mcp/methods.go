@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/embedding"
@@ -837,10 +838,19 @@ func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
 	// lo que guarda la tool. Fingerprint best-effort del contenido actual.
 	key := memory.NormalizeCodePath(s.projectPath, args.Path)
 	fp, _ := memory.FileFingerprint(s.projectPath, args.Path)
+	// Símbolos DERIVADOS del contenido actual (mismo snapshot que el fingerprint) cuando
+	// el llamador no los pasa: evita el string manual que se desincroniza. Si el llamador
+	// pasa symbols explícito, se respeta (compat hacia atrás).
+	symbols := args.Symbols
+	if strings.TrimSpace(symbols) == "" {
+		if content, rerr := s.readProjectFile(args.Path); rerr == nil {
+			symbols = codeintel.FormatSymbols(codeintel.ExtractSymbols(key, content))
+		}
+	}
 	cm := memory.CodeMemory{
 		Path:        key,
 		Gist:        args.Gist,
-		Symbols:     args.Symbols,
+		Symbols:     symbols,
 		Fingerprint: fp,
 		Tokens:      memory.EstimateTokens(args.Gist),
 	}

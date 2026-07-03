@@ -682,6 +682,23 @@
           "rules"
         ]
       }
+    },
+    {
+      "name": "musubi_detect_changes",
+      "description": "Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "Base de comparación del diff (ej. 'HEAD~1', 'main'); opcional, default working tree vs HEAD"
+          },
+          "staged": {
+            "type": "boolean",
+            "description": "Si es true, compara el índice (git diff --staged); opcional"
+          }
+        }
+      }
     }
   ]
 }
