@@ -33,8 +33,8 @@ type RecallEngine interface {
 
 // GraphStore — grafo de conocimiento: hechos (tripletas) y contexto de entidad.
 type GraphStore interface {
-	SaveFact(subject, predicate, object string) (SaveFactResult, error)
-	RecallFacts(entity string, maxHops, maxFacts int) (GraphResult, error)
+	SaveFact(subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error)
+	RecallFacts(entity string, maxHops, maxFacts int, asOf string) (GraphResult, error)
 	EntityContext(entity string, maxHops, maxFacts, maxObs int) (EntityContextResult, error)
 }
 

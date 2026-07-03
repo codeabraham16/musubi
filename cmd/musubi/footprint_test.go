@@ -52,7 +52,7 @@ func seedCorpus(t *testing.T, eng *memory.DbEngine, root string) {
 
 	// Hechos del grafo (no inflan el ledger directo pero hacen al proyecto realista).
 	for _, f := range [][3]string{{"auth", "usa", "JWT"}, {"api", "usa", "Redis"}, {"db", "es", "PostgreSQL"}} {
-		if _, err := eng.SaveFact(f[0], f[1], f[2]); err != nil {
+		if _, err := eng.SaveFact(f[0], f[1], f[2], "", nil); err != nil {
 			t.Fatalf("SaveFact: %v", err)
 		}
 	}

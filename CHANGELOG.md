@@ -16,6 +16,18 @@ Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ing
   renueva, la unidad se recicla automáticamente en el próximo `claim` (reclamo *lazy*, sin proceso de fondo).
 
 ### Added
+- **Invalidación bi-temporal del grafo de hechos** (Track 13, memoria): hasta ahora `musubi_save_fact` sólo
+  **acumulaba** tripletas y nunca retiraba ninguna, así que `(Ana, trabaja_en, Acme)` y `(Ana, trabaja_en,
+  Globex)` convivían como si ambas fueran verdad. Ahora el grafo es **bi-temporal** (patrón Zep/Graphiti,
+  model-free): para un predicado **funcional** (*single-valued*: `trabaja_en`, `estado_actual`, `vive_en`…,
+  declarados en `graph.single_valued_predicates`), guardar un objeto nuevo **invalida** automáticamente el
+  anterior por **cardinalidad** — sin LLM, sin entender el texto. El hecho viejo no se borra: se le cierra la
+  ventana de validez (`valid_from`/`valid_to`, `invalidated_at`, `superseded_by`), de modo que la historia queda
+  auditable. `musubi_recall_facts` devuelve por defecto sólo la **verdad actual** y acepta un parámetro **`as_of`**
+  para consulta *point-in-time* ("qué era verdad en tal momento"). `musubi_save_fact` acepta un `valid_from`
+  opcional y **revive** un hecho invalidado si se re-afirma. Migración de esquema **v5** (4 columnas aditivas +
+  índice + backfill `valid_from = created_at`), retrocompatible. Los predicados *many-valued* (no declarados) no
+  invalidan nada.
 - **Lease/TTL + heartbeat + fencing token en `musubi_work`** (Track 13, orquestación): patrón *visibility timeout*
   (SQS) / lease (Chubby) sobre la pizarra, 100% model-free. Nuevo `action=heartbeat` para renovar el lease
   mientras el sub-agente trabaja; el `claim` devuelve un **fencing token** monótono que `heartbeat`/`complete`

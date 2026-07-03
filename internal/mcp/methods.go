@@ -678,6 +678,7 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 		Subject   string `json:"subject"`
 		Predicate string `json:"predicate"`
 		Object    string `json:"object"`
+		ValidFrom string `json:"valid_from"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -686,20 +687,26 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInvalidParams, "subject, predicate y object son obligatorios")
 	}
 
-	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object)
+	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object, args.ValidFrom, s.graph.SingleValuedPredicates)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar hecho: %v", err)
 	}
-	if res.Created {
-		return textResult(fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)), nil
+	msg := fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)
+	if !res.Created {
+		msg = fmt.Sprintf("Hecho re-afirmado (ya existía): %s %s %s.", args.Subject, args.Predicate, args.Object)
 	}
-	return textResult("El hecho ya existía, no se duplicó."), nil
+	if res.Invalidated > 0 {
+		// Cardinalidad: el predicado es funcional y este hecho reemplazó a otro(s).
+		msg += fmt.Sprintf(" Invalidó %d hecho(s) previo(s) contradictorio(s) (predicado single-valued).", res.Invalidated)
+	}
+	return textResult(msg), nil
 }
 
 func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Entity  string `json:"entity"`
 		MaxHops int    `json:"max_hops"`
+		AsOf    string `json:"as_of"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -713,7 +720,7 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 		maxHops = args.MaxHops
 	}
 
-	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts)
+	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts, args.AsOf)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
 	}

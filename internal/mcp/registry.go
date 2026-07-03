@@ -134,13 +134,14 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_save_fact",
-				Description: "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT').",
+				Description: "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"subject":   {Type: "string", Description: "Entidad sujeto (ej. 'auth')"},
-						"predicate": {Type: "string", Description: "Relación (ej. 'usa', 'depende_de')"},
-						"object":    {Type: "string", Description: "Entidad objeto (ej. 'JWT')"},
+						"subject":    {Type: "string", Description: "Entidad sujeto (ej. 'auth')"},
+						"predicate":  {Type: "string", Description: "Relación (ej. 'usa', 'depende_de')"},
+						"object":     {Type: "string", Description: "Entidad objeto (ej. 'JWT')"},
+						"valid_from": {Type: "string", Description: "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."},
 					},
 					Required: []string{"subject", "predicate", "object"},
 				},
@@ -150,12 +151,13 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall_facts",
-				Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens.",
+				Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time (qué era verdad en ese momento).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"entity":   {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
 						"max_hops": {Type: "number", Description: "Profundidad del recorrido (opcional; usa el default de la config)"},
+						"as_of":    {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
 					},
 					Required: []string{"entity"},
 				},

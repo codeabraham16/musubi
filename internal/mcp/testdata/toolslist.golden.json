@@ -88,7 +88,7 @@
     },
     {
       "name": "musubi_save_fact",
-      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT').",
+      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -103,6 +103,10 @@
           "subject": {
             "type": "string",
             "description": "Entidad sujeto (ej. 'auth')"
+          },
+          "valid_from": {
+            "type": "string",
+            "description": "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."
           }
         },
         "required": [
@@ -114,10 +118,14 @@
     },
     {
       "name": "musubi_recall_facts",
-      "description": "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens.",
+      "description": "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time (qué era verdad en ese momento).",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "as_of": {
+            "type": "string",
+            "description": "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."
+          },
           "entity": {
             "type": "string",
             "description": "Entidad desde la que recorrer el grafo"

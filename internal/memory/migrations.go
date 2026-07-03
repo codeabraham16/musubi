@@ -112,6 +112,34 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 5,
+			name:    "relations_bitemporal",
+			// Modelo bi-temporal del grafo de hechos: sin esto, save_fact solo ACUMULA
+			// tripletas y nunca retira ninguna, así que (Ana,trabaja_en,Acme) y
+			// (Ana,trabaja_en,Globex) conviven como si ambas fueran verdad. Columnas:
+			//   valid_from / valid_to    -> tiempo del EVENTO (desde/hasta cuándo es verdad)
+			//   invalidated_at           -> tiempo de TRANSACCIÓN (cuándo dejó de ser vigente)
+			//   superseded_by            -> id de la relación que la reemplazó
+			// "Verdad actual" = invalidated_at IS NULL. Backfill: los hechos previos quedan
+			// vigentes con valid_from = created_at. El índice acelera la búsqueda de hechos
+			// vivos por (sujeto, predicado).
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE relations ADD COLUMN valid_from DATETIME`,
+					`ALTER TABLE relations ADD COLUMN valid_to DATETIME`,
+					`ALTER TABLE relations ADD COLUMN invalidated_at DATETIME`,
+					`ALTER TABLE relations ADD COLUMN superseded_by INTEGER`,
+					`CREATE INDEX IF NOT EXISTS idx_rel_live ON relations(from_id, predicate, invalidated_at)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				_, err := x.Exec(`UPDATE relations SET valid_from = created_at WHERE valid_from IS NULL`)
+				return err
+			},
+		},
 	}
 }
 
