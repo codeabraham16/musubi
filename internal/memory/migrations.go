@@ -78,6 +78,40 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 4,
+			name:    "work_lease_ttl",
+			// Lease/TTL para claims huérfanos en la pizarra: sin esto, una unidad que un
+			// agente reclama y luego abandona (crash/timeout) queda 'claimed' para siempre
+			// y ningún otro agente puede retomarla (bug de liveness). Columnas aditivas:
+			//   owner_id         -> dueño canónico del lease (alias nuevo de claimed_by)
+			//   lease_expires_at -> vencimiento del lease; NULL = sin lease (unidad vieja)
+			//   heartbeat_at     -> última renovación
+			//   attempts         -> reclamos acumulados (para dead-letter)
+			//   fencing_token    -> token monótono anti-zombie
+			// El índice (status, lease_expires_at) soporta el subselect del reclamo lazy.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE work_units ADD COLUMN owner_id TEXT`,
+					`ALTER TABLE work_units ADD COLUMN lease_expires_at DATETIME`,
+					`ALTER TABLE work_units ADD COLUMN heartbeat_at DATETIME`,
+					`ALTER TABLE work_units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+					`ALTER TABLE work_units ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0`,
+					`CREATE INDEX IF NOT EXISTS idx_work_lease ON work_units(status, lease_expires_at)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				// Backfill: las unidades ya reclamadas bajo el esquema viejo tienen
+				// claimed_by pero owner_id NULL. Copiar claimed_by -> owner_id para que su
+				// dueño pueda seguir completándolas tras el upgrade (owner_id es la columna
+				// canónica de propiedad). lease_expires_at queda NULL a propósito: se tratan
+				// como no-huérfanas (no se expropia trabajo en curso durante la migración).
+				_, err := x.Exec(`UPDATE work_units SET owner_id=claimed_by WHERE owner_id IS NULL AND claimed_by IS NOT NULL`)
+				return err
+			},
+		},
 	}
 }
 

@@ -399,17 +399,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_work",
-				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (aislamiento de contexto; estimación model-free con parámetros configurables). action ∈ {plan, claim, complete, status, savings, clear}.",
+				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente y con un LEASE, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. El claim devuelve la unidad con su fencing_token; mientras trabaja, el sub-agente DEBE renovar el lease con action=heartbeat (id + agent + fencing_token) para no perder la unidad — si un agente crashea y no renueva, su unidad se recicla automáticamente al vencer el lease (semántica at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (estimación model-free configurable). action ∈ {plan, claim, heartbeat, complete, status, savings, clear}.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "plan | claim | complete | status | clear"},
-						"batch":  {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
-						"units":  {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
-						"agent":  {Type: "string", Description: "Para claim: etiqueta del sub-agente que reclama"},
-						"id":     {Type: "string", Description: "Para complete: ID de la unidad a cerrar"},
-						"result": {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
-						"status": {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"action":        {Type: "string", Description: "plan | claim | heartbeat | complete | status | savings | clear"},
+						"batch":         {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
+						"units":         {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
+						"agent":         {Type: "string", Description: "Para claim/heartbeat/complete: etiqueta del sub-agente (dueño del lease)"},
+						"id":            {Type: "string", Description: "Para heartbeat/complete: ID de la unidad"},
+						"result":        {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
+						"status":        {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"fencing_token": {Type: "number", Description: "Para heartbeat/complete: el fencing_token que devolvió el claim (defiende contra un agente expropiado que revive)"},
 					},
 				},
 			},

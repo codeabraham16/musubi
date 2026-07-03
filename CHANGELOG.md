@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ingeniería SOTA, toda model-free.
+
+### Fixed
+- **Bug de liveness en la pizarra multi-agente (`musubi_work`)**: una unidad que un sub-agente reclamaba y luego
+  abandonaba (crash, timeout, sesión cerrada) quedaba en `claimed` **para siempre** — ningún otro agente podía
+  retomarla y el batch nunca cerraba. Ahora cada claim toma un **lease con vencimiento (TTL)**: si el dueño no lo
+  renueva, la unidad se recicla automáticamente en el próximo `claim` (reclamo *lazy*, sin proceso de fondo).
+
+### Added
+- **Lease/TTL + heartbeat + fencing token en `musubi_work`** (Track 13, orquestación): patrón *visibility timeout*
+  (SQS) / lease (Chubby) sobre la pizarra, 100% model-free. Nuevo `action=heartbeat` para renovar el lease
+  mientras el sub-agente trabaja; el `claim` devuelve un **fencing token** monótono que `heartbeat`/`complete`
+  validan para bloquear al "worker zombie" (un agente expropiado que revive con un token viejo afecta 0 filas),
+  incluso cuando dos agentes comparten el mismo id. Dead-letter automático (`failed`) tras `max_attempts` reclamos,
+  para no reciclar indefinidamente una unidad que siempre falla. TTL y máximo de reintentos configurables
+  (`multiagent.lease_ttl_seconds` = 300, `multiagent.max_attempts` = 5). Migración de esquema **v4** (columnas
+  aditivas `owner_id`/`lease_expires_at`/`heartbeat_at`/`attempts`/`fencing_token` + índice), retrocompatible.
+  Semántica *at-least-once* → el trabajo delegado debe ser idempotente.
+
 ## [0.58.0] - 2026-07-03
 
 Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la memoria** (Track 12) y la

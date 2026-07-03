@@ -193,6 +193,15 @@ type MultiAgentConfig struct {
 	// protocolo de la pizarra por unidad (default 2000). El ahorro neto por unidad es
 	// AvoidedContextTokensPerUnit - DelegationOverheadTokens.
 	DelegationOverheadTokens int `yaml:"delegation_overhead_tokens"`
+	// LeaseTTLSeconds es la vida de un lease de claim (default 300 = 5 min). Si el
+	// dueño no renueva su lease (heartbeat) dentro de esta ventana, la unidad se
+	// vuelve reclamable por otro agente. El trabajo de un sub-agente puede tardar
+	// minutos, por eso el default es mayor que el visibility timeout típico de una cola.
+	LeaseTTLSeconds int `yaml:"lease_ttl_seconds"`
+	// MaxAttempts es la cantidad de reclamos antes de mandar una unidad a dead-letter
+	// (status failed) en vez de reciclarla de nuevo (default 5). Evita el loop
+	// crash→reclaim→crash de una unidad que siempre falla.
+	MaxAttempts int `yaml:"max_attempts"`
 }
 
 // ConflictConfig controla la detección de relaciones semánticas entre
@@ -383,6 +392,8 @@ func Default() Config {
 			MaxBatchUnits:               50,
 			AvoidedContextTokensPerUnit: 4000,
 			DelegationOverheadTokens:    2000,
+			LeaseTTLSeconds:             300,
+			MaxAttempts:                 5,
 		},
 		VectorIndex: VectorIndexConfig{
 			Enabled:         true,
@@ -622,6 +633,12 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.MultiAgent.DelegationOverheadTokens == 0 {
 			c.MultiAgent.DelegationOverheadTokens = d.MultiAgent.DelegationOverheadTokens
+		}
+		if c.MultiAgent.LeaseTTLSeconds == 0 {
+			c.MultiAgent.LeaseTTLSeconds = d.MultiAgent.LeaseTTLSeconds
+		}
+		if c.MultiAgent.MaxAttempts == 0 {
+			c.MultiAgent.MaxAttempts = d.MultiAgent.MaxAttempts
 		}
 	}
 

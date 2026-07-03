@@ -344,13 +344,14 @@ func (s *McpServer) toolPhase(raw json.RawMessage) (interface{}, *RpcError) {
 // status/clear).
 func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Action string                `json:"action"`
-		Batch  string                `json:"batch"`
-		Units  []memory.WorkUnitSpec `json:"units"`
-		Agent  string                `json:"agent"`
-		ID     string                `json:"id"`
-		Result string                `json:"result"`
-		Status string                `json:"status"`
+		Action       string                `json:"action"`
+		Batch        string                `json:"batch"`
+		Units        []memory.WorkUnitSpec `json:"units"`
+		Agent        string                `json:"agent"`
+		ID           string                `json:"id"`
+		Result       string                `json:"result"`
+		Status       string                `json:"status"`
+		FencingToken int64                 `json:"fencing_token"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -373,20 +374,41 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(b)
 
 	case "claim":
-		u, ok, err := s.engine.ClaimWorkUnit(args.Batch, args.Agent)
+		u, ok, err := s.engine.ClaimWorkUnit(args.Batch, args.Agent,
+			s.multiagent.LeaseTTLSeconds, s.multiagent.MaxAttempts)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "no se pudo reclamar: %v", err)
 		}
 		if !ok {
 			return jsonResult(map[string]interface{}{"claimed": false})
 		}
+		// El agente debe renovar el lease con action=heartbeat (pasando id, agent y
+		// fencing_token de la unidad) mientras trabaja, o perderá el claim al vencer.
 		return jsonResult(map[string]interface{}{"claimed": true, "unit": u})
+
+	case "heartbeat":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "heartbeat requiere 'id'")
+		}
+		if strings.TrimSpace(args.Agent) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "heartbeat requiere 'agent' (el dueño del lease)")
+		}
+		ok, err := s.engine.HeartbeatWorkUnit(args.ID, args.Agent, args.FencingToken, s.multiagent.LeaseTTLSeconds)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo renovar el lease: %v", err)
+		}
+		if !ok {
+			// Fuiste expropiado o ya no sos el dueño: el agente debe detener el trabajo.
+			return jsonResult(map[string]interface{}{"alive": false,
+				"note": "lease no renovado: fuiste expropiado o ya no sos el dueño; detené el trabajo de esta unidad"})
+		}
+		return jsonResult(map[string]interface{}{"alive": true})
 
 	case "complete":
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'id'")
 		}
-		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent); err != nil {
+		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent, args.FencingToken); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo completar: %v", err)
 		}
 		return textResult("Unidad completada."), nil
