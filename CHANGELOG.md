@@ -7,7 +7,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-07-03
+
 Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ingeniería SOTA, toda model-free.
+Tres cambios, cada uno dogfoodeado por el flujo SDD completo: un **bugfix de liveness** en la pizarra (lease/TTL),
+la **invalidación bi-temporal** del grafo de hechos (memoria que ya no envejece mal), y el **run journal
+append-only** con idempotencia (cimiento de replay/observabilidad). Esquema evolucionado a la versión v6. El
+catálogo sigue en 30 tools; todo aditivo y retrocompatible.
 
 ### Fixed
 - **Bug de liveness en la pizarra multi-agente (`musubi_work`)**: una unidad que un sub-agente reclamaba y luego
