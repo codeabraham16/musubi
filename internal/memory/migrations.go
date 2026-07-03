@@ -140,6 +140,35 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 6,
+			name:    "run_events_journal",
+			// Journal append-only del motor de workflows: hasta ahora workflow_runs solo
+			// guardaba un snapshot mutable, sin idempotencia (un complete repetido
+			// sobrescribía) ni historia (no se podía auditar/exportar/replay). run_events
+			// registra cada transición como un evento inmutable. UNIQUE(run_id, seq) da
+			// orden total; UNIQUE(run_id, idempotency_key) da idempotencia (en SQLite,
+			// múltiples idempotency_key NULL coexisten). Aditivo: no toca workflow_runs.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS run_events (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						run_id TEXT NOT NULL,
+						seq INTEGER NOT NULL,
+						step_id TEXT,
+						event_type TEXT NOT NULL,
+						payload TEXT,
+						idempotency_key TEXT,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(run_id, seq),
+						UNIQUE(run_id, idempotency_key)
+					);`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq)`)
+				return err
+			},
+		},
 	}
 }
 

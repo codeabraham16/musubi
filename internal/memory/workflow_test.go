@@ -89,7 +89,7 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 	}
 
 	// completar explore → build y docs listos
-	if _, err := engine.CompleteWorkflowStep("run-1", "explore", "ok", StepDone); err != nil {
+	if _, err := engine.CompleteWorkflowStep("run-1", "explore", "ok", StepDone, ""); err != nil {
 		t.Fatalf("complete explore: %v", err)
 	}
 	ready, _ = engine.WorkflowReady("run-1")
@@ -98,9 +98,9 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 	}
 
 	// completar todo → run done
-	engine.CompleteWorkflowStep("run-1", "build", "ok", StepDone)
-	engine.CompleteWorkflowStep("run-1", "docs", "ok", StepDone)
-	run, _ = engine.CompleteWorkflowStep("run-1", "verify", "ok", StepDone)
+	engine.CompleteWorkflowStep("run-1", "build", "ok", StepDone, "")
+	engine.CompleteWorkflowStep("run-1", "docs", "ok", StepDone, "")
+	run, _ = engine.CompleteWorkflowStep("run-1", "verify", "ok", StepDone, "")
 	if run.Status != RunDone {
 		t.Fatalf("run completo debería estar done, está %q", run.Status)
 	}
@@ -112,12 +112,94 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 	}
 }
 
+// El journal registra cada transición del run en orden de seq.
+func TestWorkflowJournalRecordsEvents(t *testing.T) {
+	engine, err := NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	defer engine.Close()
+
+	def := WorkflowDef{ID: "j", Steps: []WorkflowStep{
+		{ID: "a"},
+		{ID: "b", Needs: []string{"a"}},
+	}}
+	if _, err := engine.StartWorkflowRun("J", def); err != nil {
+		t.Fatal(err)
+	}
+	engine.WorkflowReady("J")
+	if _, err := engine.CompleteWorkflowStep("J", "a", "ra", StepDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	engine.WorkflowReady("J")
+	if _, err := engine.CompleteWorkflowStep("J", "b", "rb", StepDone, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	ev, err := engine.WorkflowJournal("J")
+	if err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	var types []string
+	for _, e := range ev {
+		types = append(types, e.EventType)
+	}
+	want := []string{EventRunStarted, EventStepCompleted, EventStepCompleted, EventRunDone}
+	if len(ev) != len(want) {
+		t.Fatalf("journal esperaba %d eventos, obtuve %d: %v", len(want), len(ev), types)
+	}
+	for i := range want {
+		if ev[i].EventType != want[i] {
+			t.Errorf("evento %d: esperaba %s, obtuve %s (%v)", i, want[i], ev[i].EventType, types)
+		}
+		if ev[i].Seq != i+1 {
+			t.Errorf("seq del evento %d debe ser %d, es %d", i, i+1, ev[i].Seq)
+		}
+	}
+	if ev[1].StepID != "a" || ev[1].Payload == "" {
+		t.Errorf("step_completed(a) mal formado: %+v", ev[1])
+	}
+}
+
+// Un complete repetido con la misma idempotency_key es un no-op seguro.
+func TestCompleteWorkflowStepIdempotent(t *testing.T) {
+	engine, err := NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	defer engine.Close()
+	def := WorkflowDef{ID: "i", Steps: []WorkflowStep{{ID: "a"}, {ID: "b", Needs: []string{"a"}}}}
+	engine.StartWorkflowRun("I", def)
+
+	if _, err := engine.CompleteWorkflowStep("I", "a", "primero", StepDone, "k1"); err != nil {
+		t.Fatal(err)
+	}
+	// Reintento con la MISMA clave y otro result → no-op (no sobrescribe).
+	run, err := engine.CompleteWorkflowStep("I", "a", "segundo", StepDone, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.StepResults["a"] != "primero" {
+		t.Errorf("el reintento idempotente no debe sobrescribir el result, quedó %q", run.StepResults["a"])
+	}
+	ev, _ := engine.WorkflowJournal("I")
+	completes := 0
+	for _, e := range ev {
+		if e.EventType == EventStepCompleted && e.StepID == "a" {
+			completes++
+		}
+	}
+	if completes != 1 {
+		t.Errorf("un complete idempotente repetido debe dejar 1 solo evento step_completed, hay %d", completes)
+	}
+}
+
 func TestCompleteStepRechazaStepDesconocido(t *testing.T) {
 	engine, _ := NewDbEngine(t.TempDir())
 	defer engine.Close()
 	def, _ := ParseWorkflowDef([]byte(sampleWorkflowYAML))
 	engine.StartWorkflowRun("r", def)
-	if _, err := engine.CompleteWorkflowStep("r", "ghost", "x", StepDone); err == nil {
+	if _, err := engine.CompleteWorkflowStep("r", "ghost", "x", StepDone, ""); err == nil {
 		t.Error("esperaba error por step inexistente")
 	}
 }
@@ -142,7 +224,7 @@ steps:
 	engine.StartWorkflowRun("L", def)
 
 	// dos iteraciones con result != stop → se re-abre, 'after' NO listo aún
-	engine.CompleteWorkflowStep("L", "iterate", "go", StepDone)
+	engine.CompleteWorkflowStep("L", "iterate", "go", StepDone, "")
 	run, _, _ := engine.WorkflowRunStatus("L")
 	if run.StepStatus["iterate"] != StepPending || run.StepIters["iterate"] != 1 {
 		t.Fatalf("tras iter1: status=%q iters=%d", run.StepStatus["iterate"], run.StepIters["iterate"])
@@ -153,7 +235,7 @@ steps:
 	}
 
 	// result == stop → repeat_while falso → queda done, 'after' se libera
-	engine.CompleteWorkflowStep("L", "iterate", "stop", StepDone)
+	engine.CompleteWorkflowStep("L", "iterate", "stop", StepDone, "")
 	run, _, _ = engine.WorkflowRunStatus("L")
 	if run.StepStatus["iterate"] != StepDone {
 		t.Fatalf("tras stop, iterate debería estar done, está %q", run.StepStatus["iterate"])
@@ -185,7 +267,7 @@ steps:
 	engine.StartWorkflowRun("C", def)
 	// repeat_while siempre true; debería re-abrir hasta el cap (2) y luego quedar done
 	for i := 0; i < 5; i++ {
-		run, _ := engine.CompleteWorkflowStep("C", "spin", "x", StepDone)
+		run, _ := engine.CompleteWorkflowStep("C", "spin", "x", StepDone, "")
 		if run.StepStatus["spin"] == StepDone {
 			if run.StepIters["spin"] != 2 {
 				t.Fatalf("esperaba parar en 2 iteraciones, paró en %d", run.StepIters["spin"])

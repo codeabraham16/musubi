@@ -95,7 +95,8 @@ type WorkflowStore interface {
 	StartWorkflowRun(runID string, def WorkflowDef) (WorkflowRun, error)
 	WorkflowRunStatus(runID string) (WorkflowRun, bool, error)
 	WorkflowReady(runID string) ([]string, error)
-	CompleteWorkflowStep(runID, stepID, result, stepStatus string) (WorkflowRun, error)
+	CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error)
+	WorkflowJournal(runID string) ([]RunEvent, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 

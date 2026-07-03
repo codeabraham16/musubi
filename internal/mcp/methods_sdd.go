@@ -74,7 +74,7 @@ func (s *McpServer) toolSDD(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		phase := strings.TrimSpace(args.Phase)
 		runID := memory.SDDRunID(change)
-		run, err := s.engine.CompleteWorkflowStep(runID, phase, args.Summary, args.Status)
+		run, err := s.engine.CompleteWorkflowStep(runID, phase, args.Summary, args.Status, "")
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo cerrar la fase: %v", err)
 		}

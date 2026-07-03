@@ -454,13 +454,14 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 // steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Action     string `json:"action"`
-		Workflow   string `json:"workflow"`   // id → .musubi/workflows/<id>.yaml
-		Definition string `json:"definition"` // YAML inline (alternativa a 'workflow')
-		RunID      string `json:"run_id"`
-		Step       string `json:"step"`
-		Result     string `json:"result"`
-		Status     string `json:"status"`
+		Action         string `json:"action"`
+		Workflow       string `json:"workflow"`   // id → .musubi/workflows/<id>.yaml
+		Definition     string `json:"definition"` // YAML inline (alternativa a 'workflow')
+		RunID          string `json:"run_id"`
+		Step           string `json:"step"`
+		Result         string `json:"result"`
+		Status         string `json:"status"`
+		IdempotencyKey string `json:"idempotency_key"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -540,12 +541,22 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'run_id' y 'step'")
 		}
-		run, err := s.engine.CompleteWorkflowStep(args.RunID, args.Step, args.Result, args.Status)
+		run, err := s.engine.CompleteWorkflowStep(args.RunID, args.Step, args.Result, args.Status, args.IdempotencyKey)
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+
+	case "journal":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "journal requiere 'run_id'")
+		}
+		events, err := s.engine.WorkflowJournal(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run_id": args.RunID, "events": events})
 
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
@@ -570,7 +581,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal)", action)
 	}
 }
 

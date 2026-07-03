@@ -16,6 +16,17 @@ Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ing
   renueva, la unidad se recicla automáticamente en el próximo `claim` (reclamo *lazy*, sin proceso de fondo).
 
 ### Added
+- **Run journal append-only + idempotencia por step** (Track 13, orquestación): el motor de workflows
+  (`musubi_workflow`) sólo guardaba un **snapshot mutable**, sin idempotencia (un `complete` repetido
+  sobrescribía en silencio) ni historia (no se podía auditar/exportar/replay). Ahora cada transición del run
+  (arranque, step completado/saltado/reabierto, run cerrado) se registra en un **journal append-only**
+  (`run_events`), escrito en la **misma transacción** que actualiza el snapshot — event-sourcing con read-model
+  materializado, así journal y estado corriente nunca divergen. `complete` acepta una **`idempotency_key`**
+  opcional: reintentar con la misma clave es un **no-op seguro** (no re-aplica ni duplica). Nueva acción
+  `journal` (run_id) que devuelve la traza de eventos del run (`WorkflowJournal`). Es el cimiento estructural de
+  replay/HITL/saga/observabilidad (OTel), que quedan habilitados para cambios futuros. Migración de esquema
+  **v6** (tabla `run_events` con `UNIQUE(run_id, seq)` y `UNIQUE(run_id, idempotency_key)`), aditiva: el
+  snapshot y su API siguen intactos.
 - **Invalidación bi-temporal del grafo de hechos** (Track 13, memoria): hasta ahora `musubi_save_fact` sólo
   **acumulaba** tripletas y nunca retiraba ninguna, así que `(Ana, trabaja_en, Acme)` y `(Ana, trabaja_en,
   Globex)` convivían como si ambas fueran verdad. Ahora el grafo es **bi-temporal** (patrón Zep/Graphiti,
