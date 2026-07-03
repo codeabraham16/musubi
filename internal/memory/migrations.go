@@ -78,6 +78,97 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 4,
+			name:    "work_lease_ttl",
+			// Lease/TTL para claims huérfanos en la pizarra: sin esto, una unidad que un
+			// agente reclama y luego abandona (crash/timeout) queda 'claimed' para siempre
+			// y ningún otro agente puede retomarla (bug de liveness). Columnas aditivas:
+			//   owner_id         -> dueño canónico del lease (alias nuevo de claimed_by)
+			//   lease_expires_at -> vencimiento del lease; NULL = sin lease (unidad vieja)
+			//   heartbeat_at     -> última renovación
+			//   attempts         -> reclamos acumulados (para dead-letter)
+			//   fencing_token    -> token monótono anti-zombie
+			// El índice (status, lease_expires_at) soporta el subselect del reclamo lazy.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE work_units ADD COLUMN owner_id TEXT`,
+					`ALTER TABLE work_units ADD COLUMN lease_expires_at DATETIME`,
+					`ALTER TABLE work_units ADD COLUMN heartbeat_at DATETIME`,
+					`ALTER TABLE work_units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+					`ALTER TABLE work_units ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0`,
+					`CREATE INDEX IF NOT EXISTS idx_work_lease ON work_units(status, lease_expires_at)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				// Backfill: las unidades ya reclamadas bajo el esquema viejo tienen
+				// claimed_by pero owner_id NULL. Copiar claimed_by -> owner_id para que su
+				// dueño pueda seguir completándolas tras el upgrade (owner_id es la columna
+				// canónica de propiedad). lease_expires_at queda NULL a propósito: se tratan
+				// como no-huérfanas (no se expropia trabajo en curso durante la migración).
+				_, err := x.Exec(`UPDATE work_units SET owner_id=claimed_by WHERE owner_id IS NULL AND claimed_by IS NOT NULL`)
+				return err
+			},
+		},
+		{
+			version: 5,
+			name:    "relations_bitemporal",
+			// Modelo bi-temporal del grafo de hechos: sin esto, save_fact solo ACUMULA
+			// tripletas y nunca retira ninguna, así que (Ana,trabaja_en,Acme) y
+			// (Ana,trabaja_en,Globex) conviven como si ambas fueran verdad. Columnas:
+			//   valid_from / valid_to    -> tiempo del EVENTO (desde/hasta cuándo es verdad)
+			//   invalidated_at           -> tiempo de TRANSACCIÓN (cuándo dejó de ser vigente)
+			//   superseded_by            -> id de la relación que la reemplazó
+			// "Verdad actual" = invalidated_at IS NULL. Backfill: los hechos previos quedan
+			// vigentes con valid_from = created_at. El índice acelera la búsqueda de hechos
+			// vivos por (sujeto, predicado).
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE relations ADD COLUMN valid_from DATETIME`,
+					`ALTER TABLE relations ADD COLUMN valid_to DATETIME`,
+					`ALTER TABLE relations ADD COLUMN invalidated_at DATETIME`,
+					`ALTER TABLE relations ADD COLUMN superseded_by INTEGER`,
+					`CREATE INDEX IF NOT EXISTS idx_rel_live ON relations(from_id, predicate, invalidated_at)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				_, err := x.Exec(`UPDATE relations SET valid_from = created_at WHERE valid_from IS NULL`)
+				return err
+			},
+		},
+		{
+			version: 6,
+			name:    "run_events_journal",
+			// Journal append-only del motor de workflows: hasta ahora workflow_runs solo
+			// guardaba un snapshot mutable, sin idempotencia (un complete repetido
+			// sobrescribía) ni historia (no se podía auditar/exportar/replay). run_events
+			// registra cada transición como un evento inmutable. UNIQUE(run_id, seq) da
+			// orden total; UNIQUE(run_id, idempotency_key) da idempotencia (en SQLite,
+			// múltiples idempotency_key NULL coexisten). Aditivo: no toca workflow_runs.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS run_events (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						run_id TEXT NOT NULL,
+						seq INTEGER NOT NULL,
+						step_id TEXT,
+						event_type TEXT NOT NULL,
+						payload TEXT,
+						idempotency_key TEXT,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(run_id, seq),
+						UNIQUE(run_id, idempotency_key)
+					);`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq)`)
+				return err
+			},
+		},
 	}
 }
 

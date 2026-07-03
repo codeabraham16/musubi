@@ -134,13 +134,14 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_save_fact",
-				Description: "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT').",
+				Description: "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"subject":   {Type: "string", Description: "Entidad sujeto (ej. 'auth')"},
-						"predicate": {Type: "string", Description: "Relación (ej. 'usa', 'depende_de')"},
-						"object":    {Type: "string", Description: "Entidad objeto (ej. 'JWT')"},
+						"subject":    {Type: "string", Description: "Entidad sujeto (ej. 'auth')"},
+						"predicate":  {Type: "string", Description: "Relación (ej. 'usa', 'depende_de')"},
+						"object":     {Type: "string", Description: "Entidad objeto (ej. 'JWT')"},
+						"valid_from": {Type: "string", Description: "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."},
 					},
 					Required: []string{"subject", "predicate", "object"},
 				},
@@ -150,12 +151,13 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall_facts",
-				Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens.",
+				Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time (qué era verdad en ese momento).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"entity":   {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
 						"max_hops": {Type: "number", Description: "Profundidad del recorrido (opcional; usa el default de la config)"},
+						"as_of":    {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
 					},
 					Required: []string{"entity"},
 				},
@@ -399,17 +401,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_work",
-				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (aislamiento de contexto; estimación model-free con parámetros configurables). action ∈ {plan, claim, complete, status, savings, clear}.",
+				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente y con un LEASE, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. El claim devuelve la unidad con su fencing_token; mientras trabaja, el sub-agente DEBE renovar el lease con action=heartbeat (id + agent + fencing_token) para no perder la unidad — si un agente crashea y no renueva, su unidad se recicla automáticamente al vencer el lease (semántica at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (estimación model-free configurable). action ∈ {plan, claim, heartbeat, complete, status, savings, clear}.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "plan | claim | complete | status | clear"},
-						"batch":  {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
-						"units":  {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
-						"agent":  {Type: "string", Description: "Para claim: etiqueta del sub-agente que reclama"},
-						"id":     {Type: "string", Description: "Para complete: ID de la unidad a cerrar"},
-						"result": {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
-						"status": {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"action":        {Type: "string", Description: "plan | claim | heartbeat | complete | status | savings | clear"},
+						"batch":         {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
+						"units":         {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
+						"agent":         {Type: "string", Description: "Para claim/heartbeat/complete: etiqueta del sub-agente (dueño del lease)"},
+						"id":            {Type: "string", Description: "Para heartbeat/complete: ID de la unidad"},
+						"result":        {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
+						"status":        {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"fencing_token": {Type: "number", Description: "Para heartbeat/complete: el fencing_token que devolvió el claim (defiende contra un agente expropiado que revive)"},
 					},
 				},
 			},
@@ -418,17 +421,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_workflow",
-				Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). Un step con `repeat_while` (+ `max_iterations`) se re-ejecuta como loop mientras la condición sea verdadera. action=validate valida una definición sin correrla; action=list lista los runs. action ∈ {start, next, complete, status, resume, validate, list}.",
+				Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). Un step con `repeat_while` (+ `max_iterations`) se re-ejecuta como loop mientras la condición sea verdadera. Cada avance se registra en un JOURNAL append-only (auditoría/observabilidad): action=journal (run_id) devuelve la traza de eventos del run; complete acepta un idempotency_key opcional (reintentar con la misma clave es un no-op seguro). action=validate valida una definición sin correrla; action=list lista los runs. action ∈ {start, next, complete, status, resume, validate, list, journal}.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action":     {Type: "string", Description: "start | next | complete | status | resume | validate | list"},
-						"workflow":   {Type: "string", Description: "Para start: id del workflow en .musubi/workflows/<id>.yaml"},
-						"definition": {Type: "string", Description: "Para start: definición YAML inline (alternativa a 'workflow')"},
-						"run_id":     {Type: "string", Description: "Identificador del run (lo elegís vos; persiste y permite resume)"},
-						"step":       {Type: "string", Description: "Para complete: id del step que terminaste"},
-						"result":     {Type: "string", Description: "Para complete: resultado/resumen del step"},
-						"status":     {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"action":          {Type: "string", Description: "start | next | complete | status | resume | validate | list | journal"},
+						"workflow":        {Type: "string", Description: "Para start: id del workflow en .musubi/workflows/<id>.yaml"},
+						"definition":      {Type: "string", Description: "Para start: definición YAML inline (alternativa a 'workflow')"},
+						"run_id":          {Type: "string", Description: "Identificador del run (lo elegís vos; persiste y permite resume)"},
+						"step":            {Type: "string", Description: "Para complete: id del step que terminaste"},
+						"result":          {Type: "string", Description: "Para complete: resultado/resumen del step"},
+						"status":          {Type: "string", Description: "Para complete: done | failed (default done)"},
+						"idempotency_key": {Type: "string", Description: "Para complete (opcional): clave de idempotencia; reintentar con la misma clave es un no-op seguro"},
 					},
 				},
 			},

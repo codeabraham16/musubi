@@ -73,7 +73,7 @@ steps:
 	}
 
 	// build con result "ok" → deploy listo, rollback se salta
-	engine.CompleteWorkflowStep("g", "build", "deploy ok", StepDone)
+	engine.CompleteWorkflowStep("g", "build", "deploy ok", StepDone, "")
 	ready, err := engine.WorkflowReady("g")
 	if err != nil {
 		t.Fatalf("ready: %v", err)
@@ -87,7 +87,7 @@ steps:
 	}
 
 	// completar deploy → run done (rollback skipped cuenta como terminal)
-	run, _ = engine.CompleteWorkflowStep("g", "deploy", "ok", StepDone)
+	run, _ = engine.CompleteWorkflowStep("g", "deploy", "ok", StepDone, "")
 	if run.Status != RunDone {
 		t.Errorf("run debería estar done con rollback skipped, está %q", run.Status)
 	}

@@ -344,13 +344,14 @@ func (s *McpServer) toolPhase(raw json.RawMessage) (interface{}, *RpcError) {
 // status/clear).
 func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Action string                `json:"action"`
-		Batch  string                `json:"batch"`
-		Units  []memory.WorkUnitSpec `json:"units"`
-		Agent  string                `json:"agent"`
-		ID     string                `json:"id"`
-		Result string                `json:"result"`
-		Status string                `json:"status"`
+		Action       string                `json:"action"`
+		Batch        string                `json:"batch"`
+		Units        []memory.WorkUnitSpec `json:"units"`
+		Agent        string                `json:"agent"`
+		ID           string                `json:"id"`
+		Result       string                `json:"result"`
+		Status       string                `json:"status"`
+		FencingToken int64                 `json:"fencing_token"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -373,20 +374,41 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(b)
 
 	case "claim":
-		u, ok, err := s.engine.ClaimWorkUnit(args.Batch, args.Agent)
+		u, ok, err := s.engine.ClaimWorkUnit(args.Batch, args.Agent,
+			s.multiagent.LeaseTTLSeconds, s.multiagent.MaxAttempts)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "no se pudo reclamar: %v", err)
 		}
 		if !ok {
 			return jsonResult(map[string]interface{}{"claimed": false})
 		}
+		// El agente debe renovar el lease con action=heartbeat (pasando id, agent y
+		// fencing_token de la unidad) mientras trabaja, o perderá el claim al vencer.
 		return jsonResult(map[string]interface{}{"claimed": true, "unit": u})
+
+	case "heartbeat":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "heartbeat requiere 'id'")
+		}
+		if strings.TrimSpace(args.Agent) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "heartbeat requiere 'agent' (el dueño del lease)")
+		}
+		ok, err := s.engine.HeartbeatWorkUnit(args.ID, args.Agent, args.FencingToken, s.multiagent.LeaseTTLSeconds)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo renovar el lease: %v", err)
+		}
+		if !ok {
+			// Fuiste expropiado o ya no sos el dueño: el agente debe detener el trabajo.
+			return jsonResult(map[string]interface{}{"alive": false,
+				"note": "lease no renovado: fuiste expropiado o ya no sos el dueño; detené el trabajo de esta unidad"})
+		}
+		return jsonResult(map[string]interface{}{"alive": true})
 
 	case "complete":
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'id'")
 		}
-		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent); err != nil {
+		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent, args.FencingToken); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo completar: %v", err)
 		}
 		return textResult("Unidad completada."), nil
@@ -432,13 +454,14 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 // steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Action     string `json:"action"`
-		Workflow   string `json:"workflow"`   // id → .musubi/workflows/<id>.yaml
-		Definition string `json:"definition"` // YAML inline (alternativa a 'workflow')
-		RunID      string `json:"run_id"`
-		Step       string `json:"step"`
-		Result     string `json:"result"`
-		Status     string `json:"status"`
+		Action         string `json:"action"`
+		Workflow       string `json:"workflow"`   // id → .musubi/workflows/<id>.yaml
+		Definition     string `json:"definition"` // YAML inline (alternativa a 'workflow')
+		RunID          string `json:"run_id"`
+		Step           string `json:"step"`
+		Result         string `json:"result"`
+		Status         string `json:"status"`
+		IdempotencyKey string `json:"idempotency_key"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -518,12 +541,22 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'run_id' y 'step'")
 		}
-		run, err := s.engine.CompleteWorkflowStep(args.RunID, args.Step, args.Result, args.Status)
+		run, err := s.engine.CompleteWorkflowStep(args.RunID, args.Step, args.Result, args.Status, args.IdempotencyKey)
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+
+	case "journal":
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "journal requiere 'run_id'")
+		}
+		events, err := s.engine.WorkflowJournal(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run_id": args.RunID, "events": events})
 
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
@@ -548,7 +581,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal)", action)
 	}
 }
 
@@ -656,6 +689,7 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 		Subject   string `json:"subject"`
 		Predicate string `json:"predicate"`
 		Object    string `json:"object"`
+		ValidFrom string `json:"valid_from"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -664,20 +698,26 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInvalidParams, "subject, predicate y object son obligatorios")
 	}
 
-	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object)
+	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object, args.ValidFrom, s.graph.SingleValuedPredicates)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar hecho: %v", err)
 	}
-	if res.Created {
-		return textResult(fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)), nil
+	msg := fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)
+	if !res.Created {
+		msg = fmt.Sprintf("Hecho re-afirmado (ya existía): %s %s %s.", args.Subject, args.Predicate, args.Object)
 	}
-	return textResult("El hecho ya existía, no se duplicó."), nil
+	if res.Invalidated > 0 {
+		// Cardinalidad: el predicado es funcional y este hecho reemplazó a otro(s).
+		msg += fmt.Sprintf(" Invalidó %d hecho(s) previo(s) contradictorio(s) (predicado single-valued).", res.Invalidated)
+	}
+	return textResult(msg), nil
 }
 
 func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Entity  string `json:"entity"`
 		MaxHops int    `json:"max_hops"`
+		AsOf    string `json:"as_of"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -691,7 +731,7 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 		maxHops = args.MaxHops
 	}
 
-	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts)
+	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts, args.AsOf)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
 	}

@@ -119,6 +119,13 @@ type GraphConfig struct {
 	// MaxObservations es el tope de observaciones (gists) que ensambla
 	// musubi_entity_context al unir grafo + prosa.
 	MaxObservations int `yaml:"max_observations"`
+	// SingleValuedPredicates lista los predicados FUNCIONALES (single-valued): a lo
+	// sumo un objeto vivo por sujeto. Al guardar (S, P, O_new) con P en esta lista, se
+	// invalidan los (S, P, O_old) vivos con O_old != O_new (invalidación bi-temporal
+	// por cardinalidad, model-free). Los predicados no listados son many-valued (no
+	// invalidan). Comparación case-insensitive. Default curado y chico (ES+EN); el
+	// usuario puede extenderlo o vaciarlo.
+	SingleValuedPredicates []string `yaml:"single_valued_predicates"`
 }
 
 // StartupConfig controla el comportamiento del arranque de sesión (hook
@@ -193,6 +200,15 @@ type MultiAgentConfig struct {
 	// protocolo de la pizarra por unidad (default 2000). El ahorro neto por unidad es
 	// AvoidedContextTokensPerUnit - DelegationOverheadTokens.
 	DelegationOverheadTokens int `yaml:"delegation_overhead_tokens"`
+	// LeaseTTLSeconds es la vida de un lease de claim (default 300 = 5 min). Si el
+	// dueño no renueva su lease (heartbeat) dentro de esta ventana, la unidad se
+	// vuelve reclamable por otro agente. El trabajo de un sub-agente puede tardar
+	// minutos, por eso el default es mayor que el visibility timeout típico de una cola.
+	LeaseTTLSeconds int `yaml:"lease_ttl_seconds"`
+	// MaxAttempts es la cantidad de reclamos antes de mandar una unidad a dead-letter
+	// (status failed) en vez de reciclarla de nuevo (default 5). Evita el loop
+	// crash→reclaim→crash de una unidad que siempre falla.
+	MaxAttempts int `yaml:"max_attempts"`
 }
 
 // ConflictConfig controla la detección de relaciones semánticas entre
@@ -350,6 +366,20 @@ func Default() Config {
 			MaxHops:         2,
 			MaxFacts:        50,
 			MaxObservations: 5,
+			// Predicados funcionales de dominio general, ES + EN. Curado y chico para
+			// minimizar falsos positivos; la invalidación es reversible (re-afirmar revive).
+			SingleValuedPredicates: []string{
+				"trabaja_en", "works_at",
+				"estado_actual", "current_status", "status",
+				"vive_en", "lives_in",
+				"ubicado_en", "located_in",
+				"reporta_a", "reports_to",
+				"asignado_a", "assigned_to",
+				"pertenece_a", "belongs_to",
+				"prioridad", "priority",
+				"version_actual", "current_version",
+				"responsable", "owner",
+			},
 		},
 		Update: UpdateConfig{
 			CheckIntervalHours: 24,
@@ -383,6 +413,8 @@ func Default() Config {
 			MaxBatchUnits:               50,
 			AvoidedContextTokensPerUnit: 4000,
 			DelegationOverheadTokens:    2000,
+			LeaseTTLSeconds:             300,
+			MaxAttempts:                 5,
 		},
 		VectorIndex: VectorIndexConfig{
 			Enabled:         true,
@@ -559,6 +591,11 @@ func (c *Config) applyDefaults(present map[string]bool) {
 	if c.Graph.MaxObservations == 0 {
 		c.Graph.MaxObservations = d.Graph.MaxObservations
 	}
+	// nil (ausente) -> default curado; lista vacía explícita ([]) -> se respeta (opt-out
+	// total de la invalidación por cardinalidad).
+	if c.Graph.SingleValuedPredicates == nil {
+		c.Graph.SingleValuedPredicates = d.Graph.SingleValuedPredicates
+	}
 
 	// Default de Update: 0 (ausente) -> 24h. Un valor negativo desactiva el chequeo.
 	if c.Update.CheckIntervalHours == 0 {
@@ -622,6 +659,12 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.MultiAgent.DelegationOverheadTokens == 0 {
 			c.MultiAgent.DelegationOverheadTokens = d.MultiAgent.DelegationOverheadTokens
+		}
+		if c.MultiAgent.LeaseTTLSeconds == 0 {
+			c.MultiAgent.LeaseTTLSeconds = d.MultiAgent.LeaseTTLSeconds
+		}
+		if c.MultiAgent.MaxAttempts == 0 {
+			c.MultiAgent.MaxAttempts = d.MultiAgent.MaxAttempts
 		}
 	}
 

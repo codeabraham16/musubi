@@ -27,6 +27,43 @@ const (
 	RunAborted = "aborted"
 )
 
+// Tipos de evento del run journal (run_events). El journal es append-only e inmutable:
+// registra cada transición del run para idempotencia, auditoría y el futuro
+// replay/observabilidad. El snapshot workflow_runs sigue siendo la verdad corriente.
+const (
+	EventRunStarted    = "run_started"
+	EventStepCompleted = "step_completed"
+	EventStepSkipped   = "step_skipped"
+	EventStepReopened  = "step_reopened"
+	EventRunDone       = "run_done"
+)
+
+// RunEvent es una entrada del journal append-only de un run.
+type RunEvent struct {
+	Seq       int    `json:"seq"`
+	StepID    string `json:"step_id,omitempty"`
+	EventType string `json:"event_type"`
+	Payload   string `json:"payload,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+// appendRunEvent agrega un evento inmutable al journal del run, dentro de la
+// transacción del caller (para que journal y snapshot se muevan juntos). seq es
+// monótono creciente por run (MAX(seq)+1); stepID/idempKey vacíos → NULL.
+func appendRunEvent(tx *sql.Tx, runID, stepID, eventType, payload, idempKey string) error {
+	var seq int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq),0)+1 FROM run_events WHERE run_id=?`, runID).Scan(&seq); err != nil {
+		return fmt.Errorf("error al calcular el seq del evento: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO run_events (run_id, seq, step_id, event_type, payload, idempotency_key) VALUES (?,?,?,?,?,?)`,
+		runID, seq, nullable(stepID), eventType, nullable(payload), nullable(idempKey),
+	); err != nil {
+		return fmt.Errorf("error al registrar el evento %q: %w", eventType, err)
+	}
+	return nil
+}
+
 // WorkflowStep es un nodo del DAG: un id, sus dependencias (needs) y, opcionalmente,
 // una condición `when` (expresión model-free). Un step con `when` falso se salta
 // (gate/if_then/switch se expresan con `when`, sin tipos de step separados).
@@ -237,13 +274,27 @@ func (e *DbEngine) StartWorkflowRun(runID string, def WorkflowDef) (WorkflowRun,
 		status[s.ID] = StepPending
 	}
 	statusJSON, _ := json.Marshal(status)
-	_, err = e.db.Exec(`
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error iniciando la tx del run: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`
 		INSERT INTO workflow_runs (run_id, workflow_id, definition, status, step_status, step_results)
 		VALUES (?, ?, ?, ?, ?, '{}')
 		ON CONFLICT(run_id) DO NOTHING;`,
 		runID, def.ID, string(defJSON), RunRunning, string(statusJSON))
 	if err != nil {
 		return WorkflowRun{}, fmt.Errorf("error creando el run: %w", err)
+	}
+	// run_started sólo cuando el run se crea de verdad (no al reabrir uno existente).
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := appendRunEvent(tx, runID, "", EventRunStarted, def.ID, ""); err != nil {
+			return WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error confirmando el run: %w", err)
 	}
 	run, _, err := e.WorkflowRunStatus(runID)
 	return run, err
@@ -296,6 +347,7 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	whens := run.Def.whenByID()
 	changed := false
 	var ready []string
+	var skipped []string
 	for {
 		candidates := run.Def.ReadySteps(run.StepStatus)
 		skippedThisPass := false
@@ -316,6 +368,7 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 				run.StepStatus[id] = StepSkipped
 				changed = true
 				skippedThisPass = true
+				skipped = append(skipped, id)
 			}
 		}
 		if !skippedThisPass {
@@ -323,16 +376,37 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 		}
 	}
 	if changed {
-		if _, perr := e.persistRunStatus(run); perr != nil {
+		tx, err := e.db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("error iniciando la tx de skips: %w", err)
+		}
+		defer tx.Rollback()
+		_, becameDone, perr := persistRunStatusTx(tx, run)
+		if perr != nil {
 			return nil, perr
+		}
+		for _, id := range skipped {
+			if err := appendRunEvent(tx, runID, id, EventStepSkipped, "", ""); err != nil {
+				return nil, err
+			}
+		}
+		if becameDone {
+			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+				return nil, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("error confirmando los skips: %w", err)
 		}
 	}
 	return ready, nil
 }
 
-// persistRunStatus guarda step_status/step_results y recalcula si el run quedó done
-// (todos los steps terminales: done o skipped).
-func (e *DbEngine) persistRunStatus(run WorkflowRun) (WorkflowRun, error) {
+// persistRunStatusTx guarda step_status/step_results dentro de la transacción del
+// caller y recalcula si el run quedó done (todos los steps terminales: done o skipped).
+// El segundo valor (becameDone) es true si el run transicionó a done EN esta llamada,
+// para que el caller emita el evento run_done en la misma tx.
+func persistRunStatusTx(tx *sql.Tx, run WorkflowRun) (WorkflowRun, bool, error) {
 	status := run.Status
 	allTerminal := true
 	for _, s := range run.Def.Steps {
@@ -341,26 +415,31 @@ func (e *DbEngine) persistRunStatus(run WorkflowRun) (WorkflowRun, error) {
 			break
 		}
 	}
+	becameDone := allTerminal && status != RunDone
 	if allTerminal {
 		status = RunDone
 	}
 	statusJSON, _ := json.Marshal(run.StepStatus)
 	resultsJSON, _ := json.Marshal(run.StepResults)
 	itersJSON, _ := json.Marshal(run.StepIters)
-	_, err := e.db.Exec(`
+	_, err := tx.Exec(`
 		UPDATE workflow_runs SET status=?, step_status=?, step_results=?, step_iters=?, updated_at=CURRENT_TIMESTAMP
 		WHERE run_id=?;`,
 		status, string(statusJSON), string(resultsJSON), string(itersJSON), run.RunID)
 	if err != nil {
-		return WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+		return WorkflowRun{}, false, fmt.Errorf("error actualizando el run: %w", err)
 	}
 	run.Status = status
-	return run, nil
+	return run, becameDone, nil
 }
 
 // CompleteWorkflowStep marca un step como done (o failed) con su resultado y, si
 // todos los steps quedaron done, marca el run como done. Devuelve el run actualizado.
-func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus string) (WorkflowRun, error) {
+// Cada llamada registra un evento step_completed en el journal (más step_reopened /
+// run_done si corresponde), en la MISMA transacción que actualiza el snapshot.
+// idempotencyKey (opcional): si ya existe un evento con esa clave para el run, la
+// llamada es un NO-OP (reintento seguro) y devuelve el estado actual sin re-aplicar.
+func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error) {
 	if stepStatus == "" {
 		stepStatus = StepDone
 	}
@@ -377,12 +456,27 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus string
 	if _, exists := run.StepStatus[stepID]; !exists {
 		return WorkflowRun{}, fmt.Errorf("el step %q no pertenece al workflow", stepID)
 	}
+
+	// Idempotencia: si ya se registró un evento con esta clave, es un reintento -> no-op.
+	if idempotencyKey != "" {
+		var seen int
+		if err := e.db.QueryRow(
+			`SELECT COUNT(*) FROM run_events WHERE run_id=? AND idempotency_key=?`, runID, idempotencyKey,
+		).Scan(&seen); err != nil {
+			return WorkflowRun{}, fmt.Errorf("error verificando idempotencia: %w", err)
+		}
+		if seen > 0 {
+			return run, nil // no-op: devolver el estado ya aplicado
+		}
+	}
+
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
 
 	// Loop de un step: si quedó done y declara repeat_while verdadero (bajo la cota
 	// de iteraciones), se RE-ABRE (vuelve a pending) para ejecutarse otra vez. El
 	// ctx ya refleja el done + result recién seteados.
+	reopened := false
 	if stepStatus == StepDone {
 		if step, ok := stepByID(run.Def, stepID); ok && strings.TrimSpace(step.RepeatWhile) != "" {
 			max := step.MaxIterations
@@ -396,13 +490,66 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus string
 			if again && run.StepIters[stepID] < max {
 				run.StepIters[stepID]++
 				run.StepStatus[stepID] = StepPending // re-abrir para otra iteración
+				reopened = true
 			}
 		}
 	}
 
 	// El run se cierra (done) cuando todos los steps son terminales (done o skipped).
-	// Un step failed lo deja running para que el agente decida.
-	return e.persistRunStatus(run)
+	// Un step failed lo deja running para que el agente decida. Snapshot + eventos van
+	// en una sola tx: nunca divergen.
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error iniciando la tx del complete: %w", err)
+	}
+	defer tx.Rollback()
+	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	if perr != nil {
+		return WorkflowRun{}, perr
+	}
+	payload, _ := json.Marshal(map[string]string{"status": stepStatus, "result": result})
+	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), idempotencyKey); err != nil {
+		return WorkflowRun{}, err
+	}
+	if reopened {
+		if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+			return WorkflowRun{}, err
+		}
+	}
+	if becameDone {
+		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+			return WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error confirmando el complete: %w", err)
+	}
+	return updated, nil
+}
+
+// WorkflowJournal devuelve el journal append-only de un run: sus eventos en orden de
+// seq (run_started, step_completed, step_skipped, step_reopened, run_done). Es la base
+// de la auditoría/observabilidad y del futuro replay del run.
+func (e *DbEngine) WorkflowJournal(runID string) ([]RunEvent, error) {
+	rows, err := e.db.Query(`
+		SELECT seq, COALESCE(step_id,''), event_type, COALESCE(payload,''), COALESCE(created_at,'')
+		FROM run_events WHERE run_id=? ORDER BY seq`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("error leyendo el journal del run: %w", err)
+	}
+	defer rows.Close()
+	out := []RunEvent{}
+	for rows.Next() {
+		var ev RunEvent
+		if err := rows.Scan(&ev.Seq, &ev.StepID, &ev.EventType, &ev.Payload, &ev.CreatedAt); err != nil {
+			return nil, fmt.Errorf("error escaneando evento del journal: %w", err)
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterando el journal: %w", err)
+	}
+	return out, nil
 }
 
 // stepByID devuelve el step con ese id (y true) de la definición.

@@ -7,6 +7,54 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-07-03
+
+Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ingeniería SOTA, toda model-free.
+Tres cambios, cada uno dogfoodeado por el flujo SDD completo: un **bugfix de liveness** en la pizarra (lease/TTL),
+la **invalidación bi-temporal** del grafo de hechos (memoria que ya no envejece mal), y el **run journal
+append-only** con idempotencia (cimiento de replay/observabilidad). Esquema evolucionado a la versión v6. El
+catálogo sigue en 30 tools; todo aditivo y retrocompatible.
+
+### Fixed
+- **Bug de liveness en la pizarra multi-agente (`musubi_work`)**: una unidad que un sub-agente reclamaba y luego
+  abandonaba (crash, timeout, sesión cerrada) quedaba en `claimed` **para siempre** — ningún otro agente podía
+  retomarla y el batch nunca cerraba. Ahora cada claim toma un **lease con vencimiento (TTL)**: si el dueño no lo
+  renueva, la unidad se recicla automáticamente en el próximo `claim` (reclamo *lazy*, sin proceso de fondo).
+
+### Added
+- **Run journal append-only + idempotencia por step** (Track 13, orquestación): el motor de workflows
+  (`musubi_workflow`) sólo guardaba un **snapshot mutable**, sin idempotencia (un `complete` repetido
+  sobrescribía en silencio) ni historia (no se podía auditar/exportar/replay). Ahora cada transición del run
+  (arranque, step completado/saltado/reabierto, run cerrado) se registra en un **journal append-only**
+  (`run_events`), escrito en la **misma transacción** que actualiza el snapshot — event-sourcing con read-model
+  materializado, así journal y estado corriente nunca divergen. `complete` acepta una **`idempotency_key`**
+  opcional: reintentar con la misma clave es un **no-op seguro** (no re-aplica ni duplica). Nueva acción
+  `journal` (run_id) que devuelve la traza de eventos del run (`WorkflowJournal`). Es el cimiento estructural de
+  replay/HITL/saga/observabilidad (OTel), que quedan habilitados para cambios futuros. Migración de esquema
+  **v6** (tabla `run_events` con `UNIQUE(run_id, seq)` y `UNIQUE(run_id, idempotency_key)`), aditiva: el
+  snapshot y su API siguen intactos.
+- **Invalidación bi-temporal del grafo de hechos** (Track 13, memoria): hasta ahora `musubi_save_fact` sólo
+  **acumulaba** tripletas y nunca retiraba ninguna, así que `(Ana, trabaja_en, Acme)` y `(Ana, trabaja_en,
+  Globex)` convivían como si ambas fueran verdad. Ahora el grafo es **bi-temporal** (patrón Zep/Graphiti,
+  model-free): para un predicado **funcional** (*single-valued*: `trabaja_en`, `estado_actual`, `vive_en`…,
+  declarados en `graph.single_valued_predicates`), guardar un objeto nuevo **invalida** automáticamente el
+  anterior por **cardinalidad** — sin LLM, sin entender el texto. El hecho viejo no se borra: se le cierra la
+  ventana de validez (`valid_from`/`valid_to`, `invalidated_at`, `superseded_by`), de modo que la historia queda
+  auditable. `musubi_recall_facts` devuelve por defecto sólo la **verdad actual** y acepta un parámetro **`as_of`**
+  para consulta *point-in-time* ("qué era verdad en tal momento"). `musubi_save_fact` acepta un `valid_from`
+  opcional y **revive** un hecho invalidado si se re-afirma. Migración de esquema **v5** (4 columnas aditivas +
+  índice + backfill `valid_from = created_at`), retrocompatible. Los predicados *many-valued* (no declarados) no
+  invalidan nada.
+- **Lease/TTL + heartbeat + fencing token en `musubi_work`** (Track 13, orquestación): patrón *visibility timeout*
+  (SQS) / lease (Chubby) sobre la pizarra, 100% model-free. Nuevo `action=heartbeat` para renovar el lease
+  mientras el sub-agente trabaja; el `claim` devuelve un **fencing token** monótono que `heartbeat`/`complete`
+  validan para bloquear al "worker zombie" (un agente expropiado que revive con un token viejo afecta 0 filas),
+  incluso cuando dos agentes comparten el mismo id. Dead-letter automático (`failed`) tras `max_attempts` reclamos,
+  para no reciclar indefinidamente una unidad que siempre falla. TTL y máximo de reintentos configurables
+  (`multiagent.lease_ttl_seconds` = 300, `multiagent.max_attempts` = 5). Migración de esquema **v4** (columnas
+  aditivas `owner_id`/`lease_expires_at`/`heartbeat_at`/`attempts`/`fencing_token` + índice), retrocompatible.
+  Semántica *at-least-once* → el trabajo delegado debe ser idempotente.
+
 ## [0.58.0] - 2026-07-03
 
 Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la memoria** (Track 12) y la

@@ -33,8 +33,8 @@ type RecallEngine interface {
 
 // GraphStore — grafo de conocimiento: hechos (tripletas) y contexto de entidad.
 type GraphStore interface {
-	SaveFact(subject, predicate, object string) (SaveFactResult, error)
-	RecallFacts(entity string, maxHops, maxFacts int) (GraphResult, error)
+	SaveFact(subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error)
+	RecallFacts(entity string, maxHops, maxFacts int, asOf string) (GraphResult, error)
 	EntityContext(entity string, maxHops, maxFacts, maxObs int) (EntityContextResult, error)
 }
 
@@ -83,8 +83,9 @@ type SkillDecisionStore interface {
 // WorkStore — pizarra compartida de unidades de trabajo (orquestación multi-agente).
 type WorkStore interface {
 	CreateWorkBatch(batchID string, specs []WorkUnitSpec) (WorkBatch, error)
-	ClaimWorkUnit(batchID, agent string) (WorkUnit, bool, error)
-	CompleteWorkUnit(id, result, status, agent string) error
+	ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts int) (WorkUnit, bool, error)
+	HeartbeatWorkUnit(id, owner string, fencingToken int64, ttlSeconds int) (bool, error)
+	CompleteWorkUnit(id, result, status, agent string, fencingToken int64) error
 	WorkBatchStatus(batchID string) (WorkBatch, error)
 	ClearWorkBatch(batchID string) error
 }
@@ -94,7 +95,8 @@ type WorkflowStore interface {
 	StartWorkflowRun(runID string, def WorkflowDef) (WorkflowRun, error)
 	WorkflowRunStatus(runID string) (WorkflowRun, bool, error)
 	WorkflowReady(runID string) ([]string, error)
-	CompleteWorkflowStep(runID, stepID, result, stepStatus string) (WorkflowRun, error)
+	CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error)
+	WorkflowJournal(runID string) ([]RunEvent, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 
