@@ -7,7 +7,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-07-03
+
 Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
+Cuatro features, cada una dogfoodeada por el flujo SDD completo y **sin migración de esquema** (todo se apoya en
+el journal `run_events` de v0.59.0): **export OpenTelemetry**, **saga (compensación LIFO)**, **HITL
+(interrupt/resume durable)** y **gate de verificación + Reflexion**. `musubi_workflow` pasó de 8 a 13 acciones;
+el catálogo sigue en 30 tools; todo aditivo y model-free.
 
 ### Added
 - **Gate de verificación duro + Reflexion en workflows** (`musubi_workflow action=verify`): cierra el
