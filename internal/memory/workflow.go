@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -21,10 +22,16 @@ const (
 	StepDone    = "done"
 	StepFailed  = "failed"
 	StepSkipped = "skipped"
+	StepWaiting   = "waiting_input" // HITL: pausado esperando input/aprobación humana
+	StepVerifying = "verifying"     // producido, esperando veredicto de verificación (gate)
 
 	RunRunning = "running"
 	RunDone    = "done"
 	RunAborted = "aborted"
+
+	// Estados de la saga (compensación LIFO).
+	RunCompensating = "compensating" // rollback en curso
+	RunCompensated  = "compensated"  // todas las compensaciones ejecutadas
 )
 
 // Tipos de evento del run journal (run_events). El journal es append-only e inmutable:
@@ -36,7 +43,32 @@ const (
 	EventStepSkipped   = "step_skipped"
 	EventStepReopened  = "step_reopened"
 	EventRunDone       = "run_done"
+	// Eventos de la saga (compensación LIFO).
+	EventRunRollback     = "run_rollback"     // se inició el rollback del run
+	EventStepCompensated = "step_compensated" // el agente ejecutó la compensación de un step
+	EventRunCompensated  = "run_compensated"  // todas las compensaciones ejecutadas
+	// Evento HITL (interrupt/resume).
+	EventStepWaiting = "step_waiting" // el run se pausó en un gate humano
+	// Eventos del gate de verificación (Reflexion).
+	EventStepVerifying  = "step_verifying"  // step producido, esperando veredicto
+	EventStepReflection = "step_reflection" // la verificación falló; payload = la reflexión
 )
+
+// defaultVerifyAttempts es el presupuesto de intentos de verificación (Reflexion) de un
+// step con `verify` que no declara max_iterations.
+const defaultVerifyAttempts = 3
+
+// CompensationStep es una entrada del plan de compensación: qué step deshacer y cómo.
+type CompensationStep struct {
+	StepID     string `json:"step"`
+	Compensate string `json:"compensate"`
+}
+
+// AwaitingStep es un gate humano pendiente: el step pausado y su prompt.
+type AwaitingStep struct {
+	StepID string `json:"step"`
+	Prompt string `json:"prompt"`
+}
 
 // RunEvent es una entrada del journal append-only de un run.
 type RunEvent struct {
@@ -77,6 +109,22 @@ type WorkflowStep struct {
 	// MaxIterations es la cota de seguridad anti-infinito (default defaultMaxIters).
 	RepeatWhile   string `yaml:"repeat_while,omitempty" json:"repeat_while,omitempty"`
 	MaxIterations int    `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	// Compensate es la directiva de cómo DESHACER este step (saga). Vacío = sin
+	// compensación. Al iniciarse un rollback, los steps completados con Compensate se
+	// compensan en orden inverso (LIFO). Es una instrucción para el agente: Musubi
+	// coordina el orden, el agente ejecuta el undo real.
+	Compensate string `yaml:"compensate,omitempty" json:"compensate,omitempty"`
+	// Await, si no está vacío, convierte el step en un GATE humano (HITL): al quedar
+	// listo, el run se PAUSA en él (waiting_input) en vez de ofrecerlo para ejecutar, y
+	// Await es el prompt para el humano. Se reanuda con action=provide. Bloquea a sus
+	// dependientes hasta la decisión. No se combina con repeat_while (gate, no loop).
+	Await string `yaml:"await,omitempty" json:"await,omitempty"`
+	// Verify, si no está vacío, convierte el step en un GATE DE VERIFICACIÓN: al
+	// completarlo con done NO queda done sino en `verifying` (bloquea dependientes) hasta
+	// que un veredicto lo resuelva con action=verify. Verify es la directiva de qué
+	// chequear. Un fail registra la reflexión y reabre el step (Reflexion) hasta agotar el
+	// presupuesto (MaxIterations, default defaultVerifyAttempts). No se combina con repeat_while.
+	Verify string `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
 
 // defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
@@ -345,31 +393,40 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 		return nil, fmt.Errorf("run %q no existe", runID)
 	}
 	whens := run.Def.whenByID()
+	awaits := run.Def.awaitByID()
 	changed := false
 	var ready []string
 	var skipped []string
+	var waiting []string // steps recién pausados en un gate humano (para journalear step_waiting)
 	for {
 		candidates := run.Def.ReadySteps(run.StepStatus)
 		skippedThisPass := false
 		ready = ready[:0]
 		for _, id := range candidates {
 			expr := whens[id]
-			if strings.TrimSpace(expr) == "" {
-				ready = append(ready, id)
-				continue
+			if strings.TrimSpace(expr) != "" {
+				pass, eerr := EvalCondition(expr, evalContext(run))
+				if eerr != nil {
+					return nil, fmt.Errorf("condición when inválida en step %q: %w", id, eerr)
+				}
+				if !pass {
+					run.StepStatus[id] = StepSkipped
+					changed = true
+					skippedThisPass = true
+					skipped = append(skipped, id)
+					continue
+				}
 			}
-			pass, eerr := EvalCondition(expr, evalContext(run))
-			if eerr != nil {
-				return nil, fmt.Errorf("condición when inválida en step %q: %w", id, eerr)
+			// `when` pasó (o no había). ¿Es un gate humano? Entonces PAUSA en vez de ready.
+			if strings.TrimSpace(awaits[id]) != "" {
+				if run.StepStatus[id] != StepWaiting {
+					run.StepStatus[id] = StepWaiting
+					changed = true
+					waiting = append(waiting, id)
+				}
+				continue // un gate en espera nunca se ofrece como ready
 			}
-			if pass {
-				ready = append(ready, id)
-			} else {
-				run.StepStatus[id] = StepSkipped
-				changed = true
-				skippedThisPass = true
-				skipped = append(skipped, id)
-			}
+			ready = append(ready, id)
 		}
 		if !skippedThisPass {
 			break
@@ -378,7 +435,7 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	if changed {
 		tx, err := e.db.Begin()
 		if err != nil {
-			return nil, fmt.Errorf("error iniciando la tx de skips: %w", err)
+			return nil, fmt.Errorf("error iniciando la tx del scheduler: %w", err)
 		}
 		defer tx.Rollback()
 		_, becameDone, perr := persistRunStatusTx(tx, run)
@@ -390,16 +447,96 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 				return nil, err
 			}
 		}
+		for _, id := range waiting {
+			if err := appendRunEvent(tx, runID, id, EventStepWaiting, awaits[id], ""); err != nil {
+				return nil, err
+			}
+		}
 		if becameDone {
 			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
 				return nil, err
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("error confirmando los skips: %w", err)
+			return nil, fmt.Errorf("error confirmando el avance del scheduler: %w", err)
 		}
 	}
 	return ready, nil
+}
+
+// awaitByID devuelve el mapa stepID → prompt de espera (Await).
+func (d WorkflowDef) awaitByID() map[string]string {
+	m := map[string]string{}
+	for _, s := range d.Steps {
+		m[s.ID] = s.Await
+	}
+	return m
+}
+
+// WorkflowAwaiting devuelve los gates humanos pendientes del run: los steps en
+// waiting_input con su prompt. Derivado del snapshot + la definición.
+func (e *DbEngine) WorkflowAwaiting(runID string) ([]AwaitingStep, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("run %q no existe", runID)
+	}
+	out := []AwaitingStep{}
+	for _, s := range run.Def.Steps {
+		if run.StepStatus[s.ID] == StepWaiting {
+			out = append(out, AwaitingStep{StepID: s.ID, Prompt: s.Await})
+		}
+	}
+	return out, nil
+}
+
+// ProvideWorkflowInput resuelve un gate humano (HITL): fija el resultado del step en espera a
+// `input` y su estado a `status` (done=aprobado, failed=rechazado), reanudando el run. Exige
+// que el step esté en waiting_input. Journalea step_completed (uniforme con el resto).
+func (e *DbEngine) ProvideWorkflowInput(runID, stepID, input, status string) (WorkflowRun, error) {
+	if status == "" {
+		status = StepDone
+	}
+	if status != StepDone && status != StepFailed {
+		return WorkflowRun{}, fmt.Errorf("estado inválido: %q (usá done|failed)", status)
+	}
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if !ok {
+		return WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	if run.StepStatus[stepID] != StepWaiting {
+		return WorkflowRun{}, fmt.Errorf("el step %q no está esperando input (estado %q)", stepID, run.StepStatus[stepID])
+	}
+	run.StepStatus[stepID] = status
+	run.StepResults[stepID] = input
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error iniciando la tx de provide: %w", err)
+	}
+	defer tx.Rollback()
+	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	if perr != nil {
+		return WorkflowRun{}, perr
+	}
+	payload, _ := json.Marshal(map[string]string{"status": status, "result": input})
+	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
+		return WorkflowRun{}, err
+	}
+	if becameDone {
+		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+			return WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error confirmando el provide: %w", err)
+	}
+	return updated, nil
 }
 
 // persistRunStatusTx guarda step_status/step_results dentro de la transacción del
@@ -473,12 +610,19 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
 
-	// Loop de un step: si quedó done y declara repeat_while verdadero (bajo la cota
-	// de iteraciones), se RE-ABRE (vuelve a pending) para ejecutarse otra vez. El
-	// ctx ya refleja el done + result recién seteados.
+	// Gate de verificación (precedencia sobre repeat_while): si el step declara `verify` y
+	// se completa con done, NO queda done sino en `verifying` (no terminal, bloquea a sus
+	// dependientes) hasta que un veredicto lo resuelva con action=verify.
+	verifying := false
 	reopened := false
 	if stepStatus == StepDone {
-		if step, ok := stepByID(run.Def, stepID); ok && strings.TrimSpace(step.RepeatWhile) != "" {
+		step, _ := stepByID(run.Def, stepID)
+		switch {
+		case strings.TrimSpace(step.Verify) != "":
+			run.StepStatus[stepID] = StepVerifying
+			verifying = true
+		case strings.TrimSpace(step.RepeatWhile) != "":
+			// Loop de un step: si repeat_while es verdadero (bajo la cota), se RE-ABRE.
 			max := step.MaxIterations
 			if max <= 0 {
 				max = defaultMaxIters
@@ -507,24 +651,124 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	if perr != nil {
 		return WorkflowRun{}, perr
 	}
-	payload, _ := json.Marshal(map[string]string{"status": stepStatus, "result": result})
-	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), idempotencyKey); err != nil {
-		return WorkflowRun{}, err
-	}
-	if reopened {
-		if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+	if verifying {
+		// El step se produjo pero aún no está hecho: no se emite step_completed hasta el pass.
+		vp, _ := json.Marshal(map[string]string{"result": result})
+		if err := appendRunEvent(tx, runID, stepID, EventStepVerifying, string(vp), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
 		}
-	}
-	if becameDone {
-		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+	} else {
+		payload, _ := json.Marshal(map[string]string{"status": stepStatus, "result": result})
+		if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
+		}
+		if reopened {
+			if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+				return WorkflowRun{}, err
+			}
+		}
+		if becameDone {
+			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+				return WorkflowRun{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return WorkflowRun{}, fmt.Errorf("error confirmando el complete: %w", err)
 	}
 	return updated, nil
+}
+
+// stepReflections devuelve las reflexiones (payloads de step_reflection) de un step, en orden.
+func (e *DbEngine) stepReflections(runID, stepID string) ([]string, error) {
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, ev := range events {
+		if ev.EventType == EventStepReflection && ev.StepID == stepID {
+			out = append(out, ev.Payload)
+		}
+	}
+	return out, nil
+}
+
+// VerifyWorkflowStep resuelve un gate de verificación (Reflexion): con pass=true el step queda
+// done (uniforme: journalea step_completed); con pass=false registra la reflexión y, si queda
+// presupuesto de intentos, REABRE el step para otro intento informado, o lo marca failed si se
+// agotó. Exige que el step esté en `verifying`. Devuelve el run + las reflexiones acumuladas.
+func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflection string) (WorkflowRun, []string, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return WorkflowRun{}, nil, err
+	}
+	if !ok {
+		return WorkflowRun{}, nil, fmt.Errorf("run %q no existe", runID)
+	}
+	if run.StepStatus[stepID] != StepVerifying {
+		return WorkflowRun{}, nil, fmt.Errorf("el step %q no está en verificación (estado %q)", stepID, run.StepStatus[stepID])
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, nil, fmt.Errorf("error iniciando la tx de verify: %w", err)
+	}
+	defer tx.Rollback()
+
+	if pass {
+		run.StepStatus[stepID] = StepDone
+		updated, becameDone, perr := persistRunStatusTx(tx, run)
+		if perr != nil {
+			return WorkflowRun{}, nil, perr
+		}
+		payload, _ := json.Marshal(map[string]string{"status": StepDone, "result": run.StepResults[stepID]})
+		if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+		if becameDone {
+			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+				return WorkflowRun{}, nil, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return WorkflowRun{}, nil, fmt.Errorf("error confirmando el verify: %w", err)
+		}
+		return updated, []string{}, nil
+	}
+
+	// Fail: registrar la reflexión y decidir reabrir (Reflexion) o fallar el gate.
+	if err := appendRunEvent(tx, runID, stepID, EventStepReflection, reflection, ""); err != nil {
+		return WorkflowRun{}, nil, err
+	}
+	step, _ := stepByID(run.Def, stepID)
+	max := step.MaxIterations
+	if max <= 0 {
+		max = defaultVerifyAttempts
+	}
+	if run.StepIters[stepID]+1 < max {
+		run.StepIters[stepID]++
+		run.StepStatus[stepID] = StepPending // reabrir para otro intento informado
+		if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+	} else {
+		run.StepStatus[stepID] = StepFailed // presupuesto agotado: el gate no se satisface
+	}
+	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	if perr != nil {
+		return WorkflowRun{}, nil, perr
+	}
+	if becameDone {
+		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, nil, fmt.Errorf("error confirmando el verify: %w", err)
+	}
+	reflections, _ := e.stepReflections(runID, stepID)
+	return updated, reflections, nil
 }
 
 // WorkflowJournal devuelve el journal append-only de un run: sus eventos en orden de
@@ -560,6 +804,176 @@ func stepByID(def WorkflowDef, id string) (WorkflowStep, bool) {
 		}
 	}
 	return WorkflowStep{}, false
+}
+
+// --- Saga: compensación LIFO ---
+
+// hasEvent indica si el journal ya contiene un evento de ese tipo.
+func hasEvent(events []RunEvent, eventType string) bool {
+	for _, ev := range events {
+		if ev.EventType == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// compensationPlan deriva el plan de compensación LIFO de un run a partir de su journal:
+// los steps completados (por orden de su ÚLTIMO step_completed), invertidos (LIFO), y
+// filtrados a los que tienen Compensate, siguen en estado done, y no fueron aún compensados.
+// Es una función pura del journal + la definición → re-entrante e idempotente.
+func compensationPlan(run WorkflowRun, events []RunEvent) []CompensationStep {
+	comp := map[string]string{}
+	for _, s := range run.Def.Steps {
+		comp[s.ID] = s.Compensate
+	}
+	lastCompletedSeq := map[string]int{}
+	compensated := map[string]bool{}
+	for _, ev := range events {
+		switch ev.EventType {
+		case EventStepCompleted:
+			lastCompletedSeq[ev.StepID] = ev.Seq
+		case EventStepCompensated:
+			compensated[ev.StepID] = true
+		}
+	}
+	type cs struct {
+		id  string
+		seq int
+	}
+	order := make([]cs, 0, len(lastCompletedSeq))
+	for id, seq := range lastCompletedSeq {
+		order = append(order, cs{id, seq})
+	}
+	// Orden de completado ascendente por seq (único por run); LIFO = recorrer al revés.
+	sort.Slice(order, func(i, j int) bool { return order[i].seq < order[j].seq })
+	var plan []CompensationStep
+	for i := len(order) - 1; i >= 0; i-- {
+		id := order[i].id
+		if comp[id] == "" || run.StepStatus[id] != StepDone || compensated[id] {
+			continue
+		}
+		plan = append(plan, CompensationStep{StepID: id, Compensate: comp[id]})
+	}
+	return plan
+}
+
+// WorkflowRollback inicia la saga de un run: marca el run `compensating`, journalea
+// `run_rollback` (una sola vez) y devuelve el plan de compensación LIFO vigente. Si no hay
+// nada que compensar, el run queda directamente `compensated`. Re-entrante: re-llamarlo
+// recomputa el plan según lo que falte, sin duplicar el evento de inicio.
+func (e *DbEngine) WorkflowRollback(runID string) ([]CompensationStep, WorkflowRun, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	if !ok {
+		return nil, WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	plan := compensationPlan(run, events)
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error iniciando la tx de rollback: %w", err)
+	}
+	defer tx.Rollback()
+
+	newStatus := RunCompensating
+	if len(plan) == 0 {
+		newStatus = RunCompensated
+	}
+	if _, err := tx.Exec(`UPDATE workflow_runs SET status=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?`, newStatus, runID); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+	}
+	if !hasEvent(events, EventRunRollback) {
+		if err := appendRunEvent(tx, runID, "", EventRunRollback, "", ""); err != nil {
+			return nil, WorkflowRun{}, err
+		}
+	}
+	if len(plan) == 0 && !hasEvent(events, EventRunCompensated) {
+		if err := appendRunEvent(tx, runID, "", EventRunCompensated, "", ""); err != nil {
+			return nil, WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error confirmando el rollback: %w", err)
+	}
+	run.Status = newStatus
+	return plan, run, nil
+}
+
+// CompleteCompensation marca que el agente ejecutó la compensación de un step: journalea
+// `step_compensated` y, si con eso el plan queda vacío, cierra el run como `compensated`.
+// Idempotente: compensar dos veces el mismo step es no-op. Devuelve el plan restante (LIFO).
+func (e *DbEngine) CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	if !ok {
+		return nil, WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	if _, exists := run.StepStatus[stepID]; !exists {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no pertenece al workflow", stepID)
+	}
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+
+	// Idempotencia: ya compensado → no-op, devolver el plan actual.
+	for _, ev := range events {
+		if ev.EventType == EventStepCompensated && ev.StepID == stepID {
+			return compensationPlan(run, events), run, nil
+		}
+	}
+
+	// El step debe ser compensable: declarar Compensate y estar done.
+	directive := ""
+	if s, ok := stepByID(run.Def, stepID); ok {
+		directive = s.Compensate
+	}
+	if directive == "" {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no tiene compensación declarada", stepID)
+	}
+	if run.StepStatus[stepID] != StepDone {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no está done; no se puede compensar", stepID)
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error iniciando la tx de compensación: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := appendRunEvent(tx, runID, stepID, EventStepCompensated, "", ""); err != nil {
+		return nil, WorkflowRun{}, err
+	}
+
+	// Plan restante teniendo en cuenta este step_compensated (evento sintético para recomputar).
+	eventsAfter := append(events, RunEvent{StepID: stepID, EventType: EventStepCompensated})
+	remaining := compensationPlan(run, eventsAfter)
+	newStatus := run.Status
+	if len(remaining) == 0 {
+		newStatus = RunCompensated
+		if _, err := tx.Exec(`UPDATE workflow_runs SET status=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?`, newStatus, runID); err != nil {
+			return nil, WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+		}
+		if !hasEvent(events, EventRunCompensated) {
+			if err := appendRunEvent(tx, runID, "", EventRunCompensated, "", ""); err != nil {
+				return nil, WorkflowRun{}, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error confirmando la compensación: %w", err)
+	}
+	run.Status = newStatus
+	return remaining, run, nil
 }
 
 // WorkflowListRuns devuelve un resumen de todos los runs, del más reciente al más viejo.

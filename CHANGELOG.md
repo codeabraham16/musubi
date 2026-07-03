@@ -7,6 +7,55 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-07-03
+
+Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
+Cuatro features, cada una dogfoodeada por el flujo SDD completo y **sin migración de esquema** (todo se apoya en
+el journal `run_events` de v0.59.0): **export OpenTelemetry**, **saga (compensación LIFO)**, **HITL
+(interrupt/resume durable)** y **gate de verificación + Reflexion**. `musubi_workflow` pasó de 8 a 13 acciones;
+el catálogo sigue en 30 tools; todo aditivo y model-free.
+
+### Added
+- **Gate de verificación duro + Reflexion en workflows** (`musubi_workflow action=verify`): cierra el
+  *verification-generation gap* (generar es fácil, verificar es el cuello de botella). Un step puede declarar
+  `verify` (la directiva de qué chequear); al completarlo con `done` **no** queda hecho: entra en `verifying`
+  (no terminal, bloquea a sus dependientes) hasta que un veredicto lo resuelva. `action=verify` (run_id, step,
+  verdict `pass|fail`, reflexión en `result`): **pass** → `done` (uniforme: journalea `step_completed`);
+  **fail** → registra la **reflexión** y, si queda presupuesto de intentos, **reabre** el step para un reintento
+  informado (**Reflexion**); al agotarse (`max_iterations`, default 3), el step queda `failed` (el gate no se
+  satisface). Las reflexiones acumuladas se devuelven para informar el reintento y quedan en el journal. Nuevo
+  estado (`verifying`) y eventos (`step_verifying`, `step_reflection`). **Sin migración**. Model-free: Musubi
+  impone la estructura del gate y registra; el veredicto lo produce el agente, idealmente con una lente
+  adversarial (la skill `adversarial-review` lo fomenta) — adversarial > auto-chequeo.
+- **HITL: interrupt/resume durable en workflows** (`musubi_workflow action=provide`): un step puede declarar
+  `await` (un prompt), volviéndolo un **gate humano**. Al quedar listo, el run se **pausa** en él
+  (`waiting_input`) en vez de ofrecerlo para ejecutar, bloquea a sus dependientes, y las respuestas lo surface en
+  `waiting` con su prompt. Se reanuda con `action=provide` (run_id, step, input, status): `done` = aprobado (el
+  `input` queda como resultado, los dependientes se destraban), `failed` = rechazado (siguen bloqueados). La
+  espera es **durable** por construcción (estado + journal en SQLite): se puede proveer la decisión **en otra
+  sesión** y el run continúa exactamente donde estaba (patrón interrupt/resume de LangGraph). Un gate con `when`
+  falso se salta en vez de pausar. Nuevo estado de step (`waiting_input`) y evento de journal (`step_waiting`).
+  **Sin migración**. Model-free: Musubi expone QUÉ espera y su prompt; el aviso al humano es del integrador.
+- **Saga: compensación LIFO en workflows** (`musubi_workflow action=rollback` / `compensated`): el motor sabía
+  avanzar un DAG pero no **deshacer**. Ahora un step puede declarar `compensate` (la directiva de cómo revertirlo);
+  `action=rollback` inicia la **saga** y devuelve el plan de compensación en orden **LIFO** (inverso al de
+  completado) de los steps completados con compensación; el agente ejecuta cada *undo* y reporta con
+  `action=compensated` (run_id, step), que devuelve el plan restante; al vaciarse, el run queda `compensated`. El
+  plan se **deriva del run journal** (re-entrante e idempotente: compensar dos veces un step es no-op; re-`rollback`
+  recomputa lo que falta). Model-free: Musubi coordina QUÉ y EN QUÉ ORDEN; el agente ejecuta el undo real.
+  Nuevos estados de run (`compensating`, `compensated`) y eventos de journal (`run_rollback`, `step_compensated`,
+  `run_compensated`). **Sin migración** (el campo viaja en la definición ya persistida). El disparo es explícito
+  (un step `failed` no fuerza rollback; la política es del agente).
+- **Export OpenTelemetry del run journal** (`musubi_workflow action=otel`): exporta un run de workflow como una
+  **traza OTLP/JSON** estándar (el run es un *trace*, cada step un *span*), lista para ingerir en cualquier
+  collector (Jaeger, Grafana Tempo, etc.). La traza se **deriva** del journal en el momento del export (principio
+  "derivar, no guardar-y-desfasar" — sin tabla de spans, sin migración, sin drift). IDs OTel **deterministas**
+  (trace_id 16 bytes de `run_id`, span_id 8 bytes de `run_id`+`step_id`, por SHA-256 truncado): re-exportar da la
+  misma traza. Status por step (`failed`→ERROR, `done`→OK, `skipped` marcado), atributos (`musubi.seq`,
+  `event_type`, `result`, `workflow_id`), `service.name=musubi`. Model-free, Go puro, **sin el SDK de OTel** (el
+  OTLP/JSON se emite a mano). Musubi sólo devuelve el JSON; el transporte al collector es del consumidor
+  (local-first). Alinea con la dirección del servidor casero (Musubi como cerebro + orquestador observable).
+
 ## [0.59.0] - 2026-07-03
 
 Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ingeniería SOTA, toda model-free.

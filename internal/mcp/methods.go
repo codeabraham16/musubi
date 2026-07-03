@@ -462,6 +462,8 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		Result         string `json:"result"`
 		Status         string `json:"status"`
 		IdempotencyKey string `json:"idempotency_key"`
+		Input          string `json:"input"`
+		Verdict        string `json:"verdict"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -506,7 +508,8 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
 	case "validate":
 		def, rerr := loadDef()
@@ -535,7 +538,8 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
-		return jsonResult(map[string]interface{}{"ready": ready})
+		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
+		return jsonResult(map[string]interface{}{"ready": ready, "waiting": waiting})
 
 	case "complete":
 		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
@@ -546,7 +550,8 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
 	case "journal":
 		if strings.TrimSpace(args.RunID) == "" {
@@ -557,6 +562,73 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
 		return jsonResult(map[string]interface{}{"run_id": args.RunID, "events": events})
+
+	case "otel":
+		// Deriva la traza OTLP/JSON del run (trace=run, span=step) para ingestión por un
+		// collector OpenTelemetry. Read-only, derivado del journal.
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "otel requiere 'run_id'")
+		}
+		trace, err := s.engine.WorkflowTraceOTLP(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return textResult(trace), nil
+
+	case "rollback":
+		// Inicia la saga: devuelve el plan de compensación LIFO (steps a deshacer, en orden
+		// inverso). El agente ejecuta cada compensación y reporta con action=compensated.
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "rollback requiere 'run_id'")
+		}
+		plan, run, err := s.engine.WorkflowRollback(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+
+	case "compensated":
+		// El agente reporta que ejecutó la compensación de un step; devuelve el plan restante.
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "compensated requiere 'run_id' y 'step'")
+		}
+		plan, run, err := s.engine.CompleteCompensation(args.RunID, args.Step)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+
+	case "provide":
+		// HITL: resuelve un gate humano (step en waiting_input). input = la decisión/dato;
+		// status = done (aprobado) | failed (rechazado). Reanuda el run.
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "provide requiere 'run_id' y 'step'")
+		}
+		run, err := s.engine.ProvideWorkflowInput(args.RunID, args.Step, args.Input, args.Status)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		ready, _ := s.engine.WorkflowReady(args.RunID)
+		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
+
+	case "verify":
+		// Gate de verificación (Reflexion): resuelve un step en `verifying`. verdict=pass
+		// lo marca done; verdict=fail registra la reflexión (result) y reabre para otro
+		// intento, o falla el gate al agotar el presupuesto.
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "verify requiere 'run_id' y 'step'")
+		}
+		verdict := strings.TrimSpace(args.Verdict)
+		if verdict != "pass" && verdict != "fail" {
+			return nil, rpcErrorf(codeInvalidParams, "verify requiere 'verdict' = pass | fail")
+		}
+		run, reflections, err := s.engine.VerifyWorkflowStep(args.RunID, args.Step, verdict == "pass", args.Result)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		ready, _ := s.engine.WorkflowReady(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "reflections": reflections})
 
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
@@ -578,10 +650,11 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if rerr != nil {
 			return nil, rpcErrorf(codeInternalError, "%v", rerr)
 		}
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
+		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|compensated|provide|verify)", action)
 	}
 }
 
