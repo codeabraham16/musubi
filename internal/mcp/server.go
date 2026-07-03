@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
@@ -121,6 +122,9 @@ type McpServer struct {
 	pipeline config.PipelineConfig
 	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
 	multiagent config.MultiAgentConfig
+	// gitRunner obtiene el diff para musubi_detect_changes; nil → GitRunner real sobre
+	// projectPath. Los tests lo inyectan (codeintel.FakeRunner) para no depender de git.
+	gitRunner codeintel.Runner
 	// tools es el catálogo ordenado de tools (fuente de tools/list); toolIndex es
 	// el mapa nombre→handler para el dispatch O(1) de tools/call. Ambos se construyen
 	// una vez en NewMcpServer desde buildRegistry.

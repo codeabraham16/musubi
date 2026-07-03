@@ -529,5 +529,20 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler: noCtx(s.toolAuthorSkill),
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_detect_changes",
+				Description: "Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"ref":    {Type: "string", Description: "Base de comparación del diff (ej. 'HEAD~1', 'main'); opcional, default working tree vs HEAD"},
+						"staged": {Type: "boolean", Description: "Si es true, compara el índice (git diff --staged); opcional"},
+					},
+				},
+			},
+			handler:  s.toolDetectChanges,
+			readOnly: true,
+		},
 	}
 }
