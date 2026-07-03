@@ -10,6 +10,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
 
 ### Added
+- **Gate de verificación duro + Reflexion en workflows** (`musubi_workflow action=verify`): cierra el
+  *verification-generation gap* (generar es fácil, verificar es el cuello de botella). Un step puede declarar
+  `verify` (la directiva de qué chequear); al completarlo con `done` **no** queda hecho: entra en `verifying`
+  (no terminal, bloquea a sus dependientes) hasta que un veredicto lo resuelva. `action=verify` (run_id, step,
+  verdict `pass|fail`, reflexión en `result`): **pass** → `done` (uniforme: journalea `step_completed`);
+  **fail** → registra la **reflexión** y, si queda presupuesto de intentos, **reabre** el step para un reintento
+  informado (**Reflexion**); al agotarse (`max_iterations`, default 3), el step queda `failed` (el gate no se
+  satisface). Las reflexiones acumuladas se devuelven para informar el reintento y quedan en el journal. Nuevo
+  estado (`verifying`) y eventos (`step_verifying`, `step_reflection`). **Sin migración**. Model-free: Musubi
+  impone la estructura del gate y registra; el veredicto lo produce el agente, idealmente con una lente
+  adversarial (la skill `adversarial-review` lo fomenta) — adversarial > auto-chequeo.
 - **HITL: interrupt/resume durable en workflows** (`musubi_workflow action=provide`): un step puede declarar
   `await` (un prompt), volviéndolo un **gate humano**. Al quedar listo, el run se **pausa** en él
   (`waiting_input`) en vez de ofrecerlo para ejecutar, bloquea a sus dependientes, y las respuestas lo surface en

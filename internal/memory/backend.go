@@ -102,6 +102,7 @@ type WorkflowStore interface {
 	CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error)
 	ProvideWorkflowInput(runID, stepID, input, status string) (WorkflowRun, error)
 	WorkflowAwaiting(runID string) ([]AwaitingStep, error)
+	VerifyWorkflowStep(runID, stepID string, pass bool, reflection string) (WorkflowRun, []string, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 

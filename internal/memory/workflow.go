@@ -22,7 +22,8 @@ const (
 	StepDone    = "done"
 	StepFailed  = "failed"
 	StepSkipped = "skipped"
-	StepWaiting = "waiting_input" // HITL: pausado esperando input/aprobación humana
+	StepWaiting   = "waiting_input" // HITL: pausado esperando input/aprobación humana
+	StepVerifying = "verifying"     // producido, esperando veredicto de verificación (gate)
 
 	RunRunning = "running"
 	RunDone    = "done"
@@ -48,7 +49,14 @@ const (
 	EventRunCompensated  = "run_compensated"  // todas las compensaciones ejecutadas
 	// Evento HITL (interrupt/resume).
 	EventStepWaiting = "step_waiting" // el run se pausó en un gate humano
+	// Eventos del gate de verificación (Reflexion).
+	EventStepVerifying  = "step_verifying"  // step producido, esperando veredicto
+	EventStepReflection = "step_reflection" // la verificación falló; payload = la reflexión
 )
+
+// defaultVerifyAttempts es el presupuesto de intentos de verificación (Reflexion) de un
+// step con `verify` que no declara max_iterations.
+const defaultVerifyAttempts = 3
 
 // CompensationStep es una entrada del plan de compensación: qué step deshacer y cómo.
 type CompensationStep struct {
@@ -111,6 +119,12 @@ type WorkflowStep struct {
 	// Await es el prompt para el humano. Se reanuda con action=provide. Bloquea a sus
 	// dependientes hasta la decisión. No se combina con repeat_while (gate, no loop).
 	Await string `yaml:"await,omitempty" json:"await,omitempty"`
+	// Verify, si no está vacío, convierte el step en un GATE DE VERIFICACIÓN: al
+	// completarlo con done NO queda done sino en `verifying` (bloquea dependientes) hasta
+	// que un veredicto lo resuelva con action=verify. Verify es la directiva de qué
+	// chequear. Un fail registra la reflexión y reabre el step (Reflexion) hasta agotar el
+	// presupuesto (MaxIterations, default defaultVerifyAttempts). No se combina con repeat_while.
+	Verify string `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
 
 // defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
@@ -596,12 +610,19 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
 
-	// Loop de un step: si quedó done y declara repeat_while verdadero (bajo la cota
-	// de iteraciones), se RE-ABRE (vuelve a pending) para ejecutarse otra vez. El
-	// ctx ya refleja el done + result recién seteados.
+	// Gate de verificación (precedencia sobre repeat_while): si el step declara `verify` y
+	// se completa con done, NO queda done sino en `verifying` (no terminal, bloquea a sus
+	// dependientes) hasta que un veredicto lo resuelva con action=verify.
+	verifying := false
 	reopened := false
 	if stepStatus == StepDone {
-		if step, ok := stepByID(run.Def, stepID); ok && strings.TrimSpace(step.RepeatWhile) != "" {
+		step, _ := stepByID(run.Def, stepID)
+		switch {
+		case strings.TrimSpace(step.Verify) != "":
+			run.StepStatus[stepID] = StepVerifying
+			verifying = true
+		case strings.TrimSpace(step.RepeatWhile) != "":
+			// Loop de un step: si repeat_while es verdadero (bajo la cota), se RE-ABRE.
 			max := step.MaxIterations
 			if max <= 0 {
 				max = defaultMaxIters
@@ -630,24 +651,124 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	if perr != nil {
 		return WorkflowRun{}, perr
 	}
-	payload, _ := json.Marshal(map[string]string{"status": stepStatus, "result": result})
-	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), idempotencyKey); err != nil {
-		return WorkflowRun{}, err
-	}
-	if reopened {
-		if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+	if verifying {
+		// El step se produjo pero aún no está hecho: no se emite step_completed hasta el pass.
+		vp, _ := json.Marshal(map[string]string{"result": result})
+		if err := appendRunEvent(tx, runID, stepID, EventStepVerifying, string(vp), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
 		}
-	}
-	if becameDone {
-		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+	} else {
+		payload, _ := json.Marshal(map[string]string{"status": stepStatus, "result": result})
+		if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
+		}
+		if reopened {
+			if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+				return WorkflowRun{}, err
+			}
+		}
+		if becameDone {
+			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+				return WorkflowRun{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return WorkflowRun{}, fmt.Errorf("error confirmando el complete: %w", err)
 	}
 	return updated, nil
+}
+
+// stepReflections devuelve las reflexiones (payloads de step_reflection) de un step, en orden.
+func (e *DbEngine) stepReflections(runID, stepID string) ([]string, error) {
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, ev := range events {
+		if ev.EventType == EventStepReflection && ev.StepID == stepID {
+			out = append(out, ev.Payload)
+		}
+	}
+	return out, nil
+}
+
+// VerifyWorkflowStep resuelve un gate de verificación (Reflexion): con pass=true el step queda
+// done (uniforme: journalea step_completed); con pass=false registra la reflexión y, si queda
+// presupuesto de intentos, REABRE el step para otro intento informado, o lo marca failed si se
+// agotó. Exige que el step esté en `verifying`. Devuelve el run + las reflexiones acumuladas.
+func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflection string) (WorkflowRun, []string, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return WorkflowRun{}, nil, err
+	}
+	if !ok {
+		return WorkflowRun{}, nil, fmt.Errorf("run %q no existe", runID)
+	}
+	if run.StepStatus[stepID] != StepVerifying {
+		return WorkflowRun{}, nil, fmt.Errorf("el step %q no está en verificación (estado %q)", stepID, run.StepStatus[stepID])
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, nil, fmt.Errorf("error iniciando la tx de verify: %w", err)
+	}
+	defer tx.Rollback()
+
+	if pass {
+		run.StepStatus[stepID] = StepDone
+		updated, becameDone, perr := persistRunStatusTx(tx, run)
+		if perr != nil {
+			return WorkflowRun{}, nil, perr
+		}
+		payload, _ := json.Marshal(map[string]string{"status": StepDone, "result": run.StepResults[stepID]})
+		if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+		if becameDone {
+			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+				return WorkflowRun{}, nil, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return WorkflowRun{}, nil, fmt.Errorf("error confirmando el verify: %w", err)
+		}
+		return updated, []string{}, nil
+	}
+
+	// Fail: registrar la reflexión y decidir reabrir (Reflexion) o fallar el gate.
+	if err := appendRunEvent(tx, runID, stepID, EventStepReflection, reflection, ""); err != nil {
+		return WorkflowRun{}, nil, err
+	}
+	step, _ := stepByID(run.Def, stepID)
+	max := step.MaxIterations
+	if max <= 0 {
+		max = defaultVerifyAttempts
+	}
+	if run.StepIters[stepID]+1 < max {
+		run.StepIters[stepID]++
+		run.StepStatus[stepID] = StepPending // reabrir para otro intento informado
+		if err := appendRunEvent(tx, runID, stepID, EventStepReopened, "", ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+	} else {
+		run.StepStatus[stepID] = StepFailed // presupuesto agotado: el gate no se satisface
+	}
+	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	if perr != nil {
+		return WorkflowRun{}, nil, perr
+	}
+	if becameDone {
+		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+			return WorkflowRun{}, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, nil, fmt.Errorf("error confirmando el verify: %w", err)
+	}
+	reflections, _ := e.stepReflections(runID, stepID)
+	return updated, reflections, nil
 }
 
 // WorkflowJournal devuelve el journal append-only de un run: sus eventos en orden de

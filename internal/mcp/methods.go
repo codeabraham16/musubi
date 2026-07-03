@@ -463,6 +463,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		Status         string `json:"status"`
 		IdempotencyKey string `json:"idempotency_key"`
 		Input          string `json:"input"`
+		Verdict        string `json:"verdict"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -611,6 +612,24 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
+	case "verify":
+		// Gate de verificación (Reflexion): resuelve un step en `verifying`. verdict=pass
+		// lo marca done; verdict=fail registra la reflexión (result) y reabre para otro
+		// intento, o falla el gate al agotar el presupuesto.
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "verify requiere 'run_id' y 'step'")
+		}
+		verdict := strings.TrimSpace(args.Verdict)
+		if verdict != "pass" && verdict != "fail" {
+			return nil, rpcErrorf(codeInvalidParams, "verify requiere 'verdict' = pass | fail")
+		}
+		run, reflections, err := s.engine.VerifyWorkflowStep(args.RunID, args.Step, verdict == "pass", args.Result)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		ready, _ := s.engine.WorkflowReady(args.RunID)
+		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "reflections": reflections})
+
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
 		// run en otra sesión (el estado vive en SQLite).
@@ -635,7 +654,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|compensated|provide)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|compensated|provide|verify)", action)
 	}
 }
 
