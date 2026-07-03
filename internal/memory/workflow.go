@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -25,6 +26,10 @@ const (
 	RunRunning = "running"
 	RunDone    = "done"
 	RunAborted = "aborted"
+
+	// Estados de la saga (compensación LIFO).
+	RunCompensating = "compensating" // rollback en curso
+	RunCompensated  = "compensated"  // todas las compensaciones ejecutadas
 )
 
 // Tipos de evento del run journal (run_events). El journal es append-only e inmutable:
@@ -36,7 +41,17 @@ const (
 	EventStepSkipped   = "step_skipped"
 	EventStepReopened  = "step_reopened"
 	EventRunDone       = "run_done"
+	// Eventos de la saga (compensación LIFO).
+	EventRunRollback     = "run_rollback"     // se inició el rollback del run
+	EventStepCompensated = "step_compensated" // el agente ejecutó la compensación de un step
+	EventRunCompensated  = "run_compensated"  // todas las compensaciones ejecutadas
 )
+
+// CompensationStep es una entrada del plan de compensación: qué step deshacer y cómo.
+type CompensationStep struct {
+	StepID     string `json:"step"`
+	Compensate string `json:"compensate"`
+}
 
 // RunEvent es una entrada del journal append-only de un run.
 type RunEvent struct {
@@ -77,6 +92,11 @@ type WorkflowStep struct {
 	// MaxIterations es la cota de seguridad anti-infinito (default defaultMaxIters).
 	RepeatWhile   string `yaml:"repeat_while,omitempty" json:"repeat_while,omitempty"`
 	MaxIterations int    `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	// Compensate es la directiva de cómo DESHACER este step (saga). Vacío = sin
+	// compensación. Al iniciarse un rollback, los steps completados con Compensate se
+	// compensan en orden inverso (LIFO). Es una instrucción para el agente: Musubi
+	// coordina el orden, el agente ejecuta el undo real.
+	Compensate string `yaml:"compensate,omitempty" json:"compensate,omitempty"`
 }
 
 // defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
@@ -560,6 +580,176 @@ func stepByID(def WorkflowDef, id string) (WorkflowStep, bool) {
 		}
 	}
 	return WorkflowStep{}, false
+}
+
+// --- Saga: compensación LIFO ---
+
+// hasEvent indica si el journal ya contiene un evento de ese tipo.
+func hasEvent(events []RunEvent, eventType string) bool {
+	for _, ev := range events {
+		if ev.EventType == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// compensationPlan deriva el plan de compensación LIFO de un run a partir de su journal:
+// los steps completados (por orden de su ÚLTIMO step_completed), invertidos (LIFO), y
+// filtrados a los que tienen Compensate, siguen en estado done, y no fueron aún compensados.
+// Es una función pura del journal + la definición → re-entrante e idempotente.
+func compensationPlan(run WorkflowRun, events []RunEvent) []CompensationStep {
+	comp := map[string]string{}
+	for _, s := range run.Def.Steps {
+		comp[s.ID] = s.Compensate
+	}
+	lastCompletedSeq := map[string]int{}
+	compensated := map[string]bool{}
+	for _, ev := range events {
+		switch ev.EventType {
+		case EventStepCompleted:
+			lastCompletedSeq[ev.StepID] = ev.Seq
+		case EventStepCompensated:
+			compensated[ev.StepID] = true
+		}
+	}
+	type cs struct {
+		id  string
+		seq int
+	}
+	order := make([]cs, 0, len(lastCompletedSeq))
+	for id, seq := range lastCompletedSeq {
+		order = append(order, cs{id, seq})
+	}
+	// Orden de completado ascendente por seq (único por run); LIFO = recorrer al revés.
+	sort.Slice(order, func(i, j int) bool { return order[i].seq < order[j].seq })
+	var plan []CompensationStep
+	for i := len(order) - 1; i >= 0; i-- {
+		id := order[i].id
+		if comp[id] == "" || run.StepStatus[id] != StepDone || compensated[id] {
+			continue
+		}
+		plan = append(plan, CompensationStep{StepID: id, Compensate: comp[id]})
+	}
+	return plan
+}
+
+// WorkflowRollback inicia la saga de un run: marca el run `compensating`, journalea
+// `run_rollback` (una sola vez) y devuelve el plan de compensación LIFO vigente. Si no hay
+// nada que compensar, el run queda directamente `compensated`. Re-entrante: re-llamarlo
+// recomputa el plan según lo que falte, sin duplicar el evento de inicio.
+func (e *DbEngine) WorkflowRollback(runID string) ([]CompensationStep, WorkflowRun, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	if !ok {
+		return nil, WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	plan := compensationPlan(run, events)
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error iniciando la tx de rollback: %w", err)
+	}
+	defer tx.Rollback()
+
+	newStatus := RunCompensating
+	if len(plan) == 0 {
+		newStatus = RunCompensated
+	}
+	if _, err := tx.Exec(`UPDATE workflow_runs SET status=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?`, newStatus, runID); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+	}
+	if !hasEvent(events, EventRunRollback) {
+		if err := appendRunEvent(tx, runID, "", EventRunRollback, "", ""); err != nil {
+			return nil, WorkflowRun{}, err
+		}
+	}
+	if len(plan) == 0 && !hasEvent(events, EventRunCompensated) {
+		if err := appendRunEvent(tx, runID, "", EventRunCompensated, "", ""); err != nil {
+			return nil, WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error confirmando el rollback: %w", err)
+	}
+	run.Status = newStatus
+	return plan, run, nil
+}
+
+// CompleteCompensation marca que el agente ejecutó la compensación de un step: journalea
+// `step_compensated` y, si con eso el plan queda vacío, cierra el run como `compensated`.
+// Idempotente: compensar dos veces el mismo step es no-op. Devuelve el plan restante (LIFO).
+func (e *DbEngine) CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+	if !ok {
+		return nil, WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	if _, exists := run.StepStatus[stepID]; !exists {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no pertenece al workflow", stepID)
+	}
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return nil, WorkflowRun{}, err
+	}
+
+	// Idempotencia: ya compensado → no-op, devolver el plan actual.
+	for _, ev := range events {
+		if ev.EventType == EventStepCompensated && ev.StepID == stepID {
+			return compensationPlan(run, events), run, nil
+		}
+	}
+
+	// El step debe ser compensable: declarar Compensate y estar done.
+	directive := ""
+	if s, ok := stepByID(run.Def, stepID); ok {
+		directive = s.Compensate
+	}
+	if directive == "" {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no tiene compensación declarada", stepID)
+	}
+	if run.StepStatus[stepID] != StepDone {
+		return nil, WorkflowRun{}, fmt.Errorf("el step %q no está done; no se puede compensar", stepID)
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error iniciando la tx de compensación: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := appendRunEvent(tx, runID, stepID, EventStepCompensated, "", ""); err != nil {
+		return nil, WorkflowRun{}, err
+	}
+
+	// Plan restante teniendo en cuenta este step_compensated (evento sintético para recomputar).
+	eventsAfter := append(events, RunEvent{StepID: stepID, EventType: EventStepCompensated})
+	remaining := compensationPlan(run, eventsAfter)
+	newStatus := run.Status
+	if len(remaining) == 0 {
+		newStatus = RunCompensated
+		if _, err := tx.Exec(`UPDATE workflow_runs SET status=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?`, newStatus, runID); err != nil {
+			return nil, WorkflowRun{}, fmt.Errorf("error actualizando el run: %w", err)
+		}
+		if !hasEvent(events, EventRunCompensated) {
+			if err := appendRunEvent(tx, runID, "", EventRunCompensated, "", ""); err != nil {
+				return nil, WorkflowRun{}, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, WorkflowRun{}, fmt.Errorf("error confirmando la compensación: %w", err)
+	}
+	run.Status = newStatus
+	return remaining, run, nil
 }
 
 // WorkflowListRuns devuelve un resumen de todos los runs, del más reciente al más viejo.

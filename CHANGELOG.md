@@ -10,6 +10,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
 
 ### Added
+- **Saga: compensación LIFO en workflows** (`musubi_workflow action=rollback` / `compensated`): el motor sabía
+  avanzar un DAG pero no **deshacer**. Ahora un step puede declarar `compensate` (la directiva de cómo revertirlo);
+  `action=rollback` inicia la **saga** y devuelve el plan de compensación en orden **LIFO** (inverso al de
+  completado) de los steps completados con compensación; el agente ejecuta cada *undo* y reporta con
+  `action=compensated` (run_id, step), que devuelve el plan restante; al vaciarse, el run queda `compensated`. El
+  plan se **deriva del run journal** (re-entrante e idempotente: compensar dos veces un step es no-op; re-`rollback`
+  recomputa lo que falta). Model-free: Musubi coordina QUÉ y EN QUÉ ORDEN; el agente ejecuta el undo real.
+  Nuevos estados de run (`compensating`, `compensated`) y eventos de journal (`run_rollback`, `step_compensated`,
+  `run_compensated`). **Sin migración** (el campo viaja en la definición ya persistida). El disparo es explícito
+  (un step `failed` no fuerza rollback; la política es del agente).
 - **Export OpenTelemetry del run journal** (`musubi_workflow action=otel`): exporta un run de workflow como una
   **traza OTLP/JSON** estándar (el run es un *trace*, cada step un *span*), lista para ingerir en cualquier
   collector (Jaeger, Grafana Tempo, etc.). La traza se **deriva** del journal en el momento del export (principio

@@ -98,6 +98,8 @@ type WorkflowStore interface {
 	CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error)
 	WorkflowJournal(runID string) ([]RunEvent, error)
 	WorkflowTraceOTLP(runID string) (string, error)
+	WorkflowRollback(runID string) ([]CompensationStep, WorkflowRun, error)
+	CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 

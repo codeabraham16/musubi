@@ -570,6 +570,29 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return textResult(trace), nil
 
+	case "rollback":
+		// Inicia la saga: devuelve el plan de compensación LIFO (steps a deshacer, en orden
+		// inverso). El agente ejecuta cada compensación y reporta con action=compensated.
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "rollback requiere 'run_id'")
+		}
+		plan, run, err := s.engine.WorkflowRollback(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+
+	case "compensated":
+		// El agente reporta que ejecutó la compensación de un step; devuelve el plan restante.
+		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "compensated requiere 'run_id' y 'step'")
+		}
+		plan, run, err := s.engine.CompleteCompensation(args.RunID, args.Step)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
 		// run en otra sesión (el estado vive en SQLite).
@@ -593,7 +616,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|compensated)", action)
 	}
 }
 
