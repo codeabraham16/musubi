@@ -97,6 +97,7 @@ type WorkflowStore interface {
 	WorkflowReady(runID string) ([]string, error)
 	CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error)
 	WorkflowJournal(runID string) ([]RunEvent, error)
+	WorkflowTraceOTLP(runID string) (string, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 

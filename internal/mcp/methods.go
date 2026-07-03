@@ -558,6 +558,18 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return jsonResult(map[string]interface{}{"run_id": args.RunID, "events": events})
 
+	case "otel":
+		// Deriva la traza OTLP/JSON del run (trace=run, span=step) para ingestión por un
+		// collector OpenTelemetry. Read-only, derivado del journal.
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "otel requiere 'run_id'")
+		}
+		trace, err := s.engine.WorkflowTraceOTLP(args.RunID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return textResult(trace), nil
+
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un
 		// run en otra sesión (el estado vive en SQLite).
@@ -581,7 +593,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel)", action)
 	}
 }
 

@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
+
+### Added
+- **Export OpenTelemetry del run journal** (`musubi_workflow action=otel`): exporta un run de workflow como una
+  **traza OTLP/JSON** estándar (el run es un *trace*, cada step un *span*), lista para ingerir en cualquier
+  collector (Jaeger, Grafana Tempo, etc.). La traza se **deriva** del journal en el momento del export (principio
+  "derivar, no guardar-y-desfasar" — sin tabla de spans, sin migración, sin drift). IDs OTel **deterministas**
+  (trace_id 16 bytes de `run_id`, span_id 8 bytes de `run_id`+`step_id`, por SHA-256 truncado): re-exportar da la
+  misma traza. Status por step (`failed`→ERROR, `done`→OK, `skipped` marcado), atributos (`musubi.seq`,
+  `event_type`, `result`, `workflow_id`), `service.name=musubi`. Model-free, Go puro, **sin el SDK de OTel** (el
+  OTLP/JSON se emite a mano). Musubi sólo devuelve el JSON; el transporte al collector es del consumidor
+  (local-first). Alinea con la dirección del servidor casero (Musubi como cerebro + orquestador observable).
+
 ## [0.59.0] - 2026-07-03
 
 Track 13 — endurecimiento de los dos pilares (memoria + orquestación) con ingeniería SOTA, toda model-free.
