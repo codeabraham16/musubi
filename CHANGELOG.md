@@ -10,6 +10,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.
 
 ### Added
+- **HITL: interrupt/resume durable en workflows** (`musubi_workflow action=provide`): un step puede declarar
+  `await` (un prompt), volviéndolo un **gate humano**. Al quedar listo, el run se **pausa** en él
+  (`waiting_input`) en vez de ofrecerlo para ejecutar, bloquea a sus dependientes, y las respuestas lo surface en
+  `waiting` con su prompt. Se reanuda con `action=provide` (run_id, step, input, status): `done` = aprobado (el
+  `input` queda como resultado, los dependientes se destraban), `failed` = rechazado (siguen bloqueados). La
+  espera es **durable** por construcción (estado + journal en SQLite): se puede proveer la decisión **en otra
+  sesión** y el run continúa exactamente donde estaba (patrón interrupt/resume de LangGraph). Un gate con `when`
+  falso se salta en vez de pausar. Nuevo estado de step (`waiting_input`) y evento de journal (`step_waiting`).
+  **Sin migración**. Model-free: Musubi expone QUÉ espera y su prompt; el aviso al humano es del integrador.
 - **Saga: compensación LIFO en workflows** (`musubi_workflow action=rollback` / `compensated`): el motor sabía
   avanzar un DAG pero no **deshacer**. Ahora un step puede declarar `compensate` (la directiva de cómo revertirlo);
   `action=rollback` inicia la **saga** y devuelve el plan de compensación en orden **LIFO** (inverso al de

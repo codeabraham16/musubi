@@ -22,6 +22,7 @@ const (
 	StepDone    = "done"
 	StepFailed  = "failed"
 	StepSkipped = "skipped"
+	StepWaiting = "waiting_input" // HITL: pausado esperando input/aprobación humana
 
 	RunRunning = "running"
 	RunDone    = "done"
@@ -45,12 +46,20 @@ const (
 	EventRunRollback     = "run_rollback"     // se inició el rollback del run
 	EventStepCompensated = "step_compensated" // el agente ejecutó la compensación de un step
 	EventRunCompensated  = "run_compensated"  // todas las compensaciones ejecutadas
+	// Evento HITL (interrupt/resume).
+	EventStepWaiting = "step_waiting" // el run se pausó en un gate humano
 )
 
 // CompensationStep es una entrada del plan de compensación: qué step deshacer y cómo.
 type CompensationStep struct {
 	StepID     string `json:"step"`
 	Compensate string `json:"compensate"`
+}
+
+// AwaitingStep es un gate humano pendiente: el step pausado y su prompt.
+type AwaitingStep struct {
+	StepID string `json:"step"`
+	Prompt string `json:"prompt"`
 }
 
 // RunEvent es una entrada del journal append-only de un run.
@@ -97,6 +106,11 @@ type WorkflowStep struct {
 	// compensan en orden inverso (LIFO). Es una instrucción para el agente: Musubi
 	// coordina el orden, el agente ejecuta el undo real.
 	Compensate string `yaml:"compensate,omitempty" json:"compensate,omitempty"`
+	// Await, si no está vacío, convierte el step en un GATE humano (HITL): al quedar
+	// listo, el run se PAUSA en él (waiting_input) en vez de ofrecerlo para ejecutar, y
+	// Await es el prompt para el humano. Se reanuda con action=provide. Bloquea a sus
+	// dependientes hasta la decisión. No se combina con repeat_while (gate, no loop).
+	Await string `yaml:"await,omitempty" json:"await,omitempty"`
 }
 
 // defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
@@ -365,31 +379,40 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 		return nil, fmt.Errorf("run %q no existe", runID)
 	}
 	whens := run.Def.whenByID()
+	awaits := run.Def.awaitByID()
 	changed := false
 	var ready []string
 	var skipped []string
+	var waiting []string // steps recién pausados en un gate humano (para journalear step_waiting)
 	for {
 		candidates := run.Def.ReadySteps(run.StepStatus)
 		skippedThisPass := false
 		ready = ready[:0]
 		for _, id := range candidates {
 			expr := whens[id]
-			if strings.TrimSpace(expr) == "" {
-				ready = append(ready, id)
-				continue
+			if strings.TrimSpace(expr) != "" {
+				pass, eerr := EvalCondition(expr, evalContext(run))
+				if eerr != nil {
+					return nil, fmt.Errorf("condición when inválida en step %q: %w", id, eerr)
+				}
+				if !pass {
+					run.StepStatus[id] = StepSkipped
+					changed = true
+					skippedThisPass = true
+					skipped = append(skipped, id)
+					continue
+				}
 			}
-			pass, eerr := EvalCondition(expr, evalContext(run))
-			if eerr != nil {
-				return nil, fmt.Errorf("condición when inválida en step %q: %w", id, eerr)
+			// `when` pasó (o no había). ¿Es un gate humano? Entonces PAUSA en vez de ready.
+			if strings.TrimSpace(awaits[id]) != "" {
+				if run.StepStatus[id] != StepWaiting {
+					run.StepStatus[id] = StepWaiting
+					changed = true
+					waiting = append(waiting, id)
+				}
+				continue // un gate en espera nunca se ofrece como ready
 			}
-			if pass {
-				ready = append(ready, id)
-			} else {
-				run.StepStatus[id] = StepSkipped
-				changed = true
-				skippedThisPass = true
-				skipped = append(skipped, id)
-			}
+			ready = append(ready, id)
 		}
 		if !skippedThisPass {
 			break
@@ -398,7 +421,7 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	if changed {
 		tx, err := e.db.Begin()
 		if err != nil {
-			return nil, fmt.Errorf("error iniciando la tx de skips: %w", err)
+			return nil, fmt.Errorf("error iniciando la tx del scheduler: %w", err)
 		}
 		defer tx.Rollback()
 		_, becameDone, perr := persistRunStatusTx(tx, run)
@@ -410,16 +433,96 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 				return nil, err
 			}
 		}
+		for _, id := range waiting {
+			if err := appendRunEvent(tx, runID, id, EventStepWaiting, awaits[id], ""); err != nil {
+				return nil, err
+			}
+		}
 		if becameDone {
 			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
 				return nil, err
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("error confirmando los skips: %w", err)
+			return nil, fmt.Errorf("error confirmando el avance del scheduler: %w", err)
 		}
 	}
 	return ready, nil
+}
+
+// awaitByID devuelve el mapa stepID → prompt de espera (Await).
+func (d WorkflowDef) awaitByID() map[string]string {
+	m := map[string]string{}
+	for _, s := range d.Steps {
+		m[s.ID] = s.Await
+	}
+	return m
+}
+
+// WorkflowAwaiting devuelve los gates humanos pendientes del run: los steps en
+// waiting_input con su prompt. Derivado del snapshot + la definición.
+func (e *DbEngine) WorkflowAwaiting(runID string) ([]AwaitingStep, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("run %q no existe", runID)
+	}
+	out := []AwaitingStep{}
+	for _, s := range run.Def.Steps {
+		if run.StepStatus[s.ID] == StepWaiting {
+			out = append(out, AwaitingStep{StepID: s.ID, Prompt: s.Await})
+		}
+	}
+	return out, nil
+}
+
+// ProvideWorkflowInput resuelve un gate humano (HITL): fija el resultado del step en espera a
+// `input` y su estado a `status` (done=aprobado, failed=rechazado), reanudando el run. Exige
+// que el step esté en waiting_input. Journalea step_completed (uniforme con el resto).
+func (e *DbEngine) ProvideWorkflowInput(runID, stepID, input, status string) (WorkflowRun, error) {
+	if status == "" {
+		status = StepDone
+	}
+	if status != StepDone && status != StepFailed {
+		return WorkflowRun{}, fmt.Errorf("estado inválido: %q (usá done|failed)", status)
+	}
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if !ok {
+		return WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	if run.StepStatus[stepID] != StepWaiting {
+		return WorkflowRun{}, fmt.Errorf("el step %q no está esperando input (estado %q)", stepID, run.StepStatus[stepID])
+	}
+	run.StepStatus[stepID] = status
+	run.StepResults[stepID] = input
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error iniciando la tx de provide: %w", err)
+	}
+	defer tx.Rollback()
+	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	if perr != nil {
+		return WorkflowRun{}, perr
+	}
+	payload, _ := json.Marshal(map[string]string{"status": status, "result": input})
+	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
+		return WorkflowRun{}, err
+	}
+	if becameDone {
+		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+			return WorkflowRun{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error confirmando el provide: %w", err)
+	}
+	return updated, nil
 }
 
 // persistRunStatusTx guarda step_status/step_results dentro de la transacción del

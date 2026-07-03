@@ -100,6 +100,8 @@ type WorkflowStore interface {
 	WorkflowTraceOTLP(runID string) (string, error)
 	WorkflowRollback(runID string) ([]CompensationStep, WorkflowRun, error)
 	CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error)
+	ProvideWorkflowInput(runID, stepID, input, status string) (WorkflowRun, error)
+	WorkflowAwaiting(runID string) ([]AwaitingStep, error)
 	WorkflowListRuns() ([]WorkflowRunSummary, error)
 }
 
