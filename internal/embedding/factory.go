@@ -13,6 +13,10 @@ func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "", "none":
 		return NoopProvider{}, nil
+	case "static":
+		// Tabla estática (model2vec/POTION): embeddings model-free at inference, sin
+		// red ni cgo. La tabla la aporta el usuario en static_path (bring-your-own-table).
+		return NewStaticProvider(cfg.StaticPath)
 	case "ollama":
 		return NewOllamaProvider(cfg.BaseURL, cfg.Model, cfg.Dimensions), nil
 	case "openai", "openai-compatible":
@@ -32,6 +36,6 @@ func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
 		}
 		return NewOpenAIProvider(baseURL, cfg.Model, apiKey, cfg.Dimensions), nil
 	default:
-		return nil, fmt.Errorf("proveedor de embeddings desconocido: %q (usá 'none', 'ollama' u 'openai')", cfg.Provider)
+		return nil, fmt.Errorf("proveedor de embeddings desconocido: %q (usá 'none', 'static', 'ollama' u 'openai')", cfg.Provider)
 	}
 }

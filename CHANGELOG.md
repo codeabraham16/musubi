@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-07-04
+
+Track 15, Capa 2 — **semántica model-free _at inference_**. La auditoría dejó como frontera de fondo que Musubi, por
+ser model-free, no "entiende": su recall combina señales léxicas/estructurales pero no capta sinonimia real
+(`deploy`≈`despliegue`) salvo que un embedder externo esté configurado. Este release da esa capacidad **sin runtime
+de modelo y sin cgo**: un provider que genera embeddings con una **tabla estática** token→vector (formato
+model2vec/POTION) + mean-pooling — cero forward pass de red neuronal.
+
+### Added
+- **`StaticProvider` (embedding.provider=`static`)** — embeddings por lookup en una tabla estática destilada
+  (model2vec/POTION) + mean-pool + L2-normalize, con un **WordPiece BERT propio bit-exacto** (BertNormalizer con
+  strip-accents por NFD, greedy longest-match, `[UNK]`). Cae directo en el pipeline ya existente (tabla `embeddings`
+  + índice IVF + coseno + fusión RRF) — **cero cambios en memory/mcp**. La tabla la aporta el usuario en
+  `embedding.static_path` (bring-your-own-table: `model.safetensors` + `tokenizer.json`); **off por defecto**
+  (`NoopProvider`), feature 100% aditiva. Bit-exactitud validada contra model2vec (12 strings EN/ES/acentos/
+  puntuación, cosine 1.000000). Claim honesto: **"model-free _at inference_"** — la tabla se destiló offline de un
+  sentence-transformer (misma categoría que servir vectores GloVe), **no** "model-free absoluto". Única dep nueva:
+  `golang.org/x/text` (NFD del strip-accents). Sigue en 31 tools.
+
+### Notes
+- Diferido con criterio: provenance/homogeneidad de vector por `model_id` (el dim-guard existente ya cubre el switch
+  de modelos de distinta dimensión), default multilingüe (`potion-multilingual-128M`), y bundling/auto-download del
+  asset (hoy bring-your-own-path).
+
 ## [0.69.0] - 2026-07-04
 
 Track 14, #2 — **2ª ola de semántica model-free**: stemming query-time por prefijo. Ataca el miss de recall más
