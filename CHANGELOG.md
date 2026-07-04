@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-07-04
+
+Auditoría del sistema de tokens, Frente #3 (c) — **delta del run en `musubi_workflow`**. Las acciones
+incrementales dejan de re-serializar la definición inmutable del workflow en cada respuesta. Model-free, sin
+cambios de esquema ni de estado persistido.
+
+### Changed
+- **Las respuestas incrementales de `musubi_workflow` omiten `definition`**: cada acción (`complete`,
+  `provide`, `verify`, `rollback`, `abort`, `compensated`) devolvía el `run` COMPLETO, incluido el DAG entero
+  (`definition`: todos los steps con títulos y directivas `verify`/`await`/`compensate`) — que **no cambia tras
+  `start`**. En un run de varios pasos era el mayor bloque repetido del payload. Ahora esas acciones devuelven
+  una vista `run` sin `definition` (conserva `run_id`/`workflow_id`/`status`/`step_status`/`step_results`/
+  `step_iters`); el snapshot completo —con `definition`— sigue disponible en `start`, `status` y `resume` (los
+  puntos donde el caller no tiene estado previo). Solo cambia la SERIALIZACIÓN de la respuesta: el estado en
+  SQLite y la capa de memoria quedan intactos.
+
 ## [0.75.0] - 2026-07-04
 
 Auditoría del sistema de tokens, Frente #3 (b) — **búsqueda gist-first**. `musubi_search_semantic` y
