@@ -18,7 +18,7 @@ type fakeTurnStore struct {
 	lastQuery string
 	lastOpts  memory.RecallOptions
 
-	obsCount    int
+	savedCount  int
 	phase       memory.PhaseState
 	phaseActive bool
 	batch       memory.WorkBatch
@@ -43,7 +43,7 @@ func (f *fakeTurnStore) PendingObsRelations() ([]memory.ObsRelation, error) {
 	return f.pending, nil
 }
 
-func (f *fakeTurnStore) CountObservations() (int, error) { return f.obsCount, nil }
+func (f *fakeTurnStore) CountSavedItems() (int, error) { return f.savedCount, nil }
 
 func (f *fakeTurnStore) PhaseStatus() (memory.PhaseState, bool, error) {
 	return f.phase, f.phaseActive, nil
@@ -252,7 +252,7 @@ func TestTurnAccountsAllSurfaces(t *testing.T) {
 	store.phase = memory.PhaseState{Task: "refactor", Phase: "plan", Index: 1, Total: 4}
 	store.pending = []memory.ObsRelation{{ID: "r1"}, {ID: "r2"}}
 	store.recall = memory.RecallResult{Count: 1, Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "algo relevante"}}}
-	store.obsCount = 3
+	store.savedCount = 3
 	store.meta[metaLoopObsSeen+":sess-7"] = "5" // base previa alta → captura se dispara este turno
 	store.meta[metaLoopTurns+":sess-7"] = "9"
 
@@ -456,7 +456,7 @@ func TestTurnPhaseSilentWhenDisabled(t *testing.T) {
 
 func TestTurnCaptureReminderAfterNTurns(t *testing.T) {
 	store := newFakeTurnStore()
-	store.obsCount = 3 // estable: no se guarda nada entre turnos
+	store.savedCount = 3 // estable: no se guarda nada entre turnos
 	loop := config.LoopConfig{CaptureReminder: true, ReminderAfterTurns: 2}
 	in := `{"prompt":"seguimos trabajando"}`
 
@@ -478,12 +478,12 @@ func TestTurnCaptureReminderAfterNTurns(t *testing.T) {
 
 func TestTurnCaptureReminderResetsOnSave(t *testing.T) {
 	store := newFakeTurnStore()
-	store.obsCount = 1
+	store.savedCount = 1
 	loop := config.LoopConfig{CaptureReminder: true, ReminderAfterTurns: 2}
 	in := `{"prompt":"trabajando"}`
 
 	turnOutput(store, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in)) // base
-	store.obsCount = 2                                                        // el agente guardó algo
+	store.savedCount = 2                                                                      // el agente guardó algo
 	if out := turnOutput(store, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in)); out != "" {
 		t.Fatalf("guardar algo debe reiniciar el contador (sin recordatorio), obtuve: %q", out)
 	}

@@ -105,6 +105,40 @@ func TestCountObservations(t *testing.T) {
 	}
 }
 
+// TestCountSavedItems verifica que la señal de captura sube ante cualquiera de las TRES
+// superficies (observación, hecho, code), no solo observaciones (Frente #3 d).
+func TestCountSavedItems(t *testing.T) {
+	e := newTestEngine(t)
+	base, err := e.CountSavedItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.SaveObservation("o1", "t", "una observación", nil); err != nil {
+		t.Fatal(err)
+	}
+	afterObs, _ := e.CountSavedItems()
+	if afterObs <= base {
+		t.Fatalf("guardar una observación debe subir el conteo: base=%d after=%d", base, afterObs)
+	}
+
+	if _, err := e.SaveFact("Ana", "trabaja_en", "Acme", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	afterFact, _ := e.CountSavedItems()
+	if afterFact <= afterObs {
+		t.Fatalf("guardar un hecho debe subir el conteo: obs=%d fact=%d", afterObs, afterFact)
+	}
+
+	if err := e.SaveCodeMemory(CodeMemory{Path: "a.go", Gist: "gist", Fingerprint: "f1", Tokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	afterCode, _ := e.CountSavedItems()
+	if afterCode <= afterFact {
+		t.Fatalf("guardar un gist de código debe subir el conteo: fact=%d code=%d", afterFact, afterCode)
+	}
+}
+
 func TestRecallNoBumpKeepsStats(t *testing.T) {
 	e := newTestEngine(t)
 	if err := e.SaveObservation("a1", "t", "alpha beta", nil); err != nil {

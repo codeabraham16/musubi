@@ -26,7 +26,7 @@ import (
 type turnStore interface {
 	Recall(ctx context.Context, query string, opts memory.RecallOptions) (memory.RecallResult, error)
 	PendingObsRelations() ([]memory.ObsRelation, error)
-	CountObservations() (int, error)
+	CountSavedItems() (int, error)
 	PhaseStatus() (memory.PhaseState, bool, error)
 	ActiveBatch() (memory.WorkBatch, bool, error)
 	GetMeta(key string) (string, bool, error)
@@ -219,9 +219,11 @@ func buildTurnBatch(store turnStore, sessionID string) string {
 
 // buildCaptureReminder cierra el loop: cuando pasaron varios turnos sin que se
 // guardara nada en memoria, recuerda persistir lo aprendido. Es model-free: usa el
-// conteo de observaciones como señal de "se guardó algo" entre turnos.
+// conteo de items guardados en las tres superficies (observaciones + hechos + code)
+// como señal de "se guardó algo" entre turnos, para no dar falsos positivos cuando lo
+// guardado fue un fact o un snippet y no una observación.
 func buildCaptureReminder(store turnStore, sessionID string, cfg config.LoopConfig) string {
-	current, err := store.CountObservations()
+	current, err := store.CountSavedItems()
 	if err != nil {
 		return ""
 	}
