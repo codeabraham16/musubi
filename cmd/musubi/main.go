@@ -207,6 +207,12 @@ func runServe(args []string) {
 	}
 	defer engine.Close()
 
+	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
+	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
+	if embedding.Enabled(embedder) {
+		engine.WarnOnEmbedModelSwitch(embedder.Name())
+	}
+
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent))
 
 	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
@@ -247,6 +253,12 @@ func runDaemon() {
 		os.Exit(1)
 	}
 	defer engine.Close()
+
+	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
+	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
+	if embedding.Enabled(embedder) {
+		engine.WarnOnEmbedModelSwitch(embedder.Name())
+	}
 
 	// Chequeo de versión throttled: avisa por stderr si hay una versión nueva
 	// (no descarga ni reemplaza nada). Corre en goroutine para no demorar el

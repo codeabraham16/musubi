@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"musubi/internal/logx"
 )
 
 // meta.go guarda metadatos clave/valor y la lógica de throttle del
@@ -66,6 +68,38 @@ func (e *DbEngine) MetaDue(key string, intervalHours float64) (bool, error) {
 // MarkMetaNow registra que una tarea throttled acaba de correr.
 func (e *DbEngine) MarkMetaNow(key string) error {
 	return e.SetMeta(key, time.Now().UTC().Format(time.RFC3339))
+}
+
+// MetaEmbedModel es la clave donde se registra la identidad del modelo de embedding
+// activo (Provider.Name()) del último arranque, para detectar un cambio de modelo.
+const MetaEmbedModel = "embed_model_id"
+
+// WarnOnEmbedModelSwitch detecta si el modelo de embedding activo cambió respecto del
+// último arranque HABIENDO vectores ya almacenados: en ese caso los vectores viejos
+// son de OTRO modelo y no son comparables por coseno con los nuevos (mezcla silenciosa
+// que degrada el recall). No migra ni borra nada —el dim-guard ya ignora los de otra
+// dimensión—; solo AVISA para el borde same-dim (dos modelos de igual dimensión), donde
+// el guard no alcanza. Registra el modelo actual para el próximo arranque. modelID vacío
+// (sin embedder / NoopProvider) es no-op: no registra ni avisa.
+func (e *DbEngine) WarnOnEmbedModelSwitch(modelID string) {
+	if modelID == "" {
+		return
+	}
+	prev, ok, err := e.GetMeta(MetaEmbedModel)
+	if err != nil {
+		logx.Warn("no se pudo leer el modelo de embedding previo", "error", err)
+		return
+	}
+	if ok && prev != "" && prev != modelID {
+		if n, cerr := e.countActiveEmbeddings(); cerr == nil && n > 0 {
+			logx.Warn("el modelo de embedding cambió: hay vectores de otro modelo en la base",
+				"anterior", prev, "actual", modelID, "vectores_previos", n,
+				"accion", "los vectores viejos no son comparables con los nuevos; si el cambio fue a otra dimensión el dim-guard ya los ignora, pero si es misma dimensión considerá limpiarlos y re-embeber")
+		}
+	}
+	if err := e.SetMeta(MetaEmbedModel, modelID); err != nil {
+		logx.Warn("no se pudo registrar el modelo de embedding activo", "error", err)
+	}
 }
 
 // MaintenanceDue indica si corresponde correr el auto-mantenimiento.

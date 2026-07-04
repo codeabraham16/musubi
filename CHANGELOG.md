@@ -7,6 +7,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-07-04
+
+Track 15, S1 (cierre) — **guard de cambio de modelo de embedding**. Con la Capa 2 (StaticProvider) ya es fácil
+alternar tablas de embedding; si dos modelos comparten dimensión, sus vectores no son comparables por coseno pero el
+`dim-guard` existente no los distingue (mezcla silenciosa que degrada el recall). Este release cierra ese borde con
+la opción proporcionada: **visibilidad**, no maquinaria pesada.
+
+### Added
+- **Aviso de cambio de modelo de embedding** — al arrancar, si el modelo activo (`Provider.Name()`) cambió respecto
+  del último run **y hay vectores previos de otro modelo**, se logea un warning claro (con conteo y acción sugerida:
+  limpiar/re-embeber si el cambio fue same-dimension). Registra el modelo activo en `meta` para el próximo arranque.
+  **Sin migración, sin cambiar el recall, no-op sin embedder.** Cubre el borde same-dim que el `dim-guard`
+  (CosineSimilarity falla si dim≠, IVF descarta la dimensión minoritaria) no alcanza. Descartada la provenance
+  per-row completa (columna `model_id` + filtro) por sobre-ingeniería para una realidad de un embedder por proceso.
+  Cierra el backlog de Track 15 (S3 multilingüe = elección de asset sin código; Capa 1 y TLogic diferidos por
+  decisión de ROI). Sigue en 31 tools.
+
 ## [0.70.0] - 2026-07-04
 
 Track 15, Capa 2 — **semántica model-free _at inference_**. La auditoría dejó como frontera de fondo que Musubi, por
