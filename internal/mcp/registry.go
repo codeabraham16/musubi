@@ -187,7 +187,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_search_semantic",
-				Description: "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
+				Description: "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -203,7 +203,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_search_keyword",
-				Description: "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings.",
+				Description: "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

@@ -1160,6 +1160,61 @@ func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError)
 	})
 }
 
+// searchHit es un resultado de búsqueda en forma gist-first: el titular extractivo en
+// lugar del contenido completo, para no gastar el presupuesto de tokens del caller. El
+// contenido full se hidrata bajo demanda por id (musubi_recall / musubi_memory_expand).
+type searchHit struct {
+	ID         string  `json:"id"`
+	TopicKey   string  `json:"topic_key,omitempty"`
+	Gist       string  `json:"gist"`
+	Similarity float32 `json:"similarity,omitempty"`  // solo búsqueda semántica
+	FullTokens int     `json:"full_tokens,omitempty"` // costo de hidratar el contenido completo
+}
+
+// searchSource es la vista mínima de un hit (semántico o keyword) que necesita el
+// empaquetado gist-first: identidad, contenido a resumir y, opcional, la similitud.
+type searchSource struct {
+	id       string
+	topicKey string
+	content  string
+	sim      float32
+}
+
+// searchGistBudget acota el TAMAÑO total (en tokens) del payload de búsqueda gist-first.
+// limit ya acota la CANTIDAD de hits; este es el tope de tamaño para que unos pocos gists
+// grandes no inflen la respuesta. No se expone como parámetro (mantiene el schema liviano).
+const searchGistBudget = 2000
+
+// toSearchHits convierte los hits crudos en resultados gist-first acotados por presupuesto,
+// con el mismo criterio que packByBudget del recall: se garantiza el top-1 (aunque exceda) y
+// a partir de ahí se corta al llegar al budget. Determinista, sin LLM.
+func toSearchHits(sources []searchSource, gistMax, budget int) []searchHit {
+	if gistMax <= 0 {
+		gistMax = 24
+	}
+	hits := make([]searchHit, 0, len(sources))
+	used := 0
+	for _, src := range sources {
+		gist := memory.Gist(src.content, gistMax)
+		cost := memory.EstimateTokens(gist)
+		if len(hits) > 0 && used+cost > budget {
+			continue // no entra; el siguiente puede ser más chico
+		}
+		hits = append(hits, searchHit{
+			ID:         src.id,
+			TopicKey:   src.topicKey,
+			Gist:       gist,
+			Similarity: src.sim,
+			FullTokens: memory.EstimateTokens(src.content),
+		})
+		used += cost
+		if used >= budget {
+			break
+		}
+	}
+	return hits
+}
+
 func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query string `json:"query"`
@@ -1186,7 +1241,11 @@ func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda semántica: %v", err)
 	}
-	return jsonResult(results)
+	sources := make([]searchSource, len(results))
+	for i, r := range results {
+		sources[i] = searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity}
+	}
+	return jsonResult(toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget))
 }
 
 func (s *McpServer) toolSearchKeyword(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
@@ -1205,7 +1264,11 @@ func (s *McpServer) toolSearchKeyword(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda por palabra clave: %v", err)
 	}
-	return jsonResult(results)
+	sources := make([]searchSource, len(results))
+	for i, r := range results {
+		sources[i] = searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content}
+	}
+	return jsonResult(toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget))
 }
 
 func (s *McpServer) toolLogError(raw json.RawMessage) (interface{}, *RpcError) {

@@ -174,7 +174,7 @@
     },
     {
       "name": "musubi_search_semantic",
-      "description": "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado.",
+      "description": "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -194,7 +194,7 @@
     },
     {
       "name": "musubi_search_keyword",
-      "description": "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings.",
+      "description": "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
       "inputSchema": {
         "type": "object",
         "properties": {
