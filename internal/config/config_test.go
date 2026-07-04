@@ -443,6 +443,40 @@ func TestLoadRecallGraphCentralityDisableRespected(t *testing.T) {
 	}
 }
 
+func TestLoadRecallCooccurrenceDefaultOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallCooccurrence {
+		t.Error("esperaba recall_cooccurrence true por defecto (sin bloque memory)")
+	}
+}
+
+func TestLoadRecallCooccurrencePresentBlockDefaultsOn(t *testing.T) {
+	// Double-default: bloque memory presente sin la clave ⇒ conserva ON (applyMemoryDefaults).
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallCooccurrence {
+		t.Error("un bloque memory sin la clave debe conservar recall_cooccurrence ON")
+	}
+}
+
+func TestLoadRecallCooccurrenceDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_cooccurrence: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallCooccurrence {
+		t.Error("recall_cooccurrence: false explícito debería respetarse")
+	}
+}
+
 func TestLoadMaintenanceDefaults(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
 	cfg, err := Load(root)

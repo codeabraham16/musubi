@@ -39,6 +39,13 @@ type RecallOptions struct {
 	// pool existente (no incorpora candidatos nuevos). El zero-value (false) preserva el
 	// comportamiento histórico bit-a-bit; la capa MCP lo enciende según config (default ON).
 	GraphCentrality bool
+	// Cooccurrence, si es true, agrega la 6ª señal RRF (Track 14 #2, semántica model-free):
+	// expansión por pseudo-relevance feedback (PRF) — cosecha términos que co-ocurren con la
+	// query en los top resultados y corre un 2º FTS para traer observaciones con vocabulario
+	// distinto (puente 'deploy'↔'despliegue'), derivado del corpus. AUGMENTA el pool. El
+	// zero-value (false) preserva el comportamiento histórico; la capa MCP lo enciende según
+	// config (default ON).
+	Cooccurrence bool
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -107,6 +114,18 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		}
 	}
 
+	// Co-ocurrencia / PRF (Track 14 #2): 6ª señal RRF opcional, semántica model-free derivada del
+	// corpus. Corre TRAS la augmentación vectorial (para expandir sobre el mejor pool léxico) y
+	// ANTES de la centralidad de grafo (para que el grafo vea el pool ya expandido). Sólo si hubo
+	// query FTS (lexRank != nil) y hay ≥2 candidatos. No-op seguro ⇒ coocRank vacío ⇒ equivalencia.
+	var coocRank map[string]int
+	if opts.Cooccurrence && lexRank != nil && len(cands) >= 2 {
+		cands, coocRank, err = e.augmentWithCooccurrencePool(ctx, cands, query, lexRank, pool)
+		if err != nil {
+			return RecallResult{}, err
+		}
+	}
+
 	result := RecallResult{Budget: budget, Items: []RecallItem{}}
 	if len(cands) == 0 {
 		return result, nil
@@ -131,7 +150,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// El ranking keyword (lexRank) solo existe si la query tuvo términos FTS; sin ellos
 	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia. vecRank
 	// solo existe en recall híbrido; graphRank solo con GraphCentrality on.
-	scored := scoreCandidates(cands, lexRank, vecRank, graphRank)
+	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank)
 
 	result = packByBudget(scored, budget, gistMax)
 
@@ -191,11 +210,12 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 // scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía RRF y
 // pondera por importancia. Determinista, sin LLM. Los rankings por pool se pasan como mapas
 // id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
-// lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno) y graphRank el de
-// centralidad de grafo (PPR sobre observation_relations); cada uno nil ⇒ se omite ese término.
-// Con solo lexRank (NoopProvider) el resultado es idéntico al histórico; vecRank lo activa el
-// recall híbrido (T5.7 R2) y graphRank la centralidad de grafo (B4).
-func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank map[string]int) []scoredCandidate {
+// lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno), graphRank el de
+// centralidad de grafo (PPR sobre observation_relations) y coocRank el de expansión por
+// co-ocurrencia/PRF; cada uno nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el
+// resultado es idéntico al histórico; vecRank lo activa el recall híbrido (T5.7 R2), graphRank la
+// centralidad de grafo (B4) y coocRank la semántica model-free por co-ocurrencia (Track 14 #2).
+func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int) []scoredCandidate {
 	n := len(cands)
 
 	recencyRank := rankBy(cands, func(a, b candidate) bool {
@@ -216,6 +236,9 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank map[string]i
 			rrf += 1.0 / float64(rrfK+r)
 		}
 		if r, ok := graphRank[c.id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
+		}
+		if r, ok := coocRank[c.id]; ok {
 			rrf += 1.0 / float64(rrfK+r)
 		}
 		imp := c.importance
@@ -325,6 +348,21 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 		cands, err := e.recentCandidates(ctx, limit)
 		return cands, nil, err
 	}
+	cands, err := e.ftsSearch(ctx, ftsQuery, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	lexRank := make(map[string]int, len(cands))
+	for i, c := range cands {
+		lexRank[c.id] = i
+	}
+	return cands, lexRank, nil
+}
+
+// ftsSearch corre una MATCH de FTS5 ya construida (ftsQuery) sobre las observaciones vivas y
+// devuelve los candidatos en orden de `rank` (mejor primero). Es el núcleo compartido por el
+// recall léxico (recallCandidates) y la expansión por co-ocurrencia (augmentWithCooccurrencePool).
+func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
@@ -335,18 +373,10 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 		LIMIT ?
 	`, ftsQuery, limit)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error en recall (FTS): %w", err)
+		return nil, fmt.Errorf("error en recall (FTS): %w", err)
 	}
 	defer rows.Close()
-	cands, err := scanCandidates(rows)
-	if err != nil {
-		return nil, nil, err
-	}
-	lexRank := make(map[string]int, len(cands))
-	for i, c := range cands {
-		lexRank[c.id] = i
-	}
-	return cands, lexRank, nil
+	return scanCandidates(rows)
 }
 
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).

@@ -201,7 +201,7 @@ func TestScoreCandidatesFusion(t *testing.T) {
 	}
 	// lexRank por orden del slice = el comportamiento keyword-meaningful histórico.
 	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
-	scored := scoreCandidates(cands, lexRank, nil, nil)
+	scored := scoreCandidates(cands, lexRank, nil, nil, nil)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
@@ -221,7 +221,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	full := map[string]int{"a": 0, "b": 1, "c": 2}
 
-	withKeyword := scoreCandidates(cands, full, nil, nil)
+	withKeyword := scoreCandidates(cands, full, nil, nil, nil)
 	scoreOf := func(scored []scoredCandidate, id string) float64 {
 		for _, s := range scored {
 			if s.id == id {
@@ -232,7 +232,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Con lexRank completo, cada candidato suma su término keyword: score estrictamente
 	// mayor que sin él.
-	noKeyword := scoreCandidates(cands, nil, nil, nil)
+	noKeyword := scoreCandidates(cands, nil, nil, nil, nil)
 	for _, id := range []string{"a", "b", "c"} {
 		if scoreOf(withKeyword, id) <= scoreOf(noKeyword, id) {
 			t.Errorf("%s: con lexRank el score debe ser mayor que sin él (%v vs %v)",
@@ -241,7 +241,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Un id ausente del lexRank no recibe término keyword (igual que nil para ese id).
 	partial := map[string]int{"a": 0} // solo 'a' tiene rank keyword
-	mixed := scoreCandidates(cands, partial, nil, nil)
+	mixed := scoreCandidates(cands, partial, nil, nil, nil)
 	if scoreOf(mixed, "b") != scoreOf(noKeyword, "b") {
 		t.Errorf("'b' ausente del lexRank no debe sumar término keyword: %v vs %v",
 			scoreOf(mixed, "b"), scoreOf(noKeyword, "b"))
@@ -266,8 +266,8 @@ func TestScoreCandidatesVectorSignal(t *testing.T) {
 		}
 		return -1
 	}
-	base := scoreCandidates(cands, nil, nil, nil)
-	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}, nil) // solo 'a' tiene rango vectorial
+	base := scoreCandidates(cands, nil, nil, nil, nil)
+	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}, nil, nil) // solo 'a' tiene rango vectorial
 	if scoreOf(withVec, "a") <= scoreOf(base, "a") {
 		t.Errorf("'a' con rango vectorial debe sumar término RRF (%v vs %v)", scoreOf(withVec, "a"), scoreOf(base, "a"))
 	}
@@ -291,8 +291,8 @@ func TestScoreCandidatesGraphSignal(t *testing.T) {
 		}
 		return -1
 	}
-	base := scoreCandidates(cands, nil, nil, nil)
-	withGraph := scoreCandidates(cands, nil, nil, map[string]int{"a": 0}) // solo 'a' tiene centralidad
+	base := scoreCandidates(cands, nil, nil, nil, nil)
+	withGraph := scoreCandidates(cands, nil, nil, map[string]int{"a": 0}, nil) // solo 'a' tiene centralidad
 	if scoreOf(withGraph, "a") <= scoreOf(base, "a") {
 		t.Errorf("'a' con rango de centralidad debe sumar término RRF (%v vs %v)", scoreOf(withGraph, "a"), scoreOf(base, "a"))
 	}
@@ -300,7 +300,7 @@ func TestScoreCandidatesGraphSignal(t *testing.T) {
 		t.Errorf("'b' ausente del graphRank no debe cambiar (%v vs %v)", scoreOf(withGraph, "b"), scoreOf(base, "b"))
 	}
 	// graphRank=nil ⇒ idéntico al histórico (equivalencia R1).
-	if scoreOf(scoreCandidates(cands, nil, nil, nil), "a") != scoreOf(base, "a") {
+	if scoreOf(scoreCandidates(cands, nil, nil, nil, nil), "a") != scoreOf(base, "a") {
 		t.Error("graphRank=nil debe dar score idéntico al histórico")
 	}
 }

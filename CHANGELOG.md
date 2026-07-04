@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-07-04
+
+Track 14 (post-auditoría v0.65.0), #2 — **primer slice de semántica model-free** en el recall. La auditoría marcó
+como gap estratégico que, sin embedder externo, la única señal de contenido era léxica (FTS token-exact): "deploy"
+no encontraba una memoria que dice "despliegue". Este release agrega un **puente de vocabulario derivado del
+corpus**, sin LLM ni modelo, manteniendo el determinismo.
+
+### Added
+- **Recall por co-ocurrencia / pseudo-relevance feedback (PRF)** — 6ª señal RRF opcional: tras el recall léxico,
+  toma los top resultados (pseudo-relevantes), cosecha los términos que **co-ocurren** con la query en ellos
+  (aparecen en ≥2 de esos docs, excluyendo la query y stopwords) y corre un 2º FTS con esos términos para **traer
+  observaciones con vocabulario distinto** que la query original no encontró (el puente `deploy`↔`despliegue`). La
+  "semántica" se **deriva del corpus** — no se importa de un modelo: pura tokenización + conteo + FTS, determinista.
+  Realización **index-free** de la co-ocurrencia (sin índice global persistido, sin tabla, sin migración). Config
+  `memory.recall_cooccurrence` (default ON; se desactiva con `false`); off por zero-value preserva el recall
+  histórico bit-a-bit. Honesto: el valor es corpus-dependiente (con memoria escasa degrada a no-op). Primer paso de
+  #2; quedan olas futuras (stemming EN+ES, LSA/SVD, índice global de co-ocurrencia). Sigue en 31 tools.
+
 ## [0.67.0] - 2026-07-04
 
 Track 14 (post-auditoría v0.65.0), ola de endurecimiento — A2 (limpieza de código muerto, #4) + A3 (blindaje de

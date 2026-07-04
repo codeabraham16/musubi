@@ -84,6 +84,12 @@ type MemoryConfig struct {
 	// se desactiva con recall_graph_centrality: false. Un bloque `memory` presente pero sin
 	// la clave conserva el default ON (ver applyMemoryDefaults).
 	RecallGraphCentrality bool `yaml:"recall_graph_centrality"`
+	// RecallCooccurrence activa la 6ª señal RRF del recall (Track 14 #2, semántica model-free):
+	// expansión por pseudo-relevance feedback (PRF) — trae observaciones con vocabulario distinto
+	// pero co-ocurrente en el corpus (puente 'deploy'↔'despliegue'), derivado del corpus, sin
+	// embedder externo. Default ON; se desactiva con recall_cooccurrence: false. Un bloque
+	// `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
+	RecallCooccurrence bool `yaml:"recall_cooccurrence"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -365,6 +371,7 @@ func Default() Config {
 			SessionTokenBudget:    8000,
 			BrevityMode:           "off",
 			RecallGraphCentrality: true,
+			RecallCooccurrence:    true,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -523,6 +530,9 @@ func (c *Config) applyMemoryDefaults(data []byte) {
 	keys := presentBlockKeys(data, "memory")
 	if !keys["recall_graph_centrality"] {
 		c.Memory.RecallGraphCentrality = Default().Memory.RecallGraphCentrality
+	}
+	if !keys["recall_cooccurrence"] {
+		c.Memory.RecallCooccurrence = Default().Memory.RecallCooccurrence
 	}
 }
 

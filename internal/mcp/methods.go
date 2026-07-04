@@ -867,6 +867,7 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		CandidatePool:   s.memory.CandidatePool,
 		GistMaxTokens:   s.memory.GistMaxTokens,
 		GraphCentrality: s.memory.RecallGraphCentrality,
+		Cooccurrence:    s.memory.RecallCooccurrence,
 	}
 	if args.TokenBudget > 0 {
 		opts.TokenBudget = args.TokenBudget
