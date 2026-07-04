@@ -9,7 +9,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [0.67.0] - 2026-07-04
 
-Track 14 (post-auditoría v0.65.0), ola de endurecimiento — A2: limpieza de código muerto (hallazgo #4).
+Track 14 (post-auditoría v0.65.0), ola de endurecimiento — A2 (limpieza de código muerto, #4) + A3 (blindaje de
+tests, #5).
+
+### Added
+- **Fuzzing sobre los parsers model-free** (primeros fuzz tests del repo, cerrando el hueco "cero fuzzing" de la
+  auditoría): `FuzzSimilarity` (Jaccard de trigramas — invariantes [0,1] + simetría + no-NaN), `FuzzEvalCondition`
+  (parser de expresiones `when`/`repeat_while` — determinismo + no-panic), `FuzzBuildFTSQuery` (constructores de
+  query FTS — tolerancia a puntuación/unicode/bytes nulos). ~50–100k ejecuciones por fuzzer sin panics.
+- **Test de concurrencia REAL del claim de la pizarra** (`TestClaimWorkUnitConcurrentNoDoubleClaim`): N agentes en
+  goroutines compiten por M unidades; verifica que ninguna se reclama dos veces y que se reclaman exactamente las M
+  (antes la "atomicidad" sólo se probaba en secuencial). Se apoya en el `UPDATE...RETURNING` bajo el write-lock de
+  SQLite (`busy_timeout`); CI lo corre con `-race`.
 
 ### Removed
 - **Cruft genuino eliminado**: `writeMCPConfig` (envoltorio duplicado de `writeMCPConfigAt`, sólo lo usaba su
