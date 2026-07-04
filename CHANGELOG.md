@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-07-04
+
+Auditoría del sistema de tokens, Frente #3 (b) — **búsqueda gist-first**. `musubi_search_semantic` y
+`musubi_search_keyword` dejan de serializar la `Observation` completa por hit (el mayor costo de tokens
+model-facing recurrente que quedaba) y devuelven titulares acotados por presupuesto. Model-free, sin migración.
+
+### Changed
+- **`musubi_search_semantic` / `musubi_search_keyword` son gist-first**: antes ambas devolvían el objeto
+  `Observation` COMPLETO (contenido full × N hits) en cada llamada. Ahora devuelven por hit
+  `{id, topic_key, gist, similarity?, full_tokens}` —el titular extractivo en lugar del contenido— con el
+  payload total acotado por un presupuesto de tokens (`searchGistBudget`, top-1 garantizado). El contenido
+  completo se hidrata bajo demanda por `id` con `musubi_recall`/`musubi_memory_expand`. `similarity` solo
+  aparece en la búsqueda semántica; `full_tokens` informa el costo de hidratar. Sin nuevos parámetros de
+  schema (el `limit` existente sigue acotando la cantidad). Modelado en la capa MCP: las queries de memoria
+  y el esquema quedan intactos.
+
 ## [0.74.0] - 2026-07-04
 
 Auditoría del sistema de tokens, 3ª tanda — dos de los tres frentes que quedaban: **relevancia del recall por turno**

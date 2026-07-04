@@ -128,8 +128,16 @@ func TestSearchSemanticWithEmbedder(t *testing.T) {
 		t.Fatalf("search error: %+v", e)
 	}
 	resp := res.(CallToolResponse)
-	if !strings.Contains(resp.Content[0].Text, "documento alfa") {
-		t.Errorf("esperaba encontrar la observación guardada, obtuve %q", resp.Content[0].Text)
+	txt := resp.Content[0].Text
+	if !strings.Contains(txt, "documento alfa") {
+		t.Errorf("esperaba encontrar la observación guardada, obtuve %q", txt)
+	}
+	// Forma gist-first (R1): trae id + gist, no el objeto Observation completo.
+	if !strings.Contains(txt, `"id"`) || !strings.Contains(txt, `"gist"`) {
+		t.Errorf("esperaba forma gist-first con id+gist, obtuve %q", txt)
+	}
+	if strings.Contains(txt, `"content"`) {
+		t.Errorf("no debería serializar el contenido completo, obtuve %q", txt)
 	}
 }
 
@@ -142,8 +150,49 @@ func TestSearchKeyword(t *testing.T) {
 	if e != nil {
 		t.Fatalf("keyword error: %+v", e)
 	}
-	if !strings.Contains(res.(CallToolResponse).Content[0].Text, "singleton") {
+	txt := res.(CallToolResponse).Content[0].Text
+	if !strings.Contains(txt, "singleton") {
 		t.Error("esperaba resultado de keyword con 'singleton'")
+	}
+	// Forma gist-first (R1) y sin similarity en keyword (R5).
+	if !strings.Contains(txt, `"gist"`) {
+		t.Errorf("esperaba forma gist-first con gist, obtuve %q", txt)
+	}
+	if strings.Contains(txt, `"similarity"`) {
+		t.Errorf("keyword no debería incluir similarity, obtuve %q", txt)
+	}
+}
+
+// TestToSearchHitsBudget verifica el empaquetado por presupuesto (R3): el top-1 se
+// garantiza aunque exceda, y a partir de ahí se corta al llegar al budget; el id
+// siempre presente para hidratar (R4) y full_tokens refleja el costo del contenido.
+func TestToSearchHitsBudget(t *testing.T) {
+	big := strings.Repeat("palabra larga de relleno para inflar el contenido. ", 40)
+	sources := []searchSource{
+		{id: "a", topicKey: "t", content: big, sim: 0.9},
+		{id: "b", topicKey: "t", content: big, sim: 0.8},
+		{id: "c", topicKey: "t", content: big, sim: 0.7},
+	}
+	// Budget minúsculo: solo debe entrar el top-1 garantizado.
+	hits := toSearchHits(sources, 24, 1)
+	if len(hits) != 1 {
+		t.Fatalf("con budget=1 esperaba solo el top-1 garantizado, obtuve %d", len(hits))
+	}
+	if hits[0].ID != "a" {
+		t.Errorf("el top-1 debe ser el primero ('a'), obtuve %q", hits[0].ID)
+	}
+	if hits[0].Gist == "" || hits[0].FullTokens <= 0 {
+		t.Errorf("el hit debe traer gist y full_tokens>0, obtuve %+v", hits[0])
+	}
+	// Budget amplio: entran los tres, cada uno con su id.
+	all := toSearchHits(sources, 24, 100000)
+	if len(all) != 3 {
+		t.Fatalf("con budget amplio esperaba los 3, obtuve %d", len(all))
+	}
+	for i, h := range all {
+		if h.ID == "" {
+			t.Errorf("hit %d sin id (necesario para hidratar)", i)
+		}
 	}
 }
 
