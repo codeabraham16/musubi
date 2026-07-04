@@ -194,7 +194,7 @@ func TestRecallToolReturnsBudgetedItems(t *testing.T) {
 		t.Fatalf("recall error: %+v", e)
 	}
 	txt := textOf(t, res)
-	if !strings.Contains(txt, "\"budget\": 50") {
+	if !strings.Contains(txt, "\"budget\":50") {
 		t.Errorf("esperaba budget 50 en la respuesta, obtuve %s", txt)
 	}
 	if !strings.Contains(txt, "items") {
@@ -258,7 +258,7 @@ func TestTokensToolReset(t *testing.T) {
 		t.Fatalf("tokens reset error: %+v", e)
 	}
 	res, _ := call(t, s, "musubi_tokens", map[string]interface{}{"action": "status"})
-	if !strings.Contains(textOf(t, res), "\"total\": 0") {
+	if !strings.Contains(textOf(t, res), "\"total\":0") {
 		t.Errorf("tras reset el total debe ser 0, obtuve %s", textOf(t, res))
 	}
 }
@@ -277,10 +277,10 @@ func TestTokensToolReportsBudget(t *testing.T) {
 	}
 	txt := textOf(t, res)
 	// El reporte del gobernador incluye estado y presupuesto, no solo el total crudo.
-	if !strings.Contains(txt, "\"status\"") || !strings.Contains(txt, "\"budget\": 8000") {
+	if !strings.Contains(txt, "\"status\"") || !strings.Contains(txt, "\"budget\":8000") {
 		t.Errorf("el status debe reportar estado y presupuesto, obtuve %s", txt)
 	}
-	if !strings.Contains(txt, "\"surface\": \"hydration\"") {
+	if !strings.Contains(txt, "\"surface\":\"hydration\"") {
 		t.Errorf("el desglose debe listar superficies como objetos {surface,tokens,pct}, obtuve %s", txt)
 	}
 }
@@ -313,7 +313,7 @@ func TestCodeMemoryFreshAndStale(t *testing.T) {
 		t.Fatalf("recall_code error: %+v", e)
 	}
 	txt := textOf(t, res)
-	if !strings.Contains(txt, "\"fresh\": true") {
+	if !strings.Contains(txt, "\"fresh\":true") {
 		t.Errorf("el archivo sin cambios debe ser fresh, obtuve %s", txt)
 	}
 	if !strings.Contains(txt, "Paquete foo con Bar().") {
@@ -325,7 +325,7 @@ func TestCodeMemoryFreshAndStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	res2, _ := call(t, s, "musubi_recall_code", map[string]interface{}{"path": "foo.go"})
-	if !strings.Contains(textOf(t, res2), "\"fresh\": false") {
+	if !strings.Contains(textOf(t, res2), "\"fresh\":false") {
 		t.Errorf("tras modificar el archivo el gist debe quedar no-fresco, obtuve %s", textOf(t, res2))
 	}
 }
@@ -336,7 +336,7 @@ func TestRecallCodeNotFound(t *testing.T) {
 	if e != nil {
 		t.Fatalf("recall_code error: %+v", e)
 	}
-	if !strings.Contains(textOf(t, res), "\"found\": false") {
+	if !strings.Contains(textOf(t, res), "\"found\":false") {
 		t.Errorf("un path sin memoria debe devolver found:false, obtuve %s", textOf(t, res))
 	}
 }
@@ -434,7 +434,7 @@ func TestMaintainTool(t *testing.T) {
 	if !strings.Contains(txt, "consolidate") || !strings.Contains(txt, "decay") {
 		t.Errorf("esperaba resumen con consolidate y decay, obtuve %s", txt)
 	}
-	if !strings.Contains(txt, "\"merged\": 1") {
+	if !strings.Contains(txt, "\"merged\":1") {
 		t.Errorf("esperaba 1 merge de casi-duplicados, obtuve %s", txt)
 	}
 }

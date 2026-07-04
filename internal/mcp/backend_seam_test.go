@@ -55,7 +55,7 @@ func TestStorageBackendSeam_ConflictsViaFake(t *testing.T) {
 		t.Fatalf("respuesta inesperada: %#v", res)
 	}
 	text := resp.Content[0].Text
-	if !strings.Contains(text, "rel-123") || !strings.Contains(text, `"count": 1`) {
+	if !strings.Contains(text, "rel-123") || !strings.Contains(text, `"count":1`) {
 		t.Fatalf("el resultado no refleja el dato del fake backend:\n%s", text)
 	}
 }

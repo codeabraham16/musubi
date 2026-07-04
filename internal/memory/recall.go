@@ -55,12 +55,14 @@ type RecallOptions struct {
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
 type RecallItem struct {
-	ID          string  `json:"id"`
-	TopicKey    string  `json:"topic_key"`
-	Gist        string  `json:"gist"`
-	Score       float64 `json:"score"`
-	FullTokens  int     `json:"full_tokens"`  // costo de hidratar el contenido completo
-	ContentHash string  `json:"content_hash"` // huella del contenido (para inyección diferencial)
+	ID         string  `json:"id"`
+	TopicKey   string  `json:"topic_key"`
+	Gist       string  `json:"gist"`
+	Score      float64 `json:"score"`
+	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	// ContentHash es maquinaria server-side (la inyección diferencial la consume in-process
+	// en Go): json:"-" para NO enviar 64 hex de ruido al modelo en la respuesta del tool.
+	ContentHash string `json:"-"`
 }
 
 // RecallResult es la respuesta del recall, con presupuesto y consumo reales.

@@ -104,7 +104,7 @@ func TestDiscoverSkillsDesdeStaticCatalog(t *testing.T) {
 		t.Fatalf("error inesperado: %+v", rpcErr)
 	}
 	txt := res.(CallToolResponse).Content[0].Text
-	if !strings.Contains(txt, `"source": "catalog"`) {
+	if !strings.Contains(txt, `"source":"catalog"`) {
 		t.Errorf("esperaba source=catalog, obtuve: %s", txt)
 	}
 	if !strings.Contains(txt, "go-http-patterns") {
@@ -132,7 +132,7 @@ func TestDiscoverSkillsFallbackALive(t *testing.T) {
 		t.Fatalf("error inesperado: %+v", rpcErr)
 	}
 	txt := res.(CallToolResponse).Content[0].Text
-	if !strings.Contains(txt, `"source": "live"`) {
+	if !strings.Contains(txt, `"source":"live"`) {
 		t.Errorf("esperaba fallback a source=live, obtuve: %s", txt)
 	}
 	if !strings.Contains(txt, "go-http-patterns") {

@@ -108,7 +108,7 @@ func driveTurns(t *testing.T, eng *memory.DbEngine, root, sessionID string, budg
 	}
 	for _, p := range prompts {
 		in := fmt.Sprintf(`{"prompt":%q,"session_id":%q}`, p, sessionID)
-		turnOutput(eng, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, budget, "", strings.NewReader(in))
+		turnOutput(eng, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, config.MemoryConfig{SessionTokenBudget: budget}, strings.NewReader(in))
 	}
 	// Dos lecturas del archivo con memoria de código + error conocido.
 	abs := filepath.Join(root, "internal/auth/middleware.go")
