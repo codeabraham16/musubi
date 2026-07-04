@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-07-04
+
+Track 14 (post-auditoría v0.65.0), A1 — **modelo de fallo del motor de workflows**. La auditoría profunda encontró
+un bug funcional latente: `RunAborted` estaba declarado pero nunca se usaba, y un step `failed` dejaba el run en
+`running` para siempre (run zombie) con sus dependientes bloqueados, sin forma de abortarlo. Este release cierra ese
+hueco: el estado del run ahora se **deriva** correctamente de los estados de sus steps, y hay un abort explícito.
+
+### Fixed
+- **Un run wedgeado por un step fallido ya no queda zombie**: si un step queda `failed` y bloquea todo progreso
+  posible, el run transiciona a un estado terminal `failed` (con evento `run_failed` en el journal), en vez de
+  quedar `running` indefinidamente. La transición es **derivada y model-free** (`computeRunStatus`): mientras haya
+  progreso posible —una rama independiente en curso, un gate humano/verify sin resolver, un step con `when` que
+  podría saltarse— el run **no** se marca failed (sin falsos-fallo). El happy-path (`run_done`) queda idéntico.
+
+### Added
+- **`musubi_workflow action=abort`** (run_id, razón opcional en `result`): aborta explícitamente un run atascado o
+  no deseado → estado terminal `aborted` (evento `run_aborted`), y deja de despachar steps. Idempotente; falla si el
+  run ya concluyó con éxito (`done`/`compensated`). Un run `failed`/`aborted` **todavía se puede compensar** con
+  `rollback` (saga LIFO de los steps completados). Un run terminal (done/failed/aborted/compensated) no despacha más
+  steps. Sin migración (los estados nuevos fluyen por la columna `status` existente). Sigue en 31 tools.
+
 ## [0.65.0] - 2026-07-04
 
 `musubi setup` ahora **refresca las skills cognitivas manejadas** cuando el binario las actualiza, **sin pisar las

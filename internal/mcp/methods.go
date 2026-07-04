@@ -711,6 +711,19 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
 
+	case "abort":
+		// Aborta explícitamente un run atascado o no deseado: lo marca 'aborted' y deja de
+		// despachar steps. La razón (opcional) va en 'result'. Idempotente; falla si el run ya
+		// concluyó con éxito (done/compensated).
+		if strings.TrimSpace(args.RunID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "abort requiere 'run_id'")
+		}
+		run, err := s.engine.AbortWorkflowRun(args.RunID, args.Result)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		return jsonResult(map[string]interface{}{"run": run})
+
 	case "compensated":
 		// El agente reporta que ejecutó la compensación de un step; devuelve el plan restante.
 		if strings.TrimSpace(args.RunID) == "" || strings.TrimSpace(args.Step) == "" {
@@ -778,7 +791,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|compensated|provide|verify)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá start|next|complete|status|resume|validate|list|journal|otel|rollback|abort|compensated|provide|verify)", action)
 	}
 }
 

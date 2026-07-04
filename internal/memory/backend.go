@@ -116,6 +116,7 @@ type WorkflowStore interface {
 	WorkflowJournal(runID string) ([]RunEvent, error)
 	WorkflowTraceOTLP(runID string) (string, error)
 	WorkflowRollback(runID string) ([]CompensationStep, WorkflowRun, error)
+	AbortWorkflowRun(runID, reason string) (WorkflowRun, error)
 	CompleteCompensation(runID, stepID string) ([]CompensationStep, WorkflowRun, error)
 	ProvideWorkflowInput(runID, stepID, input, status string) (WorkflowRun, error)
 	WorkflowAwaiting(runID string) ([]AwaitingStep, error)

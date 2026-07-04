@@ -18,21 +18,28 @@ import (
 
 // Estados de step y de run.
 const (
-	StepPending = "pending"
-	StepDone    = "done"
-	StepFailed  = "failed"
-	StepSkipped = "skipped"
+	StepPending   = "pending"
+	StepDone      = "done"
+	StepFailed    = "failed"
+	StepSkipped   = "skipped"
 	StepWaiting   = "waiting_input" // HITL: pausado esperando input/aprobación humana
 	StepVerifying = "verifying"     // producido, esperando veredicto de verificación (gate)
 
 	RunRunning = "running"
 	RunDone    = "done"
-	RunAborted = "aborted"
+	RunFailed  = "failed"  // terminal: un step falló y el run no puede progresar más
+	RunAborted = "aborted" // terminal: el orquestador abortó el run explícitamente
 
 	// Estados de la saga (compensación LIFO).
 	RunCompensating = "compensating" // rollback en curso
 	RunCompensated  = "compensated"  // todas las compensaciones ejecutadas
 )
+
+// isTerminalRun indica si un estado de run es TERMINAL (ya no despacha steps). RunCompensating
+// NO es terminal: la saga está en curso.
+func isTerminalRun(status string) bool {
+	return status == RunDone || status == RunFailed || status == RunAborted || status == RunCompensated
+}
 
 // Tipos de evento del run journal (run_events). El journal es append-only e inmutable:
 // registra cada transición del run para idempotencia, auditoría y el futuro
@@ -43,6 +50,8 @@ const (
 	EventStepSkipped   = "step_skipped"
 	EventStepReopened  = "step_reopened"
 	EventRunDone       = "run_done"
+	EventRunFailed     = "run_failed"  // el run quedó terminal-fallido (un step failed lo wedgeó)
+	EventRunAborted    = "run_aborted" // el orquestador abortó el run (payload = razón)
 	// Eventos de la saga (compensación LIFO).
 	EventRunRollback     = "run_rollback"     // se inició el rollback del run
 	EventStepCompensated = "step_compensated" // el agente ejecutó la compensación de un step
@@ -392,6 +401,11 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("run %q no existe", runID)
 	}
+	// Un run TERMINAL (done/failed/aborted/compensated) no despacha más steps: aunque queden
+	// steps 'ready' por dependencias (p. ej. tras un abort mid-run), el run ya está cerrado.
+	if isTerminalRun(run.Status) {
+		return nil, nil
+	}
 	whens := run.Def.whenByID()
 	awaits := run.Def.awaitByID()
 	changed := false
@@ -438,7 +452,7 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 			return nil, fmt.Errorf("error iniciando la tx del scheduler: %w", err)
 		}
 		defer tx.Rollback()
-		_, becameDone, perr := persistRunStatusTx(tx, run)
+		_, terminalEvent, perr := persistRunStatusTx(tx, run)
 		if perr != nil {
 			return nil, perr
 		}
@@ -452,8 +466,8 @@ func (e *DbEngine) WorkflowReady(runID string) ([]string, error) {
 				return nil, err
 			}
 		}
-		if becameDone {
-			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+		if terminalEvent != "" {
+			if err := appendRunEvent(tx, runID, "", terminalEvent, "", ""); err != nil {
 				return nil, err
 			}
 		}
@@ -520,7 +534,7 @@ func (e *DbEngine) ProvideWorkflowInput(runID, stepID, input, status string) (Wo
 		return WorkflowRun{}, fmt.Errorf("error iniciando la tx de provide: %w", err)
 	}
 	defer tx.Rollback()
-	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	updated, terminalEvent, perr := persistRunStatusTx(tx, run)
 	if perr != nil {
 		return WorkflowRun{}, perr
 	}
@@ -528,8 +542,8 @@ func (e *DbEngine) ProvideWorkflowInput(runID, stepID, input, status string) (Wo
 	if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
 		return WorkflowRun{}, err
 	}
-	if becameDone {
-		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+	if terminalEvent != "" {
+		if err := appendRunEvent(tx, runID, "", terminalEvent, "", ""); err != nil {
 			return WorkflowRun{}, err
 		}
 	}
@@ -539,22 +553,71 @@ func (e *DbEngine) ProvideWorkflowInput(runID, stepID, input, status string) (Wo
 	return updated, nil
 }
 
-// persistRunStatusTx guarda step_status/step_results dentro de la transacción del
-// caller y recalcula si el run quedó done (todos los steps terminales: done o skipped).
-// El segundo valor (becameDone) es true si el run transicionó a done EN esta llamada,
-// para que el caller emita el evento run_done en la misma tx.
-func persistRunStatusTx(tx *sql.Tx, run WorkflowRun) (WorkflowRun, bool, error) {
-	status := run.Status
+// computeRunStatus DERIVA el estado del run de los estados de sus steps (model-free, determinista):
+//   - RunDone   si TODOS los steps son terminales de éxito (done|skipped);
+//   - RunRunning mientras el run PUEDA progresar: algún step waiting_input/verifying (pausado o en
+//     vuelo, NO fallido), o algún step pending con TODAS sus needs terminales (ready);
+//   - RunFailed si NO puede progresar y hay al menos un step failed (wedgeado por el fallo);
+//   - RunRunning en cualquier otro caso (defensivo).
+//
+// NO re-evalúa `when` (eso lo hace WorkflowReady y persiste los skips): un pending con `when` cuenta
+// como progreso posible, lo que evita un falso RunFailed. El estado es DERIVADO: si el wedge se
+// corrige (p. ej. se re-completa el step fallido), el run vuelve a running en el próximo cálculo.
+func computeRunStatus(run WorkflowRun) string {
 	allTerminal := true
+	anyFailed := false
+	canProgress := false
 	for _, s := range run.Def.Steps {
-		if !terminalStep(run.StepStatus[s.ID]) {
+		st := run.StepStatus[s.ID]
+		if !terminalStep(st) {
 			allTerminal = false
-			break
+		}
+		switch st {
+		case StepFailed:
+			anyFailed = true
+		case StepWaiting, StepVerifying:
+			canProgress = true // pausado/en vuelo, no fallido
+		case StepPending:
+			ready := true
+			for _, n := range s.Needs {
+				if !terminalStep(run.StepStatus[n]) {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				canProgress = true
+			}
 		}
 	}
-	becameDone := allTerminal && status != RunDone
 	if allTerminal {
-		status = RunDone
+		return RunDone
+	}
+	if !canProgress && anyFailed {
+		return RunFailed
+	}
+	return RunRunning
+}
+
+// persistRunStatusTx guarda step_status/step_results/step_iters dentro de la transacción del caller
+// y recalcula el estado del run con computeRunStatus. Devuelve el evento terminal a journalear
+// ("" | run_done | run_failed) SOLO si el run recién transicionó a ese terminal en esta llamada,
+// para que el caller lo emita en la MISMA tx. Los estados DELIBERADOS (aborted) y de saga
+// (compensating/compensated) son pegajosos: no se recalculan (un complete tardío no los resucita).
+func persistRunStatusTx(tx *sql.Tx, run WorkflowRun) (WorkflowRun, string, error) {
+	prev := run.Status
+	status := prev
+	if prev != RunAborted && prev != RunCompensating && prev != RunCompensated {
+		status = computeRunStatus(run)
+	}
+	terminalEvent := ""
+	if status != prev {
+		switch status {
+		case RunDone:
+			terminalEvent = EventRunDone
+		case RunFailed:
+			terminalEvent = EventRunFailed
+		}
 	}
 	statusJSON, _ := json.Marshal(run.StepStatus)
 	resultsJSON, _ := json.Marshal(run.StepResults)
@@ -564,10 +627,10 @@ func persistRunStatusTx(tx *sql.Tx, run WorkflowRun) (WorkflowRun, bool, error) 
 		WHERE run_id=?;`,
 		status, string(statusJSON), string(resultsJSON), string(itersJSON), run.RunID)
 	if err != nil {
-		return WorkflowRun{}, false, fmt.Errorf("error actualizando el run: %w", err)
+		return WorkflowRun{}, "", fmt.Errorf("error actualizando el run: %w", err)
 	}
 	run.Status = status
-	return run, becameDone, nil
+	return run, terminalEvent, nil
 }
 
 // CompleteWorkflowStep marca un step como done (o failed) con su resultado y, si
@@ -647,7 +710,7 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 		return WorkflowRun{}, fmt.Errorf("error iniciando la tx del complete: %w", err)
 	}
 	defer tx.Rollback()
-	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	updated, terminalEvent, perr := persistRunStatusTx(tx, run)
 	if perr != nil {
 		return WorkflowRun{}, perr
 	}
@@ -667,8 +730,8 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 				return WorkflowRun{}, err
 			}
 		}
-		if becameDone {
-			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+		if terminalEvent != "" {
+			if err := appendRunEvent(tx, runID, "", terminalEvent, "", ""); err != nil {
 				return WorkflowRun{}, err
 			}
 		}
@@ -718,7 +781,7 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 
 	if pass {
 		run.StepStatus[stepID] = StepDone
-		updated, becameDone, perr := persistRunStatusTx(tx, run)
+		updated, terminalEvent, perr := persistRunStatusTx(tx, run)
 		if perr != nil {
 			return WorkflowRun{}, nil, perr
 		}
@@ -726,8 +789,8 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 		if err := appendRunEvent(tx, runID, stepID, EventStepCompleted, string(payload), ""); err != nil {
 			return WorkflowRun{}, nil, err
 		}
-		if becameDone {
-			if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+		if terminalEvent != "" {
+			if err := appendRunEvent(tx, runID, "", terminalEvent, "", ""); err != nil {
 				return WorkflowRun{}, nil, err
 			}
 		}
@@ -755,12 +818,12 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 	} else {
 		run.StepStatus[stepID] = StepFailed // presupuesto agotado: el gate no se satisface
 	}
-	updated, becameDone, perr := persistRunStatusTx(tx, run)
+	updated, terminalEvent, perr := persistRunStatusTx(tx, run)
 	if perr != nil {
 		return WorkflowRun{}, nil, perr
 	}
-	if becameDone {
-		if err := appendRunEvent(tx, runID, "", EventRunDone, "", ""); err != nil {
+	if terminalEvent != "" {
+		if err := appendRunEvent(tx, runID, "", terminalEvent, "", ""); err != nil {
 			return WorkflowRun{}, nil, err
 		}
 	}
@@ -904,6 +967,45 @@ func (e *DbEngine) WorkflowRollback(runID string) ([]CompensationStep, WorkflowR
 	}
 	run.Status = newStatus
 	return plan, run, nil
+}
+
+// AbortWorkflowRun aborta explícitamente un run: lo marca RunAborted y journalea run_aborted con
+// la razón (payload). Idempotente: abortar un run ya aborted es un no-op. Falla si el run ya está
+// en un terminal de ÉXITO/compensación (done/compensated) — no se cancela algo ya concluido. Un
+// run running/failed/compensating SÍ puede abortarse (matar un run atascado o no deseado). Tras el
+// abort, WorkflowReady no despacha más steps (isTerminalRun).
+func (e *DbEngine) AbortWorkflowRun(runID, reason string) (WorkflowRun, error) {
+	run, ok, err := e.WorkflowRunStatus(runID)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if !ok {
+		return WorkflowRun{}, fmt.Errorf("run %q no existe", runID)
+	}
+	if run.Status == RunAborted {
+		return run, nil // ya abortado: no-op idempotente
+	}
+	if run.Status == RunDone || run.Status == RunCompensated {
+		return WorkflowRun{}, fmt.Errorf("no se puede abortar un run %q (ya concluido)", run.Status)
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkflowRun{}, fmt.Errorf("error iniciando la tx de abort: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE workflow_runs SET status=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?`,
+		RunAborted, runID); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error abortando el run: %w", err)
+	}
+	if err := appendRunEvent(tx, runID, "", EventRunAborted, reason, ""); err != nil {
+		return WorkflowRun{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowRun{}, fmt.Errorf("error confirmando el abort: %w", err)
+	}
+	run.Status = RunAborted
+	return run, nil
 }
 
 // CompleteCompensation marca que el agente ejecutó la compensación de un step: journalea
