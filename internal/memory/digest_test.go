@@ -16,7 +16,7 @@ func TestEstimateTokens(t *testing.T) {
 		{"abcd", 1},     // 4 runas -> ceil(4/4)=1
 		{"abcde", 2},    // 5 runas -> ceil(5/4)=2
 		{"abcdefgh", 2}, // 8 runas -> 2
-		{"áéí", 1},      // 3 runas multibyte -> 1
+		{"áéí", 2},      // 3 no-ASCII -> ceil(3/2.0)=2 (antes subcontaba a 1)
 	}
 	for _, c := range cases {
 		if got := EstimateTokens(c.in); got != c.want {
@@ -81,6 +81,32 @@ func TestEstimateTokensCJK(t *testing.T) {
 	got := EstimateTokens(cjk)
 	if got < 6 {
 		t.Errorf("EstimateTokens(CJK)=%d subcuenta; esperaba ~8 (>=6)", got)
+	}
+}
+
+func TestEstimateTokensSegmentsMarkdown(t *testing.T) {
+	// Un blob mayormente prosa con UN bloque de código no debe estimarse como si TODO
+	// fuera código (/3.4): la segmentación da MENOS que el blob-completo-código y no
+	// menos que el blob-completo-prosa. Arregla la sobre-estimación que recortaba recall.
+	md := "Esta es una explicación en prosa sobre el despliegue del sistema y su diseño.\n```\nfor i := range xs { total += xs[i] * factor }\n```\nY después seguimos con más prosa explicando el resultado y las decisiones."
+	seg := EstimateTokens(md)
+	allCode := estimateTokensFor(md, kindCode)
+	allProse := estimateTokensFor(md, kindProse)
+	if seg >= allCode {
+		t.Errorf("segmentado (%d) debería estimar MENOS que todo-código (%d)", seg, allCode)
+	}
+	if seg < allProse {
+		t.Errorf("segmentado (%d) no debería estimar menos que todo-prosa (%d)", seg, allProse)
+	}
+}
+
+// El peso no-ASCII no debe romper el sesgo conservador: prosa acentuada estima >= que
+// la misma cantidad de ASCII puro (nunca sub-cuenta el español).
+func TestEstimateTokensAccentedNotUnderAscii(t *testing.T) {
+	accented := EstimateTokens("configuración migración inyección después")
+	ascii := EstimateTokens("configuracion migracion inyeccion despues")
+	if accented < ascii {
+		t.Errorf("prosa acentuada (%d) no debe estimar menos que la ASCII equivalente (%d)", accented, ascii)
 	}
 }
 

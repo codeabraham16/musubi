@@ -58,23 +58,25 @@ func kindName(k contentKind) string {
 }
 
 // fitDivisorForSamples calcula el divisor chars/token que mejor ajusta el conjunto
-// (sobre la porción no-CJK), agregando todos los samples: divisor =
-// sum(otherChars) / sum(max(1, actual - cjk)). Se acota a un rango sano.
+// SOBRE LA PORCIÓN ASCII, agregando todos los samples: divisor = sum(ascii) /
+// sum(max(1, actual - cjk - nonascii/divNonASCII)). Descuenta las contribuciones fijas
+// de CJK (~1 tok/char) y no-ASCII (divNonASCII) para que el ajuste no las absorba en el
+// divisor del tipo. Se acota a un rango sano.
 func fitDivisorForSamples(samples []TokenSample) float64 {
-	var otherTotal, tokenTotal float64
+	var asciiTotal, tokenTotal float64
 	for _, s := range samples {
-		other, cjk := countChars(s.Text)
-		eff := float64(s.Actual - cjk)
+		ascii, nonascii, cjk := countChars(s.Text)
+		eff := float64(s.Actual) - float64(cjk) - float64(nonascii)/divNonASCII
 		if eff < 1 {
 			eff = 1
 		}
-		otherTotal += float64(other)
+		asciiTotal += float64(ascii)
 		tokenTotal += eff
 	}
-	if tokenTotal <= 0 || otherTotal <= 0 {
+	if tokenTotal <= 0 || asciiTotal <= 0 {
 		return 0
 	}
-	d := otherTotal / tokenTotal
+	d := asciiTotal / tokenTotal
 	if d < 1.5 {
 		d = 1.5
 	}
