@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-07-04
+
+Debate multi-agente (**Society of Minds**) como subsistema ejecutable y determinista, model-free — reabriendo C3,
+que en Track 13 se había descartado como subsistema. Un audit del código (con evidencia file:line) confirmó que el
+andamiaje del debate se compone solo PARCIALMENTE de las primitivas existentes: la skill `adversarial-review` ya lo
+simula como PROSA para el LLM, pero faltan tres mecanismos estructurales para tenerlo como topología ejecutable
+(fan-out/rondas parametrizados, agregador N-ario, unidad multi-postura). Este release provee los dos que son
+model-free —posturas atribuidas por ronda (crítica cruzada persistida) y tally determinista— y deja el juicio
+semántico donde corresponde: en el LLM. **Primer incremento del catálogo desde hace varias olas: 30 → 31 tools**
+(un subsistema genuinamente nuevo justifica su tool propia, como `musubi_work` y `musubi_workflow`). Migración v9.
+
+### Added
+- **`musubi_debate` — debate multi-agente model-free** (acciones `open` / `post` / `advance` / `vote` / `tally` /
+  `status`): Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas por agente y ronda (crítica
+  cruzada reproducible) y CUENTA los votos; los sub-agentes (LLM) producen las posturas, las críticas y los votos.
+  Ciclo: `open` (topic, rounds, quorum opcional) → N sub-agentes postean con `post` → `advance` cierra la ronda y
+  devuelve las posturas previas como material de crítica para la siguiente → `vote` → `tally`. El **tally es 100%
+  determinista**: gana el `choice` con el máximo ESTRICTO de votos que alcance el quórum → el debate se cierra con
+  ese ganador; empate, bajo quórum o sin votos ⇒ `no_consensus` (sigue abierto: se puede `advance`+re-votar, o
+  deferir el juicio a `musubi_judge`). El juicio SEMÁNTICO (elegir/sintetizar) se queda en el LLM. Migración v9
+  (`debates`, `debate_postures` con `UNIQUE(debate_id,round,agent)`, `debate_votes` con `UNIQUE(debate_id,agent)`,
+  `ON DELETE CASCADE`). Subsistema aislado y aditivo: no toca recall/work/workflow. Multi-Agent Debate / Society of
+  Minds. **El catálogo pasa de 30 a 31 tools** (incremento deliberado).
+
 ## [0.63.0] - 2026-07-03
 
 Track 13 — B4 (memoria más inteligente, cierre). **Centralidad de grafo como 5ª señal RRF del recall**, la última

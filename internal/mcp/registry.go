@@ -425,6 +425,26 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_debate",
+				Description: "Debate multi-agente (Society of Minds) como andamiaje EJECUTABLE y DETERMINISTA (model-free). Musubi NO razona: estructura las rondas, PERSISTE las posturas atribuidas (crítica cruzada reproducible) y CUENTA los votos; los sub-agentes (LLM) producen las posturas, las críticas y los votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → devuelve el debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea su postura de la ronda actual con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás a los agentes como material de CRÍTICA para la ronda siguiente; repetís post→advance hasta agotar las rondas; 4) cada agente vota con action=vote (id, agent, choice); 5) action=tally (id) hace el recuento DETERMINISTA: gana el choice con el máximo ESTRICTO de votos que alcance el quórum → el debate se cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: podés advance+re-votar, o deferir el juicio a musubi_judge). action=status (id) devuelve el estado completo (posturas por ronda + votos). El juicio SEMÁNTICO (elegir/sintetizar) se queda en el LLM; Musubi solo cuenta. action ∈ {open, post, advance, vote, tally, status}.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"action": {Type: "string", Description: "open | post | advance | vote | tally | status"},
+						"id":     {Type: "string", Description: "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"},
+						"topic":  {Type: "string", Description: "Para open: la pregunta/tema del debate"},
+						"rounds": {Type: "number", Description: "Para open: tope de rondas de debate (>=1)"},
+						"quorum": {Type: "number", Description: "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"},
+						"agent":  {Type: "string", Description: "Para post/vote: etiqueta del sub-agente participante"},
+						"stance": {Type: "string", Description: "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"},
+						"choice": {Type: "string", Description: "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"},
+					},
+				},
+			},
+			handler: noCtx(s.toolDebate),
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_workflow",
 				Description: "Motor de orquestación DAG (model-free). Musubi NO ejecuta los steps: define el grafo, persiste el estado del run en SQLite (resumible entre sesiones) y devuelve qué step(s) están listos; VOS ejecutás y reportás. Protocolo: action=start (run_id + workflow id de .musubi/workflows/<id>.yaml, o definition YAML inline) → devuelve los steps ready; ejecutás un step y hacés action=complete (run_id, step, result) → devuelve los nuevos ready; action=next para reconsultar; action=status para el estado completo; action=resume para retomar un run en otra sesión (estado + ready). Un step queda listo cuando todas sus dependencias (needs) están done o skipped. Control de flujo: un step puede llevar `when` (expresión, ej. `step.build.status == done and step.test.result contains ok`); si es falsa el step se salta (gate/if_then/switch). Un step con `repeat_while` (+ `max_iterations`) se re-ejecuta como loop mientras la condición sea verdadera. Cada avance se registra en un JOURNAL append-only (auditoría/observabilidad): action=journal (run_id) devuelve la traza de eventos del run; action=otel (run_id) exporta el run como una traza OpenTelemetry (OTLP/JSON, run=trace, step=span) lista para un collector; complete acepta un idempotency_key opcional (reintentar con la misma clave es un no-op seguro). SAGA (compensación LIFO): un step puede declarar `compensate` (directiva de cómo deshacerlo); action=rollback (run_id) inicia la saga y devuelve el plan de compensación en orden inverso (LIFO) de los steps completados con compensación; ejecutás cada undo y reportás con action=compensated (run_id, step) → devuelve el plan restante; al vaciarse, el run queda `compensated`. HITL (gate humano): un step puede declarar `await` (prompt); al quedar listo el run se PAUSA en él (waiting_input, bloquea dependientes) y las respuestas lo surface en `waiting`; se reanuda con action=provide (run_id, step, input, status done|failed). El estado es durable (SQLite): se puede proveer en otra sesión. GATE DE VERIFICACIÓN (Reflexion): un step puede declarar `verify` (directiva de qué chequear); al completarlo con done NO queda done sino en `verifying` (bloquea dependientes) hasta que action=verify (run_id, step, verdict pass|fail, reflexión en `result`) lo resuelva — pass→done; fail→registra la reflexión y REABRE el step para otro intento informado, o lo falla al agotar el presupuesto (max_iterations, default 3). Cierra el verification-generation gap: nada se da por hecho hasta verificarse. action=validate valida una definición sin correrla; action=list lista los runs. action ∈ {start, next, complete, status, resume, validate, list, journal, otel, rollback, compensated, provide, verify}.",
 				InputSchema: InputSchema{

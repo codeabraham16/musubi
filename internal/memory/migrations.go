@@ -207,6 +207,58 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 9,
+			name:    "debate",
+			// Debate topology (multi-agent debate / Society of Minds) como subsistema
+			// model-free: sin esto el patrón solo existe como prosa en la skill
+			// adversarial-review (sin persistencia del voto ni reproducibilidad). Tres tablas:
+			//   debates          -> la sesión (topic, rondas, quórum, estado, ganador)
+			//   debate_postures  -> N posturas atribuidas POR RONDA (crítica cruzada persistida);
+			//                       UNIQUE(debate_id,round,agent) = una postura por agente y ronda
+			//   debate_votes     -> voto por agente; UNIQUE(debate_id,agent) = un voto vigente
+			// El tally (mayoría/quórum) es SQL COUNT determinista: Musubi cuenta, no razona. FK
+			// ON DELETE CASCADE: borrar el debate limpia posturas y votos. Aditiva.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`CREATE TABLE IF NOT EXISTS debates (
+						id TEXT PRIMARY KEY,
+						topic TEXT NOT NULL,
+						rounds INTEGER NOT NULL,
+						current_round INTEGER NOT NULL DEFAULT 1,
+						quorum INTEGER NOT NULL DEFAULT 0,
+						status TEXT NOT NULL DEFAULT 'open',
+						winner TEXT,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						closed_at DATETIME
+					);`,
+					`CREATE TABLE IF NOT EXISTS debate_postures (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						debate_id TEXT NOT NULL REFERENCES debates(id) ON DELETE CASCADE,
+						round INTEGER NOT NULL,
+						agent TEXT NOT NULL,
+						stance TEXT NOT NULL,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(debate_id, round, agent)
+					);`,
+					`CREATE TABLE IF NOT EXISTS debate_votes (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						debate_id TEXT NOT NULL REFERENCES debates(id) ON DELETE CASCADE,
+						agent TEXT NOT NULL,
+						choice TEXT NOT NULL,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(debate_id, agent)
+					);`,
+					`CREATE INDEX IF NOT EXISTS idx_debate_postures ON debate_postures(debate_id, round)`,
+					`CREATE INDEX IF NOT EXISTS idx_debate_votes ON debate_votes(debate_id)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

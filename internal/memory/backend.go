@@ -96,6 +96,17 @@ type WorkStore interface {
 	WorkUnitBids(unitID string) ([]WorkBid, error)
 }
 
+// DebateStore — subsistema de debate multi-agente (Society of Minds) model-free: rondas de
+// posturas atribuidas + tally determinista por mayoría/quórum.
+type DebateStore interface {
+	OpenDebate(topic string, rounds, quorum int) (Debate, error)
+	PostPosture(debateID, agent, stance string) error
+	AdvanceDebate(debateID string) (int, []DebatePosture, error)
+	CastVote(debateID, agent, choice string) error
+	TallyDebate(debateID string) (TallyResult, Debate, error)
+	DebateStatus(debateID string) (Debate, []DebatePosture, []DebateVote, error)
+}
+
 // WorkflowStore — motor de orquestación DAG persistente (resumible entre sesiones).
 type WorkflowStore interface {
 	StartWorkflowRun(runID string, def WorkflowDef) (WorkflowRun, error)
@@ -166,6 +177,7 @@ type StorageBackend interface {
 	TelemetryStore
 	SkillDecisionStore
 	WorkStore
+	DebateStore
 	WorkflowStore
 	LedgerStore
 	PhaseStore

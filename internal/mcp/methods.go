@@ -490,6 +490,89 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 	}
 }
 
+// toolDebate maneja el subsistema de debate multi-agente (Society of Minds) model-free:
+// rondas de posturas atribuidas + tally determinista. Musubi estructura y cuenta; los agentes
+// (LLM) producen posturas, críticas y votos.
+func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Action string `json:"action"`
+		ID     string `json:"id"`
+		Topic  string `json:"topic"`
+		Rounds int    `json:"rounds"`
+		Quorum int    `json:"quorum"`
+		Agent  string `json:"agent"`
+		Stance string `json:"stance"`
+		Choice string `json:"choice"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	switch action := strings.TrimSpace(args.Action); action {
+	case "open":
+		d, err := s.engine.OpenDebate(args.Topic, args.Rounds, args.Quorum)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo abrir el debate: %v", err)
+		}
+		return jsonResult(map[string]interface{}{"debate": d,
+			"note": "postea las posturas de la ronda 1 con action=post (id, agent, stance); tras N posturas, action=advance para pasar a la siguiente ronda con las posturas previas como material de crítica"})
+
+	case "post":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "post requiere 'id' (el debate)")
+		}
+		if err := s.engine.PostPosture(args.ID, args.Agent, args.Stance); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo postear: %v", err)
+		}
+		return textResult("Postura registrada."), nil
+
+	case "advance":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "advance requiere 'id' (el debate)")
+		}
+		round, prev, err := s.engine.AdvanceDebate(args.ID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo avanzar: %v", err)
+		}
+		return jsonResult(map[string]interface{}{"round": round, "previous_postures": prev,
+			"note": "pasá 'previous_postures' a los agentes como material de crítica cruzada; cuando terminen las rondas, recogé los votos con action=vote y cerrá con action=tally"})
+
+	case "vote":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "vote requiere 'id' (el debate)")
+		}
+		if err := s.engine.CastVote(args.ID, args.Agent, args.Choice); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo votar: %v", err)
+		}
+		return textResult("Voto registrado."), nil
+
+	case "tally":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "tally requiere 'id' (el debate)")
+		}
+		res, d, err := s.engine.TallyDebate(args.ID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo hacer el recuento: %v", err)
+		}
+		return jsonResult(map[string]interface{}{"tally": res, "debate": d})
+
+	case "status":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "status requiere 'id' (el debate)")
+		}
+		d, postures, votes, err := s.engine.DebateStatus(args.ID)
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo leer el debate: %v", err)
+		}
+		return jsonResult(map[string]interface{}{"debate": d, "postures": postures, "votes": votes})
+
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá open|post|advance|vote|tally|status)", action)
+	}
+}
+
 // toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
 // Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
 // steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
