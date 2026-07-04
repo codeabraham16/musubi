@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-07-04
+
+Auditoría del sistema de tokens, Frente #3 (d) — **el recordatorio de captura cuenta las tres superficies**.
+Cierra el Frente #3 y la auditoría. Correctness del loop dirigido, model-free, sin migración.
+
+### Fixed
+- **El recordatorio de captura ya no da falsos positivos con `save_fact`/`save_code`**: `buildCaptureReminder`
+  usaba `CountObservations` como señal de "se guardó algo" entre turnos, así que persistir un **hecho**
+  (`musubi_save_fact`) o un **gist de código** (`musubi_save_code`) no reiniciaba el contador y el nudge saltaba
+  igual —aun cuando el propio texto sugería `musubi_save_fact`—. Ahora la señal deriva de un nuevo
+  `CountSavedItems()` que suma las tres superficies (`observations` + `relations` + `code_memory`) en una sola
+  query; es un total monótono ante cualquier save nuevo. La lógica de umbral/turnos/session-scoping no cambia.
+
 ## [0.76.0] - 2026-07-04
 
 Auditoría del sistema de tokens, Frente #3 (c) — **delta del run en `musubi_workflow`**. Las acciones

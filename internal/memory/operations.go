@@ -24,13 +24,28 @@ type SearchResult struct {
 	Similarity float32 `json:"similarity"`
 }
 
-// CountObservations devuelve el total de observaciones guardadas. Lo usa el loop
-// dirigido como señal model-free de "se guardó algo" entre turnos (recordatorio
-// de captura).
+// CountObservations devuelve el total de observaciones guardadas.
 func (e *DbEngine) CountObservations() (int, error) {
 	var n int
 	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("error al contar observaciones: %w", err)
+	}
+	return n, nil
+}
+
+// CountSavedItems devuelve el total de items persistidos en las TRES superficies de
+// memoria: observaciones + hechos (relations) + gists de código (code_memory). Lo usa el
+// loop dirigido como señal model-free de "se guardó algo" entre turnos (recordatorio de
+// captura): contar solo observaciones daba falsos positivos porque save_fact y save_code
+// no las incrementan. Cuenta filas totales (relations incluye invalidadas) para que la
+// señal sea MONÓTONA ante cada save nuevo, incluso cuando un hecho supersede a otro.
+func (e *DbEngine) CountSavedItems() (int, error) {
+	var n int
+	if err := e.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM observations) +
+		(SELECT COUNT(*) FROM relations) +
+		(SELECT COUNT(*) FROM code_memory)`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("error al contar items guardados: %w", err)
 	}
 	return n, nil
 }
