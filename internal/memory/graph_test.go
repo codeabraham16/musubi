@@ -62,7 +62,7 @@ func TestRecallFactsOneHop(t *testing.T) {
 	mustFact(t, e, "Alice", "knows", "Bob")
 	mustFact(t, e, "ACME", "located_in", "NYC")
 
-	res, err := e.RecallFacts("Alice", 1, 50, "")
+	res, err := e.RecallFacts("Alice", 1, 50, "", "")
 	if err != nil {
 		t.Fatalf("RecallFacts error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRecallFactsTwoHops(t *testing.T) {
 	mustFact(t, e, "Alice", "knows", "Bob")
 	mustFact(t, e, "ACME", "located_in", "NYC")
 
-	res, err := e.RecallFacts("Alice", 2, 50, "")
+	res, err := e.RecallFacts("Alice", 2, 50, "", "")
 	if err != nil {
 		t.Fatalf("RecallFacts error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestRecallFactsTwoHops(t *testing.T) {
 func TestRecallFactsUnknownEntity(t *testing.T) {
 	e := newTestEngine(t)
 	mustFact(t, e, "Alice", "knows", "Bob")
-	res, err := e.RecallFacts("Zzz", 2, 50, "")
+	res, err := e.RecallFacts("Zzz", 2, 50, "", "")
 	if err != nil {
 		t.Fatalf("RecallFacts error: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRecallFactsRespectsMaxFacts(t *testing.T) {
 	mustFact(t, e, "Alice", "knows", "Carol")
 	mustFact(t, e, "Alice", "knows", "Dave")
 
-	res, err := e.RecallFacts("Alice", 1, 1, "")
+	res, err := e.RecallFacts("Alice", 1, 1, "", "")
 	if err != nil {
 		t.Fatalf("RecallFacts error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestSaveFactSingleValuedInvalidates(t *testing.T) {
 	if r.Invalidated != 1 {
 		t.Errorf("guardar Globex (single-valued) debe invalidar 1 hecho (Acme), obtuve %d", r.Invalidated)
 	}
-	res, _ := e.RecallFacts("Ana", 1, 50, "")
+	res, _ := e.RecallFacts("Ana", 1, 50, "", "")
 	if len(res.Facts) != 1 || res.Facts[0].Object != "Globex" {
 		t.Errorf("la verdad actual debe ser sólo Globex, obtuve %+v", res.Facts)
 	}
@@ -156,7 +156,7 @@ func TestSaveFactManyValuedDoesNotInvalidate(t *testing.T) {
 	if r.Invalidated != 0 {
 		t.Errorf("un predicado many-valued no debe invalidar nada, obtuve %d", r.Invalidated)
 	}
-	res, _ := e.RecallFacts("Ana", 1, 50, "")
+	res, _ := e.RecallFacts("Ana", 1, 50, "", "")
 	if len(res.Facts) != 2 {
 		t.Errorf("ambos hechos 'knows' deben seguir vivos, obtuve %+v", res.Facts)
 	}
@@ -174,12 +174,12 @@ func TestRecallFactsAsOfPointInTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Verdad actual: sólo Globex.
-	cur, _ := e.RecallFacts("Ana", 1, 50, "")
+	cur, _ := e.RecallFacts("Ana", 1, 50, "", "")
 	if len(cur.Facts) != 1 || cur.Facts[0].Object != "Globex" {
 		t.Fatalf("verdad actual debe ser sólo Globex, obtuve %+v", cur.Facts)
 	}
 	// Point-in-time en 2021: Acme era la verdad (Globex aún no empezaba).
-	past, _ := e.RecallFacts("Ana", 1, 50, "2021-01-01")
+	past, _ := e.RecallFacts("Ana", 1, 50, "2021-01-01", "")
 	if len(past.Facts) != 1 || past.Facts[0].Object != "Acme" {
 		t.Fatalf("as_of=2021 debe devolver Acme (point-in-time), obtuve %+v", past.Facts)
 	}
@@ -206,7 +206,7 @@ func TestSaveFactReviveInvalidated(t *testing.T) {
 	if r.Invalidated != 1 {
 		t.Errorf("revivir Acme debe invalidar Globex (1), obtuve %d", r.Invalidated)
 	}
-	res, _ := e.RecallFacts("Ana", 1, 50, "")
+	res, _ := e.RecallFacts("Ana", 1, 50, "", "")
 	if len(res.Facts) != 1 || res.Facts[0].Object != "Acme" {
 		t.Errorf("la verdad actual debe ser Acme revivido, obtuve %+v", res.Facts)
 	}
@@ -218,7 +218,7 @@ func TestRecallFactsAsOfInvalidDegradesToCurrent(t *testing.T) {
 	sv := []string{"works_at"}
 	e.SaveFact("Ana", "works_at", "Acme", "", sv)
 	e.SaveFact("Ana", "works_at", "Globex", "", sv)
-	res, err := e.RecallFacts("Ana", 1, 50, "no-es-una-fecha")
+	res, err := e.RecallFacts("Ana", 1, 50, "no-es-una-fecha", "")
 	if err != nil {
 		t.Fatalf("as_of inválido no debe fallar: %v", err)
 	}

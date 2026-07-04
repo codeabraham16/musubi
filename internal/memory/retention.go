@@ -20,6 +20,7 @@ type MaintenanceOptions struct {
 	DecayMinSalience       float64
 	DecayMinAgeDays        float64
 	DecayProtectImportance float64
+	DecayReinforcementK    float64
 	PurgeArchivedAfterDays float64
 	Vacuum                 bool
 }
@@ -50,6 +51,7 @@ func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) 
 		MinSalience:       opts.DecayMinSalience,
 		MinAgeDays:        opts.DecayMinAgeDays,
 		ProtectImportance: opts.DecayProtectImportance,
+		ReinforcementK:    opts.DecayReinforcementK,
 	})
 	if err != nil {
 		return rep, err

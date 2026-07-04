@@ -110,6 +110,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		TopicKey   string  `json:"topic_key"`
 		Content    string  `json:"content"`
 		Importance float64 `json:"importance"`
+		MemType    string  `json:"mem_type"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -138,7 +139,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDeduped(args.TopicKey, args.Content, importance, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTyped(args.TopicKey, args.Content, importance, args.MemType, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -149,7 +150,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationWithImportance(args.ID, args.TopicKey, args.Content, importance, emb); err != nil {
+	if err := s.engine.SaveObservationTyped(args.ID, args.TopicKey, args.Content, importance, args.MemType, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
@@ -791,6 +792,8 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 		Entity  string `json:"entity"`
 		MaxHops int    `json:"max_hops"`
 		AsOf    string `json:"as_of"`
+		Rank    string `json:"rank"`
+		To      string `json:"to"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -804,7 +807,16 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 		maxHops = args.MaxHops
 	}
 
-	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts, args.AsOf)
+	// Con 'to' seteado: camino más corto entity→to. Sin él: vecindad (BFS/pagerank).
+	if strings.TrimSpace(args.To) != "" {
+		res, err := s.engine.FactPath(args.Entity, args.To, maxHops, args.AsOf)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al calcular el camino: %v", err)
+		}
+		return jsonResult(res)
+	}
+
+	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts, args.AsOf, args.Rank)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
 	}

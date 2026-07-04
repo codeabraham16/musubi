@@ -169,6 +169,19 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 7,
+			name:    "observations_mem_type",
+			// Tipo de memoria (semantic/episodic/procedural, estilo LangMem): sin esto todas
+			// las observaciones se olvidan con la misma curva. mem_type es un enum model-free
+			// que el agente declara al guardar y que modula la saliencia del olvido (episódico
+			// se enfría antes; procedural persiste). Aditiva: NULL = sin tipo = peso 1.0, así
+			// que las observaciones previas decaen EXACTAMENTE como antes (backward-compat).
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`ALTER TABLE observations ADD COLUMN mem_type TEXT`)
+				return err
+			},
+		},
 	}
 }
 

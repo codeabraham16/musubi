@@ -414,6 +414,9 @@ func TestLoadMaintenanceDefaults(t *testing.T) {
 	if cfg.Maintenance.DecayHalfLifeDays != 30 || cfg.Maintenance.DecayMinSalience != 0.2 || cfg.Maintenance.DecayMinAgeDays != 14 {
 		t.Errorf("defaults de maintenance no aplicados: %+v", cfg.Maintenance)
 	}
+	if cfg.Maintenance.DecayReinforcementK != 0.5 {
+		t.Errorf("esperaba decay_reinforcement_k 0.5 por defecto (refuerzo Ebbinghaus B3), obtuve %v", cfg.Maintenance.DecayReinforcementK)
+	}
 	if cfg.Maintenance.AutoIntervalHours != 24 {
 		t.Errorf("esperaba auto_interval_hours 24 por defecto, obtuve %v", cfg.Maintenance.AutoIntervalHours)
 	}

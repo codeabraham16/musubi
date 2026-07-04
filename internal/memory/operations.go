@@ -79,19 +79,31 @@ func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 // forma model-free el gist, el content_hash y la estimación de tokens. La
 // importancia no se toca en updates (se preserva la existente).
 func (e *DbEngine) SaveObservation(id, topicKey, content string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, 1.0, false, embedding)
+	return e.saveObservation(id, topicKey, content, 1.0, false, "", embedding)
 }
 
 // SaveObservationWithImportance es como SaveObservation pero fija la importancia
 // (también en updates). importance pondera el ranking del recall.
 func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, "", embedding)
+}
+
+// SaveObservationTyped es como SaveObservationWithImportance pero además fija el TIPO de
+// memoria (mem_type: semantic/episodic/procedural), que modula el olvido. memType se
+// normaliza al enum canónico (vacío/desconocido → sin tipo). Ver memtype.go.
+func (e *DbEngine) SaveObservationTyped(id, topicKey, content string, importance float64, memType string, embedding []float32) error {
+	return e.saveObservation(id, topicKey, content, importance, true, memType, embedding)
 }
 
 // SaveObservationDeduped guarda content con un id nuevo, salvo que ya exista una
 // observación con el mismo content_hash (dedup exacto): en ese caso devuelve ese
 // id y deduped=true sin insertar nada.
 func (e *DbEngine) SaveObservationDeduped(topicKey, content string, importance float64, embedding []float32) (string, bool, error) {
+	return e.SaveObservationDedupedTyped(topicKey, content, importance, "", embedding)
+}
+
+// SaveObservationDedupedTyped es SaveObservationDeduped con TIPO de memoria (mem_type).
+func (e *DbEngine) SaveObservationDedupedTyped(topicKey, content string, importance float64, memType string, embedding []float32) (string, bool, error) {
 	existing, found, err := e.FindByContentHash(ContentHash(content))
 	if err != nil {
 		return "", false, err
@@ -100,7 +112,7 @@ func (e *DbEngine) SaveObservationDeduped(topicKey, content string, importance f
 		return existing, true, nil
 	}
 	id := uuid.NewString()
-	if err := e.SaveObservationWithImportance(id, topicKey, content, importance, embedding); err != nil {
+	if err := e.SaveObservationTyped(id, topicKey, content, importance, memType, embedding); err != nil {
 		return "", false, err
 	}
 	return id, false, nil
@@ -122,7 +134,7 @@ func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 // saveObservation es el núcleo del guardado: UPSERT por id que preserva created_at
 // y las estadísticas de acceso en updates, y mantiene el FTS sincronizado vía
 // triggers (AFTER INSERT/UPDATE). Si setImportance es false, no pisa importance.
-func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, embedding []float32) error {
+func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType string, embedding []float32) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("error al iniciar transacción: %w", err)
@@ -132,20 +144,27 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	gist := Gist(content, defaultGistMaxTokens)
 	hash := ContentHash(content)
 	tokens := EstimateTokens(content)
+	// mem_type se normaliza al enum canónico; "" (sin tipo) se guarda como cadena vacía y
+	// pesa neutro en el olvido. El tipo lo aporta el agente (model-free).
+	memType = normalizeMemType(memType)
 
 	setImp := ""
 	if setImportance {
 		setImp = ",\n\t\t\timportance=excluded.importance"
 	}
-	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	// En UPSERT, un guardado SIN tipo (mem_type='') PRESERVA la clasificación existente:
+	// sólo un tipo no vacío la reemplaza. Así un update por la vía histórica (untyped) no
+	// borra el mem_type que otro guardado tipado ya fijó (evita pérdida de clasificación).
+	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
 			gist=excluded.gist,
 			content_hash=excluded.content_hash,
-			tokens=excluded.tokens` + setImp
-	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance); err != nil {
+			tokens=excluded.tokens,
+			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END` + setImp
+	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance, memType); err != nil {
 		return fmt.Errorf("error al guardar observación: %w", err)
 	}
 

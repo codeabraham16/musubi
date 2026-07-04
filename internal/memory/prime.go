@@ -61,11 +61,14 @@ func candidateSalience(c candidate, now time.Time) float64 {
 		imp = 1.0
 	}
 	ts := effectiveRecency(c)
+	// typeWeight neutro (1.0) en el priming: el peso por mem_type modula el OLVIDO (decay),
+	// no el ranking de arranque; el pool de candidatos aún no carga mem_type (eso tocaría el
+	// hot path de recall, fuera del alcance de B2).
 	t, err := time.Parse(sqliteTimeLayout, ts)
 	if err != nil {
 		// Sin timestamp parseable: edad 0 (recencia máxima), no penalizar.
-		return salience(imp, c.accessCount, 0, defaultHalfLifeDays)
+		return salience(imp, c.accessCount, 0, defaultHalfLifeDays, 1.0, 0)
 	}
 	ageDays := now.Sub(t).Hours() / 24
-	return salience(imp, c.accessCount, ageDays, defaultHalfLifeDays)
+	return salience(imp, c.accessCount, ageDays, defaultHalfLifeDays, 1.0, 0)
 }

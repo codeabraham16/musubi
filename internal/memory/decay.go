@@ -29,6 +29,10 @@ type DecayOptions struct {
 	// ProtectImportance protege del olvido a las observaciones con importance >= a este
 	// valor (conocimiento deliberado). 0 = sin protección.
 	ProtectImportance float64
+	// ReinforcementK es la fuerza del refuerzo de Ebbinghaus (B3): cada acceso alarga la
+	// vida media efectiva de la recencia (memorias calientes se olvidan más lento). 0 =
+	// vida media fija (comportamiento histórico). Ver effectiveHalfLife.
+	ReinforcementK float64
 }
 
 // decayBatchSize es el tamaño de página del scan de olvido. Es var (no const) para que
@@ -41,12 +45,28 @@ type DecayResult struct {
 	Archived int `json:"archived"`
 }
 
-// salience combina importancia, frecuencia (log) y recencia (decaimiento
-// exponencial). Determinista, sin LLM.
-func salience(importance float64, accessCount int, ageDays, halfLifeDays float64) float64 {
+// effectiveHalfLife aplica el REFUERZO de Ebbinghaus (spacing effect): cada acceso (repaso)
+// fortalece la memoria y alarga su vida media, de modo que las memorias "calientes"
+// (frecuentemente accedidas) se olvidan más lento. effHL = halfLife * (1 + K*ln(1+access)).
+// K=0 → vida media fija (comportamiento pre-B3). Clamp defensivo: K y access negativos no
+// encogen la vida media (effHL >= halfLife), así el refuerzo nunca acelera el olvido.
+func effectiveHalfLife(halfLifeDays float64, accessCount int, reinforcementK float64) float64 {
+	if reinforcementK <= 0 || accessCount <= 0 {
+		return halfLifeDays
+	}
+	return halfLifeDays * (1 + reinforcementK*math.Log(1+float64(accessCount)))
+}
+
+// salience combina importancia, frecuencia (log), recencia (decaimiento exponencial sobre la
+// vida media EFECTIVA reforzada por acceso — Ebbinghaus, B3) y el peso del TIPO de memoria
+// (typeWeight: episódico se enfría antes, procedural persiste; sin tipo = 1.0, neutro — B2).
+// reinforcementK=0 y typeWeight=1.0 reproducen exactamente la fórmula previa. Determinista,
+// sin LLM. La frecuencia (uso) y el refuerzo (rehearsal que ralentiza el olvido) son ejes
+// distintos y se combinan a propósito.
+func salience(importance float64, accessCount int, ageDays, halfLifeDays, typeWeight, reinforcementK float64) float64 {
 	freq := 1 + math.Log(1+float64(accessCount))
-	recency := math.Pow(0.5, ageDays/halfLifeDays)
-	return importance * freq * recency
+	recency := math.Pow(0.5, ageDays/effectiveHalfLife(halfLifeDays, accessCount, reinforcementK))
+	return importance * freq * recency * typeWeight
 }
 
 // Decay archiva las observaciones frías cuya saliencia cae por debajo de
@@ -72,7 +92,7 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 	lastID := ""
 	for {
 		rows, err := e.db.Query(`
-			SELECT id, access_count, importance, COALESCE(created_at,''), COALESCE(last_accessed,'')
+			SELECT id, access_count, importance, COALESCE(created_at,''), COALESCE(last_accessed,''), COALESCE(mem_type,'')
 			FROM observations WHERE archived = 0 AND id > ?
 			ORDER BY id LIMIT ?
 		`, lastID, decayBatchSize)
@@ -86,8 +106,9 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 				access                int
 				importance            float64
 				createdAt, lastAccess string
+				memType               string
 			)
-			if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess); err != nil {
+			if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess, &memType); err != nil {
 				rows.Close()
 				return DecayResult{}, fmt.Errorf("error al escanear observación: %w", err)
 			}
@@ -112,7 +133,7 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 			if ageDays < opts.MinAgeDays {
 				continue
 			}
-			if salience(importance, access, ageDays, opts.HalfLifeDays) < opts.MinSalience {
+			if salience(importance, access, ageDays, opts.HalfLifeDays, memTypeSalienceWeight(memType), opts.ReinforcementK) < opts.MinSalience {
 				toArchive = append(toArchive, id)
 			}
 		}

@@ -78,6 +78,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"content":    {Type: "string", Description: "Contenido completo de la observación o lección"},
 						"id":         {Type: "string", Description: "Identificador único opcional; si se omite se genera un UUID y se deduplica por contenido"},
 						"importance": {Type: "number", Description: "Peso opcional (>0, default 1.0) que prioriza la observación en el recall"},
+						"mem_type":   {Type: "string", Description: "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."},
 					},
 					Required: []string{"topic_key", "content"},
 				},
@@ -151,13 +152,15 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall_facts",
-				Description: "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time (qué era verdad en ese momento).",
+				Description: "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"entity":   {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
-						"max_hops": {Type: "number", Description: "Profundidad del recorrido (opcional; usa el default de la config)"},
+						"max_hops": {Type: "number", Description: "Profundidad del recorrido BFS (opcional; usa el default de la config). Ignorado con rank='pagerank'."},
 						"as_of":    {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
+						"rank":     {Type: "string", Description: "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."},
+						"to":       {Type: "string", Description: "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."},
 					},
 					Required: []string{"entity"},
 				},

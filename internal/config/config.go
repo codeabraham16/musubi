@@ -90,6 +90,11 @@ type MaintenanceConfig struct {
 	DecayMinSalience float64 `yaml:"decay_min_salience"`
 	// DecayMinAgeDays es la edad mínima para que una memoria pueda archivarse.
 	DecayMinAgeDays float64 `yaml:"decay_min_age_days"`
+	// DecayReinforcementK es la fuerza del refuerzo de Ebbinghaus (B3): cada acceso alarga
+	// la vida media efectiva de la recencia, de modo que las memorias frecuentemente
+	// accedidas ("calientes") se olvidan más lento. 0 = vida media fija (comportamiento
+	// histórico). El default activa un refuerzo moderado en el daemon.
+	DecayReinforcementK float64 `yaml:"decay_reinforcement_k"`
 	// AutoIntervalHours es cada cuántas horas corre el auto-mantenimiento al
 	// arrancar el daemon (0 = desactivado; el mantenimiento manual sigue disponible).
 	AutoIntervalHours float64 `yaml:"auto_interval_hours"`
@@ -358,6 +363,7 @@ func Default() Config {
 			DecayHalfLifeDays:      30,
 			DecayMinSalience:       0.2,
 			DecayMinAgeDays:        14,
+			DecayReinforcementK:    0.5,
 			AutoIntervalHours:      24,
 			PurgeArchivedAfterDays: 90,
 			Vacuum:                 true,
@@ -578,6 +584,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Maintenance.DecayMinAgeDays == 0 {
 			c.Maintenance.DecayMinAgeDays = d.Maintenance.DecayMinAgeDays
+		}
+		if c.Maintenance.DecayReinforcementK == 0 {
+			c.Maintenance.DecayReinforcementK = d.Maintenance.DecayReinforcementK
 		}
 	}
 

@@ -18,6 +18,10 @@
             "type": "number",
             "description": "Peso opcional (\u003e0, default 1.0) que prioriza la observación en el recall"
           },
+          "mem_type": {
+            "type": "string",
+            "description": "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."
+          },
           "topic_key": {
             "type": "string",
             "description": "Clave de agrupación temática (ej. architecture/auth)"
@@ -118,7 +122,7 @@
     },
     {
       "name": "musubi_recall_facts",
-      "description": "Recupera HECHOS del grafo alrededor de una entidad, recorriendo hasta max_hops saltos. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time (qué era verdad en ese momento).",
+      "description": "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -132,7 +136,15 @@
           },
           "max_hops": {
             "type": "number",
-            "description": "Profundidad del recorrido (opcional; usa el default de la config)"
+            "description": "Profundidad del recorrido BFS (opcional; usa el default de la config). Ignorado con rank='pagerank'."
+          },
+          "rank": {
+            "type": "string",
+            "description": "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."
+          },
+          "to": {
+            "type": "string",
+            "description": "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."
           }
         },
         "required": [

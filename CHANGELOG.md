@@ -7,6 +7,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-07-03
+
+Track 13 — Ola B (memoria más inteligente). Cuatro features sobre el pilar de memoria, cada una dogfoodeada por
+el flujo SDD completo con verificación adversarial, todas **model-free / Go-puro / aditivas**: recall asociativo
+por **Personalized PageRank**, **tipo de memoria** (mem_type) con olvido diferenciado, **refuerzo Ebbinghaus** del
+olvido (heat) y **consultas de camino** en el grafo. El catálogo sigue en 30 tools. Una sola migración aditiva
+(v7, `mem_type`); todo lo demás se deriva al vuelo. B4 (RRF hybrid) queda para una ola futura por riesgo.
+
+### Added
+- **Recall asociativo por Personalized PageRank** (`musubi_recall_facts rank=pagerank`): el BFS de vecindad, al
+  cortar por `max_facts`, dejaba los hechos en orden de inserción (arbitrario) y perdía los relevantes a 2+ saltos.
+  El nuevo modo corre **PPR** personalizado a la entidad semilla sobre el grafo de hechos y devuelve primero los
+  más relevantes por cercanía asociativa multi-hop (score de un hecho = suma del PageRank de sus extremos). Power
+  iteration pura (damping 0.85, hasta 200 iteraciones, corte por tolerancia L1), grafo no dirigido, masa
+  conservada (nodos colgantes reinyectan al restart). Compone con lo bi-temporal: `rank=pagerank` + `as_of` da
+  **PageRank point-in-time**. Default (`rank=''`/`bfs`) intacto (equivalencia byte-idéntica). **Sin migración**
+  (se deriva de `relations`). HippoRAG.
+- **Tipo de memoria (`mem_type`) con olvido diferenciado** (`musubi_save_observation mem_type=...`): cada
+  observación puede declararse `semantic` (conocimiento estable), `episodic` (eventos puntuales) o `procedural`
+  (cómo hacer algo) — enum model-free que aporta el agente. El tipo **modula el olvido**: episódico se enfría antes
+  (peso de saliencia 0.6), semántico neutro (1.0), procedural más durable (1.5); sin tipo = 1.0 (idéntico a antes).
+  Un guardado sin tipo **preserva** la clasificación existente (solo un tipo no vacío la cambia). Migración v7
+  aditiva (`ADD COLUMN mem_type`). LangMem.
+- **Refuerzo Ebbinghaus del olvido (heat)**: la vida media de la recencia deja de ser fija — cada acceso (repaso)
+  la **alarga**, así las memorias frecuentemente accedidas ("calientes") resisten el archivado (spacing effect):
+  `vida_media_efectiva = vida_media · (1 + K · ln(1+accesos))`. `K` es `maintenance.decay_reinforcement_k`
+  (default 0.5, activo en el daemon; `K=0` reproduce exactamente el olvido previo). Clamp defensivo: nunca acelera
+  el olvido. **Sin migración** (usa `access_count`). MemoryOS.
+- **Consultas de camino en el grafo** (`musubi_recall_facts to=<entidad>`): responde "¿cómo se conecta X con Y?"
+  devolviendo el **camino más corto** (cadena de hechos, en orden) entre dos entidades. BFS no dirigido con
+  reconstrucción por predecesores; acotado por `max_hops`; compone con lo bi-temporal (`as_of` → camino
+  point-in-time). **Sin migración** (se deriva de `relations`).
+
 ## [0.60.0] - 2026-07-03
 
 Track 13 — Ola A (cosechar el run journal). Frutos de observabilidad y robustez sobre el journal de v0.59.0.

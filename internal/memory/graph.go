@@ -180,11 +180,17 @@ func upsertEntity(tx *sql.Tx, name string) (int64, error) {
 	return id, nil
 }
 
-// RecallFacts recorre el grafo en anchura (BFS) desde entity hasta maxHops saltos,
-// devolviendo hasta maxFacts tripletas. Por defecto sólo hechos VIGENTES
-// (invalidated_at IS NULL). Con asOf (ISO) devuelve los que eran válidos en ese
-// instante (point-in-time); asOf inválido → verdad actual. Cero LLM; cero prosa.
-func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf string) (GraphResult, error) {
+// RecallFacts recupera hasta maxFacts tripletas alrededor de entity. Por defecto sólo hechos
+// VIGENTES (invalidated_at IS NULL); con asOf (ISO) devuelve los que eran válidos en ese
+// instante (point-in-time); asOf inválido → verdad actual. El modo de ranking lo elige rank:
+//   - "" o "bfs": recorrido en anchura (BFS) hasta maxHops saltos (comportamiento histórico).
+//   - "pagerank": recall asociativo por Personalized PageRank personalizado a entity; rankea
+//     los hechos por relevancia asociativa multi-hop y devuelve los maxFacts de mayor score.
+//     maxHops se ignora en este modo (el damping ya maneja los saltos). Ver pagerank.go.
+//
+// Cero LLM; cero prosa. El filtro temporal es común a ambos modos, así que pagerank + asOf da
+// PageRank point-in-time.
+func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error) {
 	if maxHops <= 0 {
 		maxHops = defaultMaxHops
 	}
@@ -209,6 +215,18 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf string
 	}
 	if err != nil {
 		return GraphResult{}, fmt.Errorf("error al buscar entidad: %w", err)
+	}
+
+	// Modo asociativo: delegar a PageRank tras resolver la semilla (branch temprano; el
+	// camino BFS de abajo queda intacto para rank "" / "bfs").
+	if rank == "pagerank" {
+		res, err := e.recallFactsPageRank(startID, maxFacts, liveFilter, filterArgs)
+		if err != nil {
+			return GraphResult{}, err
+		}
+		res.Entity = entity
+		res.Hops = maxHops
+		return res, nil
 	}
 
 	visited := map[int64]bool{startID: true}

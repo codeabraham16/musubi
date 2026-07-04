@@ -31,7 +31,7 @@ func (e *DbEngine) EntityContext(entity string, maxHops, maxFacts, maxObs int) (
 		maxObs = defaultMaxObservations
 	}
 
-	graph, err := e.RecallFacts(entity, maxHops, maxFacts, "")
+	graph, err := e.RecallFacts(entity, maxHops, maxFacts, "", "")
 	if err != nil {
 		return EntityContextResult{}, err
 	}
