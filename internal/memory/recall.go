@@ -33,6 +33,12 @@ type RecallOptions struct {
 	// agrega una 4ta señal RRF por rango vectorial. Lo computa la capa MCP con el embedder.
 	// Vacío ⇒ recall 100% léxico (idéntico al histórico).
 	QueryVector []float32
+	// GraphCentrality, si es true, agrega la 5ª señal RRF (B4): centralidad de grafo por
+	// Personalized PageRank sobre observation_relations (HippoRAG), que favorece las
+	// observaciones más CENTRALES en la telaraña semántica de la memoria. Es un RERANK del
+	// pool existente (no incorpora candidatos nuevos). El zero-value (false) preserva el
+	// comportamiento histórico bit-a-bit; la capa MCP lo enciende según config (default ON).
+	GraphCentrality bool
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -106,10 +112,26 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		return result, nil
 	}
 
+	// Centralidad de grafo (B4): 5ª señal RRF opcional. Se computa sobre el pool YA armado
+	// (léxico + augmentación vectorial) para que la difusión vea todos los candidatos, y es
+	// rerank-only (no agrega ids nuevos). No-op seguro cuando no aporta (grafo vacío, <2
+	// candidatos en el grafo) ⇒ graphRank vacío ⇒ score idéntico al histórico.
+	var graphRank map[string]int
+	if opts.GraphCentrality && len(cands) >= 2 {
+		ids := make([]string, len(cands))
+		for i, c := range cands {
+			ids[i] = c.id
+		}
+		graphRank, err = e.graphCentralityRank(ids)
+		if err != nil {
+			return RecallResult{}, err
+		}
+	}
+
 	// El ranking keyword (lexRank) solo existe si la query tuvo términos FTS; sin ellos
 	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia. vecRank
-	// solo existe en recall híbrido.
-	scored := scoreCandidates(cands, lexRank, vecRank)
+	// solo existe en recall híbrido; graphRank solo con GraphCentrality on.
+	scored := scoreCandidates(cands, lexRank, vecRank, graphRank)
 
 	result = packByBudget(scored, budget, gistMax)
 
@@ -169,10 +191,11 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 // scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía RRF y
 // pondera por importancia. Determinista, sin LLM. Los rankings por pool se pasan como mapas
 // id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
-// lexRank es el ranking keyword (FTS) y vecRank el ranking vectorial (coseno); cada uno
-// nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el resultado es idéntico al
-// histórico; vecRank lo activa el recall híbrido (T5.7 R2).
-func scoreCandidates(cands []candidate, lexRank, vecRank map[string]int) []scoredCandidate {
+// lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno) y graphRank el de
+// centralidad de grafo (PPR sobre observation_relations); cada uno nil ⇒ se omite ese término.
+// Con solo lexRank (NoopProvider) el resultado es idéntico al histórico; vecRank lo activa el
+// recall híbrido (T5.7 R2) y graphRank la centralidad de grafo (B4).
+func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank map[string]int) []scoredCandidate {
 	n := len(cands)
 
 	recencyRank := rankBy(cands, func(a, b candidate) bool {
@@ -190,6 +213,9 @@ func scoreCandidates(cands []candidate, lexRank, vecRank map[string]int) []score
 			rrf += 1.0 / float64(rrfK+r)
 		}
 		if r, ok := vecRank[c.id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
+		}
+		if r, ok := graphRank[c.id]; ok {
 			rrf += 1.0 / float64(rrfK+r)
 		}
 		imp := c.importance

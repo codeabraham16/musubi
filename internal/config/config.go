@@ -77,6 +77,13 @@ type MemoryConfig struct {
 	// session_token_budget (mismo umbral que la alerta), atando la brevedad al gobernador.
 	// Un valor inválido degrada a "off": un typo nunca activa la directiva.
 	BrevityMode string `yaml:"brevity_mode"`
+	// RecallGraphCentrality activa la 5ª señal RRF del recall (B4): centralidad de grafo por
+	// Personalized PageRank sobre observation_relations (HippoRAG), que favorece las
+	// observaciones más CENTRALES en la telaraña semántica de la memoria. Rerank del pool
+	// existente (no incorpora candidatos nuevos), model-free y derivada al vuelo. Default ON;
+	// se desactiva con recall_graph_centrality: false. Un bloque `memory` presente pero sin
+	// la clave conserva el default ON (ver applyMemoryDefaults).
+	RecallGraphCentrality bool `yaml:"recall_graph_centrality"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -352,11 +359,12 @@ func Default() Config {
 			// externo es opt-in (contenido no confiable de GitHub arbitrario).
 		},
 		Memory: MemoryConfig{
-			RecallTokenBudget:  400,
-			GistMaxTokens:      24,
-			CandidatePool:      50,
-			SessionTokenBudget: 8000,
-			BrevityMode:        "off",
+			RecallTokenBudget:     400,
+			GistMaxTokens:         24,
+			CandidatePool:         50,
+			SessionTokenBudget:    8000,
+			BrevityMode:           "off",
+			RecallGraphCentrality: true,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -464,6 +472,7 @@ func Load(projectPath string) (Config, error) {
 	}
 
 	cfg.applyDefaults(presentBlocks(data))
+	cfg.applyMemoryDefaults(data)
 	return cfg, nil
 }
 
@@ -479,6 +488,42 @@ func presentBlocks(data []byte) map[string]bool {
 		}
 	}
 	return present
+}
+
+// presentBlockKeys devuelve el conjunto de sub-claves presentes bajo un bloque top-level del
+// YAML (p.ej. las claves dentro de `memory:`). Permite distinguir "sub-clave ausente" de
+// "sub-clave presente con false", que con un bool puro es indistinguible por su cero-valor —
+// necesario para los toggles default-ON anidados en un bloque presente.
+func presentBlockKeys(data []byte, block string) map[string]bool {
+	keys := map[string]bool{}
+	var raw map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return keys
+	}
+	node, ok := raw[block]
+	if !ok || node.Kind != yaml.MappingNode {
+		return keys
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keys[node.Content[i].Value] = true
+	}
+	return keys
+}
+
+// applyMemoryDefaults restaura los defaults de los bool default-ON de MemoryConfig cuya clave
+// puede faltar dentro de un bloque `memory` presente. La detección de bloque top-level de
+// applyDefaults no alcanza: un bloque `memory` presente pero sin `recall_graph_centrality`
+// deja el bool en su cero-valor (false), que es indistinguible de un opt-out explícito. Acá se
+// mira la presencia de la SUB-CLAVE: ausente ⇒ default (ON); explícita (true/false) ⇒ se
+// respeta. Si el bloque `memory` está ausente, applyDefaults ya puso el default completo.
+func (c *Config) applyMemoryDefaults(data []byte) {
+	if !presentBlocks(data)["memory"] {
+		return
+	}
+	keys := presentBlockKeys(data, "memory")
+	if !keys["recall_graph_centrality"] {
+		c.Memory.RecallGraphCentrality = Default().Memory.RecallGraphCentrality
+	}
 }
 
 // normalizeBrevityMode acota brevity_mode al conjunto válido {lite,full,ultra,auto};

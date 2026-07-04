@@ -94,53 +94,51 @@ func (e *DbEngine) buildFactGraph(liveFilter string, filterArgs []interface{}) (
 	return g, nil
 }
 
-// personalizedPageRank corre PPR con reinicio en seedIdx (posición de la entidad semilla).
-// Devuelve el score por id de entidad. Power iteration:
+// pprPowerIteration es el KERNEL NUMÉRICO puro de Personalized PageRank, compartido por el
+// grafo de hechos (personalizedPageRank) y el de observaciones (graphCentralityRank). Toma
+// una adyacencia no dirigida (posición → posiciones vecinas) y un vector de restart p
+// arbitrario (la distribución de teletransporte; DEBE sumar 1 para conservar la masa) y corre
+// la power iteration:
 //
-//	r_{t+1} = (1-d)*p + d * (Aᵀ r_t normalizado por grado)
+//	r_{t+1} = (1-d)*p + d*dangling*p + d * (Aᵀ r_t normalizado por grado)
 //
-// donde p es el vector de restart personalizado (masa 1.0 concentrada en la semilla). Los
-// NODOS COLGANTES (grado 0) redistribuyen su masa al restart p (patrón anti-fuga estándar),
-// preservando la estocasticidad. Determinista: sin aleatoriedad, corta por tolerancia L1 o
-// pprMaxIter. Grafo vacío o semilla fuera de rango → mapa vacío (sin panic).
-func personalizedPageRank(g *pprGraph, seedIdx int) map[int64]float64 {
-	n := g.n()
-	if n == 0 || seedIdx < 0 || seedIdx >= n {
-		return map[int64]float64{}
+// Los NODOS COLGANTES (grado 0) reinyectan su masa vía p (patrón anti-fuga estándar). El
+// estado inicial arranca en p (concentrar la masa donde está el restart acelera la
+// convergencia). Determinista: corta por tolerancia L1 (pprTol) o pprMaxIter. Adyacencia
+// vacía → slice vacío (sin panic). Devuelve el vector de rango por posición.
+func pprPowerIteration(adj [][]int, restart []float64) []float64 {
+	n := len(adj)
+	if n == 0 {
+		return []float64{}
 	}
-
-	// Vector de restart personalizado: toda la masa en la semilla.
-	p := make([]float64, n)
-	p[seedIdx] = 1.0
+	p := restart
 
 	r := make([]float64, n)
-	r[seedIdx] = 1.0 // arrancar concentrado en la semilla acelera la convergencia
+	copy(r, restart) // arrancar concentrado en el restart acelera la convergencia
 	next := make([]float64, n)
 
 	for iter := 0; iter < pprMaxIter; iter++ {
 		// Masa colgante: la de los nodos sin vecinos se reinyecta vía p.
 		dangling := 0.0
 		for i := 0; i < n; i++ {
-			if len(g.adj[i]) == 0 {
+			if len(adj[i]) == 0 {
 				dangling += r[i]
 			}
 		}
 
-		// Base: teletransporte (restart) + masa colgante redistribuida al restart.
-		base := make([]float64, n)
+		// Teletransporte (restart) + masa colgante redistribuida al restart.
 		for i := 0; i < n; i++ {
-			base[i] = (1.0-pprDamping)*p[i] + pprDamping*dangling*p[i]
+			next[i] = (1.0-pprDamping)*p[i] + pprDamping*dangling*p[i]
 		}
-		copy(next, base)
 
 		// Difusión por aristas: cada nodo reparte su rango entre sus vecinos por grado.
 		for i := 0; i < n; i++ {
-			deg := len(g.adj[i])
+			deg := len(adj[i])
 			if deg == 0 {
 				continue
 			}
 			share := pprDamping * r[i] / float64(deg)
-			for _, j := range g.adj[i] {
+			for _, j := range adj[i] {
 				next[j] += share
 			}
 		}
@@ -159,6 +157,24 @@ func personalizedPageRank(g *pprGraph, seedIdx int) map[int64]float64 {
 			break
 		}
 	}
+	return r
+}
+
+// personalizedPageRank corre PPR con reinicio en seedIdx (posición de la entidad semilla) sobre
+// el grafo de hechos. Devuelve el score por id de entidad. Arma el vector de restart one-hot
+// (toda la masa en la semilla) y delega en el kernel compartido pprPowerIteration. Grafo vacío
+// o semilla fuera de rango → mapa vacío (sin panic).
+func personalizedPageRank(g *pprGraph, seedIdx int) map[int64]float64 {
+	n := g.n()
+	if n == 0 || seedIdx < 0 || seedIdx >= n {
+		return map[int64]float64{}
+	}
+
+	// Vector de restart personalizado: toda la masa en la semilla.
+	restart := make([]float64, n)
+	restart[seedIdx] = 1.0
+
+	r := pprPowerIteration(g.adj, restart)
 
 	scores := make(map[int64]float64, n)
 	for i, id := range g.ids {

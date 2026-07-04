@@ -402,6 +402,47 @@ func TestLoadMemorySessionBudgetZeroRespected(t *testing.T) {
 	}
 }
 
+func TestLoadRecallGraphCentralityDefaultOn(t *testing.T) {
+	// Sin bloque memory: el default-ON debe aplicarse (bloque ausente ⇒ default completo).
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallGraphCentrality {
+		t.Error("esperaba recall_graph_centrality true por defecto (sin bloque memory)")
+	}
+}
+
+// TestLoadRecallGraphCentralityPresentBlockDefaultsOn es el caso crítico del double-default:
+// un bloque memory PRESENTE (otros campos seteados por init) pero SIN recall_graph_centrality
+// debe conservar el default ON, no caer al cero-valor (false). Cubre applyMemoryDefaults.
+func TestLoadRecallGraphCentralityPresentBlockDefaultsOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallGraphCentrality {
+		t.Error("un bloque memory sin la clave debe conservar recall_graph_centrality ON")
+	}
+	if cfg.Memory.RecallTokenBudget != 800 {
+		t.Errorf("el resto del bloque debe parsearse: %+v", cfg.Memory)
+	}
+}
+
+func TestLoadRecallGraphCentralityDisableRespected(t *testing.T) {
+	// recall_graph_centrality: false EXPLÍCITO (opt-out) debe respetarse, no re-habilitarse.
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_graph_centrality: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallGraphCentrality {
+		t.Error("recall_graph_centrality: false explícito debería respetarse")
+	}
+}
+
 func TestLoadMaintenanceDefaults(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
 	cfg, err := Load(root)

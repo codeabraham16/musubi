@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-07-03
+
+Track 13 — B4 (memoria más inteligente, cierre). **Centralidad de grafo como 5ª señal RRF del recall**, la última
+pieza de la receta HippoRAG que faltaba, dogfoodeada por el flujo SDD completo con verificación adversarial;
+model-free / Go-puro / aditiva. Hallazgo de scoping: la fusión RRF del recall **ya era híbrida** (keyword FTS +
+recencia + frecuencia + semántica vectorial coseno, T5.7 R2) — "B4 = FTS + semántico vía RRF" ya estaba entregado.
+Lo único que faltaba de HippoRAG era la señal de **centralidad de grafo**, que hoy solo corría sobre el grafo de
+**hechos** (`recall_facts`), no sobre observaciones. Catálogo en 30 tools; sin migraciones (todo derivado al vuelo).
+
+### Added
+- **Centralidad de grafo en el recall de observaciones** (5ª señal RRF, config `memory.recall_graph_centrality`,
+  **default ON**): una observación que es **hub** de un cluster relacionado (muchas `related`/`supersedes`/
+  `conflicts_with` en `observation_relations`) sube en el ranking aunque el FTS/vector no la priorizara
+  (*spreading activation*, estilo HippoRAG). Se computa por **Personalized PageRank** sobre el grafo de relaciones
+  vivo (ambas puntas no archivadas ni superseded, no dirigido), sembrado uniformemente en el pool de candidatos ya
+  recuperado y **rerank-only** (no incorpora candidatos nuevos, a diferencia del pool vectorial). **DERIVE-not-store**:
+  se deriva al vuelo, sin tabla de scores. Reutiliza el kernel de power-iteration de PageRank (extraído a
+  `pprPowerIteration`, compartido con `recall_facts`; equivalencia one-hot verificada). El `zero-value` de código
+  preserva el comportamiento histórico **bit-a-bit** (equivalencia probada); se activa por config (double-default,
+  patrón de `decay_reinforcement_k`). Se desactiva con `recall_graph_centrality: false`.
+
 ## [0.62.0] - 2026-07-03
 
 Track 13 — Ola C (orquestación avanzada). **Contract-Net bidding** sobre la pizarra multi-agente, model-free

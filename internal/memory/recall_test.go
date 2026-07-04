@@ -201,7 +201,7 @@ func TestScoreCandidatesFusion(t *testing.T) {
 	}
 	// lexRank por orden del slice = el comportamiento keyword-meaningful histórico.
 	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
-	scored := scoreCandidates(cands, lexRank, nil)
+	scored := scoreCandidates(cands, lexRank, nil, nil)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
@@ -221,7 +221,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	full := map[string]int{"a": 0, "b": 1, "c": 2}
 
-	withKeyword := scoreCandidates(cands, full, nil)
+	withKeyword := scoreCandidates(cands, full, nil, nil)
 	scoreOf := func(scored []scoredCandidate, id string) float64 {
 		for _, s := range scored {
 			if s.id == id {
@@ -232,7 +232,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Con lexRank completo, cada candidato suma su término keyword: score estrictamente
 	// mayor que sin él.
-	noKeyword := scoreCandidates(cands, nil, nil)
+	noKeyword := scoreCandidates(cands, nil, nil, nil)
 	for _, id := range []string{"a", "b", "c"} {
 		if scoreOf(withKeyword, id) <= scoreOf(noKeyword, id) {
 			t.Errorf("%s: con lexRank el score debe ser mayor que sin él (%v vs %v)",
@@ -241,7 +241,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Un id ausente del lexRank no recibe término keyword (igual que nil para ese id).
 	partial := map[string]int{"a": 0} // solo 'a' tiene rank keyword
-	mixed := scoreCandidates(cands, partial, nil)
+	mixed := scoreCandidates(cands, partial, nil, nil)
 	if scoreOf(mixed, "b") != scoreOf(noKeyword, "b") {
 		t.Errorf("'b' ausente del lexRank no debe sumar término keyword: %v vs %v",
 			scoreOf(mixed, "b"), scoreOf(noKeyword, "b"))
@@ -266,13 +266,68 @@ func TestScoreCandidatesVectorSignal(t *testing.T) {
 		}
 		return -1
 	}
-	base := scoreCandidates(cands, nil, nil)
-	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}) // solo 'a' tiene rango vectorial
+	base := scoreCandidates(cands, nil, nil, nil)
+	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}, nil) // solo 'a' tiene rango vectorial
 	if scoreOf(withVec, "a") <= scoreOf(base, "a") {
 		t.Errorf("'a' con rango vectorial debe sumar término RRF (%v vs %v)", scoreOf(withVec, "a"), scoreOf(base, "a"))
 	}
 	if scoreOf(withVec, "b") != scoreOf(base, "b") {
 		t.Errorf("'b' ausente del vecRank no debe cambiar (%v vs %v)", scoreOf(withVec, "b"), scoreOf(base, "b"))
+	}
+}
+
+// TestScoreCandidatesGraphSignal verifica la 5ª señal RRF (B4): un candidato con rango de
+// centralidad de grafo suma ese término; uno ausente del graphRank no. Simétrico a las otras.
+func TestScoreCandidatesGraphSignal(t *testing.T) {
+	cands := []candidate{
+		{id: "a", importance: 1},
+		{id: "b", importance: 1},
+	}
+	scoreOf := func(scored []scoredCandidate, id string) float64 {
+		for _, s := range scored {
+			if s.id == id {
+				return s.score
+			}
+		}
+		return -1
+	}
+	base := scoreCandidates(cands, nil, nil, nil)
+	withGraph := scoreCandidates(cands, nil, nil, map[string]int{"a": 0}) // solo 'a' tiene centralidad
+	if scoreOf(withGraph, "a") <= scoreOf(base, "a") {
+		t.Errorf("'a' con rango de centralidad debe sumar término RRF (%v vs %v)", scoreOf(withGraph, "a"), scoreOf(base, "a"))
+	}
+	if scoreOf(withGraph, "b") != scoreOf(base, "b") {
+		t.Errorf("'b' ausente del graphRank no debe cambiar (%v vs %v)", scoreOf(withGraph, "b"), scoreOf(base, "b"))
+	}
+	// graphRank=nil ⇒ idéntico al histórico (equivalencia R1).
+	if scoreOf(scoreCandidates(cands, nil, nil, nil), "a") != scoreOf(base, "a") {
+		t.Error("graphRank=nil debe dar score idéntico al histórico")
+	}
+}
+
+// TestRecallGraphCentralityNoRelationsEquivalent verifica la equivalencia end-to-end (R1/R6):
+// con GraphCentrality on pero sin relaciones (grafo vacío), el recall debe dar EXACTAMENTE el
+// mismo resultado que con la señal apagada.
+func TestRecallGraphCentralityNoRelationsEquivalent(t *testing.T) {
+	e := newTestEngine(t)
+	for _, id := range []string{"o1", "o2", "o3"} {
+		saveObs(t, e, id)
+	}
+	off, err := e.Recall(context.Background(), "contenido", RecallOptions{NoBump: true})
+	if err != nil {
+		t.Fatalf("recall off: %v", err)
+	}
+	on, err := e.Recall(context.Background(), "contenido", RecallOptions{NoBump: true, GraphCentrality: true})
+	if err != nil {
+		t.Fatalf("recall on: %v", err)
+	}
+	if len(on.Items) != len(off.Items) {
+		t.Fatalf("sin relaciones el recall debe ser idéntico: %d vs %d items", len(on.Items), len(off.Items))
+	}
+	for i := range off.Items {
+		if on.Items[i].ID != off.Items[i].ID || on.Items[i].Score != off.Items[i].Score {
+			t.Errorf("item %d difiere con la señal on sin relaciones: %+v vs %+v", i, on.Items[i], off.Items[i])
+		}
 	}
 }
 
