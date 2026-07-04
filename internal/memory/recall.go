@@ -51,6 +51,11 @@ type RecallOptions struct {
 	// zero-value (false) preserva el comportamiento histórico; la capa MCP lo enciende según
 	// config (default ON).
 	Cooccurrence bool
+	// RankedFTS, si es true, filtra el RUIDO del MATCH de FTS antes de armarlo: descarta
+	// stopwords (es/en) y tokens de 1 runa, que solo diluyen el OR y dejan que la recencia
+	// vuelque el orden. Lo usa el recall POR TURNO (la superficie más caliente), que antes
+	// corría FTS crudo. El zero-value (false) preserva el recall histórico del tool bit-a-bit.
+	RankedFTS bool
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -106,7 +111,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		gistMax = defaultGistMaxTokens
 	}
 
-	cands, lexRank, err := e.recallCandidates(ctx, query, pool, opts.Stemming)
+	cands, lexRank, err := e.recallCandidates(ctx, query, pool, opts.Stemming, opts.RankedFTS)
 	if err != nil {
 		return RecallResult{}, err
 	}
@@ -389,10 +394,17 @@ func buildFTSQueryPrefix(q string) string {
 // más recientes y devuelve lexRank=nil (no hay señal keyword). Devolver el ranking acá (en
 // vez de derivarlo del orden del slice al scorear) es lo que deja unir varios pools sin
 // ambigüedad de rangos (T5.7).
-func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int, stemming bool) ([]candidate, map[string]int, error) {
-	ftsQuery := buildFTSQuery(query)
-	if stemming {
+func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int, stemming, ranked bool) ([]candidate, map[string]int, error) {
+	var ftsQuery string
+	switch {
+	case stemming && ranked:
+		ftsQuery = buildFTSQueryRankedPrefix(query) // sin stopwords + prefijo de la raíz
+	case stemming:
 		ftsQuery = buildFTSQueryPrefix(query) // 2ª ola de #2: match por prefijo de la raíz
+	case ranked:
+		ftsQuery = buildFTSQueryRanked(query) // sin stopwords ni tokens de 1 runa
+	default:
+		ftsQuery = buildFTSQuery(query)
 	}
 	if ftsQuery == "" {
 		cands, err := e.recentCandidates(ctx, limit)
@@ -489,12 +501,11 @@ var ftsStopwords = map[string]bool{
 	"by": true, "as": true, "it": true,
 }
 
-// buildFTSQueryRanked es como buildFTSQuery pero descarta el ruido que diluye el OR:
-// stopwords (lista determinista) y tokens de una sola runa (p. ej. la 'N' y el '1' de
-// 'N+1'). Preserva entidades cortas significativas como 'Go', 'DB', 'API' (>= 2 runas y no
-// stopwords). Si tras filtrar no queda nada (consulta toda de ruido), cae a buildFTSQuery
-// para no perder recall. Proxy de IDF: lo corto/frecuente pesa menos.
-func buildFTSQueryRanked(q string) string {
+// rankedTerms extrae los términos "con señal" de q: descarta stopwords (es/en) y tokens de
+// una sola runa (p. ej. la 'N'/'1' de 'N+1'), preservando entidades cortas como 'Go'/'DB'/
+// 'API' (>= 2 runas y no stopwords). Si tras filtrar no queda nada (consulta toda de ruido),
+// devuelve los términos crudos para no perder recall. Proxy de IDF, determinista.
+func rankedTerms(q string) []string {
 	fields := strings.FieldsFunc(q, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
@@ -503,12 +514,35 @@ func buildFTSQueryRanked(q string) string {
 		if len([]rune(f)) <= 1 || ftsStopwords[strings.ToLower(f)] {
 			continue
 		}
-		terms = append(terms, `"`+f+`"`)
+		terms = append(terms, f)
 	}
 	if len(terms) == 0 {
-		return buildFTSQuery(q) // fallback: no perder recall si todo era ruido
+		return fields // fallback: no perder recall si todo era ruido
 	}
-	return strings.Join(terms, " OR ")
+	return terms
+}
+
+// buildFTSQueryRanked arma un MATCH de FTS5 con los términos con señal (sin stopwords ni
+// tokens de 1 runa), entrecomillados y unidos por OR. Vacío ⇒ "".
+func buildFTSQueryRanked(q string) string {
+	terms := rankedTerms(q)
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		out = append(out, `"`+t+`"`)
+	}
+	return strings.Join(out, " OR ")
+}
+
+// buildFTSQueryRankedPrefix combina el filtrado de ruido (rankedTerms) con el match por
+// PREFIJO de la raíz (stemForPrefix): '"stem"*' OR ... — evita que un stopword, como prefijo,
+// matchee medio corpus. Es el builder del recall por turno con stemming. Vacío ⇒ "".
+func buildFTSQueryRankedPrefix(q string) string {
+	terms := rankedTerms(q)
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		out = append(out, `"`+stemForPrefix(t)+`"*`)
+	}
+	return strings.Join(out, " OR ")
 }
 
 // bumpAccess actualiza recencia y frecuencia de las observaciones devueltas.

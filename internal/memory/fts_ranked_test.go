@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,51 @@ func TestBuildFTSQueryRanked(t *testing.T) {
 	// Sin términos alfanuméricos: vacío (igual que buildFTSQuery).
 	if empty := buildFTSQueryRanked("!!! ???"); empty != "" {
 		t.Errorf("sin términos debe devolver vacío, obtuve %q", empty)
+	}
+}
+
+// TestBuildFTSQueryRankedPrefix combina el filtrado de ruido con el prefijo de la raíz.
+func TestBuildFTSQueryRankedPrefix(t *testing.T) {
+	got := buildFTSQueryRankedPrefix("los deploys de la app")
+	if !strings.Contains(got, `"deploy"*`) {
+		t.Errorf("debía emitir el prefijo de la raíz de 'deploys', obtuve %q", got)
+	}
+	if !strings.Contains(got, `"app"*`) {
+		t.Errorf("debía conservar 'app' como prefijo, obtuve %q", got)
+	}
+	for _, no := range []string{`"los"`, `"de"`, `"la"`} {
+		if strings.Contains(got, no) {
+			t.Errorf("debía descartar el stopword %s, obtuve %q", no, got)
+		}
+	}
+}
+
+// TestRecallRankedFTSFiltersStopwordNoise: con RankedFTS, una obs que solo comparte
+// stopwords con la query deja de traerse (el ruido que diluía el recall por turno).
+func TestRecallRankedFTSFiltersStopwordNoise(t *testing.T) {
+	e := newTestEngine(t)
+	saveObsC(t, e, "rel", "ops", "el despliegue del sistema fue exitoso")
+	saveObsC(t, e, "noise", "cocina", "la receta de la abuela con el tomate y la sal")
+	get := func(ranked bool) map[string]bool {
+		res, err := e.Recall(context.Background(), "el despliegue de la app",
+			RecallOptions{TokenBudget: 4000, RankedFTS: ranked, NoBump: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := map[string]bool{}
+		for _, it := range res.Items {
+			ids[it.ID] = true
+		}
+		return ids
+	}
+	if !get(false)["noise"] {
+		t.Fatal("precondición: sin ranked, los stopwords 'el/de/la' deberían traer el ruido")
+	}
+	r := get(true)
+	if !r["rel"] {
+		t.Error("ranked debe traer la obs relevante ('despliegue')")
+	}
+	if r["noise"] {
+		t.Errorf("ranked no debe traer el ruido de puros stopwords, obtuve %v", r)
 	}
 }
