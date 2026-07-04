@@ -578,6 +578,34 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 // toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
 // Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
 // steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
+// workflowRunLean es la vista del run para las acciones INCREMENTALES: espeja
+// memory.WorkflowRun pero OMITE la definición (Def), que es inmutable tras start y el
+// caller ya recibió. En un run de varios pasos, el DAG completo (títulos + directivas
+// verify/await/compensate) es el mayor bloque repetido del payload. El snapshot completo
+// —con definition— se conserva en start/status/resume. Los mismos tags/omitempty que el
+// original para no divergir la forma de los campos que sí se envían.
+type workflowRunLean struct {
+	RunID       string            `json:"run_id"`
+	WorkflowID  string            `json:"workflow_id"`
+	Status      string            `json:"status"`
+	StepStatus  map[string]string `json:"step_status"`
+	StepResults map[string]string `json:"step_results"`
+	StepIters   map[string]int    `json:"step_iters,omitempty"`
+}
+
+// leanRun proyecta un WorkflowRun a su vista sin definición (delta de las respuestas
+// incrementales de musubi_workflow). No toca el estado persistido: solo la serialización.
+func leanRun(r memory.WorkflowRun) workflowRunLean {
+	return workflowRunLean{
+		RunID:       r.RunID,
+		WorkflowID:  r.WorkflowID,
+		Status:      r.Status,
+		StepStatus:  r.StepStatus,
+		StepResults: r.StepResults,
+		StepIters:   r.StepIters,
+	}
+}
+
 func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Action         string `json:"action"`
@@ -677,7 +705,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
+		return jsonResult(map[string]interface{}{"run": leanRun(run), "ready": ready, "waiting": waiting})
 
 	case "journal":
 		if strings.TrimSpace(args.RunID) == "" {
@@ -711,7 +739,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
-		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+		return jsonResult(map[string]interface{}{"run": leanRun(run), "pending": plan})
 
 	case "abort":
 		// Aborta explícitamente un run atascado o no deseado: lo marca 'aborted' y deja de
@@ -724,7 +752,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
-		return jsonResult(map[string]interface{}{"run": run})
+		return jsonResult(map[string]interface{}{"run": leanRun(run)})
 
 	case "compensated":
 		// El agente reporta que ejecutó la compensación de un step; devuelve el plan restante.
@@ -735,7 +763,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
-		return jsonResult(map[string]interface{}{"run": run, "pending": plan})
+		return jsonResult(map[string]interface{}{"run": leanRun(run), "pending": plan})
 
 	case "provide":
 		// HITL: resuelve un gate humano (step en waiting_input). input = la decisión/dato;
@@ -749,7 +777,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
 		waiting, _ := s.engine.WorkflowAwaiting(args.RunID)
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "waiting": waiting})
+		return jsonResult(map[string]interface{}{"run": leanRun(run), "ready": ready, "waiting": waiting})
 
 	case "verify":
 		// Gate de verificación (Reflexion): resuelve un step en `verifying`. verdict=pass
@@ -767,7 +795,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
 		ready, _ := s.engine.WorkflowReady(args.RunID)
-		return jsonResult(map[string]interface{}{"run": run, "ready": ready, "reflections": reflections})
+		return jsonResult(map[string]interface{}{"run": leanRun(run), "ready": ready, "reflections": reflections})
 
 	case "status", "resume":
 		// status: estado completo. resume: lo mismo + steps listos, para retomar un

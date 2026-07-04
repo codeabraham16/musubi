@@ -64,6 +64,43 @@ func TestWorkflowToolStartNextComplete(t *testing.T) {
 	}
 }
 
+// TestWorkflowRunDelta verifica el delta del run (Frente #3 c): las acciones
+// incrementales (complete) omiten la definition inmutable, pero los snapshots
+// (status/resume) la conservan para el caller que no tiene estado previo.
+func TestWorkflowRunDelta(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	call(t, s, "musubi_workflow", map[string]interface{}{"action": "start", "run_id": "d1", "definition": wfYAML})
+
+	// complete (incremental): el run NO debe traer definition, pero sí step_status.
+	res, e := call(t, s, "musubi_workflow", map[string]interface{}{"action": "complete", "run_id": "d1", "step": "a", "result": "ok"})
+	if e != nil {
+		t.Fatalf("complete: %+v", e)
+	}
+	var comp struct {
+		Run json.RawMessage `json:"run"`
+	}
+	json.Unmarshal([]byte(textOf(t, res)), &comp)
+	if len(comp.Run) == 0 {
+		t.Fatal("complete debía traer run")
+	}
+	var runMap map[string]json.RawMessage
+	json.Unmarshal(comp.Run, &runMap)
+	if _, has := runMap["definition"]; has {
+		t.Errorf("complete NO debía incluir definition (delta), run=%s", comp.Run)
+	}
+	if _, has := runMap["step_status"]; !has {
+		t.Errorf("complete debía conservar step_status, run=%s", comp.Run)
+	}
+
+	// status (snapshot): la definition SÍ debe estar presente.
+	res, _ = call(t, s, "musubi_workflow", map[string]interface{}{"action": "status", "run_id": "d1"})
+	var st map[string]json.RawMessage
+	json.Unmarshal([]byte(textOf(t, res)), &st)
+	if _, has := st["definition"]; !has {
+		t.Errorf("status debía incluir definition (snapshot completo), obtuve %v", textOf(t, res))
+	}
+}
+
 func TestWorkflowToolResume(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_workflow", map[string]interface{}{
