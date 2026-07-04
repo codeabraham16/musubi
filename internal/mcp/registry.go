@@ -404,18 +404,20 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_work",
-				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente y con un LEASE, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. El claim devuelve la unidad con su fencing_token; mientras trabaja, el sub-agente DEBE renovar el lease con action=heartbeat (id + agent + fencing_token) para no perder la unidad — si un agente crashea y no renueva, su unidad se recicla automáticamente al vencer el lease (semántica at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (estimación model-free configurable). action ∈ {plan, claim, heartbeat, complete, status, savings, clear}.",
+				Description: "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el agente principal descompone la tarea y postea las unidades con action=plan; 2) lanza N sub-agentes con el Task tool, pasándoles mcpServers:[musubi]; cada sub-agente hace action=claim (toma una unidad atómicamente y con un LEASE, sin colisiones), la ejecuta y action=complete con su resultado; 3) el principal monitorea con action=status y consolida los resultados cuando todas están done. El claim devuelve la unidad con su fencing_token; mientras trabaja, el sub-agente DEBE renovar el lease con action=heartbeat (id + agent + fencing_token) para no perder la unidad — si un agente crashea y no renueva, su unidad se recicla automáticamente al vencer el lease (semántica at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar vs. hacerlo inline (estimación model-free configurable). CONTRACT-NET (alternativa al claim first-come, cuando los agentes difieren en aptitud): los sub-agentes ofertan por una unidad con action=bid (id, agent, bid=score donde MAYOR=mejor aptitud/confianza, note opcional); el principal las revisa con action=bids y adjudica con action=award (id) a la mejor oferta — la unidad queda claimed por el ganador (con lease/fencing, sigue el flujo heartbeat/complete). action ∈ {plan, claim, heartbeat, complete, status, savings, clear, bid, award, bids}.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action":        {Type: "string", Description: "plan | claim | heartbeat | complete | status | savings | clear"},
+						"action":        {Type: "string", Description: "plan | claim | heartbeat | complete | status | savings | clear | bid | award | bids"},
 						"batch":         {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
 						"units":         {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
 						"agent":         {Type: "string", Description: "Para claim/heartbeat/complete: etiqueta del sub-agente (dueño del lease)"},
-						"id":            {Type: "string", Description: "Para heartbeat/complete: ID de la unidad"},
+						"id":            {Type: "string", Description: "Para heartbeat/complete/bid/award/bids: ID de la unidad"},
 						"result":        {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},
 						"status":        {Type: "string", Description: "Para complete: done | failed (default done)"},
-						"fencing_token": {Type: "number", Description: "Para heartbeat/complete: el fencing_token que devolvió el claim (defiende contra un agente expropiado que revive)"},
+						"fencing_token": {Type: "number", Description: "Para heartbeat/complete: el fencing_token que devolvió el claim/award (defiende contra un agente expropiado que revive)"},
+						"bid":           {Type: "number", Description: "Para bid: score de la oferta del agente (MAYOR = mejor aptitud/confianza para la unidad)"},
+						"note":          {Type: "string", Description: "Para bid: nota opcional que justifica la oferta"},
 					},
 				},
 			},

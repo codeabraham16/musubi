@@ -182,6 +182,31 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 8,
+			name:    "work_bids",
+			// Contract-Net bidding en la pizarra multi-agente: sin esto las unidades se
+			// asignan solo por claim de orden de llegada (first-come). work_bids registra las
+			// OFERTAS de los agentes por unidad; el orquestador adjudica (award) a la mejor.
+			// UNIQUE(unit_id, agent): una oferta vigente por agente (re-bid la actualiza). FK
+			// ON DELETE CASCADE: limpiar el batch borra sus ofertas. Aditiva.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS work_bids (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						unit_id TEXT NOT NULL REFERENCES work_units(id) ON DELETE CASCADE,
+						agent TEXT NOT NULL,
+						bid REAL NOT NULL,
+						note TEXT,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(unit_id, agent)
+					);`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_work_bids_unit ON work_bids(unit_id)`)
+				return err
+			},
+		},
 	}
 }
 

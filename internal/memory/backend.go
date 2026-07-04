@@ -91,6 +91,9 @@ type WorkStore interface {
 	CompleteWorkUnit(id, result, status, agent string, fencingToken int64) error
 	WorkBatchStatus(batchID string) (WorkBatch, error)
 	ClearWorkBatch(batchID string) error
+	BidWorkUnit(unitID, agent string, bid float64, note string) error
+	AwardWorkUnit(unitID string, ttlSeconds int) (WorkUnit, WorkBid, bool, error)
+	WorkUnitBids(unitID string) ([]WorkBid, error)
 }
 
 // WorkflowStore — motor de orquestación DAG persistente (resumible entre sesiones).

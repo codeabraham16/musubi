@@ -353,6 +353,8 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		Result       string                `json:"result"`
 		Status       string                `json:"status"`
 		FencingToken int64                 `json:"fencing_token"`
+		Bid          float64               `json:"bid"`
+		Note         string                `json:"note"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -433,6 +435,44 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return textResult("Batch limpiado."), nil
 
+	case "bid":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "bid requiere 'id' (la unidad)")
+		}
+		if strings.TrimSpace(args.Agent) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "bid requiere 'agent'")
+		}
+		if err := s.engine.BidWorkUnit(args.ID, args.Agent, args.Bid, args.Note); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo ofertar: %v", err)
+		}
+		return textResult("Oferta registrada."), nil
+
+	case "award":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "award requiere 'id' (la unidad)")
+		}
+		u, winner, ok, err := s.engine.AwardWorkUnit(args.ID, s.multiagent.LeaseTTLSeconds)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo adjudicar: %v", err)
+		}
+		if !ok {
+			return jsonResult(map[string]interface{}{"awarded": false,
+				"note": "sin ofertas o la unidad ya no está open"})
+		}
+		// El ganador debe renovar el lease con heartbeat (id, agent, fencing_token) y cerrar
+		// con complete, igual que un claim normal.
+		return jsonResult(map[string]interface{}{"awarded": true, "winner": winner, "unit": u})
+
+	case "bids":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "bids requiere 'id' (la unidad)")
+		}
+		bids, err := s.engine.WorkUnitBids(args.ID)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudieron leer las ofertas: %v", err)
+		}
+		return jsonResult(map[string]interface{}{"unit": args.ID, "bids": bids})
+
 	case "savings":
 		if strings.TrimSpace(args.Batch) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "savings requiere 'batch'")
@@ -446,7 +486,7 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		return jsonResult(ds)
 
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|complete|status|savings|clear)", action)
+		return nil, rpcErrorf(codeInvalidParams, "action inválida %q (usá plan|claim|heartbeat|complete|status|savings|clear|bid|award|bids)", action)
 	}
 }
 

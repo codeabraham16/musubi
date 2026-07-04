@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-07-03
+
+Track 13 — Ola C (orquestación avanzada). **Contract-Net bidding** sobre la pizarra multi-agente, model-free
+y aditivo, dogfoodeado por el flujo SDD completo con verificación adversarial. C1 (pipelines declarativos PDL/SAMMO)
+resultó **ya cubierto** — los workflows de Musubi ya son datos declarativos (defs YAML en `.musubi/workflows/`,
+DAG, condicionales, loops, expresiones). C3 (debate topologies) se **descartó como subsistema**: el patrón se
+compone con las primitivas existentes (verify-gate + Reflexion, pizarra multi-agente, `musubi_judge`) sin agregar
+framework. Catálogo en 30 tools; una migración aditiva (v8).
+
+### Added
+- **Contract-Net bidding en la pizarra multi-agente** (`musubi_work` acciones `bid` / `award` / `bids`): cuando
+  los sub-agentes difieren en aptitud, en vez de asignar por *claim* de orden de llegada (first-come), la unidad
+  se **anuncia** y los agentes **ofertan** (`bid`, un score donde **mayor = mejor** aptitud/confianza, que produce
+  el propio agente — model-free); el orquestador revisa con `bids` y **adjudica** con `award` a la mejor oferta.
+  La adjudicación **reusa la maquinaria de lease/TTL/fencing** existente: la unidad queda `claimed` por el ganador
+  y sigue el flujo `heartbeat`/`complete` normal. Determinista (desempate por antigüedad y agente), atómico
+  (`UPDATE ... RETURNING` guardado por `status='open'` — un doble `award` es no-op). Coexiste con el claim
+  first-come (el orquestador elige el protocolo por unidad). Migración v8 (`work_bids`, con `ON DELETE CASCADE`
+  al limpiar el batch). Contract-Net (Smith, 1980).
+
 ## [0.61.0] - 2026-07-03
 
 Track 13 — Ola B (memoria más inteligente). Cuatro features sobre el pilar de memoria, cada una dogfoodeada por
