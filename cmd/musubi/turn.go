@@ -306,6 +306,7 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 	res, err := store.Recall(context.Background(), prompt, memory.RecallOptions{
 		TokenBudget:     budget,
 		NoBump:          true,
+		RankedFTS:       true, // filtrar stopwords: es la superficie más caliente, evita ruido
 		Stemming:        memCfg.RecallStemming,
 		Cooccurrence:    memCfg.RecallCooccurrence,
 		GraphCentrality: memCfg.RecallGraphCentrality,

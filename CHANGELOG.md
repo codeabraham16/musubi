@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-07-04
+
+Auditoría del sistema de tokens, 3ª tanda — dos de los tres frentes que quedaban: **relevancia del recall por turno**
+y **adelgazar el schema de tools** (costo fijo por turno). Ambos model-free y sin perder eficacia.
+
+### Fixed
+- **El recall por turno filtra stopwords** (relevancia): la superficie MÁS caliente (recall en cada
+  UserPromptSubmit) corría un MATCH de FTS **crudo** —`el`/`de`/`la`/`the`/`of` incluidos— que diluía el OR y dejaba
+  que la recencia volcara el orden, colando memorias tangenciales-pero-recientes. Ahora usa un nuevo flag
+  `RankedFTS` que descarta stopwords (es/en) y tokens de 1 runa antes de armar la query (con fallback seguro si todo
+  era ruido). **Opt-in**: el recall del tool `musubi_recall` queda bit-a-bit igual; solo cambia el recall por turno.
+
+### Changed
+- **Descripciones de tools más densas** (−~625 tok/turno de costo FIJO): las 5 mega-descripciones
+  (`musubi_workflow`, `musubi_work`, `musubi_debate`, `musubi_sdd`, `musubi_author_skill`) embebían el protocolo
+  completo paso-a-paso, pagado en el schema cada turno. Se recortó el racional y la verbosidad redundante
+  **preservando cada action y feature con su trigger→action→params** (la respuesta de la tool guía las features
+  avanzadas cuando aplican). El schema de las 31 tools bajó de ~30.1k a ~27.6k chars. Sigue en 31 tools.
+
+### Notes
+- Frente que queda de la auditoría (#3): cachear `gist_tokens` (necesita migración), `search_semantic`/`keyword`
+  gist-first con budget, delta en las respuestas de `musubi_workflow`, y `capture_reminder` contando todas las
+  superficies de guardado. Documentado en `audit/2026-07-04-token-system`.
+
 ## [0.73.0] - 2026-07-04
 
 Auditoría del sistema de tokens, 2ª tanda — **precisión del estimador** (los hallazgos #8/#9). Ambos son puro win,
