@@ -23,11 +23,15 @@ const defaultMarketplaceCatalogURL = "https://raw.githubusercontent.com/codeabra
 
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
-	Provider   string `yaml:"provider"`    // none | ollama | openai
+	Provider   string `yaml:"provider"`    // none | ollama | openai | static
 	Model      string `yaml:"model"`       // ej. nomic-embed-text, text-embedding-3-small
 	BaseURL    string `yaml:"base_url"`    // ej. http://localhost:11434, https://api.openai.com/v1
 	Dimensions int    `yaml:"dimensions"`  // dimensión del vector que produce el modelo
 	APIKeyEnv  string `yaml:"api_key_env"` // nombre de la env var con la API key (openai); el secreto NO se guarda en el yaml
+	// StaticPath es el directorio con model.safetensors + tokenizer.json (formato
+	// model2vec/POTION) para el provider "static": embeddings model-free AT INFERENCE
+	// (lookup + mean-pool, sin runtime de modelo ni cgo). Bring-your-own-table.
+	StaticPath string `yaml:"static_path,omitempty"`
 }
 
 // SourcingConfig controla la obtención automática de skills desde un catálogo remoto.
