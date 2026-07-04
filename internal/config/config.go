@@ -90,6 +90,11 @@ type MemoryConfig struct {
 	// embedder externo. Default ON; se desactiva con recall_cooccurrence: false. Un bloque
 	// `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
 	RecallCooccurrence bool `yaml:"recall_cooccurrence"`
+	// RecallStemming activa el match por PREFIJO de raíz en el FTS del recall (Track 14 #2, 2ª
+	// ola): la query matchea variantes morfológicas de sufijo (deploy/deploys/deployment) sin
+	// re-indexar ni dependencia. Default ON; se desactiva con recall_stemming: false. Un bloque
+	// `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
+	RecallStemming bool `yaml:"recall_stemming"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -372,6 +377,7 @@ func Default() Config {
 			BrevityMode:           "off",
 			RecallGraphCentrality: true,
 			RecallCooccurrence:    true,
+			RecallStemming:        true,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -533,6 +539,9 @@ func (c *Config) applyMemoryDefaults(data []byte) {
 	}
 	if !keys["recall_cooccurrence"] {
 		c.Memory.RecallCooccurrence = Default().Memory.RecallCooccurrence
+	}
+	if !keys["recall_stemming"] {
+		c.Memory.RecallStemming = Default().Memory.RecallStemming
 	}
 }
 

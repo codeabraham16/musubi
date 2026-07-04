@@ -477,6 +477,39 @@ func TestLoadRecallCooccurrenceDisableRespected(t *testing.T) {
 	}
 }
 
+func TestLoadRecallStemmingDefaultOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallStemming {
+		t.Error("esperaba recall_stemming true por defecto")
+	}
+}
+
+func TestLoadRecallStemmingPresentBlockDefaultsOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallStemming {
+		t.Error("un bloque memory sin la clave debe conservar recall_stemming ON")
+	}
+}
+
+func TestLoadRecallStemmingDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_stemming: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallStemming {
+		t.Error("recall_stemming: false explícito debería respetarse")
+	}
+}
+
 func TestLoadMaintenanceDefaults(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
 	cfg, err := Load(root)

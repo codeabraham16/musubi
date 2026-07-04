@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-07-04
+
+Track 14, #2 — **2ª ola de semántica model-free**: stemming query-time por prefijo. Ataca el miss de recall más
+común (morfológico): sin esto, buscar "deploy" no encontraba una memoria que dice "deploys" o "deployment", porque
+el FTS matchea tokens exactos.
+
+### Added
+- **Stemming por prefijo en el recall** (sin dependencia, sin re-indexar): con el flag on, cada término de la query
+  se reduce a una raíz con un stemmer **liviano y conservador** (recorta un sufijo de flexión ES+EN dejando raíz
+  ≥4 runas; términos <5 quedan intactos) y se matchea por **prefijo FTS** (`"deploy"*`), atrapando las variantes de
+  sufijo (`deploy`/`deploys`/`deployment`, `casa`/`casas`). Fiel a la identidad: **cero dependencia nueva** (se
+  descartó Snowball para no romper la disciplina de 3 deps), **sin re-indexado ni migración**, model-free y
+  determinista. Config `memory.recall_stemming` (default ON; `false` desactiva); off por zero-value preserva el
+  match exacto histórico bit-a-bit. Honesto: cubre variantes de **sufijo**, no cambios de raíz (`despliegue`↔
+  `desplegar` — eso requeriría un stemmer completo). Segunda ola de #2 tras la co-ocurrencia/PRF. Sigue en 31 tools.
+
 ## [0.68.0] - 2026-07-04
 
 Track 14 (post-auditoría v0.65.0), #2 — **primer slice de semántica model-free** en el recall. La auditoría marcó

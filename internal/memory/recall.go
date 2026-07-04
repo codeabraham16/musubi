@@ -39,6 +39,11 @@ type RecallOptions struct {
 	// pool existente (no incorpora candidatos nuevos). El zero-value (false) preserva el
 	// comportamiento histórico bit-a-bit; la capa MCP lo enciende según config (default ON).
 	GraphCentrality bool
+	// Stemming, si es true, activa el match por PREFIJO de raíz en el FTS (2ª ola de #2): la
+	// query 'deploy' matchea también 'deploys'/'deployment' (variantes morfológicas de sufijo),
+	// sin re-indexar ni dependencia. El zero-value (false) usa el match exacto histórico; la capa
+	// MCP lo enciende según config (default ON).
+	Stemming bool
 	// Cooccurrence, si es true, agrega la 6ª señal RRF (Track 14 #2, semántica model-free):
 	// expansión por pseudo-relevance feedback (PRF) — cosecha términos que co-ocurren con la
 	// query en los top resultados y corre un 2º FTS para traer observaciones con vocabulario
@@ -99,7 +104,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		gistMax = defaultGistMaxTokens
 	}
 
-	cands, lexRank, err := e.recallCandidates(ctx, query, pool)
+	cands, lexRank, err := e.recallCandidates(ctx, query, pool, opts.Stemming)
 	if err != nil {
 		return RecallResult{}, err
 	}
@@ -337,13 +342,56 @@ func effectiveRecency(c candidate) string {
 	return c.createdAt
 }
 
+// prefixSuffixes es la lista CURADA y corta de sufijos de flexión (ES+EN) que stemForPrefix
+// recorta para acercar un término a su raíz. Ordenada por longitud DESC (se recorta el primero que
+// matchee). Conservadora a propósito: sólo sufijos seguros, nunca vocales/acentos sueltos.
+var prefixSuffixes = []string{
+	"aciones", "ciones", "mientos", "iendo", "mente", "ación", "acion",
+	"miento", "ments", "ando", "ados", "idos", "ment", "ado", "ido",
+	"ing", "ar", "er", "ir", "es", "ed", "s",
+}
+
+// stemForPrefix reduce un término a una raíz para el match por prefijo del FTS (2ª ola de #2).
+// Determinista y CONSERVADOR: lowercase; términos de <5 runas quedan intactos; si no, recorta el
+// primer sufijo de prefixSuffixes que deje una raíz de ≥4 runas; si ninguno aplica, devuelve el
+// término. Un solo sufijo por término — acota el over-stemming; el prefijo FTS hace el resto.
+func stemForPrefix(term string) string {
+	t := strings.ToLower(term)
+	r := []rune(t)
+	if len(r) < 5 {
+		return t
+	}
+	for _, suf := range prefixSuffixes {
+		sr := []rune(suf)
+		if len(r)-len(sr) >= 4 && strings.HasSuffix(t, suf) {
+			return string(r[:len(r)-len(sr)])
+		}
+	}
+	return t
+}
+
+// buildFTSQueryPrefix construye una query FTS5 por PREFIJO: cada término se stemmea (stemForPrefix)
+// y se emite como '"stem"*' (prefijo verificado en FTS5/modernc), unidos por OR. Atrapa las
+// variantes morfológicas de sufijo (deploy/deploys/deployment) sin re-indexar. Vacío ⇒ "".
+func buildFTSQueryPrefix(q string) string {
+	terms := splitTerms(q)
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		out = append(out, `"`+stemForPrefix(t)+`"*`)
+	}
+	return strings.Join(out, " OR ")
+}
+
 // recallCandidates obtiene candidatos por FTS (ordenados por rank) y su ranking keyword
 // (lexRank, id→posición). Si la query no tiene términos utilizables, cae a las observaciones
 // más recientes y devuelve lexRank=nil (no hay señal keyword). Devolver el ranking acá (en
 // vez de derivarlo del orden del slice al scorear) es lo que deja unir varios pools sin
 // ambigüedad de rangos (T5.7).
-func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int) ([]candidate, map[string]int, error) {
+func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int, stemming bool) ([]candidate, map[string]int, error) {
 	ftsQuery := buildFTSQuery(query)
+	if stemming {
+		ftsQuery = buildFTSQueryPrefix(query) // 2ª ola de #2: match por prefijo de la raíz
+	}
 	if ftsQuery == "" {
 		cands, err := e.recentCandidates(ctx, limit)
 		return cands, nil, err
