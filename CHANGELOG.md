@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-07-04
+
+Auditoría del sistema de tokens, 2ª tanda — **precisión del estimador** (los hallazgos #8/#9). Ambos son puro win,
+model-free y 100% bajo control del server: mejoran la exactitud de la estimación de tokens SIN sacrificar recall. El
+estimador versionado recomputa la columna `tokens` de todas las filas al abrir el motor (aplica al reiniciar).
+
+### Fixed
+- **Estimación por-segmento del markdown** (#8): antes, un solo fence ` ``` ` en una observación clasificaba **todo**
+  el blob como código (`/3.4`), sobre-estimando ~12–17% y haciendo que el recall empaquetara **menos memoria de la
+  que cabía**. Ahora `EstimateTokens` separa los bloques de código (entre fences) de la prosa y estima cada parte con
+  su divisor. Recupera budget de recall real. JSON estructural se sigue estimando como blob completo.
+- **Peso de caracteres no-ASCII** (#9): los acentos/emoji se contaban por runa y se dividían por el divisor de prosa
+  (`/4`), **sub-estimando** la prosa acentuada — dirección insegura para un presupuesto, y todo el corpus es en
+  español. Ahora los no-ASCII no-CJK se cuentan más densos (`divNonASCII=2.0`, ~0.5 tok/char), restaurando el sesgo
+  conservador. La calibración opt-in descuenta esta contribución fija al ajustar los divisores por tipo.
+
+### Notes
+- El estimador pasa a `v3-seg-nonascii`: al reiniciar, recomputa `tokens`/`gist` de todas las filas una vez
+  (idempotente). Pendientes mayores de la auditoría aún abiertos: adelgazar el schema de tools (~7.500 tok/turno,
+  con el asterisco del prompt-caching client-side) y el floor de relevancia del recall por turno. Sigue en 31 tools.
+
 ## [0.72.0] - 2026-07-04
 
 Auditoría del sistema de ahorro de tokens (4 agentes anclados en código + verificación adversarial) → **bundle de
