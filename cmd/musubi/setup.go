@@ -337,12 +337,6 @@ func writeCodeMemoryHook(root, exePath string) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
-// writeMCPConfig registra el servidor en .mcp.json (Claude Code, config portable).
-// Envoltorio de writeMCPConfigAt para compatibilidad.
-func writeMCPConfig(root, exePath string) error {
-	return writeMCPConfigAt(root, exePath, ".mcp.json", true)
-}
-
 // writeMCPConfigAt registra (idempotente) el servidor musubi en el archivo de config
 // MCP del agente (relPath relativo a root, ej. ".mcp.json" o ".cursor/mcp.json").
 // Crea el directorio padre si hace falta. El esquema mcpServers es común a los agentes.

@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-07-04
+
+Track 14 (post-auditoría v0.65.0), ola de endurecimiento — A2: limpieza de código muerto (hallazgo #4).
+
+### Removed
+- **Cruft genuino eliminado**: `writeMCPConfig` (envoltorio duplicado de `writeMCPConfigAt`, sólo lo usaba su
+  test) e `internal/codeintel/imports.go` completo (`ExtractImports` y helpers, usado únicamente por su propio
+  test, sin ningún feature que lo consumiera). Al auditar el "código muerto" que marcó la auditoría se distinguió
+  cruft de **andamiaje intencional**: se PRESERVARON `bootstrap.RemoteEntry`/`MergeRemoteMCPServer` (groundwork
+  documentado del home-server: apuntar clientes al `musubi serve` central sobre la VPN) y `FakeRunner` (falso de
+  git usado por los tests; `deadcode` lo marca sólo porque analiza desde `main`, no desde los tests). Borrar
+  groundwork por "reducir superficie" habría destruido trabajo planeado; se removió sólo lo genuinamente muerto.
+
 ## [0.66.0] - 2026-07-04
 
 Track 14 (post-auditoría v0.65.0), A1 — **modelo de fallo del motor de workflows**. La auditoría profunda encontró

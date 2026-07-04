@@ -35,8 +35,8 @@ func TestEnsureWorkspaceCreaConfig(t *testing.T) {
 
 func TestWriteMCPConfigRegistraServidor(t *testing.T) {
 	root := t.TempDir()
-	if err := writeMCPConfig(root, "/ruta/al/musubi"); err != nil {
-		t.Fatalf("writeMCPConfig error: %v", err)
+	if err := writeMCPConfigAt(root, "/ruta/al/musubi", ".mcp.json", true); err != nil {
+		t.Fatalf("writeMCPConfigAt error: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
 	if err != nil {

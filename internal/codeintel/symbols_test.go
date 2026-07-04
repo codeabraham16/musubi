@@ -148,15 +148,3 @@ func TestExtractSymbolsUnsupportedIsEmpty(t *testing.T) {
 		t.Errorf("sin extensión debería degradar a vacío, got %+v", syms)
 	}
 }
-
-func TestExtractImports(t *testing.T) {
-	if imps := ExtractImports("a.go", "package x\nimport \"fmt\"\nimport \"os\"\n"); len(imps) != 2 {
-		t.Errorf("Go debería tener 2 imports, got %+v", imps)
-	}
-	if imps := ExtractImports("a.ts", "import { x } from './x';\nconst y = require('y');\n"); len(imps) != 2 {
-		t.Errorf("TS debería tener 2 imports, got %+v", imps)
-	}
-	if imps := ExtractImports("a.py", "import os\nfrom sys import path\n"); len(imps) != 2 {
-		t.Errorf("Py debería tener 2 imports, got %+v", imps)
-	}
-}
