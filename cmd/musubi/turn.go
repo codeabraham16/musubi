@@ -43,6 +43,7 @@ const (
 	metaBrevityInjected   = "loop_brevity_injected"   // sesión+modo ya inyectados de la directiva de brevedad
 	metaPhaseInjected     = "loop_phase_injected"     // fingerprint de la fase ya inyectada (delta)
 	metaConflictsInjected = "loop_conflicts_injected" // cantidad de conflictos ya avisada (delta)
+	metaBatchInjected     = "loop_batch_injected"     // fingerprint del batch ya inyectado (delta)
 )
 
 // turnSurfaceChanged indica si el payload de una superficie por turno difiere de lo
@@ -70,7 +71,7 @@ type turnInput struct {
 // pipeline, la memoria relevante, los conflictos pendientes y el recordatorio de
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
-func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, budget int, brevity string, stdin io.Reader) string {
+func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -79,6 +80,8 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	if prompt == "" {
 		return ""
 	}
+	budget := memCfg.SessionTokenBudget
+	brevity := memCfg.BrevityMode
 
 	// Cada bloque se etiqueta con su superficie del ledger: assembleAccounted
 	// contabiliza TODOS los no vacíos (fase, batch, recall, conflictos, captura),
@@ -94,10 +97,10 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store, in.SessionID)})
 	}
 	if maCfg.Enabled {
-		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store)})
+		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store, in.SessionID)})
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection)})
+		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection, memCfg)})
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -105,7 +108,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 		blocks = append(blocks, accountedBlock{"turn_conflicts", buildTurnConflicts(store, in.SessionID)})
 	}
 	if loopCfg.CaptureReminder {
-		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, loopCfg)})
+		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, in.SessionID, loopCfg)})
 	}
 	return assembleAccounted(store, "UserPromptSubmit", in.SessionID, blocks)
 }
@@ -198,9 +201,16 @@ func buildTurnPhase(store turnStore, sessionID string) string {
 // buildTurnBatch inyecta el estado de un batch de trabajo en curso, para que el
 // agente principal recuerde monitorearlo y consolidar. Devuelve "" si no hay batch
 // activo.
-func buildTurnBatch(store turnStore) string {
+func buildTurnBatch(store turnStore, sessionID string) string {
 	b, ok, err := store.ActiveBatch()
 	if err != nil || !ok {
+		return ""
+	}
+	// Delta: re-inyectar el estado del batch cada turno es gasto repetido (era el único
+	// bloque por turno sin guard). Solo emitir cuando el progreso cambió respecto de lo ya
+	// inyectado en la sesión; mientras el batch no avanza, silencio.
+	fp := fmt.Sprintf("%s|%d|%d|%d|%d", b.BatchID, b.Done, b.Total, b.Open, b.Claimed)
+	if !turnSurfaceChanged(store, metaBatchInjected, sessionID, fp) {
 		return ""
 	}
 	return fmt.Sprintf("[Musubi — multi-agente] Batch activo «%s»: %d/%d unidades done (%d open, %d en curso). Monitoreá con musubi_work action=status batch=%s y consolidá los resultados cuando estén todas.",
@@ -210,25 +220,30 @@ func buildTurnBatch(store turnStore) string {
 // buildCaptureReminder cierra el loop: cuando pasaron varios turnos sin que se
 // guardara nada en memoria, recuerda persistir lo aprendido. Es model-free: usa el
 // conteo de observaciones como señal de "se guardó algo" entre turnos.
-func buildCaptureReminder(store turnStore, cfg config.LoopConfig) string {
+func buildCaptureReminder(store turnStore, sessionID string, cfg config.LoopConfig) string {
 	current, err := store.CountObservations()
 	if err != nil {
 		return ""
 	}
-	prev, hasPrev := readIntMeta(store, metaLoopObsSeen)
-	turns, _ := readIntMeta(store, metaLoopTurns)
+	// Claves session-scoped: sin el prefijo de sesión, el contador de turnos-sin-guardar
+	// SANGRABA entre sesiones (una sesión nueva heredaba el conteo de la anterior y podía
+	// disparar el nudge sin actividad propia). El delta ya usa este mismo patrón.
+	obsKey := metaLoopObsSeen + ":" + sessionID
+	turnsKey := metaLoopTurns + ":" + sessionID
+	prev, hasPrev := readIntMeta(store, obsKey)
+	turns, _ := readIntMeta(store, turnsKey)
 
 	// La línea base del próximo turno es el conteo de este turno.
-	_ = store.SetMeta(metaLoopObsSeen, strconv.Itoa(current))
+	_ = store.SetMeta(obsKey, strconv.Itoa(current))
 
 	// Primer turno observado: solo fijar la base, sin recordar.
 	if !hasPrev {
-		_ = store.SetMeta(metaLoopTurns, "0")
+		_ = store.SetMeta(turnsKey, "0")
 		return ""
 	}
 	// Se guardó algo desde el turno previo: reiniciar el contador.
 	if current > prev {
-		_ = store.SetMeta(metaLoopTurns, "0")
+		_ = store.SetMeta(turnsKey, "0")
 		return ""
 	}
 
@@ -238,10 +253,10 @@ func buildCaptureReminder(store turnStore, cfg config.LoopConfig) string {
 		threshold = 5
 	}
 	if turns >= threshold {
-		_ = store.SetMeta(metaLoopTurns, "0") // reiniciar para no repetir cada turno
+		_ = store.SetMeta(turnsKey, "0") // reiniciar para no repetir cada turno
 		return fmt.Sprintf("[Musubi — captura] Van %d turnos sin guardar nada en memoria. Si tomaste una decisión, arreglaste un bug o aprendiste algo no obvio, persistilo con musubi_save_observation (o musubi_save_fact).", turns)
 	}
-	_ = store.SetMeta(metaLoopTurns, strconv.Itoa(turns))
+	_ = store.SetMeta(turnsKey, strconv.Itoa(turns))
 	return ""
 }
 
@@ -283,8 +298,18 @@ const (
 // Con deltaEnabled, inyecta SOLO la memoria nueva o modificada respecto de lo ya
 // inyectado en la sesión (cache-considerate): si no hay nada nuevo, devuelve ""
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
-func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool) string {
-	res, err := store.Recall(context.Background(), prompt, memory.RecallOptions{TokenBudget: budget, NoBump: true})
+func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool, memCfg config.MemoryConfig) string {
+	// Propagar los toggles semánticos model-free (Stemming/Cooccurrence/GraphCentrality)
+	// que la tool musubi_recall ya usa: sin esto, la superficie MÁS caliente (recall por
+	// turno) corría léxico puro, ignorando los puentes deploy↔despliegue / morfología /
+	// centralidad que el proyecto construyó. Mismos tokens, más relevancia.
+	res, err := store.Recall(context.Background(), prompt, memory.RecallOptions{
+		TokenBudget:     budget,
+		NoBump:          true,
+		Stemming:        memCfg.RecallStemming,
+		Cooccurrence:    memCfg.RecallCooccurrence,
+		GraphCentrality: memCfg.RecallGraphCentrality,
+	})
 	if err != nil || res.Count == 0 {
 		return ""
 	}
@@ -431,7 +456,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory.SessionTokenBudget, cfg.Memory.BrevityMode, os.Stdin)
+	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}

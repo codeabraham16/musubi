@@ -64,7 +64,9 @@ func textResult(text string) interface{} {
 }
 
 func jsonResult(v interface{}) (interface{}, *RpcError) {
-	jsonBytes, err := json.MarshalIndent(v, "", "  ")
+	// Marshal COMPACTO (sin indentación): la respuesta la parsea el cliente MCP, no la
+	// lee un humano; la indentación era ~28% de whitespace puro en cada payload JSON.
+	jsonBytes, err := json.Marshal(v)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al serializar resultado: %v", err)
 	}

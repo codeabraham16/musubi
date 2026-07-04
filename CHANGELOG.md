@@ -7,6 +7,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-07-04
+
+Auditoría del sistema de ahorro de tokens (4 agentes anclados en código + verificación adversarial) → **bundle de
+quick-wins**: menos tokens sin sacrificar una gota de recall. El veredicto fue "sano ~8.5/10; el desperdicio está
+concentrado, no es arquitectónico". Este release ataca 5 de los hallazgos de mayor ROI y riesgo casi nulo.
+
+### Changed
+- **Respuestas JSON de las tools compactas** (`jsonResult`: `MarshalIndent`→`Marshal`): la indentación era ~**28%**
+  de whitespace puro en cada payload estructurado (recall, tokens, workflow, search, doctor…) que el cliente MCP
+  parsea igual. −28% en toda respuesta JSON de tool.
+- **`content_hash` fuera del payload model-facing** (`RecallItem`, `json:"-"`): eran 64 hex (~25 tokens) por item de
+  maquinaria server-side (la inyección diferencial la consume in-process en Go) que viajaban al modelo sin que los
+  use. Se conserva como campo Go; deja de serializarse.
+
+### Fixed
+- **`turn_batch` sin delta guard**: era el único bloque por turno que se re-inyectaba **cada turno** mientras había
+  un batch activo (~53 tok/turno). Ahora usa el mismo `turnSurfaceChanged` que los otros bloques: solo emite cuando
+  el progreso del batch cambió.
+- **El recall por turno ignoraba los toggles semánticos**: la superficie MÁS caliente (recall en cada
+  UserPromptSubmit) corría léxico puro, sin Stemming/Cooccurrence/GraphCentrality —los puentes model-free que la tool
+  `musubi_recall` sí usa (Tracks 14/B4)—. Ahora se propagan desde `memory.*`: **mismos tokens, más relevancia**.
+- **Metaclaves de captura no session-scoped**: `loop_obs_seen`/`loop_turns_since_save` sangraban entre sesiones (una
+  sesión nueva heredaba el contador de la anterior y podía disparar el nudge de captura sin actividad propia). Ahora
+  llevan el `session_id` como sufijo, igual que el estado delta.
+
+### Notes
+- Diferido de este bundle (necesita señal nueva en el recall + más superficie de test): floor de relevancia (no
+  inyectar recencia disfrazada en prompts genéricos). Documentado en `audit/2026-07-04-token-system`. Pendientes
+  mayores de la auditoría: adelgazar el schema de tools (~7.500 tok fijos/turno) y precisión del estimador
+  (segmentación de markdown, peso no-ASCII). Sigue en 31 tools.
+
 ## [0.71.0] - 2026-07-04
 
 Track 15, S1 (cierre) — **guard de cambio de modelo de embedding**. Con la Capa 2 (StaticProvider) ya es fácil

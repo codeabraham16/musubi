@@ -85,7 +85,7 @@ func TestTokenConsumptionAudit(t *testing.T) {
 	// 2a) Turno sobre memoria YA primeada: el priming sembró el delta, así que NO
 	//     debe repetirse (fin de la doble inyección priming↔turno).
 	inPrimed := `{"prompt":"` + primedQuery + `","session_id":"` + sess + `"}`
-	_, ctxP := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), 0, "", strings.NewReader(inPrimed)))
+	_, ctxP := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(inPrimed)))
 	tP := memory.EstimateTokens(ctxP)
 	t.Logf("Turno sobre memoria YA primeada: %d tokens (debería ser ~0: el priming ya la mostró).", tP)
 	if tP != 0 {
@@ -98,8 +98,8 @@ func TestTokenConsumptionAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	inNew := `{"prompt":"rate limiting","session_id":"` + sess + `"}`
-	_, ctxN1 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), 0, "", strings.NewReader(inNew)))
-	_, ctxN2 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), 0, "", strings.NewReader(inNew)))
+	_, ctxN1 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(inNew)))
+	_, ctxN2 := hookAdditionalContext(t, turnOutput(eng, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(inNew)))
 	tN1, tN2 := memory.EstimateTokens(ctxN1), memory.EstimateTokens(ctxN2)
 	t.Logf("Memoria NUEVA: turno1=%d tokens, turno2 (delta)=%d tokens.", tN1, tN2)
 	if tN1 == 0 {
