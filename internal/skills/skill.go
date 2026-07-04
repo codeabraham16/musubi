@@ -20,6 +20,13 @@ type Skill struct {
 	// SourceURL es la URL al archivo de reglas completo en el catálogo de origen.
 	// omitempty mantiene el YAML limpio cuando el campo está vacío.
 	SourceURL string `yaml:"source_url,omitempty"`
+	// ManagedChecksum es el sha256 (hex) del contenido canónico de una skill COGNITIVA
+	// manejada por Musubi (writeCognitiveSkills), con este mismo campo vacío. Es la prueba de
+	// si el archivo sigue tal como Musubi lo escribió: si el checksum del archivo coincide, la
+	// skill está intacta y una actualización del binario la refresca; si no coincide (o no
+	// existe), fue editada a mano y se preserva. Vacío/omitempty para skills a mano o de
+	// auto-discovery (no las gestiona Musubi).
+	ManagedChecksum string `yaml:"managed_checksum,omitempty"`
 }
 
 type Resolver struct {

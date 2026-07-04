@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 
@@ -177,29 +180,93 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 	}
 }
 
-// writeCognitiveSkills escribe el bundle cognitivo en .musubi/skills/ (un archivo
-// por skill). No sobrescribe skills ya editadas por el usuario.
-func writeCognitiveSkills(root string) error {
+// skillContentChecksum computa el sha256 (hex) del contenido canónico de una skill, con su
+// propio ManagedChecksum vacío y los line-endings normalizados (sin \r). Es la huella con la que
+// writeCognitiveSkills reconoce si un archivo sigue EXACTAMENTE como Musubi lo escribió (no
+// editado). Determinista: yaml.Marshal serializa los campos del struct en orden de declaración.
+func skillContentChecksum(sk skills.Skill) (string, error) {
+	sk.ManagedChecksum = ""
+	b, err := yaml.Marshal(sk)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(stripCR(b)) // CRLF-agnóstico (autocrlf no debe romper el match)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// managedSkillAction decide si un archivo de skill EXISTENTE puede (sobre)escribirse con la
+// versión canónica nueva. SAFETY (regla de oro): ante la MÍNIMA duda devuelve false (preservar)
+// — Musubi nunca pisa trabajo del usuario.
+//   - parse falla                              → false (preservar; R0)
+//   - tiene checksum y coincide con su contenido → true  (manejada, sin editar → refrescar; R2)
+//   - tiene checksum y NO coincide               → false (editada → preservar; R3)
+//   - sin checksum, contenido == canónica nueva  → true  (legacy idéntica → adoptar/agregar checksum; R4)
+//   - sin checksum, contenido != canónica nueva  → false (indistinguible de edición → preservar; R5)
+func managedSkillAction(existing []byte, canonicalSum string) bool {
+	var ex skills.Skill
+	if err := yaml.Unmarshal(existing, &ex); err != nil {
+		return false // YAML corrupto: no tocar
+	}
+	stored := ex.ManagedChecksum
+	exSum, err := skillContentChecksum(ex)
+	if err != nil {
+		return false
+	}
+	if stored != "" {
+		return stored == exSum // intacto ⇒ refrescar; distinto ⇒ preservar
+	}
+	return exSum == canonicalSum // bootstrap: adoptar solo si es byte-idéntica a la canónica
+}
+
+// writeCognitiveSkills escribe el bundle cognitivo en .musubi/skills/ (un archivo por skill).
+// Cada archivo lleva un ManagedChecksum que permite REFRESCAR las skills manejadas cuando el
+// binario las actualiza, sin pisar las que el usuario editó (ver managedSkillAction). Devuelve
+// los nombres de las skills que reescribió sobre un archivo YA EXISTENTE (refrescadas/adoptadas),
+// para que setup lo reporte; las escrituras nuevas no se listan.
+func writeCognitiveSkills(root string) ([]string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return err
+		return nil, err
 	}
 	stack, _ := detector.DetectStack(root)
+	var refreshed []string
 	for _, sk := range cognitiveSkills(stack) {
 		path := filepath.Join(skillsDir, sk.Name+".yaml")
-		if _, err := os.Stat(path); err == nil {
-			continue // ya existe: respetar la versión del usuario
-		}
-		data, err := yaml.Marshal(sk)
+		canonicalSum, err := skillContentChecksum(sk)
 		if err != nil {
-			return err
+			return refreshed, err
 		}
-		if err := os.WriteFile(path, data, 0644); err != nil {
-			return err
+		sk.ManagedChecksum = canonicalSum
+		newData, err := yaml.Marshal(sk)
+		if err != nil {
+			return refreshed, err
+		}
+		if existing, err := os.ReadFile(path); err == nil {
+			// Ya está en esta versión exacta: nada que hacer (no reescribir ni reportar).
+			if bytes.Equal(stripCR(existing), stripCR(newData)) {
+				continue
+			}
+			// Existe y difiere: solo (sobre)escribir si es manejada-sin-editar (o legacy
+			// idéntica en contenido); si el usuario la editó, se preserva.
+			if !managedSkillAction(existing, canonicalSum) {
+				continue
+			}
+			if err := os.WriteFile(path, newData, 0644); err != nil {
+				return refreshed, err
+			}
+			refreshed = append(refreshed, sk.Name)
+			continue
+		}
+		// No existía: escritura nueva (no se reporta como refrescada).
+		if err := os.WriteFile(path, newData, 0644); err != nil {
+			return refreshed, err
 		}
 	}
-	return nil
+	return refreshed, nil
 }
+
+// stripCR quita los retornos de carro para comparar/hashear contenido de forma CRLF-agnóstica.
+func stripCR(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r"), nil) }
 
 // appendUnique agrega elem a slice si no está presente.
 func appendUnique(slice []string, elem string) []string {

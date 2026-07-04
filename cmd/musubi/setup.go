@@ -143,10 +143,13 @@ func setupProjectWith(exeOverride, agent string) {
 	printOK("Workspace .musubi/ (config + memoria) listo")
 
 	// 2. Bundle de skills cognitivas de arranque (analizar/deducir/planear + perfil).
-	if err := writeCognitiveSkills(root); err != nil {
+	if refreshed, err := writeCognitiveSkills(root); err != nil {
 		printWarn(fmt.Sprintf("No se pudieron escribir las skills cognitivas: %v", err))
 	} else {
 		printOK("Skills cognitivas en .musubi/skills/ (analyze, deduce, plan, profile, orchestrate, audit)")
+		if len(refreshed) > 0 {
+			printOK(fmt.Sprintf("Skills manejadas actualizadas a esta versión: %s", strings.Join(refreshed, ", ")))
+		}
 	}
 
 	// 2b. Templates de artefactos SDD (proposal/spec/design/tasks) — scaffold versionado.

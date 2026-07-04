@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-07-04
+
+`musubi setup` ahora **refresca las skills cognitivas manejadas** cuando el binario las actualiza, **sin pisar las
+que el usuario editó**. Antes, `writeCognitiveSkills` saltaba cualquier archivo existente, así que un update de una
+skill (p. ej. `adversarial-review` → `musubi_debate`) nunca llegaba a los repos ya inicializados — había que copiar
+el `.yaml` a mano a cada repo. Ahora cada skill lleva su propia prueba de integridad y la propagación es un
+`musubi setup`.
+
+### Changed
+- **Refresh de skills manejadas por checksum**: cada skill cognitiva que escribe Musubi lleva un `managed_checksum`
+  (sha256 de su contenido canónico, CRLF-agnóstico). En el próximo `setup`, Musubi lo usa para decidir de forma
+  determinista: si el archivo sigue **exactamente** como Musubi lo escribió (checksum coincide) → lo **refresca** a
+  la versión nueva; si el usuario lo **editó** (checksum no coincide, o el archivo no parsea) → lo **preserva**. Un
+  archivo legacy idéntico a la versión actual se **adopta** (gana el checksum, sin cambiar contenido). **Regla de
+  oro (safety): ante la mínima duda, preservar** — Musubi nunca pisa trabajo del usuario. Idempotente: un `setup`
+  sin cambios no reescribe ni reporta nada. `setup` informa qué skills actualizó. Campo `managed_checksum` opcional
+  (omitempty), no afecta el loader ni el gate de calidad; solo aplica a las skills cognitivas (no a las escritas a
+  mano ni a las de auto-discovery). Cierra el hueco de propagación que obligaba a copiar skills a mano a los repos.
+
 ## [0.64.1] - 2026-07-04
 
 Cierra el lazo de v0.64.0: la skill cognitiva **`adversarial-review`** ahora USA el subsistema `musubi_debate` en

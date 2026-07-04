@@ -150,7 +150,7 @@ func TestWriteCognitiveSkillsEscribeArchivos(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module ej\n\ngo 1.26\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCognitiveSkills(dir); err != nil {
+	if _, err := writeCognitiveSkills(dir); err != nil {
 		t.Fatalf("writeCognitiveSkills error: %v", err)
 	}
 	skillsDir := filepath.Join(dir, config.DirName, config.SkillsDir)
@@ -181,11 +181,194 @@ func TestWriteCognitiveSkillsNoSobrescribe(t *testing.T) {
 	if err := os.WriteFile(planPath, []byte(custom), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCognitiveSkills(dir); err != nil {
+	if _, err := writeCognitiveSkills(dir); err != nil {
 		t.Fatalf("writeCognitiveSkills error: %v", err)
 	}
 	got, _ := os.ReadFile(planPath)
 	if string(got) != custom {
 		t.Errorf("writeCognitiveSkills no debe sobrescribir una skill editada por el usuario")
+	}
+}
+
+// --- refresh de skills manejadas (sin pisar ediciones del usuario) ---
+
+// canonicalSkill devuelve la skill canónica del bundle por nombre (stack Go).
+func canonicalSkill(t *testing.T, name string) skills.Skill {
+	t.Helper()
+	for _, sk := range cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}) {
+		if sk.Name == name {
+			return sk
+		}
+	}
+	t.Fatalf("no existe la skill canónica %q", name)
+	return skills.Skill{}
+}
+
+// goSkillDir prepara un temp con go.mod (para que DetectStack dé Go) y devuelve el dir de skills.
+func goSkillDir(t *testing.T) (root, skillsDir string) {
+	t.Helper()
+	root = t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module ej\n\ngo 1.26\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	skillsDir = filepath.Join(root, config.DirName, config.SkillsDir)
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return root, skillsDir
+}
+
+func writeSkillYAML(t *testing.T, skillsDir string, sk skills.Skill) string {
+	t.Helper()
+	data, err := yaml.Marshal(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(skillsDir, sk.Name+".yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func readSkillYAML(t *testing.T, path string) skills.Skill {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sk skills.Skill
+	if err := yaml.Unmarshal(data, &sk); err != nil {
+		t.Fatalf("YAML inválido en %s: %v", path, err)
+	}
+	return sk
+}
+
+// R2: una skill manejada INTACTA (checksum coincide) pero de versión vieja → se refresca.
+func TestManagedSkillRefreshesWhenIntact(t *testing.T) {
+	root, skillsDir := goSkillDir(t)
+	canon := canonicalSkill(t, "adversarial-review")
+
+	// Simular una versión VIEJA manejada: mismo esqueleto, reglas viejas, checksum válido.
+	old := canon
+	old.Rules = "REGLA VIEJA que un binario anterior escribió.\n"
+	sum, err := skillContentChecksum(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.ManagedChecksum = sum
+	path := writeSkillYAML(t, skillsDir, old)
+
+	refreshed, err := writeCognitiveSkills(root)
+	if err != nil {
+		t.Fatalf("writeCognitiveSkills: %v", err)
+	}
+	got := readSkillYAML(t, path)
+	if got.Rules != canon.Rules {
+		t.Errorf("una skill manejada intacta debe refrescarse a la canónica; reglas=%q", got.Rules)
+	}
+	found := false
+	for _, n := range refreshed {
+		if n == "adversarial-review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("adversarial-review debía reportarse como refrescada, obtuve %v", refreshed)
+	}
+}
+
+// R3: una skill EDITADA por el usuario (checksum ya no coincide) → se preserva.
+func TestManagedSkillPreservedWhenEdited(t *testing.T) {
+	root, skillsDir := goSkillDir(t)
+	canon := canonicalSkill(t, "adversarial-review")
+
+	// Escribir una versión manejada con checksum de OTRO contenido (el usuario editó las reglas
+	// después de que Musubi la escribió, sin recomputar el checksum).
+	edited := canon
+	baseSum, _ := skillContentChecksum(canon) // checksum del contenido canónico...
+	edited.ManagedChecksum = baseSum
+	edited.Rules = "REGLAS EDITADAS A MANO POR EL USUARIO.\n" // ...pero el contenido ya no matchea
+	path := writeSkillYAML(t, skillsDir, edited)
+
+	refreshed, err := writeCognitiveSkills(root)
+	if err != nil {
+		t.Fatalf("writeCognitiveSkills: %v", err)
+	}
+	got := readSkillYAML(t, path)
+	if got.Rules != "REGLAS EDITADAS A MANO POR EL USUARIO.\n" {
+		t.Errorf("una skill editada NO debe pisarse; reglas=%q", got.Rules)
+	}
+	for _, n := range refreshed {
+		if n == "adversarial-review" {
+			t.Error("una skill editada no debe reportarse como refrescada")
+		}
+	}
+}
+
+// R4: un archivo legacy SIN checksum pero idéntico a la canónica → se adopta (agrega checksum).
+func TestManagedSkillBootstrapAdopts(t *testing.T) {
+	root, skillsDir := goSkillDir(t)
+	canon := canonicalSkill(t, "adversarial-review") // sin ManagedChecksum
+	path := writeSkillYAML(t, skillsDir, canon)
+
+	// Antes: sin checksum.
+	if readSkillYAML(t, path).ManagedChecksum != "" {
+		t.Fatal("precondición: el archivo legacy no debe tener checksum")
+	}
+	refreshed, err := writeCognitiveSkills(root)
+	if err != nil {
+		t.Fatalf("writeCognitiveSkills: %v", err)
+	}
+	got := readSkillYAML(t, path)
+	if got.ManagedChecksum == "" {
+		t.Error("un archivo idéntico a la canónica debe ADOPTARSE (agregar checksum)")
+	}
+	if got.Rules != canon.Rules {
+		t.Error("la adopción no debe cambiar el contenido")
+	}
+	found := false
+	for _, n := range refreshed {
+		if n == "adversarial-review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("la adopción debía reportarse como refrescada, obtuve %v", refreshed)
+	}
+}
+
+// Idempotencia: correr writeCognitiveSkills de nuevo sobre skills ya en esta versión NO debe
+// reescribir ni reportar nada como refrescado (sin cry-wolf ni churn).
+func TestManagedSkillIdempotentNoChurn(t *testing.T) {
+	root, _ := goSkillDir(t)
+	// Primera corrida: escribe todo el bundle fresco (con checksums).
+	if _, err := writeCognitiveSkills(root); err != nil {
+		t.Fatal(err)
+	}
+	// Segunda corrida: nada cambió → refreshed vacío.
+	refreshed, err := writeCognitiveSkills(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshed) != 0 {
+		t.Errorf("una segunda corrida sin cambios no debe refrescar nada, obtuve %v", refreshed)
+	}
+}
+
+// R0: un YAML corrupto no debe pisarse ni causar panic.
+func TestManagedSkillCorruptPreserved(t *testing.T) {
+	root, skillsDir := goSkillDir(t)
+	garbage := "esto: no es: yaml válido: [\n"
+	path := filepath.Join(skillsDir, "adversarial-review.yaml")
+	if err := os.WriteFile(path, []byte(garbage), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeCognitiveSkills(root); err != nil {
+		t.Fatalf("writeCognitiveSkills no debe fallar ante un archivo corrupto: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != garbage {
+		t.Error("un archivo corrupto debe preservarse (no pisarse)")
 	}
 }
