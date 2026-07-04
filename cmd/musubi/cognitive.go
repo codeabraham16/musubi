@@ -139,15 +139,15 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 		},
 		{
 			Name:         "adversarial-review",
-			Description:  "Revisión adversarial estilo juicio: verifica un cambio con escépticos independientes y veredicto por mayoría, con bucle de corrección.",
+			Description:  "Revisión adversarial estilo debate: escépticos con lentes distintos refutan un cambio en rondas, con veredicto por mayoría determinista y bucle de corrección.",
 			Triggers:     []string{"*"},
 			Capabilities: []string{},
-			Rules: "Antes de dar por bueno un cambio de riesgo (o en la fase verify de un flujo SDD), sometelo a una revisión ADVERSARIAL en vez de una sola lectura complaciente:\n" +
-				"1. Descomponé la revisión en unidades independientes y posteálas con musubi_work action=plan: una unidad por LENTE distinto (correctitud, seguridad, ¿reproduce el bug?, contrato de la spec). Guardá el batch_id.\n" +
-				"2. Lanzá N sub-agentes escépticos con el Task tool (mcpServers:[musubi]); a CADA uno instruílo a intentar REFUTAR el cambio desde su lente y devolver un veredicto {real|no_real + evidencia}, cerrando su unidad con musubi_work action=complete. Ante la duda, que falle.\n" +
-				"3. Aplicá VEREDICTO POR MAYORÍA sobre los results: si la mayoría refuta, hay que corregir. Iterá (fix → re-review) hasta que el cambio sobreviva o se descarte.\n" +
-				"4. Registrá el veredicto y lo aprendido con musubi_save_observation (topic_key 'review/<change>'); si el hallazgo contradice una memoria previa, resolvé la relación con musubi_judge.\n" +
-				"- La inteligencia (refutar, decidir) es tuya; Musubi coordina la pizarra sin colisiones y persiste el resultado.\n",
+			Rules: "Antes de dar por bueno un cambio de riesgo (o en la fase verify de un flujo SDD), sometelo a un DEBATE adversarial con veredicto determinista en vez de una sola lectura complaciente:\n" +
+				"1. Abrí el debate con musubi_debate action=open topic=<el cambio a juzgar> rounds=2 quorum=<mayoría de los escépticos, p. ej. 2 de 3>. Guardá el debate_id. (musubi_debate estructura las rondas y CUENTA los votos sin sesgo; la inteligencia de refutar es tuya.)\n" +
+				"2. Lanzá N sub-agentes escépticos con el Task tool (mcpServers:[musubi]), cada uno con un LENTE distinto (correctitud, seguridad, ¿reproduce el bug?, contrato de la spec). A CADA uno instruílo a intentar REFUTAR el cambio desde su lente y a postear su hallazgo con musubi_debate action=post id=<debate_id> agent=<lente> stance=<veredicto + evidencia>. Ante la duda, que refute.\n" +
+				"3. Cerrá la ronda con musubi_debate action=advance id=<debate_id>: devuelve las posturas de todos los lentes. Pasáselas a los escépticos para una 2ª ronda de CRÍTICA CRUZADA (cada uno revisa las refutaciones ajenas y ajusta la suya con otro post) — es lo que una sola lectura no te da.\n" +
+				"4. Recogé el veredicto: cada escéptico vota con musubi_debate action=vote id=<debate_id> agent=<lente> choice=<real|no_real>. Cerrá con action=tally: el recuento es DETERMINISTA y queda PERSISTIDO (reproducible). Si gana 'no_real' (la mayoría refuta), hay que corregir: iterá (fix → re-debate) hasta que el cambio sobreviva. Si el tally da no_consensus (empate/sin quórum), deferí el juicio final a musubi_judge.\n" +
+				"5. Registrá lo aprendido con musubi_save_observation (topic_key 'review/<change>'); el debate ya conserva las posturas y el veredicto. Si el hallazgo contradice una memoria previa, resolvé la relación con musubi_judge.\n",
 		},
 		{
 			Name:         "designing-web-ui",

@@ -90,8 +90,9 @@ func TestSDDFlowYAdversarialReviewEnBundle(t *testing.T) {
 	if !ok {
 		t.Fatal("falta la skill adversarial-review en el bundle")
 	}
-	// Debe documentar el patrón judgment-day: escépticos, mayoría y cableado a musubi_judge.
-	for _, must := range []string{"musubi_work", "mayoría", "musubi_judge"} {
+	// Debe documentar el patrón judgment-day sobre el subsistema de debate: escépticos,
+	// tally por mayoría determinista y cableado a musubi_judge para el desempate.
+	for _, must := range []string{"musubi_debate", "tally", "mayoría", "musubi_judge"} {
 		if !strings.Contains(rev.Rules, must) {
 			t.Errorf("adversarial-review debe mencionar %q", must)
 		}

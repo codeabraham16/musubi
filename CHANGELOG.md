@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.64.1] - 2026-07-04
+
+Cierra el lazo de v0.64.0: la skill cognitiva **`adversarial-review`** ahora USA el subsistema `musubi_debate` en
+vez de describir el patrón como prosa sobre la pizarra. Así el determinismo y la persistencia que agregó el debate
+se aprovechan de verdad en la revisión adversarial (y en la fase verify del flujo SDD).
+
+### Changed
+- **`adversarial-review` cableada a `musubi_debate`**: la revisión adversarial pasa de coordinar escépticos por la
+  pizarra (`musubi_work`) con conteo de mayoría "a mano" a orquestar un **debate estructurado**: `open` (rounds=2,
+  quorum=mayoría) → cada escéptico (un LENTE: correctitud/seguridad/repro/contrato) postea su refutación con `post`
+  → `advance` habilita una 2ª ronda de **crítica cruzada** (cada uno ve y rebate las refutaciones ajenas) → `vote`
+  (real|no_real) → `tally` da el **veredicto por mayoría DETERMINISTA y persistido**. no_consensus (empate/sin
+  quórum) ⇒ se defiere el juicio a `musubi_judge`. El veredicto y las posturas quedan reproducibles. Solo cambia la
+  plantilla de la skill (model-free); ninguna tool nueva.
+
 ## [0.64.0] - 2026-07-04
 
 Debate multi-agente (**Society of Minds**) como subsistema ejecutable y determinista, model-free — reabriendo C3,
