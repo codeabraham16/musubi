@@ -7,6 +7,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Scripts de despliegue del cerebro central en `deploy/`** (`install-musubi-brain.sh` +
+  `connect-brain-linux.sh` / `connect-brain-windows.ps1`): montan Musubi como daemon MCP sobre HTTP
+  (`musubi serve`) en un servidor Linux y conectan cada dispositivo cliente, en **un comando por
+  máquina**. El de servidor es idempotente —binario+checksum, `restorecon` de SELinux, workspace,
+  bloque `service:`, token que **no se regenera** al re-correr, unit systemd, `tailscale0` en la zona
+  `trusted` del firewall, y verificación de `/readyz`+`tools/list`—. Los de cliente hacen el onboarding
+  (Tailscale, allowlist de NordVPN, entrada remota `musubi-cerebro` en el `.mcp.json` con el token por
+  referencia `${MUSUBI_TOKEN}`, y verificación con auth). Codifican el runbook de
+  `docs/Server_Brain_Onboarding.md`.
+
 ## [0.77.0] - 2026-07-04
 
 Auditoría del sistema de tokens, Frente #3 (d) — **el recordatorio de captura cuenta las tres superficies**.
