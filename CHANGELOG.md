@@ -8,6 +8,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Dashboard-cerebro (`musubi dashboard`): la memoria como grafo neuronal 3D en vivo.** Nuevo backend
+  `internal/memory/braingraph.go` que expone las observaciones activas como **neuronas** y las
+  `observation_relations` como **sinapsis** (`DbEngine.BrainGraph`), read-only y model-free —saliencia
+  `importance*exp(-age/30)+ln(1+heat)` computada en Go, cap top-N, sin aristas colgantes—. `musubi export`
+  suma el campo `brain` al snapshot y `musubi dashboard` lo renderiza en un canvas: cerebro 3D con
+  **spreading-activation real** (solo dispara con actividad entre polls), HUD glass (salud/tokens/
+  orquestación/dominios/actividad) y polling de `/api/snapshot`. El volumen **se expande simétricamente con
+  la población** (radio ∝ N^⅓, encuadre estable) y el render se **autorregula por FPS** (LOD por
+  prominencia, bloom sin `ctx.filter`, gobernador de calidad) para sostener miles de neuronas. Loopback-only,
+  0 tokens, proceso aparte.
 - **Scripts de despliegue del cerebro central en `deploy/`** (`install-musubi-brain.sh` +
   `connect-brain-linux.sh` / `connect-brain-windows.ps1`): montan Musubi como daemon MCP sobre HTTP
   (`musubi serve`) en un servidor Linux y conectan cada dispositivo cliente, en **un comando por
