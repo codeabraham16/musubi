@@ -1,0 +1,6 @@
+# Los scripts de shell DEBEN conservar line endings LF para ejecutarse en Linux
+# (un CRLF en el shebang da "bad interpreter: /bin/bash^M"). Independiente de
+# core.autocrlf del clon.
+*.sh text eol=lf
+# PowerShell prefiere CRLF en Windows.
+*.ps1 text eol=crlf
