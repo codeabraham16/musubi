@@ -18,17 +18,22 @@ import (
 // vistas que exponen las tools musubi_doctor/insights/tokens, con la forma estable
 // que consumen las UIs.
 
+// brainNeuronLimit es el tope de neuronas que el snapshot expone al dashboard-cerebro:
+// suficiente para una silueta densa sin castigar el force-sim del navegador.
+const brainNeuronLimit = 300
+
 // exportSnapshot es el documento JSON que produce 'musubi export'.
 type exportSnapshot struct {
-	GeneratedAt string                `json:"generated_at"`
-	Version     string                `json:"version"`
-	Project     string                `json:"project,omitempty"`
-	Health      memory.DiagnoseReport `json:"health"`
-	Insights    memory.InsightsReport `json:"insights"`
-	Tokens      memory.BudgetStatus   `json:"tokens"`
-	Graph         exportGraph         `json:"graph"`
-	Recent        []memory.ObsCard    `json:"recent"`
-	Orchestration exportOrchestration `json:"orchestration"`
+	GeneratedAt   string                `json:"generated_at"`
+	Version       string                `json:"version"`
+	Project       string                `json:"project,omitempty"`
+	Health        memory.DiagnoseReport `json:"health"`
+	Insights      memory.InsightsReport `json:"insights"`
+	Tokens        memory.BudgetStatus   `json:"tokens"`
+	Graph         exportGraph           `json:"graph"`
+	Brain         memory.BrainGraph     `json:"brain"`
+	Recent        []memory.ObsCard      `json:"recent"`
+	Orchestration exportOrchestration   `json:"orchestration"`
 }
 
 // exportOrchestration es la vista del PILAR de orquestación en el dashboard: los runs
@@ -91,6 +96,12 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 		return snap, fmt.Errorf("export: árbol de temas: %w", err)
 	}
 	snap.Graph = exportGraph{TotalObservations: ins.Observations.Active, Domains: domains}
+
+	brain, err := engine.BrainGraph(brainNeuronLimit)
+	if err != nil {
+		return snap, fmt.Errorf("export: grafo neuronal: %w", err)
+	}
+	snap.Brain = brain
 
 	recent, err := engine.RecentObservations(20)
 	if err != nil {
