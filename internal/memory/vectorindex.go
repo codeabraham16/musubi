@@ -527,7 +527,7 @@ func (e *DbEngine) loadActiveVectors() ([]idVec, error) {
 		SELECT o.id, em.vector
 		FROM observations o
 		JOIN embeddings em ON o.id = em.observation_id
-		WHERE o.archived = 0 AND o.superseded_by IS NULL
+		WHERE ` + visibleObsPredicate + `
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error al cargar vectores activos: %w", err)
@@ -581,7 +581,7 @@ func (e *DbEngine) countActiveEmbeddings() (int, error) {
 	err := e.db.QueryRow(`
 		SELECT COUNT(*) FROM observations o
 		JOIN embeddings em ON o.id = em.observation_id
-		WHERE o.archived = 0 AND o.superseded_by IS NULL
+		WHERE ` + visibleObsPredicate + `
 	`).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("error al contar embeddings activos: %w", err)

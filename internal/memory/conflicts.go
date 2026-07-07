@@ -175,8 +175,7 @@ func (e *DbEngine) conflictCandidates(src obsRow, limit int) ([]obsRow, error) {
 		JOIN observations o ON f.id = o.id
 		WHERE observations_fts MATCH ?
 		  AND o.id != ?
-		  AND o.archived = 0
-		  AND o.superseded_by IS NULL
+		  AND `+visibleObsPredicate+`
 		ORDER BY rank
 		LIMIT ?
 	`, ftsQuery, src.id, limit)

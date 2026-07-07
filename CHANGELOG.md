@@ -8,6 +8,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cerebro híbrido F1 — modelo de `scope` (local/shared) + `project_id` en la memoria.** Fundación del
+  cerebro central compartido: cada observación lleva ahora un `scope` (`local`, default = comportamiento
+  histórico; o `shared`, candidata a sincronizarse con el cerebro central en fases siguientes) y un
+  `project_id` que la ata a su proyecto (migración v10, aditiva y backward-compatible). `musubi_save_observation`
+  acepta un parámetro opcional `scope` (validado); un tool nuevo **`musubi_promote`** eleva una observación
+  local a `shared` (idempotente). Internamente se **centralizó el predicado de visibilidad**
+  (`archived = 0 AND superseded_by IS NULL`) en una única constante (`visibleObsPredicate`), refactorizando
+  las queries de lectura sin cambiar el SQL — el *seam* para el filtrado por scope que viene. Todo aditivo:
+  las bases y observaciones previas se comportan idéntico (0 regresiones). Es la Fase 1 de un track de 5
+  (F2 sync offline-first, F3 central multi-proyecto, F4 federated recall, F5 hardening).
 - **Dashboard-cerebro (`musubi dashboard`): la memoria como grafo neuronal 3D en vivo.** Nuevo backend
   `internal/memory/braingraph.go` que expone las observaciones activas como **neuronas** y las
   `observation_relations` como **sinapsis** (`DbEngine.BrainGraph`), read-only y model-free —saliencia

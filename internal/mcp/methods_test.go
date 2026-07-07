@@ -93,6 +93,49 @@ func TestSaveObservationRequiresFields(t *testing.T) {
 	}
 }
 
+// T11(d): un scope inválido en musubi_save_observation es un error de parámetro; los
+// scopes válidos (vacío, 'local' o 'shared') pasan.
+func TestSaveObservationScopeValidation(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{
+		"topic_key": "t", "content": "x", "scope": "foo",
+	}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por scope inválido, obtuve %+v", e)
+	}
+	for _, sc := range []string{"", "local", "shared"} {
+		if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{
+			"topic_key": "t", "content": "contenido scope " + sc, "scope": sc,
+		}); e != nil {
+			t.Errorf("scope %q debe ser válido, obtuve %+v", sc, e)
+		}
+	}
+}
+
+// musubi_promote: promueve una observación a 'shared'; id inexistente devuelve error de param.
+func TestPromoteToolHandler(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	res, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "prom1", "topic_key": "t", "content": "para promover"})
+	if e != nil {
+		t.Fatalf("save: %+v", e)
+	}
+	_ = res
+	if _, e := call(t, s, "musubi_promote", map[string]interface{}{"id": "prom1"}); e != nil {
+		t.Fatalf("promote válido devolvió error: %+v", e)
+	}
+	// Idempotente.
+	if _, e := call(t, s, "musubi_promote", map[string]interface{}{"id": "prom1"}); e != nil {
+		t.Fatalf("segunda promoción debe ser no-op, obtuve: %+v", e)
+	}
+	// Id vacío / inexistente → error de parámetro.
+	if _, e := call(t, s, "musubi_promote", map[string]interface{}{"id": ""}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por id vacío, obtuve %+v", e)
+	}
+	if _, e := call(t, s, "musubi_promote", map[string]interface{}{"id": "no-existe"}); e == nil || e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params por id inexistente, obtuve %+v", e)
+	}
+}
+
 func TestSaveObservationAutoUUID(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	res, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "hola mundo"})

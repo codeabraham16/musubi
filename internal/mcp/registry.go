@@ -575,5 +575,19 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			handler:  s.toolDetectChanges,
 			readOnly: true,
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_promote",
+				Description: "Promueve una observación LOCAL (privada del proyecto) a SHARED, marcándola como candidata a la memoria central del cerebro híbrido. Es idempotente: promover una ya compartida es un no-op exitoso. Requiere el id de la observación (el que devuelve musubi_save_observation o un recall). No sincroniza nada por sí solo: sólo cambia el scope.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"id": {Type: "string", Description: "ID de la observación a promover a 'shared'"},
+					},
+					Required: []string{"id"},
+				},
+			},
+			handler: noCtx(s.countingSave(s.toolPromote)),
+		},
 	}
 }

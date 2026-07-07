@@ -320,10 +320,14 @@ type UpdateConfig struct {
 
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
-	Version           string          `yaml:"version"`
-	Mode              string          `yaml:"mode"`
-	SkillsAutoResolve bool            `yaml:"skills_auto_resolve"`
-	Embedding         EmbeddingConfig `yaml:"embedding"`
+	Version           string `yaml:"version"`
+	Mode              string `yaml:"mode"`
+	SkillsAutoResolve bool   `yaml:"skills_auto_resolve"`
+	// ProjectID identifica este proyecto en la memoria híbrida local+central (fundación del
+	// cerebro híbrido). Opcional: "" => se deriva del basename del directorio del workspace.
+	// Se estampa en cada observación (columna project_id) para atribución/filtrado futuro.
+	ProjectID string          `yaml:"project_id,omitempty"`
+	Embedding EmbeddingConfig `yaml:"embedding"`
 	// Sourcing configura el comportamiento de sourcing de skills desde catálogos remotos.
 	Sourcing SourcingConfig `yaml:"sourcing,omitempty"`
 	// Memory configura el recall por presupuesto de tokens.
@@ -356,6 +360,7 @@ func Default() Config {
 		Version:           "1.0",
 		Mode:              "local",
 		SkillsAutoResolve: true,
+		ProjectID:         "", // "" => derivar del basename del workspace (ver resolveProjectID)
 		Embedding: EmbeddingConfig{
 			Provider:   "none",
 			Model:      "nomic-embed-text",

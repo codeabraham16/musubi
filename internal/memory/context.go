@@ -60,7 +60,7 @@ func (e *DbEngine) observationGists(query string, limit int) ([]ObsGist, error) 
 		SELECT o.id, o.topic_key, COALESCE(o.gist, '')
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ? AND o.archived = 0 AND o.superseded_by IS NULL
+		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
 		ORDER BY rank
 		LIMIT ?
 	`, ftsQuery, limit)

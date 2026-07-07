@@ -108,7 +108,7 @@ func TestDebatePostAndVoteIdempotent(t *testing.T) {
 	if err := e.PostPosture(d.ID, "ana", "v2 corregida"); err != nil {
 		t.Fatal(err)
 	}
-	_, postures, votes, err := e.DebateStatus(d.ID)
+	_, postures, _, err := e.DebateStatus(d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestDebatePostAndVoteIdempotent(t *testing.T) {
 	}
 	e.CastVote(d.ID, "ana", "A")
 	e.CastVote(d.ID, "ana", "B")
-	_, _, votes, _ = e.DebateStatus(d.ID)
+	_, _, votes, _ := e.DebateStatus(d.ID)
 	if len(votes) != 1 || votes[0].Choice != "B" {
 		t.Errorf("re-vote debe reemplazar, no duplicar; obtuve %+v", votes)
 	}
