@@ -46,10 +46,22 @@ token en tu perfil, y verifica alcance + auth. **En Linux todo es automático.**
 ```powershell
 $env:MUSUBI_TOKEN="<token>"; .\connect-brain-windows.ps1 -ProjectDir "C:\ruta\al\proyecto"
 ```
-Guarda el token, escribe el `.mcp.json`, y verifica. **El split-tunnel de NordVPN es GUI
-(sin CLI):** si la verificación falla, el script imprime los clics exactos (protocolo
-OpenVPN + agregar `tailscaled.exe`, `curl.exe`, `node.exe` a "Disable VPN for selected
-apps"), y recordá el orden: **Tailscale conectado primero, NordVPN después.**
+Hace todo **desde 0**, idempotente: se auto-eleva a admin, **instala Tailscale si falta**
+(winget/MSI) y lo une a la malla (opcional `-TailscaleAuthKey` para no abrir el navegador),
+aplica el **fix de firewall que destraba NordVPN** (reglas `TS-Allow-Tailnet-In/Out` que
+permiten `100.64.0.0/10` y le ganan al filtro WFP de NordVPN), guarda el token, escribe el
+`.mcp.json`, y **verifica con `node`** (el runtime real de Claude Code) que el cerebro
+responde y autentica — no con `curl.exe`, que NordVPN no excluye de forma fiable y da
+falsos negativos.
+
+**Único paso manual que queda (GUI de NordVPN, sin CLI):** poner el protocolo en **OpenVPN
+(UDP)** y agregar `tailscaled.exe` + `node.exe` a "Disable VPN for selected apps". Si la
+verificación falla, el script imprime los clics exactos. Orden estable: **Tailscale
+conectado primero, NordVPN después**; cada cambio en el split-tunnel reconecta NordVPN.
+
+> El fix de firewall + el split-tunnel son complementarios: el firewall permite el rango a
+> nivel de sistema, el split-tunnel saca a los procesos del túnel. Con ambos, la PC llega al
+> cerebro con NordVPN activa (probado en `kernelos-pc`).
 
 ## Notas
 
