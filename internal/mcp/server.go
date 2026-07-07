@@ -141,6 +141,19 @@ type McpServer struct {
 	// dispara un mantenimiento async (T5.3). maintBusy garantiza un solo ciclo en vuelo.
 	saveCount atomic.Int64
 	maintBusy atomic.Bool
+	// syncClient empuja las filas del outbox al cerebro central (F2); nil ⇒ sync desactivado
+	// (el drain no arranca). syncCfg trae los parámetros del drain (batch/lease/backoff/tope).
+	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".
+	syncClient *SyncClient
+	syncCfg    config.SyncConfig
+}
+
+// SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando
+// el drain del outbox (RunOutboxScheduler). Lo llama el entrypoint (serve/daemon) tras
+// construir el SyncClient desde cfg.Sync. Sin llamarlo, el server no sincroniza (syncClient nil).
+func (s *McpServer) SetSyncClient(client *SyncClient, cfg config.SyncConfig) {
+	s.syncClient = client
+	s.syncCfg = cfg
 }
 
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de

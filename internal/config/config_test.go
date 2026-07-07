@@ -63,6 +63,69 @@ func TestLoadBrevityModeNormalizes(t *testing.T) {
 	}
 }
 
+// TestLoadSyncDefaultsDisabled verifica que sin bloque `sync:` el sync saliente queda
+// desactivado con los defaults del cerebro híbrido F2 (comportamiento local-first intacto).
+func TestLoadSyncDefaultsDisabled(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Sync.Enabled {
+		t.Error("esperaba sync.enabled=false por defecto")
+	}
+	if cfg.Sync.DrainIntervalSeconds != 30 {
+		t.Errorf("esperaba drain_interval_seconds 30, obtuve %d", cfg.Sync.DrainIntervalSeconds)
+	}
+	if cfg.Sync.BatchSize != 50 {
+		t.Errorf("esperaba batch_size 50, obtuve %d", cfg.Sync.BatchSize)
+	}
+	if cfg.Sync.MaxAttempts != 5 {
+		t.Errorf("esperaba max_attempts 5, obtuve %d", cfg.Sync.MaxAttempts)
+	}
+	if cfg.Sync.BackoffBaseSeconds != 5 || cfg.Sync.BackoffMaxSeconds != 300 {
+		t.Errorf("esperaba backoff 5/300, obtuve %d/%d", cfg.Sync.BackoffBaseSeconds, cfg.Sync.BackoffMaxSeconds)
+	}
+	if cfg.Sync.LeaseSeconds != 60 {
+		t.Errorf("esperaba lease_seconds 60, obtuve %d", cfg.Sync.LeaseSeconds)
+	}
+	if cfg.Sync.RequestTimeoutSeconds != 30 {
+		t.Errorf("esperaba request_timeout_seconds 30, obtuve %d", cfg.Sync.RequestTimeoutSeconds)
+	}
+	if cfg.Sync.AllowInsecureToken {
+		t.Error("esperaba allow_insecure_token=false por defecto")
+	}
+}
+
+// TestLoadSyncApplyDefaults verifica que un bloque `sync:` presente respeta los valores dados
+// (enabled=true, central_url, y un numérico explícito) y rellena los ausentes con el default.
+func TestLoadSyncApplyDefaults(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\nsync:\n  enabled: true\n  central_url: https://brain.example:7717\n  auth_token_env: MUSUBI_SYNC_TOKEN\n  batch_size: 10\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Sync.Enabled {
+		t.Error("esperaba enabled=true respetado")
+	}
+	if cfg.Sync.CentralURL != "https://brain.example:7717" {
+		t.Errorf("central_url no respetado: %q", cfg.Sync.CentralURL)
+	}
+	if cfg.Sync.AuthTokenEnv != "MUSUBI_SYNC_TOKEN" {
+		t.Errorf("auth_token_env no respetado: %q", cfg.Sync.AuthTokenEnv)
+	}
+	if cfg.Sync.BatchSize != 10 {
+		t.Errorf("batch_size explícito no respetado, obtuve %d", cfg.Sync.BatchSize)
+	}
+	// Ausentes rellenados con default.
+	if cfg.Sync.DrainIntervalSeconds != 30 {
+		t.Errorf("drain_interval_seconds ausente debía ser 30, obtuve %d", cfg.Sync.DrainIntervalSeconds)
+	}
+	if cfg.Sync.MaxAttempts != 5 || cfg.Sync.LeaseSeconds != 60 {
+		t.Errorf("defaults ausentes mal rellenados: max=%d lease=%d", cfg.Sync.MaxAttempts, cfg.Sync.LeaseSeconds)
+	}
+}
+
 func TestLoadStartupDefaults(t *testing.T) {
 	// Config legacy sin bloque startup: deben aplicarse los defaults.
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")

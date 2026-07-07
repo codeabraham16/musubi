@@ -281,6 +281,41 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 11,
+			name:    "outbox",
+			// Cerebro híbrido F2: OUTBOX DURABLE para el sync SALIENTE offline-first. Sin esto una
+			// observación promovida a 'shared' no tiene forma de sincronizarse al cerebro central
+			// que sobreviva a un crash o a un corte de red. El outbox es el patrón transaccional
+			// canónico: encolar la INTENCIÓN de sincronizar en la MISMA tx que promueve/guarda a
+			// 'shared', drenarla después con reintentos. NO copia el contenido —guarda sólo obs_id
+			// + metadatos de entrega—; el payload se reconstruye con un JOIN a observations al
+			// drenar (siempre entrega el contenido fresco, habilita re-sync). El estado
+			// next_attempt_at cubre backoff (pending futuro), lease (claimed futuro) y
+			// auto-recuperación (un claimed con lease vencido se re-reclama solo). enqueued_hash
+			// guarda el content_hash al encolar para re-sincronizar sólo cuando el contenido
+			// cambió. El índice (status, next_attempt_at) soporta el claim atómico. Aditiva: NO
+			// toca observations.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS outbox (
+						id              INTEGER PRIMARY KEY AUTOINCREMENT,
+						obs_id          TEXT NOT NULL,
+						status          TEXT NOT NULL DEFAULT 'pending',
+						enqueued_hash   TEXT,
+						attempts        INTEGER NOT NULL DEFAULT 0,
+						next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),
+						last_error      TEXT,
+						created_at      DATETIME NOT NULL DEFAULT (datetime('now')),
+						updated_at      DATETIME NOT NULL DEFAULT (datetime('now')),
+						UNIQUE(obs_id)
+					);`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_outbox_claim ON outbox(status, next_attempt_at)`)
+				return err
+			},
+		},
 	}
 }
 

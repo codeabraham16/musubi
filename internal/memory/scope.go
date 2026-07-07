@@ -52,11 +52,19 @@ func ValidScopeParam(scope string) bool {
 // ErrObservationNotFound lo devuelve PromoteObservation cuando el id no existe.
 var ErrObservationNotFound = errors.New("observación no encontrada")
 
-// PromoteObservation marca una observación como 'shared' (candidata al cerebro central).
-// Idempotente: promover una ya-shared es un no-op exitoso. Si el id no existe (0 filas
-// afectadas) devuelve ErrObservationNotFound. F1 no sincroniza: sólo cambia el scope.
+// PromoteObservation marca una observación como 'shared' (candidata al cerebro central) y la
+// encola en el OUTBOX en la MISMA transacción (F2): el cambio de scope y la intención de
+// sincronizar son atómicos (nada de "shared sin encolar"; un rollback no deja outbox huérfano).
+// Idempotente: promover una ya-shared es un no-op exitoso y el enqueue no duplica (ON CONFLICT
+// por obs_id). Si el id no existe (0 filas afectadas) devuelve ErrObservationNotFound.
 func (e *DbEngine) PromoteObservation(id string) error {
-	res, err := e.db.Exec(`UPDATE observations SET scope=? WHERE id=?`, ScopeShared, id)
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al iniciar transacción de promoción: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE observations SET scope=? WHERE id=?`, ScopeShared, id)
 	if err != nil {
 		return fmt.Errorf("error al promover observación: %w", err)
 	}
@@ -66,6 +74,14 @@ func (e *DbEngine) PromoteObservation(id string) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("%w: %s", ErrObservationNotFound, id)
+	}
+	// Encolar en el outbox dentro de la misma tx (ahora la obs ya es 'shared', así que el
+	// INSERT..SELECT sí produce fila). Idempotente por obs_id.
+	if err := enqueueOutboxTx(tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear promoción: %w", err)
 	}
 	return nil
 }

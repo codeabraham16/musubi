@@ -311,6 +311,42 @@ type ServiceConfig struct {
 	AllowInsecureToken bool `yaml:"allow_insecure_token,omitempty"`
 }
 
+// SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain
+// del outbox que empuja las observaciones 'shared' al `musubi serve` central por HTTP
+// JSON-RPC. Está DESACTIVADO por defecto (Enabled=false): un workspace sin bloque `sync:`
+// mantiene intacto el comportamiento local-first (no drena nada). Bloque YAML: sync.
+type SyncConfig struct {
+	// Enabled activa el drain del outbox (default false). Con false NO se sincroniza nada,
+	// aunque el enqueue al outbox sigue ocurriendo (la intención durable se registra igual;
+	// habilitar sync después no pierde lo previo).
+	Enabled bool `yaml:"enabled"`
+	// CentralURL es la base del cerebro central, https://host:port SIN /mcp (el cliente le
+	// agrega el path). Vacío ⇒ no se drena aunque enabled sea true.
+	CentralURL string `yaml:"central_url"`
+	// AuthTokenEnv es el NOMBRE de la env var con el bearer token del central (patrón de
+	// EmbeddingConfig.APIKeyEnv: el secreto NUNCA va en el YAML ni se loguea).
+	AuthTokenEnv string `yaml:"auth_token_env"`
+	// DrainIntervalSeconds es cada cuántos segundos corre el drain (default 30). <=0 desactiva.
+	DrainIntervalSeconds int `yaml:"drain_interval_seconds"`
+	// BatchSize es el tope de filas reclamadas por tick (default 50).
+	BatchSize int `yaml:"batch_size"`
+	// MaxAttempts es la cantidad de intentos transitorios antes de mandar la fila a
+	// dead-letter (default 5).
+	MaxAttempts int `yaml:"max_attempts"`
+	// BackoffBaseSeconds es la base del backoff exponencial entre reintentos (default 5).
+	BackoffBaseSeconds int `yaml:"backoff_base_seconds"`
+	// BackoffMaxSeconds es el tope del backoff (default 300 = 5 min).
+	BackoffMaxSeconds int `yaml:"backoff_max_seconds"`
+	// LeaseSeconds es la vida del lease de un claim del outbox (default 60): si el drain
+	// crashea a mitad de entrega, la fila se re-reclama sola al vencer.
+	LeaseSeconds int `yaml:"lease_seconds"`
+	// RequestTimeoutSeconds es el timeout por POST al central (default 30).
+	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
+	// AllowInsecureToken permite un CentralURL http:// (token en texto plano). Default false
+	// => fail-closed: sólo tailnet/dev con opt-in explícito.
+	AllowInsecureToken bool `yaml:"allow_insecure_token"`
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
@@ -352,6 +388,8 @@ type Config struct {
 	VectorIndex VectorIndexConfig `yaml:"vector_index,omitempty"`
 	// Service configura el modo servicio (transporte HTTP); desactivado por defecto.
 	Service ServiceConfig `yaml:"service,omitempty"`
+	// Sync configura el sync saliente offline-first del cerebro híbrido (F2); desactivado por defecto.
+	Sync SyncConfig `yaml:"sync,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
@@ -466,6 +504,17 @@ func Default() Config {
 			Enabled:               false,
 			Addr:                  "127.0.0.1:7717",
 			RequestTimeoutSeconds: 60,
+		},
+		Sync: SyncConfig{
+			Enabled:               false,
+			DrainIntervalSeconds:  30,
+			BatchSize:             50,
+			MaxAttempts:           5,
+			BackoffBaseSeconds:    5,
+			BackoffMaxSeconds:     300,
+			LeaseSeconds:          60,
+			RequestTimeoutSeconds: 30,
+			AllowInsecureToken:    false,
 		},
 	}
 }
@@ -785,6 +834,35 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Service.RequestTimeoutSeconds == 0 {
 			c.Service.RequestTimeoutSeconds = d.Service.RequestTimeoutSeconds
+		}
+	}
+
+	// Sync: ausente -> default completo (Enabled false); presente -> respetar los bool
+	// (enabled/allow_insecure_token, incluido false) y las cadenas (central_url/auth_token_env,
+	// que no tienen default útil) tal cual, rellenando sólo los numéricos en cero.
+	if !present["sync"] {
+		c.Sync = d.Sync
+	} else {
+		if c.Sync.DrainIntervalSeconds == 0 {
+			c.Sync.DrainIntervalSeconds = d.Sync.DrainIntervalSeconds
+		}
+		if c.Sync.BatchSize == 0 {
+			c.Sync.BatchSize = d.Sync.BatchSize
+		}
+		if c.Sync.MaxAttempts == 0 {
+			c.Sync.MaxAttempts = d.Sync.MaxAttempts
+		}
+		if c.Sync.BackoffBaseSeconds == 0 {
+			c.Sync.BackoffBaseSeconds = d.Sync.BackoffBaseSeconds
+		}
+		if c.Sync.BackoffMaxSeconds == 0 {
+			c.Sync.BackoffMaxSeconds = d.Sync.BackoffMaxSeconds
+		}
+		if c.Sync.LeaseSeconds == 0 {
+			c.Sync.LeaseSeconds = d.Sync.LeaseSeconds
+		}
+		if c.Sync.RequestTimeoutSeconds == 0 {
+			c.Sync.RequestTimeoutSeconds = d.Sync.RequestTimeoutSeconds
 		}
 	}
 }

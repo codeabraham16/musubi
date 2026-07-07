@@ -167,6 +167,19 @@ type Insighter interface {
 	Insights() (InsightsReport, error)
 }
 
+// OutboxStore — outbox durable del sync SALIENTE del cerebro híbrido (F2): encolado
+// transaccional de las observaciones 'shared' + claim/lease/backoff/dead-letter del drain
+// offline-first. enqueueOutboxTx es interno (corre dentro de la tx del save/promote), así que
+// no forma parte del contrato público; acá van los métodos que consume el drain (internal/mcp).
+type OutboxStore interface {
+	BackfillOutbox() (int, error)
+	ClaimOutboxBatch(limit, leaseSeconds int) ([]OutboxItem, error)
+	MarkOutboxSent(obsID string) error
+	MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error
+	MarkOutboxDead(obsID, errMsg string) error
+	OutboxStats() (pending, sent, dead int, err error)
+}
+
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo
 // debe satisfacer. Embebe io.Closer-equivalente vía Close.
 type StorageBackend interface {
@@ -188,6 +201,7 @@ type StorageBackend interface {
 	Doctor
 	Calibrator
 	Insighter
+	OutboxStore
 
 	// Close libera los recursos del backend (espera trabajo en background y cierra
 	// la conexión subyacente).
