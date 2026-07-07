@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **PC auto-configurable P1 — `musubi provision` (unir una máquina al cerebro).** Nuevo subcomando que
+  lleva un equipo a estar **unido al cerebro central** en un comando, idempotente y cross-platform. El
+  corazón es un **preflight de red VPN-agnóstico**: sonda dos caminos (un destino público de control por IP
+  literal —sin DNS— y el cerebro en el tailnet) y clasifica el entorno en `Clean` / `SplitExcluded`
+  (el runtime va directo y solo ve la malla) / `Tunneled` (el runtime está atrapado en el túnel y no ve la
+  malla) / `Isolated`, con **guía accionable en prosa sin nombrar ningún producto de VPN**. Si el cerebro no
+  es alcanzable, **frena el self-check y explica el paso faltante** en vez de fallar en silencio. Luego
+  asegura Tailscale, aplica la **apertura del tailnet** (reglas de firewall `TS-Allow-Tailnet-In/Out` en
+  Windows / allowlist de subred en Linux, idempotentes; si falta admin, instruye sin abortar), **cablea el
+  `.mcp.json`** con las entradas `musubi` (local) y `musubi-cerebro` (remota, bearer por `${MUSUBI_TOKEN}` —
+  el secreto nunca toca el archivo) preservando lo existente, y hace el **self-check reach + auth** contra el
+  cerebro. `--dry-run` diagnostica y muestra el plan sin mutar. Porta a Go la lógica probada en
+  `deploy/connect-brain-*`. Aditivo: no agrega tools MCP (el golden no cambia).
+
 ### Changed
 - **Cerebro híbrido — sync más robusto (offline-first de verdad).** Se corrigió una grieta de F2 que
   destapó una prueba real: un fallo **transitorio** del sync (cerebro central caído, VPN reconectando) que

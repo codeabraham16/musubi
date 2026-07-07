@@ -48,6 +48,8 @@ func main() {
 		initProject()
 	case "setup":
 		runSetup(os.Args[2:])
+	case "provision":
+		runProvision(os.Args[2:])
 	case "detect":
 		runDetect()
 	case "turn":
@@ -93,6 +95,7 @@ func printUsage() {
 	section("Instalación")
 	cmd("setup [--agent <claude|cursor>]", "Inyecta Musubi en el proyecto actual (workspace + MCP + hooks)")
 	cmd("init", "Inicializa solo el workspace .musubi/ (config + base de datos)")
+	cmd("provision [--brain ...] [--dry-run]", "Une esta máquina al cerebro central (red + .mcp.json + verificación)")
 
 	section("Servidor MCP")
 	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
