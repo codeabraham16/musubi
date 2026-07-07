@@ -122,7 +122,11 @@ func Run(opts Options, deps Deps) (Report, error) {
 	}
 	rep.Steps = append(rep.Steps, mcpStep(wr, opts.DryRun))
 
-	// 5. Self-check reach + auth (solo si el cerebro es alcanzable y no es dry-run).
+	// 5. Config de sync: dejar el bloque sync: en .musubi/config.yaml para que el daemon LOCAL
+	// suba solo la memoria 'shared' al cerebro (sin esto, conecta pero el auto-sync queda apagado).
+	rep.Steps = append(rep.Steps, ensureSyncConfig(opts.ProjectDir, opts.Brain, opts.TokenEnv, opts.DryRun))
+
+	// 6. Self-check reach + auth (solo si el cerebro es alcanzable y no es dry-run).
 	if mode.ok() && !opts.DryRun {
 		rep.Connected = selfCheck(&rep, deps.Verifier, opts)
 	}
