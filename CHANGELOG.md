@@ -7,6 +7,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **Cerebro híbrido — sync más robusto (offline-first de verdad).** Se corrigió una grieta de F2 que
+  destapó una prueba real: un fallo **transitorio** del sync (cerebro central caído, VPN reconectando) que
+  acumulaba `max_attempts` terminaba en **dead-letter permanente**, perdiendo memoria `shared` que sólo
+  estaba temporalmente sin poder entregarse. Ahora un fallo transitorio (red/timeout/5xx/429) **nunca muere**:
+  reintenta indefinidamente con backoff exponencial acotado; **sólo** un fallo permanente (4xx/params/auth)
+  va a dead-letter. Además, dos tools nuevos le dan **ojos y una red de seguridad** al sync: **`musubi_sync_status`**
+  (read-only) reporta cuántas observaciones están pendientes/enviadas/en dead-letter, la antigüedad de la más
+  vieja pendiente y el último error; **`musubi_sync_requeue`** devuelve las que quedaron en dead-letter a la
+  cola de envío (útil tras un corte). Aditivo y backward-compatible; con `sync.enabled=false` nada cambia.
+
 ### Added
 - **Cerebro híbrido F2 — outbox durable + cliente de sync saliente (offline-first).** El conocimiento
   marcado `shared` (F1) ahora **viaja al cerebro central** por su cuenta. Cuando una observación se promueve

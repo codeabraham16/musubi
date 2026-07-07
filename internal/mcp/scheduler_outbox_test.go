@@ -114,28 +114,67 @@ func TestDrainPermanentGoesDead(t *testing.T) {
 	}
 }
 
-// Escenario: tope de reintentos transitorios → dead al llegar a max_attempts.
-func TestDrainMaxAttemptsGoesDead(t *testing.T) {
-	// MaxAttempts=2, backoff 1s: falla, reintenta (attempts→1), falla de nuevo (attemptsSoFar=2≥2) → dead.
-	s, stub, closeFn := wireSync(t, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, MaxAttempts: 2, BackoffBaseSeconds: 1, BackoffMaxSeconds: 5})
+// Escenario: OFFLINE-FIRST (sync-hardening) — un fallo TRANSITORIO NUNCA va a dead, aunque
+// falle muchas más veces que max_attempts. Reintenta indefinidamente con backoff capado, y al
+// recuperarse el central, se entrega. (Antes, con la política por-conteo, moría a las 2.)
+func TestDrainTransientNeverDies(t *testing.T) {
+	// MaxAttempts=2 a propósito: bajo la política vieja, al 2do fallo iba a dead. Ahora NO.
+	s, stub, closeFn := wireSync(t, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, MaxAttempts: 2, BackoffBaseSeconds: 1, BackoffMaxSeconds: 2})
 	defer closeFn()
 	stub.mu.Lock()
-	stub.status = http.StatusInternalServerError
+	stub.status = http.StatusInternalServerError // central "caído" (transitorio)
 	stub.mu.Unlock()
 
 	saveShared(t, s, "obs1")
 
-	// 1er drain: transitorio con margen → pending (attempts=1).
-	s.drainOutboxOnce(context.Background())
-	if p, _, dead := statsOf(t, s); p != 1 || dead != 0 {
-		t.Fatalf("tras 1er fallo esperaba pending=1 dead=0, obtuve pending=%d dead=%d", p, dead)
+	// Drenar varias veces superando MaxAttempts: la fila DEBE seguir pending, nunca dead.
+	for i := 0; i < 4; i++ {
+		s.drainOutboxOnce(context.Background())
+		if _, _, dead := statsOf(t, s); dead != 0 {
+			t.Fatalf("un fallo transitorio nunca debe ir a dead (iter %d): dead=%d", i, dead)
+		}
+		time.Sleep(1100 * time.Millisecond) // dejar vencer el backoff para re-reclamar
+	}
+	if p, sent, dead := statsOf(t, s); p != 1 || sent != 0 || dead != 0 {
+		t.Fatalf("tras muchos fallos transitorios esperaba pending=1 sent=0 dead=0, obtuve %d/%d/%d", p, sent, dead)
 	}
 
-	// 2do drain (tras el backoff): alcanza el tope → dead.
-	time.Sleep(1200 * time.Millisecond)
+	// El central vuelve: la fila (que nunca murió) se entrega.
+	stub.mu.Lock()
+	stub.status = http.StatusOK
+	stub.mu.Unlock()
+	time.Sleep(2200 * time.Millisecond) // backoff capado a 2s
 	s.drainOutboxOnce(context.Background())
-	if p, _, dead := statsOf(t, s); p != 0 || dead != 1 {
-		t.Errorf("al tope de reintentos esperaba pending=0 dead=1, obtuve pending=%d dead=%d", p, dead)
+	if p, sent, dead := statsOf(t, s); p != 0 || sent != 1 || dead != 0 {
+		t.Errorf("tras recuperación esperaba pending=0 sent=1 dead=0, obtuve %d/%d/%d", p, sent, dead)
+	}
+}
+
+// Escenario: requeue de dead-letter → un dead vuelve a la cola y se entrega al recuperarse.
+func TestDrainRequeueRevivesDead(t *testing.T) {
+	s, stub, closeFn := wireSync(t, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, MaxAttempts: 5, BackoffBaseSeconds: 1, BackoffMaxSeconds: 2})
+	defer closeFn()
+	stub.mu.Lock()
+	stub.status = http.StatusBadRequest // permanente → dead
+	stub.mu.Unlock()
+
+	saveShared(t, s, "obs1")
+	s.drainOutboxOnce(context.Background())
+	if _, _, dead := statsOf(t, s); dead != 1 {
+		t.Fatalf("un 400 debía ir a dead, dead=%d", dead)
+	}
+
+	// Requeue: dead → pending. Y con el central sano, se entrega.
+	n, err := s.engine.RequeueDeadOutbox()
+	if err != nil || n != 1 {
+		t.Fatalf("RequeueDeadOutbox esperaba (1,nil), obtuve (%d,%v)", n, err)
+	}
+	stub.mu.Lock()
+	stub.status = http.StatusOK
+	stub.mu.Unlock()
+	s.drainOutboxOnce(context.Background())
+	if p, sent, dead := statsOf(t, s); p != 0 || sent != 1 || dead != 0 {
+		t.Errorf("tras requeue+recuperación esperaba 0/1/0, obtuve %d/%d/%d", p, sent, dead)
 	}
 }
 

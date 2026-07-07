@@ -178,6 +178,8 @@ type OutboxStore interface {
 	MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error
 	MarkOutboxDead(obsID, errMsg string) error
 	OutboxStats() (pending, sent, dead int, err error)
+	OutboxHealth() (OutboxHealthReport, error)
+	RequeueDeadOutbox() (int, error)
 }
 
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo

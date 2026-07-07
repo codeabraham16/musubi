@@ -191,6 +191,41 @@ func (s *McpServer) toolPromote(raw json.RawMessage) (interface{}, *RpcError) {
 	return textResult("Observación promovida a 'shared' (id: " + args.ID + "); ahora es candidata a la memoria central."), nil
 }
 
+// toolSyncStatus devuelve la salud del sync saliente del cerebro híbrido (F2): observaciones
+// shared pendientes/enviadas/en dead-letter, antigüedad de la más vieja pendiente y último
+// error. Read-only, sin params.
+func (s *McpServer) toolSyncStatus(_ json.RawMessage) (interface{}, *RpcError) {
+	h, err := s.engine.OutboxHealth()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer el estado del sync: %v", err)
+	}
+	body, _ := json.Marshal(h)
+	summary := fmt.Sprintf("Sync saliente — pendientes: %d, enviadas: %d, dead-letter: %d", h.Pending, h.Sent, h.Dead)
+	if h.Pending > 0 && h.OldestPendingAgeSec > 0 {
+		summary += fmt.Sprintf(" (la más vieja pendiente hace %ds)", h.OldestPendingAgeSec)
+	}
+	if h.Dead > 0 {
+		summary += fmt.Sprintf("; %d en dead-letter — reintentá con musubi_sync_requeue", h.Dead)
+	}
+	if h.LastError != "" {
+		summary += "\nÚltimo error: " + h.LastError
+	}
+	return textResult(summary + "\n" + string(body)), nil
+}
+
+// toolSyncRequeue devuelve las observaciones en dead-letter a la cola de envío (F2). Muta
+// (readOnly=false). Útil tras un corte del central o de la VPN. Sin params.
+func (s *McpServer) toolSyncRequeue(_ json.RawMessage) (interface{}, *RpcError) {
+	n, err := s.engine.RequeueDeadOutbox()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al re-encolar el dead-letter del sync: %v", err)
+	}
+	if n == 0 {
+		return textResult("No había observaciones en dead-letter; nada para re-encolar."), nil
+	}
+	return textResult(fmt.Sprintf("%d observación(es) re-encolada(s) para reenvío al cerebro central.", n)), nil
+}
+
 // detectAndSurface corre la detección de conflictos para la observación recién
 // guardada y devuelve un texto a anexar a la respuesta: anuncia los supersede
 // auto-resueltos y pide veredicto (musubi_judge) para las relaciones pendientes.

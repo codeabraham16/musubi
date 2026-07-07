@@ -421,3 +421,72 @@ func TestClaimAtomicNoDoubleDelivery(t *testing.T) {
 		t.Errorf("entre ambos claims se esperaban %d filas únicas, hubo %d", n, total)
 	}
 }
+
+// --- sync-hardening: requeue + health ---
+
+func TestRequeueDeadOutbox(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservationTyped("d1", "t", "para dead", 1.0, "", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Simular un dead con attempts y last_error.
+	if err := e.MarkOutboxRetry("d1", 0, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MarkOutboxDead("d1", "fallo permanente"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := e.RequeueDeadOutbox()
+	if err != nil || n != 1 {
+		t.Fatalf("RequeueDeadOutbox esperaba (1,nil), obtuve (%d,%v)", n, err)
+	}
+	status, attempts, _ := outboxRow(t, e, "d1")
+	if status != outboxPending || attempts != 0 {
+		t.Errorf("tras requeue esperaba pending/0, obtuve %s/%d", status, attempts)
+	}
+	// Idempotente: sin filas dead, re-encola 0 sin error.
+	if n2, err := e.RequeueDeadOutbox(); err != nil || n2 != 0 {
+		t.Errorf("requeue sin dead esperaba (0,nil), obtuve (%d,%v)", n2, err)
+	}
+}
+
+func TestOutboxHealth(t *testing.T) {
+	e := newTestEngine(t)
+
+	// Outbox vacío ⇒ ceros sin error.
+	h0, err := e.OutboxHealth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h0.Pending != 0 || h0.Sent != 0 || h0.Dead != 0 || h0.OldestPendingAgeSec != 0 || h0.LastError != "" {
+		t.Errorf("outbox vacío esperaba todo en cero, obtuve %+v", h0)
+	}
+
+	// Mezcla: 1 pending, 1 sent, 1 dead (con last_error).
+	for _, id := range []string{"p", "s", "d"} {
+		if err := e.SaveObservationTyped(id, "t", "contenido "+id, 1.0, "", ScopeShared, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.MarkOutboxSent("s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MarkOutboxDead("d", "el central rechazó"); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := e.OutboxHealth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Pending != 1 || h.Sent != 1 || h.Dead != 1 {
+		t.Errorf("counts esperados 1/1/1, obtuve %d/%d/%d", h.Pending, h.Sent, h.Dead)
+	}
+	if h.OldestPendingAgeSec < 0 {
+		t.Errorf("antigüedad de la pendiente no puede ser negativa, obtuve %d", h.OldestPendingAgeSec)
+	}
+	if h.LastError != "el central rechazó" {
+		t.Errorf("last_error esperado 'el central rechazó', obtuve %q", h.LastError)
+	}
+}

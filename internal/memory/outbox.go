@@ -249,3 +249,69 @@ func (e *DbEngine) OutboxStats() (pending, sent, dead int, err error) {
 	}
 	return pending, sent, dead, nil
 }
+
+// OutboxHealthReport es el estado del sync saliente para observabilidad (musubi_sync_status):
+// counts por estado, antigüedad de la observación pendiente más vieja, y el último error visto.
+type OutboxHealthReport struct {
+	Pending             int    `json:"pending"`
+	Sent                int    `json:"sent"`
+	Dead                int    `json:"dead"`
+	OldestPendingAgeSec int64  `json:"oldest_pending_age_seconds"`
+	LastError           string `json:"last_error"`
+}
+
+// OutboxHealth resume la salud del outbox del cerebro híbrido para el tool musubi_sync_status.
+// pending incluye claimed (una pendiente en vuelo). OldestPendingAgeSec son segundos desde la
+// fila pending/claimed más vieja (0 si no hay). LastError es el más reciente entre las filas NO
+// enviadas (pending/claimed/dead), por updated_at. Con outbox vacío devuelve ceros sin error.
+func (e *DbEngine) OutboxHealth() (OutboxHealthReport, error) {
+	var h OutboxHealthReport
+	p, s, d, err := e.OutboxStats()
+	if err != nil {
+		return h, err
+	}
+	h.Pending, h.Sent, h.Dead = p, s, d
+
+	var age sql.NullInt64
+	if err := e.db.QueryRow(
+		`SELECT CAST(strftime('%s','now') - strftime('%s', MIN(created_at)) AS INTEGER)
+		 FROM outbox WHERE status IN (?, ?)`, outboxPending, outboxClaimed,
+	).Scan(&age); err != nil && err != sql.ErrNoRows {
+		return h, fmt.Errorf("error al calcular antigüedad del outbox: %w", err)
+	}
+	if age.Valid && age.Int64 > 0 {
+		h.OldestPendingAgeSec = age.Int64
+	}
+
+	var last sql.NullString
+	if err := e.db.QueryRow(
+		`SELECT last_error FROM outbox
+		 WHERE last_error IS NOT NULL AND status != ?
+		 ORDER BY updated_at DESC LIMIT 1`, outboxSent,
+	).Scan(&last); err != nil && err != sql.ErrNoRows {
+		return h, fmt.Errorf("error al leer el último error del outbox: %w", err)
+	}
+	if last.Valid {
+		h.LastError = last.String
+	}
+	return h, nil
+}
+
+// RequeueDeadOutbox devuelve TODAS las filas dead-letter a 'pending' (attempts=0, listas para
+// drenar), limpiando last_error. Es la red de seguridad manual (musubi_sync_requeue) tras un
+// corte del central o de la VPN. Idempotente: sin filas dead devuelve 0 sin error.
+func (e *DbEngine) RequeueDeadOutbox() (int, error) {
+	res, err := e.db.Exec(`
+		UPDATE outbox
+		SET status = 'pending', attempts = 0, next_attempt_at = datetime('now'),
+		    last_error = NULL, updated_at = datetime('now')
+		WHERE status = 'dead'`)
+	if err != nil {
+		return 0, fmt.Errorf("error al re-encolar dead-letter del outbox: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("error al leer filas re-encoladas: %w", err)
+	}
+	return int(n), nil
+}
