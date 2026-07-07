@@ -19,8 +19,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Windows / allowlist de subred en Linux, idempotentes; si falta admin, instruye sin abortar), **cablea el
   `.mcp.json`** con las entradas `musubi` (local) y `musubi-cerebro` (remota, bearer por `${MUSUBI_TOKEN}` —
   el secreto nunca toca el archivo) preservando lo existente, y hace el **self-check reach + auth** contra el
-  cerebro. `--dry-run` diagnostica y muestra el plan sin mutar. Porta a Go la lógica probada en
-  `deploy/connect-brain-*`. Aditivo: no agrega tools MCP (el golden no cambia).
+  cerebro. También deja el bloque **`sync:`** en el `.musubi/config.yaml` (idempotente, preservando la config
+  previa) para que el daemon LOCAL **suba solo la memoria `shared`** al cerebro (outbox de F2) — con
+  `allow_insecure_token: true` porque el central es `http://` sobre el tailnet (WireGuard ya cifra); sin este
+  paso el `.mcp.json` conectaba pero el auto-sync quedaba apagado. `--dry-run` diagnostica y muestra el plan
+  sin mutar. Porta a Go la lógica probada en `deploy/connect-brain-*`. Aditivo: no agrega tools MCP (el golden no cambia).
 
 ### Changed
 - **Cerebro híbrido — sync más robusto (offline-first de verdad).** Se corrigió una grieta de F2 que
