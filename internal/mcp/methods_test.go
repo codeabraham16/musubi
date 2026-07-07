@@ -136,6 +136,63 @@ func TestPromoteToolHandler(t *testing.T) {
 	}
 }
 
+// musubi_sync_status (observabilidad) + musubi_sync_requeue (rescate del dead-letter del sync).
+func TestSyncStatusAndRequeueHandlers(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	text := func(res interface{}) string {
+		resp, ok := res.(CallToolResponse)
+		if !ok || len(resp.Content) == 0 {
+			t.Fatalf("respuesta inesperada: %#v", res)
+		}
+		return resp.Content[0].Text
+	}
+
+	// Outbox vacío: status responde sin error y reporta ceros.
+	res, e := call(t, s, "musubi_sync_status", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("sync_status vacío devolvió error: %+v", e)
+	}
+	if txt := text(res); !strings.Contains(txt, `"pending":0`) || !strings.Contains(txt, `"dead":0`) {
+		t.Errorf("status vacío debía reportar ceros, obtuve: %s", txt)
+	}
+
+	// Encolar una shared y mandarla a dead.
+	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "h1", "topic_key": "t", "content": "x", "scope": "shared"}); e != nil {
+		t.Fatalf("save shared: %+v", e)
+	}
+	if err := s.engine.MarkOutboxDead("h1", "rechazado"); err != nil {
+		t.Fatal(err)
+	}
+	res, e = call(t, s, "musubi_sync_status", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("sync_status: %+v", e)
+	}
+	if txt := text(res); !strings.Contains(txt, `"dead":1`) {
+		t.Errorf("status debía reportar dead=1, obtuve: %s", txt)
+	}
+
+	// Requeue revive el dead.
+	res, e = call(t, s, "musubi_sync_requeue", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("sync_requeue devolvió error: %+v", e)
+	}
+	if txt := text(res); !strings.Contains(txt, "1 observación") {
+		t.Errorf("requeue debía reportar 1 re-encolada, obtuve: %s", txt)
+	}
+	if p, _, dead, _ := s.engine.OutboxStats(); p != 1 || dead != 0 {
+		t.Errorf("tras requeue esperaba pending=1 dead=0, obtuve pending=%d dead=%d", p, dead)
+	}
+
+	// Requeue idempotente: sin dead, no hay nada para re-encolar.
+	res, e = call(t, s, "musubi_sync_requeue", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("sync_requeue idempotente: %+v", e)
+	}
+	if txt := text(res); !strings.Contains(txt, "nada para re-encolar") {
+		t.Errorf("requeue sin dead debía decir 'nada para re-encolar', obtuve: %s", txt)
+	}
+}
+
 func TestSaveObservationAutoUUID(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	res, e := call(t, s, "musubi_save_observation", map[string]interface{}{"topic_key": "t", "content": "hola mundo"})

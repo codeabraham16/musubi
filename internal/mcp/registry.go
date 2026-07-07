@@ -589,5 +589,28 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler: noCtx(s.countingSave(s.toolPromote)),
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_sync_status",
+				Description: "Salud del sync saliente del cerebro híbrido (F2): cuántas observaciones 'shared' están pendientes de enviar al cerebro central, cuántas ya se enviaron, cuántas quedaron en dead-letter, la antigüedad de la más vieja pendiente y el último error. Read-only, sin parámetros.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  noCtx(s.toolSyncStatus),
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_sync_requeue",
+				Description: "Reintenta el envío de las observaciones que quedaron en dead-letter del sync saliente (F2): las devuelve a la cola de envío al cerebro central. Útil tras un corte del central o de la VPN. Sin parámetros; devuelve cuántas re-encoló.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler: noCtx(s.toolSyncRequeue),
+		},
 	}
 }

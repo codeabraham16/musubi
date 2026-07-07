@@ -174,17 +174,22 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 			}
 			continue
 		}
-		// Fallo permanente (params/auth) → dead-letter sin reintentar. También si el
-		// intento recién fallado alcanzó el tope de reintentos configurado.
-		attemptsSoFar := item.Attempts + 1
-		if errors.Is(perr, errPermanent) || attemptsSoFar >= s.syncCfg.MaxAttempts {
+		// Política OFFLINE-FIRST (sync-hardening): un fallo PERMANENTE (4xx/params/auth, o
+		// error JSON-RPC del receptor) es irrecuperable reintentando lo mismo → dead-letter.
+		// Un fallo TRANSITORIO (red/timeout/5xx/429) NUNCA muere: reintenta indefinidamente
+		// con backoff exponencial acotado. El tope por CONTEO se eliminó a propósito —
+		// confundía "central temporalmente inalcanzable" con "irrecuperable" y hacía perder
+		// memoria shared en un corte de minutos. Lo genuinamente atascado se ve por
+		// musubi_sync_status y se rescata con musubi_sync_requeue.
+		if errors.Is(perr, errPermanent) {
 			if merr := s.engine.MarkOutboxDead(item.ObsID, perr.Error()); merr != nil {
 				logx.Error("drain: no se pudo marcar como dead", "obs_id", item.ObsID, "error", merr)
 			}
 			continue
 		}
-		// Fallo transitorio con margen: reprogramar con backoff exponencial + jitter.
-		backoff := backoffSeconds(attemptsSoFar, s.syncCfg.BackoffBaseSeconds, s.syncCfg.BackoffMaxSeconds)
+		// Transitorio: reprogramar con backoff exponencial + jitter (attempts sólo alimenta
+		// el backoff y la observabilidad; ya no dispara dead).
+		backoff := backoffSeconds(item.Attempts+1, s.syncCfg.BackoffBaseSeconds, s.syncCfg.BackoffMaxSeconds)
 		if merr := s.engine.MarkOutboxRetry(item.ObsID, backoff, perr.Error()); merr != nil {
 			logx.Error("drain: no se pudo reprogramar el reintento", "obs_id", item.ObsID, "error", merr)
 		}

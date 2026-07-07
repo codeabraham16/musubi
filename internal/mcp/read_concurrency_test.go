@@ -30,6 +30,7 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_discover_skills": true,
 		"musubi_insights":        true,
 		"musubi_detect_changes":  true,
+		"musubi_sync_status":     true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
