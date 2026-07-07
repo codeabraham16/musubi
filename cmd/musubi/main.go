@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +17,20 @@ import (
 	"musubi/internal/mcp"
 	"musubi/internal/memory"
 )
+
+// resolveProjectID determina el identificador de proyecto que se estampa en cada
+// observación (memoria híbrida local+central): usa cfg.ProjectID si está seteado; si no,
+// deriva el basename del path absoluto del workspace. Model-free y determinista.
+func resolveProjectID(cfg config.Config, root string) string {
+	if strings.TrimSpace(cfg.ProjectID) != "" {
+		return cfg.ProjectID
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	return filepath.Base(abs)
+}
 
 // version es la versión del binario. Se inyecta en el release vía
 // -ldflags "-X main.version=<tag>"; en builds locales queda "dev".
@@ -206,6 +221,8 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 	defer engine.Close()
+	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).
+	engine.SetProjectID(resolveProjectID(cfg, root))
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
@@ -253,6 +270,8 @@ func runDaemon() {
 		os.Exit(1)
 	}
 	defer engine.Close()
+	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).
+	engine.SetProjectID(resolveProjectID(cfg, root))
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.

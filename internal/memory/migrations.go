@@ -259,6 +259,28 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 10,
+			name:    "observations_scope_project",
+			// Fundación del CEREBRO HÍBRIDO local+central: sin esto una observación no sabe
+			// si es privada del proyecto o compartible a la memoria central, ni de qué
+			// proyecto proviene. Dos columnas aditivas:
+			//   scope      -> 'local' (privada, default) | 'shared' (promovible al cerebro)
+			//   project_id -> proyecto de origen (para atribución/filtrado en F2/F3/F4)
+			// El índice acelera el filtrado por proyecto. Es ADITIVA y BACKWARD-COMPAT: scope
+			// default 'local' + project_id NULL en las filas previas = comportamiento idéntico
+			// al de antes (F1 no sincroniza ni filtra por scope todavía; eso llega en F2/F3/F4).
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`ALTER TABLE observations ADD COLUMN scope TEXT NOT NULL DEFAULT 'local'`); err != nil {
+					return err
+				}
+				if _, err := x.Exec(`ALTER TABLE observations ADD COLUMN project_id TEXT`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_project ON observations(project_id)`)
+				return err
+			},
+		},
 	}
 }
 

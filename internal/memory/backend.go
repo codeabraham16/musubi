@@ -20,12 +20,14 @@ import "context"
 type ObservationStore interface {
 	SaveObservation(id, topicKey, content string, embedding []float32) error
 	SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error
-	SaveObservationTyped(id, topicKey, content string, importance float64, memType string, embedding []float32) error
+	SaveObservationTyped(id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error
 	SaveObservationDeduped(topicKey, content string, importance float64, embedding []float32) (string, bool, error)
-	SaveObservationDedupedTyped(topicKey, content string, importance float64, memType string, embedding []float32) (string, bool, error)
+	SaveObservationDedupedTyped(topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
+	// PromoteObservation marca una observación como 'shared' (memoria híbrida local+central).
+	PromoteObservation(id string) error
 }
 
 // RecallEngine — recall por presupuesto de tokens (model-free, híbrido FTS + ranking).

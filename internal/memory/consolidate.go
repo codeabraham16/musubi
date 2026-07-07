@@ -39,7 +39,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	// prime, context y conflicts). No tocar una observación ya oculta del recall.
 	rows, err := e.db.Query(`
 		SELECT id, content, access_count, importance, COALESCE(created_at,'')
-		FROM observations WHERE archived = 0 AND superseded_by IS NULL
+		FROM observations WHERE ` + visibleObsPredicate + `
 	`)
 	if err != nil {
 		return ConsolidateResult{}, fmt.Errorf("error al listar observaciones: %w", err)
@@ -122,7 +122,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 			}
 			for _, ki := range touched {
 				ov := overlap[ki]
-				overlap[ki] = 0                          // reset para la próxima observación
+				overlap[ki] = 0                         // reset para la próxima observación
 				denom := len(tg) + len(keptTg[ki]) - ov // |A| + |B| - |A∩B|
 				if denom <= 0 {
 					continue

@@ -35,7 +35,16 @@ type DbEngine struct {
 	lifecycleMu sync.Mutex
 	closed      bool
 	bgWG        sync.WaitGroup
+	// projectID es el proyecto de origen que se estampa en cada observación guardada
+	// (columna project_id) para la memoria híbrida local+central. Lo inyecta el
+	// entrypoint tras cargar la config (ver SetProjectID). "" = sin atribución (NULL-like).
+	projectID string
 }
+
+// SetProjectID fija el proyecto de origen que saveObservation estampa en cada
+// observación. Lo llama el entrypoint (serve/daemon) tras resolver el project_id de la
+// config o del directorio del workspace. Idempotente y barato; no toca la base.
+func (e *DbEngine) SetProjectID(id string) { e.projectID = id }
 
 // spawnBackground lanza f como goroutine RASTREADA por bgWG, salvo que el engine ya
 // esté cerrado. Devuelve true si la lanzó. El registro en bgWG ocurre bajo

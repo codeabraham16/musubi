@@ -50,21 +50,21 @@ func TestMemTypeSalienceWeight(t *testing.T) {
 // Escenarios a/b/c: persistencia del mem_type normalizado al guardar.
 func TestSaveObservationTypedPersistsMemType(t *testing.T) {
 	e := newTestEngine(t)
-	if err := e.SaveObservationTyped("a", "t", "un evento de hoy", 1.0, "Episodic", nil); err != nil {
+	if err := e.SaveObservationTyped("a", "t", "un evento de hoy", 1.0, "Episodic", ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := memTypeOf(t, e, "a"); got != MemEpisodic {
 		t.Errorf("(a) mem_type='Episodic' debe persistir 'episodic', obtuve %q", got)
 	}
 	// Sin tipo.
-	if err := e.SaveObservationTyped("b", "t", "algo sin tipo", 1.0, "", nil); err != nil {
+	if err := e.SaveObservationTyped("b", "t", "algo sin tipo", 1.0, "", ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := memTypeOf(t, e, "b"); got != "" {
 		t.Errorf("(b) mem_type='' debe persistir '' (sin tipo), obtuve %q", got)
 	}
 	// Basura → sin tipo.
-	if err := e.SaveObservationTyped("c", "t", "tipo invalido", 1.0, "foo", nil); err != nil {
+	if err := e.SaveObservationTyped("c", "t", "tipo invalido", 1.0, "foo", ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := memTypeOf(t, e, "c"); got != "" {
@@ -75,14 +75,14 @@ func TestSaveObservationTypedPersistsMemType(t *testing.T) {
 // Escenario f: UPSERT por id actualiza el mem_type.
 func TestSaveObservationTypedUpsertUpdatesMemType(t *testing.T) {
 	e := newTestEngine(t)
-	if err := e.SaveObservationTyped("x", "t", "primero episodic", 1.0, MemEpisodic, nil); err != nil {
+	if err := e.SaveObservationTyped("x", "t", "primero episodic", 1.0, MemEpisodic, ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := memTypeOf(t, e, "x"); got != MemEpisodic {
 		t.Fatalf("mem_type inicial debe ser episodic, obtuve %q", got)
 	}
 	// Re-guardar el mismo id como procedural.
-	if err := e.SaveObservationTyped("x", "t", "ahora procedural", 1.0, MemProcedural, nil); err != nil {
+	if err := e.SaveObservationTyped("x", "t", "ahora procedural", 1.0, MemProcedural, ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := memTypeOf(t, e, "x"); got != MemProcedural {
@@ -94,7 +94,7 @@ func TestSaveObservationTypedUpsertUpdatesMemType(t *testing.T) {
 // un guardado tipado (preservación de clasificación en UPSERT).
 func TestUntypedUpsertPreservesMemType(t *testing.T) {
 	e := newTestEngine(t)
-	if err := e.SaveObservationTyped("k", "t", "clasificada procedural", 1.0, MemProcedural, nil); err != nil {
+	if err := e.SaveObservationTyped("k", "t", "clasificada procedural", 1.0, MemProcedural, ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Update por la vía histórica (untyped): cambia contenido/importancia, NO el tipo.
@@ -117,7 +117,7 @@ func TestDecayDifferentialByMemType(t *testing.T) {
 	for _, tc := range []struct{ id, mt string }{
 		{"epi", MemEpisodic}, {"sem", MemSemantic}, {"pro", MemProcedural},
 	} {
-		if err := e.SaveObservationTyped(tc.id, "t", "contenido "+tc.id, 1.0, tc.mt, nil); err != nil {
+		if err := e.SaveObservationTyped(tc.id, "t", "contenido "+tc.id, 1.0, tc.mt, ScopeLocal, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -156,7 +156,7 @@ func TestDecayUntypedEqualsSemantic(t *testing.T) {
 	if err := e.SaveObservation("untyped", "t", "sin tipo declarado", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.SaveObservationTyped("semantic", "t", "tipo semantic", 1.0, MemSemantic, nil); err != nil {
+	if err := e.SaveObservationTyped("semantic", "t", "tipo semantic", 1.0, MemSemantic, ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A 400 días ambas caen muy por debajo de cualquier umbral razonable.

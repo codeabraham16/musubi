@@ -784,6 +784,22 @@
           }
         }
       }
+    },
+    {
+      "name": "musubi_promote",
+      "description": "Promueve una observación LOCAL (privada del proyecto) a SHARED, marcándola como candidata a la memoria central del cerebro híbrido. Es idempotente: promover una ya compartida es un no-op exitoso. Requiere el id de la observación (el que devuelve musubi_save_observation o un recall). No sincroniza nada por sí solo: sólo cambia el scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID de la observación a promover a 'shared'"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
     }
   ]
 }

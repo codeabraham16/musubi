@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,6 +114,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		Content    string  `json:"content"`
 		Importance float64 `json:"importance"`
 		MemType    string  `json:"mem_type"`
+		Scope      string  `json:"scope"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -122,6 +124,15 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	}
 	if strings.TrimSpace(args.Content) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "content es obligatorio")
+	}
+	// scope de la memoria híbrida: "" (default local), "local" o "shared". Cualquier otro
+	// valor es un error de parámetro (no se coacciona silenciosamente).
+	if !memory.ValidScopeParam(args.Scope) {
+		return nil, rpcErrorf(codeInvalidParams, "scope inválido %q: usá 'local' o 'shared'", args.Scope)
+	}
+	scope := args.Scope
+	if scope == "" {
+		scope = memory.ScopeLocal
 	}
 	importance := args.Importance
 	if importance <= 0 {
@@ -141,7 +152,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTyped(args.TopicKey, args.Content, importance, args.MemType, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTyped(args.TopicKey, args.Content, importance, args.MemType, scope, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -152,10 +163,32 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationTyped(args.ID, args.TopicKey, args.Content, importance, args.MemType, emb); err != nil {
+	if err := s.engine.SaveObservationTyped(args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
+}
+
+// toolPromote marca una observación como 'shared' (memoria híbrida local+central). Muta,
+// así que va bajo el lock exclusivo del dispatch (readOnly=false). Idempotente: promover
+// una ya compartida es OK; un id inexistente devuelve un error claro.
+func (s *McpServer) toolPromote(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.ID) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "id es obligatorio")
+	}
+	if err := s.engine.PromoteObservation(args.ID); err != nil {
+		if errors.Is(err, memory.ErrObservationNotFound) {
+			return nil, rpcErrorf(codeInvalidParams, "no existe una observación con id %q", args.ID)
+		}
+		return nil, rpcErrorf(codeInternalError, "error al promover observación: %v", err)
+	}
+	return textResult("Observación promovida a 'shared' (id: " + args.ID + "); ahora es candidata a la memoria central."), nil
 }
 
 // detectAndSurface corre la detección de conflictos para la observación recién

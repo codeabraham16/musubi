@@ -313,7 +313,7 @@ func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candida
 			SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 			FROM observations o
-			WHERE o.archived = 0 AND o.superseded_by IS NULL AND o.id IN (`+strings.Join(ph, ",")+`)
+			WHERE `+visibleObsPredicate+` AND o.id IN (`+strings.Join(ph, ",")+`)
 		`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("error al traer candidatos del pool vectorial: %w", err)
@@ -430,7 +430,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ? AND o.archived = 0 AND o.superseded_by IS NULL
+		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
 		ORDER BY rank
 		LIMIT ?
 	`, ftsQuery, limit)
@@ -447,7 +447,7 @@ func (e *DbEngine) recentCandidates(ctx context.Context, limit int) ([]candidate
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
 		FROM observations o
-		WHERE o.archived = 0 AND o.superseded_by IS NULL
+		WHERE `+visibleObsPredicate+`
 		ORDER BY COALESCE(o.last_accessed, o.created_at) DESC
 		LIMIT ?
 	`, limit)
