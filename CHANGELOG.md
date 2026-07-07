@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Captura automática C1 — captura proactiva (el cerebro aprende mientras trabajás).** Musubi ya
+  RECUPERA memoria solo; ahora también **empuja a capturarla sola**. El hook SessionStart inyecta un
+  bloque conciso (`startup_capture`) que instruye al agente a **guardar por su cuenta, sin que se lo
+  pidan**, los aprendizajes durables — **decisiones** (el porqué), **gotchas**, **estado del trabajo**
+  y **hechos de código** — con las tools correctas y con criterio de salencia (solo lo reusable/no-obvio,
+  nada de trivialidades); además **desambigua "shared"** = memoria compartida del cerebro, NO un tag ni
+  commit de git. El recordatorio por turno pasa a ser **prescriptivo** (nombra qué capturar, no solo el
+  conteo). El bloque **respeta el hook silencioso**: viaja solo cuando el arranque ya tiene algo que
+  decir. La extracción la hace el agente (que es el LLM), no Musubi — costo LLM cero, coherente con el
+  diseño model-free. Es la Fase 1 del track de captura automática; la captura es **local** (compartir al
+  cerebro llega en una fase posterior, detrás de la redacción de secretos). Aditivo: sin tools nuevas, golden intacto.
 - **PC auto-configurable P1 — `musubi provision` (unir una máquina al cerebro).** Nuevo subcomando que
   lleva un equipo a estar **unido al cerebro central** en un comando, idempotente y cross-platform. El
   corazón es un **preflight de red VPN-agnóstico**: sonda dos caminos (un destino público de control por IP

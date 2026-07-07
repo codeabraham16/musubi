@@ -255,6 +255,22 @@ func TestHookSinCambiosNiMemoria(t *testing.T) {
 	}
 }
 
+func TestCapturePrimingContent(t *testing.T) {
+	s := buildCapturePriming()
+	// R2 (4 clases + tools), R3 (salencia), R4 (shared≠git), R1 (proactivo).
+	for _, want := range []string{
+		"sin que te lo pidan",
+		"Decisiones", "gotchas", "Estado del trabajo",
+		"musubi_save_observation", "musubi_save_fact", "musubi_save_code",
+		"REUSABLE", "trivialidades",
+		"NO un tag ni un commit de git",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("buildCapturePriming() debería contener %q", want)
+		}
+	}
+}
+
 func TestHookPrimingInyectado(t *testing.T) {
 	dir := crearGoProject(t)
 	crearSentinel(t, dir)
