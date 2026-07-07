@@ -23,7 +23,7 @@ func TestStemForPrefix(t *testing.T) {
 		}
 	}
 	// Determinismo.
-	if stemForPrefix("deployments") != stemForPrefix("deployments") {
+	if a, b := stemForPrefix("deployments"), stemForPrefix("deployments"); a != b {
 		t.Error("stemForPrefix no determinista")
 	}
 	// Nunca recorta por debajo de 4 runas (no over-stemmea 'ados' de 'todos'→'t').
