@@ -1,9 +1,12 @@
 package memory
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+
+	"musubi/internal/redact"
 )
 
 // scope.go es la fundación del CEREBRO HÍBRIDO local+central (F1): el modelo de SCOPE de
@@ -64,16 +67,23 @@ func (e *DbEngine) PromoteObservation(id string) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE observations SET scope=? WHERE id=?`, ScopeShared, id)
-	if err != nil {
+	// Redacción de secretos al cruzar a 'shared' (C2): un secreto que vivía en una obs local no
+	// debe viajar al cerebro compartido. Se lee el contenido, se redacta, y se reescribe junto con
+	// gist/hash/tokens derivados del texto limpio. Idempotente: redactar algo ya redactado es no-op
+	// (el hash no cambia ⇒ el outbox no re-encola).
+	var content string
+	if err := tx.QueryRow(`SELECT content FROM observations WHERE id=?`, id).Scan(&content); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrObservationNotFound, id)
+		}
+		return fmt.Errorf("error al leer observación a promover: %w", err)
+	}
+	clean, _ := redact.Redact(content)
+	if _, err := tx.Exec(
+		`UPDATE observations SET scope=?, content=?, gist=?, content_hash=?, tokens=? WHERE id=?`,
+		ScopeShared, clean, Gist(clean, defaultGistMaxTokens), ContentHash(clean), EstimateTokens(clean), id,
+	); err != nil {
 		return fmt.Errorf("error al promover observación: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("error al leer filas afectadas al promover: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrObservationNotFound, id)
 	}
 	// Encolar en el outbox dentro de la misma tx (ahora la obs ya es 'shared', así que el
 	// INSERT..SELECT sí produce fila). Idempotente por obs_id.

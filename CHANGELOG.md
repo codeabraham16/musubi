@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Captura automática C2 — redacción de secretos en el borde a `shared` (más seguro que el SOTA).** Como la
+  captura es **shared-by-default**, un secreto que el agente capture no debe terminar en el cerebro que ve
+  todo el equipo. Nuevo paquete `internal/redact` (model-free, **sin dependencias nuevas**): `Redact(text)`
+  combina **reglas por forma** (AWS/GitHub/Stripe/Google/JWT/PEM/bearer/`KEY=valor`, RE2) con un **catch-all
+  de entropía de Shannon** para formatos desconocidos, respetando una allowlist de placeholders (y **sin
+  tocar git SHAs**). La guarda se aplica **en el borde donde una observación se vuelve `shared`**
+  (`saveObservation` con scope shared y `PromoteObservation`): el contenido se limpia ANTES de persistir, y
+  como el outbox reconstruye el payload desde la fila, **nada sin redactar cruza al central por ninguna ruta**.
+  La memoria **`local` queda intacta** (los secretos pueden vivir en tu propia máquina; se limpian solo al
+  compartir). Ningún competidor (Mem0/Letta/Zep/Copilot) documenta redacción. Aditivo: sin deps, sin tools
+  nuevas, golden intacto.
 - **PC auto-configurable P1 — `musubi provision` (unir una máquina al cerebro).** Nuevo subcomando que
   lleva un equipo a estar **unido al cerebro central** en un comando, idempotente y cross-platform. El
   corazón es un **preflight de red VPN-agnóstico**: sonda dos caminos (un destino público de control por IP
