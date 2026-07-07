@@ -202,6 +202,14 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 		}
 	}
 
+	// Cerebro híbrido F2: encolar en el OUTBOX dentro de la MISMA tx del UPSERT. El statement
+	// es un no-op si la fila NO quedó 'shared' (el caso común 'local'): sólo las observaciones
+	// compartidas se sincronizan al central. Idempotente por obs_id (re-save no duplica; sólo
+	// re-encola si el content_hash cambió). Va antes del Commit para ser atómico con el guardado.
+	if err := enqueueOutboxTx(tx, id); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear observación: %w", err)
 	}

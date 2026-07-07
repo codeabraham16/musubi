@@ -10,6 +10,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math/rand"
 	"time"
 
 	"musubi/internal/logx"
@@ -124,4 +126,107 @@ func (s *McpServer) RunMaintenanceScheduler(ctx context.Context, interval time.D
 			}
 		}
 	}
+}
+
+// RunOutboxScheduler drena el OUTBOX del cerebro híbrido (F2) en un ticker periódico hasta
+// que ctx se cancela. Es el GEMELO de RunMaintenanceScheduler pero NO toma dispatchMu: el
+// drain hace I/O de red (segundos por fila) y tomar el lock global congelaría todas las tools
+// (D8/R6). El claim y los marks son transacciones cortas del engine (thread-safe por sí solas);
+// el POST ocurre entre medio, fuera de todo lock. interval<=0 o syncClient nil desactivan el
+// drain. Pensado para correr en su propia goroutine; bloquea hasta la cancelación.
+func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 || s.syncClient == nil {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.drainOutboxOnce(ctx)
+		}
+	}
+}
+
+// drainOutboxOnce reclama un batch del outbox y empuja cada fila al central, aplicando el
+// resultado (sent / retry con backoff / dead). Best-effort: un fallo de una fila no aborta el
+// batch. Cada item trae Attempts (intentos ya fallidos): un fallo transitorio va a dead cuando
+// se alcanzó max_attempts, si no se reprograma con backoff exponencial+jitter; un fallo
+// permanente va directo a dead (R11-R13). El ctx corta el barrido a mitad si hay shutdown.
+func (s *McpServer) drainOutboxOnce(ctx context.Context) {
+	items, err := s.engine.ClaimOutboxBatch(s.syncCfg.BatchSize, s.syncCfg.LeaseSeconds)
+	if err != nil {
+		logx.Error("drain: no se pudo reclamar el batch del outbox", "error", err)
+		return
+	}
+	for _, item := range items {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		perr := s.syncClient.Push(item)
+		if perr == nil {
+			if merr := s.engine.MarkOutboxSent(item.ObsID); merr != nil {
+				logx.Error("drain: no se pudo marcar como enviado", "obs_id", item.ObsID, "error", merr)
+			}
+			continue
+		}
+		// Fallo permanente (params/auth) → dead-letter sin reintentar. También si el
+		// intento recién fallado alcanzó el tope de reintentos configurado.
+		attemptsSoFar := item.Attempts + 1
+		if errors.Is(perr, errPermanent) || attemptsSoFar >= s.syncCfg.MaxAttempts {
+			if merr := s.engine.MarkOutboxDead(item.ObsID, perr.Error()); merr != nil {
+				logx.Error("drain: no se pudo marcar como dead", "obs_id", item.ObsID, "error", merr)
+			}
+			continue
+		}
+		// Fallo transitorio con margen: reprogramar con backoff exponencial + jitter.
+		backoff := backoffSeconds(attemptsSoFar, s.syncCfg.BackoffBaseSeconds, s.syncCfg.BackoffMaxSeconds)
+		if merr := s.engine.MarkOutboxRetry(item.ObsID, backoff, perr.Error()); merr != nil {
+			logx.Error("drain: no se pudo reprogramar el reintento", "obs_id", item.ObsID, "error", merr)
+		}
+	}
+}
+
+// backoffSeconds calcula el backoff del n-ésimo intento (n>=1): exponencial base*2^(n-1),
+// acotado por max, más un jitter de hasta +20% (D9). El jitter evita el thundering herd
+// cuando muchas filas vencen juntas al recuperarse la red. El resultado queda garantizado en
+// [base*2^(n-1), base*2^(n-1)*1.2], siempre acotado por max (rango verificable en tests).
+func backoffSeconds(attempts, base, max int) int {
+	if base <= 0 {
+		base = 5
+	}
+	if max <= 0 {
+		max = 300
+	}
+	n := attempts
+	if n < 1 {
+		n = 1
+	}
+	// exp = base * 2^(n-1) con saturación temprana a max para no desbordar en caídas largas.
+	exp := base
+	for i := 1; i < n; i++ {
+		exp *= 2
+		if exp >= max {
+			exp = max
+			break
+		}
+	}
+	if exp > max {
+		exp = max
+	}
+	// Jitter en [0, 20%] del valor base, sin superar max (mantiene el resultado acotado).
+	jitterCap := exp / 5
+	jitter := 0
+	if jitterCap > 0 {
+		jitter = rand.Intn(jitterCap + 1)
+	}
+	v := exp + jitter
+	if v > max {
+		v = max
+	}
+	return v
 }

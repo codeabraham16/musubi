@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 	"musubi/internal/config"
+	"musubi/internal/logx"
 	"os"
 	"path/filepath"
 	"sync"
@@ -117,6 +118,16 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	if err := engine.recomputeTokensIfEstimatorChanged(); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// Cerebro híbrido F2: sembrar el OUTBOX para las observaciones 'shared' que aún no tienen
+	// fila (las creadas en F1 antes de que existiera el outbox, o promovidas con el sync
+	// apagado). Best-effort: un fallo acá NO es fatal (igual que el backfill de digests): la
+	// DB sigue usable y el próximo arranque reintenta; a lo sumo se demora una sincronización.
+	if seeded, bErr := engine.BackfillOutbox(); bErr != nil {
+		logx.Warn("no se pudo sembrar el outbox al abrir la base", "error", bErr)
+	} else if seeded > 0 {
+		logx.Info("outbox sembrado con observaciones compartidas preexistentes", "sembradas", seeded)
 	}
 
 	// Índice vectorial IVF para búsqueda semántica a escala (T1.2). Se configura

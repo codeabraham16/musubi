@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cerebro híbrido F2 — outbox durable + cliente de sync saliente (offline-first).** El conocimiento
+  marcado `shared` (F1) ahora **viaja al cerebro central** por su cuenta. Cuando una observación se promueve
+  o se guarda como `shared`, se encola una fila en una **tabla `outbox` durable** (migración v11, aditiva)
+  **dentro de la misma transacción** que cambia el scope (*transactional outbox*: o quedan ambos o ninguno).
+  Un **scheduler de drain** —arrancado en `daemon` y en `serve`, que **no toma el lock de dispatch**—
+  reclama lotes con un `UPDATE … RETURNING` atómico (lease sobre `next_attempt_at`, con auto-recuperación
+  de reclamos colgados) y los empuja al `musubi serve` central vía JSON-RPC `tools/call` →
+  `musubi_save_observation` remoto, con el `id` de la observación como clave: la re-entrega es un no-op
+  gracias al UPSERT `ON CONFLICT(id)` del receptor (**at-least-once con efecto exactly-once**). Es
+  **offline-first**: si el central está caído la fila queda `pending` con *backoff* exponencial (jitter,
+  tope) y drena sola al recuperarse; los errores permanentes (4xx) o el tope de reintentos van a
+  *dead-letter* (`status='dead'`). Un **backfill** idempotente al abrir la DB siembra el outbox con las
+  `shared` que ya existían de F1. El re-sync ante cambio de contenido se detecta por `content_hash`. Config
+  nueva bajo `sync:` (`enabled` —**off por default**—, `central_url`, `auth_token_env` —el token **nunca**
+  en el YAML, siempre por env var—, `drain_interval_seconds`, `batch_size`, `max_attempts`,
+  `backoff_base/max_seconds`, `lease_seconds`, `allow_insecure_token`). Cero dependencias nuevas; el set de
+  tools MCP no cambia; con `sync.enabled=false` el comportamiento es idéntico al de antes. Es la Fase 2 del
+  track de 5 (F3 central multi-proyecto, F4 federated recall, F5 hardening).
 - **Cerebro híbrido F1 — modelo de `scope` (local/shared) + `project_id` en la memoria.** Fundación del
   cerebro central compartido: cada observación lleva ahora un `scope` (`local`, default = comportamiento
   histórico; o `shared`, candidata a sincronizarse con el cerebro central en fases siguientes) y un

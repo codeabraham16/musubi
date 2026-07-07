@@ -236,6 +236,11 @@ func runServe(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Cerebro híbrido F2: si el sync saliente está activo, arrancar el drain del outbox que
+	// empuja las observaciones 'shared' al cerebro central. El ctx (SIGINT/SIGTERM) también
+	// para el drain. Best-effort: un error de config del cliente NO impide arrancar el serve.
+	startOutboxDrain(ctx, server, cfg.Sync)
+
 	if err := server.ListenAndServeHTTP(ctx, svc); err != nil {
 		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
 		os.Exit(1)
@@ -311,6 +316,10 @@ func runDaemon() {
 		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
 	}
 
+	// Cerebro híbrido F2: drain del outbox (sync saliente) también en el daemon (stdio). El
+	// maintCtx (cancelado al retornar de runDaemon por señal o EOF) también lo detiene.
+	startOutboxDrain(maintCtx, server, cfg.Sync)
+
 	// Capturar SIGINT/SIGTERM para graceful shutdown: el select espera hasta que el
 	// servidor termine (EOF de stdin) o llegue una señal. En ambos casos se retorna
 	// de runDaemon y el defer engine.Close() cierra la DB limpiamente.
@@ -328,4 +337,24 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "musubi: señal %v recibida, cerrando\n", sig)
 	case <-done:
 	}
+}
+
+// startOutboxDrain arranca el drain del outbox (sync saliente del cerebro híbrido, F2) si está
+// configurado: requiere sync.enabled, un central_url no vacío y un intervalo > 0. Construye el
+// SyncClient desde cfg.Sync (resuelve el token de la env var, valida https/allow_insecure), lo
+// inyecta en el server y lanza RunOutboxScheduler en su propia goroutine atada a ctx. Es
+// best-effort y compartido por runServe y runDaemon: un error de construcción del cliente NO
+// aborta el arranque (se avisa por stderr y el server sigue local-first). Con sync desactivado
+// es un no-op total (comportamiento idéntico al de antes de F2).
+func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.SyncConfig) {
+	if !cfg.Enabled || strings.TrimSpace(cfg.CentralURL) == "" || cfg.DrainIntervalSeconds <= 0 {
+		return
+	}
+	client, err := mcp.NewSyncClient(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: sync saliente desactivado (config inválida): %v\n", err)
+		return
+	}
+	server.SetSyncClient(client, cfg)
+	go server.RunOutboxScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
 }
