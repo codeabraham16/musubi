@@ -51,24 +51,21 @@ visible para el usuario, agregá una entrada en la sección `[Unreleased]` de
 
 ## Publicar un release
 
-1. Pasá el contenido de `[Unreleased]` a una sección `[X.Y.Z]` con fecha en `CHANGELOG.md`
+La versión tiene **una sola fuente de verdad**: el archivo [`VERSION`](VERSION) en la raíz.
+De ahí se deriva todo — el tag (verificado en el release), `versioninfo.json` (verificado
+por test) y `musubi version` (inyectado desde el tag). No hay que sincronizarlas a mano.
+
+1. Bumpeá **`VERSION`** a `X.Y.Z` y actualizá **`cmd/musubi/versioninfo.json`** para que
+   coincida (campos numéricos de `FixedFileInfo` y las cadenas `FileVersion`/`ProductVersion`
+   de `StringFileInfo`, que llevan un cuarto componente: `X.Y.Z.0`). El test
+   `TestVersioninfoMatchesVERSION` falla si divergen. **No edites los `.syso` a mano**:
+   `release.yml` los regenera desde `versioninfo.json` con `goversioninfo` pineado.
+2. Pasá el contenido de `[Unreleased]` a una sección `[X.Y.Z]` con fecha en `CHANGELOG.md`
    y actualizá los links de comparación al final del archivo.
-2. Actualizá la versión embebida en el `.exe` de Windows: editá
-   [`cmd/musubi/versioninfo.json`](cmd/musubi/versioninfo.json) (campos `FileVersion`,
-   `ProductVersion`, `FileVersion`/`ProductVersion` de `StringFileInfo`) y regenerá los
-   recursos:
-
-   ```bash
-   go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest  # una vez
-   cd cmd/musubi && go generate ./...   # regenera rsrc_windows_*.syso
-   ```
-
-   `versioninfo.json` es la única fuente de verdad: **no edites los `.syso` a mano.** La
-   versión que reporta `musubi version` se inyecta aparte desde el tag de git, así que es
-   correcta aunque el `.syso` quede desactualizado (solo afecta las propiedades del `.exe`).
 3. Commiteá, mergeá a `main` y creá el tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
-   El workflow [`release.yml`](.github/workflows/release.yml) compila los binarios
-   cross-platform (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256 y publica el release.
+   El workflow [`release.yml`](.github/workflows/release.yml) **aborta si el tag no coincide
+   con `VERSION`**, regenera el recurso de Windows y compila los binarios cross-platform
+   (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256, y publica el release.
 
 ## Licencia
 

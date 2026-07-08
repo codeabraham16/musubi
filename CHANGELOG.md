@@ -7,7 +7,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-07-08
+
 ### Added
+- **Fuente única de versión + release verificable (Track 16 / Producible 16.0a).** La versión vivía en dos
+  lugares que derivaron: el tag de git (vía `-ldflags -X main.version`) y `cmd/musubi/versioninfo.json` (el
+  recurso de Windows), que quedó congelado en `0.57.0.0` con el proyecto en `0.78` porque el paso manual de
+  regenerarlo se saltó ~20 releases. Ahora hay un archivo **`VERSION`** como fuente ÚNICA: un test
+  (`TestVersioninfoMatchesVERSION`) falla si `versioninfo.json` diverge de `VERSION`, y `release.yml` **aborta
+  el release** si el tag no coincide con `VERSION` y **regenera el `.syso`** desde `versioninfo.json` con
+  `goversioninfo` pineado (`@v1.4.0`) — el `.exe` de Windows ya no puede reportar una versión vieja. Cierra el
+  hallazgo *high* «release no cortada / versión con dos fuentes de verdad divergentes» de la auditoría
+  (`audit/2026-07-08`).
 - **Guarda de compatibilidad de esquema hacia adelante (Track 16 / Producible 16.0c).** Un binario viejo que
   abría una base migrada por uno más nuevo antes corría un no-op silencioso y operaba a ciegas sobre columnas/
   tablas que no conocía — riesgo de corrupción lógica en una flota mixta (laptop/PC/central con binarios de
@@ -1714,7 +1725,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.78.0...HEAD
+[0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/codeabraham16/musubi/compare/v0.42.0...v0.43.0
