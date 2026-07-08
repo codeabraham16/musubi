@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -40,6 +42,38 @@ func (e *DbEngine) ResolveTelemetryLog(id int) error {
 		return fmt.Errorf("no existe log de telemetría con id %d", id)
 	}
 	return nil
+}
+
+// ResolveTelemetryLogAndGet marca el log id como resuelto Y devuelve su contenido (para que el
+// caller pueda capturar el par error→fix como memoria, C4). Atómico (una tx): SELECT la fila y,
+// si existe, UPDATE resolved=1. Si el id no existe devuelve found=false (sin error), para que el
+// handler traduzca al mismo error que hoy. La variante ResolveTelemetryLog(id) se mantiene.
+func (e *DbEngine) ResolveTelemetryLogAndGet(id int) (TelemetryLog, bool, error) {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return TelemetryLog{}, false, fmt.Errorf("error al iniciar tx de telemetría: %w", err)
+	}
+	defer tx.Rollback()
+
+	var log TelemetryLog
+	var resolvedInt int
+	err = tx.QueryRow(
+		`SELECT id, file_path, error_message, suggested_patch, resolved, created_at FROM telemetry_logs WHERE id = ?`, id,
+	).Scan(&log.ID, &log.FilePath, &log.ErrorMessage, &log.SuggestedPatch, &resolvedInt, &log.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TelemetryLog{}, false, nil
+	}
+	if err != nil {
+		return TelemetryLog{}, false, fmt.Errorf("error al leer log de telemetría: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE telemetry_logs SET resolved = 1 WHERE id = ?`, id); err != nil {
+		return TelemetryLog{}, false, fmt.Errorf("error al resolver log de telemetría: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return TelemetryLog{}, false, fmt.Errorf("error al commitear resolución de telemetría: %w", err)
+	}
+	log.Resolved = true
+	return log, true, nil
 }
 
 // telemetryPathKey normaliza una ruta para matchear telemetría: minúsculas y separadores
