@@ -239,6 +239,10 @@ func runServe(args []string) {
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
 	if embedding.Enabled(embedder) {
+		// Procedencia del vector (F2.2): cada embedding que escriba este engine lleva este
+		// model_id, y la búsqueda semántica sólo compara vectores de la misma procedencia
+		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
+		engine.SetVectorModelID(embedder.Name())
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
 	}
 
@@ -293,6 +297,10 @@ func runDaemon() {
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
 	if embedding.Enabled(embedder) {
+		// Procedencia del vector (F2.2): cada embedding que escriba este engine lleva este
+		// model_id, y la búsqueda semántica sólo compara vectores de la misma procedencia
+		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
+		engine.SetVectorModelID(embedder.Name())
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
 	}
 

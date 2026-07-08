@@ -40,12 +40,26 @@ type DbEngine struct {
 	// (columna project_id) para la memoria híbrida local+central. Lo inyecta el
 	// entrypoint tras cargar la config (ver SetProjectID). "" = sin atribución (NULL-like).
 	projectID string
+	// vectorModelID es la PROCEDENCIA que se estampa en cada embedding que escribe este
+	// engine (columna embeddings.model_id, Track 16 F2.2). Como un engine usa UN solo
+	// embedder, todos sus vectores comparten procedencia; la búsqueda exacta sólo compara
+	// vectores de esta misma procedencia (regla de homogeneidad). Lo inyecta el entrypoint
+	// con el Name() del provider (ver SetVectorModelID). "" = procedencia desconocida.
+	vectorModelID string
 }
 
 // SetProjectID fija el proyecto de origen que saveObservation estampa en cada
 // observación. Lo llama el entrypoint (serve/daemon) tras resolver el project_id de la
 // config o del directorio del workspace. Idempotente y barato; no toca la base.
 func (e *DbEngine) SetProjectID(id string) { e.projectID = id }
+
+// SetVectorModelID fija la procedencia (model_id del embedder) que saveObservation
+// estampa en cada embedding, y contra la que la búsqueda semántica filtra por
+// homogeneidad. Lo llama el entrypoint al cablear el engine con su provider, ANTES de
+// servir pedidos (así el write es visible a las goroutines de request sin carrera).
+// "" ⇒ procedencia desconocida (sin embedder nombrado); no cambia el comportamiento
+// histórico porque un engine con "" sólo compara contra vectores con model_id "".
+func (e *DbEngine) SetVectorModelID(modelID string) { e.vectorModelID = modelID }
 
 // spawnBackground lanza f como goroutine RASTREADA por bgWG, salvo que el engine ya
 // esté cerrado. Devuelve true si la lanzó. El registro en bgWG ocurre bajo
