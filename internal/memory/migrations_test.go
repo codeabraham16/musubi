@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,6 +179,44 @@ func TestApplyMigrationsRollsBackOnFailure(t *testing.T) {
 	// v1 aplicó OK (user_version=1); v2 falló y revirtió, así que NO llega a 2.
 	if v != 1 {
 		t.Errorf("user_version=%d tras fallo en v2, esperaba 1 (v1 commiteada, v2 revertida)", v)
+	}
+}
+
+// TestApplyMigrationsRefusesNewerSchema valida la guarda de compatibilidad hacia
+// adelante: si la base está en un esquema MÁS NUEVO que el que el binario conoce
+// (user_version > última migración), applyMigrations se niega con ErrSchemaTooNew en
+// vez de abrir a ciegas. Simula un binario viejo abriendo una DB migrada por uno nuevo.
+func TestApplyMigrationsRefusesNewerSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "newer.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// La base dice estar en v9 (migrada por un binario futuro)...
+	if _, err := db.Exec(`PRAGMA user_version = 9`); err != nil {
+		t.Fatal(err)
+	}
+	// ...pero este "binario" solo conoce hasta v2.
+	known := []migration{
+		{version: 1, name: "baseline", up: func(x execQuerier) error { return initSchemaOn(x) }},
+		{version: 2, name: "foo", up: func(x execQuerier) error { return nil }},
+	}
+	err = applyMigrations(db, known)
+	if err == nil {
+		t.Fatal("esperaba que applyMigrations se negara ante un esquema más nuevo")
+	}
+	if !errors.Is(err, ErrSchemaTooNew) {
+		t.Fatalf("esperaba ErrSchemaTooNew, obtuve: %v", err)
+	}
+	// La versión NO se toca (no se degrada ni avanza).
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != 9 {
+		t.Errorf("user_version=%d, esperaba 9 sin cambios", v)
 	}
 }
 

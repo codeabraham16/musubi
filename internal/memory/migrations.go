@@ -2,8 +2,16 @@ package memory
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 )
+
+// ErrSchemaTooNew se devuelve cuando la base fue migrada por un binario MÁS NUEVO
+// (su user_version supera la última migración que este binario conoce). Es una guarda
+// de compatibilidad hacia adelante fail-closed: preferible negarse a abrir que operar a
+// ciegas sobre columnas/tablas desconocidas y arriesgar corrupción lógica en una flota
+// mixta (laptop/PC/central con binarios de distinta versión).
+var ErrSchemaTooNew = errors.New("el esquema de la base es más nuevo que este binario")
 
 // migrations.go implementa el versionado de esquema de Musubi sobre el PRAGMA
 // user_version de SQLite (un entero en el header de la base). Antes el esquema se
@@ -344,6 +352,19 @@ func applyMigrations(db *sql.DB, migs []migration) error {
 	var current int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
 		return fmt.Errorf("error al leer user_version: %w", err)
+	}
+	// Guarda de compatibilidad hacia adelante: si la base ya está en un esquema mayor
+	// que el que este binario conoce, negarse (fail-closed) en vez de operar a ciegas.
+	// Sin esto, un binario viejo abría una DB migrada por uno nuevo y el bucle de abajo
+	// era un no-op silencioso, corriendo sobre columnas/tablas que no entiende.
+	latest := 0
+	for _, m := range migs {
+		if m.version > latest {
+			latest = m.version
+		}
+	}
+	if current > latest {
+		return fmt.Errorf("%w: la base está en el esquema v%d pero este binario solo llega a v%d; actualizá musubi", ErrSchemaTooNew, current, latest)
 	}
 	for _, m := range migs {
 		if m.version <= current {
