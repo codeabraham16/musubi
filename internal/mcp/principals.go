@@ -138,6 +138,20 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 	return nil, false
 }
 
+// recallScopeFor deriva el scope del recall del principal autenticado (16.1c-3): un admin
+// ve FEDERADO (todos los proyectos); un reader/writer con project_id queda ACOTADO a él; sin
+// principal (stdio local) o sin project_id ⇒ sin scope (federado, comportamiento histórico).
+// El project_id sale de la credencial, no lo auto-declara el cliente.
+func recallScopeFor(p *Principal) (projectScope string, federate bool) {
+	if p == nil {
+		return "", false
+	}
+	if p.Role == RoleAdmin {
+		return "", true
+	}
+	return p.ProjectID, false
+}
+
 // canCall decide si el principal puede invocar una tool según su rol. reader solo puede
 // las de solo-lectura; writer y admin pueden todas (admin queda reservado para gatear
 // operaciones destructivas en un paso posterior).
