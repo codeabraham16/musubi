@@ -115,6 +115,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		Importance float64 `json:"importance"`
 		MemType    string  `json:"mem_type"`
 		Scope      string  `json:"scope"`
+		ProjectID  string  `json:"project_id"` // origen (ingest del central); "" ⇒ project_id del engine
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -150,9 +151,10 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		emb = vec
 	}
 
-	// Sin id explícito: deduplicar por contenido y autogenerar UUID.
+	// Sin id explícito: deduplicar por contenido y autogenerar UUID. Se preserva el
+	// project_id de ORIGEN que envía el caller (ingest del central); "" ⇒ el del engine.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTyped(args.TopicKey, args.Content, importance, args.MemType, scope, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(args.ProjectID, args.TopicKey, args.Content, importance, args.MemType, scope, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -163,7 +165,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationTyped(args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
+	if err := s.engine.SaveObservationTypedFrom(args.ProjectID, args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil

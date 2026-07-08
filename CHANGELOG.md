@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Atribución multi-tenant — el central preserva el `project_id` de origen (Track 16 / Producible 16.1a).**
+  Primer paso de la Fase 1 (cerebro multi-tenant). Antes, al ingerir una observación sincronizada, el central
+  estampaba **su propio** `project_id` y descartaba el del proyecto de origen (`saveObservation` usaba siempre
+  `e.projectID`, y `toolSaveObservation` ni leía el campo) — sin atribución no hay sobre qué aislar. Ahora el
+  handler lee `project_id` del payload y lo **preserva**: nuevas variantes `SaveObservationTypedFrom` /
+  `SaveObservationDedupedTypedFrom` estampan el proyecto de ORIGEN (`""` ⇒ el `project_id` del engine, así el
+  guardado local no cambia). El sync client ya enviaba el `project_id`; ahora el central lo respeta. Cimiento del
+  aislamiento por proyecto (16.1b). Backward-compatible: sin cambios en el recall todavía; golden intacto.
+
 - **DR del cerebro central — backup consistente + off-host + runbook de restore (Track 16 / Producible 16.0b).**
   El nodo central es el único punto donde converge la memoria compartida de todos los proyectos; perder su
   `memory.db` sin backup off-host era irreversible. Ahora: (1) el backup usa **`VACUUM INTO`** en vez de copiar
