@@ -141,31 +141,29 @@ Por defecto el central usa **un único bearer** (`MUSUBI_TOKEN`) para todo el eq
 principals**: cada miembro tiene su propio token, con proyecto y rol, revocable borrando una
 línea. El archivo guarda el **SHA-256** del token, nunca el token crudo.
 
-Creá `~/musubi-brain/.musubi/principals.yaml` (o la ruta de `service.principals_file`), 600:
+Gestionalo con **`musubi token`** (genera el token, guarda solo su SHA-256 y mantiene el
+`.musubi/principals.yaml`):
+
+```bash
+# Alta: imprime el token UNA vez — entregáselo al miembro por un canal seguro.
+musubi token new --name alice --project crm-musubi --role writer
+musubi token list                 # nombre / rol / proyecto (nunca el token ni el hash)
+musubi token revoke --name alice  # baja; reiniciá musubi-brain.service para aplicar
+```
+
+El archivo resultante (600, fuera de control de versiones):
 
 ```yaml
 principals:
   - name: alice
-    token_sha256: "<sha256-del-token-de-alice>"
-    project_id: crm-musubi     # aísla su recall a este proyecto (con 16.1c-3)
-    role: writer               # reader (solo lectura) | writer (lee+escribe) | admin
-```
-
-El hash se computa así (el token se genera una vez y se le entrega al miembro por un canal
-seguro; el servidor solo ve el hash):
-
-```bash
-printf %s "EL-TOKEN-DE-ALICE" | sha256sum | cut -d' ' -f1
+    token_sha256: "<sha256-del-token>"   # el servidor solo ve el hash
+    project_id: crm-musubi               # aísla su recall a este proyecto (con 16.1c-3)
+    role: writer                         # reader (solo lectura) | writer (lee+escribe) | admin
 ```
 
 - **Roles:** `reader` solo puede tools de lectura; `writer` lee y escribe; `admin` todo.
-- **Revocar** = borrar la línea y reiniciar `musubi-brain.service`.
 - **Backward-compat:** sin archivo de registro, sigue el modo de un único token. El
   `MUSUBI_TOKEN` legacy sigue válido (como `admin`) aun con registro presente.
-- El archivo es un secreto: `chmod 600`, fuera de control de versiones.
-
-> Un CLI `musubi token new|revoke|list` que genere el token y actualice el registro llega en
-> un paso siguiente; por ahora el hash se computa a mano como arriba.
 
 ## Notas de operación
 

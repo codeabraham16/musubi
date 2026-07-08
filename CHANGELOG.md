@@ -8,6 +8,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **CLI `musubi token` — gestión del registro de principals (Track 16 / Producible 16.1c-2).** Hace usable la
+  identidad por-principal sin computar hashes a mano: **`musubi token new --name X --project Y --role writer`**
+  genera un token opaco (256 bits, prefijo `msb_`), guarda su **SHA-256** en `.musubi/principals.yaml` (nunca el
+  token crudo) y lo imprime **una sola vez** para entregárselo al miembro; **`list`** muestra nombre/rol/proyecto
+  (jamás el hash); **`revoke --name X`** da de baja. Rechaza nombres duplicados y roles inválidos; crea el
+  archivo (600) si falta. El token generado **autentica de una** contra el registro (round-trip verificado).
+  Runbook actualizado en `docs/Server_Brain_Onboarding.md`. Golden intacto.
 - **Identidad por-principal — registro de tokens + autorización por rol (Track 16 / Producible 16.1c-1).**
   Cierra el core del hallazgo **high** _"un único bearer sin identidad/rotación/revocación/authz"_. El central
   puede cargar un **registro de principals** (`.musubi/principals.yaml` o `service.principals_file`) que mapea

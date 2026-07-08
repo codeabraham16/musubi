@@ -42,13 +42,15 @@ type PrincipalRegistry struct {
 	legacyHash string // SHA-256 del MUSUBI_TOKEN legacy (si hay); actúa como admin federado
 }
 
+type principalEntry struct {
+	Name        string `yaml:"name"`
+	TokenSHA256 string `yaml:"token_sha256"`
+	ProjectID   string `yaml:"project_id"`
+	Role        string `yaml:"role"`
+}
+
 type principalsFileYAML struct {
-	Principals []struct {
-		Name        string `yaml:"name"`
-		TokenSHA256 string `yaml:"token_sha256"`
-		ProjectID   string `yaml:"project_id"`
-		Role        string `yaml:"role"`
-	} `yaml:"principals"`
+	Principals []principalEntry `yaml:"principals"`
 }
 
 // hashToken devuelve el SHA-256 hex de un token. Lo usan el registro y (a futuro) el CLI
