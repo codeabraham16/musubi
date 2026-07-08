@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Aislamiento por proyecto en el recall + federación opt-in (Track 16 / Producible 16.1b).** Segundo paso de
+  la Fase 1: el recall puede acotarse a un proyecto. `RecallOptions` suma `ProjectScope` y `Federate` — con
+  scope y sin federate, el recall **descarta los candidatos de otros proyectos** (conserva el proyecto pedido y
+  las filas sin atribuir); `Federate` los vuelve a ver todos (el opt-in del modelo "aislado + federación opt-in"
+  elegido por el usuario). Implementado como **choke point único**: todos los pools (léxico, vectorial,
+  co-ocurrencia) confluyen en `cands`, así que se filtra una sola vez —limpio y sin reescribir 11 queries—
+  llevando el `project_id` del candidato en la fila. **Backward-compatible**: `ProjectScope` vacío ⇒
+  comportamiento histórico (federado) bit-a-bit; el enforcement por defecto lo cableará la identidad (16.1c).
+  Avanza el hallazgo **high** de cross-project bleed (`audit/2026-07-08`). Golden intacto.
 - **Atribución multi-tenant — el central preserva el `project_id` de origen (Track 16 / Producible 16.1a).**
   Primer paso de la Fase 1 (cerebro multi-tenant). Antes, al ingerir una observación sincronizada, el central
   estampaba **su propio** `project_id` y descartaba el del proyecto de origen (`saveObservation` usaba siempre

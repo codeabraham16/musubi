@@ -56,6 +56,14 @@ type RecallOptions struct {
 	// vuelque el orden. Lo usa el recall POR TURNO (la superficie más caliente), que antes
 	// corría FTS crudo. El zero-value (false) preserva el recall histórico del tool bit-a-bit.
 	RankedFTS bool
+	// ProjectScope activa el AISLAMIENTO por proyecto (Track 16 F1 16.1b): si no es vacío y
+	// Federate es false, el recall descarta los candidatos de OTROS proyectos (se conservan
+	// los del proyecto pedido y los sin atribuir). El zero-value ("") NO filtra: comportamiento
+	// histórico (federado) bit-a-bit. El enforcement por defecto lo cablea la identidad (16.1c).
+	ProjectScope string
+	// Federate, si es true, IGNORA ProjectScope y devuelve memoria de todos los proyectos
+	// (recall federado explícito). Es el opt-in del modelo "aislado + federación opt-in".
+	Federate bool
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -89,6 +97,7 @@ type candidate struct {
 	lastAccessed string
 	accessCount  int
 	importance   float64
+	projectID    string // atribución (F1): proyecto de origen; "" = sin atribuir
 }
 
 type scoredCandidate struct {
@@ -136,6 +145,14 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		if err != nil {
 			return RecallResult{}, err
 		}
+	}
+
+	// Aislamiento por proyecto (Track 16 F1 16.1b): CHOKE POINT único. Todos los pools
+	// (léxico, vectorial, co-ocurrencia) confluyen en `cands`; filtrar acá cubre todos de una
+	// vez, antes del grafo y el scoring. Scope vacío o Federate ⇒ NO filtra (federado histórico
+	// bit-a-bit). Se conservan el proyecto pedido y las filas sin atribuir (project_id vacío).
+	if !opts.Federate && opts.ProjectScope != "" {
+		cands = filterCandidatesByProject(cands, opts.ProjectScope)
 	}
 
 	result := RecallResult{Budget: budget, Items: []RecallItem{}}
@@ -311,7 +328,7 @@ func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candida
 		}
 		rows, err := e.db.QueryContext(ctx, `
 			SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
+			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
 			FROM observations o
 			WHERE `+visibleObsPredicate+` AND o.id IN (`+strings.Join(ph, ",")+`)
 		`, args...)
@@ -326,6 +343,23 @@ func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candida
 		out = append(out, part...)
 	}
 	return out, nil
+}
+
+// filterCandidatesByProject conserva los candidatos del proyecto `scope` y los SIN atribuir
+// (project_id vacío: legacy y locales sin estampar, que no son de "otro" proyecto). Es el
+// aislamiento por proyecto del recall (16.1b). scope=="" no debería llegar acá (el caller
+// ya cortocircuita), pero por robustez devuelve todo sin filtrar.
+func filterCandidatesByProject(cands []candidate, scope string) []candidate {
+	if scope == "" {
+		return cands
+	}
+	out := cands[:0]
+	for _, c := range cands {
+		if c.projectID == scope || c.projectID == "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // rankBy devuelve, para cada id, su posición (0 = mejor) según el orden less.
@@ -427,7 +461,7 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
@@ -445,7 +479,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 func (e *DbEngine) recentCandidates(ctx context.Context, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
 		FROM observations o
 		WHERE `+visibleObsPredicate+`
 		ORDER BY COALESCE(o.last_accessed, o.created_at) DESC
@@ -463,7 +497,7 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 	for rows.Next() {
 		var c candidate
 		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
-			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance); err != nil {
+			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID); err != nil {
 			return nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}
 		out = append(out, c)
