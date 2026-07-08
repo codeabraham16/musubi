@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Captura automática C4 — capturar el par error→fix al resolver telemetría.** El par error→fix es *la
+  memoria de código más valiosa*, y Musubi ya lo tenía en la tabla de telemetría (`musubi_log_error` guarda
+  el error + el parche propuesto) pero moría ahí. Ahora, cuando se llama **`musubi_resolve_telemetry`** (el fix
+  se confirmó), se **captura el par como memoria local** — `"Error en <file>: <mensaje> → Arreglado con:
+  <parche>"` (`procedural`, deduplicada) — recuperable por recall. Model-free, best-effort (un fallo de la
+  captura no rompe el resolve), y solo captura si hay un parche registrado (anti-ruido). Queda **local** (al
+  compartir por `promote`, la redacción de C2 lo limpia). **Cierra el track de captura automática (C1 proactiva
+  + C2 redacción + C3 commits + C4 error→fix).** Aditivo: sin tools nuevas, golden intacto.
 - **PC auto-configurable P2 — `musubi provision` deja el proyecto seteado.** P1 conectaba la máquina al
   cerebro; ahora `provision` también **deja el proyecto 100% seteado como Musubi** — workspace `.musubi/`,
   skills cognitivas, templates SDD y los **4 hooks** (SessionStart con el priming de captura proactiva **C1**,

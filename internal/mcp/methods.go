@@ -1400,8 +1400,20 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 		return nil, rpcErrorf(codeInvalidParams, "id debe ser un entero positivo")
 	}
 
-	if err := s.engine.ResolveTelemetryLog(args.ID); err != nil {
+	log, found, err := s.engine.ResolveTelemetryLogAndGet(args.ID)
+	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: %v", err)
+	}
+	if !found {
+		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: no existe log de telemetría con id %d", args.ID)
+	}
+
+	// C4: capturar el par error→fix como memoria LOCAL (best-effort; un fallo NO rompe el resolve).
+	// Solo si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Queda
+	// local; al compartir por promote, la redacción de C2 la limpia.
+	if strings.TrimSpace(log.SuggestedPatch) != "" {
+		content := fmt.Sprintf("Error en %s: %s\n\nArreglado con: %s", log.FilePath, log.ErrorMessage, log.SuggestedPatch)
+		_, _, _ = s.engine.SaveObservationDedupedTyped("error-fix", content, 0.7, "procedural", "local", nil)
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }
