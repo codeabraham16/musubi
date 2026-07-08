@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"musubi/internal/logx"
+	"musubi/internal/redact"
 
 	"github.com/google/uuid"
 )
@@ -158,17 +159,34 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	}
 	defer tx.Rollback()
 
+	// scope de la memoria híbrida: vacío ⇒ 'local' (privada). project_id se estampa desde
+	// el engine (lo inyecta el entrypoint). En el UPSERT NO se pisan scope ni project_id:
+	// un re-save por id preserva una promoción a 'shared' previa y la atribución original
+	// (aditivo/backward-compat; F1 no sincroniza ni filtra por scope todavía).
+	scope = normalizeScope(scope)
+
+	// Redacción de secretos en el borde a 'shared' (C2): el scope EFECTIVO es el pasado, o el
+	// ya almacenado para esta id — el UPSERT PRESERVA un 'shared' previo, así que un re-save por
+	// vía 'local' de una fila ya shared igual queda shared. Se limpia ANTES de derivar
+	// gist/hash/tokens para que el outbox —que reconstruye el payload desde esta fila— nunca
+	// empuje un secreto al cerebro compartido, por ninguna ruta.
+	if scope != ScopeShared {
+		var stored string
+		_ = tx.QueryRow(`SELECT scope FROM observations WHERE id = ?`, id).Scan(&stored)
+		if stored == ScopeShared {
+			scope = ScopeShared
+		}
+	}
+	if scope == ScopeShared {
+		content, _ = redact.Redact(content)
+	}
+
 	gist := Gist(content, defaultGistMaxTokens)
 	hash := ContentHash(content)
 	tokens := EstimateTokens(content)
 	// mem_type se normaliza al enum canónico; "" (sin tipo) se guarda como cadena vacía y
 	// pesa neutro en el olvido. El tipo lo aporta el agente (model-free).
 	memType = normalizeMemType(memType)
-	// scope de la memoria híbrida: vacío ⇒ 'local' (privada). project_id se estampa desde
-	// el engine (lo inyecta el entrypoint). En el UPSERT NO se pisan scope ni project_id:
-	// un re-save por id preserva una promoción a 'shared' previa y la atribución original
-	// (aditivo/backward-compat; F1 no sincroniza ni filtra por scope todavía).
-	scope = normalizeScope(scope)
 
 	setImp := ""
 	if setImportance {
