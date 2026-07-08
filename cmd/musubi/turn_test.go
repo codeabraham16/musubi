@@ -474,6 +474,12 @@ func TestTurnCaptureReminderAfterNTurns(t *testing.T) {
 	if !strings.Contains(ctx, "captura") {
 		t.Errorf("al alcanzar el umbral de turnos sin guardar debe recordar la captura, obtuve: %q", ctx)
 	}
+	// El recordatorio DEBE ser prescriptivo: nombrar QUÉ capturar, no solo el conteo.
+	for _, want := range []string{"decisión", "gotcha", "estado del trabajo", "musubi_save_observation"} {
+		if !strings.Contains(ctx, want) {
+			t.Errorf("el recordatorio debería nombrar %q; obtuve: %q", want, ctx)
+		}
+	}
 }
 
 func TestTurnCaptureReminderResetsOnSave(t *testing.T) {

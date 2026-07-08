@@ -138,8 +138,76 @@ func TestRunDryRunDoesNotMutate(t *testing.T) {
 	if v.reachCalls != 0 || v.authCalls != 0 {
 		t.Fatal("dry-run no debería correr el self-check")
 	}
+	if _, err := os.Stat(filepath.Join(dir, ".musubi", "config.yaml")); !os.IsNotExist(err) {
+		t.Fatal("dry-run no debería escribir el config.yaml")
+	}
 	if rep.Connected {
 		t.Fatal("dry-run no conecta")
+	}
+}
+
+func TestRunWritesSyncConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PROV_TOKEN", "secreto")
+	opts := Options{Brain: "1.2.3.4:7717", ProjectDir: dir, TokenEnv: "PROV_TOKEN"}
+	deps := Deps{Prober: &fakeProber{public: true, tailnet: true}, Verifier: &fakeVerifier{reach: true, auth: true}, NetworkConfigurator: &fakeNetwork{present: true, joined: true}, ExePath: "musubi"}
+
+	rep, err := Run(opts, deps)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".musubi", "config.yaml"))
+	if err != nil {
+		t.Fatalf("no se escribió .musubi/config.yaml: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{"sync:", "enabled: true", "central_url: http://1.2.3.4:7717", "auth_token_env: PROV_TOKEN", "allow_insecure_token: true"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("config.yaml sin %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "secreto") {
+		t.Fatal("FUGA: el token no debe aparecer en el config.yaml")
+	}
+	if st, ok := stepByName(rep, "sync-config"); !ok || st.Status != StatusDone {
+		t.Fatalf("esperaba sync-config=done; got %+v", st)
+	}
+
+	// Idempotencia: segunda corrida NO duplica el bloque y reporta ok.
+	rep2, err := Run(opts, deps)
+	if err != nil {
+		t.Fatalf("segunda corrida: %v", err)
+	}
+	data2, _ := os.ReadFile(filepath.Join(dir, ".musubi", "config.yaml"))
+	if n := strings.Count(string(data2), "\nsync:"); n != 1 {
+		t.Fatalf("el bloque sync: se duplicó (%d veces)", n)
+	}
+	if st, ok := stepByName(rep2, "sync-config"); !ok || st.Status != StatusOK {
+		t.Fatalf("re-ejecución debería reportar sync-config=ok; got %+v", st)
+	}
+}
+
+func TestSyncConfigPreservesExistingConfig(t *testing.T) {
+	dir := t.TempDir()
+	musubiDir := filepath.Join(dir, ".musubi")
+	if err := os.MkdirAll(musubiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prior := "embedding:\n  model: nomic-embed-text\n"
+	if err := os.WriteFile(filepath.Join(musubiDir, "config.yaml"), []byte(prior), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := ensureSyncConfig(dir, "1.2.3.4:7717", "MUSUBI_TOKEN", false)
+	if res.Status != StatusDone {
+		t.Fatalf("esperaba done; got %+v", res)
+	}
+	data, _ := os.ReadFile(filepath.Join(musubiDir, "config.yaml"))
+	s := string(data)
+	if !strings.Contains(s, "model: nomic-embed-text") {
+		t.Fatal("no preservó la config previa")
+	}
+	if !strings.Contains(s, "sync:") {
+		t.Fatal("no agregó el bloque sync:")
 	}
 }
 

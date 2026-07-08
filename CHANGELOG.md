@@ -19,6 +19,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   La memoria **`local` queda intacta** (los secretos pueden vivir en tu propia máquina; se limpian solo al
   compartir). Ningún competidor (Mem0/Letta/Zep/Copilot) documenta redacción. Aditivo: sin deps, sin tools
   nuevas, golden intacto.
+- **Captura automática C1 — captura proactiva (el cerebro aprende mientras trabajás).** Musubi ya
+  RECUPERA memoria solo; ahora también **empuja a capturarla sola**. El hook SessionStart inyecta un
+  bloque conciso (`startup_capture`) que instruye al agente a **guardar por su cuenta, sin que se lo
+  pidan**, los aprendizajes durables — **decisiones** (el porqué), **gotchas**, **estado del trabajo**
+  y **hechos de código** — con las tools correctas y con criterio de salencia (solo lo reusable/no-obvio,
+  nada de trivialidades); además **desambigua "shared"** = memoria compartida del cerebro, NO un tag ni
+  commit de git. El recordatorio por turno pasa a ser **prescriptivo** (nombra qué capturar, no solo el
+  conteo). El bloque **respeta el hook silencioso**: viaja solo cuando el arranque ya tiene algo que
+  decir. La extracción la hace el agente (que es el LLM), no Musubi — costo LLM cero, coherente con el
+  diseño model-free. Es la Fase 1 del track de captura automática; la captura es **local** (compartir al
+  cerebro llega en una fase posterior, detrás de la redacción de secretos). Aditivo: sin tools nuevas, golden intacto.
 - **PC auto-configurable P1 — `musubi provision` (unir una máquina al cerebro).** Nuevo subcomando que
   lleva un equipo a estar **unido al cerebro central** en un comando, idempotente y cross-platform. El
   corazón es un **preflight de red VPN-agnóstico**: sonda dos caminos (un destino público de control por IP
@@ -30,8 +41,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Windows / allowlist de subred en Linux, idempotentes; si falta admin, instruye sin abortar), **cablea el
   `.mcp.json`** con las entradas `musubi` (local) y `musubi-cerebro` (remota, bearer por `${MUSUBI_TOKEN}` —
   el secreto nunca toca el archivo) preservando lo existente, y hace el **self-check reach + auth** contra el
-  cerebro. `--dry-run` diagnostica y muestra el plan sin mutar. Porta a Go la lógica probada en
-  `deploy/connect-brain-*`. Aditivo: no agrega tools MCP (el golden no cambia).
+  cerebro. También deja el bloque **`sync:`** en el `.musubi/config.yaml` (idempotente, preservando la config
+  previa) para que el daemon LOCAL **suba solo la memoria `shared`** al cerebro (outbox de F2) — con
+  `allow_insecure_token: true` porque el central es `http://` sobre el tailnet (WireGuard ya cifra); sin este
+  paso el `.mcp.json` conectaba pero el auto-sync quedaba apagado. `--dry-run` diagnostica y muestra el plan
+  sin mutar. Porta a Go la lógica probada en `deploy/connect-brain-*`. Aditivo: no agrega tools MCP (el golden no cambia).
 
 ### Changed
 - **Cerebro híbrido — sync más robusto (offline-first de verdad).** Se corrigió una grieta de F2 que

@@ -106,15 +106,40 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 	}
 	health := buildHealthContext(store)
 
+	// El bloque de captura proactiva viaja SOLO si el hook ya tiene algo que decir: no debe
+	// romper el "hook silencioso cuando no hay nada" (la brevedad es sagrada; ver los tests de
+	// silencio). El recordatorio por turno cubre la captura en sesiones sin priming.
+	capture := ""
+	if store != nil && (priming != "" || cognitive != "" || health != "" || generation != "") {
+		capture = buildCapturePriming()
+	}
+
 	// Contabilizar TODAS las superficies de arranque (no solo el priming): el bloque
 	// cognitivo y el de generación de skills son los que más tokens inyectan y antes
 	// eran invisibles en el ledger. Medirlos es el cimiento para optimizarlos.
 	return assembleAccounted(store, "SessionStart", sessionID, []accountedBlock{
 		{surface: "startup_priming", text: priming},
+		{surface: "startup_capture", text: capture},
 		{surface: "startup_health", text: health},
 		{surface: "startup_cognitive", text: cognitive},
 		{surface: "startup_skillgen", text: generation},
 	}), nil
+}
+
+// buildCapturePriming instruye al agente a CAPTURAR SOLO (sin que el usuario se lo pida) los
+// aprendizajes durables mientras trabaja — la mitad de escritura del cerebro, que hoy depende
+// de que el agente se acuerde. La extracción la hace el agente (que es el LLM), como el
+// auto-memory de Claude Code: Musubi solo lo dirige. Es la Fase 1 (captura proactiva) del track
+// de captura automática. Texto estático y conciso (se contabiliza en el ledger como una
+// superficie más del arranque). La captura es LOCAL (scope default); compartir al cerebro es una
+// fase posterior detrás de la redacción de secretos.
+func buildCapturePriming() string {
+	return `[Musubi — captura proactiva] Mientras trabajás, guardá VOS SOLO (sin que te lo pidan) lo que valga la pena recordar, con las tools de Musubi:
+- Decisiones (el porqué de lo elegido) y gotchas/aprendizajes no obvios → musubi_save_observation
+- Hechos estables (convenciones, versiones, rutas, comandos) → musubi_save_fact ; gists de archivos que leíste → musubi_save_code
+- Estado del trabajo (qué se hizo, qué falta) al cerrar un avance → musubi_save_observation
+Guardá solo lo REUSABLE / NO OBVIO; nada de trivialidades (saludos, "ok", estado transitorio). No dupliques: recuperá antes con musubi_recall.
+Aclaración: "shared" en Musubi = scope shared de la MEMORIA (que la vean otras máquinas/el equipo), NO un tag ni un commit de git.`
 }
 
 // ledgerStore es lo mínimo que la contabilidad holística necesita del motor:
