@@ -87,8 +87,8 @@ type syncCallParams struct {
 }
 
 // syncSaveArguments son los argumentos de musubi_save_observation remoto. scope va SIEMPRE
-// "shared": el receptor guarda la obs ya compartida. project_id viaja en el payload pero el
-// central no filtra por proyecto todavía (eso es F3); se incluye para no tener que re-empujar.
+// "shared": el receptor guarda la obs ya compartida. project_id es el del proyecto de ORIGEN:
+// desde Track 16 F1 el central lo PRESERVA (atribución multi-tenant) en vez de estampar el suyo.
 type syncSaveArguments struct {
 	ID         string  `json:"id"`
 	TopicKey   string  `json:"topic_key"`
