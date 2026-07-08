@@ -58,6 +58,8 @@ type httpOptions struct {
 // (405) porque Musubi no emite mensajes server-initiated todavía.
 func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	metrics := &httpMetrics{}
+	// Lockout contra fuerza bruta del bearer (16.1e): 5 fallos por IP ⇒ 60s de bloqueo.
+	limiter := newAuthLimiter(5, time.Minute)
 	mux := http.NewServeMux()
 
 	// Endpoint MCP, envuelto en observabilidad (correlation ID + métricas por resultado).
@@ -77,19 +79,32 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// Autenticación. Con registro de principals (16.1c): el bearer debe resolver a un
 		// principal (o al token legacy) — si no, 401. Sin registro (modo legacy): un único
 		// token, comparado en tiempo constante. El principal resuelto viaja en el ctx.
+		// Lockout anti fuerza-bruta (16.1e): si la IP acumuló demasiados 401, se rechaza con
+		// 429 antes de tocar el token; un auth OK resetea su contador.
+		authActive := opt.registry != nil || opt.token != ""
+		ip := clientIP(r)
+		if authActive && limiter.locked(ip, time.Now()) {
+			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+			return
+		}
 		var principal *Principal
 		if opt.registry != nil {
 			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
 			if !ok {
+				limiter.fail(ip, time.Now())
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			principal = p
 		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+			limiter.fail(ip, time.Now())
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		if authActive {
+			limiter.reset(ip)
 		}
 		if r.Method == http.MethodGet {
 			// SSE reservado: no hay tráfico server-initiated en esta versión.
@@ -197,6 +212,15 @@ func validBearer(authHeader, want string) bool {
 	}
 	got := strings.TrimSpace(authHeader[len(prefix):])
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// clientIP devuelve la IP del cliente (sin el puerto) para el lockout anti fuerza-bruta.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // bearerToken extrae el token de un header "Authorization: Bearer <token>" ("" si no
