@@ -314,6 +314,11 @@ type ServiceConfig struct {
 	// Vacío => se prueba el default .musubi/principals.yaml; si tampoco existe, modo
 	// legacy (un único bearer, sin roles). El archivo NUNCA contiene el token crudo.
 	PrincipalsFile string `yaml:"principals_file,omitempty"`
+	// ForceRedact fuerza la redacción de secretos en TODO ingest (Track 16 F1 16.1d),
+	// independiente del scope declarado por el cliente. Un bind NO-loopback la enciende
+	// SIEMPRE (fail-closed: el central es infra compartida); este flag permite ADEMÁS
+	// activarla en un bind loopback. No se puede desactivar en no-loopback.
+	ForceRedact bool `yaml:"force_redact,omitempty"`
 }
 
 // SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain

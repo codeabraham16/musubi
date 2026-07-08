@@ -125,6 +125,11 @@ type McpServer struct {
 	pipeline config.PipelineConfig
 	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
 	multiagent config.MultiAgentConfig
+	// forceRedact fuerza la redacción de secretos en TODO ingest (Track 16 F1 16.1d): el
+	// central es infra compartida, así que redacta independientemente del scope declarado por
+	// el cliente (cierra el hueco scope=local → secreto crudo). Lo enciende ListenAndServeHTTP
+	// cuando el bind es no-loopback (o service.force_redact). En stdio local queda false.
+	forceRedact bool
 	// gitRunner obtiene el diff para musubi_detect_changes; nil → GitRunner real sobre
 	// projectPath. Los tests lo inyectan (codeintel.FakeRunner) para no depender de git.
 	gitRunner codeintel.Runner

@@ -165,6 +165,11 @@ principals:
 - **Backward-compat:** sin archivo de registro, sigue el modo de un único token. El
   `MUSUBI_TOKEN` legacy sigue válido (como `admin`) aun con registro presente.
 
+**Redacción forzada (automática en el central):** como el central escucha en un bind
+no-loopback (es infra compartida), **redacta secretos en TODO ingest** independientemente del
+`scope` que declare el cliente — un secreto crudo no puede entrar al pozo compartido ni
+mandando `scope=local`. Es fail-closed (no se desactiva en no-loopback).
+
 ## Notas de operación
 
 - **Un solo escritor lógico**: el daemon serializa las tools que mutan; no corras dos

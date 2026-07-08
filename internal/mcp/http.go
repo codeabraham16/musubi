@@ -225,6 +225,10 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	if err != nil {
 		return err
 	}
+	// Redacción forzada server-side (16.1d): un bind no-loopback es infra compartida ⇒
+	// redactar SIEMPRE (fail-closed, no se puede desactivar); un loopback puede optar por
+	// config. Cierra el hueco de un cliente que manda scope=local con un secreto crudo.
+	s.forceRedact = !loopback || cfg.ForceRedact
 	timeout := time.Duration(cfg.RequestTimeoutSeconds * float64(time.Second))
 	if timeout <= 0 {
 		timeout = 60 * time.Second
