@@ -9,9 +9,27 @@ permissions:
   contents: write
 
 jobs:
+  # Guarda de consistencia de versión: el tag DEBE coincidir con el archivo VERSION
+  # (la fuente única de verdad). Antes la versión vivía en el tag Y en versioninfo.json
+  # por separado y derivaban (versioninfo quedó en 0.57 con el proyecto en 0.78). Ahora
+  # un tag que no coincida con VERSION aborta el release entero antes de construir nada.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: El tag coincide con VERSION
+        run: |
+          want="v$(tr -d '[:space:]' < VERSION)"
+          if [ "${{ github.ref_name }}" != "$want" ]; then
+            echo "::error::El tag ${{ github.ref_name }} no coincide con VERSION ($want). Bumpeá VERSION (y versioninfo.json) antes de taggear."
+            exit 1
+          fi
+          echo "Tag ${{ github.ref_name }} == VERSION ($want) OK"
+
   # Crea el release UNA sola vez antes del matrix. Evita la carrera donde los 6
   # jobs de build intentan crearlo en paralelo (uno fallaba con "Not Found").
   create-release:
+    needs: check-version
     runs-on: ubuntu-latest
     steps:
       - name: Create release
@@ -20,7 +38,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
 
   build:
-    needs: create-release
+    needs: [check-version, create-release]
     runs-on: ubuntu-latest
     strategy:
       # Un fallo transitorio en una plataforma no debe cancelar las demás ni dejar
@@ -40,6 +58,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
+
+      # Regenera el recurso de versión de Windows (.syso) desde versioninfo.json —que
+      # check-version ya garantizó == VERSION == tag— con goversioninfo PINEADO. Elimina
+      # el paso manual "editá versioninfo.json y corré go generate" que se saltó ~20
+      # releases y dejó el .exe reportando 0.57. Solo corre en los targets Windows.
+      - name: Regenerar recurso de versión de Windows
+        if: matrix.goos == 'windows'
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0
+          GVI="$(go env GOPATH)/bin/goversioninfo"
+          cd cmd/musubi
+          "$GVI" -64 -o rsrc_windows_amd64.syso versioninfo.json
+          "$GVI" -arm -64 -o rsrc_windows_arm64.syso versioninfo.json
 
       - name: Build
         env:
