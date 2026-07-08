@@ -75,12 +75,13 @@ func (e *DbEngine) MarkMetaNow(key string) error {
 const MetaEmbedModel = "embed_model_id"
 
 // WarnOnEmbedModelSwitch detecta si el modelo de embedding activo cambió respecto del
-// último arranque HABIENDO vectores ya almacenados: en ese caso los vectores viejos
-// son de OTRO modelo y no son comparables por coseno con los nuevos (mezcla silenciosa
-// que degrada el recall). No migra ni borra nada —el dim-guard ya ignora los de otra
-// dimensión—; solo AVISA para el borde same-dim (dos modelos de igual dimensión), donde
-// el guard no alcanza. Registra el modelo actual para el próximo arranque. modelID vacío
-// (sin embedder / NoopProvider) es no-op: no registra ni avisa.
+// último arranque HABIENDO vectores ya almacenados: en ese caso los vectores viejos son
+// de OTRO modelo y no son comparables por coseno con los nuevos. Desde F2.2 el contrato
+// de procedencia (columna embeddings.model_id + regla de homogeneidad en la búsqueda) ya
+// los EXCLUYE automáticamente del recall, así que NO corrompen el ranking; este aviso es
+// informativo (recordar re-embeber para recuperarlos) y complementa al dim-guard, que
+// cubre el cambio de dimensión. No migra ni borra nada. Registra el modelo actual para el
+// próximo arranque. modelID vacío (sin embedder / NoopProvider) es no-op.
 func (e *DbEngine) WarnOnEmbedModelSwitch(modelID string) {
 	if modelID == "" {
 		return
@@ -94,7 +95,7 @@ func (e *DbEngine) WarnOnEmbedModelSwitch(modelID string) {
 		if n, cerr := e.countActiveEmbeddings(); cerr == nil && n > 0 {
 			logx.Warn("el modelo de embedding cambió: hay vectores de otro modelo en la base",
 				"anterior", prev, "actual", modelID, "vectores_previos", n,
-				"accion", "los vectores viejos no son comparables con los nuevos; si el cambio fue a otra dimensión el dim-guard ya los ignora, pero si es misma dimensión considerá limpiarlos y re-embeber")
+				"accion", "el contrato de procedencia (F2.2) ya los EXCLUYE del recall automáticamente (la búsqueda sólo compara igual model_id), así que no corrompen el ranking; re-embebé con el modelo actual para volver a hacerlos recuperables")
 		}
 	}
 	if err := e.SetMeta(MetaEmbedModel, modelID); err != nil {

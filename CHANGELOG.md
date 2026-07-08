@@ -8,6 +8,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Contrato de vector + procedencia — regla de homogeneidad (Track 16 / Producible 16.2b).** El núcleo de
+  ROBUSTEZ de la memoria semántica, hecho ANTES de encenderla (S1 de Track 15). Hasta ahora un vector no
+  registraba QUÉ modelo lo produjo: al cambiar de embedder, los vectores viejos (otra procedencia) se comparaban
+  por coseno con los nuevos y **corrompían el recall EN SILENCIO** cuando compartían dimensión (misma dim, otro
+  espacio semántico ⇒ similitudes basura coladas al top). La única guarda previa era por dimensión (el
+  dim-guard), que no cubre el borde same-dim; sólo había un *warning* (`WarnOnEmbedModelSwitch`) que recomendaba
+  limpiar a mano. Ahora: migración v12 añade `embeddings.model_id`; cada engine estampa la **procedencia** de su
+  embedder (`SetVectorModelID`, cableado en `serve`/`daemon` con `provider.Name()`) en todo vector que escribe; y
+  la búsqueda exacta (full-scan y por-celda IVF) aplica la **regla de homogeneidad**: sólo compara vectores de la
+  MISMA procedencia que el de consulta. Los de otro modelo quedan **excluidos automáticamente** (no se mezclan ni
+  corrompen el ranking) — el warning pasa a ser informativo (re-embeber para recuperarlos). Aditiva y
+  backward-compat: `''` = procedencia desconocida (legacy y engines sin embedder nombrado) sólo compara contra
+  `''`, así que el comportamiento histórico —y todos los tests/bench sin `SetVectorModelID`— no cambian. Golden
+  intacto.
 - **Harness de calidad de recall (Track 16 / Producible 16.2a).** Primer paso de la Fase 2: una forma
   REPETIBLE y determinista de MEDIR qué tan bueno es el recall, para poder probar con números —no con fe— que
   encender la señal semántica mejora sobre el baseline léxico ANTES de cambiar el default (el audit fue tajante:

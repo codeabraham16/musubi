@@ -324,6 +324,24 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 12,
+			name:    "embeddings_model_id",
+			// Contrato de vector + PROCEDENCIA (Track 16 / Producible F2.2). Sin esto un vector
+			// no sabía QUÉ modelo lo produjo, así que al cambiar de embedder los vectores viejos
+			// (otra procedencia) se comparaban por coseno con los nuevos y CORROMPÍAN el recall
+			// EN SILENCIO: misma dimensión pero semántica de otro espacio ⇒ similitudes basura que
+			// se colaban al top. La única guarda previa era por dimensión (coseno falla si difieren
+			// las dims), que no cubre "misma dim, distinto modelo". model_id estampa la procedencia
+			// del vector; la REGLA DE HOMOGENEIDAD (comparar sólo vectores de igual procedencia)
+			// vive en la búsqueda exacta. Aditiva y backward-compat: '' = procedencia desconocida
+			// (vectores legacy y los de engines sin embedder nombrado); un engine con '' sólo
+			// compara contra '', así que el comportamiento histórico no cambia.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`ALTER TABLE embeddings ADD COLUMN model_id TEXT NOT NULL DEFAULT ''`)
+				return err
+			},
+		},
 	}
 }
 

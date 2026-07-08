@@ -237,8 +237,11 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 		if err != nil {
 			return fmt.Errorf("error al serializar vector: %w", err)
 		}
-		queryEmb := `INSERT OR REPLACE INTO embeddings (observation_id, vector) VALUES (?, ?)`
-		if _, err = tx.Exec(queryEmb, id, vectorBytes); err != nil {
+		// Estampar la PROCEDENCIA del vector (F2.2): model_id del embedder de este engine.
+		// La búsqueda exacta sólo compara vectores de esta misma procedencia, para no mezclar
+		// coseno entre modelos. "" cuando no hay embedder nombrado (backward-compat).
+		queryEmb := `INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id) VALUES (?, ?, ?)`
+		if _, err = tx.Exec(queryEmb, id, vectorBytes, e.vectorModelID); err != nil {
 			return fmt.Errorf("error al guardar embedding: %w", err)
 		}
 	}
@@ -297,16 +300,20 @@ func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float3
 	var results []SearchResult
 	for _, chunk := range chunkStrings(uniq, maxSQLParams) {
 		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, len(chunk))
+		args := make([]interface{}, 0, len(chunk)+1)
 		for i, id := range chunk {
 			placeholders[i] = "?"
-			args[i] = id
+			args = append(args, id)
 		}
+		// Regla de homogeneidad (F2.2): sólo candidatos de la MISMA procedencia que el vector
+		// de consulta (el embedder de este engine). Evita comparar coseno entre modelos.
+		args = append(args, e.vectorModelID)
 		q := `SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 			FROM observations o
 			JOIN embeddings e ON o.id = e.observation_id
 			WHERE ` + visibleObsPredicate + `
-			  AND o.id IN (` + strings.Join(placeholders, ",") + `)`
+			  AND o.id IN (` + strings.Join(placeholders, ",") + `)
+			  AND e.model_id = ?`
 		rows, err := e.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("error al consultar candidatos: %w", err)
@@ -353,12 +360,15 @@ func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float3
 // embeddings activos y rankea por coseno. Es el camino por defecto para DBs por
 // debajo del umbral (o con el índice sin entrenar) y la red de seguridad de exactitud.
 func (e *DbEngine) searchExactFullScan(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error) {
+	// Regla de homogeneidad (F2.2): sólo se rankean vectores de la MISMA procedencia que el
+	// de consulta (el embedder de este engine), para no mezclar coseno entre modelos.
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
 		JOIN embeddings e ON o.id = e.observation_id
 		WHERE `+visibleObsPredicate+`
-	`)
+		  AND e.model_id = ?
+	`, e.vectorModelID)
 	if err != nil {
 		return nil, fmt.Errorf("error al consultar observaciones: %w", err)
 	}
