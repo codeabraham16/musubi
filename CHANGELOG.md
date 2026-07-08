@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Harness de calidad de recall (Track 16 / Producible 16.2a).** Primer paso de la Fase 2: una forma
+  REPETIBLE y determinista de MEDIR qué tan bueno es el recall, para poder probar con números —no con fe— que
+  encender la señal semántica mejora sobre el baseline léxico ANTES de cambiar el default (el audit fue tajante:
+  *harness primero*). Nuevo paquete `internal/recalleval`, 100% model-free y sin red: métricas estándar de IR
+  (`recall@k`, `MRR`, `nDCG@k`) como aritmética pura + un runner que siembra un motor de memoria temporal con un
+  **fixture dorado versionado** (`testdata/golden.json`: 26 docs de memoria de dev ES/EN + 12 queries
+  etiquetadas) y evalúa una o más configuraciones de recall sobre el mismo corpus. El fixture incluye a propósito
+  queries de **hueco de vocabulario/traducción** (bug↔error, deploy↔despliegue, olvido↔decay) donde el léxico
+  debería fallar y la semántica ganar. Baseline medido: **R@10 léxico = 0.75** (el léxico no encuentra el 25% de
+  los relevantes ni en el top-10 → margen que la tabla POTION debe cerrar en 16.2c). El camino híbrido (con
+  vector) queda ejercitado end-to-end con un embedder sintético para que la integración de la tabla real no
+  descubra bugs tarde. Golden de MCP intacto.
+
 ## [0.78.0] - 2026-07-08
 
 ### Added
