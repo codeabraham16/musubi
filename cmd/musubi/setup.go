@@ -192,6 +192,11 @@ func setupProjectWith(exeOverride, agent string) {
 		} else {
 			printOK("Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
 		}
+		if err := writeCaptureHook(root, exePath); err != nil {
+			printWarn(fmt.Sprintf("No se pudo registrar el hook Stop: %v", err))
+		} else {
+			printOK("Hook Stop en .claude/settings.json (captura de commits: red de seguridad)")
+		}
 	} else {
 		printInfo(fmt.Sprintf("%s no tiene sistema de hooks; se registró solo el servidor MCP.", target.Name))
 	}
@@ -331,6 +336,31 @@ func writeCodeMemoryHook(root, exePath string) error {
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "PreToolUse", "Read", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
+// writeCaptureHook inyecta (idempotente) el hook Stop en {root}/.claude/settings.json: al cerrar
+// cada turno, Musubi captura los commits nuevos como memoria local (la red de seguridad
+// determinista de la captura automática). Stop no usa matcher.
+func writeCaptureHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: hookExeCommand(exePath, "capture --hook-mode"),
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "Stop", "", hook)
 	if err != nil {
 		return fmt.Errorf("error al mergear settings.json: %w", err)
 	}

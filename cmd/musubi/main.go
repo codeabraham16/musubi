@@ -56,6 +56,8 @@ func main() {
 		runTurn()
 	case "precheck":
 		runPrecheck()
+	case "capture":
+		runCapture(os.Args[2:])
 	case "catalog":
 		runCatalog(os.Args[2:])
 	case "daemon":
@@ -120,6 +122,7 @@ func printUsage() {
 	cmd("detect [--hook-mode]", "Detecta el stack / SessionStart: auto-descubrimiento + priming")
 	cmd("turn --hook-mode", "UserPromptSubmit: inyecta contexto relevante al prompt")
 	cmd("precheck --hook-mode", "PreToolUse(Read): gist de un archivo antes de leerlo")
+	cmd("capture --hook-mode", "Stop: captura los commits nuevos como memoria (red de seguridad)")
 }
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
