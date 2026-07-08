@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Hardening del borde del central — lockout + threat model + ACLs (Track 16 / Producible 16.1e).** Cierra la
+  Fase 1. (1) **Lockout anti fuerza-bruta**: tras 5 fallos de auth desde una IP, el central la bloquea 60s
+  (`authLimiter`, en memoria, model-free) — antes el adivinado online del bearer era ilimitado para cualquier
+  peer del tailnet. (2) **Threat model documentado** (`docs/Threat_Model.md`): borde de confianza, activos,
+  amenazas→mitigaciones y riesgos residuales — fija qué cubre WireGuard y qué no. (3) **Guía de ACLs de
+  Tailscale**: la policy default es allow-all, así que se documenta cómo restringir el puerto del brain a
+  dispositivos autorizados (defensa en profundidad, no confiar solo en el rango CGNAT). Cierra los hallazgos
+  *low* de superficie HTTP, threat model y least-privilege de red (`audit/2026-07-08`). Golden intacto.
 - **Redacción forzada server-side en el central (Track 16 / Producible 16.1d).** La redacción de secretos se
   disparaba por el VALOR del scope declarado por el cliente (`scope==shared`), así que un cliente podía escribir
   un secreto **crudo** en el cerebro compartido mandando `scope=local`. Ahora el central **redacta SIEMPRE**,
