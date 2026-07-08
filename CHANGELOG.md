@@ -8,6 +8,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Guarda de compatibilidad de esquema hacia adelante (Track 16 / Producible 16.0c).** Un binario viejo que
+  abría una base migrada por uno más nuevo antes corría un no-op silencioso y operaba a ciegas sobre columnas/
+  tablas que no conocía — riesgo de corrupción lógica en una flota mixta (laptop/PC/central con binarios de
+  distinta versión). Ahora `applyMigrations` **falla-cerrado**: si el `user_version` de la base supera la última
+  migración que este binario conoce, se niega a abrir con el error centinela **`ErrSchemaTooNew`** (sin degradar
+  ni avanzar la versión), en vez de continuar. Cierra el hallazgo *medium* «sin guarda de compatibilidad de
+  esquema en runtime» de la auditoría de producibilidad (`audit/2026-07-08`). Aditivo, golden intacto.
 - **Captura automática C4 — capturar el par error→fix al resolver telemetría.** El par error→fix es *la
   memoria de código más valiosa*, y Musubi ya lo tenía en la tabla de telemetría (`musubi_log_error` guarda
   el error + el parche propuesto) pero moría ahí. Ahora, cuando se llama **`musubi_resolve_telemetry`** (el fix
