@@ -143,6 +143,12 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	if scope == "" {
 		scope = memory.ScopeLocal
 	}
+	// Redacción forzada server-side (16.1d): en infra compartida (el central) TODO ingest se
+	// trata como shared, así se redactan los secretos aunque el cliente declare scope=local.
+	// Cierra el hueco por el que un secreto crudo entraba al pozo compartido.
+	if s.forceRedact {
+		scope = memory.ScopeShared
+	}
 	importance := args.Importance
 	if importance <= 0 {
 		importance = 1.0

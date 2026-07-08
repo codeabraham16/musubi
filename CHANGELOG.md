@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Redacción forzada server-side en el central (Track 16 / Producible 16.1d).** La redacción de secretos se
+  disparaba por el VALOR del scope declarado por el cliente (`scope==shared`), así que un cliente podía escribir
+  un secreto **crudo** en el cerebro compartido mandando `scope=local`. Ahora el central **redacta SIEMPRE**,
+  independiente del scope declarado: un bind **no-loopback** (infra compartida) enciende `forceRedact`
+  **fail-closed** (no se puede desactivar), y un bind loopback puede optar por `service.force_redact`. Con
+  `forceRedact`, todo ingest se trata como `shared` ⇒ la redacción de C2 corre siempre. Cierra el hueco de
+  ingest crudo del hallazgo de seguridad (`audit/2026-07-08`). Backward-compatible (stdio local y loopback sin
+  el flag: sin cambios); golden intacto.
 - **Enforcement del aislamiento por credencial (Track 16 / Producible 16.1c-3).** El cable que cierra la Fase 1:
   el scope del recall se **deriva del principal autenticado** (su `project_id` sale de la credencial, no lo
   auto-declara el cliente). `toolRecall` ahora acota el recall al proyecto del principal — un `reader`/`writer`
