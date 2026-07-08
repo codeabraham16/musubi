@@ -7,6 +7,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **DR del cerebro central — backup consistente + off-host + runbook de restore (Track 16 / Producible 16.0b).**
+  El nodo central es el único punto donde converge la memoria compartida de todos los proyectos; perder su
+  `memory.db` sin backup off-host era irreversible. Ahora: (1) el backup usa **`VACUUM INTO`** en vez de copiar
+  el archivo con `io.Copy` tras un `wal_checkpoint` — snapshot *transaccionalmente consistente* en un paso, sin
+  lockear el daemon ni arriesgar un estado a medias por escrituras concurrentes; (2) nuevo comando **`musubi
+  backup [--out <dir>]`** (puro-Go, no requiere `sqlite3` en el host) que imprime la ruta del snapshot; (3)
+  `deploy/musubi-backup.sh` + un **timer systemd diario** (instalado por `install-musubi-brain.sh`) que shipa el
+  snapshot **off-host** (`rsync`/`rclone`/`cp`) con retención; (4) **runbook de restore probado** en
+  `docs/Server_Brain_Onboarding.md`. Cierra el hallazgo **crítico** «el central no tiene DR» de `audit/2026-07-08`.
+
+### Changed
+- **`backupDB()` migrado a `VACUUM INTO`** (ver arriba): el backup del auto-heal del `doctor` ahora es un snapshot
+  consistente y compactado en vez de una copia cruda del archivo.
+
 ## [0.78.0] - 2026-07-08
 
 ### Added

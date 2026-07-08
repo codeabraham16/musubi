@@ -1,10 +1,13 @@
 package memory
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func statusOf(rep DiagnoseReport, code string) string {
@@ -143,5 +146,63 @@ func TestRepairApplyCreaBackup(t *testing.T) {
 	}
 	if !strings.Contains(filepath.ToSlash(res.BackupPath), ".musubi/backups/") {
 		t.Errorf("el backup debe vivir en .musubi/backups/, obtuve %q", res.BackupPath)
+	}
+	// El backup (VACUUM INTO) debe ser una base SQLite VÁLIDA y abrible, con el estado
+	// PRE-reparación (la relación 'r1' que el apply borró después debe seguir en el snapshot).
+	bdb, err := sql.Open("sqlite", res.BackupPath)
+	if err != nil {
+		t.Fatalf("no se pudo abrir el backup: %v", err)
+	}
+	defer bdb.Close()
+	var integrity string
+	if err := bdb.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Errorf("integrity_check del backup = %q (err=%v), esperaba \"ok\"", integrity, err)
+	}
+	var n int
+	if err := bdb.QueryRow(`SELECT COUNT(*) FROM observation_relations WHERE id='r1'`).Scan(&n); err != nil {
+		t.Fatalf("no se pudo consultar el backup: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("el backup debe contener el estado pre-reparación (relación r1); filas=%d", n)
+	}
+}
+
+// TestBackupToCustomDir verifica que BackupTo escribe un snapshot consistente en un
+// directorio arbitrario (el que usa `musubi backup --out` para stagear antes de
+// shipear off-host), lo crea si falta, y el snapshot es una base válida con los datos.
+func TestBackupToCustomDir(t *testing.T) {
+	e, err := NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Close() })
+	if _, _, err := e.SaveObservationDedupedTyped("t/x", "un hecho memorable", 0.6, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(t.TempDir(), "staging", "nested") // aún no existe
+	dest, err := e.BackupTo(outDir)
+	if err != nil {
+		t.Fatalf("BackupTo: %v", err)
+	}
+	if filepath.Dir(dest) != outDir {
+		t.Errorf("el snapshot debe vivir en %q, está en %q", outDir, filepath.Dir(dest))
+	}
+
+	bdb, err := sql.Open("sqlite", dest)
+	if err != nil {
+		t.Fatalf("no se pudo abrir el snapshot: %v", err)
+	}
+	defer bdb.Close()
+	var integrity string
+	if err := bdb.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Errorf("integrity_check = %q (err=%v), esperaba \"ok\"", integrity, err)
+	}
+	var n int
+	if err := bdb.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
+		t.Fatalf("consulta al snapshot: %v", err)
+	}
+	if n < 1 {
+		t.Errorf("el snapshot debe contener las observaciones; filas=%d", n)
 	}
 }

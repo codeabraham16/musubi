@@ -66,6 +66,8 @@ func main() {
 		runServe(os.Args[2:])
 	case "maintain":
 		runMaintain()
+	case "backup":
+		runBackup(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "export":
@@ -105,6 +107,7 @@ func printUsage() {
 
 	section("Memoria")
 	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
+	cmd("backup [--out <dir>]", "Snapshot consistente de la base (VACUUM INTO); imprime la ruta")
 	cmd("doctor", "Diagnostica la memoria; 'doctor repair --check X --apply' repara")
 	cmd("export [--out <ruta>]", "Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards")
 	cmd("dashboard [--addr ...] [--no-open]", "UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)")

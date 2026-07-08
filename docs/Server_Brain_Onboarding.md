@@ -87,10 +87,55 @@ Luego, desde dos máquinas: guardá una observación en una y recuperala en la o
 `musubi_recall` — si aparece, la memoria compartida funciona. Repetí con `musubi_sdd
 action=start` en una y `action=status` en la otra para confirmar la orquestación compartida.
 
+## Backup y recuperación (DR)
+
+El cerebro central es el **único punto donde converge la memoria compartida** de todos los
+proyectos: perder su `memory.db` sin backup off-host es perder todo. `install-musubi-brain.sh`
+instala un **backup diario off-host** (`musubi-backup.timer`).
+
+**Cómo funciona.** El timer corre `musubi backup` (que usa `VACUUM INTO` → snapshot
+*transaccionalmente consistente*, sin lockear el daemon ni depender del CLI `sqlite3`) y
+shipa el snapshot a `BACKUP_REMOTE`. Config en `/etc/musubi/musubi.env`:
+
+```
+BACKUP_REMOTE=user@host:/srv/backups/musubi   # off-host: rsync, rclone-remote:path, o dir local
+BACKUP_METHOD=rsync                            # rsync | rclone | cp
+BACKUP_RETENTION_DAYS=14                        # purga snapshots LOCALES > N días
+```
+
+> Dejá `BACKUP_REMOTE` **configurado**: vacío significa que el snapshot queda solo en el
+> mismo disco y no protege contra la pérdida del host.
+
+**Operar / verificar.**
+
+```bash
+systemctl list-timers musubi-backup.timer     # próxima corrida
+sudo systemctl start musubi-backup.service     # backup manual ya
+journalctl -u musubi-backup.service -n 30      # log del último backup
+```
+
+**Restore (procedimiento probado).** Con el servicio detenido, reemplazá la base por el
+snapshot y validá la integridad ANTES de rearrancar:
+
+```bash
+sudo systemctl stop musubi-brain.service
+SNAP=/ruta/al/memory.db.YYYYMMDD-HHMMSS         # traé el snapshot desde BACKUP_REMOTE
+# Validá el snapshot antes de confiar en él:
+sqlite3 "$SNAP" 'PRAGMA integrity_check;'       # debe decir: ok   (o usá 'musubi doctor')
+# Guardá la base actual por las dudas y restaurá (el VACUUM INTO no trae -wal/-shm):
+cd /home/musubi/musubi-brain/.musubi
+sudo mv memory.db memory.db.corrupta 2>/dev/null || true
+sudo rm -f memory.db-wal memory.db-shm
+sudo -u musubi cp "$SNAP" memory.db
+sudo systemctl start musubi-brain.service
+curl -fsS http://127.0.0.1:7717/readyz          # verificá que levantó
+```
+
+- `musubi export` (snapshot JSON) y `musubi doctor` (valida integridad / repara) siguen
+  disponibles como herramientas complementarias de diagnóstico.
+
 ## Notas de operación
 
-- **Backups**: la SQLite del servidor es la fuente única; respaldala (el `musubi export`
-  produce un snapshot JSON, y `musubi_doctor` valida integridad).
 - **Un solo escritor lógico**: el daemon serializa las tools que mutan; no corras dos
   `serve` sobre la misma DB.
 - **Local + remoto conviven**: podés tener un `musubi` remoto (cerebro) y un stdio local
