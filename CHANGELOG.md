@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Captura automática C3 — captura de commits (red de seguridad determinista).** Un hook **`Stop`**
+  (`musubi capture --hook-mode`) que, al cerrar cada turno, captura los **commits nuevos** del repo como
+  memoria **local**, sin depender del agente ni de un LLM — el mensaje de commit **es el "por qué"** destilado
+  por el humano. Model-free: lee `git log` incremental desde el último HEAD capturado (guardado en meta,
+  global al repo; la primera vez solo el HEAD, para no ingerir toda la historia), **clasifica por keyword**
+  (fix/bug/security → alto; feat/refactor/perf → medio; y **omite** merge/wip/cortos y chore/docs/style/test/
+  build/ci), y guarda subject + body + archivos tocados, **deduplicado**. **No-op silencioso** si no es un
+  repo git, no hay commits nuevos, o todos son triviales. La captura es **local** (nunca comparte: un secreto
+  de un diff no cruza; compartir pasa por `promote`, que C2 redacta). `setup` registra el hook `Stop`
+  (idempotente). Cierra el track de captura automática (C1 proactiva + C2 redacción + C3 commits). Aditivo:
+  sin tools nuevas, golden intacto.
 - **Captura automática C2 — redacción de secretos en el borde a `shared` (más seguro que el SOTA).** Como la
   captura es **shared-by-default**, un secreto que el agente capture no debe terminar en el cerebro que ve
   todo el equipo. Nuevo paquete `internal/redact` (model-free, **sin dependencias nuevas**): `Redact(text)`
