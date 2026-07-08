@@ -30,6 +30,9 @@ const (
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 	codeInternalError  = -32603
+	// codeUnauthorized (rango server-error de JSON-RPC) = el principal autenticado no
+	// tiene permiso para invocar la tool (autorización por rol, Track 16 F1 16.1c).
+	codeUnauthorized = -32001
 )
 
 type JsonRpcRequest struct {

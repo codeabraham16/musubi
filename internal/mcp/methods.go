@@ -95,9 +95,17 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	if !ok {
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
+	readOnly := s.toolReadOnly[callReq.Name]
+	// Autorización por rol (Track 16 F1 16.1c): en modo serve hay un principal en el ctx
+	// (lo autenticó el transporte HTTP). Un reader solo puede tools de lectura. En stdio
+	// local no hay principal ⇒ acceso pleno (confianza local). Se chequea ANTES de tomar
+	// el lock para no serializar denegaciones.
+	if p := principalFrom(ctx); !p.canCall(readOnly) {
+		return nil, rpcErrorf(codeUnauthorized, "principal %q (rol %s) no autorizado para %q", p.Name, p.Role, callReq.Name)
+	}
 	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
 	// toman el lock exclusivo (serializadas, sin lost-updates de read-modify-write).
-	if s.toolReadOnly[callReq.Name] {
+	if readOnly {
 		s.dispatchMu.RLock()
 		defer s.dispatchMu.RUnlock()
 	} else {
