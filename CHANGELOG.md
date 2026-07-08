@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-07-08
+
 ### Added
 - **Hardening del borde del central — lockout + threat model + ACLs (Track 16 / Producible 16.1e).** Cierra la
   Fase 1. (1) **Lockout anti fuerza-bruta**: tras 5 fallos de auth desde una IP, el central la bloquea 60s
@@ -77,14 +79,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `deploy/musubi-backup.sh` + un **timer systemd diario** (instalado por `install-musubi-brain.sh`) que shipa el
   snapshot **off-host** (`rsync`/`rclone`/`cp`) con retención; (4) **runbook de restore probado** en
   `docs/Server_Brain_Onboarding.md`. Cierra el hallazgo **crítico** «el central no tiene DR» de `audit/2026-07-08`.
-
-### Changed
-- **`backupDB()` migrado a `VACUUM INTO`** (ver arriba): el backup del auto-heal del `doctor` ahora es un snapshot
-  consistente y compactado en vez de una copia cruda del archivo.
-
-## [0.78.0] - 2026-07-08
-
-### Added
 - **Fuente única de versión + release verificable (Track 16 / Producible 16.0a).** La versión vivía en dos
   lugares que derivaron: el tag de git (vía `-ldflags -X main.version`) y `cmd/musubi/versioninfo.json` (el
   recurso de Windows), que quedó congelado en `0.57.0.0` con el proyecto en `0.78` porque el paso manual de
@@ -225,6 +219,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   (Tailscale, allowlist de NordVPN, entrada remota `musubi-cerebro` en el `.mcp.json` con el token por
   referencia `${MUSUBI_TOKEN}`, y verificación con auth). Codifican el runbook de
   `docs/Server_Brain_Onboarding.md`.
+
+### Changed
+- **`backupDB()` migrado a `VACUUM INTO`**: el backup del auto-heal del `doctor` ahora es un snapshot
+  consistente y compactado en vez de una copia cruda del archivo.
 
 ## [0.77.0] - 2026-07-04
 
