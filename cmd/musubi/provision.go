@@ -68,7 +68,48 @@ func runProvision(args []string) {
 		fmt.Fprintf(os.Stderr, "provision: %v\n", err)
 		os.Exit(1)
 	}
+
+	// P2: dejar el proyecto SETEADO como Musubi (workspace + skills + hooks, incl. la captura
+	// automática C1/C3), reusando los helpers de setup. Best-effort: no revierte la conexión.
+	if opts.DryRun {
+		rep.Steps = append(rep.Steps, provision.StepResult{
+			Name: "setup-local", Status: provision.StatusTodo,
+			Detail: "setearía el proyecto (workspace + skills + templates + 4 hooks)",
+		})
+	} else {
+		rep.Steps = append(rep.Steps, injectLocalSetup(opts.ProjectDir, exe)...)
+	}
 	printProvisionReport(rep, opts)
+}
+
+// injectLocalSetup deja el proyecto seteado como Musubi reusando los helpers de setup.go:
+// workspace, skills cognitivas, templates SDD y los 4 hooks (SessionStart/UserPromptSubmit/
+// PreToolUse/Stop). Best-effort: cada paso reporta done/todo; un fallo no aborta ni revierte la
+// conexión al cerebro ya lograda. Si el workspace no se puede crear, se omiten los dependientes.
+func injectLocalSetup(projectDir, exePath string) []provision.StepResult {
+	var steps []provision.StepResult
+	add := func(name string, err error, okDetail string) {
+		if err != nil {
+			steps = append(steps, provision.StepResult{Name: name, Status: provision.StatusTodo, Detail: err.Error()})
+			return
+		}
+		steps = append(steps, provision.StepResult{Name: name, Status: provision.StatusDone, Detail: okDetail})
+	}
+
+	if err := ensureWorkspace(projectDir); err != nil {
+		add("workspace", err, "")
+		return steps // sin workspace no tiene sentido seguir con skills/hooks
+	}
+	add("workspace", nil, ".musubi/ (config + memoria) listo")
+
+	_, skillsErr := writeCognitiveSkills(projectDir)
+	add("skills", skillsErr, "skills cognitivas en .musubi/skills/")
+	add("sdd-templates", writeSddTemplates(projectDir), "templates SDD en .musubi/templates/sdd/")
+	add("hook-sessionstart", writeClaudeHook(projectDir, exePath), "SessionStart (priming + descubrimiento)")
+	add("hook-turn", writeTurnHook(projectDir, exePath), "UserPromptSubmit (contexto por turno)")
+	add("hook-precheck", writeCodeMemoryHook(projectDir, exePath), "PreToolUse(Read) (memoria de código)")
+	add("hook-stop", writeCaptureHook(projectDir, exePath), "Stop (captura de commits)")
+	return steps
 }
 
 // flagValue devuelve el valor de un flag pasado como "--x=valor" o "--x valor".

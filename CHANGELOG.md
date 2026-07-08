@@ -8,6 +8,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **PC auto-configurable P2 — `musubi provision` deja el proyecto seteado.** P1 conectaba la máquina al
+  cerebro; ahora `provision` también **deja el proyecto 100% seteado como Musubi** — workspace `.musubi/`,
+  skills cognitivas, templates SDD y los **4 hooks** (SessionStart con el priming de captura proactiva **C1**,
+  UserPromptSubmit, PreToolUse, y **Stop** con la captura de commits **C3**) — reusando los helpers de `setup`.
+  Consecuencia: una máquina recién provista tiene **la captura automática y la memoria de código funcionando
+  de fábrica**, no solo la conexión al cerebro. Best-effort (un fallo del setup local no revierte la conexión
+  ya lograda), idempotente, y `--dry-run` no muta. Aditivo: `setup` sin cambios, golden intacto.
 - **Captura automática C3 — captura de commits (red de seguridad determinista).** Un hook **`Stop`**
   (`musubi capture --hook-mode`) que, al cerrar cada turno, captura los **commits nuevos** del repo como
   memoria **local**, sin depender del agente ni de un LLM — el mensaje de commit **es el "por qué"** destilado
