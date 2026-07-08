@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Enforcement del aislamiento por credencial (Track 16 / Producible 16.1c-3).** El cable que cierra la Fase 1:
+  el scope del recall se **deriva del principal autenticado** (su `project_id` sale de la credencial, no lo
+  auto-declara el cliente). `toolRecall` ahora acota el recall al proyecto del principal — un `reader`/`writer`
+  con `project_id` **solo recupera memoria de su proyecto** (más la sin atribuir), mientras un `admin` ve
+  **federado** (todos). Sin principal (stdio local) o sin `project_id` ⇒ sin scope (federado, histórico). Con
+  esto el aislamiento de 16.1b se **activa automáticamente** por credencial: se cierra el hallazgo **high** de
+  cross-project bleed. Lógica pura en `recallScopeFor(principal)`; enforcement e2e verificado (writer ve solo lo
+  suyo, admin ve todo). Backward-compatible; golden intacto.
 - **CLI `musubi token` — gestión del registro de principals (Track 16 / Producible 16.1c-2).** Hace usable la
   identidad por-principal sin computar hashes a mano: **`musubi token new --name X --project Y --role writer`**
   genera un token opaco (256 bits, prefijo `msb_`), guarda su **SHA-256** en `.musubi/principals.yaml` (nunca el
