@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +47,10 @@ type httpOptions struct {
 	// Se usa en modo loopback; en modo remoto el bearer token es el gate y estos checks
 	// romperían a clientes legítimos (que usan un Host no-loopback).
 	loopbackOnly bool
+	// registry, si no es nil, activa la IDENTIDAD por-principal (16.1c): cada request se
+	// autentica contra el registro (o el token legacy) y el principal resuelto viaja en el
+	// ctx para la autorización por rol. Nil ⇒ modo legacy (el único `token` de arriba).
+	registry *PrincipalRegistry
 }
 
 // HTTPHandler devuelve el http.Handler que sirve MCP sobre HTTP. POST /mcp recibe un
@@ -69,9 +74,19 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 				return
 			}
 		}
-		// Autenticación: si hay token configurado, exigir Bearer válido (comparación
-		// en tiempo constante para no filtrar el token por timing).
-		if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+		// Autenticación. Con registro de principals (16.1c): el bearer debe resolver a un
+		// principal (o al token legacy) — si no, 401. Sin registro (modo legacy): un único
+		// token, comparado en tiempo constante. El principal resuelto viaja en el ctx.
+		var principal *Principal
+		if opt.registry != nil {
+			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			if !ok {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			principal = p
+		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -100,6 +115,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 
 		ctx, cancel := context.WithTimeout(r.Context(), opt.reqTimeout)
 		defer cancel()
+		ctx = withPrincipal(ctx, principal) // nil en modo legacy ⇒ acceso pleno
 
 		// Dispatch es seguro para llamarse concurrentemente: serializa internamente las
 		// tools que mutan (Lock) y deja correr en paralelo las de solo-lectura (RLock).
@@ -163,6 +179,15 @@ func resolveServiceAuth(cfg config.ServiceConfig) (token string, loopback bool, 
 	return token, loopback, nil
 }
 
+// principalsPath resuelve la ruta del registro de principals: cfg.PrincipalsFile si está
+// seteada, si no el default .musubi/principals.yaml bajo la raíz del proyecto (MUSUBI_HOME).
+func (s *McpServer) principalsPath(cfg config.ServiceConfig) string {
+	if strings.TrimSpace(cfg.PrincipalsFile) != "" {
+		return cfg.PrincipalsFile
+	}
+	return filepath.Join(s.projectPath, ".musubi", "principals.yaml")
+}
+
 // validBearer compara en tiempo constante el header Authorization contra el token
 // esperado (formato "Bearer <token>").
 func validBearer(authHeader, want string) bool {
@@ -174,11 +199,29 @@ func validBearer(authHeader, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// bearerToken extrae el token de un header "Authorization: Bearer <token>" ("" si no
+// tiene el formato). Lo usa la resolución por-principal del registro (16.1c).
+func bearerToken(authHeader string) string {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(authHeader[len(prefix):])
+}
+
 // ListenAndServeHTTP arranca el servidor HTTP en cfg.Addr y BLOQUEA hasta que ctx se
 // cancela (shutdown graceful). Aplica el gating de auth (un bind no-loopback exige
 // token) y TLS si está configurado.
 func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceConfig) error {
 	token, loopback, err := resolveServiceAuth(cfg)
+	if err != nil {
+		return err
+	}
+	// Identidad por-principal (16.1c): cargar el registro de tokens. Ruta explícita
+	// (cfg.PrincipalsFile) o el default .musubi/principals.yaml del workspace. Si no existe,
+	// loadPrincipals devuelve nil ⇒ modo legacy (un único bearer). Un archivo malformado
+	// es error de arranque (fail-closed). El token legacy queda admitido como admin.
+	registry, err := loadPrincipals(s.principalsPath(cfg), token)
 	if err != nil {
 		return err
 	}
@@ -198,7 +241,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback}),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: registry}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,

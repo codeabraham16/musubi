@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Identidad por-principal — registro de tokens + autorización por rol (Track 16 / Producible 16.1c-1).**
+  Cierra el core del hallazgo **high** _"un único bearer sin identidad/rotación/revocación/authz"_. El central
+  puede cargar un **registro de principals** (`.musubi/principals.yaml` o `service.principals_file`) que mapea
+  el **SHA-256** de cada token a `{name, project_id, role}` — credenciales **por-miembro revocables** (borrás la
+  línea) en vez de un token compartido. El archivo guarda el **hash**, nunca el token crudo (un leak no da
+  credenciales usables). En modo `serve`, cada request se autentica contra el registro y el principal viaja en el
+  contexto; el dispatch aplica **authz por rol**: `reader` solo tools de lectura, `writer` lee+escribe, `admin`
+  todo (deniega con `codeUnauthorized`). **Backward-compatible**: sin archivo de registro sigue el modo de un
+  único bearer, y el `MUSUBI_TOKEN` legacy sigue válido como `admin`; el daemon stdio local no tiene principal
+  (confianza local, acceso pleno). Runbook de alta/revocación en `docs/Server_Brain_Onboarding.md`. Golden
+  intacto. (El CLI `musubi token new|revoke|list` y el enforcement `project_id`→recall llegan en 16.1c-2/16.1c-3.)
 - **Aislamiento por proyecto en el recall + federación opt-in (Track 16 / Producible 16.1b).** Segundo paso de
   la Fase 1: el recall puede acotarse a un proyecto. `RecallOptions` suma `ProjectScope` y `Federate` — con
   scope y sin federate, el recall **descarta los candidatos de otros proyectos** (conserva el proyecto pedido y

@@ -309,6 +309,11 @@ type ServiceConfig struct {
 	// (el token viajaría en texto plano). Default false => fail-closed: hay que optar
 	// explícitamente (p.ej. cuando un proxy termina TLS por delante).
 	AllowInsecureToken bool `yaml:"allow_insecure_token,omitempty"`
+	// PrincipalsFile es la ruta del registro de identidad por-principal (Track 16 F1
+	// 16.1c): un YAML que mapea el SHA-256 de cada token a {name, project_id, role}.
+	// Vacío => se prueba el default .musubi/principals.yaml; si tampoco existe, modo
+	// legacy (un único bearer, sin roles). El archivo NUNCA contiene el token crudo.
+	PrincipalsFile string `yaml:"principals_file,omitempty"`
 }
 
 // SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain

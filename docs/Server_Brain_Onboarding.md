@@ -134,6 +134,39 @@ curl -fsS http://127.0.0.1:7717/readyz          # verificá que levantó
 - `musubi export` (snapshot JSON) y `musubi doctor` (valida integridad / repara) siguen
   disponibles como herramientas complementarias de diagnóstico.
 
+## Identidad por-principal (opcional)
+
+Por defecto el central usa **un único bearer** (`MUSUBI_TOKEN`) para todo el equipo: una fuga
+= compromiso total, sin revocación selectiva. Para un equipo, activá el **registro de
+principals**: cada miembro tiene su propio token, con proyecto y rol, revocable borrando una
+línea. El archivo guarda el **SHA-256** del token, nunca el token crudo.
+
+Creá `~/musubi-brain/.musubi/principals.yaml` (o la ruta de `service.principals_file`), 600:
+
+```yaml
+principals:
+  - name: alice
+    token_sha256: "<sha256-del-token-de-alice>"
+    project_id: crm-musubi     # aísla su recall a este proyecto (con 16.1c-3)
+    role: writer               # reader (solo lectura) | writer (lee+escribe) | admin
+```
+
+El hash se computa así (el token se genera una vez y se le entrega al miembro por un canal
+seguro; el servidor solo ve el hash):
+
+```bash
+printf %s "EL-TOKEN-DE-ALICE" | sha256sum | cut -d' ' -f1
+```
+
+- **Roles:** `reader` solo puede tools de lectura; `writer` lee y escribe; `admin` todo.
+- **Revocar** = borrar la línea y reiniciar `musubi-brain.service`.
+- **Backward-compat:** sin archivo de registro, sigue el modo de un único token. El
+  `MUSUBI_TOKEN` legacy sigue válido (como `admin`) aun con registro presente.
+- El archivo es un secreto: `chmod 600`, fuera de control de versiones.
+
+> Un CLI `musubi token new|revoke|list` que genere el token y actualice el registro llega en
+> un paso siguiente; por ahora el hash se computa a mano como arriba.
+
 ## Notas de operación
 
 - **Un solo escritor lógico**: el daemon serializa las tools que mutan; no corras dos
