@@ -3,9 +3,9 @@ package memory
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -165,35 +165,45 @@ func (e *DbEngine) Repair(code, mode string) (RepairResult, error) {
 	}
 }
 
-// backupDB copia el archivo SQLite a .musubi/backups/ con timestamp.
+// BackupTo crea un snapshot CONSISTENTE de la base en destDir (lo crea si falta), con
+// nombre `memory.db.<timestamp>`, usando `VACUUM INTO`. Antes el backup copiaba el archivo
+// con io.Copy tras un wal_checkpoint, pero eso podía capturar un estado a medias si había
+// escrituras concurrentes (el checkpoint y la copia no son atómicos entre sí). `VACUUM INTO`
+// produce una copia transaccionalmente consistente en un solo paso, sin lockear la base para
+// el resto de lectores/escritores, y de paso compacta el resultado. Es puro-Go (no requiere
+// el CLI sqlite3 en el host). Lo usan el auto-heal del doctor (vía backupDB) y el comando
+// `musubi backup` que dispara el timer de backup off-host del cerebro central
+// (deploy/musubi-backup.sh, ver docs/Server_Brain_Onboarding.md).
+func (e *DbEngine) BackupTo(destDir string) (string, error) {
+	if e.path == "" {
+		return "", fmt.Errorf("ruta de la base desconocida; no se puede respaldar")
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", err
+	}
+	ts := time.Now().UTC().Format("20060102-150405")
+	dest := filepath.Join(destDir, "memory.db."+ts)
+	// VACUUM INTO exige que el destino NO exista.
+	if _, err := os.Stat(dest); err == nil {
+		return "", fmt.Errorf("el destino de backup ya existe: %s", dest)
+	}
+	// El destino va como literal SQL (VACUUM INTO no admite parámetros enlazados); se
+	// escapan las comillas simples duplicándolas. `dest` lo construimos nosotros
+	// (directorio + timestamp), no viene de entrada del usuario.
+	q := fmt.Sprintf(`VACUUM INTO '%s'`, strings.ReplaceAll(dest, "'", "''"))
+	if _, err := e.db.Exec(q); err != nil {
+		return "", fmt.Errorf("VACUUM INTO falló: %w", err)
+	}
+	return dest, nil
+}
+
+// backupDB crea un snapshot en .musubi/backups/ (junto a la base). Es el backup local
+// que toma el auto-heal del doctor antes de reparar. Delega en BackupTo.
 func (e *DbEngine) backupDB() (string, error) {
 	if e.path == "" {
 		return "", fmt.Errorf("ruta de la base desconocida; no se puede respaldar")
 	}
-	dir := filepath.Join(filepath.Dir(e.path), "backups")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	// Con WAL, los commits viven en el archivo -wal hasta el checkpoint. Forzar un
-	// checkpoint para que el backup (que copia solo memory.db) quede completo.
-	_, _ = e.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-
-	ts := time.Now().UTC().Format("20060102-150405")
-	dest := filepath.Join(dir, "memory.db."+ts)
-	in, err := os.Open(e.path)
-	if err != nil {
-		return "", err
-	}
-	defer in.Close()
-	out, err := os.Create(dest)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return "", err
-	}
-	return dest, out.Close()
+	return e.BackupTo(filepath.Join(filepath.Dir(e.path), "backups"))
 }
 
 // ---- checks individuales ----

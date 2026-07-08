@@ -135,6 +135,58 @@ systemctl daemon-reload
 systemctl enable --now musubi-brain.service
 ok "Servicio systemd habilitado y arrancado"
 
+# ── 5b. Backup programado OFF-HOST (musubi-backup.timer) ─────────────────────
+# El cerebro central es el único punto donde converge la memoria compartida: sin backup
+# off-host, perder el disco = perder toda la memoria. El timer toma un snapshot consistente
+# (musubi backup = VACUUM INTO) y lo shipa a BACKUP_REMOTE. Runbook de restore en
+# docs/Server_Brain_Onboarding.md.
+log "Instalando backup programado (musubi-backup.timer)"
+if curl -fsSL "https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh" -o /usr/local/bin/musubi-backup; then
+  chmod 0755 /usr/local/bin/musubi-backup
+  command -v restorecon &>/dev/null && restorecon -v /usr/local/bin/musubi-backup || true
+  # Config de backup en el EnvironmentFile (idempotente: no pisa valores ya presentes).
+  if ! grep -q '^BACKUP_' "$ENV_FILE" 2>/dev/null; then
+    cat >> "$ENV_FILE" <<EOF
+
+# Backup off-host (musubi-backup.timer). Configurá BACKUP_REMOTE para proteger contra
+# la pérdida del disco; vacío = el snapshot queda SOLO en el disco local (inseguro).
+BACKUP_REMOTE=
+BACKUP_METHOD=rsync
+BACKUP_RETENTION_DAYS=14
+EOF
+  fi
+  cat > /etc/systemd/system/musubi-backup.service <<EOF
+[Unit]
+Description=Musubi backup del cerebro central (snapshot off-host)
+After=musubi-brain.service
+
+[Service]
+Type=oneshot
+User=$BRAIN_USER
+Group=$BRAIN_USER
+Environment=MUSUBI_HOME=$BRAIN_HOME
+Environment=MUSUBI_BIN=$BIN
+EnvironmentFile=$ENV_FILE
+ExecStart=/usr/local/bin/musubi-backup
+EOF
+  cat > /etc/systemd/system/musubi-backup.timer <<EOF
+[Unit]
+Description=Musubi backup diario del cerebro central
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now musubi-backup.timer
+  ok "Backup diario habilitado (03:30). CONFIGURÁ BACKUP_REMOTE en $ENV_FILE para que sea off-host."
+else
+  log "No se pudo bajar musubi-backup.sh; instalá el timer a mano (ver docs/Server_Brain_Onboarding.md)."
+fi
+
 # ── 6. Firewall de la malla (best-effort) ───────────────────────────────────
 if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
   if ip link show tailscale0 &>/dev/null; then
