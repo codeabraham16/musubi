@@ -1429,12 +1429,29 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 
 	// C4: capturar el par error→fix como memoria LOCAL (best-effort; un fallo NO rompe el resolve).
 	// Solo si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Queda
-	// local; al compartir por promote, la redacción de C2 la limpia.
+	// local; al compartir por promote, la redacción de C2 la limpia. Si la semántica está encendida,
+	// se guarda CON embedding (16.2e) para que participe del recall semántico.
 	if strings.TrimSpace(log.SuggestedPatch) != "" {
 		content := fmt.Sprintf("Error en %s: %s\n\nArreglado con: %s", log.FilePath, log.ErrorMessage, log.SuggestedPatch)
-		_, _, _ = s.engine.SaveObservationDedupedTyped("error-fix", content, 0.7, "procedural", "local", nil)
+		_, _, _ = s.engine.SaveObservationDedupedTyped("error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
+}
+
+// embedIfEnabled genera el vector de text con el embedder activo, o nil si la semántica está
+// apagada o el embedding falla. Best-effort: la captura automática (C4) no debe romperse por un
+// embed. El engine estampa la procedencia (F2.2) que fijó el entrypoint, homogénea con el recall.
+func (s *McpServer) embedIfEnabled(text string) []float32 {
+	if !embedding.Enabled(s.embedder) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	v, err := s.embedder.Embed(ctx, text)
+	if err != nil {
+		return nil
+	}
+	return v
 }
 
 // toolInsights devuelve el resumen de observabilidad activa (Track 6 / T6.4): tamaño de la

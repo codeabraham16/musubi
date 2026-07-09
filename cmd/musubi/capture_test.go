@@ -35,6 +35,55 @@ func TestClassifyCommit(t *testing.T) {
 	}
 }
 
+// recordingStore implementa captureStore y registra el embedding del último guardado, para
+// verificar que la captura pasa (o no) el vector.
+type recordingStore struct {
+	meta      map[string]string
+	lastEmbed []float32
+	saved     int
+}
+
+func (r *recordingStore) GetMeta(k string) (string, bool, error) { v, ok := r.meta[k]; return v, ok, nil }
+func (r *recordingStore) SetMeta(k, v string) error {
+	if r.meta == nil {
+		r.meta = map[string]string{}
+	}
+	r.meta[k] = v
+	return nil
+}
+func (r *recordingStore) SaveObservationDedupedTyped(_, _ string, _ float64, _, _ string, emb []float32) (string, bool, error) {
+	r.lastEmbed = emb
+	r.saved++
+	return "id", false, nil
+}
+
+// Con embed no-nil, cada commit se guarda CON su vector (participa del recall semántico).
+func TestCaptureCommitsEmbeds(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	embed := func(string) []float32 { return []float32{1, 2, 3} }
+	n, err := captureCommits(store, g, embed)
+	if err != nil || n != 1 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	if len(store.lastEmbed) != 3 {
+		t.Errorf("esperaba el vector de la captura, obtuve %v", store.lastEmbed)
+	}
+}
+
+// Con embed nil, el guardado es léxico (vector nil): comportamiento histórico.
+func TestCaptureCommitsNilEmbedIsLexical(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	n, err := captureCommits(store, g, nil)
+	if err != nil || n != 1 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	if store.lastEmbed != nil {
+		t.Errorf("sin embed debería guardar con vector nil, obtuve %v", store.lastEmbed)
+	}
+}
+
 // fakeGit implementa gitLog para el core sin repo real.
 type fakeGit struct {
 	head      string
@@ -62,7 +111,7 @@ func newEngine(t *testing.T) *memory.DbEngine {
 func TestCaptureFirstRunSavesHead(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{head: "abc123", commits: []commit{{SHA: "abc123", Subject: "feat: primera cosa", Files: []string{"a.go"}}}}
-	n, err := captureCommits(e, g)
+	n, err := captureCommits(e, g, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +133,7 @@ func TestCaptureIncremental(t *testing.T) {
 		{Subject: "fix: bug uno"},
 		{Subject: "feat: cosa dos"},
 	}}
-	n, err := captureCommits(e, g)
+	n, err := captureCommits(e, g, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +152,7 @@ func TestCaptureNoNewCommits(t *testing.T) {
 	e := newEngine(t)
 	_ = e.SetMeta(metaCaptureLastCommit, "same")
 	g := &fakeGit{head: "same", commits: []commit{{Subject: "feat: no debería leerse"}}}
-	n, err := captureCommits(e, g)
+	n, err := captureCommits(e, g, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("sin commits nuevos debe ser 0 sin error; n=%d err=%v", n, err)
 	}
@@ -115,7 +164,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 		{Subject: "chore: bump dependencies"}, // trivial → skip
 		{Subject: "fix: real problem here"},   // capturado
 	}}
-	n, err := captureCommits(e, g)
+	n, err := captureCommits(e, g, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +179,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 func TestCaptureNotAGitRepo(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{headErr: errors.New("not a git repository")}
-	n, err := captureCommits(e, g)
+	n, err := captureCommits(e, g, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("sin repo git: no-op silencioso; n=%d err=%v", n, err)
 	}
