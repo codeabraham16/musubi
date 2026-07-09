@@ -154,6 +154,10 @@ type McpServer struct {
 	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".
 	syncClient *SyncClient
 	syncCfg    config.SyncConfig
+	// metrics son los contadores/histogramas expuestos en /metrics (Track 16 F3.1). Compartido
+	// por ambos transportes: el middleware HTTP registra el resultado de cada request y
+	// handleToolsCall registra la latencia/resultado de cada tools/call. Lock-free (atomic).
+	metrics *serverMetrics
 }
 
 // SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando
@@ -184,6 +188,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		conflicts:   config.Default().Conflicts,
 		pipeline:    config.Default().Pipeline,
 		multiagent:  config.Default().MultiAgent,
+		metrics:     &serverMetrics{},
 	}
 	for _, opt := range opts {
 		opt(s)
