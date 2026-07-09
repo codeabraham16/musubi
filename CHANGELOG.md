@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-07-08
+
 ### Added
 - **Captura automática (C3/C4) con embeddings — cierra la Fase 2 (Track 16 / Producible 16.2e).** Las memorias
   auto-capturadas se guardaban con vector `nil`, así que quedaban FUERA del recall semántico (sólo participaban
