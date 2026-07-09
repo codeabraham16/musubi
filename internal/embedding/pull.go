@@ -7,13 +7,18 @@ package embedding
 // verificable e inmutable aunque la fuente sea de un tercero o un mirror propio.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -64,7 +69,7 @@ func PullModel(destDir string, spec ModelSpec, client *http.Client, progress fun
 		return fmt.Errorf("tabla %q sin archivos", spec.Name)
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Minute}
+		client = ipv4FallbackClient(60 * time.Minute)
 	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("crear %s: %w", destDir, err)
@@ -134,6 +139,40 @@ func downloadVerified(client *http.Client, f ModelFile, final string, progress f
 		return fmt.Errorf("checksum incorrecto: obtuve %s, esperaba %s (%s queda para diagnóstico)", got, f.SHA256, tmp)
 	}
 	return os.Rename(tmp, final)
+}
+
+// ipv4FallbackClient arma un http.Client que, si el dial dual-stack falla porque la red es
+// inalcanzable (el caso típico de una máquina con IPv6 CONFIGURADO pero SIN RUTA real: el
+// resolver devuelve AAAA, Go intenta IPv6 y no cae solo a IPv4), REINTENTA forzando "tcp4".
+// Así `musubi embed pull` anda en redes con IPv6 roto sin romper las IPv6-only (que aciertan
+// en el primer intento). Clona el transporte default para conservar proxy/TLS/HTTP2.
+func ipv4FallbackClient(timeout time.Duration) *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err == nil || network != "tcp" || !isNetUnreachable(err) {
+			return conn, err
+		}
+		// IPv6 sin ruta: reintentar solo por IPv4. Si también falla, devolvemos el error
+		// original (más informativo sobre por qué arrancó fallando).
+		if conn4, err4 := dialer.DialContext(ctx, "tcp4", addr); err4 == nil {
+			return conn4, nil
+		}
+		return nil, err
+	}
+	return &http.Client{Timeout: timeout, Transport: tr}
+}
+
+// isNetUnreachable indica si err corresponde a "red/host inalcanzable" (ENETUNREACH /
+// EHOSTUNREACH), la firma de un IPv6 sin ruta. Chequea el errno (cross-plataforma: Go define
+// esas constantes en todos los SO) y, por las dudas de que no se propague, el texto estable.
+func isNetUnreachable(err error) bool {
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "no route to host")
 }
 
 // fileHasChecksum indica si el archivo en path ya existe y su SHA-256 coincide con want.

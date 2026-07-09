@@ -3,12 +3,16 @@ package embedding
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestPullModel(t *testing.T) {
@@ -94,6 +98,54 @@ func TestPullModelHTTPError(t *testing.T) {
 	}}
 	if err := PullModel(t.TempDir(), spec, srv.Client(), nil); err == nil {
 		t.Fatal("un 404 debería fallar")
+	}
+}
+
+// Con client nil, PullModel usa el cliente de fallback IPv4 y descarga igual (valida el
+// cableado del path real de la CLI contra un server local).
+func TestPullModelNilClientUsesFallback(t *testing.T) {
+	content := []byte("contenido con cliente default")
+	sum := sha256.Sum256(content)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+	spec := ModelSpec{Name: "test", Files: []ModelFile{
+		{Name: "x.bin", URL: srv.URL + "/x", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(content))},
+	}}
+	if err := PullModel(t.TempDir(), spec, nil, nil); err != nil {
+		t.Fatalf("PullModel con client nil (fallback): %v", err)
+	}
+}
+
+// El cliente de fallback hace un GET normal sin regresiones (dial dual-stack a 127.0.0.1 OK).
+func TestIPv4FallbackClientWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	resp, err := ipv4FallbackClient(30 * time.Second).Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET con cliente de fallback: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status inesperado: %d", resp.StatusCode)
+	}
+}
+
+// isNetUnreachable reconoce el "IPv6 sin ruta" por errno y por texto, y NO dispara con
+// errores comunes (para no reintentar de gusto).
+func TestIsNetUnreachable(t *testing.T) {
+	unreach := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ENETUNREACH)}
+	if !isNetUnreachable(unreach) {
+		t.Error("ENETUNREACH debería contar como inalcanzable")
+	}
+	if !isNetUnreachable(errors.New("dial tcp [2600::1]:443: connect: network is unreachable")) {
+		t.Error("el texto 'network is unreachable' debería contar (fallback)")
+	}
+	if isNetUnreachable(errors.New("boom")) {
+		t.Error("un error cualquiera no debería contar como inalcanzable")
 	}
 }
 

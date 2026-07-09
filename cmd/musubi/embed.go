@@ -83,10 +83,19 @@ func runEmbedPull(args []string) {
 		fmt.Fprintf(os.Stderr, "\nError al descargar la tabla: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "\nListo. Para activar la memoria semántica, en .musubi/config.yaml:")
-	fmt.Fprintln(os.Stderr, "  embedding:")
-	fmt.Fprintln(os.Stderr, "    provider: static")
-	fmt.Fprintf(os.Stderr, "    static_path: %q\n", dest)
+	// La memoria semántica es AUTO-ON (resolveEmbedder): si la tabla quedó en la ubicación
+	// estándar del modelo default, se detecta sola al reiniciar y NO hay que tocar config.
+	// Solo cuando quedó fuera de esa ruta (--out o un modelo no-default) hace falta declararla.
+	autoPath := filepath.Join(workspaceDir(), ".musubi", "embeddings", defaultEmbedModel)
+	if dest == autoPath {
+		fmt.Fprintln(os.Stderr, "\nListo. La memoria semántica se enciende SOLA: reiniciá el daemon (o la")
+		fmt.Fprintln(os.Stderr, "sesión) y Musubi la auto-detecta. No hace falta tocar config.yaml.")
+	} else {
+		fmt.Fprintln(os.Stderr, "\nListo. La tabla quedó fuera de la ubicación estándar; activala en .musubi/config.yaml:")
+		fmt.Fprintln(os.Stderr, "  embedding:")
+		fmt.Fprintln(os.Stderr, "    provider: static")
+		fmt.Fprintf(os.Stderr, "    static_path: %q\n", dest)
+	}
 	fmt.Println(dest) // stdout: la ruta, para capturarla desde un script
 }
 
