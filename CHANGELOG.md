@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Captura automática (C3/C4) con embeddings — cierra la Fase 2 (Track 16 / Producible 16.2e).** Las memorias
+  auto-capturadas se guardaban con vector `nil`, así que quedaban FUERA del recall semántico (sólo participaban
+  las guardadas por herramienta). Ahora, cuando la semántica está encendida, **C3** (commits nuevos, hook `Stop`
+  vía `musubi capture`) y **C4** (par error→fix al resolver telemetría) generan su embedding: `runCapture`
+  resuelve el embedder con la MISMA auto-detección + degradación elegante que `serve`/`daemon` (`resolveEmbedder`)
+  y estampa la MISMA procedencia (`SetVectorModelID`, F2.2) para que los vectores sean homogéneos; C4 usa un
+  helper best-effort en el MCP server. Best-effort en ambos: un fallo de embedding devuelve `nil` (ese ítem queda
+  léxico) sin romper el turno ni el resolve. Con esto, TODA la memoria —capturada o guardada explícitamente—
+  participa del recall semántico. Golden intacto.
 - **Memoria semántica ON por default con auto-detección + degradación elegante (Track 16 / Producible 16.2f).**
   Cierra la Fase 2: la semántica se enciende sola cuando se puede y NUNCA rompe el arranque. El entrypoint
   (`serve`/`daemon`) ahora resuelve el embedder con `resolveEmbedder`: si no hay provider explícito (`none`/vacío)

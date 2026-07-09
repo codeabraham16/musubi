@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/config"
+	"musubi/internal/embedding"
 	"musubi/internal/memory"
 )
 
@@ -41,6 +43,10 @@ type captureStore interface {
 	SetMeta(key, value string) error
 	SaveObservationDedupedTyped(topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
 }
+
+// embedFunc genera el vector de un texto para la captura (o nil si la semántica está
+// apagada / falló). nil ⇒ guardado 100% léxico (comportamiento histórico).
+type embedFunc func(text string) []float32
 
 // realGit ejecuta git en un directorio, model-free y determinista (sin pager/color/locale).
 type realGit struct{ dir string }
@@ -149,9 +155,10 @@ func hasWord(s string, words ...string) bool {
 
 // captureCommits es el core testeable: captura los commits nuevos desde el último HEAD guardado
 // como observaciones LOCALES (nunca shared: C3 no debe filtrar un secreto de un diff; compartir
-// pasa por promote, que C2 redacta). Devuelve cuántas guardó. No-op silencioso si no es repo git
-// o no hay commits nuevos.
-func captureCommits(store captureStore, git gitLog) (int, error) {
+// pasa por promote, que C2 redacta). Si embed no es nil, cada commit se guarda CON su embedding
+// (participa del recall semántico); si es nil, guardado léxico. Devuelve cuántas guardó. No-op
+// silencioso si no es repo git o no hay commits nuevos.
+func captureCommits(store captureStore, git gitLog, embed embedFunc) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
@@ -177,7 +184,11 @@ func captureCommits(store captureStore, git gitLog) (int, error) {
 		if len(c.Files) > 0 {
 			content += "\n\nArchivos: " + strings.Join(c.Files, ", ")
 		}
-		if _, _, err := store.SaveObservationDedupedTyped("git-commit", content, importance, memType, memory.ScopeLocal, nil); err != nil {
+		var vec []float32
+		if embed != nil {
+			vec = embed(content)
+		}
+		if _, _, err := store.SaveObservationDedupedTyped("git-commit", content, importance, memType, memory.ScopeLocal, vec); err != nil {
 			return saved, err
 		}
 		saved++
@@ -215,7 +226,27 @@ func runCapture(args []string) {
 	}
 	defer engine.Close()
 
-	n, err := captureCommits(engine, realGit{dir: root})
+	// Embeddings en la captura (16.2e): si la semántica está encendida (auto-detección de la
+	// tabla + degradación elegante, igual que serve/daemon), cada commit capturado se guarda CON
+	// su vector, estampando la MISMA procedencia (F2.2) que el daemon para que sean homogéneos.
+	// Best-effort: un error de embedding devuelve nil (ese commit queda léxico), no rompe el turno.
+	var embed embedFunc
+	cfg, _ := config.Load(root)
+	embedder := resolveEmbedder(cfg, root)
+	if embedding.Enabled(embedder) {
+		engine.SetVectorModelID(embedder.Name())
+		embed = func(text string) []float32 {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			v, eerr := embedder.Embed(ctx, text)
+			if eerr != nil {
+				return nil
+			}
+			return v
+		}
+	}
+
+	n, err := captureCommits(engine, realGit{dir: root}, embed)
 	if err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: %v\n", err)
