@@ -322,6 +322,11 @@ type ServiceConfig struct {
 	// SIEMPRE (fail-closed: el central es infra compartida); este flag permite ADEMÁS
 	// activarla en un bind loopback. No se puede desactivar en no-loopback.
 	ForceRedact bool `yaml:"force_redact,omitempty"`
+	// QuotaPerMinute limita las llamadas a tools/call POR PRINCIPAL por minuto (Track 16 F3.2):
+	// protege al cerebro central de un principal desbocado. 0 (default) ⇒ sin límite. Solo
+	// aplica cuando hay un principal autenticado (serve con registro); en stdio local no hay
+	// cuota. Es por identidad de principal, no por IP (el lockout de auth ya cubre la IP).
+	QuotaPerMinute int `yaml:"quota_per_minute,omitempty"`
 }
 
 // SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain

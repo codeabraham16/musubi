@@ -100,8 +100,15 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	// (lo autenticó el transporte HTTP). Un reader solo puede tools de lectura. En stdio
 	// local no hay principal ⇒ acceso pleno (confianza local). Se chequea ANTES de tomar
 	// el lock para no serializar denegaciones.
-	if p := principalFrom(ctx); !p.canCall(readOnly) {
+	p := principalFrom(ctx)
+	if !p.canCall(readOnly) {
 		return nil, rpcErrorf(codeUnauthorized, "principal %q (rol %s) no autorizado para %q", p.Name, p.Role, callReq.Name)
+	}
+	// Cuota de uso por-principal (Track 16 F3.2): tras autorizar, contar la llamada contra la
+	// ventana del principal. Solo cuando hay principal (serve); en stdio local (p nil) no
+	// aplica. Se chequea ANTES del lock para no serializar los rechazos.
+	if p != nil && !s.quota.allow(p.Name, time.Now()) {
+		return nil, rpcErrorf(codeQuotaExceeded, "cuota excedida para el principal %q (máx %d llamadas/min); reintentá en unos segundos", p.Name, s.quota.max)
 	}
 	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
 	// toman el lock exclusivo (serializadas, sin lost-updates de read-modify-write).
