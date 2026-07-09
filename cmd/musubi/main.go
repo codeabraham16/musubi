@@ -70,6 +70,8 @@ func main() {
 		runBackup(os.Args[2:])
 	case "token":
 		runToken(os.Args[2:])
+	case "embed":
+		runEmbed(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "export":
