@@ -31,9 +31,13 @@ type tokenizer interface {
 	EncodeIDs(text string) []int
 }
 
-// StaticProvider genera embeddings por lookup + mean-pool sobre una tabla estática.
+// StaticProvider genera embeddings por lookup + mean-pool sobre una tabla estática. La
+// tabla se guarda PLANA (un solo []float32 de vocab*dim, la fila id ocupa
+// [id*dim : id*dim+dim]) en vez de [][]float32: para tablas grandes (p. ej. la multilingüe
+// de 500K×256 = ~488MB) evita ~500K headers de slice y mejora la localidad de caché.
 type StaticProvider struct {
-	table   [][]float32
+	table   []float32 // vocab*dim, row-major; la fila id es table[id*dim : (id+1)*dim]
+	rows    int       // cantidad de filas (tamaño del vocab)
 	dim     int
 	tok     tokenizer
 	modelID string // identidad de la tabla, para la provenance del vector (S1)
@@ -45,7 +49,7 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")
 	}
-	table, dim, err := loadStaticTable(filepath.Join(dir, "model.safetensors"))
+	table, rows, dim, err := loadStaticTable(filepath.Join(dir, "model.safetensors"))
 	if err != nil {
 		return nil, fmt.Errorf("tabla estática: %w", err)
 	}
@@ -55,6 +59,7 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	}
 	return &StaticProvider{
 		table:   table,
+		rows:    rows,
 		dim:     dim,
 		tok:     tok,
 		modelID: "static:" + filepath.Base(filepath.Clean(dir)),
@@ -72,12 +77,12 @@ func (p *StaticProvider) Embed(_ context.Context, text string) ([]float32, error
 	acc := make([]float64, p.dim)
 	n := 0
 	for _, id := range ids {
-		if id < 0 || id >= len(p.table) {
+		if id < 0 || id >= p.rows {
 			continue
 		}
-		row := p.table[id]
+		base := id * p.dim
 		for j := 0; j < p.dim; j++ {
-			acc[j] += float64(row[j])
+			acc[j] += float64(p.table[base+j])
 		}
 		n++
 	}
@@ -108,56 +113,51 @@ type stTensor struct {
 	DataOffsets []int64 `json:"data_offsets"`
 }
 
-// loadStaticTable lee el tensor "embeddings" de un safetensors: 8 bytes LE con la
-// longitud del header JSON, el header, y el blob contiguo de f32 little-endian.
-func loadStaticTable(path string) ([][]float32, int, error) {
+// loadStaticTable lee el tensor "embeddings" de un safetensors: 8 bytes LE con la longitud
+// del header JSON, el header, y el blob contiguo de f32 little-endian. Devuelve la tabla
+// PLANA (vocab*dim, row-major), el número de filas (vocab) y la dimensión.
+func loadStaticTable(path string) ([]float32, int, int, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if len(raw) < 8 {
-		return nil, 0, fmt.Errorf("safetensors demasiado corto")
+		return nil, 0, 0, fmt.Errorf("safetensors demasiado corto")
 	}
 	hlen := binary.LittleEndian.Uint64(raw[:8])
 	hdrEnd := 8 + int(hlen)
 	if hlen == 0 || hdrEnd > len(raw) {
-		return nil, 0, fmt.Errorf("header safetensors inválido")
+		return nil, 0, 0, fmt.Errorf("header safetensors inválido")
 	}
 	var hdr map[string]json.RawMessage
 	if err := json.Unmarshal(raw[8:hdrEnd], &hdr); err != nil {
-		return nil, 0, fmt.Errorf("header JSON: %w", err)
+		return nil, 0, 0, fmt.Errorf("header JSON: %w", err)
 	}
 	rawTensor, ok := hdr["embeddings"]
 	if !ok {
-		return nil, 0, fmt.Errorf("safetensors sin tensor \"embeddings\"")
+		return nil, 0, 0, fmt.Errorf("safetensors sin tensor \"embeddings\"")
 	}
 	var ti stTensor
 	if err := json.Unmarshal(rawTensor, &ti); err != nil {
-		return nil, 0, fmt.Errorf("tensor embeddings: %w", err)
+		return nil, 0, 0, fmt.Errorf("tensor embeddings: %w", err)
 	}
 	if ti.Dtype != "F32" || len(ti.Shape) != 2 {
-		return nil, 0, fmt.Errorf("esperaba embeddings F32 2D, obtuve %s %v", ti.Dtype, ti.Shape)
+		return nil, 0, 0, fmt.Errorf("esperaba embeddings F32 2D, obtuve %s %v", ti.Dtype, ti.Shape)
 	}
 	vocab, dim := ti.Shape[0], ti.Shape[1]
 	if len(ti.DataOffsets) != 2 {
-		return nil, 0, fmt.Errorf("data_offsets inválidos")
+		return nil, 0, 0, fmt.Errorf("data_offsets inválidos")
 	}
 	start, end := hdrEnd+int(ti.DataOffsets[0]), hdrEnd+int(ti.DataOffsets[1])
 	if start < 0 || end > len(raw) || end-start != vocab*dim*4 {
-		return nil, 0, fmt.Errorf("blob de embeddings inconsistente")
+		return nil, 0, 0, fmt.Errorf("blob de embeddings inconsistente")
 	}
 	blob := raw[start:end]
-	table := make([][]float32, vocab)
-	off := 0
-	for i := 0; i < vocab; i++ {
-		row := make([]float32, dim)
-		for j := 0; j < dim; j++ {
-			row[j] = math.Float32frombits(binary.LittleEndian.Uint32(blob[off : off+4]))
-			off += 4
-		}
-		table[i] = row
+	table := make([]float32, vocab*dim) // plano: la fila id es table[id*dim : (id+1)*dim]
+	for i := range table {
+		table[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
 	}
-	return table, dim, nil
+	return table, vocab, dim, nil
 }
 
 // --- WordPiece BERT hand-rolled (bit-exacto vs HuggingFace tokenizers) ---

@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`musubi embed pull` — descarga turnkey de la tabla de embeddings + carga plana (Track 16 / Producible 16.2d).**
+  Hace la memoria semántica *lista para encender* sin pasos manuales. Nuevo comando **`musubi embed pull
+  [modelo] [--out DIR] [--mirror URL]`** que baja una tabla estática (por default `potion-multilingual-128M`,
+  ES+EN) con **checksum SHA-256 pinneado**, de forma **atómica** (baja a `.part`, verifica tamaño + hash, y sólo
+  entonces renombra) e **idempotente** (si ya está con el checksum correcto, no re-descarga). La tabla es PURO
+  DATO: se baja una vez en el setup y en runtime no corre ninguna red ni modelo (model-free at inference). El
+  flag `--mirror` permite re-hostearla en infra propia (Forgejo/servidor del tailnet) manteniendo el checksum
+  pinneado, así un mirror comprometido no puede colar otra tabla. Registro `embedding.KnownModels` con URLs y
+  hashes verificados contra el oid LFS de la fuente. Además, `StaticProvider` ahora carga la tabla **PLANA** (un
+  solo `[]float32` de vocab×dim en vez de ~500K slices): para la multilingüe (500K×256 ≈ 488 MB) evita cientos de
+  miles de headers de slice y mejora la localidad de caché. Golden intacto.
 - **Tokenizer Unigram/SentencePiece en Go puro — habilita tablas MULTILINGÜES (Track 16 / Producible 16.2c).**
   El `StaticProvider` sólo sabía tokenizar WordPiece BERT (tablas inglesas). Las tablas multilingües de
   model2vec/POTION (ES+EN reales, p. ej. `potion-multilingual-128M`) usan **Unigram/SentencePiece** —otro
