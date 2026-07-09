@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.79.1] - 2026-07-09
+
 ### Fixed
 - **`musubi embed pull` ahora cae a IPv4 cuando el IPv6 no tiene ruta (Track 16 / Producible, pulido de Fase 4).**
   En máquinas con IPv6 *configurado pero sin ruta real* (VPN que tuneliza sólo IPv4, red que anuncia IPv6 sin
