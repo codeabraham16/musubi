@@ -23,6 +23,9 @@ const defaultMarketplaceCatalogURL = "https://raw.githubusercontent.com/codeabra
 
 // EmbeddingConfig describe cómo se generan los embeddings para la búsqueda semántica.
 type EmbeddingConfig struct {
+	// Provider: none | ollama | openai | static. "none" (o vacío) AUTO-DETECTA (16.2f): si hay
+	// una tabla en <workspace>/.musubi/embeddings/<default> (la que baja `musubi embed pull`)
+	// el entrypoint enciende "static" solo; si no, queda en recall léxico (degradación elegante).
 	Provider   string `yaml:"provider"`    // none | ollama | openai | static
 	Model      string `yaml:"model"`       // ej. nomic-embed-text, text-embedding-3-small
 	BaseURL    string `yaml:"base_url"`    // ej. http://localhost:11434, https://api.openai.com/v1

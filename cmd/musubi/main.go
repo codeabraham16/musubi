@@ -224,11 +224,9 @@ func runServe(args []string) {
 		svc.RequestTimeoutSeconds = config.Default().Service.RequestTimeoutSeconds
 	}
 
-	embedder, err := embedding.NewProvider(cfg.Embedding)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error al configurar embeddings: %v\n", err)
-		os.Exit(1)
-	}
+	// Proveedor de embeddings con auto-detección + degradación elegante (16.2f): enciende la
+	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.
+	embedder := resolveEmbedder(cfg, root)
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
@@ -280,11 +278,9 @@ func runDaemon() {
 		os.Exit(1)
 	}
 
-	embedder, err := embedding.NewProvider(cfg.Embedding)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error al configurar embeddings: %v\n", err)
-		os.Exit(1)
-	}
+	// Proveedor de embeddings con auto-detección + degradación elegante (16.2f): enciende la
+	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.
+	embedder := resolveEmbedder(cfg, root)
 
 	// Cargar motor de base de datos local
 	engine, err := memory.NewDbEngine(root)

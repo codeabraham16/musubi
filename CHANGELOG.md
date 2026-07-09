@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Memoria semántica ON por default con auto-detección + degradación elegante (Track 16 / Producible 16.2f).**
+  Cierra la Fase 2: la semántica se enciende sola cuando se puede y NUNCA rompe el arranque. El entrypoint
+  (`serve`/`daemon`) ahora resuelve el embedder con `resolveEmbedder`: si no hay provider explícito (`none`/vacío)
+  y existe una tabla en la ubicación estándar (`<workspace>/.musubi/embeddings/potion-multilingual-128M`, la que
+  baja `musubi embed pull`), enciende `static` automáticamente; si no hay tabla —o si cargarla falla— cae a
+  **recall léxico** en vez de abortar (antes un error de embeddings hacía `os.Exit`). **Medición del gate** (con
+  la tabla real de POTION multilingüe, sobre el fixture dorado): la semántica es un **win aditivo** — `R@10`
+  0.75→**0.83** (recupera ~1/3 de los relevantes del hueco de vocabulario) **sin regresión** en `R@1`/`R@5`/`MRR`.
+  Test de medición repetible (`recalleval`, gated por `MUSUBI_POTION_DIR`). También: fix del flag `--out` de
+  `embed pull` (el modelo posicional se extrae antes de parsear, así `embed pull <modelo> --out X` funciona) y
+  `.musubi/embeddings/` va al `.gitignore` (tablas de cientos de MB, puro dato). Golden intacto.
 - **`musubi embed pull` — descarga turnkey de la tabla de embeddings + carga plana (Track 16 / Producible 16.2d).**
   Hace la memoria semántica *lista para encender* sin pasos manuales. Nuevo comando **`musubi embed pull
   [modelo] [--out DIR] [--mirror URL]`** que baja una tabla estática (por default `potion-multilingual-128M`,

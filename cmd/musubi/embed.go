@@ -9,8 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/logx"
 )
+
+// defaultEmbedModel es la tabla multilingüe (ES+EN) por default: la que baja `embed pull`
+// y la que la auto-detección busca en la ubicación estándar para encender la semántica.
+const defaultEmbedModel = "potion-multilingual-128M"
 
 // runEmbed maneja `musubi embed <subcomando>`. Hoy: `pull` para descargar una tabla estática
 // de embeddings (model2vec/POTION) con checksum pinneado, dejando la memoria semántica lista
@@ -45,15 +51,18 @@ func embedUsage() {
 }
 
 func runEmbedPull(args []string) {
+	// El modelo es un posicional; se extrae ANTES de parsear flags porque el paquete flag de
+	// Go deja de parsear en el primer no-flag (así `embed pull <modelo> --out X` funciona).
+	model := defaultEmbedModel
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		model = args[0]
+		args = args[1:]
+	}
 	fs := flag.NewFlagSet("embed pull", flag.ExitOnError)
 	out := fs.String("out", "", "directorio destino (default: <workspace>/.musubi/embeddings/<modelo>)")
 	mirror := fs.String("mirror", "", "base URL alternativa para bajar los archivos (re-hostear en tu infra); default: la fuente pinneada")
 	_ = fs.Parse(args)
 
-	model := "potion-multilingual-128M" // multilingüe ES+EN por default
-	if fs.NArg() > 0 {
-		model = fs.Arg(0)
-	}
 	spec, ok := embedding.KnownModels[model]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "Modelo desconocido: %s\n", model)
@@ -93,6 +102,41 @@ func applyMirror(spec embedding.ModelSpec, mirror string) embedding.ModelSpec {
 		out.Files[i] = f
 	}
 	return out
+}
+
+// resolveEmbedder decide el proveedor de embeddings con AUTO-DETECCIÓN y DEGRADACIÓN
+// ELEGANTE (16.2f): "prendido cuando se puede, nunca falla". Si no hay provider explícito
+// (none/vacío) y existe una tabla en la ubicación estándar (<root>/.musubi/embeddings/
+// <modelo-default>, la que baja `embed pull`), enciende la semántica; si no, se queda en
+// recall léxico. Un provider explícito (static/ollama/openai) se respeta. Ante CUALQUIER
+// error al construir el proveedor, cae a léxico (NoopProvider) en vez de abortar el arranque.
+func resolveEmbedder(cfg config.Config, root string) embedding.Provider {
+	ec := cfg.Embedding
+	if ec.Provider == "" || ec.Provider == "none" {
+		def := filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel)
+		if hasStaticTable(def) {
+			ec.Provider = "static"
+			ec.StaticPath = def
+			logx.Info("memoria semántica auto-detectada (tabla presente)", "tabla", defaultEmbedModel)
+		}
+	}
+	prov, err := embedding.NewProvider(ec)
+	if err != nil {
+		logx.Warn("no se pudo inicializar el proveedor de embeddings; se usa recall léxico",
+			"provider", ec.Provider, "error", err)
+		return embedding.NoopProvider{}
+	}
+	return prov
+}
+
+// hasStaticTable indica si dir tiene los dos archivos de una tabla estática cargable.
+func hasStaticTable(dir string) bool {
+	for _, f := range []string{"model.safetensors", "tokenizer.json"} {
+		if st, err := os.Stat(filepath.Join(dir, f)); err != nil || st.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // embedPullProgress devuelve un callback de avance que imprime porcentaje por archivo en
