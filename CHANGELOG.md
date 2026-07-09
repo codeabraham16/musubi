@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **`musubi embed pull` ahora cae a IPv4 cuando el IPv6 no tiene ruta (Track 16 / Producible, pulido de Fase 4).**
+  En máquinas con IPv6 *configurado pero sin ruta real* (VPN que tuneliza sólo IPv4, red que anuncia IPv6 sin
+  salida), la descarga de la tabla fallaba con `dial tcp [2600:…]:443: connect: network is unreachable` porque el
+  cliente HTTP por default de Go no reintentaba por IPv4. Ahora el downloader usa un cliente que, ante un error de
+  *red/host inalcanzable* (`ENETUNREACH`/`EHOSTUNREACH`), **reintenta forzando `tcp4`** — sin romper las redes
+  IPv6-only (que aciertan en el primer intento) ni cambiar el camino feliz. Se detectó dogfooteando el despliegue
+  de la Fase 2 en una laptop Linux con IPv6 roto.
+- **El mensaje de éxito de `musubi embed pull` ya no manda a editar `config.yaml` de gusto.** Desde 16.2f la
+  memoria semántica es *auto-ON* (`resolveEmbedder` detecta la tabla en la ubicación estándar y la enciende al
+  reiniciar), pero el mensaje seguía diciendo "para activar, poné `provider: static`…" — heredado y engañoso.
+  Ahora, si la tabla quedó en la ruta estándar del modelo default, informa que **se auto-detecta al reiniciar el
+  daemon** (sin tocar config); sólo si quedó fuera (por `--out` o un modelo no-default) muestra las líneas de
+  `config.yaml` a declarar.
+
+### Security
+- **Toolchain de Go a `1.26.5` en CI/release por `GO-2026-5856`** — leak de privacidad en *Encrypted Client Hello*
+  de `crypto/tls`, presente en go1.26.4 y corregido en go1.26.5. El pin flotante `1.26.x` se había quedado en
+  1.26.4 (retraso del manifest de `setup-go`), así que `govulncheck` empezó a marcar la stdlib; se fija **exacto a
+  `1.26.5`** en los tres jobs de `ci.yml` y en `release.yml` para que los binarios publicados se compilen con la
+  stdlib parcheada.
+
 ## [0.79.0] - 2026-07-08
 
 ### Added

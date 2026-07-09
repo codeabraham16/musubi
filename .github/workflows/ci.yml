@@ -13,7 +13,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.5'
 
       - name: Vet
         run: go vet ./...
@@ -47,7 +47,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.5'
 
       - name: Maintain complexity guard (memoria sub-cuadrática)
         # Corre BenchmarkMaintain a n=1k y n=10k y verifica que la MEMORIA asignada por
@@ -82,7 +82,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.5'
 
       - name: golangci-lint
         # Versión fijada (la verificada localmente); usa .golangci.yml del repo.
