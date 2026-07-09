@@ -11,6 +11,9 @@
 *.db-wal
 .musubi/memory.db
 
+# Tablas de embeddings descargadas por `musubi embed pull` (puro dato, cientos de MB)
+.musubi/embeddings/
+
 # Artefactos de release (cross-compilados)
 dist/
 
