@@ -7,6 +7,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`/metrics` accionable: latencia de tools + gauges de dominio (Track 16 / Producible F3.1).** Antes `/metrics`
+  solo exponía 4 contadores de requests HTTP por resultado — un operador 24/7 no veía nada del dominio. Ahora,
+  manteniendo cero dependencias (renderer Prometheus hecho a mano), agrega: (a) **histograma de latencia**
+  `musubi_tool_duration_seconds` (buckets + `_sum` + `_count`, lock-free) y contador `musubi_tool_calls_total`
+  {ok,error} por cada `tools/call`, instrumentado en el choke point `handleToolsCall` (cubre stdio y HTTP); (b)
+  **gauges de dominio** pulled at scrape vía un accesor nuevo `DbEngine.OperationalStats()`: `musubi_observations`,
+  `musubi_embeddings_active`, `musubi_vector_index_size`, `musubi_vector_index_trained`, `musubi_sync_outbox`
+  {pending,sent,dead} y `musubi_sync_outbox_oldest_pending_age_seconds` (atraso del sync). Los gauges se exponen
+  vía una interfaz opcional (`opStatsProvider`) type-asserted al render, así los backends de test que no la
+  implementan no rompen el scrape. Las métricas viven en un `serverMetrics` compartido en el `McpServer`.
+
 ## [0.79.1] - 2026-07-09
 
 ### Fixed

@@ -63,6 +63,73 @@ func TestMetricsCountsRequests(t *testing.T) {
 	}
 }
 
+// El histograma de latencia y los contadores de tools/call se acumulan y renderizan en
+// formato Prometheus. Unitario (no depende del transporte): ejercita recordTool + render.
+func TestServerMetricsToolHistogram(t *testing.T) {
+	m := &serverMetrics{}
+	m.recordTool(2*time.Millisecond, true)   // cae en el bucket le=0.005
+	m.recordTool(200*time.Millisecond, true) // le=0.25
+	m.recordTool(30*time.Second, false)      // excede el último límite (10s) ⇒ solo +Inf
+
+	out := m.render(nil) // engine nil ⇒ sin gauges de dominio, pero histograma + counters sí
+	for _, want := range []string{
+		`musubi_tool_calls_total{result="ok"} 2`,
+		`musubi_tool_calls_total{result="error"} 1`,
+		`musubi_tool_duration_seconds_count 3`,
+		`musubi_tool_duration_seconds_bucket{le="+Inf"} 3`,
+		// El de 30s NO entra en ningún bucket finito: le=10 acumula solo los de 2ms y 200ms.
+		`musubi_tool_duration_seconds_bucket{le="10"} 2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("falta %q en:\n%s", want, out)
+		}
+	}
+}
+
+// /metrics expone los gauges de dominio cuando el backend los implementa (DbEngine real).
+func TestMetricsExposesDomainGauges(t *testing.T) {
+	ts := newHTTPTestServer(t)
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	text := string(body)
+	for _, want := range []string{
+		"musubi_observations ",
+		"musubi_embeddings_active ",
+		"musubi_vector_index_trained ",
+		`musubi_sync_outbox{state="pending"}`,
+		"musubi_sync_outbox_oldest_pending_age_seconds ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("gauge de dominio ausente: %q\nmétricas:\n%s", want, text)
+		}
+	}
+}
+
+// Un tools/call real incrementa el contador y el histograma vía handleToolsCall (wiring
+// transporte → s.metrics).
+func TestMetricsCountsToolCalls(t *testing.T) {
+	ts := newHTTPTestServer(t)
+	postMCP(t, ts.URL, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"musubi_save_observation","arguments":{"topic_key":"m/t","content":"x"}}}`)
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	text := string(body)
+	if !strings.Contains(text, `musubi_tool_calls_total{result="ok"} 1`) {
+		t.Errorf("esperaba 1 tools/call ok contado:\n%s", text)
+	}
+	if !strings.Contains(text, "musubi_tool_duration_seconds_count 1") {
+		t.Errorf("esperaba count=1 en el histograma de tools:\n%s", text)
+	}
+}
+
 func TestMetricsRequiresAuthWhenTokenSet(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: "tok", loopbackOnly: true}))

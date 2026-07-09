@@ -112,7 +112,13 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		s.dispatchMu.Lock()
 		defer s.dispatchMu.Unlock()
 	}
-	return handler(ctx, callReq.Arguments)
+	// Métrica de latencia/resultado de la tool (Track 16 F3.1), expuesta en /metrics.
+	start := time.Now()
+	result, rpcErr := handler(ctx, callReq.Arguments)
+	if s.metrics != nil {
+		s.metrics.recordTool(time.Since(start), rpcErr == nil)
+	}
+	return result, rpcErr
 }
 
 func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcError) {

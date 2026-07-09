@@ -57,7 +57,12 @@ type httpOptions struct {
 // request JSON-RPC y responde el resultado; GET /mcp (upgrade SSE) queda reservado
 // (405) porque Musubi no emite mensajes server-initiated todavía.
 func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
-	metrics := &httpMetrics{}
+	// Métricas compartidas del server (Track 16 F3.1). Fallback defensivo si se construyó el
+	// McpServer sin NewMcpServer (p.ej. un literal en un test viejo).
+	if s.metrics == nil {
+		s.metrics = &serverMetrics{}
+	}
+	metrics := s.metrics
 	// Lockout contra fuerza bruta del bearer (16.1e): 5 fallos por IP ⇒ 60s de bloqueo.
 	limiter := newAuthLimiter(5, time.Minute)
 	mux := http.NewServeMux()
@@ -156,7 +161,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte(metrics.render()))
+		_, _ = w.Write([]byte(metrics.render(s.engine)))
 	})
 	return mux
 }
