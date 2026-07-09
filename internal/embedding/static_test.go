@@ -88,7 +88,7 @@ func TestStaticWordPiece(t *testing.T) {
 		"deploy el": {1, 4}, // dos palabras
 	}
 	for in, want := range cases {
-		got := p.wp.EncodeIDs(in)
+		got := p.tok.EncodeIDs(in)
 		if len(got) != len(want) {
 			t.Errorf("EncodeIDs(%q) = %v, quería %v", in, got, want)
 			continue

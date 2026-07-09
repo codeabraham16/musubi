@@ -24,11 +24,18 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// tokenizer convierte texto en ids de token (índices en la tabla). Lo implementan tanto
+// el WordPiece BERT (tablas inglesas) como el Unigram/SentencePiece (multilingües); el
+// StaticProvider despacha al que corresponda según el tokenizer.json.
+type tokenizer interface {
+	EncodeIDs(text string) []int
+}
+
 // StaticProvider genera embeddings por lookup + mean-pool sobre una tabla estática.
 type StaticProvider struct {
 	table   [][]float32
 	dim     int
-	wp      *wordPiece
+	tok     tokenizer
 	modelID string // identidad de la tabla, para la provenance del vector (S1)
 }
 
@@ -42,14 +49,14 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tabla estática: %w", err)
 	}
-	wp, err := loadWordPiece(filepath.Join(dir, "tokenizer.json"))
+	tok, err := loadTokenizer(filepath.Join(dir, "tokenizer.json"))
 	if err != nil {
 		return nil, fmt.Errorf("tokenizer: %w", err)
 	}
 	return &StaticProvider{
 		table:   table,
 		dim:     dim,
-		wp:      wp,
+		tok:     tok,
 		modelID: "static:" + filepath.Base(filepath.Clean(dir)),
 	}, nil
 }
@@ -61,7 +68,7 @@ func (p *StaticProvider) Dimensions() int { return p.dim }
 // L2-normalize. Reproduce bit-exacto model2vec/POTION (config normalize=true; pca/zipf
 // vienen horneados en la tabla al destilar, así que en inferencia son no-op).
 func (p *StaticProvider) Embed(_ context.Context, text string) ([]float32, error) {
-	ids := p.wp.EncodeIDs(text)
+	ids := p.tok.EncodeIDs(text)
 	acc := make([]float64, p.dim)
 	n := 0
 	for _, id := range ids {
@@ -163,11 +170,54 @@ type wordPiece struct {
 	lowercase, stripAccents, cleanText, handleCJK bool
 }
 
-func loadWordPiece(tokenizerJSON string) (*wordPiece, error) {
-	b, err := os.ReadFile(tokenizerJSON)
+// loadTokenizer lee tokenizer.json y construye el tokenizer según model.type: WordPiece
+// (tablas BERT, p. ej. las inglesas de POTION) o Unigram (SentencePiece, multilingües).
+func loadTokenizer(path string) (tokenizer, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	var head struct {
+		Normalizer   json.RawMessage `json:"normalizer"`
+		PreTokenizer tkMetaspace     `json:"pre_tokenizer"`
+		Model        struct {
+			Type string `json:"type"`
+		} `json:"model"`
+	}
+	if err := json.Unmarshal(b, &head); err != nil {
+		return nil, fmt.Errorf("tokenizer.json: %w", err)
+	}
+	switch head.Model.Type {
+	case "WordPiece":
+		return newWordPiece(b)
+	case "Unigram":
+		var doc struct {
+			Model tkUnigramModel `json:"model"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			return nil, fmt.Errorf("tokenizer.json (unigram): %w", err)
+		}
+		return newUnigram(head.Normalizer, head.PreTokenizer, doc.Model)
+	case "":
+		return nil, fmt.Errorf("tokenizer.json sin model.type")
+	default:
+		return nil, fmt.Errorf("tokenizer model.type %q no soportado (usá WordPiece o Unigram)", head.Model.Type)
+	}
+}
+
+// tkMetaspace y tkUnigramModel son vistas parciales del tokenizer.json para la rama Unigram.
+type tkMetaspace struct {
+	Replacement   string `json:"replacement"`
+	PrependScheme string `json:"prepend_scheme"`
+}
+
+type tkUnigramModel struct {
+	UnkID int                 `json:"unk_id"`
+	Vocab [][]json.RawMessage `json:"vocab"`
+}
+
+// newWordPiece construye el tokenizer WordPiece BERT desde el contenido de tokenizer.json.
+func newWordPiece(b []byte) (*wordPiece, error) {
 	var t struct {
 		Normalizer struct {
 			CleanText          bool  `json:"clean_text"`
