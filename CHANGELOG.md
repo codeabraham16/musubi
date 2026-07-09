@@ -8,6 +8,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Tokenizer Unigram/SentencePiece en Go puro — habilita tablas MULTILINGÜES (Track 16 / Producible 16.2c).**
+  El `StaticProvider` sólo sabía tokenizar WordPiece BERT (tablas inglesas). Las tablas multilingües de
+  model2vec/POTION (ES+EN reales, p. ej. `potion-multilingual-128M`) usan **Unigram/SentencePiece** —otro
+  formato de `tokenizer.json`— así que no cargaban. Este PR agrega un tokenizer Unigram **bit-exacto vs
+  HuggingFace, en Go puro y sin cgo**, reproduciendo todo el pipeline: normalizer con `precompiled_charsmap`
+  (trie DARTS de SentencePiece) + reglas `Replace` + `Strip`, pre-tokenizer `Metaspace` (▁), y segmentación
+  `Unigram` por Viterbi sobre ~500K piezas con log-probs. La única sutileza vs HF (recomposición de secuencias
+  descompuestas por grapheme) se resuelve con `NFC` antes del charsmap, que da idéntico resultado para toda
+  entrada realista. `static.go` se refactorizó a una interfaz `tokenizer` con dispatch por `model.type`
+  (WordPiece | Unigram); el WordPiece existente no cambia de comportamiento. **Validado bit-exacto** contra el
+  tokenizer real de POTION multilingüe (test gated por `MUSUBI_SPM_TESTDATA`; referencia `text→ids` en testdata)
+  y con unit tests sintéticos del Viterbi/normalizer. Precede a 16.2d (traer la tabla). Golden intacto.
 - **Contrato de vector + procedencia — regla de homogeneidad (Track 16 / Producible 16.2b).** El núcleo de
   ROBUSTEZ de la memoria semántica, hecho ANTES de encenderla (S1 de Track 15). Hasta ahora un vector no
   registraba QUÉ modelo lo produjo: al cambiar de embedder, los vectores viejos (otra procedencia) se comparaban
