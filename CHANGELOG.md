@@ -18,6 +18,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   {pending,sent,dead} y `musubi_sync_outbox_oldest_pending_age_seconds` (atraso del sync). Los gauges se exponen
   vía una interfaz opcional (`opStatsProvider`) type-asserted al render, así los backends de test que no la
   implementan no rompen el scrape. Las métricas viven en un `serverMetrics` compartido en el `McpServer`.
+- **Benchmark de búsqueda vectorial a escala + guard de sublinealidad del IVF (Track 16 / Producible F3.3).** El
+  único benchmark vectorial topaba en n=10 000 (justo el umbral donde el IVF se activa), así que el régimen donde
+  el índice debe ganarle al full-scan quedaba sin medir ni proteger en CI. `BenchmarkSearchVector` ahora fuerza el
+  entrenamiento síncrono del IVF (mide la ruta indexada de forma determinista, no el full-scan transitorio) y suma
+  un caso de escala **n=100 000 opt-in** (env `MUSUBI_BENCH_SCALE`, porque sembrar 100k tarda minutos). Nuevo
+  **bench-guard en CI** que corre `BenchmarkSearchVector` a n=1k y n=10k y verifica que la memoria por búsqueda
+  crezca SUB-LINEALmente (`B/op(10k)/B/op(1k)` ≈ 3.7x medido, ~√10; umbral 6): una regresión que rompa el IVF y
+  caiga a full-scan lo llevaría a ~lineal (~10x). Se mide `B/op` (determinista) y no wall-time, igual que el guard
+  de `BenchmarkMaintain`.
 
 ## [0.79.1] - 2026-07-09
 
