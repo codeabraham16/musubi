@@ -74,6 +74,29 @@ jobs:
             print "OK: Maintain escala sub-cuadráticamente en memoria"
           }'
 
+      - name: Vector search sublinearity guard (IVF a escala)
+        # Corre BenchmarkSearchVector a n=1k y n=10k (ambos con el IVF ENTRENADO, rebuild
+        # síncrono en el bench) y verifica que la MEMORIA por búsqueda crezca SUB-LINEALmente
+        # con el tamaño de la base: el IVF acota candidatos a ~nprobe·√n, así que
+        # B/op(10k)/B/op(1k) ≈ √10 ≈ 3.2x (medido ~3.7x). Una regresión que rompa el IVF y
+        # caiga a full-scan lo llevaría a ~lineal (~10x). Medimos B/op (determinista, estable en
+        # runners compartidos), no wall-time (Track 16 F3.3). El caso de escala n=100000 es
+        # opt-in (MUSUBI_BENCH_SCALE) y NO corre en CI por el costo de sembrar 100k filas.
+        run: |
+          out=$(go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x ./internal/memory/)
+          echo "$out"
+          b1=$(echo "$out" | awk '/SearchVector\/n=1000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b10=$(echo "$out" | awk '/SearchVector\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          echo "B/op n=1000:  ${b1:-<vacío>}"
+          echo "B/op n=10000: ${b10:-<vacío>}"
+          awk -v a="$b1" -v b="$b10" 'BEGIN {
+            if (a+0 == 0 || b+0 == 0) { print "ERROR: no se pudo medir B/op de SearchVector"; exit 1 }
+            r = (b+0)/(a+0)
+            printf "ratio B/op(10k)/B/op(1k) = %.1fx (umbral 6)\n", r
+            if (r > 6.0) { print "ERROR: la búsqueda vectorial dejó de escalar sublinealmente (¿IVF caído a full-scan?)"; exit 1 }
+            print "OK: la búsqueda vectorial escala sublinealmente (IVF)"
+          }'
+
   lint:
     runs-on: ubuntu-latest
     steps:

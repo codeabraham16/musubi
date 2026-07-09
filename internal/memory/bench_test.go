@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"strings"
 	"testing"
 )
@@ -168,13 +169,30 @@ func BenchmarkSearchFTS(b *testing.B) {
 	}
 }
 
-// BenchmarkSearchVector mide la búsqueda vectorial (IVF si está entrenado, si no full-scan).
+// BenchmarkSearchVector mide la búsqueda vectorial con el índice IVF ENTRENADO. Fuerza el
+// rebuild síncrono tras sembrar para medir la ruta indexada de forma determinista: en
+// producción el daemon auto-entrena al arrancar, pero el rebuild de fondo es async y el bench,
+// sin esto, podría medir el full-scan transitorio. El punto del IVF es que el costo de búsqueda
+// crezca SUB-LINEALmente con n (candidatos ~ nprobe·√n, no n); el bench-guard de CI vigila que
+// B/op(10k)/B/op(1k) se mantenga sublineal (una regresión IVF→full-scan lo llevaría a ~lineal).
+//
+// El caso de escala n=100000 es OPT-IN (env MUSUBI_BENCH_SCALE) porque sembrar 100k
+// observaciones tarda minutos (inviable en cada corrida de CI); corré
+// `MUSUBI_BENCH_SCALE=1 go test -run=NONE -bench=BenchmarkSearchVector -benchmem ./internal/memory/`
+// para el perfil de escala manual.
 func BenchmarkSearchVector(b *testing.B) {
 	ctx := context.Background()
 	qvec := benchVector(rand.New(rand.NewSource(9)))
-	for _, n := range []int{1000, 10000} {
+	sizes := []int{1000, 10000}
+	if os.Getenv("MUSUBI_BENCH_SCALE") != "" {
+		sizes = append(sizes, 100000)
+	}
+	for _, n := range sizes {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			eng := benchSeedEngine(b, n, true)
+			if err := eng.rebuildVectorIndex(); err != nil {
+				b.Fatalf("rebuildVectorIndex: %v", err)
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
