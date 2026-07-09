@@ -22,6 +22,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   daemon** (sin tocar config); sólo si quedó fuera (por `--out` o un modelo no-default) muestra las líneas de
   `config.yaml` a declarar.
 
+### Security
+- **Toolchain de Go a `1.26.5` en CI/release por `GO-2026-5856`** — leak de privacidad en *Encrypted Client Hello*
+  de `crypto/tls`, presente en go1.26.4 y corregido en go1.26.5. El pin flotante `1.26.x` se había quedado en
+  1.26.4 (retraso del manifest de `setup-go`), así que `govulncheck` empezó a marcar la stdlib; se fija **exacto a
+  `1.26.5`** en los tres jobs de `ci.yml` y en `release.yml` para que los binarios publicados se compilen con la
+  stdlib parcheada.
+
 ## [0.79.0] - 2026-07-08
 
 ### Added
