@@ -100,6 +100,9 @@ type TelemetryStore interface {
 	SaveTelemetryLogFrom(originProjectID, filePath, errorMessage, suggestedPatch string) error
 	GetUnresolvedTelemetryLogs() ([]TelemetryLog, error)
 	GetUnresolvedTelemetryLogsForFiles(files []string) ([]TelemetryLog, error)
+	// Variantes ctx-aware acotadas al proyecto de la credencial (Track 19): resolve_skills exponía
+	// telemetría cross-tenant por colisión de basename.
+	GetUnresolvedTelemetryLogsForFilesCtx(ctx context.Context, files []string) ([]TelemetryLog, error)
 	ResolveTelemetryLog(id int) error
 	// ResolveTelemetryLogAndGet resuelve el log y devuelve su contenido (para capturar el par
 	// error→fix como memoria, C4). found=false si el id no existe.

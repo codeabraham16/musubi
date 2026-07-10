@@ -1787,7 +1787,7 @@ func (s *McpServer) toolAuthorSkill(raw json.RawMessage) (interface{}, *RpcError
 // toolSearchSkills busca skills aplicables al proyecto desde el catálogo remoto.
 // Inputs opcionales: query (string), stack (string), limit (int).
 // Degradación graciosa: catálogo caído → textResult con guía, sin RpcError.
-func (s *McpServer) toolSearchSkills(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSearchSkills(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query string `json:"query"`
 		Stack string `json:"stack"`
@@ -1867,9 +1867,11 @@ func (s *McpServer) toolSearchSkills(raw json.RawMessage) (interface{}, *RpcErro
 		candidatos = filtrados
 	}
 
-	// Feedback de decisiones (Track 6 / T6.1): Musubi no re-propone las skills que el
-	// usuario ya rechazó. Best-effort: si la lectura falla, se devuelve sin filtrar.
-	if decisions, derr := s.engine.GetSkillDecisions(); derr == nil {
+	// Feedback de decisiones (Track 6 / T6.1): Musubi no re-propone las skills que el usuario ya
+	// rechazó. Track 19: ACOTADO al proyecto de la credencial (GetSkillDecisionsCtx) — antes leía
+	// federado, así que un 'rejected' de un tenant excluía candidatos de otro (behavior-bleed).
+	// Best-effort: si la lectura falla, se devuelve sin filtrar.
+	if decisions, derr := s.engine.GetSkillDecisionsCtx(s.scopedCtx(ctx)); derr == nil {
 		candidatos = excludeRejectedSkills(candidatos, decisions)
 	}
 
@@ -2072,7 +2074,7 @@ func (s *McpServer) toolLogSkillDecision(ctx context.Context, raw json.RawMessag
 	return textResult(fmt.Sprintf("Decisión '%s' para skill '%s' registrada con éxito.", args.Decision, args.SkillID)), nil
 }
 
-func (s *McpServer) toolResolveSkills(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ModifiedFiles []string `json:"modified_files"`
 	}
@@ -2088,9 +2090,10 @@ func (s *McpServer) toolResolveSkills(raw json.RawMessage) (interface{}, *RpcErr
 		return nil, rpcErrorf(codeInternalError, "error al resolver skills: %v", err)
 	}
 
-	// Telemetría RELEVANTE (Track 6 / T6.2): solo los errores no resueltos de los archivos
-	// que el agente está tocando, no toda la telemetría pendiente.
-	telemetryLogs, err := s.engine.GetUnresolvedTelemetryLogsForFiles(args.ModifiedFiles)
+	// Telemetría RELEVANTE (Track 6 / T6.2): solo los errores no resueltos de los archivos que el
+	// agente está tocando. Track 19: ACOTADA al proyecto de la credencial — antes corría sin scope
+	// y devolvía file_path+error_message+suggested_patch de otros tenants por colisión de basename.
+	telemetryLogs, err := s.engine.GetUnresolvedTelemetryLogsForFilesCtx(s.scopedCtx(ctx), args.ModifiedFiles)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al obtener telemetría: %v", err)
 	}
