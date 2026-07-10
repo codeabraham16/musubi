@@ -48,15 +48,15 @@ func TestMigrationV14RebuildsRelationsPreservingData(t *testing.T) {
 	}
 	db.Close()
 
-	// Abrir con el motor completo: migra a v14 (rebuild de relations).
+	// Abrir con el motor completo: migra hasta la última (incluye el rebuild de relations en v14).
 	e, err := NewDbEngine(root)
 	if err != nil {
-		t.Fatalf("NewDbEngine (migra a v14): %v", err)
+		t.Fatalf("NewDbEngine (migra relations v14): %v", err)
 	}
 	defer e.Close()
 
-	if v, _ := e.schemaVersion(); v != 14 {
-		t.Fatalf("tras migrar user_version=%d, esperaba 14", v)
+	if v, _ := e.schemaVersion(); v != latestSchemaVersion() {
+		t.Fatalf("tras migrar user_version=%d, esperaba %d", v, latestSchemaVersion())
 	}
 
 	// Las 2 filas sobrevivieron, con project_id='' (federado) y la auto-referencia intacta.

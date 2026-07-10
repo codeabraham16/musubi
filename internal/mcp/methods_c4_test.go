@@ -19,7 +19,7 @@ func TestResolveTelemetryCapturesErrorFix(t *testing.T) {
 
 	resolve := func(id int) *RpcError {
 		raw, _ := json.Marshal(map[string]int{"id": id})
-		_, rpcErr := s.toolResolveTelemetry(raw)
+		_, rpcErr := s.toolResolveTelemetry(context.Background(), raw)
 		return rpcErr
 	}
 

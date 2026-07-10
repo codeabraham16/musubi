@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,10 +18,23 @@ type TelemetryLog struct {
 	CreatedAt      string
 }
 
-// SaveTelemetryLog registra un error detectado durante la compilación o testing.
+// SaveTelemetryLog registra un error detectado durante la compilación o testing. Fino wrapper
+// federado sobre SaveTelemetryLogFrom (project_id del engine).
 func (e *DbEngine) SaveTelemetryLog(filePath, errorMessage, suggestedPatch string) error {
-	query := `INSERT INTO telemetry_logs (file_path, error_message, suggested_patch, resolved) VALUES (?, ?, ?, 0)`
-	_, err := e.db.Exec(query, filePath, errorMessage, suggestedPatch)
+	return e.SaveTelemetryLogFrom("", filePath, errorMessage, suggestedPatch)
+}
+
+// SaveTelemetryLogFrom registra el error atribuyéndolo al project_id de ORIGEN (Track 18):
+// el MCP lo deriva de la credencial (no del cliente), de modo que un log de un tenant no se
+// mezcla con el de otro en los hotspots de insights ni es legible por resolve_telemetry ajeno.
+// originProjectID == "" ⇒ project_id del engine (comportamiento histórico).
+func (e *DbEngine) SaveTelemetryLogFrom(originProjectID, filePath, errorMessage, suggestedPatch string) error {
+	projectID := originProjectID
+	if projectID == "" {
+		projectID = e.projectID
+	}
+	query := `INSERT INTO telemetry_logs (file_path, error_message, suggested_patch, resolved, project_id) VALUES (?, ?, ?, 0, ?)`
+	_, err := e.db.Exec(query, filePath, errorMessage, suggestedPatch, projectID)
 	if err != nil {
 		return fmt.Errorf("error al guardar log de telemetría: %w", err)
 	}
@@ -44,12 +58,21 @@ func (e *DbEngine) ResolveTelemetryLog(id int) error {
 	return nil
 }
 
-// ResolveTelemetryLogAndGet marca el log id como resuelto Y devuelve su contenido (para que el
-// caller pueda capturar el par error→fix como memoria, C4). Atómico (una tx): SELECT la fila y,
-// si existe, UPDATE resolved=1. Si el id no existe devuelve found=false (sin error), para que el
-// handler traduzca al mismo error que hoy. La variante ResolveTelemetryLog(id) se mantiene.
+// ResolveTelemetryLogAndGet marca el log id como resuelto Y devuelve su contenido. Fino wrapper
+// federado sobre ResolveTelemetryLogAndGetCtx (sin scope ⇒ ve cualquier log, histórico).
 func (e *DbEngine) ResolveTelemetryLogAndGet(id int) (TelemetryLog, bool, error) {
-	tx, err := e.db.Begin()
+	return e.ResolveTelemetryLogAndGetCtx(context.Background(), id)
+}
+
+// ResolveTelemetryLogAndGetCtx marca el log id como resuelto Y devuelve su contenido (para que el
+// caller capture el par error→fix como memoria, C4), ACOTADO al proyecto de la credencial (Track
+// 18): un tenant no puede resolver ni leer el log crudo de otro. Atómico (una tx): SELECT la fila
+// visible al scope y, si existe, UPDATE resolved=1. Un id que existe pero pertenece a otro proyecto
+// devuelve found=false (indistinguible de inexistente, sin filtrar su existencia). Ctx federado
+// (stdio/admin) ⇒ ve cualquier log, como siempre.
+func (e *DbEngine) ResolveTelemetryLogAndGetCtx(ctx context.Context, id int) (TelemetryLog, bool, error) {
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
+	tx, err := e.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TelemetryLog{}, false, fmt.Errorf("error al iniciar tx de telemetría: %w", err)
 	}
@@ -57,8 +80,9 @@ func (e *DbEngine) ResolveTelemetryLogAndGet(id int) (TelemetryLog, bool, error)
 
 	var log TelemetryLog
 	var resolvedInt int
-	err = tx.QueryRow(
-		`SELECT id, file_path, error_message, suggested_patch, resolved, created_at FROM telemetry_logs WHERE id = ?`, id,
+	selArgs := append([]interface{}{id}, scopeArgs...)
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, file_path, error_message, suggested_patch, resolved, created_at FROM telemetry_logs WHERE id = ?`+scopeSQL, selArgs...,
 	).Scan(&log.ID, &log.FilePath, &log.ErrorMessage, &log.SuggestedPatch, &resolvedInt, &log.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TelemetryLog{}, false, nil
@@ -66,7 +90,8 @@ func (e *DbEngine) ResolveTelemetryLogAndGet(id int) (TelemetryLog, bool, error)
 	if err != nil {
 		return TelemetryLog{}, false, fmt.Errorf("error al leer log de telemetría: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE telemetry_logs SET resolved = 1 WHERE id = ?`, id); err != nil {
+	// El SELECT ya validó visibilidad al scope; el UPDATE por id sobre esa fila es seguro.
+	if _, err := tx.ExecContext(ctx, `UPDATE telemetry_logs SET resolved = 1 WHERE id = ?`, id); err != nil {
 		return TelemetryLog{}, false, fmt.Errorf("error al resolver log de telemetría: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
