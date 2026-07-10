@@ -190,6 +190,8 @@ type Calibrator interface {
 // Insighter — resumen agregado de observabilidad activa (estado de la memoria).
 type Insighter interface {
 	Insights() (InsightsReport, error)
+	// InsightsCtx acota los counts de observations al proyecto del contexto (Track 17, parcial).
+	InsightsCtx(ctx context.Context) (InsightsReport, error)
 }
 
 // OutboxStore — outbox durable del sync SALIENTE del cerebro híbrido (F2): encolado

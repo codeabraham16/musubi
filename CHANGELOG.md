@@ -23,6 +23,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   legacy → `''`), de modo que cada proyecto tiene su propia entrada por archivo.
 
 ### Security
+- **Aislamiento (parcial) de `musubi_insights` por proyecto (Track 17, T17.1c).** `insights` reportaba los counts de
+  observations (`total`/`active`/`archived`) de **todos** los proyectos, filtrando el **volumen** de la memoria ajena.
+  Ahora `InsightsCtx` acota esos counts al proyecto de la **credencial** (mismo `scopeClause`); `admin`/stdio ⇒
+  federado. Es un aislamiento **parcial deliberado**: los hotspots de errores (`telemetry_logs`) y las decisiones de
+  skills (`skill_decisions`) siguen federados porque sus tablas **no** tienen `project_id` (scopearlas requeriría otra
+  migración; diferido, bajo riesgo). Con esto **todas las superficies de lectura respaldadas por `observations`/
+  `relations`/`code_memory` quedan aisladas** — cierra el HIGH de cross-project bleed de la auditoría de cierre. Guard:
+  `TestInsightsCtxScopesObservationCounts`.
 - **Aislamiento del grafo de hechos (`recall_facts` / `entity_context` / `fact_path`) por proyecto (Track 17,
   T17.1b-4, migración v14).** La última superficie de lectura sin aislar: el recorrido del grafo devolvía hechos de
   **todos** los proyectos. Ahora `SaveFactFrom` atribuye la arista al proyecto de la **credencial** y un helper único
@@ -44,8 +52,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   proyectos. Ahora `PendingObsRelationsCtx` hace `JOIN` a `observations` por el `source_id` y filtra por el
   `project_id` **derivado de la credencial** (mismo `scopeClause` que las demás superficies); `admin`/stdio ⇒
   federado. `musubi_conflicts` pasó a ctx-aware. Sin migración (aprovecha el `project_id` que ya vive en
-  `observations`). Guard: `TestConflictsEnforcePrincipalScope`. *Pendiente del aislamiento: `insights` (scope parcial
-  de los counts de observations).*
+  `observations`). Guard: `TestConflictsEnforcePrincipalScope`.
 - **Redacción de TODO ingest al central: `save_fact` y `save_code` ya no escriben secretos crudos (Track 17, T17.2).**
   La auditoría de cierre encontró que la redacción forzada server-side (`forceRedact`) cubría **solo**
   `save_observation` — `save_fact` (subject/predicate/object) y `save_code` (gist/symbols) escribían contenido

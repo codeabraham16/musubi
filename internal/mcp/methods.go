@@ -1543,8 +1543,10 @@ func (s *McpServer) embedIfEnabled(text string) []float32 {
 
 // toolInsights devuelve el resumen de observabilidad activa (Track 6 / T6.4): tamaño de la
 // memoria, hotspots de errores no resueltos, decisiones de skills y salud del ciclo. Read-only.
-func (s *McpServer) toolInsights(raw json.RawMessage) (interface{}, *RpcError) {
-	rep, err := s.engine.Insights()
+func (s *McpServer) toolInsights(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	// Aislamiento por proyecto (Track 17, parcial): los counts de observations se acotan al
+	// proyecto de la credencial; hotspots/decisiones siguen federados (sus tablas no tienen project_id).
+	rep, err := s.engine.InsightsCtx(s.scopedCtx(ctx))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al generar insights: %v", err)
 	}

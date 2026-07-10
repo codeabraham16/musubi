@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // insights.go implementa el resumen de "observabilidad activa" (Track 6 / T6.4): un único
@@ -42,12 +44,30 @@ type DecisionStats struct {
 	Rejected int `json:"rejected"`
 }
 
-// Insights agrega el estado de la memoria en un único reporte (T6.4). Read-only.
+// Insights agrega el estado de la memoria en el espacio FEDERADO (histórico). Fino wrapper
+// sobre InsightsCtx con contexto vacío. Read-only.
 func (e *DbEngine) Insights() (InsightsReport, error) {
+	return e.InsightsCtx(context.Background())
+}
+
+// InsightsCtx agrega el estado de la memoria acotando los COUNTS DE OBSERVACIONES al proyecto del
+// contexto (Track 17, aislamiento PARCIAL): sin esto, un principal veía el tamaño de la memoria de
+// TODOS los proyectos (fuga del volumen ajeno). Los hotspots de errores (telemetry_logs) y las
+// decisiones de skills (skill_decisions) siguen FEDERADOS: esas tablas no tienen project_id, así
+// que scopearlas requeriría una migración aparte (diferida; bajo riesgo). Ctx federado ⇒ counts
+// globales (histórico bit-a-bit). Read-only.
+func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 	var rep InsightsReport
 
+	// Scope de proyecto aplicado sólo al conteo de observations (la tabla que sí tiene project_id).
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
+	where := ""
+	if scopeSQL != "" {
+		where = " WHERE" + strings.TrimPrefix(scopeSQL, " AND")
+	}
 	if err := e.db.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN archived=1 THEN 1 ELSE 0 END),0) FROM observations`,
+		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN archived=1 THEN 1 ELSE 0 END),0) FROM observations`+where,
+		scopeArgs...,
 	).Scan(&rep.Observations.Total, &rep.Observations.Archived); err != nil {
 		return rep, fmt.Errorf("insights: contar observaciones: %w", err)
 	}

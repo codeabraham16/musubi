@@ -517,7 +517,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{},
 				},
 			},
-			handler:  noCtx(s.toolInsights),
+			handler:  s.toolInsights,
 			readOnly: true,
 		},
 		{
