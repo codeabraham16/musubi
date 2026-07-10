@@ -64,6 +64,12 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 // un envío OFF-HOST exitoso. Vive junto a los snapshots locales (<workspace>/.musubi/backups).
 const offhostMarkerName = ".last_offhost"
 
+// offhostErrorMarkerName es el archivo que deploy/musubi-backup.sh escribe cuando el envío
+// off-host FALLA (o BACKUP_REMOTE está vacío sin el escape hatch), y BORRA tras un envío exitoso
+// (Track 18). Su presencia le permite a `musubi doctor` distinguir "backup configurado pero
+// fallando / que NUNCA funcionó" de "instancia local sin backup" — antes ambos daban 'ok'.
+const offhostErrorMarkerName = ".last_offhost_error"
+
 // offhostBackupStaleAfter es la antigüedad máxima tolerada del último backup off-host antes de
 // que el dead-man's-switch avise. El timer del cerebro corre a diario; 48h = dos corridas
 // perdidas, señal clara de que el timer dejó de shipear (no un atraso puntual de una corrida).
@@ -231,19 +237,35 @@ func checkOffhostBackup(e *DbEngine) CheckResult {
 	if e.path == "" {
 		return CheckResult{Code: "offhost_backup", Status: "ok", Message: "ruta de la base desconocida; no aplica"}
 	}
-	marker := filepath.Join(filepath.Dir(e.path), "backups", offhostMarkerName)
-	info, err := os.Stat(marker)
-	if err != nil {
+	dir := filepath.Join(filepath.Dir(e.path), "backups")
+	okInfo, okErr := os.Stat(filepath.Join(dir, offhostMarkerName))
+	errInfo, errErr := os.Stat(filepath.Join(dir, offhostErrorMarkerName))
+
+	// Estado de FALLO (Track 18): hay marca de error y, o bien NUNCA hubo un envío exitoso, o el
+	// último error es más nuevo que el último éxito. Cierra el falso-negativo del baseline: antes,
+	// sin marca de éxito, el check daba 'ok' aunque el timer fallara cada noche (BACKUP_REMOTE mal
+	// tipeado/vacío) — el cerebro se veía sano con CERO backups off-host.
+	if errErr == nil && (okErr != nil || errInfo.ModTime().After(okInfo.ModTime())) {
+		since := time.Since(errInfo.ModTime()).Round(time.Hour)
+		if okErr != nil {
+			return CheckResult{Code: "offhost_backup", Status: "warning",
+				Message: fmt.Sprintf("el backup off-host está configurado pero NUNCA tuvo éxito (último intento falló hace %s); revisá `systemctl status musubi-backup` y BACKUP_REMOTE", since)}
+		}
+		return CheckResult{Code: "offhost_backup", Status: "warning",
+			Message: fmt.Sprintf("el backup off-host viene fallando desde el último éxito (último error hace %s); revisá `systemctl status musubi-backup`", since)}
+	}
+
+	if okErr != nil {
 		return CheckResult{Code: "offhost_backup", Status: "ok",
 			Message: "sin registro de backup off-host (instancia local, o backup no configurado — el timer falla-cerrado si BACKUP_REMOTE está vacío)"}
 	}
-	if age := time.Since(info.ModTime()); age > offhostBackupStaleAfter {
+	if age := time.Since(okInfo.ModTime()); age > offhostBackupStaleAfter {
 		return CheckResult{Code: "offhost_backup", Status: "warning",
 			Message: fmt.Sprintf("el último backup off-host fue hace %s (> %s): el timer podría haber dejado de shipear (dead-man's-switch)",
 				age.Round(time.Hour), offhostBackupStaleAfter)}
 	}
 	return CheckResult{Code: "offhost_backup", Status: "ok",
-		Message: fmt.Sprintf("último backup off-host hace %s", time.Since(info.ModTime()).Round(time.Hour))}
+		Message: fmt.Sprintf("último backup off-host hace %s", time.Since(okInfo.ModTime()).Round(time.Hour))}
 }
 
 func checkDBIntegrity(e *DbEngine) CheckResult {
