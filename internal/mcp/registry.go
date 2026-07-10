@@ -492,7 +492,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"path", "gist"},
 				},
 			},
-			handler: noCtx(s.countingSave(s.toolSaveCode)),
+			handler: s.countingSaveCtx(s.toolSaveCode),
 		},
 		{
 			Tool: Tool{
@@ -506,7 +506,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"path"},
 				},
 			},
-			handler: noCtx(s.toolRecallCode),
+			handler: s.toolRecallCode,
 		},
 		{
 			Tool: Tool{

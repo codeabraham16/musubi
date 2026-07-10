@@ -342,6 +342,41 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 13,
+			name:    "code_memory_project_id",
+			// Aislamiento multi-tenant de la memoria de código (Track 17). No es SOLO aislamiento:
+			// con PRIMARY KEY(path), dos proyectos con el mismo path (p.ej. internal/auth.go)
+			// colisionaban en el ON CONFLICT(path) y se PISABAN el gist entre sí — corrupción
+			// cross-tenant. Se agrega project_id y la unicidad pasa a (path, project_id). SQLite no
+			// soporta ALTER de PRIMARY KEY ⇒ rebuild de tabla. project_id es NOT NULL DEFAULT ''
+			// (sentinel, NO nullable: SQLite trata cada NULL como distinto en UNIQUE, así que un
+			// project_id nullable rompería la dedup del upsert). Las filas legacy quedan con ''.
+			up: func(x execQuerier) error {
+				stmts := []string{
+					`CREATE TABLE code_memory_new (
+						path TEXT NOT NULL,
+						gist TEXT NOT NULL,
+						symbols TEXT,
+						fingerprint TEXT,
+						tokens INTEGER NOT NULL DEFAULT 0,
+						updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						project_id TEXT NOT NULL DEFAULT '',
+						UNIQUE(path, project_id)
+					)`,
+					`INSERT INTO code_memory_new (path, gist, symbols, fingerprint, tokens, updated_at, project_id)
+						SELECT path, gist, symbols, fingerprint, tokens, updated_at, '' FROM code_memory`,
+					`DROP TABLE code_memory`,
+					`ALTER TABLE code_memory_new RENAME TO code_memory`,
+				}
+				for _, s := range stmts {
+					if _, err := x.Exec(s); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
