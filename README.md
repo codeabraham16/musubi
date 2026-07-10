@@ -12,6 +12,8 @@
 [![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Changelog](https://img.shields.io/badge/changelog-keep--a--changelog-orange.svg)](CHANGELOG.md)
 
+<a href="README.en.md">English</a> · <strong>Español</strong>
+
 </div>
 
 **Musubi** es un servidor **MCP (Model Context Protocol)** escrito en Go que le da a un agente de IA

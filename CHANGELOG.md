@@ -8,6 +8,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **README en inglés + cross-link ES↔EN (adopción por terceros, Track 16 / Producible F4).** Cierra la Fase 4.
+  Toda la documentación estaba solo en español, así que un adoptante anglófono no tenía onboarding. Nuevo
+  `README.en.md` — espejo fiel del README (instalación, inicio rápido, cómo funciona, capacidades, herramientas
+  MCP, configuración, referencia de CLI, búsqueda semántica, desarrollo, roadmap; diagramas Mermaid con labels
+  traducidos y anchors del TOC en inglés). Ambos READMEs llevan un selector de idioma cruzado en el encabezado.
 - **CI cross-platform: validación en Windows y macOS (adopción por terceros, Track 16 / Producible F4).** Hasta
   ahora todos los jobs de CI corrían solo en `ubuntu-latest`; los binarios se cross-compilan para 6 targets pero
   nunca se *testeaban* fuera de Linux. Nuevo job `test-cross` con `strategy.matrix: [windows-latest, macos-latest]`
