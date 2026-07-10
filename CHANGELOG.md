@@ -16,6 +16,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   serve/daemon), reconstruye el índice IVF una vez y actualiza la marca de modelo. Es **idempotente y resumible**
   (una fila ya re-embebida no se vuelve a listar). Sin semántica encendida ⇒ mensaje claro y salida. Guards:
   `TestEmbedBackfillReembedsHistory`, `TestEmbedBackfillSkipsEmptyVectors`.
+- **Gate de calidad R@10 del recall semántico en CI (Track 17, T17.3c).** El harness `recalleval` medía léxico vs
+  semántico con la tabla POTION real pero `TestSemanticVsLexicalReal` **sólo logueaba** el reporte (y se salteaba en
+  CI): la calidad del recall no era un contrato defendido, sólo una medición de una vez. Ahora el test **asserta** un
+  piso: híbrido **R@10 ≥ 0.80** (medido 0.833; léxico 0.750) y híbrido ≥ léxico (el win semántico debe ser aditivo).
+  Nuevo job `recall-gate` en CI que **cachea** la tabla (~488MB, SHA-256 pinneado; sólo se baja en cache miss) y corre
+  la evaluación con `MUSUBI_POTION_DIR`. Atrapa una regresión real (bug en el tokenizer Unigram, en el ranking híbrido
+  o en la tabla) que degrade el recall — con el mismo molde de ratchet que el piso de cobertura y el `bench-guard`.
 
 ### Fixed
 - **Procedencia de vector real por-modelo: `ollama`/`openai` ya no mezclan modelos en silencio (Track 17, T17.3).**
