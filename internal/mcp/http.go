@@ -48,9 +48,11 @@ type httpOptions struct {
 	// romperían a clientes legítimos (que usan un Host no-loopback).
 	loopbackOnly bool
 	// registry, si no es nil, activa la IDENTIDAD por-principal (16.1c): cada request se
-	// autentica contra el registro (o el token legacy) y el principal resuelto viaja en el
-	// ctx para la autorización por rol. Nil ⇒ modo legacy (el único `token` de arriba).
-	registry *PrincipalRegistry
+	// autentica contra el snapshot VIGENTE del registro (o el token legacy) y el principal
+	// resuelto viaja en el ctx para la autorización por rol. Nil ⇒ modo legacy (el único
+	// `token` de arriba). Es un principalResolver: recargable en caliente (Track 18) cuando
+	// hay archivo, o el registro estático en modo legacy.
+	registry principalResolver
 }
 
 // HTTPHandler devuelve el http.Handler que sirve MCP sobre HTTP. POST /mcp recibe un
@@ -250,9 +252,23 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// (cfg.PrincipalsFile) o el default .musubi/principals.yaml del workspace. Si no existe,
 	// loadPrincipals devuelve nil ⇒ modo legacy (un único bearer). Un archivo malformado
 	// es error de arranque (fail-closed). El token legacy queda admitido como admin.
-	registry, err := loadPrincipals(s.principalsPath(cfg), token)
+	principalsFile := s.principalsPath(cfg)
+	registry, err := loadPrincipals(principalsFile, token)
 	if err != nil {
 		return err
+	}
+	// Recarga en caliente (Track 18): si hay ARCHIVO de registro, vigilar su mtime para que altas
+	// y revocaciones surtan efecto sin reiniciar el daemon (una revocación diferida es un agujero).
+	// Sin archivo (legacy-only) no hay qué vigilar: se usa el registro estático tal cual.
+	var resolver principalResolver
+	var reload *reloadableRegistry
+	if registry != nil {
+		if fi, statErr := os.Stat(principalsFile); statErr == nil {
+			reload = newReloadableRegistry(principalsFile, token, registry, fi.ModTime())
+			resolver = reload
+		} else {
+			resolver = registry
+		}
 	}
 	// Redacción forzada server-side (16.1d): un bind no-loopback es infra compartida ⇒
 	// redactar SIEMPRE (fail-closed, no se puede desactivar); un loopback puede optar por
@@ -274,7 +290,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: registry}),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -288,6 +304,10 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 
 	logx.Info("musubi: servidor HTTP escuchando", "addr", cfg.Addr, "path", mcpHTTPPath, "tls", useTLS, "auth", token != "")
+	// Vigilar el registro para recarga en caliente; el goroutine muere con ctx (mismo shutdown).
+	if reload != nil {
+		go reload.watch(ctx)
+	}
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {
