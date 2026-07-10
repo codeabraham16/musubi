@@ -83,7 +83,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"topic_key", "content"},
 				},
 			},
-			handler: noCtx(s.countingSave(s.toolSaveObservation)),
+			handler: s.countingSaveCtx(s.toolSaveObservation),
 		},
 		{
 			Tool: Tool{

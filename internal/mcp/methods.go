@@ -128,7 +128,7 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	return result, rpcErr
 }
 
-func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ID         string  `json:"id"`
 		TopicKey   string  `json:"topic_key"`
@@ -167,6 +167,16 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		importance = 1.0
 	}
 
+	// Atribución de escritura por CREDENCIAL (Track 17 — cierra el write-poisoning cross-tenant,
+	// simétrico al aislamiento de lectura de T17.1a): un writer/reader acotado NO puede atribuir
+	// la observación a otro proyecto (ni dejarla sin atribuir, visible para todos) — su origen lo
+	// fija su credencial, se ignora el project_id que declare el cliente. El origen explícito de
+	// los args solo se respeta para admin/legacy (ingest del central), para quien se diseñó *From.
+	origin := args.ProjectID
+	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+		origin = p.ProjectID
+	}
+
 	var emb []float32
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -178,10 +188,10 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 		emb = vec
 	}
 
-	// Sin id explícito: deduplicar por contenido y autogenerar UUID. Se preserva el
-	// project_id de ORIGEN que envía el caller (ingest del central); "" ⇒ el del engine.
+	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
+	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(args.ProjectID, args.TopicKey, args.Content, importance, args.MemType, scope, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, args.TopicKey, args.Content, importance, args.MemType, scope, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -192,7 +202,7 @@ func (s *McpServer) toolSaveObservation(raw json.RawMessage) (interface{}, *RpcE
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationTypedFrom(args.ProjectID, args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
+	if err := s.engine.SaveObservationTypedFrom(origin, args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil

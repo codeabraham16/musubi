@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Security
+- **Atribución de escritura por credencial: se cierra el write-poisoning cross-tenant (Track 17, T17.1b-1).**
+  Complementa T17.1a (aislamiento de LECTURA) con su contracara de ESCRITURA: `musubi_save_observation` confiaba en
+  el `project_id` que declaraba el cliente, así que un `writer`/`reader` acotado a un proyecto podía atribuir una
+  observación a OTRO proyecto (o dejarla sin atribuir, visible para todos), evadiendo el aislamiento recién
+  cerrado. Ahora el origen se **deriva de la credencial** (`principalFrom(ctx)`): un principal no-admin siempre
+  escribe atribuido a SU proyecto; se ignora el `project_id` de los args. El origen explícito se respeta solo para
+  **admin/legacy** (ingest del central, para quien se diseñó la variante `*From`). `musubi_save_observation` pasó a
+  ctx-aware (`countingSaveCtx`). Guard: `TestWriteAttributionFromPrincipal`.
 - **Aislamiento multi-tenant: se cierra la fuga de CONTENIDO cross-project (Track 17, T17.1a).** La auditoría de
   cierre encontró que el scope por-credencial estaba cableado en UNA sola superficie de lectura (`musubi_recall`):
   las demás consultaban la memoria SIN filtro de proyecto, así que un principal acotado a un proyecto leía el
