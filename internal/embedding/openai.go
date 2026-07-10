@@ -48,7 +48,18 @@ func NewOpenAIProvider(baseURL, model, apiKey string, dim int) *OpenAIProvider {
 	}
 }
 
-func (o *OpenAIProvider) Name() string    { return "openai" }
+// Name devuelve la PROCEDENCIA del vector INCLUYENDO el modelo concreto ("openai:<model>"), no
+// sólo el provider (T17.3). Sin el modelo, dos modelos OpenAI-compatibles de igual dimensión
+// (p.ej. text-embedding-3-small vs un modelo local a 1536) compartían el model_id "openai" y se
+// MEZCLABAN en silencio en la búsqueda por coseno; con el modelo en la procedencia, la regla de
+// homogeneidad las separa. NewOpenAIProvider siempre setea un modelo (default), así que el
+// fallback es defensivo.
+func (o *OpenAIProvider) Name() string {
+	if strings.TrimSpace(o.model) == "" {
+		return "openai"
+	}
+	return "openai:" + o.model
+}
 func (o *OpenAIProvider) Dimensions() int { return o.dim }
 
 func (o *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, error) {

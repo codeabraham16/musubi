@@ -96,16 +96,17 @@ func TestNewProviderFactory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if oll.Name() != "ollama" {
-		t.Errorf("esperaba ollama, obtuve %q", oll.Name())
+	// Name() incluye el modelo en la procedencia (T17.3): "ollama:<model>", no sólo "ollama".
+	if oll.Name() != "ollama:m" {
+		t.Errorf("esperaba ollama:m, obtuve %q", oll.Name())
 	}
 
 	oai, err := NewProvider(config.EmbeddingConfig{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536})
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if oai.Name() != "openai" {
-		t.Errorf("esperaba openai, obtuve %q", oai.Name())
+	if oai.Name() != "openai:text-embedding-3-small" {
+		t.Errorf("esperaba openai:text-embedding-3-small, obtuve %q", oai.Name())
 	}
 	if !Enabled(oai) {
 		t.Error("OpenAIProvider debería contar como Enabled")

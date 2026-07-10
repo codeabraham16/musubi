@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
+	"musubi/internal/memory"
 )
 
 // defaultEmbedModel es la tabla multilingüe (ES+EN) por default: la que baja `embed pull`
@@ -29,6 +31,8 @@ func runEmbed(args []string) {
 	switch args[0] {
 	case "pull":
 		runEmbedPull(args[1:])
+	case "backfill":
+		runEmbedBackfill(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Subcomando de embed desconocido: %s\n", args[0])
 		embedUsage()
@@ -37,9 +41,13 @@ func runEmbed(args []string) {
 }
 
 func embedUsage() {
-	fmt.Println(cBold("Uso:") + " musubi embed pull [modelo] [--out DIR] [--mirror URL]")
-	fmt.Println("  Descarga una tabla estática de embeddings (checksum pinneado) para la búsqueda semántica.")
-	fmt.Println("  Modelos conocidos:")
+	fmt.Println(cBold("Uso:") + " musubi embed <subcomando>")
+	fmt.Println("  " + cBold("pull") + " [modelo] [--out DIR] [--mirror URL]")
+	fmt.Println("     Descarga una tabla estática de embeddings (checksum pinneado) para la búsqueda semántica.")
+	fmt.Println("  " + cBold("backfill"))
+	fmt.Println("     Re-embebe las observaciones del histórico que no tienen vector del modelo actual,")
+	fmt.Println("     para volverlas recuperables por la búsqueda semántica (tras encender o cambiar el embedder).")
+	fmt.Println("  Modelos conocidos (para pull):")
 	names := make([]string, 0, len(embedding.KnownModels))
 	for n := range embedding.KnownModels {
 		names = append(names, n)
@@ -48,6 +56,54 @@ func embedUsage() {
 	for _, n := range names {
 		fmt.Printf("    - %s\n", n)
 	}
+}
+
+// runEmbedBackfill re-embebe las observaciones históricas sin vector del modelo ACTUAL, para
+// cerrar el hueco que WarnOnEmbedModelSwitch avisaba (memoria previa a encender la semántica, o de
+// otro embedder, queda invisible para el recall semántico). Resuelve el mismo embedder que
+// serve/daemon (auto-detección + degradación elegante); si la semántica no está encendida, no hay
+// nada que backfillear y sale con error claro.
+func runEmbedBackfill(args []string) {
+	fs := flag.NewFlagSet("embed backfill", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	root := workspaceDir()
+	if err := ensureWorkspace(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
+		os.Exit(1)
+	}
+
+	embedder := resolveEmbedder(cfg, root)
+	if !embedding.Enabled(embedder) {
+		fmt.Fprintln(os.Stderr, "La memoria semántica no está encendida (recall léxico): no hay nada que backfillear.")
+		fmt.Fprintln(os.Stderr, "Encendé la semántica primero: 'musubi embed pull' (tabla estática) o configurá un provider en .musubi/config.yaml.")
+		os.Exit(1)
+	}
+
+	engine, err := memory.NewDbEngine(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
+		os.Exit(1)
+	}
+	defer engine.Close()
+	// Misma procedencia que un save normal (serve/daemon): el model_id del embedder actual.
+	engine.SetVectorModelID(embedder.Name())
+
+	fmt.Printf("Re-embebiendo el histórico con procedencia %q ...\n", embedder.Name())
+	res, err := engine.EmbedBackfill(func(text string) ([]float32, error) {
+		return embedder.Embed(context.Background(), text)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error en backfill (progreso: %d re-embebidas): %v\n", res.Embedded, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Backfill completo: %d pendiente(s), %d re-embebida(s), %d omitida(s). Procedencia: %s\n",
+		res.Scanned, res.Embedded, res.Skipped, res.ModelID)
 }
 
 func runEmbedPull(args []string) {
