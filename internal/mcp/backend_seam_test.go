@@ -31,6 +31,13 @@ func (f *fakeBackend) PendingObsRelations() ([]memory.ObsRelation, error) {
 	return f.pending, f.pendingErr
 }
 
+// PendingObsRelationsCtx es la variante ctx-aware que usa toolConflicts (Track 17); el fake la
+// trata igual que la sin-ctx (cuenta la llamada + devuelve el mismo dato).
+func (f *fakeBackend) PendingObsRelationsCtx(_ context.Context) ([]memory.ObsRelation, error) {
+	f.calls++
+	return f.pending, f.pendingErr
+}
+
 func TestStorageBackendSeam_ConflictsViaFake(t *testing.T) {
 	fake := &fakeBackend{
 		pending: []memory.ObsRelation{

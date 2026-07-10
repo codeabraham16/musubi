@@ -54,6 +54,8 @@ type GraphStore interface {
 type RelationStore interface {
 	UpsertObsRelation(r ObsRelation) (string, error)
 	PendingObsRelations() ([]ObsRelation, error)
+	// PendingObsRelationsCtx acota al proyecto de la credencial (ctx, Track 17 — aislamiento).
+	PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, error)
 	ResolveObsRelation(id, relation, resolvedBy, reason string) error
 }
 

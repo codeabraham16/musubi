@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -117,6 +119,27 @@ func (e *DbEngine) ResolveObsRelation(id, relation, resolvedBy, reason string) e
 	return nil
 }
 
+// PendingObsRelationsCtx es como PendingObsRelations pero ACOTA al proyecto de la credencial
+// (Track 17 — aislamiento multi-tenant): solo devuelve las relaciones cuya observación de ORIGEN
+// (source_id) pertenece al proyecto del caller. Ausencia de scope ⇒ federado (histórico). Se
+// filtra por el source (el lado que dispara la contradicción); ambos endpoints suelen ser del
+// mismo proyecto. El JOIN a observations es interno (una relación cuyo source ya no existe se
+// omite, caso degenerado).
+func (e *DbEngine) PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, error) {
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+	q := `SELECT r.id, r.source_id, r.target_id, r.relation, r.confidence, r.status,
+	             COALESCE(r.resolved_by,''), COALESCE(r.reason,'')
+	      FROM observation_relations r
+	      JOIN observations o ON o.id = r.source_id
+	      WHERE r.status = ?` + scopeSQL + ` ORDER BY r.updated_at DESC`
+	args := append([]interface{}{RelStatusPending}, scopeArgs...)
+	rows, err := e.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar relaciones pendientes acotadas: %w", err)
+	}
+	return scanObsRelations(rows)
+}
+
 // queryObsRelations centraliza el SELECT con un filtro WHERE opcional.
 func (e *DbEngine) queryObsRelations(where string, args ...interface{}) ([]ObsRelation, error) {
 	q := `SELECT id, source_id, target_id, relation, confidence, status,
@@ -126,6 +149,12 @@ func (e *DbEngine) queryObsRelations(where string, args ...interface{}) ([]ObsRe
 	if err != nil {
 		return nil, fmt.Errorf("error al listar relaciones de observaciones: %w", err)
 	}
+	return scanObsRelations(rows)
+}
+
+// scanObsRelations escanea filas de observation_relations en []ObsRelation (columnas en el
+// orden id, source_id, target_id, relation, confidence, status, resolved_by, reason).
+func scanObsRelations(rows *sql.Rows) ([]ObsRelation, error) {
 	defer rows.Close()
 	var out []ObsRelation
 	for rows.Next() {

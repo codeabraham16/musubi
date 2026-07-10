@@ -941,8 +941,10 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 }
 
 // toolConflicts lista las relaciones pendientes de veredicto.
-func (s *McpServer) toolConflicts(_ json.RawMessage) (interface{}, *RpcError) {
-	rels, err := s.engine.PendingObsRelations()
+func (s *McpServer) toolConflicts(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
+	// Aislamiento por proyecto (Track 17): solo los conflictos cuya observación de origen es del
+	// proyecto de la credencial; stdio local / admin ⇒ federado.
+	rels, err := s.engine.PendingObsRelationsCtx(s.scopedCtx(ctx))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al listar conflictos: %v", err)
 	}
