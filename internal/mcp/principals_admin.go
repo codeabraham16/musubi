@@ -83,6 +83,13 @@ func AddPrincipal(path, name, projectID, role string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Tenancy fail-closed (Track 18): reader/writer DEBEN tener project_id (sin él resolverían a
+	// scope vacío ⇒ federado + escritura sin atribuir). Cierra el default silencioso de `token new`
+	// (rol writer, proyecto vacío). Solo 'admin' puede ser federado (por diseño).
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" && r != RoleAdmin {
+		return "", fmt.Errorf("el rol %q requiere --project (aislamiento por proyecto); solo 'admin' puede ser federado (sin proyecto)", r)
+	}
 	f, err := readPrincipalsFile(path)
 	if err != nil {
 		return "", err
@@ -97,7 +104,7 @@ func AddPrincipal(path, name, projectID, role string) (string, error) {
 		return "", err
 	}
 	f.Principals = append(f.Principals, principalEntry{
-		Name: name, TokenSHA256: hashToken(token), ProjectID: strings.TrimSpace(projectID), Role: r,
+		Name: name, TokenSHA256: hashToken(token), ProjectID: projectID, Role: r,
 	})
 	if err := writePrincipalsFile(path, f); err != nil {
 		return "", err
