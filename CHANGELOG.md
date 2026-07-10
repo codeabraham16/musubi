@@ -7,6 +7,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.83.1] - 2026-07-10
+
+**Track 19 — sellar la clase de tenancy (parche quirúrgico).** La auditoría de re-medición post-Track 18
+(veredicto **4.2/5**) encontró **por tercera vez** la misma clase de fuga de lectura cross-tenant en una
+superficie no enumerada, más una regresión de durabilidad que introdujo la cuota-ON de v0.83.0. Este
+parche cierra ambas y —clave— sella la clase **por contrato** para que no reincida.
+
+### Security
+- **`resolve_skills` / `search_skills` aislados por proyecto (T19.1).** `resolve_skills` corría `noCtx` y
+  devolvía la telemetría *relevante* (`GetUnresolvedTelemetryLogsForFiles`) SIN scope: un writer del
+  proyecto B recibía `file_path`+`error_message`+`suggested_patch` de otros tenants por colisión de
+  basename. `search_skills` leía `skill_decisions` federado (behavior-bleed de `rejected` ajenos). Ambos
+  pasan a ctx-aware (`GetUnresolvedTelemetryLogsForFilesCtx`, `GetSkillDecisionsCtx`). **Sellado por
+  contrato:** `TestReadSurfaceClassIsolation` barre 8 superficies de lectura con datos cross-tenant y
+  falla si el marcador del otro tenant aparece; `TestEveryReadOnlyToolClassified` exige que toda tool
+  `readOnly` nueva esté clasificada (cubierta por el barrido, o declarada sin lectura scopeada) — así una
+  hermana federada no puede colarse.
+
+### Fixed
+- **El drain del outbox ya no dead-letterea memoria `shared` cuando el central rate-limita (T19.2).**
+  Regresión introducida por la cuota-ON-default de v0.83.0: `classifyResponse` clasificaba **cualquier**
+  error JSON-RPC como permanente, así que un `codeQuotaExceeded` (-32002) del central mandaba la
+  observación a dead-letter (pérdida recuperable solo con `sync_requeue` manual). Una cuota es un límite
+  **temporal**: ahora se trata como transitorio (reintento con backoff). Guard: `TestSyncClientQuotaIsTransient`.
+
 ## [0.83.0] - 2026-07-10
 
 **Track 18 — tenancy hardening ("cerrar la clase").** La auditoría de re-medición post-Track 17
