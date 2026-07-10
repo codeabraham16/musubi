@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -30,6 +31,48 @@ const (
 // es semánticamente idéntico al anterior (mismo predicado; a lo sumo cambia el prefijo de
 // alias, que es redundante cuando `observations` es la única tabla con esas columnas).
 const visibleObsPredicate = "archived = 0 AND superseded_by IS NULL"
+
+// ProjectScope acota una lectura a un proyecto para el AISLAMIENTO multi-tenant (Track 17).
+// Federate (o ProjectID vacío) ⇒ SIN filtro: comportamiento federado histórico (stdio local,
+// bearer legacy, admin). Deriva de la CREDENCIAL en el MCP (recallScopeFor), nunca del cliente.
+type ProjectScope struct {
+	ProjectID string
+	Federate  bool
+}
+
+type projectScopeKey struct{}
+
+// WithProjectScope adjunta un scope de proyecto al contexto. El MCP lo inyecta tras derivarlo
+// del principal; las queries de lectura del engine lo aplican vía projectScopeFrom. Viaja por
+// el ctx (no por la firma) para no cambiar el contrato StorageBackend ni sus ~30 callers.
+func WithProjectScope(ctx context.Context, sc ProjectScope) context.Context {
+	return context.WithValue(ctx, projectScopeKey{}, sc)
+}
+
+// projectScopeFrom recupera el scope del contexto. AUSENTE ⇒ ProjectScope{} = federado (sin
+// filtro): así un caller que no inyecta scope (tests, recall pool, stdio) conserva el
+// comportamiento previo bit-a-bit.
+func projectScopeFrom(ctx context.Context) ProjectScope {
+	if sc, ok := ctx.Value(projectScopeKey{}).(ProjectScope); ok {
+		return sc
+	}
+	return ProjectScope{}
+}
+
+// scopeClause devuelve el fragmento SQL (con su AND inicial) + args que acotan una query al
+// proyecto pedido CONSERVANDO las filas sin atribuir (project_id NULL o ''), idéntico criterio
+// que filterCandidatesByProject del recall. Federate o ProjectID vacío ⇒ ("", nil): no filtra.
+// alias es el prefijo de la tabla observations (p.ej. "o"); vacío para columnas sin calificar.
+func (sc ProjectScope) scopeClause(alias string) (string, []interface{}) {
+	if sc.Federate || sc.ProjectID == "" {
+		return "", nil
+	}
+	col := "project_id"
+	if alias != "" {
+		col = alias + ".project_id"
+	}
+	return fmt.Sprintf(" AND (%s = ? OR %s IS NULL OR %s = '')", col, col, col), []interface{}{sc.ProjectID}
+}
 
 // normalizeScope acota un scope al conjunto válido. Vacío o desconocido ⇒ 'local' (el
 // default privado), de modo que la columna NOT NULL siempre reciba un valor sano y un

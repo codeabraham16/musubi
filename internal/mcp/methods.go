@@ -1166,7 +1166,7 @@ func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
 	return jsonResult(maintainResponse{Skipped: false, LastMaintenance: last, Report: &rep})
 }
 
-func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolMemoryExpand(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		IDs       []string `json:"ids"`
 		MaxTokens int      `json:"max_tokens"`
@@ -1178,7 +1178,9 @@ func (s *McpServer) toolMemoryExpand(raw json.RawMessage) (interface{}, *RpcErro
 		return nil, rpcErrorf(codeInvalidParams, "ids no puede estar vacío")
 	}
 
-	res, used, err := s.engine.GetObservationsBudget(args.IDs, args.MaxTokens)
+	// Aislamiento por proyecto (Track 17): la hidratación por id era una fuga total (leer el
+	// contenido crudo de CUALQUIER proyecto enumerando ids). Se acota a la credencial.
+	res, used, err := s.engine.GetObservationsBudgetCtx(s.scopedCtx(ctx), args.IDs, args.MaxTokens)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al expandir memorias: %v", err)
 	}
@@ -1343,6 +1345,15 @@ func toSearchHits(sources []searchSource, gistMax, budget int) []searchHit {
 	return hits
 }
 
+// scopedCtx adjunta al contexto el ProjectScope derivado de la CREDENCIAL (recallScopeFor),
+// para que las lecturas del engine se acoten al proyecto del principal (Track 17 — aislamiento
+// multi-tenant). En stdio local / admin / legacy ⇒ federado (sin filtro): idéntico criterio que
+// el scope del recall, ahora extendido a las demás superficies de lectura.
+func (s *McpServer) scopedCtx(ctx context.Context) context.Context {
+	ps, fed := recallScopeFor(principalFrom(ctx))
+	return memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: ps, Federate: fed})
+}
+
 func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query string `json:"query"`
@@ -1365,7 +1376,7 @@ func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage)
 		return nil, rpcErrorf(codeInternalError, "error al generar embedding de la consulta: %v", err)
 	}
 
-	results, err := s.engine.SearchObservations(ctx, vec, clampLimit(args.Limit))
+	results, err := s.engine.SearchObservations(s.scopedCtx(ctx), vec, clampLimit(args.Limit))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda semántica: %v", err)
 	}
@@ -1388,7 +1399,7 @@ func (s *McpServer) toolSearchKeyword(ctx context.Context, raw json.RawMessage) 
 		return nil, rpcErrorf(codeInvalidParams, "query_text es obligatorio")
 	}
 
-	results, err := s.engine.SearchObservationsFTS(ctx, args.QueryText, clampLimit(args.Limit))
+	results, err := s.engine.SearchObservationsFTS(s.scopedCtx(ctx), args.QueryText, clampLimit(args.Limit))
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda por palabra clave: %v", err)
 	}

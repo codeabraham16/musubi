@@ -117,7 +117,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"ids"},
 				},
 			},
-			handler: noCtx(s.toolMemoryExpand),
+			handler: s.toolMemoryExpand,
 		},
 		{
 			Tool: Tool{

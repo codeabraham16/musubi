@@ -30,6 +30,9 @@ type ObservationStore interface {
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
+	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
+	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.
+	GetObservationsBudgetCtx(ctx context.Context, ids []string, budget int) ([]Observation, int, error)
 	// PromoteObservation marca una observación como 'shared' (memoria híbrida local+central).
 	PromoteObservation(id string) error
 }

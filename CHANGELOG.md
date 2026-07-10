@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Security
+- **Aislamiento multi-tenant: se cierra la fuga de CONTENIDO cross-project (Track 17, T17.1a).** La auditoría de
+  cierre encontró que el scope por-credencial estaba cableado en UNA sola superficie de lectura (`musubi_recall`):
+  las demás consultaban la memoria SIN filtro de proyecto, así que un principal acotado a un proyecto leía el
+  contenido crudo de TODOS. Esta unidad cierra las 3 superficies que devuelven contenido completo —
+  `musubi_search_keyword`, `musubi_search_semantic` y `musubi_memory_expand` (la fuga más grave: hidrataba por id
+  arbitrario). Diseño de mínima superficie: un `ProjectScope` que viaja por el **contexto** (`WithProjectScope`/
+  `projectScopeFrom`) y un helper SQL `scopeClause` centralizado (mismo criterio que `filterCandidatesByProject`
+  del recall: el proyecto pedido + las filas sin atribuir); las funciones de lectura del engine lo aplican sin
+  cambiar la firma de `StorageBackend` ni sus ~30 callers. El MCP deriva el scope de la credencial (`recallScopeFor`)
+  y lo inyecta (`scopedCtx`); `musubi_memory_expand` pasó a ctx-aware. Ausencia de scope (stdio local / admin /
+  legacy) ⇒ federado, comportamiento histórico bit-a-bit. Guards de no-bleed: `TestReadIsolationByProjectScope`
+  (motor, las 3 funciones) + `TestReadSurfacesEnforcePrincipalScope` (e2e MCP). **Pendiente en T17.1b:** las
+  superficies de metadata/grafo (`recall_facts`, `entity_context`, `recall_code`, `insights`, `conflicts`) y la
+  atribución de ESCRITURA por credencial (poisoning).
+
 ### Added
 - **README en inglés + cross-link ES↔EN (adopción por terceros, Track 16 / Producible F4).** Cierra la Fase 4.
   Toda la documentación estaba solo en español, así que un adoptante anglófono no tenía onboarding. Nuevo

@@ -43,10 +43,15 @@ func (e *DbEngine) GetObservationsBudgetCtx(ctx context.Context, ids []string, b
 		placeholders[i] = "?"
 		args[i] = id
 	}
+	// Aislamiento por proyecto (Track 17): la hidratación por id arbitrario era una fuga total
+	// (memory_expand traía contenido de cualquier proyecto). Acota a la credencial del caller
+	// (ausente ⇒ federado). Conserva las filas sin atribuir (project_id NULL o '').
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
+	args = append(args, scopeArgs...)
 
 	rows, err := e.db.QueryContext(ctx,
 		`SELECT id, topic_key, content, COALESCE(created_at,'')
-		 FROM observations WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
+		 FROM observations WHERE id IN (`+strings.Join(placeholders, ",")+`)`+scopeSQL,
 		args...,
 	)
 	if err != nil {
