@@ -8,6 +8,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Security
+- **Redacción de TODO ingest al central: `save_fact` y `save_code` ya no escriben secretos crudos (Track 17, T17.2).**
+  La auditoría de cierre encontró que la redacción forzada server-side (`forceRedact`) cubría **solo**
+  `save_observation` — `save_fact` (subject/predicate/object) y `save_code` (gist/symbols) escribían contenido
+  **crudo** al pozo compartido, recuperable por `recall_facts`/`recall_code`, mientras el `Threat_Model` lo declaraba
+  falsamente como "redacta TODO ingest". Ahora un helper único (`redactIfForced`) pasa **las tres** tools por la
+  redacción cuando el bind es no-loopback (el central). Además: en `save_observation` el contenido se redacta
+  **ANTES** de computar el embedding (el vector at-rest ya no se deriva del secreto crudo) y el `topic_key` también
+  se cubre. El `Threat_Model.md` se corrigió para reflejar el alcance real **y** advertir que la redacción es
+  **best-effort heurística** (reduce, no garantiza; un secreto corto o de baja entropía puede escapar), no una
+  garantía dura. Guard: `TestForceRedactCoversAllIngest`. En loopback local el contenido queda crudo (el dev lo necesita).
 - **Atribución de escritura por credencial: se cierra el write-poisoning cross-tenant (Track 17, T17.1b-1).**
   Complementa T17.1a (aislamiento de LECTURA) con su contracara de ESCRITURA: `musubi_save_observation` confiaba en
   el `project_id` que declaraba el cliente, así que un `writer`/`reader` acotado a un proyecto podía atribuir una

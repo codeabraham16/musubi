@@ -27,9 +27,9 @@ token se filtra o un peer se compromete. Esas garantías las provee Musubi por e
 | Amenaza | Mitigación (dónde) |
 |---|---|
 | Fuga de un token compartido = acceso total | **Identidad por-principal** (16.1c): un token por miembro, revocable individualmente; el archivo guarda el SHA-256, no el token |
-| Un miembro lee la memoria de otro proyecto | **Aislamiento por proyecto** (16.1b/c-3): el recall se acota al `project_id` **derivado de la credencial**; solo `admin` ve federado |
+| Un miembro lee la memoria de otro proyecto | **Aislamiento por proyecto** derivado de la credencial: `recall` (16.1c-3) y las lecturas de **contenido** —`search_keyword`, `search_semantic`, `memory_expand`— se acotan al `project_id` del principal (T17.1a); la **escritura** también se atribuye por credencial, no por lo que declare el cliente (T17.1b-1). Solo `admin` ve federado. *Pendiente (T17.1b-2): las superficies de metadata/grafo (`recall_facts`, `entity_context`, `recall_code`, `insights`, `conflicts`) todavía consultan federado.* |
 | Escalamiento: un `reader` muta memoria | **Authz por rol** (16.1c): `reader` solo tools de lectura; deniega con `codeUnauthorized` |
-| Un secreto crudo entra al pozo compartido | **Redacción forzada server-side** (16.1d): el central redacta TODO ingest, fail-closed, sin importar el `scope` que declare el cliente |
+| Un secreto crudo entra al pozo compartido | **Redacción forzada server-side** en TODO ingest al central —`save_observation` (content + topic_key, **antes** del embedding), `save_fact` y `save_code`— cuando el bind es no-loopback (T17.2), fail-closed, sin importar el `scope` declarado. **Es BEST-EFFORT heurístico** (formas conocidas de secreto + entropía): **reduce, no garantiza** la fuga —un secreto corto o de baja entropía puede escapar—; no confiar en la redacción como única barrera. |
 | Fuerza bruta del bearer | **Lockout** (16.1e): N fallos por IP ⇒ bloqueo temporal; comparación en tiempo constante (no filtra por timing) |
 | Token en texto plano en tránsito | Fail-closed: bind no-loopback **exige** token; sin TLS, hay que optar explícitamente por `allow_insecure_token` (válido solo si WireGuard/un proxy cubren el cifrado) |
 | DNS-rebinding (modo loopback) | Chequeo de Host loopback + Origin local |
