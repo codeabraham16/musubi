@@ -84,11 +84,20 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		reg.legacyHash = hashToken(legacyToken)
 	}
 	seen := make(map[string]bool)
+	seenNames := make(map[string]bool)
 	for i, p := range parsed.Principals {
 		name := strings.TrimSpace(p.Name)
 		if name == "" {
 			return nil, fmt.Errorf("principal #%d sin 'name' en %q", i+1, path)
 		}
+		// Unicidad de nombres (Track 18): el nombre es la CLAVE de la cuota por-principal y la
+		// identidad en logs/atribución; dos principals homónimos compartirían bucket de cuota y
+		// serían ambiguos. Case-insensitive, coherente con el rechazo de duplicados de AddPrincipal.
+		lname := strings.ToLower(name)
+		if seenNames[lname] {
+			return nil, fmt.Errorf("principal %q: nombre duplicado en %q (los nombres deben ser únicos)", name, path)
+		}
+		seenNames[lname] = true
 		h := strings.ToLower(strings.TrimSpace(p.TokenSHA256))
 		if len(h) != 64 || !isHex(h) {
 			return nil, fmt.Errorf("principal %q: token_sha256 debe ser 64 hex (el SHA-256 del token), no %q", name, p.TokenSHA256)

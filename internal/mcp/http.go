@@ -270,6 +270,16 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 			resolver = registry
 		}
 	}
+	// Tenancy en bind remoto (Track 18): "legacy admin-federado" = sin registro de principals (o
+	// solo el bearer legacy) ⇒ un token con acceso TOTAL a todos los proyectos. En un bind
+	// no-loopback eso es infra compartida SIN aislamiento por miembro. StrictTenancy lo rechaza al
+	// arranque (fail-closed opt-in); apagado, un WARNING siempre lo hace visible.
+	if isRemoteLegacyTenancy(loopback, registry) {
+		if cfg.StrictTenancy {
+			return fmt.Errorf("strict_tenancy: un bind no-loopback (%q) exige un registro de principals con al menos un miembro; configurá principals.yaml (musubi token new) o desactivá service.strict_tenancy a conciencia", cfg.Addr)
+		}
+		logx.Warn("musubi: sirviendo en bind remoto en modo legacy admin-federado (un único bearer con acceso total a todos los proyectos); configurá principals.yaml (musubi token new) para aislamiento por miembro, o service.strict_tenancy: true para exigirlo", "addr", cfg.Addr)
+	}
 	// Redacción forzada server-side (16.1d): un bind no-loopback es infra compartida ⇒
 	// redactar SIEMPRE (fail-closed, no se puede desactivar); un loopback puede optar por
 	// config. Cierra el hueco de un cliente que manda scope=local con un secreto crudo.
@@ -331,6 +341,13 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		}
 		return err
 	}
+}
+
+// isRemoteLegacyTenancy reporta si el server escucharía en un bind NO-loopback en modo "legacy
+// admin-federado": sin registro de principals real (registry nil, o solo el bearer legacy sin
+// miembros). Es la condición que StrictTenancy rechaza y que el WARNING de arranque hace visible.
+func isRemoteLegacyTenancy(loopback bool, registry *PrincipalRegistry) bool {
+	return !loopback && (registry == nil || len(registry.principals) == 0)
 }
 
 // isLoopbackHost indica si host (con o sin puerto) resuelve a loopback o "localhost".

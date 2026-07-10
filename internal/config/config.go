@@ -323,10 +323,35 @@ type ServiceConfig struct {
 	// activarla en un bind loopback. No se puede desactivar en no-loopback.
 	ForceRedact bool `yaml:"force_redact,omitempty"`
 	// QuotaPerMinute limita las llamadas a tools/call POR PRINCIPAL por minuto (Track 16 F3.2):
-	// protege al cerebro central de un principal desbocado. 0 (default) ⇒ sin límite. Solo
-	// aplica cuando hay un principal autenticado (serve con registro); en stdio local no hay
-	// cuota. Es por identidad de principal, no por IP (el lockout de auth ya cubre la IP).
+	// protege al cerebro central de un principal desbocado. Track 18 la enciende por default:
+	// 0 ⇒ default generoso (ver EffectiveQuotaPerMinute); NEGATIVO ⇒ sin límite (opt-out
+	// explícito); >0 ⇒ ese límite. Solo aplica cuando hay un principal autenticado (serve con
+	// registro); en stdio local no hay cuota. Es por identidad de principal, no por IP.
 	QuotaPerMinute int `yaml:"quota_per_minute,omitempty"`
+	// StrictTenancy (Track 18) exige, en un bind NO-loopback, un registro de principals con al
+	// menos un miembro: rechaza arrancar en "legacy admin-federado" (un único bearer con acceso
+	// total a todos los proyectos). Default false (backward-compat); un WARNING de arranque avisa
+	// del modo legacy en bind remoto aunque esté apagado.
+	StrictTenancy bool `yaml:"strict_tenancy,omitempty"`
+}
+
+// defaultServiceQuotaPerMinute es la cuota por-principal aplicada cuando QuotaPerMinute==0
+// (Track 18): protege al central por default sin lastimar el uso normal (600/min = 10/s
+// sostenidos por principal es holgado para un agente). Un valor negativo la desactiva a conciencia.
+const defaultServiceQuotaPerMinute = 600
+
+// EffectiveQuotaPerMinute resuelve la cuota efectiva desde QuotaPerMinute: 0 ⇒ default (protección
+// ON, Track 18); <0 ⇒ sin límite (opt-out explícito); >0 ⇒ ese valor. Cablearla en vez de leer
+// QuotaPerMinute directo evita cambiar la semántica del cero en YAMLs existentes.
+func (c ServiceConfig) EffectiveQuotaPerMinute() int {
+	switch {
+	case c.QuotaPerMinute == 0:
+		return defaultServiceQuotaPerMinute
+	case c.QuotaPerMinute < 0:
+		return 0
+	default:
+		return c.QuotaPerMinute
+	}
 }
 
 // SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain
