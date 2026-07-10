@@ -36,7 +36,7 @@ Para evitar el colapso bajo alta carga (como sucede con Python/Node en entornos 
 ## 4. Estructura del Monorepo
 
 ```text
-c:/Users/Davantis/Desktop/Musubi/
+musubi/
 ├── go.mod                      <- Definición del módulo
 ├── cmd/
 │   ├── musubi/                 <- CLI Entry point

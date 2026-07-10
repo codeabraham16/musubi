@@ -9,14 +9,14 @@
     # si no pasás -ProjectDir usa el directorio actual.
 
   Parámetros:
-    -BrainIp           IP del cerebro en el tailnet     (default 100.79.126.62)
+    -BrainIp           IP de TU cerebro en el tailnet   (REQUERIDO: no hay default)
     -BrainPort         puerto del cerebro               (default 7717)
     -TailscaleAuthKey  (opcional) auth key para unir la malla sin abrir el navegador
     -SkipFirewall      no tocar el firewall (si ya lo configuraste a mano)
 #>
 param(
   [string]$ProjectDir      = (Get-Location).Path,
-  [string]$BrainIp         = "100.79.126.62",
+  [string]$BrainIp         = "",
   [int]$BrainPort          = 7717,
   [string]$TailscaleAuthKey = "",
   [switch]$SkipFirewall
@@ -30,6 +30,12 @@ function Ok($m){   Write-Host "OK  $m" -ForegroundColor Green }
 function Info($m){ Write-Host "--> $m" -ForegroundColor Cyan }
 function Warn($m){ Write-Host "!   $m" -ForegroundColor Yellow }
 function Die($m){  Write-Host "X   $m" -ForegroundColor Red; exit 1 }
+
+# -BrainIp es REQUERIDO: apunta a TU cerebro central (antes defaulteaba a la infra del autor,
+# lo que rompía la adopción por terceros — Track 16 F4).
+if ([string]::IsNullOrWhiteSpace($BrainIp)) {
+  Die "Falta -BrainIp: pasá la IP de TU cerebro central de Musubi (ej: -BrainIp 100.x.y.z)."
+}
 
 # ── 0. Elevar a administrador (el fix de firewall lo necesita) ────────────────
 $isAdmin = ([Security.Principal.WindowsPrincipal] `

@@ -9,13 +9,13 @@
 #   # si no pasás el token por env, te lo pregunta.
 #   # si no pasás directorio, usa el actual ($PWD).
 #
-# Variables opcionales:
-#   BRAIN_IP    IP del cerebro en el tailnet   (default: 100.79.126.62)
-#   BRAIN_PORT  puerto del cerebro             (default: 7717)
+# Variables:
+#   BRAIN_IP    IP de TU cerebro en el tailnet  (REQUERIDO: no hay default)
+#   BRAIN_PORT  puerto del cerebro              (default: 7717)
 #
 set -euo pipefail
 
-BRAIN_IP="${BRAIN_IP:-100.79.126.62}"
+BRAIN_IP="${BRAIN_IP:?seteá BRAIN_IP con la IP de TU cerebro central (ej: BRAIN_IP=100.x.y.z ./connect-brain-linux.sh)}"
 BRAIN_PORT="${BRAIN_PORT:-7717}"
 PROJECT_DIR="${1:-$PWD}"
 BRAIN_URL="http://$BRAIN_IP:$BRAIN_PORT/mcp"

@@ -37,7 +37,7 @@ func TestModeOK(t *testing.T) {
 func TestGuidanceIsVPNAgnostic(t *testing.T) {
 	// Ningún modo debe nombrar un producto de VPN concreto (requisito R2).
 	for _, m := range []NetworkMode{ModeClean, ModeSplitExcluded, ModeTunneled, ModeIsolated} {
-		g := Guidance(m, "100.79.126.62:7717")
+		g := Guidance(m, "brain.example:7717")
 		if g == "" {
 			t.Fatalf("Guidance(%v) vacía", m)
 		}

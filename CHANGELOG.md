@@ -7,6 +7,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **`musubi provision` ahora EXIGE `--brain` (adopción por terceros, Track 16 / Producible F4).** Antes `--brain`
+  defaulteaba a `100.79.126.62:7717` — la IP del tailnet del AUTOR: un tercero que corría `musubi provision` sin
+  flags terminaba sondeando/cableando contra la máquina del autor. Se eliminó ese default personal (constante
+  `provision.DefaultBrain`) y ahora `provision` falla con un mensaje claro si falta `--brain`, apuntando a `musubi
+  setup` para quien solo quiere setear el proyecto localmente sin un cerebro central. Mismo criterio en los scripts
+  de deploy: `deploy/connect-brain-linux.sh` (`BRAIN_IP` requerido vía `${BRAIN_IP:?…}`) y
+  `deploy/connect-brain-windows.ps1` (`-BrainIp` requerido con check explícito). Ningún archivo versionado apunta ya
+  a infra del autor. (El `repoOwner`/catálogos siguen en `codeabraham16/musubi` — ese ES el repo público real.)
+
 ## [0.80.0] - 2026-07-09
 
 ### Added

@@ -15,7 +15,6 @@ import (
 // el self-check. Idempotente. El secreto va por ${MUSUBI_TOKEN}, nunca al archivo.
 func runProvision(args []string) {
 	opts := provision.Options{
-		Brain:      provision.DefaultBrain,
 		ProjectDir: ".",
 		TokenEnv:   "MUSUBI_TOKEN",
 	}
@@ -50,6 +49,16 @@ func runProvision(args []string) {
 			printProvisionUsage()
 			os.Exit(1)
 		}
+	}
+
+	// --brain es REQUERIDO: apunta a TU cerebro central. No hay default (antes apuntaba a la
+	// infra del autor, lo que rompía la adopción por terceros — Track 16 F4). Para setear solo
+	// este proyecto localmente, sin cerebro central, está `musubi setup`.
+	if strings.TrimSpace(opts.Brain) == "" {
+		fmt.Fprintln(os.Stderr, "provision: falta --brain <ip:port> — la dirección de TU cerebro central de Musubi.")
+		fmt.Fprintln(os.Stderr, "  Si solo querés setear este proyecto localmente (sin cerebro central), usá 'musubi setup'.")
+		printProvisionUsage()
+		os.Exit(1)
 	}
 
 	if strings.TrimSpace(opts.ProjectDir) == "" {
@@ -124,7 +133,7 @@ func printProvisionUsage() {
 	fmt.Println(cBold("Uso:") + " musubi provision [opciones]")
 	fmt.Println("  Une esta máquina al cerebro central de Musubi (red + .mcp.json + verificación).")
 	fmt.Println()
-	fmt.Println("  --brain <ip:port>    cerebro (default " + provision.DefaultBrain + ")")
+	fmt.Println("  --brain <ip:port>    cerebro central (REQUERIDO; ip:port de TU servidor Musubi)")
 	fmt.Println("  --project <dir>      proyecto cuyo .mcp.json se cablea (default: actual)")
 	fmt.Println("  --token-env <VAR>    env var con el token (default MUSUBI_TOKEN)")
 	fmt.Println("  --authkey <key>      auth key de Tailscale para unir sin navegador")
