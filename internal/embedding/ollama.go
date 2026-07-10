@@ -34,7 +34,17 @@ func NewOllamaProvider(baseURL, model string, dim int) *OllamaProvider {
 	}
 }
 
-func (o *OllamaProvider) Name() string    { return "ollama" }
+// Name devuelve la PROCEDENCIA del vector INCLUYENDO el modelo concreto ("ollama:<model>"), no
+// sólo el provider (T17.3). Sin el modelo, dos tablas distintas de Ollama de igual dimensión
+// (p.ej. nomic-embed-text vs mxbai-embed-large a 768) compartían el model_id "ollama" y se
+// MEZCLABAN en silencio en la búsqueda por coseno; con el modelo en la procedencia, la regla de
+// homogeneidad las separa. Modelo vacío ⇒ "ollama" (defensivo; en la práctica config exige uno).
+func (o *OllamaProvider) Name() string {
+	if strings.TrimSpace(o.model) == "" {
+		return "ollama"
+	}
+	return "ollama:" + o.model
+}
 func (o *OllamaProvider) Dimensions() int { return o.dim }
 
 func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {

@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`musubi embed backfill`: re-embeber el histórico (Track 17, T17.3).** Al encender la memoria semántica sobre una
+  base con observaciones previas —o al cambiar de embedder— esas observaciones quedaban SIN vector de la procedencia
+  actual y eran **invisibles** para el recall semántico para siempre; `WarnOnEmbedModelSwitch` avisaba del hueco pero
+  no ofrecía remedio. El nuevo subcomando `EmbedBackfill` recorre las observaciones activas sin vector del modelo
+  actual (sin fila en `embeddings` o con `model_id` distinto), las re-embebe con el embedder resuelto (mismo que
+  serve/daemon), reconstruye el índice IVF una vez y actualiza la marca de modelo. Es **idempotente y resumible**
+  (una fila ya re-embebida no se vuelve a listar). Sin semántica encendida ⇒ mensaje claro y salida. Guards:
+  `TestEmbedBackfillReembedsHistory`, `TestEmbedBackfillSkipsEmptyVectors`.
+
+### Fixed
+- **Procedencia de vector real por-modelo: `ollama`/`openai` ya no mezclan modelos en silencio (Track 17, T17.3).**
+  El `model_id` que estampa la procedencia del vector salía de `Provider.Name()`, que para `ollama`/`openai` devolvía
+  la **constante** `"ollama"`/`"openai"` — así, dos modelos distintos de **igual dimensión** bajo el mismo provider
+  (p.ej. `nomic-embed-text` vs `mxbai-embed-large` a 768) compartían `model_id` y se **mezclaban** en la búsqueda por
+  coseno, corrompiendo el recall en silencio (la única guarda previa, por dimensión, no los distinguía). Ahora
+  `Name()` incluye el modelo (`"ollama:<model>"` / `"openai:<model>"`), de modo que la regla de homogeneidad los
+  separa. `static` ya era correcto (incluía la tabla). *Nota:* tras actualizar, los vectores `ollama`/`openai` viejos
+  quedan con la procedencia antigua y salen del recall hasta correr `musubi embed backfill` (arriba).
+
 ### Changed
 - **DR off-host segura por default + dead-man's-switch + test de restore en CI (Track 17, T17.4).** Cierra el
   hallazgo **CRÍTICO** de la auditoría (perder el disco del cerebro central = perder toda la memoria compartida),
