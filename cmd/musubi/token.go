@@ -10,9 +10,10 @@ import (
 )
 
 // runToken administra el registro de principals del cerebro central (Track 16 F1 16.1c-2):
-//   musubi token new    --name X [--project Y] [--role reader|writer|admin] [--file path]
-//   musubi token list   [--file path]
-//   musubi token revoke --name X [--file path]
+//
+//	musubi token new    --name X [--project Y] [--role reader|writer|admin] [--file path]
+//	musubi token list   [--file path]
+//	musubi token revoke --name X [--file path]
 //
 // El registro guarda el SHA-256 de cada token, nunca el token crudo. `new` imprime el token
 // UNA sola vez para entregárselo al miembro. Ruta default: <workspace>/.musubi/principals.yaml.
@@ -43,8 +44,8 @@ func defaultPrincipalsPath() string {
 func tokenNew(args []string) {
 	fs := flag.NewFlagSet("token new", flag.ExitOnError)
 	name := fs.String("name", "", "nombre del principal (obligatorio)")
-	project := fs.String("project", "", "project_id que se le atribuye (aísla su recall)")
-	role := fs.String("role", "writer", "rol: reader | writer | admin")
+	project := fs.String("project", "", "project_id que se le atribuye (aísla su recall); OBLIGATORIO para reader/writer")
+	role := fs.String("role", "writer", "rol: reader | writer | admin (reader/writer requieren --project; admin es federado)")
 	file := fs.String("file", "", "ruta del registro (default: <workspace>/.musubi/principals.yaml)")
 	_ = fs.Parse(args)
 

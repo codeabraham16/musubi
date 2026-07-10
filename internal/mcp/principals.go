@@ -105,9 +105,17 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		default:
 			return nil, fmt.Errorf("principal %q: role inválido %q (usá reader|writer|admin)", name, role)
 		}
+		// Tenancy fail-closed (Track 18): un reader/writer SIN project_id resolvería a scope vacío
+		// ⇒ recall federado + escritura sin atribuir (fuga silenciosa entre tenants). Se exige
+		// project_id no-vacío para esos roles; solo 'admin' puede ser federado (por diseño). Aplica
+		// también a un YAML editado a mano (defensa en profundidad, espeja la guarda de AddPrincipal).
+		projectID := strings.TrimSpace(p.ProjectID)
+		if projectID == "" && role != RoleAdmin {
+			return nil, fmt.Errorf("principal %q (rol %s): project_id es obligatorio para reader/writer (aislamiento multi-tenant); solo 'admin' puede ser federado", name, role)
+		}
 		reg.principals = append(reg.principals, Principal{
 			Name:      name,
-			ProjectID: strings.TrimSpace(p.ProjectID),
+			ProjectID: projectID,
 			Role:      role,
 			hash:      h,
 		})
