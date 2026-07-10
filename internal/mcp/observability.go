@@ -283,6 +283,9 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	b.WriteString("# HELP musubi_sync_outbox_oldest_pending_age_seconds Antigüedad de la pendiente más vieja (atraso del sync).\n")
 	b.WriteString("# TYPE musubi_sync_outbox_oldest_pending_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_sync_outbox_oldest_pending_age_seconds %d\n", st.OutboxOldestAgeSec)
+	b.WriteString("# HELP musubi_backup_offhost_age_seconds Antigüedad del último backup off-host exitoso (-1 si nunca/no configurado).\n")
+	b.WriteString("# TYPE musubi_backup_offhost_age_seconds gauge\n")
+	fmt.Fprintf(b, "musubi_backup_offhost_age_seconds %d\n", st.BackupOffhostAgeSec)
 }
 
 // statusRecorder envuelve un ResponseWriter para capturar el código de estado emitido

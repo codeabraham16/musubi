@@ -9,6 +9,8 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -21,15 +23,16 @@ const opStatsTimeout = 5 * time.Second
 // exponerse como gauges Prometheus. Todo son magnitudes acotadas (conteos + antigüedad), no
 // series por-item, así que la cardinalidad se mantiene baja.
 type OpStats struct {
-	Observations       int   // observaciones VISIBLES (no archivadas/superseded)
-	ActiveEmbeddings   int   // observaciones visibles con embedding (participan del recall vectorial)
-	VectorIndexSize    int   // vectores vivos en el índice IVF
-	VectorIndexTrained bool  // el IVF tiene centroides utilizables (si no, recall = full-scan exacto)
-	VectorIndexDim     int   // dimensión del índice (0 si no entrenado)
-	OutboxPending      int   // filas del outbox de sync sin enviar (incluye claimed)
-	OutboxSent         int   // filas ya empujadas al central
-	OutboxDead         int   // filas que agotaron reintentos (requieren atención)
-	OutboxOldestAgeSec int64 // antigüedad de la pendiente más vieja (0 si no hay): mide atraso del sync
+	Observations        int   // observaciones VISIBLES (no archivadas/superseded)
+	ActiveEmbeddings    int   // observaciones visibles con embedding (participan del recall vectorial)
+	VectorIndexSize     int   // vectores vivos en el índice IVF
+	VectorIndexTrained  bool  // el IVF tiene centroides utilizables (si no, recall = full-scan exacto)
+	VectorIndexDim      int   // dimensión del índice (0 si no entrenado)
+	OutboxPending       int   // filas del outbox de sync sin enviar (incluye claimed)
+	OutboxSent          int   // filas ya empujadas al central
+	OutboxDead          int   // filas que agotaron reintentos (requieren atención)
+	OutboxOldestAgeSec  int64 // antigüedad de la pendiente más vieja (0 si no hay): mide atraso del sync
+	BackupOffhostAgeSec int64 // antigüedad del último backup off-host EXITOSO; -1 si no hay marca (T18)
 }
 
 // OperationalStats reúne las métricas operativas del motor para /metrics. Hace unas pocas
@@ -66,5 +69,15 @@ func (e *DbEngine) OperationalStats() (OpStats, error) {
 	}
 	st.OutboxPending, st.OutboxSent, st.OutboxDead = h.Pending, h.Sent, h.Dead
 	st.OutboxOldestAgeSec = h.OldestPendingAgeSec
+
+	// Staleness del backup off-host como gauge (Track 18): -1 si no hay marca (instancia local o
+	// backup que nunca tuvo éxito). Expone el DR a Prometheus para que un backup que dejó de shipear
+	// (o que nunca funcionó) sea PAGINABLE, no solo visible en `musubi doctor`.
+	st.BackupOffhostAgeSec = -1
+	if e.path != "" {
+		if fi, statErr := os.Stat(filepath.Join(filepath.Dir(e.path), "backups", offhostMarkerName)); statErr == nil {
+			st.BackupOffhostAgeSec = int64(time.Since(fi.ModTime()).Seconds())
+		}
+	}
 	return st, nil
 }
