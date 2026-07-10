@@ -10,9 +10,6 @@ import (
 )
 
 const (
-	// DefaultBrain es el cerebro central por defecto (IP del tailnet, NO MagicDNS: con una
-	// VPN activa el DNS de la malla no resuelve).
-	DefaultBrain = "100.79.126.62:7717"
 	// publicControlAddr es un destino público ESTABLE por IP literal (Cloudflare, anycast),
 	// para sondear "¿hay internet público?" sin depender del DNS (que una VPN puede pisar).
 	publicControlAddr = "1.1.1.1:443"
