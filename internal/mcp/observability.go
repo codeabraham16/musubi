@@ -11,7 +11,9 @@ package mcp
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,18 +54,69 @@ func (h *latencyHistogram) observe(d time.Duration) {
 	// Cae en +Inf: no incrementa ningún bucket finito (el render lo deriva de count).
 }
 
+// toolStat son los contadores POR-TOOL (T17.5): volumen ok/error y latencia sumada, para ver qué
+// tool concreta se llama más, cuál falla y cuál es la más lenta (el histograma global agrega todo).
+// Lock-free; se crea perezosamente por nombre de tool en un sync.Map.
+type toolStat struct {
+	ok        atomic.Int64
+	err       atomic.Int64
+	count     atomic.Int64 // llamadas medidas (ok+error)
+	sumMicros atomic.Int64 // latencia acumulada, en microsegundos (avg = sum/count)
+}
+
 // serverMetrics son los contadores/histogramas en memoria del servidor MCP, expuestos en
 // /metrics. Lock-free (atomic) para no contender bajo carga. Incluye: resultado de requests
-// HTTP, latencia + resultado de tools/call, y (al render) gauges de dominio del motor.
+// HTTP, latencia + resultado de tools/call (agregado y POR-TOOL), rechazos de authz/cuota, y
+// (al render, con cache) gauges de dominio del motor.
 type serverMetrics struct {
 	ok           atomic.Int64 // requests HTTP 2xx/3xx
 	clientError  atomic.Int64 // respuestas 4xx (incl. 401)
 	unauthorized atomic.Int64 // subconjunto 401, útil para detectar fuerza bruta
 	serverError  atomic.Int64 // respuestas 5xx
 
-	toolHist  latencyHistogram // latencia de cada tools/call (handler)
+	toolHist  latencyHistogram // latencia AGREGADA de cada tools/call (handler)
 	toolOK    atomic.Int64     // tools/call que devolvieron resultado
 	toolError atomic.Int64     // tools/call que devolvieron un RpcError
+	toolStats sync.Map         // nombre de tool (string) -> *toolStat (desglose por-tool, T17.5)
+
+	// Rechazos ANTES de ejecutar la tool (T17.5): antes eran invisibles en /metrics (la request
+	// HTTP contaba como ok). Un pico de authz o quota es señal de abuso o de un cliente mal configurado.
+	authzDenied   atomic.Int64 // tools/call negadas por rol (codeUnauthorized)
+	quotaExceeded atomic.Int64 // tools/call negadas por cuota (codeQuotaExceeded)
+
+	gaugeCache domainGaugeCache // cache TTL de OperationalStats para no re-COUNT en cada scrape
+}
+
+// domainGaugeCache cachea el resultado de OperationalStats por un TTL corto (T17.5): sin esto, un
+// Prometheus scrapeando /metrics cada pocos segundos re-ejecuta los COUNT O(n) en CADA scrape. El
+// cache los amortiza a lo sumo uno por ventana; combinado con el deadline del engine, /metrics deja
+// de poder martillar (o colgar por) la base.
+type domainGaugeCache struct {
+	mu    sync.Mutex
+	val   memory.OpStats
+	at    time.Time
+	valid bool
+}
+
+// domainGaugeTTL es la ventana del cache de gauges de dominio. Corto: los conteos cambian lento y
+// un pequeño desfase en /metrics es irrelevante para operar.
+const domainGaugeTTL = 15 * time.Second
+
+// get devuelve el valor cacheado si sigue fresco.
+func (c *domainGaugeCache) get() (memory.OpStats, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.valid && time.Since(c.at) < domainGaugeTTL {
+		return c.val, true
+	}
+	return memory.OpStats{}, false
+}
+
+// put guarda el valor recién computado con su marca de tiempo.
+func (c *domainGaugeCache) put(st memory.OpStats) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.val, c.at, c.valid = st, time.Now(), true
 }
 
 func (m *serverMetrics) record(status int) {
@@ -80,14 +133,25 @@ func (m *serverMetrics) record(status int) {
 	}
 }
 
-// recordTool registra la latencia y el resultado de un tools/call. ok=false ⇒ el handler
-// devolvió un RpcError. Barato (atomics), seguro de llamar concurrentemente.
-func (m *serverMetrics) recordTool(d time.Duration, ok bool) {
+// recordTool registra la latencia y el resultado de un tools/call, AGREGADO y por-tool (T17.5).
+// ok=false ⇒ el handler devolvió un RpcError. Barato (atomics + un LoadOrStore la 1ª vez por tool),
+// seguro de llamar concurrentemente.
+func (m *serverMetrics) recordTool(tool string, d time.Duration, ok bool) {
 	m.toolHist.observe(d)
 	if ok {
 		m.toolOK.Add(1)
 	} else {
 		m.toolError.Add(1)
+	}
+
+	v, _ := m.toolStats.LoadOrStore(tool, &toolStat{})
+	ts := v.(*toolStat)
+	ts.count.Add(1)
+	ts.sumMicros.Add(d.Microseconds())
+	if ok {
+		ts.ok.Add(1)
+	} else {
+		ts.err.Add(1)
 	}
 }
 
@@ -111,12 +175,12 @@ func (m *serverMetrics) render(engine memory.StorageBackend) string {
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"unauthorized\"} %d\n", m.unauthorized.Load())
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"server_error\"} %d\n", m.serverError.Load())
 
-	b.WriteString("# HELP musubi_tool_calls_total Invocaciones de tools/call por resultado.\n")
+	b.WriteString("# HELP musubi_tool_calls_total Invocaciones de tools/call por resultado (agregado).\n")
 	b.WriteString("# TYPE musubi_tool_calls_total counter\n")
 	fmt.Fprintf(&b, "musubi_tool_calls_total{result=\"ok\"} %d\n", m.toolOK.Load())
 	fmt.Fprintf(&b, "musubi_tool_calls_total{result=\"error\"} %d\n", m.toolError.Load())
 
-	b.WriteString("# HELP musubi_tool_duration_seconds Latencia de tools/call (handler).\n")
+	b.WriteString("# HELP musubi_tool_duration_seconds Latencia de tools/call (handler, agregado).\n")
 	b.WriteString("# TYPE musubi_tool_duration_seconds histogram\n")
 	var cum int64
 	for i := 0; i < numToolBuckets; i++ {
@@ -128,20 +192,72 @@ func (m *serverMetrics) render(engine memory.StorageBackend) string {
 	fmt.Fprintf(&b, "musubi_tool_duration_seconds_sum %g\n", float64(m.toolHist.sumMicros.Load())/1e6)
 	fmt.Fprintf(&b, "musubi_tool_duration_seconds_count %d\n", total)
 
-	renderDomainGauges(&b, engine)
+	m.renderToolBreakdown(&b)
+	m.renderRejections(&b)
+	m.renderDomainGauges(&b, engine)
 	return b.String()
 }
 
-// renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK.
-// Best-effort: ante error se omiten (no rompe el scrape).
-func renderDomainGauges(b *strings.Builder, engine memory.StorageBackend) {
+// renderToolBreakdown emite el desglose POR-TOOL (T17.5): volumen ok/error y latencia sumada+contada
+// (avg = sum/count) por nombre de tool. Orden estable (alfabético) para un scrape determinista.
+func (m *serverMetrics) renderToolBreakdown(b *strings.Builder) {
+	type row struct {
+		name string
+		st   *toolStat
+	}
+	var rows []row
+	m.toolStats.Range(func(k, v interface{}) bool {
+		rows = append(rows, row{k.(string), v.(*toolStat)})
+		return true
+	})
+	if len(rows) == 0 {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
+
+	b.WriteString("# HELP musubi_tool_invocations_total Invocaciones de tools/call por tool y resultado.\n")
+	b.WriteString("# TYPE musubi_tool_invocations_total counter\n")
+	for _, r := range rows {
+		fmt.Fprintf(b, "musubi_tool_invocations_total{tool=%q,result=\"ok\"} %d\n", r.name, r.st.ok.Load())
+		fmt.Fprintf(b, "musubi_tool_invocations_total{tool=%q,result=\"error\"} %d\n", r.name, r.st.err.Load())
+	}
+	b.WriteString("# HELP musubi_tool_latency_seconds_sum Latencia acumulada de tools/call por tool (avg = sum/count).\n")
+	b.WriteString("# TYPE musubi_tool_latency_seconds_sum counter\n")
+	for _, r := range rows {
+		fmt.Fprintf(b, "musubi_tool_latency_seconds_sum{tool=%q} %g\n", r.name, float64(r.st.sumMicros.Load())/1e6)
+	}
+	b.WriteString("# HELP musubi_tool_latency_seconds_count Llamadas de tools/call medidas por tool.\n")
+	b.WriteString("# TYPE musubi_tool_latency_seconds_count counter\n")
+	for _, r := range rows {
+		fmt.Fprintf(b, "musubi_tool_latency_seconds_count{tool=%q} %d\n", r.name, r.st.count.Load())
+	}
+}
+
+// renderRejections emite los rechazos de tools/call ANTES de ejecutar (authz por rol / cuota),
+// que antes no se veían en /metrics (T17.5).
+func (m *serverMetrics) renderRejections(b *strings.Builder) {
+	b.WriteString("# HELP musubi_tool_rejections_total Tools/call rechazadas antes de ejecutar, por razón.\n")
+	b.WriteString("# TYPE musubi_tool_rejections_total counter\n")
+	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"authz\"} %d\n", m.authzDenied.Load())
+	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"quota\"} %d\n", m.quotaExceeded.Load())
+}
+
+// renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un
+// cache TTL (T17.5) para no re-ejecutar los COUNT O(n) en cada scrape. Best-effort: ante error se
+// omiten (no rompe el scrape) y no se cachea (para reintentar al próximo).
+func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.StorageBackend) {
 	p, ok := engine.(opStatsProvider)
 	if !ok {
 		return
 	}
-	st, err := p.OperationalStats()
-	if err != nil {
-		return
+	st, cached := m.gaugeCache.get()
+	if !cached {
+		var err error
+		st, err = p.OperationalStats()
+		if err != nil {
+			return
+		}
+		m.gaugeCache.put(st)
 	}
 	trained := 0
 	if st.VectorIndexTrained {

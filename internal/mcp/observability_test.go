@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"musubi/internal/embedding"
+	"musubi/internal/memory"
 )
 
 func TestHealthz(t *testing.T) {
@@ -67,9 +68,12 @@ func TestMetricsCountsRequests(t *testing.T) {
 // formato Prometheus. Unitario (no depende del transporte): ejercita recordTool + render.
 func TestServerMetricsToolHistogram(t *testing.T) {
 	m := &serverMetrics{}
-	m.recordTool(2*time.Millisecond, true)   // cae en el bucket le=0.005
-	m.recordTool(200*time.Millisecond, true) // le=0.25
-	m.recordTool(30*time.Second, false)      // excede el último límite (10s) ⇒ solo +Inf
+	m.recordTool("musubi_recall", 2*time.Millisecond, true)        // cae en el bucket le=0.005
+	m.recordTool("musubi_recall", 200*time.Millisecond, true)      // le=0.25
+	m.recordTool("musubi_save_observation", 30*time.Second, false) // excede el último límite (10s) ⇒ solo +Inf
+	// Rechazos ANTES de ejecutar (T17.5): visibles en /metrics.
+	m.authzDenied.Add(2)
+	m.quotaExceeded.Add(1)
 
 	out := m.render(nil) // engine nil ⇒ sin gauges de dominio, pero histograma + counters sí
 	for _, want := range []string{
@@ -79,10 +83,37 @@ func TestServerMetricsToolHistogram(t *testing.T) {
 		`musubi_tool_duration_seconds_bucket{le="+Inf"} 3`,
 		// El de 30s NO entra en ningún bucket finito: le=10 acumula solo los de 2ms y 200ms.
 		`musubi_tool_duration_seconds_bucket{le="10"} 2`,
+		// Desglose POR-TOOL (T17.5).
+		`musubi_tool_invocations_total{tool="musubi_recall",result="ok"} 2`,
+		`musubi_tool_invocations_total{tool="musubi_save_observation",result="error"} 1`,
+		`musubi_tool_latency_seconds_count{tool="musubi_recall"} 2`,
+		// Rechazos (T17.5).
+		`musubi_tool_rejections_total{reason="authz"} 2`,
+		`musubi_tool_rejections_total{reason="quota"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("falta %q en:\n%s", want, out)
 		}
+	}
+}
+
+// El cache TTL de gauges de dominio (T17.5) evita re-ejecutar los COUNT O(n) en cada scrape:
+// devuelve el valor guardado mientras esté fresco y hace miss cuando vence.
+func TestDomainGaugeCacheTTL(t *testing.T) {
+	var c domainGaugeCache
+	if _, ok := c.get(); ok {
+		t.Error("un cache vacío no debería devolver hit")
+	}
+	c.put(memory.OpStats{Observations: 42})
+	if st, ok := c.get(); !ok || st.Observations != 42 {
+		t.Errorf("un cache fresco debería devolver el valor guardado, got ok=%v st=%+v", ok, st)
+	}
+	// Envejecer la marca más allá del TTL ⇒ miss (se recomputará al próximo scrape).
+	c.mu.Lock()
+	c.at = c.at.Add(-2 * domainGaugeTTL)
+	c.mu.Unlock()
+	if _, ok := c.get(); ok {
+		t.Error("un cache vencido (más viejo que el TTL) debería ser miss")
 	}
 }
 

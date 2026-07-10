@@ -103,12 +103,18 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	// el lock para no serializar denegaciones.
 	p := principalFrom(ctx)
 	if !p.canCall(readOnly) {
+		if s.metrics != nil {
+			s.metrics.authzDenied.Add(1) // rechazo por rol, visible en /metrics (T17.5)
+		}
 		return nil, rpcErrorf(codeUnauthorized, "principal %q (rol %s) no autorizado para %q", p.Name, p.Role, callReq.Name)
 	}
 	// Cuota de uso por-principal (Track 16 F3.2): tras autorizar, contar la llamada contra la
 	// ventana del principal. Solo cuando hay principal (serve); en stdio local (p nil) no
 	// aplica. Se chequea ANTES del lock para no serializar los rechazos.
 	if p != nil && !s.quota.allow(p.Name, time.Now()) {
+		if s.metrics != nil {
+			s.metrics.quotaExceeded.Add(1) // rechazo por cuota, visible en /metrics (T17.5)
+		}
 		return nil, rpcErrorf(codeQuotaExceeded, "cuota excedida para el principal %q (máx %d llamadas/min); reintentá en unos segundos", p.Name, s.quota.max)
 	}
 	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
@@ -124,7 +130,7 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	start := time.Now()
 	result, rpcErr := handler(ctx, callReq.Arguments)
 	if s.metrics != nil {
-		s.metrics.recordTool(time.Since(start), rpcErr == nil)
+		s.metrics.recordTool(callReq.Name, time.Since(start), rpcErr == nil)
 	}
 	return result, rpcErr
 }

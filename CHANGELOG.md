@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Operabilidad 24/7: métricas por-tool + contadores de rechazo + COUNT cacheado en `/metrics` (Track 17, T17.5).**
+  Cierra los huecos de observabilidad que marcó la auditoría de cierre. **(1) Métricas por-tool:** el histograma de
+  latencia era sólo agregado (no se veía QUÉ tool se llama más, cuál falla o cuál es la más lenta). Ahora, además del
+  agregado, se emiten `musubi_tool_invocations_total{tool,result}` y `musubi_tool_latency_seconds_{sum,count}{tool}`
+  (avg = sum/count), orden alfabético para un scrape determinista. **(2) Rechazos visibles:** las tools/call negadas
+  por **rol** (authz) o **cuota** eran invisibles en `/metrics` (la request HTTP contaba como ok), ocultando abusos o
+  clientes mal configurados; ahora `musubi_tool_rejections_total{reason="authz|quota"}` los cuenta. **(3) COUNT
+  cacheado + con timeout:** los gauges de dominio re-ejecutaban los `COUNT` O(n) sobre `observations` en **cada**
+  scrape; ahora se cachean con un TTL corto (15s) y los `COUNT` corren con un deadline (5s) para que una base lenta no
+  cuelgue el scrape (best-effort: si vence, se omiten los gauges ese ciclo). Guards: `TestServerMetricsToolHistogram`
+  (por-tool + rechazos), `TestDomainGaugeCacheTTL`.
 - **`musubi embed backfill`: re-embeber el histórico (Track 17, T17.3).** Al encender la memoria semántica sobre una
   base con observaciones previas —o al cambiar de embedder— esas observaciones quedaban SIN vector de la procedencia
   actual y eran **invisibles** para el recall semántico para siempre; `WarnOnEmbedModelSwitch` avisaba del hueco pero
