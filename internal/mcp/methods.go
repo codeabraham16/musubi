@@ -17,6 +17,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
+	"musubi/internal/redact"
 	"musubi/internal/skills"
 	"musubi/internal/skillsource"
 
@@ -177,11 +178,18 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		origin = p.ProjectID
 	}
 
+	// Redacción ANTES del embedding (Track 17 T17.2): con forceRedact el vector debe derivarse del
+	// contenido YA redactado (antes se embebía el crudo, dejando un vector at-rest derivado del
+	// secreto en infra compartida). topic_key también se redacta (antes cruzaba crudo al central en
+	// su propia tool guardada). Idempotente con la redacción de la capa de memoria (scope shared).
+	content := s.redactIfForced(args.Content)
+	topicKey := s.redactIfForced(args.TopicKey)
+
 	var emb []float32
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer embCancel()
-		vec, err := s.embedder.Embed(embCtx, args.Content)
+		vec, err := s.embedder.Embed(embCtx, content)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al generar embedding: %v", err)
 		}
@@ -191,7 +199,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
 	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, args.TopicKey, args.Content, importance, args.MemType, scope, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, topicKey, content, importance, args.MemType, scope, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -202,7 +210,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationTypedFrom(origin, args.ID, args.TopicKey, args.Content, importance, args.MemType, scope, emb); err != nil {
+	if err := s.engine.SaveObservationTypedFrom(origin, args.ID, topicKey, content, importance, args.MemType, scope, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
@@ -1051,13 +1059,19 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInvalidParams, "subject, predicate y object son obligatorios")
 	}
 
-	res, err := s.engine.SaveFact(args.Subject, args.Predicate, args.Object, args.ValidFrom, s.graph.SingleValuedPredicates)
+	// Redacción de TODO ingest al central (Track 17 T17.2): en infra compartida, el triple no
+	// puede llevar un secreto crudo al pozo compartido (recuperable por recall_facts).
+	subject := s.redactIfForced(args.Subject)
+	predicate := s.redactIfForced(args.Predicate)
+	object := s.redactIfForced(args.Object)
+
+	res, err := s.engine.SaveFact(subject, predicate, object, args.ValidFrom, s.graph.SingleValuedPredicates)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar hecho: %v", err)
 	}
-	msg := fmt.Sprintf("Hecho guardado: %s %s %s.", args.Subject, args.Predicate, args.Object)
+	msg := fmt.Sprintf("Hecho guardado: %s %s %s.", subject, predicate, object)
 	if !res.Created {
-		msg = fmt.Sprintf("Hecho re-afirmado (ya existía): %s %s %s.", args.Subject, args.Predicate, args.Object)
+		msg = fmt.Sprintf("Hecho re-afirmado (ya existía): %s %s %s.", subject, predicate, object)
 	}
 	if res.Invalidated > 0 {
 		// Cardinalidad: el predicado es funcional y este hecho reemplazó a otro(s).
@@ -1253,12 +1267,17 @@ func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
 			symbols = codeintel.FormatSymbols(codeintel.ExtractSymbols(key, content))
 		}
 	}
+	// Redacción de TODO ingest al central (Track 17 T17.2): gist y symbols no pueden llevar un
+	// secreto crudo al pozo compartido (recuperable por recall_code). El path es la clave, no se
+	// redacta. En loopback local queda crudo.
+	gist := s.redactIfForced(args.Gist)
+	symbols = s.redactIfForced(symbols)
 	cm := memory.CodeMemory{
 		Path:        key,
-		Gist:        args.Gist,
+		Gist:        gist,
 		Symbols:     symbols,
 		Fingerprint: fp,
-		Tokens:      memory.EstimateTokens(args.Gist),
+		Tokens:      memory.EstimateTokens(gist),
 	}
 	if err := s.engine.SaveCodeMemory(cm); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
@@ -1362,6 +1381,19 @@ func toSearchHits(sources []searchSource, gistMax, budget int) []searchHit {
 func (s *McpServer) scopedCtx(ctx context.Context) context.Context {
 	ps, fed := recallScopeFor(principalFrom(ctx))
 	return memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: ps, Federate: fed})
+}
+
+// redactIfForced redacta text cuando el server FUERZA redacción (infra compartida: un bind
+// no-loopback / el cerebro central). En loopback local queda crudo (el dev necesita el texto
+// real). Es la GUARDA ÚNICA de "redactar TODO ingest al central" (Track 17 T17.2): antes solo
+// cubría save_observation, dejando save_fact y save_code escribiendo secretos crudos al pozo
+// compartido. Idempotente (redactar algo ya redactado es no-op).
+func (s *McpServer) redactIfForced(text string) string {
+	if !s.forceRedact {
+		return text
+	}
+	clean, _ := redact.Redact(text)
+	return clean
 }
 
 func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
