@@ -297,10 +297,13 @@ func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float3
 		}
 	}
 
+	// Aislamiento por proyecto (Track 17): acota a la credencial del caller (ausente ⇒ federado).
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+
 	var results []SearchResult
 	for _, chunk := range chunkStrings(uniq, maxSQLParams) {
 		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, 0, len(chunk)+1)
+		args := make([]interface{}, 0, len(chunk)+2)
 		for i, id := range chunk {
 			placeholders[i] = "?"
 			args = append(args, id)
@@ -308,12 +311,13 @@ func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float3
 		// Regla de homogeneidad (F2.2): sólo candidatos de la MISMA procedencia que el vector
 		// de consulta (el embedder de este engine). Evita comparar coseno entre modelos.
 		args = append(args, e.vectorModelID)
+		args = append(args, scopeArgs...)
 		q := `SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 			FROM observations o
 			JOIN embeddings e ON o.id = e.observation_id
 			WHERE ` + visibleObsPredicate + `
 			  AND o.id IN (` + strings.Join(placeholders, ",") + `)
-			  AND e.model_id = ?`
+			  AND e.model_id = ?` + scopeSQL
 		rows, err := e.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("error al consultar candidatos: %w", err)
@@ -362,13 +366,16 @@ func (e *DbEngine) searchExactByIDs(ctx context.Context, queryEmbedding []float3
 func (e *DbEngine) searchExactFullScan(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error) {
 	// Regla de homogeneidad (F2.2): sólo se rankean vectores de la MISMA procedencia que el
 	// de consulta (el embedder de este engine), para no mezclar coseno entre modelos.
+	// Aislamiento por proyecto (Track 17): acota a la credencial del caller (ausente ⇒ federado).
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+	args := append([]interface{}{e.vectorModelID}, scopeArgs...)
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, o.content, o.created_at, e.vector
 		FROM observations o
 		JOIN embeddings e ON o.id = e.observation_id
 		WHERE `+visibleObsPredicate+`
-		  AND e.model_id = ?
-	`, e.vectorModelID)
+		  AND e.model_id = ?`+scopeSQL+`
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error al consultar observaciones: %w", err)
 	}
@@ -427,14 +434,18 @@ func (e *DbEngine) SearchObservationsFTS(ctx context.Context, queryText string, 
 	if ftsQuery == "" {
 		return []Observation{}, nil
 	}
+	// Aislamiento por proyecto (Track 17): acota a la credencial del caller (ausente ⇒ federado).
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+	args := append([]interface{}{ftsQuery}, scopeArgs...)
+	args = append(args, limit)
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT f.id, f.topic_key, f.content, o.created_at
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
-		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
+		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+scopeSQL+`
 		ORDER BY rank
 		LIMIT ?
-	`, ftsQuery, limit)
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error en búsqueda FTS5: %w", err)
 	}
