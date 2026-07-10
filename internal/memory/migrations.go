@@ -377,6 +377,57 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 14,
+			name:    "relations_project_id",
+			// Aislamiento multi-tenant del GRAFO DE HECHOS (Track 17). Como en code_memory (v13),
+			// no es sólo fuga de lectura: con UNIQUE(from_id,predicate,to_id) el MISMO triple no
+			// podía coexistir entre proyectos, y —peor— la invalidación por cardinalidad de un
+			// predicado funcional cruzaba proyectos (un save en A cerraba la ventana de un hecho
+			// vivo de B). Se agrega project_id y la unicidad pasa a (from_id,predicate,to_id,
+			// project_id); la invalidación por cardinalidad se acota al proyecto de origen.
+			//
+			// relations tiene FKs a entities (ON DELETE CASCADE) ⇒ rebuild de tabla. Se PRESERVA el
+			// id explícito porque superseded_by es una auto-referencia (relations.id → relations.id):
+			// copiar con ids nuevos rompería esas referencias. Nada apunta a relations (superseded_by
+			// es INTEGER plano, no FK declarada), así que el DROP+RENAME no arrastra referencias
+			// ajenas. project_id es NOT NULL DEFAULT '' (sentinel, NO nullable: SQLite trata cada NULL
+			// como distinto en UNIQUE y rompería la dedup del upsert). Las filas legacy quedan con ''
+			// (espacio federado histórico, visible a cualquier proyecto). El índice idx_rel_live se
+			// recrea porque se va con el DROP de la tabla vieja.
+			up: func(x execQuerier) error {
+				stmts := []string{
+					`CREATE TABLE relations_new (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						from_id INTEGER NOT NULL,
+						predicate TEXT NOT NULL,
+						to_id INTEGER NOT NULL,
+						created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+						valid_from DATETIME,
+						valid_to DATETIME,
+						invalidated_at DATETIME,
+						superseded_by INTEGER,
+						project_id TEXT NOT NULL DEFAULT '',
+						UNIQUE(from_id, predicate, to_id, project_id),
+						FOREIGN KEY(from_id) REFERENCES entities(id) ON DELETE CASCADE,
+						FOREIGN KEY(to_id) REFERENCES entities(id) ON DELETE CASCADE
+					)`,
+					`INSERT INTO relations_new
+						(id, from_id, predicate, to_id, created_at, valid_from, valid_to, invalidated_at, superseded_by, project_id)
+						SELECT id, from_id, predicate, to_id, created_at, valid_from, valid_to, invalidated_at, superseded_by, ''
+						FROM relations`,
+					`DROP TABLE relations`,
+					`ALTER TABLE relations_new RENAME TO relations`,
+					`CREATE INDEX IF NOT EXISTS idx_rel_live ON relations(from_id, predicate, invalidated_at)`,
+				}
+				for _, s := range stmts {
+					if _, err := x.Exec(s); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

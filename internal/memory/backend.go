@@ -45,9 +45,18 @@ type RecallEngine interface {
 // GraphStore — grafo de conocimiento: hechos (tripletas) y contexto de entidad.
 type GraphStore interface {
 	SaveFact(subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error)
+	// SaveFactFrom atribuye el hecho a originProjectID y acota la invalidación por cardinalidad
+	// a ese proyecto (multi-tenant, Track 17); UNIQUE por (from_id, predicate, to_id, project_id).
+	SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error)
 	RecallFacts(entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)
+	// RecallFactsCtx acota el traversal a las aristas visibles al proyecto del contexto (Track 17).
+	RecallFactsCtx(ctx context.Context, entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)
 	FactPath(from, to string, maxHops int, asOf string) (GraphResult, error)
+	// FactPathCtx acota el camino a las aristas visibles al proyecto del contexto (Track 17).
+	FactPathCtx(ctx context.Context, from, to string, maxHops int, asOf string) (GraphResult, error)
 	EntityContext(entity string, maxHops, maxFacts, maxObs int) (EntityContextResult, error)
+	// EntityContextCtx acota hechos y observaciones al proyecto del contexto (Track 17).
+	EntityContextCtx(ctx context.Context, entity string, maxHops, maxFacts, maxObs int) (EntityContextResult, error)
 }
 
 // RelationStore — relaciones semánticas entre observaciones (resolución de conflictos).
