@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -577,11 +578,17 @@ func (e *DbEngine) rebuildVectorIndexWith(cfg config.VectorIndexConfig) error {
 
 // countActiveEmbeddings cuenta las observaciones activas con embedding.
 func (e *DbEngine) countActiveEmbeddings() (int, error) {
+	return e.countActiveEmbeddingsCtx(context.Background())
+}
+
+// countActiveEmbeddingsCtx es countActiveEmbeddings acotable por contexto: /metrics le pasa un
+// deadline para que este COUNT O(n) no cuelgue el scrape si la base está lenta (T17.5).
+func (e *DbEngine) countActiveEmbeddingsCtx(ctx context.Context) (int, error) {
 	var n int
-	err := e.db.QueryRow(`
+	err := e.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM observations o
 		JOIN embeddings em ON o.id = em.observation_id
-		WHERE ` + visibleObsPredicate + `
+		WHERE `+visibleObsPredicate+`
 	`).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("error al contar embeddings activos: %w", err)

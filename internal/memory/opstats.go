@@ -6,7 +6,16 @@ package memory
 // best-effort — si una consulta falla, se reporta el error y el caller omite los gauges ese
 // scrape (nunca rompe /metrics). Cero dependencias nuevas.
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// opStatsTimeout acota los COUNT O(n) de OperationalStats para que un scrape de /metrics no
+// cuelgue si la base está lenta o muy grande (T17.5): pasado el deadline, la consulta se cancela
+// y el scrape omite los gauges de dominio ese ciclo (best-effort) en vez de bloquear.
+const opStatsTimeout = 5 * time.Second
 
 // OpStats es una foto de las métricas operativas del motor en un instante, pensada para
 // exponerse como gauges Prometheus. Todo son magnitudes acotadas (conteos + antigüedad), no
@@ -27,13 +36,18 @@ type OpStats struct {
 // consultas COUNT + lee el estado en memoria del índice vectorial. Un error en cualquier
 // consulta aborta y se reporta (el caller decide: típicamente omite los gauges ese scrape).
 func (e *DbEngine) OperationalStats() (OpStats, error) {
+	// Deadline compartido por los COUNT O(n) (observaciones + embeddings activos): el más caro del
+	// scrape. Si la base está lenta/bloqueada, la consulta se cancela y el caller omite los gauges.
+	ctx, cancel := context.WithTimeout(context.Background(), opStatsTimeout)
+	defer cancel()
+
 	var st OpStats
-	if err := e.db.QueryRow(
-		`SELECT COUNT(*) FROM observations o WHERE ` + visibleObsPredicate,
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM observations o WHERE `+visibleObsPredicate,
 	).Scan(&st.Observations); err != nil {
 		return st, fmt.Errorf("contar observaciones: %w", err)
 	}
-	ae, err := e.countActiveEmbeddings()
+	ae, err := e.countActiveEmbeddingsCtx(ctx)
 	if err != nil {
 		return st, err
 	}
