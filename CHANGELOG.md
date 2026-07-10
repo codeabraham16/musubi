@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.81.0] - 2026-07-10
+
 ### Fixed
 - **Invalidación por cardinalidad cross-tenant del grafo de hechos — corrección de correctitud (Track 17, migración
   v14).** Con `UNIQUE(from_id, predicate, to_id)`, la invalidación por cardinalidad de un predicado **funcional**
