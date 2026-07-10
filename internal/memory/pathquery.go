@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -26,11 +27,19 @@ type pathPred struct {
 	fact Fact  // hecho que conecta from → este nodo
 }
 
-// FactPath devuelve los hechos del camino MÁS CORTO (en número de aristas) entre las entidades
-// from y to sobre el grafo VIVO no dirigido, en orden desde from hacia to. Respeta el mismo
-// filtro temporal que RecallFacts (verdad actual por defecto; point-in-time con asOf). Sin
-// camino dentro de maxHops, entidades inexistentes o from==to → GraphResult vacío (sin error).
+// FactPath devuelve los hechos del camino MÁS CORTO en el espacio FEDERADO (histórico). Fino
+// wrapper sobre FactPathCtx con contexto vacío.
 func (e *DbEngine) FactPath(from, to string, maxHops int, asOf string) (GraphResult, error) {
+	return e.FactPathCtx(context.Background(), from, to, maxHops, asOf)
+}
+
+// FactPathCtx devuelve los hechos del camino MÁS CORTO (en número de aristas) entre las entidades
+// from y to sobre el grafo VIVO no dirigido VISIBLE AL PROYECTO del contexto (Track 17), en orden
+// desde from hacia to. Respeta el mismo filtro combinado (temporal + scope) que RecallFactsCtx,
+// así que el camino se puede pedir point-in-time (as_of) y sólo cruza aristas del proyecto (o sin
+// atribuir). Sin camino dentro de maxHops, entidades inexistentes o from==to → GraphResult vacío
+// (sin error).
+func (e *DbEngine) FactPathCtx(ctx context.Context, from, to string, maxHops int, asOf string) (GraphResult, error) {
 	if maxHops <= 0 {
 		maxHops = defaultMaxHops
 	}
@@ -52,13 +61,8 @@ func (e *DbEngine) FactPath(from, to string, maxHops int, asOf string) (GraphRes
 		return result, nil
 	}
 
-	// Filtro temporal común con RecallFacts: verdad actual o point-in-time (as_of).
-	liveFilter := "r.invalidated_at IS NULL"
-	var filterArgs []interface{}
-	if af := parseTimestamp(asOf); af != nil {
-		liveFilter = "r.valid_from <= ? AND (r.valid_to IS NULL OR r.valid_to > ?)"
-		filterArgs = []interface{}{af, af}
-	}
+	// Filtro combinado temporal + scope de proyecto, idéntico a RecallFactsCtx.
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf)
 
 	// BFS por niveles con predecesores. maxHops acota la longitud (número de aristas).
 	pred := map[int64]pathPred{fromID: {}}

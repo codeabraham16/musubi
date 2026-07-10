@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -49,13 +50,24 @@ type GraphResult struct {
 	Facts  []Fact `json:"facts"`
 }
 
-// SaveFact guarda una tripleta (subject, predicate, object). Las entidades se
-// deduplican por nombre normalizado (case-insensitive); la relación se deduplica
-// por (sujeto, predicado, objeto). Si el predicado es single-valued (∈ singleValued,
-// comparación case-insensitive), invalida los hechos vivos del mismo (sujeto, predicado)
-// con OTRO objeto (cardinalidad). validFrom (ISO opcional) marca desde cuándo el hecho es
-// verdad; ausente/ inválido → ahora. Re-afirmar un triplete invalidado lo revive.
+// SaveFact guarda una tripleta en el espacio FEDERADO (project_id=''): el comportamiento
+// histórico (stdio local, admin). Es un fino wrapper sobre SaveFactFrom.
 func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
+	return e.SaveFactFrom("", subject, predicate, object, validFrom, singleValued)
+}
+
+// SaveFactFrom guarda una tripleta (subject, predicate, object) ATRIBUIDA a originProjectID
+// (aislamiento multi-tenant, Track 17). Las entidades se deduplican por nombre normalizado
+// (case-insensitive) y son GLOBALES (los nodos se comparten; sólo las aristas se atribuyen);
+// la relación se deduplica por (sujeto, predicado, objeto, project_id), así que el mismo triple
+// puede coexistir en varios proyectos. Si el predicado es single-valued (∈ singleValued,
+// case-insensitive) invalida los hechos vivos del mismo (sujeto, predicado) con OTRO objeto
+// DENTRO DEL MISMO PROYECTO (cardinalidad ESTRICTA por proyecto): un save en el proyecto A nunca
+// cierra la ventana de un hecho vivo de B ni de los legacy ''. validFrom (ISO opcional) marca
+// desde cuándo el hecho es verdad; ausente/ inválido → ahora. Re-afirmar un triplete invalidado
+// lo revive. originProjectID '' ⇒ espacio federado histórico (admin/stdio); en ese caso la
+// cardinalidad se acota a '' y el comportamiento es bit-idéntico al previo a v14.
+func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
 	if strings.TrimSpace(subject) == "" || strings.TrimSpace(predicate) == "" || strings.TrimSpace(object) == "" {
 		return SaveFactResult{}, fmt.Errorf("subject, predicate y object son obligatorios")
 	}
@@ -75,12 +87,12 @@ func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, single
 		return SaveFactResult{}, err
 	}
 
-	// ¿Existía ya el triplete exacto antes de este guardado? Determina Created (fila
-	// nueva) vs. revivencia/no-op.
+	// ¿Existía ya el triplete exacto EN ESTE PROYECTO antes de este guardado? Determina Created
+	// (fila nueva) vs. revivencia/no-op. El mismo triple en otro proyecto es una fila distinta.
 	var dummy int64
 	errSel := tx.QueryRow(
-		`SELECT id FROM relations WHERE from_id=? AND predicate=? AND to_id=?`,
-		fromID, predicate, toID,
+		`SELECT id FROM relations WHERE from_id=? AND predicate=? AND to_id=? AND project_id=?`,
+		fromID, predicate, toID, originProjectID,
 	).Scan(&dummy)
 	if errSel != nil && errSel != sql.ErrNoRows {
 		return SaveFactResult{}, fmt.Errorf("error al verificar existencia del hecho: %w", errSel)
@@ -88,36 +100,39 @@ func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, single
 	created := errSel == sql.ErrNoRows
 
 	// UPSERT: inserta el hecho vivo, o REVIVE uno invalidado (limpia la ventana de
-	// invalidación y actualiza valid_from). vf NULL → datetime('now').
+	// invalidación y actualiza valid_from). vf NULL → datetime('now'). El ON CONFLICT incluye
+	// project_id: el upsert dedup-a POR PROYECTO.
 	vf := parseTimestamp(validFrom)
 	if _, err := tx.Exec(`
-		INSERT INTO relations (from_id, predicate, to_id, valid_from, created_at)
-		VALUES (?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
-		ON CONFLICT(from_id, predicate, to_id) DO UPDATE SET
+		INSERT INTO relations (from_id, predicate, to_id, project_id, valid_from, created_at)
+		VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
+		ON CONFLICT(from_id, predicate, to_id, project_id) DO UPDATE SET
 			valid_from = COALESCE(excluded.valid_from, datetime('now')),
 			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL`,
-		fromID, predicate, toID, vf,
+		fromID, predicate, toID, originProjectID, vf,
 	); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al guardar relación: %w", err)
 	}
 
 	var newID int64
 	if err := tx.QueryRow(
-		`SELECT id FROM relations WHERE from_id=? AND predicate=? AND to_id=?`,
-		fromID, predicate, toID,
+		`SELECT id FROM relations WHERE from_id=? AND predicate=? AND to_id=? AND project_id=?`,
+		fromID, predicate, toID, originProjectID,
 	).Scan(&newID); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al resolver el id del hecho: %w", err)
 	}
 
-	// Invalidación por cardinalidad: si el predicado es funcional, cerrar la ventana de
-	// los otros objetos vivos del mismo (sujeto, predicado). Nunca se borran.
+	// Invalidación por cardinalidad: si el predicado es funcional, cerrar la ventana de los otros
+	// objetos vivos del mismo (sujeto, predicado) DENTRO DE ESTE PROYECTO. El AND project_id=? es
+	// la garantía de aislamiento de ESCRITURA: un save nunca invalida hechos de otro proyecto (ni
+	// los legacy ''). Nunca se borran.
 	invalidated := 0
 	if isSingleValued(predicate, singleValued) {
 		res, err := tx.Exec(`
 			UPDATE relations
 			   SET valid_to = datetime('now'), invalidated_at = datetime('now'), superseded_by = ?
-			 WHERE from_id = ? AND predicate = ? AND to_id != ? AND invalidated_at IS NULL`,
-			newID, fromID, predicate, toID,
+			 WHERE from_id = ? AND predicate = ? AND to_id != ? AND invalidated_at IS NULL AND project_id = ?`,
+			newID, fromID, predicate, toID, originProjectID,
 		)
 		if err != nil {
 			return SaveFactResult{}, fmt.Errorf("error al invalidar hechos contradictorios: %w", err)
@@ -191,6 +206,36 @@ func upsertEntity(tx *sql.Tx, name string) (int64, error) {
 // Cero LLM; cero prosa. El filtro temporal es común a ambos modos, así que pagerank + asOf da
 // PageRank point-in-time.
 func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error) {
+	return e.RecallFactsCtx(context.Background(), entity, maxHops, maxFacts, asOf, rank)
+}
+
+// liveFactFilter arma el fragmento WHERE (referenciando el alias r) que selecciona las
+// relaciones VISIBLES a esta consulta: el predicado bi-temporal "vivo" (verdad actual por
+// defecto; point-in-time con asOf) Y el scope multi-tenant del proyecto (Track 17). Plegar
+// AMBOS en un solo par (filtro, args) hace que TODA superficie de traversal del grafo —BFS
+// (expandFrontier), recall asociativo (buildFactGraph/recallFactsPageRank) y caminos
+// (pathNeighbors)— quede scopeada IDÉNTICAMENTE, porque todas interpolan este fragmento. Ctx
+// federado (admin/stdio, o ProjectID vacío) ⇒ sin cláusula de proyecto: histórico bit-a-bit.
+// Los placeholders de proyecto van DESPUÉS de los temporales, igual que los args, así que el
+// orden es consistente en todos los call sites (que anteponen los args de la frontera/nodo).
+func liveFactFilter(ctx context.Context, asOf string) (string, []interface{}) {
+	filter := "r.invalidated_at IS NULL"
+	var args []interface{}
+	if af := parseTimestamp(asOf); af != nil {
+		filter = "r.valid_from <= ? AND (r.valid_to IS NULL OR r.valid_to > ?)"
+		args = []interface{}{af, af}
+	}
+	if scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("r"); scopeSQL != "" {
+		filter += scopeSQL // " AND (r.project_id = ? OR r.project_id IS NULL OR r.project_id = '')"
+		args = append(args, scopeArgs...)
+	}
+	return filter, args
+}
+
+// RecallFactsCtx es RecallFacts scopeada al proyecto del contexto (Track 17): sólo recorre las
+// aristas visibles al proyecto del principal (las propias + las sin atribuir). Las ENTIDADES son
+// globales, así que la semilla se resuelve igual; lo que se acota es el traversal de relaciones.
+func (e *DbEngine) RecallFactsCtx(ctx context.Context, entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error) {
 	if maxHops <= 0 {
 		maxHops = defaultMaxHops
 	}
@@ -198,13 +243,8 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank 
 		maxFacts = defaultMaxFacts
 	}
 
-	// Filtro temporal: por defecto "verdad actual"; con asOf válido, point-in-time.
-	liveFilter := "r.invalidated_at IS NULL"
-	var filterArgs []interface{}
-	if af := parseTimestamp(asOf); af != nil {
-		liveFilter = "r.valid_from <= ? AND (r.valid_to IS NULL OR r.valid_to > ?)"
-		filterArgs = []interface{}{af, af}
-	}
+	// Filtro combinado temporal + scope de proyecto; común a BFS y a pagerank.
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf)
 
 	result := GraphResult{Entity: entity, Hops: maxHops, Facts: []Fact{}}
 

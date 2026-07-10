@@ -1047,7 +1047,7 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	return jsonResult(res)
 }
 
-func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSaveFact(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Subject   string `json:"subject"`
 		Predicate string `json:"predicate"`
@@ -1067,7 +1067,15 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 	predicate := s.redactIfForced(args.Predicate)
 	object := s.redactIfForced(args.Object)
 
-	res, err := s.engine.SaveFact(subject, predicate, object, args.ValidFrom, s.graph.SingleValuedPredicates)
+	// Atribución por credencial (Track 17): el hecho se guarda para el proyecto del principal, no
+	// en un espacio global compartido; la invalidación por cardinalidad queda acotada a ese
+	// proyecto (no cierra hechos vivos de otros). admin/stdio ⇒ '' (espacio federado histórico).
+	origin := ""
+	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+		origin = p.ProjectID
+	}
+
+	res, err := s.engine.SaveFactFrom(origin, subject, predicate, object, args.ValidFrom, s.graph.SingleValuedPredicates)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar hecho: %v", err)
 	}
@@ -1082,7 +1090,7 @@ func (s *McpServer) toolSaveFact(raw json.RawMessage) (interface{}, *RpcError) {
 	return textResult(msg), nil
 }
 
-func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Entity  string `json:"entity"`
 		MaxHops int    `json:"max_hops"`
@@ -1102,23 +1110,26 @@ func (s *McpServer) toolRecallFacts(raw json.RawMessage) (interface{}, *RpcError
 		maxHops = args.MaxHops
 	}
 
+	// Aislamiento por proyecto (Track 17): el traversal se acota al proyecto de la credencial.
+	scoped := s.scopedCtx(ctx)
+
 	// Con 'to' seteado: camino más corto entity→to. Sin él: vecindad (BFS/pagerank).
 	if strings.TrimSpace(args.To) != "" {
-		res, err := s.engine.FactPath(args.Entity, args.To, maxHops, args.AsOf)
+		res, err := s.engine.FactPathCtx(scoped, args.Entity, args.To, maxHops, args.AsOf)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al calcular el camino: %v", err)
 		}
 		return jsonResult(res)
 	}
 
-	res, err := s.engine.RecallFacts(args.Entity, maxHops, s.graph.MaxFacts, args.AsOf, args.Rank)
+	res, err := s.engine.RecallFactsCtx(scoped, args.Entity, maxHops, s.graph.MaxFacts, args.AsOf, args.Rank)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al recuperar hechos: %v", err)
 	}
 	return jsonResult(res)
 }
 
-func (s *McpServer) toolEntityContext(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolEntityContext(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Entity  string `json:"entity"`
 		MaxHops int    `json:"max_hops"`
@@ -1135,7 +1146,8 @@ func (s *McpServer) toolEntityContext(raw json.RawMessage) (interface{}, *RpcErr
 		maxHops = args.MaxHops
 	}
 
-	res, err := s.engine.EntityContext(args.Entity, maxHops, s.graph.MaxFacts, s.graph.MaxObservations)
+	// Aislamiento por proyecto (Track 17): hechos y observaciones se acotan al proyecto de la credencial.
+	res, err := s.engine.EntityContextCtx(s.scopedCtx(ctx), args.Entity, maxHops, s.graph.MaxFacts, s.graph.MaxObservations)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al ensamblar contexto de entidad: %v", err)
 	}

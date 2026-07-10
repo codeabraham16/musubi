@@ -147,7 +147,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"subject", "predicate", "object"},
 				},
 			},
-			handler: noCtx(s.countingSave(s.toolSaveFact)),
+			handler: s.countingSaveCtx(s.toolSaveFact),
 		},
 		{
 			Tool: Tool{
@@ -165,7 +165,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"entity"},
 				},
 			},
-			handler:  noCtx(s.toolRecallFacts),
+			handler:  s.toolRecallFacts,
 			readOnly: true,
 		},
 		{
@@ -181,7 +181,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"entity"},
 				},
 			},
-			handler:  noCtx(s.toolEntityContext),
+			handler:  s.toolEntityContext,
 			readOnly: true,
 		},
 		{

@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Invalidación por cardinalidad cross-tenant del grafo de hechos — corrección de correctitud (Track 17, migración
+  v14).** Con `UNIQUE(from_id, predicate, to_id)`, la invalidación por cardinalidad de un predicado **funcional**
+  (single-valued: `works_at`, `estado_actual`…) cruzaba proyectos: en un cerebro central compartido, guardar
+  `(Ana, works_at, Acme)` desde el proyecto A **cerraba la ventana** de `(Ana, works_at, Globex)` viva en el
+  proyecto B (un tenant mutaba silenciosamente la verdad de otro). La migración v14 reconstruye `relations` con
+  `UNIQUE(from_id, predicate, to_id, project_id)` (`project_id NOT NULL DEFAULT ''`, filas legacy → `''`), y la
+  invalidación se acota **estrictamente** al proyecto de origen. Además el mismo triple ya puede coexistir entre
+  proyectos (antes colisionaba en el `ON CONFLICT`).
 - **Colisión cross-tenant de la memoria de código (`code_memory`) — corrección de correctitud (Track 17, migración
   v13).** `code_memory` tenía `PRIMARY KEY(path)`, así que en un cerebro central compartido dos proyectos con el
   mismo `path` (p.ej. `internal/auth.go`) **colisionaban** en el `ON CONFLICT(path)` y se **pisaban el gist** entre
@@ -15,6 +23,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   legacy → `''`), de modo que cada proyecto tiene su propia entrada por archivo.
 
 ### Security
+- **Aislamiento del grafo de hechos (`recall_facts` / `entity_context` / `fact_path`) por proyecto (Track 17,
+  T17.1b-4, migración v14).** La última superficie de lectura sin aislar: el recorrido del grafo devolvía hechos de
+  **todos** los proyectos. Ahora `SaveFactFrom` atribuye la arista al proyecto de la **credencial** y un helper único
+  (`liveFactFilter`) **pliega el scope de proyecto dentro del filtro bi-temporal** que comparten las tres superficies
+  de traversal —BFS (`expandFrontier`), recall asociativo (PageRank) y camino más corto (`pathNeighbors`)—, de modo
+  que las tres quedan scopeadas por un solo punto de cambio. `entity_context` acota además la parte de **prosa**
+  (`observationGistsCtx`). Las **entidades** siguen siendo globales (se comparten los nodos; sólo las aristas se
+  atribuyen). `recall_facts`/`entity_context` pasaron a ctx-aware y `save_fact` deriva el origen de la credencial;
+  `admin`/stdio ⇒ federado. Guards: `TestFactsReadNoBleed`, `TestFactsCardinalityPerProject`,
+  `TestFactPathProjectScope`, `TestFactsPageRankProjectScope`, `TestEntityContextProjectScope`,
+  `TestMigrationV14RebuildsRelationsPreservingData`.
 - **Aislamiento de `musubi_recall_code` por proyecto (Track 17, T17.1b-3).** Sobre la migración v13 (arriba):
   `SaveCodeMemoryFrom` atribuye el gist al proyecto de la **credencial** (no a un espacio global) y
   `GetCodeMemoryCtx` acota la lectura al proyecto del principal, prefiriendo su propia fila sobre la sin atribuir.
@@ -25,9 +44,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   proyectos. Ahora `PendingObsRelationsCtx` hace `JOIN` a `observations` por el `source_id` y filtra por el
   `project_id` **derivado de la credencial** (mismo `scopeClause` que las demás superficies); `admin`/stdio ⇒
   federado. `musubi_conflicts` pasó a ctx-aware. Sin migración (aprovecha el `project_id` que ya vive en
-  `observations`). Guard: `TestConflictsEnforcePrincipalScope`. *Pendiente del aislamiento: `recall_facts`,
-  `recall_code`, `insights`, `entity_context` (parte hechos) — requieren migración v13/v14 (`project_id` en
-  `relations`/`code_memory`, esta última con un bug de colisión `ON CONFLICT(path)` cross-tenant a corregir).*
+  `observations`). Guard: `TestConflictsEnforcePrincipalScope`. *Pendiente del aislamiento: `insights` (scope parcial
+  de los counts de observations).*
 - **Redacción de TODO ingest al central: `save_fact` y `save_code` ya no escriben secretos crudos (Track 17, T17.2).**
   La auditoría de cierre encontró que la redacción forzada server-side (`forceRedact`) cubría **solo**
   `save_observation` — `save_fact` (subject/predicate/object) y `save_code` (gist/symbols) escribían contenido
