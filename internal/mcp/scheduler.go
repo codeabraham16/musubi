@@ -31,6 +31,18 @@ func (s *McpServer) countingSave(h func(json.RawMessage) (interface{}, *RpcError
 	}
 }
 
+// countingSaveCtx es como countingSave pero para handlers CTX-AWARE (Track 17): toolSaveObservation
+// necesita el principal del contexto para derivar la atribución de escritura por credencial.
+func (s *McpServer) countingSaveCtx(h func(context.Context, json.RawMessage) (interface{}, *RpcError)) func(context.Context, json.RawMessage) (interface{}, *RpcError) {
+	return func(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+		res, rpcErr := h(ctx, raw)
+		if rpcErr == nil {
+			s.maybeTriggerMaintenance()
+		}
+		return res, rpcErr
+	}
+}
+
 // maybeTriggerMaintenance incrementa el contador de saves y, si cruza el umbral, dispara
 // un mantenimiento en goroutine (async) — NO inline: el handler de save ya tiene el
 // write-lock de dispatchMu, así que correr el ciclo acá re-entraría el lock (deadlock). La

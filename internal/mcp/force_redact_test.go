@@ -34,7 +34,7 @@ func TestForceRedactScrubsLocalIngest(t *testing.T) {
 			"scope":     "local", // el cliente declara local a propósito
 		}
 		raw, _ := json.Marshal(args)
-		if _, rpcErr := s.toolSaveObservation(raw); rpcErr != nil {
+		if _, rpcErr := s.toolSaveObservation(context.Background(), raw); rpcErr != nil {
 			t.Fatalf("save: %+v", rpcErr)
 		}
 		res, err := engine.SearchObservationsFTS(context.Background(), marker, 5)
