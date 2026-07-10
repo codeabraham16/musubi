@@ -111,11 +111,19 @@ func telemetryPathKey(p string) string {
 // file_path coincide —por ruta completa o por nombre base— con alguno de los archivos dados.
 // Es la telemetría RELEVANTE a lo que el agente está tocando (T6.2), en vez de TODA la
 // pendiente. La reusan resolve_skills (por turno) y el hook precheck (por archivo, T6.3).
+// Fino wrapper federado sobre la variante ctx-aware.
 func (e *DbEngine) GetUnresolvedTelemetryLogsForFiles(files []string) ([]TelemetryLog, error) {
+	return e.GetUnresolvedTelemetryLogsForFilesCtx(context.Background(), files)
+}
+
+// GetUnresolvedTelemetryLogsForFilesCtx acota la telemetría relevante al proyecto de la credencial
+// (Track 19): resolve_skills la exponía cross-tenant (file_path+error_message+suggested_patch de
+// otros proyectos por colisión de basename). El scope se aplica en la query subyacente.
+func (e *DbEngine) GetUnresolvedTelemetryLogsForFilesCtx(ctx context.Context, files []string) ([]TelemetryLog, error) {
 	if len(files) == 0 {
 		return nil, nil
 	}
-	all, err := e.GetUnresolvedTelemetryLogs()
+	all, err := e.GetUnresolvedTelemetryLogsCtx(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -138,14 +146,22 @@ func (e *DbEngine) GetUnresolvedTelemetryLogsForFiles(files []string) ([]Telemet
 	return out, nil
 }
 
-// GetUnresolvedTelemetryLogs obtiene logs de telemetría que aún no han sido resueltos.
+// GetUnresolvedTelemetryLogs obtiene logs de telemetría que aún no han sido resueltos. Fino
+// wrapper federado (sin scope ⇒ todos) sobre la variante ctx-aware.
 func (e *DbEngine) GetUnresolvedTelemetryLogs() ([]TelemetryLog, error) {
-	rows, err := e.db.Query(`
-		SELECT id, file_path, error_message, suggested_patch, resolved, created_at 
-		FROM telemetry_logs 
-		WHERE resolved = 0
+	return e.GetUnresolvedTelemetryLogsCtx(context.Background())
+}
+
+// GetUnresolvedTelemetryLogsCtx acota los logs no resueltos al proyecto del contexto (Track 19):
+// las del proyecto + las sin atribuir (project_id vacío). Ctx federado (stdio/admin) ⇒ todos.
+func (e *DbEngine) GetUnresolvedTelemetryLogsCtx(ctx context.Context) ([]TelemetryLog, error) {
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT id, file_path, error_message, suggested_patch, resolved, created_at
+		FROM telemetry_logs
+		WHERE resolved = 0`+scopeSQL+`
 		ORDER BY created_at DESC
-	`)
+	`, scopeArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("error al obtener logs de telemetría: %w", err)
 	}

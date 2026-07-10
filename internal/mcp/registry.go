@@ -262,7 +262,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"modified_files"},
 				},
 			},
-			handler: noCtx(s.toolResolveSkills),
+			handler: s.toolResolveSkills,
 		},
 		{
 			Tool: Tool{
@@ -308,7 +308,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					},
 				},
 			},
-			handler:  noCtx(s.toolSearchSkills),
+			handler:  s.toolSearchSkills,
 			readOnly: true,
 		},
 		{
