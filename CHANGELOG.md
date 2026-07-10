@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-07-09
+
 ### Added
 - **`/metrics` accionable: latencia de tools + gauges de dominio (Track 16 / Producible F3.1).** Antes `/metrics`
   solo exponía 4 contadores de requests HTTP por resultado — un operador 24/7 no veía nada del dominio. Ahora,
