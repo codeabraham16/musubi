@@ -1,0 +1,83 @@
+# musubi-alerts.yml — reglas de alerta Prometheus para el cerebro central de Musubi (Track 18).
+#
+# Cierra el hueco que marcó la auditoría: /metrics exponía contadores ricos (rechazos de cuota/
+# authz, outbox muerto, índice sin entrenar, staleness del backup) pero NADA disparaba sobre ellos
+# — operabilidad reactiva, no 24/7. Estas reglas hacen PAGINABLES los eventos de mayor consecuencia.
+#
+# Instalación (Prometheus):
+#   1. Copiá este archivo junto a prometheus.yml (o a /etc/prometheus/rules/).
+#   2. En prometheus.yml:  rule_files: ["musubi-alerts.yml"]
+#   3. Scrape del cerebro:  job_name: "musubi" → <tailnet-ip>:7717/metrics  (con el bearer si aplica)
+#   4. Recargá Prometheus (SIGHUP o /-/reload). Ver deploy/RUNBOOK.md para qué hacer ante cada alerta.
+#
+# Los umbrales son un punto de partida sensato para un cerebro de equipo chico; ajustá a tu SLO.
+
+groups:
+  - name: musubi-brain
+    rules:
+      # --- Disponibilidad ---
+      - alert: MusubiDown
+        expr: up{job="musubi"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "El cerebro Musubi no responde al scrape (>5m)."
+          runbook: "deploy/RUNBOOK.md#musubidown"
+
+      # --- DR: backup off-host (el CRÍTICO del baseline) ---
+      # age < 0  ⇒ nunca hubo un envío off-host exitoso (o no está configurado) — DR APAGADO.
+      # age > 48h ⇒ el timer dejó de shipear (dead-man's-switch).
+      - alert: MusubiBackupOffhostStale
+        expr: musubi_backup_offhost_age_seconds < 0 or musubi_backup_offhost_age_seconds > 172800
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "El backup off-host de Musubi no shipea (nunca funcionó o >48h)."
+          runbook: "deploy/RUNBOOK.md#musubibackupoffhoststale"
+
+      # --- Sync: outbox muerto (observaciones 'shared' que agotaron reintentos) ---
+      - alert: MusubiOutboxDead
+        expr: musubi_sync_outbox{state="dead"} > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hay filas del outbox de sync muertas (agotaron reintentos)."
+          runbook: "deploy/RUNBOOK.md#musubioutboxdead"
+
+      # --- Recall degradado: IVF sin entrenar con dataset grande (cae a full-scan) ---
+      - alert: MusubiVectorIndexUntrained
+        expr: musubi_vector_index_trained == 0 and musubi_embeddings_active > 10000
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El índice vectorial no está entrenado con >10k embeddings (recall = full-scan)."
+          runbook: "deploy/RUNBOOK.md#musubivectorindexuntrained"
+
+      # --- Seguridad/capacidad: rechazos de cuota sostenidos (principal desbocado o límite bajo) ---
+      - alert: MusubiQuotaRejections
+        expr: sum(rate(musubi_tool_rejections_total{reason="quota"}[5m])) > 0
+        for: 10m
+        labels: { severity: info }
+        annotations:
+          summary: "Un principal viene chocando la cuota por-minuto de forma sostenida."
+          runbook: "deploy/RUNBOOK.md#musubiquotarejections"
+
+      # --- Seguridad: rechazos de authz repetidos (probing / token revocado en uso) ---
+      - alert: MusubiAuthzRejectionsSpike
+        expr: sum(rate(musubi_tool_rejections_total{reason="authz"}[5m])) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Pico sostenido de rechazos de autorización (probing o credencial inválida en uso)."
+          runbook: "deploy/RUNBOOK.md#musubiauthzrejectionsspike"
+
+      # --- Salud de tools: tasa de error alta ---
+      - alert: MusubiToolErrorRateHigh
+        expr: |
+          sum(rate(musubi_tool_calls_total{result="error"}[5m]))
+            / clamp_min(sum(rate(musubi_tool_calls_total[5m])), 1) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Más del 20% de las tools/call fallan (sostenido 10m)."
+          runbook: "deploy/RUNBOOK.md#musubitoolerrorratehigh"
