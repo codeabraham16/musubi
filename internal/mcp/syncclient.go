@@ -172,6 +172,13 @@ func classifyResponse(resp *http.Response) error {
 			return fmt.Errorf("%w: respuesta 200 ilegible del central: %v", errTransient, err)
 		}
 		if body.Error != nil {
+			// Cuota excedida (-32002): el central rate-limita; se libera al pasar la ventana ⇒
+			// TRANSITORIO (Track 19). Antes caía en el "permanente" de abajo y el drain
+			// DEAD-LETTEREABA memoria shared por un límite temporal — pérdida de durabilidad que
+			// destapó la auditoría al encender la cuota por default (T18.5).
+			if body.Error.Code == codeQuotaExceeded {
+				return fmt.Errorf("%w: el central rate-limita por cuota: %s", errTransient, body.Error.Message)
+			}
 			// El central procesó pero rechazó: params inválidos / tool desconocida. No se
 			// arregla reintentando lo mismo → permanente.
 			return fmt.Errorf("%w: el central devolvió error JSON-RPC %d: %s", errPermanent, body.Error.Code, body.Error.Message)
