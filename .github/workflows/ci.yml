@@ -126,6 +126,41 @@ jobs:
             print "OK: la búsqueda vectorial escala sublinealmente (IVF)"
           }'
 
+  recall-gate:
+    # Gate de CALIDAD del recall semántico (Track 17, T17.3c): corre la evaluación R@10 con la
+    # tabla POTION multilingüe REAL sobre el fixture dorado versionado y asserta un piso
+    # (ratchet anti-regresión: híbrido R@10 >= 0.80 y >= léxico). Antes esto sólo se logueaba y
+    # se salteaba en CI. La tabla (~488MB, SHA-256 pinneado) se CACHEA entre corridas; sólo se
+    # baja de HuggingFace en un cache miss, así que el costo recurrente es sólo cargarla y correr
+    # la evaluación. MUSUBI_POTION_DIR debe ser ABSOLUTO: `go test` corre con el cwd en el dir del
+    # paquete, no en la raíz del repo.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+
+      - name: Cache POTION table
+        id: potion
+        uses: actions/cache@v4
+        with:
+          path: .musubi/embeddings/potion-multilingual-128M
+          key: potion-multilingual-128M-v1
+
+      - name: Download POTION table (cache miss)
+        if: steps.potion.outputs.cache-hit != 'true'
+        # Checksum SHA-256 pinneado dentro de `embed pull` (PullModel): un mirror/host comprometido
+        # no puede colar una tabla distinta.
+        run: go run ./cmd/musubi embed pull --out "${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M"
+
+      - name: Recall gate (R@10)
+        env:
+          MUSUBI_POTION_DIR: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+        run: go test ./internal/recalleval/ -run TestSemanticVsLexicalReal -count=1 -v
+
   lint:
     runs-on: ubuntu-latest
     steps:
