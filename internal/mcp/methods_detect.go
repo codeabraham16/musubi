@@ -59,6 +59,13 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 	}
 	diffs := codeintel.ParseUnifiedDiff(out)
 
+	// Aislamiento por proyecto (Track 18): detect_changes es una superficie de LECTURA
+	// (readOnly) que cruza el diff con la memoria compartida (código + observaciones). Deriva
+	// el scope de la credencial UNA vez y pásalo a las dos consultas de memoria (gistStale /
+	// relatedMemory); sin esto un reader vería gists/topic_keys de otros proyectos (bleed de
+	// metadata, misma clase que el HIGH de aislamiento de Track 17). Ausencia de scope ⇒ federado.
+	scoped := s.scopedCtx(ctx)
+
 	report := detectReport{Files: make([]fileChange, 0, len(diffs))}
 	changedFiles, changedSymbols := 0, 0
 	for _, fd := range diffs {
@@ -80,11 +87,11 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 				for _, sym := range codeintel.SymbolsInRanges(syms, fd.NewRanges) {
 					fc.ChangedSymbols = append(fc.ChangedSymbols, sym.Name)
 				}
-				fc.GistStale = s.gistStale(key, fd.Path)
+				fc.GistStale = s.gistStale(scoped, key, fd.Path)
 			}
 		}
 
-		fc.RelatedMemory = s.relatedMemory(ctx, key, fc.ChangedSymbols)
+		fc.RelatedMemory = s.relatedMemory(scoped, key, fc.ChangedSymbols)
 		changedFiles++
 		changedSymbols += len(fc.ChangedSymbols)
 		report.Files = append(report.Files, fc)
@@ -108,9 +115,12 @@ func (s *McpServer) readProjectFile(path string) (string, error) {
 }
 
 // gistStale indica si hay un gist guardado para el archivo cuyo fingerprint ya no coincide
-// con el contenido actual (el gist quedó desactualizado).
-func (s *McpServer) gistStale(key, path string) bool {
-	cm, ok, err := s.engine.GetCodeMemory(key)
+// con el contenido actual (el gist quedó desactualizado). Usa la variante ctx-aware para
+// acotar la lectura al proyecto de la credencial (Track 18): sin scope, GetCodeMemory hacía
+// `WHERE path=? LIMIT 1` y podía comparar el fingerprint del archivo LOCAL contra el gist de
+// OTRO proyecto (tras la migración v13 varias filas comparten path) ⇒ staleness falso + fuga.
+func (s *McpServer) gistStale(ctx context.Context, key, path string) bool {
+	cm, ok, err := s.engine.GetCodeMemoryCtx(ctx, key)
 	if err != nil || !ok || cm.Fingerprint == "" {
 		return false
 	}
