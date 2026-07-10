@@ -7,6 +7,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **CI cross-platform: validación en Windows y macOS (adopción por terceros, Track 16 / Producible F4).** Hasta
+  ahora todos los jobs de CI corrían solo en `ubuntu-latest`; los binarios se cross-compilan para 6 targets pero
+  nunca se *testeaban* fuera de Linux. Nuevo job `test-cross` con `strategy.matrix: [windows-latest, macos-latest]`
+  que corre `go vet` + `go build` + `go test ./...` en cada uno. El job `test` de ubuntu sigue siendo el canónico
+  (race + piso de cobertura + govulncheck). Sin `-race` en la matriz a propósito: evita depender de cgo/gcc en
+  Windows (el driver SQLite es `modernc` puro Go, así que build y test no necesitan un compilador C).
+
 ### Changed
 - **`musubi provision` ahora EXIGE `--brain` (adopción por terceros, Track 16 / Producible F4).** Antes `--brain`
   defaulteaba a `100.79.126.62:7717` — la IP del tailnet del AUTOR: un tercero que corría `musubi provision` sin

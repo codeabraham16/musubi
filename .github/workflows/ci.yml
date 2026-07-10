@@ -39,6 +39,35 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+  test-cross:
+    # Portabilidad (adopción por terceros, Track 16 F4): valida que el código COMPILA y los
+    # tests pasan en Windows y macOS. El job `test` de ubuntu sigue siendo el canónico (race +
+    # piso de cobertura + govulncheck); acá solo confirmamos que no hay nada POSIX-only. Sin
+    # -race a propósito: evita depender de cgo/gcc en Windows (modernc/sqlite es Go puro, así
+    # que build y test no necesitan un compilador C). Comandos `go` planos → corren igual en el
+    # PowerShell default de windows-latest, sin `shell: bash`.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
   bench-guard:
     runs-on: ubuntu-latest
     steps:
