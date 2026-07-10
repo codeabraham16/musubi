@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Security
+- **Aislamiento de `musubi_conflicts` por proyecto (Track 17, T17.1b-2).** Extiende el aislamiento multi-tenant a
+  la superficie de conflictos de memoria: antes `musubi_conflicts` devolvía las relaciones pendientes de TODOS los
+  proyectos. Ahora `PendingObsRelationsCtx` hace `JOIN` a `observations` por el `source_id` y filtra por el
+  `project_id` **derivado de la credencial** (mismo `scopeClause` que las demás superficies); `admin`/stdio ⇒
+  federado. `musubi_conflicts` pasó a ctx-aware. Sin migración (aprovecha el `project_id` que ya vive en
+  `observations`). Guard: `TestConflictsEnforcePrincipalScope`. *Pendiente del aislamiento: `recall_facts`,
+  `recall_code`, `insights`, `entity_context` (parte hechos) — requieren migración v13/v14 (`project_id` en
+  `relations`/`code_memory`, esta última con un bug de colisión `ON CONFLICT(path)` cross-tenant a corregir).*
 - **Redacción de TODO ingest al central: `save_fact` y `save_code` ya no escriben secretos crudos (Track 17, T17.2).**
   La auditoría de cierre encontró que la redacción forzada server-side (`forceRedact`) cubría **solo**
   `save_observation` — `save_fact` (subject/predicate/object) y `save_code` (gist/symbols) escribían contenido
