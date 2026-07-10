@@ -32,3 +32,9 @@ coverage.html
 /.mcp.json
 /.claude/
 .musubi/skills/
+
+# Artefactos locales de SDD (musubi_sdd): specs/design/tasks de trabajo y sus plantillas.
+# Son estado local del autor —pueden contener rutas/IPs de su entorno— y no se versionan; así
+# un `git add -A` accidental nunca los sube (cierra el low "sdd sin gitignore" de la auditoría).
+.musubi/sdd/
+.musubi/templates/
