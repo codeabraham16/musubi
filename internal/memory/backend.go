@@ -67,7 +67,11 @@ type ConflictDetector interface {
 // CodeMemoryStore — memoria de código (gist + símbolos por archivo, para no re-leer).
 type CodeMemoryStore interface {
 	SaveCodeMemory(cm CodeMemory) error
+	// SaveCodeMemoryFrom atribuye al project_id de origen (multi-tenant, Track 17); UPSERT por (path, project_id).
+	SaveCodeMemoryFrom(originProjectID string, cm CodeMemory) error
 	GetCodeMemory(path string) (CodeMemory, bool, error)
+	// GetCodeMemoryCtx acota al proyecto de la credencial (ctx, Track 17 — aislamiento).
+	GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemory, bool, error)
 }
 
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.

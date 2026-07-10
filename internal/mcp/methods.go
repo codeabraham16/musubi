@@ -1243,7 +1243,7 @@ func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
 	}
 }
 
-func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Path    string `json:"path"`
 		Gist    string `json:"gist"`
@@ -1281,13 +1281,19 @@ func (s *McpServer) toolSaveCode(raw json.RawMessage) (interface{}, *RpcError) {
 		Fingerprint: fp,
 		Tokens:      memory.EstimateTokens(gist),
 	}
-	if err := s.engine.SaveCodeMemory(cm); err != nil {
+	// Atribución por credencial (Track 17): la memoria de código se guarda para el proyecto del
+	// principal, no en un espacio global compartido. admin/stdio ⇒ project_id del engine.
+	origin := ""
+	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+		origin = p.ProjectID
+	}
+	if err := s.engine.SaveCodeMemoryFrom(origin, cm); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
 	}
 	return jsonResult(map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens})
 }
 
-func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolRecallCode(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Path string `json:"path"`
 	}
@@ -1299,7 +1305,8 @@ func (s *McpServer) toolRecallCode(raw json.RawMessage) (interface{}, *RpcError)
 	}
 
 	key := memory.NormalizeCodePath(s.projectPath, args.Path)
-	cm, ok, err := s.engine.GetCodeMemory(key)
+	// Aislamiento por proyecto (Track 17): el gist se lee del proyecto de la credencial.
+	cm, ok, err := s.engine.GetCodeMemoryCtx(s.scopedCtx(ctx), key)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al leer memoria de código: %v", err)
 	}

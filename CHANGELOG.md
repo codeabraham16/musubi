@@ -7,7 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Colisión cross-tenant de la memoria de código (`code_memory`) — corrección de correctitud (Track 17, migración
+  v13).** `code_memory` tenía `PRIMARY KEY(path)`, así que en un cerebro central compartido dos proyectos con el
+  mismo `path` (p.ej. `internal/auth.go`) **colisionaban** en el `ON CONFLICT(path)` y se **pisaban el gist** entre
+  sí. La migración v13 reconstruye la tabla con `UNIQUE(path, project_id)` (`project_id NOT NULL DEFAULT ''`, filas
+  legacy → `''`), de modo que cada proyecto tiene su propia entrada por archivo.
+
 ### Security
+- **Aislamiento de `musubi_recall_code` por proyecto (Track 17, T17.1b-3).** Sobre la migración v13 (arriba):
+  `SaveCodeMemoryFrom` atribuye el gist al proyecto de la **credencial** (no a un espacio global) y
+  `GetCodeMemoryCtx` acota la lectura al proyecto del principal, prefiriendo su propia fila sobre la sin atribuir.
+  `musubi_save_code`/`musubi_recall_code` pasaron a ctx-aware. `admin`/stdio ⇒ federado. Guard:
+  `TestCodeMemoryProjectIsolationAndNoCollision`.
 - **Aislamiento de `musubi_conflicts` por proyecto (Track 17, T17.1b-2).** Extiende el aislamiento multi-tenant a
   la superficie de conflictos de memoria: antes `musubi_conflicts` devolvía las relaciones pendientes de TODOS los
   proyectos. Ahora `PendingObsRelationsCtx` hace `JOIN` a `observations` por el `source_id` y filtra por el
