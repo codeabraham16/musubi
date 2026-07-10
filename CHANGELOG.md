@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.82.0] - 2026-07-10
+
 ### Added
 - **Operabilidad 24/7: métricas por-tool + contadores de rechazo + COUNT cacheado en `/metrics` (Track 17, T17.5).**
   Cierra los huecos de observabilidad que marcó la auditoría de cierre. **(1) Métricas por-tool:** el histograma de
