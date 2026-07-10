@@ -33,6 +33,10 @@ const (
 	// codeUnauthorized (rango server-error de JSON-RPC) = el principal autenticado no
 	// tiene permiso para invocar la tool (autorización por rol, Track 16 F1 16.1c).
 	codeUnauthorized = -32001
+	// codeQuotaExceeded (rango server-error) = el principal superó su cuota de llamadas por
+	// ventana (Track 16 F3.2). La credencial es VÁLIDA; excedió el límite de uso. Reintentar
+	// tras la ventana.
+	codeQuotaExceeded = -32002
 )
 
 type JsonRpcRequest struct {
@@ -158,6 +162,15 @@ type McpServer struct {
 	// por ambos transportes: el middleware HTTP registra el resultado de cada request y
 	// handleToolsCall registra la latencia/resultado de cada tools/call. Lock-free (atomic).
 	metrics *serverMetrics
+	// quota limita las llamadas por-principal por ventana (Track 16 F3.2); nil ⇒ sin cuota.
+	// Solo aplica cuando hay un principal autenticado (serve); en stdio local no hay cuota.
+	quota *quotaLimiter
+}
+
+// WithQuota devuelve un Option que activa la cuota de uso por-principal: máximo perMinute
+// llamadas a tools/call por principal por minuto. perMinute<=0 ⇒ sin cuota (default).
+func WithQuota(perMinute int) Option {
+	return func(s *McpServer) { s.quota = newQuotaLimiter(perMinute, time.Minute) }
 }
 
 // SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando

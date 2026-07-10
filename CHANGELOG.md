@@ -27,6 +27,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   crezca SUB-LINEALmente (`B/op(10k)/B/op(1k)` ≈ 3.7x medido, ~√10; umbral 6): una regresión que rompa el IVF y
   caiga a full-scan lo llevaría a ~lineal (~10x). Se mide `B/op` (determinista) y no wall-time, igual que el guard
   de `BenchmarkMaintain`.
+- **Cuota de uso por-principal (Track 16 / Producible F3.2).** Cierra la Fase 3. Hasta ahora, una vez autenticado,
+  un principal podía hacer llamadas ilimitadas: el único rate-limit era el lockout de auth por-IP (anti fuerza
+  bruta del bearer). Nuevo `quotaLimiter` (ventana deslizante en memoria, model-free, espeja `authLimiter`) que
+  limita las `tools/call` **por identidad de principal** por minuto, enforced en el choke point `handleToolsCall`
+  (tras autorizar por rol, antes de tomar el lock — no serializa los rechazos). Superar la cuota devuelve el nuevo
+  código `codeQuotaExceeded` (-32002; la credencial es válida, solo excedió el uso). Configurable con
+  `service.quota_per_minute` (0 = sin límite, default). Solo aplica cuando hay principal (serve con registro); en
+  stdio local (agente confiable, sin principal) no hay cuota. Distintos principals tienen cuotas independientes.
 
 ## [0.79.1] - 2026-07-09
 
