@@ -50,16 +50,16 @@ func (e *DbEngine) Insights() (InsightsReport, error) {
 	return e.InsightsCtx(context.Background())
 }
 
-// InsightsCtx agrega el estado de la memoria acotando los COUNTS DE OBSERVACIONES al proyecto del
-// contexto (Track 17, aislamiento PARCIAL): sin esto, un principal veía el tamaño de la memoria de
-// TODOS los proyectos (fuga del volumen ajeno). Los hotspots de errores (telemetry_logs) y las
-// decisiones de skills (skill_decisions) siguen FEDERADOS: esas tablas no tienen project_id, así
-// que scopearlas requeriría una migración aparte (diferida; bajo riesgo). Ctx federado ⇒ counts
-// globales (histórico bit-a-bit). Read-only.
+// InsightsCtx agrega el estado de la memoria acotando TODO al proyecto del contexto (Track 17 +
+// Track 18): sin esto un principal veía el tamaño de la memoria, los hotspots de errores y las
+// decisiones de skills de TODOS los proyectos (fuga de volumen/metadata ajena). Desde Track 18
+// telemetry_logs y skill_decisions tienen project_id (migración v15), así que los tres se acotan
+// con el mismo scopeClause; sólo lo sin atribuir (project_id vacío) queda visible para todos. Ctx federado
+// (stdio/admin) ⇒ counts globales (histórico bit-a-bit). Read-only.
 func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 	var rep InsightsReport
 
-	// Scope de proyecto aplicado sólo al conteo de observations (la tabla que sí tiene project_id).
+	// Scope de proyecto (Track 17/18): se aplica a observations, telemetry_logs y skill_decisions.
 	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
 	where := ""
 	if scopeSQL != "" {
@@ -74,14 +74,16 @@ func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 	rep.Observations.Active = rep.Observations.Total - rep.Observations.Archived
 
 	if err := e.db.QueryRow(
-		`SELECT COUNT(*) FROM telemetry_logs WHERE resolved=0`,
+		`SELECT COUNT(*) FROM telemetry_logs WHERE resolved=0`+scopeSQL,
+		scopeArgs...,
 	).Scan(&rep.UnresolvedErrors); err != nil {
 		return rep, fmt.Errorf("insights: contar errores: %w", err)
 	}
 
+	hotspotArgs := append(append([]interface{}{}, scopeArgs...), insightsHotspotLimit)
 	rows, err := e.db.Query(`
-		SELECT file_path, COUNT(*) AS c FROM telemetry_logs WHERE resolved=0
-		GROUP BY file_path ORDER BY c DESC, file_path ASC LIMIT ?`, insightsHotspotLimit)
+		SELECT file_path, COUNT(*) AS c FROM telemetry_logs WHERE resolved=0`+scopeSQL+`
+		GROUP BY file_path ORDER BY c DESC, file_path ASC LIMIT ?`, hotspotArgs...)
 	if err != nil {
 		return rep, fmt.Errorf("insights: hotspots: %w", err)
 	}
@@ -99,8 +101,9 @@ func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 	}
 	rows.Close()
 
-	// Decisiones de skills por su decisión más reciente (last-write-wins, coherente con T6.1).
-	decisions, err := e.GetSkillDecisions()
+	// Decisiones de skills por su decisión más reciente (last-write-wins, coherente con T6.1),
+	// acotadas al proyecto del contexto (Track 18).
+	decisions, err := e.GetSkillDecisionsCtx(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("insights: decisiones: %w", err)
 	}

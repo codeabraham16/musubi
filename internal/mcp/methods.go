@@ -1479,7 +1479,7 @@ func (s *McpServer) toolSearchKeyword(ctx context.Context, raw json.RawMessage) 
 	return jsonResult(toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget))
 }
 
-func (s *McpServer) toolLogError(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolLogError(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		FilePath       string `json:"file_path"`
 		ErrorMessage   string `json:"error_message"`
@@ -1495,13 +1495,22 @@ func (s *McpServer) toolLogError(raw json.RawMessage) (interface{}, *RpcError) {
 		return nil, rpcErrorf(codeInvalidParams, "error_message es obligatorio")
 	}
 
-	if err := s.engine.SaveTelemetryLog(args.FilePath, args.ErrorMessage, args.SuggestedPatch); err != nil {
+	// Track 18: atribuir el log a la credencial (no al cliente) y redactar el ingest a infra
+	// compartida. error_message/suggested_patch pueden traer secretos (tokens, rutas, stack); en
+	// un bind no-loopback se redactan ANTES de persistir, como el resto del ingest (T17.2).
+	origin := ""
+	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+		origin = p.ProjectID
+	}
+	msg := s.redactIfForced(args.ErrorMessage)
+	patch := s.redactIfForced(args.SuggestedPatch)
+	if err := s.engine.SaveTelemetryLogFrom(origin, args.FilePath, msg, patch); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar log de telemetría: %v", err)
 	}
 	return textResult("Log de telemetría guardado con éxito."), nil
 }
 
-func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ID int `json:"id"`
 	}
@@ -1512,7 +1521,10 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 		return nil, rpcErrorf(codeInvalidParams, "id debe ser un entero positivo")
 	}
 
-	log, found, err := s.engine.ResolveTelemetryLogAndGet(args.ID)
+	// Track 18: acotar la resolución/lectura al proyecto de la credencial. Un tenant no puede
+	// resolver ni leer el log crudo de otro (un id de otro proyecto ⇒ found=false, igual que
+	// inexistente, sin filtrar su existencia).
+	log, found, err := s.engine.ResolveTelemetryLogAndGetCtx(s.scopedCtx(ctx), args.ID)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: %v", err)
 	}
@@ -1521,12 +1533,18 @@ func (s *McpServer) toolResolveTelemetry(raw json.RawMessage) (interface{}, *Rpc
 	}
 
 	// C4: capturar el par error→fix como memoria LOCAL (best-effort; un fallo NO rompe el resolve).
-	// Solo si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Queda
-	// local; al compartir por promote, la redacción de C2 la limpia. Si la semántica está encendida,
-	// se guarda CON embedding (16.2e) para que participe del recall semántico.
+	// Solo si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Track
+	// 18: el contenido se redacta ANTES de derivar embedding/gist (va al pozo compartido) y se
+	// ATRIBUYE al proyecto de la credencial, no al espacio federado. Si la semántica está encendida,
+	// se guarda CON embedding (16.2e) homogéneo con el recall.
 	if strings.TrimSpace(log.SuggestedPatch) != "" {
 		content := fmt.Sprintf("Error en %s: %s\n\nArreglado con: %s", log.FilePath, log.ErrorMessage, log.SuggestedPatch)
-		_, _, _ = s.engine.SaveObservationDedupedTyped("error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
+		content = s.redactIfForced(content)
+		origin := ""
+		if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+			origin = p.ProjectID
+		}
+		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, "error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }
@@ -2018,7 +2036,7 @@ func marketplaceQueryFromStack(stacks []detector.StackResult) string {
 // toolLogSkillDecision registra una decisión de skill (accepted/rejected) en SQLite.
 // Inputs: skill_id (requerido), decision (requerido, "accepted"|"rejected"),
 // name (opcional), reason (opcional).
-func (s *McpServer) toolLogSkillDecision(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolLogSkillDecision(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		SkillID  string `json:"skill_id"`
 		Name     string `json:"name"`
@@ -2042,7 +2060,13 @@ func (s *McpServer) toolLogSkillDecision(raw json.RawMessage) (interface{}, *Rpc
 		return nil, rpcErrorf(codeInvalidParams, "decision debe ser 'accepted' o 'rejected', se recibió: %q", args.Decision)
 	}
 
-	if err := s.engine.SaveSkillDecision(args.SkillID, args.Name, args.Decision, args.Reason); err != nil {
+	// Track 18: atribuir la decisión al proyecto de la credencial (no al cliente) para que no se
+	// cuente en los insights de otro tenant.
+	origin := ""
+	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
+		origin = p.ProjectID
+	}
+	if err := s.engine.SaveSkillDecisionFrom(origin, args.SkillID, args.Name, args.Decision, args.Reason); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar decisión de skill: %v", err)
 	}
 	return textResult(fmt.Sprintf("Decisión '%s' para skill '%s' registrada con éxito.", args.Decision, args.SkillID)), nil

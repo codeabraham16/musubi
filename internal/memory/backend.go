@@ -96,18 +96,27 @@ type MetaStore interface {
 // TelemetryStore — logs de errores de compilación/test para el bucle de telemetría.
 type TelemetryStore interface {
 	SaveTelemetryLog(filePath, errorMessage, suggestedPatch string) error
+	// SaveTelemetryLogFrom atribuye el log al project_id de origen (multi-tenant, Track 18).
+	SaveTelemetryLogFrom(originProjectID, filePath, errorMessage, suggestedPatch string) error
 	GetUnresolvedTelemetryLogs() ([]TelemetryLog, error)
 	GetUnresolvedTelemetryLogsForFiles(files []string) ([]TelemetryLog, error)
 	ResolveTelemetryLog(id int) error
 	// ResolveTelemetryLogAndGet resuelve el log y devuelve su contenido (para capturar el par
 	// error→fix como memoria, C4). found=false si el id no existe.
 	ResolveTelemetryLogAndGet(id int) (TelemetryLog, bool, error)
+	// ResolveTelemetryLogAndGetCtx acota la resolución/lectura al proyecto de la credencial
+	// (ctx, Track 18): un tenant no resuelve ni lee el log crudo de otro. found=false si no visible.
+	ResolveTelemetryLogAndGetCtx(ctx context.Context, id int) (TelemetryLog, bool, error)
 }
 
 // SkillDecisionStore — log persistente de decisiones de skills (aceptada/rechazada).
 type SkillDecisionStore interface {
 	SaveSkillDecision(skillID, name, decision, reason string) error
+	// SaveSkillDecisionFrom atribuye la decisión al project_id de origen (multi-tenant, Track 18).
+	SaveSkillDecisionFrom(originProjectID, skillID, name, decision, reason string) error
 	GetSkillDecisions() ([]SkillDecision, error)
+	// GetSkillDecisionsCtx acota al proyecto de la credencial (ctx, Track 18 — aislamiento).
+	GetSkillDecisionsCtx(ctx context.Context) ([]SkillDecision, error)
 }
 
 // WorkStore — pizarra compartida de unidades de trabajo (orquestación multi-agente).

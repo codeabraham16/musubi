@@ -428,6 +428,33 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 15,
+			name:    "telemetry_decisions_project_id",
+			// Aislamiento multi-tenant del subsistema de TELEMETRÍA y DECISIONES (Track 18). La
+			// auditoría de re-medición marcó que telemetry_logs y skill_decisions eran las dos
+			// tablas de lectura SIN project_id: resolve_telemetry leía/persistía logs crudos de
+			// cualquier proyecto y los hotspots/decisiones de insights sumaban entre tenants
+			// (misma clase que el bleed cross-project de Track 17, pero en superficies no
+			// enumeradas por la auditoría de cierre). A diferencia de code_memory (v13) y
+			// relations (v14), acá NO hay PK/UNIQUE que cambiar ⇒ ADD COLUMN aditivo (como v10/v12),
+			// sin rebuild. project_id es NOT NULL DEFAULT '' (sentinel, no nullable): las filas
+			// legacy quedan en el espacio federado '' (visible a cualquier proyecto, histórico
+			// bit-a-bit). Los índices aceleran el filtrado por proyecto.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE telemetry_logs ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+					`ALTER TABLE skill_decisions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+					`CREATE INDEX IF NOT EXISTS idx_telemetry_project ON telemetry_logs(project_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_skill_dec_project ON skill_decisions(project_id)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

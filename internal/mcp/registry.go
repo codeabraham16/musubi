@@ -230,7 +230,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"file_path", "error_message"},
 				},
 			},
-			handler: noCtx(s.toolLogError),
+			handler: s.toolLogError,
 		},
 		{
 			Tool: Tool{
@@ -244,7 +244,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"id"},
 				},
 			},
-			handler: noCtx(s.toolResolveTelemetry),
+			handler: s.toolResolveTelemetry,
 		},
 		{
 			Tool: Tool{
@@ -341,7 +341,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"skill_id", "decision"},
 				},
 			},
-			handler: noCtx(s.toolLogSkillDecision),
+			handler: s.toolLogSkillDecision,
 		},
 		{
 			Tool: Tool{
