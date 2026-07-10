@@ -7,6 +7,71 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.83.0] - 2026-07-10
+
+**Track 18 — tenancy hardening ("cerrar la clase").** La auditoría de re-medición post-Track 17
+(veredicto **4.0/5**, +0.5 sobre 3.5) verificó que Track 17 cerró de verdad los HIGH nombrados,
+pero la caza adversarial destapó la **misma clase** de fuga (superficie de lectura sin scope ·
+ingest sin redactar · default fail-open) en superficies que el primer informe **no enumeró**. Este
+release cierra esos 3 HIGH residuales y una segunda ola de endurecimiento de operabilidad.
+
+### Security
+- **Aislamiento de `detect_changes` por proyecto (T18.1).** La 10ª superficie de lectura (readOnly,
+  alcanzable por un reader) cruzaba el diff local con la memoria compartida usando el ctx **crudo**:
+  `relatedMemory`→`SearchObservationsFTS` leía observaciones federadas y `gistStale`→`GetCodeMemory`
+  (variante federada; tras la migración v13 varias filas comparten `path`) comparaba contra el gist
+  de **otro** proyecto ⇒ fuga de metadata + staleness falso. Ahora deriva el scope de la credencial
+  (`scopedCtx`) y usa `GetCodeMemoryCtx`. Guard: `TestDetectChangesEnforcesProjectScope`.
+- **Aislamiento + redacción del subsistema de telemetría/decisiones (T18.2, migración v15).** El
+  subsistema escapaba **dos** garantías a la vez: `telemetry_logs`/`skill_decisions` no tenían
+  `project_id` (⇒ `resolve_telemetry` leía/resolvía el log crudo de cualquier proyecto; los hotspots
+  y decisiones de `insights` sumaban entre tenants), y `log_error`/`resolve_telemetry` escribían
+  **crudo** al pozo compartido. La migración v15 agrega `project_id` a ambas tablas (ADD COLUMN, sin
+  rebuild); los saves atribuyen por credencial, las lecturas se acotan (`ResolveTelemetryLogAndGetCtx`,
+  `GetSkillDecisionsCtx`, `insights` scopeado) y el ingest se redacta antes del embedding. Guards:
+  `TestMigrationV15AddsProjectIdPreservingData`, `TestTelemetryAndDecisionsEnforceProjectScope`,
+  `TestLogErrorRedactsAndAttributes`.
+
+### Changed
+- **Tenancy fail-closed: `reader`/`writer` exigen `project_id` (T18.3).** Un principal reader/writer
+  con `project_id` vacío resolvía a scope vacío ⇒ recall **federado** + escritura sin atribuir, y el
+  `token new` default (rol writer, proyecto vacío) lo producía en silencio. Ahora `AddPrincipal` y
+  `loadPrincipals` lo **rechazan** (solo `admin` puede ser federado, por diseño).
+- **Cuota de uso ON por default (T18.5).** `service.quota_per_minute == 0` ahora resuelve a un default
+  generoso (600/min por principal, vía `EffectiveQuotaPerMinute`); **negativo** ⇒ sin límite (opt-out
+  explícito); `>0` ⇒ ese valor. Protege al central por default sin lastimar el uso normal.
+- **`StrictTenancy` + WARNING de arranque en bind remoto (T18.5).** `service.strict_tenancy` (default
+  false) hace que un bind no-loopback **exija** un registro de principals real (rechaza el modo
+  "legacy admin-federado" = un único bearer con acceso total). Apagado, un WARNING de arranque siempre
+  lo hace visible. Además: **unicidad de nombres** de principals al cargar (el nombre es la clave de la
+  cuota). Guards: `TestEffectiveQuotaPerMinute`, `TestIsRemoteLegacyTenancy`,
+  `TestLoadPrincipalsRejectsDuplicateNames`.
+
+### Added
+- **Revocación en caliente del registro de principals (T18.4).** Antes `loadPrincipals` corría una
+  sola vez al arranque, así que revocar/dar de alta a un miembro no surtía efecto hasta reiniciar (una
+  revocación diferida es un agujero). Ahora un `reloadableRegistry` con `atomic.Pointer` + un goroutine
+  que vigila el mtime del archivo (mtime-poll, 0-deps) recarga en caliente; una recarga fallida
+  **conserva** el snapshot vigente (fail-safe: un typo no deja al equipo afuera). Guards:
+  `TestReloadableRegistryHotRevoke`, `TestReloadableRegistryKeepsSnapshotOnBadReload`.
+- **Alertas Prometheus + runbook + gauge de staleness del backup (T18.7).** `/metrics` exponía
+  contadores ricos pero nada disparaba sobre ellos (operabilidad reactiva) y un evento de DR quedaba
+  no-paginable. Nuevo gauge `musubi_backup_offhost_age_seconds` (-1 si nunca/no configurado);
+  `deploy/musubi-alerts.yml` con reglas para los eventos de mayor consecuencia (down, backup stale,
+  outbox dead, índice sin entrenar, rechazos de cuota/authz, tasa de error); `deploy/RUNBOOK.md` con
+  qué hacer ante cada una. Guard: `TestOperationalStatsBackupAge`.
+
+### Fixed
+- **`doctor` detecta el backup off-host que NUNCA funcionó (T18.6).** `musubi doctor` daba VERDE
+  cuando el backup off-host nunca tuvo éxito (la marca `.last_offhost` solo se escribe tras un envío
+  OK, así que su ausencia era indistinguible de una instancia local). Ahora `deploy/musubi-backup.sh`
+  escribe `.last_offhost_error` en cada fallo (y la borra al éxito), y `checkOffhostBackup` avisa si
+  hay error sin éxito previo (o más nuevo que el último éxito). Guard: `TestCheckOffhostBackupErrorMarker`.
+
+**Esquema en v15** (`telemetry_logs.project_id` + `skill_decisions.project_id`; la guarda
+`ErrSchemaTooNew` protege binarios viejos de la flota). Verde: build + `go test ./...` + lint + CI
+cross-platform + recall-gate.
+
 ## [0.82.0] - 2026-07-10
 
 ### Added
