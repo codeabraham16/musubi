@@ -158,6 +158,70 @@ func TestSaveCodeAutoDerivesSymbols(t *testing.T) {
 	}
 }
 
+// TestDetectChangesEnforcesProjectScope prueba el aislamiento de Track 18: detect_changes es
+// una superficie de LECTURA que cruza el diff local con la memoria compartida (código +
+// observaciones). Un lector acotado a un proyecto NO debe ver el gist ni las observaciones
+// atribuidas a OTRO proyecto (fuga de metadata: gist_stale + topic_keys); un admin federado sí.
+func TestDetectChangesEnforcesProjectScope(t *testing.T) {
+	dir := t.TempDir()
+	src := "package x\n\nfunc Parse() int {\n\treturn 1\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "foo.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServerWithPath(t, dir)
+
+	// Gist + observación atribuidos al proyecto "web", con fingerprint viejo (sería stale si es visible).
+	if err := s.engine.SaveCodeMemoryFrom("web", memory.CodeMemory{
+		Path: "foo.go", Gist: "gist de web", Fingerprint: "hashviejo", Tokens: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.engine.SaveObservationTypedFrom("web", "obs-web", "web/decision-secreta",
+		"La decisión de web sobre foo.go.", 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	s.gitRunner = codeintel.FakeRunner{Out: "diff --git a/foo.go b/foo.go\n" +
+		"index 111..222 100644\n--- a/foo.go\n+++ b/foo.go\n" +
+		"@@ -1,3 +1,4 @@\n package x\n+// nuevo\n \n func Parse() int {\n"}
+
+	detectAs := func(p *Principal) fileChange {
+		raw, _ := json.Marshal(map[string]interface{}{})
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_detect_changes", Arguments: raw})
+		ctx := context.Background()
+		if p != nil {
+			ctx = withPrincipal(ctx, p)
+		}
+		out, rpcErr := s.handleToolsCall(ctx, params)
+		if rpcErr != nil {
+			t.Fatalf("detect_changes: %+v", rpcErr)
+		}
+		fc, ok := fileByPath(decodeDetect(t, out), "foo.go")
+		if !ok {
+			t.Fatalf("foo.go ausente del reporte")
+		}
+		return fc
+	}
+
+	// Lector acotado a "crm": no ve el gist ni la observación de "web".
+	crm := detectAs(&Principal{Name: "alice", Role: RoleReader, ProjectID: "crm"})
+	if crm.GistStale {
+		t.Errorf("crm no tiene gist para foo.go ⇒ gist_stale debería ser false (fuga del gist de web)")
+	}
+	if containsStr(crm.RelatedMemory, "web/decision-secreta") {
+		t.Errorf("crm no debería ver la observación de web en related_memory, obtuve %v", crm.RelatedMemory)
+	}
+
+	// Admin federado: ve el gist viejo de web como stale y su topic_key (el filtro no rompe legacy).
+	adm := detectAs(&Principal{Name: "root", Role: RoleAdmin})
+	if !adm.GistStale {
+		t.Errorf("admin federado debería ver el gist viejo de web como stale")
+	}
+	if !containsStr(adm.RelatedMemory, "web/decision-secreta") {
+		t.Errorf("admin federado debería ver la observación de web, obtuve %v", adm.RelatedMemory)
+	}
+}
+
 func containsStr(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {
