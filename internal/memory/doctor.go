@@ -56,8 +56,18 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "fts_consistency", run: checkFTS, count: countFTSDrift, apply: applyRebuildFTS},
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
+		{code: "offhost_backup", run: checkOffhostBackup},
 	}
 }
+
+// offhostMarkerName es el archivo que deploy/musubi-backup.sh toca (con una marca ISO) SÓLO tras
+// un envío OFF-HOST exitoso. Vive junto a los snapshots locales (<workspace>/.musubi/backups).
+const offhostMarkerName = ".last_offhost"
+
+// offhostBackupStaleAfter es la antigüedad máxima tolerada del último backup off-host antes de
+// que el dead-man's-switch avise. El timer del cerebro corre a diario; 48h = dos corridas
+// perdidas, señal clara de que el timer dejó de shipear (no un atraso puntual de una corrida).
+const offhostBackupStaleAfter = 48 * time.Hour
 
 // autoHealCodes son los checks de BAJO riesgo que el auto-mantenimiento repara sin
 // supervisión: tienen apply mecánico con backup. schema_migrations y db_integrity quedan
@@ -207,6 +217,34 @@ func (e *DbEngine) backupDB() (string, error) {
 }
 
 // ---- checks individuales ----
+
+// checkOffhostBackup es el DEAD-MAN'S-SWITCH del backup OFF-HOST (DR, Track 17). Lee la marca que
+// deja deploy/musubi-backup.sh tras cada envío remoto exitoso y AVISA (warning) si envejeció más
+// de offhostBackupStaleAfter: el timer dejó de shipear ⇒ la memoria central volvió a quedar sin
+// protección off-host (el CRÍTICO del baseline). Es INFORMATIVO y NO reparable: no es un problema
+// de integridad de la base y NO afecta readyz (que sólo sondea GetMeta). Marca AUSENTE ⇒ ok a
+// propósito: esta instancia es local (no un cerebro) o el backup aún no corrió/está mal
+// configurado — ese caso lo cubre, de forma ruidosa, el fallo-cerrado del propio script (visible
+// en `systemctl status musubi-backup`). Así el check no genera falsos positivos en las máquinas de
+// desarrollo, que no tienen timer de backup.
+func checkOffhostBackup(e *DbEngine) CheckResult {
+	if e.path == "" {
+		return CheckResult{Code: "offhost_backup", Status: "ok", Message: "ruta de la base desconocida; no aplica"}
+	}
+	marker := filepath.Join(filepath.Dir(e.path), "backups", offhostMarkerName)
+	info, err := os.Stat(marker)
+	if err != nil {
+		return CheckResult{Code: "offhost_backup", Status: "ok",
+			Message: "sin registro de backup off-host (instancia local, o backup no configurado — el timer falla-cerrado si BACKUP_REMOTE está vacío)"}
+	}
+	if age := time.Since(info.ModTime()); age > offhostBackupStaleAfter {
+		return CheckResult{Code: "offhost_backup", Status: "warning",
+			Message: fmt.Sprintf("el último backup off-host fue hace %s (> %s): el timer podría haber dejado de shipear (dead-man's-switch)",
+				age.Round(time.Hour), offhostBackupStaleAfter)}
+	}
+	return CheckResult{Code: "offhost_backup", Status: "ok",
+		Message: fmt.Sprintf("último backup off-host hace %s", time.Since(info.ModTime()).Round(time.Hour))}
+}
 
 func checkDBIntegrity(e *DbEngine) CheckResult {
 	var result string

@@ -148,9 +148,13 @@ if curl -fsSL "https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi
   if ! grep -q '^BACKUP_' "$ENV_FILE" 2>/dev/null; then
     cat >> "$ENV_FILE" <<EOF
 
-# Backup off-host (musubi-backup.timer). Configurá BACKUP_REMOTE para proteger contra
-# la pérdida del disco; vacío = el snapshot queda SOLO en el disco local (inseguro).
+# Backup off-host (musubi-backup.timer). DR segura por default: con BACKUP_REMOTE vacío el
+# backup FALLA-CERRADO (la unidad systemd queda 'failed' y se ve en 'systemctl status
+# musubi-backup') en vez de dejar un snapshot solo-local que no protege contra la pérdida del
+# disco. Configurá BACKUP_REMOTE (rsync/rclone/cp a otra máquina de la malla o a la nube), o
+# seteá BACKUP_ALLOW_LOCAL_ONLY=1 para aceptar el modo local-only a conciencia.
 BACKUP_REMOTE=
+BACKUP_ALLOW_LOCAL_ONLY=
 BACKUP_METHOD=rsync
 BACKUP_RETENTION_DAYS=14
 EOF
@@ -182,7 +186,7 @@ WantedBy=timers.target
 EOF
   systemctl daemon-reload
   systemctl enable --now musubi-backup.timer
-  ok "Backup diario habilitado (03:30). CONFIGURÁ BACKUP_REMOTE en $ENV_FILE para que sea off-host."
+  ok "Backup diario habilitado (03:30). CONFIGURÁ BACKUP_REMOTE en $ENV_FILE (si no, la unidad falla-cerrado; o seteá BACKUP_ALLOW_LOCAL_ONLY=1)."
 else
   log "No se pudo bajar musubi-backup.sh; instalá el timer a mano (ver docs/Server_Brain_Onboarding.md)."
 fi

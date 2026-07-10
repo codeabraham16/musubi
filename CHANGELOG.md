@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **DR off-host segura por default + dead-man's-switch + test de restore en CI (Track 17, T17.4).** Cierra el
+  hallazgo **CRÍTICO** de la auditoría (perder el disco del cerebro central = perder toda la memoria compartida),
+  que seguía abierto porque el backup off-host era un **no-op silencioso**. Tres cambios: **(1) fallo-cerrado** —
+  `deploy/musubi-backup.sh` con `BACKUP_REMOTE` vacío ahora **falla** (exit≠0 ⇒ la unidad systemd queda `failed` y
+  se ve en `systemctl status`) en vez de reportar "éxito" dejando el snapshot solo-local; el modo local-only se
+  acepta **explícitamente** con `BACKUP_ALLOW_LOCAL_ONLY=1`. **(2) dead-man's-switch** — tras cada envío off-host
+  exitoso el script deja una marca `.last_offhost`; un nuevo check de `musubi doctor` (`offhost_backup`) **avisa**
+  (warning, no error; no afecta `readyz`) si esa marca envejece > 48h (el timer dejó de shipear). Marca ausente ⇒
+  ok (no genera falsos positivos en máquinas de desarrollo sin timer). **(3) test de restore en CI** —
+  `TestBackupToProducesRestorableSnapshot` toma un snapshot (`VACUUM INTO`), lo **restaura** como base nueva y
+  verifica `integrity_check` + esquema + datos de las 3 familias (observación/hecho/código): "tenemos backups"
+  pasa de afirmación no verificada a camino ejercitado en cada corrida. Verificado end-to-end con binario real
+  (fallo-cerrado / escape hatch / envío + marca). *Nota de despliegue:* el servidor con `BACKUP_REMOTE` vacío
+  empezará a fallar el timer hasta configurar un destino remoto o setear `BACKUP_ALLOW_LOCAL_ONLY=1`.
+
 ## [0.81.0] - 2026-07-10
 
 ### Fixed
