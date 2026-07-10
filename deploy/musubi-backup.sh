@@ -36,6 +36,12 @@ BACKUP_METHOD="${BACKUP_METHOD:-rsync}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 
 log() { printf '[musubi-backup] %s\n' "$*"; }
+# mark_offhost_error deja la marca .last_offhost_error (timestamp + motivo) para que `musubi
+# doctor` distinga "off-host configurado pero fallando / que NUNCA funcionó" de "instancia local"
+# (Track 18). Best-effort: nunca hace fallar al script por sí misma.
+mark_offhost_error() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" > "$BACKUP_LOCAL_DIR/.last_offhost_error" 2>/dev/null || true; }
+# die_offhost registra el fallo off-host (para el check de doctor) y aborta.
+die_offhost() { mark_offhost_error "$*"; die "$*"; }
 die() { printf '[musubi-backup] ERROR: %s\n' "$*" >&2; exit 1; }
 
 # 1. Snapshot consistente. `musubi backup` imprime SOLO la ruta del snapshot en stdout.
@@ -52,20 +58,22 @@ if [ -z "$BACKUP_REMOTE" ]; then
   if [ "$BACKUP_ALLOW_LOCAL_ONLY" = "1" ]; then
     log "ADVERTENCIA: BACKUP_REMOTE vacío y BACKUP_ALLOW_LOCAL_ONLY=1 — el snapshot queda SOLO en el disco local (NO es DR)."
   else
-    die "BACKUP_REMOTE vacío: un backup en el mismo disco NO protege contra la pérdida del host. Configurá BACKUP_REMOTE (rsync/rclone/cp a otra máquina o nube), o seteá BACKUP_ALLOW_LOCAL_ONLY=1 para aceptar el modo local-only a conciencia."
+    die_offhost "BACKUP_REMOTE vacío: un backup en el mismo disco NO protege contra la pérdida del host. Configurá BACKUP_REMOTE (rsync/rclone/cp a otra máquina o nube), o seteá BACKUP_ALLOW_LOCAL_ONLY=1 para aceptar el modo local-only a conciencia."
   fi
 else
   log "Enviando off-host ($BACKUP_METHOD) → $BACKUP_REMOTE ..."
   case "$BACKUP_METHOD" in
-    rsync)  rsync -a --mkpath "$SNAPSHOT" "$BACKUP_REMOTE/" || die "rsync falló" ;;
-    rclone) rclone copy "$SNAPSHOT" "$BACKUP_REMOTE" || die "rclone falló" ;;
-    cp)     mkdir -p "$BACKUP_REMOTE" && cp "$SNAPSHOT" "$BACKUP_REMOTE/" || die "cp falló" ;;
-    *)      die "BACKUP_METHOD inválido: $BACKUP_METHOD (usá rsync|rclone|cp)" ;;
+    rsync)  rsync -a --mkpath "$SNAPSHOT" "$BACKUP_REMOTE/" || die_offhost "rsync falló" ;;
+    rclone) rclone copy "$SNAPSHOT" "$BACKUP_REMOTE" || die_offhost "rclone falló" ;;
+    cp)     mkdir -p "$BACKUP_REMOTE" && cp "$SNAPSHOT" "$BACKUP_REMOTE/" || die_offhost "cp falló" ;;
+    *)      die_offhost "BACKUP_METHOD inválido: $BACKUP_METHOD (usá rsync|rclone|cp)" ;;
   esac
   log "Copia off-host OK."
   # Marca del dead-man's-switch: registra el MOMENTO del último envío off-host EXITOSO. `musubi
   # doctor` (check offhost_backup) avisa si esta marca envejece — el timer dejó de shipear.
   date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_LOCAL_DIR/.last_offhost" || log "no se pudo escribir la marca .last_offhost"
+  # Envío OK ⇒ limpiar la marca de error (si venía de un fallo previo), así doctor vuelve a 'ok'.
+  rm -f "$BACKUP_LOCAL_DIR/.last_offhost_error" 2>/dev/null || true
 fi
 
 # 3. Retención local (los snapshots off-host se retienen en el destino remoto).
