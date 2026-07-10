@@ -17,10 +17,11 @@ import (
 // centralStub imita el /mcp del cerebro central para los tests del cliente de sync. Registra
 // lo que recibe (auth, method, name, id, scope) y responde según status/errores configurados.
 type centralStub struct {
-	mu        sync.Mutex
-	status    int  // status HTTP a devolver (0 => 200)
-	jsonError bool // si true, responde 200 con un error JSON-RPC
-	delay     time.Duration
+	mu         sync.Mutex
+	status     int  // status HTTP a devolver (0 => 200)
+	jsonError  bool // si true, responde 200 con un error JSON-RPC (params inválidos, permanente)
+	quotaError bool // si true, responde 200 con error JSON-RPC de cuota (-32002, transitorio)
+	delay      time.Duration
 	// capturas del último request
 	gotAuth   string
 	gotMethod string
@@ -65,11 +66,17 @@ func (c *centralStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.countByID[req.Params.Arguments.ID]++
 	status := c.status
 	jsonError := c.jsonError
+	quotaError := c.quotaError
 	c.mu.Unlock()
 
 	if status != 0 && status != http.StatusOK {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"stub"}}`))
+		return
+	}
+	if quotaError {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"x","error":{"code":-32002,"message":"cuota excedida"}}`))
 		return
 	}
 	if jsonError {
@@ -187,6 +194,25 @@ func TestSyncClientJSONRPCErrorIsPermanent(t *testing.T) {
 	err := client.Push(testItem())
 	if err == nil || !errors.Is(err, errPermanent) {
 		t.Errorf("un error JSON-RPC debía ser permanente, obtuve %v", err)
+	}
+}
+
+// TestSyncClientQuotaIsTransient valida el fix de la regresión de cuota (Track 19): un rechazo por
+// cuota (-32002) del central es TRANSITORIO (se libera al pasar la ventana), NO permanente — así el
+// drain reintenta con backoff en vez de DEAD-LETTEREAR memoria shared por un límite temporal.
+func TestSyncClientQuotaIsTransient(t *testing.T) {
+	stub := newCentralStub()
+	stub.quotaError = true // 200 con error JSON-RPC de cuota (-32002)
+	ts := httptest.NewServer(stub)
+	defer ts.Close()
+
+	client := newTestSyncClient(t, ts.URL)
+	err := client.Push(testItem())
+	if err == nil || !errors.Is(err, errTransient) {
+		t.Errorf("un rechazo por cuota debía ser transitorio (reintentable), obtuve %v", err)
+	}
+	if errors.Is(err, errPermanent) {
+		t.Errorf("un rechazo por cuota NO debía ser permanente (dead-letter): %v", err)
 	}
 }
 
