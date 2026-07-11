@@ -161,7 +161,9 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	}
 	scope := args.Scope
 	if scope == "" {
-		scope = memory.ScopeLocal
+		// C5.2: sin scope explícito, en team mode default a 'shared' (fluye al central); si no,
+		// 'local' (histórico). Un scope explícito ('local'/'shared') se respeta como escape hatch.
+		scope = s.defaultScope()
 	}
 	// Redacción forzada server-side (16.1d): en infra compartida (el central) TODO ingest se
 	// trata como shared, así se redactan los secretos aunque el cliente declare scope=local.
@@ -1535,11 +1537,12 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: no existe log de telemetría con id %d", args.ID)
 	}
 
-	// C4: capturar el par error→fix como memoria LOCAL (best-effort; un fallo NO rompe el resolve).
-	// Solo si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Track
-	// 18: el contenido se redacta ANTES de derivar embedding/gist (va al pozo compartido) y se
-	// ATRIBUYE al proyecto de la credencial, no al espacio federado. Si la semántica está encendida,
-	// se guarda CON embedding (16.2e) homogéneo con el recall.
+	// C4: capturar el par error→fix como memoria (best-effort; un fallo NO rompe el resolve). Solo
+	// si hay un parche registrado (anti-ruido: un error sin fix no es una memoria útil). Track 18: el
+	// contenido se redacta ANTES de derivar embedding/gist (va al pozo compartido) y se ATRIBUYE al
+	// proyecto de la credencial. C5.2: usa el scope default del proyecto (local, o shared en team
+	// mode → fluye al central; la redacción del borde a shared corre igual). Si la semántica está
+	// encendida, se guarda CON embedding (16.2e) homogéneo con el recall.
 	if strings.TrimSpace(log.SuggestedPatch) != "" {
 		content := fmt.Sprintf("Error en %s: %s\n\nArreglado con: %s", log.FilePath, log.ErrorMessage, log.SuggestedPatch)
 		content = s.redactIfForced(content)
@@ -1548,7 +1551,7 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 			origin = p.ProjectID
 		}
 		author := authorFrom(principalFrom(ctx))
-		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
+		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), s.embedIfEnabled(content))
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }

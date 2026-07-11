@@ -84,6 +84,13 @@ type MemoryConfig struct {
 	// session_token_budget (mismo umbral que la alerta), atando la brevedad al gobernador.
 	// Un valor inválido degrada a "off": un typo nunca activa la directiva.
 	BrevityMode string `yaml:"brevity_mode"`
+	// TeamMode hace que la captura de este proyecto sea CENTRAL por naturaleza (C5.2 del track
+	// captura-automática de equipo): con true, una observación guardada SIN scope explícito se
+	// persiste como 'shared' (candidata al cerebro central) en vez de 'local' — la pieza que hace
+	// fluir la memoria de un proyecto de equipo al central sin pedirlo. Default false (off) ⇒
+	// comportamiento histórico (captura local). Un scope explícito ('local'/'shared') siempre se
+	// respeta (escape hatch); la redacción de secretos corre igual en el borde a 'shared'.
+	TeamMode bool `yaml:"team_mode"`
 	// RecallGraphCentrality activa la 5ª señal RRF del recall (B4): centralidad de grafo por
 	// Personalized PageRank sobre observation_relations (HippoRAG), que favorece las
 	// observaciones más CENTRALES en la telaraña semántica de la memoria. Rerank del pool
