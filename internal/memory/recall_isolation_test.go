@@ -20,9 +20,9 @@ func TestRecallProjectIsolation(t *testing.T) {
 		}
 	}
 	// Mismo término buscable en las tres, distinto proyecto de origen.
-	must(e.SaveObservationTypedFrom("projA", "a1", "deploy/notes", "deploy alpha zqxtoken", 1.0, "semantic", "local", nil))
-	must(e.SaveObservationTypedFrom("projB", "b1", "deploy/notes", "deploy beta zqxtoken", 1.0, "semantic", "local", nil))
-	must(e.SaveObservationTypedFrom("", "u1", "deploy/notes", "deploy sinproyecto zqxtoken", 1.0, "semantic", "local", nil))
+	must(e.SaveObservationTypedFrom("projA", "", "a1", "deploy/notes", "deploy alpha zqxtoken", 1.0, "semantic", "local", nil))
+	must(e.SaveObservationTypedFrom("projB", "", "b1", "deploy/notes", "deploy beta zqxtoken", 1.0, "semantic", "local", nil))
+	must(e.SaveObservationTypedFrom("", "", "u1", "deploy/notes", "deploy sinproyecto zqxtoken", 1.0, "semantic", "local", nil))
 
 	idsOf := func(r RecallResult) map[string]bool {
 		m := make(map[string]bool, len(r.Items))

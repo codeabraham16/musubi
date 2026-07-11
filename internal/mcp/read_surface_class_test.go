@@ -23,7 +23,7 @@ import (
 // seedVictim siembra datos del proyecto "web" con marcadores distintivos en cada tabla scopeada.
 func seedVictim(t *testing.T, e *memory.DbEngine) {
 	t.Helper()
-	if err := e.SaveObservationTypedFrom("web", "web-obs-1", "web/topic", "VICTIMOBS sobre shared/auth.go", 1.0, "semantic", "local", nil); err != nil {
+	if err := e.SaveObservationTypedFrom("web", "", "web-obs-1", "web/topic", "VICTIMOBS sobre shared/auth.go", 1.0, "semantic", "local", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.SaveTelemetryLogFrom("web", "shared/auth.go", "VICTIMTELEM boom", "fix"); err != nil {

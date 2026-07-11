@@ -183,6 +183,9 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
 		origin = p.ProjectID
 	}
+	// Atribución por PERSONA (C5.1): author se deriva de la credencial (nunca del cliente), para
+	// que la memoria compartida de un equipo registre QUIÉN aportó cada cosa. Sellado server-side.
+	author := authorFrom(principalFrom(ctx))
 
 	// Redacción ANTES del embedding (Track 17 T17.2): con forceRedact el vector debe derivarse del
 	// contenido YA redactado (antes se embebía el crudo, dejando un vector at-rest derivado del
@@ -205,7 +208,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
 	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, topicKey, content, importance, args.MemType, scope, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, topicKey, content, importance, args.MemType, scope, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -216,7 +219,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	}
 
 	// Con id explícito: upsert por id.
-	if err := s.engine.SaveObservationTypedFrom(origin, args.ID, topicKey, content, importance, args.MemType, scope, emb); err != nil {
+	if err := s.engine.SaveObservationTypedFrom(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, emb); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
@@ -1544,7 +1547,8 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 		if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
 			origin = p.ProjectID
 		}
-		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, "error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
+		author := authorFrom(principalFrom(ctx))
+		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", "local", s.embedIfEnabled(content))
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }

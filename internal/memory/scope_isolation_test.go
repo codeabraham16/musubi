@@ -18,7 +18,7 @@ func TestReadIsolationByProjectScope(t *testing.T) {
 
 	vec := []float32{1, 0, 0}
 	save := func(origin, id string) {
-		if err := e.SaveObservationTypedFrom(origin, id, "t/x", "shared qtoken content", 1, "", ScopeLocal, vec); err != nil {
+		if err := e.SaveObservationTypedFrom(origin, "", id, "t/x", "shared qtoken content", 1, "", ScopeLocal, vec); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}

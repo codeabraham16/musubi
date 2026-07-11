@@ -23,7 +23,7 @@ func TestConflictsEnforcePrincipalScope(t *testing.T) {
 	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
 
 	obs := func(origin, id string) {
-		if err := engine.SaveObservationTypedFrom(origin, id, "t/x", "contenido "+id, 1, "", memory.ScopeLocal, nil); err != nil {
+		if err := engine.SaveObservationTypedFrom(origin, "", id, "t/x", "contenido "+id, 1, "", memory.ScopeLocal, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

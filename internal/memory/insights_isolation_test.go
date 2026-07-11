@@ -16,7 +16,7 @@ func TestInsightsCtxScopesObservationCounts(t *testing.T) {
 	t.Cleanup(func() { _ = e.Close() })
 
 	save := func(origin, id string) {
-		if err := e.SaveObservationTypedFrom(origin, id, "t/x", "contenido de "+id, 1, "", ScopeLocal, nil); err != nil {
+		if err := e.SaveObservationTypedFrom(origin, "", id, "t/x", "contenido de "+id, 1, "", ScopeLocal, nil); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}

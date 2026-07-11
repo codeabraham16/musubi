@@ -207,3 +207,14 @@ func principalFrom(ctx context.Context) *Principal {
 	p, _ := ctx.Value(principalCtxKey{}).(*Principal)
 	return p
 }
+
+// authorFrom deriva la atribución por PERSONA (C5.1) de la credencial: el nombre del principal,
+// salvo nil (stdio/local sin auth) o el admin legacy (Name=="legacy", token único sin identidad de
+// persona) ⇒ "". Un admin NOMBRADO conserva su nombre. Nunca se toma del cliente: es autoridad
+// server-side, así que un payload entrante no puede falsificar el autor (sellado en el central).
+func authorFrom(p *Principal) string {
+	if p == nil || p.Name == "legacy" {
+		return ""
+	}
+	return p.Name
+}

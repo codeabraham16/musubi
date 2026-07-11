@@ -25,8 +25,8 @@ type ObservationStore interface {
 	SaveObservationDedupedTyped(topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
 	// Variantes *From: guardan con el project_id de ORIGEN explícito (atribución
 	// multi-tenant, Track 16 F1). origin == "" ⇒ project_id del engine.
-	SaveObservationTypedFrom(originProjectID, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error
-	SaveObservationDedupedTypedFrom(originProjectID, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
+	SaveObservationTypedFrom(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error
+	SaveObservationDedupedTypedFrom(originProjectID, author, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)

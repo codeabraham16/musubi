@@ -176,7 +176,7 @@ func TestDetectChangesEnforcesProjectScope(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.engine.SaveObservationTypedFrom("web", "obs-web", "web/decision-secreta",
+	if err := s.engine.SaveObservationTypedFrom("web", "", "obs-web", "web/decision-secreta",
 		"La decisión de web sobre foo.go.", 1.0, "semantic", "local", nil); err != nil {
 		t.Fatal(err)
 	}

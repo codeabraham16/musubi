@@ -42,7 +42,7 @@ func TestToolRecallEnforcesPrincipalScope(t *testing.T) {
 
 	// Memoria de dos proyectos + una sin atribuir, con un término común buscable.
 	seed := func(origin, id, content string) {
-		if err := engine.SaveObservationTypedFrom(origin, id, "t/x", content, 1.0, "semantic", "shared", nil); err != nil {
+		if err := engine.SaveObservationTypedFrom(origin, "", id, "t/x", content, 1.0, "semantic", "shared", nil); err != nil {
 			t.Fatal(err)
 		}
 	}

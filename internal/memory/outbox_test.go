@@ -35,9 +35,8 @@ func outboxRow(t *testing.T, e *DbEngine, obsID string) (status string, attempts
 func TestMigrationV11OutboxSchema(t *testing.T) {
 	e := newTestEngine(t)
 
-	// user_version quedó en la última migración (15 en este binario: Track 18 añadió
-	// telemetry_logs.project_id y skill_decisions.project_id (v15) sobre las v13/v14 del
-	// aislamiento de code_memory/relations de Track 17).
+	// user_version quedó en la última migración (16 en este binario: C5.1 añadió
+	// observations.author sobre la v15 de Track 18, v13/v14 de Track 17, etc.).
 	v, err := e.schemaVersion()
 	if err != nil {
 		t.Fatalf("schemaVersion: %v", err)
@@ -45,8 +44,8 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	if v != latestSchemaVersion() {
 		t.Errorf("user_version = %d, esperaba %d", v, latestSchemaVersion())
 	}
-	if latestSchemaVersion() != 15 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 15", latestSchemaVersion())
+	if latestSchemaVersion() != 16 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 16", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

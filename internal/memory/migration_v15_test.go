@@ -21,12 +21,9 @@ func TestMigrationV15AddsProjectIdPreservingData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all := schemaMigrations()
-	if all[len(all)-1].version != 15 {
-		t.Fatalf("este test asume que la última migración es v15; es v%d", all[len(all)-1].version)
-	}
-	// Migrar hasta v14 (todas menos la última): telemetry_logs y skill_decisions AÚN sin project_id.
-	if err := applyMigrations(db, all[:len(all)-1]); err != nil {
+	// Migrar hasta v14 (version-explícito, robusto a migraciones futuras): telemetry_logs y
+	// skill_decisions AÚN sin project_id.
+	if err := applyMigrations(db, migrationsUpTo(14)); err != nil {
 		t.Fatalf("migrar hasta v14: %v", err)
 	}
 	// Sembrar filas SIN project_id (esquema pre-v15).
@@ -36,7 +33,7 @@ func TestMigrationV15AddsProjectIdPreservingData(t *testing.T) {
 		"go-gin", "Go Gin", "accepted", "ok")
 
 	// Aplicar v15.
-	if err := applyMigrations(db, all); err != nil {
+	if err := applyMigrations(db, migrationsUpTo(15)); err != nil {
 		t.Fatalf("aplicar v15: %v", err)
 	}
 	var v int

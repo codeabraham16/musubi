@@ -24,7 +24,7 @@ func TestReadSurfacesEnforcePrincipalScope(t *testing.T) {
 	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
 
 	seed := func(origin, id string) {
-		if err := engine.SaveObservationTypedFrom(origin, id, "t/x", "shared qtoken content", 1.0, "semantic", "shared", nil); err != nil {
+		if err := engine.SaveObservationTypedFrom(origin, "", id, "t/x", "shared qtoken content", 1.0, "semantic", "shared", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
