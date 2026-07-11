@@ -22,14 +22,14 @@ import (
 // SharedObs es una observación 'shared' traída del central para el sync ENTRANTE. Lleva el rowid
 // del central como cursor de paginación (el cliente guarda el mayor visto para la próxima página).
 type SharedObs struct {
-	RowID      int64
-	ID         string
-	TopicKey   string
-	Content    string
-	Importance float64
-	MemType    string
-	Author     string
-	ProjectID  string
+	RowID      int64   `json:"rowid"`
+	ID         string  `json:"id"`
+	TopicKey   string  `json:"topic_key"`
+	Content    string  `json:"content"`
+	Importance float64 `json:"importance"`
+	MemType    string  `json:"mem_type"`
+	Author     string  `json:"author"`
+	ProjectID  string  `json:"project_id"`
 }
 
 // ListSharedForPull devuelve hasta limit observaciones 'shared' visibles con rowid > afterRowID, en

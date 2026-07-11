@@ -75,6 +75,37 @@ func jsonResult(v interface{}) (interface{}, *RpcError) {
 	return textResult(string(jsonBytes)), nil
 }
 
+// toolSyncPull sirve un PULL entrante del cerebro híbrido (C5.3b): devuelve un lote de la memoria
+// 'shared' del proyecto de la CREDENCIAL (aislamiento T17-19) con rowid > after_rowid, para que un
+// cliente en team mode la baje e ingiera localmente y su recall la surfacee sola (sin red en el hot
+// path). Read-only. next_cursor = el mayor rowid del lote (o after_rowid si vino vacío): el cliente
+// lo guarda para pedir la página siguiente.
+func (s *McpServer) toolSyncPull(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		AfterRowID int64 `json:"after_rowid"`
+		Limit      int   `json:"limit"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+	items, err := s.engine.ListSharedForPull(s.scopedCtx(ctx), args.AfterRowID, args.Limit)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al listar shared para pull: %v", err)
+	}
+	next := args.AfterRowID
+	for _, o := range items {
+		if o.RowID > next {
+			next = o.RowID
+		}
+	}
+	if items == nil {
+		items = []memory.SharedObs{}
+	}
+	return jsonResult(map[string]interface{}{"items": items, "next_cursor": next})
+}
+
 // clampLimit normaliza el límite recibido a un rango razonable.
 func clampLimit(limit int) int {
 	if limit <= 0 {

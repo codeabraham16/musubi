@@ -15,8 +15,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   engine: **`ListSharedForPull`** (el central lista la memoria `shared` del proyecto de la credencial,
   paginada por cursor `rowid`, aislada por T17-19) e **`IngestShared`** (el cliente persiste una obs
   bajada **SIN encolarla en el outbox** — la garantía **anti-loop**: lo bajado del central no se
-  re-sube). El tool MCP de pull + el scheduler entrante + el cursor persistente son el slice siguiente
-  (C5.3b).
+  re-sube). El **tool MCP `musubi_sync_pull`** (central, read-only, scopeado por credencial) ya expone
+  ese pull; el scheduler entrante + el cursor persistente (client side) son el slice siguiente
+  (C5.3b-2).
 - **Team-mode: captura auto-central por proyecto (C5.2 — track captura-automática de equipo).** Un
   proyecto con `memory.team_mode: true` hace que una observación capturada **SIN scope explícito** se
   persista como **`shared`** (fluye al cerebro central vía el outbox, con redacción de secretos en el

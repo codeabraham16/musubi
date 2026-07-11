@@ -121,6 +121,7 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_conflicts",       // conflicts_isolation_test (JOIN a observations)
 		"musubi_detect_changes",  // methods_detect_test (necesita git runner)
 		"musubi_search_skills",   // behavior-bleed via GetSkillDecisionsCtx (Track 19); no marker-in-text
+		"musubi_sync_pull",       // aislamiento por credencial verificado en sync_pull_test (TestToolSyncPullScoped)
 	} {
 		swept[name] = true
 	}
