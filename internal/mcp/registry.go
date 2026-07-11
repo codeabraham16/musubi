@@ -612,5 +612,20 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler: noCtx(s.toolSyncRequeue),
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_sync_pull",
+				Description: "Sync ENTRANTE del cerebro híbrido (C5.3): devuelve un lote de la memoria 'shared' del proyecto de la credencial (aislado por tenant) con rowid mayor a after_rowid, para que un cliente en team mode la baje e ingiera localmente y su recall la surfacee sola. Read-only. Parámetros: after_rowid (cursor, 0 = desde el principio), limit (tope del lote, default 200). Devuelve {items, next_cursor}.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"after_rowid": {Type: "integer", Description: "cursor: solo devuelve observaciones con rowid mayor a este (0 = desde el principio)"},
+						"limit":       {Type: "integer", Description: "tope de observaciones en el lote (default 200)"},
+					},
+				},
+			},
+			handler:  s.toolSyncPull,
+			readOnly: true,
+		},
 	}
 }
