@@ -1,0 +1,46 @@
+# prometheus.yml — scrape + evaluación de alertas para el cerebro central de Musubi.
+#
+# Lo instala deploy/prometheus/install-musubi-prometheus.sh (Prometheus como systemd nativo,
+# al estilo de install-musubi-brain.sh). Prometheus corre EN EL MISMO host que el cerebro,
+# así que scrapea 127.0.0.1:7717/metrics por loopback (no hace falta abrir el puerto).
+#
+# El endpoint /metrics EXIGE el mismo bearer token que el resto del cerebro
+# (service.auth_token_env). Se pasa por `credentials_file` para que el secreto NUNCA viva en
+# este archivo — mismo patrón "token por referencia" que el .mcp.json de los clientes.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    host: musubi-brain
+
+rule_files:
+  - /etc/prometheus/rules/musubi-alerts.yml
+
+# Para que las alertas realmente "paginen" (email / Telegram / Slack) hace falta sumar
+# Alertmanager y un canal de notificación. Sin esto, las alertas igual se evalúan y se ven
+# en la UI de Prometheus (http://127.0.0.1:9090/alerts), pero no notifican a ningún lado.
+# Descomentá y apuntá a tu Alertmanager cuando lo montes:
+#
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["127.0.0.1:9093"]
+
+scrape_configs:
+  # El cerebro Musubi. El job DEBE llamarse "musubi": la alerta MusubiDown mira up{job="musubi"}.
+  - job_name: musubi
+    scheme: http
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/musubi.token
+    static_configs:
+      - targets: ["127.0.0.1:7717"]
+        labels:
+          instance: musubi-brain
+
+  # Prometheus se scrapea a sí mismo: permite distinguir "el cerebro cayó" de "Prometheus cayó".
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]

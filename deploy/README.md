@@ -63,6 +63,30 @@ conectado primero, NordVPN después**; cada cambio en el split-tunnel reconecta 
 > nivel de sistema, el split-tunnel saca a los procesos del túnel. Con ambos, la PC llega al
 > cerebro con NordVPN activa (probado en `kernelos-pc`).
 
+## 3. En el servidor — monitoreo y alertas (opcional)
+
+El cerebro expone `/metrics` (Prometheus) con contadores ricos, pero *nada dispara* sobre
+ellos hasta que un Prometheus los scrapea y evalúa las reglas de
+[`musubi-alerts.yml`](musubi-alerts.yml) (7 alertas: caído, backup off-host stale, outbox
+muerto, índice vectorial sin entrenar, rechazos de cuota/authz, tasa de error de tools).
+
+Turnkey, en el mismo server que el cerebro:
+
+```bash
+sudo ./prometheus/install-musubi-prometheus.sh
+```
+
+Idempotente: descarga Prometheus (verifica sha256 contra el `sha256sums.txt` del release),
+crea el usuario de sistema, escribe [`prometheus/prometheus.yml`](prometheus/prometheus.yml)
+(scrape a `127.0.0.1:7717/metrics` con el bearer por `credentials_file` — el token nunca
+toca la config), carga las reglas, **valida con `promtool` antes de arrancar**, y levanta el
+servicio systemd. La UI queda en `127.0.0.1:9090` (loopback; exponela por la malla o túnel
+SSH si la querés remota).
+
+> Las alertas se **evalúan y se ven** en `http://127.0.0.1:9090/alerts`, pero para que
+> **notifiquen** (email/Telegram/Slack) hay que sumar Alertmanager + un canal y descomentar
+> el bloque `alerting:` en `prometheus.yml`. Qué hacer ante cada alerta: [`RUNBOOK.md`](RUNBOOK.md).
+
 ## Notas
 
 - El token va **por referencia** (`${MUSUBI_TOKEN}`) en el `.mcp.json`: el secreto nunca
