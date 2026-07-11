@@ -455,6 +455,21 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 16,
+			name:    "observations_author",
+			// Atribución por PERSONA (C5.1 del track captura-automatica de equipo). La memoria
+			// compartida ya se atribuye al PROYECTO (project_id, v10) pero no a la persona que la
+			// aportó: en un cerebro de equipo no se distingue lo que aprendió Ana de lo de Juan. author
+			// se DERIVA de la credencial (principal.Name) en el write path y se SELLA en el central
+			// (nunca del cliente). Como v15, NO hay PK/UNIQUE que cambiar ⇒ ADD COLUMN aditivo sin
+			// rebuild. NOT NULL DEFAULT '' (sentinel): las filas legacy y las capturas sin principal
+			// (stdio local) quedan sin atribución (vacío), comportamiento bit-a-bit al previo.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`ALTER TABLE observations ADD COLUMN author TEXT NOT NULL DEFAULT ''`)
+				return err
+			},
+		},
 	}
 }
 

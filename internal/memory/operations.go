@@ -95,13 +95,13 @@ func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 // forma model-free el gist, el content_hash y la estimación de tokens. La
 // importancia no se toca en updates (se preserva la existente).
 func (e *DbEngine) SaveObservation(id, topicKey, content string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", embedding)
+	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", embedding)
 }
 
 // SaveObservationWithImportance es como SaveObservation pero fija la importancia
 // (también en updates). importance pondera el ranking del recall.
 func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", "", embedding)
 }
 
 // SaveObservationTyped es como SaveObservationWithImportance pero además fija el TIPO de
@@ -109,16 +109,17 @@ func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, i
 // (local/shared) de la memoria híbrida. memType se normaliza al enum canónico
 // (vacío/desconocido → sin tipo); scope vacío se trata como 'local'. Ver memtype.go/scope.go.
 func (e *DbEngine) SaveObservationTyped(id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error {
-	return e.SaveObservationTypedFrom("", id, topicKey, content, importance, memType, scope, embedding)
+	return e.SaveObservationTypedFrom("", "", id, topicKey, content, importance, memType, scope, embedding)
 }
 
 // SaveObservationTypedFrom es SaveObservationTyped con el project_id de ORIGEN explícito
 // (atribución multi-tenant, Track 16 Fase 1). Lo usa el ingest del central para preservar
 // el proyecto de la máquina que originó la observación, en vez de estampar el del propio
 // central. originProjectID == "" ⇒ se usa el project_id del engine (comportamiento de
-// siempre para los guardados locales).
-func (e *DbEngine) SaveObservationTypedFrom(originProjectID, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, embedding)
+// siempre para los guardados locales). author es la atribución por PERSONA (C5.1), derivada
+// de la credencial por el handler; "" ⇒ sin atribución (local/stdio/legacy).
+func (e *DbEngine) SaveObservationTypedFrom(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error {
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, embedding)
 }
 
 // SaveObservationDeduped guarda content con un id nuevo, salvo que ya exista una
@@ -131,13 +132,13 @@ func (e *DbEngine) SaveObservationDeduped(topicKey, content string, importance f
 // SaveObservationDedupedTyped es SaveObservationDeduped con TIPO de memoria (mem_type)
 // y SCOPE (local/shared) de la memoria híbrida.
 func (e *DbEngine) SaveObservationDedupedTyped(topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error) {
-	return e.SaveObservationDedupedTypedFrom("", topicKey, content, importance, memType, scope, embedding)
+	return e.SaveObservationDedupedTypedFrom("", "", topicKey, content, importance, memType, scope, embedding)
 }
 
 // SaveObservationDedupedTypedFrom es SaveObservationDedupedTyped con el project_id de ORIGEN
 // explícito (atribución multi-tenant, Track 16 Fase 1). originProjectID == "" ⇒ project_id
-// del engine (comportamiento de siempre).
-func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error) {
+// del engine (comportamiento de siempre). author es la atribución por PERSONA (C5.1).
+func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, author, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error) {
 	existing, found, err := e.FindByContentHash(ContentHash(content))
 	if err != nil {
 		return "", false, err
@@ -146,7 +147,7 @@ func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, topicKey, co
 		return existing, true, nil
 	}
 	id := uuid.NewString()
-	if err := e.SaveObservationTypedFrom(originProjectID, id, topicKey, content, importance, memType, scope, embedding); err != nil {
+	if err := e.SaveObservationTypedFrom(originProjectID, author, id, topicKey, content, importance, memType, scope, embedding); err != nil {
 		return "", false, err
 	}
 	return id, false, nil
@@ -168,7 +169,7 @@ func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 // saveObservation es el núcleo del guardado: UPSERT por id que preserva created_at
 // y las estadísticas de acceso en updates, y mantiene el FTS sincronizado vía
 // triggers (AFTER INSERT/UPDATE). Si setImportance es false, no pisa importance.
-func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID string, embedding []float32) error {
+func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, embedding []float32) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("error al iniciar transacción: %w", err)
@@ -211,8 +212,8 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// En UPSERT, un guardado SIN tipo (mem_type='') PRESERVA la clasificación existente:
 	// sólo un tipo no vacío la reemplaza. Así un update por la vía histórica (untyped) no
 	// borra el mem_type que otro guardado tipado ya fijó (evita pérdida de clasificación).
-	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
@@ -227,7 +228,10 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	if projectID == "" {
 		projectID = e.projectID
 	}
-	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance, memType, scope, projectID); err != nil {
+	// Atribución por PERSONA (C5.1): author se deriva de la credencial (principal.Name) en el
+	// handler y se estampa acá. Como project_id/scope, NO se pisa en el UPSERT: un re-save por
+	// otra persona PRESERVA el autor original (no reasigna crédito). Vacío = sin atribución.
+	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance, memType, scope, projectID, author); err != nil {
 		return fmt.Errorf("error al guardar observación: %w", err)
 	}
 

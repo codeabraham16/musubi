@@ -166,10 +166,10 @@ func TestEntityContextProjectScope(t *testing.T) {
 	mustFactFrom(t, e, "web", "Payments", "uses", "Adyen")
 
 	// Observaciones que mencionan la entidad, atribuidas a cada proyecto.
-	if err := e.SaveObservationTypedFrom("crm", "o-crm", "t/pay", "Payments module notes for crm", 1, "", ScopeLocal, nil); err != nil {
+	if err := e.SaveObservationTypedFrom("crm", "", "o-crm", "t/pay", "Payments module notes for crm", 1, "", ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.SaveObservationTypedFrom("web", "o-web", "t/pay", "Payments module notes for web", 1, "", ScopeLocal, nil); err != nil {
+	if err := e.SaveObservationTypedFrom("web", "", "o-web", "t/pay", "Payments module notes for web", 1, "", ScopeLocal, nil); err != nil {
 		t.Fatal(err)
 	}
 
