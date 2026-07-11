@@ -1058,6 +1058,7 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		GraphCentrality: s.memory.RecallGraphCentrality,
 		Cooccurrence:    s.memory.RecallCooccurrence,
 		Stemming:        s.memory.RecallStemming,
+		VectorFloor:     s.memory.VectorFloor,
 	}
 	// Enforcement del aislamiento por proyecto (Track 16 F1 16.1c-3): el scope del recall se
 	// DERIVA del principal autenticado (su project_id sale de la credencial, no se auto-declara).

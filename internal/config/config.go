@@ -109,6 +109,14 @@ type MemoryConfig struct {
 	// re-indexar ni dependencia. Default ON; se desactiva con recall_stemming: false. Un bloque
 	// `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
 	RecallStemming bool `yaml:"recall_stemming"`
+	// VectorFloor es el piso de coseno (0..1) del pool vectorial del recall híbrido (Q1): los
+	// candidatos por similitud con coseno < VectorFloor se descartan ANTES de entrar al ranking,
+	// para no inyectar vecinos de baja señal con peso RRF pleno (el defecto era rankear hasta 50
+	// vecinos sin umbral, un coseno 0.42 pesando igual que 0.95). Default 0.30 (conservador:
+	// descarta la cola claramente irrelevante sin tocar la banda relevante ~0.40-0.50). Un bloque
+	// `memory` presente pero sin la clave conserva el default (ver applyMemoryDefaults);
+	// `vector_floor: 0` lo desactiva (comportamiento histórico, sin piso).
+	VectorFloor float64 `yaml:"vector_floor"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -475,6 +483,7 @@ func Default() Config {
 			RecallGraphCentrality: true,
 			RecallCooccurrence:    true,
 			RecallStemming:        true,
+			VectorFloor:           0.30,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -650,6 +659,9 @@ func (c *Config) applyMemoryDefaults(data []byte) {
 	}
 	if !keys["recall_stemming"] {
 		c.Memory.RecallStemming = Default().Memory.RecallStemming
+	}
+	if !keys["vector_floor"] {
+		c.Memory.VectorFloor = Default().Memory.VectorFloor
 	}
 }
 
