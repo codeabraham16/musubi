@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Sync entrante — scheduler cliente · LOOP CERRADO (C5.3b-2 — track captura-automática de equipo).**
+  Cierra el loop de memoria de equipo **end-to-end**: `SyncClient.Pull` (POST `musubi_sync_pull` al
+  central) + `RunInboundScheduler`/`drainInboundOnce` que baja páginas de la memoria `shared` del
+  proyecto, las **ingiere localmente** (anti-loop, sin re-encolar) y avanza un **cursor persistente**
+  (`sync:inbound_cursor`). Se arranca en el daemon cuando hay sync configurado **y** `team_mode`.
+  Ahora: **capturás en una máquina → fluye al central (C5.2) → baja a las otras (C5.3) → el recall
+  local lo surfacea**, offline y sin red en el hot path (pull, no recall federado en vivo → preserva
+  local-first).
 - **Sync entrante — primitivos (C5.3a — track captura-automática de equipo).** Base del *pull* que
   hará que un proyecto de equipo VEA la memoria del central en cada máquina **preservando
   local-first** (el recall sigue local/offline; un scheduler bajará la memoria `shared` del central a

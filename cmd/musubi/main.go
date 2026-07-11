@@ -375,4 +375,7 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 	}
 	server.SetSyncClient(client, cfg)
 	go server.RunOutboxScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
+	// Sync ENTRANTE (C5.3b): baja la memoria shared del proyecto DESDE el central. RunInboundScheduler
+	// gatea internamente en team_mode (un proyecto local no baja nada). Mismo intervalo que el drain.
+	go server.RunInboundScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
 }

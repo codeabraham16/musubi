@@ -160,6 +160,80 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 	return classifyResponse(resp)
 }
 
+// syncPullArguments son los argumentos del musubi_sync_pull remoto (sync ENTRANTE C5.3b).
+type syncPullArguments struct {
+	AfterRowID int64 `json:"after_rowid"`
+	Limit      int   `json:"limit"`
+}
+
+// pullPayload es el JSON que el tool devuelve DENTRO de content[0].text: el lote + el cursor.
+type pullPayload struct {
+	Items      []memory.SharedObs `json:"items"`
+	NextCursor int64              `json:"next_cursor"`
+}
+
+// Pull baja un lote de la memoria 'shared' del proyecto DESDE el central (sync ENTRANTE, C5.3b): un
+// tools/call remoto de musubi_sync_pull con el cursor afterRowID. Devuelve los items + el cursor
+// siguiente. Cualquier fallo (red, HTTP, JSON-RPC) devuelve error: el scheduler entrante lo trata
+// como transitorio (reintenta en el próximo tick) — es best-effort, no rompe nada.
+func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int64, error) {
+	reqBody := struct {
+		JsonRpc string `json:"jsonrpc"`
+		ID      string `json:"id"`
+		Method  string `json:"method"`
+		Params  struct {
+			Name      string            `json:"name"`
+			Arguments syncPullArguments `json:"arguments"`
+		} `json:"params"`
+	}{JsonRpc: "2.0", ID: "pull", Method: "tools/call"}
+	reqBody.Params.Name = "musubi_sync_pull"
+	reqBody.Params.Arguments = syncPullArguments{AfterRowID: afterRowID, Limit: limit}
+
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, afterRowID, fmt.Errorf("%w: serializar pull: %v", errPermanent, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, afterRowID, fmt.Errorf("%w: construir pull: %v", errPermanent, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, afterRowID, fmt.Errorf("%w: %v", errTransient, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, afterRowID, fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
+	}
+	var rpcResp syncRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, afterRowID, fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
+	}
+	if rpcResp.Error != nil {
+		return nil, afterRowID, fmt.Errorf("%w: pull JSON-RPC %d: %s", errPermanent, rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+	// result = {content:[{type,text}]}; el text es el JSON {items, next_cursor}.
+	var toolResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(rpcResp.Result, &toolResult); err != nil || len(toolResult.Content) == 0 {
+		return nil, afterRowID, fmt.Errorf("%w: pull sin content parseable", errTransient)
+	}
+	var pl pullPayload
+	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &pl); err != nil {
+		return nil, afterRowID, fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
+	}
+	return pl.Items, pl.NextCursor, nil
+}
+
 // classifyResponse traduce la respuesta HTTP+JSON-RPC a nil / errTransient / errPermanent
 // (R10, D7). Éxito ⇔ 200 + result + sin error JSON-RPC. 5xx/429 → transitorio; otro no-2xx o
 // error JSON-RPC → permanente (params inválidos / auth). Un body ilegible o no-JSON en un 200

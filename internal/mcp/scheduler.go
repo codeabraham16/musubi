@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"strconv"
+	"strings"
 	"time"
 
 	"musubi/internal/logx"
@@ -158,6 +160,73 @@ func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Durati
 			return
 		case <-t.C:
 			s.drainOutboxOnce(ctx)
+		}
+	}
+}
+
+// metaInboundCursor guarda el rowid del central hasta el que ya bajamos memoria shared (C5.3b).
+const metaInboundCursor = "sync:inbound_cursor"
+
+// RunInboundScheduler baja periódicamente la memoria 'shared' del proyecto DESDE el central (sync
+// ENTRANTE, C5.3b): el espejo de RunOutboxScheduler en sentido de bajada. Solo corre si hay sync
+// configurado (syncClient) Y el proyecto está en team mode (memory.team_mode) — un proyecto local no
+// baja nada. Preserva local-first: baja a la DB local, el recall sigue offline y rápido.
+func (s *McpServer) RunInboundScheduler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 || s.syncClient == nil || !s.memory.TeamMode {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.drainInboundOnce(ctx)
+		}
+	}
+}
+
+// drainInboundOnce baja páginas de memoria shared del central desde el cursor guardado y las ingiere
+// localmente (IngestShared, anti-loop: NO re-encola en el outbox). Avanza el cursor con el mayor
+// rowid del lote. Best-effort: un fallo de red reintenta en el próximo tick; un fallo de ingest de
+// una fila se logea y no aborta el batch. Tope de páginas por tick para no monopolizar.
+func (s *McpServer) drainInboundOnce(ctx context.Context) {
+	var cur int64
+	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
+		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	}
+	limit := s.syncCfg.BatchSize
+	if limit <= 0 {
+		limit = 200
+	}
+	for page := 0; page < 20; page++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		items, next, err := s.syncClient.Pull(cur, limit)
+		if err != nil {
+			logx.Error("inbound: no se pudo bajar del central (reintenta en el próximo tick)", "error", err)
+			return
+		}
+		if len(items) == 0 {
+			return
+		}
+		for _, o := range items {
+			if _, ierr := s.engine.IngestShared(o); ierr != nil {
+				logx.Error("inbound: no se pudo ingerir obs shared", "id", o.ID, "error", ierr)
+			}
+		}
+		if next > cur {
+			cur = next
+			if merr := s.engine.SetMeta(metaInboundCursor, strconv.FormatInt(cur, 10)); merr != nil {
+				logx.Error("inbound: no se pudo guardar el cursor entrante", "error", merr)
+			}
+		}
+		if len(items) < limit {
+			return
 		}
 	}
 }

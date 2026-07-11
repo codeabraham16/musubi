@@ -220,6 +220,9 @@ type OutboxStore interface {
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)
+	// IngestShared persiste una obs 'shared' bajada del central (sync ENTRANTE C5.3) SIN encolarla
+	// en el outbox local (anti-loop). UPSERT idempotente por id. Devuelve si insertó una fila nueva.
+	IngestShared(o SharedObs) (inserted bool, err error)
 	OutboxHealth() (OutboxHealthReport, error)
 	RequeueDeadOutbox() (int, error)
 }
