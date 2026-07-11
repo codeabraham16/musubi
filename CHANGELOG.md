@@ -8,6 +8,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Team-mode: captura auto-central por proyecto (C5.2 — track captura-automática de equipo).** Un
+  proyecto con `memory.team_mode: true` hace que una observación capturada **SIN scope explícito** se
+  persista como **`shared`** (fluye al cerebro central vía el outbox, con redacción de secretos en el
+  borde) en vez de `local`. Es la pieza que hace que la memoria de un proyecto de equipo se comparta
+  **sola, sin pedirlo**. Aplica a la captura proactiva del agente (C1) y a error→fix (C4); un scope
+  explícito (`local`/`shared`) se respeta como escape hatch. Default **off** ⇒ comportamiento
+  histórico (captura local). La captura de commits (C3) queda local por ahora (mayor riesgo de
+  secretos en diffs; slice aparte).
 - **Atribución por persona en la memoria (C5.1 — track captura-automática de equipo).** Las
   observaciones ganan un campo `author` **derivado de la credencial** (`principal.Name`) y
   **sellado server-side** —el cliente no puede falsificarlo, el central lo re-deriva de su propia

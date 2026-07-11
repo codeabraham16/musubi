@@ -181,6 +181,16 @@ func (s *McpServer) SetSyncClient(client *SyncClient, cfg config.SyncConfig) {
 	s.syncCfg = cfg
 }
 
+// defaultScope es el scope que recibe una captura SIN scope explícito (C5.2): 'shared' cuando el
+// proyecto está en team mode (la memoria fluye al cerebro central vía outbox), o 'local' si no
+// (comportamiento histórico). Un scope explícito del cliente siempre se respeta (no pasa por acá).
+func (s *McpServer) defaultScope() string {
+	if s.memory.TeamMode {
+		return memory.ScopeShared
+	}
+	return memory.ScopeLocal
+}
+
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
 // texto; usá embedding.NoopProvider{} para desactivar la búsqueda semántica.
 // opts son opciones funcionales aditivas (ej. WithSourcing); los callers existentes
