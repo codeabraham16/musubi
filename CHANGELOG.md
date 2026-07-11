@@ -7,6 +7,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Deploy turnkey de Prometheus para el cerebro (`deploy/prometheus/`).** `install-musubi-prometheus.sh`
+  (systemd nativo, idempotente, verifica el sha256 del release oficial) levanta un Prometheus que scrapea
+  `127.0.0.1:7717/metrics` con el bearer por `credentials_file` (el token no toca la config) y carga las 7
+  reglas de `musubi-alerts.yml`, **validadas con `promtool` antes de arrancar**. Cierra el hueco de
+  operabilidad de la auditoría: `/metrics` exponía contadores ricos pero nada disparaba sobre ellos.
+
 ## [0.83.1] - 2026-07-10
 
 **Track 19 — sellar la clase de tenancy (parche quirúrgico).** La auditoría de re-medición post-Track 18
