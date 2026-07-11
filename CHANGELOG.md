@@ -14,8 +14,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   credencial de sync e ignora el payload—, para que la memoria compartida de un equipo registre
   QUIÉN aportó cada cosa. Migración aditiva **v16** (`ADD COLUMN author`, sin rebuild);
   backward-compat: la captura local/legacy/stdio queda con `author` vacío (comportamiento bit-a-bit
-  al previo). Es el cimiento del cerebro de equipo; el recall y el filtrado por autor llegan en
-  slices siguientes (C5.2–C5.4).
+  al previo). Es el cimiento del cerebro de equipo; el **recall ya expone el `author`** de cada
+  memoria en su resultado (`json:"author,omitempty"`). El filtrado por autor y el team-mode
+  auto-shared llegan en slices siguientes (C5.2–C5.4).
 - **Deploy turnkey de Prometheus para el cerebro (`deploy/prometheus/`).** `install-musubi-prometheus.sh`
   (systemd nativo, idempotente, verifica el sha256 del release oficial) levanta un Prometheus que scrapea
   `127.0.0.1:7717/metrics` con el bearer por `credentials_file` (el token no toca la config) y carga las 7

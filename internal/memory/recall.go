@@ -73,6 +73,9 @@ type RecallItem struct {
 	Gist       string  `json:"gist"`
 	Score      float64 `json:"score"`
 	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	// Author es la atribución por PERSONA (C5.1): quién aportó la memoria. omitempty ⇒ no ensucia
+	// la respuesta cuando no hay atribución (captura local/legacy/stdio).
+	Author string `json:"author,omitempty"`
 	// ContentHash es maquinaria server-side (la inyección diferencial la consume in-process
 	// en Go): json:"-" para NO enviar 64 hex de ruido al modelo en la respuesta del tool.
 	ContentHash string `json:"-"`
@@ -98,6 +101,7 @@ type candidate struct {
 	accessCount  int
 	importance   float64
 	projectID    string // atribución (F1): proyecto de origen; "" = sin atribuir
+	author       string // atribución por PERSONA (C5.1): quién aportó la memoria; "" = sin atribuir
 }
 
 type scoredCandidate struct {
@@ -225,6 +229,7 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 			Gist:        gist,
 			Score:       c.score,
 			FullTokens:  c.fullTokens,
+			Author:      c.author,
 			ContentHash: c.contentHash,
 		})
 		result.UsedTokens += cost
@@ -328,7 +333,7 @@ func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candida
 		}
 		rows, err := e.db.QueryContext(ctx, `
 			SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
+			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
 			FROM observations o
 			WHERE `+visibleObsPredicate+` AND o.id IN (`+strings.Join(ph, ",")+`)
 		`, args...)
@@ -461,7 +466,7 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
@@ -479,7 +484,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 func (e *DbEngine) recentCandidates(ctx context.Context, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,'')
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
 		FROM observations o
 		WHERE `+visibleObsPredicate+`
 		ORDER BY COALESCE(o.last_accessed, o.created_at) DESC
@@ -497,7 +502,7 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 	for rows.Next() {
 		var c candidate
 		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
-			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID); err != nil {
+			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author); err != nil {
 			return nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}
 		out = append(out, c)
