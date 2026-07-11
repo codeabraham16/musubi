@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Recall híbrido — piso de coseno en el pool vectorial (Q1, track Semantic Hardening).** El pool
+  vectorial del recall **descartaba la similitud coseno** e inyectaba hasta 50 vecinos con **peso RRF
+  pleno sin umbral** (un coseno 0.42 pesaba igual que 0.95), metiendo ruido de baja señal en el
+  ranking. Ahora se aplica un **piso** configurable (`memory.vector_floor`, default `0.30`): los
+  vecinos por debajo se descartan **antes** de entrar al ranking. `vector_floor: 0` restaura el
+  comportamiento histórico (sin piso). Solo afecta el recall híbrido (con vector de query); el recall
+  léxico queda idéntico.
+- **Recall — degradación elegante ante FTS corrupto (Q2, track Semantic Hardening).** Un error de
+  **corrupción del índice FTS** tumbaba TODO el recall, aunque hubiera un pool vectorial semántico
+  servible. Ahora, ante corrupción (SQLITE_CORRUPT / FTS malformado), el recall **logea y degrada** a
+  pool no-léxico (el vectorial y/o el fallback llenan) en vez de abortar; cualquier **otro** error se
+  sigue propagando (la degradación se acota a la clase corrupción, para no enmascarar fallos reales).
+
 ## [0.84.0] - 2026-07-11
 
 ### Added

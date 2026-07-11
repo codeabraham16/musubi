@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"musubi/internal/logx"
 )
 
 // recall.go implementa el recall por PRESUPUESTO de tokens, 100% model-free.
@@ -64,6 +66,11 @@ type RecallOptions struct {
 	// Federate, si es true, IGNORA ProjectScope y devuelve memoria de todos los proyectos
 	// (recall federado explícito). Es el opt-in del modelo "aislado + federación opt-in".
 	Federate bool
+	// VectorFloor es el piso de coseno (0..1) del pool vectorial del recall híbrido (Q1): los
+	// candidatos con similitud < VectorFloor se descartan ANTES de entrar al ranking, para no
+	// inyectar vecinos de baja señal con peso RRF pleno. <= 0 ⇒ sin piso (histórico bit-a-bit).
+	// Lo cablea la capa MCP desde config (default 0.30).
+	VectorFloor float64
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -126,14 +133,22 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 
 	cands, lexRank, err := e.recallCandidates(ctx, query, pool, opts.Stemming, opts.RankedFTS)
 	if err != nil {
-		return RecallResult{}, err
+		// Degradación elegante (Q2): un FTS corrupto NO debe tumbar TODO el recall si hay un pool
+		// vectorial servible. Ante corrupción del índice, logear y seguir con pool léxico vacío
+		// (el vectorial y/o el fallback llenan); cualquier otro error se propaga (acota el rescate
+		// a la clase corrupción, para no enmascarar fallos reales).
+		if !isFTSCorruption(err) {
+			return RecallResult{}, err
+		}
+		logx.Warn("recall: FTS corrupto, degradando a pool no-léxico", "error", err)
+		cands, lexRank = nil, nil
 	}
 
 	// Recall híbrido (T5.7 R2): si hay vector de query, unir el pool vectorial por id (trae
 	// también semánticamente-relacionadas que el léxico no encontró) y rankear por coseno.
 	var vecRank map[string]int
 	if len(opts.QueryVector) > 0 {
-		cands, vecRank, err = e.augmentWithVectorPool(ctx, cands, opts.QueryVector, pool)
+		cands, vecRank, err = e.augmentWithVectorPool(ctx, cands, opts.QueryVector, pool, opts.VectorFloor)
 		if err != nil {
 			return RecallResult{}, err
 		}
@@ -289,7 +304,7 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank ma
 // por coseno (SearchObservations), trae el candidate completo de los ids que el léxico no
 // tenía (union, no intersección) y devuelve el ranking vectorial (id→posición). Best-effort
 // sobre el universo de candidatos: si no hay resultados vectoriales, deja cands intacto.
-func (e *DbEngine) augmentWithVectorPool(ctx context.Context, cands []candidate, queryVec []float32, limit int) ([]candidate, map[string]int, error) {
+func (e *DbEngine) augmentWithVectorPool(ctx context.Context, cands []candidate, queryVec []float32, limit int, floor float64) ([]candidate, map[string]int, error) {
 	results, err := e.SearchObservations(ctx, queryVec, limit)
 	if err != nil {
 		return cands, nil, err
@@ -303,11 +318,25 @@ func (e *DbEngine) augmentWithVectorPool(ctx context.Context, cands []candidate,
 	}
 	vecRank := make(map[string]int, len(results))
 	var missing []string
-	for i, r := range results {
-		vecRank[r.ID] = i
+	rank := 0
+	for _, r := range results {
+		// Piso de coseno (Q1): descartar los vecinos de baja señal ANTES de rankearlos, para no
+		// inyectarlos al pool con peso RRF pleno (0.42 pesando igual que 0.95). results viene
+		// ordenado por Similarity desc (SearchObservations), así que saltear los de baja sim NO
+		// altera el rango relativo de los que sobreviven. floor <= 0 ⇒ sin piso (histórico).
+		if floor > 0 && float64(r.Similarity) < floor {
+			continue
+		}
+		vecRank[r.ID] = rank
+		rank++
 		if !have[r.ID] {
 			missing = append(missing, r.ID)
 		}
+	}
+	if len(vecRank) == 0 {
+		// Todos los vecinos cayeron bajo el piso: sin señal vectorial, equivalente a no tener
+		// resultados (no se agregan candidatos ni término RRF).
+		return cands, nil, nil
 	}
 	if len(missing) > 0 {
 		extra, err := e.candidatesByIDs(ctx, missing)
@@ -317,6 +346,20 @@ func (e *DbEngine) augmentWithVectorPool(ctx context.Context, cands []candidate,
 		cands = append(cands, extra...)
 	}
 	return cands, vecRank, nil
+}
+
+// isFTSCorruption indica si err es un error de CORRUPCIÓN del índice/base (SQLITE_CORRUPT o
+// FTS5 malformado). El driver (modernc/sqlite) no expone un código tipado estable acá, así que
+// se reconoce por el texto del mensaje. Acota la degradación elegante del recall (Q2) a la clase
+// corrupción, para no tragar silenciosamente otros errores (contexto cancelado, etc.).
+func isFTSCorruption(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "corrupt") ||
+		strings.Contains(msg, "malformed") ||
+		strings.Contains(msg, "database disk image")
 }
 
 // candidatesByIDs trae los candidatos vivos (no archivados ni superseded) para los ids
