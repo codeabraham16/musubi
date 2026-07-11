@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.84.0] - 2026-07-11
+
 ### Added
 - **Sync entrante — scheduler cliente · LOOP CERRADO (C5.3b-2 — track captura-automática de equipo).**
   Cierra el loop de memoria de equipo **end-to-end**: `SyncClient.Pull` (POST `musubi_sync_pull` al
