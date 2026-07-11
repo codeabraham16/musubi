@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Sync entrante — primitivos (C5.3a — track captura-automática de equipo).** Base del *pull* que
+  hará que un proyecto de equipo VEA la memoria del central en cada máquina **preservando
+  local-first** (el recall sigue local/offline; un scheduler bajará la memoria `shared` del central a
+  la DB local en vez de consultar por red en el hot path). Este slice entrega los dos primitivos del
+  engine: **`ListSharedForPull`** (el central lista la memoria `shared` del proyecto de la credencial,
+  paginada por cursor `rowid`, aislada por T17-19) e **`IngestShared`** (el cliente persiste una obs
+  bajada **SIN encolarla en el outbox** — la garantía **anti-loop**: lo bajado del central no se
+  re-sube). El tool MCP de pull + el scheduler entrante + el cursor persistente son el slice siguiente
+  (C5.3b).
 - **Team-mode: captura auto-central por proyecto (C5.2 — track captura-automática de equipo).** Un
   proyecto con `memory.team_mode: true` hace que una observación capturada **SIN scope explícito** se
   persista como **`shared`** (fluye al cerebro central vía el outbox, con redacción de secretos en el
