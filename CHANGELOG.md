@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El `doctor` ya puede reparar el índice FTS cuando está corrupto — antes fallaba justo ahí (Fase 0
+  / P0, track Semantic Hardening).** Lo vivimos en vivo: con la memoria corrupta, `musubi doctor`
+  decía `db_integrity: corruption ... observations_fts (repairable: false)` **y al mismo tiempo**
+  `fts_consistency: índice FTS sincronizado ✓ ok`. **El check que VEÍA el problema no lo podía
+  arreglar, y el que lo PODÍA arreglar no lo veía.** Tres fallas que se componían en cadena:
+  - **La detección era ciega.** `fts_consistency` (el único con reparación y el único en el
+    auto-heal) detectaba comparando `COUNT(*)` de las dos tablas. **Un índice internamente corrupto
+    puede tener el conteo PERFECTO** ⇒ reportaba `ok`. Ahora corre además el comando **nativo
+    `integrity-check` de FTS5**, que valida la estructura interna del índice.
+  - **La reconstrucción recorría lo corrupto.** Hacía `DELETE FROM observations_fts`, que **recorre
+    el b-tree** ⇒ tocaba las páginas corruptas ⇒ **fallaba justo en el caso que debía curar**. Ahora
+    usa **`DROP TABLE` + recrear + re-poblar**: `DROP` libera las páginas **sin leer el contenido**.
+  - **El backup previo también.** El auto-heal respalda antes de reparar con `VACUUM INTO`, que **lee
+    toda la base** ⇒ fallaba ⇒ **abortaba antes de reparar nada**. Ahora, si `VACUUM INTO` falla, cae
+    a una **copia cruda de bytes** (`.db` + `.wal` + `.shm`), que **no parsea páginas** y por lo tanto
+    sobrevive a una base corrupta. Se logea explícitamente como **backup de rescate** (puede quedar
+    inconsistente si hay escrituras concurrentes): es un backup peor, y aun así infinitamente mejor
+    que **ninguno**. El camino feliz no cambia — `VACUUM INTO` se sigue intentando primero.
+  > El principio: **nada del camino de reparación puede depender de LEER lo que está roto.** Suena
+  > obvio, y sin embargo las tres etapas (detectar → respaldar → reconstruir) lo violaban.
+
 ## [0.86.1] - 2026-07-12
 
 ### Fixed

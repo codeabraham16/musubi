@@ -333,12 +333,10 @@ func initSchemaOn(x execQuerier) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 
-		// Tabla virtual FTS5 para búsqueda rápida sin embeddings
-		`CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
-			id UNINDEXED,
-			topic_key UNINDEXED,
-			content
-		);`,
+		// Tabla virtual FTS5 para búsqueda rápida sin embeddings. La DDL vive en ftsTableDDL
+		// (doctor.go): es la MISMA que usa la reconstrucción del doctor, para que el esquema y el
+		// repair no puedan divergir.
+		ftsTableDDL,
 
 		// Triggers para mantener FTS5 sincronizado automáticamente
 		`CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
