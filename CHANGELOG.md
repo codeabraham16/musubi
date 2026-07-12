@@ -7,6 +7,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Musubi ahora te avisa cuando lo que guardás puede CONTRADECIR algo que ya sabía.** Salió de un
+  falso negativo **real**: una memoria decía *«NordVPN y Tailscale no pueden coexistir»* y la
+  solución posterior lo **dio vuelta** — y Musubi **nunca relacionó las dos**.
+
+  **Por qué se le escapaba, y por qué no bastaba con bajar el umbral.** El piso de coseno del dedup
+  (0.85) está calibrado sobre **duplicados** — los casi-idénticos dan ~0.99. Pero **una contradicción
+  no es un duplicado**: decir *lo contrario* usa **otras palabras**, así que vive estructuralmente
+  **más abajo** en la escala. El detector está afinado para encontrar **redundancia**, y la
+  contradicción es su opuesto. **Un solo umbral no puede hacer los dos trabajos.**
+
+  Medido sobre las 436 observaciones reales (94.830 pares): el par que se contradice da coseno
+  **0.806** (piso 0.85 ✗) y similitud léxica **0.213** (piso 0.30 ✗) — pasó por debajo de **las dos
+  puertas**. Y sin embargo ese 0.806 es **más similar que el 99% de todos los pares**: no era una
+  señal débil perdida en el ruido, era de las más fuertes que había.
+
+  Bajar el piso a 0.80 lo habría atrapado… y **triplicado la cola** (medido: ×2.9), o sea ~3
+  veredictos extra **por cada memoria nueva**.
+
+  Ahora existe una **banda ciega** propia — `[band_floor, cosine_floor)` — y sus vecinos **se te
+  muestran al guardar**, con la pregunta explícita de si algo quedó superado.
+  > **MOSTRAR NO ES ENCOLAR — la distinción que resuelve el trade-off.** La falla real no fue que el
+  > detector no **decidiera**: fue que **nunca le mostró el par al agente**. Encolar una relación
+  > cuesta caro (exige un veredicto y **vive** en la cola); mostrarle los vecinos al que ya está ahí,
+  > con el contexto fresco, cuesta **~cero**. Por eso la banda **no persiste nada**: es un aviso, no
+  > un compromiso.
+  >
+  > Y el código que la implementa es **de sólo lectura** — no conoce `UpsertObsRelation`, así que
+  > **no puede** crear una relación aunque quisiera. El invariante no depende de que nadie se
+  > olvide: es **imposible** llegar ahí.
+
+  Configurable con `conflicts.band_floor` (default **0.80**, medido). En **0** se apaga y el `save`
+  responde exactamente como antes. **Límite declarado:** una contradicción con coseno por debajo del
+  piso **sigue invisible**, y decidir *si* dos memorias se contradicen sigue siendo del agente —
+  evaluar el predicado («¿esto niega aquello?») es el techo semántico de los embeddings estáticos.
+
 ## [0.86.4] - 2026-07-12
 
 > **Otro bug que encontró el uso, no el diseño** — y esta vez la feature se quejó de sí misma: los

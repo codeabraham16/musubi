@@ -71,6 +71,9 @@ type RelationStore interface {
 // ConflictDetector — deducción model-free de relaciones al guardar una observación.
 type ConflictDetector interface {
 	DetectRelations(obsID string, opts ConflictOptions) ([]ObsRelation, error)
+	// BandNeighbors — SOLO LECTURA: las memorias de la banda ciega [BandFloor, CosineFloor), donde
+	// viven las CONTRADICCIONES. Se le MUESTRAN al agente; NO se encolan ni se persisten (band.go).
+	BandNeighbors(obsID string, opts ConflictOptions) ([]BandNeighbor, int, error)
 }
 
 // CodeMemoryStore — memoria de código (gist + símbolos por archivo, para no re-leer).

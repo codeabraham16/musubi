@@ -283,6 +283,20 @@ type ConflictConfig struct {
 	// (default 0.90: 0 falsos positivos en 77k pares medidos). El coseno nunca auto-resuelve SOLO:
 	// hace falta ADEMÁS similitud léxica alta (AND-gate). Ver conflicts.go.
 	CosineAutoThreshold float64 `yaml:"cosine_auto_threshold"`
+	// BandFloor es el piso de la BANDA CIEGA: [BandFloor, CosineFloor). Ahí viven las
+	// CONTRADICCIONES — "mismo tema, dicho distinto" —, que por debajo del piso del dedup son
+	// invisibles. Los vecinos de esta banda se le MUESTRAN al agente al guardar, y NO se encolan:
+	// no se crea ninguna relación (mostrar no es encolar).
+	//
+	// Por qué existe una banda separada: el piso del dedup (0.85) está calibrado sobre DUPLICADOS
+	// (los casi-idénticos dan ~0.99). Una contradicción NO es un duplicado — decir lo contrario usa
+	// OTRAS palabras — así que vive estructuralmente MÁS ABAJO. Un solo umbral no puede hacer los
+	// dos trabajos. MEDIDO: el par contradictorio real (NordVPN↔Tailscale) da coseno 0.806, y el p99
+	// de los 94.830 pares reales es 0.803 ⇒ 0.80 deja entrar ~el 1% más similar.
+	//
+	// OJO: 0.80 sale de UNA medición sobre UNA memoria. Es una heurística calibrada, no una verdad.
+	// En 0 (o >= CosineFloor) la banda se APAGA: el save responde exactamente como antes.
+	BandFloor float64 `yaml:"band_floor"`
 }
 
 // VectorIndexConfig configura el índice vectorial ANN (IVF) para la búsqueda
@@ -544,6 +558,7 @@ func Default() Config {
 			CandidatePool:        10,
 			CosineFloor:          0.85,
 			CosineAutoThreshold:  0.90,
+			BandFloor:            0.80,
 		},
 		Loop: LoopConfig{
 			PerTurnRecall:      true,
@@ -671,8 +686,14 @@ func (c *Config) applyConflictsDefaults(data []byte) {
 	if !presentBlocks(data)["conflicts"] {
 		return // bloque ausente ⇒ applyDefaults ya puso el default completo
 	}
-	if !presentBlockKeys(data, "conflicts")["cosine_floor"] {
+	keys := presentBlockKeys(data, "conflicts")
+	if !keys["cosine_floor"] {
 		c.Conflicts.CosineFloor = Default().Conflicts.CosineFloor
+	}
+	// band_floor: mismo criterio. Un `band_floor: 0` EXPLÍCITO apaga la banda ciega y debe
+	// respetarse; con el `== 0 ⇒ default` de applyDefaults quedaría pisado y no habría rollback.
+	if !keys["band_floor"] {
+		c.Conflicts.BandFloor = Default().Conflicts.BandFloor
 	}
 }
 
