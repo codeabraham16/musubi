@@ -117,6 +117,17 @@ type MemoryConfig struct {
 	// `memory` presente pero sin la clave conserva el default (ver applyMemoryDefaults);
 	// `vector_floor: 0` lo desactiva (comportamiento histórico, sin piso).
 	VectorFloor float64 `yaml:"vector_floor"`
+	// MMRLambda es el dial de DIVERSIDAD del recall (MMR). Pondera relevancia contra REDUNDANCIA al
+	// elegir el orden en que se gasta el presupuesto de tokens: una candidata que repite lo que ya
+	// se eligió BAJA de posición (nunca se descarta).
+	//
+	// Por qué hace falta: el ranker optimiza relevancia POR ITEM, pero el presupuesto es del
+	// CONJUNTO. Medido en la memoria real, una consulta gastaba un TERCIO del presupuesto en 3
+	// cambios contados SIETE VECES cada uno (las 7 fases SDD), enterrando memoria más útil.
+	//
+	// 1 (o menos) APAGA MMR: sólo relevancia, orden bit-idéntico al histórico. El default sale de
+	// MEDIR contra el recall-gate (R@10), no de estimar.
+	MMRLambda float64 `yaml:"mmr_lambda"`
 }
 
 // MaintenanceConfig controla el auto-mantenimiento de la memoria (consolidación
@@ -512,6 +523,7 @@ func Default() Config {
 			RecallCooccurrence:    true,
 			RecallStemming:        true,
 			VectorFloor:           0.30,
+			MMRLambda:             0.75,
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:         0.85,
@@ -713,6 +725,12 @@ func (c *Config) applyMemoryDefaults(data []byte) {
 	}
 	if !keys["vector_floor"] {
 		c.Memory.VectorFloor = Default().Memory.VectorFloor
+	}
+	// mmr_lambda: ausente ⇒ default; explícito ⇒ se respeta, INCLUIDO el 1 (que apaga la diversidad
+	// y devuelve el ranking histórico). Con el `== 0 ⇒ default` de applyDefaults, un `mmr_lambda: 1`
+	// no se distinguiría de "no lo puse" y el rollback por config no funcionaría.
+	if !keys["mmr_lambda"] {
+		c.Memory.MMRLambda = Default().Memory.MMRLambda
 	}
 }
 
