@@ -7,6 +7,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El recall ya no gasta el presupuesto contando lo mismo siete veces (MMR / diversidad).** El
+  ranker fusiona **siete señales** y hace bien su trabajo… pero **ninguna mira lo que YA se eligió**.
+  Optimiza **relevancia por item**; nadie optimizaba **la utilidad del conjunto** — y el presupuesto
+  de tokens es **del conjunto**.
+
+  Medido en la memoria real: una consulta traía **las siete fases SDD** de un cambio, **las siete**
+  de otro y 5 de un tercero. Varias sin aportar nada — el gist de `tasks` es literalmente
+  *«17 tareas.»*. Y la nota del **principio destilado**, el item más útil, quedaba **6ª, por debajo
+  de 5 contratos del mismo cambio**.
+
+  Ahora una candidata que **repite** lo que ya se eligió **baja de posición**. Configurable con
+  `memory.mmr_lambda` (default **0.75**); en **1** se apaga y el orden es **bit-idéntico** al de
+  antes.
+  > **La penalización mide REDUNDANCIA, no similitud** — y esa distinción es todo. El coseno entre
+  > dos memorias **cualesquiera** del corpus es **0.60** (medido): parecerse *eso* no es redundancia,
+  > es **estar escritas en el mismo idioma**. Penalizar sobre coseno crudo castigaría a **todo** por
+  > igual. La escala va de **0 en esa línea de base** a **1 en el duplicado exacto**.
+  >
+  > **MMR reordena, NO descarta.** Un item redundante **baja**; si el presupuesto alcanza, **sigue
+  > estando**.
+
+  **Honestidad sobre la magnitud:** en el λ seguro (0.75) la redundancia baja **~16%** — es una
+  mejora **moderada**, no dramática. El `recall-gate` (R@10) queda **intacto en 0.833** con cualquier
+  λ… pero **eso sólo prueba que no daña**: el fixture dorado son documentos **distintos**, sin
+  redundancia que penalizar, así que **no puede medir el beneficio**. Ése se midió aparte, sobre la
+  memoria real. Por debajo de **λ = 0.72** la diversidad empieza a **promover items sin relación con
+  la consulta** — ahí está el límite, y por eso el default no baja de 0.75.
+
 ## [0.87.1] - 2026-07-12
 
 > **La v0.87.0 duró un `save`.** El primer uso real de la banda ciega encontró dos defectos en ella

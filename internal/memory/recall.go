@@ -72,6 +72,12 @@ type RecallOptions struct {
 	// inyectar vecinos de baja señal con peso RRF pleno. <= 0 ⇒ sin piso (histórico bit-a-bit).
 	// Lo cablea la capa MCP desde config (default 0.30).
 	VectorFloor float64
+	// MMRLambda es el dial de DIVERSIDAD del recall (ver mmr.go): pondera relevancia contra
+	// redundancia al elegir el orden en que se gasta el presupuesto de tokens.
+	//   λ = 1  ⇒ MMR APAGADO: sólo relevancia, orden BIT-IDÉNTICO al histórico (rollback).
+	//   λ < 1  ⇒ una candidata que repite lo que ya se eligió BAJA de posición (nunca se descarta).
+	// El cero NO se normaliza acá: el default lo pone la config, para que un valor explícito valga.
+	MMRLambda float64
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -202,6 +208,12 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// `now` se INYECTA (no time.Now() adentro de scoreCandidates) para que el scoring siga siendo
 	// una función PURA y determinista: los tests pueden fijar el reloj y verificar la fuga (N4).
 	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank, time.Now().UTC())
+
+	// DIVERSIDAD (MMR), entre el scoring y el empaquetado. scoreCandidates responde "¿qué tan
+	// relevante es cada item?" y packByBudget "¿cuántos entran?" — pero faltaba la pregunta del
+	// medio: "¿qué tan útil es el CONJUNTO?". Ahí vive la redundancia (ver mmr.go). Reordena; no
+	// descarta. MMRLambda >= 1 lo apaga y el orden queda bit-idéntico.
+	scored = e.diversify(scored, opts.MMRLambda)
 
 	result = packByBudget(scored, budget, gistMax)
 
