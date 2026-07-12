@@ -68,6 +68,10 @@ type ConflictOptions struct {
 	// withDefaults justamente para que un 0 EXPLÍCITO se respete; el default lo pone la config.
 	CosineFloor         float64
 	CosineAutoThreshold float64
+	// BandFloor es el piso de la BANDA CIEGA [BandFloor, CosineFloor): el rango donde viven las
+	// CONTRADICCIONES, que se le MUESTRAN al agente sin encolarse. Ver band.go. No se normaliza en
+	// withDefaults: un 0 EXPLÍCITO apaga la banda (el default lo pone la config).
+	BandFloor float64
 	// DetectOnly (M4) fuerza TODOS los veredictos a `pending`: detecta y MARCA, nunca decide. Es el
 	// modo de los caminos de captura AUTOMÁTICA (commits, error→fix), donde no hay ningún agente en
 	// el loop que pueda notar una auto-supresión equivocada.

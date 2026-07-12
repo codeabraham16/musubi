@@ -324,6 +324,7 @@ func (s *McpServer) conflictOpts(detectOnly bool) memory.ConflictOptions {
 		CandidatePool:        s.conflicts.CandidatePool,
 		CosineFloor:          s.conflicts.CosineFloor,
 		CosineAutoThreshold:  s.conflicts.CosineAutoThreshold,
+		BandFloor:            s.conflicts.BandFloor,
 		DetectOnly:           detectOnly,
 	}
 }
@@ -382,7 +383,50 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 			fmt.Fprintf(&b, "\n- relation_id=%s target=%s (similitud %.2f): ¿se contradicen, una reemplaza a la otra, o son compatibles?", r.ID, r.TargetID, r.Confidence)
 		}
 	}
+	b.WriteString(s.surfaceBandNeighbors(obsID))
 	return b.String()
+}
+
+// surfaceBandNeighbors le MUESTRA al agente las memorias de la BANDA CIEGA: las que hablan del
+// mismo tema sin ser duplicados — el rango donde viven las CONTRADICCIONES (ver band.go).
+//
+// MOSTRAR NO ES ENCOLAR: no crea ninguna relación, no engorda la cola, no oculta nada. Sólo lo
+// llama el camino EXPLÍCITO del agente; los automáticos (detectOnly) no, porque no hay nadie en el
+// loop a quien mostrarle y el aviso se perdería.
+func (s *McpServer) surfaceBandNeighbors(obsID string) string {
+	near, omitted, err := s.engine.BandNeighbors(obsID, s.conflictOpts(false))
+	if err != nil {
+		logx.Warn("vecinos de la banda ciega: fallaron (la observación se guardó igual)", "error", err)
+		return ""
+	}
+	if len(near) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[banda] %d memoria(s) hablan de ESTO MISMO sin ser duplicados. ¿Alguna queda"+
+		" SUPERADA o CONTRADICHA por lo que acabás de guardar? Si sí, resolvelo con musubi_judge"+
+		" (relation=supersedes|conflicts_with); si no, ignorá este aviso.", len(near))
+	for _, n := range near {
+		fmt.Fprintf(&b, "\n- id=%s [%s] (coseno %.2f): %s", n.ID, n.TopicKey, n.Cosine, firstLine(n.Gist, 100))
+	}
+	if omitted > 0 {
+		// El recorte se INFORMA: un truncado silencioso diría "esto es todo" cuando no lo es.
+		fmt.Fprintf(&b, "\n  (hay %d más por debajo del techo)", omitted)
+	}
+	return b.String()
+}
+
+// firstLine recorta a la primera línea y a max runes, para que el aviso sea corto.
+func firstLine(s string, max int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= max {
+		return string(r)
+	}
+	return string(r[:max]) + "…"
 }
 
 // toolDoctor diagnostica o repara la base de memoria.
