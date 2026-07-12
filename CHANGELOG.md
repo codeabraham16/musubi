@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.87.1] - 2026-07-12
+
+> **La v0.87.0 duró un `save`.** El primer uso real de la banda ciega encontró dos defectos en ella
+> — y ninguno era un umbral mal puesto: los dos eran **decir una cosa y escribir otra**.
+
 ### Fixed
 - **Dos defectos que encontró el PRIMER uso real de la banda ciega (v0.87.0).** Un solo
   `musubi_save_observation` — una nota destilando el aprendizaje de la sesión — generó **8
@@ -2504,7 +2509,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.87.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.87.1...HEAD
 [0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
