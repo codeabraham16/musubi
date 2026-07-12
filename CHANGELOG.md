@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La captura ya no guarda dos veces el mismo commit cuando mergeás con squash.** Encontrado en la
+  memoria real, no en teoría: `musubi capture` guarda el commit de la **rama**, y después el
+  **squash-merge** crea en `main` un commit **nuevo** con el **mismo mensaje** más el sufijo `(#123)`
+  (y GitHub reescribe el trailer `Co-Authored-By` → `Co-authored-by`). La captura lo veía como nuevo
+  y lo **guardaba otra vez**. El dedup por **hash exacto** no lo agarraba: el texto cambió apenas.
+  Y es redundante **por construcción** — tras un squash, el commit de la rama **ya no existe** en la
+  historia de `main`; el canónico es el del merge.
+
+  Ahora el id de una observación de commit se deriva **determinísticamente** de una **clave
+  normalizada** (sin el sufijo `(#NNN)` del subject, insensible a mayúsculas). El gemelo del squash
+  cae en el **mismo id** ⇒ **actualiza** la observación existente con el contenido canónico en vez de
+  crear un duplicado. **Nada se oculta ni se descarta: se actualiza.** La clave incluye el cuerpo y
+  la **lista de archivos**, así que dos commits genuinamente distintos con el mismo título no
+  colisionan.
+  > **Por qué acá SÍ se resuelve solo, si el track entero insiste en no auto-suprimir.** Un duplicado
+  > **semántico** (otras palabras, mismo significado) es una **interpretación** y por eso requiere
+  > juicio ⇒ va a `pending` (dedup semántico + gate de novedad). Un gemelo de **squash** es un hecho
+  > **estructural**: el mismo commit, mismo cuerpo, mismos archivos, reformulado mecánicamente por
+  > GitHub. Es tan seguro como el dedup por hash exacto — y no cuesta un veredicto en cada PR.
+
 ## [0.86.2] - 2026-07-12
 
 > **Cierra el track «Semantic Hardening».** Con esto, el camino de reparación de la memoria ya no
