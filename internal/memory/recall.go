@@ -420,18 +420,6 @@ func filterCandidatesByProject(cands []candidate, scope string) []candidate {
 	return out
 }
 
-// rankBy devuelve, para cada id, su posición (0 = mejor) según el orden less.
-func rankBy(cands []candidate, less func(a, b candidate) bool) map[string]int {
-	ordered := make([]candidate, len(cands))
-	copy(ordered, cands)
-	sort.SliceStable(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
-	ranks := make(map[string]int, len(ordered))
-	for i, c := range ordered {
-		ranks[c.id] = i
-	}
-	return ranks
-}
-
 // effectiveImportance normaliza la importancia no seteada (<=0) a 1.0, el default histórico, para
 // que empate con la default en el ranking (Q3, R3).
 func effectiveImportance(c candidate) float64 {
