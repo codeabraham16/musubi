@@ -58,6 +58,7 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "schema_migrations", run: checkSchema, count: countMissingColumns, apply: applySchema},
 		{code: "fts_consistency", run: checkFTS, count: countFTSDrift, apply: applyRebuildFTS},
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
+		{code: "stale_gists", run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
 		{code: "offhost_backup", run: checkOffhostBackup},
 	}
@@ -497,6 +498,85 @@ func applyBackfillDigests(e *DbEngine) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// checkStaleGists busca gists que NO DEJAN DECIDIR: los que un extractor viejo dejó cortados en la
+// primera oración, abandonando el presupuesto que les sobraba ("SDD tasks — brain-dashboard
+// BACKEND.", 8 tokens de un techo de 24).
+//
+// El gist existe para UNA cosa: que el agente decida SI VALE LA PENA EXPANDIR la memoria. Uno que no
+// deja decidir cuesta tokens y obliga a expandir igual — se paga DOS VECES por lo que debía anticipar.
+//
+// La reparación es EXPLÍCITA (--fix) a propósito: reescribir 461 gists EN SILENCIO al arrancar el
+// binario sería un cambio invisible en la superficie que el agente lee. Y es segura por naturaleza:
+// el gist es DERIVADO de content, así que regenerarlo es idempotente y no puede perder nada.
+func checkStaleGists(e *DbEngine) CheckResult {
+	n, err := countStaleGists(e)
+	if err != nil {
+		return CheckResult{Code: "stale_gists", Status: "error", Message: err.Error(), Repairable: true}
+	}
+	if n > 0 {
+		return CheckResult{Code: "stale_gists", Status: "warning", Repairable: true,
+			Message: fmt.Sprintf("%d gist(s) desaprovechan su presupuesto (se pueden recalcular sin perder nada)", n)}
+	}
+	return CheckResult{Code: "stale_gists", Status: "ok", Message: "los gists aprovechan su presupuesto"}
+}
+
+// staleGist decide si el gist guardado difiere del que produce el extractor ACTUAL. Es la única
+// definición de "viejo" que no depende de recordar qué versión lo escribió.
+func staleGist(gist, content string) bool {
+	return gist != "" && gist != Gist(content, defaultGistMaxTokens)
+}
+
+func countStaleGists(e *DbEngine) (int, error) {
+	rows, err := e.db.Query(`SELECT gist, content FROM observations WHERE gist IS NOT NULL AND gist != ''`)
+	if err != nil {
+		return 0, fmt.Errorf("error al consultar gists: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var g, c string
+		if err := rows.Scan(&g, &c); err != nil {
+			return 0, err
+		}
+		if staleGist(g, c) {
+			n++
+		}
+	}
+	return n, rows.Err()
+}
+
+// applyRegenGists recalcula los gists desviados. NO toca content, ni content_hash, ni los
+// embeddings, ni las relaciones: el gist es lo ÚNICO que se recalcula.
+func applyRegenGists(e *DbEngine) (int, error) {
+	rows, err := e.db.Query(`SELECT id, gist, content FROM observations WHERE gist IS NOT NULL AND gist != ''`)
+	if err != nil {
+		return 0, fmt.Errorf("error al consultar gists: %w", err)
+	}
+	type fix struct{ id, gist string }
+	var pendientes []fix
+	for rows.Next() {
+		var id, g, c string
+		if err := rows.Scan(&id, &g, &c); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if staleGist(g, c) {
+			pendientes = append(pendientes, fix{id: id, gist: Gist(c, defaultGistMaxTokens)})
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range pendientes {
+		if _, err := e.db.Exec(`UPDATE observations SET gist=? WHERE id=?`, p.gist, p.id); err != nil {
+			return 0, fmt.Errorf("error al recalcular el gist de %q: %w", p.id, err)
+		}
+	}
+	return len(pendientes), nil
 }
 
 func checkOrphans(e *DbEngine) CheckResult {

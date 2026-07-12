@@ -7,6 +7,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El 24% de los gists no te dejaban decidir nada.** Medido en la memoria real: **110 de 461**
+  gists usaban menos de 15 tokens de un techo de **24**, y lo que decían era esto:
+
+  ```
+  "SDD tasks — brain-dashboard BACKEND."
+  "SDD verify — debate-topology VERDE."
+  ```
+
+  **El gist existe para UNA cosa: que el agente decida si vale la pena EXPANDIR la memoria.** Es la
+  pieza central del recall por presupuesto. **Uno que no deja decidir es peor que inútil: cuesta
+  tokens y te obliga a expandir igual — o sea, a pagar dos veces por lo que debía anticipar.**
+
+  **La causa era una línea:** `Gist()` tomaba la **primera oración y se detenía**. Si esa oración
+  eran 8 tokens, **abandonaba 16** sin intentar decir nada más. No era un problema de cómo se
+  redactan los contratos SDD: era **del extractor**.
+
+  Ahora el gist **llena su techo** (que no cambia — lo que cambia es que **se usa**), y el `doctor`
+  gana una reparación **`stale_gists`** para recalcular los que quedaron viejos. El gist es
+  **derivado** de `content`: regenerarlo es **idempotente** y no puede perder nada.
+  > **La regla que sonaba prolija resultó ser la peor, y sólo medirlo lo mostró.** El diseño original
+  > decía *«nunca truncar una oración a la mitad — un gist cortado tampoco deja decidir»*. Suena
+  > bien. Pero con esa regla **sólo mejoraban 39 de 461**, y **no** los que motivaron el cambio: en
+  > los peores casos la segunda oración es **larga** y no entra, así que quedaban mudos igual.
+  > Truncando la última para llenar el techo: **181 mejoran**.
+
+  **El canje, con el número y no con una intuición:** los gists mudos caen de **24% a 3%**, al costo
+  de **~5 items menos** por consulta (de ~39 a ~34 en un presupuesto de 700 tokens). Menos memorias,
+  pero **cada una decidible**.
+
+### Added
+- **`musubi doctor` detecta y repara los gists que desaprovechan su presupuesto** (`stale_gists`).
+  La reparación es **explícita** (`--apply`), nunca un efecto colateral silencioso del arranque:
+  reescribir cientos de gists sin que nadie lo pida sería un cambio invisible en la superficie que
+  el agente lee.
+
 ## [0.88.0] - 2026-07-12
 
 > **El recall deja de repetirse.** Sabía rankear cada memoria por separado; ahora también cuida que

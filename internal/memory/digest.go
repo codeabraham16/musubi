@@ -238,10 +238,39 @@ func Gist(content string, maxTokens int) string {
 	}
 
 	lead := firstSentence(norm)
-	if EstimateTokens(lead) <= maxTokens {
-		return lead
+	if EstimateTokens(lead) >= maxTokens {
+		// La 1ª oración ya llena (o desborda) el techo: comportamiento de SIEMPRE, intacto.
+		return truncateToTokens(lead, maxTokens)
 	}
-	return truncateToTokens(lead, maxTokens)
+
+	// Acá estaba el bug: se devolvía `lead` y se ABANDONABA el presupuesto que sobraba. Si la 1ª
+	// oración eran 8 tokens de un techo de 24, el gist tiraba 16 sin intentar decir nada más — y
+	// quedaban gists como "SDD tasks — brain-dashboard BACKEND." (medido: 110 de 461 gists reales).
+	//
+	// EL GIST EXISTE PARA UNA COSA: que el agente decida SI VALE LA PENA EXPANDIR la memoria. Un
+	// gist que no deja decidir es PEOR que inútil — cuesta tokens y obliga a expandir igual, o sea
+	// a pagar DOS VECES por la información que debía anticipar.
+	out := lead
+	rest := strings.TrimSpace(norm[len(lead):])
+	for rest != "" {
+		s := firstSentence(rest)
+		if EstimateTokens(out+" "+s) > maxTokens {
+			// La oración no entra ENTERA. Se la trunca para LLENAR el techo, en vez de abandonarlo.
+			//
+			// Prohibir el truncado sonaba prolijo ("un gist cortado al medio tampoco deja decidir")
+			// pero MEDIRLO lo refutó: en los peores casos —justo los que motivaron este cambio— la
+			// 2ª oración es LARGA, así que la regla prolija los dejaba mudos igual. Y era además
+			// INCONSISTENTE: Gist() ya trunca la PRIMERA oración cuando no entra (arriba). Un
+			// fragmento informativo dice muchísimo más que "SDD tasks — brain-dashboard BACKEND.".
+			if t := truncateToTokens(out+" "+s, maxTokens); EstimateTokens(t) > EstimateTokens(out) {
+				out = t
+			}
+			break
+		}
+		out += " " + s
+		rest = strings.TrimSpace(rest[len(s):])
+	}
+	return out
 }
 
 // firstSentence devuelve el texto hasta el primer terminador de oración (. ! ?)

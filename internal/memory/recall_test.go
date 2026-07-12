@@ -52,11 +52,18 @@ func TestRecallReturnsGistsNotFullContent(t *testing.T) {
 		t.Fatalf("esperaba 1 item, obtuve %d", res.Count)
 	}
 	it := res.Items[0]
-	if it.Gist != "Resumen corto." {
-		t.Errorf("esperaba gist extractivo 'Resumen corto.', obtuve %q", it.Gist)
+	// Lo que este test protege es que el recall devuelva un GIST y no el contenido completo — no
+	// que el gist se quede en la 1ª oración (eso era el bug: abandonaba su presupuesto y dejaba
+	// gists mudos). Ahora el gist LLENA su techo, pero sigue siendo mucho más chico que el contenido.
+	if !strings.HasPrefix(it.Gist, "Resumen corto.") {
+		t.Errorf("el gist debe arrancar por el resumen extractivo, obtuve %q", it.Gist)
+	}
+	if EstimateTokens(it.Gist) > defaultGistMaxTokens {
+		t.Errorf("el gist (%d tokens) no puede exceder su techo (%d)", EstimateTokens(it.Gist), defaultGistMaxTokens)
 	}
 	if it.FullTokens <= EstimateTokens(it.Gist) {
-		t.Errorf("full_tokens (%d) debería ser mayor que los del gist (%d)", it.FullTokens, EstimateTokens(it.Gist))
+		t.Errorf("full_tokens (%d) debería ser mayor que los del gist (%d): el gist NO es el contenido completo",
+			it.FullTokens, EstimateTokens(it.Gist))
 	}
 }
 
