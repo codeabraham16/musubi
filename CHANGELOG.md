@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Dos defectos que encontró el PRIMER uso real de la banda ciega (v0.87.0).** Un solo
+  `musubi_save_observation` — una nota destilando el aprendizaje de la sesión — generó **8
+  pendientes**, y una de ellas salió **además** en la banda.
+
+  **El doble aviso.** El diseño decía *«si el par ya es `pending`, no avisar dos veces»*, pero la
+  condición escrita fue `coseno >= piso` — y eso es una **proxy equivocada**: a la cola se entra por
+  **dos puertas** (léxico **o** coseno). Un par que entró por la **léxica**, con coseno **0.849**
+  (justo por debajo del piso), caía igual en la banda. Ahora la banda pregunta con **la misma
+  función** que decide la cola: **es su complemento**, no un rango de coseno. Llamarla en vez de
+  copiarla es lo que evita que vuelvan a divergir.
+
+  **El veredicto imposible.** Las 8 pendientes eran la nota contra **los artefactos del trabajo que
+  la nota resumía** (contratos SDD y commits). Y el único veredicto disponible habría sido *«esta
+  nota reemplaza al commit»* o *«…al spec»* — **que no significa nada**: un commit es lo que
+  **pasó**; un contrato SDD es lo que se **acordó**. **No se pueden des-hacer.** Pedir un juicio que
+  ya está decidido de antemano es, por definición, ruido.
+  > **La regla, y su asimetría — que es lo que la vuelve una regla y no un martillo.** Un registro
+  > histórico nunca puede ser el **destino** de una relación propuesta por algo de otra clase. Pero
+  > **al revés sí importa**: un commit *«feat: migrar de X a Y»* **sí** puede volver obsoleta una
+  > nota que decía *«usamos X»* — el commit es **evidencia** de que la nota envejeció. Ese caso se
+  > conserva, igual que `commit ↔ commit` y `SDD ↔ SDD` de cambios distintos.
+
 ## [0.87.0] - 2026-07-12
 
 > **La memoria deja de ser sólo un archivo y empieza a discutirte.** Hasta acá Musubi sabía detectar

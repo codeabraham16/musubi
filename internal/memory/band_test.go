@@ -81,6 +81,36 @@ func TestBandaMuestraPeroNoEncola(t *testing.T) { // S.a
 	}
 }
 
+// TestBandaNoAvisaPorLoQueYaEstaEnLaCola es el test del defecto que encontró el PRIMER uso real:
+// un par que entra a la cola por la vía LÉXICA, con coseno JUSTO por debajo del piso, caía igual en
+// la banda ⇒ el agente recibía el mismo par avisado DOS VECES.
+//
+// La banda es el COMPLEMENTO de la cola: muestra lo que la cola NO muestra.
+func TestBandaNoAvisaPorLoQueYaEstaEnLaCola(t *testing.T) { // S.a
+	e := newBandEngine(t)
+	// Textos MUY parecidos ⇒ léxico alto ⇒ el par entra a la cola por esa puerta...
+	saveWithVec(t, e, "a", "notas/uno", "El detector de conflictos usa dos señales para emitir su veredicto.", vecAt(1.0))
+	// ...y el coseno (0.82) lo pondría en la banda. No debe salir en las dos.
+	saveWithVec(t, e, "b", "notas/dos", "El detector de conflictos usa dos señales para emitir un veredicto.", vecAt(0.82))
+
+	rels, err := e.DetectRelations("b", bandOpts())
+	if err != nil {
+		t.Fatalf("DetectRelations error: %v", err)
+	}
+	if len(rels) == 0 {
+		t.Fatal("precondición del test: el par DEBE entrar a la cola por la vía léxica")
+	}
+
+	near, _, err := e.BandNeighbors("b", bandOpts())
+	if err != nil {
+		t.Fatalf("BandNeighbors error: %v", err)
+	}
+	if len(near) != 0 {
+		t.Fatalf("DOBLE AVISO: el par ya está en la cola (%d relación/es) y la banda lo muestra"+
+			" igual. La banda es el COMPLEMENTO de la cola. Obtuve %+v", len(rels), near)
+	}
+}
+
 func TestBandaNoAvisaDosVecesPorLoMismo(t *testing.T) { // S.b
 	e := newBandEngine(t)
 	saveWithVec(t, e, "a", "arch/db", "Usamos PostgreSQL como base principal.", vecAt(1.0))
@@ -140,10 +170,18 @@ func TestBandaApagada(t *testing.T) { // S.d y S.e
 func TestBandaRecortaYLoDICE(t *testing.T) { // S.g — el techo es honesto
 	e := newBandEngine(t)
 	saveWithVec(t, e, "src", "notas/src", "El detector de conflictos usa dos señales para decidir.", vecAt(1.0))
-	// 5 vecinos en la banda, con un techo de 3.
+	// 5 vecinos en la banda, con un techo de 3. Los textos son LÉXICAMENTE AJENOS entre sí y al
+	// source: si compartieran palabras entrarían a la COLA, y la banda —que es su complemento— los
+	// excluiría con razón. La banda existe justo para lo que se dice con OTRAS palabras.
+	textos := []string{
+		"Mañana probablemente llueva sobre toda la región litoral.",
+		"Las tortugas marinas migran miles de kilómetros cada temporada.",
+		"El violonchelo barroco tenía cinco cuerdas y afinación distinta.",
+		"La levadura fermenta mejor con una hidratación del setenta por ciento.",
+		"Los volcanes islandeses expulsan basalto de baja viscosidad.",
+	}
 	for i, cos := range []float64{0.81, 0.83, 0.804, 0.845, 0.82} {
-		saveWithVec(t, e, string(rune('a'+i)), "notas/otra",
-			"El detector de conflictos combina señales para emitir un veredicto heurístico.", vecAt(cos))
+		saveWithVec(t, e, string(rune('a'+i)), "notas/otra", textos[i], vecAt(cos))
 	}
 
 	near, omitted, err := e.BandNeighbors("src", bandOpts())

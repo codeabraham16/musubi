@@ -132,10 +132,25 @@ func sddChange(topicKey string) string {
 func isSDD(topicKey string) bool    { return sddChange(topicKey) != "" }
 func isCommit(topicKey string) bool { return topicKey == CommitTopicKey }
 
-// complementaryPair reconoce dos artefactos que NO pueden ser redundantes entre sí por su
-// ESTRUCTURA, sin importar cuánto se parezcan. No mira el contenido A PROPÓSITO: el parecido entre
-// el `spec` y el `design` de un mismo cambio es alto y CORRECTO — mirar el texto sólo puede
-// confundir. Lo que decide es de QUÉ son artefactos, y eso vive en el topic_key.
+// historicalRecord: lo que PASÓ (un commit) o lo que se ACORDÓ (un contrato SDD). No se puede
+// DES-HACER. Nada de otra clase lo puede reemplazar — y por eso nada de otra clase puede pedir un
+// veredicto sobre él.
+func historicalRecord(topicKey string) bool { return isCommit(topicKey) || isSDD(topicKey) }
+
+// sameKind: dos artefactos de la MISMA naturaleza. Entre ellos el parecido SÍ puede significar
+// redundancia (dos commits pueden ser el mismo commit), así que se siguen comparando.
+func sameKind(a, b string) bool {
+	return (isCommit(a) && isCommit(b)) || (isSDD(a) && isSDD(b))
+}
+
+// complementaryPair responde UNA pregunta: ¿este par es siquiera COMPARABLE? Lo hace por la
+// ESTRUCTURA (el topic_key), sin importar cuánto se parezcan los textos. No mira el contenido A
+// PROPÓSITO: el parecido entre el `spec` y el `design` de un mismo cambio es alto y CORRECTO —
+// mirar el texto sólo puede confundir. Lo que decide es de QUÉ son artefactos.
+//
+// Hay dos formas de NO ser comparable, y las dos viven acá:
+//   - "son COMPLEMENTARIOS": ninguno sobra, se necesitan (G1, G2).
+//   - "el veredicto NO SIGNIFICARÍA NADA": la relación sólo habilitaría un juicio imposible (G3).
 //
 // Sin esto, cada cambio fabrica ruido: el flujo SDD guarda 7 contratos que describen EL MISMO
 // cambio, así que por construcción se parecen entre sí. Medido en la memoria real: 14 de 23
@@ -156,6 +171,21 @@ func complementaryPair(a, b obsRow) bool {
 		return true
 	}
 	if isSDD(a.topicKey) && isCommit(b.topicKey) {
+		return true
+	}
+	// G3 — un REGISTRO HISTÓRICO no puede ser el DESTINO de otra clase. El único veredicto que esa
+	// relación habilitaría sería "esto reemplaza al commit / al spec", y eso NO SIGNIFICA NADA: no se
+	// puede des-hacer lo que pasó. Pedir un juicio que ya está decidido de antemano es, por
+	// definición, ruido — y el ruido erosiona la credibilidad de la cola entera.
+	//
+	// ASIMÉTRICA A PROPÓSITO, y ahí está la diferencia entre una REGLA y un MARTILLO: al revés SÍ
+	// importa. Un commit "feat: migrar de X a Y" SÍ puede volver obsoleta una nota que decía
+	// "usamos X" — el commit es EVIDENCIA de que la nota envejeció. Por eso se mira sólo el TARGET
+	// (b), nunca el source, y se exceptúa la misma clase.
+	//
+	// Encontrado en el PRIMER uso real de la banda: UN save de una nota-resumen generó 8 pendientes
+	// contra los artefactos del trabajo que la nota resumía.
+	if historicalRecord(b.topicKey) && !sameKind(a.topicKey, b.topicKey) {
 		return true
 	}
 	return false
