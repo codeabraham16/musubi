@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"musubi/internal/logx"
@@ -198,7 +199,9 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// El ranking keyword (lexRank) solo existe si la query tuvo términos FTS; sin ellos
 	// (fallback por recencia) es nil y se omite, para no doble-contar la recencia. vecRank
 	// solo existe en recall híbrido; graphRank solo con GraphCentrality on.
-	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank)
+	// `now` se INYECTA (no time.Now() adentro de scoreCandidates) para que el scoring siga siendo
+	// una función PURA y determinista: los tests pueden fijar el reloj y verificar la fuga (N4).
+	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank, time.Now().UTC())
 
 	result = packByBudget(scored, budget, gistMax)
 
@@ -265,7 +268,7 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 // co-ocurrencia/PRF; cada uno nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el
 // resultado es idéntico al histórico; vecRank lo activa el recall híbrido (T5.7 R2), graphRank la
 // centralidad de grafo (B4) y coocRank la semántica model-free por co-ocurrencia (Track 14 #2).
-func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int) []scoredCandidate {
+func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int, now time.Time) []scoredCandidate {
 	n := len(cands)
 
 	// Rangos DENSOS (empates comparten rango): a diferencia de rankBy posicional, dos candidatos
@@ -273,11 +276,23 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank ma
 	// posicional (varios términos de 1/(rrfK+i)) ahogaría al único término de importancia y la
 	// importancia no podría desempatar (Q3). Con rangos densos, los pools empatados no aportan señal
 	// espuria y la importancia queda como desempate limpio.
+	//
+	// N4 — EL RANKER NO SE ALIMENTA DE SU PROPIA SALIDA. bumpAccess escribe last_accessed y
+	// access_count sobre lo que el recall ACABA DE DEVOLVER. Si esas mismas columnas rankean, el lazo
+	// se cierra: lo que se muestra sube de rango ⇒ se vuelve a mostrar ⇒ sube más (rich-get-richer),
+	// y la memoria nueva nunca entra. La distinción que ordena el fix:
+	//   - EXÓGENO  (created_at, texto, vector): el ranker NO lo puede cambiar ⇒ prior legítimo.
+	//   - ENDÓGENO (last_accessed, access_count): lo escribe el ranker ⇒ circular por definición.
+	// La cura no es prohibir el acceso como señal, sino que NO PUEDA ACUMULARSE PARA SIEMPRE.
+	//
+	// Recencia = NOVEDAD (created_at, exógeno). Antes usaba last_accessed si existía, así que una
+	// memoria de hace 6 meses mostrada hace 5 minutos le ganaba en "recencia" a una escrita ayer.
 	recencyRank := denseRankBy(cands, func(a, b candidate) bool {
-		return effectiveRecency(a) > effectiveRecency(b)
+		return a.createdAt > b.createdAt // ISO8601 ordena lexicográficamente
 	})
+	// Frecuencia = TASA de uso, no total acumulado (ver accessRate).
 	freqRank := denseRankBy(cands, func(a, b candidate) bool {
-		return a.accessCount > b.accessCount
+		return accessRate(a, now) > accessRate(b, now)
 	})
 
 	impRank := importanceRank(cands)
@@ -460,13 +475,54 @@ func importanceRank(cands []candidate) map[string]int {
 	})
 }
 
-// effectiveRecency usa last_accessed si existe, si no created_at (ISO8601 ordena
-// lexicográficamente).
+// effectiveRecency devuelve "cuándo se tocó por última vez" (last_accessed, o created_at si nunca
+// se accedió). Lo usa el PRIMING, que comparte a propósito el criterio del OLVIDO (salience): ahí el
+// acceso es una señal legítima — lo que usás no se olvida (Ebbinghaus).
+//
+// NO se usa en el ranking del recall: ahí sería CIRCULAR (bumpAccess escribe last_accessed sobre lo
+// que el recall acaba de devolver ⇒ el ranker se alimentaría de su propia salida). Ver N4 en
+// scoreCandidates.
 func effectiveRecency(c candidate) string {
 	if strings.TrimSpace(c.lastAccessed) != "" {
 		return c.lastAccessed
 	}
 	return c.createdAt
+}
+
+// ageDays devuelve la edad en días de una fecha ISO8601. Un parseo fallido devuelve 0 (edad
+// desconocida): la tasa cae a count/1 = el contador crudo, o sea el comportamiento previo para esa
+// fila. Degradación segura, no un error.
+func ageDays(createdAt string, now time.Time) float64 {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return 0
+	}
+	d := now.Sub(t).Hours() / 24
+	if d < 0 {
+		return 0 // fecha futura (reloj torcido): tratarla como recién creada
+	}
+	return d
+}
+
+// accessRate es la señal de frecuencia del recall: usos por día de vida, NO el total acumulado.
+//
+// El access_count crudo sólo SUBE y nunca baja: es un acumulador desbocado que el propio ranker
+// incrementa (bumpAccess corre sobre lo que el recall acaba de devolver). Con la TASA, a igual
+// cantidad de accesos la observación MÁS VIEJA vale menos ⇒ la ventaja SE EROSIONA si deja de
+// usarse. El lazo endógeno pasa de runaway a integrador CON FUGA: para seguir arriba hay que ser
+// útil ÚLTIMAMENTE, no haberlo sido alguna vez.
+//
+// Ojo con el arreglo "obvio": amortiguar la magnitud (p. ej. log(access_count)) NO HACE NADA acá,
+// porque freqRank es un RANGO y toda transformación monótona conserva el orden — rank(log(x)) ==
+// rank(x). Para romper el lock-in hay que cambiar el ORDEN, y para eso el tiempo tiene que entrar
+// en la cuenta.
+//
+// El +1 del denominador suaviza: una observación recién creada (edad ~0) no explota.
+func accessRate(c candidate, now time.Time) float64 {
+	if c.accessCount <= 0 {
+		return 0
+	}
+	return float64(c.accessCount) / (ageDays(c.createdAt, now) + 1)
 }
 
 // prefixSuffixes es la lista CURADA y corta de sufijos de flexión (ES+EN) que stemForPrefix

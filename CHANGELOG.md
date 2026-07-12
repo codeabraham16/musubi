@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El ranker del recall dejó de alimentarse de su propia salida (N4, track Semantic Hardening).**
+  Cada recall llama a `bumpAccess`, que sobre lo que **acaba de devolver** escribe `last_accessed` y
+  `access_count + 1`. Y esas **mismas dos columnas** alimentaban dos términos del score RRF
+  (recencia y frecuencia). Lazo cerrado con realimentación positiva: **lo que el ranker mostraba se
+  volvía más mostrable** ⇒ se volvía a mostrar ⇒ subía más. La memoria nueva o poco usada no podía
+  entrar. Medido sobre la base real (409 observaciones): el **10% más accedido concentraba el 62% de
+  todos los accesos**, el **69% nunca se accedió**, y el **31%** ya no rankeaba por su fecha de
+  creación.
+  - **La recencia ahora mide NOVEDAD** (`created_at`), no *"cuándo te lo mostré"* (`last_accessed`).
+    Antes, una memoria de hace 6 meses que el ranker mostró hace 5 minutos le ganaba en "recencia" a
+    una escrita ayer.
+  - **La frecuencia ahora es una TASA de uso** (accesos ÷ días de vida), no el total acumulado. Para
+    seguir arriba hay que ser útil **últimamente**, no haberlo sido **alguna vez**: la ventaja **se
+    erosiona** si deja de usarse. El acumulador desbocado pasa a ser un integrador **con fuga**.
+  > El criterio que ordena el fix: señales **exógenas** (el ranker **no** las puede cambiar:
+  > `created_at`, el texto, el vector) vs **endógenas** (las escribe el ranker: `last_accessed`,
+  > `access_count`). Rankear con una señal endógena **sin fuga** es circular por definición.
+  >
+  > Ojo con el arreglo "obvio": amortiguar la magnitud (p. ej. `log(access_count)`) **no habría hecho
+  > nada** — el término es un **rango**, y toda transformación monótona conserva el orden
+  > (`rank(log(x)) == rank(x)`). Hay que cambiar el **orden**, y para eso el tiempo tiene que entrar
+  > en la cuenta.
+
+  **El olvido NO cambia.** `decay.go` también usa el acceso, y ahí es **legítimo** (refuerzo de
+  Ebbinghaus: lo que usás no se olvida) y **no es circular** — el olvido no elige qué mostrar. Dos
+  usos del mismo dato: uno correcto, otro circular. Sólo se tocó el **ranking**.
+
 ## [0.86.0] - 2026-07-12
 
 > Cierra el track **«Semantic Hardening»**: la última fuente de memoria que no tenía ningún control
