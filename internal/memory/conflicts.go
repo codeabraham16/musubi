@@ -68,6 +68,18 @@ type ConflictOptions struct {
 	// withDefaults justamente para que un 0 EXPLÍCITO se respete; el default lo pone la config.
 	CosineFloor         float64
 	CosineAutoThreshold float64
+	// DetectOnly (M4) fuerza TODOS los veredictos a `pending`: detecta y MARCA, nunca decide. Es el
+	// modo de los caminos de captura AUTOMÁTICA (commits, error→fix), donde no hay ningún agente en
+	// el loop que pueda notar una auto-supresión equivocada.
+	//
+	// Por qué hace falta: el auto-supersede se dispara con mismo topic_key + léxico alto + más
+	// reciente. En la captura de commits TODOS llevan topic_key="git-commit" — que ahí es un BALDE,
+	// no un tema. Dos commits de mensaje parecido ("fix: typo en el README" / "fix: typo en el
+	// CHANGELOG") auto-ocultarían al anterior. Una heurística correcta cuando el topic lo elige el
+	// agente es DESTRUCTIVA cuando el topic es un balde; este flag hace explícita esa diferencia.
+	//
+	// false (el cero) = comportamiento de siempre ⇒ el camino explícito del agente no cambia.
+	DetectOnly bool
 }
 
 func (o ConflictOptions) withDefaults() ConflictOptions {
@@ -152,6 +164,13 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 		}
 
 		rel := decideRelation(src, c, lex, cos, opts)
+		if opts.DetectOnly {
+			// Camino AUTOMÁTICO (M4): detectar y MARCAR, nunca decidir. Al forzar `pending`, el
+			// markSuperseded de abajo queda INALCANZABLE por construcción (sólo corre con
+			// Supersedes+Resolved, y pendingRel jamás produce eso). El invariante no depende de que
+			// alguien se acuerde de no ocultar memoria: es imposible llegar ahí.
+			rel = pendingRel(src, c, lex, cos)
+		}
 		id, err := e.UpsertObsRelation(rel)
 		if err != nil {
 			return nil, err

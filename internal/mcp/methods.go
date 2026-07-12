@@ -315,6 +315,32 @@ func (s *McpServer) toolSyncRequeue(_ json.RawMessage) (interface{}, *RpcError) 
 	return textResult(fmt.Sprintf("%d observación(es) re-encolada(s) para reenvío al cerebro central.", n)), nil
 }
 
+// conflictOpts arma las opciones de detección desde la config. detectOnly fuerza todos los
+// veredictos a `pending` (modo de la captura AUTOMÁTICA: marca, nunca auto-oculta).
+func (s *McpServer) conflictOpts(detectOnly bool) memory.ConflictOptions {
+	return memory.ConflictOptions{
+		SimilarityFloor:      s.conflicts.SimilarityFloor,
+		AutoResolveThreshold: s.conflicts.AutoResolveThreshold,
+		CandidatePool:        s.conflicts.CandidatePool,
+		CosineFloor:          s.conflicts.CosineFloor,
+		CosineAutoThreshold:  s.conflicts.CosineAutoThreshold,
+		DetectOnly:           detectOnly,
+	}
+}
+
+// detectOnly (M4) corre la detección sobre una observación capturada AUTOMÁTICAMENTE (error→fix):
+// marca los duplicados como `pending` para que los juzgue el agente, sin auto-ocultar nada. No
+// devuelve nada: es fire-and-forget, la observación ya quedó guardada y un fallo acá no puede
+// romper el camino que la capturó.
+func (s *McpServer) detectOnly(obsID string) {
+	if !s.conflicts.Enabled {
+		return
+	}
+	if _, err := s.engine.DetectRelations(obsID, s.conflictOpts(true)); err != nil {
+		logx.Warn("detección de duplicados en la captura automática falló (la observación se guardó igual)", "error", err)
+	}
+}
+
 // detectAndSurface corre la detección de conflictos para la observación recién
 // guardada y devuelve un texto a anexar a la respuesta: anuncia los supersede
 // auto-resueltos y pide veredicto (musubi_judge) para las relaciones pendientes.
@@ -323,13 +349,9 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 	if !s.conflicts.Enabled {
 		return ""
 	}
-	rels, err := s.engine.DetectRelations(obsID, memory.ConflictOptions{
-		SimilarityFloor:      s.conflicts.SimilarityFloor,
-		AutoResolveThreshold: s.conflicts.AutoResolveThreshold,
-		CandidatePool:        s.conflicts.CandidatePool,
-		CosineFloor:          s.conflicts.CosineFloor,
-		CosineAutoThreshold:  s.conflicts.CosineAutoThreshold,
-	})
+	// detectOnly=false: el camino EXPLÍCITO del agente conserva su auto-resolve. Ahí el topic_key lo
+	// eligió el agente (es un tema real, no un balde) y el AND-gate del coseno ya lo protege.
+	rels, err := s.engine.DetectRelations(obsID, s.conflictOpts(false))
 	if err != nil {
 		logx.Warn("detección de conflictos falló", "error", err)
 		return ""
@@ -1585,7 +1607,14 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 			origin = p.ProjectID
 		}
 		author := authorFrom(principalFrom(ctx))
-		_, _, _ = s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), s.embedIfEnabled(content))
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), s.embedIfEnabled(content))
+		// Gate de novedad (M4): este error→fix también pasa por la detección de duplicados. Igual que
+		// la captura de commits, corre en modo DetectOnly (marca `pending`, nunca auto-oculta): acá
+		// el topic_key es el balde "error-fix", así que un auto-supersede taparía un arreglo anterior
+		// por parecerse. Best-effort y fire-and-forget: la observación YA quedó guardada.
+		if err == nil && !deduped {
+			s.detectOnly(id)
+		}
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }

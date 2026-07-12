@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La memoria que Musubi captura SOLA ahora también pasa por la detección de duplicados (M4, track
+  Semantic Hardening).** `DetectRelations` se llamaba **únicamente** desde `musubi_save_observation`
+  (lo que el agente guarda **explícito**). Los **dos** caminos de captura **automática** —los commits
+  (C3) y el error→fix (C4)— la salteaban por completo: su único dedup era el **hash exacto** del
+  contenido, así que **cualquier otra redacción se guardaba como memoria nueva e independiente, sin
+  marca ni relación**. Es la fuente de **mayor volumen** de memoria y era la de **menos** control.
+  Ahora un commit (o un arreglo) que duplica algo ya guardado queda **marcado** `pending` para que lo
+  juzgue el agente.
+  > **En el camino automático la detección NUNCA auto-oculta ni descarta nada** (`DetectOnly`). El
+  > auto-supersede se dispara con *mismo `topic_key` + léxico alto + más reciente*, y en la captura
+  > **todos** los commits comparten `topic_key = "git-commit"` — que ahí es un **balde**, no un tema.
+  > Sin esta guarda, dos commits de mensaje parecido (*"fix: typo en el README"* / *"fix: typo en el
+  > README del core"*) **se auto-ocultarían entre sí**: pérdida de memoria automática y silenciosa,
+  > justo donde no hay ningún agente mirando. Hay un test que **demuestra** ese peligro (sin la
+  > guarda, el commit viejo queda `superseded`). Tampoco hay auto-NOOP: el duplicado **se guarda
+  > igual** y sólo queda marcado — descartarlo en silencio sería perder memoria.
+
+  Costo medido: **~6 ms** por commit capturado sobre 401 observaciones (la captura ya paga ~1.2 s
+  cargando la tabla, y sólo corre cuando hay commits nuevos). `conflicts.enabled: false` lo apaga.
+
 ## [0.85.0] - 2026-07-12
 
 > **Track «Semantic Hardening».** Cuatro slices que atacan el *techo semántico* de la memoria
