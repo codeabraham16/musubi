@@ -244,6 +244,11 @@ func runServe(args []string) {
 		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
 		engine.SetVectorModelID(embedder.Name())
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
+		// M3: además de AVISAR del hueco, cerrarlo. Re-embebe en background la memoria que no
+		// tiene vector de este modelo (la previa a encender la semántica, o la de otra tabla tras
+		// un cambio de checksum/modelo). Sin esto, cambiar de modelo apaga el recall semántico
+		// hasta un `musubi embed backfill` manual. No bloquea el arranque.
+		autoBackfill(engine, embedder)
 	}
 
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()))
@@ -300,6 +305,11 @@ func runDaemon() {
 		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
 		engine.SetVectorModelID(embedder.Name())
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
+		// M3: además de AVISAR del hueco, cerrarlo. Re-embebe en background la memoria que no
+		// tiene vector de este modelo (la previa a encender la semántica, o la de otra tabla tras
+		// un cambio de checksum/modelo). Sin esto, cambiar de modelo apaga el recall semántico
+		// hasta un `musubi embed backfill` manual. No bloquea el arranque.
+		autoBackfill(engine, embedder)
 	}
 
 	// Chequeo de versión throttled: avisa por stderr si hay una versión nueva
@@ -358,6 +368,17 @@ func runDaemon() {
 }
 
 // startOutboxDrain arranca el drain del outbox (sync saliente del cerebro híbrido, F2) si está
+// autoBackfill (M3) le pasa al engine el callback de vectorización para que cierre en background el
+// hueco de procedencia (memoria sin vector del modelo actual). El engine se mantiene MODEL-FREE: no
+// embebe, recibe el embed del caller. Compartido por runServe y runDaemon. No bloquea el arranque
+// (ver DbEngine.AutoEmbedBackfill); el ctx del embed es Background porque la goroutine ya está atada
+// al ciclo de vida del engine (bgWG: Close la espera).
+func autoBackfill(engine *memory.DbEngine, embedder embedding.Provider) {
+	engine.AutoEmbedBackfill(func(text string) ([]float32, error) {
+		return embedder.Embed(context.Background(), text)
+	})
+}
+
 // configurado: requiere sync.enabled, un central_url no vacío y un intervalo > 0. Construye el
 // SyncClient desde cfg.Sync (resuelve el token de la env var, valida https/allow_insecure), lo
 // inyecta en el server y lanza RunOutboxScheduler en su propia goroutine atada a ctx. Es

@@ -8,6 +8,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Embeddings — el `model_id` ahora identifica el CONTENIDO de la tabla, no el nombre de su carpeta
+  (N1, track Semantic Hardening).** El `StaticProvider` armaba su identidad como
+  `"static:" + basename(dir)`: re-destilar la tabla **in-place** (mismo directorio, vectores
+  distintos) **no cambiaba el `model_id`**, así que los vectores viejos seguían pareciendo
+  compatibles y la búsqueda los comparaba por coseno contra los de la tabla nueva ⇒ **ranking
+  corrupto en silencio**, sin error ni aviso. Ahora el id es `static:<nombre>@<checksum>`, con un
+  checksum del contenido de `model.safetensors` **y** de `tokenizer.json` (los dos cambian los
+  vectores). Una tabla distinta es una identidad distinta, y el contrato de procedencia (F2.2)
+  excluye solo a los vectores viejos. Es la **precondición** de cualquier función que confíe en el
+  coseno (p. ej. el dedup semántico).
+- **Embeddings — re-embedding automático al cambiar de modelo (M3).** El server **avisaba** de que
+  había memoria sin vector del modelo actual, pero no lo **remediaba**: el recall semántico quedaba
+  apagado hasta que alguien corriera `musubi embed backfill` **a mano**. Ahora el arranque detecta el
+  hueco y lo cierra solo, **en background** (no bloquea el arranque: un daemon bajo systemd tiene
+  timeout, y re-embeber una base grande tardaría minutos). Logea inicio y fin, así que la degradación
+  temporal del recall durante la ventana es **visible**, no silenciosa. Sin hueco, es un no-op.
+  > **Migración (one-time, automática):** al actualizar, el `model_id` de tu tabla cambia (ahora
+  > lleva checksum) ⇒ tus vectores existentes quedan **excluidos** —invisibles, **no corruptos**— y
+  > el re-embedding automático los regenera en el primer arranque. No hay que hacer nada.
+
 - **Recall — la importancia deja de aplastar la relevancia (Q3, track Semantic Hardening).** El score
   era `rrf * importance`, un **multiplicador sin techo**: con `importance:10`, una memoria apenas
   relevante **barría** matches mucho mejores (la importancia *anulaba* la relevancia en vez de

@@ -12,9 +12,12 @@ package embedding
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"os"
 	"path/filepath"
@@ -49,21 +52,59 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")
 	}
-	table, rows, dim, err := loadStaticTable(filepath.Join(dir, "model.safetensors"))
+	tableRaw, err := os.ReadFile(filepath.Join(dir, "model.safetensors"))
 	if err != nil {
 		return nil, fmt.Errorf("tabla estática: %w", err)
 	}
-	tok, err := loadTokenizer(filepath.Join(dir, "tokenizer.json"))
+	table, rows, dim, err := parseStaticTable(tableRaw)
+	if err != nil {
+		return nil, fmt.Errorf("tabla estática: %w", err)
+	}
+	tokRaw, err := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
+	if err != nil {
+		return nil, fmt.Errorf("tokenizer: %w", err)
+	}
+	tok, err := loadTokenizerBytes(tokRaw)
 	if err != nil {
 		return nil, fmt.Errorf("tokenizer: %w", err)
 	}
 	return &StaticProvider{
-		table:   table,
-		rows:    rows,
-		dim:     dim,
-		tok:     tok,
-		modelID: "static:" + filepath.Base(filepath.Clean(dir)),
+		table: table,
+		rows:  rows,
+		dim:   dim,
+		tok:   tok,
+		// N1: la identidad lleva el CONTENIDO, no sólo el nombre de la carpeta. Con sólo el
+		// basename, re-destilar la tabla in-place NO cambiaba el model_id: los vectores viejos
+		// seguían pareciendo compatibles y la búsqueda los comparaba por coseno contra los de la
+		// tabla nueva ⇒ ranking corrupto EN SILENCIO. Con el checksum, una tabla distinta es una
+		// identidad distinta y el contrato de procedencia (F2.2) excluye sola a los vectores viejos.
+		modelID: "static:" + filepath.Base(filepath.Clean(dir)) + "@" + staticTableChecksum(tableRaw, tokRaw),
 	}, nil
+}
+
+// castagnoli es la tabla CRC32-C (polinomio Castagnoli), que Go acelera por HARDWARE (SSE4.2/ARM).
+var castagnoli = crc32.MakeTable(crc32.Castagnoli)
+
+// staticTableChecksum deriva la identidad de CONTENIDO de la tabla. Entran los DOS archivos porque
+// los dos cambian los vectores que produce el provider: otra tabla ⇒ otros vectores; otro tokenizer
+// ⇒ otra tokenización ⇒ otro mean-pool. Sólo depende de los bytes: mismo contenido ⇒ mismo checksum,
+// sin importar mtime ni ruta.
+//
+// CRC32-C y no SHA-256: MEDIDO sobre la tabla real (488MB), SHA-256 tarda ~1.16s y CRC32-C ~39ms
+// (30x). No es una micro-optimización: `musubi capture` (la captura automática) carga la tabla en
+// cada corrida, así que un hash lento le DUPLICARÍA el arranque. Esto no es un uso criptográfico:
+// sólo hay que detectar que la tabla cambió, no resistir un adversario. Para compensar los 32 bits
+// del CRC se mezclan además los TAMAÑOS de ambos archivos: una colisión tendría que coincidir en CRC
+// **y** en longitud exacta, en los dos archivos a la vez. El sha256 final es sobre 24 bytes (gratis)
+// y sólo sirve para compactar todo eso en un id corto y legible.
+func staticTableChecksum(tableRaw, tokRaw []byte) string {
+	var seed [24]byte
+	binary.BigEndian.PutUint32(seed[0:4], crc32.Checksum(tableRaw, castagnoli))
+	binary.BigEndian.PutUint64(seed[4:12], uint64(len(tableRaw)))
+	binary.BigEndian.PutUint32(seed[12:16], crc32.Checksum(tokRaw, castagnoli))
+	binary.BigEndian.PutUint64(seed[16:24], uint64(len(tokRaw)))
+	sum := sha256.Sum256(seed[:])
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func (p *StaticProvider) Name() string    { return p.modelID }
@@ -113,14 +154,11 @@ type stTensor struct {
 	DataOffsets []int64 `json:"data_offsets"`
 }
 
-// loadStaticTable lee el tensor "embeddings" de un safetensors: 8 bytes LE con la longitud
-// del header JSON, el header, y el blob contiguo de f32 little-endian. Devuelve la tabla
-// PLANA (vocab*dim, row-major), el número de filas (vocab) y la dimensión.
-func loadStaticTable(path string) ([]float32, int, int, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, 0, 0, err
-	}
+// parseStaticTable interpreta el tensor "embeddings" de un safetensors YA LEÍDO: 8 bytes LE con
+// la longitud del header JSON, el header, y el blob contiguo de f32 little-endian. Devuelve la
+// tabla PLANA (vocab*dim, row-major), el número de filas (vocab) y la dimensión. Toma los bytes
+// (y no la ruta) para que el caller pueda hashearlos sin releer el archivo (N1).
+func parseStaticTable(raw []byte) ([]float32, int, int, error) {
 	if len(raw) < 8 {
 		return nil, 0, 0, fmt.Errorf("safetensors demasiado corto")
 	}
@@ -170,13 +208,19 @@ type wordPiece struct {
 	lowercase, stripAccents, cleanText, handleCJK bool
 }
 
-// loadTokenizer lee tokenizer.json y construye el tokenizer según model.type: WordPiece
-// (tablas BERT, p. ej. las inglesas de POTION) o Unigram (SentencePiece, multilingües).
+// loadTokenizer lee tokenizer.json y construye el tokenizer. Wrapper por RUTA sobre
+// loadTokenizerBytes (que es el que usa NewStaticProvider, para hashear los bytes sin releerlos).
 func loadTokenizer(path string) (tokenizer, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	return loadTokenizerBytes(b)
+}
+
+// loadTokenizerBytes construye el tokenizer desde un tokenizer.json YA LEÍDO, según model.type:
+// WordPiece (tablas BERT, p. ej. las inglesas de POTION) o Unigram (SentencePiece, multilingües).
+func loadTokenizerBytes(b []byte) (tokenizer, error) {
 	var head struct {
 		Normalizer   json.RawMessage `json:"normalizer"`
 		PreTokenizer tkMetaspace     `json:"pre_tokenizer"`
