@@ -7,6 +7,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.87.0] - 2026-07-12
+
+> **La memoria deja de ser sólo un archivo y empieza a discutirte.** Hasta acá Musubi sabía detectar
+> lo que se **repetía**; ahora también avisa cuando algo puede estar **contradiciendo** lo que ya
+> sabía — que es el error que de verdad duele, porque te deja creyendo algo falso.
+
 ### Added
 - **Musubi ahora te avisa cuando lo que guardás puede CONTRADECIR algo que ya sabía.** Salió de un
   falso negativo **real**: una memoria decía *«NordVPN y Tailscale no pueden coexistir»* y la
@@ -2475,7 +2481,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.86.4...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.87.0...HEAD
 [0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
