@@ -158,7 +158,11 @@ func hasWord(s string, words ...string) bool {
 // pasa por promote, que C2 redacta). Si embed no es nil, cada commit se guarda CON su embedding
 // (participa del recall semántico); si es nil, guardado léxico. Devuelve cuántas guardó. No-op
 // silencioso si no es repo git o no hay commits nuevos.
-func captureCommits(store captureStore, git gitLog, embed embedFunc) (int, error) {
+// detectFunc corre la detección de relaciones sobre una observación recién guardada. Se inyecta
+// (como embed) para que el core siga testeable sin engine real. nil = sin detección.
+type detectFunc func(obsID string)
+
+func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
@@ -188,8 +192,15 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc) (int, error
 		if embed != nil {
 			vec = embed(content)
 		}
-		if _, _, err := store.SaveObservationDedupedTyped("git-commit", content, importance, memType, memory.ScopeLocal, vec); err != nil {
+		id, deduped, err := store.SaveObservationDedupedTyped("git-commit", content, importance, memType, memory.ScopeLocal, vec)
+		if err != nil {
 			return saved, err
+		}
+		// Gate de novedad (M4): marcar el commit que duplica algo ya guardado. Sólo sobre lo que
+		// REALMENTE se guardó: un dedup por hash exacto no crea observación nueva que relacionar.
+		// El detect corre en modo DetectOnly ⇒ jamás auto-oculta un commit anterior.
+		if !deduped && detect != nil {
+			detect(id)
 		}
 		saved++
 	}
@@ -246,7 +257,28 @@ func runCapture(args []string) {
 		}
 	}
 
-	n, err := captureCommits(engine, realGit{dir: root}, embed)
+	// Gate de novedad (M4): la memoria que Musubi captura SOLA también pasa por la detección de
+	// duplicados. En modo DetectOnly: detecta y MARCA como `pending` para que lo juzgue el agente,
+	// pero NUNCA auto-oculta — acá todos los commits comparten topic_key="git-commit" (un balde, no
+	// un tema), así que un auto-supersede taparía un commit anterior por parecerse en el mensaje.
+	// Best-effort: si la detección falla, el commit YA quedó guardado; la captura no rompe el turno.
+	var detect detectFunc
+	if cfg.Conflicts.Enabled {
+		detect = func(obsID string) {
+			if _, derr := engine.DetectRelations(obsID, memory.ConflictOptions{
+				SimilarityFloor:      cfg.Conflicts.SimilarityFloor,
+				AutoResolveThreshold: cfg.Conflicts.AutoResolveThreshold,
+				CandidatePool:        cfg.Conflicts.CandidatePool,
+				CosineFloor:          cfg.Conflicts.CosineFloor,
+				CosineAutoThreshold:  cfg.Conflicts.CosineAutoThreshold,
+				DetectOnly:           true,
+			}); derr != nil && !hookMode {
+				fmt.Fprintf(os.Stderr, "capture: detección de duplicados falló (el commit se guardó igual): %v\n", derr)
+			}
+		}
+	}
+
+	n, err := captureCommits(engine, realGit{dir: root}, embed, detect)
 	if err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: %v\n", err)

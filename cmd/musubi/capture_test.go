@@ -41,6 +41,9 @@ type recordingStore struct {
 	meta      map[string]string
 	lastEmbed []float32
 	saved     int
+	// dedupeAll simula que el contenido ya existía (dedup por hash exacto): no se crea una
+	// observación nueva, así que tampoco hay nada que relacionar.
+	dedupeAll bool
 }
 
 func (r *recordingStore) GetMeta(k string) (string, bool, error) { v, ok := r.meta[k]; return v, ok, nil }
@@ -54,7 +57,48 @@ func (r *recordingStore) SetMeta(k, v string) error {
 func (r *recordingStore) SaveObservationDedupedTyped(_, _ string, _ float64, _, _ string, emb []float32) (string, bool, error) {
 	r.lastEmbed = emb
 	r.saved++
-	return "id", false, nil
+	return "id", r.dedupeAll, nil
+}
+
+// M4 — el gate de novedad corre sobre cada commit que REALMENTE se guarda.
+func TestCaptureCommitsRunsNoveltyGateOnSavedCommits(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h2", commits: []commit{
+		{SHA: "h1", Subject: "feat: algo importante y largo"},
+		{SHA: "h2", Subject: "feat: otra cosa importante y larga"},
+	}}
+	var detected []string
+	n, err := captureCommits(store, g, nil, func(id string) { detected = append(detected, id) })
+	if err != nil || n != 2 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	if len(detected) != 2 {
+		t.Errorf("el gate de novedad debe correr sobre los 2 commits guardados, corrió %d veces", len(detected))
+	}
+}
+
+// M4 / R6 — un commit DEDUPEADO por hash exacto NO dispara el gate: no hay observación nueva que
+// relacionar (FindByContentHash ya devolvió la existente).
+func TestCaptureCommitsSkipsNoveltyGateOnHashDedupe(t *testing.T) {
+	store := &recordingStore{dedupeAll: true}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	detected := 0
+	n, err := captureCommits(store, g, nil, func(string) { detected++ })
+	if err != nil || n != 1 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	if detected != 0 {
+		t.Errorf("un commit dedupeado por hash no debe disparar el gate (no hay observación nueva), corrió %d veces", detected)
+	}
+}
+
+// Sin detect (nil), la captura funciona igual: el gate es opcional (conflicts.enabled: false).
+func TestCaptureCommitsWorksWithoutNoveltyGate(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	if n, err := captureCommits(store, g, nil, nil); err != nil || n != 1 {
+		t.Fatalf("sin gate la captura debe seguir funcionando: (%d, %v)", n, err)
+	}
 }
 
 // Con embed no-nil, cada commit se guarda CON su vector (participa del recall semántico).
@@ -62,7 +106,7 @@ func TestCaptureCommitsEmbeds(t *testing.T) {
 	store := &recordingStore{}
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
 	embed := func(string) []float32 { return []float32{1, 2, 3} }
-	n, err := captureCommits(store, g, embed)
+	n, err := captureCommits(store, g, embed, nil)
 	if err != nil || n != 1 {
 		t.Fatalf("captureCommits = (%d, %v)", n, err)
 	}
@@ -75,7 +119,7 @@ func TestCaptureCommitsEmbeds(t *testing.T) {
 func TestCaptureCommitsNilEmbedIsLexical(t *testing.T) {
 	store := &recordingStore{}
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
-	n, err := captureCommits(store, g, nil)
+	n, err := captureCommits(store, g, nil, nil)
 	if err != nil || n != 1 {
 		t.Fatalf("captureCommits = (%d, %v)", n, err)
 	}
@@ -111,7 +155,7 @@ func newEngine(t *testing.T) *memory.DbEngine {
 func TestCaptureFirstRunSavesHead(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{head: "abc123", commits: []commit{{SHA: "abc123", Subject: "feat: primera cosa", Files: []string{"a.go"}}}}
-	n, err := captureCommits(e, g, nil)
+	n, err := captureCommits(e, g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +177,7 @@ func TestCaptureIncremental(t *testing.T) {
 		{Subject: "fix: bug uno"},
 		{Subject: "feat: cosa dos"},
 	}}
-	n, err := captureCommits(e, g, nil)
+	n, err := captureCommits(e, g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +196,7 @@ func TestCaptureNoNewCommits(t *testing.T) {
 	e := newEngine(t)
 	_ = e.SetMeta(metaCaptureLastCommit, "same")
 	g := &fakeGit{head: "same", commits: []commit{{Subject: "feat: no debería leerse"}}}
-	n, err := captureCommits(e, g, nil)
+	n, err := captureCommits(e, g, nil, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("sin commits nuevos debe ser 0 sin error; n=%d err=%v", n, err)
 	}
@@ -164,7 +208,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 		{Subject: "chore: bump dependencies"}, // trivial → skip
 		{Subject: "fix: real problem here"},   // capturado
 	}}
-	n, err := captureCommits(e, g, nil)
+	n, err := captureCommits(e, g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +223,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 func TestCaptureNotAGitRepo(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{headErr: errors.New("not a git repository")}
-	n, err := captureCommits(e, g, nil)
+	n, err := captureCommits(e, g, nil, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("sin repo git: no-op silencioso; n=%d err=%v", n, err)
 	}
