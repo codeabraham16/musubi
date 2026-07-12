@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.86.3] - 2026-07-12
+
+> **Un bug que encontró el uso, no el diseño.** Salió al estrenar el dedup semántico de v0.86.0
+> contra la memoria real: marcó relaciones contra **dos observaciones del mismo commit**.
+
 ### Fixed
 - **La captura ya no guarda dos veces el mismo commit cuando mergeás con squash.** Encontrado en la
   memoria real, no en teoría: `musubi capture` guarda el commit de la **rama**, y después el
@@ -2405,7 +2410,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.78.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.86.3...HEAD
 [0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
