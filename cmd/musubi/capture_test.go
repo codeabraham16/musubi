@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"musubi/internal/memory"
@@ -41,9 +42,10 @@ type recordingStore struct {
 	meta      map[string]string
 	lastEmbed []float32
 	saved     int
-	// dedupeAll simula que el contenido ya existía (dedup por hash exacto): no se crea una
-	// observación nueva, así que tampoco hay nada que relacionar.
+	// dedupeAll fuerza que TODO id se considere ya existente (simula el UPSERT de un gemelo).
 	dedupeAll bool
+	// byID simula la tabla observations: id → contenido.
+	byID map[string]string
 }
 
 func (r *recordingStore) GetMeta(k string) (string, bool, error) { v, ok := r.meta[k]; return v, ok, nil }
@@ -54,10 +56,107 @@ func (r *recordingStore) SetMeta(k, v string) error {
 	r.meta[k] = v
 	return nil
 }
-func (r *recordingStore) SaveObservationDedupedTyped(_, _ string, _ float64, _, _ string, emb []float32) (string, bool, error) {
+// byID simula la tabla: id → contenido. Es lo que permite testear el UPSERT del gemelo del squash.
+func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, _ string, emb []float32) error {
+	if r.byID == nil {
+		r.byID = map[string]string{}
+	}
+	r.byID[id] = content
 	r.lastEmbed = emb
 	r.saved++
-	return "id", r.dedupeAll, nil
+	return nil
+}
+
+func (r *recordingStore) ObservationExists(id string) (bool, error) {
+	if r.dedupeAll {
+		return true, nil
+	}
+	_, ok := r.byID[id]
+	return ok, nil
+}
+
+// El gemelo del SQUASH-MERGE: GitHub crea en main un commit nuevo con el MISMO mensaje más el
+// sufijo `(#123)`, y reescribe el trailer Co-Authored-By → Co-authored-by. Sin normalizar, la
+// captura lo guardaba como una memoria NUEVA (el dedup por hash exacto no lo agarra: el texto cambió
+// apenas). Encontrado en la memoria real: 3 pares sobre 58 commits.
+const commitRama = "feat(dedup): dedup semantico\n\nCuerpo del commit.\n\nCo-Authored-By: Claude <x@y>\n\nArchivos: a.go, b.go"
+const commitSquash = "feat(dedup): dedup semantico (#193)\n\nCuerpo del commit.\n\nCo-authored-by: Claude <x@y>\n\nArchivos: a.go, b.go"
+
+// S.a / S.e — el gemelo del squash cae en la MISMA clave: mismo id ⇒ UPSERT, no observación nueva.
+func TestCommitIDIgnoresSquashSuffixAndTrailerCase(t *testing.T) {
+	if commitObsID(commitRama) != commitObsID(commitSquash) {
+		t.Errorf("el gemelo del squash debe caer en el MISMO id que el commit de la rama\n  rama:   %s\n  squash: %s",
+			commitObsID(commitRama), commitObsID(commitSquash))
+	}
+}
+
+// S.d — dos commits con el MISMO subject pero ARCHIVOS distintos NO deben colisionar: la lista de
+// archivos entra en la clave, y es lo que los distingue.
+func TestCommitIDDistinguishesDifferentFiles(t *testing.T) {
+	a := "chore: bump deps\n\nArchivos: go.mod"
+	b := "chore: bump deps\n\nArchivos: package.json"
+	if commitObsID(a) == commitObsID(b) {
+		t.Error("dos commits con el mismo título pero archivos distintos NO deben colisionar")
+	}
+}
+
+// S.a / S.b — end-to-end: el gemelo del squash NO crea una observación nueva y deja el contenido
+// CANÓNICO (el del merge, con el (#193)).
+func TestCaptureCommitsUpsertsSquashTwinInsteadOfDuplicating(t *testing.T) {
+	store := &recordingStore{}
+
+	// 1) La captura corre sobre la rama.
+	g1 := &fakeGit{head: "h1", commits: []commit{{
+		SHA: "h1", Subject: "feat(dedup): dedup semantico",
+		Body: "Cuerpo del commit.\n\nCo-Authored-By: Claude <x@y>", Files: []string{"a.go", "b.go"},
+	}}}
+	if n, err := captureCommits(store, g1, nil, nil); err != nil || n != 1 {
+		t.Fatalf("captura de la rama = (%d, %v)", n, err)
+	}
+	if len(store.byID) != 1 {
+		t.Fatalf("esperaba 1 observación tras la rama, hay %d", len(store.byID))
+	}
+
+	// 2) Squash-merge: mismo commit, con (#193) y el trailer reescrito por GitHub.
+	g2 := &fakeGit{head: "h2", commits: []commit{{
+		SHA: "h2", Subject: "feat(dedup): dedup semantico (#193)",
+		Body: "Cuerpo del commit.\n\nCo-authored-by: Claude <x@y>", Files: []string{"a.go", "b.go"},
+	}}}
+	n, err := captureCommits(store, g2, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.byID) != 1 {
+		t.Errorf("el gemelo del squash NO debe crear una observación nueva: hay %d (esperaba 1)", len(store.byID))
+	}
+	if n != 0 {
+		t.Errorf("un UPSERT no cuenta como memoria nueva: reportó %d guardados", n)
+	}
+	// S.b — el contenido queda el CANÓNICO (el del merge).
+	for _, content := range store.byID {
+		if !strings.Contains(content, "(#193)") {
+			t.Errorf("tras el UPSERT el contenido debe ser el del merge (con el (#193)), obtuve:\n%s", content)
+		}
+	}
+}
+
+// S.a / R7 — el gate de novedad (M4) NO corre sobre un UPSERT: no hay memoria nueva que relacionar.
+func TestCaptureSkipsNoveltyGateOnSquashTwin(t *testing.T) {
+	store := &recordingStore{}
+	g1 := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "fix: algo importante", Files: []string{"a.go"}}}}
+	if _, err := captureCommits(store, g1, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	detected := 0
+	g2 := &fakeGit{head: "h2", commits: []commit{{SHA: "h2", Subject: "fix: algo importante (#42)", Files: []string{"a.go"}}}}
+	if _, err := captureCommits(store, g2, nil, func(string) { detected++ }); err != nil {
+		t.Fatal(err)
+	}
+	if detected != 0 {
+		t.Errorf("un UPSERT del gemelo no debe disparar el gate de novedad, corrió %d veces", detected)
+	}
 }
 
 // M4 — el gate de novedad corre sobre cada commit que REALMENTE se guarda.
@@ -77,18 +176,21 @@ func TestCaptureCommitsRunsNoveltyGateOnSavedCommits(t *testing.T) {
 	}
 }
 
-// M4 / R6 — un commit DEDUPEADO por hash exacto NO dispara el gate: no hay observación nueva que
-// relacionar (FindByContentHash ya devolvió la existente).
-func TestCaptureCommitsSkipsNoveltyGateOnHashDedupe(t *testing.T) {
-	store := &recordingStore{dedupeAll: true}
+// M4 / R7-R8 — un commit cuyo id YA EXISTE es un UPSERT (no memoria nueva): no dispara el gate de
+// novedad y no cuenta como guardado.
+func TestCaptureCommitsUpsertDoesNotCountNorFireGate(t *testing.T) {
+	store := &recordingStore{dedupeAll: true} // todo id se considera ya existente
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
 	detected := 0
 	n, err := captureCommits(store, g, nil, func(string) { detected++ })
-	if err != nil || n != 1 {
-		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("un UPSERT no es memoria nueva: no debe contar como guardado, reportó %d", n)
 	}
 	if detected != 0 {
-		t.Errorf("un commit dedupeado por hash no debe disparar el gate (no hay observación nueva), corrió %d veces", detected)
+		t.Errorf("un UPSERT no debe disparar el gate (no hay observación nueva que relacionar), corrió %d veces", detected)
 	}
 }
 

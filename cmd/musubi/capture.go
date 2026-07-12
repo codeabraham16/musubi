@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,7 +44,44 @@ type gitLog interface {
 type captureStore interface {
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
-	SaveObservationDedupedTyped(topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
+	SaveObservationTyped(id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error
+	ObservationExists(id string) (bool, error)
+}
+
+// prNumSuffix matchea el ` (#123)` que el squash-merge de GitHub le agrega al SUBJECT del commit.
+var prNumSuffix = regexp.MustCompile(`\s*\(#\d+\)$`)
+
+// commitKey normaliza el contenido de un commit para deduplicarlo.
+//
+// EL PROBLEMA: cada PR mergeado con SQUASH deja DOS memorias del mismo commit. La captura guarda el
+// commit de la rama; después el squash-merge crea en main un commit NUEVO con el MISMO mensaje más
+// el sufijo `(#123)` (y GitHub reescribe el trailer `Co-Authored-By` → `Co-authored-by`). La captura
+// lo ve como nuevo y lo guarda otra vez. El dedup por hash EXACTO no lo agarra: el texto cambió
+// apenas. Y es redundante POR CONSTRUCCIÓN — tras el squash, el commit de la rama ya no existe en la
+// historia de main; el canónico es el del merge.
+//
+// La normalización: quitar el `(#NNN)` del subject (SÓLO del subject, no del cuerpo) y bajar todo a
+// minúsculas (lo que absorbe el reescrito del trailer).
+//
+// La clave incluye el CUERPO y la LISTA DE ARCHIVOS, no sólo el subject: es lo que evita que dos
+// commits genuinamente distintos con el mismo título colisionen.
+func commitKey(content string) string {
+	subject, rest, _ := strings.Cut(content, "\n")
+	subject = prNumSuffix.ReplaceAllString(strings.TrimSpace(subject), "")
+	return strings.ToLower(subject + "\n" + rest)
+}
+
+// commitObsID deriva un id DETERMINÍSTICO del commit desde su clave normalizada. Como el id ES la
+// clave de dedup, el gemelo del squash cae en el MISMO id ⇒ el guardado lo UPSERTEA con el contenido
+// canónico (el del merge) en vez de crear una observación nueva.
+//
+// Es un NOOP seguro por la misma razón que el dedup por hash exacto: no es una interpretación, es un
+// hecho ESTRUCTURAL (el mismo commit, reformulado mecánicamente por GitHub). Un duplicado SEMÁNTICO
+// —otras palabras, mismo significado— sí requiere juicio, y para eso están el dedup semántico (#193)
+// y el gate de novedad (#195), que lo rutean a `pending`.
+func commitObsID(content string) string {
+	sum := sha256.Sum256([]byte(commitKey(content)))
+	return "commit-" + hex.EncodeToString(sum[:])[:16]
 }
 
 // embedFunc genera el vector de un texto para la captura (o nil si la semántica está
@@ -192,14 +232,25 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc, detect dete
 		if embed != nil {
 			vec = embed(content)
 		}
-		id, deduped, err := store.SaveObservationDedupedTyped("git-commit", content, importance, memType, memory.ScopeLocal, vec)
+		// Id DETERMINÍSTICO desde la clave normalizada (ver commitObsID): si ya existe, este "commit
+		// nuevo" es el mismo commit reformulado por el squash-merge ⇒ el guardado lo UPSERTEA con el
+		// contenido canónico en vez de crear un gemelo. No se oculta ni se descarta nada: se
+		// ACTUALIZA. SaveObservationTyped preserva created_at y las stats de acceso en el update.
+		id := commitObsID(content)
+		existed, err := store.ObservationExists(id)
 		if err != nil {
 			return saved, err
 		}
-		// Gate de novedad (M4): marcar el commit que duplica algo ya guardado. Sólo sobre lo que
-		// REALMENTE se guardó: un dedup por hash exacto no crea observación nueva que relacionar.
-		// El detect corre en modo DetectOnly ⇒ jamás auto-oculta un commit anterior.
-		if !deduped && detect != nil {
+		if err := store.SaveObservationTyped(id, "git-commit", content, importance, memType, memory.ScopeLocal, vec); err != nil {
+			return saved, err
+		}
+		if existed {
+			continue // gemelo del squash: se actualizó lo existente, no hay memoria nueva
+		}
+		// Gate de novedad (M4): marcar el commit que duplica algo ya guardado. Sólo sobre memoria
+		// REALMENTE nueva: un UPSERT no crea observación que relacionar. El detect corre en modo
+		// DetectOnly ⇒ jamás auto-oculta un commit anterior.
+		if detect != nil {
 			detect(id)
 		}
 		saved++

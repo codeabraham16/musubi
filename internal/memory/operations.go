@@ -153,6 +153,18 @@ func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, author, topi
 	return id, false, nil
 }
 
+// ObservationExists indica si ya hay una observación con ese id. Lo usa la captura de commits, que
+// deriva un id DETERMINÍSTICO del contenido: si el id ya existe, el "commit nuevo" es en realidad el
+// mismo commit reformulado (el gemelo del squash-merge) y el guardado es un UPSERT, no memoria nueva.
+func (e *DbEngine) ObservationExists(id string) (bool, error) {
+	var n int
+	err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, id).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("error al verificar si existe la observación %q: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // FindByContentHash devuelve el id de la observación con ese content_hash, si existe.
 func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 	var id string
