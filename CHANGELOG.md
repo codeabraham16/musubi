@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.86.4] - 2026-07-12
+
+> **Otro bug que encontró el uso, no el diseño** — y esta vez la feature se quejó de sí misma: los
+> contratos SDD de este mismo fix generaron, al guardarse, exactamente el ruido que el fix elimina.
+
 ### Fixed
 - **La cola de conflictos ya no se llena de ruido que Musubi se fabrica sola.** Medido en la memoria
   real: **14 de 23** relaciones pendientes eran **artefactos del MISMO cambio relacionándose entre
@@ -2434,7 +2439,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.86.3...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.86.4...HEAD
 [0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
