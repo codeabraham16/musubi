@@ -111,7 +111,7 @@ func (e *DbEngine) augmentWithCooccurrencePool(ctx context.Context, cands []cand
 	for i, t := range terms {
 		quoted[i] = `"` + t + `"`
 	}
-	results, err := e.ftsSearch(ctx, strings.Join(quoted, " OR "), limit)
+	results, scores, err := e.ftsSearch(ctx, strings.Join(quoted, " OR "), limit)
 	if err != nil {
 		return cands, nil, err
 	}
@@ -123,9 +123,15 @@ func (e *DbEngine) augmentWithCooccurrencePool(ctx context.Context, cands []cand
 	for _, c := range cands {
 		have[c.id] = true
 	}
+	// coocRank DENSO por score bm25 (Q3), igual que lexRank: empates de relevancia comparten rango
+	// en vez de recibir posiciones arbitrarias por rowid. results ya viene ordenado por rank.
 	coocRank := make(map[string]int, len(results))
+	rank := 0
 	for i, r := range results {
-		coocRank[r.id] = i
+		if i > 0 && scores[i] != scores[i-1] {
+			rank++
+		}
+		coocRank[r.id] = rank
 		if !have[r.id] {
 			cands = append(cands, r) // puente de vocabulario: obs que la query original no halló
 			have[r.id] = true
