@@ -101,6 +101,62 @@ func (o ConflictOptions) withDefaults() ConflictOptions {
 // cosineEnabled indica si el coseno participa del veredicto. CosineFloor <= 0 lo apaga.
 func (o ConflictOptions) cosineEnabled() bool { return o.CosineFloor > 0 }
 
+// CommitTopicKey es el topic_key de las observaciones que captura `musubi capture` desde git.
+// Vive acá (y no en cmd/) porque la detección de conflictos necesita reconocerlas: dos literales
+// "git-commit" en paquetes distintos serían una bomba de tiempo — el día que uno cambiara, la
+// guarda de abajo dejaría de aplicar EN SILENCIO (sin error, sin test rojo, sólo más ruido).
+const CommitTopicKey = "git-commit"
+
+// sddPrefix es el prefijo de los contratos que persiste el flujo SDD: sdd/<cambio>/<fase>.
+const sddPrefix = "sdd/"
+
+// sddChange extrae el <cambio> de un topic_key con forma sdd/<cambio>/<fase>. Devuelve "" si no
+// matchea. Exige la barra de la <fase>: un topic_key raro como "sdd/loquesea" NO se toma por un
+// contrato SDD y el par cae al camino normal (degradación segura).
+func sddChange(topicKey string) string {
+	rest, ok := strings.CutPrefix(topicKey, sddPrefix)
+	if !ok {
+		return ""
+	}
+	change, _, ok := strings.Cut(rest, "/")
+	if !ok || change == "" {
+		return ""
+	}
+	return change
+}
+
+func isSDD(topicKey string) bool    { return sddChange(topicKey) != "" }
+func isCommit(topicKey string) bool { return topicKey == CommitTopicKey }
+
+// complementaryPair reconoce dos artefactos que NO pueden ser redundantes entre sí por su
+// ESTRUCTURA, sin importar cuánto se parezcan. No mira el contenido A PROPÓSITO: el parecido entre
+// el `spec` y el `design` de un mismo cambio es alto y CORRECTO — mirar el texto sólo puede
+// confundir. Lo que decide es de QUÉ son artefactos, y eso vive en el topic_key.
+//
+// Sin esto, cada cambio fabrica ruido: el flujo SDD guarda 7 contratos que describen EL MISMO
+// cambio, así que por construcción se parecen entre sí. Medido en la memoria real: 14 de 23
+// relaciones pendientes eran esto. Y el daño no es el ruido, es la erosión — una cola llena de
+// falsos positivos deja de leerse, y el día que aparezca la contradicción REAL se pierde entre
+// las demás. El dedup semántico vale lo que valga la CREDIBILIDAD de su cola.
+func complementaryPair(a, b obsRow) bool {
+	// G1 — hermanos del mismo cambio SDD. proposal, spec, design... se COMPLEMENTAN, no se
+	// duplican: ninguno se puede borrar sin perder el rastro del razonamiento.
+	if ch := sddChange(a.topicKey); ch != "" && ch == sddChange(b.topicKey) {
+		return true
+	}
+	// G2 — el EVENTO vs el CONTRATO. Un commit no puede reemplazar a un spec, ni al revés: uno es
+	// lo que pasó, el otro es lo que se acordó. Se chequea en AMBOS órdenes porque `src` es siempre
+	// la observación recién guardada — o sea que el orden depende de quién llegó último. Una guarda
+	// asimétrica taparía la mitad de los casos según el orden de guardado.
+	if isCommit(a.topicKey) && isSDD(b.topicKey) {
+		return true
+	}
+	if isSDD(a.topicKey) && isCommit(b.topicKey) {
+		return true
+	}
+	return false
+}
+
 type obsRow struct {
 	id        string
 	topicKey  string
@@ -154,6 +210,12 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 
 	var out []ObsRelation
 	for _, c := range cands {
+		// Guarda ESTRUCTURAL, antes de cualquier scoring: si el par no es siquiera COMPARABLE, no hay
+		// veredicto que pedir. Va acá —el único loop donde nacen todas las relaciones— para que sea
+		// imposible de saltear, igual que DetectOnly volvió inalcanzable al markSuperseded.
+		if complementaryPair(src, c) {
+			continue
+		}
 		lex := Similarity(src.content, c.content)
 		var cos *float64
 		if v, ok := cosines[c.id]; ok {

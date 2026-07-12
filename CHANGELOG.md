@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La cola de conflictos ya no se llena de ruido que Musubi se fabrica sola.** Medido en la memoria
+  real: **14 de 23** relaciones pendientes eran **artefactos del MISMO cambio relacionándose entre
+  sí**. El flujo SDD guarda **7 contratos por cambio** (proposal → spec → design → …) y los siete
+  describen *el mismo cambio*, así que por construcción se parecen. El detector los veía parecidos y
+  pedía un veredicto por cada par. El commit de ese mismo cambio también se parecía a sus propios
+  contratos (coseno hasta **0.93** contra su `proposal`).
+
+  Pero un `proposal` y un `design` **no son duplicados: son complementarios**. Ninguno se puede
+  borrar sin perder el rastro del razonamiento. Pedir un juicio ahí es pedir que se decida algo que
+  no tiene decisión.
+
+  Ahora dos guardas **estructurales** (deciden por el `topic_key`, sin mirar el contenido) evitan
+  **crear** esas relaciones: las fases del mismo cambio SDD entre sí, y un `git-commit` contra un
+  contrato SDD — el **evento** vs. el **acuerdo**, donde ninguno puede reemplazar al otro. La
+  detección entre memorias **comparables** (dos notas, dos commits, un commit y una nota) no se toca.
+  > **El daño real no era el ruido: era la erosión.** Una cola llena de falsos positivos **deja de
+  > leerse**, y el día que aparezca la contradicción **real** se pierde entre las demás. El dedup
+  > semántico vale lo que valga la **credibilidad** de su cola.
+  >
+  > **Y ninguna guarda oculta memoria.** Es un `continue`, no un `DELETE`: evita *crear* una
+  > relación. El peor caso de un falso negativo es una relación **de menos en la cola** — jamás una
+  > observación de menos en el recall.
+
 ## [0.86.3] - 2026-07-12
 
 > **Un bug que encontró el uso, no el diseño.** Salió al estrenar el dedup semántico de v0.86.0

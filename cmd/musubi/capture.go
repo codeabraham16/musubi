@@ -241,7 +241,7 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc, detect dete
 		if err != nil {
 			return saved, err
 		}
-		if err := store.SaveObservationTyped(id, "git-commit", content, importance, memType, memory.ScopeLocal, vec); err != nil {
+		if err := store.SaveObservationTyped(id, memory.CommitTopicKey, content, importance, memType, memory.ScopeLocal, vec); err != nil {
 			return saved, err
 		}
 		if existed {
