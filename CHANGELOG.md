@@ -7,6 +7,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.85.0] - 2026-07-12
+
+> **Track «Semantic Hardening».** Cuatro slices que atacan el *techo semántico* de la memoria
+> model-free. Salieron de una investigación (96 agentes) + una auditoría con verificación adversarial
+> (13 agentes), y cada uno arregla un **bug medido**, no una intuición. Hilo conductor: la semántica
+> **amplía y rutea**, pero **nunca decide sola** qué memoria se oculta.
+>
+> **Migración: ninguna acción requerida.** Tus vectores se re-generan solos en el primer arranque.
+
 ### Added
 - **Dedup SEMÁNTICO: el duplicado dicho con otras palabras ya no es invisible (M1/Q4 + M2, track
   Semantic Hardening).** La detección de relaciones era **100% léxica**: el pool de candidatas salía
