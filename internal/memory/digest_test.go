@@ -133,11 +133,45 @@ func TestGistEmpty(t *testing.T) {
 	}
 }
 
-func TestGistFirstSentence(t *testing.T) {
-	g := Gist("Primera oración. Segunda oración que sobra.", 50)
-	if g != "Primera oración." {
-		t.Errorf("Gist debería tomar la primera oración, obtuve %q", g)
-	}
+// Este test ANTES exigía que el gist se quedara en la primera oración — o sea, pineaba el bug:
+// un gist de 8 tokens con un techo de 24 abandonaba 16 sin intentar decir nada más, y quedaban
+// gists mudos como "SDD tasks — brain-dashboard BACKEND." (110 de 461 en la memoria real).
+//
+// El gist existe para que el agente decida SI VALE LA PENA EXPANDIR. Uno que no deja decidir cuesta
+// tokens y obliga a expandir igual: se paga DOS VECES.
+func TestGistLlenaSuTecho(t *testing.T) {
+	const texto = "Primera oración. Segunda oración que sobra."
+
+	t.Run("con techo de sobra, suma oraciones", func(t *testing.T) { // S.a
+		g := Gist(texto, 50)
+		if g != texto {
+			t.Errorf("con 50 tokens de techo entran las DOS oraciones; el gist no debe abandonar"+
+				" presupuesto. Obtuve %q", g)
+		}
+	})
+
+	t.Run("no agrega una oración que no entra COMPLETA", func(t *testing.T) { // S.c
+		// Techo justo para la 1ª: la 2ª no entra entera ⇒ no se agrega a medias.
+		g := Gist(texto, EstimateTokens("Primera oración."))
+		if g != "Primera oración." {
+			t.Errorf("una oración que no entra completa NO se agrega: un gist cortado al medio"+
+				" tampoco deja decidir. Obtuve %q", g)
+		}
+	})
+
+	t.Run("nunca excede el techo", func(t *testing.T) { // S.b
+		for _, techo := range []int{4, 8, 12, 24, 50} {
+			if got := EstimateTokens(Gist(texto, techo)); got > techo {
+				t.Errorf("techo %d: el gist usó %d tokens", techo, got)
+			}
+		}
+	})
+
+	t.Run("una sola oración: no se inventa nada", func(t *testing.T) { // S.e
+		if g := Gist("Única oración.", 50); g != "Única oración." {
+			t.Errorf("no hay más texto que agregar; obtuve %q", g)
+		}
+	})
 }
 
 func TestGistStripsMarkdownLead(t *testing.T) {

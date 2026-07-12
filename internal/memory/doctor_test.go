@@ -206,3 +206,46 @@ func TestBackupToCustomDir(t *testing.T) {
 		t.Errorf("el snapshot debe contener las observaciones; filas=%d", n)
 	}
 }
+
+// TestRegenGistsEsSeguroEIdempotente pinea el invariante R0: el gist es DERIVADO, así que
+// regenerarlo NO puede perder información y correrlo dos veces da lo mismo que correrlo una.
+func TestRegenGistsEsSeguroEIdempotente(t *testing.T) {
+	e := newTestEngine(t)
+	const contenido = "Titulo corto. Detalle que importa. Y mucho mas texto detras que ya no entra en el techo del gist."
+	if err := e.SaveObservation("o1", "t/a", contenido, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Simular un gist VIEJO (cortado en la 1ª oración, como lo dejaba el extractor anterior).
+	if _, err := e.db.Exec(`UPDATE observations SET gist=? WHERE id='o1'`, "Titulo corto."); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := applyRegenGists(e)
+	if err != nil {
+		t.Fatalf("applyRegenGists: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("se esperaba 1 gist recalculado, obtuve %d", n)
+	}
+
+	var gist, content, hash string
+	if err := e.db.QueryRow(`SELECT gist, content, COALESCE(content_hash,'') FROM observations WHERE id='o1'`).
+		Scan(&gist, &content, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if gist == "Titulo corto." {
+		t.Error("el gist debía recalcularse y usar su presupuesto, no quedarse en la 1ª oración")
+	}
+	if content != contenido {
+		t.Error("la reparación NO debe tocar el content: el gist es DERIVADO")
+	}
+
+	// Idempotencia (S.f): correr de nuevo no cambia nada.
+	n2, err := applyRegenGists(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 0 {
+		t.Errorf("la reparación debe ser IDEMPOTENTE: la 2ª corrida tocó %d gist(s)", n2)
+	}
+}
