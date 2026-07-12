@@ -226,21 +226,74 @@ func TestArchivedExcludedFromRecallAndSearch(t *testing.T) {
 	}
 }
 
-func TestScoreCandidatesFusion(t *testing.T) {
-	// 'c' tiene la peor posición keyword pero importancia alta: debe ganar.
+// TestScoreCandidatesImportanceNoOverride verifica el fix Q3: la importancia dejó de ser un
+// multiplicador sin techo que ANULABA la relevancia. 'c' tiene importancia máxima (10) pero la peor
+// posición en todos los pools; 'a' tiene importancia default pero la mejor relevancia keyword. La
+// relevancia DEBE dominar — 'a' gana. (Antes, con `rrf*imp`, 'c' barría a 'a': ése era el bug.)
+func TestScoreCandidatesImportanceNoOverride(t *testing.T) {
 	cands := []candidate{
 		{id: "a", accessCount: 0, importance: 1},
 		{id: "b", accessCount: 100, importance: 1},
 		{id: "c", accessCount: 0, importance: 10},
 	}
-	// lexRank por orden del slice = el comportamiento keyword-meaningful histórico.
 	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
 	scored := scoreCandidates(cands, lexRank, nil, nil, nil)
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
-	if scored[0].id != "c" {
-		t.Errorf("esperaba 'c' primero por importancia, obtuve %s", scored[0].id)
+	if scored[0].id != "a" {
+		t.Errorf("la relevancia debe dominar: esperaba 'a' primero (mejor pool), obtuve %s", scored[0].id)
+	}
+	// El importance:10 con la peor relevancia NO debe treparse al tope solo por importancia.
+	if scored[0].id == "c" {
+		t.Error("importance:10 no debe overridear una relevancia claramente superior (Q3)")
+	}
+}
+
+// TestImportanceRankDense verifica el rango denso tie-aware (Q3.a/R2/R3): igual importancia efectiva
+// ⇒ mismo rango; el rango sólo incrementa al bajar de valor; importance<=0 normaliza a 1.0.
+func TestImportanceRankDense(t *testing.T) {
+	cands := []candidate{
+		{id: "hi", importance: 10},
+		{id: "mid", importance: 5},
+		{id: "def", importance: 1},
+		{id: "zero", importance: 0}, // normaliza a 1.0 ⇒ empata con 'def'
+	}
+	r := importanceRank(cands)
+	want := map[string]int{"hi": 0, "mid": 1, "def": 2, "zero": 2}
+	for id, w := range want {
+		if r[id] != w {
+			t.Errorf("importanceRank[%s] = %d, esperaba %d (rangos densos %v)", id, r[id], w, want)
+		}
+	}
+}
+
+// TestScoreCandidatesImportanceTiebreak verifica R5/Q3.b: a igual rango en TODOS los pools, la mayor
+// importancia desempata (rankea primero). La importancia conserva su rol de desempate.
+func TestScoreCandidatesImportanceTiebreak(t *testing.T) {
+	cands := []candidate{
+		{id: "low", accessCount: 3, importance: 1},
+		{id: "high", accessCount: 3, importance: 5},
+	}
+	// Mismo rango léxico para ambos ⇒ sólo la importancia los diferencia.
+	scored := scoreCandidates(cands, map[string]int{"low": 0, "high": 0}, nil, nil, nil)
+	if scored[0].id != "high" {
+		t.Errorf("a igual relevancia, la mayor importancia debe desempatar: esperaba 'high', obtuve %s", scored[0].id)
+	}
+}
+
+// TestScoreCandidatesImportanceUniform verifica R4/Q3.d: con importancia uniforme el término de
+// importancia es constante y NO altera el orden — lo fija el pool léxico.
+func TestScoreCandidatesImportanceUniform(t *testing.T) {
+	cands := []candidate{
+		{id: "a", importance: 1},
+		{id: "b", importance: 1},
+		{id: "c", importance: 1},
+	}
+	// Mejor lexRank ⇒ debe rankear primero, sin que la importancia (uniforme) lo altere.
+	scored := scoreCandidates(cands, map[string]int{"a": 2, "b": 0, "c": 1}, nil, nil, nil)
+	if scored[0].id != "b" {
+		t.Errorf("con importancia uniforme el orden lo fija el lexRank: esperaba 'b' primero, obtuve %s", scored[0].id)
 	}
 }
 

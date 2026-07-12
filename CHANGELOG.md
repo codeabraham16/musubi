@@ -8,6 +8,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Recall — la importancia deja de aplastar la relevancia (Q3, track Semantic Hardening).** El score
+  era `rrf * importance`, un **multiplicador sin techo**: con `importance:10`, una memoria apenas
+  relevante **barría** matches mucho mejores (la importancia *anulaba* la relevancia en vez de
+  desempatarla). Ahora la importancia entra como **un término RRF más** (`1/(rrfK+rango)`), a la misma
+  escala acotada que recencia/frecuencia/léxico/vector/grafo/co-ocurrencia: **desempata** cuando la
+  relevancia es comparable, pero ya **no puede overridear** una relevancia claramente superior.
+- **Recall — rangos DENSOS en todos los pools (Q3).** Los rangos rompían empates **posicionalmente**:
+  `rankBy` daba 0,1,2… aun a valores iguales, y `lexRank`/`coocRank` usaban la posición del resultado
+  FTS (**por rowid**). Así, dos observaciones de relevancia **idéntica** quedaban "a un rango de
+  distancia" — indistinguible de una brecha real — lo que hacía imposible que la importancia
+  desempatara sin, a la vez, overridear brechas genuinas. Ahora los empates **comparten rango**:
+  recencia/frecuencia/importancia vía rango denso, y léxico/co-ocurrencia densos por **score bm25**
+  (`ftsSearch` ahora expone el score). Elimina orden arbitrario por rowid y hace la fusión RRF
+  determinista ante empates.
+
 - **Recall híbrido — piso de coseno en el pool vectorial (Q1, track Semantic Hardening).** El pool
   vectorial del recall **descartaba la similitud coseno** e inyectaba hasta 50 vecinos con **peso RRF
   pleno sin umbral** (un coseno 0.42 pesaba igual que 0.95), metiendo ruido de baja señal en el

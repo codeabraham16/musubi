@@ -13,8 +13,8 @@ import (
 
 // recall.go implementa el recall por PRESUPUESTO de tokens, 100% model-free.
 // El agente pide "lo más útil que entre en N tokens"; el server rankea por
-// fusión RRF (relevancia keyword + recencia + frecuencia, ponderada por
-// importancia) y devuelve GISTS hasta llenar el presupuesto. El contenido
+// fusión RRF (relevancia keyword + recencia + frecuencia + importancia, cada
+// una como un término acotado) y devuelve GISTS hasta llenar el presupuesto. El contenido
 // completo se trae aparte con GetObservations (hidratación perezosa).
 
 const (
@@ -256,8 +256,9 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 	return result
 }
 
-// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia) vía RRF y
-// pondera por importancia. Determinista, sin LLM. Los rankings por pool se pasan como mapas
+// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia, importancia) vía
+// RRF. La importancia entra como un término RRF más (no como multiplicador: ver importanceRank/Q3),
+// así ninguna señal domina a las otras. Determinista, sin LLM. Los rankings por pool se pasan como mapas
 // id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
 // lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno), graphRank el de
 // centralidad de grafo (PPR sobre observation_relations) y coocRank el de expansión por
@@ -267,12 +268,19 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int) []scoredCandidate {
 	n := len(cands)
 
-	recencyRank := rankBy(cands, func(a, b candidate) bool {
+	// Rangos DENSOS (empates comparten rango): a diferencia de rankBy posicional, dos candidatos
+	// con igual recencia/frecuencia NO reciben rangos distintos arbitrarios. Sin esto, ese ruido
+	// posicional (varios términos de 1/(rrfK+i)) ahogaría al único término de importancia y la
+	// importancia no podría desempatar (Q3). Con rangos densos, los pools empatados no aportan señal
+	// espuria y la importancia queda como desempate limpio.
+	recencyRank := denseRankBy(cands, func(a, b candidate) bool {
 		return effectiveRecency(a) > effectiveRecency(b)
 	})
-	freqRank := rankBy(cands, func(a, b candidate) bool {
+	freqRank := denseRankBy(cands, func(a, b candidate) bool {
 		return a.accessCount > b.accessCount
 	})
+
+	impRank := importanceRank(cands)
 
 	out := make([]scoredCandidate, n)
 	for i, c := range cands {
@@ -290,11 +298,13 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank ma
 		if r, ok := coocRank[c.id]; ok {
 			rrf += 1.0 / float64(rrfK+r)
 		}
-		imp := c.importance
-		if imp <= 0 {
-			imp = 1.0
-		}
-		out[i] = scoredCandidate{candidate: c, score: rrf * imp}
+		// Q3: importancia como término RRF propio, NO como multiplicador. Antes era `rrf * imp`
+		// (imp hasta 10) → un multiplicador sin techo que ANULABA la relevancia (un importance:10
+		// apenas relevante barría matches mejores). Como término RRF acotado (1/(rrfK+rank)) la
+		// importancia queda a la misma escala que los otros pools: desempata cuando la relevancia
+		// es comparable, no la override. impRank está definido para todo candidato (no es opcional).
+		rrf += 1.0 / float64(rrfK+impRank[c.id])
+		out[i] = scoredCandidate{candidate: c, score: rrf}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
 	return out
@@ -410,16 +420,44 @@ func filterCandidatesByProject(cands []candidate, scope string) []candidate {
 	return out
 }
 
-// rankBy devuelve, para cada id, su posición (0 = mejor) según el orden less.
-func rankBy(cands []candidate, less func(a, b candidate) bool) map[string]int {
+// effectiveImportance normaliza la importancia no seteada (<=0) a 1.0, el default histórico, para
+// que empate con la default en el ranking (Q3, R3).
+func effectiveImportance(c candidate) float64 {
+	if c.importance <= 0 {
+		return 1.0
+	}
+	return c.importance
+}
+
+// denseRankBy es como rankBy pero con empates DENSOS: candidatos equivalentes bajo less (ni a<b ni
+// b<a) comparten rango; el rango sólo incrementa al pasar a un valor estrictamente peor. Elimina el
+// ruido posicional de rankBy (que asigna 0,1,2… aun a valores iguales), clave para que un término
+// RRF débil como la importancia (Q3) no quede ahogado por empates espurios en otros pools.
+func denseRankBy(cands []candidate, less func(a, b candidate) bool) map[string]int {
 	ordered := make([]candidate, len(cands))
 	copy(ordered, cands)
 	sort.SliceStable(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
 	ranks := make(map[string]int, len(ordered))
+	rank := 0
 	for i, c := range ordered {
-		ranks[c.id] = i
+		// Tras el sort, less(prev, c) es true sólo si prev es estrictamente mejor; en un empate
+		// ambos less dan false ⇒ el rango no incrementa ⇒ comparten rango.
+		if i > 0 && less(ordered[i-1], c) {
+			rank++
+		}
+		ranks[c.id] = rank
 	}
 	return ranks
+}
+
+// importanceRank rankea por importancia efectiva DESC con empates densos: candidatos con igual
+// importancia comparten rango. Con importancia uniforme (el caso común) todos caen en rango 0, el
+// término RRF de importancia es constante y el orden relativo lo deciden los demás pools. Así la
+// importancia pasa de multiplicador-override a desempate acotado (Q3).
+func importanceRank(cands []candidate) map[string]int {
+	return denseRankBy(cands, func(a, b candidate) bool {
+		return effectiveImportance(a) > effectiveImportance(b)
+	})
 }
 
 // effectiveRecency usa last_accessed si existe, si no created_at (ISO8601 ordena
@@ -492,23 +530,34 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 		cands, err := e.recentCandidates(ctx, limit)
 		return cands, nil, err
 	}
-	cands, err := e.ftsSearch(ctx, ftsQuery, limit)
+	cands, scores, err := e.ftsSearch(ctx, ftsQuery, limit)
 	if err != nil {
 		return nil, nil, err
 	}
+	// lexRank DENSO por score bm25 (Q3): candidatos con idéntica relevancia FTS (p. ej. mismo
+	// contenido) comparten rango en vez de recibir 0,1,2… posicionales por rowid. Sin esto, un
+	// empate de relevancia real se vería como "un rango de diferencia" —indistinguible de una
+	// brecha genuina— y ese ruido posicional impediría que la importancia desempatara (o, al revés,
+	// dejaría que la importancia overrideara una brecha chiquita). cands ya viene ordenado por rank.
 	lexRank := make(map[string]int, len(cands))
+	rank := 0
 	for i, c := range cands {
-		lexRank[c.id] = i
+		if i > 0 && scores[i] != scores[i-1] {
+			rank++
+		}
+		lexRank[c.id] = rank
 	}
 	return cands, lexRank, nil
 }
 
 // ftsSearch corre una MATCH de FTS5 ya construida (ftsQuery) sobre las observaciones vivas y
-// devuelve los candidatos en orden de `rank` (mejor primero). Es el núcleo compartido por el
-// recall léxico (recallCandidates) y la expansión por co-ocurrencia (augmentWithCooccurrencePool).
-func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, error) {
+// devuelve los candidatos en orden de `rank` (mejor primero) junto al score bm25 de cada uno
+// (slice paralelo). El score se expone para poder rankear DENSO (empates de relevancia comparten
+// rango, Q3); quien no lo necesite lo descarta. Es el núcleo compartido por el recall léxico
+// (recallCandidates) y la expansión por co-ocurrencia (augmentWithCooccurrencePool).
+func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, []float64, error) {
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
+		SELECT rank, o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
 		FROM observations_fts f
 		JOIN observations o ON f.id = o.id
@@ -517,10 +566,26 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 		LIMIT ?
 	`, ftsQuery, limit)
 	if err != nil {
-		return nil, fmt.Errorf("error en recall (FTS): %w", err)
+		return nil, nil, fmt.Errorf("error en recall (FTS): %w", err)
 	}
 	defer rows.Close()
-	return scanCandidates(rows)
+
+	var cands []candidate
+	var scores []float64
+	for rows.Next() {
+		var c candidate
+		var score float64
+		if err := rows.Scan(&score, &c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
+			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author); err != nil {
+			return nil, nil, fmt.Errorf("error al escanear candidato: %w", err)
+		}
+		cands = append(cands, c)
+		scores = append(scores, score)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("error al iterar candidatos: %w", err)
+	}
+	return cands, scores, nil
 }
 
 // recentCandidates devuelve las observaciones más recientes (fallback sin query).
