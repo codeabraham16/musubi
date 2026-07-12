@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-07-12
+
+> Cierra el track **«Semantic Hardening»**: la última fuente de memoria que no tenía ningún control
+> —la que Musubi captura **sola**— ahora también pasa por el dedup.
+
 ### Added
 - **La memoria que Musubi captura SOLA ahora también pasa por la detección de duplicados (M4, track
   Semantic Hardening).** `DetectRelations` se llamaba **únicamente** desde `musubi_save_observation`
