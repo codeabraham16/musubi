@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.86.1] - 2026-07-12
+
 ### Fixed
 - **El ranker del recall dejó de alimentarse de su propia salida (N4, track Semantic Hardening).**
   Cada recall llama a `bumpAccess`, que sobre lo que **acaba de devolver** escribe `last_accessed` y
