@@ -7,6 +7,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.86.2] - 2026-07-12
+
+> **Cierra el track «Semantic Hardening».** Con esto, el camino de reparación de la memoria ya no
+> depende de poder leer lo que está roto.
+
 ### Fixed
 - **El `doctor` ya puede reparar el índice FTS cuando está corrupto — antes fallaba justo ahí (Fase 0
   / P0, track Semantic Hardening).** Lo vivimos en vivo: con la memoria corrupta, `musubi doctor`
