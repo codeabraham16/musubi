@@ -3,10 +3,13 @@ package memory
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"musubi/internal/logx"
 )
 
 // doctor.go implementa diagnóstico y reparación de la base de memoria, pure-Go.
@@ -207,10 +210,59 @@ func (e *DbEngine) BackupTo(destDir string) (string, error) {
 	// escapan las comillas simples duplicándolas. `dest` lo construimos nosotros
 	// (directorio + timestamp), no viene de entrada del usuario.
 	q := fmt.Sprintf(`VACUUM INTO '%s'`, strings.ReplaceAll(dest, "'", "''"))
-	if _, err := e.db.Exec(q); err != nil {
-		return "", fmt.Errorf("VACUUM INTO falló: %w", err)
+	if _, err := e.db.Exec(q); err == nil {
+		return dest, nil
+	} else {
+		// P0.1 — VACUUM INTO LEE Y REESCRIBE TODAS LAS PÁGINAS, así que es exactamente lo que NO se
+		// puede hacer sobre una base CORRUPTA: falla, y con él se caía el auto-heal ANTES de reparar
+		// nada (el backup previo abortaba la reparación que iba a curar la corrupción).
+		//
+		// Fallback page-agnóstico: copiar los BYTES crudos. No parsea páginas ⇒ funciona sobre una
+		// base corrupta. Es un backup PEOR (puede quedar a medias si hay escrituras concurrentes;
+		// para eso existe VACUUM INTO) pero infinitamente mejor que NINGUNO.
+		logx.Warn("el backup consistente (VACUUM INTO) falló; cayendo a una copia CRUDA de bytes",
+			"error", err, "nota", "backup DE RESCATE: puede quedar inconsistente si hay escrituras concurrentes")
+		if cerr := rawCopyDB(e.path, dest); cerr != nil {
+			return "", fmt.Errorf("VACUUM INTO falló (%v) y la copia cruda de rescate también: %w", err, cerr)
+		}
+		return dest, nil
 	}
-	return dest, nil
+}
+
+// rawCopyDB copia los BYTES del archivo SQLite (y su -wal / -shm, si existen) sin interpretarlos.
+// Es el backup de RESCATE: al no parsear páginas, es el único que sobrevive a una base corrupta.
+// El -wal se copia porque sin él la copia del .db puede quedar sin los commits más recientes.
+func rawCopyDB(src, dest string) error {
+	if err := copyFile(src, dest); err != nil {
+		return err
+	}
+	// Sidecars del WAL: best-effort — si no existen, no hay nada que copiar.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(src + suffix); err != nil {
+			continue
+		}
+		if err := copyFile(src+suffix, dest+suffix); err != nil {
+			return fmt.Errorf("no se pudo copiar %s: %w", src+suffix, err)
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
 // backupDB crea un snapshot en .musubi/backups/ (junto a la base). Es el backup local
@@ -316,7 +368,33 @@ func applySchema(e *DbEngine) (int, error) {
 	return n, nil
 }
 
+// ftsIntegrityErr corre el comando NATIVO de FTS5 `integrity-check`, que valida la estructura
+// INTERNA del índice invertido. Es justo lo que countFTSDrift NO puede ver: un índice corrupto
+// puede tener el COUNT(*) PERFECTO — las filas están, lo que está roto es el b-tree del índice.
+// nil = índice sano.
+func ftsIntegrityErr(e *DbEngine) error {
+	_, err := e.db.Exec(`INSERT INTO observations_fts(observations_fts) VALUES('integrity-check')`)
+	return err
+}
+
+// checkFTS corre las DOS comprobaciones, porque son modos de falla DISTINTOS:
+//
+//   - integrity-check falla ⇒ corrupción INTERNA del índice (el caso grave).
+//   - drift de COUNT(*)     ⇒ desincronización (filas de más/de menos) SIN corrupción.
+//
+// P0.3 — Antes sólo se miraba el drift, y por eso el doctor era CIEGO al caso grave: un índice
+// corrupto con el conteo correcto reportaba "ok". Y el único check que SÍ veía la corrupción
+// (db_integrity) no tiene `apply` ni entra al auto-heal ⇒ el que veía no podía arreglar, y el que
+// podía arreglar no veía. Ahora el que repara también VE.
+//
+// El integrity-check va PRIMERO: si el índice está corrupto, el COUNT puede ser una lectura sin
+// sentido y no tiene caso interpretarlo.
 func checkFTS(e *DbEngine) CheckResult {
+	if err := ftsIntegrityErr(e); err != nil {
+		return CheckResult{Code: "fts_consistency", Status: "error",
+			Message:    "el índice FTS está CORRUPTO (integrity-check falló): " + err.Error(),
+			Repairable: true}
+	}
 	drift, err := countFTSDrift(e)
 	if err != nil {
 		return CheckResult{Code: "fts_consistency", Status: "error", Message: err.Error(), Repairable: true}
@@ -325,7 +403,7 @@ func checkFTS(e *DbEngine) CheckResult {
 		return CheckResult{Code: "fts_consistency", Status: "warning",
 			Message: fmt.Sprintf("el índice FTS está desincronizado (diferencia de %d fila(s))", drift), Repairable: true}
 	}
-	return CheckResult{Code: "fts_consistency", Status: "ok", Message: "índice FTS sincronizado"}
+	return CheckResult{Code: "fts_consistency", Status: "ok", Message: "índice FTS sincronizado e íntegro"}
 }
 
 func countFTSDrift(e *DbEngine) (int, error) {
@@ -343,17 +421,42 @@ func countFTSDrift(e *DbEngine) (int, error) {
 	return d, nil
 }
 
+// ftsTableDDL es la ÚNICA definición de la tabla FTS: la usan el esquema (database.go) y la
+// reconstrucción del doctor, para que no puedan divergir.
+const ftsTableDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+	id UNINDEXED,
+	topic_key UNINDEXED,
+	content
+);`
+
+// applyRebuildFTS reconstruye el índice FTS desde `observations` con DROP + recrear + re-poblar.
+//
+// P0.2 — Antes hacía `DELETE FROM observations_fts`, y ahí estaba el bug: DELETE **recorre el
+// b-tree** del índice para borrar fila por fila ⇒ toca las páginas corruptas ⇒ FALLA justo en el
+// único caso que tenía que curar. DROP TABLE, en cambio, **libera las páginas sin leer el
+// contenido**, así que sobrevive a la corrupción.
+//
+// No se usa el comando `'rebuild'` de FTS5 (que sería lo primero que uno busca): sólo aplica a
+// tablas *contentless* o *external-content*. `observations_fts` es una FTS5 REGULAR — guarda su
+// propia copia, sincronizada por triggers — y sobre ella `'rebuild'` da error.
+//
+// Los TRIGGERS sobreviven: están definidos sobre `observations` (no sobre la tabla FTS) y apuntan a
+// `observations_fts` por NOMBRE, así que al recrearla vuelven a funcionar. Hay un test que lo
+// verifica (no se asume).
 func applyRebuildFTS(e *DbEngine) (int, error) {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM observations_fts`); err != nil {
-		return 0, err
+	if _, err := tx.Exec(`DROP TABLE IF EXISTS observations_fts`); err != nil {
+		return 0, fmt.Errorf("no se pudo dropear el índice FTS: %w", err)
+	}
+	if _, err := tx.Exec(ftsTableDDL); err != nil {
+		return 0, fmt.Errorf("no se pudo recrear el índice FTS: %w", err)
 	}
 	if _, err := tx.Exec(`INSERT INTO observations_fts(id, topic_key, content) SELECT id, topic_key, content FROM observations`); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("no se pudo re-poblar el índice FTS: %w", err)
 	}
 	var obs int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&obs); err != nil {
