@@ -109,8 +109,20 @@ func (e *DbEngine) BandNeighbors(obsID string, opts ConflictOptions) ([]BandNeig
 		if !ok {
 			continue
 		}
-		// Semiabierta a propósito: si alcanza CosineFloor, el par YA es una relación `pending` y el
-		// agente lo ve por el camino de siempre. Avisar dos veces por lo mismo entrena a ignorar.
+		lex := Similarity(src.content, c.content)
+		// LA BANDA ES EL COMPLEMENTO DE LA COLA: muestra lo que la cola NO muestra. Por eso pregunta
+		// con la MISMA función que decide la entrada a la cola, en vez de reimplementar el criterio.
+		//
+		// La primera versión filtraba por `cos >= CosineFloor`, y eso era una PROXY EQUIVOCADA: a la
+		// cola se entra por DOS puertas (léxico O coseno). Un par que entraba por la LÉXICA con
+		// coseno 0.849 —justo debajo del piso— caía igual en la banda, y el agente recibía el MISMO
+		// par avisado DOS VECES. Pasó en el primer uso real.
+		//
+		// Llamar a relevantPair (y no copiar su lógica) es lo que evita que vuelvan a divergir: si
+		// mañana gana una tercera puerta, la banda la hereda gratis.
+		if relevantPair(lex, &cos, opts) {
+			continue
+		}
 		if cos < opts.BandFloor || cos >= opts.CosineFloor {
 			continue
 		}
