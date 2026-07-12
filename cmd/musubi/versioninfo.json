@@ -2,13 +2,13 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 0,
-      "Minor": 85,
+      "Minor": 86,
       "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 0,
-      "Minor": 85,
+      "Minor": 86,
       "Patch": 0,
       "Build": 0
     },
@@ -21,12 +21,12 @@
   "StringFileInfo": {
     "CompanyName": "codeabraham16",
     "FileDescription": "Musubi — memoria persistente MCP para agentes de IA",
-    "FileVersion": "0.85.0.0",
+    "FileVersion": "0.86.0.0",
     "InternalName": "musubi",
     "LegalCopyright": "Copyright (c) 2026 codeabraham16. Licencia MIT.",
     "OriginalFilename": "Musubi.exe",
     "ProductName": "Musubi",
-    "ProductVersion": "0.85.0.0",
+    "ProductVersion": "0.86.0.0",
     "Comments": "Servidor MCP de memoria persistente local-first. https://github.com/codeabraham16/musubi"
   },
   "VarFileInfo": {
