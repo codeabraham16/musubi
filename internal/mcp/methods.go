@@ -327,6 +327,8 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 		SimilarityFloor:      s.conflicts.SimilarityFloor,
 		AutoResolveThreshold: s.conflicts.AutoResolveThreshold,
 		CandidatePool:        s.conflicts.CandidatePool,
+		CosineFloor:          s.conflicts.CosineFloor,
+		CosineAutoThreshold:  s.conflicts.CosineAutoThreshold,
 	})
 	if err != nil {
 		logx.Warn("detección de conflictos falló", "error", err)

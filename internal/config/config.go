@@ -269,6 +269,20 @@ type ConflictConfig struct {
 	AutoResolveThreshold float64 `yaml:"auto_resolve_threshold"`
 	// CandidatePool es la cantidad de candidatas por FTS a evaluar (default 10).
 	CandidatePool int `yaml:"candidate_pool"`
+	// CosineFloor es el piso de COSENO para que una candidata puramente SEMÁNTICA (mismo
+	// significado, otras palabras ⇒ Jaccard bajo) entre como `pending` (default 0.85). En 0 el
+	// coseno no participa ⇒ comportamiento léxico histórico (interruptor de rollback).
+	//
+	// OJO — esta escala NO es la de memory.vector_floor: allá se compara QUERY vs documento (sims
+	// 0.40-0.50); acá es documento vs DOCUMENTO, y la línea de base es mucho más alta. Medido sobre
+	// 77k pares reales: dos observaciones NO relacionadas ya dan ~0.60 de coseno mediano (texto del
+	// mismo dominio) y el ruido llega hasta 0.884; los casi-duplicados reales están en ~0.99.
+	// Reusar acá el 0.30 del recall marcaría CASI TODO como duplicado.
+	CosineFloor float64 `yaml:"cosine_floor"`
+	// CosineAutoThreshold es el coseno mínimo para que el coseno CORROBORE una auto-resolución
+	// (default 0.90: 0 falsos positivos en 77k pares medidos). El coseno nunca auto-resuelve SOLO:
+	// hace falta ADEMÁS similitud léxica alta (AND-gate). Ver conflicts.go.
+	CosineAutoThreshold float64 `yaml:"cosine_auto_threshold"`
 }
 
 // VectorIndexConfig configura el índice vectorial ANN (IVF) para la búsqueda
@@ -528,6 +542,8 @@ func Default() Config {
 			SimilarityFloor:      0.3,
 			AutoResolveThreshold: 0.7,
 			CandidatePool:        10,
+			CosineFloor:          0.85,
+			CosineAutoThreshold:  0.90,
 		},
 		Loop: LoopConfig{
 			PerTurnRecall:      true,
@@ -603,6 +619,7 @@ func Load(projectPath string) (Config, error) {
 
 	cfg.applyDefaults(presentBlocks(data))
 	cfg.applyMemoryDefaults(data)
+	cfg.applyConflictsDefaults(data)
 	return cfg, nil
 }
 
@@ -646,6 +663,19 @@ func presentBlockKeys(data []byte, block string) map[string]bool {
 // deja el bool en su cero-valor (false), que es indistinguible de un opt-out explícito. Acá se
 // mira la presencia de la SUB-CLAVE: ausente ⇒ default (ON); explícita (true/false) ⇒ se
 // respeta. Si el bloque `memory` está ausente, applyDefaults ya puso el default completo.
+// applyConflictsDefaults resuelve la sub-clave `cosine_floor` con el criterio ausente-vs-explícito:
+// ausente ⇒ default (0.85); explícita ⇒ se respeta, INCLUIDO el 0 (que apaga el coseno y devuelve el
+// dedup a su comportamiento léxico histórico). Con el `== 0 ⇒ default` de applyDefaults, un
+// `cosine_floor: 0` quedaría pisado por el default y el rollback por config no funcionaría.
+func (c *Config) applyConflictsDefaults(data []byte) {
+	if !presentBlocks(data)["conflicts"] {
+		return // bloque ausente ⇒ applyDefaults ya puso el default completo
+	}
+	if !presentBlockKeys(data, "conflicts")["cosine_floor"] {
+		c.Conflicts.CosineFloor = Default().Conflicts.CosineFloor
+	}
+}
+
 func (c *Config) applyMemoryDefaults(data []byte) {
 	if !presentBlocks(data)["memory"] {
 		return
@@ -817,6 +847,12 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		if c.Conflicts.CandidatePool == 0 {
 			c.Conflicts.CandidatePool = d.Conflicts.CandidatePool
 		}
+		if c.Conflicts.CosineAutoThreshold == 0 {
+			c.Conflicts.CosineAutoThreshold = d.Conflicts.CosineAutoThreshold
+		}
+		// CosineFloor NO se rellena acá: un 0 EXPLÍCITO es el interruptor de rollback (apaga el
+		// coseno) y hay que respetarlo. Lo resuelve applyConflictsDefaults mirando la presencia de
+		// la sub-clave (ausente ⇒ default; explícita, incluido 0 ⇒ se respeta).
 	}
 
 	// Loop: ausente -> default completo; presente -> respetar bool y rellenar numéricos.

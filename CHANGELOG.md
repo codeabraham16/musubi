@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Dedup SEMÁNTICO: el duplicado dicho con otras palabras ya no es invisible (M1/Q4 + M2, track
+  Semantic Hardening).** La detección de relaciones era **100% léxica**: el pool de candidatas salía
+  sólo de FTS y el veredicto sólo del Jaccard de trigramas. Una observación que **repite algo ya
+  guardado pero con otras palabras** nunca entraba al pool ⇒ **nunca se detectaba**. No es que se
+  juzgara mal: era **invisible**. Ahora el pool suma un **pool vectorial** (vecinos por coseno) y el
+  veredicto usa **las dos señales**, léxica y semántica.
+  > **El coseno NUNCA auto-oculta memoria.** Los embeddings estáticos no evalúan predicados: miden
+  > *de qué* se habla, no *qué* se afirma — *"usamos X"* y *"ya NO usamos X"* tienen coseno **alto**.
+  > Por eso auto-resolver exige **las dos** señales altas (**AND-gate**): el coseno sólo **corrobora**,
+  > nunca decide solo. Como el auto-resolve conserva la condición léxica de siempre y le **suma** una,
+  > las auto-supresiones son por construcción un **subconjunto** de las de antes: **agregar semántica
+  > no puede hacer desaparecer memoria**. El coseno sólo puede volver **visible** (como `pending`, para
+  > que lo juzgue el agente) un duplicado que hoy se ignora, o **degradar** a `pending` una
+  > auto-resolución que no corrobora. Hay un property test sobre 10.201 combinaciones que lo verifica.
+
+  Umbrales nuevos (`conflicts.cosine_floor` = 0.85, `conflicts.cosine_auto_threshold` = 0.90),
+  **calibrados midiendo 77.028 pares reales**, no estimados: dos observaciones **no relacionadas** ya
+  dan ~**0.60** de coseno (texto del mismo dominio) y el ruido llega a **0.884**; los casi-duplicados
+  reales están en ~**0.99**. ⚠️ Esta escala **no** es la de `memory.vector_floor` (0.30): allá se compara
+  *query* vs documento, acá documento vs **documento**. `cosine_floor: 0` vuelve al dedup léxico
+  histórico. Sin embedder, el comportamiento es **idéntico** al de siempre.
+
 ### Fixed
 - **Embeddings — el `model_id` ahora identifica el CONTENIDO de la tabla, no el nombre de su carpeta
   (N1, track Semantic Hardening).** El `StaticProvider` armaba su identidad como
