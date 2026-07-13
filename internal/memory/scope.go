@@ -129,9 +129,11 @@ func (e *DbEngine) PromoteObservation(id string) error {
 		return fmt.Errorf("error al promover observación: %w", err)
 	}
 	// Encolar en el outbox dentro de la misma tx (ahora la obs ya es 'shared', así que el
-	// INSERT..SELECT sí produce fila). Idempotente por obs_id.
-	if err := enqueueOutboxTx(tx, id); err != nil {
-		return err
+	// INSERT..SELECT sí produce fila). Idempotente por obs_id. Apagado en el central (terminal).
+	if e.outboxEnabled {
+		if err := enqueueOutboxTx(tx, id); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear promoción: %w", err)

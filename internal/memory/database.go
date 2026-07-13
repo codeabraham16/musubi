@@ -46,7 +46,19 @@ type DbEngine struct {
 	// vectores de esta misma procedencia (regla de homogeneidad). Lo inyecta el entrypoint
 	// con el Name() del provider (ver SetVectorModelID). "" = procedencia desconocida.
 	vectorModelID string
+	// outboxEnabled decide si un guardado 'shared' se encola en el outbox para empujarlo al
+	// cerebro central. true en todo cliente (default). El CENTRAL lo apaga: es el nodo TERMINAL
+	// —no tiene upstream a dónde empujar— así que cada observación que ingería se le quedaba
+	// `pending` para siempre. No era un loop (nunca enviaba), pero acumulaba una fila muerta por
+	// observación y hacía que `sync_status` contra el cerebro reportara miles de "pendientes de
+	// envío": una señal de salud que MIENTE, y que ya mandó a investigar un problema inexistente.
+	outboxEnabled bool
 }
+
+// SetOutboxEnabled decide si los guardados 'shared' se encolan para el central. Lo apaga el
+// entrypoint `serve` cuando el nodo no tiene sync saliente configurado (el caso del cerebro
+// central: es terminal). Ver el comentario del campo.
+func (e *DbEngine) SetOutboxEnabled(v bool) { e.outboxEnabled = v }
 
 // SetProjectID fija el proyecto de origen que saveObservation estampa en cada
 // observación. Lo llama el entrypoint (serve/daemon) tras resolver el project_id de la
@@ -116,7 +128,10 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		return nil, err
 	}
 
-	engine := &DbEngine{db: db, path: dbPath}
+	// outboxEnabled arranca en true: encolar es el comportamiento de siempre y el de todo cliente.
+	// Sólo el CENTRAL lo apaga (ver SetOutboxEnabled) — el cero de un bool es false, así que esto
+	// tiene que ser explícito o ningún cliente encolaría nada.
+	engine := &DbEngine{db: db, path: dbPath, outboxEnabled: true}
 	// Aplicar los divisores de tokens calibrados de esta DB (o defaults) ANTES de
 	// backfillear/recomputar, para que los tokens se calculen con el divisor activo.
 	if err := engine.applyCalibratedDivisors(); err != nil {

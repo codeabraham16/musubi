@@ -253,6 +253,13 @@ func runServe(args []string) {
 
 	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()))
 
+	// Un nodo que SIRVE sin sync saliente es TERMINAL — el caso del cerebro central: no tiene
+	// upstream a dónde empujar. Encolar ahí dejaba una fila `pending` INMORTAL por cada
+	// observación ingerida (nunca drenaban: el drain de abajo ni arranca sin sync), y hacía que
+	// `sync_status` contra el cerebro reportara miles de "pendientes de envío" — una señal de
+	// salud que MIENTE. Con sync configurado (un central encadenado a otro), encola normal.
+	engine.SetOutboxEnabled(cfg.Sync.Enabled)
+
 	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

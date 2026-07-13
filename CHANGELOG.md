@@ -7,6 +7,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Ante la duda, no se tira la memoria.** Reintentar de más es barato y acotado; perder una
+> observación es irreversible. La clasificación de fallos del sync tenía esa asimetría al revés.
+
+### Fixed
+
+- **El sync ya no manda memoria a dead-letter por un fallo TRANSITORIO del central.** La
+  clasificación de errores JSON-RPC era una **lista negra de uno**: *todo* permanente salvo la cuota
+  (`-32002`, carveada a mano en Track 19). Así, un **`-32603` del central —típicamente un
+  `SQLITE_BUSY` por contención—** mandaba la observación a **dead-letter sin reintentar una sola
+  vez**: memoria perdida en silencio, con el `sync_status` en verde. Y salta justo en el **sync
+  inicial grande de una máquina nueva**, que es cuando más contención hay y cuando menos perdonable
+  es perder memoria.
+  - Ahora la lista es de **PERMANENTES** (`-32700`, `-32600`, `-32601`, `-32602`, `-32001`): los
+    errores donde el central **rechazó** el pedido y reenviarlo idéntico no cambia nada. Un fallo
+    **interno** suyo, o un código que no conocemos, nace **transitorio** — el outbox reintenta con
+    backoff y corta solo al llegar a `max_attempts`.
+  - Arregla la **forma**, no un caso más: la cuota se había carveado caso por caso; cualquier código
+    nuevo del central ya nace del lado seguro.
+  - El mismo bug estaba en el camino del **pull**: un fallo interno del central cortaba la bajada
+    entera y la máquina se quedaba sin memoria.
+  - Lo dead-letereado se recupera con `musubi_sync_requeue` — no hace falta reconstruir nada.
+
+- **El cerebro central dejó de encolar lo que nunca iba a enviar.** El central es un nodo
+  **terminal**: sirve memoria, pero no tiene upstream a dónde empujarla. Aun así encolaba en su
+  outbox **cada observación que ingería**, y esas filas quedaban `pending` **para siempre** (el drain
+  ni arranca sin sync configurado). No era un loop —nunca enviaba nada— pero acumulaba una fila
+  muerta por observación: **571 en el cerebro real**. Peor que el peso muerto: hacía que
+  `sync_status` contra el cerebro reportara *"571 pendientes de envío, 0 enviadas"*, una **señal de
+  salud que miente** — ya mandó a investigar un problema inexistente dos veces. Ahora un nodo que
+  sirve **sin sync saliente** no encola. Un cliente encola como siempre; un central encadenado a
+  otro central (con sync configurado) también.
+
 > **Aislar la atribución no es aislar la escritura.** Track 17 cerró la *falsificación* (un writer no
 > puede declarar que su memoria es de otro proyecto). Faltaba lo simétrico: que tampoco pueda
 > **corromper** la memoria de otro proyecto que ya existe.
