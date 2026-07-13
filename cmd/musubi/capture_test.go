@@ -46,6 +46,8 @@ type recordingStore struct {
 	dedupeAll bool
 	// byID simula la tabla observations: id → contenido.
 	byID map[string]string
+	// scopeByID: con qué scope se guardó cada commit (C5.2: 'shared' en team mode).
+	scopeByID map[string]string
 }
 
 func (r *recordingStore) GetMeta(k string) (string, bool, error) { v, ok := r.meta[k]; return v, ok, nil }
@@ -57,11 +59,13 @@ func (r *recordingStore) SetMeta(k, v string) error {
 	return nil
 }
 // byID simula la tabla: id → contenido. Es lo que permite testear el UPSERT del gemelo del squash.
-func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, _ string, emb []float32) error {
+func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, scope string, emb []float32) error {
 	if r.byID == nil {
 		r.byID = map[string]string{}
+		r.scopeByID = map[string]string{}
 	}
 	r.byID[id] = content
+	r.scopeByID[id] = scope
 	r.lastEmbed = emb
 	r.saved++
 	return nil
@@ -73,6 +77,38 @@ func (r *recordingStore) ObservationExists(id string) (bool, error) {
 	}
 	_, ok := r.byID[id]
 	return ok, nil
+}
+
+// C5.2 — en TEAM MODE la captura es CENTRAL por naturaleza: los commits se guardan 'shared' y viajan
+// al cerebro. Sin esto, lo ÚNICO que Musubi captura SOLO era justo lo único que NUNCA cruzaba de
+// máquina: medido en la memoria real, la PC tenía 481 observaciones locales y la laptop 70 — ~400
+// commits capturados de un lado eran invisibles del otro.
+func TestCaptureCommitsSharedEnTeamMode(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	if n, err := captureCommits(store, g, nil, nil, memory.ScopeShared); err != nil || n != 1 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	for id, sc := range store.scopeByID {
+		if sc != memory.ScopeShared {
+			t.Errorf("commit %s guardado con scope %q, esperaba 'shared' (team mode)", id, sc)
+		}
+	}
+}
+
+// …y en un proyecto personal (team mode apagado) sigue siendo LOCAL: la memoria de un repo privado
+// no se va al cerebro sólo por existir. Es el comportamiento histórico y no puede romperse.
+func TestCaptureCommitsLocalSinTeamMode(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
+	if n, err := captureCommits(store, g, nil, nil, memory.ScopeLocal); err != nil || n != 1 {
+		t.Fatalf("captureCommits = (%d, %v)", n, err)
+	}
+	for id, sc := range store.scopeByID {
+		if sc != memory.ScopeLocal {
+			t.Errorf("commit %s guardado con scope %q, esperaba 'local' (proyecto personal)", id, sc)
+		}
+	}
 }
 
 // El gemelo del SQUASH-MERGE: GitHub crea en main un commit nuevo con el MISMO mensaje más el
@@ -110,7 +146,7 @@ func TestCaptureCommitsUpsertsSquashTwinInsteadOfDuplicating(t *testing.T) {
 		SHA: "h1", Subject: "feat(dedup): dedup semantico",
 		Body: "Cuerpo del commit.\n\nCo-Authored-By: Claude <x@y>", Files: []string{"a.go", "b.go"},
 	}}}
-	if n, err := captureCommits(store, g1, nil, nil); err != nil || n != 1 {
+	if n, err := captureCommits(store, g1, nil, nil, memory.ScopeLocal); err != nil || n != 1 {
 		t.Fatalf("captura de la rama = (%d, %v)", n, err)
 	}
 	if len(store.byID) != 1 {
@@ -122,7 +158,7 @@ func TestCaptureCommitsUpsertsSquashTwinInsteadOfDuplicating(t *testing.T) {
 		SHA: "h2", Subject: "feat(dedup): dedup semantico (#193)",
 		Body: "Cuerpo del commit.\n\nCo-authored-by: Claude <x@y>", Files: []string{"a.go", "b.go"},
 	}}}
-	n, err := captureCommits(store, g2, nil, nil)
+	n, err := captureCommits(store, g2, nil, nil, memory.ScopeLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,13 +181,13 @@ func TestCaptureCommitsUpsertsSquashTwinInsteadOfDuplicating(t *testing.T) {
 func TestCaptureSkipsNoveltyGateOnSquashTwin(t *testing.T) {
 	store := &recordingStore{}
 	g1 := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "fix: algo importante", Files: []string{"a.go"}}}}
-	if _, err := captureCommits(store, g1, nil, nil); err != nil {
+	if _, err := captureCommits(store, g1, nil, nil, memory.ScopeLocal); err != nil {
 		t.Fatal(err)
 	}
 
 	detected := 0
 	g2 := &fakeGit{head: "h2", commits: []commit{{SHA: "h2", Subject: "fix: algo importante (#42)", Files: []string{"a.go"}}}}
-	if _, err := captureCommits(store, g2, nil, func(string) { detected++ }); err != nil {
+	if _, err := captureCommits(store, g2, nil, func(string) { detected++ }, memory.ScopeLocal); err != nil {
 		t.Fatal(err)
 	}
 	if detected != 0 {
@@ -167,7 +203,7 @@ func TestCaptureCommitsRunsNoveltyGateOnSavedCommits(t *testing.T) {
 		{SHA: "h2", Subject: "feat: otra cosa importante y larga"},
 	}}
 	var detected []string
-	n, err := captureCommits(store, g, nil, func(id string) { detected = append(detected, id) })
+	n, err := captureCommits(store, g, nil, func(id string) { detected = append(detected, id) }, memory.ScopeLocal)
 	if err != nil || n != 2 {
 		t.Fatalf("captureCommits = (%d, %v)", n, err)
 	}
@@ -182,7 +218,7 @@ func TestCaptureCommitsUpsertDoesNotCountNorFireGate(t *testing.T) {
 	store := &recordingStore{dedupeAll: true} // todo id se considera ya existente
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
 	detected := 0
-	n, err := captureCommits(store, g, nil, func(string) { detected++ })
+	n, err := captureCommits(store, g, nil, func(string) { detected++ }, memory.ScopeLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +234,7 @@ func TestCaptureCommitsUpsertDoesNotCountNorFireGate(t *testing.T) {
 func TestCaptureCommitsWorksWithoutNoveltyGate(t *testing.T) {
 	store := &recordingStore{}
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
-	if n, err := captureCommits(store, g, nil, nil); err != nil || n != 1 {
+	if n, err := captureCommits(store, g, nil, nil, memory.ScopeLocal); err != nil || n != 1 {
 		t.Fatalf("sin gate la captura debe seguir funcionando: (%d, %v)", n, err)
 	}
 }
@@ -208,7 +244,7 @@ func TestCaptureCommitsEmbeds(t *testing.T) {
 	store := &recordingStore{}
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
 	embed := func(string) []float32 { return []float32{1, 2, 3} }
-	n, err := captureCommits(store, g, embed, nil)
+	n, err := captureCommits(store, g, embed, nil, memory.ScopeLocal)
 	if err != nil || n != 1 {
 		t.Fatalf("captureCommits = (%d, %v)", n, err)
 	}
@@ -221,7 +257,7 @@ func TestCaptureCommitsEmbeds(t *testing.T) {
 func TestCaptureCommitsNilEmbedIsLexical(t *testing.T) {
 	store := &recordingStore{}
 	g := &fakeGit{head: "h1", commits: []commit{{SHA: "h1", Subject: "feat: algo importante y largo"}}}
-	n, err := captureCommits(store, g, nil, nil)
+	n, err := captureCommits(store, g, nil, nil, memory.ScopeLocal)
 	if err != nil || n != 1 {
 		t.Fatalf("captureCommits = (%d, %v)", n, err)
 	}
@@ -257,7 +293,7 @@ func newEngine(t *testing.T) *memory.DbEngine {
 func TestCaptureFirstRunSavesHead(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{head: "abc123", commits: []commit{{SHA: "abc123", Subject: "feat: primera cosa", Files: []string{"a.go"}}}}
-	n, err := captureCommits(e, g, nil, nil)
+	n, err := captureCommits(e, g, nil, nil, memory.ScopeLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +315,7 @@ func TestCaptureIncremental(t *testing.T) {
 		{Subject: "fix: bug uno"},
 		{Subject: "feat: cosa dos"},
 	}}
-	n, err := captureCommits(e, g, nil, nil)
+	n, err := captureCommits(e, g, nil, nil, memory.ScopeLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +334,7 @@ func TestCaptureNoNewCommits(t *testing.T) {
 	e := newEngine(t)
 	_ = e.SetMeta(metaCaptureLastCommit, "same")
 	g := &fakeGit{head: "same", commits: []commit{{Subject: "feat: no debería leerse"}}}
-	n, err := captureCommits(e, g, nil, nil)
+	n, err := captureCommits(e, g, nil, nil, memory.ScopeLocal)
 	if err != nil || n != 0 {
 		t.Fatalf("sin commits nuevos debe ser 0 sin error; n=%d err=%v", n, err)
 	}
@@ -310,7 +346,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 		{Subject: "chore: bump dependencies"}, // trivial → skip
 		{Subject: "fix: real problem here"},   // capturado
 	}}
-	n, err := captureCommits(e, g, nil, nil)
+	n, err := captureCommits(e, g, nil, nil, memory.ScopeLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +361,7 @@ func TestCaptureTrivialSkippedButMetaAdvances(t *testing.T) {
 func TestCaptureNotAGitRepo(t *testing.T) {
 	e := newEngine(t)
 	g := &fakeGit{headErr: errors.New("not a git repository")}
-	n, err := captureCommits(e, g, nil, nil)
+	n, err := captureCommits(e, g, nil, nil, memory.ScopeLocal)
 	if err != nil || n != 0 {
 		t.Fatalf("sin repo git: no-op silencioso; n=%d err=%v", n, err)
 	}

@@ -7,6 +7,49 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Aislar la atribución no es aislar la escritura.** Track 17 cerró la *falsificación* (un writer no
+> puede declarar que su memoria es de otro proyecto). Faltaba lo simétrico: que tampoco pueda
+> **corromper** la memoria de otro proyecto que ya existe.
+
+### Security
+
+- **Un writer del proyecto A ya no puede pisarle el contenido a una observación del proyecto B.** El
+  UPSERT por id **no pisa `project_id`** (correcto: un re-save no debe reasignar la atribución) — pero
+  tampoco había ninguna guarda que impidiera el UPSERT en sí. Resultado: conociendo un id ajeno, un
+  writer acotado escribía dentro del tenant de otro, y la fila quedaba **atribuida a su dueño con
+  contenido ajeno**. Y los ids ajenos **se filtran**: cualquier cliente que alguna vez sincronizó con
+  la credencial equivocada se los bajó. Ahora la escritura cross-tenant se rechaza (`ErrCrossTenant`,
+  `-32001` en MCP). El caller sin tenant (admin/federado/stdio local) conserva el acceso pleno.
+- **El dedup por `content_hash` ya no cruza tenants.** `FindByContentHash` no filtraba por proyecto:
+  un writer cuyo contenido coincidía con el de OTRO proyecto recibía **el id ajeno** con
+  `deduped=true` y **su observación no se guardaba** — pérdida silenciosa de memoria. Ahora el dedup
+  se acota al tenant que escribe (las filas legacy sin atribuir siguen siendo candidatas, para no
+  romper el dedup de lo anterior a Track 16).
+
+### Fixed
+
+- **En team mode, los commits capturados ya viajan al cerebro.** La captura guardaba con
+  `ScopeLocal` **hardcodeado**: corre en el CLI, que no pasa por el `defaultScope()` del servidor MCP,
+  así que `team_mode` ni se miraba. Resultado: **lo único que Musubi captura SOLO era justo lo único
+  que nunca cruzaba de máquina.** Medido en la memoria real de este repo: la PC tenía **481**
+  observaciones locales y la laptop **70** — unos 400 commits capturados de un lado eran invisibles
+  del otro. La memoria *deliberada* era de equipo; la *automática*, de máquina. Al revés del contrato
+  del flag, que dice *«la captura de este proyecto es CENTRAL por naturaleza»*.
+  - El comentario que lo justificaba (*«nunca shared: C3 no debe filtrar un secreto de un diff»*)
+    quedó **obsoleto**: la redacción corre hoy en el **borde a `shared` dentro de `saveObservation`**,
+    por cualquier ruta, no sólo vía `promote`. Y la captura guarda subject + body + nombres de
+    archivo, **no el diff**.
+  - Sin riesgo de duplicados: el id del commit es **determinístico desde su contenido**, así que si
+    dos máquinas capturan el mismo commit el central lo **upsertea en la misma fila**.
+  - Un proyecto personal (sin `team_mode`) sigue capturando `local`: nada cambia.
+
+- **Una fila que cayó en el tenant equivocado ya no es una trampa silenciosa.** Como el UPSERT
+  preserva `project_id`, reenviarla con el token CORRECTO la actualizaba **dentro del tenant ajeno**,
+  sin reasignarla y sin avisar. Encontrado en producción: una observación quedó en el tenant de otro
+  proyecto por un token mal configurado, y el intento de repararla desde el cliente sólo la reescribió
+  en el lugar equivocado. Ahora falla ruidosamente y le dice al caller que use un id nuevo: reasignar
+  el tenant de una fila existente sólo puede hacerlo un admin en el central.
+
 ## [0.90.0] - 2026-07-13
 
 > **El libro mayor no se tacha.** Un commit es lo que PASÓ; un contrato SDD es lo que se ACORDÓ.
