@@ -20,6 +20,10 @@ type PrincipalInfo struct {
 	Name      string
 	ProjectID string
 	Role      string
+	// Read/Write son las capacidades EFECTIVAS (ya resueltas del rol si el registro no las
+	// declara): sin esto, un `token list` no distingue una cabina de un reader normal.
+	Read  string
+	Write string
 }
 
 // GenerateToken produce un token opaco aleatorio (256 bits) con prefijo "msb_". Es el
@@ -71,10 +75,34 @@ func writePrincipalsFile(path string, f *principalsFileYAML) error {
 	return os.WriteFile(path, out, 0600)
 }
 
-// AddPrincipal genera un token, agrega el principal al registro (guardando su SHA-256) y
-// devuelve el token CRUDO una sola vez (para entregárselo al miembro). Rechaza nombres
-// duplicados. Crea el archivo si no existe.
+// AddPrincipal genera un token con las capacidades por DEFAULT del rol (compat: la firma de
+// siempre). Para expresar alcance y autoridad por separado, usar AddPrincipalWithCaps.
 func AddPrincipal(path, name, projectID, role string) (string, error) {
+	return AddPrincipalWithCaps(path, name, projectID, role, "", "")
+}
+
+// EffectiveCaps resuelve el par (alcance, autoridad) final: el del rol, salvo que se declaren
+// explícitamente. La usan el CLI (para informar qué quedó) y AddPrincipalWithCaps.
+func EffectiveCaps(role, read, write string) (string, string) {
+	r, w := capsFromRole(strings.ToLower(strings.TrimSpace(role)))
+	if v := strings.ToLower(strings.TrimSpace(read)); v != "" {
+		r = v
+	}
+	if v := strings.ToLower(strings.TrimSpace(write)); v != "" {
+		w = v
+	}
+	return r, w
+}
+
+// AddPrincipalWithCaps genera un token, agrega el principal al registro (guardando su SHA-256) y
+// devuelve el token CRUDO una sola vez. read/write vacíos ⇒ se derivan del rol.
+//
+// ALCANCE (qué VE) y AUTORIDAD (qué ESCRIBE) son ejes independientes. El rol solo, que los
+// colapsaba, no sabía expresar las dos identidades que un cerebro central necesita:
+//
+//	sala de mando (el repo de Musubi): read=all + write=own  ⇒ diagnostica todo, muta sólo lo suyo
+//	cabina (el CRM, el gateway):       read=all + write=none ⇒ ve todo, no muta nada
+func AddPrincipalWithCaps(path, name, projectID, role, read, write string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("el nombre del principal es obligatorio")
@@ -83,13 +111,30 @@ func AddPrincipal(path, name, projectID, role string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Tenancy fail-closed (Track 18): reader/writer DEBEN tener project_id (sin él resolverían a
-	// scope vacío ⇒ federado + escritura sin atribuir). Cierra el default silencioso de `token new`
-	// (rol writer, proyecto vacío). Solo 'admin' puede ser federado (por diseño).
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" && r != RoleAdmin {
-		return "", fmt.Errorf("el rol %q requiere --project (aislamiento por proyecto); solo 'admin' puede ser federado (sin proyecto)", r)
+	efRead, efWrite := EffectiveCaps(r, read, write)
+	switch efRead {
+	case ReadOwn, ReadAll:
+	default:
+		return "", fmt.Errorf("--read inválido %q (usá own|all)", efRead)
 	}
+	switch efWrite {
+	case WriteNone, WriteOwn, WriteAny:
+	default:
+		return "", fmt.Errorf("--write inválido %q (usá none|own|any)", efWrite)
+	}
+
+	// Tenancy fail-closed, ahora sobre los EJES y no sobre el rol: sin project_id, un principal que
+	// escribe "lo suyo" no tiene "lo suyo" (su fila caería SIN ATRIBUIR, visible desde TODOS los
+	// tenants), y uno que lee "lo suyo" no tiene a qué acotarse (vería todos los proyectos). Sólo
+	// puede no tener proyecto quien NO escribe (cabina) o quien lo DECLARA en cada escritura (any).
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" && efWrite == WriteOwn {
+		return "", fmt.Errorf("write=own requiere --project: sin proyecto propio, su escritura caería sin atribuir y la verían todos los tenants")
+	}
+	if projectID == "" && efRead == ReadOwn {
+		return "", fmt.Errorf("read=own requiere --project: sin proyecto propio, el recall no tiene a qué acotarse y vería todos los proyectos")
+	}
+
 	f, err := readPrincipalsFile(path)
 	if err != nil {
 		return "", err
@@ -103,9 +148,13 @@ func AddPrincipal(path, name, projectID, role string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f.Principals = append(f.Principals, principalEntry{
-		Name: name, TokenSHA256: hashToken(token), ProjectID: projectID, Role: r,
-	})
+	e := principalEntry{Name: name, TokenSHA256: hashToken(token), ProjectID: projectID, Role: r}
+	// Sólo se persisten read/write cuando DIFIEREN del default del rol: un registro que usa los
+	// pares clásicos queda idéntico a como estaba (diff limpio, compat total).
+	if dr, dw := capsFromRole(r); efRead != dr || efWrite != dw {
+		e.Read, e.Write = efRead, efWrite
+	}
+	f.Principals = append(f.Principals, e)
 	if err := writePrincipalsFile(path, f); err != nil {
 		return "", err
 	}
@@ -120,7 +169,8 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 	}
 	out := make([]PrincipalInfo, 0, len(f.Principals))
 	for _, p := range f.Principals {
-		out = append(out, PrincipalInfo{Name: p.Name, ProjectID: p.ProjectID, Role: p.Role})
+		r, w := EffectiveCaps(p.Role, p.Read, p.Write)
+		out = append(out, PrincipalInfo{Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w})
 	}
 	return out, nil
 }

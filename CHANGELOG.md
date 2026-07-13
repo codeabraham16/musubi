@@ -7,6 +7,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Ver todo y poder tocar todo son dos cosas distintas.** El rol las tenía colapsadas en un solo
+> enum, y por eso el cerebro central no sabía expresar ni una sala de mando ni una cabina.
+
+### Added
+
+- **Alcance y autoridad son ejes independientes.** Un principal ahora declara **qué VE**
+  (`read: own|all`) y **qué ESCRIBE** (`write: none|own|any`) por separado. El `role` sigue
+  funcionando como atajo — `reader`/`writer`/`admin` significan exactamente lo mismo que antes — pero
+  ya no es la única forma de hablar. Esto habilita las dos identidades que el enum **no sabía decir**:
+  - **Sala de mando** (`read: all` + `write: own`) — el repo de **Musubi**: ve los 3 proyectos para
+    diagnosticarlos, pero su escritura **se clava en su propio tenant**, aunque declare otro. Antes
+    había que darle `admin`, que además lo dejaba escribir dentro de la memoria de producción ajena.
+  - **Cabina** (`read: all` + `write: none`) — el **CRM** y el **gateway**: ven todo, no mutan nada.
+    Antes no existía el término medio: `reader` sólo veía su tenant y `admin` escribía en todos.
+  - `musubi token new --read all --write own`; `musubi token list` ahora muestra **VE** y **ESCRIBE**
+    (las capacidades efectivas), porque una cabina y un reader normal comparten rol y no se
+    distinguían.
+
+### Security
+
+- **Una escritura sin proyecto ya no cae "sin atribuir".** Una fila con `project_id` vacío es
+  visible desde **TODOS los tenants** (el filtro de recall la deja pasar). Un `admin` que guardaba
+  sin declarar proyecto la producía **en silencio** — medido en el cerebro real: **2 filas de test
+  contaminando los 3 proyectos**. Ahora se rechaza (`-32001`): quien escribe con `write: any` debe
+  **declarar** el proyecto, y quien tiene `write: own` lo toma de su credencial.
+- La guarda fail-closed del registro pasó a expresarse sobre los **ejes** y no sobre el rol: quien
+  **escribe lo suyo** debe **tener** lo suyo, y quien **lee lo suyo** también. Sin `project_id`, el
+  primero escribiría sin atribuir y el segundo vería todos los proyectos.
+- **La trampa del cero:** el valor cero de un string es `""`, así que un `Principal` construido a
+  mano tendría capacidades vacías y caería en un comportamiento accidental (un `reader` podría
+  **mutar**; un `admin` dejaría de ser federado). Las capacidades **caen al rol** cuando no están
+  declaradas, y hay un test que lo fija. Tres tests existentes lo destaparon antes del merge.
+
 > **Ante la duda, no se tira la memoria.** Reintentar de más es barato y acotado; perder una
 > observación es irreversible. La clasificación de fallos del sync tenía esa asimetría al revés.
 
