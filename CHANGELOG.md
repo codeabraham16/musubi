@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **El libro mayor no se tacha.** Un commit es lo que PASÓ; un contrato SDD es lo que se ACORDÓ.
+> Ninguno se puede des-hacer — así que ninguna relación puede nacer apuntándolos. Sólo las
+> **creencias** (las notas) se reemplazan.
+
+### Fixed
+
+- **Un registro histórico nunca es DESTINO de una relación.** La guarda G3 tenía una excepción —
+  *«…salvo que ambos sean de la misma clase»*— que dejaba pasar **commit vs commit** y **contrato vs
+  contrato**. Medido sobre las **169 relaciones** de una memoria real: esos pares eran el **20% de la
+  cola** y produjeron **CERO veredictos sustantivos**. Los 8 `supersedes` que existen son **todos
+  `nota → nota`**. La práctica ya respetaba la regla; el código recién ahora la escribe.
+  - La excepción se justificó con *«dos commits pueden ser el mismo commit»*. **Falso**: 16 pares
+    commit↔commit, cero duplicados. Los commits son únicos — tienen SHA. Y `supersedes` **oculta** el
+    destino: que un commit oculte a otro es **borrar historia**.
+
+### Changed
+
+- **Las tres guardas eran UNA.** G1 (hermanos SDD), G2 (el evento vs el contrato) y G3 se
+  descubrieron por separado, en tres PRs, cada una a partir de un ruido distinto. Al quitar la
+  excepción, las dos primeras quedan **subsumidas**: sus destinos son históricos por definición. La
+  función colapsa a un predicado. **Sus tests siguen verdes sin una línea de cambio** — son a la vez
+  la prueba del colapso y la red que impide que se pierdan en silencio.
+- **La asimetría se conserva** (y es lo que impide que la regla sea un martillo): se mira **sólo el
+  destino**. Un commit `feat: migrar de X a Y` **sí** vuelve obsoleta la nota `usamos X` — es
+  evidencia de que la nota envejeció.
+- Los tests de `DetectOnly` (M4) se re-apuntan del balde `git-commit` al balde `error-fix`. Para los
+  commits la guarda estructural ahora **subsume** a `DetectOnly` (la relación ni siquiera nace), pero
+  el flag **sigue siendo load-bearing** en la telemetría, que no es un registro histórico. **Un test
+  que cubre un camino ya bloqueado río arriba queda verde para siempre sin custodiar nada.**
+
 ## [0.89.0] - 2026-07-12
 
 > **El gist vuelve a servir para lo que existe: decidir.** Un cuarto de ellos no te dejaba decidir
