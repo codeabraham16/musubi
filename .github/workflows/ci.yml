@@ -145,7 +145,7 @@ jobs:
 
       - name: Cache POTION table
         id: potion
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .musubi/embeddings/potion-multilingual-128M
           key: potion-multilingual-128M-v1
