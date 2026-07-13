@@ -216,7 +216,14 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {
-		return nil, afterRowID, fmt.Errorf("%w: pull JSON-RPC %d: %s", errPermanent, rpcResp.Error.Code, rpcResp.Error.Message)
+		// Misma disciplina que classifyResponse: permanente SÓLO si el central RECHAZÓ el pedido
+		// (params / tool / credencial). Un fallo INTERNO suyo (-32603: SQLITE_BUSY, disco) o la
+		// cuota se reintentan — antes cortaban el pull y la máquina se quedaba sin bajar memoria.
+		kind := errTransient
+		if permanentRPCCodes[rpcResp.Error.Code] {
+			kind = errPermanent
+		}
+		return nil, afterRowID, fmt.Errorf("%w: pull JSON-RPC %d: %s", kind, rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	// result = {content:[{type,text}]}; el text es el JSON {items, next_cursor}.
 	var toolResult struct {
@@ -234,10 +241,36 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	return pl.Items, pl.NextCursor, nil
 }
 
+// permanentRPCCodes enumera los errores del central que NO se arreglan reintentando el MISMO
+// payload: la request está mal formada, la tool no existe, o la credencial no alcanza para esa
+// escritura. Todo lo demás es TRANSITORIO — en particular -32603 (fallo INTERNO del central:
+// SQLITE_BUSY por contención, disco, etc.), que es un fallo del servidor, no del pedido.
+//
+// La lista es de PERMANENTES, no de transitorios, y esa forma es el punto. Antes era al revés
+// —TODO permanente salvo la cuota— y eso hacía que un SQLITE_BUSY del central mandara la
+// observación a DEAD-LETTER: memoria perdida en silencio, sin reintentar una sola vez. Y salta
+// justo en el sync inicial grande de una máquina nueva, que es cuando más contención hay y cuando
+// menos perdonable es perder memoria.
+//
+// La asimetría manda: reintentar de más es barato y ACOTADO (el outbox corta solo al llegar a
+// max_attempts); tirar la memoria es irreversible. Ante un error que no conocemos, se reintenta.
+//
+// La cuota (-32002) ya se había carveado a mano por esta misma razón (Track 19), caso por caso.
+// Esto arregla la FORMA, no un caso más: cualquier código nuevo del central nace transitorio.
+var permanentRPCCodes = map[int]bool{
+	codeParseError:     true,
+	codeInvalidRequest: true,
+	codeMethodNotFound: true,
+	codeInvalidParams:  true,
+	// -32001: rol insuficiente, o la id pertenece a otro tenant (ErrCrossTenant). En ambos casos
+	// reenviar lo mismo no cambia nada: el caller tiene que corregir el payload o la credencial.
+	codeUnauthorized: true,
+}
+
 // classifyResponse traduce la respuesta HTTP+JSON-RPC a nil / errTransient / errPermanent
-// (R10, D7). Éxito ⇔ 200 + result + sin error JSON-RPC. 5xx/429 → transitorio; otro no-2xx o
-// error JSON-RPC → permanente (params inválidos / auth). Un body ilegible o no-JSON en un 200
-// se trata como transitorio (el POST pudo llegar; conviene reintentar).
+// (R10, D7). Éxito ⇔ 200 + result + sin error JSON-RPC. 5xx/429 → transitorio; otro no-2xx →
+// permanente. Un error JSON-RPC es permanente SÓLO si está en permanentRPCCodes (ver arriba).
+// Un body ilegible o no-JSON en un 200 se trata como transitorio (el POST pudo llegar).
 func classifyResponse(resp *http.Response) error {
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -246,16 +279,14 @@ func classifyResponse(resp *http.Response) error {
 			return fmt.Errorf("%w: respuesta 200 ilegible del central: %v", errTransient, err)
 		}
 		if body.Error != nil {
-			// Cuota excedida (-32002): el central rate-limita; se libera al pasar la ventana ⇒
-			// TRANSITORIO (Track 19). Antes caía en el "permanente" de abajo y el drain
-			// DEAD-LETTEREABA memoria shared por un límite temporal — pérdida de durabilidad que
-			// destapó la auditoría al encender la cuota por default (T18.5).
-			if body.Error.Code == codeQuotaExceeded {
-				return fmt.Errorf("%w: el central rate-limita por cuota: %s", errTransient, body.Error.Message)
+			if permanentRPCCodes[body.Error.Code] {
+				return fmt.Errorf("%w: el central RECHAZÓ la entrega (JSON-RPC %d): %s",
+					errPermanent, body.Error.Code, body.Error.Message)
 			}
-			// El central procesó pero rechazó: params inválidos / tool desconocida. No se
-			// arregla reintentando lo mismo → permanente.
-			return fmt.Errorf("%w: el central devolvió error JSON-RPC %d: %s", errPermanent, body.Error.Code, body.Error.Message)
+			// Fallo del central procesando un pedido válido (incl. -32603 SQLITE_BUSY y -32002
+			// cuota): se libera solo. Reintentar con backoff; el outbox corta a max_attempts.
+			return fmt.Errorf("%w: el central FALLÓ al procesar (JSON-RPC %d): %s",
+				errTransient, body.Error.Code, body.Error.Message)
 		}
 		if len(body.Result) == 0 {
 			return fmt.Errorf("%w: respuesta 200 sin result ni error", errTransient)

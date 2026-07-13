@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ type centralStub struct {
 	status     int  // status HTTP a devolver (0 => 200)
 	jsonError  bool // si true, responde 200 con un error JSON-RPC (params inválidos, permanente)
 	quotaError bool // si true, responde 200 con error JSON-RPC de cuota (-32002, transitorio)
+	rpcCode    int  // si != 0, responde 200 con un error JSON-RPC de ESE código (tests de clasificación)
 	delay      time.Duration
 	// capturas del último request
 	gotAuth   string
@@ -67,11 +69,17 @@ func (c *centralStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status := c.status
 	jsonError := c.jsonError
 	quotaError := c.quotaError
+	rpcCode := c.rpcCode
 	c.mu.Unlock()
 
 	if status != 0 && status != http.StatusOK {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"stub"}}`))
+		return
+	}
+	if rpcCode != 0 {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":"x","error":{"code":%d,"message":"stub"}}`, rpcCode)
 		return
 	}
 	if quotaError {
@@ -167,6 +175,52 @@ func TestSyncClientTimeoutIsTransient(t *testing.T) {
 	err := client.Push(testItem())
 	if err == nil || !errors.Is(err, errTransient) {
 		t.Errorf("un timeout debía ser transitorio, obtuve %v", err)
+	}
+}
+
+// La clasificación de errores JSON-RPC es una lista de PERMANENTES; todo lo demás es transitorio.
+//
+// EL BUG QUE ESTO FIJA: antes era al revés (todo permanente salvo la cuota), así que un -32603 del
+// central —típicamente un SQLITE_BUSY por contención— mandaba la observación a DEAD-LETTER sin
+// reintentar una sola vez: memoria perdida en silencio. Y salta justo en el sync inicial grande de
+// una máquina nueva, que es cuando más contención hay y cuando menos perdonable es perderla.
+//
+// La asimetría manda: reintentar de más es barato y ACOTADO (el outbox corta a max_attempts);
+// tirar la memoria es irreversible. Un código que no conocemos nace TRANSITORIO.
+func TestSyncClientClasificaErroresRPC(t *testing.T) {
+	casos := []struct {
+		code int
+		perm bool
+		por  string
+	}{
+		{codeInternalError, false, "fallo INTERNO del central (SQLITE_BUSY, disco): se libera solo"},
+		{codeQuotaExceeded, false, "rate-limit: se libera al pasar la ventana"},
+		{-32099, false, "código DESCONOCIDO: ante la duda no se tira memoria"},
+		{codeInvalidParams, true, "el central rechazó el payload: reenviarlo no cambia nada"},
+		{codeMethodNotFound, true, "el central no tiene la tool"},
+		{codeUnauthorized, true, "credencial insuficiente / id de otro tenant"},
+		{codeParseError, true, "payload no parseable"},
+		{codeInvalidRequest, true, "request mal formada"},
+	}
+	for _, c := range casos {
+		stub := newCentralStub()
+		stub.rpcCode = c.code
+		ts := httptest.NewServer(stub)
+		client := newTestSyncClient(t, ts.URL)
+		err := client.Push(testItem())
+		ts.Close()
+
+		if err == nil {
+			t.Errorf("código %d: esperaba error, no hubo", c.code)
+			continue
+		}
+		if c.perm && !errors.Is(err, errPermanent) {
+			t.Errorf("código %d debía ser PERMANENTE (%s), obtuve %v", c.code, c.por, err)
+		}
+		if !c.perm && !errors.Is(err, errTransient) {
+			t.Errorf("código %d debía ser TRANSITORIO (%s) — con permanente se PIERDE la memoria en dead-letter; obtuve %v",
+				c.code, c.por, err)
+		}
 	}
 }
 

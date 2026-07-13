@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Ante la duda, no se tira la memoria.** Reintentar de más es barato y acotado; perder una
+> observación es irreversible. La clasificación de fallos del sync tenía esa asimetría al revés.
+
+### Fixed
+
+- **El sync ya no manda memoria a dead-letter por un fallo TRANSITORIO del central.** La
+  clasificación de errores JSON-RPC era una **lista negra de uno**: *todo* permanente salvo la cuota
+  (`-32002`, carveada a mano en Track 19). Así, un **`-32603` del central —típicamente un
+  `SQLITE_BUSY` por contención—** mandaba la observación a **dead-letter sin reintentar una sola
+  vez**: memoria perdida en silencio, con el `sync_status` en verde. Y salta justo en el **sync
+  inicial grande de una máquina nueva**, que es cuando más contención hay y cuando menos perdonable
+  es perder memoria.
+  - Ahora la lista es de **PERMANENTES** (`-32700`, `-32600`, `-32601`, `-32602`, `-32001`): los
+    errores donde el central **rechazó** el pedido y reenviarlo idéntico no cambia nada. Un fallo
+    **interno** suyo, o un código que no conocemos, nace **transitorio** — el outbox reintenta con
+    backoff y corta solo al llegar a `max_attempts`.
+  - Arregla la **forma**, no un caso más: la cuota se había carveado caso por caso; cualquier código
+    nuevo del central ya nace del lado seguro.
+  - El mismo bug estaba en el camino del **pull**: un fallo interno del central cortaba la bajada
+    entera y la máquina se quedaba sin memoria.
+  - Lo dead-letereado se recupera con `musubi_sync_requeue` — no hace falta reconstruir nada.
+
 > **Aislar la atribución no es aislar la escritura.** Track 17 cerró la *falsificación* (un writer no
 > puede declarar que su memoria es de otro proyecto). Faltaba lo simétrico: que tampoco pueda
 > **corromper** la memoria de otro proyecto que ya existe.
