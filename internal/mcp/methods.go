@@ -251,8 +251,14 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		return textResult("Observación guardada con éxito (id: " + id + ")." + s.detectAndSurface(id)), nil
 	}
 
-	// Con id explícito: upsert por id.
+	// Con id explícito: upsert por id. Una id que ya pertenece a OTRO proyecto se rechaza (no se
+	// puede escribir memoria de otro tenant, ni siquiera "de vuelta" a la propia: el UPSERT preserva
+	// la atribución, así que reenviarla sólo corrompería la fila ajena). El caller debe usar una id
+	// nueva; reasignar el tenant de una fila existente sólo puede hacerlo un admin en el central.
 	if err := s.engine.SaveObservationTypedFrom(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, emb); err != nil {
+		if errors.Is(err, memory.ErrCrossTenant) {
+			return nil, rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
+		}
 		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil

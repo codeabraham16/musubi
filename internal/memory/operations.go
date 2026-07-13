@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ErrCrossTenant se devuelve cuando una escritura intenta tocar una observación que ya pertenece
+// a OTRO proyecto. El UPSERT por id preserva la atribución (project_id/author) en updates, así que
+// escribir sobre una id ajena NO la reasigna: le corrompe el contenido dejándola atribuida a su
+// dueño. Fail-closed: se rechaza en vez de corromper en silencio.
+var ErrCrossTenant = errors.New("la observación pertenece a otro proyecto")
 
 type Observation struct {
 	ID        string `json:"id"`
@@ -139,7 +146,11 @@ func (e *DbEngine) SaveObservationDedupedTyped(topicKey, content string, importa
 // explícito (atribución multi-tenant, Track 16 Fase 1). originProjectID == "" ⇒ project_id
 // del engine (comportamiento de siempre). author es la atribución por PERSONA (C5.1).
 func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, author, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error) {
-	existing, found, err := e.FindByContentHash(ContentHash(content))
+	// El dedup se acota al TENANT que escribe: sin esto, un writer cuyo contenido coincide con el de
+	// OTRO proyecto recibe el id ajeno con deduped=true y su observación NO se guarda — pérdida
+	// silenciosa de memoria (y fuga de un id ajeno). Con tenant vacío (admin/federado/stdio local)
+	// el dedup sigue siendo global, como siempre.
+	existing, found, err := e.findByContentHashIn(e.effectiveProjectID(originProjectID), ContentHash(content))
 	if err != nil {
 		return "", false, err
 	}
@@ -167,8 +178,24 @@ func (e *DbEngine) ObservationExists(id string) (bool, error) {
 
 // FindByContentHash devuelve el id de la observación con ese content_hash, si existe.
 func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
+	return e.findByContentHashIn("", hash)
+}
+
+// findByContentHashIn es FindByContentHash ACOTADO a un tenant: sólo considera candidatas las
+// observaciones del proyecto que escribe (o las sin atribuir, para no romper el dedup de las filas
+// legacy anteriores a Track 16, que tienen project_id vacío). projectID == "" ⇒ sin filtro.
+func (e *DbEngine) findByContentHashIn(projectID, hash string) (string, bool, error) {
+	q := `SELECT id FROM observations WHERE content_hash = ? LIMIT 1`
+	args := []any{hash}
+	if projectID != "" {
+		q = `SELECT id FROM observations
+			WHERE content_hash = ? AND COALESCE(project_id,'') IN (?, '')
+			ORDER BY CASE WHEN COALESCE(project_id,'') = ? THEN 0 ELSE 1 END
+			LIMIT 1`
+		args = []any{hash, projectID, projectID}
+	}
 	var id string
-	err := e.db.QueryRow(`SELECT id FROM observations WHERE content_hash = ? LIMIT 1`, hash).Scan(&id)
+	err := e.db.QueryRow(q, args...).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -176,6 +203,16 @@ func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 		return "", false, fmt.Errorf("error al buscar content_hash: %w", err)
 	}
 	return id, true, nil
+}
+
+// effectiveProjectID resuelve el tenant de una escritura: el origen explícito que estampó el
+// handler desde la CREDENCIAL (ingest del central), o el del engine si no vino ninguno (guardado
+// local). Vacío = sin tenant (admin/federado/stdio local) ⇒ las guardias multi-tenant no aplican.
+func (e *DbEngine) effectiveProjectID(originProjectID string) string {
+	if originProjectID != "" {
+		return originProjectID
+	}
+	return e.projectID
 }
 
 // saveObservation es el núcleo del guardado: UPSERT por id que preserva created_at
@@ -194,17 +231,36 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// (aditivo/backward-compat; F1 no sincroniza ni filtra por scope todavía).
 	scope = normalizeScope(scope)
 
+	// Atribución (Track 16 F1): el project_id de ORIGEN si el caller lo pasó (ingest del central,
+	// derivado de la credencial), o el del engine si no (guardado local).
+	projectID := e.effectiveProjectID(originProjectID)
+
+	// Estado ALMACENADO de esta id, si ya existe. Una sola lectura alimenta dos invariantes: la
+	// preservación de un 'shared' previo y el aislamiento de escritura entre tenants.
+	var storedScope, storedProject string
+	_ = tx.QueryRow(`SELECT COALESCE(scope,''), COALESCE(project_id,'') FROM observations WHERE id = ?`, id).
+		Scan(&storedScope, &storedProject)
+
+	// AISLAMIENTO DE ESCRITURA CROSS-TENANT: el UPSERT de abajo NO pisa project_id ni author (ver
+	// más abajo), así que escribir sobre la id de OTRO proyecto no la reasigna — le pisa el
+	// contenido dejándola atribuida a su dueño. Dos daños reales: (a) un writer del proyecto A
+	// corrompe memoria del proyecto B con sólo conocer su id (los ids ajenos se filtran a cualquier
+	// cliente que alguna vez sincronizó con la credencial equivocada), y (b) una fila que cayó en el
+	// tenant equivocado es IRRECUPERABLE desde el cliente: reenviarla con el token correcto la
+	// actualiza dentro del tenant ajeno. Fail-closed: se rechaza. Sin tenant efectivo
+	// (admin/federado/stdio local) no aplica — ese caller es dueño de todo.
+	if storedProject != "" && projectID != "" && storedProject != projectID {
+		return fmt.Errorf("%w: la observación %s es del proyecto %q y no puede escribirse desde %q",
+			ErrCrossTenant, id, storedProject, projectID)
+	}
+
 	// Redacción de secretos en el borde a 'shared' (C2): el scope EFECTIVO es el pasado, o el
 	// ya almacenado para esta id — el UPSERT PRESERVA un 'shared' previo, así que un re-save por
 	// vía 'local' de una fila ya shared igual queda shared. Se limpia ANTES de derivar
 	// gist/hash/tokens para que el outbox —que reconstruye el payload desde esta fila— nunca
 	// empuje un secreto al cerebro compartido, por ninguna ruta.
-	if scope != ScopeShared {
-		var stored string
-		_ = tx.QueryRow(`SELECT scope FROM observations WHERE id = ?`, id).Scan(&stored)
-		if stored == ScopeShared {
-			scope = ScopeShared
-		}
+	if scope != ScopeShared && storedScope == ScopeShared {
+		scope = ScopeShared
 	}
 	if scope == ScopeShared {
 		content, _ = redact.Redact(content)
@@ -233,13 +289,8 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 			content_hash=excluded.content_hash,
 			tokens=excluded.tokens,
 			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END` + setImp
-	// Atribución (Track 16 F1): estampar el project_id de ORIGEN si el caller lo pasó
-	// (ingest del central), o el del engine si no (guardado local). El UPSERT NO pisa
-	// project_id en updates, así que un re-save no borra la atribución original.
-	projectID := originProjectID
-	if projectID == "" {
-		projectID = e.projectID
-	}
+	// El UPSERT NO pisa project_id en updates, así que un re-save no borra la atribución original
+	// (proyecto ya resuelto arriba, junto con la guardia cross-tenant que ese no-pisar hace necesaria).
 	// Atribución por PERSONA (C5.1): author se deriva de la credencial (principal.Name) en el
 	// handler y se estampa acá. Como project_id/scope, NO se pisa en el UPSERT: un re-save por
 	// otra persona PRESERVA el autor original (no reasigna crédito). Vacío = sin atribución.

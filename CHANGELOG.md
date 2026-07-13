@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Aislar la atribución no es aislar la escritura.** Track 17 cerró la *falsificación* (un writer no
+> puede declarar que su memoria es de otro proyecto). Faltaba lo simétrico: que tampoco pueda
+> **corromper** la memoria de otro proyecto que ya existe.
+
+### Security
+
+- **Un writer del proyecto A ya no puede pisarle el contenido a una observación del proyecto B.** El
+  UPSERT por id **no pisa `project_id`** (correcto: un re-save no debe reasignar la atribución) — pero
+  tampoco había ninguna guarda que impidiera el UPSERT en sí. Resultado: conociendo un id ajeno, un
+  writer acotado escribía dentro del tenant de otro, y la fila quedaba **atribuida a su dueño con
+  contenido ajeno**. Y los ids ajenos **se filtran**: cualquier cliente que alguna vez sincronizó con
+  la credencial equivocada se los bajó. Ahora la escritura cross-tenant se rechaza (`ErrCrossTenant`,
+  `-32001` en MCP). El caller sin tenant (admin/federado/stdio local) conserva el acceso pleno.
+- **El dedup por `content_hash` ya no cruza tenants.** `FindByContentHash` no filtraba por proyecto:
+  un writer cuyo contenido coincidía con el de OTRO proyecto recibía **el id ajeno** con
+  `deduped=true` y **su observación no se guardaba** — pérdida silenciosa de memoria. Ahora el dedup
+  se acota al tenant que escribe (las filas legacy sin atribuir siguen siendo candidatas, para no
+  romper el dedup de lo anterior a Track 16).
+
+### Fixed
+
+- **Una fila que cayó en el tenant equivocado ya no es una trampa silenciosa.** Como el UPSERT
+  preserva `project_id`, reenviarla con el token CORRECTO la actualizaba **dentro del tenant ajeno**,
+  sin reasignarla y sin avisar. Encontrado en producción: una observación quedó en el tenant de otro
+  proyecto por un token mal configurado, y el intento de repararla desde el cliente sólo la reescribió
+  en el lugar equivocado. Ahora falla ruidosamente y le dice al caller que use un id nuevo: reasignar
+  el tenant de una fila existente sólo puede hacerlo un admin en el central.
+
 ## [0.90.0] - 2026-07-13
 
 > **El libro mayor no se tacha.** Un commit es lo que PASÓ; un contrato SDD es lo que se ACORDÓ.
