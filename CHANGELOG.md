@@ -28,6 +28,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Fixed
 
+- **En team mode, los commits capturados ya viajan al cerebro.** La captura guardaba con
+  `ScopeLocal` **hardcodeado**: corre en el CLI, que no pasa por el `defaultScope()` del servidor MCP,
+  así que `team_mode` ni se miraba. Resultado: **lo único que Musubi captura SOLO era justo lo único
+  que nunca cruzaba de máquina.** Medido en la memoria real de este repo: la PC tenía **481**
+  observaciones locales y la laptop **70** — unos 400 commits capturados de un lado eran invisibles
+  del otro. La memoria *deliberada* era de equipo; la *automática*, de máquina. Al revés del contrato
+  del flag, que dice *«la captura de este proyecto es CENTRAL por naturaleza»*.
+  - El comentario que lo justificaba (*«nunca shared: C3 no debe filtrar un secreto de un diff»*)
+    quedó **obsoleto**: la redacción corre hoy en el **borde a `shared` dentro de `saveObservation`**,
+    por cualquier ruta, no sólo vía `promote`. Y la captura guarda subject + body + nombres de
+    archivo, **no el diff**.
+  - Sin riesgo de duplicados: el id del commit es **determinístico desde su contenido**, así que si
+    dos máquinas capturan el mismo commit el central lo **upsertea en la misma fila**.
+  - Un proyecto personal (sin `team_mode`) sigue capturando `local`: nada cambia.
+
 - **Una fila que cayó en el tenant equivocado ya no es una trampa silenciosa.** Como el UPSERT
   preserva `project_id`, reenviarla con el token CORRECTO la actualizaba **dentro del tenant ajeno**,
   sin reasignarla y sin avisar. Encontrado en producción: una observación quedó en el tenant de otro
