@@ -11,6 +11,12 @@
 *.db-wal
 .musubi/memory.db
 
+# Config del workspace: es estado de LA MÁQUINA, no del proyecto. Suele llevar la IP del cerebro
+# central y el nombre de la variable del token, así que versionarla filtra infraestructura privada a
+# un repo público. La genera `musubi init`/`setup`, y `config.Load` aplica defaults si falta: nada la
+# necesita versionada. Las claves están documentadas en .musubi/config.example.yaml (ese SÍ se versiona).
+.musubi/config.yaml
+
 # Snapshot del índice vectorial IVF: caché DERIVADO y reconstruible (centroides). Si falta o está
 # corrupto, el engine cae al rebuild normal — nunca compromete correctness. No se versiona.
 .musubi/memory.db.vindex

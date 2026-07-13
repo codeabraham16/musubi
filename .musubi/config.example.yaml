@@ -1,0 +1,46 @@
+# Ejemplo de .musubi/config.yaml — copiá este archivo a .musubi/config.yaml y ajustá lo que uses.
+#
+# NO HACE FALTA CREARLO A MANO: `musubi init` (o `musubi setup`) lo genera, y `musubi provision`
+# escribe el bloque `sync:` solo. Este ejemplo existe para DOCUMENTAR las claves, porque el
+# config.yaml real NO se versiona: es estado de TU máquina y suele llevar IPs y nombres de token.
+#
+# TODAS las claves son OPCIONALES: lo ausente toma su default. Un config vacío es válido.
+
+version: 1.0
+mode: local # local | team
+
+# Identidad del proyecto en el cerebro central. Debe coincidir con el scope del principal de sync.
+# project_id: mi-proyecto
+
+# --- Memoria -------------------------------------------------------------------------------------
+# memory:
+#   team_mode: true       # las observaciones nuevas nacen `shared` y fluyen al cerebro central
+#   recall_token_budget: 700
+#   gist_max_tokens: 24   # techo del resumen extractivo que trae el recall
+#   mmr_lambda: 0.75      # diversidad del recall: 1 = apagado (orden bit-idéntico al de antes).
+#                         # Por debajo de ~0.72 empieza a promover items sin relación con la consulta.
+
+# --- Detección de conflictos ---------------------------------------------------------------------
+# conflicts:
+#   enabled: true
+#   cosine_floor: 0.85    # piso semántico para ENCOLAR un pendiente. 0 = apaga el coseno (dedup léxico).
+#   band_floor: 0.80      # "banda ciega": vecinos que se MUESTRAN al guardar sin encolar un veredicto.
+#                         # Debe ser < cosine_floor. Ahí viven las CONTRADICCIONES: decir lo contrario
+#                         # usa OTRAS palabras, así que se parecen MENOS que un duplicado.
+
+# --- Semántica (embeddings) ----------------------------------------------------------------------
+# Sin provider, la búsqueda es léxica (FTS). La tabla estática se baja con `musubi embed pull`.
+# embedding:
+#   provider: static      # none | static | ollama
+#   model: potion-multilingual-128M
+
+# --- Sync con el cerebro central -----------------------------------------------------------------
+# Lo escribe `musubi provision`. El token NUNCA va acá: se nombra la variable de entorno que lo tiene.
+# sync:
+#   enabled: true
+#   central_url: http://<ip-del-cerebro>:7717
+#   auth_token_env: MUSUBI_TOKEN
+#   drain_interval_seconds: 10
+#   allow_insecure_token: true # sólo si el transporte ya cifra (p. ej. una malla WireGuard/tailnet)
+
+skills_auto_resolve: true
