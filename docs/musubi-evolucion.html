@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Musubi — La Evolución</title>
+<style>
+  :root{
+    --ink:#1a1d29;        /* texto principal */
+    --muted:#5b6070;      /* texto secundario */
+    --faint:#8a8f9e;      /* texto terciario */
+    --accent:#4338ca;     /* indigo */
+    --accent2:#0e7490;    /* teal */
+    --line:#e4e6ee;       /* líneas */
+    --bg-soft:#f6f7fb;    /* fondo suave */
+    --bg-card:#fbfbfe;
+    --ok:#0f766e;
+  }
+
+  @page{
+    size:A4;
+    margin:18mm 16mm 16mm 16mm;
+    @bottom-center{
+      content:"Musubi · Memoria persistente MCP para agentes de IA";
+      font-family:'Segoe UI',sans-serif; font-size:8pt; color:#8a8f9e;
+    }
+    @bottom-right{
+      content:counter(page) " / " counter(pages);
+      font-family:'Segoe UI',sans-serif; font-size:8pt; color:#8a8f9e;
+    }
+  }
+  @page :first{ margin:0; }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;
+    color:var(--ink);
+    font-size:10.5pt;
+    line-height:1.5;
+    -webkit-print-color-adjust:exact;
+    print-color-adjust:exact;
+  }
+
+  /* ---------- PORTADA ---------- */
+  .cover{
+    height:297mm;
+    background:linear-gradient(155deg,#1e1b4b 0%,#312e81 42%,#3730a3 72%,#1e3a8a 100%);
+    color:#fff;
+    padding:34mm 24mm;
+    display:flex; flex-direction:column;
+    position:relative; overflow:hidden;
+    page-break-after:always;
+  }
+  .cover::after{
+    content:""; position:absolute; right:-60mm; top:-40mm;
+    width:160mm; height:160mm; border-radius:50%;
+    background:radial-gradient(circle,rgba(99,102,241,.30),transparent 65%);
+  }
+  .knot{
+    font-size:13pt; letter-spacing:.5em; text-transform:uppercase;
+    color:#a5b4fc; font-weight:600; margin-bottom:6mm;
+  }
+  .cover h1{
+    font-size:58pt; line-height:1; margin:0 0 4mm; font-weight:800;
+    letter-spacing:-.02em;
+  }
+  .cover .sub{
+    font-size:17pt; color:#c7d2fe; font-weight:400; max-width:130mm;
+    line-height:1.35;
+  }
+  .cover .spacer{ flex:1; }
+  .cover .meta{
+    display:flex; gap:14mm; border-top:1px solid rgba(255,255,255,.18);
+    padding-top:7mm; z-index:2;
+  }
+  .cover .meta .k{ font-size:9pt; color:#a5b4fc; text-transform:uppercase; letter-spacing:.12em; }
+  .cover .meta .v{ font-size:20pt; font-weight:700; margin-top:1mm; }
+  .cover .tagline{
+    margin-top:9mm; font-size:11pt; color:#e0e7ff; font-style:italic;
+    border-left:2px solid #818cf8; padding-left:5mm; z-index:2;
+  }
+
+  /* ---------- ESTRUCTURA ---------- */
+  .page{ padding:0; }
+  section{ page-break-inside:avoid; }
+  h2{
+    font-size:18pt; color:var(--ink); margin:0 0 1mm; font-weight:750;
+    letter-spacing:-.01em;
+  }
+  .eyebrow{
+    font-size:8.5pt; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--accent); font-weight:700; margin-bottom:1.5mm;
+  }
+  .lead{ color:var(--muted); font-size:11pt; margin:2mm 0 6mm; max-width:160mm; }
+  hr.div{ border:none; border-top:1px solid var(--line); margin:8mm 0; }
+  p{ margin:0 0 3mm; }
+  .muted{ color:var(--muted); }
+
+  /* ---------- TARJETAS DE PRINCIPIOS ---------- */
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:5mm; }
+  .grid3{ display:grid; grid-template-columns:repeat(3,1fr); gap:5mm; }
+  .card{
+    background:var(--bg-card); border:1px solid var(--line);
+    border-radius:3mm; padding:5mm 5.5mm;
+  }
+  .card .ct{ font-weight:700; font-size:10.5pt; margin-bottom:1.5mm; color:var(--ink); }
+  .card .cd{ font-size:9.5pt; color:var(--muted); line-height:1.45; }
+  .card.accent{ border-left:3px solid var(--accent); }
+
+  /* ---------- MÉTRICAS ---------- */
+  .stats{ display:grid; grid-template-columns:repeat(4,1fr); gap:5mm; margin:5mm 0; }
+  .stat{
+    text-align:center; background:var(--bg-soft); border-radius:3mm; padding:6mm 3mm;
+    border:1px solid var(--line);
+  }
+  .stat .num{ font-size:26pt; font-weight:800; color:var(--accent); line-height:1; }
+  .stat .lbl{ font-size:8.5pt; color:var(--muted); margin-top:2mm; text-transform:uppercase; letter-spacing:.06em; }
+
+  /* ---------- TIMELINE DE ERAS ---------- */
+  .era{
+    display:grid; grid-template-columns:40mm 1fr; gap:7mm;
+    padding:5mm 0; border-top:1px solid var(--line);
+    page-break-inside:avoid;
+  }
+  .era:first-of-type{ border-top:none; }
+  .era .left .badge{
+    display:inline-block; font-size:8pt; font-weight:700; letter-spacing:.08em;
+    color:#fff; background:var(--accent); border-radius:10mm; padding:1mm 3.5mm; text-transform:uppercase;
+  }
+  .era .left .ver{ font-family:'Consolas','Courier New',monospace; font-size:10pt; color:var(--accent2); font-weight:700; margin-top:2.5mm; }
+  .era .left .date{ font-size:8.5pt; color:var(--faint); margin-top:1mm; }
+  .era .right .et{ font-size:13pt; font-weight:700; margin:0 0 1mm; }
+  .era .right .ed{ font-size:9.5pt; color:var(--muted); font-style:italic; margin-bottom:2.5mm; }
+  .era .right ul{ margin:0; padding-left:5mm; font-size:9.5pt; color:var(--ink); }
+  .era .right li{ margin-bottom:1mm; }
+  .era .right li b{ color:var(--accent); }
+
+  .icon{ font-size:16pt; margin-bottom:2mm; }
+
+  /* ---------- TABLA DE TRACKS ---------- */
+  table{ width:100%; border-collapse:collapse; font-size:9.5pt; margin:3mm 0; }
+  th{ text-align:left; background:var(--accent); color:#fff; padding:2.5mm 3mm; font-size:9pt; font-weight:600; }
+  th:first-child{ border-radius:2mm 0 0 0; }
+  th:last-child{ border-radius:0 2mm 0 0; }
+  td{ padding:2.5mm 3mm; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:nth-child(even) td{ background:var(--bg-soft); }
+  td .tver{ font-family:'Consolas',monospace; font-size:8.5pt; color:var(--accent2); }
+
+  /* ---------- CIERRE ---------- */
+  .arc{
+    background:linear-gradient(135deg,#312e81,#1e3a8a); color:#fff;
+    border-radius:4mm; padding:9mm 10mm; margin-top:7mm; page-break-inside:avoid;
+  }
+  .arc .eyebrow{ color:#a5b4fc; }
+  .arc .flow{ font-size:12.5pt; line-height:1.7; font-weight:500; }
+  .arc .flow b{ color:#fde68a; }
+  .arc .note{ margin-top:5mm; font-size:9.5pt; color:#c7d2fe; border-top:1px solid rgba(255,255,255,.2); padding-top:4mm; }
+
+  .footer-id{ margin-top:9mm; font-size:8pt; color:var(--faint); text-align:center; }
+</style>
+</head>
+<body>
+
+<!-- ====================== PORTADA ====================== -->
+<div class="cover">
+  <div class="knot">結び · Musubi</div>
+  <h1>La Evolución<br>de Musubi</h1>
+  <div class="sub">El recorrido de un servidor MCP de memoria persistente para agentes de IA — de la primera instalación a una base que escala a perpetuidad.</div>
+  <div class="tagline">"Coordina y persiste; el agente ejecuta."</div>
+  <div class="spacer"></div>
+  <div class="meta">
+    <div><div class="k">Recorrido</div><div class="v">v0.1.0 → v0.24.0</div></div>
+    <div><div class="k">Releases</div><div class="v">33</div></div>
+    <div><div class="k">Período</div><div class="v">6 días</div></div>
+    <div><div class="k">Stack</div><div class="v">Go puro</div></div>
+  </div>
+</div>
+
+<!-- ====================== QUÉ ES ====================== -->
+<div class="page">
+<section>
+  <div class="eyebrow">El proyecto</div>
+  <h2>¿Qué es Musubi?</h2>
+  <p class="lead">Musubi (結び, "anudar" en japonés) es un servidor <b>MCP</b> que le da a los agentes de IA una memoria persistente que sobrevive entre sesiones. Es <b>local-first</b>, escrito en <b>Go puro</b> sobre un único archivo SQLite, y opera <b>sin modelos</b> (model-free): toda validación y búsqueda es determinista. El protocolo orquesta; el agente ejecuta.</p>
+
+  <div class="grid2">
+    <div class="card accent"><div class="ct">🗃️ Memoria que se entiende</div><div class="cd">No solo guarda texto: detecta conflictos semánticos, consolida duplicados y se auto-repara — todo sin llamar a un LLM.</div></div>
+    <div class="card accent"><div class="ct">🔀 Orquesta trabajo</div><div class="cd">Motor de orquestación por DAG y pizarra compartida multi-agente para coordinar flujos de trabajo complejos.</div></div>
+    <div class="card accent"><div class="ct">🪙 Eficiente en tokens</div><div class="cd">Recall por presupuesto de tokens, calibración opt-in y memoria de código por gists para minimizar el footprint de contexto.</div></div>
+    <div class="card accent"><div class="ct">🚀 Listo para escalar</div><div class="cd">Migraciones versionadas, índice vectorial, retención automática y un modo servicio HTTP seguro y observable.</div></div>
+  </div>
+</section>
+
+<hr class="div">
+
+<!-- ====================== PRINCIPIOS ====================== -->
+<section>
+  <div class="eyebrow">La disciplina</div>
+  <h2>Invariantes innegociables</h2>
+  <p class="lead">Los mismos principios desde el día 1 hasta hoy — no se aflojaron al crecer 24 versiones.</p>
+  <div class="grid3">
+    <div class="card"><div class="ct">Go puro · sin CGo</div><div class="cd">Un solo binario por plataforma, sin dependencias nativas. Solo 3 deps directas.</div></div>
+    <div class="card"><div class="ct">Model-free</div><div class="cd">Ningún LLM en la validación o la búsqueda. Comportamiento determinista y auditable.</div></div>
+    <div class="card"><div class="ct">Local-first</div><div class="cd">Un único archivo SQLite. Tus datos no salen de tu máquina (salvo modo servicio explícito).</div></div>
+    <div class="card"><div class="ct">MCP orquesta</div><div class="cd">El servidor coordina y persiste; el agente ejecuta. Separación clara de responsabilidades.</div></div>
+    <div class="card"><div class="ct">Test 1:1</div><div class="cd">Casi tantas líneas de test como de código. La cobertura crece con cada feature.</div></div>
+    <div class="card"><div class="ct">Entrega encadenada</div><div class="cd">PRs encadenados, cada sub-track es un release menor, CI verde con <span style="font-family:Consolas">-race</span>.</div></div>
+  </div>
+</section>
+
+<hr class="div">
+
+<!-- ====================== MÉTRICAS ====================== -->
+<section>
+  <div class="eyebrow">El estado hoy · v0.24.0</div>
+  <h2>Musubi en números</h2>
+  <div class="stats">
+    <div class="stat"><div class="num">25</div><div class="lbl">Tools MCP</div></div>
+    <div class="stat"><div class="num">103</div><div class="lbl">Commits</div></div>
+    <div class="stat"><div class="num">~12k</div><div class="lbl">Líneas de código</div></div>
+    <div class="stat"><div class="num">~11k</div><div class="lbl">Líneas de test</div></div>
+    <div class="stat"><div class="num">70</div><div class="lbl">Archivos fuente</div></div>
+    <div class="stat"><div class="num">83</div><div class="lbl">Archivos de test</div></div>
+    <div class="stat"><div class="num">3</div><div class="lbl">Deps directas</div></div>
+    <div class="stat"><div class="num">33</div><div class="lbl">Releases</div></div>
+  </div>
+</section>
+</div>
+
+<!-- ====================== TIMELINE ====================== -->
+<div class="page" style="page-break-before:always;">
+<section>
+  <div class="eyebrow">La trayectoria</div>
+  <h2>Seis eras en seis días</h2>
+  <p class="lead">Cada era resolvió un problema distinto, construyendo sobre la anterior — de "se puede instalar" a "escala sin techo".</p>
+</section>
+
+<div class="era">
+  <div class="left"><span class="badge">Era 0</span><div class="ver">v0.1.0 → v0.2.4</div><div class="date">13–14 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">🥚</div>
+    <div class="et">Nacer y distribuirse</div>
+    <div class="ed">El problema: que exista y se instale sin fricción.</div>
+    <ul>
+      <li>Instaladores de <b>una línea</b> + workflow de release + setup por doble-clic</li>
+      <li>Icono embebido en el <b>.exe</b>, VERSIONINFO y checksums SHA-256 por asset</li>
+    </ul>
+  </div>
+</div>
+
+<div class="era">
+  <div class="left"><span class="badge">Era 1</span><div class="ver">v0.3.0 → v0.5.0</div><div class="date">15–16 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">🧠</div>
+    <div class="et">Memoria que se entiende a sí misma</div>
+    <div class="ed">El salto de "guardar texto" a "memoria viva".</div>
+    <ul>
+      <li>Memoria eficiente <b>model-free</b> + auto-update</li>
+      <li>Arranque vivo + autoconocimiento (stack-fingerprint, priming, skills cognitivas)</li>
+      <li><b>Conflictos semánticos</b> model-free + doctor con auto-repair</li>
+    </ul>
+  </div>
+</div>
+
+<div class="era">
+  <div class="left"><span class="badge">Era 2</span><div class="ver">v0.6.0 → v0.7.3</div><div class="date">16 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">🔀</div>
+    <div class="et">Orquestación</div>
+    <div class="ed">De memoria a coordinador de trabajo.</div>
+    <ul>
+      <li>Loop dirigido + pipeline por fases</li>
+      <li><b>Multi-agente:</b> pizarra compartida (orquestación model-free)</li>
+      <li>Auditoría completa con su propio flujo multi-agente → <b>9 fixes</b> ALTO/MEDIO</li>
+    </ul>
+  </div>
+</div>
+
+<div class="era">
+  <div class="left"><span class="badge">Era 3</span><div class="ver">v0.8.0 → v0.10.0</div><div class="date">16 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">🪙</div>
+    <div class="et">Eficiencia de tokens</div>
+    <div class="ed">Bajar el costo real de tener memoria.</div>
+    <ul>
+      <li>Núcleo de eficiencia de tokens + calibración opt-in + ledger completo</li>
+      <li>Fin de la doble inyección priming↔turno (footprint ~67% → ~78%)</li>
+      <li><b>Memoria de código</b> (gists con frescura) vía hook PreToolUse(Read)</li>
+    </ul>
+  </div>
+</div>
+
+<div class="era">
+  <div class="left"><span class="badge">Era 4</span><div class="ver">v0.11.0 → v0.14.0</div><div class="date">18 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">💎</div>
+    <div class="et">Acabado profesional</div>
+    <div class="ed">Madurez de producto.</div>
+    <ul>
+      <li>Embeddings OpenAI, hardening, VERSIONINFO reproducible</li>
+      <li><b>Motor de orquestación DAG</b> (musubi_workflow) + templates SDD</li>
+      <li>Soporte multi-agente (musubi setup --agent)</li>
+    </ul>
+  </div>
+</div>
+
+<div class="era">
+  <div class="left"><span class="badge" style="background:var(--accent2)">Era 5</span><div class="ver">v0.15.0 → v0.24.0</div><div class="date">19 jun 2026</div></div>
+  <div class="right">
+    <div class="icon">🚀</div>
+    <div class="et">Escalabilidad perpetua</div>
+    <div class="ed">La fundación para crecer sin techo — el roadmap de 4 tracks.</div>
+    <ul>
+      <li>Una década de deuda técnica evitada en un día: ver el desglose por tracks abajo</li>
+    </ul>
+  </div>
+</div>
+
+<hr class="div">
+
+<section>
+  <div class="eyebrow">Era 5 · en detalle</div>
+  <h2>El roadmap de escalabilidad perpetua</h2>
+  <table>
+    <thead><tr><th style="width:30%">Track</th><th style="width:22%">Releases</th><th>Qué desbloqueó</th></tr></thead>
+    <tbody>
+      <tr><td><b>1 · Cimientos de datos</b></td><td class="tver">v0.15 – v0.17</td><td>Migraciones versionadas (PRAGMA user_version) · índice vectorial IVF · retención + compactación</td></tr>
+      <tr><td><b>2 · Calidad (CI)</b></td><td class="tver">v0.18.x</td><td>golangci-lint · piso de cobertura · govulncheck · Dependabot</td></tr>
+      <tr><td><b>3 · Extensibilidad</b></td><td class="tver">v0.18 – v0.19</td><td>Registro de tools map-based · interfaz StorageBackend (seam de backend)</td></tr>
+      <tr><td><b>4 · Modo servicio</b></td><td class="tver">v0.20 – v0.24</td><td>Dispatch puro · transporte HTTP · auth bearer + TLS · observabilidad · concurrencia de lectura</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====================== CIERRE ====================== -->
+<div class="arc">
+  <div class="eyebrow">El arco completo</div>
+  <div class="flow">
+    <b>Instalable</b> (E0) → <b>memoria que se entiende</b> (E1) → <b>que orquesta trabajo</b> (E2) → <b>a bajo costo</b> (E3) → <b>con acabado de producto</b> (E4) → <b>y una base que escala para siempre</b> (E5).
+  </div>
+  <div class="note">Lo notable no es la velocidad — son los invariantes intactos. El ratio de test 1:1 y las 3 dependencias directas se mantuvieron del primer commit al último. La disciplina no se aflojó al crecer 24 versiones.</div>
+</div>
+
+<div class="footer-id">Musubi · github.com/codeabraham16/musubi · Documento generado a partir de la historia real del repositorio (git) · v0.24.0</div>
+</div>
+
+</body>
+</html>
