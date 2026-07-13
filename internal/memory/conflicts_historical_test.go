@@ -47,31 +47,55 @@ func TestUnCommitSiPuedeVolverObsoletaUnaNota(t *testing.T) { // S.e
 	}
 }
 
-func TestCommitVsCommitSeSigueDetectando(t *testing.T) { // S.f — misma clase
-	e := newTestEngine(t)
-	saveAt(t, e, "c1", CommitTopicKey, "fix(captura): no guardar dos veces el mismo commit al mergear con squash", "2026-01-01 10:00:00")
-	saveAt(t, e, "c2", CommitTopicKey, "fix(captura): no guardar dos veces el mismo commit al mergear con squash (#201)", "2026-01-02 10:00:00")
+// LA REGLA ENTERA, EN UNA TABLA. Antes vivía en tres guardas (G1, G2, G3) que se descubrieron por
+// separado; resultaron ser TRES CARAS DE LA MISMA. La tabla es el contrato completo, y lo único que
+// decide es la CLASE DEL DESTINO — por eso la columna `source` varía y nunca cambia el resultado,
+// salvo cuando el destino deja de ser histórico.
+//
+// Los textos son deliberadamente CASI IDÉNTICOS: sin guarda, el detector los relacionaría sin dudar.
+// Que no haya relación sólo puede venir de la guarda.
+func TestSoloLasCreenciasSeReemplazan(t *testing.T) {
+	const contenido = "La captura no debe guardar dos veces el mismo commit al mergear con squash."
 
-	rels, err := e.DetectRelations("c2", ConflictOptions{})
-	if err != nil {
-		t.Fatalf("DetectRelations error: %v", err)
-	}
-	if len(rels) == 0 {
-		t.Fatal("entre dos commits el parecido SÍ puede ser redundancia (son la misma clase): no debe taparse")
-	}
-}
+	for _, tc := range []struct {
+		name           string
+		source         string // topic_key de la observación que se guarda ÚLTIMA (sobre la que corre la detección)
+		target         string // topic_key de la que ya estaba
+		quiereRelacion bool
+	}{
+		// El destino es un REGISTRO HISTÓRICO ⇒ jamás. Da igual quién pregunte.
+		{"nota -> commit", "notas/captura", CommitTopicKey, false},
+		{"nota -> contrato", "notas/captura", "sdd/mi-cambio/spec", false},
+		{"commit -> commit", CommitTopicKey, CommitTopicKey, false},
+		{"contrato -> contrato, MISMO cambio", "sdd/mi-cambio/design", "sdd/mi-cambio/spec", false},
+		{"contrato -> contrato, cambios DISTINTOS", "sdd/cambio-b/spec", "sdd/cambio-a/spec", false},
+		{"commit -> contrato", CommitTopicKey, "sdd/mi-cambio/spec", false},
+		{"contrato -> commit", "sdd/mi-cambio/spec", CommitTopicKey, false},
 
-func TestSDDVsSDDDeCambiosDistintosSeSigueDetectando(t *testing.T) { // S.g — misma clase
-	e := newTestEngine(t)
-	saveAt(t, e, "a", "sdd/cambio-a/design", "El detector DEBE proponer una relación pendiente cuando el coseno supera el piso.", "2026-01-01 10:00:00")
-	saveAt(t, e, "b", "sdd/cambio-b/design", "El detector DEBE proponer una relación pendiente cuando el coseno supera el piso.", "2026-01-02 10:00:00")
+		// El destino es una CREENCIA ⇒ sí se juzga. Acá vive todo el valor, y perderlo sería
+		// convertir la regla en un martillo.
+		{"commit -> nota (el commit es EVIDENCIA de que la nota envejeció)", CommitTopicKey, "notas/captura", true},
+		{"contrato -> nota", "sdd/mi-cambio/spec", "notas/captura", true},
+		{"nota -> nota (el ÚNICO par donde `supersedes` significa algo)", "notas/otra", "notas/captura", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t)
+			saveAt(t, e, "target", tc.target, contenido, "2026-01-01 10:00:00")
+			saveAt(t, e, "source", tc.source, contenido+" Vale para todos los repos.", "2026-01-02 10:00:00")
 
-	rels, err := e.DetectRelations("b", ConflictOptions{})
-	if err != nil {
-		t.Fatalf("DetectRelations error: %v", err)
-	}
-	if len(rels) == 0 {
-		t.Fatal("dos cambios SDD DISTINTOS son la misma clase: la guarda no debe taparlos")
+			rels, err := e.DetectRelations("source", ConflictOptions{})
+			if err != nil {
+				t.Fatalf("DetectRelations error: %v", err)
+			}
+			if got := len(rels) > 0; got != tc.quiereRelacion {
+				if tc.quiereRelacion {
+					t.Fatal("el destino es una CREENCIA y SÍ se puede reemplazar: la guarda se pasó de ancha," +
+						" es un martillo")
+				}
+				t.Fatalf("el destino es un REGISTRO HISTÓRICO: no se puede des-hacer lo que pasó ni tachar lo"+
+					" que se acordó, así que no hay veredicto que pedir. Obtuve %+v", rels)
+			}
+		})
 	}
 }
 

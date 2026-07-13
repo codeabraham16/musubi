@@ -133,62 +133,46 @@ func isSDD(topicKey string) bool    { return sddChange(topicKey) != "" }
 func isCommit(topicKey string) bool { return topicKey == CommitTopicKey }
 
 // historicalRecord: lo que PASÓ (un commit) o lo que se ACORDÓ (un contrato SDD). No se puede
-// DES-HACER. Nada de otra clase lo puede reemplazar — y por eso nada de otra clase puede pedir un
-// veredicto sobre él.
+// DES-HACER, y por eso nada puede pedir un veredicto sobre él.
 func historicalRecord(topicKey string) bool { return isCommit(topicKey) || isSDD(topicKey) }
-
-// sameKind: dos artefactos de la MISMA naturaleza. Entre ellos el parecido SÍ puede significar
-// redundancia (dos commits pueden ser el mismo commit), así que se siguen comparando.
-func sameKind(a, b string) bool {
-	return (isCommit(a) && isCommit(b)) || (isSDD(a) && isSDD(b))
-}
 
 // complementaryPair responde UNA pregunta: ¿este par es siquiera COMPARABLE? Lo hace por la
 // ESTRUCTURA (el topic_key), sin importar cuánto se parezcan los textos. No mira el contenido A
 // PROPÓSITO: el parecido entre el `spec` y el `design` de un mismo cambio es alto y CORRECTO —
 // mirar el texto sólo puede confundir. Lo que decide es de QUÉ son artefactos.
 //
-// Hay dos formas de NO ser comparable, y las dos viven acá:
-//   - "son COMPLEMENTARIOS": ninguno sobra, se necesitan (G1, G2).
-//   - "el veredicto NO SIGNIFICARÍA NADA": la relación sólo habilitaría un juicio imposible (G3).
+// LA REGLA, ENTERA:
 //
-// Sin esto, cada cambio fabrica ruido: el flujo SDD guarda 7 contratos que describen EL MISMO
-// cambio, así que por construcción se parecen entre sí. Medido en la memoria real: 14 de 23
-// relaciones pendientes eran esto. Y el daño no es el ruido, es la erosión — una cola llena de
-// falsos positivos deja de leerse, y el día que aparezca la contradicción REAL se pierde entre
-// las demás. El dedup semántico vale lo que valga la CREDIBILIDAD de su cola.
-func complementaryPair(a, b obsRow) bool {
-	// G1 — hermanos del mismo cambio SDD. proposal, spec, design... se COMPLEMENTAN, no se
-	// duplican: ninguno se puede borrar sin perder el rastro del razonamiento.
-	if ch := sddChange(a.topicKey); ch != "" && ch == sddChange(b.topicKey) {
-		return true
-	}
-	// G2 — el EVENTO vs el CONTRATO. Un commit no puede reemplazar a un spec, ni al revés: uno es
-	// lo que pasó, el otro es lo que se acordó. Se chequea en AMBOS órdenes porque `src` es siempre
-	// la observación recién guardada — o sea que el orden depende de quién llegó último. Una guarda
-	// asimétrica taparía la mitad de los casos según el orden de guardado.
-	if isCommit(a.topicKey) && isSDD(b.topicKey) {
-		return true
-	}
-	if isSDD(a.topicKey) && isCommit(b.topicKey) {
-		return true
-	}
-	// G3 — un REGISTRO HISTÓRICO no puede ser el DESTINO de otra clase. El único veredicto que esa
-	// relación habilitaría sería "esto reemplaza al commit / al spec", y eso NO SIGNIFICA NADA: no se
-	// puede des-hacer lo que pasó. Pedir un juicio que ya está decidido de antemano es, por
-	// definición, ruido — y el ruido erosiona la credibilidad de la cola entera.
-	//
-	// ASIMÉTRICA A PROPÓSITO, y ahí está la diferencia entre una REGLA y un MARTILLO: al revés SÍ
-	// importa. Un commit "feat: migrar de X a Y" SÍ puede volver obsoleta una nota que decía
-	// "usamos X" — el commit es EVIDENCIA de que la nota envejeció. Por eso se mira sólo el TARGET
-	// (b), nunca el source, y se exceptúa la misma clase.
-	//
-	// Encontrado en el PRIMER uso real de la banda: UN save de una nota-resumen generó 8 pendientes
-	// contra los artefactos del trabajo que la nota resumía.
-	if historicalRecord(b.topicKey) && !sameKind(a.topicKey, b.topicKey) {
-		return true
-	}
-	return false
+//	El registro histórico es el LIBRO MAYOR; la nota es la CREENCIA ACTUAL.
+//	Sólo las creencias se reemplazan.
+//
+// Un commit y un contrato SDD son asientos del libro. Se leen, se citan, se vuelven obsoletos —
+// pero no se TACHAN. El único veredicto que una relación contra ellos habilitaría sería "esto
+// reemplaza al commit / al spec", y `supersedes` OCULTA el destino del recall: ocultar un commit es
+// BORRAR HISTORIA. Un juicio decidido de antemano es, por definición, ruido — y el ruido erosiona
+// la credibilidad de la cola entera. El dedup semántico vale lo que valga la CREDIBILIDAD de su cola.
+//
+// ASIMÉTRICA, y ahí está la diferencia entre una REGLA y un MARTILLO: se mira SÓLO EL TARGET, por
+// eso el source es `_`. Al revés sí importa — un commit "feat: migrar de X a Y" SÍ puede volver
+// obsoleta una nota que decía "usamos X": el commit es EVIDENCIA de que la nota envejeció. Ahí el
+// target es la NOTA, así que la relación nace, como debe.
+//
+// TRES GUARDAS QUE ERAN UNA. Esta regla se descubrió en tres PRs, cada uno a partir de un ruido
+// distinto que apareció dogfooding, y quedaron subsumidas acá — no borradas, sino vistas por fin
+// enteras. Sus tests siguen verdes SIN TOCARSE, y son la red que impide que se pierdan en silencio
+// si alguien angosta historicalRecord:
+//
+//	G1 — hermanos del mismo cambio SDD (proposal, spec, design... se COMPLEMENTAN, no se duplican).
+//	     Su target es sdd/<cambio>/<fase>            => histórico.
+//	G2 — el EVENTO vs el CONTRATO (lo que pasó vs lo que se acordó; ninguno reemplaza al otro).
+//	     Su target es un commit o un spec            => histórico.
+//	G3 — un registro histórico como destino          => histórico por definición.
+//
+// MEDIDO sobre las 169 relaciones de la memoria real: los pares histórico-vs-histórico eran el 20%
+// de la cola y dieron CERO veredictos sustantivos. Los 8 `supersedes` que existen son TODOS
+// nota→nota. La práctica ya respetaba esta regla; el código recién ahora la escribe.
+func complementaryPair(_, b obsRow) bool {
+	return historicalRecord(b.topicKey)
 }
 
 type obsRow struct {

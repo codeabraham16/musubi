@@ -19,7 +19,12 @@ func TestGuardaHermanosDelMismoCambioSDD(t *testing.T) { // S.a
 	}
 }
 
-func TestGuardaNoTapaCambiosSDDDistintos(t *testing.T) { // S.b — el test que más importa
+// CONTRATO NUEVO (antes se exigía lo CONTRARIO). Este test pineaba la excepción `sameKind`: que dos
+// contratos SDD de cambios DISTINTOS sí se juzgaran entre sí. La memoria real lo refutó — 83
+// relaciones sdd→sdd, CERO veredictos sustantivos. Y la razón de fondo: `supersedes` OCULTA el
+// destino, y ocultar un contrato es tachar lo que se acordó. Si dos cambios se contradicen, lo que
+// se reemplaza es la NOTA que dice qué creemos hoy, no el asiento del libro mayor.
+func TestContratoNoEsDestinoDeOtroContrato(t *testing.T) { // S.b
 	e := newTestEngine(t)
 	saveAt(t, e, "a", "sdd/cambio-a/design", "El detector DEBE proponer una relación pendiente cuando el coseno supera el piso.", "2026-01-01 10:00:00")
 	saveAt(t, e, "b", "sdd/cambio-b/design", "El detector DEBE proponer una relación pendiente cuando el coseno supera el piso.", "2026-01-02 10:00:00")
@@ -28,8 +33,9 @@ func TestGuardaNoTapaCambiosSDDDistintos(t *testing.T) { // S.b — el test que 
 	if err != nil {
 		t.Fatalf("DetectRelations error: %v", err)
 	}
-	if len(rels) == 0 {
-		t.Fatal("dos cambios DISTINTOS que dicen lo mismo SÍ merecen un veredicto: la guarda se pasó de ancha")
+	if len(rels) != 0 {
+		t.Fatalf("un contrato SDD es un REGISTRO HISTÓRICO: no se puede tachar lo que se acordó, así que"+
+			" no es destino de ningún veredicto. Obtuve %+v", rels)
 	}
 }
 
@@ -58,7 +64,11 @@ func TestGuardaCommitVsSuPropioSDD(t *testing.T) { // S.c — en AMBOS órdenes 
 	}
 }
 
-func TestGuardaNoTapaCommitVsCommit(t *testing.T) { // S.d
+// CONTRATO NUEVO (antes se exigía lo CONTRARIO). La excepción `sameKind` se justificó con "dos
+// commits pueden ser el mismo commit". La memoria real la refutó: 16 pares commit↔commit, CERO
+// duplicados y CERO veredictos sustantivos. Los commits son únicos por naturaleza — tienen SHA — y
+// que uno OCULTE a otro sería borrar historia.
+func TestCommitNoEsDestinoDeOtroCommit(t *testing.T) { // S.a
 	e := newTestEngine(t)
 	saveAt(t, e, "c1", CommitTopicKey, "fix(captura): no guardar dos veces el mismo commit al mergear con squash", "2026-01-01 10:00:00")
 	saveAt(t, e, "c2", CommitTopicKey, "fix(captura): no guardar dos veces el mismo commit al mergear con squash (#201)", "2026-01-02 10:00:00")
@@ -67,8 +77,9 @@ func TestGuardaNoTapaCommitVsCommit(t *testing.T) { // S.d
 	if err != nil {
 		t.Fatalf("DetectRelations error: %v", err)
 	}
-	if len(rels) == 0 {
-		t.Fatal("entre dos commits el parecido SÍ puede ser redundancia: la guarda no debe taparlo")
+	if len(rels) != 0 {
+		t.Fatalf("un commit es lo que PASÓ: ocultarlo sería borrar historia, así que no es destino de"+
+			" ningún veredicto. Obtuve %+v", rels)
 	}
 }
 
