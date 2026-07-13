@@ -317,8 +317,12 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// es un no-op si la fila NO quedó 'shared' (el caso común 'local'): sólo las observaciones
 	// compartidas se sincronizan al central. Idempotente por obs_id (re-save no duplica; sólo
 	// re-encola si el content_hash cambió). Va antes del Commit para ser atómico con el guardado.
-	if err := enqueueOutboxTx(tx, id); err != nil {
-		return err
+	// En el CENTRAL (nodo terminal, sin upstream) el outbox está apagado: encolar ahí sólo dejaba
+	// filas `pending` inmortales, una por observación.
+	if e.outboxEnabled {
+		if err := enqueueOutboxTx(tx, id); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

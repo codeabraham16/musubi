@@ -29,6 +29,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     entera y la máquina se quedaba sin memoria.
   - Lo dead-letereado se recupera con `musubi_sync_requeue` — no hace falta reconstruir nada.
 
+- **El cerebro central dejó de encolar lo que nunca iba a enviar.** El central es un nodo
+  **terminal**: sirve memoria, pero no tiene upstream a dónde empujarla. Aun así encolaba en su
+  outbox **cada observación que ingería**, y esas filas quedaban `pending` **para siempre** (el drain
+  ni arranca sin sync configurado). No era un loop —nunca enviaba nada— pero acumulaba una fila
+  muerta por observación: **571 en el cerebro real**. Peor que el peso muerto: hacía que
+  `sync_status` contra el cerebro reportara *"571 pendientes de envío, 0 enviadas"*, una **señal de
+  salud que miente** — ya mandó a investigar un problema inexistente dos veces. Ahora un nodo que
+  sirve **sin sync saliente** no encola. Un cliente encola como siempre; un central encadenado a
+  otro central (con sync configurado) también.
+
 > **Aislar la atribución no es aislar la escritura.** Track 17 cerró la *falsificación* (un writer no
 > puede declarar que su memoria es de otro proyecto). Faltaba lo simétrico: que tampoco pueda
 > **corromper** la memoria de otro proyecto que ya existe.
