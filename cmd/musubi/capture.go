@@ -193,16 +193,19 @@ func hasWord(s string, words ...string) bool {
 	return false
 }
 
-// captureCommits es el core testeable: captura los commits nuevos desde el último HEAD guardado
-// como observaciones LOCALES (nunca shared: C3 no debe filtrar un secreto de un diff; compartir
-// pasa por promote, que C2 redacta). Si embed no es nil, cada commit se guarda CON su embedding
-// (participa del recall semántico); si es nil, guardado léxico. Devuelve cuántas guardó. No-op
-// silencioso si no es repo git o no hay commits nuevos.
+// captureCommits es el core testeable: captura los commits nuevos desde el último HEAD guardado.
+// El SCOPE lo decide el caller (C5.2): 'local' en un proyecto personal, 'shared' en team mode —
+// donde la captura es CENTRAL por naturaleza y los commits deben llegar a las demás máquinas del
+// equipo, no quedarse en la que los hizo. Compartir es seguro: la redacción de secretos corre en el
+// BORDE a 'shared' dentro de saveObservation (C2), por cualquier ruta, no sólo vía promote.
+// Si embed no es nil, cada commit se guarda CON su embedding (participa del recall semántico); si
+// es nil, guardado léxico. Devuelve cuántas guardó. No-op silencioso si no es repo git o no hay
+// commits nuevos.
 // detectFunc corre la detección de relaciones sobre una observación recién guardada. Se inyecta
 // (como embed) para que el core siga testeable sin engine real. nil = sin detección.
 type detectFunc func(obsID string)
 
-func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc) (int, error) {
+func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope string) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
@@ -241,7 +244,7 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc, detect dete
 		if err != nil {
 			return saved, err
 		}
-		if err := store.SaveObservationTyped(id, memory.CommitTopicKey, content, importance, memType, memory.ScopeLocal, vec); err != nil {
+		if err := store.SaveObservationTyped(id, memory.CommitTopicKey, content, importance, memType, scope, vec); err != nil {
 			return saved, err
 		}
 		if existed {
@@ -329,7 +332,17 @@ func runCapture(args []string) {
 		}
 	}
 
-	n, err := captureCommits(engine, realGit{dir: root}, embed, detect)
+	// Scope de la captura (C5.2): en team mode la memoria del proyecto es CENTRAL por naturaleza, así
+	// que los commits se capturan 'shared' y viajan al cerebro (outbox) — si no, lo ÚNICO que Musubi
+	// guarda SOLO sería justo lo único que nunca cruza de máquina, y la otra máquina del equipo no
+	// tendría ni idea de lo que se hizo acá. El id del commit es DETERMINÍSTICO desde su contenido:
+	// si dos máquinas capturan el mismo commit, el central lo UPSERTEA en la misma fila, no duplica.
+	scope := memory.ScopeLocal
+	if cfg.Memory.TeamMode {
+		scope = memory.ScopeShared
+	}
+
+	n, err := captureCommits(engine, realGit{dir: root}, embed, detect, scope)
 	if err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: %v\n", err)
@@ -337,6 +350,10 @@ func runCapture(args []string) {
 		return
 	}
 	if !hookMode {
-		fmt.Printf("Capturados %d commit(s) nuevos en memoria local.\n", n)
+		destino := "memoria local"
+		if scope == memory.ScopeShared {
+			destino = "memoria compartida (van al cerebro central)"
+		}
+		fmt.Printf("Capturados %d commit(s) nuevos en %s.\n", n, destino)
 	}
 }
