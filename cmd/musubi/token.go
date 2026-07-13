@@ -44,8 +44,14 @@ func defaultPrincipalsPath() string {
 func tokenNew(args []string) {
 	fs := flag.NewFlagSet("token new", flag.ExitOnError)
 	name := fs.String("name", "", "nombre del principal (obligatorio)")
-	project := fs.String("project", "", "project_id que se le atribuye (aísla su recall); OBLIGATORIO para reader/writer")
-	role := fs.String("role", "writer", "rol: reader | writer | admin (reader/writer requieren --project; admin es federado)")
+	project := fs.String("project", "", "project_id que se le atribuye (aísla su recall); OBLIGATORIO salvo cabina (read=all + write=none)")
+	role := fs.String("role", "writer", "rol (atajo): reader | writer | admin. Define los defaults de --read/--write")
+	// ALCANCE y AUTORIDAD son ejes independientes: el rol es sólo un atajo para los pares comunes.
+	// Los que el rol NO sabía expresar, y por los que existen estos flags:
+	//   sala de mando (Musubi): --read all  --write own   ⇒ ve TODO, muta sólo lo suyo
+	//   cabina (CRM, gateway):  --read all  --write none  ⇒ ve TODO, no muta nada
+	read := fs.String("read", "", "alcance de LECTURA: own | all (default: del rol). all = ve todos los proyectos")
+	write := fs.String("write", "", "autoridad de ESCRITURA: none | own | any (default: del rol)")
 	file := fs.String("file", "", "ruta del registro (default: <workspace>/.musubi/principals.yaml)")
 	_ = fs.Parse(args)
 
@@ -53,12 +59,14 @@ func tokenNew(args []string) {
 	if path == "" {
 		path = defaultPrincipalsPath()
 	}
-	token, err := mcp.AddPrincipal(path, *name, *project, *role)
+	token, err := mcp.AddPrincipalWithCaps(path, *name, *project, *role, *read, *write)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Principal %q agregado (project=%q, role=%s) en %s\n", *name, *project, *role, path)
+	efRead, efWrite := mcp.EffectiveCaps(*role, *read, *write)
+	fmt.Printf("Principal %q agregado (project=%q, role=%s, read=%s, write=%s) en %s\n",
+		*name, *project, *role, efRead, efWrite, path)
 	fmt.Println("\nToken (guardalo YA — no se vuelve a mostrar; entregáselo al miembro por un canal seguro):")
 	fmt.Println("  " + token)
 }
@@ -82,12 +90,19 @@ func tokenList(args []string) {
 		return
 	}
 	fmt.Printf("Principals en %s:\n", path)
+	fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", "NOMBRE", "ROL", "PROYECTO", "VE", "ESCRIBE")
 	for _, p := range infos {
 		proj := p.ProjectID
 		if proj == "" {
 			proj = "(sin proyecto)"
 		}
-		fmt.Printf("  %-20s  %-10s  %s\n", p.Name, p.Role, proj)
+		// "VE" y "ESCRIBE" son lo que de verdad decide el comportamiento; el rol es sólo el atajo
+		// con el que se creó. Una cabina (ve todo, no escribe) y un reader normal comparten rol.
+		ve := p.Read
+		if p.Read == mcp.ReadAll {
+			ve = "TODO"
+		}
+		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", p.Name, p.Role, proj, ve, p.Write)
 	}
 }
 

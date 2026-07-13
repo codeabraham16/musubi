@@ -208,13 +208,13 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	}
 
 	// Atribución de escritura por CREDENCIAL (Track 17 — cierra el write-poisoning cross-tenant,
-	// simétrico al aislamiento de lectura de T17.1a): un writer/reader acotado NO puede atribuir
-	// la observación a otro proyecto (ni dejarla sin atribuir, visible para todos) — su origen lo
-	// fija su credencial, se ignora el project_id que declare el cliente. El origen explícito de
-	// los args solo se respeta para admin/legacy (ingest del central), para quien se diseñó *From.
-	origin := args.ProjectID
-	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-		origin = p.ProjectID
+	// simétrico al aislamiento de lectura): un principal con write=own NO puede atribuir la
+	// observación a otro proyecto ni dejarla sin atribuir — su origen lo fija su credencial y se
+	// IGNORA el project_id que declare el cliente. Sólo write=any (mantenimiento, y el ingest del
+	// central) respeta el origen declarado en los args, para quien se diseñó *From.
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), args.ProjectID)
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 	// Atribución por PERSONA (C5.1): author se deriva de la credencial (nunca del cliente), para
 	// que la memoria compartida de un equipo registre QUIÉN aportó cada cosa. Sellado server-side.
@@ -1188,9 +1188,9 @@ func (s *McpServer) toolSaveFact(ctx context.Context, raw json.RawMessage) (inte
 	// Atribución por credencial (Track 17): el hecho se guarda para el proyecto del principal, no
 	// en un espacio global compartido; la invalidación por cardinalidad queda acotada a ese
 	// proyecto (no cierra hechos vivos de otros). admin/stdio ⇒ '' (espacio federado histórico).
-	origin := ""
-	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-		origin = p.ProjectID
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 
 	res, err := s.engine.SaveFactFrom(origin, subject, predicate, object, args.ValidFrom, s.graph.SingleValuedPredicates)
@@ -1413,9 +1413,9 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	}
 	// Atribución por credencial (Track 17): la memoria de código se guarda para el proyecto del
 	// principal, no en un espacio global compartido. admin/stdio ⇒ project_id del engine.
-	origin := ""
-	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-		origin = p.ProjectID
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 	if err := s.engine.SaveCodeMemoryFrom(origin, cm); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
@@ -1610,9 +1610,9 @@ func (s *McpServer) toolLogError(ctx context.Context, raw json.RawMessage) (inte
 	// Track 18: atribuir el log a la credencial (no al cliente) y redactar el ingest a infra
 	// compartida. error_message/suggested_patch pueden traer secretos (tokens, rutas, stack); en
 	// un bind no-loopback se redactan ANTES de persistir, como el resto del ingest (T17.2).
-	origin := ""
-	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-		origin = p.ProjectID
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 	msg := s.redactIfForced(args.ErrorMessage)
 	patch := s.redactIfForced(args.SuggestedPatch)
@@ -1653,9 +1653,9 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 	if strings.TrimSpace(log.SuggestedPatch) != "" {
 		content := fmt.Sprintf("Error en %s: %s\n\nArreglado con: %s", log.FilePath, log.ErrorMessage, log.SuggestedPatch)
 		content = s.redactIfForced(content)
-		origin := ""
-		if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-			origin = p.ProjectID
+		origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+		if !okOrigin {
+			return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 		}
 		author := authorFrom(principalFrom(ctx))
 		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), s.embedIfEnabled(content))
@@ -2185,9 +2185,9 @@ func (s *McpServer) toolLogSkillDecision(ctx context.Context, raw json.RawMessag
 
 	// Track 18: atribuir la decisión al proyecto de la credencial (no al cliente) para que no se
 	// cuente en los insights de otro tenant.
-	origin := ""
-	if p := principalFrom(ctx); p != nil && p.Role != RoleAdmin {
-		origin = p.ProjectID
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 	if err := s.engine.SaveSkillDecisionFrom(origin, args.SkillID, args.Name, args.Decision, args.Reason); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar decisión de skill: %v", err)
