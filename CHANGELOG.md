@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.90.0] - 2026-07-13
+
 > **El libro mayor no se tacha.** Un commit es lo que PASÓ; un contrato SDD es lo que se ACORDÓ.
 > Ninguno se puede des-hacer — así que ninguna relación puede nacer apuntándolos. Sólo las
 > **creencias** (las notas) se reemplazan.
