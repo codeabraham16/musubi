@@ -11,6 +11,14 @@
 *.db-wal
 .musubi/memory.db
 
+# Snapshot del índice vectorial IVF: caché DERIVADO y reconstruible (centroides). Si falta o está
+# corrupto, el engine cae al rebuild normal — nunca compromete correctness. No se versiona.
+.musubi/memory.db.vindex
+
+# Backups automáticos que hace `musubi doctor ... --apply` antes de reparar. Estado local de esta
+# máquina (y copias enteras de la base): nunca se versionan.
+.musubi/backups/
+
 # Tablas de embeddings descargadas por `musubi embed pull` (puro dato, cientos de MB)
 .musubi/embeddings/
 
