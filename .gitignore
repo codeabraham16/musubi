@@ -20,6 +20,11 @@
 # Snapshot del índice vectorial IVF: caché DERIVADO y reconstruible (centroides). Si falta o está
 # corrupto, el engine cae al rebuild normal — nunca compromete correctness. No se versiona.
 .musubi/memory.db.vindex
+# Registro de credenciales del cerebro (`musubi token new`). Guarda SHA-256, no tokens crudos, pero
+# es el padrón de QUIÉN puede escribir en la memoria del equipo: no se versiona. Vive en el
+# workspace del CEREBRO, no en un repo — pero `token new` lo crea en el cwd si te equivocás de
+# directorio (pasó de verdad), y sin esta línea un `git add -A` lo publicaría.
+.musubi/principals.yaml
 
 # Backups automáticos que hace `musubi doctor ... --apply` antes de reparar. Estado local de esta
 # máquina (y copias enteras de la base): nunca se versionan.
