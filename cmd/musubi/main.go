@@ -62,6 +62,8 @@ func main() {
 		runCatalog(os.Args[2:])
 	case "daemon":
 		runDaemon()
+	case "cerebro":
+		runCerebro(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "maintain":
@@ -107,6 +109,7 @@ func printUsage() {
 
 	section("Servidor MCP")
 	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
+	cmd("cerebro", "Canal MCP (stdio) al cerebro CENTRAL: consulta en vivo, no replica")
 	cmd("serve [--addr host:port]", "Servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
 
 	section("Memoria")

@@ -7,6 +7,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **`musubi cerebro` — el canal de la sala de mando.** Un servidor MCP por **stdio** que no tiene
+  memoria propia: **reenvía** cada llamada al cerebro central por HTTP, poniendo la credencial él
+  mismo. Es lo que convierte a Musubi en sala de mando *en la práctica*: desde su repo se consulta
+  la memoria de **todos** los proyectos, sin replicarla.
+  - **Por qué no un `"type": "http"` en el `.mcp.json`:** el cliente MCP-sobre-HTTP de Claude Code
+    hoy **no envía los `headers`** que declarás
+    ([#48514](https://github.com/anthropics/claude-code/issues/48514)) — la credencial nunca llega — y
+    además intenta OAuth **por descubrimiento** en vez de por un 401
+    ([#46879](https://github.com/anthropics/claude-code/issues/46879)), terminando en un
+    `SDK auth failed` que no dice nada. Acá el header **lo pone Musubi**: no hay nada que el cliente
+    pueda omitir. Y stdio no tiene OAuth ni sesión: es un pipe.
+  - **Ver todo ≠ replicar todo.** El canal **consulta** el cerebro en vivo; no baja la memoria de los
+    demás proyectos a la base local. Si lo hiciera, el recall del repo competiría para siempre con
+    ruido de producción ajena. Dos planos: el daemon local (acotado, rápido, offline) y este canal
+    (federado, en vivo).
+  - `MUSUBI_CENTRAL_URL` + `MANDO_MUSUBI_TOKEN` (o `--url` / `--token-env`). Fail-closed: sin token no
+    arranca, en vez de encadenar 401 silenciosos.
+
+### Fixed
+
+- **Una línea de stdin ilegible ya no desaparece en silencio.** El canal distinguía mal *"no parsea"*
+  de *"es una notificación"* (que, por diseño, no lleva respuesta): una línea corrupta se **tragaba**
+  y el cliente esperaba **para siempre** una respuesta que nunca iba a llegar. Ahora un JSON ilegible
+  se contesta con un parse error (`-32700`).
+  - Lo destapó un **BOM UTF-8**: cualquier productor que escriba UTF-8 "con firma" (PowerShell, por
+    caso) antepone `\xef\xbb\xbf` al stream, y esa marca **invisible** rompía la **primera** línea —
+    que es justo el `initialize`. El síntoma era desconcertante: el canal contestaba `tools/list` pero
+    no el handshake. El BOM ahora se tolera; el bug de fondo (tragarse lo ilegible) era el grave.
+
 > **Ver todo y poder tocar todo son dos cosas distintas.** El rol las tenía colapsadas en un solo
 > enum, y por eso el cerebro central no sabía expresar ni una sala de mando ni una cabina.
 
