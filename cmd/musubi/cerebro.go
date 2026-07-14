@@ -139,10 +139,21 @@ func forward(client *http.Client, endpoint, token string, payload []byte) ([]byt
 	return body, nil
 }
 
+// writeLine escribe una respuesta y la EMPUJA: sin flush, el cliente espera para siempre una
+// respuesta que quedó en el buffer. Si stdout se rompe, el canal está muerto — se dice por stderr
+// en vez de seguir escribiendo al vacío.
 func writeLine(w *bufio.Writer, b []byte) {
-	w.Write(b)
-	w.WriteByte('\n')
-	w.Flush() // sin flush, el cliente espera una respuesta que quedó en el buffer: deadlock.
+	if _, err := w.Write(b); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi cerebro: no se pudo escribir la respuesta: %v\n", err)
+		return
+	}
+	if err := w.WriteByte('\n'); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi cerebro: no se pudo cerrar la línea: %v\n", err)
+		return
+	}
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi cerebro: no se pudo enviar la respuesta: %v\n", err)
+	}
 }
 
 func errorRPC(id json.RawMessage, code int, msg string) []byte {
