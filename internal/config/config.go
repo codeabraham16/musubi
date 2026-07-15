@@ -153,6 +153,13 @@ type MaintenanceConfig struct {
 	// se tocaron en esta cantidad de días (retención dura, acota el crecimiento). El
 	// olvido (decay) solo marca archived; esto las elimina de verdad. 0 = nunca purgar.
 	PurgeArchivedAfterDays float64 `yaml:"purge_archived_after_days"`
+	// MaxActivePerProject es la CUOTA DE CRECIMIENTO: el techo de observaciones ACTIVAS por
+	// tenant (project_id). Cuando un proyecto lo supera, el mantenimiento archiva sus memorias
+	// más frías (menor saliencia, reversible) hasta volver bajo el techo — el bound que el
+	// olvido por umbral no garantiza en un tenant de alto ingest. Respeta la protección por
+	// importancia y nunca evicciona memoria sin sincronizar. 0 = sin cuota. Es lo que acota el
+	// crecimiento del cerebro central 24/7; bajalo si querés un techo más ajustado.
+	MaxActivePerProject int `yaml:"max_active_per_project"`
 	// Vacuum corre VACUUM tras una purga que borró filas, para reclamar espacio en
 	// disco (default true). El checkpoint del WAL y PRAGMA optimize corren siempre.
 	Vacuum bool `yaml:"vacuum"`
@@ -533,6 +540,7 @@ func Default() Config {
 			DecayReinforcementK:    0.5,
 			AutoIntervalHours:      24,
 			PurgeArchivedAfterDays: 90,
+			MaxActivePerProject:    50000,
 			Vacuum:                 true,
 		},
 		Graph: GraphConfig{
@@ -825,6 +833,11 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		// campo está EXPLÍCITO en el yaml (lo escribe `musubi init` con el default 90,
 		// visible y editable). Así un upgrade nunca borra memorias sin opt-in del usuario.
 		c.Maintenance.PurgeArchivedAfterDays = 0
+		// La cuota de crecimiento archiva memoria (reversible, pero la saca del recall): tampoco
+		// se enciende por un upgrade silencioso. Un config sin bloque `maintenance` queda con la
+		// cuota DESACTIVADA; sólo se activa con el campo EXPLÍCITO en el yaml (lo escribe
+		// `musubi init` con el default 50000, visible y editable).
+		c.Maintenance.MaxActivePerProject = 0
 	} else {
 		if c.Maintenance.DedupThreshold == 0 {
 			c.Maintenance.DedupThreshold = d.Maintenance.DedupThreshold

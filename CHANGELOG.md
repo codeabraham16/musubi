@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **Crecer para siempre no es un plan.** El olvido archiva lo que cae bajo un umbral de
+> saliencia, pero un tenant de alto ingest cuyas memorias nunca bajan del umbral crece sin
+> techo. La retención por tiempo (purga por edad) tampoco lo acota si el ingest supera a la
+> purga. Faltaba el bound que SIEMPRE aplica: una cuota.
+
+### Added
+
+- **Cuota de crecimiento por tenant (Track 16 F3).** Un techo configurable de observaciones
+  **activas por `project_id`** (`maintenance.max_active_per_project`): cuando un proyecto lo
+  supera, el mantenimiento archiva sus memorias **más frías** (menor saliencia, la misma
+  fórmula del olvido) hasta volver bajo el techo. Es lo que acota de verdad el crecimiento del
+  cerebro central 24/7, donde ni el olvido por umbral ni la purga por edad lo garantizan.
+  - **Por tenant y no global:** en el central multi-tenant, una cuota global dejaría que un
+    proyecto ruidoso desalojara la memoria de otro. Cada `project_id` se acota por separado.
+  - **Evicción = archivar (reversible),** no borrar: la purga por edad hace el borrado duro
+    después, con su período de gracia. La cuota nunca pierde memoria de forma irreversible.
+  - **Protecciones:** respeta la importancia deliberada (cuenta para el techo pero no se
+    evicta) y el período de gracia; y **nunca evicciona memoria sin sincronizar** (fila de
+    outbox no `sent`) — archivarla podría dejarla varada sin llegar al central.
+  - Streaming con un heap acotado a lo que sobra del techo: memoria O(excedente), no O(activas)
+    — no re-materializa el corpus. Off por default y no se enciende en un upgrade silencioso
+    (mismo cuidado que la purga); `musubi init` lo escribe visible y editable.
+
 ## [0.91.0] - 2026-07-15
 
 ### Added

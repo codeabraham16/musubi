@@ -166,6 +166,7 @@ func runMaintain() {
 	fmt.Printf("Mantenimiento de memoria completo:\n")
 	fmt.Printf("  Consolidación: %d fusionadas de %d escaneadas\n", rep.Consolidate.Merged, rep.Consolidate.Scanned)
 	fmt.Printf("  Olvido: %d archivadas de %d escaneadas\n", rep.Decay.Archived, rep.Decay.Scanned)
+	fmt.Printf("  Cuota: %d evictadas por techo de crecimiento\n", rep.Evicted)
 	fmt.Printf("  Retención: %d purgadas\n", rep.Purged)
 }
 
@@ -181,6 +182,7 @@ func maintenanceCycle(engine *memory.DbEngine, m config.MaintenanceConfig) (memo
 		DecayProtectImportance: m.DecayProtectImportance,
 		DecayReinforcementK:    m.DecayReinforcementK,
 		PurgeArchivedAfterDays: m.PurgeArchivedAfterDays,
+		MaxActivePerProject:    m.MaxActivePerProject,
 		Vacuum:                 m.Vacuum,
 	})
 }
@@ -348,7 +350,7 @@ func runDaemon() {
 			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
 				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
 			} else if ran {
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Purged)
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d evictadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Evicted, rep.Purged)
 			}
 		}()
 		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))

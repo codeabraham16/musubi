@@ -22,21 +22,30 @@ type MaintenanceOptions struct {
 	DecayProtectImportance float64
 	DecayReinforcementK    float64
 	PurgeArchivedAfterDays float64
-	Vacuum                 bool
+	// MaxActivePerProject es el techo de la cuota de crecimiento: observaciones ACTIVAS por
+	// tenant (project_id). <= 0 desactiva la cuota. Ver quota.go.
+	MaxActivePerProject int
+	Vacuum              bool
 }
 
 // MaintenanceReport resume una corrida completa de mantenimiento.
 type MaintenanceReport struct {
 	Consolidate ConsolidateResult `json:"consolidate"`
 	Decay       DecayResult       `json:"decay"`
+	Evicted     int               `json:"evicted"` // archivadas por la cuota de crecimiento (quota.go)
 	Purged      int               `json:"purged"`
 	Compacted   bool              `json:"compacted"`
 }
 
 // Maintain corre el ciclo completo: consolidar casi-duplicados → olvidar (archivar)
-// memorias frías → purgar definitivamente las archivadas vencidas → compactar. Es la
+// memorias frías → aplicar la cuota de crecimiento (archivar las más frías de los tenants
+// que superan el techo) → purgar definitivamente las archivadas vencidas → compactar. Es la
 // única entrada al mantenimiento; la usan el subcomando `maintain`, el auto-mantenimiento
 // del daemon y la tool MCP musubi_maintain (sin duplicar la secuencia).
+//
+// La cuota va DESPUÉS del olvido (que ya archivó lo que cayó bajo el umbral absoluto) y ANTES
+// de la purga (que borra lo archivado vencido): así la cuota sólo mopea el excedente que el
+// olvido por umbral no alcanzó, y lo recién evictado entra a la ventana de gracia de la purga.
 func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) {
 	var rep MaintenanceReport
 
@@ -57,6 +66,18 @@ func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) 
 		return rep, err
 	}
 	rep.Decay = dec
+
+	evicted, err := e.EnforceQuota(QuotaOptions{
+		MaxActivePerProject: opts.MaxActivePerProject,
+		ProtectImportance:   opts.DecayProtectImportance,
+		MinAgeDays:          opts.DecayMinAgeDays,
+		HalfLifeDays:        opts.DecayHalfLifeDays,
+		ReinforcementK:      opts.DecayReinforcementK,
+	})
+	if err != nil {
+		return rep, err
+	}
+	rep.Evicted = evicted
 
 	purged, err := e.PurgeArchived(opts.PurgeArchivedAfterDays)
 	if err != nil {
