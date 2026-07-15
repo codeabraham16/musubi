@@ -80,6 +80,7 @@ func (s *McpServer) maintenanceOptions() memory.MaintenanceOptions {
 		DecayProtectImportance: s.maintenance.DecayProtectImportance,
 		DecayReinforcementK:    s.maintenance.DecayReinforcementK,
 		PurgeArchivedAfterDays: s.maintenance.PurgeArchivedAfterDays,
+		MaxActivePerProject:    s.maintenance.MaxActivePerProject,
 		Vacuum:                 s.maintenance.Vacuum,
 	}
 }
@@ -117,7 +118,7 @@ func (s *McpServer) RunScheduledMaintenance() (ran bool, rep memory.MaintenanceR
 	}
 	logx.Info("scheduler: mantenimiento",
 		"merged", rep.Consolidate.Merged, "archived", rep.Decay.Archived,
-		"purged", rep.Purged, "dur", time.Since(start).String())
+		"evicted", rep.Evicted, "purged", rep.Purged, "dur", time.Since(start).String())
 	return true, rep, nil
 }
 
