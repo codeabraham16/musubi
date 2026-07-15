@@ -42,13 +42,31 @@ var (
 	rules = []rule{
 		{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), 0},
 		{"github-token", regexp.MustCompile(`\bgh[opsur]_[0-9A-Za-z]{20,}\b`), 0},
+		// GitHub personal access token FINO (github_pat_...): NO lo cubre la regla gh[opsur]_.
+		{"github-pat", regexp.MustCompile(`\bgithub_pat_[0-9A-Za-z_]{20,}`), 0},
+		{"gitlab-token", regexp.MustCompile(`\bglpat-[0-9A-Za-z_\-]{20,}`), 0},
 		{"stripe-key", regexp.MustCompile(`\b(?:sk|rk)_live_[0-9A-Za-z]{16,}\b`), 0},
+		// Claves de proveedores de IA (sk-ant- Anthropic, sk-proj-/sk- OpenAI). La usa el propio
+		// Musubi: una filtrada en la memoria compartida sería grave. Separador `-` (no `_` de Stripe).
+		{"ai-provider-key", regexp.MustCompile(`\bsk-(?:ant-|proj-)?[0-9A-Za-z_\-]{20,}`), 0},
 		{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35,}\b`), 0},
+		{"slack-token", regexp.MustCompile(`\bxox[baprse]-[0-9A-Za-z\-]{10,}`), 0},
+		{"slack-webhook", regexp.MustCompile(`https://hooks\.slack\.com/services/[A-Za-z0-9/]+`), 0},
+		// Token de bot de Telegram (\d{8,10}:base64{35}): lo usa el gateway de chat de Musubi.
+		{"telegram-bot-token", regexp.MustCompile(`\b\d{8,10}:[0-9A-Za-z_\-]{35}\b`), 0},
+		{"sendgrid-key", regexp.MustCompile(`\bSG\.[0-9A-Za-z_\-]{22}\.[0-9A-Za-z_\-]{43}\b`), 0},
+		{"twilio-key", regexp.MustCompile(`\bSK[0-9a-f]{32}\b`), 0},
+		{"npm-token", regexp.MustCompile(`\bnpm_[0-9A-Za-z]{36}\b`), 0},
 		{"jwt", regexp.MustCompile(`\beyJ[0-9A-Za-z_\-]{6,}\.[0-9A-Za-z_\-]{6,}\.[0-9A-Za-z_\-]{6,}\b`), 0},
 		{"private-key", regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`), 0},
 		{"bearer-token", regexp.MustCompile(`(?i)bearer\s+([A-Za-z0-9._\-]{16,})`), 1},
 		// KEY=valor / KEY: valor para claves sensibles: redacta SOLO el valor (grupo 2).
 		{"env-secret", regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|AUTH))\b\s*[:=]\s*["']?([^\s"']{6,})`), 2},
+		// Contraseña embebida en un connection string (scheme://user:PASS@host): redacta SOLO la
+		// contraseña (grupo 1). Las passwords humanas son de BAJA entropía, así que el catch-all NO
+		// las ve — pero un postgres://u:p@host filtrado es una fuga real. Cubre postgres/redis/
+		// mongodb/amqp/etc. de una.
+		{"connstring-password", regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^:@/\s]*:([^@/\s]{3,})@`), 1},
 	}
 	// entropyToken: candidatos base64-ish para el catch-all (NO hex puro, para no pegar SHAs).
 	entropyToken = regexp.MustCompile(`[A-Za-z0-9+/_\-]{` + itoa(minTokenLen) + `,}`)
