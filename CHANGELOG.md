@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-15
+
 ### Added
 
 - **`musubi cerebro` — el canal de la sala de mando.** Un servidor MCP por **stdio** que no tiene
@@ -2755,7 +2757,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.89.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.91.0...HEAD
+[0.91.0]: https://github.com/codeabraham16/musubi/compare/v0.90.0...v0.91.0
 [0.78.0]: https://github.com/codeabraham16/musubi/compare/v0.77.0...v0.78.0
 [0.44.0]: https://github.com/codeabraham16/musubi/compare/v0.43.1...v0.44.0
 [0.43.1]: https://github.com/codeabraham16/musubi/compare/v0.43.0...v0.43.1
