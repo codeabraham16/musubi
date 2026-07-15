@@ -67,6 +67,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El único hit del ruleset curado (`VACUUM INTO`, que no admite parámetros enlazados y usa un
     destino que construimos nosotros) queda documentado con un `#nosec G201` en el código.
 
+- **Redacción de secretos a paridad de gitleaks (Track 16 F4).** El redactor model-free (la guarda
+  que tapa credenciales antes de que la captura automática las mande a la memoria COMPARTIDA) suma
+  las reglas de forma de más valor que le faltaban frente a gitleaks — priorizando las relevantes al
+  propio proyecto:
+  - **Claves de proveedores de IA** (`sk-ant-` Anthropic, `sk-proj-`/`sk-` OpenAI) — las usa el
+    propio Musubi; una filtrada en la memoria de equipo sería grave. El separador `-` las distingue
+    de las de Stripe (`sk_live_`).
+  - **Token de bot de Telegram** (`\d{8,10}:…`) — lo usa el gateway de chat.
+  - GitHub PAT fino (`github_pat_`, que la regla `gh[opsur]_` no cubría), GitLab (`glpat-`), Slack
+    (`xox…` + webhooks), SendGrid, Twilio, npm.
+  - **Contraseñas en connection strings** (`scheme://user:PASS@host`): las passwords humanas son de
+    BAJA entropía, así que el catch-all no las veía, pero un `postgres://u:p@host` filtrado es una
+    fuga real. Se redacta sólo la contraseña.
+  - El catch-all de entropía sigue cubriendo los formatos desconocidos; esto agrega CERTEZA sobre
+    los prefijos distintivos (que además pueden ser cortos o de baja entropía). 11 casos de test.
+
 ### Changed
 
 - **Benchmarks a escala (n=100k) en CI (Track 16 F3).** El `bench-guard` de cada push valida el
