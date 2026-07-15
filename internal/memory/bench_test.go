@@ -206,6 +206,11 @@ func BenchmarkSearchVector(b *testing.B) {
 
 // BenchmarkMaintain mide el ciclo completo de mantenimiento (consolidar + decay + purgar)
 // a escala. Re-siembra por iteración (fuera del timer) porque Maintain muta la base.
+//
+// Consolidate es el paso caro: su fix denso (T7.1) lo bajó de O(n²) a ~lineal en memoria, y el
+// bench-guard de CI vigila ese ratio. El caso n=100000 es OPT-IN (MUSUBI_BENCH_SCALE) igual que
+// BenchmarkSearchVector: valida a 100k lo que a 1k/10k no descartaría (una regresión que sólo
+// muerda con corpus grande — justo la clase de bug que la auditoría marcó en Consolidate).
 func BenchmarkMaintain(b *testing.B) {
 	opts := MaintenanceOptions{
 		DedupThreshold:         0.9,
@@ -216,7 +221,11 @@ func BenchmarkMaintain(b *testing.B) {
 		PurgeArchivedAfterDays: 90,
 		Vacuum:                 false,
 	}
-	for _, n := range []int{1000, 10000} {
+	sizes := []int{1000, 10000}
+	if os.Getenv("MUSUBI_BENCH_SCALE") != "" {
+		sizes = append(sizes, 100000)
+	}
+	for _, n := range sizes {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()

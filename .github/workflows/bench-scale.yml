@@ -1,0 +1,65 @@
+name: Bench (scale)
+
+# Benchmarks a ESCALA (n=100000), Track 16 F3. Sembrar 100k observaciones tarda minutos, así que
+# NO corre en cada push (eso lo hace el job `bench-guard` de ci.yml a n=1k/10k). Corre semanal y
+# a demanda: valida a 100k lo que el ratio 10k/1k no descartaría — una regresión de memoria que
+# sólo muerde con corpus grande (justo la clase que la auditoría marcó en Consolidate y en el IVF
+# ">10k jamás benchmarkeado"). Es un CANARIO de escala, no un gate de PR: avisa por la corrida
+# fallida sin bloquear el desarrollo.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # lunes 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  bench-scale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+
+      - name: Vector search sublinearity @ 100k (IVF)
+        # Con el IVF entrenado, el costo de búsqueda crece ~nprobe·√n. Para un salto 10x de n
+        # (10k→100k) la memoria por búsqueda debería crecer ~√10 ≈ 3.2x; el umbral 6 atrapa una
+        # regresión IVF→full-scan (que lo llevaría a ~lineal, ~10x) sin falsos positivos. Mismo
+        # criterio que bench-guard, un tramo más arriba en la escala.
+        env:
+          MUSUBI_BENCH_SCALE: '1'
+        run: |
+          out=$(go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x -timeout=30m ./internal/memory/)
+          echo "$out"
+          b10=$(echo "$out" | awk '/SearchVector\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b100=$(echo "$out" | awk '/SearchVector\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          echo "B/op n=10000:  ${b10:-<vacío>}"
+          echo "B/op n=100000: ${b100:-<vacío>}"
+          awk -v a="$b10" -v b="$b100" 'BEGIN {
+            if (a+0 == 0 || b+0 == 0) { print "ERROR: no se pudo medir B/op de SearchVector a escala"; exit 1 }
+            r = (b+0)/(a+0)
+            printf "ratio B/op(100k)/B/op(10k) = %.1fx (umbral 6)\n", r
+            if (r > 6.0) { print "ERROR: la búsqueda vectorial dejó de escalar sublinealmente a 100k (¿IVF caído a full-scan?)"; exit 1 }
+            print "OK: la búsqueda vectorial escala sublinealmente a 100k (IVF)"
+          }'
+
+      - name: Maintain complexity @ 100k (memoria sub-cuadrática)
+        # Consolidate es el paso caro; su fix denso (T7.1) lo dejó ~lineal en memoria. Para un
+        # salto 10x de n, lineal ≈ 10x y cuadrático ≈ 100x; el umbral 20 atrapa el regreso a
+        # cuadrático a escala sin marcar el crecimiento lineal esperado.
+        env:
+          MUSUBI_BENCH_SCALE: '1'
+        run: |
+          out=$(go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x -timeout=30m ./internal/memory/)
+          echo "$out"
+          b10=$(echo "$out" | awk '/Maintain\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b100=$(echo "$out" | awk '/Maintain\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          echo "B/op n=10000:  ${b10:-<vacío>}"
+          echo "B/op n=100000: ${b100:-<vacío>}"
+          awk -v a="$b10" -v b="$b100" 'BEGIN {
+            if (a+0 == 0 || b+0 == 0) { print "ERROR: no se pudo medir B/op de Maintain a escala"; exit 1 }
+            r = (b+0)/(a+0)
+            printf "ratio B/op(100k)/B/op(10k) = %.1fx (umbral 20)\n", r
+            if (r > 20.0) { print "ERROR: Maintain volvió a escalar cuadráticamente en memoria a 100k"; exit 1 }
+            print "OK: Maintain escala sub-cuadráticamente en memoria a 100k"
+          }'
