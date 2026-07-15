@@ -95,8 +95,9 @@ func TestCheckFTSRunsIntegrityCheckAndDrift(t *testing.T) {
 		t.Errorf("índice sano ⇒ ok, obtuve %s (%s)", r.Status, r.Message)
 	}
 
-	// Desincronización (sin corrupción): una fila de más en el FTS ⇒ drift ⇒ reparable.
-	if _, err := e.db.Exec(`INSERT INTO observations_fts(id, topic_key, content) VALUES ('fantasma','t','huerfano')`); err != nil {
+	// Desincronización (sin corrupción): una entrada de más en el FTS (external-content: se indexa
+	// por rowid; un rowid inexistente en observations es una fila huérfana) ⇒ drift ⇒ reparable.
+	if _, err := e.db.Exec(`INSERT INTO observations_fts(rowid, topic_key, content) VALUES (999999,'t','huerfano')`); err != nil {
 		t.Fatal(err)
 	}
 	r := checkFTS(e)

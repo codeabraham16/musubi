@@ -43,8 +43,13 @@ func TestFtsConsistencyDetectaYRepara(t *testing.T) {
 	if err := e.SaveObservation("a", "topic/x", "contenido para fts", nil); err != nil {
 		t.Fatal(err)
 	}
-	// Inyectar una fila FTS duplicada (simula el bug de FTS desincronizado).
-	if _, err := e.db.Exec(`INSERT INTO observations_fts(id, topic_key, content) VALUES('a','topic/x','contenido para fts')`); err != nil {
+	// Desincronizar el índice del contenido (external-content): dropear el trigger de UPDATE y
+	// cambiar el contenido en observations deja los tokens del índice apuntando al texto VIEJO —
+	// justo el desync que el integrity-check rank=1 detecta y applyRebuildFTS repara.
+	if _, err := e.db.Exec(`DROP TRIGGER observations_au`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET content='contenido TOTALMENTE distinto ahora' WHERE id='a'`); err != nil {
 		t.Fatal(err)
 	}
 	rep, _ := e.Diagnose()

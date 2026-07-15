@@ -503,7 +503,7 @@ func (e *DbEngine) lexicalConflictCandidates(src obsRow, limit int) ([]obsRow, e
 	rows, err := e.db.Query(`
 		SELECT o.id, o.topic_key, o.content, COALESCE(o.created_at,'')
 		FROM observations_fts f
-		JOIN observations o ON f.id = o.id
+		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ?
 		  AND o.id != ?
 		  AND `+visibleObsPredicate+`

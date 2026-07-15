@@ -195,6 +195,15 @@ func (e *DbEngine) Compact(vacuum bool) error {
 		if _, err := e.db.Exec(`VACUUM`); err != nil {
 			return fmt.Errorf("error en VACUUM: %w", err)
 		}
+		// CRÍTICO: VACUUM renumera los rowids de `observations` (no tiene INTEGER PRIMARY KEY), y
+		// la FTS external-content indexa POR rowid. Sin este rebuild, el índice quedaría apuntando
+		// a rowids viejos y el recall FTS devolvería filas equivocadas o vacío — corrupción lógica
+		// silenciosa. 'rebuild' relee el contenido de observations por el rowid NUEVO. Es el único
+		// sitio que vacuumea la base viva (el backup DR usa VACUUM INTO a un archivo aparte, que no
+		// toca los rowids del origen).
+		if _, err := e.db.Exec(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`); err != nil {
+			return fmt.Errorf("error al reconstruir el índice FTS tras VACUUM: %w", err)
+		}
 	}
 	return nil
 }

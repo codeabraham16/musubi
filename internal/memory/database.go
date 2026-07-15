@@ -353,25 +353,17 @@ func initSchemaOn(x execQuerier) error {
 		// repair no puedan divergir.
 		ftsTableDDL,
 
-		// Triggers para mantener FTS5 sincronizado automáticamente
-		`CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
-			INSERT OR REPLACE INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
-		END;`,
-
-		`CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
-			DELETE FROM observations_fts WHERE id = old.id;
-		END;`,
-
-		// El UPSERT de saveObservation (y cualquier UPDATE, ej. bumpAccess) actualiza
-		// filas existentes; este trigger mantiene el índice FTS sincronizado.
-		// DELETE+INSERT (no INSERT OR REPLACE): observations_fts no tiene clave única
-		// en id, así que un OR REPLACE duplicaría la fila en cada UPDATE.
-		// Se recrea para reemplazar la versión previa (con bug) en bases existentes.
+		// Triggers external-content para mantener la FTS sincronizada con observations. Definidos
+		// en doctor.go (ftsTrigger{AI,AD,AU}) para compartir la ÚNICA fuente de verdad con la
+		// migración v17 y el repair del doctor. Se DROPean primero para que, si una base pre-v17
+		// aún tuviera los triggers REGULARES (que referencian `id`), la baseline los reemplace por
+		// los external-content (defensivo; la migración v17 ya hace la conversión).
+		`DROP TRIGGER IF EXISTS observations_ai;`,
+		`DROP TRIGGER IF EXISTS observations_ad;`,
 		`DROP TRIGGER IF EXISTS observations_au;`,
-		`CREATE TRIGGER observations_au AFTER UPDATE ON observations BEGIN
-			DELETE FROM observations_fts WHERE id = old.id;
-			INSERT INTO observations_fts(id, topic_key, content) VALUES (new.id, new.topic_key, new.content);
-		END;`,
+		ftsTriggerAI,
+		ftsTriggerAD,
+		ftsTriggerAU,
 
 		// Memoria de código: gist + símbolos de un archivo ya leído, con un
 		// fingerprint del contenido para saber si sigue fresco. Permite recordar la

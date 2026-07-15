@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrSchemaTooNew se devuelve cuando la base fue migrada por un binario MÁS NUEVO
@@ -468,6 +469,66 @@ func schemaMigrations() []migration {
 			up: func(x execQuerier) error {
 				_, err := x.Exec(`ALTER TABLE observations ADD COLUMN author TEXT NOT NULL DEFAULT ''`)
 				return err
+			},
+		},
+		{
+			version: 17,
+			name:    "fts_external_content",
+			// La FTS pasa de REGULAR (guardaba su propia copia del contenido) a EXTERNAL-CONTENT
+			// (lee el contenido de `observations` por rowid). Elimina la duplicación del texto en
+			// disco. Cambia el DDL, los 3 triggers (patrón external-content: el 'delete' toma los
+			// valores viejos de old.*) y el join de las queries (por rowid, no por id).
+			//
+			// Dos casos, ambos terminan en 'rebuild':
+			//   - FTS REGULAR (base pre-v17 con datos): se convierte — dropear triggers viejos +
+			//     FTS regular, recrear external-content + triggers.
+			//   - Ya EXTERNAL-CONTENT (base fresca: la baseline usa el DDL nuevo): no se toca el
+			//     esquema.
+			// El 'rebuild' corre SIEMPRE, y es CRÍTICO que así sea: en una base pre-FTS (muy vieja),
+			// la baseline crea la FTS external-content VACÍA pero `observations` ya tiene filas que
+			// no quedan indexadas; un UPDATE posterior dispararía el 'delete' external-content sobre
+			// una entrada inexistente y CORROMPERÍA el índice ("database disk image is malformed").
+			// 'rebuild' puebla esas filas desde la tabla base. En una base fresca (observations
+			// vacío) es instantáneo.
+			up: func(x execQuerier) error {
+				var ddl string
+				rows, err := x.Query(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='observations_fts'`)
+				if err != nil {
+					return fmt.Errorf("fts_external_content: no se pudo leer el DDL de la FTS: %w", err)
+				}
+				if rows.Next() {
+					if err := rows.Scan(&ddl); err != nil {
+						rows.Close()
+						return fmt.Errorf("fts_external_content: %w", err)
+					}
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return err
+				}
+				rows.Close()
+
+				if !strings.Contains(ddl, "content=") {
+					// Convertir la FTS regular a external-content.
+					for _, stmt := range []string{
+						`DROP TRIGGER IF EXISTS observations_ai`,
+						`DROP TRIGGER IF EXISTS observations_ad`,
+						`DROP TRIGGER IF EXISTS observations_au`,
+						`DROP TABLE IF EXISTS observations_fts`,
+						ftsTableDDL,
+						ftsTriggerAI,
+						ftsTriggerAD,
+						ftsTriggerAU,
+					} {
+						if _, err := x.Exec(stmt); err != nil {
+							return fmt.Errorf("fts_external_content: %w", err)
+						}
+					}
+				}
+				if _, err := x.Exec(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`); err != nil {
+					return fmt.Errorf("fts_external_content: rebuild: %w", err)
+				}
+				return nil
 			},
 		},
 	}
