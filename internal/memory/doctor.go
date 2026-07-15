@@ -210,6 +210,8 @@ func (e *DbEngine) BackupTo(destDir string) (string, error) {
 	// El destino va como literal SQL (VACUUM INTO no admite parámetros enlazados); se
 	// escapan las comillas simples duplicándolas. `dest` lo construimos nosotros
 	// (directorio + timestamp), no viene de entrada del usuario.
+	// #nosec G201 -- VACUUM INTO no admite parámetros enlazados; `dest` lo construimos nosotros
+	// (destDir + timestamp), no es entrada del usuario, y las comillas se escapan arriba.
 	q := fmt.Sprintf(`VACUUM INTO '%s'`, strings.ReplaceAll(dest, "'", "''"))
 	if _, err := e.db.Exec(q); err == nil {
 		return dest, nil
