@@ -44,6 +44,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El único hit del ruleset curado (`VACUUM INTO`, que no admite parámetros enlazados y usa un
     destino que construimos nosotros) queda documentado con un `#nosec G201` en el código.
 
+### Changed
+
+- **Benchmarks a escala (n=100k) en CI (Track 16 F3).** El `bench-guard` de cada push valida el
+  escalado de memoria a 1k/10k; faltaba confirmar la asíntota a escala real — justo donde la
+  auditoría marcó los riesgos (Consolidate materializando el corpus, IVF ">10k jamás
+  benchmarkeado"). `BenchmarkMaintain` ahora también corre a 100k bajo `MUSUBI_BENCH_SCALE`, y un
+  workflow **`bench-scale`** (semanal + a demanda, no en cada push por el costo de sembrar 100k
+  filas) vigila que la búsqueda vectorial siga sublineal y el mantenimiento sub-cuadrático a 100k.
+  Es un canario de escala, no un gate de PR.
+
 ## [0.91.0] - 2026-07-15
 
 ### Added
