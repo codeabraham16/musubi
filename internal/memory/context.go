@@ -78,7 +78,7 @@ func (e *DbEngine) observationGistsCtx(ctx context.Context, query string, limit 
 	rows, err := e.db.Query(`
 		SELECT o.id, o.topic_key, COALESCE(o.gist, '')
 		FROM observations_fts f
-		JOIN observations o ON f.id = o.id
+		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+scopeSQL+`
 		ORDER BY rank
 		LIMIT ?

@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+> **El índice no necesita una segunda copia del texto.** La FTS guardaba su propio duplicado del
+> contenido; ahora lo LEE de la tabla base. Menos disco, misma búsqueda — con un cuidado: el índice
+> pasa a depender del rowid, y el rowid lo puede mover un VACUUM.
+
+### Changed
+
+- **La búsqueda de texto (FTS) pasa a EXTERNAL-CONTENT (Track 16 F3).** `observations_fts` ya no
+  guarda su propia copia del contenido: lo referencia desde `observations` por rowid
+  (`content='observations'`). Elimina la duplicación del texto en disco (el contenido pesaba dos
+  veces). Migración **v17**, idempotente (una base fresca ya nace external-content; una vieja se
+  convierte y se re-puebla con `'rebuild'`).
+  - **El pivote de diseño — VACUUM.** `observations` no tiene `INTEGER PRIMARY KEY`, así que su
+    rowid lo **renumera un VACUUM**, y la FTS external-content indexa por rowid. Sin remediarlo, cada
+    VACUUM dejaría la búsqueda devolviendo basura **en silencio**. `Compact` ahora **reconstruye la
+    FTS después de vacuumear** (único sitio que vacuumea la base viva; el backup DR usa `VACUUM INTO`
+    a un archivo aparte, que no toca los rowids del origen).
+  - **Detección más fina.** El `integrity-check` del doctor pasa a la forma `rank=1`, que valida no
+    sólo el b-tree interno sino que los tokens **coincidan con el contenido** — atrapa el desync por
+    rowid que el check básico no ve. El repair usa el comando `'rebuild'` (relee de la tabla base).
+  - Triggers external-content (el `'delete'` toma los valores viejos de `old.*`) y queries que joinean
+    por `rowid`. Cubierto por tests adversariales: sobrevida a VACUUM, update/delete re-indexan, y la
+    conversión desde la FTS regular.
+
 > **Crecer para siempre no es un plan.** El olvido archiva lo que cae bajo un umbral de
 > saliencia, pero un tenant de alto ingest cuyas memorias nunca bajan del umbral crece sin
 > techo. La retención por tiempo (purga por edad) tampoco lo acota si el ingest supera a la

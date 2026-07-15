@@ -56,7 +56,7 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 	return []doctorCheck{
 		{code: "db_integrity", run: checkDBIntegrity},
 		{code: "schema_migrations", run: checkSchema, count: countMissingColumns, apply: applySchema},
-		{code: "fts_consistency", run: checkFTS, count: countFTSDrift, apply: applyRebuildFTS},
+		{code: "fts_consistency", run: checkFTS, count: countFTSInconsistent, apply: applyRebuildFTS},
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
 		{code: "stale_gists", run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
@@ -372,65 +372,82 @@ func applySchema(e *DbEngine) (int, error) {
 }
 
 // ftsIntegrityErr corre el comando NATIVO de FTS5 `integrity-check`, que valida la estructura
-// INTERNA del índice invertido. Es justo lo que countFTSDrift NO puede ver: un índice corrupto
-// puede tener el COUNT(*) PERFECTO — las filas están, lo que está roto es el b-tree del índice.
+// INTERNA del índice invertido Y (con rank=1, external-content) que sus tokens coincidan con el
+// contenido de `observations`. Un índice corrupto o desincronizado puede tener el COUNT(*)
+// PERFECTO — las filas están, lo que está roto es el b-tree del índice o los tokens vs el contenido.
 // nil = índice sano.
 func ftsIntegrityErr(e *DbEngine) error {
-	_, err := e.db.Exec(`INSERT INTO observations_fts(observations_fts) VALUES('integrity-check')`)
+	// rank=1: para una FTS external-content, el integrity-check verifica NO SÓLO el b-tree interno
+	// del índice sino que sus tokens COINCIDAN con el contenido actual de `observations` (leído por
+	// rowid). Es lo que atrapa el desync más peligroso de external-content: un rowid renumerado por
+	// VACUUM sin rebuild, o un trigger que no corrió. El check básico (sin rank) NO ve ese caso —
+	// pasa aunque el índice apunte a contenido viejo (verificado). Devuelve "database disk image is
+	// malformed" ante el mismatch, que es reparable con applyRebuildFTS.
+	_, err := e.db.Exec(`INSERT INTO observations_fts(observations_fts, rank) VALUES('integrity-check', 1)`)
 	return err
 }
 
-// checkFTS corre las DOS comprobaciones, porque son modos de falla DISTINTOS:
+// checkFTS corre el integrity-check external-content (rank=1), que es a la vez el detector de
+// corrupción INTERNA del índice y el de DESINCRONIZACIÓN con el contenido (tokens que no coinciden
+// con `observations` — p.ej. rowids renumerados por VACUUM sin rebuild, o un trigger que no corrió).
 //
-//   - integrity-check falla ⇒ corrupción INTERNA del índice (el caso grave).
-//   - drift de COUNT(*)     ⇒ desincronización (filas de más/de menos) SIN corrupción.
-//
-// P0.3 — Antes sólo se miraba el drift, y por eso el doctor era CIEGO al caso grave: un índice
-// corrupto con el conteo correcto reportaba "ok". Y el único check que SÍ veía la corrupción
-// (db_integrity) no tiene `apply` ni entra al auto-heal ⇒ el que veía no podía arreglar, y el que
-// podía arreglar no veía. Ahora el que repara también VE.
-//
-// El integrity-check va PRIMERO: si el índice está corrupto, el COUNT puede ser una lectura sin
-// sentido y no tiene caso interpretarlo.
+// P0.3 — el motivo original era que el doctor viera la corrupción interna (antes sólo miraba un
+// drift de COUNT(*), y era ciego a un índice corrupto con el conteo correcto). Con external-content
+// (v17) el drift de COUNT ya NO es un modo de falla posible: `COUNT(*) FROM observations_fts` LEE de
+// la tabla de contenido, así que siempre iguala a `observations`. El que reemplaza ambos chequeos es
+// el integrity-check rank=1, que valida índice↔contenido de una. El que repara (applyRebuildFTS)
+// también VE.
 func checkFTS(e *DbEngine) CheckResult {
 	if err := ftsIntegrityErr(e); err != nil {
 		return CheckResult{Code: "fts_consistency", Status: "error",
-			Message:    "el índice FTS está CORRUPTO (integrity-check falló): " + err.Error(),
+			Message:    "el índice FTS está CORRUPTO o desincronizado (integrity-check falló): " + err.Error(),
 			Repairable: true}
-	}
-	drift, err := countFTSDrift(e)
-	if err != nil {
-		return CheckResult{Code: "fts_consistency", Status: "error", Message: err.Error(), Repairable: true}
-	}
-	if drift != 0 {
-		return CheckResult{Code: "fts_consistency", Status: "warning",
-			Message: fmt.Sprintf("el índice FTS está desincronizado (diferencia de %d fila(s))", drift), Repairable: true}
 	}
 	return CheckResult{Code: "fts_consistency", Status: "ok", Message: "índice FTS sincronizado e íntegro"}
 }
 
-func countFTSDrift(e *DbEngine) (int, error) {
-	var obs, fts int
-	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&obs); err != nil {
-		return 0, fmt.Errorf("error al contar observations: %w", err)
+// countFTSInconsistent reporta 1 si el índice FTS está corrupto/desincronizado, 0 si está sano.
+// Binario (no hay "cuántas filas de drift" con external-content), pero preserva la forma que el
+// registry del doctor espera para el conteo de problemas.
+func countFTSInconsistent(e *DbEngine) (int, error) {
+	if ftsIntegrityErr(e) != nil {
+		return 1, nil
 	}
-	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations_fts`).Scan(&fts); err != nil {
-		return 0, fmt.Errorf("error al contar observations_fts: %w", err)
-	}
-	d := fts - obs
-	if d < 0 {
-		d = -d
-	}
-	return d, nil
+	return 0, nil
 }
 
-// ftsTableDDL es la ÚNICA definición de la tabla FTS: la usan el esquema (database.go) y la
-// reconstrucción del doctor, para que no puedan divergir.
+// ftsTableDDL es la ÚNICA definición de la tabla FTS: la usan el esquema (database.go), la
+// migración v17 y la reconstrucción del doctor, para que no puedan divergir.
+//
+// EXTERNAL-CONTENT (v17): la FTS NO guarda su propia copia del contenido — lo LEE de
+// `observations` por rowid (`content='observations', content_rowid='rowid'`). Elimina la
+// duplicación del texto (el contenido pesaba dos veces en disco). La columna `id` (TEXT) ya no
+// se almacena en la FTS: el join a observations es por rowid. OJO: `observations` no tiene
+// INTEGER PRIMARY KEY, así que su rowid lo puede RENUMERAR un VACUUM — por eso Compact
+// reconstruye la FTS después de vacuumear (ver retention.go).
 const ftsTableDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
-	id UNINDEXED,
 	topic_key UNINDEXED,
-	content
+	content,
+	content='observations',
+	content_rowid='rowid'
 );`
+
+// ftsTrigger{AI,AD,AU} mantienen la FTS external-content sincronizada con observations. Son la
+// ÚNICA fuente de verdad de los triggers (las comparten el esquema baseline, la migración v17 y
+// el repair). Patrón external-content: el INSERT indexa por rowid; el 'delete' necesita los
+// valores VIEJOS de las columnas indexadas (old.*) para removerlos del índice invertido.
+const ftsTriggerAI = `CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
+	INSERT INTO observations_fts(rowid, topic_key, content) VALUES (new.rowid, new.topic_key, new.content);
+END;`
+
+const ftsTriggerAD = `CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
+	INSERT INTO observations_fts(observations_fts, rowid, topic_key, content) VALUES('delete', old.rowid, old.topic_key, old.content);
+END;`
+
+const ftsTriggerAU = `CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
+	INSERT INTO observations_fts(observations_fts, rowid, topic_key, content) VALUES('delete', old.rowid, old.topic_key, old.content);
+	INSERT INTO observations_fts(rowid, topic_key, content) VALUES (new.rowid, new.topic_key, new.content);
+END;`
 
 // applyRebuildFTS reconstruye el índice FTS desde `observations` con DROP + recrear + re-poblar.
 //
@@ -439,9 +456,11 @@ const ftsTableDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING f
 // único caso que tenía que curar. DROP TABLE, en cambio, **libera las páginas sin leer el
 // contenido**, así que sobrevive a la corrupción.
 //
-// No se usa el comando `'rebuild'` de FTS5 (que sería lo primero que uno busca): sólo aplica a
-// tablas *contentless* o *external-content*. `observations_fts` es una FTS5 REGULAR — guarda su
-// propia copia, sincronizada por triggers — y sobre ella `'rebuild'` da error.
+// Se DROPea (no DELETE) para sobrevivir a la corrupción, y se re-puebla con el comando `'rebuild'`
+// de FTS5 — que RELEE el contenido de `observations` por rowid. Ese comando sólo aplica a tablas
+// *contentless* o *external-content*; desde v17 `observations_fts` ES external-content, así que ya
+// es válido (sobre la FTS regular anterior daba error, y por eso antes se re-poblaba con INSERT
+// ... SELECT). Lee de la tabla base, no del índice corrupto que acabamos de dropear.
 //
 // Los TRIGGERS sobreviven: están definidos sobre `observations` (no sobre la tabla FTS) y apuntan a
 // `observations_fts` por NOMBRE, así que al recrearla vuelven a funcionar. Hay un test que lo
@@ -458,7 +477,7 @@ func applyRebuildFTS(e *DbEngine) (int, error) {
 	if _, err := tx.Exec(ftsTableDDL); err != nil {
 		return 0, fmt.Errorf("no se pudo recrear el índice FTS: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO observations_fts(id, topic_key, content) SELECT id, topic_key, content FROM observations`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`); err != nil {
 		return 0, fmt.Errorf("no se pudo re-poblar el índice FTS: %w", err)
 	}
 	var obs int

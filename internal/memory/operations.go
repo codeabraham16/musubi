@@ -510,9 +510,9 @@ func (e *DbEngine) SearchObservationsFTS(ctx context.Context, queryText string, 
 	args := append([]interface{}{ftsQuery}, scopeArgs...)
 	args = append(args, limit)
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT f.id, f.topic_key, f.content, o.created_at
+		SELECT o.id, o.topic_key, o.content, o.created_at
 		FROM observations_fts f
-		JOIN observations o ON f.id = o.id
+		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+scopeSQL+`
 		ORDER BY rank
 		LIMIT ?

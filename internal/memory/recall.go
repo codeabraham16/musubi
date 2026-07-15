@@ -628,7 +628,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 		SELECT rank, o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
 		FROM observations_fts f
-		JOIN observations o ON f.id = o.id
+		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
 		ORDER BY rank
 		LIMIT ?
