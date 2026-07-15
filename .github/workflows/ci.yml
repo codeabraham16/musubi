@@ -176,3 +176,42 @@ jobs:
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
           "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+  sast:
+    # Análisis estático de seguridad (Track 16 F4): gosec complementa a govulncheck. govulncheck
+    # atrapa dependencias con CVE conocido; gosec atrapa PATRONES inseguros en NUESTRO código
+    # (SQL interpolado, crypto débil, TLS skip-verify, credenciales hardcodeadas). Hoy el
+    # codebase da CERO hallazgos reales sobre el ruleset curado; este gate LOCKEA ese cero y
+    # atrapa una regresión futura (que alguien meta md5/DES/`?`-menos-SQL).
+    #
+    # Ruleset CURADO —severity>=medium, confidence=high— excluyendo las clases que son FP
+    # sistemático o comportamiento DE DISEÑO en esta CLI/herramienta de provisioning:
+    #   G104           errores no manejados — ya lo gatea errcheck (golangci); el residuo es
+    #                  fire-and-forget intencional (cleanup en paths de error).
+    #   G202           concat de SQL — todo IN() se arma con placeholders `?` y los valores van
+    #                  como args enlazados, nunca interpolados: no es inyectable.
+    #   G204           subprocess con variable — el provisioning lanza git/tailscale/firewall
+    #                  con comandos que arma la herramienta, no entrada no confiable.
+    #   G301/G302/G306 permisos — 0644/0755 deliberado para skills/catálogos/exports compartibles;
+    #                  el `principals.yaml` sensible ya se crea 0600.
+    #   G304           file inclusion via variable — una CLI lee los paths que el operador nombra,
+    #                  por diseño.
+    #   G702/G703/G704 taint analysis EXPERIMENTAL (command-injection/path-traversal/SSRF): FP
+    #                  masivo para una CLI que lee archivos del operador y corre git/tailscale.
+    # El único hit del ruleset curado (VACUUM INTO, que no admite parámetros enlazados) lleva un
+    # #nosec G201 justificado en el código. @latest como govulncheck: el ruleset acotado limita el
+    # riesgo de drift entre versiones.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+
+      - name: gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          "$(go env GOPATH)/bin/gosec" -quiet -severity=medium -confidence=high \
+            -exclude=G104,G202,G204,G301,G302,G306,G304,G702,G703,G704 ./...

@@ -30,6 +30,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     — no re-materializa el corpus. Off por default y no se enciende en un upgrade silencioso
     (mismo cuidado que la purga); `musubi init` lo escribe visible y editable.
 
+### Security
+
+- **SAST en CI: gosec (Track 16 F4).** Un gate de análisis estático de seguridad que complementa
+  a `govulncheck`: éste atrapa dependencias con CVE conocido; gosec atrapa **patrones inseguros en
+  nuestro propio código** — SQL interpolado, crypto débil, TLS sin verificar, credenciales
+  hardcodeadas. Hoy el codebase da **cero hallazgos reales**; el gate lockea ese cero y atrapa la
+  regresión futura.
+  - Ruleset **curado** (severity≥medium, confidence=high) que excluye las clases de FP sistemático
+    o comportamiento **de diseño** en una CLI/herramienta de provisioning (lectura de archivos que
+    el operador nombra, ejecución de `git`/`tailscale`, `IN()` con placeholders `?`, permisos
+    deliberados en artefactos compartibles). Cada exclusión está justificada en el workflow.
+  - El único hit del ruleset curado (`VACUUM INTO`, que no admite parámetros enlazados y usa un
+    destino que construimos nosotros) queda documentado con un `#nosec G201` en el código.
+
 ## [0.91.0] - 2026-07-15
 
 ### Added
