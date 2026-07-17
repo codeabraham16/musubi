@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.93.0] - 2026-07-17
+
+> **El cerebro se ve como un cerebro.** El brain-dashboard pasa de Canvas 2D a WebGL (three.js):
+> nodos facetados con luz de borde, sinapsis con un pulso de luz continuo, bloom cinematográfico y
+> movimiento libre — con la actividad en vivo apegada a los datos reales del snapshot, sin inventar.
+
+### Changed
+
+- **El brain-dashboard se reescribe de Canvas 2D a WebGL puro (three.js), embebido en el binario.**
+  Los nodos son icosaedros facetados con rim-light fresnel (`InstancedMesh`); las sinapsis son tubos
+  con un shader de **pulso continuo** (banda de luz viajera) en lugar de partículas discretas.
+  Post-proceso UnrealBloom + SMAA + MSAA, `TrackballControls` para mover/zoom libre, y arrastrar una
+  neurona con vuelta por resorte (los vecinos conectados la siguen). Layout force-directed esférico:
+  las conectadas quedan más juntas y el resto más separado.
+  - **La actividad EN VIVO está apegada a datos reales** del snapshot (diff entre polls de 5 s):
+    memoria nueva → *escribir* (verde), heat/recencia → *recordar* (cian), sinapsis nueva →
+    *relacionar* (ámbar), reposo azul tenue. Nada fabricado.
+  - **Empaquetado sin runtime de build.** El bundle (`dashboard.bundle.js`) se **commitea** y lo
+    consume `go:embed`; compilar Go **no** necesita node. El toolchain (esbuild + three) queda en
+    `package.json`/`.gitignore` y solo se corre al tocar el frontend. `dashboard.go` sirve el bundle
+    en `/dashboard.bundle.js` same-origin sobre loopback (sin CDN, offline).
+
 ## [0.92.0] - 2026-07-15
 
 > **El índice no necesita una segunda copia del texto.** La FTS guardaba su propio duplicado del
