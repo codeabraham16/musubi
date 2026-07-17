@@ -19,7 +19,7 @@ import (
 	"musubi/internal/memory"
 )
 
-//go:embed assets/dashboard.html
+//go:embed assets/dashboard.html assets/dashboard.bundle.js
 var dashboardAssets embed.FS
 
 // dashboard.go implementa 'musubi dashboard': una UI LOCAL de solo lectura de la
@@ -95,6 +95,7 @@ func runDashboard(args []string) {
 func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.Handler {
 	mux := http.NewServeMux()
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
+	bundle, _ := dashboardAssets.ReadFile("assets/dashboard.bundle.js")
 
 	mux.HandleFunc("/api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		snap, err := buildExportSnapshot(engine, version, budget, time.Now())
@@ -106,6 +107,13 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(snap)
+	})
+
+	// bundle WebGL (three.js) embebido, servido same-origin sobre loopback (sin CDN, offline).
+	mux.HandleFunc("/dashboard.bundle.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(bundle)
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
