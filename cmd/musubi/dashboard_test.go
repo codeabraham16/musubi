@@ -59,8 +59,23 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("esperaba 200 en /, obtuve %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "MUSUBI") || !strings.Contains(rr.Body.String(), "/api/snapshot") {
-		t.Error("el HTML servido debe ser el dashboard (con MUSUBI y el fetch a /api/snapshot)")
+	// El HTML es la cáscara del dashboard WebGL: incluye MUSUBI y carga el bundle
+	// three.js. El fetch a /api/snapshot vive DENTRO del bundle, no en el HTML.
+	if !strings.Contains(rr.Body.String(), "MUSUBI") || !strings.Contains(rr.Body.String(), "/dashboard.bundle.js") {
+		t.Error("el HTML servido debe ser la cáscara del dashboard (con MUSUBI y el <script> del bundle)")
+	}
+
+	// El bundle WebGL se sirve como JS y trae el fetch a /api/snapshot (el polling en vivo).
+	rrb := httptest.NewRecorder()
+	h.ServeHTTP(rrb, httptest.NewRequest(http.MethodGet, "/dashboard.bundle.js", nil))
+	if rrb.Code != http.StatusOK {
+		t.Fatalf("esperaba 200 en /dashboard.bundle.js, obtuve %d", rrb.Code)
+	}
+	if ct := rrb.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("el bundle debe servirse como javascript, obtuve %q", ct)
+	}
+	if !strings.Contains(rrb.Body.String(), "/api/snapshot") {
+		t.Error("el bundle debe contener el fetch a /api/snapshot (el polling en vivo)")
 	}
 
 	// Rutas desconocidas: 404 (no servir el HTML para cualquier path).
