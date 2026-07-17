@@ -1,0 +1,10 @@
+# Toolchain del build del dashboard (esbuild + three). NO se commitea.
+node_modules/
+package-lock.json
+
+# El bundle SÍ se commitea (lo consume go:embed sin node):
+!dashboard.bundle.js
+
+# binario de build bajado por curl (este entorno: node sin red)
+esbuild.exe
+*.tgz
