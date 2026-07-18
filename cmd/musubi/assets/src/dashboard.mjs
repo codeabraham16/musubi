@@ -61,12 +61,12 @@ function buildGraph(brain){
 
   // ACTIVIDAD REAL entre polls (idéntico al dashboard previo, ahora TIPADA por color):
   const firstLoad=prevStats.size===0;
-  if(firstLoad){ let mr=null; for(const n of NEURONS){ if(!mr || (n.recency_days||9e9)<(mr.recency_days||9e9)) mr=n; } if(mr){ mr.act=1; mr.ak=2; } thinking=0.6; }
+  if(firstLoad){ thinking=0; }   // primera carga = reposo puro: NO fabricar pulso (solo se enciende lo que cambia de verdad entre polls)
   else { let hits=0;
     for(const n of NEURONS){ const ps=prevStats.get(n.id);
-      if(!ps){ n.act=1; n.ak=1; hits++; }                                             // id nuevo → escribir
+      if(!ps){ if(n.age_days!=null && n.age_days<0.02){ n.act=1; n.ak=1; hits++; } }   // id nuevo Y joven (<~30min) → escribir; si solo ENTRÓ al top-300 (memoria vieja) no es actividad
       else if(n.heat>ps.heat || (ps.rec!=null && n.recency_days!=null && n.recency_days<ps.rec-0.0004)){ n.act=1; n.ak=2; hits++; } } // accedida → recordar
-    for(const s of SYN){ if(!prevSyn.has(s.source+'|'+s.target)){ NEURONS[s.a].act=1; NEURONS[s.a].ak=3; NEURONS[s.b].act=1; NEURONS[s.b].ak=3; hits++; } } // sinapsis nueva → relacionar
+    for(const s of SYN){ if(!prevSyn.has(s.source+'|'+s.target) && prevStats.has(s.source) && prevStats.has(s.target)){ NEURONS[s.a].act=1; NEURONS[s.a].ak=3; NEURONS[s.b].act=1; NEURONS[s.b].ak=3; hits++; } } // sinapsis nueva ENTRE neuronas ya visibles → relacionar (no si una recién entró al top-300)
     if(hits>0) thinking=Math.min(1, thinking+0.5+hits*0.2);
   }
   prevStats=new Map(NEURONS.map(n=>[n.id,{heat:n.heat, rec:n.recency_days}]));
