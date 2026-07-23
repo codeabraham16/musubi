@@ -58,6 +58,8 @@ func main() {
 		runPrecheck()
 	case "capture":
 		runCapture(os.Args[2:])
+	case "ingest":
+		runIngest(os.Args[2:])
 	case "catalog":
 		runCatalog(os.Args[2:])
 	case "daemon":
