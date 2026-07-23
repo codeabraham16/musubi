@@ -169,7 +169,11 @@ func reportIngestEngines(ytdlp string) {
 	} else {
 		fmt.Printf("  %-16s %s\n", "video/redes", cYellow("yt-dlp NO instalado (instalá con `uv tool install yt-dlp`)"))
 	}
-	fmt.Printf("  %-16s %s\n", "audio→texto", cYellow("whisper.cpp — pendiente (fase F2)"))
+	if w := ingest.FindWhisper(); w.Available() {
+		fmt.Printf("  %-16s %s\n", "audio→texto", cGreen("whisper.cpp — "+w.Bin))
+	} else {
+		fmt.Printf("  %-16s %s\n", "audio→texto", cYellow("whisper.cpp NO configurado (definí MUSUBI_WHISPER_BIN y MUSUBI_WHISPER_MODEL)"))
+	}
 }
 
 // printIngestHuman imprime un resumen legible + el texto extraído.

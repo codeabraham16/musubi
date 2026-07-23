@@ -28,19 +28,24 @@ type ytMeta struct {
 	Language   string  `json:"language"`
 }
 
-// ytFetcher trae metadata + un archivo de subtítulos de una URL. Se inyecta para testear sin yt-dlp.
+// ytFetcher trae metadata + subtítulos (fetch) o el audio (fetchAudio) de una URL. Se inyecta para
+// testear sin yt-dlp. fetchAudio devuelve la ruta a un wav y un cleanup para borrar el temporal.
 type ytFetcher interface {
 	fetch(ctx context.Context, rawURL string, opts Options) (meta ytMeta, vtt string, subLang string, err error)
+	fetchAudio(ctx context.Context, rawURL string, opts Options) (audioPath string, cleanup func(), err error)
 }
 
-// MediaExtractor implementa Extractor para plataformas de video/redes.
+// MediaExtractor implementa Extractor para plataformas de video/redes. Transcriber es opcional
+// (whisper.cpp): si está disponible y el video no tiene subtítulos, se transcribe el audio (F2).
 type MediaExtractor struct {
-	Fetcher ytFetcher
+	Fetcher     ytFetcher
+	Transcriber Transcriber
 }
 
-// NewMediaExtractor arma el extractor con el fetcher real de yt-dlp apuntando a bin.
+// NewMediaExtractor arma el extractor con el fetcher real de yt-dlp apuntando a bin, y detecta
+// whisper.cpp para el fallback de transcripción (nil-safe: si no está, la cascada corta en captions).
 func NewMediaExtractor(bin string) *MediaExtractor {
-	return &MediaExtractor{Fetcher: &ytDlpFetcher{bin: bin}}
+	return &MediaExtractor{Fetcher: &ytDlpFetcher{bin: bin}, Transcriber: FindWhisper()}
 }
 
 // FindYtDlp busca el binario de yt-dlp: primero en el PATH, luego en ~/.local/bin (donde lo deja
@@ -81,7 +86,41 @@ func (m *MediaExtractor) Extract(ctx context.Context, rawURL string, opts Option
 			Note:             mediaErrorNote(err),
 		}, nil
 	}
-	return buildMediaResult(rawURL, meta, vtt, subLang), nil
+	res := buildMediaResult(rawURL, meta, vtt, subLang)
+	if res.TranscriptSource != SourceNone {
+		return res, nil // ya hay subtítulos: no toca Whisper (cascada barata primero)
+	}
+	// Cascada F2: sin subtítulos → si whisper.cpp está disponible, bajar el audio y transcribir local.
+	if m.Transcriber != nil && m.Transcriber.Available() {
+		if txt, lang := m.transcribe(ctx, rawURL, opts); txt != "" {
+			res.Text = txt
+			res.TranscriptSource = SourceWhisper
+			res.Note = ""
+			if res.Lang == "" {
+				res.Lang = lang
+			}
+			return res, nil
+		}
+		res.Note = "el video no tiene subtítulos y la transcripción de audio falló"
+		return res, nil
+	}
+	res.Note = "el video no tiene subtítulos; instalá whisper.cpp (MUSUBI_WHISPER_BIN/MODEL) para transcribir el audio"
+	return res, nil
+}
+
+// transcribe baja el audio del video y lo pasa por el Transcriber. Best-effort: cualquier fallo
+// (descarga o whisper) devuelve "" y la cascada degrada con aviso.
+func (m *MediaExtractor) transcribe(ctx context.Context, rawURL string, opts Options) (text, lang string) {
+	audioPath, cleanup, err := m.Fetcher.fetchAudio(ctx, rawURL, opts)
+	if err != nil {
+		return "", ""
+	}
+	defer cleanup()
+	txt, lg, terr := m.Transcriber.Transcribe(ctx, audioPath, opts.Langs)
+	if terr != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(txt), lg
 }
 
 // buildMediaResult arma el Result a partir de la metadata y el VTT. Es puro y testeable.
@@ -107,8 +146,7 @@ func buildMediaResult(rawURL string, m ytMeta, vtt, subLang string) Result {
 		r.Text = txt
 		r.TranscriptSource = SourceCaptions
 	} else {
-		r.TranscriptSource = SourceNone
-		r.Note = "el video no tiene subtítulos; la transcripción del audio (Whisper) llega en la fase siguiente"
+		r.TranscriptSource = SourceNone // el aviso lo pone Extract según haya o no whisper
 	}
 	return r
 }
@@ -181,6 +219,45 @@ func (f *ytDlpFetcher) fetch(ctx context.Context, rawURL string, opts Options) (
 		return ytMeta{}, "", "", fmt.Errorf("%s", msg)
 	}
 	return meta, vtt, lang, nil
+}
+
+// fetchAudio baja SOLO el audio del video a un wav 16kHz mono (lo que espera whisper.cpp) en un dir
+// temporal. Devuelve la ruta del wav + un cleanup para borrar el temporal. Requiere ffmpeg (yt-dlp lo
+// usa para extraer/convertir el audio).
+func (f *ytDlpFetcher) fetchAudio(ctx context.Context, rawURL string, opts Options) (string, func(), error) {
+	noop := func() {}
+	tmp, err := os.MkdirTemp("", "musubi-audio-*")
+	if err != nil {
+		return "", noop, err
+	}
+	cleanup := func() { os.RemoveAll(tmp) }
+	args := []string{
+		"--no-playlist", "--no-warnings", "--ignore-config",
+		"-x", "--audio-format", "wav",
+		"--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
+		"-o", filepath.Join(tmp, "audio.%(ext)s"),
+	}
+	if opts.CookiesFromBrowser != "" {
+		args = append(args, "--cookies-from-browser", opts.CookiesFromBrowser)
+	}
+	if opts.CookiesFile != "" {
+		args = append(args, "--cookies", opts.CookiesFile)
+	}
+	args = append(args, rawURL)
+
+	cmd := exec.CommandContext(ctx, f.bin, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	wavs, _ := filepath.Glob(filepath.Join(tmp, "*.wav"))
+	if len(wavs) == 0 {
+		cleanup()
+		return "", noop, fmt.Errorf("yt-dlp no dejó audio wav (¿falta ffmpeg?)")
+	}
+	return wavs[0], cleanup, nil
 }
 
 // readInfoJSON encuentra y parsea el *.info.json del dir.
