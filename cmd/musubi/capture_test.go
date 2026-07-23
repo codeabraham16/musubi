@@ -111,6 +111,41 @@ func TestCaptureCommitsLocalSinTeamMode(t *testing.T) {
 	}
 }
 
+// A2 (captura origin-side multi-repo): con una CLAVE DE CURSOR POR REPO, varios repos se capturan en
+// la MISMA memoria (el cerebro central) sin pisarse el HEAD entre sí. Es lo que habilita el timer que
+// corre `capture --repo <mirror>` por cada repo de Forgejo.
+func TestCaptureCommitsKeyedCursorPorRepo(t *testing.T) {
+	store := &recordingStore{}
+	repoA := &fakeGit{head: "a1", commits: []commit{{SHA: "a1", Subject: "feat: algo grande del repo A"}}}
+	repoB := &fakeGit{head: "b1", commits: []commit{{SHA: "b1", Subject: "fix: algo grande del repo B"}}}
+
+	keyA := repoCursorKey("/srv/repos/a.git")
+	keyB := repoCursorKey("/srv/repos/b.git")
+	if keyA == keyB {
+		t.Fatal("dos repos distintos deben tener claves de cursor distintas")
+	}
+
+	if n, err := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); err != nil || n != 1 {
+		t.Fatalf("repo A: (%d, %v), esperaba 1", n, err)
+	}
+	// Repo B con SU propio cursor captura, sin que el HEAD de A lo bloquee.
+	if n, err := captureCommitsKeyed(store, repoB, nil, nil, memory.ScopeShared, keyB); err != nil || n != 1 {
+		t.Fatalf("repo B: (%d, %v), esperaba 1 (el cursor de A no debe interferir)", n, err)
+	}
+	// Cada cursor apunta al HEAD de SU repo.
+	if store.meta[keyA] != "a1" || store.meta[keyB] != "b1" {
+		t.Errorf("cursores cruzados: keyA=%q (quería a1), keyB=%q (quería b1)", store.meta[keyA], store.meta[keyB])
+	}
+	// Re-capturar A con su cursor: ya está al día ⇒ 0 nuevos.
+	if n, _ := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); n != 0 {
+		t.Errorf("re-captura de A: esperaba 0 (al día), obtuve %d", n)
+	}
+	// repoCursorKey es determinista y namespaced bajo la clave global.
+	if repoCursorKey("/srv/repos/a.git") != keyA || !strings.HasPrefix(keyA, metaCaptureLastCommit+":") {
+		t.Errorf("repoCursorKey no es determinista/namespaced: %q", keyA)
+	}
+}
+
 // El gemelo del SQUASH-MERGE: GitHub crea en main un commit nuevo con el MISMO mensaje más el
 // sufijo `(#123)`, y reescribe el trailer Co-Authored-By → Co-authored-by. Sin normalizar, la
 // captura lo guardaba como una memoria NUEVA (el dedup por hash exacto no lo agarra: el texto cambió
