@@ -36,6 +36,7 @@ var DefaultLangs = []string{"es", "en"}
 type Result struct {
 	SourceURL        string `json:"source_url"`
 	Platform         string `json:"platform"`
+	ID               string `json:"id,omitempty"` // id nativo de la plataforma (ej. video_id de YouTube); "" para artículos
 	Kind             string `json:"kind"`
 	Title            string `json:"title,omitempty"`
 	Author           string `json:"author,omitempty"`
@@ -44,7 +45,8 @@ type Result struct {
 	DurationSeconds  int    `json:"duration_seconds,omitempty"`
 	Text             string `json:"text"`
 	TranscriptSource string `json:"transcript_source"`
-	Note             string `json:"note,omitempty"` // aviso accionable (degradación, bloqueo por cookies, etc.)
+	Note             string `json:"note,omitempty"`     // aviso accionable (degradación, bloqueo por cookies, etc.)
+	SavedID          string `json:"saved_id,omitempty"` // id de la observación si se persistió (--save)
 }
 
 // Options modula una ingesta.

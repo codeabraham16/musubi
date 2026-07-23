@@ -93,6 +93,7 @@ func buildMediaResult(rawURL string, m ytMeta, vtt, subLang string) Result {
 	r := Result{
 		SourceURL:       rawURL,
 		Platform:        platform,
+		ID:              strings.TrimSpace(m.ID),
 		Kind:            KindVideo,
 		Title:           strings.TrimSpace(m.Title),
 		Author:          firstNonEmpty(m.Uploader, m.Channel),

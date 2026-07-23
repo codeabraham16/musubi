@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/config"
+	"musubi/internal/embedding"
 	"musubi/internal/ingest"
+	"musubi/internal/memory"
 )
 
 // ingest.go implementa `musubi ingest <url>`: convierte un link (video, red social, artículo) en
@@ -22,6 +25,7 @@ func runIngest(args []string) {
 		asKind      = fs.String("as", "", "forzar la ruta: article|video (default: auto por el host)")
 		lang        = fs.String("lang", "", "idioma(s) de subtítulos preferidos, coma-separados (ej. es,en)")
 		asJSON      = fs.Bool("json", false, "salida en JSON")
+		save        = fs.Bool("save", false, "persistir el texto en la memoria del cerebro (default: solo mostrar)")
 		doctor      = fs.Bool("doctor", false, "reporta los motores de ingesta detectados y sale")
 		cookiesFrom = fs.String("cookies-from-browser", "", "navegador para tomar cookies (chrome, firefox…) — para IG/FB/X")
 		cookiesFile = fs.String("cookies-file", "", "archivo de cookies Netscape para yt-dlp")
@@ -72,6 +76,18 @@ func runIngest(args []string) {
 		os.Exit(1)
 	}
 
+	// --save (R6): persistir el texto en memoria. "las dos cosas": por defecto solo se muestra; con
+	// --save además se guarda como conocimiento durable del cerebro (idempotente por URL/id).
+	if *save {
+		if strings.TrimSpace(res.Text) == "" {
+			fmt.Fprintln(os.Stderr, "ingest: no hay texto para guardar (--save omitido)")
+		} else if id, serr := saveIngest(res); serr != nil {
+			fmt.Fprintf(os.Stderr, "ingest: no pude guardar en memoria: %v\n", serr)
+		} else {
+			res.SavedID = id
+		}
+	}
+
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -103,6 +119,47 @@ func splitCommaTrim(s string) []string {
 	return out
 }
 
+// saveIngest persiste el Result en la memoria local del cerebro y devuelve el id de la observación.
+// El id/topic_key son DETERMINÍSTICOS (ver ingest.PersistKey): re-ingerir la misma URL UPSERTEA la
+// misma fila en vez de duplicar (idempotencia, R10). Estampa el embedding si la semántica está
+// encendida, igual que la captura de commits, para que participe del recall semántico.
+func saveIngest(res ingest.Result) (string, error) {
+	root := workspaceDir()
+	if err := ensureWorkspace(root); err != nil {
+		return "", err
+	}
+	engine, err := memory.NewDbEngine(root)
+	if err != nil {
+		return "", err
+	}
+	defer engine.Close()
+
+	topicKey, obsID := ingest.PersistKey(res)
+	content := ingest.RenderForMemory(res)
+
+	var vec []float32
+	cfg, _ := config.Load(root)
+	embedder := resolveEmbedder(cfg, root)
+	if embedding.Enabled(embedder) {
+		engine.SetVectorModelID(embedder.Name())
+		ectx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if v, eerr := embedder.Embed(ectx, content); eerr == nil {
+			vec = v
+		}
+	}
+
+	// Scope: local por defecto; en team mode viaja al cerebro central (como la captura de commits).
+	scope := memory.ScopeLocal
+	if cfg.Memory.TeamMode {
+		scope = memory.ScopeShared
+	}
+	if err := engine.SaveObservationTyped(obsID, topicKey, content, 1.0, "semantic", scope, vec); err != nil {
+		return "", err
+	}
+	return obsID, nil
+}
+
 // reportIngestEngines imprime qué motores de ingesta hay disponibles (R7).
 func reportIngestEngines(ytdlp string) {
 	fmt.Println(cBold("Motores de ingesta:"))
@@ -132,6 +189,9 @@ func printIngestHuman(r ingest.Result) {
 	fmt.Println(cDim("fuente del texto: " + r.TranscriptSource))
 	if r.Note != "" {
 		fmt.Println(cYellow("⚠ " + r.Note))
+	}
+	if r.SavedID != "" {
+		fmt.Println(cGreen("✔ guardado en memoria: " + r.SavedID))
 	}
 	if r.Text != "" {
 		words := len(strings.Fields(r.Text))
