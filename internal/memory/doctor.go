@@ -60,7 +60,9 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
 		{code: "stale_gists", run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
+		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
 		{code: "offhost_backup", run: checkOffhostBackup},
+		{code: "outbox_stall", run: checkOutboxStall},
 	}
 }
 
@@ -78,6 +80,13 @@ const offhostErrorMarkerName = ".last_offhost_error"
 // que el dead-man's-switch avise. El timer del cerebro corre a diario; 48h = dos corridas
 // perdidas, señal clara de que el timer dejó de shipear (no un atraso puntual de una corrida).
 const offhostBackupStaleAfter = 48 * time.Hour
+
+// outboxStallAfter es cuánto puede quedar una observación 'shared' pendiente de envío antes de que
+// el doctor lo marque. Un nodo que sincroniza drena el outbox en segundos; una pendiente de HORAS
+// sólo pasa si el drain NO está corriendo. Es el detector del stall SILENCIOSO que dejó cientos de
+// filas 9 días sin que nada avisara: convierte una pila invisible en un warning visible. 6h tolera
+// un corte puntual del central/VPN (esas filas llevan last_error) sin gritar por un atraso menor.
+const outboxStallAfter = 6 * time.Hour
 
 // autoHealCodes son los checks de BAJO riesgo que el auto-mantenimiento repara sin
 // supervisión: tienen apply mecánico con backup. schema_migrations y db_integrity quedan
@@ -321,6 +330,31 @@ func checkOffhostBackup(e *DbEngine) CheckResult {
 	}
 	return CheckResult{Code: "offhost_backup", Status: "ok",
 		Message: fmt.Sprintf("último backup off-host hace %s", time.Since(okInfo.ModTime()).Round(time.Hour))}
+}
+
+// checkOutboxStall es el detector del STALL SILENCIOSO del sync saliente (F2). Un nodo sano drena el
+// outbox en segundos; que haya observaciones 'shared' pendientes desde hace horas sólo pasa si el
+// drain no corre. Distingue por last_error: VACÍO ⇒ nunca se intentó enviar (el drain ni arrancó:
+// bloque sync ausente/inválido, o un nodo terminal con filas huérfanas de un binario viejo); CON
+// error ⇒ el envío viene fallando (central/VPN caídos). Es INFORMATIVO y no reparable a ciegas: si
+// purgar o reintentar depende de saber si el nodo DEBE sincronizar, y eso lo sabe el arranque (que
+// tiene la config), no el doctor. Outbox vacío o al día ⇒ ok. Cierra el agujero que dejó 650 filas
+// 9 días en silencio: ahora el doctor y el hook de arranque lo muestran en amarillo.
+func checkOutboxStall(e *DbEngine) CheckResult {
+	h, err := e.OutboxHealth()
+	if err != nil {
+		return CheckResult{Code: "outbox_stall", Status: "error", Message: "no se pudo leer la salud del outbox: " + err.Error()}
+	}
+	if h.Pending == 0 || h.OldestPendingAgeSec < int64(outboxStallAfter.Seconds()) {
+		return CheckResult{Code: "outbox_stall", Status: "ok", Message: "el outbox del sync saliente está al día"}
+	}
+	age := (time.Duration(h.OldestPendingAgeSec) * time.Second).Round(time.Hour)
+	if strings.TrimSpace(h.LastError) == "" {
+		return CheckResult{Code: "outbox_stall", Status: "warning",
+			Message: fmt.Sprintf("%d observación(es) 'shared' llevan hasta %s pendientes SIN UN SOLO intento de envío: el drain del sync no está corriendo (bloque sync ausente/inválido, o nodo terminal). Un nodo terminal se auto-purga al reiniciar el binario; si debería sincronizar, revisá el bloque sync de .musubi/config.yaml", h.Pending, age)}
+	}
+	return CheckResult{Code: "outbox_stall", Status: "warning",
+		Message: fmt.Sprintf("%d observación(es) 'shared' pendientes desde hace %s; el envío al central viene fallando: %s", h.Pending, age, h.LastError)}
 }
 
 func checkDBIntegrity(e *DbEngine) CheckResult {
@@ -598,6 +632,109 @@ func applyRegenGists(e *DbEngine) (int, error) {
 		}
 	}
 	return len(pendientes), nil
+}
+
+// checkStaleConflicts detecta relaciones de conflicto `pending` que las GUARDAS ACTUALES nunca
+// habrían creado — residuo histórico de antes de que existieran (complementaryPair / DetectOnly).
+// Dos clases, ambas ruido puro que erosiona la credibilidad de la cola de musubi_judge:
+//   - TARGET HISTÓRICO: el destino es un commit o un artefacto SDD (libro mayor: se cita, no se
+//     tacha). complementaryPair hoy saltea el par; las viejas quedaron encoladas para siempre.
+//   - RECÍPROCO DUPLICADO: existen A→B y B→A (la contradicción es simétrica); sobra una dirección.
+// Ninguna clase toca observaciones ni relaciones ya RESUELTAS: sólo poda pendings que no aportan un
+// veredicto posible. Reversible en el sentido de que se regenerarían si el par fuera real (no lo es).
+func checkStaleConflicts(e *DbEngine) CheckResult {
+	n, err := countStaleConflicts(e)
+	if err != nil {
+		return CheckResult{Code: "stale_conflicts", Status: "error", Message: err.Error(), Repairable: true}
+	}
+	if n > 0 {
+		return CheckResult{Code: "stale_conflicts", Status: "warning", Repairable: true,
+			Message: fmt.Sprintf("%d relación(es) de conflicto 'pending' son ruido que las guardas actuales ya no crean (target histórico o recíproco duplicado); se pueden podar sin perder ningún veredicto real", n)}
+	}
+	return CheckResult{Code: "stale_conflicts", Status: "ok", Message: "la cola de conflictos no tiene ruido estructural"}
+}
+
+// staleConflictIDs devuelve los ids de las relaciones 'pending' a podar: (1) las de target histórico
+// (reusa historicalRecord, la MISMA regla que complementaryPair, para no divergir) y (2) el lado
+// no-canónico (source_id > target_id) de cada par recíproco pending. Determinista, sin borrar nada.
+func staleConflictIDs(e *DbEngine) ([]string, error) {
+	dead := map[string]bool{}
+
+	// (1) Target histórico: JOIN a observations por target_id y filtro con historicalRecord en Go
+	// (misma función que la detección) — no una aproximación en SQL que pueda divergir de la guarda.
+	rows, err := e.db.Query(`
+		SELECT r.id, COALESCE(o.topic_key,'')
+		FROM observation_relations r JOIN observations o ON o.id = r.target_id
+		WHERE r.status = ?`, RelStatusPending)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar conflictos con target histórico: %w", err)
+	}
+	for rows.Next() {
+		var id, topicKey string
+		if err := rows.Scan(&id, &topicKey); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if historicalRecord(topicKey) {
+			dead[id] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	// (2) Recíproco duplicado: si existen A→B y B→A ambas pending, se poda el lado no-canónico
+	// (source_id > target_id) y se conserva source_id < target_id. La contradicción es simétrica.
+	rows2, err := e.db.Query(`
+		SELECT a.id FROM observation_relations a
+		JOIN observation_relations b ON b.source_id = a.target_id AND b.target_id = a.source_id
+		WHERE a.status = ? AND b.status = ? AND a.source_id > a.target_id`, RelStatusPending, RelStatusPending)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar conflictos recíprocos: %w", err)
+	}
+	for rows2.Next() {
+		var id string
+		if err := rows2.Scan(&id); err != nil {
+			rows2.Close()
+			return nil, err
+		}
+		dead[id] = true
+	}
+	if err := rows2.Err(); err != nil {
+		rows2.Close()
+		return nil, err
+	}
+	rows2.Close()
+
+	ids := make([]string, 0, len(dead))
+	for id := range dead {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func countStaleConflicts(e *DbEngine) (int, error) {
+	ids, err := staleConflictIDs(e)
+	return len(ids), err
+}
+
+func applyDeleteStaleConflicts(e *DbEngine) (int, error) {
+	ids, err := staleConflictIDs(e)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, id := range ids {
+		res, derr := e.db.Exec(`DELETE FROM observation_relations WHERE id = ?`, id)
+		if derr != nil {
+			return deleted, fmt.Errorf("error al podar la relación %q: %w", id, derr)
+		}
+		n, _ := res.RowsAffected()
+		deleted += int(n)
+	}
+	return deleted, nil
 }
 
 func checkOrphans(e *DbEngine) CheckResult {

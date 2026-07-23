@@ -114,6 +114,44 @@ func TestMonotonicDampeningWouldNotHaveHelped(t *testing.T) {
 	}
 }
 
+// El castigo por EDAD ABSOLUTA decrece con la edad pero NUNCA baja del piso: una vieja-pero-relevante
+// conserva la mitad de su score y puede ganar por contenido. Fecha ilegible ⇒ sin castigo.
+func TestAbsoluteRecencyFactorDecaysWithFloor(t *testing.T) {
+	now := testNow()
+	fresca := absoluteRecencyFactor(iso(now.AddDate(0, 0, -1)), now)
+	media := absoluteRecencyFactor(iso(now.AddDate(0, 0, -180)), now)
+	muyVieja := absoluteRecencyFactor(iso(now.AddDate(0, 0, -900)), now)
+
+	if !(fresca > media && media >= muyVieja) {
+		t.Errorf("el factor debe decrecer con la edad: fresca=%.3f media=%.3f muyVieja=%.3f", fresca, media, muyVieja)
+	}
+	if fresca < 0.99 {
+		t.Errorf("una memoria de ayer casi no se castiga, obtuve %.3f", fresca)
+	}
+	if muyVieja < recallAgeFloor-1e-9 {
+		t.Errorf("el castigo NUNCA baja del piso (%.2f); obtuve %.3f", recallAgeFloor, muyVieja)
+	}
+	if f := absoluteRecencyFactor("no-es-fecha", now); f != 1.0 {
+		t.Errorf("fecha ilegible ⇒ factor 1.0 (sin castigo), obtuve %.3f", f)
+	}
+}
+
+// End-to-end del ranker: cuando el contenido queda casi EMPATADO (el caso real de scores planos
+// 0.05–0.09), la edad absoluta desempata a favor de lo fresco. Acá la vieja tiene una VENTAJA léxica
+// de un rango que compensa exactamente su desventaja de recencia ordinal (base RRF idéntica); sin el
+// castigo de edad quedaría primera por orden de entrada — con él, gana la fresca.
+func TestScoreCandidatesAgePenaltyBreaksNearTie(t *testing.T) {
+	now := testNow()
+	vieja := candidate{id: "vieja", createdAt: iso(now.AddDate(0, 0, -300))}
+	fresca := candidate{id: "fresca", createdAt: iso(now.AddDate(0, 0, -2))}
+	lex := map[string]int{"vieja": 0, "fresca": 1} // la vieja matchea un poco mejor el keyword
+
+	scored := scoreCandidates([]candidate{vieja, fresca}, lex, nil, nil, nil, now)
+	if scored[0].id != "fresca" {
+		t.Errorf("en un casi-empate de contenido, la edad debe desempatar a favor de la fresca; obtuve %s primero", scored[0].id)
+	}
+}
+
 // N4.c — la tasa no explota con edad ≈ 0 (el +1 del denominador).
 func TestAccessRateDoesNotExplodeOnBrandNew(t *testing.T) {
 	now := testNow()

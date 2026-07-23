@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,17 @@ const (
 	defaultCandidatePool = 50
 	// rrfK es la constante de Reciprocal Rank Fusion (estándar ~60).
 	rrfK = 60
+	// recallAgeHalfLifeDays / recallAgeFloor gobiernan el CASTIGO POR EDAD ABSOLUTA del recall.
+	// recencyRank es un rango ORDINAL dentro del pool: sólo dice quién es más nuevo, no CUÁNTO — con
+	// un pool de ~50, la diferencia de "recencia" entre una nota de ayer y una de 8 meses es de
+	// milésimas (1/(60+k)), y el score del pool queda casi plano (0.05–0.09), así que una vieja bien
+	// matcheada le gana a una fresca por ruido. Este factor es CONTINUO sobre la edad real: 1.0 para
+	// lo recién creado, decae con vida media de 180 días y NUNCA baja del piso (0.5). O sea: desempata
+	// a favor de lo fresco y hunde lo MUY viejo, pero jamás borra una memoria vieja-pero-relevante
+	// (conserva la mitad de su score y puede ganar por señal de contenido). Multiplicativo sobre el
+	// RRF ⇒ no rompe el balance interno de los términos, sólo modula el conjunto por antigüedad.
+	recallAgeHalfLifeDays = 180.0
+	recallAgeFloor        = 0.5
 )
 
 // RecallOptions configura un recall. Los ceros usan los defaults.
@@ -87,6 +99,11 @@ type RecallItem struct {
 	Gist       string  `json:"gist"`
 	Score      float64 `json:"score"`
 	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	// CreatedAt es la fecha ISO8601 de creación. Viaja para que la superficie (los gists que el hook
+	// inyecta en el contexto) pueda mostrar la EDAD de cada memoria: sin ella el agente no distingue
+	// una nota de ayer de una de 8 meses y trata la vieja como verdad ACTUAL — la raíz de la
+	// "divagación" por memoria caduca. omitempty ⇒ no ensucia la respuesta si falta la fecha.
+	CreatedAt string `json:"created_at,omitempty"`
 	// Author es la atribución por PERSONA (C5.1): quién aportó la memoria. omitempty ⇒ no ensucia
 	// la respuesta cuando no hay atribución (captura local/legacy/stdio).
 	Author string `json:"author,omitempty"`
@@ -259,6 +276,7 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 			Gist:        gist,
 			Score:       c.score,
 			FullTokens:  c.fullTokens,
+			CreatedAt:   c.createdAt,
 			Author:      c.author,
 			ContentHash: c.contentHash,
 		})
@@ -331,7 +349,10 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank ma
 		// importancia queda a la misma escala que los otros pools: desempata cuando la relevancia
 		// es comparable, no la override. impRank está definido para todo candidato (no es opcional).
 		rrf += 1.0 / float64(rrfK+impRank[c.id])
-		out[i] = scoredCandidate{candidate: c, score: rrf}
+		// Castigo por EDAD ABSOLUTA (no ordinal): desempata a favor de lo fresco y hunde lo muy viejo
+		// sin borrarlo (nunca baja del piso). Ver recallAgeHalfLifeDays. Es lo que corta la
+		// "divagación" por memoria caduca que el rango ordinal de recencia no lograba separar.
+		out[i] = scoredCandidate{candidate: c, score: rrf * absoluteRecencyFactor(c.createdAt, now)}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
 	return out
@@ -514,6 +535,23 @@ func ageDays(createdAt string, now time.Time) float64 {
 		return 0 // fecha futura (reloj torcido): tratarla como recién creada
 	}
 	return d
+}
+
+// absoluteRecencyFactor es el multiplicador por EDAD ABSOLUTA que modula el score RRF: 1.0 para algo
+// recién creado y un decaimiento exponencial (vida media recallAgeHalfLifeDays) que NUNCA baja de
+// recallAgeFloor. A diferencia de recencyRank (ordinal, dentro del pool), mira la edad real, así que
+// separa de verdad una nota de ayer de una de meses. Edad desconocida (fecha no parseable) ⇒ 1.0
+// (sin castigo): misma degradación segura que ageDays/accessRate.
+func absoluteRecencyFactor(createdAt string, now time.Time) float64 {
+	age := ageDays(createdAt, now)
+	if age <= 0 {
+		return 1.0
+	}
+	f := math.Pow(0.5, age/recallAgeHalfLifeDays)
+	if f < recallAgeFloor {
+		return recallAgeFloor
+	}
+	return f
 }
 
 // accessRate es la señal de frecuencia del recall: usos por día de vida, NO el total acumulado.
