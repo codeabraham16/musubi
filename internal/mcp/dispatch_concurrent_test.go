@@ -105,7 +105,7 @@ func TestDispatchConcurrentSafe(t *testing.T) {
 				// tools/list debe devolver siempre el catálogo completo, incluso bajo carga.
 				if req.Method == "tools/list" {
 					if m, isMap := resp.Result.(map[string]interface{}); isMap {
-						if tools, isSlice := m["tools"].([]Tool); isSlice && len(tools) == 36 {
+						if tools, isSlice := m["tools"].([]Tool); isSlice && len(tools) == 40 {
 							mu.Lock()
 							toolsListOK++
 							mu.Unlock()

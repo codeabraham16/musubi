@@ -24,6 +24,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - **Poblado como efecto de `save_code`.** Guardar el gist de un `.go` deriva y persiste el grafo de
     su paquete (best-effort, no falla el guardado). En F1 **no hay tool pública ni hook que responda
     consultas** — eso es F2. Las aristas son **sólo derivadas**, nunca provistas por el agente.
+- **Consultar el grafo de código sin leer archivos (Track 20 · F2-A).** Cuatro tools MCP nuevas,
+  model-free: `musubi_codegraph_index` (indexa el repo entero: recorre los paquetes Go y persiste su
+  grafo), y tres de consulta read-only y scopeadas — `musubi_code_graph` (callees/callers/imports de
+  un símbolo, o los símbolos de un archivo), `musubi_impact` (cierre transitivo de callers: "qué se
+  rompe si cambio X") y `musubi_map` (panorama: conteos, god-nodes por grado, entry points). Cada
+  respuesta **anota `stale`** comparando el fingerprint guardado con el actual del archivo (cierra el
+  gap de staleness de F1). El hook `PreToolUse` que inyecta el subgrafo antes de leer queda para F2-B
+  (con opt-in de config).
 
 ## [0.94.0] - 2026-07-17
 

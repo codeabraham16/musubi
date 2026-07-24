@@ -38,6 +38,19 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 	if _, err := e.SaveFactFrom("web", "SharedEntity", "relates_to", "VICTIMFACT", "", nil); err != nil {
 		t.Fatal(err)
 	}
+	// Grafo de código de web (Track 20 F2): VictimCaller --CALLS--> VictimCallee. Los markers son
+	// el EXTREMO OPUESTO al que se consulta (así no se filtran por el eco del arg): code_graph pide
+	// VictimCaller y el marker es VictimCallee; impact pide VictimCallee y el marker es VictimCaller.
+	if err := e.UpsertPackageGraphFrom("web", []string{"shared/auth.go"},
+		[]memory.GraphNode{
+			{Key: "shared/auth.go#func:VictimCaller", Kind: "func", Name: "VictimCaller", Path: "shared/auth.go", SrcFingerprint: "h"},
+			{Key: "shared/auth.go#func:VictimCallee", Kind: "func", Name: "VictimCallee", Path: "shared/auth.go", SrcFingerprint: "h"},
+		},
+		[]memory.GraphEdge{
+			{FromKey: "shared/auth.go#func:VictimCaller", ToKey: "shared/auth.go#func:VictimCallee", Kind: "CALLS", Confidence: 1, Provenance: "EXTRACTED", SrcPath: "shared/auth.go", SrcFingerprint: "h"},
+		}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // readSweepCase es una superficie de lectura y el marcador del tenant "web" que NO debe filtrar.
@@ -60,6 +73,9 @@ func readSweepCases() []readSweepCase {
 		{"musubi_recall_code", map[string]any{"path": "shared/auth.go"}, "VICTIMGIST"},
 		{"musubi_insights", map[string]any{}, "shared/auth.go"}, // hotspot file_path de la telemetria de web
 		{"musubi_resolve_skills", map[string]any{"modified_files": []string{"auth.go"}}, "VICTIMTELEM"},
+		{"musubi_code_graph", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "VictimCallee"},
+		{"musubi_impact", map[string]any{"symbol": "shared/auth.go#func:VictimCallee"}, "VictimCaller"},
+		{"musubi_map", map[string]any{}, "Victim"},
 	}
 }
 

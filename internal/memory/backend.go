@@ -97,6 +97,18 @@ type CodeGraphStore interface {
 	GetGraphNodeCtx(ctx context.Context, nodeKey string) (GraphNode, bool, error)
 	// GraphOutEdgesCtx devuelve las aristas salientes de un nodo, scopeadas al proyecto.
 	GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]GraphEdge, error)
+	// GraphInEdgesCtx devuelve las aristas entrantes a un nodo (sus callers), scopeadas (F2).
+	GraphInEdgesCtx(ctx context.Context, toKey string) ([]GraphEdge, error)
+	// GraphImpactCtx devuelve el cierre transitivo de callers (BFS acotado), scopeado (F2).
+	GraphImpactCtx(ctx context.Context, key string, maxDepth, maxNodes int) ([]string, error)
+	// GraphStatsCtx devuelve conteo de nodos y aristas por kind, scopeado (F2).
+	GraphStatsCtx(ctx context.Context) (int, map[string]int, error)
+	// GraphTopByDegreeCtx devuelve los N nodos con mayor grado CALLS (god-nodes), scopeado (F2).
+	GraphTopByDegreeCtx(ctx context.Context, n int) ([]GraphDegree, error)
+	// GraphEntryPointsCtx devuelve funcs/métodos sin callers internos (entry points), scopeado (F2).
+	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error)
+	// ListGraphNodesForFileCtx devuelve los símbolos de un archivo, scopeado (F2).
+	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]GraphNode, error)
 }
 
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.

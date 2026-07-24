@@ -2,10 +2,38 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// decodeCG decodifica el JSON de una respuesta MCP a un mapa.
+func decodeCG(t *testing.T, res interface{}) map[string]interface{} {
+	t.Helper()
+	resp, ok := res.(CallToolResponse)
+	if !ok || len(resp.Content) == 0 {
+		t.Fatalf("respuesta inesperada: %#v", res)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(resp.Content[0].Text), &m); err != nil {
+		t.Fatalf("no se pudo decodear: %v\ntext=%s", err, resp.Content[0].Text)
+	}
+	return m
+}
+
+func containsInAny(v interface{}, want string) bool {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, x := range arr {
+		if s, ok := x.(string); ok && s == want {
+			return true
+		}
+	}
+	return false
+}
 
 // writeFile es un helper local para armar el proyecto de prueba.
 func writeFile(t *testing.T, path, content string) {
@@ -81,4 +109,57 @@ func TestSaveCodeTriggersGraph(t *testing.T) {
 	if !hasCall {
 		t.Errorf("esperaba CALLS main→Helper por el trigger de save_code, edges=%+v", edges)
 	}
+}
+
+// TestCodegraphQueryToolsE2E ejercita el índice de repo + las 3 tools de consulta + staleness.
+func TestCodegraphQueryToolsE2E(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/proj\n")
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\nfunc Alpha() { beta() }\n\nfunc beta() {}\n")
+	s := newTestServerWithPath(t, dir)
+
+	// Index de todo el repo.
+	idx := decodeCG(t, mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{}))
+	if n, _ := idx["nodes"].(float64); n <= 0 {
+		t.Fatalf("el índice debería poblar nodos, got %v", idx["nodes"])
+	}
+
+	// code_graph sobre Alpha: beta en callees.
+	cg := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/a.go#func:Alpha"}))
+	if cg["found"] != true {
+		t.Fatalf("Alpha debería encontrarse: %v", cg)
+	}
+	if !containsInAny(cg["callees"], "pkg/a.go#func:beta") {
+		t.Errorf("callees de Alpha debería incluir beta, got %v", cg["callees"])
+	}
+
+	// impact sobre beta: Alpha en callers.
+	im := decodeCG(t, mustCall(t, s, "musubi_impact", map[string]interface{}{"symbol": "pkg/a.go#func:beta"}))
+	if !containsInAny(im["callers"], "pkg/a.go#func:Alpha") {
+		t.Errorf("impact de beta debería incluir Alpha, got %v", im["callers"])
+	}
+
+	// map: nodos > 0 y algún entry point.
+	mp := decodeCG(t, mustCall(t, s, "musubi_map", map[string]interface{}{}))
+	if n, _ := mp["nodes"].(float64); n <= 0 {
+		t.Errorf("map debería reportar nodos, got %v", mp["nodes"])
+	}
+
+	// staleness: mutar a.go sin re-indexar ⇒ el nodo se reporta stale.
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\n// cambio\nfunc Alpha() { beta() }\n\nfunc beta() {}\n")
+	cg2 := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/a.go#func:Alpha"}))
+	node, _ := cg2["node"].(map[string]interface{})
+	if node == nil || node["stale"] != true {
+		t.Errorf("tras mutar el archivo, Alpha debería reportarse stale, got node=%v", node)
+	}
+}
+
+// mustCall corre una tool y falla si devuelve error JSON-RPC.
+func mustCall(t *testing.T, s *McpServer, name string, args map[string]interface{}) interface{} {
+	t.Helper()
+	res, rpcErr := call(t, s, name, args)
+	if rpcErr != nil {
+		t.Fatalf("%s: %+v", name, rpcErr)
+	}
+	return res
 }

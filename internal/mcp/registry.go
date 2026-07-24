@@ -627,6 +627,60 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			handler:  s.toolSyncPull,
 			readOnly: true,
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_codegraph_index",
+				Description: "Indexa el GRAFO DE CÓDIGO del proyecto entero (Track 20): recorre todos los paquetes Go, deriva del AST (model-free) sus símbolos y aristas (IMPORTS/CONTAINS/CALLS) y los persiste, para luego consultarlos SIN leer archivos. Corre esto una vez (o tras cambios grandes) antes de usar musubi_code_graph / musubi_impact / musubi_map. Salta .git/.musubi/vendor/testdata. Devuelve {packages, nodes, edges}.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler: s.toolCodegraphIndex,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_code_graph",
+				Description: "Consulta el grafo de código SIN leer archivos (Track 20). Con 'symbol' (node_key 'path#kind:name') devuelve el nodo + sus callees (a quién llama), callers (quién lo llama) e imports de su archivo. Con 'path' devuelve los símbolos que contiene el archivo + sus imports. Marca 'stale' si el archivo cambió desde que se indexó (conviene re-indexar). Salida compacta (claves, no cuerpos): la forma barata en tokens de navegar el código.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"symbol": {Type: "string", Description: "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/mcp/methods.go#func:toolSaveCode')"},
+						"path":   {Type: "string", Description: "Ruta de un archivo (alternativa a symbol): devuelve sus símbolos e imports"},
+					},
+				},
+			},
+			handler:  s.toolCodeGraph,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_impact",
+				Description: "'¿Qué se rompe si cambio esto?' (Track 20): devuelve el cierre TRANSITIVO de callers de un símbolo (quién lo llama directa o indirectamente), recorriendo el grafo de CALLS hacia atrás (BFS acotado, model-free). Útil antes de modificar una función para dimensionar el blast radius. Requiere que el grafo esté indexado (musubi_codegraph_index).",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"symbol":    {Type: "string", Description: "node_key del símbolo a analizar ('path#kind:name')"},
+						"max_depth": {Type: "number", Description: "Profundidad máxima del recorrido (opcional, default 5)"},
+					},
+					Required: []string{"symbol"},
+				},
+			},
+			handler:  s.toolImpact,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_map",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes) y los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports). Requiere el grafo indexado. Sin parámetros.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  s.toolMap,
+			readOnly: true,
+		},
 	}
 	// musubi_ingest_url va SIEMPRE (daemon local y cerebro central). En infra compartida el handler
 	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del
