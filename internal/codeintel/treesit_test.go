@@ -22,6 +22,13 @@ func TestDerivePolyglot(t *testing.T) {
 	if !hasEdge(g, "pkg/a.ts#func:Alpha", "pkg/a.ts#func:beta", EdgeCalls) {
 		t.Error("falta CALLS Alpha → beta (TS)")
 	}
+	// Imports TS (extraídos del árbol, no del extractor de la lib que da 0): './util' relativo → in-project.
+	if !hasEdge(g, "pkg/a.ts", PackageKey("./util"), EdgeImports) {
+		t.Error("falta IMPORTS a.ts → ./util (TS)")
+	}
+	if n := findNode(g, PackageKey("./util")); n == nil || n.External {
+		t.Errorf("el import relativo './util' debería ser package in-project (no external): %v", n)
+	}
 
 	// Py: símbolos + CALLS intra-archivo (alpha→beta) + IMPORTS.
 	if findNode(g, "pkg/b.py#func:alpha") == nil || findNode(g, "pkg/b.py#func:beta") == nil {

@@ -106,13 +106,10 @@ func derivePolyglotFile(path, content string) ([]Node, []Edge) {
 		spans = append(spans, defSpan{d.StartByte, d.EndByte, key})
 	}
 
-	// Imports → nodos package + IMPORTS. Relative>0 (import relativo) = in-project; bare = externo.
-	for _, im := range ts.ExtractImportsFromSource(lang, src) {
-		if im.Path == "" {
-			continue
-		}
-		pk := PackageKey(im.Path)
-		nodes = append(nodes, Node{Key: pk, Kind: KindPackage, Name: im.Path, External: im.Relative == 0})
+	// Imports → nodos package + IMPORTS. Bare = externo; relativo (empieza con ".") = in-project.
+	for _, im := range fileImports(path, tree.RootNode(), src, lang) {
+		pk := PackageKey(im.path)
+		nodes = append(nodes, Node{Key: pk, Kind: KindPackage, Name: im.path, External: im.external})
 		edges = append(edges, Edge{FromKey: fileKey, ToKey: pk, Kind: EdgeImports, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: path})
 	}
 
@@ -156,4 +153,58 @@ func lineAtByte(src []byte, off uint32) int {
 		off = uint32(len(src))
 	}
 	return 1 + bytes.Count(src[:off], []byte{'\n'})
+}
+
+// importDecl es un import derivado: su module path y si es externo (no in-project).
+type importDecl struct {
+	path     string
+	external bool
+}
+
+// fileImports devuelve los imports del archivo. Python usa el extractor de gotreesitter (que sí
+// los da); para TS/TSX/JS/JSX se recorre el árbol, porque gotreesitter NO extrae imports de esos
+// lenguajes (devuelve 0): un import ES es `(import_statement ... (string ...))` y el módulo es el
+// nodo `string`. Se deduplica por path. (require()/import() dinámico quedan fuera de F4.)
+func fileImports(path string, root *ts.Node, src []byte, lang *ts.Language) []importDecl {
+	if strings.ToLower(filepath.Ext(path)) == ".py" {
+		var out []importDecl
+		for _, im := range ts.ExtractImportsFromSource(lang, src) {
+			if im.Path != "" {
+				out = append(out, importDecl{path: im.Path, external: im.Relative == 0})
+			}
+		}
+		return out
+	}
+	var out []importDecl
+	seen := map[string]bool{}
+	var walk func(n *ts.Node)
+	walk = func(n *ts.Node) {
+		if n == nil {
+			return
+		}
+		if n.Type(lang) == "import_statement" {
+			if s := firstNamedChildOfType(n, "string", lang); s != nil {
+				p := strings.Trim(s.Text(src), "'\"`")
+				if p != "" && !seen[p] {
+					seen[p] = true
+					out = append(out, importDecl{path: p, external: !strings.HasPrefix(p, ".")})
+				}
+			}
+		}
+		for i := 0; i < n.NamedChildCount(); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return out
+}
+
+// firstNamedChildOfType devuelve el primer hijo nombrado de n con ese type, o nil.
+func firstNamedChildOfType(n *ts.Node, typ string, lang *ts.Language) *ts.Node {
+	for i := 0; i < n.NamedChildCount(); i++ {
+		if c := n.NamedChild(i); c.Type(lang) == typ {
+			return c
+		}
+	}
+	return nil
 }
