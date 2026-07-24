@@ -888,6 +888,22 @@
       }
     },
     {
+      "name": "musubi_code_context",
+      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/memory/codemem.go#func:SaveCodeMemory')"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    },
+    {
       "name": "musubi_ingest_url",
       "description": "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/\u003cplataforma\u003e/\u003cid\u003e, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
       "inputSchema": {

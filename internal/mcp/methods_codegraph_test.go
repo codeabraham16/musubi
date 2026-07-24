@@ -163,3 +163,39 @@ func mustCall(t *testing.T, s *McpServer, name string, args map[string]interface
 	}
 	return res
 }
+
+// TestCodeContextWeldsMemory valida el puente código↔memoria (F3): estructura + explained_by.
+func TestCodeContextWeldsMemory(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/proj\n")
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\nfunc Alpha() { beta() }\n\nfunc beta() {}\n")
+	s := newTestServerWithPath(t, dir)
+	mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{})
+
+	// Una decisión guardada que menciona el símbolo Alpha y su archivo.
+	if err := s.engine.SaveObservation("obs-alpha", "arq/alpha",
+		"Decisión sobre Alpha en pkg/a.go: se implementa así por rendimiento.", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// code_context: estructura (callees) + el porqué (explained_by).
+	cc := decodeCG(t, mustCall(t, s, "musubi_code_context", map[string]interface{}{"symbol": "pkg/a.go#func:Alpha"}))
+	if cc["found"] != true {
+		t.Fatalf("Alpha debería encontrarse: %v", cc)
+	}
+	if !containsInAny(cc["callees"], "pkg/a.go#func:beta") {
+		t.Errorf("callees debería incluir beta: %v", cc["callees"])
+	}
+	if !containsInAny(cc["explained_by"], "arq/alpha") {
+		t.Errorf("explained_by debería soldar la decisión arq/alpha: %v", cc["explained_by"])
+	}
+
+	// Símbolo sin nodo: found=false pero explained_by se computa igual (por el path del arg).
+	cc2 := decodeCG(t, mustCall(t, s, "musubi_code_context", map[string]interface{}{"symbol": "pkg/a.go#func:Nope"}))
+	if cc2["found"] != false {
+		t.Errorf("un símbolo inexistente debería dar found=false, got %v", cc2["found"])
+	}
+	if !containsInAny(cc2["explained_by"], "arq/alpha") {
+		t.Errorf("aún sin nodo, explained_by por path debería incluir arq/alpha: %v", cc2["explained_by"])
+	}
+}

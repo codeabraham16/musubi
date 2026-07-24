@@ -297,3 +297,106 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
 	})
 }
+
+// ---- F3: soldar el grafo de código a la memoria (Track 20 · F3) ----
+
+// symbolNameFromKey parsea un node_key "path#kind:name" y devuelve (path, name). El name de un
+// método viene calificado ("Recv.Metodo"). Si no tiene el separador, devuelve ("", key).
+func symbolNameFromKey(key string) (path, name string) {
+	i := strings.Index(key, "#")
+	if i < 0 {
+		return "", key
+	}
+	path = key[:i]
+	rest := key[i+1:] // kind:name
+	if j := strings.Index(rest, ":"); j >= 0 {
+		return path, rest[j+1:]
+	}
+	return path, rest
+}
+
+// explainedBy DERIVA el weld código→memoria: busca en las observaciones (FTS, ya scopeada por la
+// credencial) el nombre del símbolo y su archivo, y devuelve los topic_keys deduplicados de las
+// decisiones/gotchas que lo mencionan. No persiste ninguna arista (respeta el invariante de F1:
+// las aristas sólo se derivan). El agente expande el detalle con recall/memory_expand.
+func (s *McpServer) explainedBy(ctx context.Context, path, name string, limit int) []string {
+	if limit <= 0 {
+		limit = 5
+	}
+	terms := []string{}
+	if strings.TrimSpace(name) != "" {
+		terms = append(terms, name)
+	}
+	if strings.TrimSpace(path) != "" {
+		terms = append(terms, path, filepath.Base(path))
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, term := range terms {
+		obs, err := s.engine.SearchObservationsFTS(ctx, term, limit)
+		if err != nil {
+			continue
+		}
+		for _, o := range obs {
+			ref := o.TopicKey
+			if ref == "" {
+				ref = o.ID
+			}
+			if ref == "" || seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// toolCodeContext es el PUENTE código↔memoria (Track 20 · F3): dado un símbolo, devuelve su
+// estructura (nodo + callees/callers) Y las decisiones/gotchas que lo explican (`explained_by`,
+// derivado por FTS). Es el análogo de musubi_entity_context para el mundo del código: responde
+// "qué es esto, a qué llama, quién lo llama, y POR QUÉ es así / qué cuidado tiene".
+func (s *McpServer) toolCodeContext(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Symbol string `json:"symbol"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Symbol) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "se requiere 'symbol' (node_key path#kind:name)")
+	}
+	scoped := s.scopedCtx(ctx)
+	path, name := symbolNameFromKey(args.Symbol)
+
+	resp := map[string]interface{}{"symbol": args.Symbol}
+	n, found, err := s.engine.GetGraphNodeCtx(scoped, args.Symbol)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer el nodo: %v", err)
+	}
+	resp["found"] = found
+	if found {
+		resp["node"] = s.cgView(n)
+		if n.Path != "" {
+			path = n.Path
+		}
+		out, _ := s.engine.GraphOutEdgesCtx(scoped, args.Symbol)
+		in, _ := s.engine.GraphInEdgesCtx(scoped, args.Symbol)
+		callees, callers := []string{}, []string{}
+		for _, e := range out {
+			if e.Kind == codeintel.EdgeCalls {
+				callees = append(callees, e.ToKey)
+			}
+		}
+		for _, e := range in {
+			if e.Kind == codeintel.EdgeCalls {
+				callers = append(callers, e.FromKey)
+			}
+		}
+		resp["callees"] = callees
+		resp["callers"] = callers
+	}
+	// El weld: decisiones/gotchas que explican este símbolo (derivado, scopeado).
+	resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+	return jsonResult(resp)
+}

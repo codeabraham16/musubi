@@ -32,6 +32,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   respuesta **anota `stale`** comparando el fingerprint guardado con el actual del archivo (cierra el
   gap de staleness de F1). El hook `PreToolUse` que inyecta el subgrafo antes de leer queda para F2-B
   (con opt-in de config).
+- **El puente código↔memoria (Track 20 · F3).** Nueva tool `musubi_code_context` (read-only): dado un
+  símbolo devuelve su **estructura** (nodo + callees/callers) **y su porqué** — las decisiones/gotchas
+  de la memoria que lo mencionan (`explained_by`, topic_keys). Es el análogo de `musubi_entity_context`
+  para el código. El weld se **deriva al consultar** (FTS por nombre/archivo, scopeada por proyecto),
+  **no** como arista escrita a mano — respeta el invariante de F1 ("aristas sólo derivadas") y no se
+  pudre. Es el diferencial del Track: *qué es esto, a qué llama, quién lo llama, y por qué es así*.
 
 ## [0.94.0] - 2026-07-17
 

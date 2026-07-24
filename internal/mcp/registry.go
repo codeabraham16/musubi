@@ -681,6 +681,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			handler:  s.toolMap,
 			readOnly: true,
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_code_context",
+				Description: "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"symbol": {Type: "string", Description: "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/memory/codemem.go#func:SaveCodeMemory')"},
+					},
+					Required: []string{"symbol"},
+				},
+			},
+			handler:  s.toolCodeContext,
+			readOnly: true,
+		},
 	}
 	// musubi_ingest_url va SIEMPRE (daemon local y cerebro central). En infra compartida el handler
 	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del

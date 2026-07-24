@@ -76,6 +76,8 @@ func readSweepCases() []readSweepCase {
 		{"musubi_code_graph", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "VictimCallee"},
 		{"musubi_impact", map[string]any{"symbol": "shared/auth.go#func:VictimCallee"}, "VictimCaller"},
 		{"musubi_map", map[string]any{}, "Victim"},
+		// code_context: el weld deriva explained_by de la obs de web (topic_key web/topic) por el path.
+		{"musubi_code_context", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "web/topic"},
 	}
 }
 
