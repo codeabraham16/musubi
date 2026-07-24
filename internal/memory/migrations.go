@@ -531,6 +531,61 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 18,
+			name:    "code_graph",
+			// GRAFO DE CÓDIGO derivado del AST (Track 20 · F1). Dos tablas nuevas —nodos y
+			// aristas— scopeadas por project_id, con el mismo patrón de tenancy que code_memory
+			// (v13) y relations (v14): project_id NOT NULL DEFAULT '' sentinel (SQLite trata cada
+			// NULL como distinto en UNIQUE y rompería la dedup del upsert), legacy en '' = espacio
+			// federado. Es ADITIVA: no toca ninguna tabla existente (patrón de run_events/outbox:
+			// tabla nueva sólo en su migración, no en la baseline). El grafo NACE derivado del AST
+			// y se persiste para poder FEDERARSE (el central no tiene el fuente) y servir consultas
+			// baratas; cada fila lleva el src_fingerprint del archivo del que se derivó, de modo que
+			// una desincronía se reporte STALE (comparando contra el fingerprint actual en la capa
+			// MCP) en vez de mentir. La arista es PROPIEDAD de su src_path: el refresco borra por
+			// src_path y reinserta, así el grafo nunca queda con aristas stale. Índices: (project_id,
+			// path) para lectura scopeada y borrado por archivo de nodos; (project_id, from_key) y
+			// (project_id, to_key) para el recorrido; (project_id, src_path) para el borrado de aristas.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`CREATE TABLE IF NOT EXISTS code_graph_nodes (
+						project_id      TEXT NOT NULL DEFAULT '',
+						node_key        TEXT NOT NULL,
+						kind            TEXT NOT NULL,
+						name            TEXT NOT NULL,
+						path            TEXT NOT NULL DEFAULT '',
+						start_line      INTEGER NOT NULL DEFAULT 0,
+						end_line        INTEGER NOT NULL DEFAULT 0,
+						external        INTEGER NOT NULL DEFAULT 0,
+						src_fingerprint TEXT NOT NULL DEFAULT '',
+						updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(project_id, node_key)
+					)`,
+					`CREATE TABLE IF NOT EXISTS code_graph_edges (
+						project_id      TEXT NOT NULL DEFAULT '',
+						from_key        TEXT NOT NULL,
+						to_key          TEXT NOT NULL,
+						kind            TEXT NOT NULL,
+						confidence      REAL NOT NULL DEFAULT 1.0,
+						provenance      TEXT NOT NULL DEFAULT 'EXTRACTED',
+						src_path        TEXT NOT NULL DEFAULT '',
+						src_fingerprint TEXT NOT NULL DEFAULT '',
+						updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+						UNIQUE(project_id, from_key, to_key, kind)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_cg_nodes_scope ON code_graph_nodes(project_id, path)`,
+					`CREATE INDEX IF NOT EXISTS idx_cg_edges_from ON code_graph_edges(project_id, from_key)`,
+					`CREATE INDEX IF NOT EXISTS idx_cg_edges_to ON code_graph_edges(project_id, to_key)`,
+					`CREATE INDEX IF NOT EXISTS idx_cg_edges_src ON code_graph_edges(project_id, src_path)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

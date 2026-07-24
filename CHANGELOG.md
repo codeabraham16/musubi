@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **Grafo de código derivado del AST de Go (Track 20 · F1).** `internal/codeintel` ahora emite un
+  GRAFO —nodos (archivo/símbolo/paquete) y aristas tipadas `IMPORTS`/`CONTAINS`/`CALLS`— derivado
+  del AST, **model-free y Go puro**. `IMPORTS` y `CONTAINS` son exactos (confianza 1.0); `CALLS`
+  resuelve llamadas **intra-paquete** (match único, confianza 1.0) y **difiere** las cross-paquete
+  precisas (la dependencia ya vive en `IMPORTS`). Id de nodo estable (`path#kind:name`, con receiver
+  para métodos) — una función y un método homónimos nunca colisionan.
+  - **Persistencia federable con invalidación por fingerprint.** Migración **v18** (`code_graph_nodes`
+    / `code_graph_edges`), scopeada por `project_id` (mismo patrón de tenancy que `code_memory`). El
+    grafo NACE derivado y se persiste para poder **federarse** (el cerebro central no tiene el fuente)
+    y servir consultas baratas; cada fila lleva el `src_fingerprint` del archivo del que se derivó, así
+    una desincronía se reporta **STALE** en vez de mentir. La arista es propiedad de su `src_path`: el
+    refresco borra por archivo y reinserta (nunca deja aristas stale). Aditiva: no toca ninguna tabla.
+  - **Poblado como efecto de `save_code`.** Guardar el gist de un `.go` deriva y persiste el grafo de
+    su paquete (best-effort, no falla el guardado). En F1 **no hay tool pública ni hook que responda
+    consultas** — eso es F2. Las aristas son **sólo derivadas**, nunca provistas por el agente.
+
 ## [0.94.0] - 2026-07-17
 
 > **El cerebro solo muestra actividad real.** Al refrescar o entrar/salir del dashboard ya no se

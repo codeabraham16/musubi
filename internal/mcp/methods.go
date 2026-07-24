@@ -1420,6 +1420,12 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	if err := s.engine.SaveCodeMemoryFrom(origin, cm); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
 	}
+	// Track 20 · F1: poblá el grafo de código del paquete como EFECTO del guardado del gist.
+	// Best-effort: sólo Go, y un fallo del derivado/persistido NO debe fallar el guardado del
+	// gist (que ya se commiteó). Las tools de consulta y el hook que responde son F2.
+	if strings.HasSuffix(strings.ToLower(key), ".go") {
+		_ = s.refreshCodeGraphForPackage(ctx, packageDirOf(key))
+	}
 	return jsonResult(map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens})
 }
 

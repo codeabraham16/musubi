@@ -86,6 +86,19 @@ type CodeMemoryStore interface {
 	GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemory, bool, error)
 }
 
+// CodeGraphStore — grafo de código derivado del AST (Track 20 · F1): nodos + aristas tipadas,
+// scopeados por project_id, con invalidación por src_fingerprint. Distinto de GraphStore (que
+// es el grafo de HECHOS/memoria). Las tools de consulta y el hook que responde son F2.
+type CodeGraphStore interface {
+	// UpsertPackageGraphFrom persiste el grafo de un paquete atribuido al project_id de origen,
+	// borrando por src_path (delete-by-source) y reinsertando con el fingerprint del snapshot.
+	UpsertPackageGraphFrom(originProjectID string, files []string, nodes []GraphNode, edges []GraphEdge) error
+	// GetGraphNodeCtx lee un nodo acotado al proyecto de la credencial (prefiere el propio sobre '').
+	GetGraphNodeCtx(ctx context.Context, nodeKey string) (GraphNode, bool, error)
+	// GraphOutEdgesCtx devuelve las aristas salientes de un nodo, scopeadas al proyecto.
+	GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]GraphEdge, error)
+}
+
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.
 type MetaStore interface {
 	GetMeta(key string) (string, bool, error)
@@ -239,6 +252,7 @@ type StorageBackend interface {
 	RelationStore
 	ConflictDetector
 	CodeMemoryStore
+	CodeGraphStore
 	MetaStore
 	TelemetryStore
 	SkillDecisionStore
