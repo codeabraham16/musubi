@@ -34,7 +34,7 @@ func (a *ArticleExtractor) Name() string        { return "article" }
 func (a *ArticleExtractor) Match(*url.URL) bool { return true } // fallback universal
 
 // Extract baja la página y devuelve su texto principal + metadata (title/author/fecha/idioma).
-func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, _ Options) (Result, error) {
+func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, opts Options) (Result, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return Result{}, fmt.Errorf("URL inválida: %w", err)
@@ -45,7 +45,13 @@ func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, _ Options
 	}
 	// Un UA de navegador evita que algunos sitios devuelvan una página vacía a los bots.
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Musubi-Ingest/1.0; +https://musubi)")
-	resp, err := a.Client.Do(req)
+	// En infra compartida usamos un cliente SSRF-safe (dialer que rechaza IPs internas incluso tras un
+	// redirect / DNS-rebinding). En local (CLI) se usa el cliente inyectado (testeable).
+	client := a.Client
+	if opts.RestrictToPublic {
+		client = safeHTTPClient(20 * time.Second)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("no pude bajar %s: %w", rawURL, err)
 	}

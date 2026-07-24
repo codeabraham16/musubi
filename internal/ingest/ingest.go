@@ -55,6 +55,10 @@ type Options struct {
 	CookiesFromBrowser string   // navegador para --cookies-from-browser (IG/FB/X)
 	CookiesFile        string   // archivo de cookies Netscape
 	ForceKind          string   // KindArticle|KindVideo para forzar la ruta (R2); "" = auto
+	// RestrictToPublic activa la guarda SSRF: rechaza URLs que resuelven a destinos internos
+	// (loopback/privadas/link-local/CGNAT-tailnet/metadata). Lo enciende la tool MCP para que sea
+	// segura en infra compartida (el cerebro central). La CLI local no la usa (uso de confianza).
+	RestrictToPublic bool
 }
 
 // Extractor extrae contenido de las URLs que sabe manejar.
@@ -84,6 +88,13 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (Re
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return Result{}, fmt.Errorf("URL inválida: %q", rawURL)
+	}
+	// Guarda SSRF (infra compartida): antes de que yt-dlp o go-trafilatura toquen la red, exigir que
+	// el host resuelva a un destino PÚBLICO. Corta loopback/privadas/CGNAT-tailnet/metadata.
+	if opts.RestrictToPublic {
+		if err := assertPublicHost(ctx, u.Host); err != nil {
+			return Result{}, err
+		}
 	}
 
 	wantMedia := opts.ForceKind == KindVideo || (opts.ForceKind == "" && IsMediaHost(u))

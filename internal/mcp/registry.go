@@ -628,11 +628,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			readOnly: true,
 		},
 	}
-	// Tools exclusivas del daemon LOCAL (no en el central): musubi_ingest_url baja URLs
-	// arbitrarias y lanza subprocesos del lado del server, superficie que no exponemos en la
-	// infra compartida del cerebro central. Las enciende WithLocalTools (runDaemon).
-	if s.localTools {
-		entries = append(entries, s.localToolEntries()...)
-	}
+	// musubi_ingest_url va SIEMPRE (daemon local y cerebro central). En infra compartida el handler
+	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del
+	// fetcher del lado del server es segura incluso con varios principales. Ver methods_ingest.go.
+	entries = append(entries, s.ingestToolEntry())
 	return entries
 }
