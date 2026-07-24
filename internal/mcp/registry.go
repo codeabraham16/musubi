@@ -66,7 +66,7 @@ func (s *McpServer) handleToolsList() interface{} {
 // tools/list (congelado por TestToolsListGolden). Para agregar una tool: agregá su
 // toolEntry acá (schema + handler) y nada más.
 func (s *McpServer) buildRegistry() []toolEntry {
-	return []toolEntry{
+	entries := []toolEntry{
 		{
 			Tool: Tool{
 				Name:        "musubi_save_observation",
@@ -628,4 +628,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			readOnly: true,
 		},
 	}
+	// Tools exclusivas del daemon LOCAL (no en el central): musubi_ingest_url baja URLs
+	// arbitrarias y lanza subprocesos del lado del server, superficie que no exponemos en la
+	// infra compartida del cerebro central. Las enciende WithLocalTools (runDaemon).
+	if s.localTools {
+		entries = append(entries, s.localToolEntries()...)
+	}
+	return entries
 }
