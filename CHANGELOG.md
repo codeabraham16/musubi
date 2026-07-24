@@ -45,6 +45,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   variable de entorno `MUSUBI_CODEGRAPH_HOOK=1` (así no cambia la experiencia actual hasta que lo
   quieras). Aun encendido es inerte hasta correr `musubi_codegraph_index`. Se contabiliza en el
   ledger de tokens (`precheck_codegraph`).
+- **Aristas para TypeScript/JavaScript/Python (Track 20 · F4).** El grafo de código ahora puede
+  derivar símbolos + imports + CALLS intra-archivo para `.ts/.tsx/.js/.jsx/.py`, usando
+  **`gotreesitter`** (un runtime tree-sitter **100% Go, sin CGo**). Es **opt-in a nivel de build**:
+  el binario por default de Musubi queda **idéntico y lean** (no linkea tree-sitter; esos lenguajes
+  siguen solo-símbolos), y las aristas se activan compilando con
+  `-tags 'treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'`
+  (los `grammar_subset_*` acotan las gramáticas embebidas a las que usamos: pocos MB, no las ~206).
+  Mismo modelo que Go (F1): CALLS **intra-archivo** con match único; cross-archivo diferido.
+  Nota de mantenimiento: `gotreesitter` es una dependencia **tag-gated**; no la borres con
+  `go mod tidy` sin el tag `treesitter`.
 
 ## [0.94.0] - 2026-07-17
 

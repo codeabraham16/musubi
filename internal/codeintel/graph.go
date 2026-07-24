@@ -242,6 +242,27 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 		addEdge(Edge{FromKey: cs.caller, ToKey: target, Kind: EdgeCalls, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: cs.src})
 	}
 
+	// Pase polyglot (Track 20 · F4): TS/JS/Py vía tree-sitter. En el build por default
+	// `polyglotSupported` devuelve false y esto es un NO-OP (los no-Go quedan solo-símbolos, sin
+	// aristas, como hasta ahora); compilando con `-tags treesitter` se activa la derivación real.
+	// Se mergea por los mismos addNode/addEdge (dedup) que el pase Go.
+	var polyPaths []string
+	for p := range files {
+		if polyglotSupported(p) {
+			polyPaths = append(polyPaths, p)
+		}
+	}
+	sort.Strings(polyPaths)
+	for _, path := range polyPaths {
+		pn, pe := derivePolyglotFile(path, files[path])
+		for _, n := range pn {
+			addNode(n)
+		}
+		for _, e := range pe {
+			addEdge(e)
+		}
+	}
+
 	return PackageGraph{Nodes: sortedNodes(nodes), Edges: sortEdges(edges)}
 }
 

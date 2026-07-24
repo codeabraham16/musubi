@@ -156,14 +156,15 @@ func TestDerivePackage_BrokenFileNoPanic(t *testing.T) {
 	}
 }
 
-func TestDerivePackage_NonGoEmpty(t *testing.T) {
+func TestDerivePackage_UnsupportedExtEmpty(t *testing.T) {
+	// Extensiones que NO derivamos en ningún build (ni Go ni tree-sitter): siempre vacías.
 	files := map[string]string{
 		"pkg/styles.css": "body { color: red; }",
-		"pkg/app.ts":     "export function f() {}",
+		"pkg/README.md":  "# hola",
 	}
 	g := DerivePackage("pkg", files, modPath)
 	if len(g.Nodes) != 0 || len(g.Edges) != 0 {
-		t.Errorf("los archivos no-Go no deben emitir nodos/aristas en F1: %d nodos, %d aristas", len(g.Nodes), len(g.Edges))
+		t.Errorf("las extensiones no soportadas no deben emitir nodos/aristas: %d nodos, %d aristas", len(g.Nodes), len(g.Edges))
 	}
 }
 
