@@ -12,10 +12,10 @@ import (
 )
 
 // methods_ingest.go implementa musubi_ingest_url: ingiere un link (video/red/artículo) y devuelve su
-// texto; con save=true lo persiste como observación durable (idempotente por URL/id). SOLO se
-// registra en el daemon LOCAL (WithLocalTools). En el central sería un fetcher de URLs ARBITRARIAS
-// del lado del server (SSRF) + un spawner de subprocesos (yt-dlp) expuesto a varios principales —
-// superficie que deliberadamente no abrimos en infra compartida. Ver SDD sdd/ingesta-de-links (T11).
+// texto; con save=true lo persiste como observación durable (idempotente por URL/id). Se registra en
+// el daemon local Y en el cerebro central. Como corre un fetcher del lado del server (go-trafilatura)
+// + un subproceso (yt-dlp) y lo puede invocar cualquier principal, el handler activa SIEMPRE la guarda
+// SSRF (RestrictToPublic): rechaza URLs que resuelven a destinos internos. Ver ingest/ssrf.go.
 
 func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
@@ -44,6 +44,9 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 		ForceKind:          ingestForceKind(args.As),
 		CookiesFromBrowser: args.CookiesFromBrowser,
 		CookiesFile:        args.CookiesFile,
+		// Guarda SSRF SIEMPRE en la superficie MCP: el fetcher corre del lado del server y lo puede
+		// invocar cualquier principal, así que jamás dejamos que apunte a un destino interno.
+		RestrictToPublic: true,
 	}
 	if strings.TrimSpace(args.Lang) != "" {
 		opts.Langs = ingestSplitLangs(args.Lang)
@@ -78,28 +81,28 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 	return jsonResult(res)
 }
 
-// localToolEntries son las tools que SOLO se registran en el daemon local (ver WithLocalTools).
-func (s *McpServer) localToolEntries() []toolEntry {
-	return []toolEntry{
-		{
-			Tool: Tool{
-				Name:        "musubi_ingest_url",
-				Description: "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Model-free: para video usa los subtítulos existentes (sin transcripción de audio en esta fase). Con save=true persiste el texto como memoria durable bajo ingested/<plataforma>/<id>, de forma IDEMPOTENTE (re-ingerir la misma URL no duplica). Por defecto solo devuelve el texto. Sólo disponible en el daemon local (no en el cerebro central). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"url":                  {Type: "string", Description: "La URL a ingerir (video, red social o artículo)"},
-						"save":                 {Type: "boolean", Description: "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"},
-						"as":                   {Type: "string", Description: "Forzar la ruta: 'article' o 'video'; opcional, default auto por el host"},
-						"lang":                 {Type: "string", Description: "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"},
-						"cookies_from_browser": {Type: "string", Description: "Navegador del que tomar cookies (chrome, firefox…) para plataformas que piden sesión (IG/FB/X); opcional"},
-						"cookies_file":         {Type: "string", Description: "Ruta a un archivo de cookies Netscape para yt-dlp; opcional"},
-					},
-					Required: []string{"url"},
+// ingestToolEntry registra musubi_ingest_url. Va en local Y en el central: el handler activa la
+// guarda SSRF (RestrictToPublic) que rechaza destinos internos, así el fetcher del lado del server es
+// seguro aunque lo invoque cualquier principal (ej. el bot de WhatsApp).
+func (s *McpServer) ingestToolEntry() toolEntry {
+	return toolEntry{
+		Tool: Tool{
+			Name:        "musubi_ingest_url",
+			Description: "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/<plataforma>/<id>, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"url":                  {Type: "string", Description: "La URL a ingerir (video, red social o artículo)"},
+					"save":                 {Type: "boolean", Description: "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"},
+					"as":                   {Type: "string", Description: "Forzar la ruta: 'article' o 'video'; opcional, default auto por el host"},
+					"lang":                 {Type: "string", Description: "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"},
+					"cookies_from_browser": {Type: "string", Description: "Navegador del que tomar cookies (chrome, firefox…) para plataformas que piden sesión (IG/FB/X); opcional"},
+					"cookies_file":         {Type: "string", Description: "Ruta a un archivo de cookies Netscape para yt-dlp; opcional"},
 				},
+				Required: []string{"url"},
 			},
-			handler: s.toolIngestURL,
 		},
+		handler: s.toolIngestURL,
 	}
 }
 

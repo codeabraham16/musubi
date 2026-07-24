@@ -833,6 +833,42 @@
           }
         }
       }
+    },
+    {
+      "name": "musubi_ingest_url",
+      "description": "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/\u003cplataforma\u003e/\u003cid\u003e, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "as": {
+            "type": "string",
+            "description": "Forzar la ruta: 'article' o 'video'; opcional, default auto por el host"
+          },
+          "cookies_file": {
+            "type": "string",
+            "description": "Ruta a un archivo de cookies Netscape para yt-dlp; opcional"
+          },
+          "cookies_from_browser": {
+            "type": "string",
+            "description": "Navegador del que tomar cookies (chrome, firefox…) para plataformas que piden sesión (IG/FB/X); opcional"
+          },
+          "lang": {
+            "type": "string",
+            "description": "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"
+          },
+          "url": {
+            "type": "string",
+            "description": "La URL a ingerir (video, red social o artículo)"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
     }
   ]
 }

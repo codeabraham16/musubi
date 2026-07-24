@@ -341,9 +341,8 @@ func runDaemon() {
 		}
 	}
 
-	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados. WithLocalTools:
-	// el daemon local expone musubi_ingest_url (no el central; ver methods_ingest.go).
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithLocalTools())
+	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()))
 
 	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el
 	// ciclo cognitivo (consolidar/olvidar/purgar) solo correría una vez al arrancar. Dos

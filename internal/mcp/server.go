@@ -105,13 +105,6 @@ func WithMultiAgent(c config.MultiAgentConfig) Option {
 	return func(s *McpServer) { s.multiagent = c }
 }
 
-// WithLocalTools habilita las tools exclusivas del daemon LOCAL (ej. musubi_ingest_url). NO se pasa
-// en el central (serve): allí esas tools serían un fetcher SSRF + spawner de subprocesos expuesto a
-// varios principales. Ver buildRegistry / methods_ingest.go.
-func WithLocalTools() Option {
-	return func(s *McpServer) { s.localTools = true }
-}
-
 type McpServer struct {
 	engine   memory.StorageBackend
 	resolver *skills.Resolver
@@ -141,10 +134,6 @@ type McpServer struct {
 	// el cliente (cierra el hueco scope=local → secreto crudo). Lo enciende ListenAndServeHTTP
 	// cuando el bind es no-loopback (o service.force_redact). En stdio local queda false.
 	forceRedact bool
-	// localTools habilita las tools que sólo tienen sentido en el daemon LOCAL (stdio), no en el
-	// central: musubi_ingest_url baja URLs arbitrarias y lanza yt-dlp del lado del server, superficie
-	// que no exponemos en infra compartida. Lo enciende WithLocalTools (runDaemon), no runServe.
-	localTools bool
 	// gitRunner obtiene el diff para musubi_detect_changes; nil → GitRunner real sobre
 	// projectPath. Los tests lo inyectan (codeintel.FakeRunner) para no depender de git.
 	gitRunner codeintel.Runner
