@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/memory"
 )
 
@@ -22,13 +24,18 @@ import (
 // vale la pena recordar guardarlo. Por debajo, no molesta.
 const umbralArchivoGrande = 1500
 
-// codeStore es lo que el hook necesita del motor: leer la memoria de código y los errores
-// conocidos (telemetría) del archivo que se va a leer, y contabilizar en el ledger lo que
-// inyecta (estas dos superficies también gastan contexto y antes no se medían).
+// codeStore es lo que el hook necesita del motor: leer la memoria de código, los errores
+// conocidos (telemetría) y el GRAFO DE CÓDIGO (Track 20 · F2-B) del archivo que se va a leer,
+// y contabilizar en el ledger lo que inyecta (estas superficies también gastan contexto y antes
+// no se medían).
 type codeStore interface {
 	GetCodeMemory(path string) (memory.CodeMemory, bool, error)
 	GetUnresolvedTelemetryLogsForFiles(files []string) ([]memory.TelemetryLog, error)
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
+	// Lecturas del grafo de código (F2-B): estructura del archivo sin leerlo.
+	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]memory.GraphNode, error)
+	GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]memory.GraphEdge, error)
+	GraphInEdgesCtx(ctx context.Context, toKey string) ([]memory.GraphEdge, error)
 }
 
 // maxPrecheckTelemetry acota cuántos errores conocidos se surfacean por lectura, para no
@@ -78,10 +85,129 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 		_, _ = store.LedgerAdd(in.SessionID, "precheck_telemetry", memory.EstimateTokens(m))
 		parts = append(parts, m)
 	}
+	// Grafo de código (F2-B): la palanca de tokens — inyecta la ESTRUCTURA del archivo (imports +
+	// símbolos con sus callers/callees) para navegarlo sin leerlo. OPT-IN por env var
+	// MUSUBI_CODEGRAPH_HOOK (default OFF: no cambia la experiencia actual); aun encendido, solo
+	// dispara si el archivo está indexado (musubi_codegraph_index), así que es inerte hasta que
+	// haya grafo.
+	if codegraphHookEnabled() {
+		if m := codeGraphMessage(store, key); m != "" {
+			_, _ = store.LedgerAdd(in.SessionID, "precheck_codegraph", memory.EstimateTokens(m))
+			parts = append(parts, m)
+		}
+	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return preEnvelope(strings.Join(parts, "\n\n"))
+}
+
+// codegraphHookEnabled indica si el usuario habilitó la inyección del grafo en el hook (opt-in).
+func codegraphHookEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MUSUBI_CODEGRAPH_HOOK"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// Cotas para que el contexto del grafo sea compacto (la palanca de tokens, no un volcado).
+const (
+	maxGraphSymbols = 10
+	maxGraphRefs    = 5
+)
+
+// codeGraphMessage arma el contexto de ESTRUCTURA de un archivo desde el grafo de código: sus
+// imports y sus funciones/métodos con a quién llaman y quién los llama. "" si el archivo no está
+// indexado (inerte hasta correr musubi_codegraph_index). Model-free: solo recorre el grafo.
+func codeGraphMessage(store codeStore, key string) string {
+	ctx := context.Background()
+	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
+	if err != nil || len(nodes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Musubi — grafo de código] «%s» está indexado: navegá su estructura SIN leerlo.", key)
+
+	if fe, _ := store.GraphOutEdgesCtx(ctx, key); len(fe) > 0 {
+		var imps []string
+		for _, e := range fe {
+			if e.Kind == codeintel.EdgeImports {
+				imps = append(imps, strings.TrimPrefix(e.ToKey, "pkg:"))
+			}
+		}
+		if len(imps) > 0 {
+			b.WriteString("\nimporta: " + joinCapped(imps, 8))
+		}
+	}
+
+	shown := 0
+	for _, n := range nodes {
+		if n.Kind != codeintel.KindFunc && n.Kind != codeintel.KindMethod {
+			continue
+		}
+		if shown >= maxGraphSymbols {
+			b.WriteString("\n(+más símbolos)")
+			break
+		}
+		callees := graphRefNames(store, ctx, n.Key, true)
+		callers := graphRefNames(store, ctx, n.Key, false)
+		fmt.Fprintf(&b, "\n- %s → llama a: %s | ← lo llaman: %s",
+			n.Name, noneIfEmpty(joinCapped(callees, maxGraphRefs)), noneIfEmpty(joinCapped(callers, maxGraphRefs)))
+		shown++
+	}
+	b.WriteString("\nProfundizá con musubi_code_graph / musubi_impact / musubi_code_context.")
+	return b.String()
+}
+
+// graphRefNames devuelve los NOMBRES de los símbolos conectados por CALLS a key (out=callees,
+// in=callers). Extrae el nombre del node_key para no volcar claves largas.
+func graphRefNames(store codeStore, ctx context.Context, key string, out bool) []string {
+	var edges []memory.GraphEdge
+	if out {
+		edges, _ = store.GraphOutEdgesCtx(ctx, key)
+	} else {
+		edges, _ = store.GraphInEdgesCtx(ctx, key)
+	}
+	var names []string
+	for _, e := range edges {
+		if e.Kind != codeintel.EdgeCalls {
+			continue
+		}
+		ref := e.ToKey
+		if !out {
+			ref = e.FromKey
+		}
+		names = append(names, symNameFromKey(ref))
+	}
+	return names
+}
+
+// symNameFromKey extrae el nombre de un node_key "path#kind:name".
+func symNameFromKey(key string) string {
+	if i := strings.Index(key, "#"); i >= 0 {
+		rest := key[i+1:]
+		if j := strings.Index(rest, ":"); j >= 0 {
+			return rest[j+1:]
+		}
+		return rest
+	}
+	return key
+}
+
+// joinCapped une los items con coma, mostrando a lo sumo n y "(+K)" si hay más.
+func joinCapped(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:n], ", ") + fmt.Sprintf(" (+%d)", len(items)-n)
+}
+
+func noneIfEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 // codeMemoryMessage arma el aviso de memoria de código para el archivo (gist fresco,

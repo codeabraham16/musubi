@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +15,23 @@ type fakeCodeStore struct {
 	mem map[string]memory.CodeMemory
 	tel []memory.TelemetryLog
 
+	// Grafo de código (F2-B): nodos por archivo y aristas por from/to key.
+	graphNodes map[string][]memory.GraphNode
+	outEdges   map[string][]memory.GraphEdge
+	inEdges    map[string][]memory.GraphEdge
+
 	ledger        map[string]int
 	ledgerSession string
+}
+
+func (f *fakeCodeStore) ListGraphNodesForFileCtx(_ context.Context, path string) ([]memory.GraphNode, error) {
+	return f.graphNodes[path], nil
+}
+func (f *fakeCodeStore) GraphOutEdgesCtx(_ context.Context, fromKey string) ([]memory.GraphEdge, error) {
+	return f.outEdges[fromKey], nil
+}
+func (f *fakeCodeStore) GraphInEdgesCtx(_ context.Context, toKey string) ([]memory.GraphEdge, error) {
+	return f.inEdges[toKey], nil
 }
 
 func (f *fakeCodeStore) GetCodeMemory(path string) (memory.CodeMemory, bool, error) {
@@ -154,5 +170,57 @@ func TestPrecheckSilentForSmallUnknownFile(t *testing.T) {
 	in := `{"tool_name":"Read","tool_input":{"file_path":"tiny.go"},"session_id":"s"}`
 	if out := precheckOutput(store, root, strings.NewReader(in)); out != "" {
 		t.Errorf("un archivo chico sin gist no debe molestar, obtuve %q", out)
+	}
+}
+
+// graphStore siembra un fakeCodeStore con el grafo de a.go: Alpha importa fmt y llama a beta.
+func graphStore() *fakeCodeStore {
+	return &fakeCodeStore{
+		mem: map[string]memory.CodeMemory{},
+		graphNodes: map[string][]memory.GraphNode{
+			"a.go": {
+				{Key: "a.go#func:Alpha", Kind: "func", Name: "Alpha", Path: "a.go"},
+				{Key: "a.go#func:beta", Kind: "func", Name: "beta", Path: "a.go"},
+			},
+		},
+		outEdges: map[string][]memory.GraphEdge{
+			"a.go":            {{FromKey: "a.go", ToKey: "pkg:fmt", Kind: "IMPORTS"}},
+			"a.go#func:Alpha": {{FromKey: "a.go#func:Alpha", ToKey: "a.go#func:beta", Kind: "CALLS"}},
+		},
+		inEdges: map[string][]memory.GraphEdge{
+			"a.go#func:beta": {{FromKey: "a.go#func:Alpha", ToKey: "a.go#func:beta", Kind: "CALLS"}},
+		},
+	}
+}
+
+func TestPrecheckSurfacesCodeGraphWhenEnabled(t *testing.T) {
+	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "1")
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a\nfunc Alpha(){ beta() }\nfunc beta(){}\n")
+	store := graphStore()
+	in := `{"tool_name":"Read","tool_input":{"file_path":"a.go"},"session_id":"s"}`
+	out := precheckOutput(store, root, strings.NewReader(in))
+	_, ctx := hookAdditionalContext(t, out)
+	if !strings.Contains(ctx, "grafo de código") {
+		t.Fatalf("esperaba el contexto del grafo, obtuve %q", ctx)
+	}
+	// Estructura: imports + Alpha llama a beta + beta lo llama Alpha.
+	if !strings.Contains(ctx, "fmt") || !strings.Contains(ctx, "Alpha") || !strings.Contains(ctx, "beta") {
+		t.Errorf("el contexto del grafo debe incluir imports y Alpha↔beta, obtuve %q", ctx)
+	}
+	if store.ledger["precheck_codegraph"] <= 0 {
+		t.Errorf("el grafo inyectado debe contabilizarse en el ledger, obtuve %d", store.ledger["precheck_codegraph"])
+	}
+}
+
+func TestPrecheckCodeGraphOffByDefault(t *testing.T) {
+	// Sin MUSUBI_CODEGRAPH_HOOK: aunque el archivo esté indexado, NO se inyecta el grafo.
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a\nfunc Alpha(){}\n")
+	store := graphStore()
+	in := `{"tool_name":"Read","tool_input":{"file_path":"a.go"},"session_id":"s"}`
+	out := precheckOutput(store, root, strings.NewReader(in))
+	if strings.Contains(out, "grafo de código") {
+		t.Errorf("sin el env var de opt-in el grafo NO debe inyectarse, obtuve %q", out)
 	}
 }

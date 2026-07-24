@@ -38,6 +38,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   para el código. El weld se **deriva al consultar** (FTS por nombre/archivo, scopeada por proyecto),
   **no** como arista escrita a mano — respeta el invariante de F1 ("aristas sólo derivadas") y no se
   pudre. Es el diferencial del Track: *qué es esto, a qué llama, quién lo llama, y por qué es así*.
+- **El hook que responde antes de leer (Track 20 · F2-B).** El hook `PreToolUse` de `musubi precheck`
+  gana una 3ª superficie: cuando vas a `Read` un archivo Go **indexado**, inyecta su **estructura**
+  (imports + funciones/métodos con a quién llaman y quién los llama) para navegarlo **sin leerlo** —
+  la palanca de tokens de Graphify, model-free. **Opt-in**: apagado por default; se enciende con la
+  variable de entorno `MUSUBI_CODEGRAPH_HOOK=1` (así no cambia la experiencia actual hasta que lo
+  quieras). Aun encendido es inerte hasta correr `musubi_codegraph_index`. Se contabiliza en el
+  ledger de tokens (`precheck_codegraph`).
 
 ## [0.94.0] - 2026-07-17
 
