@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -206,11 +208,20 @@ func hasWord(s string, words ...string) bool {
 type detectFunc func(obsID string)
 
 func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope string) (int, error) {
+	return captureCommitsKeyed(store, git, embed, detect, scope, metaCaptureLastCommit)
+}
+
+// captureCommitsKeyed es captureCommits con la CLAVE DEL CURSOR explícita. Capturar varios repos en
+// la MISMA memoria (el cerebro central, origin-side) exige que cada repo lleve su propio cursor
+// `capture:last_commit:<repo>`: con la clave global compartida, capturar el repo B pisaría el HEAD
+// del repo A y ninguno avanzaría bien. captureCommits usa la clave global histórica (un repo por
+// workspace, el caso del hook en la máquina de dev).
+func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope, cursorKey string) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
 	}
-	last, _, _ := store.GetMeta(metaCaptureLastCommit)
+	last, _, _ := store.GetMeta(cursorKey)
 	if strings.TrimSpace(last) == head {
 		return 0, nil
 	}
@@ -258,19 +269,38 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc, detect dete
 		}
 		saved++
 	}
-	_ = store.SetMeta(metaCaptureLastCommit, head)
+	_ = store.SetMeta(cursorKey, head)
 	return saved, nil
 }
 
-// runCapture implementa `musubi capture [--hook-mode]`: en el hook Stop es silencioso; en modo
-// normal imprime un resumen. Best-effort: cualquier fallo (sin repo, sin memoria) no rompe el turno.
-func runCapture(args []string) {
-	hookMode := false
-	for _, a := range args {
-		if a == "--hook-mode" {
-			hookMode = true
-		}
+// repoCursorKey deriva una clave de cursor estable y única por repo desde su ruta absoluta, para que
+// la captura multi-repo no mezcle los HEAD. Ruta no resoluble ⇒ se usa la cruda (degradación segura).
+func repoCursorKey(repoPath string) string {
+	abs, err := filepath.Abs(repoPath)
+	if err != nil {
+		abs = repoPath
 	}
+	sum := sha256.Sum256([]byte(abs))
+	return metaCaptureLastCommit + ":" + hex.EncodeToString(sum[:])[:12]
+}
+
+// runCapture implementa `musubi capture [--hook-mode] [--repo DIR --project ID --scope shared --fetch]`.
+// Sin flags de repo: es el hook Stop en la máquina de dev (silencioso, captura el workspace). Con
+// --repo captura OTRO repo hacia esta misma memoria — el modo ORIGIN-SIDE del cerebro central: un
+// timer corre `capture --repo <mirror> --project <p> --scope shared --fetch` por cada repo de Forgejo,
+// así el cerebro aprende de CADA push de cualquiera (no solo de lo que tocó una sesión de Claude).
+// Best-effort: cualquier fallo (sin repo, sin memoria) no rompe nada.
+func runCapture(args []string) {
+	fs := flag.NewFlagSet("capture", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	hookModeF := fs.Bool("hook-mode", false, "modo hook Stop (silencioso)")
+	repoF := fs.String("repo", "", "capturar desde este repo en vez del workspace (ruta a un repo git, incl. bare/mirror)")
+	projectF := fs.String("project", "", "estampar este project_id en los commits capturados (aislamiento por tenant)")
+	scopeF := fs.String("scope", "", "scope de guardado: local | shared (default: según team_mode)")
+	fetchF := fs.Bool("fetch", false, "git fetch en el repo antes de capturar (para mantener frescos los mirror clones)")
+	_ = fs.Parse(args)
+	hookMode := *hookModeF
+
 	if hookMode {
 		_, _ = io.Copy(io.Discard, os.Stdin) // drenar el payload del Stop (no lo necesitamos)
 	}
@@ -290,6 +320,13 @@ func runCapture(args []string) {
 		return
 	}
 	defer engine.Close()
+
+	// De DÓNDE se leen los commits: el repo indicado, o el workspace (hook). La MEMORIA es siempre
+	// la del workspace (el cerebro central en el modo origin-side); solo cambia el árbol git de origen.
+	gitDir := root
+	if strings.TrimSpace(*repoF) != "" {
+		gitDir = *repoF
+	}
 
 	// Embeddings en la captura (16.2e): si la semántica está encendida (auto-detección de la
 	// tabla + degradación elegante, igual que serve/daemon), cada commit capturado se guarda CON
@@ -332,17 +369,47 @@ func runCapture(args []string) {
 		}
 	}
 
-	// Scope de la captura (C5.2): en team mode la memoria del proyecto es CENTRAL por naturaleza, así
-	// que los commits se capturan 'shared' y viajan al cerebro (outbox) — si no, lo ÚNICO que Musubi
-	// guarda SOLO sería justo lo único que nunca cruza de máquina, y la otra máquina del equipo no
-	// tendría ni idea de lo que se hizo acá. El id del commit es DETERMINÍSTICO desde su contenido:
-	// si dos máquinas capturan el mismo commit, el central lo UPSERTEA en la misma fila, no duplica.
+	// Atribución por proyecto (aislamiento por tenant): con --project se estampa ese project_id en
+	// cada commit capturado, así el recall del central los acota al tenant correcto. Sin --project, el
+	// del workspace (comportamiento del hook). Debe fijarse ANTES de capturar (afecta el guardado).
+	projectID := strings.TrimSpace(*projectF)
+	if projectID == "" {
+		projectID = resolveProjectID(cfg, root)
+	}
+	engine.SetProjectID(projectID)
+
+	// Scope (C5.2): --scope lo fija explícito; si no, team mode ⇒ shared, si no local. En el modo
+	// origin-side del central se pasa --scope shared (la captura es central por naturaleza: los
+	// commits deben poder llegar por inbound-sync a las máquinas del equipo). El id del commit es
+	// DETERMINÍSTICO desde su contenido: si dos orígenes capturan el mismo commit, se UPSERTEA, no duplica.
 	scope := memory.ScopeLocal
-	if cfg.Memory.TeamMode {
+	switch strings.ToLower(strings.TrimSpace(*scopeF)) {
+	case "shared":
 		scope = memory.ScopeShared
+	case "local":
+		scope = memory.ScopeLocal
+	default:
+		if cfg.Memory.TeamMode {
+			scope = memory.ScopeShared
+		}
 	}
 
-	n, err := captureCommits(engine, realGit{dir: root}, embed, detect, scope)
+	// Cursor por repo: capturar VARIOS repos en la misma memoria exige un cursor por repo para que no
+	// se pisen el HEAD. El hook (sin --repo) mantiene la clave global histórica.
+	cursorKey := metaCaptureLastCommit
+	if strings.TrimSpace(*repoF) != "" {
+		cursorKey = repoCursorKey(*repoF)
+	}
+
+	// --fetch: refresca el mirror clone antes de leer (Forgejo es localhost ⇒ instantáneo). Sólo tiene
+	// sentido con --repo. Best-effort: un fetch fallido no aborta la captura de lo que ya está local.
+	if *fetchF && strings.TrimSpace(*repoF) != "" {
+		if _, ferr := (realGit{dir: gitDir}).run("fetch", "--quiet"); ferr != nil && !hookMode {
+			fmt.Fprintf(os.Stderr, "capture: git fetch falló en %s (capturo lo que haya): %v\n", gitDir, ferr)
+		}
+	}
+
+	n, err := captureCommitsKeyed(engine, realGit{dir: gitDir}, embed, detect, scope, cursorKey)
 	if err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: %v\n", err)
@@ -354,6 +421,10 @@ func runCapture(args []string) {
 		if scope == memory.ScopeShared {
 			destino = "memoria compartida (van al cerebro central)"
 		}
-		fmt.Printf("Capturados %d commit(s) nuevos en %s.\n", n, destino)
+		origen := "el workspace"
+		if strings.TrimSpace(*repoF) != "" {
+			origen = *repoF
+		}
+		fmt.Printf("Capturados %d commit(s) nuevos de %s en %s (proyecto: %s).\n", n, origen, destino, projectID)
 	}
 }

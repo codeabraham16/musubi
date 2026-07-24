@@ -271,6 +271,11 @@ func runServe(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Conciliar el outbox con la config ANTES de arrancar el drain: un nodo terminal (el cerebro
+	// central: sync off / sin central_url) purga sus filas 'shared' huérfanas; un nodo con sync
+	// real avisa del backlog. Cierra el stall silencioso (ver reconcileOutboxOnStartup).
+	reconcileOutboxOnStartup(engine, cfg.Sync)
+
 	// Cerebro híbrido F2: si el sync saliente está activo, arrancar el drain del outbox que
 	// empuja las observaciones 'shared' al cerebro central. El ctx (SIGINT/SIGTERM) también
 	// para el drain. Best-effort: un error de config del cliente NO impide arrancar el serve.
@@ -359,8 +364,16 @@ func runDaemon() {
 		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
 	}
 
-	// Cerebro híbrido F2: drain del outbox (sync saliente) también en el daemon (stdio). El
-	// maintCtx (cancelado al retornar de runDaemon por señal o EOF) también lo detiene.
+	// Cerebro híbrido F2: gatear el ENQUEUE con el sync (simétrico con runServe). Sin esto el
+	// daemon stdio encola 'shared' incondicionalmente (default true) y, con el sync apagado, esas
+	// filas se apilan sin que el drain (que ni arranca sin sync) las toque → pending INMORTALES que
+	// envejecen en silencio. Debe fijarse antes de servir pedidos (server.Start()).
+	engine.SetOutboxEnabled(cfg.Sync.Enabled)
+	// Conciliar el outbox con la config: purga huérfanas de un nodo terminal / avisa de un backlog
+	// real, ANTES de arrancar el drain (ver reconcileOutboxOnStartup).
+	reconcileOutboxOnStartup(engine, cfg.Sync)
+	// Drain del outbox (sync saliente) también en el daemon (stdio). El maintCtx (cancelado al
+	// retornar de runDaemon por señal o EOF) también lo detiene.
 	startOutboxDrain(maintCtx, server, cfg.Sync)
 
 	// Capturar SIGINT/SIGTERM para graceful shutdown: el select espera hasta que el
@@ -400,8 +413,41 @@ func autoBackfill(engine *memory.DbEngine, embedder embedding.Provider) {
 // best-effort y compartido por runServe y runDaemon: un error de construcción del cliente NO
 // aborta el arranque (se avisa por stderr y el server sigue local-first). Con sync desactivado
 // es un no-op total (comportamiento idéntico al de antes de F2).
+// reconcileOutboxOnStartup concilia el outbox con la config de sync al arrancar, para que un stall
+// SILENCIOSO sea imposible. Con backlog pendiente hay dos caminos:
+//   - Nodo TERMINAL (sync off o sin central_url): esas filas no tienen destino — son huérfanas de
+//     un binario viejo (antes del gate SetOutboxEnabled) o de una config que apagó el sync. Se
+//     PURGAN (el contenido de las observaciones queda; sólo se descarta el intento de envío) y se
+//     avisa. Es la auto-cura del cerebro central: se sana sola al reiniciar con el binario nuevo.
+//   - Sync habilitado y con destino: hay backlog real; se avisa fuerte (el drain debería vaciarlo).
+// Best-effort: cualquier error se logea por stderr y NO aborta el arranque.
+func reconcileOutboxOnStartup(engine *memory.DbEngine, sync config.SyncConfig) {
+	pending, _, _, err := engine.OutboxStats()
+	if err != nil || pending == 0 {
+		return
+	}
+	if !sync.Enabled || strings.TrimSpace(sync.CentralURL) == "" {
+		n, perr := engine.PurgeOutboxPending()
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "musubi: no se pudieron purgar %d fila(s) huérfanas del outbox: %v\n", pending, perr)
+			return
+		}
+		if n > 0 {
+			fmt.Fprintf(os.Stderr, "musubi: outbox — purgadas %d fila(s) 'shared' pendientes huérfanas (nodo terminal sin sync saliente: no tenían destino)\n", n)
+		}
+		return
+	}
+	fmt.Fprintf(os.Stderr, "musubi: outbox — %d observación(es) 'shared' pendientes de enviar al central; el drain intentará vaciarlas\n", pending)
+}
+
 func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.SyncConfig) {
-	if !cfg.Enabled || strings.TrimSpace(cfg.CentralURL) == "" || cfg.DrainIntervalSeconds <= 0 {
+	if !cfg.Enabled {
+		return // sync saliente apagado a propósito (nodo local o terminal): no-op total.
+	}
+	if strings.TrimSpace(cfg.CentralURL) == "" || cfg.DrainIntervalSeconds <= 0 {
+		// HABILITADO pero mal configurado: antes retornaba en silencio y, con el enqueue activo,
+		// las filas 'shared' se apilaban sin que nada avisara (el stall silencioso). Ahora se grita.
+		fmt.Fprintln(os.Stderr, "musubi: sync saliente HABILITADO pero mal configurado (central_url vacío o drain_interval<=0); el outbox NO va a drenar. Revisá el bloque sync de .musubi/config.yaml")
 		return
 	}
 	client, err := mcp.NewSyncClient(cfg)

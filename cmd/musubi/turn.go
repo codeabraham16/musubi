@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
@@ -345,7 +346,7 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 
 	// La contabilidad la hace assembleAccounted sobre el bloque final (header + ids
 	// incluidos); acá solo se construye el bloque con la memoria nueva del turno.
-	header := "[Musubi — memoria relevante] Lo que Musubi ya sabe sobre lo que pediste (gists; usá musubi_memory_expand con el id para el detalle completo):"
+	header := "[Musubi — memoria relevante] Contexto de fondo que Musubi recuerda sobre lo que pediste. La edad va en cada línea (· hace Xd/m/a): puede estar DESACTUALIZADO — verificá contra el código/estado actual antes de darlo por cierto, sobre todo lo viejo. (gists; expandí con musubi_memory_expand):"
 	return formatDeltaGists(header, items, updated)
 }
 
@@ -393,10 +394,11 @@ func formatDeltaGists(header string, items []memory.RecallItem, updated []bool) 
 		if i < len(updated) && updated[i] {
 			suffix = " (actualizado)"
 		}
+		age := gistAge(it.CreatedAt)
 		if it.TopicKey != "" {
-			fmt.Fprintf(&b, "- (%s) %s%s [id:%s]\n", it.TopicKey, it.Gist, suffix, it.ID)
+			fmt.Fprintf(&b, "- (%s) %s%s%s [id:%s]\n", it.TopicKey, it.Gist, age, suffix, it.ID)
 		} else {
-			fmt.Fprintf(&b, "- %s%s [id:%s]\n", it.Gist, suffix, it.ID)
+			fmt.Fprintf(&b, "- %s%s%s [id:%s]\n", it.Gist, age, suffix, it.ID)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -418,6 +420,29 @@ func buildTurnConflicts(store turnStore, sessionID string) string {
 	return fmt.Sprintf("[Musubi — conflictos] Hay %d relación(es) de memoria sin resolver. Revisalas con musubi_conflicts y resolvé cada una con musubi_judge.", len(pending))
 }
 
+// gistAge devuelve un sufijo compacto con la EDAD de la memoria (" · hoy", " · hace 3d", " · hace
+// 5m", " · hace 2a") para que el agente vea de un vistazo si un gist es fresco o viejo y no trate
+// una nota de hace meses como verdad actual. Vacío si la fecha no parsea (degradación segura).
+func gistAge(createdAt string) string {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < 0:
+		return ""
+	case d < 24*time.Hour:
+		return " · hoy"
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf(" · hace %dd", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf(" · hace %dm", int(d.Hours()/24/30))
+	default:
+		return fmt.Sprintf(" · hace %da", int(d.Hours()/24/365))
+	}
+}
+
 // formatGists arma un bloque con un encabezado y la lista de gists de un recall.
 // Compartido por el priming de arranque y la inyección por turno.
 func formatGists(header string, res memory.RecallResult) string {
@@ -425,10 +450,11 @@ func formatGists(header string, res memory.RecallResult) string {
 	b.WriteString(header)
 	b.WriteString("\n")
 	for _, it := range res.Items {
+		age := gistAge(it.CreatedAt)
 		if it.TopicKey != "" {
-			fmt.Fprintf(&b, "- (%s) %s [id:%s]\n", it.TopicKey, it.Gist, it.ID)
+			fmt.Fprintf(&b, "- (%s) %s%s [id:%s]\n", it.TopicKey, it.Gist, age, it.ID)
 		} else {
-			fmt.Fprintf(&b, "- %s [id:%s]\n", it.Gist, it.ID)
+			fmt.Fprintf(&b, "- %s%s [id:%s]\n", it.Gist, age, it.ID)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")

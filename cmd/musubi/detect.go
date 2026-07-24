@@ -326,7 +326,7 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 	}
 	saveDeltaState(store, sessionID, seed)
 
-	header := "[Musubi — memoria] Contexto que Musubi recuerda de este proyecto (gists; usá musubi_memory_expand con el id para el detalle completo):"
+	header := "[Musubi — memoria] Contexto de fondo que Musubi recuerda de este proyecto. La edad va en cada línea (· hace Xd/m/a): puede estar DESACTUALIZADO — verificá contra el código/estado actual antes de darlo por cierto, sobre todo lo viejo. (gists; expandí con musubi_memory_expand):"
 	return formatGists(header, res)
 }
 

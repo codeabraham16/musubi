@@ -315,3 +315,22 @@ func (e *DbEngine) RequeueDeadOutbox() (int, error) {
 	}
 	return int(n), nil
 }
+
+// PurgeOutboxPending BORRA las filas pending/claimed del outbox y devuelve cuántas. Es la limpieza
+// del NODO TERMINAL: un cerebro que SIRVE sin sync saliente (central_url vacío / sync.enabled=false)
+// no tiene upstream a dónde empujar, así que una fila 'pending' ahí es basura INMORTAL — encolada
+// por un binario viejo (antes del gate SetOutboxEnabled) o por una config que después apagó el sync.
+// A diferencia de RequeueDeadOutbox (que REACTIVA para reintentar), esto DESCARTA: sólo lo llama el
+// arranque cuando la config confirma que el destino no existe. NO toca observations — el contenido
+// queda intacto; se descarta únicamente el intento de envío. Idempotente: sin filas devuelve 0.
+func (e *DbEngine) PurgeOutboxPending() (int, error) {
+	res, err := e.db.Exec(`DELETE FROM outbox WHERE status IN (?, ?)`, outboxPending, outboxClaimed)
+	if err != nil {
+		return 0, fmt.Errorf("error al purgar pendientes del outbox: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("error al contar filas purgadas del outbox: %w", err)
+	}
+	return int(n), nil
+}
