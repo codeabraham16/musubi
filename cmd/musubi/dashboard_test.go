@@ -77,12 +77,73 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 	if !strings.Contains(rrb.Body.String(), "/api/snapshot") {
 		t.Error("el bundle debe contener el fetch a /api/snapshot (el polling en vivo)")
 	}
+	// La lente "código" hace hover-fetch del weld: su URL literal sobrevive a la minificación.
+	if !strings.Contains(rrb.Body.String(), "/api/explained") {
+		t.Error("el bundle debe contener el fetch a /api/explained (weld on-hover de la lente código)")
+	}
 
 	// Rutas desconocidas: 404 (no servir el HTML para cualquier path).
 	rr2 := httptest.NewRecorder()
 	h.ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/otra", nil))
 	if rr2.Code != http.StatusNotFound {
 		t.Errorf("una ruta desconocida debe dar 404, obtuve %d", rr2.Code)
+	}
+}
+
+// TestDashboardCodeLens valida el backend de la lente "código": el snapshot trae el grafo de
+// código y /api/explained devuelve las memorias que explican un símbolo (weld on-hover).
+func TestDashboardCodeLens(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDbEngine error: %v", err)
+	}
+	defer engine.Close()
+
+	nodes := []memory.GraphNode{
+		{Key: "pkg/a.go#func:Hub", Kind: "func", Name: "Hub", Path: "pkg/a.go", SrcFingerprint: "1"},
+		{Key: "pkg/a.go#func:Leaf", Kind: "func", Name: "Leaf", Path: "pkg/a.go", SrcFingerprint: "1"},
+	}
+	edges := []memory.GraphEdge{
+		{FromKey: "pkg/a.go#func:Hub", ToKey: "pkg/a.go#func:Leaf", Kind: "CALLS", Confidence: 1, Provenance: "EXTRACTED", SrcPath: "pkg/a.go", SrcFingerprint: "1"},
+	}
+	if err := engine.UpsertPackageGraph([]string{"pkg/a.go"}, nodes, edges); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveObservation("o1", "arq/hub", "Decisión sobre Hub en pkg/a.go: por rendimiento.", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	h := dashboardHandler(engine, 0, "demo")
+
+	// El snapshot trae el grafo de código.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
+	var snap exportSnapshot
+	if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("snapshot inválido: %v", err)
+	}
+	if len(snap.Code.Nodes) != 2 || len(snap.Code.Edges) != 1 {
+		t.Errorf("el snapshot debería traer el grafo de código (2 nodos, 1 arista), got %d nodos / %d aristas", len(snap.Code.Nodes), len(snap.Code.Edges))
+	}
+
+	// El weld on-hover: /api/explained del símbolo devuelve la decisión que lo menciona.
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/api/explained?symbol=pkg/a.go%23func:Hub", nil))
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("esperaba 200 en /api/explained, obtuve %d", rr2.Code)
+	}
+	var exp []memory.CodeExplain
+	if err := json.Unmarshal(rr2.Body.Bytes(), &exp); err != nil {
+		t.Fatalf("respuesta de /api/explained inválida: %v", err)
+	}
+	found := false
+	for _, x := range exp {
+		if x.TopicKey == "arq/hub" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("/api/explained debería soldar la decisión arq/hub, got %+v", exp)
 	}
 }
 
