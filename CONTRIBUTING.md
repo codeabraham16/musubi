@@ -1,5 +1,7 @@
 # Contribuir a Musubi
 
+<a href="CONTRIBUTING.en.md">English</a> · <strong>Español</strong>
+
 ¡Gracias por tu interés en mejorar Musubi! Esta guía resume cómo proponer cambios.
 
 ## Antes de empezar

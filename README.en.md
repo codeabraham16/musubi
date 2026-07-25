@@ -467,7 +467,7 @@ internal/
   skillsource/     # curated catalog + marketplace (fetch, applicability gate, harvest)
 ```
 
-Conventions, CI checks and the release flow in [CONTRIBUTING.md](CONTRIBUTING.md).
+Conventions, CI checks and the release flow in [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
 
 ---
 
@@ -488,7 +488,7 @@ Deliberately deferred (with the groundwork already in place):
 ## Documentation
 
 - [CHANGELOG.md](CHANGELOG.md) — version history (Keep a Changelog).
-- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, CI checks, conventions and release.
+- [CONTRIBUTING.en.md](CONTRIBUTING.en.md) — dev setup, CI checks, conventions and release.
 - [docs/MCP_SDK_Evaluation.md](docs/MCP_SDK_Evaluation.md) — why the server hand-rolls JSON-RPC.
 - [docs/Roadmap_spec-kit_adoption.md](docs/Roadmap_spec-kit_adoption.md) — DAG orchestration, multi-agent and SDD templates.
 - [LICENSE](LICENSE) — MIT.
