@@ -160,6 +160,50 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 	return classifyResponse(resp)
 }
 
+// PushGraph empuja el grafo de código COMPLETO de un proyecto al central (Track 20 · F6): un
+// tools/call remoto de musubi_codegraph_push, espejo de Push. NO manda project_id: el central lo
+// atribuye por el principal del token (un write=own lo ignoraría igual, y no asertar proyecto es lo
+// más seguro). Devuelve error clasificado (transitorio/permanente) como el resto del sync; el caller
+// (pushCodeGraphToCentral) lo trata best-effort y no rompe el index.
+func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge) error {
+	reqBody := struct {
+		JsonRpc string `json:"jsonrpc"`
+		ID      string `json:"id"`
+		Method  string `json:"method"`
+		Params  struct {
+			Name      string `json:"name"`
+			Arguments struct {
+				Nodes []memory.GraphNode `json:"nodes"`
+				Edges []memory.GraphEdge `json:"edges"`
+			} `json:"arguments"`
+		} `json:"params"`
+	}{JsonRpc: "2.0", ID: "codegraph-push", Method: "tools/call"}
+	reqBody.Params.Name = "musubi_codegraph_push"
+	reqBody.Params.Arguments.Nodes = nodes
+	reqBody.Params.Arguments.Edges = edges
+
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("%w: serializar push del grafo: %v", errPermanent, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("%w: construir push del grafo: %v", errPermanent, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errTransient, err)
+	}
+	defer resp.Body.Close()
+	return classifyResponse(resp)
+}
+
 // syncPullArguments son los argumentos del musubi_sync_pull remoto (sync ENTRANTE C5.3b).
 type syncPullArguments struct {
 	AfterRowID int64 `json:"after_rowid"`

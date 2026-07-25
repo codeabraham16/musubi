@@ -115,6 +115,13 @@ type CodeGraphStore interface {
 	// PruneGraphFilesFrom borra nodos/aristas de los archivos dados (fantasmas), scopeado por
 	// project_id de origen (F5).
 	PruneGraphFilesFrom(originProjectID string, paths []string) (int, error)
+	// ReplaceProjectGraphFrom reemplaza el grafo COMPLETO de un proyecto (recepción de la
+	// federación push-on-index, F6): borra todo lo del origin_project_id y reinserta el set empujado.
+	ReplaceProjectGraphFrom(originProjectID string, nodes []GraphNode, edges []GraphEdge) error
+	// AllGraphNodesCtx / AllGraphEdgesCtx vuelcan el grafo completo del proyecto (scopeado por la
+	// credencial) para serializarlo en el push-on-index de la federación (F6).
+	AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error)
+	AllGraphEdgesCtx(ctx context.Context) ([]GraphEdge, error)
 }
 
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.
