@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.96.0] - 2026-07-25
+
 ### Added
 
 - **Federación del grafo de código al cerebro central (Track 20 · F6).** El grafo de código de cada
@@ -2969,7 +2971,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.95.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.96.0...HEAD
+[0.96.0]: https://github.com/codeabraham16/musubi/compare/v0.95.0...v0.96.0
 [0.95.0]: https://github.com/codeabraham16/musubi/compare/v0.94.0...v0.95.0
 [0.94.0]: https://github.com/codeabraham16/musubi/compare/v0.93.0...v0.94.0
 [0.93.0]: https://github.com/codeabraham16/musubi/compare/v0.92.0...v0.93.0
