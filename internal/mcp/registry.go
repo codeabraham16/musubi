@@ -630,10 +630,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_codegraph_index",
-				Description: "Indexa el GRAFO DE CÓDIGO del proyecto entero (Track 20): recorre todos los paquetes Go, deriva del AST (model-free) sus símbolos y aristas (IMPORTS/CONTAINS/CALLS) y los persiste, para luego consultarlos SIN leer archivos. Corre esto una vez (o tras cambios grandes) antes de usar musubi_code_graph / musubi_impact / musubi_map. Salta .git/.musubi/vendor/testdata. Devuelve {packages, nodes, edges}.",
+				Description: "Indexa el GRAFO DE CÓDIGO del proyecto (Track 20): deriva del AST (model-free) los símbolos y aristas (IMPORTS/CONTAINS/CALLS) y los persiste, para consultarlos SIN leer archivos. mode='full' (default) re-deriva TODOS los paquetes: corré esto la primera vez. mode='incremental' reconcilia BARATO con el working tree — sólo re-deriva los paquetes con archivos modificados/nuevos, PODA los de archivos borrados y salta lo sin cambios (ideal tras editar unos pocos archivos). Salta .git/.musubi/vendor/testdata. Devuelve {packages, nodes, edges} (incremental agrega pruned y skipped).",
 				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
+					Type: "object",
+					Properties: map[string]Property{
+						"mode": {Type: "string", Description: "'full' (default): re-deriva todo el repo. 'incremental': sólo lo cambiado desde el último índice (más barato)."},
+					},
 				},
 			},
 			handler: s.toolCodegraphIndex,
@@ -672,7 +674,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_map",
-				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes) y los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports). Requiere el grafo indexado. Sin parámetros.",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y cuántos archivos están 'stale' (cambiaron desde el índice) o 'ghosts' (borrados) — si son >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},

@@ -157,6 +157,73 @@ func (e *DbEngine) GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]Grap
 	return out, rows.Err()
 }
 
+// GraphFileFingerprintsCtx devuelve path → src_fingerprint de los archivos presentes en el
+// grafo (nodos con path != ''), acotado a la credencial. Es la base de la reconciliación del
+// índice incremental y del cómputo de frescura (Track 20 · F5): el propio grafo guardado ES el
+// estado anterior, así que no hace falta git ni un cursor de commit.
+func (e *DbEngine) GraphFileFingerprintsCtx(ctx context.Context) (map[string]string, error) {
+	sc := projectScopeFrom(ctx)
+	clause, args := sc.scopeClause("")
+	q := `SELECT DISTINCT path, COALESCE(src_fingerprint,'') FROM code_graph_nodes WHERE path != ''` + clause
+	rows, err := e.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("error al leer fingerprints del grafo: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var path, fp string
+		if err := rows.Scan(&path, &fp); err != nil {
+			return nil, err
+		}
+		out[path] = fp
+	}
+	return out, rows.Err()
+}
+
+// PruneGraphFiles poda los archivos dados atribuido al project_id del engine. Ver PruneGraphFilesFrom.
+func (e *DbEngine) PruneGraphFiles(paths []string) (int, error) {
+	return e.PruneGraphFilesFrom("", paths)
+}
+
+// PruneGraphFilesFrom borra los nodos (por path) y aristas (por src_path) de los archivos dados
+// en UNA transacción, atribuido al project_id de ORIGEN (Track 20 · F5). Es simétrico al
+// delete-by-source de UpsertPackageGraphFrom pero sin reinsertar: sirve para eliminar los nodos
+// FANTASMA de archivos borrados/renombrados que ya no existen en disco. Scopeado por project_id
+// para no cruzar tenants. origin == "" ⇒ project_id del engine. Devuelve cuántos nodos se borraron.
+func (e *DbEngine) PruneGraphFilesFrom(originProjectID string, paths []string) (int, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	projectID := originProjectID
+	if projectID == "" {
+		projectID = e.projectID
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("error al iniciar transacción de poda del grafo: %w", err)
+	}
+	defer tx.Rollback()
+
+	pruned := 0
+	for _, f := range paths {
+		res, err := tx.Exec(`DELETE FROM code_graph_nodes WHERE project_id=? AND path=?`, projectID, f)
+		if err != nil {
+			return 0, fmt.Errorf("error al podar nodos de %s: %w", f, err)
+		}
+		if n, aerr := res.RowsAffected(); aerr == nil {
+			pruned += int(n)
+		}
+		if _, err := tx.Exec(`DELETE FROM code_graph_edges WHERE project_id=? AND src_path=?`, projectID, f); err != nil {
+			return 0, fmt.Errorf("error al podar aristas de %s: %w", f, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("error al commitear la poda del grafo: %w", err)
+	}
+	return pruned, nil
+}
+
 // cgBoolToInt mapea el flag external a 0/1 para la columna INTEGER.
 func cgBoolToInt(b bool) int {
 	if b {

@@ -199,3 +199,94 @@ func TestCodeContextWeldsMemory(t *testing.T) {
 		t.Errorf("aún sin nodo, explained_by por path debería incluir arq/alpha: %v", cc2["explained_by"])
 	}
 }
+
+// TestCodegraphIncrementalIndex ejercita el índice incremental (F5): sin-cambios (0 paquetes),
+// modificado (sólo su paquete, deja de estar stale), nuevo (aparece) y borrado (podado).
+func TestCodegraphIncrementalIndex(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/proj\n")
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\nfunc Alpha() { beta() }\n\nfunc beta() {}\n")
+	writeFile(t, filepath.Join(dir, "otro", "z.go"), "package otro\n\nfunc Zeta() {}\n")
+	s := newTestServerWithPath(t, dir)
+
+	mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{}) // full inicial
+
+	// (1) incremental sin cambios ⇒ 0 paquetes refrescados.
+	inc := decodeCG(t, mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{"mode": "incremental"}))
+	if p, _ := inc["packages"].(float64); p != 0 {
+		t.Errorf("incremental sin cambios debería refrescar 0 paquetes, got %v", inc["packages"])
+	}
+
+	// (2) modificar a.go ⇒ sólo se re-deriva pkg; Alpha deja de estar stale.
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\n// cambio\nfunc Alpha() { beta() }\n\nfunc beta() {}\n")
+	inc = decodeCG(t, mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{"mode": "incremental"}))
+	if p, _ := inc["packages"].(float64); p != 1 {
+		t.Errorf("modificar a.go debería refrescar 1 paquete (no otro), got %v", inc["packages"])
+	}
+	cg := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/a.go#func:Alpha"}))
+	if node, _ := cg["node"].(map[string]interface{}); node == nil || node["stale"] == true {
+		t.Errorf("tras re-indexar, Alpha no debería estar stale, got %v", cg["node"])
+	}
+
+	// (3) agregar c.go nuevo ⇒ aparece su símbolo.
+	writeFile(t, filepath.Join(dir, "pkg", "c.go"), "package pkg\n\nfunc Gamma() {}\n")
+	mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{"mode": "incremental"})
+	cg = decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/c.go#func:Gamma"}))
+	if cg["found"] != true {
+		t.Errorf("el símbolo nuevo Gamma debería encontrarse tras el incremental, got %v", cg)
+	}
+
+	// (4) borrar c.go ⇒ se poda (pruned>=1) y ya no aparece.
+	if err := os.Remove(filepath.Join(dir, "pkg", "c.go")); err != nil {
+		t.Fatal(err)
+	}
+	inc = decodeCG(t, mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{"mode": "incremental"}))
+	if pr, _ := inc["pruned"].(float64); pr < 1 {
+		t.Errorf("borrar c.go debería podar >=1, got %v", inc["pruned"])
+	}
+	cg = decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/c.go#func:Gamma"}))
+	if cg["found"] != false {
+		t.Errorf("Gamma no debería encontrarse tras podar c.go, got %v", cg)
+	}
+}
+
+// TestCgStaleMissingFileReportsStale valida el fix de correctitud (F5, R5): un nodo cuyo archivo
+// fue borrado SIN re-indexar se reporta stale (antes leía como fresco).
+func TestCgStaleMissingFileReportsStale(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/proj\n")
+	writeFile(t, filepath.Join(dir, "pkg", "b.go"), "package pkg\n\ntype T struct{}\n")
+	s := newTestServerWithPath(t, dir)
+	mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{})
+
+	if err := os.Remove(filepath.Join(dir, "pkg", "b.go")); err != nil {
+		t.Fatal(err)
+	}
+	cg := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/b.go#type:T"}))
+	if node, _ := cg["node"].(map[string]interface{}); node == nil || node["stale"] != true {
+		t.Errorf("un nodo cuyo archivo fue borrado debería reportarse stale, got node=%v", cg["node"])
+	}
+}
+
+// TestMapReportsFreshness valida que map expone los conteos stale/ghosts (F5, R8).
+func TestMapReportsFreshness(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/proj\n")
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\nfunc Alpha() {}\n")
+	writeFile(t, filepath.Join(dir, "pkg", "b.go"), "package pkg\n\nfunc Beta() {}\n")
+	s := newTestServerWithPath(t, dir)
+	mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{})
+
+	// modificar uno, borrar otro, SIN re-indexar.
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\n// x\nfunc Alpha() {}\n")
+	if err := os.Remove(filepath.Join(dir, "pkg", "b.go")); err != nil {
+		t.Fatal(err)
+	}
+	mp := decodeCG(t, mustCall(t, s, "musubi_map", map[string]interface{}{}))
+	if st, _ := mp["stale"].(float64); st < 1 {
+		t.Errorf("map debería reportar stale>=1, got %v", mp["stale"])
+	}
+	if gh, _ := mp["ghosts"].(float64); gh < 1 {
+		t.Errorf("map debería reportar ghosts>=1, got %v", mp["ghosts"])
+	}
+}

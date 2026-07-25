@@ -33,6 +33,14 @@
 # Tablas de embeddings descargadas por `musubi embed pull` (puro dato, cientos de MB)
 .musubi/embeddings/
 
+# Guardarraíl de secretos: variables de entorno. Hoy este repo no usa archivos .env, pero sin esta
+# línea un `git add -A` accidental podría publicar credenciales (cierra el low de la auditoría
+# 2026-07-24). Los *.example SÍ se versionan (son plantillas sin secretos).
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # Artefactos de release (cross-compilados)
 dist/
 

@@ -31,8 +31,8 @@ const (
 	EdgeCalls    = "CALLS"
 )
 
-// Proveniencia de una arista. En F1 todo lo emitido es EXTRACTED (derivado del código, no
-// inferido por un modelo ni provisto por el agente).
+// ProvExtracted es la proveniencia de una arista derivada del código (no inferida por un modelo
+// ni provista por el agente). En F1 todo lo emitido es EXTRACTED.
 const ProvExtracted = "EXTRACTED"
 
 // Node es un vértice del grafo con id estable y re-derivable (ver NodeKey/PackageKey/FileKey).
