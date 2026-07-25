@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"musubi/internal/codeintel"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
@@ -282,7 +283,66 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al indexar el grafo de código: %v", err)
 	}
+	// Federación (Track 20 · F6): tras indexar, empujar el grafo al central. BEST-EFFORT — si el
+	// gate está apagado no hace nada, y un fallo del push jamás rompe el index (el grafo local ya
+	// quedó bien). Sólo reportamos `federated` cuando de verdad se intentó (gate encendido).
+	if attempted, ok := s.pushCodeGraphToCentral(ctx); attempted {
+		res["federated"] = ok
+	}
 	return jsonResult(res)
+}
+
+// pushCodeGraphToCentral empuja el grafo local completo al cerebro central tras indexar (Track 20 ·
+// F6), BEST-EFFORT. Gateado por sync configurado (s.syncClient) Y team mode (el proyecto participa
+// del cerebro compartido) — igual que el drain entrante. Cualquier fallo se loguea y se traga: no
+// rompe el index. Devuelve (attempted, ok): attempted=false cuando el gate está apagado (no-op sin
+// red); ok=true sólo si el push se concretó.
+func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok bool) {
+	if s.syncClient == nil || !s.memory.TeamMode {
+		return false, false // no-op: sin sync o proyecto local (R6/E4)
+	}
+	scoped := s.scopedCtx(ctx)
+	nodes, err := s.engine.AllGraphNodesCtx(scoped)
+	if err != nil {
+		logx.Error("federación del grafo: no se pudieron leer los nodos locales", "error", err)
+		return true, false
+	}
+	edges, err := s.engine.AllGraphEdgesCtx(scoped)
+	if err != nil {
+		logx.Error("federación del grafo: no se pudieron leer las aristas locales", "error", err)
+		return true, false
+	}
+	if err := s.syncClient.PushGraph(nodes, edges); err != nil {
+		logx.Error("federación del grafo: el push al central falló (best-effort, no rompe el index)", "error", err)
+		return true, false
+	}
+	logx.Info("federación del grafo: empujado al central", "nodes", len(nodes), "edges", len(edges))
+	return true, true
+}
+
+// toolCodegraphPush RECIBE el grafo de código federado de un proyecto (Track 20 · F6): el daemon
+// local, tras indexar, empuja su grafo entero y el central lo REEMPLAZA scopeado por el project_id
+// del PRINCIPAL del token. La atribución la fija writeOriginFor —la misma guarda que save_observation—:
+// un write=own IGNORA cualquier project_id del payload y usa el suyo (no puede plantar el grafo en
+// otro tenant); sólo un write=any puede declarar otro proyecto. Es una tool WRITE (canCall exige
+// autoridad de escritura). Model-free: sólo persiste lo derivado.
+func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Nodes     []memory.GraphNode `json:"nodes"`
+		Edges     []memory.GraphEdge `json:"edges"`
+		ProjectID string             `json:"project_id"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	origin, ok := writeOriginFor(principalFrom(ctx), args.ProjectID)
+	if !ok {
+		return nil, rpcErrorf(codeUnauthorized, "no se pudo atribuir el grafo a un proyecto (declará project_id o usá una credencial con proyecto)")
+	}
+	if err := s.engine.ReplaceProjectGraphFrom(origin, args.Nodes, args.Edges); err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al persistir el grafo federado: %v", err)
+	}
+	return jsonResult(map[string]interface{}{"nodes": len(args.Nodes), "edges": len(args.Edges)})
 }
 
 func (s *McpServer) toolCodeGraph(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {

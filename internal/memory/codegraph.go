@@ -103,6 +103,63 @@ func (e *DbEngine) UpsertPackageGraphFrom(originProjectID string, files []string
 	return nil
 }
 
+// ReplaceProjectGraphFrom REEMPLAZA por completo el grafo de un proyecto (Track 20 · F6, el receptor
+// de la federación push-on-index): en UNA transacción borra TODOS los nodos/aristas del
+// origin_project_id y reinserta el set empujado. El daemon local manda su grafo entero y el central
+// lo espeja tal cual, scopeado por el project_id de ORIGEN — así el push es idempotente (re-empujar
+// = mismo estado), aislado por tenant (el DELETE nunca toca otro project_id) y sin drift de nodos
+// fantasma (a diferencia del delete-by-source per-archivo de UpsertPackageGraphFrom). origin == ""
+// ⇒ project_id del engine. El ON CONFLICT protege ante claves duplicadas DENTRO del set empujado.
+func (e *DbEngine) ReplaceProjectGraphFrom(originProjectID string, nodes []GraphNode, edges []GraphEdge) error {
+	projectID := originProjectID
+	if projectID == "" {
+		projectID = e.projectID
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al iniciar transacción de reemplazo del grafo: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM code_graph_nodes WHERE project_id=?`, projectID); err != nil {
+		return fmt.Errorf("error al limpiar nodos del proyecto %q: %w", projectID, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM code_graph_edges WHERE project_id=?`, projectID); err != nil {
+		return fmt.Errorf("error al limpiar aristas del proyecto %q: %w", projectID, err)
+	}
+	for _, n := range nodes {
+		if _, err := tx.Exec(
+			`INSERT INTO code_graph_nodes (project_id, node_key, kind, name, path, start_line, end_line, external, src_fingerprint, updated_at)
+			 VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+			 ON CONFLICT(project_id, node_key) DO UPDATE SET
+			   kind=excluded.kind, name=excluded.name, path=excluded.path,
+			   start_line=excluded.start_line, end_line=excluded.end_line,
+			   external=excluded.external, src_fingerprint=excluded.src_fingerprint,
+			   updated_at=CURRENT_TIMESTAMP`,
+			projectID, n.Key, n.Kind, n.Name, n.Path, n.StartLine, n.EndLine, cgBoolToInt(n.External), n.SrcFingerprint,
+		); err != nil {
+			return fmt.Errorf("error al guardar nodo %s: %w", n.Key, err)
+		}
+	}
+	for _, ed := range edges {
+		if _, err := tx.Exec(
+			`INSERT INTO code_graph_edges (project_id, from_key, to_key, kind, confidence, provenance, src_path, src_fingerprint, updated_at)
+			 VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+			 ON CONFLICT(project_id, from_key, to_key, kind) DO UPDATE SET
+			   confidence=excluded.confidence, provenance=excluded.provenance,
+			   src_path=excluded.src_path, src_fingerprint=excluded.src_fingerprint,
+			   updated_at=CURRENT_TIMESTAMP`,
+			projectID, ed.FromKey, ed.ToKey, ed.Kind, ed.Confidence, ed.Provenance, ed.SrcPath, ed.SrcFingerprint,
+		); err != nil {
+			return fmt.Errorf("error al guardar arista %s→%s: %w", ed.FromKey, ed.ToKey, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear el reemplazo del grafo: %w", err)
+	}
+	return nil
+}
+
 // GetGraphNodeCtx devuelve un nodo por su clave, acotado al proyecto de la credencial (Track
 // 17/18): con scope, sólo el nodo del proyecto pedido o el sin atribuir (''), PREFIRIENDO el
 // del proyecto. Ausencia de scope / Federate ⇒ federado (la primera fila de ese node_key).

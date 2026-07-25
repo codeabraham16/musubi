@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **Federación del grafo de código al cerebro central (Track 20 · F6).** El grafo de código de cada
+  proyecto ahora viaja al central: tras `musubi_codegraph_index`, el daemon local empuja su grafo
+  entero (nodos + aristas) por una tool nueva `musubi_codegraph_push`, y el central lo **REEMPLAZA**
+  scopeado por el `project_id` del **PRINCIPAL** del token — aislamiento por tenant: un `write=own`
+  no puede plantar su grafo en otro proyecto (el `project_id` del payload se ignora, misma guarda
+  `writeOriginFor` que `save_observation`). **Best-effort**: gateado por sync + team mode; un fallo
+  del push **jamás** rompe el index (el grafo local ya quedó bien) y re-indexar re-empuja
+  (consistencia eventual). Cierra la **topología federada** que el Track declaró desde F1 — falta
+  sólo la vista en la cabina CRM (F7, repo aparte). Push por-request full-replace (batching diferido).
+  Model-free.
+
 ## [0.95.0] - 2026-07-25
 
 ### Added

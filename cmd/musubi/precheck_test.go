@@ -215,6 +215,10 @@ func TestPrecheckSurfacesCodeGraphWhenEnabled(t *testing.T) {
 
 func TestPrecheckCodeGraphOffByDefault(t *testing.T) {
 	// Sin MUSUBI_CODEGRAPH_HOOK: aunque el archivo esté indexado, NO se inyecta el grafo.
+	// Hermético: forzamos el var a vacío (off) para no depender del ambiente del runner —
+	// si quien corre los tests tiene el opt-in ENCENDIDO en su entorno, el default debe seguir
+	// verificándose igual.
+	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "")
 	root := t.TempDir()
 	writeFile(t, root, "a.go", "package a\nfunc Alpha(){}\n")
 	store := graphStore()

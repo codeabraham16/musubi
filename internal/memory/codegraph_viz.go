@@ -197,6 +197,17 @@ func (e *DbEngine) listAllGraphEdges(ctx context.Context) ([]GraphEdge, error) {
 	return out, rows.Err()
 }
 
+// AllGraphNodesCtx / AllGraphEdgesCtx exponen el grafo COMPLETO del proyecto (scopeado por la
+// credencial) para el push-on-index de la federación (Track 20 · F6): envuelven los volcados
+// internos ya existentes con un nombre exportado que la capa MCP puede llamar por la interfaz.
+func (e *DbEngine) AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error) {
+	return e.listAllGraphNodes(ctx)
+}
+
+func (e *DbEngine) AllGraphEdgesCtx(ctx context.Context) ([]GraphEdge, error) {
+	return e.listAllGraphEdges(ctx)
+}
+
 // ExplainedBy deriva el weld código→memoria de UN símbolo (Track 20 · F3): busca por FTS las
 // decisiones/gotchas que mencionan su nombre o su archivo y devuelve sus topic_keys + un gist
 // corto. On-demand (para el hover del dashboard); no persiste ninguna arista. Scopeado por ctx.
