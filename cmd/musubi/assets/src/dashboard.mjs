@@ -16,6 +16,9 @@ const RELCOL={ conflicts_with:'#f87171', supersedes:'#a78bfa', scoped:'#38bdf8',
 // color por TIPO DE ACTIVIDAD (ancla a señales reales): 0 reposo · 1 escribir · 2 recordar · 3 relacionar
 const AK=['#7f9cc9','#43e08b','#31c9ff','#f5c451'];
 const REPOSO=AK[0];
+// LENTE CÓDIGO: color de arista por TIPO (llama / importa / contiene). En reposo cada tubo toma su color.
+const EDGEKIND={ CALLS:'#38bdf8', IMPORTS:'#a78bfa', CONTAINS:'#5b6b86' };
+const edgeBase=s=>(s&&s.kind&&EDGEKIND[s.kind])||REPOSO;
 let DOMCOL=new Map(), DOMAINS=[];
 const domColor=d=>DOMCOL.get(d)||'#64748b';
 function hash01(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0)%1000/1000; }
@@ -31,6 +34,7 @@ function clampBrain(n){ const q=(n.x*n.x)/(rx*rx)+(n.y*n.y)/(ry*ry)+(n.z*n.z)/(r
 let NEURONS=[], SYN=[], POS=new Map();
 let prevStats=new Map(), prevSyn=new Set(), thinking=0, actInc=new Float32Array(0), bestInc=new Float32Array(0), akSrc=new Int8Array(0);
 let motion=true, needsRebuild=false;
+let lens='memory', LAST=null;   // lente activa (memory|code) + último snapshot (para reconstruir al togglear)
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -76,6 +80,42 @@ function buildGraph(brain){
   if(changed) settle(NEURONS.length>500?90:(NEURONS.length>180?150:230));
   POS=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
   if(changed) needsRebuild=true;   // solo recrear mallas si CAMBIÓ la topología (evita el parpadeo cada poll)
+}
+
+// buildCodeGraph: la LENTE CÓDIGO (Track 20). Mapea el grafo de código a los MISMOS campos que
+// buildGraph, así el resto del pipeline (settle/spread/rebuildMeshes/animate) lo dibuja sin tocar
+// nada: COLOR por módulo/paquete (reusa DOMPAL/DOMCOL), TAMAÑO por centralidad (grado), aristas
+// tipadas por kind (CALLS/IMPORTS/CONTAINS). Reposo puro — sin sistema de actividad de memoria; el
+// "porqué" (EXPLICADO_POR) se resuelve on-hover contra /api/explained.
+function buildCodeGraph(code){
+  const prev=POS, ns0=code.nodes||[];
+  const N0=240; growth=Math.max(0.85, Math.min(2.2, Math.cbrt((ns0.length||1)/N0))); applyScale();
+  const counts={}; ns0.forEach(n=>counts[n.module]=(counts[n.module]||0)+1);
+  const mods=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
+  DOMCOL=new Map(); DOMAINS=[]; const dIdx=new Map();
+  mods.forEach((d,i)=>{ const col=DOMPAL[i%DOMPAL.length]; DOMCOL.set(d,col); dIdx.set(d,i);
+    DOMAINS.push({name:d,color:col,count:counts[d]}); });
+
+  const prevIds=new Set(NEURONS.map(n=>n.id));
+  NEURONS=ns0.map(n=>{ const p=prev.get(n.key); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
+    const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.degree||0,0))*0.62)); // tamaño = centralidad
+    return { id:n.key, topic:n.name||n.key, domain:n.module, mem_type:n.kind, heat:n.degree||0,
+      path:n.path, line:n.line, gist:(n.path?n.path+(n.line?':'+n.line:''):(n.kind||'')), _code:true, _exp:undefined,
+      x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec:1, col:domColor(n.module),
+      ph:(p&&p.ph!=null)?p.ph:Math.random()*6.283, phx:Math.random()*6.283, phz:Math.random()*6.283,
+      di:dIdx.has(n.module)?dIdx.get(n.module):-1, act:0, ak:0, adj:[], _new:!p }; });
+  const idx=new Map(NEURONS.map((n,i)=>[n.id,i]));
+  SYN=(code.edges||[]).filter(s=>idx.has(s.source)&&idx.has(s.target))
+    .map(s=>{ const hs=hash01(s.source+'>'+s.target); return {...s, a:idx.get(s.source), b:idx.get(s.target), off:hs}; });
+  NEURONS.forEach(n=>{n.adj=[]; n.deg=0;});
+  for(const s of SYN){ const w=0.35+(s.confidence||0)*0.55; NEURONS[s.a].adj.push({j:s.b,w}); NEURONS[s.b].adj.push({j:s.a,w}); NEURONS[s.a].deg++; NEURONS[s.b].deg++; }
+  actInc=new Float32Array(NEURONS.length); bestInc=new Float32Array(NEURONS.length); akSrc=new Int8Array(NEURONS.length);
+  prevStats=new Map(); prevSyn=new Set(); thinking=0;   // código = reposo puro (sin diff de actividad)
+
+  const changed=NEURONS.some(n=>n._new)||NEURONS.length!==prevIds.size;
+  if(changed) settle(NEURONS.length>500?90:(NEURONS.length>180?150:230));
+  POS=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
+  if(changed) needsRebuild=true;
 }
 
 function settle(iters){ const n=NEURONS.length; if(!n) return;
@@ -159,7 +199,7 @@ function rebuildMeshes(){
   inst.instanceMatrix.needsUpdate=true; if(inst.instanceColor) inst.instanceColor.needsUpdate=true;
   world.add(inst);
   for(const s of SYN){ ADJ[s.a].push(s.b); ADJ[s.b].push(s.a);
-    const mat=new THREE.ShaderMaterial({ uniforms:{ uTime:{value:0}, uColor:{value:new THREE.Color(REPOSO)}, uSpeed:{value:0.42+(s.confidence||0)*0.5}, uBase:{value:0.06}, uGlow:{value:0.55} },
+    const mat=new THREE.ShaderMaterial({ uniforms:{ uTime:{value:0}, uColor:{value:new THREE.Color(edgeBase(s))}, uSpeed:{value:0.42+(s.confidence||0)*0.5}, uBase:{value:0.06}, uGlow:{value:0.55} },
       vertexShader:VERT, fragmentShader:FRAG, transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
     const mesh=new THREE.Mesh(EGEO,mat); mesh.__r=0.28+(s.confidence||0)*0.5; s.__mat=mat; s.__mesh=mesh; world.add(mesh); tubeMeshes.push(mesh); tubeMats.push(mat); }
   if(!framed && N){ let mr=0; for(const n of NEURONS){ const d=Math.hypot(n.x,n.y,n.z); if(d>mr)mr=d; } camera.position.set(0,20,Math.max(240,mr*2.7)); framed=true; }
@@ -181,10 +221,26 @@ renderer.domElement.addEventListener('pointerup',endDrag,true); renderer.domElem
 addEventListener('pointerup',endDrag); addEventListener('blur',endDrag);
 function hover(){ if(drag>=0 || !inst){ tip.classList.remove('on'); return; } ray.setFromCamera(ptr,camera); const hit=ray.intersectObject(inst);
   if(hit.length){ const n=NEURONS[hit[0].instanceId]; tip.querySelector('.tt').textContent=n.topic||n.domain;
-    tip.querySelector('.tg').textContent=n.gist||'(sin resumen)';
-    tip.querySelector('.tm').innerHTML=`<i>${n.domain}</i><i>${n.mem_type||'sin tipo'}</i><i>calor ${n.heat}</i>`;
+    if(n._code){
+      fetchExplain(n);   // trae (una vez, on-demand) las memorias que EXPLICAN este símbolo
+      let tg=esc(n.gist||'(sin ruta)');
+      if(Array.isArray(n._exp) && n._exp.length) tg+='<div class="why">'+n._exp.slice(0,3).map(e=>`<span>${esc(e.topic_key)}</span>`).join('')+'</div>';
+      tip.querySelector('.tg').innerHTML=tg;
+      let meta=`<i>${esc(n.mem_type||'')}</i><i>${esc(n.domain)}</i><i>centralidad ${n.heat}</i>`;
+      if(Array.isArray(n._exp)) meta+= n._exp.length?`<i style="color:var(--purple)">explicado ×${n._exp.length}</i>`:`<i style="opacity:.55">sin memorias</i>`;
+      tip.querySelector('.tm').innerHTML=meta;
+    } else {
+      tip.querySelector('.tg').textContent=n.gist||'(sin resumen)';
+      tip.querySelector('.tm').innerHTML=`<i>${esc(n.domain)}</i><i>${esc(n.mem_type||'sin tipo')}</i><i>calor ${n.heat}</i>`;
+    }
     const tw=tip.offsetWidth||220, th=tip.offsetHeight||70; let x=mx+16,y=my+16; if(x+tw>innerWidth-8)x=mx-tw-16; if(y+th>innerHeight-8)y=my-th-16;
     tip.style.left=x+'px'; tip.style.top=y+'px'; tip.classList.add('on'); } else tip.classList.remove('on'); }
+
+// fetchExplain: trae UNA vez las memorias que explican el símbolo (weld F3), cacheado en el nodo
+// (n._exp). Lazy + debounce por el flag: solo pega a /api/explained la primera vez que se hoverea.
+async function fetchExplain(n){ if(n._exp!==undefined || n._expLoading) return; n._expLoading=true;
+  try{ const r=await fetch('/api/explained?symbol='+encodeURIComponent(n.id),{cache:'no-store'}); n._exp=r.ok?((await r.json())||[]):[]; }
+  catch(_){ n._exp=[]; } finally{ n._expLoading=false; } }
 
 /* ---------- loop ---------- */
 const AMP=2.4;
@@ -215,7 +271,7 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
       const u=tubeMats[si].uniforms; u.uTime.value=t;
       const act=Math.max(a.act,b.act), ak=(a.act>=b.act?a.ak:b.ak);
       if(act>0.06 && ak>0){ u.uColor.value.set(AK[ak]); u.uGlow.value=0.55+act*3.6; u.uSpeed.value=1.0+act*1.6; }   // ACTIVIDAD: brillante
-      else { u.uColor.value.set(REPOSO); u.uGlow.value=0.5+thinking*0.35; u.uSpeed.value=0.42+(s.confidence||0)*0.5; } } // REPOSO: tenue (sube leve con thinking)
+      else { u.uColor.value.set(edgeBase(s)); u.uGlow.value=0.5+thinking*0.35; u.uSpeed.value=0.42+(s.confidence||0)*0.5; } } // REPOSO: color por tipo (código) o azul tenue (memoria)
   }
   controls.update(); hover(); composer.render();
 }
@@ -224,13 +280,18 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
 const $=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function renderHUD(d){
+  const code=lens==='code';
   const b=d.brain||{neurons:[],synapses:[]}, ins=d.insights||{}, ob=ins.observations||{};
-  const total=b.total_neurons||0, shown=(b.neurons||[]).length;
-  $('neuronCount').textContent=b.truncated?`${shown}/${total}`:shown;
-  $('synCount').textContent=(b.synapses||[]).length;
+  const cg=d.code||{nodes:[],edges:[]};
+  const shown=code?(cg.nodes||[]).length:(b.neurons||[]).length;
+  const total=code?(cg.total_nodes||0):(b.total_neurons||0);
+  const trunc=code?cg.truncated:b.truncated;
+  const edgeN=code?(cg.edges||[]).length:(b.synapses||[]).length;
+  $('neuronCount').textContent=trunc?`${shown}/${total}`:shown;
+  $('synCount').textContent=edgeN;
   $('proj').textContent=d.project||'—'; $('ver').textContent=d.version||'';
-  $('kActive').textContent=ob.active!=null?ob.active:'—';
-  $('kSyn').textContent=(b.synapses||[]).length;
+  $('kActive').textContent=code?shown:(ob.active!=null?ob.active:'—');
+  $('kSyn').textContent=edgeN;
   $('kDomains').textContent=DOMAINS.length||((d.graph||{}).domains||[]).length;
   $('domlegend').innerHTML=DOMAINS.length?DOMAINS.slice(0,10).map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
   const runs=((d.orchestration||{}).runs)||[];
@@ -257,11 +318,35 @@ function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); came
 addEventListener('resize',resize); resize();
 
 async function poll(){ try{ const r=await fetch('/api/snapshot',{cache:'no-store'}); if(!r.ok) throw 0;
-  const d=await r.json(); buildGraph(d.brain||{neurons:[],synapses:[]}); renderHUD(d); $('liveTxt').textContent='en vivo';
+  const d=await r.json(); LAST=d; renderLens(); renderHUD(d); $('liveTxt').textContent='en vivo';
   }catch(e){ $('liveTxt').textContent='reconectando'; } }
+
+// renderLens: reconstruye el grafo con la lente activa desde el último snapshot (sin re-pollear).
+function renderLens(){ if(!LAST) return;
+  if(lens==='code') buildCodeGraph(LAST.code||{nodes:[],edges:[]}); else buildGraph(LAST.brain||{neurons:[],synapses:[]}); }
 
 function setMotion(v){ motion=v; const b=$('motionBtn'); if(b){ b.textContent=motion?'❚❚ pausar':'▶ reanudar'; b.classList.toggle('paused',!motion); b.setAttribute('aria-pressed',String(!motion)); } }
 $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motion);
+
+// setLens: conmuta memoria↔código. Reconstruye el grafo, repinta leyendas/etiquetas y el HUD.
+function setLens(v){ lens=v; const b=$('lensBtn');
+  if(b){ b.textContent=lens==='code'?'◉ código':'◉ memoria'; b.classList.toggle('code',lens==='code'); b.setAttribute('aria-pressed',String(lens==='code')); }
+  applyLensLabels(); renderLens(); if(LAST) renderHUD(LAST); }
+// applyLensLabels: intercambia los textos estáticos del HUD según la lente (leyenda de aristas,
+// títulos, guía). Se llama al togglear, no en cada poll.
+function applyLensLabels(){ const code=lens==='code';
+  const set=(id,t)=>{ const e=$(id); if(e) e.textContent=t; };
+  set('lblNodes', code?'nodos':'neuronas'); set('lblEdges', code?'aristas':'sinapsis');
+  set('domTitle', code?'Módulos':'Dominios'); set('lblActive', code?'Nodos':'Memorias activas');
+  set('lblSyn', code?'Aristas':'Sinapsis'); set('lblDomains', code?'Módulos':'Dominios');
+  const al=$('actlegend'); if(al) al.innerHTML = code
+    ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
+    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
+  const ht=$('howto'); if(ht) ht.innerHTML = code
+    ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
+    : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
+}
+const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>setLens(lens==='code'?'memory':'code'));
 
 poll(); setInterval(poll,5000);
 requestAnimationFrame(animate);

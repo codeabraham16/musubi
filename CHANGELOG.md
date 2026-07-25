@@ -67,6 +67,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     **stale**.
   - **Visibilidad en `musubi_map`.** El panorama reporta cuántos archivos están `stale` (cambiaron
     desde el índice) o `ghosts` (borrados) — si son >0, conviene re-indexar.
+- **Lente "código" en el dashboard-cerebro (Track 20 · bonus visual).** El dashboard WebGL gana un
+  toggle **memoria ↔ código**: la misma escena three.js ahora también dibuja el GRAFO DE CÓDIGO —
+  **color por módulo** (paquete), **tamaño por centralidad** y **aristas tipadas** (`llama` / `importa`
+  / `contiene`). Al pasar el mouse sobre un símbolo, revela **qué memorias lo explican**
+  (`EXPLICADO_POR`, weld F3 derivado por FTS on-demand). Backend: nuevo `CodeGraphViz(ctx, limit)`
+  (análogo a `BrainGraph`, pero **scopeado por proyecto** — no cruza tenants) servido en el mismo
+  `/api/snapshot` (campo `code`), y `/api/explained` para el hover. La centralidad **pondera los
+  `IMPORTS` a la baja** para que los god-nodes propios del proyecto destaquen sobre los paquetes de
+  la stdlib. Model-free, read-only, loopback. El motor de render no cambió: la lente rellena los
+  mismos campos que el grafo de memoria.
 
 ## [0.94.0] - 2026-07-17
 

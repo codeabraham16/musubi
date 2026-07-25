@@ -94,6 +94,11 @@ body{
   transition:background .2s,color .2s,border-color .2s;}
 #motionBtn:hover{background:rgba(45,212,191,.20);}
 #motionBtn.paused{color:var(--amber); background:rgba(251,191,36,.12); border-color:rgba(251,191,36,.4);}
+#lensBtn{font-family:var(--mono); font-size:10.5px; letter-spacing:.5px; color:var(--purple); cursor:pointer;
+  background:rgba(167,139,250,.12); border:1px solid rgba(167,139,250,.38); border-radius:999px; padding:3px 11px;
+  transition:background .2s,color .2s,border-color .2s;}
+#lensBtn:hover{background:rgba(167,139,250,.22);}
+#lensBtn.code{color:var(--teal); background:rgba(45,212,191,.12); border-color:rgba(45,212,191,.4);}
 .hint b{color:var(--muted); font-weight:600;} .hint .sep{opacity:.4;}
 .hint button{pointer-events:auto; font:inherit; color:var(--muted); background:none; border:none; cursor:pointer; letter-spacing:.5px;}
 .hint button:hover{color:var(--teal);}
@@ -103,8 +108,11 @@ body{
 #tip.on{opacity:1; transform:translateY(0);}
 #tip .tt{font-family:var(--mono); font-size:10px; color:var(--teal); margin-bottom:4px; letter-spacing:.3px;}
 #tip .tg{font-size:12px; color:var(--txt); line-height:1.4;}
-#tip .tm{margin-top:6px; display:flex; gap:10px; font-size:9.5px; color:var(--dim); font-family:var(--mono); text-transform:uppercase; letter-spacing:.8px;}
+#tip .tm{margin-top:6px; display:flex; flex-wrap:wrap; gap:8px; font-size:9.5px; color:var(--dim); font-family:var(--mono); text-transform:uppercase; letter-spacing:.8px;}
 #tip .tm i{font-style:normal;}
+#tip .why{margin-top:6px; display:flex; flex-wrap:wrap; gap:4px;}
+#tip .why span{font-family:var(--mono); font-size:9px; color:var(--purple); background:rgba(167,139,250,.13);
+  border:1px solid rgba(167,139,250,.3); border-radius:5px; padding:1px 5px; letter-spacing:.2px;}
 @media (max-width:1080px){ #hud{grid-template-columns:1fr;} #hud .rail.r{grid-column:1;} #hud .rail{display:none;} #hud .hdr,#hud .center{display:flex;} }
 </style>
 </head>
@@ -133,8 +141,8 @@ body{
     <div class="spacer"></div>
     <div class="status">
       <span id="health" class="pill"><span class="dot"></span><span id="healthTxt">…</span></span>
-      <div class="col"><b id="neuronCount">—</b><span>neuronas</span></div>
-      <div class="col"><b id="synCount">—</b><span>sinapsis</span></div>
+      <div class="col"><b id="neuronCount">—</b><span id="lblNodes">neuronas</span></div>
+      <div class="col"><b id="synCount">—</b><span id="lblEdges">sinapsis</span></div>
       <div class="col"><b id="proj">—</b><span id="ver">—</span></div>
       <span class="pill"><span class="dot live" style="color:var(--teal)"></span><span id="liveTxt">en vivo</span></span>
     </div>
@@ -144,9 +152,9 @@ body{
     <div class="panel">
       <h2><span class="ic"></span>Cerebro</h2>
       <div class="kpis">
-        <div class="kpi"><div class="v teal" id="kActive">—</div><div class="k">Memorias activas</div></div>
-        <div class="kpi"><div class="v purple" id="kSyn">—</div><div class="k">Sinapsis</div></div>
-        <div class="kpi"><div class="v amber" id="kDomains">—</div><div class="k">Dominios</div></div>
+        <div class="kpi"><div class="v teal" id="kActive">—</div><div class="k" id="lblActive">Memorias activas</div></div>
+        <div class="kpi"><div class="v purple" id="kSyn">—</div><div class="k" id="lblSyn">Sinapsis</div></div>
+        <div class="kpi"><div class="v amber" id="kDomains">—</div><div class="k" id="lblDomains">Dominios</div></div>
         <div class="kpi"><div class="v green" id="kRuns">—</div><div class="k">Runs activos</div></div>
       </div>
       <div style="margin-top:12px;">
@@ -155,7 +163,7 @@ body{
       </div>
     </div>
     <div class="panel">
-      <h2><span class="ic" style="background:var(--purple)"></span>Dominios</h2>
+      <h2><span class="ic" style="background:var(--purple)"></span><span id="domTitle">Dominios</span></h2>
       <div class="legend" id="domlegend"><div class="empty">…</div></div>
       <div class="legend" style="margin:10px 0;padding-top:10px;border-top:1px solid var(--glass-line)" id="actlegend">
         <div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div>
@@ -163,7 +171,7 @@ body{
         <div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div>
         <div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>
       </div>
-      <div class="howto">
+      <div class="howto" id="howto">
         <span><b>·</b> cada punto es una <b>memoria</b></span>
         <span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>
         <span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>
@@ -188,9 +196,10 @@ body{
 
   <div class="center">
     <div class="hint">
+      <button id="lensBtn" aria-pressed="false">◉ memoria</button><span class="sep">·</span>
       <span><b>arrastrá</b> para rotar</span><span class="sep">·</span>
       <span><b>rueda</b> para acercar</span><span class="sep">·</span>
-      <span><b>hover</b> activa un recuerdo</span><span class="sep">·</span>
+      <span><b>hover</b> revela el detalle</span><span class="sep">·</span>
       <button id="motionBtn" aria-pressed="false">❚❚ pausar</button>
     </div>
   </div>

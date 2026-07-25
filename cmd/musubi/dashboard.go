@@ -109,6 +109,23 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.
 		_ = json.NewEncoder(w).Encode(snap)
 	})
 
+	// /api/explained?symbol=path#kind:name → las memorias (decisiones/gotchas) que EXPLICAN ese
+	// símbolo (weld F3), derivadas por FTS al vuelo. Lo consume el hover de la lente "código".
+	mux.HandleFunc("/api/explained", func(w http.ResponseWriter, r *http.Request) {
+		path, name := splitCodeKey(r.URL.Query().Get("symbol"))
+		exp, err := engine.ExplainedBy(context.Background(), path, name, 5)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if exp == nil {
+			exp = []memory.CodeExplain{}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(exp)
+	})
+
 	// bundle WebGL (three.js) embebido, servido same-origin sobre loopback (sin CDN, offline).
 	mux.HandleFunc("/dashboard.bundle.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -126,6 +143,21 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.
 	})
 
 	return mux
+}
+
+// splitCodeKey parsea una clave de nodo de código "path#kind:name" en (path, name), para el
+// endpoint /api/explained. Sin '#' devuelve ("", key); espeja symbolNameFromKey de la capa MCP.
+func splitCodeKey(key string) (path, name string) {
+	i := strings.Index(key, "#")
+	if i < 0 {
+		return "", key
+	}
+	path = key[:i]
+	rest := key[i+1:] // kind:name
+	if j := strings.Index(rest, ":"); j >= 0 {
+		return path, rest[j+1:]
+	}
+	return path, rest
 }
 
 // isLoopbackAddr indica si addr (host:port) liga SOLO a loopback. Un host vacío

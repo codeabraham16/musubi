@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,6 +23,10 @@ import (
 // suficiente para una silueta densa sin castigar el force-sim del navegador.
 const brainNeuronLimit = 300
 
+// codeVizLimit es el tope de nodos del grafo de código (lente "código" del dashboard): mismo
+// criterio que brainNeuronLimit — denso pero sin ahogar el force-sim.
+const codeVizLimit = 400
+
 // exportSnapshot es el documento JSON que produce 'musubi export'.
 type exportSnapshot struct {
 	GeneratedAt   string                `json:"generated_at"`
@@ -32,6 +37,7 @@ type exportSnapshot struct {
 	Tokens        memory.BudgetStatus   `json:"tokens"`
 	Graph         exportGraph           `json:"graph"`
 	Brain         memory.BrainGraph     `json:"brain"`
+	Code          memory.CodeGraphViz   `json:"code"`
 	Recent        []memory.ObsCard      `json:"recent"`
 	Orchestration exportOrchestration   `json:"orchestration"`
 }
@@ -102,6 +108,13 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 		return snap, fmt.Errorf("export: grafo neuronal: %w", err)
 	}
 	snap.Brain = brain
+
+	// Grafo de código para la lente "código" del dashboard (federado: DB local monoproyecto).
+	code, err := engine.CodeGraphViz(context.Background(), codeVizLimit)
+	if err != nil {
+		return snap, fmt.Errorf("export: grafo de código: %w", err)
+	}
+	snap.Code = code
 
 	recent, err := engine.RecentObservations(20)
 	if err != nil {
