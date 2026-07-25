@@ -124,24 +124,31 @@ type cgNodeView struct {
 }
 
 // cgStale compara el fingerprint guardado de un nodo con el ACTUAL del archivo (en la capa MCP,
-// que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale.
+// que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
+// archivo AUSENTE o ilegible cuenta como stale (nodo fantasma): mostrar código borrado como
+// fresco era un bug de correctitud — impact/callers apuntarían a símbolos que ya no existen.
 func (s *McpServer) cgStale(n memory.GraphNode) bool {
 	if n.Path == "" {
 		return false
 	}
 	cur, err := memory.FileFingerprint(s.projectPath, n.Path)
-	return err == nil && cur != "" && cur != n.SrcFingerprint
+	if err != nil || cur == "" {
+		return true
+	}
+	return cur != n.SrcFingerprint
 }
 
 func (s *McpServer) cgView(n memory.GraphNode) cgNodeView {
 	return cgNodeView{Key: n.Key, Kind: n.Kind, Name: n.Name, Path: n.Path, Line: n.StartLine, Stale: s.cgStale(n)}
 }
 
-// indexAllPackages recorre el proyecto (WalkDir desde projectPath), junta los directorios con
-// archivos .go y refresca el grafo de cada uno, poblando el repo ENTERO. Salta directorios
-// ocultos (.git/.musubi), vendor, testdata y node_modules. Devuelve un resumen.
-func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
-	dirs := map[string]bool{}
+// walkGoTree recorre el proyecto UNA vez (WalkDir desde projectPath) y devuelve el set de
+// directorios con archivos .go y el set de file-keys normalizados (con "/") de cada .go en disco.
+// Salta directorios ocultos (.git/.musubi), vendor, testdata y node_modules. Es la fuente común
+// del índice full (usa los dirs) y del incremental (compara los file-keys contra el grafo).
+func (s *McpServer) walkGoTree() (dirs map[string]bool, fileKeys map[string]bool) {
+	dirs = map[string]bool{}
+	fileKeys = map[string]bool{}
 	_ = filepath.WalkDir(s.projectPath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort: saltar lo ilegible sin abortar el índice
@@ -159,27 +166,119 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 			if rel, rerr := filepath.Rel(s.projectPath, filepath.Dir(p)); rerr == nil {
 				dirs[filepath.ToSlash(rel)] = true
 			}
+			fileKeys[memory.NormalizeCodePath(s.projectPath, p)] = true
 		}
 		return nil
 	})
+	return dirs, fileKeys
+}
 
+// dirExists indica si un directorio del paquete (relativo con "/", o absoluto) existe en disco.
+func (s *McpServer) dirExists(dir string) bool {
+	p := dir
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(s.projectPath, dir)
+	}
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
+}
+
+// graphSize devuelve el total de nodos y aristas del grafo scopeado (para el resumen del índice).
+func (s *McpServer) graphSize(scoped context.Context) (nodes, edges int) {
+	nodes, byKind, _ := s.engine.GraphStatsCtx(scoped)
+	for _, c := range byKind {
+		edges += c
+	}
+	return nodes, edges
+}
+
+// indexAllPackages puebla el repo ENTERO: refresca el grafo de cada directorio con .go. Devuelve
+// un resumen {packages, nodes, edges}.
+func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
+	dirs, _ := s.walkGoTree()
 	pkgs := 0
 	for dir := range dirs {
 		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
 			pkgs++
 		}
 	}
-	scoped := s.scopedCtx(ctx)
-	nodes, byKind, _ := s.engine.GraphStatsCtx(scoped)
-	edges := 0
-	for _, c := range byKind {
-		edges += c
-	}
+	nodes, edges := s.graphSize(s.scopedCtx(ctx))
 	return map[string]interface{}{"packages": pkgs, "nodes": nodes, "edges": edges}, nil
 }
 
-func (s *McpServer) toolCodegraphIndex(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
-	res, err := s.indexAllPackages(ctx)
+// indexIncremental reconcilia el grafo con el working tree sin re-derivar todo (Track 20 · F5):
+// compara el src_fingerprint guardado por archivo contra el actual del disco y sólo re-deriva los
+// paquetes con archivos MODIFICADOS o NUEVOS, PODA los FANTASMA (en el grafo, ausentes en disco)
+// y salta los sin cambio. El dir de un fantasma que aún existe se re-deriva para limpiar aristas
+// colgantes que lo referenciaban. Devuelve {packages, pruned, skipped, nodes, edges}.
+func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{}, error) {
+	scoped := s.scopedCtx(ctx)
+	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
+	if err != nil {
+		return nil, err
+	}
+	_, diskFiles := s.walkGoTree()
+
+	dirtyDirs := map[string]bool{}
+	var ghostPaths []string
+	skipped := 0
+	for path, fp := range stored {
+		if !diskFiles[path] {
+			ghostPaths = append(ghostPaths, path)
+			if dir := packageDirOf(path); s.dirExists(dir) {
+				dirtyDirs[dir] = true // re-derivar para soltar aristas que apuntaban al fantasma
+			}
+			continue
+		}
+		cur, ferr := memory.FileFingerprint(s.projectPath, path)
+		if ferr == nil && cur == fp {
+			skipped++
+			continue
+		}
+		dirtyDirs[packageDirOf(path)] = true
+	}
+	for path := range diskFiles {
+		if _, ok := stored[path]; !ok {
+			dirtyDirs[packageDirOf(path)] = true // archivo nuevo
+		}
+	}
+
+	pruned := 0
+	if len(ghostPaths) > 0 {
+		// Poda scopeada por credencial (como el refresh): sin proyecto atribuible, no borramos.
+		if origin, ok := writeOriginFor(principalFrom(ctx), ""); ok {
+			if n, perr := s.engine.PruneGraphFilesFrom(origin, ghostPaths); perr == nil {
+				pruned = n
+			}
+		}
+	}
+	refreshed := 0
+	for dir := range dirtyDirs {
+		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
+			refreshed++
+		}
+	}
+	nodes, edges := s.graphSize(scoped)
+	return map[string]interface{}{
+		"mode": "incremental", "packages": refreshed, "pruned": pruned,
+		"skipped": skipped, "nodes": nodes, "edges": edges,
+	}, nil
+}
+
+func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Mode string `json:"mode"`
+	}
+	_ = json.Unmarshal(raw, &args) // best-effort: sin/mal 'mode' ⇒ full (no rompe callers)
+	var (
+		res map[string]interface{}
+		err error
+	)
+	if strings.EqualFold(strings.TrimSpace(args.Mode), "incremental") {
+		res, err = s.indexIncremental(ctx)
+	} else {
+		res, err = s.indexAllPackages(ctx)
+	}
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al indexar el grafo de código: %v", err)
 	}
@@ -279,6 +378,28 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 	return jsonResult(map[string]interface{}{"symbol": args.Symbol, "callers": callers, "count": len(callers)})
 }
 
+// graphFreshness cuenta, sobre los archivos presentes en el grafo scopeado, cuántos están STALE
+// (fingerprint del disco distinto al guardado) y cuántos son FANTASMA (ausentes/ilegibles en
+// disco). Es la señal de "conviene re-indexar" que expone map (Track 20 · F5), a granularidad de
+// archivo (barata: una pasada de stat sobre los paths del grafo).
+func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
+	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
+	if err != nil {
+		return 0, 0
+	}
+	for path, fp := range stored {
+		cur, ferr := memory.FileFingerprint(s.projectPath, path)
+		if ferr != nil || cur == "" {
+			ghosts++
+			continue
+		}
+		if cur != fp {
+			stale++
+		}
+	}
+	return stale, ghosts
+}
+
 func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
 	scoped := s.scopedCtx(ctx)
 	nodes, byKind, err := s.engine.GraphStatsCtx(scoped)
@@ -293,8 +414,10 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	if entry == nil {
 		entry = []string{}
 	}
+	stale, ghosts := s.graphFreshness(scoped)
 	return jsonResult(map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
+		"stale": stale, "ghosts": ghosts,
 	})
 }
 

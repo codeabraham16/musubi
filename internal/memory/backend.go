@@ -109,6 +109,12 @@ type CodeGraphStore interface {
 	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error)
 	// ListGraphNodesForFileCtx devuelve los símbolos de un archivo, scopeado (F2).
 	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]GraphNode, error)
+	// GraphFileFingerprintsCtx devuelve path → src_fingerprint de los archivos del grafo, scopeado
+	// (base de la reconciliación incremental y de la frescura, F5).
+	GraphFileFingerprintsCtx(ctx context.Context) (map[string]string, error)
+	// PruneGraphFilesFrom borra nodos/aristas de los archivos dados (fantasmas), scopeado por
+	// project_id de origen (F5).
+	PruneGraphFilesFrom(originProjectID string, paths []string) (int, error)
 }
 
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.
