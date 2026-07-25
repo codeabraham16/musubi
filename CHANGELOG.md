@@ -55,6 +55,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Mismo modelo que Go (F1): CALLS **intra-archivo** con match único; cross-archivo diferido.
   Nota de mantenimiento: `gotreesitter` es una dependencia **tag-gated**; no la borres con
   `go mod tidy` sin el tag `treesitter`.
+- **Índice incremental + poda de fantasmas (Track 20 · F5).** `musubi_codegraph_index` gana
+  `mode:"incremental"`: reconcilia el grafo con el working tree **reusando el `src_fingerprint`
+  ya guardado por archivo** (el propio grafo es el estado anterior — sin git ni cursor de commit).
+  Sólo re-deriva los paquetes con archivos **modificados/nuevos**, **poda** los nodos/aristas de
+  archivos **borrados/renombrados** (scopeado por `project_id`) y salta lo sin cambios (0 paquetes
+  si nada cambió). `mode:"full"` sigue siendo el default. Devuelve además `pruned` y `skipped`.
+  - **Fix de correctitud (staleness de archivos borrados).** Un nodo cuyo archivo ya no existía se
+    reportaba `stale:false` (se veía **fresco**), así que `impact`/`code_graph` podían apuntar a
+    código eliminado como si estuviera vigente. Ahora un archivo ausente/ilegible cuenta como
+    **stale**.
+  - **Visibilidad en `musubi_map`.** El panorama reporta cuántos archivos están `stale` (cambiaron
+    desde el índice) o `ghosts` (borrados) — si son >0, conviene re-indexar.
 
 ## [0.94.0] - 2026-07-17
 
