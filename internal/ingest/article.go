@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/markusmobius/go-trafilatura"
 )
+
+// maxArticleBytes acota cuánto se lee del body de una página (backstop anti-DoS/OOM): sin esto una URL
+// pública que streamea GBs tumbaba el cerebro central always-on. Mismo criterio que maxCatalogBytes en
+// skillsource. 16 MiB cubre con holgura cualquier artículo/HTML real. Ver auditoría 2026-07-26 #14.
+const maxArticleBytes = 16 << 20
 
 // article.go extrae el texto principal de cualquier página web con go-trafilatura (Go puro,
 // in-process, sin binarios externos). Es el fallback UNIVERSAL de la ingesta: Match siempre da true.
@@ -60,7 +66,7 @@ func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, opts Opti
 		return Result{}, fmt.Errorf("la página respondió HTTP %d", resp.StatusCode)
 	}
 
-	res, err := trafilatura.Extract(resp.Body, trafilatura.Options{
+	res, err := trafilatura.Extract(io.LimitReader(resp.Body, maxArticleBytes), trafilatura.Options{
 		OriginalURL:     u,
 		EnableFallback:  true, // usa Readability/DomDistiller si trafilatura no encuentra el cuerpo
 		ExcludeComments: true,

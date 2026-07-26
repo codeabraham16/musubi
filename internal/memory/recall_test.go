@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -423,8 +424,14 @@ func TestRecallGraphCentralityNoRelationsEquivalent(t *testing.T) {
 	if len(on.Items) != len(off.Items) {
 		t.Fatalf("sin relaciones el recall debe ser idéntico: %d vs %d items", len(on.Items), len(off.Items))
 	}
+	// El score se compara con TOLERANCIA, no exacto: desde el fix del castigo por edad (auditoría #1) el
+	// factor de recencia depende del reloj REAL (time.Now en cada Recall), y las dos llamadas off/on se
+	// muestrean con µs de diferencia ⇒ divergen ~1e-9. La igualdad EXACTA de antes sólo se daba porque
+	// la señal de edad estaba muerta (factor 1.0 fijo). Un aporte REAL del grafo sería ~1/(rrfK) ≈ 0.016,
+	// muy por encima de esta tolerancia, así que la equivalencia "sin relaciones = no-op" sigue vigilada.
+	const eps = 1e-6
 	for i := range off.Items {
-		if on.Items[i].ID != off.Items[i].ID || on.Items[i].Score != off.Items[i].Score {
+		if on.Items[i].ID != off.Items[i].ID || math.Abs(on.Items[i].Score-off.Items[i].Score) > eps {
 			t.Errorf("item %d difiere con la señal on sin relaciones: %+v vs %+v", i, on.Items[i], off.Items[i])
 		}
 	}

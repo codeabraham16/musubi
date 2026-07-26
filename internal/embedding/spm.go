@@ -166,7 +166,7 @@ func newDarts(raw []byte) (*darts, error) {
 		return nil, fmt.Errorf("charsmap demasiado corto")
 	}
 	trieSize := binary.LittleEndian.Uint32(raw[:4])
-	if 4+int(trieSize) > len(raw) || trieSize%4 != 0 {
+	if trieSize == 0 || 4+int(trieSize) > len(raw) || trieSize%4 != 0 {
 		return nil, fmt.Errorf("charsmap con tamaño de trie inválido")
 	}
 	trieBlob := raw[4 : 4+trieSize]
@@ -187,6 +187,9 @@ func dartsOffset(u uint32) uint32 {
 // match hace un commonPrefixSearch darts-clone y devuelve la longitud (en bytes) y el
 // valor (offset en `norm`) del prefijo MÁS LARGO de key presente en el trie.
 func (d *darts) match(key []byte) (int, uint32, bool) {
+	if len(d.units) == 0 { // charsmap corrupto: degradar en vez de paniquear
+		return 0, 0, false
+	}
 	pos := uint32(0)
 	unit := d.units[pos]
 	pos ^= dartsOffset(unit)
@@ -216,6 +219,9 @@ func (d *darts) match(key []byte) (int, uint32, bool) {
 
 // normString lee la forma normalizada (string terminado en NUL) que empieza en el offset.
 func (d *darts) normString(off uint32) string {
+	if off >= uint32(len(d.norm)) { // offset fuera de rango (charsmap corrupto)
+		return ""
+	}
 	end := off
 	for end < uint32(len(d.norm)) && d.norm[end] != 0 {
 		end++

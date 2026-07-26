@@ -109,6 +109,41 @@ func TestRedactDoesNotTouchGitSHAorCleanText(t *testing.T) {
 	}
 }
 
+// REGRESIÓN (auditoría 2026-07-26, #16): el catch-all de entropía NO cubre hex puro (entropía máxima
+// del hex = 4.0 < umbral 4.5), así que un secreto en hex (HMAC / API key de servicios self-hosted) se
+// filtraba a la memoria compartida. Se agregó un catch-all de hex que EXCLUYE las longitudes canónicas
+// de hash de git (40 sha1, 64 sha256), pervasivas en la memoria de commits.
+func TestRedactPureHexSecret(t *testing.T) {
+	// 48 hex (no es longitud de hash de git) tras una etiqueta con espacio (env-secret no aplica, pide `:=`).
+	secret := strings.Repeat("0123456789abcdef", 3)
+	clean, finds := Redact("webhook_secret " + secret + " listo")
+	if strings.Contains(clean, secret) {
+		t.Fatalf("un secreto hex no se redactó:\n%s", clean)
+	}
+	if !strings.Contains(clean, "[REDACTED:hex-secret]") {
+		t.Fatalf("esperaba hex-secret, obtuve: %s", clean)
+	}
+	if len(finds) == 0 {
+		t.Fatal("esperaba un finding")
+	}
+
+	// 32 hex (longitud md5, que git NO usa): también se redacta.
+	s32 := strings.Repeat("0123456789abcdef", 2)
+	if c, _ := Redact("k " + s32 + " x"); !strings.Contains(c, "[REDACTED:hex-secret]") {
+		t.Fatalf("un hex de 32 debe redactarse; obtuve: %s", c)
+	}
+
+	// git SHA-1 (40) y SHA-256 (64): NO se tocan (aparecen por toda la memoria de commits).
+	sha1 := "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+	if c, _ := Redact("commit " + sha1); strings.Contains(c, "[REDACTED") {
+		t.Errorf("un git SHA-1 (40) no debe redactarse; obtuve: %s", c)
+	}
+	sha256 := strings.Repeat("0123456789abcdef", 4)
+	if c, _ := Redact("commit " + sha256); strings.Contains(c, "[REDACTED") {
+		t.Errorf("un git SHA-256 (64) no debe redactarse; obtuve: %s", c)
+	}
+}
+
 func TestShannonEntropy(t *testing.T) {
 	if h := shannonEntropy("aaaaaaaa"); h != 0 {
 		t.Errorf("entropía de un char repetido debe ser 0, obtuve %v", h)

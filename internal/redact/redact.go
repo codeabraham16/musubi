@@ -70,6 +70,11 @@ var (
 	}
 	// entropyToken: candidatos base64-ish para el catch-all (NO hex puro, para no pegar SHAs).
 	entropyToken = regexp.MustCompile(`[A-Za-z0-9+/_\-]{` + itoa(minTokenLen) + `,}`)
+	// hexToken: hex puro largo. El catch-all de entropía NO lo cubre (entropía máx del hex = 4.0 < 4.5),
+	// así que un secreto en hex (HMAC / API keys de servicios self-hosted) se filtraba (auditoría #16).
+	// En el loop se EXCLUYEN las longitudes canónicas de hash de git (40 sha1, 64 sha256) para no
+	// redactar los SHAs de commit, omnipresentes en la memoria de Musubi.
+	hexToken = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
 	// placeholderRe: ejemplos/plantillas que NO son secretos reales.
 	placeholderRe = regexp.MustCompile(`(?i)example|xxxx+|your[_-]|placeholder|dummy|<[^>]+>|\.\.\.`)
 )
@@ -105,6 +110,18 @@ func Redact(text string) (string, []Finding) {
 			continue
 		}
 		finds = append(finds, Finding{"high-entropy", s, e})
+	}
+
+	// 2b. Catch-all de hex puro (el de entropía no lo ve). Se saltan las longitudes de hash de git.
+	for _, m := range hexToken.FindAllStringIndex(text, -1) {
+		s, e := m[0], m[1]
+		if n := e - s; n == 40 || n == 64 { // git SHA-1 / SHA-256: no redactar
+			continue
+		}
+		if overlaps(finds, s, e) || isAllowlisted(text[s:e]) {
+			continue
+		}
+		finds = append(finds, Finding{"hex-secret", s, e})
 	}
 
 	if len(finds) == 0 {

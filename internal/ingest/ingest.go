@@ -102,6 +102,12 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (Re
 		wantMedia = false
 	}
 
+	// LIMITACIÓN CONOCIDA (auditoría 2026-07-26 #15): en la ruta MEDIA, yt-dlp resuelve el host y
+	// conecta por su cuenta (subproceso), así que el assertPublicHost de arriba es TOCTOU — un host
+	// hostil podría re-bindear a una IP interna entre la check y el fetch de yt-dlp. La ruta ARTÍCULO
+	// no tiene este hueco (usa safeHTTPClient con un dialer que revalida al conectar). Fijar la IP
+	// resuelta en yt-dlp no es soportado limpio; se acepta el residual (requiere host de media hostil +
+	// rebinding + el path RestrictToPublic del central). Si esto se endurece, va acá.
 	if wantMedia {
 		if r.media == nil {
 			return Result{

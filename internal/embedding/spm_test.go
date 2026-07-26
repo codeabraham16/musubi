@@ -81,6 +81,24 @@ func TestNewDartsRejectsBadCharsmap(t *testing.T) {
 	if _, err := newDarts([]byte{0xff, 0xff, 0xff, 0xff}); err == nil {
 		t.Error("trie_size fuera de rango debería fallar")
 	}
+	// trie_size == 0: units vacío ⇒ darts.match paniqueaba en d.units[0] (auditoría #16).
+	if _, err := newDarts([]byte{0, 0, 0, 0}); err == nil {
+		t.Error("trie_size == 0 (trie vacío) debería fallar en vez de producir un darts que paniquea")
+	}
+}
+
+// REGRESIÓN (auditoría 2026-07-26, #16): un tokenizer.json malformado (charsmap corrupto) podía
+// producir un darts con units vacío u offsets fuera de rango, y match/normString paniqueaban con
+// index-out-of-range en vez de degradar. Todo el resto del cargador devuelve error; estos también.
+func TestDartsMatchAndNormStringDoNotPanic(t *testing.T) {
+	empty := &darts{} // units vacío
+	if _, _, ok := empty.match([]byte("hola")); ok {
+		t.Fatal("un trie vacío no debe encontrar prefijo")
+	}
+	d := &darts{norm: []byte("abc\x00")}
+	if s := d.normString(999); s != "" {
+		t.Fatalf("un offset fuera de rango debe dar \"\", obtuve %q", s)
+	}
 }
 
 func TestParseNormalizerUnsupported(t *testing.T) {

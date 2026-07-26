@@ -70,3 +70,38 @@ func TestArticleExtractorHTTPError(t *testing.T) {
 		t.Fatal("esperaba error en HTTP 404")
 	}
 }
+
+// countingRC cuenta cuántos bytes se consumieron del body subyacente.
+type countingRC struct {
+	r io.Reader
+	n *int64
+}
+
+func (c countingRC) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	*c.n += int64(n)
+	return n, err
+}
+func (countingRC) Close() error { return nil }
+
+type countingDoer struct {
+	body io.Reader
+	read *int64
+}
+
+func (d countingDoer) Do(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Body: countingRC{r: d.body, n: d.read}, Header: make(http.Header)}, nil
+}
+
+// REGRESIÓN (auditoría 2026-07-26, #14): article.Extract pasaba resp.Body directo a trafilatura SIN
+// tope de tamaño. Una URL pública que streamea GBs => OOM/DoS en el cerebro central always-on. El fix
+// envuelve el body en io.LimitReader(maxArticleBytes): acá probamos que NO se consumen más bytes que el tope.
+func TestArticleExtractorCapsBodySize(t *testing.T) {
+	var read int64
+	big := strings.NewReader(fixtureHTML + strings.Repeat("x", int(maxArticleBytes)+(2<<20)))
+	ex := &ArticleExtractor{Client: countingDoer{body: big, read: &read}}
+	_, _ = ex.Extract(context.Background(), "https://blog.example.com/big", Options{})
+	if read > maxArticleBytes+4096 {
+		t.Fatalf("el body no se acotó: se leyeron %d bytes (tope %d)", read, int64(maxArticleBytes))
+	}
+}
