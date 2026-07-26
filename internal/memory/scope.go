@@ -128,6 +128,13 @@ func (e *DbEngine) PromoteObservation(id string) error {
 	); err != nil {
 		return fmt.Errorf("error al promover observación: %w", err)
 	}
+	// Bump de sync_seq (auditoría #4): al pasar a 'shared' la obs se vuelve pulleable; si conservara su
+	// sync_seq viejo, un cliente cuyo cursor ya lo pasó nunca la bajaría. Fresco ⇒ se re-entrega.
+	if _, err := tx.Exec(
+		`UPDATE observations SET sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1 WHERE id = ?`, id,
+	); err != nil {
+		return fmt.Errorf("error al asignar sync_seq en promoción: %w", err)
+	}
 	// Encolar en el outbox dentro de la misma tx (ahora la obs ya es 'shared', así que el
 	// INSERT..SELECT sí produce fila). Idempotente por obs_id. Apagado en el central (terminal).
 	if e.outboxEnabled {

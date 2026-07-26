@@ -22,6 +22,9 @@ import (
 // SharedObs es una observación 'shared' traída del central para el sync ENTRANTE. Lleva el rowid
 // del central como cursor de paginación (el cliente guarda el mayor visto para la próxima página).
 type SharedObs struct {
+	// RowID es el CURSOR de sync del protocolo entrante. Desde la migración v19 (auditoría #4) lleva el
+	// valor de sync_seq (monótono, sube en cada insert/update, estable ante VACUUM), NO el rowid crudo.
+	// El nombre del campo se conserva por compat del wire (JSON "rowid") — la semántica es "cursor".
 	RowID      int64   `json:"rowid"`
 	ID         string  `json:"id"`
 	TopicKey   string  `json:"topic_key"`
@@ -51,10 +54,13 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 	}
 	sc := projectScopeFrom(ctx)
 	scopeSQL, scopeArgs := sc.scopeClause("")
-	q := `SELECT rowid, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,'')
+	// Se pagina por sync_seq (no por rowid): sync_seq SUBE también en un UPDATE (auditoría #4), así que
+	// una edición de una obs shared ya sincronizada se re-entrega; y es estable ante VACUUM (rowid no).
+	// El valor de sync_seq viaja en el campo RowID (es el cursor del protocolo; ver SharedObs).
+	q := `SELECT sync_seq, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,'')
 		FROM observations
-		WHERE ` + visibleObsPredicate + ` AND scope = 'shared' AND rowid > ?` + scopeSQL + `
-		ORDER BY rowid ASC
+		WHERE ` + visibleObsPredicate + ` AND scope = 'shared' AND sync_seq > ?` + scopeSQL + `
+		ORDER BY sync_seq ASC
 		LIMIT ?`
 	args := make([]interface{}, 0, len(scopeArgs)+2)
 	args = append(args, afterRowID)
@@ -111,6 +117,13 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author)
 	if err != nil {
 		return false, fmt.Errorf("error al ingerir observación shared: %w", err)
+	}
+	// Bump de sync_seq (auditoría #4): sin esto la fila ingerida quedaría con sync_seq=0 y NO sería
+	// visible al pull (que pagina por sync_seq>cursor) — importa si este cliente a su vez sirve pulls.
+	if _, err = e.db.Exec(
+		`UPDATE observations SET sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1 WHERE id = ?`, o.ID,
+	); err != nil {
+		return false, fmt.Errorf("error al asignar sync_seq al ingerir shared: %w", err)
 	}
 	return before == 0, nil
 }

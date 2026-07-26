@@ -303,6 +303,16 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 		return fmt.Errorf("error al guardar observación: %w", err)
 	}
 
+	// Bump de sync_seq (auditoría #4): en TODO insert Y update se le asigna a esta fila el mayor
+	// sync_seq + 1. Así una EDICIÓN de una obs shared ya sincronizada sube su sync_seq y el pull
+	// entrante —que ahora pagina por sync_seq, no por rowid— la vuelve a entregar a los clientes.
+	// Single-writer SQLite ⇒ MAX+1 es seguro (sin race). Va en la MISMA tx que el UPSERT.
+	if _, err = tx.Exec(
+		`UPDATE observations SET sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1 WHERE id = ?`, id,
+	); err != nil {
+		return fmt.Errorf("error al asignar sync_seq: %w", err)
+	}
+
 	// Si se provee embedding, guardarlo (keyed por observation_id).
 	if len(embedding) > 0 {
 		vectorBytes, err := Float32ToBytes(embedding)

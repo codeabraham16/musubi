@@ -586,6 +586,29 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 19,
+			name:    "sync_seq",
+			// SECUENCIA DE SYNC MONÓTONA (auditoría 2026-07-26 #4). El pull entrante paginaba por
+			// `rowid`, que NO cambia en un UPDATE (el UPSERT reescribe in-place) ⇒ las EDICIONES de una
+			// obs shared ya sincronizada nunca se re-bajaban (mirror stale). Peor: `rowid` puede CAMBIAR
+			// en un VACUUM (gotcha FTS external-content), corrompiendo el cursor. sync_seq es una columna
+			// ESTABLE que se bumpea en cada insert/update de una obs (ver saveObservation) y sobrevive al
+			// VACUUM, así que el cursor entrante pasa a ser por sync_seq: monótono y captura ediciones.
+			// Backfill: sync_seq = rowid preserva el orden histórico para no re-bajar todo de golpe.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE observations ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0`,
+					`UPDATE observations SET sync_seq = rowid`,
+					`CREATE INDEX IF NOT EXISTS idx_obs_sync_seq ON observations(sync_seq)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

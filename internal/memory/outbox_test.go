@@ -44,8 +44,8 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	if v != latestSchemaVersion() {
 		t.Errorf("user_version = %d, esperaba %d", v, latestSchemaVersion())
 	}
-	if latestSchemaVersion() != 18 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 18", latestSchemaVersion())
+	if latestSchemaVersion() != 19 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 19", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.
@@ -420,6 +420,36 @@ func TestClaimAtomicNoDoubleDelivery(t *testing.T) {
 	}
 	if total != n {
 		t.Errorf("entre ambos claims se esperaban %d filas únicas, hubo %d", n, total)
+	}
+}
+
+// REGRESIÓN (auditoría 2026-07-26, #13c): con dos drainers solapados por vencimiento de lease, una
+// marca rezagada de un ciclo viejo podía resucitar una fila ya resuelta (un MarkRetry tardío revivía
+// un 'sent' a 'pending' = phantom pending). El fencing por estado (excluir terminales) lo corta.
+func TestOutboxMarkDoesNotResurrectTerminal(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservationTyped("x", "t", "contenido", 1.0, "", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ClaimOutboxBatch(10, 60); err != nil { // pending -> claimed
+		t.Fatal(err)
+	}
+	if err := e.MarkOutboxSent("x"); err != nil { // claimed -> sent (ciclo B, entrega OK)
+		t.Fatal(err)
+	}
+	// Ciclo A rezagado: su intento falló y llama a retry TARDE. No debe revivir el 'sent'.
+	if err := e.MarkOutboxRetry("x", 30, "fallo tardío del ciclo viejo"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _ := outboxRow(t, e, "x"); status != outboxSent {
+		t.Fatalf("un retry rezagado no debe resucitar un 'sent'; estado quedó %q (esperaba sent)", status)
+	}
+	// Idem para dead.
+	if err := e.MarkOutboxDead("x", "tardío"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _ := outboxRow(t, e, "x"); status != outboxSent {
+		t.Fatalf("un dead rezagado no debe pisar un 'sent'; estado quedó %q", status)
 	}
 }
 

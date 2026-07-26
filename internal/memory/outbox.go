@@ -183,9 +183,13 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 
 // MarkOutboxSent marca la fila 'sent' tras una entrega exitosa (R13). No se re-entrega.
 func (e *DbEngine) MarkOutboxSent(obsID string) error {
+	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
+	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
+	// rezagado podía re-marcar una fila que otro ya resolvió (p. ej. un MarkRetry tardío revivía un 'sent'
+	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now')
-		WHERE obs_id = ?`, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
 	return nil
@@ -204,7 +208,7 @@ func (e *DbEngine) MarkOutboxRetry(obsID string, backoffSeconds int, errMsg stri
 		    next_attempt_at = datetime('now', '+' || ? || ' seconds'),
 		    last_error = ?,
 		    updated_at = datetime('now')
-		WHERE obs_id = ?`, backoffSeconds, errMsg, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, backoffSeconds, errMsg, obsID); err != nil {
 		return fmt.Errorf("error al reprogramar reintento en outbox: %w", err)
 	}
 	return nil
@@ -215,7 +219,7 @@ func (e *DbEngine) MarkOutboxRetry(obsID string, backoffSeconds int, errMsg stri
 func (e *DbEngine) MarkOutboxDead(obsID, errMsg string) error {
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET status = 'dead', last_error = ?, updated_at = datetime('now')
-		WHERE obs_id = ?`, errMsg, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, errMsg, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como dead: %w", err)
 	}
 	return nil
