@@ -155,11 +155,23 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", s.readyzHandler)
 
-	// Métricas: detrás de auth si hay token (son datos operativos).
+	// Métricas: datos operativos (uso por tool, profundidad del outbox, gauges de la DB). Detrás de
+	// auth SIEMPRE que la auth esté activa. SEGURIDAD (auditoría 2026-07-26 #9): antes gateaba sólo por
+	// opt.token, así que en el setup multi-tenant recomendado (principals.yaml, sin token legacy) el
+	// token quedaba "" y /metrics caía ABIERTO en el bind del tailnet. Ahora usa la MISMA regla que /mcp:
+	// con registry, exige un principal válido; con token legacy, exige el bearer.
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+		deny := func() {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
+		if opt.registry != nil {
+			if _, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization"))); !ok {
+				deny()
+				return
+			}
+		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+			deny()
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")

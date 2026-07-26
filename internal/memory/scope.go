@@ -140,3 +140,37 @@ func (e *DbEngine) PromoteObservation(id string) error {
 	}
 	return nil
 }
+
+// obsInScope verifica que la observación id pertenezca al proyecto del ctx. Federado o sin scope
+// (admin / stdio local) ⇒ siempre ok. Si la fila NO existe, devuelve ok=true a propósito: dejá que el
+// mutador de arriba devuelva "no encontrada" en vez de convertir esto en un ORÁCULO de tenant.
+// AISLAMIENTO (auditoría 2026-07-26 #11).
+func (e *DbEngine) obsInScope(ctx context.Context, id string) (bool, error) {
+	sc := projectScopeFrom(ctx)
+	if sc.Federate || sc.ProjectID == "" {
+		return true, nil
+	}
+	var proj string
+	err := e.db.QueryRowContext(ctx, `SELECT COALESCE(project_id,'') FROM observations WHERE id=?`, id).Scan(&proj)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return proj == sc.ProjectID, nil
+}
+
+// PromoteObservationCtx es PromoteObservation acotada al proyecto de la credencial: un principal
+// acotado NO puede forzar a 'shared' (y al outbox central) la observación de OTRO tenant con sólo
+// conocer su id. Auditoría 2026-07-26 #11.
+func (e *DbEngine) PromoteObservationCtx(ctx context.Context, id string) error {
+	ok, err := e.obsInScope(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: no se puede promover %s desde otro proyecto", ErrCrossTenant, id)
+	}
+	return e.PromoteObservation(id)
+}

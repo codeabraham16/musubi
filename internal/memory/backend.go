@@ -35,6 +35,8 @@ type ObservationStore interface {
 	GetObservationsBudgetCtx(ctx context.Context, ids []string, budget int) ([]Observation, int, error)
 	// PromoteObservation marca una observación como 'shared' (memoria híbrida local+central).
 	PromoteObservation(id string) error
+	// PromoteObservationCtx es PromoteObservation acotada al proyecto de la credencial (aislamiento #11).
+	PromoteObservationCtx(ctx context.Context, id string) error
 }
 
 // RecallEngine — recall por presupuesto de tokens (model-free, híbrido FTS + ranking).
@@ -66,6 +68,8 @@ type RelationStore interface {
 	// PendingObsRelationsCtx acota al proyecto de la credencial (ctx, Track 17 — aislamiento).
 	PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, error)
 	ResolveObsRelation(id, relation, resolvedBy, reason string) error
+	// ResolveObsRelationCtx acota el veredicto al proyecto de la credencial (aislamiento #11).
+	ResolveObsRelationCtx(ctx context.Context, id, relation, resolvedBy, reason string) error
 }
 
 // ConflictDetector — deducción model-free de relaciones al guardar una observación.

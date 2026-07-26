@@ -270,6 +270,14 @@ func (p *Principal) canCall(readOnly bool) bool {
 	return true
 }
 
+// isAdmin indica si el principal puede correr operaciones DESTRUCTIVAS/GLOBALES (mantenimiento,
+// reparación con apply): sólo el rol admin, que la doc reserva justo para eso. Sin principal (stdio
+// local) ⇒ true (confianza local). Un write=own/any NO es admin: sin esta guarda cualquier writer
+// podía disparar maintain/doctor-repair sobre TODA la base multi-tenant (auditoría 2026-07-26 #8).
+func (p *Principal) isAdmin() bool {
+	return p == nil || p.Role == RoleAdmin
+}
+
 // writeOriginFor decide a QUÉ PROYECTO se atribuye una escritura, dado lo que declaró el cliente.
 // Es la guarda de atribución, y es fail-closed:
 //

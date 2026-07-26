@@ -20,20 +20,12 @@ import (
 	"musubi/internal/memory"
 )
 
-// countingSave envuelve un handler de save para contar las corridas exitosas y, al cruzar
-// el umbral maintenance.AutoAfterSaves, disparar un mantenimiento (T5.3). El conteo va por
-// el wrapper para no instrumentar cada return de éxito de los handlers.
-func (s *McpServer) countingSave(h func(json.RawMessage) (interface{}, *RpcError)) func(json.RawMessage) (interface{}, *RpcError) {
-	return func(raw json.RawMessage) (interface{}, *RpcError) {
-		res, rpcErr := h(raw)
-		if rpcErr == nil {
-			s.maybeTriggerMaintenance()
-		}
-		return res, rpcErr
-	}
-}
-
-// countingSaveCtx es como countingSave pero para handlers CTX-AWARE (Track 17): toolSaveObservation
+// countingSaveCtx envuelve un handler de save CTX-AWARE para contar las corridas exitosas y, al cruzar
+// el umbral maintenance.AutoAfterSaves, disparar un mantenimiento (T5.3). El conteo va por el wrapper
+// para no instrumentar cada return de éxito de los handlers. (Antes había una variante no-ctx
+// `countingSave`; quedó sin uso al pasar toolPromote a ctx-aware por el aislamiento #11.)
+//
+// countingSaveCtx es para handlers CTX-AWARE (Track 17): toolSaveObservation
 // necesita el principal del contexto para derivar la atribución de escritura por credencial.
 func (s *McpServer) countingSaveCtx(h func(context.Context, json.RawMessage) (interface{}, *RpcError)) func(context.Context, json.RawMessage) (interface{}, *RpcError) {
 	return func(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {

@@ -267,7 +267,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 // toolPromote marca una observación como 'shared' (memoria híbrida local+central). Muta,
 // así que va bajo el lock exclusivo del dispatch (readOnly=false). Idempotente: promover
 // una ya compartida es OK; un id inexistente devuelve un error claro.
-func (s *McpServer) toolPromote(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolPromote(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ID string `json:"id"`
 	}
@@ -277,9 +277,12 @@ func (s *McpServer) toolPromote(raw json.RawMessage) (interface{}, *RpcError) {
 	if strings.TrimSpace(args.ID) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "id es obligatorio")
 	}
-	if err := s.engine.PromoteObservation(args.ID); err != nil {
+	if err := s.engine.PromoteObservationCtx(s.scopedCtx(ctx), args.ID); err != nil {
 		if errors.Is(err, memory.ErrObservationNotFound) {
 			return nil, rpcErrorf(codeInvalidParams, "no existe una observación con id %q", args.ID)
+		}
+		if errors.Is(err, memory.ErrCrossTenant) {
+			return nil, rpcErrorf(codeUnauthorized, "%v", err)
 		}
 		return nil, rpcErrorf(codeInternalError, "error al promover observación: %v", err)
 	}
@@ -436,7 +439,7 @@ func firstLine(s string, max int) string {
 }
 
 // toolDoctor diagnostica o repara la base de memoria.
-func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Check  string `json:"check"`
 		Repair bool   `json:"repair"`
@@ -449,6 +452,11 @@ func (s *McpServer) toolDoctor(raw json.RawMessage) (interface{}, *RpcError) {
 	}
 
 	if args.Repair {
+		// La reparación MUTA la base global (no acotada por tenant): sólo admin. El diagnóstico (sin
+		// repair) sigue abierto a cualquier lector. Ver auditoría 2026-07-26 #8.
+		if !principalFrom(ctx).isAdmin() {
+			return nil, rpcErrorf(codeUnauthorized, "doctor con repair:true es una operación de reparación GLOBAL: requiere un principal admin")
+		}
 		if strings.TrimSpace(args.Check) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "repair requiere 'check' (qué reparar)")
 		}
@@ -862,8 +870,13 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		var data []byte
 		if strings.TrimSpace(args.Definition) != "" {
 			data = []byte(args.Definition)
-		} else if strings.TrimSpace(args.Workflow) != "" {
-			path := filepath.Join(s.projectPath, config.DirName, "workflows", args.Workflow+".yaml")
+		} else if wf := strings.TrimSpace(args.Workflow); wf != "" {
+			// SEGURIDAD (auditoría 2026-07-26 #13): el nombre viene del cliente y se concatena a una ruta.
+			// Sin validar, "../../../../etc/x" escapa de .musubi/workflows/. Se exige un nombre simple.
+			if strings.ContainsAny(wf, `/\`) || strings.Contains(wf, "..") {
+				return memory.WorkflowDef{}, rpcErrorf(codeInvalidParams, "nombre de workflow inválido %q: sin separadores de ruta ni '..'", wf)
+			}
+			path := filepath.Join(s.projectPath, config.DirName, "workflows", wf+".yaml")
 			b, err := os.ReadFile(path)
 			if err != nil {
 				return memory.WorkflowDef{}, rpcErrorf(codeInvalidParams, "no se pudo leer el workflow %q: %v", args.Workflow, err)
@@ -1085,7 +1098,7 @@ var validJudgeRelations = map[string]bool{
 }
 
 // toolJudge emite el veredicto de una relación entre observaciones.
-func (s *McpServer) toolJudge(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolJudge(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		RelationID string `json:"relation_id"`
 		Relation   string `json:"relation"`
@@ -1100,7 +1113,10 @@ func (s *McpServer) toolJudge(raw json.RawMessage) (interface{}, *RpcError) {
 	if !validJudgeRelations[args.Relation] {
 		return nil, rpcErrorf(codeInvalidParams, "relation inválida %q (usá related|compatible|scoped|conflicts_with|supersedes|not_conflict)", args.Relation)
 	}
-	if err := s.engine.ResolveObsRelation(args.RelationID, args.Relation, "agent", args.Reason); err != nil {
+	if err := s.engine.ResolveObsRelationCtx(s.scopedCtx(ctx), args.RelationID, args.Relation, "agent", args.Reason); err != nil {
+		if errors.Is(err, memory.ErrCrossTenant) {
+			return nil, rpcErrorf(codeUnauthorized, "%v", err)
+		}
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo juzgar la relación: %v", err)
 	}
 	msg := fmt.Sprintf("Veredicto registrado: %s (relación %s).", args.Relation, args.RelationID)
@@ -1282,7 +1298,11 @@ type maintainResponse struct {
 	Report          *memory.MaintenanceReport `json:"report,omitempty"`
 }
 
-func (s *McpServer) toolMaintain(raw json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolMaintain(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	// maintain corre consolidación + forget + VACUUM sobre TODA la base (no acotado por tenant): sólo admin.
+	if !principalFrom(ctx).isAdmin() {
+		return nil, rpcErrorf(codeUnauthorized, "musubi_maintain es una operación de mantenimiento GLOBAL: requiere un principal admin")
+	}
 	var args struct {
 		Force bool `json:"force"`
 	}

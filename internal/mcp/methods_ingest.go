@@ -68,7 +68,13 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 		}
 		author := authorFrom(principalFrom(ctx))
 		topicKey, obsID := ingest.PersistKey(res)
-		content := ingest.RenderForMemory(res)
+		// Redacción forzada ANTES del embedding (auditoría 2026-07-26 #10): en infra compartida el
+		// contenido ingerido (páginas/transcripciones) puede traer secretos. Los otros save ya pasan por
+		// redactIfForced; ingest_url NO lo hacía, así que guardaba el texto crudo Y —peor— derivaba el
+		// vector del crudo (fuga vector-at-rest que T17.2 cerró para el resto). Se redacta el contenido y
+		// el topic, y el embedding se calcula del texto YA redactado.
+		topicKey = s.redactIfForced(topicKey)
+		content := s.redactIfForced(ingest.RenderForMemory(res))
 		emb := s.embedIfEnabled(content)
 		if serr := s.engine.SaveObservationTypedFrom(origin, author, obsID, topicKey, content, 1.0, "semantic", s.defaultScope(), emb); serr != nil {
 			if errors.Is(serr, memory.ErrCrossTenant) {

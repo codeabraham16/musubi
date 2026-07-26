@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -117,6 +118,33 @@ func (e *DbEngine) ResolveObsRelation(id, relation, resolvedBy, reason string) e
 		}
 	}
 	return nil
+}
+
+// ResolveObsRelationCtx es ResolveObsRelation acotada al proyecto de la credencial: sin esto, un
+// principal acotado que conociera un relation_id ajeno podía juzgarlo y —con supersedes— OCULTAR la
+// observación de OTRO tenant. Se valida contra el proyecto de la observación de ORIGEN de la relación
+// (tras el fix #6, origen y target son del mismo tenant). Auditoría 2026-07-26 #11.
+func (e *DbEngine) ResolveObsRelationCtx(ctx context.Context, id, relation, resolvedBy, reason string) error {
+	sc := projectScopeFrom(ctx)
+	if !sc.Federate && sc.ProjectID != "" {
+		var sourceID string
+		err := e.db.QueryRowContext(ctx, `SELECT source_id FROM observation_relations WHERE id=?`, id).Scan(&sourceID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// No existe: dejá que ResolveObsRelation devuelva "no existe la relación" (sin oráculo de tenant).
+		case err != nil:
+			return fmt.Errorf("error al verificar el scope de la relación %q: %w", id, err)
+		default:
+			ok, serr := e.obsInScope(ctx, sourceID)
+			if serr != nil {
+				return serr
+			}
+			if !ok {
+				return fmt.Errorf("%w: no se puede juzgar la relación %s de otro proyecto", ErrCrossTenant, id)
+			}
+		}
+	}
+	return e.ResolveObsRelation(id, relation, resolvedBy, reason)
 }
 
 // PendingObsRelationsCtx es como PendingObsRelations pero ACOTA al proyecto de la credencial

@@ -238,8 +238,13 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// Estado ALMACENADO de esta id, si ya existe. Una sola lectura alimenta dos invariantes: la
 	// preservación de un 'shared' previo y el aislamiento de escritura entre tenants.
 	var storedScope, storedProject string
-	_ = tx.QueryRow(`SELECT COALESCE(scope,''), COALESCE(project_id,'') FROM observations WHERE id = ?`, id).
-		Scan(&storedScope, &storedProject)
+	// El error se PROPAGA (no se traga): esta lectura alimenta la guarda de aislamiento cross-tenant de
+	// abajo, y tragar el error la haría FALLAR-ABIERTO (storedProject quedaría "" y la guarda no
+	// dispararía, permitiendo pisar la fila de otro tenant). Sólo ErrNoRows es benigno (id nueva).
+	if err := tx.QueryRow(`SELECT COALESCE(scope,''), COALESCE(project_id,'') FROM observations WHERE id = ?`, id).
+		Scan(&storedScope, &storedProject); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("no se pudo leer el estado previo de %s (guarda de aislamiento): %w", id, err)
+	}
 
 	// AISLAMIENTO DE ESCRITURA CROSS-TENANT: el UPSERT de abajo NO pisa project_id ni author (ver
 	// más abajo), así que escribir sobre la id de OTRO proyecto no la reasigna — le pisa el

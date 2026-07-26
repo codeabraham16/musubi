@@ -40,8 +40,15 @@ func (g GitRunner) Diff(ref string, staged bool) (string, error) {
 	if staged {
 		args = append(args, "--staged")
 	}
-	if strings.TrimSpace(ref) != "" {
-		args = append(args, ref)
+	if r := strings.TrimSpace(ref); r != "" {
+		// SEGURIDAD (auditoría 2026-07-26 #7): ref viene del cliente MCP y detect_changes es readOnly,
+		// así que lo puede disparar hasta el principal de MENOR privilegio. Sin guarda, un ref como
+		// "--output=/ruta" git lo interpreta como FLAG y escribe/trunca un archivo arbitrario. Se rechaza
+		// cualquier ref con pinta de opción y se sella con --end-of-options (todo lo que sigue es revisión).
+		if strings.HasPrefix(r, "-") {
+			return "", fmt.Errorf("ref inválido %q: no puede empezar con '-'", ref)
+		}
+		args = append(args, "--end-of-options", r)
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.Dir

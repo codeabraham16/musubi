@@ -100,6 +100,12 @@ func (e *DbEngine) BandNeighbors(obsID string, opts ConflictOptions) ([]BandNeig
 
 	var out []BandNeighbor
 	for _, c := range cands {
+		// AISLAMIENTO POR TENANT (auditoría 2026-07-26 #6): la banda le muestra al agente el GIST de las
+		// vecinas, así que sin acotar por proyecto filtraría contenido de OTROS tenants en la respuesta
+		// del save. Misma guarda que en DetectRelations. (project_id vacío == vacío ⇒ el caso local no cambia.)
+		if c.projectID != src.projectID {
+			continue
+		}
 		// Las guardas estructurales valen acá también: sería absurdo sacar el ruido de la cola por
 		// una puerta y metérselo al agente por la otra.
 		if complementaryPair(src, c) {

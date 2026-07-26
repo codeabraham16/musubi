@@ -130,7 +130,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					},
 				},
 			},
-			handler: noCtx(s.toolMaintain),
+			handler: s.toolMaintain,
 		},
 		{
 			Tool: Tool{
@@ -369,7 +369,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"relation_id", "relation"},
 				},
 			},
-			handler: noCtx(s.toolJudge),
+			handler: s.toolJudge,
 		},
 		{
 			Tool: Tool{
@@ -384,7 +384,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					},
 				},
 			},
-			handler: noCtx(s.toolDoctor),
+			handler: s.toolDoctor,
 		},
 		{
 			Tool: Tool{
@@ -587,7 +587,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"id"},
 				},
 			},
-			handler: noCtx(s.countingSave(s.toolPromote)),
+			handler: s.countingSaveCtx(s.toolPromote),
 		},
 		{
 			Tool: Tool{

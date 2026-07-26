@@ -180,6 +180,7 @@ type obsRow struct {
 	topicKey  string
 	content   string
 	createdAt string
+	projectID string // AISLAMIENTO (auditoría #6): tenant de la fila, para no cruzar la detección de conflictos
 }
 
 // DetectRelations evalúa la observación obsID contra sus candidatas y persiste las
@@ -228,6 +229,15 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 
 	var out []ObsRelation
 	for _, c := range cands {
+		// AISLAMIENTO POR TENANT (auditoría 2026-07-26 #6): la detección de conflictos corre en el ingest
+		// (incluido el que llega por sync al central multi-tenant) y su pool de candidatas NO estaba
+		// acotado por proyecto. Sin esta guarda, la respuesta de save_observation filtraba ids+gists de
+		// OTROS tenants, y un auto-supersede podía OCULTAR la memoria de otro proyecto. Va acá —el único
+		// loop donde nacen las relaciones— para que sea imposible de saltear: una fila de otro tenant
+		// nunca se relaciona ni se marca superseded. (project_id vacío == vacío ⇒ el caso local no cambia.)
+		if c.projectID != src.projectID {
+			continue
+		}
 		// Guarda ESTRUCTURAL, antes de cualquier scoring: si el par no es siquiera COMPARABLE, no hay
 		// veredicto que pedir. Va acá —el único loop donde nacen todas las relaciones— para que sea
 		// imposible de saltear, igual que DetectOnly volvió inalcanzable al markSuperseded.
@@ -359,9 +369,9 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 func (e *DbEngine) loadObsRow(id string) (obsRow, bool, error) {
 	var r obsRow
 	err := e.db.QueryRow(
-		`SELECT id, topic_key, content, COALESCE(created_at,'') FROM observations WHERE id=? AND archived=0`,
+		`SELECT id, topic_key, content, COALESCE(created_at,''), COALESCE(project_id,'') FROM observations WHERE id=? AND archived=0`,
 		id,
-	).Scan(&r.id, &r.topicKey, &r.content, &r.createdAt)
+	).Scan(&r.id, &r.topicKey, &r.content, &r.createdAt, &r.projectID)
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {
 			return obsRow{}, false, nil
@@ -501,7 +511,7 @@ func (e *DbEngine) lexicalConflictCandidates(src obsRow, limit int) ([]obsRow, e
 		return nil, nil
 	}
 	rows, err := e.db.Query(`
-		SELECT o.id, o.topic_key, o.content, COALESCE(o.created_at,'')
+		SELECT o.id, o.topic_key, o.content, COALESCE(o.created_at,''), COALESCE(o.project_id,'')
 		FROM observations_fts f
 		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ?
@@ -517,7 +527,7 @@ func (e *DbEngine) lexicalConflictCandidates(src obsRow, limit int) ([]obsRow, e
 	var out []obsRow
 	for rows.Next() {
 		var r obsRow
-		if err := rows.Scan(&r.id, &r.topicKey, &r.content, &r.createdAt); err != nil {
+		if err := rows.Scan(&r.id, &r.topicKey, &r.content, &r.createdAt, &r.projectID); err != nil {
 			return nil, fmt.Errorf("error al escanear candidata: %w", err)
 		}
 		out = append(out, r)
