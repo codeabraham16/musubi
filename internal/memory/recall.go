@@ -526,8 +526,11 @@ func effectiveRecency(c candidate) string {
 // desconocida): la tasa cae a count/1 = el contador crudo, o sea el comportamiento previo para esa
 // fila. Degradación segura, no un error.
 func ageDays(createdAt string, now time.Time) float64 {
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
-	if err != nil {
+	// created_at llega en formato SQLite (CURRENT_TIMESTAMP: "2006-01-02 15:04:05", sin 'T' ni zona),
+	// NO en RFC3339. Parsear sólo RFC3339 fallaba para TODA fila real ⇒ edad 0 ⇒ castigo por edad y
+	// tasa de acceso muertos (auditoría 2026-07-26 #1). parseObsTime es tolerante a ambos formatos.
+	t, ok := parseObsTime(createdAt)
+	if !ok {
 		return 0
 	}
 	d := now.Sub(t).Hours() / 24

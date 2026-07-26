@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/config"
 )
 
 // ── fakes (compartidos por los tests del paquete) ────────────────────────────
@@ -208,6 +210,41 @@ func TestSyncConfigPreservesExistingConfig(t *testing.T) {
 	}
 	if !strings.Contains(s, "sync:") {
 		t.Fatal("no agregó el bloque sync:")
+	}
+}
+
+// REGRESIÓN (auditoría 2026-07-26, #2): el caso REAL. ensureWorkspace deja un config.yaml completo
+// (config.Default().Marshal()) que YA trae un bloque `sync:` con enabled:false. El match textual de
+// `^sync:` lo daba por "ya configurado" y NO habilitaba nada ⇒ el outbox nunca drenaba, con ✓ verde.
+func TestSyncConfigEnablesWhenPresentButDisabled(t *testing.T) {
+	dir := t.TempDir()
+	musubiDir := filepath.Join(dir, ".musubi")
+	if err := os.MkdirAll(musubiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	def, err := config.Default().Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(musubiDir, "config.yaml"), def, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := ensureSyncConfig(dir, "100.79.126.62:7717", "MUSUBI_TOKEN", false)
+	if res.Status == StatusOK {
+		t.Fatalf("no debe reportar 'ya configurado' con sync enabled:false; status=%v detail=%q", res.Status, res.Detail)
+	}
+
+	// El config resultante debe parsear (sin clave `sync:` duplicada) y quedar habilitado.
+	cfg, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("el config resultante no parsea (¿clave sync duplicada?): %v", err)
+	}
+	if !cfg.Sync.Enabled {
+		t.Errorf("provision debe dejar sync.enabled=true, quedó false")
+	}
+	if cfg.Sync.CentralURL == "" {
+		t.Errorf("provision debe fijar sync.central_url, quedó vacío")
 	}
 }
 

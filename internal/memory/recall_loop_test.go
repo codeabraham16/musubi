@@ -114,6 +114,42 @@ func TestMonotonicDampeningWouldNotHaveHelped(t *testing.T) {
 	}
 }
 
+// sqlt formatea como lo hace SQLite (CURRENT_TIMESTAMP): "2006-01-02 15:04:05", SIN la 'T' ni zona.
+// Es el formato REAL con el que created_at llega desde la DB al recall — a diferencia de iso() (RFC3339),
+// que es lo único que probaban los tests y por lo que el bug #1 de la auditoría era invisible.
+func sqlt(t time.Time) string { return t.UTC().Format(sqliteTimeLayout) }
+
+// REGRESIÓN (auditoría 2026-07-26, #1): ageDays parseaba SÓLO con time.RFC3339, pero created_at llega
+// en formato SQLite (espacio, sin 'T'). El parseo fallaba SIEMPRE ⇒ edad 0 para toda fila real.
+func TestAgeDaysParsesSqliteTimestampFormat(t *testing.T) {
+	now := testNow()
+	age := ageDays(sqlt(now.AddDate(0, 0, -100)), now)
+	if age < 99 || age > 101 {
+		t.Errorf("ageDays debe entender el formato SQLite: esperaba ~100 días, obtuve %.2f", age)
+	}
+}
+
+// Mismo bug, por su EFECTO observable: con el formato REAL de la DB el lazo rich-get-richer debe seguir
+// roto. Con el bug ambas edades caían a 0 y accessRate degeneraba al contador crudo (rica gana).
+func TestRichGetRicherStaysBrokenWithSqliteFormat(t *testing.T) {
+	now := testNow()
+	rica := candidate{id: "rica", createdAt: sqlt(now.AddDate(0, 0, -300)), accessCount: 20}
+	nueva := candidate{id: "nueva", createdAt: sqlt(now.AddDate(0, 0, -3)), accessCount: 2}
+	if !(accessRate(nueva, now) > accessRate(rica, now)) {
+		t.Errorf("con timestamps formato-SQLite el lock-in revive: nueva debe superar a rica (nueva=%.4f rica=%.4f)",
+			accessRate(nueva, now), accessRate(rica, now))
+	}
+}
+
+// El castigo por EDAD ABSOLUTA debe ACTIVARSE con el formato real de la DB (con el bug, 1.0 = sin castigo).
+func TestAbsoluteRecencyFactorFiresWithSqliteFormat(t *testing.T) {
+	now := testNow()
+	f := absoluteRecencyFactor(sqlt(now.AddDate(0, 0, -400)), now)
+	if f >= 1.0 {
+		t.Errorf("una nota de 400 días debe recibir castigo por edad (<1.0), obtuve %.4f", f)
+	}
+}
+
 // El castigo por EDAD ABSOLUTA decrece con la edad pero NUNCA baja del piso: una vieja-pero-relevante
 // conserva la mitad de su score y puede ganar por contenido. Fecha ilegible ⇒ sin castigo.
 func TestAbsoluteRecencyFactorDecaysWithFloor(t *testing.T) {

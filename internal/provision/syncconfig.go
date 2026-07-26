@@ -6,10 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"musubi/internal/config"
 )
 
-// syncKeyRe detecta un bloque `sync:` de nivel superior ya presente en el config.yaml.
-var syncKeyRe = regexp.MustCompile(`(?m)^sync:`)
+// syncBlockRe captura el bloque `sync:` de nivel superior COMPLETO (la línea `sync:` más sus líneas
+// indentadas) para poder REEMPLAZARLO en su lugar. No basta con detectar `^sync:` y anexar: el config
+// que deja `ensureWorkspace` (config.Default().Marshal()) YA trae un bloque `sync:` con enabled:false,
+// y anexar otro crearía una clave YAML duplicada (parseo fallido). Ver auditoría 2026-07-26 #2.
+var syncBlockRe = regexp.MustCompile(`(?m)^sync:.*(?:\n[ \t]+.*)*\n?`)
 
 // ensureSyncConfig deja el bloque `sync:` en el .musubi/config.yaml del proyecto para que el
 // daemon LOCAL suba solo la memoria `shared` al cerebro central (outbox de F2). Sin esto, el
@@ -24,11 +29,15 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 	if err != nil && !os.IsNotExist(err) {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo leer " + cfgPath + ": " + err.Error()}
 	}
-	if syncKeyRe.Match(existing) {
-		return StepResult{Name: "sync-config", Status: StatusOK, Detail: "bloque sync: ya presente en .musubi/config.yaml"}
+
+	// "Ya configurado" NO es "existe un bloque sync:": el default trae uno con enabled:false. Se
+	// consulta el estado REAL (parseado, con defaults aplicados): sólo si el sync ya está habilitado y
+	// con central_url no vacío se lo deja en paz. Así provision funciona sobre un proyecto ya inicializado.
+	if cfg, lerr := config.Load(projectDir); lerr == nil && cfg.Sync.Enabled && cfg.Sync.CentralURL != "" {
+		return StepResult{Name: "sync-config", Status: StatusOK, Detail: "sync ya habilitado hacia " + cfg.Sync.CentralURL}
 	}
 
-	block := fmt.Sprintf("\n# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central.\n"+
+	block := fmt.Sprintf("# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central.\n"+
 		"sync:\n"+
 		"  enabled: true\n"+
 		"  central_url: http://%s\n"+
@@ -38,21 +47,29 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 		brain, tokenEnv)
 
 	if dryRun {
-		return StepResult{Name: "sync-config", Status: StatusTodo, Detail: "agregaría el bloque sync: (auto-sube 'shared' al cerebro) a " + cfgPath}
+		return StepResult{Name: "sync-config", Status: StatusTodo, Detail: "habilitaría el sync saliente (auto-sube 'shared' al cerebro) en " + cfgPath}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo crear .musubi/: " + err.Error()}
 	}
+
+	// Si ya hay un bloque `sync:` (el deshabilitado del default), se REEMPLAZA en su lugar para no
+	// duplicar la clave. Si no hay ninguno, se anexa al final.
 	content := existing
-	if len(bytes.TrimSpace(content)) == 0 {
-		content = []byte("# Configuración de Musubi (bootstrap por `musubi provision`).\n")
-	} else if !bytes.HasSuffix(content, []byte("\n")) {
+	if syncBlockRe.Match(content) {
+		content = syncBlockRe.ReplaceAll(content, []byte(block))
+	} else {
+		if len(bytes.TrimSpace(content)) == 0 {
+			content = []byte("# Configuración de Musubi (bootstrap por `musubi provision`).\n")
+		} else if !bytes.HasSuffix(content, []byte("\n")) {
+			content = append(content, '\n')
+		}
 		content = append(content, '\n')
+		content = append(content, []byte(block)...)
 	}
-	content = append(content, []byte(block)...)
 	if err := os.WriteFile(cfgPath, content, 0o644); err != nil {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo escribir " + cfgPath + ": " + err.Error()}
 	}
-	return StepResult{Name: "sync-config", Status: StatusDone, Detail: "bloque sync: agregado (auto-sube 'shared' al cerebro) en " + cfgPath}
+	return StepResult{Name: "sync-config", Status: StatusDone, Detail: "sync saliente habilitado (auto-sube 'shared' al cerebro) en " + cfgPath}
 }
