@@ -207,16 +207,35 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		if len(items) == 0 {
 			return
 		}
+		// El cursor avanza SÓLO hasta la última fila ingerida OK de forma CONTIGUA. Antes se avanzaba a
+		// `next` aunque un IngestShared fallara ⇒ esa fila quedaba saltada PARA SIEMPRE (hueco permanente
+		// en el mirror local; auditoría 2026-07-26 #5). Ahora un fallo (p. ej. SQLITE_BUSY transitorio)
+		// corta el avance: la fila y las siguientes se re-bajan en el próximo tick. Como un batch SIN
+		// fallos sí avanza, no hay livelock (una fila "veneno" permanente frena, pero se ve en los logs).
+		lastOK := cur
+		failed := false
 		for _, o := range items {
 			if _, ierr := s.engine.IngestShared(o); ierr != nil {
-				logx.Error("inbound: no se pudo ingerir obs shared", "id", o.ID, "error", ierr)
+				logx.Error("inbound: no se pudo ingerir obs shared; NO se avanza el cursor más allá (se reintenta en el próximo tick)", "id", o.ID, "rowid", o.RowID, "error", ierr)
+				failed = true
+				break
+			}
+			if o.RowID > lastOK {
+				lastOK = o.RowID
 			}
 		}
-		if next > cur {
-			cur = next
+		advanceTo := lastOK
+		if !failed && next > advanceTo {
+			advanceTo = next // batch completo OK: honrar el cursor que devolvió el central
+		}
+		if advanceTo > cur {
+			cur = advanceTo
 			if merr := s.engine.SetMeta(metaInboundCursor, strconv.FormatInt(cur, 10)); merr != nil {
 				logx.Error("inbound: no se pudo guardar el cursor entrante", "error", merr)
 			}
+		}
+		if failed {
+			return // no seguir paginando tras un fallo: se retoma desde acá en el próximo tick
 		}
 		if len(items) < limit {
 			return

@@ -132,6 +132,13 @@ func (s *McpServer) cgStale(n memory.GraphNode) bool {
 	if n.Path == "" {
 		return false
 	}
+	// En el central COMPARTIDO (forceRedact) el grafo es FEDERADO: los nodos vienen de otros proyectos y
+	// sus archivos NO están en el disco del central, así que fingerprintear contra s.projectPath daría
+	// "fantasma"/stale para TODO y la cabina mostraría el código federado como podrido (auditoría #3).
+	// No se puede verificar frescura de un árbol remoto ⇒ no marcarlo stale.
+	if s.forceRedact {
+		return false
+	}
 	cur, err := memory.FileFingerprint(s.projectPath, n.Path)
 	if err != nil || cur == "" {
 		return true
@@ -443,6 +450,11 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 // disco). Es la señal de "conviene re-indexar" que expone map (Track 20 · F5), a granularidad de
 // archivo (barata: una pasada de stat sobre los paths del grafo).
 func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
+	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
+	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
+	if s.forceRedact {
+		return 0, 0
+	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
 	if err != nil {
 		return 0, 0

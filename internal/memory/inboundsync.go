@@ -37,6 +37,14 @@ type SharedObs struct {
 // ACOTADAS al proyecto del ctx (aislamiento multi-tenant T17-19: el central sólo entrega la memoria
 // del proyecto de la credencial que pide el pull; Federate/vacío ⇒ sin filtro, histórico). afterRowID=0
 // trae desde el principio. La corre el central al servir un pull entrante de un cliente.
+//
+// LIMITACIÓN CONOCIDA (auditoría 2026-07-26 #4 — diferida a un slice de diseño): el cursor es por
+// `rowid`, que NO cambia en un UPDATE (el UPSERT reescribe la fila in-place). Por eso una máquina cuyo
+// cursor ya pasó el rowid de una obs shared NO vuelve a bajar sus EDICIONES posteriores: el mirror
+// queda stale (el central igual tiene la verdad — es staleness, no pérdida). Cerrarlo bien requiere un
+// contador MONÓTONO que suba también al actualizar (p. ej. una columna sync_seq bumpeada en cada
+// insert/update de shared) y paginar por él en vez de por rowid — cambio de esquema + write-path +
+// cliente, fuera del alcance de esta pasada de hardening.
 func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error) {
 	if limit <= 0 {
 		limit = 200
