@@ -123,9 +123,13 @@ func printUsage() {
 	cmd("dashboard [--addr ...] [--no-open]", "UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)")
 	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
 
+	section("Ingesta")
+	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
+
 	section("Catálogo de skills")
 	cmd("catalog validate", "Valida un index.json de catálogo de skills")
 	cmd("catalog merge <url> [--output <ruta>]", "Obtiene y fusiona un catálogo remoto en index.json")
+	cmd("catalog harvest [--seeds ...] [--top N]", "Cosecha un catálogo estático de skills desde GitHub")
 
 	section("Binario")
 	cmd("update", "Descarga el último release, verifica el checksum y se auto-reemplaza")
