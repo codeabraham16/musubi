@@ -7,6 +7,54 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.97.0] - 2026-07-26
+
+Endurecimiento post-auditoría exhaustiva (v0.96.0): 15 hallazgos corregidos con TDD +
+1 decisión de diseño documentada. Ver `audit/2026-07-26-*` en la memoria de Musubi.
+
+### Security
+
+- **Aislamiento por tenant en la detección de conflictos del ingest.** El pool de candidatas de
+  `DetectRelations`/`BandNeighbors` no estaba acotado por proyecto: en el central multi-tenant la
+  respuesta de `save_observation` filtraba ids+gists de otros tenants y un auto-supersede podía OCULTAR
+  memoria ajena. Ahora una guarda de tenant en el único loop donde nacen las relaciones lo impide.
+- **Inyección de argumentos de git en `detect_changes`.** El `ref` del cliente se pasaba crudo a
+  `git diff`; un `ref="--output=/x"` escribía/truncaba archivos. Se rechaza `-` inicial + `--end-of-options`.
+- **Gate de admin en operaciones destructivas globales.** `maintain` y `doctor(repair)` operan sobre
+  toda la base sin scope; ahora exigen un principal admin (el diagnóstico de `doctor` sigue abierto).
+- **`/metrics` exige autenticación cuando hay registry** (antes caía abierto en el setup multi-tenant
+  sin token legacy).
+- **`ingest_url` redacta antes de embeber** (secretos ya no derivaban el vector al-reposo).
+- **`promote`/`judge` acotados por proyecto** (`*Ctx`): un principal no muta memoria/relaciones de otro
+  tenant conociendo su id.
+- **Redacción de secretos en hex puro** (el catch-all de entropía no cubría hex; se excluyen las
+  longitudes de hash de git). **Path traversal** en la carga de workflows por nombre. La guarda
+  cross-tenant de `save_observation` ya no falla-abierta al errar su lectura.
+
+### Fixed
+
+- **Recall: señales de edad y frecuencia revividas.** `ageDays` parseaba `created_at` solo con RFC3339
+  pero SQLite lo guarda con formato de espacio ⇒ edad 0 siempre, castigo por edad muerto y `accessRate`
+  degenerado al contador crudo (rich-get-richer). Ahora parsea ambos formatos.
+- **`provision --brain` habilita el sync en proyectos ya inicializados.** Detectaba "ya configurado" por
+  un match textual `^sync:` que el config por defecto siempre emite (deshabilitado); ahora consulta el
+  estado real y reemplaza el bloque en su lugar.
+- **Ingest de artículos con tope de tamaño** (`io.LimitReader`, anti-OOM/DoS en el central always-on).
+- **Grafo de código federado ya no se reporta stale** en el central compartido (sus archivos no están
+  en disco; no se juzga frescura por fingerprint ahí).
+- **Sync entrante: no se salta filas tras un fallo de ingest** (el cursor avanza solo hasta la última OK
+  contigua). **Outbox: fencing por estado** — una marca rezagada no resucita una fila terminal.
+- **Robustez:** el cargador de tokenizer estático (`spm`) degrada en vez de paniquear ante un
+  `tokenizer.json` malformado.
+
+### Added
+
+- **`sync_seq`: la memoria shared editada se re-propaga al equipo.** Migración **v19** (columna monótona
+  `sync_seq`, backfill = rowid); el pull entrante pagina por ella en vez de por `rowid`, así una EDICIÓN
+  de una obs shared ya sincronizada vuelve a bajarse (antes el mirror quedaba stale) y el cursor es
+  estable ante VACUUM.
+- Los comandos `ingest` y `catalog harvest` ahora aparecen en la ayuda (`musubi help`).
+
 ## [0.96.0] - 2026-07-25
 
 ### Added
