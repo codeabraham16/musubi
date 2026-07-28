@@ -7,16 +7,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.98.1] - 2026-07-28
+
+**Endurecimiento post-auditoría integral de v0.98.0** (8 agentes, 8 lentes: arquitectura, recall,
+grafo/bi-temporal, seguridad, orquestación, datos/SQLite, cognición/code-graph, tests/CI). 13
+correcciones con test, cada una con su *porqué* verificado, respetando lo que estaba así por diseño.
+El núcleo model-free y todas las rutas OFF-by-default siguen **bit-idénticos**. Decisiones de
+arquitectura tomadas en el camino: se **preservan** SQLite single-writer + federación, la cognición
+*caller-borrowed*, y el juicio abstracto delegado al caller (no es deuda).
+
 ### Fixed
 
-- **Baseline model-free reproducible (elimina un flake de CI).** `TestModelFreeBaselineNoRegression`
-  flakeaba de forma intermitente (visto en Windows CI: MRR 0.58 vs 0.66) porque el harness de
-  evaluación sembraba los docs con `created_at = datetime('now')`: si el loop de seed cruzaba un
-  borde de segundo, la señal de RECENCIA separaba docs que deberían empatar y el ranking cambiaba
-  entre corridas. Ahora `SeedEngine` fija un `created_at` CONSTANTE (primitiva nueva
-  `DbEngine.SetObservationCreatedAt`), volviendo el recall model-free una función pura del fixture.
-  Se agrega `TestModelFreeBaselineDeterministic` (dos corridas ⇒ Scores idénticos) como guarda. La
-  baseline commiteada no cambia (0.66 ya era el valor determinista).
+- **Aislamiento por tenant en la consolidación.** `Consolidate` ya no fusiona observaciones de
+  proyectos distintos aunque el texto empate por trigramas (clave de dedup + guard por `project_id`).
+- **`sync_seq` atómico en la ingesta inbound.** El bump de `sync_seq` se pliega DENTRO del UPSERT (una
+  sola sentencia), cerrando la ventana donde un update entrante podía quedar con seq inconsistente.
+- **Cuarentena de cognición por allowlist.** El filtro de hechos autoritativos pasó de denylist
+  (`NOT LIKE 'llm-extract:%'`) a allowlist (`source = 'agent'`): cualquier procedencia futura
+  no-`agent` queda excluida del read autoritativo por default.
+- **Determinismo de `ResolveEntityName`.** Ante empate de similitud resuelve por orden lexicográfico
+  estable (`ORDER BY name`), no por el orden físico volátil tras un VACUUM.
+- **Degradación elegante del recall.** Una señal OPCIONAL que falla (pool vectorial / co-ocurrencia /
+  centralidad de grafo) ya no tumba el recall léxico: se loguea, degrada y sigue.
+- **Migración v14 anti-brick.** Barre relaciones huérfanas ANTES del rebuild bajo FK, evitando que una
+  relación legacy huérfana impida abrir la base.
+- **Atomicidad paso↔artefacto en el flujo SDD.** `musubi_sdd` complete persiste el artefacto ANTES de
+  cerrar la fase: un fallo del artefacto deja la fase reintentable en vez de romper en silencio el
+  contrato "fase done ⟹ artefacto existe" del que dependen las fases siguientes.
+- **Guard de polaridad en la consolidación.** `Consolidate` ya no fusiona una afirmación con su
+  negación ("usa X" vs "no usa X", que empatan en trigramas 0.89 > 0.85): un candidato con distinta
+  cuenta de negadores explícitos no es duplicado. Model-free y acotado a negación explícita (medido
+  antes de arreglar); antónimos/negación implícita siguen delegados al caller.
+- **Schemas de array válidos.** `musubi_propose_facts` (`facts`) y `musubi_work` (`units`) declaran
+  `items`, cumpliendo JSON Schema.
+- **Blindaje del RMW de orquestación.** El complete del DAG/SDD es un read-modify-write cuya seguridad
+  depende del Lock exclusivo del dispatch (single-writer); se documenta el invariante y se agrega
+  `musubi_sdd` al guard de clasificación read/write. Un despliegue multi-proceso requeriría
+  CAS-by-version (atado a la posture de concurrencia; no se implementa especulativamente).
+- **README y guardas de test.** El README refleja las **43** tools reales (con guard de conteo contra
+  el registro). Dos flakes eliminados de raíz asertando invariantes DETERMINISTAS en vez de
+  side-effects sensibles al timing: `TestAutoMaintainAfterSaves` (invariante `saveCount` + espera de
+  la TERMINACIÓN de la goroutine async, que en Windows rompía el cleanup del `TempDir`) y
+  `TestModelFreeBaselineNoRegression` (seeding con `created_at` CONSTANTE vía la primitiva
+  `DbEngine.SetObservationCreatedAt` ⇒ el recall model-free es una función pura del fixture; nueva
+  guarda `TestModelFreeBaselineDeterministic`; la baseline commiteada no cambia, 0.66 ya era el valor
+  determinista).
 
 ## [0.98.0] - 2026-07-28
 
