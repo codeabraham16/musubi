@@ -199,6 +199,45 @@ func parseTimestamp(s string) interface{} {
 	return nil
 }
 
+// ResolveEntityName canonicaliza name al nombre de una entidad EXISTENTE suficientemente similar,
+// para que las PROPUESTAS del 3er pilar (Cognición F4) no fragmenten el grafo con variantes de la
+// misma entidad (potions→potion, alphacorp→"alpha corp", typos). La similitud es DETERMINISTA y
+// model-free: Jaccard de trigramas (Similarity), el mismo criterio que Consolidate — sin LLM ni
+// embeddings. Escanea el conjunto GLOBAL de entidades y se queda con la de mayor similitud; si esa
+// supera threshold devuelve (canonical, true), si no (name, false). threshold<=0 o name vacío ⇒
+// no-op (name, false). Un match exacto por norma da Similarity 1.0, así que siempre gana. Sólo lo
+// usan las propuestas: save_fact autoritativo NO pasa por acá (preserva el comportamiento histórico).
+func (e *DbEngine) ResolveEntityName(name string, threshold float64) (string, bool, error) {
+	if threshold <= 0 || strings.TrimSpace(name) == "" {
+		return name, false, nil
+	}
+	rows, err := e.db.Query(`SELECT name FROM entities`)
+	if err != nil {
+		return name, false, fmt.Errorf("error al listar entidades para resolver: %w", err)
+	}
+	defer rows.Close()
+
+	best := ""
+	bestScore := 0.0
+	for rows.Next() {
+		var cand string
+		if err := rows.Scan(&cand); err != nil {
+			return name, false, fmt.Errorf("error al escanear entidad candidata: %w", err)
+		}
+		if sc := Similarity(name, cand); sc > bestScore {
+			bestScore = sc
+			best = cand
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return name, false, fmt.Errorf("error al iterar entidades para resolver: %w", err)
+	}
+	if best != "" && bestScore >= threshold {
+		return best, true, nil
+	}
+	return name, false, nil
+}
+
 // upsertEntity devuelve el id de la entidad, creándola si no existe (dedup por
 // nombre normalizado).
 func upsertEntity(tx *sql.Tx, name string) (int64, error) {

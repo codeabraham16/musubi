@@ -477,6 +477,11 @@ type CognitionConfig struct {
 	// mantenimiento invalida las propuestas ('llm-extract:*') vivas más viejas que esto. 0 ⇒
 	// nunca barrer (bit-idéntico). Las corroboradas (source=agent) nunca se barren.
 	ProposalTTLHours float64 `yaml:"proposal_ttl_hours,omitempty"`
+	// EntityResolutionThreshold es el umbral (0..1) de la resolución de entidades DETERMINISTA
+	// para propuestas LLM (F4): al proponer, un subject/object sin match exacto pero con Similarity
+	// (Jaccard de trigramas) >= umbral contra una entidad existente se CANONICALIZA a ella, para no
+	// fragmentar el grafo con variantes. 0 ⇒ desactivado (bit-idéntico). No afecta a save_fact.
+	EntityResolutionThreshold float64 `yaml:"entity_resolution_threshold,omitempty"`
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).

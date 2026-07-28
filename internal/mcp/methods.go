@@ -1276,12 +1276,35 @@ func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (
 		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 	}
 
-	proposed, existed := 0, 0
+	// Resolución de entidades (F4): umbral de canonicalización DETERMINISTA (Jaccard de trigramas).
+	// 0 ⇒ desactivada (los nombres pasan tal cual, bit-idéntico).
+	erThreshold := s.cognitionCfg.EntityResolutionThreshold
+
+	proposed, existed, resolved := 0, 0, 0
 	for _, f := range args.Facts {
 		// Redacción forzada al central: una propuesta tampoco puede llevar un secreto crudo al pozo.
 		subject := s.redactIfForced(f.Subject)
 		predicate := s.redactIfForced(f.Predicate)
 		object := s.redactIfForced(f.Object)
+
+		// Canonicalizar subject/object a una entidad existente similar, para no fragmentar el grafo
+		// con variantes (F4). Sólo para propuestas; save_fact autoritativo no pasa por acá. Si el
+		// nombre cambia (norma distinta) se cuenta como resuelto para informarlo en la respuesta.
+		if erThreshold > 0 {
+			if canon, matched, err := s.engine.ResolveEntityName(subject, erThreshold); err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al resolver entidad (subject): %v", err)
+			} else if matched && !sameNormalized(canon, subject) {
+				subject = canon
+				resolved++
+			}
+			if canon, matched, err := s.engine.ResolveEntityName(object, erThreshold); err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al resolver entidad (object): %v", err)
+			} else if matched && !sameNormalized(canon, object) {
+				object = canon
+				resolved++
+			}
+		}
+
 		res, err := s.engine.SaveFactFromSourced(origin, subject, predicate, object, f.ValidFrom, source, s.graph.SingleValuedPredicates)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al proponer hecho: %v", err)
@@ -1293,7 +1316,18 @@ func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (
 		}
 	}
 	msg := fmt.Sprintf("Propuesto(s) %d hecho(s) en CUARENTENA (source=%s); %d ya existía(n). No son autoritativos ni aparecen en recall_facts hasta corroborarlos con musubi_save_fact; revisalos con recall_facts include_proposed=true.", proposed, source, existed)
+	if resolved > 0 {
+		msg += fmt.Sprintf(" %d nombre(s) canonicalizado(s) a una entidad existente (resolución F4).", resolved)
+	}
 	return textResult(msg), nil
+}
+
+// sameNormalized indica si dos nombres colapsan a la misma entidad tras normalizar (minúsculas +
+// espacios colapsados) — la MISMA normalización que usa el grafo para deduplicar entidades. Se usa
+// para no contar como "resuelto" un match que sólo difiere en caja/espaciado (F4).
+func sameNormalized(a, b string) bool {
+	norm := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	return norm(a) == norm(b)
 }
 
 // predicateAllowed indica si predicate está en el vocabulario controlado enum (F3), comparando

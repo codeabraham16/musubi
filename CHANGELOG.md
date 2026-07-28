@@ -51,6 +51,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     (`musubi_maintain` + auto-mantenimiento) invalida las propuestas en cuarentena no corroboradas
     más viejas que el TTL, para que la cuarentena no crezca sin fin. Nunca toca lo autoritativo
     (`source=agent`) ni lo ya invalidado; TTL 0 ⇒ no-op. Reporta el conteo en `proposals_swept`.
+- **Pilar Cognición · F4 (resolución de entidades para propuestas).** Tercera guarda de calidad,
+  también determinista y model-free: `musubi_propose_facts` canonicaliza el `subject`/`object` de
+  una tripleta a una entidad EXISTENTE suficientemente parecida (similitud de Jaccard sobre
+  trigramas ≥ `cognition.entity_resolution_threshold`, el mismo criterio que la consolidación),
+  para no fragmentar el grafo con variantes de la misma entidad (`potions`→`potion`, typos). Se
+  elige trigramas sobre coseno a propósito: sin dependencia de embeddings, determinista, fiel a la
+  identidad model-free. Sólo aplica a propuestas — `musubi_save_fact` autoritativo no se toca — y
+  el umbral 0 (default) la desactiva ⇒ bit-idéntico. La respuesta informa cuántos nombres canonicalizó.
 
 ## [0.97.0] - 2026-07-26
 

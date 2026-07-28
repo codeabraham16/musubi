@@ -53,6 +53,10 @@ type GraphStore interface {
 	// SaveFactFromSourced sella además la PROCEDENCIA (source) de la arista para poder auditar
 	// y excluir hechos derivados por un LLM (pilar Cognición, F0). source vacío → "agent".
 	SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, source string, singleValued []string) (SaveFactResult, error)
+	// ResolveEntityName canonicaliza un nombre a una entidad existente suficientemente similar
+	// (Jaccard de trigramas >= threshold), para que las propuestas LLM no fragmenten el grafo
+	// (pilar Cognición, F4). threshold<=0 ⇒ no-op. Devuelve (canonical, matched).
+	ResolveEntityName(name string, threshold float64) (string, bool, error)
 	RecallFacts(entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)
 	// RecallFactsCtx acota el traversal a las aristas visibles al proyecto del contexto (Track 17).
 	RecallFactsCtx(ctx context.Context, entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)
