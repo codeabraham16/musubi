@@ -172,9 +172,16 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// también semánticamente-relacionadas que el léxico no encontró) y rankear por coseno.
 	var vecRank map[string]int
 	if len(opts.QueryVector) > 0 {
-		cands, vecRank, err = e.augmentWithVectorPool(ctx, cands, opts.QueryVector, pool, opts.VectorFloor)
+		var vcands []candidate
+		vcands, vecRank, err = e.augmentWithVectorPool(ctx, cands, opts.QueryVector, pool, opts.VectorFloor)
 		if err != nil {
-			return RecallResult{}, err
+			// DEGRADACIÓN ELEGANTE (auditoría v0.98.0): una señal OPCIONAL que falla NO debe tumbar el
+			// recall léxico sano — misma filosofía que la corrupción FTS de arriba. Logear y seguir sin
+			// la señal (vecRank nil, cands intacto): un embeddings bloqueado no deja al agente sin nada.
+			logx.Warn("recall: pool vectorial falló, degradando sin señal vectorial", "error", err)
+			vecRank = nil
+		} else {
+			cands = vcands
 		}
 	}
 
@@ -184,9 +191,14 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// query FTS (lexRank != nil) y hay ≥2 candidatos. No-op seguro ⇒ coocRank vacío ⇒ equivalencia.
 	var coocRank map[string]int
 	if opts.Cooccurrence && lexRank != nil && len(cands) >= 2 {
-		cands, coocRank, err = e.augmentWithCooccurrencePool(ctx, cands, query, lexRank, pool)
+		var ccands []candidate
+		ccands, coocRank, err = e.augmentWithCooccurrencePool(ctx, cands, query, lexRank, pool)
 		if err != nil {
-			return RecallResult{}, err
+			// Señal opcional: degradar sin la expansión por co-ocurrencia (ver pool vectorial arriba).
+			logx.Warn("recall: pool de co-ocurrencia falló, degradando sin PRF", "error", err)
+			coocRank = nil
+		} else {
+			cands = ccands
 		}
 	}
 
@@ -215,7 +227,9 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		}
 		graphRank, err = e.graphCentralityRank(ids)
 		if err != nil {
-			return RecallResult{}, err
+			// Señal opcional (rerank-only): degradar sin la centralidad de grafo (ver arriba).
+			logx.Warn("recall: centralidad de grafo falló, degradando sin señal de grafo", "error", err)
+			graphRank = nil
 		}
 	}
 
