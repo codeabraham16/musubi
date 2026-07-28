@@ -74,6 +74,7 @@ func (s *McpServer) maintenanceOptions() memory.MaintenanceOptions {
 		PurgeArchivedAfterDays: s.maintenance.PurgeArchivedAfterDays,
 		MaxActivePerProject:    s.maintenance.MaxActivePerProject,
 		Vacuum:                 s.maintenance.Vacuum,
+		ProposalTTLHours:       s.cognitionCfg.ProposalTTLHours,
 	}
 }
 

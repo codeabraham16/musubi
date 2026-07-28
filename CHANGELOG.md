@@ -41,6 +41,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - **`recall_facts include_proposed`** — flag para revisar las propuestas antes de corroborarlas.
   - Loop completo: proponer → revisar → corroborar con `musubi_save_fact` (F1 las promueve a
     autoritativas). Aditivo: `recall_facts` sin el flag es bit-idéntico.
+- **Pilar Cognición · F3 (guardas de calidad sobre las propuestas).** Dos guardas deterministas y
+  model-free que moderan lo que un motor LLM propone, ambas OFF por default (⇒ bit-idéntico):
+  - **Enum de predicados** (`cognition.allowed_predicates`) — `musubi_propose_facts` rechaza el
+    lote entero si alguna tripleta usa un predicado fuera del vocabulario controlado
+    (case-insensitive), para que el LLM no fragmente la ontología en sinónimos. No afecta a
+    `musubi_save_fact` autoritativo; vocabulario vacío ⇒ allow-all.
+  - **Barrido de propuestas rancias** (`cognition.proposal_ttl_hours`) — el mantenimiento
+    (`musubi_maintain` + auto-mantenimiento) invalida las propuestas en cuarentena no corroboradas
+    más viejas que el TTL, para que la cuarentena no crezca sin fin. Nunca toca lo autoritativo
+    (`source=agent`) ni lo ya invalidado; TTL 0 ⇒ no-op. Reporta el conteo en `proposals_swept`.
 
 ## [0.97.0] - 2026-07-26
 

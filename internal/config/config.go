@@ -469,6 +469,14 @@ type CognitionConfig struct {
 	Endpoint              string `yaml:"endpoint,omitempty"`                // endpoint del motor (tailnet), si aplica
 	AuthTokenEnv          string `yaml:"auth_token_env,omitempty"`          // NOMBRE de la env var del secreto
 	RequestTimeoutSeconds int    `yaml:"request_timeout_seconds,omitempty"` // timeout por llamada (0 => default del motor)
+	// AllowedPredicates es el vocabulario controlado de PREDICADOS para las propuestas LLM (F3):
+	// musubi_propose_facts rechaza una tripleta cuyo predicado no esté acá (comparación
+	// case-insensitive). Vacío ⇒ allow-all (bit-idéntico). No afecta a save_fact autoritativo.
+	AllowedPredicates []string `yaml:"allowed_predicates,omitempty"`
+	// ProposalTTLHours es el TTL de CUARENTENA de una propuesta LLM no corroborada (F3): el
+	// mantenimiento invalida las propuestas ('llm-extract:*') vivas más viejas que esto. 0 ⇒
+	// nunca barrer (bit-idéntico). Las corroboradas (source=agent) nunca se barren.
+	ProposalTTLHours float64 `yaml:"proposal_ttl_hours,omitempty"`
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).

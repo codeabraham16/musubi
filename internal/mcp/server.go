@@ -112,6 +112,10 @@ type McpServer struct {
 	embedder embedding.Provider
 	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
 	cognition cognition.Provider
+	// cognitionCfg trae las guardas de CALIDAD del 3er pilar (F3): el vocabulario controlado de
+	// predicados para propuestas (AllowedPredicates) y el TTL de cuarentena (ProposalTTLHours).
+	// Zero-value ⇒ enum allow-all + sin barrido ⇒ comportamiento bit-idéntico.
+	cognitionCfg config.CognitionConfig
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
@@ -184,6 +188,12 @@ func WithCognition(c cognition.Provider) Option {
 			s.cognition = c
 		}
 	}
+}
+
+// WithCognitionConfig inyecta las guardas de calidad del 3er pilar (F3): enum de predicados para
+// propuestas + TTL de cuarentena. Aditivo; zero-value ⇒ allow-all + sin barrido (bit-idéntico).
+func WithCognitionConfig(c config.CognitionConfig) Option {
+	return func(s *McpServer) { s.cognitionCfg = c }
 }
 
 // SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando

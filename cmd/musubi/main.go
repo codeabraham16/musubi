@@ -262,7 +262,7 @@ func runServe(args []string) {
 		autoBackfill(engine, embedder)
 	}
 
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition))
 
 	// Un nodo que SIRVE sin sync saliente es TERMINAL — el caso del cerebro central: no tiene
 	// upstream a dónde empujar. Encolar ahí dejaba una fila `pending` INMORTAL por cada
@@ -346,7 +346,7 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition))
 
 	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el
 	// ciclo cognitivo (consolidar/olvidar/purgar) solo correría una vez al arrancar. Dos

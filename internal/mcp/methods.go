@@ -1252,6 +1252,18 @@ func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (
 		}
 	}
 
+	// Guarda de CALIDAD del pilar Cognición (F3): enum de predicados. Si hay un vocabulario
+	// controlado configurado, una tripleta con un predicado fuera de él rechaza el LOTE entero
+	// (validate-all-then-save), para que el LLM no fragmente la ontología en sinónimos. El enum
+	// modera SÓLO lo que un motor propone; save_fact autoritativo no pasa por acá. Vacío ⇒ allow-all.
+	if enum := s.cognitionCfg.AllowedPredicates; len(enum) > 0 {
+		for i, f := range args.Facts {
+			if !predicateAllowed(f.Predicate, enum) {
+				return nil, rpcErrorf(codeInvalidParams, "facts[%d]: predicado %q fuera del vocabulario permitido (allowed_predicates)", i, strings.TrimSpace(f.Predicate))
+			}
+		}
+	}
+
 	model := strings.TrimSpace(args.Model)
 	if model == "" {
 		model = "caller"
@@ -1282,6 +1294,18 @@ func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (
 	}
 	msg := fmt.Sprintf("Propuesto(s) %d hecho(s) en CUARENTENA (source=%s); %d ya existía(n). No son autoritativos ni aparecen en recall_facts hasta corroborarlos con musubi_save_fact; revisalos con recall_facts include_proposed=true.", proposed, source, existed)
 	return textResult(msg), nil
+}
+
+// predicateAllowed indica si predicate está en el vocabulario controlado enum (F3), comparando
+// case-insensitive con trim (misma normalización que los predicados single-valued del grafo).
+func predicateAllowed(predicate string, enum []string) bool {
+	p := strings.ToLower(strings.TrimSpace(predicate))
+	for _, a := range enum {
+		if strings.ToLower(strings.TrimSpace(a)) == p {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
