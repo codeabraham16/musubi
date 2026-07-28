@@ -54,16 +54,26 @@ func TestAutoMaintainAfterSaves(t *testing.T) {
 		return v != ""
 	}
 
-	// Bajo el umbral (2 de 3): no dispara.
+	// Bajo el umbral (2 de 3): el contador sube pero NO se resetea. Se chequea el INVARIANTE
+	// DETERMINISTA (saveCount), no un side-effect sensible al timing: maybeTriggerMaintenance hace
+	// saveCount.Store(0) SINCRÓNICAMENTE sólo al cruzar el umbral, así que count==2 prueba que el
+	// trigger no corrió (antes esto se verificaba con un sleep+maintRan, que flakeaba bajo carga).
 	save(1)
 	save(2)
-	time.Sleep(50 * time.Millisecond)
+	if got := s.saveCount.Load(); got != 2 {
+		t.Fatalf("con 2 saves bajo el umbral, saveCount=%d (esperaba 2: sin reset ⇒ sin trigger)", got)
+	}
 	if maintRan() {
-		t.Fatalf("con 2 saves (umbral 3) no debía dispararse mantenimiento")
+		t.Fatal("con 2 saves (umbral 3) no debía haberse disparado mantenimiento")
 	}
 
-	// Cruza el umbral: dispara (async). Esperar a que la goroutine corra.
+	// Cruza el umbral: el trigger resetea el contador (sincrónico, prueba determinista de que
+	// disparó) y corre el ciclo en goroutine (async).
 	save(3)
+	if got := s.saveCount.Load(); got != 0 {
+		t.Fatalf("al cruzar el umbral, saveCount debe resetear a 0 (prueba determinista del trigger), got %d", got)
+	}
+	// El ciclo corre async: esperar (acotado) a que marque last_maintenance.
 	ran := false
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
 		if maintRan() {
