@@ -41,6 +41,16 @@ type Fixture struct {
 // tests). nil ⇒ evaluación 100% léxica (los docs se siembran sin vector).
 type EmbedFunc func(text string) ([]float32, error)
 
+// evalSeedCreatedAt es el created_at CONSTANTE con el que SeedEngine siembra TODOS los docs, para
+// que la evaluación sea REPRODUCIBLE. El created_at real (datetime('now') al guardar) haría que la
+// señal de recencia dependa del instante del seed: si el loop cruza un borde de segundo, unos docs
+// quedan "más nuevos" y el ranking cambia entre corridas (el flake que veía CI en Windows). Con un
+// valor fijo, todos los docs son equidistantes de `now` ⇒ recencia/frecuencia son un término
+// CONSTANTE que no altera el orden relativo, y el ranking queda determinado sólo por la señal de
+// recuperación (léxico + co-ocurrencia + grafo + importancia). Fecha absoluta a propósito (no
+// relativa a now): así el factor de edad es idéntico para todos, corra el test el día que corra.
+const evalSeedCreatedAt = "2020-01-01 00:00:00"
+
 // Config es una variante de recall a evaluar. UseVector activa el recall híbrido
 // (rellena QueryVector con embed(query)); requiere un EmbedFunc no-nil en Run.
 type Config struct {
@@ -95,6 +105,13 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 		if err := eng.SaveObservation(d.ID, d.Topic, d.Content, vec); err != nil {
 			eng.Close()
 			return nil, fmt.Errorf("guardar doc %s: %w", d.ID, err)
+		}
+		// Seeding DETERMINISTA en el tiempo: fijar el created_at a un valor constante para que la
+		// recencia no dependa del instante del guardado (ver evalSeedCreatedAt). Sin esto la
+		// evaluación flakea cuando el loop de seed cruza un borde de segundo.
+		if err := eng.SetObservationCreatedAt(d.ID, evalSeedCreatedAt); err != nil {
+			eng.Close()
+			return nil, fmt.Errorf("fijar created_at doc %s: %w", d.ID, err)
 		}
 	}
 	return eng, nil

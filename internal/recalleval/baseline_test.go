@@ -45,6 +45,34 @@ func TestModelFreeBaselineNoRegression(t *testing.T) {
 	}
 }
 
+// TestModelFreeBaselineDeterministic exige que el recall model-free sea una FUNCIÓN PURA del
+// fixture: dos corridas sobre engines frescos deben dar Scores IDÉNTICOS (no sólo "≥ baseline").
+// Es la guarda contra la clase de flake que motivó el seeding determinista (created_at fijo): una
+// fuga de reloj de pared o de orden de map reaparecería acá como una diferencia entre corridas.
+func TestModelFreeBaselineDeterministic(t *testing.T) {
+	fx := loadGolden(t)
+	ks := []int{1, 5, 10}
+	run := func() Scores {
+		scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig}, ks)
+		if err != nil {
+			t.Fatalf("Run léxico: %v", err)
+		}
+		return scores[0]
+	}
+	a, b := run(), run()
+	if a.MRR != b.MRR {
+		t.Errorf("MRR no determinista entre corridas: %.9f vs %.9f", a.MRR, b.MRR)
+	}
+	for _, k := range ks {
+		if a.RecallAtK[k] != b.RecallAtK[k] {
+			t.Errorf("Recall@%d no determinista: %.9f vs %.9f", k, a.RecallAtK[k], b.RecallAtK[k])
+		}
+		if a.NDCGAtK[k] != b.NDCGAtK[k] {
+			t.Errorf("nDCG@%d no determinista: %.9f vs %.9f", k, a.NDCGAtK[k], b.NDCGAtK[k])
+		}
+	}
+}
+
 func writeBaseline(t *testing.T, s Scores) {
 	t.Helper()
 	b, err := json.MarshalIndent(s, "", "  ")

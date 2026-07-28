@@ -105,6 +105,20 @@ func (e *DbEngine) SaveObservation(id, topicKey, content string, embedding []flo
 	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", embedding)
 }
 
+// SetObservationCreatedAt fija el created_at (ISO 'YYYY-MM-DD HH:MM:SS' UTC) de una observación.
+// Es una primitiva de SEEDING DETERMINISTA / backdating para la evaluación reproducible (recalleval):
+// created_at por default es datetime('now') (reloj de pared), así que la señal de RECENCIA del recall
+// depende del INSTANTE del guardado — sobre un corpus sembrado en bloque, si el loop cruza un borde de
+// segundo, unos docs quedan "más nuevos" que otros y el ranking (y las métricas) dejan de ser
+// reproducibles. Fijar un created_at CONSTANTE neutraliza esa dependencia temporal. No toca el FTS
+// (created_at no está indexado).
+func (e *DbEngine) SetObservationCreatedAt(id, iso string) error {
+	if _, err := e.db.Exec(`UPDATE observations SET created_at = ? WHERE id = ?`, iso, id); err != nil {
+		return fmt.Errorf("error al fijar created_at de %s: %w", id, err)
+	}
+	return nil
+}
+
 // SaveObservationWithImportance es como SaveObservation pero fija la importancia
 // (también en updates). importance pondera el ranking del recall.
 func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error {

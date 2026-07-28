@@ -7,6 +7,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Baseline model-free reproducible (elimina un flake de CI).** `TestModelFreeBaselineNoRegression`
+  flakeaba de forma intermitente (visto en Windows CI: MRR 0.58 vs 0.66) porque el harness de
+  evaluación sembraba los docs con `created_at = datetime('now')`: si el loop de seed cruzaba un
+  borde de segundo, la señal de RECENCIA separaba docs que deberían empatar y el ranking cambiaba
+  entre corridas. Ahora `SeedEngine` fija un `created_at` CONSTANTE (primitiva nueva
+  `DbEngine.SetObservationCreatedAt`), volviendo el recall model-free una función pura del fixture.
+  Se agrega `TestModelFreeBaselineDeterministic` (dos corridas ⇒ Scores idénticos) como guarda. La
+  baseline commiteada no cambia (0.66 ya era el valor determinista).
+
 ## [0.98.0] - 2026-07-28
 
 **Pilar Cognición — el 3er pilar de Musubi (junto a Memoria y Orquestación).** Añade cognición
