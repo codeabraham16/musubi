@@ -72,12 +72,13 @@ func TestSaveFactFromSourcedSealsProvenance(t *testing.T) {
 		t.Errorf("SaveFactFromSourced: source=%q, esperaba llm-extract:potion-x", got)
 	}
 
-	// Re-afirmar el MISMO triplete con otro origen NO pisa la procedencia original.
+	// F1 (corroboración por precedencia): un 'agent' que re-afirma una propuesta LLM la PROMUEVE a
+	// autoritativa (agent-wins). La procedencia sube hacia lo autoritativo, no se preserva la propuesta.
 	if _, err := e.SaveFactFromSourced("", "claude", "es_un", "llm", "", "agent", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := factSource(t, e, "claude", "es_un", "llm"); got != "llm-extract:potion-x" {
-		t.Errorf("re-afirmación pisó la procedencia: source=%q, esperaba llm-extract:potion-x", got)
+	if got := factSource(t, e, "claude", "es_un", "llm"); got != "agent" {
+		t.Errorf("corroboración: source=%q, esperaba agent (promovido)", got)
 	}
 
 	// source vacío se normaliza a 'agent'.

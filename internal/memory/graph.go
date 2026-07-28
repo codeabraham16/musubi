@@ -121,7 +121,8 @@ func (e *DbEngine) SaveFactFromSourced(originProjectID, subject, predicate, obje
 		VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
 		ON CONFLICT(from_id, predicate, to_id, project_id) DO UPDATE SET
 			valid_from = COALESCE(excluded.valid_from, datetime('now')),
-			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL`,
+			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL,
+			source = CASE WHEN source = 'agent' OR excluded.source = 'agent' THEN 'agent' ELSE source END`,
 		fromID, predicate, toID, originProjectID, source, vf,
 	); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al guardar relación: %w", err)
@@ -140,7 +141,9 @@ func (e *DbEngine) SaveFactFromSourced(originProjectID, subject, predicate, obje
 	// la garantía de aislamiento de ESCRITURA: un save nunca invalida hechos de otro proyecto (ni
 	// los legacy ''). Nunca se borran.
 	invalidated := 0
-	if isSingleValued(predicate, singleValued) {
+	// PROPOSE-ONLY (pilar Cognición · F1): sólo un save AUTORITATIVO ('agent') invalida por
+	// cardinalidad. Una propuesta LLM no puede tachar lo autoritativo; espera corroboración.
+	if isSingleValued(predicate, singleValued) && isAuthoritative(source) {
 		res, err := tx.Exec(`
 			UPDATE relations
 			   SET valid_to = datetime('now'), invalidated_at = datetime('now'), superseded_by = ?
@@ -174,6 +177,11 @@ func isSingleValued(predicate string, set []string) bool {
 	}
 	return false
 }
+
+// isAuthoritative indica si una procedencia es autoritativa: puede invalidar por cardinalidad y es
+// visible en el read por default. Hoy sólo "agent" lo es; las propuestas de un motor LLM
+// ("llm-extract:*") NO, hasta ser corroboradas (pilar Cognición · F1).
+func isAuthoritative(source string) bool { return source == "agent" }
 
 // parseTimestamp normaliza una marca ISO opcional a 'YYYY-MM-DD HH:MM:SS' (UTC, el
 // formato de SQLite). Vacío o inválido → nil (el caller usa datetime('now')); nunca
@@ -231,7 +239,7 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank 
 // federado (admin/stdio, o ProjectID vacío) ⇒ sin cláusula de proyecto: histórico bit-a-bit.
 // Los placeholders de proyecto van DESPUÉS de los temporales, igual que los args, así que el
 // orden es consistente en todos los call sites (que anteponen los args de la frontera/nodo).
-func liveFactFilter(ctx context.Context, asOf string) (string, []interface{}) {
+func liveFactFilter(ctx context.Context, asOf string, includeProposed bool) (string, []interface{}) {
 	filter := "r.invalidated_at IS NULL"
 	var args []interface{}
 	if af := parseTimestamp(asOf); af != nil {
@@ -241,6 +249,13 @@ func liveFactFilter(ctx context.Context, asOf string) (string, []interface{}) {
 	if scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("r"); scopeSQL != "" {
 		filter += scopeSQL // " AND (r.project_id = ? OR r.project_id IS NULL OR r.project_id = '')"
 		args = append(args, scopeArgs...)
+	}
+	// CUARENTENA del pilar Cognición (F1): las aristas PROPUESTAS por un motor LLM
+	// ('llm-extract:*') no son autoritativas hasta ser corroboradas ⇒ se excluyen del read por
+	// default. includeProposed=true las incluye (superficie de revisión de propuestas). El patrón
+	// es un literal fijo (sin args) para no alterar el orden de los placeholders del filtro.
+	if !includeProposed {
+		filter += " AND r.source NOT LIKE 'llm-extract:%'"
 	}
 	return filter, args
 }
@@ -256,8 +271,9 @@ func (e *DbEngine) RecallFactsCtx(ctx context.Context, entity string, maxHops, m
 		maxFacts = defaultMaxFacts
 	}
 
-	// Filtro combinado temporal + scope de proyecto; común a BFS y a pagerank.
-	liveFilter, filterArgs := liveFactFilter(ctx, asOf)
+	// Filtro combinado temporal + scope de proyecto + cuarentena de propuestas; común a BFS y a
+	// pagerank. includeProposed=false: el read autoritativo NO ve las aristas propuestas por un LLM.
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf, false)
 
 	result := GraphResult{Entity: entity, Hops: maxHops, Facts: []Fact{}}
 

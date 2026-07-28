@@ -15,13 +15,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - **Procedencia de aristas** — columna `source` en `relations` (migración v20,
     `NOT NULL DEFAULT 'agent'`) + `SaveFactFromSourced(...)`, para auditar, excluir y revertir hechos
     según su origen (`agent` | `llm-extract:<model_id>` | `heuristic`). La procedencia se fija al CREAR
-    la arista y NO se pisa al re-afirmar (registra al primer afirmante).
+    la arista (la precedencia al re-afirmar se define en F1: corroboración agent-wins).
   - **Baseline de no-regresión** del recall model-free en `internal/recalleval`
     (`testdata/baseline_modelfree.json` + test que falla si MRR/Recall@k/nDCG@k caen; regenerable con
     `MUSUBI_UPDATE_BASELINE=1`).
   - **Andamiaje `internal/cognition`** — interfaz `Provider` + `NoopProvider` + factory +
     `CognitionConfig` + `mcp.WithCognition`, APAGADO por default: sin `cognition.provider` en la config,
     Musubi es bit-idéntico a un cerebro model-free. F0 no realiza ninguna llamada real a un LLM.
+- **Pilar Cognición · F1 (cuarentena y corroboración).** Vuelve *enforceable* el invariante del pilar
+  en el grafo de hechos, model-free y sin conectar ningún LLM:
+  - **Cuarentena en read-time** — el read autoritativo (`RecallFacts`/`FactPath`, vía el único choke
+    point `liveFactFilter`) EXCLUYE por default las aristas propuestas por un LLM
+    (`source LIKE 'llm-extract:%'`); quedan invisibles hasta ser corroboradas.
+  - **Corroboración por precedencia** — al re-afirmar un triplete, la procedencia se promueve hacia lo
+    autoritativo (agent-wins): un `agent` corrobora una propuesta LLM; una re-propuesta LLM nunca
+    degrada un hecho de agente.
+  - **Propose-only** — la invalidación por cardinalidad sólo la dispara un save `agent`: una propuesta
+    LLM no puede tachar lo autoritativo. Bit-idéntico para los datos actuales.
 
 ## [0.97.0] - 2026-07-26
 
