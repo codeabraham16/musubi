@@ -50,6 +50,9 @@ type GraphStore interface {
 	// SaveFactFrom atribuye el hecho a originProjectID y acota la invalidación por cardinalidad
 	// a ese proyecto (multi-tenant, Track 17); UNIQUE por (from_id, predicate, to_id, project_id).
 	SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error)
+	// SaveFactFromSourced sella además la PROCEDENCIA (source) de la arista para poder auditar
+	// y excluir hechos derivados por un LLM (pilar Cognición, F0). source vacío → "agent".
+	SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, source string, singleValued []string) (SaveFactResult, error)
 	RecallFacts(entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)
 	// RecallFactsCtx acota el traversal a las aristas visibles al proyecto del contexto (Track 17).
 	RecallFactsCtx(ctx context.Context, entity string, maxHops, maxFacts int, asOf, rank string) (GraphResult, error)

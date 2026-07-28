@@ -458,6 +458,19 @@ type UpdateConfig struct {
 	CheckIntervalHours float64 `yaml:"check_interval_hours"`
 }
 
+// CognitionConfig configura el pilar Cognición (LLM), el 3er pilar de Musubi. OPT-IN: con
+// Provider vacío o "none" el pilar nace APAGADO (NoopProvider) y el binario se comporta
+// bit-idéntico a un Musubi model-free. El contrato del pilar es que el LLM PROPONE, nunca
+// escribe directo al libro mayor durable. El secreto (si el motor lo requiere) se lee de la
+// env var NOMBRADA en AuthTokenEnv, nunca de este YAML.
+type CognitionConfig struct {
+	Provider              string `yaml:"provider,omitempty"`                // "" | none (F1+: motores reales)
+	Model                 string `yaml:"model,omitempty"`                   // modelo del motor (para procedencia)
+	Endpoint              string `yaml:"endpoint,omitempty"`                // endpoint del motor (tailnet), si aplica
+	AuthTokenEnv          string `yaml:"auth_token_env,omitempty"`          // NOMBRE de la env var del secreto
+	RequestTimeoutSeconds int    `yaml:"request_timeout_seconds,omitempty"` // timeout por llamada (0 => default del motor)
+}
+
 // Config es la configuración del workspace (.musubi/config.yaml).
 type Config struct {
 	Version           string `yaml:"version"`
@@ -494,6 +507,9 @@ type Config struct {
 	Service ServiceConfig `yaml:"service,omitempty"`
 	// Sync configura el sync saliente offline-first del cerebro híbrido (F2); desactivado por defecto.
 	Sync SyncConfig `yaml:"sync,omitempty"`
+	// Cognition configura el 3er pilar (Cognición LLM): OPT-IN, apagado por defecto (provider "" => Noop).
+	// F0 sólo cablea el andamiaje; no hace ninguna llamada real a un LLM.
+	Cognition CognitionConfig `yaml:"cognition,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).

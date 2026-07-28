@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"musubi/internal/codeintel"
+	"musubi/internal/cognition"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
@@ -109,6 +110,8 @@ type McpServer struct {
 	engine   memory.StorageBackend
 	resolver *skills.Resolver
 	embedder embedding.Provider
+	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
+	cognition cognition.Provider
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
@@ -173,6 +176,16 @@ func WithQuota(perMinute int) Option {
 	return func(s *McpServer) { s.quota = newQuotaLimiter(perMinute, time.Minute) }
 }
 
+// WithCognition inyecta el motor del 3er pilar (Cognición). Aditivo; c==nil se ignora (queda el
+// NoopProvider por default ⇒ pilar apagado). F0 sólo cablea el enchufe: ninguna ruta lo invoca aún.
+func WithCognition(c cognition.Provider) Option {
+	return func(s *McpServer) {
+		if c != nil {
+			s.cognition = c
+		}
+	}
+}
+
 // SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando
 // el drain del outbox (RunOutboxScheduler). Lo llama el entrypoint (serve/daemon) tras
 // construir el SyncClient desde cfg.Sync. Sin llamarlo, el server no sincroniza (syncClient nil).
@@ -203,6 +216,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		engine:      engine,
 		resolver:    skills.NewResolver(projectPath),
 		embedder:    embedder,
+		cognition:   cognition.NoopProvider{},
 		projectPath: projectPath,
 		sourcing:    config.Default().Sourcing,
 		memory:      config.Default().Memory,

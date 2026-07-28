@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **Pilar Cognición · F0 (instrumentación).** Cimientos del 3er pilar de Musubi (junto a Memoria y
+  Orquestación), de riesgo cero y OPT-IN. El contrato que lo hace compatible con la identidad
+  model-free: *el LLM PROPONE, nunca escribe directo al libro mayor*. Tres piezas aditivas:
+  - **Procedencia de aristas** — columna `source` en `relations` (migración v20,
+    `NOT NULL DEFAULT 'agent'`) + `SaveFactFromSourced(...)`, para auditar, excluir y revertir hechos
+    según su origen (`agent` | `llm-extract:<model_id>` | `heuristic`). La procedencia se fija al CREAR
+    la arista y NO se pisa al re-afirmar (registra al primer afirmante).
+  - **Baseline de no-regresión** del recall model-free en `internal/recalleval`
+    (`testdata/baseline_modelfree.json` + test que falla si MRR/Recall@k/nDCG@k caen; regenerable con
+    `MUSUBI_UPDATE_BASELINE=1`).
+  - **Andamiaje `internal/cognition`** — interfaz `Provider` + `NoopProvider` + factory +
+    `CognitionConfig` + `mcp.WithCognition`, APAGADO por default: sin `cognition.provider` en la config,
+    Musubi es bit-idéntico a un cerebro model-free. F0 no realiza ninguna llamada real a un LLM.
+
 ## [0.97.0] - 2026-07-26
 
 Endurecimiento post-auditoría exhaustiva (v0.96.0): 15 hallazgos corregidos con TDD +

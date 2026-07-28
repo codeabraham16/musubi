@@ -68,6 +68,19 @@ func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, single
 // lo revive. originProjectID '' ⇒ espacio federado histórico (admin/stdio); en ese caso la
 // cardinalidad se acota a '' y el comportamiento es bit-idéntico al previo a v14.
 func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
+	return e.SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, "agent", singleValued)
+}
+
+// SaveFactFromSourced es SaveFactFrom sellando la PROCEDENCIA (source) de la arista en el libro
+// mayor: "agent" (afirmada por un caller vía la API/tools), "llm-extract:<model_id>" (extracción
+// del pilar Cognición, F1+) o "heuristic". source vacío se normaliza a "agent". La procedencia se
+// fija SOLO al CREAR la arista; revivir o re-afirmar un triplete NO la pisa (registra al primer
+// afirmante, para poder auditar/excluir aristas derivadas por un LLM). El resto de la semántica
+// (cardinalidad, revive, aislamiento por proyecto) es idéntica a SaveFactFrom.
+func (e *DbEngine) SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, source string, singleValued []string) (SaveFactResult, error) {
+	if strings.TrimSpace(source) == "" {
+		source = "agent"
+	}
 	if strings.TrimSpace(subject) == "" || strings.TrimSpace(predicate) == "" || strings.TrimSpace(object) == "" {
 		return SaveFactResult{}, fmt.Errorf("subject, predicate y object son obligatorios")
 	}
@@ -104,12 +117,12 @@ func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, val
 	// project_id: el upsert dedup-a POR PROYECTO.
 	vf := parseTimestamp(validFrom)
 	if _, err := tx.Exec(`
-		INSERT INTO relations (from_id, predicate, to_id, project_id, valid_from, created_at)
-		VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
+		INSERT INTO relations (from_id, predicate, to_id, project_id, source, valid_from, created_at)
+		VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
 		ON CONFLICT(from_id, predicate, to_id, project_id) DO UPDATE SET
 			valid_from = COALESCE(excluded.valid_from, datetime('now')),
 			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL`,
-		fromID, predicate, toID, originProjectID, vf,
+		fromID, predicate, toID, originProjectID, source, vf,
 	); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al guardar relación: %w", err)
 	}

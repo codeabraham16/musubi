@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/cognition"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
@@ -190,6 +191,19 @@ func resolveEmbedder(cfg config.Config, root string) embedding.Provider {
 		logx.Warn("no se pudo inicializar el proveedor de embeddings; se usa recall léxico",
 			"provider", ec.Provider, "error", err)
 		return embedding.NoopProvider{}
+	}
+	return prov
+}
+
+// resolveCognition construye el motor del 3er pilar (Cognición) desde la config. F0: apagado por
+// default (Provider "" => NoopProvider). Ante una config inválida degrada a Noop sin abortar el
+// arranque: el pilar es OPT-IN y removible, nunca el camino crítico (misma filosofía que el embedder).
+func resolveCognition(cfg config.Config) cognition.Provider {
+	prov, err := cognition.NewProvider(cfg.Cognition)
+	if err != nil {
+		logx.Warn("no se pudo inicializar el motor de cognición; el pilar queda apagado (model-free)",
+			"provider", cfg.Cognition.Provider, "error", err)
+		return cognition.NoopProvider{}
 	}
 	return prov
 }
