@@ -50,6 +50,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_recall", "musubi_memory_expand", "musubi_recall_code",
 		"musubi_save_observation", "musubi_maintain", "musubi_judge", "musubi_tokens",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
+		// musubi_sdd hace un RMW del blob del run (CompleteWorkflowStep) + persiste el
+		// artefacto: su corrección depende del Lock exclusivo de dispatchMu. Marcarla readOnly
+		// la pondría bajo RLock y reintroduciría el lost-update del complete (auditoría #5).
+		"musubi_sdd",
 	}
 	for _, name := range mustWrite {
 		if s.toolReadOnly[name] {
