@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>27 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>43 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,18 +325,26 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **27 herramientas**, agrupadas por dominio:
+El servidor expone **43 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
 | **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
+| **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) |
 | **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
+| **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
-| **Skills** | `musubi_detect_stack` · `musubi_search_skills` · `musubi_save_skill` · `musubi_resolve_skills` · `musubi_log_skill_decision` · `musubi_discover_skills` (marketplace) |
+| **Skills** | `musubi_detect_stack` · `musubi_search_skills` · `musubi_save_skill` · `musubi_resolve_skills` · `musubi_log_skill_decision` · `musubi_discover_skills` (marketplace) · `musubi_author_skill` |
+| **Ingesta** | `musubi_ingest_url` (links/media → cerebro) |
+| **Orquestación** | `musubi_workflow` (DAG) · `musubi_work` (multi-agente) · `musubi_phase` (pipeline) · `musubi_sdd` (flujo guiado) · `musubi_debate` |
+| **Sync híbrido** (cerebro central) | `musubi_promote` · `musubi_sync_status` · `musubi_sync_requeue` · `musubi_sync_pull` |
 | **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` |
 | **Conflictos de memoria** | `musubi_conflicts` · `musubi_judge` |
-| **Orquestación** | `musubi_workflow` (DAG) · `musubi_work` (multi-agente) · `musubi_phase` (pipeline) |
+
+> Los tres pilares de Musubi: **Memoria** (ledger durable + grafo bi-temporal + recall model-free),
+> **Orquestación** (SDD + DAG + pizarra multi-agente) y **Cognición** (el LLM propone, nunca escribe
+> directo; el núcleo permanece model-free y determinista).
 
 ---
 
@@ -460,7 +468,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 27 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 43 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo
