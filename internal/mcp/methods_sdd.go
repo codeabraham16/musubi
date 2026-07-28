@@ -74,15 +74,18 @@ func (s *McpServer) toolSDD(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		phase := strings.TrimSpace(args.Phase)
 		runID := memory.SDDRunID(change)
-		run, err := s.engine.CompleteWorkflowStep(runID, phase, args.Summary, args.Status, "")
-		if err != nil {
-			return nil, rpcErrorf(codeInvalidParams, "no se pudo cerrar la fase: %v", err)
-		}
 
-		// Handoff a memoria: persistir el contrato de resultado bajo sdd/<change>/<phase>.
-		// Solo cuando la fase quedó 'done' (un 'failed' no produce artefacto válido).
+		// Atomicidad step↔artefacto (auditoría #23): se persiste el artefacto ANTES de marcar la
+		// fase 'done', no después. El orden inverso dejaba —si el guardado del artefacto fallaba— la
+		// fase 'done' SIN artefacto, rompiendo en silencio el contrato "fase done ⟹ artefacto existe"
+		// del que dependen las fases siguientes (que lo recuperan por referencia). Con este orden, un
+		// fallo del artefacto deja la fase SIN cerrar → el reintento es limpio; y si el complete fallara
+		// tras persistir, el artefacto tiene id determinista (SDDTopicKey) y el reintento re-UPSERTa sin
+		// duplicar. Las fases SDD son una cadena lineal sin gate verify/repeat, así que status=done
+		// siempre resulta en StepDone: persistir cuando el intent NO es 'failed' equivale exactamente a
+		// la semántica previa "solo cuando quedó done".
 		var memNote string
-		if run.StepStatus[phase] == memory.StepDone {
+		if !strings.EqualFold(strings.TrimSpace(args.Status), memory.StepFailed) {
 			contract := memory.SDDContract{
 				Summary:         args.Summary,
 				Artifacts:       args.Artifacts,
@@ -94,6 +97,11 @@ func (s *McpServer) toolSDD(raw json.RawMessage) (interface{}, *RpcError) {
 				return nil, rerr
 			}
 			memNote = "Artefacto guardado en memoria (id: " + id + ")."
+		}
+
+		run, err := s.engine.CompleteWorkflowStep(runID, phase, args.Summary, args.Status, "")
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo cerrar la fase: %v", err)
 		}
 
 		ready, _ := s.engine.WorkflowReady(runID)

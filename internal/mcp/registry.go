@@ -156,7 +156,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"facts": {Type: "array", Description: "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact."},
+						"facts": {Type: "array", Description: "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact.", Items: &Property{Type: "object", Description: "tripleta {subject, predicate, object, valid_from?}"}},
 						"model": {Type: "string", Description: "Opcional: id del modelo que extrajo las tripletas, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."},
 					},
 					Required: []string{"facts"},
@@ -426,7 +426,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{
 						"action":        {Type: "string", Description: "plan | claim | heartbeat | complete | status | savings | clear | bid | award | bids"},
 						"batch":         {Type: "string", Description: "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"},
-						"units":         {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear"},
+						"units":         {Type: "array", Description: "Para plan: lista de unidades [{title, spec}] a postear", Items: &Property{Type: "object", Description: "unidad de trabajo {title, spec}"}},
 						"agent":         {Type: "string", Description: "Para claim/heartbeat/complete: etiqueta del sub-agente (dueño del lease)"},
 						"id":            {Type: "string", Description: "Para heartbeat/complete/bid/award/bids: ID de la unidad"},
 						"result":        {Type: "string", Description: "Para complete: resultado/resumen producido por el sub-agente"},

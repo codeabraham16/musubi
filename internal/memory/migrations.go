@@ -398,6 +398,13 @@ func schemaMigrations() []migration {
 			// recrea porque se va con el DROP de la tabla vieja.
 			up: func(x execQuerier) error {
 				stmts := []string{
+					// GUARD anti-brick (auditoría v0.98.0): el rebuild corre con foreign_keys=ON, así que
+					// una relación LEGACY huérfana (from_id/to_id apuntando a una entidad inexistente —
+					// posible en datos creados antes de que el CASCADE se aplicara) haría fallar el
+					// INSERT..SELECT por la FK y ABORTARÍA la migración (rollback ⇒ NewDbEngine devuelve
+					// error ⇒ la base "que funcionaba" NO abre con el binario nuevo). Barrer las huérfanas
+					// ANTES del rebuild: son aristas a un nodo que ya no existe (no aportan al grafo).
+					`DELETE FROM relations WHERE from_id NOT IN (SELECT id FROM entities) OR to_id NOT IN (SELECT id FROM entities)`,
 					`CREATE TABLE relations_new (
 						id INTEGER PRIMARY KEY AUTOINCREMENT,
 						from_id INTEGER NOT NULL,

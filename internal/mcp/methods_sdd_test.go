@@ -1,12 +1,24 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"musubi/internal/embedding"
 )
+
+// failingEmbedder cuenta como Enabled (no es NoopProvider) pero su Embed siempre falla:
+// fuerza el fallo de persistSDDArtifact para probar el ordenamiento crash-safe del complete.
+type failingEmbedder struct{}
+
+func (failingEmbedder) Embed(context.Context, string) ([]float32, error) {
+	return nil, errors.New("embed caído (test)")
+}
+func (failingEmbedder) Dimensions() int { return 8 }
+func (failingEmbedder) Name() string    { return "failing-test" }
 
 // sddOut es la forma de la respuesta de musubi_sdd que asertan los tests.
 type sddOut struct {
@@ -127,6 +139,36 @@ func TestSDDImplementDirectiveReferencesHandoff(t *testing.T) {
 	}
 	if !strings.Contains(out.Directive, "sdd/add-auth") {
 		t.Fatalf("la directiva de implement debería referenciar sdd/add-auth: %q", out.Directive)
+	}
+}
+
+// TestSDDCompleteAtomicityArtifactFirst prueba el ordenamiento crash-safe (auditoría #23): si el
+// guardado del artefacto falla, la fase NO queda 'done' — nunca hay una fase cerrada sin su artefacto
+// (el contrato "fase done ⟹ artefacto existe" del que dependen las fases siguientes). El complete
+// persiste el artefacto ANTES de marcar el step, así que un fallo del artefacto deja la fase reintenta-
+// ble en vez de romper el contrato en silencio.
+func TestSDDCompleteAtomicityArtifactFirst(t *testing.T) {
+	s := newTestServer(t, failingEmbedder{})
+	const change = "Add Auth"
+	call(t, s, "musubi_sdd", map[string]interface{}{"action": "start", "change": change})
+
+	// complete proposal: persistSDDArtifact falla (embed caído) ANTES de cerrar el step.
+	if _, e := call(t, s, "musubi_sdd", map[string]interface{}{
+		"action": "complete", "change": change, "phase": "proposal", "summary": "propuesta lista",
+	}); e == nil {
+		t.Fatal("esperaba error: el guardado del artefacto debía fallar")
+	}
+
+	// INVARIANTE: proposal NO quedó 'done' (habría sido una fase cerrada sin artefacto).
+	res, _ := call(t, s, "musubi_sdd", map[string]interface{}{"action": "status", "change": change})
+	out := parseSDD(t, res)
+	for _, p := range out.Phases {
+		if p.Phase == "proposal" && p.Status == "done" {
+			t.Fatalf("proposal quedó 'done' pese a que el artefacto falló: contrato step↔artefacto roto")
+		}
+	}
+	if out.Active != "proposal" {
+		t.Errorf("proposal debería seguir activa (reintentable) tras el fallo, active=%q", out.Active)
 	}
 }
 

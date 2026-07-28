@@ -207,11 +207,16 @@ func parseTimestamp(s string) interface{} {
 // supera threshold devuelve (canonical, true), si no (name, false). threshold<=0 o name vacío ⇒
 // no-op (name, false). Un match exacto por norma da Similarity 1.0, así que siempre gana. Sólo lo
 // usan las propuestas: save_fact autoritativo NO pasa por acá (preserva el comportamiento histórico).
+//
+// DETERMINISMO ANTE EMPATES (auditoría v0.98.0): el escaneo va ORDER BY name y la comparación es
+// ESTRICTA (sc > bestScore), así que ante dos candidatos con idéntica similitud gana siempre el
+// nombre lexicográficamente MENOR — reproducible aunque SQLite reordene las filas tras un VACUUM.
+// Sin el ORDER BY, un empate se resolvía por el orden físico de filas (no estable).
 func (e *DbEngine) ResolveEntityName(name string, threshold float64) (string, bool, error) {
 	if threshold <= 0 || strings.TrimSpace(name) == "" {
 		return name, false, nil
 	}
-	rows, err := e.db.Query(`SELECT name FROM entities`)
+	rows, err := e.db.Query(`SELECT name FROM entities ORDER BY name`)
 	if err != nil {
 		return name, false, fmt.Errorf("error al listar entidades para resolver: %w", err)
 	}

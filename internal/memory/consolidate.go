@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // consolidate.go fusiona observaciones casi-duplicadas (auto-mantenimiento
@@ -11,6 +12,30 @@ import (
 
 // defaultDedupThreshold es el umbral de similitud por defecto para fusionar.
 const defaultDedupThreshold = 0.85
+
+// negationTokens son negadores explícitos (es/en) para el guard de POLARIDAD de la
+// consolidación. Model-free y deliberadamente ACOTADO: cierra el falso positivo medido
+// (auditoría) donde una observación larga negada con un token corto —"no usa Postgres"
+// vs "usa Postgres"— empata en trigramas (sim ~0.89 > 0.85) y se fusionaría, ocultando del
+// recall la polaridad opuesta. NO pretende resolver antónimos ("seguro"/"inseguro") ni
+// negación implícita: eso es el techo semántico model-free (Track 15), delegado al caller/LLM.
+var negationTokens = map[string]bool{
+	"no": true, "nunca": true, "jamás": true, "jamas": true, "tampoco": true, "ni": true,
+	"not": true, "never": true, "neither": true, "nor": true, "cannot": true,
+}
+
+// negationCount cuenta tokens de negación explícita en un texto YA normalizado
+// (normalizeForSim: minúsculas + espacios colapsados). Cuenta palabras completas, así que
+// "no-sql" (un token) no dispara: solo el "no" suelto.
+func negationCount(normalized string) int {
+	n := 0
+	for _, tok := range strings.Fields(normalized) {
+		if negationTokens[tok] {
+			n++
+		}
+	}
+	return n
+}
 
 // ConsolidateResult resume una corrida de consolidación.
 type ConsolidateResult struct {
@@ -104,6 +129,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	for _, o := range all {
 		norm := normalizeForSim(o.content)
 		tg := trigrams(norm)
+		oNeg := negationCount(norm) // guard de polaridad: un candidato con distinta cuenta de negación no es duplicado
 		// AISLAMIENTO POR TENANT (Track 17): la consolidación NO fusiona a través de proyectos —
 		// igual que EnforceQuota agrupa por project_id. La clave de igualdad-exacta incluye el
 		// project_id (el NUL nunca aparece en texto normalizado), y el match por trigramas exige
@@ -135,8 +161,11 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 					continue
 				}
 				// Sólo fusiona dentro del mismo tenant (aislamiento): un candidato de otro
-				// project_id nunca es "duplicado" aunque el texto empate por trigramas.
-				if float64(ov)/float64(denom) >= threshold && kept[ki].projectID == o.projectID {
+				// project_id nunca es "duplicado" aunque el texto empate por trigramas. Y guard de
+				// POLARIDAD: si difieren en la cuenta de negadores explícitos, no son duplicados
+				// (evita fusionar "usa X" con "no usa X", que empatan en trigramas — auditoría).
+				if float64(ov)/float64(denom) >= threshold && kept[ki].projectID == o.projectID &&
+					negationCount(normalizeForSim(kept[ki].content)) == oNeg {
 					if matchIdx == -1 || ki < matchIdx {
 						matchIdx = ki
 					}

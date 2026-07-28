@@ -639,6 +639,16 @@ func persistRunStatusTx(tx *sql.Tx, run WorkflowRun) (WorkflowRun, string, error
 // run_done si corresponde), en la MISMA transacción que actualiza el snapshot.
 // idempotencyKey (opcional): si ya existe un evento con esa clave para el run, la
 // llamada es un NO-OP (reintento seguro) y devuelve el estado actual sin re-aplicar.
+//
+// CONCURRENCIA (auditoría #5): esto es un read-modify-write del blob del run — lee el
+// snapshot (WorkflowRunStatus, FUERA de la tx), muta un step en Go y reescribe el blob
+// completo con un UPDATE incondicional. Es RMW-safe porque el dispatch del MCP serializa
+// las tools de escritura bajo el Lock exclusivo de dispatchMu: nunca hay dos completes
+// concurrentes sobre el mismo proceso. Ese es el modelo de despliegue actual (single
+// server sobre SQLite single-writer). Un despliegue MULTI-PROCESO contra el mismo archivo
+// perdería updates acá y exigiría CAS-by-version (UPDATE ... WHERE run_id=? AND version=?
+// + retry); ese endurecimiento está atado a la decisión de posture de concurrencia
+// (SQLite single-writer vs backend Postgres), no se implementa especulativamente.
 func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idempotencyKey string) (WorkflowRun, error) {
 	if stepStatus == "" {
 		stepStatus = StepDone
