@@ -73,17 +73,21 @@ func TestAutoMaintainAfterSaves(t *testing.T) {
 	if got := s.saveCount.Load(); got != 0 {
 		t.Fatalf("al cruzar el umbral, saveCount debe resetear a 0 (prueba determinista del trigger), got %d", got)
 	}
-	// El ciclo corre async: esperar (acotado) a que marque last_maintenance.
+	// El ciclo corre async: esperar (acotado) a que (a) marque last_maintenance —prueba que
+	// CORRIÓ— y (b) maintBusy vuelva a false —prueba que la goroutine TERMINÓ, liberó el
+	// write-lock y soltó la DB—. Esperar la terminación real (no sólo el side-effect) evita que
+	// el cleanup del TempDir choque con la goroutine todavía usando la base: en Windows no se
+	// puede borrar un archivo abierto, así que un handle vivo rompía el RemoveAll del t.TempDir.
 	ran := false
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
-		if maintRan() {
+		if maintRan() && !s.maintBusy.Load() {
 			ran = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !ran {
-		t.Error("3 saves con auto_after_saves=3 debió disparar el mantenimiento")
+		t.Error("3 saves con auto_after_saves=3 debió disparar el mantenimiento (y terminarlo)")
 	}
 }
 
