@@ -7,6 +7,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.98.0] - 2026-07-28
+
+**Pilar Cognición — el 3er pilar de Musubi (junto a Memoria y Orquestación).** Añade cognición
+respetando el contrato que preserva la identidad model-free: *el LLM PROPONE, nunca escribe directo
+al libro mayor durable*, y el core sigue sin llamar a ningún LLM (la cognición se *presta del
+caller*, como `musubi_judge`/`debate`). Cinco fases (F0–F4), todas aditivas y **OFF por default**:
+un Musubi sin `cognition.*` configurado es **bit-idéntico** al anterior. Loop completo
+`propose → resolve → [cuarentena] → review → corroborate → sweep`. Ver `sdd/cognicion-f*` en la
+memoria de Musubi.
+
 ### Added
 
 - **Pilar Cognición · F0 (instrumentación).** Cimientos del 3er pilar de Musubi (junto a Memoria y
