@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.98.2] - 2026-07-28
+
+### Fixed
+
+- **Embedder Ollama: truncación del input al contexto del modelo.** `OllamaProvider` pasó del
+  deprecado `/api/embeddings` a `POST /api/embed` con `truncate: true`: ante un texto más largo que el
+  contexto del modelo (memorias/dossiers vs. el contexto de bge-m3), Ollama lo **recorta** en vez de
+  devolver `500 "input length exceeds the context length"` —que abortaba el `musubi embed backfill`—.
+  Robusto y model-free: Ollama trunca al límite exacto del modelo, sin que el server tenga que adivinar
+  un tope de caracteres/tokens. Incluye la herramienta de medición A/B `TestSemanticVsOllamaReal`
+  (medido: bge-m3 híbrido R@10=0.917 vs POTION 0.833 sobre el fixture dorado). Habilita usar un embedder
+  local fuerte (bge-m3) como señal semántica del cerebro.
+
 ## [0.98.1] - 2026-07-28
 
 **Endurecimiento post-auditoría integral de v0.98.0** (8 agentes, 8 lentes: arquitectura, recall,
