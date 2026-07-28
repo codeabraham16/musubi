@@ -128,7 +128,11 @@
         "properties": {
           "facts": {
             "type": "array",
-            "description": "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact."
+            "description": "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact.",
+            "items": {
+              "type": "object",
+              "description": "tripleta {subject, predicate, object, valid_from?}"
+            }
           },
           "model": {
             "type": "string",
@@ -537,7 +541,11 @@
           },
           "units": {
             "type": "array",
-            "description": "Para plan: lista de unidades [{title, spec}] a postear"
+            "description": "Para plan: lista de unidades [{title, spec}] a postear",
+            "items": {
+              "type": "object",
+              "description": "unidad de trabajo {title, spec}"
+            }
           }
         }
       }
