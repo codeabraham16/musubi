@@ -32,6 +32,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     degrada un hecho de agente.
   - **Propose-only** — la invalidación por cardinalidad sólo la dispara un save `agent`: una propuesta
     LLM no puede tachar lo autoritativo. Bit-idéntico para los datos actuales.
+- **Pilar Cognición · F2 (propuestas caller-borrowed + revisión).** El pilar ya PRODUCE cognición, por
+  la vía más segura — *caller-borrowed*: sin LLM en el server, sin red, sin superficie de ToS:
+  - **`musubi_propose_facts`** — el agente-LLM aporta tripletas que extrajo; entran al grafo en
+    cuarentena con procedencia `llm-extract:<model>` (no autoritativas, invisibles a `recall_facts` por
+    default, no invalidan nada). Mismo patrón que `musubi_judge`/`debate`: Musubi delega la cognición
+    al caller y nunca llama a un LLM.
+  - **`recall_facts include_proposed`** — flag para revisar las propuestas antes de corroborarlas.
+  - Loop completo: proponer → revisar → corroborar con `musubi_save_fact` (F1 las promueve a
+    autoritativas). Aditivo: `recall_facts` sin el flag es bit-idéntico.
 
 ## [0.97.0] - 2026-07-26
 

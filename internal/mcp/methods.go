@@ -1224,13 +1224,74 @@ func (s *McpServer) toolSaveFact(ctx context.Context, raw json.RawMessage) (inte
 	return textResult(msg), nil
 }
 
+// toolProposeFacts es la cognición CALLER-BORROWED del 3er pilar (F2): el agente-LLM aporta tripletas
+// que extrajo, y entran al grafo en CUARENTENA con procedencia 'llm-extract:<model>'. Musubi NO llama
+// a ningún LLM (mismo patrón que judge/debate). Las propuestas no son autoritativas, no aparecen en
+// recall_facts por default y no invalidan nada (garantías de F1); para volverlas autoritativas hay que
+// corroborarlas con musubi_save_fact. Misma redacción forzada + atribución por credencial que save_fact.
+func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Facts []struct {
+			Subject   string `json:"subject"`
+			Predicate string `json:"predicate"`
+			Object    string `json:"object"`
+			ValidFrom string `json:"valid_from"`
+		} `json:"facts"`
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if len(args.Facts) == 0 {
+		return nil, rpcErrorf(codeInvalidParams, "facts es obligatorio (al menos una tripleta)")
+	}
+	// Validación validate-all-then-save: si alguna tripleta está incompleta, se rechaza el lote entero.
+	for i, f := range args.Facts {
+		if strings.TrimSpace(f.Subject) == "" || strings.TrimSpace(f.Predicate) == "" || strings.TrimSpace(f.Object) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "facts[%d]: subject, predicate y object son obligatorios", i)
+		}
+	}
+
+	model := strings.TrimSpace(args.Model)
+	if model == "" {
+		model = "caller"
+	}
+	source := "llm-extract:" + model
+
+	// Atribución por credencial (Track 17): la propuesta se guarda para el proyecto del principal.
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
+	}
+
+	proposed, existed := 0, 0
+	for _, f := range args.Facts {
+		// Redacción forzada al central: una propuesta tampoco puede llevar un secreto crudo al pozo.
+		subject := s.redactIfForced(f.Subject)
+		predicate := s.redactIfForced(f.Predicate)
+		object := s.redactIfForced(f.Object)
+		res, err := s.engine.SaveFactFromSourced(origin, subject, predicate, object, f.ValidFrom, source, s.graph.SingleValuedPredicates)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al proponer hecho: %v", err)
+		}
+		if res.Created {
+			proposed++
+		} else {
+			existed++
+		}
+	}
+	msg := fmt.Sprintf("Propuesto(s) %d hecho(s) en CUARENTENA (source=%s); %d ya existía(n). No son autoritativos ni aparecen en recall_facts hasta corroborarlos con musubi_save_fact; revisalos con recall_facts include_proposed=true.", proposed, source, existed)
+	return textResult(msg), nil
+}
+
 func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Entity  string `json:"entity"`
-		MaxHops int    `json:"max_hops"`
-		AsOf    string `json:"as_of"`
-		Rank    string `json:"rank"`
-		To      string `json:"to"`
+		Entity          string `json:"entity"`
+		MaxHops         int    `json:"max_hops"`
+		AsOf            string `json:"as_of"`
+		Rank            string `json:"rank"`
+		To              string `json:"to"`
+		IncludeProposed bool   `json:"include_proposed"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -1246,6 +1307,12 @@ func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (i
 
 	// Aislamiento por proyecto (Track 17): el traversal se acota al proyecto de la credencial.
 	scoped := s.scopedCtx(ctx)
+
+	// Revisión de propuestas (pilar Cognición · F2): por default el read está en CUARENTENA (no ve
+	// las aristas 'llm-extract:*'); include_proposed=true las incluye para inspeccionarlas.
+	if args.IncludeProposed {
+		scoped = memory.WithIncludeProposed(scoped)
+	}
 
 	// Con 'to' seteado: camino más corto entity→to. Sin él: vecindad (BFS/pagerank).
 	if strings.TrimSpace(args.To) != "" {

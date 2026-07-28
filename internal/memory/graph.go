@@ -230,6 +230,22 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank 
 	return e.RecallFactsCtx(context.Background(), entity, maxHops, maxFacts, asOf, rank)
 }
 
+// includeProposedCtxKey es la clave (privada) del flag "incluir propuestas" en el contexto.
+type includeProposedCtxKey struct{}
+
+// WithIncludeProposed marca el contexto para que el read del grafo de hechos INCLUYA las aristas
+// PROPUESTAS por un motor LLM ('llm-extract:*'), que por default están en cuarentena (pilar
+// Cognición · F1). Lo usa la superficie de revisión (recall_facts con include_proposed=true).
+func WithIncludeProposed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, includeProposedCtxKey{}, true)
+}
+
+// includeProposedFrom lee ese flag del contexto (default false = cuarentena).
+func includeProposedFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(includeProposedCtxKey{}).(bool)
+	return v
+}
+
 // liveFactFilter arma el fragmento WHERE (referenciando el alias r) que selecciona las
 // relaciones VISIBLES a esta consulta: el predicado bi-temporal "vivo" (verdad actual por
 // defecto; point-in-time con asOf) Y el scope multi-tenant del proyecto (Track 17). Plegar
@@ -272,8 +288,9 @@ func (e *DbEngine) RecallFactsCtx(ctx context.Context, entity string, maxHops, m
 	}
 
 	// Filtro combinado temporal + scope de proyecto + cuarentena de propuestas; común a BFS y a
-	// pagerank. includeProposed=false: el read autoritativo NO ve las aristas propuestas por un LLM.
-	liveFilter, filterArgs := liveFactFilter(ctx, asOf, false)
+	// pagerank. includeProposed sale del ctx: por default el read autoritativo NO ve las aristas
+	// propuestas por un LLM; la superficie de revisión (recall_facts include_proposed) lo activa.
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf, includeProposedFrom(ctx))
 
 	result := GraphResult{Entity: entity, Hops: maxHops, Facts: []Fact{}}
 

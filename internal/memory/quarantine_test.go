@@ -78,6 +78,31 @@ func TestProposeOnlyCardinality(t *testing.T) {
 	}
 }
 
+// TestWithIncludeProposedRevealsFacts: una propuesta LLM está oculta en RecallFacts por default
+// (cuarentena) y se revela cuando el contexto lleva WithIncludeProposed (superficie de revisión · F2).
+func TestWithIncludeProposedRevealsFacts(t *testing.T) {
+	e := newTestEngine(t)
+
+	if _, err := e.SaveFactFromSourced("", "alpha", "usa", "potion", "", "llm-extract:m", nil); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.RecallFactsCtx(context.Background(), "alpha", 2, 10, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Facts) != 0 {
+		t.Errorf("por default la propuesta debería estar en cuarentena; got %d", len(res.Facts))
+	}
+
+	res, err = e.RecallFactsCtx(WithIncludeProposed(context.Background()), "alpha", 2, 10, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Facts) != 1 {
+		t.Errorf("con WithIncludeProposed la propuesta debería verse; got %d", len(res.Facts))
+	}
+}
+
 // factLive indica si la arista (subject,predicate,object) está viva (invalidated_at IS NULL).
 func factLive(t *testing.T, e *DbEngine, subject, predicate, object string) bool {
 	t.Helper()
