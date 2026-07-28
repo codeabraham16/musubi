@@ -121,6 +121,26 @@
       }
     },
     {
+      "name": "musubi_propose_facts",
+      "description": "PROPONE hechos (tripletas) que VOS (el agente-LLM) extrajiste, al grafo, en CUARENTENA: entran con procedencia 'llm-extract:*', NO son autoritativos, NO aparecen en recall_facts por default y NO invalidan nada. Es cognición 'caller-borrowed': Musubi no llama a ningún LLM, vos aportás las tripletas. Para volver autoritativa una propuesta, corroborála con musubi_save_fact (el mismo triple); para revisarlas, usá recall_facts con include_proposed=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "facts": {
+            "type": "array",
+            "description": "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact."
+          },
+          "model": {
+            "type": "string",
+            "description": "Opcional: id del modelo que extrajo las tripletas, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."
+          }
+        },
+        "required": [
+          "facts"
+        ]
+      }
+    },
+    {
       "name": "musubi_recall_facts",
       "description": "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
       "inputSchema": {
@@ -133,6 +153,10 @@
           "entity": {
             "type": "string",
             "description": "Entidad desde la que recorrer el grafo"
+          },
+          "include_proposed": {
+            "type": "boolean",
+            "description": "Opcional (default false): incluye las aristas PROPUESTAS por un LLM ('llm-extract:*'), que por default están en cuarentena. Para revisar propuestas antes de corroborarlas con musubi_save_fact."
           },
           "max_hops": {
             "type": "number",

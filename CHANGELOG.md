@@ -7,6 +7,59 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **Pilar Cognición · F0 (instrumentación).** Cimientos del 3er pilar de Musubi (junto a Memoria y
+  Orquestación), de riesgo cero y OPT-IN. El contrato que lo hace compatible con la identidad
+  model-free: *el LLM PROPONE, nunca escribe directo al libro mayor*. Tres piezas aditivas:
+  - **Procedencia de aristas** — columna `source` en `relations` (migración v20,
+    `NOT NULL DEFAULT 'agent'`) + `SaveFactFromSourced(...)`, para auditar, excluir y revertir hechos
+    según su origen (`agent` | `llm-extract:<model_id>` | `heuristic`). La procedencia se fija al CREAR
+    la arista (la precedencia al re-afirmar se define en F1: corroboración agent-wins).
+  - **Baseline de no-regresión** del recall model-free en `internal/recalleval`
+    (`testdata/baseline_modelfree.json` + test que falla si MRR/Recall@k/nDCG@k caen; regenerable con
+    `MUSUBI_UPDATE_BASELINE=1`).
+  - **Andamiaje `internal/cognition`** — interfaz `Provider` + `NoopProvider` + factory +
+    `CognitionConfig` + `mcp.WithCognition`, APAGADO por default: sin `cognition.provider` en la config,
+    Musubi es bit-idéntico a un cerebro model-free. F0 no realiza ninguna llamada real a un LLM.
+- **Pilar Cognición · F1 (cuarentena y corroboración).** Vuelve *enforceable* el invariante del pilar
+  en el grafo de hechos, model-free y sin conectar ningún LLM:
+  - **Cuarentena en read-time** — el read autoritativo (`RecallFacts`/`FactPath`, vía el único choke
+    point `liveFactFilter`) EXCLUYE por default las aristas propuestas por un LLM
+    (`source LIKE 'llm-extract:%'`); quedan invisibles hasta ser corroboradas.
+  - **Corroboración por precedencia** — al re-afirmar un triplete, la procedencia se promueve hacia lo
+    autoritativo (agent-wins): un `agent` corrobora una propuesta LLM; una re-propuesta LLM nunca
+    degrada un hecho de agente.
+  - **Propose-only** — la invalidación por cardinalidad sólo la dispara un save `agent`: una propuesta
+    LLM no puede tachar lo autoritativo. Bit-idéntico para los datos actuales.
+- **Pilar Cognición · F2 (propuestas caller-borrowed + revisión).** El pilar ya PRODUCE cognición, por
+  la vía más segura — *caller-borrowed*: sin LLM en el server, sin red, sin superficie de ToS:
+  - **`musubi_propose_facts`** — el agente-LLM aporta tripletas que extrajo; entran al grafo en
+    cuarentena con procedencia `llm-extract:<model>` (no autoritativas, invisibles a `recall_facts` por
+    default, no invalidan nada). Mismo patrón que `musubi_judge`/`debate`: Musubi delega la cognición
+    al caller y nunca llama a un LLM.
+  - **`recall_facts include_proposed`** — flag para revisar las propuestas antes de corroborarlas.
+  - Loop completo: proponer → revisar → corroborar con `musubi_save_fact` (F1 las promueve a
+    autoritativas). Aditivo: `recall_facts` sin el flag es bit-idéntico.
+- **Pilar Cognición · F3 (guardas de calidad sobre las propuestas).** Dos guardas deterministas y
+  model-free que moderan lo que un motor LLM propone, ambas OFF por default (⇒ bit-idéntico):
+  - **Enum de predicados** (`cognition.allowed_predicates`) — `musubi_propose_facts` rechaza el
+    lote entero si alguna tripleta usa un predicado fuera del vocabulario controlado
+    (case-insensitive), para que el LLM no fragmente la ontología en sinónimos. No afecta a
+    `musubi_save_fact` autoritativo; vocabulario vacío ⇒ allow-all.
+  - **Barrido de propuestas rancias** (`cognition.proposal_ttl_hours`) — el mantenimiento
+    (`musubi_maintain` + auto-mantenimiento) invalida las propuestas en cuarentena no corroboradas
+    más viejas que el TTL, para que la cuarentena no crezca sin fin. Nunca toca lo autoritativo
+    (`source=agent`) ni lo ya invalidado; TTL 0 ⇒ no-op. Reporta el conteo en `proposals_swept`.
+- **Pilar Cognición · F4 (resolución de entidades para propuestas).** Tercera guarda de calidad,
+  también determinista y model-free: `musubi_propose_facts` canonicaliza el `subject`/`object` de
+  una tripleta a una entidad EXISTENTE suficientemente parecida (similitud de Jaccard sobre
+  trigramas ≥ `cognition.entity_resolution_threshold`, el mismo criterio que la consolidación),
+  para no fragmentar el grafo con variantes de la misma entidad (`potions`→`potion`, typos). Se
+  elige trigramas sobre coseno a propósito: sin dependencia de embeddings, determinista, fiel a la
+  identidad model-free. Sólo aplica a propuestas — `musubi_save_fact` autoritativo no se toca — y
+  el umbral 0 (default) la desactiva ⇒ bit-idéntico. La respuesta informa cuántos nombres canonicalizó.
+
 ## [0.97.0] - 2026-07-26
 
 Endurecimiento post-auditoría exhaustiva (v0.96.0): 15 hallazgos corregidos con TDD +

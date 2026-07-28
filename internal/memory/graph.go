@@ -68,6 +68,19 @@ func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, single
 // lo revive. originProjectID '' ⇒ espacio federado histórico (admin/stdio); en ese caso la
 // cardinalidad se acota a '' y el comportamiento es bit-idéntico al previo a v14.
 func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
+	return e.SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, "agent", singleValued)
+}
+
+// SaveFactFromSourced es SaveFactFrom sellando la PROCEDENCIA (source) de la arista en el libro
+// mayor: "agent" (afirmada por un caller vía la API/tools), "llm-extract:<model_id>" (extracción
+// del pilar Cognición, F1+) o "heuristic". source vacío se normaliza a "agent". La procedencia se
+// fija SOLO al CREAR la arista; revivir o re-afirmar un triplete NO la pisa (registra al primer
+// afirmante, para poder auditar/excluir aristas derivadas por un LLM). El resto de la semántica
+// (cardinalidad, revive, aislamiento por proyecto) es idéntica a SaveFactFrom.
+func (e *DbEngine) SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, source string, singleValued []string) (SaveFactResult, error) {
+	if strings.TrimSpace(source) == "" {
+		source = "agent"
+	}
 	if strings.TrimSpace(subject) == "" || strings.TrimSpace(predicate) == "" || strings.TrimSpace(object) == "" {
 		return SaveFactResult{}, fmt.Errorf("subject, predicate y object son obligatorios")
 	}
@@ -104,12 +117,13 @@ func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, val
 	// project_id: el upsert dedup-a POR PROYECTO.
 	vf := parseTimestamp(validFrom)
 	if _, err := tx.Exec(`
-		INSERT INTO relations (from_id, predicate, to_id, project_id, valid_from, created_at)
-		VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
+		INSERT INTO relations (from_id, predicate, to_id, project_id, source, valid_from, created_at)
+		VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
 		ON CONFLICT(from_id, predicate, to_id, project_id) DO UPDATE SET
 			valid_from = COALESCE(excluded.valid_from, datetime('now')),
-			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL`,
-		fromID, predicate, toID, originProjectID, vf,
+			valid_to = NULL, invalidated_at = NULL, superseded_by = NULL,
+			source = CASE WHEN source = 'agent' OR excluded.source = 'agent' THEN 'agent' ELSE source END`,
+		fromID, predicate, toID, originProjectID, source, vf,
 	); err != nil {
 		return SaveFactResult{}, fmt.Errorf("error al guardar relación: %w", err)
 	}
@@ -127,7 +141,9 @@ func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, val
 	// la garantía de aislamiento de ESCRITURA: un save nunca invalida hechos de otro proyecto (ni
 	// los legacy ''). Nunca se borran.
 	invalidated := 0
-	if isSingleValued(predicate, singleValued) {
+	// PROPOSE-ONLY (pilar Cognición · F1): sólo un save AUTORITATIVO ('agent') invalida por
+	// cardinalidad. Una propuesta LLM no puede tachar lo autoritativo; espera corroboración.
+	if isSingleValued(predicate, singleValued) && isAuthoritative(source) {
 		res, err := tx.Exec(`
 			UPDATE relations
 			   SET valid_to = datetime('now'), invalidated_at = datetime('now'), superseded_by = ?
@@ -162,6 +178,11 @@ func isSingleValued(predicate string, set []string) bool {
 	return false
 }
 
+// isAuthoritative indica si una procedencia es autoritativa: puede invalidar por cardinalidad y es
+// visible en el read por default. Hoy sólo "agent" lo es; las propuestas de un motor LLM
+// ("llm-extract:*") NO, hasta ser corroboradas (pilar Cognición · F1).
+func isAuthoritative(source string) bool { return source == "agent" }
+
 // parseTimestamp normaliza una marca ISO opcional a 'YYYY-MM-DD HH:MM:SS' (UTC, el
 // formato de SQLite). Vacío o inválido → nil (el caller usa datetime('now')); nunca
 // falla, para no romper un guardado por un typo de fecha (no inferimos fechas de prosa).
@@ -176,6 +197,45 @@ func parseTimestamp(s string) interface{} {
 		}
 	}
 	return nil
+}
+
+// ResolveEntityName canonicaliza name al nombre de una entidad EXISTENTE suficientemente similar,
+// para que las PROPUESTAS del 3er pilar (Cognición F4) no fragmenten el grafo con variantes de la
+// misma entidad (potions→potion, alphacorp→"alpha corp", typos). La similitud es DETERMINISTA y
+// model-free: Jaccard de trigramas (Similarity), el mismo criterio que Consolidate — sin LLM ni
+// embeddings. Escanea el conjunto GLOBAL de entidades y se queda con la de mayor similitud; si esa
+// supera threshold devuelve (canonical, true), si no (name, false). threshold<=0 o name vacío ⇒
+// no-op (name, false). Un match exacto por norma da Similarity 1.0, así que siempre gana. Sólo lo
+// usan las propuestas: save_fact autoritativo NO pasa por acá (preserva el comportamiento histórico).
+func (e *DbEngine) ResolveEntityName(name string, threshold float64) (string, bool, error) {
+	if threshold <= 0 || strings.TrimSpace(name) == "" {
+		return name, false, nil
+	}
+	rows, err := e.db.Query(`SELECT name FROM entities`)
+	if err != nil {
+		return name, false, fmt.Errorf("error al listar entidades para resolver: %w", err)
+	}
+	defer rows.Close()
+
+	best := ""
+	bestScore := 0.0
+	for rows.Next() {
+		var cand string
+		if err := rows.Scan(&cand); err != nil {
+			return name, false, fmt.Errorf("error al escanear entidad candidata: %w", err)
+		}
+		if sc := Similarity(name, cand); sc > bestScore {
+			bestScore = sc
+			best = cand
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return name, false, fmt.Errorf("error al iterar entidades para resolver: %w", err)
+	}
+	if best != "" && bestScore >= threshold {
+		return best, true, nil
+	}
+	return name, false, nil
 }
 
 // upsertEntity devuelve el id de la entidad, creándola si no existe (dedup por
@@ -209,6 +269,22 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank 
 	return e.RecallFactsCtx(context.Background(), entity, maxHops, maxFacts, asOf, rank)
 }
 
+// includeProposedCtxKey es la clave (privada) del flag "incluir propuestas" en el contexto.
+type includeProposedCtxKey struct{}
+
+// WithIncludeProposed marca el contexto para que el read del grafo de hechos INCLUYA las aristas
+// PROPUESTAS por un motor LLM ('llm-extract:*'), que por default están en cuarentena (pilar
+// Cognición · F1). Lo usa la superficie de revisión (recall_facts con include_proposed=true).
+func WithIncludeProposed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, includeProposedCtxKey{}, true)
+}
+
+// includeProposedFrom lee ese flag del contexto (default false = cuarentena).
+func includeProposedFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(includeProposedCtxKey{}).(bool)
+	return v
+}
+
 // liveFactFilter arma el fragmento WHERE (referenciando el alias r) que selecciona las
 // relaciones VISIBLES a esta consulta: el predicado bi-temporal "vivo" (verdad actual por
 // defecto; point-in-time con asOf) Y el scope multi-tenant del proyecto (Track 17). Plegar
@@ -218,7 +294,7 @@ func (e *DbEngine) RecallFacts(entity string, maxHops, maxFacts int, asOf, rank 
 // federado (admin/stdio, o ProjectID vacío) ⇒ sin cláusula de proyecto: histórico bit-a-bit.
 // Los placeholders de proyecto van DESPUÉS de los temporales, igual que los args, así que el
 // orden es consistente en todos los call sites (que anteponen los args de la frontera/nodo).
-func liveFactFilter(ctx context.Context, asOf string) (string, []interface{}) {
+func liveFactFilter(ctx context.Context, asOf string, includeProposed bool) (string, []interface{}) {
 	filter := "r.invalidated_at IS NULL"
 	var args []interface{}
 	if af := parseTimestamp(asOf); af != nil {
@@ -228,6 +304,13 @@ func liveFactFilter(ctx context.Context, asOf string) (string, []interface{}) {
 	if scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("r"); scopeSQL != "" {
 		filter += scopeSQL // " AND (r.project_id = ? OR r.project_id IS NULL OR r.project_id = '')"
 		args = append(args, scopeArgs...)
+	}
+	// CUARENTENA del pilar Cognición (F1): las aristas PROPUESTAS por un motor LLM
+	// ('llm-extract:*') no son autoritativas hasta ser corroboradas ⇒ se excluyen del read por
+	// default. includeProposed=true las incluye (superficie de revisión de propuestas). El patrón
+	// es un literal fijo (sin args) para no alterar el orden de los placeholders del filtro.
+	if !includeProposed {
+		filter += " AND r.source NOT LIKE 'llm-extract:%'"
 	}
 	return filter, args
 }
@@ -243,8 +326,10 @@ func (e *DbEngine) RecallFactsCtx(ctx context.Context, entity string, maxHops, m
 		maxFacts = defaultMaxFacts
 	}
 
-	// Filtro combinado temporal + scope de proyecto; común a BFS y a pagerank.
-	liveFilter, filterArgs := liveFactFilter(ctx, asOf)
+	// Filtro combinado temporal + scope de proyecto + cuarentena de propuestas; común a BFS y a
+	// pagerank. includeProposed sale del ctx: por default el read autoritativo NO ve las aristas
+	// propuestas por un LLM; la superficie de revisión (recall_facts include_proposed) lo activa.
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf, includeProposedFrom(ctx))
 
 	result := GraphResult{Entity: entity, Hops: maxHops, Facts: []Fact{}}
 

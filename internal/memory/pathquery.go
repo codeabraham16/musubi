@@ -62,7 +62,7 @@ func (e *DbEngine) FactPathCtx(ctx context.Context, from, to string, maxHops int
 	}
 
 	// Filtro combinado temporal + scope de proyecto, idéntico a RecallFactsCtx.
-	liveFilter, filterArgs := liveFactFilter(ctx, asOf)
+	liveFilter, filterArgs := liveFactFilter(ctx, asOf, includeProposedFrom(ctx))
 
 	// BFS por niveles con predecesores. maxHops acota la longitud (número de aristas).
 	pred := map[int64]pathPred{fromID: {}}

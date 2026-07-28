@@ -609,6 +609,30 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 20,
+			name:    "relations_source",
+			// PROCEDENCIA DE ARISTAS (pilar Cognición · F0). El grafo de hechos DEBE poder
+			// distinguir QUIÉN afirmó cada arista para auditarla, excluirla del baseline
+			// model-free y revertirla: 'agent' (un caller humano/agente vía musubi_save_fact),
+			// 'llm-extract:<model_id>' (extracción del pilar Cognición, F1+) o 'heuristic'. Sin
+			// esta columna una arista derivada por un LLM sería indistinguible de una afirmada
+			// por una persona y "no alucina" quedaría sin evidencia. ADITIVA (patrón v15/v16):
+			// ADD COLUMN NOT NULL DEFAULT 'agent' ⇒ las filas legacy quedan atribuidas al agente
+			// (bit-idéntico al previo). El índice sirve al filtrado por procedencia que el
+			// read-time usará para EXCLUIR aristas no corroboradas (F1+).
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`ALTER TABLE relations ADD COLUMN source TEXT NOT NULL DEFAULT 'agent'`,
+					`CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

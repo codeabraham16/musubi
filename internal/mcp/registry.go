@@ -151,6 +151,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_propose_facts",
+				Description: "PROPONE hechos (tripletas) que VOS (el agente-LLM) extrajiste, al grafo, en CUARENTENA: entran con procedencia 'llm-extract:*', NO son autoritativos, NO aparecen en recall_facts por default y NO invalidan nada. Es cognición 'caller-borrowed': Musubi no llama a ningún LLM, vos aportás las tripletas. Para volver autoritativa una propuesta, corroborála con musubi_save_fact (el mismo triple); para revisarlas, usá recall_facts con include_proposed=true.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"facts": {Type: "array", Description: "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact."},
+						"model": {Type: "string", Description: "Opcional: id del modelo que extrajo las tripletas, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."},
+					},
+					Required: []string{"facts"},
+				},
+			},
+			handler: s.countingSaveCtx(s.toolProposeFacts),
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_recall_facts",
 				Description: "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
 				InputSchema: InputSchema{
@@ -161,6 +176,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"as_of":    {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
 						"rank":     {Type: "string", Description: "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."},
 						"to":       {Type: "string", Description: "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."},
+						"include_proposed": {Type: "boolean", Description: "Opcional (default false): incluye las aristas PROPUESTAS por un LLM ('llm-extract:*'), que por default están en cuarentena. Para revisar propuestas antes de corroborarlas con musubi_save_fact."},
 					},
 					Required: []string{"entity"},
 				},

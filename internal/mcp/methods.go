@@ -1224,13 +1224,132 @@ func (s *McpServer) toolSaveFact(ctx context.Context, raw json.RawMessage) (inte
 	return textResult(msg), nil
 }
 
+// toolProposeFacts es la cognición CALLER-BORROWED del 3er pilar (F2): el agente-LLM aporta tripletas
+// que extrajo, y entran al grafo en CUARENTENA con procedencia 'llm-extract:<model>'. Musubi NO llama
+// a ningún LLM (mismo patrón que judge/debate). Las propuestas no son autoritativas, no aparecen en
+// recall_facts por default y no invalidan nada (garantías de F1); para volverlas autoritativas hay que
+// corroborarlas con musubi_save_fact. Misma redacción forzada + atribución por credencial que save_fact.
+func (s *McpServer) toolProposeFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Facts []struct {
+			Subject   string `json:"subject"`
+			Predicate string `json:"predicate"`
+			Object    string `json:"object"`
+			ValidFrom string `json:"valid_from"`
+		} `json:"facts"`
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	if len(args.Facts) == 0 {
+		return nil, rpcErrorf(codeInvalidParams, "facts es obligatorio (al menos una tripleta)")
+	}
+	// Validación validate-all-then-save: si alguna tripleta está incompleta, se rechaza el lote entero.
+	for i, f := range args.Facts {
+		if strings.TrimSpace(f.Subject) == "" || strings.TrimSpace(f.Predicate) == "" || strings.TrimSpace(f.Object) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "facts[%d]: subject, predicate y object son obligatorios", i)
+		}
+	}
+
+	// Guarda de CALIDAD del pilar Cognición (F3): enum de predicados. Si hay un vocabulario
+	// controlado configurado, una tripleta con un predicado fuera de él rechaza el LOTE entero
+	// (validate-all-then-save), para que el LLM no fragmente la ontología en sinónimos. El enum
+	// modera SÓLO lo que un motor propone; save_fact autoritativo no pasa por acá. Vacío ⇒ allow-all.
+	if enum := s.cognitionCfg.AllowedPredicates; len(enum) > 0 {
+		for i, f := range args.Facts {
+			if !predicateAllowed(f.Predicate, enum) {
+				return nil, rpcErrorf(codeInvalidParams, "facts[%d]: predicado %q fuera del vocabulario permitido (allowed_predicates)", i, strings.TrimSpace(f.Predicate))
+			}
+		}
+	}
+
+	model := strings.TrimSpace(args.Model)
+	if model == "" {
+		model = "caller"
+	}
+	source := "llm-extract:" + model
+
+	// Atribución por credencial (Track 17): la propuesta se guarda para el proyecto del principal.
+	origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+	if !okOrigin {
+		return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
+	}
+
+	// Resolución de entidades (F4): umbral de canonicalización DETERMINISTA (Jaccard de trigramas).
+	// 0 ⇒ desactivada (los nombres pasan tal cual, bit-idéntico).
+	erThreshold := s.cognitionCfg.EntityResolutionThreshold
+
+	proposed, existed, resolved := 0, 0, 0
+	for _, f := range args.Facts {
+		// Redacción forzada al central: una propuesta tampoco puede llevar un secreto crudo al pozo.
+		subject := s.redactIfForced(f.Subject)
+		predicate := s.redactIfForced(f.Predicate)
+		object := s.redactIfForced(f.Object)
+
+		// Canonicalizar subject/object a una entidad existente similar, para no fragmentar el grafo
+		// con variantes (F4). Sólo para propuestas; save_fact autoritativo no pasa por acá. Si el
+		// nombre cambia (norma distinta) se cuenta como resuelto para informarlo en la respuesta.
+		if erThreshold > 0 {
+			if canon, matched, err := s.engine.ResolveEntityName(subject, erThreshold); err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al resolver entidad (subject): %v", err)
+			} else if matched && !sameNormalized(canon, subject) {
+				subject = canon
+				resolved++
+			}
+			if canon, matched, err := s.engine.ResolveEntityName(object, erThreshold); err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al resolver entidad (object): %v", err)
+			} else if matched && !sameNormalized(canon, object) {
+				object = canon
+				resolved++
+			}
+		}
+
+		res, err := s.engine.SaveFactFromSourced(origin, subject, predicate, object, f.ValidFrom, source, s.graph.SingleValuedPredicates)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al proponer hecho: %v", err)
+		}
+		if res.Created {
+			proposed++
+		} else {
+			existed++
+		}
+	}
+	msg := fmt.Sprintf("Propuesto(s) %d hecho(s) en CUARENTENA (source=%s); %d ya existía(n). No son autoritativos ni aparecen en recall_facts hasta corroborarlos con musubi_save_fact; revisalos con recall_facts include_proposed=true.", proposed, source, existed)
+	if resolved > 0 {
+		msg += fmt.Sprintf(" %d nombre(s) canonicalizado(s) a una entidad existente (resolución F4).", resolved)
+	}
+	return textResult(msg), nil
+}
+
+// sameNormalized indica si dos nombres colapsan a la misma entidad tras normalizar (minúsculas +
+// espacios colapsados) — la MISMA normalización que usa el grafo para deduplicar entidades. Se usa
+// para no contar como "resuelto" un match que sólo difiere en caja/espaciado (F4).
+func sameNormalized(a, b string) bool {
+	norm := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	return norm(a) == norm(b)
+}
+
+// predicateAllowed indica si predicate está en el vocabulario controlado enum (F3), comparando
+// case-insensitive con trim (misma normalización que los predicados single-valued del grafo).
+func predicateAllowed(predicate string, enum []string) bool {
+	p := strings.ToLower(strings.TrimSpace(predicate))
+	for _, a := range enum {
+		if strings.ToLower(strings.TrimSpace(a)) == p {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Entity  string `json:"entity"`
-		MaxHops int    `json:"max_hops"`
-		AsOf    string `json:"as_of"`
-		Rank    string `json:"rank"`
-		To      string `json:"to"`
+		Entity          string `json:"entity"`
+		MaxHops         int    `json:"max_hops"`
+		AsOf            string `json:"as_of"`
+		Rank            string `json:"rank"`
+		To              string `json:"to"`
+		IncludeProposed bool   `json:"include_proposed"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -1246,6 +1365,12 @@ func (s *McpServer) toolRecallFacts(ctx context.Context, raw json.RawMessage) (i
 
 	// Aislamiento por proyecto (Track 17): el traversal se acota al proyecto de la credencial.
 	scoped := s.scopedCtx(ctx)
+
+	// Revisión de propuestas (pilar Cognición · F2): por default el read está en CUARENTENA (no ve
+	// las aristas 'llm-extract:*'); include_proposed=true las incluye para inspeccionarlas.
+	if args.IncludeProposed {
+		scoped = memory.WithIncludeProposed(scoped)
+	}
 
 	// Con 'to' seteado: camino más corto entity→to. Sin él: vecindad (BFS/pagerank).
 	if strings.TrimSpace(args.To) != "" {

@@ -26,6 +26,10 @@ type MaintenanceOptions struct {
 	// tenant (project_id). <= 0 desactiva la cuota. Ver quota.go.
 	MaxActivePerProject int
 	Vacuum              bool
+	// ProposalTTLHours es el TTL de cuarentena de las propuestas LLM del 3er pilar (Cognición F3):
+	// una propuesta viva ('llm-extract:*') más vieja que esto y sin corroborar se invalida en el
+	// mantenimiento. <= 0 ⇒ no se barre (bit-idéntico). Ver SweepStaleProposals.
+	ProposalTTLHours float64
 }
 
 // MaintenanceReport resume una corrida completa de mantenimiento.
@@ -35,6 +39,9 @@ type MaintenanceReport struct {
 	Evicted     int               `json:"evicted"` // archivadas por la cuota de crecimiento (quota.go)
 	Purged      int               `json:"purged"`
 	Compacted   bool              `json:"compacted"`
+	// ProposalsSwept son las propuestas LLM en cuarentena invalidadas por TTL (Cognición F3).
+	// omitempty: con el pilar apagado (TTL 0) no aparece ⇒ salida bit-idéntica.
+	ProposalsSwept int `json:"proposals_swept,omitempty"`
 }
 
 // Maintain corre el ciclo completo: consolidar casi-duplicados → olvidar (archivar)
@@ -67,6 +74,15 @@ func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) 
 	}
 	rep.Decay = dec
 
+	// Barrido de propuestas rancias del 3er pilar (Cognición F3): invalida las propuestas LLM en
+	// cuarentena no corroboradas más viejas que el TTL. Va junto al olvido (misma familia: acotar
+	// crecimiento). No toca lo autoritativo ni lo ya invalidado. TTL 0 ⇒ no-op.
+	swept, err := e.SweepStaleProposals(opts.ProposalTTLHours)
+	if err != nil {
+		return rep, err
+	}
+	rep.ProposalsSwept = swept
+
 	evicted, err := e.EnforceQuota(QuotaOptions{
 		MaxActivePerProject: opts.MaxActivePerProject,
 		ProtectImportance:   opts.DecayProtectImportance,
@@ -93,6 +109,34 @@ func (e *DbEngine) Maintain(opts MaintenanceOptions) (MaintenanceReport, error) 
 	rep.Compacted = true
 
 	return rep, nil
+}
+
+// SweepStaleProposals invalida (cierra la ventana bi-temporal) las propuestas del 3er pilar
+// (Cognición F3) que quedaron en CUARENTENA sin corroborar: aristas con source 'llm-extract:*'
+// vivas (invalidated_at IS NULL) cuyo created_at es más viejo que ttlHours. Es el opuesto de
+// la corroboración (que las promueve a source='agent'): lo que nadie confirmó en la ventana, se
+// deja caer para que la cuarentena no crezca sin fin. NUNCA toca lo autoritativo (source='agent')
+// ni lo ya invalidado. ttlHours <= 0 ⇒ no-op (devuelve 0). Devuelve cuántas barrió. Model-free:
+// puro filtro temporal + de procedencia, sin LLM. El cutoff se computa en Go (como PurgeArchived).
+func (e *DbEngine) SweepStaleProposals(ttlHours float64) (int, error) {
+	if ttlHours <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(ttlHours * float64(time.Hour))).Format(sqliteTimeLayout)
+	res, err := e.db.Exec(`
+		UPDATE relations
+		   SET valid_to = datetime('now'), invalidated_at = datetime('now')
+		 WHERE source LIKE 'llm-extract:%' AND invalidated_at IS NULL AND created_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("error al barrer propuestas rancias: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("error al contar propuestas barridas: %w", err)
+	}
+	return int(n), nil
 }
 
 // PurgeArchived borra DEFINITIVAMENTE las observaciones archivadas cuyo último uso
