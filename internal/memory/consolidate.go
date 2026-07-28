@@ -24,6 +24,7 @@ type consObs struct {
 	createdAt  string
 	access     int
 	importance float64
+	projectID  string // atribución (Track 17): la consolidación NO fusiona a través de tenants
 }
 
 // Consolidate fusiona observaciones cuya similitud supere threshold. El más
@@ -38,7 +39,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	// Solo memorias VIVAS: excluir archivadas y superseded (coherente con recall,
 	// prime, context y conflicts). No tocar una observación ya oculta del recall.
 	rows, err := e.db.Query(`
-		SELECT id, content, access_count, importance, COALESCE(created_at,'')
+		SELECT id, content, access_count, importance, COALESCE(created_at,''), COALESCE(project_id,'')
 		FROM observations WHERE ` + visibleObsPredicate + `
 	`)
 	if err != nil {
@@ -47,7 +48,7 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	var all []consObs
 	for rows.Next() {
 		var o consObs
-		if err := rows.Scan(&o.id, &o.content, &o.access, &o.importance, &o.createdAt); err != nil {
+		if err := rows.Scan(&o.id, &o.content, &o.access, &o.importance, &o.createdAt, &o.projectID); err != nil {
 			rows.Close()
 			return ConsolidateResult{}, fmt.Errorf("error al escanear observación: %w", err)
 		}
@@ -85,8 +86,8 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	// (el canónico más fuerte, es decir el de menor índice, gana).
 	var kept []consObs
 	keptTg := []map[string]bool{}  // trigramas de cada canónico (paralelo a kept)
-	byNorm := map[string]int{}     // contenido normalizado -> índice de canónico
-	inverted := map[string][]int{} // trigrama -> índices de canónicos que lo contienen
+	byNorm := map[string]int{}     // (project_id, contenido normalizado) -> índice de canónico
+	inverted := map[string][]int{} // trigrama -> índices de canónicos que lo contienen (GLOBAL)
 	var removed []string           // ids de duplicados archivados (para sacar del índice vectorial)
 	merged := 0
 
@@ -103,10 +104,16 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 	for _, o := range all {
 		norm := normalizeForSim(o.content)
 		tg := trigrams(norm)
+		// AISLAMIENTO POR TENANT (Track 17): la consolidación NO fusiona a través de proyectos —
+		// igual que EnforceQuota agrupa por project_id. La clave de igualdad-exacta incluye el
+		// project_id (el NUL nunca aparece en texto normalizado), y el match por trigramas exige
+		// mismo proyecto abajo. Con un solo bucket (mono-tenant o federado local '') el
+		// comportamiento es bit-idéntico al previo.
+		normKey := o.projectID + "\x00" + norm
 
 		matchIdx := -1
-		if ki, ok := byNorm[norm]; ok {
-			matchIdx = ki // igualdad exacta tras normalizar (Similarity == 1.0)
+		if ki, ok := byNorm[normKey]; ok {
+			matchIdx = ki // igualdad exacta tras normalizar, dentro del mismo tenant (Similarity == 1.0)
 		} else {
 			if len(overlap) < len(kept) {
 				overlap = append(overlap, make([]int, len(kept)-len(overlap))...)
@@ -127,7 +134,9 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 				if denom <= 0 {
 					continue
 				}
-				if float64(ov)/float64(denom) >= threshold {
+				// Sólo fusiona dentro del mismo tenant (aislamiento): un candidato de otro
+				// project_id nunca es "duplicado" aunque el texto empate por trigramas.
+				if float64(ov)/float64(denom) >= threshold && kept[ki].projectID == o.projectID {
 					if matchIdx == -1 || ki < matchIdx {
 						matchIdx = ki
 					}
@@ -139,8 +148,8 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 			ki := len(kept)
 			kept = append(kept, o)
 			keptTg = append(keptTg, tg)
-			if _, ok := byNorm[norm]; !ok {
-				byNorm[norm] = ki
+			if _, ok := byNorm[normKey]; !ok {
+				byNorm[normKey] = ki
 			}
 			for g := range tg {
 				inverted[g] = append(inverted[g], ki)
