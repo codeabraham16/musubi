@@ -305,12 +305,16 @@ func liveFactFilter(ctx context.Context, asOf string, includeProposed bool) (str
 		filter += scopeSQL // " AND (r.project_id = ? OR r.project_id IS NULL OR r.project_id = '')"
 		args = append(args, scopeArgs...)
 	}
-	// CUARENTENA del pilar Cognición (F1): las aristas PROPUESTAS por un motor LLM
-	// ('llm-extract:*') no son autoritativas hasta ser corroboradas ⇒ se excluyen del read por
-	// default. includeProposed=true las incluye (superficie de revisión de propuestas). El patrón
-	// es un literal fijo (sin args) para no alterar el orden de los placeholders del filtro.
+	// CUARENTENA del pilar Cognición (F1, endurecida en la auditoría v0.98.0): el read por default
+	// sólo muestra lo AUTORITATIVO. Antes esto era un DENYLIST (`NOT LIKE 'llm-extract:%'`), asimétrico
+	// con la autoridad, que es un ALLOWLIST (isAuthoritative ⇒ source == 'agent'): un tercer source
+	// (p. ej. 'heuristic') quedaba VISIBLE pero incapaz de invalidar por cardinalidad — un estado
+	// contradictorio. Ahora la visibilidad es el MISMO allowlist que la autoridad: sólo 'agent' se ve
+	// por default; todo lo demás (propuestas LLM y cualquier source derivado) espera corroboración.
+	// includeProposed=true levanta el filtro (superficie de revisión). Literal fijo (sin args) para no
+	// alterar el orden de los placeholders. Los legacy son 'agent' por la migración v20 (default).
 	if !includeProposed {
-		filter += " AND r.source NOT LIKE 'llm-extract:%'"
+		filter += " AND r.source = 'agent'"
 	}
 	return filter, args
 }

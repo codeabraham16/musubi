@@ -103,9 +103,17 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// UPSERT espejo del de saveObservation, PERO sin enqueueOutboxTx (anti-loop) y forzando
 	// scope='shared' (viene del pozo compartido). project_id/author se estampan del ORIGEN y no se
 	// pisan en updates (misma disciplina que la atribución local).
+	//
+	// ATOMICIDAD DEL sync_seq (auditoría v0.98.0): el bump va PLEGADO en el mismo statement (subselect
+	// MAX+1 tanto en el INSERT como en el DO UPDATE), no en un segundo Exec autocommit. Antes, un
+	// crash entre el UPSERT y el bump dejaba la fila con sync_seq=0 — que nunca es > cursor ⇒
+	// INVISIBLE para siempre al pull (importa cuando este cliente a su vez sirve pulls: nodo
+	// relay/equipo). Plegarlo lo hace atómico (una sola fila jamás queda con sync_seq=0) y de paso
+	// dispara el trigger FTS una vez en vez de dos. El subselect en el DO UPDATE ve el sync_seq viejo
+	// de la propia fila, así que MAX+1 es un bump monótono estricto. Single-writer ⇒ sin race.
 	_, err = e.db.Exec(`INSERT INTO observations
-		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?)
+		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, sync_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
@@ -113,17 +121,11 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 			content_hash=excluded.content_hash,
 			tokens=excluded.tokens,
 			importance=excluded.importance,
-			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END`,
+			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END,
+			sync_seq=(SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations)`,
 		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author)
 	if err != nil {
 		return false, fmt.Errorf("error al ingerir observación shared: %w", err)
-	}
-	// Bump de sync_seq (auditoría #4): sin esto la fila ingerida quedaría con sync_seq=0 y NO sería
-	// visible al pull (que pagina por sync_seq>cursor) — importa si este cliente a su vez sirve pulls.
-	if _, err = e.db.Exec(
-		`UPDATE observations SET sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1 WHERE id = ?`, o.ID,
-	); err != nil {
-		return false, fmt.Errorf("error al asignar sync_seq al ingerir shared: %w", err)
 	}
 	return before == 0, nil
 }
