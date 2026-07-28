@@ -23,20 +23,24 @@ func TestNoopProviderReturnsDisabled(t *testing.T) {
 }
 
 func TestOllamaProviderEmbedSuccess(t *testing.T) {
-	var gotModel, gotPrompt string
+	var gotModel, gotInput string
+	var gotTruncate bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/embeddings" {
+		if r.URL.Path != "/api/embed" {
 			t.Errorf("path inesperado: %s", r.URL.Path)
 		}
 		var body struct {
-			Model  string `json:"model"`
-			Prompt string `json:"prompt"`
+			Model    string `json:"model"`
+			Input    string `json:"input"`
+			Truncate bool   `json:"truncate"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		gotModel = body.Model
-		gotPrompt = body.Prompt
+		gotInput = body.Input
+		gotTruncate = body.Truncate
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"embedding": []float32{0.1, 0.2, 0.3}})
+		// /api/embed devuelve un lote de embeddings (uno por input).
+		json.NewEncoder(w).Encode(map[string]interface{}{"embeddings": [][]float32{{0.1, 0.2, 0.3}}})
 	}))
 	defer srv.Close()
 
@@ -52,8 +56,11 @@ func TestOllamaProviderEmbedSuccess(t *testing.T) {
 	if len(vec) != 3 {
 		t.Fatalf("esperaba 3 componentes, obtuve %d", len(vec))
 	}
-	if gotModel != "nomic-embed-text" || gotPrompt != "texto de prueba" {
-		t.Errorf("request inesperado: model=%q prompt=%q", gotModel, gotPrompt)
+	if gotModel != "nomic-embed-text" || gotInput != "texto de prueba" {
+		t.Errorf("request inesperado: model=%q input=%q", gotModel, gotInput)
+	}
+	if !gotTruncate {
+		t.Error("el pedido a /api/embed debe llevar truncate:true (evita el 500 por input largo)")
 	}
 }
 

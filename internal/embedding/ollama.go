@@ -16,7 +16,9 @@ import (
 const defaultOllamaBaseURL = "http://localhost:11434"
 
 // OllamaProvider genera embeddings llamando a una instancia local de Ollama.
-// Endpoint: POST {base_url}/api/embeddings  body {"model","prompt"} -> {"embedding":[...]}
+// Endpoint: POST {base_url}/api/embed  body {"model","input","truncate":true} -> {"embeddings":[[...]]}
+// (se usa /api/embed, no el deprecado /api/embeddings, para poder pedir truncate: ante un texto más
+// largo que el contexto del modelo Ollama lo RECORTA en vez de devolver 500).
 type OllamaProvider struct {
 	baseURL string
 	model   string
@@ -48,15 +50,20 @@ func (o *OllamaProvider) Name() string {
 func (o *OllamaProvider) Dimensions() int { return o.dim }
 
 func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	reqBody, err := json.Marshal(map[string]string{
-		"model":  o.model,
-		"prompt": text,
+	// truncate:true ⇒ Ollama recorta el input al contexto del modelo en vez de fallar con 500 "input
+	// length exceeds the context length" (el corpus tiene memorias/dossiers que superan el contexto de
+	// bge-m3). Robusto y model-free: Ollama trunca al límite EXACTO del modelo, sin que el server tenga
+	// que adivinar un tope de caracteres/tokens.
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"model":    o.model,
+		"input":    text,
+		"truncate": true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error al serializar pedido a Ollama: %w", err)
 	}
 
-	url := strings.TrimRight(o.baseURL, "/") + "/api/embeddings"
+	url := strings.TrimRight(o.baseURL, "/") + "/api/embed"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("error al construir pedido a Ollama: %w", err)
@@ -74,14 +81,15 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("ollama devolvió status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
+	// /api/embed devuelve un LOTE: {"embeddings": [[...]]}. Con un único input, el vector es el [0].
 	var out struct {
-		Embedding []float32 `json:"embedding"`
+		Embeddings [][]float32 `json:"embeddings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("error al decodificar respuesta de Ollama: %w", err)
 	}
-	if len(out.Embedding) == 0 {
+	if len(out.Embeddings) == 0 || len(out.Embeddings[0]) == 0 {
 		return nil, fmt.Errorf("ollama devolvió un embedding vacío (¿modelo %q instalado?)", o.model)
 	}
-	return out.Embedding, nil
+	return out.Embeddings[0], nil
 }
