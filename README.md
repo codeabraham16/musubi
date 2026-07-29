@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>43 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>44 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,13 +325,13 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **43 herramientas**, agrupadas por dominio:
+El servidor expone **44 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
 | **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
-| **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) |
+| **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) · `musubi_ask` (respuesta razonada sobre la memoria, RAG; opt-in) |
 | **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
 | **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
@@ -468,7 +468,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 43 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 44 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

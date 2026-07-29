@@ -1178,6 +1178,9 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
 	}
+	// Juez de pertinencia read-time (F3.5c): OPT-IN y best-effort. Con la flag apagada (default) es
+	// un no-op y el recall queda 100% model-free; encendido, re-ordena el tope por relevancia.
+	res = s.rerankIfEnabled(ctx, args.Query, res)
 	return jsonResult(res)
 }
 

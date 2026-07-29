@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Cognición · F3.5c — juez de pertinencia read-time (opt-in).** Nueva opción
+  `cognition.read_time_rerank` (bool, default `false`) que, tras el ranking model-free del recall,
+  hace que el motor LLM re-ordene los primeros `read_time_rerank_top_k` candidatos por relevancia a
+  la consulta. Es el seam de mayor riesgo (latencia + rate-limit), por eso nace APAGADO (recall
+  bit-idéntico y 100% model-free) y es selectivo, cacheado por `(consulta+ids)` y **best-effort**:
+  ante cualquier fallo/timeout/parseo malo se mantiene el orden model-free. Sólo re-ordena, no descarta.
+- **Cognición · F3.5b — `musubi_ask` (cognición a-demanda).** Nueva herramienta MCP que responde una
+  pregunta en lenguaje natural SINTETIZANDO la memoria relevante (RAG) y citando los ids que la
+  respaldan, vía un motor LLM opcional. Es de sólo lectura y OPT-IN: sin `cognition.provider`
+  configurado devuelve un error explícito y Musubi sigue model-free (binario bit-idéntico). Se suma un
+  motor real `cognition.provider: openai-compat` (alias `litellm`) que habla con cualquier endpoint de
+  chat OpenAI-compatible (ej. el proxy que respalda una suscripción por el Agent SDK); la master key se
+  lee de la env var nombrada en `cognition.auth_token_env`, nunca del yaml. La interfaz `cognition.Provider`
+  gana `Ask()` de forma aditiva. Herramientas MCP: 43 → 44.
+
 ## [0.98.2] - 2026-07-28
 
 ### Fixed
