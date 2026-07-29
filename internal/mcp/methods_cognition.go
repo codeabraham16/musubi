@@ -84,14 +84,12 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 
 	// 2) Construir el prompt fundamentado. El system exige citar ids y admitir lo que no sabe.
 	var b strings.Builder
-	sources := make([]string, 0, len(res.Items))
 	for _, it := range res.Items {
 		age := ""
 		if it.CreatedAt != "" {
 			age = " · " + it.CreatedAt
 		}
 		fmt.Fprintf(&b, "[%s] (%s%s)\n%s\n\n", it.ID, it.TopicKey, age, it.Gist)
-		sources = append(sources, it.ID)
 	}
 	system := "Sos el asistente de cognición de Musubi. Respondé la PREGUNTA usando ÚNICAMENTE la MEMORIA provista. " +
 		"Citá entre corchetes el id [id] de cada memoria que respalde una afirmación. " +
@@ -106,9 +104,52 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "el motor de cognición falló: %v", err)
 	}
+	// sources = SÓLO las memorias que la respuesta realmente citó (no las ~N del grounding), para que
+	// el caller pueda verificar la atribución sin ruido. grounded_on deja transparente cuántas se
+	// consideraron.
 	return jsonResult(map[string]interface{}{
-		"answer":  answer,
-		"sources": sources,
-		"model":   s.cognition.Name(),
+		"answer":      answer,
+		"sources":     citedSources(answer, res.Items),
+		"grounded_on": len(res.Items),
+		"model":       s.cognition.Name(),
 	})
+}
+
+// citedSources devuelve los ids de las memorias del grounding que la respuesta CITÓ, ya sea por su id
+// completo o por el prefijo de 8 hex de un uuid ([822784c1]) — la forma abreviada que suelen usar los
+// LLM. Preserva el orden del recall y deduplica.
+func citedSources(answer string, items []memory.RecallItem) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, 8)
+	for _, it := range items {
+		if seen[it.ID] {
+			continue
+		}
+		cited := strings.Contains(answer, it.ID)
+		if !cited {
+			// Prefijo de uuid: 8 hex seguidos de '-'. Sólo entonces el prefijo es distintivo.
+			if i := strings.IndexByte(it.ID, '-'); i == 8 && isHex8(it.ID[:8]) && strings.Contains(answer, it.ID[:8]) {
+				cited = true
+			}
+		}
+		if cited {
+			seen[it.ID] = true
+			out = append(out, it.ID)
+		}
+	}
+	return out
+}
+
+// isHex8 indica si s son 8 dígitos hexadecimales (el primer segmento de un uuid).
+func isHex8(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for i := 0; i < 8; i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

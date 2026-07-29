@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"musubi/internal/embedding"
+	"musubi/internal/memory"
 )
 
 // fakeCognition es un motor de cognición de prueba: registra el prompt que recibió y devuelve una
@@ -56,6 +57,22 @@ func TestAskGroundsInMemory(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(fake.gotSystem), "cit") {
 		t.Errorf("el system debía instruir citar ids; system=%q", fake.gotSystem)
+	}
+}
+
+// TestCitedSources: sources devuelve SÓLO las memorias citadas — por id completo o por el prefijo de
+// 8 hex de un uuid ([822784c1]) — y NO las que quedaron sin citar en el grounding.
+func TestCitedSources(t *testing.T) {
+	items := []memory.RecallItem{
+		{ID: "822784c1-e66c-4f22-a505-bedee7e62716"}, // citada por prefijo
+		{ID: "8abb93fe-8405-4fb9-af56-31bf7200b31d"}, // citada por id completo
+		{ID: "deadbeef-0000-0000-0000-000000000000"}, // NO citada
+		{ID: "commit-b1dbbc4a72a06659"},              // no-uuid, sin cita
+	}
+	answer := "El extractor [822784c1] extiende el B1 [8abb93fe-8405-4fb9-af56-31bf7200b31d]."
+	got := citedSources(answer, items)
+	if len(got) != 2 || got[0] != items[0].ID || got[1] != items[1].ID {
+		t.Errorf("citedSources=%v, esperaba [%s %s]", got, items[0].ID, items[1].ID)
 	}
 }
 
