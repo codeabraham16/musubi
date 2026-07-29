@@ -102,6 +102,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_ask",
+				Description: "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"question":     {Type: "string", Description: "La pregunta a responder con la memoria del proyecto"},
+						"token_budget": {Type: "number", Description: "Techo de tokens de memoria a recuperar como contexto (opcional)"},
+					},
+					Required: []string{"question"},
+				},
+			},
+			handler: s.toolAsk,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_memory_expand",
 				Description: "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
 				InputSchema: InputSchema{
