@@ -8,6 +8,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cognición · F3.5c — juez de pertinencia read-time (opt-in).** Nueva opción
+  `cognition.read_time_rerank` (bool, default `false`) que, tras el ranking model-free del recall,
+  hace que el motor LLM re-ordene los primeros `read_time_rerank_top_k` candidatos por relevancia a
+  la consulta. Es el seam de mayor riesgo (latencia + rate-limit), por eso nace APAGADO (recall
+  bit-idéntico y 100% model-free) y es selectivo, cacheado por `(consulta+ids)` y **best-effort**:
+  ante cualquier fallo/timeout/parseo malo se mantiene el orden model-free. Sólo re-ordena, no descarta.
 - **Cognición · F3.5b — `musubi_ask` (cognición a-demanda).** Nueva herramienta MCP que responde una
   pregunta en lenguaje natural SINTETIZANDO la memoria relevante (RAG) y citando los ids que la
   respaldan, vía un motor LLM opcional. Es de sólo lectura y OPT-IN: sin `cognition.provider`

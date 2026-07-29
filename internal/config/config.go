@@ -482,6 +482,15 @@ type CognitionConfig struct {
 	// (Jaccard de trigramas) >= umbral contra una entidad existente se CANONICALIZA a ella, para no
 	// fragmentar el grafo con variantes. 0 ⇒ desactivado (bit-idéntico). No afecta a save_fact.
 	EntityResolutionThreshold float64 `yaml:"entity_resolution_threshold,omitempty"`
+	// ReadTimeRerank activa el juez de pertinencia LLM en el RECALL (F3.5c): tras el ranking
+	// model-free, el motor re-ordena los primeros candidatos por relevancia a la consulta. Es el
+	// seam de MAYOR riesgo (latencia en el camino caliente + rate-limit), por eso nace APAGADO
+	// (false ⇒ bit-idéntico: el recall sigue 100% model-free) y es selectivo/cacheado/best-effort:
+	// ante cualquier fallo o timeout se mantiene el orden model-free. Sólo re-ordena, no descarta.
+	ReadTimeRerank bool `yaml:"read_time_rerank,omitempty"`
+	// ReadTimeRerankTopK es cuántos candidatos del tope se someten al juez (el resto queda intacto
+	// al final). 0 ⇒ default interno. Acota latencia y costo: el juez nunca ve todo el recall.
+	ReadTimeRerankTopK int `yaml:"read_time_rerank_top_k,omitempty"`
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).

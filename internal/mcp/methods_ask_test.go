@@ -15,12 +15,16 @@ import (
 type fakeCognition struct {
 	called             bool
 	gotSystem, gotUser string
+	answer             string // respuesta a devolver (si vacío, una por default)
 }
 
 func (f *fakeCognition) Name() string { return "llm:fake" }
 func (f *fakeCognition) Ask(_ context.Context, system, user string) (string, error) {
 	f.called = true
 	f.gotSystem, f.gotUser = system, user
+	if f.answer != "" {
+		return f.answer, nil
+	}
 	return "Musubi es un servidor MCP de memoria.", nil
 }
 
@@ -87,5 +91,54 @@ func TestAskWithoutRelevantMemorySkipsLLM(t *testing.T) {
 	}
 	if fake.called {
 		t.Error("sin memoria relevante NO se debería invocar el motor")
+	}
+}
+
+func recallRes(ids ...string) memory.RecallResult {
+	items := make([]memory.RecallItem, len(ids))
+	for i, id := range ids {
+		items[i] = memory.RecallItem{ID: id, Gist: "gist de " + id}
+	}
+	return memory.RecallResult{Count: len(items), Items: items}
+}
+
+// TestRerankDisabledIsNoop: con la flag apagada (default), el recall queda intacto y NO se llama al motor.
+func TestRerankDisabledIsNoop(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	fake := &fakeCognition{answer: `["c","b","a"]`}
+	s.cognition = fake // motor presente...
+	// ...pero ReadTimeRerank sigue en false (default)
+	in := recallRes("a", "b", "c")
+	out := s.rerankIfEnabled(context.Background(), "q", in)
+	if fake.called {
+		t.Error("con la flag apagada NO se debe invocar el juez")
+	}
+	if out.Items[0].ID != "a" || out.Items[2].ID != "c" {
+		t.Errorf("orden alterado con la flag apagada: %v", out.Items)
+	}
+}
+
+// TestRerankReordersByJudge: con la flag encendida, el juez re-ordena el tope según su array de ids;
+// los no mencionados quedan al final sin perderse.
+func TestRerankReordersByJudge(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: `El orden es ["c","a"]`} // 'b' omitido por el juez
+	s.cognitionCfg.ReadTimeRerank = true
+	out := s.rerankIfEnabled(context.Background(), "q-reorder", recallRes("a", "b", "c"))
+	got := []string{out.Items[0].ID, out.Items[1].ID, out.Items[2].ID}
+	// c y a primero (orden del juez), b preservado al final.
+	if got[0] != "c" || got[1] != "a" || got[2] != "b" {
+		t.Errorf("reorden inesperado: %v (esperaba [c a b])", got)
+	}
+}
+
+// TestRerankBadJSONFallsBack: si el juez no devuelve un array parseable, se mantiene el orden model-free.
+func TestRerankBadJSONFallsBack(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: "no tengo idea, no hay json"}
+	s.cognitionCfg.ReadTimeRerank = true
+	out := s.rerankIfEnabled(context.Background(), "q-badjson", recallRes("a", "b", "c"))
+	if out.Items[0].ID != "a" || out.Items[1].ID != "b" || out.Items[2].ID != "c" {
+		t.Errorf("ante JSON malo debería mantener el orden model-free, got %v", out.Items)
 	}
 }
