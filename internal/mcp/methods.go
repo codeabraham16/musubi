@@ -658,10 +658,22 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		return textResult("Unidad completada."), nil
 
 	case "status":
-		if strings.TrimSpace(args.Batch) == "" {
-			return nil, rpcErrorf(codeInvalidParams, "status requiere 'batch'")
+		batch := strings.TrimSpace(args.Batch)
+		if batch == "" {
+			// Sin 'batch': caé al batch ACTIVO (el que tiene trabajo pendiente más
+			// reciente). Deja que un cliente lea la pizarra —contadores y unidades—
+			// sin conocer el id del batch (p. ej. el tablero del cuerpo). Si no hay
+			// ninguno activo, devolvé un batch vacío (no es un error).
+			ab, ok, err := s.engine.ActiveBatch()
+			if err != nil {
+				return nil, rpcErrorf(codeInternalError, "no se pudo leer el batch activo: %v", err)
+			}
+			if !ok {
+				return jsonResult(memory.WorkBatch{Units: []memory.WorkUnit{}})
+			}
+			return jsonResult(ab)
 		}
-		b, err := s.engine.WorkBatchStatus(args.Batch)
+		b, err := s.engine.WorkBatchStatus(batch)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "no se pudo leer el batch: %v", err)
 		}

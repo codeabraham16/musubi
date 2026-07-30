@@ -181,6 +181,7 @@ type WorkStore interface {
 	HeartbeatWorkUnit(id, owner string, fencingToken int64, ttlSeconds int) (bool, error)
 	CompleteWorkUnit(id, result, status, agent string, fencingToken int64) error
 	WorkBatchStatus(batchID string) (WorkBatch, error)
+	ActiveBatch() (WorkBatch, bool, error)
 	ClearWorkBatch(batchID string) error
 	BidWorkUnit(unitID, agent string, bid float64, note string) error
 	AwardWorkUnit(unitID string, ttlSeconds int) (WorkUnit, WorkBid, bool, error)
