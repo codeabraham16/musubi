@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestBrainGraphSalienceAndCap(t *testing.T) {
 	insBrainObs(t, e, "mid", "a/dos", 1.0, 0, recent)
 	insBrainObs(t, e, "lo", "b/tres", 1.0, 0, old)
 
-	g, err := e.brainGraphAt(now, 2)
+	g, err := e.brainGraphAt(context.Background(), now, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestBrainGraphSynapsesNoDangling(t *testing.T) {
 	insBrainRel(t, e, "n2", "n3", "conflicts_with", 1) // ambos incluidos
 	insBrainRel(t, e, "n1", "ghost", "related", 0.5)   // target inexistente → colgante
 
-	g, err := e.brainGraphAt(now, 100)
+	g, err := e.brainGraphAt(context.Background(), now, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

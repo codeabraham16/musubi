@@ -950,6 +950,32 @@
       }
     },
     {
+      "name": "musubi_code_graph_viz",
+      "description": "Grafo de CÓDIGO completo y renderizable en UNA llamada (Track 20): nodos (símbolos, con key/kind/name/path/degree) + aristas (CALLS/IMPORTS/CONTAINS), top-N por grado, scopeado al proyecto. Es la fuente para dibujar el grafo de código (a diferencia de musubi_code_graph, que es vecindad-por-símbolo). Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de nodos (default 400)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_brain_graph",
+      "description": "Grafo de MEMORIA completo y renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…), top-N por relevancia. Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de neuronas (default 300)"
+          }
+        }
+      }
+    },
+    {
       "name": "musubi_impact",
       "description": "'¿Qué se rompe si cambio esto?' (Track 20): devuelve el cierre TRANSITIVO de callers de un símbolo (quién lo llama directa o indirectamente), recorriendo el grafo de CALLS hacia atrás (BFS acotado, model-free). Útil antes de modificar una función para dimensionar el blast radius. Requiere que el grafo esté indexado (musubi_codegraph_index).",
       "inputSchema": {

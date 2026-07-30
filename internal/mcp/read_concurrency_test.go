@@ -36,6 +36,8 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_impact":          true,
 		"musubi_map":             true,
 		"musubi_code_context":    true,
+		"musubi_code_graph_viz":  true,
+		"musubi_brain_graph":     true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

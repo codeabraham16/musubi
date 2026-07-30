@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Grafo por MCP en una llamada: `musubi_code_graph_viz` + `musubi_brain_graph`.**
+  Dos tools read-only que devuelven el grafo COMPLETO renderizable (nodos +
+  aristas / neuronas + sinapsis, top-N) en una sola llamada — antes sólo salían
+  por `musubi export` o el dashboard HTTP. Habilitan que un cliente MCP (p. ej.
+  el *cuerpo* de Musubi) dibuje el grafo del cerebro por el mismo canal, local o
+  central. `musubi_code_graph_viz` ya venía scopeado por tenant; para
+  `musubi_brain_graph` se agregó `DbEngine.BrainGraphCtx` (filtra observations
+  por el proyecto de la credencial), así el central no filtra memoria de otros
+  tenants (cubierto por el barrido de aislamiento).
 - **Cognición · F3.5c — juez de pertinencia read-time (opt-in).** Nueva opción
   `cognition.read_time_rerank` (bool, default `false`) que, tras el ranking model-free del recall,
   hace que el motor LLM re-ordene los primeros `read_time_rerank_top_k` candidatos por relevancia a

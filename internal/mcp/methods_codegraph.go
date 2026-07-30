@@ -493,6 +493,56 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	})
 }
 
+// graphVizEngine es el sub-contrato para los grafos renderizables completos. Lo
+// cumple *memory.DbEngine; se accede por type-assert para no ensuciar la interfaz
+// StorageBackend ni sus fakes.
+type graphVizEngine interface {
+	BrainGraphCtx(ctx context.Context, limit int) (memory.BrainGraph, error)
+	CodeGraphViz(ctx context.Context, limit int) (memory.CodeGraphViz, error)
+}
+
+func graphLimit(raw json.RawMessage, def int) int {
+	if len(raw) > 0 {
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if json.Unmarshal(raw, &args) == nil && args.Limit > 0 {
+			return args.Limit
+		}
+	}
+	return def
+}
+
+// toolCodeGraphViz devuelve el grafo de código COMPLETO renderizable (nodos +
+// aristas, top-N por grado) en una sola llamada — lo que dibuja el Grafo del
+// cuerpo/dashboard. Scopeado por tenant (ctx). Read-only.
+func (s *McpServer) toolCodeGraphViz(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	eng, ok := s.engine.(graphVizEngine)
+	if !ok {
+		return nil, rpcErrorf(codeInternalError, "este backend no expone el grafo renderizable")
+	}
+	g, err := eng.CodeGraphViz(s.scopedCtx(ctx), graphLimit(raw, 400))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "grafo de código: %v", err)
+	}
+	return jsonResult(g)
+}
+
+// toolBrainGraph devuelve el grafo de MEMORIA renderizable (neuronas + sinapsis,
+// top-N por relevancia) en una sola llamada — el gemelo de memoria de
+// toolCodeGraphViz. Read-only.
+func (s *McpServer) toolBrainGraph(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	eng, ok := s.engine.(graphVizEngine)
+	if !ok {
+		return nil, rpcErrorf(codeInternalError, "este backend no expone el grafo renderizable")
+	}
+	g, err := eng.BrainGraphCtx(s.scopedCtx(ctx), graphLimit(raw, 300))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "grafo neuronal: %v", err)
+	}
+	return jsonResult(g)
+}
+
 // ---- F3: soldar el grafo de código a la memoria (Track 20 · F3) ----
 
 // symbolNameFromKey parsea un node_key "path#kind:name" y devuelve (path, name). El name de un
