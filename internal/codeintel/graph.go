@@ -83,6 +83,18 @@ func SymbolKey(path, kind, name string) string {
 // PackageKey es la clave estable de un nodo paquete importado.
 func PackageKey(importPath string) string { return "pkg:" + importPath }
 
+// IndexableForGraph indica si un archivo debe FEEDEARSE a DerivePackage para poblar el grafo de
+// código: siempre los `.go`, y —sólo cuando el binario se compiló con `-tags treesitter`— los
+// lenguajes polyglot (TS/TSX/JS/JSX/Py). En el build por default `polyglotSupported` es false, así
+// que esto equivale a "sólo .go" y el comportamiento histórico queda idéntico. Es el predicado que
+// el indexador (capa MCP) usa para decidir qué archivos recolectar: model-free, sólo mira extensión.
+func IndexableForGraph(path string) bool {
+	if strings.ToLower(filepath.Ext(path)) == ".go" {
+		return true
+	}
+	return polyglotSupported(path)
+}
+
 // ExtractImports devuelve los imports declarados en un archivo `.go`. Degrada a lista vacía
 // (sin error, sin pánico) si la extensión no es Go o el parseo falla del todo.
 func ExtractImports(path, content string) []Import {

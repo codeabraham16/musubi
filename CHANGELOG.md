@@ -8,6 +8,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Grafo de código POLYGLOT en el binario distribuido (Track 20 · F4 completo).** El indexador
+  ahora deriva grafo de código de **TypeScript/TSX/JavaScript/JSX y Python**, no sólo Go. El pase
+  tree-sitter (`gotreesitter`, runtime 100% Go, sin CGo) ya existía detrás del build tag `treesitter`
+  pero (a) el binario del release NO lo linkeaba y (b) el walker/refresh del indexador filtraban a
+  `.go`, así que el pase polyglot nunca recibía archivos: un repo JS/TS mostraba grafo de código
+  vacío. Se cablea `codeintel.IndexableForGraph` (siempre `.go`; TS/JS/Py sólo con el tag) en
+  `walkSourceTree`/`refreshCodeGraphForPackage`, se saltan salidas generadas (`dist`/`coverage`), y
+  el release y un job de CI pasan a compilar con `-tags treesitter` + los `grammar_subset_*`
+  (~8 MB de gramáticas embebidas). Medido sobre Altura real: de 0 a ~1.3k nodos / ~1.9k aristas.
 - **Grafo por MCP en una llamada: `musubi_code_graph_viz` + `musubi_brain_graph`.**
   Dos tools read-only que devuelven el grafo COMPLETO renderizable (nodos +
   aristas / neuronas + sinapsis, top-N) en una sola llamada — antes sólo salían

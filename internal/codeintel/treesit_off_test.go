@@ -16,3 +16,19 @@ func TestDerivePolyglotDisabledByDefault(t *testing.T) {
 		t.Errorf("sin -tags treesitter, TS/Py no deben emitir grafo: %d nodos, %d aristas", len(g.Nodes), len(g.Edges))
 	}
 }
+
+// Sin -tags treesitter, IndexableForGraph sólo acepta `.go` (comportamiento histórico del indexador).
+func TestIndexableForGraphDefault(t *testing.T) {
+	yes := []string{"main.go", "internal/pkg/File.GO"}
+	no := []string{"app.ts", "comp.tsx", "index.js", "mod.mjs", "svc.py", "README.md", "data.json"}
+	for _, p := range yes {
+		if !IndexableForGraph(p) {
+			t.Errorf("IndexableForGraph(%q) = false; en el build default los .go deben indexarse", p)
+		}
+	}
+	for _, p := range no {
+		if IndexableForGraph(p) {
+			t.Errorf("IndexableForGraph(%q) = true; sin -tags treesitter sólo .go se indexa", p)
+		}
+	}
+}
