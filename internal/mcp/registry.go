@@ -81,7 +81,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"mem_type":   {Type: "string", Description: "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."},
 						"origin_paths": {
 							Type:        "array",
-							Description: "Opcional: archivos del proyecto (rutas relativas a la raíz) de los que habla esta observación. Se guarda el fingerprint de cada uno y el recall lo re-deriva del disco: si cambiaron, la observación se devuelve MARCADA como posiblemente rancia. Sirve para notas de estado ('X está pendiente', 'Y funciona así') que se vencen cuando el código se mueve. Máximo 10; anclar a una ruta inexistente es error.",
+							Description: "Opcional: de qué habla esta observación, como 'ruta/al/archivo.go' o —mejor— 'ruta/al/archivo.go#NombreDelSimbolo'. Se guarda el fingerprint del contenido y el recall lo re-deriva del disco: si cambió, la observación se devuelve MARCADA como posiblemente rancia. Sirve para notas de estado ('X está pendiente', 'Y funciona así') que se vencen cuando el código se mueve. PREFERÍ EL SÍMBOLO: un archivo grande cambia todo el tiempo por motivos ajenos a la nota y la marca se vuelve ruido, mientras que el símbolo cambia cuando cambia lo que la nota describe (y aguanta que se le desplacen las líneas). Símbolos soportados en Go, TS/JS y Python. Máximo 10; anclar a una ruta o un símbolo inexistente es error.",
 							Items:       &Property{Type: "string"},
 						},
 					},

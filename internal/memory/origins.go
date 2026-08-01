@@ -12,17 +12,86 @@ package memory
 // señal es una advertencia para que un humano —o musubi_judge— decida.
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"musubi/internal/codeintel"
 )
 
 // projectRoot devuelve la raíz del proyecto: e.path es <root>/.musubi/memory.db, así que
 // subir dos niveles da la raíz. Es la base contra la que se resuelven las anclas.
 func (e *DbEngine) projectRoot() string {
 	return filepath.Dir(filepath.Dir(e.path))
+}
+
+// errSymbolNotFound distingue "el símbolo ya no está en el archivo" de un fallo de E/S. Lo
+// primero es deriva legítima (alguien borró o renombró la función); lo segundo no es evidencia
+// de nada y no debe marcar.
+var errSymbolNotFound = errors.New("símbolo no encontrado")
+
+// splitOriginRef parte un ancla `ruta#símbolo` en sus dos mitades. Sin '#', el símbolo queda
+// vacío y el ancla es del archivo entero.
+func splitOriginRef(ref string) (path, symbol string) {
+	if i := strings.LastIndex(ref, "#"); i > 0 {
+		return ref[:i], ref[i+1:]
+	}
+	return ref, ""
+}
+
+// symbolFingerprint calcula la identidad de UN SÍMBOLO: sha256 de las líneas que ocupa hoy en
+// el archivo. Se extrae del contenido ACTUAL con codeintel (model-free, tolerante a archivos
+// que no compilan), nunca del grafo de código persistido: los rangos del grafo valen para el
+// snapshot en que se indexó, y justo cuando el archivo cambia —el caso que nos importa— serían
+// los rangos equivocados.
+//
+// Anclar a un símbolo en vez de al archivo entero es lo que hace la marca UTIL: un archivo
+// grande cambia todo el tiempo por motivos ajenos a la nota, y una marca que salta siempre se
+// aprende a ignorar. El símbolo cambia cuando cambia lo que la nota describe.
+func symbolFingerprint(root, path, symbol string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+	syms := codeintel.ExtractSymbols(path, content)
+	lineas := strings.Split(content, "\n")
+
+	h := sha256.New()
+	encontrado := false
+	for _, s := range syms {
+		if s.Name != symbol {
+			continue
+		}
+		encontrado = true
+		// Rangos 1-based inclusivos; se acotan por si el extractor estimó de más.
+		ini, fin := s.StartLine, s.EndLine
+		if ini < 1 {
+			ini = 1
+		}
+		if fin > len(lineas) {
+			fin = len(lineas)
+		}
+		fmt.Fprintf(h, "%s\x00%s\x00", s.Kind, strings.Join(lineas[ini-1:fin], "\n"))
+	}
+	if !encontrado {
+		return "", errSymbolNotFound
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// originFingerprint resuelve la identidad de un ancla, sea de archivo entero o de símbolo.
+func originFingerprint(root, ref string) (string, error) {
+	path, symbol := splitOriginRef(ref)
+	if symbol == "" {
+		return FileFingerprint(root, path)
+	}
+	return symbolFingerprint(root, path, symbol)
 }
 
 // maxOriginPaths acota cuántos archivos puede anclar una observación. Excederlo es un
@@ -55,7 +124,13 @@ func saveObservationOrigins(tx *sql.Tx, obsID, root string, paths []string) erro
 		return err
 	}
 	for _, rel := range limpias {
-		fp, ferr := FileFingerprint(root, rel)
+		fp, ferr := originFingerprint(root, rel)
+		if errors.Is(ferr, errSymbolNotFound) {
+			p, sym := splitOriginRef(rel)
+			return fmt.Errorf(
+				"no se puede anclar a %q: %q no tiene un símbolo top-level llamado %q (¿está bien escrito, o el archivo es de un lenguaje sin extractor?). Sin el símbolo, anclá al archivo entero: %q",
+				rel, p, sym, p)
+		}
 		if ferr != nil {
 			return fmt.Errorf("no se pudo calcular el fingerprint de %q: %w", rel, ferr)
 		}
@@ -79,14 +154,20 @@ func normalizeOriginPaths(root string, paths []string) ([]string, error) {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		rel := NormalizeCodePath(root, p)
+		// El ancla puede ser `ruta` o `ruta#símbolo`: sólo la ruta se normaliza y se valida
+		// contra el disco; el símbolo se resuelve después, al calcular el fingerprint.
+		crudo, simbolo := splitOriginRef(strings.TrimSpace(p))
+		rel := NormalizeCodePath(root, crudo)
 		if strings.HasPrefix(rel, "../") || rel == ".." {
-			return nil, fmt.Errorf("la ruta %q queda fuera del proyecto: las anclas son relativas a la raíz", p)
+			return nil, fmt.Errorf("la ruta %q queda fuera del proyecto: las anclas son relativas a la raíz", crudo)
+		}
+		if simbolo != "" {
+			rel += "#" + simbolo
 		}
 		if visto[rel] {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(NormalizeCodePath(root, crudo))))
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf(
@@ -140,12 +221,14 @@ func (e *DbEngine) staleOriginsFor(ids []string, root string) (map[string][]Stal
 		}
 		vigente, calculado := actual[path]
 		if !calculado {
-			fp, ferr := FileFingerprint(root, path)
+			fp, ferr := originFingerprint(root, path)
 			switch {
 			case ferr == nil:
 				vigente = fp
-			case os.IsNotExist(ferr):
-				vigente = "" // el archivo desapareció: es deriva, y de la fuerte
+			case os.IsNotExist(ferr), errors.Is(ferr, errSymbolNotFound):
+				// El archivo desapareció, o el símbolo anclado ya no está en él (lo
+				// borraron o renombraron). Las dos son deriva, y de la fuerte.
+				vigente = ""
 			default:
 				vigente = guardado // E/S ajena al contenido: no marcar
 			}

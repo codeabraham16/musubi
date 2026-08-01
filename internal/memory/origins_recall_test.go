@@ -192,3 +192,66 @@ func TestRecallNoMarcaAnteErrorDeEsQueNoEsAusencia(t *testing.T) {
 		t.Errorf("el gist no debe llevar advertencia, obtuve %q", it.Gist)
 	}
 }
+
+// ANCLAJE A SÍMBOLO — el punto de todo esto: un archivo grande cambia todo el tiempo por
+// motivos ajenos a la nota. Anclado al archivo entero, la marca salta siempre y se aprende a
+// ignorar; anclado al símbolo, salta cuando cambia lo que la nota describe.
+func TestAnclaASimboloIgnoraCambiosEnElRestoDelArchivo(t *testing.T) {
+	original := `package p
+
+// Uno hace una cosa.
+func Uno() int {
+	return 1
+}
+
+// Dos hace otra.
+func Dos() int {
+	return 2
+}
+`
+	engine, root := engineConArchivos(t, map[string]string{"src/p.go": original})
+	if err := engine.SaveObservationTypedWithOrigins("", "", "O1", "t/k",
+		"la funcion Dos devuelve el contador de reintentos", 1.0, "", "local",
+		[]string{"src/p.go#Dos"}, nil); err != nil {
+		t.Fatalf("anclar a simbolo: %v", err)
+	}
+
+	escribir := func(s string) {
+		if err := os.WriteFile(filepath.Join(root, "src", "p.go"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// (a) Cambia OTRA función del mismo archivo: la nota NO debe marcarse.
+	escribir(strings.Replace(original, "return 1", "return 100 // otra cosa", 1))
+	if it := recallItem(t, engine, "contador de reintentos", "O1"); len(it.Stale) != 0 {
+		t.Errorf("un cambio en otro símbolo del mismo archivo no debe marcar, obtuve %+v", it.Stale)
+	}
+
+	// (b) Cambia el símbolo anclado: ahora SÍ.
+	escribir(strings.Replace(original, "return 2", "return 42", 1))
+	it := recallItem(t, engine, "contador de reintentos", "O1")
+	if len(it.Stale) != 1 || it.Stale[0].Reason != StaleChanged {
+		t.Fatalf("cambiar el símbolo anclado debe marcar como %q, obtuve %+v", StaleChanged, it.Stale)
+	}
+	if !strings.Contains(it.Gist, "src/p.go#Dos") {
+		t.Errorf("la marca debe nombrar el símbolo, no sólo el archivo, obtuve %q", it.Gist)
+	}
+}
+
+// Si el símbolo anclado desaparece (lo borraron o renombraron) es deriva fuerte: 'missing'.
+func TestAnclaASimboloQueDesaparece(t *testing.T) {
+	engine, root := engineConArchivos(t, map[string]string{"src/p.go": "package p\n\nfunc Vieja() {}\n"})
+	if err := engine.SaveObservationTypedWithOrigins("", "", "O1", "t/k",
+		"la funcion Vieja arma el indice de terminos", 1.0, "", "local",
+		[]string{"src/p.go#Vieja"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "p.go"), []byte("package p\n\nfunc Nueva() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	it := recallItem(t, engine, "indice de terminos", "O1")
+	if len(it.Stale) != 1 || it.Stale[0].Reason != StaleMissing {
+		t.Fatalf("un símbolo renombrado debe marcarse como %q, obtuve %+v", StaleMissing, it.Stale)
+	}
+}

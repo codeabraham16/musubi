@@ -219,3 +219,42 @@ func TestMigracionV21CreaLasAnclasEnBaseExistente(t *testing.T) {
 		t.Errorf("tras migrar, el check del doctor debe dar ok, dio %q: %s", c.Status, c.Message)
 	}
 }
+
+// Anclar a un símbolo que no existe se rechaza al guardar, con un error que dice cómo salir.
+func TestAnclaASimboloInexistenteSeRechaza(t *testing.T) {
+	engine, _ := engineConArchivos(t, map[string]string{"src/p.go": "package p\n\nfunc Uno() {}\n"})
+	err := engine.SaveObservationTypedWithOrigins("", "", "O1", "t/k", "n", 1.0, "", "local",
+		[]string{"src/p.go#NoExiste"}, nil)
+	if err == nil {
+		t.Fatal("anclar a un símbolo inexistente debe fallar")
+	}
+	if !strings.Contains(err.Error(), "NoExiste") || !strings.Contains(err.Error(), "src/p.go") {
+		t.Errorf("el error debe nombrar el símbolo y ofrecer el archivo entero, obtuve: %v", err)
+	}
+	if contarAnclas(t, engine, "O1") != 0 {
+		t.Error("no debe quedar nada guardado")
+	}
+}
+
+// El fingerprint de un símbolo es estable si el símbolo no cambió, aunque se muevan sus líneas.
+func TestFingerprintDeSimboloIgnoraDesplazamientoDeLineas(t *testing.T) {
+	_, root := engineConArchivos(t, map[string]string{
+		"src/p.go": "package p\n\nfunc Dos() int {\n\treturn 2\n}\n",
+	})
+	antes, err := symbolFingerprint(root, "src/p.go", "Dos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Se agrega código ARRIBA: Dos baja de línea pero su cuerpo es idéntico.
+	if err := os.WriteFile(filepath.Join(root, "src", "p.go"),
+		[]byte("package p\n\n// comentario nuevo\n// y otro\nfunc Uno() {}\n\nfunc Dos() int {\n\treturn 2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	despues, err := symbolFingerprint(root, "src/p.go", "Dos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if antes != despues {
+		t.Error("el fingerprint del símbolo no debe cambiar porque se desplazaron sus líneas: eso es justo lo que gana sobre anclar al archivo")
+	}
+}
