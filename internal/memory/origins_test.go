@@ -187,3 +187,35 @@ func TestDoctorDetectaYCuraAnclasHuerfanas(t *testing.T) {
 		t.Errorf("tras la reparación debe quedar ok, quedó %q", c.Status)
 	}
 }
+
+// La tabla debe llegar también a bases YA MIGRADAS, no sólo a las nuevas: la baseline no
+// se re-ejecuta, así que sin la migración v21 la feature quedaría muerta en toda
+// instalación existente. Se simula una base en el esquema anterior y se reabre.
+func TestMigracionV21CreaLasAnclasEnBaseExistente(t *testing.T) {
+	root := t.TempDir()
+	engine, err := NewDbEngine(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simular una base del esquema previo: sin la tabla y con user_version retrasada.
+	if _, err := engine.db.Exec(`DROP TABLE IF EXISTS observation_origins`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.db.Exec(`PRAGMA user_version = 20`); err != nil {
+		t.Fatal(err)
+	}
+	engine.Close()
+
+	reabierto, err := NewDbEngine(root)
+	if err != nil {
+		t.Fatalf("reabrir debe migrar, no fallar: %v", err)
+	}
+	defer reabierto.Close()
+
+	if cols := columnas(t, reabierto, "observation_origins"); len(cols) == 0 {
+		t.Fatal("la migración v21 debe crear observation_origins en una base preexistente")
+	}
+	if c, _ := reabierto.RunCheck("orphan_origins"); c.Status != "ok" {
+		t.Errorf("tras migrar, el check del doctor debe dar ok, dio %q: %s", c.Status, c.Message)
+	}
+}

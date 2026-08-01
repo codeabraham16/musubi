@@ -163,3 +163,32 @@ func TestRecallDetectaElPendienteYaResuelto(t *testing.T) {
 		t.Errorf("la advertencia debe nombrar el archivo que se movió, obtuve %q", it.Gist)
 	}
 }
+
+// R13 — un error de E/S que NO sea "no existe" no debe marcar. Un disco ocupado, un permiso
+// momentáneo o una ruta que dejó de ser archivo no son evidencia de que la memoria envejeció;
+// marcar por eso entrenaría a ignorar la marca, que es la única forma de matar esta feature.
+// Se ejercita reemplazando el archivo por un DIRECTORIO con el mismo nombre: ReadFile falla
+// con un error que no es IsNotExist, igual que un problema de permisos, y es portable.
+func TestRecallNoMarcaAnteErrorDeEsQueNoEsAusencia(t *testing.T) {
+	engine, root := engineConArchivos(t, map[string]string{"src/a.go": "package a\n"})
+	if err := engine.SaveObservationTypedWithOrigins("", "", "O1", "t/k",
+		"nota sobre el compilador incremental", 1.0, "", "local", []string{"src/a.go"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	p := filepath.Join(root, "src", "a.go")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	it := recallItem(t, engine, "compilador incremental", "O1")
+	if len(it.Stale) != 0 {
+		t.Errorf("un error de E/S ajeno a la ausencia no debe marcar, obtuve %+v", it.Stale)
+	}
+	if strings.Contains(it.Gist, "rancia") {
+		t.Errorf("el gist no debe llevar advertencia, obtuve %q", it.Gist)
+	}
+}

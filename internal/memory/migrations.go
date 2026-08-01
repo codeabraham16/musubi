@@ -640,6 +640,37 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 21,
+			name:    "observation_origins",
+			// ANCLAS AL ESTADO DEL PROYECTO. Una observación puede declarar de qué archivos
+			// habla; se guarda el fingerprint de cada uno y el recall lo re-deriva del disco
+			// para MARCAR la nota si cambió. Cierra el hueco que el detector de conflictos no
+			// puede ver: compara observaciones ENTRE SÍ, así que nunca detecta una nota válida
+			// con una línea vencida adentro.
+			//
+			// La tabla también está en initSchemaOn (baseline), pero eso SÓLO alcanza a bases
+			// nuevas: una base ya migrada no re-ejecuta la baseline, y sin esta migración la
+			// feature quedaría muerta en toda instalación existente — el check del doctor
+			// fallando con "no such table". Es el mismo patrón que documenta la v2.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`CREATE TABLE IF NOT EXISTS observation_origins (
+						observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+						path           TEXT NOT NULL,
+						fingerprint    TEXT NOT NULL,
+						captured_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+						PRIMARY KEY (observation_id, path)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_obs_origins_path ON observation_origins(path)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
