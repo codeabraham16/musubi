@@ -649,6 +649,10 @@
             "type": "string",
             "description": "Para complete: id del step que terminaste"
           },
+          "target_digest": {
+            "type": "string",
+            "description": "Para verify (opcional): digest del candidato que verificaste, tal como vino en el step_verifying del journal. Ata el veredicto a ESOS bytes: si el candidato cambió, el veredicto se rechaza en vez de dar por bueno algo que nadie revisó"
+          },
           "verdict": {
             "type": "string",
             "description": "Para verify: pass (la verificación pasó → done) | fail (falló → reflexión + reintento). La reflexión va en 'result'"

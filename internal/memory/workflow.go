@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -680,6 +682,16 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 		}
 	}
 
+	// CANDIDATO CONGELADO: un step en `verifying` ya emitió su candidato y hay un veredicto en
+	// curso sobre ESOS bytes. Volver a completarlo pisaría el resultado y el veredicto caería
+	// sobre contenido distinto del que se revisó — el step quedaría `done` sin que nadie haya
+	// verificado lo que finalmente vale. Se rechaza: el gate se resuelve con action=verify, y
+	// un fail lo reabre (pending) si queda presupuesto.
+	if run.StepStatus[stepID] == StepVerifying {
+		return WorkflowRun{}, fmt.Errorf(
+			"el step %q está en verificación: su candidato está congelado y no puede re-completarse; resolvé el gate con action=verify (un fail lo reabre)", stepID)
+	}
+
 	run.StepStatus[stepID] = stepStatus
 	run.StepResults[stepID] = result
 
@@ -726,7 +738,8 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	}
 	if verifying {
 		// El step se produjo pero aún no está hecho: no se emite step_completed hasta el pass.
-		vp, _ := json.Marshal(map[string]string{"result": result})
+		// El digest CONGELA el candidato: es contra esta identidad que se valida el veredicto.
+		vp, _ := json.Marshal(map[string]string{"result": result, "digest": candidateDigest(result)})
 		if err := appendRunEvent(tx, runID, stepID, EventStepVerifying, string(vp), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
 		}
@@ -752,6 +765,44 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	return updated, nil
 }
 
+// candidateDigest calcula la IDENTIDAD DE CONTENIDO de un candidato a verificar. Es el ancla
+// del gate: el veredicto no vale para "el step", vale para EXACTAMENTE estos bytes. sha256 en
+// hex, model-free y estable entre corridas y máquinas.
+func candidateDigest(result string) string {
+	sum := sha256.Sum256([]byte(result))
+	return hex.EncodeToString(sum[:])
+}
+
+// frozenCandidate devuelve el digest del candidato CONGELADO de un step: el del último
+// step_verifying journaleado. Se DERIVA del journal (no se guarda en el snapshot) para no
+// tocar el esquema, igual que stepReflections. Devuelve "" si el step nunca se congeló.
+func (e *DbEngine) frozenCandidate(runID, stepID string) (string, error) {
+	events, err := e.WorkflowJournal(runID)
+	if err != nil {
+		return "", err
+	}
+	digest := ""
+	for _, ev := range events {
+		if ev.EventType != EventStepVerifying || ev.StepID != stepID {
+			continue
+		}
+		var p struct {
+			Digest string `json:"digest"`
+			Result string `json:"result"`
+		}
+		if json.Unmarshal([]byte(ev.Payload), &p) != nil {
+			continue
+		}
+		if p.Digest != "" {
+			digest = p.Digest
+		} else {
+			// Congelados por versiones previas al digest: se deriva del propio result.
+			digest = candidateDigest(p.Result)
+		}
+	}
+	return digest, nil
+}
+
 // stepReflections devuelve las reflexiones (payloads de step_reflection) de un step, en orden.
 func (e *DbEngine) stepReflections(runID, stepID string) ([]string, error) {
 	events, err := e.WorkflowJournal(runID)
@@ -771,7 +822,12 @@ func (e *DbEngine) stepReflections(runID, stepID string) ([]string, error) {
 // done (uniforme: journalea step_completed); con pass=false registra la reflexión y, si queda
 // presupuesto de intentos, REABRE el step para otro intento informado, o lo marca failed si se
 // agotó. Exige que el step esté en `verifying`. Devuelve el run + las reflexiones acumuladas.
-func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflection string) (WorkflowRun, []string, error) {
+//
+// targetDigest ATA el veredicto al candidato: si no está vacío, debe coincidir con el digest
+// congelado al entrar en `verifying`. Un veredicto sobre otro contenido se RECHAZA sin tocar el
+// estado — vale sólo para los bytes que se revisaron, no para el step. Vacío = no se exige
+// (compatibilidad con llamadores que no lo declaran).
+func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflection, targetDigest string) (WorkflowRun, []string, error) {
 	run, ok, err := e.WorkflowRunStatus(runID)
 	if err != nil {
 		return WorkflowRun{}, nil, err
@@ -781,6 +837,17 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 	}
 	if run.StepStatus[stepID] != StepVerifying {
 		return WorkflowRun{}, nil, fmt.Errorf("el step %q no está en verificación (estado %q)", stepID, run.StepStatus[stepID])
+	}
+	if strings.TrimSpace(targetDigest) != "" {
+		frozen, ferr := e.frozenCandidate(runID, stepID)
+		if ferr != nil {
+			return WorkflowRun{}, nil, ferr
+		}
+		if !strings.EqualFold(strings.TrimSpace(targetDigest), frozen) {
+			return WorkflowRun{}, nil, fmt.Errorf(
+				"el veredicto no corresponde al candidato congelado del step %q (declarado %s, congelado %s): verificá el candidato vigente y volvé a emitirlo",
+				stepID, strings.TrimSpace(targetDigest), frozen)
+		}
 	}
 
 	tx, err := e.db.Begin()

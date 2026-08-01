@@ -491,6 +491,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"idempotency_key": {Type: "string", Description: "Para complete (opcional): clave de idempotencia; reintentar con la misma clave es un no-op seguro"},
 						"input":           {Type: "string", Description: "Para provide (HITL): la decisión/dato del humano que resuelve el gate en espera"},
 						"verdict":         {Type: "string", Description: "Para verify: pass (la verificación pasó → done) | fail (falló → reflexión + reintento). La reflexión va en 'result'"},
+						"target_digest":   {Type: "string", Description: "Para verify (opcional): digest del candidato que verificaste, tal como vino en el step_verifying del journal. Ata el veredicto a ESOS bytes: si el candidato cambió, el veredicto se rechaza en vez de dar por bueno algo que nadie revisó"},
 					},
 				},
 			},
