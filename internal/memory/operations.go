@@ -102,7 +102,7 @@ func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 // forma model-free el gist, el content_hash y la estimación de tokens. La
 // importancia no se toca en updates (se preserva la existente).
 func (e *DbEngine) SaveObservation(id, topicKey, content string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", embedding)
+	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", nil, embedding)
 }
 
 // SetObservationCreatedAt fija el created_at (ISO 'YYYY-MM-DD HH:MM:SS' UTC) de una observación.
@@ -122,7 +122,7 @@ func (e *DbEngine) SetObservationCreatedAt(id, iso string) error {
 // SaveObservationWithImportance es como SaveObservation pero fija la importancia
 // (también en updates). importance pondera el ranking del recall.
 func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", "", embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", "", nil, embedding)
 }
 
 // SaveObservationTyped es como SaveObservationWithImportance pero además fija el TIPO de
@@ -140,7 +140,38 @@ func (e *DbEngine) SaveObservationTyped(id, topicKey, content string, importance
 // siempre para los guardados locales). author es la atribución por PERSONA (C5.1), derivada
 // de la credencial por el handler; "" ⇒ sin atribución (local/stdio/legacy).
 func (e *DbEngine) SaveObservationTypedFrom(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, nil, embedding)
+}
+
+// SaveObservationTypedWithOrigins es SaveObservationTypedFrom más las ANCLAS al estado del
+// proyecto: por cada ruta declarada se guarda el fingerprint de su contenido actual, y el
+// recall vuelve a derivarlo del disco para marcar la observación si cambió. Es una firma
+// aparte a propósito: las variantes existentes quedan intactas, así que una observación sin
+// anclas se guarda exactamente como siempre.
+//
+// Las rutas son relativas a la raíz del proyecto. Anclar a una que no existe es ERROR
+// (nacería marcada como rancia) y el tope es maxOriginPaths.
+func (e *DbEngine) SaveObservationTypedWithOrigins(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) error {
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, originPaths, embedding)
+}
+
+// SaveObservationDedupedTypedFromWithOrigins es SaveObservationDedupedTypedFrom más las ANCLAS
+// al estado del proyecto. Si el contenido ya existía NO se ancla nada: la observación devuelta
+// es la de antes y anclarla ahora reescribiría el origen de una memoria que no acabamos de
+// crear, con el fingerprint de hoy en vez del de su guardado real.
+func (e *DbEngine) SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error) {
+	existing, found, err := e.findByContentHashIn(e.effectiveProjectID(originProjectID), ContentHash(content))
+	if err != nil {
+		return "", false, err
+	}
+	if found {
+		return existing, true, nil
+	}
+	id := uuid.NewString()
+	if err := e.SaveObservationTypedWithOrigins(originProjectID, author, id, topicKey, content, importance, memType, scope, originPaths, embedding); err != nil {
+		return "", false, err
+	}
+	return id, false, nil
 }
 
 // SaveObservationDeduped guarda content con un id nuevo, salvo que ya exista una
@@ -232,7 +263,7 @@ func (e *DbEngine) effectiveProjectID(originProjectID string) string {
 // saveObservation es el núcleo del guardado: UPSERT por id que preserva created_at
 // y las estadísticas de acceso en updates, y mantiene el FTS sincronizado vía
 // triggers (AFTER INSERT/UPDATE). Si setImportance es false, no pisa importance.
-func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, embedding []float32) error {
+func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, originPaths []string, embedding []float32) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("error al iniciar transacción: %w", err)
@@ -350,6 +381,16 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// filas `pending` inmortales, una por observación.
 	if e.outboxEnabled {
 		if err := enqueueOutboxTx(tx, id); err != nil {
+			return err
+		}
+	}
+
+	// Anclas al estado del proyecto (origins.go): van en ESTA tx para que un ancla inválida
+	// no deje la observación guardada sin la protección que el caller pidió. Va DESPUÉS del
+	// outbox a propósito: el payload de sync se arma desde la fila de observations, así que
+	// las anclas —que son locales a esta máquina— nunca lo tocan.
+	if len(originPaths) > 0 {
+		if err := saveObservationOrigins(tx, id, e.projectRoot(), originPaths); err != nil {
 			return err
 		}
 	}

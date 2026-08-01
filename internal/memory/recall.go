@@ -110,6 +110,13 @@ type RecallItem struct {
 	// ContentHash es maquinaria server-side (la inyección diferencial la consume in-process
 	// en Go): json:"-" para NO enviar 64 hex de ruido al modelo en la respuesta del tool.
 	ContentHash string `json:"-"`
+	// Stale son las anclas de esta observación que ya NO coinciden con el disco (origins.go).
+	// Es el hermano derivable de CreatedAt: la edad es un PROXY de si una memoria sigue
+	// valiendo, esto es EVIDENCIA — el archivo del que la nota habla cambió, y se puede
+	// probar sin preguntarle a ningún agente. La advertencia también se antepone al Gist,
+	// que es lo que el modelo lee. Nunca oculta ni desprioriza: sólo avisa.
+	// omitempty ⇒ una observación sin anclas devuelve exactamente lo de siempre.
+	Stale []StaleOrigin `json:"stale,omitempty"`
 }
 
 // RecallResult es la respuesta del recall, con presupuesto y consumo reales.
@@ -247,6 +254,12 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	scored = e.diversify(scored, opts.MMRLambda)
 
 	result = packByBudget(scored, budget, gistMax)
+
+	// Anclas al estado del proyecto (origins.go): DESPUÉS de rankear y empaquetar, nunca
+	// antes. Si esto influyera en la selección o en el orden dejaría de ser una advertencia
+	// y pasaría a ser un filtro silencioso — que es exactamente lo que no queremos: un
+	// archivo que cambió no prueba que la memoria sea falsa. Sólo anota.
+	result = e.markStaleOrigins(result)
 
 	// Recall read-only (ej. inyección por turno): no contar como acceso para no
 	// distorsionar el ranking por frecuencia con accesos que el agente no pidió.

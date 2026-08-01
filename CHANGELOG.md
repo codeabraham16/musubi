@@ -8,6 +8,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Observaciones atadas al estado que las originó.** `musubi_save_observation` acepta
+  `origin_paths`: los archivos del proyecto de los que habla la observación. Se guarda el
+  fingerprint del contenido de cada uno y el recall lo **re-deriva del disco**; si cambió, la
+  observación vuelve **marcada** como posiblemente rancia, nombrando el archivo (y distinguiendo
+  "cambió" de "ya no existe"). Cierra el hueco que el detector de conflictos no puede ver: como
+  compara observaciones ENTRE SÍ, nunca detecta una nota por lo demás válida con una línea vencida
+  adentro ("PENDIENTE: X" cuando X ya se hizo) — para eso hay que comparar la nota contra el mundo,
+  no contra otras notas. Es el hermano derivable de `created_at`: la edad es un proxy de si una
+  memoria sigue valiendo, el fingerprint es evidencia. **Marca, nunca oculta**: que un archivo
+  cambie no prueba que la nota sea falsa, así que la observación se sirve igual y en la misma
+  posición del ranking (hay un test que lo fija). Opt-in puro: sin `origin_paths` todo se comporta
+  exactamente como antes. Tabla satélite nueva (`observation_origins`) con FK `ON DELETE CASCADE`
+  — la única del esquema que referencia `observations`, así que las anclas no necesitan limpieza
+  manual al borrar. Las anclas **no viajan** al cerebro central: un fingerprint sólo tiene sentido
+  contra el checkout de la máquina que lo calculó. Tope de 10 rutas por observación y anclar a una
+  ruta inexistente es error (nacería marcada). `musubi doctor` gana el check `orphan_origins`
+  (auto-curable). SDD completo en `specs/observaciones-atadas-a-su-origen/`.
 - **Grafo de código POLYGLOT en el binario distribuido (Track 20 · F4 completo).** El indexador
   ahora deriva grafo de código de **TypeScript/TSX/JavaScript/JSX y Python**, no sólo Go. El pase
   tree-sitter (`gotreesitter`, runtime 100% Go, sin CGo) ya existía detrás del build tag `treesitter`

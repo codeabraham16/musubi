@@ -421,6 +421,25 @@ func initSchemaOn(x execQuerier) error {
 			UNIQUE(source_id, target_id)
 		);`,
 
+		// Anclas de una observación al ESTADO DEL PROYECTO del que habla: por cada
+		// archivo declarado, el fingerprint de su contenido AL MOMENTO DE GUARDAR. En el
+		// recall se re-deriva del disco y, si difiere, la observación se marca como
+		// posiblemente rancia. Es lo que permite detectar que una nota envejeció sin
+		// preguntarle a ningún agente: el detector de conflictos compara observaciones
+		// ENTRE SÍ y por eso nunca ve una nota válida con una línea vencida adentro.
+		//
+		// OJO: es la ÚNICA tabla con FK hacia observations. El resto del esquema no
+		// cascadea y por eso un borrado en duro exige limpiar satélites a mano; acá NO
+		// hace falta (el DSN abre con foreign_keys(1)).
+		`CREATE TABLE IF NOT EXISTS observation_origins (
+			observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+			path           TEXT NOT NULL,
+			fingerprint    TEXT NOT NULL,
+			captured_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (observation_id, path)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_origins_path ON observation_origins(path);`,
+
 		// Pizarra compartida del multi-agente: unidades de trabajo que el agente
 		// principal postea y los sub-agentes reclaman (claim atómico), ejecutan y
 		// completan. Es el ÚNICO canal de coordinación entre agentes (no comparten

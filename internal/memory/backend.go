@@ -27,6 +27,13 @@ type ObservationStore interface {
 	// multi-tenant, Track 16 F1). origin == "" ⇒ project_id del engine.
 	SaveObservationTypedFrom(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error
 	SaveObservationDedupedTypedFrom(originProjectID, author, topicKey, content string, importance float64, memType, scope string, embedding []float32) (string, bool, error)
+	// Variantes *WithOrigins: además ATAN la observación a archivos del proyecto (ruta +
+	// fingerprint al guardar). El recall re-deriva del disco y MARCA la observación si el
+	// estado cambió — así una nota con una línea vencida deja de servirse como verdad
+	// vigente sin que ningún agente tenga que notarlo. originPaths vacío ⇒ idéntico a las
+	// variantes de arriba.
+	SaveObservationTypedWithOrigins(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) error
+	SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error)
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)

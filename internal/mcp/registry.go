@@ -79,6 +79,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"id":         {Type: "string", Description: "Identificador único opcional; si se omite se genera un UUID y se deduplica por contenido"},
 						"importance": {Type: "number", Description: "Peso opcional (>0, default 1.0) que prioriza la observación en el recall"},
 						"mem_type":   {Type: "string", Description: "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."},
+						"origin_paths": {
+							Type:        "array",
+							Description: "Opcional: archivos del proyecto (rutas relativas a la raíz) de los que habla esta observación. Se guarda el fingerprint de cada uno y el recall lo re-deriva del disco: si cambiaron, la observación se devuelve MARCADA como posiblemente rancia. Sirve para notas de estado ('X está pendiente', 'Y funciona así') que se vencen cuando el código se mueve. Máximo 10; anclar a una ruta inexistente es error.",
+							Items:       &Property{Type: "string"},
+						},
 					},
 					Required: []string{"topic_key", "content"},
 				},

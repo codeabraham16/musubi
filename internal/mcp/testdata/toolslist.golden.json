@@ -22,6 +22,14 @@
             "type": "string",
             "description": "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."
           },
+          "origin_paths": {
+            "type": "array",
+            "description": "Opcional: archivos del proyecto (rutas relativas a la raíz) de los que habla esta observación. Se guarda el fingerprint de cada uno y el recall lo re-deriva del disco: si cambiaron, la observación se devuelve MARCADA como posiblemente rancia. Sirve para notas de estado ('X está pendiente', 'Y funciona así') que se vencen cuando el código se mueve. Máximo 10; anclar a una ruta inexistente es error.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
           "topic_key": {
             "type": "string",
             "description": "Clave de agrupación temática (ej. architecture/auth)"
