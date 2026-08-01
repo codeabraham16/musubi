@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -136,6 +137,12 @@ type WorkflowStep struct {
 	// chequear. Un fail registra la reflexión y reabre el step (Reflexion) hasta agotar el
 	// presupuesto (MaxIterations, default defaultVerifyAttempts). No se combina con repeat_while.
 	Verify string `yaml:"verify,omitempty" json:"verify,omitempty"`
+	// VerifyTarget son globs de archivos (relativos a la raíz del proyecto) que definen QUÉ se
+	// está verificando. Con esto el candidato deja de ser lo que el agente DICE y pasa a ser lo
+	// que el proyecto ES: Musubi calcula la identidad leyendo el disco al congelar, y la vuelve
+	// a derivar al emitir el veredicto. Si los archivos cambiaron en el medio, el veredicto
+	// revisó otra cosa y el gate se reabre. Soporta `**`. Requiere `verify`.
+	VerifyTarget []string `yaml:"verify_target,omitempty" json:"verify_target,omitempty"`
 }
 
 // defaultMaxIters es el tope de iteraciones de un loop si el step no declara uno.
@@ -210,6 +217,10 @@ func (d WorkflowDef) Validate() []error {
 			if _, err := EvalCondition(s.When, map[string]string{}); err != nil {
 				errs = append(errs, fmt.Errorf("step %q: condición when inválida: %v", s.ID, err))
 			}
+		}
+		if len(s.VerifyTarget) > 0 && strings.TrimSpace(s.Verify) == "" {
+			errs = append(errs, fmt.Errorf(
+				"step %q: verify_target sin verify — el target define QUÉ se verifica, pero sin verify no hay gate que lo use", s.ID))
 		}
 		if strings.TrimSpace(s.RepeatWhile) != "" {
 			if _, err := EvalCondition(s.RepeatWhile, map[string]string{}); err != nil {
@@ -700,10 +711,19 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	// dependientes) hasta que un veredicto lo resuelva con action=verify.
 	verifying := false
 	reopened := false
+	frozenDigest := ""
+	frozenFiles := []string{}
 	if stepStatus == StepDone {
 		step, _ := stepByID(run.Def, stepID)
 		switch {
 		case strings.TrimSpace(step.Verify) != "":
+			// Congelar el candidato ANTES de mover el estado: si el target no se puede
+			// resolver, el step no entra en verifying con una identidad inventada.
+			d, files, _, ferr := e.freezeCandidate(step, result)
+			if ferr != nil {
+				return WorkflowRun{}, fmt.Errorf("no se pudo congelar el candidato de %q: %w", stepID, ferr)
+			}
+			frozenDigest, frozenFiles = d, files
 			run.StepStatus[stepID] = StepVerifying
 			verifying = true
 		case strings.TrimSpace(step.RepeatWhile) != "":
@@ -739,7 +759,12 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 	if verifying {
 		// El step se produjo pero aún no está hecho: no se emite step_completed hasta el pass.
 		// El digest CONGELA el candidato: es contra esta identidad que se valida el veredicto.
-		vp, _ := json.Marshal(map[string]string{"result": result, "digest": candidateDigest(result)})
+		// Con verify_target el digest sale del DISCO y `target` dice qué archivos entraron.
+		payload := map[string]interface{}{"result": result, "digest": frozenDigest}
+		if len(frozenFiles) > 0 {
+			payload["target"] = frozenFiles
+		}
+		vp, _ := json.Marshal(payload)
 		if err := appendRunEvent(tx, runID, stepID, EventStepVerifying, string(vp), idempotencyKey); err != nil {
 			return WorkflowRun{}, err
 		}
@@ -763,6 +788,28 @@ func (e *DbEngine) CompleteWorkflowStep(runID, stepID, result, stepStatus, idemp
 		return WorkflowRun{}, fmt.Errorf("error confirmando el complete: %w", err)
 	}
 	return updated, nil
+}
+
+// projectRoot devuelve la raíz del proyecto a partir de la ruta de la base: e.path es
+// <root>/.musubi/memory.db, así que subir dos niveles da la raíz. Es la base contra la que se
+// resuelven los `verify_target`.
+func (e *DbEngine) projectRoot() string {
+	return filepath.Dir(filepath.Dir(e.path))
+}
+
+// freezeCandidate calcula la identidad del candidato de un step. Si el step declara
+// `verify_target`, la identidad se DERIVA DEL DISCO (prueba estructural) y no del texto del
+// agente; si no, cae al digest del result (congela la narración, que es lo único que hay).
+// Devuelve el digest, los archivos que entraron y si fue estructural.
+func (e *DbEngine) freezeCandidate(step WorkflowStep, result string) (string, []string, bool, error) {
+	if len(step.VerifyTarget) == 0 {
+		return candidateDigest(result), nil, false, nil
+	}
+	digest, files, err := verifyTargetDigest(e.projectRoot(), step.VerifyTarget)
+	if err != nil {
+		return "", nil, true, err
+	}
+	return digest, files, true, nil
 }
 
 // candidateDigest calcula la IDENTIDAD DE CONTENIDO de un candidato a verificar. Es el ancla
@@ -838,15 +885,37 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 	if run.StepStatus[stepID] != StepVerifying {
 		return WorkflowRun{}, nil, fmt.Errorf("el step %q no está en verificación (estado %q)", stepID, run.StepStatus[stepID])
 	}
-	if strings.TrimSpace(targetDigest) != "" {
-		frozen, ferr := e.frozenCandidate(runID, stepID)
-		if ferr != nil {
-			return WorkflowRun{}, nil, ferr
-		}
-		if !strings.EqualFold(strings.TrimSpace(targetDigest), frozen) {
+	frozen, ferr := e.frozenCandidate(runID, stepID)
+	if ferr != nil {
+		return WorkflowRun{}, nil, ferr
+	}
+	if strings.TrimSpace(targetDigest) != "" && !strings.EqualFold(strings.TrimSpace(targetDigest), frozen) {
+		return WorkflowRun{}, nil, fmt.Errorf(
+			"el veredicto no corresponde al candidato congelado del step %q (declarado %s, congelado %s): verificá el candidato vigente y volvé a emitirlo",
+			stepID, strings.TrimSpace(targetDigest), frozen)
+	}
+
+	// PRUEBA ESTRUCTURAL: si el step declara verify_target, Musubi RE-DERIVA la identidad del
+	// disco acá y ahora. Esto no pasa por el agente: si los archivos cambiaron desde que se
+	// congeló el candidato, lo que se revisó ya no existe y el pass no puede valer. Se fuerza
+	// el camino de fail (reabre con presupuesto) en vez de aceptar un veredicto huérfano.
+	step, _ := stepByID(run.Def, stepID)
+	if len(step.VerifyTarget) > 0 {
+		actual, _, derr := verifyTargetDigest(e.projectRoot(), step.VerifyTarget)
+		switch {
+		case derr != nil:
 			return WorkflowRun{}, nil, fmt.Errorf(
-				"el veredicto no corresponde al candidato congelado del step %q (declarado %s, congelado %s): verificá el candidato vigente y volvé a emitirlo",
-				stepID, strings.TrimSpace(targetDigest), frozen)
+				"no se pudo re-derivar el candidato de %q para validar el veredicto: %w", stepID, derr)
+		case !strings.EqualFold(actual, frozen):
+			deriva := fmt.Sprintf(
+				"[musubi] el candidato cambió en disco desde que se congeló (congelado %s, actual %s): lo que se verificó ya no existe, el veredicto no aplica",
+				frozen, actual)
+			if strings.TrimSpace(reflection) != "" {
+				reflection = strings.TrimSpace(reflection) + "\n" + deriva
+			} else {
+				reflection = deriva
+			}
+			pass = false // derivado, no declarado: el agente no puede sobreescribir esto
 		}
 	}
 
@@ -881,7 +950,6 @@ func (e *DbEngine) VerifyWorkflowStep(runID, stepID string, pass bool, reflectio
 	if err := appendRunEvent(tx, runID, stepID, EventStepReflection, reflection, ""); err != nil {
 		return WorkflowRun{}, nil, err
 	}
-	step, _ := stepByID(run.Def, stepID)
 	max := step.MaxIterations
 	if max <= 0 {
 		max = defaultVerifyAttempts
