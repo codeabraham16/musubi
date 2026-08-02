@@ -106,8 +106,13 @@ func TestRecallMarcadaPeroServidaEnLaMismaPosicion(t *testing.T) {
 		"el indice invertido se arma en src/a.go al cargar", 2.0, "", "local", []string{"src/a.go"}, nil)
 	engine.SaveObservationTyped("O3", "t/k", "el indice invertido se compacta cada noche", 1.0, "", "local", nil)
 
+	// NoBump es OBLIGATORIO acá: un recall normal cuenta como ACCESO y el ranking pondera
+	// frecuencia y recencia, así que la primera llamada movería lo que la segunda mide y el
+	// test compararía dos rankings distintos por un motivo ajeno a la marca. Sin esto el
+	// guardián falla al azar (lo hizo en CI bajo race+coverage), y un guardián que falla al
+	// azar se aprende a ignorar — justo lo que no puede pasarle a este invariante.
 	orden := func() []string {
-		res, err := engine.Recall(context.Background(), "indice invertido", RecallOptions{TokenBudget: 4000})
+		res, err := engine.Recall(context.Background(), "indice invertido", RecallOptions{TokenBudget: 4000, NoBump: true})
 		if err != nil {
 			t.Fatal(err)
 		}
