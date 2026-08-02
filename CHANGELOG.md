@@ -8,6 +8,41 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Prueba estructural en el gate de verificación.** El gate NO congelaba nada: un step en
+  `verifying` podía re-completarse, pisar su resultado y hacer que el veredicto en curso aterrizara
+  sobre bytes distintos de los revisados — quedaba `done` sin que nadie verificara lo que finalmente
+  valía. Ahora el candidato queda **congelado** (re-completarlo falla) y su identidad de contenido
+  viaja en el journal; `action=verify` acepta `target_digest` y rechaza, sin tocar el estado, un
+  veredicto que apunta a otro candidato. Además un step puede declarar `verify_target` (globs de
+  archivos, soporta `**`): con eso el candidato deja de ser lo que el agente **dice** y pasa a ser lo
+  que el proyecto **es** — Musubi deriva la identidad leyendo el disco al congelar y la **re-deriva**
+  al emitir el veredicto, así que si los archivos cambiaron el `pass` no se aplica y el gate se
+  reabre. Esa comprobación no pasa por el agente, que por lo tanto no puede afirmarla ni negarla. La
+  deriva toma el camino de `fail` (con una reflexión que la explica) en vez de devolver error, para
+  que siempre haya avance dentro del presupuesto de intentos. Sin migración: el digest se deriva del
+  journal, como las reflexiones.
+- **Observaciones atadas al estado que las originó.** `musubi_save_observation` acepta
+  `origin_paths`: de qué habla la observación, como `ruta/archivo.go` o —mejor—
+  `ruta/archivo.go#NombreDelSimbolo`. Se guarda el fingerprint del contenido y el recall lo
+  **re-deriva del disco**; si cambió, la observación vuelve **marcada** como posiblemente rancia,
+  nombrando qué se movió (y distinguiendo "cambió" de "ya no existe"). **Preferí el símbolo**: un
+  archivo grande cambia todo el tiempo por motivos ajenos a la nota y la marca se vuelve ruido,
+  mientras que el símbolo cambia cuando cambia lo que la nota describe y aguanta que le desplacen
+  las líneas. Símbolos en Go, TS/JS y Python vía `codeintel`, extraídos del contenido **actual** y
+  no de los rangos del grafo persistido (que valen para el snapshot en que se indexó, justo lo
+  equivocado cuando el archivo cambia). Cierra el hueco que el detector de conflictos no puede ver: como
+  compara observaciones ENTRE SÍ, nunca detecta una nota por lo demás válida con una línea vencida
+  adentro ("PENDIENTE: X" cuando X ya se hizo) — para eso hay que comparar la nota contra el mundo,
+  no contra otras notas. Es el hermano derivable de `created_at`: la edad es un proxy de si una
+  memoria sigue valiendo, el fingerprint es evidencia. **Marca, nunca oculta**: que un archivo
+  cambie no prueba que la nota sea falsa, así que la observación se sirve igual y en la misma
+  posición del ranking (hay un test que lo fija). Opt-in puro: sin `origin_paths` todo se comporta
+  exactamente como antes. Tabla satélite nueva (`observation_origins`) con FK `ON DELETE CASCADE`
+  — la única del esquema que referencia `observations`, así que las anclas no necesitan limpieza
+  manual al borrar. Las anclas **no viajan** al cerebro central: un fingerprint sólo tiene sentido
+  contra el checkout de la máquina que lo calculó. Tope de 10 rutas por observación y anclar a una
+  ruta inexistente es error (nacería marcada). `musubi doctor` gana el check `orphan_origins`
+  (auto-curable). SDD completo en `specs/observaciones-atadas-a-su-origen/`.
 - **Grafo de código POLYGLOT en el binario distribuido (Track 20 · F4 completo).** El indexador
   ahora deriva grafo de código de **TypeScript/TSX/JavaScript/JSX y Python**, no sólo Go. El pase
   tree-sitter (`gotreesitter`, runtime 100% Go, sin CGo) ya existía detrás del build tag `treesitter`

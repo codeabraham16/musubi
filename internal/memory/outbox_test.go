@@ -44,8 +44,8 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	if v != latestSchemaVersion() {
 		t.Errorf("user_version = %d, esperaba %d", v, latestSchemaVersion())
 	}
-	if latestSchemaVersion() != 20 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 20", latestSchemaVersion())
+	if latestSchemaVersion() != 21 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 21", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

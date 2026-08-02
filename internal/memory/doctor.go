@@ -60,6 +60,7 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
 		{code: "stale_gists", run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
+		{code: "orphan_origins", run: checkOrphanOrigins, count: countOrphanOrigins, apply: applyDeleteOrphanOrigins},
 		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
 		{code: "offhost_backup", run: checkOffhostBackup},
 		{code: "outbox_stall", run: checkOutboxStall},
@@ -96,6 +97,7 @@ var autoHealCodes = map[string]bool{
 	"fts_consistency":  true,
 	"missing_digests":  true,
 	"orphan_relations": true,
+	"orphan_origins":   true,
 }
 
 // AutoHeal diagnostica y repara automáticamente SOLO los checks de bajo riesgo
@@ -758,6 +760,44 @@ func countOrphans(e *DbEngine) (int, error) {
 		return 0, fmt.Errorf("error al contar relaciones huérfanas: %w", err)
 	}
 	return n, nil
+}
+
+// Anclas huérfanas (origins.go). La FK ON DELETE CASCADE las previene, pero el check existe
+// igual: una base restaurada desde un backup viejo, o escrita por una herramienta externa que
+// abrió sin `foreign_keys(1)`, puede dejarlas. Un ancla huérfana no rompe nada, pero hace que
+// el cálculo de ranciedad lea archivos para nadie.
+func checkOrphanOrigins(e *DbEngine) CheckResult {
+	n, err := countOrphanOrigins(e)
+	if err != nil {
+		return CheckResult{Code: "orphan_origins", Status: "error", Message: err.Error(), Repairable: true}
+	}
+	if n > 0 {
+		return CheckResult{Code: "orphan_origins", Status: "warning",
+			Message: fmt.Sprintf("%d ancla(s) de origen apuntan a observaciones inexistentes", n), Repairable: true}
+	}
+	return CheckResult{Code: "orphan_origins", Status: "ok", Message: "no hay anclas de origen huérfanas"}
+}
+
+const orphanOriginsWhere = `WHERE observation_id NOT IN (SELECT id FROM observations)`
+
+func countOrphanOrigins(e *DbEngine) (int, error) {
+	var n int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observation_origins ` + orphanOriginsWhere).Scan(&n); err != nil {
+		return 0, fmt.Errorf("error al contar anclas huérfanas: %w", err)
+	}
+	return n, nil
+}
+
+func applyDeleteOrphanOrigins(e *DbEngine) (int, error) {
+	res, err := e.db.Exec(`DELETE FROM observation_origins ` + orphanOriginsWhere)
+	if err != nil {
+		return 0, fmt.Errorf("error al borrar anclas huérfanas: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("error al contar filas borradas: %w", err)
+	}
+	return int(n), nil
 }
 
 func applyDeleteOrphans(e *DbEngine) (int, error) {

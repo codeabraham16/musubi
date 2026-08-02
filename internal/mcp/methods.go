@@ -175,6 +175,10 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		MemType    string  `json:"mem_type"`
 		Scope      string  `json:"scope"`
 		ProjectID  string  `json:"project_id"` // origen (ingest del central); "" ⇒ project_id del engine
+		// OriginPaths ata la observación a los archivos del proyecto de los que habla: se guarda
+		// el fingerprint de cada uno y el recall vuelve a derivarlo del disco para MARCAR la
+		// observación si cambió. Vacío ⇒ se guarda exactamente como siempre.
+		OriginPaths []string `json:"origin_paths"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -241,7 +245,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
 	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
 	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, topicKey, content, importance, args.MemType, scope, emb)
+		id, deduped, err := s.engine.SaveObservationDedupedTypedFromWithOrigins(origin, author, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 		}
@@ -255,7 +259,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// puede escribir memoria de otro tenant, ni siquiera "de vuelta" a la propia: el UPSERT preserva
 	// la atribución, así que reenviarla sólo corrompería la fila ajena). El caller debe usar una id
 	// nueva; reasignar el tenant de una fila existente sólo puede hacerlo un admin en el central.
-	if err := s.engine.SaveObservationTypedFrom(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, emb); err != nil {
+	if err := s.engine.SaveObservationTypedWithOrigins(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb); err != nil {
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
 		}
