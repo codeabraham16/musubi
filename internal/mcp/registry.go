@@ -477,7 +477,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_workflow",
-				Description: "Motor de orquestación DAG model-free: Musubi NO ejecuta los steps — define el grafo, persiste el run en SQLite (resumible entre sesiones) y devuelve qué steps están ready; VOS ejecutás y reportás. Loop: action=start (run_id + `workflow` id de .musubi/workflows/<id>.yaml, o `definition` YAML inline) → ready; ejecutás y action=complete (run_id, step, result[, status done|failed, idempotency_key]) → nuevos ready; action=next reconsulta; action=status estado completo; action=resume retoma en otra sesión. Un step queda ready cuando sus `needs` están done/skipped; puede llevar `when` (gate condicional, se salta si es falsa) y `repeat_while`+`max_iterations` (loop). Features avanzadas activadas por el YAML del step, que la RESPUESTA te va guiando cuando el run se pausa: SAGA (`compensate` → action=rollback devuelve el plan LIFO; reportás cada undo con action=compensated); HITL (`await` pausa el run en waiting_input → action=provide con input y status); verificación Reflexion (`verify`: complete deja el step en `verifying` hasta action=verify con verdict pass|fail — fail reabre para reintentar hasta max_iterations); auditoría con action=journal (traza append-only) y action=otel (export OTLP). Si un step failed bloquea todo progreso, el run pasa a `failed`; action=abort lo cierra a `aborted` (ambos aún compensables con rollback). action=validate valida sin correr; action=list lista runs. action ∈ {start, next, complete, status, resume, validate, list, journal, otel, rollback, abort, compensated, provide, verify}. Las respuestas incrementales omiten `definition` (inmutable tras start); usá status/resume para el snapshot completo.",
+				Description: "Motor de orquestación DAG model-free: Musubi NO ejecuta los steps — define el grafo, persiste el run en SQLite (resumible entre sesiones) y devuelve qué steps están ready; VOS ejecutás y reportás. Loop: action=start (run_id + `workflow` id de .musubi/workflows/<id>.yaml, o `definition` YAML inline) → ready; ejecutás y action=complete (run_id, step, result[, status done|failed, idempotency_key]) → nuevos ready; action=next reconsulta; action=status estado completo; action=resume retoma en otra sesión. Un step queda ready cuando sus `needs` están done/skipped; puede llevar `when` (gate condicional, se salta si es falsa) y `repeat_while`+`max_iterations` (loop). Features avanzadas activadas por el YAML del step, que la RESPUESTA te va guiando cuando el run se pausa: SAGA (`compensate` → action=rollback devuelve el plan LIFO; reportás cada undo con action=compensated); HITL (`await` pausa el run en waiting_input → action=provide con input y status); verificación Reflexion (`verify`: complete deja el step en `verifying` hasta action=verify con verdict pass|fail — fail reabre para reintentar hasta max_iterations; el candidato queda CONGELADO: no podés re-completar un step en `verifying`, y con `verify_target` (globs de archivos, soporta `**`) Musubi deriva la identidad del DISCO al congelar y la RE-DERIVA al emitir el veredicto — si los archivos cambiaron, tu pass no se aplica y el gate se reabre, porque revisaste otra cosa); auditoría con action=journal (traza append-only) y action=otel (export OTLP). Si un step failed bloquea todo progreso, el run pasa a `failed`; action=abort lo cierra a `aborted` (ambos aún compensables con rollback). action=validate valida sin correr; action=list lista runs. action ∈ {start, next, complete, status, resume, validate, list, journal, otel, rollback, abort, compensated, provide, verify}. Las respuestas incrementales omiten `definition` (inmutable tras start); usá status/resume para el snapshot completo.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -491,6 +491,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"idempotency_key": {Type: "string", Description: "Para complete (opcional): clave de idempotencia; reintentar con la misma clave es un no-op seguro"},
 						"input":           {Type: "string", Description: "Para provide (HITL): la decisión/dato del humano que resuelve el gate en espera"},
 						"verdict":         {Type: "string", Description: "Para verify: pass (la verificación pasó → done) | fail (falló → reflexión + reintento). La reflexión va en 'result'"},
+						"target_digest":   {Type: "string", Description: "Para verify (opcional): digest del candidato que verificaste, tal como vino en el step_verifying del journal. Ata el veredicto a ESOS bytes: si el candidato cambió, el veredicto se rechaza en vez de dar por bueno algo que nadie revisó"},
 					},
 				},
 			},
@@ -700,6 +701,34 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler:  s.toolCodeGraph,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_code_graph_viz",
+				Description: "Grafo de CÓDIGO completo y renderizable en UNA llamada (Track 20): nodos (símbolos, con key/kind/name/path/degree) + aristas (CALLS/IMPORTS/CONTAINS), top-N por grado, scopeado al proyecto. Es la fuente para dibujar el grafo de código (a diferencia de musubi_code_graph, que es vecindad-por-símbolo). Read-only.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"limit": {Type: "number", Description: "Máximo de nodos (default 400)"},
+					},
+				},
+			},
+			handler:  s.toolCodeGraphViz,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_brain_graph",
+				Description: "Grafo de MEMORIA completo y renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…), top-N por relevancia. Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"limit": {Type: "number", Description: "Máximo de neuronas (default 300)"},
+					},
+				},
+			},
+			handler:  s.toolBrainGraph,
 			readOnly: true,
 		},
 		{

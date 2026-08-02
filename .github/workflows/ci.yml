@@ -24,6 +24,17 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
+      # El grafo de código polyglot (TS/JS/Py vía tree-sitter, Track 20 · F4) vive detrás del build
+      # tag `treesitter` y NO se compila en el build por default, así que el job de arriba jamás lo
+      # toca. Este paso compila el binario CON el tag (mismo set de gramáticas que shippea release.yml)
+      # y corre los tests etiquetados: garantiza que el pase polyglot y su cableado al indexador no se
+      # pudran. Sin -race: gotreesitter es Go puro y estos tests no ejercitan concurrencia.
+      - name: Build+Test (treesitter/polyglot)
+        run: |
+          TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'
+          go build -tags "$TAGS" ./cmd/musubi
+          go test -tags "$TAGS" ./internal/codeintel/ ./internal/mcp/
+
       - name: Coverage summary
         run: go tool cover -func=coverage.out
 

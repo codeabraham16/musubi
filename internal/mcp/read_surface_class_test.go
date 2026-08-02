@@ -78,6 +78,10 @@ func readSweepCases() []readSweepCase {
 		{"musubi_map", map[string]any{}, "Victim"},
 		// code_context: el weld deriva explained_by de la obs de web (topic_key web/topic) por el path.
 		{"musubi_code_context", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "web/topic"},
+		// grafos renderizables completos (Track 20): brain_graph lee observations (marker VICTIMOBS),
+		// code_graph_viz lee code_graph_nodes (marker el nombre de nodo de web).
+		{"musubi_brain_graph", map[string]any{}, "VICTIMOBS"},
+		{"musubi_code_graph_viz", map[string]any{}, "VictimCaller"},
 	}
 }
 

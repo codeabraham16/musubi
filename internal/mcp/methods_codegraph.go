@@ -55,7 +55,7 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 	fps := map[string]string{}
 	var fileKeys []string
 	for _, ent := range entries {
-		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
+		if ent.IsDir() || !codeintel.IndexableForGraph(ent.Name()) {
 			continue
 		}
 		rel := filepath.Join(dir, ent.Name())
@@ -150,11 +150,13 @@ func (s *McpServer) cgView(n memory.GraphNode) cgNodeView {
 	return cgNodeView{Key: n.Key, Kind: n.Kind, Name: n.Name, Path: n.Path, Line: n.StartLine, Stale: s.cgStale(n)}
 }
 
-// walkGoTree recorre el proyecto UNA vez (WalkDir desde projectPath) y devuelve el set de
-// directorios con archivos .go y el set de file-keys normalizados (con "/") de cada .go en disco.
-// Salta directorios ocultos (.git/.musubi), vendor, testdata y node_modules. Es la fuente común
-// del índice full (usa los dirs) y del incremental (compara los file-keys contra el grafo).
-func (s *McpServer) walkGoTree() (dirs map[string]bool, fileKeys map[string]bool) {
+// walkSourceTree recorre el proyecto UNA vez (WalkDir desde projectPath) y devuelve el set de
+// directorios con archivos INDEXABLES (ver codeintel.IndexableForGraph: siempre .go, y TS/JS/Py sólo
+// si el binario se compiló con -tags treesitter) y el set de file-keys normalizados (con "/") de cada
+// uno en disco. Salta directorios ocultos (.git/.musubi), vendor, testdata, node_modules y salidas
+// generadas (dist/coverage) — evita indexar bundles minificados. Es la fuente común del índice full
+// (usa los dirs) y del incremental (compara los file-keys contra el grafo).
+func (s *McpServer) walkSourceTree() (dirs map[string]bool, fileKeys map[string]bool) {
 	dirs = map[string]bool{}
 	fileKeys = map[string]bool{}
 	_ = filepath.WalkDir(s.projectPath, func(p string, d fs.DirEntry, err error) error {
@@ -164,13 +166,14 @@ func (s *McpServer) walkGoTree() (dirs map[string]bool, fileKeys map[string]bool
 		if d.IsDir() {
 			if p != s.projectPath {
 				name := d.Name()
-				if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "node_modules" {
+				if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" ||
+					name == "node_modules" || name == "dist" || name == "coverage" {
 					return filepath.SkipDir
 				}
 			}
 			return nil
 		}
-		if strings.HasSuffix(d.Name(), ".go") {
+		if codeintel.IndexableForGraph(d.Name()) {
 			if rel, rerr := filepath.Rel(s.projectPath, filepath.Dir(p)); rerr == nil {
 				dirs[filepath.ToSlash(rel)] = true
 			}
@@ -203,7 +206,7 @@ func (s *McpServer) graphSize(scoped context.Context) (nodes, edges int) {
 // indexAllPackages puebla el repo ENTERO: refresca el grafo de cada directorio con .go. Devuelve
 // un resumen {packages, nodes, edges}.
 func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
-	dirs, _ := s.walkGoTree()
+	dirs, _ := s.walkSourceTree()
 	pkgs := 0
 	for dir := range dirs {
 		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
@@ -225,7 +228,7 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	_, diskFiles := s.walkGoTree()
+	_, diskFiles := s.walkSourceTree()
 
 	dirtyDirs := map[string]bool{}
 	var ghostPaths []string
@@ -491,6 +494,56 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
 		"stale": stale, "ghosts": ghosts,
 	})
+}
+
+// graphVizEngine es el sub-contrato para los grafos renderizables completos. Lo
+// cumple *memory.DbEngine; se accede por type-assert para no ensuciar la interfaz
+// StorageBackend ni sus fakes.
+type graphVizEngine interface {
+	BrainGraphCtx(ctx context.Context, limit int) (memory.BrainGraph, error)
+	CodeGraphViz(ctx context.Context, limit int) (memory.CodeGraphViz, error)
+}
+
+func graphLimit(raw json.RawMessage, def int) int {
+	if len(raw) > 0 {
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if json.Unmarshal(raw, &args) == nil && args.Limit > 0 {
+			return args.Limit
+		}
+	}
+	return def
+}
+
+// toolCodeGraphViz devuelve el grafo de código COMPLETO renderizable (nodos +
+// aristas, top-N por grado) en una sola llamada — lo que dibuja el Grafo del
+// cuerpo/dashboard. Scopeado por tenant (ctx). Read-only.
+func (s *McpServer) toolCodeGraphViz(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	eng, ok := s.engine.(graphVizEngine)
+	if !ok {
+		return nil, rpcErrorf(codeInternalError, "este backend no expone el grafo renderizable")
+	}
+	g, err := eng.CodeGraphViz(s.scopedCtx(ctx), graphLimit(raw, 400))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "grafo de código: %v", err)
+	}
+	return jsonResult(g)
+}
+
+// toolBrainGraph devuelve el grafo de MEMORIA renderizable (neuronas + sinapsis,
+// top-N por relevancia) en una sola llamada — el gemelo de memoria de
+// toolCodeGraphViz. Read-only.
+func (s *McpServer) toolBrainGraph(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	eng, ok := s.engine.(graphVizEngine)
+	if !ok {
+		return nil, rpcErrorf(codeInternalError, "este backend no expone el grafo renderizable")
+	}
+	g, err := eng.BrainGraphCtx(s.scopedCtx(ctx), graphLimit(raw, 300))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "grafo neuronal: %v", err)
+	}
+	return jsonResult(g)
 }
 
 // ---- F3: soldar el grafo de código a la memoria (Track 20 · F3) ----

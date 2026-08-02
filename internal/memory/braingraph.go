@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -58,21 +59,31 @@ const defaultBrainNeuronLimit = 300
 // BrainGraph arma el grafo neuronal read-only. limit<=0 usa el default. Las neuronas se
 // ordenan por saliencia = importance*exp(-ageDays/30) + ln(1+heat) y se capan a limit;
 // las sinapsis se filtran a las que tienen ambos extremos entre las incluidas.
+// BrainGraph arma el grafo neuronal FEDERADO (sin scope): todo el espacio. Lo usa
+// `musubi export` (local monoproyecto).
 func (e *DbEngine) BrainGraph(limit int) (BrainGraph, error) {
-	return e.brainGraphAt(time.Now().UTC(), limit)
+	return e.brainGraphAt(context.Background(), time.Now().UTC(), limit)
 }
 
-func (e *DbEngine) brainGraphAt(now time.Time, limit int) (BrainGraph, error) {
+// BrainGraphCtx arma el grafo neuronal SCOPEADO al proyecto de la credencial (ctx):
+// para servir el grafo por MCP sin filtrar memoria de otros tenants (central).
+func (e *DbEngine) BrainGraphCtx(ctx context.Context, limit int) (BrainGraph, error) {
+	return e.brainGraphAt(ctx, time.Now().UTC(), limit)
+}
+
+func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (BrainGraph, error) {
 	if limit <= 0 {
 		limit = defaultBrainNeuronLimit
 	}
 
-	rows, err := e.db.Query(`
+	sc := projectScopeFrom(ctx)
+	clause, args := sc.scopeClause("")
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT id, topic_key, COALESCE(mem_type,''), COALESCE(importance,1.0),
 		       COALESCE(access_count,0), COALESCE(created_at,''), COALESCE(last_accessed,''),
 		       COALESCE(NULLIF(gist,''), substr(content,1,120))
 		FROM observations
-		WHERE archived = 0`)
+		WHERE archived = 0`+clause, args...)
 	if err != nil {
 		return BrainGraph{}, fmt.Errorf("brain: neuronas: %w", err)
 	}

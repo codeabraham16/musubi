@@ -81,7 +81,13 @@ jobs:
         # menos de tamaño (ej. Windows amd64 18.1MB -> 12.5MB), sin afectar la
         # funcionalidad (los panics siguen mostrando nombres de función). -trimpath
         # ya garantizaba builds reproducibles sin rutas absolutas.
-        run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "${{ matrix.asset }}" ./cmd/musubi
+        #
+        # -tags treesitter (+ grammar_subset_* acotadas) activa el grafo de código POLYGLOT
+        # (TS/TSX/JS/JSX/Py vía tree-sitter, Track 20 · F4). gotreesitter es un runtime tree-sitter
+        # 100% Go, así que sigue con CGO_ENABLED=0 y cross-compila igual; suma ~8MB de gramáticas
+        # embebidas. Sin esto, el binario distribuido sólo indexa .go y los repos JS/TS ven un grafo
+        # de código vacío.
+        run: go build -trimpath -tags 'treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python' -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "${{ matrix.asset }}" ./cmd/musubi
 
       - name: Checksum (SHA-256)
         run: sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"

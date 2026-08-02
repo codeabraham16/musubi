@@ -47,3 +47,18 @@ func TestDerivePolyglot(t *testing.T) {
 		t.Error("esperaba al menos una arista IMPORTS de los archivos Py/TS")
 	}
 }
+
+// Con -tags treesitter, IndexableForGraph acepta también los lenguajes polyglot: es lo que hace que
+// el indexador (capa MCP) recolecte TS/JS/Py y no sólo .go.
+func TestIndexableForGraphWithTreesitter(t *testing.T) {
+	for _, p := range []string{"app.ts", "comp.tsx", "index.js", "widget.jsx", "mod.mjs", "svc.py", "main.go"} {
+		if !IndexableForGraph(p) {
+			t.Errorf("IndexableForGraph(%q) = false; con -tags treesitter debería indexarse", p)
+		}
+	}
+	for _, p := range []string{"README.md", "data.json", "style.css"} {
+		if IndexableForGraph(p) {
+			t.Errorf("IndexableForGraph(%q) = true; ni siquiera con treesitter se indexa", p)
+		}
+	}
+}

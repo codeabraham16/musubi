@@ -92,7 +92,7 @@ func TestRunFailsWhenVerifyGateExhausts(t *testing.T) {
 		t.Fatal(err)
 	}
 	// fail con presupuesto 1 ⇒ se agota ⇒ step failed ⇒ run failed.
-	run, _, err := e.VerifyWorkflowStep("R", "a", false, "no pasa la verificación")
+	run, _, err := e.VerifyWorkflowStep("R", "a", false, "no pasa la verificación", "")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
