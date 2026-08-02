@@ -1032,6 +1032,14 @@
       }
     },
     {
+      "name": "musubi_whoami",
+      "description": "Devuelve la IDENTIDAD del principal autenticado: nombre (persona), proyecto y capacidades (read: own|all, write: none|own|any). Read-only; cualquier principal puede llamarla (incluida la cabina write=none). La usa el cuerpo (musubi-body) para mostrar con qué identidad está conectado al cerebro de empresa. La identidad se deriva server-side del token, nunca del cliente. En stdio local (sin token) devuelve authenticated=false.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
       "name": "musubi_ingest_url",
       "description": "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/\u003cplataforma\u003e/\u003cid\u003e, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
       "inputSchema": {

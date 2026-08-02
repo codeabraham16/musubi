@@ -191,11 +191,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"entity":   {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
-						"max_hops": {Type: "number", Description: "Profundidad del recorrido BFS (opcional; usa el default de la config). Ignorado con rank='pagerank'."},
-						"as_of":    {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
-						"rank":     {Type: "string", Description: "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."},
-						"to":       {Type: "string", Description: "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."},
+						"entity":           {Type: "string", Description: "Entidad desde la que recorrer el grafo"},
+						"max_hops":         {Type: "number", Description: "Profundidad del recorrido BFS (opcional; usa el default de la config). Ignorado con rank='pagerank'."},
+						"as_of":            {Type: "string", Description: "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."},
+						"rank":             {Type: "string", Description: "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."},
+						"to":               {Type: "string", Description: "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."},
 						"include_proposed": {Type: "boolean", Description: "Opcional (default false): incluye las aristas PROPUESTAS por un LLM ('llm-extract:*'), que por default están en cuarentena. Para revisar propuestas antes de corroborarlas con musubi_save_fact."},
 					},
 					Required: []string{"entity"},
@@ -777,6 +777,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler:  s.toolCodeContext,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_whoami",
+				Description: "Devuelve la IDENTIDAD del principal autenticado: nombre (persona), proyecto y capacidades (read: own|all, write: none|own|any). Read-only; cualquier principal puede llamarla (incluida la cabina write=none). La usa el cuerpo (musubi-body) para mostrar con qué identidad está conectado al cerebro de empresa. La identidad se deriva server-side del token, nunca del cliente. En stdio local (sin token) devuelve authenticated=false.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  s.toolWhoami,
 			readOnly: true,
 		},
 	}

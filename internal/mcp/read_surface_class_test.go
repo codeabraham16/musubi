@@ -155,6 +155,7 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_tokens":          true, // ledger de la sesion
 		"musubi_sync_status":     true, // estado del outbox (no por-proyecto)
 		"musubi_phase":           true, // pipeline de fases de la sesion
+		"musubi_whoami":          true, // identidad del propio principal (nunca datos de otro tenant)
 	}
 
 	for i := range s.tools {
