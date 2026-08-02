@@ -24,12 +24,6 @@ import (
 	"musubi/internal/codeintel"
 )
 
-// projectRoot devuelve la raíz del proyecto: e.path es <root>/.musubi/memory.db, así que
-// subir dos niveles da la raíz. Es la base contra la que se resuelven las anclas.
-func (e *DbEngine) projectRoot() string {
-	return filepath.Dir(filepath.Dir(e.path))
-}
-
 // errSymbolNotFound distingue "el símbolo ya no está en el archivo" de un fallo de E/S. Lo
 // primero es deriva legítima (alguien borró o renombró la función); lo segundo no es evidencia
 // de nada y no debe marcar.

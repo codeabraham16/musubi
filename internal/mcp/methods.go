@@ -873,6 +873,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		IdempotencyKey string `json:"idempotency_key"`
 		Input          string `json:"input"`
 		Verdict        string `json:"verdict"`
+		TargetDigest   string `json:"target_digest"` // ata el veredicto al candidato congelado
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -1050,7 +1051,7 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 		if verdict != "pass" && verdict != "fail" {
 			return nil, rpcErrorf(codeInvalidParams, "verify requiere 'verdict' = pass | fail")
 		}
-		run, reflections, err := s.engine.VerifyWorkflowStep(args.RunID, args.Step, verdict == "pass", args.Result)
+		run, reflections, err := s.engine.VerifyWorkflowStep(args.RunID, args.Step, verdict == "pass", args.Result, args.TargetDigest)
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}

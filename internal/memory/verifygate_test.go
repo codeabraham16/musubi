@@ -58,7 +58,7 @@ func TestVerifyGatePass(t *testing.T) {
 	engine.WorkflowReady("R")
 	engine.CompleteWorkflowStep("R", "check", "hecho", StepDone, "")
 
-	run, reflections, err := engine.VerifyWorkflowStep("R", "check", true, "")
+	run, reflections, err := engine.VerifyWorkflowStep("R", "check", true, "", "")
 	if err != nil {
 		t.Fatalf("verify pass: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestVerifyGateFailReopens(t *testing.T) {
 	engine.WorkflowReady("R")
 	engine.CompleteWorkflowStep("R", "check", "intento 1", StepDone, "")
 
-	run, reflections, err := engine.VerifyWorkflowStep("R", "check", false, "faltó cubrir el caso X")
+	run, reflections, err := engine.VerifyWorkflowStep("R", "check", false, "faltó cubrir el caso X", "")
 	if err != nil {
 		t.Fatalf("verify fail: %v", err)
 	}
@@ -121,14 +121,14 @@ func TestVerifyGateExhaustsToFailed(t *testing.T) {
 	// Intento 1: complete → verify fail → reopen.
 	engine.WorkflowReady("R")
 	engine.CompleteWorkflowStep("R", "check", "i1", StepDone, "")
-	run, _, _ := engine.VerifyWorkflowStep("R", "check", false, "mal 1")
+	run, _, _ := engine.VerifyWorkflowStep("R", "check", false, "mal 1", "")
 	if run.StepStatus["check"] != StepPending {
 		t.Fatalf("tras el 1er fail (max=2) debe reabrir, está %q", run.StepStatus["check"])
 	}
 	// Intento 2: complete → verify fail → agotado → failed.
 	engine.WorkflowReady("R")
 	engine.CompleteWorkflowStep("R", "check", "i2", StepDone, "")
-	run, reflections, _ := engine.VerifyWorkflowStep("R", "check", false, "mal 2")
+	run, reflections, _ := engine.VerifyWorkflowStep("R", "check", false, "mal 2", "")
 	if run.StepStatus["check"] != StepFailed {
 		t.Errorf("agotado el presupuesto el step debe quedar failed, está %q", run.StepStatus["check"])
 	}
@@ -156,12 +156,92 @@ func TestVerifyGateNoVerifyDirectDone(t *testing.T) {
 	}
 }
 
+// El candidato queda CONGELADO: un step en verifying no puede re-completarse, porque eso
+// pisaría el resultado y el veredicto caería sobre bytes distintos de los revisados.
+func TestVerifyGateCandidateFrozen(t *testing.T) {
+	engine := vgRun(t, "R", 3)
+	defer engine.Close()
+	engine.WorkflowReady("R")
+	if _, err := engine.CompleteWorkflowStep("R", "check", "candidato original", StepDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.CompleteWorkflowStep("R", "check", "candidato pisado", StepDone, ""); err == nil {
+		t.Fatal("re-completar un step en verificación debe fallar: el candidato está congelado")
+	}
+	// El resultado original sobrevive intacto.
+	run, _, _ := engine.WorkflowRunStatus("R")
+	if run.StepResults["check"] != "candidato original" {
+		t.Errorf("el candidato congelado no debe pisarse, quedó %q", run.StepResults["check"])
+	}
+	if run.StepStatus["check"] != StepVerifying {
+		t.Errorf("el step debe seguir en verifying, está %q", run.StepStatus["check"])
+	}
+}
+
+// Un veredicto que declara un candidato distinto del congelado se RECHAZA sin tocar el estado.
+func TestVerifyGateDigestMismatchRejected(t *testing.T) {
+	engine := vgRun(t, "R", 3)
+	defer engine.Close()
+	engine.WorkflowReady("R")
+	engine.CompleteWorkflowStep("R", "check", "hecho", StepDone, "")
+
+	_, _, err := engine.VerifyWorkflowStep("R", "check", true, "", candidateDigest("otra cosa"))
+	if err == nil {
+		t.Fatal("un veredicto sobre un candidato distinto debe rechazarse")
+	}
+	run, _, _ := engine.WorkflowRunStatus("R")
+	if run.StepStatus["check"] != StepVerifying {
+		t.Errorf("un veredicto rechazado no debe cambiar el estado, quedó %q", run.StepStatus["check"])
+	}
+	// Con el digest correcto, el mismo veredicto sí entra.
+	if _, _, err := engine.VerifyWorkflowStep("R", "check", true, "", candidateDigest("hecho")); err != nil {
+		t.Fatalf("el veredicto con el digest congelado debe pasar: %v", err)
+	}
+	run, _, _ = engine.WorkflowRunStatus("R")
+	if run.StepStatus["check"] != StepDone {
+		t.Errorf("tras el pass ligado al candidato el step debe quedar done, está %q", run.StepStatus["check"])
+	}
+}
+
+// El caso que motivó el cambio: tras un fail el step se reabre y produce OTRO candidato. Un
+// veredicto que todavía apunta al candidato viejo no puede darlo por bueno.
+func TestVerifyGateStaleVerdictRejectedAfterReopen(t *testing.T) {
+	engine := vgRun(t, "R", 3)
+	defer engine.Close()
+	engine.WorkflowReady("R")
+	engine.CompleteWorkflowStep("R", "check", "i1", StepDone, "")
+	if _, _, err := engine.VerifyWorkflowStep("R", "check", false, "faltó X", candidateDigest("i1")); err != nil {
+		t.Fatalf("fail sobre el candidato vigente: %v", err)
+	}
+	// Reintento informado: nuevo candidato.
+	engine.WorkflowReady("R")
+	engine.CompleteWorkflowStep("R", "check", "i2", StepDone, "")
+
+	if _, _, err := engine.VerifyWorkflowStep("R", "check", true, "", candidateDigest("i1")); err == nil {
+		t.Fatal("un veredicto que apunta al candidato viejo debe rechazarse tras el reintento")
+	}
+	if _, _, err := engine.VerifyWorkflowStep("R", "check", true, "", candidateDigest("i2")); err != nil {
+		t.Fatalf("el veredicto sobre el candidato vigente debe pasar: %v", err)
+	}
+}
+
+// Sin target_digest el gate se comporta como antes (compatibilidad).
+func TestVerifyGateDigestOpcional(t *testing.T) {
+	engine := vgRun(t, "R", 3)
+	defer engine.Close()
+	engine.WorkflowReady("R")
+	engine.CompleteWorkflowStep("R", "check", "hecho", StepDone, "")
+	if _, _, err := engine.VerifyWorkflowStep("R", "check", true, "", ""); err != nil {
+		t.Fatalf("sin digest declarado el veredicto debe pasar igual que antes: %v", err)
+	}
+}
+
 // verify sobre un step que no está en verifying es error.
 func TestVerifyGateNonVerifyingErrors(t *testing.T) {
 	engine := vgRun(t, "R", 3)
 	defer engine.Close()
 	// 'a' está done, no verifying.
-	if _, _, err := engine.VerifyWorkflowStep("R", "a", true, ""); err == nil {
+	if _, _, err := engine.VerifyWorkflowStep("R", "a", true, "", ""); err == nil {
 		t.Error("verify sobre un step que no está en verifying debe fallar")
 	}
 }
