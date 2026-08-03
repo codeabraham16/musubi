@@ -225,6 +225,13 @@ func bodyUpdateHandler(dir string) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		// El binario del cuerpo son decenas de MB; el WriteTimeout global del server (pensado
+		// para respuestas chicas de /mcp) podría cortar una descarga legítima por un enlace
+		// lento del tailnet. Estos son archivos estáticos de confianza: limpiamos el deadline
+		// de escritura para no truncarlos. Best-effort (si el server no lo soporta, sigue igual).
+		if rc := http.NewResponseController(w); rc != nil {
+			_ = rc.SetWriteDeadline(time.Time{})
+		}
 		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 	}
 }
@@ -359,9 +366,22 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		// Fail-closed: hay que optar explícitamente (típico tras un proxy que termina TLS).
 		return fmt.Errorf("bind no-loopback %q sin TLS: el bearer token viajaría en texto plano. Configurá service.tls_cert_file/tls_key_file, o seteá service.allow_insecure_token: true si un proxy termina TLS por delante", cfg.Addr)
 	}
+	// Auto-update del cuerpo: validar la raíz ANTES de servir. Sin esto, un valor mal puesto
+	// (dir inexistente, o peor, un archivo/dir sensible) quedaría expuesto en el tailnet sin
+	// auth o daría 404 mudos. Si es inválido, se deshabilita /body/ y se avisa; si es válido,
+	// se loguea la raíz efectiva para que el operador vea qué se está exponiendo.
+	bodyDir := strings.TrimSpace(os.Getenv("MUSUBI_BODY_UPDATE_DIR"))
+	if bodyDir != "" {
+		if fi, err := os.Stat(bodyDir); err != nil || !fi.IsDir() {
+			logx.Warn("musubi: MUSUBI_BODY_UPDATE_DIR no es un directorio válido; /body/ deshabilitado", "dir", bodyDir)
+			bodyDir = ""
+		} else {
+			logx.Info("musubi: auto-update del cuerpo habilitado (GET /body/)", "dir", bodyDir)
+		}
+	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver, bodyDir: strings.TrimSpace(os.Getenv("MUSUBI_BODY_UPDATE_DIR"))}),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver, bodyDir: bodyDir}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,

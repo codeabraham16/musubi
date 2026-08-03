@@ -37,7 +37,18 @@ func fetch(raw string, out io.Writer) error {
 	if err := allowedFetchURL(raw); err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 120 * time.Second}
+	// Anti-SSRF en redirects: allowedFetchURL sólo valida la URL INICIAL. Sin esto un host
+	// del tailnet podría redirigir (3xx) a una IP pública/link-local (metadata de cloud, LAN)
+	// y `fetch` la seguiría, anulando la garantía "sólo tailnet". Revalidamos cada salto.
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("demasiados redirects")
+			}
+			return allowedFetchURL(req.URL.String())
+		},
+	}
 	resp, err := client.Get(raw)
 	if err != nil {
 		return err
