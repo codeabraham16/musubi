@@ -53,6 +53,11 @@ type httpOptions struct {
 	// `token` de arriba). Es un principalResolver: recargable en caliente (Track 18) cuando
 	// hay archivo, o el registro estático en modo legacy.
 	registry principalResolver
+	// bodyDir, si no es vacío, habilita GET /body/<archivo>: sirve el manifiesto + binarios
+	// del auto-update del cuerpo (musubi-body) desde ese directorio. SIN auth (como /readyz):
+	// la frontera es el tailnet. Es la contraparte de `musubi fetch` (canal de update por la
+	// malla). Vacío ⇒ la ruta no se registra.
+	bodyDir string
 }
 
 // HTTPHandler devuelve el http.Handler que sirve MCP sobre HTTP. POST /mcp recibe un
@@ -155,6 +160,12 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", s.readyzHandler)
 
+	// Auto-update del cuerpo por la malla: sirve manifest + binarios desde bodyDir, sin
+	// auth (la frontera es el tailnet, como /readyz). Solo si está configurado.
+	if opt.bodyDir != "" {
+		mux.HandleFunc("/body/", bodyUpdateHandler(opt.bodyDir))
+	}
+
 	// Métricas: datos operativos (uso por tool, profundidad del outbox, gauges de la DB). Detrás de
 	// auth SIEMPRE que la auth esté activa. SEGURIDAD (auditoría 2026-07-26 #9): antes gateaba sólo por
 	// opt.token, así que en el setup multi-tenant recomendado (principals.yaml, sin token legacy) el
@@ -178,6 +189,44 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		_, _ = w.Write([]byte(metrics.render(s.engine)))
 	})
 	return mux
+}
+
+// bodyUpdateHandler sirve archivos de dir bajo GET /body/<archivo> (manifest + binarios
+// del auto-update del cuerpo). ANTI-TRAVERSAL: la ruta se limpia contra la raíz y se
+// verifica con filepath.Rel que el destino quede DENTRO de dir; cualquier `..` o escape
+// da 404. Solo GET/HEAD; no lista directorios. Sin auth (frontera = tailnet).
+func bodyUpdateHandler(dir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/body/")
+		if name == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// Clean("/"+name) neutraliza los `..` (no puede subir por encima de la raíz);
+		// el chequeo con Rel es la garantía extra de que no se escapa de dir.
+		full := filepath.Join(dir, filepath.Clean("/"+name))
+		if rel, err := filepath.Rel(dir, full); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		f, err := os.Open(full)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil || fi.IsDir() {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+	}
 }
 
 // writeHTTPJSON serializa una respuesta JSON-RPC al ResponseWriter. Reporta fallos de
@@ -312,7 +361,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver}),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver, bodyDir: strings.TrimSpace(os.Getenv("MUSUBI_BODY_UPDATE_DIR"))}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,
