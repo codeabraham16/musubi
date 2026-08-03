@@ -86,6 +86,8 @@ func main() {
 		fmt.Printf("musubi %s\n", version)
 	case "update":
 		runUpdate()
+	case "fetch":
+		runFetch(os.Args[2:])
 	case "calibrate":
 		runCalibrate(os.Args[2:])
 	default:
@@ -133,6 +135,7 @@ func printUsage() {
 
 	section("Binario")
 	cmd("update", "Descarga el último release, verifica el checksum y se auto-reemplaza")
+	cmd("fetch <url>", "Baja una URL del tailnet a stdout (transporte de auto-update del cuerpo)")
 	cmd("version", "Muestra la versión del binario")
 
 	section("Hooks (uso interno de Claude Code)")
