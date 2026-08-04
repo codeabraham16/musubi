@@ -63,16 +63,16 @@ func runDoctor(args []string) {
 	}
 
 	if check != "" {
-		res := memory.CheckResult{}
+		var res memory.CheckResult
 		if check == cognitionGatewayCheckCode {
 			res = cognitionGatewayCheck(root)
 		} else {
-			var err error
-			res, err = engine.RunCheck(check)
+			r, err := engine.RunCheck(check)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
+			res = r
 		}
 		if asJSON {
 			printJSON(res)
