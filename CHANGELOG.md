@@ -8,6 +8,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Portero de privacidad entre la memoria y cualquier LLM externo.** Hasta ahora, encender el pilar
+  de Cognición mandaba el texto de la memoria **tal cual** al motor: un token `msb_`, una clave de
+  API o una contraseña dentro de un connection string cruzaban la red sin más. Ahora todo motor real
+  nace envuelto en un portero que **tapa los secretos antes de salir y los repone en la respuesta**,
+  así el modelo razona sobre `[[MSB:ai-provider-key:1]]` y nunca ve el valor. La detección no se
+  duplicó: la decide `internal/redact`, que ya estaba auditado, y el paquete nuevo
+  (`internal/privacy`) sólo agrega lo que le faltaba para este uso — poder deshacerse. El envoltorio
+  se aplica dentro de `cognition.NewProvider`, el único constructor del pilar, así que **no hay forma
+  de esquivarlo**, tampoco desde código futuro. Configurable con `cognition.gateway.mode`: `scrub`
+  (default, tapa y repone), `refuse` (si hay un secreto no manda nada — para motores en los que no se
+  confía, como los tiers gratis que entrenan con lo que reciben) y `off` (hay que escribirlo, y avisa
+  por log). Un modo mal escrito **apaga el pilar entero** en vez de caer en silencio a "sin
+  protección": falla cerrado, porque sin motor no hay frontera que cruzar. El camino model-free queda
+  bit-idéntico: sin motor configurado no se envuelve nada. Ver `specs/gateway-privacidad-cognicion/`.
+- **`musubi doctor` ahora diagnostica el portero** (check `cognition_gateway`). Una guarda de
+  privacidad apagada sólo se veía en el log de arranque de un daemon — es decir, no se veía. El check
+  informa el motor y el modo efectivo, y se pone **en rojo** si el portero está en `off`, con la
+  línea de config que hay que quitar para volver al default protegido. Con el pilar apagado avisa en
+  amarillo si el modo está mal escrito, para que el error aparezca ahora y no el día que se encienda.
 - **Prueba estructural en el gate de verificación.** El gate NO congelaba nada: un step en
   `verifying` podía re-completarse, pisar su resultado y hacer que el veredicto en curso aterrizara
   sobre bytes distintos de los revisados — quedaba `done` sin que nadie verificara lo que finalmente

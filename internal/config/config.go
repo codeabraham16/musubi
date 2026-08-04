@@ -491,6 +491,29 @@ type CognitionConfig struct {
 	// ReadTimeRerankTopK es cuántos candidatos del tope se someten al juez (el resto queda intacto
 	// al final). 0 ⇒ default interno. Acota latencia y costo: el juez nunca ve todo el recall.
 	ReadTimeRerankTopK int `yaml:"read_time_rerank_top_k,omitempty"`
+	// Gateway es el portero de privacidad que se para entre la memoria y el motor externo. A
+	// diferencia del resto del pilar, nace ENCENDIDO: es una guarda de seguridad, y el default
+	// seguro es estar protegido. No rompe la bit-identidad model-free porque sólo actúa cuando la
+	// cognición ya está encendida (que sí es opt-in).
+	Gateway GatewayConfig `yaml:"gateway,omitempty"`
+}
+
+// GatewayConfig configura el portero de privacidad de la cognición: qué hacer con los secretos que
+// aparecen en el texto que Musubi está por mandarle a un LLM externo.
+//
+// El default (Mode vacío ⇒ "scrub") protege. Quedarse sin portero exige escribirlo, y avisa.
+type GatewayConfig struct {
+	// Mode es la política ante un secreto detectado:
+	//
+	//	scrub  (default) tapa el secreto con un marcador reversible, manda, y repone en la respuesta.
+	//	refuse           si hay un secreto, NO manda nada y devuelve error. Para motores en los que
+	//	                 no se confía (p.ej. tiers gratis que entrenan con lo que reciben).
+	//	off              sin portero. Hay que escribirlo a mano y deja aviso en el log.
+	//
+	// Un valor desconocido NO cae a un default silencioso: NewProvider devuelve error y el pilar
+	// entero queda apagado (model-free). Es falla-cerrado — sin motor no hay frontera que cruzar —
+	// y se ve en el log de arranque. Una config mal escrita no puede terminar en "sin protección".
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).

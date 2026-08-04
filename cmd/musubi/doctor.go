@@ -5,8 +5,34 @@ import (
 	"fmt"
 	"os"
 
+	"musubi/internal/cognition"
+	"musubi/internal/config"
 	"musubi/internal/memory"
 )
+
+// cognitionGatewayCheckCode es el código del check del portero de privacidad.
+//
+// Vive acá y no en el registry de internal/memory a propósito: los checks de ahí diagnostican la
+// BASE DE DATOS, y el portero es una propiedad de la CONFIG. Meterlo en el engine obligaría a que
+// la memoria conozca la cognición, que es exactamente el acoplamiento que el pilar evita.
+const cognitionGatewayCheckCode = "cognition_gateway"
+
+// cognitionGatewayCheck traduce el estado del portero a un check del diagnóstico.
+//
+// Sin esto, apagar la única guarda de privacidad del pilar sólo se veía en el log de arranque de un
+// daemon — es decir, no se veía. Un riesgo que nadie mira no está mitigado.
+func cognitionGatewayCheck(root string) memory.CheckResult {
+	cfg, err := config.Load(root)
+	if err != nil {
+		return memory.CheckResult{
+			Code:    cognitionGatewayCheckCode,
+			Status:  "error",
+			Message: fmt.Sprintf("no se pudo leer la config para diagnosticar el portero: %v", err),
+		}
+	}
+	st := cognition.InspectGateway(cfg.Cognition)
+	return memory.CheckResult{Code: cognitionGatewayCheckCode, Status: st.Status, Message: st.Message}
+}
 
 // runDoctor implementa el comando 'musubi doctor':
 //
@@ -37,10 +63,16 @@ func runDoctor(args []string) {
 	}
 
 	if check != "" {
-		res, err := engine.RunCheck(check)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
+		res := memory.CheckResult{}
+		if check == cognitionGatewayCheckCode {
+			res = cognitionGatewayCheck(root)
+		} else {
+			var err error
+			res, err = engine.RunCheck(check)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
 		}
 		if asJSON {
 			printJSON(res)
@@ -57,6 +89,13 @@ func runDoctor(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al diagnosticar: %v\n", err)
 		os.Exit(1)
+	}
+	// El portero se suma al reporte y puede ensuciar el estado global: una guarda de privacidad
+	// apagada ES un problema del proyecto, aunque la base esté impecable.
+	gw := cognitionGatewayCheck(root)
+	rep.Checks = append(rep.Checks, gw)
+	if gw.Status != "ok" {
+		rep.Status = "issues"
 	}
 	if asJSON {
 		printJSON(rep)

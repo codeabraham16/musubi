@@ -34,6 +34,28 @@ mode: local # local | team
 #   provider: static      # none | static | ollama
 #   model: potion-multilingual-128M
 
+# --- Cognición (3er pilar) -----------------------------------------------------------------------
+# OPT-IN y removible: sin `provider`, el cerebro es 100% model-free y se comporta igual que siempre.
+# El LLM propone, el cerebro determinístico dispone: si el motor se cae, alucina o se lo bloquea,
+# todo degrada al camino model-free — nunca se rompe.
+# cognition:
+#   provider: openai-compat          # "" | none (model-free) | openai-compat
+#   model: claude-sonnet-4-5         # se estampa como PROCEDENCIA de lo que el motor produzca
+#   endpoint: http://127.0.0.1:4000/v1
+#   auth_token_env: MUSUBI_COGNITION_TOKEN  # el NOMBRE de la env var; el secreto nunca va acá
+#
+#   # Portero de privacidad: se para entre la memoria y el motor externo.
+#   # A diferencia del resto del pilar, nace ENCENDIDO — es una guarda de seguridad, y el default
+#   # seguro es estar protegido. Sólo actúa cuando la cognición ya está encendida.
+#   gateway:
+#     mode: scrub   # scrub (default) | refuse | off
+#     #   scrub  tapa cada secreto con un marcador reversible ([[MSB:tipo:n]]), manda, y lo repone
+#     #          en la respuesta. El modelo razona igual; nunca ve el valor.
+#     #   refuse si detecta un secreto NO manda nada y devuelve error. Para motores en los que no se
+#     #          confía — p. ej. tiers gratis que ENTRENAN con lo que reciben.
+#     #   off    sin portero. Hay que escribirlo a mano y deja aviso en el log de arranque.
+#     # Un valor desconocido apaga el pilar entero (falla-cerrado), no cae a "sin protección".
+
 # --- Sync con el cerebro central -----------------------------------------------------------------
 # Lo escribe `musubi provision`. El token NUNCA va acá: se nombra la variable de entorno que lo tiene.
 # sync:
