@@ -17,7 +17,9 @@ Toda salida de texto desde Musubi hacia un motor de cognición externo, es decir
 
 Fuera de alcance en F1 (queda anotado, no silenciado): los proveedores de **embeddings**
 (`internal/embedding`) también pueden mandar texto afuera. Se trata en su propia fase para no
-mezclar dos superficies con contratos distintos.
+mezclar dos superficies con contratos distintos — ver `specs/gateway-privacidad-embeddings/`, que
+además **corrige dos afirmaciones equivocadas de esta spec** sobre el tamaño de ese hueco y sobre
+qué política le corresponde.
 
 ---
 

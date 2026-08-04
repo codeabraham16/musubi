@@ -107,6 +107,15 @@ func TestNewProviderFactory(t *testing.T) {
 	if oll.Name() != "ollama:m" {
 		t.Errorf("esperaba ollama:m, obtuve %q", oll.Name())
 	}
+	// Y ese Name() lo delega el PORTERO: hay que verificar además que abajo esté el motor real,
+	// porque si no, un envoltorio que no envolviera nada pasaría este test igual.
+	gOll, ok := oll.(guarded)
+	if !ok {
+		t.Fatalf("ollama salió de la fábrica sin portero: %T", oll)
+	}
+	if _, ok := gOll.inner.(*OllamaProvider); !ok {
+		t.Fatalf("el portero de ollama envuelve algo que no es el motor: %T", gOll.inner)
+	}
 
 	oai, err := NewProvider(config.EmbeddingConfig{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536})
 	if err != nil {
@@ -115,8 +124,17 @@ func TestNewProviderFactory(t *testing.T) {
 	if oai.Name() != "openai:text-embedding-3-small" {
 		t.Errorf("esperaba openai:text-embedding-3-small, obtuve %q", oai.Name())
 	}
+	gOai, ok := oai.(guarded)
+	if !ok {
+		t.Fatalf("openai salió de la fábrica sin portero: %T", oai)
+	}
+	if _, ok := gOai.inner.(*OpenAIProvider); !ok {
+		t.Fatalf("el portero de openai envuelve algo que no es el motor: %T", gOai.inner)
+	}
+	// El envoltorio no puede cambiar si la semántica cuenta como encendida: es lo que consultan
+	// todos los call sites antes de embeber.
 	if !Enabled(oai) {
-		t.Error("OpenAIProvider debería contar como Enabled")
+		t.Error("un OpenAIProvider envuelto debería seguir contando como Enabled")
 	}
 
 	if _, err := NewProvider(config.EmbeddingConfig{Provider: "desconocido"}); err == nil {

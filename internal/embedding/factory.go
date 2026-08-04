@@ -10,6 +10,20 @@ import (
 // NewProvider construye el Provider adecuado según la configuración.
 // Por defecto (provider vacío o "none") devuelve NoopProvider.
 func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
+	base, err := newBaseProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	// EL PORTERO SE PONE ACÁ, Y NO EN EL CALLER, A PROPÓSITO: este es el único constructor del
+	// embedder, así que todo proveedor con red nace envuelto — el de hoy y el que se agregue
+	// mañana. Además hace que el texto que se INDEXA y el que se CONSULTA pasen por el mismo
+	// objeto, que es lo que garantiza la coherencia índice↔consulta (invariante E2).
+	return newGuarded(base, cfg.Gateway.Mode)
+}
+
+// newBaseProvider arma el embedder desnudo, sin portero. Separado de NewProvider para que quede
+// imposible construir uno sin pasar por el envoltorio.
+func newBaseProvider(cfg config.EmbeddingConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "", "none":
 		return NoopProvider{}, nil

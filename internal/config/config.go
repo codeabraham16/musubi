@@ -35,6 +35,13 @@ type EmbeddingConfig struct {
 	// model2vec/POTION) para el provider "static": embeddings model-free AT INFERENCE
 	// (lookup + mean-pool, sin runtime de modelo ni cgo). Bring-your-own-table.
 	StaticPath string `yaml:"static_path,omitempty"`
+	// Gateway es el portero de privacidad que se para entre el texto de Musubi y un embedder que
+	// habla por un socket (`ollama`, `openai`). Nace ENCENDIDO, como el de la cognición: es una
+	// guarda de seguridad y el default seguro es estar protegido.
+	//
+	// No afecta a `none` ni a `static`: esos no mandan texto a ningún lado, así que no hay frontera
+	// que cuidar y el camino sin red queda bit-idéntico.
+	Gateway GatewayConfig `yaml:"gateway,omitempty"`
 }
 
 // SourcingConfig controla la obtención automática de skills desde un catálogo remoto.
@@ -514,6 +521,32 @@ type GatewayConfig struct {
 	// entero queda apagado (model-free). Es falla-cerrado — sin motor no hay frontera que cruzar —
 	// y se ve en el log de arranque. Una config mal escrita no puede terminar en "sin protección".
 	Mode string `yaml:"mode,omitempty"`
+}
+
+// Modos del portero de privacidad. Valen igual para la cognición y para los embeddings.
+const (
+	GatewayModeScrub  = "scrub"  // default: tapar el secreto antes de que salga
+	GatewayModeRefuse = "refuse" // si hay un secreto, no se manda nada
+	GatewayModeOff    = "off"    // sin portero (explícito y ruidoso)
+)
+
+// NormalizeGatewayMode valida el modo y devuelve el efectivo ("" ⇒ scrub).
+//
+// Vive en config y no en un pilar porque los DOS pilares que tienen portero —cognición y
+// embeddings— la usan. Es la única fuente de verdad sobre qué modos existen: agregar uno no puede
+// dejar a uno de los dos desactualizado, ni permitir que signifiquen cosas distintas en cada lado.
+func NormalizeGatewayMode(mode string) (string, error) {
+	switch mode {
+	case "", GatewayModeScrub:
+		return GatewayModeScrub, nil
+	case GatewayModeRefuse:
+		return GatewayModeRefuse, nil
+	case GatewayModeOff:
+		return GatewayModeOff, nil
+	default:
+		return "", fmt.Errorf("gateway.mode desconocido: %q (usá %q, %q u %q)",
+			mode, GatewayModeScrub, GatewayModeRefuse, GatewayModeOff)
+	}
 }
 
 // Config es la configuración del workspace (.musubi/config.yaml).

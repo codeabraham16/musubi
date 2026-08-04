@@ -396,12 +396,21 @@ cognition:                      # 3er pilar: OPT-IN. Sin provider, el cerebro es
 
 ### El portero de privacidad
 
-Cuando la cognición está encendida, **ningún secreto detectable sale hacia el motor**. El portero se
-instala dentro del único constructor del pilar, así que todo motor —el de hoy y el que se agregue
-mañana— nace protegido; no existe una versión sin él que alguien pueda tomar por error.
+**Ningún secreto detectable sale de Musubi sin taparse.** Hay dos superficies por las que el texto
+puede irse a un servicio externo, y cada una tiene su portero:
 
-En `scrub` (el default) cada secreto se reemplaza por un marcador reversible antes de salir y se
-repone al volver:
+| Superficie | Config | Qué sale por ahí |
+|---|---|---|
+| Motor de cognición (LLM) | `cognition.gateway.mode` | prompts de `musubi_ask` y del juez del recall |
+| Proveedor de embeddings | `embedding.gateway.mode` | lo que se guarda **y las consultas** |
+
+Los dos porteros se instalan dentro del **único constructor** de su pilar, así que todo proveedor
+—el de hoy y el que se agregue mañana— nace protegido; no existe una versión sin él que alguien
+pueda tomar por error. Los que no abren un socket (`none`, `static`) no se envuelven: sin frontera
+no hay nada que cuidar, y ese camino queda bit-idéntico.
+
+En `scrub` (el default) cada secreto se reemplaza antes de salir. Del lado de la cognición el
+marcador es **reversible**, y se repone al volver:
 
 ```
 entrada:   "usá la clave sk-ant-api03-REAL para autenticar"
@@ -414,18 +423,27 @@ El modelo razona igual. Nunca vio el valor. `Restore` sólo repone marcadores qu
 acuñó, así que un motor malicioso no puede inventar un marcador para hacer aparecer un secreto que
 nunca recibió.
 
+Del lado de los **embeddings** no hace falta vuelta: lo que devuelven es un vector, no texto. Ahí el
+secreto se reemplaza por `[REDACTED:<tipo>]` y se embebe el texto tapado — que es exactamente el
+vector que uno quiere guardar. Como el portero está en el constructor, el texto que se **indexa** y
+el que se **consulta** pasan por la misma transformación, así que tapar no degrada la búsqueda.
+
 | Modo | Cuándo |
 |---|---|
-| `scrub` | **Default.** Tapa, manda, repone |
-| `refuse` | Si hay un secreto no manda nada y devuelve error. Para motores en los que no se confía — p. ej. tiers gratis que **entrenan con lo que reciben** |
+| `scrub` | **Default.** Tapa antes de salir (y repone, en la cognición) |
+| `refuse` | Si hay un secreto no manda nada y devuelve error. Para servicios en los que no se confía — p. ej. tiers gratis que **entrenan con lo que reciben** |
 | `off` | Sin portero. Hay que escribirlo a mano, avisa por log y deja `musubi doctor` en rojo |
 
 Un modo desconocido apaga el pilar entero (falla-cerrado): una config mal escrita no puede terminar
-en «sin protección». `musubi doctor --check cognition_gateway` informa el motor y el modo efectivo.
+en «sin protección».
 
-Lo que el portero **no** cubre: datos sensibles sin forma de secreto (el nombre de un cliente, una
-decisión de negocio) y los proveedores de *embeddings*, que son una segunda superficie de salida con
-su propio contrato.
+```bash
+musubi doctor --check cognition_gateway
+musubi doctor --check embedding_gateway
+```
+
+Lo que los porteros **no** cubren: datos sensibles **sin forma de secreto** (el nombre de un cliente,
+una decisión de negocio). Eso es juicio semántico, no detección determinista.
 
 > El catálogo curado y el catálogo cosechado del marketplace viven en el repo
 > [`musubi-skills`](https://github.com/codeabraham16/musubi-skills); por eso el sourcing funciona

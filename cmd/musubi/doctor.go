@@ -7,31 +7,51 @@ import (
 
 	"musubi/internal/cognition"
 	"musubi/internal/config"
+	"musubi/internal/embedding"
 	"musubi/internal/memory"
 )
 
-// cognitionGatewayCheckCode es el código del check del portero de privacidad.
+// Códigos de los checks que diagnostican la CONFIG en vez de la base de datos.
 //
-// Vive acá y no en el registry de internal/memory a propósito: los checks de ahí diagnostican la
-// BASE DE DATOS, y el portero es una propiedad de la CONFIG. Meterlo en el engine obligaría a que
-// la memoria conozca la cognición, que es exactamente el acoplamiento que el pilar evita.
-const cognitionGatewayCheckCode = "cognition_gateway"
+// Viven acá y no en el registry de internal/memory a propósito: los de allá diagnostican la BASE DE
+// DATOS. Meter estos ahí obligaría a que la memoria conozca la cognición y los embeddings, que es
+// exactamente el acoplamiento que los pilares evitan.
+const (
+	cognitionGatewayCheckCode = "cognition_gateway"
+	embeddingGatewayCheckCode = "embedding_gateway"
+)
 
-// cognitionGatewayCheck traduce el estado del portero a un check del diagnóstico.
+// configChecks diagnostica los dos porteros de privacidad: el que se para frente al motor de
+// cognición y el que se para frente al proveedor de embeddings.
 //
-// Sin esto, apagar la única guarda de privacidad del pilar sólo se veía en el log de arranque de un
-// daemon — es decir, no se veía. Un riesgo que nadie mira no está mitigado.
-func cognitionGatewayCheck(root string) memory.CheckResult {
+// Sin esto, apagar una guarda de privacidad sólo se veía en el log de arranque de un daemon — es
+// decir, no se veía. Un riesgo que nadie mira no está mitigado.
+func configChecks(root string) []memory.CheckResult {
 	cfg, err := config.Load(root)
 	if err != nil {
-		return memory.CheckResult{
-			Code:    cognitionGatewayCheckCode,
-			Status:  "error",
-			Message: fmt.Sprintf("no se pudo leer la config para diagnosticar el portero: %v", err),
+		msg := fmt.Sprintf("no se pudo leer la config para diagnosticar el portero: %v", err)
+		return []memory.CheckResult{
+			{Code: cognitionGatewayCheckCode, Status: "error", Message: msg},
+			{Code: embeddingGatewayCheckCode, Status: "error", Message: msg},
 		}
 	}
-	st := cognition.InspectGateway(cfg.Cognition)
-	return memory.CheckResult{Code: cognitionGatewayCheckCode, Status: st.Status, Message: st.Message}
+	cg := cognition.InspectGateway(cfg.Cognition)
+	eg := embedding.InspectGateway(cfg.Embedding)
+	return []memory.CheckResult{
+		{Code: cognitionGatewayCheckCode, Status: cg.Status, Message: cg.Message},
+		{Code: embeddingGatewayCheckCode, Status: eg.Status, Message: eg.Message},
+	}
+}
+
+// configCheck devuelve el check de config con ese código, o ok=false si el código no es de los
+// que miran la config (y entonces le toca al engine).
+func configCheck(root, code string) (memory.CheckResult, bool) {
+	for _, c := range configChecks(root) {
+		if c.Code == code {
+			return c, true
+		}
+	}
+	return memory.CheckResult{}, false
 }
 
 // runDoctor implementa el comando 'musubi doctor':
@@ -64,8 +84,8 @@ func runDoctor(args []string) {
 
 	if check != "" {
 		var res memory.CheckResult
-		if check == cognitionGatewayCheckCode {
-			res = cognitionGatewayCheck(root)
+		if c, esDeConfig := configCheck(root, check); esDeConfig {
+			res = c
 		} else {
 			r, err := engine.RunCheck(check)
 			if err != nil {
@@ -90,12 +110,13 @@ func runDoctor(args []string) {
 		fmt.Fprintf(os.Stderr, "Error al diagnosticar: %v\n", err)
 		os.Exit(1)
 	}
-	// El portero se suma al reporte y puede ensuciar el estado global: una guarda de privacidad
+	// Los porteros se suman al reporte y pueden ensuciar el estado global: una guarda de privacidad
 	// apagada ES un problema del proyecto, aunque la base esté impecable.
-	gw := cognitionGatewayCheck(root)
-	rep.Checks = append(rep.Checks, gw)
-	if gw.Status != "ok" {
-		rep.Status = "issues"
+	for _, c := range configChecks(root) {
+		rep.Checks = append(rep.Checks, c)
+		if c.Status != "ok" {
+			rep.Status = "issues"
+		}
 	}
 	if asJSON {
 		printJSON(rep)

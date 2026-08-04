@@ -31,8 +31,20 @@ mode: local # local | team
 # --- Semántica (embeddings) ----------------------------------------------------------------------
 # Sin provider, la búsqueda es léxica (FTS). La tabla estática se baja con `musubi embed pull`.
 # embedding:
-#   provider: static      # none | static | ollama
+#   provider: static      # none | static | ollama | openai
 #   model: potion-multilingual-128M
+#
+#   # Portero de privacidad, igual que el de la cognición. Sólo aplica a los providers que hablan
+#   # por un socket (`ollama`, `openai`): `none` y `static` no mandan texto a ningún lado.
+#   # OJO: acá viajan también las CONSULTAS, no sólo lo que se guarda.
+#   gateway:
+#     mode: scrub   # scrub (default) | refuse | off
+#     #   scrub  reemplaza cada secreto por [REDACTED:<tipo>] antes de embeber. No hay vuelta que
+#     #          dar: un embedder devuelve un vector, y el vector del texto tapado es justo el que
+#     #          se quiere guardar.
+#     #   refuse si detecta un secreto no embebe y devuelve error. OJO: en save_observation un
+#     #          error de embedding aborta el guardado — es fail-closed a propósito.
+#     #   off    sin portero. Deja aviso en el log y `musubi doctor` en rojo.
 
 # --- Cognición (3er pilar) -----------------------------------------------------------------------
 # OPT-IN y removible: sin `provider`, el cerebro es 100% model-free y se comporta igual que siempre.
