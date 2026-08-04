@@ -384,15 +384,56 @@ sourcing:
   enabled: true
   catalog_url: https://raw.githubusercontent.com/codeabraham16/musubi-skills/main/index.json
   marketplace_enabled: false    # opt-in: descubrimiento de Agent Skills externas
+
+cognition:                      # 3er pilar: OPT-IN. Sin provider, el cerebro es 100% model-free
+  provider: openai-compat       # "" | none | openai-compat
+  model: claude-sonnet-4-5      # se estampa como PROCEDENCIA de lo que el motor produzca
+  endpoint: http://127.0.0.1:4000/v1
+  auth_token_env: MUSUBI_COGNITION_TOKEN
+  gateway:
+    mode: scrub                 # portero de privacidad: scrub (default) | refuse | off
 ```
+
+### El portero de privacidad
+
+Cuando la cognición está encendida, **ningún secreto detectable sale hacia el motor**. El portero se
+instala dentro del único constructor del pilar, así que todo motor —el de hoy y el que se agregue
+mañana— nace protegido; no existe una versión sin él que alguien pueda tomar por error.
+
+En `scrub` (el default) cada secreto se reemplaza por un marcador reversible antes de salir y se
+repone al volver:
+
+```
+entrada:   "usá la clave sk-ant-api03-REAL para autenticar"
+al motor:  "usá la clave [[MSB:ai-provider-key:1]] para autenticar"
+respuesta: "poné [[MSB:ai-provider-key:1]] en el header"
+al caller: "poné sk-ant-api03-REAL en el header"
+```
+
+El modelo razona igual. Nunca vio el valor. `Restore` sólo repone marcadores que *esa* llamada
+acuñó, así que un motor malicioso no puede inventar un marcador para hacer aparecer un secreto que
+nunca recibió.
+
+| Modo | Cuándo |
+|---|---|
+| `scrub` | **Default.** Tapa, manda, repone |
+| `refuse` | Si hay un secreto no manda nada y devuelve error. Para motores en los que no se confía — p. ej. tiers gratis que **entrenan con lo que reciben** |
+| `off` | Sin portero. Hay que escribirlo a mano, avisa por log y deja `musubi doctor` en rojo |
+
+Un modo desconocido apaga el pilar entero (falla-cerrado): una config mal escrita no puede terminar
+en «sin protección». `musubi doctor --check cognition_gateway` informa el motor y el modo efectivo.
+
+Lo que el portero **no** cubre: datos sensibles sin forma de secreto (el nombre de un cliente, una
+decisión de negocio) y los proveedores de *embeddings*, que son una segunda superficie de salida con
+su propio contrato.
 
 > El catálogo curado y el catálogo cosechado del marketplace viven en el repo
 > [`musubi-skills`](https://github.com/codeabraham16/musubi-skills); por eso el sourcing funciona
 > sin que mantengas un índice local. Apuntá `catalog_url` a tu propio repo para curar el tuyo.
 
 Otros bloques disponibles (con defaults): `maintenance` (consolidación + olvido + retención),
-`graph`, `conflicts`, `pipeline`, `multiagent`, `vector_index` (índice IVF), `startup`, `update`
-y `service` (transporte HTTP opt-in, solo loopback).
+`graph`, `conflicts`, `pipeline`, `multiagent`, `vector_index` (índice IVF), `startup`, `update`,
+`sync` (cerebro central) y `service` (transporte HTTP opt-in, solo loopback).
 
 ---
 

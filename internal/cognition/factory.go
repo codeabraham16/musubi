@@ -14,6 +14,21 @@ import (
 // OpenAI-compatible (F3.5b). Cualquier provider desconocido es un error explícito (fail-closed),
 // no un Noop silencioso, para no ocultar una config equivocada.
 func NewProvider(cfg config.CognitionConfig) (Provider, error) {
+	base, err := newBaseProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	// EL PORTERO SE PONE ACÁ, Y NO EN EL CALLER, A PROPÓSITO: este es el único constructor del
+	// pilar, así que todo motor real nace envuelto — el de hoy y el que se agregue mañana. Un
+	// caller nuevo no puede olvidarse de pasar por el portero porque no existe una versión sin él.
+	// newGuarded devuelve el Provider tal cual si es el NoopProvider (nada que cuidar) o si el modo
+	// es "off", y falla explícito ante un modo desconocido.
+	return newGuarded(base, cfg.Gateway.Mode)
+}
+
+// newBaseProvider arma el motor desnudo, sin portero. Separado de NewProvider para que quede
+// imposible construir uno sin pasar por el envoltorio.
+func newBaseProvider(cfg config.CognitionConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "", "none":
 		return NoopProvider{}, nil

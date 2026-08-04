@@ -124,6 +124,11 @@ func TestOpenAICompatAskAPIError(t *testing.T) {
 
 // TestFactoryBuildsOpenAICompat: provider 'openai-compat' arma el motor real y lee la master key
 // de la env var nombrada en auth_token_env (nunca del yaml).
+//
+// ACTUALIZADO junto con el portero de privacidad (specs/gateway-privacidad-cognicion): NewProvider
+// ya no devuelve el motor desnudo sino ENVUELTO en el gateway, porque un motor real sin portero
+// dejaría salir secretos. El test ahora afirma las dos cosas —que está envuelto y que adentro está
+// el motor correcto con su key— que es una garantía más fuerte que la anterior.
 func TestFactoryBuildsOpenAICompat(t *testing.T) {
 	t.Setenv("COG_TEST_KEY", "sk-cog-fromenv")
 	p, err := NewProvider(config.CognitionConfig{
@@ -138,9 +143,16 @@ func TestFactoryBuildsOpenAICompat(t *testing.T) {
 	if !Enabled(p) {
 		t.Fatal("openai-compat debería estar habilitado")
 	}
-	oc, ok := p.(*OpenAICompatProvider)
+	g, ok := p.(guarded)
 	if !ok {
-		t.Fatalf("esperaba *OpenAICompatProvider, obtuve %T", p)
+		t.Fatalf("el motor real tenía que salir de fábrica ENVUELTO en el portero, obtuve %T", p)
+	}
+	if g.mode != GatewayModeScrub {
+		t.Errorf("el modo por defecto tenía que ser %q, fue %q", GatewayModeScrub, g.mode)
+	}
+	oc, ok := g.inner.(*OpenAICompatProvider)
+	if !ok {
+		t.Fatalf("dentro del portero esperaba *OpenAICompatProvider, obtuve %T", g.inner)
 	}
 	if oc.apiKey != "sk-cog-fromenv" {
 		t.Errorf("apiKey=%q, esperaba la de la env var", oc.apiKey)
