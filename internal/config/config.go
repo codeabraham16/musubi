@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -503,6 +504,96 @@ type CognitionConfig struct {
 	// seguro es estar protegido. No rompe la bit-identidad model-free porque sólo actúa cuando la
 	// cognición ya está encendida (que sí es opt-in).
 	Gateway GatewayConfig `yaml:"gateway,omitempty"`
+	// Fleet es la flota ordenada de motores (F2). Vacía ⇒ se usa el motor único de los campos de
+	// arriba y no se instancia ningún router: el comportamiento es bit-idéntico al de F1.
+	//
+	// Con flota, el router prueba los motores EN ORDEN, saltea los que el circuit breaker tiene
+	// abiertos, y escala al siguiente cuando uno se niega por política.
+	Fleet []FleetEngineConfig `yaml:"fleet,omitempty"`
+	// Breaker configura el circuit breaker por motor de la flota.
+	Breaker BreakerConfig `yaml:"breaker,omitempty"`
+}
+
+// Tiers de confianza de un motor de la flota.
+const (
+	// TierFree es un motor en el que NO se confía: típicamente un tier gratis que entrena con lo
+	// que recibe. Es el DEFAULT a propósito — asumir "no confiable" es la dirección segura, y
+	// confiar en algo tiene que declararse.
+	TierFree = "free"
+	// TierPrivate es un motor de confianza (p. ej. un endpoint propio en loopback o en la tailnet).
+	TierPrivate = "private"
+)
+
+// FleetEngineConfig es un motor de la flota. Repite los campos del motor único a propósito: cada
+// entrada se construye con la MISMA fábrica, así todo lo que vale para un motor vale para todos.
+type FleetEngineConfig struct {
+	// Name identifica el motor en los logs y en el diagnóstico. Vacío ⇒ se deriva del motor.
+	Name                  string `yaml:"name,omitempty"`
+	Provider              string `yaml:"provider,omitempty"`
+	Model                 string `yaml:"model,omitempty"`
+	Endpoint              string `yaml:"endpoint,omitempty"`
+	AuthTokenEnv          string `yaml:"auth_token_env,omitempty"`
+	RequestTimeoutSeconds int    `yaml:"request_timeout_seconds,omitempty"`
+	// Tier es la confianza que se le tiene a este motor: free (default) o private.
+	Tier string `yaml:"tier,omitempty"`
+	// Gateway fuerza el modo del portero de ESTE motor. Vacío ⇒ se deriva del tier: `free` nace en
+	// `refuse` (un secreto no va a un motor en el que no se confía) y `private` en `scrub`.
+	Gateway GatewayConfig `yaml:"gateway,omitempty"`
+}
+
+// BreakerConfig configura el circuit breaker por motor.
+type BreakerConfig struct {
+	// Failures son las fallas CONSECUTIVAS que abren el circuito (0 ⇒ default 3). Una respuesta
+	// exitosa resetea el contador.
+	Failures int `yaml:"failures,omitempty"`
+	// CooldownSeconds es cuánto queda el motor fuera de la rotación (0 ⇒ default 60). Vencido,
+	// entra UNA sola llamada de prueba (half-open).
+	CooldownSeconds int `yaml:"cooldown_seconds,omitempty"`
+}
+
+// EffectiveFailures aplica el default sin que el caller tenga que conocerlo.
+func (b BreakerConfig) EffectiveFailures() int {
+	if b.Failures <= 0 {
+		return 3
+	}
+	return b.Failures
+}
+
+// EffectiveCooldown aplica el default sin que el caller tenga que conocerlo.
+func (b BreakerConfig) EffectiveCooldown() time.Duration {
+	if b.CooldownSeconds <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(b.CooldownSeconds) * time.Second
+}
+
+// NormalizeTier valida el tier y devuelve el efectivo ("" ⇒ free).
+//
+// El default es el conservador: un motor sin tier declarado se trata como NO confiable, así que su
+// portero nace en `refuse` y un texto con secretos nunca le llega. Equivocarse por omisión no puede
+// terminar en "le confié a un servicio que entrena con mis datos".
+func NormalizeTier(tier string) (string, error) {
+	switch tier {
+	case "", TierFree:
+		return TierFree, nil
+	case TierPrivate:
+		return TierPrivate, nil
+	default:
+		return "", fmt.Errorf("tier desconocido: %q (usá %q o %q)", tier, TierFree, TierPrivate)
+	}
+}
+
+// DefaultGatewayModeForTier es la regla dura del roadmap hecha estructura: un motor en el que no se
+// confía nace RECHAZANDO los textos con secretos, no tapándolos.
+//
+// Que sea un default y no una imposición es deliberado: tapar antes de mandar a un tier gratis es
+// una decisión legítima del dueño de los datos (tapado no hay fuga de credenciales), pero tiene que
+// escribirse a mano y el doctor la muestra.
+func DefaultGatewayModeForTier(tier string) string {
+	if tier == TierPrivate {
+		return GatewayModeScrub
+	}
+	return GatewayModeRefuse
 }
 
 // GatewayConfig configura el portero de privacidad de la cognición: qué hacer con los secretos que

@@ -445,6 +445,51 @@ musubi doctor --check embedding_gateway
 Lo que los porteros **no** cubren: datos sensibles **sin forma de secreto** (el nombre de un cliente,
 una decisión de negocio). Eso es juicio semántico, no detección determinista.
 
+### Flota de motores y circuit breaker
+
+En vez de un motor único podés declarar una **flota ordenada**. El router prueba de arriba a abajo,
+saltea los que están caídos y **escala de tier** cuando uno se niega:
+
+```yaml
+cognition:
+  fleet:
+    - name: groq
+      provider: openai-compat
+      endpoint: https://api.groq.com/openai/v1
+      model: llama-3.3-70b-versatile
+      auth_token_env: GROQ_API_KEY
+      tier: free        # free (default) | private
+    - name: max
+      provider: openai-compat
+      endpoint: http://127.0.0.1:4000/v1
+      model: claude-sonnet-4-5
+      tier: private
+  breaker:
+    failures: 3
+    cooldown_seconds: 60
+```
+
+`tier: free` significa «no confío en este servicio», y hace que su portero nazca en **`refuse`**. La
+consecuencia es la regla que hace todo esto usable:
+
+```
+Ask("… la clave es AKIA… …")
+  ├─ groq (free, refuse)   ──► se niega, NO salió a la red   → el router escala
+  └─ max  (private, scrub) ──► sale tapado, responde
+```
+
+Un secreto **nunca** llega a un servicio que entrena con lo que recibe — y si no hay ningún motor
+`private`, no se manda a ninguno: el router se agota y todo degrada a model-free. El router no sabe
+qué es un secreto; sólo sabe qué hacer cuando un motor dice «esto no lo mando».
+
+Un motor que falla `failures` veces seguidas queda fuera de la rotación por `cooldown_seconds`, y
+después recibe **una sola** llamada de prueba. **Negarse por política no cuenta como falla**: un
+motor que rechaza un secreto está sano, y si contara, tres prompts con secretos apagarían un motor
+perfectamente bueno.
+
+Si toda la flota está caída, la cognición devuelve un error explícito y Musubi sigue funcionando
+model-free. El LLM es un acelerador, nunca el camino crítico.
+
 > El catálogo curado y el catálogo cosechado del marketplace viven en el repo
 > [`musubi-skills`](https://github.com/codeabraham16/musubi-skills); por eso el sourcing funciona
 > sin que mantengas un índice local. Apuntá `catalog_url` a tu propio repo para curar el tuyo.
