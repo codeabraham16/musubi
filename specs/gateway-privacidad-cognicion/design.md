@@ -113,14 +113,19 @@ llamadas concurrentes. Por eso `Session` **no necesita mutex**: no se comparte.
 
 **Los embeddings son una segunda salida, y F1 no la cubre.** Verificado en el código:
 `internal/embedding/factory.go` ofrece `ollama` y `openai`/`openai-compatible`, que mandan el texto
-a un endpoint. Si ese endpoint es remoto, el texto sale sin pasar por este portero. Queda para su
-propia fase: el contrato de un embedder es distinto (devuelve un vector, no texto, así que **no hay
-nada que rehidratar** — ahí la política correcta es `refuse` o un embedder local, no `scrub`).
+a un endpoint.
 
-Mientras tanto hay una segunda capa que sí cubre el destino final: `redact.Redact` ya se aplica en
-el camino de guardado y de sync (`internal/mcp/methods.go:1705`, `internal/memory/inboundsync.go:94`,
-`internal/memory/operations.go:316`, `internal/memory/scope.go:124`). Si una respuesta rehidratada
-terminara guardándose, el secreto se tapa antes de llegar a la memoria compartida.
+> **Corrección (F1.5).** Acá decía además que la política correcta para los embeddings sería
+> "`refuse` o un embedder local, no `scrub`". También estaba mal: que no haya nada que rehidratar
+> vuelve el problema **más simple**, no imposible. `scrub` es la política correcta y es el default,
+> con la redacción de una sola vía que `internal/redact` ya hace.
+
+> **Corrección (F1.5).** Acá decía que `redact.Redact`, aplicado en cuatro puntos del camino de
+> guardado y sync, "mitigaba parcialmente" esta superficie. **Es falso**, y se verificó leyendo el
+> código: los cuatro puntos están condicionados a `scope == shared` o a `forceRedact` (que es el flag
+> del cerebro central). Protegen lo que se **guarda como compartido**, no lo que sale hacia el
+> embedder. En un workspace local el contenido sale crudo, y las **queries no están protegidas en
+> ninguna configuración**. El hueco se cierra en `specs/gateway-privacidad-embeddings/`.
 
 El gateway protege contra **fuga de credenciales por forma**. No protege contra:
 

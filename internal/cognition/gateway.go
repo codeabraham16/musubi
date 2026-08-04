@@ -10,11 +10,12 @@ import (
 	"musubi/internal/privacy"
 )
 
-// Modos del portero de privacidad. Ver GatewayConfig en internal/config.
+// Modos del portero de privacidad. Son ALIAS de los de config, no copias: los mismos tres modos
+// valen para la cognición y para los embeddings, y tienen que significar lo mismo en los dos lados.
 const (
-	GatewayModeScrub  = "scrub"  // default: tapar y reponer
-	GatewayModeRefuse = "refuse" // si hay secreto, no se manda nada
-	GatewayModeOff    = "off"    // sin portero (explícito y ruidoso)
+	GatewayModeScrub  = config.GatewayModeScrub  // default: tapar y reponer
+	GatewayModeRefuse = config.GatewayModeRefuse // si hay secreto, no se manda nada
+	GatewayModeOff    = config.GatewayModeOff    // sin portero (explícito y ruidoso)
 )
 
 // ErrSecretsBlocked se devuelve en modo `refuse` cuando el texto que iba a salir contenía un
@@ -141,20 +142,16 @@ func newGuarded(p Provider, mode string) (Provider, error) {
 
 // normalizeGatewayMode valida el modo y devuelve el efectivo ("" ⇒ scrub).
 //
-// Es la ÚNICA fuente de verdad sobre qué modos existen: la usan el constructor y el diagnóstico,
-// así que agregar un modo nuevo no puede dejar a uno de los dos desactualizado.
+// Delega en config.NormalizeGatewayMode, que es la ÚNICA fuente de verdad sobre qué modos existen:
+// la comparten los DOS pilares con portero (cognición y embeddings), así que agregar un modo no
+// puede dejar a uno desactualizado ni permitir que signifiquen cosas distintas en cada lado
+// (invariante E6). Acá sólo se le pone el prefijo de la clave de config al mensaje de error.
 func normalizeGatewayMode(mode string) (string, error) {
-	switch mode {
-	case "", GatewayModeScrub:
-		return GatewayModeScrub, nil
-	case GatewayModeRefuse:
-		return GatewayModeRefuse, nil
-	case GatewayModeOff:
-		return GatewayModeOff, nil
-	default:
-		return "", fmt.Errorf("cognition.gateway.mode desconocido: %q (usá %q, %q u %q)",
-			mode, GatewayModeScrub, GatewayModeRefuse, GatewayModeOff)
+	effective, err := config.NormalizeGatewayMode(mode)
+	if err != nil {
+		return "", fmt.Errorf("cognition.%w", err)
 	}
+	return effective, nil
 }
 
 // GatewayStatus es el estado del portero para un diagnóstico legible.

@@ -268,6 +268,49 @@ func TestSesionRealEsLaQueSeUsaPorDefecto(t *testing.T) {
 	}
 }
 
+// --- E6: los modos son los mismos que los de config -----------------------------------------
+
+func TestE6LosModosNoSePuedenDespegarDeConfig(t *testing.T) {
+	// Si estas constantes o esta validación se despegaran de config, la misma palabra en el yaml
+	// significaría cosas distintas para la cognición y para los embeddings.
+	if GatewayModeScrub != config.GatewayModeScrub ||
+		GatewayModeRefuse != config.GatewayModeRefuse ||
+		GatewayModeOff != config.GatewayModeOff {
+		t.Fatal("las constantes de modo de cognition se despegaron de las de config")
+	}
+	// Enumerar unos pocos modos NO alcanza: una divergencia se cuela por cualquier palabra que la
+	// lista no contenga (lo comprobé saboteando — con una lista corta el sabotaje pasó limpio).
+	// Se prueba contra un corpus: palabras que un dev podría elegir de verdad, más ruido
+	// pseudoaleatorio determinista (LCG con semilla fija, así el test es reproducible en CI).
+	corpus := []string{
+		"", "scrub", "refuse", "off", "on", "auto", "none", "disabled", "enabled", "silencioso",
+		"quiet", "silent", "strict", "safe", "seguro", "apagado", "prendido", "true", "false", "0",
+		"1", "SCRUB", "Off", "scub", "refus", "scrub ", " off", "scrub,refuse", "default",
+	}
+	seed := uint32(20260804)
+	for i := 0; i < 400; i++ {
+		seed = seed*1664525 + 1013904223
+		n := int(seed>>28) + 1
+		b := make([]byte, n)
+		for j := range b {
+			seed = seed*1664525 + 1013904223
+			b[j] = byte('a' + seed%26)
+		}
+		corpus = append(corpus, string(b))
+	}
+
+	for _, m := range corpus {
+		valCfg, errCfg := config.NormalizeGatewayMode(m)
+		valCog, errCog := normalizeGatewayMode(m)
+		if (errCfg == nil) != (errCog == nil) {
+			t.Fatalf("el modo %q lo acepta uno y lo rechaza el otro (config=%v, cognition=%v)", m, errCfg, errCog)
+		}
+		if errCfg == nil && valCfg != valCog {
+			t.Fatalf("el modo %q se resuelve distinto: config=%q, cognition=%q", m, valCfg, valCog)
+		}
+	}
+}
+
 // --- Diagnóstico: InspectGateway (musubi doctor) --------------------------------------------
 
 func cfgMotorReal(modo string) config.CognitionConfig {

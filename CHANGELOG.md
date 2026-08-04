@@ -22,7 +22,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   por log). Un modo mal escrito **apaga el pilar entero** en vez de caer en silencio a "sin
   protección": falla cerrado, porque sin motor no hay frontera que cruzar. El camino model-free queda
   bit-idéntico: sin motor configurado no se envuelve nada. Ver `specs/gateway-privacidad-cognicion/`.
-- **`musubi doctor` ahora diagnostica el portero** (check `cognition_gateway`). Una guarda de
+- **El portero también cubre los embeddings**, que eran la segunda superficie por la que el texto se
+  iba a un servicio externo. Al ir a cerrar ese hallazgo resultó **más grande de lo anotado**: los
+  cuatro puntos donde `redact` ya se aplicaba están condicionados a `scope == shared` o a
+  `forceRedact` (el flag del cerebro central), así que en un workspace normal el contenido salía
+  crudo hacia el embedder — y **las consultas no estaban protegidas en ninguna configuración**. Ahora
+  todo embedder que hable por un socket (`ollama`, `openai`) nace envuelto, con `embedding.gateway.mode`
+  y los mismos tres modos. `none` y `static` no se tocan: no mandan texto a ningún lado. Acá no hay
+  nada que rehidratar —un embedder devuelve un vector—, así que alcanza con la redacción de una vía,
+  que además es determinista: el mismo texto da el mismo vector. Y como el portero vive en el
+  constructor, lo que se indexa y lo que se consulta pasan por la misma transformación, así que tapar
+  no degrada la búsqueda. Ver `specs/gateway-privacidad-embeddings/`.
+- **`musubi doctor` ahora diagnostica los dos porteros** (checks `cognition_gateway` y
+  `embedding_gateway`). Una guarda de
   privacidad apagada sólo se veía en el log de arranque de un daemon — es decir, no se veía. El check
   informa el motor y el modo efectivo, y se pone **en rojo** si el portero está en `off`, con la
   línea de config que hay que quitar para volver al default protegido. Con el pilar apagado avisa en
