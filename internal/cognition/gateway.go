@@ -170,6 +170,9 @@ type GatewayStatus struct {
 // Reusa newBaseProvider y normalizeGatewayMode a propósito, para que el diagnóstico no pueda
 // divergir de lo que el constructor realmente hace.
 func InspectGateway(cfg config.CognitionConfig) GatewayStatus {
+	if len(cfg.Fleet) > 0 {
+		return inspectFleet(cfg)
+	}
 	base, err := newBaseProvider(cfg)
 	if err != nil {
 		return GatewayStatus{Status: "error", Message: fmt.Sprintf("el pilar de cognición no arranca: %v", err)}

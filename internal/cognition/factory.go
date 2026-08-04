@@ -14,6 +14,14 @@ import (
 // OpenAI-compatible (F3.5b). Cualquier provider desconocido es un error explícito (fail-closed),
 // no un Noop silencioso, para no ocultar una config equivocada.
 func NewProvider(cfg config.CognitionConfig) (Provider, error) {
+	// Con flota declarada manda el router (F2). Sin flota no se instancia nada nuevo: el camino de
+	// motor único queda bit-idéntico al de F1 (invariante C6).
+	//
+	// El router construye cada motor con esta misma fábrica, incluido el portero, así que la
+	// garantía de F1 —no existe un motor real sin envolver— sigue valiendo dentro de la flota.
+	if len(cfg.Fleet) > 0 {
+		return newRouter(cfg, nil)
+	}
 	base, err := newBaseProvider(cfg)
 	if err != nil {
 		return nil, err

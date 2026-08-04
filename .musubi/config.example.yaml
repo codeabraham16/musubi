@@ -67,6 +67,36 @@ mode: local # local | team
 #     #          confía — p. ej. tiers gratis que ENTRENAN con lo que reciben.
 #     #   off    sin portero. Hay que escribirlo a mano y deja aviso en el log de arranque.
 #     # Un valor desconocido apaga el pilar entero (falla-cerrado), no cae a "sin protección".
+#
+#   # --- Flota (F2) ---------------------------------------------------------------------------
+#   # En vez de un motor único, una lista ORDENADA. El router prueba de arriba a abajo, saltea los
+#   # que el circuit breaker tiene abiertos, y ESCALA al siguiente cuando uno se niega por política.
+#   # Sin `fleet`, se usa el motor único de arriba y no se instancia ningún router.
+#   fleet:
+#     - name: groq
+#       provider: openai-compat
+#       endpoint: https://api.groq.com/openai/v1
+#       model: llama-3.3-70b-versatile
+#       auth_token_env: GROQ_API_KEY
+#       tier: free        # free (DEFAULT) | private
+#       # `tier: free` hace que el portero de ESTE motor nazca en `refuse`: si el texto lleva un
+#       # secreto, no se manda y el router pasa al siguiente. Es la regla dura hecha estructura —
+#       # un secreto nunca llega a un servicio que entrena con lo que recibe.
+#     - name: max
+#       provider: openai-compat
+#       endpoint: http://127.0.0.1:4000/v1
+#       model: claude-sonnet-4-5
+#       auth_token_env: MUSUBI_COGNITION_TOKEN
+#       tier: private     # de confianza (loopback) ⇒ su portero nace en `scrub`
+#
+#   # Si NO hay ningún motor `private`, un texto con secretos no se manda a ninguno: el router
+#   # devuelve agotamiento y el caller degrada a model-free. Es el "en duda, fallback local".
+#
+#   breaker:
+#     failures: 3           # fallas CONSECUTIVAS que abren el circuito (default 3)
+#     cooldown_seconds: 60  # cuánto queda fuera de la rotación (default 60); después entra UNA
+#                           # sola llamada de prueba (half-open)
+#   # Negarse por política NO cuenta como falla: un motor que rechaza un secreto está sano.
 
 # --- Sync con el cerebro central -----------------------------------------------------------------
 # Lo escribe `musubi provision`. El token NUNCA va acá: se nombra la variable de entorno que lo tiene.

@@ -22,6 +22,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   por log). Un modo mal escrito **apaga el pilar entero** en vez de caer en silencio a "sin
   protección": falla cerrado, porque sin motor no hay frontera que cruzar. El camino model-free queda
   bit-idéntico: sin motor configurado no se envuelve nada. Ver `specs/gateway-privacidad-cognicion/`.
+- **Flota de motores de cognición con router y circuit breaker.** En vez de un motor único se puede
+  declarar una lista ordenada con `cognition.fleet`: el router prueba de arriba a abajo, saltea los
+  que el breaker tiene abiertos y devuelve la primera respuesta. Un motor que falla N veces seguidas
+  queda fuera por un cooldown y después recibe **una sola** llamada de prueba; si toda la flota está
+  caída, la cognición falla explícito y Musubi sigue model-free.
+
+  Lo que hace usable la flota gratis es cómo se resuelve la regla dura *«un secreto no va a un
+  servicio que entrena con lo que recibe»*: un motor `tier: free` nace con su portero en `refuse`, y
+  el router trata esa negativa **no como una falla sino como una señal de ruteo** — escala al
+  siguiente tier. El router no sabe qué es un secreto; sólo sabe qué hacer cuando un motor dice «esto
+  no lo mando». Si no hay ningún motor `private`, el texto no se manda a ninguno. `tier` default es
+  `free`: asumir "no confiable" es la dirección segura, y confiar se declara. Sin `fleet`, el
+  comportamiento es bit-idéntico al del motor único. Ver `specs/router-y-circuit-breaker/`.
 - **El portero también cubre los embeddings**, que eran la segunda superficie por la que el texto se
   iba a un servicio externo. Al ir a cerrar ese hallazgo resultó **más grande de lo anotado**: los
   cuatro puntos donde `redact` ya se aplicaba están condicionados a `scope == shared` o a
