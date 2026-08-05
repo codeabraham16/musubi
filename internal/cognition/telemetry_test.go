@@ -120,8 +120,11 @@ func TestD6ContarNoCambiaLaRespuesta(t *testing.T) {
 // --- D7: seguro bajo concurrencia (las carreras las verifica la CI con -race) -----------------
 
 func TestD7LosContadoresNoPierdenIncrementos(t *testing.T) {
-	sp := &spy{answer: "ok"}
-	g, _ := newGuarded(sp, GatewayModeScrub)
+	// Usa `espia` y NO `spy`: el spy de F1 escribe sus campos sin lock porque nació para tests
+	// secuenciales. Llamarlo desde 8 goroutines es una carrera EN EL TEST, no en el portero — la
+	// encontró la CI con -race, que es exactamente para lo que la spec dice que sirve.
+	e := &espia{}
+	g, _ := newGuarded(e, GatewayModeScrub)
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
