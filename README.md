@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>47 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>48 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,7 +325,7 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **47 herramientas**, agrupadas por dominio:
+El servidor expone **48 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
@@ -441,6 +441,45 @@ en «sin protección».
 musubi doctor --check cognition_gateway
 musubi doctor --check embedding_gateway
 ```
+
+### El dial de potencia
+
+Una sola perilla en vez de cuatro:
+
+```yaml
+cognition:
+  effort: balanced   # eco | balanced | turbo
+```
+
+| | `eco` | `balanced` | `turbo` |
+|---|---|---|---|
+| Juez del recall | apagado | apagado | **prendido** (top-K 12) |
+| TTL del caché | 1 día | 1 hora | 15 min |
+
+Dos cosas que no son obvias y son a propósito:
+
+- **`balanced` deja el juez apagado.** Es el default y tiene que ser el que no sorprende: el juez
+  corre en el camino caliente del recall. Un default que lo enciende no es "balanceado".
+- **Más potencia ⇒ TTL más corto.** Quien pide `turbo` quiere respuestas frescas y las paga; quien
+  pide `eco` prefiere una de ayer antes que una llamada.
+
+**Lo que escribas a mano le gana al dial.** Si ponés `read_time_rerank: false` y `effort: turbo`, el
+juez queda apagado. Agregar `effort` a una config existente nunca le cambia el comportamiento en
+silencio, y sin `effort` no se aplica ningún preset.
+
+### Medir si todo esto sirve
+
+```
+musubi_cognition_stats
+```
+
+Devuelve hits/misses y tasa de acierto del caché, cuántas veces actuó el portero y qué **tipos** de
+secreto tapó —nunca los valores—, y las escaladas del router con los circuitos abiertos. Read-only:
+leer no resetea nada.
+
+Es una tool y no un check de `musubi doctor` por un motivo concreto: los contadores viven en memoria
+del **daemon**, y el CLI es otro proceso. El doctor reportaría ceros para siempre — un número
+convincente y falso.
 
 ### El caché de cognición
 
@@ -590,7 +629,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 47 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 48 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

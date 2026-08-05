@@ -173,6 +173,14 @@
       }
     },
     {
+      "name": "musubi_cognition_stats",
+      "description": "Contadores del pilar de Cognición: hits/misses del caché y su tasa de acierto, cuántas veces actuó el portero de privacidad y qué TIPOS de secreto tapó (nunca los valores), escaladas del router de flota y qué circuitos están abiertos. Read-only: leer no resetea nada. Con la cognición apagada devuelve enabled=false, que es un estado normal y no un error. Sirve para responder con datos si el caché rinde, si el portero actúa seguido o nunca, y qué motor de la flota se está cayendo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
       "name": "musubi_recall_facts",
       "description": "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
       "inputSchema": {

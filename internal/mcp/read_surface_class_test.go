@@ -156,6 +156,9 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_sync_status":     true, // estado del outbox (no por-proyecto)
 		"musubi_phase":           true, // pipeline de fases de la sesion
 		"musubi_whoami":          true, // identidad del propio principal (nunca datos de otro tenant)
+		// Contadores EN MEMORIA del proceso (F5): no lee ninguna tabla, así que no hay nada que
+		// scopear. Y por invariante D5 nunca contiene un secreto, sólo conteos y TIPOS.
+		"musubi_cognition_stats": true,
 	}
 
 	for i := range s.tools {

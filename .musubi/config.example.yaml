@@ -51,6 +51,20 @@ mode: local # local | team
 # El LLM propone, el cerebro determinístico dispone: si el motor se cae, alucina o se lo bloquea,
 # todo degrada al camino model-free — nunca se rompe.
 # cognition:
+#   # DIAL DE POTENCIA (F5): una perilla en vez de coordinar cuatro a mano. Es un PRESET sobre las
+#   # perillas de abajo, no maquinaria nueva.
+#   #
+#   #   eco       juez del recall APAGADO, caché de 1 día. El LLM sólo cuando lo invocás.
+#   #   balanced  juez APAGADO, caché de 1 hora. Es el default del dial, y deja el camino
+#   #             caliente del recall en paz a propósito.
+#   #   turbo     juez PRENDIDO (top-K 12), caché de 15 min. Más potencia ⇒ TTL más CORTO:
+#   #             quien pide turbo quiere respuestas frescas y las paga.
+#   #
+#   # LO QUE ESCRIBAS A MANO LE GANA AL DIAL. Con `effort: turbo` y `read_time_rerank: false`, el
+#   # juez queda apagado. Sin `effort` no se aplica ningún preset y todo queda como estaba.
+#   # Un valor desconocido ROMPE EL ARRANQUE: mejor no arrancar que arrancar con otra potencia.
+#   effort: balanced                 # eco | balanced | turbo
+#
 #   provider: openai-compat          # "" | none (model-free) | openai-compat
 #   model: claude-sonnet-4-5         # se estampa como PROCEDENCIA de lo que el motor produzca
 #   endpoint: http://127.0.0.1:4000/v1

@@ -28,6 +28,22 @@ type engine struct {
 // se entera de que abajo hay más de un motor.
 type router struct {
 	engines []*engine
+	// stats cuenta escaladas y agotamientos (F5). Nunca guarda prompts ni respuestas.
+	stats *routerStats
+}
+
+// reportStats suma lo del router, el estado de los circuitos, y sigue hacia adentro de cada motor
+// para juntar lo que cuenta el portero de cada uno (F5).
+func (r *router) reportStats(st *CognitionStats) {
+	r.stats.snapshot(st)
+	for _, e := range r.engines {
+		if e.breaker.open() {
+			st.OpenCircuits = append(st.OpenCircuits, e.name)
+		}
+		if sr, ok := e.inner.(statsReporter); ok {
+			sr.reportStats(st)
+		}
+	}
 }
 
 // Name nombra a la flota entera. La procedencia REAL de una respuesta la estampa el motor que la
@@ -63,6 +79,7 @@ func (r *router) Ask(ctx context.Context, system, user string) (string, error) {
 			// secretos seguidos apagarían un motor sano.
 			e.breaker.abstain()
 			seNego = true
+			r.stats.escalated()
 			logx.Info("router: el motor se negó por política, se escala al siguiente",
 				"motor", e.name, "tier", e.tier)
 
@@ -74,10 +91,12 @@ func (r *router) Ask(ctx context.Context, system, user string) (string, error) {
 
 		default:
 			e.breaker.failure()
+			r.stats.escalated()
 			logx.Warn("router: motor caído, se prueba el siguiente",
 				"motor", e.name, "error", err)
 		}
 	}
+	r.stats.ranOut()
 
 	// Agotada la flota. Se distingue "no te lo mando" de "no hay motor": el caller decide distinto
 	// (con lo primero no tiene sentido reintentar el mismo texto).
@@ -182,5 +201,5 @@ func newRouter(cfg config.CognitionConfig, now func() time.Time) (Provider, erro
 	if len(engines) == 0 {
 		return nil, errors.New("cognition.fleet está declarada pero vacía")
 	}
-	return &router{engines: engines}, nil
+	return &router{engines: engines, stats: &routerStats{}}, nil
 }

@@ -186,12 +186,26 @@ func (c *cached) Ask(ctx context.Context, system, user string) (string, error) {
 	return answer, nil
 }
 
-// Stats devuelve hits y misses acumulados. Es la superficie que va a consumir la telemetría de F5:
-// sin números no hay forma de saber si el caché sirve o es decoración.
+// Stats devuelve hits y misses acumulados. Es la superficie que consume la telemetría de F5: sin
+// números no hay forma de saber si el caché sirve o es decoración.
 func (c *cached) Stats() (hits, misses int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.hits, c.misses
+}
+
+// reportStats suma lo del caché y sigue hacia adentro (F5).
+func (c *cached) reportStats(st *CognitionStats) {
+	c.mu.Lock()
+	st.CacheHits += c.hits
+	st.CacheMisses += c.misses
+	st.CacheSize += c.lru.Len()
+	inner := c.inner
+	c.mu.Unlock() // se suelta ANTES de bajar: la capa de adentro toma su propio lock
+
+	if r, ok := inner.(statsReporter); ok {
+		r.reportStats(st)
+	}
 }
 
 // Len es cuántas entradas hay guardadas. Para los tests del desalojo.
