@@ -366,7 +366,10 @@ func TestInspectGatewayNoLeMienteAlConstructor(t *testing.T) {
 		p, err := NewProvider(cfg)
 		envuelto := false
 		if err == nil {
-			_, envuelto = p.(guarded)
+			// Se desenvuelve el caché de F3, que va POR FUERA del portero. Lo que este
+			// invariante protege es que el doctor no mienta sobre si HAY portero, y eso se
+			// sigue verificando igual de fuerte.
+			_, envuelto = unwrapCache(p).(guarded)
 		}
 
 		if diceProtegido != envuelto {

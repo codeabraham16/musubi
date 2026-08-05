@@ -512,7 +512,42 @@ type CognitionConfig struct {
 	Fleet []FleetEngineConfig `yaml:"fleet,omitempty"`
 	// Breaker configura el circuit breaker por motor de la flota.
 	Breaker BreakerConfig `yaml:"breaker,omitempty"`
+	// Cache es el caché de respuestas del motor (F3): responde sin llamar cuando ya se preguntó
+	// lo mismo. Como el portero, sólo actúa cuando la cognición ya está encendida, así que no
+	// afecta la bit-identidad del camino model-free.
+	Cache CacheConfig `yaml:"cache,omitempty"`
 }
+
+// CacheConfig configura el caché de cognición (F3).
+type CacheConfig struct {
+	// Enabled: nace ENCENDIDO cuando hay motor real. Ahorrar una llamada idéntica no tiene
+	// contraindicación, y el pilar entero ya es opt-in.
+	//
+	// Es *bool y no bool para distinguir "no lo escribieron" (⇒ default true) de "lo apagaron
+	// a propósito" (false). Con un bool pelado, el cero de Go haría que omitir el bloque
+	// apagara el caché, que es lo contrario del default que se quiere.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// MaxEntries es la cota DURA de entradas. Al llegar se desaloja la usada hace más tiempo,
+	// UNA, no todas. 0 ⇒ default interno; negativo con el caché encendido es error de config,
+	// no un default silencioso: un caché sin cota es una fuga de memoria con nombre amable.
+	MaxEntries int `yaml:"max_entries,omitempty"`
+	// TTLSeconds vence las entradas. 0 ⇒ sin vencimiento.
+	//
+	// El vencimiento importa menos de lo que parece porque el prompt de `musubi_ask` LLEVA
+	// ADENTRO la memoria recuperada: si la memoria cambia, cambia el prompt y por lo tanto la
+	// clave. El TTL cubre lo que esa propiedad no cubre — que el motor mismo mejore, o que la
+	// respuesta dependa de algo que no está en el prompt.
+	TTLSeconds int `yaml:"ttl_seconds,omitempty"`
+}
+
+// CacheEnabled resuelve el default de Enabled: ausente ⇒ true.
+func (c CacheConfig) CacheEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// DefaultCacheMaxEntries es la cota por defecto. 512 es el mismo número que usaba el rerankCache
+// que este caché reemplaza, así que no cambia el perfil de memoria de una instalación existente.
+const DefaultCacheMaxEntries = 512
 
 // Tiers de confianza de un motor de la flota.
 const (

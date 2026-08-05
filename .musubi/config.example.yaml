@@ -97,6 +97,24 @@ mode: local # local | team
 #     cooldown_seconds: 60  # cuánto queda fuera de la rotación (default 60); después entra UNA
 #                           # sola llamada de prueba (half-open)
 #   # Negarse por política NO cuenta como falla: un motor que rechaza un secreto está sano.
+#
+#   # --- Caché de respuestas (F3) ---------------------------------------------------------------
+#   # Responde sin llamar al motor cuando ya se preguntó EXACTAMENTE lo mismo. Nace ENCENDIDO
+#   # cuando hay motor real: ahorrarse una llamada idéntica no tiene contraindicación.
+#   #
+#   # Es un caché EXACTO, no semántico: no busca preguntas "parecidas". Un hit por similitud
+#   # devolvería la respuesta de OTRA pregunta, y eso necesita su propio umbral medido.
+#   #
+#   # Va por FUERA del portero de privacidad, así que guarda prompts y respuestas crudos EN
+#   # MEMORIA (nunca en disco). Es contenido que el proceso ya tiene en RAM porque salió de la
+#   # base local; lo que agrega es tiempo de retención.
+#   cache:
+#     enabled: true         # default true. Ponerlo en false lo saca del todo (bit-idéntico a antes)
+#     max_entries: 512      # cota DURA. Al llegar desaloja la usada hace más tiempo, UNA, no todas.
+#                           # <= 0 es error de config: un caché sin cota es una fuga de memoria
+#     ttl_seconds: 3600     # 0 = sin vencimiento. Importa menos de lo que parece: el prompt de
+#                           # musubi_ask LLEVA ADENTRO la memoria recuperada, así que si la memoria
+#                           # cambia, cambia la clave. El TTL cubre lo que eso no cubre
 
 # --- Sync con el cerebro central -----------------------------------------------------------------
 # Lo escribe `musubi provision`. El token NUNCA va acá: se nombra la variable de entorno que lo tiene.

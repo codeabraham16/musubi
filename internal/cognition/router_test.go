@@ -438,8 +438,14 @@ func TestC6SinFlotaNoHayRouter(t *testing.T) {
 	if _, esRouter := p2.(*router); esRouter {
 		t.Fatal("con motor único no tenía que instanciarse un router")
 	}
-	if _, esGuarded := p2.(guarded); !esGuarded {
-		t.Fatalf("el motor único dejó de venir envuelto: %T", p2)
+	// Desde F3 el motor viene además envuelto en el caché, que va POR FUERA del portero. Se
+	// desenvuelve en vez de aflojar la aserción: lo que este invariante protege —que el motor
+	// único NUNCA salga sin portero (garantía de F1)— sigue verificándose igual de fuerte.
+	if _, esCache := p2.(*cached); !esCache {
+		t.Fatalf("con el caché encendido por default, el motor único debía venir cacheado: %T", p2)
+	}
+	if _, esGuarded := unwrapCache(p2).(guarded); !esGuarded {
+		t.Fatalf("el motor único dejó de venir envuelto por el portero: %T", unwrapCache(p2))
 	}
 }
 
