@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>48 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>50 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,13 +325,14 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **48 herramientas**, agrupadas por dominio:
+El servidor expone **50 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
 | **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) · `musubi_ask` (respuesta razonada sobre la memoria, RAG; opt-in) |
+| **Cuarentena de escritura** | `musubi_propose_observation` (todo lo que generó un LLM entra acá, invisible al recall) · `musubi_corroborate` (única salida; conserva el sello de procedencia) |
 | **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
 | **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
@@ -498,6 +499,42 @@ Y uno que conviene saber: el caché va **por fuera** del portero, así que guard
 crudos **en memoria** — nunca en disco. Ponerlo adentro habría evitado eso, pero el contador de
 marcadores del portero reintenta ante colisiones del texto crudo, y dos sesiones con el mismo prompt
 tapado pueden numerar distinto: la respuesta cacheada volvería con el secreto equivocado repuesto.
+### La cuarentena de escritura
+
+El portero cuida lo que **sale**. Esto cuida lo que **entra**.
+
+`musubi_ask` sintetiza texto con un LLM. Si esa respuesta se guarda con
+`musubi_save_observation`, queda en la memoria indistinguible de una nota verificada a mano — y la
+memoria es el producto. Por eso todo lo que generó un modelo entra por otra puerta:
+
+```
+musubi_save_observation      → human           visible en el recall
+musubi_propose_observation   → llm:<modelo>    EN CUARENTENA: invisible al recall,
+                                                no se promueve a shared,
+                                                no viaja al cerebro central
+        │
+        └── musubi_corroborate ──→ visible, PERO conserva el sello
+```
+
+**El sello es por dónde entraste, no lo que dijiste ser.** `musubi_propose_observation` no expone
+parámetro de procedencia: lo escribe ella. Un modelo no puede declararse `human` porque la puerta
+por la que escribe no tiene esa perilla.
+
+Corroborar **no lava la procedencia**. Un `llm:groq/llama-3.3` corroborado sigue diciendo de dónde
+salió, y el recall lo sigue marcando. Si corroborar limpiara el sello, duraría hasta la primera vez.
+
+No confundir con dos cosas parecidas:
+
+| | Qué responde |
+|---|---|
+| `provenance` | **qué clase de proceso** generó el contenido (`human` / `deterministic` / `llm:<modelo>`) |
+| `author` | **qué credencial** lo escribió — un agente-LLM y una persona usan la misma, así que no distingue |
+| `musubi_promote` | otro eje: `local → shared`, o sea si viaja al cerebro central |
+
+El recall marca **sólo** lo que no es `human`. Si todas las memorias llegaran etiquetadas, la
+etiqueta sería ruido de fondo y dejaría de leerse.
+
+Sin llamar a la tool nueva no hay una sola fila en cuarentena y todo se comporta como antes.
 
 Lo que los porteros **no** cubren: datos sensibles **sin forma de secreto** (el nombre de un cliente,
 una decisión de negocio). Eso es juicio semántico, no detección determinista.
@@ -629,7 +666,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 48 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 50 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

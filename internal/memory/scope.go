@@ -30,7 +30,20 @@ const (
 // las queries de lectura lo concatenan en vez de repetir el literal inline. El SQL resultante
 // es semánticamente idéntico al anterior (mismo predicado; a lo sumo cambia el prefijo de
 // alias, que es redundante cuando `observations` es la única tabla con esas columnas).
-const visibleObsPredicate = "archived = 0 AND superseded_by IS NULL"
+// `quarantined = 0` se agregó en F4 y es EL punto donde se cumple la Muralla 2: nueve
+// consultas concatenan esta const (recall vectorial y léxico, prime, context, conflicts,
+// consolidate, opstats, backfill de embeddings y la cola del sync saliente), así que una
+// observación en cuarentena queda fuera de TODOS los caminos de recuperación con un solo
+// cambio — y de paso no puede viajar al cerebro central.
+//
+// Escribir el filtro acá y no en cada query es deliberado: la única forma de que una
+// consulta nueva se saltee la cuarentena es NO usar el predicado canónico, y eso es una
+// desviación visible en el diff. Repetir el literal inline dejaría la muralla a merced de
+// que el próximo que escriba una query se acuerde.
+//
+// OJO: `promote` (local → shared) NO pasa por acá. Se bloquea aparte, en
+// PromoteObservationCtx, y tiene test propio.
+const visibleObsPredicate = "archived = 0 AND superseded_by IS NULL AND quarantined = 0"
 
 // ProjectScope acota una lectura a un proyecto para el AISLAMIENTO multi-tenant (Track 17).
 // Federate (o ProjectID vacío) ⇒ SIN filtro: comportamiento federado histórico (stdio local,
@@ -178,6 +191,18 @@ func (e *DbEngine) PromoteObservationCtx(ctx context.Context, id string) error {
 	}
 	if !ok {
 		return fmt.Errorf("%w: no se puede promover %s desde otro proyecto", ErrCrossTenant, id)
+	}
+	// Muralla 2 (F4), segunda vía. La primera —el outbox y toda consulta de recall— ya queda
+	// tapada por `quarantined = 0` dentro de visibleObsPredicate, pero la promoción a 'shared'
+	// NO pasa por ese predicado: es un UPDATE por id. Sin esta guarda, texto de un LLM sin
+	// corroborar viajaría al cerebro central y aparecería como memoria de equipo en las
+	// máquinas de otras personas — el daño que la muralla existe para evitar, multiplicado.
+	quarantined, err := e.IsQuarantined(id)
+	if err != nil {
+		return err
+	}
+	if quarantined {
+		return fmt.Errorf("%w: %s no puede promoverse a 'shared' sin corroborar primero", ErrQuarantined, id)
 	}
 	return e.PromoteObservation(id)
 }

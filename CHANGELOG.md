@@ -44,6 +44,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   pueden numerar distinto y la respuesta cacheada se rehidrataría con el secreto equivocado. El
   costo de la decisión, dicho de frente: el caché guarda prompts y respuestas crudos en memoria
   (nunca en disco).
+- **Cuarentena de escritura y procedencia en el libro mayor.** `musubi_ask` sintetiza texto con un
+  LLM, y hasta ahora nada impedía tomar esa respuesta y guardarla con `musubi_save_observation`:
+  quedaba en la memoria **indistinguible de una nota verificada a mano**. El grafo de hechos ya
+  tenía esta guarda desde el pilar Cognición; el libro mayor no. Ahora cada observación lleva un
+  sello de **procedencia** (`human`, `deterministic` o `llm:<modelo>`) y una **confianza**, y hay
+  una puerta nueva —`musubi_propose_observation`— por la que entra todo lo que generó un modelo:
+  queda **en cuarentena**, o sea que no aparece en ningún recall, no se puede promover a `shared` y
+  no viaja al cerebro central. Sale sólo con `musubi_corroborate`, que **conserva el sello**:
+  corroborar la hace visible, no la convierte en una nota humana. El sello no se puede falsificar
+  porque la tool de cuarentena **no expone** parámetro de procedencia — es *por dónde entraste*, no
+  lo que dijiste ser, la misma decisión estructural que hizo imposible construir un motor sin
+  portero. Ojo con no confundirlo con `author`, que es *qué credencial* escribió: un agente-LLM y
+  una persona usan la misma. El recall marca sólo lo que **no** es `human`, para que la marca
+  signifique algo. Sin llamar a la tool nueva no hay una sola fila en cuarentena y el comportamiento
+  es idéntico al anterior. Ver `specs/cuarentena-escritura-procedencia/`.
+
 - **Portero de privacidad entre la memoria y cualquier LLM externo.** Hasta ahora, encender el pilar
   de Cognición mandaba el texto de la memoria **tal cual** al motor: un token `msb_`, una clave de
   API o una contraseña dentro de un connection string cruzaban la red sin más. Ahora todo motor real
@@ -155,6 +171,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   chat OpenAI-compatible (ej. el proxy que respalda una suscripción por el Agent SDK); la master key se
   lee de la env var nombrada en `cognition.auth_token_env`, nunca del yaml. La interfaz `cognition.Provider`
   gana `Ask()` de forma aditiva. Herramientas MCP: 43 → 44.
+
+### Fixed
+
+- **El grafo neuronal del dashboard mostraba memoria que el recall ya descartaba.** `brainGraphAt`
+  filtraba con un `archived = 0` propio en vez del predicado canónico de visibilidad, así que
+  dibujaba como neuronas las observaciones **reemplazadas** (`superseded_by`) — notas que ya fueron
+  superadas por otra y que ningún recall devuelve. Ahora usa el mismo predicado que todo el resto.
+  Apareció tirando del hilo de la cuarentena: sin este cambio, una observación sin corroborar se
+  habría dibujado en el dashboard.
 
 ## [0.98.2] - 2026-07-28
 
