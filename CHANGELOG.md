@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.99.0] - 2026-08-05
+
 ### Added
 - **Dial de potencia y telemetría de la cognición.** Decidir "cuánto LLM quiero" obligaba a
   entender y coordinar cuatro perillas sueltas; ahora hay una: `cognition.effort` con `eco`,
@@ -23,10 +25,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   secreto tapados (nunca los valores), y escaladas del router con los circuitos abiertos. Es
   read-only: leer no resetea nada.
 
-### Changed
-- `cognition.read_time_rerank` pasó de `bool` a puntero en el YAML. Para el usuario no cambia nada
-  (`true`/`false`/ausente se siguen escribiendo igual), pero internamente permite distinguir "no lo
-  escribieron" de "lo apagaron", que es lo que hace que el dial no pise una decisión explícita.
 - **Caché de respuestas del motor de cognición.** Una pregunta idéntica ya no se paga dos veces:
   cuesta latencia, cuota y —en la flota gratis— rate-limit compartido. Es un caché **exacto**, con
   cota dura y desalojo LRU **de a una** (el `rerankCache` que reemplaza se vaciaba entero al
@@ -180,6 +178,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   superadas por otra y que ningún recall devuelve. Ahora usa el mismo predicado que todo el resto.
   Apareció tirando del hilo de la cuarentena: sin este cambio, una observación sin corroborar se
   habría dibujado en el dashboard.
+
+### Changed
+
+- `cognition.read_time_rerank` pasó de `bool` a puntero en el YAML. Para el usuario no cambia nada
+  (`true`/`false`/ausente se siguen escribiendo igual), pero internamente permite distinguir "no lo
+  escribieron" de "lo apagaron", que es lo que hace que el dial no pise una decisión explícita.
 
 ## [0.98.2] - 2026-07-28
 
