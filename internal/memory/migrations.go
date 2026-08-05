@@ -671,6 +671,46 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 22,
+			name:    "observation_provenance_quarantine",
+			// CUARENTENA DE ESCRITURA Y PROCEDENCIA (Murallas 2+3 · F4). Hasta acá una
+			// observación no decía de dónde salió su contenido. `author` existe pero es
+			// otra cosa: la atribución por credencial del Track C5 (QUÉ persona o máquina
+			// escribió), y un agente-LLM y una persona escriben con la misma credencial.
+			//
+			// Sin esto, la respuesta sintetizada por `musubi_ask` se podía guardar con
+			// `musubi_save_observation` y quedaba en el libro mayor indistinguible de una
+			// nota verificada a mano. Es el mismo agujero que la v20 cerró para el grafo
+			// de hechos con `relations.source`, del lado del libro mayor.
+			//
+			// ADITIVA (patrón v15/v16/v20): ADD COLUMN NOT NULL DEFAULT rellena las filas
+			// existentes sin una pasada de escritura, así que la base vieja queda
+			// bit-idéntica en comportamiento (Q5) y sin filas sin sello (Q1).
+			//
+			// Las filas legacy quedan en 'human'. Es la mejor descripción disponible y no
+			// una verdad verificada: no sabemos qué generó cada una, pero todas entraron
+			// por un camino donde una persona o su agente eligió el contenido, y no había
+			// motor de cognición escribiendo. Marcarlas 'unknown' agregaría ruido a cada
+			// recall para no informar nada.
+			//
+			// SIN ÍNDICE sobre quarantined a propósito: casi todas las filas valen 0, así
+			// que el planificador no usaría un índice de cardinalidad 2 y sólo costaría
+			// escrituras. Viaja pegado a `archived = 0`, que tiene el mismo perfil y
+			// tampoco lo tiene.
+			//
+			// DELEGA en addObservationColumns en vez de repetir la DDL, y no es cosmético:
+			// las tres columnas están TAMBIÉN en la lista de esa función, que es la que arma
+			// el esquema de una base nueva. Con la DDL escrita a mano acá, una base nueva la
+			// recibía por la baseline y después esta migración la volvía a agregar
+			// ⇒ "duplicate column name" y el engine no abría. ALTER TABLE ADD COLUMN no es
+			// idempotente; addObservationColumns sí (consulta las columnas existentes antes
+			// de tocar nada). Una sola fuente de verdad para la lista, y sirve para los dos
+			// caminos: base nueva y base ya migrada.
+			up: func(x execQuerier) error {
+				return addObservationColumns(x)
+			},
+		},
 	}
 }
 

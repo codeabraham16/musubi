@@ -78,12 +78,24 @@ func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (
 
 	sc := projectScopeFrom(ctx)
 	clause, args := sc.scopeClause("")
+	// Usa el predicado CANÓNICO de visibilidad, no un `archived = 0` propio. Antes de F4 esta
+	// query filtraba sólo por archived, y eso la dejaba fuera de sincronía con todo el resto
+	// del recall por dos motivos:
+	//
+	//  1. Las observaciones en CUARENTENA (F4) se dibujarían como neuronas. Este grafo alimenta
+	//     el dashboard, o sea la cara visual del cerebro: texto de un LLM sin corroborar
+	//     apareciendo ahí es exactamente el daño que la Muralla 2 existe para evitar.
+	//  2. Las REEMPLAZADAS (superseded_by) también se dibujaban. Eso ya estaba mal antes de esta
+	//     fase —una nota superada no es memoria viva— y se corrige de paso.
+	//
+	// El punto 2 CAMBIA lo que muestra el dashboard: las notas superadas dejan de aparecer.
+	// Es intencional y está decidido, no un efecto colateral que se coló.
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT id, topic_key, COALESCE(mem_type,''), COALESCE(importance,1.0),
 		       COALESCE(access_count,0), COALESCE(created_at,''), COALESCE(last_accessed,''),
 		       COALESCE(NULLIF(gist,''), substr(content,1,120))
 		FROM observations
-		WHERE archived = 0`+clause, args...)
+		WHERE `+visibleObsPredicate+clause, args...)
 	if err != nil {
 		return BrainGraph{}, fmt.Errorf("brain: neuronas: %w", err)
 	}

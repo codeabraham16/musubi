@@ -249,6 +249,13 @@ func addObservationColumns(x execQuerier) error {
 		{"importance", "importance REAL NOT NULL DEFAULT 1.0"},
 		{"archived", "archived INTEGER NOT NULL DEFAULT 0"},
 		{"superseded_by", "superseded_by TEXT"},
+		// Cuarentena de escritura y procedencia (F4). Van también acá, y no sólo en la
+		// migración v22, porque esta función es la que arma el esquema de una base NUEVA:
+		// la baseline no re-corre en una base ya migrada y la migración no corre en una
+		// base nueva. Es la trampa que documenta la v21. Las dos son idempotentes.
+		{"provenance", "provenance TEXT NOT NULL DEFAULT 'human'"},
+		{"confidence", "confidence REAL NOT NULL DEFAULT 1.0"},
+		{"quarantined", "quarantined INTEGER NOT NULL DEFAULT 0"},
 	}
 	existing, err := observationColumnsOn(x)
 	if err != nil {

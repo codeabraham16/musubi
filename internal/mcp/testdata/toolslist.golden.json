@@ -181,6 +181,55 @@
       }
     },
     {
+      "name": "musubi_propose_observation",
+      "description": "PROPONE una observación al libro mayor en CUARENTENA. Usala para TODO contenido generado por un LLM — incluida una respuesta de musubi_ask que quieras conservar. Entra con procedencia 'llm:\u003cmodelo\u003e', NO aparece en ningún recall, NO se puede promover a 'shared' y NO viaja al cerebro central. Para volverla visible hay que corroborarla con musubi_corroborate, que CONSERVA el sello de procedencia. Si el contenido lo decidió una persona o lo derivó código sin modelo, no uses esta tool: usá musubi_save_observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confidence": {
+            "type": "number",
+            "description": "Opcional (default 0.5): cuánta confianza le tenés, en [0,1]. Fuera de rango se RECHAZA, no se recorta. Mandá 0 explícito si no le creés nada."
+          },
+          "content": {
+            "type": "string",
+            "description": "El contenido propuesto."
+          },
+          "mem_type": {
+            "type": "string",
+            "description": "Opcional: 'semantic' | 'episodic' | 'procedural', igual que en musubi_save_observation."
+          },
+          "model": {
+            "type": "string",
+            "description": "Opcional: id del modelo que generó el contenido, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."
+          },
+          "topic_key": {
+            "type": "string",
+            "description": "Clave de agrupación temática, igual que en musubi_save_observation (ej. architecture/auth)."
+          }
+        },
+        "required": [
+          "topic_key",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "musubi_corroborate",
+      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID de la observación en cuarentena (el que devolvió musubi_propose_observation)."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
       "name": "musubi_recall_facts",
       "description": "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
       "inputSchema": {

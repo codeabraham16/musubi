@@ -117,6 +117,15 @@ type RecallItem struct {
 	// que es lo que el modelo lee. Nunca oculta ni desprioriza: sólo avisa.
 	// omitempty ⇒ una observación sin anclas devuelve exactamente lo de siempre.
 	Stale []StaleOrigin `json:"stale,omitempty"`
+	// Provenance es el sello de QUÉ CLASE DE PROCESO generó el contenido (Muralla 3 · F4):
+	// 'human', 'deterministic' o 'llm:<modelo>'. No confundir con Author, que es la atribución
+	// por CREDENCIAL (qué persona o máquina escribió): un agente-LLM y una persona escriben con
+	// la misma credencial, así que Author no distingue una inferencia de un hecho verificado.
+	//
+	// Se emite SÓLO cuando no es 'human' (omitempty + el filtro de stampProvenance). Si todas
+	// las memorias dijeran '[human]', el sello se volvería ruido de fondo y dejaría de leerse —
+	// el mismo mecanismo por el que una alarma siempre encendida enseña a ignorar el rojo.
+	Provenance string `json:"provenance,omitempty"`
 }
 
 // RecallResult es la respuesta del recall, con presupuesto y consumo reales.
@@ -140,6 +149,21 @@ type candidate struct {
 	importance   float64
 	projectID    string // atribución (F1): proyecto de origen; "" = sin atribuir
 	author       string // atribución por PERSONA (C5.1): quién aportó la memoria; "" = sin atribuir
+	provenance   string // sello de QUÉ generó el contenido (Muralla 3 · F4): human | deterministic | llm:<modelo>
+}
+
+// stampProvenance decide si el sello viaja al caller. Devuelve "" para 'human' (y para el vacío
+// de una fila legacy), que es el default y por lo tanto no informa nada.
+//
+// No es una micro-optimización de bytes: si TODAS las memorias llegaran marcadas '[human]', el
+// sello se volvería ruido de fondo y dejaría de leerse. Es el mismo mecanismo por el que una
+// alarma siempre encendida enseña a ignorar el rojo. Marcar sólo lo que se aparta del default
+// hace que la marca signifique algo.
+func stampProvenance(p string) string {
+	if p == "" || p == provenanceHuman {
+		return ""
+	}
+	return p
 }
 
 type scoredCandidate struct {
@@ -306,6 +330,7 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 			CreatedAt:   c.createdAt,
 			Author:      c.author,
 			ContentHash: c.contentHash,
+			Provenance:  stampProvenance(c.provenance),
 		})
 		result.UsedTokens += cost
 		if result.UsedTokens >= budget {
@@ -461,7 +486,7 @@ func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candida
 		}
 		rows, err := e.db.QueryContext(ctx, `
 			SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
+			       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,''), COALESCE(o.provenance,'human')
 			FROM observations o
 			WHERE `+visibleObsPredicate+` AND o.id IN (`+strings.Join(ph, ",")+`)
 		`, args...)
@@ -694,7 +719,7 @@ func (e *DbEngine) recallCandidates(ctx context.Context, query string, limit int
 func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([]candidate, []float64, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT rank, o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,''), COALESCE(o.provenance,'human')
 		FROM observations_fts f
 		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+`
@@ -712,7 +737,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 		var c candidate
 		var score float64
 		if err := rows.Scan(&score, &c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
-			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author); err != nil {
+			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author, &c.provenance); err != nil {
 			return nil, nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}
 		cands = append(cands, c)
@@ -728,7 +753,7 @@ func (e *DbEngine) ftsSearch(ctx context.Context, ftsQuery string, limit int) ([
 func (e *DbEngine) recentCandidates(ctx context.Context, limit int) ([]candidate, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
-		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,'')
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,''), COALESCE(o.provenance,'human')
 		FROM observations o
 		WHERE `+visibleObsPredicate+`
 		ORDER BY COALESCE(o.last_accessed, o.created_at) DESC
@@ -746,7 +771,7 @@ func scanCandidates(rows *sql.Rows) ([]candidate, error) {
 	for rows.Next() {
 		var c candidate
 		if err := rows.Scan(&c.id, &c.topicKey, &c.gist, &c.content, &c.contentHash, &c.fullTokens,
-			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author); err != nil {
+			&c.createdAt, &c.lastAccessed, &c.accessCount, &c.importance, &c.projectID, &c.author, &c.provenance); err != nil {
 			return nil, fmt.Errorf("error al escanear candidato: %w", err)
 		}
 		out = append(out, c)

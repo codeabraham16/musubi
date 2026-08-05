@@ -102,7 +102,7 @@ func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 // forma model-free el gist, el content_hash y la estimación de tokens. La
 // importancia no se toca en updates (se preserva la existente).
 func (e *DbEngine) SaveObservation(id, topicKey, content string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", nil, embedding)
+	return e.saveObservation(id, topicKey, content, 1.0, false, "", "local", "", "", nil, embedding, nil)
 }
 
 // SetObservationCreatedAt fija el created_at (ISO 'YYYY-MM-DD HH:MM:SS' UTC) de una observación.
@@ -122,7 +122,7 @@ func (e *DbEngine) SetObservationCreatedAt(id, iso string) error {
 // SaveObservationWithImportance es como SaveObservation pero fija la importancia
 // (también en updates). importance pondera el ranking del recall.
 func (e *DbEngine) SaveObservationWithImportance(id, topicKey, content string, importance float64, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", "", nil, embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, "", "local", "", "", nil, embedding, nil)
 }
 
 // SaveObservationTyped es como SaveObservationWithImportance pero además fija el TIPO de
@@ -140,7 +140,7 @@ func (e *DbEngine) SaveObservationTyped(id, topicKey, content string, importance
 // siempre para los guardados locales). author es la atribución por PERSONA (C5.1), derivada
 // de la credencial por el handler; "" ⇒ sin atribución (local/stdio/legacy).
 func (e *DbEngine) SaveObservationTypedFrom(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, nil, embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, nil, embedding, nil)
 }
 
 // SaveObservationTypedWithOrigins es SaveObservationTypedFrom más las ANCLAS al estado del
@@ -152,7 +152,7 @@ func (e *DbEngine) SaveObservationTypedFrom(originProjectID, author, id, topicKe
 // Las rutas son relativas a la raíz del proyecto. Anclar a una que no existe es ERROR
 // (nacería marcada como rancia) y el tope es maxOriginPaths.
 func (e *DbEngine) SaveObservationTypedWithOrigins(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) error {
-	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, originPaths, embedding)
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, originPaths, embedding, nil)
 }
 
 // SaveObservationDedupedTypedFromWithOrigins es SaveObservationDedupedTypedFrom más las ANCLAS
@@ -263,7 +263,9 @@ func (e *DbEngine) effectiveProjectID(originProjectID string) string {
 // saveObservation es el núcleo del guardado: UPSERT por id que preserva created_at
 // y las estadísticas de acceso en updates, y mantiene el FTS sincronizado vía
 // triggers (AFTER INSERT/UPDATE). Si setImportance es false, no pisa importance.
-func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, originPaths []string, embedding []float32) error {
+// El parámetro stamp (F4) es el sello de procedencia/cuarentena. nil ⇒ los defaults del
+// esquema ('human', 1.0, no en cuarentena), que es el camino de siempre.
+func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, originPaths []string, embedding []float32, stamp *obsStamp) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("error al iniciar transacción: %w", err)
@@ -330,8 +332,17 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 	// En UPSERT, un guardado SIN tipo (mem_type='') PRESERVA la clasificación existente:
 	// sólo un tipo no vacío la reemplaza. Así un update por la vía histórica (untyped) no
 	// borra el mem_type que otro guardado tipado ya fijó (evita pérdida de clasificación).
-	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	// Sello de procedencia/cuarentena (F4). nil ⇒ los defaults del esquema, que es el camino
+	// de siempre y deja la fila bit-idéntica a antes de esta fase.
+	prov, conf, quar := provenanceHuman, 1.0, 0
+	if stamp != nil {
+		prov, conf = stamp.provenance, stamp.confidence
+		if stamp.quarantined {
+			quar = 1
+		}
+	}
+	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, provenance, confidence, quarantined)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
@@ -339,12 +350,17 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 			content_hash=excluded.content_hash,
 			tokens=excluded.tokens,
 			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END` + setImp
+	// El UPSERT NO pisa provenance/confidence/quarantined, y eso es una guarda de seguridad, no
+	// una omisión: si los pisara, un `save_observation` sobre el id de una observación en
+	// cuarentena la limpiaría en silencio y el sello quedaría en 'human'. Sería exactamente el
+	// lavado de procedencia que esta fase existe para impedir. Salir de cuarentena tiene una
+	// sola puerta: CorroborateObservation (Q4).
 	// El UPSERT NO pisa project_id en updates, así que un re-save no borra la atribución original
 	// (proyecto ya resuelto arriba, junto con la guardia cross-tenant que ese no-pisar hace necesaria).
 	// Atribución por PERSONA (C5.1): author se deriva de la credencial (principal.Name) en el
 	// handler y se estampa acá. Como project_id/scope, NO se pisa en el UPSERT: un re-save por
 	// otra persona PRESERVA el autor original (no reasigna crédito). Vacío = sin atribución.
-	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance, memType, scope, projectID, author); err != nil {
+	if _, err = tx.Exec(queryObs, id, topicKey, content, gist, hash, tokens, importance, memType, scope, projectID, author, prov, conf, quar); err != nil {
 		return fmt.Errorf("error al guardar observación: %w", err)
 	}
 

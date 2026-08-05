@@ -44,6 +44,20 @@ type ObservationStore interface {
 	PromoteObservation(id string) error
 	// PromoteObservationCtx es PromoteObservation acotada al proyecto de la credencial (aislamiento #11).
 	PromoteObservationCtx(ctx context.Context, id string) error
+
+	// --- Cuarentena de escritura y procedencia (Murallas 2+3 · F4) ---
+
+	// ProposeObservation escribe una observación EN CUARENTENA con procedencia de modelo. NO
+	// recibe procedencia ni bandera de cuarentena a propósito: las escribe ella, así el sello
+	// es POR DÓNDE ENTRÓ y no lo que el caller haya dicho ser.
+	ProposeObservation(originProjectID, author, topicKey, content, model string, confidence float64, memType string, embedding []float32) (string, error)
+	// CorroborateObservationCtx saca una observación de cuarentena, acotada al proyecto de la
+	// credencial. Es la ÚNICA salida, y CONSERVA el sello de procedencia.
+	CorroborateObservationCtx(ctx context.Context, id string) error
+	// IsQuarantined indica si una observación está en cuarentena.
+	IsQuarantined(id string) (bool, error)
+	// ObservationStamp devuelve el sello de una observación: procedencia, confianza y cuarentena.
+	ObservationStamp(id string) (provenance string, confidence float64, quarantined bool, err error)
 }
 
 // RecallEngine — recall por presupuesto de tokens (model-free, híbrido FTS + ranking).
