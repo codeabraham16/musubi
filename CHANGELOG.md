@@ -8,6 +8,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Dial de potencia y telemetría de la cognición.** Decidir "cuánto LLM quiero" obligaba a
+  entender y coordinar cuatro perillas sueltas; ahora hay una: `cognition.effort` con `eco`,
+  `balanced` y `turbo`. No es maquinaria nueva — es un **preset sobre las perillas que ya existen**,
+  y `turbo` no inventa potencia: prende el juez del recall y le sube el top-K. **Lo escrito a mano
+  siempre le gana al preset**, así que agregar `effort` a una config existente no le cambia el
+  comportamiento en silencio; sin `effort` declarado no pasa absolutamente nada. Un valor mal
+  escrito rompe el arranque en vez de caer a un default.
+
+  Y lo segundo, que es lo que faltaba de verdad: **`musubi_cognition_stats`**, para responder con
+  datos si el caché rinde, si el portero de privacidad actúa seguido o nunca, y qué motor de la
+  flota se está cayendo. Tres fases habían dejado esas preguntas anotadas sin instrumento. Devuelve
+  hits/misses y tasa de acierto del caché, llamadas y bloqueos del portero con los **tipos** de
+  secreto tapados (nunca los valores), y escaladas del router con los circuitos abiertos. Es
+  read-only: leer no resetea nada.
+
+### Changed
+- `cognition.read_time_rerank` pasó de `bool` a puntero en el YAML. Para el usuario no cambia nada
+  (`true`/`false`/ausente se siguen escribiendo igual), pero internamente permite distinguir "no lo
+  escribieron" de "lo apagaron", que es lo que hace que el dial no pise una decisión explícita.
 - **Caché de respuestas del motor de cognición.** Una pregunta idéntica ya no se paga dos veces:
   cuesta latencia, cuota y —en la flota gratis— rate-limit compartido. Es un caché **exacto**, con
   cota dura y desalojo LRU **de a una** (el `rerankCache` que reemplaza se vaciaba entero al

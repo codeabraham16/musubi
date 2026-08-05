@@ -39,6 +39,8 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_code_graph_viz":  true,
 		"musubi_brain_graph":     true,
 		"musubi_whoami":          true,
+		// Contadores en memoria del proceso; no toca la DB ni bumpea nada (F5, invariante D8).
+		"musubi_cognition_stats": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
