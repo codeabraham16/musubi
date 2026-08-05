@@ -39,6 +39,10 @@ type guarded struct {
 	// seguridad que nunca se vio atajar algo no se sabe si aguanta. Es un campo y no una variable
 	// de paquete para no introducir estado global mutable entre tests.
 	newSession func() scrubSession
+	// stats son los contadores de F5. Es un PUNTERO porque `guarded` es un tipo por valor: sin
+	// él, cada copia de la struct contaría por su cuenta y los números no sumarían nada.
+	// nil ⇒ no se cuenta (los tests que construyen un guarded a mano no necesitan telemetría).
+	stats *gatewayStats
 }
 
 // scrubSession es lo que el portero necesita de una sesión de privacidad. En producción siempre es
@@ -62,6 +66,14 @@ func (g guarded) session() scrubSession {
 // nombrando al modelo real, no al portero. El portero es transporte, no autor.
 func (g guarded) Name() string { return g.inner.Name() }
 
+// reportStats suma lo del portero y sigue hacia adentro (F5).
+func (g guarded) reportStats(st *CognitionStats) {
+	g.stats.snapshot(st)
+	if r, ok := g.inner.(statsReporter); ok {
+		r.reportStats(st)
+	}
+}
+
 // Ask tapa los secretos de system y user, llama al motor, y repone los secretos en la respuesta.
 //
 // Una sesión POR LLAMADA: system y user comparten el mapeo (así un mismo secreto que aparece en los
@@ -70,8 +82,14 @@ func (g guarded) Name() string { return g.inner.Name() }
 func (g guarded) Ask(ctx context.Context, system, user string) (string, error) {
 	sess, scrubbedSystem, scrubbedUser, err := g.scrubPrompt(system, user)
 	if err != nil {
+		g.stats.record(nil, false, true)
 		return "", err
 	}
+
+	// Se anota UNA VEZ por llamada, con los TIPOS y nunca los valores (D5). Va acá y no al final
+	// para que también cuente la llamada que el motor rechaza: lo que se mide es el trabajo del
+	// portero, no el éxito del motor.
+	g.stats.record(sess.Types(), sess.Count() > 0 && g.mode == GatewayModeRefuse, false)
 
 	if n := sess.Count(); n > 0 && g.mode == GatewayModeRefuse {
 		// Se loguean los TIPOS, jamás los valores. Un log que filtra el secreto que acabás de tapar
@@ -137,7 +155,7 @@ func newGuarded(p Provider, mode string) (Provider, error) {
 			"modo", GatewayModeOff, "motor", p.Name())
 		return p, nil
 	}
-	return guarded{inner: p, mode: effective}, nil
+	return guarded{inner: p, mode: effective, stats: newGatewayStats()}, nil
 }
 
 // normalizeGatewayMode valida el modo y devuelve el efectivo ("" ⇒ scrub).

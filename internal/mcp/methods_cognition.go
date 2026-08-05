@@ -174,7 +174,9 @@ func isHex8(s string) bool {
 // timeout o parseo malo se devuelve el orden model-free sin tocar — el recall nunca se rompe ni se
 // bloquea por el LLM. Con la flag apagada (default) es un no-op y el recall queda 100% model-free.
 func (s *McpServer) rerankIfEnabled(ctx context.Context, query string, res memory.RecallResult) memory.RecallResult {
-	if !s.cognitionCfg.ReadTimeRerank || !cognition.Enabled(s.cognition) || len(res.Items) < 2 {
+	// ReadTimeRerankOn() resuelve el *bool: ausente ⇒ apagado. Es puntero desde F5 para que el
+	// dial de potencia distinga "no lo escribieron" de "lo apagaron a mano".
+	if !s.cognitionCfg.ReadTimeRerankOn() || !cognition.Enabled(s.cognition) || len(res.Items) < 2 {
 		return res
 	}
 	topK := s.cognitionCfg.ReadTimeRerankTopK

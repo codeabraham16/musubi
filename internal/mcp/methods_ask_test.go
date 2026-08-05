@@ -118,12 +118,16 @@ func TestRerankDisabledIsNoop(t *testing.T) {
 	}
 }
 
+// rerankOn es el true al que apuntan los tests que prenden el juez. ReadTimeRerank es *bool desde
+// F5 para que el dial de potencia distinga "no lo escribieron" de "lo apagaron a mano".
+var rerankOn = true
+
 // TestRerankReordersByJudge: con la flag encendida, el juez re-ordena el tope según su array de ids;
 // los no mencionados quedan al final sin perderse.
 func TestRerankReordersByJudge(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.cognition = &fakeCognition{answer: `El orden es ["c","a"]`} // 'b' omitido por el juez
-	s.cognitionCfg.ReadTimeRerank = true
+	s.cognitionCfg.ReadTimeRerank = &rerankOn
 	out := s.rerankIfEnabled(context.Background(), "q-reorder", recallRes("a", "b", "c"))
 	got := []string{out.Items[0].ID, out.Items[1].ID, out.Items[2].ID}
 	// c y a primero (orden del juez), b preservado al final.
@@ -136,7 +140,7 @@ func TestRerankReordersByJudge(t *testing.T) {
 func TestRerankBadJSONFallsBack(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.cognition = &fakeCognition{answer: "no tengo idea, no hay json"}
-	s.cognitionCfg.ReadTimeRerank = true
+	s.cognitionCfg.ReadTimeRerank = &rerankOn
 	out := s.rerankIfEnabled(context.Background(), "q-badjson", recallRes("a", "b", "c"))
 	if out.Items[0].ID != "a" || out.Items[1].ID != "b" || out.Items[2].ID != "c" {
 		t.Errorf("ante JSON malo debería mantener el orden model-free, got %v", out.Items)

@@ -495,7 +495,11 @@ type CognitionConfig struct {
 	// seam de MAYOR riesgo (latencia en el camino caliente + rate-limit), por eso nace APAGADO
 	// (false ⇒ bit-idéntico: el recall sigue 100% model-free) y es selectivo/cacheado/best-effort:
 	// ante cualquier fallo o timeout se mantiene el orden model-free. Sólo re-ordena, no descarta.
-	ReadTimeRerank bool `yaml:"read_time_rerank,omitempty"`
+	//
+	// Es *bool y no bool desde F5: el dial de potencia necesita distinguir "no lo escribieron"
+	// (⇒ lo decide el preset) de "lo escribieron en false" (⇒ el preset NO lo pisa). Con un bool
+	// pelado las dos cosas son el cero de Go y lo explícito se perdería. Usar ReadTimeRerankOn().
+	ReadTimeRerank *bool `yaml:"read_time_rerank,omitempty"`
 	// ReadTimeRerankTopK es cuántos candidatos del tope se someten al juez (el resto queda intacto
 	// al final). 0 ⇒ default interno. Acota latencia y costo: el juez nunca ve todo el recall.
 	ReadTimeRerankTopK int `yaml:"read_time_rerank_top_k,omitempty"`
@@ -516,6 +520,9 @@ type CognitionConfig struct {
 	// lo mismo. Como el portero, sólo actúa cuando la cognición ya está encendida, así que no
 	// afecta la bit-identidad del camino model-free.
 	Cache CacheConfig `yaml:"cache,omitempty"`
+	// Effort es el DIAL DE POTENCIA (F5): un solo parámetro en vez de coordinar a mano las
+	// perillas de arriba. "" ⇒ no se aplica ningún preset y todo queda como estaba.
+	Effort string `yaml:"effort,omitempty"`
 }
 
 // CacheConfig configura el caché de cognición (F3).
@@ -875,6 +882,20 @@ func Load(projectPath string) (Config, error) {
 	cfg.applyDefaults(presentBlocks(data))
 	cfg.applyMemoryDefaults(data)
 	cfg.applyConflictsDefaults(data)
+
+	// DIAL DE POTENCIA (F5). Se resuelve ACÁ, en el único punto por el que pasa toda config
+	// cargada, y no dentro de cognition.NewProvider: el servidor MCP guarda su propia copia de
+	// CognitionConfig para decidir el juez del recall, así que resolverlo en la fábrica dejaría a
+	// esa copia con el dial sin aplicar. Un dial que rige en la mitad de los consumidores es peor
+	// que no tenerlo.
+	//
+	// Un `effort` mal escrito ROMPE EL ARRANQUE (D2), igual que un gateway.mode desconocido: es
+	// preferible no arrancar a arrancar con una potencia distinta de la que se pidió.
+	resolved, err := cfg.Cognition.ApplyEffort()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Cognition = resolved
 	return cfg, nil
 }
 
