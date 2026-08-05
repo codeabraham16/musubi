@@ -8,6 +8,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Caché de respuestas del motor de cognición.** Una pregunta idéntica ya no se paga dos veces:
+  cuesta latencia, cuota y —en la flota gratis— rate-limit compartido. Es un caché **exacto**, con
+  cota dura y desalojo LRU **de a una** (el `rerankCache` que reemplaza se vaciaba entero al
+  llenarse: tiraba 511 entradas buenas para hacer lugar a una) y vencimiento opcional por TTL. Se
+  configura con `cognition.cache` y nace encendido cuando hay motor real; apagarlo devuelve el
+  comportamiento anterior byte a byte.
+
+  **No es semántico y el nombre no lo sugiere**: no busca preguntas "parecidas". Un hit por
+  similitud devolvería la respuesta de *otra* pregunta, lo que está en tensión directa con la
+  garantía central del caché, así que queda como fase propia con su umbral medido.
+
+  Va **por fuera** del portero de privacidad. La opción de ponerlo adentro —que habría evitado
+  guardar secretos y subido el hit rate— se descartó al verificarla: el contador de marcadores del
+  portero reintenta ante colisiones del texto crudo, así que dos sesiones con el mismo prompt tapado
+  pueden numerar distinto y la respuesta cacheada se rehidrataría con el secreto equivocado. El
+  costo de la decisión, dicho de frente: el caché guarda prompts y respuestas crudos en memoria
+  (nunca en disco).
 - **Portero de privacidad entre la memoria y cualquier LLM externo.** Hasta ahora, encender el pilar
   de Cognición mandaba el texto de la memoria **tal cual** al motor: un token `msb_`, una clave de
   API o una contraseña dentro de un connection string cruzaban la red sin más. Ahora todo motor real

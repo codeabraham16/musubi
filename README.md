@@ -442,6 +442,24 @@ musubi doctor --check cognition_gateway
 musubi doctor --check embedding_gateway
 ```
 
+### El caché de cognición
+
+Una pregunta idéntica no se paga dos veces. Se configura con `cognition.cache` y nace encendido
+cuando hay motor real.
+
+Es **exacto**, no semántico: no busca preguntas parecidas. Un hit por similitud devolvería la
+respuesta de *otra* pregunta, y eso necesita su propio umbral medido antes de encenderlo.
+
+Dos detalles que valen:
+
+- **Desaloja de a una** (LRU) al llegar a `max_entries`, no vaciándose entero.
+- **No cachea errores.** Un rate-limit de 30 segundos cacheado quedaría servido todo el TTL.
+
+Y uno que conviene saber: el caché va **por fuera** del portero, así que guarda prompts y respuestas
+crudos **en memoria** — nunca en disco. Ponerlo adentro habría evitado eso, pero el contador de
+marcadores del portero reintenta ante colisiones del texto crudo, y dos sesiones con el mismo prompt
+tapado pueden numerar distinto: la respuesta cacheada volvería con el secreto equivocado repuesto.
+
 Lo que los porteros **no** cubren: datos sensibles **sin forma de secreto** (el nombre de un cliente,
 una decisión de negocio). Eso es juicio semántico, no detección determinista.
 

@@ -15,12 +15,18 @@ import (
 // no un Noop silencioso, para no ocultar una config equivocada.
 func NewProvider(cfg config.CognitionConfig) (Provider, error) {
 	// Con flota declarada manda el router (F2). Sin flota no se instancia nada nuevo: el camino de
-	// motor único queda bit-idéntico al de F1 (invariante C6).
+	// motor único queda bit-idéntico al de F1 (invariante C6 del router).
 	//
 	// El router construye cada motor con esta misma fábrica, incluido el portero, así que la
 	// garantía de F1 —no existe un motor real sin envolver— sigue valiendo dentro de la flota.
 	if len(cfg.Fleet) > 0 {
-		return newRouter(cfg, nil)
+		r, err := newRouter(cfg, nil)
+		if err != nil {
+			return nil, err
+		}
+		// El caché va por FUERA del router: una pregunta repetida no debería ni elegir motor.
+		// Y el router ya construye cada motor con esta misma fábrica, portero incluido.
+		return withCache(r, cfg)
 	}
 	base, err := newBaseProvider(cfg)
 	if err != nil {
@@ -31,7 +37,28 @@ func NewProvider(cfg config.CognitionConfig) (Provider, error) {
 	// caller nuevo no puede olvidarse de pasar por el portero porque no existe una versión sin él.
 	// newGuarded devuelve el Provider tal cual si es el NoopProvider (nada que cuidar) o si el modo
 	// es "off", y falla explícito ante un modo desconocido.
-	return newGuarded(base, cfg.Gateway.Mode)
+	g, err := newGuarded(base, cfg.Gateway.Mode)
+	if err != nil {
+		return nil, err
+	}
+	return withCache(g, cfg)
+}
+
+// withCache pone el caché de F3 alrededor de p, si está habilitado.
+//
+// EL ORDEN IMPORTA Y ES DELIBERADO: el caché queda por FUERA del portero
+// (caller → caché → portero → motor). La razón larga está en cache.go y en la propuesta; la corta
+// es que cachear el prompt ya tapado puede devolver la respuesta con los secretos MAL repuestos,
+// porque el contador de marcadores del portero reintenta ante colisiones del texto crudo.
+func withCache(p Provider, cfg config.CognitionConfig) (Provider, error) {
+	if !cfg.Cache.CacheEnabled() {
+		return p, nil
+	}
+	max := cfg.Cache.MaxEntries
+	if max == 0 {
+		max = config.DefaultCacheMaxEntries
+	}
+	return newCached(p, max, time.Duration(cfg.Cache.TTLSeconds)*time.Second)
 }
 
 // newBaseProvider arma el motor desnudo, sin portero. Separado de NewProvider para que quede

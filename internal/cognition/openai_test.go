@@ -143,7 +143,9 @@ func TestFactoryBuildsOpenAICompat(t *testing.T) {
 	if !Enabled(p) {
 		t.Fatal("openai-compat debería estar habilitado")
 	}
-	g, ok := p.(guarded)
+	// unwrapCache saca la capa de caché de F3, que va por fuera del portero. La aserción de
+	// abajo —que el motor real NUNCA sale de fábrica sin portero— queda intacta.
+	g, ok := unwrapCache(p).(guarded)
 	if !ok {
 		t.Fatalf("el motor real tenía que salir de fábrica ENVUELTO en el portero, obtuve %T", p)
 	}
