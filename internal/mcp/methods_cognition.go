@@ -35,6 +35,54 @@ const askGroundingBudget = 6000
 // provider). La cognición a-demanda tolera latencia; el agente eligió invocarla y esperar.
 const askTimeout = 150 * time.Second
 
+// askHydrationFactor y askHydrationCap acotan cuánto contenido COMPLETO entra al prompt.
+//
+// El token_budget del recall cuenta GISTS (~20 tokens cada uno); un contenido completo pesa varias
+// veces más, así que hidratar todo lo que el recall selecciona no entra en ningún prompt. El factor
+// es deliberadamente conservador: da profundidad al tope del ranking y conserva la amplitud abajo,
+// donde los gists siguen alcanzando para que el modelo sepa que esa memoria existe.
+//
+// Derivar el presupuesto del que ya pidió el caller —en vez de agregar una perilla nueva— mantiene
+// la promesa del parámetro: un token_budget chico sigue dando un prompt chico.
+const (
+	askHydrationFactor = 2
+	askHydrationCap    = 16000
+)
+
+// hydrateGrounding devuelve el contenido completo de los mejores candidatos, indexado por id.
+//
+// Los ids salen EXCLUSIVAMENTE de res.Items, o sea del Recall, que aplica el predicado canónico de
+// visibilidad (archivadas, reemplazadas y EN CUARENTENA quedan fuera). La hidratación por id no
+// filtra —es la frontera declarada en Q0b— así que la muralla acá se sostiene por la PROCEDENCIA de
+// los ids. Alimentar esto desde otra lista reabriría el agujero sin que nada más se ponga rojo.
+//
+// Best-effort a propósito: ante cualquier error devuelve nil y el caller sigue con los gists. La
+// profundidad mejora la respuesta; su ausencia no puede impedir responder — el mismo trato que ask
+// ya le da al embedder cuando no puede embeber la pregunta.
+func (s *McpServer) hydrateGrounding(ctx context.Context, items []memory.RecallItem, selectionBudget int) map[string]string {
+	if len(items) == 0 {
+		return nil
+	}
+	budget := selectionBudget * askHydrationFactor
+	if budget > askHydrationCap {
+		budget = askHydrationCap
+	}
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	obs, _, err := s.engine.HydrateForGroundingCtx(ctx, ids, budget)
+	if err != nil {
+		logx.Error("ask: no se pudo hidratar el grounding, sigo con los gists", "error", err)
+		return nil
+	}
+	out := make(map[string]string, len(obs))
+	for _, o := range obs {
+		out[o.ID] = o.Content
+	}
+	return out
+}
+
 // toolAsk es la COGNICIÓN A-DEMANDA del 3er pilar (F3.5b): responde una pregunta en lenguaje
 // natural FUNDAMENTÁNDOSE en la memoria recuperada (RAG-synthesis). A diferencia de musubi_recall
 // (que devuelve gists crudos, model-free), acá el motor LLM SINTETIZA una respuesta y cita las
@@ -96,14 +144,35 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		})
 	}
 
-	// 2) Construir el prompt fundamentado. El system exige citar ids y admitir lo que no sabe.
+	// 2) Hidratar el contenido COMPLETO de los mejores candidatos. El recall devuelve gists
+	// truncados —útiles para elegir, mutilados para razonar—: sin esto el motor sintetiza sobre
+	// frases cortadas a la mitad. Cambia la PROFUNDIDAD, no la SELECCIÓN: los que no entran en el
+	// presupuesto se quedan con su gist y ninguno se cae de la lista.
+	full := s.hydrateGrounding(ctx, res.Items, budget)
+
+	// 3) Construir el prompt fundamentado. El system exige citar ids y admitir lo que no sabe.
 	var b strings.Builder
 	for _, it := range res.Items {
 		age := ""
 		if it.CreatedAt != "" {
 			age = " · " + it.CreatedAt
 		}
-		fmt.Fprintf(&b, "[%s] (%s%s)\n%s\n\n", it.ID, it.TopicKey, age, it.Gist)
+		// El sello de procedencia va en la cabecera para que el motor NO trate una inferencia de
+		// otro LLM como una nota verificada. Viene ya filtrado por stampProvenance: vacío cuando
+		// es 'human', que es el caso normal y no ensucia nada.
+		sello := ""
+		if it.Provenance != "" {
+			sello = " · " + it.Provenance
+		}
+		body := it.Gist
+		if content, ok := full[it.ID]; ok {
+			// La advertencia de ranciedad viaja PEGADA al gist (markStaleOrigins la antepone), no
+			// en un campo que este prompt lea. Al cambiar el gist por el contenido hay que
+			// reponerla o desaparece en silencio: el prompt se vería perfecto y el modelo dejaría
+			// de saber que la nota puede estar vencida.
+			body = memory.StaleWarning(it.Stale) + content
+		}
+		fmt.Fprintf(&b, "[%s] (%s%s%s)\n%s\n\n", it.ID, it.TopicKey, age, sello, body)
 	}
 	system := "Sos el asistente de cognición de Musubi. Respondé la PREGUNTA usando ÚNICAMENTE la MEMORIA provista. " +
 		"Citá entre corchetes el id [id] de cada memoria que respalde una afirmación. " +
@@ -111,7 +180,7 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		"Ojo con la edad de cada memoria: una nota vieja puede estar desactualizada. Sé conciso y directo."
 	user := "PREGUNTA:\n" + args.Question + "\n\nMEMORIA RELEVANTE:\n" + b.String()
 
-	// 3) Llamar al motor (a-demanda, con backstop de timeout).
+	// 4) Llamar al motor (a-demanda, con backstop de timeout).
 	askCtx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
 	answer, err := s.cognition.Ask(askCtx, system, user)
