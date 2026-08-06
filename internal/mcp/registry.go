@@ -195,6 +195,20 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_tool_usage",
+				Description: "Qué herramientas de Musubi se usan DE VERDAD: invocaciones, errores, rechazos, latencia media y p95 por tool, en una ventana de días. Sale del ledger persistente, así que sobrevive a los reinicios (a diferencia de los contadores de /metrics, que se resetean y ni siquiera existen en modo stdio). Read-only. Sirve para decidir con datos qué maquinaria gana su lugar y cuál nadie invoca — y para ver dónde se va la latencia.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"days": {Type: "number", Description: "Ventana en días hacia atrás (default 30)."},
+					},
+				},
+			},
+			handler:  s.toolToolUsage,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_propose_observation",
 				Description: "PROPONE una observación al libro mayor en CUARENTENA. Usala para TODO contenido generado por un LLM — incluida una respuesta de musubi_ask que quieras conservar. Entra con procedencia 'llm:<modelo>', NO aparece en ningún recall, NO se puede promover a 'shared' y NO viaja al cerebro central. Para volverla visible hay que corroborarla con musubi_corroborate, que CONSERVA el sello de procedencia. Si el contenido lo decidió una persona o lo derivó código sin modelo, no uses esta tool: usá musubi_save_observation.",
 				InputSchema: InputSchema{

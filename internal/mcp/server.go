@@ -116,6 +116,12 @@ type McpServer struct {
 	// predicados para propuestas (AllowedPredicates) y el TTL de cuarentena (ProposalTTLHours).
 	// Zero-value ⇒ enum allow-all + sin barrido ⇒ comportamiento bit-idéntico.
 	cognitionCfg config.CognitionConfig
+	// ledger es el LEDGER DE USO (F0): amortigua las invocaciones y las baja por lote. nil ⇒
+	// no se registra nada y el servidor se comporta como antes de la fase.
+	ledger *usageLedger
+	// ledgerRetentionDays es la ventana que conserva el ledger; la purga cuelga del
+	// mantenimiento que ya existe.
+	ledgerRetentionDays int
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
@@ -195,6 +201,27 @@ func WithCognition(c cognition.Provider) Option {
 func WithCognitionConfig(c config.CognitionConfig) Option {
 	return func(s *McpServer) { s.cognitionCfg = c }
 }
+
+// WithUsageLedger enciende el LEDGER DE USO (F0 · track «Potencia medida»): persiste una fila por
+// invocación de tool para poder responder cuáles se usan de verdad. Sin esta option el servidor no
+// registra nada y se comporta exactamente como antes.
+//
+// El sink es el motor de memoria. Se pasa como interfaz para que un test pueda inyectar uno que
+// falla y verificar que un ledger roto NO tumba una tool (invariante L2).
+func WithUsageLedger(sink ledgerSink, cfg config.UsageLedgerConfig) Option {
+	return func(s *McpServer) {
+		if sink == nil || !cfg.EnabledOn() {
+			return
+		}
+		s.ledger = newUsageLedger(sink, time.Duration(cfg.EffectiveFlushSeconds())*time.Second)
+		s.ledgerRetentionDays = cfg.EffectiveRetentionDays()
+		s.ledger.start()
+	}
+}
+
+// CloseLedger baja lo que quede en el buffer y detiene la goroutine de flush. Lo llama el
+// entrypoint al terminar; es idempotente y seguro sobre un servidor sin ledger.
+func (s *McpServer) CloseLedger() { s.ledger.close() }
 
 // SetSyncClient inyecta el cliente de sync saliente y su config en el servidor, habilitando
 // el drain del outbox (RunOutboxScheduler). Lo llama el entrypoint (serve/daemon) tras
