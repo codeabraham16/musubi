@@ -56,11 +56,14 @@ func preguntar(t *testing.T, s *McpServer, args string) {
 	}
 }
 
-// El contenido es MÁS LARGO que un gist a propósito: el final sólo aparece si se hidrató de verdad.
-const contenidoLargo = "El portero de privacidad se para entre la memoria y el motor externo y tapa los secretos " +
+// textoBase pesa MUCHO más que un gist a propósito: lo que venga después de él en el contenido
+// sólo llega al prompt si se hidrató de verdad.
+const textoBase = "El portero de privacidad se para entre la memoria y el motor externo y tapa los secretos " +
 	"antes de que crucen. Trabaja con marcadores reversibles, así que el valor real se repone en la respuesta " +
 	"que vuelve al caller y el agente no pierde el dato. No tiene interruptor de apagado por config porque una " +
-	"guarda de seguridad disponible para apagar termina apagada. MARCA-DEL-FINAL-DEL-CONTENIDO"
+	"guarda de seguridad disponible para apagar termina apagada."
+
+const contenidoLargo = textoBase + " MARCA-DEL-FINAL-DEL-CONTENIDO"
 
 // G1 — el grounding manda el CONTENIDO COMPLETO, no el gist truncado.
 func TestG1GroundingMandaContenidoCompleto(t *testing.T) {
@@ -75,32 +78,52 @@ func TestG1GroundingMandaContenidoCompleto(t *testing.T) {
 }
 
 // G2 — la hidratación cambia la PROFUNDIDAD, no la SELECCIÓN: las mismas memorias, en el mismo orden.
+//
+// El caso que importa es el PARCIAL: cuando el presupuesto alcanza para hidratar sólo algunas, las
+// otras tienen que seguir en el prompt con su gist. La primera versión de este test usaba memorias
+// chiquitas que entraban TODAS, así que la rama de "no entró" nunca se ejecutaba y el test no vio
+// un sabotaje que borraba del prompt justo a las no hidratadas. Por eso ahora se verifica primero
+// que la hidratación haya quedado incompleta.
 func TestG2HidratarNoCambiaLaSeleccion(t *testing.T) {
 	s, _, fake := newAskServer(t, nil)
-	guardar(t, s, `{"id":"aaaaaaaa-0000-0000-0000-000000000001","topic_key":"t/uno","content":"el portero de privacidad tapa secretos antes del motor"}`)
-	guardar(t, s, `{"id":"aaaaaaaa-0000-0000-0000-000000000002","topic_key":"t/dos","content":"el portero de privacidad repone el valor en la respuesta"}`)
-	guardar(t, s, `{"id":"aaaaaaaa-0000-0000-0000-000000000003","topic_key":"t/tres","content":"el portero de privacidad no tiene interruptor de apagado"}`)
-
-	res, err := s.engine.Recall(context.Background(), "portero de privacidad", memory.RecallOptions{TokenBudget: askGroundingBudget})
-	if err != nil {
-		t.Fatalf("recall: %v", err)
-	}
-	if len(res.Items) < 2 {
-		t.Fatalf("el control no sirve: el recall trajo %d items, esperaba varios", len(res.Items))
+	marcas := []string{"UNO", "DOS", "TRES"}
+	for _, m := range marcas {
+		// El INICIO entra en el gist; el FINAL sólo aparece si esa memoria se hidrató.
+		guardar(t, s, `{"topic_key":"t/`+m+`","content":`+jsonStr(
+			"MARCA-"+m+"-INICIO "+textoBase+" "+textoBase+" MARCA-"+m+"-FINAL")+`}`)
 	}
 
-	preguntar(t, s, `{"question":"portero de privacidad"}`)
+	// No se corre un Recall aparte para comparar: ese Recall BUMPEA los accesos y le cambia el
+	// ranking al Recall que hace ask, y el test terminaba fallando por su propia sonda. Todo lo
+	// que se verifica sale del único prompt.
+	preguntar(t, s, `{"question":"portero de privacidad secretos motor","token_budget":150}`)
 
-	pos := -1
-	for _, it := range res.Items {
-		i := strings.Index(fake.gotUser, it.ID)
-		if i < 0 {
-			t.Fatalf("FUGA G2: la memoria %s salió del grounding al hidratar", it.ID)
+	hidratadas, soloGist := []int{}, []int{}
+	for _, m := range marcas {
+		ini := strings.Index(fake.gotUser, "MARCA-"+m+"-INICIO")
+		if ini < 0 {
+			t.Fatalf("FUGA G2: la memoria %s se cayó del grounding (probablemente por no entrar en la hidratación).\nprompt=%q", m, fake.gotUser)
 		}
-		if i < pos {
-			t.Errorf("FUGA G2: la hidratación reordenó el grounding (%s quedó fuera de orden)", it.ID)
+		if strings.Contains(fake.gotUser, "MARCA-"+m+"-FINAL") {
+			hidratadas = append(hidratadas, ini)
+		} else {
+			soloGist = append(soloGist, ini)
 		}
-		pos = i
+	}
+
+	// Control: si entraran todas o ninguna, este test no estaría probando el caso PARCIAL, que es
+	// el único donde la distinción entre profundidad y selección se puede romper.
+	if len(hidratadas) == 0 || len(soloGist) == 0 {
+		t.Fatalf("el control no sirve: %d hidratadas y %d en gist — hace falta hidratación INCOMPLETA",
+			len(hidratadas), len(soloGist))
+	}
+	// La hidratación sirve al TOPE del ranking: las hidratadas van antes que las que quedaron en gist.
+	for _, h := range hidratadas {
+		for _, g := range soloGist {
+			if h > g {
+				t.Errorf("FUGA G2: una memoria hidratada quedó DESPUÉS de una sin hidratar; la hidratación no siguió el orden del recall")
+			}
+		}
 	}
 }
 
