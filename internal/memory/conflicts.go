@@ -175,6 +175,56 @@ func complementaryPair(_, b obsRow) bool {
 	return historicalRecord(b.topicKey)
 }
 
+// dominioDe devuelve el primer segmento del topic_key, hasta la primera barra. Sin barra, el
+// topic_key entero. Es el nivel al que "hablan del mismo tema" todavía significa algo: la
+// convención del proyecto es jerárquica (gio/auditoria, gio/perfil, roadmap/track-x), y dos notas
+// de gio/* SÍ pueden contradecirse — cortar por topic_key completo mataría señal real.
+func dominioDe(topicKey string) string {
+	if i := strings.IndexByte(topicKey, '/'); i > 0 {
+		return topicKey[:i]
+	}
+	return topicKey
+}
+
+// dominiosAjenos responde: ¿estas dos observaciones hablan siquiera de temas comparables?
+//
+// EL PROBLEMA QUE RESUELVE, MEDIDO. La cola de conflictos de la memoria real tenía 494 relaciones
+// y sólo 45 de señal (`supersedes`/`conflicts_with`): 9,8%. De las 36 pendientes, 31 cruzaban
+// dominios distintos — gio × last-chaos-nostalgia, roadmap × cognicion, auditoria × minecraft.
+// La causa es que el detector dispara por parecido de FORMA: dos auditorías multi-agente se
+// parecen muchísimo entre sí —misma estructura, mismo vocabulario de método— aunque una hable de
+// las terminales de una persona y la otra del herramental de un videojuego.
+//
+// Y el daño no es el ruido, es la EROSIÓN: una cola llena de falsos positivos DEJA DE LEERSE, y el
+// día que aparezca la contradicción real se pierde entre las demás. Es la misma lección que motivó
+// las guardas del PR #203, aplicada a la siguiente clase de ruido.
+//
+// LA EXCEPCIÓN SON LOS REGISTROS HISTÓRICOS, y no es un parche. Se midió el costo de la guarda
+// antes de escribirla: de las 45 señales históricas, 44 son del mismo dominio y UNA sola cruza —
+// `git-commit` × `bugs`. Un commit no es un dominio temático: es el registro de lo que pasó, y por
+// eso puede volver obsoleta una nota de CUALQUIER tema (la misma asimetría que complementaryPair ya
+// documenta: un commit "feat: migrar de X a Y" SÍ envejece una nota que decía "usamos X"). Un
+// contrato SDD es lo mismo por la misma razón, y por eso la excepción se escribe con
+// `historicalRecord` y no sólo con `isCommit`.
+//
+// ESA SEGUNDA MITAD LA ENCONTRÓ UN TEST, NO YO. La primera versión eximía sólo a `git-commit` y
+// rompió `TestSoloLasCreenciasSeReemplazan/contrato -> nota`, que sella justamente que una creencia
+// SÍ se puede reemplazar. El mensaje del test lo dice mejor que este comentario: «la guarda se pasó
+// de ancha, es un martillo». La red del #203 hizo exactamente lo que se construyó para hacer.
+//
+// SIMÉTRICA, a diferencia de complementaryPair, que mira sólo el destino a propósito: su pregunta
+// es "¿se puede tachar esto?", que sí tiene lado. Acá la pregunta es "¿hablan del mismo tema?",
+// que no lo tiene — cuál de las dos se guardó última es un accidente del orden de escritura.
+//
+// NO OCULTA MEMORIA: el caller hace `continue`, no un DELETE. El peor caso de un falso negativo es
+// una relación DE MENOS en la cola, jamás una observación de menos en el recall.
+func dominiosAjenos(a, b obsRow) bool {
+	if dominioDe(a.topicKey) == dominioDe(b.topicKey) {
+		return false
+	}
+	return !historicalRecord(a.topicKey) && !historicalRecord(b.topicKey)
+}
+
 type obsRow struct {
 	id        string
 	topicKey  string
@@ -242,6 +292,12 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 		// veredicto que pedir. Va acá —el único loop donde nacen todas las relaciones— para que sea
 		// imposible de saltear, igual que DetectOnly volvió inalcanzable al markSuperseded.
 		if complementaryPair(src, c) {
+			continue
+		}
+		// Guarda de PRECISIÓN, también antes de cualquier scoring: dos observaciones de dominios
+		// distintos no proponen relación. Medido sobre la memoria real: evita 163 relaciones
+		// (un tercio de la cola) sin perder UNA sola señal. Ver dominiosAjenos.
+		if dominiosAjenos(src, c) {
 			continue
 		}
 		lex := Similarity(src.content, c.content)

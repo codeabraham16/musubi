@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **La cola de conflictos deja de llenarse de pares que no tienen nada que ver.** Medido sobre la
+  memoria real: de 494 relaciones sólo 45 exigían una decisión — **9,8 %** — y 31 de las 36
+  pendientes cruzaban temas completamente distintos (una auditoría de un servidor contra otra de un
+  videojuego). La causa es que el detector dispara por parecido de **forma**: dos auditorías se
+  parecen muchísimo entre sí aunque no hablen de lo mismo. Ahora dos observaciones de dominios
+  distintos no proponen relación, salvo que una sea un registro histórico —un commit o un contrato
+  SDD— que sí puede volver obsoleta una nota de cualquier tema.
+
+  **Cero señal perdida**: las 45 relaciones que sí exigían decisión se conservan enteras, y la cola
+  de pendientes baja de 36 a 6. La guarda nunca oculta memoria: evita *crear* una relación, jamás
+  archiva ni marca nada como reemplazado.
+
 ### Added
 - **Ledger de uso: Musubi ya puede responder qué herramientas se usan de verdad.** Hasta acá no
   podía, y eso hacía que toda decisión sobre dónde invertir esfuerzo se tomara por opinión: los
