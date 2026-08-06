@@ -137,6 +137,10 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		if s.metrics != nil {
 			s.metrics.authzDenied.Add(1) // rechazo por rol, visible en /metrics (T17.5)
 		}
+		// El ledger registra TAMBIÉN los rechazos (invariante L0). No son un caso borde: saber
+		// QUÉ tool se intentó y no se pudo es más informativo que el contador agregado, que es
+		// todo lo que había hasta acá.
+		s.registrarUso(ctx, callReq.Name, memory.OutcomeDeniedRole, 0)
 		return nil, rpcErrorf(codeUnauthorized, "principal %q (rol %s) no autorizado para %q", p.Name, p.Role, callReq.Name)
 	}
 	// Cuota de uso por-principal (Track 16 F3.2): tras autorizar, contar la llamada contra la
@@ -146,6 +150,7 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		if s.metrics != nil {
 			s.metrics.quotaExceeded.Add(1) // rechazo por cuota, visible en /metrics (T17.5)
 		}
+		s.registrarUso(ctx, callReq.Name, memory.OutcomeDeniedQuota, 0)
 		return nil, rpcErrorf(codeQuotaExceeded, "cuota excedida para el principal %q (máx %d llamadas/min); reintentá en unos segundos", p.Name, s.quota.max)
 	}
 	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
@@ -159,10 +164,25 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	}
 	// Métrica de latencia/resultado de la tool (Track 16 F3.1), expuesta en /metrics.
 	start := time.Now()
+	// El defer cubre el caso que un registro inline se perdería: si el handler entra en PÁNICO,
+	// el recover está más arriba (en Dispatch) y esta función no vuelve por su return. Sin defer,
+	// la invocación que MÁS interesa —la que rompió algo— sería la única que no queda registrada.
+	registrado := false
+	defer func() {
+		if !registrado {
+			s.registrarUso(ctx, callReq.Name, memory.OutcomePanic, time.Since(start))
+		}
+	}()
 	result, rpcErr := handler(ctx, callReq.Arguments)
 	if s.metrics != nil {
 		s.metrics.recordTool(callReq.Name, time.Since(start), rpcErr == nil)
 	}
+	outcome := memory.OutcomeOK
+	if rpcErr != nil {
+		outcome = memory.OutcomeError
+	}
+	s.registrarUso(ctx, callReq.Name, outcome, time.Since(start))
+	registrado = true
 	return result, rpcErr
 }
 

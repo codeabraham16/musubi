@@ -711,6 +711,51 @@ func schemaMigrations() []migration {
 				return addObservationColumns(x)
 			},
 		},
+		{
+			version: 23,
+			name:    "tool_invocations_ledger",
+			// LEDGER DE USO (F0 del track «Potencia medida»). Hasta acá Musubi no podía
+			// responder cuáles de sus tools se usan: el histograma por-tool de
+			// observability.go vive en memoria y se resetea en cada reinicio, /metrics pide
+			// bearer y el modo daemon (stdio, el 99% del uso) ni siquiera levanta HTTP.
+			// La tabla `telemetry_logs` no ayuda: guarda errores de compilación.
+			//
+			// LO QUE NO TIENE ESTA TABLA ES LA MITAD DEL DISEÑO. No hay columna de
+			// argumentos, ni de resultado, ni de mensaje de error: la fuga es imposible
+			// porque no hay dónde escribirla. `save_observation` recibe exactamente el
+			// contenido que el portero de privacidad existe para proteger, así que un
+			// registro de invocaciones con los argumentos adentro sería una segunda copia
+			// de toda la memoria sensible, sin ninguna de sus murallas.
+			//
+			// `outcome` es taxonomía CERRADA y no texto libre, por la misma razón que la
+			// procedencia de la v22: un mensaje de error puede arrastrar adentro el
+			// contenido que lo causó.
+			//
+			// Los dos índices son a propósito: las únicas consultas son "agrupá por tool" y
+			// "ventana reciente / purgá lo viejo". Sin el de fecha, la purga hace scan
+			// completo justo sobre la tabla que más crece.
+			up: func(x execQuerier) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS tool_invocations (
+						id          INTEGER PRIMARY KEY AUTOINCREMENT,
+						tool        TEXT     NOT NULL,
+						outcome     TEXT     NOT NULL,
+						duration_us INTEGER  NOT NULL,
+						project_id  TEXT     NOT NULL DEFAULT '',
+						principal   TEXT     NOT NULL DEFAULT '',
+						created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+					);`,
+					`CREATE INDEX IF NOT EXISTS idx_tool_invocations_tool ON tool_invocations(tool);`,
+					`CREATE INDEX IF NOT EXISTS idx_tool_invocations_ts ON tool_invocations(created_at);`,
+				}
+				for _, s := range stmts {
+					if _, err := x.Exec(s); err != nil {
+						return fmt.Errorf("v23 ledger de uso: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

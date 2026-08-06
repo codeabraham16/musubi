@@ -41,6 +41,8 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_whoami":          true,
 		// Contadores en memoria del proceso; no toca la DB ni bumpea nada (F5, invariante D8).
 		"musubi_cognition_stats": true,
+		// Lee el ledger de uso y no escribe nada: sin bumpAccess, sin ledger de tokens (F0).
+		"musubi_tool_usage": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

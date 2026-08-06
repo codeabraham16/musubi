@@ -109,10 +109,37 @@ func (s *McpServer) RunScheduledMaintenance() (ran bool, rep memory.MaintenanceR
 	} else if health.Status != "ok" {
 		logx.Info("scheduler: auto-curación dejó problemas no auto-reparables", "status", health.Status)
 	}
+	// Retención del LEDGER DE USO (F0 · invariante L6). Cuelga del mantenimiento que ya existe
+	// en vez de un timer propio: una tabla de telemetría sin techo termina siendo el problema
+	// que vino a diagnosticar, y encima en un sistema que se autodiagnostica con `doctor`.
+	// Best-effort como todo lo del ledger: si falla, se logea y el mantenimiento sigue.
+	purgadasLedger := s.purgarLedger()
+
 	logx.Info("scheduler: mantenimiento",
 		"merged", rep.Consolidate.Merged, "archived", rep.Decay.Archived,
-		"evicted", rep.Evicted, "purged", rep.Purged, "dur", time.Since(start).String())
+		"evicted", rep.Evicted, "purged", rep.Purged,
+		"ledger_purgado", purgadasLedger, "dur", time.Since(start).String())
 	return true, rep, nil
+}
+
+// purgarLedger borra las invocaciones más viejas que la retención configurada. Devuelve cuántas
+// para el log. Silencioso y sin efecto si el ledger está apagado o el backend no lo soporta.
+func (s *McpServer) purgarLedger() int64 {
+	if s.ledger == nil || s.ledgerRetentionDays <= 0 {
+		return 0
+	}
+	purgador, ok := s.engine.(interface {
+		PurgeToolInvocations(ctx context.Context, retentionDays int) (int64, error)
+	})
+	if !ok {
+		return 0
+	}
+	n, err := purgador.PurgeToolInvocations(context.Background(), s.ledgerRetentionDays)
+	if err != nil {
+		logx.Warn("ledger de uso: no se pudo purgar", "error", err)
+		return 0
+	}
+	return n
 }
 
 // RunMaintenanceScheduler corre RunScheduledMaintenance en un ticker periódico hasta que

@@ -7,6 +7,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Ledger de uso: Musubi ya puede responder qué herramientas se usan de verdad.** Hasta acá no
+  podía, y eso hacía que toda decisión sobre dónde invertir esfuerzo se tomara por opinión: los
+  contadores por-tool vivían en memoria y se reseteaban en cada reinicio, `/metrics` pide bearer, y
+  el modo daemon —que es el 99 % del uso— ni siquiera levanta HTTP donde exponerlos. Ahora cada
+  invocación queda en la base con su latencia y su resultado, y `musubi_tool_usage` la devuelve
+  agrupada por herramienta con media y p95. La cobertura es **estructural**: el registro vive en el
+  único punto por el que pasan todas las llamadas, así que incluye los errores, los rechazos por rol
+  y por cuota, y hasta el handler que entra en pánico.
+
+  **El ledger nunca guarda argumentos ni contenido** — el esquema no tiene dónde ponerlos, así que
+  la fuga es imposible y no depende de que nadie se olvide. Y no puede hacer fallar una llamada:
+  si no puede escribir, la herramienta responde igual.
+
 ### Changed
 - **`musubi_ask` fundamenta sobre el contenido completo, no sobre gists truncados.** El prompt de
   grounding mandaba al motor el gist de cada memoria —cortado a mitad de frase— así que el modelo

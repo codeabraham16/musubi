@@ -38,6 +38,14 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 	if _, err := e.SaveFactFrom("web", "SharedEntity", "relates_to", "VICTIMFACT", "", nil); err != nil {
 		t.Fatal(err)
 	}
+	// Ledger de uso de web (F0): el patrón de uso de OTRO proyecto —qué herramientas usa y con
+	// qué frecuencia— es información de negocio y no debe cruzarse. El marker va en la columna
+	// `tool`, que es lo único del ledger que llega a la respuesta.
+	if err := e.RecordToolInvocations(context.Background(), []memory.ToolInvocation{
+		{Tool: "VICTIMTOOL", Outcome: memory.OutcomeOK, ProjectID: "web"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Grafo de código de web (Track 20 F2): VictimCaller --CALLS--> VictimCallee. Los markers son
 	// el EXTREMO OPUESTO al que se consulta (así no se filtran por el eco del arg): code_graph pide
 	// VictimCaller y el marker es VictimCallee; impact pide VictimCallee y el marker es VictimCaller.
@@ -76,6 +84,7 @@ func readSweepCases() []readSweepCase {
 		{"musubi_code_graph", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "VictimCallee"},
 		{"musubi_impact", map[string]any{"symbol": "shared/auth.go#func:VictimCallee"}, "VictimCaller"},
 		{"musubi_map", map[string]any{}, "Victim"},
+		{"musubi_tool_usage", map[string]any{}, "VICTIMTOOL"},
 		// code_context: el weld deriva explained_by de la obs de web (topic_key web/topic) por el path.
 		{"musubi_code_context", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "web/topic"},
 		// grafos renderizables completos (Track 20): brain_graph lee observations (marker VICTIMOBS),

@@ -345,6 +345,27 @@ func initSchemaOn(x execQuerier) error {
 			FOREIGN KEY(observation_id) REFERENCES observations(id) ON DELETE CASCADE
 		);`,
 
+		// LEDGER DE USO (F0 · track «Potencia medida»): una fila por invocación de tool, para
+		// poder responder cuáles se usan de verdad. Va TAMBIÉN acá y no sólo en la migración
+		// v23 porque esta baseline es la que arma una base NUEVA (la v23 no corre sobre ella).
+		// Los dos caminos usan CREATE TABLE IF NOT EXISTS, que sí es idempotente — a
+		// diferencia de ALTER TABLE ADD COLUMN, que fue lo que rompió toda base nueva cuando
+		// la v22 repitió la DDL a mano.
+		//
+		// SIN columna de argumentos, resultado ni mensaje de error, a propósito (invariante
+		// L1): lo que no existe en el esquema no se puede filtrar.
+		`CREATE TABLE IF NOT EXISTS tool_invocations (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			tool        TEXT     NOT NULL,
+			outcome     TEXT     NOT NULL,
+			duration_us INTEGER  NOT NULL,
+			project_id  TEXT     NOT NULL DEFAULT '',
+			principal   TEXT     NOT NULL DEFAULT '',
+			created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_invocations_tool ON tool_invocations(tool);`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_invocations_ts ON tool_invocations(created_at);`,
+
 		// Tabla de logs de compilación/telemetría para feedback
 		`CREATE TABLE IF NOT EXISTS telemetry_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

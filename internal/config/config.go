@@ -525,6 +525,51 @@ type CognitionConfig struct {
 	Effort string `yaml:"effort,omitempty"`
 }
 
+// UsageLedgerConfig configura el LEDGER DE USO (F0 · track «Potencia medida»): la historia
+// persistente de qué tools se invocaron, cuánto tardaron y cómo terminaron.
+//
+// NACE ENCENDIDO, y es una decisión: no cambia el comportamiento de ninguna tool, no manda nada
+// afuera y no guarda contenido — así que no tiene contraindicación. Y sobre todo, un medidor
+// disponible-para-apagar termina apagado, que es literalmente el problema que esta fase vino a
+// arreglar (los contadores que ya existían morían en cada reinicio y nadie se enteró en dos meses).
+type UsageLedgerConfig struct {
+	// Enabled es *bool para distinguir "no lo escribieron" (⇒ encendido) de "lo apagaron a
+	// propósito" (false). Con un bool pelado el cero de Go haría que omitir el bloque apagara
+	// el ledger, que es el default equivocado. Usar EnabledOn().
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// FlushIntervalSeconds es cada cuánto baja el buffer a la base. Más chico pierde menos ante
+	// una muerte súbita del proceso y escribe más seguido. 0 ⇒ default.
+	FlushIntervalSeconds int `yaml:"flush_interval_seconds,omitempty"`
+	// RetentionDays es cuánto se conserva. La purga cuelga del mantenimiento que ya existe.
+	// 0 ⇒ default. Negativo ⇒ nunca purgar (a tu riesgo).
+	RetentionDays int `yaml:"retention_days,omitempty"`
+}
+
+// Defaults del ledger de uso.
+const (
+	defaultLedgerFlushSeconds  = 10
+	defaultLedgerRetentionDays = 90
+)
+
+// EnabledOn resuelve el *bool: ausente ⇒ ENCENDIDO.
+func (c UsageLedgerConfig) EnabledOn() bool { return c.Enabled == nil || *c.Enabled }
+
+// EffectiveFlushSeconds aplica el default sin que el caller tenga que conocerlo.
+func (c UsageLedgerConfig) EffectiveFlushSeconds() int {
+	if c.FlushIntervalSeconds <= 0 {
+		return defaultLedgerFlushSeconds
+	}
+	return c.FlushIntervalSeconds
+}
+
+// EffectiveRetentionDays aplica el default. Un valor negativo se respeta y significa "no purgar".
+func (c UsageLedgerConfig) EffectiveRetentionDays() int {
+	if c.RetentionDays == 0 {
+		return defaultLedgerRetentionDays
+	}
+	return c.RetentionDays
+}
+
 // CacheConfig configura el caché de cognición (F3).
 type CacheConfig struct {
 	// Enabled: nace ENCENDIDO cuando hay motor real. Ahorrar una llamada idéntica no tiene
@@ -721,6 +766,9 @@ type Config struct {
 	// Cognition configura el 3er pilar (Cognición LLM): OPT-IN, apagado por defecto (provider "" => Noop).
 	// F0 sólo cablea el andamiaje; no hace ninguna llamada real a un LLM.
 	Cognition CognitionConfig `yaml:"cognition,omitempty"`
+	// UsageLedger es la historia persistente de invocaciones de tools (F0 · «Potencia medida»).
+	// Nace encendido; ver el comentario del tipo para el porqué.
+	UsageLedger UsageLedgerConfig `yaml:"usage_ledger,omitempty"`
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
