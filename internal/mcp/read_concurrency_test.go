@@ -43,6 +43,8 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_cognition_stats": true,
 		// Lee el ledger de uso y no escribe nada: sin bumpAccess, sin ledger de tokens (F0).
 		"musubi_tool_usage": true,
+		// Lee .musubi/skills/*.yaml del disco: no toca la DB, no bumpea, no escribe (F5.1).
+		"musubi_list_skills": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

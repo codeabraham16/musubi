@@ -492,6 +492,23 @@
       }
     },
     {
+      "name": "musubi_list_skills",
+      "description": "Lista las skills GUARDADAS en el arsenal (.musubi/skills/). Responde '¿qué hay guardado?', a diferencia de musubi_search_skills, que puntúa el catálogo REMOTO para recomendar y excluye lo ya rechazado. Devuelve un array (vacío si no hay ninguna); una skill con YAML inválido se saltea sin tumbar el resto.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de resultados; ausente o ≤ 0 devuelve todas (opcional)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Filtra por subcadena en nombre o descripción, sin distinguir mayúsculas (opcional)"
+          }
+        }
+      }
+    },
+    {
       "name": "musubi_log_skill_decision",
       "description": "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
       "inputSchema": {

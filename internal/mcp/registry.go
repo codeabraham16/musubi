@@ -419,6 +419,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_list_skills",
+				Description: "Lista las skills GUARDADAS en el arsenal (.musubi/skills/). Responde '¿qué hay guardado?', a diferencia de musubi_search_skills, que puntúa el catálogo REMOTO para recomendar y excluye lo ya rechazado. Devuelve un array (vacío si no hay ninguna); una skill con YAML inválido se saltea sin tumbar el resto.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"query": {Type: "string", Description: "Filtra por subcadena en nombre o descripción, sin distinguir mayúsculas (opcional)"},
+						"limit": {Type: "number", Description: "Máximo de resultados; ausente o ≤ 0 devuelve todas (opcional)"},
+					},
+				},
+			},
+			handler:  noCtx(s.toolListSkills),
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_log_skill_decision",
 				Description: "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
 				InputSchema: InputSchema{
