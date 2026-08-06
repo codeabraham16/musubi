@@ -77,12 +77,16 @@ func TestL6LaPurgaRespetaLaRetencion(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
-	if err := e.RecordToolInvocations(ctx, []ToolInvocation{
-		{Tool: "musubi_recall", Outcome: OutcomeOK, Duration: time.Millisecond},
-	}); err != nil {
+	// LAS DOS FILAS VAN CON FECHA EXPLÍCITA, y no es cosmético. La primera versión usaba
+	// RecordToolInvocations para la fila reciente, que la sella con CURRENT_TIMESTAMP —
+	// granularidad de SEGUNDO. Al purgar en el mismo segundo, `created_at < datetime('now')`
+	// daba falso y la fila sobrevivía por TIMING, no por lógica: el sabotaje que pone la
+	// retención en cero pasaba en verde. Con -1 día la frontera es inequívoca.
+	if _, err := e.db.Exec(
+		`INSERT INTO tool_invocations (tool, outcome, duration_us, created_at)
+		 VALUES ('musubi_recall', 'ok', 1000, datetime('now','-1 day'))`); err != nil {
 		t.Fatal(err)
 	}
-	// Una fila vieja, insertada con fecha explícita.
 	if _, err := e.db.Exec(
 		`INSERT INTO tool_invocations (tool, outcome, duration_us, created_at)
 		 VALUES ('musubi_map', 'ok', 1000, datetime('now','-200 days'))`); err != nil {
