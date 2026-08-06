@@ -96,6 +96,57 @@ func TestL0TodaLlamadaQuedaRegistrada(t *testing.T) {
 	}
 }
 
+// L0 (los rechazos) — un rechazo por ROL y uno por CUOTA también quedan registrados.
+//
+// Va aparte porque la primera versión del test de L0 sólo cubría éxito y error, y el sabotaje que
+// borraba el registro del rechazo por rol pasaba en VERDE. El invariante dice "incluidos los
+// rechazados" y el test no los ejercitaba: un invariante probado a medias no está probado.
+func TestL0LosRechazosTambienQuedanRegistrados(t *testing.T) {
+	sink := &sinkEspia{}
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}, WithQuota(1))
+	s.ledger = newUsageLedger(sink, time.Hour)
+	t.Cleanup(func() { s.ledger.close() })
+
+	params := json.RawMessage(`{"name":"musubi_save_observation","arguments":{"topic_key":"q/t","content":"contenido de prueba para el rechazo"}}`)
+
+	// 1) RECHAZO POR ROL: un reader no puede llamar una tool que escribe.
+	ctxLector := withPrincipal(context.Background(), &Principal{Name: "lector", Role: RoleReader, Read: ReadOwn, Write: WriteNone})
+	if _, rerr := s.handleToolsCall(ctxLector, params); rerr == nil {
+		t.Fatal("el control no sirve: un reader no debería poder escribir")
+	}
+
+	// 2) RECHAZO POR CUOTA: el writer gasta su única llamada y la segunda rebota.
+	ctxEscritor := withPrincipal(context.Background(), &Principal{Name: "escritor", Role: RoleWriter, ProjectID: "proj-prueba", Read: ReadAll, Write: WriteAny})
+	if _, rerr := s.handleToolsCall(ctxEscritor, params); rerr != nil {
+		t.Fatalf("la primera llamada del writer debía pasar: %v", rerr)
+	}
+	if _, rerr := s.handleToolsCall(ctxEscritor, params); rerr == nil {
+		t.Fatal("el control no sirve: la segunda llamada debía exceder la cuota")
+	}
+
+	s.ledger.flush()
+	porOutcome := map[string]int{}
+	for _, v := range sink.todas() {
+		porOutcome[v.Outcome]++
+	}
+	if porOutcome[memory.OutcomeDeniedRole] != 1 {
+		t.Errorf("FUGA L0: el rechazo por ROL no quedó registrado (denied_role=%d). Registrados: %+v",
+			porOutcome[memory.OutcomeDeniedRole], porOutcome)
+	}
+	if porOutcome[memory.OutcomeDeniedQuota] != 1 {
+		t.Errorf("FUGA L0: el rechazo por CUOTA no quedó registrado (denied_quota=%d). Registrados: %+v",
+			porOutcome[memory.OutcomeDeniedQuota], porOutcome)
+	}
+	if porOutcome[memory.OutcomeOK] != 1 {
+		t.Errorf("el control no sirve: esperaba 1 llamada exitosa registrada, obtuve %d", porOutcome[memory.OutcomeOK])
+	}
+}
+
 // L1 — el ledger nunca guarda argumentos ni contenido. Es el invariante de privacidad.
 func TestL1ElLedgerNoGuardaArgumentosNiContenido(t *testing.T) {
 	sink := &sinkEspia{}
