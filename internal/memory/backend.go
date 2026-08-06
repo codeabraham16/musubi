@@ -40,6 +40,10 @@ type ObservationStore interface {
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.
 	GetObservationsBudgetCtx(ctx context.Context, ids []string, budget int) ([]Observation, int, error)
+	// HydrateForGroundingCtx es GetObservationsBudgetCtx SIN contabilizar el acceso. La usa el
+	// grounding de musubi_ask, donde Recall ya bumpeó esos mismos ids: fundamentar una pregunta es
+	// UN uso, y contarlo dos veces realimentaría el ranker con su propia salida (invariante N4).
+	HydrateForGroundingCtx(ctx context.Context, ids []string, budget int) ([]Observation, int, error)
 	// PromoteObservation marca una observación como 'shared' (memoria híbrida local+central).
 	PromoteObservation(id string) error
 	// PromoteObservationCtx es PromoteObservation acotada al proyecto de la credencial (aislamiento #11).

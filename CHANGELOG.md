@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **`musubi_ask` fundamenta sobre el contenido completo, no sobre gists truncados.** El prompt de
+  grounding mandaba al motor el gist de cada memoria —cortado a mitad de frase— así que el modelo
+  sintetizaba sobre resúmenes mutilados y la calidad de la respuesta quedaba limitada por el
+  truncado, no por el modelo. Ahora se hidrata el contenido íntegro de los mejores candidatos
+  dentro de un presupuesto derivado del `token_budget` que ya acepta la tool (sin perilla nueva); los
+  que no entran **siguen en el prompt con su gist**, así que cambia la profundidad y nunca la
+  selección. Apareció auditando el cable con un motor falso en loopback, no leyendo el código.
+- **El sello de procedencia ahora viaja en el prompt del motor.** Era un agujero de Q3 en el camino
+  de `ask`: el recall marcaba la procedencia para el caller pero la cabecera que veía el motor sólo
+  llevaba id, topic y fecha, así que una inferencia de un LLM ya corroborada le llegaba al
+  sintetizador indistinguible de una nota verificada a mano. Las memorias `human` siguen sin marca:
+  si todas la llevaran, el sello sería ruido de fondo.
+- **La hidratación por id se partió en dos puertas.** `musubi_memory_expand` sigue contabilizando el
+  acceso, igual que siempre; el grounding de `ask` usa una puerta que **no** lo cuenta, porque
+  `Recall` ya lo contó sobre esos mismos ids y fundamentar una pregunta es un uso, no dos. Sin esto
+  cada `ask` habría inflado `access_count` al doble justo sobre las memorias más consultadas, y el
+  ranker habría empezado a alimentarse de su propia salida.
+
+  Ojo con el efecto de borde: esto **agranda lo que cruza al motor externo** (antes gists
+  truncados, ahora contenido completo). Lo cubre el portero de privacidad, que nace encendido y
+  quedó verificado en el cable; quien lo apague a mano se expone a más que antes de este cambio.
+
 ## [0.99.0] - 2026-08-05
 
 ### Added

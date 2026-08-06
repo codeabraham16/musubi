@@ -261,15 +261,20 @@ func (e *DbEngine) markStaleOrigins(result RecallResult) RecallResult {
 			continue
 		}
 		result.Items[i].Stale = s
-		result.Items[i].Gist = staleWarning(s) + result.Items[i].Gist
+		result.Items[i].Gist = StaleWarning(s) + result.Items[i].Gist
 	}
 	return result
 }
 
-// staleWarning arma el prefijo que se antepone al gist. Es lo que el agente LEE: el campo
+// StaleWarning arma el prefijo que se antepone al gist. Es lo que el agente LEE: el campo
 // estructurado sirve al dashboard y a los tests, pero si la advertencia no viaja en el
 // gist el modelo no la ve sin hidratar la observación entera.
-func staleWarning(stale []StaleOrigin) string {
+//
+// Exportada porque el grounding de musubi_ask (paquete mcp) reemplaza el gist por el contenido
+// completo y tiene que REPONER esta advertencia: si no, desaparecería en silencio y el modelo
+// sintetizaría sobre una nota vencida creyéndola vigente. Un segundo formato de advertencia
+// escrito allá sería el mismo texto divergiendo en dos lugares.
+func StaleWarning(stale []StaleOrigin) string {
 	if len(stale) == 0 {
 		return ""
 	}
