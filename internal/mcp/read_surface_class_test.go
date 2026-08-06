@@ -161,6 +161,11 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 	noScopedRead := map[string]bool{
 		"musubi_discover_skills": true, // catalogo remoto/marketplace
 		"musubi_detect_stack":    true, // inspecciona el filesystem del proyecto local
+		// Lee .musubi/skills/*.yaml del disco, igual que detect_stack. El arsenal del central es
+		// COMPARTIDO a proposito (arsenal de empresa), asi que no hay dato de tenant que aislar. Lo
+		// que si es por-proyecto son las DECISIONES sobre skills, y esta tool no las mira: si algun
+		// dia filtrara por ellas, hay que MOVERLA al barrido de aislamiento.
+		"musubi_list_skills": true,
 		"musubi_tokens":          true, // ledger de la sesion
 		"musubi_sync_status":     true, // estado del outbox (no por-proyecto)
 		"musubi_phase":           true, // pipeline de fases de la sesion

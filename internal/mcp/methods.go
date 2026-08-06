@@ -2190,6 +2190,77 @@ func (s *McpServer) toolSearchSkills(ctx context.Context, raw json.RawMessage) (
 	return jsonResult(candidatos)
 }
 
+// skillListada es una skill del arsenal tal como la ve un cliente de musubi_list_skills.
+//
+// EXISTE PARA FIJAR EL CONTRATO JSON. `skills.Skill` tiene sólo tags YAML, así que serializarla
+// directo produce las claves con los nombres de campo de Go ("Name", "Description"). Un cliente
+// que parsea en minúscula NO recibiría un error: recibiría un array del largo correcto con todos
+// los campos vacíos — una falla que se lee como un dato. Los tags de acá son el contrato.
+//
+// Deja afuera GeneratedBy/GeneratedAt/ManagedChecksum a propósito: son metadatos de cómo Musubi
+// gestiona el archivo en disco, no información del arsenal.
+type skillListada struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Triggers     []string `json:"triggers"`
+	Capabilities []string `json:"capabilities"`
+	Source       string   `json:"source"`
+	SourceURL    string   `json:"source_url"`
+	Rules        string   `json:"rules"`
+}
+
+// toolListSkills lista las skills GUARDADAS en el arsenal (.musubi/skills/*.yaml).
+//
+// Responde una pregunta distinta a la de musubi_search_skills: aquélla puntúa un catálogo REMOTO
+// para recomendar y excluye lo que el usuario rechazó; ésta dice qué hay guardado. Una skill
+// rechazada para un proyecto sigue estando en el arsenal, así que acá no se filtra por decisiones
+// — y por eso esta tool no lee ninguna tabla con project_id (ver noScopedRead en el guard del
+// Track 19).
+func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+
+	// LoadSkills ya saltea los YAML rotos con un warning y devuelve vacío —no error— si el
+	// directorio no existe. Se reusa en vez de releer el disco acá: dos lecturas con criterios
+	// propios se desincronizan el día que cambie qué es una skill válida.
+	todas, err := s.resolver.LoadSkills()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "no se pudo leer el arsenal de skills: %v", err)
+	}
+
+	q := strings.ToLower(strings.TrimSpace(args.Query))
+
+	// `make` y no `var`: un slice nil se serializa como `null`, y el contrato de una tool que
+	// lista es devolver una lista aunque esté vacía.
+	out := make([]skillListada, 0, len(todas))
+	for _, sk := range todas {
+		if q != "" && !strings.Contains(strings.ToLower(sk.Name), q) &&
+			!strings.Contains(strings.ToLower(sk.Description), q) {
+			continue
+		}
+		out = append(out, skillListada{
+			Name:         sk.Name,
+			Description:  sk.Description,
+			Triggers:     sk.Triggers,
+			Capabilities: sk.Capabilities,
+			Source:       sk.Source,
+			SourceURL:    sk.SourceURL,
+			Rules:        sk.Rules,
+		})
+		if args.Limit > 0 && len(out) >= args.Limit {
+			break
+		}
+	}
+	return jsonResult(out)
+}
+
 // excludeRejectedSkills quita del listado los candidatos cuya decisión MÁS RECIENTE fue
 // "rejected": Musubi aprende de las decisiones y no re-propone lo descartado (T6.1).
 // Last-write-wins (GetSkillDecisions viene ordenado por id ASC): una skill rechazada y luego
