@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Las skills dejan de morir en la máquina donde se escribieron.** Hasta acá una skill guardada
+  desde una terminal se quedaba ahí para siempre: el sync movía memoria y grafo de código, pero no
+  skills, y no existía ninguna herramienta para instalar en un proyecto una skill del cerebro
+  central. Se veía en el dato — el arsenal del central tenía **una** skill mientras una sola PC
+  tenía once que nunca subieron. Ahora hay un arsenal compartido de verdad:
+
+  - `musubi_promote_skill` sube una skill local al cerebro central. **Explícita a propósito**: nada
+    sube solo, porque hay skills que son locales por naturaleza y otras que dispararían en todos los
+    proyectos de todos. La curaduría es del dueño; la herramienta sólo la hace fácil.
+  - `musubi_list_skills` gana `source`: `local` (el default de siempre, intacto), `central` para ver
+    el arsenal —con cada entrada marcada `installed: true|false`— y `all` para las locales más lo
+    que falta. Sin esto, instalar exigía saber el nombre exacto de memoria.
+  - `musubi_install_skill` la baja y la escribe en el proyecto, marcada con su procedencia para
+    poder responder «¿esto lo escribí yo o lo adopté?» sin adivinar.
+  - `musubi provision --skills` deja el arsenal instalado al unir un proyecto nuevo. Sin el flag no
+    se hace ninguna llamada al central: unir una máquina no puede depender de que el arsenal esté
+    sano.
+
+  Nada se pisa sin pedirlo, y lo que baja del central pasa por la misma puerta de escritura que
+  `musubi_save_skill`, con su gate de calidad y su guarda de path traversal: el contenido del
+  arsenal es dato remoto, y tratarlo como confiable «porque es nuestro» es como se cuela un escape
+  de directorio.
+
 ### Changed
 - **La cola de conflictos deja de llenarse de pares que no tienen nada que ver.** Medido sobre la
   memoria real: de 494 relaciones sólo 45 exigían una decisión — **9,8 %** — y 31 de las 36

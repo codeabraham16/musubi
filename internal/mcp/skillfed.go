@@ -125,30 +125,36 @@ func (c *SyncClient) PushSkill(sk skills.Skill, overwrite bool) error {
 	return err
 }
 
-// FetchSkill trae UNA skill del arsenal del central por nombre exacto.
+// ListArsenal trae el CATÁLOGO del arsenal del central, opcionalmente filtrado por subcadena.
 //
-// Pide con query=name porque musubi_list_skills filtra por SUBCADENA, así que la respuesta puede
-// traer parientes ("go-rules" al pedir "go"): el match exacto se hace acá. Sin esa comparación,
-// instalar "go" podría bajar cualquier cosa que empiece igual.
-func (c *SyncClient) FetchSkill(name string) (skills.Skill, error) {
-	txt, err := c.callCentral("install-skill:"+name, "musubi_list_skills",
-		map[string]any{"query": name})
+// Existe porque FetchSkill ya recibía la lista entera y descartaba todo menos un nombre: el
+// descubrimiento estaba construido y escondido. Exponerlo es lo que vuelve usable a
+// musubi_install_skill, que sin esto exige saber el nombre exacto de memoria (spec
+// «arsenal-arranque», B1).
+func (c *SyncClient) ListArsenal(query string) ([]skills.Skill, error) {
+	args := map[string]any{}
+	if query != "" {
+		args["query"] = query
+	}
+	txt, err := c.callCentral("arsenal-list:"+query, "musubi_list_skills", args)
 	if err != nil {
-		return skills.Skill{}, err
+		return nil, err
 	}
 	txt = strings.TrimSpace(txt)
+	// Un arsenal VACÍO responde "[]" —musubi_list_skills construye con make(), no con var—, así
+	// que "" o "null" NO significan "no hay skills": significan un central que no entiende la
+	// tool (versión vieja) o una respuesta rota. Distinguirlo evita reportar «arsenal vacío»
+	// cuando el problema real es el deploy del otro lado.
 	if txt == "" || txt == "null" {
-		return skills.Skill{}, fmt.Errorf("%w: el arsenal no devolvió nada para %q", errPermanent, name)
+		return nil, fmt.Errorf("%w: el arsenal del central no devolvió una lista", errPermanent)
 	}
 	var lista []skillPayload
 	if err := json.Unmarshal([]byte(txt), &lista); err != nil {
-		return skills.Skill{}, fmt.Errorf("%w: respuesta del arsenal ilegible: %v", errPermanent, err)
+		return nil, fmt.Errorf("%w: respuesta del arsenal ilegible: %v", errPermanent, err)
 	}
+	out := make([]skills.Skill, 0, len(lista))
 	for _, p := range lista {
-		if p.Name != name {
-			continue
-		}
-		return skills.Skill{
+		out = append(out, skills.Skill{
 			Name:         p.Name,
 			Description:  p.Description,
 			Triggers:     p.Triggers,
@@ -156,7 +162,25 @@ func (c *SyncClient) FetchSkill(name string) (skills.Skill, error) {
 			Rules:        p.Rules,
 			Source:       p.Source,
 			SourceURL:    p.SourceURL,
-		}, nil
+		})
+	}
+	return out, nil
+}
+
+// FetchSkill trae UNA skill del arsenal del central por nombre exacto.
+//
+// Pide con query=name porque musubi_list_skills filtra por SUBCADENA, así que la respuesta puede
+// traer parientes ("go-rules" al pedir "go"): el match exacto se hace acá. Sin esa comparación,
+// instalar "go" podría bajar cualquier cosa que empiece igual.
+func (c *SyncClient) FetchSkill(name string) (skills.Skill, error) {
+	lista, err := c.ListArsenal(name)
+	if err != nil {
+		return skills.Skill{}, err
+	}
+	for _, sk := range lista {
+		if sk.Name == name {
+			return sk, nil
+		}
 	}
 	return skills.Skill{}, fmt.Errorf("%w: %q no está en el arsenal del central", errPermanent, name)
 }

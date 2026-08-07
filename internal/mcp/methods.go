@@ -2207,7 +2207,24 @@ type skillListada struct {
 	Source       string   `json:"source"`
 	SourceURL    string   `json:"source_url"`
 	Rules        string   `json:"rules"`
+
+	// Origin dice de DÓNDE salió esta entrada: "local" (el disco de este proyecto) o "central"
+	// (el arsenal). No es lo mismo que Source, que dice cómo llegó a existir la skill: una
+	// skill con Origin=local puede tener Source=arsenal-central porque se adoptó ayer.
+	Origin string `json:"origin"`
+	// Installed sólo aparece en entradas del central: responde «¿ya la tengo?», que es la
+	// pregunta que uno se hace mirando un arsenal. Es puntero para poder OMITIRSE en las
+	// entradas locales (donde la respuesta sería trivialmente sí) sin confundir ese caso con
+	// un `false`, que ahí sí sería una mentira.
+	Installed *bool `json:"installed,omitempty"`
 }
+
+// Valores de `source` de musubi_list_skills.
+const (
+	fuenteLocal   = "local"
+	fuenteCentral = "central"
+	fuenteTodas   = "all"
+)
 
 // toolListSkills lista las skills GUARDADAS en el arsenal (.musubi/skills/*.yaml).
 //
@@ -2218,8 +2235,9 @@ type skillListada struct {
 // Track 19).
 func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query  string `json:"query"`
+		Limit  int    `json:"limit"`
+		Source string `json:"source"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -2227,38 +2245,97 @@ func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError)
 		}
 	}
 
+	// G6: un `source` con typo NO cae al default. Degradar a "local" en silencio produce
+	// exactamente la mentira que G5 prohíbe —una lista local que se lee como el arsenal—, pero
+	// por accidente y sin que nadie se entere.
+	fuente := strings.ToLower(strings.TrimSpace(args.Source))
+	if fuente == "" {
+		fuente = fuenteLocal
+	}
+	switch fuente {
+	case fuenteLocal, fuenteCentral, fuenteTodas:
+	default:
+		return nil, rpcErrorf(codeInvalidParams,
+			"source inválido %q: usá %q, %q o %q", args.Source, fuenteLocal, fuenteCentral, fuenteTodas)
+	}
+
 	// LoadSkills ya saltea los YAML rotos con un warning y devuelve vacío —no error— si el
 	// directorio no existe. Se reusa en vez de releer el disco acá: dos lecturas con criterios
 	// propios se desincronizan el día que cambie qué es una skill válida.
-	todas, err := s.resolver.LoadSkills()
+	// Se cargan SIEMPRE, incluso con source=central: son las que dicen qué está ya instalado.
+	locales, err := s.resolver.LoadSkills()
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo leer el arsenal de skills: %v", err)
 	}
+	tengo := make(map[string]bool, len(locales))
+	for _, sk := range locales {
+		tengo[sk.Name] = true
+	}
 
 	q := strings.ToLower(strings.TrimSpace(args.Query))
+	coincide := func(sk skills.Skill) bool {
+		return q == "" || strings.Contains(strings.ToLower(sk.Name), q) ||
+			strings.Contains(strings.ToLower(sk.Description), q)
+	}
 
 	// `make` y no `var`: un slice nil se serializa como `null`, y el contrato de una tool que
 	// lista es devolver una lista aunque esté vacía.
-	out := make([]skillListada, 0, len(todas))
-	for _, sk := range todas {
-		if q != "" && !strings.Contains(strings.ToLower(sk.Name), q) &&
-			!strings.Contains(strings.ToLower(sk.Description), q) {
-			continue
-		}
-		out = append(out, skillListada{
-			Name:         sk.Name,
-			Description:  sk.Description,
-			Triggers:     sk.Triggers,
-			Capabilities: sk.Capabilities,
-			Source:       sk.Source,
-			SourceURL:    sk.SourceURL,
-			Rules:        sk.Rules,
-		})
-		if args.Limit > 0 && len(out) >= args.Limit {
-			break
+	out := make([]skillListada, 0, len(locales))
+	if fuente == fuenteLocal || fuente == fuenteTodas {
+		for _, sk := range locales {
+			if !coincide(sk) {
+				continue
+			}
+			out = append(out, entradaSkill(sk, fuenteLocal, nil))
 		}
 	}
+
+	if fuente == fuenteCentral || fuente == fuenteTodas {
+		// G5: sin central NO se devuelve la lista local haciéndola pasar por el arsenal. Una
+		// lista que "anda" mostrando lo local se lee como un arsenal VACÍO, y la conclusión es
+		// «no hay nada que instalar»: la peor forma de fallar de todo este track.
+		if s.syncClient == nil {
+			return nil, rpcErrorf(codeInvalidParams,
+				"no hay cerebro central configurado: definí sync.central_url y sync.auth_token_env para ver el arsenal")
+		}
+		remotas, ferr := s.syncClient.ListArsenal(args.Query)
+		if ferr != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo leer el arsenal del central: %v", ferr)
+		}
+		for _, sk := range remotas {
+			// G4: con `all`, lo que ya está instalado no se repite. La pregunta que responde
+			// `all` es «qué tengo y qué MÁS podría tener»; duplicar esconde el faltante.
+			if fuente == fuenteTodas && tengo[sk.Name] {
+				continue
+			}
+			if !coincide(sk) {
+				continue
+			}
+			ya := tengo[sk.Name]
+			out = append(out, entradaSkill(sk, fuenteCentral, &ya))
+		}
+	}
+
+	if args.Limit > 0 && len(out) > args.Limit {
+		out = out[:args.Limit]
+	}
 	return jsonResult(out)
+}
+
+// entradaSkill arma una entrada del listado. Centraliza el mapeo skills.Skill → DTO para que las
+// dos fuentes no se desincronicen: el día que se agregue un campo, se agrega en un solo lugar.
+func entradaSkill(sk skills.Skill, origen string, installed *bool) skillListada {
+	return skillListada{
+		Name:         sk.Name,
+		Description:  sk.Description,
+		Triggers:     sk.Triggers,
+		Capabilities: sk.Capabilities,
+		Source:       sk.Source,
+		SourceURL:    sk.SourceURL,
+		Rules:        sk.Rules,
+		Origin:       origen,
+		Installed:    installed,
+	}
 }
 
 // excludeRejectedSkills quita del listado los candidatos cuya decisión MÁS RECIENTE fue
