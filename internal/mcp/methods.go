@@ -1910,6 +1910,11 @@ type argsGuardarSkill struct {
 	Capabilities []string `json:"capabilities"`
 	Rules        string   `json:"rules"`
 	Overwrite    bool     `json:"overwrite"`
+	// AlwaysBecause: éste es el lado RECEPTOR de una promoción (PushSkill llama a musubi_save_skill
+	// en el central). Sin el campo acá, la justificación se perdería justo al cruzar —sin error, sin
+	// aviso— y el arsenal guardaría skills siempre-encendidas sin razón. Es la misma trampa que ya
+	// documenta skillPayload: los tags equivocados no fallan, guardan vacío.
+	AlwaysBecause string `json:"always_because"`
 }
 
 // toolSaveSkill valida los argumentos y guarda la skill como YAML en .musubi/skills/.
@@ -1928,13 +1933,14 @@ func (s *McpServer) toolSaveSkill(raw json.RawMessage) (interface{}, *RpcError) 
 
 	// Construir la skill con campos de procedencia.
 	sk := skills.Skill{
-		Name:         args.Name,
-		Description:  args.Description,
-		Triggers:     args.Triggers,
-		Capabilities: args.Capabilities,
-		Rules:        args.Rules,
-		GeneratedBy:  "auto-discovery",
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+		Name:          args.Name,
+		Description:   args.Description,
+		Triggers:      args.Triggers,
+		Capabilities:  args.Capabilities,
+		Rules:         args.Rules,
+		AlwaysBecause: args.AlwaysBecause,
+		GeneratedBy:   "auto-discovery",
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// GATE DE CALIDAD (model-free): bloquea si hay errores; los warnings avisan.
@@ -2042,25 +2048,27 @@ func skillSaveMessage(name, path string, r skills.QualityReport) string {
 // reputados), y reporta el tier de confiabilidad de la fuente.
 func (s *McpServer) toolAuthorSkill(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Name         string   `json:"name"`
-		Description  string   `json:"description"`
-		Triggers     []string `json:"triggers"`
-		Capabilities []string `json:"capabilities"`
-		Rules        string   `json:"rules"`
-		SourceURL    string   `json:"source_url"`
-		Save         bool     `json:"save"`
+		Name          string   `json:"name"`
+		Description   string   `json:"description"`
+		Triggers      []string `json:"triggers"`
+		Capabilities  []string `json:"capabilities"`
+		Rules         string   `json:"rules"`
+		SourceURL     string   `json:"source_url"`
+		AlwaysBecause string   `json:"always_because"`
+		Save          bool     `json:"save"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 	}
 
 	sk := skills.Skill{
-		Name:         args.Name,
-		Description:  args.Description,
-		Triggers:     args.Triggers,
-		Capabilities: args.Capabilities,
-		Rules:        args.Rules,
-		SourceURL:    args.SourceURL,
+		Name:          args.Name,
+		Description:   args.Description,
+		Triggers:      args.Triggers,
+		Capabilities:  args.Capabilities,
+		Rules:         args.Rules,
+		SourceURL:     args.SourceURL,
+		AlwaysBecause: args.AlwaysBecause,
 	}
 	report := skills.ValidateSkillQuality(sk)
 	resp := map[string]interface{}{
@@ -2207,6 +2215,10 @@ type skillListada struct {
 	Source       string   `json:"source"`
 	SourceURL    string   `json:"source_url"`
 	Rules        string   `json:"rules"`
+	// AlwaysBecause aparece sólo en skills que se activan siempre: es la razón declarada del "*".
+	// Mostrarla en el catálogo es lo que permite decidir ANTES de instalar —«¿me sirve tener esto
+	// encendido en cada tarea de mi repo?»— en vez de descubrirlo cuando ya ensucia el contexto.
+	AlwaysBecause string `json:"always_because,omitempty"`
 
 	// Origin dice de DÓNDE salió esta entrada: "local" (el disco de este proyecto) o "central"
 	// (el arsenal). No es lo mismo que Source, que dice cómo llegó a existir la skill: una
@@ -2326,15 +2338,16 @@ func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError)
 // dos fuentes no se desincronicen: el día que se agregue un campo, se agrega en un solo lugar.
 func entradaSkill(sk skills.Skill, origen string, installed *bool) skillListada {
 	return skillListada{
-		Name:         sk.Name,
-		Description:  sk.Description,
-		Triggers:     sk.Triggers,
-		Capabilities: sk.Capabilities,
-		Source:       sk.Source,
-		SourceURL:    sk.SourceURL,
-		Rules:        sk.Rules,
-		Origin:       origen,
-		Installed:    installed,
+		Name:          sk.Name,
+		Description:   sk.Description,
+		Triggers:      sk.Triggers,
+		Capabilities:  sk.Capabilities,
+		Source:        sk.Source,
+		SourceURL:     sk.SourceURL,
+		Rules:         sk.Rules,
+		AlwaysBecause: sk.AlwaysBecause,
+		Origin:        origen,
+		Installed:     installed,
 	}
 }
 

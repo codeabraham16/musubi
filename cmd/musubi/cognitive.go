@@ -61,12 +61,20 @@ func projectTriggers(stack []detector.StackResult) []string {
 // análisis/deducción adaptados al stack detectado.
 func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 	stackTriggers := projectTriggers(stack)
+	// Las cognitivas dependientes del stack sólo caen a "*" cuando no se reconoció ecosistema
+	// alguno. En ese caso —y SÓLO en ése— hay que declarar por qué disparan siempre: con globs
+	// concretos la razón sería una mentira sobre su alcance (spec «trigger-honesto», H1).
+	sinStack := ""
+	if len(stackTriggers) == 1 && stackTriggers[0] == "*" {
+		sinStack = "sin ecosistema reconocido no hay globs a los que acotar: el análisis inicial mira el proyecto entero"
+	}
 	return []skills.Skill{
 		{
-			Name:         "analyze-project",
-			Description:  "Analiza la estructura del proyecto para arrancar el autoconocimiento.",
-			Triggers:     stackTriggers,
-			Capabilities: []string{},
+			Name:          "analyze-project",
+			Description:   "Analiza la estructura del proyecto para arrancar el autoconocimiento.",
+			Triggers:      stackTriggers,
+			Capabilities:  []string{},
+			AlwaysBecause: sinStack,
 			Rules: "Cuando empieces a trabajar en este proyecto:\n" +
 				"- Mapeá la estructura: manifests, entrypoints, carpetas clave y scripts de build/test.\n" +
 				"- Usá musubi_detect_stack para confirmar ecosistemas y frameworks.\n" +
@@ -74,30 +82,33 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"- No re-analices lo que ya esté en memoria: primero recuperá con musubi_recall.\n",
 		},
 		{
-			Name:         "deduce-conventions",
-			Description:  "Deduce las convenciones del proyecto a partir del código existente.",
-			Triggers:     stackTriggers,
-			Capabilities: []string{},
+			Name:          "deduce-conventions",
+			Description:   "Deduce las convenciones del proyecto a partir del código existente.",
+			Triggers:      stackTriggers,
+			Capabilities:  []string{},
+			AlwaysBecause: sinStack,
 			Rules: "A partir del código existente, deducí (no inventes) las convenciones del proyecto:\n" +
 				"- Naming, estructura de carpetas, estilo de tests y manejo de errores.\n" +
 				"- Guardá cada convención estable como hecho con musubi_save_fact (ej. sujeto='proyecto', predicado='usa', objeto='gofmt').\n" +
 				"- Ante dudas o señales contradictorias, marcá la incertidumbre en vez de asumir.\n",
 		},
 		{
-			Name:         "plan-ahead",
-			Description:  "Planea antes de actuar usando lo que el proyecto ya sabe de sí mismo.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "plan-ahead",
+			Description:   "Planea antes de actuar usando lo que el proyecto ya sabe de sí mismo.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "planificar es una FASE del trabajo, no un tipo de archivo: aplica antes de tocar cualquier cosa",
 			Rules: "Antes de implementar o cambiar algo:\n" +
 				"- Recuperá contexto con musubi_recall y musubi_recall_facts.\n" +
 				"- Armá un plan corto (pasos concretos) basado en lo que ya se sabe del proyecto.\n" +
 				"- Identificá explícitamente los huecos de información y resolvelos antes de codear.\n",
 		},
 		{
-			Name:         "project-profile",
-			Description:  "Mantiene un perfil vivo del proyecto: el ancla del autoconocimiento.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "project-profile",
+			Description:   "Mantiene un perfil vivo del proyecto: el ancla del autoconocimiento.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "el perfil describe el proyecto entero; no hay un archivo al que atarlo",
 			Rules: "Mantené un PERFIL del proyecto como memoria de alto nivel:\n" +
 				"- Guardalo y actualizalo con musubi_save_observation usando el topic_key exacto 'project/profile'.\n" +
 				"- El perfil resume: propósito, stack, arquitectura, convenciones clave y decisiones vigentes.\n" +
@@ -105,10 +116,11 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"- Este perfil es lo que Musubi recuerda al arrancar cada sesión, así que mantenelo al día.\n",
 		},
 		{
-			Name:         "orchestrate-multiagent",
-			Description:  "Orquesta sub-agentes en paralelo usando la pizarra compartida de Musubi.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "orchestrate-multiagent",
+			Description:   "Orquesta sub-agentes en paralelo usando la pizarra compartida de Musubi.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "se activa por la FORMA de la tarea (grande y paralelizable), no por el archivo que se toca",
 			Rules: "Cuando una tarea sea grande y paralelizable (varios archivos/áreas independientes), orquestá sub-agentes con la pizarra compartida en vez de hacerlo todo en serie:\n" +
 				"1. Descomponé la tarea y posteá las unidades con musubi_work action=plan (cada unidad: title + spec claro y autónomo). Guardá el batch_id que devuelve.\n" +
 				"2. Lanzá N sub-agentes con el Task tool. En CADA uno: pasá mcpServers:[musubi] e instruí el protocolo: hacer musubi_work action=claim batch=<id> agent=<etiqueta>, ejecutar la unidad, y cerrarla con musubi_work action=complete id=<id> result=<resumen>. El claim es atómico: dos sub-agentes nunca toman la misma unidad.\n" +
@@ -117,10 +129,11 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"- Guardá las decisiones/aprendizajes del trabajo con musubi_save_observation.\n",
 		},
 		{
-			Name:         "audit-structure-flow",
-			Description:  "Audita la estructura y el flujo del codebase y emite hallazgos priorizados con evidencia.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "audit-structure-flow",
+			Description:   "Audita la estructura y el flujo del codebase y emite hallazgos priorizados con evidencia.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "audita el codebase como un todo; el disparador es el pedido de auditoría, no un archivo",
 			Rules: "Cuando se pida auditar la ESTRUCTURA (organización, cohesión, acoplamiento, capas, código muerto) o el FLUJO (dirección de dependencias, ciclos, entrada→salida, propagación de context/errores) del proyecto:\n" +
 				"1. Mapeá módulos/paquetes (tamaño + responsabilidad) y construí el grafo de dependencias con la herramienta del stack (go list, madge, pydeps, cargo modules, jdeps). Verificá cada afirmación contra el código; no asumas por los nombres.\n" +
 				"2. Severidad — ALTO: ciclo o inversión (módulo core que importa IO/transporte), estado global mutable, errores tragados. MEDIO: smell con costo real (god-file, módulo grab-bag, código muerto/huérfano). BAJO: cosmético.\n" +
@@ -129,10 +142,11 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"5. Separá estructura (forma estática) de flujo (recorrido dinámico). Cada hallazgo: severidad + evidencia (ruta:símbolo) + acción. Guardá el resultado con musubi_save_observation (topic_key 'audit/...') e incluí un Top 3 de acciones.\n",
 		},
 		{
-			Name:         "sdd-flow",
-			Description:  "Conduce features medianas-grandes con Spec-Driven Development guiado (musubi_sdd), encarnando el rol de cada fase.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "sdd-flow",
+			Description:   "Conduce features medianas-grandes con Spec-Driven Development guiado (musubi_sdd), encarnando el rol de cada fase.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "gobierna el flujo completo de un cambio; no depende del lenguaje ni del archivo abierto",
 			Rules: "Para un cambio no trivial (varias fases, 2+ archivos, decisiones de diseño), usá el flujo SDD guiado en vez de improvisar:\n" +
 				"1. Arrancá con musubi_sdd action=start change=<nombre>. Devuelve la fase activa, su ROL y su directiva; ENCARNÁ ese rol (proponente→especificador→diseñador→planificador→implementador→verificador→archivador).\n" +
 				"2. Trabajá la fase usando su plantilla (.musubi/templates/sdd/) y cerrala con musubi_sdd action=complete change=<c> phase=<f> summary=<resumen ejecutivo> [artifacts, risks, next_recommended]. Eso persiste el artefacto en memoria bajo sdd/<change>/<phase>.\n" +
@@ -141,10 +155,11 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"5. El run es resumible: en otra sesión retomás con musubi_sdd action=status change=<c>.\n",
 		},
 		{
-			Name:         "adversarial-review",
-			Description:  "Revisión adversarial estilo debate: escépticos con lentes distintos refutan un cambio en rondas, con veredicto por mayoría determinista y bucle de corrección.",
-			Triggers:     []string{"*"},
-			Capabilities: []string{},
+			Name:          "adversarial-review",
+			Description:   "Revisión adversarial estilo debate: escépticos con lentes distintos refutan un cambio en rondas, con veredicto por mayoría determinista y bucle de corrección.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "se activa al cerrar un cambio de riesgo, en cualquier lenguaje; el disparador es el momento, no el archivo",
 			Rules: "Antes de dar por bueno un cambio de riesgo (o en la fase verify de un flujo SDD), sometelo a un DEBATE adversarial con veredicto determinista en vez de una sola lectura complaciente:\n" +
 				"1. Abrí el debate con musubi_debate action=open topic=<el cambio a juzgar> rounds=2 quorum=<mayoría de los escépticos, p. ej. 2 de 3>. Guardá el debate_id. (musubi_debate estructura las rondas y CUENTA los votos sin sesgo; la inteligencia de refutar es tuya.)\n" +
 				"2. Lanzá N sub-agentes escépticos con el Task tool (mcpServers:[musubi]), cada uno con un LENTE distinto (correctitud, seguridad, ¿reproduce el bug?, contrato de la spec). A CADA uno instruílo a intentar REFUTAR el cambio desde su lente y a postear su hallazgo con musubi_debate action=post id=<debate_id> agent=<lente> stance=<veredicto + evidencia>. Ante la duda, que refute.\n" +
