@@ -54,8 +54,8 @@ func TestHTTPToolsList(t *testing.T) {
 		t.Fatalf("result no es objeto: %T", jr.Result)
 	}
 	tools, ok := m["tools"].([]interface{})
-	if !ok || len(tools) != 52 {
-		t.Fatalf("esperaba 52 tools por HTTP, obtuve %v (%d)", ok, len(tools))
+	if !ok || len(tools) != 54 {
+		t.Fatalf("esperaba 54 tools por HTTP, obtuve %v (%d)", ok, len(tools))
 	}
 }
 

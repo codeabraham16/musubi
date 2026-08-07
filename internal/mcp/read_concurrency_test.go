@@ -58,6 +58,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 	mustWrite := []string{
 		"musubi_recall", "musubi_memory_expand", "musubi_recall_code",
 		"musubi_save_observation", "musubi_maintain", "musubi_judge", "musubi_tokens",
+		// Federación del arsenal: promote escribe en el CENTRAL, install escribe en el disco
+		// del proyecto. Marcarlas readOnly las metería en la clase de lectura aislada, que es
+		// justo lo que no son.
+		"musubi_promote_skill", "musubi_install_skill",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
 		// musubi_sdd hace un RMW del blob del run (CompleteWorkflowStep) + persiste el
 		// artefacto: su corrección depende del Lock exclusivo de dispatchMu. Marcarla readOnly

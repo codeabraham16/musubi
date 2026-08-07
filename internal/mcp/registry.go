@@ -434,6 +434,36 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_promote_skill",
+				Description: "Sube una skill LOCAL al arsenal del cerebro central, para que quede disponible al arrancar cualquier otro proyecto. Explícita a propósito: nada sube solo, la curaduría es del dueño. Requiere sync.central_url configurado.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name":      {Type: "string", Description: "Slug de la skill local a promover"},
+						"overwrite": {Type: "boolean", Description: "Reemplaza la del arsenal si ya existe (default false)"},
+					},
+					Required: []string{"name"},
+				},
+			},
+			handler: noCtx(s.toolPromoteSkill),
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_install_skill",
+				Description: "Baja una skill del arsenal del cerebro central y la escribe en este proyecto, marcada como adoptada. Pasa por el mismo gate de calidad y la misma guarda de rutas que musubi_save_skill. Requiere sync.central_url configurado.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name":      {Type: "string", Description: "Slug exacto de la skill en el arsenal"},
+						"overwrite": {Type: "boolean", Description: "Reemplaza la local si ya existe (default false)"},
+					},
+					Required: []string{"name"},
+				},
+			},
+			handler: noCtx(s.toolInstallSkill),
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_log_skill_decision",
 				Description: "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
 				InputSchema: InputSchema{
