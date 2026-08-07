@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"musubi/internal/mcp"
 	"musubi/internal/provision"
 )
 
@@ -37,6 +38,8 @@ func runProvision(args []string) {
 			opts.TokenEnv = flagValue(a, "--token-env", val)
 		case a == "--authkey" || strings.HasPrefix(a, "--authkey="):
 			opts.AuthKey = flagValue(a, "--authkey", val)
+		case a == "--skills":
+			opts.Skills = true
 		case a == "--dry-run":
 			opts.DryRun = true
 		case a == "--yes" || a == "-y":
@@ -88,7 +91,60 @@ func runProvision(args []string) {
 	} else {
 		rep.Steps = append(rep.Steps, injectLocalSetup(opts.ProjectDir, exe)...)
 	}
+
+	// B2: el arsenal del cerebro central. Va DESPUÉS de injectLocalSetup a propósito — las
+	// skills cognitivas que escribe setup son las locales del proyecto, y el arsenal no las
+	// pisa (G10). Invertir el orden haría que setup sobrescribiera lo recién adoptado.
+	rep.Steps = append(rep.Steps, arsenalStep(opts))
+
 	printProvisionReport(rep, opts)
+}
+
+// arsenalStep baja el ARSENAL del cerebro central al proyecto (spec «arsenal-arranque», B2).
+//
+// Sin --skills NO se llama al central: sólo se deja un paso que dice cómo pedirlo. Que el paso
+// informativo costara una llamada de red haría que `provision` —cuyo trabajo es unir una
+// máquina— dependiera de que el arsenal esté sano.
+func arsenalStep(opts provision.Options) provision.StepResult {
+	if !opts.Skills {
+		return provision.StepResult{
+			Name: "arsenal", Status: provision.StatusTodo,
+			Detail: "no se tocó; corré 'musubi provision --skills' para instalar las skills del cerebro central",
+		}
+	}
+
+	rep, err := mcp.InstallArsenalInto(opts.ProjectDir, opts.DryRun)
+	if err != nil {
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusTodo, Detail: err.Error()}
+	}
+
+	var partes []string
+	if n := len(rep.Instaladas); n > 0 {
+		verbo := "instaladas"
+		if opts.DryRun {
+			verbo = "se instalarían"
+		}
+		partes = append(partes, fmt.Sprintf("%s %d (%s)", verbo, n, strings.Join(rep.Instaladas, ", ")))
+	}
+	if n := len(rep.Salteadas); n > 0 {
+		partes = append(partes, fmt.Sprintf("%d ya estaban en el proyecto (no se pisan)", n))
+	}
+	if n := len(rep.Fallidas); n > 0 {
+		partes = append(partes, fmt.Sprintf("%d RECHAZADAS por el gate: %s", n, strings.Join(rep.Fallidas, ", ")))
+	}
+
+	switch {
+	case len(rep.Fallidas) > 0:
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusError, Detail: strings.Join(partes, "; ")}
+	case len(partes) == 0:
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusOK, Detail: "el arsenal del central está vacío"}
+	case opts.DryRun:
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusTodo, Detail: strings.Join(partes, "; ")}
+	case len(rep.Instaladas) == 0:
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusOK, Detail: strings.Join(partes, "; ")}
+	default:
+		return provision.StepResult{Name: "arsenal", Status: provision.StatusDone, Detail: strings.Join(partes, "; ")}
+	}
 }
 
 // injectLocalSetup deja el proyecto seteado como Musubi reusando los helpers de setup.go:
@@ -137,6 +193,7 @@ func printProvisionUsage() {
 	fmt.Println("  --project <dir>      proyecto cuyo .mcp.json se cablea (default: actual)")
 	fmt.Println("  --token-env <VAR>    env var con el token (default MUSUBI_TOKEN)")
 	fmt.Println("  --authkey <key>      auth key de Tailscale para unir sin navegador")
+	fmt.Println("  --skills             instala en el proyecto el arsenal de skills del cerebro central")
 	fmt.Println("  --dry-run            diagnostica y muestra el plan sin mutar nada")
 }
 

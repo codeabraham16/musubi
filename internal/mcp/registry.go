@@ -420,12 +420,13 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_list_skills",
-				Description: "Lista las skills GUARDADAS en el arsenal (.musubi/skills/). Responde '¿qué hay guardado?', a diferencia de musubi_search_skills, que puntúa el catálogo REMOTO para recomendar y excluye lo ya rechazado. Devuelve un array (vacío si no hay ninguna); una skill con YAML inválido se saltea sin tumbar el resto.",
+				Description: "Lista skills guardadas. Con source=local (default) las de este proyecto (.musubi/skills/); con source=central el ARSENAL del cerebro, marcando cada una con installed:true|false; con source=all las locales más las del arsenal que falten. Es el paso previo a musubi_install_skill, que exige el nombre exacto. Distinta de musubi_search_skills, que puntúa un catálogo REMOTO para recomendar. Devuelve un array (vacío si no hay ninguna); una skill con YAML inválido se saltea sin tumbar el resto.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"query": {Type: "string", Description: "Filtra por subcadena en nombre o descripción, sin distinguir mayúsculas (opcional)"},
-						"limit": {Type: "number", Description: "Máximo de resultados; ausente o ≤ 0 devuelve todas (opcional)"},
+						"query":  {Type: "string", Description: "Filtra por subcadena en nombre o descripción, sin distinguir mayúsculas (opcional)"},
+						"limit":  {Type: "number", Description: "Máximo de resultados; ausente o ≤ 0 devuelve todas (opcional)"},
+						"source": {Type: "string", Description: "De dónde listar: 'local' (default, el disco de este proyecto), 'central' (el arsenal) o 'all' (ambas, sin duplicar lo ya instalado). 'central' y 'all' requieren sync.central_url configurado y fallan explícitamente si no lo está"},
 					},
 				},
 			},

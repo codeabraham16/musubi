@@ -38,6 +38,10 @@ type Options struct {
 	AuthKey    string // opcional: auth key de Tailscale
 	DryRun     bool
 	Yes        bool
+	// Skills baja el ARSENAL del central al proyecto (spec «arsenal-arranque», B2). Es opt-in:
+	// sin el flag no se hace ninguna llamada al central, para que provision siga sirviendo
+	// para unir una máquina aunque el arsenal esté caído.
+	Skills bool
 }
 
 // Deps agrupa las dependencias inyectables (reales en cmd, fakes en tests).
