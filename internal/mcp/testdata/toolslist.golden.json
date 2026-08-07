@@ -509,6 +509,46 @@
       }
     },
     {
+      "name": "musubi_promote_skill",
+      "description": "Sube una skill LOCAL al arsenal del cerebro central, para que quede disponible al arrancar cualquier otro proyecto. Explícita a propósito: nada sube solo, la curaduría es del dueño. Requiere sync.central_url configurado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Slug de la skill local a promover"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Reemplaza la del arsenal si ya existe (default false)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_install_skill",
+      "description": "Baja una skill del arsenal del cerebro central y la escribe en este proyecto, marcada como adoptada. Pasa por el mismo gate de calidad y la misma guarda de rutas que musubi_save_skill. Requiere sync.central_url configurado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Slug exacto de la skill en el arsenal"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Reemplaza la local si ya existe (default false)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
       "name": "musubi_log_skill_decision",
       "description": "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
       "inputSchema": {
