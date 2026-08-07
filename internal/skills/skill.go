@@ -20,6 +20,15 @@ type Skill struct {
 	// SourceURL es la URL al archivo de reglas completo en el catálogo de origen.
 	// omitempty mantiene el YAML limpio cuando el campo está vacío.
 	SourceURL string `yaml:"source_url,omitempty"`
+	// AlwaysBecause declara POR QUÉ esta skill se activa siempre (trigger "*").
+	//
+	// Existe porque el vocabulario de triggers sólo sabe de globs de ARCHIVO, y hay skills que no
+	// se activan por archivo sino por TIPO DE TAREA: orquestar, planificar, auditar. Ésas no tienen
+	// cómo expresarse salvo con "*". Medido sobre las 12 skills de este repo, 7 usan "*" y ninguna
+	// por descuido. Sin este campo, un "*" deliberado y uno por pereza son indistinguibles —y en un
+	// arsenal compartido esa diferencia decide si el contexto de otro se llena de reglas que no
+	// aplican. omitempty: una skill con triggers acotados no lo necesita.
+	AlwaysBecause string `yaml:"always_because,omitempty"`
 	// ManagedChecksum es el sha256 (hex) del contenido canónico de una skill COGNITIVA
 	// manejada por Musubi (writeCognitiveSkills), con este mismo campo vacío. Es la prueba de
 	// si el archivo sigue tal como Musubi lo escribió: si el checksum del archivo coincide, la

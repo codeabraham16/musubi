@@ -36,17 +36,22 @@ type skillPayload struct {
 	Rules        string   `json:"rules"`
 	Source       string   `json:"source,omitempty"`
 	SourceURL    string   `json:"source_url,omitempty"`
+	// AlwaysBecause tiene que cruzar la red o el arreglo entero es teatro: quien mira el arsenal
+	// vería una skill siempre-encendida sin poder saber por qué, que es exactamente el estado que
+	// este campo vino a terminar (spec «trigger-honesto», G2).
+	AlwaysBecause string `json:"always_because,omitempty"`
 }
 
 func payloadFromSkill(sk skills.Skill) skillPayload {
 	return skillPayload{
-		Name:         sk.Name,
-		Description:  sk.Description,
-		Triggers:     sk.Triggers,
-		Capabilities: sk.Capabilities,
-		Rules:        sk.Rules,
-		Source:       sk.Source,
-		SourceURL:    sk.SourceURL,
+		Name:          sk.Name,
+		Description:   sk.Description,
+		Triggers:      sk.Triggers,
+		Capabilities:  sk.Capabilities,
+		Rules:         sk.Rules,
+		Source:        sk.Source,
+		SourceURL:     sk.SourceURL,
+		AlwaysBecause: sk.AlwaysBecause,
 	}
 }
 
@@ -155,13 +160,14 @@ func (c *SyncClient) ListArsenal(query string) ([]skills.Skill, error) {
 	out := make([]skills.Skill, 0, len(lista))
 	for _, p := range lista {
 		out = append(out, skills.Skill{
-			Name:         p.Name,
-			Description:  p.Description,
-			Triggers:     p.Triggers,
-			Capabilities: p.Capabilities,
-			Rules:        p.Rules,
-			Source:       p.Source,
-			SourceURL:    p.SourceURL,
+			Name:          p.Name,
+			Description:   p.Description,
+			Triggers:      p.Triggers,
+			Capabilities:  p.Capabilities,
+			Rules:         p.Rules,
+			Source:        p.Source,
+			SourceURL:     p.SourceURL,
+			AlwaysBecause: p.AlwaysBecause,
 		})
 	}
 	return out, nil
@@ -196,6 +202,31 @@ const arsenalSource = "arsenal-central"
 // trigger "*" —disparan en cualquier archivo—, y algunas son locales por naturaleza
 // (project-profile describe ESTE proyecto). Subirlas todas ensuciaría el arsenal de todos. La
 // curaduría es del dueño; la herramienta sólo la hace fácil.
+// gateDePromocion es lo que se le cobra a una skill por entrar al arsenal COMPARTIDO.
+//
+// Hasta el spec «trigger-honesto» la promoción era la ÚNICA puerta sin gate: save_skill,
+// author_skill e install_skill validaban calidad, y justo la que publica para todos no. Una skill
+// escrita a mano —que nunca pasó por ninguna tool— subía tal cual.
+//
+// El segundo chequeo es asimétrico A PROPÓSITO: un "*" sin declarar es un warning en el score y un
+// ERROR acá. En tu proyecto el alcance es tu problema; en el arsenal se lo comen todos los demás,
+// que van a recibir esas reglas encendidas en cada tarea de un repo que la skill no conoce.
+func gateDePromocion(sk skills.Skill) *RpcError {
+	if report := skills.ValidateSkillQuality(sk); !report.OK() {
+		return rpcErrorf(codeInvalidParams,
+			"la skill %q no pasa el gate de calidad y no se sube al arsenal:\n%s",
+			sk.Name, formatIssues(report.Errors))
+	}
+	if skills.WildcardUnjustified(sk) {
+		return rpcErrorf(codeInvalidParams,
+			"la skill %q se activa SIEMPRE ('*' entre sus triggers) sin declarar por qué, y el arsenal es compartido.\n"+
+				"Acotá los triggers a donde aplique de verdad, o —si aplica siempre porque se activa por TIPO DE TAREA "+
+				"y no por archivo— agregale el campo 'always_because' con la razón (mínimo %d caracteres).",
+			sk.Name, skills.MinAlwaysBecauseChars)
+	}
+	return nil
+}
+
 func (s *McpServer) toolPromoteSkill(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Name      string `json:"name"`
@@ -222,6 +253,9 @@ func (s *McpServer) toolPromoteSkill(raw json.RawMessage) (interface{}, *RpcErro
 	for _, sk := range todas {
 		if sk.Name != args.Name {
 			continue
+		}
+		if rerr := gateDePromocion(sk); rerr != nil {
+			return nil, rerr
 		}
 		if perr := s.syncClient.PushSkill(sk, args.Overwrite); perr != nil {
 			return nil, rpcErrorf(codeInternalError, "no se pudo promover %q al arsenal: %v", args.Name, perr)

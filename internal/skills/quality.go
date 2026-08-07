@@ -19,13 +19,17 @@ const (
 	// RulesMaxChars es el umbral blando de las rules: por encima, la skill pesa
 	// demasiado en tokens cada vez que se inyecta (progressive disclosure).
 	RulesMaxChars = 5000
+	// MinAlwaysBecauseChars es el piso de una justificación de trigger "*". No es un capricho de
+	// longitud: es lo mínimo para que la frase diga ALGO. "porque sí" no es una declaración de
+	// alcance, y un campo que se satisface con dos palabras no cambia ninguna conducta.
+	MinAlwaysBecauseChars = 20
 )
 
 // Penalizaciones del score (base 100, piso 0). Un error pesa mucho más que un warning.
 const (
-	scoreBase          = 100
-	penaltyPerError    = 34
-	penaltyPerWarning  = 12
+	scoreBase         = 100
+	penaltyPerError   = 34
+	penaltyPerWarning = 12
 )
 
 // QualityIssue es un hallazgo del validador: un código estable, el mensaje y cómo
@@ -131,12 +135,22 @@ func ValidateSkillQuality(s Skill) QualityReport {
 			Fix:     "recortá a lo esencial y accionable; sacá lo obvio (el agente ya es capaz)",
 		})
 	}
-	// R7: triggers no exclusivamente over-broad.
-	if allWildcard(s.Triggers) {
+	// R7: la skill se activa siempre sin declarar por qué.
+	if WildcardUnjustified(s) {
 		r.Warnings = append(r.Warnings, QualityIssue{
 			Code:    "triggers_over_broad",
-			Message: "los triggers son todos '*': la skill se activa SIEMPRE y compite por contexto en cada tarea",
-			Fix:     "acotá los triggers a los archivos donde la skill aplica de verdad (ej. '*.go', 'Dockerfile')",
+			Message: "la skill se activa SIEMPRE ('*' entre sus triggers) y compite por contexto en cada tarea",
+			Fix:     "acotá los triggers a donde aplica de verdad (ej. '*.go', 'Dockerfile'); si de verdad aplica siempre —porque se activa por TIPO DE TAREA y no por archivo— declaralo en 'always_because'",
+		})
+	}
+	// R7b: el '*' convive con triggers específicos. Es peor que el caso de arriba y por eso se
+	// nombra aparte: los específicos hacen PARECER que la skill está acotada cuando el '*' ya la
+	// activó en todo. Un 'always_because' justifica el '*', no vuelve honesto al adorno.
+	if anyWildcard(s.Triggers) && !allWildcard(s.Triggers) {
+		r.Warnings = append(r.Warnings, QualityIssue{
+			Code:    "triggers_wildcard_masks_specific",
+			Message: "hay un '*' mezclado con triggers específicos: los específicos no significan nada, el '*' ya activa la skill en todo",
+			Fix:     "quitá el '*' si la skill es acotada, o quitá los triggers específicos si de verdad aplica siempre",
 		})
 	}
 	// R8b: paths estilo Windows en las rules.
@@ -169,7 +183,36 @@ func scoreFor(errors, warnings int) int {
 	return score
 }
 
-// allWildcard indica si hay triggers y TODOS son "*" (over-broad).
+// WildcardUnjustified indica si la skill se activa SIEMPRE sin declarar por qué.
+//
+// Es la ÚNICA definición de «'*' sin declarar» del sistema: la consumen el score de calidad —donde
+// es un warning— y la puerta de promoción al arsenal —donde bloquea—. La asimetría es deliberada:
+// en tu proyecto el alcance es tu problema; en el arsenal compartido es el de todos. Pero la
+// DEFINICIÓN tiene que ser una sola, o la advertencia local y el rechazo del central terminarían
+// diciendo cosas distintas de la misma skill.
+func WildcardUnjustified(s Skill) bool {
+	if !anyWildcard(s.Triggers) {
+		return false
+	}
+	return len([]rune(strings.TrimSpace(s.AlwaysBecause))) < MinAlwaysBecauseChars
+}
+
+// anyWildcard indica si ALGUNO de los triggers es "*".
+//
+// Alguno, no todos: un solo "*" vuelve decorativos a los demás, porque la skill ya se activa en
+// todo. La versión anterior exigía que TODOS lo fueran, así que ["*", "*.go"] —el caso que miente
+// sobre su alcance— se le escapaba entero.
+func anyWildcard(triggers []string) bool {
+	for _, t := range triggers {
+		if strings.TrimSpace(t) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+// allWildcard indica si hay triggers y TODOS son "*". Sigue existiendo para distinguir el caso
+// honesto (sólo "*") del enmascarado ("*" mezclado con específicos).
 func allWildcard(triggers []string) bool {
 	if len(triggers) == 0 {
 		return false

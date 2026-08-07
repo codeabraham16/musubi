@@ -413,6 +413,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "always_because": {
+            "type": "string",
+            "description": "Sólo si un trigger es '*': POR QUÉ la skill aplica siempre (ej. 'se activa por tipo de tarea, no por archivo'). Sin esto, un '*' no se puede promover al arsenal compartido."
+          },
           "capabilities": {
             "type": "array",
             "description": "Herramientas requeridas en PATH (opcional)",
@@ -920,6 +924,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "always_because": {
+            "type": "string",
+            "description": "Sólo si un trigger es '*': POR QUÉ la skill aplica siempre (mínimo 20 caracteres). Declararlo apaga el warning 'triggers_over_broad' y es lo único que permite promoverla al arsenal compartido."
+          },
           "capabilities": {
             "type": "array",
             "description": "Herramientas requeridas en PATH (opcional)",
@@ -950,7 +958,7 @@
           },
           "triggers": {
             "type": "array",
-            "description": "Globs acotados que activan la skill (ej. '*.go'); evitá '*' (dispara siempre)",
+            "description": "Globs acotados que activan la skill (ej. '*.go'); evitá '*' (dispara siempre). Si de verdad aplica siempre, poné '*' Y declaralo en always_because.",
             "items": {
               "type": "string",
               "description": ""
