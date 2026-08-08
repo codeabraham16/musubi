@@ -82,23 +82,44 @@ toma `RLock`— dos lectores conviven y la prueba pasaría igual. Sólo un escri
 **cualquier** candado tomado, compartido o exclusivo. Se cambió a `musubi_save_fact`, que además no
 toca el embedder.
 
-**★ Y aun así se puso rojo en CI — por el presupuesto, no por el candado.** `windows-latest` falló
-G4 con *«el juez nunca llamó al motor»*: el paquete tardó **318 s** en ese runner y los 5 s que le
-daba a la espera de arranque se agotaron antes de que el recall llegara siquiera a llamar al juez.
-El mismo job pasó en el otro run del mismo commit, que es la firma clásica de un flaky — pero **no
-era el flaky conocido del scheduler, era mi test**, y sólo se supo leyendo el log en vez de asumirlo.
+**★ Se puso rojo en CI, y mi primera explicación fue la equivocada.** `windows-latest` falló G4 con
+*«el juez nunca llamó al motor»*. El mismo job pasó en el otro run del mismo commit — la firma
+clásica de un flaky — pero **no era el flaky conocido del scheduler, era mi test**, y eso sólo se
+supo leyendo el log en vez de asumirlo por la firma.
 
-El arreglo separa dos esperas que estaban confundidas en una constante:
+Diagnostiqué **lentitud**: el paquete tardó 318 s en ese runner y la espera era de 5 s. Subí el
+presupuesto a 60 s… y **volvió a fallar, quemando los 60 s completos**. O sea que la hipótesis era
+falsa: el juez genuinamente no se llamaba, y ningún presupuesto lo iba a arreglar.
+
+El defecto de verdad estaba **en el diseño de la prueba**, y era doble:
+
+1. **La goroutine descartaba el error de la tool.** Si el recall fallaba, esa información —la única
+   que explicaba el fallo— se tiraba a la basura.
+2. **El `select` sólo tenía dos salidas** (`entró` o timeout). Cuando la tool terminaba *sin* tocar
+   el falso, la prueba no tenía forma de notarlo: esperaba el presupuesto entero y después acusaba
+   al reloj. **El mensaje de error era mentira**, y encima cara: 60 s para decir algo falso.
+
+El arreglo tiene tres partes: `esperarQueElFalsoReciba` agrega `terminó` al `select` —así ese caso
+se detecta al instante y se nombra como precondición rota, no como bloqueo—; el error de la tool se
+guarda y se imprime; y `exigeSembradas` verifica que las 3 observaciones sobrevivieron, porque el
+juez necesita ≥2 items y algo que las colapsara daría exactamente este síntoma.
+
+Las dos esperas también se separaron, que sigue siendo correcto aunque no fuera la causa:
 
 | | qué es | presupuesto |
 |---|---|---|
 | `esperaArranque` | **viveza**: que el falso reciba la llamada. Es el preámbulo, no la aserción | 60 s |
 | `esperaMax` | **la aserción**: que la sonda concurrente no quede bloqueada | 30 s |
 
-Y lo importante: **ser generoso no debilita la prueba**. Bajo el defecto, la sonda queda bloqueada
-hasta que la prueba suelte el motor —o sea, indefinidamente—, así que el tamaño del timeout cambia
-cuánto tarda en detectarse el fallo, no si se detecta. Verificado: con los presupuestos nuevos, los
-10 sabotajes siguen en rojo.
+Ser generoso no debilita nada: bajo el defecto la sonda queda bloqueada hasta que la prueba suelte
+el motor —indefinidamente—, así que el timeout cambia cuánto tarda en detectarse el fallo, no si se
+detecta. Verificado: los 10 sabotajes siguen en rojo con los presupuestos nuevos.
+
+**Queda dicho de frente: la causa raíz del rojo en CI todavía no está identificada.** Localmente,
+30 corridas seguidas dieron 3 observaciones, 3 items y el motor llamado — no se reprodujo (y sin
+`gcc` en esta PC tampoco se puede correr `-race`, que es como corre ese job). Lo que cambió es que
+la prueba ahora **dice la verdad cuando falla**: la próxima vez va a nombrar cuál precondición se
+rompió en vez de culpar al candado.
 
 **El falso bloqueante necesitó un interruptor.** Guardar una observación también embebe, así que un
 embedder que se cuelga siempre frenaba la propia siembra y la prueba moría antes de medir nada. El

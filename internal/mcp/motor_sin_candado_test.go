@@ -108,6 +108,30 @@ func llamarSinT(s *McpServer, name string, args map[string]interface{}) *RpcErro
 	return rpcErr
 }
 
+// esperarQueElFalsoReciba es el preámbulo de G3/G4/G5, y distingue TRES desenlaces en vez de uno.
+//
+// POR QUÉ EXISTE. La primera versión sólo esperaba `entro` contra un timeout, así que cuando el
+// falso no era llamado —por el motivo que fuera— la prueba quemaba el presupuesto entero y culpaba
+// al reloj. En CI (PR #265) eso dio un mensaje FALSO: decía «revisá que la flag esté encendida»
+// tras 60 s, cuando el dato útil era que la tool bajo prueba ya había TERMINADO sin tocar el falso.
+//
+// Con `terminó` en el select, ese caso se detecta al instante y se nombra por lo que es —una
+// precondición rota, no un bloqueo— y el presupuesto de tiempo sólo cubre lo que debe cubrir: una
+// máquina lenta.
+func esperarQueElFalsoReciba(t *testing.T, entro <-chan struct{}, termino <-chan struct{}, quien string, errTool func() *RpcError) {
+	t.Helper()
+	select {
+	case <-entro:
+	case <-termino:
+		t.Fatalf("PRECONDICIÓN ROTA: la tool terminó sin llamar a %s (error devuelto: %+v). "+
+			"No es un problema de concurrencia — revisá que el recall devuelva ≥2 items y que la flag esté encendida",
+			quien, errTool())
+	case <-time.After(esperaArranque):
+		t.Fatalf("%s no recibió la llamada en %v y la tool sigue en vuelo: la máquina está muy lenta o hay un bloqueo antes de llegar",
+			quien, esperaArranque)
+	}
+}
+
 // sembrar deja N observaciones que compartan un término, para que el recall devuelva ≥2 items (el
 // juez no se activa con menos).
 func sembrar(t *testing.T, s *McpServer, n int) {
@@ -123,7 +147,9 @@ func sembrar(t *testing.T, s *McpServer, n int) {
 	}
 }
 
-func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.CognitionConfig, emb embedding.Provider) *McpServer {
+// servidorConMotor devuelve TAMBIÉN el engine concreto: s.engine es la interfaz StorageBackend y no
+// expone CountObservations, que es lo que necesita exigeSembradas para verificar la precondición.
+func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.CognitionConfig, emb embedding.Provider) (*McpServer, *memory.DbEngine) {
 	t.Helper()
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {
@@ -134,7 +160,21 @@ func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.Cognition
 	if motor != nil {
 		opts = append(opts, WithCognition(motor))
 	}
-	return NewMcpServer(engine, t.TempDir(), emb, opts...)
+	return NewMcpServer(engine, t.TempDir(), emb, opts...), engine
+}
+
+// exigeSembradas verifica que la siembra sobrevivió entera. El juez sólo se activa con ≥2 items del
+// recall, así que si algo colapsara las observaciones —dedup por contenido, consolidación— el juez
+// no dispararía y la prueba culparía al candado. Mejor fallar acá, diciendo la verdad.
+func exigeSembradas(t *testing.T, engine *memory.DbEngine, n int) {
+	t.Helper()
+	total, err := engine.CountObservations()
+	if err != nil {
+		t.Fatalf("CountObservations: %v", err)
+	}
+	if total != n {
+		t.Fatalf("PRECONDICIÓN ROTA: sembré %d observaciones y quedaron %d — algo las colapsó, y sin ≥2 el juez no se activa", n, total)
+	}
 }
 
 // exigeQueOtraToolResponda corre una tool en paralelo y falla si no termina dentro de esperaMax.
@@ -265,20 +305,19 @@ func TestG2EscriturasConcurrentesNoSePisan(t *testing.T) {
 // G3 — Un musubi_ask lento NO bloquea a otra tool. Es el invariante central del spec.
 func TestG3AskLentoNoBloqueaOtraTool(t *testing.T) {
 	motor := nuevoMotorBloqueante()
-	s := servidorConMotor(t, motor, config.CognitionConfig{Provider: "fake"}, embedding.NoopProvider{})
+	s, _ := servidorConMotor(t, motor, config.CognitionConfig{Provider: "fake"}, embedding.NoopProvider{})
 	sembrar(t, s, 2)
 
+	// El error de la tool se GUARDA en vez de descartarse: si el ask falla antes de llegar al
+	// motor, ése es el dato que explica el fallo, y la primera versión lo tiraba a la basura.
+	var errAsk atomic.Pointer[RpcError]
 	hecho := make(chan struct{})
 	go func() {
-		defer close(hecho)
-		llamarSinT(s, "musubi_ask", map[string]interface{}{"question": "candado despacho red"})
+		errAsk.Store(llamarSinT(s, "musubi_ask", map[string]interface{}{"question": "candado despacho red"}))
+		close(hecho)
 	}()
 
-	select {
-	case <-motor.entro:
-	case <-time.After(esperaArranque):
-		t.Fatal("el motor nunca recibió la llamada: la prueba no está midiendo lo que cree")
-	}
+	esperarQueElFalsoReciba(t, motor.entro, hecho, "el motor", errAsk.Load)
 
 	exigeQueOtraToolResponda(t, s, "musubi_ask colgado en el motor")
 
@@ -292,23 +331,24 @@ func TestG3AskLentoNoBloqueaOtraTool(t *testing.T) {
 func TestG4RecallConJuezLentoNoBloqueaOtraTool(t *testing.T) {
 	motor := nuevoMotorBloqueante()
 	si := true
-	s := servidorConMotor(t, motor, config.CognitionConfig{
+	s, engine := servidorConMotor(t, motor, config.CognitionConfig{
 		Provider:       "fake",
 		ReadTimeRerank: &si,
 	}, embedding.NoopProvider{})
+	// El juez sólo se activa con ≥2 items, así que la siembra es una PRECONDICIÓN y se verifica en
+	// vez de suponerse: si algo la colapsara (dedup, consolidación), la prueba tiene que decir eso
+	// y no «el juez nunca llamó al motor», que fue el mensaje falso que dio en CI.
 	sembrar(t, s, 3)
+	exigeSembradas(t, engine, 3)
 
+	var errRecall atomic.Pointer[RpcError]
 	hecho := make(chan struct{})
 	go func() {
-		defer close(hecho)
-		llamarSinT(s, "musubi_recall", map[string]interface{}{"query": "candado despacho red"})
+		errRecall.Store(llamarSinT(s, "musubi_recall", map[string]interface{}{"query": "candado despacho red"}))
+		close(hecho)
 	}()
 
-	select {
-	case <-motor.entro:
-	case <-time.After(esperaArranque):
-		t.Fatal("el juez nunca llamó al motor: revisá que el recall devuelva ≥2 items y que la flag esté encendida")
-	}
+	esperarQueElFalsoReciba(t, motor.entro, hecho, "el juez", errRecall.Load)
 
 	exigeQueOtraToolResponda(t, s, "musubi_recall colgado en el juez")
 
@@ -320,21 +360,18 @@ func TestG4RecallConJuezLentoNoBloqueaOtraTool(t *testing.T) {
 // arreglar sólo el LLM dejaría un segundo cuello.
 func TestG5EmbedderLentoNoBloqueaOtraTool(t *testing.T) {
 	emb := nuevoEmbedderBloqueante()
-	s := servidorConMotor(t, nil, config.CognitionConfig{}, emb)
+	s, _ := servidorConMotor(t, nil, config.CognitionConfig{}, emb)
 	sembrar(t, s, 2)
 	emb.activo.Store(true) // recién ahora: sembrar también embebe
 
+	var errRecall atomic.Pointer[RpcError]
 	hecho := make(chan struct{})
 	go func() {
-		defer close(hecho)
-		llamarSinT(s, "musubi_recall", map[string]interface{}{"query": "candado despacho red"})
+		errRecall.Store(llamarSinT(s, "musubi_recall", map[string]interface{}{"query": "candado despacho red"}))
+		close(hecho)
 	}()
 
-	select {
-	case <-emb.entro:
-	case <-time.After(esperaArranque):
-		t.Fatal("el embedder nunca recibió la consulta del recall")
-	}
+	esperarQueElFalsoReciba(t, emb.entro, hecho, "el embedder", errRecall.Load)
 
 	exigeQueUnEscritorSinEmbedderResponda(t, s, "musubi_recall colgado en el embedder")
 
@@ -458,7 +495,7 @@ func TestG9LaClaseDeCandadoNoOtorgaAcceso(t *testing.T) {
 func TestG11ConElJuezApagadoElMotorNoSeToca(t *testing.T) {
 	motor := nuevoMotorBloqueante()
 	close(motor.soltar) // que no cuelgue: si lo llaman, queremos ver la llamada, no un timeout
-	s := servidorConMotor(t, motor, config.CognitionConfig{Provider: "fake"}, embedding.NoopProvider{})
+	s, _ := servidorConMotor(t, motor, config.CognitionConfig{Provider: "fake"}, embedding.NoopProvider{})
 	sembrar(t, s, 3)
 
 	if _, rpcErr := call(t, s, "musubi_recall", map[string]interface{}{"query": "candado despacho red"}); rpcErr != nil {
