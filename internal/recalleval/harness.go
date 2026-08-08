@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"musubi/internal/cognition"
 	"musubi/internal/memory"
 )
 
@@ -57,6 +58,18 @@ type Config struct {
 	Name      string
 	Opts      memory.RecallOptions
 	UseVector bool
+	// Juez, si no es nil, somete los primeros JuezTopK resultados al JUEZ DE PERTINENCIA antes de
+	// medir — el mismo camino que corre en producción cuando `cognition.read_time_rerank` está
+	// encendido. Nil ⇒ el brazo no existe y el resultado es bit-idéntico al recall model-free.
+	//
+	// EL JUEZ ES EL DE VERDAD, no una copia: se llama a cognition.Rerank, que es la misma unidad que
+	// usa el servidor. Reimplementar acá el prompt haría que este banco midiera una IMITACIÓN, y un
+	// número con aspecto de autoridad sobre algo que no corre en producción es peor que no medir.
+	Juez cognition.Provider
+	// JuezTopK es cuántos resultados del tope ven al juez. 0 ⇒ cognition.DefaultTopK, la MISMA
+	// constante que aplica el servidor — no una copia: si el banco juzgara más candidatos que
+	// producción, mediría una configuración que nadie va a correr.
+	JuezTopK int
 }
 
 // Scores son las métricas agregadas (promedio sobre queries con ≥1 relevante) de una
@@ -146,7 +159,35 @@ func rankedIDs(ctx context.Context, eng *memory.DbEngine, query string, cfg Conf
 	for i, it := range res.Items {
 		ids[i] = it.ID
 	}
-	return ids, nil
+	if cfg.Juez == nil {
+		return ids, nil
+	}
+
+	// EL BRAZO DEL JUEZ. Espeja lo que hace el servidor: somete sólo la cabeza del ranking y deja
+	// la cola intacta. A diferencia de producción NO hay caché — una respuesta memoizada mediría el
+	// caché en vez del juez— y el error NO se traga: en producción degradar en silencio protege al
+	// usuario, pero acá un juez roto que devuelve el orden model-free daría «el juez no aporta
+	// nada», que es una conclusión falsa con cara de medición.
+	topK := cfg.JuezTopK
+	if topK <= 0 {
+		topK = cognition.DefaultTopK
+	}
+	n := len(ids)
+	if n > topK {
+		n = topK
+	}
+	if n < 2 {
+		return ids, nil // igual que producción: con menos de 2 no hay nada que ordenar
+	}
+	cands := make([]cognition.Candidato, n)
+	for i, it := range res.Items[:n] {
+		cands[i] = cognition.Candidato{ID: it.ID, Gist: it.Gist}
+	}
+	orden, err := cognition.Rerank(ctx, cfg.Juez, query, cands)
+	if err != nil {
+		return nil, fmt.Errorf("config %q: el juez falló en la query %q: %w", cfg.Name, query, err)
+	}
+	return append(cognition.ReordenarIDs(ids[:n], orden), ids[n:]...), nil
 }
 
 // Evaluate corre todas las queries del fixture bajo una configuración y agrega las

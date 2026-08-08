@@ -14,9 +14,12 @@ import (
 	"musubi/internal/memory"
 )
 
-// defaultRerankTopK es cuántos candidatos ve el juez read-time si la config no lo fija. Acotado a
-// propósito: el juez es caro (latencia + rate-limit), sólo mira el tope.
-const defaultRerankTopK = 12
+// defaultRerankTopK es cuántos candidatos ve el juez read-time si la config no lo fija.
+//
+// Es un alias de cognition.DefaultTopK y NO un 12 escrito de nuevo: el banco de evaluación usa la
+// misma constante, y si acá hubiera una copia el banco podría terminar midiendo una configuración
+// que el servidor no corre — con el número saliendo bien y nadie notando que responde otra pregunta.
+const defaultRerankTopK = cognition.DefaultTopK
 
 // rerankCache memoiza el orden que dictó el juez para un (query + set de ids) — read-time selectivo
 // y cacheado (guardrail de la auditoría: estira la suscripción y protege el rate-limit compartido).
@@ -273,34 +276,29 @@ func (s *McpServer) rerankIfEnabled(ctx context.Context, query string, res memor
 	head := res.Items[:n]
 
 	ids := make([]string, len(head))
+	cands := make([]cognition.Candidato, len(head))
 	for i, it := range head {
 		ids[i] = it.ID
+		cands[i] = cognition.Candidato{ID: it.ID, Gist: it.Gist}
 	}
 	key := query + "\x00" + strings.Join(ids, ",")
 
+	// El CACHÉ vive acá y no adentro del juez, a propósito: es una política de producción —estira
+	// la suscripción y protege el rate-limit compartido— y adentro del juez falsearía el banco de
+	// evaluación, que necesita una llamada al motor por query para medir algo.
 	order := rerankCacheGet(key)
 	if order == nil {
-		var b strings.Builder
-		for _, it := range head {
-			fmt.Fprintf(&b, "[%s] %s\n", it.ID, it.Gist)
-		}
-		system := "Sos un juez de pertinencia. Dada una CONSULTA y MEMORIAS candidatas, devolvé SÓLO un array JSON " +
-			"con TODOS los ids ordenados de MÁS a MENOS relevante para la consulta. Nada de prosa ni explicación, " +
-			"sólo el JSON. Ejemplo de formato: [\"id-a\",\"id-b\",\"id-c\"]."
-		user := "CONSULTA: " + query + "\n\nMEMORIAS:\n" + b.String()
-
+		// El TIMEOUT también es del llamador: acá el backstop de producción; el banco pone el suyo.
 		rctx, cancel := context.WithTimeout(ctx, askTimeout)
-		ans, err := s.cognition.Ask(rctx, system, user)
+		nuevo, err := cognition.Rerank(rctx, s.cognition, query, cands)
 		cancel()
 		if err != nil {
-			logx.Error("rerank read-time: el motor falló, mantengo el orden model-free", "error", err)
+			// BEST-EFFORT: cualquier fallo —motor caído, timeout, respuesta imparseable— conserva el
+			// orden model-free. El recall nunca se rompe por el LLM.
+			logx.Error("rerank read-time: mantengo el orden model-free", "error", err)
 			return res
 		}
-		order = parseIDArray(ans)
-		if len(order) == 0 {
-			logx.Error("rerank read-time: no pude parsear ids de la respuesta, mantengo el orden model-free")
-			return res
-		}
+		order = nuevo
 		rerankCachePut(key, order)
 	}
 
@@ -308,46 +306,26 @@ func (s *McpServer) rerankIfEnabled(ctx context.Context, query string, res memor
 	return res
 }
 
-// parseIDArray extrae el array JSON de ids de la respuesta del juez (tolera prosa alrededor: toma
-// del primer '[' al último ']'). Devuelve nil si no hay un array de strings parseable.
-func parseIDArray(answer string) []string {
-	i := strings.IndexByte(answer, '[')
-	j := strings.LastIndexByte(answer, ']')
-	if i < 0 || j <= i {
-		return nil
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(answer[i:j+1]), &ids); err != nil {
-		return nil
-	}
-	out := ids[:0]
-	for _, id := range ids {
-		if strings.TrimSpace(id) != "" {
-			out = append(out, id)
-		}
-	}
-	return out
-}
+// parseIDArray se fue a cognition.ParsearOrdenDeIDs junto con el resto del juez: el parseo es parte
+// de su contrato, y dejar una copia acá era garantizar que un día divergieran.
 
-// reorderByIDs reordena items según la secuencia de ids del juez; los ids desconocidos se ignoran y
-// los items NO mencionados se preservan al final en su orden original (nunca se pierde una memoria).
+// reorderByIDs reordena items según la secuencia de ids del juez.
+//
+// La REGLA —los ids inventados se ignoran, los items no mencionados quedan al final en su orden
+// original, nunca se pierde una memoria— vive en cognition.ReordenarIDs y no se reimplementa acá:
+// dos copias se desincronizarían, y el síntoma sería que el banco y producción difieren en un caso
+// borde que nadie va a depurar. Esto es sólo el mapeo de ids de vuelta a items.
 func reorderByIDs(items []memory.RecallItem, order []string) []memory.RecallItem {
 	byID := make(map[string]memory.RecallItem, len(items))
-	for _, it := range items {
+	ids := make([]string, len(items))
+	for i, it := range items {
 		byID[it.ID] = it
+		ids[i] = it.ID
 	}
-	out := make([]memory.RecallItem, 0, len(items))
-	placed := make(map[string]bool, len(items))
-	for _, id := range order {
-		if it, ok := byID[id]; ok && !placed[id] {
-			out = append(out, it)
-			placed[id] = true
-		}
-	}
-	for _, it := range items { // los que el juez no mencionó, en su orden original
-		if !placed[it.ID] {
-			out = append(out, it)
-		}
+	final := cognition.ReordenarIDs(ids, order)
+	out := make([]memory.RecallItem, 0, len(final))
+	for _, id := range final {
+		out = append(out, byID[id])
 	}
 	return out
 }
