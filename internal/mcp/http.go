@@ -321,6 +321,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// loadPrincipals devuelve nil ⇒ modo legacy (un único bearer). Un archivo malformado
 	// es error de arranque (fail-closed). El token legacy queda admitido como admin.
 	principalsFile := s.principalsPath(cfg)
+	s.principalsFile = principalsFile // las tools admin (musubi_token_*) mutan este mismo registro
 	registry, err := loadPrincipals(principalsFile, token)
 	if err != nil {
 		return err

@@ -930,6 +930,53 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			handler:  s.toolWhoami,
 			readOnly: true,
 		},
+		{
+			Tool: Tool{
+				Name:        "musubi_token_new",
+				Description: "ADMIN. Da de alta un miembro del cerebro central y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). name identifica a la persona (clave de cuota + atribución). ALCANCE y AUTORIDAD son ejes independientes: read = own|all (ve su proyecto | ve todos) y write = none|own|any (no muta | muta sólo lo suyo | muta cualquiera declarándolo). role (reader|writer|admin, default writer) es sólo el atajo para los pares comunes; read/write declarados mandan. project es obligatorio salvo cabina (write=none). Requiere principal admin: la usa el panel de administración del cuerpo para no mintear por terminal. Surte efecto en ≤10s (recarga en caliente).",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name":    {Type: "string", Description: "Nombre del miembro (identidad de la persona; único)"},
+						"project": {Type: "string", Description: "project_id que se le atribuye (aísla su recall). Obligatorio salvo cabina (write=none)"},
+						"role":    {Type: "string", Description: "Atajo: reader | writer | admin (default writer). Fija los defaults de read/write"},
+						"read":    {Type: "string", Description: "Alcance de LECTURA: own | all (default: del rol). all = ve todos los proyectos"},
+						"write":   {Type: "string", Description: "Autoridad de ESCRITURA: none | own | any (default: del rol)"},
+					},
+					Required: []string{"name"},
+				},
+			},
+			handler: s.toolTokenNew,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_token_list",
+				Description: "ADMIN. Lista los miembros del cerebro central SIN los tokens: name, proyecto, rol y capacidades EFECTIVAS (read: own|all, write: none|own|any). Requiere principal admin. La usa el panel de administración del cuerpo para mostrar quién tiene acceso y con qué poder.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			// readOnly=false a propósito: aunque NO muta, es ADMIN-ONLY en todos sus caminos (a
+			// diferencia de doctor, que deja el diagnóstico a un reader). readOnly gobierna la
+			// AUTORIZACIÓN — marcarla true dejaría a un reader llegar al dispatch. El costo de correr
+			// bajo Lock exclusivo es nulo: es una llamada rara de administración.
+			handler: s.toolTokenList,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_token_revoke",
+				Description: "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name": {Type: "string", Description: "Nombre del miembro a revocar"},
+					},
+					Required: []string{"name"},
+				},
+			},
+			handler: s.toolTokenRevoke,
+		},
 	}
 	// musubi_ingest_url va SIEMPRE (daemon local y cerebro central). En infra compartida el handler
 	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del

@@ -27,7 +27,12 @@ const (
 	OutcomeError       = "error"        // el handler devolvió un RpcError
 	OutcomeDeniedRole  = "denied_role"  // rechazada por rol antes de llegar al handler
 	OutcomeDeniedQuota = "denied_quota" // rechazada por cuota antes de llegar al handler
-	OutcomePanic       = "panic"        // el handler entró en pánico
+	// OutcomeDeniedMotor es el rechazo por el FRENO DE GASTO del motor de cognición, y es un
+	// outcome APARTE de denied_quota a propósito: si compartieran valor sería imposible responder
+	// «¿me frenó el límite general o el del motor?», que es la única pregunta que alguien se hace
+	// cuando una tool deja de andar.
+	OutcomeDeniedMotor = "denied_motor"
+	OutcomePanic       = "panic" // el handler entró en pánico
 )
 
 // validOutcome mantiene la taxonomía cerrada. Un valor fuera del conjunto se normaliza a "error"
@@ -35,7 +40,7 @@ const (
 // le metan texto arbitrario en una columna que se lee sin escrutinio.
 func validOutcome(o string) string {
 	switch o {
-	case OutcomeOK, OutcomeError, OutcomeDeniedRole, OutcomeDeniedQuota, OutcomePanic:
+	case OutcomeOK, OutcomeError, OutcomeDeniedRole, OutcomeDeniedQuota, OutcomeDeniedMotor, OutcomePanic:
 		return o
 	default:
 		return OutcomeError
