@@ -122,6 +122,7 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		MMRLambda:       s.memory.MMRLambda,
 	}
 	opts.ProjectScope, opts.Federate = recallScopeFor(principalFrom(ctx))
+	// TRAMO 1 — SIN CANDADO. Embeber es I/O externa con 30 s de techo.
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
 		if vec, eerr := s.embedder.Embed(embCtx, args.Question); eerr != nil {
@@ -131,7 +132,25 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		}
 		embCancel()
 	}
-	res, err := s.engine.Recall(ctx, args.Question, opts)
+
+	// TRAMO 2 — RLock ACOTADO. Los DOS accesos a la base —el recall del grounding y la hidratación
+	// del contenido completo— entran en la MISMA sección crítica en vez de abrir dos: son
+	// consecutivos y el segundo depende del primero, así que partirlos sólo agregaría un ciclo de
+	// toma-y-suelta sin ganar concurrencia.
+	//
+	// 2) Hidratar el contenido COMPLETO de los mejores candidatos. El recall devuelve gists
+	// truncados —útiles para elegir, mutilados para razonar—: sin esto el motor sintetiza sobre
+	// frases cortadas a la mitad. Cambia la PROFUNDIDAD, no la SELECCIÓN: los que no entran en el
+	// presupuesto se quedan con su gist y ninguno se cae de la lista.
+	var res memory.RecallResult
+	var full map[string]string
+	var err error
+	s.withReadLock(func() {
+		if res, err = s.engine.Recall(ctx, args.Question, opts); err != nil || len(res.Items) == 0 {
+			return
+		}
+		full = s.hydrateGrounding(ctx, res.Items, budget)
+	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en el recall de grounding: %v", err)
 	}
@@ -143,12 +162,6 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 			"model":   s.cognition.Name(),
 		})
 	}
-
-	// 2) Hidratar el contenido COMPLETO de los mejores candidatos. El recall devuelve gists
-	// truncados —útiles para elegir, mutilados para razonar—: sin esto el motor sintetiza sobre
-	// frases cortadas a la mitad. Cambia la PROFUNDIDAD, no la SELECCIÓN: los que no entran en el
-	// presupuesto se quedan con su gist y ninguno se cae de la lista.
-	full := s.hydrateGrounding(ctx, res.Items, budget)
 
 	// 3) Construir el prompt fundamentado. El system exige citar ids y admitir lo que no sabe.
 	var b strings.Builder
@@ -180,7 +193,8 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		"Ojo con la edad de cada memoria: una nota vieja puede estar desactualizada. Sé conciso y directo."
 	user := "PREGUNTA:\n" + args.Question + "\n\nMEMORIA RELEVANTE:\n" + b.String()
 
-	// 4) Llamar al motor (a-demanda, con backstop de timeout).
+	// TRAMO 3 — SIN CANDADO. 4) Llamar al motor (a-demanda, con backstop de timeout). Medido en el
+	// central, un ask real tardó 25 s: con el candado del despacho tomado, nadie más pudo entrar.
 	askCtx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
 	answer, err := s.cognition.Ask(askCtx, system, user)

@@ -155,12 +155,19 @@ type McpServer struct {
 	// una vez en NewMcpServer desde buildRegistry.
 	tools     []toolEntry
 	toolIndex map[string]toolHandler
-	// toolReadOnly[name]=true si la tool no muta estado: corre bajo RLock (concurrente
-	// con otras lecturas). Las demás corren bajo Lock exclusivo.
+	// toolReadOnly[name]=true si la tool no muta estado. Decide la AUTORIZACIÓN (un reader
+	// sólo puede llamar tools de lectura) y es el DEFAULT del candado de despacho.
 	toolReadOnly map[string]bool
+	// toolLock[name] pisa ese default SÓLO para la concurrencia. Ausente ⇒ lockFromReadOnly,
+	// el comportamiento histórico. Ver lockClass en registry.go.
+	toolLock map[string]lockClass
 	// dispatchMu hace seguro el dispatch concurrente (transporte HTTP): las tools que
 	// mutan toman Lock (serializadas, RMW-safe); las de solo-lectura toman RLock
 	// (concurrentes entre sí). En stdio (un goroutine) está siempre libre, costo nulo.
+	//
+	// NINGÚN CANDADO DE ACÁ PUEDE CRUZAR UNA LLAMADA DE RED. Un handler que hace I/O externa
+	// (motor LLM, embedder) se declara lockSelf y acota su sección crítica con withReadLock:
+	// con el candado tomado, una llamada de 120 s deja al servidor entero sin atender.
 	dispatchMu sync.RWMutex
 	// saveCount cuenta saves desde el último disparo; al cruzar maintenance.AutoAfterSaves
 	// dispara un mantenimiento async (T5.3). maintBusy garantiza un solo ciclo en vuelo.
@@ -275,10 +282,16 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	s.tools = s.buildRegistry()
 	s.toolIndex = make(map[string]toolHandler, len(s.tools))
 	s.toolReadOnly = make(map[string]bool, len(s.tools))
+	// toolLock sólo guarda las clases DISTINTAS del cero: un miss devuelve lockFromReadOnly, que es
+	// el default correcto. Así el mapa queda del tamaño de lo que realmente se declaró.
+	s.toolLock = make(map[string]lockClass)
 	for i := range s.tools {
 		s.toolIndex[s.tools[i].Name] = s.tools[i].handler
 		if s.tools[i].readOnly {
 			s.toolReadOnly[s.tools[i].Name] = true
+		}
+		if s.tools[i].lock != lockFromReadOnly {
+			s.toolLock[s.tools[i].Name] = s.tools[i].lock
 		}
 	}
 	return s

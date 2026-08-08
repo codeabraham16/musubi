@@ -153,14 +153,21 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		s.registrarUso(ctx, callReq.Name, memory.OutcomeDeniedQuota, 0)
 		return nil, rpcErrorf(codeQuotaExceeded, "cuota excedida para el principal %q (máx %d llamadas/min); reintentá en unos segundos", p.Name, s.quota.max)
 	}
-	// Las tools de solo-lectura corren concurrentes entre sí (RLock); las que mutan
-	// toman el lock exclusivo (serializadas, sin lost-updates de read-modify-write).
-	if readOnly {
-		s.dispatchMu.RLock()
-		defer s.dispatchMu.RUnlock()
-	} else {
-		s.dispatchMu.Lock()
-		defer s.dispatchMu.Unlock()
+	// Candado de despacho. Las tools de solo-lectura corren concurrentes entre sí (RLock); las que
+	// mutan toman el lock exclusivo (serializadas, sin lost-updates de read-modify-write).
+	//
+	// lockSelf es la excepción: el handler hace I/O EXTERNA (motor LLM, embedder) y acota su propia
+	// sección crítica con withReadLock. Sostener el candado del despacho durante una llamada de red
+	// serializa el servidor entero — medido en el central, un musubi_ask real tardó 25 s y nadie
+	// más pudo entrar en ese rato.
+	if s.toolLock[callReq.Name] != lockSelf {
+		if readOnly {
+			s.dispatchMu.RLock()
+			defer s.dispatchMu.RUnlock()
+		} else {
+			s.dispatchMu.Lock()
+			defer s.dispatchMu.Unlock()
+		}
 	}
 	// Métrica de latencia/resultado de la tool (Track 16 F3.1), expuesta en /metrics.
 	start := time.Now()
@@ -184,6 +191,22 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	s.registrarUso(ctx, callReq.Name, outcome, time.Since(start))
 	registrado = true
 	return result, rpcErr
+}
+
+// withReadLock corre fn bajo el RLock del despacho y lo suelta al salir.
+//
+// Es la herramienta de los handlers en clase lockSelf: acota el candado al acceso a la BASE y deja
+// la I/O externa AFUERA. El corte típico es en tres tramos — embeber (sin candado) → leer la base
+// (acá adentro) → llamar al motor (sin candado).
+//
+// EL `defer` ES EL INVARIANTE, no un detalle de estilo: si fn entra en pánico, el candado igual se
+// suelta y el servidor sigue atendiendo. Con RUnlock() al final del cuerpo, un pánico dejaría el
+// RLock tomado para siempre — y eso cambiaría un cuello de botella (que se destraba solo en 120 s)
+// por un deadlock (que no se destraba nunca), que es peor que el problema original.
+func (s *McpServer) withReadLock(fn func()) {
+	s.dispatchMu.RLock()
+	defer s.dispatchMu.RUnlock()
+	fn()
 }
 
 func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
@@ -1198,8 +1221,9 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		}
 	}
 
-	// Recall híbrido (T5.7 R2): si hay embedder, embeber la query para sumar el pool
-	// vectorial. Best-effort: si falla, se sigue solo con el léxico (no rompe el recall).
+	// TRAMO 1 — SIN CANDADO. Recall híbrido (T5.7 R2): si hay embedder, embeber la query para sumar
+	// el pool vectorial. Es I/O externa con 30 s de techo; bajo el candado del despacho dejaría al
+	// servidor sin atender todo ese rato. Best-effort: si falla, se sigue solo con el léxico.
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
 		vec, eerr := s.embedder.Embed(embCtx, args.Query)
@@ -1211,12 +1235,21 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		}
 	}
 
-	res, err := s.engine.Recall(ctx, args.Query, opts)
+	// TRAMO 2 — RLock ACOTADO. Es lo único que toca la base. El bump de accesos que hace Recall es
+	// `access_count = access_count + 1`, una sentencia atómica: SQLite ya lo serializa, así que no
+	// hace falta el candado EXCLUSIVO que esta tool tomaba antes.
+	var res memory.RecallResult
+	var err error
+	s.withReadLock(func() {
+		res, err = s.engine.Recall(ctx, args.Query, opts)
+	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
 	}
-	// Juez de pertinencia read-time (F3.5c): OPT-IN y best-effort. Con la flag apagada (default) es
-	// un no-op y el recall queda 100% model-free; encendido, re-ordena el tope por relevancia.
+
+	// TRAMO 3 — SIN CANDADO. Juez de pertinencia read-time (F3.5c): OPT-IN y best-effort. Con la
+	// flag apagada (default) es un no-op y el recall queda 100% model-free; encendido, re-ordena el
+	// tope llamando al motor por red (hasta 120 s) — de ahí que este tramo quede afuera.
 	res = s.rerankIfEnabled(ctx, args.Query, res)
 	return jsonResult(res)
 }
