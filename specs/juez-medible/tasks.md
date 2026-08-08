@@ -86,6 +86,6 @@ medición, que es peor que un test en rojo.
 - **El fixture no se amplió.** 26 docs / 12 queries alcanza para verificar que el brazo funciona,
   **no** para que una diferencia de MRR entre dos jueces reales signifique algo. Ampliarlo con
   memoria real es el trabajo que sigue, y es el que de verdad contesta la pregunta de F2.
-- **No se corrió contra el motor real.** Requiere el central o el túnel + `LITELLM_MASTER_KEY`, que
-  es un secreto del dueño. Ese es el paso que convierte el instrumento en una respuesta.
+- ~~**No se corrió contra el motor real.**~~ **CERRADO** por `specs/juez-real/` (2026-08-08): medido
+  contra el cerebro central, **nDCG@1 0.333 → 0.806**. El instrumento ya dio su respuesta.
 - **Presupuesto y autorización del motor** siguen siendo los pasos 3 y 4 de F1, intactos.
