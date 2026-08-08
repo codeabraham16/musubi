@@ -126,16 +126,31 @@ func TestMaintenanceSchedulerRunsAndStops(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	time.Sleep(20 * time.Millisecond) // dejar correr varios ticks
 
+	// (1) CORRIÓ. Antes había un `time.Sleep(20 * time.Millisecond)` y después una aserción a
+	// ciegas sobre last_maintenance. Eso hacía FLAKY el test: el ciclo de mantenimiento pelea el
+	// lock EXCLUSIVO contra las 30 goroutines de arriba, y en un runner cargado 20 ms no le
+	// alcanzan para completar uno — el rojo no decía nada sobre el código.
+	//
+	// Se espera a la CONDICIÓN, con el mismo patrón que ya usa TestAutoMaintainAfterSaves acá al
+	// lado. El plazo generoso no debilita nada: si el scheduler no corre, se agota igual y falla.
+	corrio := false
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if v, _, _ := s.engine.GetMeta("last_maintenance"); v != "" {
+			corrio = true
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !corrio {
+		t.Error("el scheduler debió correr al menos un ciclo (last_maintenance quedó vacío)")
+	}
+
+	// (2) PARA. Cancelar el ctx tiene que terminar la goroutine del scheduler.
 	cancel()
 	select {
 	case <-schedDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("el scheduler no paró tras cancelar el ctx")
-	}
-
-	if v, _, _ := s.engine.GetMeta("last_maintenance"); v == "" {
-		t.Error("el scheduler debió correr al menos un ciclo (last_maintenance quedó vacío)")
 	}
 }
