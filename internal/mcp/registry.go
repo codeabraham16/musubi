@@ -18,17 +18,42 @@ import (
 // JSON-RPC.
 type toolHandler func(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError)
 
+// lockClass es cómo el dispatcher toma el candado de despacho para una tool.
+//
+// EXISTE PORQUE `readOnly` GOBERNABA DOS EJES QUE NO TIENEN POR QUÉ COINCIDIR: la concurrencia
+// (¿RLock o Lock?) y la autorización (¿un principal reader puede llamarla?). Pegados en un
+// booleano forzaban un canje falso — destrabar `musubi_recall` exigía marcarla `readOnly`, y eso
+// además le abría la tool a los readers. Acá se separan: `readOnly` queda como eje de
+// AUTORIZACIÓN y sigue siendo el default del candado, pero ahora es un default que se puede pisar.
+type lockClass int
+
+const (
+	// lockFromReadOnly es el comportamiento histórico: el candado se deriva de readOnly (RLock si
+	// es de sólo lectura, Lock exclusivo si no). Es el CERO DE GO a propósito, así las tools que no
+	// hacen I/O externa no se editan: lo que cambia es exactamente lo que se declara.
+	lockFromReadOnly lockClass = iota
+	// lockSelf: el dispatcher NO toma ningún candado; el handler acota su propia sección crítica
+	// con withReadLock. Reservado para handlers que hacen I/O EXTERNA (motor LLM, embedder), donde
+	// sostener el candado del despacho durante una llamada de red serializa el servidor entero.
+	lockSelf
+)
+
 // toolEntry liga el schema público de una tool (lo que ve tools/list) con su handler
 // (lo que ejecuta tools/call). Es la unidad atómica del registro.
 //
-// readOnly marca las tools que NO mutan estado (ni DB, ni índice, ni ledger, ni
-// bumpAccess): el dispatch las corre bajo RLock (concurrentes entre sí). El default es
-// false = se asume que muta y corre bajo Lock exclusivo (fail-safe: una tool nueva es
-// segura por defecto; recién marcás readOnly tras VERIFICAR que es pura lectura).
+// readOnly marca las tools que NO mutan estado (ni DB, ni índice, ni ledger, ni bumpAccess). Decide
+// la AUTORIZACIÓN (un principal reader sólo puede llamar tools de lectura, ver Principal.canCall) y
+// es además el DEFAULT del candado de despacho. El default es false = se asume que muta y corre
+// bajo Lock exclusivo (fail-safe: una tool nueva es segura por defecto; recién marcás readOnly tras
+// VERIFICAR que es pura lectura).
+//
+// lock pisa ese default SÓLO para la concurrencia. No toca la autorización: una tool en lockSelf no
+// queda por eso llamable por un reader.
 type toolEntry struct {
 	Tool
 	handler  toolHandler
 	readOnly bool
+	lock     lockClass
 }
 
 // noCtx adapta un handler que no usa el contexto del request a la firma uniforme
@@ -104,6 +129,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolRecall,
+			// El juez read-time (rerankIfEnabled) llama al motor por red desde adentro de este
+			// handler. Con el candado del despacho tomado, una sola llamada lenta deja al servidor
+			// sin atender a nadie hasta 120 s. El handler acota su propia sección crítica.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
@@ -119,6 +148,13 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolAsk,
+			// Mismo motivo que musubi_recall: la síntesis llama al motor por red. Medido en el
+			// central, un ask real tardó 25 s con el candado exclusivo tomado.
+			//
+			// NO se marca readOnly aunque no escriba al libro mayor: eso cambiaría la AUTORIZACIÓN
+			// (un principal reader podría gastar la suscripción del motor), que es otro eje y otro
+			// spec. Acá sólo se corrige la concurrencia.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
