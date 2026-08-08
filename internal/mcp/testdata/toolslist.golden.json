@@ -1179,6 +1179,62 @@
       }
     },
     {
+      "name": "musubi_token_new",
+      "description": "ADMIN. Da de alta un miembro del cerebro central y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). name identifica a la persona (clave de cuota + atribución). ALCANCE y AUTORIDAD son ejes independientes: read = own|all (ve su proyecto | ve todos) y write = none|own|any (no muta | muta sólo lo suyo | muta cualquiera declarándolo). role (reader|writer|admin, default writer) es sólo el atajo para los pares comunes; read/write declarados mandan. project es obligatorio salvo cabina (write=none). Requiere principal admin: la usa el panel de administración del cuerpo para no mintear por terminal. Surte efecto en ≤10s (recarga en caliente).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del miembro (identidad de la persona; único)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id que se le atribuye (aísla su recall). Obligatorio salvo cabina (write=none)"
+          },
+          "read": {
+            "type": "string",
+            "description": "Alcance de LECTURA: own | all (default: del rol). all = ve todos los proyectos"
+          },
+          "role": {
+            "type": "string",
+            "description": "Atajo: reader | writer | admin (default writer). Fija los defaults de read/write"
+          },
+          "write": {
+            "type": "string",
+            "description": "Autoridad de ESCRITURA: none | own | any (default: del rol)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_token_list",
+      "description": "ADMIN. Lista los miembros del cerebro central SIN los tokens: name, proyecto, rol y capacidades EFECTIVAS (read: own|all, write: none|own|any). Requiere principal admin. La usa el panel de administración del cuerpo para mostrar quién tiene acceso y con qué poder.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_token_revoke",
+      "description": "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del miembro a revocar"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
       "name": "musubi_ingest_url",
       "description": "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/\u003cplataforma\u003e/\u003cid\u003e, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
       "inputSchema": {

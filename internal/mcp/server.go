@@ -185,6 +185,10 @@ type McpServer struct {
 	// quota limita las llamadas por-principal por ventana (Track 16 F3.2); nil ⇒ sin cuota.
 	// Solo aplica cuando hay un principal autenticado (serve); en stdio local no hay cuota.
 	quota *quotaLimiter
+	// principalsFile es la ruta del registro de identidades que el server usa para autenticar.
+	// La fija ListenAndServeHTTP (serve/HTTP); las tools admin (musubi_token_*) la mutan para dar
+	// de alta/baja miembros por la red, sin SSH ni CLI. Vacía en stdio local/tests ⇒ default.
+	principalsFile string
 }
 
 // WithQuota devuelve un Option que activa la cuota de uso por-principal: máximo perMinute
