@@ -381,7 +381,7 @@
     },
     {
       "name": "musubi_resolve_skills",
-      "description": "Resuelve dinámicamente las reglas y skills activas según los archivos modificados, junto con la telemetría sin resolver.",
+      "description": "Resuelve las skills activas para lo que estás por hacer, junto con la telemetría sin resolver. Se puede preguntar por ARCHIVOS (skills atadas a un tipo de archivo) y/o declarando la FASE o la FORMA de la tarea (skills que se activan por el momento del trabajo, no por el archivo: planificar, revisar, auditar, orquestar). Al menos uno de los tres es obligatorio.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -392,11 +392,16 @@
               "type": "string",
               "description": "Ruta o nombre del archivo"
             }
+          },
+          "phase": {
+            "type": "string",
+            "description": "Fase del trabajo, declarada por vos: 'phase:planning' (antes de tocar nada), 'phase:implementing' (escribiendo el cambio) o 'phase:reviewing' (cerrándolo)"
+          },
+          "task": {
+            "type": "string",
+            "description": "Forma de la tarea, declarada por vos: 'task:audit' (auditar un codebase o un área) o 'task:orchestration' (tarea grande y paralelizable)"
           }
-        },
-        "required": [
-          "modified_files"
-        ]
+        }
       }
     },
     {

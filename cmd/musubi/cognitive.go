@@ -98,6 +98,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			Triggers:      []string{"*"},
 			Capabilities:  []string{},
 			AlwaysBecause: "planificar es una FASE del trabajo, no un tipo de archivo: aplica antes de tocar cualquier cosa",
+			AppliesTo:     []string{skills.FasePlanificar},
 			Rules: "Antes de implementar o cambiar algo:\n" +
 				"- Recuperá contexto con musubi_recall y musubi_recall_facts.\n" +
 				"- Armá un plan corto (pasos concretos) basado en lo que ya se sabe del proyecto.\n" +
@@ -121,6 +122,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			Triggers:      []string{"*"},
 			Capabilities:  []string{},
 			AlwaysBecause: "se activa por la FORMA de la tarea (grande y paralelizable), no por el archivo que se toca",
+			AppliesTo:     []string{skills.TareaOrquestar},
 			Rules: "Cuando una tarea sea grande y paralelizable (varios archivos/áreas independientes), orquestá sub-agentes con la pizarra compartida en vez de hacerlo todo en serie:\n" +
 				"1. Descomponé la tarea y posteá las unidades con musubi_work action=plan (cada unidad: title + spec claro y autónomo). Guardá el batch_id que devuelve.\n" +
 				"2. Lanzá N sub-agentes con el Task tool. En CADA uno: pasá mcpServers:[musubi] e instruí el protocolo: hacer musubi_work action=claim batch=<id> agent=<etiqueta>, ejecutar la unidad, y cerrarla con musubi_work action=complete id=<id> result=<resumen>. El claim es atómico: dos sub-agentes nunca toman la misma unidad.\n" +
@@ -134,6 +136,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			Triggers:      []string{"*"},
 			Capabilities:  []string{},
 			AlwaysBecause: "audita el codebase como un todo; el disparador es el pedido de auditoría, no un archivo",
+			AppliesTo:     []string{skills.TareaAuditar},
 			Rules: "Cuando se pida auditar la ESTRUCTURA (organización, cohesión, acoplamiento, capas, código muerto) o el FLUJO (dirección de dependencias, ciclos, entrada→salida, propagación de context/errores) del proyecto:\n" +
 				"1. Mapeá módulos/paquetes (tamaño + responsabilidad) y construí el grafo de dependencias con la herramienta del stack (go list, madge, pydeps, cargo modules, jdeps). Verificá cada afirmación contra el código; no asumas por los nombres.\n" +
 				"2. Severidad — ALTO: ciclo o inversión (módulo core que importa IO/transporte), estado global mutable, errores tragados. MEDIO: smell con costo real (god-file, módulo grab-bag, código muerto/huérfano). BAJO: cosmético.\n" +
@@ -147,6 +150,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			Triggers:      []string{"*"},
 			Capabilities:  []string{},
 			AlwaysBecause: "gobierna el flujo completo de un cambio; no depende del lenguaje ni del archivo abierto",
+			AppliesTo:     []string{skills.FasePlanificar, skills.FaseImplementar, skills.FaseRevisar},
 			Rules: "Para un cambio no trivial (varias fases, 2+ archivos, decisiones de diseño), usá el flujo SDD guiado en vez de improvisar:\n" +
 				"1. Arrancá con musubi_sdd action=start change=<nombre>. Devuelve la fase activa, su ROL y su directiva; ENCARNÁ ese rol (proponente→especificador→diseñador→planificador→implementador→verificador→archivador).\n" +
 				"2. Trabajá la fase usando su plantilla (.musubi/templates/sdd/) y cerrala con musubi_sdd action=complete change=<c> phase=<f> summary=<resumen ejecutivo> [artifacts, risks, next_recommended]. Eso persiste el artefacto en memoria bajo sdd/<change>/<phase>.\n" +
@@ -160,6 +164,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			Triggers:      []string{"*"},
 			Capabilities:  []string{},
 			AlwaysBecause: "se activa al cerrar un cambio de riesgo, en cualquier lenguaje; el disparador es el momento, no el archivo",
+			AppliesTo:     []string{skills.FaseRevisar},
 			Rules: "Antes de dar por bueno un cambio de riesgo (o en la fase verify de un flujo SDD), sometelo a un DEBATE adversarial con veredicto determinista en vez de una sola lectura complaciente:\n" +
 				"1. Abrí el debate con musubi_debate action=open topic=<el cambio a juzgar> rounds=2 quorum=<mayoría de los escépticos, p. ej. 2 de 3>. Guardá el debate_id. (musubi_debate estructura las rondas y CUENTA los votos sin sesgo; la inteligencia de refutar es tuya.)\n" +
 				"2. Lanzá N sub-agentes escépticos con el Task tool (mcpServers:[musubi]), cada uno con un LENTE distinto (correctitud, seguridad, ¿reproduce el bug?, contrato de la spec). A CADA uno instruílo a intentar REFUTAR el cambio desde su lente y a postear su hallazgo con musubi_debate action=post id=<debate_id> agent=<lente> stance=<veredicto + evidencia>. Ante la duda, que refute.\n" +
