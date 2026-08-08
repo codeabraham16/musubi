@@ -70,7 +70,8 @@ se habría notado en ningún test.
 
 ## Fuera de alcance
 
-- **No se corre contra el motor real.** Sigue necesitando el central o el túnel con
-  `LITELLM_MASTER_KEY`. El banco ya está a escala; falta encender el motor y comparar los dos arms.
+- ~~**No se corre contra el motor real.**~~ **CERRADO** por `specs/juez-real/` (2026-08-08): este
+  fixture, generado de la memoria del cerebro central (1.216 docs / 36 consultas), es el que sostuvo
+  la medición. El delta con juez dio **nDCG@1 +0.472**.
 - **No hay etiquetado a mano.** Sería el patrón oro y es tiempo del dueño; el formato lo admite.
 - **El fixture dorado no se tocó.**
