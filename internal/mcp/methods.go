@@ -187,6 +187,15 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	outcome := memory.OutcomeOK
 	if rpcErr != nil {
 		outcome = memory.OutcomeError
+		// El freno de gasto del motor se decide DENTRO del handler —el costo de musubi_recall es
+		// condicional y un acierto de caché no gasta, así que el despacho no puede saberlo de
+		// antemano— y acá se lo reconoce por el código para darle su propio outcome. Mapear en este
+		// punto, en vez de registrar desde el handler, conserva el punto ÚNICO de registro que
+		// documenta usageledger.go: si el handler registrara por su cuenta, la llamada quedaría
+		// contada dos veces.
+		if rpcErr.Code == codeMotorQuota {
+			outcome = memory.OutcomeDeniedMotor
+		}
 	}
 	s.registrarUso(ctx, callReq.Name, outcome, time.Since(start))
 	registrado = true

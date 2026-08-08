@@ -83,6 +83,11 @@ type serverMetrics struct {
 	// HTTP contaba como ok). Un pico de authz o quota es señal de abuso o de un cliente mal configurado.
 	authzDenied   atomic.Int64 // tools/call negadas por rol (codeUnauthorized)
 	quotaExceeded atomic.Int64 // tools/call negadas por cuota (codeQuotaExceeded)
+	// motorDenied cuenta los frenazos del PRESUPUESTO DEL MOTOR, y va aparte de quotaExceeded
+	// porque incluye un caso que no es un rechazo: cuando el recall se queda sin presupuesto,
+	// DEGRADA al orden model-free y devuelve ok. Sin este contador, el sistema dejaría de usar el
+	// juez sin que nadie pudiera enterarse.
+	motorDenied atomic.Int64
 
 	gaugeCache domainGaugeCache // cache TTL de OperationalStats para no re-COUNT en cada scrape
 }
@@ -240,6 +245,7 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 	b.WriteString("# TYPE musubi_tool_rejections_total counter\n")
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"authz\"} %d\n", m.authzDenied.Load())
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"quota\"} %d\n", m.quotaExceeded.Load())
+	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"motor_quota\"} %d\n", m.motorDenied.Load())
 }
 
 // renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un

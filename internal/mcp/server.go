@@ -38,6 +38,11 @@ const (
 	// ventana (Track 16 F3.2). La credencial es VÁLIDA; excedió el límite de uso. Reintentar
 	// tras la ventana.
 	codeQuotaExceeded = -32002
+	// codeMotorQuota (rango server-error) = el principal agotó su PRESUPUESTO DEL MOTOR de
+	// cognición. Código propio y no codeQuotaExceeded porque el remedio es distinto: la cuota
+	// general se libera en segundos y ésta en la hora, y quien la recibe puede querer seguir con
+	// las tools model-free en vez de esperar.
+	codeMotorQuota = -32003
 )
 
 type JsonRpcRequest struct {
@@ -185,6 +190,11 @@ type McpServer struct {
 	// quota limita las llamadas por-principal por ventana (Track 16 F3.2); nil ⇒ sin cuota.
 	// Solo aplica cuando hay un principal autenticado (serve); en stdio local no hay cuota.
 	quota *quotaLimiter
+	// motorQuota es el FRENO DE GASTO del motor de cognición: cuenta, por principal y por hora, las
+	// llamadas que EFECTIVAMENTE llegan al modelo. Es un limitador aparte de `quota` y no un ajuste
+	// suyo porque miden cosas distintas: `quota` protege al daemon de un cliente desbocado (600/min,
+	// calibrado para tools gratis) y éste protege la SUSCRIPCIÓN. nil ⇒ sin freno.
+	motorQuota *quotaLimiter
 	// principalsFile es la ruta del registro de identidades que el server usa para autenticar.
 	// La fija ListenAndServeHTTP (serve/HTTP); las tools admin (musubi_token_*) la mutan para dar
 	// de alta/baja miembros por la red, sin SSH ni CLI. Vacía en stdio local/tests ⇒ default.
@@ -195,6 +205,16 @@ type McpServer struct {
 // llamadas a tools/call por principal por minuto. perMinute<=0 ⇒ sin cuota (default).
 func WithQuota(perMinute int) Option {
 	return func(s *McpServer) { s.quota = newQuotaLimiter(perMinute, time.Minute) }
+}
+
+// WithMotorQuota activa el freno de gasto del motor: máximo perHour llamadas AL MODELO por
+// principal por hora. perHour<=0 ⇒ sin freno.
+//
+// La ventana es de una HORA y no de un minuto porque el gasto no se acumula igual que las llamadas
+// baratas: nadie hace 60 preguntas razonadas en un minuto, pero un bucle sí — y contra un bucle lo
+// que importa es el techo de la hora, no la ráfaga del segundo.
+func WithMotorQuota(perHour int) Option {
+	return func(s *McpServer) { s.motorQuota = newQuotaLimiter(perHour, time.Hour) }
 }
 
 // WithCognition inyecta el motor del 3er pilar (Cognición). Aditivo; c==nil se ignora (queda el
