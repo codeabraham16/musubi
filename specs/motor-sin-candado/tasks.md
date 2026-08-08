@@ -82,6 +82,24 @@ toma `RLock`— dos lectores conviven y la prueba pasaría igual. Sólo un escri
 **cualquier** candado tomado, compartido o exclusivo. Se cambió a `musubi_save_fact`, que además no
 toca el embedder.
 
+**★ Y aun así se puso rojo en CI — por el presupuesto, no por el candado.** `windows-latest` falló
+G4 con *«el juez nunca llamó al motor»*: el paquete tardó **318 s** en ese runner y los 5 s que le
+daba a la espera de arranque se agotaron antes de que el recall llegara siquiera a llamar al juez.
+El mismo job pasó en el otro run del mismo commit, que es la firma clásica de un flaky — pero **no
+era el flaky conocido del scheduler, era mi test**, y sólo se supo leyendo el log en vez de asumirlo.
+
+El arreglo separa dos esperas que estaban confundidas en una constante:
+
+| | qué es | presupuesto |
+|---|---|---|
+| `esperaArranque` | **viveza**: que el falso reciba la llamada. Es el preámbulo, no la aserción | 60 s |
+| `esperaMax` | **la aserción**: que la sonda concurrente no quede bloqueada | 30 s |
+
+Y lo importante: **ser generoso no debilita la prueba**. Bajo el defecto, la sonda queda bloqueada
+hasta que la prueba suelte el motor —o sea, indefinidamente—, así que el tamaño del timeout cambia
+cuánto tarda en detectarse el fallo, no si se detecta. Verificado: con los presupuestos nuevos, los
+10 sabotajes siguen en rojo.
+
 **El falso bloqueante necesitó un interruptor.** Guardar una observación también embebe, así que un
 embedder que se cuelga siempre frenaba la propia siembra y la prueba moría antes de medir nada. El
 campo `activo` se prende recién después de sembrar. Es el tipo de detalle que, sin resolver, empuja

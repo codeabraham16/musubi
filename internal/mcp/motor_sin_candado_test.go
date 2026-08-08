@@ -24,9 +24,20 @@ import (
 // un falso que se cuelga hasta que la prueba lo suelta, el verde SÓLO es posible si la otra tool
 // corrió de verdad en paralelo.
 
-// esperaMax es cuánto tolera una prueba antes de declarar bloqueo. Generoso a propósito: el fallo
-// que buscamos es un bloqueo INDEFINIDO, no una lentitud de milisegundos.
-const esperaMax = 5 * time.Second
+// LOS DOS PRESUPUESTOS SON GENEROSOS A PROPÓSITO, y eso NO debilita las pruebas.
+//
+// Bajo el defecto que persiguen, la sonda queda bloqueada hasta que la prueba suelte el motor —o
+// sea, indefinidamente—, así que el tamaño del timeout no cambia si el fallo se detecta: cambia
+// sólo cuánto tarda en detectarse. Apretarlos, en cambio, sí produce falsos rojos: en un runner de
+// CI cargado este paquete tardó 318 s y un presupuesto de 5 s se agotó ANTES de que el juez
+// llegara a llamar al motor (windows-latest, PR #265).
+const (
+	// esperaArranque es una espera de VIVEZA: cuánto se le da al falso para recibir la llamada.
+	// No es la aserción — es el preámbulo que la habilita.
+	esperaArranque = 60 * time.Second
+	// esperaMax es LA ASERCIÓN: cuánto tolera la sonda concurrente antes de declarar bloqueo.
+	esperaMax = 30 * time.Second
+)
 
 // motorBloqueante se cuelga en Ask hasta que la prueba cierra `soltar`.
 type motorBloqueante struct {
@@ -265,7 +276,7 @@ func TestG3AskLentoNoBloqueaOtraTool(t *testing.T) {
 
 	select {
 	case <-motor.entro:
-	case <-time.After(esperaMax):
+	case <-time.After(esperaArranque):
 		t.Fatal("el motor nunca recibió la llamada: la prueba no está midiendo lo que cree")
 	}
 
@@ -295,7 +306,7 @@ func TestG4RecallConJuezLentoNoBloqueaOtraTool(t *testing.T) {
 
 	select {
 	case <-motor.entro:
-	case <-time.After(esperaMax):
+	case <-time.After(esperaArranque):
 		t.Fatal("el juez nunca llamó al motor: revisá que el recall devuelva ≥2 items y que la flag esté encendida")
 	}
 
@@ -321,7 +332,7 @@ func TestG5EmbedderLentoNoBloqueaOtraTool(t *testing.T) {
 
 	select {
 	case <-emb.entro:
-	case <-time.After(esperaMax):
+	case <-time.After(esperaArranque):
 		t.Fatal("el embedder nunca recibió la consulta del recall")
 	}
 
