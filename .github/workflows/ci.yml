@@ -1,7 +1,15 @@
 name: CI
 
+# CADA PR CORRÍA LA SUITE DOS VECES. Con `push:` sin filtro, empujar a una rama con PR abierto
+# dispara el evento `push` (por la rama) Y el evento `pull_request` (por el PR): dos corridas
+# idénticas de 7 jobs cada una. No es sólo gasto de minutos — duplica la exposición a los tests
+# flaky, así que un PR sano se ve rojo con el doble de frecuencia (pasó en el #265).
+#
+# Acotar `push` a main conserva las dos cosas que importan: las ramas se validan por su PR, y main
+# se valida en cada merge (que es donde un rojo importa de verdad).
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
