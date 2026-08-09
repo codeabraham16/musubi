@@ -169,6 +169,9 @@ func injectLocalSetup(projectDir, exePath string) []provision.StepResult {
 
 	_, skillsErr := writeCognitiveSkills(projectDir)
 	add("skills", skillsErr, "skills cognitivas en .musubi/skills/")
+	// Y al formato que el agente lee: sin este paso el arsenal queda escrito y sin aplicar.
+	_, exportErr := exportarSkillsAlAgente(projectDir)
+	add("skills-agente", exportErr, "skills para el agente en "+dirSkillsAgente+"/")
 	add("sdd-templates", writeSddTemplates(projectDir), "templates SDD en .musubi/templates/sdd/")
 	add("hook-sessionstart", writeClaudeHook(projectDir, exePath), "SessionStart (priming + descubrimiento)")
 	add("hook-turn", writeTurnHook(projectDir, exePath), "UserPromptSubmit (contexto por turno)")
