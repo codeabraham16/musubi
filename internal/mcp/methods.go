@@ -2594,10 +2594,25 @@ func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) 
 		ModifiedFiles []string `json:"modified_files"`
 		Phase         string   `json:"phase"`
 		Task          string   `json:"task"`
+		Detail        string   `json:"detail"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
 	}
+
+	// G6, el mismo precedente que `source` en musubi_list_skills: un `detail` con typo NO cae al
+	// default. Degradar en silencio produce una respuesta que se lee como un dato y no como una falla.
+	detalle := strings.ToLower(strings.TrimSpace(args.Detail))
+	if detalle == "" {
+		detalle = detalleAuto
+	}
+	switch detalle {
+	case detalleAuto, detalleFull, detalleSummary:
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "detail inválido %q: usá %q, %q o %q",
+			args.Detail, detalleAuto, detalleFull, detalleSummary)
+	}
+
 	req := skills.ResolveRequest{ModifiedFiles: args.ModifiedFiles, Phase: args.Phase, Task: args.Task}
 	// La validación NO se afloja: se le agrega una segunda forma de satisfacerla. Antes exigía
 	// archivos, y por eso una skill que se activa por FASE o por FORMA DE LA TAREA no tenía cómo ser
@@ -2609,10 +2624,11 @@ func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) 
 			strings.Join(skills.VocabularioDeAlcance(), ", "))
 	}
 
-	activeSkills, err := s.resolver.ResolveSkills(req)
+	resueltas, err := s.resolver.ResolveConDetalle(req)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al resolver skills: %v", err)
 	}
+	resueltas = aplicarNivel(resueltas, detalle)
 
 	// Telemetría RELEVANTE (Track 6 / T6.2): solo los errores no resueltos de los archivos que el
 	// agente está tocando. Track 19: ACOTADA al proyecto de la credencial — antes corría sin scope
@@ -2622,8 +2638,115 @@ func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) 
 		return nil, rpcErrorf(codeInternalError, "error al obtener telemetría: %v", err)
 	}
 
-	return jsonResult(map[string]interface{}{
-		"active_skills":  activeSkills,
+	// El largo de esta lista NO depende de `detail`: toda skill que matcheó aparece. Lo que cambia es
+	// si trae su cuerpo. Una skill que desapareciera de la lista sería indistinguible de una que no
+	// matcheó — el peor modo de falla posible.
+	activas := make([]skillPorNiveles, 0, len(resueltas))
+	sinCuerpo := 0
+	for _, r := range resueltas {
+		activas = append(activas, entradaPorNiveles(r))
+		if !r.ConCuerpo {
+			sinCuerpo++
+		}
+	}
+
+	salida := map[string]interface{}{
+		"active_skills":  activas,
 		"telemetry_logs": telemetryLogs,
-	})
+		"detail":         detalle,
+		"bodies_omitted": sinCuerpo,
+	}
+	if sinCuerpo > 0 {
+		// El nivel 2 ya existe y nadie tiene por qué saberlo de memoria.
+		salida["hint"] = `para traer el cuerpo de una skill: musubi_list_skills con query:"<nombre>"`
+	}
+	return jsonResult(salida)
+}
+
+// Valores de `detail` de musubi_resolve_skills.
+const (
+	// detalleAuto — el cuerpo viaja con la evidencia, con techo de bytes. Es el default.
+	detalleAuto = "auto"
+	// detalleFull — todos los cuerpos, sin techo. Es el comportamiento anterior a los niveles, y la
+	// red para cualquiera que dependiera de él.
+	detalleFull = "full"
+	// detalleSummary — ningún cuerpo, ni siquiera con evidencia. La sonda más barata posible.
+	detalleSummary = "summary"
+)
+
+// aplicarNivel decide qué cuerpos viajan según lo que pidió el llamador.
+func aplicarNivel(res []skills.SkillResuelta, detalle string) []skills.SkillResuelta {
+	switch detalle {
+	case detalleFull:
+		out := make([]skills.SkillResuelta, len(res))
+		copy(out, res)
+		for i := range out {
+			out[i].ConCuerpo = true
+		}
+		return out
+	case detalleSummary:
+		out := make([]skills.SkillResuelta, len(res))
+		copy(out, res)
+		for i := range out {
+			out[i].ConCuerpo = false
+		}
+		return out
+	default:
+		return skills.SeleccionarCuerpos(res, skills.PresupuestoDeCuerpos)
+	}
+}
+
+// skillPorNiveles es una skill resuelta tal como la ve un cliente de musubi_resolve_skills.
+//
+// EXISTE PARA FIJAR EL CONTRATO JSON, por la misma razón que skillListada: `skills.Skill` tiene sólo
+// tags YAML, así que serializarla directo —lo que esta tool hacía— emite las claves con los nombres
+// de campo de Go ("Name", "AppliesTo") y encima filtra ManagedChecksum y GeneratedAt, que son
+// metadatos de cómo Musubi gestiona el archivo en disco. Un cliente que parsea en minúscula no
+// recibe un error: recibe una lista del largo correcto con todo vacío.
+type skillPorNiveles struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// Cuando es la cláusula que dice CUÁNDO aplica la skill. Es lo que hace utilizable al nivel 1:
+	// para las 6 skills que se activan con '*', el «cuándo» no vive en la description sino en
+	// always_because, y un nivel 1 que no lo trajera las dejaría mudas justo en la capa donde se
+	// decide si se cargan.
+	Cuando       string   `json:"cuando"`
+	Triggers     []string `json:"triggers"`
+	AppliesTo    []string `json:"applies_to,omitempty"`
+	Capabilities []string `json:"capabilities"`
+	// MatchedBy dice por qué entró esta skill. Importa sobre todo cuando llegó sin cuerpo: la
+	// respuesta tiene que poder explicarse sola.
+	MatchedBy string `json:"matched_by"`
+	// RulesBytes es el peso del cuerpo, esté incluido o no. Deja medir el ahorro sin adivinarlo.
+	RulesBytes int    `json:"rules_bytes"`
+	Rules      string `json:"rules,omitempty"`
+	// BodyOmitted va SIEMPRE, sin omitempty: que el cuerpo falte tiene que ser un dato explícito y
+	// no una ausencia que el lector deduzca.
+	BodyOmitted bool `json:"body_omitted"`
+}
+
+func entradaPorNiveles(r skills.SkillResuelta) skillPorNiveles {
+	e := skillPorNiveles{
+		Name:         r.Name,
+		Description:  r.Description,
+		Cuando:       skills.CuandoUsarla(r.Skill),
+		Triggers:     listaNoNula(r.Triggers),
+		AppliesTo:    r.AppliesTo,
+		Capabilities: listaNoNula(r.Capabilities),
+		MatchedBy:    string(r.Matcheo),
+		RulesBytes:   len(r.Rules),
+		BodyOmitted:  !r.ConCuerpo,
+	}
+	if r.ConCuerpo {
+		e.Rules = r.Rules
+	}
+	return e
+}
+
+// listaNoNula evita que un slice nil se serialice como `null` donde el contrato dice lista.
+func listaNoNula(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }
