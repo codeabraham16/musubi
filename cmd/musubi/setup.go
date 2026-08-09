@@ -152,6 +152,21 @@ func setupProjectWith(exeOverride, agent string) {
 		}
 	}
 
+	// 2b. Y las mismas skills al formato que el AGENTE lee. Sin este paso el arsenal queda inerte:
+	// medido, .claude/skills/ estaba vacío mientras .musubi/skills/ tenía 11, ningún hook las
+	// menciona y musubi_resolve_skills tuvo cero llamadas en 30 días.
+	if rep, err := exportarSkillsAlAgente(root); err != nil {
+		printWarn(fmt.Sprintf("No se pudieron exportar las skills al agente: %v", err))
+	} else {
+		printOK(fmt.Sprintf("Skills disponibles para el agente en %s/ (%d)", dirSkillsAgente, len(rep.Escritas)))
+		if len(rep.Preservadas) > 0 {
+			printOK(fmt.Sprintf("Preservadas por estar editadas a mano: %s", strings.Join(rep.Preservadas, ", ")))
+		}
+		if len(rep.Retiradas) > 0 {
+			printOK(fmt.Sprintf("Retiradas por no existir ya en el origen: %s", strings.Join(rep.Retiradas, ", ")))
+		}
+	}
+
 	// 2b. Templates de artefactos SDD (proposal/spec/design/tasks) — scaffold versionado.
 	if err := writeSddTemplates(root); err != nil {
 		printWarn(fmt.Sprintf("No se pudieron escribir los templates SDD: %v", err))
