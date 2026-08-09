@@ -19,9 +19,11 @@ import (
 
 // sinkEspia captura los lotes en memoria en vez de escribir a la base.
 type sinkEspia struct {
-	mu     sync.Mutex
-	vistas []memory.ToolInvocation
-	falla  error
+	mu      sync.Mutex
+	vistas  []memory.ToolInvocation
+	skills  []memory.SkillEvent
+	falla   error
+	fallaSk error
 }
 
 func (s *sinkEspia) RecordToolInvocations(_ context.Context, batch []memory.ToolInvocation) error {
@@ -32,6 +34,24 @@ func (s *sinkEspia) RecordToolInvocations(_ context.Context, batch []memory.Tool
 	}
 	s.vistas = append(s.vistas, batch...)
 	return nil
+}
+
+func (s *sinkEspia) RecordSkillEvents(_ context.Context, batch []memory.SkillEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fallaSk != nil {
+		return s.fallaSk
+	}
+	s.skills = append(s.skills, batch...)
+	return nil
+}
+
+func (s *sinkEspia) conteos() []memory.SkillEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]memory.SkillEvent, len(s.skills))
+	copy(out, s.skills)
+	return out
 }
 
 func (s *sinkEspia) todas() []memory.ToolInvocation {

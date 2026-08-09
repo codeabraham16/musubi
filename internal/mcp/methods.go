@@ -2287,7 +2287,10 @@ const (
 // rechazada para un proyecto sigue estando en el arsenal, así que acá no se filtra por decisiones
 // — y por eso esta tool no lee ninguna tabla con project_id (ver noScopedRead en el guard del
 // Track 19).
-func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError) {
+// Recibe ctx —y no se registra con noCtx— porque los contadores del arsenal necesitan el
+// project_id de la credencial: sin él, un pedido de cuerpo se contaría contra el proyecto vacío y
+// el scope del Track 19 nunca lo devolvería.
+func (s *McpServer) toolListSkills(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query  string `json:"query"`
 		Limit  int    `json:"limit"`
@@ -2335,14 +2338,22 @@ func (s *McpServer) toolListSkills(raw json.RawMessage) (interface{}, *RpcError)
 	// `make` y no `var`: un slice nil se serializa como `null`, y el contrato de una tool que
 	// lista es devolver una lista aunque esté vacía.
 	out := make([]skillListada, 0, len(locales))
+	// Un `query` que nombra skills locales es un PEDIDO DE CUERPO: esta tool las devuelve con su
+	// `rules` completo, así que es el nivel 2 de la resolución por niveles. Con `query` vacío no se
+	// cuenta nada: mirar el arsenal entero no es pedir una skill, es una lista.
+	var pedidas []string
 	if fuente == fuenteLocal || fuente == fuenteTodas {
 		for _, sk := range locales {
 			if !coincide(sk) {
 				continue
 			}
+			if q != "" {
+				pedidas = append(pedidas, sk.Name)
+			}
 			out = append(out, entradaSkill(sk, fuenteLocal, nil))
 		}
 	}
+	s.registrarPedidosDeCuerpo(ctx, pedidas)
 
 	if fuente == fuenteCentral || fuente == fuenteTodas {
 		// G5: sin central NO se devuelve la lista local haciéndola pasar por el arsenal. Una
@@ -2629,6 +2640,9 @@ func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) 
 		return nil, rpcErrorf(codeInternalError, "error al resolver skills: %v", err)
 	}
 	resueltas = aplicarNivel(resueltas, detalle)
+	// Se cuenta DESPUÉS de aplicar el nivel: lo que interesa registrar no es sólo que la skill
+	// matcheó sino si su cuerpo llegó a viajar, y eso recién se sabe acá.
+	s.registrarActivaciones(ctx, resueltas)
 
 	// Telemetría RELEVANTE (Track 6 / T6.2): solo los errores no resueltos de los archivos que el
 	// agente está tocando. Track 19: ACOTADA al proyecto de la credencial — antes corría sin scope

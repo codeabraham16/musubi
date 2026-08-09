@@ -46,6 +46,15 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Contadores del arsenal de web (§7 «Forja global»): qué skills usa OTRO equipo y con qué
+	// frecuencia es el mismo tipo de información de negocio que el ledger de tools. El marker va
+	// en `skill`, y llega a la respuesta porque las skills con contadores que ya no están
+	// instaladas se listan POR NOMBRE en vez de contarse como un número.
+	if err := e.RecordSkillEvents(context.Background(), []memory.SkillEvent{
+		{Skill: "VICTIMSKILL", ProjectID: "web", Evidence: memory.EvidenciaGlob, Kind: memory.UsoResuelta},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Grafo de código de web (Track 20 F2): VictimCaller --CALLS--> VictimCallee. Los markers son
 	// el EXTREMO OPUESTO al que se consulta (así no se filtran por el eco del arg): code_graph pide
 	// VictimCaller y el marker es VictimCallee; impact pide VictimCallee y el marker es VictimCaller.
@@ -85,6 +94,7 @@ func readSweepCases() []readSweepCase {
 		{"musubi_impact", map[string]any{"symbol": "shared/auth.go#func:VictimCallee"}, "VictimCaller"},
 		{"musubi_map", map[string]any{}, "Victim"},
 		{"musubi_tool_usage", map[string]any{}, "VICTIMTOOL"},
+		{"musubi_skill_usage", map[string]any{}, "VICTIMSKILL"},
 		// code_context: el weld deriva explained_by de la obs de web (topic_key web/topic) por el path.
 		{"musubi_code_context", map[string]any{"symbol": "shared/auth.go#func:VictimCaller"}, "web/topic"},
 		// grafos renderizables completos (Track 20): brain_graph lee observations (marker VICTIMOBS),

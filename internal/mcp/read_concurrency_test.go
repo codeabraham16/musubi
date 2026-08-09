@@ -45,6 +45,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_tool_usage": true,
 		// Lee .musubi/skills/*.yaml del disco: no toca la DB, no bumpea, no escribe (F5.1).
 		"musubi_list_skills": true,
+		// Lee los contadores del arsenal y el disco (§7 «Forja global»). Los conteos que las
+		// otras tools provocan no se escriben en el handler: van al buffer del ledger y bajan
+		// desde otra goroutine, justamente para no escribir con dispatchMu tomado.
+		"musubi_skill_usage": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
