@@ -265,7 +265,7 @@ func runServe(args []string) {
 		autoBackfill(engine, embedder)
 	}
 
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 
 	// Un nodo que SIRVE sin sync saliente es TERMINAL — el caso del cerebro central: no tiene
@@ -350,7 +350,7 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 
 	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el

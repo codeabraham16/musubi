@@ -187,6 +187,15 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	outcome := memory.OutcomeOK
 	if rpcErr != nil {
 		outcome = memory.OutcomeError
+		// El freno de gasto del motor se decide DENTRO del handler —el costo de musubi_recall es
+		// condicional y un acierto de caché no gasta, así que el despacho no puede saberlo de
+		// antemano— y acá se lo reconoce por el código para darle su propio outcome. Mapear en este
+		// punto, en vez de registrar desde el handler, conserva el punto ÚNICO de registro que
+		// documenta usageledger.go: si el handler registrara por su cuenta, la llamada quedaría
+		// contada dos veces.
+		if rpcErr.Code == codeMotorQuota {
+			outcome = memory.OutcomeDeniedMotor
+		}
 	}
 	s.registrarUso(ctx, callReq.Name, outcome, time.Since(start))
 	registrado = true
@@ -2583,15 +2592,24 @@ func (s *McpServer) toolLogSkillDecision(ctx context.Context, raw json.RawMessag
 func (s *McpServer) toolResolveSkills(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ModifiedFiles []string `json:"modified_files"`
+		Phase         string   `json:"phase"`
+		Task          string   `json:"task"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
 	}
-	if len(args.ModifiedFiles) == 0 {
-		return nil, rpcErrorf(codeInvalidParams, "modified_files no puede estar vacío")
+	req := skills.ResolveRequest{ModifiedFiles: args.ModifiedFiles, Phase: args.Phase, Task: args.Task}
+	// La validación NO se afloja: se le agrega una segunda forma de satisfacerla. Antes exigía
+	// archivos, y por eso una skill que se activa por FASE o por FORMA DE LA TAREA no tenía cómo ser
+	// encontrada salvo declarando '*'. Ahora alcanza con declarar qué se está haciendo — pero una
+	// petición que no dice NADA sigue siendo un error: devolver el arsenal entero es peor que fallar.
+	if !req.DeclaraAlgo() {
+		return nil, rpcErrorf(codeInvalidParams,
+			"decí algo: modified_files, o phase/task (valores válidos: %s)",
+			strings.Join(skills.VocabularioDeAlcance(), ", "))
 	}
 
-	activeSkills, err := s.resolver.ResolveSkills(args.ModifiedFiles)
+	activeSkills, err := s.resolver.ResolveSkills(req)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al resolver skills: %v", err)
 	}

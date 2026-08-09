@@ -196,6 +196,20 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		"Ojo con la edad de cada memoria: una nota vieja puede estar desactualizada. Sé conciso y directo."
 	user := "PREGUNTA:\n" + args.Question + "\n\nMEMORIA RELEVANTE:\n" + b.String()
 
+	// EL FRENO DE GASTO, y va acá y no en el despacho: se cobra donde se gasta. Rechazar no puede
+	// costar, así que se consulta ANTES de la llamada.
+	//
+	// musubi_ask se RECHAZA (a diferencia del recall, que degrada): quien llamó pidió una respuesta
+	// razonada del motor. Devolverle otra cosa sin decirlo sería mentirle.
+	if !s.hayPresupuestoDeMotor(ctx) {
+		if s.metrics != nil {
+			s.metrics.motorDenied.Add(1)
+		}
+		return nil, rpcErrorf(codeMotorQuota,
+			"presupuesto del motor agotado (máx %d llamadas al modelo por hora y por principal); las tools model-free como musubi_recall siguen disponibles",
+			s.motorQuota.max)
+	}
+
 	// TRAMO 3 — SIN CANDADO. 4) Llamar al motor (a-demanda, con backstop de timeout). Medido en el
 	// central, un ask real tardó 25 s: con el candado del despacho tomado, nadie más pudo entrar.
 	askCtx, cancel := context.WithTimeout(ctx, askTimeout)
@@ -254,6 +268,27 @@ func isHex8(s string) bool {
 	return true
 }
 
+// hayPresupuestoDeMotor consulta el freno de gasto para el principal del contexto y CUENTA la
+// llamada si la deja pasar.
+//
+// SE LLAMA JUSTO ANTES DE CADA LLAMADA AL MODELO, nunca en el despacho, y eso salió de medir el
+// código: los dos únicos caminos al motor son musubi_ask y el juez read-time adentro de
+// musubi_recall. El del recall es CONDICIONAL —sólo gasta con `read_time_rerank` encendido— y además
+// no gasta cuando el caché de rerank acierta. Cobrar en el despacho estrangularía los dos casos
+// gratis: un recall model-free y un acierto de caché no cuestan nada y no pueden consumir cuota.
+//
+// Sin principal (stdio local) no hay freno: no hay identidad contra la cual contar, igual que la
+// cuota general. Un límite sobre la clave vacía sería uno solo compartido por todos los usos
+// anónimos, que es peor que no tenerlo.
+func (s *McpServer) hayPresupuestoDeMotor(ctx context.Context) bool {
+	p := principalFrom(ctx)
+	if p == nil {
+		return true
+	}
+	// allow tolera receptor nil y max<=0: sin WithMotorQuota, no hay freno.
+	return s.motorQuota.allow(p.Name, time.Now())
+}
+
 // rerankIfEnabled aplica el JUEZ DE PERTINENCIA read-time (F3.5c) SÓLO si está activado en la config
 // y hay motor. Re-ordena los primeros TopK candidatos por relevancia a la consulta (no descarta) y
 // deja el resto intacto al final. Es OPT-IN, selectivo, cacheado y BEST-EFFORT: ante cualquier fallo,
@@ -288,6 +323,20 @@ func (s *McpServer) rerankIfEnabled(ctx context.Context, query string, res memor
 	// evaluación, que necesita una llamada al motor por query para medir algo.
 	order := rerankCacheGet(key)
 	if order == nil {
+		// EL FRENO DE GASTO, adentro del miss del caché a propósito: un acierto no llama al motor,
+		// así que cobrarle agotaría el presupuesto justo cuando el sistema se está portando bien.
+		//
+		// Y acá se DEGRADA en vez de rechazar: quien llamó pidió memoria, no un juez. Es la misma
+		// regla que ya rige más abajo cuando el motor se cae o contesta cualquier cosa — quedarse sin
+		// presupuesto es, para el recall, otra forma de que el juez no esté disponible.
+		if !s.hayPresupuestoDeMotor(ctx) {
+			if s.metrics != nil {
+				s.metrics.motorDenied.Add(1)
+			}
+			logx.Warn("rerank read-time: sin presupuesto de motor, mantengo el orden model-free",
+				"max_por_hora", s.motorQuota.max)
+			return res
+		}
 		// El TIMEOUT también es del llamador: acá el backstop de producción; el banco pone el suyo.
 		rctx, cancel := context.WithTimeout(ctx, askTimeout)
 		nuevo, err := cognition.Rerank(rctx, s.cognition, query, cands)

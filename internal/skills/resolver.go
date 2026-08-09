@@ -61,8 +61,17 @@ func (r *Resolver) LoadSkills() ([]Skill, error) {
 	return loaded, nil
 }
 
-// ResolveSkills evalúa qué skills corresponden a los archivos modificados y tienen capabilities instaladas.
-func (r *Resolver) ResolveSkills(modifiedFiles []string) ([]Skill, error) {
+// ResolveSkills evalúa qué skills corresponden a la situación declarada y tienen capabilities
+// instaladas.
+//
+// DOS CAMINOS INDEPENDIENTES, Y ES ADITIVO: una skill entra si matchea por ARCHIVO (sus globs) o
+// por ALCANCE DECLARADO (su AppliesTo contra la fase/tarea del request). Cualquiera de los dos
+// alcanza.
+//
+// Que sea un OR y no un AND es deliberado y es lo que evita una regresión: las skills que hoy
+// declaran `triggers: ['*']` y reciben un AppliesTo seguirían activándose por archivo mientras
+// ningún llamador declare todavía su fase. Primero existe el canal, después se aprieta.
+func (r *Resolver) ResolveSkills(req ResolveRequest) ([]Skill, error) {
 	allSkills, err := r.LoadSkills()
 	if err != nil {
 		return nil, err
@@ -70,12 +79,35 @@ func (r *Resolver) ResolveSkills(modifiedFiles []string) ([]Skill, error) {
 
 	var active []Skill
 	for _, skill := range allSkills {
-		if r.matchTriggers(skill, modifiedFiles) && r.verifyCapabilities(skill) {
+		if !r.verifyCapabilities(skill) {
+			continue
+		}
+		if r.matchTriggers(skill, req.ModifiedFiles) || matchAlcance(skill, req) {
 			active = append(active, skill)
 		}
 	}
 
 	return active, nil
+}
+
+// matchAlcance compara el AppliesTo de la skill contra lo que el llamador DECLARÓ.
+//
+// Igualdad exacta de strings: sin prefijos, sin heurística, sin distancia de edición. Es lo que
+// mantiene el matcher determinista y sin costo — y lo que hace que el vocabulario cerrado sirva de
+// algo, porque un typo no puede colarse pareciéndose a un valor bueno.
+func matchAlcance(skill Skill, req ResolveRequest) bool {
+	if len(skill.AppliesTo) == 0 {
+		return false // una skill que no declara alcance nunca matchea por declaración
+	}
+	for _, a := range skill.AppliesTo {
+		if req.Phase != "" && a == req.Phase {
+			return true
+		}
+		if req.Task != "" && a == req.Task {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchGlob indica si file coincide con glob por nombre base o ruta completa.

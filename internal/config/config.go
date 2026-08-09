@@ -423,6 +423,28 @@ func (c ServiceConfig) EffectiveQuotaPerMinute() int {
 	}
 }
 
+// defaultMotorQuotaPerHour es el freno del motor cuando MotorQuotaPerHour==0.
+//
+// EL NÚMERO SALE DE MEDIR, no de elegirlo lindo: en el cerebro central se hicieron 3 llamadas al
+// motor en 30 días. 60 por hora es ~150 veces esa tasa —holgado para una tarde de trabajo intenso, y
+// holgado también si el juez read-time se enciende sobre los 14 recalls/mes que hoy ve el central—
+// pero acota un BUCLE: un cliente desbocado quema 60 llamadas en una hora, no 36.000.
+const defaultMotorQuotaPerHour = 60
+
+// EffectiveMotorQuotaPerHour resuelve el freno del motor: 0 ⇒ default (protección ON); <0 ⇒ sin
+// límite (opt-out explícito); >0 ⇒ ese valor. Idéntica a EffectiveQuotaPerMinute a propósito: son
+// dos frenos hermanos y una semántica distinta entre ellos sería una trampa.
+func (c CognitionConfig) EffectiveMotorQuotaPerHour() int {
+	switch {
+	case c.MotorQuotaPerHour == 0:
+		return defaultMotorQuotaPerHour
+	case c.MotorQuotaPerHour < 0:
+		return 0
+	default:
+		return c.MotorQuotaPerHour
+	}
+}
+
 // SyncConfig configura el sync SALIENTE offline-first del cerebro híbrido (F2): el drain
 // del outbox que empuja las observaciones 'shared' al `musubi serve` central por HTTP
 // JSON-RPC. Está DESACTIVADO por defecto (Enabled=false): un workspace sin bloque `sync:`
@@ -503,6 +525,17 @@ type CognitionConfig struct {
 	// ReadTimeRerankTopK es cuántos candidatos del tope se someten al juez (el resto queda intacto
 	// al final). 0 ⇒ default interno. Acota latencia y costo: el juez nunca ve todo el recall.
 	ReadTimeRerankTopK int `yaml:"read_time_rerank_top_k,omitempty"`
+	// MotorQuotaPerHour es el FRENO DE GASTO del motor: cuántas llamadas al modelo puede provocar
+	// UN principal por hora. Existe porque `quota_per_minute` cuenta todas las tools por igual, y su
+	// default (600/min) está calibrado para tools gratis: aplicado al motor no es un límite.
+	//
+	// Cuenta LLAMADAS, no tokens ni dinero — es lo que el sistema puede saber por sí mismo, sin
+	// depender de que un proveedor reporte bien ni de una tabla de precios que envejece.
+	//
+	// 0 ⇒ default (ver EffectiveMotorQuotaPerHour); NEGATIVO ⇒ sin límite. La MISMA semántica que
+	// quota_per_minute, a propósito: dos números que se parecen y significan cosas distintas es la
+	// forma más barata de que alguien se apague el freno creyendo que lo apretaba.
+	MotorQuotaPerHour int `yaml:"motor_quota_per_hour,omitempty"`
 	// Gateway es el portero de privacidad que se para entre la memoria y el motor externo. A
 	// diferencia del resto del pilar, nace ENCENDIDO: es una guarda de seguridad, y el default
 	// seguro es estar protegido. No rompe la bit-identidad model-free porque sólo actúa cuando la
