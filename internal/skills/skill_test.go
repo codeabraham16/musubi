@@ -100,7 +100,7 @@ generated_at: "2026-01-01T00:00:00Z"
 	}
 
 	// Verificar que ResolveSkills la retorna al hacer match (go está en PATH durante tests)
-	activas, err := r.ResolveSkills([]string{"main.go"})
+	activas, err := r.ResolveSkills(ResolveRequest{ModifiedFiles: []string{"main.go"}})
 	if err != nil {
 		t.Fatalf("ResolveSkills error: %v", err)
 	}

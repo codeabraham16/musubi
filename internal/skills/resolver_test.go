@@ -107,7 +107,7 @@ func TestResolveSkillsEndToEnd(t *testing.T) {
 	})
 	r := NewResolver(root)
 
-	active, err := r.ResolveSkills([]string{"main.go"})
+	active, err := r.ResolveSkills(ResolveRequest{ModifiedFiles: []string{"main.go"}})
 	if err != nil {
 		t.Fatalf("ResolveSkills error: %v", err)
 	}

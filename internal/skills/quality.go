@@ -100,6 +100,21 @@ func ValidateSkillQuality(s Skill) QualityReport {
 		})
 	}
 
+	// R3b: el alcance declarado tiene que estar en el vocabulario CERRADO.
+	//
+	// Es ERROR y no warning porque el modo de falla es invisible: un `applies_to: [phase:planing]`
+	// con typo no rompe nada, no avisa nada, y produce una skill que simplemente no se activa
+	// nunca. Indistinguible de una skill que no aplica — y por eso nadie lo encontraría.
+	for _, a := range s.AppliesTo {
+		if !AlcanceValido(a) {
+			r.Errors = append(r.Errors, QualityIssue{
+				Code:    "applies_to_desconocido",
+				Message: "applies_to declara un alcance que no existe: " + a,
+				Fix:     "usá uno de: " + strings.Join(VocabularioDeAlcance(), ", "),
+			})
+		}
+	}
+
 	// --- WARNINGS (avisan; heurísticos) ---
 	if desc != "" {
 		// R4: la description debería declarar cuándo usarla.
@@ -225,14 +240,40 @@ func allWildcard(triggers []string) bool {
 	return true
 }
 
-// containsAny indica si s contiene alguno de los substrings (s ya en minúsculas).
+// containsAny indica si s contiene alguna de las frases, RESPETANDO LÍMITES DE PALABRA.
+//
+// Antes era un strings.Contains pelado y aprobaba de más. Caso real medido: `adversarial-review`
+// pasaba el check desc_no_trigger porque la lista incluye "al " y su descripción dice «revisión
+// advers-AL- estilo debate». Un token de tres caracteres buscado ADENTRO de las palabras aprueba
+// casi cualquier texto en castellano, y el warning que existe justamente para avisar que la skill
+// no dice cuándo usarse quedaba mudo en la skill que más lo necesitaba.
+//
+// El límite se chequea sólo al INICIO de la frase: las de la lista ya terminan en espacio o son
+// frases completas, así que exigirlo también al final rechazaría "use when" seguido de coma.
 func containsAny(s string, subs []string) bool {
 	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			return true
+		for i := 0; ; {
+			j := strings.Index(s[i:], sub)
+			if j < 0 {
+				break
+			}
+			inicio := i + j
+			if inicio == 0 || !esLetraODigito(s[inicio-1]) {
+				return true
+			}
+			i = inicio + 1
+			if i >= len(s) {
+				break
+			}
 		}
 	}
 	return false
+}
+
+// esLetraODigito trabaja sobre bytes ASCII a propósito: alcanza para decidir si el carácter previo
+// pega la frase adentro de una palabra, y evita arrastrar unicode a un chequeo heurístico.
+func esLetraODigito(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // SourceTrustTier clasifica la confiabilidad de la FUENTE de una skill a partir de su

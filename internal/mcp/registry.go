@@ -376,7 +376,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_resolve_skills",
-				Description: "Resuelve dinámicamente las reglas y skills activas según los archivos modificados, junto con la telemetría sin resolver.",
+				Description: "Resuelve las skills activas para lo que estás por hacer, junto con la telemetría sin resolver. Se puede preguntar por ARCHIVOS (skills atadas a un tipo de archivo) y/o declarando la FASE o la FORMA de la tarea (skills que se activan por el momento del trabajo, no por el archivo: planificar, revisar, auditar, orquestar). Al menos uno de los tres es obligatorio.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -385,8 +385,15 @@ func (s *McpServer) buildRegistry() []toolEntry {
 							Description: "Listado de archivos que van a ser modificados o leídos",
 							Items:       &Property{Type: "string", Description: "Ruta o nombre del archivo"},
 						},
+						"phase": {
+							Type:        "string",
+							Description: "Fase del trabajo, declarada por vos: 'phase:planning' (antes de tocar nada), 'phase:implementing' (escribiendo el cambio) o 'phase:reviewing' (cerrándolo)",
+						},
+						"task": {
+							Type:        "string",
+							Description: "Forma de la tarea, declarada por vos: 'task:audit' (auditar un codebase o un área) o 'task:orchestration' (tarea grande y paralelizable)",
+						},
 					},
-					Required: []string{"modified_files"},
 				},
 			},
 			handler: s.toolResolveSkills,
