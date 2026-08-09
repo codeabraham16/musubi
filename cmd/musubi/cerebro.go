@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -33,11 +34,50 @@ import (
 // proyectos, el recall de este repo competiría para siempre con ruido de producción ajena.
 // Son dos planos: el daemon local (acotado, rápido, offline) y este canal (federado, en vivo).
 
+// defaultDialTimeoutSeg es cuánto se espera para ESTABLECER la conexión con el cerebro central.
+//
+// ★ EL NÚMERO SALE DE UN INCIDENTE MEDIDO, no de elegirlo lindo. Con el central caído por un corte
+// de luz, a otra máquina del equipo NO le arrancaba Claude Code entero. La causa, cronometrada:
+//
+//	initialize                 21 s   <- timeout de conexión del SISTEMA OPERATIVO
+//	notifications/initialized  21 s   <- nadie espera su respuesta, y cuesta igual
+//	tools/list                 21 s
+//	                         ------
+//	                           63 s   contra los 60 s que el host da para inicializar un MCP server
+//
+// Ninguna request sola llegaba al timeout de 60 s: el que las sumaba era el arranque. Y el precio
+// no era perder el canal federado —eso sería aceptable— sino que la SESIÓN ENTERA no levantara. Un
+// servidor MCP caído tiene que degradar a «ese servidor no está», nunca tumbar al agente.
+//
+// Con 5 s, el mismo arranque cuesta ~15 s: entra cómodo aunque el host apure el presupuesto. El
+// timeout de REQUEST sigue en 60 s, que es otra cosa: cubre a un central vivo pero lento.
+const defaultDialTimeoutSeg = 5
+
+// clienteCerebro arma el cliente HTTP con los DOS timeouts separados, que es el punto: uno acota
+// cuánto se espera para que el otro extremo CONTESTE (request) y el otro cuánto para saber si
+// siquiera ESTÁ (dial). Dejar el segundo en manos del sistema operativo es lo que produjo el
+// incidente: en Windows son ~21 s por intento y nadie los eligió.
+func clienteCerebro(timeoutSeg, dialSeg int) *http.Client {
+	if dialSeg <= 0 {
+		dialSeg = defaultDialTimeoutSeg
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   time.Duration(dialSeg) * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	return &http.Client{
+		Timeout:   time.Duration(timeoutSeg) * time.Second,
+		Transport: tr,
+	}
+}
+
 func runCerebro(args []string) {
 	fs := flag.NewFlagSet("cerebro", flag.ExitOnError)
 	url := fs.String("url", "", "URL del cerebro central (default: $MUSUBI_CENTRAL_URL)")
 	tokenEnv := fs.String("token-env", "MANDO_MUSUBI_TOKEN", "variable de entorno con el token")
 	timeout := fs.Int("timeout", 60, "timeout por request, en segundos")
+	dialTimeout := fs.Int("dial-timeout", defaultDialTimeoutSeg, "timeout para ESTABLECER la conexión, en segundos")
 	_ = fs.Parse(args)
 
 	base := strings.TrimSpace(*url)
@@ -57,7 +97,7 @@ func runCerebro(args []string) {
 	}
 	endpoint := strings.TrimRight(base, "/") + "/mcp"
 
-	client := &http.Client{Timeout: time.Duration(*timeout) * time.Second}
+	client := clienteCerebro(*timeout, *dialTimeout)
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
