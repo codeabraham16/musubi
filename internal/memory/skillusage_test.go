@@ -164,7 +164,7 @@ func TestA10LosTresPatrones(t *testing.T) {
 func TestA9NoSeLlamaUtilidadALoQueNoLoEs(t *testing.T) {
 	txt := FormatSkillUsage([]SkillUsageRow{
 		{Skill: "plan-ahead", Resolved: 40, PorComodin: 40},
-	}, 0)
+	}, nil)
 
 	bajo := strings.ToLower(txt)
 	for _, prohibida := range []string{"utilidad", "score", "puntaje", "ranking", "sirvió la skill"} {
