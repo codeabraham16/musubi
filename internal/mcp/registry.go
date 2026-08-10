@@ -393,6 +393,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 							Type:        "string",
 							Description: "Forma de la tarea, declarada por vos: 'task:audit' (auditar un codebase o un área) o 'task:orchestration' (tarea grande y paralelizable)",
 						},
+						"detail": {
+							Type:        "string",
+							Description: "Cuánto cuerpo traer. 'auto' (default): el cuerpo viaja sólo con las skills que matchearon por un glob real o por el alcance que declaraste; las que entraron sólo por su comodín '*' llegan con nombre, descripción y 'cuando'. 'full': todos los cuerpos. 'summary': ninguno. Para pedir un cuerpo omitido usá musubi_list_skills con query:\"<nombre>\"",
+						},
 					},
 				},
 			},

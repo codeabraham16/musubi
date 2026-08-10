@@ -72,22 +72,39 @@ func (r *Resolver) LoadSkills() ([]Skill, error) {
 // declaran `triggers: ['*']` y reciben un AppliesTo seguirían activándose por archivo mientras
 // ningún llamador declare todavía su fase. Primero existe el canal, después se aprieta.
 func (r *Resolver) ResolveSkills(req ResolveRequest) ([]Skill, error) {
+	resueltas, err := r.ResolveConDetalle(req)
+	if err != nil {
+		return nil, err
+	}
+	var active []Skill
+	for _, s := range resueltas {
+		active = append(active, s.Skill)
+	}
+	return active, nil
+}
+
+// ResolveConDetalle resuelve lo mismo que ResolveSkills pero diciendo POR QUÉ entró cada skill.
+//
+// Existe porque el ahorro de tokens necesita esa razón: el cuerpo de una skill viaja sólo cuando hay
+// evidencia de que aplica (ver niveles.go). El CONJUNTO de skills activas es exactamente el mismo —
+// acá no se filtra nada nuevo—; lo único que se agrega es la clasificación.
+func (r *Resolver) ResolveConDetalle(req ResolveRequest) ([]SkillResuelta, error) {
 	allSkills, err := r.LoadSkills()
 	if err != nil {
 		return nil, err
 	}
 
-	var active []Skill
+	var resueltas []SkillResuelta
 	for _, skill := range allSkills {
 		if !r.verifyCapabilities(skill) {
 			continue
 		}
-		if r.matchTriggers(skill, req.ModifiedFiles) || matchAlcance(skill, req) {
-			active = append(active, skill)
+		if como, ok := clasificarMatcheo(skill, req); ok {
+			resueltas = append(resueltas, SkillResuelta{Skill: skill, Matcheo: como})
 		}
 	}
 
-	return active, nil
+	return resueltas, nil
 }
 
 // matchAlcance compara el AppliesTo de la skill contra lo que el llamador DECLARÓ.
@@ -125,16 +142,14 @@ func MatchGlob(glob, file string) bool {
 }
 
 // matchTriggers comprueba si alguno de los archivos coincide con los globs declarados en la skill.
+//
+// Delega en clasificarMatcheo —que distingue glob real de comodín— y descarta la distinción: acá la
+// pregunta es sólo «¿matcheó por archivo?». Sin `Phase` ni `Task`, la rama de alcance no puede
+// dispararse, así que el resultado es exactamente el de antes. Se escribe así para que exista UNA
+// sola implementación del recorrido de triggers: dos que hagan lo mismo se desincronizan.
 func (r *Resolver) matchTriggers(skill Skill, files []string) bool {
-	for _, file := range files {
-		for _, trigger := range skill.Triggers {
-			// Delega en MatchGlob para mantener una única implementación de glob.
-			if MatchGlob(trigger, file) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := clasificarMatcheo(skill, ResolveRequest{ModifiedFiles: files})
+	return ok
 }
 
 // verifyCapabilities valida que las herramientas necesarias (como compiladores o linters) existan en el PATH.

@@ -32,6 +32,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   de directorio.
 
 ### Changed
+- **`musubi_resolve_skills` deja de mandar el arsenal entero en cada respuesta.** Devolvía los
+  `Skill` completos, `rules` incluido, sin niveles: como 6 de las 11 skills declaran
+  `triggers: ['*']` y matchean cualquier archivo, sus cuerpos viajaban siempre, fueran o no
+  relevantes. Ahora **el cuerpo viaja con la evidencia**: se lleva su `rules` la skill que matcheó
+  por un glob real o por el alcance que el llamador declaró; la que entró sólo por su comodín llega
+  con nombre, descripción y —esto es lo que la hace utilizable— la cláusula `cuando`, que para esas
+  seis no vive en la `description` sino en su `always_because`.
+
+  Medido contra el arsenal real de este repo: tocar un `.go` baja de **3.207 a 1.774 tokens (−45 %)**,
+  y tocar un archivo que no matchea ningún glob, de **1.750 a 317 (−82 %)**. Ninguna skill
+  desaparece de la lista —lo que se omite es el cuerpo, y se declara con `body_omitted`— y el nivel 2
+  ya existía: `musubi_list_skills` con `query:"<nombre>"` devuelve el cuerpo completo. Hay un
+  parámetro `detail` con `full` (todo, el comportamiento anterior) y `summary` (nada); un valor con
+  typo es error y no cae al default.
+
+  De paso se arregla un contrato que mentía: la tool serializaba `skills.Skill`, que sólo tiene tags
+  YAML, así que emitía las claves con los nombres de campo de Go (`"Name"`, `"AppliesTo"`) y filtraba
+  `managed_checksum` y `generated_at`. Nadie lo había notado porque la tool medía **cero llamadas en
+  30 días** en el ledger local y en el central.
+
 - **La cola de conflictos deja de llenarse de pares que no tienen nada que ver.** Medido sobre la
   memoria real: de 494 relaciones sólo 45 exigían una decisión — **9,8 %** — y 31 de las 36
   pendientes cruzaban temas completamente distintos (una auditoría de un servidor contra otra de un
