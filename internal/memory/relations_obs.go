@@ -206,3 +206,32 @@ func nullable(s string) interface{} {
 	}
 	return s
 }
+
+// ObsRelationByID devuelve una relación por su id. Existe porque quien juzga necesita saber a QUÉ
+// observación apunta antes de decidir —sobre todo con `supersedes`, que la oculta— y hasta ahora el
+// target sólo se resolvía adentro de ResolveObsRelation, donde nadie podía verlo.
+func (e *DbEngine) ObsRelationByID(id string) (ObsRelation, error) {
+	rels, err := e.queryObsRelations(`WHERE id = ?`, id)
+	if err != nil {
+		return ObsRelation{}, err
+	}
+	if len(rels) == 0 {
+		return ObsRelation{}, fmt.Errorf("no existe la relación %q", id)
+	}
+	return rels[0], nil
+}
+
+// ReferenciasA devuelve las OTRAS relaciones que tocan a obsID, en cualquiera de las dos puntas,
+// excluyendo la relación `excepto` (típicamente la que se está juzgando).
+//
+// POR QUÉ EXISTE. `supersedes` es el único veredicto que HACE algo —oculta la observación target del
+// recall— y no dice qué apunta a ella. Se puede huerfanizar una conversación en silencio: alguien
+// construye respuestas encima de una nota, otro la consolida y la reemplaza, y las respuestas quedan
+// citando algo que ya nadie ve. Pasó de verdad entre dos equipos el 2026-08-10.
+//
+// Mira las DOS puntas a propósito: una nota puede ser citada (target) o puede citar (source), y las
+// dos formas se rompen igual cuando desaparece del recall.
+func (e *DbEngine) ReferenciasA(obsID, excepto string) ([]ObsRelation, error) {
+	return e.queryObsRelations(
+		`WHERE (source_id = ? OR target_id = ?) AND id <> ?`, obsID, obsID, excepto)
+}
