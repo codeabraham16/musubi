@@ -500,6 +500,10 @@ func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interf
 		Check  string `json:"check"`
 		Repair bool   `json:"repair"`
 		Mode   string `json:"mode"`
+		// Deep controla la profundidad del diagnóstico. Puntero para distinguir "ausente" (retrocompat:
+		// los clientes viejos no lo mandan → full) de un false explícito. deep=false = diagnóstico
+		// RÁPIDO (saltea las tres pasadas pesadas), pensado para el sondeo del cuerpo.
+		Deep *bool `json:"deep"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -535,7 +539,15 @@ func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interf
 		return jsonResult(res)
 	}
 
-	rep, err := s.engine.Diagnose()
+	// deep ausente = full (retrocompat con clientes que no conocen el flag). deep=false → rápido.
+	deep := args.Deep == nil || *args.Deep
+	var rep memory.DiagnoseReport
+	var err error
+	if deep {
+		rep, err = s.engine.Diagnose()
+	} else {
+		rep, err = s.engine.DiagnoseQuick()
+	}
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
 	}

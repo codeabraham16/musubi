@@ -265,6 +265,7 @@ type Maintainer interface {
 // Doctor — diagnóstico y reparación de la base de memoria.
 type Doctor interface {
 	Diagnose() (DiagnoseReport, error)
+	DiagnoseQuick() (DiagnoseReport, error)
 	RunCheck(code string) (CheckResult, error)
 	Repair(code, mode string) (RepairResult, error)
 	AutoHeal() (DiagnoseReport, error)

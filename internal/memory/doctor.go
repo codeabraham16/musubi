@@ -24,12 +24,22 @@ type CheckResult struct {
 	Status     string `json:"status"` // ok | warning | error
 	Message    string `json:"message"`
 	Repairable bool   `json:"repairable"`
+	// Unmeasured marca un check que devolvió 'ok' SIN haber podido medir de verdad (no hay dato):
+	// el caso del dead-man's-switch de backup off-host cuando no existe ningún marcador. Deja de
+	// mentir un 'ok medido' — el consumidor (el cuerpo) lo puede pintar distinto ("sin dato" gris,
+	// no verde). omitempty: los checks que SÍ miden no lo emiten, así el contrato no cambia para ellos.
+	Unmeasured bool `json:"unmeasured,omitempty"`
 }
 
 // DiagnoseReport agrupa los resultados de todos los checks.
 type DiagnoseReport struct {
 	Status string        `json:"status"` // ok | issues
 	Checks []CheckResult `json:"checks"`
+	// Deep indica si esta corrida incluyó los checks PESADOS (integridad SQLite full-DB, integridad
+	// FTS, gists rancios). deep=false es el diagnóstico RÁPIDO —sólo checks baratos— que puede correr
+	// cada pocos segundos sin costar ~675ms; deep=true corre TODO (el default, y lo que usan el CLI
+	// `musubi doctor`, el auto-heal y el refresco profundo periódico/on-demand del cuerpo).
+	Deep bool `json:"deep"`
 }
 
 // RepairResult describe una corrida de reparación.
@@ -46,6 +56,7 @@ type RepairResult struct {
 // reparable (ej. integridad: se reporta, no se auto-repara).
 type doctorCheck struct {
 	code  string
+	deep  bool // true = check PESADO (full-DB / CPU por fila); se saltea en el diagnóstico RÁPIDO
 	run   func(e *DbEngine) CheckResult
 	count func(e *DbEngine) (int, error)
 	apply func(e *DbEngine) (int, error)
@@ -54,11 +65,11 @@ type doctorCheck struct {
 // doctorChecks devuelve el registry de checks (orden estable).
 func (e *DbEngine) doctorChecks() []doctorCheck {
 	return []doctorCheck{
-		{code: "db_integrity", run: checkDBIntegrity},
+		{code: "db_integrity", deep: true, run: checkDBIntegrity},
 		{code: "schema_migrations", run: checkSchema, count: countMissingColumns, apply: applySchema},
-		{code: "fts_consistency", run: checkFTS, count: countFTSInconsistent, apply: applyRebuildFTS},
+		{code: "fts_consistency", deep: true, run: checkFTS, count: countFTSInconsistent, apply: applyRebuildFTS},
 		{code: "missing_digests", run: checkDigests, count: countMissingDigests, apply: applyBackfillDigests},
-		{code: "stale_gists", run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
+		{code: "stale_gists", deep: true, run: checkStaleGists, count: countStaleGists, apply: applyRegenGists},
 		{code: "orphan_relations", run: checkOrphans, count: countOrphans, apply: applyDeleteOrphans},
 		{code: "orphan_origins", run: checkOrphanOrigins, count: countOrphanOrigins, apply: applyDeleteOrphanOrigins},
 		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
@@ -126,10 +137,27 @@ func (e *DbEngine) AutoHeal() (DiagnoseReport, error) {
 	return final, nil
 }
 
-// Diagnose corre todos los checks y resume el estado general.
+// Diagnose corre TODOS los checks (incluidos los pesados) y resume el estado general. Es el
+// diagnóstico COMPLETO: lo usan el CLI `musubi doctor`, el auto-heal y el refresco profundo.
 func (e *DbEngine) Diagnose() (DiagnoseReport, error) {
-	rep := DiagnoseReport{Status: "ok", Checks: []CheckResult{}}
+	return e.diagnose(true)
+}
+
+// DiagnoseQuick corre sólo los checks BARATOS: saltea integridad SQLite full-DB, integridad FTS y
+// gists rancios (las tres pasadas pesadas que dominan los ~675ms). Es el diagnóstico que puede
+// correr seguido sin costar caro; lo pide el sondeo del cuerpo. Los checks pesados detectan
+// corrupción de la base —algo que cambia casi nunca— y se dejan para el refresco profundo.
+func (e *DbEngine) DiagnoseQuick() (DiagnoseReport, error) {
+	return e.diagnose(false)
+}
+
+// diagnose corre los checks del registry; con deep=false saltea los marcados como pesados.
+func (e *DbEngine) diagnose(deep bool) (DiagnoseReport, error) {
+	rep := DiagnoseReport{Status: "ok", Checks: []CheckResult{}, Deep: deep}
 	for _, c := range e.doctorChecks() {
+		if c.deep && !deep {
+			continue // diagnóstico rápido: los checks pesados se dejan para el refresco profundo
+		}
 		r := c.run(e)
 		rep.Checks = append(rep.Checks, r)
 		if r.Status != "ok" {
@@ -322,7 +350,11 @@ func checkOffhostBackup(e *DbEngine) CheckResult {
 	}
 
 	if okErr != nil {
-		return CheckResult{Code: "offhost_backup", Status: "ok",
+		// Sin NINGÚN marcador (ni éxito ni error) no hay NADA que medir: no se afirma un 'ok' verde
+		// (sería mentir). Se marca Unmeasured para que el consumidor lo muestre como "sin dato". Sigue
+		// con Status 'ok' para no generar falsos positivos en las máquinas de dev (que no tienen timer
+		// de backup) ni voltear el rollup a 'issues'; la honestidad va en Unmeasured, no en el estado.
+		return CheckResult{Code: "offhost_backup", Status: "ok", Unmeasured: true,
 			Message: "sin registro de backup off-host (instancia local, o backup no configurado — el timer falla-cerrado si BACKUP_REMOTE está vacío)"}
 	}
 	if age := time.Since(okInfo.ModTime()); age > offhostBackupStaleAfter {
