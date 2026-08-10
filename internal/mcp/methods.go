@@ -1182,6 +1182,13 @@ func (s *McpServer) toolJudge(ctx context.Context, raw json.RawMessage) (interfa
 	if !validJudgeRelations[args.Relation] {
 		return nil, rpcErrorf(codeInvalidParams, "relation inválida %q (usá related|compatible|scoped|conflicts_with|supersedes|not_conflict)", args.Relation)
 	}
+	// Con `supersedes` se mira ANTES quién más toca al target, porque después de resolver la
+	// observación ya está oculta y el aviso llegaría tarde. Ver avisoDeHuerfanas.
+	var aviso string
+	if args.Relation == memory.RelSupersedes {
+		aviso = s.avisoDeHuerfanas(args.RelationID)
+	}
+
 	if err := s.engine.ResolveObsRelationCtx(s.scopedCtx(ctx), args.RelationID, args.Relation, "agent", args.Reason); err != nil {
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v", err)
@@ -1190,9 +1197,57 @@ func (s *McpServer) toolJudge(ctx context.Context, raw json.RawMessage) (interfa
 	}
 	msg := fmt.Sprintf("Veredicto registrado: %s (relación %s).", args.Relation, args.RelationID)
 	if args.Relation == memory.RelSupersedes {
-		msg += " La observación target quedó oculta del recall."
+		msg += " La observación target quedó oculta del recall." + aviso
 	}
 	return textResult(msg), nil
+}
+
+// referenciasReader lo implementa el motor real. Interfaz y no *memory.DbEngine para que un backend
+// que no sepa de relaciones no rompa el veredicto: el aviso es un extra, nunca un requisito.
+type referenciasReader interface {
+	ObsRelationByID(id string) (memory.ObsRelation, error)
+	ReferenciasA(obsID, excepto string) ([]memory.ObsRelation, error)
+}
+
+// avisoDeHuerfanas dice CUÁNTAS otras relaciones apuntan a la observación que `supersedes` está por
+// ocultar, y con qué veredicto.
+//
+// POR QUÉ. `supersedes` es el único veredicto que HACE algo —oculta el target del recall— y no dice
+// qué queda apuntando a él. Así se puede huerfanizar una conversación en silencio: alguien construye
+// respuestas encima de una nota, otro la consolida y la reemplaza, y las respuestas quedan citando
+// algo que ya nadie ve. Pasó de verdad entre dos equipos el 2026-08-10, y lo levantó quien lo
+// provocó — nada se lo avisó.
+//
+// NO BLOQUEA, AVISA. Ocultar puede ser exactamente lo correcto; lo que faltaba era saberlo. Y
+// devuelve "" ante cualquier problema: un aviso que falla no puede costar un veredicto.
+func (s *McpServer) avisoDeHuerfanas(relationID string) string {
+	lector, ok := s.engine.(referenciasReader)
+	if !ok {
+		return ""
+	}
+	rel, err := lector.ObsRelationByID(relationID)
+	if err != nil {
+		return ""
+	}
+	otras, err := lector.ReferenciasA(rel.TargetID, relationID)
+	if err != nil || len(otras) == 0 {
+		return ""
+	}
+	// Se listan los veredictos, no los ids: lo que decide si importa es SI alguien construyó algo
+	// encima, y un puñado de UUID desnudos no lo dice (el mismo defecto que la cola de conflictos).
+	porVeredicto := map[string]int{}
+	for _, o := range otras {
+		porVeredicto[o.Relation]++
+	}
+	partes := make([]string, 0, len(porVeredicto))
+	for _, v := range []string{memory.RelPending, memory.RelSupersedes, memory.RelConflictsWith,
+		memory.RelScoped, memory.RelRelated, memory.RelCompatible, memory.RelNotConflict} {
+		if n := porVeredicto[v]; n > 0 {
+			partes = append(partes, fmt.Sprintf("%d %s", n, v))
+		}
+	}
+	return fmt.Sprintf(" OJO: otras %d relaciones tocan a esa observación (%s); si alguien construyó algo encima, quedó citando lo que ya no se ve.",
+		len(otras), strings.Join(partes, ", "))
 }
 
 // maxRecallBudget acota el presupuesto pedido por el cliente a un rango sano.
