@@ -31,6 +31,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   arsenal es dato remoto, y tratarlo como confiable «porque es nuestro» es como se cuela un escape
   de directorio.
 
+### Added
+- **Ya se puede medir el arsenal, y sin mentir sobre lo que se mide.** Hasta acá nadie podía decir
+  qué skill vale la pena: `skill_decisions` guarda «acepté o rechacé **instalarla**», que es otra
+  pregunta, y el ledger de uso no guarda argumentos —a propósito, es una garantía de privacidad— así
+  que ni siquiera indirectamente se sabía qué skill se activó. `musubi_skill_usage` cuenta ahora,
+  por skill: cuántas veces matcheó, **por qué evidencia** (alcance declarado, glob real o comodín),
+  cuántas veces viajó su cuerpo y cuántas se lo pidieron por nombre.
+
+  **El instrumento lo creó el cambio de niveles, sin proponérselo**: mientras cada resolución
+  entregaba todos los cuerpos no había ninguna decisión que observar. Ahora el llamador ve el nivel 1
+  y elige si el cuerpo vale sus tokens — y eso es lo más cerca de «sirvió» a lo que se llega sin un
+  modelo. **Se guarda con el nombre de lo que es, un pedido, y no con el de lo que se le parece**: no
+  hay campo `utilidad`, ni puntaje, ni ranking, y la salida dice explícitamente que si una skill
+  sirvió no se puede medir sin juicio.
+
+  De ahí salen tres lecturas accionables: **muerta** (nunca matcheó), **candidata a retiro** (matcheó
+  N veces y nadie abrió su cuerpo) y **candidata a alcance declarado** (matcheó siempre por comodín y
+  sin embargo le piden el cuerpo — o sea, aplica de verdad y no tiene cómo decir cuándo). Marca
+  patrones; **no retira ni apaga nada**.
+
+  Son contadores y no un log de eventos, así que la tabla queda acotada al tamaño del arsenal y no
+  necesita purga. Se escriben con el buffer del ledger que ya existía: el conteo en el camino caliente
+  es un append en memoria, nunca disco con el lock de dispatch tomado, y un fallo al persistir jamás
+  puede hacer fallar una herramienta.
+
 ### Changed
 - **`musubi_resolve_skills` deja de mandar el arsenal entero en cada respuesta.** Devolvía los
   `Skill` completos, `rules` incluido, sin niveles: como 6 de las 11 skills declaran

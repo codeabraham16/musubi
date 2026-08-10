@@ -245,6 +245,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_skill_usage",
+				Description: "Qué pasó con cada skill del arsenal cuando se activó: cuántas veces matcheó, por qué evidencia (alcance declarado, glob real o comodín '*'), cuántas veces viajó su cuerpo y cuántas se lo pidieron por nombre. Marca tres patrones —muerta, candidata a retiro, candidata a alcance declarado— pero no retira ni apaga nada. No recibe parámetros. Read-only. OJO: mide activación y pedido; si una skill SIRVIÓ no se puede medir sin juicio, y esta tool no lo finge.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  s.toolSkillUsage,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_propose_observation",
 				Description: "PROPONE una observación al libro mayor en CUARENTENA. Usala para TODO contenido generado por un LLM — incluida una respuesta de musubi_ask que quieras conservar. Entra con procedencia 'llm:<modelo>', NO aparece en ningún recall, NO se puede promover a 'shared' y NO viaja al cerebro central. Para volverla visible hay que corroborarla con musubi_corroborate, que CONSERVA el sello de procedencia. Si el contenido lo decidió una persona o lo derivó código sin modelo, no uses esta tool: usá musubi_save_observation.",
 				InputSchema: InputSchema{
@@ -478,7 +490,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					},
 				},
 			},
-			handler:  noCtx(s.toolListSkills),
+			handler:  s.toolListSkills,
 			readOnly: true,
 		},
 		{

@@ -496,6 +496,22 @@ func initSchemaOn(x execQuerier) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 
+		// Contadores de uso del arsenal (v24). Responden una pregunta DISTINTA a la de
+		// skill_decisions: aquélla guarda si se aceptó INSTALAR una skill; ésta, qué pasó cuando
+		// se activó. Son contadores y no eventos para que la tabla quede acotada al tamaño del
+		// arsenal en vez de crecer con el uso. Ver la migración v24.
+		`CREATE TABLE IF NOT EXISTS skill_usage (
+			skill      TEXT     NOT NULL,
+			project_id TEXT     NOT NULL DEFAULT '',
+			evidence   TEXT     NOT NULL DEFAULT '',
+			kind       TEXT     NOT NULL,
+			n          INTEGER  NOT NULL DEFAULT 0,
+			first_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (skill, project_id, evidence, kind)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_skill_usage_project ON skill_usage(project_id);`,
+
 		// Motor de orquestación DAG (model-free): estado persistido de cada run de
 		// workflow. Musubi NO ejecuta los steps; guarda la definición + el estado por
 		// step para decir qué está listo y ser resumible entre sesiones.

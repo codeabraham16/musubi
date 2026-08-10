@@ -756,6 +756,49 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 24,
+			name:    "skill_usage_counters",
+			// EL ARSENAL SE MIDE (§7 del track «Forja global»). Hasta acá nadie podía decir qué
+			// skill vale la pena: `skill_decisions` guarda «acepté o rechacé INSTALARLA», y
+			// `tool_invocations` no guarda argumentos —a propósito, es una garantía de
+			// privacidad— así que ni siquiera indirectamente se sabía qué skill se activó.
+			//
+			// SON CONTADORES Y NO UN LOG DE EVENTOS. Una resolución activa ~10 skills: un evento
+			// por activación escribiría diez filas por llamada y traería el problema de retención
+			// del ledger de tools. Y no hace falta: las preguntas de mantenimiento son «cuántas
+			// veces» y «cuándo fue la última», no series de tiempo. Así la tabla queda acotada al
+			// tamaño del arsenal, no crece con el uso, y no necesita purga.
+			//
+			// `evidence` Y `kind` SON TAXONOMÍAS CERRADAS, como `outcome` en la v23. Guardar la
+			// evidencia por separado es lo que habilita la única lectura que no se puede adivinar
+			// de otra forma: «esta skill matcheó SIEMPRE por comodín y sin embargo le piden el
+			// cuerpo» — o sea, aplica de verdad y no tiene cómo decir cuándo.
+			//
+			// NO HAY COLUMNA DE UTILIDAD NI DE PUNTAJE. Lo que se puede medir sin un modelo es
+			// activación y pedido; llamarle utilidad a eso sería opinión con un número al lado.
+			up: func(x execQuerier) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS skill_usage (
+						skill      TEXT     NOT NULL,
+						project_id TEXT     NOT NULL DEFAULT '',
+						evidence   TEXT     NOT NULL DEFAULT '',
+						kind       TEXT     NOT NULL,
+						n          INTEGER  NOT NULL DEFAULT 0,
+						first_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						last_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						PRIMARY KEY (skill, project_id, evidence, kind)
+					);`,
+					`CREATE INDEX IF NOT EXISTS idx_skill_usage_project ON skill_usage(project_id);`,
+				}
+				for _, s := range stmts {
+					if _, err := x.Exec(s); err != nil {
+						return fmt.Errorf("v24 contadores de skills: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
