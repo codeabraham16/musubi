@@ -134,8 +134,25 @@ func esperarQueElFalsoReciba(t *testing.T, entro <-chan struct{}, termino <-chan
 
 // sembrar deja N observaciones que compartan un término, para que el recall devuelva ≥2 items (el
 // juez no se activa con menos).
+//
+// LA GUARDA DE ARRIBA ES LO QUE IMPIDE QUE ESTO SE REPITA. La siembra son casi-duplicados a
+// propósito —difieren en un carácter— y con la detección de conflictos encendida el auto-supersede
+// puede ocultar dos de las tres, dejando al recall con un solo item y al juez sin activarse. Eso
+// dependía de si el segundo del reloj tickeaba entre dos escrituras (`created_at` tiene resolución
+// de 1 s), así que fallaba ~1 de cada 100 corridas y en CI parecía un flake.
+//
+// Apagar los conflictos en cada test que siembra era la otra opción, y es la que se olvida: el
+// arreglo original tocó `servidorConMotor` y dejó vivo el mismo bug en `motor_con_freno_test.go`,
+// que arma su servidor por otro lado. Con la guarda acá, olvidarse deja un rojo DETERMINISTA que
+// dice qué hacer, en vez de un intermitente que dice cualquier cosa.
 func sembrar(t *testing.T, s *McpServer, n int) {
 	t.Helper()
+	if s.conflicts.Enabled {
+		t.Fatalf("sembrar() con la detección de conflictos ENCENDIDA: la siembra son casi-duplicados y " +
+			"el auto-supersede puede ocultar parte de ellos según el tick del reloj, dejando al recall " +
+			"con menos items de los que el test necesita. Construí el servidor con " +
+			"WithConflicts(config.ConflictConfig{})")
+	}
 	for i := 0; i < n; i++ {
 		_, rpcErr := call(t, s, "musubi_save_observation", map[string]interface{}{
 			"topic_key": "candado/prueba",

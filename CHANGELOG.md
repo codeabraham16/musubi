@@ -39,12 +39,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   no se activa —necesita ≥2— y la tool termina sin llamar al motor. Ése era el síntoma exacto. La
   detección de conflictos queda apagada en esos tests, que no la prueban: la misma decisión, por el
   mismo motivo, que ya había tomado `TestMaintainTool`.
+
+  **El arreglo no se deja librado a que el próximo se acuerde.** `sembrar()` ahora RECHAZA que lo
+  llamen con la detección encendida, nombrando el problema y la línea que lo resuelve. Hace falta
+  porque olvidarse es lo que pasa: la primera versión de este arreglo tocó un solo constructor de
+  servidor y dejó el mismo bug vivo en `motor_con_freno_test.go`, que arma el suyo por otro lado. Con
+  la guarda, olvidarse produce un rojo **determinista** que dice qué hacer, en lugar de un
+  intermitente del 1 % que dice cualquier cosa.
 - **La precondición de esos tests verificaba lo que no importaba.** `exigeSembradas` contaba FILAS
   con `CountObservations`, y el auto-supersede **no borra la fila**: le prende una marca que la
   esconde del recall. La precondición daba verde con 3 filas mientras el recall veía 1, y el test se
   caía dos pasos después con un mensaje que mandaba a revisar el candado — medía bien, pero otra
-  cosa. Ahora verifica los items que el recall DEVUELVE, y al fallar imprime las dos cifras para que
-  el próximo rojo se diagnostique en una corrida y no en una tarde.
+  cosa. Ahora verifica los items que el recall DEVUELVE, y al fallar imprime las dos cifras.
+
+  Se pagó sola en la primera corrida: fue esta precondición nueva la que, en el CI de este mismo PR,
+  encontró que el arreglo estaba incompleto — `TestM2RecallSinPresupuestoDegrada` cayó diciendo
+  «3 filas, 1 item visible, algo las OCULTÓ». Un diagnóstico completo en una corrida, en vez de un
+  flake más para la pila.
 
 ## [0.102.0] - 2026-08-11
 

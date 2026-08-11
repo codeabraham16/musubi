@@ -36,6 +36,7 @@ func servidorConFreno(t *testing.T, motor cognition.Provider, maxPorHora int) (*
 	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{},
 		WithCognition(motor),
 		WithCognitionConfig(config.CognitionConfig{Provider: "fake", ReadTimeRerank: &si}),
+		WithConflicts(config.ConflictConfig{}), // ver la guarda de sembrar(): la siembra son casi-duplicados
 		WithMotorQuota(maxPorHora))
 	sembrar(t, s, 3)
 	exigeSembradas(t, engine, 3)
@@ -271,6 +272,7 @@ func TestM9ElRechazoQuedaEnElLedgerConOutcomePropio(t *testing.T) {
 	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{},
 		WithCognition(motor),
 		WithCognitionConfig(config.CognitionConfig{Provider: "fake", ReadTimeRerank: &si}),
+		WithConflicts(config.ConflictConfig{}), // ver la guarda de sembrar(): la siembra son casi-duplicados
 		WithMotorQuota(1),
 		WithUsageLedger(engine, config.UsageLedgerConfig{}))
 	sembrar(t, s, 3)
