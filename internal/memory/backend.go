@@ -99,6 +99,9 @@ type RelationStore interface {
 	PendingObsRelations() ([]ObsRelation, error)
 	// PendingObsRelationsCtx acota al proyecto de la credencial (ctx, Track 17 — aislamiento).
 	PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, error)
+	// PendingObsRelationsQueryCtx es la misma lectura con filtros, orden y tope: existe porque la
+	// cola llegó a las centenas y traerla entera para leer un contador cuesta 77 KB por consulta.
+	PendingObsRelationsQueryCtx(ctx context.Context, q PendingQuery) (PendingPage, error)
 	ResolveObsRelation(id, relation, resolvedBy, reason string) error
 	// ResolveObsRelationCtx acota el veredicto al proyecto de la credencial (aislamiento #11).
 	ResolveObsRelationCtx(ctx context.Context, id, relation, resolvedBy, reason string) error

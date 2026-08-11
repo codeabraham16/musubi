@@ -7,6 +7,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`musubi_conflicts` acepta filtros: `count_only`, `limit`, `min_confidence` y `order`.** No
+  aceptaba **ninguno**: devolvía la cola entera, siempre. Medido en el cerebro central el
+  2026-08-11: 358 relaciones pendientes, **77 KB por respuesta**, y el consumidor principal —el
+  panel del cuerpo, que ya está desplegado— la pedía completa **cada 4 segundos** para leer un solo
+  entero. Son ~69 MB por hora de app abierta, por instancia, para mostrar un número. Con
+  `count_only=true` el mismo panel pide lo que necesita y nada más.
+
+  Y el otro costo, menos visible: sin `limit` ni orden **la cola no se podía triar**. Eso explica
+  cómo terminó barrida a plantilla — 166 relaciones resueltas en un minuto, 140 de ellas `related`
+  con siete razones distintas. Una cola que no se puede recorrer de a poco se despacha entera o no
+  se despacha.
+
+  Dos decisiones que parecen detalles y no lo son: **`count` es siempre el TOTAL** que matchea los
+  filtros aunque `limit` recorte la lista —si el conteo se truncara, un panel que pagina mostraría
+  el tamaño de la página para siempre, y el número seguiría siendo plausible—, y el recorte **se
+  anuncia** con `truncated:true`, porque un tope silencioso se lee como «no hay más».
+
+  Sin argumentos la tool se comporta EXACTAMENTE como antes: los clientes desplegados no cambian.
+
+  La descripción advierte de algo que la tool no puede arreglar: en una relación pendiente,
+  `confidence` es `max(léxico, coseno)`, y el coseno entre documentos SIN relación ya llega a 0,88
+  medido en este repo. Un `min_confidence` alto no trae «las contradicciones más seguras» sino las
+  más **parecidas**. Sirve para acotar el payload, no como ranking de gravedad — decirlo en el
+  schema evita que el próximo lo use de triage como se usó hasta hoy.
+
 ## [0.102.1] - 2026-08-11
 
 ### Fixed

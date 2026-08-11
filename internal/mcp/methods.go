@@ -1168,20 +1168,63 @@ func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 }
 
 // toolConflicts lista las relaciones pendientes de veredicto.
-func (s *McpServer) toolConflicts(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
+//
+// Acepta filtros porque NO aceptarlos tenía un costo medido: la cola del central llegó a 358
+// relaciones (77 KB por respuesta) y el panel del cuerpo la pedía ENTERA cada 4 segundos para leer
+// un solo entero. Sin parámetros no había manera de pedir menos, ni de traer primero las que uno
+// quiere mirar — y una cola que no se puede triar termina barrida a plantilla en vez de arbitrada.
+//
+// Sin argumentos se comporta EXACTAMENTE como antes (lista completa, más reciente primero): ningún
+// cliente existente cambia de comportamiento.
+func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		CountOnly     bool    `json:"count_only"`
+		Limit         int     `json:"limit"`
+		MinConfidence float64 `json:"min_confidence"`
+		Order         string  `json:"order"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+		}
+	}
+	if args.Limit < 0 {
+		return nil, rpcErrorf(codeInvalidParams, "limit no puede ser negativo (0 = sin tope)")
+	}
+	if args.MinConfidence < 0 || args.MinConfidence > 1 {
+		return nil, rpcErrorf(codeInvalidParams, "min_confidence va entre 0 y 1, no %v", args.MinConfidence)
+	}
+	orden := strings.ToLower(strings.TrimSpace(args.Order))
+	switch orden {
+	case "", "recent", "confidence":
+	default:
+		return nil, rpcErrorf(codeInvalidParams, "order inválido %q (usá recent|confidence)", args.Order)
+	}
+
 	// Aislamiento por proyecto (Track 17): solo los conflictos cuya observación de origen es del
 	// proyecto de la credencial; stdio local / admin ⇒ federado.
-	rels, err := s.engine.PendingObsRelationsCtx(s.scopedCtx(ctx))
+	page, err := s.engine.PendingObsRelationsQueryCtx(s.scopedCtx(ctx), memory.PendingQuery{
+		MinConfidence: args.MinConfidence,
+		Limit:         args.Limit,
+		PorConfianza:  orden == "confidence",
+		CountOnly:     args.CountOnly,
+	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al listar conflictos: %v", err)
 	}
-	if rels == nil {
-		rels = []memory.ObsRelation{}
+	out := map[string]interface{}{
+		"count":     page.Count,
+		"relations": page.Relations,
 	}
-	return jsonResult(map[string]interface{}{
-		"count":     len(rels),
-		"relations": rels,
-	})
+	// `truncated` aparece SÓLO cuando es true: quien la ve sabe que hay más, y quien no la ve tiene
+	// la lista entera. Cortar en silencio sería un tope silencioso, que es peor que no tener tope.
+	if page.Truncated {
+		out["truncated"] = true
+	}
+	if args.CountOnly {
+		out["count_only"] = true
+	}
+	return jsonResult(out)
 }
 
 // validJudgeRelations son los veredictos que el agente puede emitir (pending no
