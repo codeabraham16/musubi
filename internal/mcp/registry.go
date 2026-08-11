@@ -558,10 +558,15 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_conflicts",
-				Description: "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge.",
+				Description: "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge. SIN ARGUMENTOS devuelve la cola COMPLETA, que en una memoria grande son centenas de relaciones: si sólo querés el número para un panel, pedí count_only=true — medido en el cerebro central, la lista entera pesa 77 KB, y bajarla para leer un contador es el desperdicio más caro de esta tool. `count` es SIEMPRE el total que matchea los filtros aunque `limit` recorte la lista, y si se recortó viene `truncated:true`. OJO CON min_confidence: en una relación PENDIENTE la confianza es max(léxico, coseno), y el coseno entre documentos SIN relación ya llega a 0,88 — así que un umbral alto NO trae «las contradicciones más seguras» sino las más PARECIDAS. Sirve para acotar el payload, no como ranking de gravedad.",
 				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
+					Type: "object",
+					Properties: map[string]Property{
+						"count_only":     {Type: "boolean", Description: "true = devolvé sólo el conteo, sin las relaciones. Para paneles que muestran un número."},
+						"limit":          {Type: "number", Description: "Tope de relaciones devueltas (0 = sin tope). NO afecta a `count`, que sigue siendo el total."},
+						"min_confidence": {Type: "number", Description: "Descarta las de confianza menor, entre 0 y 1. Acota el payload; no es un ranking de gravedad (ver la descripción de la tool)."},
+						"order":          {Type: "string", Description: "recent (default, más nuevas primero) | confidence (mayor confianza primero)"},
+					},
 				},
 			},
 			handler:  s.toolConflicts,

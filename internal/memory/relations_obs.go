@@ -168,6 +168,91 @@ func (e *DbEngine) PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, e
 	return scanObsRelations(rows)
 }
 
+// PendingQuery acota qué pendientes se piden y cuántas se traen de vuelta.
+//
+// Existe porque la cola creció hasta las centenas y la tool no aceptaba NI UN parámetro: devolvía la
+// lista entera siempre. Medido en el central el 2026-08-11: 77 KB por respuesta, y el consumidor
+// principal —el panel del cuerpo— la pedía cada 4 segundos para leer UN ENTERO. Bajar 77 KB para
+// mirar un número es el desperdicio; y sin `limit` ni orden, la cola tampoco se podía triar, que es
+// parte de por qué terminaba barrida a plantilla en vez de arbitrada.
+type PendingQuery struct {
+	// MinConfidence descarta las de confianza menor. 0 = sin filtro.
+	//
+	// OJO CON ESTE NÚMERO: en una relación PENDIENTE `confidence` es max(léxico, coseno), y la línea
+	// de base del coseno documento-contra-documento para pares SIN relación llega a 0,884 medida en
+	// este mismo repo. Un umbral alto acá NO selecciona «las contradicciones más seguras»: selecciona
+	// las más parecidas, que es otra cosa. Se expone porque acota el payload, no como ranking de
+	// gravedad — y por eso la descripción de la tool lo dice con todas las letras.
+	MinConfidence float64
+	// Limit trunca la LISTA devuelta. No afecta al conteo (ver PendingPage.Count).
+	Limit int
+	// PorConfianza ordena de mayor a menor confianza en vez de por recencia.
+	PorConfianza bool
+	// CountOnly evita traer las filas: sólo cuenta. Es el caso del panel que muestra un número.
+	CountOnly bool
+}
+
+// PendingPage es el resultado de PendingObsRelationsQueryCtx.
+type PendingPage struct {
+	// Count es el TOTAL que matchea los filtros, INDEPENDIENTE de Limit.
+	//
+	// Que no sea len(Relations) es deliberado, y es la parte que se puede romper sin que nadie lo
+	// note: un consumidor que pinta «N conflictos» y además pagina mostraría «10» para siempre si el
+	// conteo viniera truncado. Un indicador que se achica solo al paginar es peor que no tenerlo.
+	Count     int
+	Relations []ObsRelation
+	// Truncated avisa que la lista se cortó por Limit. Sin esta bandera, un cliente no puede
+	// distinguir «hay 10» de «te mando 10 de 358».
+	Truncated bool
+}
+
+// PendingObsRelationsQueryCtx es PendingObsRelationsCtx con filtros, orden y tope. Mantiene el mismo
+// aislamiento por proyecto: sólo las relaciones cuya observación de ORIGEN es del proyecto de la
+// credencial (ausencia de scope ⇒ federado).
+func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQuery) (PendingPage, error) {
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+	where := ` WHERE r.status = ?` + scopeSQL
+	args := append([]interface{}{RelStatusPending}, scopeArgs...)
+	if q.MinConfidence > 0 {
+		where += ` AND r.confidence >= ?`
+		args = append(args, q.MinConfidence)
+	}
+	from := ` FROM observation_relations r JOIN observations o ON o.id = r.source_id`
+
+	page := PendingPage{Relations: []ObsRelation{}}
+	// El conteo se hace SIEMPRE y con los MISMOS filtros, aunque después se trunque la lista.
+	if err := e.db.QueryRowContext(ctx, `SELECT COUNT(*)`+from+where, args...).Scan(&page.Count); err != nil {
+		return page, fmt.Errorf("error al contar relaciones pendientes: %w", err)
+	}
+	if q.CountOnly || page.Count == 0 {
+		return page, nil
+	}
+
+	orden := ` ORDER BY r.updated_at DESC`
+	if q.PorConfianza {
+		orden = ` ORDER BY r.confidence DESC, r.updated_at DESC`
+	}
+	sel := `SELECT r.id, r.source_id, r.target_id, r.relation, r.confidence, r.status,
+	               COALESCE(r.resolved_by,''), COALESCE(r.reason,'')` + from + where + orden
+	if q.Limit > 0 {
+		sel += ` LIMIT ?`
+		args = append(args, q.Limit)
+	}
+	rows, err := e.db.QueryContext(ctx, sel, args...)
+	if err != nil {
+		return page, fmt.Errorf("error al listar relaciones pendientes acotadas: %w", err)
+	}
+	rels, err := scanObsRelations(rows)
+	if err != nil {
+		return page, err
+	}
+	if rels != nil {
+		page.Relations = rels
+	}
+	page.Truncated = q.Limit > 0 && page.Count > len(page.Relations)
+	return page, nil
+}
+
 // queryObsRelations centraliza el SELECT con un filtro WHERE opcional.
 func (e *DbEngine) queryObsRelations(where string, args ...interface{}) ([]ObsRelation, error) {
 	q := `SELECT id, source_id, target_id, relation, confidence, status,

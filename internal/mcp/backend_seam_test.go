@@ -38,6 +38,30 @@ func (f *fakeBackend) PendingObsRelationsCtx(_ context.Context) ([]memory.ObsRel
 	return f.pending, f.pendingErr
 }
 
+// PendingObsRelationsQueryCtx es la variante con filtros, que es la que toolConflicts usa desde que
+// la cola creció a las centenas. El fake honra CountOnly y Limit porque el handler los propaga, y un
+// seam sólo prueba algo si el fake se comporta como dice el contrato.
+//
+// Que este archivo haya tenido que cambiar es el seam haciendo su trabajo: el fake embebe la
+// interfaz en nil, así que cualquier método NUEVO que el handler empiece a llamar paniquea acá en
+// vez de pasar desapercibido.
+func (f *fakeBackend) PendingObsRelationsQueryCtx(_ context.Context, q memory.PendingQuery) (memory.PendingPage, error) {
+	f.calls++
+	if f.pendingErr != nil {
+		return memory.PendingPage{}, f.pendingErr
+	}
+	page := memory.PendingPage{Count: len(f.pending), Relations: []memory.ObsRelation{}}
+	if q.CountOnly {
+		return page, nil
+	}
+	page.Relations = f.pending
+	if q.Limit > 0 && q.Limit < len(page.Relations) {
+		page.Relations = page.Relations[:q.Limit]
+		page.Truncated = true
+	}
+	return page, nil
+}
+
 func TestStorageBackendSeam_ConflictsViaFake(t *testing.T) {
 	fake := &fakeBackend{
 		pending: []memory.ObsRelation{
