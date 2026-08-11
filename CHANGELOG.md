@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.102.1] - 2026-08-11
+
 ### Fixed
 - **El puntaje de coherencia comparaba dos escalas distintas y se ganaba solo con historia.** Medía
   «pendientes AHORA contra resueltas DE TODA LA VIDA». El primer resultado real del cerebro central
