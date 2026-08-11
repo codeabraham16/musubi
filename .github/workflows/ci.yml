@@ -29,8 +29,20 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # `-timeout 20m` es EXPLÍCITO porque el default de Go —10 min POR PAQUETE— dejó de alcanzar.
+      # Medido en la corrida verde de main @67f2d80 (2026-08-11), con -race y cobertura:
+      #     internal/memory  372,9 s   internal/mcp  246,7 s   cmd/musubi  68,8 s
+      # O sea que internal/memory usa el 62 % de los 600 s en un runner sano. Un runner 1,6× más
+      # lento —normal en infraestructura compartida— lo pasa, y el rojo que produce no dice «hay un
+      # bug» sino «hoy la máquina estaba cargada». Ese rojo es peor que no tener CI: entrena a
+      # relanzar sin leer, y el día que el fallo sea real nadie lo va a mirar.
+      #
+      # 20 min deja 3,2× de margen sobre lo medido y SIGUE atrapando un deadlock de verdad (un
+      # cuelgue quema 20 min en vez de 10, y es un evento raro). Subir el techo NO arregla que
+      # internal/memory tarde 6 minutos: eso se mide y se ataca aparte. Lo que arregla es que el
+      # rojo vuelva a significar algo.
       - name: Test (race + coverage)
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -timeout 20m -coverprofile=coverage.out ./...
 
       # El grafo de código polyglot (TS/JS/Py vía tree-sitter, Track 20 · F4) vive detrás del build
       # tag `treesitter` y NO se compila en el build por default, así que el job de arriba jamás lo
