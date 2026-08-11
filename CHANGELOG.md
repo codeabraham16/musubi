@@ -7,6 +7,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **`confidence` significaba dos cosas distintas según la fila, y desde afuera no se podía notar.**
+  En una relación PENDIENTE era `max(léxico, coseno)`; en una auto-resuelta, el léxico solo. Un mismo
+  0,86 podía ser «comparten muchos trigramas» o «el coseno entre dos documentos cualesquiera» — y la
+  línea de base del coseno documento-contra-documento, medida en este repo, da p50 0,60 y llega a
+  **0,884 para pares SIN ninguna relación**. O sea que la mitad alta de la escala es ruido con forma
+  de señal.
+
+  Costó de la peor manera: el 2026-08-11 se triaron los conflictos del cerebro central por
+  «confianza ≥ 0,85» creyendo que eso ordenaba por gravedad, cuando ordenaba por parecido.
+
+  Las dos señales ahora se guardan **por separado** (`lex` y `cosine`, migración v27) y viajan en la
+  respuesta de `musubi_conflicts`. `confidence` **no se toca**: cambiarle el significado rompería a
+  cualquiera que ya filtre por ella. Y se suma `min_lex`, que filtra por el solape léxico solo — el
+  filtro que sirve para triar y que no existía.
+
+  **`nil` no es `0`, y ésa es la parte del diseño que hay que sostener.** Las columnas son nullable y
+  los campos son punteros: una relación anterior a la v27 no tiene el desglose y no se puede
+  reconstruir sin volver a scorear los pares. Un `0` sería una mentira —un coseno de 0 quiere decir
+  «ortogonales», que es información— así que las viejas quedan ausentes, que quiere decir «no se
+  sabe». Por lo mismo `min_lex` **descarta** las filas sin desglose: no se puede afirmar que superan
+  un umbral que nadie midió.
+
 ### Added
 - **`musubi_conflicts` acepta filtros: `count_only`, `limit`, `min_confidence` y `order`.** No
   aceptaba **ninguno**: devolvía la cola entera, siempre. Medido en el cerebro central el
