@@ -205,6 +205,11 @@ type WorkStore interface {
 	ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts int) (WorkUnit, bool, error)
 	HeartbeatWorkUnit(id, owner string, fencingToken int64, ttlSeconds int) (bool, error)
 	CompleteWorkUnit(id, result, status, agent string, fencingToken int64) error
+	// CompleteWorkUnitConEfecto cierra declarando qué hizo el agente (report|apply); el efecto
+	// se contrasta con la autonomía declarada de la unidad (L1/L2/L3).
+	CompleteWorkUnitConEfecto(id, result, status, agent string, fencingToken int64, effect string) error
+	// ApproveWorkUnit firma el intento en curso de una unidad L2 (maker/checker).
+	ApproveWorkUnit(id, reviewer string) error
 	WorkBatchStatus(batchID string) (WorkBatch, error)
 	ActiveBatch() (WorkBatch, bool, error)
 	ClearWorkBatch(batchID string) error

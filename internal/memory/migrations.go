@@ -827,6 +827,44 @@ func schemaMigrations() []migration {
 				return agregarColumnaSiFalta(x, "work_units", "claim_log", `claim_log TEXT NOT NULL DEFAULT ''`)
 			},
 		},
+		{
+			version: 26,
+			name:    "work_autonomy",
+			// CUÁNTA AUTONOMÍA TIENE ESTA TAREA ERA UNA PREGUNTA QUE NADIE PODÍA HACER. El cerebro
+			// sabía QUIÉN opera (el rol del token: reader/writer/admin) y eso es una propiedad de la
+			// CREDENCIAL, no del trabajo. Un mismo agente, con el mismo token, puede tener encargado
+			// «andá y mirá, no toques nada» en una unidad y «arreglalo solo» en la siguiente; la
+			// pizarra no tenía dónde anotar esa diferencia, así que la única manera de sostenerla era
+			// que el humano se acordara. Un encargo que sólo vive en la cabeza del que lo dio es
+			// exactamente la deuda de intención: se paga cuando el agente hace de más y nadie puede
+			// señalar la regla que rompió, porque no había regla.
+			//
+			// `autonomy` la escribe el que POSTEA la unidad y ya no cambia: L1 sólo reporta, L2
+			// arregla pero necesita que otro apruebe, L3 cierra solo. El default es 'L3' porque es
+			// exactamente lo que la pizarra hacía hasta hoy — una base vieja y un cliente que no sabe
+			// del campo siguen comportándose igual.
+			//
+			// La terna `approved_*` es la contracara: la firma del revisor de L2. `approved_token`
+			// guarda el fencing_token VIGENTE al aprobar, y ahí está el invariante que hace que la
+			// firma valga algo — una aprobación aprueba EL INTENTO que se revisó, no la unidad para
+			// siempre. Si al dueño le vence el lease y otro agente retoma la unidad, el
+			// fencing_token avanza y la firma vieja deja de coincidir: el trabajo nuevo, que nadie
+			// miró, no se cuela por la puerta que abrió el trabajo viejo.
+			up: func(x execQuerier) error {
+				cols := [][2]string{
+					{"autonomy", `autonomy TEXT NOT NULL DEFAULT 'L3'`},
+					{"approved_by", `approved_by TEXT NOT NULL DEFAULT ''`},
+					{"approved_at", `approved_at DATETIME`},
+					{"approved_token", `approved_token INTEGER NOT NULL DEFAULT 0`},
+				}
+				for _, c := range cols {
+					if err := agregarColumnaSiFalta(x, "work_units", c[0], c[1]); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
