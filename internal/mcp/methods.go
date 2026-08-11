@@ -1181,6 +1181,7 @@ func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (int
 		CountOnly     bool    `json:"count_only"`
 		Limit         int     `json:"limit"`
 		MinConfidence float64 `json:"min_confidence"`
+		MinLex        float64 `json:"min_lex"`
 		Order         string  `json:"order"`
 	}
 	if len(raw) > 0 {
@@ -1194,6 +1195,9 @@ func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (int
 	if args.MinConfidence < 0 || args.MinConfidence > 1 {
 		return nil, rpcErrorf(codeInvalidParams, "min_confidence va entre 0 y 1, no %v", args.MinConfidence)
 	}
+	if args.MinLex < 0 || args.MinLex > 1 {
+		return nil, rpcErrorf(codeInvalidParams, "min_lex va entre 0 y 1, no %v", args.MinLex)
+	}
 	orden := strings.ToLower(strings.TrimSpace(args.Order))
 	switch orden {
 	case "", "recent", "confidence":
@@ -1205,6 +1209,7 @@ func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (int
 	// proyecto de la credencial; stdio local / admin ⇒ federado.
 	page, err := s.engine.PendingObsRelationsQueryCtx(s.scopedCtx(ctx), memory.PendingQuery{
 		MinConfidence: args.MinConfidence,
+		MinLex:        args.MinLex,
 		Limit:         args.Limit,
 		PorConfianza:  orden == "confidence",
 		CountOnly:     args.CountOnly,

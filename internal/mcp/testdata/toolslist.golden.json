@@ -621,7 +621,7 @@
     },
     {
       "name": "musubi_conflicts",
-      "description": "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge. SIN ARGUMENTOS devuelve la cola COMPLETA, que en una memoria grande son centenas de relaciones: si sólo querés el número para un panel, pedí count_only=true — medido en el cerebro central, la lista entera pesa 77 KB, y bajarla para leer un contador es el desperdicio más caro de esta tool. `count` es SIEMPRE el total que matchea los filtros aunque `limit` recorte la lista, y si se recortó viene `truncated:true`. OJO CON min_confidence: en una relación PENDIENTE la confianza es max(léxico, coseno), y el coseno entre documentos SIN relación ya llega a 0,88 — así que un umbral alto NO trae «las contradicciones más seguras» sino las más PARECIDAS. Sirve para acotar el payload, no como ranking de gravedad.",
+      "description": "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge. SIN ARGUMENTOS devuelve la cola COMPLETA, que en una memoria grande son centenas de relaciones: si sólo querés el número para un panel, pedí count_only=true — medido en el cerebro central, la lista entera pesa 77 KB, y bajarla para leer un contador es el desperdicio más caro de esta tool. `count` es SIEMPRE el total que matchea los filtros aunque `limit` recorte la lista, y si se recortó viene `truncated:true`. OJO CON min_confidence: en una relación PENDIENTE la confianza es max(léxico, coseno), y el coseno entre documentos SIN relación ya llega a 0,88 — así que un umbral alto NO trae «las contradicciones más seguras» sino las más PARECIDAS. Sirve para acotar el payload, no como ranking de gravedad. Desde la v27 cada relación trae las DOS señales por separado (`lex` y `cosine`), y `min_lex` filtra por la léxica sola, que es la que significa algo estable. Las relaciones detectadas ANTES de la v27 no tienen el desglose: vienen sin esos campos, que es «no se sabe» y no «cero».",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -635,7 +635,11 @@
           },
           "min_confidence": {
             "type": "number",
-            "description": "Descarta las de confianza menor, entre 0 y 1. Acota el payload; no es un ranking de gravedad (ver la descripción de la tool)."
+            "description": "Descarta las de confianza menor, entre 0 y 1. Acota el payload; no es un ranking de gravedad (ver la descripción de la tool). Para TRIAR usá min_lex."
+          },
+          "min_lex": {
+            "type": "number",
+            "description": "Filtra por el SOLAPE LÉXICO solo (0 a 1): comparten trigramas. Es la señal estable y el filtro que sirve para triar, a diferencia de min_confidence. Descarta las relaciones detectadas antes de la v27, que no guardan el desglose — no se puede afirmar que superan un umbral que nadie midió."
           },
           "order": {
             "type": "string",

@@ -34,14 +34,25 @@ const (
 
 // ObsRelation es una arista entre dos observaciones (source -> target).
 type ObsRelation struct {
-	ID         string  `json:"id"`
-	SourceID   string  `json:"source_id"`
-	TargetID   string  `json:"target_id"`
-	Relation   string  `json:"relation"`
+	ID       string `json:"id"`
+	SourceID string `json:"source_id"`
+	TargetID string `json:"target_id"`
+	Relation string `json:"relation"`
+	// Confidence es la señal histórica, y NO significa lo mismo en toda la tabla: en una relación
+	// pendiente es max(léxico, coseno) y en una auto-resuelta es el léxico solo. Se conserva tal cual
+	// por compatibilidad; para saber de DÓNDE salió el número, mirar Lex y Cosine.
 	Confidence float64 `json:"confidence"`
 	Status     string  `json:"status"`
 	ResolvedBy string  `json:"resolved_by,omitempty"`
 	Reason     string  `json:"reason,omitempty"`
+	// Lex y Cosine son las dos señales POR SEPARADO, y son punteros a propósito.
+	//
+	// nil significa «no se sabe»: la fila es anterior a la migración v27 y su desglose no se puede
+	// reconstruir sin volver a scorear el par. Un 0 sería otra cosa —un coseno 0 quiere decir
+	// ortogonales, que es información— y confundir «no medido» con «midió cero» es exactamente cómo
+	// una señal ausente se cuela como si fuera un dato.
+	Lex    *float64 `json:"lex,omitempty"`
+	Cosine *float64 `json:"cosine,omitempty"`
 }
 
 // UpsertObsRelation inserta o actualiza la relación del par (source, target) y
@@ -58,17 +69,23 @@ func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
+	// lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano, un test, un
+	// veredicto que no re-scorea). El COALESCE del UPDATE conserva lo que ya había en vez de pisarlo
+	// con NULL: juzgar una relación no debería borrar cómo se la detectó.
 	_, err := e.db.Exec(`
-		INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason, lex_score, cosine_score, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(source_id, target_id) DO UPDATE SET
 			relation=excluded.relation,
 			confidence=excluded.confidence,
 			status=excluded.status,
 			resolved_by=excluded.resolved_by,
 			reason=excluded.reason,
+			lex_score=COALESCE(excluded.lex_score, lex_score),
+			cosine_score=COALESCE(excluded.cosine_score, cosine_score),
 			updated_at=CURRENT_TIMESTAMP
-	`, r.ID, r.SourceID, r.TargetID, r.Relation, r.Confidence, r.Status, nullable(r.ResolvedBy), nullable(r.Reason))
+	`, r.ID, r.SourceID, r.TargetID, r.Relation, r.Confidence, r.Status, nullable(r.ResolvedBy), nullable(r.Reason),
+		floatOrNil(r.Lex), floatOrNil(r.Cosine))
 	if err != nil {
 		return "", fmt.Errorf("error al upsertar relación de observaciones: %w", err)
 	}
@@ -155,8 +172,7 @@ func (e *DbEngine) ResolveObsRelationCtx(ctx context.Context, id, relation, reso
 // omite, caso degenerado).
 func (e *DbEngine) PendingObsRelationsCtx(ctx context.Context) ([]ObsRelation, error) {
 	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
-	q := `SELECT r.id, r.source_id, r.target_id, r.relation, r.confidence, r.status,
-	             COALESCE(r.resolved_by,''), COALESCE(r.reason,'')
+	q := `SELECT ` + colsObsRel("r.") + `
 	      FROM observation_relations r
 	      JOIN observations o ON o.id = r.source_id
 	      WHERE r.status = ?` + scopeSQL + ` ORDER BY r.updated_at DESC`
@@ -184,6 +200,14 @@ type PendingQuery struct {
 	// las más parecidas, que es otra cosa. Se expone porque acota el payload, no como ranking de
 	// gravedad — y por eso la descripción de la tool lo dice con todas las letras.
 	MinConfidence float64
+	// MinLex filtra por la señal LÉXICA sola, que es la que significa algo estable: comparten
+	// trigramas. Es el filtro que había que tener desde el principio y no existía — el que triaba
+	// por MinConfidence creía estar ordenando por gravedad y ordenaba por parecido.
+	//
+	// Descarta también las filas SIN desglose (anteriores a la v27): no se puede afirmar que una
+	// fila cuyo léxico no se conoce supere un umbral. Excluir por no saber es la respuesta correcta;
+	// incluirla «por las dudas» metería en el resultado justo lo que el filtro quería sacar.
+	MinLex float64
 	// Limit trunca la LISTA devuelta. No afecta al conteo (ver PendingPage.Count).
 	Limit int
 	// PorConfianza ordena de mayor a menor confianza en vez de por recencia.
@@ -217,6 +241,12 @@ func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQue
 		where += ` AND r.confidence >= ?`
 		args = append(args, q.MinConfidence)
 	}
+	if q.MinLex > 0 {
+		// `lex_score >= ?` ya excluye los NULL por semántica de SQL, y eso es lo buscado: una fila
+		// sin desglose no puede afirmarse por encima de un umbral.
+		where += ` AND r.lex_score >= ?`
+		args = append(args, q.MinLex)
+	}
 	from := ` FROM observation_relations r JOIN observations o ON o.id = r.source_id`
 
 	page := PendingPage{Relations: []ObsRelation{}}
@@ -232,8 +262,7 @@ func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQue
 	if q.PorConfianza {
 		orden = ` ORDER BY r.confidence DESC, r.updated_at DESC`
 	}
-	sel := `SELECT r.id, r.source_id, r.target_id, r.relation, r.confidence, r.status,
-	               COALESCE(r.resolved_by,''), COALESCE(r.reason,'')` + from + where + orden
+	sel := `SELECT ` + colsObsRel("r.") + from + where + orden
 	if q.Limit > 0 {
 		sel += ` LIMIT ?`
 		args = append(args, q.Limit)
@@ -255,8 +284,7 @@ func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQue
 
 // queryObsRelations centraliza el SELECT con un filtro WHERE opcional.
 func (e *DbEngine) queryObsRelations(where string, args ...interface{}) ([]ObsRelation, error) {
-	q := `SELECT id, source_id, target_id, relation, confidence, status,
-	             COALESCE(resolved_by,''), COALESCE(reason,'')
+	q := `SELECT ` + colsObsRel("") + `
 	      FROM observation_relations ` + where + ` ORDER BY updated_at DESC`
 	rows, err := e.db.Query(q, args...)
 	if err != nil {
@@ -272,9 +300,21 @@ func scanObsRelations(rows *sql.Rows) ([]ObsRelation, error) {
 	var out []ObsRelation
 	for rows.Next() {
 		var r ObsRelation
+		// lex/cosine se escanean como sql.NullFloat64 y NO con COALESCE a 0: el NULL de una fila
+		// vieja significa «no se sabe», y aplanarlo a 0 lo volvería indistinguible de un coseno
+		// realmente nulo. Es la misma distinción que defiende el tipo puntero del struct.
+		var lex, cos sql.NullFloat64
 		if err := rows.Scan(&r.ID, &r.SourceID, &r.TargetID, &r.Relation, &r.Confidence,
-			&r.Status, &r.ResolvedBy, &r.Reason); err != nil {
+			&r.Status, &r.ResolvedBy, &r.Reason, &lex, &cos); err != nil {
 			return nil, fmt.Errorf("error al escanear relación: %w", err)
+		}
+		if lex.Valid {
+			v := lex.Float64
+			r.Lex = &v
+		}
+		if cos.Valid {
+			v := cos.Float64
+			r.Cosine = &v
 		}
 		out = append(out, r)
 	}
@@ -282,6 +322,28 @@ func scanObsRelations(rows *sql.Rows) ([]ObsRelation, error) {
 		return nil, fmt.Errorf("error al iterar relaciones de observaciones: %w", err)
 	}
 	return out, nil
+}
+
+// colsObsRel es la lista de columnas que espera scanObsRelations, con el prefijo de tabla que
+// corresponda ("r." cuando hay JOIN, "" cuando no).
+//
+// Está centralizada porque hay TRES consultas que leen relaciones y el scanner es uno solo: agregar
+// una columna en dos de las tres deja la tercera devolviendo un error de scan en tiempo de
+// ejecución, no de compilación. Una función que las arma es la diferencia entre olvidarse y no
+// poder olvidarse.
+func colsObsRel(p string) string {
+	return p + `id, ` + p + `source_id, ` + p + `target_id, ` + p + `relation, ` + p + `confidence, ` +
+		p + `status, COALESCE(` + p + `resolved_by,''), COALESCE(` + p + `reason,''), ` +
+		p + `lex_score, ` + p + `cosine_score`
+}
+
+// floatOrNil pasa un *float64 a la capa SQL conservando la diferencia entre «no medido» (NULL) y
+// «midió cero», que para el coseno son cosas distintas.
+func floatOrNil(f *float64) interface{} {
+	if f == nil {
+		return nil
+	}
+	return *f
 }
 
 // nullable convierte "" en NULL para columnas opcionales.

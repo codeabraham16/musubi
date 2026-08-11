@@ -865,6 +865,39 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 27,
+			name:    "relation_signals_split",
+			// `confidence` SIGNIFICABA DOS COSAS DISTINTAS SEGÚN LA FILA, y nadie podía notarlo desde
+			// afuera. En una relación PENDIENTE era `max(léxico, coseno)`; en una auto-resuelta era el
+			// léxico a secas. Un mismo 0,86 podía ser «comparten muchos trigramas» o «el coseno entre
+			// dos documentos cualesquiera», que no es lo mismo ni parecido: la línea de base del coseno
+			// documento-contra-documento medida en este repo da p50 0,60 y llega a 0,88 para pares SIN
+			// ninguna relación. O sea que la mitad alta de la escala es ruido con forma de señal.
+			//
+			// Costó caro y de la peor manera: el 2026-08-11 se triaron los conflictos del cerebro
+			// central por «confianza ≥ 0,85» creyendo que eso ordenaba por gravedad, cuando ordenaba
+			// por parecido. Las dos señales se guardan ahora POR SEPARADO para que quien filtre sepa
+			// por cuál está filtrando.
+			//
+			// NULL ES UN VALOR CON SIGNIFICADO ACÁ, y por eso las columnas son nullable en vez de
+			// tener default 0: una fila anterior a esta migración no tiene las señales desglosadas y
+			// no se pueden reconstruir sin volver a scorear los pares. `0` sería una mentira —un coseno
+			// de 0 quiere decir «ortogonales», que es un dato— así que las viejas quedan en NULL, que
+			// quiere decir «no se sabe». `confidence` no se toca: sigue siendo lo que siempre fue.
+			up: func(x execQuerier) error {
+				cols := [][2]string{
+					{"lex_score", `lex_score REAL`},
+					{"cosine_score", `cosine_score REAL`},
+				}
+				for _, c := range cols {
+					if err := agregarColumnaSiFalta(x, "observation_relations", c[0], c[1]); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

@@ -52,8 +52,10 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       en vez de repetir un string fijo (F1 · doctrina de loop-engineering).
 	// v26 = autonomía declarada por unidad (L1/L2/L3) + la firma del revisor atada al intento
 	//       que revisó (F2 · doctrina de loop-engineering).
-	if latestSchemaVersion() != 26 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 26", latestSchemaVersion())
+	// v27 = las dos señales del detector (léxico y coseno) guardadas POR SEPARADO: `confidence`
+	//       significaba una cosa distinta según la fila y desde afuera no se podía notar.
+	if latestSchemaVersion() != 27 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 27", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

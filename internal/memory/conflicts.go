@@ -346,18 +346,31 @@ func relevantPair(lex float64, cos *float64, opts ConflictOptions) bool {
 
 // pendingRel arma la relación que delega el juicio al agente (musubi_judge). La confianza es la
 // señal MÁS FUERTE de las dos: es la que motiva mirar el par.
+// Desde la v27 las DOS señales se guardan APARTE, porque ese `max` volvía al número ambiguo: un
+// 0,86 podía ser solape léxico real o el coseno entre dos documentos cualesquiera, cuya línea de
+// base para pares SIN relación llega a 0,88 medida en este mismo repo. Quien filtre por confianza
+// ahora puede ver de dónde salió el número en vez de suponerlo.
 func pendingRel(src, cand obsRow, lex float64, cos *float64) ObsRelation {
 	conf := lex
 	if cos != nil && *cos > conf {
 		conf = *cos
 	}
-	return ObsRelation{
+	return conSeñales(ObsRelation{
 		SourceID:   src.id,
 		TargetID:   cand.id,
 		Relation:   RelPending,
 		Confidence: conf,
 		Status:     RelStatusPending,
-	}
+	}, lex, cos)
+}
+
+// conSeñales estampa el desglose en una relación. Las heurísticas de auto-resolución deciden por
+// léxico, pero el coseno se guarda igual cuando se calculó: es lo que permite entender después por
+// qué un par entró a la cola, que era justo lo que no se podía.
+func conSeñales(r ObsRelation, lex float64, cos *float64) ObsRelation {
+	l := lex
+	r.Lex, r.Cosine = &l, cos
+	return r
 }
 
 // decideRelation aplica la heurística determinista a un par (src=recién guardada, candidato).
@@ -390,7 +403,7 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 		// Mismo tema + casi duplicado + la recién guardada es ESTRICTAMENTE más
 		// nueva: reemplaza a la anterior. Solo auto-supersede en esta dirección, así
 		// nunca ocultamos la observación recién guardada ni contenido más nuevo.
-		return ObsRelation{
+		return conSeñales(ObsRelation{
 			SourceID:   src.id,
 			TargetID:   cand.id,
 			Relation:   RelSupersedes,
@@ -398,14 +411,14 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 			Status:     RelStatusResolved,
 			ResolvedBy: "heuristic",
 			Reason:     "mismo topic_key y similitud alta; la observación más reciente reemplaza a la anterior",
-		}
+		}, lex, cos)
 	case lex >= autoThreshold && src.topicKey == cand.topicKey:
 		// Mismo tema + alta similitud, pero la candidata es igual o más nueva: no
 		// auto-ocultar nada; que el agente decida.
 		return pendingRel(src, cand, lex, cos)
 	case lex >= autoThreshold:
 		// Alto solape pero distinto tema: relacionadas, sin contradicción deducible.
-		return ObsRelation{
+		return conSeñales(ObsRelation{
 			SourceID:   src.id,
 			TargetID:   cand.id,
 			Relation:   RelRelated,
@@ -413,7 +426,7 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 			Status:     RelStatusResolved,
 			ResolvedBy: "heuristic",
 			Reason:     "alto solape léxico; relacionadas",
-		}
+		}, lex, cos)
 	default:
 		// Similitud media: podría ser contradicción o complemento. No es deducible
 		// sin entender el texto -> lo juzga el agente.
