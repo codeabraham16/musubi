@@ -134,8 +134,25 @@ func esperarQueElFalsoReciba(t *testing.T, entro <-chan struct{}, termino <-chan
 
 // sembrar deja N observaciones que compartan un término, para que el recall devuelva ≥2 items (el
 // juez no se activa con menos).
+//
+// LA GUARDA DE ARRIBA ES LO QUE IMPIDE QUE ESTO SE REPITA. La siembra son casi-duplicados a
+// propósito —difieren en un carácter— y con la detección de conflictos encendida el auto-supersede
+// puede ocultar dos de las tres, dejando al recall con un solo item y al juez sin activarse. Eso
+// dependía de si el segundo del reloj tickeaba entre dos escrituras (`created_at` tiene resolución
+// de 1 s), así que fallaba ~1 de cada 100 corridas y en CI parecía un flake.
+//
+// Apagar los conflictos en cada test que siembra era la otra opción, y es la que se olvida: el
+// arreglo original tocó `servidorConMotor` y dejó vivo el mismo bug en `motor_con_freno_test.go`,
+// que arma su servidor por otro lado. Con la guarda acá, olvidarse deja un rojo DETERMINISTA que
+// dice qué hacer, en vez de un intermitente que dice cualquier cosa.
 func sembrar(t *testing.T, s *McpServer, n int) {
 	t.Helper()
+	if s.conflicts.Enabled {
+		t.Fatalf("sembrar() con la detección de conflictos ENCENDIDA: la siembra son casi-duplicados y " +
+			"el auto-supersede puede ocultar parte de ellos según el tick del reloj, dejando al recall " +
+			"con menos items de los que el test necesita. Construí el servidor con " +
+			"WithConflicts(config.ConflictConfig{})")
+	}
 	for i := 0; i < n; i++ {
 		_, rpcErr := call(t, s, "musubi_save_observation", map[string]interface{}{
 			"topic_key": "candado/prueba",
@@ -156,24 +173,53 @@ func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.Cognition
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	opts := []Option{WithCognitionConfig(cfg)}
+	// LA DETECCIÓN DE CONFLICTOS VA APAGADA, y no es higiene: era la causa de un fallo intermitente
+	// REAL de G4 en CI. Medido: 4 fallos en 400 corridas locales antes de esto, 0 después.
+	//
+	// La siembra de estos tests son observaciones casi idénticas —difieren en un carácter— bajo el
+	// mismo topic_key: justo lo que el detector llama casi-duplicado. El auto-supersede dispara si la
+	// segunda es ESTRICTAMENTE más nueva, y esa comparación se hace sobre `created_at`, que es el
+	// CURRENT_TIMESTAMP de SQLite y tiene RESOLUCIÓN DE UN SEGUNDO. Si los tres saves caen dentro del
+	// mismo segundo no pasa nada; si el segundo tickea entre el segundo y el tercero, la tercera
+	// oculta a las otras dos, el recall devuelve UN item, el juez no se activa —necesita ≥2— y la
+	// tool termina sin llamar al motor. Ése era exactamente el síntoma: «la tool terminó sin llamar
+	// a el juez», con error nil, una vez cada cien.
+	//
+	// Lo que estos tests prueban es que NINGÚN CANDADO DEL DESPACHO cruza una llamada de red. El
+	// detector no tiene nada que ver con eso, así que apagarlo saca una variable que sólo aportaba
+	// ruido. Es la misma decisión, por el mismo motivo, que ya había tomado TestMaintainTool.
+	opts := []Option{WithCognitionConfig(cfg), WithConflicts(config.ConflictConfig{})}
 	if motor != nil {
 		opts = append(opts, WithCognition(motor))
 	}
 	return NewMcpServer(engine, t.TempDir(), emb, opts...), engine
 }
 
-// exigeSembradas verifica que la siembra sobrevivió entera. El juez sólo se activa con ≥2 items del
-// recall, así que si algo colapsara las observaciones —dedup por contenido, consolidación— el juez
-// no dispararía y la prueba culparía al candado. Mejor fallar acá, diciendo la verdad.
+// exigeSembradas verifica que la siembra sobrevivió entera Y VISIBLE.
+//
+// Contaba filas con CountObservations, y ahí estaba el segundo defecto: el auto-supersede NO BORRA
+// la fila, le prende una marca que la esconde del recall. O sea que la precondición daba verde con
+// 3 filas mientras el recall veía 1 — medía bien, pero otra cosa. El test se caía después, dos pasos
+// más adelante, con un mensaje que mandaba a revisar el candado.
+//
+// Ahora se verifica lo que el juez realmente necesita: cuántos items DEVUELVE el recall. Y cuando
+// falla, el mensaje dice las dos cifras, para que el próximo rojo se diagnostique en una corrida y
+// no en una tarde.
 func exigeSembradas(t *testing.T, engine *memory.DbEngine, n int) {
 	t.Helper()
 	total, err := engine.CountObservations()
 	if err != nil {
 		t.Fatalf("CountObservations: %v", err)
 	}
-	if total != n {
-		t.Fatalf("PRECONDICIÓN ROTA: sembré %d observaciones y quedaron %d — algo las colapsó, y sin ≥2 el juez no se activa", n, total)
+	res, err := engine.Recall(context.Background(), "candado despacho red", memory.RecallOptions{NoBump: true})
+	if err != nil {
+		t.Fatalf("Recall de precondición: %v", err)
+	}
+	if len(res.Items) < n {
+		t.Fatalf("PRECONDICIÓN ROTA: sembré %d observaciones, hay %d filas en la base y el recall "+
+			"devuelve %d items visibles. El juez necesita ≥2 para activarse. Filas == %d con menos "+
+			"items visibles significa que algo las OCULTÓ (auto-supersede de casi-duplicados) en vez "+
+			"de borrarlas", n, total, len(res.Items), total)
 	}
 }
 
