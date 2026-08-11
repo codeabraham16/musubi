@@ -687,13 +687,13 @@
     },
     {
       "name": "musubi_work",
-      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el principal descompone y postea unidades con action=plan; 2) lanza N sub-agentes (Task tool + mcpServers:[musubi]); cada uno hace action=claim (toma una unidad atómicamente con un LEASE), la ejecuta y action=complete con su result; 3) el principal monitorea con action=status y consolida al estar todas done. El claim devuelve la unidad + fencing_token; el sub-agente DEBE renovar con action=heartbeat (id, agent, fencing_token) o la unidad se recicla al vencer el lease (at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar. CONTRACT-NET (cuando los agentes difieren en aptitud): action=bid (id, agent, bid=score MAYOR es mejor, note opcional) → el principal ve action=bids y adjudica con action=award (id) al mejor; el ganador queda claimed (con lease/fencing). action ∈ {plan, claim, heartbeat, complete, status, savings, clear, bid, award, bids}.",
+      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el principal descompone y postea unidades con action=plan; 2) lanza N sub-agentes (Task tool + mcpServers:[musubi]); cada uno hace action=claim (toma una unidad atómicamente con un LEASE), la ejecuta y action=complete con su result; 3) el principal monitorea con action=status y consolida al estar todas done. El claim devuelve la unidad + fencing_token; el sub-agente DEBE renovar con action=heartbeat (id, agent, fencing_token) o la unidad se recicla al vencer el lease (at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar. CONTRACT-NET (cuando los agentes difieren en aptitud): action=bid (id, agent, bid=score MAYOR es mejor, note opcional) → el principal ve action=bids y adjudica con action=award (id) al mejor; el ganador queda claimed (con lease/fencing). AUTONOMÍA DECLARADA: cada unidad lleva su techo en `autonomy` (L1 = sólo reporta · L2 = arregla pero el cierre necesita la firma de OTRO · L3 = desatendido; ausente ⇒ L3, el comportamiento de siempre) y al cerrar el agente declara `effect` (report = no cambié nada | apply = cambié algo; ausente ⇒ apply). Cerrar con effect=apply exige L3, o L2 con una firma VIGENTE puesta por action=approve (id, reviewer ≠ dueño) sobre ESE intento: si a la unidad le vence el lease y la retoma otro, la firma se invalida sola y el trabajo nuevo no cierra amparado por la revisión del viejo. Cerrar como failed nunca se frena. action ∈ {plan, claim, heartbeat, complete, approve, status, savings, clear, bid, award, bids}.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
-            "description": "plan | claim | heartbeat | complete | status | savings | clear | bid | award | bids"
+            "description": "plan | claim | heartbeat | complete | approve | status | savings | clear | bid | award | bids"
           },
           "agent": {
             "type": "string",
@@ -707,13 +707,17 @@
             "type": "number",
             "description": "Para bid: score de la oferta del agente (MAYOR = mejor aptitud/confianza para la unidad)"
           },
+          "effect": {
+            "type": "string",
+            "description": "Para complete: qué HIZO el agente — report (no cambié nada: diagnóstico, hallazgos) | apply (cambié algo). Ausente ⇒ apply, que es fail-closed: quien no declara se trata como quien tocó. Una unidad L1 rechaza apply; una L2 lo exige firmado"
+          },
           "fencing_token": {
             "type": "number",
             "description": "Para heartbeat/complete: el fencing_token que devolvió el claim/award (defiende contra un agente expropiado que revive)"
           },
           "id": {
             "type": "string",
-            "description": "Para heartbeat/complete/bid/award/bids: ID de la unidad"
+            "description": "Para heartbeat/complete/approve/bid/award/bids: ID de la unidad"
           },
           "note": {
             "type": "string",
@@ -723,16 +727,20 @@
             "type": "string",
             "description": "Para complete: resultado/resumen producido por el sub-agente"
           },
+          "reviewer": {
+            "type": "string",
+            "description": "Para approve: quién firma la revisión. NO puede ser el dueño de la unidad — el que hace no puede ser el que aprueba"
+          },
           "status": {
             "type": "string",
             "description": "Para complete: done | failed (default done)"
           },
           "units": {
             "type": "array",
-            "description": "Para plan: lista de unidades [{title, spec}] a postear",
+            "description": "Para plan: lista de unidades [{title, spec, autonomy}] a postear. `autonomy` (L1|L2|L3) es el techo de lo que el sub-agente puede hacer solo; ausente ⇒ L3",
             "items": {
               "type": "object",
-              "description": "unidad de trabajo {title, spec}"
+              "description": "unidad de trabajo {title, spec, autonomy}"
             }
           }
         }

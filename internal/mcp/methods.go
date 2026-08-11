@@ -664,6 +664,8 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		FencingToken int64                 `json:"fencing_token"`
 		Bid          float64               `json:"bid"`
 		Note         string                `json:"note"`
+		Effect       string                `json:"effect"`
+		Reviewer     string                `json:"reviewer"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -720,10 +722,25 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "complete requiere 'id'")
 		}
-		if err := s.engine.CompleteWorkUnit(args.ID, args.Result, args.Status, args.Agent, args.FencingToken); err != nil {
+		// 'effect' declara QUÉ HIZO el agente y se contrasta con la autonomía de la unidad.
+		// Ausente ⇒ apply (fail-closed): quien no declara es indistinguible de quien cambió algo.
+		if err := s.engine.CompleteWorkUnitConEfecto(args.ID, args.Result, args.Status, args.Agent,
+			args.FencingToken, args.Effect); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo completar: %v", err)
 		}
 		return textResult("Unidad completada."), nil
+
+	case "approve":
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "approve requiere 'id' (la unidad)")
+		}
+		if strings.TrimSpace(args.Reviewer) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "approve requiere 'reviewer' (quién firma; NO puede ser el dueño)")
+		}
+		if err := s.engine.ApproveWorkUnit(args.ID, args.Reviewer); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo firmar: %v", err)
+		}
+		return textResult("Unidad firmada: el dueño ya puede cerrarla con effect=apply."), nil
 
 	case "status":
 		batch := strings.TrimSpace(args.Batch)
