@@ -3,6 +3,8 @@ package memory
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -135,26 +137,24 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts 
 
 	// Paso 1: dead-letter de huérfanas agotadas. Va ANTES del claim; como work_units
 	// vive en una base SQLite single-writer, no hay interleaving entre ambos statements.
-	deadLetter := `
-		UPDATE work_units
-		   SET status=?, result=COALESCE(NULLIF(result,''), ?), updated_at=datetime('now')
-		 WHERE status=?
-		   AND lease_expires_at IS NOT NULL AND lease_expires_at < datetime('now')
-		   AND attempts >= ?`
-	dlArgs := []interface{}{WorkFailed, "lease agotado: superó el máximo de reintentos", WorkClaimed, maxAttempts}
-	if batchID != "" {
-		deadLetter += ` AND batch_id=?`
-		dlArgs = append(dlArgs, batchID)
-	}
-	if _, err := e.db.Exec(deadLetter, dlArgs...); err != nil {
-		return WorkUnit{}, false, fmt.Errorf("error al dead-letter huérfanas: %w", err)
+	//
+	// Se hace fila por fila —y no con un UPDATE masivo— porque el mensaje de escalada ya no es
+	// una constante: cada unidad cuenta SU historia (ver escaladaDesdeHistoria). El costo es
+	// irrelevante: sólo entran acá las unidades que ya agotaron sus reintentos.
+	if err := e.deadLetterAgotadas(batchID, maxAttempts); err != nil {
+		return WorkUnit{}, false, err
 	}
 
 	// Paso 2: claim atómico. Elegible = open OR huérfana (claimed con lease vencido).
 	leaseExpr := `datetime('now','+' || ? || ' seconds')`
 	eligible := `(status=? OR (status=? AND lease_expires_at IS NOT NULL AND lease_expires_at < datetime('now')))`
+	// La historia se anota EN EL MISMO UPDATE atómico, con una concatenación. Leer el log,
+	// agregarle una línea y volver a escribirlo sería un read-modify-write: dos reclamos
+	// concurrentes se pisarían y perderían justo el registro que explica la carrera.
 	setClause := `status=?, owner_id=?, claimed_by=?, lease_expires_at=` + leaseExpr +
-		`, heartbeat_at=datetime('now'), attempts=attempts+1, fencing_token=fencing_token+1, updated_at=datetime('now')`
+		`, heartbeat_at=datetime('now'), attempts=attempts+1, fencing_token=fencing_token+1` +
+		`, claim_log=claim_log||?, updated_at=datetime('now')`
+	entrada := entradaDeReclamo(agent, time.Now().UTC())
 
 	var row *sql.Row
 	if batchID == "" {
@@ -162,13 +162,13 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts 
 			UPDATE work_units SET `+setClause+`
 			WHERE id = (SELECT id FROM work_units WHERE `+eligible+` ORDER BY created_at, seq, rowid LIMIT 1)
 			RETURNING `+workUnitCols,
-			WorkClaimed, agent, agent, ttlSeconds, WorkOpen, WorkClaimed)
+			WorkClaimed, agent, agent, ttlSeconds, entrada, WorkOpen, WorkClaimed)
 	} else {
 		row = e.db.QueryRow(`
 			UPDATE work_units SET `+setClause+`
 			WHERE id = (SELECT id FROM work_units WHERE batch_id=? AND `+eligible+` ORDER BY seq LIMIT 1)
 			RETURNING `+workUnitCols,
-			WorkClaimed, agent, agent, ttlSeconds, batchID, WorkOpen, WorkClaimed)
+			WorkClaimed, agent, agent, ttlSeconds, entrada, batchID, WorkOpen, WorkClaimed)
 	}
 	u, err := scanWorkUnit(row)
 	if err == sql.ErrNoRows {
@@ -244,6 +244,143 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string, fencingTok
 	}
 	if n == 0 {
 		return fmt.Errorf("la unidad %q no existe, no está reclamada, fue expropiada (lease vencido y retomada por otro), o el fencing token no coincide", id)
+	}
+	return nil
+}
+
+// ── La historia de los reclamos ───────────────────────────────────────────────────────────────
+//
+// Una unidad que muere tras agotar sus reintentos deja de decir sólo QUE murió: cuenta CÓMO. La
+// diferencia no es cosmética — es la que separa dos diagnósticos opuestos que antes producían el
+// mismo mensaje:
+//
+//	cinco agentes distintos, tiempos dispares  → infraestructura inestable, reintentar sirve
+//	el mismo agente, siempre a los ~30 s       → cuelgue reproducible, reintentar no va a servir
+//
+// El segundo caso es un bug esperando a que alguien lo mire, y con el string fijo de antes era
+// indistinguible del primero.
+
+// reclamo es una línea del claim_log ya parseada.
+type reclamo struct {
+	Agente string
+	Cuando time.Time
+}
+
+// entradaDeReclamo arma la línea que se concatena al claim_log: `agente<TAB>instante<LF>`.
+//
+// El agente se SANEA (tabs y saltos a espacio) porque es texto que viene de afuera y acá es un
+// separador: un agente llamado "a\tb" partiría la línea en dos y la historia diría cualquier cosa.
+func entradaDeReclamo(agente string, cuando time.Time) string {
+	limpio := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(agente)
+	if limpio == "" {
+		limpio = "(anónimo)"
+	}
+	return limpio + "\t" + cuando.Format(time.RFC3339) + "\n"
+}
+
+// parseClaimLog lee el log append-only. Las líneas ilegibles se SALTEAN en vez de romper: esto
+// alimenta un mensaje de diagnóstico, y un log a medio escribir no puede impedir una escalada.
+func parseClaimLog(log string) []reclamo {
+	var out []reclamo
+	for _, linea := range strings.Split(log, "\n") {
+		if linea == "" {
+			continue
+		}
+		partes := strings.SplitN(linea, "\t", 2)
+		if len(partes) != 2 {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, partes[1])
+		if err != nil {
+			continue
+		}
+		out = append(out, reclamo{Agente: partes[0], Cuando: t})
+	}
+	return out
+}
+
+// escaladaDesdeHistoria convierte el claim_log en el mensaje que lee un humano.
+//
+// Sin historia (base recién migrada, unidad vieja) cae al mensaje de siempre: perder el detalle es
+// aceptable, inventarlo no.
+func escaladaDesdeHistoria(log string, maxAttempts int) string {
+	base := fmt.Sprintf("lease agotado: superó el máximo de reintentos (%d)", maxAttempts)
+	rs := parseClaimLog(log)
+	if len(rs) == 0 {
+		return base
+	}
+
+	agentes := make([]string, 0, len(rs))
+	distintos := map[string]int{}
+	for _, r := range rs {
+		agentes = append(agentes, r.Agente)
+		distintos[r.Agente]++
+	}
+
+	var b strings.Builder
+	b.WriteString(base)
+	fmt.Fprintf(&b, ". %d reclamos: %s", len(rs), strings.Join(agentes, " → "))
+
+	// El VEREDICTO sobre el patrón. Es lo único que convierte una lista en un diagnóstico, y por
+	// eso se dice explícito en vez de dejar que el lector lo deduzca de las marcas de tiempo.
+	if len(distintos) == 1 && len(rs) > 1 {
+		fmt.Fprintf(&b, ". SIEMPRE el mismo agente (%s): sospechá de un cuelgue reproducible en la unidad, no de la infraestructura", agentes[0])
+	} else if len(rs) > 1 {
+		fmt.Fprintf(&b, ". %d agentes distintos: el patrón apunta al entorno antes que a la unidad", len(distintos))
+	}
+
+	// Cuánto aguantó cada uno entre reclamo y reclamo. Retenciones parecidas entre sí delatan un
+	// tiempo de muerte constante — y eso es un cuelgue, no mala suerte.
+	if len(rs) > 1 {
+		var dur []string
+		for i := 1; i < len(rs); i++ {
+			dur = append(dur, rs[i].Cuando.Sub(rs[i-1].Cuando).Round(time.Second).String())
+		}
+		fmt.Fprintf(&b, ". Retuvo: %s", strings.Join(dur, ", "))
+	}
+	return b.String()
+}
+
+// deadLetterAgotadas cierra como failed las huérfanas que ya agotaron sus reintentos, y a cada una
+// le escribe SU historia. Fila por fila porque el mensaje dejó de ser una constante.
+func (e *DbEngine) deadLetterAgotadas(batchID string, maxAttempts int) error {
+	sel := `SELECT id, COALESCE(claim_log,'') FROM work_units
+	         WHERE status=? AND lease_expires_at IS NOT NULL AND lease_expires_at < datetime('now')
+	           AND attempts >= ?`
+	args := []interface{}{WorkClaimed, maxAttempts}
+	if batchID != "" {
+		sel += ` AND batch_id=?`
+		args = append(args, batchID)
+	}
+	rows, err := e.db.Query(sel, args...)
+	if err != nil {
+		return fmt.Errorf("error al buscar huérfanas agotadas: %w", err)
+	}
+	type pendiente struct{ id, log string }
+	var lista []pendiente
+	for rows.Next() {
+		var p pendiente
+		if err := rows.Scan(&p.id, &p.log); err != nil {
+			rows.Close()
+			return fmt.Errorf("error al leer huérfana agotada: %w", err)
+		}
+		lista = append(lista, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error al recorrer huérfanas agotadas: %w", err)
+	}
+	rows.Close()
+
+	for _, p := range lista {
+		// El COALESCE(NULLIF(result,'')) se conserva: si la unidad ya había dejado un resultado,
+		// ése manda. La historia explica una muerte por silencio, no pisa una explicación real.
+		if _, err := e.db.Exec(
+			`UPDATE work_units SET status=?, result=COALESCE(NULLIF(result,''), ?), updated_at=datetime('now')
+			  WHERE id=? AND status=?`,
+			WorkFailed, escaladaDesdeHistoria(p.log, maxAttempts), p.id, WorkClaimed); err != nil {
+			return fmt.Errorf("error al dead-letter huérfanas: %w", err)
+		}
 	}
 	return nil
 }
