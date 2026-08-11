@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.101.0] - 2026-08-10
+
 ### Added
 - **Las skills dejan de morir en la máquina donde se escribieron.** Hasta acá una skill guardada
   desde una terminal se quedaba ahí para siempre: el sync movía memoria y grafo de código, pero no
@@ -136,6 +138,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   **saltea con motivo** si falta `MUSUBI_OLLAMA_URL` en vez de degradar a léxico en silencio.
   El invariante quedó fijado en `TestElJuezSeMideSobreLaBaseDeProduccion`, que corre en CI sin red
   ni cuota: el defecto no rompía nada, y por eso hacía falta un test que lo mirara a propósito.
+- **Un central caído tumbaba la sesión entera.** Cuando el cerebro central estaba inalcanzable, el
+  arranque se quedaba colgado hasta el límite de 60 s y se llevaba puesta la sesión completa — el
+  modo de falla exactamente al revés del que corresponde, porque el central es un complemento y la
+  memoria local basta para trabajar. Ahora falla rápido y la sesión sigue: **63 s → 15 s**.
+- **Ocultar una nota dejó de ser silencioso.** Un veredicto `supersedes` esconde la observación
+  target del recall, pero nada avisaba de las OTRAS relaciones que la apuntaban: si alguien había
+  construido algo encima, quedaba citando lo que ya no se ve. Salió de un caso real, y lo levantó
+  quien lo provocó, no el sistema. Ahora el veredicto cuenta cuántas referencias quedan huérfanas y
+  con qué veredicto. Avisa, no bloquea: el que resuelve sigue siendo quien decide.
+
+### Added
+- **El arsenal se escribe en el formato que el agente lee de verdad.** Las skills existían,
+  estaban validadas y federadas — y nada las usaba, porque vivían en un formato que el agente no
+  mira. Ahora se exportan como `SKILL.md` con su «cuándo» adelante: las once del equipo se anuncian
+  con **587 tokens** en vez de los 3.720 que costaría mandarlas enteras.
+- **`musubi_doctor` acepta `deep`.** `deep:false` es un pulso de salud barato: saltea
+  `db_integrity`, `fts_consistency` y `stale_gists`, las tres pasadas caras (~675 ms). Ausente o
+  `true` sigue siendo el diagnóstico completo, así que ningún cliente viejo pierde cobertura. Nació
+  de una medición incómoda: el sondeo de un cliente corría el diagnóstico pesado **cada 4 segundos**.
+
+### Changed
+- **`deep` ahora se anuncia en `tools/list`.** Se implementó, se mergeó y se desplegó… y el sondeo
+  siguió costando lo mismo, porque el parámetro no figuraba en el `inputSchema`: ningún cliente MCP
+  podía descubrirlo. Una capacidad desplegada que nadie puede invocar es una capacidad que no
+  existe. La prueba que lo fija es de *catálogo*, no de comportamiento — con el sabotaje, la de
+  comportamiento sigue en verde, porque el handler acepta el flag igual.
+- Dependencias: `modernc.org/sqlite` 1.55.0 → 1.56.0 y `github.com/odvcencio/gotreesitter`
+  0.47.0 → 0.48.1.
 
 ## [0.99.0] - 2026-08-05
 
