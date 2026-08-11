@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.102.0] - 2026-08-11
+
 ### Changed
 - **La revisión adversarial ahora exige la evidencia ANTES del debate.** `adversarial-review`
   abría el debate de una: N escépticos con lentes distintos deliberando sobre un cambio que nadie
@@ -124,7 +126,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   caché y la misma degradación best-effort. Y el parámetro **se anuncia con su precio** en
   `tools/list` — un opt-in caro sin costo escrito termina dentro de un bucle.
 
-## [0.101.0] - 2026-08-10
+### Fixed
+- **El timeout de los tests dejó de ser un default heredado.** `go test` sin `-timeout` corta a los
+  **10 minutos por paquete**, y `internal/memory` venía consumiendo 6 min 13 s de esos 10 con
+  `-race`. El CI empezó a fallar en builds sanos: dos corridas murieron a los 11 m 31 s y 11 m 18 s
+  —duraciones casi idénticas, que es la firma de un tope y no de un test intermitente— y la primera
+  lectura fue «es un flake». No lo era. Ahora los dos jobs declaran `-timeout 20m`.
+
+  El segundo arreglo salió de que el primero estaba incompleto: sólo se había tocado el job `test`,
+  y el que más lo necesitaba era `test-cross` en Windows, que sin `-race` igual tarda 12 min. Un
+  arreglo a medias en un gate de CI es peor que ninguno: convence de que el problema ya se resolvió.
 
 ### Added
 - **Las skills dejan de morir en la máquina donde se escribieron.** Hasta acá una skill guardada
