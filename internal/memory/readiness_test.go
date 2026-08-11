@@ -155,41 +155,67 @@ func TestRechazosCuentanAparteDeLosErrores(t *testing.T) {
 	}
 }
 
+// obsPara crea una observación con el id dado y lo devuelve.
+func obsPara(t *testing.T, e *DbEngine, id string) string {
+	t.Helper()
+	if err := e.SaveObservation(id, "tema", "contenido de "+id, nil); err != nil {
+		t.Fatalf("SaveObservation(%s): %v", id, err)
+	}
+	return id
+}
+
+// relacion crea una relación entre dos observaciones nuevas y devuelve su id.
+func relacion(t *testing.T, e *DbEngine, sufijo, status string) string {
+	t.Helper()
+	s := obsPara(t, e, "src-"+sufijo)
+	d := obsPara(t, e, "tgt-"+sufijo)
+	rel := ObsRelation{SourceID: s, TargetID: d, Status: status}
+	if status == RelStatusResolved {
+		rel.Relation, rel.ResolvedBy = "supersedes", "humano"
+	}
+	id, err := e.UpsertObsRelation(rel)
+	if err != nil {
+		t.Fatalf("UpsertObsRelation(%s): %v", sufijo, err)
+	}
+	return id
+}
+
+// envejecerRelacion empuja al pasado las marcas de una relación. White-box: es la única manera de
+// construir «esto se resolvió hace un año» sin esperar un año.
+func envejecerRelacion(t *testing.T, e *DbEngine, id string, dias int) {
+	t.Helper()
+	if _, err := e.db.Exec(
+		`UPDATE observation_relations SET created_at=datetime('now','-`+itoa(dias)+` days'),
+		        updated_at=datetime('now','-`+itoa(dias)+` days') WHERE id=?`, id); err != nil {
+		t.Fatalf("no se pudo envejecer la relación: %v", err)
+	}
+}
+
 // R5: la cola de contradicciones tiene que poder GANAR. Una memoria donde el detector encuentra y
 // nadie arbitra es la forma en que un cerebro «empieza a fallar» sin que ningún chequeo de
 // integridad se ponga en rojo — las dos memorias en conflicto son individualmente válidas.
 func TestCoherenciaCaeCuandoLaColaGana(t *testing.T) {
 	e := newTestEngine(t)
-	obs := func(id string) string {
-		if err := e.SaveObservation(id, "tema", "contenido de "+id, nil); err != nil {
-			t.Fatalf("SaveObservation: %v", err)
-		}
-		return id
-	}
-	// Una resuelta, una pendiente: la cola no gana.
-	a, b, c, d := obs("o1"), obs("o2"), obs("o3"), obs("o4")
-	if _, err := e.UpsertObsRelation(ObsRelation{SourceID: a, TargetID: b,
-		Relation: "supersedes", Status: RelStatusResolved, ResolvedBy: "humano"}); err != nil {
-		t.Fatalf("UpsertObsRelation: %v", err)
-	}
-	if _, err := e.UpsertObsRelation(ObsRelation{SourceID: c, TargetID: d, Status: RelStatusPending}); err != nil {
-		t.Fatalf("UpsertObsRelation: %v", err)
-	}
+	// Todo lo que se detectó se resolvió: la cola no creció ni un poco.
+	//
+	// Ojo con la aritmética, que no es obvia: una relación creada Y resuelta dentro de la ventana
+	// cuenta en las DOS columnas. Por eso el empate (1 detectada, 1 resuelta) es el piso del verde,
+	// y basta UNA detección sin resolver para que la cola crezca. Es estricto a propósito: «la cola
+	// no crece» significa exactamente eso.
+	relacion(t, e, "r1", RelStatusResolved)
+
 	rep, err := e.Readiness(context.Background(), 30)
 	if err != nil {
 		t.Fatalf("Readiness: %v", err)
 	}
 	coh := dimensionDe(t, rep, "coherencia")
 	if !coh.Observed || coh.Score != 1 {
-		t.Fatalf("1 resuelta y 1 pendiente debería dar coherencia perfecta: %+v", coh)
+		t.Fatalf("todo lo detectado se resolvió: la coherencia debería ser perfecta: %+v", coh)
 	}
 
-	// Ahora se acumulan pendientes: la cola gana y la dimensión cae.
+	// Ahora entran 5 detecciones nuevas y nadie resuelve ninguna: la cola crece y la dimensión cae.
 	for i := 0; i < 5; i++ {
-		s, tg := obs("p"+string(rune('a'+i))), obs("q"+string(rune('a'+i)))
-		if _, err := e.UpsertObsRelation(ObsRelation{SourceID: s, TargetID: tg, Status: RelStatusPending}); err != nil {
-			t.Fatalf("UpsertObsRelation: %v", err)
-		}
+		relacion(t, e, "nueva"+itoa(i), RelStatusPending)
 	}
 	rep2, err := e.Readiness(context.Background(), 30)
 	if err != nil {
@@ -197,10 +223,123 @@ func TestCoherenciaCaeCuandoLaColaGana(t *testing.T) {
 	}
 	coh2 := dimensionDe(t, rep2, "coherencia")
 	if coh2.Score >= coh.Score {
-		t.Errorf("con 6 pendientes contra 1 resuelta la coherencia no bajó: %v → %v", coh.Score, coh2.Score)
+		t.Errorf("con 6 detecciones contra 1 resolución la coherencia no bajó: %v → %v", coh.Score, coh2.Score)
 	}
-	if coh2.Evidence["pendientes"] != 6 || coh2.Evidence["resueltas"] != 1 {
-		t.Errorf("la evidencia no cuenta bien la cola: %+v", coh2.Evidence)
+	if coh2.Evidence["pendientes"] != 5 || coh2.Evidence["detectadas_en_ventana"] != 6 {
+		t.Errorf("la evidencia no cuenta bien el flujo: %+v", coh2.Evidence)
+	}
+	// El chequeo que cae es el del CRECIMIENTO, no el de que alguien arbitre: sigue habiendo una
+	// resolución en la ventana. Distinguirlos es el punto de tener dos chequeos y no uno.
+	for _, c := range coh2.Checks {
+		if strings.Contains(c.Name, "todavía") && !c.Pass {
+			t.Errorf("hubo 1 resolución en la ventana: ese chequeo no debía caer: %+v", c)
+		}
+		if strings.Contains(c.Name, "no crece") && c.Pass {
+			t.Errorf("la cola creció de 0 a 5: ese chequeo tenía que caer: %+v", c)
+		}
+	}
+}
+
+// R5b: EL CASO QUE LA PRIMERA VERSIÓN DABA VERDE Y ESTABA MAL.
+//
+// Un cerebro que arbitró muchísimo hace un año y hace un año no arbitra nada. Comparando «pendientes
+// AHORA contra resueltas DE TODA LA VIDA» pasaba con holgura —20 resueltas contra 3 pendientes— y el
+// indicador decía que las contradicciones se atienden cuando hacía doce meses que no las atendía
+// nadie. Son dos escalas distintas, y la comparación se gana sola acumulando historia.
+//
+// Lo encontró el primer dato real del central: 372 pendientes contra 780 resueltas daba verde.
+func TestCoherenciaNoSeGanaConHistoriaVieja(t *testing.T) {
+	e := newTestEngine(t)
+	// 20 resoluciones, todas de hace un año.
+	for i := 0; i < 20; i++ {
+		envejecerRelacion(t, e, relacion(t, e, "vieja"+itoa(i), RelStatusResolved), 365)
+	}
+	// 3 pendientes recientes que nadie tocó.
+	for i := 0; i < 3; i++ {
+		relacion(t, e, "hoy"+itoa(i), RelStatusPending)
+	}
+
+	rep, err := e.Readiness(context.Background(), 30)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	coh := dimensionDe(t, rep, "coherencia")
+	if !coh.Observed {
+		t.Fatalf("hay 23 relaciones: la dimensión está observada: %+v", coh)
+	}
+	if coh.Score == 1 {
+		t.Errorf("un año sin arbitrar no puede dar coherencia perfecta sólo por tener historia: %+v", coh.Checks)
+	}
+	for _, c := range coh.Checks {
+		if strings.Contains(c.Name, "todavía") && c.Pass {
+			t.Errorf("el chequeo de «alguien arbitra todavía» no puede pasar con 0 resoluciones en la ventana: %+v", c)
+		}
+	}
+	// La historia sigue estando, pero como evidencia y no como vara.
+	if coh.Evidence["resueltas_historico"] != 20 || coh.Evidence["resueltas_en_ventana"] != 0 {
+		t.Errorf("la evidencia debe separar el histórico de la ventana: %+v", coh.Evidence)
+	}
+}
+
+// R5c: y al revés — una cola grande que SE ESTÁ ACHICANDO no puede castigarse. Lo que importa es el
+// flujo, no el tamaño del backlog: castigar el backlog heredado desalienta justo al que se puso a
+// limpiarlo.
+func TestColaGrandeQueSeAchicaNoSeCastiga(t *testing.T) {
+	e := newTestEngine(t)
+	// Backlog heredado: 50 pendientes viejas.
+	for i := 0; i < 50; i++ {
+		envejecerRelacion(t, e, relacion(t, e, "backlog"+itoa(i), RelStatusPending), 200)
+	}
+	// Alguien se puso a arbitrar: 10 resoluciones esta semana, ninguna detección nueva.
+	for i := 0; i < 10; i++ {
+		relacion(t, e, "limpieza"+itoa(i), RelStatusResolved)
+	}
+
+	rep, err := e.Readiness(context.Background(), 30)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	coh := dimensionDe(t, rep, "coherencia")
+	if coh.Score != 1 {
+		t.Errorf("con 10 resoluciones y 0 detecciones nuevas en la ventana, el backlog heredado no debe "+
+			"castigar: %+v / evidencia %+v", coh.Checks, coh.Evidence)
+	}
+	if coh.Evidence["pendientes"] != 50 {
+		t.Errorf("el backlog debe seguir visible en la evidencia: %+v", coh.Evidence)
+	}
+}
+
+// R5d: el nombre del chequeo de mantenimiento dice lo que MIDE.
+//
+// La marca `last_maintenance` la refresca el scheduler del binario, no una persona: en una
+// instalación viva siempre está fresca. El rótulo viejo («el mantenimiento corre seguido») se leía
+// como «alguien cuida la memoria», que es otra cosa. Medir bien y rotular mal es la manera más
+// silenciosa de que un indicador mienta, y este test fija el rótulo honesto.
+func TestElChequeoDeMantenimientoDiceQueMide(t *testing.T) {
+	e := newTestEngine(t)
+	obsPara(t, e, "o1")
+	if err := e.SetMeta(metaLastMaintenance, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	rep, err := e.Readiness(context.Background(), 30)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	mem := dimensionDe(t, rep, "memoria")
+	var encontrado bool
+	for _, c := range mem.Checks {
+		if strings.Contains(c.Name, "scheduler") {
+			encontrado = true
+			if !strings.Contains(c.Why, "no una persona") {
+				t.Errorf("el chequeo debe aclarar que la marca la pone el scheduler: %q", c.Why)
+			}
+		}
+		if strings.Contains(c.Name, "corre seguido") {
+			t.Errorf("el rótulo viejo prometía curación y medía un latido: %q", c.Name)
+		}
+	}
+	if !encontrado {
+		t.Errorf("falta el chequeo del scheduler: %+v", mem.Checks)
 	}
 }
 
