@@ -96,8 +96,12 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # Mismo `-timeout 20m` que el job `test`, y por el mismo motivo. NO es simetría cosmética:
+      # windows-latest tarda MÁS sin -race (12m05s medidos el 2026-08-11) que ubuntu CON -race
+      # (8m48s), así que es el runner que primero choca el default de 10 min por paquete. El fix
+      # anterior arregló sólo el job donde se vio el rojo; el defecto estaba en los dos.
       - name: Test
-        run: go test ./...
+        run: go test -timeout 20m ./...
 
   bench-guard:
     runs-on: ubuntu-latest

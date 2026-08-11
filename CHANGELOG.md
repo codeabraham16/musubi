@@ -25,6 +25,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   El invariante que lo fija no comprueba que la skill *mencione* correr tests —eso lo cumpliría un
   párrafo al final que nadie lee en orden— sino que la evidencia y el sabotaje **aparezcan antes**
   de abrir el debate, porque un agente ejecuta la lista en el orden en que está escrita.
+- **La escalada de una unidad de trabajo cuenta qué pasó, en vez de repetir un string fijo.** Cuando
+  una unidad agotaba sus reintentos, el dead-letter escribía siempre lo mismo: «lease agotado:
+  superó el máximo de reintentos». Con ese mensaje, dos situaciones OPUESTAS eran indistinguibles —
+  cinco agentes distintos muriendo en tiempos dispares (la infraestructura está inestable) y el
+  mismo agente muriendo cinco veces a los ~30 s (la unidad tiene un cuelgue reproducible). La
+  segunda es un bug esperando a que alguien lo mire; la primera es reintentar y seguir.
+
+  Ahora cada reclamo deja una línea —`agente<TAB>instante`— y la escalada arma el diagnóstico:
+  cuántos reclamos hubo, quiénes la tomaron, cuánto la retuvo cada uno, y **el veredicto sobre el
+  patrón** dicho explícito en vez de dejárselo deducir al lector. Sin historia (base recién
+  migrada) cae al mensaje de siempre: perder el detalle es aceptable, inventarlo no.
+
+  La historia se anota en el MISMO `UPDATE` atómico del claim, con una concatenación. Un
+  leer-modificar-escribir habría perdido, entre dos reclamos concurrentes, justo el registro que
+  explica la carrera. Y el nombre del agente se sanea antes de escribirse: es texto de afuera y acá
+  hace de separador, así que un agente llamado `a<TAB>b` podría inyectar entradas falsas.
+
+  La columna **no guarda el motivo de la falla**, a propósito y por la misma razón que la v23: un
+  motivo es texto libre que sale del trabajo mismo, y esto se lee en un mensaje de escalada que
+  termina en un reporte — sería una vía para que contenido sensible salga sin pasar por el portero
+  de privacidad. Con agente y marca de tiempo alcanza para distinguir azar de patrón.
 
 ### Added
 - **Catálogo de modos de falla** (`docs/failure-modes.md`) con severidad S1/S2/S3. Seis entradas,
