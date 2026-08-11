@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El fallo intermitente de `TestG4RecallConJuezLentoNoBloqueaOtraTool` tenía causa, no azar.** Se
+  reprodujo y se midió: **4 fallos en 400 corridas** (~1 %), y **0 en 400** después del arreglo.
+
+  Los tests de «el motor no traba la casa» siembran observaciones casi idénticas —difieren en un
+  carácter— bajo el mismo `topic_key`, que es justo lo que el detector de conflictos llama
+  casi-duplicado. El auto-supersede dispara cuando la segunda es *estrictamente* más nueva, y esa
+  comparación se hace sobre `created_at`, que es el `CURRENT_TIMESTAMP` de SQLite: **resolución de un
+  segundo**. Si las tres escrituras caen en el mismo segundo no pasa nada; si el segundo tickea entre
+  la segunda y la tercera, la tercera oculta a las otras dos, el recall devuelve **un** item, el juez
+  no se activa —necesita ≥2— y la tool termina sin llamar al motor. Ése era el síntoma exacto. La
+  detección de conflictos queda apagada en esos tests, que no la prueban: la misma decisión, por el
+  mismo motivo, que ya había tomado `TestMaintainTool`.
+- **La precondición de esos tests verificaba lo que no importaba.** `exigeSembradas` contaba FILAS
+  con `CountObservations`, y el auto-supersede **no borra la fila**: le prende una marca que la
+  esconde del recall. La precondición daba verde con 3 filas mientras el recall veía 1, y el test se
+  caía dos pasos después con un mensaje que mandaba a revisar el candado — medía bien, pero otra
+  cosa. Ahora verifica los items que el recall DEVUELVE, y al fallar imprime las dos cifras para que
+  el próximo rojo se diagnostique en una corrida y no en una tarde.
+
 ## [0.102.0] - 2026-08-11
 
 ### Changed
