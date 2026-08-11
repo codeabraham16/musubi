@@ -48,8 +48,10 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	// el punto — así nadie suma una migración sin darse cuenta de que cambió el esquema.
 	// v23 = ledger de uso: una fila por invocación de tool (F0 · «Potencia medida»).
 	// v24 = contadores del arsenal: qué pasó con cada skill al activarse (§7 · «Forja global»).
-	if latestSchemaVersion() != 24 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 24", latestSchemaVersion())
+	// v25 = historia de reclamos: quién tomó cada unidad y cuándo, para que la escalada diagnostique
+	//       en vez de repetir un string fijo (F1 · doctrina de loop-engineering).
+	if latestSchemaVersion() != 25 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 25", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

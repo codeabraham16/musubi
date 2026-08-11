@@ -799,6 +799,34 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 25,
+			name:    "work_claim_log",
+			// LA ESCALADA TIENE QUE CONTAR QUÉ PASÓ. Cuando una unidad agota sus reintentos, el
+			// dead-letter escribía un string FIJO: «lease agotado: superó el máximo de reintentos».
+			// El humano que lo lee no sabe lo único que importa para decidir: si cinco agentes
+			// distintos murieron al azar (infraestructura) o si el mismo agente murió cinco veces
+			// a los treinta segundos (un cuelgue reproducible). Los dos casos producían el MISMO
+			// mensaje, y el segundo es un bug esperando a que alguien lo mire.
+			//
+			// `claim_log` es append-only y de una línea por reclamo: `agente<TAB>instante`. Texto
+			// plano y no JSON a propósito — se escribe con una concatenación en el mismo UPDATE
+			// atómico del claim, sin leer-modificar-escribir, que es donde dos reclamos
+			// concurrentes se pisarían. Se llena en ClaimWorkUnit y sólo se lee al dead-letterear.
+			//
+			// LO QUE NO GUARDA ES DELIBERADO, igual que en la v23: no hay campo de error ni de
+			// resultado. El motivo de una falla es texto libre que viene del trabajo mismo, y esta
+			// columna se lee en un mensaje de escalada que va a parar a un reporte; un motivo
+			// libre acá sería una vía para que contenido sensible salga por un camino que no pasa
+			// por el portero de privacidad. Con agente + marca de tiempo alcanza para distinguir
+			// azar de patrón, que es la pregunta que la escalada tiene que responder.
+			//
+			// Aditiva y con default: una base vieja queda con '' y el dead-letter cae al mensaje
+			// de siempre. Ninguna unidad en vuelo se rompe por migrar.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "work_units", "claim_log", `claim_log TEXT NOT NULL DEFAULT ''`)
+			},
+		},
 	}
 }
 
@@ -863,6 +891,52 @@ func applyMigrations(db *sql.DB, migs []migration) error {
 			return fmt.Errorf("error al commitear migración %d (%s): %w", m.version, m.name, err)
 		}
 		current = m.version
+	}
+	return nil
+}
+
+// agregarColumnaSiFalta hace idempotente un `ALTER TABLE ... ADD COLUMN`.
+//
+// SQLite no acepta `ADD COLUMN IF NOT EXISTS`, y una migración que corre dos veces sobre la misma
+// base NO es hipotético: pasa cuando un test rebobina user_version para ejercitar el camino de
+// actualización, y pasa cuando una base nueva recibe la columna por la baseline y la migración se
+// la vuelve a agregar. Es la trampa que ya documentaron la v21 y la v22 — ésta sólo le pone una
+// función al patrón para no volver a resolverla a mano cada vez.
+//
+// `tabla` y `columna` se interpolan porque PRAGMA y DDL no admiten parámetros. Son literales del
+// código, nunca entrada de usuario; si algún día lo fueran, esto sería una inyección.
+func agregarColumnaSiFalta(x execQuerier, tabla, columna, ddl string) error {
+	rows, err := x.Query(`PRAGMA table_info(` + tabla + `)`)
+	if err != nil {
+		return fmt.Errorf("error al leer columnas de %s: %w", tabla, err)
+	}
+	existe := false
+	for rows.Next() {
+		var (
+			cid         int
+			name, ctype string
+			notnull, pk int
+			dflt        interface{}
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("error al escanear PRAGMA table_info(%s): %w", tabla, err)
+		}
+		if name == columna {
+			existe = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error al recorrer PRAGMA table_info(%s): %w", tabla, err)
+	}
+	rows.Close()
+
+	if existe {
+		return nil
+	}
+	if _, err := x.Exec(`ALTER TABLE ` + tabla + ` ADD COLUMN ` + ddl); err != nil {
+		return fmt.Errorf("error al agregar %s.%s: %w", tabla, columna, err)
 	}
 	return nil
 }
