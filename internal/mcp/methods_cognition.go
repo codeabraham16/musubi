@@ -295,9 +295,40 @@ func (s *McpServer) hayPresupuestoDeMotor(ctx context.Context) bool {
 // timeout o parseo malo se devuelve el orden model-free sin tocar — el recall nunca se rompe ni se
 // bloquea por el LLM. Con la flag apagada (default) es un no-op y el recall queda 100% model-free.
 func (s *McpServer) rerankIfEnabled(ctx context.Context, query string, res memory.RecallResult) memory.RecallResult {
-	// ReadTimeRerankOn() resuelve el *bool: ausente ⇒ apagado. Es puntero desde F5 para que el
-	// dial de potencia distinga "no lo escribieron" de "lo apagaron a mano".
-	if !s.cognitionCfg.ReadTimeRerankOn() || !cognition.Enabled(s.cognition) || len(res.Items) < 2 {
+	return s.rerankSiCorresponde(ctx, query, res, nil)
+}
+
+// quiereJuez resuelve QUIÉN decide si el juez corre en esta llamada.
+//
+// EL PORQUÉ DE LOS TRES ESTADOS (medido, no supuesto). El 2026-08-10 se midió el juez contra la
+// base que corre en producción —recall híbrido, 1.303 docs de memoria real—: +114 % en nDCG@1, o
+// sea pone lo correcto primero, a cambio de ~8,5 s por consulta. Con esos dos números juntos una
+// perilla GLOBAL no alcanza: encenderla mete 8,5 s en el camino caliente de TODO recall (incluido
+// el sondeo de un cliente), y apagarla le niega el juez a la persona que está esperando una
+// respuesta y esos segundos los pagaría con gusto.
+//
+// Por eso la decisión baja al que llama, con el default intacto:
+//
+//	pedido == nil    ⇒ decide la config (comportamiento de siempre; el dial sigue mandando)
+//	pedido == &true  ⇒ esta consulta quiere el juez, aunque el dial esté en balanced
+//	pedido == &false ⇒ esta consulta NO lo quiere, aunque el dial esté en turbo
+//
+// El false explícito no es simetría decorativa: es lo que le permite a un sondeo periódico correr
+// barato contra un servidor en turbo, sin tener que bajarle el dial a todos los demás.
+func (s *McpServer) quiereJuez(pedido *bool) bool {
+	if pedido != nil {
+		return *pedido
+	}
+	// ReadTimeRerankOn() resuelve el *bool de la config: ausente ⇒ apagado. Es puntero desde F5 para
+	// que el dial de potencia distinga "no lo escribieron" de "lo apagaron a mano".
+	return s.cognitionCfg.ReadTimeRerankOn()
+}
+
+// rerankSiCorresponde es rerankIfEnabled con la decisión explícita del llamador. Todo lo demás
+// —freno de gasto, caché, timeout, degradación best-effort— es IDÉNTICO: un `rerank:true` compra el
+// intento, no un privilegio. Sin presupuesto o con el motor caído degrada igual que siempre.
+func (s *McpServer) rerankSiCorresponde(ctx context.Context, query string, res memory.RecallResult, pedido *bool) memory.RecallResult {
+	if !s.quiereJuez(pedido) || !cognition.Enabled(s.cognition) || len(res.Items) < 2 {
 		return res
 	}
 	topK := s.cognitionCfg.ReadTimeRerankTopK

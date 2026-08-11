@@ -1269,6 +1269,11 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	var args struct {
 		Query       string `json:"query"`
 		TokenBudget int    `json:"token_budget"`
+		// Rerank decide, PARA ESTA CONSULTA, si corre el juez de pertinencia. Puntero para
+		// distinguir "no opinó" (⇒ manda la config, como siempre) de un true/false explícito.
+		// Ver quiereJuez: +114 % en el primer resultado a ~8,5 s la consulta, así que quién paga
+		// esa espera es una decisión de la llamada y no del servidor entero.
+		Rerank *bool `json:"rerank"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -1326,7 +1331,7 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	// TRAMO 3 — SIN CANDADO. Juez de pertinencia read-time (F3.5c): OPT-IN y best-effort. Con la
 	// flag apagada (default) es un no-op y el recall queda 100% model-free; encendido, re-ordena el
 	// tope llamando al motor por red (hasta 120 s) — de ahí que este tramo quede afuera.
-	res = s.rerankIfEnabled(ctx, args.Query, res)
+	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
 	return jsonResult(res)
 }
 
