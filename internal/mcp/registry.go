@@ -124,6 +124,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{
 						"query":        {Type: "string", Description: "Texto de la consulta"},
 						"token_budget": {Type: "number", Description: "Techo de tokens del resultado (opcional; usa el default de la config)"},
+						"rerank":       {Type: "boolean", Description: "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Medido 2026-08-10 contra la memoria real: pone lo correcto primero (+114 % en el primer resultado) y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo."},
 					},
 					Required: []string{"query"},
 				},

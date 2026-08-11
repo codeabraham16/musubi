@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El juez de pertinencia se pide por consulta, no por servidor.** El 2026-08-10 se midió el juez
+  contra la base que corre en producción —recall híbrido sobre 1.303 documentos de memoria real— y
+  el resultado trajo dos números que hay que leer juntos: **+114 % en nDCG@1** (pone lo correcto
+  primero) y **~8,5 s por consulta**. También mostró lo que el juez NO hace: `R@10` se mueve 5,6 %,
+  porque es un reordenador y no puede encontrar lo que el recall no trajo.
+
+  Con esos dos números, el dial global quedaba con la forma equivocada: encenderlo mete 8,5 s en el
+  camino caliente de todo recall —incluido el sondeo de un cliente— y apagarlo se lo niega a quien
+  está esperando una respuesta y esos segundos los pagaría con gusto. Ahora `musubi_recall` acepta
+  `rerank` como tri-estado: **ausente** ⇒ decide la config, igual que siempre; **true** ⇒ esta
+  consulta lo compra aunque el servidor esté en `balanced`; **false** ⇒ esta consulta lo rechaza
+  aunque el servidor esté en `turbo`. Ese último no es simetría decorativa: es lo que deja a un
+  sondeo correr barato sin bajarle el dial a todos los demás.
+
+  Un `rerank:true` compra el intento, no un privilegio: pasa por el mismo freno de gasto, el mismo
+  caché y la misma degradación best-effort. Y el parámetro **se anuncia con su precio** en
+  `tools/list` — un opt-in caro sin costo escrito termina dentro de un bucle.
+
 ## [0.101.0] - 2026-08-10
 
 ### Added
