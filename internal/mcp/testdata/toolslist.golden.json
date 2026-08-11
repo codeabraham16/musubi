@@ -637,13 +637,17 @@
     },
     {
       "name": "musubi_doctor",
-      "description": "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+      "description": "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'deep: false': pulso de salud barato, sin las pasadas caras. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "check": {
             "type": "string",
             "description": "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "false = pulso rápido: saltea db_integrity, fts_consistency y stale_gists (las tres pasadas caras, ~675 ms). Ausente o true = diagnóstico completo. Usá false para sondeos periódicos; true cuando el resultado se va a creer."
           },
           "mode": {
             "type": "string",
