@@ -43,6 +43,9 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_cognition_stats": true,
 		// Lee el ledger de uso y no escribe nada: sin bumpAccess, sin ledger de tokens (F0).
 		"musubi_tool_usage": true,
+		// Agrega ledger, conflictos, memoria y grafo para puntuar la instalación: cinco lecturas
+		// y ninguna escritura — no bumpea acceso ni marca nada (F3 · madurez medida).
+		"musubi_readiness": true,
 		// Lee .musubi/skills/*.yaml del disco: no toca la DB, no bumpea, no escribe (F5.1).
 		"musubi_list_skills": true,
 		// Lee los contadores del arsenal y el disco (§7 «Forja global»). Los conteos que las

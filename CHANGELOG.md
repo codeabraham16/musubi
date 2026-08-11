@@ -73,6 +73,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `report` cierra igual, como hoy puede escribir cualquier cosa en `result`; contener eso pide un
   sandbox, no una columna. Lo que sí hace es que el encargo deje de ser tácito y que la regla la
   aplique el motor —dentro del mismo `UPDATE` atómico del cierre— en vez de la memoria del humano.
+- **`musubi_readiness`: qué tan lista está la instalación, medido por lo que HIZO.** Las
+  evaluaciones de madurez de la industria son cuestionarios: alguien marca casilleros sobre su
+  propio equipo y sale un nivel. El problema no es que mientan — es que miden la INTENCIÓN. El
+  equipo que responde «sí, revisamos todo lo que produce el agente» y el que efectivamente lo
+  revisa sacan el mismo puntaje, porque el cuestionario nunca miró lo que pasó. Musubi tiene lo que
+  un cuestionario no tiene: un ledger de invocaciones, una cola de contradicciones, un grafo de
+  código y el estado de su propia memoria. Todo eso es comportamiento registrado.
+
+  Cinco dimensiones, todas sobre datos que el cerebro ya guardaba: si lo **invocan** de verdad, si
+  esas invocaciones **salen bien** (errores y rechazos por separado — no son lo mismo), si hay
+  **memoria viva** y se la mantiene, si las **contradicciones** detectadas se arbitran o sólo se
+  acumulan, y si el **código está indexado**.
+
+  **La regla que le da los dientes: una señal NO OBSERVADA puntúa CERO.** No «N/A», no se saltea,
+  no se promedia entre las demás. Si el grafo nunca se indexó, esa dimensión vale 0 y el global
+  baja. Sin esa regla el puntaje premia no medir, que es exactamente cómo un indicador se convierte
+  en una medalla: quien apaga la instrumentación sube de nivel. Por eso una instalación recién
+  parida —sana, migrada, todo verde— puntúa **0**: es el caso que ningún chequeo de integridad sabe
+  ver, porque no hay nada roto y el valor entregado igual es nulo.
+
+  Y la segunda regla, que lo hace auditable: **el puntaje es opinable, la evidencia no.** Cada
+  dimensión devuelve los números crudos con los que se calculó y, cuando puntúa cero, dice por qué.
+  Los umbrales (5 % de fallas, tres superficies distintas, siete días de frescura) son convenciones
+  discutibles, y están juntas y comentadas justamente para que se discutan; «hubo 250 invocaciones
+  y 50 fallaron» no es una convención.
+
+  Read-only y acotada al proyecto de la credencial: en el cerebro central el puntaje de un proyecto
+  no se calcula con el uso, los conflictos ni el grafo de los demás.
 - **Catálogo de modos de falla** (`docs/failure-modes.md`) con severidad S1/S2/S3. Seis entradas,
   todas con un caso medido y su fecha: medir bien en el sitio equivocado, capacidad desplegada que
   nadie puede invocar, la ventana rodante que miente, el sabotaje vacuo, el estado rancio en la

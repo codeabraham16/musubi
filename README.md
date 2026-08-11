@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>58 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>59 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,7 +325,7 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **58 herramientas**, agrupadas por dominio:
+El servidor expone **59 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
@@ -340,7 +340,7 @@ El servidor expone **58 herramientas**, agrupadas por dominio:
 | **Ingesta** | `musubi_ingest_url` (links/media → cerebro) |
 | **Orquestación** | `musubi_workflow` (DAG) · `musubi_work` (multi-agente) · `musubi_phase` (pipeline) · `musubi_sdd` (flujo guiado) · `musubi_debate` |
 | **Sync híbrido** (cerebro central) | `musubi_promote` · `musubi_sync_status` · `musubi_sync_requeue` · `musubi_sync_pull` |
-| **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` · `musubi_tool_usage` (qué herramientas se usan de verdad; ledger persistente) |
+| **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` · `musubi_tool_usage` (qué herramientas se usan de verdad; ledger persistente) · `musubi_readiness` (qué tan lista está la instalación, medido por lo que HIZO; una señal no observada puntúa cero) |
 | **Conflictos de memoria** | `musubi_conflicts` · `musubi_judge` |
 | **Identidad y acceso** (cerebro central) | `musubi_whoami` (¿quién soy? read-only) · `musubi_token_new` · `musubi_token_list` · `musubi_token_revoke` (**admin**: alta/baja de miembros por la red, la contracara de `musubi token`) |
 
@@ -667,7 +667,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 58 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 59 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo
