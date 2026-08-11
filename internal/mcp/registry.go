@@ -246,6 +246,20 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_readiness",
+				Description: "Qué tan lista está ESTA instalación, medido por lo que HIZO y no por lo que alguien declara. Cinco dimensiones, todas sacadas de datos que el cerebro ya registra: si lo invocan de verdad (ledger de uso), si esas invocaciones salen bien (errores y rechazos), si hay memoria viva y se la mantiene, si las contradicciones detectadas se arbitran o sólo se acumulan, y si el código está indexado. LA REGLA QUE LO HACE ÚTIL: una señal NO OBSERVADA puntúa CERO y no se saltea — no medir no puede subir el puntaje, que es como un indicador se convierte en una medalla. Cada dimensión devuelve la EVIDENCIA cruda con la que se calculó, y dice por qué puntuó cero cuando no hay dato: los umbrales son convenciones discutibles, los números no. Read-only y acotada al proyecto de la credencial. Sirve para responder «¿esto ya sirve?» con datos, y para comparar proyectos dentro del cerebro central.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"days": {Type: "number", Description: "Ventana en días para las dimensiones que salen del ledger (default 30)."},
+					},
+				},
+			},
+			handler:  s.toolReadiness,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_skill_usage",
 				Description: "Qué pasó con cada skill del arsenal cuando se activó: cuántas veces matcheó, por qué evidencia (alcance declarado, glob real o comodín '*'), cuántas veces viajó su cuerpo y cuántas se lo pidieron por nombre. Marca tres patrones —muerta, candidata a retiro, candidata a alcance declarado— pero no retira ni apaga nada. No recibe parámetros. Read-only. OJO: mide activación y pedido; si una skill SIRVIÓ no se puede medir sin juicio, y esta tool no lo finge.",
 				InputSchema: InputSchema{

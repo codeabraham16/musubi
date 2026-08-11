@@ -163,6 +163,12 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_detect_changes",  // methods_detect_test (necesita git runner)
 		"musubi_search_skills",   // behavior-bleed via GetSkillDecisionsCtx (Track 19); no marker-in-text
 		"musubi_sync_pull",       // aislamiento por credencial verificado en sync_pull_test (TestToolSyncPullScoped)
+		// readiness_medido_test (TestReadinessAcotadaAlProyecto). NO entra al barrido por marcador
+		// porque no devuelve NINGÚN texto del dato: sólo agregados. Eso no la exime — filtrar
+		// «cuántas veces invocó el otro equipo» es la misma información de negocio que filtrar QUÉ
+		// invocó —, así que su test dedicado usa este mismo seedVictim y exige que las cuatro
+		// dimensiones scopeadas den CERO para el tenant vecino y NO cero para el admin federado.
+		"musubi_readiness",
 	} {
 		swept[name] = true
 	}
