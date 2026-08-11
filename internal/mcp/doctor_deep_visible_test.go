@@ -58,7 +58,7 @@ func TestElModoRapidoDelDoctorSeAnuncia(t *testing.T) {
 
 	var doctor *Tool
 	for i := range s.tools {
-		if s.tools[i].Tool.Name == "musubi_doctor" {
+		if s.tools[i].Name == "musubi_doctor" {
 			doctor = &s.tools[i].Tool
 			break
 		}
