@@ -51,12 +51,13 @@ func TestMedicionJuezReal(t *testing.T) {
 		t.Fatalf("FixtureDesdeDB(%s): %v", rutaDB, err)
 	}
 
-	// EL COSTO, DICHO ANTES DE GASTARLO: una llamada al juez por consulta con ≥2 candidatos, y un
-	// embedding por doc y por consulta en CADA brazo (los dos siembran su propio motor). Si estos
-	// números sorprenden, hay que parar acá y no después de haber gastado.
+	// EL COSTO, DICHO ANTES DE GASTARLO: una llamada al juez por consulta con ≥2 candidatos, más los
+	// embeddings. Run SIEMBRA UNA SOLA VEZ y evalúa los dos brazos sobre el mismo engine, así que el
+	// corpus se embebe una vez y sólo las consultas se repiten por brazo: docs + 2×consultas. Si
+	// estos números sorprenden, hay que parar acá y no después de haber gastado.
 	t.Logf("fixture: %d docs · %d consultas ⇒ hasta %d llamadas al juez (%s vía %s) y ~%d embeddings (%s vía %s)",
 		len(fx.Docs), len(fx.Queries), len(fx.Queries), modelo, endpoint,
-		2*(len(fx.Docs)+len(fx.Queries)), modeloEmbed, urlEmbed)
+		len(fx.Docs)+2*len(fx.Queries), modeloEmbed, urlEmbed)
 
 	juez := cognition.NewOpenAICompatProvider(endpoint, modelo, clave, 120*time.Second)
 	base, conJuez := configsDelJuez(juez)
