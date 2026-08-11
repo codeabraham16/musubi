@@ -8,6 +8,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Changed
+- **La revisión adversarial ahora exige la evidencia ANTES del debate.** `adversarial-review`
+  abría el debate de una: N escépticos con lentes distintos deliberando sobre un cambio que nadie
+  había ejecutado. Eso tiene nombre —*teatro de verificación*— y su forma de fallar es aprobar y
+  que el CI falle después. Ahora los dos primeros pasos son reunir la evidencia (correr build,
+  vet/lint y tests **uno mismo**, sin creerle al implementador; revisar el alcance; buscar tests
+  deshabilitados o aserciones comentadas) y **sabotear cada invariante nuevo**: si romper a
+  propósito el código que la prueba dice cubrir no la pone en rojo, esa prueba no medía nada.
+
+  El sabotaje viene con las dos trampas que ya nos costaron tiempo: la mutación **vacua** —no
+  altera lo que la prueba observa, así que el verde es correcto y no informa— y el **sitio
+  equivocado** —la prueba mide bien, pero otra cosa—. Se suma la postura por defecto del
+  verificador: **RECHAZAR**; el escéptico que no pudo verificar su lente vota `no_real`, porque
+  aprobar de más deja un cambio malo en `main` y rechazar de más cuesta una vuelta.
+
+  El invariante que lo fija no comprueba que la skill *mencione* correr tests —eso lo cumpliría un
+  párrafo al final que nadie lee en orden— sino que la evidencia y el sabotaje **aparezcan antes**
+  de abrir el debate, porque un agente ejecuta la lista en el orden en que está escrita.
 - **La escalada de una unidad de trabajo cuenta qué pasó, en vez de repetir un string fijo.** Cuando
   una unidad agotaba sus reintentos, el dead-letter escribía siempre lo mismo: «lease agotado:
   superó el máximo de reintentos». Con ese mensaje, dos situaciones OPUESTAS eran indistinguibles —
@@ -31,6 +48,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   de privacidad. Con agente y marca de tiempo alcanza para distinguir azar de patrón.
 
 ### Added
+- **Catálogo de modos de falla** (`docs/failure-modes.md`) con severidad S1/S2/S3. Seis entradas,
+  todas con un caso medido y su fecha: medir bien en el sitio equivocado, capacidad desplegada que
+  nadie puede invocar, la ventana rodante que miente, el sabotaje vacuo, el estado rancio en la
+  memoria, y la capacidad cara que no se anuncia con su precio. La regla de admisión es que una
+  falla entra cuando **se observó**, no cuando se imagina.
 - **El juez de pertinencia se pide por consulta, no por servidor.** El 2026-08-10 se midió el juez
   contra la base que corre en producción —recall híbrido sobre 1.303 documentos de memoria real— y
   el resultado trajo dos números que hay que leer juntos: **+114 % en nDCG@1** (pone lo correcto

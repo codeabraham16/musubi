@@ -99,6 +99,50 @@ func TestSDDFlowYAdversarialReviewEnBundle(t *testing.T) {
 	}
 }
 
+// ★ LA EVIDENCIA VA ANTES QUE EL DEBATE, Y ESO ES UN ORDEN, NO UNA MENCIÓN.
+//
+// Un panel de escépticos que delibera sin haber corrido las comprobaciones es teatro de
+// verificación: aprueba y el CI falla después. Lo que fija esta prueba no es que la skill
+// «hable de» correr tests —eso lo cumpliría un párrafo al final que nadie lee en orden— sino que
+// la instrucción de reunir evidencia y sabotear los invariantes APAREZCA ANTES de la de abrir el
+// debate. Un agente ejecuta la lista en el orden en que está escrita.
+func TestAdversarialReviewPideEvidenciaAntesDeDebatir(t *testing.T) {
+	m := skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}))
+	rev, ok := m["adversarial-review"]
+	if !ok {
+		t.Fatal("falta la skill adversarial-review en el bundle")
+	}
+
+	iEvidencia := strings.Index(rev.Rules, "LA EVIDENCIA VA ANTES QUE EL DEBATE")
+	iSabotaje := strings.Index(rev.Rules, "SABOTEÁ CADA INVARIANTE NUEVO")
+	iDebate := strings.Index(rev.Rules, "action=open")
+
+	if iEvidencia < 0 {
+		t.Error("la skill no exige reunir la evidencia (correr build/vet/tests) antes de opinar")
+	}
+	if iSabotaje < 0 {
+		t.Error("la skill no exige sabotear los invariantes nuevos: una prueba que no se rompe al romper el código no medía nada")
+	}
+	if iDebate < 0 {
+		t.Fatal("la skill dejó de abrir el debate con musubi_debate action=open")
+	}
+	if iEvidencia > iDebate || iSabotaje > iDebate {
+		t.Errorf("la evidencia (%d) y el sabotaje (%d) tienen que ir ANTES de abrir el debate (%d): un agente ejecuta la lista en orden",
+			iEvidencia, iSabotaje, iDebate)
+	}
+
+	// La postura por defecto es lo que separa un verificador de un lector complaciente.
+	if !strings.Contains(rev.Rules, "POSTURA POR DEFECTO ES RECHAZAR") {
+		t.Error("falta la postura por defecto: el escéptico que no pudo verificar su lente vota no_real")
+	}
+
+	// El nivel 1 —nombre + descripción— es lo único que ve el agente al decidir si trae el cuerpo
+	// de la skill. Si la descripción no anuncia la evidencia, la skill no se elige para eso.
+	if !strings.Contains(strings.ToLower(rev.Description), "evidencia") {
+		t.Errorf("la descripción no anuncia que la evidencia va primero, y es la línea que decide si la skill se elige: %q", rev.Description)
+	}
+}
+
 func TestOrchestrateSkillDocumentaProtocolo(t *testing.T) {
 	m := skillsByName(cognitiveSkills(nil))
 	sk, ok := m["orchestrate-multiagent"]
