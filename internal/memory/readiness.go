@@ -102,7 +102,7 @@ func (e *DbEngine) Readiness(ctx context.Context, days int) (ReadinessReport, er
 	if err != nil {
 		return rep, err
 	}
-	coh, err := e.dimensionCoherencia(ctx)
+	coh, err := e.dimensionCoherencia(ctx, days)
 	if err != nil {
 		return rep, err
 	}
@@ -198,11 +198,20 @@ func (e *DbEngine) dimensionesDeUso(ctx context.Context, days int) (uso, conf Re
 	return uso, conf, nil
 }
 
-// dimensionMemoria mide si hay conocimiento vivo y si se lo mantiene.
+// dimensionMemoria mide si hay conocimiento vivo y si el mantenimiento está corriendo.
 //
 // El mantenimiento sale de `meta`, que NO está acotada por proyecto: en un cerebro central la
 // marca es de la instalación entera. Se declara en la evidencia en vez de fingir un dato
 // per-proyecto que la tabla no tiene.
+//
+// LO QUE ESTA DIMENSIÓN NO MIDE, dicho acá para que no se lea de más: la marca `last_maintenance`
+// la refresca el SCHEDULER del propio binario, no una persona. En una instalación viva siempre está
+// fresca, así que el chequeo detecta «el scheduler está muerto» y NO «alguien cuida la memoria».
+// Son cosas distintas y la primera versión las confundía en el nombre — medía bien, pero el rótulo
+// prometía otra cosa, que es la manera más silenciosa de que un indicador mienta. El nombre del
+// chequeo y su `why` ahora dicen exactamente lo que se observó. Detectado el 2026-08-11 mirando el
+// primer resultado real del central: la marca estaba a un minuto de la consulta porque acababa de
+// reiniciarse el servicio.
 func (e *DbEngine) dimensionMemoria(ctx context.Context) (ReadinessDimension, error) {
 	d := ReadinessDimension{Key: "memoria", Title: "Hay conocimiento y se lo mantiene",
 		Evidence: map[string]interface{}{}}
@@ -227,8 +236,11 @@ func (e *DbEngine) dimensionMemoria(ctx context.Context) (ReadinessDimension, er
 			Why: fmt.Sprintf("%d activas de %d", ins.Observations.Active, ins.Observations.Total)},
 		{Name: "el mantenimiento corrió alguna vez", Pass: ultimo != "",
 			Why: "marca `last_maintenance`: " + oVacio(ultimo)},
-		{Name: "el mantenimiento corre seguido", Pass: ultimo != "" && recienteISO(ultimo, readinessMantenimientoDias),
-			Why: fmt.Sprintf("último %s (se espera cada %d días)", oVacio(ultimo), readinessMantenimientoDias)},
+		{Name: "el scheduler de mantenimiento está vivo", Pass: ultimo != "" && recienteISO(ultimo, readinessMantenimientoDias),
+			Why: fmt.Sprintf("último %s (se espera cada %d días). OJO: esta marca la refresca el "+
+				"scheduler del binario, no una persona — en una instalación viva siempre está fresca, "+
+				"así que verde acá significa «el scheduler corre», no «alguien curó la memoria»",
+				oVacio(ultimo), readinessMantenimientoDias)},
 	}
 	d.Score = puntaje(d.Checks)
 	return d, nil
@@ -236,31 +248,54 @@ func (e *DbEngine) dimensionMemoria(ctx context.Context) (ReadinessDimension, er
 
 // dimensionCoherencia mide si la cola de contradicciones SE ATIENDE.
 //
-// El detector encuentra pares que se contradicen y los deja `pending`; resolverlos es un juicio
-// que hace un humano o un agente. Una cola que sólo crece es memoria que se contradice a sí misma
-// y nadie arbitra — la forma en que un cerebro «empieza a fallar» sin que ningún chequeo de
-// integridad se ponga en rojo, porque las dos memorias en conflicto son individualmente válidas.
-func (e *DbEngine) dimensionCoherencia(ctx context.Context) (ReadinessDimension, error) {
+// El detector encuentra pares que se contradicen y los deja `pending`; resolverlos es un juicio que
+// hace un humano o un agente. Una cola que sólo crece es memoria que se contradice a sí misma y
+// nadie arbitra — la forma en que un cerebro «empieza a fallar» sin que ningún chequeo de integridad
+// se ponga en rojo, porque las dos memorias en conflicto son individualmente válidas.
+//
+// SE COMPARA FLUJO CONTRA FLUJO, y ésa es la corrección que trajo el primer dato real. La primera
+// versión medía «pendientes AHORA contra resueltas DE TODA LA VIDA»: dos escalas distintas, y la
+// comparación se gana sola con historia. El central lo mostró crudo — 372 pendientes contra 780
+// resueltas daba verde, pero las 780 son de años y las 372 son de hoy. Un cerebro que arbitró mucho
+// hace un año y hace seis meses no arbitra nada seguiría dando verde hasta que la cola pasara las
+// 780, o sea justo cuando ya no hace falta ningún indicador para darse cuenta.
+//
+// Ahora las dos preguntas se responden con datos de la MISMA ventana:
+//
+//	¿alguien arbitra todavía?  → resoluciones dentro de la ventana > 0
+//	¿la cola crece o se achica? → resoluciones >= detecciones nuevas, ambas en la ventana
+//
+// El backlog acumulado sigue en la evidencia, pero ya no como umbral: es un número que el que lee
+// interpreta, no una vara que se pasa sola con el tiempo.
+func (e *DbEngine) dimensionCoherencia(ctx context.Context, days int) (ReadinessDimension, error) {
 	d := ReadinessDimension{Key: "coherencia", Title: "Las contradicciones se arbitran",
 		Evidence: map[string]interface{}{}}
 
 	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
-	var pendientes, resueltas int
+	// `-N days` se interpola con %d sobre un int del caller ya normalizado (>0): SQLite no admite
+	// parámetros enlazados dentro del modificador de datetime().
+	desde := fmt.Sprintf(`datetime('now','-%d days')`, days)
+	var pendientes, resueltasTotal, resueltasVentana, nuevasVentana int
 	err := e.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(CASE WHEN r.status = ? THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN r.status <> ? THEN 1 ELSE 0 END), 0)
+		       COALESCE(SUM(CASE WHEN r.status <> ? THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN r.status <> ? AND r.updated_at >= `+desde+` THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN r.created_at >= `+desde+` THEN 1 ELSE 0 END), 0)
 		  FROM observation_relations r
 		  JOIN observations o ON o.id = r.source_id
 		 WHERE 1=1`+scopeSQL,
-		append([]interface{}{RelStatusPending, RelStatusPending}, scopeArgs...)...).
-		Scan(&pendientes, &resueltas)
+		append([]interface{}{RelStatusPending, RelStatusPending, RelStatusPending}, scopeArgs...)...).
+		Scan(&pendientes, &resueltasTotal, &resueltasVentana, &nuevasVentana)
 	if err != nil {
 		return d, fmt.Errorf("readiness: contar relaciones de conflicto: %w", err)
 	}
 	d.Evidence["pendientes"] = pendientes
-	d.Evidence["resueltas"] = resueltas
+	d.Evidence["resueltas_historico"] = resueltasTotal
+	d.Evidence["resueltas_en_ventana"] = resueltasVentana
+	d.Evidence["detectadas_en_ventana"] = nuevasVentana
+	d.Evidence["ventana_dias"] = days
 
-	if pendientes+resueltas == 0 {
+	if pendientes+resueltasTotal == 0 {
 		// Sin detecciones no hay nada que arbitrar. Puntúa 0 igual, y el motivo lo dice: puede ser
 		// una memoria chica y sana, o el detector que nunca corrió. Desde acá no se distinguen, y
 		// suponer la versión buena es justo lo que un cuestionario haría.
@@ -270,10 +305,12 @@ func (e *DbEngine) dimensionCoherencia(ctx context.Context) (ReadinessDimension,
 	}
 	d.Observed = true
 	d.Checks = []ReadinessCheck{
-		{Name: "alguien arbitra", Pass: resueltas > 0,
-			Why: fmt.Sprintf("%d relaciones resueltas", resueltas)},
-		{Name: "la cola no gana", Pass: pendientes <= resueltas,
-			Why: fmt.Sprintf("%d pendientes contra %d resueltas", pendientes, resueltas)},
+		{Name: "alguien arbitra todavía", Pass: resueltasVentana > 0,
+			Why: fmt.Sprintf("%d resueltas en %d días (histórico: %d, backlog actual: %d)",
+				resueltasVentana, days, resueltasTotal, pendientes)},
+		{Name: "la cola no crece", Pass: resueltasVentana >= nuevasVentana,
+			Why: fmt.Sprintf("%d resueltas contra %d detectadas nuevas, ambas en %d días",
+				resueltasVentana, nuevasVentana, days)},
 	}
 	d.Score = puntaje(d.Checks)
 	return d, nil

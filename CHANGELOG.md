@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El puntaje de coherencia comparaba dos escalas distintas y se ganaba solo con historia.** Medía
+  «pendientes AHORA contra resueltas DE TODA LA VIDA». El primer resultado real del cerebro central
+  lo dejó a la vista: **372 pendientes contra 780 resueltas** daba verde, pero las 780 son de años y
+  las 372 son de hoy. Un cerebro que arbitró mucho hace un año y hace seis meses no arbitra nada
+  seguía dando verde hasta que la cola pasara las 780 — o sea, hasta mucho después de que hiciera
+  falta un indicador para notarlo.
+
+  Ahora las dos preguntas se responden con datos de la MISMA ventana: *¿alguien arbitra todavía?*
+  (resoluciones dentro de la ventana > 0) y *¿la cola crece o se achica?* (resoluciones ≥ detecciones
+  nuevas, ambas en la ventana). El backlog acumulado sigue en la evidencia, pero como número que el
+  lector interpreta y ya no como vara que el tiempo supera solo. El corolario deseado: un backlog
+  heredado grande **no** castiga a quien se puso a limpiarlo, porque lo que se mide es el flujo.
+- **El chequeo de mantenimiento prometía curación y medía un latido.** La marca `last_maintenance` la
+  refresca el scheduler del propio binario, no una persona: en una instalación viva siempre está
+  fresca. Se detectó mirando el primer dato real — la marca estaba a un minuto de la consulta porque
+  el servicio acababa de reiniciarse. El chequeo era correcto; el rótulo, no. Ahora se llama «el
+  scheduler de mantenimiento está vivo» y su `why` aclara que verde ahí significa «el scheduler
+  corre», no «alguien curó la memoria». Medir bien y rotular mal es la forma más silenciosa de que un
+  indicador mienta.
+
 ## [0.102.0] - 2026-08-11
 
 ### Changed
