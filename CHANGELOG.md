@@ -126,6 +126,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   truncados, ahora contenido completo). Lo cubre el portero de privacidad, que nace encendido y
   quedó verificado en el cable; quien lo apague a mano se expone a más que antes de este cambio.
 
+### Fixed
+- **El juez se medía contra una base que no corre en producción.** `TestMedicionJuezReal` comparaba
+  `lexical` contra `lexical+juez` sin embedder, pero el cerebro central hace búsqueda **híbrida**
+  desde el 2026-07-28. Así, el delta le acreditaba al juez todo lo que ya aportaba el vector: la
+  aritmética era correcta, el número salía grande, y respondía una pregunta que nadie había hecho.
+  Es el modo de falla más caro de una medición — medir bien en el sitio equivocado y salir verde
+  igual. Ahora los dos brazos son `hybrid` y `hybrid+juez`, idénticos salvo el juez, y el test se
+  **saltea con motivo** si falta `MUSUBI_OLLAMA_URL` en vez de degradar a léxico en silencio.
+  El invariante quedó fijado en `TestElJuezSeMideSobreLaBaseDeProduccion`, que corre en CI sin red
+  ni cuota: el defecto no rompía nada, y por eso hacía falta un test que lo mirara a propósito.
+
 ## [0.99.0] - 2026-08-05
 
 ### Added

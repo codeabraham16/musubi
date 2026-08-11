@@ -19,24 +19,9 @@ import (
 // var se saltea: CI no corre Ollama. Es una MEDICIÓN (imprime los números para decidir), no un gate:
 // el cambio de default sólo se hace si estos números superan a POTION.
 func TestSemanticVsOllamaReal(t *testing.T) {
-	url := os.Getenv("MUSUBI_OLLAMA_URL")
-	if url == "" {
+	embed, url, model, dim, ok := embedderOllamaDesdeEnv()
+	if !ok {
 		t.Skip("MUSUBI_OLLAMA_URL no seteado: se saltea la medición semántica con Ollama")
-	}
-	model := os.Getenv("MUSUBI_OLLAMA_MODEL")
-	if model == "" {
-		model = "bge-m3"
-	}
-	dim := 1024 // bge-m3
-	if d := os.Getenv("MUSUBI_OLLAMA_DIM"); d != "" {
-		if n, err := strconv.Atoi(d); err == nil && n > 0 {
-			dim = n
-		}
-	}
-
-	prov := embedding.NewOllamaProvider(url, model, dim)
-	embed := func(text string) ([]float32, error) {
-		return prov.Embed(context.Background(), text)
 	}
 
 	fx := loadGolden(t)
@@ -66,4 +51,32 @@ func TestSemanticVsOllamaReal(t *testing.T) {
 		t.Logf("AVISO: el híbrido Ollama (%.3f) quedó por debajo del léxico (%.3f) — la señal no está sumando (¿dim/modelo mal?)",
 			hyb.RecallAtK[10], lex.RecallAtK[10])
 	}
+}
+
+// embedderOllamaDesdeEnv arma el embedder REAL (bge-m3 vía Ollama) leyendo el entorno, y dice si
+// está disponible. Lo comparten las dos mediciones que necesitan vectores de verdad — la semántica
+// y la del juez — para que no se separen: si una armara el provider distinto de la otra, dos
+// «mediciones con Ollama» estarían midiendo configuraciones diferentes sin que se note.
+//
+// ok=false significa que no hay MUSUBI_OLLAMA_URL. El caller decide qué hacer con eso; ninguno debe
+// seguir sin vectores y llamarlo igual «con embedder».
+func embedderOllamaDesdeEnv() (embed EmbedFunc, url, model string, dim int, ok bool) {
+	url = os.Getenv("MUSUBI_OLLAMA_URL")
+	if url == "" {
+		return nil, "", "", 0, false
+	}
+	model = os.Getenv("MUSUBI_OLLAMA_MODEL")
+	if model == "" {
+		model = "bge-m3"
+	}
+	dim = 1024 // bge-m3
+	if d := os.Getenv("MUSUBI_OLLAMA_DIM"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 {
+			dim = n
+		}
+	}
+	prov := embedding.NewOllamaProvider(url, model, dim)
+	return func(text string) ([]float32, error) {
+		return prov.Embed(context.Background(), text)
+	}, url, model, dim, true
 }
