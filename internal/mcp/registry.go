@@ -571,13 +571,14 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_doctor",
-				Description: "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+				Description: "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'deep: false': pulso de salud barato, sin las pasadas caras. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"check":  {Type: "string", Description: "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."},
 						"repair": {Type: "boolean", Description: "Si es true, repara el check indicado (requiere 'check')."},
 						"mode":   {Type: "string", Description: "Modo de reparación: plan | dry-run | apply (default dry-run)."},
+						"deep":   {Type: "boolean", Description: "false = pulso rápido: saltea db_integrity, fts_consistency y stale_gists (las tres pasadas caras, ~675 ms). Ausente o true = diagnóstico completo. Usá false para sondeos periódicos; true cuando el resultado se va a creer."},
 					},
 				},
 			},
