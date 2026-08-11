@@ -48,6 +48,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   de privacidad. Con agente y marca de tiempo alcanza para distinguir azar de patrón.
 
 ### Added
+- **Cada unidad de trabajo declara cuánta autonomía tiene** (`musubi_work`). Musubi sabía decir
+  QUIÉN opera —el rol del token: `reader`/`writer`/`admin`— y eso es una propiedad de la
+  credencial. Le faltaba la otra mitad: *cuánta autonomía tiene esta tarea*. Un mismo agente, con
+  el mismo token, recibe «andá y mirá, no toques nada» en una unidad y «arreglalo solo» en la
+  siguiente; si el único lugar donde vive esa diferencia es la cabeza del que la dio, el día que el
+  agente hace de más nadie puede señalar la regla que rompió, porque no había regla.
+
+  Ahora el que postea la unidad fija su techo: **L1** sólo reporta, **L2** arregla pero el cierre
+  necesita la firma de otro (maker/checker), **L3** cierra solo. Del otro lado, el que cierra
+  declara qué hizo: `effect=report` (no cambié nada) o `effect=apply` (cambié algo). Omitirlo vale
+  como `apply` —fail-closed: quien no declara es indistinguible de quien tocó— y `autonomy`
+  ausente vale como `L3`, que es exactamente lo que la pizarra hacía hasta hoy: ningún batch en
+  vuelo cambia de comportamiento.
+
+  La firma de L2 (`action=approve`, con un `reviewer` que **no** puede ser el dueño) queda atada al
+  `fencing_token` del intento que se revisó. Ése es el detalle que hace que valga: sin él, una
+  unidad firmada cuyo dueño se cuelga y es retomada por otro agente arrastraría la firma vieja, y
+  el trabajo NUEVO —que nadie miró— cerraría amparado por la revisión del viejo. Cerrar como
+  `failed` nunca se frena, en ningún nivel: una L1 que no pudiera ni declararse fallida quedaría
+  colgada hasta vencer el lease y se escalaría sola como un agente desaparecido.
+
+  Lo que esto **no** es: una jaula contra un agente que miente. Quien tocó el disco y declara
+  `report` cierra igual, como hoy puede escribir cualquier cosa en `result`; contener eso pide un
+  sandbox, no una columna. Lo que sí hace es que el encargo deje de ser tácito y que la regla la
+  aplique el motor —dentro del mismo `UPDATE` atómico del cierre— en vez de la memoria del humano.
 - **Catálogo de modos de falla** (`docs/failure-modes.md`) con severidad S1/S2/S3. Seis entradas,
   todas con un caso medido y su fecha: medir bien en el sitio equivocado, capacidad desplegada que
   nadie puede invocar, la ventana rodante que miente, el sabotaje vacuo, el estado rancio en la

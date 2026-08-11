@@ -55,12 +55,18 @@ type WorkUnit struct {
 	LeaseExpiresAt string `json:"lease_expires_at,omitempty"` // vencimiento (UTC ISO)
 	Attempts       int    `json:"attempts,omitempty"`         // reclamos acumulados
 	FencingToken   int64  `json:"fencing_token,omitempty"`    // token monótono anti-zombie
+	// Autonomía declarada (v0.102+): cuánto puede hacer solo el que la reclame.
+	Autonomy   string `json:"autonomy,omitempty"`    // L1 | L2 | L3 (ver work_autonomia.go)
+	ApprovedBy string `json:"approved_by,omitempty"` // revisor que firmó este intento (sólo L2)
 }
 
 // WorkUnitSpec describe una unidad a crear.
 type WorkUnitSpec struct {
 	Title string `json:"title"`
 	Spec  string `json:"spec"`
+	// Autonomy es el techo de lo que puede hacer solo quien reclame esta unidad.
+	// Vacío ⇒ AutonomyUnattended (lo que la pizarra hacía antes de que el campo existiera).
+	Autonomy string `json:"autonomy,omitempty"`
 }
 
 // WorkBatch es el estado consolidado de un batch.
@@ -78,13 +84,15 @@ type WorkBatch struct {
 // (mismo orden que scanWorkUnit). Incluye los campos de lease.
 const workUnitCols = `id, batch_id, seq, COALESCE(title,''), COALESCE(spec,''), status, ` +
 	`COALESCE(claimed_by,''), COALESCE(result,''), COALESCE(owner_id,''), ` +
-	`COALESCE(lease_expires_at,''), COALESCE(attempts,0), COALESCE(fencing_token,0)`
+	`COALESCE(lease_expires_at,''), COALESCE(attempts,0), COALESCE(fencing_token,0), ` +
+	`COALESCE(autonomy,'` + AutonomyUnattended + `'), COALESCE(approved_by,'')`
 
 // scanWorkUnit escanea una fila con las columnas de workUnitCols en una WorkUnit.
 func scanWorkUnit(s interface{ Scan(...interface{}) error }) (WorkUnit, error) {
 	var u WorkUnit
 	err := s.Scan(&u.ID, &u.BatchID, &u.Seq, &u.Title, &u.Spec, &u.Status,
-		&u.ClaimedBy, &u.Result, &u.OwnerID, &u.LeaseExpiresAt, &u.Attempts, &u.FencingToken)
+		&u.ClaimedBy, &u.Result, &u.OwnerID, &u.LeaseExpiresAt, &u.Attempts, &u.FencingToken,
+		&u.Autonomy, &u.ApprovedBy)
 	return u, err
 }
 
@@ -103,9 +111,17 @@ func (e *DbEngine) CreateWorkBatch(batchID string, specs []WorkUnitSpec) (WorkBa
 		return WorkBatch{}, fmt.Errorf("error al iniciar la transacción del batch: %w", err)
 	}
 	for i, s := range specs {
+		// La autonomía se valida ACÁ, al postear, y no al cerrar: un nivel mal escrito
+		// ("l2", "L4") que se descubriera recién al completar dejaría al agente trabajando
+		// bajo un techo que nadie fijó. Fail-closed y temprano.
+		nivel, err := normalizarAutonomia(s.Autonomy)
+		if err != nil {
+			tx.Rollback()
+			return WorkBatch{}, fmt.Errorf("unidad %d: %w", i, err)
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO work_units (id, batch_id, seq, title, spec, status) VALUES (?, ?, ?, ?, ?, ?)`,
-			uuid.NewString(), batchID, i, s.Title, s.Spec, WorkOpen,
+			`INSERT INTO work_units (id, batch_id, seq, title, spec, status, autonomy) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			uuid.NewString(), batchID, i, s.Title, s.Spec, WorkOpen, nivel,
 		); err != nil {
 			tx.Rollback()
 			return WorkBatch{}, fmt.Errorf("error al crear unidad %d: %w", i, err)
@@ -209,18 +225,33 @@ func (e *DbEngine) HeartbeatWorkUnit(id, owner string, fencingToken int64, ttlSe
 	return n > 0, nil
 }
 
-// CompleteWorkUnit cierra una unidad con su resultado. status debe ser done o
-// failed (vacío = done). Si agent != "", exige además que sea el DUEÑO actual
-// (owner_id), de modo que un agente expropiado no cierre trabajo que ya no es suyo.
-// Si fencingToken > 0, exige que coincida con el token vigente: esto defiende del
-// "worker zombie" incluso cuando dos agentes comparten el mismo id (owner_id no los
-// distingue, pero el token monótono sí).
+// CompleteWorkUnit cierra una unidad declarando el efecto MÁS PRIVILEGIADO (EffectApply):
+// es el atajo para el llamador que no distingue reportar de tocar, y es fail-closed —
+// asumir que el agente cambió algo hace que una unidad L1 lo frene, en vez de dejarlo pasar.
 func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string, fencingToken int64) error {
+	return e.CompleteWorkUnitConEfecto(id, result, status, agent, fencingToken, EffectApply)
+}
+
+// CompleteWorkUnitConEfecto cierra una unidad con su resultado, declarando QUÉ HIZO el agente
+// (effect: report | apply). status debe ser done o failed (vacío = done). Si agent != "", exige
+// además que sea el DUEÑO actual (owner_id), de modo que un agente expropiado no cierre trabajo
+// que ya no es suyo. Si fencingToken > 0, exige que coincida con el token vigente: esto defiende
+// del "worker zombie" incluso cuando dos agentes comparten el mismo id (owner_id no los
+// distingue, pero el token monótono sí).
+//
+// El efecto declarado se contrasta contra la AUTONOMÍA de la unidad, y esa comparación va dentro
+// del mismo UPDATE —no en un if previo— para que sea atómica: entre un chequeo suelto y la
+// escritura cabe una expropiación, y ahí es justo donde un cierre no autorizado se colaría.
+func (e *DbEngine) CompleteWorkUnitConEfecto(id, result, status, agent string, fencingToken int64, effect string) error {
 	if status == "" {
 		status = WorkDone
 	}
 	if status != WorkDone && status != WorkFailed {
 		return fmt.Errorf("status de cierre inválido %q (usá done|failed)", status)
+	}
+	efecto, err := normalizarEfecto(effect)
+	if err != nil {
+		return err
 	}
 	// Guarda de estado: solo una unidad RECLAMADA puede cerrarse. Evita cerrar una
 	// open nunca reclamada y re-cerrar/sobrescribir una ya done/failed.
@@ -234,6 +265,9 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string, fencingTok
 		query += ` AND fencing_token=?`
 		args = append(args, fencingToken)
 	}
+	if gate := gateDeAutonomia(status, efecto); gate != "" {
+		query += ` AND ` + gate
+	}
 	res, err := e.db.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("error al completar unidad: %w", err)
@@ -243,6 +277,12 @@ func (e *DbEngine) CompleteWorkUnit(id, result, status, agent string, fencingTok
 		return fmt.Errorf("error al verificar unidad completada: %w", err)
 	}
 	if n == 0 {
+		// El UPDATE no dice POR QUÉ no tocó ninguna fila, y las dos familias de causa piden
+		// acciones opuestas: "perdiste el lease" se resuelve abandonando, "te falta la firma"
+		// se resuelve pidiéndola. Vale una segunda consulta para no mandar a nadie a adivinar.
+		if motivo, hay := e.motivoDeCierreBloqueado(id, efecto); hay {
+			return fmt.Errorf("%s", motivo)
+		}
 		return fmt.Errorf("la unidad %q no existe, no está reclamada, fue expropiada (lease vencido y retomada por otro), o el fencing token no coincide", id)
 	}
 	return nil
