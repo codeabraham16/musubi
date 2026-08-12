@@ -55,9 +55,10 @@ type DbEngine struct {
 	outboxEnabled bool
 }
 
-// SetOutboxEnabled decide si los guardados 'shared' se encolan para el central. Lo apaga el
-// entrypoint `serve` cuando el nodo no tiene sync saliente configurado (el caso del cerebro
-// central: es terminal). Ver el comentario del campo.
+// SetOutboxEnabled decide si los guardados 'shared' se encolan para el central. Desde que
+// NewDbEngine lo deriva de la config (cfg.Sync.HasDestination), los entrypoints ya no NECESITAN
+// llamarlo: queda como override explícito para tests y para un caller que sepa algo que la
+// config no dice. Ver el comentario del campo.
 func (e *DbEngine) SetOutboxEnabled(v bool) { e.outboxEnabled = v }
 
 // SetProjectID fija el proyecto de origen que saveObservation estampa en cada
@@ -89,6 +90,16 @@ func (e *DbEngine) spawnBackground(f func()) bool {
 		f()
 	}()
 	return true
+}
+
+// configPresente dice si el workspace tiene un .musubi/config.yaml en disco. Hace falta porque
+// config.Load devuelve defaults SIN error cuando el archivo no existe, y para el outbox esos dos
+// casos no son lo mismo: "no declaré política de sync" (un engine de test sobre un TempDir, que
+// debe conservar el default histórico de encolar) contra "declaré una config y no tiene destino"
+// (el cerebro central, que es terminal y no debe encolar nada).
+func configPresente(projectPath string) bool {
+	_, err := os.Stat(filepath.Join(projectPath, config.DirName, config.ConfigFile))
+	return err == nil
 }
 
 func NewDbEngine(projectPath string) (*DbEngine, error) {
@@ -128,10 +139,24 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 		return nil, err
 	}
 
+	// La config se carga ACÁ, antes de construir el engine, porque el outbox necesita saber si
+	// este nodo tiene destino de sync ANTES de sembrarse (ver más abajo). Un error de lectura no
+	// es fatal: config.Load devuelve defaults y el engine abre igual.
+	cfg, _ := config.Load(projectPath)
+
 	// outboxEnabled arranca en true: encolar es el comportamiento de siempre y el de todo cliente.
-	// Sólo el CENTRAL lo apaga (ver SetOutboxEnabled) — el cero de un bool es false, así que esto
-	// tiene que ser explícito o ningún cliente encolaría nada.
-	engine := &DbEngine{db: db, path: dbPath, outboxEnabled: true}
+	// El cero de un bool es false, así que esto tiene que ser explícito o ningún cliente encolaría.
+	//
+	// Con un config.yaml en el disco, la config MANDA: si declara que no hay destino de sync, este
+	// nodo es TERMINAL y no encola. Sin config.yaml no hay política declarada (el caso de un engine
+	// de test sobre un TempDir), así que se mantiene el default histórico. Esto cierra el agujero de
+	// los comandos CLI: `serve` y `daemon` fijaban el gate a mano después de abrir, pero `capture`,
+	// `ingest` y `turn` nunca lo hacían y encolaban en el central una fila muerta por captura.
+	outbox := true
+	if configPresente(projectPath) {
+		outbox = cfg.Sync.HasDestination()
+	}
+	engine := &DbEngine{db: db, path: dbPath, outboxEnabled: outbox}
 	// Aplicar los divisores de tokens calibrados de esta DB (o defaults) ANTES de
 	// backfillear/recomputar, para que los tokens se calculen con el divisor activo.
 	if err := engine.applyCalibratedDivisors(); err != nil {
@@ -153,10 +178,21 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	// fila (las creadas en F1 antes de que existiera el outbox, o promovidas con el sync
 	// apagado). Best-effort: un fallo acá NO es fatal (igual que el backfill de digests): la
 	// DB sigue usable y el próximo arranque reintenta; a lo sumo se demora una sincronización.
-	if seeded, bErr := engine.BackfillOutbox(); bErr != nil {
-		logx.Warn("no se pudo sembrar el outbox al abrir la base", "error", bErr)
-	} else if seeded > 0 {
-		logx.Info("outbox sembrado con observaciones compartidas preexistentes", "sembradas", seeded)
+	//
+	// SÓLO si hay destino. Sin esta guarda, la siembra le ganaba la pulseada a la purga del
+	// arranque en el nodo TERMINAL: medido en el cerebro central el 2026-08-12, el arranque
+	// purgó 1.401 filas huérfanas y 39 segundos después estaban las 1.409 de vuelta, porque
+	// BackfillOutbox corre en CADA apertura de la base y no miraba la config. La purga vivía
+	// segundos y `sync_status` quedaba mintiendo para siempre.
+	//
+	// No se pierde intención: cuando el nodo GANE un destino, la próxima apertura siembra todo
+	// lo acumulado — para eso existe esta función. La guarda sólo evita sembrar hacia la nada.
+	if engine.outboxEnabled {
+		if seeded, bErr := engine.BackfillOutbox(); bErr != nil {
+			logx.Warn("no se pudo sembrar el outbox al abrir la base", "error", bErr)
+		} else if seeded > 0 {
+			logx.Info("outbox sembrado con observaciones compartidas preexistentes", "sembradas", seeded)
+		}
 	}
 
 	// Índice vectorial IVF para búsqueda semántica a escala (T1.2). Se configura
@@ -164,7 +200,6 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	// reconstruible desde SQLite; si ya hay suficientes embeddings se entrena en
 	// segundo plano para no demorar el arranque (las búsquedas caen al full-scan
 	// exacto hasta que esté listo).
-	cfg, _ := config.Load(projectPath)
 	engine.vindexCfg = cfg.VectorIndex
 	if engine.vindexCfg.Enabled {
 		engine.index = newIVFIndex()

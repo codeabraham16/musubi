@@ -19,6 +19,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   se verificó que el hallazgo NO estuviera ya en la memoria — no estaba, sólo vivía acá, así que
   borrar primero habría perdido el contenido y no sólo el archivo.
 
+### Fixed
+- **El outbox del cerebro central deja de resembrarse solo, y con eso `sync_status` vuelve a decir
+  la verdad.** Estaba anotado como una alarma inherente del nodo terminal — "encola y nunca drena,
+  no te preocupes". Es cierto en el efecto y falso en la causa. El journal del arranque del
+  2026-08-12 lo muestra entero: `purgadas 1401 fila(s) 'shared' pendientes huérfanas`, y **39
+  segundos después estaban las 1.409 de vuelta**, con `attempts=0` y sin error. No eran reintentos:
+  eran filas nuevas.
+
+  Eran dos piezas peleándose. `reconcileOutboxOnStartup` purga bien, pero `BackfillOutbox` corre en
+  **cada apertura de la base** —no sólo al arrancar el servicio— y no miraba la config; en el server
+  hay un timer que abre la base cada 30 minutos. La purga vivía segundos.
+
+  Debajo había una discrepancia más vieja: la purga preguntaba por el DESTINO
+  (`!Enabled || CentralURL == ""`) y el gate del encolado preguntaba por la INTENCIÓN (`Enabled`).
+  Un nodo con `enabled: true` y sin `central_url` caía justo en la grieta. Ahora las dos pasan por
+  `config.SyncConfig.HasDestination()`, y `NewDbEngine` lo deriva de la config en vez de esperar a
+  que el entrypoint lo fije a mano — que es lo que dejaba afuera a los comandos CLI (`capture`,
+  `ingest`, `turn`), los únicos que seguían encolando una fila muerta por captura.
+
+  No se pierde intención durable: cuando un nodo GANA un destino, la próxima apertura siembra todo
+  lo acumulado, que es exactamente para lo que existe `BackfillOutbox`. Hay un test que lo prueba, y
+  los cuatro tests nuevos se verificaron rompiendo el arreglo de cuatro maneras distintas — incluida
+  la guarda pasada de rosca, que sí sería pérdida de datos. Un workspace sin `config.yaml` conserva
+  el default histórico de encolar.
+
 ### Added
 - **El grafo de código ahora habla antes de que escribas, que es cuando importa.** `musubi_impact`
   contesta "¿qué se rompe si cambio esto?" desde Track 20 y **nunca la contestó**: cero invocaciones

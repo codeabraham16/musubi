@@ -273,7 +273,7 @@ func runServe(args []string) {
 	// observación ingerida (nunca drenaban: el drain de abajo ni arranca sin sync), y hacía que
 	// `sync_status` contra el cerebro reportara miles de "pendientes de envío" — una señal de
 	// salud que MIENTE. Con sync configurado (un central encadenado a otro), encola normal.
-	engine.SetOutboxEnabled(cfg.Sync.Enabled)
+	engine.SetOutboxEnabled(cfg.Sync.HasDestination())
 
 	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -376,7 +376,7 @@ func runDaemon() {
 	// daemon stdio encola 'shared' incondicionalmente (default true) y, con el sync apagado, esas
 	// filas se apilan sin que el drain (que ni arranca sin sync) las toque → pending INMORTALES que
 	// envejecen en silencio. Debe fijarse antes de servir pedidos (server.Start()).
-	engine.SetOutboxEnabled(cfg.Sync.Enabled)
+	engine.SetOutboxEnabled(cfg.Sync.HasDestination())
 	// Conciliar el outbox con la config: purga huérfanas de un nodo terminal / avisa de un backlog
 	// real, ANTES de arrancar el drain (ver reconcileOutboxOnStartup).
 	reconcileOutboxOnStartup(engine, cfg.Sync)
@@ -434,7 +434,7 @@ func reconcileOutboxOnStartup(engine *memory.DbEngine, sync config.SyncConfig) {
 	if err != nil || pending == 0 {
 		return
 	}
-	if !sync.Enabled || strings.TrimSpace(sync.CentralURL) == "" {
+	if !sync.HasDestination() {
 		n, perr := engine.PurgeOutboxPending()
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "musubi: no se pudieron purgar %d fila(s) huérfanas del outbox: %v\n", pending, perr)
