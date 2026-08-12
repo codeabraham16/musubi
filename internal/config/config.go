@@ -481,6 +481,18 @@ type SyncConfig struct {
 	AllowInsecureToken bool `yaml:"allow_insecure_token"`
 }
 
+// HasDestination responde la ÚNICA pregunta que importa para el outbox: ¿este nodo tiene a
+// dónde empujar? Existe porque la respuesta se venía calculando de dos maneras distintas, y
+// esa discrepancia le costó al cerebro central una métrica de salud entera.
+//
+// El arranque purgaba las filas huérfanas con `!Enabled || CentralURL == ""` (bien: mide el
+// DESTINO), mientras que el gate del encolado miraba sólo `Enabled` (mal: mide la INTENCIÓN).
+// Un nodo con `enabled: true` y sin `central_url` caía en la grieta: encolaba sin destino y
+// después se purgaba a sí mismo. Con un solo predicado los tres lugares no pueden discrepar.
+func (s SyncConfig) HasDestination() bool {
+	return s.Enabled && strings.TrimSpace(s.CentralURL) != ""
+}
+
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.
 type UpdateConfig struct {
 	// CheckIntervalHours es cada cuántas horas el daemon chequea si hay una
