@@ -574,8 +574,13 @@ func (e *DbEngine) conflictCandidates(src obsRow, srcVec []float32, limit int) (
 
 // lexicalConflictCandidates es el pool por FTS de siempre: excluye la propia, las archivadas y las
 // ya superseded.
+//
+// Usa buildFTSQueryDeDocumento y NO buildFTSQueryRanked: acá la "consulta" es la observación
+// entera, que es el único lugar del código donde a ese builder se le pasaba un documento en vez de
+// unas pocas palabras. Ahí estaba el 96-99 % del costo de guardar (ver el comentario del builder,
+// con la medición). Los otros dos callers reciben consultas cortas y siguen como estaban.
 func (e *DbEngine) lexicalConflictCandidates(src obsRow, limit int) ([]obsRow, error) {
-	ftsQuery := buildFTSQueryRanked(src.content)
+	ftsQuery := buildFTSQueryDeDocumento(src.content)
 	if ftsQuery == "" {
 		return nil, nil
 	}

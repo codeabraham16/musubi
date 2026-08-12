@@ -841,6 +841,82 @@ func buildFTSQueryRanked(q string) string {
 	return strings.Join(out, " OR ")
 }
 
+// topeTerminosDeDocumento acota cuántos términos DISTINTOS entran al MATCH cuando lo que se busca
+// es el parecido a un documento entero. Queda por debajo del pool de candidatas (50 por defecto) a
+// propósito: el objetivo es traer las mejores 50, no todas las que existan.
+const topeTerminosDeDocumento = 48
+
+// buildFTSQueryDeDocumento arma el MATCH del pool léxico cuando la "consulta" es UN DOCUMENTO
+// ENTERO y no una pregunta. Es otro problema, y por eso tiene su propio builder.
+//
+// ── POR QUÉ NO ALCANZA CON buildFTSQueryRanked ─────────────────────────────────────────────
+// Aquél se escribió para consultas —unas pocas palabras— y hace dos cosas que en un documento
+// salen caras: conserva los DUPLICADOS y no tiene tope. Una nota de 18.000 caracteres produce
+// miles de términos, con el mismo repitiéndose decenas de veces, y todos terminan OR-eados en un
+// único MATCH.
+//
+// Medido el 2026-08-12 contra la base real (1.372 observaciones), el pool léxico del detector de
+// conflictos costaba:
+//
+//	   500 caracteres →    24,6 ms        8.000 caracteres →   746,9 ms
+//	 1.500 caracteres →    78,2 ms       18.000 caracteres → 2.504,8 ms
+//	 3.500 caracteres →   230,6 ms
+//
+// 36 veces más largo costaba 102 veces más tiempo: SUPERLINEAL. Y como el detector corre en CADA
+// guardado, eso era el 96-99 % del costo de guardar una observación, contra 4-8 ms de persistir la
+// fila. La nota larga —la que vale la pena guardar— era la que más se castigaba.
+//
+// ── POR QUÉ NO PIERDE NADA ─────────────────────────────────────────────────────────────────
+// Dos razones, y la segunda es la que manda:
+//
+//  1. `"x" OR "x"` es idénticamente `"x"`. Deduplicar no cambia qué matchea; sólo saca trabajo.
+//  2. Las cinco mediciones de arriba devolvieron EXACTAMENTE 50 candidatas, el tope del pool. Los
+//     cientos de términos extra no traían ni una candidata más: sólo cambiaban cuáles, y sin
+//     criterio, porque el orden era el del documento. Ahora el criterio es explícito — se quedan
+//     los términos que MÁS SE REPITEN en la nota, que es de lo que la nota habla.
+//
+// Los empates por frecuencia se rompen por primera aparición, para que dos guardados del mismo
+// texto den exactamente el mismo pool.
+func buildFTSQueryDeDocumento(doc string) string {
+	terms := rankedTerms(doc)
+	if len(terms) == 0 {
+		return ""
+	}
+
+	type dato struct {
+		veces   int
+		primera int
+	}
+	vistos := make(map[string]*dato, len(terms))
+	orden := make([]string, 0, len(terms))
+	for i, t := range terms {
+		k := strings.ToLower(t)
+		if d, ok := vistos[k]; ok {
+			d.veces++
+			continue
+		}
+		vistos[k] = &dato{veces: 1, primera: i}
+		orden = append(orden, k)
+	}
+
+	sort.SliceStable(orden, func(a, b int) bool {
+		da, db := vistos[orden[a]], vistos[orden[b]]
+		if da.veces != db.veces {
+			return da.veces > db.veces
+		}
+		return da.primera < db.primera
+	})
+	if len(orden) > topeTerminosDeDocumento {
+		orden = orden[:topeTerminosDeDocumento]
+	}
+
+	out := make([]string, 0, len(orden))
+	for _, t := range orden {
+		out = append(out, `"`+t+`"`)
+	}
+	return strings.Join(out, " OR ")
+}
+
 // buildFTSQueryRankedPrefix combina el filtrado de ruido (rankedTerms) con el match por
 // PREFIJO de la raíz (stemForPrefix): '"stem"*' OR ... — evita que un stopword, como prefijo,
 // matchee medio corpus. Es el builder del recall por turno con stemming. Vacío ⇒ "".
