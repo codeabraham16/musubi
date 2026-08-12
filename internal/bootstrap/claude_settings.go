@@ -29,7 +29,14 @@ type hookEntry struct {
 // .claude/settings.json. Preserva otros eventos, hooks, matchers y claves de
 // nivel superior. matcher define cuándo dispara (ej. "startup"; "" para eventos
 // sin matcher como UserPromptSubmit). No duplica el hook de Musubi si su Command
-// ya está presente en alguna entrada del mismo evento.
+// ya está presente EN EL MISMO MATCHER del mismo evento.
+//
+// La unidad de deduplicación es el PAR (matcher, comando), no el comando solo. Antes era el
+// comando solo, y eso volvía imposible una cosa que resultó necesaria: el mismo binario atado a
+// dos matchers del mismo evento. `precheck --hook-mode` va en PreToolUse tanto para "Read" —donde
+// devuelve el gist y la estructura— como para las tools que escriben, donde devuelve el radio de
+// impacto; el binario distingue por `tool_name`. Con el criterio viejo el segundo registro se
+// descartaba en silencio como "idéntico" y el hook de edición no se instalaba nunca.
 func MergeClaudeSettings(existing []byte, event, matcher string, hook HookCommand) ([]byte, error) {
 	// Paso 1: parsear el root en un mapa de RawMessage para preservar claves desconocidas.
 	root := map[string]json.RawMessage{}
@@ -55,12 +62,17 @@ func MergeClaudeSettings(existing []byte, event, matcher string, hook HookComman
 		}
 	}
 
-	// Paso 4: dedup por FIRMA (el subcomando, ignorando la ruta del ejecutable).
-	// - Si ya existe un hook con la misma firma y Command idéntico -> idempotente.
-	// - Si existe con la misma firma pero distinta ruta -> reemplazar (evita dejar
-	//   un hook duplicado apuntando a un binario viejo al re-instalar/mover).
+	// Paso 4: dedup por (MATCHER, FIRMA), donde la firma es el subcomando ignorando la ruta del
+	// ejecutable.
+	// - Si ya existe en ESTE matcher un hook con la misma firma y Command idéntico -> idempotente.
+	// - Si existe en ESTE matcher con la misma firma pero distinta ruta -> reemplazar (evita dejar
+	//   un hook apuntando a un binario viejo al re-instalar o mover el ejecutable).
+	// Las entradas de OTROS matchers no se miran: el mismo comando en otro matcher es otro hook.
 	sig := hookSignature(hook.Command)
 	for i := range entries {
+		if entries[i].Matcher != matcher {
+			continue
+		}
 		for j := range entries[i].Hooks {
 			if hookSignature(entries[i].Hooks[j].Command) != sig {
 				continue

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/memory"
 )
 
@@ -32,6 +33,39 @@ func (f *fakeCodeStore) GraphOutEdgesCtx(_ context.Context, fromKey string) ([]m
 }
 func (f *fakeCodeStore) GraphInEdgesCtx(_ context.Context, toKey string) ([]memory.GraphEdge, error) {
 	return f.inEdges[toKey], nil
+}
+
+// GraphImpactCtx recorre las aristas CALLS entrantes hacia atrás, con las mismas cotas que el
+// motor real, para que el radio de impacto se pruebe contra la MISMA forma de dato y no contra una
+// lista inventada — si el fake devolviera cualquier cosa, el test no diría nada del cierre.
+func (f *fakeCodeStore) GraphImpactCtx(_ context.Context, key string, maxDepth, maxNodes int) ([]string, error) {
+	if maxDepth <= 0 {
+		maxDepth = 5
+	}
+	if maxNodes <= 0 {
+		maxNodes = 200
+	}
+	visto := map[string]bool{key: true}
+	var orden []string
+	frontera := []string{key}
+	for d := 0; d < maxDepth && len(frontera) > 0 && len(orden) < maxNodes; d++ {
+		var sig []string
+		for _, k := range frontera {
+			for _, e := range f.inEdges[k] {
+				if e.Kind != codeintel.EdgeCalls || visto[e.FromKey] {
+					continue
+				}
+				visto[e.FromKey] = true
+				orden = append(orden, e.FromKey)
+				sig = append(sig, e.FromKey)
+				if len(orden) >= maxNodes {
+					return orden, nil
+				}
+			}
+		}
+		frontera = sig
+	}
+	return orden, nil
 }
 
 func (f *fakeCodeStore) GetCodeMemory(path string) (memory.CodeMemory, bool, error) {
