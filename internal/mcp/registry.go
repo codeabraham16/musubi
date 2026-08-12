@@ -918,12 +918,13 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_codegraph_push",
-				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas) que un proyecto empuja tras indexar y REEMPLAZA el grafo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), project_id (opcional, sólo lo respeta write=any).",
+				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"nodes":      {Type: "array", Description: "nodos del grafo de código a federar", Items: &Property{Type: "object"}},
 						"edges":      {Type: "array", Description: "aristas del grafo de código a federar", Items: &Property{Type: "object"}},
+						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada", Items: &Property{Type: "object"}},
 						"project_id": {Type: "string", Description: "proyecto destino (opcional; sólo lo respeta una credencial write=any; un write=own usa siempre el suyo)"},
 					},
 					Required: []string{"nodes", "edges"},

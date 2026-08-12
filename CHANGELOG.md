@@ -44,6 +44,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   la guarda pasada de rosca, que sí sería pérdida de datos. Un workspace sin `config.yaml` conserva
   el default histórico de encolar.
 
+- **Los gists de código ahora federan: el central tenía la estructura y ninguno de los titulares.**
+  Medido en el cerebro central el 2026-08-12: **4.862 nodos y 10.100 aristas** federados contra
+  **cero** filas en `code_memory`. `musubi_codegraph_push` llevaba nodos y aristas desde Track 20 ·
+  F6 y nunca llevó los gists, así que `musubi_recall_code` contra el cerebro compartido no tenía
+  nada que devolver — y ésa es justamente la única vía al gist en un proyecto que no tiene hooks.
+
+  El campo `gists` se lee como **puntero**, y no es un detalle: en un protocolo de reemplazo,
+  "no mandé gists" y "no tengo gists" no significan lo mismo. Omitir la clave deja intacto lo
+  guardado (así un cliente viejo empujando el mismo proyecto desde otra máquina no le borra los
+  gists a uno nuevo); mandarla vacía sí reemplaza. Del lado del emisor, si falla la lectura local
+  se aborta el push entero en vez de mandar una lista vacía, que el central leería como un borrado.
+
+  Aislamiento por tenant igual que el grafo: el `DELETE` del reemplazo está scopeado por
+  `project_id` y la atribución sale del principal, no del payload. Los cuatro tests se verificaron
+  rompiendo el arreglo de cuatro maneras, incluidas las dos que serían pérdida de datos.
+
 ### Added
 - **El grafo de código ahora habla antes de que escribas, que es cuando importa.** `musubi_impact`
   contesta "¿qué se rompe si cambio esto?" desde Track 20 y **nunca la contestó**: cero invocaciones

@@ -123,6 +123,13 @@ type CodeMemoryStore interface {
 	GetCodeMemory(path string) (CodeMemory, bool, error)
 	// GetCodeMemoryCtx acota al proyecto de la credencial (ctx, Track 17 — aislamiento).
 	GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemory, bool, error)
+	// AllCodeMemoryCtx / ReplaceProjectCodeMemoryFrom son las dos mitades de la federación de
+	// gists: la primera los vuelca para empujarlos con el grafo, la segunda los recibe en el
+	// central. Espejan a AllGraphNodesCtx / ReplaceProjectGraphFrom del CodeGraphStore, que ya
+	// existían — los gists eran la mitad que faltaba, y por eso el central tenía miles de nodos
+	// y cero titulares.
+	AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error)
+	ReplaceProjectCodeMemoryFrom(originProjectID string, gists []CodeMemory) error
 }
 
 // CodeGraphStore — grafo de código derivado del AST (Track 20 · F1): nodos + aristas tipadas,

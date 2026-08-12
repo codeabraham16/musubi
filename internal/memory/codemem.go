@@ -86,3 +86,78 @@ func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemor
 	}
 	return cm, true, nil
 }
+
+// AllCodeMemoryCtx devuelve TODOS los gists del proyecto de la credencial, para el push-on-index
+// de la federación (Track 20 · F6). Es la contraparte de AllGraphNodesCtx/AllGraphEdgesCtx: hasta
+// que existió, el push llevaba nodos y aristas pero NO los gists, y el central quedaba con
+// code_memory en CERO — medido el 2026-08-12: 4.862 nodos federados contra 0 gists. Con el central
+// vacío, `musubi_recall_code` contra el cerebro compartido no tenía nada que devolver, que es
+// justamente la única vía al gist donde el proyecto no tiene hooks.
+func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
+	sc := projectScopeFrom(ctx)
+	var rows *sql.Rows
+	var err error
+	if sc.Federate || sc.ProjectID == "" {
+		rows, err = e.db.QueryContext(ctx,
+			`SELECT path, gist, COALESCE(symbols,''), COALESCE(fingerprint,''), tokens
+			 FROM code_memory ORDER BY path`)
+	} else {
+		rows, err = e.db.QueryContext(ctx,
+			`SELECT path, gist, COALESCE(symbols,''), COALESCE(fingerprint,''), tokens
+			 FROM code_memory WHERE project_id = ? OR project_id = '' ORDER BY path`, sc.ProjectID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error al listar memoria de código: %w", err)
+	}
+	defer rows.Close()
+	out := []CodeMemory{}
+	for rows.Next() {
+		var cm CodeMemory
+		if err := rows.Scan(&cm.Path, &cm.Gist, &cm.Symbols, &cm.Fingerprint, &cm.Tokens); err != nil {
+			return nil, fmt.Errorf("error al leer fila de memoria de código: %w", err)
+		}
+		out = append(out, cm)
+	}
+	return out, rows.Err()
+}
+
+// ReplaceProjectCodeMemoryFrom REEMPLAZA los gists de un proyecto, igual que ReplaceProjectGraphFrom
+// hace con nodos y aristas: en UNA transacción borra los del origin_project_id y reinserta el set
+// empujado. Así el push es idempotente y aislado por tenant — el DELETE nunca toca otro project_id.
+// origin == "" ⇒ project_id del engine. Un gist sin path o sin contenido se saltea en silencio: no
+// vale abortar la federación entera por una fila mal formada del emisor.
+func (e *DbEngine) ReplaceProjectCodeMemoryFrom(originProjectID string, gists []CodeMemory) error {
+	projectID := originProjectID
+	if projectID == "" {
+		projectID = e.projectID
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al iniciar transacción de reemplazo de gists: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM code_memory WHERE project_id=?`, projectID); err != nil {
+		return fmt.Errorf("error al limpiar gists del proyecto %q: %w", projectID, err)
+	}
+	for _, cm := range gists {
+		if cm.Path == "" || cm.Gist == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO code_memory (path, gist, symbols, fingerprint, tokens, project_id, updated_at)
+			 VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)
+			 ON CONFLICT(path, project_id) DO UPDATE SET
+			   gist=excluded.gist, symbols=excluded.symbols,
+			   fingerprint=excluded.fingerprint, tokens=excluded.tokens,
+			   updated_at=CURRENT_TIMESTAMP`,
+			cm.Path, cm.Gist, cm.Symbols, cm.Fingerprint, cm.Tokens, projectID,
+		); err != nil {
+			return fmt.Errorf("error al guardar gist de %s: %w", cm.Path, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear el reemplazo de gists: %w", err)
+	}
+	return nil
+}
