@@ -93,18 +93,42 @@ func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemor
 // code_memory en CERO — medido el 2026-08-12: 4.862 nodos federados contra 0 gists. Con el central
 // vacío, `musubi_recall_code` contra el cerebro compartido no tenía nada que devolver, que es
 // justamente la única vía al gist donde el proyecto no tiene hooks.
+//
+// DEVUELVE UN SOLO GIST POR PATH, prefiriendo el del proyecto sobre el sin atribuir — la misma
+// regla de desempate que ya usa GetCodeMemoryCtx. Hace falta porque la tabla admite las dos filas
+// (la PK es (path, project_id)) y en una base real conviven: los gists anteriores a la atribución
+// multi-tenant quedaron con project_id='' y el mismo archivo volvió a gistearse después con el
+// suyo. Medido en altura-erp el 2026-08-12: 25 filas locales, 23 paths distintos, 2 duplicados
+// con el viejo de junio y el nuevo de julio.
+//
+// Sin el desempate explícito los dos se mandaban y ganaba el ÚLTIMO que insertara el receptor
+// (ON CONFLICT DO UPDATE), con el orden entre filas de igual path sin definir. En la prueba real
+// ganó el correcto, pero por casualidad: bastaba un VACUUM o un plan de consulta distinto para
+// federar el gist rancio. Un empate que se resuelve solo hoy es un bug que aparece mañana.
 func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
 	sc := projectScopeFrom(ctx)
 	var rows *sql.Rows
 	var err error
 	if sc.Federate || sc.ProjectID == "" {
+		// Sin scope no hay proyecto que preferir: se desempata por el más recientemente tocado.
 		rows, err = e.db.QueryContext(ctx,
-			`SELECT path, gist, COALESCE(symbols,''), COALESCE(fingerprint,''), tokens
-			 FROM code_memory ORDER BY path`)
+			`SELECT path, gist, symbols, fingerprint, tokens FROM (
+			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
+			          COALESCE(fingerprint,'') AS fingerprint, tokens,
+			          ROW_NUMBER() OVER (PARTITION BY path ORDER BY updated_at DESC) AS rn
+			   FROM code_memory
+			 ) WHERE rn = 1 ORDER BY path`)
 	} else {
 		rows, err = e.db.QueryContext(ctx,
-			`SELECT path, gist, COALESCE(symbols,''), COALESCE(fingerprint,''), tokens
-			 FROM code_memory WHERE project_id = ? OR project_id = '' ORDER BY path`, sc.ProjectID)
+			`SELECT path, gist, symbols, fingerprint, tokens FROM (
+			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
+			          COALESCE(fingerprint,'') AS fingerprint, tokens,
+			          ROW_NUMBER() OVER (
+			            PARTITION BY path
+			            ORDER BY (project_id = ?) DESC, updated_at DESC
+			          ) AS rn
+			   FROM code_memory WHERE project_id = ? OR project_id = ''
+			 ) WHERE rn = 1 ORDER BY path`, sc.ProjectID, sc.ProjectID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error al listar memoria de código: %w", err)

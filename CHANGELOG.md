@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Al federar los gists, gana el del proyecto y no el sin atribuir.** Encontrado verificando el
+  deploy de la federación (#301), no en review: el cliente reportó `gists=25` y en el central
+  aterrizaron **23**. La diferencia no era una pérdida — la tabla admite dos gists del mismo
+  archivo, porque la PK es `(path, project_id)`, y en altura-erp conviven los anteriores a la
+  atribución multi-tenant (`project_id=''`, de junio) con los que se volvieron a gistear después
+  con el suyo (de julio). Dos paths estaban duplicados, y al federarlos colapsaban en uno.
+
+  El problema era **cuál** de los dos ganaba: se mandaban los dos y se quedaba el último que
+  insertara el receptor, con el orden entre filas de igual path sin definir. En la corrida real
+  ganó el correcto, pero por casualidad — bastaba un `VACUUM` o un plan de consulta distinto para
+  federar el gist rancio de junio. El sabotaje lo confirma: sin la regla explícita gana el viejo.
+
+  Ahora `AllCodeMemoryCtx` devuelve **un solo gist por path**, prefiriendo el del proyecto sobre el
+  sin atribuir y, a igualdad, el más recientemente tocado — la misma regla de desempate que
+  `GetCodeMemoryCtx` ya usaba para las lecturas de a uno. Un empate que se resuelve solo hoy es un
+  bug que aparece mañana.
+
 ### Removed
 - **`docs/propuesta-tenancy-gio.md` sale del repo: describía accesos y trabajo ajeno en un repo
   PÚBLICO.** No tenía secretos ni tokens, pero publicaba el mapa de capacidades del cerebro central
