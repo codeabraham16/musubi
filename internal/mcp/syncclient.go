@@ -165,7 +165,16 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 // atribuye por el principal del token (un write=own lo ignoraría igual, y no asertar proyecto es lo
 // más seguro). Devuelve error clasificado (transitorio/permanente) como el resto del sync; el caller
 // (pushCodeGraphToCentral) lo trata best-effort y no rompe el index.
-func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge) error {
+//
+// Lleva nodos, aristas y GISTS. Los gists se sumaron el 2026-08-12: hasta entonces el push
+// federaba sólo la estructura y el central quedaba con `code_memory` en CERO (medido: 4.862 nodos
+// contra 0 gists), así que `musubi_recall_code` contra el cerebro compartido no tenía nada que
+// devolver. El campo va SIEMPRE, aunque esté vacío — es lo que le dice al receptor "reemplazá los
+// míos"; un central viejo ignora la clave desconocida y se comporta como antes.
+func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
+	if gists == nil {
+		gists = []memory.CodeMemory{}
+	}
 	reqBody := struct {
 		JsonRpc string `json:"jsonrpc"`
 		ID      string `json:"id"`
@@ -173,14 +182,16 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 		Params  struct {
 			Name      string `json:"name"`
 			Arguments struct {
-				Nodes []memory.GraphNode `json:"nodes"`
-				Edges []memory.GraphEdge `json:"edges"`
+				Nodes []memory.GraphNode  `json:"nodes"`
+				Edges []memory.GraphEdge  `json:"edges"`
+				Gists []memory.CodeMemory `json:"gists"`
 			} `json:"arguments"`
 		} `json:"params"`
 	}{JsonRpc: "2.0", ID: "codegraph-push", Method: "tools/call"}
 	reqBody.Params.Name = "musubi_codegraph_push"
 	reqBody.Params.Arguments.Nodes = nodes
 	reqBody.Params.Arguments.Edges = edges
+	reqBody.Params.Arguments.Gists = gists
 
 	payload, err := json.Marshal(reqBody)
 	if err != nil {

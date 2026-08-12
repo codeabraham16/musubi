@@ -322,11 +322,23 @@ func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok b
 		logx.Error("federación del grafo: no se pudieron leer las aristas locales", "error", err)
 		return true, false
 	}
-	if err := s.syncClient.PushGraph(nodes, edges); err != nil {
+	// Los GISTS viajan con el grafo. Sin esto el central se quedaba con la estructura y sin los
+	// titulares: 4.862 nodos federados contra 0 filas en code_memory, medido el 2026-08-12.
+	//
+	// Si leerlos falla se ABORTA el push entero, y es a propósito: el protocolo es de REEMPLAZO,
+	// así que mandar la lista vacía no significa "no pude leerlos" sino "borrá todos los míos".
+	// Ante una lectura fallida, no federar nada es lo único seguro — el grafo local ya quedó bien
+	// y el próximo index reintenta.
+	gists, err := s.engine.AllCodeMemoryCtx(scoped)
+	if err != nil {
+		logx.Error("federación del grafo: no se pudieron leer los gists locales (se aborta el push para no borrar los del central)", "error", err)
+		return true, false
+	}
+	if err := s.syncClient.PushGraph(nodes, edges, gists); err != nil {
 		logx.Error("federación del grafo: el push al central falló (best-effort, no rompe el index)", "error", err)
 		return true, false
 	}
-	logx.Info("federación del grafo: empujado al central", "nodes", len(nodes), "edges", len(edges))
+	logx.Info("federación del grafo: empujado al central", "nodes", len(nodes), "edges", len(edges), "gists", len(gists))
 	return true, true
 }
 
@@ -341,6 +353,12 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		Nodes     []memory.GraphNode `json:"nodes"`
 		Edges     []memory.GraphEdge `json:"edges"`
 		ProjectID string             `json:"project_id"`
+		// Gists es PUNTERO a propósito: acá la ausencia y el vacío significan cosas distintas.
+		// nil ⇒ el emisor no habla de gists (un cliente viejo, anterior a que el push los
+		// llevara) ⇒ no se toca lo que ya haya en el central. Lista vacía ⇒ el emisor SÍ habla
+		// y dice que no tiene ninguno ⇒ se reemplaza por vacío. Sin esta distinción, un cliente
+		// viejo empujando el mismo proyecto desde otra máquina le borraría los gists a uno nuevo.
+		Gists *[]memory.CodeMemory `json:"gists"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -352,7 +370,14 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	if err := s.engine.ReplaceProjectGraphFrom(origin, args.Nodes, args.Edges); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al persistir el grafo federado: %v", err)
 	}
-	return jsonResult(map[string]interface{}{"nodes": len(args.Nodes), "edges": len(args.Edges)})
+	res := map[string]interface{}{"nodes": len(args.Nodes), "edges": len(args.Edges)}
+	if args.Gists != nil {
+		if err := s.engine.ReplaceProjectCodeMemoryFrom(origin, *args.Gists); err != nil {
+			return nil, rpcErrorf(codeInternalError, "error al persistir los gists federados: %v", err)
+		}
+		res["gists"] = len(*args.Gists)
+	}
+	return jsonResult(res)
 }
 
 func (s *McpServer) toolCodeGraph(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
