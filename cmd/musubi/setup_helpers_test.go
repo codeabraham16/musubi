@@ -83,6 +83,32 @@ func TestWriteCodeMemoryHookRegistraPrecheck(t *testing.T) {
 	if !strings.Contains(s, "precheck") || !strings.Contains(s, "PreToolUse") {
 		t.Errorf("settings.json no registró el hook precheck/PreToolUse: %s", s)
 	}
+	// LOS DOS matchers. Sin el de edición el radio de impacto no se dispara nunca, y el binario
+	// puede saber calcularlo perfectamente: si Claude Code no lo llama, no existe. Chequear sólo
+	// "precheck" dejaba pasar exactamente ese caso.
+	for _, matcher := range []string{`"Read"`, `"` + matcherEdicion + `"`} {
+		if !strings.Contains(s, matcher) {
+			t.Errorf("falta el matcher %s en settings.json: %s", matcher, s)
+		}
+	}
+}
+
+// Correr setup dos veces no debe duplicar los hooks: se ejecuta en cada `musubi setup` y en cada
+// `provision`, y un settings.json con el mismo comando repetido lo corre repetido.
+func TestWriteCodeMemoryHookEsIdempotente(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 3; i++ {
+		if err := writeCodeMemoryHook(root, "/ruta/musubi"); err != nil {
+			t.Fatalf("pasada %d: %v", i, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, config.ClaudeDir, config.ClaudeSettingsFile))
+	if err != nil {
+		t.Fatalf("esperaba settings.json: %v", err)
+	}
+	if n := strings.Count(string(data), "precheck --hook-mode"); n != 2 {
+		t.Errorf("esperaba el comando exactamente 2 veces (un matcher de lectura y uno de edición), lo encontré %d: %s", n, data)
+	}
 }
 
 func TestWorkspaceDirHonraMusubiHome(t *testing.T) {

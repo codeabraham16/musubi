@@ -203,7 +203,7 @@ func setupProjectWith(exeOverride, agent string) {
 			printOK("Hook UserPromptSubmit en .claude/settings.json (loop dirigido: contexto por turno)")
 		}
 		if err := writeCodeMemoryHook(root, exePath); err != nil {
-			printWarn(fmt.Sprintf("No se pudo registrar el hook PreToolUse(Read): %v", err))
+			printWarn(fmt.Sprintf("No se pudo registrar el hook PreToolUse (Read + edición): %v", err))
 		} else {
 			printOK("Hook PreToolUse(Read) en .claude/settings.json (memoria de código: gist antes de leer)")
 		}
@@ -331,10 +331,23 @@ func writeTurnHook(root, exePath string) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
-// writeCodeMemoryHook inyecta (idempotente) el hook PreToolUse con matcher "Read"
-// en {root}/.claude/settings.json: antes de cada lectura de archivo, Musubi
-// surface el gist en memoria de código (o recuerda guardarlo). Hace automático el
-// uso de la memoria de código sin que el agente deba acordarse.
+// matcherEdicion son las tools que ESCRIBEN un archivo. Van en su propio matcher de PreToolUse
+// porque antes de escribir el hook contesta otra cosa que antes de leer: el radio de impacto
+// ("¿quién depende de esto?") en vez de la estructura y el gist.
+const matcherEdicion = "Edit|Write|MultiEdit|NotebookEdit"
+
+// writeCodeMemoryHook inyecta (idempotente) el hook PreToolUse en
+// {root}/.claude/settings.json, con DOS matchers y el mismo comando:
+//
+//   - "Read"  — antes de leer: el gist en memoria de código (o el recordatorio de guardarlo) y,
+//     con el opt-in, la estructura del archivo sacada del grafo.
+//   - edición — antes de escribir: el RADIO DE IMPACTO, qué símbolos del archivo tienen callers y
+//     cuántos arrastra el cierre transitivo.
+//
+// Son dos matchers y no uno solo porque Claude Code decide POR MATCHER a quién llamar; el binario
+// después distingue por `tool_name`. Hace automático el uso del grafo sin que el agente deba
+// acordarse, que es exactamente lo que no pasaba: con 3.771 símbolos indexados en este repo,
+// musubi_impact llevaba CERO invocaciones en 400 días de ledger.
 func writeCodeMemoryHook(root, exePath string) error {
 	claudeDir := filepath.Join(root, config.ClaudeDir)
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {
@@ -350,9 +363,12 @@ func writeCodeMemoryHook(root, exePath string) error {
 		Command: hookExeCommand(exePath, "precheck --hook-mode"),
 		Timeout: 10,
 	}
-	merged, err := bootstrap.MergeClaudeSettings(existing, "PreToolUse", "Read", hook)
-	if err != nil {
-		return fmt.Errorf("error al mergear settings.json: %w", err)
+	merged := existing
+	for _, matcher := range []string{"Read", matcherEdicion} {
+		var err error
+		if merged, err = bootstrap.MergeClaudeSettings(merged, "PreToolUse", matcher, hook); err != nil {
+			return fmt.Errorf("error al mergear settings.json (matcher %q): %w", matcher, err)
+		}
 	}
 	return os.WriteFile(settingsPath, merged, 0644)
 }

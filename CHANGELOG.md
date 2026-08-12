@@ -7,6 +7,47 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El grafo de código ahora habla antes de que escribas, que es cuando importa.** `musubi_impact`
+  contesta "¿qué se rompe si cambio esto?" desde Track 20 y **nunca la contestó**: cero invocaciones
+  en los 400 días del ledger del cerebro central, con **3.771 símbolos indexados** en este repo,
+  1.135 en altura-erp y 988 en musubi-body. No era que faltara la herramienta. El único empujón
+  vivía al final del mensaje de LECTURA —"profundizá con musubi_impact"— o sea en el turno
+  equivocado: para cuando el agente decide cambiar una firma, ese texto quedó veinte mensajes atrás.
+
+  Ahora el hook `PreToolUse` cuelga de dos matchers. Al leer sigue haciendo lo de siempre; al
+  **editar** inyecta el RADIO DE IMPACTO — qué símbolos del archivo tienen callers, cuántos de ellos
+  son de producción, y cuántos arrastra el cierre transitivo:
+
+  ```
+  [Musubi — radio de impacto] Vas a editar «internal/memory/recall.go».
+  - buildFTSQueryRanked ← 5 directo(s), 3 fuera de tests · 5 en total: …
+  - scanCandidates      ← 3 directo(s), 3 fuera de tests · 3 en total: …
+  (+15 símbolo(s) más con callers)
+  ```
+
+  **Rankea por callers de PRODUCCIÓN, no por callers a secas**, y esa distinción cambió el
+  resultado: medido en este repo, ordenar por el total ponía arriba `scoreCandidates` (9 callers, 8
+  de ellos `Test*`) y enterraba lo realmente usado. Un test que se rompe lo canta el compilador; un
+  caller de producción que se rompe, no.
+
+  Un archivo indexado **sin** callers no produce silencio sino una línea que lo dice: "no arrastra a
+  nadie conocido" es justo lo que uno quiere saber antes de tocarlo, y confundirlo con "no sé" sería
+  perder la distinción que el resto de esta memoria se toma el trabajo de mantener.
+
+  Medido sobre un archivo real de 38 símbolos: **908 caracteres (~252 tokens) y ~280 ms**, contra
+  los 1.745 de la superficie de lectura. Va **encendido por defecto** —a diferencia de la de
+  lectura, que es opt-in— porque es cuatro veces más chica, dispara mucho menos seguido, y es inerte
+  sin grafo. Dejarla detrás de un flag la habría condenado a lo mismo que condenó a `musubi_impact`:
+  existir apagada.
+
+### Fixed
+- **`MergeClaudeSettings` deduplicaba por comando y no por (matcher, comando)**, así que era
+  imposible atar el mismo binario a dos matchers del mismo evento: el segundo registro se
+  descartaba en silencio como "idéntico". Salió a la luz al colgar `precheck --hook-mode` de
+  `PreToolUse` para lectura y para edición. La idempotencia y el reemplazo-por-ruta-vieja siguen
+  valiendo, ahora **dentro de cada matcher**.
+
 ### Changed
 - **Seis tools que nadie llamó nunca dejan de ocupar el catálogo, sin dejar de existir.** El
   catálogo MCP se paga entero en cada arranque de cada repo: medido en el registro real, `tools/list`

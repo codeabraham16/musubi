@@ -175,7 +175,7 @@ func injectLocalSetup(projectDir, exePath string) []provision.StepResult {
 	add("sdd-templates", writeSddTemplates(projectDir), "templates SDD en .musubi/templates/sdd/")
 	add("hook-sessionstart", writeClaudeHook(projectDir, exePath), "SessionStart (priming + descubrimiento)")
 	add("hook-turn", writeTurnHook(projectDir, exePath), "UserPromptSubmit (contexto por turno)")
-	add("hook-precheck", writeCodeMemoryHook(projectDir, exePath), "PreToolUse(Read) (memoria de código)")
+	add("hook-precheck", writeCodeMemoryHook(projectDir, exePath), "PreToolUse Read+edición (memoria de código y radio de impacto)")
 	add("hook-stop", writeCaptureHook(projectDir, exePath), "Stop (captura de commits)")
 	return steps
 }

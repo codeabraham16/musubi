@@ -110,6 +110,76 @@ func TestMergeClaudeSettingsIdempotente(t *testing.T) {
 	}
 }
 
+// EL MISMO COMANDO EN DOS MATCHERS DEL MISMO EVENTO SON DOS HOOKS DISTINTOS, no un duplicado.
+//
+// El dedup era por comando a secas y descartaba el segundo en silencio como "ya está". Hizo falta
+// cuando `precheck --hook-mode` pasó a colgar de PreToolUse en dos momentos: al leer devuelve el
+// gist y la estructura, al editar el radio de impacto, y quien decide cuál corre es el matcher.
+// La idempotencia se sigue exigiendo DENTRO de cada matcher (las pasadas repetidas de abajo).
+func TestMergeClaudeSettingsMismoComandoEnDosMatchers(t *testing.T) {
+	hook := HookCommand{Type: "command", Command: "/bin/musubi precheck --hook-mode", Timeout: 10}
+	out, err := MergeClaudeSettings(nil, "PreToolUse", "Read", hook)
+	if err != nil {
+		t.Fatalf("matcher Read: %v", err)
+	}
+	for i := 0; i < 2; i++ { // además de agregarse, no debe duplicarse al repetir
+		if out, err = MergeClaudeSettings(out, "PreToolUse", "Edit|Write", hook); err != nil {
+			t.Fatalf("matcher de edición (pasada %d): %v", i, err)
+		}
+	}
+	if out, err = MergeClaudeSettings(out, "PreToolUse", "Read", hook); err != nil {
+		t.Fatalf("Read otra vez: %v", err)
+	}
+
+	entradas := parsearHooksEvento(t, out, "PreToolUse")
+	if len(entradas) != 2 {
+		t.Fatalf("esperaba 2 entradas (una por matcher), obtuve %d: %s", len(entradas), out)
+	}
+	vistos := map[string]int{}
+	for _, e := range entradas {
+		if len(e.Hooks) != 1 {
+			t.Errorf("el matcher %q quedó con %d hooks, esperaba 1: %+v", e.Matcher, len(e.Hooks), e.Hooks)
+		}
+		vistos[e.Matcher]++
+	}
+	for _, m := range []string{"Read", "Edit|Write"} {
+		if vistos[m] != 1 {
+			t.Errorf("esperaba exactamente una entrada para el matcher %q, obtuve %d: %s", m, vistos[m], out)
+		}
+	}
+}
+
+// Y el reemplazo por ruta vieja sigue siendo POR MATCHER: mover el binario actualiza el hook del
+// matcher que se está registrando y no toca los de los demás (cada uno se actualiza en su turno).
+func TestMergeClaudeSettingsReemplazaRutaViejaSoloEnSuMatcher(t *testing.T) {
+	viejo := HookCommand{Type: "command", Command: "/viejo/musubi precheck --hook-mode", Timeout: 10}
+	nuevo := HookCommand{Type: "command", Command: "/nuevo/musubi precheck --hook-mode", Timeout: 10}
+
+	out, err := MergeClaudeSettings(nil, "PreToolUse", "Read", viejo)
+	if err != nil {
+		t.Fatalf("sembrar Read: %v", err)
+	}
+	if out, err = MergeClaudeSettings(out, "PreToolUse", "Edit", viejo); err != nil {
+		t.Fatalf("sembrar Edit: %v", err)
+	}
+	if out, err = MergeClaudeSettings(out, "PreToolUse", "Edit", nuevo); err != nil {
+		t.Fatalf("actualizar Edit: %v", err)
+	}
+
+	for _, e := range parsearHooksEvento(t, out, "PreToolUse") {
+		if len(e.Hooks) != 1 {
+			t.Fatalf("el matcher %q quedó con %d hooks", e.Matcher, len(e.Hooks))
+		}
+		quiero := viejo.Command
+		if e.Matcher == "Edit" {
+			quiero = nuevo.Command
+		}
+		if e.Hooks[0].Command != quiero {
+			t.Errorf("matcher %q: esperaba %q, obtuve %q", e.Matcher, quiero, e.Hooks[0].Command)
+		}
+	}
+}
+
 // TestMergeClaudeSettingsSalidaEsJSONValido verifica que el output siempre es JSON válido.
 func TestMergeClaudeSettingsSalidaEsJSONValido(t *testing.T) {
 	hook := HookCommand{Type: "command", Command: "/bin/musubi detect --hook-mode"}

@@ -7,18 +7,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"musubi/internal/codeintel"
 	"musubi/internal/memory"
 )
 
-// precheck.go implementa 'musubi precheck --hook-mode': el hook PreToolUse atado a
-// la tool Read. ANTES de que el agente lea un archivo, Musubi mira su memoria de
-// código: si ya tiene un gist FRESCO lo inyecta (para no re-leer el archivo
-// entero), si está desactualizado avisa, y si no hay gist y el archivo es grande
-// recuerda guardarlo. Hace AUTOMÁTICO el uso de la memoria de código (recall sin
-// que el agente tenga que acordarse; nudge de save). 100% model-free.
+// precheck.go implementa 'musubi precheck --hook-mode': el hook PreToolUse, atado a DOS momentos
+// que preguntan cosas distintas.
+//
+// ANTES DE LEER un archivo, Musubi mira su memoria de código: si ya tiene un gist FRESCO lo
+// inyecta (para no re-leer el archivo entero), si está desactualizado avisa, y si no hay gist y el
+// archivo es grande recuerda guardarlo. Con el opt-in MUSUBI_CODEGRAPH_HOOK suma la ESTRUCTURA
+// sacada del grafo, para navegarlo sin abrirlo.
+//
+// ANTES DE ESCRIBIRLO contesta la otra pregunta —"¿qué se rompe si toco esto?"— con el RADIO DE
+// IMPACTO: qué símbolos del archivo tienen callers, cuántos de ellos son de producción y cuántos
+// arrastra el cierre transitivo.
+//
+// Hace AUTOMÁTICO el uso de la memoria de código y del grafo, sin que el agente tenga que
+// acordarse. 100% model-free.
 
 // umbralArchivoGrande es el tamaño (bytes) a partir del cual, si no hay gist,
 // vale la pena recordar guardarlo. Por debajo, no molesta.
@@ -36,6 +45,8 @@ type codeStore interface {
 	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]memory.GraphNode, error)
 	GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]memory.GraphEdge, error)
 	GraphInEdgesCtx(ctx context.Context, toKey string) ([]memory.GraphEdge, error)
+	// Cierre transitivo de callers: el radio de impacto de un símbolo que se va a editar.
+	GraphImpactCtx(ctx context.Context, key string, maxDepth, maxNodes int) ([]string, error)
 }
 
 // maxPrecheckTelemetry acota cuántos errores conocidos se surfacean por lectura, para no
@@ -65,12 +76,32 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return ""
 	}
-	if in.ToolName != "Read" || in.ToolInput.FilePath == "" {
+	if in.ToolInput.FilePath == "" {
 		return ""
 	}
 
 	path := in.ToolInput.FilePath
 	key := memory.NormalizeCodePath(root, path)
+
+	// ANTES DE ESCRIBIR es otro momento y merece otra superficie. Leer y editar disparan preguntas
+	// distintas: al leer, "¿de qué va este archivo?"; al editar, "¿qué se rompe si lo toco?". El
+	// grafo sabe responder la segunda desde que existe Track 20, y no la respondía nunca: medido
+	// contra el ledger del cerebro central (400 días), musubi_impact tenía CERO invocaciones con
+	// 3.771 nodos indexados en este repo, 1.135 en altura-erp y 988 en musubi-body. La causa no era
+	// que faltara la herramienta sino que el único empujón vivía al final del mensaje de lectura
+	// —"profundizá con musubi_impact"—, o sea en el turno equivocado: para cuando el agente decide
+	// cambiar una firma, ese texto quedó veinte mensajes atrás.
+	if esEdicion(in.ToolName) {
+		m := impactMessage(store, key)
+		if m == "" {
+			return ""
+		}
+		_, _ = store.LedgerAdd(in.SessionID, "precheck_impacto", memory.EstimateTokens(m))
+		return preEnvelope(m)
+	}
+	if in.ToolName != "Read" {
+		return ""
+	}
 
 	// Dos superficies que se combinan: la memoria de código (gist) y los errores conocidos
 	// del archivo (telemetría, T6.3). Cualquiera puede estar vacía. Cada una se contabiliza
@@ -158,6 +189,158 @@ func codeGraphMessage(store codeStore, key string) string {
 	}
 	b.WriteString("\nProfundizá con musubi_code_graph / musubi_impact / musubi_code_context.")
 	return b.String()
+}
+
+// Cotas del radio de impacto. Son más chicas que las de musubi_impact a propósito: acá el trabajo
+// se paga en el camino crítico de CADA edición, y lo que se busca no es el cierre completo sino
+// saber si hace falta pedirlo.
+const (
+	maxSimbolosImpacto = 3  // sólo los símbolos más conectados; el resto se resume en una línea
+	profundidadImpacto = 4  // saltos de BFS hacia atrás por aristas CALLS
+	topeNodosImpacto   = 60 // techo duro del recorrido
+)
+
+// esEdicion dice si la tool que está por correr ESCRIBE el archivo. Son los momentos en que
+// "¿quién depende de esto?" deja de ser curiosidad y pasa a ser la pregunta que evita el bug.
+func esEdicion(tool string) bool {
+	switch tool {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		return true
+	}
+	return false
+}
+
+// impactMessage arma el RADIO DE IMPACTO de un archivo que se va a editar: qué símbolos suyos
+// tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
+// "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
+//
+// El caso "ningún símbolo tiene callers" NO devuelve vacío: que un archivo esté aislado es
+// justamente lo que uno quiere saber antes de cambiarlo, y cuesta una línea decirlo. Callar ahí
+// sería confundir "no hay riesgo" con "no sé", que es la distinción que el resto de esta memoria
+// se toma el trabajo de mantener.
+func impactMessage(store codeStore, key string) string {
+	ctx := context.Background()
+	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
+	if err != nil || len(nodes) == 0 {
+		return ""
+	}
+
+	type simboloConectado struct {
+		nombre     string
+		clave      string
+		directos   []string // nombres, los de producción primero
+		produccion int      // cuántos de esos callers NO son tests
+	}
+	var conectados []simboloConectado
+	funciones := 0
+	for _, n := range nodes {
+		if n.Kind != codeintel.KindFunc && n.Kind != codeintel.KindMethod {
+			continue
+		}
+		funciones++
+		claves := graphRefKeys(store, ctx, n.Key)
+		if len(claves) == 0 {
+			continue
+		}
+		nombres, prod := ordenarPorProduccion(claves)
+		conectados = append(conectados, simboloConectado{n.Name, n.Key, nombres, prod})
+	}
+	if funciones == 0 {
+		return ""
+	}
+	if len(conectados) == 0 {
+		return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers en el grafo: "+
+			"tocarlo no arrastra a nadie conocido.", key)
+	}
+
+	// Ordena por callers DE PRODUCCIÓN, no por callers a secas. Medido sobre este mismo repo: los
+	// tests dominan las listas (scoreCandidates tiene 9 callers y 8 son Test*), así que rankear por
+	// el total pone arriba lo más testeado en vez de lo más usado, que es justo al revés de lo que
+	// hace falta saber antes de cambiar una firma. Un test que se rompe lo dice el compilador; un
+	// caller de producción que se rompe lo decís vos. Estable para que dos ediciones seguidas del
+	// mismo archivo no reordenen el mensaje sin motivo.
+	sort.SliceStable(conectados, func(a, b int) bool {
+		if conectados[a].produccion != conectados[b].produccion {
+			return conectados[a].produccion > conectados[b].produccion
+		}
+		return len(conectados[a].directos) > len(conectados[b].directos)
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Musubi — radio de impacto] Vas a editar «%s». Según el grafo, esto cuelga de sus símbolos:", key)
+	mostrados := conectados
+	if len(mostrados) > maxSimbolosImpacto {
+		mostrados = mostrados[:maxSimbolosImpacto]
+	}
+	for _, s := range mostrados {
+		// El cierre transitivo se calcula SÓLO para los que se muestran: es un BFS por símbolo y
+		// esto corre antes de cada edición, no en una consulta que alguien pidió.
+		total := len(s.directos)
+		if cierre, err := store.GraphImpactCtx(ctx, s.clave, profundidadImpacto, topeNodosImpacto); err == nil && len(cierre) > total {
+			total = len(cierre)
+		}
+		fmt.Fprintf(&b, "\n- %s ← %d directo(s), %d fuera de tests · %d en total: %s",
+			s.nombre, len(s.directos), s.produccion, total, joinCapped(s.directos, maxGraphRefs))
+	}
+	if resto := len(conectados) - len(mostrados); resto > 0 {
+		fmt.Fprintf(&b, "\n(+%d símbolo(s) más con callers)", resto)
+	}
+	b.WriteString("\nSi vas a cambiar una FIRMA, pedí el cierre completo con musubi_impact (symbol='" +
+		mostrados[0].clave + "').")
+	return b.String()
+}
+
+// graphRefKeys devuelve las CLAVES (no los nombres) de quienes llaman a key. A diferencia de
+// graphRefNames, conserva la ruta del archivo, que es lo único que permite después distinguir un
+// caller de producción de uno de test.
+func graphRefKeys(store codeStore, ctx context.Context, key string) []string {
+	edges, _ := store.GraphInEdgesCtx(ctx, key)
+	var claves []string
+	for _, e := range edges {
+		if e.Kind != codeintel.EdgeCalls {
+			continue
+		}
+		claves = append(claves, e.FromKey)
+	}
+	return claves
+}
+
+// esRutaDeTest reconoce los archivos de test por la convención de cada ecosistema: `_test.go`,
+// `foo_test.py`, `foo.test.ts`, `foo.spec.js`. Es una heurística por NOMBRE y puede errarle a un
+// proyecto con convención propia; el costo de errarle es sólo el orden de una lista, así que no
+// vale la pena algo más caro.
+func esRutaDeTest(clave string) bool {
+	ruta := clave
+	if i := strings.Index(ruta, "#"); i >= 0 {
+		ruta = ruta[:i]
+	}
+	ruta = strings.ToLower(ruta)
+	for _, marca := range []string{"_test.", ".test.", ".spec.", "_spec."} {
+		if strings.Contains(ruta, marca) {
+			return true
+		}
+	}
+	return strings.Contains(ruta, "/tests/") || strings.HasPrefix(ruta, "tests/")
+}
+
+// ordenarPorProduccion convierte claves de callers en NOMBRES únicos, con los de producción
+// adelante, y devuelve cuántos de esos nombres no vienen de un archivo de test.
+func ordenarPorProduccion(claves []string) (nombres []string, produccion int) {
+	var prod, tests []string
+	visto := make(map[string]bool, len(claves))
+	for _, c := range claves {
+		n := symNameFromKey(c)
+		if visto[n] {
+			continue
+		}
+		visto[n] = true
+		if esRutaDeTest(c) {
+			tests = append(tests, n)
+		} else {
+			prod = append(prod, n)
+		}
+	}
+	return append(prod, tests...), len(prod)
 }
 
 // graphRefNames devuelve los NOMBRES de los símbolos conectados por CALLS a key (out=callees,
