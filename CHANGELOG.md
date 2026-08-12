@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **Seis tools que nadie llamó nunca dejan de ocupar el catálogo, sin dejar de existir.** El
+  catálogo MCP se paga entero en cada arranque de cada repo: medido en el registro real, `tools/list`
+  pesa **56.655 caracteres (~15.700 tokens)** y no hay forma de que un agente lo lea en partes.
+  Contra el ledger del cerebro central —400 días, 129.913 invocaciones— **26 de las 59 tools tienen
+  cero llamadas**, y seis de ellas no las tienen porque falte oportunidad sino porque no tienen
+  quién las llame: `musubi_save_fact` (el grafo de hechos se llena por `musubi_propose_facts`),
+  `musubi_log_error` y `musubi_resolve_telemetry` (la tabla `telemetry_logs` tiene **1 fila** en el
+  repo más usado), `musubi_debate` (sus tres tablas en **cero** en los 9 repos), `musubi_promote`
+  (con `team_mode:true` —el default de los repos activos— `save_observation` ya escribe `shared` de
+  entrada: 1.238 de 1.371 acá, 230 de 230 en altura-erp) y `musubi_workflow`, que además es **la
+  tool más cara del catálogo**: 3.582 caracteres, el 6,3 % del total.
+
+  **Dormir no es retirar, y la diferencia es el punto.** Una tool dormida sigue implementada,
+  testeada y **despachable por `tools/call`**: lo único que pierde es el lugar en `tools/list`.
+  Retirarla habría borrado andamiaje que funciona —el motor de debate y el de DAG están enteros, lo
+  que les falta es que alguien los estrene—, y la decisión es reversible por tool con un booleano.
+  `MUSUBI_TOOLS_ALL=1` devuelve el catálogo completo sin recompilar.
+
+  Medido: **56.103 → 47.998 caracteres, −8.105 (−14,4 %)** por sesión y por repo.
+
+  Ojo con el ledger antes de sacar conclusiones de un cero: sólo registra el camino **MCP**, y el
+  ledger *local* recién existe desde el 2026-08-06. Dos de los ceros de esta auditoría eran
+  artefactos de esa ventana (`musubi_codegraph_index` y `musubi_codegraph_push` corrieron entre el
+  07-25 y el 07-29), y uno era un falso positivo al revés: `workflow_runs` tiene 68 filas, pero son
+  todas `sdd-*` y las crea `musubi_sdd`, no `musubi_workflow`.
+
+  De paso muere una clase de drift: tres tests que no hablan del catálogo tenían el número `59`
+  hardcodeado y se rompían al dormir una sola tool. Ahora lo derivan del registro.
+
 ### Fixed
 - **`confidence` significaba dos cosas distintas según la fila, y desde afuera no se podía notar.**
   En una relación PENDIENTE era `max(léxico, coseno)`; en una auto-resuelta, el léxico solo. Un mismo

@@ -87,6 +87,9 @@ func TestDispatchConcurrentSafe(t *testing.T) {
 	var mu sync.Mutex
 	var badResp int
 	var toolsListOK int
+	// Se calcula ANTES de largar las goroutines: construir un server dentro del bucle competiría
+	// con la carga que este test justamente quiere medir.
+	catalogoCompleto := toolsExpuestas()
 
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -105,7 +108,7 @@ func TestDispatchConcurrentSafe(t *testing.T) {
 				// tools/list debe devolver siempre el catálogo completo, incluso bajo carga.
 				if req.Method == "tools/list" {
 					if m, isMap := resp.Result.(map[string]interface{}); isMap {
-						if tools, isSlice := m["tools"].([]Tool); isSlice && len(tools) == 59 {
+						if tools, isSlice := m["tools"].([]Tool); isSlice && len(tools) == catalogoCompleto {
 							mu.Lock()
 							toolsListOK++
 							mu.Unlock()

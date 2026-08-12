@@ -11,6 +11,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 )
 
 // toolHandler es la firma uniforme de todo handler de tool. Recibe el contexto del
@@ -49,11 +51,20 @@ const (
 //
 // lock pisa ese default SÓLO para la concurrencia. No toca la autorización: una tool en lockSelf no
 // queda por eso llamable por un reader.
+//
+// dormant es un TERCER eje —la VISIBILIDAD— y no toca ni la autorización ni la capacidad. Una tool
+// dormida sigue implementada, testeada y DESPACHABLE por tools/call; lo único que pierde es el
+// lugar que ocupaba en tools/list. Existe porque el catálogo se paga por sesión: medido en el
+// registro real, tools/list pesa ~56.700 caracteres (~15.700 tokens) y cada tool que nadie invoca
+// se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
+// trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
+// MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.
 type toolEntry struct {
 	Tool
 	handler  toolHandler
 	readOnly bool
 	lock     lockClass
+	dormant  bool
 }
 
 // noCtx adapta un handler que no usa el contexto del request a la firma uniforme
@@ -78,13 +89,30 @@ func (s *McpServer) handleInitialize() interface{} {
 	}
 }
 
-// handleToolsList construye la respuesta de tools/list iterando el registro en orden.
+// handleToolsList construye la respuesta de tools/list iterando el registro en orden, SALTEANDO
+// las tools dormidas (ver toolEntry.dormant). Es el único lugar donde `dormant` tiene efecto: el
+// índice de despacho las conserva, así que una dormida sigue respondiendo si alguien la nombra.
 func (s *McpServer) handleToolsList() interface{} {
+	todas := toolsAllEnabled()
 	tools := make([]Tool, 0, len(s.tools))
 	for i := range s.tools {
+		if s.tools[i].dormant && !todas {
+			continue
+		}
 		tools = append(tools, s.tools[i].Tool)
 	}
 	return map[string]interface{}{"tools": tools}
+}
+
+// toolsAllEnabled indica si se pidió el catálogo COMPLETO, dormidas incluidas (MUSUBI_TOOLS_ALL).
+// Es la salida de emergencia para que dormir una tool no la vuelva indescubrible: un agente que
+// necesite el catálogo entero lo pide por env, sin recompilar ni tocar el registro.
+func toolsAllEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MUSUBI_TOOLS_ALL"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // buildRegistry devuelve el catálogo ordenado de tools. El ORDEN define la salida de
@@ -205,6 +233,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.countingSaveCtx(s.toolSaveFact),
+			// DORMIDA. Cero invocaciones en los 400 días del ledger central. El grafo de hechos se
+			// llena por musubi_propose_facts (12 llamadas, 15 entidades en altura-erp): esta era la
+			// escritura DIRECTA, sin proponer, y nadie la eligió nunca.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -385,6 +417,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolLogError,
+			// DORMIDA. Cero invocaciones, y la tabla lo confirma: telemetry_logs tiene 1 fila en el
+			// repo más usado. El bucle de telemetría nunca arrancó.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -399,6 +434,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolResolveTelemetry,
+			// DORMIDA por ARRASTRE: resolver un log de telemetría sólo tiene sentido si antes alguien
+			// llamó a musubi_log_error, que está dormida. Despertar una sin la otra no sirve.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -663,6 +701,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolDebate),
+			// DORMIDA, y es la más cara de las que nadie usa después de workflow: ~575 tokens de
+			// catálogo. Las tres tablas que la respaldan —debates, debate_postures, debate_votes—
+			// están en CERO en los 9 repos. El andamiaje está entero; lo que falta es que alguien
+			// lo estrene.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -686,6 +729,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolWorkflow),
+			// DORMIDA, y es la tool MÁS CARA del catálogo: 3.582 caracteres (~995 tokens), el 6,3 %
+			// de tools/list, con cero invocaciones. OJO al falso positivo: la tabla workflow_runs
+			// tiene 68 filas, pero todas son 'sdd-*' y las crea musubi_sdd (8 llamadas), no esta.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -811,6 +858,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.countingSaveCtx(s.toolPromote),
+			// DORMIDA porque el modo en que se usa Musubi la volvió innecesaria: con team_mode:true
+			// —el default de los repos activos— save_observation ya escribe 'shared' de entrada
+			// (1.238 de 1.371 en este repo, 230 de 230 en altura-erp). Promover a mano quedó como
+			// la salida para el caso raro de una nota que nació local; sigue despachable.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
