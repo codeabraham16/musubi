@@ -7,6 +7,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Removed
+- **`docs/propuesta-tenancy-gio.md` sale del repo: describía accesos y trabajo ajeno en un repo
+  PÚBLICO.** No tenía secretos ni tokens, pero publicaba el mapa de capacidades del cerebro central
+  —que un principal nombrado tiene `read: all` y `write: any`—, el reparto de los topics de esa
+  persona con sus conteos, y la ruta del código que decide la atribución. Es el inventario de
+  accesos de un sistema privado, en un repositorio que cualquiera clona.
+
+  **El análisis no se perdió: se movió entero al cerebro** (`seguridad/tenancy-del-principal-gio`),
+  que es privado y además es donde esa clase de conocimiento pertenece. Antes de borrar el archivo
+  se verificó que el hallazgo NO estuviera ya en la memoria — no estaba, sólo vivía acá, así que
+  borrar primero habría perdido el contenido y no sólo el archivo.
+
 ### Added
 - **El grafo de código ahora habla antes de que escribas, que es cuando importa.** `musubi_impact`
   contesta "¿qué se rompe si cambio esto?" desde Track 20 y **nunca la contestó**: cero invocaciones
