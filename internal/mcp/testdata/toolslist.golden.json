@@ -123,36 +123,6 @@
       }
     },
     {
-      "name": "musubi_save_fact",
-      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "object": {
-            "type": "string",
-            "description": "Entidad objeto (ej. 'JWT')"
-          },
-          "predicate": {
-            "type": "string",
-            "description": "Relación (ej. 'usa', 'depende_de')"
-          },
-          "subject": {
-            "type": "string",
-            "description": "Entidad sujeto (ej. 'auth')"
-          },
-          "valid_from": {
-            "type": "string",
-            "description": "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."
-          }
-        },
-        "required": [
-          "subject",
-          "predicate",
-          "object"
-        ]
-      }
-    },
-    {
       "name": "musubi_propose_facts",
       "description": "PROPONE hechos (tripletas) que VOS (el agente-LLM) extrajiste, al grafo, en CUARENTENA: entran con procedencia 'llm-extract:*', NO son autoritativos, NO aparecen en recall_facts por default y NO invalidan nada. Es cognición 'caller-borrowed': Musubi no llama a ningún LLM, vos aportás las tripletas. Para volver autoritativa una propuesta, corroborála con musubi_save_fact (el mismo triple); para revisarlas, usá recall_facts con include_proposed=true.",
       "inputSchema": {
@@ -360,47 +330,6 @@
         },
         "required": [
           "query_text"
-        ]
-      }
-    },
-    {
-      "name": "musubi_log_error",
-      "description": "Registra un error de compilación o testeo capturado para el bucle de telemetría.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "error_message": {
-            "type": "string",
-            "description": "Detalle completo del compilador o linter"
-          },
-          "file_path": {
-            "type": "string",
-            "description": "Ruta del archivo que causó el error"
-          },
-          "suggested_patch": {
-            "type": "string",
-            "description": "Parche correctivo sugerido (opcional)"
-          }
-        },
-        "required": [
-          "file_path",
-          "error_message"
-        ]
-      }
-    },
-    {
-      "name": "musubi_resolve_telemetry",
-      "description": "Marca un log de telemetría como resuelto una vez corregido el error.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "number",
-            "description": "ID del log de telemetría a marcar como resuelto"
-          }
-        },
-        "required": [
-          "id"
         ]
       }
     },
@@ -781,100 +710,6 @@
       }
     },
     {
-      "name": "musubi_debate",
-      "description": "Debate multi-agente (Society of Minds), andamiaje EJECUTABLE y DETERMINISTA model-free: Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas y CUENTA los votos; los sub-agentes (LLM) producen posturas, críticas y votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás como material de CRÍTICA a la ronda siguiente; repetís post→advance hasta agotar rondas; 4) cada agente action=vote (id, agent, choice); 5) action=tally (id) recuenta DETERMINISTA: gana el choice con máximo ESTRICTO que alcance el quórum → cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: advance+re-votar, o deferí a musubi_judge). action=status (id) da el estado completo. El juicio SEMÁNTICO se queda en el LLM. action ∈ {open, post, advance, vote, tally, status}.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "description": "open | post | advance | vote | tally | status"
-          },
-          "agent": {
-            "type": "string",
-            "description": "Para post/vote: etiqueta del sub-agente participante"
-          },
-          "choice": {
-            "type": "string",
-            "description": "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"
-          },
-          "id": {
-            "type": "string",
-            "description": "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"
-          },
-          "quorum": {
-            "type": "number",
-            "description": "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"
-          },
-          "rounds": {
-            "type": "number",
-            "description": "Para open: tope de rondas de debate (\u003e=1)"
-          },
-          "stance": {
-            "type": "string",
-            "description": "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"
-          },
-          "topic": {
-            "type": "string",
-            "description": "Para open: la pregunta/tema del debate"
-          }
-        }
-      }
-    },
-    {
-      "name": "musubi_workflow",
-      "description": "Motor de orquestación DAG model-free: Musubi NO ejecuta los steps — define el grafo, persiste el run en SQLite (resumible entre sesiones) y devuelve qué steps están ready; VOS ejecutás y reportás. Loop: action=start (run_id + `workflow` id de .musubi/workflows/\u003cid\u003e.yaml, o `definition` YAML inline) → ready; ejecutás y action=complete (run_id, step, result[, status done|failed, idempotency_key]) → nuevos ready; action=next reconsulta; action=status estado completo; action=resume retoma en otra sesión. Un step queda ready cuando sus `needs` están done/skipped; puede llevar `when` (gate condicional, se salta si es falsa) y `repeat_while`+`max_iterations` (loop). Features avanzadas activadas por el YAML del step, que la RESPUESTA te va guiando cuando el run se pausa: SAGA (`compensate` → action=rollback devuelve el plan LIFO; reportás cada undo con action=compensated); HITL (`await` pausa el run en waiting_input → action=provide con input y status); verificación Reflexion (`verify`: complete deja el step en `verifying` hasta action=verify con verdict pass|fail — fail reabre para reintentar hasta max_iterations; el candidato queda CONGELADO: no podés re-completar un step en `verifying`, y con `verify_target` (globs de archivos, soporta `**`) Musubi deriva la identidad del DISCO al congelar y la RE-DERIVA al emitir el veredicto — si los archivos cambiaron, tu pass no se aplica y el gate se reabre, porque revisaste otra cosa); auditoría con action=journal (traza append-only) y action=otel (export OTLP). Si un step failed bloquea todo progreso, el run pasa a `failed`; action=abort lo cierra a `aborted` (ambos aún compensables con rollback). action=validate valida sin correr; action=list lista runs. action ∈ {start, next, complete, status, resume, validate, list, journal, otel, rollback, abort, compensated, provide, verify}. Las respuestas incrementales omiten `definition` (inmutable tras start); usá status/resume para el snapshot completo.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "description": "start | next | complete | status | resume | validate | list | journal | otel | rollback | abort | compensated | provide | verify"
-          },
-          "definition": {
-            "type": "string",
-            "description": "Para start: definición YAML inline (alternativa a 'workflow')"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "description": "Para complete (opcional): clave de idempotencia; reintentar con la misma clave es un no-op seguro"
-          },
-          "input": {
-            "type": "string",
-            "description": "Para provide (HITL): la decisión/dato del humano que resuelve el gate en espera"
-          },
-          "result": {
-            "type": "string",
-            "description": "Para complete: resultado/resumen del step"
-          },
-          "run_id": {
-            "type": "string",
-            "description": "Identificador del run (lo elegís vos; persiste y permite resume)"
-          },
-          "status": {
-            "type": "string",
-            "description": "Para complete: done | failed (default done)"
-          },
-          "step": {
-            "type": "string",
-            "description": "Para complete: id del step que terminaste"
-          },
-          "target_digest": {
-            "type": "string",
-            "description": "Para verify (opcional): digest del candidato que verificaste, tal como vino en el step_verifying del journal. Ata el veredicto a ESOS bytes: si el candidato cambió, el veredicto se rechaza en vez de dar por bueno algo que nadie revisó"
-          },
-          "verdict": {
-            "type": "string",
-            "description": "Para verify: pass (la verificación pasó → done) | fail (falló → reflexión + reintento). La reflexión va en 'result'"
-          },
-          "workflow": {
-            "type": "string",
-            "description": "Para start: id del workflow en .musubi/workflows/\u003cid\u003e.yaml"
-          }
-        }
-      }
-    },
-    {
       "name": "musubi_tokens",
       "description": "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación) y contra el presupuesto blando de sesión. Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
       "inputSchema": {
@@ -1053,22 +888,6 @@
             "description": "Si es true, compara el índice (git diff --staged); opcional"
           }
         }
-      }
-    },
-    {
-      "name": "musubi_promote",
-      "description": "Promueve una observación LOCAL (privada del proyecto) a SHARED, marcándola como candidata a la memoria central del cerebro híbrido. Es idempotente: promover una ya compartida es un no-op exitoso. Requiere el id de la observación (el que devuelve musubi_save_observation o un recall). No sincroniza nada por sí solo: sólo cambia el scope.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "ID de la observación a promover a 'shared'"
-          }
-        },
-        "required": [
-          "id"
-        ]
       }
     },
     {
