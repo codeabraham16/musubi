@@ -8,6 +8,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **La frescura de un gist ya cruza de máquina: «no se sabe» dejó de reportarse como «rancio».**
+  Encontrado estrenando `musubi_recall_code` contra el cerebro central, no en review. Tras federar
+  los gists (#301/#302) la tool empezó a devolver contenido de verdad —el gist de un archivo de
+  altura, con sus símbolos y sus líneas, desde otra máquina—, pero `fresh` venía **siempre** false.
+
+  No era que el gist estuviera rancio: la frescura se derivaba del disco **del servidor que
+  contesta**, y el central no tiene el repo de otro proyecto. Contra el daemon local eso es
+  correcto (el que pregunta y el que responde miran el mismo árbol); contra el central es una
+  pregunta que el que responde no puede contestar. Control positivo: el mismo mecanismo devuelve
+  `fresh=true` cuando el archivo sí está a la vista.
+
+  El costo era exactamente el propósito de la tool. Su contrato dice «false ⇒ conviene re-leerlo»,
+  así que un agente que le hiciera caso re-leía **siempre** el archivo cuando el gist venía del
+  central — y ahorrar esa re-lectura es lo único para lo que existe la memoria de código. El gist
+  federado quedaba informativo para un humano y sin valor para un agente obediente.
+
+  Ahora la respuesta trae `freshness` con **tres** estados, en vez de aplastar dos hechos distintos
+  en un booleano: `fresh` (el archivo no cambió), `stale` (cambió, re-leelo) y `unknown` (nadie
+  pudo mirarlo, o el gist se guardó sin huella). Afirmar «rancio» sobre un archivo que no se puede
+  ver es inventar un hecho que nadie midió. Además `musubi_recall_code` acepta un `fingerprint`
+  opcional: un llamador programático que ya tiene el contenido en la mano manda su propia huella y
+  **le gana al disco del servidor**, porque es el único que miró el archivo de verdad — con eso el
+  central puede afirmar frescura sin ver el repo. El booleano `fresh` conserva su semántica exacta
+  (true sólo con identidad verificada), así que ningún cliente existente cambia de comportamiento.
+
+  Era un defecto **latente**: `musubi_recall_code` estaba entre las tools con cero invocaciones del
+  ledger, y salió a la luz justamente al encenderla.
+
 - **Al federar los gists, gana el del proyecto y no el sin atribuir.** Encontrado verificando el
   deploy de la federación (#301), no en review: el cliente reportó `gists=25` y en el central
   aterrizaron **23**. La diferencia no era una pérdida — la tabla admite dos gists del mismo

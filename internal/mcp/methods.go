@@ -1795,7 +1795,8 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 
 func (s *McpServer) toolRecallCode(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Path string `json:"path"`
+		Path        string `json:"path"`
+		Fingerprint string `json:"fingerprint"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -1814,18 +1815,63 @@ func (s *McpServer) toolRecallCode(ctx context.Context, raw json.RawMessage) (in
 		return jsonResult(map[string]interface{}{"found": false, "path": key})
 	}
 
-	// Frescura: el gist sirve si el archivo no cambió desde que se guardó.
-	current, ferr := memory.FileFingerprint(s.projectPath, args.Path)
-	fresh := ferr == nil && current != "" && current == cm.Fingerprint
+	fresh, estado := s.frescuraDelGist(args.Path, args.Fingerprint, cm.Fingerprint)
 	_, _ = s.engine.LedgerAdd("", "code_recall", cm.Tokens)
 	return jsonResult(map[string]interface{}{
-		"found":   true,
-		"path":    cm.Path,
-		"gist":    cm.Gist,
-		"symbols": cm.Symbols,
-		"tokens":  cm.Tokens,
-		"fresh":   fresh,
+		"found":     true,
+		"path":      cm.Path,
+		"gist":      cm.Gist,
+		"symbols":   cm.Symbols,
+		"tokens":    cm.Tokens,
+		"fresh":     fresh,
+		"freshness": estado,
 	})
+}
+
+// Estados de frescura de un gist. Son TRES y no dos porque «no se sabe» no es «rancio».
+const (
+	frescuraFresca      = "fresh"   // el archivo es idéntico al que se gisteó
+	frescuraRancia      = "stale"   // el archivo existe y CAMBIÓ: conviene re-leerlo
+	frescuraDesconocida = "unknown" // nadie pudo mirar el archivo, o el gist no guardó huella
+)
+
+// frescuraDelGist decide si el gist sigue sirviendo, y sobre todo DISTINGUE «no se sabe» de
+// «rancio» — dos cosas que antes salían las dos como fresh=false.
+//
+// EL PORQUÉ (medido el 2026-08-12, al estrenar la tool). El fingerprint se derivaba SIEMPRE del
+// disco del servidor que contesta. Contra el daemon local eso es correcto: el que pregunta y el
+// que responde miran el mismo árbol. Pero contra el cerebro CENTRAL es una pregunta que el que
+// responde no puede contestar — el central no tiene el repo de otro proyecto. Los 23 gists que
+// altura federó volvían todos fresh=false, no por rancios sino por INVISIBLES, y el contrato de
+// la tool («false ⇒ conviene re-leerlo») mandaba al agente a re-leer el archivo siempre. Ahorrar
+// esa re-lectura es el único propósito de la memoria de código: el gist federado quedaba
+// informativo para un humano y sin valor para un agente que le hiciera caso.
+//
+// QUIÉN TIENE LA HUELLA BUENA. Si el llamador manda la suya, GANA la suya: es el único que miró
+// el archivo de verdad. El disco del servidor es el respaldo, no la autoridad.
+//
+// `fresh` se mantiene true SÓLO con identidad verificada, exactamente como antes: un cliente
+// viejo que sólo lea ese bool no cambia de comportamiento. Lo nuevo se pide mirando `freshness`.
+func (s *McpServer) frescuraDelGist(path, delLlamador, guardado string) (bool, string) {
+	if strings.TrimSpace(guardado) == "" {
+		// Gist guardado sin huella (FileFingerprint es best-effort al guardar): no hay contra
+		// qué comparar. Afirmar «rancio» sería inventar un hecho que nadie midió.
+		return false, frescuraDesconocida
+	}
+	huella := strings.TrimSpace(delLlamador)
+	if huella == "" {
+		// Nadie la mandó: última chance, el disco propio. Es el camino del daemon local.
+		if actual, ferr := memory.FileFingerprint(s.projectPath, path); ferr == nil {
+			huella = actual
+		}
+	}
+	if huella == "" {
+		return false, frescuraDesconocida
+	}
+	if huella == guardado {
+		return true, frescuraFresca
+	}
+	return false, frescuraRancia
 }
 
 // searchHit es un resultado de búsqueda en forma gist-first: el titular extractivo en
