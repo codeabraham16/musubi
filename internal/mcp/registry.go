@@ -766,11 +766,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall_code",
-				Description: "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Devuelve fresh=true si el archivo no cambió desde que se guardó el gist, o fresh=false si conviene re-leerlo (o leer solo los símbolos que necesitás). Llamala ANTES de leer un archivo grande.",
+				Description: "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo (el caso típico es preguntarle al cerebro CENTRAL por un archivo que vive en otra máquina) — el gist puede seguir sirviendo, pero nadie lo verificó. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"path": {Type: "string", Description: "Ruta del archivo a recordar"},
+						"path":        {Type: "string", Description: "Ruta del archivo a recordar"},
+						"fingerprint": {Type: "string", Description: "Opcional: sha256 en hex del contenido ACTUAL del archivo. Sirve para que un servidor que no ve tu disco (el cerebro central) pueda igual decirte si el gist está fresco, en vez de responder 'unknown'. Es para llamadores PROGRAMÁTICOS (hooks, puentes, otro daemon) que ya tienen el contenido en la mano: si sos un agente y tendrías que leer el archivo para hashearlo, no lo mandes — leer el archivo es justo lo que esta tool viene a evitar."},
 					},
 					Required: []string{"path"},
 				},
