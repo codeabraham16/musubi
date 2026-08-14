@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **Tres tools que nadie invocó en 90 días salen del catálogo, y dos ganan su disparador escrito.**
+  Salió de cruzar los DOS ledgers —central y local, ventana de 90 días— contra `tools/list`: 13 de
+  las 53 expuestas estaban en cero absoluto. El catálogo se cobra por sesión y por servidor, así que
+  cada una se le cobra a todos los repos en cada arranque, la llamen o no.
+
+  **El criterio NO fue el conteo, y eso es lo que salvó el cambio.** «Cero invocaciones» no alcanza:
+  `musubi_token_revoke` está en cero y eso es una *buena* noticia — nunca hubo que revocar un token.
+  El criterio fue buscarle el CONSUMIDOR a cada una. Y aparecieron cinco que **musubi-body llama en
+  código vivo**: `token_revoke` (panel de identidades), `author_skill`, `search_skills` y
+  `log_skill_decision` (la Forja) y `code_graph_viz` (la vista del Grafo). Dormirlas habría roto tres
+  pantallas del cuerpo en silencio. Su cero no mide falta de cableado: mide que nadie las usó nunca.
+
+  Se durmieron sólo **tres**, cada una porque tiene un duplicado que SÍ corre solo:
+  `musubi_resolve_skills` (el harness ya lee `.claude/skills/*/SKILL.md`, que `musubi setup` escribe
+  junto al `.musubi/skills/*.yaml`), `musubi_detect_stack` (el hook de `SessionStart` ya corre
+  `musubi detect --hook-mode` antes del primer turno) y `musubi_discover_skills` (ya era opt-in por
+  `sourcing.marketplace_enabled`, y la solapa Comunidad del cuerpo usa `search_skills`).
+
+  Dormir no es retirar: siguen implementadas, testeadas y **despachables si alguien las nombra**;
+  sólo pierden el lugar en `tools/list`, y `MUSUBI_TOOLS_ALL=1` las devuelve sin recompilar.
+
+  Y dos que se quedan estrenan **disparador nombrado en su propia descripción**, que es lo único que
+  el agente lee: `musubi_maintain` («después de una carga masiva, sin esperar al ciclo de 24 h») y
+  `musubi_detect_changes` («antes de cerrar un cambio, para saber qué verificar y qué decisión quedó
+  obsoleta»). Una tool sin disparador escrito no se invoca sola por buena que sea.
+
+  Catálogo: 53 → 50 tools. El test de dormancia exige declarar cada una con su motivo medido, y el
+  sabotaje lo confirma: despertar una sin sacarla de la lista pone rojas la prueba y el golden.
+
 ### Fixed
 - **La frescura de un gist ya cruza de máquina: «no se sabe» dejó de reportarse como «rancio».**
   Encontrado estrenando `musubi_recall_code` contra el cerebro central, no en review. Tras federar

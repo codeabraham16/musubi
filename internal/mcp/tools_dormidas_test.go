@@ -24,6 +24,16 @@ var dormidas = map[string]string{
 	"musubi_debate":            "cero invocaciones; debates/debate_postures/debate_votes en cero",
 	"musubi_promote":           "con team_mode:true save_observation ya escribe 'shared' de entrada",
 	"musubi_workflow":          "cero invocaciones; los 68 workflow_runs son 'sdd-*', los crea musubi_sdd",
+
+	// Segunda tanda (2026-08-14). Cruce de los DOS ledgers a 90 días —central y local— contra
+	// tools/list: 13 tools en cero. Sólo estas TRES se durmieron, y el criterio que las separó de
+	// las otras diez fue buscarle el CONSUMIDOR a cada una, no el conteo. Cinco de las trece las
+	// llama musubi-body en código vivo (token_revoke, author_skill, search_skills,
+	// log_skill_decision, code_graph_viz): dormirlas habría roto el panel de identidades, la Forja
+	// y la vista del Grafo. Su cero mide falta de USO, no de cableado.
+	"musubi_resolve_skills":  "cero en 90 días; el harness ya lee .claude/skills/*/SKILL.md nativo, que musubi setup escribe junto al .musubi/skills/*.yaml",
+	"musubi_detect_stack":    "cero en 90 días; el hook de SessionStart ya corre `musubi detect --hook-mode` antes del primer turno",
+	"musubi_discover_skills": "cero en 90 días; ya era opt-in (sourcing.marketplace_enabled) y la solapa Comunidad del cuerpo usa search_skills",
 }
 
 // toolsExpuestas es cuántas tools debe listar tools/list con la config por defecto: el registro
