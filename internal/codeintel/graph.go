@@ -161,10 +161,12 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 	nodes := map[string]Node{} // key → nodo (dedup: paquetes aparecen en varios archivos)
 	var edges []Edge
 	edgeSeen := map[string]bool{}
-	pkgFuncs := map[string]string{} // nombre de func top-level → SymbolKey (tabla del paquete)
+	pkgFuncs := map[string]string{}   // nombre de func top-level → SymbolKey (tabla del paquete)
+	pkgMethods := map[string]string{} // "Receptor.Metodo" → SymbolKey (tabla de MÉTODOS del paquete)
 	type callSite struct{ caller, callee, src string }
 	var calls []callSite
-	var pending []PendingCall // cross-paquete in-module: se emiten sin resolver (ver PendingCall)
+	var methodCalls []callSite // callee ya calificado "Receptor.Metodo"; resuelve contra pkgMethods
+	var pending []PendingCall  // cross-paquete in-module: se emiten sin resolver (ver PendingCall)
 	pendingSeen := map[string]bool{}
 
 	addNode := func(n Node) {
@@ -230,18 +232,25 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 			case *ast.FuncDecl:
 				kind := KindFunc
 				qual := d.Name.Name
-				if recv := receiverTypeName(d.Recv); recv != "" {
+				recvType := receiverTypeName(d.Recv)
+				if recvType != "" {
 					kind = KindMethod
-					qual = recv + "." + d.Name.Name
+					qual = recvType + "." + d.Name.Name
 				}
 				key := SymbolKey(path, kind, qual)
 				addNode(Node{Key: key, Kind: kind, Name: qual, Path: path, StartLine: lineOf(d.Pos()), EndLine: lineOf(d.End())})
 				addEdge(Edge{FromKey: fileKey, ToKey: key, Kind: EdgeContains, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: path})
 				if kind == KindFunc {
-					// Solo las funcs top-level se llaman sin calificar dentro del paquete;
-					// los métodos se invocan por selector (x.M) y se difieren.
+					// Las funcs top-level se llaman sin calificar dentro del paquete.
 					pkgFuncs[d.Name.Name] = key
+				} else {
+					// Los métodos se invocan por selector. Se los indexa por "Receptor.Metodo" para
+					// poder resolver `recv.Otro()` desde adentro del mismo tipo (Track 20 · F8-C).
+					pkgMethods[qual] = key
 				}
+				// Nombre del receptor —la `s` de `(s *McpServer)`—, que es lo que permite leer
+				// `s.Otro()` sin inferir tipos: adentro de este método, `s` ES de tipo recvType.
+				recvName := receiverName(d.Recv)
 				if d.Body != nil {
 					ast.Inspect(d.Body, func(n ast.Node) bool {
 						ce, ok := n.(*ast.CallExpr)
@@ -253,12 +262,20 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 							// `Func(...)` — sin calificar: se resuelve en el pase 2 contra el paquete.
 							calls = append(calls, callSite{caller: key, callee: fun.Name, src: path})
 						case *ast.SelectorExpr:
-							// `X.Func(...)`. Sólo nos interesa cuando X es un identificador que matchea
-							// un import IN-MODULE del propio archivo. Si X es cualquier otra cosa (un
-							// valor, una expresión), es un método sobre un receptor y resolverlo
-							// exigiría inferencia de tipos: fuera de alcance de F8-A.
+							// `X.Algo(...)`. X tiene que ser un identificador PELADO: si es una
+							// expresión (`s.campo.Metodo()`, `f().Metodo()`) saber a qué tipo
+							// pertenece exige inferencia y queda fuera de alcance.
 							base, ok := fun.X.(*ast.Ident)
 							if !ok {
+								return true
+							}
+							// EL RECEPTOR SE MIRA PRIMERO, y el orden no es capricho: dentro del
+							// método el receptor SOMBREA a cualquier import homónimo, así que al
+							// revés la llamada se le adjudicaría al paquete equivocado.
+							if recvName != "" && base.Name == recvName {
+								methodCalls = append(methodCalls, callSite{
+									caller: key, callee: recvType + "." + fun.Sel.Name, src: path,
+								})
 								return true
 							}
 							ip, ok := inModImports[base.Name]
@@ -313,6 +330,23 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 		addEdge(Edge{FromKey: cs.caller, ToKey: target, Kind: EdgeCalls, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: cs.src})
 	}
 
+	// Pase 2-bis: MÉTODOS sobre el propio receptor (Track 20 · F8-C). Hasta acá ningún método era
+	// DESTINO de una llamada —medido: 2.537 aristas salían de funcs top-level y CERO llegaban a un
+	// método—, así que el cierre transitivo de `impact` se cortaba en el primer envoltorio: un
+	// `Envoltorio()` que sólo delega en `s.Interno()` no mostraba a quién le pega cambiar `Interno`.
+	//
+	// El callee ya viene calificado "Receptor.Metodo" del pase 1, y eso NO necesitó inferencia de
+	// tipos: adentro de un método, el tipo del receptor está declarado en su propia firma.
+	// Lo que sigue fuera de alcance es todo lo demás —`otraVar.Metodo()`, campos, valores de
+	// retorno—, porque ahí sí hay que inferir. Igual que arriba: lo que no resuelve se OMITE.
+	for _, mc := range methodCalls {
+		target, ok := pkgMethods[mc.callee]
+		if !ok {
+			continue
+		}
+		addEdge(Edge{FromKey: mc.caller, ToKey: target, Kind: EdgeCalls, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: mc.src})
+	}
+
 	// Pase polyglot (Track 20 · F4): TS/JS/Py vía tree-sitter. En el build por default
 	// `polyglotSupported` devuelve false y esto es un NO-OP (los no-Go quedan solo-símbolos, sin
 	// aristas, como hasta ahora); compilando con `-tags treesitter` se activa la derivación real.
@@ -359,6 +393,21 @@ func inModule(importPath, modulePath string) bool {
 		return false
 	}
 	return importPath == modulePath || strings.HasPrefix(importPath, modulePath+"/")
+}
+
+// receiverName devuelve el NOMBRE de la variable receptora —la `s` de `(s *McpServer)`—, o "" si
+// el método declara el receptor sin nombrarlo (`func (*T) M()`, legal cuando no se lo usa) o si no
+// hay receptor. Con "" simplemente no se recolectan llamadas a métodos hermanos desde ahí: una
+// arista de menos, nunca una inventada.
+func receiverName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 || len(recv.List[0].Names) == 0 {
+		return ""
+	}
+	n := recv.List[0].Names[0].Name
+	if n == "_" {
+		return "" // receptor descartado: no se puede llamar nada a través de él
+	}
+	return n
 }
 
 // receiverTypeName devuelve el nombre del TIPO receptor de un método (sin puntero ni

@@ -93,20 +93,18 @@ func TestImpactoReal_ElSaltoEntrePaquetesSeVe(t *testing.T) {
 		t.Errorf("impact sobre DerivePackage NO incluye a su caller de producción %s.\ncallers = %v", prod, callers)
 	}
 
-	// ⚠️ LÍMITE CONOCIDO, y este test lo FIJA en vez de dejarlo como sorpresa.
-	// `refreshCodeGraphForPackage` envuelve a `refreshCodeGraphPkg`, pero la llamada es
-	// `s.refreshCodeGraphPkg(...)`: un método sobre un receptor. Ni F1 ni F8-A resuelven eso —
-	// F1 sólo resuelve contra las funcs TOP-LEVEL del paquete, y F8-A contra las funcs top-level de
-	// otro paquete. Medido sobre el código real de Musubi (3 paquetes, 3.062 aristas CALLS):
-	// 2.537 aristas salen de funcs top-level y CERO apuntan a un método.
+	// EL SALTO POR ENVOLTORIO, que hasta F8-C se cortaba. `refreshCodeGraphForPackage` no llama a
+	// `DerivePackage`: sólo delega en `s.refreshCodeGraphPkg(...)`, un método sobre su propio
+	// receptor. Mientras ningún método fue DESTINO de una llamada (medido: 4.115 aristas CALLS y
+	// CERO llegando a un método), el cierre transitivo moría en el primer envoltorio — y en un
+	// paquete como éste, donde casi todo es `McpServer.*`, eso dejaba a `impact` casi ciego.
 	//
-	// O sea: hoy ningún método es destino de una llamada, así que el cierre transitivo se corta en
-	// el primer envoltorio. NO es un defecto de este cambio; es la superficie que sigue abierta.
-	// Si algún día se resuelven las llamadas a métodos, este test va a fallar acá y hay que
-	// convertirlo en una aserción positiva.
+	// Este test fue escrito en F8-A como aserción INVERTIDA («si algún día aparece, avisá»), y en
+	// F8-C disparó con ese mensaje. Ahora afirma lo contrario, que es el punto: un límite declarado
+	// en un test se entera solo de cuándo deja de existir.
 	const envoltorio = "internal/mcp/methods_codegraph.go#method:McpServer.refreshCodeGraphForPackage"
-	if tiene(envoltorio) {
-		t.Errorf("¡%s ahora SÍ aparece! Se resolvieron las llamadas a métodos: actualizá este test y la nota de arriba", envoltorio)
+	if !tiene(envoltorio) {
+		t.Errorf("impact no llegó a %s: el cierre transitivo se cortó en el envoltorio.\ncallers = %v", envoltorio, callers)
 	}
 
 	// CONTROL: que el impact no se haya vuelto un "todo con todo". Un símbolo del mismo paquete que
