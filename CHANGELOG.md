@@ -7,6 +7,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La federación del grafo de código estaba muerta hacía semanas, y el sistema decía que estaba
+  bien.** `musubi_codegraph_index` manda el grafo entero al central en UN solo POST; el central topea
+  el body en 4 MiB. Medido el 2026-08-14 contra este repo: **4.958.147 bytes** (5.194 nodos, 11.225
+  aristas, 113 gists) contra un tope de 4.194.304. El central respondía `-32700 "error leyendo el
+  body"` y ahí moría.
+
+  Lo grave no fue el tope sino **cómo se veía desde afuera**. El push es best-effort a propósito —un
+  fallo de red no debe romper el index local—, así que `codegraph_index` seguía devolviendo verde con
+  un `federated:false` discreto al costado, y el error de verdad se iba al stderr del daemon, que en
+  un MCP no lo mira nadie. El central quedó congelado en 3.502 nodos mientras el local iba por 6.450.
+  Nada estaba roto *visiblemente*: simplemente el cerebro compartido dejó de aprender del código.
+
+  El push ahora **viaja comprimido**: los mismos 4.958.147 bytes salen en 363.640 (13,6:1 — es JSON
+  con las mismas claves repetidas miles de veces, el caso ideal para gzip). Con eso el grafo entra
+  con más de un orden de magnitud de margen.
+
+  Tres decisiones que conviene no deshacer sin leer el porqué:
+  - **El tope del cable NO se tocó.** Sigue en 4 MiB. Aceptar gzip agrega un SEGUNDO tope, aguas
+    abajo, sobre el body ya descomprimido (64 MiB) — porque descomprimir sin límite es una bomba:
+    4 MiB de gzip pueden expandirse a gigabytes y voltear un central always-on. Que ese número pueda
+    ser tan alto se apoya en un detalle del handler: **la autenticación corre antes de leer el body**,
+    así que un cuerpo comprimido sólo lo manda un principal ya autenticado.
+  - **Se comprime sólo por encima de 1 MiB, no siempre.** Un central viejo no entiende
+    `Content-Encoding: gzip`; comprimir de entrada convertiría los pushes chicos —que hoy sí
+    funcionan— en errores de parseo. Efecto lateral a respetar: **el central se actualiza ANTES que
+    los clientes que lo empujan.**
+  - **Los errores del body ahora se distinguen.** Pasarse de tamaño, gzip corrupto y lectura cortada
+    colapsaban los tres en un mismo `"error leyendo el body"`, y desde el cliente eso era
+    indistinguible de un bug de serialización. Es la razón por la que la falla tardó tanto en
+    encontrarse. El de tamaño además nombra el tope y sugiere gzip.
+
+  Si algún día el grafo no entra **ni comprimido**, el arreglo ya no es este: hay que trocear el
+  push. El cliente lo dice con los dos números en el error, para que el próximo no tenga que
+  reproducirlo para enterarse.
+
 ### Changed
 - **Tres tools que nadie invocó en 90 días salen del catálogo, y dos ganan su disparador escrito.**
   Salió de cruzar los DOS ledgers —central y local, ventana de 90 días— contra `tools/list`: 13 de

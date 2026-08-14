@@ -33,7 +33,8 @@ token se filtra o un peer se compromete. Esas garantías las provee Musubi por e
 | Fuerza bruta del bearer | **Lockout** (16.1e): N fallos por IP ⇒ bloqueo temporal; comparación en tiempo constante (no filtra por timing) |
 | Token en texto plano en tránsito | Fail-closed: bind no-loopback **exige** token; sin TLS, hay que optar explícitamente por `allow_insecure_token` (válido solo si WireGuard/un proxy cubren el cifrado) |
 | DNS-rebinding (modo loopback) | Chequeo de Host loopback + Origin local |
-| DoS por body gigante / slow-loris | `MaxBytesReader` 4 MiB + timeouts de lectura/escritura |
+| DoS por body gigante / slow-loris | `MaxBytesReader` 4 MiB en el cable + timeouts de lectura/escritura |
+| Bomba de descompresión (`Content-Encoding: gzip`) | Segundo tope de 64 MiB sobre el body **ya descomprimido**; el de 4 MiB sigue rigiendo en el cable. Se apoya en que la **auth corre ANTES de leer el body**, así que sólo un principal autenticado puede mandar comprimido: si alguna vez se mueve ese orden, hay que revisar el número |
 | Movimiento lateral desde cualquier peer de la malla | **ACLs de Tailscale** (ver abajo): restringir el puerto del brain a principals concretos, no confiar solo en el rango CGNAT |
 | Pérdida del disco central | **DR** (16.0b): backup consistente off-host + restore probado |
 
