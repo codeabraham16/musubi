@@ -15,6 +15,7 @@ package mcp
 // compartido) ya deja ese cambio listo.
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -35,8 +36,72 @@ import (
 
 const (
 	mcpHTTPPath    = "/mcp"
-	maxRequestBody = 4 << 20 // 4 MiB: techo del body JSON-RPC entrante.
+	maxRequestBody = 4 << 20 // 4 MiB: techo del body JSON-RPC entrante (EN EL CABLE).
+
+	// maxDecodedBody es el techo del body YA DESCOMPRIMIDO cuando llega con Content-Encoding:
+	// gzip. Existe porque descomprimir sin tope es una bomba: 4 MiB de gzip pueden expandirse a
+	// gigabytes y voltear el central always-on. El de arriba sigue rigiendo en el cable, así que
+	// aceptar gzip NO afloja el control anti-DoS de la red — sólo agrega un segundo tope, aguas
+	// abajo, para el trabajo de descompresión.
+	//
+	// Que sea seguro subirlo tanto depende de un detalle del handler que conviene no romper: la
+	// AUTENTICACIÓN corre ANTES de leer el body. Un cuerpo comprimido sólo lo manda un principal
+	// que ya presentó un token válido, el mismo al que la tenencia ya le confía escrituras. Si
+	// alguna vez se mueve el chequeo de auth después de la lectura, este número hay que revisarlo.
+	maxDecodedBody = 64 << 20 // 64 MiB
 )
+
+// readRequestBody lee el cuerpo de un POST a /mcp respetando los dos topes, y acepta
+// Content-Encoding: gzip.
+//
+// El gzip existe por una razón concreta y medida: la federación del grafo de código
+// (musubi_codegraph_push) manda el grafo ENTERO en un solo POST, y a partir de cierto tamaño de
+// proyecto ese cuerpo pasa los 4 MiB y el central lo rechaza. El síntoma era pésimo: el push es
+// best-effort, así que el index local quedaba bien y devolvía `federated:false` sin más, mientras el
+// central se quedaba congelado con un grafo viejo. Nadie se enteraba.
+//
+// Los errores se devuelven DISTINGUIDOS a propósito. Antes los tres casos —pasarse de tamaño, gzip
+// corrupto, y una lectura cortada— colapsaban en un mismo "error leyendo el body", y desde el lado
+// del cliente eso es indistinguible de un bug de serialización. Un error que dice cuál de los tres
+// fue, y contra qué tope, es la diferencia entre leerlo y tener que reproducirlo.
+func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	// El tope del CABLE se aplica siempre y primero, comprimido o no.
+	limitado := http.MaxBytesReader(w, r.Body, maxRequestBody)
+
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
+		body, err := io.ReadAll(limitado)
+		if err != nil {
+			var tope *http.MaxBytesError
+			if errors.As(err, &tope) {
+				return nil, fmt.Errorf("el body supera el tope de %d MiB; si es un push del grafo, mandalo con Content-Encoding: gzip", maxRequestBody>>20)
+			}
+			return nil, fmt.Errorf("error leyendo el body: %v", err)
+		}
+		return body, nil
+	}
+
+	zr, err := gzip.NewReader(limitado)
+	if err != nil {
+		return nil, fmt.Errorf("Content-Encoding: gzip pero el body no es gzip válido: %v", err)
+	}
+	defer zr.Close()
+
+	// +1 byte para poder DISTINGUIR "entró justo" de "se truncó en el tope". io.LimitReader corta
+	// sin error, así que sin este byte de más un cuerpo gigante llegaría como JSON cortado y el
+	// error saldría por el Unmarshal de más abajo, diciendo cualquier otra cosa.
+	body, err := io.ReadAll(io.LimitReader(zr, maxDecodedBody+1))
+	if err != nil {
+		var tope *http.MaxBytesError
+		if errors.As(err, &tope) {
+			return nil, fmt.Errorf("el body comprimido supera el tope de %d MiB en el cable", maxRequestBody>>20)
+		}
+		return nil, fmt.Errorf("error descomprimiendo el body: %v", err)
+	}
+	if len(body) > maxDecodedBody {
+		return nil, fmt.Errorf("el body descomprimido supera el tope de %d MiB", maxDecodedBody>>20)
+	}
+	return body, nil
+}
 
 // httpOptions configura el handler HTTP.
 type httpOptions struct {
@@ -129,9 +194,9 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			return
 		}
 
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+		body, err := readRequestBody(w, r)
 		if err != nil {
-			writeHTTPJSON(w, errResponse(nil, rpcErrorf(codeParseError, "error leyendo el body")))
+			writeHTTPJSON(w, errResponse(nil, rpcErrorf(codeParseError, "%v", err)))
 			return
 		}
 		var req JsonRpcRequest

@@ -9,6 +9,7 @@ package mcp
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,8 +20,14 @@ import (
 	"time"
 
 	"musubi/internal/config"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
+
+// umbralCompresionPush es a partir de cuántos bytes el push del grafo viaja comprimido. Está bien
+// por debajo del tope del central (4 MiB) para dejar margen, y bien por encima de lo que pesa el
+// grafo de un proyecto chico, que es justo el que puede estar hablándole a un central viejo.
+const umbralCompresionPush = 1 << 20 // 1 MiB
 
 // errTransient marca un fallo reintentar-able (red/timeout/5xx/429): la fila vuelve a
 // 'pending' con backoff. errPermanent marca un fallo que NO se reintenta (4xx de params,
@@ -197,6 +204,39 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 	if err != nil {
 		return fmt.Errorf("%w: serializar push del grafo: %v", errPermanent, err)
 	}
+
+	// El grafo entero va en UN solo POST, y el central topea el body en 4 MiB. Un proyecto
+	// mediano ya se pasa: medido el 2026-08-14 contra el repo de Musubi, el central rechazaba
+	// con -32700 y el push moría en silencio (best-effort ⇒ sólo `federated:false`).
+	//
+	// Se comprime SÓLO por encima del umbral, no siempre, y eso es deliberado: un central viejo
+	// no entiende Content-Encoding: gzip, así que comprimir de entrada rompería los pushes chicos
+	// que hoy SÍ funcionan. Por debajo del umbral el comportamiento queda idéntico al de antes;
+	// por encima, hoy no funciona nada, así que no hay nada que romper. Efecto lateral: el
+	// central hay que actualizarlo ANTES que los clientes que lo empujan.
+	crudo := len(payload)
+	comprimido := false
+	if crudo > umbralCompresionPush {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, werr := zw.Write(payload); werr != nil {
+			return fmt.Errorf("%w: comprimir push del grafo: %v", errPermanent, werr)
+		}
+		if cerr := zw.Close(); cerr != nil {
+			return fmt.Errorf("%w: cerrar el gzip del push: %v", errPermanent, cerr)
+		}
+		payload = buf.Bytes()
+		comprimido = true
+		logx.Info("federación del grafo: payload comprimido", "crudo_bytes", crudo, "gzip_bytes", len(payload),
+			"nodos", len(nodes), "aristas", len(edges), "gists", len(gists))
+	}
+	// Si NI COMPRIMIDO entra, el arreglo ya no es este: hay que trocear el push. Se dice acá y con
+	// los dos números, para que el próximo que lo vea no tenga que reproducirlo para enterarse.
+	if len(payload) > maxRequestBody {
+		return fmt.Errorf("%w: el grafo no entra en un POST (%d bytes crudos, %d comprimidos, tope %d) — hace falta trocear el push",
+			errPermanent, crudo, len(payload), maxRequestBody)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
@@ -204,6 +244,9 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 		return fmt.Errorf("%w: construir push del grafo: %v", errPermanent, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if comprimido {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
