@@ -518,7 +518,7 @@
           },
           "order": {
             "type": "string",
-            "description": "recent (default, más nuevas primero) | confidence (mayor confianza primero)"
+            "description": "recent (default, más nuevas primero) | confidence (mayor confianza primero) | oldest (FIFO, la pendiente más vieja primero). SI VAS A DRENAR LA COLA CON UN `limit`, USÁ oldest: los otros dos órdenes son ESTABLES, así que pedir siempre las primeras N devuelve siempre las mismas N y el fondo de la cola queda inalcanzable por construcción. Cuando eso pasa, la respuesta te lo avisa con `oldest_pending_at` y `tail_hint`."
           }
         }
       }

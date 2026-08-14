@@ -1200,19 +1200,20 @@ func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (int
 	}
 	orden := strings.ToLower(strings.TrimSpace(args.Order))
 	switch orden {
-	case "", "recent", "confidence":
+	case "", "recent", "confidence", "oldest":
 	default:
-		return nil, rpcErrorf(codeInvalidParams, "order inválido %q (usá recent|confidence)", args.Order)
+		return nil, rpcErrorf(codeInvalidParams, "order inválido %q (usá recent|confidence|oldest)", args.Order)
 	}
 
 	// Aislamiento por proyecto (Track 17): solo los conflictos cuya observación de origen es del
 	// proyecto de la credencial; stdio local / admin ⇒ federado.
 	page, err := s.engine.PendingObsRelationsQueryCtx(s.scopedCtx(ctx), memory.PendingQuery{
-		MinConfidence: args.MinConfidence,
-		MinLex:        args.MinLex,
-		Limit:         args.Limit,
-		PorConfianza:  orden == "confidence",
-		CountOnly:     args.CountOnly,
+		MinConfidence:    args.MinConfidence,
+		MinLex:           args.MinLex,
+		Limit:            args.Limit,
+		PorConfianza:     orden == "confidence",
+		MasViejasPrimero: orden == "oldest",
+		CountOnly:        args.CountOnly,
 	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al listar conflictos: %v", err)
@@ -1225,6 +1226,15 @@ func (s *McpServer) toolConflicts(ctx context.Context, raw json.RawMessage) (int
 	// la lista entera. Cortar en silencio sería un tope silencioso, que es peor que no tener tope.
 	if page.Truncated {
 		out["truncated"] = true
+	}
+	// Y con la cola truncada en un orden estable, se dice cuán vieja es la más vieja Y cómo llegar a
+	// ella. Sin esto un adjudicador con tope puede correr semanas sobre las mismas N y no enterarse:
+	// es exactamente lo que venía pasando (405 pendientes, la más vieja de julio, nunca tocada). El
+	// aviso va en el resultado y no en un log porque el que tiene que cambiar de conducta es el
+	// agente que lee esta respuesta.
+	if page.MasViejaPendiente != "" {
+		out["oldest_pending_at"] = page.MasViejaPendiente
+		out["tail_hint"] = "hay pendientes más viejas que esta página y este orden nunca las alcanza; pedí order=\"oldest\" para drenar en FIFO"
 	}
 	if args.CountOnly {
 		out["count_only"] = true
