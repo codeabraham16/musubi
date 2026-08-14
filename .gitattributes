@@ -1,0 +1,18 @@
+# Normalización de finales de línea.
+#
+# El árbol de trabajo vivió un tiempo en Windows con core.autocrlf=true, así que
+# el checkout quedó en CRLF mientras el repo guarda LF. Al mover el disco a Linux
+# git pasó a ver 655 archivos "modificados" sin un solo cambio de contenido.
+# Fijar la política acá la vuelve independiente de la config local de cada máquina.
+* text=auto eol=lf
+
+# Los scripts se rompen con CRLF, así que se dejan explícitos.
+*.sh   text eol=lf
+*.go   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Binarios: sin traducción ni diff de texto.
+*.png binary
+*.ico binary
+*.pdf binary
