@@ -155,6 +155,10 @@ type CodeGraphStore interface {
 	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error)
 	// ListGraphNodesForFileCtx devuelve los símbolos de un archivo, scopeado (F2).
 	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]GraphNode, error)
+	// ListGraphFuncsInDirsCtx devuelve las funcs top-level de un conjunto de directorios (no
+	// recursivo). Es lo que permite resolver una llamada cross-paquete en el refresco incremental:
+	// de un import path se conoce el DIRECTORIO, nunca el archivo donde vive el símbolo (F8-A).
+	ListGraphFuncsInDirsCtx(ctx context.Context, dirs []string) ([]GraphNode, error)
 	// GraphFileFingerprintsCtx devuelve path → src_fingerprint de los archivos del grafo, scopeado
 	// (base de la reconciliación incremental y de la frescura, F5).
 	GraphFileFingerprintsCtx(ctx context.Context) (map[string]string, error)

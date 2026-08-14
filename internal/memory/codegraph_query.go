@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // codegraph_query.go añade las LECTURAS de consulta del grafo de código (Track 20 · F2):
@@ -212,6 +213,61 @@ func (e *DbEngine) GraphEntryPointsCtx(ctx context.Context, limit int) ([]string
 		}
 	}
 	return out, nil
+}
+
+// ListGraphFuncsInDirsCtx devuelve las funcs TOP-LEVEL que viven en un conjunto de directorios
+// (no recursivo: sólo los archivos del propio dir, que es lo que en Go equivale a "un paquete").
+//
+// Existe para resolver llamadas CROSS-PAQUETE en el refresco incremental (Track 20 · F8-A). De un
+// import path se conoce el DIRECTORIO del paquete, pero NO el archivo donde vive el símbolo, así que
+// ni `GetGraphNodeCtx` (lookup exacto por node_key) ni `ListGraphNodesForFileCtx` (por archivo)
+// alcanzan: son las dos superficies que ya existían y ninguna sabe buscar por dir.
+//
+// La consulta queda acotada por los imports in-module del paquete que se refresca, no por el repo.
+func (e *DbEngine) ListGraphFuncsInDirsCtx(ctx context.Context, dirs []string) ([]GraphNode, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	sc := projectScopeFrom(ctx)
+	clause, scopeArgs := sc.scopeClause("")
+
+	// Un OR por directorio: "está bajo el dir" Y "no está en un subdirectorio". SQLite no tiene
+	// dirname, y filtrar en Go obligaría a traerse todas las funcs del proyecto para descartar casi
+	// todas. ESCAPE porque `_` y `%` son comodines de LIKE y un nombre de directorio puede tenerlos:
+	// sin escapar, un dir llamado `a_b` matchearía también `axb`.
+	var conds []string
+	var args []interface{}
+	for _, d := range dirs {
+		if d == "." || d == "" {
+			conds = append(conds, `path NOT LIKE '%/%'`) // raíz del módulo: sin barras
+			continue
+		}
+		pref := likeEscape(d) + `/`
+		conds = append(conds, `(path LIKE ? ESCAPE '\' AND path NOT LIKE ? ESCAPE '\')`)
+		args = append(args, pref+`%`, pref+`%/%`)
+	}
+	q := `SELECT node_key, kind, name, path FROM code_graph_nodes
+	      WHERE kind='func' AND (` + strings.Join(conds, " OR ") + `)` + clause
+	rows, err := e.db.QueryContext(ctx, q, append(args, scopeArgs...)...)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar funcs por directorio: %w", err)
+	}
+	defer rows.Close()
+	var out []GraphNode
+	for rows.Next() {
+		var n GraphNode
+		if err := rows.Scan(&n.Key, &n.Kind, &n.Name, &n.Path); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// likeEscape neutraliza los comodines de LIKE (`%`, `_`) y la propia barra de escape.
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // ListGraphNodesForFileCtx devuelve los nodos (símbolos) contenidos en un archivo, scopeado.
