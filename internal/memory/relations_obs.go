@@ -212,6 +212,14 @@ type PendingQuery struct {
 	Limit int
 	// PorConfianza ordena de mayor a menor confianza en vez de por recencia.
 	PorConfianza bool
+	// MasViejasPrimero drena la cola en FIFO: la pendiente más vieja primero.
+	//
+	// Existe porque los otros dos órdenes son ESTABLES, y eso vuelve la cola inalcanzable POR
+	// CONSTRUCCIÓN para cualquier consumidor con tope: pedir siempre las 30 primeras por recencia
+	// devuelve siempre las mismas 30. Medido en el central el 2026-08-14: 405 pendientes, y el
+	// adjudicador que corre por timer no había tocado jamás las de julio. No era un bug del
+	// adjudicador — no tenía con qué pedirlas.
+	MasViejasPrimero bool
 	// CountOnly evita traer las filas: sólo cuenta. Es el caso del panel que muestra un número.
 	CountOnly bool
 }
@@ -228,6 +236,13 @@ type PendingPage struct {
 	// Truncated avisa que la lista se cortó por Limit. Sin esta bandera, un cliente no puede
 	// distinguir «hay 10» de «te mando 10 de 358».
 	Truncated bool
+	// MasViejaPendiente es el updated_at de la relación pendiente MÁS VIEJA que matchea los filtros,
+	// y sólo se llena cuando la lista se truncó Y no se pidió el orden FIFO.
+	//
+	// Es la mitad accionable de Truncated. «Te mando 30 de 405» no dice lo que hay que saber; «y la
+	// más vieja es del 2026-07-29» sí, porque delata que hay una cola que nadie está tocando. Sin
+	// esto, un consumidor con tope puede correr durante semanas creyendo que va al día.
+	MasViejaPendiente string
 }
 
 // PendingObsRelationsQueryCtx es PendingObsRelationsCtx con filtros, orden y tope. Mantiene el mismo
@@ -259,7 +274,10 @@ func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQue
 	}
 
 	orden := ` ORDER BY r.updated_at DESC`
-	if q.PorConfianza {
+	switch {
+	case q.MasViejasPrimero:
+		orden = ` ORDER BY r.updated_at ASC`
+	case q.PorConfianza:
 		orden = ` ORDER BY r.confidence DESC, r.updated_at DESC`
 	}
 	sel := `SELECT ` + colsObsRel("r.") + from + where + orden
@@ -279,6 +297,21 @@ func (e *DbEngine) PendingObsRelationsQueryCtx(ctx context.Context, q PendingQue
 		page.Relations = rels
 	}
 	page.Truncated = q.Limit > 0 && page.Count > len(page.Relations)
+
+	// Con la lista truncada y un orden que NO es FIFO, hay una cola que este consumidor no está
+	// viendo. Se le dice cuán vieja es. Con MasViejasPrimero no hace falta: la más vieja ya es la
+	// primera de la lista que se lleva. `args` acá sigue teniendo el LIMIT al final, así que la
+	// consulta se rearma con los del WHERE solamente.
+	if page.Truncated && !q.MasViejasPrimero {
+		whereArgs := args
+		if q.Limit > 0 {
+			whereArgs = args[:len(args)-1]
+		}
+		var masVieja sql.NullString
+		if err := e.db.QueryRowContext(ctx, `SELECT MIN(r.updated_at)`+from+where, whereArgs...).Scan(&masVieja); err == nil && masVieja.Valid {
+			page.MasViejaPendiente = masVieja.String
+		}
+	}
 	return page, nil
 }
 

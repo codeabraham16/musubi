@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El fondo de la cola de conflictos era inalcanzable, y no por culpa de quien la drena.**
+  `musubi_conflicts` tenía dos órdenes —`recent` y `confidence`— y **los dos son estables**: pedir
+  siempre «las primeras 30» devuelve siempre las mismas 30. Un consumidor con tope nunca llega al
+  fondo, por construcción. Medido en el central el 2026-08-14: **405 pendientes**, la más vieja del
+  **2026-07-29**, y un adjudicador corriendo por timer que jamás la había tocado. La conclusión
+  anterior —«hay que arreglar el prompt del adjudicador»— era falsa: el adjudicador no tenía con qué
+  pedirlas.
+
+  Dos cambios, y hacen falta los dos:
+  - **`order: "oldest"`** drena en FIFO, la pendiente más vieja primero.
+  - **La respuesta avisa.** Cuando la lista se trunca en un orden estable, ahora vienen
+    `oldest_pending_at` (cuán vieja es la más vieja que el filtro alcanza) y un `tail_hint` que
+    nombra la salida. Un orden nuevo que el consumidor no sabe que existe no arregla nada: el que
+    tiene que cambiar de conducta es el agente que lee la respuesta, y por eso el aviso va en el
+    resultado y no en un log. Con `order: "oldest"` el aviso NO aparece — la más vieja ya está en la
+    página y repetirlo sería ruido.
+
+  El aviso respeta **los mismos filtros** que la lista. Calcularlo sobre la tabla entera le mostraría
+  a quien filtra por `min_lex` la fecha de una relación que su filtro excluye, y lo mandaría a buscar
+  una cola que para él no existe.
+
+  Verificado por sabotaje: dejar `oldest` como alias silencioso del default —el modo de falla más
+  probable de este cambio, porque la tool aceptaría el parámetro sin quejarse— pone en rojo los dos
+  tests de orden.
 - **La federación del grafo de código estaba muerta hacía semanas, y el sistema decía que estaba
   bien.** `musubi_codegraph_index` manda el grafo entero al central en UN solo POST; el central topea
   el body en 4 MiB. Medido el 2026-08-14 contra este repo: **4.958.147 bytes** (5.194 nodos, 11.225

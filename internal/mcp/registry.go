@@ -621,7 +621,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"limit":          {Type: "number", Description: "Tope de relaciones devueltas (0 = sin tope). NO afecta a `count`, que sigue siendo el total."},
 						"min_confidence": {Type: "number", Description: "Descarta las de confianza menor, entre 0 y 1. Acota el payload; no es un ranking de gravedad (ver la descripción de la tool). Para TRIAR usá min_lex."},
 						"min_lex":        {Type: "number", Description: "Filtra por el SOLAPE LÉXICO solo (0 a 1): comparten trigramas. Es la señal estable y el filtro que sirve para triar, a diferencia de min_confidence. Descarta las relaciones detectadas antes de la v27, que no guardan el desglose — no se puede afirmar que superan un umbral que nadie midió."},
-						"order":          {Type: "string", Description: "recent (default, más nuevas primero) | confidence (mayor confianza primero)"},
+						"order":          {Type: "string", Description: "recent (default, más nuevas primero) | confidence (mayor confianza primero) | oldest (FIFO, la pendiente más vieja primero). SI VAS A DRENAR LA COLA CON UN `limit`, USÁ oldest: los otros dos órdenes son ESTABLES, así que pedir siempre las primeras N devuelve siempre las mismas N y el fondo de la cola queda inalcanzable por construcción. Cuando eso pasa, la respuesta te lo avisa con `oldest_pending_at` y `tail_hint`."},
 					},
 				},
 			},
