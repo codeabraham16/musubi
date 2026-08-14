@@ -57,11 +57,27 @@ type Edge struct {
 	SrcPath    string  `json:"src_path"`
 }
 
+// PendingCall es un call-site CALIFICADO hacia otro paquete DEL MISMO MÓDULO (`alias.Func(...)`)
+// que la derivación por paquete NO puede convertir en arista: el paquete destino está fuera de su
+// alcance, así que no conoce el archivo —y por lo tanto la node_key— donde vive el símbolo.
+// Se emite como DATO para que una fase posterior lo resuelva contra un SymbolIndex (ver crosspkg.go).
+// Track 20 · F8-A.
+type PendingCall struct {
+	FromKey    string `json:"from_key"`    // node_key del símbolo que hace la llamada
+	ImportPath string `json:"import_path"` // import path YA resuelto desde el alias del propio archivo
+	Name       string `json:"name"`        // nombre de la func llamada, sin calificar
+	SrcPath    string `json:"src_path"`    // archivo del CALLER: es quien va a poseer la arista
+}
+
 // PackageGraph es el resultado de derivar un paquete (directorio): nodos y aristas ya
 // deduplicados y en orden determinista (para golden tests y salidas reproducibles).
+// PendingCalls son las llamadas cross-paquete que quedaron SIN resolver a propósito: derivar un
+// paquete no alcanza para resolverlas, y la alternativa —recibir un índice como parámetro— es
+// imposible en un índice completo (haría falta derivar todo para poder construirlo).
 type PackageGraph struct {
-	Nodes []Node `json:"nodes"`
-	Edges []Edge `json:"edges"`
+	Nodes        []Node        `json:"nodes"`
+	Edges        []Edge        `json:"edges"`
+	PendingCalls []PendingCall `json:"pending_calls,omitempty"`
 }
 
 // Import es un import declarado en un archivo Go (Path canónico, Alias si se renombró).
@@ -145,9 +161,11 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 	nodes := map[string]Node{} // key → nodo (dedup: paquetes aparecen en varios archivos)
 	var edges []Edge
 	edgeSeen := map[string]bool{}
-	pkgFuncs := map[string]string{}       // nombre de func top-level → SymbolKey (tabla del paquete)
+	pkgFuncs := map[string]string{} // nombre de func top-level → SymbolKey (tabla del paquete)
 	type callSite struct{ caller, callee, src string }
 	var calls []callSite
+	var pending []PendingCall // cross-paquete in-module: se emiten sin resolver (ver PendingCall)
+	pendingSeen := map[string]bool{}
 
 	addNode := func(n Node) {
 		if _, ok := nodes[n.Key]; !ok {
@@ -181,11 +199,29 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 		fileKey := FileKey(path)
 		addNode(Node{Key: fileKey, Kind: KindFile, Name: filepath.Base(path), Path: path})
 
-		// IMPORTS.
+		// IMPORTS. De paso se arma la tabla nombre-local→import-path de los imports IN-MODULE, que
+		// es lo que después permite leer `alias.Func()` como una llamada cross-paquete. La tabla es
+		// POR ARCHIVO a propósito: dos archivos del mismo paquete pueden aliasear distinto el mismo
+		// import, y cada uno tiene que resolver por el suyo.
+		inModImports := map[string]string{}
 		for _, imp := range importsOf(file) {
 			pk := PackageKey(imp.Path)
-			addNode(Node{Key: pk, Kind: KindPackage, Name: imp.Path, External: !inModule(imp.Path, modulePath)})
+			external := !inModule(imp.Path, modulePath)
+			addNode(Node{Key: pk, Kind: KindPackage, Name: imp.Path, External: external})
 			addEdge(Edge{FromKey: fileKey, ToKey: pk, Kind: EdgeImports, Confidence: 1.0, Provenance: ProvExtracted, SrcPath: path})
+			if external || imp.Alias == "_" || imp.Alias == "." {
+				// Externos: fuera de alcance (su grafo no es nuestro). `_` no expone nombres y `.`
+				// mete los símbolos sin calificar, que ya no es el caso que este pase resuelve.
+				continue
+			}
+			local := imp.Alias
+			if local == "" {
+				// Sin alias, el nombre local es el del PAQUETE, que casi siempre coincide con el
+				// último segmento del path. Si difiere, el peor caso es no emitir el pendiente —
+				// una arista de menos, nunca una inventada.
+				local = imp.Path[strings.LastIndex(imp.Path, "/")+1:]
+			}
+			inModImports[local] = imp.Path
 		}
 
 		// Símbolos top-level → nodos + CONTAINS. Los métodos se califican con su receiver.
@@ -208,9 +244,32 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 				}
 				if d.Body != nil {
 					ast.Inspect(d.Body, func(n ast.Node) bool {
-						if ce, ok := n.(*ast.CallExpr); ok {
-							if id, ok := ce.Fun.(*ast.Ident); ok {
-								calls = append(calls, callSite{caller: key, callee: id.Name, src: path})
+						ce, ok := n.(*ast.CallExpr)
+						if !ok {
+							return true
+						}
+						switch fun := ce.Fun.(type) {
+						case *ast.Ident:
+							// `Func(...)` — sin calificar: se resuelve en el pase 2 contra el paquete.
+							calls = append(calls, callSite{caller: key, callee: fun.Name, src: path})
+						case *ast.SelectorExpr:
+							// `X.Func(...)`. Sólo nos interesa cuando X es un identificador que matchea
+							// un import IN-MODULE del propio archivo. Si X es cualquier otra cosa (un
+							// valor, una expresión), es un método sobre un receptor y resolverlo
+							// exigiría inferencia de tipos: fuera de alcance de F8-A.
+							base, ok := fun.X.(*ast.Ident)
+							if !ok {
+								return true
+							}
+							ip, ok := inModImports[base.Name]
+							if !ok {
+								return true
+							}
+							pc := PendingCall{FromKey: key, ImportPath: ip, Name: fun.Sel.Name, SrcPath: path}
+							id := pc.FromKey + "\x00" + pc.ImportPath + "\x00" + pc.Name
+							if !pendingSeen[id] {
+								pendingSeen[id] = true
+								pending = append(pending, pc)
 							}
 						}
 						return true
@@ -275,7 +334,22 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 		}
 	}
 
-	return PackageGraph{Nodes: sortedNodes(nodes), Edges: sortEdges(edges)}
+	return PackageGraph{Nodes: sortedNodes(nodes), Edges: sortEdges(edges), PendingCalls: sortPendingCalls(pending)}
+}
+
+// sortPendingCalls ordena los pendientes por (FromKey, ImportPath, Name) para salida determinista,
+// igual que sortedNodes/sortEdges: el orden de recorrido del AST no debe filtrarse al resultado.
+func sortPendingCalls(p []PendingCall) []PendingCall {
+	sort.Slice(p, func(i, j int) bool {
+		if p[i].FromKey != p[j].FromKey {
+			return p[i].FromKey < p[j].FromKey
+		}
+		if p[i].ImportPath != p[j].ImportPath {
+			return p[i].ImportPath < p[j].ImportPath
+		}
+		return p[i].Name < p[j].Name
+	})
+	return p
 }
 
 // inModule indica si un import-path pertenece al módulo actual (in-project) y por lo tanto NO

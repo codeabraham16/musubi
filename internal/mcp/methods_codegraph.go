@@ -42,13 +42,25 @@ func (s *McpServer) moduleImportPath() string {
 // debe fallar por esto. Deriva del contenido ACTUAL de cada archivo (derivar-no-desfasar) y
 // estampa el fingerprint de ese mismo snapshot en cada fila.
 func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) error {
+	_, err := s.refreshCodeGraphPkg(ctx, dir)
+	return err
+}
+
+// refreshCodeGraphPkg es refreshCodeGraphForPackage y además informa CUÁNTAS llamadas cross-paquete
+// quedaron sin resolver. Ese número no es diagnóstico: lo usa el índice COMPLETO para saber qué
+// paquetes vale la pena re-derivar en una segunda pasada. En un índice desde cero los paquetes se
+// recorren en algún orden, así que cuando se deriva el primero los símbolos del segundo todavía no
+// están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
+// destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
+// que es justo la clase de "se arregla solo más tarde" que nadie verifica.
+func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unresolved int, err error) {
 	absDir := dir
 	if !filepath.IsAbs(absDir) {
 		absDir = filepath.Join(s.projectPath, dir)
 	}
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	files := map[string]string{}
@@ -71,10 +83,22 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 		fileKeys = append(fileKeys, key)
 	}
 	if len(files) == 0 {
-		return nil
+		return 0, nil
 	}
 
-	g := codeintel.DerivePackage(dir, files, s.moduleImportPath())
+	modPath := s.moduleImportPath()
+	g := codeintel.DerivePackage(dir, files, modPath)
+
+	// CROSS-PAQUETE (Track 20 · F8-A). `DerivePackage` no puede resolver una llamada `otro.Func()`
+	// —el archivo donde vive el símbolo está fuera de su alcance—, así que devuelve pendientes y acá
+	// se resuelven contra el grafo YA persistido.
+	//
+	// ⚠️ INVARIANTE: estas aristas tienen que viajar en la MISMA llamada a UpsertPackageGraphFrom que
+	// las demás del paquete. Esa llamada BORRA por src_path y re-inserta, así que persistirlas aparte
+	// borraría lo recién escrito. Y como su SrcPath es el archivo del CALLER, el borrado-por-fuente
+	// las posee: re-indexar este paquete recalcula sus propias aristas cross y no se pierden — que es
+	// exactamente el modo de falla que este cambio existe para no fabricar.
+	crossEdges, unresolved := s.resolveCrossPkgCalls(ctx, g.PendingCalls, modPath)
 
 	nodes := make([]memory.GraphNode, 0, len(g.Nodes))
 	for _, n := range g.Nodes {
@@ -84,8 +108,8 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 			SrcFingerprint: fps[n.Path],
 		})
 	}
-	edges := make([]memory.GraphEdge, 0, len(g.Edges))
-	for _, ed := range g.Edges {
+	edges := make([]memory.GraphEdge, 0, len(g.Edges)+len(crossEdges))
+	for _, ed := range append(append([]codeintel.Edge{}, g.Edges...), crossEdges...) {
 		edges = append(edges, memory.GraphEdge{
 			FromKey: ed.FromKey, ToKey: ed.ToKey, Kind: ed.Kind,
 			Confidence: ed.Confidence, Provenance: ed.Provenance,
@@ -97,9 +121,54 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 	// no dejar filas sin atribuir que verían todos los tenants.
 	origin, ok := writeOriginFor(principalFrom(ctx), "")
 	if !ok {
-		return nil
+		return 0, nil
 	}
-	return s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges)
+	return unresolved, s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges)
+}
+
+// resolveCrossPkgCalls convierte los pendientes de un paquete en aristas CALLS, buscando los
+// símbolos destino en el grafo ya persistido. Devuelve también cuántos quedaron sin resolver.
+//
+// La consulta va acotada a los DIRECTORIOS de los imports in-module que aparecen en los pendientes,
+// no al repo entero: un paquete importa un puñado de paquetes propios, no todos.
+//
+// Best-effort igual que el resto del indexado: si la consulta falla, se devuelven cero aristas y el
+// índice sigue. Perder una arista degrada el grafo; abortar el índice lo deja sin nada.
+func (s *McpServer) resolveCrossPkgCalls(ctx context.Context, pending []codeintel.PendingCall, modPath string) ([]codeintel.Edge, int) {
+	if len(pending) == 0 || modPath == "" {
+		return nil, 0
+	}
+	var dirs []string
+	for _, ip := range codeintel.ImportPathsOf(pending) {
+		if d, ok := codeintel.DirForImportPath(ip, modPath); ok {
+			dirs = append(dirs, d)
+		}
+	}
+	if len(dirs) == 0 {
+		return nil, 0
+	}
+	rows, err := s.engine.ListGraphFuncsInDirsCtx(s.scopedCtx(ctx), dirs)
+	if err != nil {
+		logx.Warn("codegraph: no se pudieron leer las funcs para resolver cross-paquete", "dirs", len(dirs), "error", err)
+		return nil, len(pending)
+	}
+	idx := codeintel.NewModuleIndex(modPath)
+	nodes := make([]codeintel.Node, 0, len(rows))
+	for _, r := range rows {
+		nodes = append(nodes, codeintel.Node{Key: r.Key, Kind: r.Kind, Name: r.Name, Path: r.Path})
+	}
+	idx.Add(nodes)
+
+	// Se cuenta con el MISMO índice que resuelve, no con la diferencia de longitudes: dos pendientes
+	// distintos pueden colapsar en una sola arista (dedup por from→to), así que restar contaría de
+	// más y mandaría a una segunda pasada inútil.
+	unresolved := 0
+	for _, pc := range pending {
+		if _, ok := idx.LookupFunc(pc.ImportPath, pc.Name); !ok {
+			unresolved++
+		}
+	}
+	return codeintel.ResolveCrossPackageCalls(pending, idx), unresolved
 }
 
 // packageDirOf devuelve el directorio del paquete de una clave de path normalizada (con "/").
@@ -205,13 +274,33 @@ func (s *McpServer) graphSize(scoped context.Context) (nodes, edges int) {
 
 // indexAllPackages puebla el repo ENTERO: refresca el grafo de cada directorio con .go. Devuelve
 // un resumen {packages, nodes, edges}.
+//
+// Son DOS pasadas, y la segunda no es paranoia. Las llamadas cross-paquete se resuelven contra el
+// grafo ya persistido (F8-A), así que en un índice desde cero el paquete que se deriva PRIMERO no
+// puede resolver sus llamadas al que se deriva DESPUÉS: el destino todavía no existe. Con una sola
+// pasada el grafo quedaría completo recién al segundo índice — el clásico "se arregla solo la
+// próxima vez" que nadie verifica y que acá se paga como aristas ausentes en `musubi_impact`.
+//
+// La segunda pasada NO re-deriva todo: sólo los paquetes que reportaron pendientes sin resolver.
+// Y re-derivar es idempotente (borra por src_path y re-inserta), así que repetir uno no duplica nada.
 func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
 	dirs, _ := s.walkSourceTree()
 	pkgs := 0
+	var pendientes []string
 	for dir := range dirs {
-		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
-			pkgs++
+		unresolved, err := s.refreshCodeGraphPkg(ctx, dir)
+		if err != nil {
+			continue
 		}
+		pkgs++
+		if unresolved > 0 {
+			pendientes = append(pendientes, dir)
+		}
+	}
+	// Segunda pasada: ahora el grafo tiene TODOS los símbolos del módulo, así que lo que en la
+	// primera vuelta apuntaba a un paquete todavía no indexado ya resuelve.
+	for _, dir := range pendientes {
+		_, _ = s.refreshCodeGraphPkg(ctx, dir)
 	}
 	nodes, edges := s.graphSize(s.scopedCtx(ctx))
 	return map[string]interface{}{"packages": pkgs, "nodes": nodes, "edges": edges}, nil
