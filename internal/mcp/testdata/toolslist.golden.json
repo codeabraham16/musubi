@@ -111,7 +111,7 @@
     },
     {
       "name": "musubi_maintain",
-      "description": "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
+      "description": "DISPARADOR: corré esto DESPUÉS de una carga masiva —un ingest grande, una importación, una tanda de capturas— sin esperar al ciclo automático de 24 h. Ése es el único momento en que el ciclo automático llega tarde: la consolidación es lo que evita que el recall se llene de casi-duplicados justo cuando acabás de meter mucho. Fuera de ese caso no hace falta invocarla. Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -334,43 +334,6 @@
       }
     },
     {
-      "name": "musubi_resolve_skills",
-      "description": "Resuelve las skills activas para lo que estás por hacer, junto con la telemetría sin resolver. Se puede preguntar por ARCHIVOS (skills atadas a un tipo de archivo) y/o declarando la FASE o la FORMA de la tarea (skills que se activan por el momento del trabajo, no por el archivo: planificar, revisar, auditar, orquestar). Al menos uno de los tres es obligatorio.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "detail": {
-            "type": "string",
-            "description": "Cuánto cuerpo traer. 'auto' (default): el cuerpo viaja sólo con las skills que matchearon por un glob real o por el alcance que declaraste; las que entraron sólo por su comodín '*' llegan con nombre, descripción y 'cuando'. 'full': todos los cuerpos. 'summary': ninguno. Para pedir un cuerpo omitido usá musubi_list_skills con query:\"\u003cnombre\u003e\""
-          },
-          "modified_files": {
-            "type": "array",
-            "description": "Listado de archivos que van a ser modificados o leídos",
-            "items": {
-              "type": "string",
-              "description": "Ruta o nombre del archivo"
-            }
-          },
-          "phase": {
-            "type": "string",
-            "description": "Fase del trabajo, declarada por vos: 'phase:planning' (antes de tocar nada), 'phase:implementing' (escribiendo el cambio) o 'phase:reviewing' (cerrándolo)"
-          },
-          "task": {
-            "type": "string",
-            "description": "Forma de la tarea, declarada por vos: 'task:audit' (auditar un codebase o un área) o 'task:orchestration' (tarea grande y paralelizable)"
-          }
-        }
-      }
-    },
-    {
-      "name": "musubi_detect_stack",
-      "description": "Detecta el stack/ecosistema del proyecto actual (lenguajes y frameworks) inspeccionando archivos de manifiesto. No recibe parámetros. Devuelve JSON para que el agente investigue mejores prácticas oficiales y luego guarde skills con musubi_save_skill.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {}
-      }
-    },
-    {
       "name": "musubi_save_skill",
       "description": "Guarda una skill generada como {name}.yaml en .musubi/skills/ y crea el sentinel para no re-generar. IMPORTANTE: usar solo después de confirmar las reglas con el usuario. Por defecto NO sobrescribe skills existentes (pasa overwrite=true para forzar).",
       "inputSchema": {
@@ -437,23 +400,6 @@
           "stack": {
             "type": "string",
             "description": "Filtrar por ecosistema específico (ej. 'Go', 'Node.js') (opcional)"
-          }
-        }
-      }
-    },
-    {
-      "name": "musubi_discover_skills",
-      "description": "Descubre Agent Skills (SKILL.md) de la comunidad, filtradas por el stack del proyecto. Si no se pasa 'query', la deriva del stack detectado. Lee un catálogo curado y estático por default (cero rate limit) y cae a la API del marketplace en vivo si el catálogo no está disponible. Devuelve candidatos con su 'githubUrl' para que el usuario los REVISE e instale: Musubi NO instala ni ejecuta nada (contenido no confiable). Opt-in (sourcing.marketplace_enabled); degrada con gracia si está deshabilitado o la red cae.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "limit": {
-            "type": "number",
-            "description": "Cantidad máxima de resultados (1-100, por defecto 20)"
-          },
-          "query": {
-            "type": "string",
-            "description": "Texto de búsqueda (opcional; por defecto se deriva del stack del proyecto)"
           }
         }
       }
@@ -879,7 +825,7 @@
     },
     {
       "name": "musubi_detect_changes",
-      "description": "Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+      "description": "DISPARADOR: ANTES de cerrar un cambio —al abrir el PR, o en la fase verify de SDD— para saber QUÉ verificar y QUÉ decisión guardada pudo quedar obsoleta. No es una tool de exploración: se invoca sobre un diff que ya existe. Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
       "inputSchema": {
         "type": "object",
         "properties": {

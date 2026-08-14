@@ -207,7 +207,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_maintain",
-				Description: "Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
+				Description: "DISPARADOR: corré esto DESPUÉS de una carga masiva —un ingest grande, una importación, una tanda de capturas— sin esperar al ciclo automático de 24 h. Ése es el único momento en que el ciclo automático llega tarde: la consolidación es lo que evita que el recall se llene de casi-duplicados justo cuando acabás de meter mucho. Fuera de ese caso no hace falta invocarla. Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -466,6 +466,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolResolveSkills,
+			// DORMIDA (2026-08-14). Cero invocaciones en 90 días en los DOS ledgers, y la causa no es
+			// que no sirva: el harness ya resuelve skills por su cuenta. `musubi setup` escribe la
+			// misma skill en `.musubi/skills/*.yaml` Y en `.claude/skills/*/SKILL.md`, y Claude Code
+			// lee la segunda de forma nativa y la ofrece por trigger. Esta tool es el camino paralelo
+			// al que el agente ya no necesita llegar. Sigue despachable si alguien la nombra.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -478,6 +484,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler:  noCtx(s.toolDetectStack),
 			readOnly: true,
+			// DORMIDA (2026-08-14). Cero invocaciones en 90 días, y tiene un duplicado que SÍ corre
+			// solo: el hook de `SessionStart` ejecuta `musubi detect --hook-mode`, que detecta el
+			// stack e inyecta el resultado al arrancar la sesión. Pedirlo otra vez por tool es
+			// repetir un trabajo que ya está hecho antes del primer turno.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -529,6 +540,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler:  noCtx(s.toolDiscoverSkills),
 			readOnly: true,
+			// DORMIDA (2026-08-14). Cero invocaciones en 90 días. Ya era opt-in
+			// (`sourcing.marketplace_enabled`), o sea que en la mayoría de las instalaciones ni
+			// siquiera responde — y aun así se cobraba su esquema en cada tools/list. La superficie
+			// que descubre skills de afuera es la solapa Comunidad del cuerpo, y ésa llama a
+			// `musubi_search_skills`, que queda expuesta.
+			dormant: true,
 		},
 		{
 			Tool: Tool{
@@ -834,7 +851,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_detect_changes",
-				Description: "Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+				Description: "DISPARADOR: ANTES de cerrar un cambio —al abrir el PR, o en la fase verify de SDD— para saber QUÉ verificar y QUÉ decisión guardada pudo quedar obsoleta. No es una tool de exploración: se invoca sobre un diff que ya existe. Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
