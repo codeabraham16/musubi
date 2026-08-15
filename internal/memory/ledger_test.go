@@ -1,6 +1,10 @@
 package memory
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestLedgerAddAndStatus(t *testing.T) {
 	e := newTestEngine(t)
@@ -79,6 +83,36 @@ func TestBudgetReport(t *testing.T) {
 	un := l.Budget(0)
 	if un.Status != "unbudgeted" || un.Budget != 0 || len(un.Surfaces) != 3 {
 		t.Errorf("budget 0 debe dar 'unbudgeted' con desglose, obtuve %+v", un)
+	}
+}
+
+// EL CONTRATO DEL QUE DEPENDE EL DASHBOARD para distinguir un acumulado de una sesión.
+//
+// En un proceso always-on sin hooks —el cerebro central bajo `musubi serve`— nadie pasa un
+// sessionID, así que el ledger no rota y el total es un acumulado de por vida. El único dato que
+// permite darse cuenta es que SessionID viene VACÍO, y para eso tiene que sobrevivir el viaje a
+// JSON: si alguien le pone `omitempty` al campo o lo saca del reporte, el dashboard vuelve a
+// mostrar "Tokens de sesión 2.153.453 / 8000" con la barra clavada, y nadie se entera.
+func TestBudgetExponeSessionIDVacioParaDistinguirAcumulado(t *testing.T) {
+	sinSesion := TokenLedger{Total: 2153453, Surfaces: map[string]int{"hydration": 2153453}}
+	b := sinSesion.Budget(8000)
+
+	if b.SessionID != "" {
+		t.Errorf("un ledger sin sesión debe reportar SessionID vacío, obtuve %q", b.SessionID)
+	}
+	// El JSON es lo que ve el dashboard: la clave tiene que estar presente aunque valga "".
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"session_id"`) {
+		t.Errorf("el reporte no expone session_id: el dashboard no puede distinguir acumulado de sesión\n%s", data)
+	}
+
+	// Y con sesión, el id viaja igual: es el otro lado del mismo contrato.
+	conSesion := TokenLedger{SessionID: "s1", Total: 100, Surfaces: map[string]int{"turn_recall": 100}}
+	if got := conSesion.Budget(8000).SessionID; got != "s1" {
+		t.Errorf("con sesión el id debe viajar al reporte, obtuve %q", got)
 	}
 }
 

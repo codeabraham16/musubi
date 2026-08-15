@@ -301,10 +301,19 @@ function renderHUD(d){
   $('healthTxt').textContent=h.status==='ok'?'sano':(bad?`${bad} avisos`:'revisar');
   $('checks').innerHTML=(h.checks||[]).length?(h.checks||[]).map(c=>{ const ok=!c.status||c.status==='ok';
     return `<div class="chk"><span class="s" style="background:${ok?'var(--green)':'var(--amber)'};box-shadow:0 0 7px ${ok?'var(--green)':'var(--amber)'}"></span>${esc(c.code||c.name||'check')}</div>`;}).join(''):'<div class="empty">sin checks</div>';
-  const tk=d.tokens||{}, budgeted=tk.status&&tk.status!=='unbudgeted'&&tk.budget;
-  $('tokLabel').textContent=budgeted?'Tokens de sesión':'Tokens (sin techo)';
+  // TRES estados, no dos. Sin `session_id` nadie pasó un id de hook, y sin hooks el ledger NUNCA
+  // rota: es un proceso always-on (el cerebro central) donde el total es un ACUMULADO DE POR VIDA.
+  // Compararlo contra un techo pensado para UNA sesión daba una barra clavada al 100% y un número
+  // que no significaba nada (se vio en vivo: 2.153.453 / 8000, sin moverse desde el deploy).
+  // El techo es blando y no recorta, así que acá lo único que hay que arreglar es lo que se dice.
+  // Ver internal/memory/ledger.go (LedgerAdd) para el porqué del sessionID vacío.
+  const tk=d.tokens||{}, sessioned=!!tk.session_id;
+  const budgeted=sessioned&&tk.status&&tk.status!=='unbudgeted'&&tk.budget;
+  $('tokLabel').textContent=budgeted?'Tokens de sesión':(sessioned?'Tokens (sin techo)':'Tokens acumulados');
   $('tokVal').textContent=budgeted?`${tk.total||0} / ${tk.budget}`:(tk.total||0);
-  const bar=$('tokBar'); bar.className='bar'+(tk.status==='watch'||tk.status==='over'?' watch':''); bar.querySelector('i').style.width=Math.min(100, budgeted?(tk.pct_used||0):(tk.total?8:0))+'%';
+  // El estado del gobernador sólo se pinta si hay sesión con techo: si no, `over` es permanente por
+  // construcción y la alerta visual pierde todo su valor de aviso.
+  const bar=$('tokBar'); bar.className='bar'+(budgeted&&(tk.status==='watch'||tk.status==='over')?' watch':''); bar.querySelector('i').style.width=Math.min(100, budgeted?(tk.pct_used||0):(tk.total?8:0))+'%';
   $('runs').innerHTML=runs.length?runs.slice(0,6).map(r=>{ const done=r.done||0,tot=r.total||0,pct=tot?Math.round(done*100/tot):0;
     const col=r.status==='done'?'var(--green)':r.status==='failed'?'var(--red)':'var(--amber)';
     return `<div class="run"><span class="s" style="width:6px;height:6px;border-radius:50%;background:${col};box-shadow:0 0 7px ${col}"></span><span class="rl">${esc(r.workflow_id||r.run_id)}</span><span class="rp">${done}/${tot}·${pct}%</span></div>`;}).join(''):'<div class="empty">sin runs activos</div>';
