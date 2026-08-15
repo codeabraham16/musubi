@@ -377,6 +377,12 @@ func runDaemon() {
 		}()
 		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
 	}
+	// El grafo de código se mantiene solo (P3). Va en su PROPIO gate y no colgado del de
+	// mantenimiento: son dos ciclos con costos y riesgos distintos, y quien apague el
+	// mantenimiento de la memoria no está pidiendo que además se le quede rancio el grafo.
+	if cfg.Maintenance.GraphIndexHours > 0 {
+		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)))
+	}
 
 	// Cerebro híbrido F2: gatear el ENQUEUE con el sync (simétrico con runServe). Sin esto el
 	// daemon stdio encola 'shared' incondicionalmente (default true) y, con el sync apagado, esas
