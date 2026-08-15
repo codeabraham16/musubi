@@ -24,6 +24,8 @@ func runConflicts(args []string) {
 	switch args[0] {
 	case "backfill":
 		runConflictsBackfill(args[1:])
+	case "shadow":
+		runConflictsShadow(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Subcomando de conflicts desconocido: %s\n", args[0])
 		conflictsUsage()
@@ -37,6 +39,52 @@ func conflictsUsage() {
 	fmt.Println("     Reconstruye el desglose (lex/coseno) de las relaciones que se guardaron sin él,")
 	fmt.Println("     para poder recalibrar los umbrales del detector con evidencia y no con 8 pares.")
 	fmt.Println("     Sólo rellena huecos: nunca pisa un score que el detector ya había medido.")
+	fmt.Println("  " + cBold("shadow") + " [--json]")
+	fmt.Println("     Lee el libro del modo sombra: en qué veredictos el motor coincidió con el detector")
+	fmt.Println("     y en qué rango léxico cae cada tipo. La lectura del motor nunca se aplicó.")
+}
+
+// runConflictsShadow imprime la evidencia acumulada por el modo sombra. Existe porque una tabla
+// que nadie puede leer sin abrir SQLite es una tabla que no se va a leer: la sombra se enciende
+// para responder una pregunta, y la respuesta tiene que estar a un comando de distancia.
+func runConflictsShadow(args []string) {
+	fs := flag.NewFlagSet("conflicts shadow", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emitir el resumen como JSON")
+	_ = fs.Parse(args)
+
+	engine, err := memory.NewDbEngine(workspaceDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al abrir la memoria: %v\n", err)
+		os.Exit(1)
+	}
+	defer engine.Close()
+
+	res, err := engine.ShadowAgreementByRelation()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error al leer el libro del modo sombra: %v\n", err)
+		os.Exit(1)
+	}
+	if *asJSON {
+		b, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+	if len(res) == 0 {
+		fmt.Println("El libro del modo sombra está vacío.")
+		fmt.Println("Se enciende en .musubi/config.yaml (conflicts.shadow.enabled) y necesita motor de cognición.")
+		return
+	}
+	fmt.Printf("%-16s %7s %7s %8s   %s\n", "VEREDICTO", "TOTAL", "ACUERDO", "TASA", "RANGO LÉXICO")
+	for _, a := range res {
+		rango := "—"
+		if a.LexMin != nil && a.LexMax != nil {
+			rango = fmt.Sprintf("%.2f – %.2f", *a.LexMin, *a.LexMax)
+		}
+		fmt.Printf("%-16s %7d %7d %7.0f%%   %s\n", a.HeurRelation, a.Total, a.Agreed, a.Rate*100, rango)
+	}
+	// El recordatorio no es decorativo: la tentación al ver una tasa baja es "ascender" los
+	// veredictos del motor, y eso convertiría la medición en una escritura del LLM al libro mayor.
+	fmt.Println("\nLa lectura del motor NUNCA se aplicó: esto mide el umbral, no lo corrige.")
 }
 
 // runConflictsBackfill vuelve a scorear los pares sin desglose. El léxico se recalcula siempre

@@ -54,8 +54,11 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       que revisó (F2 · doctrina de loop-engineering).
 	// v27 = las dos señales del detector (léxico y coseno) guardadas POR SEPARADO: `confidence`
 	//       significaba una cosa distinta según la fila y desde afuera no se podía notar.
-	if latestSchemaVersion() != 27 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 27", latestSchemaVersion())
+	// v28 = libro de evidencia del MODO SOMBRA: las dos lecturas de un par (model-free y motor)
+	//       lado a lado. La del motor se descarta; la tabla existe para poder recalibrar los
+	//       umbrales con pares etiquetados, que eran 8.
+	if latestSchemaVersion() != 28 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 28", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

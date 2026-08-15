@@ -113,6 +113,14 @@ type ConflictDetector interface {
 	// BandNeighbors — SOLO LECTURA: las memorias de la banda ciega [BandFloor, CosineFloor), donde
 	// viven las CONTRADICCIONES. Se le MUESTRAN al agente; NO se encolan ni se persisten (band.go).
 	BandNeighbors(obsID string, opts ConflictOptions) ([]BandNeighbor, int, error)
+	// SaveShadowVerdict registra las DOS lecturas de un par (la model-free y la del motor) en el
+	// libro de evidencia. La del motor se descarta: nada del camino de decisión lee esa tabla.
+	SaveShadowVerdict(v ShadowVerdict) error
+	// ShadowPairTexts trae los contenidos de las dos puntas SIN exigir visibilidad (el target de
+	// un supersedes está supersedido por construcción). Lo usa el worker del modo sombra.
+	ShadowPairTexts(srcID, tgtID string) (string, string, error)
+	// ShadowAgreementByRelation resume el acuerdo entre el detector y el motor, por tipo.
+	ShadowAgreementByRelation() ([]ShadowAgreement, error)
 }
 
 // CodeMemoryStore — memoria de código (gist + símbolos por archivo, para no re-leer).
