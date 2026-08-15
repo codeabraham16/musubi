@@ -146,3 +146,85 @@ func TestRerankBadJSONFallsBack(t *testing.T) {
 		t.Errorf("ante JSON malo debería mantener el orden model-free, got %v", out.Items)
 	}
 }
+
+// recallResConPuntaje arma un recall con puntajes DECRECIENTES, que es como sale del camino
+// model-free: el orden y el número cuentan la misma historia.
+func recallResConPuntaje(ids ...string) memory.RecallResult {
+	res := recallRes(ids...)
+	for i := range res.Items {
+		res.Items[i].Score = 1.0 - float64(i)/10.0
+	}
+	return res
+}
+
+// EL BUG QUE ESTE TEST FIJA: el juez re-ordenaba los items y dejaba intacto el `score` model-free,
+// así que la respuesta salía con un orden y un número que se contradecían. Cualquier consumidor que
+// ordenara por `score` deshacía, en silencio, un juicio que cuesta ~8,5 s.
+func TestRerankBorraElPuntajeQueYaNoExplicaElOrden(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: `["c","a","b"]`}
+	s.cognitionCfg.ReadTimeRerank = &rerankOn
+
+	out := s.rerankIfEnabled(context.Background(), "q-puntaje", recallResConPuntaje("a", "b", "c"))
+
+	if !out.Reranked {
+		t.Error("el reordenamiento no se declaró: sin `reranked` el caller no puede explicar por qué falta el score")
+	}
+	for _, it := range out.Items {
+		if it.Score != 0 {
+			t.Errorf("item %s conservó el puntaje model-free (%v) después de que lo reordenara el juez", it.ID, it.Score)
+		}
+	}
+}
+
+// La contracara: sin juez, el puntaje es la ÚNICA explicación del orden y tiene que sobrevivir
+// intacto. Borrarlo siempre habría cambiado el camino model-free, que es el 100 % del uso normal.
+func TestSinJuezElPuntajeSobreviveIntacto(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: `["c","b","a"]`} // motor presente, flag apagada
+
+	out := s.rerankIfEnabled(context.Background(), "q", recallResConPuntaje("a", "b", "c"))
+
+	if out.Reranked {
+		t.Error("se declaró un reordenamiento que no ocurrió")
+	}
+	if out.Items[0].Score != 1.0 {
+		t.Errorf("el camino model-free perdió su puntaje: %v", out.Items[0].Score)
+	}
+}
+
+// EL CASO QUE IMPORTA MÁS QUE EL FELIZ: si el juez falla, el orden que se devuelve ES el model-free,
+// así que el puntaje vuelve a explicarlo y NO se puede borrar ni declarar un reorden que no pasó.
+// Fallar de la manera equivocada acá dejaría al caller sin ninguna forma de ordenar.
+func TestJuezCaidoConservaPuntajeYNoDeclaraReorden(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: "el motor devolvió cualquier cosa"}
+	s.cognitionCfg.ReadTimeRerank = &rerankOn
+
+	out := s.rerankIfEnabled(context.Background(), "q-caido", recallResConPuntaje("a", "b", "c"))
+
+	if out.Reranked {
+		t.Error("el juez falló y aun así se declaró reordenado")
+	}
+	if out.Items[0].Score != 1.0 || out.Items[2].Score != 0.8 {
+		t.Errorf("el juez falló y se perdieron los puntajes model-free: %v", out.Items)
+	}
+}
+
+// La COLA (lo que queda fuera del top-K que ve el juez) no la reordena nadie, así que su puntaje
+// sigue explicando su orden y tiene que quedar en pie.
+func TestLaColaFueraDelTopKConservaSuPuntaje(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	s.cognition = &fakeCognition{answer: `["b","a"]`}
+	s.cognitionCfg.ReadTimeRerank = &rerankOn
+	s.cognitionCfg.ReadTimeRerankTopK = 2 // el juez sólo ve 'a' y 'b'; 'c' queda en la cola
+
+	out := s.rerankIfEnabled(context.Background(), "q-cola", recallResConPuntaje("a", "b", "c"))
+
+	if out.Items[2].ID != "c" {
+		t.Fatalf("la cola se movió: %v", out.Items)
+	}
+	if out.Items[2].Score != 0.8 {
+		t.Errorf("la cola perdió su puntaje sin que nadie la reordenara: %v", out.Items[2].Score)
+	}
+}

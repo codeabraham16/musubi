@@ -94,10 +94,15 @@ type RecallOptions struct {
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
 type RecallItem struct {
-	ID         string  `json:"id"`
-	TopicKey   string  `json:"topic_key"`
-	Gist       string  `json:"gist"`
-	Score      float64 `json:"score"`
+	ID       string `json:"id"`
+	TopicKey string `json:"topic_key"`
+	Gist     string `json:"gist"`
+	// Score es el puntaje MODEL-FREE y explica el orden SÓLO mientras nadie reordene la lista.
+	// Cuando el juez de pertinencia interviene (RecallResult.Reranked) el orden pasa a ser suyo y
+	// este puntaje deja de corresponderse con él, así que se omite: publicar un número que
+	// contradice el orden que lo acompaña es una invitación a re-ordenar por él y deshacer, en
+	// silencio, un juicio que costó ~8,5 s. Ver rerankSiCorresponde.
+	Score      float64 `json:"score,omitempty"`
 	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
 	// CreatedAt es la fecha ISO8601 de creación. Viaja para que la superficie (los gists que el hook
 	// inyecta en el contexto) pueda mostrar la EDAD de cada memoria: sin ella el agente no distingue
@@ -134,6 +139,11 @@ type RecallResult struct {
 	UsedTokens int          `json:"used_tokens"`
 	Count      int          `json:"count"`
 	Items      []RecallItem `json:"items"`
+	// Reranked declara que el ORDEN de Items lo decidió el juez de pertinencia y no el puntaje
+	// model-free. Va explícito porque es la única explicación de por qué los items del tope vienen
+	// sin `score`: sin esta marca, un caller vería campos faltantes y lo leería como un bug.
+	// omitempty ⇒ el camino model-free (el default) no paga ni un token por esto.
+	Reranked bool `json:"reranked,omitempty"`
 }
 
 type candidate struct {
