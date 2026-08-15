@@ -14,6 +14,20 @@ import (
 // (hidratación, recall de código)— no solo el recall. Es model-free (estima el
 // texto final con EstimateTokens) y se persiste como un único valor JSON en la
 // tabla meta. Se reinicia al cambiar de sesión.
+//
+// ⚠️ EL CASO ALWAYS-ON, que hasta acá no estaba escrito en ningún lado. Quien marca
+// el corte de sesión es el sessionID, y ese id lo aportan SÓLO los hooks de sesión
+// (cmd/musubi/turn.go, precheck.go, detect.go). El camino MCP llama con sessionID
+// vacío, así que en un proceso que no reinicia y donde no corre ningún hook —el
+// cerebro central bajo `musubi serve`— el ledger NO ROTA NUNCA y el total pasa a ser
+// un acumulado de por vida. Se vio en vivo: 2.153.453 tokens contra un techo de 8000,
+// sin moverse desde el deploy.
+//
+// No se arregla forzando un corte artificial: en un servidor always-on y multi-principal
+// "sesión" no está definido, y un corte inventado mentiría igual. Como el techo es BLANDO
+// (no recorta nada; ver config.SessionTokenBudget) el gasto real nunca estuvo en riesgo:
+// lo único que fallaba era lo que se decía. Por eso quien consume el ledger tiene que
+// mirar SessionID: vacío ⇒ es un acumulado, no una sesión, y no se compara contra el techo.
 
 const metaTokenLedger = "token_ledger"
 
@@ -105,7 +119,8 @@ func (e *DbEngine) LedgerReset() error {
 // LedgerAdd suma tokens a una superficie de la sesión sessionID y devuelve el
 // ledger actualizado. Si sessionID identifica una sesión distinta de la activa,
 // reinicia el ledger antes de sumar. Si sessionID es vacío, acumula en la sesión
-// activa sin reiniciar (caller sin id de hook).
+// activa sin reiniciar (caller sin id de hook) y el SessionID queda vacío, que es
+// la señal de "esto es un acumulado, no una sesión" — ver el encabezado del archivo.
 func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error) {
 	l, err := e.loadLedger()
 	if err != nil {
