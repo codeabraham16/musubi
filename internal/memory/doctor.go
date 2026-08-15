@@ -735,7 +735,7 @@ func checkStaleConflicts(e *DbEngine) CheckResult {
 	}
 	if n > 0 {
 		return CheckResult{Code: "stale_conflicts", Status: "warning", Repairable: true,
-			Message: fmt.Sprintf("%d relación(es) de conflicto 'pending' son ruido que las guardas actuales ya no crean (target histórico o recíproco duplicado); se pueden podar sin perder ningún veredicto real", n)}
+			Message: fmt.Sprintf("%d relación(es) de conflicto 'pending' no le sirven a nadie: target histórico, recíproco duplicado, o un lado ya oculto del recall. Las dos primeras son ruido que las guardas actuales ya no crean; la tercera ENVEJECIÓ hasta acá (nació con los dos lados visibles y después se ocultó uno). Se pueden podar sin perder ningún veredicto real", n)}
 	}
 	return CheckResult{Code: "stale_conflicts", Status: "ok", Message: "la cola de conflictos no tiene ruido estructural"}
 }
@@ -793,6 +793,39 @@ func staleConflictIDs(e *DbEngine) ([]string, error) {
 		return nil, err
 	}
 	rows2.Close()
+
+	// (3) Un lado ya está OCULTO del recall (archivado, supersedido o en cuarentena). La guarda de
+	// detección impide que nazcan así, pero una relación pendiente puede ENVEJECER hasta acá: se
+	// detectó con los dos lados visibles y después alguien supersedió uno. Arbitrarla no cambia
+	// nada —el recall ya no muestra ese lado— y el adjudicador la paga igual, leyendo dos
+	// observaciones y gastando una llamada al motor para producir un veredicto sobre memoria que
+	// nadie va a ver.
+	//
+	// Va con subconsultas y no con un JOIN a dos alias de `observations` a propósito: así
+	// visibleObsPredicate se reusa TAL CUAL, sin una copia con prefijo de alias que pueda divergir
+	// del original el día que alguien le agregue una cuarta condición.
+	rows3, err := e.db.Query(`
+		SELECT r.id FROM observation_relations r
+		WHERE r.status = ?
+		  AND (r.source_id NOT IN (SELECT id FROM observations WHERE `+visibleObsPredicate+`)
+		    OR r.target_id NOT IN (SELECT id FROM observations WHERE `+visibleObsPredicate+`))`,
+		RelStatusPending)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar conflictos con un lado oculto: %w", err)
+	}
+	for rows3.Next() {
+		var id string
+		if err := rows3.Scan(&id); err != nil {
+			rows3.Close()
+			return nil, err
+		}
+		dead[id] = true
+	}
+	if err := rows3.Err(); err != nil {
+		rows3.Close()
+		return nil, err
+	}
+	rows3.Close()
 
 	ids := make([]string, 0, len(dead))
 	for id := range dead {

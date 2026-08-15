@@ -434,11 +434,18 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 	}
 }
 
-// loadObsRow trae los campos de una observación no archivada por id.
+// loadObsRow trae los campos de una observación VISIBLE por id.
+//
+// Filtra con visibleObsPredicate y no sólo con `archived=0`, que es lo que hacía antes. La
+// diferencia se midió en el cerebro central: había 12 relaciones pendientes cuyo SOURCE ya estaba
+// supersedido —la más nueva, del día en que se encontró—, o sea que la fuga estaba viva y no era
+// residuo histórico. El pool de candidatos ya usaba el predicado completo, así que el lado del
+// candidato estaba bien y el del source no: una observación oculta seguía generando pares nuevos
+// para que alguien los arbitrara, y arbitrarlos no cambia nada porque el recall no los muestra.
 func (e *DbEngine) loadObsRow(id string) (obsRow, bool, error) {
 	var r obsRow
 	err := e.db.QueryRow(
-		`SELECT id, topic_key, content, COALESCE(created_at,''), COALESCE(project_id,'') FROM observations WHERE id=? AND archived=0`,
+		`SELECT id, topic_key, content, COALESCE(created_at,''), COALESCE(project_id,'') FROM observations WHERE id=? AND `+visibleObsPredicate,
 		id,
 	).Scan(&r.id, &r.topicKey, &r.content, &r.createdAt, &r.projectID)
 	if err != nil {
