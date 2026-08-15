@@ -382,7 +382,15 @@ func (s *McpServer) rerankSiCorresponde(ctx context.Context, query string, res m
 		rerankCachePut(key, order)
 	}
 
-	res.Items = append(reorderByIDs(head, order), res.Items[n:]...)
+	// El puntaje model-free ya NO explica el orden del tope: lo decidió el juez. Se borra de los
+	// items reordenados y se declara el reordenamiento, en vez de dejar conviviendo un orden y un
+	// número que se contradicen. La cola (res.Items[n:]) no la tocó nadie, así que conserva el suyo.
+	cabeza := reorderByIDs(head, order)
+	for i := range cabeza {
+		cabeza[i].Score = 0
+	}
+	res.Items = append(cabeza, res.Items[n:]...)
+	res.Reranked = true
 	return res
 }
 
