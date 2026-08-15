@@ -17,6 +17,28 @@ import (
 // skillsource. 16 MiB cubre con holgura cualquier artículo/HTML real. Ver auditoría 2026-07-26 #14.
 const maxArticleBytes = 16 << 20
 
+// browserUA es el User-Agent con el que sale la ingesta. Ver el porqué en Extract, donde se usa.
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+// httpStatusError traduce el status a un error que le dice al agente QUÉ HACER. Antes todo `>=400`
+// salía con el mismo texto, así que un bloqueo por automatismo y un enlace roto eran
+// indistinguibles: el agente reintentaba igual el que nunca iba a funcionar, y daba por muerto el
+// que sí valía la pena. La pista accionable importa más que el número.
+func httpStatusError(rawURL string, status int) error {
+	switch {
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return fmt.Errorf("%s respondió HTTP %d: el sitio rechazó la petición (bloqueo de automatismos, muro de pago o contenido restringido por región). Reintentar igual no cambia nada", rawURL, status)
+	case status == http.StatusTooManyRequests:
+		return fmt.Errorf("%s respondió HTTP %d: límite de tasa alcanzado. Esperar antes de volver a pedir esta URL", rawURL, status)
+	case status == http.StatusNotFound, status == http.StatusGone:
+		return fmt.Errorf("%s respondió HTTP %d: la página no existe. Revisar la URL antes de reintentar", rawURL, status)
+	case status >= 500:
+		return fmt.Errorf("%s respondió HTTP %d: falla del servidor, es transitoria. Se puede reintentar más tarde", rawURL, status)
+	default:
+		return fmt.Errorf("%s respondió HTTP %d", rawURL, status)
+	}
+}
+
 // article.go extrae el texto principal de cualquier página web con go-trafilatura (Go puro,
 // in-process, sin binarios externos). Es el fallback UNIVERSAL de la ingesta: Match siempre da true.
 // 100% model-free.
@@ -49,8 +71,16 @@ func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, opts Opti
 	if err != nil {
 		return Result{}, err
 	}
-	// Un UA de navegador evita que algunos sitios devuelvan una página vacía a los bots.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Musubi-Ingest/1.0; +https://musubi)")
+	// UA DE NAVEGADOR, Y ES UNA DECISIÓN, no un descuido. El valor anterior decía ser un navegador
+	// y era lo contrario: `Mozilla/5.0 (compatible; Musubi-Ingest/1.0; +https://musubi)` es la
+	// convención canónica de DECLARARSE CRAWLER —el mismo formato que usa Googlebot— así que el
+	// código contradecía al comentario de arriba y muchos sitios devolvían la página vacía que el
+	// comentario prometía evitar. De yapa, ese `+https://musubi` no resuelve a ningún lado.
+	//
+	// Va un UA de navegador de verdad porque esto NO ES UN CRAWLER: `musubi_ingest_url` baja UNA
+	// página que una persona pidió por su nombre, de a una, sin seguir enlaces. Es el mismo perfil
+	// de tráfico que un lector de RSS o una vista previa de enlace.
+	req.Header.Set("User-Agent", browserUA)
 	// En infra compartida usamos un cliente SSRF-safe (dialer que rechaza IPs internas incluso tras un
 	// redirect / DNS-rebinding). En local (CLI) se usa el cliente inyectado (testeable).
 	client := a.Client
@@ -63,7 +93,7 @@ func (a *ArticleExtractor) Extract(ctx context.Context, rawURL string, opts Opti
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("la página respondió HTTP %d", resp.StatusCode)
+		return Result{}, httpStatusError(rawURL, resp.StatusCode)
 	}
 
 	res, err := trafilatura.Extract(io.LimitReader(resp.Body, maxArticleBytes), trafilatura.Options{
