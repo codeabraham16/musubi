@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,7 +76,58 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
 		{code: "offhost_backup", run: checkOffhostBackup},
 		{code: "outbox_stall", run: checkOutboxStall},
+		{code: "abandoned_runs", run: checkAbandonedRuns},
 	}
+}
+
+// runAbandonedAfter es cuánto puede pasar un run 'running' sin que nadie lo toque antes de que el
+// doctor lo señale. Medido en la base real el 2026-08-15: 16 runs en 'running', el más viejo
+// arrancado el 2026-07-04 con su último evento 17 MINUTOS después. Todos son flujos SDD que
+// quedaron abiertos cuando terminó la sesión que los conducía.
+//
+// 14 días, y no menos, porque Musubi NO EJECUTA LOS STEPS: los ejecuta el agente, y un run es
+// resumible entre sesiones y compactaciones a propósito (workflow.go). Un run legítimamente
+// pausado esperando input humano puede estar quieto días. Dos semanas sin una sola transición no
+// es una pausa, es un abandono.
+const runAbandonedAfter = 14 * 24 * time.Hour
+
+// checkAbandonedRuns señala los runs que quedaron abiertos y que nadie va a retomar.
+//
+// POR QUÉ ESTE CHECK NO TIENE `apply`, Y ES LA DECISIÓN DE DISEÑO DEL ARREGLO. La tentación
+// evidente era un reaper: cerrar solo lo que lleva N días quieto, como hace `work_units` con su
+// lease. Pero un work_unit tiene lease PORQUE hay otro agente esperando para reclamarlo — vencerlo
+// libera trabajo. Un workflow run no bloquea a nadie: cerrarlo no libera nada y sí destruye el
+// único diferencial del motor, que es sobrevivir a que se apague la sesión. Un reaper convertiría
+// "se cortó la luz un fin de semana largo" en "tu run murió".
+//
+// Así que esto REPORTA y no actúa. Cerrar un run sigue siendo una decisión con dueño
+// (AbortWorkflowRun); lo que faltaba no era la capacidad de cerrarlos, era enterarse de que están.
+func checkAbandonedRuns(e *DbEngine) CheckResult {
+	var n int
+	// MIN() sobre cero filas devuelve NULL, así que el destino tiene que tolerarlo: con un string
+	// pelado el Scan falla y un check sano se reportaría como error.
+	var masViejo sql.NullString
+	err := e.db.QueryRow(`
+		SELECT COUNT(1), MIN(updated_at) FROM workflow_runs
+		WHERE status=? AND updated_at < datetime('now','-'||?||' seconds')`,
+		RunRunning, int64(runAbandonedAfter.Seconds())).Scan(&n, &masViejo)
+	if err != nil {
+		return CheckResult{Code: "abandoned_runs", Status: "error",
+			Message: "no se pudieron leer los runs abiertos: " + err.Error()}
+	}
+	if n == 0 {
+		return CheckResult{Code: "abandoned_runs", Status: "ok",
+			Message: "no hay runs abiertos que nadie esté conduciendo"}
+	}
+	desde := "fecha desconocida"
+	if masViejo.Valid {
+		desde = masViejo.String
+	}
+	return CheckResult{Code: "abandoned_runs", Status: "warning",
+		Message: fmt.Sprintf("%d run(s) siguen en 'running' sin una transición hace más de %d días (el más viejo, quieto desde %s). "+
+			"Nadie los va a retomar: cerralos con abort si ya no corresponden, o retomalos. No se tocan solos a propósito — "+
+			"un run está diseñado para sobrevivir a que se apague la sesión",
+			n, int(runAbandonedAfter.Hours()/24), desde)}
 }
 
 // offhostMarkerName es el archivo que deploy/musubi-backup.sh toca (con una marca ISO) SÓLO tras
