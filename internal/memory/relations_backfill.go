@@ -28,20 +28,29 @@ import "fmt"
 // refrescara la marca, 965 filas viejas pasarían a parecer recién resueltas y arruinarían
 // cualquier lectura de antigüedad —incluida la del check `abandoned_runs`— por un cambio que no
 // dijo nada nuevo sobre el par.
+//
+// Y NO EXIGE VISIBILIDAD, que es lo contrario de lo que pide casi todo el resto del paquete. El
+// target de un `supersedes` está supersedido POR ESTA MISMA RELACIÓN: filtrar por
+// visibleObsPredicate excluiría TODA auto-resolución exitosa, que es exactamente la población
+// cuyo umbral se quiere calibrar. Medido en el central: de 73 pares de señal recuperables, exigir
+// visibilidad dejaba 21 — se perdían los 50 `supersedes` completos. La condición correcta es que
+// las dos filas EXISTAN y tengan contenido; para eso alcanza el JOIN.
 
 // BackfillScoresOptions parametriza el re-scoreo. El cero corre completo y escribe.
 type BackfillScoresOptions struct {
 	// DryRun cuenta exactamente lo mismo que escribiría, sin escribir nada.
 	DryRun bool
 	// Limit acota los pares a procesar (0 = todos). Ordena por updated_at DESC, así un límite
-	// chico devuelve lo más reciente, que es lo más representativo del detector actual.
+	// chico devuelve lo más reciente, que es lo más representativo del detector actual. El cupo es
+	// exacto: el JOIN ya descarta las relaciones huérfanas, así que no se gasta en filas que
+	// después se tiran.
 	Limit int
 }
 
 // BackfillScoresResult es lo que el backfill hizo (o haría, con DryRun).
 type BackfillScoresResult struct {
-	// Scanned son los pares candidatos: les falta al menos una de las dos señales y AMBAS
-	// observaciones siguen visibles.
+	// Scanned son los pares candidatos: les falta al menos una de las dos señales y las dos
+	// observaciones todavía existen. Visibles o no — ver el encabezado.
 	Scanned int `json:"scanned"`
 	// Signal son, de los escaneados, los que sirven para calibrar: supersedes y conflicts_with.
 	// El resto (related, compatible, scoped, not_conflict) es volumen, no evidencia.
@@ -65,19 +74,19 @@ type BackfillScoresResult struct {
 func (e *DbEngine) BackfillRelationScores(opts BackfillScoresOptions) (BackfillScoresResult, error) {
 	res := BackfillScoresResult{ModelID: e.vectorModelID}
 
-	// El filtro de visibilidad acá NO es lo que garantiza la corrección —loadObsRow vuelve a
-	// aplicarlo abajo y ésa es la compuerta autoritativa—. Está para que `Limit` signifique «N
-	// pares útiles» y no «N filas de las cuales algunas se tiran»: sin él, un límite chico sobre
-	// una base con mucha memoria archivada devolvería casi puro descarte. Va con subconsultas y no
-	// con un JOIN a dos alias de `observations` para reusar visibleObsPredicate TAL CUAL, sin una
-	// copia con prefijo de alias que pueda divergir. Mismo criterio que staleConflictIDs.
+	// El JOIN es la única condición sobre las observaciones, y es a propósito: exige que existan
+	// (una relación huérfana no se puede scorear) y nada más. El contenido viene en la misma
+	// consulta en vez de con un loadObsRow por punta, porque loadObsRow filtra por visibilidad y
+	// acá eso sería el error.
 	q := `
-		SELECT id, source_id, target_id, relation, lex_score IS NULL, cosine_score IS NULL
-		FROM observation_relations
-		WHERE (lex_score IS NULL OR cosine_score IS NULL)
-		  AND source_id IN (SELECT id FROM observations WHERE ` + visibleObsPredicate + `)
-		  AND target_id IN (SELECT id FROM observations WHERE ` + visibleObsPredicate + `)
-		ORDER BY updated_at DESC`
+		SELECT r.id, r.source_id, r.target_id, r.relation,
+		       r.lex_score IS NULL, r.cosine_score IS NULL,
+		       s.content, t.content
+		FROM observation_relations r
+		JOIN observations s ON s.id = r.source_id
+		JOIN observations t ON t.id = r.target_id
+		WHERE r.lex_score IS NULL OR r.cosine_score IS NULL
+		ORDER BY r.updated_at DESC`
 	if opts.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", opts.Limit)
 	}
@@ -86,8 +95,9 @@ func (e *DbEngine) BackfillRelationScores(opts BackfillScoresOptions) (BackfillS
 	// por las que filtra el SELECT, y escribir con el cursor abierto sobre la misma tabla es cómo
 	// se pierden filas a mitad del recorrido.
 	type pendiente struct {
-		id, src, tgt, rel string
-		lexNulo, cosNulo  bool
+		id, src, tgt, rel  string
+		lexNulo, cosNulo   bool
+		srcTexto, tgtTexto string
 	}
 	var pares []pendiente
 	rows, err := e.db.Query(q)
@@ -96,7 +106,7 @@ func (e *DbEngine) BackfillRelationScores(opts BackfillScoresOptions) (BackfillS
 	}
 	for rows.Next() {
 		var p pendiente
-		if err := rows.Scan(&p.id, &p.src, &p.tgt, &p.rel, &p.lexNulo, &p.cosNulo); err != nil {
+		if err := rows.Scan(&p.id, &p.src, &p.tgt, &p.rel, &p.lexNulo, &p.cosNulo, &p.srcTexto, &p.tgtTexto); err != nil {
 			rows.Close()
 			return res, fmt.Errorf("error al escanear una relación sin desglose: %w", err)
 		}
@@ -109,21 +119,6 @@ func (e *DbEngine) BackfillRelationScores(opts BackfillScoresOptions) (BackfillS
 	rows.Close()
 
 	for _, p := range pares {
-		src, ok, err := e.loadObsRow(p.src)
-		if err != nil {
-			return res, err
-		}
-		if !ok {
-			continue // dejó de ser visible entre el SELECT y ahora
-		}
-		tgt, ok, err := e.loadObsRow(p.tgt)
-		if err != nil {
-			return res, err
-		}
-		if !ok {
-			continue
-		}
-
 		res.Scanned++
 		if p.rel == RelSupersedes || p.rel == RelConflictsWith {
 			res.Signal++
@@ -131,7 +126,7 @@ func (e *DbEngine) BackfillRelationScores(opts BackfillScoresOptions) (BackfillS
 
 		// La MISMA función que corre en producción. Reimplementarla —aunque fuera trigrama por
 		// trigrama— convertiría la calibración en una medición de otra cosa.
-		lex := Similarity(src.content, tgt.content)
+		lex := Similarity(p.srcTexto, p.tgtTexto)
 
 		var cos *float64
 		if v, err := e.observationVector(p.src); err != nil {

@@ -68,14 +68,44 @@ func TestBackfillNoPisaLoYaMedido(t *testing.T) {
 	}
 }
 
-// B3: si alguna de las dos puntas dejó de ser visible, el par no entra. Calibrar umbrales con
-// pares donde una observación ya está archivada o supersedida sería calibrar contra memoria que
-// el sistema decidió no mostrar más.
-func TestBackfillIgnoraLosParesConUnaPuntaInvisible(t *testing.T) {
+// B3: EL TEST QUE JUSTIFICA TODO. Un par `supersedes` tiene su target supersedido —por esta misma
+// relación— y por lo tanto INVISIBLE. Si el backfill exigiera visibilidad, se saltearía todas las
+// auto-resoluciones exitosas, que son justo la población cuyo umbral se quiere calibrar. Medido en
+// el cerebro central: de 73 pares de señal recuperables, exigir visibilidad dejaba 21 y se perdían
+// los 50 `supersedes` enteros. Este test existe porque la primera versión hacía exactamente eso.
+func TestBackfillAlcanzaAlTargetQueElSupersedeOculto(t *testing.T) {
 	e := newTestEngine(t)
 	r := relacionConSenales(t, e, "c", nil, nil)
-	if _, err := e.db.Exec(`UPDATE observations SET archived = 1 WHERE id = ?`, "tgt-c"); err != nil {
-		t.Fatalf("archivar el target: %v", err)
+	if _, err := e.db.Exec(
+		`UPDATE observation_relations SET relation = ?, status = ? WHERE id = ?`,
+		RelSupersedes, RelStatusResolved, r.ID); err != nil {
+		t.Fatalf("marcar la relación como supersedes: %v", err)
+	}
+	if _, err := e.db.Exec(
+		`UPDATE observations SET superseded_by = ? WHERE id = ?`, "src-c", "tgt-c"); err != nil {
+		t.Fatalf("supersedir el target: %v", err)
+	}
+
+	res, err := e.BackfillRelationScores(BackfillScoresOptions{})
+	if err != nil {
+		t.Fatalf("BackfillRelationScores: %v", err)
+	}
+	if res.Scanned != 1 || res.Signal != 1 {
+		t.Fatalf("el supersedes quedó afuera: %+v", res)
+	}
+	if lex, _ := leerDesglose(t, e, r.ID); lex == nil {
+		t.Error("el par supersedes se quedó sin desglose: la evidencia de calibración se pierde")
+	}
+}
+
+// B3b: una relación huérfana —alguna punta ya no existe— no se puede scorear y no debe romper la
+// corrida. El JOIN la descarta, que es la ÚNICA condición que el backfill pone sobre las
+// observaciones.
+func TestBackfillDescartaLasRelacionesHuerfanas(t *testing.T) {
+	e := newTestEngine(t)
+	r := relacionConSenales(t, e, "f", nil, nil)
+	if _, err := e.db.Exec(`DELETE FROM observations WHERE id = ?`, "tgt-f"); err != nil {
+		t.Fatalf("borrar el target: %v", err)
 	}
 
 	res, err := e.BackfillRelationScores(BackfillScoresOptions{})
@@ -83,39 +113,10 @@ func TestBackfillIgnoraLosParesConUnaPuntaInvisible(t *testing.T) {
 		t.Fatalf("BackfillRelationScores: %v", err)
 	}
 	if res.Scanned != 0 {
-		t.Errorf("no debería haber escaneado nada: %+v", res)
+		t.Errorf("una relación huérfana no se puede scorear: %+v", res)
 	}
 	if lex, _ := leerDesglose(t, e, r.ID); lex != nil {
-		t.Errorf("se le escribió desglose a un par con una punta invisible: %v", *lex)
-	}
-}
-
-// B3b: `Limit` cuenta pares ÚTILES, no filas leídas. Es la razón por la que el filtro de
-// visibilidad está también en el SELECT y no sólo en loadObsRow: sin él, un límite chico sobre una
-// base con memoria archivada gastaría el cupo en descartes y el backfill parecería no avanzar.
-// El par invisible se fuerza más nuevo para que el ORDER BY lo ponga primero, que es el caso malo.
-func TestBackfillLimitNoGastaElCupoEnDescartes(t *testing.T) {
-	e := newTestEngine(t)
-	invisible := relacionConSenales(t, e, "f", nil, nil)
-	visible := relacionConSenales(t, e, "g", nil, nil)
-	if _, err := e.db.Exec(`UPDATE observations SET archived = 1 WHERE id = ?`, "tgt-f"); err != nil {
-		t.Fatalf("archivar el target: %v", err)
-	}
-	for id, ts := range map[string]string{invisible.ID: "2030-01-01", visible.ID: "2020-01-01"} {
-		if _, err := e.db.Exec(`UPDATE observation_relations SET updated_at = ? WHERE id = ?`, ts, id); err != nil {
-			t.Fatalf("fijar updated_at: %v", err)
-		}
-	}
-
-	res, err := e.BackfillRelationScores(BackfillScoresOptions{Limit: 1})
-	if err != nil {
-		t.Fatalf("BackfillRelationScores: %v", err)
-	}
-	if res.Scanned != 1 {
-		t.Fatalf("el cupo de 1 se gastó en el par invisible: %+v", res)
-	}
-	if lex, _ := leerDesglose(t, e, visible.ID); lex == nil {
-		t.Error("el par visible se quedó sin desglose: el límite lo consumió un descarte")
+		t.Errorf("se le escribió desglose a una relación huérfana: %v", *lex)
 	}
 }
 
