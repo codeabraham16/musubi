@@ -56,6 +56,8 @@ func main() {
 		runTurn()
 	case "precheck":
 		runPrecheck()
+	case "precompact":
+		runPrecompact()
 	case "capture":
 		runCapture(os.Args[2:])
 	case "ingest":
@@ -143,6 +145,7 @@ func printUsage() {
 	cmd("turn --hook-mode", "UserPromptSubmit: inyecta contexto relevante al prompt")
 	cmd("precheck --hook-mode", "PreToolUse: gist antes de leer; radio de impacto antes de editar")
 	cmd("capture --hook-mode", "Stop: captura los commits nuevos como memoria (red de seguridad)")
+	cmd("precompact --hook-mode", "PreCompact: avisa de bajar lo durable ANTES de que se resuma")
 }
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
