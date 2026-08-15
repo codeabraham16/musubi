@@ -131,6 +131,7 @@ func printUsage() {
 	cmd("dashboard [--addr ...] [--no-open]", "UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)")
 	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
 	cmd("conflicts backfill [--dry-run]", "Reconstruye el desglose lex/coseno de las relaciones que se guardaron sin él")
+	cmd("conflicts shadow [--json]", "Lee el modo sombra: dónde el motor coincidió con el detector (y nunca lo corrigió)")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
@@ -386,6 +387,9 @@ func runDaemon() {
 	if cfg.Maintenance.GraphIndexHours > 0 {
 		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)))
 	}
+	// El modo sombra no se pregunta acá: RunShadowWorker es un no-op si está apagado (el default).
+	// Sale con el mismo contexto que el mantenimiento, así el apagado del daemon lo corta también.
+	go server.RunShadowWorker(maintCtx)
 
 	// Cerebro híbrido F2: gatear el ENQUEUE con el sync (simétrico con runServe). Sin esto el
 	// daemon stdio encola 'shared' incondicionalmente (default true) y, con el sync apagado, esas

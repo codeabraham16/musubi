@@ -402,9 +402,12 @@ func (s *McpServer) detectOnly(obsID string) {
 	if !s.conflicts.Enabled {
 		return
 	}
-	if _, err := s.engine.DetectRelations(obsID, s.conflictOpts(true)); err != nil {
+	rels, err := s.engine.DetectRelations(obsID, s.conflictOpts(true))
+	if err != nil {
 		logx.Warn("detección de duplicados en la captura automática falló (la observación se guardó igual)", "error", err)
+		return
 	}
+	s.encolarSombra(rels)
 }
 
 // detectAndSurface corre la detección de conflictos para la observación recién
@@ -422,6 +425,9 @@ func (s *McpServer) detectAndSurface(obsID string) string {
 		logx.Warn("detección de conflictos falló", "error", err)
 		return ""
 	}
+	// La sombra se encola ANTES de armar el texto y no participa de él: lo que el motor diga no
+	// puede aparecer en la respuesta del save, ni siquiera como comentario. Medir no es opinar.
+	s.encolarSombra(rels)
 
 	var auto, pending []memory.ObsRelation
 	for _, r := range rels {

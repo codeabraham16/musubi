@@ -336,6 +336,25 @@ type ConflictConfig struct {
 	// OJO: 0.80 sale de UNA medición sobre UNA memoria. Es una heurística calibrada, no una verdad.
 	// En 0 (o >= CosineFloor) la banda se APAGA: el save responde exactamente como antes.
 	BandFloor float64 `yaml:"band_floor"`
+	// Shadow enciende el MODO SOMBRA: por cada veredicto del detector, preguntarle también al
+	// motor de cognición y guardar las dos lecturas lado a lado. La del motor se descarta.
+	Shadow ShadowConfig `yaml:"shadow,omitempty"`
+}
+
+// ShadowConfig configura el modo sombra del detector de conflictos.
+//
+// NO TIENE MUESTREO, y es a propósito. El central emite del orden de 90 veredictos por día; una
+// llamada al motor por veredicto es un gasto chico y acotado, mientras que muestrear agregaría un
+// generador de azar al camino de guardado —irreproducible en los tests— para ahorrar poco. Si el
+// volumen molesta, el interruptor correcto es apagarlo entero, que ya existe.
+type ShadowConfig struct {
+	// Enabled nace en false: el modo sombra gasta motor y no mejora ninguna respuesta. Se
+	// enciende para medir durante un tiempo y se apaga.
+	Enabled bool `yaml:"enabled"`
+	// Queue es el tope de veredictos esperando al motor (default 64). Lo que no entra se DESCARTA
+	// y se cuenta: preferimos perder evidencia a que un pico de guardados haga crecer la cola sin
+	// techo, porque la sombra no puede degradar el camino que sí importa.
+	Queue int `yaml:"queue"`
 }
 
 // VectorIndexConfig configura el índice vectorial ANN (IVF) para la búsqueda
@@ -917,6 +936,9 @@ func Default() Config {
 			CosineFloor:          0.85,
 			CosineAutoThreshold:  0.90,
 			BandFloor:            0.80,
+			// Enabled false: la sombra nace apagada. Queue igual trae su default para que
+			// encenderla sea una línea (`enabled: true`) y no dos.
+			Shadow: ShadowConfig{Queue: 64},
 		},
 		Loop: LoopConfig{
 			PerTurnRecall:      true,
@@ -1253,6 +1275,11 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Conflicts.CosineAutoThreshold == 0 {
 			c.Conflicts.CosineAutoThreshold = d.Conflicts.CosineAutoThreshold
+		}
+		// El tope de cola se rellena igual que el resto de los numéricos. `enabled` NO: un false
+		// —explícito o por omisión— es la respuesta correcta, porque la sombra nace apagada.
+		if c.Conflicts.Shadow.Queue <= 0 {
+			c.Conflicts.Shadow.Queue = d.Conflicts.Shadow.Queue
 		}
 		// CosineFloor NO se rellena acá: un 0 EXPLÍCITO es el interruptor de rollback (apaga el
 		// coseno) y hay que respetarlo. Lo resuelve applyConflictsDefaults mirando la presencia de

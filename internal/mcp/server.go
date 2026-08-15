@@ -143,6 +143,10 @@ type McpServer struct {
 	graph config.GraphConfig
 	// conflicts contiene los parámetros de la detección de relaciones semánticas.
 	conflicts config.ConflictConfig
+	// shadow es el worker del MODO SOMBRA, o nil cuando está apagado (que es el default). nil no
+	// es un caso especial que haya que recordar: encolarSombra chequea por nil y no hace nada, así
+	// que el camino de guardado es idéntico con o sin sombra.
+	shadow *shadowWorker
 	// pipeline contiene los parámetros del pipeline por fases del loop dirigido.
 	pipeline config.PipelineConfig
 	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
@@ -301,6 +305,14 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	// El caché de sourcing se crea tras aplicar las options: su TTL sale de la config
 	// (WithSourcing) que recién quedó fijada arriba.
 	s.sourceCache = newSourcingCache(s.sourcing.CacheSeconds)
+	// El worker de sombra se CONSTRUYE acá aunque su bucle arranque después (RunShadowWorker):
+	// crearlo en el arranque del bucle dejaría que un save temprano leyera s.shadow mientras otra
+	// goroutine lo escribe. Construirlo es sólo un canal; el gasto está en el bucle, no acá.
+	// Se exige motor real: sin cognición no hay segunda lectura que comparar, y encolar trabajo
+	// para un motor apagado sería llenar una cola que nadie vacía.
+	if s.conflicts.Shadow.Enabled && cognition.Enabled(s.cognition) {
+		s.shadow = newShadowWorker(engine, s.cognition, s.conflicts.Shadow.Queue)
+	}
 	// Construir el registro de tools una vez (los handlers leen la config de s en
 	// tiempo de llamada, así que el orden respecto de las opciones no importa).
 	s.tools = s.buildRegistry()

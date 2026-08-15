@@ -898,6 +898,56 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 28,
+			name:    "shadow_verdicts",
+			// LA MESA DONDE EL MOTOR HABLA Y NADIE LE HACE CASO.
+			//
+			// El detector de conflictos decide model-free y esa decisión es la que vale. Esta tabla
+			// guarda, al lado, lo que el motor de cognición habría dicho del MISMO par — y esa
+			// segunda lectura SE DESCARTA. No es redundancia: es la única forma de saber si el
+			// umbral model-free acierta, sin arriesgar que el LLM escriba en el libro mayor.
+			//
+			// POR QUÉ HACÍA FALTA. Los pisos de coseno se calibraron contra la DISTRIBUCIÓN de
+			// pares al azar (77k medidos, p99 = 0,803): eso dice dónde está el ruido, no si el
+			// veredicto acierta. Para lo segundo hacen falta pares ETIQUETADOS, y de ésos había 8.
+			//
+			// LA SEPARACIÓN ES ESTRUCTURAL, NO UNA PROMESA. Ninguna consulta del camino de decisión
+			// lee esta tabla; no tiene FK que la ate a observation_relations en la dirección que
+			// importa, y el worker que la escribe no tiene forma de tocar una relación. Si alguna
+			// vez alguien quiere ascender un veredicto de acá, va a tener que escribir código nuevo
+			// y visible, que es exactamente el punto.
+			//
+			// relation_id NO es una FK: la relación puede ser re-juzgada, fusionada o borrada, y la
+			// evidencia de qué dijo cada lado ESE día no debería desaparecer con ella. Se guardan
+			// también source_id/target_id y las señales del momento, para que la fila se explique
+			// sola aunque el par ya no exista.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS shadow_verdicts (
+						id             TEXT PRIMARY KEY,
+						relation_id    TEXT NOT NULL,
+						source_id      TEXT NOT NULL,
+						target_id      TEXT NOT NULL,
+						heur_relation  TEXT NOT NULL,
+						heur_status    TEXT NOT NULL,
+						lex_score      REAL,
+						cosine_score   REAL,
+						judge_relation TEXT NOT NULL,
+						judge_raw      TEXT,
+						judge_model    TEXT NOT NULL,
+						agree          INTEGER NOT NULL,
+						created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+					)`)
+				if err != nil {
+					return err
+				}
+				// El índice es por (heur_relation, agree): la consulta que motiva la tabla es
+				// «de los supersedes auto-resueltos, ¿en cuántos el juez discrepó?».
+				_, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_shadow_heur ON shadow_verdicts(heur_relation, agree)`)
+				return err
+			},
+		},
 	}
 }
 
