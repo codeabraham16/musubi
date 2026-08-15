@@ -356,3 +356,63 @@ func backoffSeconds(attempts, base, max int) int {
 	}
 	return v
 }
+
+// RunCodeGraphScheduler re-indexa el grafo de código de forma INCREMENTAL cada `interval`, hasta
+// que ctx se cancela. interval<=0 lo desactiva.
+//
+// EL AGUJERO QUE TAPA. Hasta acá el grafo sólo se indexaba si un AGENTE llamaba
+// musubi_codegraph_index: no hay subcomando CLI, así que ni un hook de git ni un timer podían
+// hacerlo. Dependía de que alguien se acordara. Medido el 2026-08-15 en el cerebro central: el
+// grafo estaba fechado el día anterior y no contenía los cuatro PRs de esa jornada.
+//
+// Y un grafo rancio NO falla ruidosamente. Contesta — con la forma que el código tenía antes. Lo
+// consumen musubi_impact y el precheck, que avisan del radio de impacto ANTES de escribir, así que
+// el precio de la ranciedad se paga en una decisión de código, no en una consulta curiosa.
+//
+// POR QUÉ INCREMENTAL Y NO COMPLETO: el incremental compara el fingerprint de cada archivo contra
+// el guardado y sólo re-deriva los paquetes sucios. Con el árbol quieto —el caso de casi todos los
+// ticks— la corrida es leer fingerprints y salir. Un índice completo cada 6 h sería quemar CPU para
+// llegar al mismo grafo.
+//
+// BEST-EFFORT, como el resto del scheduler: un fallo se loguea y el ciclo sigue. El grafo es una
+// AYUDA para el recall y el impacto; que un tick falle no puede tumbar el daemon ni bloquear una
+// herramienta.
+func (s *McpServer) RunCodeGraphScheduler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.reindexCodeGraphOnce(ctx)
+		}
+	}
+}
+
+// reindexCodeGraphOnce corre UN índice incremental bajo el candado del despacho.
+//
+// Toma dispatchMu por el mismo motivo que RunScheduledMaintenance: escribe nodos y aristas, y sin
+// el candado se cruzaría con una tool en vuelo. Va en su propio método —y no inline en el select—
+// para que el `defer Unlock` cierre en cada vuelta en vez de acumularse hasta que muera el ticker.
+func (s *McpServer) reindexCodeGraphOnce(ctx context.Context) {
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+
+	res, err := s.indexIncremental(ctx)
+	if err != nil {
+		logx.Error("scheduler: el índice incremental del grafo falló", "error", err)
+		return
+	}
+	// Sólo se anuncia cuando HUBO trabajo. Un log por tick con "0 paquetes" en un daemon que vive
+	// días es ruido que entierra la línea que sí importa.
+	if refreshed, _ := res["packages"].(int); refreshed > 0 {
+		logx.Info("scheduler: grafo de código re-indexado", "paquetes", refreshed, "podados", res["pruned"])
+	}
+	// Federación best-effort, igual que en la tool: si el gate está apagado no hace nada, y un
+	// fallo del push jamás invalida el índice local, que ya quedó bien.
+	s.pushCodeGraphToCentral(ctx)
+}

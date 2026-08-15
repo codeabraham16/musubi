@@ -157,6 +157,19 @@ type MaintenanceConfig struct {
 	// AutoIntervalHours es cada cuántas horas corre el auto-mantenimiento al
 	// arrancar el daemon (0 = desactivado; el mantenimiento manual sigue disponible).
 	AutoIntervalHours float64 `yaml:"auto_interval_hours"`
+	// GraphIndexHours es cada cuántas horas el daemon re-indexa el grafo de código de forma
+	// INCREMENTAL (0 = desactivado).
+	//
+	// POR QUÉ EXISTE: hasta ahora el grafo sólo se indexaba si un agente llamaba
+	// musubi_codegraph_index a mano — no hay subcomando CLI, así que ni un hook de git ni un timer
+	// podían hacerlo. Medido el 2026-08-15: el grafo del central estaba fechado el día anterior y no
+	// contenía los cuatro PRs de esa jornada. Un grafo rancio no falla ruidosamente: contesta, y
+	// contesta sobre código que ya no existe.
+	//
+	// Cuelga del mismo daemon que ya corre el auto-mantenimiento porque el índice incremental es
+	// barato cuando no cambió nada: compara el fingerprint de cada archivo contra el guardado y sólo
+	// re-deriva los paquetes sucios. Con el árbol quieto, una corrida es leer fingerprints.
+	GraphIndexHours float64 `yaml:"graph_index_hours"`
 	// PurgeArchivedAfterDays borra DEFINITIVAMENTE las observaciones archivadas que no
 	// se tocaron en esta cantidad de días (retención dura, acota el crecimiento). El
 	// olvido (decay) solo marca archived; esto las elimina de verdad. 0 = nunca purgar.
@@ -859,6 +872,11 @@ func Default() Config {
 			DecayMinAgeDays:        14,
 			DecayReinforcementK:    0.5,
 			AutoIntervalHours:      24,
+			// 6 h y no 24: el grafo lo consumen musubi_impact y el precheck ANTES de escribir, o
+			// sea que una respuesta rancia se paga en una decisión de código y no en una consulta
+			// curiosa. Es más barato que el mantenimiento (fingerprints contra disco, sin LLM),
+			// así que puede correr más seguido sin que se note.
+			GraphIndexHours:        6,
 			PurgeArchivedAfterDays: 90,
 			MaxActivePerProject:    50000,
 			Vacuum:                 true,
