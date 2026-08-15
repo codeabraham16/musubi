@@ -54,6 +54,8 @@ func main() {
 		runDetect()
 	case "turn":
 		runTurn()
+	case "receipt":
+		runReceipt(os.Args[2:])
 	case "precheck":
 		runPrecheck()
 	case "precompact":
@@ -138,6 +140,7 @@ func printUsage() {
 	section("Binario")
 	cmd("update", "Descarga el último release, verifica el checksum y se auto-reemplaza")
 	cmd("fetch <url>", "Baja una URL del tailnet a stdout (transporte de auto-update del cuerpo)")
+	cmd("receipt <emit|check|show|install-hook>", "Gate de entrega: el push exige un recibo para ESTA huella del árbol")
 	cmd("version", "Muestra la versión del binario")
 
 	section("Hooks (uso interno de Claude Code)")
