@@ -52,15 +52,11 @@ func TestUnaCorridaDelGrafoNoSeQuedaConElCandado(t *testing.T) {
 
 	s.reindexCodeGraphOnce(context.Background())
 
-	liberado := make(chan struct{})
-	go func() {
-		s.dispatchMu.Lock()
-		s.dispatchMu.Unlock()
-		close(liberado)
-	}()
-	select {
-	case <-liberado:
-	case <-time.After(2 * time.Second):
-		t.Fatal("la corrida se quedó con dispatchMu: la próxima tool que despache se cuelga")
+	// TryLock y no Lock/Unlock: pedir el candado y soltarlo enseguida es una sección crítica vacía
+	// (staticcheck SA2001), y encima haría falta un timeout para no colgar el test si el invariante
+	// se rompe. TryLock responde la pregunta directamente —¿quedó libre?— sin bloquearse nunca.
+	if !s.dispatchMu.TryLock() {
+		t.Fatal("la corrida se quedó con dispatchMu: la próxima tool que despache se cuelga para siempre")
 	}
+	s.dispatchMu.Unlock()
 }
