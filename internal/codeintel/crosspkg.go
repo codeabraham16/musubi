@@ -42,12 +42,19 @@ func NewModuleIndex(modulePath string) *ModuleIndex {
 	return &ModuleIndex{modulePath: modulePath, byDirName: map[string][]string{}}
 }
 
-// Add incorpora nodos al índice. Sólo entran las funcs TOP-LEVEL: son las únicas invocables como
-// `paquete.Func(...)` desde afuera. Los métodos se llaman por selector sobre un valor y resolverlos
-// exigiría inferencia de tipos (fuera de alcance); los tipos y constantes no son call-sites.
+// Add incorpora nodos al índice: funcs top-level (invocables como `paquete.Func(...)`) Y MÉTODOS.
+//
+// Los métodos entran indexados por su nombre CALIFICADO —"Tipo.Metodo", que es como el derivador
+// ya los nombra—, así que no hacen falta ni una clave ni un lookup aparte. El emisor de pendientes
+// pone ese mismo nombre calificado cuando el tipo de la variable está declarado (ver
+// tipos_declarados.go), y las dos puntas se encuentran solas.
+//
+// Antes se los excluía porque «resolverlos exigiría inferencia de tipos». Sigue siendo verdad para
+// el caso general (`x := hacerAlgo()`), y por eso el emisor sólo emite cuando el tipo está ESCRITO.
+// Los tipos y las constantes siguen afuera: no son call-sites.
 func (m *ModuleIndex) Add(nodes []Node) {
 	for _, n := range nodes {
-		if n.Kind != KindFunc || n.Path == "" {
+		if (n.Kind != KindFunc && n.Kind != KindMethod) || n.Path == "" {
 			continue
 		}
 		k := indexKey(dirOfPath(n.Path), n.Name)

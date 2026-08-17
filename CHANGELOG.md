@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El grafo ya ve las llamadas a métodos de otro paquete, y con eso `musubi_impact` deja de
+  subestimar el blast radius.** Hasta ahora `variable.Metodo()` no generaba arista si el tipo venía
+  de otro paquete: el extractor descartaba el call-site porque el receptor no era ni el receptor del
+  método ni un alias de import. Efecto medido: `DbEngine.AutoEmbedBackfill` decía `callers: []`
+  cuando lo llama `cmd/musubi/main.go#func:autoBackfill`. Como los métodos exportados SON la
+  superficie pública, la herramienta que existe para decir «qué se rompe si toco esto» contestaba de
+  menos, en silencio y justo donde más importa.
+  El comentario original decía que resolverlo «exigiría inferencia de tipos», y para el caso general
+  es cierto. Pero hay un subconjunto donde el tipo está **escrito**: parámetros, resultados con
+  nombre y `var x pkg.T`. Eso se lee del AST sin inferir nada, y es lo que ahora se resuelve. Un `:=`
+  sigue sin resolverse a propósito.
+  Se descartó la alternativa barata —indexar los métodos por su nombre pelado y resolver cuando hay
+  uno solo— porque **inventa aristas**: un `client.Do()` sobre un tipo de terceros se resolvería
+  hacia un `Do` propio que casualmente fuera único, y una arista inventada manda a revisar código
+  que no participa. Hay un test que defiende esa política.
+  Medido sobre el repo: **+25 aristas cross-paquete (8 % más que las 315 que había)**, todas en la
+  dirección que estaba ciega —del binario hacia adentro—. `buildExportSnapshot` solo gana 8.
+  El camino incremental también las ve: la consulta por directorio ahora trae `func` y `method`, sin
+  lo cual habría resuelto menos que el índice completo y la diferencia habría aparecido sola.
+
 ### Fixed
 - **El fondo de la cola de conflictos era inalcanzable, y no por culpa de quien la drena.**
   `musubi_conflicts` tenía dos órdenes —`recent` y `confidence`— y **los dos son estables**: pedir
