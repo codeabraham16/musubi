@@ -137,6 +137,29 @@ func correr(memory *memory.DbEngine) {
 	}
 }
 
+// ⚠️ UN `var` DENTRO DE UN BLOQUE ANIDADO NO CUENTA, y la restricción es de correctitud, no de
+// simplicidad: dos bloques hermanos pueden declarar el mismo nombre con tipos DISTINTOS, y quien
+// leyera todo el cuerpo le atribuiría al primero el tipo del último. Sería una arista equivocada.
+func TestVarEnBloqueAnidadoNoSeUsa(t *testing.T) {
+	g := DerivePackage("cmd/app", map[string]string{
+		"cmd/app/main.go": `package main
+
+import "ejemplo/internal/memory"
+
+func correr(cond bool) {
+	if cond {
+		var e memory.DbEngine
+		e.Uno()
+	}
+}
+`,
+	}, modPathTD)
+
+	if pc := pendientePorNombre(g, "DbEngine.Uno"); pc != nil {
+		t.Errorf("un var de bloque anidado no debe emitir pendiente (arriesga atribuir mal): %+v", pc)
+	}
+}
+
 // El resolver sigue OMITIENDO lo ambiguo: si dos tipos del mismo paquete tienen el mismo método y
 // el índice ve dos candidatos con la misma clave, no inventa. Acá se comprueba el otro lado: un
 // método que NO existe en el destino no produce arista, no un error ni una arista rota.

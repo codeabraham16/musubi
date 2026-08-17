@@ -69,19 +69,25 @@ func tiposDeclarados(d *ast.FuncDecl, inModImports map[string]string) map[string
 		anotar(d.Type.Results) // sólo aporta si están nombrados; si no, Names viene vacío
 	}
 
-	// `var x pkg.T` dentro del cuerpo. Se recorre TODO el cuerpo, incluidos los bloques anidados:
-	// el grafo trabaja a nivel de función, no de bloque, así que una variable declarada dentro de
-	// un `if` igual pertenece a esta función. El riesgo de colisión de nombres entre bloques
-	// hermanos existe, pero apuntaría a un método del mismo tipo en el 99 % de los casos.
+	// `var x pkg.T` — SÓLO en el nivel superior del cuerpo, no en bloques anidados.
+	//
+	// ⚠️ LA RESTRICCIÓN ES LA QUE HACE CORRECTO ESTO, no una simplificación. Recorriendo todo el
+	// cuerpo, dos bloques hermanos pueden declarar el MISMO nombre con tipos DISTINTOS y el último
+	// leído gana: las llamadas del primer bloque quedarían atribuidas al tipo del segundo. Eso es
+	// una arista EQUIVOCADA, no una ausente, y la política del grafo prohíbe justamente eso.
+	//
+	// En el nivel superior el problema no existe: los parámetros y las declaraciones del cuerpo
+	// comparten bloque, así que Go rechaza `func f(x T) { var x U }` con "x redeclared". No puede
+	// haber dos tipos para un mismo nombre.
 	if d.Body != nil {
-		ast.Inspect(d.Body, func(n ast.Node) bool {
-			ds, ok := n.(*ast.DeclStmt)
+		for _, stmt := range d.Body.List {
+			ds, ok := stmt.(*ast.DeclStmt)
 			if !ok {
-				return true
+				continue
 			}
 			gd, ok := ds.Decl.(*ast.GenDecl)
 			if !ok {
-				return true
+				continue
 			}
 			for _, spec := range gd.Specs {
 				vs, ok := spec.(*ast.ValueSpec)
@@ -99,8 +105,7 @@ func tiposDeclarados(d *ast.FuncDecl, inModImports map[string]string) map[string
 					out[name.Name] = tipoDeVar{importPath: ip, typeName: tn}
 				}
 			}
-			return true
-		})
+		}
 	}
 
 	return out
