@@ -62,10 +62,15 @@ type Edge struct {
 // alcance, así que no conoce el archivo —y por lo tanto la node_key— donde vive el símbolo.
 // Se emite como DATO para que una fase posterior lo resuelva contra un SymbolIndex (ver crosspkg.go).
 // Track 20 · F8-A.
+// Un pendiente cubre DOS formas de call-site, y el campo Name las distingue:
+//   - `alias.Func(...)`      → Name = "Func"
+//   - `variable.Metodo(...)` → Name = "Tipo.Metodo", cuando el tipo de `variable` está DECLARADO
+//     en la firma o en un `var` (ver tipoCalificado). Es la misma convención con la que el grafo
+//     nombra a los métodos, así que el resolver los busca sin ningún caso especial.
 type PendingCall struct {
 	FromKey    string `json:"from_key"`    // node_key del símbolo que hace la llamada
 	ImportPath string `json:"import_path"` // import path YA resuelto desde el alias del propio archivo
-	Name       string `json:"name"`        // nombre de la func llamada, sin calificar
+	Name       string `json:"name"`        // "Func" o "Tipo.Metodo", sin calificar por paquete
 	SrcPath    string `json:"src_path"`    // archivo del CALLER: es quien va a poseer la arista
 }
 
@@ -251,6 +256,10 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 				// Nombre del receptor —la `s` de `(s *McpServer)`—, que es lo que permite leer
 				// `s.Otro()` sin inferir tipos: adentro de este método, `s` ES de tipo recvType.
 				recvName := receiverName(d.Recv)
+				// Variables cuyo tipo está DECLARADO y es de otro paquete del módulo. Es lo que
+				// permite leer `engine.Metodo()` sin inferir: el tipo de `engine` está escrito en
+				// la firma. Ver tiposDeclarados.
+				varTypes := tiposDeclarados(d, inModImports)
 				if d.Body != nil {
 					ast.Inspect(d.Body, func(n ast.Node) bool {
 						ce, ok := n.(*ast.CallExpr)
@@ -278,11 +287,20 @@ func DerivePackage(dir string, files map[string]string, modulePath string) Packa
 								})
 								return true
 							}
-							ip, ok := inModImports[base.Name]
+							// Por el MISMO motivo que el receptor va primero: una variable
+							// declarada SOMBREA a un import homónimo dentro de la función. Al
+							// revés, `engine.X()` con un paquete llamado `engine` en el árbol se
+							// le adjudicaría al paquete y no al tipo.
+							ip, name, ok := "", "", false
+							if vt, hay := varTypes[base.Name]; hay {
+								ip, name, ok = vt.importPath, vt.typeName+"."+fun.Sel.Name, true
+							} else if p, hay := inModImports[base.Name]; hay {
+								ip, name, ok = p, fun.Sel.Name, true
+							}
 							if !ok {
 								return true
 							}
-							pc := PendingCall{FromKey: key, ImportPath: ip, Name: fun.Sel.Name, SrcPath: path}
+							pc := PendingCall{FromKey: key, ImportPath: ip, Name: name, SrcPath: path}
 							id := pc.FromKey + "\x00" + pc.ImportPath + "\x00" + pc.Name
 							if !pendingSeen[id] {
 								pendingSeen[id] = true

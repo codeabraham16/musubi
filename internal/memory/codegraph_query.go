@@ -246,8 +246,12 @@ func (e *DbEngine) ListGraphFuncsInDirsCtx(ctx context.Context, dirs []string) (
 		conds = append(conds, `(path LIKE ? ESCAPE '\' AND path NOT LIKE ? ESCAPE '\')`)
 		args = append(args, pref+`%`, pref+`%/%`)
 	}
+	// Funcs Y MÉTODOS: los dos son destinos válidos de una llamada cross-paquete. Los métodos
+	// entran con su nombre calificado "Tipo.Metodo" y el índice los busca así (ver ModuleIndex.Add).
+	// Sin ellos, el camino INCREMENTAL resolvería menos que el índice completo y la diferencia
+	// aparecería sola con el tiempo, que es el modo de falla que crosspkg.go existe para evitar.
 	q := `SELECT node_key, kind, name, path FROM code_graph_nodes
-	      WHERE kind='func' AND (` + strings.Join(conds, " OR ") + `)` + clause
+	      WHERE kind IN ('func','method') AND (` + strings.Join(conds, " OR ") + `)` + clause
 	rows, err := e.db.QueryContext(ctx, q, append(args, scopeArgs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("error al listar funcs por directorio: %w", err)
