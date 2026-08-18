@@ -108,7 +108,7 @@ func (e *DbEngine) BandNeighbors(obsID string, opts ConflictOptions) ([]BandNeig
 		}
 		// Las guardas estructurales valen acá también: sería absurdo sacar el ruido de la cola por
 		// una puerta y metérselo al agente por la otra.
-		if complementaryPair(src, c) {
+		if complementaryPair(src, c, opts) {
 			continue
 		}
 		cos, ok := cosines[c.id]

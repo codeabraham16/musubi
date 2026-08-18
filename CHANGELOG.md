@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`conflicts.ledger_prefixes`: el despliegue puede declarar qué géneros de nota son LIBRO MAYOR.**
+  El motor ya trataba así a los commits y a los contratos SDD —se leen y se citan, pero nadie puede
+  pedir un veredicto que los reemplace— porque los escribe él. Cada equipo, en cambio, inventa
+  géneros propios que tampoco se pueden tachar (correspondencia entre agentes, actas, bitácoras), y
+  ésos son convención del despliegue, no del producto: hardcodearlos metería la costumbre de un
+  usuario adentro del motor de todos.
+  **Medido en el cerebro central el 2026-08-17:** 465 relaciones pendientes, el 83% apretadas en la
+  franja 0,30–0,35, pegada al piso del detector. No eran contradicciones: eran 27 notas
+  `terminales/` —despachos entre agentes— pareándose **entre sí por la plantilla que comparten**
+  (cabeceras, emoji, nombres de destinatario). 27×26/2 = 351, el grueso de la cola. Dos cartas a
+  destinatarios distintos no pueden contradecirse, así que esos pares nunca iban a producir un
+  veredicto — y una cola que no se puede drenar deja de leerse entera, incluida la contradicción
+  real que aparezca mañana.
+  La guarda se aplica **sólo en `complementaryPair`, y deliberadamente NO en `dominiosAjenos`**,
+  aunque `historicalRecord` esté en las dos: un commit es evidencia sobre el mundo y por eso puede
+  envejecer una nota de cualquier tema, mientras que un género declarado por configuración sólo dice
+  «esto no se tacha». Eximirlo del guardia de dominios agregaría pares cruzados, o sea lo contrario
+  de lo que se buscaba. Hay un test que sella esa diferencia.
+  Es **asimétrica**, igual que la regla que extiende: un despacho SÍ puede envejecer una nota (la
+  carta trae mediciones); lo que no se puede es tacharlo a él. Y nunca oculta memoria — el caller
+  hace `continue`, así que el peor caso de un prefijo mal declarado es una relación de menos en la
+  cola, jamás una observación de menos en el recall. Vacío por defecto: una instalación que no lo
+  declara se comporta exactamente como antes.
+
 - **El grafo ya ve las llamadas a métodos de otro paquete, y con eso `musubi_impact` deja de
   subestimar el blast radius.** Hasta ahora `variable.Metodo()` no generaba arista si el tipo venía
   de otro paquete: el extractor descartaba el call-site porque el receptor no era ni el receptor del

@@ -362,6 +362,7 @@ func runCapture(args []string) {
 				CandidatePool:        cfg.Conflicts.CandidatePool,
 				CosineFloor:          cfg.Conflicts.CosineFloor,
 				CosineAutoThreshold:  cfg.Conflicts.CosineAutoThreshold,
+				LedgerPrefixes:       cfg.Conflicts.LedgerPrefixes,
 				DetectOnly:           true,
 			}); derr != nil && !hookMode {
 				fmt.Fprintf(os.Stderr, "capture: detección de duplicados falló (el commit se guardó igual): %v\n", derr)
