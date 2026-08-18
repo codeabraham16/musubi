@@ -42,8 +42,8 @@ func stalePredicate() string {
 // ida y vuelta HTTP y el arranque por pedido. Es una mejora real y modesta, no un salto.
 //
 // 16 y no 64 porque ahí la curva ya está plana, y el resto del tamaño sólo agrega riesgo: un fallo
-// a mitad tira el lote entero (la corrida es resumible, así que se paga re-haciéndolo) y el pedido
-// HTTP crece con textos que pueden ser dossiers. Ganar 0,03× no paga nada de eso.
+// a mitad tira el lote entero (que hoy se reintenta de a uno, pero se paga re-embebiendo los 15
+// inocentes) y el pedido HTTP crece con textos que pueden ser dossiers. Ganar 0,03× no paga nada.
 const embedBatchSize = 16
 
 // EmbedBackfillResult resume una corrida de re-embedding del histórico.
@@ -52,7 +52,69 @@ type EmbedBackfillResult struct {
 	Scanned  int    `json:"scanned"`  // observaciones activas que necesitaban (re)embedding
 	Embedded int    `json:"embedded"` // vectores generados y persistidos
 	Skipped  int    `json:"skipped"`  // el embedder devolvió vector vacío (no se persiste)
+	Failed   int    `json:"failed"`   // el embedder RECHAZÓ ese texto; queda pendiente para la próxima corrida
 }
+
+// obsPendiente es una observación a la espera de vector. Vive a nivel de paquete (y no dentro de
+// EmbedBackfill) porque el reintento uno-por-uno la necesita.
+type obsPendiente struct{ id, content string }
+
+// embedUnoAUno reintenta, texto por texto, un lote que falló entero.
+//
+// ⚠️ ESTE ES EL REMEDIO A UNA FALLA MEDIDA, NO UNA DEFENSA HIPOTÉTICA. En el cerebro central una
+// sola observación de 11.700 caracteres que este ollama rechaza con 400 (y que `truncate` no
+// salva) mantuvo al backfill parado TRES DÍAS: abortaba en la primera, y como la corrida
+// resumible vuelve a empezar por la misma, las otras 32 pendientes no se embebían nunca.
+// "Resumible" no alcanza cuando el primer ítem siempre falla.
+//
+// De paso arregla el mismo bloqueo por el lado del portero de privacidad: en modo `refuse` un solo
+// texto con secreto tumba el lote entero, y acá pasa a costar sólo su propio lugar.
+//
+// LA REGLA DE CORTE, Y POR QUÉ SE MIDE EN VEZ DE DEDUCIRSE: que falle TODO el lote admite dos
+// lecturas opuestas —"esos textos son imposibles" y "el embebedor está caído"— y confundirlas
+// cuesta caro en las dos direcciones. Si se elige mal hacia el verde, una corrida que termina bien
+// con 33 fallidas y 0 embebidas se lee como éxito y no la mira nadie. Si se elige mal hacia el
+// rojo, el estado estacionario del cerebro central (UNA observación imposible, sola en la cola)
+// grita "el embebedor está caído, corré el backfill a mano" en cada arranque — un diagnóstico
+// falso con una instrucción que no arregla nada.
+//
+// Deducirlo del progreso de la corrida no alcanza: con un lote de una sola observación no hay
+// evidencia con qué. Así que en vez de adivinar se le PREGUNTA al embebedor, con un texto trivial
+// que cualquiera sano acepta. Si contesta, está vivo y la culpa es de los textos: se saltean, sin
+// persistir nada, y siguen pendientes. Si tampoco puede con eso, está caído y se aborta.
+// La sonda cuesta un pedido, y sólo en el camino en que ya falló todo.
+func embedUnoAUno(embed func([]string) ([][]float32, error), lote []obsPendiente, causa error) ([][]float32, []error, error) {
+	vecs := make([][]float32, len(lote))
+	errs := make([]error, len(lote))
+	fallaron := 0
+	var ultimo error
+	for i, p := range lote {
+		v, err := embed([]string{p.content})
+		if err != nil {
+			errs[i], ultimo, fallaron = err, err, fallaron+1
+			continue
+		}
+		// La misma garantía de cuenta que arriba, en su versión chica: uno adentro, uno afuera.
+		if len(v) != 1 {
+			errs[i] = fmt.Errorf("el embebedor devolvió %d vectores para 1 texto", len(v))
+			ultimo, fallaron = errs[i], fallaron+1
+			continue
+		}
+		vecs[i] = v[0]
+	}
+	// Si alguna entró, el embebedor ya demostró estar vivo y no hace falta preguntárselo.
+	if fallaron == len(lote) {
+		if _, err := embed([]string{textoSondaEmbed}); err != nil {
+			return nil, nil, fmt.Errorf("el embebedor no pudo con ninguna de las %d observación(es) del lote (empieza en %s) NI con un texto trivial: está caído o mal configurado. En lote: %v. Individual: %v. Sonda: %w",
+				len(lote), lote[0].id, causa, ultimo, err)
+		}
+	}
+	return vecs, errs, nil
+}
+
+// textoSondaEmbed es la pregunta "¿estás vivo?" hecha texto. Corto y sin nada que pueda disparar
+// al portero de privacidad: la sonda tiene que medir el transporte, no chocar contra una guarda.
+const textoSondaEmbed = "musubi"
 
 // EmbedBackfill (re)genera los embeddings de las observaciones ACTIVAS que no tienen un vector con
 // la procedencia (model_id) del embedder ACTUAL — las guardadas antes de encender la semántica, o
@@ -82,10 +144,9 @@ func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (Emb
 	if err != nil {
 		return res, fmt.Errorf("error al listar observaciones a re-embeber: %w", err)
 	}
-	type pending struct{ id, content string }
-	var todo []pending
+	var todo []obsPendiente
 	for rows.Next() {
-		var p pending
+		var p obsPendiente
 		if err := rows.Scan(&p.id, &p.content); err != nil {
 			rows.Close()
 			return res, fmt.Errorf("error al escanear observación pendiente: %w", err)
@@ -108,11 +169,19 @@ func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (Emb
 			textos[i] = p.content
 		}
 
+		var fallos []error
 		vecs, err := embed(textos)
 		if err != nil {
-			// Abortar con el progreso ya persistido: la corrida es resumible (lo hecho no se
-			// re-lista). Devolver el error para que el operador vea qué falló (p.ej. ollama caído).
-			return res, fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)
+			// UNA observación imposible NO puede seguir bloqueando a las otras 15. Se reintenta
+			// texto por texto para que el costo del rechazo sea su propio lugar y nada más.
+			// embedUnoAUno decide si esto es "un texto malo" o "el embebedor caído" (ver allá).
+			logx.Warn("el lote falló entero; se reintenta texto por texto para aislar al culpable",
+				"desde", lote[0].id, "textos", len(lote), "error", err)
+			vecs, fallos, err = embedUnoAUno(embed, lote, err)
+			if err != nil {
+				// Acá sí se aborta, con el progreso ya persistido: la corrida es resumible.
+				return res, fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)
+			}
 		}
 
 		// ⚠️ LA GUARDA QUE NO SE PUEDE SALTEAR, Y POR QUÉ SE REPITE ACÁ.
@@ -133,6 +202,15 @@ func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (Emb
 		}
 
 		for i, p := range lote {
+			// Fallida ≠ salteada: al vacío el embebedor le dijo "no tengo vector", a ésta le dijo
+			// que NO. Se cuentan aparte y se nombra a la culpable, que es el dato que hace falta
+			// para arreglarla; no se persiste nada, así que sigue pendiente para la próxima corrida.
+			if fallos != nil && fallos[i] != nil {
+				res.Failed++
+				logx.Warn("el embebedor rechaza esta observación; se saltea y queda pendiente",
+					"id", p.id, "caracteres", len(p.content), "error", fallos[i])
+				continue
+			}
 			if len(vecs[i]) == 0 {
 				res.Skipped++
 				continue
@@ -213,6 +291,14 @@ func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) 
 		if err != nil {
 			logx.Warn("el re-embedding automático falló; corré `musubi embed backfill` a mano",
 				"error", err, "embebidas", res.Embedded)
+			return
+		}
+		if res.Failed > 0 {
+			// Que no se lea como un verde limpio: quedaron observaciones fuera del recall semántico
+			// y el próximo arranque las va a volver a intentar. El id de cada una ya se logueó.
+			logx.Warn("re-embedding automático completo, pero el embebedor rechazó algunas observaciones",
+				"embebidas", res.Embedded, "fallidas", res.Failed, "omitidas", res.Skipped, "modelo", res.ModelID,
+				"nota", "las fallidas siguen pendientes y fuera de la búsqueda semántica")
 			return
 		}
 		logx.Info("re-embedding automático completo",

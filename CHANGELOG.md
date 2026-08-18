@@ -416,6 +416,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   más **parecidas**. Sirve para acotar el payload, no como ranking de gravedad — decirlo en el
   schema evita que el próximo lo use de triage como se usó hasta hoy.
 
+### Fixed
+- **Una sola observación imposible dejó de bloquear el re-embedding de todas las demás.**
+  Medido en el cerebro central: una observación de 11.700 caracteres que ese Ollama rechaza con
+  `400 the input length exceeds the context length` —y que `truncate` **no** salva: falla igual
+  sola, con `truncate=true`, con `false` y sin el campo— mantuvo al backfill parado **tres días**
+  con 33 observaciones pendientes. El backfill abortaba en la primera que fallara, y como la
+  corrida es *resumible* volvía a empezar **por esa misma**: reintentaba, chocaba, y las otras 32
+  no se embebían nunca. **«Resumible» no alcanza cuando el primer ítem siempre falla.**
+  Ahora un lote que cae entero se reintenta **texto por texto**, así el rechazo cuesta sólo su
+  propio lugar. La rechazada se cuenta aparte (`failed`, distinto de `skipped`), se loguea **con su
+  id y su tamaño** —que es el dato con el que se arregla— y **no se persiste nada suyo**, así que
+  sigue pendiente para el próximo intento o para otro embebedor.
+  ⚠️ **Y la regla de corte, que se MIDE en vez de deducirse.** Que falle todo el lote admite dos
+  lecturas opuestas —«esos textos son imposibles» y «el embebedor está caído»— y confundirlas
+  cuesta caro en las dos direcciones: hacia el verde, una corrida que termina bien con 33 fallidas
+  y 0 embebidas se lee como éxito y no la mira nadie; hacia el rojo, el **estado estacionario**
+  —una sola observación imposible, sola en la cola— gritaría «está caído, corré el backfill a
+  mano» en cada arranque del daemon, para siempre, con un diagnóstico falso y una instrucción que
+  no arregla nada. Deducirlo del progreso de la corrida **no alcanza**: con un lote de una sola
+  observación no hay evidencia con qué. Así que se le **pregunta** al embebedor, con un texto
+  trivial que cualquiera sano acepta: si contesta está vivo y la culpa es de los textos; si tampoco
+  puede con eso, se aborta. La sonda cuesta un pedido, y sólo cuando ya falló todo.
+  De regalo arregla el mismo bloqueo por el lado del portero de privacidad: en modo `refuse` un
+  solo texto con secreto tumbaba el lote entero.
+  `musubi embed backfill` informa las rechazadas y **sale con código 2**: quedó memoria afuera del
+  recall semántico, y un script encadenado tiene que poder verlo.
+
 ## [0.102.1] - 2026-08-11
 
 ### Fixed
