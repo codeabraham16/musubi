@@ -362,6 +362,7 @@ func runCapture(args []string) {
 				CandidatePool:        cfg.Conflicts.CandidatePool,
 				CosineFloor:          cfg.Conflicts.CosineFloor,
 				CosineAutoThreshold:  cfg.Conflicts.CosineAutoThreshold,
+				LedgerPrefixes:       cfg.Conflicts.LedgerPrefixes,
 				DetectOnly:           true,
 			}); derr != nil && !hookMode {
 				fmt.Fprintf(os.Stderr, "capture: detección de duplicados falló (el commit se guardó igual): %v\n", derr)
@@ -377,6 +378,7 @@ func runCapture(args []string) {
 		projectID = resolveProjectID(cfg, root)
 	}
 	engine.SetProjectID(projectID)
+	engine.SetLedgerPrefixes(cfg.Conflicts.LedgerPrefixes)
 
 	// Scope (C5.2): --scope lo fija explícito; si no, team mode ⇒ shared, si no local. En el modo
 	// origin-side del central se pasa --scope shared (la captura es central por naturaleza: los

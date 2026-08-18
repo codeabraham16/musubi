@@ -336,6 +336,24 @@ type ConflictConfig struct {
 	// OJO: 0.80 sale de UNA medición sobre UNA memoria. Es una heurística calibrada, no una verdad.
 	// En 0 (o >= CosineFloor) la banda se APAGA: el save responde exactamente como antes.
 	BandFloor float64 `yaml:"band_floor"`
+	// LedgerPrefixes son prefijos de topic_key que se tratan como LIBRO MAYOR: se leen y se citan,
+	// pero nadie puede pedir un veredicto que los REEMPLACE. Vacío (el default) = nadie, así que
+	// una instalación que no lo declara se comporta exactamente como antes.
+	//
+	// POR QUÉ ES CONFIGURABLE Y NO VA EN EL CÓDIGO. `git-commit` y `sdd/` los conoce el motor
+	// porque LOS ESCRIBE ÉL: son artefactos de Musubi. Pero cada equipo inventa géneros propios que
+	// tampoco se pueden tachar —correspondencia entre agentes, actas, bitácoras— y esos son
+	// convención del DESPLIEGUE, no del producto. Hardcodearlos metería la costumbre de un usuario
+	// adentro del motor de todos.
+	//
+	// EL CASO QUE LO MOTIVÓ, MEDIDO en el cerebro central el 2026-08-17: 465 relaciones pendientes,
+	// el 83% apretadas en la franja 0,30-0,35, pegada al piso del detector. No eran contradicciones:
+	// eran las 27 notas `terminales/` —despachos entre agentes— pareándose entre sí por la PLANTILLA
+	// que comparten (cabeceras, emoji, nombres de destinatario). 27×26/2 = 351, el grueso de la cola.
+	// Dos cartas a destinatarios distintos no pueden contradecirse, así que esos pares nunca iban a
+	// producir un veredicto — y una cola que no se puede drenar deja de leerse ENTERA, incluida la
+	// contradicción real que aparezca mañana.
+	LedgerPrefixes []string `yaml:"ledger_prefixes,omitempty"`
 	// Shadow enciende el MODO SOMBRA: por cada veredicto del detector, preguntarle también al
 	// motor de cognición y guardar las dos lecturas lado a lado. La del motor se descarta.
 	Shadow ShadowConfig `yaml:"shadow,omitempty"`

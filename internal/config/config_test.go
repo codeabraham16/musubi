@@ -660,3 +660,36 @@ func TestLoadParsesMaintenanceBlock(t *testing.T) {
 		t.Errorf("bloque maintenance no parseado: %+v", cfg.Maintenance)
 	}
 }
+
+// ⚠️ LA CLAVE YAML ES EL ESLABÓN SILENCIOSO. Si `ledger_prefixes` no coincide con el tag del
+// struct, la lista llega VACÍA y no falla nada: la guarda simplemente no se aplica nunca, y el
+// síntoma es «la cola sigue llena», que nadie va a atribuir a un tag mal escrito. Este test
+// convierte esa falla muda en un rojo.
+func TestLoadConflictsLedgerPrefixes(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nconflicts:\n  ledger_prefixes:\n    - \"terminales/\"\n    - \"actas/\"\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	got := cfg.Conflicts.LedgerPrefixes
+	if len(got) != 2 || got[0] != "terminales/" || got[1] != "actas/" {
+		t.Fatalf("ledger_prefixes no se leyó del YAML: %#v", got)
+	}
+	// Y declarar SÓLO esta clave no puede tirar abajo los demás defaults del bloque: un bloque
+	// `conflicts` presente pero parcial tiene que seguir completándose.
+	if cfg.Conflicts.SimilarityFloor != 0.3 || cfg.Conflicts.CandidatePool != 10 {
+		t.Errorf("declarar ledger_prefixes rompió los defaults del bloque: %+v", cfg.Conflicts)
+	}
+}
+
+// Y el default es NADIE: una instalación que no lo declara se comporta exactamente como antes.
+func TestLoadConflictsLedgerPrefixesDefaultVacio(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.Conflicts.LedgerPrefixes) != 0 {
+		t.Errorf("sin declarar, ledger_prefixes debe venir vacío: %#v", cfg.Conflicts.LedgerPrefixes)
+	}
+}

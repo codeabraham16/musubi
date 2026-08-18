@@ -259,6 +259,9 @@ func runServe(args []string) {
 	defer engine.Close()
 	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).
 	engine.SetProjectID(resolveProjectID(cfg, root))
+	// Los géneros que este despliegue declara LIBRO MAYOR: los necesita el doctor para podar la
+	// cola con la misma regla con la que la detección deja de llenarla.
+	engine.SetLedgerPrefixes(cfg.Conflicts.LedgerPrefixes)
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
@@ -333,6 +336,9 @@ func runDaemon() {
 	defer engine.Close()
 	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).
 	engine.SetProjectID(resolveProjectID(cfg, root))
+	// Los géneros que este despliegue declara LIBRO MAYOR: los necesita el doctor para podar la
+	// cola con la misma regla con la que la detección deja de llenarla.
+	engine.SetLedgerPrefixes(cfg.Conflicts.LedgerPrefixes)
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.

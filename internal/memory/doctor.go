@@ -761,7 +761,10 @@ func staleConflictIDs(e *DbEngine) ([]string, error) {
 			rows.Close()
 			return nil, err
 		}
-		if historicalRecord(topicKey) {
+		// La MISMA regla que la detección, incluidos los prefijos que declara el despliegue. Si
+		// acá quedara sólo `historicalRecord`, la guarda nueva cerraría la canilla y dejaría el
+		// balde lleno: las relaciones que ya existen no las reconocería nadie como podables.
+		if historicalRecord(topicKey) || declaredLedger(topicKey, e.ledgerPrefixes) {
 			dead[id] = true
 		}
 	}

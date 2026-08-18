@@ -176,7 +176,7 @@ func TestD4LaGuardaNoOcultaMemoria(t *testing.T) {
 // D6 — convive con la guarda del par histórico: un commit contra un contrato SDD sigue filtrado
 // por complementaryPair aunque la excepción de git-commit lo deje pasar por dominios.
 func TestD6ConviveConLaGuardaDelParHistorico(t *testing.T) {
-	if !complementaryPair(obsRow{topicKey: CommitTopicKey}, obsRow{topicKey: "sdd/cambio/spec"}) {
+	if !complementaryPair(obsRow{topicKey: CommitTopicKey}, obsRow{topicKey: "sdd/cambio/spec"}, ConflictOptions{}) {
 		t.Error("la guarda del par histórico debe seguir filtrando commit -> contrato SDD")
 	}
 	// La de dominios lo dejaría pasar (git-commit es excepción); la histórica lo ataja. Las dos

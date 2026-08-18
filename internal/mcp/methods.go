@@ -391,6 +391,7 @@ func (s *McpServer) conflictOpts(detectOnly bool) memory.ConflictOptions {
 		CosineAutoThreshold:  s.conflicts.CosineAutoThreshold,
 		BandFloor:            s.conflicts.BandFloor,
 		DetectOnly:           detectOnly,
+		LedgerPrefixes:       s.conflicts.LedgerPrefixes,
 	}
 }
 

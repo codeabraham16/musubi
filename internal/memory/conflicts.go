@@ -84,6 +84,10 @@ type ConflictOptions struct {
 	//
 	// false (el cero) = comportamiento de siempre ⇒ el camino explícito del agente no cambia.
 	DetectOnly bool
+	// LedgerPrefixes extiende `historicalRecord` con prefijos de topic_key que declara el
+	// DESPLIEGUE. Nil (el cero) = sólo los que conoce el motor ⇒ nada cambia sin configurarlo.
+	// Ver ConflictConfig.LedgerPrefixes para por qué esto se configura en vez de hardcodearse.
+	LedgerPrefixes []string
 }
 
 func (o ConflictOptions) withDefaults() ConflictOptions {
@@ -171,8 +175,33 @@ func historicalRecord(topicKey string) bool { return isCommit(topicKey) || isSDD
 // MEDIDO sobre las 169 relaciones de la memoria real: los pares histórico-vs-histórico eran el 20%
 // de la cola y dieron CERO veredictos sustantivos. Los 8 `supersedes` que existen son TODOS
 // nota→nota. La práctica ya respetaba esta regla; el código recién ahora la escribe.
-func complementaryPair(_, b obsRow) bool {
-	return historicalRecord(b.topicKey)
+func complementaryPair(_, b obsRow, opts ConflictOptions) bool {
+	return historicalRecord(b.topicKey) || declaredLedger(b.topicKey, opts.LedgerPrefixes)
+}
+
+// declaredLedger extiende la regla de arriba con los géneros que declara el DESPLIEGUE, y no el
+// motor: correspondencia entre agentes, actas, bitácoras. Comparten con un commit la única
+// propiedad que acá importa —no se pueden DES-HACER— y por eso ningún veredicto los alcanza.
+//
+// ⚠️ SE USA SÓLO ACÁ, Y NO EN `dominiosAjenos`, aunque `historicalRecord` esté en las dos. La
+// diferencia no es un olvido:
+//
+//	`historicalRecord` está exento del guardia de dominios porque un commit es evidencia sobre
+//	EL MUNDO —«feat: migrar de X a Y» envejece una nota de cualquier tema—. Un género declarado
+//	por configuración no reclama esa autoridad: sólo dice «esto no se tacha». Eximirlo del guardia
+//	de dominios AGREGARÍA pares cruzados, que es exactamente lo contrario de para lo que se pidió.
+//
+// Y NO OCULTA MEMORIA: el caller hace `continue`. El peor caso de un prefijo mal declarado es una
+// relación DE MENOS en la cola, nunca una observación de menos en el recall.
+func declaredLedger(topicKey string, prefixes []string) bool {
+	for _, p := range prefixes {
+		// Un prefijo vacío matchearía TODO y apagaría la detección entera en silencio. Se ignora:
+		// es un error de configuración, y fallar-abierto acá cuesta ruido, no memoria perdida.
+		if p != "" && strings.HasPrefix(topicKey, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // dominioDe devuelve el primer segmento del topic_key, hasta la primera barra. Sin barra, el
@@ -291,7 +320,7 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 		// Guarda ESTRUCTURAL, antes de cualquier scoring: si el par no es siquiera COMPARABLE, no hay
 		// veredicto que pedir. Va acá —el único loop donde nacen todas las relaciones— para que sea
 		// imposible de saltear, igual que DetectOnly volvió inalcanzable al markSuperseded.
-		if complementaryPair(src, c) {
+		if complementaryPair(src, c, opts) {
 			continue
 		}
 		// Guarda de PRECISIÓN, también antes de cualquier scoring: dos observaciones de dominios
