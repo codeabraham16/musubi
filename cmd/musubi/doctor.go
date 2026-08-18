@@ -67,6 +67,18 @@ func runDoctor(args []string) {
 	}
 	defer engine.Close()
 
+	// Los géneros que el despliegue declara LIBRO MAYOR. Sin esto, `doctor repair --check
+	// stale_conflicts` podaría con una regla MÁS ANGOSTA que la que usa la detección para no
+	// crear esas relaciones: la cola dejaría de crecer y las viejas no las reconocería nadie.
+	//
+	// Es best-effort a propósito: el doctor tiene que poder diagnosticar una instalación con la
+	// config rota —que es justo cuando más se lo necesita—, así que un fallo acá degrada a «sin
+	// prefijos declarados» y no aborta. El chequeo de config, que corre igual, es el que reporta
+	// que la config no se pudo leer.
+	if cfg, cerr := config.Load(root); cerr == nil {
+		engine.SetLedgerPrefixes(cfg.Conflicts.LedgerPrefixes)
+	}
+
 	if len(args) > 0 && args[0] == "repair" {
 		runDoctorRepair(engine, args[1:])
 		return
