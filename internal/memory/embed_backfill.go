@@ -126,6 +126,24 @@ const textoSondaEmbed = "musubi"
 // no la vuelve a listar. Requiere un embedder nombrado (e.vectorModelID != ""): sin él no hay
 // semántica que backfillear.
 func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (EmbedBackfillResult, error) {
+	return e.embedBackfill(embed, false)
+}
+
+// EmbedBackfillAll re-embebe TODAS las observaciones activas, incluidas las que ya tienen vector de
+// la procedencia actual.
+//
+// Existe porque «mismo model_id» no siempre significa «mismo vector»: si cambia CÓMO se embebe —y
+// no con qué— la procedencia no alcanza para detectarlo. El caso que lo motivó: los textos largos
+// se mandaban enteros y el embebedor devolvía un vector calculado sólo sobre el primer pedazo, en
+// silencio; con el troceo ese mismo modelo ahora devuelve un vector del documento COMPLETO. Las
+// filas viejas no están rancias por procedencia, pero están mal, y nada las volvería a listar.
+//
+// Es caro (re-embebe la base entera) y por eso es explícito, no automático.
+func (e *DbEngine) EmbedBackfillAll(embed func([]string) ([][]float32, error)) (EmbedBackfillResult, error) {
+	return e.embedBackfill(embed, true)
+}
+
+func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), todas bool) (EmbedBackfillResult, error) {
 	res := EmbedBackfillResult{ModelID: e.vectorModelID}
 	if e.vectorModelID == "" {
 		return res, fmt.Errorf("no hay un embedder nombrado configurado; encendé la memoria semántica antes de backfillear")
@@ -136,11 +154,22 @@ func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (Emb
 
 	// Observaciones ACTIVAS sin vector de la procedencia actual: sin fila en embeddings (LEFT JOIN
 	// nulo) o con model_id distinto (vector de otro modelo, excluido del recall por homogeneidad).
-	rows, err := e.db.Query(`
+	consulta := `
 		SELECT o.id, o.content
 		FROM observations o
 		LEFT JOIN embeddings em ON o.id = em.observation_id
-		WHERE `+stalePredicate(), e.vectorModelID)
+		WHERE ` + stalePredicate()
+	args := []any{e.vectorModelID}
+	if todas {
+		// Sin la condición de procedencia: entran también las que YA tienen vector del modelo
+		// actual. El LEFT JOIN se conserva para no cambiar la forma de la consulta.
+		consulta = `
+		SELECT o.id, o.content
+		FROM observations o
+		WHERE ` + visibleObsPredicate
+		args = nil
+	}
+	rows, err := e.db.Query(consulta, args...)
 	if err != nil {
 		return res, fmt.Errorf("error al listar observaciones a re-embeber: %w", err)
 	}

@@ -18,7 +18,10 @@ func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
 	// embedder, así que todo proveedor con red nace envuelto — el de hoy y el que se agregue
 	// mañana. Además hace que el texto que se INDEXA y el que se CONSULTA pasen por el mismo
 	// objeto, que es lo que garantiza la coherencia índice↔consulta (invariante E2).
-	return newGuarded(base, cfg.Gateway.Mode)
+	// Y el troceador va DEBAJO del portero, no encima: el texto se tapa ENTERO y recién después se
+	// parte. Al revés, un secreto que cayera justo sobre el corte quedaría partido en dos mitades
+	// que ninguna regla reconoce, y saldría sin tapar.
+	return newGuarded(newTroceado(base), cfg.Gateway.Mode)
 }
 
 // newBaseProvider arma el embedder desnudo, sin portero. Separado de NewProvider para que quede

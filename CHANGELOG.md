@@ -443,6 +443,56 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `musubi embed backfill` informa las rechazadas y **sale con código 2**: quedó memoria afuera del
   recall semántico, y un script encadenado tiene que poder verlo.
 
+### Fixed
+- **Los textos largos dejan de embeberse a medias, en silencio.** El embebedor no tiene un umbral
+  de largo: tiene una **banda**, y los dos lados son malos. Medido contra el ollama del cerebro
+  central (bge-m3, 2026-08-18):
+
+  | tramo | tokens | qué pasa |
+  |---|---|---|
+  | ≤ ~8.970 caracteres | ≤ ~2.048 | entra bien |
+  | ~8.971 – 18.151 | ~2.048 – `num_ctx` | **HTTP 400 «input length exceeds the context length»** |
+  | ≥ ~18.152 | ≥ `num_ctx` | entra, **truncado en silencio** |
+
+  O sea que **entradas más grandes funcionan y una más chica falla** — el síntoma que delata que
+  leer el error literalmente («es muy largo») lleva a la conclusión equivocada. Y lo de arriba es
+  peor que lo de abajo: abajo se pierde la observación con un error visible; arriba se guarda un
+  vector calculado sobre el primer pedazo y se lo presenta como si representara el documento
+  entero. **Probado, no supuesto:** dos textos que diferían en 140.000 caracteres devolvieron el
+  vector **idéntico** (coseno `1,000000`). En el cerebro central eran **40 observaciones**; la más
+  larga mide 79.029 caracteres y se había embebido ~11% de ella.
+
+  ⚠️ **Y subir `num_ctx` no arregla nada: lo empeora.** Al pasar de 4096 a 8192 el borde de abajo
+  **no se movió** (8.970 → 8.921 caracteres), porque es una constante del embebedor y no una
+  fracción del contexto. Lo único que se corrió fue el borde de arriba, o sea que subir el contexto
+  **ensancha la banda muerta**. Era la opción que parecía obvia y la medición la descartó.
+
+  El arreglo va del lado de Musubi: el texto se **parte y se promedian los vectores de las partes**
+  (media de vectores normalizados), así el final del documento deja de ser invisible para el
+  recall. **Model-free y sin tokenizador:** Musubi no puede contar tokens, así que no cablea una
+  constante que estaría mal para el próximo modelo o para un idioma más denso — el trozo que el
+  embebedor rechaza se parte al medio y se reintenta, hasta un piso. El límite se descubre
+  midiendo, como el resto del sistema.
+
+  Dos cosas que el troceo **no** cambia, y hay un test para cada una: el camino de los textos que
+  ya entraban es **bit-idéntico** (si no, todos los vectores guardados quedarían incomparables con
+  los nuevos, sin un solo error), y el lote se conserva mientras ningún texto necesite troceo, que
+  es donde está la velocidad medida.
+
+  **El troceador va DEBAJO del portero de privacidad**, no encima: el texto se tapa entero y recién
+  después se parte. Al revés, un secreto que caiga sobre el corte queda partido en dos mitades que
+  ninguna regla reconoce y sale **sin tapar** — verificado invirtiendo las capas, que hace viajar
+  `AKIA1234` crudo hacia el proveedor.
+
+### Added
+- **`musubi embed backfill --all`** re-embebe TODAS las observaciones activas, no sólo las de otra
+  procedencia. Existe porque «mismo `model_id`» no siempre significa «mismo vector»: cuando cambia
+  **cómo** se embebe y no **con qué**, la procedencia no lo detecta y esas filas no las lista nadie
+  — quedan mal para siempre. Es el caso del troceo de arriba: las 40 observaciones largas no están
+  rancias por procedencia, pero su vector representa el 11% de su contenido. Es caro (re-embebe la
+  base entera), y por eso es explícito y no automático.
+
+
 ## [0.102.1] - 2026-08-11
 
 ### Fixed
