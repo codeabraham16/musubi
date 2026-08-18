@@ -23,16 +23,19 @@ func TestNoopProviderReturnsDisabled(t *testing.T) {
 }
 
 func TestOllamaProviderEmbedSuccess(t *testing.T) {
-	var gotModel, gotInput string
+	var gotModel string
+	var gotInput []string
 	var gotTruncate bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/embed" {
 			t.Errorf("path inesperado: %s", r.URL.Path)
 		}
+		// `input` va como ARRAY desde que Embed delega en EmbedBatch. El campo del endpoint acepta
+		// las dos formas; se manda siempre array para tener UN solo camino de red.
 		var body struct {
-			Model    string `json:"model"`
-			Input    string `json:"input"`
-			Truncate bool   `json:"truncate"`
+			Model    string   `json:"model"`
+			Input    []string `json:"input"`
+			Truncate bool     `json:"truncate"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		gotModel = body.Model
@@ -56,7 +59,7 @@ func TestOllamaProviderEmbedSuccess(t *testing.T) {
 	if len(vec) != 3 {
 		t.Fatalf("esperaba 3 componentes, obtuve %d", len(vec))
 	}
-	if gotModel != "nomic-embed-text" || gotInput != "texto de prueba" {
+	if gotModel != "nomic-embed-text" || len(gotInput) != 1 || gotInput[0] != "texto de prueba" {
 		t.Errorf("request inesperado: model=%q input=%q", gotModel, gotInput)
 	}
 	if !gotTruncate {

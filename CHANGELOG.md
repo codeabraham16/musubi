@@ -7,6 +7,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El re-embedding del histórico va en lotes de 16, y rinde 1,37× — no 4,58× como estaba anotado.**
+  `/api/embed` de Ollama ya aceptaba un array en `input` y ya devolvía `embeddings` como array;
+  mandar de a uno pagaba una ida y vuelta HTTP y un arranque de inferencia **por texto**.
+  **Medido contra el embebedor real** (bge-m3 en el server, textos de ~1.100 caracteres):
+
+  | lote | ms/texto | acel. |
+  |---:|---:|---:|
+  | 1 | 917,5 | 1,00× |
+  | 4 | 758,9 | 1,21× |
+  | 8 | 686,5 | 1,34× |
+  | **16** | **670,1** | **1,37×** |
+  | 32 | 669,9 | 1,37× |
+  | 64 | 654,7 | 1,40× |
+
+  ⚠️ **La medición corrige la creencia que motivó el cambio.** El tiempo *total* crece casi lineal
+  con el tamaño del lote (0,92 s → 41,90 s de 1 a 64): el modelo en CPU **no paraleliza el
+  cómputo**, así que lo único que el lote ahorra es el overhead por pedido. Es una mejora real y
+  modesta. 16 y no 64 porque ahí la curva ya está plana y el resto del tamaño sólo agrega riesgo:
+  un fallo a mitad tira el lote entero y el pedido HTTP crece con textos que pueden ser dossiers.
+  **La guarda que hace esto seguro, y por qué se verifica DOS veces:** los vectores se aparean con
+  las observaciones **por índice**, así que un lote que devuelve una cantidad distinta a la pedida
+  no produce ningún error visible — corre los vectores una posición y le escribe a cada observación
+  el embedding de **otra**. La memoria queda semánticamente barajada y nada lo explica. Se
+  comprueba en `embedding.EmbedBatch` (todos los proveedores) y otra vez en `EmbedBackfill`, porque
+  a `memory` no le llega un Provider sino una **función opaca**: confiar ahí en la garantía de un
+  paquete que no se ve es cómo un invariante se vuelve folklore.
+  `Embed` de Ollama ahora delega en el lote de uno, para que el truncado, el manejo de status y el
+  parseo no puedan divergir entre el caso simple y el lote. Y el portero de privacidad **reenvía**
+  el lote: si no lo hiciera, `EmbedBatch` caería al bucle y la mejora no ocurriría **en silencio** —
+  hay un test cuyo único trabajo es atajar esa falla.
+
 ### Added
 - **`conflicts.ledger_prefixes`: el despliegue puede declarar qué géneros de nota son LIBRO MAYOR.**
   El motor ya trataba así a los commits y a los contratos SDD —se leen y se citan, pero nadie puede

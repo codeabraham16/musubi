@@ -435,8 +435,8 @@ func runDaemon() {
 // (ver DbEngine.AutoEmbedBackfill); el ctx del embed es Background porque la goroutine ya está atada
 // al ciclo de vida del engine (bgWG: Close la espera).
 func autoBackfill(engine *memory.DbEngine, embedder embedding.Provider) {
-	engine.AutoEmbedBackfill(func(text string) ([]float32, error) {
-		return embedder.Embed(context.Background(), text)
+	engine.AutoEmbedBackfill(func(textos []string) ([][]float32, error) {
+		return embedding.EmbedBatch(context.Background(), embedder, textos)
 	})
 }
 

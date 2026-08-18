@@ -96,8 +96,8 @@ func runEmbedBackfill(args []string) {
 	engine.SetVectorModelID(embedder.Name())
 
 	fmt.Printf("Re-embebiendo el histórico con procedencia %q ...\n", embedder.Name())
-	res, err := engine.EmbedBackfill(func(text string) ([]float32, error) {
-		return embedder.Embed(context.Background(), text)
+	res, err := engine.EmbedBackfill(func(textos []string) ([][]float32, error) {
+		return embedding.EmbedBatch(context.Background(), embedder, textos)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error en backfill (progreso: %d re-embebidas): %v\n", res.Embedded, err)

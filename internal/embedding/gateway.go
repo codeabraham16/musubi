@@ -60,6 +60,39 @@ func (g guarded) Embed(ctx context.Context, text string) ([]float32, error) {
 	return g.inner.Embed(ctx, clean)
 }
 
+// EmbedBatch tapa CADA texto del lote y lo reenvía al lote del proveedor.
+//
+// ⚠️ SIN ESTO EL LOTE NO EXISTE EN PRODUCCIÓN. El portero envuelve al proveedor en el CONSTRUCTOR,
+// así que quien pide un lote ve al `guarded`, no al Ollama de adentro. Si `guarded` no implementa
+// BatchProvider, embedding.EmbedBatch cae al bucle y el 4,58× se pierde en silencio: nada falla,
+// nada se loguea, y la mejora simplemente no ocurre. Ese es el modo de falla más caro de todos.
+//
+// La política de privacidad es la MISMA que la de Embed, sin atajos: un solo texto con secreto en
+// modo `refuse` bloquea el LOTE ENTERO. Es deliberado — embeber los otros y devolver un hueco
+// dejaría al caller apareando vectores contra una lista que ya no coincide, y esa es la falla que
+// baraja la memoria en silencio. Fallar entero es lo recuperable: el backfill es resumible.
+func (g guarded) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	limpios := make([]string, len(texts))
+	total := 0
+	for i, t := range texts {
+		clean, n, err := g.scrubText(t)
+		if err != nil {
+			return nil, err
+		}
+		limpios[i] = clean
+		total += n
+	}
+	if total > 0 && g.mode == config.GatewayModeRefuse {
+		// La CANTIDAD, nunca los valores.
+		logx.Warn("portero de privacidad: lote de embeddings bloqueado, no se envía al proveedor",
+			"secretos", total, "textos", len(texts), "modo", g.mode, "proveedor", g.inner.Name())
+		return nil, ErrSecretsBlocked
+	}
+	// El proveedor de adentro puede NO saber de lotes (Noop, Static, un espía de test): se pide por
+	// la función del paquete, que en ese caso hace el bucle y mantiene la misma garantía de cuenta.
+	return EmbedBatch(ctx, g.inner, limpios)
+}
+
 // scrubText tapa el texto, blindado contra pánico.
 //
 // El recover no es paranoia decorativa: esto corre dentro del daemon MCP y un pánico en la

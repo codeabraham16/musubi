@@ -49,14 +49,41 @@ func (o *OllamaProvider) Name() string {
 }
 func (o *OllamaProvider) Dimensions() int { return o.dim }
 
+// Embed delega en el lote de UNO. No es comodidad: mantiene UN SOLO camino de red, así que el
+// truncado, el manejo de status y el parseo no pueden divergir entre el caso simple y el lote —
+// que es exactamente cómo dos rutas hermanas se separan con el tiempo sin que nadie lo note.
 func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	out, err := o.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(out) != 1 || len(out[0]) == 0 {
+		return nil, fmt.Errorf("ollama devolvió un embedding vacío (¿modelo %q instalado?)", o.model)
+	}
+	return out[0], nil
+}
+
+// EmbedBatch embebe VARIOS textos en UNA llamada.
+//
+// CUÁNTO RINDE, MEDIDO Y SIN INFLAR: 1,37× con bge-m3 en el server (917 → 670 ms por texto). El
+// tiempo TOTAL crece casi lineal con el tamaño del lote, así que el modelo en CPU NO paraleliza el
+// cómputo — lo único que el lote ahorra es la ida y vuelta HTTP y el arranque por pedido.
+// `/api/embed` ya aceptaba un array en `input` y ya devolvía `embeddings` como array; sólo faltaba
+// usarlo. La tabla completa está en embed_backfill.go, junto al tamaño de lote que salió de ella.
+//
+// El orden de `embeddings` es el de `input`, y eso es lo que permite aparear por índice. Que
+// vinieron TODOS lo verifica embedding.EmbedBatch, en un solo lugar.
+func (o *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
 	// truncate:true ⇒ Ollama recorta el input al contexto del modelo en vez de fallar con 500 "input
 	// length exceeds the context length" (el corpus tiene memorias/dossiers que superan el contexto de
 	// bge-m3). Robusto y model-free: Ollama trunca al límite EXACTO del modelo, sin que el server tenga
 	// que adivinar un tope de caracteres/tokens.
 	reqBody, err := json.Marshal(map[string]interface{}{
 		"model":    o.model,
-		"input":    text,
+		"input":    texts,
 		"truncate": true,
 	})
 	if err != nil {
@@ -81,15 +108,14 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("ollama devolvió status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	// /api/embed devuelve un LOTE: {"embeddings": [[...]]}. Con un único input, el vector es el [0].
+	// /api/embed responde {"embeddings": [[...], [...]]} en el MISMO orden que `input`. Se devuelve
+	// el lote ENTERO, sin recortar ni juzgar cuántos vinieron: quien verifica que la cuenta cierre
+	// es embedding.EmbedBatch, en un solo lugar, para que ningún proveedor pueda olvidárselo.
 	var out struct {
 		Embeddings [][]float32 `json:"embeddings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("error al decodificar respuesta de Ollama: %w", err)
 	}
-	if len(out.Embeddings) == 0 || len(out.Embeddings[0]) == 0 {
-		return nil, fmt.Errorf("ollama devolvió un embedding vacío (¿modelo %q instalado?)", o.model)
-	}
-	return out.Embeddings[0], nil
+	return out.Embeddings, nil
 }
