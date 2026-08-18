@@ -20,7 +20,7 @@ func TestAutoEmbedBackfillClosesProvenanceGap(t *testing.T) {
 		t.Fatalf("esperaba 3 pendientes, obtuve n=%d err=%v", n, err)
 	}
 
-	e.AutoEmbedBackfill(fixedEmbed)
+	e.AutoEmbedBackfill(enLote(fixedEmbed))
 	e.bgWG.Wait() // el backfill corre en background: esperarlo como haría Close()
 
 	if n := countEmbeddingsWithModel(t, e, "static:tabla@aaaa"); n != 3 {
@@ -42,7 +42,7 @@ func TestAutoEmbedBackfillReembedsAfterChecksumChange(t *testing.T) {
 	}
 	// Modelo viejo: tabla re-destilada ⇒ mismo basename, checksum distinto.
 	e.SetVectorModelID("static:tabla@viejo")
-	e.AutoEmbedBackfill(fixedEmbed)
+	e.AutoEmbedBackfill(enLote(fixedEmbed))
 	e.bgWG.Wait()
 	if n := countEmbeddingsWithModel(t, e, "static:tabla@viejo"); n != 2 {
 		t.Fatalf("precondición: esperaba 2 vectores con el modelo viejo, obtuve %d", n)
@@ -54,7 +54,7 @@ func TestAutoEmbedBackfillReembedsAfterChecksumChange(t *testing.T) {
 		t.Fatalf("con el checksum nuevo las 2 obs deben quedar pendientes, obtuve n=%d err=%v", n, err)
 	}
 
-	e.AutoEmbedBackfill(fixedEmbed)
+	e.AutoEmbedBackfill(enLote(fixedEmbed))
 	e.bgWG.Wait()
 
 	if n := countEmbeddingsWithModel(t, e, "static:tabla@nuevo"); n != 2 {
@@ -72,13 +72,13 @@ func TestAutoEmbedBackfillNoopWhenNoGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.SetVectorModelID("static:tabla@aaaa")
-	e.AutoEmbedBackfill(fixedEmbed)
+	e.AutoEmbedBackfill(enLote(fixedEmbed))
 	e.bgWG.Wait()
 
 	// Segunda corrida: ya no hay pendientes ⇒ no debe re-embeber (el embedder ni se llama).
 	calls := 0
 	counting := func(s string) ([]float32, error) { calls++; return fixedEmbed(s) }
-	e.AutoEmbedBackfill(counting)
+	e.AutoEmbedBackfill(enLote(counting))
 	e.bgWG.Wait()
 
 	if calls != 0 {
@@ -93,7 +93,7 @@ func TestAutoEmbedBackfillNoopWithoutModelID(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	e.AutoEmbedBackfill(func(s string) ([]float32, error) { calls++; return fixedEmbed(s) })
+	e.AutoEmbedBackfill(enLote(func(s string) ([]float32, error) { calls++; return fixedEmbed(s) }))
 	e.bgWG.Wait()
 	if calls != 0 {
 		t.Errorf("sin vectorModelID no debe embeber nada, hubo %d llamadas", calls)
@@ -114,7 +114,7 @@ func TestAutoEmbedBackfillDoesNotSpawnWhenClosed(t *testing.T) {
 	e.lifecycleMu.Unlock()
 
 	calls := 0
-	e.AutoEmbedBackfill(func(s string) ([]float32, error) { calls++; return fixedEmbed(s) })
+	e.AutoEmbedBackfill(enLote(func(s string) ([]float32, error) { calls++; return fixedEmbed(s) }))
 	e.bgWG.Wait()
 
 	if calls != 0 {

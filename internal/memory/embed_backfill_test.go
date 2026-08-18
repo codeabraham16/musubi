@@ -29,13 +29,13 @@ func TestEmbedBackfillReembedsHistory(t *testing.T) {
 	}
 
 	// Sin embedder nombrado ⇒ error (no hay semántica que backfillear).
-	if _, err := e.EmbedBackfill(fixedEmbed); err == nil {
+	if _, err := e.EmbedBackfill(enLote(fixedEmbed)); err == nil {
 		t.Error("EmbedBackfill sin vectorModelID debería fallar")
 	}
 
 	// Encender la procedencia (como serve/daemon con un embedder) y backfillear.
 	e.SetVectorModelID("static:test-A")
-	res, err := e.EmbedBackfill(fixedEmbed)
+	res, err := e.EmbedBackfill(enLote(fixedEmbed))
 	if err != nil {
 		t.Fatalf("EmbedBackfill: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestEmbedBackfillReembedsHistory(t *testing.T) {
 	}
 
 	// Idempotencia: re-correr no encuentra pendientes (ya tienen el model_id actual).
-	res2, err := e.EmbedBackfill(fixedEmbed)
+	res2, err := e.EmbedBackfill(enLote(fixedEmbed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestEmbedBackfillReembedsHistory(t *testing.T) {
 
 	// Cambio de modelo: ahora las 3 tienen procedencia distinta a la nueva ⇒ se re-embeben.
 	e.SetVectorModelID("static:test-B")
-	res3, err := e.EmbedBackfill(fixedEmbed)
+	res3, err := e.EmbedBackfill(enLote(fixedEmbed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +81,28 @@ func TestEmbedBackfillSkipsEmptyVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.SetVectorModelID("static:test")
-	res, err := e.EmbedBackfill(func(string) ([]float32, error) { return nil, nil })
+	res, err := e.EmbedBackfill(enLote(func(string) ([]float32, error) { return nil, nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Scanned != 1 || res.Embedded != 0 || res.Skipped != 1 {
 		t.Errorf("esperaba scanned=1 embedded=0 skipped=1, obtuve %+v", res)
+	}
+}
+
+// enLote adapta un embebedor de UN texto al callback por lote que espera EmbedBackfill. Existe
+// para que los tests que cuentan llamadas sigan contando POR TEXTO: si contaran lotes, medirían el
+// tamaño del lote y no lo que esos tests afirman (que el embebedor no se llama sin trabajo).
+func enLote(f func(string) ([]float32, error)) func([]string) ([][]float32, error) {
+	return func(textos []string) ([][]float32, error) {
+		out := make([][]float32, len(textos))
+		for i, t := range textos {
+			v, err := f(t)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = v
+		}
+		return out, nil
 	}
 }

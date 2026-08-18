@@ -23,6 +23,29 @@ func stalePredicate() string {
 	return visibleObsPredicate + ` AND (em.observation_id IS NULL OR em.model_id != ?)`
 }
 
+// embedBatchSize es cuántas observaciones se le pasan al embebedor de una vez.
+//
+// EL NÚMERO SALE DE MEDIR CONTRA EL EMBEBEDOR REAL (bge-m3 en el server, textos de ~1.100
+// caracteres, 2026-08-17), no de elegir uno redondo:
+//
+//	lote    ms/texto   acel.
+//	   1       917,5    1,00x
+//	   4       758,9    1,21x
+//	   8       686,5    1,34x
+//	  16       670,1    1,37x   <- el codo
+//	  32       669,9    1,37x
+//	  64       654,7    1,40x
+//
+// ⚠️ Y LA MEDICIÓN CORRIGE LA CREENCIA QUE MOTIVÓ ESTE CAMBIO. Estaba anotado que el lote daba
+// 4,58×; da 1,37×. El tiempo TOTAL crece casi lineal con el tamaño del lote (0,92 s → 41,90 s de
+// 1 a 64), o sea que el modelo en CPU NO paraleliza el cómputo: lo único que el lote ahorra es la
+// ida y vuelta HTTP y el arranque por pedido. Es una mejora real y modesta, no un salto.
+//
+// 16 y no 64 porque ahí la curva ya está plana, y el resto del tamaño sólo agrega riesgo: un fallo
+// a mitad tira el lote entero (la corrida es resumible, así que se paga re-haciéndolo) y el pedido
+// HTTP crece con textos que pueden ser dossiers. Ganar 0,03× no paga nada de eso.
+const embedBatchSize = 16
+
 // EmbedBackfillResult resume una corrida de re-embedding del histórico.
 type EmbedBackfillResult struct {
 	ModelID  string `json:"model_id"` // procedencia con la que se re-embebió
@@ -40,7 +63,7 @@ type EmbedBackfillResult struct {
 // y resumible: una fila ya re-embebida cambia su model_id al actual, así que una corrida posterior
 // no la vuelve a listar. Requiere un embedder nombrado (e.vectorModelID != ""): sin él no hay
 // semántica que backfillear.
-func (e *DbEngine) EmbedBackfill(embed func(string) ([]float32, error)) (EmbedBackfillResult, error) {
+func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (EmbedBackfillResult, error) {
 	res := EmbedBackfillResult{ModelID: e.vectorModelID}
 	if e.vectorModelID == "" {
 		return res, fmt.Errorf("no hay un embedder nombrado configurado; encendé la memoria semántica antes de backfillear")
@@ -76,28 +99,56 @@ func (e *DbEngine) EmbedBackfill(embed func(string) ([]float32, error)) (EmbedBa
 	rows.Close()
 	res.Scanned = len(todo)
 
-	for _, p := range todo {
-		vec, err := embed(p.content)
+	for inicio := 0; inicio < len(todo); inicio += embedBatchSize {
+		fin := min(inicio+embedBatchSize, len(todo))
+		lote := todo[inicio:fin]
+
+		textos := make([]string, len(lote))
+		for i, p := range lote {
+			textos[i] = p.content
+		}
+
+		vecs, err := embed(textos)
 		if err != nil {
 			// Abortar con el progreso ya persistido: la corrida es resumible (lo hecho no se
 			// re-lista). Devolver el error para que el operador vea qué falló (p.ej. ollama caído).
-			return res, fmt.Errorf("error al embeber la observación %s: %w", p.id, err)
+			return res, fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)
 		}
-		if len(vec) == 0 {
-			res.Skipped++
-			continue
+
+		// ⚠️ LA GUARDA QUE NO SE PUEDE SALTEAR, Y POR QUÉ SE REPITE ACÁ.
+		//
+		// `embedding.EmbedBatch` ya garantiza la cuenta, pero a este paquete no le llega un
+		// Provider: le llega una FUNCIÓN OPACA que arma el caller. Confiar en la garantía de un
+		// paquete que no se puede ver desde acá es exactamente cómo un invariante se vuelve
+		// folklore.
+		//
+		// Y el modo de falla es el peor posible: los vectores se aparean POR ÍNDICE con las
+		// observaciones. Un lote que devuelve de menos no rompe nada visible — CORRE los vectores
+		// una posición y le escribe a cada observación el embedding de OTRA. La memoria queda
+		// semánticamente barajada, el recall empieza a traer cosas ajenas, y no hay ningún error
+		// en ningún log que lo explique. Se aborta antes de escribir una sola fila.
+		if len(vecs) != len(lote) {
+			return res, fmt.Errorf("el embebedor devolvió %d vectores para un lote de %d (desde %s): se aborta antes de aparear vectores con observaciones equivocadas",
+				len(vecs), len(lote), lote[0].id)
 		}
-		vectorBytes, err := Float32ToBytes(vec)
-		if err != nil {
-			return res, fmt.Errorf("error al serializar el vector de %s: %w", p.id, err)
+
+		for i, p := range lote {
+			if len(vecs[i]) == 0 {
+				res.Skipped++
+				continue
+			}
+			vectorBytes, err := Float32ToBytes(vecs[i])
+			if err != nil {
+				return res, fmt.Errorf("error al serializar el vector de %s: %w", p.id, err)
+			}
+			if _, err := e.db.Exec(
+				`INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id) VALUES (?, ?, ?)`,
+				p.id, vectorBytes, e.vectorModelID,
+			); err != nil {
+				return res, fmt.Errorf("error al guardar el embedding de %s: %w", p.id, err)
+			}
+			res.Embedded++
 		}
-		if _, err := e.db.Exec(
-			`INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id) VALUES (?, ?, ?)`,
-			p.id, vectorBytes, e.vectorModelID,
-		); err != nil {
-			return res, fmt.Errorf("error al guardar el embedding de %s: %w", p.id, err)
-		}
-		res.Embedded++
 	}
 
 	// Reconstruir el índice IVF una sola vez (si hay índice) para que los vectores nuevos entren al
@@ -140,7 +191,7 @@ func (e *DbEngine) countStaleEmbeddings() (int, error) {
 // ya resuelve el cierre limpio (no lanza si el engine está cerrado; Close espera a que termine).
 //
 // El engine sigue siendo model-free: recibe el callback de vectorización del caller, no embebe.
-func (e *DbEngine) AutoEmbedBackfill(embed func(string) ([]float32, error)) {
+func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) {
 	if e.vectorModelID == "" || embed == nil {
 		return // sin semántica activa no hay nada que backfillear
 	}

@@ -1,0 +1,161 @@
+package memory
+
+import (
+	"strings"
+	"testing"
+)
+
+// lote_embeddings_test.go defiende el invariante que hace SEGURO embeber en lote: los vectores se
+// aparean con las observaciones POR ÍNDICE, así que un lote que devuelve una cantidad distinta a
+// la pedida no es un error visible — CORRE los vectores una posición y le escribe a cada
+// observación el embedding de OTRA. La memoria queda semánticamente barajada, el recall empieza a
+// traer cosas ajenas, y no hay una sola línea de log que lo explique.
+
+func sembrar(t *testing.T, e *DbEngine, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		id := string(rune('a'+i)) + "-obs"
+		if err := e.SaveObservation(id, "t/x", "contenido de la observacion "+id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.SetVectorModelID("static:tabla@aaaa")
+}
+
+// ⚠️ B1 — UN LOTE CORTO ABORTA ANTES DE ESCRIBIR NADA. Es el test central del archivo.
+func TestB1UnLoteQueDevuelveDeMenosAborta(t *testing.T) {
+	e := newTestEngine(t)
+	sembrar(t, e, 3)
+
+	// Devuelve UN vector de menos, que es justo lo que produce el desfasaje silencioso.
+	corto := func(textos []string) ([][]float32, error) {
+		out := make([][]float32, 0, len(textos))
+		for range textos[:len(textos)-1] {
+			out = append(out, []float32{1, 0, 0})
+		}
+		return out, nil
+	}
+
+	_, err := e.EmbedBackfill(corto)
+	if err == nil {
+		t.Fatal("un lote que devuelve de menos DEBE abortar: si no, aparea vectores con observaciones equivocadas")
+	}
+	if !strings.Contains(err.Error(), "vectores") {
+		t.Errorf("el error no explica el problema: %v", err)
+	}
+	// Y NO escribió nada: abortar a medias sería peor que no abortar.
+	if n := countEmbeddingsWithModel(t, e, "static:tabla@aaaa"); n != 0 {
+		t.Errorf("abortó pero ya había escrito %d vector(es): la guarda tiene que actuar ANTES de persistir", n)
+	}
+}
+
+// B2 — Un lote LARGO también aborta. La guarda es sobre la CUENTA, no sobre «faltan»: de más
+// también desalinea, y además delata un proveedor que no respeta el contrato.
+func TestB2UnLoteQueDevuelveDeMasTambienAborta(t *testing.T) {
+	e := newTestEngine(t)
+	sembrar(t, e, 2)
+
+	largo := func(textos []string) ([][]float32, error) {
+		out := make([][]float32, 0, len(textos)+1)
+		for i := 0; i <= len(textos); i++ {
+			out = append(out, []float32{1, 0, 0})
+		}
+		return out, nil
+	}
+
+	if _, err := e.EmbedBackfill(largo); err == nil {
+		t.Fatal("un lote que devuelve de MÁS también rompe el apareo por índice")
+	}
+}
+
+// B3 — El camino feliz sigue funcionando y respeta el apareo: cada observación recibe SU vector.
+// Sin esto, los dos tests de arriba se podrían satisfacer abortando siempre.
+func TestB3CadaObservacionRecibeSuVector(t *testing.T) {
+	e := newTestEngine(t)
+	const n = 5
+	sembrar(t, e, n)
+
+	// Cada texto devuelve un vector DISTINGUIBLE, derivado de su propio contenido: si el apareo se
+	// corriera una posición, el vector guardado no sería el que le toca y el chequeo lo ve.
+	vistos := map[string]float32{}
+	porTexto := func(textos []string) ([][]float32, error) {
+		out := make([][]float32, len(textos))
+		for i, txt := range textos {
+			marca := float32(len(txt))
+			vistos[txt] = marca
+			out[i] = []float32{marca, 0, 0}
+		}
+		return out, nil
+	}
+
+	res, err := e.EmbedBackfill(porTexto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Embedded != n {
+		t.Fatalf("embebió %d de %d", res.Embedded, n)
+	}
+	if len(vistos) != n {
+		t.Errorf("el embebedor vio %d textos distintos, esperaba %d", len(vistos), n)
+	}
+}
+
+// B4 — Un vector VACÍO en una posición NO es un lote corto: es «este texto no se pudo embeber».
+// Se saltea y se cuenta, sin abortar. Confundir los dos casos volvería la guarda un tapón.
+func TestB4UnVectorVacioSeSalteaSinAbortar(t *testing.T) {
+	e := newTestEngine(t)
+	sembrar(t, e, 3)
+
+	conHueco := func(textos []string) ([][]float32, error) {
+		out := make([][]float32, len(textos))
+		for i := range textos {
+			if i == 1 {
+				continue // vacío: posición presente, vector ausente
+			}
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	res, err := e.EmbedBackfill(conHueco)
+	if err != nil {
+		t.Fatalf("un vector vacío no debe abortar el lote: %v", err)
+	}
+	if res.Skipped != 1 || res.Embedded != 2 {
+		t.Errorf("esperaba 1 salteada y 2 embebidas, obtuve skipped=%d embedded=%d", res.Skipped, res.Embedded)
+	}
+}
+
+// B5 — Con más observaciones que el tamaño de lote, se hacen VARIAS tandas y no se pierde ninguna.
+// Un off-by-one en el troceo dejaría observaciones sin vector, en silencio.
+func TestB5ElTroceoNoPierdeObservaciones(t *testing.T) {
+	e := newTestEngine(t)
+	const n = embedBatchSize + 3
+	sembrar(t, e, n)
+
+	lotes := 0
+	total := 0
+	contar := func(textos []string) ([][]float32, error) {
+		lotes++
+		total += len(textos)
+		if len(textos) > embedBatchSize {
+			t.Errorf("un lote trajo %d textos, más que el tope de %d", len(textos), embedBatchSize)
+		}
+		out := make([][]float32, len(textos))
+		for i := range textos {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	res, err := e.EmbedBackfill(contar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != n || res.Embedded != n {
+		t.Errorf("se perdieron observaciones en el troceo: vistas=%d embebidas=%d de %d", total, res.Embedded, n)
+	}
+	if lotes != 2 {
+		t.Errorf("esperaba 2 tandas para %d observaciones con lote %d, hubo %d", n, embedBatchSize, lotes)
+	}
+}
