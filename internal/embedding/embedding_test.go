@@ -116,8 +116,15 @@ func TestNewProviderFactory(t *testing.T) {
 	if !ok {
 		t.Fatalf("ollama salió de la fábrica sin portero: %T", oll)
 	}
-	if _, ok := gOll.inner.(*OllamaProvider); !ok {
-		t.Fatalf("el portero de ollama envuelve algo que no es el motor: %T", gOll.inner)
+	// La cadena completa es portero -> troceador -> motor. El troceador va DEBAJO del
+	// portero a propósito: el texto se tapa entero y recién después se parte, así un
+	// secreto que caiga sobre el corte no queda partido en dos mitades que nadie reconoce.
+	trgOll, ok := gOll.inner.(troceado)
+	if !ok {
+		t.Fatalf("el portero de ollama no envuelve al troceador: %T", gOll.inner)
+	}
+	if _, ok := trgOll.inner.(*OllamaProvider); !ok {
+		t.Fatalf("el troceador de ollama envuelve algo que no es el motor: %T", trgOll.inner)
 	}
 
 	oai, err := NewProvider(config.EmbeddingConfig{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536})
@@ -131,8 +138,15 @@ func TestNewProviderFactory(t *testing.T) {
 	if !ok {
 		t.Fatalf("openai salió de la fábrica sin portero: %T", oai)
 	}
-	if _, ok := gOai.inner.(*OpenAIProvider); !ok {
-		t.Fatalf("el portero de openai envuelve algo que no es el motor: %T", gOai.inner)
+	// La cadena completa es portero -> troceador -> motor. El troceador va DEBAJO del
+	// portero a propósito: el texto se tapa entero y recién después se parte, así un
+	// secreto que caiga sobre el corte no queda partido en dos mitades que nadie reconoce.
+	trgOai, ok := gOai.inner.(troceado)
+	if !ok {
+		t.Fatalf("el portero de openai no envuelve al troceador: %T", gOai.inner)
+	}
+	if _, ok := trgOai.inner.(*OpenAIProvider); !ok {
+		t.Fatalf("el troceador de openai envuelve algo que no es el motor: %T", trgOai.inner)
 	}
 	// El envoltorio no puede cambiar si la semántica cuenta como encendida: es lo que consultan
 	// todos los call sites antes de embeber.

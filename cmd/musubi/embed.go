@@ -45,7 +45,7 @@ func embedUsage() {
 	fmt.Println(cBold("Uso:") + " musubi embed <subcomando>")
 	fmt.Println("  " + cBold("pull") + " [modelo] [--out DIR] [--mirror URL]")
 	fmt.Println("     Descarga una tabla estática de embeddings (checksum pinneado) para la búsqueda semántica.")
-	fmt.Println("  " + cBold("backfill"))
+	fmt.Println("  " + cBold("backfill") + " [--all]")
 	fmt.Println("     Re-embebe las observaciones del histórico que no tienen vector del modelo actual,")
 	fmt.Println("     para volverlas recuperables por la búsqueda semántica (tras encender o cambiar el embedder).")
 	fmt.Println("  Modelos conocidos (para pull):")
@@ -66,6 +66,7 @@ func embedUsage() {
 // nada que backfillear y sale con error claro.
 func runEmbedBackfill(args []string) {
 	fs := flag.NewFlagSet("embed backfill", flag.ExitOnError)
+	todas := fs.Bool("all", false, "re-embeber TODAS las observaciones, incluidas las que ya tienen vector del modelo actual (caro; para cuando cambió CÓMO se embebe y no CON QUÉ)")
 	_ = fs.Parse(args)
 
 	root := workspaceDir()
@@ -95,10 +96,17 @@ func runEmbedBackfill(args []string) {
 	// Misma procedencia que un save normal (serve/daemon): el model_id del embedder actual.
 	engine.SetVectorModelID(embedder.Name())
 
-	fmt.Printf("Re-embebiendo el histórico con procedencia %q ...\n", embedder.Name())
-	res, err := engine.EmbedBackfill(func(textos []string) ([][]float32, error) {
+	vectorizar := func(textos []string) ([][]float32, error) {
 		return embedding.EmbedBatch(context.Background(), embedder, textos)
-	})
+	}
+	var res memory.EmbedBackfillResult
+	if *todas {
+		fmt.Printf("Re-embebiendo TODO el histórico con procedencia %q (incluidas las que ya tienen vector) ...\n", embedder.Name())
+		res, err = engine.EmbedBackfillAll(vectorizar)
+	} else {
+		fmt.Printf("Re-embebiendo el histórico con procedencia %q ...\n", embedder.Name())
+		res, err = engine.EmbedBackfill(vectorizar)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error en backfill (progreso: %d re-embebidas): %v\n", res.Embedded, err)
 		os.Exit(1)

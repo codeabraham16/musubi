@@ -341,3 +341,45 @@ func TestB10SinSondaSiAlgunaDelLoteEntro(t *testing.T) {
 		t.Errorf("esperaba 3 embebidas y 1 rechazada, obtuve embedded=%d failed=%d", res.Embedded, res.Failed)
 	}
 }
+
+// ⚠️ B11 — «MISMO model_id» NO SIEMPRE SIGNIFICA «MISMO VECTOR». Si cambia CÓMO se embebe y no
+// CON QUÉ, la procedencia no lo detecta y esas filas no las lista nadie: quedan mal para siempre.
+// Es el caso real del troceo — los textos largos tenían un vector calculado sólo sobre su primer
+// pedazo. EmbedBackfillAll es la salida, y por eso es explícita: re-embebe la base entera.
+func TestB11BackfillAllRehaceLoQueYaTeniaVector(t *testing.T) {
+	e := newTestEngine(t)
+	const n = 4
+	sembrar(t, e, n)
+
+	uno := func(textos []string) ([][]float32, error) {
+		out := make([][]float32, len(textos))
+		for i := range textos {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+	if _, err := e.EmbedBackfill(uno); err != nil {
+		t.Fatal(err)
+	}
+	if pend, _ := e.countStaleEmbeddings(); pend != 0 {
+		t.Fatalf("precondición: no debería quedar nada pendiente, quedan %d", pend)
+	}
+
+	// El backfill normal ya no ve nada que hacer: la procedencia coincide.
+	res, err := e.EmbedBackfill(uno)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scanned != 0 {
+		t.Errorf("el backfill normal no debería listar nada, listó %d", res.Scanned)
+	}
+
+	// El de --all sí, y las re-embebe todas.
+	res, err = e.EmbedBackfillAll(uno)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scanned != n || res.Embedded != n {
+		t.Errorf("--all tenía que re-embeber las %d, listó %d y embebió %d", n, res.Scanned, res.Embedded)
+	}
+}
