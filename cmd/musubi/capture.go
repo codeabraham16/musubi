@@ -378,6 +378,7 @@ func runCapture(args []string) {
 		projectID = resolveProjectID(cfg, root)
 	}
 	engine.SetProjectID(projectID)
+	engine.SetLedgerPrefixes(cfg.Conflicts.LedgerPrefixes)
 
 	// Scope (C5.2): --scope lo fija explícito; si no, team mode ⇒ shared, si no local. En el modo
 	// origin-side del central se pasa --scope shared (la captura es central por naturaleza: los

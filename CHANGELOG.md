@@ -31,6 +31,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   hace `continue`, así que el peor caso de un prefijo mal declarado es una relación de menos en la
   cola, jamás una observación de menos en el recall. Vacío por defecto: una instalación que no lo
   declara se comporta exactamente como antes.
+  El **doctor poda con la misma regla**, y eso no es un extra: la guarda impide que nazcan
+  relaciones nuevas, pero las que ya existen sólo desaparecen si el `stale_conflicts` las reconoce.
+  Sin eso, declarar un prefijo dejaría la canilla cerrada y el balde lleno — y `doctor.go` ya
+  declaraba podar con «la misma función que la detección, no una aproximación que pueda divergir de
+  la guarda». Hay un test que impide que esa frase se vuelva mentira.
 
 - **El grafo ya ve las llamadas a métodos de otro paquete, y con eso `musubi_impact` deja de
   subestimar el blast radius.** Hasta ahora `variable.Metodo()` no generaba arista si el tipo venía

@@ -40,6 +40,10 @@ type DbEngine struct {
 	// (columna project_id) para la memoria híbrida local+central. Lo inyecta el
 	// entrypoint tras cargar la config (ver SetProjectID). "" = sin atribución (NULL-like).
 	projectID string
+	// ledgerPrefixes son los prefijos de topic_key que este despliegue declara LIBRO MAYOR. Los
+	// necesita el DOCTOR, que poda la cola con la misma regla que usa la detección (ver
+	// SetLedgerPrefixes). Nil = sólo los géneros que conoce el motor.
+	ledgerPrefixes []string
 	// vectorModelID es la PROCEDENCIA que se estampa en cada embedding que escribe este
 	// engine (columna embeddings.model_id, Track 16 F2.2). Como un engine usa UN solo
 	// embedder, todos sus vectores comparten procedencia; la búsqueda exacta sólo compara
@@ -65,6 +69,18 @@ func (e *DbEngine) SetOutboxEnabled(v bool) { e.outboxEnabled = v }
 // observación. Lo llama el entrypoint (serve/daemon) tras resolver el project_id de la
 // config o del directorio del workspace. Idempotente y barato; no toca la base.
 func (e *DbEngine) SetProjectID(id string) { e.projectID = id }
+
+// SetLedgerPrefixes fija los prefijos de topic_key que este despliegue declara LIBRO MAYOR
+// (conflicts.ledger_prefixes). Lo llama el entrypoint tras cargar la config, ANTES de servir
+// pedidos, igual que SetProjectID.
+//
+// ⚠️ POR QUÉ VIVE EN EL ENGINE Y NO SÓLO EN ConflictOptions. La DETECCIÓN los recibe por opts,
+// pero el DOCTOR no: su registro de checks tiene firmas fijas `func(*DbEngine)`. Y `doctor.go`
+// declara explícitamente que poda con «la misma función que la detección, no una aproximación que
+// pueda divergir de la guarda» — si el doctor no los viera, la detección dejaría de crear estas
+// relaciones y las que YA existen quedarían pendientes para siempre, sin nadie que las reconozca.
+// La canilla cerrada y el balde lleno. Nil = nadie, como en ConflictOptions.
+func (e *DbEngine) SetLedgerPrefixes(p []string) { e.ledgerPrefixes = p }
 
 // SetVectorModelID fija la procedencia (model_id del embedder) que saveObservation
 // estampa en cada embedding, y contra la que la búsqueda semántica filtra por
