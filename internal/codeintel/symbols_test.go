@@ -148,3 +148,60 @@ func TestExtractSymbolsUnsupportedIsEmpty(t *testing.T) {
 		t.Errorf("sin extensión debería degradar a vacío, got %+v", syms)
 	}
 }
+
+// El receptor se extrae de las CUATRO formas que Go admite, y una forma no reconocida degrada a
+// receptor vacío (que vuelve al matcheo por nombre pelado) en vez de inventar un tipo.
+func TestRecvTypeNameCubreLasFormasDeReceptor(t *testing.T) {
+	const src = `package p
+
+type T struct{}
+type G[P any] struct{}
+type H[P any, Q any] struct{}
+
+func (t T) Valor() {}
+func (t *T) Puntero() {}
+func (g *G[P]) Generico() {}
+func (h *H[P, Q]) GenericoDoble() {}
+func Suelta() {}
+`
+	esperado := map[string]string{
+		"Valor":         "T",
+		"Puntero":       "T",
+		"Generico":      "G",
+		"GenericoDoble": "H",
+		"Suelta":        "", // una func no tiene receptor: vacío es la verdad, no una omisión
+	}
+	syms := ExtractSymbols("x.go", src)
+	visto := map[string]bool{}
+	for _, s := range syms {
+		want, hay := esperado[s.Name]
+		if !hay {
+			continue
+		}
+		visto[s.Name] = true
+		if s.Recv != want {
+			t.Errorf("%s: Recv = %q, esperaba %q", s.Name, s.Recv, want)
+		}
+	}
+	for n := range esperado {
+		if !visto[n] {
+			t.Errorf("no se extrajo el símbolo %q", n)
+		}
+	}
+}
+
+// Ref() es la clave que se copia a un origin_path: calificada para métodos, pelada para el resto.
+func TestRefEsLaFormaQueSeAncla(t *testing.T) {
+	casos := []struct {
+		s    Symbol
+		want string
+	}{
+		{Symbol{Name: "Close", Recv: "DbEngine"}, "DbEngine.Close"},
+		{Symbol{Name: "NewDbEngine"}, "NewDbEngine"},
+	}
+	for _, c := range casos {
+		if got := c.s.Ref(); got != c.want {
+			t.Errorf("Ref() = %q, esperaba %q", got, c.want)
+		}
+	}
+}

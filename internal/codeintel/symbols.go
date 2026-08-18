@@ -30,10 +30,35 @@ const (
 // Symbol es una declaración top-level con su rango de líneas (1-based, inclusivo),
 // derivada del contenido actual del archivo.
 type Symbol struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Recv es el TIPO DEL RECEPTOR de un método (sin `*`), y está vacío en todo lo demás.
+	//
+	// POR QUÉ NO ALCANZABA CON Name. El grafo de código identifica a un método por
+	// `Tipo.Metodo`, pero acá el nombre venía PELADO, y de ahí salían dos problemas que se ven
+	// distintos y son el mismo:
+	//
+	//  1. La clave que el grafo entrega —`DbEngine.AutoEmbedBackfill`— NO resolvía como ancla de
+	//     observación, aunque la propia doc recomiende «preferí el símbolo». Dos subsistemas sin
+	//     acordar qué ES un símbolo.
+	//  2. El nombre pelado FUNDE homónimos: un ancla a `Close` cubre todos los `Close` del
+	//     archivo, así que salta por cambios en código que la nota no describe. Medido en este
+	//     repo: 8 archivos con métodos homónimos, 18 métodos, 7 de ellos fuera de tests.
+	//
+	// Va como campo aparte y no concatenado en Name para no romper a quien ya matchea por nombre
+	// pelado — incluidas las anclas YA GUARDADAS, que se resolverían distinto de un día para otro.
+	Recv      string `json:"recv,omitempty"`
 	StartLine int    `json:"start_line"`
 	EndLine   int    `json:"end_line"`
+}
+
+// Ref es la forma CALIFICADA del símbolo: `Tipo.Metodo` para un método, el nombre pelado para
+// todo lo demás. Es la que hay que pegar en un `origin_path` y la que muestra FormatSymbols.
+func (s Symbol) Ref() string {
+	if s.Recv == "" {
+		return s.Name
+	}
+	return s.Recv + "." + s.Name
 }
 
 // ExtractSymbols despacha por extensión y devuelve los símbolos top-level del contenido.
@@ -70,11 +95,11 @@ func extractGo(content string) []Symbol {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			kind := KindFunc
+			kind, recv := KindFunc, ""
 			if d.Recv != nil && len(d.Recv.List) > 0 {
-				kind = KindMethod
+				kind, recv = KindMethod, recvTypeName(d.Recv.List[0].Type)
 			}
-			out = appendSym(out, d.Name.Name, kind, lineOf(d.Pos()), lineOf(d.End()))
+			out = appendSymRecv(out, d.Name.Name, kind, recv, lineOf(d.Pos()), lineOf(d.End()))
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
 				switch s := spec.(type) {
@@ -212,18 +237,49 @@ func FormatSymbols(syms []Symbol) string {
 	}
 	parts := make([]string, 0, len(syms))
 	for _, s := range syms {
-		parts = append(parts, fmt.Sprintf("%s L%d", s.Name, s.StartLine))
+		// Calificado: esta lista es de dónde el agente COPIA la clave para anclar una
+		// observación, así que mostrar `AutoEmbedBackfill` cuando lo que identifica al método es
+		// `DbEngine.AutoEmbedBackfill` sería entregarle la mitad que funde homónimos.
+		parts = append(parts, fmt.Sprintf("%s L%d", s.Ref(), s.StartLine))
 	}
 	return strings.Join(parts, "; ")
 }
 
 // appendSym agrega un símbolo saneando el rango (descarta los sin nombre o sin línea).
 func appendSym(out []Symbol, name, kind string, start, end int) []Symbol {
+	return appendSymRecv(out, name, kind, "", start, end)
+}
+
+// appendSymRecv es la variante con receptor, para métodos. Los lenguajes de llaves y Python
+// siguen usando appendSym: sus extractores son por regex y no distinguen el tipo dueño, así que
+// declarar un receptor vacío es la verdad —no se sabe— y no una omisión.
+func appendSymRecv(out []Symbol, name, kind, recv string, start, end int) []Symbol {
 	if name == "" || start <= 0 {
 		return out
 	}
 	if end < start {
 		end = start
 	}
-	return append(out, Symbol{Name: name, Kind: kind, StartLine: start, EndLine: end})
+	return append(out, Symbol{Name: name, Kind: kind, Recv: recv, StartLine: start, EndLine: end})
+}
+
+// recvTypeName saca el nombre del tipo receptor de un método: `T`, `*T`, y los genéricos `T[P]`
+// y `T[P, Q]`. Devuelve "" ante cualquier forma que no reconozca, y eso NO es un fallo: un
+// receptor sin nombre resuelto degrada al comportamiento de antes (matcheo por nombre pelado),
+// que es exactamente lo que corresponde cuando no se sabe de quién es el método.
+func recvTypeName(e ast.Expr) string {
+	for {
+		switch t := e.(type) {
+		case *ast.StarExpr: // *T
+			e = t.X
+		case *ast.IndexExpr: // T[P]
+			e = t.X
+		case *ast.IndexListExpr: // T[P, Q]
+			e = t.X
+		case *ast.Ident:
+			return t.Name
+		default:
+			return ""
+		}
+	}
 }
