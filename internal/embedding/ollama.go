@@ -17,8 +17,9 @@ const defaultOllamaBaseURL = "http://localhost:11434"
 
 // OllamaProvider genera embeddings llamando a una instancia local de Ollama.
 // Endpoint: POST {base_url}/api/embed  body {"model","input","truncate":true} -> {"embeddings":[[...]]}
-// (se usa /api/embed, no el deprecado /api/embeddings, para poder pedir truncate: ante un texto más
-// largo que el contexto del modelo Ollama lo RECORTA en vez de devolver 500).
+// (se usa /api/embed, no el deprecado /api/embeddings, porque acepta un array en `input` y por
+// tanto el lote). Ojo con la creencia vieja de que `truncate` resuelve el texto largo: NO lo hace
+// —ver el detalle medido en EmbedBatch—; de eso se ocupa el troceo de trozos.go.
 type OllamaProvider struct {
 	baseURL string
 	model   string
@@ -32,9 +33,52 @@ func NewOllamaProvider(baseURL, model string, dim int) *OllamaProvider {
 		baseURL: baseURL,
 		model:   model,
 		dim:     dim,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		// Sin tope en el cliente: el plazo lo pone cada pedido según cuánto texto lleva (plazoPara).
+		// Un Timeout acá se aplicaría por igual al pedido de un renglón y al de un dossier, que es
+		// justo el defecto que se está sacando. Ningún pedido sale sin vencimiento: EmbedBatch le
+		// pone uno al contexto cuando el caller no trajo el suyo.
+		client: &http.Client{},
 	}
 }
+
+// plazoPara calcula cuánto esperar por un pedido, a partir de cuánto texto lleva.
+//
+// LOS NÚMEROS SALEN DE MEDIR CONTRA EL EMBEBEDOR REAL (bge-m3 en el server, 2026-08-18), no de
+// elegir uno cómodo. El tiempo es lineal en caracteres, ~0,5–0,8 ms cada uno:
+//
+//	 1.000 caracteres ->  0,8 s
+//	16.000            ->  8,1 s
+//	48.000            -> 27,8 s
+//	96.000            -> 65,5 s
+//
+// El margen es de ~3× sobre lo medido, porque el server es compartido y el modelo puede estar
+// frío. La base cubre el arranque del pedido y NO baja de los 30 s que había: un plazo nuevo no
+// puede volverse más estricto que el viejo para los pedidos que ya andaban bien.
+//
+// El tope existe para que un embebedor colgado se note. Sin él, el plazo crece con el texto y una
+// corrida grande podría esperar indefinidamente sin que nadie sospeche.
+func plazoPara(texts []string) time.Duration {
+	total := 0
+	for _, t := range texts {
+		total += len(t)
+	}
+	plazo := plazoBase + time.Duration(total)*plazoPorCaracter
+	if plazo > plazoMaximo {
+		return plazoMaximo
+	}
+	return plazo
+}
+
+const (
+	plazoBase = 30 * time.Second
+	// 2 ms por carácter ≈ 3× el peor caso medido (0,682 ms/car en el pedido de 96.000).
+	// ⚠️ La unidad importa y es fácil de errar: son MILIsegundos por carácter. Con microsegundos
+	// el plazo de un pedido de 96.000 caracteres crecería 0,24 s en vez de 192 s — o sea que
+	// quedaría igual que el fijo de antes, y el arreglo sería puro comentario. Hay un test que
+	// compara contra los segundos MEDIDOS justamente para atajar eso.
+	plazoPorCaracter = 2 * time.Millisecond
+	plazoMaximo      = 10 * time.Minute
+)
 
 // Name devuelve la PROCEDENCIA del vector INCLUYENDO el modelo concreto ("ollama:<model>"), no
 // sólo el provider (T17.3). Sin el modelo, dos tablas distintas de Ollama de igual dimensión
@@ -77,10 +121,12 @@ func (o *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	// truncate:true ⇒ Ollama recorta el input al contexto del modelo en vez de fallar con 500 "input
-	// length exceeds the context length" (el corpus tiene memorias/dossiers que superan el contexto de
-	// bge-m3). Robusto y model-free: Ollama trunca al límite EXACTO del modelo, sin que el server tenga
-	// que adivinar un tope de caracteres/tokens.
+	// ⚠️ `truncate:true` NO ALCANZA, Y LA NOTA VIEJA DECÍA QUE SÍ. Se creía que Ollama recortaba al
+	// contexto del modelo y por eso el texto largo era problema resuelto. Medido contra el ollama
+	// del central (bge-m3, 2026-08-18): hay una FRANJA de largos que devuelve 400 igual —con
+	// `true`, con `false`, sin el campo y con `num_ctx` explícito— y por encima de ella el recorte
+	// ocurre EN SILENCIO, dejando un vector del primer pedazo presentado como si fuera del
+	// documento entero. Quien protege de verdad es el troceo de trozos.go; esto queda como red.
 	reqBody, err := json.Marshal(map[string]interface{}{
 		"model":    o.model,
 		"input":    texts,
@@ -88,6 +134,17 @@ func (o *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error al serializar pedido a Ollama: %w", err)
+	}
+
+	// EL PLAZO SE CALCULA CON LO QUE SE PIDE, NO SE FIJA DE ANTEMANO. Antes eran 30 s para
+	// cualquier pedido, y el costo del embebedor es lineal en caracteres: 30 s alcanzan para unos
+	// 50.000, así que un lote de 16 textos de 3.000 quedaba al filo y uno de 6.000 se pasaba
+	// siempre. Un plazo que no mira el tamaño no es un plazo, es una lotería.
+	// Si el caller ya puso su propio vencimiento, manda el suyo: acá no se afloja lo que otro apretó.
+	if _, hay := ctx.Deadline(); !hay {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, plazoPara(texts))
+		defer cancel()
 	}
 
 	url := strings.TrimRight(o.baseURL, "/") + "/api/embed"

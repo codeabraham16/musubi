@@ -44,6 +44,26 @@ const (
 	// problema de tamaño: es del texto o del servicio, y hay que devolver el error en vez de
 	// seguir partiendo hasta el carácter.
 	trozoMinimo = 375
+	// loteMaxChars acota cuánto texto va en UN pedido, sin importar cuántos textos sean.
+	//
+	// EL LOTE ESTABA LIMITADO POR CANTIDAD Y EL COSTO NO DEPENDE DE LA CANTIDAD, DEPENDE DEL TEXTO.
+	// Medido contra el ollama del central (bge-m3, 2026-08-18), el tiempo de un pedido es lineal en
+	// caracteres, ~0,5–0,8 ms cada uno:
+	//
+	//	 1 texto  ×  1.000 car =   1.000 car ->   0,8 s
+	//	16 textos ×  1.000 car =  16.000 car ->   8,1 s
+	//	16 textos ×  3.000 car =  48.000 car ->  27,8 s   <- al filo del plazo
+	//	16 textos ×  6.000 car =  96.000 car ->  65,5 s   <- se pasa
+	//
+	// Se vio en producción: `embed backfill --all` llenó el log de `context deadline exceeded` en
+	// lotes de 16, y cada uno cayó al reintento uno por uno. No se perdió nada —para eso está esa
+	// red— pero el lote quedó DESACTIVADO de hecho justo para los textos grandes, y con él la
+	// mejora de 1,37× que se había medido. Un tope por cantidad no puede acotar un costo que
+	// depende del tamaño.
+	//
+	// 40.000 porque ahí el pedido tarda ~23 s medidos: entra con margen en cualquier plazo sensato
+	// y sigue juntando decenas de observaciones normales en un solo viaje.
+	loteMaxChars = 40000
 )
 
 // troceado envuelve un Provider y le garantiza pedidos que entran.
@@ -82,7 +102,9 @@ func (t troceado) EmbedBatch(ctx context.Context, texts []string) ([][]float32, 
 		}
 	}
 	if !hayLargo {
-		return EmbedBatch(ctx, t.inner, texts)
+		// Ningún texto necesita troceo, pero el LOTE sí puede ser demasiado para un solo pedido:
+		// el costo es lineal en caracteres, no en cantidad. Se manda de a tandas acotadas.
+		return t.enTandas(ctx, texts)
 	}
 	out := make([][]float32, len(texts))
 	for i, tx := range texts {
@@ -91,6 +113,34 @@ func (t troceado) EmbedBatch(ctx context.Context, texts []string) ([][]float32, 
 			return nil, err
 		}
 		out[i] = v
+	}
+	return out, nil
+}
+
+// enTandas parte el lote en pedidos de a lo sumo loteMaxChars y concatena las respuestas.
+//
+// La concatenación conserva el ORDEN, que es lo único que el caller puede usar para aparear cada
+// vector con su observación. Un reordenamiento acá no rompería nada visible: escribiría el
+// embedding de cada texto en el registro de otro.
+func (t troceado) enTandas(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, 0, len(texts))
+	for inicio := 0; inicio < len(texts); {
+		fin, acum := inicio, 0
+		for fin < len(texts) {
+			// Siempre al menos uno, aunque solo ya supere el tope: partirlo es trabajo del troceo
+			// por texto, no de acá, y dejarlo afuera sería un bucle que no avanza.
+			if fin > inicio && acum+len(texts[fin]) > loteMaxChars {
+				break
+			}
+			acum += len(texts[fin])
+			fin++
+		}
+		vecs, err := EmbedBatch(ctx, t.inner, texts[inicio:fin])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vecs...)
+		inicio = fin
 	}
 	return out, nil
 }

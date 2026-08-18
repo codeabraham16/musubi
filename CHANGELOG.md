@@ -493,6 +493,45 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   base entera), y por eso es explícito y no automático.
 
 
+### Fixed
+- **El lote de embeddings se acotaba por cantidad y el costo depende del tamaño.** `embed backfill
+  --all` en el cerebro central llenó el log de `context deadline exceeded`: lotes de 16 textos que
+  no llegaban a tiempo. Medido contra el embebedor real (bge-m3, 2026-08-18), el costo de un pedido
+  es **lineal en caracteres**, ~0,5–0,8 ms cada uno:
+
+  | pedido | caracteres | tarda | vs. los 30 s fijos |
+  |---|---:|---:|---|
+  | 1 texto × 1.000 | 1.000 | 0,8 s | ok |
+  | 16 × 1.000 | 16.000 | 8,1 s | ok |
+  | 16 × 3.000 | 48.000 | 27,8 s | **al filo** |
+  | 16 × 6.000 | 96.000 | 65,5 s | **se pasa** |
+
+  O sea que los 30 s fijos eran, en realidad, un tope de ~50.000 caracteres que nadie había
+  escrito. **Un tope por cantidad no puede acotar un costo que depende del tamaño**, y el resultado
+  fue que el lote quedó *desactivado de hecho* justo para los textos grandes —cada uno caía al
+  reintento uno por uno— y con él la mejora de 1,37× que se había medido. No se perdió ninguna
+  observación, porque esa red ya estaba puesta; se perdió la velocidad, en silencio.
+
+  Dos cambios, uno por punta. **El lote ahora se corta por texto acumulado** (40.000 caracteres,
+  ~23 s medidos) en vez de por cantidad, y las tandas **conservan el orden**, que es lo único que
+  el caller tiene para aparear cada vector con su observación. Y **el plazo se calcula con lo que
+  se pide** —base más una parte por carácter, con ~3× de margen sobre lo medido y un techo para que
+  un embebedor colgado se note— en vez de ser el mismo para un renglón que para un dossier. Nunca
+  queda más estricto que los 30 s anteriores: un pedido que antes andaba no puede empezar a fallar
+  por este cambio.
+
+  ⚠️ Los tests se anclan a los **segundos medidos**, no a la constante elegida. Es lo que ataja el
+  error de unidades: con µs en vez de ms por carácter el plazo de 96.000 caracteres crecería 0,2 s
+  en vez de 192 s, quedaría igual que el fijo de antes y el arreglo sería puro comentario.
+
+### Changed
+- **Se corrige una creencia documentada sobre `truncate` de Ollama.** El comentario decía que
+  pedirlo hacía el texto largo «robusto y model-free», porque Ollama recortaría al contexto exacto
+  del modelo. Es falso, y estuvo escrito meses: hay una franja de largos que devuelve 400 igual —con
+  `true`, con `false`, sin el campo y con `num_ctx` explícito— y por encima de ella el recorte
+  ocurre **en silencio**. Quien protege de verdad es el troceo.
+
+
 ## [0.102.1] - 2026-08-11
 
 ### Fixed
