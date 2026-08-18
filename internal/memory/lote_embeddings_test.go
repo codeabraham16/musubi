@@ -270,3 +270,74 @@ func TestB8UnLoteQueFallaDespuesDeFuncionarNoTumbaLaCorrida(t *testing.T) {
 		t.Errorf("las 3 rechazadas tienen que quedar pendientes: pendientes=%d err=%v", pend, err)
 	}
 }
+
+// ⚠️ B9 — EL ESTADO ESTACIONARIO, QUE ES EL QUE MÁS SE VA A VER. Cuando ya sólo queda LA
+// observación imposible en la cola, el lote es de UNA: el progreso de la corrida no da ninguna
+// evidencia para distinguir "este texto es imposible" de "el embebedor está caído". Deducirlo
+// falla acá, y falla hacia el rojo: gritaría "está caído, corré el backfill a mano" en cada
+// arranque del daemon, para siempre, con un diagnóstico falso y una instrucción que no arregla
+// nada. Por eso se PREGUNTA con un texto trivial en vez de adivinar.
+func TestB9UnaSolaImposibleNoSeConfundeConElEmbebedorCaido(t *testing.T) {
+	e := newTestEngine(t)
+	sembrar(t, e, 1)
+
+	sondas := 0
+	vivoPeroLaRechaza := func(textos []string) ([][]float32, error) {
+		if len(textos) == 1 && textos[0] == textoSondaEmbed {
+			sondas++ // el embebedor está VIVO: contesta cualquier cosa trivial
+			return [][]float32{{1, 0, 0}}, nil
+		}
+		return nil, fmt.Errorf("status 400: the input length exceeds the context length")
+	}
+
+	res, err := e.EmbedBackfill(vivoPeroLaRechaza)
+	if err != nil {
+		t.Fatalf("el embebedor contestó la sonda: está vivo, así que esto NO es una corrida fallida: %v", err)
+	}
+	if res.Failed != 1 || res.Embedded != 0 {
+		t.Errorf("esperaba 1 rechazada y 0 embebidas, obtuve failed=%d embedded=%d", res.Failed, res.Embedded)
+	}
+	if sondas != 1 {
+		t.Errorf("esperaba exactamente 1 sonda de vitalidad, hubo %d", sondas)
+	}
+	// Y sigue pendiente: mañana, con otro embebedor o más contexto, entra.
+	if pend, err := e.countStaleEmbeddings(); err != nil || pend != 1 {
+		t.Errorf("la rechazada tiene que quedar pendiente: pendientes=%d err=%v", pend, err)
+	}
+}
+
+// B10 — La sonda NO se dispara cuando alguna del lote entró: el embebedor ya demostró estar vivo
+// y preguntárselo sería un pedido de más en el camino más común de este arreglo.
+func TestB10SinSondaSiAlgunaDelLoteEntro(t *testing.T) {
+	e := newTestEngine(t)
+	sembrar(t, e, 4)
+
+	sondas := 0
+	unaMala := func(textos []string) ([][]float32, error) {
+		if len(textos) == 1 && textos[0] == textoSondaEmbed {
+			sondas++
+			return [][]float32{{1, 0, 0}}, nil
+		}
+		for _, txt := range textos {
+			if strings.Contains(txt, "b-obs") {
+				return nil, fmt.Errorf("status 400")
+			}
+		}
+		out := make([][]float32, len(textos))
+		for i := range textos {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	res, err := e.EmbedBackfill(unaMala)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sondas != 0 {
+		t.Errorf("no hacía falta sondear: 3 de 4 entraron, el embebedor ya se probó vivo (sondas=%d)", sondas)
+	}
+	if res.Embedded != 3 || res.Failed != 1 {
+		t.Errorf("esperaba 3 embebidas y 1 rechazada, obtuve embedded=%d failed=%d", res.Embedded, res.Failed)
+	}
+}

@@ -70,13 +70,20 @@ type obsPendiente struct{ id, content string }
 // De paso arregla el mismo bloqueo por el lado del portero de privacidad: en modo `refuse` un solo
 // texto con secreto tumba el lote entero, y acá pasa a costar sólo su propio lugar.
 //
-// LA REGLA DE CORTE, Y POR QUÉ ES ASÍ: si NINGUNA del lote se pudo embeber una por una y la
-// corrida todavía no embebió nada, la culpa no es de los textos — es el embebedor caído o mal
-// configurado. Ahí se aborta con error en vez de contar todo como "fallidas", porque una corrida
-// que termina en verde con 33 fallidas y 0 embebidas se lee como éxito y no la mira nadie.
-// Si el embebedor YA demostró funcionar en esta corrida, un lote que igual falla entero se saltea:
-// nada se persiste, así que esas observaciones siguen pendientes para el próximo intento.
-func embedUnoAUno(embed func([]string) ([][]float32, error), lote []obsPendiente, yaEmbebio bool, causa error) ([][]float32, []error, error) {
+// LA REGLA DE CORTE, Y POR QUÉ SE MIDE EN VEZ DE DEDUCIRSE: que falle TODO el lote admite dos
+// lecturas opuestas —"esos textos son imposibles" y "el embebedor está caído"— y confundirlas
+// cuesta caro en las dos direcciones. Si se elige mal hacia el verde, una corrida que termina bien
+// con 33 fallidas y 0 embebidas se lee como éxito y no la mira nadie. Si se elige mal hacia el
+// rojo, el estado estacionario del cerebro central (UNA observación imposible, sola en la cola)
+// grita "el embebedor está caído, corré el backfill a mano" en cada arranque — un diagnóstico
+// falso con una instrucción que no arregla nada.
+//
+// Deducirlo del progreso de la corrida no alcanza: con un lote de una sola observación no hay
+// evidencia con qué. Así que en vez de adivinar se le PREGUNTA al embebedor, con un texto trivial
+// que cualquiera sano acepta. Si contesta, está vivo y la culpa es de los textos: se saltean, sin
+// persistir nada, y siguen pendientes. Si tampoco puede con eso, está caído y se aborta.
+// La sonda cuesta un pedido, y sólo en el camino en que ya falló todo.
+func embedUnoAUno(embed func([]string) ([][]float32, error), lote []obsPendiente, causa error) ([][]float32, []error, error) {
 	vecs := make([][]float32, len(lote))
 	errs := make([]error, len(lote))
 	fallaron := 0
@@ -95,12 +102,19 @@ func embedUnoAUno(embed func([]string) ([][]float32, error), lote []obsPendiente
 		}
 		vecs[i] = v[0]
 	}
-	if fallaron == len(lote) && !yaEmbebio {
-		return nil, nil, fmt.Errorf("no se pudo embeber ninguna de las %d observación(es) del lote (empieza en %s), ni en lote ni una por una: o el embebedor está caído o mal configurado, o esos textos son imposibles para él. En lote: %v. Último individual: %w",
-			len(lote), lote[0].id, causa, ultimo)
+	// Si alguna entró, el embebedor ya demostró estar vivo y no hace falta preguntárselo.
+	if fallaron == len(lote) {
+		if _, err := embed([]string{textoSondaEmbed}); err != nil {
+			return nil, nil, fmt.Errorf("el embebedor no pudo con ninguna de las %d observación(es) del lote (empieza en %s) NI con un texto trivial: está caído o mal configurado. En lote: %v. Individual: %v. Sonda: %w",
+				len(lote), lote[0].id, causa, ultimo, err)
+		}
 	}
 	return vecs, errs, nil
 }
+
+// textoSondaEmbed es la pregunta "¿estás vivo?" hecha texto. Corto y sin nada que pueda disparar
+// al portero de privacidad: la sonda tiene que medir el transporte, no chocar contra una guarda.
+const textoSondaEmbed = "musubi"
 
 // EmbedBackfill (re)genera los embeddings de las observaciones ACTIVAS que no tienen un vector con
 // la procedencia (model_id) del embedder ACTUAL — las guardadas antes de encender la semántica, o
@@ -163,7 +177,7 @@ func (e *DbEngine) EmbedBackfill(embed func([]string) ([][]float32, error)) (Emb
 			// embedUnoAUno decide si esto es "un texto malo" o "el embebedor caído" (ver allá).
 			logx.Warn("el lote falló entero; se reintenta texto por texto para aislar al culpable",
 				"desde", lote[0].id, "textos", len(lote), "error", err)
-			vecs, fallos, err = embedUnoAUno(embed, lote, res.Embedded > 0, err)
+			vecs, fallos, err = embedUnoAUno(embed, lote, err)
 			if err != nil {
 				// Acá sí se aborta, con el progreso ya persistido: la corrida es resumible.
 				return res, fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)

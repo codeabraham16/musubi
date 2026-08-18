@@ -428,11 +428,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   propio lugar. La rechazada se cuenta aparte (`failed`, distinto de `skipped`), se loguea **con su
   id y su tamaño** —que es el dato con el que se arregla— y **no se persiste nada suyo**, así que
   sigue pendiente para el próximo intento o para otro embebedor.
-  ⚠️ **Y la regla de corte que impide que el arreglo tape la falla real:** si *ninguna* del lote se
-  pudo embeber una por una y la corrida todavía no embebió nada, se **aborta con error** en vez de
-  contar 33 fallidas — porque «ollama caído» y «este texto es imposible» se ven igual desde acá, y
-  una corrida que termina en verde con 0 embebidas no la mira nadie. Si el embebedor ya demostró
-  funcionar en esa corrida, un lote que igual falla entero se saltea y lo demás sigue.
+  ⚠️ **Y la regla de corte, que se MIDE en vez de deducirse.** Que falle todo el lote admite dos
+  lecturas opuestas —«esos textos son imposibles» y «el embebedor está caído»— y confundirlas
+  cuesta caro en las dos direcciones: hacia el verde, una corrida que termina bien con 33 fallidas
+  y 0 embebidas se lee como éxito y no la mira nadie; hacia el rojo, el **estado estacionario**
+  —una sola observación imposible, sola en la cola— gritaría «está caído, corré el backfill a
+  mano» en cada arranque del daemon, para siempre, con un diagnóstico falso y una instrucción que
+  no arregla nada. Deducirlo del progreso de la corrida **no alcanza**: con un lote de una sola
+  observación no hay evidencia con qué. Así que se le **pregunta** al embebedor, con un texto
+  trivial que cualquiera sano acepta: si contesta está vivo y la culpa es de los textos; si tampoco
+  puede con eso, se aborta. La sonda cuesta un pedido, y sólo cuando ya falló todo.
   De regalo arregla el mismo bloqueo por el lado del portero de privacidad: en modo `refuse` un
   solo texto con secreto tumbaba el lote entero.
   `musubi embed backfill` informa las rechazadas y **sale con código 2**: quedó memoria afuera del
