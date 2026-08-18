@@ -103,8 +103,15 @@ func runEmbedBackfill(args []string) {
 		fmt.Fprintf(os.Stderr, "Error en backfill (progreso: %d re-embebidas): %v\n", res.Embedded, err)
 		os.Exit(1)
 	}
-	fmt.Printf("Backfill completo: %d pendiente(s), %d re-embebida(s), %d omitida(s). Procedencia: %s\n",
-		res.Scanned, res.Embedded, res.Skipped, res.ModelID)
+	fmt.Printf("Backfill completo: %d pendiente(s), %d re-embebida(s), %d omitida(s), %d rechazada(s). Procedencia: %s\n",
+		res.Scanned, res.Embedded, res.Skipped, res.Failed, res.ModelID)
+	if res.Failed > 0 {
+		// Salida distinta de 0 a propósito: un script que encadene backfill tiene que poder ver
+		// que quedó memoria afuera del recall semántico, aunque el resto haya entrado bien.
+		fmt.Fprintf(os.Stderr, "\n%d observación(es) las rechazó el embebedor y siguen pendientes (sus ids están en el log de arriba).\n", res.Failed)
+		fmt.Fprintln(os.Stderr, "Suele ser un texto más largo de lo que el modelo acepta: revisalas o cambiá de embedder.")
+		os.Exit(2)
+	}
 }
 
 func runEmbedPull(args []string) {

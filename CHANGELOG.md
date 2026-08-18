@@ -416,6 +416,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   más **parecidas**. Sirve para acotar el payload, no como ranking de gravedad — decirlo en el
   schema evita que el próximo lo use de triage como se usó hasta hoy.
 
+### Fixed
+- **Una sola observación imposible dejó de bloquear el re-embedding de todas las demás.**
+  Medido en el cerebro central: una observación de 11.700 caracteres que ese Ollama rechaza con
+  `400 the input length exceeds the context length` —y que `truncate` **no** salva: falla igual
+  sola, con `truncate=true`, con `false` y sin el campo— mantuvo al backfill parado **tres días**
+  con 33 observaciones pendientes. El backfill abortaba en la primera que fallara, y como la
+  corrida es *resumible* volvía a empezar **por esa misma**: reintentaba, chocaba, y las otras 32
+  no se embebían nunca. **«Resumible» no alcanza cuando el primer ítem siempre falla.**
+  Ahora un lote que cae entero se reintenta **texto por texto**, así el rechazo cuesta sólo su
+  propio lugar. La rechazada se cuenta aparte (`failed`, distinto de `skipped`), se loguea **con su
+  id y su tamaño** —que es el dato con el que se arregla— y **no se persiste nada suyo**, así que
+  sigue pendiente para el próximo intento o para otro embebedor.
+  ⚠️ **Y la regla de corte que impide que el arreglo tape la falla real:** si *ninguna* del lote se
+  pudo embeber una por una y la corrida todavía no embebió nada, se **aborta con error** en vez de
+  contar 33 fallidas — porque «ollama caído» y «este texto es imposible» se ven igual desde acá, y
+  una corrida que termina en verde con 0 embebidas no la mira nadie. Si el embebedor ya demostró
+  funcionar en esa corrida, un lote que igual falla entero se saltea y lo demás sigue.
+  De regalo arregla el mismo bloqueo por el lado del portero de privacidad: en modo `refuse` un
+  solo texto con secreto tumbaba el lote entero.
+  `musubi embed backfill` informa las rechazadas y **sale con código 2**: quedó memoria afuera del
+  recall semántico, y un script encadenado tiene que poder verlo.
+
 ## [0.102.1] - 2026-08-11
 
 ### Fixed
