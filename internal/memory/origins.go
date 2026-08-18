@@ -47,6 +47,29 @@ func splitOriginRef(ref string) (path, symbol string) {
 // Anclar a un símbolo en vez de al archivo entero es lo que hace la marca UTIL: un archivo
 // grande cambia todo el tiempo por motivos ajenos a la nota, y una marca que salta siempre se
 // aprende a ignorar. El símbolo cambia cuando cambia lo que la nota describe.
+// symbolMatches decide si un símbolo extraído del archivo es el que pide el ancla, y acepta DOS
+// formas a propósito:
+//
+//	`Tipo.Metodo`  -> exacta. Es la clave que ya usa el grafo de código, así que la que devuelve
+//	                  `musubi_code_graph` se puede pegar tal cual en un origin_path. Y al exigir
+//	                  el receptor, NO funde métodos homónimos.
+//	`Nombre`       -> pelada, el comportamiento HISTÓRICO. Sigue matcheando funciones, tipos y
+//	                  también métodos de cualquier receptor.
+//
+// LA FORMA PELADA NO SE QUITA, y no es por comodidad: las anclas ya guardadas en la base están
+// escritas así. Angostarla haría que observaciones que hoy resuelven bien pasaran a `missing` de
+// un día para otro —una marca de rancio masiva y falsa—, que es justo el ruido que este mecanismo
+// existe para no producir. Se AGREGA precisión para quien la pida; no se le cambia el piso a nadie.
+//
+// El costo asumido: un ancla pelada a un nombre repetido sigue cubriendo a todos sus homónimos.
+// Quien quiera precisión ahora tiene cómo pedirla, y la lista de símbolos se la muestra calificada.
+func symbolMatches(s codeintel.Symbol, pedido string) bool {
+	if tipo, metodo, esCalificado := strings.Cut(pedido, "."); esCalificado {
+		return s.Recv == tipo && s.Name == metodo
+	}
+	return s.Name == pedido
+}
+
 func symbolFingerprint(root, path, symbol string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 	if err != nil {
@@ -59,7 +82,7 @@ func symbolFingerprint(root, path, symbol string) (string, error) {
 	h := sha256.New()
 	encontrado := false
 	for _, s := range syms {
-		if s.Name != symbol {
+		if !symbolMatches(s, symbol) {
 			continue
 		}
 		encontrado = true

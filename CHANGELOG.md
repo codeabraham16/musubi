@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Una observación ya se puede anclar a un método con la misma clave que da el grafo.** El grafo
+  de código identifica un método como `Tipo.Metodo`, la doc de `origin_paths` recomienda «preferí
+  el símbolo»… y el ancla **rechazaba esa clave**: sólo comía el nombre pelado. Dos subsistemas que
+  nunca acordaron qué *es* un símbolo, y el resultado práctico era que la recomendación no se podía
+  cumplir para métodos — justo la superficie pública.
+  Y el nombre pelado tenía un segundo problema, más silencioso: **funde homónimos**. Un ancla a
+  `Close` cubre *todos* los `Close` del archivo, así que la marca de rancio salta por cambios en
+  código que la nota no describe — la falla que `origins.go` advierte en su propio comentario, un
+  nivel más abajo. Medido en este repo: 8 archivos con métodos homónimos, 18 métodos, 7 fuera de
+  tests.
+  Ahora `codeintel.Symbol` lleva el receptor en un campo aparte (`Recv`) y el ancla acepta **las
+  dos formas**: `Tipo.Metodo` resuelve exacto, y el nombre pelado sigue funcionando **igual que
+  antes**. Eso último no es comodidad: las anclas ya guardadas están escritas en la forma pelada, y
+  angostar el matcheo las habría mandado a `missing` de un día para otro — una marca de rancio
+  masiva y falsa, el ruido exacto que el mecanismo existe para no producir.
+  `musubi_detect_changes` **reporta** la forma calificada (es la identidad, y la clave que se copia
+  para anclar) pero **busca** con la pelada (son términos de FTS, donde el punto sólo parte el
+  token). Dos trabajos distintos con la misma lista era parte del enredo.
 - **`conflicts.ledger_prefixes`: el despliegue puede declarar qué géneros de nota son LIBRO MAYOR.**
   El motor ya trataba así a los commits y a los contratos SDD —se leen y se citan, pero nadie puede
   pedir un veredicto que los reemplace— porque los escribe él. Cada equipo, en cambio, inventa

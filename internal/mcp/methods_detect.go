@@ -81,17 +81,24 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 		key := memory.NormalizeCodePath(s.projectPath, fd.Path)
 
 		// Símbolos + staleness: solo tienen sentido si el archivo existe (no borrado).
+		//
+		// SE ARMAN DOS LISTAS PORQUE SON DOS TRABAJOS. Lo que se REPORTA va calificado
+		// (`DbEngine.Close`): es la IDENTIDAD del símbolo, y es la clave que el que lee esto va a
+		// copiar para anclar una observación. Lo que se BUSCA va pelado (`Close`): son términos
+		// para FTS, y el punto del calificador sólo parte el token y ensucia la consulta.
+		var paraBuscar []string
 		if fd.ChangeType != codeintel.ChangeDeleted {
 			if content, rerr := s.readProjectFile(fd.Path); rerr == nil {
 				syms := codeintel.ExtractSymbols(fd.Path, content)
 				for _, sym := range codeintel.SymbolsInRanges(syms, fd.NewRanges) {
-					fc.ChangedSymbols = append(fc.ChangedSymbols, sym.Name)
+					fc.ChangedSymbols = append(fc.ChangedSymbols, sym.Ref())
+					paraBuscar = append(paraBuscar, sym.Name)
 				}
 				fc.GistStale = s.gistStale(scoped, key, fd.Path)
 			}
 		}
 
-		fc.RelatedMemory = s.relatedMemory(scoped, key, fc.ChangedSymbols)
+		fc.RelatedMemory = s.relatedMemory(scoped, key, paraBuscar)
 		changedFiles++
 		changedSymbols += len(fc.ChangedSymbols)
 		report.Files = append(report.Files, fc)
