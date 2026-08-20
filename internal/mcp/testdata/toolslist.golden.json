@@ -1100,6 +1100,10 @@
             "type": "string",
             "description": "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"
           },
+          "project_id": {
+            "type": "string",
+            "description": "Opcional: proyecto de ORIGEN al que atribuir la ingesta guardada. Sólo lo respeta un principal write=any (la sala de mando); un principal acotado lo ignora y usa su propio proyecto. Sirve para ingerir a un tenant COMPARTIDO como 'musubi-design' (el acervo del motor de diseño). Default: tu proyecto."
+          },
           "save": {
             "type": "boolean",
             "description": "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"
