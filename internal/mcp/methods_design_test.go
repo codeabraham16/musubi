@@ -228,6 +228,57 @@ func TestDesignBrandArgSoloReadAll(t *testing.T) {
 	}
 }
 
+// TestDesignPrefiereTarjetasSobreBlobs valida F4: en el brief, una tarjeta CURADA (destilada) le gana el
+// lugar a un artículo CRUDO (ingested/) que matchea la misma consulta — así el destilado se surfacea.
+func TestDesignPrefiereTarjetasSobreBlobs(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Un blob crudo y una tarjeta curada, AMBOS con el término "tabla".
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "blob1", "ingested/article/x",
+		"Artículo largo sobre diseño de tabla tabla tabla con muchas filas y columnas.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "card1", "design-corpus/tabla-densa",
+		"PATRÓN — TABLA DENSA: fila compacta, números a la derecha con tabular-nums. (de: tabla)", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := callDesign(t, s, nil, "tabla", "web")
+	if len(brief.Corpus) == 0 {
+		t.Fatal("el corpus vino vacío")
+	}
+	// La tarjeta curada debe estar, y ANTES del blob (o el blob ni aparece dentro del límite).
+	var idxCard, idxBlob = -1, -1
+	for i, h := range brief.Corpus {
+		if h.ID == "card1" {
+			idxCard = i
+		}
+		if h.ID == "blob1" {
+			idxBlob = i
+		}
+	}
+	if idxCard < 0 {
+		t.Errorf("la tarjeta curada (card1) debe aparecer en el corpus; ids=%v", corpusIDs(brief.Corpus))
+	}
+	if idxBlob >= 0 && idxCard > idxBlob {
+		t.Errorf("la tarjeta curada debe ir ANTES del blob crudo (card en %d, blob en %d)", idxCard, idxBlob)
+	}
+}
+
+func corpusIDs(hits []searchHit) []string {
+	out := make([]string, len(hits))
+	for i, h := range hits {
+		out[i] = h.ID
+	}
+	return out
+}
+
 // TestDesignEmitRellenaTokens valida F2 (emisión multi-target): con tokens de marca, el `emit` sale
 // RELLENO con los hex reales de ESA marca en el dialecto del target; una marca en prosa cae a la guía
 // genérica sin valores; y el naranja de un cliente nunca se cruza con el índigo de Musubi.

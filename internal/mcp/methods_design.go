@@ -117,29 +117,58 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 // semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
 // Cualquier error es best-effort: devuelve lo que tenga (o vacío) y marca degraded, nunca falla la tool.
 func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query string, limit int) (hits []searchHit, degraded bool) {
+	// Traemos un POOL más grande que `limit` para poder re-rankear: las TARJETAS destiladas (cortas) pierden
+	// en similitud cruda contra los ARTÍCULOS crudos (blobs de miles de tokens), así que primero juntamos
+	// candidatos de más y después preferimos lo curado (Musubi Renaissance · F4 — que el destilado se surfacee).
+	pool := limit * 3
+	if pool > maxLimit {
+		pool = maxLimit
+	}
+	var sources []searchSource
 	if embedding.Enabled(s.embedder) {
 		embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		vec, err := s.embedder.Embed(embCtx, query)
 		cancel()
 		if err == nil {
-			if results, serr := s.engine.SearchObservations(corpusCtx, vec, limit); serr == nil && len(results) > 0 {
-				sources := make([]searchSource, len(results))
-				for i, r := range results {
-					sources[i] = searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity}
+			if results, serr := s.engine.SearchObservations(corpusCtx, vec, pool); serr == nil {
+				for _, r := range results {
+					sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
 				}
-				return toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget), false
 			}
 		}
 	}
-	// Fallback léxico (FTS5): siempre disponible, sin embedder. Best-effort.
-	if results, ferr := s.engine.SearchObservationsFTS(corpusCtx, query, limit); ferr == nil && len(results) > 0 {
-		sources := make([]searchSource, len(results))
-		for i, r := range results {
-			sources[i] = searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content}
+	if len(sources) == 0 { // Fallback léxico (FTS5): siempre disponible, sin embedder. Best-effort.
+		if results, ferr := s.engine.SearchObservationsFTS(corpusCtx, query, pool); ferr == nil {
+			for _, r := range results {
+				sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content})
+			}
 		}
-		return toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget), false
 	}
-	return nil, true
+	if len(sources) == 0 {
+		return nil, true
+	}
+	return toSearchHits(preferCuratedSources(sources, limit), s.memory.GistMaxTokens, searchGistBudget), false
+}
+
+// preferCuratedSources reordena los candidatos del acervo para que las TARJETAS CURADAS (destiladas:
+// topic_key que NO empieza con 'ingested/') ganen su lugar sobre los BLOBS crudos, conservando el orden de
+// similitud dentro de cada grupo, y corta a n. Así el conocimiento destilado se surfacea, y los artículos
+// crudos quedan de RELLENO para los temas que todavía no se destilaron (cero pérdida de conocimiento).
+func preferCuratedSources(src []searchSource, n int) []searchSource {
+	curated := make([]searchSource, 0, len(src))
+	var raw []searchSource
+	for _, s := range src {
+		if strings.HasPrefix(s.topicKey, "ingested/") {
+			raw = append(raw, s)
+		} else {
+			curated = append(curated, s)
+		}
+	}
+	out := append(curated, raw...)
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
 // brandScopeFor decide DE QUÉ proyecto sale la marca activa, con la disciplina "nunca se cruza": el
