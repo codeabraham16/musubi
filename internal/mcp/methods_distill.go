@@ -101,13 +101,29 @@ func (s *McpServer) toolDistill(ctx context.Context, raw json.RawMessage) (inter
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	batch := args.Limit
+	rep, err := s.runDistillBatch(ctx, args.Limit, args.DryRun)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	return jsonResult(rep)
+}
+
+// runDistillBatch es el NÚCLEO del destilador, compartido por la tool musubi_distill y el auto-drain del
+// scheduler (RunDistillScheduler). NO hace control de acceso ni parseo de args —eso es del caller— y asume
+// que el motor de cognición está disponible. Acota su propia sección crítica —lee bajo RLock, escribe bajo
+// Lock, con el LLM y el embedder AFUERA—, así que el caller NO debe tener tomado el candado del despacho.
+// dryRun lista sin escribir. Sólo devuelve error ante un fallo de LECTURA del backlog; los fallos por blob
+// van en el reporte (Skipped) y no abortan la tanda.
+func (s *McpServer) runDistillBatch(ctx context.Context, limit int, dryRun bool) (distillReport, error) {
+	batch := limit
 	if batch <= 0 {
 		batch = distillDefaultBatch
 	}
 	if batch > distillMaxBatch {
 		batch = distillMaxBatch
 	}
+
+	report := distillReport{Motor: s.cognition.Name(), Blobs: []distillBlobResult{}}
 
 	// 1) Leer los blobs sin destilar (read, bajo RLock acotado).
 	var blobs []memory.ObsLite
@@ -116,17 +132,15 @@ func (s *McpServer) toolDistill(ctx context.Context, raw json.RawMessage) (inter
 		blobs, readErr = s.engine.ObservationsMissingRelation(distillScope, distillRawPrefix, distillMarker, batch)
 	})
 	if readErr != nil {
-		return nil, rpcErrorf(codeInternalError, "no pude listar los blobs sin destilar: %v", readErr)
+		return report, fmt.Errorf("no pude listar los blobs sin destilar: %w", readErr)
 	}
-
-	report := distillReport{Motor: s.cognition.Name(), Blobs: []distillBlobResult{}}
 	if len(blobs) == 0 {
 		report.Note = "el acervo está destilado al día: no hay blobs `ingested/*` pendientes."
-		return jsonResult(report)
+		return report, nil
 	}
 
 	// dry-run: informa qué se destilaría, sin tocar el motor ni escribir.
-	if args.DryRun {
+	if dryRun {
 		for _, b := range blobs {
 			report.Blobs = append(report.Blobs, distillBlobResult{BlobID: b.ID, Topic: b.TopicKey, Skipped: "dry_run"})
 		}
@@ -134,7 +148,7 @@ func (s *McpServer) toolDistill(ctx context.Context, raw json.RawMessage) (inter
 			report.Remaining, _ = s.engine.CountObservationsMissingRelation(distillScope, distillRawPrefix, distillMarker)
 		})
 		report.Note = fmt.Sprintf("dry-run: %d blobs listos para destilar (no se escribió nada); quedan %d en total.", len(blobs), report.Remaining)
-		return jsonResult(report)
+		return report, nil
 	}
 
 	// 2) Por cada blob: destilar con el motor (SIN candado) → embeber (SIN candado) → persistir (write-lock).
@@ -209,7 +223,7 @@ func (s *McpServer) toolDistill(ctx context.Context, raw json.RawMessage) (inter
 	if report.Note == "" {
 		report.Note = fmt.Sprintf("destilé %d blobs → %d tarjetas; quedan %d por destilar.", report.Distilled, report.Cards, report.Remaining)
 	}
-	return jsonResult(report)
+	return report, nil
 }
 
 // distillOne destila UN blob: llama al motor con el texto crudo (acotado) y devuelve las tarjetas

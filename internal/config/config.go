@@ -192,6 +192,16 @@ type MaintenanceConfig struct {
 	// >= a este valor: conocimiento deliberado (decisiones, arquitectura) no se auto-archiva
 	// por más viejo/frío que esté. 0 = sin protección (default; opt-in).
 	DecayProtectImportance float64 `yaml:"decay_protect_importance"`
+	// AutoDistillMinutes es cada cuántos minutos el daemon destila una tanda chica del acervo de
+	// diseño (blobs `ingested/*` → tarjetas `design-corpus/*`) sin intervención. 0 = desactivado
+	// (default; opt-in). Es el "molino continuo" del pilar Musubi Renaissance: material ingerido que
+	// se destila solo. Requiere un motor de cognición; sin él, el scheduler es un no-op. La tanda se
+	// mantiene chica a propósito — el throughput lo limita el rate-limit del motor, no el código —, así
+	// que corre espaciada y va drenando el backlog de a poco sin saturar el endpoint.
+	AutoDistillMinutes float64 `yaml:"auto_distill_minutes"`
+	// AutoDistillBatch es cuántos blobs destila cada tick del auto-drain (default 3 cuando está activo).
+	// Chico y espaciado: dosifica el gasto y no satura el endpoint de cognición.
+	AutoDistillBatch int `yaml:"auto_distill_batch"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
@@ -903,12 +913,12 @@ func Default() Config {
 			MMRLambda:             0.75,
 		},
 		Maintenance: MaintenanceConfig{
-			DedupThreshold:         0.85,
-			DecayHalfLifeDays:      30,
-			DecayMinSalience:       0.2,
-			DecayMinAgeDays:        14,
-			DecayReinforcementK:    0.5,
-			AutoIntervalHours:      24,
+			DedupThreshold:      0.85,
+			DecayHalfLifeDays:   30,
+			DecayMinSalience:    0.2,
+			DecayMinAgeDays:     14,
+			DecayReinforcementK: 0.5,
+			AutoIntervalHours:   24,
 			// 6 h y no 24: el grafo lo consumen musubi_impact y el precheck ANTES de escribir, o
 			// sea que una respuesta rancia se paga en una decisión de código y no en una consulta
 			// curiosa. Es más barato que el mantenimiento (fingerprints contra disco, sin LLM),
@@ -917,6 +927,10 @@ func Default() Config {
 			PurgeArchivedAfterDays: 90,
 			MaxActivePerProject:    50000,
 			Vacuum:                 true,
+			// Auto-drain del acervo APAGADO por default (opt-in): sólo el central con motor de
+			// cognición lo enciende. El batch por tick queda sano por si se activa sin fijarlo.
+			AutoDistillMinutes: 0,
+			AutoDistillBatch:   3,
 		},
 		Graph: GraphConfig{
 			MaxHops:         2,
