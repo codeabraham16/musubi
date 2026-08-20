@@ -36,6 +36,10 @@ type ObservationStore interface {
 	SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error)
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
+	// LatestObservationByTopicInProject devuelve el contenido de la obs visible más reciente con ese
+	// topic_key atribuida EXACTAMENTE a projectID (scope estricto, sin filas sin atribuir). La usa la
+	// resolución de marca-por-proyecto de musubi_design (Musubi Renaissance · CAPA 3).
+	LatestObservationByTopicInProject(topicKey, projectID string) (content string, found bool, err error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.

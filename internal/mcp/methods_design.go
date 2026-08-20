@@ -31,6 +31,15 @@ const designCorpusScope = "musubi-design"
 // pocos patrones concretos, no una investigación sin fin).
 const designCorpusLimit = 6
 
+// brandTopicKey es la clave donde vive la MARCA ACTIVA de un proyecto (Musubi Renaissance · CAPA 3,
+// marca-por-proyecto): una observación con los tokens + reglas de identidad de ESE proyecto.
+const brandTopicKey = "diseno/marca"
+
+// homeBrandProject es el proyecto dueño de la marca Musubi por default (el fallback cuando no hay
+// principal, p.ej. stdio local). Sólo un caller de Musubi (o sin principal) hereda la marca Musubi;
+// un proyecto ajeno SIN marca propia NO la hereda (ver brandFor → designBrandNeutral).
+const homeBrandProject = "musubi"
+
 // designBrief es lo que musubi_design le entrega al caller: todo el conocimiento de diseño ensamblado
 // para que EL agente componga. El cerebro no dibuja; prepara el terreno.
 type designBrief struct {
@@ -38,7 +47,9 @@ type designBrief struct {
 	Target       string      `json:"target"`             // painter | web | html | any
 	Role         string      `json:"role"`               // el rol de diseñador senior (universal)
 	Principles   string      `json:"principles"`         // los principios que se aplican siempre
-	Brand        string      `json:"brand"`              // la identidad de Musubi (no-negociables)
+	Brand        string      `json:"brand"`              // la marca ACTIVA, resuelta por proyecto (CAPA 3)
+	BrandScope   string      `json:"brand_scope"`        // de qué proyecto salió la marca
+	BrandSource  string      `json:"brand_source"`       // project | default | none (ver brandFor)
 	Emit         string      `json:"emit"`               // cómo entregar según el target
 	Corpus       []searchHit `json:"corpus"`             // patrones recallados del acervo (gists por id)
 	CorpusScope  string      `json:"corpus_scope"`       // de qué tenant salió el acervo
@@ -51,6 +62,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	var args struct {
 		Prompt string `json:"prompt"`
 		Target string `json:"target"`
+		Brand  string `json:"brand"`
 		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -60,6 +72,12 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		return nil, rpcErrorf(codeInvalidParams, "prompt es obligatorio: describí qué querés diseñar")
 	}
 	target := normalizeDesignTarget(args.Target)
+
+	// CAPA 3 — marca por proyecto: se resuelve por el PRINCIPAL autenticado (nunca por texto libre),
+	// así "sólo la del target, nunca se cruza" sale del propio modelo. El acervo (materia prima +
+	// método) es compartido; la marca es del proyecto.
+	brandScope := brandScopeFor(principalFrom(ctx), args.Brand)
+	brandText, brandSource := s.brandFor(brandScope)
 	limit := args.Limit
 	if limit <= 0 {
 		limit = designCorpusLimit
@@ -80,7 +98,9 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Target:       target,
 		Role:         designRole,
 		Principles:   designPrinciples,
-		Brand:        designBrand,
+		Brand:        brandText,
+		BrandScope:   brandScope,
+		BrandSource:  brandSource,
 		Emit:         designEmitFor(target),
 		Corpus:       hits,
 		CorpusScope:  designCorpusScope,
@@ -118,6 +138,47 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 		return toSearchHits(sources, s.memory.GistMaxTokens, searchGistBudget), false
 	}
 	return nil, true
+}
+
+// brandScopeFor decide DE QUÉ proyecto sale la marca activa, con la disciplina "nunca se cruza": el
+// scope se DERIVA del principal autenticado (misma idea que writeOriginFor sella las escrituras), NO de
+// texto libre que el cliente controle. El arg `brand` sólo se respeta para un principal read=all (la sala
+// de mando), que puede diseñar a nombre de OTRO proyecto; un principal acotado lo ignora y usa el suyo.
+// Sin principal (stdio local) ⇒ homeBrandProject (Musubi).
+func brandScopeFor(p *Principal, argBrand string) string {
+	if argBrand = strings.TrimSpace(argBrand); argBrand != "" && brandArgAllowed(p) {
+		return argBrand
+	}
+	if p != nil && p.ProjectID != "" {
+		return p.ProjectID
+	}
+	return homeBrandProject
+}
+
+// brandArgAllowed indica si el principal puede DECLARAR una marca ajena por el arg `brand`: sólo quien ve
+// todos los proyectos (read=all, la sala de mando/cabina). Un writer acotado no puede pedir la marca de
+// otro tenant. Sin principal (stdio) ⇒ confianza local.
+func brandArgAllowed(p *Principal) bool {
+	if p == nil {
+		return true
+	}
+	read, _ := p.caps()
+	return read == ReadAll
+}
+
+// brandFor resuelve la MARCA ACTIVA para un scope de proyecto (Musubi Renaissance · CAPA 3). Fetch KEYED
+// y estricto de la obs 'diseno/marca' del tenant (nunca semántico, nunca hereda de otro): si existe, es
+// la marca del proyecto (source "project"); si no y el scope es Musubi, la marca Musubi por default
+// (source "default"); si no y es un proyecto ajeno, la marca neutra que NO cruza identidad (source
+// "none"). Model-free. Un error de lectura degrada al default/neutral, nunca tumba el brief.
+func (s *McpServer) brandFor(scope string) (brand, source string) {
+	if content, found, err := s.engine.LatestObservationByTopicInProject(brandTopicKey, scope); err == nil && found && strings.TrimSpace(content) != "" {
+		return content, "project"
+	}
+	if scope == homeBrandProject {
+		return designBrand, "default"
+	}
+	return designBrandNeutral, "none"
 }
 
 // normalizeDesignTarget acota el target a los cuatro emisores conocidos. Vacío/desconocido ⇒ "any"
@@ -159,12 +220,13 @@ func (s *McpServer) designToolEntry() toolEntry {
 	return toolEntry{
 		Tool: Tool{
 			Name:        "musubi_design",
-			Description: "El MOTOR DE DISEÑO de Musubi, invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño anclado en el acervo compartido: el rol de diseñador senior, los principios que se aplican siempre, la identidad de marca de Musubi y los PATRONES relevantes recallados del acervo de diseño del central (sistemas de diseño, tokens, layout, tipografía, color, accesibilidad). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default, elegís el formato). Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
+			Description: "El MOTOR DE DISEÑO de Musubi (pilar 'Musubi Renaissance'), invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño en tres capas: la MATERIA PRIMA + el MÉTODO universal recallados del acervo de diseño compartido (rol de diseñador senior, principios anti-genérico, patrones de sistemas de diseño/tokens/layout/tipografía/color/accesibilidad) MÁS la MARCA del proyecto (resuelta por tu credencial: la de Musubi por default, la de otro proyecto si tenés acceso). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default). 'brand' opcional para diseñar a nombre de otro proyecto. Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"prompt": {Type: "string", Description: "Descripción en lenguaje libre de lo que querés diseñar (tipo de pantalla, tono, contexto)."},
 					"target": {Type: "string", Description: "Formato de ENTREGA que orienta el brief: 'painter' (spec de bloques del cuerpo/Lienzo) | 'web' (React + Tailwind + tokens, para CRM/Altura) | 'html' (mock HTML autocontenido) | 'any' (default: el caller elige el mejor)."},
+					"brand":  {Type: "string", Description: "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."},
 					"limit":  {Type: "number", Description: "Cuántos patrones del acervo traer (default 6, máximo 100)."},
 				},
 				Required: []string{"prompt"},
@@ -193,7 +255,15 @@ const designPrinciples = `PRINCIPIOS QUE APLICÁS SIEMPRE:
 7. AGRUPACIÓN: eyebrow → título → subtítulo → contenido → acción. Ese ritmo lee profesional.
 8. UN CTA claro por pantalla.`
 
-const designBrand = `LA IDENTIDAD DE MUSUBI (no se pega encima: sale de lo que hace el producto). Musubi es 結び, el nudo que ata todo → la interfaz HACE eso, no lo dibuja. LA REGLA QUE SOSTIENE TODO: ningún elemento de identidad entra si no hace un trabajo — el nudo aparece porque hay vínculo; el sello porque hay ruta o estado; la voz porque hay algo que explicar; el ornamento SÓLO donde no hay datos. Un vacío se explica (qué lo va a llenar); un error NUNCA se disfraza de dato. PALETA: fondo oscuro, texto casi-blanco (principal) y secundario/tenue, UN acento dominante (violeta, la marca); el color se GANA, no se reparte — degradados e imágenes para héroes y momentos, no para todo. PROHIBIDO Y NO SE NEGOCIA: gradiente en textos, serifas, glows de color, vidrio con blur, color como adorno, adorno que tape un dato.`
+// designBrand es la marca Musubi por DEFAULT (fallback cuando no hay un doc 'diseno/marca' en el tenant
+// musubi). Los hex son los tokens REALES del cuerpo (body-rs/src/ui.rs), no el "violeta genérico" que
+// tenía antes y que produjo un demo off-brand: la marca de Musubi es ÍNDIGO sobre AZUL-NOCHE, plana.
+const designBrand = `LA IDENTIDAD DE MUSUBI (no se pega encima: sale de lo que hace el producto). Musubi es 結び, el nudo que ata todo → la interfaz HACE eso, no lo dibuja. LA REGLA QUE SOSTIENE TODO: ningún elemento de identidad entra si no hace un trabajo — el nudo aparece porque hay vínculo; el sello porque hay ruta o estado; la voz porque hay algo que explicar; el ornamento SÓLO donde no hay datos. Un vacío se explica (qué lo va a llenar); un error NUNCA se disfraza de dato. PALETA REAL (tokens del cuerpo, hex): fondo AZUL-NOCHE #0C1020 (NO negro puro), superficies #121734 / #182042, borde hairline #2A335C; texto INK #E9ECF7 (principal), MUTED #98A0C0, FAINT #5A6390; UN acento dominante — CORD = ÍNDIGO #6366F1 (la marca, hover #818CF8); segundo acento BRAIN cian #22D3EE (detalle); estado RESERVADO: BODY verde #34D399 (ok), WARN ámbar #FBBF24 (aviso), NO rosa-rojo #FB7185 (error). El color se GANA, no se reparte. ELEVACIÓN PLANA: la profundidad es por capas de fondo + hairline de 1px, NUNCA por sombra ni glow. Radio 8 (superficies), 4 (pills). PROHIBIDO Y NO SE NEGOCIA: gradiente en textos, serifas, glows de color, vidrio con blur, color como adorno, adorno que tape un dato.`
+
+// designBrandNeutral es la marca para un proyecto AJENO que todavía no definió la suya. NO hereda la
+// identidad de Musubi (eso sería cruzar la marca): pide el método universal + una paleta neutra, y cómo
+// fijar la marca propia. Es el fallback con brand_source:"none".
+const designBrandNeutral = `SIN MARCA DEFINIDA para este proyecto. Aplicá SÓLO el método universal (jerarquía, un CTA, "el color se gana", matar el look de IA) con una paleta sobria y sensata que el pedido sugiera. ⛔ NO uses la identidad de Musubi (el nudo 結び, el índigo #6366F1) — es de OTRO proyecto y no se cruza. Para fijar la marca de ESTE proyecto, guardá una observación con topic_key='diseno/marca' en su tenant: tokens (paleta por rol, tipografía, radios, elevación) + reglas de identidad + prohibiciones.`
 
 const designInstructions = `CON ESTE BRIEF: (1) si querés más patrón concreto, expandí 1 o 2 ids del corpus con musubi_memory_expand — no más, el objetivo es traer estructura, no investigar sin fin; (2) componé UN diseño completo y excelente, anclado en los principios + la marca + lo que traiga el corpus (el corpus informa la ESTRUCTURA; vos componés — nunca copies texto de marca ajena ni inventes datos); (3) entregá en el formato del target (ver 'emit'). NO narres el proceso ni lo que recallaste: entregá el diseño.`
 
@@ -206,6 +276,6 @@ const designEmitHTML = `TARGET = html (mock autocontenido para render headless).
 const designEmitPainter = `TARGET = painter (el motor nativo del cuerpo/Lienzo dibuja un SPEC JSON de bloques). Devolvés SÓLO el JSON del spec: { "blocks": [ BLOQUE, ... ] } — los bloques se dibujan EN ORDEN (el último queda encima). Frame (artboard) 340×520 (pantalla de teléfono), margen 28 a cada lado, fondo oscuro. Cada BLOQUE: {"kind","x","y","w","h","label","px","tint","radius","primary","shadow","fill","children"}.
 kind ∈ card | panel | button | text | eyebrow | divider | dot | chip | row | col.
   card=contenedor elevado (héroes/tarjetas) · panel=superficie plana con borde (campos/filas) · button=acción (primary:true relleno) · text=texto (px marca jerarquía: título 22–30, subtítulo 14–18, cuerpo 13–15, meta 11–12) · eyebrow=rótulo mayúsculas con barrita (px 11) · divider=línea (h:1) · dot=indicador 12×12 · chip=etiqueta translúcida · row/col=auto-acomodan sus children con gap.
-tint (rol de color) ∈ INK (principal) | MUTED (secundario) | FAINT (tenue) | CORD (acento primario, violeta) | BRAIN (acento secundario) | BODY (positivo/verde) | WARN (ámbar).
+tint (rol de color) ∈ INK (principal) | MUTED (secundario) | FAINT (tenue) | CORD (acento primario de la marca; en Musubi, índigo) | BRAIN (acento secundario) | BODY (positivo/verde) | WARN (ámbar). Los VALORES concretos de cada rol salen de la marca del brief, no son fijos.
 fill (cuerpo de una caja) ∈ "CORD" (sólido nombrado) | "solid:BODY" | "grad:CORD,BRAIN,vertical|horizontal|diagonal" | "grad:BRAIN,CORD,radial" | "image:foto" | "image:textura".
 REGLAS DE SALIDA: SÓLO el JSON (sin ` + "```" + `json, sin comentarios, sin prosa antes ni después), JSON válido (comillas dobles, sin comas colgantes), todo dentro del frame 340×520, un CTA por pantalla.`

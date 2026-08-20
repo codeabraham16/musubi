@@ -27,6 +27,28 @@ func (e *DbEngine) TopicExists(topicKey string) (bool, error) {
 	return true, nil
 }
 
+// LatestObservationByTopicInProject devuelve el CONTENIDO de la observación visible más reciente con
+// ese topic_key ATRIBUIDA EXACTAMENTE a projectID. found=false si no hay ninguna.
+//
+// El scope es ESTRICTO a propósito (project_id = ?), NO el criterio del recall que conserva las filas
+// sin atribuir: la marca de un proyecto se resuelve keyed y aislada, para que una fila 'diseno/marca'
+// SIN atribuir no se aplique a TODOS los tenants (la mitigación anti-fuga cross-marca de Musubi
+// Renaissance F1). Es la contracara de fetch de la CAPA 3 (marca por proyecto): querés LA marca exacta
+// del target, no un match difuso ni una heredada. Model-free (query keyed, sin LLM ni embeddings).
+func (e *DbEngine) LatestObservationByTopicInProject(topicKey, projectID string) (content string, found bool, err error) {
+	q := `SELECT content FROM observations
+	      WHERE topic_key = ? AND project_id = ? AND ` + visibleObsPredicate + `
+	      ORDER BY created_at DESC, rowid DESC LIMIT 1`
+	err = e.db.QueryRow(q, topicKey, projectID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("marca por topic %q en proyecto %q: %w", topicKey, projectID, err)
+	}
+	return content, true, nil
+}
+
 // DomainCount es la cantidad de observaciones activas en un DOMINIO de topic: el
 // prefijo del topic_key antes del primer "/" ("roadmap/track-7" -> "roadmap").
 type DomainCount struct {

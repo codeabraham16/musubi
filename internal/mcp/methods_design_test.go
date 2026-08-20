@@ -128,3 +128,102 @@ func TestDesignEsLlamablePorReaderYCabina(t *testing.T) {
 		t.Error("la cabina (write=none) debe poder llamar a musubi_design y recibir el brief")
 	}
 }
+
+// callDesignBrand invoca musubi_design con prompt/target/brand bajo el principal p y devuelve el brief.
+func callDesignBrand(t *testing.T, s *McpServer, p *Principal, prompt, target, brand string) designBrief {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"prompt": prompt, "target": target, "brand": brand})
+	params, _ := json.Marshal(CallToolRequest{Name: "musubi_design", Arguments: raw})
+	ctx := context.Background()
+	if p != nil {
+		ctx = withPrincipal(ctx, p)
+	}
+	out, rpcErr := s.handleToolsCall(ctx, params)
+	if rpcErr != nil {
+		t.Fatalf("musubi_design: %+v", rpcErr)
+	}
+	var brief designBrief
+	if err := json.Unmarshal([]byte(out.(CallToolResponse).Content[0].Text), &brief); err != nil {
+		t.Fatalf("parse brief: %v", err)
+	}
+	return brief
+}
+
+// TestDesignMarcaPorProyectoNoSeCruza valida la CAPA 3 (Musubi Renaissance F1): la marca activa se
+// resuelve por el proyecto del principal, un cliente ve SU marca, Musubi ve la suya (índigo por default),
+// y un proyecto SIN marca NO hereda la identidad de nadie (ni Musubi ni otro cliente) — no se cruza.
+func TestDesignMarcaPorProyectoNoSeCruza(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Marca propia del cliente 'acme' (identidad distinta de Musubi).
+	if err := engine.SaveObservationTypedFrom("acme", "", "acme-brand", brandTopicKey,
+		"MARCA ACME: acento NARANJA #FF6A00, tipografía condensada, look industrial.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(project string) designBrief {
+		return callDesign(t, s, &Principal{Name: "x", Role: RoleWriter, ProjectID: project}, "un login", "web")
+	}
+
+	// El caller de 'acme' ve SU marca (source project), con el naranja.
+	a := call("acme")
+	if a.BrandSource != "project" || a.BrandScope != "acme" || !strings.Contains(a.Brand, "ACME") {
+		t.Errorf("acme debe ver SU marca: source=%q scope=%q brand=%.50q", a.BrandSource, a.BrandScope, a.Brand)
+	}
+	// El caller de 'musubi' ve la marca Musubi por default (índigo real).
+	m := call("musubi")
+	if m.BrandSource != "default" || !strings.Contains(m.Brand, "6366F1") {
+		t.Errorf("musubi debe ver la marca default índigo: source=%q brand=%.50q", m.BrandSource, m.Brand)
+	}
+	if strings.Contains(m.Brand, "ACME") || strings.Contains(m.Brand, "FF6A00") {
+		t.Error("FUGA cross-marca: musubi vio la identidad de acme")
+	}
+	// Un proyecto SIN marca no hereda NI la de acme NI la de Musubi: marca neutra, source 'none'.
+	o := call("otro")
+	if o.BrandSource != "none" {
+		t.Errorf("un proyecto sin marca debe ser 'none', fue %q", o.BrandSource)
+	}
+	// El leak real = heredar la marca APLICADA de otro cliente. (La marca neutra NOMBRA el índigo de
+	// Musubi para decir "NO lo uses" — eso es una instrucción de no-cruce, no aplicar la identidad.)
+	if strings.Contains(o.Brand, "ACME") || strings.Contains(o.Brand, "FF6A00") {
+		t.Errorf("FUGA: un proyecto sin marca heredó la identidad de otro cliente: %.70q", o.Brand)
+	}
+}
+
+// TestDesignBrandArgSoloReadAll valida que el arg `brand` (diseñar a nombre de otro proyecto) SÓLO lo
+// respeta un principal read=all (la sala de mando); un writer acotado lo ignora y usa su propia marca.
+func TestDesignBrandArgSoloReadAll(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+	if err := engine.SaveObservationTypedFrom("acme", "", "acme-brand", brandTopicKey,
+		"MARCA ACME: acento NARANJA #FF6A00.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sala de mando (read=all) pidiendo brand='acme' ⇒ obtiene la marca de acme.
+	admin := &Principal{Name: "mando", Role: RoleAdmin}
+	got := callDesignBrand(t, s, admin, "un login", "web", "acme")
+	if got.BrandScope != "acme" || !strings.Contains(got.Brand, "ACME") {
+		t.Errorf("un read=all con brand='acme' debe traer la marca de acme: scope=%q brand=%.50q", got.BrandScope, got.Brand)
+	}
+	// Writer acotado a 'otro' pidiendo brand='acme' ⇒ se IGNORA el arg, usa su propio scope.
+	scoped := &Principal{Name: "w", Role: RoleWriter, ProjectID: "otro"}
+	got2 := callDesignBrand(t, s, scoped, "un login", "web", "acme")
+	if got2.BrandScope != "otro" {
+		t.Errorf("un writer acotado NO puede declarar marca ajena: esperaba scope 'otro', fue %q", got2.BrandScope)
+	}
+	if strings.Contains(got2.Brand, "ACME") || strings.Contains(got2.Brand, "FF6A00") {
+		t.Error("FUGA: un writer acotado obtuvo la marca de otro proyecto vía el arg brand")
+	}
+}

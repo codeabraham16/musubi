@@ -1116,10 +1116,14 @@
     },
     {
       "name": "musubi_design",
-      "description": "El MOTOR DE DISEÑO de Musubi, invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño anclado en el acervo compartido: el rol de diseñador senior, los principios que se aplican siempre, la identidad de marca de Musubi y los PATRONES relevantes recallados del acervo de diseño del central (sistemas de diseño, tokens, layout, tipografía, color, accesibilidad). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default, elegís el formato). Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
+      "description": "El MOTOR DE DISEÑO de Musubi (pilar 'Musubi Renaissance'), invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño en tres capas: la MATERIA PRIMA + el MÉTODO universal recallados del acervo de diseño compartido (rol de diseñador senior, principios anti-genérico, patrones de sistemas de diseño/tokens/layout/tipografía/color/accesibilidad) MÁS la MARCA del proyecto (resuelta por tu credencial: la de Musubi por default, la de otro proyecto si tenés acceso). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default). 'brand' opcional para diseñar a nombre de otro proyecto. Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "brand": {
+            "type": "string",
+            "description": "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."
+          },
           "limit": {
             "type": "number",
             "description": "Cuántos patrones del acervo traer (default 6, máximo 100)."
