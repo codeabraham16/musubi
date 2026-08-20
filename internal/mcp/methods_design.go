@@ -43,19 +43,20 @@ const homeBrandProject = "musubi"
 // designBrief es lo que musubi_design le entrega al caller: todo el conocimiento de diseño ensamblado
 // para que EL agente componga. El cerebro no dibuja; prepara el terreno.
 type designBrief struct {
-	Ask          string      `json:"ask"`                // el pedido, tal como llegó
-	Target       string      `json:"target"`             // painter | web | html | any
-	Role         string      `json:"role"`               // el rol de diseñador senior (universal)
-	Principles   string      `json:"principles"`         // los principios que se aplican siempre
-	Brand        string      `json:"brand"`              // la marca ACTIVA, resuelta por proyecto (CAPA 3)
-	BrandScope   string      `json:"brand_scope"`        // de qué proyecto salió la marca
-	BrandSource  string      `json:"brand_source"`       // project | default | none (ver brandFor)
-	Emit         string      `json:"emit"`               // cómo entregar según el target
-	Corpus       []searchHit `json:"corpus"`             // patrones recallados del acervo (gists por id)
-	CorpusScope  string      `json:"corpus_scope"`       // de qué tenant salió el acervo
-	CorpusNote   string      `json:"corpus_note"`        // cómo profundizar un patrón
-	Instructions string      `json:"instructions"`       // qué hace el caller ahora
-	Degraded     bool        `json:"degraded,omitempty"` // true si el acervo no devolvió nada (queda el núcleo estático)
+	Ask          string       `json:"ask"`                    // el pedido, tal como llegó
+	Target       string       `json:"target"`                 // painter | web | html | any
+	Role         string       `json:"role"`                   // el rol de diseñador senior (universal)
+	Principles   string       `json:"principles"`             // los principios que se aplican siempre
+	Brand        string       `json:"brand"`                  // la marca ACTIVA, resuelta por proyecto (CAPA 3)
+	BrandScope   string       `json:"brand_scope"`            // de qué proyecto salió la marca
+	BrandSource  string       `json:"brand_source"`           // project | default | none (ver brandFor)
+	BrandTokens  *brandTokens `json:"brand_tokens,omitempty"` // tokens estructurados de la marca (F2), si los hay
+	Emit         string       `json:"emit"`                   // cómo entregar según el target (relleno con los tokens)
+	Corpus       []searchHit  `json:"corpus"`                 // patrones recallados del acervo (gists por id)
+	CorpusScope  string       `json:"corpus_scope"`           // de qué tenant salió el acervo
+	CorpusNote   string       `json:"corpus_note"`            // cómo profundizar un patrón
+	Instructions string       `json:"instructions"`           // qué hace el caller ahora
+	Degraded     bool         `json:"degraded,omitempty"`     // true si el acervo no devolvió nada (queda el núcleo estático)
 }
 
 func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
@@ -77,7 +78,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// así "sólo la del target, nunca se cruza" sale del propio modelo. El acervo (materia prima +
 	// método) es compartido; la marca es del proyecto.
 	brandScope := brandScopeFor(principalFrom(ctx), args.Brand)
-	brandText, brandSource := s.brandFor(brandScope)
+	brandText, brandSource, brandTok := s.brandFor(brandScope)
 	limit := args.Limit
 	if limit <= 0 {
 		limit = designCorpusLimit
@@ -101,7 +102,8 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Brand:        brandText,
 		BrandScope:   brandScope,
 		BrandSource:  brandSource,
-		Emit:         designEmitFor(target),
+		BrandTokens:  brandTok,
+		Emit:         designEmitFor(target, brandTok),
 		Corpus:       hits,
 		CorpusScope:  designCorpusScope,
 		CorpusNote:   "Cada item es un gist (titular). Para traer el patrón completo, expandí su id con musubi_memory_expand — 1 o 2, no más.",
@@ -171,14 +173,21 @@ func brandArgAllowed(p *Principal) bool {
 // la marca del proyecto (source "project"); si no y el scope es Musubi, la marca Musubi por default
 // (source "default"); si no y es un proyecto ajeno, la marca neutra que NO cruza identidad (source
 // "none"). Model-free. Un error de lectura degrada al default/neutral, nunca tumba el brief.
-func (s *McpServer) brandFor(scope string) (brand, source string) {
+func (s *McpServer) brandFor(scope string) (identity, source string, tokens *brandTokens) {
 	if content, found, err := s.engine.LatestObservationByTopicInProject(brandTopicKey, scope); err == nil && found && strings.TrimSpace(content) != "" {
-		return content, "project"
+		if bt := parseBrandTokens(content); bt != nil { // marca ESTRUCTURADA (doc JSON con tokens)
+			id := strings.TrimSpace(bt.Identity)
+			if id == "" {
+				id = "Marca del proyecto (tokens estructurados: ver brand_tokens y emit)."
+			}
+			return id, "project", bt
+		}
+		return content, "project", nil // marca en PROSA: identidad sí, tokens no → emit genérico
 	}
 	if scope == homeBrandProject {
-		return designBrand, "default"
+		return designBrand, "default", musubiBrandTokens
 	}
-	return designBrandNeutral, "none"
+	return designBrandNeutral, "none", nil
 }
 
 // normalizeDesignTarget acota el target a los cuatro emisores conocidos. Vacío/desconocido ⇒ "any"
@@ -196,9 +205,20 @@ func normalizeDesignTarget(v string) string {
 	}
 }
 
-// designEmitFor devuelve la guía de ENTREGA según el target. El núcleo (rol/principios/marca) es
-// universal; sólo cambia en qué formato materializa el caller el diseño.
-func designEmitFor(target string) string {
+// designEmitFor devuelve la guía de ENTREGA según el target, RELLENA con los tokens de la marca cuando
+// los hay (F2 · una fuente → N targets): a la guía base se le suma la paleta/tipografía/radios REALES de
+// la marca resuelta, en el dialecto del target. Sin tokens (marca en prosa) queda sólo la guía genérica.
+func designEmitFor(target string, tokens *brandTokens) string {
+	base := designEmitBase(target)
+	if r := tokens.render(target); r != "" {
+		return base + "\n\nTOKENS DE LA MARCA (usá ESTOS valores; no inventes hex ni tamaños):\n" + r
+	}
+	return base
+}
+
+// designEmitBase es la guía de entrega UNIVERSAL por target (sin valores de marca): el vocabulario y el
+// formato, que no cambian entre marcas.
+func designEmitBase(target string) string {
 	switch target {
 	case "painter":
 		return designEmitPainter

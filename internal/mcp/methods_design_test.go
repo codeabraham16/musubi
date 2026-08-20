@@ -227,3 +227,64 @@ func TestDesignBrandArgSoloReadAll(t *testing.T) {
 		t.Error("FUGA: un writer acotado obtuvo la marca de otro proyecto vía el arg brand")
 	}
 }
+
+// TestDesignEmitRellenaTokens valida F2 (emisión multi-target): con tokens de marca, el `emit` sale
+// RELLENO con los hex reales de ESA marca en el dialecto del target; una marca en prosa cae a la guía
+// genérica sin valores; y el naranja de un cliente nunca se cruza con el índigo de Musubi.
+func TestDesignEmitRellenaTokens(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Marca de 'acme' como DOC JSON de tokens (acento naranja).
+	acme := `{"name":"Acme","palette":{"bg":"#101010","ink":"#FFFFFF","accent":"#FF6A00"},"radius":{"surface":6},"elevation":"raised","identity":"MARCA ACME industrial."}`
+	if err := engine.SaveObservationTypedFrom("acme", "", "acme-brand", brandTopicKey, acme, 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Marca de 'proso' en PROSA (sin tokens estructurados).
+	if err := engine.SaveObservationTypedFrom("proso", "", "proso-brand", brandTopicKey, "Marca en prosa, sin tokens estructurados.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	call := func(project, target string) designBrief {
+		return callDesign(t, s, &Principal{Name: "x", Role: RoleWriter, ProjectID: project}, "una pantalla", target)
+	}
+
+	// Musubi por default (web): el índigo real RELLENO en las variables CSS.
+	m := call("musubi", "web")
+	if !strings.Contains(m.Emit, "--accent: #6366F1") {
+		t.Errorf("el emit web de Musubi debe rellenar el índigo real; emit=%.220q", m.Emit)
+	}
+	if m.BrandTokens == nil || m.BrandTokens.Palette["accent"] != "#6366F1" {
+		t.Error("brand_tokens de Musubi debe traer accent índigo #6366F1")
+	}
+	// Musubi (painter): el mismo token mapeado al dialecto del cuerpo.
+	if mp := call("musubi", "painter"); !strings.Contains(mp.Emit, "CORD(acento)=#6366F1") {
+		t.Errorf("el emit painter de Musubi debe mapear CORD al índigo; emit=%.220q", mp.Emit)
+	}
+	// Acme (web): SU naranja relleno, y NUNCA el índigo de Musubi.
+	a := call("acme", "web")
+	if !strings.Contains(a.Emit, "--accent: #FF6A00") {
+		t.Errorf("el emit web de acme debe rellenar SU naranja; emit=%.220q", a.Emit)
+	}
+	if strings.Contains(a.Emit, "#6366F1") {
+		t.Error("FUGA: acme recibió el índigo de Musubi en el emit")
+	}
+	if a.BrandTokens == nil || a.BrandTokens.Palette["accent"] != "#FF6A00" {
+		t.Error("brand_tokens de acme debe traer accent naranja #FF6A00")
+	}
+	// Marca en prosa: sin tokens ⇒ emit genérico (sin :root relleno), pero igual es source 'project'.
+	p := call("proso", "web")
+	if p.BrandTokens != nil {
+		t.Error("una marca en prosa NO debe traer brand_tokens")
+	}
+	if strings.Contains(p.Emit, ":root {") {
+		t.Errorf("una marca en prosa no debe rellenar tokens; emit=%.150q", p.Emit)
+	}
+	if p.BrandSource != "project" {
+		t.Errorf("una marca en prosa igual tiene source 'project', fue %q", p.BrandSource)
+	}
+}
