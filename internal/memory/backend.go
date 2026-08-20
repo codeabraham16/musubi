@@ -40,6 +40,11 @@ type ObservationStore interface {
 	// topic_key atribuida EXACTAMENTE a projectID (scope estricto, sin filas sin atribuir). La usa la
 	// resolución de marca-por-proyecto de musubi_design (Musubi Renaissance · CAPA 3).
 	LatestObservationByTopicInProject(topicKey, projectID string) (content string, found bool, err error)
+	// ObservationsMissingRelation / CountObservationsMissingRelation alimentan el DESTILADOR del acervo
+	// (Musubi Renaissance): los blobs `ingested/*` de un tenant que todavía no son destino de una arista
+	// `derived_from` (o sea, que aún no produjeron tarjetas). FIFO, model-free. Ver memory/distill.go.
+	ObservationsMissingRelation(projectID, topicPrefix, relation string, limit int) ([]ObsLite, error)
+	CountObservationsMissingRelation(projectID, topicPrefix, relation string) (int, error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.

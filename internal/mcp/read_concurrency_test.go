@@ -74,6 +74,9 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// justo lo que no son.
 		"musubi_promote_skill", "musubi_install_skill",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
+		// El destilador (Musubi Renaissance) escribe tarjetas + aristas de procedencia en el acervo:
+		// jamás readOnly. Es lockSelf (I/O externa) pero eso es concurrencia, no autorización.
+		"musubi_distill",
 		// musubi_sdd hace un RMW del blob del run (CompleteWorkflowStep) + persiste el
 		// artefacto: su corrección depende del Lock exclusivo de dispatchMu. Marcarla readOnly
 		// la pondría bajo RLock y reintroduciría el lost-update del complete (auditoría #5).

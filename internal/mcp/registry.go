@@ -1104,5 +1104,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// compartido y arma un brief para que el caller componga). readOnly ⇒ llamable desde cualquier
 	// proyecto o sin proyecto. Ver methods_design.go.
 	entries = append(entries, s.designToolEntry())
+	// musubi_distill: el destilador del acervo (pilar 'Musubi Renaissance'). Pase OFFLINE admin+opt-in
+	// que convierte los blobs `ingested/*` en tarjetas `design-corpus/*`; lockSelf porque hace I/O
+	// externa (motor + embedder) por blob. Ver methods_distill.go.
+	entries = append(entries, s.distillToolEntry())
 	return entries
 }

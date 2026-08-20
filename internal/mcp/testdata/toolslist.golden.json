@@ -1141,6 +1141,23 @@
           "prompt"
         ]
       }
+    },
+    {
+      "name": "musubi_distill",
+      "description": "DESTILADOR del acervo de diseño (pilar 'Musubi Renaissance'): pase OFFLINE que convierte los artículos crudos ingeridos (blobs `ingested/*` del acervo `musubi-design`) en TARJETAS curadas y cortas (`design-corpus/*`) que el motor de diseño surfacea ANTES que los blobs. Cada blob se destila con el motor de cognición en 1-6 lecciones genéricas y reusables, embebidas para búsqueda. IDEMPOTENTE y reanudable: marca cada blob con una arista de procedencia `derived_from`, procesa de a tandas (default 6) y no reprocesa lo ya hecho — corré en bucle hasta que 'remaining' llegue a 0. Requiere admin y un motor de cognición configurado (opt-in: sin motor, falla explícito). Pasá `dry_run:true` para ver qué se destilaría sin escribir, o `limit` para el tamaño de la tanda (máx 25).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Si es true, lista los blobs que se destilarían SIN llamar al motor ni escribir nada."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Cuántos blobs destilar en esta tanda (default 6, máximo 25). Cada blob es una llamada al motor; tandas grandes tardan más."
+          }
+        }
+      }
     }
   ]
 }
