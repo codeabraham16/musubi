@@ -780,6 +780,16 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 		return textResult("Batch limpiado."), nil
 
+	case "reopen":
+		// reintento manual: devuelve una unidad FALLIDA a `open` para que la flota la vuelva a reclamar.
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "reopen requiere 'id' (la unidad fallida)")
+		}
+		if err := s.engine.ReopenWorkUnit(args.ID); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo reabrir: %v", err)
+		}
+		return textResult("Unidad reabierta: vuelve a estar disponible para la flota."), nil
+
 	case "bid":
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "bid requiere 'id' (la unidad)")

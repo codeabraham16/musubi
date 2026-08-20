@@ -235,6 +235,8 @@ type WorkStore interface {
 	WorkBatchStatus(batchID string) (WorkBatch, error)
 	ActiveBatch() (WorkBatch, bool, error)
 	ClearWorkBatch(batchID string) error
+	// ReopenWorkUnit devuelve una unidad FALLIDA a `open` (reintento manual desde la cabina).
+	ReopenWorkUnit(id string) error
 	BidWorkUnit(unitID, agent string, bid float64, note string) error
 	AwardWorkUnit(unitID string, ttlSeconds int) (WorkUnit, WorkBid, bool, error)
 	WorkUnitBids(unitID string) ([]WorkBid, error)
