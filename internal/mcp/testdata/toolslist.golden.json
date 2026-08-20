@@ -1113,6 +1113,30 @@
           "url"
         ]
       }
+    },
+    {
+      "name": "musubi_design",
+      "description": "El MOTOR DE DISEÑO de Musubi, invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño anclado en el acervo compartido: el rol de diseñador senior, los principios que se aplican siempre, la identidad de marca de Musubi y los PATRONES relevantes recallados del acervo de diseño del central (sistemas de diseño, tokens, layout, tipografía, color, accesibilidad). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default, elegís el formato). Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Cuántos patrones del acervo traer (default 6, máximo 100)."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Descripción en lenguaje libre de lo que querés diseñar (tipo de pantalla, tono, contexto)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Formato de ENTREGA que orienta el brief: 'painter' (spec de bloques del cuerpo/Lienzo) | 'web' (React + Tailwind + tokens, para CRM/Altura) | 'html' (mock HTML autocontenido) | 'any' (default: el caller elige el mejor)."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      }
     }
   ]
 }

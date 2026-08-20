@@ -169,6 +169,13 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		// invocó —, así que su test dedicado usa este mismo seedVictim y exige que las cuatro
 		// dimensiones scopeadas den CERO para el tenant vecino y NO cero para el admin federado.
 		"musubi_readiness",
+		// musubi_design lee la tabla observations pero con scope FIJO al acervo COMPARTIDO
+		// `musubi-design`, nunca al proyecto del caller — como el arsenal de skills, es un pozo de
+		// conocimiento compartido a propósito, así que no hay dato por-tenant que aislar. NO entra al
+		// barrido por marcador porque un admin federado tampoco vería el marker de web (el scope es
+		// fijo, no federado): su test dedicado (TestDesignBriefTraeNucleoYAcervoScopeado) siembra un
+		// señuelo en otro tenant y exige que el corpus salga SÓLO de `musubi-design`.
+		"musubi_design",
 	} {
 		swept[name] = true
 	}

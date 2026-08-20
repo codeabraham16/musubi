@@ -500,6 +500,9 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// un reader TIENE que poder llamarla. Si deja de poder, el tablero del cuerpo y el CRM se
 		// quedan sin el puntaje y nadie se entera hasta que alguien abra la pantalla.
 		"musubi_readiness": true,
+		// F1 · Lienzo como capacidad: el motor de diseño es readOnly y se pensó para invocarse desde
+		// donde sea, incluso sin poder mutar; una cabina/reader TIENE que poder llamarlo.
+		"musubi_design": true,
 	}
 
 	for _, e := range s.tools {

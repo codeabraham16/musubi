@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>59 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>60 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,11 +325,12 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **59 herramientas**, agrupadas por dominio:
+El servidor expone **60 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
 | **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
+| **Diseño** | `musubi_design` (el motor de diseño como capacidad: arma un brief anclado en el acervo `musubi-design` para que el caller componga; invocable desde cualquier proyecto, model-free) |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) · `musubi_ask` (respuesta razonada sobre la memoria, RAG; opt-in) |
 | **Cuarentena de escritura** | `musubi_propose_observation` (todo lo que generó un LLM entra acá, invisible al recall) · `musubi_corroborate` (única salida; conserva el sello de procedencia) |
@@ -667,7 +668,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 59 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 60 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

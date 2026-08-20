@@ -1100,5 +1100,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del
 	// fetcher del lado del server es segura incluso con varios principales. Ver methods_ingest.go.
 	entries = append(entries, s.ingestToolEntry())
+	// musubi_design: el motor de diseño como capacidad del cerebro (lee el acervo `musubi-design`
+	// compartido y arma un brief para que el caller componga). readOnly ⇒ llamable desde cualquier
+	// proyecto o sin proyecto. Ver methods_design.go.
+	entries = append(entries, s.designToolEntry())
 	return entries
 }

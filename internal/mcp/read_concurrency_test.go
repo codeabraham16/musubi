@@ -52,6 +52,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// otras tools provocan no se escriben en el handler: van al buffer del ledger y bajan
 		// desde otra goroutine, justamente para no escribir con dispatchMu tomado.
 		"musubi_skill_usage": true,
+		// El motor de diseño: arma un brief leyendo el acervo `musubi-design` con SearchObservations/
+		// FTS (búsquedas puras, sin bumpAccess ni ledger). No muta nada; por eso es readOnly y la
+		// puede llamar una cabina (F1 · Lienzo como capacidad del cerebro).
+		"musubi_design": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
