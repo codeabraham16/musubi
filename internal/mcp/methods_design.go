@@ -31,6 +31,15 @@ const designCorpusScope = "musubi-design"
 // pocos patrones concretos, no una investigación sin fin).
 const designCorpusLimit = 6
 
+// designMethodPrefix es el sub-acervo del MÉTODO vivo (Musubi Renaissance · CAPA 2): las tarjetas
+// `design-method/*` que arbitran el criterio anti-genérico. Se sirven SIEMPRE (no por relevancia al
+// prompt: el método es universal) y se EXCLUYEN del corpus de patrones para no duplicarse en el brief.
+const designMethodPrefix = "design-method/"
+
+// designMethodLimit acota cuántas tarjetas de método entran al brief (el método es un set CURADO y chico,
+// no un corpus). Ordenadas por importancia: un método reforzado pesa más que uno recién agregado.
+const designMethodLimit = 24
+
 // brandTopicKey es la clave donde vive la MARCA ACTIVA de un proyecto (Musubi Renaissance · CAPA 3,
 // marca-por-proyecto): una observación con los tokens + reglas de identidad de ESE proyecto.
 const brandTopicKey = "diseno/marca"
@@ -46,7 +55,8 @@ type designBrief struct {
 	Ask          string       `json:"ask"`                    // el pedido, tal como llegó
 	Target       string       `json:"target"`                 // painter | web | html | any
 	Role         string       `json:"role"`                   // el rol de diseñador senior (universal)
-	Principles   string       `json:"principles"`             // los principios que se aplican siempre
+	Principles   string       `json:"principles"`             // los principios que se aplican siempre (método)
+	MethodSource string       `json:"method_source"`          // corpus (sub-acervo design-method/* vivo) | static (const de fallback)
 	Brand        string       `json:"brand"`                  // la marca ACTIVA, resuelta por proyecto (CAPA 3)
 	BrandScope   string       `json:"brand_scope"`            // de qué proyecto salió la marca
 	BrandSource  string       `json:"brand_source"`           // project | default | none (ver brandFor)
@@ -94,11 +104,16 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
 	hits, degraded := s.recallDesignCorpus(ctx, corpusCtx, args.Prompt, limit)
 
+	// CAPA 2 — el MÉTODO vivo: los principios salen del sub-acervo arbitrable `design-method/*` si está
+	// sembrado, o de la const de fallback si no. Así el método se puede judge/supersede sin tocar código.
+	principles, methodSource := s.designMethod()
+
 	brief := designBrief{
 		Ask:          strings.TrimSpace(args.Prompt),
 		Target:       target,
 		Role:         designRole,
-		Principles:   designPrinciples,
+		Principles:   principles,
+		MethodSource: methodSource,
 		Brand:        brandText,
 		BrandScope:   brandScope,
 		BrandSource:  brandSource,
@@ -113,6 +128,33 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	return jsonResult(brief)
 }
 
+// designMethod arma el bloque de PRINCIPIOS del brief desde el sub-acervo VIVO `design-method/*` del tenant
+// de diseño (Musubi Renaissance · CAPA 2 — el método arbitrable que reemplaza a la const hardcodeada). Si
+// el sub-acervo está vacío (stdio local sin sembrar, o un fallo de lectura), cae al núcleo estático
+// `designPrinciples`, que ya vale por sí solo: el método se puede judge/supersede sin romper NUNCA el brief.
+// Devuelve (texto de principios, source: "corpus"|"static"). Model-free: query keyed, sin LLM.
+func (s *McpServer) designMethod() (principles, source string) {
+	cards, err := s.engine.ObservationsByTopicPrefixInProject(designCorpusScope, designMethodPrefix, designMethodLimit)
+	if err != nil || len(cards) == 0 {
+		return designPrinciples, "static"
+	}
+	var b strings.Builder
+	b.WriteString("PRINCIPIOS QUE APLICÁS SIEMPRE (el método vivo del acervo, arbitrado — no hardcodeado):")
+	n := 0
+	for _, c := range cards {
+		if txt := strings.TrimSpace(c.Content); txt != "" {
+			b.WriteString("\n- ")
+			b.WriteString(txt)
+			n++
+		}
+	}
+	if n == 0 {
+		// Tarjetas presentes pero TODAS vacías: la const de fallback es más útil que un header solo.
+		return designPrinciples, "static"
+	}
+	return b.String(), "corpus"
+}
+
 // recallDesignCorpus trae los patrones más relevantes del acervo para el pedido. Prioriza la búsqueda
 // semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
 // Cualquier error es best-effort: devuelve lo que tenga (o vacío) y marca degraded, nunca falla la tool.
@@ -120,7 +162,13 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	// Traemos un POOL más grande que `limit` para poder re-rankear: las TARJETAS destiladas (cortas) pierden
 	// en similitud cruda contra los ARTÍCULOS crudos (blobs de miles de tokens), así que primero juntamos
 	// candidatos de más y después preferimos lo curado (Musubi Renaissance · F4 — que el destilado se surfacee).
-	pool := limit * 3
+	// El pool debe dejar lugar para los patrones REALES aunque las tarjetas del método (design-method/*,
+	// que viven en el MISMO tenant y se excluyen más abajo) copen las primeras posiciones del ranking. Si
+	// el pool se acotara sólo a limit*3, una consulta densa en "principios" lo llenaría de método, la
+	// exclusión lo vaciaría y el brief marcaría degraded EN FALSO con corpus vacío (revisión adversarial
+	// 2026-08-21). Como hay a lo sumo designMethodLimit tarjetas de método, sumarlas al pool garantiza que
+	// tras excluirlas siga habiendo hasta limit*3 patrones reales.
+	pool := limit*3 + designMethodLimit
 	if pool > maxLimit {
 		pool = maxLimit
 	}
@@ -147,7 +195,25 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	if len(sources) == 0 {
 		return nil, true
 	}
+	// El sub-acervo del MÉTODO (design-method/*) se sirve como Principles del brief, NO como patrón de
+	// corpus: excluirlo evita que el método aparezca DOS veces (Musubi Renaissance · CAPA 2).
+	sources = excludeTopicPrefix(sources, designMethodPrefix)
+	if len(sources) == 0 {
+		return nil, true
+	}
 	return toSearchHits(preferCuratedSources(sources, limit), s.memory.GistMaxTokens, searchGistBudget), false
+}
+
+// excludeTopicPrefix descarta las fuentes cuyo topic_key empieza con prefix. La usa recallDesignCorpus para
+// sacar el sub-acervo del método (design-method/*) del corpus de patrones: el método viaja como Principles.
+func excludeTopicPrefix(src []searchSource, prefix string) []searchSource {
+	var out []searchSource
+	for _, s := range src {
+		if !strings.HasPrefix(s.topicKey, prefix) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // preferCuratedSources reordena los candidatos del acervo para que las TARJETAS CURADAS (destiladas:

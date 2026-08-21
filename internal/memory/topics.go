@@ -49,6 +49,40 @@ func (e *DbEngine) LatestObservationByTopicInProject(topicKey, projectID string)
 	return content, true, nil
 }
 
+// ObservationsByTopicPrefixInProject devuelve hasta limit observaciones VISIBLES atribuidas EXACTAMENTE a
+// projectID cuyo topic_key empieza con topicPrefix, ordenadas por IMPORTANCIA desc y luego recencia. La usa
+// el MÉTODO VIVO del motor de diseño (Musubi Renaissance · CAPA 2): las tarjetas `design-method/*` del
+// acervo que reemplazan a los principios hardcodeados, para que el método se pueda ARBITRAR
+// (judge/supersede) a medida que el "tell" anti-genérico se mueve. El scope es ESTRICTO (project_id = ?),
+// igual que la marca: el método es del acervo COMPARTIDO `musubi-design`, no se hereda difuso desde otro
+// tenant. Ordena por importancia para que un método reforzado pese más que uno recién agregado. Model-free
+// (query keyed, sin LLM ni embeddings).
+func (e *DbEngine) ObservationsByTopicPrefixInProject(projectID, topicPrefix string, limit int) ([]ObsLite, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	q := `SELECT id, topic_key, content FROM observations
+	      WHERE project_id = ? AND topic_key LIKE ? AND ` + visibleObsPredicate + `
+	      ORDER BY importance DESC, created_at DESC, rowid DESC LIMIT ?`
+	rows, err := e.db.Query(q, projectID, topicPrefix+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("observaciones por prefijo %q en proyecto %q: %w", topicPrefix, projectID, err)
+	}
+	defer rows.Close()
+	var out []ObsLite
+	for rows.Next() {
+		var o ObsLite
+		if err := rows.Scan(&o.ID, &o.TopicKey, &o.Content); err != nil {
+			return nil, fmt.Errorf("escanear observación por prefijo %q: %w", topicPrefix, err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterar observaciones por prefijo %q: %w", topicPrefix, err)
+	}
+	return out, nil
+}
+
 // DomainCount es la cantidad de observaciones activas en un DOMINIO de topic: el
 // prefijo del topic_key antes del primer "/" ("roadmap/track-7" -> "roadmap").
 type DomainCount struct {

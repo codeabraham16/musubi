@@ -271,6 +271,139 @@ func TestDesignPrefiereTarjetasSobreBlobs(t *testing.T) {
 	}
 }
 
+// TestDesignMethodFallbackEstatico valida CAPA 2: sin sub-acervo `design-method/*`, los principios salen
+// de la const de fallback y method_source es "static" — el brief nunca queda sin método.
+func TestDesignMethodFallbackEstatico(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	brief := callDesign(t, s, nil, "un login", "web")
+	if brief.MethodSource != "static" {
+		t.Errorf("sin sub-acervo de método, method_source debe ser 'static'; fue %q", brief.MethodSource)
+	}
+	if brief.Principles != designPrinciples {
+		t.Errorf("sin sub-acervo, los principios deben ser la const de fallback")
+	}
+}
+
+// TestDesignMethodDelAcervoVivo valida CAPA 2: con tarjetas `design-method/*` sembradas, los principios
+// salen del ACERVO (arbitrable), method_source es "corpus", y respetan el orden por importancia.
+func TestDesignMethodDelAcervoVivo(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Método vivo: dos tarjetas, distinta importancia (la de mayor importancia va primero).
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "meth-color", "design-method/el-color-se-gana",
+		"EL COLOR SE GANA: un acento dominante, el resto neutro; el color no se reparte.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "meth-ia", "design-method/matar-look-de-ia",
+		"MATAR EL LOOK DE IA: evitá el tell del momento (violeta-gradiente, crema+serif); el tell se mueve cada ~18 meses.", 0.5, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := callDesign(t, s, nil, "un login", "web")
+	if brief.MethodSource != "corpus" {
+		t.Fatalf("con sub-acervo sembrado, method_source debe ser 'corpus'; fue %q", brief.MethodSource)
+	}
+	if !strings.Contains(brief.Principles, "EL COLOR SE GANA") || !strings.Contains(brief.Principles, "MATAR EL LOOK DE IA") {
+		t.Errorf("los principios deben traer las tarjetas de método del acervo; got=%.200q", brief.Principles)
+	}
+	// Orden por importancia: la tarjeta de importancia 1.0 (color) va ANTES que la de 0.5 (ia).
+	if i, j := strings.Index(brief.Principles, "EL COLOR SE GANA"), strings.Index(brief.Principles, "MATAR EL LOOK DE IA"); i < 0 || j < 0 || i > j {
+		t.Errorf("el método más importante debe ir primero; color en %d, ia en %d", i, j)
+	}
+}
+
+// TestDesignMethodExcluidoDelCorpus valida que el sub-acervo del método NO se duplica: una tarjeta
+// `design-method/*` que matchea el pedido viaja como Principles, NUNCA como patrón del corpus.
+func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Método y patrón, ambos con el término "jerarquia" (con NoopProvider el recall cae al FTS).
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "meth-jer", "design-method/jerarquia",
+		"JERARQUIA: una sola cosa manda por pantalla, jerarquia jerarquia.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "card-jer", "design-corpus/jerarquia-tabla",
+		"PATRÓN — jerarquia en tablas: el total manda, jerarquia jerarquia.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := callDesign(t, s, nil, "jerarquia", "web")
+	// El método aparece en Principles...
+	if brief.MethodSource != "corpus" || !strings.Contains(brief.Principles, "una sola cosa manda") {
+		t.Errorf("la tarjeta de método debe servir como Principles; source=%q principles=%.120q", brief.MethodSource, brief.Principles)
+	}
+	// ...pero NUNCA en el corpus de patrones (evita la duplicación).
+	for _, h := range brief.Corpus {
+		if h.ID == "meth-jer" {
+			t.Errorf("la tarjeta design-method/ NO debe aparecer en el corpus; ids=%v", corpusIDs(brief.Corpus))
+		}
+	}
+}
+
+// TestDesignMethodNoStarveaCorpus valida el fix de la revisión adversarial: las tarjetas del método
+// (design-method/*) viven en el MISMO tenant y son densas en keywords de diseño, pero NO deben copar el
+// pool de búsqueda y dejar el corpus de patrones vacío con degraded en falso. El pool se agranda para
+// dejar lugar a los patrones reales tras excluir el método.
+func TestDesignMethodNoStarveaCorpus(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	// Muchas tarjetas de método, todas densas en el término de la consulta (starvan el pool viejo de 18).
+	for i := 0; i < 20; i++ {
+		id := "m" + string(rune('a'+i))
+		if err := engine.SaveObservationTypedFrom(designCorpusScope, "", id, "design-method/regla-"+id,
+			"jerarquia densa contraste grilla: regla de metodo numero jerarquia densa", 1.0, "semantic", "shared", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// UN patrón real del corpus con el mismo término: no debe quedar sepultado ni excluido.
+	if err := engine.SaveObservationTypedFrom(designCorpusScope, "", "patron1", "design-corpus/tabla-jerarquia",
+		"PATRÓN — jerarquia densa en tablas: el total manda, jerarquia densa contraste grilla.", 1.0, "semantic", "shared", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := callDesign(t, s, nil, "jerarquia densa contraste grilla", "web")
+	if brief.Degraded {
+		t.Error("el corpus NO debe quedar degraded en falso: las tarjetas de método no deben vaciar el pool")
+	}
+	found := false
+	for _, h := range brief.Corpus {
+		if h.ID == "patron1" {
+			found = true
+		}
+		if strings.HasPrefix(h.TopicKey, designMethodPrefix) {
+			t.Errorf("una tarjeta de método se coló en el corpus: %s", h.TopicKey)
+		}
+	}
+	if !found {
+		t.Errorf("el patrón real (patron1) debe sobrevivir en el corpus pese a las 20 tarjetas de método; ids=%v", corpusIDs(brief.Corpus))
+	}
+}
+
 func corpusIDs(hits []searchHit) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
