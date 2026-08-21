@@ -286,14 +286,40 @@ function renderHUD(d){
   const shown=code?(cg.nodes||[]).length:(b.neurons||[]).length;
   const total=code?(cg.total_nodes||0):(b.total_neurons||0);
   const trunc=code?cg.truncated:b.truncated;
+  // Las aristas se recortan MUCHO más que los nodos —una se pierde en cuanto uno de sus dos
+  // extremos queda fuera del top-N—, así que necesitan su propio total y su propia bandera.
+  // Imprimir su largo pelado al lado de un "300/3660" le enseña al ojo que ahí el número es
+  // el total, y no lo es: en el cerebro central eran 486 dibujadas sobre 3620 reales.
   const edgeN=code?(cg.edges||[]).length:(b.synapses||[]).length;
+  const edgeTotal=code?(cg.total_edges||0):(b.total_synapses||0);
+  const edgeTrunc=code?!!cg.edges_truncated:!!b.synapses_truncated;
+  const edgeTxt=edgeTrunc?`${edgeN}/${edgeTotal}`:edgeN;
   $('neuronCount').textContent=trunc?`${shown}/${total}`:shown;
-  $('synCount').textContent=edgeN;
+  $('synCount').textContent=edgeTxt;
   $('proj').textContent=d.project||'—'; $('ver').textContent=d.version||'';
-  $('kActive').textContent=code?shown:(ob.active!=null?ob.active:'—');
-  $('kSyn').textContent=edgeN;
-  $('kDomains').textContent=DOMAINS.length||((d.graph||{}).domains||[]).length;
-  $('domlegend').innerHTML=DOMAINS.length?DOMAINS.slice(0,10).map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
+  // En lente MEMORIA el KPI es el universo recuperable: utilization.active y observations.visible
+  // salen los dos del predicado canónico; observations.active queda de último recurso porque
+  // cuenta como vivas las notas superadas y las que están en cuarentena.
+  // En lente CÓDIGO el KPI es el total de nodos, no los dibujados: con `shown` contradecía al
+  // contador de arriba, que en la misma pantalla ya decía "400/8193".
+  const visibles=(ins.utilization||{}).active;
+  $('kActive').textContent=code?(total||shown):(visibles!=null?visibles:(ob.visible!=null?ob.visible:(ob.active!=null?ob.active:'—')));
+  $('kSyn').textContent=edgeTxt;
+  // Los dominios REALES vienen en graph.domains, calculados por SQL sobre toda la memoria.
+  // DOMAINS se arma de la muestra dibujada y sirve para COLOREAR: usarlo para contar decía 46
+  // donde había 90. En lente código el equivalente del universo es total_modules.
+  const gdoms=((d.graph||{}).domains)||[];
+  $('kDomains').textContent=code
+    ?(cg.total_modules?(cg.truncated&&DOMAINS.length<cg.total_modules?`${DOMAINS.length}/${cg.total_modules}`:cg.total_modules):DOMAINS.length)
+    :(gdoms.length||DOMAINS.length);
+  // La leyenda también: su ranking y sus conteos salían del top-N por saliencia, que está
+  // sesgado por recencia y calor — un dominio grande y frío no aparecía. El color se sigue
+  // tomando de DOMCOL (la muestra); los que no entraron se pintan en reposo.
+  const legend=(!code&&gdoms.length)
+    ?gdoms.slice().sort((x,y)=>(y.count-x.count)||String(x.domain).localeCompare(String(y.domain))).slice(0,10)
+      .map(dd=>({name:dd.domain,count:dd.count,color:(DOMCOL&&DOMCOL.get(dd.domain))||'#7f9cc9'}))
+    :DOMAINS.slice(0,10);
+  $('domlegend').innerHTML=legend.length?legend.map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
   const runs=((d.orchestration||{}).runs)||[];
   $('kRuns').textContent=runs.filter(r=>r.status==='running'||r.done<r.total).length;
   const h=d.health||{}, bad=(h.checks||[]).filter(c=>c.status&&c.status!=='ok').length;

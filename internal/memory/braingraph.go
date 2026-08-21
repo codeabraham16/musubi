@@ -42,14 +42,49 @@ type BrainSynapse struct {
 	Status     string  `json:"status,omitempty"`
 }
 
-// BrainGraph es el grafo neuronal completo para el render: las neuronas incluidas (top-N
-// por saliencia), sus sinapsis (solo las que conectan neuronas incluidas) y el total real
-// (para señalar truncamiento en la UI).
+// BrainGraph es el grafo neuronal para el render: las neuronas incluidas (top-N por
+// saliencia), sus sinapsis (solo las que conectan neuronas incluidas) y —para CADA una de
+// las dos colecciones— su total real y si se recortó.
+//
+// Las sinapsis necesitan su propio par de campos, y no alcanza con `Truncated`: una sinapsis
+// se pierde en cuanto UNO de sus extremos queda fuera del top-N, así que el recorte de
+// aristas es muchísimo más agresivo que el de nodos y no se deduce del de neuronas. Medido
+// en el cerebro central: 3660 neuronas capadas a 300 dejaban 486 sinapsis visibles, y el
+// JSON no traía forma alguna de saber cuántas habían quedado afuera.
+//
+// OJO CON EL DENOMINADOR: TotalSynapses NO es `COUNT(*) FROM observation_relations`. Ese
+// número incluye relaciones que tocan observaciones archivadas, superadas o en cuarentena
+// —que el grafo excluye a propósito y no se dibujarían ni sin tope—, así que publicarlo
+// cambiaría una mentira por otra. Y en el cerebro central sería peor: brainSynapses lee la
+// tabla SIN scopeClause, y hoy no filtra memoria ajena sólo porque el gate es el set de
+// neuronas visibles del scope; un COUNT crudo expondría la cardinalidad de otros tenants.
+// El gemelo honesto de TotalNeurons es "relaciones con los DOS extremos visibles".
 type BrainGraph struct {
-	Neurons      []BrainNeuron  `json:"neurons"`
-	Synapses     []BrainSynapse `json:"synapses"`
-	TotalNeurons int            `json:"total_neurons"`
-	Truncated    bool           `json:"truncated"`
+	Neurons           []BrainNeuron  `json:"neurons"`
+	Synapses          []BrainSynapse `json:"synapses"`
+	TotalNeurons      int            `json:"total_neurons"`
+	Truncated         bool           `json:"truncated"`
+	TotalSynapses     int            `json:"total_synapses"`
+	SynapsesTruncated bool           `json:"synapses_truncated"`
+}
+
+// newBrainGraph es el ÚNICO constructor de BrainGraph, y los totales entran como parámetros
+// POSICIONALES a propósito: un literal con campos nombrados deja en cero y en silencio el
+// total que uno se olvida de poner, que es exactamente cómo nació el bug que este archivo
+// arregla. Así, agregar una colección recortada sin su total no compila.
+func newBrainGraph(neurons []BrainNeuron, totalNeurons int, neuronsTruncated bool,
+	synapses []BrainSynapse, totalSynapses int, synapsesTruncated bool) BrainGraph {
+	if neurons == nil {
+		neurons = []BrainNeuron{}
+	}
+	if synapses == nil {
+		synapses = []BrainSynapse{}
+	}
+	return BrainGraph{
+		Neurons: neurons, Synapses: synapses,
+		TotalNeurons: totalNeurons, Truncated: neuronsTruncated,
+		TotalSynapses: totalSynapses, SynapsesTruncated: synapsesTruncated,
+	}
 }
 
 // defaultBrainNeuronLimit es el tope de neuronas del render por defecto: suficiente para
@@ -119,58 +154,69 @@ func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (
 	}
 	rows.Close()
 
-	total := len(neurons)
-	sort.SliceStable(neurons, func(i, j int) bool { return neurons[i].salience > neurons[j].salience })
-	truncated := false
-	if len(neurons) > limit {
-		neurons = neurons[:limit]
-		truncated = true
+	// El set VISIBLE se toma ACÁ, con todas las neuronas todavía en la mano y ANTES del cap:
+	// es el universo contra el que se cuentan las sinapsis. Tomarlo después del recorte haría
+	// colapsar el total a la cantidad dibujada y el bug volvería disfrazado de arreglo.
+	visible := make(map[string]bool, len(neurons))
+	for _, n := range neurons {
+		visible[n.ID] = true
 	}
+
+	sort.SliceStable(neurons, func(i, j int) bool { return neurons[i].salience > neurons[j].salience })
+	neurons, total, truncated := capped(neurons, limit)
 
 	included := make(map[string]bool, len(neurons))
 	for _, n := range neurons {
 		included[n.ID] = true
 	}
 
-	synapses, err := e.brainSynapses(included)
+	synapses, totalSynapses, err := e.brainSynapses(visible, included)
 	if err != nil {
 		return BrainGraph{}, err
 	}
 
-	if neurons == nil {
-		neurons = []BrainNeuron{}
-	}
-	if synapses == nil {
-		synapses = []BrainSynapse{}
-	}
-	return BrainGraph{Neurons: neurons, Synapses: synapses, TotalNeurons: total, Truncated: truncated}, nil
+	return newBrainGraph(neurons, total, truncated, synapses, totalSynapses, len(synapses) < totalSynapses), nil
 }
 
-// brainSynapses lee todas las relaciones y devuelve solo las que conectan dos neuronas
-// incluidas (sin aristas colgantes). Filtrar en Go evita un IN(...) gigante y el troceo.
-func (e *DbEngine) brainSynapses(included map[string]bool) ([]BrainSynapse, error) {
+// brainSynapses lee todas las relaciones y hace DOS cosas en la misma pasada:
+//   - devuelve las que conectan dos neuronas INCLUIDAS (las dibujables, sin colgantes);
+//   - cuenta las que conectan dos neuronas VISIBLES, que es el universo contra el cual
+//     declarar el truncado.
+//
+// Los dos sets son distintos y el orden importa: `visible` son todas las observaciones que
+// pasaron el predicado de visibilidad (≈ TotalNeurons), `included` son sólo las que además
+// entraron en el top-N. Contar sobre `visible` y no sobre las filas crudas es lo que hace
+// que el denominador pertenezca al mismo universo que el numerador: una relación con un
+// extremo archivado, superado o en cuarentena no es una sinapsis que "no entró", es una que
+// no existe para este grafo. Filtrar en Go evita un IN(...) gigante y su troceo.
+func (e *DbEngine) brainSynapses(visible, included map[string]bool) ([]BrainSynapse, int, error) {
 	rows, err := e.db.Query(`
 		SELECT source_id, target_id, relation, COALESCE(confidence,0), COALESCE(status,'')
 		FROM observation_relations`)
 	if err != nil {
-		return nil, fmt.Errorf("brain: sinapsis: %w", err)
+		return nil, 0, fmt.Errorf("brain: sinapsis: %w", err)
 	}
 	defer rows.Close()
 
 	var out []BrainSynapse
+	total := 0
 	for rows.Next() {
 		var s BrainSynapse
 		if err := rows.Scan(&s.Source, &s.Target, &s.Relation, &s.Confidence, &s.Status); err != nil {
-			return nil, fmt.Errorf("brain: escanear sinapsis: %w", err)
+			return nil, 0, fmt.Errorf("brain: escanear sinapsis: %w", err)
 		}
+		if !visible[s.Source] || !visible[s.Target] {
+			continue
+		}
+		total++
 		if included[s.Source] && included[s.Target] {
 			out = append(out, s)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("brain: iterar sinapsis: %w", err)
+		return nil, 0, fmt.Errorf("brain: iterar sinapsis: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // domainOf deriva el dominio de un topic_key: el prefijo antes del primer '/' (o el

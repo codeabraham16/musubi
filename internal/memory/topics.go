@@ -101,7 +101,7 @@ func (e *DbEngine) TopicDomainCounts() ([]DomainCount, error) {
 		            ELSE topic_key END AS domain,
 		       COUNT(*) AS c
 		FROM observations
-		WHERE archived = 0
+		WHERE `+visibleObsPredicate+`
 		GROUP BY domain
 		ORDER BY c DESC, domain ASC`)
 	if err != nil {
@@ -140,15 +140,21 @@ type DomainNode struct {
 	Topics       []TopicLeaf `json:"topics"`
 }
 
-// TopicTree arma el árbol DOMINIO → temas de las observaciones NO archivadas, con
+// TopicTree arma el árbol DOMINIO → temas de las observaciones VISIBLES (recuperables), con
 // conteos y última actividad por nodo. Alimenta el grafo de conocimiento interactivo
 // (drill-down + brillo por recencia). Agregación SQL determinista, sin LLM. Dominios
 // ordenados por cantidad desc (desempate alfabético); temas igual dentro de cada uno.
+//
+// Usa el predicado CANÓNICO y no un `archived = 0` propio, por el mismo motivo que
+// braingraph.go lo documenta para el grafo: con el filtro laxo el árbol contaba las notas
+// SUPERADAS y las EN CUARENTENA, así que el encabezado del mapa de conocimiento sumaba una
+// población y el grafo dibujaba otra —64 de diferencia en el cerebro central—, y encima
+// exponía en la cara visual texto sin corroborar que la cuarentena existe para tapar.
 func (e *DbEngine) TopicTree() ([]DomainNode, error) {
 	rows, err := e.db.Query(`
 		SELECT topic_key, COUNT(*) AS c, COALESCE(MAX(created_at), '') AS last
 		FROM observations
-		WHERE archived = 0
+		WHERE ` + visibleObsPredicate + `
 		GROUP BY topic_key`)
 	if err != nil {
 		return nil, fmt.Errorf("árbol de topics: %w", err)

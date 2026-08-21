@@ -38,10 +38,25 @@ type UtilizationStats struct {
 }
 
 // ObsStats resume el tamaño de la memoria de observaciones.
+//
+// Active y Visible NO son lo mismo, y la diferencia es la que hacía que el dashboard
+// afirmara dos poblaciones distintas en la misma pantalla:
+//
+//	Active  = Total - Archived          -> mide "no archivada", un solo eje
+//	Visible = visibleObsPredicate       -> archived=0 AND superseded_by IS NULL AND quarantined=0
+//
+// Visible es la cantidad RECUPERABLE: lo que el recall devuelve y lo que el grafo dibuja.
+// En el cerebro central la brecha era de 64 notas superadas o en cuarentena que Active
+// contaba como memoria viva y ningún camino de lectura devuelve nunca.
+//
+// Active se deja como está a propósito, con su fórmula vieja: alimenta readiness y
+// consumidores externos, y cambiarle el VALOR a un campo publicado es un break silencioso.
+// Se agrega Visible al lado y se hace que la UI lea el bueno.
 type ObsStats struct {
 	Total    int `json:"total"`
 	Active   int `json:"active"`
 	Archived int `json:"archived"`
+	Visible  int `json:"visible"`
 }
 
 // ErrorHotspot es un archivo con errores no resueltos y su cantidad.
@@ -100,6 +115,10 @@ func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 		util.RecallRate = float64(util.Recalled) / float64(util.Active)
 	}
 	rep.Utilization = util
+	// El conteo VISIBLE ya está calculado acá arriba con el predicado canónico: se copia a
+	// ObsStats en vez de correr un segundo COUNT idéntico. Que salgan de la misma query es
+	// además lo que garantiza que los dos campos no puedan divergir.
+	rep.Observations.Visible = util.Active
 
 	if err := e.db.QueryRow(
 		`SELECT COUNT(*) FROM telemetry_logs WHERE resolved=0`+scopeSQL,

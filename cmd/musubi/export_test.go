@@ -114,3 +114,83 @@ func TestBuildExportSnapshotOrchestration(t *testing.T) {
 		t.Errorf("el snapshot debería incluir la pizarra activa con 2 unidades, obtuve %+v", snap.Orchestration.ActiveBatch)
 	}
 }
+
+// TestSnapshotCoherenteEntreSusCifras es el test de coherencia END-TO-END del snapshot, y
+// existe porque el dashboard llegó a afirmar DOS poblaciones distintas para la misma cosa en
+// la misma pantalla: el encabezado decía "3724 memorias activas" mientras el grafo dibujaba
+// sobre 3660 y el árbol de dominios sumaba una tercera cifra.
+//
+// INVARIANTE: las cinco formas de contar la memoria viva dan el MISMO número.
+//
+//	insights.utilization.active == insights.observations.visible
+//	                            == brain.total_neurons
+//	                            == graph.total_observations
+//	                            == suma de graph.domains[].count
+//
+// La fixture tiene a propósito una observación archivada y una EN CUARENTENA: sin ellas
+// Active y Visible coinciden por accidente y el test no prueba nada. La aserción de que
+// Active > Visible está justamente para que el test no pueda volverse vacuo en silencio.
+func TestSnapshotCoherenteEntreSusCifras(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	for _, s := range []struct{ id, topic string }{
+		{"v1", "roadmap/uno"},
+		{"v2", "roadmap/dos"},
+		{"v3", "audit/tres"},
+		{"muerta", "audit/cuatro"},
+	} {
+		if err := engine.SaveObservation(s.id, s.topic, "contenido "+s.id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Archivada: sale de los dos universos (Active la descuenta, Visible también).
+	if _, err := engine.ArchiveAsDuplicate("", "muerta", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	// En cuarentena: ACÁ está la trampa. archived=0, así que Active la cuenta como viva,
+	// pero ningún camino de recall la devuelve y el grafo no la dibuja.
+	if _, err := engine.ProposeObservation("", "un-modelo", "audit/propuesta",
+		"texto sin corroborar", "modelo-x", 0.5, "semantic", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := buildExportSnapshot(engine, "test", 8000, time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	visible := snap.Insights.Observations.Visible
+	if visible != 3 {
+		t.Fatalf("visibles esperadas 3 (v1,v2,v3), obtuve %d", visible)
+	}
+	// Si esto no se cumple, la fixture dejó de ejercer la divergencia y el resto del test
+	// pasaría por coincidencia.
+	if snap.Insights.Observations.Active <= visible {
+		t.Fatalf("la fixture debe tener memoria no-visible pero no archivada (cuarentena): active=%d visible=%d",
+			snap.Insights.Observations.Active, visible)
+	}
+
+	if snap.Insights.Utilization.Active != visible {
+		t.Errorf("utilization.active=%d debería igualar observations.visible=%d",
+			snap.Insights.Utilization.Active, visible)
+	}
+	if snap.Brain.TotalNeurons != visible {
+		t.Errorf("brain.total_neurons=%d debería igualar visible=%d: el grafo y el encabezado tienen que hablar de la misma memoria",
+			snap.Brain.TotalNeurons, visible)
+	}
+	if snap.Graph.TotalObservations != visible {
+		t.Errorf("graph.total_observations=%d debería igualar visible=%d", snap.Graph.TotalObservations, visible)
+	}
+	suma := 0
+	for _, d := range snap.Graph.Domains {
+		suma += d.Count
+	}
+	if suma != visible {
+		t.Errorf("las hojas del árbol suman %d y el encabezado dice %d: el mapa de conocimiento se contradice a sí mismo",
+			suma, visible)
+	}
+}

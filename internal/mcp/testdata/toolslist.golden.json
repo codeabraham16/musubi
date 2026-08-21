@@ -657,7 +657,7 @@
     },
     {
       "name": "musubi_tokens",
-      "description": "Ledger de tokens de la sesión (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación) y contra el presupuesto blando de sesión. Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. Útil para medir y controlar el gasto real de la memoria.",
+      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -946,7 +946,7 @@
     },
     {
       "name": "musubi_code_graph_viz",
-      "description": "Grafo de CÓDIGO completo y renderizable en UNA llamada (Track 20): nodos (símbolos, con key/kind/name/path/degree) + aristas (CALLS/IMPORTS/CONTAINS), top-N por grado, scopeado al proyecto. Es la fuente para dibujar el grafo de código (a diferencia de musubi_code_graph, que es vecindad-por-símbolo). Read-only.",
+      "description": "Grafo de CÓDIGO renderizable en UNA llamada (Track 20): nodos (símbolos, con key/kind/name/path/degree) + aristas (CALLS/IMPORTS/CONTAINS), scopeado al proyecto. Es la fuente para dibujar el grafo de código (a diferencia de musubi_code_graph, que es vecindad-por-símbolo). Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve los top-N nodos por grado (default 400, parámetro `limit`) y sólo las aristas con AMBOS extremos entre ellos, así que se recortan mucho más que los nodos — con 400 de 8193 nodos pueden quedar 1149 aristas de 17661. Leé `total_nodes`/`truncated`, `total_edges`/`edges_truncated` y `total_modules` para el tamaño real.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -959,7 +959,7 @@
     },
     {
       "name": "musubi_brain_graph",
-      "description": "Grafo de MEMORIA completo y renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…), top-N por relevancia. Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only.",
+      "description": "Grafo de MEMORIA renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…). Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve las top-N neuronas por saliencia (default 300, parámetro `limit`) y sólo las sinapsis con AMBOS extremos entre ellas, así que las aristas se recortan MUCHÍSIMO más que los nodos — con 300 de 3660 neuronas pueden quedar 486 sinapsis de 3620. Para saber el tamaño real leé `total_neurons`/`truncated` y `total_synapses`/`synapses_truncated`; NO concluyas de un `synapses` corto o vacío que la memoria no tiene relaciones.",
       "inputSchema": {
         "type": "object",
         "properties": {

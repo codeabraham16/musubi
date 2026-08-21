@@ -37,12 +37,49 @@ type CodeVizEdge struct {
 }
 
 // CodeGraphViz es el grafo de código para el render: nodos incluidos (top-N por grado), sus
-// aristas (solo entre nodos incluidos) y el total real (para señalar truncamiento en la UI).
+// aristas (solo entre nodos incluidos) y, para CADA colección recortada, su total real.
+//
+// Es el gemelo exacto de BrainGraph y arrastraba el mismo hueco: declaraba TotalNodes pero
+// no el total de aristas, y lo pinta el MISMO renglón del HUD (un ternario sobre las dos
+// lentes), así que arreglar una sola dejaba al otro lado mintiendo. Medido en el cerebro
+// central: 8193 nodos capados a 400 dejaban 1149 aristas de 17661 reales.
+//
+// TotalEdges se cuenta DEDUPLICADO por (kind, from, to) —el mismo criterio con el que se
+// filtra lo dibujado— y no como COUNT(*) sobre code_graph_edges. La tabla tiene
+// UNIQUE(project_id, from_key, to_key, kind), así que dentro de UN proyecto no hay
+// repetidas; pero en una lectura FEDERADA (el cerebro central, donde scopeClause queda
+// vacío) la misma arista lógica llega una vez por cada project_id que la tenga, y el render
+// las colapsa. Contar crudo daría un denominador que el numerador no puede alcanzar nunca.
+//
+// TotalModules existe porque el KPI "Módulos" también se calculaba sobre la muestra: es la
+// cantidad de módulos del grafo COMPLETO, tomada antes del cap.
 type CodeGraphViz struct {
-	Nodes      []CodeVizNode `json:"nodes"`
-	Edges      []CodeVizEdge `json:"edges"`
-	TotalNodes int           `json:"total_nodes"`
-	Truncated  bool          `json:"truncated"`
+	Nodes          []CodeVizNode `json:"nodes"`
+	Edges          []CodeVizEdge `json:"edges"`
+	TotalNodes     int           `json:"total_nodes"`
+	Truncated      bool          `json:"truncated"`
+	TotalEdges     int           `json:"total_edges"`
+	EdgesTruncated bool          `json:"edges_truncated"`
+	TotalModules   int           `json:"total_modules"`
+}
+
+// newCodeGraphViz es el ÚNICO constructor de CodeGraphViz, con los totales POSICIONALES por
+// el mismo motivo que newBrainGraph: un literal con campos nombrados deja el total olvidado
+// en cero sin que nada se queje, y ese silencio es el bug.
+func newCodeGraphViz(nodes []CodeVizNode, totalNodes int, nodesTruncated bool,
+	edges []CodeVizEdge, totalEdges int, edgesTruncated bool, totalModules int) CodeGraphViz {
+	if nodes == nil {
+		nodes = []CodeVizNode{}
+	}
+	if edges == nil {
+		edges = []CodeVizEdge{}
+	}
+	return CodeGraphViz{
+		Nodes: nodes, Edges: edges,
+		TotalNodes: totalNodes, Truncated: nodesTruncated,
+		TotalEdges: totalEdges, EdgesTruncated: edgesTruncated,
+		TotalModules: totalModules,
+	}
 }
 
 // defaultCodeVizLimit es el tope de nodos del render por defecto: denso pero sin ahogar el
@@ -93,45 +130,47 @@ func (e *DbEngine) CodeGraphViz(ctx context.Context, limit int) (CodeGraphViz, e
 			Module: codeModuleOf(n), Line: n.StartLine, Degree: int(math.Round(deg[n.Key])), External: n.External,
 		})
 	}
-	total := len(viz)
+	// Los módulos se cuentan sobre el grafo COMPLETO y ANTES del cap: el KPI "Módulos" habla
+	// del código indexado, no de lo que entró en pantalla.
+	modules := make(map[string]bool, 32)
+	for _, n := range viz {
+		modules[n.Module] = true
+	}
+
 	sort.SliceStable(viz, func(i, j int) bool {
 		if viz[i].Degree != viz[j].Degree {
 			return viz[i].Degree > viz[j].Degree
 		}
 		return viz[i].Key < viz[j].Key
 	})
-	truncated := false
-	if len(viz) > limit {
-		viz = viz[:limit]
-		truncated = true
-	}
+	viz, total, truncated := capped(viz, limit)
 
 	included := make(map[string]bool, len(viz))
 	for _, n := range viz {
 		included[n.Key] = true
 	}
 
+	// Una sola pasada para las dos cosas, y el dedup va PRIMERO: así el total y lo dibujado
+	// se cuentan con el mismo criterio de identidad de arista. Si el dedup quedara después
+	// del filtro de incluidos —como estaba—, el denominador contaría filas repetidas que el
+	// numerador colapsa, y "1149/17661" compararía dos unidades distintas.
 	var out []CodeVizEdge
 	seen := make(map[string]bool, len(edges))
+	totalEdges := 0
 	for _, ed := range edges {
-		if !included[ed.FromKey] || !included[ed.ToKey] {
-			continue
-		}
 		id := ed.Kind + "\x00" + ed.FromKey + "\x00" + ed.ToKey
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
+		totalEdges++
+		if !included[ed.FromKey] || !included[ed.ToKey] {
+			continue
+		}
 		out = append(out, CodeVizEdge{Source: ed.FromKey, Target: ed.ToKey, Kind: ed.Kind, Confidence: ed.Confidence})
 	}
 
-	if viz == nil {
-		viz = []CodeVizNode{}
-	}
-	if out == nil {
-		out = []CodeVizEdge{}
-	}
-	return CodeGraphViz{Nodes: viz, Edges: out, TotalNodes: total, Truncated: truncated}, nil
+	return newCodeGraphViz(viz, total, truncated, out, totalEdges, len(out) < totalEdges, len(modules)), nil
 }
 
 // codeModuleOf deriva el MÓDULO de un nodo para colorear: el directorio del paquete (parte del

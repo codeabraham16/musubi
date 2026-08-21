@@ -63,8 +63,11 @@ func projectLabel(root string) string {
 	return abs
 }
 
-// exportGraph es el mapa de conocimiento: total de observaciones activas y el árbol
-// dominio → temas (con conteos y última actividad por nodo) que dibuja el grafo.
+// exportGraph es el mapa de conocimiento: total de observaciones VISIBLES (recuperables) y
+// el árbol dominio → temas (con conteos y última actividad por nodo) que dibuja el grafo.
+// TotalObservations tiene que ser el MISMO universo que brain.total_neurons y que la suma de
+// domains[].count: son tres formas de contar la misma memoria viva, y cuando no coinciden el
+// snapshot se está contradiciendo a sí mismo.
 type exportGraph struct {
 	TotalObservations int                 `json:"total_observations"`
 	Domains           []memory.DomainNode `json:"domains"`
@@ -101,7 +104,10 @@ func buildExportSnapshot(engine *memory.DbEngine, version string, budget int, no
 	if err != nil {
 		return snap, fmt.Errorf("export: árbol de temas: %w", err)
 	}
-	snap.Graph = exportGraph{TotalObservations: ins.Observations.Active, Domains: domains}
+	// VISIBLE y no Active: el encabezado tiene que hablar de la misma población que las hojas.
+	// TopicTree agrupa con el predicado canónico, así que con Active el struct quedaba
+	// descuadrado consigo mismo (encabezado 3724 contra hojas que suman 3660).
+	snap.Graph = exportGraph{TotalObservations: ins.Observations.Visible, Domains: domains}
 
 	brain, err := engine.BrainGraph(brainNeuronLimit)
 	if err != nil {
