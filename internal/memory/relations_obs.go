@@ -31,6 +31,13 @@ const (
 	// conflictos. Su otro trabajo es el MARCADOR de idempotencia: un blob con `derived_from` entrante ya
 	// fue destilado y no se reprocesa (ver ObservationsMissingRelation).
 	RelDerivedFrom = "derived_from"
+	// RelNotDuplicate tampoco es un veredicto de conflicto: es el MARCADOR del AFILADOR (pilar 'Musubi
+	// Renaissance'). Cuando el juez LLM mira un par de tarjetas gemelas por coseno y decide que cubren
+	// facetas DISTINTAS (KEEP), se sella este `not_duplicate` entre las dos para no volver a gastarle una
+	// llamada al motor al mismo par. Se crea SIEMPRE `status=resolved` e —igual que derived_from— es
+	// inerte para la maquinaria de conflictos (sólo RelSupersedes dispara markSuperseded). Ver
+	// memory/semdedup.go (el par juzgado se excluye de SemanticDuplicateCandidates).
+	RelNotDuplicate = "not_duplicate"
 )
 
 // Estados de una relación.

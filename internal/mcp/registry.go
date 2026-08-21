@@ -1108,5 +1108,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// que convierte los blobs `ingested/*` en tarjetas `design-corpus/*`; lockSelf porque hace I/O
 	// externa (motor + embedder) por blob. Ver methods_distill.go.
 	entries = append(entries, s.distillToolEntry())
+	// musubi_sharpen: el afilador del acervo (pilar 'Musubi Renaissance'), gemelo del destilador. Pase
+	// OFFLINE admin+opt-in que junta las tarjetas `design-corpus/*` gemelas por COSENO (un juez LLM decide
+	// MERGE/KEEP); lockSelf porque hace I/O externa (juez) por par. Ver methods_dedup.go.
+	entries = append(entries, s.sharpenToolEntry())
 	return entries
 }

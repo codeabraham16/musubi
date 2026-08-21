@@ -50,6 +50,11 @@ const (
 	// distillAuthor es el autor que se estampa en las tarjetas y en la arista: procedencia legible del
 	// pase automático (no un humano ni "legacy").
 	distillAuthor = "destilador"
+	// distillTwinFloor es el piso de coseno del chequeo ANTI-GEMELO (causa raíz del loop de afilado): si
+	// una tarjeta por escribir se parece a una que YA existe por encima de este umbral, NO se escribe la
+	// gemela — el blob se absorbe como CORROBORACIÓN de la existente. A diferencia del afilador
+	// (musubi_sharpen), acá NO hay juez LLM, así que el umbral es ALTO: sólo se saltea lo casi idéntico.
+	distillTwinFloor = 0.93
 )
 
 // distillCard es una tarjeta destilada tal como la devuelve el motor: un slug temático + la lección.
@@ -70,6 +75,7 @@ type distillBlobResult struct {
 	BlobID  string `json:"blob_id"`
 	Topic   string `json:"topic"`
 	Cards   int    `json:"cards,omitempty"`
+	Twins   int    `json:"twins,omitempty"`   // tarjetas que NO se escribieron por ser gemelas de una existente (anti-gemelo)
 	Skipped string `json:"skipped,omitempty"` // motivo si no se destiló (motor falló, sin tarjetas, dry-run)
 }
 
@@ -189,20 +195,51 @@ func (s *McpServer) runDistillBatch(ctx context.Context, limit int, dryRun bool)
 			})
 		}
 
-		// Persistir bajo write-lock EXCLUSIVO: las tarjetas + la arista de procedencia derived_from que
-		// marca el blob como destilado. El motor y el embedder ya quedaron afuera del candado.
+		// Persistir bajo write-lock EXCLUSIVO. El MARCADOR del blob (las aristas derived_from) se escribe AL
+		// FINAL, recién cuando TODAS las tarjetas se guardaron OK: si una escritura falla a mitad de camino,
+		// el blob queda SIN marcar y se reintenta ENTERO en la próxima corrida (idempotente por el id
+		// determinístico de cada tarjeta ⇒ UPSERT, no duplica). Antes las aristas iban intercaladas con los
+		// saves, así que un fallo tardío dejaba el blob marcado por una tarjeta previa y las tarjetas que
+		// seguían se perdían para siempre —el blob nunca se reprocesaba— (revisión adversarial 2026-08-20;
+		// withWriteLock es un mutex, no una transacción, y cada save/arista autocommitea por separado). El
+		// motor y el embedder ya quedaron afuera del candado.
 		var writeErr error
+		var written, twins int
+		var edges []memory.ObsRelation
 		s.withWriteLock(func() {
 			for _, p := range toWrite {
+				// Anti-gemelo (causa raíz del loop de afilado): si la tarjeta por escribir se parece a una
+				// que YA existe por encima de distillTwinFloor, NO se escribe una gemela — el blob se
+				// absorbe como CORROBORACIÓN de la existente (arista derived_from tarjeta_existente→blob).
+				// Sin embedder (emb vacío) el chequeo se saltea y degrada blando. excludeID=p.id descarta la
+				// propia tarjeta (id determinístico) en un re-destilado, para que no se tome a sí misma por gemela.
+				if len(p.emb) > 0 {
+					twinID, _, cos, nerr := s.engine.NearestVisibleByVector(distillScope, distillCardPrefix, p.emb, p.id)
+					if nerr == nil && twinID != "" && cos >= distillTwinFloor {
+						edges = append(edges, memory.ObsRelation{
+							SourceID: twinID, TargetID: b.ID, Relation: distillMarker,
+							Status: memory.RelStatusResolved, ResolvedBy: distillAuthor,
+							Reason: "el blob corrobora una tarjeta existente (gemela); no se duplicó", Confidence: 1.0,
+						})
+						twins++
+						continue
+					}
+				}
 				if err := s.engine.SaveObservationTypedFrom(distillScope, distillAuthor, p.id, p.topic, p.content, 1.0, "semantic", s.defaultScope(), p.emb); err != nil {
 					writeErr = err
 					return
 				}
-				if _, err := s.engine.UpsertObsRelation(memory.ObsRelation{
+				edges = append(edges, memory.ObsRelation{
 					SourceID: p.id, TargetID: b.ID, Relation: distillMarker,
 					Status: memory.RelStatusResolved, ResolvedBy: distillAuthor,
 					Reason: "tarjeta destilada del blob crudo", Confidence: 1.0,
-				}); err != nil {
+				})
+				written++
+			}
+			// Todas las tarjetas OK: RECIÉN AHORA se marca el blob (las aristas). Si algo falló arriba, se
+			// volvió con writeErr y no se escribió NINGUNA arista ⇒ el blob sigue pendiente y se reintenta.
+			for _, rel := range edges {
+				if _, err := s.engine.UpsertObsRelation(rel); err != nil {
 					writeErr = err
 					return
 				}
@@ -212,9 +249,15 @@ func (s *McpServer) runDistillBatch(ctx context.Context, limit int, dryRun bool)
 			report.Blobs = append(report.Blobs, distillBlobResult{BlobID: b.ID, Topic: b.TopicKey, Skipped: "error al persistir: " + writeErr.Error()})
 			continue
 		}
+		// Un blob cuyas tarjetas eran TODAS gemelas queda marcado (aristas de corroboración) pero no suma
+		// tarjetas nuevas: se reporta como absorbido, no como destilado, y NO se reprocesa (ya tiene arista).
+		if written == 0 {
+			report.Blobs = append(report.Blobs, distillBlobResult{BlobID: b.ID, Topic: b.TopicKey, Twins: twins, Skipped: "todas las tarjetas ya existían (gemelas): blob absorbido como corroboración"})
+			continue
+		}
 		report.Distilled++
-		report.Cards += len(toWrite)
-		report.Blobs = append(report.Blobs, distillBlobResult{BlobID: b.ID, Topic: b.TopicKey, Cards: len(toWrite)})
+		report.Cards += written
+		report.Blobs = append(report.Blobs, distillBlobResult{BlobID: b.ID, Topic: b.TopicKey, Cards: written, Twins: twins})
 	}
 
 	s.withReadLock(func() {

@@ -45,6 +45,13 @@ type ObservationStore interface {
 	// `derived_from` (o sea, que aún no produjeron tarjetas). FIFO, model-free. Ver memory/distill.go.
 	ObservationsMissingRelation(projectID, topicPrefix, relation string, limit int) ([]ObsLite, error)
 	CountObservationsMissingRelation(projectID, topicPrefix, relation string) (int, error)
+	// SemanticDuplicateCandidates / NearestVisibleByVector / ArchiveAsDuplicate alimentan el AFILADOR del
+	// acervo (Musubi Renaissance): hallar tarjetas gemelas por COSENO (no por trigramas), evitar escribir
+	// una gemela nueva en la destilación, y archivar la más débil cuando un juez confirma la redundancia.
+	// La capa halla y archiva; el JUICIO lo hace el caller (LLM offline). Ver memory/semdedup.go.
+	SemanticDuplicateCandidates(projectID, topicPrefix string, floor float64, maxPairs int) ([]SemDupCandidate, error)
+	NearestVisibleByVector(projectID, topicPrefix string, vec []float32, excludeID string) (id, topic string, cosine float64, err error)
+	ArchiveAsDuplicate(projectID, loserID, canonicalID string) (archived bool, err error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.

@@ -441,18 +441,37 @@ func (s *McpServer) RunDistillScheduler(ctx context.Context, interval time.Durat
 	}
 }
 
-// distillBatchOnce destila UNA tanda del acervo y logea el resultado. Best-effort: un fallo del backlog o
-// de un blob se logea y el ciclo sigue en el próximo tick. Corre SIN principal (ctx de fondo) ⇒ no hay
-// cuota de motor por-principal; el gasto lo dosifican el tamaño de la tanda y el intervalo del scheduler.
+// distillBatchOnce destila UNA tanda del acervo y logea el resultado, y a continuación AFILA (sharpen) si
+// está configurado — el molino LLENA, el afilador junta gemelas: los dos lados del loop continuo del
+// acervo (pilar Musubi Renaissance). Best-effort: un fallo del backlog o de un blob se logea y el ciclo
+// sigue en el próximo tick. Corre SIN principal (ctx de fondo) ⇒ no hay cuota de motor por-principal; el
+// gasto lo dosifican el tamaño de la tanda, el de afilado y el intervalo del scheduler.
 func (s *McpServer) distillBatchOnce(ctx context.Context, batch int) {
 	rep, err := s.runDistillBatch(ctx, batch, false)
 	if err != nil {
 		logx.Error("scheduler: auto-drain del acervo falló", "error", err)
+	} else if rep.Distilled > 0 || rep.Cards > 0 {
+		// Sólo se anuncia cuando HUBO trabajo (como el grafo): un log por tick con 0 en un daemon que vive
+		// días es ruido que entierra la línea que importa.
+		logx.Info("scheduler: acervo destilado", "blobs", rep.Distilled, "tarjetas", rep.Cards, "quedan", rep.Remaining)
+	}
+	s.sharpenBatchOnce(ctx)
+}
+
+// sharpenBatchOnce afila UNA tanda del acervo (junta gemelas por coseno con juez LLM) si el gate opt-in
+// maintenance.AutoSharpenPairs está encendido. No-op si es 0 (default). Best-effort: un fallo se logea y
+// el ciclo sigue. Corre SIN principal (ctx de fondo), igual que la destilación.
+func (s *McpServer) sharpenBatchOnce(ctx context.Context) {
+	pairs := s.maintenance.AutoSharpenPairs
+	if pairs <= 0 || !cognition.Enabled(s.cognition) {
 		return
 	}
-	// Sólo se anuncia cuando HUBO trabajo (como el grafo): un log por tick con 0 en un daemon que vive
-	// días es ruido que entierra la línea que importa.
-	if rep.Distilled > 0 || rep.Cards > 0 {
-		logx.Info("scheduler: acervo destilado", "blobs", rep.Distilled, "tarjetas", rep.Cards, "quedan", rep.Remaining)
+	rep, err := s.runDedupBatch(ctx, dedupDefaultFloor, pairs, false)
+	if err != nil {
+		logx.Error("scheduler: afilado del acervo falló", "error", err)
+		return
+	}
+	if rep.Merged > 0 || rep.Kept > 0 {
+		logx.Info("scheduler: acervo afilado", "fusionadas", rep.Merged, "conservadas", rep.Kept, "candidatos", rep.Scanned)
 	}
 }

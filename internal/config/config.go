@@ -202,6 +202,12 @@ type MaintenanceConfig struct {
 	// AutoDistillBatch es cuántos blobs destila cada tick del auto-drain (default 3 cuando está activo).
 	// Chico y espaciado: dosifica el gasto y no satura el endpoint de cognición.
 	AutoDistillBatch int `yaml:"auto_distill_batch"`
+	// AutoSharpenPairs es cuántos pares de tarjetas gemelas AFILA (junta por coseno con juez LLM) cada
+	// tick del auto-drain, DESPUÉS de destilar. 0 = desactivado (default; opt-in). Es el otro lado del
+	// loop continuo del acervo (pilar Musubi Renaissance): el molino LLENA, el afilador junta las gemelas
+	// que el destilar produce inevitablemente. Cuelga del mismo scheduler (auto_distill_minutes) y también
+	// requiere un motor de cognición. Chico: cada par es una llamada al juez; se corre espaciado.
+	AutoSharpenPairs int `yaml:"auto_sharpen_pairs"`
 }
 
 // GraphConfig controla la memoria estructurada en grafo (hechos/tripletas).
@@ -931,6 +937,9 @@ func Default() Config {
 			// cognición lo enciende. El batch por tick queda sano por si se activa sin fijarlo.
 			AutoDistillMinutes: 0,
 			AutoDistillBatch:   3,
+			// Afilado (dedup semántico) también APAGADO por default (opt-in): cuelga del mismo scheduler
+			// y sólo el central con motor lo enciende. El batch de pares queda sano por si se activa.
+			AutoSharpenPairs: 0,
 		},
 		Graph: GraphConfig{
 			MaxHops:         2,

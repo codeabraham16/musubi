@@ -291,10 +291,11 @@ func exigeQueUnEscritorSinEmbedderResponda(t *testing.T, s *McpServer, motivo st
 func TestG1ClasePorDefaultEsLaDeHoy(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 
-	// musubi_distill se suma al conjunto lockSelf: el destilador hace I/O externa (motor LLM + embedder)
-	// por cada blob, así que NO puede correr bajo el candado exclusivo del despacho (congelaría el
-	// servidor durante minutos). Acota su propia sección crítica con withReadLock/withWriteLock.
-	declaradas := map[string]bool{"musubi_recall": true, "musubi_ask": true, "musubi_distill": true}
+	// musubi_distill y musubi_sharpen se suman al conjunto lockSelf: el destilador y el afilador hacen
+	// I/O externa (motor LLM + embedder / juez LLM) por cada blob o par, así que NO pueden correr bajo el
+	// candado exclusivo del despacho (congelaría el servidor durante minutos). Acotan su propia sección
+	// crítica con withReadLock/withWriteLock.
+	declaradas := map[string]bool{"musubi_recall": true, "musubi_ask": true, "musubi_distill": true, "musubi_sharpen": true}
 	for _, e := range s.tools {
 		clase, hayClase := s.toolLock[e.Name]
 		if declaradas[e.Name] {
