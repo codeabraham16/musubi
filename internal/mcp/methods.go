@@ -218,6 +218,20 @@ func (s *McpServer) withReadLock(fn func()) {
 	fn()
 }
 
+// withWriteLock corre fn bajo el Lock EXCLUSIVO del despacho y lo suelta al salir. Es la contracara de
+// withReadLock para un handler lockSelf que además ESCRIBE (el destilador): mantiene la I/O externa —el
+// motor LLM y el embedder— AFUERA del candado, y serializa sólo el tramo que toca la base, sin
+// lost-updates de read-modify-write. El corte típico es cuatro tramos: leer los blobs (withReadLock) →
+// destilar con el motor (sin candado) → embeber las tarjetas (sin candado) → persistirlas (acá adentro).
+//
+// El `defer` es el mismo invariante que en withReadLock: si fn entra en pánico, el candado igual se
+// suelta y el servidor sigue atendiendo, en vez de quedar en deadlock permanente.
+func (s *McpServer) withWriteLock(fn func()) {
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+	fn()
+}
+
 func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		ID         string  `json:"id"`
@@ -779,6 +793,16 @@ func (s *McpServer) toolWork(raw json.RawMessage) (interface{}, *RpcError) {
 			return nil, rpcErrorf(codeInternalError, "no se pudo limpiar el batch: %v", err)
 		}
 		return textResult("Batch limpiado."), nil
+
+	case "reopen":
+		// reintento manual: devuelve una unidad FALLIDA a `open` para que la flota la vuelva a reclamar.
+		if strings.TrimSpace(args.ID) == "" {
+			return nil, rpcErrorf(codeInvalidParams, "reopen requiere 'id' (la unidad fallida)")
+		}
+		if err := s.engine.ReopenWorkUnit(args.ID); err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "no se pudo reabrir: %v", err)
+		}
+		return textResult("Unidad reabierta: vuelve a estar disponible para la flota."), nil
 
 	case "bid":
 		if strings.TrimSpace(args.ID) == "" {

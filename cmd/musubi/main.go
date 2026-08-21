@@ -302,6 +302,13 @@ func runServe(args []string) {
 	// para el drain. Best-effort: un error de config del cliente NO impide arrancar el serve.
 	startOutboxDrain(ctx, server, cfg.Sync)
 
+	// Auto-drain del acervo de diseño (pilar Musubi Renaissance, el "molino continuo"): destila los
+	// blobs ingeridos en tarjetas de a tandas chicas, sin intervención. No-op sin motor de cognición o
+	// con el intervalo en 0 — sólo el central con motor lo enciende. Sale con el mismo ctx (SIGINT/SIGTERM).
+	if cfg.Maintenance.AutoDistillMinutes > 0 {
+		go server.RunDistillScheduler(ctx, time.Duration(cfg.Maintenance.AutoDistillMinutes*float64(time.Minute)), cfg.Maintenance.AutoDistillBatch)
+	}
+
 	if err := server.ListenAndServeHTTP(ctx, svc); err != nil {
 		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
 		os.Exit(1)
@@ -393,6 +400,11 @@ func runDaemon() {
 	if cfg.Maintenance.GraphIndexHours > 0 {
 		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)))
 	}
+	// Auto-drain del acervo (pilar Musubi Renaissance): no-op sin motor de cognición o con el intervalo
+	// en 0. Va en su propio gate, como el grafo — dos ciclos con costos distintos.
+	if cfg.Maintenance.AutoDistillMinutes > 0 {
+		go server.RunDistillScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoDistillMinutes*float64(time.Minute)), cfg.Maintenance.AutoDistillBatch)
+	}
 	// El modo sombra no se pregunta acá: RunShadowWorker es un no-op si está apagado (el default).
 	// Sale con el mismo contexto que el mantenimiento, así el apagado del daemon lo corta también.
 	go server.RunShadowWorker(maintCtx)
@@ -453,6 +465,7 @@ func autoBackfill(engine *memory.DbEngine, embedder embedding.Provider) {
 //     PURGAN (el contenido de las observaciones queda; sólo se descarta el intento de envío) y se
 //     avisa. Es la auto-cura del cerebro central: se sana sola al reiniciar con el binario nuevo.
 //   - Sync habilitado y con destino: hay backlog real; se avisa fuerte (el drain debería vaciarlo).
+//
 // Best-effort: cualquier error se logea por stderr y NO aborta el arranque.
 func reconcileOutboxOnStartup(engine *memory.DbEngine, sync config.SyncConfig) {
 	pending, _, _, err := engine.OutboxStats()

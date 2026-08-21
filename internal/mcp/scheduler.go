@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/cognition"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
@@ -415,4 +416,62 @@ func (s *McpServer) reindexCodeGraphOnce(ctx context.Context) {
 	// Federación best-effort, igual que en la tool: si el gate está apagado no hace nada, y un
 	// fallo del push jamás invalida el índice local, que ya quedó bien.
 	s.pushCodeGraphToCentral(ctx)
+}
+
+// RunDistillScheduler es el AUTO-DRAIN del acervo de diseño (pilar Musubi Renaissance, el "molino
+// continuo"): cada `interval` destila una tanda de `batch` blobs `ingested/*` en tarjetas `design-corpus/*`,
+// sin intervención, hasta que ctx se cancela. Es el GEMELO de RunOutboxScheduler y por el mismo motivo NO
+// toma dispatchMu: la destilación hace I/O de red (motor LLM + embedder), y el núcleo (runDistillBatch)
+// acota su propia sección crítica (read bajo RLock, write bajo Lock, LLM afuera). interval<=0 o SIN motor
+// de cognición lo desactivan (no-op inmediato), así que es seguro lanzarlo desde cualquier entrypoint;
+// sólo el central con motor lo enciende de verdad. Pensado para correr en su propia goroutine.
+func (s *McpServer) RunDistillScheduler(ctx context.Context, interval time.Duration, batch int) {
+	if interval <= 0 || !cognition.Enabled(s.cognition) {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.distillBatchOnce(ctx, batch)
+		}
+	}
+}
+
+// distillBatchOnce destila UNA tanda del acervo y logea el resultado, y a continuación AFILA (sharpen) si
+// está configurado — el molino LLENA, el afilador junta gemelas: los dos lados del loop continuo del
+// acervo (pilar Musubi Renaissance). Best-effort: un fallo del backlog o de un blob se logea y el ciclo
+// sigue en el próximo tick. Corre SIN principal (ctx de fondo) ⇒ no hay cuota de motor por-principal; el
+// gasto lo dosifican el tamaño de la tanda, el de afilado y el intervalo del scheduler.
+func (s *McpServer) distillBatchOnce(ctx context.Context, batch int) {
+	rep, err := s.runDistillBatch(ctx, batch, false)
+	if err != nil {
+		logx.Error("scheduler: auto-drain del acervo falló", "error", err)
+	} else if rep.Distilled > 0 || rep.Cards > 0 {
+		// Sólo se anuncia cuando HUBO trabajo (como el grafo): un log por tick con 0 en un daemon que vive
+		// días es ruido que entierra la línea que importa.
+		logx.Info("scheduler: acervo destilado", "blobs", rep.Distilled, "tarjetas", rep.Cards, "quedan", rep.Remaining)
+	}
+	s.sharpenBatchOnce(ctx)
+}
+
+// sharpenBatchOnce afila UNA tanda del acervo (junta gemelas por coseno con juez LLM) si el gate opt-in
+// maintenance.AutoSharpenPairs está encendido. No-op si es 0 (default). Best-effort: un fallo se logea y
+// el ciclo sigue. Corre SIN principal (ctx de fondo), igual que la destilación.
+func (s *McpServer) sharpenBatchOnce(ctx context.Context) {
+	pairs := s.maintenance.AutoSharpenPairs
+	if pairs <= 0 || !cognition.Enabled(s.cognition) {
+		return
+	}
+	rep, err := s.runDedupBatch(ctx, dedupDefaultFloor, pairs, false)
+	if err != nil {
+		logx.Error("scheduler: afilado del acervo falló", "error", err)
+		return
+	}
+	if rep.Merged > 0 || rep.Kept > 0 {
+		logx.Info("scheduler: acervo afilado", "fusionadas", rep.Merged, "conservadas", rep.Kept, "candidatos", rep.Scanned)
+	}
 }

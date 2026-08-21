@@ -57,3 +57,33 @@ func TestInsights(t *testing.T) {
 		t.Errorf("decisiones: %+v (esperaba accepted 2 [go-testing+rust], rejected 1 [go-gin])", rep.SkillDecisions)
 	}
 }
+
+// TestInsightsUtilizacion valida la métrica de utilización del acervo (Musubi Renaissance · F4): cuenta
+// sólo lo RECUPERABLE (visible), marca recuperado por access_count>0, y deriva never_recalled + recall_rate.
+func TestInsightsUtilizacion(t *testing.T) {
+	e := newTestEngine(t)
+	for _, id := range []string{"u1", "u2", "u3", "u4"} {
+		if err := e.SaveObservation(id, "t", "contenido "+id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// u4 archivada (deja de ser recuperable); u1 recuperada alguna vez (access_count>0).
+	if _, err := e.db.Exec(`UPDATE observations SET archived=1 WHERE id='u4'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET access_count=3 WHERE id='u1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := e.Insights()
+	if err != nil {
+		t.Fatalf("Insights error: %v", err)
+	}
+	u := rep.Utilization
+	if u.Active != 3 || u.Recalled != 1 || u.NeverRecalled != 2 {
+		t.Errorf("utilización: %+v (esperaba active 3, recalled 1, never_recalled 2)", u)
+	}
+	if u.RecallRate < 0.33 || u.RecallRate > 0.34 {
+		t.Errorf("recall_rate: %.4f (esperaba ~0.333)", u.RecallRate)
+	}
+}

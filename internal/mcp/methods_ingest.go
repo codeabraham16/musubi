@@ -25,6 +25,7 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 		Lang               string `json:"lang"`
 		CookiesFromBrowser string `json:"cookies_from_browser"`
 		CookiesFile        string `json:"cookies_file"`
+		ProjectID          string `json:"project_id"` // origen declarado; sólo lo respeta write=any (ver writeOriginFor)
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -60,9 +61,12 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 	}
 
 	// save=true persiste (idempotente): mismo id determinístico ⇒ UPSERT, no duplica. Atribución
-	// por credencial (origin/author sellados server-side), igual que musubi_save_observation.
+	// por credencial (origin/author sellados server-side), igual que musubi_save_observation:
+	// project_id es un ORIGEN DECLARADO que sólo un write=any (la sala de mando) puede fijar —un
+	// write=own lo ignora y usa el suyo—, así se ingiere a un tenant compartido como `musubi-design`
+	// sin abrir la muralla. writeOriginFor es la MISMA guarda fail-closed que sella save_observation.
 	if args.Save && strings.TrimSpace(res.Text) != "" {
-		origin, okOrigin := writeOriginFor(principalFrom(ctx), "")
+		origin, okOrigin := writeOriginFor(principalFrom(ctx), args.ProjectID)
 		if !okOrigin {
 			return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio")
 		}
@@ -104,6 +108,7 @@ func (s *McpServer) ingestToolEntry() toolEntry {
 					"lang":                 {Type: "string", Description: "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"},
 					"cookies_from_browser": {Type: "string", Description: "Navegador del que tomar cookies (chrome, firefox…) para plataformas que piden sesión (IG/FB/X); opcional"},
 					"cookies_file":         {Type: "string", Description: "Ruta a un archivo de cookies Netscape para yt-dlp; opcional"},
+					"project_id":           {Type: "string", Description: "Opcional: proyecto de ORIGEN al que atribuir la ingesta guardada. Sólo lo respeta un principal write=any (la sala de mando); un principal acotado lo ignora y usa su propio proyecto. Sirve para ingerir a un tenant COMPARTIDO como 'musubi-design' (el acervo del motor de diseño). Default: tu proyecto."},
 				},
 				Required: []string{"url"},
 			},

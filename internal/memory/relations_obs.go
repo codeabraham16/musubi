@@ -24,6 +24,20 @@ const (
 	RelConflictsWith = "conflicts_with" // se contradicen directamente
 	RelSupersedes    = "supersedes"     // source reemplaza/obsoleta a target
 	RelNotConflict   = "not_conflict"   // explícitamente NO en conflicto
+	// RelDerivedFrom NO es un veredicto de conflicto: es una arista de PROCEDENCIA. La escribe el
+	// destilador (pilar 'Musubi Renaissance') source=tarjeta → target=blob crudo, para dejar sentado
+	// que esa tarjeta salió de ese blob. Se crea SIEMPRE `status=resolved`, así las colas de pendientes
+	// la ignoran; y como sólo RelSupersedes dispara markSuperseded, es inerte para la maquinaria de
+	// conflictos. Su otro trabajo es el MARCADOR de idempotencia: un blob con `derived_from` entrante ya
+	// fue destilado y no se reprocesa (ver ObservationsMissingRelation).
+	RelDerivedFrom = "derived_from"
+	// RelNotDuplicate tampoco es un veredicto de conflicto: es el MARCADOR del AFILADOR (pilar 'Musubi
+	// Renaissance'). Cuando el juez LLM mira un par de tarjetas gemelas por coseno y decide que cubren
+	// facetas DISTINTAS (KEEP), se sella este `not_duplicate` entre las dos para no volver a gastarle una
+	// llamada al motor al mismo par. Se crea SIEMPRE `status=resolved` e —igual que derived_from— es
+	// inerte para la maquinaria de conflictos (sólo RelSupersedes dispara markSuperseded). Ver
+	// memory/semdedup.go (el par juzgado se excluye de SemanticDuplicateCandidates).
+	RelNotDuplicate = "not_duplicate"
 )
 
 // Estados de una relación.

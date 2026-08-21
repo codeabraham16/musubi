@@ -17,12 +17,24 @@ const insightsHotspotLimit = 10
 
 // InsightsReport es el resumen agregado del estado de la memoria.
 type InsightsReport struct {
-	Observations     ObsStats       `json:"observations"`
-	UnresolvedErrors int            `json:"unresolved_errors"`
-	ErrorHotspots    []ErrorHotspot `json:"error_hotspots"`
-	SkillDecisions   DecisionStats  `json:"skill_decisions"`
-	LastMaintenance  string         `json:"last_maintenance,omitempty"`
-	Health           string         `json:"health,omitempty"`
+	Observations     ObsStats         `json:"observations"`
+	Utilization      UtilizationStats `json:"utilization"`
+	UnresolvedErrors int              `json:"unresolved_errors"`
+	ErrorHotspots    []ErrorHotspot   `json:"error_hotspots"`
+	SkillDecisions   DecisionStats    `json:"skill_decisions"`
+	LastMaintenance  string           `json:"last_maintenance,omitempty"`
+	Health           string           `json:"health,omitempty"`
+}
+
+// UtilizationStats mide cuánta de la memoria RECUPERABLE se usó de verdad (Musubi Renaissance · F4 —
+// "que todo lo ingerido se use, sin cabos sueltos"). recall_rate = recalled / active. never_recalled es
+// la señal cruda de cabos sueltos; NO implica huérfano por sí sola (una obs recién guardada tiene 0
+// accesos legítimamente — se interpreta junto con la edad). Model-free: agregación SQL determinista.
+type UtilizationStats struct {
+	Active        int     `json:"active"`         // observaciones recuperables (visibles) del scope
+	Recalled      int     `json:"recalled"`       // de esas, cuántas se recuperaron alguna vez (access_count>0)
+	NeverRecalled int     `json:"never_recalled"` // nunca recuperadas (candidatas a cabo suelto)
+	RecallRate    float64 `json:"recall_rate"`    // recalled / active (0 si no hay activas)
 }
 
 // ObsStats resume el tamaño de la memoria de observaciones.
@@ -72,6 +84,22 @@ func (e *DbEngine) InsightsCtx(ctx context.Context) (InsightsReport, error) {
 		return rep, fmt.Errorf("insights: contar observaciones: %w", err)
 	}
 	rep.Observations.Active = rep.Observations.Total - rep.Observations.Archived
+
+	// Utilización del acervo (F4): de las observaciones RECUPERABLES (visibles), cuántas se recuperaron
+	// alguna vez. never_recalled es la señal de cabos sueltos. Mismo scope de proyecto que el resto.
+	var util UtilizationStats
+	if err := e.db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN access_count>0 THEN 1 ELSE 0 END),0)
+		 FROM observations WHERE `+visibleObsPredicate+scopeSQL,
+		scopeArgs...,
+	).Scan(&util.Active, &util.Recalled); err != nil {
+		return rep, fmt.Errorf("insights: utilización: %w", err)
+	}
+	util.NeverRecalled = util.Active - util.Recalled
+	if util.Active > 0 {
+		util.RecallRate = float64(util.Recalled) / float64(util.Active)
+	}
+	rep.Utilization = util
 
 	if err := e.db.QueryRow(
 		`SELECT COUNT(*) FROM telemetry_logs WHERE resolved=0`+scopeSQL,

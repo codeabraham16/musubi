@@ -36,6 +36,26 @@ type ObservationStore interface {
 	SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error)
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
+	// LatestObservationByTopicInProject devuelve el contenido de la obs visible más reciente con ese
+	// topic_key atribuida EXACTAMENTE a projectID (scope estricto, sin filas sin atribuir). La usa la
+	// resolución de marca-por-proyecto de musubi_design (Musubi Renaissance · CAPA 3).
+	LatestObservationByTopicInProject(topicKey, projectID string) (content string, found bool, err error)
+	// ObservationsByTopicPrefixInProject alimenta el MÉTODO VIVO del motor de diseño (Musubi Renaissance ·
+	// CAPA 2): las tarjetas `design-method/*` del acervo, ordenadas por importancia, que reemplazan a los
+	// principios hardcodeados para poder arbitrarlos. Scope estricto por project_id. Ver memory/topics.go.
+	ObservationsByTopicPrefixInProject(projectID, topicPrefix string, limit int) ([]ObsLite, error)
+	// ObservationsMissingRelation / CountObservationsMissingRelation alimentan el DESTILADOR del acervo
+	// (Musubi Renaissance): los blobs `ingested/*` de un tenant que todavía no son destino de una arista
+	// `derived_from` (o sea, que aún no produjeron tarjetas). FIFO, model-free. Ver memory/distill.go.
+	ObservationsMissingRelation(projectID, topicPrefix, relation string, limit int) ([]ObsLite, error)
+	CountObservationsMissingRelation(projectID, topicPrefix, relation string) (int, error)
+	// SemanticDuplicateCandidates / NearestVisibleByVector / ArchiveAsDuplicate alimentan el AFILADOR del
+	// acervo (Musubi Renaissance): hallar tarjetas gemelas por COSENO (no por trigramas), evitar escribir
+	// una gemela nueva en la destilación, y archivar la más débil cuando un juez confirma la redundancia.
+	// La capa halla y archiva; el JUICIO lo hace el caller (LLM offline). Ver memory/semdedup.go.
+	SemanticDuplicateCandidates(projectID, topicPrefix string, floor float64, maxPairs int) ([]SemDupCandidate, error)
+	NearestVisibleByVector(projectID, topicPrefix string, vec []float32, excludeID string) (id, topic string, cosine float64, err error)
+	ArchiveAsDuplicate(projectID, loserID, canonicalID string) (archived bool, err error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.
@@ -235,6 +255,8 @@ type WorkStore interface {
 	WorkBatchStatus(batchID string) (WorkBatch, error)
 	ActiveBatch() (WorkBatch, bool, error)
 	ClearWorkBatch(batchID string) error
+	// ReopenWorkUnit devuelve una unidad FALLIDA a `open` (reintento manual desde la cabina).
+	ReopenWorkUnit(id string) error
 	BidWorkUnit(unitID, agent string, bid float64, note string) error
 	AwardWorkUnit(unitID string, ttlSeconds int) (WorkUnit, WorkBid, bool, error)
 	WorkUnitBids(unitID string) ([]WorkBid, error)

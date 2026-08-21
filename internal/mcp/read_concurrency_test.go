@@ -52,6 +52,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// otras tools provocan no se escriben en el handler: van al buffer del ledger y bajan
 		// desde otra goroutine, justamente para no escribir con dispatchMu tomado.
 		"musubi_skill_usage": true,
+		// El motor de diseño: arma un brief leyendo el acervo `musubi-design` con SearchObservations/
+		// FTS (búsquedas puras, sin bumpAccess ni ledger). No muta nada; por eso es readOnly y la
+		// puede llamar una cabina (F1 · Lienzo como capacidad del cerebro).
+		"musubi_design": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
@@ -70,6 +74,9 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// justo lo que no son.
 		"musubi_promote_skill", "musubi_install_skill",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
+		// El destilador y el afilador (Musubi Renaissance) escriben tarjetas + aristas en el acervo:
+		// jamás readOnly. Son lockSelf (I/O externa) pero eso es concurrencia, no autorización.
+		"musubi_distill", "musubi_sharpen",
 		// musubi_sdd hace un RMW del blob del run (CompleteWorkflowStep) + persiste el
 		// artefacto: su corrección depende del Lock exclusivo de dispatchMu. Marcarla readOnly
 		// la pondría bajo RLock y reintroduciría el lost-update del complete (auditoría #5).

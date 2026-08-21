@@ -288,6 +288,34 @@ func (e *DbEngine) CompleteWorkUnitConEfecto(id, result, status, agent string, f
 	return nil
 }
 
+// ReopenWorkUnit devuelve una unidad FALLIDA al estado `open` para que la flota pueda reclamarla de
+// nuevo (reintento manual desde la cabina). Limpia dueño/lease, resetea `attempts` a 0 —si no,
+// deadLetterAgotadas la mataría en el próximo claim— y anota el reintento en el claim_log. Guarda de
+// estado: SOLO toca unidades `failed`; una open/claimed/done no se "reabre". El fencing_token NO se
+// reinicia: es monótono y defiende del worker zombie aun tras la reapertura.
+func (e *DbEngine) ReopenWorkUnit(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("reopen requiere el id de la unidad")
+	}
+	res, err := e.db.Exec(`
+		UPDATE work_units
+		   SET status=?, owner_id=NULL, claimed_by=NULL, lease_expires_at=NULL,
+		       attempts=0, result='', claim_log=claim_log||?, updated_at=datetime('now')
+		 WHERE id=? AND status=?`,
+		WorkOpen, "reabierta para reintentar\n", id, WorkFailed)
+	if err != nil {
+		return fmt.Errorf("error al reabrir la unidad: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error al verificar la reapertura: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("la unidad %q no existe o no está en estado failed (solo se reabre lo fallido)", id)
+	}
+	return nil
+}
+
 // ── La historia de los reclamos ───────────────────────────────────────────────────────────────
 //
 // Una unidad que muere tras agotar sus reintentos deja de decir sólo QUE murió: cuenta CÓMO. La

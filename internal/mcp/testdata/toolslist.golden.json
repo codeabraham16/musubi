@@ -1100,6 +1100,10 @@
             "type": "string",
             "description": "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"
           },
+          "project_id": {
+            "type": "string",
+            "description": "Opcional: proyecto de ORIGEN al que atribuir la ingesta guardada. Sólo lo respeta un principal write=any (la sala de mando); un principal acotado lo ignora y usa su propio proyecto. Sirve para ingerir a un tenant COMPARTIDO como 'musubi-design' (el acervo del motor de diseño). Default: tu proyecto."
+          },
           "save": {
             "type": "boolean",
             "description": "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"
@@ -1112,6 +1116,72 @@
         "required": [
           "url"
         ]
+      }
+    },
+    {
+      "name": "musubi_design",
+      "description": "El MOTOR DE DISEÑO de Musubi (pilar 'Musubi Renaissance'), invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño en tres capas: la MATERIA PRIMA + el MÉTODO universal recallados del acervo de diseño compartido (rol de diseñador senior, principios anti-genérico, patrones de sistemas de diseño/tokens/layout/tipografía/color/accesibilidad) MÁS la MARCA del proyecto (resuelta por tu credencial: la de Musubi por default, la de otro proyecto si tenés acceso). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default). 'brand' opcional para diseñar a nombre de otro proyecto. Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "brand": {
+            "type": "string",
+            "description": "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Cuántos patrones del acervo traer (default 6, máximo 100)."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Descripción en lenguaje libre de lo que querés diseñar (tipo de pantalla, tono, contexto)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Formato de ENTREGA que orienta el brief: 'painter' (spec de bloques del cuerpo/Lienzo) | 'web' (React + Tailwind + tokens, para CRM/Altura) | 'html' (mock HTML autocontenido) | 'any' (default: el caller elige el mejor)."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      }
+    },
+    {
+      "name": "musubi_distill",
+      "description": "DESTILADOR del acervo de diseño (pilar 'Musubi Renaissance'): pase OFFLINE que convierte los artículos crudos ingeridos (blobs `ingested/*` del acervo `musubi-design`) en TARJETAS curadas y cortas (`design-corpus/*`) que el motor de diseño surfacea ANTES que los blobs. Cada blob se destila con el motor de cognición en 1-6 lecciones genéricas y reusables, embebidas para búsqueda. IDEMPOTENTE y reanudable: marca cada blob con una arista de procedencia `derived_from`, procesa de a tandas (default 6) y no reprocesa lo ya hecho — corré en bucle hasta que 'remaining' llegue a 0. Requiere admin y un motor de cognición configurado (opt-in: sin motor, falla explícito). Pasá `dry_run:true` para ver qué se destilaría sin escribir, o `limit` para el tamaño de la tanda (máx 25).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Si es true, lista los blobs que se destilarían SIN llamar al motor ni escribir nada."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Cuántos blobs destilar en esta tanda (default 6, máximo 25). Cada blob es una llamada al motor; tandas grandes tardan más."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_sharpen",
+      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Si es true, lista los pares candidatos por coseno SIN llamar al juez ni archivar nada."
+          },
+          "floor": {
+            "type": "number",
+            "description": "Piso de coseno para proponer un par al juez (default 0.84). Más bajo = más pares candidatos."
+          },
+          "pairs": {
+            "type": "number",
+            "description": "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."
+          }
+        }
       }
     }
   ]

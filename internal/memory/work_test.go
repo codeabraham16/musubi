@@ -340,3 +340,52 @@ func TestDeadLetterAfterMaxAttempts(t *testing.T) {
 		t.Errorf("la unidad agotada debe quedar failed (dead-letter): %+v", b)
 	}
 }
+
+func TestReopenWorkUnit(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.CreateWorkBatch("b", twoUnits()); err != nil {
+		t.Fatalf("CreateWorkBatch: %v", err)
+	}
+	// una unidad se reclama y FALLA
+	u, ok, err := e.ClaimWorkUnit("b", "a", 0, 0)
+	if err != nil || !ok {
+		t.Fatalf("claim inicial: ok=%v err=%v", ok, err)
+	}
+	if err := e.CompleteWorkUnit(u.ID, "se rompió", WorkFailed, "a", u.FencingToken); err != nil {
+		t.Fatalf("complete failed: %v", err)
+	}
+
+	// reopen la devuelve a `open`, sin dueño y con attempts reseteado
+	if err := e.ReopenWorkUnit(u.ID); err != nil {
+		t.Fatalf("ReopenWorkUnit: %v", err)
+	}
+	st, _ := e.WorkBatchStatus("b")
+	var found *WorkUnit
+	for i := range st.Units {
+		if st.Units[i].ID == u.ID {
+			found = &st.Units[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no encontré la unidad %s tras reopen", u.ID)
+	}
+	if found.Status != WorkOpen {
+		t.Fatalf("tras reopen esperaba status=open, tengo %q", found.Status)
+	}
+	if found.Attempts != 0 || found.OwnerID != "" {
+		t.Fatalf("tras reopen esperaba attempts=0 y sin dueño, tengo attempts=%d owner=%q", found.Attempts, found.OwnerID)
+	}
+
+	// y vuelve a ser reclamable
+	if _, ok, err := e.ClaimWorkUnit("b", "b", 0, 0); err != nil || !ok {
+		t.Fatalf("la unidad reabierta debería poder reclamarse: ok=%v err=%v", ok, err)
+	}
+
+	// reopen SOLO aplica a `failed`: sobre una no-fallida o un id inexistente, error
+	if err := e.ReopenWorkUnit(u.ID); err == nil {
+		t.Fatalf("reopen de una unidad no-failed debería fallar")
+	}
+	if err := e.ReopenWorkUnit("no-existe"); err == nil {
+		t.Fatalf("reopen de un id inexistente debería fallar")
+	}
+}

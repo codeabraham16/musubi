@@ -1100,5 +1100,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// activa la guarda SSRF (rechaza URLs que resuelven a destinos internos), así la exposición del
 	// fetcher del lado del server es segura incluso con varios principales. Ver methods_ingest.go.
 	entries = append(entries, s.ingestToolEntry())
+	// musubi_design: el motor de diseño como capacidad del cerebro (lee el acervo `musubi-design`
+	// compartido y arma un brief para que el caller componga). readOnly ⇒ llamable desde cualquier
+	// proyecto o sin proyecto. Ver methods_design.go.
+	entries = append(entries, s.designToolEntry())
+	// musubi_distill: el destilador del acervo (pilar 'Musubi Renaissance'). Pase OFFLINE admin+opt-in
+	// que convierte los blobs `ingested/*` en tarjetas `design-corpus/*`; lockSelf porque hace I/O
+	// externa (motor + embedder) por blob. Ver methods_distill.go.
+	entries = append(entries, s.distillToolEntry())
+	// musubi_sharpen: el afilador del acervo (pilar 'Musubi Renaissance'), gemelo del destilador. Pase
+	// OFFLINE admin+opt-in que junta las tarjetas `design-corpus/*` gemelas por COSENO (un juez LLM decide
+	// MERGE/KEEP); lockSelf porque hace I/O externa (juez) por par. Ver methods_dedup.go.
+	entries = append(entries, s.sharpenToolEntry())
 	return entries
 }
