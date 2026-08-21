@@ -108,6 +108,57 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   lo cual habría resuelto menos que el índice completo y la diferencia habría aparecido sola.
 
 ### Fixed
+- **El dashboard mostraba el largo de un array recortado como si fuera el total, y lo hacía en
+  cuatro lugares.** El patrón correcto estaba escrito UNA vez —las neuronas dicen `300/3660`— y al
+  copiarlo a mano a los otros recortes se copió sólo la mitad: se recortaba y no se contaba. Medido
+  contra el cerebro central: **486 sinapsis dibujadas sobre 3620 reales** y **1149 aristas de código
+  sobre 17661**, las dos impresas peladas al lado de un contador que sí declaraba su truncado — y esa
+  vecindad le enseña al ojo que donde no hay barra el número es el total.
+  El daño peor no era visual sino por MCP: `musubi_brain_graph` con `limit` chico devuelve
+  `"synapses": []` con `"truncated": true`, y un agente lee de ahí que **la memoria no tiene ninguna
+  relación**. La misma base devolvía 0, 486 o 3620 sinapsis según un tope de render que quien llama
+  ni siquiera puso.
+  `BrainGraph` gana `total_synapses` + `synapses_truncated`; `CodeGraphViz` gana `total_edges`,
+  `edges_truncated` y `total_modules`. **El denominador NO es `COUNT(*)` sobre la tabla**: ese número
+  incluye relaciones que tocan observaciones archivadas, superadas o en cuarentena —que no se
+  dibujarían ni sin tope—, así que publicarlo cambiaría una mentira por otra; y en el central sería
+  peor, porque `brainSynapses` lee sin `scopeClause` y un conteo crudo expondría la cardinalidad de
+  otros tenants. El gemelo honesto es «relaciones con los DOS extremos visibles», que ya estaba en
+  memoria antes del cap y se tiraba. Las aristas de código se cuentan **deduplicadas por
+  (kind, from, to)**, el mismo criterio con que se filtra lo dibujado, porque en una lectura federada
+  la misma arista lógica llega una vez por cada `project_id`.
+  **Lo que impide que vuelva** es estructural, no un campo más: los totales entran a los DTOs por
+  constructores POSICIONALES (un literal con campos nombrados deja el olvidado en cero y en silencio
+  —así nació esto—), el recorte pasa por un helper único que devuelve el total quiera o no el
+  llamador, y un test por reflexión exige que **toda** colección con tag `json:"x"` tenga `total_x` y
+  su bandera. Los seis tests nuevos se verificaron FALLANDO bajo sabotaje dirigido al invariante que
+  cada uno declara; el único test de sinapsis que existía corría con `limit=100` sobre 3 neuronas, o
+  sea que la rama del recorte no se ejecutaba nunca y nada podía ponerse rojo.
+- **El snapshot afirmaba dos poblaciones distintas para la misma memoria.** `insights.observations.active`
+  se derivaba restando sólo `archived`, mientras siete líneas más abajo `utilization` usaba el
+  predicado canónico: dos «activas» en el mismo JSON, 64 de diferencia en el central. Y `TopicTree`
+  filtraba con un `archived = 0` propio —exactamente lo que `braingraph.go` documenta en un
+  comentario que NO hay que hacer—, así que el árbol de dominios sumaba una población y el grafo
+  dibujaba otra. Se agrega `observations.visible` (recuperables) en vez de cambiarle el valor a
+  `active`, que alimenta `readiness` y consumidores externos; `TopicTree` y `TopicDomainCounts` pasan
+  al predicado canónico y `graph.total_observations` publica el visible.
+  **Cambia un número publicado**: `graph.total_observations` baja al universo recuperable (en el
+  central, de 3724 a 3660). Es un cambio hacia la verdad y lo ven `musubi-body` y el CRM.
+  Ahora las cinco cifras coinciden y hay un test end-to-end que lo exige:
+  `utilization.active` == `observations.visible` == `brain.total_neurons` == `graph.total_observations`
+  == suma de `domains[].count`. Verificado contra la base real: 2075 las cinco.
+- **El contador de dominios y su leyenda salían de la muestra, con el dato bueno a mano.** Decía
+  «46 dominios» donde había 90, y los conteos de la leyenda eran cuántos de los 300 nodos dibujados
+  caían en cada dominio (sumaban 200, no el acervo). `graph.domains` ya trae la agregación SQL sobre
+  toda la memoria, pero estaba detrás de un `||` que nunca se alcanzaba porque el valor de la muestra
+  siempre es truthy. El ranking además venía sesgado por saliencia: un dominio grande y frío no
+  aparecía. En la lente código el KPI «Nodos» mostraba los 400 dibujados y **se contradecía con el
+  contador de arriba**, que en la misma pantalla decía `400/8193`.
+- **`musubi_tokens` no repetía su propio contrato.** El `status: over` permanente con `session_id`
+  vacío es correcto y está documentado en `ledger.go` —en un servidor always-on el ledger no rota y
+  el total es un acumulado de por vida—, pero la descripción de la tool hablaba de «sesión» y de
+  «presupuesto» sin decirlo, así que invitaba a leer una alarma donde no la hay. Sólo cambia el texto:
+  el ledger no se toca.
 - **El fondo de la cola de conflictos era inalcanzable, y no por culpa de quien la drena.**
   `musubi_conflicts` tenía dos órdenes —`recent` y `confidence`— y **los dos son estables**: pedir
   siempre «las primeras 30» devuelve siempre las mismas 30. Un consumidor con tope nunca llega al
