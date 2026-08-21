@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.103.0] - 2026-08-21
+
 ### Changed
 - **El re-embedding del histórico va en lotes de 16, y rinde 1,37× — no 4,58× como estaba anotado.**
   `/api/embed` de Ollama ya aceptaba un array en `input` y ya devolvía `embeddings` como array;
