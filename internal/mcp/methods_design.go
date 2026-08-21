@@ -36,9 +36,11 @@ const designCorpusLimit = 6
 // prompt: el método es universal) y se EXCLUYEN del corpus de patrones para no duplicarse en el brief.
 const designMethodPrefix = "design-method/"
 
-// designMethodLimit acota cuántas tarjetas de método entran al brief (el método es un set CURADO y chico,
-// no un corpus). Ordenadas por importancia: un método reforzado pesa más que uno recién agregado.
-const designMethodLimit = 24
+// designMethodLimit acota cuántas tarjetas de método entran al brief (el método es un set CURADO, no el
+// corpus). Ordenadas por importancia: un método reforzado pesa más que uno recién agregado. El tope tiene
+// que superar la cantidad de tarjetas de método vivas, o el brief deja afuera principios buenos en silencio:
+// al 2026-08-21 el método cubre layout/color/tipografía/jerarquía + motion/microcopy/mobile/a11y = 30 tarjetas.
+const designMethodLimit = 40
 
 // brandTopicKey es la clave donde vive la MARCA ACTIVA de un proyecto (Musubi Renaissance · CAPA 3,
 // marca-por-proyecto): una observación con los tokens + reglas de identidad de ESE proyecto.
