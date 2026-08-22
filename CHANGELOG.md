@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.104.0] - 2026-08-21
+
 ### Changed
 - **El grafo del dashboard ya no tiene tope: crece con la memoria.** Estaba capado a 300
   neuronas, y el motivo real no era el render sino el TRANSPORTE — el front pedía
