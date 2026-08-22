@@ -809,29 +809,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   y el que más lo necesitaba era `test-cross` en Windows, que sin `-race` igual tarda 12 min. Un
   arreglo a medias en un gate de CI es peor que ninguno: convence de que el problema ya se resolvió.
 
-### Added
-- **Las skills dejan de morir en la máquina donde se escribieron.** Hasta acá una skill guardada
-  desde una terminal se quedaba ahí para siempre: el sync movía memoria y grafo de código, pero no
-  skills, y no existía ninguna herramienta para instalar en un proyecto una skill del cerebro
-  central. Se veía en el dato — el arsenal del central tenía **una** skill mientras una sola PC
-  tenía once que nunca subieron. Ahora hay un arsenal compartido de verdad:
-
-  - `musubi_promote_skill` sube una skill local al cerebro central. **Explícita a propósito**: nada
-    sube solo, porque hay skills que son locales por naturaleza y otras que dispararían en todos los
-    proyectos de todos. La curaduría es del dueño; la herramienta sólo la hace fácil.
-  - `musubi_list_skills` gana `source`: `local` (el default de siempre, intacto), `central` para ver
-    el arsenal —con cada entrada marcada `installed: true|false`— y `all` para las locales más lo
-    que falta. Sin esto, instalar exigía saber el nombre exacto de memoria.
-  - `musubi_install_skill` la baja y la escribe en el proyecto, marcada con su procedencia para
-    poder responder «¿esto lo escribí yo o lo adopté?» sin adivinar.
-  - `musubi provision --skills` deja el arsenal instalado al unir un proyecto nuevo. Sin el flag no
-    se hace ninguna llamada al central: unir una máquina no puede depender de que el arsenal esté
-    sano.
-
-  Nada se pisa sin pedirlo, y lo que baja del central pasa por la misma puerta de escritura que
-  `musubi_save_skill`, con su gate de calidad y su guarda de path traversal: el contenido del
-  arsenal es dato remoto, y tratarlo como confiable «porque es nuestro» es como se cuela un escape
-  de directorio.
+## [0.101.0] - 2026-08-11
 
 ### Added
 - **Ya se puede medir el arsenal, y sin mentir sobre lo que se mide.** Hasta acá nadie podía decir
@@ -857,6 +835,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   necesita purga. Se escriben con el buffer del ledger que ya existía: el conteo en el camino caliente
   es un append en memoria, nunca disco con el lock de dispatch tomado, y un fallo al persistir jamás
   puede hacer fallar una herramienta.
+- **El arsenal se escribe en el formato que el agente lee de verdad.** Las skills existían,
+  estaban validadas y federadas — y nada las usaba, porque vivían en un formato que el agente no
+  mira. Ahora se exportan como `SKILL.md` con su «cuándo» adelante: las once del equipo se anuncian
+  con **587 tokens** en vez de los 3.720 que costaría mandarlas enteras.
+- **`musubi_doctor` acepta `deep`.** `deep:false` es un pulso de salud barato: saltea
+  `db_integrity`, `fts_consistency` y `stale_gists`, las tres pasadas caras (~675 ms). Ausente o
+  `true` sigue siendo el diagnóstico completo, así que ningún cliente viejo pierde cobertura. Nació
+  de una medición incómoda: el sondeo de un cliente corría el diagnóstico pesado **cada 4 segundos**.
 
 ### Changed
 - **`musubi_resolve_skills` deja de mandar el arsenal entero en cada respuesta.** Devolvía los
@@ -878,55 +864,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   YAML, así que emitía las claves con los nombres de campo de Go (`"Name"`, `"AppliesTo"`) y filtraba
   `managed_checksum` y `generated_at`. Nadie lo había notado porque la tool medía **cero llamadas en
   30 días** en el ledger local y en el central.
-
-- **La cola de conflictos deja de llenarse de pares que no tienen nada que ver.** Medido sobre la
-  memoria real: de 494 relaciones sólo 45 exigían una decisión — **9,8 %** — y 31 de las 36
-  pendientes cruzaban temas completamente distintos (una auditoría de un servidor contra otra de un
-  videojuego). La causa es que el detector dispara por parecido de **forma**: dos auditorías se
-  parecen muchísimo entre sí aunque no hablen de lo mismo. Ahora dos observaciones de dominios
-  distintos no proponen relación, salvo que una sea un registro histórico —un commit o un contrato
-  SDD— que sí puede volver obsoleta una nota de cualquier tema.
-
-  **Cero señal perdida**: las 45 relaciones que sí exigían decisión se conservan enteras, y la cola
-  de pendientes baja de 36 a 6. La guarda nunca oculta memoria: evita *crear* una relación, jamás
-  archiva ni marca nada como reemplazado.
-
-### Added
-- **Ledger de uso: Musubi ya puede responder qué herramientas se usan de verdad.** Hasta acá no
-  podía, y eso hacía que toda decisión sobre dónde invertir esfuerzo se tomara por opinión: los
-  contadores por-tool vivían en memoria y se reseteaban en cada reinicio, `/metrics` pide bearer, y
-  el modo daemon —que es el 99 % del uso— ni siquiera levanta HTTP donde exponerlos. Ahora cada
-  invocación queda en la base con su latencia y su resultado, y `musubi_tool_usage` la devuelve
-  agrupada por herramienta con media y p95. La cobertura es **estructural**: el registro vive en el
-  único punto por el que pasan todas las llamadas, así que incluye los errores, los rechazos por rol
-  y por cuota, y hasta el handler que entra en pánico.
-
-  **El ledger nunca guarda argumentos ni contenido** — el esquema no tiene dónde ponerlos, así que
-  la fuga es imposible y no depende de que nadie se olvide. Y no puede hacer fallar una llamada:
-  si no puede escribir, la herramienta responde igual.
-
-### Changed
-- **`musubi_ask` fundamenta sobre el contenido completo, no sobre gists truncados.** El prompt de
-  grounding mandaba al motor el gist de cada memoria —cortado a mitad de frase— así que el modelo
-  sintetizaba sobre resúmenes mutilados y la calidad de la respuesta quedaba limitada por el
-  truncado, no por el modelo. Ahora se hidrata el contenido íntegro de los mejores candidatos
-  dentro de un presupuesto derivado del `token_budget` que ya acepta la tool (sin perilla nueva); los
-  que no entran **siguen en el prompt con su gist**, así que cambia la profundidad y nunca la
-  selección. Apareció auditando el cable con un motor falso en loopback, no leyendo el código.
-- **El sello de procedencia ahora viaja en el prompt del motor.** Era un agujero de Q3 en el camino
-  de `ask`: el recall marcaba la procedencia para el caller pero la cabecera que veía el motor sólo
-  llevaba id, topic y fecha, así que una inferencia de un LLM ya corroborada le llegaba al
-  sintetizador indistinguible de una nota verificada a mano. Las memorias `human` siguen sin marca:
-  si todas la llevaran, el sello sería ruido de fondo.
-- **La hidratación por id se partió en dos puertas.** `musubi_memory_expand` sigue contabilizando el
-  acceso, igual que siempre; el grounding de `ask` usa una puerta que **no** lo cuenta, porque
-  `Recall` ya lo contó sobre esos mismos ids y fundamentar una pregunta es un uso, no dos. Sin esto
-  cada `ask` habría inflado `access_count` al doble justo sobre las memorias más consultadas, y el
-  ranker habría empezado a alimentarse de su propia salida.
-
-  Ojo con el efecto de borde: esto **agranda lo que cruza al motor externo** (antes gists
-  truncados, ahora contenido completo). Lo cubre el portero de privacidad, que nace encendido y
-  quedó verificado en el cable; quien lo apague a mano se expone a más que antes de este cambio.
+- **`deep` ahora se anuncia en `tools/list`.** Se implementó, se mergeó y se desplegó… y el sondeo
+  siguió costando lo mismo, porque el parámetro no figuraba en el `inputSchema`: ningún cliente MCP
+  podía descubrirlo. Una capacidad desplegada que nadie puede invocar es una capacidad que no
+  existe. La prueba que lo fija es de *catálogo*, no de comportamiento — con el sabotaje, la de
+  comportamiento sigue en verde, porque el handler acepta el flag igual.
+- Dependencias: `modernc.org/sqlite` 1.55.0 → 1.56.0 y `github.com/odvcencio/gotreesitter`
+  0.47.0 → 0.48.1.
 
 ### Fixed
 - **El juez se medía contra una base que no corre en producción.** `TestMedicionJuezReal` comparaba
@@ -948,24 +892,77 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   quien lo provocó, no el sistema. Ahora el veredicto cuenta cuántas referencias quedan huérfanas y
   con qué veredicto. Avisa, no bloquea: el que resuelve sigue siendo quien decide.
 
+## [0.100.0] - 2026-08-08
+
 ### Added
-- **El arsenal se escribe en el formato que el agente lee de verdad.** Las skills existían,
-  estaban validadas y federadas — y nada las usaba, porque vivían en un formato que el agente no
-  mira. Ahora se exportan como `SKILL.md` con su «cuándo» adelante: las once del equipo se anuncian
-  con **587 tokens** en vez de los 3.720 que costaría mandarlas enteras.
-- **`musubi_doctor` acepta `deep`.** `deep:false` es un pulso de salud barato: saltea
-  `db_integrity`, `fts_consistency` y `stale_gists`, las tres pasadas caras (~675 ms). Ausente o
-  `true` sigue siendo el diagnóstico completo, así que ningún cliente viejo pierde cobertura. Nació
-  de una medición incómoda: el sondeo de un cliente corría el diagnóstico pesado **cada 4 segundos**.
+- **Las skills dejan de morir en la máquina donde se escribieron.** Hasta acá una skill guardada
+  desde una terminal se quedaba ahí para siempre: el sync movía memoria y grafo de código, pero no
+  skills, y no existía ninguna herramienta para instalar en un proyecto una skill del cerebro
+  central. Se veía en el dato — el arsenal del central tenía **una** skill mientras una sola PC
+  tenía once que nunca subieron. Ahora hay un arsenal compartido de verdad:
+
+  - `musubi_promote_skill` sube una skill local al cerebro central. **Explícita a propósito**: nada
+    sube solo, porque hay skills que son locales por naturaleza y otras que dispararían en todos los
+    proyectos de todos. La curaduría es del dueño; la herramienta sólo la hace fácil.
+  - `musubi_list_skills` gana `source`: `local` (el default de siempre, intacto), `central` para ver
+    el arsenal —con cada entrada marcada `installed: true|false`— y `all` para las locales más lo
+    que falta. Sin esto, instalar exigía saber el nombre exacto de memoria.
+  - `musubi_install_skill` la baja y la escribe en el proyecto, marcada con su procedencia para
+    poder responder «¿esto lo escribí yo o lo adopté?» sin adivinar.
+  - `musubi provision --skills` deja el arsenal instalado al unir un proyecto nuevo. Sin el flag no
+    se hace ninguna llamada al central: unir una máquina no puede depender de que el arsenal esté
+    sano.
+
+  Nada se pisa sin pedirlo, y lo que baja del central pasa por la misma puerta de escritura que
+  `musubi_save_skill`, con su gate de calidad y su guarda de path traversal: el contenido del
+  arsenal es dato remoto, y tratarlo como confiable «porque es nuestro» es como se cuela un escape
+  de directorio.
+- **Ledger de uso: Musubi ya puede responder qué herramientas se usan de verdad.** Hasta acá no
+  podía, y eso hacía que toda decisión sobre dónde invertir esfuerzo se tomara por opinión: los
+  contadores por-tool vivían en memoria y se reseteaban en cada reinicio, `/metrics` pide bearer, y
+  el modo daemon —que es el 99 % del uso— ni siquiera levanta HTTP donde exponerlos. Ahora cada
+  invocación queda en la base con su latencia y su resultado, y `musubi_tool_usage` la devuelve
+  agrupada por herramienta con media y p95. La cobertura es **estructural**: el registro vive en el
+  único punto por el que pasan todas las llamadas, así que incluye los errores, los rechazos por rol
+  y por cuota, y hasta el handler que entra en pánico.
+
+  **El ledger nunca guarda argumentos ni contenido** — el esquema no tiene dónde ponerlos, así que
+  la fuga es imposible y no depende de que nadie se olvide. Y no puede hacer fallar una llamada:
+  si no puede escribir, la herramienta responde igual.
 
 ### Changed
-- **`deep` ahora se anuncia en `tools/list`.** Se implementó, se mergeó y se desplegó… y el sondeo
-  siguió costando lo mismo, porque el parámetro no figuraba en el `inputSchema`: ningún cliente MCP
-  podía descubrirlo. Una capacidad desplegada que nadie puede invocar es una capacidad que no
-  existe. La prueba que lo fija es de *catálogo*, no de comportamiento — con el sabotaje, la de
-  comportamiento sigue en verde, porque el handler acepta el flag igual.
-- Dependencias: `modernc.org/sqlite` 1.55.0 → 1.56.0 y `github.com/odvcencio/gotreesitter`
-  0.47.0 → 0.48.1.
+- **La cola de conflictos deja de llenarse de pares que no tienen nada que ver.** Medido sobre la
+  memoria real: de 494 relaciones sólo 45 exigían una decisión — **9,8 %** — y 31 de las 36
+  pendientes cruzaban temas completamente distintos (una auditoría de un servidor contra otra de un
+  videojuego). La causa es que el detector dispara por parecido de **forma**: dos auditorías se
+  parecen muchísimo entre sí aunque no hablen de lo mismo. Ahora dos observaciones de dominios
+  distintos no proponen relación, salvo que una sea un registro histórico —un commit o un contrato
+  SDD— que sí puede volver obsoleta una nota de cualquier tema.
+
+  **Cero señal perdida**: las 45 relaciones que sí exigían decisión se conservan enteras, y la cola
+  de pendientes baja de 36 a 6. La guarda nunca oculta memoria: evita *crear* una relación, jamás
+  archiva ni marca nada como reemplazado.
+- **`musubi_ask` fundamenta sobre el contenido completo, no sobre gists truncados.** El prompt de
+  grounding mandaba al motor el gist de cada memoria —cortado a mitad de frase— así que el modelo
+  sintetizaba sobre resúmenes mutilados y la calidad de la respuesta quedaba limitada por el
+  truncado, no por el modelo. Ahora se hidrata el contenido íntegro de los mejores candidatos
+  dentro de un presupuesto derivado del `token_budget` que ya acepta la tool (sin perilla nueva); los
+  que no entran **siguen en el prompt con su gist**, así que cambia la profundidad y nunca la
+  selección. Apareció auditando el cable con un motor falso en loopback, no leyendo el código.
+- **El sello de procedencia ahora viaja en el prompt del motor.** Era un agujero de Q3 en el camino
+  de `ask`: el recall marcaba la procedencia para el caller pero la cabecera que veía el motor sólo
+  llevaba id, topic y fecha, así que una inferencia de un LLM ya corroborada le llegaba al
+  sintetizador indistinguible de una nota verificada a mano. Las memorias `human` siguen sin marca:
+  si todas la llevaran, el sello sería ruido de fondo.
+- **La hidratación por id se partió en dos puertas.** `musubi_memory_expand` sigue contabilizando el
+  acceso, igual que siempre; el grounding de `ask` usa una puerta que **no** lo cuenta, porque
+  `Recall` ya lo contó sobre esos mismos ids y fundamentar una pregunta es un uso, no dos. Sin esto
+  cada `ask` habría inflado `access_count` al doble justo sobre las memorias más consultadas, y el
+  ranker habría empezado a alimentarse de su propia salida.
+
+  Ojo con el efecto de borde: esto **agranda lo que cruza al motor externo** (antes gists
+  truncados, ahora contenido completo). Lo cubre el portero de privacidad, que nace encendido y
+  quedó verificado en el cable; quien lo apague a mano se expone a más que antes de este cambio.
 
 ## [0.99.0] - 2026-08-05
 
@@ -4284,6 +4281,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
 [0.103.0]: https://github.com/codeabraham16/musubi/compare/v0.102.1...v0.103.0
 [0.102.1]: https://github.com/codeabraham16/musubi/compare/v0.102.0...v0.102.1
 [0.102.0]: https://github.com/codeabraham16/musubi/compare/v0.101.0...v0.102.0
+[0.101.0]: https://github.com/codeabraham16/musubi/compare/v0.100.0...v0.101.0
+[0.100.0]: https://github.com/codeabraham16/musubi/compare/v0.99.0...v0.100.0
 [0.99.0]: https://github.com/codeabraham16/musubi/compare/v0.98.2...v0.99.0
 [0.98.2]: https://github.com/codeabraham16/musubi/compare/v0.98.1...v0.98.2
 [0.98.1]: https://github.com/codeabraham16/musubi/compare/v0.98.0...v0.98.1
