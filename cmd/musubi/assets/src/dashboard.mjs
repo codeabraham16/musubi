@@ -625,7 +625,7 @@ function renderHUD(d){
    evento del central encendiendo una neurona local seria inventar. Lo que si hace un evento es
    PEDIR UN PULSO YA: si de verdad cambio algo local, los deltas reales lo encienden; si no cambio
    nada, no se enciende nada. La animacion sigue saliendo de datos medidos, nunca del feed. */
-const VIVO={ ev:[], vistos:new Set(), sondeos:[], enlace:{estado:'conectando'}, sucio:true };
+const VIVO={ nuevos:[], vistos:new Set(), sondeos:[], enlace:{estado:'conectando'} };
 const VIVO_MAX=40;          // filas en el riel
 const VIVO_DEDUPE=600;      // claves recordadas para no repetir al reconectar
 
@@ -652,11 +652,9 @@ function refrescarYa(){
 
 function anotarEvento(e){
   if(!e || vistoYa(e)) return;
-  if(e.kind==='sondeo'){ VIVO.sondeos.push(Date.now()); VIVO.sucio=true; return; }
-  if(e.perdidos>0) VIVO.ev.unshift({hueco:e.perdidos});
-  VIVO.ev.unshift(e);
-  if(VIVO.ev.length>VIVO_MAX) VIVO.ev.length=VIVO_MAX;
-  VIVO.sucio=true;
+  if(e.kind==='sondeo'){ VIVO.sondeos.push(Date.now()); return; }
+  if(e.perdidos>0) VIVO.nuevos.push({hueco:e.perdidos});
+  VIVO.nuevos.push(e);
   // El grafo de codigo SI cambia de verdad con esto: se invalida para que se vuelva a bajar.
   if(e.tool==='musubi_codegraph_push') GRAPH.code=null;
   refrescarYa();
@@ -673,37 +671,75 @@ function hace(iso){
 // El prefijo `musubi_` esta en las 53 tools: repetirlo 40 veces gasta ancho de columna sin decir nada.
 const cortaTool=t=>String(t||'').replace(/^musubi_/,'');
 
-function pintarVivo(){
-  if(!VIVO.sucio) return; VIVO.sucio=false;
-  const cont=$('vivo'); if(!cont) return;
-  cont.innerHTML = VIVO.ev.length
-    ? VIVO.ev.map(e=>e.hueco
-        ? `<div class="ev hueco"><span class="s"></span><span class="t">se perdieron ${e.hueco} eventos</span></div>`
-        : `<div class="ev${e.outcome&&e.outcome!=='ok'?' err':''}"><span class="s"></span>`+
-          `<span class="t">${esc(cortaTool(e.tool))}</span>`+
-          (e.principal?`<span class="q">${esc(e.principal)}</span>`:'')+
-          `<span class="d">${hace(e.at)}</span></div>`).join('')
-    : '<div class="empty">sin trabajo todavia</div>';
+// nodoEvento arma UNA fila. El nodo se guarda la hora en un data- para poder refrescar despues
+// solo el texto de la antiguedad, sin volver a armar nada.
+function nodoEvento(e){
+  const d=document.createElement('div');
+  if(e.hueco){ d.className='ev hueco';
+    d.innerHTML=`<span class="s"></span><span class="t">se perdieron ${e.hueco} eventos</span>`;
+    return d; }
+  d.className='ev'+(e.outcome&&e.outcome!=='ok'?' err':'');
+  d.dataset.at=e.at||'';
+  d.innerHTML=`<span class="s"></span><span class="t">${esc(cortaTool(e.tool))}</span>`+
+    (e.principal?`<span class="q">${esc(e.principal)}</span>`:'')+
+    `<span class="d">${hace(e.at)}</span>`;
+  return d;
+}
 
+// pintarVivo INSERTA las filas nuevas; no reconstruye el riel.
+//
+// Antes reasignaba innerHTML entero, y eso se pagaba dos veces por segundo de dos formas visibles:
+// el contenedor quedaba un instante sin hijos, su alto colapsaba, y la linea del separador de
+// abajo saltaba hacia arriba y volvia — un parpadeo gris, una vez por segundo; y la animacion de
+// entrada se re-disparaba en TODAS las filas a la vez, no solo en la que acababa de llegar.
+// Insertando, la animacion queda donde tiene sentido: en lo que de verdad es nuevo.
+function pintarVivo(){
+  const cont=$('vivo'); if(!cont) return;
+  if(VIVO.nuevos.length){
+    const vacio=cont.querySelector('.empty'); if(vacio) vacio.remove();
+    // Llegan de mas viejo a mas nuevo; cada uno va al frente, asi el ultimo queda arriba.
+    for(const e of VIVO.nuevos) cont.insertBefore(nodoEvento(e), cont.firstChild);
+    VIVO.nuevos.length=0;
+    while(cont.children.length>VIVO_MAX) cont.removeChild(cont.lastChild);
+  }
+  if(!cont.children.length) cont.innerHTML='<div class="empty">sin trabajo todavia</div>';
+  pintarEnlace();
+}
+
+function pintarEnlace(){
+  const en=$('enlace'); if(!en) return; const s=VIVO.enlace;
+  const cls='enl'+(s.estado==='conectado'?' ok':(s.estado==='conectando'?'':' mal'));
+  const txt = s.estado==='conectado' ? (s.destino||'enlazado')
+    : s.estado==='conectando' ? 'conectando…'
+    : s.estado==='apagado' ? 'apagado' : 'sin enlace';
+  // Escribir solo lo que cambio: asignar el mismo textContent igual invalida el layout del nodo.
+  if(en.className!==cls) en.className=cls;
+  if(en.textContent!==txt) en.textContent=txt;
+  const tt=s.detalle||''; if(en.title!==tt) en.title=tt;
+}
+
+// tictac corre a 1 Hz y NO toca la estructura: reescribe el texto de la antiguedad solo en las
+// filas donde de verdad cambio, y el contador de sondeo. Con la antiguedad en unidades gruesas
+// (s -> m -> h), la enorme mayoria de los segundos no cambia ni una fila.
+function tictac(){
+  const cont=$('vivo');
+  if(cont) for(const n of cont.children){
+    const at=n.dataset&&n.dataset.at; if(!at) continue;
+    const d=n.lastElementChild; if(!d||!d.classList.contains('d')) continue;
+    const t=hace(at); if(d.textContent!==t) d.textContent=t;
+  }
   // El sondeo, agregado: cuantos por minuto. Es la unica forma honesta de mostrar el 99% del
-  // trafico sin que tape el 1% que importa.
+  // trafico sin que tape el 1% que importa. Ventana rodante, por eso se recalcula cada segundo.
   const corte=Date.now()-60000;
   VIVO.sondeos=VIVO.sondeos.filter(t=>t>corte);
   const lat=$('latido'), txt=$('latidoTxt');
   if(lat&&txt){ const n=VIVO.sondeos.length;
+    const s=n>0?`sondeo · ${n}/min`:'sin sondeo';
     lat.classList.toggle('vive', n>0);
-    txt.textContent = n>0 ? `sondeo · ${n}/min` : 'sin sondeo';
-  }
-  const en=$('enlace'); if(en){ const s=VIVO.enlace;
-    en.className='enl'+(s.estado==='conectado'?' ok':(s.estado==='conectando'?'':' mal'));
-    en.textContent = s.estado==='conectado' ? (s.destino||'enlazado')
-      : s.estado==='conectando' ? 'conectando…'
-      : s.estado==='apagado' ? 'apagado' : 'sin enlace';
-    en.title = s.detalle||'';
+    if(txt.textContent!==s) txt.textContent=s;
   }
 }
-// 1 Hz alcanza: las filas solo cambian de "hace 3s" a "hace 4s", y el riel entra 40 filas.
-setInterval(()=>{ VIVO.sucio=true; pintarVivo(); }, 1000);
+setInterval(tictac, 1000);
 
 function conectarVivo(){
   // EventSource y no fetch: el stream local es same-origin sobre loopback y no lleva credencial
@@ -713,9 +749,9 @@ function conectarVivo(){
   try{ es=new EventSource('/api/stream'); }catch(_){ return; }
   es.addEventListener('backlog', m=>{ try{ (JSON.parse(m.data)||[]).forEach(anotarEvento); }catch(_){} pintarVivo(); });
   es.addEventListener('uso', m=>{ try{ anotarEvento(JSON.parse(m.data)); }catch(_){} pintarVivo(); });
-  es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); VIVO.sucio=true; pintarVivo(); }catch(_){} });
+  es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); pintarVivo(); }catch(_){} });
   es.onerror=()=>{ // EventSource reconecta solo; lo unico que hace falta es no mentir mientras tanto
-    if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; VIVO.sucio=true; pintarVivo(); }
+    if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; pintarVivo(); }
   };
 }
 

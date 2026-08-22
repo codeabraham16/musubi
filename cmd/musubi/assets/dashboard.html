@@ -75,7 +75,9 @@ body{
 .howto b{color:var(--muted); font-weight:600;}
 .list{display:flex; flex-direction:column; gap:8px; max-height:210px; overflow:auto;}
 /* Riel en vivo. Densidad alta a proposito: son eventos, no lectura; lo que importa es el ritmo. */
-.vivo{gap:3px; max-height:264px;}
+/* scrollbar-gutter reserva el canal SIEMPRE. Sin esto, la fila 20 hace aparecer la barra, el
+   ancho util se achica de golpe y todo el texto del riel se re-acomoda de costado. */
+.vivo{gap:3px; max-height:264px; scrollbar-gutter:stable;}
 .ev{display:flex; align-items:baseline; gap:7px; font-family:var(--mono); font-size:10.5px;
   line-height:1.5; color:var(--muted); padding:1px 0; animation:entra .32s cubic-bezier(.2,.8,.2,1);}
 @keyframes entra{from{opacity:0; transform:translateX(7px);} to{opacity:1; transform:none;}}
@@ -85,7 +87,9 @@ body{
 .ev .t{flex:1; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .ev .q{flex:none; color:var(--purple); opacity:.9; max-width:88px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap;}
-.ev .d{flex:none; color:var(--dim); font-variant-numeric:tabular-nums;}
+/* min-width + tabular: "9s" -> "10s" no puede cambiar el ancho de la columna. Con ancho
+   variable, cada segundo el texto de la izquierda se corria un pixel. */
+.ev .d{flex:none; min-width:27px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums;}
 .ev.hueco{color:var(--amber); font-style:italic;}
 /* El sondeo NO va como filas: son el 99% del trafico y taparia todo lo demas. Va como pulso. */
 .latido{display:flex; align-items:center; gap:7px; margin-top:9px; padding-top:8px;
