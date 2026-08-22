@@ -73,14 +73,10 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 // Se usa en NewMcpServer para configuración aditiva sin romper callers existentes.
 type Option func(*McpServer)
 
-// WithSourcing devuelve un Option que configura el campo sourcing del servidor.
 // WithSpoolLocal enciende el vertedero del feed en `dir`, para que un panel de ESTA máquina
-// pueda ver lo que hace un daemon stdio. Se usa en `musubi daemon`, no en `musubi serve`.
-// CloseSpool borra el archivo de este proceso. Va en un defer del daemon: la salida limpia
-// no tiene que dejarle basura al lector, aunque el lector igual pode lo que quede de una
-// muerte de golpe.
-func (s *McpServer) CloseSpool() { s.spool.cerrar() }
-
+// pueda ver lo que hace un daemon stdio. Se usa en `musubi daemon`, no en `musubi serve`:
+// el central ya reparte por HTTP y escribir además a disco serían ~100.000 líneas diarias
+// para nadie.
 func WithSpoolLocal(dir string) Option {
 	return func(s *McpServer) {
 		s.spool = nuevoSpool(dir, os.Getpid(), spoolTope)
@@ -88,6 +84,12 @@ func WithSpoolLocal(dir string) Option {
 	}
 }
 
+// CloseSpool borra el archivo de este proceso. Va en un defer del daemon: la salida limpia no
+// tiene que dejarle basura al lector, aunque el lector igual pode lo que quede de una muerte
+// de golpe.
+func (s *McpServer) CloseSpool() { s.spool.cerrar() }
+
+// WithSourcing devuelve un Option que configura el campo sourcing del servidor.
 func WithSourcing(c config.SourcingConfig) Option {
 	return func(s *McpServer) { s.sourcing = c }
 }
