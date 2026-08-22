@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.106.0] - 2026-08-22
+
 ### Added
 - **El panel entró al CI: hasta ahora ningún job tocaba node.** El frontend del dashboard viajaba
   sin red de contención, y el fallo que eso deja pasar es de los caros porque es silencioso: se
@@ -4463,7 +4465,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.105.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.106.0...HEAD
+[0.106.0]: https://github.com/codeabraham16/musubi/compare/v0.105.0...v0.106.0
 [0.105.0]: https://github.com/codeabraham16/musubi/compare/v0.104.0...v0.105.0
 [0.104.0]: https://github.com/codeabraham16/musubi/compare/v0.103.0...v0.104.0
 [0.103.0]: https://github.com/codeabraham16/musubi/compare/v0.102.1...v0.103.0
