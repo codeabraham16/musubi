@@ -531,7 +531,10 @@ const VIVO_DEDUPE=600;      // claves recordadas para no repetir al reconectar
 // incluye la hora porque `seq` reinicia si el cerebro se reinicia, y dos eventos distintos con el
 // mismo seq quedarian pisados.
 function vistoYa(e){
-  const k=(e.seq||0)+'|'+(e.at||'');
+  // EL ORIGEN VA EN LA CLAVE. Local y central numeran su `seq` por separado, asi que sin
+  // esto dos eventos distintos con la misma marca y el mismo numero se pisan — y el que
+  // llega segundo se descarta EN SILENCIO, que es la peor forma de perder un evento.
+  const k=(e.origen||'central')+'|'+(e.seq||0)+'|'+(e.at||'');
   if(VIVO.vistos.has(k)) return true;
   VIVO.vistos.add(k);
   if(VIVO.vistos.size>VIVO_DEDUPE){ VIVO.vistos=new Set([...VIVO.vistos].slice(-VIVO_MAX*2)); }
@@ -576,10 +579,15 @@ function nodoEvento(e){
   if(e.hueco){ d.className='ev hueco';
     d.innerHTML=`<span class="s"></span><span class="t">se perdieron ${e.hueco} eventos</span>`;
     return d; }
-  d.className='ev'+(e.outcome&&e.outcome!=='ok'?' err':'');
+  // El origen se MUESTRA, no se deduce. Un riel que mezcla lo de esta maquina con lo de toda
+  // la empresa sin decir cual es cual afirma algo falso. Los eventos locales no traen
+  // `principal` —no hay token en stdio, no hay a quien distinguir— asi que ocupan ese lugar.
+  const local = e.origen==='local';
+  d.className='ev'+(local?' loc':'')+(e.outcome&&e.outcome!=='ok'?' err':'');
   d.dataset.at=e.at||'';
   d.innerHTML=`<span class="s"></span><span class="t">${esc(cortaTool(e.tool))}</span>`+
-    (e.principal?`<span class="q">${esc(e.principal)}</span>`:'')+
+    (local?'<span class="q aqui">esta maquina</span>'
+          :(e.principal?`<span class="q">${esc(e.principal)}</span>`:''))+
     `<span class="d">${hace(e.at)}</span>`;
   return d;
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -54,12 +55,17 @@ func runDashboard(args []string) {
 		tokenEnv = "MUSUBI_TOKEN"
 	}
 	relay := nuevoRelay(central, os.Getenv(tokenEnv))
+	relay.explicarSinCentral(motivoSinRelay(central, tokenEnv))
 
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
 		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Los daemons stdio de esta maquina dejan sus eventos aca, un archivo por PID.
+	// Ver internal/mcp/spool.go.
+	dirSpool := filepath.Join(root, ".musubi", "live")
 	cfg, err := config.Load(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
@@ -85,11 +91,12 @@ func runDashboard(args []string) {
 
 	url := "http://" + addr + "/"
 	fmt.Printf("Musubi dashboard en %s  (solo lectura · loopback · 0 tokens)\n", url)
-	if relay != nil {
-		fmt.Printf("Riel en vivo: enlazado a %s\n", relay.host())
+	if relay.url != "" {
+		fmt.Printf("Riel en vivo: central enlazado a %s\n", relay.host())
 	} else {
-		fmt.Printf("Riel en vivo: apagado (%s)\n", motivoSinRelay(central, tokenEnv))
+		fmt.Printf("Riel en vivo: central apagado (%s)\n", motivoSinRelay(central, tokenEnv))
 	}
+	fmt.Printf("Riel en vivo: local siguiendo %s\n", dirSpool)
 	fmt.Println("Ctrl+C para detener.")
 	if !hasFlag(args, "--no-open") {
 		openBrowser(url)
@@ -97,9 +104,12 @@ func runDashboard(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if relay != nil {
-		go relay.run(ctx)
-	}
+	go relay.run(ctx) // sale solo si no hay central configurado
+	// El riel LOCAL va aparte del central a proposito: el central puede estar caido y lo de esta
+	// maquina tiene que verse igual.
+	paroLocal := make(chan struct{})
+	defer close(paroLocal)
+	go seguirSpoolLocal(paroLocal, nuevoLectorSpool(dirSpool), relay)
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -118,8 +128,9 @@ func runDashboard(args []string) {
 func dashboardHandler(engine *memory.DbEngine, budget int, project string, relay *relayVivo) http.Handler {
 	mux := http.NewServeMux()
 
-	// /api/stream - el RIEL EN VIVO. Lo que se ve aca NO sale de la base local: sale del cerebro
-	// central, por relay (ver livestream.go).
+	// /api/stream - el RIEL EN VIVO. Sale de DOS fuentes por el mismo canal: el cerebro central
+	// (por relay, ver livestream.go) y los daemons stdio de ESTA maquina (por spool, ver
+	// livelocal.go). Cada evento dice de cual con su campo `origen`.
 	//
 	// POR QUE NO DE LA BASE LOCAL, que es lo que este panel lee para todo lo demas. Medido sobre
 	// 24 h de la base de este repo: 97.889 invocaciones, de las cuales 97.815 (99,92%) fueron tres
@@ -127,12 +138,8 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string, relay
 	// muestra un rio seco con tres bombas golpeando. En el cerebro central, las mismas 24 h dan 29
 	// tools distintas y ~550 eventos de trabajo de seis terminales - y con `principal`, asi que se
 	// puede decir QUIEN. La base local no tiene ese dato: esta vacio en las 130.471 filas.
-	if relay != nil {
-		mux.HandleFunc("/api/stream", relay.handlerStream())
-	} else {
-		mux.HandleFunc("/api/stream", handlerStreamApagado(
-			"falta el enlace al cerebro central: exporta MUSUBI_CENTRAL_URL y MUSUBI_TOKEN, o pasa --central <url>"))
-	}
+	mux.HandleFunc("/api/stream", relay.handlerStream())
+
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
 	bundle, _ := dashboardAssets.ReadFile("assets/dashboard.bundle.js")
 

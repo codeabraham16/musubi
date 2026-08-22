@@ -87,6 +87,9 @@ body{
 .ev .t{flex:1; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .ev .q{flex:none; color:var(--purple); opacity:.9; max-width:88px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap;}
+    /* El evento de ESTA maquina se marca aparte del de la empresa: son dos procedencias
+       y confundirlas es leer mal el riel. */
+    .ev .q.aqui{color:var(--teal);opacity:.8}
 /* min-width + tabular: "9s" -> "10s" no puede cambiar el ancho de la columna. Con ancho
    variable, cada segundo el texto de la izquierda se corria un pixel. */
 .ev .d{flex:none; min-width:27px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums;}

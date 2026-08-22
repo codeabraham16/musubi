@@ -20,6 +20,11 @@
 # Snapshot del índice vectorial IVF: caché DERIVADO y reconstruible (centroides). Si falta o está
 # corrupto, el engine cae al rebuild normal — nunca compromete correctness. No se versiona.
 .musubi/memory.db.vindex
+
+# El VERTEDERO del riel en vivo: un archivo por daemon, con lo que esta pasando AHORA.
+# Es estado de proceso, no del proyecto — se crea al arrancar, se borra al salir, y el nombre
+# es un PID de esta maquina. Versionarlo no tendria sentido en ninguna otra.
+.musubi/live/
 # Registro de credenciales del cerebro (`musubi token new`). Guarda SHA-256, no tokens crudos, pero
 # es el padrón de QUIÉN puede escribir en la memoria del equipo: no se versiona. Vive en el
 # workspace del CEREBRO, no en un repo — pero `token new` lo crea en el cwd si te equivocás de

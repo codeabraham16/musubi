@@ -373,8 +373,11 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
+	// El VERTEDERO del feed en vivo: sólo acá, no en runServe. El central ya reparte por HTTP;
+	// un daemon stdio no tiene por dónde sacar sus eventos y por eso el trabajo local no se veía.
+	defer server.CloseSpool()
 
 	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el
 	// ciclo cognitivo (consolidar/olvidar/purgar) solo correría una vez al arrancar. Dos
