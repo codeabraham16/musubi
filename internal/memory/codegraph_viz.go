@@ -97,7 +97,9 @@ type CodeExplain struct {
 // ordenan por grado (callers+callees+imports+contains) desc y se capan a limit; las aristas se
 // filtran a las que tienen ambos extremos entre los incluidos (sin colgantes), como brainSynapses.
 func (e *DbEngine) CodeGraphViz(ctx context.Context, limit int) (CodeGraphViz, error) {
-	if limit <= 0 {
+	// Igual que BrainGraph: cero = default, negativo = NoLimit (todo). Ver el comentario de
+	// NoLimit en braingraph.go — la ambigüedad de `<= 0` era lo que impedía pedir el grafo entero.
+	if limit == 0 {
 		limit = defaultCodeVizLimit
 	}
 	nodes, err := e.listAllGraphNodes(ctx)
