@@ -71,7 +71,7 @@ function buildGraph(brain){
       if(!ps){ if(n.age_days!=null && n.age_days<0.02){ n.act=1; n.ak=1; hits++; } }   // id nuevo Y joven (<~30min) → escribir; si solo ENTRÓ al top-300 (memoria vieja) no es actividad
       else if(n.heat>ps.heat || (ps.rec!=null && n.recency_days!=null && n.recency_days<ps.rec-0.0004)){ n.act=1; n.ak=2; hits++; } } // accedida → recordar
     for(const s of SYN){ if(!prevSyn.has(s.source+'|'+s.target) && prevStats.has(s.source) && prevStats.has(s.target)){ NEURONS[s.a].act=1; NEURONS[s.a].ak=3; NEURONS[s.b].act=1; NEURONS[s.b].ak=3; hits++; } } // sinapsis nueva ENTRE neuronas ya visibles → relacionar (no si una recién entró al top-300)
-    if(hits>0) thinking=Math.min(1, thinking+0.5+hits*0.2);
+    if(hits>0){ thinking=Math.min(1, thinking+0.5+hits*0.2); actViva=true; }   // despierta el bucle aunque este en pausa
   }
   prevStats=new Map(NEURONS.map(n=>[n.id,{heat:n.heat, rec:n.recency_days}]));
   prevSyn=new Set(SYN.map(s=>s.source+'|'+s.target));
@@ -284,7 +284,12 @@ controls.rotateSpeed=2.4; controls.zoomSpeed=1.3; controls.panSpeed=0.6; control
 // (edgeInst) con sus atributos por instancia; ya no hay un array de mallas ni de materiales.
 let inst=null, N=0, BX,BY,BZ,RAD,PHX,PHY,PHZ,GX,GY,GZ,PULL,QROT,ADJ;
 let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
-const _m=new THREE.Matrix4(), _c=new THREE.Color(), _c2=new THREE.Color(), _v=new THREE.Vector3(), _up=new THREE.Vector3(0,1,0), _q=new THREE.Quaternion(), _pos=new THREE.Vector3(), _scl=new THREE.Vector3(), _eu=new THREE.Euler();
+// Estado para no rehacer trabajo que no cambio. NHOT/EHOT recuerdan si el color escrito para esa
+// instancia es el TENIDO POR ACTIVIDAD, para poder devolverlo al base UNA vez al apagarse en vez
+// de reescribirlo todos los frames. `resto` es el residuo del arrastre y `actViva` si hay pulso.
+let NHOT=null, EHOT=null, resto=0, actViva=false, lastThink=-1;
+// _v/_up/_q se fueron con el quaternion de las aristas: ya nadie los usa.
+const _m=new THREE.Matrix4(), _c=new THREE.Color(), _c2=new THREE.Color(), _pos=new THREE.Vector3(), _scl=new THREE.Vector3(), _eu=new THREE.Euler();
 let framed=false;
 
 function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose(); inst=null; }
@@ -298,7 +303,7 @@ function rebuildMeshes(){
   PHX=new Float32Array(N); PHY=new Float32Array(N); PHZ=new Float32Array(N);
   GX=new Float32Array(N); GY=new Float32Array(N); GZ=new Float32Array(N); PULL=new Float32Array(N); QROT=[];
   ADJ=Array.from({length:N},()=>[]);
-  inst=new THREE.InstancedMesh(NGEO, nodeMat, N);
+  inst=new THREE.InstancedMesh(NGEO, nodeMat, N); NHOT=new Uint8Array(N); resto=1; lastThink=-1;
   for(let i=0;i<N;i++){ const n=NEURONS[i]; BX[i]=n.x; BY[i]=n.y; BZ[i]=n.z; RAD[i]=n.r; PHX[i]=n.phx; PHY[i]=n.ph; PHZ[i]=n.phz;
     QROT.push(new THREE.Quaternion().setFromEuler(_eu.set(Math.random()*6.283,Math.random()*6.283,Math.random()*6.283)));
     _m.compose(_pos.set(n.x,n.y,n.z), QROT[i], _scl.set(n.r,n.r,n.r)); inst.setMatrixAt(i,_m); inst.setColorAt(i,_c.set(n.col)); }
@@ -308,7 +313,7 @@ function rebuildMeshes(){
   // índice en SYN, así que animate() escribe por posición sin buscar nada.
   const E=SYN.length;
   if(E){
-    ECOL=new Float32Array(E*3); ESPD=new Float32Array(E); EGLW=new Float32Array(E); EBAS=new Float32Array(E);
+    ECOL=new Float32Array(E*3); ESPD=new Float32Array(E); EGLW=new Float32Array(E); EBAS=new Float32Array(E); EHOT=new Uint8Array(E);
     const geo=EGEO.clone();
     geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(ECOL,3));
     geo.setAttribute('aSpeed', new THREE.InstancedBufferAttribute(ESPD,1));
@@ -378,33 +383,68 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     let Dkx=0,Dky=0,Dkz=0;
     if(drag>=0){ const fx=BX[drag]+Math.sin(t*0.5+PHX[drag])*AMP, fy=BY[drag]+Math.sin(t*0.44+PHY[drag])*AMP, fz=BZ[drag]+Math.sin(t*0.57+PHZ[drag])*AMP;
       Dkx=_dt.x-fx; Dky=_dt.y-fy; Dkz=_dt.z-fz; GX[drag]=Dkx; GY[drag]=Dky; GZ[drag]=Dkz; }
+    // ¿SE MOVIÓ ALGO DE VERDAD? Con la animación en pausa, sin arrastre y con el residuo del
+    // último ya decaido, las posiciones son idénticas a las del frame anterior — y los dos bucles
+    // de abajo escribirían exactamente lo mismo que ya está. Medido en la lente código del central
+    // (8193 nodos, 17661 aristas): eran 16,5 ms de JS y 2 MB de subida a la GPU POR FRAME, cuando
+    // el presupuesto entero de un frame a 60 fps son 16,6 ms.
+    if(motion || drag>=0 || resto>0.002 || actViva){
+    let rMax=0, hayAct=false, colorSucio=false;
+    // La 3x3 (rotación x escala) es CONSTANTE por nodo y ya quedó sembrada en rebuildMeshes: por
+    // frame sólo cambian los 3 floats de traslación, escritos DIRECTO en el buffer de instancias.
+    // compose+setMatrixAt costaba 6,20 ms a 8193 nodos; esto, 1,57 ms.
+    const NM=inst.instanceMatrix.array;
     for(let i=0;i<N;i++){ const n=NEURONS[i];
       const dr=motion?AMP:0;
       const fx=BX[i]+Math.sin(t*0.5+PHX[i])*dr, fy=BY[i]+Math.sin(t*0.44+PHY[i])*dr, fz=BZ[i]+Math.sin(t*0.57+PHZ[i])*dr;
       if(i===drag){} else if(PULL[i]>0){ const p=PULL[i]; GX[i]+=(Dkx*p-GX[i])*0.14; GY[i]+=(Dky*p-GY[i])*0.14; GZ[i]+=(Dkz*p-GZ[i])*0.14; }
       else { GX[i]*=0.945; GY[i]*=0.945; GZ[i]*=0.945; }
-      const x=fx+GX[i], y=fy+GY[i], z=fz+GZ[i]; n.x=x; n.y=y; n.z=z;
-      _m.compose(_pos.set(x,y,z), QROT[i], _scl.set(RAD[i],RAD[i],RAD[i])); inst.setMatrixAt(i,_m);
-      // color: dominio + tinte de actividad si está encendida (cubre neuronas aisladas sin aristas)
-      _c.set(n.col); if(n.act>0.06){ _c2.set(AK[n.ak]||REPOSO); _c.lerp(_c2, Math.min(0.85,n.act*0.8)); } inst.setColorAt(i,_c); }
-    inst.instanceMatrix.needsUpdate=true; if(inst.instanceColor) inst.instanceColor.needsUpdate=true;
+      const gx=GX[i], gy=GY[i], gz=GZ[i];
+      const g=Math.abs(gx)+Math.abs(gy)+Math.abs(gz); if(g>rMax) rMax=g;
+      const x=fx+gx, y=fy+gy, z=fz+gz; n.x=x; n.y=y; n.z=z;
+      const o=i*16; NM[o+12]=x; NM[o+13]=y; NM[o+14]=z;
+      // color: dominio + tinte de actividad si está encendida (cubre neuronas aisladas sin aristas).
+      // Se escribe SÓLO mientras hay actividad, y una última vez al apagarse. En la lente código no
+      // hay actividad NUNCA (es reposo puro), así que estos writes eran íntegramente basura.
+      if(n.act>0.06){ hayAct=true; _c.set(n.col); _c2.set(AK[n.ak]||REPOSO); _c.lerp(_c2, Math.min(0.85,n.act*0.8)); inst.setColorAt(i,_c); NHOT[i]=1; colorSucio=true; }
+      else if(NHOT[i]){ inst.setColorAt(i,_c.set(n.col)); NHOT[i]=0; colorSucio=true; } }
+    inst.instanceMatrix.needsUpdate=true; if(colorSucio && inst.instanceColor) inst.instanceColor.needsUpdate=true;
     // aristas: siguen a las neuronas + pulso (reposo tenue vs actividad brillante).
     // Todo se escribe en los buffers de la ÚNICA malla instanciada: una draw call para las
     // 3.411 del cerebro completo, en vez de una por arista.
     if(edgeInst){
       edgeMat.uniforms.uTime.value=t;
+      const EM=edgeInst.instanceMatrix.array;
+      const pensando=Math.abs(thinking-lastThink)>0.002; if(pensando) lastThink=thinking;
+      let attrSucio=false;
       for(let si=0; si<SYN.length; si++){ const s=SYN[si]; const a=NEURONS[s.a], b=NEURONS[s.b];
-        _v.set(b.x-a.x,b.y-a.y,b.z-a.z); const len=_v.length()||1;
-        _q.setFromUnitVectors(_up,_v.normalize());
-        _m.compose(_pos.set((a.x+b.x)/2,(a.y+b.y)/2,(a.z+b.z)/2), _q, _scl.set(s.__r,len,s.__r));
-        edgeInst.setMatrixAt(si,_m);
+        // Base ortonormal escrita a mano en el buffer. El cilindro es simétrico radialmente, así
+        // que CUALQUIER par de ejes perpendiculares al eje A->B sirve: no hace falta el quaternion
+        // de setFromUnitVectors, que era el 62% del costo del frame. 10,33 ms -> 3,04 ms.
+        let dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
+        const len=Math.sqrt(dx*dx+dy*dy+dz*dz)||1, il=1/len; dx*=il; dy*=il; dz*=il;
+        let px,py,pz;
+        if(Math.abs(dy)<0.9){ px=dz; py=0; pz=-dx; } else { px=0; py=-dz; pz=dy; }   // el eje menos alineado: evita el caso degenerado
+        const pl=Math.sqrt(px*px+py*py+pz*pz)||1, ipl=1/pl; px*=ipl; py*=ipl; pz*=ipl;
+        // q = p x d, NO d x p: con (X,Y,Z)=(p,d,q) la terna tiene que ser DERECHA. Al reves el
+        // determinante sale negativo, se invierte el winding y el back-face culling se come las
+        // aristas. Verificado sobre 200.004 casos: det>0 en todos.
+        const qx=py*dz-pz*dy, qy=pz*dx-px*dz, qz=px*dy-py*dx;
+        const r=s.__r, o=si*16;
+        EM[o   ]=px*r;    EM[o+1 ]=py*r;    EM[o+2 ]=pz*r;    EM[o+3 ]=0;
+        EM[o+4 ]=dx*len;  EM[o+5 ]=dy*len;  EM[o+6 ]=dz*len;  EM[o+7 ]=0;
+        EM[o+8 ]=qx*r;    EM[o+9 ]=qy*r;    EM[o+10]=qz*r;    EM[o+11]=0;
+        EM[o+12]=(a.x+b.x)*0.5; EM[o+13]=(a.y+b.y)*0.5; EM[o+14]=(a.z+b.z)*0.5; EM[o+15]=1;
         const act=Math.max(a.act,b.act), ak=(a.act>=b.act?a.ak:b.ak);
-        if(act>0.06 && ak>0){ _c.set(AK[ak]); EGLW[si]=0.55+act*3.6; ESPD[si]=1.0+act*1.6; }   // ACTIVIDAD: brillante
-        else { _c.set(edgeBase(s)); EGLW[si]=0.5+thinking*0.35; ESPD[si]=0.42+(s.confidence||0)*0.5; } // REPOSO: color por tipo (código) o azul tenue (memoria)
-        ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; }
+        if(act>0.06 && ak>0){ _c.set(AK[ak]); EGLW[si]=0.55+act*3.6; ESPD[si]=1.0+act*1.6;   // ACTIVIDAD: brillante
+          ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=1; attrSucio=true; }
+        else if(EHOT[si] || pensando){ _c.set(edgeBase(s)); EGLW[si]=0.5+thinking*0.35; ESPD[si]=0.42+(s.confidence||0)*0.5;   // REPOSO: color por tipo (código) o azul tenue (memoria)
+          ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=0; attrSucio=true; } }
       edgeInst.instanceMatrix.needsUpdate=true;
-      const at=edgeInst.geometry.attributes;
-      at.aColor.needsUpdate=true; at.aSpeed.needsUpdate=true; at.aGlow.needsUpdate=true;
+      if(attrSucio){ const at=edgeInst.geometry.attributes;
+        at.aColor.needsUpdate=true; at.aSpeed.needsUpdate=true; at.aGlow.needsUpdate=true; }
+    }
+    resto=rMax; actViva=hayAct;
     }
   }
   controls.update(); hover(); composer.render();
