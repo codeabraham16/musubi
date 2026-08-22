@@ -7,6 +7,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El riel en vivo ya no muestra sólo el central: ahora también se ve el trabajo de esta máquina.**
+  El feed vive dentro del `McpServer` y el único que lo exponía era `ListenAndServeHTTP` — o sea
+  `musubi serve`. Un daemon stdio, que es lo que usa cada sesión de un agente contra la memoria
+  local, publicaba sus eventos a un feed que **nadie escuchaba**: emisor construido, receptor
+  apagado. Trabajabas todo el día contra el cerebro local y el panel no mostraba nada tuyo.
+  - **Un archivo por proceso, no uno compartido**, y lo decidió una medición: hay **7 daemons stdio
+    vivos a la vez** en esta máquina. Siete escritores sobre un mismo archivo es contención y
+    —peor— líneas entrelazadas, que se leen como un evento corrupto y se descartan sin que nadie se
+    entere. Cada daemon escribe `.musubi/live/<pid>.jsonl`, lo acota solo y lo borra al salir.
+  - **Se poda lo que dejan los que mueren de golpe**, con dos condiciones a la vez: el proceso
+    muerto **y** el archivo quieto un rato. Sólo la primera no alcanza porque los PID de Windows se
+    reciclan, y borrar el archivo de un daemon vivo lo deja invisible. Sin poda, cada muerto dejaría
+    restos que el panel relee para siempre — que es exactamente la forma del bug de los `bridge
+    -watch` huérfanos que medimos el mismo día.
+  - **La procedencia viaja en el evento** (`origen`) y el panel la muestra. Un riel que mezcla lo de
+    esta máquina con lo de toda la empresa sin decir cuál es cuál afirma algo falso. De paso se
+    cerró una pérdida silenciosa: la clave de deduplicación era `seq|at`, y los dos orígenes numeran
+    su `seq` por separado, así que una colisión descartaba un evento sin decir nada.
+  - **El riel existe aunque no haya central.** Antes, sin URL o sin token no había riel y una ruta
+    aparte servía la explicación; ahora lo local hay que verlo igual, así que el motivo viaja por el
+    mismo canal. Lo que no cambió: sin central **no se reintenta contra nada**, y el panel sigue
+    recibiendo una frase accionable en vez de un 404.
+  - Verificado punta a punta contra un daemon real, no sólo por unidad: `musubi_doctor` apareció en
+    el riel con su duración medida (2.054 ms) y `origen: local`. Y el ciclo de vida del archivo se
+    observó segundo a segundo: aparece, recibe su evento, y **desaparece cuando el daemon sale**.
+  - Trece invariantes en `specs/riel-local/`, cada uno verificado fallando bajo un sabotaje que
+    ataca lo que declara. **Uno tiene un hueco, y está escrito en el propio test**: el candado del
+    escritor no lo cubre ninguna prueba local — saboteado, pasó 20 de 20— y lo custodia la CI con
+    `-race`.
+
 ## [0.106.0] - 2026-08-22
 
 ### Added

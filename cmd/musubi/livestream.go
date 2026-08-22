@@ -83,14 +83,24 @@ type relayVivo struct {
 	enlace estadoEnlace
 }
 
-// nuevoRelay arma el relay. Devuelve nil si falta la URL o el token: sin cualquiera de los dos no
-// hay feed que traer, y un relay a medias que reintenta para siempre contra nada sería un motor
-// prendido calentando el aire.
+// nuevoRelay arma EL RIEL. Siempre devuelve uno: desde que existe el spool local (livelocal.go)
+// hay eventos que mostrar aunque no haya central, y devolver nil dejaría el riel local sin por
+// dónde salir.
+//
+// LO QUE NO CAMBIA: sin URL o sin token NO se intenta conectar al central. Un relay que reintenta
+// para siempre contra nada sería un motor prendido calentando el aire — por eso `run` sale de
+// inmediato cuando no hay a dónde ir, y el estado del enlace lo dice con una frase accionable en
+// vez de dejarlo adivinar. Ver R4.
 func nuevoRelay(base, token string) *relayVivo {
 	base = strings.TrimSpace(base)
 	token = strings.TrimSpace(token)
-	if base == "" || token == "" {
-		return nil
+	sinCentral := base == "" || token == ""
+	if sinCentral {
+		return &relayVivo{
+			subs:   make(map[int64]chan frame),
+			ring:   make([]frame, relayRing),
+			enlace: estadoEnlace{Estado: "apagado", Detalle: "sin enlace al cerebro central: sólo se ve lo de esta máquina"},
+		}
 	}
 	return &relayVivo{
 		url:   strings.TrimRight(base, "/") + "/api/stream",
@@ -123,6 +133,9 @@ func (r *relayVivo) host() string {
 
 // run mantiene la conexión hasta que ctx se cancela. Bloquea: se lanza en una goroutine.
 func (r *relayVivo) run(ctx context.Context) {
+	if r.url == "" {
+		return // no hay central configurado: no se reintenta contra nada
+	}
 	espera := relayBackoffMin
 	for ctx.Err() == nil {
 		r.marcar(estadoEnlace{Estado: "conectando", Destino: r.host()})
@@ -324,23 +337,17 @@ func (r *relayVivo) handlerStream() http.HandlerFunc {
 	}
 }
 
-// handlerStreamApagado responde cuando el panel corre SIN enlace al cerebro (falta la URL o el
-// token). Devuelve un stream válido que dice por qué está vacío, en vez de un 404.
+// explicarSinCentral fija el motivo concreto de que no haya central, para que el panel lo muestre.
 //
-// La diferencia importa: con 404 el front no puede distinguir "este panel no tiene feed" de "el
-// panel es viejo" ni de "escribí mal la ruta", y termina mostrando un error técnico donde
-// correspondía una frase que dice qué hacer.
-func handlerStreamApagado(motivo string) http.HandlerFunc {
-	return func(w http.ResponseWriter, req *http.Request) {
-		rc := http.NewResponseController(w)
-		_ = rc.SetWriteDeadline(time.Time{})
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		b, _ := json.Marshal(estadoEnlace{Estado: "apagado", Detalle: motivo})
-		fmt.Fprintf(w, "event: enlace\ndata: %s\n\n", b)
-		fmt.Fprint(w, "event: backlog\ndata: []\n\n")
-		_ = rc.Flush()
-		<-req.Context().Done()
+// POR QUE EXISTE (era handlerStreamApagado, R4). Antes, sin central no habia riel y una ruta
+// aparte servia la explicacion. Ahora el riel existe siempre —porque lo LOCAL hay que verlo aunque
+// el central falte—, asi que la explicacion viaja por el mismo canal, en el evento `enlace`.
+// Lo que NO cambia es el invariante: el panel dice que falta, con una frase accionable, en vez de
+// dejarlo adivinar. Un 404 o un "apagado" a secas obligan a mirar la consola del server para saber
+// si falta la URL, falta el token, o el panel es viejo.
+func (r *relayVivo) explicarSinCentral(motivo string) {
+	if r == nil || r.url != "" {
+		return // hay central: el estado lo maneja run()
 	}
+	r.marcar(estadoEnlace{Estado: "apagado", Detalle: motivo})
 }

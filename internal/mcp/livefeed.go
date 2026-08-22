@@ -56,6 +56,11 @@ type LiveEvent struct {
 	Project   string `json:"project,omitempty"`
 	// Kind separa TRABAJO de SONDEO. Ver clasificarTool.
 	Kind string `json:"kind"`
+	// Origen dice de QUÉ cerebro salió el evento: "local" (esta máquina, por spool) o
+	// "central" (el server, por HTTP). Sin esto el riel mezcla el trabajo de esta máquina con
+	// el de toda la empresa y afirma algo falso. Un central viejo no lo manda: la ausencia se
+	// lee como "central", que es de donde venían TODOS los eventos antes de este cambio.
+	Origen string `json:"origen,omitempty"`
 	// Perdidos, si es > 0, dice cuántos eventos se le descartaron a ESTE suscriptor justo antes
 	// de éste. Va en el evento y no en un log del servidor porque el que necesita saber que la
 	// vista tiene un hueco es el que la está mirando.
@@ -242,10 +247,14 @@ func (s *McpServer) publicarUso(ctx context.Context, tool, outcome string, d tim
 		Outcome:    outcome,
 		DurationMs: float64(d.Microseconds()) / 1000,
 		Kind:       clasificarTool(tool),
+		Origen:     s.origenFeed,
 	}
 	if p := principalFrom(ctx); p != nil {
 		ev.Principal = p.Name
 		ev.Project = p.ProjectID
 	}
 	s.live.publish(ev)
+	// Y a disco, para el panel de esta máquina. Va DESPUÉS del canal y es best-effort: el que
+	// está mirando en vivo no puede esperar a un fsync (ver A5 de la spec).
+	s.spool.escribir(ev)
 }

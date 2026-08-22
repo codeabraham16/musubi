@@ -74,6 +74,20 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 type Option func(*McpServer)
 
 // WithSourcing devuelve un Option que configura el campo sourcing del servidor.
+// WithSpoolLocal enciende el vertedero del feed en `dir`, para que un panel de ESTA máquina
+// pueda ver lo que hace un daemon stdio. Se usa en `musubi daemon`, no en `musubi serve`.
+// CloseSpool borra el archivo de este proceso. Va en un defer del daemon: la salida limpia
+// no tiene que dejarle basura al lector, aunque el lector igual pode lo que quede de una
+// muerte de golpe.
+func (s *McpServer) CloseSpool() { s.spool.cerrar() }
+
+func WithSpoolLocal(dir string) Option {
+	return func(s *McpServer) {
+		s.spool = nuevoSpool(dir, os.Getpid(), spoolTope)
+		s.origenFeed = "local"
+	}
+}
+
 func WithSourcing(c config.SourcingConfig) Option {
 	return func(s *McpServer) { s.sourcing = c }
 }
@@ -130,6 +144,13 @@ type McpServer struct {
 	// telemetria que hay que acordarse de encender termina apagada (la misma leccion que dejo
 	// el ledger de uso, cuyos contadores en memoria murieron dos meses sin que nadie lo notara).
 	live *liveFeed
+
+	// spool saca el feed a disco para los daemons que NO sirven HTTP. nil ⇒ apagado, que es
+	// lo correcto en el central: ahí ya hay suscriptores por HTTP y escribir además a disco
+	// serían ~100.000 líneas diarias para nadie. Ver spool.go.
+	spool *spoolLocal
+	// origenFeed viaja en cada evento. Ver LiveEvent.Origen.
+	origenFeed string
 	// ledgerRetentionDays es la ventana que conserva el ledger; la purga cuelga del
 	// mantenimiento que ya existe.
 	ledgerRetentionDays int

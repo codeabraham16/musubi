@@ -143,7 +143,9 @@ func TestFeedVivoSinHuecoNiDuplicadoAlSuscribirse(t *testing.T) {
 // campo `Args` o `Result` al struct rompe ACÁ, en el commit que lo agrega, y no en una auditoría
 // seis meses después.
 func TestLiveEventNoTieneDondePonerContenido(t *testing.T) {
-	permitidos := []string{"At", "DurationMs", "Kind", "Outcome", "Perdidos", "Principal", "Project", "Seq", "Tool"}
+	// Origen entra porque es un valor CERRADO que fija el servidor —"local" o "central"—, nunca
+	// algo que venga del llamador. Dice de qué cerebro salió el evento, no qué decía.
+	permitidos := []string{"At", "DurationMs", "Kind", "Origen", "Outcome", "Perdidos", "Principal", "Project", "Seq", "Tool"}
 	var got []string
 	tp := reflect.TypeOf(LiveEvent{})
 	for i := 0; i < tp.NumField(); i++ {

@@ -195,29 +195,50 @@ func TestRelayAvisaCuandoElCerebroRechazaLaCredencial(t *testing.T) {
 	t.Fatal("el panel nunca se enteró de que la credencial fue rechazada")
 }
 
-// R4 · sin URL o sin token NO hay relay, y el panel dice qué falta.
+// R4 · SIN CENTRAL EL RIEL SIGUE EXISTIENDO, Y DICE QUE FALTA.
 //
-// Devolver 404 sería peor: el front no podría distinguir "este panel no tiene feed" de "el panel
-// es viejo" ni de "la ruta está mal", y mostraría un error técnico donde va una frase accionable.
+// EL INVARIANTE NO CAMBIÓ; EL MECANISMO SÍ. Antes, sin URL o sin token no había relay y una ruta
+// aparte servía la explicación. Ahora el riel existe siempre, porque los daemons stdio de esta
+// máquina escriben eventos que hay que mostrar aunque el central falte (ver livelocal.go). Lo que
+// se sigue custodiando es lo mismo de antes: que el panel reciba una frase ACCIONABLE en vez de un
+// 404 o un "apagado" a secas, con los que no se puede distinguir "falta la URL" de "falta el
+// token" de "este panel es viejo".
+//
+// Y la otra mitad, que es la que justificaba devolver nil: sin central NO se reintenta contra
+// nada. Un relay dando vueltas contra un destino inexistente sería un motor prendido calentando el
+// aire, así que `run` tiene que retornar de inmediato.
 func TestSinEnlaceElRielExplicaPorQue(t *testing.T) {
-	if nuevoRelay("", "tok") != nil {
-		t.Error("sin URL no debería haber relay")
-	}
-	if nuevoRelay("http://x", "") != nil {
-		t.Error("sin token no debería haber relay")
-	}
-	if nuevoRelay("   ", "  ") != nil {
-		t.Error("espacios en blanco no son una URL ni un token")
+	for _, c := range []struct{ base, token, que string }{
+		{"", "tok", "sin URL"},
+		{"http://x", "", "sin token"},
+		{"   ", "  ", "sólo espacios"},
+	} {
+		r := nuevoRelay(c.base, c.token)
+		if r == nil {
+			t.Fatalf("%s: el riel tiene que existir igual, para poder mostrar lo local", c.que)
+		}
+		if r.url != "" {
+			t.Fatalf("%s: no debería haber destino central (url=%q)", c.que, r.url)
+		}
+
+		// run() sale de inmediato: si reintentara, este test colgaría hasta el timeout.
+		hecho := make(chan struct{})
+		go func() { r.run(context.Background()); close(hecho) }()
+		select {
+		case <-hecho:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s: run() se quedó reintentando contra un central que no existe", c.que)
+		}
 	}
 
-	ts := httptest.NewServer(handlerStreamApagado("falta MUSUBI_CENTRAL_URL"))
+	// Y el motivo concreto llega al navegador por el mismo canal que todo lo demás.
+	r := nuevoRelay("", "")
+	r.explicarSinCentral("falta MUSUBI_CENTRAL_URL")
+	ts := httptest.NewServer(r.handlerStream())
 	defer ts.Close()
 	todo := strings.Join(leerFrames(t, ts.URL, 2, 4*time.Second), "\n")
-	if !strings.Contains(todo, `"estado":"apagado"`) {
-		t.Fatalf("el stream apagado no declara su estado: %s", todo)
-	}
-	if !strings.Contains(todo, "MUSUBI_CENTRAL_URL") {
-		t.Fatalf("el stream apagado no dice qué falta: %s", todo)
+	if !strings.Contains(todo, "enlace") || !strings.Contains(todo, "MUSUBI_CENTRAL_URL") {
+		t.Fatalf("el panel no recibió el motivo accionable; recibió:\n%s", todo)
 	}
 }
 
