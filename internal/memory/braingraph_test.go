@@ -218,3 +218,58 @@ func TestBrainGraphEmpty(t *testing.T) {
 		t.Errorf("memoria vacía: total 0 y no truncated, obtuve total=%d truncated=%v", g.TotalNeurons, g.Truncated)
 	}
 }
+
+// insBrainObsAutor inserta una observación con AUTOR explícito. El helper de arriba no
+// lo hace: la columna llegó en la migración v16 y las filas viejas quedan con author ”.
+func insBrainObsAutor(t *testing.T, e *DbEngine, id, topic, autor, created string) {
+	t.Helper()
+	_, err := e.db.Exec(`INSERT INTO observations
+		(id, topic_key, content, gist, created_at, last_accessed, importance, access_count, archived, author)
+		VALUES (?,?,?,?,?,?,1.0,0,0,?)`,
+		id, topic, "contenido de "+id, "gist de "+id, created, created, autor)
+	if err != nil {
+		t.Fatalf("insertar obs %s: %v", id, err)
+	}
+}
+
+// TestBrainGraphCadaNeuronaTraeSuAutor: el grafo dice QUIÉN escribió cada nota.
+//
+// Sin esto el grafo no se puede agrupar por persona y hay que deducir la identidad leyendo
+// el texto de cada nota, que es exactamente lo que había que hacer antes de este cambio.
+//
+// El test compara autor POR NEURONA, no "que venga alguno": un scan que le pegue a todas el
+// mismo autor —o que lo tome de la fila equivocada— pasa cualquier chequeo de "no está
+// vacío", y es el modo de falla más probable al agregar una columna a un SELECT.
+func TestBrainGraphCadaNeuronaTraeSuAutor(t *testing.T) {
+	e := newTestEngine(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	ts := now.Add(-time.Hour).Format(sqliteTimeLayout)
+
+	insBrainObsAutor(t, e, "n1", "a/uno", "gio", ts)
+	insBrainObsAutor(t, e, "n2", "a/dos", "davantis-mando-admin", ts)
+	// la legacy: pre-v16, sin atribución. Tiene que quedar VACÍA, no heredar la de otro.
+	insBrainObs(t, e, "n3", "b/tres", 1.0, 0, ts)
+
+	g, err := e.brainGraphAt(context.Background(), now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	esperado := map[string]string{"n1": "gio", "n2": "davantis-mando-admin", "n3": ""}
+	if len(g.Neurons) != len(esperado) {
+		t.Fatalf("esperaba %d neuronas, obtuve %d", len(esperado), len(g.Neurons))
+	}
+	vistos := 0
+	for _, n := range g.Neurons {
+		quiero, ok := esperado[n.ID]
+		if !ok {
+			t.Fatalf("neurona inesperada %q", n.ID)
+		}
+		if n.Author != quiero {
+			t.Errorf("neurona %s: autor %q, esperaba %q", n.ID, n.Author, quiero)
+		}
+		vistos++
+	}
+	if vistos != len(esperado) {
+		t.Fatalf("revisé %d neuronas de %d", vistos, len(esperado))
+	}
+}

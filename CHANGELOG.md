@@ -8,6 +8,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El grafo del cerebro ahora dice QUIÉN escribió cada nota.** `musubi_brain_graph` devolvía
+  `id · topic · domain · mem_type · importance · heat · age_days · recency_days · gist` y nada más:
+  el **autor no viajaba**. La columna existe en `observations` desde la migración v16 y
+  `musubi_recall` ya la devolvía en cada item, así que el dato estaba ahí y el grafo era la única
+  superficie que lo dejaba afuera.
+  - Efecto práctico: **agrupar el grafo por persona era imposible sin leer el texto de las notas**.
+    Para dibujar quién le escribe a quién había que sacar la identidad del encabezado del gist con
+    una expresión regular — arqueología de texto sobre un campo que ya existía.
+  - Arregla de paso una limitación anotada: `musubi export` tampoco traía el autor, porque
+    serializa el mismo `BrainNeuron`. Ahora sí, sin tocar `export`.
+  - El campo va `omitempty`: las observaciones anteriores a v16 tienen autor vacío, y **«sin
+    atribución» no es lo mismo que «autor = cadena vacía»**. Un consumidor que reciba el campo
+    ausente sabe que esa nota no tiene autoría, en vez de creer que alguien firmó en blanco.
+  - Es aditivo: ningún consumidor existente se rompe, y el `total_neurons`/`truncated` no cambian.
+
 - **El riel en vivo ya no muestra sólo el central: ahora también se ve el trabajo de esta máquina.**
   El feed vive dentro del `McpServer` y el único que lo exponía era `ListenAndServeHTTP` — o sea
   `musubi serve`. Un daemon stdio, que es lo que usa cada sesión de un agente contra la memoria
