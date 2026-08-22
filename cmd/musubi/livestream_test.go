@@ -220,3 +220,30 @@ func TestRelayNoSeFrenaConUnaPestanaMuerta(t *testing.T) {
 		t.Fatal("el relay se bloqueó con una pestaña que no lee")
 	}
 }
+
+// R7 · el relay tampoco acumula pestañas muertas. Mismo razonamiento que en el feed del cerebro:
+// lo que se degrada en silencio es lo que no se arregla nunca.
+func TestRelayNoAcumulaPestanasMuertas(t *testing.T) {
+	r := nuevoRelay("http://x", "tok")
+	ids := make([]int64, 0, 4)
+	for i := 0; i < 4; i++ {
+		id, _, _ := r.suscribir()
+		ids = append(ids, id)
+	}
+	r.mu.Lock()
+	vivas := len(r.subs)
+	r.mu.Unlock()
+	if vivas != 4 {
+		t.Fatalf("suscriptores = %d, esperaba 4", vivas)
+	}
+	for _, id := range ids {
+		r.desuscribir(id)
+	}
+	r.mu.Lock()
+	quedan := len(r.subs)
+	r.mu.Unlock()
+	if quedan != 0 {
+		t.Fatalf("quedaron %d pestañas muertas en el relay", quedan)
+	}
+	r.desuscribir(ids[0]) // idempotente: no puede entrar en pánico
+}

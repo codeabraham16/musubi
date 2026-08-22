@@ -217,7 +217,10 @@ func (f *liveFeed) unsubscribe(id int64) {
 	}
 }
 
-// suscriptores es para los tests y para /metrics: cuántos paneles hay mirando.
+// suscriptores dice cuántos paneles hay mirando. Existe para poder probar que unsubscribe DE
+// VERDAD saca al suscriptor: si no lo sacara, cada pestaña cerrada dejaría un canal muerto en el
+// mapa y publish —que corre en la salida de toda tool— iteraría para siempre sobre una lista que
+// sólo crece. Es una degradación lenta, del tipo que no se nota hasta que ya duele.
 func (f *liveFeed) suscriptores() int {
 	if f == nil {
 		return 0

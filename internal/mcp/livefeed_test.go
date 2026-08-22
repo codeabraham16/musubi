@@ -341,3 +341,33 @@ func TestStreamPuedeDejarFueraElSondeo(t *testing.T) {
 		t.Fatalf("llegó %q; con kind=trabajo el sondeo no tiene que salir al cable", ev.Tool)
 	}
 }
+
+// L-VIVO-11 · cerrar una pestaña SACA al suscriptor.
+//
+// Si unsubscribe no lo sacara, cada pestaña cerrada dejaría un canal muerto en el mapa y publish
+// —que corre en la salida de TODA tool— iteraría para siempre sobre una lista que sólo crece,
+// escribiendo en buffers que nadie drena. No rompe nada de golpe: se degrada, que es peor.
+func TestFeedVivoNoAcumulaSuscriptoresMuertos(t *testing.T) {
+	f := newLiveFeed()
+	if n := f.suscriptores(); n != 0 {
+		t.Fatalf("feed nuevo con %d suscriptores", n)
+	}
+	ids := make([]int64, 0, 5)
+	for i := 0; i < 5; i++ {
+		id, _, _ := f.subscribe("", false)
+		ids = append(ids, id)
+	}
+	if n := f.suscriptores(); n != 5 {
+		t.Fatalf("suscriptores = %d, esperaba 5", n)
+	}
+	for _, id := range ids {
+		f.unsubscribe(id)
+	}
+	if n := f.suscriptores(); n != 0 {
+		t.Fatalf("quedaron %d suscriptores muertos: publish los recorrería en cada llamada a cualquier tool", n)
+	}
+	// Y desuscribir dos veces el mismo id no puede entrar en pánico (cerrar un canal cerrado lo
+	// haría): un handler que retorna por dos caminos llama a su defer una sola vez, pero el
+	// contrato tiene que aguantarlo igual.
+	f.unsubscribe(ids[0])
+}
