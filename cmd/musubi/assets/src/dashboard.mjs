@@ -9,6 +9,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { extraerPersonas, agruparPorPersona } from './personas.mjs';
+import { crearVista } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
 /* ---------- paletas ---------- */
@@ -67,7 +69,10 @@ const POS={memory:new Map(), code:new Map()};
 const ASENTADO={memory:false, code:false};
 let prevStats=new Map(), prevSyn=new Set(), thinking=0, actInc=new Float32Array(0), bestInc=new Float32Array(0), akSrc=new Int8Array(0);
 let motion=true, needsRebuild=false;
-let lens='memory';   // lente activa (memory|code); los datos viven en GRAPH/PULSE (ver más abajo)
+let lens='memory';   // lente activa (memory|code|personas); los datos viven en GRAPH/PULSE
+// La vista de PERSONAS dibuja en su propio canvas 2D. Se crea una sola vez; se apaga sola
+// cuando la lente no es la suya, asi que no gasta un frame mientras nadie la mira.
+const VISTA_PERSONAS = crearVista(document.getElementById('personas'));
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -346,6 +351,9 @@ if(STATS){
 }
 
 function animate(){ requestAnimationFrame(animate); renderer.info.reset();
+  // La lente personas se dibuja ACA y no en su propio requestAnimationFrame: dos bucles
+  // peleandose por el mismo frame es como se pierde el control del costo por cuadro.
+  if(VISTA_PERSONAS.activa()){ VISTA_PERSONAS.frame(motion); return; }
   const _t0 = STATS ? performance.now() : 0;
   if(needsRebuild || (inst && (N!==NEURONS.length || (edgeInst?edgeInst.count:0)!==SYN.length))) rebuildMeshes();
   // El layout se asienta de a tramos: 6 ms por frame deja ~10 ms para dibujar y mantiene 60 fps
@@ -754,6 +762,14 @@ let CONSTRUIDO=null;
 
 // renderLens: reconstruye el grafo con la lente activa desde lo que hay en cache (sin re-pollear).
 function renderLens(){
+  if(lens==='personas'){
+    // Se alimenta del MISMO grafo de memoria que ya esta en cache: no pide nada nuevo al
+    // server. La persona sale de `author`, que viaja en el grafo desde 0.107.0.
+    if(!GRAPH.memory) return;
+    const datos = extraerPersonas(GRAPH.memory);
+    VISTA_PERSONAS.cargar(datos, agruparPorPersona(datos.terminales));
+    return;
+  }
   if(lens==='code'){
     if(!GRAPH.code) return;
     if(CONSTRUIDO===GRAPH.code) return;   // mismo objeto ⇒ mismo grafo ⇒ no hay nada que rehacer
@@ -770,7 +786,15 @@ $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motio
 
 // setLens: conmuta memoria↔código. Reconstruye el grafo, repinta leyendas/etiquetas y el HUD.
 function setLens(v){ lens=v; const b=$('lensBtn');
-  if(b){ b.textContent=lens==='code'?'◉ código':'◉ memoria'; b.classList.toggle('code',lens==='code'); b.setAttribute('aria-pressed',String(lens==='code')); }
+  const cvB=document.getElementById('brain'), cvP=document.getElementById('personas');
+  const esPer = lens==='personas';
+  // Se OCULTA el WebGL en vez de dejarlo debajo: sigue costando GPU aunque no se vea.
+  if(cvB) cvB.hidden = esPer;
+  if(cvP) cvP.hidden = !esPer;
+  VISTA_PERSONAS.activar(esPer);
+  if(b){ b.textContent = esPer?'◉ personas':(lens==='code'?'◉ código':'◉ memoria');
+    b.classList.toggle('code',lens==='code'); b.classList.toggle('personas',esPer);
+    b.setAttribute('aria-pressed',String(lens!=='memory')); }
   applyLensLabels();
   // La lente de código se baja on-demand: no viaja en el pulso ni tiene por qué estar en
   // memoria si nadie la miró. Si falta, se pide y recién ahí se dibuja.
@@ -790,7 +814,14 @@ function applyLensLabels(){ const code=lens==='code';
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
     : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
 }
-const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>setLens(lens==='code'?'memory':'code'));
+const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
+  setLens(lens==='memory' ? 'code' : (lens==='code' ? 'personas' : 'memory')));
+
+// La lente se puede fijar por URL (?lens=personas). Sirve para dos cosas concretas: que el
+// CRM pueda enlazar directo a una vista, y que una captura automatica pueda verificar una
+// lente sin simular un click. Un valor desconocido se ignora y queda `memory`.
+const _lensURL=new URLSearchParams(location.search).get('lens');
+if(_lensURL==='code'||_lensURL==='personas') setLens(_lensURL);
 
 poll(); setInterval(poll,5000);
 conectarVivo();

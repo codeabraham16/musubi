@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El panel tiene una tercera lente: `personas`.** Memoria y código dibujan QUÉ sabe el cerebro;
+  ésta dibuja **quién lo escribe**. Cada terminal es una neurona con dendritas en 3D, los despachos
+  entre ellas son axones dirigidos, y cada persona es un racimo. Se llega con el botón de lente o
+  directo por URL con `?lens=personas`, que además le sirve al CRM para enlazar una vista concreta.
+  - **La persona sale de `author`**, no de una lista escrita a mano, y las credenciales del mismo
+    humano colapsan en una sola: `davantis`, `davantis-admin`, `davantis-mando-admin` y
+    `davantis-altura` son una persona, no cuatro.
+  - **La terminal sale del texto**, porque no existe como campo — se firma a mano en el encabezado
+    del gist. `personas.mjs` es un parser y está tratado como tal: 11 invariantes en `node --test`,
+    cada uno verificado fallando bajo un sabotaje que ataca lo que ese test declara.
+  - **Firmar no es mencionar, y confundirlos daba respuestas falsas.** La persona de una terminal
+    sale de quién **firma** como ella (el gist EMPIEZA con el rol), no de quién la nombra: a
+    `ALTURA` la menciona más gio que Gabriel, así que por menciones el racimo se la llevaba gio.
+    Con la regla de firma el dato se lee solo: `ALTURA` tiene 80 menciones y **1** firma — es un
+    dominio, no una terminal— y `GIO` tiene 91 menciones y **0** firmas, porque es una persona.
+  - El render es canvas 2D y no three.js aunque three ya esté en el bundle: lo que hace que una
+    rama parezca dendrita es el trazo que adelgaza hacia la punta, y eso en 2D es una propiedad
+    del stroke y en 3D es geometría por segmento.
+
+### Fixed
+- **`npm test` del panel corría UN archivo, no los tests.** El script decía
+  `node --test src/layout.test.mjs`, así que cualquier test nuevo quedaba fuera de CI sin que nada
+  se pusiera rojo. Ahora es `src/*.test.mjs`.
+
 - **El grafo del cerebro ahora dice QUIÉN escribió cada nota.** `musubi_brain_graph` devolvía
   `id · topic · domain · mem_type · importance · heat · age_days · recency_days · gist` y nada más:
   el **autor no viajaba**. La columna existe en `observations` desde la migración v16 y
