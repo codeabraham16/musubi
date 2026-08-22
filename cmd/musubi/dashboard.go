@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -109,6 +110,97 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.
 		_ = json.NewEncoder(w).Encode(snap)
 	})
 
+	// /api/graph?lens=memory|code[&limit=N] → el GRAFO SOLO, y ENTERO por defecto.
+	//
+	// Existe para poder sacarle el tope al render. El grafo cambia cuando nace una memoria o
+	// una relación, no cada 5 segundos: separarlo del sondeo es lo que permite que crezca con
+	// el acervo en vez de tener que caber en un intervalo de polling. El cliente lo baja una
+	// vez y lo re-baja sólo cuando `graph_version` del pulso cambia; el ETag deja que ni
+	// siquiera se retransmita si pide de nuevo lo mismo.
+	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		limit := memory.NoLimit // sin tope salvo que lo pidan
+		if s := r.URL.Query().Get("limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		ver, err := engine.BrainGraphVersion(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		lens := r.URL.Query().Get("lens")
+		if lens == "" {
+			lens = "memory"
+		}
+		etag := `"` + lens + "-" + ver.Tag() + `"`
+		// La huella no cubre el grafo de CÓDIGO (se indexa aparte), así que el 304 sólo se
+		// ofrece para la lente memoria: prometer frescura que no se midió es peor que
+		// retransmitir.
+		if lens == "memory" {
+			w.Header().Set("ETag", etag)
+			if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+		var payload any
+		if lens == "code" {
+			g, err := engine.CodeGraphViz(ctx, limit)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			payload = g
+		} else {
+			g, err := engine.BrainGraphCtx(ctx, limit)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			payload = g
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+
+	// /api/pulse?since=<RFC3339> → el LATIDO: lo chico que cambia seguido.
+	//
+	// Es el reemplazo del sondeo a /api/snapshot. Lleva los contadores reales, los dominios
+	// SIN sus hojas (2.809 en el cerebro central, 278 KB que el front nunca leyó), la salud,
+	// el ledger, la actividad reciente, y los DELTAS: qué neurona se calentó y qué sinapsis
+	// nació desde `since`. Eso es lo que enciende el brillo del render, y son unos pocos KB
+	// en vez de los 631 que viajaban cada 5 segundos.
+	mux.HandleFunc("/api/pulse", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		now := time.Now()
+		p, err := engine.BrainPulseSince(ctx, memory.ParsePulseSince(r.URL.Query().Get("since")), now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out := dashboardPulse{BrainPulse: p, Project: project, Version: version}
+		if rep, err := engine.Diagnose(); err == nil {
+			out.Health = rep
+		}
+		if ins, err := engine.Insights(); err == nil {
+			out.Insights = ins
+		}
+		if ledger, err := engine.LedgerStatus(); err == nil {
+			out.Tokens = ledger.Budget(budget)
+		}
+		if recent, err := engine.RecentObservations(20); err == nil {
+			out.Recent = recent
+		}
+		if runs, err := engine.WorkflowListRuns(); err == nil {
+			out.Orchestration = exportOrchestration{Runs: runs}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
 	// /api/explained?symbol=path#kind:name → las memorias (decisiones/gotchas) que EXPLICAN ese
 	// símbolo (weld F3), derivadas por FTS al vuelo. Lo consume el hover de la lente "código".
 	mux.HandleFunc("/api/explained", func(w http.ResponseWriter, r *http.Request) {
@@ -188,4 +280,22 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	_ = cmd.Start()
+}
+
+// dashboardPulse es lo que devuelve /api/pulse: el latido de la memoria (memory.BrainPulse)
+// más las vistas chicas que el HUD necesita en cada tick.
+//
+// NO lleva el grafo, y esa ausencia es el punto: el grafo viaja por /api/graph, una vez y
+// cuando cambia. Mientras los dos viajaban juntos, el tamaño del grafo estaba atado al
+// intervalo de sondeo —632 KB cada 5 s— y por eso había que caparlo a 300 neuronas. Separados,
+// el grafo puede crecer con el acervo y el sondeo se mantiene en unos pocos KB.
+type dashboardPulse struct {
+	memory.BrainPulse
+	Project       string                `json:"project,omitempty"`
+	Version       string                `json:"version,omitempty"`
+	Health        memory.DiagnoseReport `json:"health"`
+	Insights      memory.InsightsReport `json:"insights"`
+	Tokens        memory.BudgetStatus   `json:"tokens"`
+	Recent        []memory.ObsCard      `json:"recent"`
+	Orchestration exportOrchestration   `json:"orchestration"`
 }

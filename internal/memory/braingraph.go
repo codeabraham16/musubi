@@ -87,9 +87,18 @@ func newBrainGraph(neurons []BrainNeuron, totalNeurons int, neuronsTruncated boo
 	}
 }
 
-// defaultBrainNeuronLimit es el tope de neuronas del render por defecto: suficiente para
-// una silueta densa sin castigar el force-sim del navegador (O(n^2) por frame).
+// defaultBrainNeuronLimit es el tope de neuronas cuando el llamador no pide nada. Sigue en
+// 300 para las tools MCP, donde un agente no quiere 3.667 nodos por accidente en su contexto.
 const defaultBrainNeuronLimit = 300
+
+// NoLimit pide el grafo ENTERO, sin tope. Es un valor explícito y no "cero o menos" porque
+// esa ambigüedad era justamente la que impedía pedirlo: `limit <= 0` caía al default, así que
+// no había forma de expresar «todo» — el tope no se podía sacar ni queriendo.
+//
+// Lo usa /api/graph del dashboard, que baja el grafo UNA vez y lo re-baja sólo cuando cambia
+// su huella (ver pulse.go). Las tools MCP siguen con el default: son superficies distintas y
+// lo que es sano para un render no lo es para el contexto de un modelo.
+const NoLimit = -1
 
 // BrainGraph arma el grafo neuronal read-only. limit<=0 usa el default. Las neuronas se
 // ordenan por saliencia = importance*exp(-ageDays/30) + ln(1+heat) y se capan a limit;
@@ -107,7 +116,9 @@ func (e *DbEngine) BrainGraphCtx(ctx context.Context, limit int) (BrainGraph, er
 }
 
 func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (BrainGraph, error) {
-	if limit <= 0 {
+	// Sólo el CERO (nadie pidió nada) cae al default. Un negativo es NoLimit: pedido explícito
+	// de traer todo, y `capped` no recorta con limit<=0.
+	if limit == 0 {
 		limit = defaultBrainNeuronLimit
 	}
 
