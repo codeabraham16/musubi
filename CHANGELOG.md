@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.105.0] - 2026-08-22
+
 ### Fixed
 - **El grafo dejó de rehacer, cada frame, trabajo que no cambió.** Al sacarle el tope, la lente
   código del cerebro central pasó a 8.193 nodos y 17.661 aristas — y el bucle de animación
@@ -4384,7 +4386,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.104.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.105.0...HEAD
+[0.105.0]: https://github.com/codeabraham16/musubi/compare/v0.104.0...v0.105.0
 [0.104.0]: https://github.com/codeabraham16/musubi/compare/v0.103.0...v0.104.0
 [0.103.0]: https://github.com/codeabraham16/musubi/compare/v0.102.1...v0.103.0
 [0.102.1]: https://github.com/codeabraham16/musubi/compare/v0.102.0...v0.102.1
