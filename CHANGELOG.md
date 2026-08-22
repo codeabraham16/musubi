@@ -66,6 +66,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   nuevo»; `aplicaDeltas` en cambio **muta memoria en el lugar**, y comparar por identidad allí
   saltearía una reconstrucción necesaria y apagaría el latido, que es la razón de ser del panel.
 
+- **Un test del relay del riel en vivo esperaba algo que no probaba nada, y falló en CI.**
+  `TestRelayMandaElTokenPorHeaderYNoPorURL` llamaba a `leerFrames(…, 2, …)` con el comentario
+  «fuerza a que el relay ya haya conectado» — y no fuerza nada: `suscribir()` **sintetiza** el
+  `enlace` y el `backlog` en el momento, sin haber hablado con nadie. Medido: un relay al que
+  nunca se le arrancó `run()` devuelve igual esos 2 frames **en 0 s**. El test leía entonces un
+  `Authorization` vacío y lo reportaba como «el relay mandó mal el token», que es justo lo
+  contrario de lo que pasaba. Venía pasando de suerte, porque la goroutine del relay solía ganarle
+  al viaje HTTP; bajo `-race` con la máquina cargada, perdió.
+  Ahora el cerebro falso avisa por un canal cuando el pedido llegó de verdad, y el test espera
+  **eso**. De paso se cierra una carrera de datos real: lo que veía el handler se escribía en la
+  goroutine del servidor y se leía en la del test sin candado — `-race` no la había marcado porque
+  las tripas de `net/http` crean un orden incidental, que no es una garantía.
+  Reproducido y verificado: con el relay conectando 300 ms tarde, el patrón viejo falla **5 de 5**
+  con el mismo mensaje que CI y el nuevo pasa **5 de 5**. Y el test sigue atrapando lo que
+  custodia, comprobado con dos sabotajes por separado: sacarle el header lo hace fallar, y
+  **dejarle el header pero mandar además el token en la query también** — que es la mitad del
+  invariante que el primer sabotaje no tocaba.
+
 ## [0.105.0] - 2026-08-22
 
 ### Fixed
