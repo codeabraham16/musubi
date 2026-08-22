@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El grafo dejó de rehacer, cada frame, trabajo que no cambió.** Al sacarle el tope, la lente
+  código del cerebro central pasó a 8.193 nodos y 17.661 aristas — y el bucle de animación
+  recomponía TODAS las matrices de instancia en cada frame: ~26.000 composiciones y **2 MB de
+  buffers subidos a la GPU**, cuando el presupuesto entero de un frame a 60 fps son 16,6 ms.
+  Medido con las clases reales de three.js a esa escala: **43,9 ms de JS por frame**, antes de
+  dibujar nada, del bloom y del SMAA. La lente memoria (3.678/3.420) costaba 11,8 ms y por eso
+  se sentía bien; la de código no.
+  Tres cambios, cada uno medido antes de escribirlo:
+  - **Nodos**: la 3×3 (rotación × escala) es CONSTANTE por nodo —`RAD` sólo se escribe en
+    `rebuildMeshes` y `n.r` no se reasigna nunca—, así que ya queda sembrada ahí y por frame sólo
+    se escriben los 3 floats de la traslación, directo en el buffer. 6,20 ms → 1,57 ms.
+  - **Aristas**: base ortonormal escrita a mano en lugar de `setFromUnitVectors` + `compose`. El
+    cilindro es simétrico radialmente, así que cualquier par de ejes perpendiculares al eje A→B
+    sirve y el quaternion sobra. Era el **62% del costo del frame**: 10,33 ms → 3,04 ms.
+  - **Colores**: se escriben sólo mientras hay actividad, y una última vez al apagarse. En la
+    lente código no hay actividad NUNCA (es reposo puro), así que esos ~25.000 writes por frame
+    eran íntegramente basura.
+  Y el bucle entero se saltea cuando nada se movió: con la animación en pausa, sin arrastre y con
+  el residuo ya decaído, las posiciones son idénticas a las del frame anterior. Rotar el grafo
+  pausado pasa a costar **cero**.
+  Resultado medido, en proceso aislado y tres corridas por escenario: **3,5× en la lente código
+  del central** (43,9 ms → 12,7 ms). Los absolutos varían bastante entre corridas por GC y JIT; lo
+  estable es el ratio, y en todas el "antes" se pasa del presupuesto y el "después" entra.
+  La base ortonormal se verificó contra el método viejo en **200.004 casos** —aleatorios más los
+  borde: exactamente vertical, casi vertical, invertido y de largo cero—: eje coincidente a 1,2e-11,
+  ortogonalidad a 2,8e-16 y **cero determinantes negativos**. Ese último control atajó un bug real:
+  la primera versión tenía el producto cruz al revés (`q = d × p` en vez de `p × d`), la terna salía
+  zurda, el winding se invertía y el back-face culling se habría comido las aristas.
+
 ## [0.104.0] - 2026-08-21
 
 ### Changed
