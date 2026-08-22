@@ -4279,7 +4279,16 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.96.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.104.0...HEAD
+[0.104.0]: https://github.com/codeabraham16/musubi/compare/v0.103.0...v0.104.0
+[0.103.0]: https://github.com/codeabraham16/musubi/compare/v0.102.1...v0.103.0
+[0.102.1]: https://github.com/codeabraham16/musubi/compare/v0.102.0...v0.102.1
+[0.102.0]: https://github.com/codeabraham16/musubi/compare/v0.101.0...v0.102.0
+[0.99.0]: https://github.com/codeabraham16/musubi/compare/v0.98.2...v0.99.0
+[0.98.2]: https://github.com/codeabraham16/musubi/compare/v0.98.1...v0.98.2
+[0.98.1]: https://github.com/codeabraham16/musubi/compare/v0.98.0...v0.98.1
+[0.98.0]: https://github.com/codeabraham16/musubi/compare/v0.97.0...v0.98.0
+[0.97.0]: https://github.com/codeabraham16/musubi/compare/v0.96.0...v0.97.0
 [0.96.0]: https://github.com/codeabraham16/musubi/compare/v0.95.0...v0.96.0
 [0.95.0]: https://github.com/codeabraham16/musubi/compare/v0.94.0...v0.95.0
 [0.94.0]: https://github.com/codeabraham16/musubi/compare/v0.93.0...v0.94.0
