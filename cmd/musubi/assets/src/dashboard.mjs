@@ -614,6 +614,111 @@ function renderHUD(d){
   $('recent').innerHTML=rec.length?rec.slice(0,6).map(o=>`<div class="item"><span class="tk">${esc(o.topic_key)}</span><span class="gg">${esc(o.gist)}</span></div>`).join(''):'<div class="empty">memoria en formación</div>';
 }
 
+/* ---------- RIEL EN VIVO ----------
+   Lo que se ve aca NO sale de la base local: llega por SSE desde el cerebro central, a traves del
+   relay del panel (cmd/musubi/livestream.go). El motivo esta medido: en 24 h, la base local tuvo
+   97.889 invocaciones de las cuales 97.815 (99,92%) fueron tres tools de sondeo, y el trabajo real
+   fueron 4 save_observation y 1 recall. El central, en las mismas 24 h, tuvo 29 tools distintas y
+   ~550 eventos de trabajo de seis terminales, con `principal` para decir de quien fue cada uno.
+
+   EL GRAFO NO SE PINTA CON ESTOS EVENTOS, y es deliberado. El grafo dibuja la memoria LOCAL; un
+   evento del central encendiendo una neurona local seria inventar. Lo que si hace un evento es
+   PEDIR UN PULSO YA: si de verdad cambio algo local, los deltas reales lo encienden; si no cambio
+   nada, no se enciende nada. La animacion sigue saliendo de datos medidos, nunca del feed. */
+const VIVO={ ev:[], vistos:new Set(), sondeos:[], enlace:{estado:'conectando'}, sucio:true };
+const VIVO_MAX=40;          // filas en el riel
+const VIVO_DEDUPE=600;      // claves recordadas para no repetir al reconectar
+
+// El backlog se re-manda en cada reconexion, asi que hay que descartar lo ya visto. La clave
+// incluye la hora porque `seq` reinicia si el cerebro se reinicia, y dos eventos distintos con el
+// mismo seq quedarian pisados.
+function vistoYa(e){
+  const k=(e.seq||0)+'|'+(e.at||'');
+  if(VIVO.vistos.has(k)) return true;
+  VIVO.vistos.add(k);
+  if(VIVO.vistos.size>VIVO_DEDUPE){ VIVO.vistos=new Set([...VIVO.vistos].slice(-VIVO_MAX*2)); }
+  return false;
+}
+
+let _pollPedido=0;
+// refrescarYa: adelanta el pulso cuando el cerebro dice que paso algo, en vez de esperar los 5 s
+// del sondeo. Con techo: una rafaga de eventos pide UN pulso, no uno por evento.
+function refrescarYa(){
+  const ahora=performance.now();
+  if(ahora-_pollPedido<2000) return;
+  _pollPedido=ahora;
+  setTimeout(()=>{ poll().catch(()=>{}); }, 350);   // margen para que la escritura ya este visible
+}
+
+function anotarEvento(e){
+  if(!e || vistoYa(e)) return;
+  if(e.kind==='sondeo'){ VIVO.sondeos.push(Date.now()); VIVO.sucio=true; return; }
+  if(e.perdidos>0) VIVO.ev.unshift({hueco:e.perdidos});
+  VIVO.ev.unshift(e);
+  if(VIVO.ev.length>VIVO_MAX) VIVO.ev.length=VIVO_MAX;
+  VIVO.sucio=true;
+  // El grafo de codigo SI cambia de verdad con esto: se invalida para que se vuelva a bajar.
+  if(e.tool==='musubi_codegraph_push') GRAPH.code=null;
+  refrescarYa();
+}
+
+// hace: la antiguedad en la forma mas corta que sigue siendo exacta.
+function hace(iso){
+  const t=Date.parse(iso); if(!isFinite(t)) return '';
+  const s=Math.max(0,Math.round((Date.now()-t)/1000));
+  if(s<60) return s+'s';
+  const m=Math.round(s/60); if(m<60) return m+'m';
+  return Math.round(m/60)+'h';
+}
+// El prefijo `musubi_` esta en las 53 tools: repetirlo 40 veces gasta ancho de columna sin decir nada.
+const cortaTool=t=>String(t||'').replace(/^musubi_/,'');
+
+function pintarVivo(){
+  if(!VIVO.sucio) return; VIVO.sucio=false;
+  const cont=$('vivo'); if(!cont) return;
+  cont.innerHTML = VIVO.ev.length
+    ? VIVO.ev.map(e=>e.hueco
+        ? `<div class="ev hueco"><span class="s"></span><span class="t">se perdieron ${e.hueco} eventos</span></div>`
+        : `<div class="ev${e.outcome&&e.outcome!=='ok'?' err':''}"><span class="s"></span>`+
+          `<span class="t">${esc(cortaTool(e.tool))}</span>`+
+          (e.principal?`<span class="q">${esc(e.principal)}</span>`:'')+
+          `<span class="d">${hace(e.at)}</span></div>`).join('')
+    : '<div class="empty">sin trabajo todavia</div>';
+
+  // El sondeo, agregado: cuantos por minuto. Es la unica forma honesta de mostrar el 99% del
+  // trafico sin que tape el 1% que importa.
+  const corte=Date.now()-60000;
+  VIVO.sondeos=VIVO.sondeos.filter(t=>t>corte);
+  const lat=$('latido'), txt=$('latidoTxt');
+  if(lat&&txt){ const n=VIVO.sondeos.length;
+    lat.classList.toggle('vive', n>0);
+    txt.textContent = n>0 ? `sondeo · ${n}/min` : 'sin sondeo';
+  }
+  const en=$('enlace'); if(en){ const s=VIVO.enlace;
+    en.className='enl'+(s.estado==='conectado'?' ok':(s.estado==='conectando'?'':' mal'));
+    en.textContent = s.estado==='conectado' ? (s.destino||'enlazado')
+      : s.estado==='conectando' ? 'conectando…'
+      : s.estado==='apagado' ? 'apagado' : 'sin enlace';
+    en.title = s.detalle||'';
+  }
+}
+// 1 Hz alcanza: las filas solo cambian de "hace 3s" a "hace 4s", y el riel entra 40 filas.
+setInterval(()=>{ VIVO.sucio=true; pintarVivo(); }, 1000);
+
+function conectarVivo(){
+  // EventSource y no fetch: el stream local es same-origin sobre loopback y no lleva credencial
+  // (el bearer se queda en el relay), asi que se puede usar el que reconecta solo. El del CEREBRO
+  // sí necesita header, y por eso ese lo abre el relay con fetch — ver livestream.go.
+  let es;
+  try{ es=new EventSource('/api/stream'); }catch(_){ return; }
+  es.addEventListener('backlog', m=>{ try{ (JSON.parse(m.data)||[]).forEach(anotarEvento); }catch(_){} pintarVivo(); });
+  es.addEventListener('uso', m=>{ try{ anotarEvento(JSON.parse(m.data)); }catch(_){} pintarVivo(); });
+  es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); VIVO.sucio=true; pintarVivo(); }catch(_){} });
+  es.onerror=()=>{ // EventSource reconecta solo; lo unico que hace falta es no mentir mientras tanto
+    if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; VIVO.sucio=true; pintarVivo(); }
+  };
+}
+
 /* ---------- resize / poll / init ---------- */
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
   renderer.getDrawingBufferSize(_dbs); composer.setSize(_dbs.x,_dbs.y); controls.handleResize(); }
@@ -722,4 +827,5 @@ function applyLensLabels(){ const code=lens==='code';
 const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>setLens(lens==='code'?'memory':'code'));
 
 poll(); setInterval(poll,5000);
+conectarVivo();
 requestAnimationFrame(animate);

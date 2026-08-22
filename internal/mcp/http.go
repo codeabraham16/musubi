@@ -253,6 +253,126 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = w.Write([]byte(metrics.render(s.engine)))
 	})
+
+	// /api/stream — el FEED EN VIVO por SSE (livefeed.go). Cada invocación de tool sale acá en el
+	// instante en que termina: qué tool, cómo salió, cuánto tardó y de quién fue.
+	//
+	// AUTH IGUAL QUE /metrics, y TENANCY ADEMÁS. El gate de /metrics sólo pregunta "¿es un
+	// principal válido?"; acá no alcanza: el feed lleva `principal` y `project` en cada evento, así
+	// que un miembro acotado a lo suyo (read=own) vería en tiempo real qué está haciendo OTRO
+	// equipo — cuándo trabajan, con qué herramientas y a qué ritmo. El filtro se aplica adentro del
+	// feed (subscribe), no acá, para que no dependa de que cada endpoint futuro se acuerde.
+	//
+	// POR QUÉ SSE Y NO WEBSOCKET: el tráfico es de una sola dirección y SSE reconecta solo. Y por
+	// qué el cliente lo consume con fetch() y no con EventSource: EventSource NO puede mandar el
+	// header Authorization, y la alternativa —el token en la query string— lo deja escrito en los
+	// logs de acceso y en el historial del navegador. Con fetch + ReadableStream el bearer viaja
+	// donde tiene que viajar.
+	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var principal *Principal
+		if opt.registry != nil {
+			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			if !ok {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			principal = p
+		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if s.live == nil {
+			http.Error(w, "live feed unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		soloTrabajo := r.URL.Query().Get("kind") == KindTrabajo
+
+		rc := http.NewResponseController(w)
+		// SIN ESTO EL STREAM MUERE A LOS 90 s. El WriteTimeout del server está calibrado para las
+		// respuestas cortas de /mcp (timeout + 30 s); una conexión que por diseño no termina nunca
+		// lo viola siempre. Misma maniobra que la descarga del cuerpo, por el mismo motivo.
+		_ = rc.SetWriteDeadline(time.Time{})
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no") // que ningún proxy intermedio lo bufferee
+		w.WriteHeader(http.StatusOK)
+
+		ps, fed := recallScopeFor(principal)
+		// filtrar sólo si el principal está ACOTADO y tiene a qué acotarse. El registro ya
+		// garantiza que read=own implica project_id no vacío (fail-closed en loadPrincipals), así
+		// que un ps vacío acá significa federado o stdio local, no un agujero.
+		id, ch, backlog := s.live.subscribe(ps, !fed && ps != "")
+		defer s.live.unsubscribe(id)
+
+		emitir := func(evento string, v any) bool {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return true // un evento que no serializa no puede cortar el stream
+			}
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evento, b); err != nil {
+				return false
+			}
+			return rc.Flush() == nil
+		}
+
+		// El backlog va PRIMERO y como un solo frame: un panel que abre tiene que ver el minuto
+		// anterior en vez de una pantalla en blanco esperando a que alguien haga algo. En un
+		// sistema donde el trabajo real son ~23 eventos por hora, esa espera puede ser larga.
+		if soloTrabajo {
+			filtrado := backlog[:0]
+			for _, ev := range backlog {
+				if ev.Kind == KindTrabajo {
+					filtrado = append(filtrado, ev)
+				}
+			}
+			backlog = filtrado
+		}
+		if backlog == nil {
+			backlog = []LiveEvent{}
+		}
+		if !emitir("backlog", backlog) {
+			return
+		}
+
+		// Latido cada 20 s. No es decorativo: sin tráfico, ni el cliente ni los intermedios
+		// distinguen "conexión viva y silenciosa" de "conexión muerta", y un feed que se cayó
+		// pero se ve igual que uno tranquilo es peor que no tener feed.
+		hb := time.NewTicker(20 * time.Second)
+		defer hb.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				if soloTrabajo && ev.Kind != KindTrabajo {
+					continue
+				}
+				if !emitir("uso", ev) {
+					return
+				}
+			case <-hb.C:
+				if _, err := fmt.Fprint(w, ": latido\n\n"); err != nil {
+					return
+				}
+				if rc.Flush() != nil {
+					return
+				}
+			}
+		}
+	})
+
 	return mux
 }
 

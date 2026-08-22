@@ -65,6 +65,50 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   física ni un bit.
 
 ### Added
+- **RIEL EN VIVO: el panel muestra lo que el cerebro hace, mientras lo hace.** Cada invocación de
+  tool sale por `GET /api/stream` (SSE) en el instante en que termina, con su hora real, su
+  resultado, su latencia y —cuando hay token— de quién fue.
+  **No sale de la base, y eso es lo que lo hace posible.** El ledger de uso ya guarda todas las
+  invocaciones, así que lo obvio era que el panel leyera `tool_invocations` con un cursor. Medido,
+  no puede ser en vivo por tres razones estructurales: el buffer baja a disco cada 10 s por
+  diseño; `created_at` se estampa en el `INSERT`, o sea que es la hora del *flush* y no la de la
+  llamada (en la base local hay hasta **23 invocaciones compartiendo timestamp**); y esa columna
+  tiene resolución de un segundo, así que dos llamadas separadas por 40 ms son simultáneas para
+  ella. Publicar en proceso resuelve las tres: en la prueba punta a punta los eventos salieron a
+  `.818 · .840 · .861 · .880 · .900 · .918` — 20 ms de separación, cada uno con su hora.
+  El ledger sigue siendo la **historia** (sobrevive al reinicio, se consulta con SQL); esto es el
+  **presente**.
+  - **El sondeo se separa del trabajo, porque el sondeo es casi todo.** Medido sobre 24 h: en la
+    base local, 97.815 de 97.889 invocaciones (**99,92%**) fueron tres tools de sondeo, y el
+    trabajo real fueron 4 `save_observation` y 1 `recall`; en el cerebro central, 13.919 de 18.363
+    fueron `musubi_sync_pull` sola. Un riel crudo es una pared de ruido donde lo que importa pasa
+    sin que nadie lo vea. Cada evento viene clasificado `trabajo`/`sondeo`, el panel muestra el
+    sondeo como un pulso agregado (`sondeo · N/min`) en vez de filas, y `?kind=trabajo` lo saca
+    directamente del cable. **La lista es de sondeo y el default es trabajo**, no al revés: así una
+    tool nueva nace visible en vez de invisible.
+  - **Aislamiento por proyecto, no sólo autenticación.** El evento lleva `principal` y `project`, así
+    que la regla de `/metrics` («¿es un principal válido?») no alcanzaba: un miembro acotado a lo
+    suyo vería en tiempo real a qué hora trabaja otro equipo, con qué herramientas y a qué ritmo. El
+    filtro va adentro del feed, no en el handler, para que no dependa de que cada endpoint futuro se
+    acuerde de aplicarlo.
+  - **Nunca frena el camino caliente.** `publish` corre en la salida de toda tool: los envíos son no
+    bloqueantes y a la pestaña que no lee se le descartan eventos. Lo descartado **se cuenta y se
+    avisa** (`perdidos`) — un feed que pierde en silencio le hace creer al que mira que vio todo.
+  - **Ni argumentos, ni resultados, ni mensajes de error.** Mismo invariante L1 del ledger, y acá
+    pesa más: un feed en vivo es la superficie más fácil de dejar abierta sin querer. El struct no
+    tiene dónde ponerlo, y hay un test por reflexión que rompe el día que alguien le agregue un
+    campo que sí podría.
+- **El panel local se enlaza al cerebro central por un relay** (`musubi dashboard --central <url>`,
+  o `$MUSUBI_CENTRAL_URL` + `$MUSUBI_TOKEN`). El navegador nunca ve el token: el relay lo guarda,
+  abre **una** conexión al cerebro y la reparte entre las pestañas. Sin eso habría que mandarle el
+  bearer al navegador —donde queda en el historial si va por query string, y sirve para llamar a
+  todo el cerebro, no sólo al feed— y además abrirle CORS al cerebro. El riel dice siempre en qué
+  estado está el enlace (`conectado` / `caído` / `apagado`, con el motivo): con ~23 eventos de
+  trabajo por hora, «hace veinte minutos que no pasa nada» es un estado **normal** y se ve idéntico
+  a un enlace cortado.
+  El panel apunta al central y no a la base local a propósito: la base local no tiene qué mostrar
+  —1 recall en 24 horas— ni puede decir de quién fue nada, porque `principal` está vacío en sus
+  130.471 filas.
 - **Medidor de frame opt-in con `?stats=1`.** Reporta fps, ms de frame y el corte entre *mis bucles*
   (JS optimizable) y *render+bloom* (GPU), más draw calls, triángulos y dpr. Existe porque «se siente
   pesado» no es una medición, y porque `renderer.info.reset()` ya se llamaba todos los frames sin que

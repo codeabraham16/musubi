@@ -124,6 +124,12 @@ type McpServer struct {
 	// ledger es el LEDGER DE USO (F0): amortigua las invocaciones y las baja por lote. nil ⇒
 	// no se registra nada y el servidor se comporta como antes de la fase.
 	ledger *usageLedger
+	// live es el FEED EN VIVO (livefeed.go): reparte cada invocacion a los paneles conectados
+	// en el instante en que termina. Va SIEMPRE construido y no detras de una option: sin
+	// suscriptores publish() es tomar un mutex y escribir una posicion de un array, y una
+	// telemetria que hay que acordarse de encender termina apagada (la misma leccion que dejo
+	// el ledger de uso, cuyos contadores en memoria murieron dos meses sin que nadie lo notara).
+	live *liveFeed
 	// ledgerRetentionDays es la ventana que conserva el ledger; la purga cuelga del
 	// mantenimiento que ya existe.
 	ledgerRetentionDays int
@@ -298,6 +304,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		pipeline:    config.Default().Pipeline,
 		multiagent:  config.Default().MultiAgent,
 		metrics:     &serverMetrics{},
+		live:        newLiveFeed(),
 	}
 	for _, opt := range opts {
 		opt(s)
