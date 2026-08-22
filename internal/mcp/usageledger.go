@@ -196,6 +196,12 @@ func (l *usageLedger) pendientes() int {
 // para que los tres caminos de salida —ok/error, rechazo por rol y rechazo por cuota— usen
 // exactamente la misma forma de registrar y no se pueda olvidar un campo en uno de ellos.
 func (s *McpServer) registrarUso(ctx context.Context, tool, outcome string, d time.Duration) {
+	// El FEED EN VIVO va PRIMERO y fuera del guard del ledger: son dos consumidores distintos de
+	// la misma señal —el presente y la historia— y apagar la historia no puede apagar el presente.
+	// Con el orden al revés, `usage_ledger.enabled: false` dejaba el panel en vivo mudo sin que
+	// nada lo dijera.
+	s.publicarUso(ctx, tool, outcome, d, time.Now())
+
 	if s.ledger == nil {
 		return
 	}

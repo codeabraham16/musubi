@@ -21,7 +21,7 @@ func TestDashboardSnapshotEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := dashboardHandler(engine, 8000, "proyecto-demo")
+	h := dashboardHandler(engine, 8000, "proyecto-demo", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
 
@@ -53,7 +53,7 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 	}
 	defer engine.Close()
 
-	h := dashboardHandler(engine, 0, "")
+	h := dashboardHandler(engine, 0, "", nil)
 
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -123,7 +123,7 @@ func TestDashboardCodeLens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := dashboardHandler(engine, 0, "demo")
+	h := dashboardHandler(engine, 0, "demo", nil)
 
 	// El snapshot trae el grafo de código.
 	rr := httptest.NewRecorder()
@@ -185,7 +185,7 @@ func TestDashboardGrafoSinTope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h := dashboardHandler(engine, 8000, "demo")
+	h := dashboardHandler(engine, 8000, "demo", nil)
 
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/graph?lens=memory", nil))
@@ -239,7 +239,7 @@ func TestDashboardPulseEsChico(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h := dashboardHandler(engine, 8000, "demo")
+	h := dashboardHandler(engine, 8000, "demo", nil)
 
 	rp := httptest.NewRecorder()
 	h.ServeHTTP(rp, httptest.NewRequest(http.MethodGet, "/api/pulse", nil))

@@ -41,6 +41,20 @@ func runDashboard(args []string) {
 		os.Exit(1)
 	}
 
+	// Enlace con el cerebro central para el RIEL EN VIVO. Es OPCIONAL: sin URL o sin token el
+	// panel sigue funcionando igual y el riel dice por que esta apagado, en vez de fallar el
+	// arranque. El token se lee de una variable de entorno y NUNCA de un flag: un flag queda en la
+	// lista de procesos y en el historial del shell.
+	central := parseFlagValue(args, "--central")
+	if central == "" {
+		central = strings.TrimSpace(os.Getenv("MUSUBI_CENTRAL_URL"))
+	}
+	tokenEnv := parseFlagValue(args, "--token-env")
+	if tokenEnv == "" {
+		tokenEnv = "MUSUBI_TOKEN"
+	}
+	relay := nuevoRelay(central, os.Getenv(tokenEnv))
+
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
 		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
@@ -65,12 +79,17 @@ func runDashboard(args []string) {
 	}
 
 	srv := &http.Server{
-		Handler:           dashboardHandler(engine, cfg.Memory.SessionTokenBudget, projectLabel(root)),
+		Handler:           dashboardHandler(engine, cfg.Memory.SessionTokenBudget, projectLabel(root), relay),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	url := "http://" + addr + "/"
 	fmt.Printf("Musubi dashboard en %s  (solo lectura · loopback · 0 tokens)\n", url)
+	if relay != nil {
+		fmt.Printf("Riel en vivo: enlazado a %s\n", relay.host())
+	} else {
+		fmt.Printf("Riel en vivo: apagado (%s)\n", motivoSinRelay(central, tokenEnv))
+	}
 	fmt.Println("Ctrl+C para detener.")
 	if !hasFlag(args, "--no-open") {
 		openBrowser(url)
@@ -78,6 +97,9 @@ func runDashboard(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if relay != nil {
+		go relay.run(ctx)
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -93,8 +115,24 @@ func runDashboard(args []string) {
 
 // dashboardHandler arma el router: el HTML embebido en / y el snapshot JSON en vivo
 // en /api/snapshot. Aislado para poder testearlo con httptest.
-func dashboardHandler(engine *memory.DbEngine, budget int, project string) http.Handler {
+func dashboardHandler(engine *memory.DbEngine, budget int, project string, relay *relayVivo) http.Handler {
 	mux := http.NewServeMux()
+
+	// /api/stream - el RIEL EN VIVO. Lo que se ve aca NO sale de la base local: sale del cerebro
+	// central, por relay (ver livestream.go).
+	//
+	// POR QUE NO DE LA BASE LOCAL, que es lo que este panel lee para todo lo demas. Medido sobre
+	// 24 h de la base de este repo: 97.889 invocaciones, de las cuales 97.815 (99,92%) fueron tres
+	// tools de sondeo, y el trabajo real fueron 4 save_observation y 1 recall. Un riel contra eso
+	// muestra un rio seco con tres bombas golpeando. En el cerebro central, las mismas 24 h dan 29
+	// tools distintas y ~550 eventos de trabajo de seis terminales - y con `principal`, asi que se
+	// puede decir QUIEN. La base local no tiene ese dato: esta vacio en las 130.471 filas.
+	if relay != nil {
+		mux.HandleFunc("/api/stream", relay.handlerStream())
+	} else {
+		mux.HandleFunc("/api/stream", handlerStreamApagado(
+			"falta el enlace al cerebro central: exporta MUSUBI_CENTRAL_URL y MUSUBI_TOKEN, o pasa --central <url>"))
+	}
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
 	bundle, _ := dashboardAssets.ReadFile("assets/dashboard.bundle.js")
 
@@ -298,4 +336,17 @@ type dashboardPulse struct {
 	Tokens        memory.BudgetStatus   `json:"tokens"`
 	Recent        []memory.ObsCard      `json:"recent"`
 	Orchestration exportOrchestration   `json:"orchestration"`
+}
+
+// motivoSinRelay explica en una linea por que el riel quedo apagado. Decir "apagado" a secas
+// obliga a adivinar entre dos causas distintas con arreglos distintos.
+func motivoSinRelay(central, tokenEnv string) string {
+	falta := []string{}
+	if strings.TrimSpace(central) == "" {
+		falta = append(falta, "$MUSUBI_CENTRAL_URL / --central")
+	}
+	if strings.TrimSpace(os.Getenv(tokenEnv)) == "" {
+		falta = append(falta, "$"+tokenEnv)
+	}
+	return "falta " + strings.Join(falta, " y ")
 }

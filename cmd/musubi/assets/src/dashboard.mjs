@@ -614,6 +614,147 @@ function renderHUD(d){
   $('recent').innerHTML=rec.length?rec.slice(0,6).map(o=>`<div class="item"><span class="tk">${esc(o.topic_key)}</span><span class="gg">${esc(o.gist)}</span></div>`).join(''):'<div class="empty">memoria en formación</div>';
 }
 
+/* ---------- RIEL EN VIVO ----------
+   Lo que se ve aca NO sale de la base local: llega por SSE desde el cerebro central, a traves del
+   relay del panel (cmd/musubi/livestream.go). El motivo esta medido: en 24 h, la base local tuvo
+   97.889 invocaciones de las cuales 97.815 (99,92%) fueron tres tools de sondeo, y el trabajo real
+   fueron 4 save_observation y 1 recall. El central, en las mismas 24 h, tuvo 29 tools distintas y
+   ~550 eventos de trabajo de seis terminales, con `principal` para decir de quien fue cada uno.
+
+   EL GRAFO NO SE PINTA CON ESTOS EVENTOS, y es deliberado. El grafo dibuja la memoria LOCAL; un
+   evento del central encendiendo una neurona local seria inventar. Lo que si hace un evento es
+   PEDIR UN PULSO YA: si de verdad cambio algo local, los deltas reales lo encienden; si no cambio
+   nada, no se enciende nada. La animacion sigue saliendo de datos medidos, nunca del feed. */
+const VIVO={ nuevos:[], vistos:new Set(), sondeos:[], enlace:{estado:'conectando'} };
+const VIVO_MAX=40;          // filas en el riel
+const VIVO_DEDUPE=600;      // claves recordadas para no repetir al reconectar
+
+// El backlog se re-manda en cada reconexion, asi que hay que descartar lo ya visto. La clave
+// incluye la hora porque `seq` reinicia si el cerebro se reinicia, y dos eventos distintos con el
+// mismo seq quedarian pisados.
+function vistoYa(e){
+  const k=(e.seq||0)+'|'+(e.at||'');
+  if(VIVO.vistos.has(k)) return true;
+  VIVO.vistos.add(k);
+  if(VIVO.vistos.size>VIVO_DEDUPE){ VIVO.vistos=new Set([...VIVO.vistos].slice(-VIVO_MAX*2)); }
+  return false;
+}
+
+let _pollPedido=0;
+// refrescarYa: adelanta el pulso cuando el cerebro dice que paso algo, en vez de esperar los 5 s
+// del sondeo. Con techo: una rafaga de eventos pide UN pulso, no uno por evento.
+function refrescarYa(){
+  const ahora=performance.now();
+  if(ahora-_pollPedido<2000) return;
+  _pollPedido=ahora;
+  setTimeout(()=>{ poll().catch(()=>{}); }, 350);   // margen para que la escritura ya este visible
+}
+
+function anotarEvento(e){
+  if(!e || vistoYa(e)) return;
+  if(e.kind==='sondeo'){ VIVO.sondeos.push(Date.now()); return; }
+  if(e.perdidos>0) VIVO.nuevos.push({hueco:e.perdidos});
+  VIVO.nuevos.push(e);
+  // El grafo de codigo SI cambia de verdad con esto: se invalida para que se vuelva a bajar.
+  if(e.tool==='musubi_codegraph_push') GRAPH.code=null;
+  refrescarYa();
+}
+
+// hace: la antiguedad en la forma mas corta que sigue siendo exacta.
+function hace(iso){
+  const t=Date.parse(iso); if(!isFinite(t)) return '';
+  const s=Math.max(0,Math.round((Date.now()-t)/1000));
+  if(s<60) return s+'s';
+  const m=Math.round(s/60); if(m<60) return m+'m';
+  return Math.round(m/60)+'h';
+}
+// El prefijo `musubi_` esta en las 53 tools: repetirlo 40 veces gasta ancho de columna sin decir nada.
+const cortaTool=t=>String(t||'').replace(/^musubi_/,'');
+
+// nodoEvento arma UNA fila. El nodo se guarda la hora en un data- para poder refrescar despues
+// solo el texto de la antiguedad, sin volver a armar nada.
+function nodoEvento(e){
+  const d=document.createElement('div');
+  if(e.hueco){ d.className='ev hueco';
+    d.innerHTML=`<span class="s"></span><span class="t">se perdieron ${e.hueco} eventos</span>`;
+    return d; }
+  d.className='ev'+(e.outcome&&e.outcome!=='ok'?' err':'');
+  d.dataset.at=e.at||'';
+  d.innerHTML=`<span class="s"></span><span class="t">${esc(cortaTool(e.tool))}</span>`+
+    (e.principal?`<span class="q">${esc(e.principal)}</span>`:'')+
+    `<span class="d">${hace(e.at)}</span>`;
+  return d;
+}
+
+// pintarVivo INSERTA las filas nuevas; no reconstruye el riel.
+//
+// Antes reasignaba innerHTML entero, y eso se pagaba dos veces por segundo de dos formas visibles:
+// el contenedor quedaba un instante sin hijos, su alto colapsaba, y la linea del separador de
+// abajo saltaba hacia arriba y volvia — un parpadeo gris, una vez por segundo; y la animacion de
+// entrada se re-disparaba en TODAS las filas a la vez, no solo en la que acababa de llegar.
+// Insertando, la animacion queda donde tiene sentido: en lo que de verdad es nuevo.
+function pintarVivo(){
+  const cont=$('vivo'); if(!cont) return;
+  if(VIVO.nuevos.length){
+    const vacio=cont.querySelector('.empty'); if(vacio) vacio.remove();
+    // Llegan de mas viejo a mas nuevo; cada uno va al frente, asi el ultimo queda arriba.
+    for(const e of VIVO.nuevos) cont.insertBefore(nodoEvento(e), cont.firstChild);
+    VIVO.nuevos.length=0;
+    while(cont.children.length>VIVO_MAX) cont.removeChild(cont.lastChild);
+  }
+  if(!cont.children.length) cont.innerHTML='<div class="empty">sin trabajo todavia</div>';
+  pintarEnlace();
+}
+
+function pintarEnlace(){
+  const en=$('enlace'); if(!en) return; const s=VIVO.enlace;
+  const cls='enl'+(s.estado==='conectado'?' ok':(s.estado==='conectando'?'':' mal'));
+  const txt = s.estado==='conectado' ? (s.destino||'enlazado')
+    : s.estado==='conectando' ? 'conectando…'
+    : s.estado==='apagado' ? 'apagado' : 'sin enlace';
+  // Escribir solo lo que cambio: asignar el mismo textContent igual invalida el layout del nodo.
+  if(en.className!==cls) en.className=cls;
+  if(en.textContent!==txt) en.textContent=txt;
+  const tt=s.detalle||''; if(en.title!==tt) en.title=tt;
+}
+
+// tictac corre a 1 Hz y NO toca la estructura: reescribe el texto de la antiguedad solo en las
+// filas donde de verdad cambio, y el contador de sondeo. Con la antiguedad en unidades gruesas
+// (s -> m -> h), la enorme mayoria de los segundos no cambia ni una fila.
+function tictac(){
+  const cont=$('vivo');
+  if(cont) for(const n of cont.children){
+    const at=n.dataset&&n.dataset.at; if(!at) continue;
+    const d=n.lastElementChild; if(!d||!d.classList.contains('d')) continue;
+    const t=hace(at); if(d.textContent!==t) d.textContent=t;
+  }
+  // El sondeo, agregado: cuantos por minuto. Es la unica forma honesta de mostrar el 99% del
+  // trafico sin que tape el 1% que importa. Ventana rodante, por eso se recalcula cada segundo.
+  const corte=Date.now()-60000;
+  VIVO.sondeos=VIVO.sondeos.filter(t=>t>corte);
+  const lat=$('latido'), txt=$('latidoTxt');
+  if(lat&&txt){ const n=VIVO.sondeos.length;
+    const s=n>0?`sondeo · ${n}/min`:'sin sondeo';
+    lat.classList.toggle('vive', n>0);
+    if(txt.textContent!==s) txt.textContent=s;
+  }
+}
+setInterval(tictac, 1000);
+
+function conectarVivo(){
+  // EventSource y no fetch: el stream local es same-origin sobre loopback y no lleva credencial
+  // (el bearer se queda en el relay), asi que se puede usar el que reconecta solo. El del CEREBRO
+  // sí necesita header, y por eso ese lo abre el relay con fetch — ver livestream.go.
+  let es;
+  try{ es=new EventSource('/api/stream'); }catch(_){ return; }
+  es.addEventListener('backlog', m=>{ try{ (JSON.parse(m.data)||[]).forEach(anotarEvento); }catch(_){} pintarVivo(); });
+  es.addEventListener('uso', m=>{ try{ anotarEvento(JSON.parse(m.data)); }catch(_){} pintarVivo(); });
+  es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); pintarVivo(); }catch(_){} });
+  es.onerror=()=>{ // EventSource reconecta solo; lo unico que hace falta es no mentir mientras tanto
+    if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; pintarVivo(); }
+  };
+}
+
 /* ---------- resize / poll / init ---------- */
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
   renderer.getDrawingBufferSize(_dbs); composer.setSize(_dbs.x,_dbs.y); controls.handleResize(); }
@@ -722,4 +863,5 @@ function applyLensLabels(){ const code=lens==='code';
 const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>setLens(lens==='code'?'memory':'code'));
 
 poll(); setInterval(poll,5000);
+conectarVivo();
 requestAnimationFrame(animate);

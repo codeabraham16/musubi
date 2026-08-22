@@ -74,6 +74,32 @@ body{
 .howto span{font-size:10.5px; color:var(--dim); line-height:1.3;}
 .howto b{color:var(--muted); font-weight:600;}
 .list{display:flex; flex-direction:column; gap:8px; max-height:210px; overflow:auto;}
+/* Riel en vivo. Densidad alta a proposito: son eventos, no lectura; lo que importa es el ritmo. */
+/* scrollbar-gutter reserva el canal SIEMPRE. Sin esto, la fila 20 hace aparecer la barra, el
+   ancho util se achica de golpe y todo el texto del riel se re-acomoda de costado. */
+.vivo{gap:3px; max-height:264px; scrollbar-gutter:stable;}
+.ev{display:flex; align-items:baseline; gap:7px; font-family:var(--mono); font-size:10.5px;
+  line-height:1.5; color:var(--muted); padding:1px 0; animation:entra .32s cubic-bezier(.2,.8,.2,1);}
+@keyframes entra{from{opacity:0; transform:translateX(7px);} to{opacity:1; transform:none;}}
+.ev .s{flex:none; width:5px; height:5px; border-radius:50%; background:var(--teal);
+  box-shadow:0 0 7px currentColor; color:var(--teal);}
+.ev.err .s{background:var(--red); color:var(--red);}
+.ev .t{flex:1; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.ev .q{flex:none; color:var(--purple); opacity:.9; max-width:88px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;}
+/* min-width + tabular: "9s" -> "10s" no puede cambiar el ancho de la columna. Con ancho
+   variable, cada segundo el texto de la izquierda se corria un pixel. */
+.ev .d{flex:none; min-width:27px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums;}
+.ev.hueco{color:var(--amber); font-style:italic;}
+/* El sondeo NO va como filas: son el 99% del trafico y taparia todo lo demas. Va como pulso. */
+.latido{display:flex; align-items:center; gap:7px; margin-top:9px; padding-top:8px;
+  border-top:1px solid var(--glass-line); font-family:var(--mono); font-size:9.5px; color:var(--dim);}
+.latido .s{width:5px; height:5px; border-radius:50%; background:var(--slate); color:var(--slate);}
+.latido.vive .s{background:var(--teal); color:var(--teal); box-shadow:0 0 7px currentColor;
+  animation:blink 2.4s ease-in-out infinite;}
+.enl{margin-left:auto; font-family:var(--mono); font-size:9px; letter-spacing:.4px; font-weight:400;
+  text-transform:none; color:var(--dim);}
+.enl.ok{color:var(--teal);} .enl.mal{color:var(--amber);}
 .list::-webkit-scrollbar{width:5px;} .list::-webkit-scrollbar-thumb{background:var(--glass-hi); border-radius:9px;}
 .item{font-size:11.5px; line-height:1.35;}
 .item .tk{font-family:var(--mono); font-size:9.5px; letter-spacing:.4px; color:var(--teal); display:block; margin-bottom:1px; opacity:.85;}
@@ -180,6 +206,11 @@ body{
   </div>
 
   <div class="rail r">
+    <div class="panel">
+      <h2><span class="ic" style="background:var(--teal)"></span>En vivo<span class="enl" id="enlace">…</span></h2>
+      <div class="list vivo" id="vivo"><div class="empty">…</div></div>
+      <div class="latido" id="latido"><span class="s"></span><span id="latidoTxt">sin sondeo</span></div>
+    </div>
     <div class="panel">
       <h2><span class="ic" style="background:var(--green)"></span>Salud</h2>
       <div class="checks" id="checks"><div class="empty">…</div></div>
