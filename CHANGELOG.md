@@ -7,6 +7,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El panel entró al CI: hasta ahora ningún job tocaba node.** El frontend del dashboard viajaba
+  sin red de contención, y el fallo que eso deja pasar es de los caros porque es silencioso: se
+  edita un `.mjs`, se olvida `npm run build`, y el binario embebe el bundle viejo. Compila,
+  arranca, y muestra otra cosa. El job `panel` reconstruye y exige que no cambie **ni un byte**.
+  - **La física del layout se separó a `src/layout.mjs`** para poder probarla. `dashboard.mjs`
+    arranca WebGL, cuelga listeners de `document` y abre un `EventSource` en su nivel superior:
+    importarlo fuera de un navegador es imposible, así que la única forma de probar el asentado era
+    recortar funciones del fuente con un script — frágil e imposible de correr en CI.
+  - **El refactor es idéntico bit a bit**, verificado contra la física commiteada en tres escalas
+    (600/3.678/8.362 nodos, incluida la que va por el camino exacto O(n²)) y en **dos geometrías**:
+    esférica y elipsoidal. La elipsoide no es decorativa — con `rx=ry=rz` un intercambio de radios
+    al extraer `clampBrain` sería invisible. **Peor desvío 0,00e+0** en los seis casos.
+  - **Cinco invariantes en `src/layout.test.mjs`**, cada uno verificado fallando bajo un sabotaje
+    que ataca lo que ese invariante declara: que rebanar la iteración no cambia el resultado, que
+    con presupuesto 0 igual se avanza (si el chequeo de tiempo fuera antes del trozo, el asentado
+    no terminaría nunca — es un cuelgue, no una lentitud), que `settleStart` reinicia la pasada en
+    curso (`bhGrow` reasigna los arrays del árbol), que el trabajo es proporcional al cambio, y que
+    `settleTick` no miente sobre haber terminado.
+  - Las versiones de `package.json` pasan a **exactas**: `three` se empaqueta DENTRO del bundle y
+    `esbuild` decide cómo se minifica, así que un `^` haría fallar la comparación de bytes al
+    publicarse cualquier parche aguas arriba, sin que nadie hubiera tocado el panel. Y `esbuild`
+    quedó en **0.28.1**, que es la versión que realmente construye el bundle commiteado: el
+    manifiesto declaraba `^0.24.2`, que nunca lo había construido.
+
 ### Fixed
 - **El panel dejaba de responder mientras acomodaba el grafo, y una sola memoria nueva lo
   reacomodaba entero.** Dos causas distintas, las dos medidas. La primera es un defecto de la

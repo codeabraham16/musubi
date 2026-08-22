@@ -250,3 +250,46 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           "$(go env GOPATH)/bin/gosec" -quiet -severity=medium -confidence=high \
             -exclude=G104,G202,G204,G301,G302,G306,G304,G702,G703,G704 ./...
+
+  # ---------------------------------------------------------------------------------------------
+  # EL PANEL. Hasta ahora NINGÚN job tocaba node, así que el frontend del dashboard viajaba sin red
+  # de contención: el bundle que consume go:embed se generaba a mano y nadie comprobaba que
+  # correspondiera al fuente. Ese es el fallo caro y silencioso — se edita `.mjs`, se olvida
+  # `npm run build`, y el binario embebe la versión vieja. Compila, arranca, y muestra otra cosa.
+  #
+  # Las versiones de package.json van EXACTAS por este job: three se empaqueta DENTRO del bundle y
+  # esbuild decide cómo se minifica, así que un `^` haría que la comparación de bytes fallara al
+  # publicarse cualquier parche aguas arriba, sin que nadie hubiera tocado el panel.
+  panel:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cmd/musubi/assets
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      # `npm install` y no `npm ci`: package-lock.json está en .gitignore a propósito (ver el
+      # .gitignore de assets). Con las dos dependencias pinneadas exacto, install ya es
+      # determinista para lo único que afecta la salida.
+      - name: Instalar el toolchain del panel
+        run: npm install --no-audit --no-fund
+
+      # Los invariantes de la física del layout: que rebanar la iteración no cambie el resultado,
+      # que con presupuesto 0 igual se avance, y que arrancar un asentado no arrastre el anterior.
+      - name: Invariantes del layout
+        run: npm test
+
+      # LA VALLA QUE FALTABA. Reconstruye y exige que no cambie ni un byte: si difiere, el bundle
+      # commiteado no corresponde al fuente commiteado.
+      - name: El bundle corresponde al fuente
+        run: |
+          npm run build
+          if ! git diff --exit-code -- dashboard.bundle.js; then
+            echo "::error::dashboard.bundle.js no corresponde a src/. Corré 'npm run build' en cmd/musubi/assets y commiteá el bundle."
+            exit 1
+          fi
