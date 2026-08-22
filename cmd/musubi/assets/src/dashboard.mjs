@@ -31,7 +31,16 @@ function randInBrain(){ for(let i=0;i<80;i++){ const x=(Math.random()*2-1)*rx,y=
 function clampBrain(n){ const q=(n.x*n.x)/(rx*rx)+(n.y*n.y)/(ry*ry)+(n.z*n.z)/(rz*rz); if(q>1){ const s=1/Math.sqrt(q); n.x*=s; n.y*=s; n.z*=s; n.vx*=0.4; n.vy*=0.4; n.vz*=0.4; } }
 
 /* ---------- estado del grafo (fuente de verdad = snapshot) ---------- */
-let NEURONS=[], SYN=[], POS=new Map();
+let NEURONS=[], SYN=[];
+// POS guarda las posiciones YA ASENTADAS para sembrar el proximo build y no re-asentar.
+// Va SEPARADO POR LENTE: con un solo mapa, al pasar a codigo las claves guardadas eran las de
+// memoria, TODOS los nodos salian `_new`, y el layout se recalculaba entero en cada toggle.
+// Medido: settle(55) sobre 6113 nodos = 3.037 ms de hilo principal bloqueado, cada vez.
+const POS={memory:new Map(), code:new Map()};
+// ASENTADO: si cambias de lente A MITAD del asentado, POS ya quedo sembrado con posiciones a
+// medio ordenar y la proxima vez `changed` daria false -> el grafo se quedaria desordenado
+// para siempre. Esta bandera es la que dice si esa lente termino de asentarse de verdad.
+const ASENTADO={memory:false, code:false};
 let prevStats=new Map(), prevSyn=new Set(), thinking=0, actInc=new Float32Array(0), bestInc=new Float32Array(0), akSrc=new Int8Array(0);
 let motion=true, needsRebuild=false;
 let lens='memory';   // lente activa (memory|code); los datos viven en GRAPH/PULSE (ver más abajo)
@@ -40,7 +49,7 @@ let lens='memory';   // lente activa (memory|code); los datos viven en GRAPH/PUL
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
 // que la escena three recree las mallas cuando cambian nodos/aristas.
 function buildGraph(brain){
-  const prev=POS, ns0=brain.neurons||[];
+  const prev=POS.memory, ns0=brain.neurons||[];
   const N0=240; growth=Math.max(0.85, Math.min(2.2, Math.cbrt((ns0.length||1)/N0))); applyScale();
   const counts={}; ns0.forEach(n=>counts[n.domain]=(counts[n.domain]||0)+1);
   const doms=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
@@ -49,7 +58,8 @@ function buildGraph(brain){
     const k=i+0.5, phi=Math.acos(1-2*k/Math.max(doms.length,1)), th=Math.PI*(1+Math.sqrt(5))*k;
     DOMAINS.push({name:d,color:col,count:counts[d], ax:Math.cos(th)*Math.sin(phi)*rx*0.52, ay:Math.cos(phi)*ry*0.52, az:Math.sin(th)*Math.sin(phi)*rz*0.52}); });
 
-  const prevIds=new Set(NEURONS.map(n=>n.id));
+  // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
+  const prevIds=new Set(prev.keys());
   NEURONS=ns0.map(n=>{ const p=prev.get(n.id); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
     const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.importance,0))*0.72+Math.log(1+(n.heat||0))*0.38)); // tamaño del prototipo (más chico)
     const rec=Math.max(0.10, Math.min(1, 1-(n.recency_days||0)/45));
@@ -77,9 +87,11 @@ function buildGraph(brain){
   prevSyn=new Set(SYN.map(s=>s.source+'|'+s.target));
 
   const changed=NEURONS.some(n=>n._new)||NEURONS.length!==prevIds.size;
-  if(changed) settle(iterSettle(NEURONS.length));
-  POS=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
-  if(changed) needsRebuild=true;   // solo recrear mallas si CAMBIÓ la topología (evita el parpadeo cada poll)
+  // El asentado ya NO congela: se reparte en tramos de pocos ms por frame (ver settleTick).
+  // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
+  // terminar de asentar, que es cuando las posiciones son las buenas.
+  POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
+  if(changed || !ASENTADO.memory){ settleStart(iterSettle(NEURONS.length),'memory'); needsRebuild=true; }
 }
 
 // buildCodeGraph: la LENTE CÓDIGO (Track 20). Mapea el grafo de código a los MISMOS campos que
@@ -88,7 +100,7 @@ function buildGraph(brain){
 // tipadas por kind (CALLS/IMPORTS/CONTAINS). Reposo puro — sin sistema de actividad de memoria; el
 // "porqué" (EXPLICADO_POR) se resuelve on-hover contra /api/explained.
 function buildCodeGraph(code){
-  const prev=POS, ns0=code.nodes||[];
+  const prev=POS.code, ns0=code.nodes||[];
   const N0=240; growth=Math.max(0.85, Math.min(2.2, Math.cbrt((ns0.length||1)/N0))); applyScale();
   const counts={}; ns0.forEach(n=>counts[n.module]=(counts[n.module]||0)+1);
   const mods=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
@@ -96,7 +108,8 @@ function buildCodeGraph(code){
   mods.forEach((d,i)=>{ const col=DOMPAL[i%DOMPAL.length]; DOMCOL.set(d,col); dIdx.set(d,i);
     DOMAINS.push({name:d,color:col,count:counts[d]}); });
 
-  const prevIds=new Set(NEURONS.map(n=>n.id));
+  // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
+  const prevIds=new Set(prev.keys());
   NEURONS=ns0.map(n=>{ const p=prev.get(n.key); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
     const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.degree||0,0))*0.62)); // tamaño = centralidad
     return { id:n.key, topic:n.name||n.key, domain:n.module, mem_type:n.kind, heat:n.degree||0,
@@ -113,9 +126,8 @@ function buildCodeGraph(code){
   prevStats=new Map(); prevSyn=new Set(); thinking=0;   // código = reposo puro (sin diff de actividad)
 
   const changed=NEURONS.some(n=>n._new)||NEURONS.length!==prevIds.size;
-  if(changed) settle(iterSettle(NEURONS.length));
-  POS=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
-  if(changed) needsRebuild=true;
+  POS.code=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
+  if(changed || !ASENTADO.code){ settleStart(iterSettle(NEURONS.length),'code'); needsRebuild=true; }
 }
 
 // iterSettle: cuántas iteraciones de física corre el layout según el tamaño. Es una sola
@@ -194,12 +206,40 @@ function bhForce(root,i,px,py,pz,cut2,charge,out){
 }
 const _bhOut=new Float64Array(3);
 
-function settle(iters){ const n=NEURONS.length; if(!n) return;
-  // SIN atractores de dominio (esparce como el prototipo) · más repulsión + resortes cortos = clusters conectados juntos, resto separado
-  const cut=rx*0.85, cut2=cut*cut, charge=rx*rx*0.06, rest=rx*0.044, kS=0.09, kC=0.0042, damp=0.86; // resortes más cortos+fuertes: conectadas más juntas
-  const bh=n>=BH_MIN;
-  if(bh) bhGrow(Math.max(1024, n*4));
-  for(let it=0; it<iters; it++){
+/* ---------- ASENTADO POR TRAMOS ----------
+   Antes era un `for` sincronico de N iteraciones. Medido con las funciones reales: sobre el grafo
+   de codigo del central (8362 nodos, 18073 aristas) son 3.952 ms con el hilo principal BLOQUEADO.
+   Durante ese rato requestAnimationFrame no corre, asi que no es que baje el framerate: NO HAY
+   FRAMES. Ese era el "se va toda la animacion al tocar codigo".
+   Ahora settleStart() arma el estado, settleStep() corre UNA iteracion, y settleTick() consume
+   un presupuesto de milisegundos por frame. El grafo se ve organizarse en vez de congelarse. */
+let _setQ=0, _setLens='memory', _setCut2=0, _setCharge=0, _setRest=0, _setBH=false;
+const _setKS=0.09, _setKC=0.0042, _setDamp=0.86;   // resortes cortos+fuertes: conectadas mas juntas
+
+function settleStart(iters, cual){
+  const n=NEURONS.length; if(!n){ _setQ=0; return; }
+  // SIN atractores de dominio (esparce como el prototipo) · más repulsión + resortes cortos
+  const cut=rx*0.85; _setCut2=cut*cut; _setCharge=rx*rx*0.06; _setRest=rx*0.044;
+  _setBH = n>=BH_MIN; if(_setBH) bhGrow(Math.max(1024, n*4));
+  _setLens = cual || lens; _setQ = iters; ASENTADO[_setLens]=false;
+}
+
+// settleTick: corre iteraciones hasta agotar el presupuesto. Devuelve true si movio algo, para que
+// animate() sepa que tiene que refrescar las posiciones base de las instancias.
+function settleTick(ms){
+  if(_setQ<=0) return false;
+  const t0=performance.now();
+  do { settleStep(); _setQ--; } while(_setQ>0 && performance.now()-t0<ms);
+  if(_setQ===0){   // ya asentado: esta es la posicion que vale la pena recordar
+    POS[_setLens]=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
+    ASENTADO[_setLens]=true;
+  }
+  return true;
+}
+
+function settleStep(){ const n=NEURONS.length; if(!n) return;
+  const cut2=_setCut2, charge=_setCharge, rest=_setRest, kS=_setKS, kC=_setKC, damp=_setDamp, bh=_setBH;
+  {
     if(bh){
       let half=1; for(const a of NEURONS){ const m=Math.max(Math.abs(a.x),Math.abs(a.y),Math.abs(a.z)); if(m>half) half=m; }
       bhUsed=0; const root=bhCell(0,0,0,half*1.05);
@@ -221,6 +261,23 @@ function settle(iters){ const n=NEURONS.length; if(!n) return;
       const s2=a.vx*a.vx+a.vy*a.vy+a.vz*a.vz; if(s2>1600){ const s=40/Math.sqrt(s2); a.vx*=s;a.vy*=s;a.vz*=s; }
       a.x+=a.vx; a.y+=a.vy; a.z+=a.vz; clampBrain(a); } }
 }
+
+// refrescarBase: rebuildMeshes fotografia n.x/y/z en BX/BY/BZ. Mientras el layout se asienta esas
+// posiciones cambian, asi que hay que re-fotografiarlas o el dibujo se queda en el primer frame.
+//
+// Y con `k<1` lo DIBUJADO persigue a la fisica en vez de saltar con ella. Importa porque el layout
+// es violento de verdad al principio: arranca con los nodos al azar en todo el volumen y el clamp
+// permite 40 unidades por iteracion sobre un radio de 118 — un tercio del cerebro de un salto.
+// Antes eso no se veia porque pasaba entero adentro del congelamiento; ahora que se reparte en
+// frames, sin suavizar se ve como si el grafo se volviera loco. La FISICA no cambia: sigue
+// corriendo exacta, sobre n.x/n.y/n.z. Lo unico que se amortigua es el punto donde se dibuja.
+//
+// Al terminar de asentar se copia exacto (k=1). Ese salto final es invisible: con damping 0.86 por
+// iteracion las velocidades ya son ~0, asi que lo dibujado y la fisica estan practicamente encima.
+function refrescarBase(k){ if(!BX) return; const m=Math.min(N, NEURONS.length);
+  if(k>=1){ for(let i=0;i<m;i++){ const n=NEURONS[i]; BX[i]=n.x; BY[i]=n.y; BZ[i]=n.z; } return; }
+  for(let i=0;i<m;i++){ const n=NEURONS[i];
+    BX[i]+=(n.x-BX[i])*k; BY[i]+=(n.y-BY[i])*k; BZ[i]+=(n.z-BZ[i])*k; } }
 
 // spread: propaga `act` por la adyacencia REAL de sinapsis (el vecino que se despierta adopta el ak
 // del que lo encendió). Topología real; decay estético.
@@ -373,8 +430,29 @@ async function fetchExplain(n){ if(n._exp!==undefined || n._expLoading) return; 
 
 /* ---------- loop ---------- */
 const AMP=2.4;
+/* ---------- MEDIDOR (opt-in con ?stats=1) ----------
+   Existe porque "se siente pesado" no es una medicion. `renderer.info.reset()` ya se llamaba
+   todos los frames y NADIE leia renderer.info: la mitad del plumbing estaba puesta.
+   Separa lo que puedo optimizar en JS (los dos bucles) de lo que cuesta la GPU (draw + bloom +
+   SMAA), que es la parte que no se puede medir desde headless porque SwiftShader se cuelga. */
+const STATS = new URLSearchParams(location.search).has('stats');
+let _statBox=null, _acumFrame=0, _acumJS=0, _frames=0, _ultStat=0;
+if(STATS){
+  _statBox=document.createElement('div');
+  _statBox.style.cssText='position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:99;'+
+    'font:11px/1.5 ui-monospace,Menlo,monospace;color:#9fe8ff;background:rgba(6,10,18,.86);'+
+    'border:1px solid #23405c;border-radius:7px;padding:7px 12px;white-space:pre;pointer-events:none;'+
+    'letter-spacing:.02em;text-align:center';
+  _statBox.textContent='midiendo…';
+  document.body.appendChild(_statBox);
+}
+
 function animate(){ requestAnimationFrame(animate); renderer.info.reset();
+  const _t0 = STATS ? performance.now() : 0;
   if(needsRebuild || (inst && (N!==NEURONS.length || (edgeInst?edgeInst.count:0)!==SYN.length))) rebuildMeshes();
+  // El layout se asienta de a tramos: 6 ms por frame deja ~10 ms para dibujar y mantiene 60 fps
+  // mientras el grafo se organiza a la vista.
+  const asentando = settleTick(6); if(asentando) refrescarBase(_setQ>0 ? 0.16 : 1);
   const t=performance.now()/1000;
   if(motion){ thinking*=0.985; spread(); }
   if(inst && N){
@@ -388,7 +466,7 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     // de abajo escribirían exactamente lo mismo que ya está. Medido en la lente código del central
     // (8193 nodos, 17661 aristas): eran 16,5 ms de JS y 2 MB de subida a la GPU POR FRAME, cuando
     // el presupuesto entero de un frame a 60 fps son 16,6 ms.
-    if(motion || drag>=0 || resto>0.002 || actViva){
+    if(motion || drag>=0 || resto>0.002 || actViva || asentando){
     let rMax=0, hayAct=false, colorSucio=false;
     // La 3x3 (rotación x escala) es CONSTANTE por nodo y ya quedó sembrada en rebuildMeshes: por
     // frame sólo cambian los 3 floats de traslación, escritos DIRECTO en el buffer de instancias.
@@ -447,7 +525,22 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     resto=rMax; actViva=hayAct;
     }
   }
+  const _tJS = STATS ? performance.now()-_t0 : 0;
   controls.update(); hover(); composer.render();
+  if(STATS){
+    const ahora=performance.now();
+    _acumFrame += ahora-_t0; _acumJS += _tJS; _frames++;
+    if(ahora-_ultStat > 500){
+      const r=renderer.info.render, m=renderer.info.memory;
+      const msF=_acumFrame/_frames, msJS=_acumJS/_frames;
+      _statBox.textContent =
+        Math.round(1000/msF)+' fps   frame '+msF.toFixed(1)+' ms'+
+        '   ·   mis bucles '+msJS.toFixed(1)+' ms   ·   render+bloom '+(msF-msJS).toFixed(1)+' ms\n'+
+        r.calls+' draw · '+(r.triangles/1000).toFixed(0)+'k tris · dpr '+renderer.getPixelRatio()+
+        ' · '+m.geometries+' geo · '+m.textures+' tex';
+      _acumFrame=_acumJS=_frames=0; _ultStat=ahora;
+    }
+  }
 }
 
 /* ---------- HUD (PORTADO, paridad con el dashboard previo) ---------- */

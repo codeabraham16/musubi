@@ -37,6 +37,40 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   la primera versión tenía el producto cruz al revés (`q = d × p` en vez de `p × d`), la terna salía
   zurda, el winding se invertía y el back-face culling se habría comido las aristas.
 
+- **Cambiar a la lente código congelaba el panel tres segundos, y volvía a congelarlo en cada
+  toggle.** Eran dos causas distintas apiladas.
+  La primera: el asentado del layout (`settle`) era un `for` sincrónico. Medido con las funciones
+  reales extraídas del fuente, sobre los grafos de verdad: memoria local (2.097/2.000) **654 ms**,
+  código local (6.113/14.235) **3.037 ms**, código del central (8.362/18.073) **3.952 ms**. Durante
+  ese rato `requestAnimationFrame` no corre, así que no es que baje el framerate: **no hay frames**.
+  La segunda: `POS` —el mapa que recuerda dónde quedó cada nodo para no re-asentar— era **uno solo,
+  compartido por las dos lentes**. Al pasar a código, las claves guardadas eran las de memoria, todos
+  los nodos salían `_new`, y el layout se recalculaba entero. Cada ida y vuelta costaba el
+  congelamiento completo, para siempre. `prevIds` tenía el mismo defecto: salía de `NEURONS`, que en
+  ese momento todavía tiene el grafo de la OTRA lente.
+  - `POS` pasa a ser `{memory, code}` y `prevIds` sale de las claves de la lente que se está
+    construyendo. Con esto el segundo toggle ya no asienta nada.
+  - `settle` se parte en `settleStart` / `settleStep` / `settleTick(ms)`: el mismo cómputo total,
+    pero repartido en tramos de 6 ms por frame. El grafo se ve organizarse en vez de congelarse.
+  - Bandera `ASENTADO` por lente. Sin ella, cambiar de lente **a mitad** del asentado sembraba `POS`
+    con posiciones a medio ordenar, `changed` daba `false` de ahí en más y el grafo quedaba
+    desordenado permanentemente. Es un agujero que abrió el propio arreglo.
+  - Lo dibujado **persigue** a la física en vez de saltar con ella (`refrescarBase(k)`, k=0,16).
+    Hace falta porque el layout es violento de verdad al arrancar: nodos al azar en todo el volumen
+    y un clamp que permite 40 unidades por iteración sobre un radio de 118 — un tercio del cerebro
+    de un salto. Antes eso pasaba entero adentro del congelamiento y no se veía. La física no
+    cambia: sigue corriendo exacta sobre `n.x/y/z`; lo único amortiguado es dónde se pinta.
+  Verificado contra la versión anterior con el mismo estado inicial y las mismas iteraciones:
+  **2.097/2.097 y 6.113/6.113 posiciones idénticas, peor desvío 0,00e+0**. El refactor no movió la
+  física ni un bit.
+
+### Added
+- **Medidor de frame opt-in con `?stats=1`.** Reporta fps, ms de frame y el corte entre *mis bucles*
+  (JS optimizable) y *render+bloom* (GPU), más draw calls, triángulos y dpr. Existe porque «se siente
+  pesado» no es una medición, y porque `renderer.info.reset()` ya se llamaba todos los frames sin que
+  nadie leyera `renderer.info`: la mitad del plumbing estaba puesta. Cuesta cero cuando no está el
+  flag.
+
 ## [0.104.0] - 2026-08-21
 
 ### Changed
