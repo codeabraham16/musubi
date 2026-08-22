@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,7 +66,7 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 		t.Error("el HTML servido debe ser la cáscara del dashboard (con MUSUBI y el <script> del bundle)")
 	}
 
-	// El bundle WebGL se sirve como JS y trae el fetch a /api/snapshot (el polling en vivo).
+	// El bundle WebGL se sirve como JS y trae los DOS fetch del flujo nuevo.
 	rrb := httptest.NewRecorder()
 	h.ServeHTTP(rrb, httptest.NewRequest(http.MethodGet, "/dashboard.bundle.js", nil))
 	if rrb.Code != http.StatusOK {
@@ -74,8 +75,17 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 	if ct := rrb.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
 		t.Errorf("el bundle debe servirse como javascript, obtuve %q", ct)
 	}
-	if !strings.Contains(rrb.Body.String(), "/api/snapshot") {
-		t.Error("el bundle debe contener el fetch a /api/snapshot (el polling en vivo)")
+	// El contrato cambió A PROPÓSITO: el front dejó de sondear /api/snapshot —que arrastraba el
+	// grafo entero cada 5 s y por eso obligaba a caparlo a 300 neuronas— y ahora pide el pulso,
+	// más el grafo aparte y sólo cuando cambia. Este test declara el contrato NUEVO.
+	if !strings.Contains(rrb.Body.String(), "/api/pulse") {
+		t.Error("el bundle debe contener el fetch a /api/pulse (el sondeo liviano)")
+	}
+	if !strings.Contains(rrb.Body.String(), "/api/graph") {
+		t.Error("el bundle debe contener el fetch a /api/graph (el grafo, aparte del sondeo)")
+	}
+	if strings.Contains(rrb.Body.String(), "/api/snapshot") {
+		t.Error("el bundle NO debe sondear /api/snapshot: ese acoplamiento es el que obligaba al tope")
 	}
 	// La lente "código" hace hover-fetch del weld: su URL literal sobrevive a la minificación.
 	if !strings.Contains(rrb.Body.String(), "/api/explained") {
@@ -157,5 +167,104 @@ func TestIsLoopbackAddr(t *testing.T) {
 		if isLoopbackAddr(bad) {
 			t.Errorf("isLoopbackAddr(%q) debería ser false (no expone a la red)", bad)
 		}
+	}
+}
+
+// TestDashboardGrafoSinTope: /api/graph trae el grafo ENTERO por defecto. Es la razón de ser
+// del endpoint — el snapshot lo servía capado a 300 porque viajaba en cada sondeo, y con más
+// de 300 memorias eso significaba que la pantalla nunca podía mostrar el acervo completo.
+func TestDashboardGrafoSinTope(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	const total = 420 // por encima del default de 300, para que un tope se note
+	for i := 0; i < total; i++ {
+		if err := engine.SaveObservation(fmt.Sprintf("o%03d", i), "dom/x", "contenido", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := dashboardHandler(engine, 8000, "demo")
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/graph?lens=memory", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("esperaba 200, obtuve %d", rr.Code)
+	}
+	var g memory.BrainGraph
+	if err := json.Unmarshal(rr.Body.Bytes(), &g); err != nil {
+		t.Fatalf("no es JSON válido: %v", err)
+	}
+	if len(g.Neurons) != total || g.Truncated {
+		t.Errorf("el grafo tiene que venir entero: %d de %d, truncated=%v", len(g.Neurons), total, g.Truncated)
+	}
+
+	// Y el ETag tiene que evitar retransmitirlo: es lo que hace barato re-pedirlo.
+	etag := rr.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("falta el ETag: sin él el cliente re-baja el grafo entero cada vez")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/graph?lens=memory", nil)
+	req.Header.Set("If-None-Match", etag)
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req)
+	if rr2.Code != http.StatusNotModified || rr2.Body.Len() != 0 {
+		t.Errorf("con If-None-Match esperaba 304 y 0 bytes, obtuve %d con %d bytes", rr2.Code, rr2.Body.Len())
+	}
+
+	// Un limit explícito sigue capando: la superficie no pierde la capacidad de acotar.
+	rr3 := httptest.NewRecorder()
+	h.ServeHTTP(rr3, httptest.NewRequest(http.MethodGet, "/api/graph?lens=memory&limit=50", nil))
+	var g3 memory.BrainGraph
+	if err := json.Unmarshal(rr3.Body.Bytes(), &g3); err != nil {
+		t.Fatal(err)
+	}
+	if len(g3.Neurons) != 50 || !g3.Truncated || g3.TotalNeurons != total {
+		t.Errorf("con limit=50 esperaba 50 de %d y truncated: obtuve %d de %d trunc=%v",
+			total, len(g3.Neurons), g3.TotalNeurons, g3.Truncated)
+	}
+}
+
+// TestDashboardPulseEsChico: el pulso es lo que se pide cada 5 s, así que su tamaño es su
+// contrato. Con 420 memorias el snapshot arrastra el grafo entero y el pulso no.
+func TestDashboardPulseEsChico(t *testing.T) {
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	for i := 0; i < 420; i++ {
+		if err := engine.SaveObservation(fmt.Sprintf("o%03d", i), "dom/x", "contenido de relleno para que pese", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := dashboardHandler(engine, 8000, "demo")
+
+	rp := httptest.NewRecorder()
+	h.ServeHTTP(rp, httptest.NewRequest(http.MethodGet, "/api/pulse", nil))
+	if rp.Code != http.StatusOK {
+		t.Fatalf("pulse: esperaba 200, obtuve %d", rp.Code)
+	}
+	rs := httptest.NewRecorder()
+	h.ServeHTTP(rs, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
+
+	if rp.Body.Len() >= rs.Body.Len() {
+		t.Errorf("el pulso tiene que ser MÁS CHICO que el snapshot: pulse=%d snapshot=%d",
+			rp.Body.Len(), rs.Body.Len())
+	}
+	var p dashboardPulse
+	if err := json.Unmarshal(rp.Body.Bytes(), &p); err != nil {
+		t.Fatalf("el pulso no es JSON válido: %v", err)
+	}
+	if p.Counts.Neurons != 420 {
+		t.Errorf("el pulso lleva el conteo REAL aunque no lleve el grafo: esperaba 420, obtuve %d", p.Counts.Neurons)
+	}
+	if p.GraphVersion == "" {
+		t.Error("sin graph_version el cliente no puede saber cuándo re-bajar el grafo")
+	}
+	// Lo que NO tiene que llevar: el grafo. Si algún día se cuela, el sondeo vuelve a pesar.
+	if strings.Contains(rp.Body.String(), `"neurons":[{`) {
+		t.Error("el pulso NO debe llevar el array de neuronas: ese era el problema que resuelve")
 	}
 }

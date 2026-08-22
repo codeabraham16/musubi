@@ -7,6 +7,46 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El grafo del dashboard ya no tiene tope: crece con la memoria.** Estaba capado a 300
+  neuronas, y el motivo real no era el render sino el TRANSPORTE — el front pedía
+  `/api/snapshot` entero cada 5 segundos. Medido: 481 KB con el tope puesto y **2,3 MB sin él**,
+  que por un túnel SSH son 31 s y 117 s por pedido. A los 5 segundos ya había seis pedidos
+  apilados y ninguno terminaba. El síntoma que se veía era un grafo **apagado**, no lento: la
+  actividad sólo se enciende diffeando un snapshot nuevo contra el anterior, así que sin datos
+  frescos todo decae a color de reposo en menos de un segundo. Subir el número sin tocar esto lo
+  habría empeorado 4×.
+  Ahora son dos caminos. `/api/graph?lens=memory|code` trae el grafo **entero**, con ETag: se baja
+  una vez y un segundo pedido con `If-None-Match` devuelve 304 y 0 bytes. `/api/pulse?since=` es
+  el sondeo: **18 KB contra 481 KB**, con los contadores reales, los dominios sin sus hojas
+  (2.809 en el cerebro central, 278 KB que el front nunca leyó) y los DELTAS de actividad.
+  Dos decisiones sostienen que esto escale, y cada una tiene su test: **la huella del grafo no
+  incluye calor ni recencia** —si las incluyera, cada recall dispararía una re-bajada del grafo
+  entero—, y **las memorias nuevas viajan completas en el pulso**, así que guardar algo se
+  incorpora sin re-bajar nada. El grafo sólo se vuelve a pedir cuando el conteo del server no
+  coincide con el del cliente, o sea cuando algo DESAPARECIÓ, que un delta no puede reconstruir.
+  `memory.NoLimit` existe porque `limit <= 0` caía al default: no había forma de expresar «todo»,
+  el tope no se podía sacar ni queriendo. El cero sigue cayendo al default de 300 para las tools
+  MCP, que son otra superficie: un agente no quiere 3.667 nodos en su contexto por accidente.
+  `/api/snapshot` queda intacto — lo leen `musubi-body` y el CRM desde afuera.
+- **Las aristas pasaron de una malla cada una a una sola instanciada, y el layout usa Barnes-Hut.**
+  Eran los dos techos del render. Cada sinapsis era un `Mesh` con su propio `ShaderMaterial`: a
+  486 se notaba poco, pero el grafo completo del central tiene 3.411 y eso son 3.411 draw calls.
+  Ahora es **una** `InstancedMesh` y lo que era un uniform por material es un atributo por
+  instancia; sólo `uTime` queda compartido.
+  El `settle()` era O(n²): a 3.667 neuronas son 6,7 M de pares **por iteración**, ~600 M en total,
+  que congela la pestaña. Una grilla espacial no servía —el corte de repulsión es `rx*0.85`, o sea
+  el 85% del radio del cerebro, así que casi todos los pares caen dentro y las 27 celdas vecinas
+  son el volumen entero—, y por eso va un octree con criterio de apertura. Medido contra el bucle
+  exacto **del mismo código**: 1,0% de error de fuerza en una iteración con theta=0,7, y 2,0 s
+  para 3.667 neuronas × 90 iteraciones. El bucle exacto se conserva para grafos de menos de 700
+  nodos, así que los proyectos chicos mantienen su layout bit a bit.
+  ⚠️ Nota de método: la divergencia de posiciones tras 60 iteraciones es del 100% del radio, y
+  **eso no es un error** — un sistema repulsivo es caótico y amplifica cualquier diferencia; los
+  dos llegan a equilibrios distintos e igualmente válidos. El exacto no es «la respuesta
+  correcta», es *un* equilibrio. Medir a 60 iteraciones y concluir «bug» fue el primer diagnóstico
+  y era falso.
+
 ## [0.103.0] - 2026-08-21
 
 ### Changed
