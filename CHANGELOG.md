@@ -7,6 +7,40 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El panel dejaba de responder mientras acomodaba el grafo, y una sola memoria nueva lo
+  reacomodaba entero.** Dos causas distintas, las dos medidas. La primera es un defecto de la
+  corrección anterior: repartir el asentado en iteraciones no repartía nada, porque **una sola
+  iteración cuesta 26,4 ms** sobre los 3.678 nodos de memoria y **73,0 ms** sobre los 8.362 de
+  código, contra un presupuesto de 6 ms por frame. El grano era 12× el tramo, así que el
+  `do{}while` de `settleTick` corría igual la iteración entera. La segunda es que `changed` daba
+  true con **un** nodo nuevo, y eso disparaba `iterSettle(n)` completo: 55 iteraciones sobre 3.678
+  nodos = **1,45 s de CPU cada vez que se guardaba una observación** — con los hooks de captura
+  escribiendo seguido, el panel trabándose cada pocos segundos y reacomodando de lugar todo lo que
+  estabas mirando.
+  - **La iteración ahora se corta por dentro**, en trozos de 256 nodos (`settlePasada`). Dónde
+    cortar salió de medir, no de suponer: con 8.362 nodos la iteración cuesta 68,5 ms **con**
+    18.073 aristas y 68,4 ms **con cero** — las aristas no cuestan nada, todo el costo es la
+    repulsión por nodo. Se rebana por nodo y nada más; resortes e integración quedan enteros.
+  - **Y sale idéntico bit a bit.** La repulsión de cada nodo lee un árbol Barnes-Hut ya armado y su
+    propia posición, que no cambia hasta la integración del final, y escribe sólo su velocidad; por
+    eso el orden no importa. Verificado contra la iteración entera con presupuesto **cero** —el
+    corte más agresivo posible, hasta 33 pedazos por iteración— en tres escalas, incluida la que
+    usa el camino exacto O(n²) que no se rebana: **600/600, 3.678/3.678 y 8.362/8.362 posiciones
+    idénticas, peor desvío 0,00e+0**. Distribución con el presupuesto real de 6 ms: p50 6,8 ms,
+    p95 8,5 ms, máximo 14,0 ms, **0 frames por encima de 16,6 ms**.
+  - **Las iteraciones ahora son proporcionales al cambio** (`iterParaCambio`). Un grafo ya asentado
+    que recibe unas pocas memorias nuevas no necesita re-asentarse: el resto está en equilibrio y
+    el damping lo deja donde está. Pasa de 55 iteraciones a `4 + nuevas×2`.
+- **La lente código se reconstruía entera en cada pulso, desde datos idénticos.** Se baja una sola
+  vez y no cambia entre pollings, pero `renderLens` rearmaba sus 8.362 nodos, 17.661 aristas, listas
+  de adyacencia y dos Map grandes cada 5 segundos: **28,8 ms** medidos —casi dos frames— más la
+  basura de ~26.000 objetos para el GC. Ese era el tirón periódico. Ahora se saltea cuando el objeto
+  del grafo es el mismo. **Sólo se saltea código, y la asimetría no es un detalle**: `fetchGraph`
+  asigna un objeto nuevo, así que para código identidad distinta significa exactamente «hay grafo
+  nuevo»; `aplicaDeltas` en cambio **muta memoria en el lugar**, y comparar por identidad allí
+  saltearía una reconstrucción necesaria y apagaría el latido, que es la razón de ser del panel.
+
 ## [0.105.0] - 2026-08-22
 
 ### Fixed
