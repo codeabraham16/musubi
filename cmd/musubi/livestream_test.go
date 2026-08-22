@@ -9,26 +9,52 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // cerebroFalso levanta un /api/stream de mentira que emite lo que se le pase y registra cómo lo
 // llamaron. Devuelve la URL base y un puntero a lo que vio del pedido.
+//
+// El handler corre en la goroutine del servidor y el test lee desde la suya, así que lo que vio
+// va bajo mutex y sólo se lee por esperar(), que primero bloquea hasta que el pedido llegó de
+// verdad. Sin las dos cosas el test es una carrera: ver el defecto que esto arregla en R1.
 type pedidoVisto struct {
+	mu    sync.Mutex
+	llego chan struct{}
+	una   sync.Once
 	auth  string
 	query string
 	ruta  string
 }
 
+// esperar bloquea hasta que el relay haya llamado al cerebro falso, y recién ahí devuelve lo que
+// se vio del pedido. Falla el test si no llega en el plazo, en vez de devolver campos vacíos que
+// se leerían como "el relay mandó mal el token".
+func (p *pedidoVisto) esperar(t *testing.T, plazo time.Duration) pedidoVisto {
+	t.Helper()
+	select {
+	case <-p.llego:
+	case <-time.After(plazo):
+		t.Fatalf("el relay no llamó al cerebro en %v", plazo)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return pedidoVisto{auth: p.auth, query: p.query, ruta: p.ruta}
+}
+
 func cerebroFalso(t *testing.T, emitir func(w http.ResponseWriter, rc *http.ResponseController)) (string, *pedidoVisto) {
 	t.Helper()
-	visto := &pedidoVisto{}
+	visto := &pedidoVisto{llego: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {
+		visto.mu.Lock()
 		visto.auth = r.Header.Get("Authorization")
 		visto.query = r.URL.RawQuery
 		visto.ruta = r.URL.Path
+		visto.mu.Unlock()
+		visto.una.Do(func() { close(visto.llego) })
 		rc := http.NewResponseController(w)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -96,13 +122,19 @@ func TestRelayMandaElTokenPorHeaderYNoPorURL(t *testing.T) {
 
 	ts := httptest.NewServer(r.handlerStream())
 	defer ts.Close()
-	leerFrames(t, ts.URL, 2, 5*time.Second) // fuerza a que el relay ya haya conectado
 
-	if visto.auth != "Bearer tok-secreto" {
-		t.Fatalf("Authorization = %q, esperaba el bearer", visto.auth)
+	// OJO con lo que se espera. Un leerFrames(...,2,...) acá NO sirve: suscribir() sintetiza el
+	// "enlace" y el "backlog" en el momento, sin haber hablado con nadie, así que los 2 frames
+	// llegan al instante aunque el relay no haya conectado jamás (medido: 2 frames en 0 s con
+	// run() sin arrancar). Hay que esperar el pedido del lado del cerebro, que es lo único que
+	// prueba que el token viajó.
+	p := visto.esperar(t, 5*time.Second)
+
+	if p.auth != "Bearer tok-secreto" {
+		t.Fatalf("Authorization = %q, esperaba el bearer", p.auth)
 	}
-	if strings.Contains(visto.query, "tok-secreto") || strings.Contains(visto.ruta, "tok-secreto") {
-		t.Fatalf("el token se filtró a la URL (ruta=%q query=%q): quedaría en logs e historial", visto.ruta, visto.query)
+	if strings.Contains(p.query, "tok-secreto") || strings.Contains(p.ruta, "tok-secreto") {
+		t.Fatalf("el token se filtró a la URL (ruta=%q query=%q): quedaría en logs e historial", p.ruta, p.query)
 	}
 }
 
