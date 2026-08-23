@@ -838,11 +838,22 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
       `<div class="lg"><span class="sw" style="background:${COLOR_CRUCE};color:${COLOR_CRUCE}"></span>entre personas</div>`;
     const ht0=$('howto'); if(ht0) ht0.innerHTML =
       `<span><b>·</b> cada neurona es una <b>terminal</b>; sus <b>dendritas</b>, cuánto escribió</span>`+
-      `<span><b>·</b> las flechas son <b>despachos</b> y tienen <b>dirección</b>: quién le escribió a quién</span>`+
+      `<span><b>·</b> la <b>luz que viaja</b> es un <b>despacho</b> yendo de quien escribe a quien recibe; cuantas más viajan a la vez, más se escribieron</span>`+
+      `<span><b>·</b> la neurona <b>late</b> según cuánto se <b>recupera</b> lo que escribió — la que nadie consulta se queda quieta</span>`+
       `<span><b>·</b> el <b>color</b> agrupa por <b>persona</b> · la persona sale de quién <b>firma</b>, no de quién menciona</span>`;
+    // Corto: con los verbos completos la barra se partia en dos lineas y empujaba el area
+    // util del grafo hacia arriba.
+    pistas(`<span><b>arrastrá</b> gira</span><span class="sep">·</span>`+
+      `<span><b>rueda</b> acerca 40×</span><span class="sep">·</span>`+
+      `<span><b>shift+arrastrá</b> desplaza</span><span class="sep">·</span>`+
+      `<span><b>hover</b> detalla</span><span class="sep">·</span>`+
+      `<span><b>doble click</b> entra</span>`);
     pintarLeyendaPersonas();
     return;
   }
+  pistas(`<span><b>arrastrá</b> para rotar</span><span class="sep">·</span>`+
+    `<span><b>rueda</b> para acercar</span><span class="sep">·</span>`+
+    `<span><b>hover</b> revela el detalle</span>`);
   const al=$('actlegend'); if(al) al.innerHTML = code
     ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
     : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
@@ -850,6 +861,41 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
     : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
 }
+// El detalle de una terminal al pasarle el mouse. Reusa el MISMO `#tip` que la lente de
+// memoria: son la misma pieza de UI y duplicarla es garantizar que se despeguen. En esta lente
+// `hover()` no corre (animate sale antes), así que nadie le pisa el contenido.
+VISTA_PERSONAS.onFoco((nd, datos, px, py) => {
+  const tip = document.getElementById('tip');
+  if (!tip) return;
+  if (!nd) { tip.classList.remove('on'); return; }
+  const D = (datos && datos.despachos) || [];
+  const lista = (arr, dir) => arr.length
+    ? arr.sort((a,b)=>b.veces-a.veces).slice(0,4).map(d=>`${esc((dir==='sale'?d.a:d.de).toLowerCase())} <b>${d.veces}</b>`).join(' · ')
+    : '—';
+  const salen = D.filter(d => d.de === nd.id), entran = D.filter(d => d.a === nd.id);
+  tip.querySelector('.tt').textContent = nd.id.toLowerCase();
+  // Se dice `notas` y `firma` por separado a propósito: son cosas distintas y confundirlas fue
+  // el error que hubo que corregir para saber de quién es cada terminal.
+  tip.querySelector('.tg').innerHTML =
+    `de <b>${esc(nd.persona || 'sin autor')}</b> · ${nd.notas} notas la nombran · ${nd.firmas} las firma`;
+  tip.querySelector('.tm').innerHTML =
+    `<i>calor ${nd.calor}</i><i>escribe a: ${lista(salen,'sale')}</i><i>recibe de: ${lista(entran,'entra')}</i>`;
+  // La posicion la manda la vista con el evento que la origino. El `mx/my` global lo
+  // actualiza otro listener y no siempre corrio antes: medido, el tooltip aparecia en
+  // (16,16) tapando la cabecera.
+  const tw = tip.offsetWidth || 240, th = tip.offsetHeight || 80;
+  const ax = (typeof px === 'number' ? px : mx), ay = (typeof py === 'number' ? py : my);
+  let x = ax + 16, y = ay + 16;
+  if (x + tw > innerWidth - 8) x = ax - tw - 16;
+  if (y + th > innerHeight - 8) y = ay - th - 16;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px'; tip.classList.add('on');
+});
+
+// pistas: la barra de abajo dice qué se puede HACER, y eso cambia con la lente. La de personas
+// tiene desplazamiento y doble click, que no existen en las otras dos: dejar el texto viejo es
+// esconder los dos gestos que hacen falta para llegar a una neurona chica.
+function pistas(html){ const e=$('pistas'); if(e) e.innerHTML=html; }
+
 // pintarLeyendaPersonas: quién es quién, con EL MISMO color con que se dibujó su racimo.
 // Y declara las notas sin `author`: el reparto por persona se hace sobre las que lo tienen, y
 // callar cuántas quedaron afuera convierte una muestra parcial en un total aparente.

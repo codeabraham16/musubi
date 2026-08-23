@@ -8,6 +8,15 @@
 //
 // El render vive aparte de personas.mjs a propósito: allá es lógica pura que corre en
 // `node --test`, acá hay DOM. Mezclarlos deja la lógica sin poder testear.
+//
+// NADA DE ADORNO: cada cosa que se mueve codifica un dato medido.
+//   · la luz que viaja por un axón es un DESPACHO; cuántas viajan a la vez sale de `veces`;
+//   · el latido de una neurona sale de su CALOR (cuánto se recupera lo que escribió), y una
+//     terminal que nadie consulta se queda quieta — eso también es información;
+//   · el giro lento existe para que la profundidad se lea, y se DETIENE en cuanto el usuario
+//     está mirando algo (hover, zoom o desplazamiento).
+// Se descartó animar por RECENCIA: medido sobre el cerebro local, las 11 terminales tienen su
+// nota más nueva a menos de medio día, así que ese canal pinta a todas igual.
 
 const IND = [79, 107, 255], JADE = [63, 208, 163], CYAN = [53, 208, 224];
 // Paleta de PERSONAS. El color acá no es decorativo: es la única forma de saber de quién es
@@ -28,11 +37,15 @@ export const COLOR_CRUCE = `rgb(${CYAN[0]},${CYAN[1]},${CYAN[2]})`;
 // Math.random(), dos personas mirando la misma pantalla ven dibujos distintos y no pueden
 // hablar de lo que ven — y una captura de ayer deja de comparar con la de hoy.
 const rng = (s) => () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+// Fase determinista por nombre: dos neuronas no pueden latir al unísono (parecería un efecto
+// global y no once relojes distintos), pero tampoco puede depender de Math.random().
+const fase = (id) => { let h = 2166136261; for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619); return ((h >>> 0) % 1000) / 1000 * 6.2832; };
 
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const acotar = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // desviar: gira una dirección `ang` radianes hacia un lado cualquiera del plano perpendicular.
 function desviar(d, ang, r) {
@@ -45,23 +58,36 @@ function desviar(d, ang, r) {
 
 export function crearVista(canvas) {
   const cx = canvas.getContext('2d');
-  // `dist` ya no se elige a mano: la calcula el encuadre. El valor inicial es sólo un piso
-  // por si se pinta un frame antes de medir.
   // `f` grande = perspectiva suave. No es gusto: MEDIDO. Con f=1120 el encuadre quedaba en
   // dist≈1900 para un radio de escena de 538, o sea la profundidad era el 28 % de la distancia;
   // la punta MÁS CERCANA tocaba el borde y todo lo del medio proyectaba al 59 %, dejando la
   // escena en 540 px de los 940 disponibles. Alejando la cámara y alargando la focal en la
   // misma proporción, la escala deja de depender tanto de la profundidad y el dibujo llena el
-  // cuadro; la sensación de 3D se sostiene con el degradado de profundidad y el orden del
-  // pintor, no con la deformación.
+  // cuadro; la sensación de 3D se sostiene con el degradado de profundidad, el orden del pintor
+  // y el giro, no con la deformación. `dist` la calcula el encuadre; el valor inicial es un piso.
   const cam = { yaw: 0.20, pitch: -0.24, dist: 1180, f: 2800, zoom: 1 };
-  let W = 0, H = 0, DATOS = null, SEG = [], AX = [], NODOS = [], IDX = new Map();
+  // ZOOM_MAX alto a propósito: el pedido es poder meterse en las neuronas CHICAS. `SALA DE
+  // MANDO` tiene 10 notas y a escala 1 es un punto de 3 px; recién cerca de 25× se le ven las
+  // ramas. Lo que hace que eso no cueste un frame es el LOD + el descarte por pantalla.
+  const ZOOM_MIN = 0.4, ZOOM_MAX = 40;
+  // Niveles EXTRA de dendrita que se generan de más, para que haya qué mirar al acercarse. No
+  // se dibujan a escala 1: el LOD los deja fuera del recorrido, no sólo del trazo.
+  const NIVELES_EXTRA = 2;
+
+  let W = 0, H = 0, DATOS = null, AX = [], NODOS = [], IDX = new Map();
   // Encuadre: el centro de la escena en el mundo, su radio, y dónde cae el centro del ÁREA
   // ÚTIL en pantalla — que NO es el centro del lienzo, porque el HUD tapa las dos columnas.
   // RH: radio en el plano XZ (invariante al giro). RV: media altura. Van separados porque el
   // ancho y el alto de la pantalla no son el mismo número y un radio único desperdicia el mayor.
   let CENTRO = [0, 0, 0], RH = 600, RV = 300, OX = 0, OY = 0;
-  let foco = null, arrastrando = false, lx = 0, ly = 0, quieto = 0, vivo = false;
+  // Desplazamiento en PANTALLA. Existe para que la rueda pueda acercar HACIA EL PUNTERO: sin
+  // esto el zoom siempre tira al centro de la escena y llegar a una neurona del borde es
+  // imposible por más que el zoom llegue a 40×.
+  let PANX = 0, PANY = 0;
+  let foco = null, arrastrando = false, modo = 'rotar', lx = 0, ly = 0, vivo = false;
+  let reloj = 0;            // segundos de animación; sólo avanza si el panel no está pausado
+  let calorMax = 1;
+  let viaje = null;         // transición suave hacia una neurona (doble click)
   const buf = [];
   const suave = !matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -101,6 +127,7 @@ export function crearVista(canvas) {
   // máximo (±1,2 rad) obligaría a alejar tanto la cámara que en reposo la escena entraría en
   // un tercio del cuadro. Se elige el compromiso, no el peor caso.
   const PITCH_ENCUADRE = 0.5;
+  let semiW = 200, semiH = 200;
 
   // encuadrar: aleja la cámara lo justo para que la escena entre en el área útil.
   //
@@ -117,17 +144,23 @@ export function crearVista(canvas) {
     if (!W || !H) return;
     const a = areaUtil();
     OX = (a.x0 + a.x1) / 2; OY = (a.y0 + a.y1) / 2;
-    const semiW = Math.max((a.x1 - a.x0) / 2 * 0.96, 60);
-    const semiH = Math.max((a.y1 - a.y0) / 2 * 0.96, 60);
+    semiW = Math.max((a.x1 - a.x0) / 2 * 0.96, 60);
+    semiH = Math.max((a.y1 - a.y0) / 2 * 0.96, 60);
     // al inclinar, lo que era profundidad pasa a ocupar alto: por eso Rh entra acá también
     const alto = RV * Math.cos(PITCH_ENCUADRE) + RH * Math.sin(PITCH_ENCUADRE);
     cam.dist = Math.max(240, RH + cam.f * RH / semiW, RH + cam.f * alto / semiH);
   }
 
+  // La escala a la profundidad del centro de la escena. Es la referencia para el zoom hacia el
+  // puntero: no existe UN factor válido para todas las profundidades a la vez, así que se toma
+  // el plano medio, que es donde el ojo cree que está mirando.
+  const escalaCentro = () => cam.f / (cam.dist / cam.zoom);
+
   // construir: de {terminales, despachos} a geometría 3D. Se llama sólo cuando cambian los
-  // datos, no por frame: son ~4 000 segmentos y rehacerlos a 60 fps sería absurdo.
+  // datos, no por frame: son decenas de miles de segmentos y rehacerlos a 60 fps sería absurdo.
   function construir(datos, racimos) {
-    DATOS = datos; SEG = []; AX = []; NODOS = []; IDX = new Map();
+    DATOS = datos; AX = []; NODOS = []; IDX = new Map();
+    PANX = 0; PANY = 0; cam.zoom = 1; viaje = null;
     if (!racimos.length) return;
 
     // El tamaño del racimo lo fija cuántas TERMINALES tiene, no cuántas notas: es el volumen
@@ -148,6 +181,7 @@ export function crearVista(canvas) {
     const medio = centros.length ? (centros[0][0] + centros[centros.length - 1][0]) / 2 : 0;
     for (const c of centros) c[0] -= medio;
 
+    calorMax = 1;
     racimos.forEach((rac, ri) => {
       const col = PALETA[ri % PALETA.length];
       const c = centros[ri];
@@ -160,9 +194,13 @@ export function crearVista(canvas) {
         // racimo. Es la que la representa, y verla orbitando en el borde junto a las otras
         // hacía que el racimo no tuviera núcleo.
         const rr = t.id.toLowerCase() === rac.persona ? R * 0.18 : R;
+        const calor = Number.isFinite(t.calor) ? t.calor : 0;
+        if (calor > calorMax) calorMax = calor;
         const nd = {
-          id: t.id, notas: t.notas, persona: rac.persona, col,
+          id: t.id, notas: t.notas, calor, firmas: t.firmas || 0, persona: rac.persona, col,
           r: Math.max(4.2, Math.sqrt(t.notas) * 1.15),
+          fase: fase(t.id),
+          seg: [], finNivel: [0], alcance: 0,
           pos: [c[0] + Math.cos(th) * Math.sin(phi) * rr,
                 c[1] + Math.cos(phi) * rr * 0.78,
                 c[2] + Math.sin(th) * Math.sin(phi) * rr],
@@ -175,16 +213,27 @@ export function crearVista(canvas) {
     let semilla = 7;
     for (const nd of NODOS) {
       const r = rng(semilla += 977);
-      // La densidad está ACOTADA: cada segmento es un stroke por frame. Con profundidad 5 en
-      // todas las neuronas pasaba de 7 000 trazos y el panel se arrastraba.
       const raices = Math.max(4, Math.min(7, Math.round(Math.log(nd.notas + 1) * 1.6)));
-      const prof = nd.notas > 150 ? 5 : (nd.notas > 55 ? 4 : 3);
+      nd.profBase = nd.notas > 150 ? 5 : (nd.notas > 55 ? 4 : 3);
       const L0 = nd.r * (nd.notas > 120 ? 2.5 : 2.9);
       for (let i = 0; i < raices; i++) {
         const k = i + 0.5, phi = Math.acos(1 - 2 * k / raices);
         const th = Math.PI * (1 + Math.sqrt(5)) * k;
         const d0 = norm([Math.cos(th) * Math.sin(phi), Math.cos(phi), Math.sin(th) * Math.sin(phi)]);
-        crecer(add(nd.pos, mul(d0, nd.r * 0.85)), d0, L0, Math.max(1.5, nd.r * 0.3), prof, nd, r);
+        crecer(add(nd.pos, mul(d0, nd.r * 0.85)), d0, L0, Math.max(1.5, nd.r * 0.3),
+               nd.profBase + NIVELES_EXTRA, 0, nd, r);
+      }
+      // Ordenar por nivel y anotar dónde termina cada uno: así el frame recorre un PREFIJO del
+      // arreglo y las ramas finas ni se visitan cuando no se ven. Ordenar una vez al construir
+      // es lo que hace que el LOD no cueste nada por frame.
+      nd.seg.sort((a, b) => a.nivel - b.nivel);
+      const hondo = nd.profBase + NIVELES_EXTRA;
+      nd.finNivel = new Array(hondo + 1).fill(0);
+      for (const s of nd.seg) for (let l = s.nivel; l <= hondo; l++) nd.finNivel[l]++;
+      // alcance: hasta dónde llega la copa. Es el radio que usa el descarte por pantalla.
+      for (const s of nd.seg) {
+        const d = Math.hypot(s.b[0] - nd.pos[0], s.b[1] - nd.pos[1], s.b[2] - nd.pos[2]);
+        if (d > nd.alcance) nd.alcance = d;
       }
     }
 
@@ -204,7 +253,17 @@ export function crearVista(canvas) {
                 u * u * A.pos[1] + 2 * u * t * ctrl[1] + t * t * B.pos[1],
                 u * u * A.pos[2] + 2 * u * t * ctrl[2] + t * t * B.pos[2]]);
       }
-      AX.push({ de: d.de, a: d.a, veces: d.veces, P, cruza: A.persona !== B.persona });
+      // Cuántas luces viajan a la vez por este axón: sale de `veces`, o sea de cuántos
+      // despachos reales hay entre esas dos terminales. Un par que se escribió una sola vez
+      // manda UNA luz; el par más activo (18) manda cuatro. Es el dato, no un efecto.
+      const luces = 1 + Math.min(3, Math.floor(d.veces / 5));
+      AX.push({
+        de: d.de, a: d.a, veces: d.veces, P, luces,
+        // velocidades apenas distintas para que no marchen en formación
+        vel: 0.3 + (d.veces % 5) * 0.022,
+        cruza: A.persona !== B.persona,
+        Q: new Array(P.length),
+      });
     }
 
     // El centro de la escena son los NODOS. Los arcos de los axones suben bastante por encima
@@ -234,15 +293,17 @@ export function crearVista(canvas) {
     encuadrar();
   }
 
-  function crecer(p, d, largo, w, prof, nodo, r) {
-    if (prof <= 0 || w < 0.28 || SEG.length > 26000) return;
+  function crecer(p, d, largo, w, prof, nivel, nodo, r) {
+    // El corte por ancho baja a 0,06: las ramas finas AHORA sirven, porque a 20× se ven. Lo que
+    // impide que cuesten es el LOD, no dejar de generarlas.
+    if (prof <= 0 || w < 0.06 || nodo.seg.length > 9000) return;
     const hijos = r() < 0.28 ? 3 : 2;
     for (let i = 0; i < hijos; i++) {
       const d2 = desviar(d, 0.38 + r() * 0.42, r);
       const l2 = largo * (0.66 + r() * 0.16);
       const q = add(p, mul(d2, l2));
-      SEG.push({ a: p, b: q, w, col: nodo.col, nodo: nodo.id });
-      crecer(q, d2, l2, w * 0.6, prof - 1, nodo, r);
+      nodo.seg.push({ a: p, b: q, w, nivel });
+      crecer(q, d2, l2, w * 0.6, prof - 1, nivel + 1, nodo, r);
     }
   }
 
@@ -261,7 +322,16 @@ export function crearVista(canvas) {
     const s = cam.f / Math.max(zc, 40);
     // El centro de proyección es el del ÁREA ÚTIL, no el del lienzo: si fuera W/2 la escena
     // queda centrada DEBAJO de las tarjetas del HUD, que es exactamente lo que pasaba.
-    return { x: OX + x * s, y: OY + y2 * s, s, z: zc };
+    return { x: OX + PANX + x * s, y: OY + PANY + y2 * s, s, z: zc };
+  }
+
+  // punto sobre la polilínea proyectada del axón, con u en [0,1]
+  function enAxon(ax, u) {
+    const n = ax.Q.length - 1;
+    const t = acotar(u, 0, 0.9999) * n;
+    const i = Math.floor(t), f = t - i;
+    const A = ax.Q[i], B = ax.Q[i + 1] || A;
+    return { x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f, z: A.z + (B.z - A.z) * f, s: A.s };
   }
 
   function pintar() {
@@ -280,30 +350,52 @@ export function crearVista(canvas) {
     // todo quedaba igual de brillante. Contra el radio propio, el efecto es el mismo con
     // cualquier focal.
     const zCerca = cam.dist / cam.zoom - RH, zLargo = Math.max(2 * RH, 1);
-    const prof01 = (z) => Math.max(0, Math.min(1, (z - zCerca) / zLargo));
+    const prof01 = (z) => acotar((z - zCerca) / zLargo, 0, 1);
+    // LOD: cada duplicación del zoom habilita un nivel más de rama. Los niveles extra existen
+    // justamente para esto y no se recorren hasta que hay con qué verlos.
+    const extra = acotar(Math.round(Math.log2(Math.max(cam.zoom, 1))), 0, NIVELES_EXTRA);
 
-    for (const s of SEG) {
-      const A = proy(s.a), B = proy(s.b);
-      // una rama de menos de medio píxel no se ve pero cuesta un stroke igual
-      if (Math.abs(A.x - B.x) + Math.abs(A.y - B.y) < 0.8) continue;
-      buf.push({ z: (A.z + B.z) / 2, t: 0, A, B, s });
-    }
-    for (const ax of AX) {
-      for (let i = 0; i < ax.P.length - 1; i++) {
-        const A = proy(ax.P[i]), B = proy(ax.P[i + 1]);
-        buf.push({ z: (A.z + B.z) / 2, t: 1, A, B, ax, ult: i === ax.P.length - 2 });
+    for (const nd of NODOS) {
+      const P = proy(nd.pos);
+      // Descarte por pantalla ANTES de proyectar la copa: a 20× casi todas las neuronas están
+      // fuera de cuadro, y proyectar sus miles de ramas para tirarlas una por una es el gasto
+      // que haría inusable el zoom profundo.
+      const rr = nd.alcance * P.s + 40;
+      if (P.x + rr < 0 || P.x - rr > W || P.y + rr < 0 || P.y - rr > H) { nd._sx = null; continue; }
+      nd._P = P;
+      buf.push({ z: P.z, t: 2, nd, P });
+      const lim = nd.finNivel[Math.min(nd.finNivel.length - 1, nd.profBase + extra)];
+      for (let i = 0; i < lim; i++) {
+        const s = nd.seg[i];
+        const A = proy(s.a), B = proy(s.b);
+        // una rama de menos de medio píxel no se ve pero cuesta un stroke igual
+        if (Math.abs(A.x - B.x) + Math.abs(A.y - B.y) < 0.8) continue;
+        buf.push({ z: (A.z + B.z) / 2, t: 0, A, B, w: s.w, col: nd.col, nodo: nd.id });
       }
     }
-    for (const nd of NODOS) buf.push({ z: proy(nd.pos).z, t: 2, nd, P: proy(nd.pos) });
+
+    for (const ax of AX) {
+      for (let i = 0; i < ax.P.length; i++) ax.Q[i] = proy(ax.P[i]);
+      for (let i = 0; i < ax.Q.length - 1; i++) {
+        const A = ax.Q[i], B = ax.Q[i + 1];
+        buf.push({ z: (A.z + B.z) / 2, t: 1, A, B, ax, ult: i === ax.Q.length - 2 });
+      }
+      // las luces que viajan: una por despacho simultáneo, repartidas a lo largo del axón
+      for (let k = 0; k < ax.luces; k++) {
+        const u = (reloj * ax.vel + k / ax.luces) % 1;
+        const M = enAxon(ax, Math.max(0, u - 0.085)), N = enAxon(ax, u);
+        buf.push({ z: (M.z + N.z) / 2, t: 3, A: M, B: N, ax });
+      }
+    }
     buf.sort((a, b) => b.z - a.z);   // pintor: lo lejano primero
 
     for (const it of buf) {
       if (it.t === 0) {
-        const off = foco && foco !== it.s.nodo;
+        const off = foco && foco !== it.nodo;
         const p = 1 - 0.78 * prof01(it.A.z);
-        const c = it.s.col;
+        const c = it.col;
         cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${((off ? 0.055 : 0.3) * p).toFixed(3)})`;
-        cx.lineWidth = Math.max(0.35, it.s.w * it.A.s * 1.15);
+        cx.lineWidth = Math.max(0.35, it.w * it.A.s * 1.15);
         cx.lineCap = 'round';
         cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
       } else if (it.t === 1) {
@@ -311,27 +403,57 @@ export function crearVista(canvas) {
         const off = foco && !toca;
         const p = 1 - 0.6 * prof01(it.A.z);
         const c = it.ax.cruza ? CYAN : [138, 153, 255];
-        const base = toca ? 0.95 : (off ? 0.05 : 0.34 + it.ax.veces * 0.022);
+        // El axón en REPOSO es tenue: lo que se ve es la luz que lo recorre. Antes el brillo
+        // base subía con `veces` y competía con el pulso, que es el que trae ese mismo dato.
+        const base = toca ? 0.62 : (off ? 0.04 : 0.27);
         cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${(base * p).toFixed(3)})`;
         cx.lineWidth = Math.max(0.5, (0.7 + it.ax.veces * 0.16) * it.A.s * (toca ? 1.5 : 1));
         cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
-        if (it.ult) {   // el despacho tiene DIRECCIÓN y se tiene que ver
+        if (it.ult) {   // el despacho tiene DIRECCIÓN y se tiene que ver aunque esté quieto
           const an = Math.atan2(it.B.y - it.A.y, it.B.x - it.A.x);
           const L = Math.max(4, 7 * it.B.s * (toca ? 1.5 : 1));
-          cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(base * p).toFixed(3)})`;
+          cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${((base + 0.14) * p).toFixed(3)})`;
           cx.beginPath();
           cx.moveTo(it.B.x, it.B.y);
           cx.lineTo(it.B.x - Math.cos(an - 0.42) * L, it.B.y - Math.sin(an - 0.42) * L);
           cx.lineTo(it.B.x - Math.cos(an + 0.42) * L, it.B.y - Math.sin(an + 0.42) * L);
           cx.closePath(); cx.fill();
         }
+      } else if (it.t === 3) {
+        // la luz que viaja: UN despacho recorriendo el axón de quien escribe a quien recibe
+        const toca = foco && (foco === it.ax.de || foco === it.ax.a);
+        if (foco && !toca) continue;
+        const p = 1 - 0.5 * prof01(it.A.z);
+        const c = it.ax.cruza ? CYAN : [162, 176, 255];
+        cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${((toca ? 1 : 0.85) * p).toFixed(3)})`;
+        cx.lineWidth = Math.max(1.2, (1.8 + it.ax.veces * 0.13) * it.B.s * (toca ? 1.6 : 1));
+        cx.lineCap = 'round';
+        // la cola se desvanece hacia atras: asi la luz tiene DIRECCION aunque se la mire quieta
+        const grad = cx.createLinearGradient(it.A.x, it.A.y, it.B.x, it.B.y);
+        grad.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},0)`);
+        grad.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},${((toca ? 1 : 0.9) * p).toFixed(3)})`);
+        cx.strokeStyle = grad;
+        cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
+        // la cabeza, un punto claro: es lo que el ojo sigue
+        cx.fillStyle = `rgba(226,236,255,${(0.85 * p).toFixed(3)})`;
+        cx.beginPath(); cx.arc(it.B.x, it.B.y, Math.max(1.1, cx.lineWidth * 0.55), 0, 6.2832); cx.fill();
       } else {
         const nd = it.nd, P = it.P, off = foco && foco !== nd.id;
-        const R = Math.max(2.2, nd.r * P.s * 1.5), c = nd.col;
-        const g = cx.createRadialGradient(P.x, P.y, 0, P.x, P.y, R * 2.6);
-        g.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.1 : 0.3})`);
+        // LATIDO: la amplitud sale del CALOR, o sea de cuánto se recupera lo que esa terminal
+        // escribió. Escala logarítmica porque el reparto es muy desparejo (0 a 435 medidos): en
+        // lineal, AUDITOR late y las otras diez se ven congeladas. Calor 0 ⇒ amplitud 0: una
+        // terminal que nadie consulta se queda quieta, y eso es lo que hay que ver.
+        const amp = Math.log(1 + nd.calor) / Math.log(1 + calorMax);
+        const lat = 1 + 0.17 * amp * Math.sin(reloj * 1.9 + nd.fase);
+        const R = Math.max(2.2, nd.r * P.s * 1.5) * lat, c = nd.col;
+        // El halo tiene TECHO. Es proporcional al nucleo hasta cierto punto y despues crece
+        // fijo: sin tope, acercandose se convierte en una mancha que se come las dendritas,
+        // que es justo lo que uno fue a mirar de cerca.
+        const HALO = R + Math.min(R * 1.6, 38);
+        const g = cx.createRadialGradient(P.x, P.y, 0, P.x, P.y, HALO);
+        g.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.1 : 0.22 + 0.14 * amp * (lat - 1) / 0.17})`);
         g.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`);
-        cx.fillStyle = g; cx.beginPath(); cx.arc(P.x, P.y, R * 2.6, 0, 6.2832); cx.fill();
+        cx.fillStyle = g; cx.beginPath(); cx.arc(P.x, P.y, HALO, 0, 6.2832); cx.fill();
         cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.28 : 0.95})`;
         cx.beginPath(); cx.arc(P.x, P.y, R, 0, 6.2832); cx.fill();
         cx.fillStyle = `rgba(255,255,255,${off ? 0.06 : 0.22})`;
@@ -340,7 +462,7 @@ export function crearVista(canvas) {
         if (!off) {   // se etiquetan TODAS: una terminal chica sin nombre es un punto anónimo
           cx.fillStyle = foco === nd.id ? '#ECEAE3'
             : (nd.notas >= 60 ? 'rgba(236,234,227,.62)' : 'rgba(236,234,227,.34)');
-          cx.font = `${Math.max(9, Math.min(12, 11 * P.s * 1.3))}px 'JetBrains Mono', ui-monospace, monospace`;
+          cx.font = `${Math.max(9, Math.min(16, 11 * P.s * 1.3))}px 'JetBrains Mono', ui-monospace, monospace`;
           cx.textAlign = 'center';
           cx.fillText(nd.id.toLowerCase(), P.x, P.y + R + 14);
         }
@@ -349,35 +471,77 @@ export function crearVista(canvas) {
   }
 
   // ── interacción ──
+  const nodoEn = (e) => {
+    const rc = canvas.getBoundingClientRect();
+    const mx = e.clientX - rc.left, my = e.clientY - rc.top;
+    let mejor = null, dm = 1e9;
+    for (const nd of NODOS) {
+      if (nd._sx == null) continue;
+      const d = Math.hypot(mx - nd._sx, my - nd._sy);
+      if (d < Math.max(16, nd._sr * 1.9) && d < dm) { dm = d; mejor = nd; }
+    }
+    return mejor;
+  };
+
   canvas.addEventListener('pointerdown', (e) => {
-    arrastrando = true; lx = e.clientX; ly = e.clientY;
+    arrastrando = true;
+    // Con shift o con el botón del medio se DESPLAZA en vez de girar. Hace falta: acercándose
+    // a 20× la neurona que buscabas se va de cuadro y sin desplazamiento no hay cómo alcanzarla.
+    modo = (e.shiftKey || e.button === 1) ? 'pan' : 'rotar';
+    lx = e.clientX; ly = e.clientY; viaje = null; soltarFoco();
     try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* sin captura se sigue pudiendo */ }
   });
   canvas.addEventListener('pointerup', () => { arrastrando = false; });
   canvas.addEventListener('pointermove', (e) => {
     if (arrastrando) {
-      cam.yaw += (e.clientX - lx) * 0.006;
-      cam.pitch = Math.max(-1.2, Math.min(1.2, cam.pitch + (e.clientY - ly) * 0.005));
-      lx = e.clientX; ly = e.clientY; quieto = 0;
+      if (modo === 'pan') { PANX += e.clientX - lx; PANY += e.clientY - ly; }
+      else {
+        cam.yaw += (e.clientX - lx) * 0.006;
+        cam.pitch = acotar(cam.pitch + (e.clientY - ly) * 0.005, -1.2, 1.2);
+      }
+      lx = e.clientX; ly = e.clientY;
       return;
     }
-    let mejor = null, dm = 1e9;
-    const rc = canvas.getBoundingClientRect();
-    for (const nd of NODOS) {
-      if (nd._sx == null) continue;
-      const d = Math.hypot(e.clientX - rc.left - nd._sx, e.clientY - rc.top - nd._sy);
-      if (d < Math.max(16, nd._sr * 1.9) && d < dm) { dm = d; mejor = nd; }
-    }
+    const mejor = nodoEn(e);
     const id = mejor ? mejor.id : null;
-    if (id !== foco) { foco = id; if (alFocar) alFocar(mejor, DATOS); }
+    if (id !== foco) { foco = id; if (alFocar) alFocar(mejor, DATOS, e.clientX, e.clientY); }
   });
-  canvas.addEventListener('pointerleave', () => {
-    if (foco !== null) { foco = null; if (alFocar) alFocar(null, DATOS); }
-  });
+  canvas.addEventListener('pointerleave', () => { soltarFoco(); });
+  // Al mover la camara lo que habia bajo el puntero deja de estar ahi, asi que el detalle
+  // que quedaba abierto pasa a describir otra cosa. Se cierra: un tooltip que sobrevive al
+  // gesto miente con datos ciertos.
+  function soltarFoco() { if (foco !== null) { foco = null; if (alFocar) alFocar(null, DATOS); } }
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    cam.zoom = Math.max(0.42, Math.min(3.4, cam.zoom * (e.deltaY > 0 ? 1.09 : 0.917)));
+    const rc = canvas.getBoundingClientRect();
+    const mx = e.clientX - rc.left, my = e.clientY - rc.top;
+    const antes = escalaCentro();
+    cam.zoom = acotar(cam.zoom * (e.deltaY > 0 ? 1 / 1.12 : 1.12), ZOOM_MIN, ZOOM_MAX);
+    // El punto bajo el puntero se queda donde está: se despeja el desplazamiento que hace falta
+    // para eso. Sin esto la rueda tira siempre al centro y las neuronas del borde son
+    // inalcanzables por más que el zoom llegue.
+    const k = escalaCentro() / antes;
+    PANX = mx - OX - (mx - OX - PANX) * k;
+    PANY = my - OY - (my - OY - PANY) * k;
+    viaje = null; soltarFoco();
   }, { passive: false });
+
+  // Doble click: la forma directa de llegar a una neurona chica. En una, la centra y se acerca
+  // lo justo para que su copa llene el cuadro; en el vacío, vuelve a la vista completa.
+  canvas.addEventListener('dblclick', (e) => {
+    const nd = nodoEn(e);
+    if (!nd) { viaje = { zoom: 1, panx: 0, pany: 0, t: 0 }; return; }
+    const alcance = Math.max(nd.alcance, nd.r * 3);
+    const zObj = acotar(0.62 * Math.min(semiW, semiH) * cam.dist / (cam.f * alcance), 1, ZOOM_MAX);
+    // Dónde caería la neurona con ese zoom y sin desplazamiento: ése es el desplazamiento que
+    // hay que aplicar para dejarla en el centro del área útil.
+    const zA = cam.zoom, pX = PANX, pY = PANY;
+    cam.zoom = zObj; PANX = 0; PANY = 0;
+    const P = proy(nd.pos);
+    const destino = { zoom: zObj, panx: OX - P.x, pany: OY - P.y, t: 0 };
+    cam.zoom = zA; PANX = pX; PANY = pY;
+    viaje = destino;
+  });
 
   let alFocar = null;
   addEventListener('resize', () => { if (vivo) medir(); });
@@ -391,7 +555,22 @@ export function crearVista(canvas) {
     // tener DOS bucles peleándose por el mismo frame cuando la lente está apagada.
     frame(motion) {
       if (!vivo) return;
-      if (motion && suave && !arrastrando && !foco) { quieto++; if (quieto > 40) cam.yaw += 0.0016; }
+      if (motion && suave) {
+        reloj += 1 / 60;
+        // El giro es continuo, no después de N frames quietos: la profundidad se lee moviéndose.
+        // Pero se DETIENE cuando el usuario está mirando algo —hover, acercado o desplazado—,
+        // porque ahí girar deja de ayudar y saca de cuadro lo que estabas leyendo.
+        const inspeccionando = arrastrando || foco || cam.zoom > 1.35 || PANX || PANY;
+        if (!inspeccionando) cam.yaw += 0.0018;
+      }
+      if (viaje) {   // transición suave del doble click: llegar de un salto desorienta
+        viaje.t = Math.min(1, viaje.t + 0.075);
+        const k = 1 - Math.pow(1 - viaje.t, 3);
+        cam.zoom += (viaje.zoom - cam.zoom) * k * 0.5;
+        PANX += (viaje.panx - PANX) * k * 0.5;
+        PANY += (viaje.pany - PANY) * k * 0.5;
+        if (viaje.t >= 1) { cam.zoom = viaje.zoom; PANX = viaje.panx; PANY = viaje.pany; viaje = null; }
+      }
       pintar();
     },
     onFoco(fn) { alFocar = fn; },

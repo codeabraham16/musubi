@@ -130,6 +130,26 @@ test('P10 · la persona sale de quien FIRMA, no de quien menciona', () => {
     'la persona tiene que salir de la firma (davantis), no de las 3 menciones de gio');
 });
 
+test('P12 · el calor suma el `heat` de las notas, y sin heat es 0 y no NaN', () => {
+  // El calor es lo que hace latir a la neurona en el dibujo. Si una nota vieja no trae `heat`,
+  // sumarla como undefined convierte el total en NaN — y un NaN en el radio del latido no se
+  // ve como un error: se ve como una neurona que dejó de latir.
+  const g = {
+    neurons: [
+      { id: '1', topic: 'x/y', gist: 'AUDITOR revisó algo', author: 'gio', heat: 5 },
+      { id: '2', topic: 'x/y', gist: 'AUDITOR otra vez', author: 'gio', heat: 3 },
+      { id: '3', topic: 'x/y', gist: 'AUDITOR sin heat', author: 'gio' },
+      { id: '4', topic: 'x/y', gist: 'SKILLS nunca se leyó', author: 'gio', heat: 0 },
+    ],
+  };
+  const { terminales } = extraerPersonas(g);
+  const aud = terminales.find((t) => t.id === 'AUDITOR');
+  assert.equal(aud.calor, 8, 'suma 5+3 y la nota sin heat aporta 0');
+  const sk = terminales.find((t) => t.id === 'SKILLS');
+  assert.equal(sk.calor, 0, 'heat 0 es un calor de 0, no ausencia');
+  assert.ok(Number.isFinite(aud.calor) && Number.isFinite(sk.calor), 'jamás NaN');
+});
+
 test('P11 · una terminal que nadie firma cae a quien la menciona', () => {
   const g = { neurons: [n('1', 'x/y', 'Una nota que habla del REFUTADOR sin firmarlo', 'gio')] };
   const { terminales } = extraerPersonas(g);

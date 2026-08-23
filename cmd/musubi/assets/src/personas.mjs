@@ -82,8 +82,16 @@ export function extraerPersonas(grafo) {
     for (const r of ROLES) {
       if (!txt.includes(r)) continue;
       let t = term.get(r);
-      if (!t) { t = { id: r, notas: 0, firmadas: 0, autores: new Map(), firmas: new Map() }; term.set(r, t); }
+      if (!t) { t = { id: r, notas: 0, firmadas: 0, calor: 0, autores: new Map(), firmas: new Map() }; term.set(r, t); }
       t.notas++;
+      // CALOR = cuántas veces se recuperaron las notas que la nombran (`heat` es access_count).
+      // No es lo mismo que `notas`: mide cuánto se LEE lo que escribió, no cuánto escribió.
+      // Medido sobre el cerebro local va de 0 (REFUTADOR) a 435 (AUDITOR), o sea tiene rango
+      // real y sirve como canal. La recencia NO: las 11 terminales tienen su última nota a
+      // menos de medio día, así que animar por recencia pintaría a todas igual.
+      // Una nota que nombra a tres terminales suma su calor a las tres, igual que suma 1 nota
+      // a las tres: es el mismo criterio de atribución, no un doble conteo.
+      t.calor += (typeof n.heat === 'number' && n.heat > 0) ? n.heat : 0;
       // La FIRMA es un hecho del texto y se cuenta SIEMPRE, tenga autor la nota o no: con el
       // 65 % de la memoria local sin `author`, contarla sólo cuando hay autor haría parecer
       // que casi ninguna terminal escribe.
@@ -112,6 +120,7 @@ export function extraerPersonas(grafo) {
     id: t.id,
     notas: t.notas,
     firmas: t.firmadas,
+    calor: t.calor,
     // La persona sale de quien FIRMA como esa terminal. Sólo si nadie firmó nunca —una
     // terminal que se nombra pero no escribe— se cae a quien más la menciona, que es una
     // respuesta peor pero mejor que ninguna.

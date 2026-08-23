@@ -34,6 +34,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El encuadre se **mide del DOM**: la escena se centra en el rectángulo que el HUD no tapa, y se
     calcula sobre los nodos y sus etiquetas, dejando que las dendritas se salgan del cuadro — que
     es lo que hace que el dibujo se lea frondoso y no tímido.
+  - **Se mueve, y cada movimiento dice algo.** Por cada axón viajan luces: una **luz = un despacho**,
+    y cuántas viajan a la vez sale de `veces`, o sea de cuántas veces esas dos terminales se
+    escribieron. Cada neurona **late** según su **calor** —cuánto se recupera lo que escribió— y la
+    que nadie consulta **se queda quieta**, que también es información. El giro lento se **detiene**
+    en cuanto hay hover, zoom o desplazamiento: ahí ya estás mirando algo.
+    - Se descartó animar por **recencia**: medido sobre el cerebro local, las once terminales
+      tienen su nota más nueva a menos de medio día, así que ese canal las pinta a todas igual.
+      El calor sí tiene rango real (0 en `REFUTADOR`, 435 en `AUDITOR`).
+  - **Zoom hasta 40× para entrar en las neuronas chicas**, que era el punto: `SALA DE MANDO` tiene
+    10 notas y a escala 1 es un punto de 3 px. La rueda acerca **hacia el puntero** (si no, el zoom
+    tira siempre al centro y las del borde son inalcanzables), `shift+arrastrá` desplaza y el
+    **doble click entra** en una neurona con una transición suave; en el vacío, vuelve a la vista
+    completa. Lo que hace que eso no cueste un frame es el **LOD por nivel de rama** —cada
+    duplicación del zoom habilita un nivel más, y los niveles finos ni se recorren de lejos— más el
+    **descarte por pantalla** por neurona antes de proyectar su copa.
+  - **El hover explica la terminal**: de quién es, cuántas notas la nombran, cuántas la firman, su
+    calor, y a quién le escribe y de quién recibe. Reusa el mismo `#tip` que la lente de memoria.
 
 ### Fixed
 - **`npm test` del panel corría UN archivo, no los tests.** El script decía
