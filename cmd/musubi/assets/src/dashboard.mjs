@@ -708,10 +708,20 @@ addEventListener('resize',resize); resize();
 const GRAPH={memory:null, code:null};
 let PULSE=null, since=null;
 
+// Un pedido de grafo EN VUELO por lente, compartido. Dos caminos pueden pedir el mismo grafo a
+// la vez —el arranque en paralelo y el primer poll— y bajarlo dos veces son 1,6 MB y dos ranuras
+// de conexión al pedo, justo cuando las ranuras son el recurso escaso.
+const _bajando={};
 async function fetchGraph(which){
-  const r=await fetch('/api/graph?lens='+which,{cache:'no-store'});
-  if(!r.ok) throw 0;
-  GRAPH[which]=await r.json();
+  if(_bajando[which]) return _bajando[which];
+  _bajando[which]=(async()=>{
+    try{
+      const r=await fetch('/api/graph?lens='+which,{cache:'no-store'});
+      if(!r.ok) throw 0;
+      GRAPH[which]=await r.json();
+    } finally { _bajando[which]=null; }
+  })();
+  return _bajando[which];
 }
 
 // aplicaDeltas: mete lo que trajo el pulso en el grafo cacheado. No toca el render ni la
@@ -748,7 +758,17 @@ function hudShape(){
     project:p.project, version:p.version };
 }
 
+// EL PANEL SE AHOGABA SOLO, y este guardia es el arreglo. `/api/pulse` corre el diagnóstico
+// completo del cerebro; sobre una base de 54 MB con 56 MB de WAL eso MIDE 45-51 s. Con un
+// setInterval de 5 s se lanzaba un pedido nuevo antes de que volviera el anterior: a los 30 s ya
+// había seis en vuelo, que es el tope de conexiones por origen de un navegador, y desde ahí TODO
+// fetch quedaba encolado para siempre. El síntoma no era "lento": era el panel entero en «—» sin
+// un solo error en consola, porque las promesas no se resolvían ni fallaban. Medido: 8 conexiones
+// ESTABLISHED contra el panel y ningún poll completado.
+let sondeando=false;
 async function poll(){
+  if(sondeando) return;
+  sondeando=true;
   try{
     const r=await fetch('/api/pulse'+(since?('?since='+encodeURIComponent(since)):''),{cache:'no-store'});
     if(!r.ok) throw 0;
@@ -759,6 +779,7 @@ async function poll(){
     renderLens(); renderHUD(hudShape());
     $('liveTxt').textContent='en vivo';
   }catch(e){ $('liveTxt').textContent='reconectando'; }
+  finally{ sondeando=false; }
 }
 
 // CONSTRUIDO recuerda DE QUE OBJETO se armo el grafo que se esta dibujando.
@@ -919,6 +940,11 @@ const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
 const _lensURL=new URLSearchParams(location.search).get('lens');
 if(_lensURL==='code'||_lensURL==='personas') setLens(_lensURL);
 
+// El GRAFO no depende del PULSO, así que se pide EN PARALELO en vez de esperar a que el pulso
+// vuelva. Con el pulso en ~50 s y el grafo en ~9 s, la diferencia es ver el dibujo a los nueve
+// segundos en vez de tener la pantalla vacía casi un minuto. El HUD (contadores, salud, riel) sí
+// necesita el pulso y llena cuando llega.
+fetchGraph(lens==='code'?'code':'memory').then(()=>{ renderLens(); }).catch(()=>{});
 poll(); setInterval(poll,5000);
 conectarVivo();
 requestAnimationFrame(animate);

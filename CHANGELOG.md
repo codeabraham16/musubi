@@ -53,6 +53,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     calor, y a quién le escribe y de quién recibe. Reusa el mismo `#tip` que la lente de memoria.
 
 ### Fixed
+- **El panel se ahogaba solo y quedaba en blanco.** `/api/pulse` corre el diagnóstico completo del
+  cerebro en cada llamada; sobre la memoria local (54 MB de base con 56 MB de WAL) eso **mide
+  45–51 s**. Con el sondeo cada 5 s se lanzaba un pedido nuevo antes de que volviera el anterior:
+  a los 30 s había seis en vuelo —el tope de conexiones por origen de un navegador— y desde ahí
+  **todo `fetch` quedaba encolado para siempre**. El síntoma no era lentitud: era el panel entero
+  en «—» sin un error en consola, porque las promesas no se resolvían ni fallaban.
+  - Ahora el sondeo **no se apila** (guardia de pedido en vuelo) y el **grafo se pide en paralelo
+    al pulso**, que no dependen entre sí. Medido: el dibujo aparece a los **5,5 s** en vez de
+    nunca; los contadores llenan cuando vuelve el pulso.
+  - Queda pendiente lo de fondo: correr `Diagnose()` entero en cada pulso de 5 s es caro y no hace
+    falta a esa frecuencia.
+- **La lente de personas dibujaba ENCIMA de la de memoria.** `#brain` tenía `display:block` por
+  selector de ID, que le gana a la regla `[hidden]{display:none}` del navegador, así que ocultar
+  el canvas desde JS **no ocultaba nada**: las 2171 neuronas con bloom seguían pintadas debajo y
+  la pantalla se volvía una mancha blanca. Sólo se reproduce entrando por la lente de memoria y
+  cambiando después — entrando por `?lens=personas` la esfera nunca llega a dibujarse.
 - **`npm test` del panel corría UN archivo, no los tests.** El script decía
   `node --test src/layout.test.mjs`, así que cualquier test nuevo quedaba fuera de CI sin que nada
   se pusiera rojo. Ahora es `src/*.test.mjs`.
