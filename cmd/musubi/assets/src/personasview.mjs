@@ -15,6 +15,15 @@ const IND = [79, 107, 255], JADE = [63, 208, 163], CYAN = [53, 208, 224];
 // último porque en el resto del sistema significa «aviso» y conviene no gastarlo.
 const PALETA = [IND, JADE, [160, 107, 255], CYAN, [232, 178, 74]];
 
+// El HUD tiene que pintar la leyenda con EXACTAMENTE el color con que se dibujó cada racimo.
+// Se exporta la función y no la tabla para que el índice y el módulo del ciclo vivan en un
+// solo lugar: si el HUD repitiera `PALETA[i % 5]` por su cuenta, alcanzaría con agregar un
+// color acá para que la leyenda y el dibujo dejaran de coincidir sin que nada se rompa.
+export const colorPersona = (i) => { const c = PALETA[i % PALETA.length]; return `rgb(${c[0]},${c[1]},${c[2]})`; };
+// Los axones: mismo criterio: el mismo par de colores que usa pintar().
+export const COLOR_DESPACHO = `rgb(138,153,255)`;
+export const COLOR_CRUCE = `rgb(${CYAN[0]},${CYAN[1]},${CYAN[2]})`;
+
 // PRNG con semilla: el árbol de cada neurona tiene que ser EL MISMO en cada recarga. Con
 // Math.random(), dos personas mirando la misma pantalla ven dibujos distintos y no pueden
 // hablar de lo que ven — y una captura de ayer deja de comparar con la de hoy.
@@ -36,8 +45,22 @@ function desviar(d, ang, r) {
 
 export function crearVista(canvas) {
   const cx = canvas.getContext('2d');
-  const cam = { yaw: 0.55, pitch: -0.22, dist: 1180, f: 1120, zoom: 1.24 };
+  // `dist` ya no se elige a mano: la calcula el encuadre. El valor inicial es sólo un piso
+  // por si se pinta un frame antes de medir.
+  // `f` grande = perspectiva suave. No es gusto: MEDIDO. Con f=1120 el encuadre quedaba en
+  // dist≈1900 para un radio de escena de 538, o sea la profundidad era el 28 % de la distancia;
+  // la punta MÁS CERCANA tocaba el borde y todo lo del medio proyectaba al 59 %, dejando la
+  // escena en 540 px de los 940 disponibles. Alejando la cámara y alargando la focal en la
+  // misma proporción, la escala deja de depender tanto de la profundidad y el dibujo llena el
+  // cuadro; la sensación de 3D se sostiene con el degradado de profundidad y el orden del
+  // pintor, no con la deformación.
+  const cam = { yaw: 0.20, pitch: -0.24, dist: 1180, f: 2800, zoom: 1 };
   let W = 0, H = 0, DATOS = null, SEG = [], AX = [], NODOS = [], IDX = new Map();
+  // Encuadre: el centro de la escena en el mundo, su radio, y dónde cae el centro del ÁREA
+  // ÚTIL en pantalla — que NO es el centro del lienzo, porque el HUD tapa las dos columnas.
+  // RH: radio en el plano XZ (invariante al giro). RV: media altura. Van separados porque el
+  // ancho y el alto de la pantalla no son el mismo número y un radio único desperdicia el mayor.
+  let CENTRO = [0, 0, 0], RH = 600, RV = 300, OX = 0, OY = 0;
   let foco = null, arrastrando = false, lx = 0, ly = 0, quieto = 0, vivo = false;
   const buf = [];
   const suave = !matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -47,6 +70,58 @@ export function crearVista(canvas) {
     W = canvas.clientWidth; H = canvas.clientHeight;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    encuadrar();
+  }
+
+  // areaUtil: el rectángulo del lienzo que NO tapa el HUD. Se MIDE del DOM en vez de
+  // hardcodear los 290 px de la grilla: por debajo de 1080 px los rieles se ocultan
+  // (@media en dashboard.html) y ahí el área útil es el lienzo entero. Un número escrito a
+  // mano acá diría que hay HUD donde no lo hay, y la escena quedaría chica sin motivo.
+  function areaUtil() {
+    const m = 20;
+    let x0 = m, y0 = m, x1 = W - m, y1 = H - m;
+    const vis = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return (r.width > 1 && r.height > 1) ? r : null;   // display:none da 0×0
+    };
+    const l = vis('#hud .rail.l'); if (l) x0 = Math.max(x0, l.right + m);
+    const r = vis('#hud .rail.r'); if (r) x1 = Math.min(x1, r.left - m);
+    const h = vis('#hud .hdr');    if (h) y0 = Math.max(y0, h.bottom + m);
+    const c = vis('#hud .center'); if (c) y1 = Math.min(y1, c.top - m);
+    // Si el HUD llegara a comerse todo (ventana muy chica), no se devuelve un rectángulo
+    // negativo: se cae al lienzo entero, que se ve mal pero se ve.
+    if (x1 - x0 < 120 || y1 - y0 < 120) return { x0: 0, y0: 0, x1: W, y1: H };
+    return { x0, y0, x1, y1 };
+  }
+
+  // Hasta qué inclinación se garantiza el encuadre. Más allá el usuario ya está mirando la
+  // escena desde arriba y que una punta roce el borde es barato; encuadrar para el pitch
+  // máximo (±1,2 rad) obligaría a alejar tanto la cámara que en reposo la escena entraría en
+  // un tercio del cuadro. Se elige el compromiso, no el peor caso.
+  const PITCH_ENCUADRE = 0.5;
+
+  // encuadrar: aleja la cámara lo justo para que la escena entre en el área útil.
+  //
+  // Se resuelve POR EJE y CON la perspectiva adentro, que es donde se equivocaba antes. Un
+  // punto a radio horizontal Rh cae en pantalla a f·Rh/z, y el peor caso no es el centro de la
+  // escena sino su borde CERCANO, a z = dist − Rh. Encuadrar con f·R/dist —ignorando ese
+  // acercamiento— y encima usar el radio de la esfera 3D (que infla el horizontal con la
+  // profundidad) daba una escena metida en la mitad del cuadro. Despejando f·Rh/(dist−Rh) ≤
+  // semiancho sale la fórmula de abajo.
+  //
+  // Rh es invariante al yaw (es el radio en el plano XZ), así que el encuadre no baila cuando
+  // la escena gira sola ni cuando se la arrastra.
+  function encuadrar() {
+    if (!W || !H) return;
+    const a = areaUtil();
+    OX = (a.x0 + a.x1) / 2; OY = (a.y0 + a.y1) / 2;
+    const semiW = Math.max((a.x1 - a.x0) / 2 * 0.96, 60);
+    const semiH = Math.max((a.y1 - a.y0) / 2 * 0.96, 60);
+    // al inclinar, lo que era profundidad pasa a ocupar alto: por eso Rh entra acá también
+    const alto = RV * Math.cos(PITCH_ENCUADRE) + RH * Math.sin(PITCH_ENCUADRE);
+    cam.dist = Math.max(240, RH + cam.f * RH / semiW, RH + cam.f * alto / semiH);
   }
 
   // construir: de {terminales, despachos} a geometría 3D. Se llama sólo cuando cambian los
@@ -55,30 +130,42 @@ export function crearVista(canvas) {
     DATOS = datos; SEG = []; AX = []; NODOS = []; IDX = new Map();
     if (!racimos.length) return;
 
-    // un racimo por persona, repartidos en una fila con separación proporcional a su tamaño
-    const anchoTotal = racimos.reduce((s, r) => s + Math.sqrt(r.notas), 0) || 1;
+    // El tamaño del racimo lo fija cuántas TERMINALES tiene, no cuántas notas: es el volumen
+    // que hay que repartir en la esfera. La constante sale del boceto aprobado (8 terminales →
+    // 190, 3 → 150); lo que importa no es el número sino la PROPORCIÓN entre el racimo y sus
+    // neuronas, porque el encuadre normaliza la escala después. Con racimos más anchos las
+    // neuronas quedan relativamente chicas y el dibujo se ve tímido.
+    const radioRacimo = (r) => 88 + 36 * Math.sqrt(r.terminales.length);
+    // Y se colocan en fila PEGADAS: cada una a su radio más un aire fijo de la siguiente. La
+    // versión anterior repartía un ancho fijo en proporción a las notas, así que dos racimos
+    // desparejos quedaban lejísimos con vacío en el medio.
+    const AIRE = 92;
     let x = 0;
-    const centros = racimos.map((r) => {
-      const w = Math.sqrt(r.notas) / anchoTotal;
-      const c = [(x + w / 2 - 0.5) * 1180, 0, 0];
-      x += w;
-      return c;
+    const centros = racimos.map((r, i) => {
+      if (i > 0) x += radioRacimo(racimos[i - 1]) + AIRE + radioRacimo(r);
+      return [x, 0, 0];
     });
+    const medio = centros.length ? (centros[0][0] + centros[centros.length - 1][0]) / 2 : 0;
+    for (const c of centros) c[0] -= medio;
 
     racimos.forEach((rac, ri) => {
       const col = PALETA[ri % PALETA.length];
       const c = centros[ri];
-      const R = 105 + 62 * Math.sqrt(rac.terminales.length);
+      const R = radioRacimo(rac);
       rac.terminales.forEach((t, i) => {
         // esfera de Fibonacci: reparte sin apelmazar y es determinista
         const k = i + 0.5, phi = Math.acos(1 - 2 * k / rac.terminales.length);
         const th = Math.PI * (1 + Math.sqrt(5)) * k;
+        // Si una terminal se llama como la persona —GIO, DAVANTIS— va casi en el centro de su
+        // racimo. Es la que la representa, y verla orbitando en el borde junto a las otras
+        // hacía que el racimo no tuviera núcleo.
+        const rr = t.id.toLowerCase() === rac.persona ? R * 0.18 : R;
         const nd = {
           id: t.id, notas: t.notas, persona: rac.persona, col,
           r: Math.max(4.2, Math.sqrt(t.notas) * 1.15),
-          pos: [c[0] + Math.cos(th) * Math.sin(phi) * R,
-                c[1] + Math.cos(phi) * R * 0.78,
-                c[2] + Math.sin(th) * Math.sin(phi) * R],
+          pos: [c[0] + Math.cos(th) * Math.sin(phi) * rr,
+                c[1] + Math.cos(phi) * rr * 0.78,
+                c[2] + Math.sin(th) * Math.sin(phi) * rr],
         };
         NODOS.push(nd); IDX.set(t.id, nd);
       });
@@ -119,6 +206,32 @@ export function crearVista(canvas) {
       }
       AX.push({ de: d.de, a: d.a, veces: d.veces, P, cruza: A.persona !== B.persona });
     }
+
+    // El centro de la escena son los NODOS. Los arcos de los axones suben bastante por encima
+    // de ellos, así que meterlos acá corría el centro hacia arriba y dejaba a las neuronas
+    // sentadas en la mitad de abajo del cuadro.
+    const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    for (const nd of NODOS) for (let i = 0; i < 3; i++) {
+      if (nd.pos[i] < lo[i]) lo[i] = nd.pos[i];
+      if (nd.pos[i] > hi[i]) hi[i] = nd.pos[i];
+    }
+    CENTRO = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    // El encuadre se calcula sobre los NODOS y sus etiquetas, NO sobre la última punta de la
+    // última dendrita. Es la decisión del boceto aprobado y es deliberada: ahí los árboles de
+    // `principal` y `auditor` se salen del cuadro, y por eso el dibujo se lee frondoso. Metiendo
+    // las puntas adentro, el mismo grafo proyecta un 40 % más chico y queda tímido — comparé las
+    // dos contra el boceto. Lo que NO puede salirse es un nodo o su nombre: eso sí es información.
+    let rh = 0, rv = 0;
+    const PAD = 46;   // el bulbo del nodo y su etiqueta debajo
+    for (const nd of NODOS) {
+      const d = Math.hypot(nd.pos[0] - CENTRO[0], nd.pos[2] - CENTRO[2]);
+      if (d + PAD > rh) rh = d + PAD;
+      const v = Math.abs(nd.pos[1] - CENTRO[1]);
+      if (v + PAD > rv) rv = v + PAD;
+    }
+    RH = Math.max(120, rh);
+    RV = Math.max(80, rv);
+    encuadrar();
   }
 
   function crecer(p, d, largo, w, prof, nodo, r) {
@@ -134,15 +247,21 @@ export function crearVista(canvas) {
   }
 
   function proy(p) {
+    // Se gira alrededor del CENTRO de la escena, no del origen del mundo: con dos racimos de
+    // tamaños distintos el centro geométrico no cae en 0, y girar sobre el origen mandaba
+    // media escena fuera de cuadro en cuanto se arrastraba.
+    const px = p[0] - CENTRO[0], py = p[1] - CENTRO[1], pz = p[2] - CENTRO[2];
     const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
-    const x = p[0] * cy - p[2] * sy, z = p[0] * sy + p[2] * cy, y = p[1];
+    const x = px * cy - pz * sy, z = px * sy + pz * cy, y = py;
     const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
     const y2 = y * cp - z * sp, z2 = y * sp + z * cp;
     // OJO: el zoom mueve la CÁMARA, no la distancia focal. Dividir las dos por `zoom` se
     // cancela en el centro de la escena y el zoom no hace nada justo donde estás mirando.
     const zc = z2 + cam.dist / cam.zoom;
     const s = cam.f / Math.max(zc, 40);
-    return { x: W / 2 + x * s, y: H / 2 + y2 * s, s, z: zc };
+    // El centro de proyección es el del ÁREA ÚTIL, no el del lienzo: si fuera W/2 la escena
+    // queda centrada DEBAJO de las tarjetas del HUD, que es exactamente lo que pasaba.
+    return { x: OX + x * s, y: OY + y2 * s, s, z: zc };
   }
 
   function pintar() {
@@ -151,11 +270,17 @@ export function crearVista(canvas) {
       cx.fillStyle = 'rgba(154,157,171,.7)';
       cx.font = "13px 'JetBrains Mono', ui-monospace, monospace";
       cx.textAlign = 'center';
-      cx.fillText('todavía no hay despachos entre terminales en esta memoria', W / 2, H / 2);
+      cx.fillText('todavía no hay despachos entre terminales en esta memoria', OX || W / 2, OY || H / 2);
       return;
     }
     buf.length = 0;
-    const lejos = cam.dist / cam.zoom * 1.9;
+    // Profundidad NORMALIZADA dentro de la escena: 0 la cara cercana, 1 la lejana. Antes se
+    // medía contra la distancia de cámara, que no es una propiedad de la escena sino del
+    // encuadre — al alejar la cámara para achatar la perspectiva, el degradado se planchaba y
+    // todo quedaba igual de brillante. Contra el radio propio, el efecto es el mismo con
+    // cualquier focal.
+    const zCerca = cam.dist / cam.zoom - RH, zLargo = Math.max(2 * RH, 1);
+    const prof01 = (z) => Math.max(0, Math.min(1, (z - zCerca) / zLargo));
 
     for (const s of SEG) {
       const A = proy(s.a), B = proy(s.b);
@@ -175,7 +300,7 @@ export function crearVista(canvas) {
     for (const it of buf) {
       if (it.t === 0) {
         const off = foco && foco !== it.s.nodo;
-        const p = Math.max(0.12, Math.min(1, 1.35 - it.A.z / lejos));
+        const p = 1 - 0.78 * prof01(it.A.z);
         const c = it.s.col;
         cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${((off ? 0.055 : 0.3) * p).toFixed(3)})`;
         cx.lineWidth = Math.max(0.35, it.s.w * it.A.s * 1.15);
@@ -184,7 +309,7 @@ export function crearVista(canvas) {
       } else if (it.t === 1) {
         const toca = foco && (foco === it.ax.de || foco === it.ax.a);
         const off = foco && !toca;
-        const p = Math.max(0.2, Math.min(1, 1.35 - it.A.z / lejos));
+        const p = 1 - 0.6 * prof01(it.A.z);
         const c = it.ax.cruza ? CYAN : [138, 153, 255];
         const base = toca ? 0.95 : (off ? 0.05 : 0.34 + it.ax.veces * 0.022);
         cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${(base * p).toFixed(3)})`;

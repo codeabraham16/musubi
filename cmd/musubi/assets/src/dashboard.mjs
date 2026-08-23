@@ -10,7 +10,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { extraerPersonas, agruparPorPersona } from './personas.mjs';
-import { crearVista } from './personasview.mjs';
+import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
 /* ---------- paletas ---------- */
@@ -73,6 +73,9 @@ let lens='memory';   // lente activa (memory|code|personas); los datos viven en 
 // La vista de PERSONAS dibuja en su propio canvas 2D. Se crea una sola vez; se apaga sola
 // cuando la lente no es la suya, asi que no gasta un frame mientras nadie la mira.
 const VISTA_PERSONAS = crearVista(document.getElementById('personas'));
+// Lo último que se extrajo, para que el HUD pinte la MISMA verdad que el lienzo. Vive acá y no
+// dentro de renderLens porque renderHUD corre en cada poll (cada 5 s) y necesita leerlo.
+let RACIMOS = [], PERSONAS = null;
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -492,7 +495,22 @@ function renderHUD(d){
     ?gdoms.slice().sort((x,y)=>(y.count-x.count)||String(x.domain).localeCompare(String(y.domain))).slice(0,10)
       .map(dd=>({name:dd.domain,count:dd.count,color:(DOMCOL&&DOMCOL.get(dd.domain))||'#7f9cc9'}))
     :DOMAINS.slice(0,10);
-  $('domlegend').innerHTML=legend.length?legend.map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
+  // En la lente personas esta tarjeta muestra a las PERSONAS, no a los dominios. El guardia va
+  // acá y no en renderLens porque renderHUD corre en CADA poll: sin él, la leyenda de personas
+  // vivía cinco segundos y volvía a ser la de dominios sola.
+  if(lens==='personas') pintarLeyendaPersonas();
+  else $('domlegend').innerHTML=legend.length?legend.map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
+  // En la lente personas los tres primeros KPI cambian de SUJETO, y por eso cambian el valor
+  // JUNTO con la etiqueta: dejar el rótulo «Terminales» sobre el conteo de memorias es la
+  // forma más barata de que un panel mienta con datos ciertos.
+  if(lens==='personas'&&PERSONAS){
+    $('kActive').textContent=PERSONAS.terminales.length;
+    // DESPACHOS son los mensajes, no los PARES. `despachos.length` cuenta pares distintos
+    // (A→B una vez, valga 1 o valga 40) y ponerlo bajo el rótulo «despachos» dividía la cifra
+    // real por cinco. El total es la suma de `veces`; los pares van a la leyenda, aparte.
+    $('kSyn').textContent=PERSONAS.despachos.reduce((s,d)=>s+d.veces,0);
+    $('kDomains').textContent=RACIMOS.length;
+  }
   const runs=((d.orchestration||{}).runs)||[];
   $('kRuns').textContent=runs.filter(r=>r.status==='running'||r.done<r.total).length;
   const h=d.health||{}, bad=(h.checks||[]).filter(c=>c.status&&c.status!=='ok').length;
@@ -767,7 +785,10 @@ function renderLens(){
     // server. La persona sale de `author`, que viaja en el grafo desde 0.107.0.
     if(!GRAPH.memory) return;
     const datos = extraerPersonas(GRAPH.memory);
-    VISTA_PERSONAS.cargar(datos, agruparPorPersona(datos.terminales));
+    RACIMOS = agruparPorPersona(datos.terminales);
+    PERSONAS = datos;
+    VISTA_PERSONAS.cargar(datos, RACIMOS);
+    pintarLeyendaPersonas();
     return;
   }
   if(lens==='code'){
@@ -802,17 +823,46 @@ function setLens(v){ lens=v; const b=$('lensBtn');
   renderLens(); if(PULSE) renderHUD(hudShape()); }
 // applyLensLabels: intercambia los textos estáticos del HUD según la lente (leyenda de aristas,
 // títulos, guía). Se llama al togglear, no en cada poll.
-function applyLensLabels(){ const code=lens==='code';
+function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
   const set=(id,t)=>{ const e=$(id); if(e) e.textContent=t; };
+  // Los contadores de la cabecera siguen describiendo la MEMORIA aun en la lente personas: son
+  // el universo del que sale este grafo, y renombrarlos ahí sí sería mentir.
   set('lblNodes', code?'nodos':'neuronas'); set('lblEdges', code?'aristas':'sinapsis');
-  set('domTitle', code?'Módulos':'Dominios'); set('lblActive', code?'Nodos':'Memorias activas');
-  set('lblSyn', code?'Aristas':'Sinapsis'); set('lblDomains', code?'Módulos':'Dominios');
+  set('domTitle', per?'Personas':(code?'Módulos':'Dominios'));
+  set('lblActive', per?'Terminales':(code?'Nodos':'Memorias activas'));
+  set('lblSyn', per?'Despachos':(code?'Aristas':'Sinapsis'));
+  set('lblDomains', per?'Personas':(code?'Módulos':'Dominios'));
+  if(per){
+    const al0=$('actlegend'); if(al0) al0.innerHTML =
+      `<div class="lg"><span class="sw" style="background:${COLOR_DESPACHO};color:${COLOR_DESPACHO}"></span>despacho</div>`+
+      `<div class="lg"><span class="sw" style="background:${COLOR_CRUCE};color:${COLOR_CRUCE}"></span>entre personas</div>`;
+    const ht0=$('howto'); if(ht0) ht0.innerHTML =
+      `<span><b>·</b> cada neurona es una <b>terminal</b>; sus <b>dendritas</b>, cuánto escribió</span>`+
+      `<span><b>·</b> las flechas son <b>despachos</b> y tienen <b>dirección</b>: quién le escribió a quién</span>`+
+      `<span><b>·</b> el <b>color</b> agrupa por <b>persona</b> · la persona sale de quién <b>firma</b>, no de quién menciona</span>`;
+    pintarLeyendaPersonas();
+    return;
+  }
   const al=$('actlegend'); if(al) al.innerHTML = code
     ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
     : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
   const ht=$('howto'); if(ht) ht.innerHTML = code
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
     : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
+}
+// pintarLeyendaPersonas: quién es quién, con EL MISMO color con que se dibujó su racimo.
+// Y declara las notas sin `author`: el reparto por persona se hace sobre las que lo tienen, y
+// callar cuántas quedaron afuera convierte una muestra parcial en un total aparente.
+function pintarLeyendaPersonas(){
+  const dl=$('domlegend'); if(!dl) return;
+  if(!RACIMOS.length){ dl.innerHTML='<div class="empty">sin terminales firmadas</div>'; return; }
+  const filas=RACIMOS.map((r,i)=>{ const c=colorPersona(i);
+    return `<div class="lg"><span class="sw" style="background:${c};color:${c}"></span>${esc(r.persona)} <b>${r.notas}</b></div>`; });
+  const pares=PERSONAS?PERSONAS.despachos.length:0;
+  if(pares) filas.push(`<div class="lg" style="opacity:.55">${pares} pares se escriben</div>`);
+  const sa=PERSONAS?PERSONAS.sinAutor:0;
+  if(sa) filas.push(`<div class="lg" style="opacity:.55">${sa} notas sin autor · no se reparten</div>`);
+  dl.innerHTML=filas.join('');
 }
 const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
   setLens(lens==='memory' ? 'code' : (lens==='code' ? 'personas' : 'memory')));

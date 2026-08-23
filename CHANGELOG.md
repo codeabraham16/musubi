@@ -26,6 +26,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El render es canvas 2D y no three.js aunque three ya esté en el bundle: lo que hace que una
     rama parezca dendrita es el trazo que adelgaza hacia la punta, y eso en 2D es una propiedad
     del stroke y en 3D es geometría por segmento.
+  - **El HUD acompaña a la lente.** La tarjeta de dominios pasa a ser la de **personas** —cada una
+    con el mismo color con que se dibujó su racimo—, los KPI cambian de sujeto (terminales,
+    despachos, personas) y la guía explica lo que esta lente muestra. Se declaran además los dos
+    números que faltaban para no leer una muestra como si fuera un total: cuántos **pares** se
+    escriben, y cuántas notas **sin autor** quedaron fuera del reparto.
+  - El encuadre se **mide del DOM**: la escena se centra en el rectángulo que el HUD no tapa, y se
+    calcula sobre los nodos y sus etiquetas, dejando que las dendritas se salgan del cuadro — que
+    es lo que hace que el dibujo se lea frondoso y no tímido.
 
 ### Fixed
 - **`npm test` del panel corría UN archivo, no los tests.** El script decía
