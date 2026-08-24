@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extraerPersonas, agruparPorPersona, personaDe } from './personas.mjs';
+import {
+  extraerPersonas, agruparPorPersona, personaDe,
+  neuronaDeEvento, clasificarEvento,
+} from './personas.mjs';
 
 // Fixture chico y EXPLÍCITO: cada nota está puesta para tensar un invariante distinto, y por
 // eso se escriben a mano en vez de generarse. Un fixture generado en bucle hace que todos los
@@ -128,6 +131,66 @@ test('P10 · la persona sale de quien FIRMA, no de quien menciona', () => {
   assert.equal(alt.firmas, 1, 'pero sólo una la firma');
   assert.equal(alt.persona, 'davantis',
     'la persona tiene que salir de la firma (davantis), no de las 3 menciones de gio');
+});
+
+// ── el pulso en vivo: un evento real del riel enciende UNA neurona, o ninguna ──
+
+test('P13 · un principal declarado enciende SU terminal, y se marca exacta', () => {
+  const n = neuronaDeEvento({ principal: 'davantis-altura', tool: 'musubi_sync_pull', kind: 'sondeo' });
+  assert.equal(n.terminal, 'ALTURA');
+  assert.equal(n.persona, 'davantis');
+  assert.equal(n.exacta, true, 'hay tabla para este principal: la atribución es exacta');
+
+  const m = neuronaDeEvento({ principal: 'davantis-mando-admin' });
+  assert.equal(m.terminal, 'SALA DE MANDO', 'el sufijo -mando-admin es la sala de mando');
+});
+
+test('P14 · un servicio sin dueño declarado NO enciende nada ni inventa una neurona', () => {
+  // El nombre de la terminal tiene que salir de la TABLA, nunca derivarse del principal.
+  // Derivarlo —`persona.toUpperCase()` y listo— haría que `b1-adjudicador` encendiera una
+  // neurona «B1» que no existe en el grafo, y `crm-cabina` una «CRM». Son servicios reales
+  // cuyo dueño no se deduce del dato, y se prefiere no dibujar antes que dibujar una mentira.
+  for (const p of ['b1-adjudicador', 'crm-cabina', 'algun-bot-nuevo', 'auditor-x']) {
+    const n = neuronaDeEvento({ principal: p });
+    assert.equal(n, null, `${p} no puede encender nada: no está declarado`);
+  }
+  assert.equal(neuronaDeEvento({ principal: '' }), null);
+  assert.equal(neuronaDeEvento({}), null);
+  assert.equal(neuronaDeEvento(null), null);
+});
+
+test('P15 · una credencial sin neurona propia PULSA EN SU PERSONA, y se declara inexacta', () => {
+  // `davantis-admin` es el 28 % del tráfico medido y no tiene terminal propia. Cae en DAVANTIS
+  // por REGLA DECLARADA (la credencial es de esa persona y la persona tiene neurona), pero
+  // `exacta:false` existe para que el dibujo no afirme más de lo que sabe.
+  const n = neuronaDeEvento({ principal: 'davantis-admin' });
+  assert.equal(n.terminal, 'DAVANTIS');
+  assert.equal(n.persona, 'davantis');
+  assert.equal(n.exacta, false, 'es un repliegue, no una coincidencia: hay que poder distinguirlo');
+
+  const g = neuronaDeEvento({ principal: 'gio' });
+  assert.equal(g.terminal, 'GIO');
+  assert.equal(g.exacta, true);
+});
+
+test('P16 · la capa la decide el SERVIDOR (`kind`), no el panel', () => {
+  const s = clasificarEvento({ kind: 'sondeo', outcome: 'ok', ms: 0.25, tool: 'musubi_sync_pull' });
+  assert.equal(s.capa, 'sondeo');
+  assert.equal(s.falla, false);
+  assert.equal(s.ms, 0.25);
+
+  const t = clasificarEvento({ kind: 'trabajo', outcome: 'ok', ms: 2893, tool: 'musubi_save_observation' });
+  assert.equal(t.capa, 'trabajo', 'todo lo que no es sondeo es trabajo');
+
+  // un kind desconocido NO puede caer en «sondeo»: el sondeo se dibuja tenue, y esconder ahí
+  // un evento que no sabemos qué es sería perder trabajo real en el ruido.
+  assert.equal(clasificarEvento({ kind: 'loquesea' }).capa, 'trabajo');
+  assert.equal(clasificarEvento({}).capa, 'trabajo');
+
+  assert.equal(clasificarEvento({ outcome: 'error' }).falla, true);
+  assert.equal(clasificarEvento({ outcome: 'rechazo' }).falla, true);
+  assert.equal(clasificarEvento({ ms: -5 }).ms, 0, 'un ms negativo no puede volverse un grosor');
+  assert.equal(clasificarEvento({ ms: 'x' }).ms, 0, 'ni un ms que no es número');
 });
 
 test('P12 · el calor suma el `heat` de las notas, y sin heat es 0 y no NaN', () => {

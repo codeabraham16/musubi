@@ -34,6 +34,73 @@ export function personaDe(author) {
   return (i === -1 ? author : author.slice(0, i)).toLowerCase();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DE UN EVENTO EN VIVO A UNA NEURONA
+//
+// El riel del central emite una invocación por cada llamada a una tool:
+//   {seq, at, tool, outcome, ms, principal, project, kind}
+// El `principal` es una identidad de TOKEN, y las neuronas de este grafo son TERMINALES, que
+// salen de la firma del gist. Son DOS POBLACIONES DISTINTAS que sólo se solapan en parte, y
+// unirlas a ojo es la misma trampa que confundir firmar con mencionar.
+//
+// Por eso el mapeo es una TABLA DECLARADA y no una regla inferida. `personaDe()` sirve para
+// colapsar credenciales de un humano, pero aplicada a los principales INVENTA personas:
+// `b1-adjudicador` daría una persona «b1» y `crm-cabina` una persona «crm», y no son personas:
+// son servicios. De quién es cada uno no se deduce del dato — `crm-cabina` ni siquiera declara
+// proyecto. Mientras no se declare, NO pulsan, y el panel dice cuántos eventos quedaron sin
+// neurona en vez de repartirlos a dedo.
+// La protección contra inventar personas NO es un guardia aparte: es que esta tabla sea una
+// LISTA CERRADA, igual que `ROLES`. `crm-cabina` no enciende nada porque no hay entrada `crm`,
+// no porque haya un `if` que lo frene. Lo aprendí sacándole el guardia que tenía antes: el test
+// pasaba igual, o sea el guardia era defensa en profundidad tapando el invariante.
+export const ACTORES = {
+  'davantis-mando-admin': 'SALA DE MANDO',
+  'davantis-mando': 'SALA DE MANDO',
+  'davantis-altura': 'ALTURA',
+  'davantis': 'DAVANTIS',
+  'gio': 'GIO',
+};
+
+/**
+ * neuronaDeEvento: qué neurona enciende una invocación, o null si no se puede saber.
+ *
+ * El repliegue —un `davantis-*` sin neurona propia pulsa en la de `davantis`— es una REGLA
+ * DECLARADA, no una inferencia: la credencial es de esa persona y la persona tiene neurona.
+ * Se devuelve `exacta:false` para que el dibujo pueda mostrarlo distinto y no afirmar de más.
+ */
+export function neuronaDeEvento(ev) {
+  const principal = String((ev && ev.principal) || '').toLowerCase();
+  if (!principal) return null;
+
+  const directa = ACTORES[principal];
+  if (directa) return { terminal: directa, persona: personaDe(principal), principal, exacta: true };
+
+  // Repliegue: una credencial `<persona>-loquesea` pulsa en la neurona de esa persona SI la
+  // persona está en la tabla. El nombre de la terminal sale SIEMPRE de la tabla, nunca del
+  // principal: derivarlo del texto (por ejemplo `persona.toUpperCase()`) fabricaría neuronas
+  // que no existen en el grafo, que es exactamente lo que no se puede hacer acá.
+  const persona = personaDe(principal);
+  const propia = ACTORES[persona];
+  return propia ? { terminal: propia, persona, principal, exacta: false } : null;
+}
+
+/**
+ * clasificarEvento: las dos capas y si falló. `kind` lo decide el SERVIDOR (viene en el evento),
+ * no este módulo: acá sólo se normaliza. Medido sobre 7 días, el 98,2 % es `sondeo` — por eso
+ * las dos capas tienen que verse distintas o el trabajo real queda enterrado bajo el ruido.
+ */
+export function clasificarEvento(ev) {
+  const kind = String((ev && ev.kind) || '').toLowerCase();
+  const outcome = String((ev && ev.outcome) || '').toLowerCase();
+  const ms = Number(ev && ev.ms);
+  return {
+    capa: kind === 'sondeo' ? 'sondeo' : 'trabajo',
+    falla: outcome !== '' && outcome !== 'ok',
+    ms: Number.isFinite(ms) && ms >= 0 ? ms : 0,
+    tool: String((ev && ev.tool) || ''),
+  };
+}
+
 const textoDe = (n) => `${n.topic || ''} ${n.gist || ''}`.toUpperCase();
 
 // rolEn: qué terminal nombra este fragmento, o null. Devuelve UNA, la más larga que matchee.

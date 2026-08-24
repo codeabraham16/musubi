@@ -9,7 +9,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { extraerPersonas, agruparPorPersona } from './personas.mjs';
+import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento } from './personas.mjs';
 import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -673,6 +673,22 @@ function tictac(){
 }
 setInterval(tictac, 1000);
 
+// impulsar: de UNA invocacion real del riel a UN impulso en la lente personas. Es el unico
+// camino por el que nace un pulso; no hay bucle que los fabrique.
+//
+// NO se llama desde el `backlog`, y eso es deliberado: el backlog son eventos que YA pasaron
+// (la corrida medida traia 230 de golpe al conectar). Dispararlos como impulsos seria mostrar
+// como presente algo pasado, que es justo lo que este rediseño vino a sacar.
+//
+// Tampoco se acumulan con la lente apagada: `reloj` no avanza mientras la vista no esta viva, y
+// los pulsos encolados ahi saldrian todos juntos al volver, mintiendo sobre cuando ocurrieron.
+function impulsar(ev){
+  if(lens!=='personas' || !VISTA_PERSONAS.activa() || !ev || !ev.tool) return;
+  const n=neuronaDeEvento(ev), c=clasificarEvento(ev);
+  VISTA_PERSONAS.pulsar(n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
+                          : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms});
+}
+
 function conectarVivo(){
   // EventSource y no fetch: el stream local es same-origin sobre loopback y no lleva credencial
   // (el bearer se queda en el relay), asi que se puede usar el que reconecta solo. El del CEREBRO
@@ -680,7 +696,7 @@ function conectarVivo(){
   let es;
   try{ es=new EventSource('/api/stream'); }catch(_){ return; }
   es.addEventListener('backlog', m=>{ try{ (JSON.parse(m.data)||[]).forEach(anotarEvento); }catch(_){} pintarVivo(); });
-  es.addEventListener('uso', m=>{ try{ anotarEvento(JSON.parse(m.data)); }catch(_){} pintarVivo(); });
+  es.addEventListener('uso', m=>{ try{ const ev=JSON.parse(m.data); anotarEvento(ev); impulsar(ev); }catch(_){} pintarVivo(); });
   es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); pintarVivo(); }catch(_){} });
   es.onerror=()=>{ // EventSource reconecta solo; lo unico que hace falta es no mentir mientras tanto
     if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; pintarVivo(); }
@@ -855,11 +871,15 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
   set('lblDomains', per?'Personas':(code?'Módulos':'Dominios'));
   if(per){
     const al0=$('actlegend'); if(al0) al0.innerHTML =
+      `<div class="lg"><span class="sw" style="background:rgba(255,255,255,.30);color:rgba(255,255,255,.30)"></span>sondeo</div>`+
+      `<div class="lg"><span class="sw" style="background:#fff;color:#fff"></span>trabajo real</div>`+
+      `<div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>falló</div>`+
       `<div class="lg"><span class="sw" style="background:${COLOR_DESPACHO};color:${COLOR_DESPACHO}"></span>despacho</div>`+
-      `<div class="lg"><span class="sw" style="background:${COLOR_CRUCE};color:${COLOR_CRUCE}"></span>entre personas</div>`;
+      `<div class="lg"><span class="sw" style="background:${COLOR_CRUCE};color:${COLOR_CRUCE}"></span>cruza personas</div>`;
     const ht0=$('howto'); if(ht0) ht0.innerHTML =
       `<span><b>·</b> cada neurona es una <b>terminal</b>; sus <b>dendritas</b>, cuánto escribió</span>`+
-      `<span><b>·</b> la <b>luz que viaja</b> es un <b>despacho</b> yendo de quien escribe a quien recibe; cuantas más viajan a la vez, más se escribieron</span>`+
+      `<span><b>·</b> el <b>impulso</b> que recorre un árbol es <b>UNA llamada real a una tool</b>, en el momento en que ocurre. <b>Sin evento no hay luz</b>: si el cerebro está quieto, esto está quieto</span>`+
+      `<span><b>·</b> el <b>grosor</b> del impulso es lo que tardó esa llamada; el <b>ámbar</b>, que falló</span>`+
       `<span><b>·</b> la neurona <b>late</b> según cuánto se <b>recupera</b> lo que escribió — la que nadie consulta se queda quieta</span>`+
       `<span><b>·</b> el <b>color</b> agrupa por <b>persona</b> · la persona sale de quién <b>firma</b>, no de quién menciona</span>`;
     // Corto: con los verbos completos la barra se partia en dos lineas y empujaba el area
@@ -929,6 +949,11 @@ function pintarLeyendaPersonas(){
   if(pares) filas.push(`<div class="lg" style="opacity:.55">${pares} pares se escriben</div>`);
   const sa=PERSONAS?PERSONAS.sinAutor:0;
   if(sa) filas.push(`<div class="lg" style="opacity:.55">${sa} notas sin autor · no se reparten</div>`);
+  // Los eventos que no encontraron neurona SE DECLARAN. Son los servicios sin dueño declarado
+  // (`b1-adjudicador`, `crm-cabina`): repartirlos a la neurona de otro para que la pantalla no
+  // quede quieta seria exactamente el tipo de invento que este rediseño vino a sacar.
+  const cp=VISTA_PERSONAS.cuentaPulsos();
+  if(cp.sinNeurona) filas.push(`<div class="lg" style="opacity:.55">${cp.sinNeurona} eventos sin neurona · falta declarar su dueño</div>`);
   dl.innerHTML=filas.join('');
 }
 const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>

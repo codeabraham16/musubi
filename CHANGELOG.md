@@ -51,6 +51,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     **descarte por pantalla** por neurona antes de proyectar su copa.
   - **El hover explica la terminal**: de quién es, cuántas notas la nombran, cuántas la firman, su
     calor, y a quién le escribe y de quién recibe. Reusa el mismo `#tip` que la lente de memoria.
+- **El impulso eléctrico de la lente `personas` sale de invocaciones REALES, y de nada más.** Cada
+  llamada a una tool que llega por el riel en vivo enciende **un** frente que recorre las dendritas
+  de la neurona que la disparó, desde el soma hacia las puntas.
+  - **Un pulso = un evento.** Se eliminó el bucle de luces que recorría los axones sin que hubiera
+    pasado nada: eran despachos reales, pero el *momento* en que viajaban era inventado. Ahora si
+    el cerebro está quieto, el dibujo está quieto — y eso también es información.
+  - La neurona sale del `principal` del evento por una **tabla declarada**, no inferida.
+    `personaDe()` colapsa en el primer guion y aplicada a los tokens inventaría personas:
+    `b1-adjudicador` daría «b1» y `crm-cabina` daría «crm», que son **servicios, no personas**.
+    Los que no están declarados **no pulsan**, y el panel dice cuántos eventos quedaron sin neurona.
+  - `kind` (lo clasifica el servidor) separa las dos capas: el **sondeo** es un frente tenue y el
+    **trabajo real** uno saturado. Medido sobre 7 días: 225.967 invocaciones, **98,2 % sondeo**.
+    Un `kind` desconocido cae del lado del trabajo, nunca del sondeo: esconder ahí algo que no
+    sabemos qué es sería perder cognición en el ruido.
+  - `outcome` pinta el ámbar de «falló» —el mismo que ya usa el HUD para aviso— y `ms` da el
+    grosor, en escala logarítmica porque el rango medido va de 0,15 ms a 60.041 ms.
+  - El frente se dibuja **aditivo** (`globalCompositeOperation = 'lighter'`) con halo y núcleo:
+    donde dos ramas encendidas se cruzan el brillo se suma. Medido, es la diferencia entre un
+    impulso que mueve el brillo del cuadro 0,3 % (invisible) y uno que lo mueve 1,67 %.
+  - El **backlog no pulsa**: al conectar llegan de golpe los eventos ya ocurridos (230 en la
+    corrida medida) y dispararlos sería mostrar como presente algo pasado.
 
 ### Fixed
 - **El panel se ahogaba solo y quedaba en blanco.** `/api/pulse` corre el diagnóstico completo del

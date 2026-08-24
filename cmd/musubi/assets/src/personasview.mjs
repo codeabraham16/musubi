@@ -91,6 +91,19 @@ export function crearVista(canvas) {
   const buf = [];
   const suave = !matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  // ── el impulso ──
+  // Cuánto tarda un frente en ir del soma a la última punta, y qué porción del árbol abarca.
+  // Estos DOS números no salen de ningún dato y hay que decirlo: son la velocidad de LECTURA,
+  // elegida para que el ojo pueda seguir el frente. Lo que SÍ sale del dato es cuándo nace el
+  // impulso (una invocación real del riel), en qué neurona (el `principal`), de qué capa
+  // (`kind`), si falló (`outcome`) y qué tan grueso es (`ms`).
+  const DUR_PULSO = 0.85;
+  const ANCHO_FRENTE = 0.22;
+  // Techo por neurona: una ráfaga de sondeo no puede volverse un fogonazo blanco. Se descarta
+  // el más viejo, que ya casi terminó su recorrido.
+  const PULSOS_POR_NEURONA = 6;
+  let pulsosVistos = 0, pulsosSinNeurona = 0;
+
   function medir() {
     const dpr = Math.min(devicePixelRatio || 1, 2);
     W = canvas.clientWidth; H = canvas.clientHeight;
@@ -200,7 +213,7 @@ export function crearVista(canvas) {
           id: t.id, notas: t.notas, calor, firmas: t.firmas || 0, persona: rac.persona, col,
           r: Math.max(4.2, Math.sqrt(t.notas) * 1.15),
           fase: fase(t.id),
-          seg: [], finNivel: [0], alcance: 0,
+          seg: [], finNivel: [0], alcance: 0, alcanceRama: 1, pulsos: [],
           pos: [c[0] + Math.cos(th) * Math.sin(phi) * rr,
                 c[1] + Math.cos(phi) * rr * 0.78,
                 c[2] + Math.sin(th) * Math.sin(phi) * rr],
@@ -221,7 +234,7 @@ export function crearVista(canvas) {
         const th = Math.PI * (1 + Math.sqrt(5)) * k;
         const d0 = norm([Math.cos(th) * Math.sin(phi), Math.cos(phi), Math.sin(th) * Math.sin(phi)]);
         crecer(add(nd.pos, mul(d0, nd.r * 0.85)), d0, L0, Math.max(1.5, nd.r * 0.3),
-               nd.profBase + NIVELES_EXTRA, 0, nd, r);
+               nd.profBase + NIVELES_EXTRA, 0, nd, r, nd.r * 0.85);
       }
       // Ordenar por nivel y anotar dónde termina cada uno: así el frame recorre un PREFIJO del
       // arreglo y las ramas finas ni se visitan cuando no se ven. Ordenar una vez al construir
@@ -253,14 +266,11 @@ export function crearVista(canvas) {
                 u * u * A.pos[1] + 2 * u * t * ctrl[1] + t * t * B.pos[1],
                 u * u * A.pos[2] + 2 * u * t * ctrl[2] + t * t * B.pos[2]]);
       }
-      // Cuántas luces viajan a la vez por este axón: sale de `veces`, o sea de cuántos
-      // despachos reales hay entre esas dos terminales. Un par que se escribió una sola vez
-      // manda UNA luz; el par más activo (18) manda cuatro. Es el dato, no un efecto.
-      const luces = 1 + Math.min(3, Math.floor(d.veces / 5));
+      // El axón queda como CAMINO, no como flujo: su grosor sigue diciendo cuántos despachos
+      // hubo (`veces`), que es un dato histórico real. Lo que se fue es el bucle de luces que
+      // lo recorría sin que hubiera pasado nada — eso era una animación sin referente.
       AX.push({
-        de: d.de, a: d.a, veces: d.veces, P, luces,
-        // velocidades apenas distintas para que no marchen en formación
-        vel: 0.3 + (d.veces % 5) * 0.022,
+        de: d.de, a: d.a, veces: d.veces, P,
         cruza: A.persona !== B.persona,
         Q: new Array(P.length),
       });
@@ -293,7 +303,11 @@ export function crearVista(canvas) {
     encuadrar();
   }
 
-  function crecer(p, d, largo, w, prof, nivel, nodo, r) {
+  // `dist` es el camino recorrido DESDE EL SOMA hasta el final de este segmento, medido a lo
+  // largo de la rama y no en línea recta. Es lo que le permite al impulso viajar como viaja de
+  // verdad —un frente que se propaga por el árbol— en vez de como una onda esférica que
+  // encendería a la vez ramas que están a distinto camino.
+  function crecer(p, d, largo, w, prof, nivel, nodo, r, dist) {
     // El corte por ancho baja a 0,06: las ramas finas AHORA sirven, porque a 20× se ven. Lo que
     // impide que cuesten es el LOD, no dejar de generarlas.
     if (prof <= 0 || w < 0.06 || nodo.seg.length > 9000) return;
@@ -302,9 +316,35 @@ export function crearVista(canvas) {
       const d2 = desviar(d, 0.38 + r() * 0.42, r);
       const l2 = largo * (0.66 + r() * 0.16);
       const q = add(p, mul(d2, l2));
-      nodo.seg.push({ a: p, b: q, w, nivel });
-      crecer(q, d2, l2, w * 0.6, prof - 1, nivel + 1, nodo, r);
+      const hasta = dist + l2;
+      if (hasta > nodo.alcanceRama) nodo.alcanceRama = hasta;
+      nodo.seg.push({ a: p, b: q, w, nivel, dist: hasta });
+      crecer(q, d2, l2, w * 0.6, prof - 1, nivel + 1, nodo, r, hasta);
     }
+  }
+
+  /**
+   * pulsar: nace UN impulso, porque pasó UNA cosa. No hay otra forma de que aparezca un pulso
+   * en este lienzo — no existe ningún bucle que los fabrique.
+   *
+   * @param {{terminal:string, capa:string, falla:boolean, ms:number, exacta:boolean}} ev
+   * @returns {boolean} si encontró neurona. Un false NO se traga: se cuenta y se muestra.
+   */
+  function pulsar(ev) {
+    pulsosVistos++;
+    const nd = ev && ev.terminal ? IDX.get(ev.terminal) : null;
+    if (!nd) { pulsosSinNeurona++; return false; }
+    if (nd.pulsos.length >= PULSOS_POR_NEURONA) nd.pulsos.shift();
+    nd.pulsos.push({
+      t0: reloj,
+      capa: ev.capa === 'sondeo' ? 'sondeo' : 'trabajo',
+      falla: !!ev.falla,
+      // `ms` a grosor en escala log: el rango medido va de 0,15 ms (sync_pull) a 60.041 ms
+      // (distill). En lineal, todo lo que no sea el peor caso es un pelo invisible.
+      grosor: 1 + Math.min(1.6, Math.log10(1 + Math.max(0, Number(ev.ms) || 0)) * 0.42),
+      exacta: ev.exacta !== false,
+    });
+    return true;
   }
 
   function proy(p) {
@@ -323,15 +363,6 @@ export function crearVista(canvas) {
     // El centro de proyección es el del ÁREA ÚTIL, no el del lienzo: si fuera W/2 la escena
     // queda centrada DEBAJO de las tarjetas del HUD, que es exactamente lo que pasaba.
     return { x: OX + PANX + x * s, y: OY + PANY + y2 * s, s, z: zc };
-  }
-
-  // punto sobre la polilínea proyectada del axón, con u en [0,1]
-  function enAxon(ax, u) {
-    const n = ax.Q.length - 1;
-    const t = acotar(u, 0, 0.9999) * n;
-    const i = Math.floor(t), f = t - i;
-    const A = ax.Q[i], B = ax.Q[i + 1] || A;
-    return { x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f, z: A.z + (B.z - A.z) * f, s: A.s };
   }
 
   function pintar() {
@@ -363,6 +394,31 @@ export function crearVista(canvas) {
       const rr = nd.alcance * P.s + 40;
       if (P.x + rr < 0 || P.x - rr > W || P.y + rr < 0 || P.y - rr > H) { nd._sx = null; continue; }
       nd._P = P;
+
+      // Los impulsos vivos de ESTA neurona. Se vencen acá y no en un temporizador: el reloj de
+      // la escena se detiene cuando el panel esta en pausa, y un pulso no puede seguir viajando
+      // mientras el dibujo esta congelado.
+      const vivos = nd.pulsos;
+      while (vivos.length && reloj - vivos[0].t0 > DUR_PULSO) vivos.shift();
+      // El frente de cada pulso, precalculado por NODO: meterlo adentro del bucle de segmentos
+      // lo repetiria diez mil veces por cuadro para dar siempre lo mismo.
+      const frentes = [];
+      for (let k = 0; k < vivos.length; k++) {
+        const pu = vivos[k];
+        const u = (reloj - pu.t0) / DUR_PULSO;
+        frentes.push({
+          en: u * nd.alcanceRama,
+          radio: ANCHO_FRENTE * nd.alcanceRama,
+          // se apaga hacia el final del recorrido: llega a la punta y se disipa, no desaparece
+          fuerza: (pu.capa === 'trabajo' ? 1 : 0.3) * (1 - u * u) * (pu.exacta ? 1 : 0.65),
+          falla: pu.falla, grosor: pu.grosor,
+        });
+      }
+      nd._flash = 0;
+      for (const f of frentes) {   // el soma fogonea mientras el frente todavia esta encima
+        if (f.en < f.radio) nd._flash = Math.max(nd._flash, f.fuerza * (1 - f.en / f.radio));
+      }
+
       buf.push({ z: P.z, t: 2, nd, P });
       const lim = nd.finNivel[Math.min(nd.finNivel.length - 1, nd.profBase + extra)];
       for (let i = 0; i < lim; i++) {
@@ -370,7 +426,18 @@ export function crearVista(canvas) {
         const A = proy(s.a), B = proy(s.b);
         // una rama de menos de medio píxel no se ve pero cuesta un stroke igual
         if (Math.abs(A.x - B.x) + Math.abs(A.y - B.y) < 0.8) continue;
-        buf.push({ z: (A.z + B.z) / 2, t: 0, A, B, w: s.w, col: nd.col, nodo: nd.id });
+        // ¿pasa un frente por este tramo justo ahora?
+        let carga = 0, gordo = 1, falla = false;
+        for (let k = 0; k < frentes.length; k++) {
+          const f = frentes[k];
+          const d = Math.abs(s.dist - f.en) / f.radio;
+          if (d >= 1) continue;
+          const forma = (1 - d) * (1 - d);
+          carga += forma * f.fuerza;
+          if (forma > 0.35) { gordo = Math.max(gordo, f.grosor); falla = falla || f.falla; }
+        }
+        buf.push({ z: (A.z + B.z) / 2, t: 0, A, B, w: s.w, col: nd.col, nodo: nd.id,
+                   carga: carga > 0.01 ? Math.min(1.6, carga) : 0, gordo, falla });
       }
     }
 
@@ -380,12 +447,6 @@ export function crearVista(canvas) {
         const A = ax.Q[i], B = ax.Q[i + 1];
         buf.push({ z: (A.z + B.z) / 2, t: 1, A, B, ax, ult: i === ax.Q.length - 2 });
       }
-      // las luces que viajan: una por despacho simultáneo, repartidas a lo largo del axón
-      for (let k = 0; k < ax.luces; k++) {
-        const u = (reloj * ax.vel + k / ax.luces) % 1;
-        const M = enAxon(ax, Math.max(0, u - 0.085)), N = enAxon(ax, u);
-        buf.push({ z: (M.z + N.z) / 2, t: 3, A: M, B: N, ax });
-      }
     }
     buf.sort((a, b) => b.z - a.z);   // pintor: lo lejano primero
 
@@ -394,10 +455,40 @@ export function crearVista(canvas) {
         const off = foco && foco !== it.nodo;
         const p = 1 - 0.78 * prof01(it.A.z);
         const c = it.col;
+        cx.lineCap = 'round';
+        // 1) la rama en REPOSO
         cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${((off ? 0.055 : 0.3) * p).toFixed(3)})`;
         cx.lineWidth = Math.max(0.35, it.w * it.A.s * 1.15);
-        cx.lineCap = 'round';
         cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
+        // 2) y encima, el FRENTE, si justo pasa por acá. Se dibuja como una segunda pasada y no
+        //    cambiando el color de la primera: superponer es lo que hace que el cruce de ramas
+        //    acumule luz, que es lo que da el aspecto eléctrico.
+        if (it.carga > 0 && !off) {
+          // hacia el blanco segun la carga: un impulso fuerte satura, uno debil apenas tiñe
+          const k = Math.min(1, it.carga);
+          const r2 = Math.round(c[0] + (255 - c[0]) * k * 0.9);
+          const g2 = Math.round(c[1] + (255 - c[1]) * k * 0.9);
+          const b2 = Math.round(c[2] + (255 - c[2]) * k * 0.75);
+          // una falla no se pinta de rojo a secas: se pinta ámbar, que es el color que este
+          // sistema ya usa para «aviso» en todo el HUD. Un rojo nuevo seria un idioma nuevo.
+          const col = it.falla ? [245, 196, 81] : [r2, g2, b2];
+          const base = Math.max(0.6, it.w * it.A.s * 1.15);
+          // ADITIVO. Es lo único parecido a un bloom que canvas 2D sabe hacer, y es lo que
+          // hace que el impulso se lea como luz y no como una línea pintada: donde dos ramas
+          // encendidas se cruzan, el brillo SE SUMA, igual que en la referencia.
+          const antes = cx.globalCompositeOperation;
+          cx.globalCompositeOperation = 'lighter';
+          // 1) el halo, ancho y tenue: sin esto una rama fina encendida sigue siendo una rama
+          //    fina. Medido: con sólo el núcleo, un impulso movía el brillo del cuadro 0,3 %.
+          cx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${(0.20 * k * p).toFixed(3)})`;
+          cx.lineWidth = Math.max(3.2, base * it.gordo * 5.5);
+          cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
+          // 2) el núcleo, angosto y saturado
+          cx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${(Math.min(1, it.carga) * p).toFixed(3)})`;
+          cx.lineWidth = Math.max(1.5, base * it.gordo * 2.1);
+          cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
+          cx.globalCompositeOperation = antes;
+        }
       } else if (it.t === 1) {
         const toca = foco && (foco === it.ax.de || foco === it.ax.a);
         const off = foco && !toca;
@@ -419,24 +510,6 @@ export function crearVista(canvas) {
           cx.lineTo(it.B.x - Math.cos(an + 0.42) * L, it.B.y - Math.sin(an + 0.42) * L);
           cx.closePath(); cx.fill();
         }
-      } else if (it.t === 3) {
-        // la luz que viaja: UN despacho recorriendo el axón de quien escribe a quien recibe
-        const toca = foco && (foco === it.ax.de || foco === it.ax.a);
-        if (foco && !toca) continue;
-        const p = 1 - 0.5 * prof01(it.A.z);
-        const c = it.ax.cruza ? CYAN : [162, 176, 255];
-        cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${((toca ? 1 : 0.85) * p).toFixed(3)})`;
-        cx.lineWidth = Math.max(1.2, (1.8 + it.ax.veces * 0.13) * it.B.s * (toca ? 1.6 : 1));
-        cx.lineCap = 'round';
-        // la cola se desvanece hacia atras: asi la luz tiene DIRECCION aunque se la mire quieta
-        const grad = cx.createLinearGradient(it.A.x, it.A.y, it.B.x, it.B.y);
-        grad.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},0)`);
-        grad.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},${((toca ? 1 : 0.9) * p).toFixed(3)})`);
-        cx.strokeStyle = grad;
-        cx.beginPath(); cx.moveTo(it.A.x, it.A.y); cx.lineTo(it.B.x, it.B.y); cx.stroke();
-        // la cabeza, un punto claro: es lo que el ojo sigue
-        cx.fillStyle = `rgba(226,236,255,${(0.85 * p).toFixed(3)})`;
-        cx.beginPath(); cx.arc(it.B.x, it.B.y, Math.max(1.1, cx.lineWidth * 0.55), 0, 6.2832); cx.fill();
       } else {
         const nd = it.nd, P = it.P, off = foco && foco !== nd.id;
         // LATIDO: la amplitud sale del CALOR, o sea de cuánto se recupera lo que esa terminal
@@ -445,7 +518,11 @@ export function crearVista(canvas) {
         // terminal que nadie consulta se queda quieta, y eso es lo que hay que ver.
         const amp = Math.log(1 + nd.calor) / Math.log(1 + calorMax);
         const lat = 1 + 0.17 * amp * Math.sin(reloj * 1.9 + nd.fase);
-        const R = Math.max(2.2, nd.r * P.s * 1.5) * lat, c = nd.col;
+        // El fogonazo del soma es el ARRANQUE del impulso: dura lo que el frente tarda en
+        // despegarse del cuerpo. Es lo que hace que se lea «disparó ESTA neurona» y no
+        // «apareció una luz en el aire».
+        const flash = nd._flash || 0;
+        const R = Math.max(2.2, nd.r * P.s * 1.5) * lat * (1 + 0.9 * flash), c = nd.col;
         // El halo tiene TECHO. Es proporcional al nucleo hasta cierto punto y despues crece
         // fijo: sin tope, acercandose se convierte en una mancha que se come las dendritas,
         // que es justo lo que uno fue a mirar de cerca.
@@ -456,8 +533,8 @@ export function crearVista(canvas) {
         cx.fillStyle = g; cx.beginPath(); cx.arc(P.x, P.y, HALO, 0, 6.2832); cx.fill();
         cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.28 : 0.95})`;
         cx.beginPath(); cx.arc(P.x, P.y, R, 0, 6.2832); cx.fill();
-        cx.fillStyle = `rgba(255,255,255,${off ? 0.06 : 0.22})`;
-        cx.beginPath(); cx.arc(P.x, P.y, R * 0.42, 0, 6.2832); cx.fill();
+        cx.fillStyle = `rgba(255,255,255,${off ? 0.06 : Math.min(1, 0.22 + 0.78 * flash).toFixed(3)})`;
+        cx.beginPath(); cx.arc(P.x, P.y, R * (0.42 + 0.18 * flash), 0, 6.2832); cx.fill();
         nd._sx = P.x; nd._sy = P.y; nd._sr = R;
         if (!off) {   // se etiquetan TODAS: una terminal chica sin nombre es un punto anónimo
           cx.fillStyle = foco === nd.id ? '#ECEAE3'
@@ -574,5 +651,12 @@ export function crearVista(canvas) {
       pintar();
     },
     onFoco(fn) { alFocar = fn; },
+    // pulsar: la ÚNICA puerta por la que entra un impulso. Si nadie la llama, el lienzo no
+    // tiene de dónde sacar un pulso — que es exactamente la garantía que se quiere.
+    pulsar,
+    // Cuántos eventos llegaron y cuántos no encontraron neurona. Se declara en pantalla en vez
+    // de repartirlos a dedo: un servicio sin dueño declarado no puede encender la neurona de
+    // otro sólo para que la pantalla no quede quieta.
+    cuentaPulsos() { return { vistos: pulsosVistos, sinNeurona: pulsosSinNeurona }; },
   };
 }
