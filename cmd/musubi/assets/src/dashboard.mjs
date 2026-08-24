@@ -9,7 +9,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento } from './personas.mjs';
+import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento,
+         fusionarActores, mapaDeEncendido } from './personas.mjs';
 import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -76,6 +77,10 @@ const VISTA_PERSONAS = crearVista(document.getElementById('personas'));
 // Lo último que se extrajo, para que el HUD pinte la MISMA verdad que el lienzo. Vive acá y no
 // dentro de renderLens porque renderHUD corre en cada poll (cada 5 s) y necesita leerlo.
 let RACIMOS = [], PERSONAS = null;
+// CENSO es la respuesta de /api/actores tal cual: trae `estado` ademas del censo. ENCENDIDO es
+// el mapa principal→neurona que sale de fundirlo con las terminales. Los dos arrancan en null y
+// eso NO es "cero actores": es "todavia no se pregunto", que la vista distingue.
+let CENSO = null, ENCENDIDO = null, _bajandoCenso = null;
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -509,7 +514,9 @@ function renderHUD(d){
     // (A→B una vez, valga 1 o valga 40) y ponerlo bajo el rótulo «despachos» dividía la cifra
     // real por cinco. El total es la suma de `veces`; los pares van a la leyenda, aparte.
     $('kSyn').textContent=PERSONAS.despachos.reduce((s,d)=>s+d.veces,0);
-    $('kDomains').textContent=RACIMOS.length;
+    // PERSONAS cuenta personas. El racimo «(servicios)» es un racimo y NO una persona: sumarlo
+    // acá pondria un numero cierto bajo un rotulo falso, que es la forma mas barata de mentir.
+    $('kDomains').textContent=RACIMOS.filter(r=>r.persona!=='(servicios)').length;
   }
   const runs=((d.orchestration||{}).runs)||[];
   $('kRuns').textContent=runs.filter(r=>r.status==='running'||r.done<r.total).length;
@@ -684,7 +691,9 @@ setInterval(tictac, 1000);
 // los pulsos encolados ahi saldrian todos juntos al volver, mintiendo sobre cuando ocurrieron.
 function impulsar(ev){
   if(lens!=='personas' || !VISTA_PERSONAS.activa() || !ev || !ev.tool) return;
-  const n=neuronaDeEvento(ev), c=clasificarEvento(ev);
+  // El MAPA manda. Se arma al construir el grafo y sale del censo: sin el, un servicio no
+  // tiene donde caer y el evento se cuenta como "sin neurona" en vez de repartirse a dedo.
+  const n=neuronaDeEvento(ev, ENCENDIDO), c=clasificarEvento(ev);
   VISTA_PERSONAS.pulsar(n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
                           : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms});
 }
@@ -738,6 +747,32 @@ async function fetchGraph(which){
     } finally { _bajando[which]=null; }
   })();
   return _bajando[which];
+}
+
+// fetchCenso: baja el CENSO DE ACTORES (quien llama al cerebro y cuanto).
+//
+// Va por su propio camino y no por el pulso a proposito: el volumen historico de cada actor
+// cambia en horas, y meterlo en un sondeo de 5 s seria pagarlo 720 veces por hora para ver el
+// mismo numero. El servidor ademas lo cachea 60 s (ver cmd/musubi/actores.go).
+//
+// NUNCA TIRA. Un censo que no llega deja `estado` diciendo por que, y la lente dibuja las
+// terminales sola — que es exactamente como se veia antes de que el censo existiera.
+async function fetchCenso(){
+  if(_bajandoCenso) return _bajandoCenso;
+  _bajandoCenso=(async()=>{
+    try{
+      const r=await fetch('/api/actores',{cache:'no-store'});
+      if(!r.ok) throw 0;
+      const j=await r.json();
+      // El cuerpo del central viaja anidado en `censo` como texto JSON crudo. Se desanida aca
+      // para que el resto del panel vea una sola forma.
+      CENSO={ estado:j.estado, detalle:j.detalle||'', destino:j.destino||'',
+              censo:j.censo||null };
+    }catch(_){
+      CENSO={ estado:'caido', detalle:'el panel no pudo pedir el censo', censo:null };
+    } finally { _bajandoCenso=null; }
+  })();
+  return _bajandoCenso;
 }
 
 // aplicaDeltas: mete lo que trajo el pulso en el grafo cacheado. No toca el render ni la
@@ -822,7 +857,13 @@ function renderLens(){
     // server. La persona sale de `author`, que viaja en el grafo desde 0.107.0.
     if(!GRAPH.memory) return;
     const datos = extraerPersonas(GRAPH.memory);
-    RACIMOS = agruparPorPersona(datos.terminales);
+    // El censo se FUNDE sobre las terminales (les suma su volumen de llamadas) y devuelve los
+    // actores que no tienen terminal. Si el censo no llego, `CENSO` es null y esto degrada a
+    // exactamente lo que habia antes: las mismas terminales, ningun actor, ninguno inventado.
+    const fus = fusionarActores(datos.terminales, CENSO && CENSO.censo);
+    datos.actores = fus.actores; datos.sinDeclarar = fus.sinDeclarar; datos.censo = CENSO;
+    RACIMOS = agruparPorPersona(datos.terminales, fus.actores);
+    ENCENDIDO = mapaDeEncendido(datos.terminales, fus.actores);
     PERSONAS = datos;
     VISTA_PERSONAS.cargar(datos, RACIMOS);
     pintarLeyendaPersonas();
@@ -857,6 +898,9 @@ function setLens(v){ lens=v; const b=$('lensBtn');
   // La lente de código se baja on-demand: no viaja en el pulso ni tiene por qué estar en
   // memoria si nadie la miró. Si falta, se pide y recién ahí se dibuja.
   if(lens==='code' && !GRAPH.code){ fetchGraph('code').then(()=>{ renderLens(); if(PULSE) renderHUD(hudShape()); }).catch(()=>{}); return; }
+  // El censo se pide UNA vez, la primera que alguien entra a personas. Si nunca se abre la
+  // lente, no se le pregunta nada al central: el panel de memoria no necesita saber quien llama.
+  if(esPer && !CENSO && !_bajandoCenso){ fetchCenso().then(()=>{ renderLens(); }).catch(()=>{}); }
   renderLens(); if(PULSE) renderHUD(hudShape()); }
 // applyLensLabels: intercambia los textos estáticos del HUD según la lente (leyenda de aristas,
 // títulos, guía). Se llama al togglear, no en cada poll.
@@ -914,13 +958,30 @@ VISTA_PERSONAS.onFoco((nd, datos, px, py) => {
     ? arr.sort((a,b)=>b.veces-a.veces).slice(0,4).map(d=>`${esc((dir==='sale'?d.a:d.de).toLowerCase())} <b>${d.veces}</b>`).join(' · ')
     : '—';
   const salen = D.filter(d => d.de === nd.id), entran = D.filter(d => d.a === nd.id);
+  const num = (n) => (n||0).toLocaleString('es');
   tip.querySelector('.tt').textContent = nd.id.toLowerCase();
-  // Se dice `notas` y `firma` por separado a propósito: son cosas distintas y confundirlas fue
-  // el error que hubo que corregir para saber de quién es cada terminal.
-  tip.querySelector('.tg').innerHTML =
-    `de <b>${esc(nd.persona || 'sin autor')}</b> · ${nd.notas} notas la nombran · ${nd.firmas} las firma`;
-  tip.querySelector('.tm').innerHTML =
-    `<i>calor ${nd.calor}</i><i>escribe a: ${lista(salen,'sale')}</i><i>recibe de: ${lista(entran,'entra')}</i>`;
+  if (nd.tipo === 'actor') {
+    // Un ACTOR no tiene notas ni firmas: no escribe. Mostrarle esos campos en cero seria
+    // afirmar que escribio poco, cuando lo cierto es que no es de los que escriben.
+    const L = nd.llamadas || {};
+    tip.querySelector('.tg').innerHTML = nd.exacta === false
+      ? `credencial de <b>${esc(nd.persona)}</b> · por convención del nombre, sin declarar`
+      : `servicio · <b>dueño no declarado</b>${L.proyecto ? ` · proyecto ${esc(L.proyecto)}` : ''}`;
+    tip.querySelector('.tm').innerHTML =
+      `<i>${num(L.calls)} llamadas</i><i>${num(L.trabajo)} trabajo · ${num(L.sondeo)} sondeo</i><i>${L.tools||0} tools distintas</i>`;
+  } else {
+    // Se dice `notas` y `firma` por separado a propósito: son cosas distintas y confundirlas fue
+    // el error que hubo que corregir para saber de quién es cada terminal.
+    tip.querySelector('.tg').innerHTML =
+      `de <b>${esc(nd.persona || 'sin autor')}</b> · ${nd.notas} notas la nombran · ${nd.firmas} las firma`;
+    // Las llamadas van al final y sólo si el censo llegó: son la OTRA naturaleza de la misma
+    // identidad —escribe y ademas llama— y es el numero que explica por que la neurona que mas
+    // late puede ser la que menos escribio.
+    const L = nd.llamadas;
+    tip.querySelector('.tm').innerHTML =
+      `<i>calor ${nd.calor}</i>${L?`<i>${num(L.calls)} llamadas · ${num(L.trabajo)} trabajo</i>`:''}` +
+      `<i>escribe a: ${lista(salen,'sale')}</i><i>recibe de: ${lista(entran,'entra')}</i>`;
+  }
   // La posicion la manda la vista con el evento que la origino. El `mx/my` global lo
   // actualiza otro listener y no siempre corrio antes: medido, el tooltip aparecia en
   // (16,16) tapando la cabecera.
@@ -944,7 +1005,23 @@ function pintarLeyendaPersonas(){
   const dl=$('domlegend'); if(!dl) return;
   if(!RACIMOS.length){ dl.innerHTML='<div class="empty">sin terminales firmadas</div>'; return; }
   const filas=RACIMOS.map((r,i)=>{ const c=colorPersona(i);
-    return `<div class="lg"><span class="sw" style="background:${c};color:${c}"></span>${esc(r.persona)} <b>${r.notas}</b></div>`; });
+    // El racimo de servicios se mide en LLAMADAS y los de personas en NOTAS. Son dos unidades
+    // y se rotulan distinto: poner "0" al lado de un racimo que hizo 175.000 llamadas seria
+    // decir que no hizo nada.
+    const n = r.persona==='(servicios)' ? `<b>${r.llamadas}</b> llamadas` : `<b>${r.notas}</b>`;
+    return `<div class="lg"><span class="sw" style="background:${c};color:${c}"></span>${esc(r.persona)} ${n}</div>`; });
+  // EL ESTADO DEL CENSO, cuando no esta vivo. Sin esta linea, un cerebro apagado y un cerebro
+  // sin actores se dibujan igual — y la unica diferencia entre los dos es si lo que ves es la
+  // verdad o una pantalla que nunca pregunto.
+  if(CENSO && CENSO.estado && CENSO.estado!=='vivo')
+    filas.push(`<div class="lg" style="opacity:.7">censo de actores ${esc(CENSO.estado)} · ${esc(CENSO.detalle||'')}</div>`);
+  const acts=PERSONAS&&PERSONAS.actores?PERSONAS.actores:[];
+  if(acts.length){
+    const llamadas=acts.reduce((t,a)=>t+a.calls,0);
+    filas.push(`<div class="lg" style="opacity:.55">${acts.length} actores ◯ · ${llamadas.toLocaleString('es')} llamadas</div>`);
+  }
+  const sd=PERSONAS?PERSONAS.sinDeclarar||0:0;
+  if(sd) filas.push(`<div class="lg" style="opacity:.55">${sd} sin dueño declarado · van a servicios</div>`);
   const pares=PERSONAS?PERSONAS.despachos.length:0;
   if(pares) filas.push(`<div class="lg" style="opacity:.55">${pares} pares se escriben</div>`);
   const sa=PERSONAS?PERSONAS.sinAutor:0;

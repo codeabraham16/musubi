@@ -8,6 +8,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El censo de actores: quién LLAMA al cerebro, no sólo quién escribe.** El ledger guarda
+  `principal` en cada invocación desde el primer día, pero lo único que se podía preguntar era
+  «qué tools se usan». Los bots y los servicios —`crm-cabina`, `b1-adjudicador`, `davantis-crm`—
+  no aparecían en ninguna vista: no escriben memoria, sólo llaman. Ahora tienen neurona propia.
+  - `memory.ActorUsage` agrupa `tool_invocations` por principal, parte las llamadas en sondeo y
+    trabajo, y cuenta cuántas **tools distintas** tocó cada uno — que es lo que separa a un poller
+    de un agente cuando los dos tienen el mismo total.
+  - `GET /api/actores` en el cerebro central, con **la misma auth y la misma tenancy que
+    `/api/stream`**: el censo dice quién trabaja, cuándo y a qué ritmo, o sea el patrón de trabajo
+    de un equipo. Un principal acotado ve lo suyo.
+  - El panel lo **proxea** en `/api/actores` con un cache de 60 s, para que el bearer no baje al
+    navegador. **El estado viaja siempre**: `apagado`, `viejo` (un central sin el endpoint, que
+    responde 404), `caido` o `sin_permiso` se dibujan distinto de «no hay actores». Un 404 leído
+    como lista vacía pintaría un sistema desierto sobre un cerebro trabajando.
+  - **Sólo sirve contra el central, y está dicho donde hace falta.** Medido sobre la base local:
+    230.682 invocaciones y las 230.682 con `principal` vacío — en stdio no hay credencial que
+    atribuir. Por eso no hay camino local: devolvería la lista vacía siempre.
+  - En el dibujo, un actor es un **anillo** `◯` y una terminal un **disco** `◉`. El actor no lleva
+    árbol dendrítico —una dendrita acá representa memoria escrita y un actor no escribe— sino una
+    **corona de radios rectos, uno por cada tool distinta que llama**. Y el anillo va punteado
+    cuando la atribución sale de la convención del nombre en vez de una declaración.
+  - Un principal declarado **no nace como nodo aparte**: su volumen se le suma a su terminal, que
+    es la misma identidad con dos naturalezas. Los que no tienen dueño declarado van a un racimo
+    **`(servicios)`** que se ordena SIEMPRE último —no es una persona— y el panel dice cuántos son
+    en vez de repartirlos a dedo.
+  - 13 invariantes nuevos entre Go y `node --test`, cada uno verificado fallando bajo un sabotaje
+    que ataca lo que ese test declara. Uno de ellos encontró una fuga real: el proxy reenviaba el
+    cuerpo de error del central al navegador, y con él el bearer.
+
 - **El panel tiene una tercera lente: `personas`.** Memoria y código dibujan QUÉ sabe el cerebro;
   ésta dibuja **quién lo escribe**. Cada terminal es una neurona con dendritas en 3D, los despachos
   entre ellas son axones dirigidos, y cada persona es un racimo. Se llega con el botón de lente o

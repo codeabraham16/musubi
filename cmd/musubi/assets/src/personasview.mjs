@@ -181,7 +181,7 @@ export function crearVista(canvas) {
     // 190, 3 → 150); lo que importa no es el número sino la PROPORCIÓN entre el racimo y sus
     // neuronas, porque el encuadre normaliza la escala después. Con racimos más anchos las
     // neuronas quedan relativamente chicas y el dibujo se ve tímido.
-    const radioRacimo = (r) => 88 + 36 * Math.sqrt(r.terminales.length);
+    const radioRacimo = (r) => 88 + 36 * Math.sqrt(r.nodos.length);
     // Y se colocan en fila PEGADAS: cada una a su radio más un aire fijo de la siguiente. La
     // versión anterior repartía un ancho fijo en proporción a las notas, así que dos racimos
     // desparejos quedaban lejísimos con vacío en el medio.
@@ -199,19 +199,31 @@ export function crearVista(canvas) {
       const col = PALETA[ri % PALETA.length];
       const c = centros[ri];
       const R = radioRacimo(rac);
-      rac.terminales.forEach((t, i) => {
+      rac.nodos.forEach((t, i) => {
         // esfera de Fibonacci: reparte sin apelmazar y es determinista
-        const k = i + 0.5, phi = Math.acos(1 - 2 * k / rac.terminales.length);
+        const k = i + 0.5, phi = Math.acos(1 - 2 * k / rac.nodos.length);
         const th = Math.PI * (1 + Math.sqrt(5)) * k;
         // Si una terminal se llama como la persona —GIO, DAVANTIS— va casi en el centro de su
         // racimo. Es la que la representa, y verla orbitando en el borde junto a las otras
         // hacía que el racimo no tuviera núcleo.
         const rr = t.id.toLowerCase() === rac.persona ? R * 0.18 : R;
-        const calor = Number.isFinite(t.calor) ? t.calor : 0;
+        const esActor = t.tipo === 'actor';
+        // El CALOR es cuánto se recupera lo que alguien escribió. Un actor no escribe, así que
+        // no tiene calor y NO late en reposo. No es una carencia del dibujo: una neurona que
+        // sólo se enciende cuando llama es exactamente lo que un servicio es.
+        const calor = (!esActor && Number.isFinite(t.calor)) ? t.calor : 0;
         if (calor > calorMax) calorMax = calor;
+        // DOS UNIDADES DISTINTAS, dos fórmulas. Las notas de una terminal van de 1 a 232 y con
+        // raíz quedan bien; las llamadas de un actor van de 1 a 166.371 —cinco órdenes de
+        // magnitud— y con raíz el poller taparía la pantalla. Convertir una en otra para tener
+        // una sola fórmula sería inventar una equivalencia entre escribir y llamar.
         const nd = {
-          id: t.id, notas: t.notas, calor, firmas: t.firmas || 0, persona: rac.persona, col,
-          r: Math.max(4.2, Math.sqrt(t.notas) * 1.15),
+          id: t.id, tipo: esActor ? 'actor' : 'terminal',
+          notas: esActor ? 0 : t.notas, calor, firmas: t.firmas || 0, persona: rac.persona, col,
+          llamadas: esActor ? { calls: t.calls, sondeo: t.sondeo, trabajo: t.trabajo, tools: t.tools, proyecto: t.proyecto } : (t.llamadas || null),
+          exacta: esActor ? t.exacta !== false : true,
+          r: esActor ? Math.max(3.4, Math.log10(1 + (t.calls || 0)) * 3.4)
+                     : Math.max(4.2, Math.sqrt(t.notas) * 1.15),
           fase: fase(t.id),
           seg: [], finNivel: [0], alcance: 0, alcanceRama: 1, pulsos: [],
           pos: [c[0] + Math.cos(th) * Math.sin(phi) * rr,
@@ -226,6 +238,7 @@ export function crearVista(canvas) {
     let semilla = 7;
     for (const nd of NODOS) {
       const r = rng(semilla += 977);
+      if (nd.tipo === 'actor') { corona(nd); continue; }
       const raices = Math.max(4, Math.min(7, Math.round(Math.log(nd.notas + 1) * 1.6)));
       nd.profBase = nd.notas > 150 ? 5 : (nd.notas > 55 ? 4 : 3);
       const L0 = nd.r * (nd.notas > 120 ? 2.5 : 2.9);
@@ -321,6 +334,31 @@ export function crearVista(canvas) {
       nodo.seg.push({ a: p, b: q, w, nivel, dist: hasta });
       crecer(q, d2, l2, w * 0.6, prof - 1, nivel + 1, nodo, r, hasta);
     }
+  }
+
+  /**
+   * corona: la forma de un ACTOR. Radios rectos desde el soma, uno por cada TOOL DISTINTA que
+   * esa credencial llama — que es un dato del censo, no un adorno con número redondo.
+   *
+   * No lleva árbol dendrítico y es deliberado: una dendrita en este grafo representa memoria
+   * escrita, y un actor no escribe nada. Dibujarle ramas lo haría parecer lo que no es. Lo que
+   * sí necesita es camino por donde salga el impulso, porque si no una llamada de un servicio
+   * sería un destello de un píxel.
+   */
+  function corona(nd) {
+    const n = Math.max(2, Math.min(12, nd.llamadas ? nd.llamadas.tools || 2 : 2));
+    const L = nd.r * 2.4;
+    for (let i = 0; i < n; i++) {
+      const k = i + 0.5, phi = Math.acos(1 - 2 * k / n);
+      const th = Math.PI * (1 + Math.sqrt(5)) * k;
+      const d0 = norm([Math.cos(th) * Math.sin(phi), Math.cos(phi), Math.sin(th) * Math.sin(phi)]);
+      const a = add(nd.pos, mul(d0, nd.r * 0.9)), b = add(nd.pos, mul(d0, nd.r * 0.9 + L));
+      nd.seg.push({ a, b, w: Math.max(0.9, nd.r * 0.22), nivel: 0, dist: nd.r * 0.9 + L });
+    }
+    nd.alcanceRama = nd.r * 0.9 + L;
+    nd.alcance = nd.alcanceRama;
+    nd.profBase = 0;
+    nd.finNivel = new Array(NIVELES_EXTRA + 1).fill(nd.seg.length);
   }
 
   /**
@@ -531,17 +569,46 @@ export function crearVista(canvas) {
         g.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.1 : 0.22 + 0.14 * amp * (lat - 1) / 0.17})`);
         g.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`);
         cx.fillStyle = g; cx.beginPath(); cx.arc(P.x, P.y, HALO, 0, 6.2832); cx.fill();
-        cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.28 : 0.95})`;
-        cx.beginPath(); cx.arc(P.x, P.y, R, 0, 6.2832); cx.fill();
-        cx.fillStyle = `rgba(255,255,255,${off ? 0.06 : Math.min(1, 0.22 + 0.78 * flash).toFixed(3)})`;
-        cx.beginPath(); cx.arc(P.x, P.y, R * (0.42 + 0.18 * flash), 0, 6.2832); cx.fill();
+        if (nd.tipo === 'actor') {
+          // ANILLO, no disco. Un actor LLAMA y no escribe: el hueco del centro es la
+          // diferencia, y se lee de un vistazo sin necesidad de leyenda. Es la distinción
+          // ◉/◯ del plan, dibujada en vez de rotulada.
+          cx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.3 : 0.95})`;
+          cx.lineWidth = Math.max(1.2, R * 0.34);
+          // Punteado cuando la atribución NO es exacta: `davantis-crm` cae en el racimo de
+          // davantis por la convención del nombre, no porque alguien lo haya declarado. El
+          // dibujo tiene que poder decir «esto lo deduje» sin decirlo con la misma tinta.
+          if (nd.exacta === false) cx.setLineDash([Math.max(2, R * 0.5), Math.max(2, R * 0.42)]);
+          cx.beginPath(); cx.arc(P.x, P.y, R, 0, 6.2832); cx.stroke();
+          cx.setLineDash([]);
+          if (flash > 0.01) {   // el disparo llena el hueco: es el único momento en que se ve lleno
+            cx.fillStyle = `rgba(255,255,255,${(0.75 * flash).toFixed(3)})`;
+            cx.beginPath(); cx.arc(P.x, P.y, R * 0.52 * flash, 0, 6.2832); cx.fill();
+          }
+        } else {
+          cx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${off ? 0.28 : 0.95})`;
+          cx.beginPath(); cx.arc(P.x, P.y, R, 0, 6.2832); cx.fill();
+          cx.fillStyle = `rgba(255,255,255,${off ? 0.06 : Math.min(1, 0.22 + 0.78 * flash).toFixed(3)})`;
+          cx.beginPath(); cx.arc(P.x, P.y, R * (0.42 + 0.18 * flash), 0, 6.2832); cx.fill();
+        }
         nd._sx = P.x; nd._sy = P.y; nd._sr = R;
         if (!off) {   // se etiquetan TODAS: una terminal chica sin nombre es un punto anónimo
+          // El destaque sale de la unidad de CADA UNO: notas para quien escribe, llamadas para
+          // quien llama. Usar notas para los dos dejaría a todos los actores en el mismo gris.
+          const fuerte = nd.tipo === 'actor' ? (nd.llamadas && nd.llamadas.calls >= 1000) : nd.notas >= 60;
           cx.fillStyle = foco === nd.id ? '#ECEAE3'
-            : (nd.notas >= 60 ? 'rgba(236,234,227,.62)' : 'rgba(236,234,227,.34)');
-          cx.font = `${Math.max(9, Math.min(16, 11 * P.s * 1.3))}px 'JetBrains Mono', ui-monospace, monospace`;
+            : (fuerte ? 'rgba(236,234,227,.62)' : 'rgba(236,234,227,.34)');
+          const esAct = nd.tipo === 'actor';
+          cx.font = `${Math.max(8, Math.min(esAct ? 12 : 16, (esAct ? 9 : 11) * P.s * 1.3))}px 'JetBrains Mono', ui-monospace, monospace`;
           cx.textAlign = 'center';
-          cx.fillText(nd.id.toLowerCase(), P.x, P.y + R + 14);
+          // SE LE SACA EL PREFIJO DE LA PERSONA cuando está dentro del racimo de esa persona.
+          // `davantis-lienzo-corpus-reader` son 29 caracteres al lado de `davantis-crm` y
+          // `davantis-admin`: las tres etiquetas se pisaban y no se leía ninguna. El racimo ya
+          // dice de quién es, así que el prefijo es información repetida ocupando el lugar de
+          // la que distingue. En SERVICIOS va entero: ahí el nombre completo ES el dato.
+          const et = (esAct && nd.persona && nd.id.startsWith(nd.persona + '-'))
+            ? nd.id.slice(nd.persona.length + 1) : nd.id;
+          cx.fillText(et.toLowerCase(), P.x, P.y + R + (esAct ? 11 : 14));
         }
       }
     }

@@ -249,3 +249,137 @@ func FormatToolUsage(rows []ToolUsageRow, days int) string {
 	fmt.Fprintf(&b, "\nTotal: %d invocaciones.\n", total)
 	return b.String()
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EL CENSO DE ACTORES: quién LLAMA al cerebro, no qué se llamó.
+//
+// `ToolUsage` agrupa por tool y responde «qué herramientas se usan». Esta responde la otra
+// mitad, que hasta acá no se podía contestar aunque el dato estuviera guardado desde el primer
+// día: QUIÉN las usa. Es lo que le falta al grafo de personas para dibujar a los bots y a los
+// servicios, que hoy no aparecen en ningún lado porque no escriben memoria — sólo llaman.
+//
+// SÓLO SIRVE CONTRA EL CEREBRO CENTRAL, y conviene decirlo acá y no descubrirlo mirando un panel
+// vacío: `principal` sale de la credencial, y en stdio local no hay credencial. Medido sobre la
+// base de este repo el 2026-08-24: 230.682 invocaciones, las 230.682 con `principal` vacío. Por
+// eso las anónimas no se mezclan con las demás — se CUENTAN APARTE y se devuelven, para que el
+// que muestre esto pueda declarar «hay N llamadas sin dueño» en vez de inventarles uno o, peor,
+// dibujar un actor gigante llamado «(vacío)» que se coma la pantalla.
+
+// ActorUsageRow es un actor del cerebro: una credencial y lo que hizo con ella.
+type ActorUsageRow struct {
+	Principal string `json:"principal"`
+	Calls     int    `json:"calls"`
+	// Sondeo y Trabajo parten las llamadas en las dos capas del riel en vivo. Van sumadas en
+	// SQL y no contadas por el cliente porque el cliente no tiene las filas: tiene el total.
+	Sondeo  int `json:"sondeo"`
+	Trabajo int `json:"trabajo"`
+	Errors  int `json:"errors"`
+	Denied  int `json:"denied"`
+	// Tools es cuántas herramientas DISTINTAS tocó. Separa a un poller —que llama tres cosas
+	// un millón de veces— de un agente que usa media caja: dos actores con el mismo `calls`
+	// pueden ser cosas completamente distintas, y sin esta columna se ven iguales.
+	Tools      int     `json:"tools"`
+	AvgMillis  float64 `json:"avg_ms"`
+	MaxMillis  float64 `json:"max_ms"`
+	LastUsedAt string  `json:"last_used_at"`
+	// Project es el proyecto al que quedaron atribuidas sus llamadas, si es uno solo. Vacío
+	// cuando llamó desde varios: afirmar uno de ellos sería elegir a dedo.
+	Project string `json:"project,omitempty"`
+}
+
+// ActorUsage devuelve el uso agregado por PRINCIPAL en los últimos `days` días, del que más
+// llama al que menos, más cuántas invocaciones quedaron sin principal.
+//
+// POR QUÉ LA LISTA DE SONDEO ENTRA POR PARÁMETRO en vez de estar acá: qué significa una tool
+// —si es trabajo de alguien o el latido de un poller— es una cuestión del protocolo MCP, y vive
+// en `internal/mcp` (clasificarTool). Este paquete conoce filas, no herramientas. Duplicar la
+// lista acá sería garantizar que las dos se separen con el tiempo y que el panel y el riel
+// clasifiquen distinto el mismo evento.
+//
+// Y el default es TRABAJO, igual que en el riel: con la lista vacía todo cuenta como trabajo,
+// nunca como sondeo. Al revés, una tool nueva nacería invisible — que es la peor falla posible
+// para algo cuyo trabajo es mostrar lo que pasa.
+func (e *DbEngine) ActorUsage(ctx context.Context, days int, sondeo []string) ([]ActorUsageRow, int, error) {
+	if days <= 0 {
+		days = 30
+	}
+	desde := fmt.Sprintf("-%d days", days)
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
+
+	// El IN se arma con placeholders, uno por tool. Interpolar los nombres en el SQL sería
+	// inyección aunque hoy la lista sea una constante del binario: la protección no puede
+	// depender de quién llama.
+	inSQL := "0"
+	sondeoArgs := make([]interface{}, 0, len(sondeo))
+	if len(sondeo) > 0 {
+		marcas := make([]string, len(sondeo))
+		for i, t := range sondeo {
+			marcas[i] = "?"
+			sondeoArgs = append(sondeoArgs, t)
+		}
+		inSQL = "tool IN (" + strings.Join(marcas, ",") + ")"
+	}
+
+	// Orden de los args: primero los del CASE (van en el SELECT), después el `desde` del WHERE,
+	// después los del scope. Es el orden en que SQLite los ve, y equivocarlo no da error: da
+	// números creíbles y mal.
+	args := append([]interface{}{}, sondeoArgs...)
+	args = append(args, desde)
+	args = append(args, scopeArgs...)
+
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT principal,
+		       COUNT(*)                                                  AS calls,
+		       SUM(CASE WHEN `+inSQL+` THEN 1 ELSE 0 END)                AS sondeo,
+		       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END)        AS errors,
+		       SUM(CASE WHEN outcome LIKE 'denied_%' THEN 1 ELSE 0 END)  AS denied,
+		       COUNT(DISTINCT tool)                                      AS tools,
+		       AVG(duration_us)                                          AS avg_us,
+		       MAX(duration_us)                                          AS max_us,
+		       MAX(created_at)                                           AS last_used,
+		       COUNT(DISTINCT project_id)                                AS proyectos,
+		       MIN(project_id)                                           AS un_proyecto
+		FROM tool_invocations
+		WHERE principal <> '' AND created_at >= datetime('now', ?)`+scopeSQL+`
+		GROUP BY principal
+		ORDER BY calls DESC, principal ASC`, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("censo de actores: consultar: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ActorUsageRow{}
+	for rows.Next() {
+		var r ActorUsageRow
+		var avgUs, maxUs float64
+		var proyectos int
+		var unProyecto string
+		if err := rows.Scan(&r.Principal, &r.Calls, &r.Sondeo, &r.Errors, &r.Denied,
+			&r.Tools, &avgUs, &maxUs, &r.LastUsedAt, &proyectos, &unProyecto); err != nil {
+			return nil, 0, fmt.Errorf("censo de actores: escanear fila: %w", err)
+		}
+		r.Trabajo = r.Calls - r.Sondeo
+		r.AvgMillis = redondearMillis(avgUs)
+		r.MaxMillis = redondearMillis(maxUs)
+		if proyectos == 1 {
+			r.Project = unProyecto
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("censo de actores: iterar: %w", err)
+	}
+
+	// Las anónimas, en su propia consulta y con el MISMO recorte de tiempo y de scope. Si se
+	// contaran sobre otra ventana, el total no cerraría y nadie sabría cuál de los dos números
+	// está mal.
+	var sinPrincipal int
+	argsAnon := append([]interface{}{desde}, scopeArgs...)
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tool_invocations
+		 WHERE principal = '' AND created_at >= datetime('now', ?)`+scopeSQL,
+		argsAnon...).Scan(&sinPrincipal); err != nil {
+		return nil, 0, fmt.Errorf("censo de actores: contar sin principal: %w", err)
+	}
+	return out, sinPrincipal, nil
+}

@@ -62,26 +62,153 @@ export const ACTORES = {
 };
 
 /**
+ * fusionarActores: el CENSO de quién llama, convertido en nodos del grafo.
+ *
+ * El censo (/api/actores) y las terminales son DOS POBLACIONES: una sale del token, la otra de
+ * la firma del gist. Fusionarlas tiene tres casos y ninguno se resuelve adivinando:
+ *
+ *   1. principal DECLARADO en ACTORES y con terminal en el grafo → NO nace un nodo: el volumen
+ *      se le suma a esa terminal. Son la misma identidad con dos naturalezas (escribe y llama),
+ *      y dibujarla dos veces sería contar dos veces a la misma persona.
+ *   2. principal no declarado pero cuya PERSONA sí lo está (`davantis-crm` → davantis) → nodo
+ *      propio de tipo actor, en el racimo de esa persona, marcado `exacta:false` porque la
+ *      atribución sale de la convención de nombres, no de una declaración.
+ *   3. ni el principal ni su persona declarados (`b1-adjudicador`, `crm-cabina`) → nodo propio
+ *      en el racimo SERVICIOS, sin persona. De quién son NO se deduce del dato: `crm-cabina` ni
+ *      siquiera trae proyecto. Se queda ahí hasta que alguien lo declare, y el panel dice
+ *      cuántos hay en vez de repartirlos a dedo.
+ *
+ * `personaDe()` NO se usa para nombrar el racimo del caso 3, y es el punto entero: aplicada a
+ * `crm-cabina` devuelve «crm», que no es una persona sino el prefijo de un servicio. Ese es
+ * exactamente el error que este grafo existe para no cometer.
+ */
+export const RACIMO_SERVICIOS = '(servicios)';
+
+export function fusionarActores(terminales, censo) {
+  const filas = (censo && censo.actores) || [];
+  const porId = new Map((terminales || []).map((t) => [t.id, t]));
+  const actores = [];
+  let sinDeclarar = 0;
+
+  for (const f of filas) {
+    const principal = String((f && f.principal) || '').toLowerCase();
+    if (!principal) continue;
+    const llamadas = {
+      principal,
+      calls: Math.max(0, Number(f.calls) || 0),
+      sondeo: Math.max(0, Number(f.sondeo) || 0),
+      trabajo: Math.max(0, Number(f.trabajo) || 0),
+      errores: Math.max(0, Number(f.errors) || 0) + Math.max(0, Number(f.denied) || 0),
+      tools: Math.max(0, Number(f.tools) || 0),
+      proyecto: String(f.project || ''),
+    };
+
+    // Caso 1: declarado y con terminal viva en el grafo.
+    const declarada = ACTORES[principal];
+    const term = declarada && porId.get(declarada);
+    if (term) {
+      // Un mismo humano tiene varias credenciales: se ACUMULAN sobre la terminal en vez de
+      // pisarse. `davantis-mando` y `davantis-mando-admin` son las dos SALA DE MANDO.
+      const prev = term.llamadas || { calls: 0, sondeo: 0, trabajo: 0, errores: 0, tools: 0, principales: [] };
+      term.llamadas = {
+        calls: prev.calls + llamadas.calls,
+        sondeo: prev.sondeo + llamadas.sondeo,
+        trabajo: prev.trabajo + llamadas.trabajo,
+        errores: prev.errores + llamadas.errores,
+        // Las tools distintas NO se suman: dos credenciales que llaman las mismas cinco tools
+        // no tocan diez. Sin las filas crudas no se puede unir el conjunto, así que se queda
+        // el máximo, que es el piso correcto y nunca miente para arriba.
+        tools: Math.max(prev.tools, llamadas.tools),
+        principales: [...(prev.principales || []), principal],
+      };
+      continue;
+    }
+
+    // Casos 2 y 3: nodo propio.
+    const persona = personaDe(principal);
+    const suya = ACTORES[persona] ? persona : '';
+    if (!suya) sinDeclarar++;
+    actores.push({
+      id: principal, principal, tipo: 'actor',
+      persona: suya || RACIMO_SERVICIOS,
+      exacta: !!suya,
+      ...llamadas,
+    });
+  }
+
+  actores.sort((a, b) => b.calls - a.calls || a.id.localeCompare(b.id));
+  return { terminales: terminales || [], actores, sinDeclarar };
+}
+
+/**
+ * mapaDeEncendido: qué neurona enciende cada principal. Se arma UNA vez al cargar el grafo y se
+ * consulta por cada evento del riel — a 0,6 eventos/s da igual, pero a una ráfaga no.
+ *
+ * Devuelve DOS mapas y no uno porque son dos preguntas distintas: `directo` es «esta credencial
+ * tiene su neurona» y `porPersona` es «esta credencial es de alguien que tiene neurona». La
+ * segunda es un repliegue declarado y se marca inexacto; mezclarlas en un solo mapa haría
+ * imposible distinguir el hecho de la convención.
+ *
+ * SÓLO ENTRA LO QUE EXISTE EN EL DIBUJO. Una terminal declarada en ACTORES que no está en el
+ * grafo no se incluye: encender un nodo que nadie dibujó es un pulso que se pierde en silencio,
+ * y el contador de «eventos sin neurona» deja de contar lo que dice contar. Lo aprendí con un
+ * test que declaraba justo eso y pasaba igual, porque la tabla declarada seguía respondiendo
+ * por atrás cuando el mapa decía que no.
+ */
+export function mapaDeEncendido(terminales, actores) {
+  const directo = new Map(), porPersona = new Map();
+  const hay = new Set((terminales || []).map((t) => t.id));
+  for (const [principal, term] of Object.entries(ACTORES)) {
+    if (!hay.has(term)) continue;
+    directo.set(principal, { id: term, tipo: 'terminal' });
+    // El repliegue sale de la entrada de la PERSONA (una clave sin guion), no de la primera
+    // credencial que empiece con ese nombre. La diferencia es concreta y me mordió: iterando la
+    // tabla, `davantis-mando-admin` aparece antes que `davantis`, así que un `davantis-*`
+    // desconocido replegaba a SALA DE MANDO en vez de a DAVANTIS. El orden de un objeto no
+    // puede decidir a quién se le atribuye trabajo.
+    if (personaDe(principal) === principal) porPersona.set(principal, { id: term, tipo: 'terminal' });
+  }
+  for (const a of actores || []) directo.set(a.principal, { id: a.id, tipo: 'actor' });
+  return { directo, porPersona };
+}
+
+// El mapa que se usa cuando NO hay censo: exactamente la tabla declarada, sin filtrar por lo
+// dibujado. Es el comportamiento que había antes del censo, conservado a propósito para que
+// «no llegó el censo» degrade a menos neuronas y nunca a neuronas inventadas.
+function mapaDeclarado() {
+  const directo = new Map(), porPersona = new Map();
+  for (const [principal, term] of Object.entries(ACTORES)) {
+    directo.set(principal, { id: term, tipo: 'terminal' });
+    if (personaDe(principal) === principal) porPersona.set(principal, { id: term, tipo: 'terminal' });
+  }
+  return { directo, porPersona };
+}
+
+/**
  * neuronaDeEvento: qué neurona enciende una invocación, o null si no se puede saber.
  *
- * El repliegue —un `davantis-*` sin neurona propia pulsa en la de `davantis`— es una REGLA
- * DECLARADA, no una inferencia: la credencial es de esa persona y la persona tiene neurona.
+ * CUANDO HAY MAPA, EL MAPA MANDA. No hay un segundo camino que consulte la tabla declarada por
+ * detrás: si el mapa dice que esa neurona no está dibujada, el evento queda sin neurona y se
+ * cuenta como tal. Un repliegue silencioso a la tabla convierte «no se pudo atribuir» en un
+ * pulso invisible sobre un nodo inexistente.
+ *
+ * El repliegue por PERSONA —un `davantis-*` sin neurona propia pulsa en la de `davantis`— es una
+ * REGLA DECLARADA, no una inferencia: la credencial es de esa persona y la persona tiene neurona.
  * Se devuelve `exacta:false` para que el dibujo pueda mostrarlo distinto y no afirmar de más.
  */
-export function neuronaDeEvento(ev) {
+export function neuronaDeEvento(ev, mapa) {
   const principal = String((ev && ev.principal) || '').toLowerCase();
   if (!principal) return null;
+  const m = mapa || mapaDeclarado();
 
-  const directa = ACTORES[principal];
-  if (directa) return { terminal: directa, persona: personaDe(principal), principal, exacta: true };
-
-  // Repliegue: una credencial `<persona>-loquesea` pulsa en la neurona de esa persona SI la
-  // persona está en la tabla. El nombre de la terminal sale SIEMPRE de la tabla, nunca del
-  // principal: derivarlo del texto (por ejemplo `persona.toUpperCase()`) fabricaría neuronas
-  // que no existen en el grafo, que es exactamente lo que no se puede hacer acá.
+  const directa = m.directo.get(principal);
+  if (directa) {
+    return { terminal: directa.id, tipo: directa.tipo, persona: personaDe(principal), principal, exacta: true };
+  }
   const persona = personaDe(principal);
-  const propia = ACTORES[persona];
-  return propia ? { terminal: propia, persona, principal, exacta: false } : null;
+  const propia = m.porPersona.get(persona);
+  if (!propia) return null;
+  return { terminal: propia.id, tipo: propia.tipo, persona, principal, exacta: false };
 }
 
 /**
@@ -213,21 +340,39 @@ function mayoritaria(m) {
 }
 
 /**
- * agruparPorPersona: las terminales, repartidas en racimos. El orden es estable (por cantidad
- * de notas y después alfabético) para que el dibujo no baile entre recargas.
+ * agruparPorPersona: los nodos del grafo, repartidos en racimos. El orden es estable (por
+ * cantidad de notas y después alfabético) para que el dibujo no baile entre recargas.
+ *
+ * Cada racimo trae `nodos`, que son terminales Y actores mezclados: en el dibujo son vecinos
+ * de la misma persona y no dos capas separadas. El TIPO va en cada nodo (`tipo`), que es donde
+ * tiene que estar — separarlos en dos listas obligaría a cada consumidor a volver a unirlos.
+ *
+ * El racimo SERVICIOS va SIEMPRE ÚLTIMO, aunque tenga más volumen que varias personas. No es
+ * una persona: ordenarlo entre ellas por tamaño afirmaría que lo es, y de quién son esos
+ * servicios es justamente lo que todavía no está declarado.
  */
-export function agruparPorPersona(terminales) {
+export function agruparPorPersona(terminales, actores) {
   const por = new Map();
-  for (const t of terminales) {
-    const p = t.persona || '(sin autor)';
-    if (!por.has(p)) por.set(p, []);
-    por.get(p).push(t);
-  }
+  const meter = (clave, nodo) => {
+    if (!por.has(clave)) por.set(clave, []);
+    por.get(clave).push(nodo);
+  };
+  for (const t of terminales || []) meter(t.persona || '(sin autor)', { ...t, tipo: 'terminal' });
+  for (const a of actores || []) meter(a.persona || RACIMO_SERVICIOS, a);
+
   return [...por.entries()]
-    .map(([persona, ts]) => ({
+    .map(([persona, ns]) => ({
       persona,
-      terminales: ts,
-      notas: ts.reduce((s, t) => s + t.notas, 0),
+      nodos: ns,
+      // `notas` sigue siendo el peso EDITORIAL del racimo: cuánto se escribió. Los actores no
+      // escriben, así que no suman acá — un poller con 160.000 llamadas no hace grande a nadie
+      // en la memoria. Su volumen se ve en el tamaño de SU nodo, que es donde significa algo.
+      notas: ns.reduce((s, x) => s + (x.tipo === 'terminal' ? x.notas : 0), 0),
+      llamadas: ns.reduce((s, x) => s + (x.tipo === 'actor' ? x.calls : (x.llamadas ? x.llamadas.calls : 0)), 0),
     }))
-    .sort((a, b) => b.notas - a.notas || a.persona.localeCompare(b.persona));
+    .sort((a, b) => {
+      if (a.persona === RACIMO_SERVICIOS) return 1;
+      if (b.persona === RACIMO_SERVICIOS) return -1;
+      return b.notas - a.notas || a.persona.localeCompare(b.persona);
+    });
 }

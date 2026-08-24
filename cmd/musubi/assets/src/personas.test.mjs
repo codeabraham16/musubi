@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extraerPersonas, agruparPorPersona, personaDe,
   neuronaDeEvento, clasificarEvento,
+  fusionarActores, mapaDeEncendido, RACIMO_SERVICIOS,
 } from './personas.mjs';
 
 // Fixture chico y EXPLÍCITO: cada nota está puesta para tensar un invariante distinto, y por
@@ -219,4 +220,105 @@ test('P11 · una terminal que nadie firma cae a quien la menciona', () => {
   const r = terminales.find((t) => t.id === 'REFUTADOR');
   assert.equal(r.firmas, 0);
   assert.equal(r.persona, 'gio', 'sin firmas, la mención es la mejor respuesta disponible');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F2 · EL CENSO DE ACTORES ENTRA AL GRAFO
+//
+// El censo dice quién LLAMA; las terminales dicen quién ESCRIBE. Los tests de abajo cubren la
+// costura entre las dos poblaciones, que es donde este grafo se puede poner a mentir.
+
+// Un censo de juguete con la forma exacta de /api/actores.
+const act = (principal, calls, extra = {}) => ({
+  principal, calls, sondeo: 0, trabajo: calls, errors: 0, denied: 0, tools: 1, ...extra,
+});
+
+test('P17 · un principal declarado NO nace como nodo aparte: se le suma a su terminal', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  const { actores } = fusionarActores(terminales, { actores: [act('davantis-mando-admin', 900)] });
+  assert.equal(actores.length, 0, 'la identidad ya está dibujada como terminal; un segundo nodo la cuenta dos veces');
+  const mando = terminales.find((t) => t.id === 'SALA DE MANDO');
+  assert.equal(mando.llamadas.calls, 900, 'el volumen tiene que llegar a la terminal, no perderse');
+});
+
+test('P18 · varias credenciales de la misma terminal se ACUMULAN', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  fusionarActores(terminales, {
+    actores: [act('davantis-mando-admin', 900, { tools: 12 }), act('davantis-mando', 100, { tools: 5 })],
+  });
+  const mando = terminales.find((t) => t.id === 'SALA DE MANDO');
+  assert.equal(mando.llamadas.calls, 1000, 'las dos credenciales son la misma sala de mando');
+  assert.deepEqual(mando.llamadas.principales.sort(), ['davantis-mando', 'davantis-mando-admin']);
+  // Las tools distintas NO se suman: 12 y 5 no son 17 tools, porque los conjuntos se solapan y
+  // desde acá no se sabe cuánto. El máximo es el piso correcto; sumar mentiría para arriba.
+  assert.equal(mando.llamadas.tools, 12, 'las tools distintas no se suman entre credenciales');
+});
+
+test('P19 · un servicio sin dueño va al racimo SERVICIOS, y su racimo NO sale de personaDe()', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  const { actores, sinDeclarar } = fusionarActores(terminales, {
+    actores: [act('crm-cabina', 400), act('b1-adjudicador', 50)],
+  });
+  assert.equal(actores.length, 2);
+  assert.equal(sinDeclarar, 2, 'el panel tiene que poder decir cuántos quedaron sin dueño');
+  for (const a of actores) {
+    assert.equal(a.persona, RACIMO_SERVICIOS, `${a.id} no tiene dueño declarado`);
+    assert.equal(a.exacta, false, 'sin declaración, la atribución no es exacta');
+    // El delator concreto: `personaDe('crm-cabina')` es «crm», que no es una persona sino el
+    // prefijo de un servicio. Si ese string aparece como racimo, el grafo inventó una persona.
+    assert.notEqual(a.persona, personaDe(a.principal));
+  }
+});
+
+test('P20 · con censo, un servicio enciende SU nodo — que es lo que antes no podía pasar', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  const { actores } = fusionarActores(terminales, { actores: [act('crm-cabina', 400)] });
+  const mapa = mapaDeEncendido(terminales, actores);
+
+  const n = neuronaDeEvento({ principal: 'crm-cabina' }, mapa);
+  assert.ok(n, 'con nodo propio, el evento tiene dónde caer');
+  assert.equal(n.terminal, 'crm-cabina');
+  assert.equal(n.tipo, 'actor', 'es un actor, no una terminal: no escribe, llama');
+
+  // Y sin censo sigue sin encender nada, que era el comportamiento anterior. La diferencia la
+  // hace el DATO, no una regla nueva que reparta a dedo.
+  assert.equal(neuronaDeEvento({ principal: 'crm-cabina' }, mapaDeEncendido(terminales, [])), null);
+});
+
+test('P21 · al mapa sólo entra lo que EXISTE en el dibujo', () => {
+  // Un grafo donde GIO no aparece: ninguna nota la nombra.
+  const g = { neurons: [n('1', 'x/y', 'AUDITOR revisó algo', 'davantis-admin')] };
+  const { terminales } = extraerPersonas(g);
+  const mapa = mapaDeEncendido(terminales, []);
+  assert.equal(mapa.directo.has('gio'), false, 'GIO está declarada en ACTORES pero no está dibujada');
+  // Encender un nodo que nadie dibujó es un pulso que se pierde en silencio, y el contador de
+  // «eventos sin neurona» deja de contar lo que dice contar.
+  assert.equal(neuronaDeEvento({ principal: 'gio' }, mapa), null);
+});
+
+test('P22 · el censo apagado degrada a la tabla declarada, no a cero', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  const { actores, sinDeclarar } = fusionarActores(terminales, null);
+  assert.deepEqual(actores, []);
+  assert.equal(sinDeclarar, 0);
+  const mapa = mapaDeEncendido(terminales, actores);
+  const n = neuronaDeEvento({ principal: 'davantis-mando-admin' }, mapa);
+  assert.equal(n && n.terminal, 'SALA DE MANDO', 'sin censo, lo declarado sigue encendiendo');
+});
+
+test('P23 · el racimo SERVICIOS va último aunque pese más, y no compite por notas', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+  const { actores } = fusionarActores(terminales, {
+    actores: [act('crm-cabina', 166371), act('b1-adjudicador', 9000)],
+  });
+  const racimos = agruparPorPersona(terminales, actores);
+  const ultimo = racimos[racimos.length - 1];
+  assert.equal(ultimo.persona, RACIMO_SERVICIOS, 'un racimo que no es una persona no se ordena entre personas');
+  assert.equal(ultimo.nodos.length, 2);
+  assert.equal(ultimo.notas, 0, 'los actores no escriben: no pueden pesar en el eje editorial');
+  assert.equal(ultimo.llamadas, 175371, 'su volumen se cuenta, pero en su propia unidad');
+  // Y las personas de arriba conservan su orden por notas: el racimo de servicios se saca de la
+  // competencia, no la altera.
+  const personas = racimos.slice(0, -1).map((r) => r.notas);
+  assert.deepEqual(personas, [...personas].sort((a, b) => b - a));
 });
