@@ -447,6 +447,15 @@ function mayoritaria(m) {
  * una persona: ordenarlo entre ellas por tamaño afirmaría que lo es, y de quién son esos
  * servicios es justamente lo que todavía no está declarado.
  */
+// APARCADA: ya no la llama nadie de la escena. El agrupamiento lo hace ahora
+// `grupoDeNeurona()` sobre las memorias, que es el sujeto que se dibuja; esto agrupaba
+// TERMINALES para el layout de la vista 2D que se retiro.
+//
+// Se deja, con sus tres invariantes corriendo, porque resuelve algo que sigue abierto y va a
+// volver a hacer falta: los ACTORES que llaman al cerebro pero no escriben nada —hoy
+// `davantis-admin`, 52.498 llamadas, cero trabajo, 401 errores— no tienen memorias que
+// dibujar, asi que en la escena no aparecen: quedan contados en la leyenda y nada mas. El dia
+// que se decida como mostrarlos, este es el reparto y ya esta verificado.
 export function agruparPorPersona(terminales, actores) {
   const por = new Map();
   const meter = (clave, nodo) => {

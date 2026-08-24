@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Removed
+- **Se retira la lente `personas` aparte: eran dos vistas contando lo mismo.** El ciclo vuelve a
+  ser **memoria ↔ código**. Todo lo que tenía esa vista está ahora en la escena principal — los
+  árboles, el impulso, los despachos y el detalle de cada terminal —, así que no se perdió nada:
+  se dejó de tener dos lugares donde arreglar cada cosa.
+  - **El tooltip de una terminal** era un callback de la vista 2D y ahora lo dispara `hover()`
+    sobre el soma, con el mismo `#tip` que usan las memorias. Los somas se consultan **primero**:
+    son once contra 2.219 memorias y están dentro de la nube de puntos de su racimo, así que con
+    el criterio de «el más cercano» la neurona queda tapada por cualquier punto que le pase por
+    delante y no hay forma de mirarla. Verificado: pasar el mouse por el soma de gio devuelve
+    `auditor · de gio · 232 notas la nombran · 56 las firma · calor 441 · escribe a…`.
+  - **Las declaraciones dejan de estar escondidas.** Cuántas notas no tienen autor (1.420 de
+    2.221), cuántas credenciales no tienen dueño declarado, cuántos eventos no se atribuyen y si
+    el censo llegó: todo eso vivía en la lente aparte, o sea que hasta hoy sólo lo veía quien se
+    acordaba de cambiar de vista. Ahora está en la leyenda de la escena principal. Sin esas
+    líneas una muestra parcial se lee como un total.
+  - Se borra `personasview.mjs` (729 líneas de canvas 2D) y el segundo `<canvas>`. **Un solo
+    lienzo**, que era lo que había causado el bug de la pantalla en blanco.
+  - **Lo que SÍ queda afuera, y conviene decirlo:** los actores que llaman al cerebro pero no
+    escriben nada —hoy `davantis-admin`, 52.498 llamadas, cero trabajo, 401 errores— no tienen
+    memorias que dibujar, así que aparecen contados en la leyenda y no en la escena. La función
+    que los repartía queda aparcada y verificada en `personas.mjs` para cuando se decida cómo
+    mostrarlos.
+
 ### Added
 - **Los despachos entre terminales entran a la escena.** 27 axones que van de quien escribe a
   quien se le escribe (`PRINCIPAL -> PLANIFICADOR`, 21 veces). Cian cuando **cruzan personas** —

@@ -19,22 +19,14 @@ body{
   -webkit-font-smoothing:antialiased; letter-spacing:.2px;
 }
 #brain{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0; cursor:grab; touch-action:none;}
-/* HACE FALTA, y su ausencia costó un bug que se veía como el fin del mundo: el `display:block`
-   de arriba es un selector de ID, así que le gana a la regla del navegador `[hidden]{display:none}`
-   y poner `brain.hidden = true` desde JS NO ocultaba nada. La lente de personas quedaba dibujando
-   ENCIMA de la esfera de memoria —2171 neuronas con bloom— y la pantalla se volvía una mancha
-   blanca. No se vio en las capturas porque entrando por `?lens=personas` la esfera nunca llega a
-   dibujarse: el canvas queda negro sobre fondo negro. Se reproduce ENTRANDO EN MEMORIA y recién
-   después cambiando de lente. */
+/* HACE FALTA, aunque hoy no haya nada que ocultar: `#brain{display:block}` es un selector de ID y
+   le gana a la regla del navegador `[hidden]{display:none}`, así que `brain.hidden = true` desde JS
+   NO oculta nada sin esta línea. Ya costó un bug que se veía como el fin del mundo —un segundo
+   lienzo dibujando ENCIMA de la esfera de memoria, la pantalla entera en blanco— y no apareció en
+   ninguna captura porque entrando directo a la otra lente la esfera nunca llegaba a dibujarse.
+   Ese segundo lienzo ya no existe: hay UNA sola escena. La trampa del selector, sí. */
 #brain[hidden]{display:none;}
 #brain.drag{cursor:grabbing;}
-/* La lente PERSONAS dibuja en su propio lienzo 2D, encima del WebGL y por debajo del HUD.
-   width/height EXPLICITOS como #brain: un <canvas> es un elemento reemplazado y `inset:0`
-   NO lo estira — se queda en 300x150 y el dibujo entra apretado en una esquina. */
-#personas{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:1;
-  cursor:grab; touch-action:none;}
-#personas[hidden]{display:none;}
-#lensBtn.personas{color:#8A99FF; background:rgba(79,107,255,.14); border-color:rgba(79,107,255,.45);}
 .vignette{position:fixed; inset:0; z-index:1; pointer-events:none;
   background:
     radial-gradient(1200px 700px at 50% 46%, transparent 46%, rgba(4,6,10,.55) 100%),
@@ -162,7 +154,6 @@ body{
 </head>
 <body>
 <canvas id="brain"></canvas>
-<canvas id="personas" hidden></canvas>
 <div class="vignette"></div>
 
 <div id="hud">
