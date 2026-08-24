@@ -7,7 +7,297 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El tirón cada cinco segundos: `renderLens()` recalculaba personas y bosque en cada poll.**
+  Medido: `extraerPersonas` corre regexes sobre los 2.221 gists (**22,7 ms**) y `bosque` genera
+  12.010 segmentos (**14,1 ms**) — **36,8 ms de hilo principal cada 5 s** para obtener casi siempre
+  lo mismo. El presupuesto de un cuadro a 60 fps son 16,6 ms.
+  - Antes / después, midiendo el HUECO más largo entre cuadros y no el promedio, sobre 26 s:
+
+    | | p50 | p99 | máximo | cuadros >33 ms |
+    |---|---|---|---|---|
+    | sin memoizar | 16,5 ms | 21,5 ms | **109,4 ms** | **4** |
+    | memoizado | 16,5 ms | 20,3 ms | 25,1 ms | **0** |
+
+    El **p50 es idéntico en los dos**, que es exactamente por qué el FPS se veía bien y se sentía
+    mal: un pico de 109 ms cada cinco segundos no mueve el promedio y sí se nota.
+  - La firma incluye el **calor**, no sólo la cantidad de notas: `extraerPersonas` deriva el calor
+    de cada terminal de la suma del de sus notas, y una firma que sólo contara lo dejaría congelado
+    hasta que entrara una memoria nueva. El tooltip diría un número viejo sin que nada avisara.
+- **Un pulso podía sobrevivir a la reconstrucción del bosque y encender la neurona equivocada.**
+  Los pulsos guardan el **índice** de su tronco; al rehacerse el grafo ese índice puede pasar a
+  nombrar otro árbol, y el pulso vivo le atribuía la llamada a la persona que no fue — durante
+  hasta 0,85 s, sin error de ninguna clase. Es la falla que este dibujo existe para no cometer.
+  Invariante nuevo (I7c), verificado fallando bajo su sabotaje.
+- **`NGEO` se liberaba dos veces por reconstrucción.** Es la icosaedro de módulo que comparten las
+  2.219 memorias **y** los 11 somas, y `disposeMeshes` la liberaba una vez por cada malla — tirando
+  sus buffers de GPU para recrearlos acto seguido. La regla queda escrita donde se rompe: se libera
+  lo que se **clonó** (`EGEO`/`DGEO`, con sus atributos por instancia), nunca lo compartido.
+
+### Removed
+- **Se retira la lente `personas` aparte: eran dos vistas contando lo mismo.** El ciclo vuelve a
+  ser **memoria ↔ código**. Todo lo que tenía esa vista está ahora en la escena principal — los
+  árboles, el impulso, los despachos y el detalle de cada terminal —, así que no se perdió nada:
+  se dejó de tener dos lugares donde arreglar cada cosa.
+  - **El tooltip de una terminal** era un callback de la vista 2D y ahora lo dispara `hover()`
+    sobre el soma, con el mismo `#tip` que usan las memorias. Los somas se consultan **primero**:
+    son once contra 2.219 memorias y están dentro de la nube de puntos de su racimo, así que con
+    el criterio de «el más cercano» la neurona queda tapada por cualquier punto que le pase por
+    delante y no hay forma de mirarla. Verificado: pasar el mouse por el soma de gio devuelve
+    `auditor · de gio · 232 notas la nombran · 56 las firma · calor 441 · escribe a…`.
+  - **Las declaraciones dejan de estar escondidas.** Cuántas notas no tienen autor (1.420 de
+    2.221), cuántas credenciales no tienen dueño declarado, cuántos eventos no se atribuyen y si
+    el censo llegó: todo eso vivía en la lente aparte, o sea que hasta hoy sólo lo veía quien se
+    acordaba de cambiar de vista. Ahora está en la leyenda de la escena principal. Sin esas
+    líneas una muestra parcial se lee como un total.
+  - Se borra `personasview.mjs` (729 líneas de canvas 2D) y el segundo `<canvas>`. **Un solo
+    lienzo**, que era lo que había causado el bug de la pantalla en blanco.
+  - **Lo que SÍ queda afuera, y conviene decirlo:** los actores que llaman al cerebro pero no
+    escriben nada —hoy `davantis-admin`, 52.498 llamadas, cero trabajo, 401 errores— no tienen
+    memorias que dibujar, así que aparecen contados en la leyenda y no en la escena. La función
+    que los repartía queda aparcada y verificada en `personas.mjs` para cuando se decida cómo
+    mostrarlos.
+
 ### Added
+- **Los despachos entre terminales entran a la escena.** 27 axones que van de quien escribe a
+  quien se le escribe (`PRINCIPAL -> PLANIFICADOR`, 21 veces). Cian cuando **cruzan personas** —
+  trabajo que salio de una cabeza y entro en otra— y azul dentro de la misma.
+  - **Son estaticos, y esa es la decision.** Un despacho no es un evento en vivo sino un hecho de
+    la memoria: una nota firmada por A y dirigida a B. Ponerle una luz viajando seria el mismo
+    bucle inventado que este rediseno vino a sacar; se veria igual de vivo con el cerebro apagado.
+  - La **direccion** se dibuja con el adelgazamiento que ya tenia el shader de dendritas: el axon
+    nace grueso en quien escribe y termina fino en quien recibe. Una punta de flecha habria que
+    orientarla contra la camara en cada giro.
+  - Un despacho a una terminal que no esta en la escena **no se dibuja ni se acomoda a la mas
+    cercana**: la nota existe, el destinatario no esta, y colgarlo de otro seria inventarlo.
+
+### Fixed
+- **Los arboles se filtraban a la lente codigo.** `BOSQUE` queda cargado al cambiar de lente, y
+  las dendritas se dibujaban encima del grafo de codigo en las posiciones viejas —los anclajes de
+  racimo de la lente anterior—, como una mancha blanca flotando que no era nada. Se ve **solo
+  entrando por memoria y cambiando despues**: el atajo `?lens=code` no lo muestra porque ahi
+  `BOSQUE` nunca se llena, que es exactamente el escenario comodo escondiendo el bug. Ademas,
+  cambiar de lente ahora **siempre** rehace las mallas: el disparador comparaba cantidades de
+  nodos, y dos grafos distintos con la misma cantidad no se distinguen ahi.
+- **El impulso entra a la escena principal: una llamada real recorre el árbol de quien la hizo.**
+  Hasta ahora los troncos estaban puestos pero quietos; el pulso sólo existía en la lente aparte.
+  - **La regla que manda: un pulso = un evento real.** `impulsos.mjs` no tiene bucle, temporizador
+    ni nada que fabrique luz — `nacer()` es la única puerta y la llama el riel. Verificado **en
+    pantalla, no en el buffer**: con la animación pausada, un cuadro sin evento contra el anterior
+    da **0 píxeles de diferencia** en el lienzo, y una ráfaga de gio da 215.994.
+  - **La atribución se ve**: gio y `davantis-mando-admin` encienden centros separados por **217 px**.
+    Un principal desconocido (`pepe-inventado`), uno sin credencial y uno con dueño declarado pero
+    sin terminal propia (`b1-adjudicador`) encienden **exactamente cero**: tener dueño decide el
+    racimo, no prende una neurona. Ninguno se reparte a dedo.
+  - **Las dos capas se separan por brillo**: el trabajo real llega **4,8×** más fuerte que el
+    sondeo sobre la misma neurona. En la ventana medida el 98,1 % del tráfico es sondeo, así que
+    sin esa separación el 1,9 % que importa quedaría enterrado.
+  - Costo medido bajo ráfaga sostenida: **0,50 ms de JS por cuadro** — 3 % del presupuesto de un
+    frame a 60 fps, y sólo mientras hay pulsos vivos. El resto del tiempo no se escribe nada.
+  - 12 invariantes en `node --test`, **cada uno verificado fallando bajo un sabotaje dirigido**.
+    Uno salió VACUO en el primer intento: el vencimiento del pulso estaba defendido en dos lugares
+    y el segundo tapaba al sabotaje, así que ahora vive en uno solo.
+
+### Fixed
+- **Un evento sin neurona encendía el tronco más grande.** `Number(null)` es `0`, no `NaN`, así
+  que coercionar el índice mandaba todo principal sin declarar al tronco 0 — y los racimos van
+  ordenados por volumen, o sea que el panel le atribuía la llamada a la terminal que más escribe.
+  Lo agarró su propio test antes de llegar a la pantalla.
+- **El ámbar de una falla era invisible.** Dos defectos encadenados, los dos medidos en pantalla:
+  el aviso tomaba el **máximo** de las fallas y lo dividía por la **suma** de la carga, así que
+  ocho fallas apiladas daban 1/8 de aviso; y el ámbar del HUD (`#f5c451`) sobre un medio aditivo
+  es casi blanco. La relación azul/rojo del frente no se movía ni un punto entre una ráfaga que
+  salía bien y una que fallaba entera: **0,498 contra 0,497**. Ahora el aviso se suma como la carga
+  y el frente usa el **mismo tono (41°) a saturación plena**: **0,487 contra 0,089**, un factor 5,5.
+  Arreglar sólo el primero llevaba a 0,445 — real, medible y todavía invisible con las dos capturas
+  puestas al lado, que es por qué la verificación era mirar y no sólo medir.
+- **Las neuronas con dendritas viven DENTRO de la escena principal.** Cada terminal es un tronco
+  con su árbol, plantado en el racimo de su persona, y las memorias de esa persona lo orbitan.
+  - **12.010 segmentos en UNA draw call**, con el adelgazamiento resuelto en el vertex shader
+    (`position.xz *= mix(1.0, aTaper, altura)`). Lo que hace que una rama se lea como dendrita y
+    no como un palito es que la punta sea más fina que la base; en canvas 2D eso era una propiedad
+    del trazo, acá es geometría — y emitir un cono por segmento serían 12.010 geometrías.
+  - Costo medido: **59,9 FPS · p50 16,6 ms** con los árboles puestos, contra 60,3 sin ellos.
+  - `dendritas.mjs` es geometría pura y corre en `node --test`: 7 invariantes, cada uno verificado
+    fallando bajo un sabotaje. Custodian lo que se vería como un cambio estético y por eso nadie
+    miraría — que el árbol sea el MISMO en cada recarga (PRNG semillado, no `Math.random`), que
+    adelgace, que el conteo tenga techo, y que la distancia que usa el impulso se mida **a lo
+    largo de la rama** y no en línea recta.
+  - **El libro mayor y lo sin atribuir NO llevan tronco.** Nadie los firma, así que no hay neurona
+    que dibujar; fabricarles una sería inventar un autor. Se ven como lo que son: nubes de puntos.
+  - Y un bug que no daba excepción: `disposeMeshes()` limpiaba el bosque y `rebuildMeshes()`
+    empieza llamándolo, así que la geometría llegaba VACÍA al constructor de la malla.
+
+### Changed
+- **La escena principal agrupa por QUIÉN, no por dominio.** El sujeto del panel cambia: cada
+  memoria sigue siendo un punto, pero el racimo y el color pasan a ser la persona que la escribió.
+  - **Los racimos ahora existen de verdad.** `layout.mjs` decía «SIN atractores de dominio»: el
+    dominio nunca fue una posición, sólo un color. Con 90 dominios eso se veía como parches; con 4
+    racimos de 500-1.000 nodos la repulsión gana y queda una esfera pareja (medido: a los 50 s de
+    asentado, cero separación). Ahora el centrado tira hacia el ancla del racimo y cada uno tiene
+    su propio volumen. Un nodo sin ancla usa el camino de antes, así que la lente código no cambia.
+  - **Los dos números que lo gobiernan salen de un banco, no de probar a ojo.** «Holgura» =
+    separación entre centros / suma de radios; por debajo de 1 los racimos se pisan. Con el tirón
+    solo daba **0,38**, y alejando las anclas hasta el borde llegaba a 0,70 — nunca a 1, porque la
+    repulsión está calibrada para llenar el elipsoide. Con volumen propio: **1,26**.
+  - **Tres clases, no una.** Sólo 802 de 2.217 memorias (36,2 %) traen `author`. Agrupar por
+    persona a secas dejaría el 62 % en una mancha gris. Pero 1.027 de esas huérfanas son
+    `git-commit` y `sdd/` — los dos géneros que **escribe el propio motor**, y que Musubi ya llama
+    LIBRO MAYOR en `internal/config/config.go:355`. Van a su racimo, declarado, y no compiten entre
+    personas. Lo que de verdad no se pudo atribuir (390) también se declara.
+  - El género gana sobre el autor: un `git-commit` es el registro del repo aunque la fila diga
+    quién lo firmó. Si mandara el autor, un backfill mudaría el racimo entero de golpe.
+
+### Fixed
+- **El lag de la lente de personas, medido y con causa.** 11.012 `stroke()` por cuadro —155.068
+  llamadas de dibujo por segundo, todas en CPU— daban **13,8 FPS** (p50 69,4 ms). La misma escena
+  en WebGL, en la misma GPU, da **60,3 FPS** (p50 16,6 ms). Al mover el agrupamiento por persona a
+  la escena WebGL, hereda esos 60.
+- **Un contador que mandaba a una acción imposible.** «N eventos sin neurona · falta declarar su
+  dueño» contaba también los del spool de esta máquina, que llegan sin credencial: ahí no hay dueño
+  que declarar. Medido en 40 s: los 8 que reportaba eran los 8 locales, y los principales sin
+  neurona eran cero. Ahora son dos contadores con dos frases.
+
+### Added
+- **El censo de actores: quién LLAMA al cerebro, no sólo quién escribe.** El ledger guarda
+  `principal` en cada invocación desde el primer día, pero lo único que se podía preguntar era
+  «qué tools se usan». Los bots y los servicios —`crm-cabina`, `b1-adjudicador`, `davantis-crm`—
+  no aparecían en ninguna vista: no escriben memoria, sólo llaman. Ahora tienen neurona propia.
+  - `memory.ActorUsage` agrupa `tool_invocations` por principal, parte las llamadas en sondeo y
+    trabajo, y cuenta cuántas **tools distintas** tocó cada uno — que es lo que separa a un poller
+    de un agente cuando los dos tienen el mismo total.
+  - `GET /api/actores` en el cerebro central, con **la misma auth y la misma tenancy que
+    `/api/stream`**: el censo dice quién trabaja, cuándo y a qué ritmo, o sea el patrón de trabajo
+    de un equipo. Un principal acotado ve lo suyo.
+  - El panel lo **proxea** en `/api/actores` con un cache de 60 s, para que el bearer no baje al
+    navegador. **El estado viaja siempre**: `apagado`, `viejo` (un central sin el endpoint, que
+    responde 404), `caido` o `sin_permiso` se dibujan distinto de «no hay actores». Un 404 leído
+    como lista vacía pintaría un sistema desierto sobre un cerebro trabajando.
+  - **Sólo sirve contra el central, y está dicho donde hace falta.** Medido sobre la base local:
+    230.682 invocaciones y las 230.682 con `principal` vacío — en stdio no hay credencial que
+    atribuir. Por eso no hay camino local: devolvería la lista vacía siempre.
+  - En el dibujo, un actor es un **anillo** `◯` y una terminal un **disco** `◉`. El actor no lleva
+    árbol dendrítico —una dendrita acá representa memoria escrita y un actor no escribe— sino una
+    **corona de radios rectos, uno por cada tool distinta que llama**. Y el anillo va punteado
+    cuando la atribución sale de la convención del nombre en vez de una declaración.
+  - Un principal declarado **no nace como nodo aparte**: su volumen se le suma a su terminal, que
+    es la misma identidad con dos naturalezas. Los que no tienen dueño declarado van a un racimo
+    **`(servicios)`** que se ordena SIEMPRE último —no es una persona— y el panel dice cuántos son
+    en vez de repartirlos a dedo.
+  - **Los dueños de los servicios están DECLARADOS, con su cita.** `crm-cabina` y
+    `b1-adjudicador` no eran huérfanos: estaban documentados en la memoria y yo había leído el
+    `project_id` vacío de la cabina como falta de información cuando era una decisión de diseño
+    («el project_id existe para ATRIBUIR lo que un principal ESCRIBE; una cabina no escribe»).
+    La tabla `DUEÑOS` es aparte de `ACTORES` a propósito: una dice de quién ES una credencial,
+    la otra dice qué terminal ES. Tener dueño decide el racimo, no enciende una neurona.
+  - Lo declarado se dibuja entero y lo inferido del nombre, **punteado**. Hoy quedan tres
+    credenciales punteadas (`davantis-musubi-design`, `-lienzo-corpus-reader`,
+    `-renaissance-seed`): nadie escribió de quién son, sólo lo sugiere el prefijo.
+  - 15 invariantes nuevos entre Go y `node --test`, cada uno verificado fallando bajo un sabotaje
+    que ataca lo que ese test declara. Uno de ellos encontró una fuga real: el proxy reenviaba el
+    cuerpo de error del central al navegador, y con él el bearer.
+
+- **El panel tiene una tercera lente: `personas`.** Memoria y código dibujan QUÉ sabe el cerebro;
+  ésta dibuja **quién lo escribe**. Cada terminal es una neurona con dendritas en 3D, los despachos
+  entre ellas son axones dirigidos, y cada persona es un racimo. Se llega con el botón de lente o
+  directo por URL con `?lens=personas`, que además le sirve al CRM para enlazar una vista concreta.
+  - **La persona sale de `author`**, no de una lista escrita a mano, y las credenciales del mismo
+    humano colapsan en una sola: `davantis`, `davantis-admin`, `davantis-mando-admin` y
+    `davantis-altura` son una persona, no cuatro.
+  - **La terminal sale del texto**, porque no existe como campo — se firma a mano en el encabezado
+    del gist. `personas.mjs` es un parser y está tratado como tal: 11 invariantes en `node --test`,
+    cada uno verificado fallando bajo un sabotaje que ataca lo que ese test declara.
+  - **Firmar no es mencionar, y confundirlos daba respuestas falsas.** La persona de una terminal
+    sale de quién **firma** como ella (el gist EMPIEZA con el rol), no de quién la nombra: a
+    `ALTURA` la menciona más gio que Gabriel, así que por menciones el racimo se la llevaba gio.
+    Con la regla de firma el dato se lee solo: `ALTURA` tiene 80 menciones y **1** firma — es un
+    dominio, no una terminal— y `GIO` tiene 91 menciones y **0** firmas, porque es una persona.
+  - El render es canvas 2D y no three.js aunque three ya esté en el bundle: lo que hace que una
+    rama parezca dendrita es el trazo que adelgaza hacia la punta, y eso en 2D es una propiedad
+    del stroke y en 3D es geometría por segmento.
+  - **El HUD acompaña a la lente.** La tarjeta de dominios pasa a ser la de **personas** —cada una
+    con el mismo color con que se dibujó su racimo—, los KPI cambian de sujeto (terminales,
+    despachos, personas) y la guía explica lo que esta lente muestra. Se declaran además los dos
+    números que faltaban para no leer una muestra como si fuera un total: cuántos **pares** se
+    escriben, y cuántas notas **sin autor** quedaron fuera del reparto.
+  - El encuadre se **mide del DOM**: la escena se centra en el rectángulo que el HUD no tapa, y se
+    calcula sobre los nodos y sus etiquetas, dejando que las dendritas se salgan del cuadro — que
+    es lo que hace que el dibujo se lea frondoso y no tímido.
+  - **Se mueve, y cada movimiento dice algo.** Por cada axón viajan luces: una **luz = un despacho**,
+    y cuántas viajan a la vez sale de `veces`, o sea de cuántas veces esas dos terminales se
+    escribieron. Cada neurona **late** según su **calor** —cuánto se recupera lo que escribió— y la
+    que nadie consulta **se queda quieta**, que también es información. El giro lento se **detiene**
+    en cuanto hay hover, zoom o desplazamiento: ahí ya estás mirando algo.
+    - Se descartó animar por **recencia**: medido sobre el cerebro local, las once terminales
+      tienen su nota más nueva a menos de medio día, así que ese canal las pinta a todas igual.
+      El calor sí tiene rango real (0 en `REFUTADOR`, 435 en `AUDITOR`).
+  - **Zoom hasta 40× para entrar en las neuronas chicas**, que era el punto: `SALA DE MANDO` tiene
+    10 notas y a escala 1 es un punto de 3 px. La rueda acerca **hacia el puntero** (si no, el zoom
+    tira siempre al centro y las del borde son inalcanzables), `shift+arrastrá` desplaza y el
+    **doble click entra** en una neurona con una transición suave; en el vacío, vuelve a la vista
+    completa. Lo que hace que eso no cueste un frame es el **LOD por nivel de rama** —cada
+    duplicación del zoom habilita un nivel más, y los niveles finos ni se recorren de lejos— más el
+    **descarte por pantalla** por neurona antes de proyectar su copa.
+  - **El hover explica la terminal**: de quién es, cuántas notas la nombran, cuántas la firman, su
+    calor, y a quién le escribe y de quién recibe. Reusa el mismo `#tip` que la lente de memoria.
+- **El impulso eléctrico de la lente `personas` sale de invocaciones REALES, y de nada más.** Cada
+  llamada a una tool que llega por el riel en vivo enciende **un** frente que recorre las dendritas
+  de la neurona que la disparó, desde el soma hacia las puntas.
+  - **Un pulso = un evento.** Se eliminó el bucle de luces que recorría los axones sin que hubiera
+    pasado nada: eran despachos reales, pero el *momento* en que viajaban era inventado. Ahora si
+    el cerebro está quieto, el dibujo está quieto — y eso también es información.
+  - La neurona sale del `principal` del evento por una **tabla declarada**, no inferida.
+    `personaDe()` colapsa en el primer guion y aplicada a los tokens inventaría personas:
+    `b1-adjudicador` daría «b1» y `crm-cabina` daría «crm», que son **servicios, no personas**.
+    Los que no están declarados **no pulsan**, y el panel dice cuántos eventos quedaron sin neurona.
+  - `kind` (lo clasifica el servidor) separa las dos capas: el **sondeo** es un frente tenue y el
+    **trabajo real** uno saturado. Medido sobre 7 días: 225.967 invocaciones, **98,2 % sondeo**.
+    Un `kind` desconocido cae del lado del trabajo, nunca del sondeo: esconder ahí algo que no
+    sabemos qué es sería perder cognición en el ruido.
+  - `outcome` pinta el ámbar de «falló» —el mismo que ya usa el HUD para aviso— y `ms` da el
+    grosor, en escala logarítmica porque el rango medido va de 0,15 ms a 60.041 ms.
+  - El frente se dibuja **aditivo** (`globalCompositeOperation = 'lighter'`) con halo y núcleo:
+    donde dos ramas encendidas se cruzan el brillo se suma. Medido, es la diferencia entre un
+    impulso que mueve el brillo del cuadro 0,3 % (invisible) y uno que lo mueve 1,67 %.
+  - El **backlog no pulsa**: al conectar llegan de golpe los eventos ya ocurridos (230 en la
+    corrida medida) y dispararlos sería mostrar como presente algo pasado.
+
+### Fixed
+- **El panel se ahogaba solo y quedaba en blanco.** `/api/pulse` corre el diagnóstico completo del
+  cerebro en cada llamada; sobre la memoria local (54 MB de base con 56 MB de WAL) eso **mide
+  45–51 s**. Con el sondeo cada 5 s se lanzaba un pedido nuevo antes de que volviera el anterior:
+  a los 30 s había seis en vuelo —el tope de conexiones por origen de un navegador— y desde ahí
+  **todo `fetch` quedaba encolado para siempre**. El síntoma no era lentitud: era el panel entero
+  en «—» sin un error en consola, porque las promesas no se resolvían ni fallaban.
+  - Ahora el sondeo **no se apila** (guardia de pedido en vuelo) y el **grafo se pide en paralelo
+    al pulso**, que no dependen entre sí. Medido: el dibujo aparece a los **5,5 s** en vez de
+    nunca; los contadores llenan cuando vuelve el pulso.
+  - Queda pendiente lo de fondo: correr `Diagnose()` entero en cada pulso de 5 s es caro y no hace
+    falta a esa frecuencia.
+- **La lente de personas dibujaba ENCIMA de la de memoria.** `#brain` tenía `display:block` por
+  selector de ID, que le gana a la regla `[hidden]{display:none}` del navegador, así que ocultar
+  el canvas desde JS **no ocultaba nada**: las 2171 neuronas con bloom seguían pintadas debajo y
+  la pantalla se volvía una mancha blanca. Sólo se reproduce entrando por la lente de memoria y
+  cambiando después — entrando por `?lens=personas` la esfera nunca llega a dibujarse.
+- **`npm test` del panel corría UN archivo, no los tests.** El script decía
+  `node --test src/layout.test.mjs`, así que cualquier test nuevo quedaba fuera de CI sin que nada
+  se pusiera rojo. Ahora es `src/*.test.mjs`.
+
+- **El grafo del cerebro ahora dice QUIÉN escribió cada nota.** `musubi_brain_graph` devolvía
+  `id · topic · domain · mem_type · importance · heat · age_days · recency_days · gist` y nada más:
+  el **autor no viajaba**. La columna existe en `observations` desde la migración v16 y
+  `musubi_recall` ya la devolvía en cada item, así que el dato estaba ahí y el grafo era la única
+  superficie que lo dejaba afuera.
+  - Efecto práctico: **agrupar el grafo por persona era imposible sin leer el texto de las notas**.
+    Para dibujar quién le escribe a quién había que sacar la identidad del encabezado del gist con
+    una expresión regular — arqueología de texto sobre un campo que ya existía.
+  - Arregla de paso una limitación anotada: `musubi export` tampoco traía el autor, porque
+    serializa el mismo `BrainNeuron`. Ahora sí, sin tocar `export`.
+  - El campo va `omitempty`: las observaciones anteriores a v16 tienen autor vacío, y **«sin
+    atribución» no es lo mismo que «autor = cadena vacía»**. Un consumidor que reciba el campo
+    ausente sabe que esa nota no tiene autoría, en vez de creer que alguien firmó en blanco.
+  - Es aditivo: ningún consumidor existente se rompe, y el `total_neurons`/`truncated` no cambian.
+
 - **El riel en vivo ya no muestra sólo el central: ahora también se ve el trabajo de esta máquina.**
   El feed vive dentro del `McpServer` y el único que lo exponía era `ListenAndServeHTTP` — o sea
   `musubi serve`. Un daemon stdio, que es lo que usa cada sesión de un agente contra la memoria

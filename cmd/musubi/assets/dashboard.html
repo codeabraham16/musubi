@@ -19,6 +19,13 @@ body{
   -webkit-font-smoothing:antialiased; letter-spacing:.2px;
 }
 #brain{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0; cursor:grab; touch-action:none;}
+/* HACE FALTA, aunque hoy no haya nada que ocultar: `#brain{display:block}` es un selector de ID y
+   le gana a la regla del navegador `[hidden]{display:none}`, así que `brain.hidden = true` desde JS
+   NO oculta nada sin esta línea. Ya costó un bug que se veía como el fin del mundo —un segundo
+   lienzo dibujando ENCIMA de la esfera de memoria, la pantalla entera en blanco— y no apareció en
+   ninguna captura porque entrando directo a la otra lente la esfera nunca llegaba a dibujarse.
+   Ese segundo lienzo ya no existe: hay UNA sola escena. La trampa del selector, sí. */
+#brain[hidden]{display:none;}
 #brain.drag{cursor:grabbing;}
 .vignette{position:fixed; inset:0; z-index:1; pointer-events:none;
   background:
@@ -203,7 +210,7 @@ body{
       <div class="howto" id="howto">
         <span><b>·</b> cada punto es una <b>memoria</b></span>
         <span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>
-        <span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>
+        <span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>
       </div>
     </div>
   </div>
@@ -231,9 +238,7 @@ body{
   <div class="center">
     <div class="hint">
       <button id="lensBtn" aria-pressed="false">◉ memoria</button><span class="sep">·</span>
-      <span><b>arrastrá</b> para rotar</span><span class="sep">·</span>
-      <span><b>rueda</b> para acercar</span><span class="sep">·</span>
-      <span><b>hover</b> revela el detalle</span><span class="sep">·</span>
+      <span id="pistas"><span><b>arrastrá</b> para rotar</span><span class="sep">·</span><span><b>rueda</b> para acercar</span><span class="sep">·</span><span><b>hover</b> revela el detalle</span></span><span class="sep">·</span>
       <button id="motionBtn" aria-pressed="false">❚❚ pausar</button>
     </div>
   </div>

@@ -18,11 +18,18 @@ import (
 // BrainNeuron es una observación activa vista como neurona del cerebro. domain es el
 // prefijo temático (antes del primer '/'); heat = access_count; age_days/recency_days
 // alimentan el tamaño y el glow del render.
+//
+// Author es QUIÉN la escribió, y viaja acá porque sin él el grafo no puede agrupar por
+// persona: el campo existe en la tabla desde la migración v16 y `musubi_recall` ya lo
+// devuelve, pero el grafo no lo traía, así que dibujar el cerebro por autor obligaba a
+// deducir la identidad leyendo el TEXTO de cada nota. Va `omitempty` a propósito: las filas
+// anteriores a v16 tienen author vacío, y "sin atribución" no es lo mismo que "autor = ''".
 type BrainNeuron struct {
 	ID          string  `json:"id"`
 	Topic       string  `json:"topic"`
 	Domain      string  `json:"domain"`
 	MemType     string  `json:"mem_type,omitempty"`
+	Author      string  `json:"author,omitempty"`
 	Importance  float64 `json:"importance"`
 	Heat        int     `json:"heat"`
 	AgeDays     float64 `json:"age_days"`
@@ -137,7 +144,7 @@ func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (
 	// El punto 2 CAMBIA lo que muestra el dashboard: las notas superadas dejan de aparecer.
 	// Es intencional y está decidido, no un efecto colateral que se coló.
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, topic_key, COALESCE(mem_type,''), COALESCE(importance,1.0),
+		SELECT id, topic_key, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(importance,1.0),
 		       COALESCE(access_count,0), COALESCE(created_at,''), COALESCE(last_accessed,''),
 		       COALESCE(NULLIF(gist,''), substr(content,1,120))
 		FROM observations
@@ -149,7 +156,7 @@ func (e *DbEngine) brainGraphAt(ctx context.Context, now time.Time, limit int) (
 	for rows.Next() {
 		var n BrainNeuron
 		var created, last string
-		if err := rows.Scan(&n.ID, &n.Topic, &n.MemType, &n.Importance, &n.Heat, &created, &last, &n.Gist); err != nil {
+		if err := rows.Scan(&n.ID, &n.Topic, &n.MemType, &n.Author, &n.Importance, &n.Heat, &created, &last, &n.Gist); err != nil {
 			rows.Close()
 			return BrainGraph{}, fmt.Errorf("brain: escanear neurona: %w", err)
 		}

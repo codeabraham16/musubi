@@ -71,6 +71,7 @@ type estadoEnlace struct {
 // relayVivo mantiene UNA conexión al cerebro y la reparte entre las pestañas abiertas.
 type relayVivo struct {
 	url    string // ya resuelto a .../api/stream
+	base   string // la raíz del cerebro, sin ruta: la necesita el censo de actores (actores.go)
 	token  string
 	client *http.Client
 
@@ -104,6 +105,7 @@ func nuevoRelay(base, token string) *relayVivo {
 	}
 	return &relayVivo{
 		url:   strings.TrimRight(base, "/") + "/api/stream",
+		base:  strings.TrimRight(base, "/"),
 		token: token,
 		// Sin Timeout global: este cliente abre una conexión que POR DISEÑO no termina nunca, y
 		// un http.Client.Timeout cubre el cuerpo entero, así que la cortaría a mano. Los timeouts

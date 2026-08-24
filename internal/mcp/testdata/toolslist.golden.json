@@ -959,7 +959,7 @@
     },
     {
       "name": "musubi_brain_graph",
-      "description": "Grafo de MEMORIA renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…). Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve las top-N neuronas por saliencia (default 300, parámetro `limit`) y sólo las sinapsis con AMBOS extremos entre ellas, así que las aristas se recortan MUCHÍSIMO más que los nodos — con 300 de 3660 neuronas pueden quedar 486 sinapsis de 3620. Para saber el tamaño real leé `total_neurons`/`truncated` y `total_synapses`/`synapses_truncated`; NO concluyas de un `synapses` corto o vacío que la memoria no tiene relaciones.",
+      "description": "Grafo de MEMORIA renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/author/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…). Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve las top-N neuronas por saliencia (default 300, parámetro `limit`) y sólo las sinapsis con AMBOS extremos entre ellas, así que las aristas se recortan MUCHÍSIMO más que los nodos — con 300 de 3660 neuronas pueden quedar 486 sinapsis de 3620. Para saber el tamaño real leé `total_neurons`/`truncated` y `total_synapses`/`synapses_truncated`; NO concluyas de un `synapses` corto o vacío que la memoria no tiene relaciones.",
       "inputSchema": {
         "type": "object",
         "properties": {

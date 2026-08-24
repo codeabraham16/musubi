@@ -9,6 +9,11 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { extraerPersonas, neuronaDeEvento, clasificarEvento,
+         fusionarActores, mapaDeEncendido,
+         grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
+import { bosque } from './dendritas.mjs';
+import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
 /* ---------- paletas ---------- */
@@ -19,9 +24,35 @@ const AK=['#7f9cc9','#43e08b','#31c9ff','#f5c451'];
 const REPOSO=AK[0];
 // LENTE CÓDIGO: color de arista por TIPO (llama / importa / contiene). En reposo cada tubo toma su color.
 const EDGEKIND={ CALLS:'#38bdf8', IMPORTS:'#a78bfa', CONTAINS:'#5b6b86' };
+// DESPACHOS: una terminal le escribe a otra («PRINCIPAL → PLANIFICADOR»). Azul cuando el par
+// pertenece a la misma persona, cian cuando CRUZA personas — que es el caso interesante, porque
+// es trabajo que salió de una cabeza y entró en otra.
+const COLOR_DESPACHO='#8a99ff', COLOR_CRUCE='#2dd4bf';
 const edgeBase=s=>(s&&s.kind&&EDGEKIND[s.kind])||REPOSO;
 let DOMCOL=new Map(), DOMAINS=[];
 const domColor=d=>DOMCOL.get(d)||'#64748b';
+// Los racimos que NO son personas van en gris, fuera de la paleta. La distinción tiene que
+// entrar por el ojo antes que por la leyenda: si el libro mayor —el 46,3 % de la memoria— tuviera
+// un color de la paleta, sería el racimo más vistoso de la pantalla y se leería como una persona.
+// Grises CLAROS, no oscuros. El primer intento usó #5b6472/#3f4652 y el resultado medido en
+// pantalla fue que los dos racimos —el 64 % de la memoria— quedaban casi invisibles sobre el
+// fondo negro, sobre todo el libro mayor, que es viejo y por eso el factor de recencia lo apaga
+// todavía más. «No compite por atención» no puede significar «no se ve»: la mitad del acervo
+// desapareciendo es una afirmación falsa sobre cuánto hay.
+const GRIS_LIBRO='#98a2b3', GRIS_SIN='#78839a';
+// quienEscribio: lo que el tooltip dice del AUTOR. Los tres casos se nombran distinto porque son
+// distintos: una persona, el registro del propio motor, y una nota que no se pudo atribuir. Decir
+// «sin atribuir» a un `git-commit` sería tratar como hueco lo que es una categoría.
+function quienEscribio(n){
+  if(n._grupoTipo==='libro') return 'libro mayor · lo escribe el motor';
+  if(n._grupoTipo==='sin') return 'sin autor · anterior a la columna';
+  return 'de '+(n._grupo||'?');
+}
+function colorDeRacimo(clave,i){
+  if(clave===GRUPO_LIBRO) return GRIS_LIBRO;
+  if(clave===GRUPO_SIN_ATRIBUIR) return GRIS_SIN;
+  return DOMPAL[i%DOMPAL.length];
+}
 function hash01(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0)%1000/1000; }
 
 /* ---------- escala del volumen (proporcional a la población) ---------- */
@@ -67,7 +98,19 @@ const POS={memory:new Map(), code:new Map()};
 const ASENTADO={memory:false, code:false};
 let prevStats=new Map(), prevSyn=new Set(), thinking=0, actInc=new Float32Array(0), bestInc=new Float32Array(0), akSrc=new Int8Array(0);
 let motion=true, needsRebuild=false;
-let lens='memory';   // lente activa (memory|code); los datos viven en GRAPH/PULSE (ver más abajo)
+let lens='memory';   // lente activa (memory|code|personas); los datos viven en GRAPH/PULSE
+// La vista de PERSONAS dibuja en su propio canvas 2D. Se crea una sola vez; se apaga sola
+// cuando la lente no es la suya, asi que no gasta un frame mientras nadie la mira.
+// Lo último que se extrajo, para que el HUD pinte la MISMA verdad que el lienzo. Vive acá y no
+// dentro de renderLens porque renderHUD corre en cada poll (cada 5 s) y necesita leerlo.
+let PERSONAS = null;
+// CENSO es la respuesta de /api/actores tal cual: trae `estado` ademas del censo. ENCENDIDO es
+// el mapa principal→neurona que sale de fundirlo con las terminales. Los dos arrancan en null y
+// eso NO es "cero actores": es "todavia no se pregunto", que la vista distingue.
+let CENSO = null, ENCENDIDO = null, _bajandoCenso = null;
+// Eventos del spool local, que llegan SIN credencial. Se cuentan aparte de los que sí traen un
+// principal y aun así no encuentran neurona: son dos problemas y tienen dos arreglos distintos.
+let SIN_CREDENCIAL = 0;
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -75,21 +118,46 @@ let lens='memory';   // lente activa (memory|code); los datos viven en GRAPH/PUL
 function buildGraph(brain){
   const prev=POS.memory, ns0=brain.neurons||[];
   const N0=240; growth=Math.max(0.85, Math.min(2.2, Math.cbrt((ns0.length||1)/N0))); applyScale();
-  const counts={}; ns0.forEach(n=>counts[n.domain]=(counts[n.domain]||0)+1);
-  const doms=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
+  // EL RACIMO ES LA PERSONA, no el dominio. Es el cambio de sujeto de la escena principal:
+  // antes agrupaba por QUÉ trata una memoria, ahora por QUIÉN la escribió. La maquinaria es la
+  // misma —anclas en una esfera de Fibonacci y el layout tira de cada nodo hacia la suya—, y por
+  // eso hereda los 60 FPS que el canvas 2D de la lente aparte no podía dar (medido: 60,3 contra
+  // 13,8, con 11.012 strokes por cuadro).
+  //
+  // Se cachea el grupo EN la neurona (`_grupo`) porque se consulta dos veces por nodo acá y una
+  // más en el tooltip; recalcularlo es barato pero repetirlo escondería que es el mismo criterio.
+  ns0.forEach(n=>{ const g=grupoDeNeurona(n); n._grupo=g.clave; n._grupoTipo=g.tipo; });
+  const counts={}; ns0.forEach(n=>counts[n._grupo]=(counts[n._grupo]||0)+1);
+  // ordenarRacimos deja al LIBRO MAYOR y a lo SIN ATRIBUIR al final aunque pesen más: no son
+  // personas, y ordenarlos por tamaño entre ellas afirmaría que lo son. Medido, el libro mayor
+  // es el 46,3 % — el racimo más grande de todos.
+  const doms=ordenarRacimos(Object.keys(counts), counts);
   DOMCOL=new Map(); DOMAINS=[]; const dIdx=new Map();
-  doms.forEach((d,i)=>{ const col=DOMPAL[i%DOMPAL.length]; DOMCOL.set(d,col); dIdx.set(d,i);
+  // ANCLA a 0,62 del radio y VOLUMEN PROPIO de 0,32, escalado por la raíz cúbica del tamaño para
+  // que todos los racimos queden con la misma DENSIDAD (si no, el libro mayor —1.028 nodos— sería
+  // una masa apretada al lado de davantis, y el tamaño se leería como intensidad).
+  // Los dos números salen de un banco con los parámetros reales, no de probar a ojo: con ancla
+  // 0,52 y sin volumen propio la holgura entre racimos daba 0,38 (se pisaban); así da 1,26. Y
+  // 0,62+0,39 = 1,01 del radio, o sea el conjunto entra justo en el cuadro que encuadra la cámara.
+  const FRAC_ANCLA=0.62, FRAC_RADIO=0.32, medioRacimo=Math.max(1,ns0.length/Math.max(doms.length,1));
+  doms.forEach((d,i)=>{ const col=colorDeRacimo(d,i); DOMCOL.set(d,col); dIdx.set(d,i);
     const k=i+0.5, phi=Math.acos(1-2*k/Math.max(doms.length,1)), th=Math.PI*(1+Math.sqrt(5))*k;
-    DOMAINS.push({name:d,color:col,count:counts[d], ax:Math.cos(th)*Math.sin(phi)*rx*0.52, ay:Math.cos(phi)*ry*0.52, az:Math.sin(th)*Math.sin(phi)*rz*0.52}); });
+    DOMAINS.push({name:d,color:col,count:counts[d],
+      ax:Math.cos(th)*Math.sin(phi)*rx*FRAC_ANCLA, ay:Math.cos(phi)*ry*FRAC_ANCLA, az:Math.sin(th)*Math.sin(phi)*rz*FRAC_ANCLA,
+      ar:rx*FRAC_RADIO*Math.cbrt(counts[d]/medioRacimo)}); });
 
   // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
   const prevIds=new Set(prev.keys());
   NEURONS=ns0.map(n=>{ const p=prev.get(n.id); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
     const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.importance,0))*0.72+Math.log(1+(n.heat||0))*0.38)); // tamaño del prototipo (más chico)
     const rec=Math.max(0.10, Math.min(1, 1-(n.recency_days||0)/45));
-    return {...n, x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec, col:domColor(n.domain),
+    // El ancla del racimo viaja EN el nodo y no en una tabla aparte: la física recorre nodos, y
+    // hacerle consultar un índice por cada uno, en cada iteración, sería el costo del layout.
+    const anc=dIdx.has(n._grupo)?DOMAINS[dIdx.get(n._grupo)]:null;
+    return {...n, x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec, col:domColor(n._grupo),
+      gx:anc?anc.ax:0, gy:anc?anc.ay:0, gz:anc?anc.az:0, gr:anc?anc.ar:0,
       ph:(p&&p.ph!=null)?p.ph:Math.random()*6.283, phx:Math.random()*6.283, phz:Math.random()*6.283,
-      di:dIdx.has(n.domain)?dIdx.get(n.domain):-1, act:0, ak:0, adj:[], _new:!p}; });
+      di:dIdx.has(n._grupo)?dIdx.get(n._grupo):-1, act:0, ak:0, adj:[], _new:!p}; });
   const idx=new Map(NEURONS.map((n,i)=>[n.id,i]));
   SYN=(brain.synapses||[]).filter(s=>idx.has(s.source)&&idx.has(s.target))
     .map(s=>{ const hs=hash01(s.source+'>'+s.target); return {...s, a:idx.get(s.source), b:idx.get(s.target), off:hs}; });
@@ -115,6 +183,8 @@ function buildGraph(brain){
   // El asentado ya NO congela: se reparte en trozos de pocos ms por frame (ver settleTick).
   // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
   // terminar de asentar, que es cuando las posiciones son las buenas.
+  const _fp=firmaPersonas();
+  if(_fp!==_firmaPersonas){ _firmaPersonas=_fp; refrescarPersonas(brain); }
   POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
   const its=iterParaCambio(NEURONS.length, nuevos, ASENTADO.memory);
   if(its>0){ arrancarAsentado(its,'memory'); needsRebuild=true; }
@@ -224,6 +294,42 @@ const FRAG=['precision highp float;','uniform float uTime;',
   'float band(float y){ float p=fract(y); return smoothstep(0.0,0.06,p)*(1.0-smoothstep(0.06,0.36,p)); }',
   'void main(){ float y=vUv.y-uTime*vSpeed; float pulse=band(y)+band(y+0.5); float i=vBase+pulse*vGlow; gl_FragColor=vec4(vColor*i,i); }'].join('\n');
 
+// ── DENDRITAS ────────────────────────────────────────────────────────────────────────────────
+// Mismo truco que las aristas —UN cilindro instanciado, atributos por instancia— con dos cosas
+// que una arista no necesita:
+//
+//   1. ADELGAZAMIENTO. Lo que hace que una rama se lea como dendrita y no como un palito es que
+//      la punta sea más fina que la base. En canvas 2D eso era una propiedad del trazo; acá es
+//      geometría, y se resuelve en el vertex shader escalando `position.xz` según la altura. Sin
+//      esto habría que emitir un cilindro cónico por segmento, o sea 22.000 geometrías.
+//   2. EL IMPULSO viaja por `aGlow`, que JS escribe por frame igual que en las aristas. No hay un
+//      bucle que lo fabrique: se enciende cuando llega un evento del riel.
+const DGEO=new THREE.CylinderGeometry(1,1,1,5,1,true);
+// El shader va como template literal y no como array + join: GLSL acepta los saltos reales, y
+// asi el fuente se lee igual que el shader que corre.
+const DVERT=`
+attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase; attribute float aWarn;
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
+void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vWarn=aWarn; vY=position.y+0.5;
+  vec3 p=position; p.xz*=mix(1.0,aTaper,vY);
+  gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(p,1.0); }
+`;
+// El brillo cae hacia la punta: una dendrita real se apaga en los extremos, y sin eso las
+// puntas finas quedan como un halo de polvo blanco alrededor del arbol.
+const DFRAG=`
+precision highp float;
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
+void main(){ float i=vBase+vGlow*(1.0-0.35*vY);
+  // EL FRENTE SATURA: un impulso fuerte quema hacia el blanco, uno debil apenas tine la rama.
+  vec3 c=mix(vColor, vec3(1.0), clamp(vGlow*0.5, 0.0, 0.8));
+  // Y si fallo, el nucleo se va a AMBAR ENTERO, sin dejar nada del color de la rama. Las dos
+  // formas intermedias que probe no se leian, y las dos por la misma razon —quedaba cian adentro
+  // del nucleo—: tenir el DESTINO de la saturacion deja el 20 % que el clamp no cubre, y tenir
+  // con el ambar palido del HUD sobre un medio aditivo es casi blanco (ver impulsos.mjs).
+  c=mix(c, vec3(${AMBAR_FRENTE.join(", ")}), vWarn);
+  gl_FragColor=vec4(c*i,i); }
+`;
+
 // post: MSAA + bloom + SMAA
 const _dbs=new THREE.Vector2(); renderer.getDrawingBufferSize(_dbs);
 const composer=new EffectComposer(renderer, new THREE.WebGLRenderTarget(_dbs.x,_dbs.y,{samples:4}));
@@ -239,6 +345,24 @@ controls.rotateSpeed=2.4; controls.zoomSpeed=1.3; controls.panSpeed=0.6; control
 // (edgeInst) con sus atributos por instancia; ya no hay un array de mallas ni de materiales.
 let inst=null, N=0, BX,BY,BZ,RAD,PHX,PHY,PHZ,GX,GY,GZ,PULL,QROT,ADJ;
 let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
+// DENDRITAS: una instancia por segmento de todos los árboles, y los somas aparte.
+//
+// Los buffers están APLANADOS a propósito. `DTRONCO[i]` y `DDIST[i]` dicen de qué árbol es la
+// instancia i y a qué distancia del soma está, medida A LO LARGO de la rama. Con eso, escribir el
+// brillo de las 12.010 instancias es un solo barrido lineal sin bajar por ninguna estructura
+// anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
+let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null;
+let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
+// TRONCO_DE traduce el id de una terminal al índice de su árbol. Es la última milla del camino
+// `principal` -> persona -> terminal -> árbol, y sin ella un evento real no tiene dónde caer.
+let TRONCO_DE=new Map();
+// DESPACHOS: los axones entre terminales. Van en su propia malla y no con las sinapsis de la
+// memoria porque son otra cosa — una sinapsis une dos NOTAS, un despacho une dos PERSONAS.
+let despInst=null, despMat=null;
+// El registro de pulsos vivos. NO hay ningún bucle que los fabrique: `impulsar()` es la única
+// puerta, y la llama el riel cuando llega una invocación de verdad (ver impulsos.mjs).
+const IMPULSOS=crearImpulsos();
+let denSucio=false;
 // Estado para no rehacer trabajo que no cambio. NHOT/EHOT recuerdan si el color escrito para esa
 // instancia es el TENIDO POR ACTIVIDAD, para poder devolverlo al base UNA vez al apagarse en vez
 // de reescribirlo todos los frames. `resto` es el residuo del arrastre y `actViva` si hay pulso.
@@ -247,10 +371,207 @@ let NHOT=null, EHOT=null, resto=0, actViva=false, lastThink=-1;
 const _m=new THREE.Matrix4(), _c=new THREE.Color(), _c2=new THREE.Color(), _pos=new THREE.Vector3(), _scl=new THREE.Vector3(), _eu=new THREE.Euler();
 let framed=false;
 
-function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose(); inst=null; }
+// disposeMeshes: saca las mallas de la escena y libera SOLO lo que es de ellas.
+//
+// LA REGLA: se libera lo que se CLONO, nunca lo compartido. `EGEO`/`DGEO` se clonan por
+// reconstruccion (cada clon lleva sus propios atributos por instancia) y hay que liberarlos o se
+// acumulan. `NGEO` NO: es una sola icosaedro de modulo que usan las 2.219 memorias Y los 11 somas,
+// y se vuelve a usar en la reconstruccion siguiente. Liberarla tira sus buffers de GPU para
+// recrearlos acto seguido, y ademas se estaba haciendo DOS VECES por reconstruccion —una por
+// `inst` y otra por `somaInst`— sobre el mismo objeto.
+function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(edgeInst){ world.remove(edgeInst); edgeInst.geometry.dispose(); edgeInst=null; }
   if(edgeMat){ edgeMat.dispose(); edgeMat=null; }
-  ECOL=ESPD=EGLW=EBAS=null; }
+  if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
+  if(somaInst){ world.remove(somaInst); somaInst=null; }
+  if(denMat){ denMat.dispose(); denMat=null; }
+  if(despInst){ world.remove(despInst); despInst.geometry.dispose(); despInst=null; }
+  if(despMat){ despMat.dispose(); despMat=null; }
+  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DDIST=DTRONCO=DALC=DRAD=null;
+  TRONCO_DE=new Map(); }
+// OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
+// una malla. Limpiarlo desde disposeMeshes lo borraba justo antes de usarlo, porque
+// rebuildMeshes() empieza llamando a disposeMeshes(): el bosque se armaba con 12.010 segmentos y
+// llegaba vacío al constructor de la malla. Sin excepción y sin dendritas.
+
+// construirBosque: los TRONCOS de la escena. Una neurona con dendritas por cada TERMINAL, dentro
+// del racimo de su persona.
+//
+// Los racimos que no son personas —libro mayor, sin atribuir— NO llevan tronco, y es lo correcto:
+// nadie los firma, así que no hay neurona que dibujar. Fabricarles una sería inventar un autor.
+const _qd=new THREE.Quaternion(), _va=new THREE.Vector3(), _vb=new THREE.Vector3(), _vd=new THREE.Vector3();
+const _UP=new THREE.Vector3(0,1,0);
+function construirBosque(terminales){
+  // Cada tronco se lleva su terminal entera. La geometria no la necesita —`dendritas.mjs` sólo
+  // quiere id, notas y centro— pero el tooltip sí: sin esto, pasarle el mouse a una neurona no
+  // podria decir a quien le escribe ni cuantas llamadas hizo, que es la mitad de lo que había
+  // que mirar. Se cuelga acá y no en `bosque()` para que ese modulo siga siendo matematica pura.
+  const porId=new Map(terminales.map(t=>[t.id,t]));
+  const porPersona=new Map();
+  for(const t of terminales){ const p=t.persona||''; if(!p) continue;
+    if(!porPersona.has(p)) porPersona.set(p,[]); porPersona.get(p).push({id:t.id, notas:t.notas}); }
+  const racimos=DOMAINS.filter(d=>porPersona.has(d.name)).map(d=>({
+    persona:d.name, color:d.color, centro:[d.ax,d.ay,d.az], radio:d.ar,
+    troncos:porPersona.get(d.name).slice().sort((a,b)=>b.notas-a.notas),
+  }));
+  // La escala ata el tamaño del árbol al del racimo: sin esto, un racimo chico tendría el mismo
+  // árbol que uno grande y se le saldría por los bordes.
+  const R=racimos.length?racimos.reduce((s2,r)=>s2+r.radio,0)/racimos.length:60;
+  const { troncos } = bosque(racimos, { escala:Math.max(0.6, R/34), topePorArbol:2200 });
+  return troncos.map(t=>({ ...t, term:porId.get(t.id)||null }));
+}
+
+// refrescarEncendido: el mapa `principal` -> terminal. Se rehace aparte del grafo porque su otra
+// mitad —el censo de actores— llega por su propio camino y varios segundos después: sin esto, los
+// eventos que caen en una persona por su credencial de servicio (`davantis-crm`, `crm-cabina`) se
+// contarían como sin neurona hasta el siguiente rearmado del grafo.
+function refrescarEncendido(){
+  if(!PERSONAS) return;
+  const fus=fusionarActores(PERSONAS.terminales, CENSO && CENSO.censo);
+  PERSONAS.actores=fus.actores; PERSONAS.sinDeclarar=fus.sinDeclarar; PERSONAS.censo=CENSO;
+  ENCENDIDO=mapaDeEncendido(PERSONAS.terminales, fus.actores);
+}
+
+// refrescarPersonas: las cuatro cosas que salen de quién firma la memoria — las terminales, sus
+// racimos, el mapa de encendido y los árboles. Van juntas porque son la misma lectura del grafo,
+// y separarlas ya dejó una vez el mapa apuntando a un bosque que ya no existía.
+// LA FIRMA de lo que personas+bosque miran. Barata (una pasada sobre 2.221 enteros) contra los
+// 36,8 ms que cuesta rehacerlos: `extraerPersonas` corre regexes sobre todos los gists (22,7 ms) y
+// `bosque` genera 12.010 segmentos (14,1 ms). Eso pasaba en CADA poll —cada 5 s, en el hilo
+// principal— y el presupuesto de un cuadro a 60 fps son 16,6 ms: se saltaban dos o tres cuadros
+// cada cinco segundos para recalcular casi siempre lo mismo.
+//
+// Va el CALOR y no solo la cantidad: `extraerPersonas` deriva el calor de cada terminal de la suma
+// del de sus notas, y con una firma que solo mirara cuantas hay, ese numero se congelaba hasta que
+// entrara una memoria nueva. El tooltip diria un calor viejo sin que nada avisara.
+let _firmaPersonas='';
+function firmaPersonas(){ let h=0; for(const n of NEURONS) h+=n.heat||0; return NEURONS.length+':'+h; }
+
+function refrescarPersonas(brain){
+  PERSONAS=extraerPersonas(brain);
+  refrescarEncendido();
+  BOSQUE=construirBosque(PERSONAS.terminales);
+  return PERSONAS;
+}
+
+function rebuildDendritas(){
+  // LOS ÁRBOLES SON DE LA MEMORIA. En la lente código el sujeto son símbolos, no personas, y
+  // BOSQUE sigue cargado con los troncos que armó la lente anterior: sin este corte se dibujaban
+  // encima del grafo de código, en las posiciones viejas —los anclajes de racimo ya no existen—,
+  // y quedaba una mancha blanca flotando que no era nada. Se ve sólo entrando por memoria y
+  // cambiando después; el atajo `?lens=code` no lo mostraba porque ahí BOSQUE nunca se llena.
+  if(lens==='code') return;
+  const total=BOSQUE.reduce((k,t)=>k+t.segs.length,0);
+  if(!total) return;
+  DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
+  DTAP=new Float32Array(total); DDIST=new Float32Array(total); DTRONCO=new Int32Array(total);
+  DWARN=new Float32Array(total);
+  // El alcance de cada árbol se copia a un array plano: el frente del impulso se calcula contra
+  // él una vez por tronco y por frame, y buscarlo en BOSQUE adentro del bucle grande sería
+  // bajar por un objeto doce mil veces para leer siempre el mismo número.
+  DALC=new Float32Array(BOSQUE.length); DRAD=new Float32Array(BOSQUE.length);
+  TRONCO_DE=new Map();
+  const geo=DGEO.clone();
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(DCOL,3));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DGLW,1));
+  geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(DBAS,1));
+  geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(DTAP,1));
+  geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(DWARN,1));
+  denMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
+  denInst=new THREE.InstancedMesh(geo, denMat, total);
+  denInst.frustumCulled=false;   // la malla envuelve toda la escena, igual que las aristas
+
+  let i=0;
+  // Los pulsos vivos guardan el INDICE de su tronco, y los indices acaban de cambiar. Uno que
+  // sobreviva enciende, por lo que le quede de vida, la neurona equivocada — sin error de ninguna
+  // clase, y atribuyendole la llamada a quien no fue.
+  IMPULSOS.limpiar();
+  BOSQUE.forEach((tr,ti)=>{ _c.set(tr.color||'#7f9cc9');
+    TRONCO_DE.set(tr.id, ti); DALC[ti]=tr.alcanceRama||1; DRAD[ti]=tr.rSoma||1;
+    for(const sg of tr.segs){
+      _va.set(sg.a[0],sg.a[1],sg.a[2]); _vb.set(sg.b[0],sg.b[1],sg.b[2]);
+      _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
+      _qd.setFromUnitVectors(_UP,_vd.normalize());
+      _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(sg.w0,len,sg.w0));
+      denInst.setMatrixAt(i,_m);
+      DCOL[i*3]=_c.r; DCOL[i*3+1]=_c.g; DCOL[i*3+2]=_c.b;
+      DTAP[i]=Math.max(0.05, sg.w1/sg.w0);
+      // El brillo en reposo cae con el nivel: el tronco se ve y las puntas se insinúan. Plano,
+      // el árbol se lee como una maraña de alambre del mismo peso.
+      DBAS[i]=Math.max(0.09, 0.62*Math.pow(0.74,sg.nivel));
+      DDIST[i]=sg.dist; DTRONCO[i]=ti; DGLW[i]=0; i++;
+    } });
+  denInst.instanceMatrix.needsUpdate=true;
+  world.add(denInst);
+
+  // Los SOMAS, en su propia malla: son once esferas y no justifican un shader, pero sí que se
+  // vean como cuerpos y no como el nacimiento de las ramas.
+  somaInst=new THREE.InstancedMesh(NGEO, nodeMat, BOSQUE.length);
+  BOSQUE.forEach((tr,k)=>{ _m.compose(_pos.set(tr.centro[0],tr.centro[1],tr.centro[2]),
+    new THREE.Quaternion(), _scl.setScalar(tr.rSoma));
+    somaInst.setMatrixAt(k,_m); somaInst.setColorAt(k,_c.set(tr.color||'#7f9cc9')); });
+  denSucio=true;   // buffers recién creados: el primer frame tiene que subirlos
+  somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
+  world.add(somaInst);
+  rebuildDespachos();
+}
+
+// rebuildDespachos: los axones entre terminales, de quien escribe a quien se le escribe.
+//
+// SON ESTÁTICOS, y esa es la decisión: un despacho no es un evento en vivo sino un hecho de la
+// memoria (una nota firmada por A y dirigida a B). Ponerle una luz viajando sería exactamente el
+// bucle inventado que este rediseño vino a sacar — se vería igual de vivo con el cerebro apagado.
+// Lo que sí sale del dato: la dirección y el grosor.
+//
+// La DIRECCIÓN se dibuja con el adelgazamiento del shader de dendritas, que ya está: el axón nace
+// grueso en quien escribe y termina fino en quien recibe. Sin eso, un axón es una línea y una
+// línea no tiene lado; con una punta de flecha habría que orientar un triángulo por instancia
+// contra la cámara, y eso se recalcula en cada giro.
+function rebuildDespachos(){
+  const ds=(PERSONAS&&PERSONAS.despachos)||[];
+  const pares=[];
+  for(const d of ds){
+    const a=TRONCO_DE.get(d.de), b=TRONCO_DE.get(d.a);
+    // Un despacho a alguien que no tiene árbol no se dibuja ni se acomoda a otro lado: la nota
+    // existe, pero la terminal destino no está en esta escena y colgarla de la más cercana sería
+    // inventar el destinatario.
+    if(a===undefined||b===undefined||a===b) continue;
+    pares.push({a, b, veces:Math.max(1, Number(d.veces)||1), cruza:BOSQUE[a].persona!==BOSQUE[b].persona});
+  }
+  if(!pares.length) return;
+  const col=new Float32Array(pares.length*3), glw=new Float32Array(pares.length),
+        bas=new Float32Array(pares.length), tap=new Float32Array(pares.length),
+        wrn=new Float32Array(pares.length);
+  const geo=DGEO.clone();
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(col,3));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(glw,1));
+  geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(bas,1));
+  geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(tap,1));
+  geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(wrn,1));
+  despMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
+  despInst=new THREE.InstancedMesh(geo, despMat, pares.length);
+  despInst.frustumCulled=false;
+  // El grosor va en LOG sobre `veces`: el reparto medido va de 1 a 21, y en lineal el par más
+  // escrito sería veintiún veces más gordo que el resto y taparía media escena.
+  pares.forEach((p,i)=>{
+    const A=BOSQUE[p.a], B=BOSQUE[p.b];
+    _va.set(A.centro[0],A.centro[1],A.centro[2]); _vb.set(B.centro[0],B.centro[1],B.centro[2]);
+    _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
+    _qd.setFromUnitVectors(_UP,_vd.normalize());
+    const r=0.35+Math.log(1+p.veces)*0.30;
+    _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(r,len,r));
+    despInst.setMatrixAt(i,_m);
+    _c.set(p.cruza?COLOR_CRUCE:COLOR_DESPACHO);
+    col[i*3]=_c.r; col[i*3+1]=_c.g; col[i*3+2]=_c.b;
+    tap[i]=0.22;   // nace grueso en quien escribe, termina fino en quien recibe
+    bas[i]=p.cruza?0.34:0.20;
+    glw[i]=0; wrn[i]=0;
+  });
+  despInst.instanceMatrix.needsUpdate=true;
+  world.add(despInst);
+}
 
 function rebuildMeshes(){
   disposeMeshes(); N=NEURONS.length; if(!N) return;
@@ -286,6 +607,7 @@ function rebuildMeshes(){
   } else {
     for(const s of SYN){ ADJ[s.a].push(s.b); ADJ[s.b].push(s.a); }
   }
+  rebuildDendritas();
   if(!framed && N){ let mr=0; for(const n of NEURONS){ const d=Math.hypot(n.x,n.y,n.z); if(d>mr)mr=d; } camera.position.set(0,20,Math.max(240,mr*2.7)); framed=true; }
   needsRebuild=false;
 }
@@ -303,19 +625,27 @@ renderer.domElement.addEventListener('pointerdown',ev=>{ if(!inst) return; ptr.x
 function endDrag(){ if(drag>=0){ drag=-1; renderer.domElement.style.cursor=''; if(PULL) PULL.fill(0); try{ if(dragPid>=0) renderer.domElement.releasePointerCapture(dragPid); }catch(_){} dragPid=-1; } }
 renderer.domElement.addEventListener('pointerup',endDrag,true); renderer.domElement.addEventListener('pointercancel',endDrag,true);
 addEventListener('pointerup',endDrag); addEventListener('blur',endDrag);
-function hover(){ if(drag>=0 || !inst){ tip.classList.remove('on'); return; } ray.setFromCamera(ptr,camera); const hit=ray.intersectObject(inst);
+function hover(){ if(drag>=0 || !inst){ tip.classList.remove('on'); return; } ray.setFromCamera(ptr,camera);
+  // LOS SOMAS PRIMERO. Son once contra 2.219 memorias, y están adentro de la nube de puntos de su
+  // racimo: si gana el rayo más cercano, la neurona queda tapada por cualquier memoria que le pase
+  // por delante y nunca se la puede mirar. Preguntarle primero cuesta un raycast sobre once
+  // instancias.
+  if(somaInst){ const hs=ray.intersectObject(somaInst);
+    if(hs.length){ const tr=BOSQUE[hs[0].instanceId];
+      if(tr&&tr.term){ tipTerminal(tr.term, mx, my); return; } } }
+  const hit=ray.intersectObject(inst);
   if(hit.length){ const n=NEURONS[hit[0].instanceId]; tip.querySelector('.tt').textContent=n.topic||n.domain;
     if(n._code){
       fetchExplain(n);   // trae (una vez, on-demand) las memorias que EXPLICAN este símbolo
       let tg=esc(n.gist||'(sin ruta)');
       if(Array.isArray(n._exp) && n._exp.length) tg+='<div class="why">'+n._exp.slice(0,3).map(e=>`<span>${esc(e.topic_key)}</span>`).join('')+'</div>';
       tip.querySelector('.tg').innerHTML=tg;
-      let meta=`<i>${esc(n.mem_type||'')}</i><i>${esc(n.domain)}</i><i>centralidad ${n.heat}</i>`;
+      let meta=`<i>${esc(quienEscribio(n))}</i><i>${esc(n.domain)}</i><i>centralidad ${n.heat}</i>`;
       if(Array.isArray(n._exp)) meta+= n._exp.length?`<i style="color:var(--purple)">explicado ×${n._exp.length}</i>`:`<i style="opacity:.55">sin memorias</i>`;
       tip.querySelector('.tm').innerHTML=meta;
     } else {
       tip.querySelector('.tg').textContent=n.gist||'(sin resumen)';
-      tip.querySelector('.tm').innerHTML=`<i>${esc(n.domain)}</i><i>${esc(n.mem_type||'sin tipo')}</i><i>calor ${n.heat}</i>`;
+      tip.querySelector('.tm').innerHTML=`<i>${esc(quienEscribio(n))}</i><i>${esc(n.domain)}</i><i>calor ${n.heat}</i>`;
     }
     const tw=tip.offsetWidth||220, th=tip.offsetHeight||70; let x=mx+16,y=my+16; if(x+tw>innerWidth-8)x=mx-tw-16; if(y+th>innerHeight-8)y=my-th-16;
     tip.style.left=x+'px'; tip.style.top=y+'px'; tip.classList.add('on'); } else tip.classList.remove('on'); }
@@ -423,6 +753,29 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     resto=rMax; actViva=hayAct;
     }
   }
+  // ── EL IMPULSO ───────────────────────────────────────────────────────────────────────────
+  // Va FUERA del bloque de arriba y con su propia condición a propósito: un pulso tiene que
+  // recorrer su árbol aunque la animación esté en pausa y aunque no se haya movido un solo nodo.
+  // Metido adentro, pausar el panel congelaba el impulso a mitad de camino.
+  //
+  // `denSucio` es lo que apaga el árbol UNA vez cuando muere el último pulso, en vez de reescribir
+  // doce mil ceros en cada frame de reposo — que es el 98 % de los frames.
+  if(denInst && DALC){
+    const vivos=IMPULSOS.vivos(t);
+    if(vivos>0 || denSucio){
+      const r=IMPULSOS.escribir(t,{glow:DGLW, warn:DWARN, dist:DDIST, tronco:DTRONCO, alcances:DALC});
+      const at=denInst.geometry.attributes;
+      at.aGlow.needsUpdate=true; at.aWarn.needsUpdate=true;
+      // El SOMA fogonea con el arranque. La rotación de estas instancias es la identidad, así que
+      // la escala son los tres elementos de la diagonal y se escriben directo: recomponer once
+      // matrices por frame para cambiar un número sería el mismo gasto que costaba el grafo entero.
+      if(somaInst){ const SM=somaInst.instanceMatrix.array;
+        for(let k=0;k<DRAD.length;k++){ const e=DRAD[k]*(1+0.9*r.flash[k]), o=k*16;
+          SM[o]=e; SM[o+5]=e; SM[o+10]=e; }
+        somaInst.instanceMatrix.needsUpdate=true; }
+      denSucio = vivos>0;
+    }
+  }
   const _tJS = STATS ? performance.now()-_t0 : 0;
   controls.update(); hover(); composer.render();
   if(STATS){
@@ -474,17 +827,26 @@ function renderHUD(d){
   // DOMAINS se arma de la muestra dibujada y sirve para COLOREAR: usarlo para contar decía 46
   // donde había 90. En lente código el equivalente del universo es total_modules.
   const gdoms=((d.graph||{}).domains)||[];
+  // PERSONAS cuenta personas. El libro mayor y lo sin atribuir son racimos y no personas: sumarlos
+  // pondría un número cierto bajo un rótulo falso. Y ya NO se usa `graph.domains` del servidor
+  // acá: ese conteo es por DOMINIO, que dejó de ser el sujeto de esta escena. Mezclarlos daría
+  // «90» bajo el rótulo «Personas».
+  const personasVisibles=DOMAINS.filter(dd=>dd.name!==GRUPO_LIBRO&&dd.name!==GRUPO_SIN_ATRIBUIR).length;
   $('kDomains').textContent=code
     ?(cg.total_modules?(cg.truncated&&DOMAINS.length<cg.total_modules?`${DOMAINS.length}/${cg.total_modules}`:cg.total_modules):DOMAINS.length)
-    :(gdoms.length||DOMAINS.length);
+    :personasVisibles;
   // La leyenda también: su ranking y sus conteos salían del top-N por saliencia, que está
   // sesgado por recencia y calor — un dominio grande y frío no aparecía. El color se sigue
   // tomando de DOMCOL (la muestra); los que no entraron se pintan en reposo.
-  const legend=(!code&&gdoms.length)
-    ?gdoms.slice().sort((x,y)=>(y.count-x.count)||String(x.domain).localeCompare(String(y.domain))).slice(0,10)
-      .map(dd=>({name:dd.domain,count:dd.count,color:(DOMCOL&&DOMCOL.get(dd.domain))||'#7f9cc9'}))
-    :DOMAINS.slice(0,10);
-  $('domlegend').innerHTML=legend.length?legend.map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin dominios</div>';
+  // La leyenda sale de DOMAINS, que ahora es la lista de RACIMOS armada sobre el grafo entero
+  // (el tope de 300 se fue: el payload trae las 2.217). Antes salía de `graph.domains`, que el
+  // servidor calcula por dominio en SQL — otro sujeto, y ya no aplica.
+  const legend=DOMAINS.slice(0,10);
+  // En la lente personas esta tarjeta muestra a las PERSONAS, no a los dominios. El guardia va
+  // acá y no en renderLens porque renderHUD corre en CADA poll: sin él, la leyenda de personas
+  // vivía cinco segundos y volvía a ser la de dominios sola.
+  if(code) $('domlegend').innerHTML=legend.length?legend.map(dd=>`<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`).join(''):'<div class="empty">sin módulos</div>';
+  else pintarLeyendaRacimos(legend);
   const runs=((d.orchestration||{}).runs)||[];
   $('kRuns').textContent=runs.filter(r=>r.status==='running'||r.done<r.total).length;
   const h=d.health||{}, bad=(h.checks||[]).filter(c=>c.status&&c.status!=='ok').length;
@@ -647,6 +1009,34 @@ function tictac(){
 }
 setInterval(tictac, 1000);
 
+// impulsar: de UNA invocacion real del riel a UN impulso en la lente personas. Es el unico
+// camino por el que nace un pulso; no hay bucle que los fabrique.
+//
+// NO se llama desde el `backlog`, y eso es deliberado: el backlog son eventos que YA pasaron
+// (la corrida medida traia 230 de golpe al conectar). Dispararlos como impulsos seria mostrar
+// como presente algo pasado, que es justo lo que este rediseño vino a sacar.
+//
+// Tampoco se acumulan con la lente apagada: `reloj` no avanza mientras la vista no esta viva, y
+// los pulsos encolados ahi saldrian todos juntos al volver, mintiendo sobre cuando ocurrieron.
+function impulsar(ev){
+  if(!ev || !ev.tool) return;
+  // El MAPA manda. Se arma al construir el grafo y sale del censo: sin el, un servicio no
+  // tiene donde caer y el evento se cuenta como "sin neurona" en vez de repartirse a dedo.
+  // DOS AUSENCIAS DISTINTAS, y confundirlas manda a una acción imposible. Un evento sin
+  // `principal` viene del spool de ESTA máquina, donde el stdio no tiene credencial: no hay dueño
+  // que declarar. Uno CON principal y sin neurona sí es un dueño sin declarar. Medido en una
+  // ventana de 40 s: 8 eventos locales sin credencial y 0 principales sin neurona — o sea el
+  // contador decía «falta declarar su dueño» para los 8 casos donde eso no aplica.
+  if(!String(ev.principal||'').trim()) SIN_CREDENCIAL++;
+  const n=neuronaDeEvento(ev, ENCENDIDO), c=clasificarEvento(ev);
+  const pu = n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
+               : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms};
+  // La escena principal. El reloj es el MISMO que usa animate(): si el impulso naciera con otro,
+  // el frente arrancaría corrido y en el peor caso ya vencido.
+  const ti = n ? TRONCO_DE.get(n.terminal) : undefined;
+  IMPULSOS.nacer(ti===undefined ? -1 : ti, pu, performance.now()/1000);
+}
+
 function conectarVivo(){
   // EventSource y no fetch: el stream local es same-origin sobre loopback y no lleva credencial
   // (el bearer se queda en el relay), asi que se puede usar el que reconecta solo. El del CEREBRO
@@ -654,7 +1044,7 @@ function conectarVivo(){
   let es;
   try{ es=new EventSource('/api/stream'); }catch(_){ return; }
   es.addEventListener('backlog', m=>{ try{ (JSON.parse(m.data)||[]).forEach(anotarEvento); }catch(_){} pintarVivo(); });
-  es.addEventListener('uso', m=>{ try{ anotarEvento(JSON.parse(m.data)); }catch(_){} pintarVivo(); });
+  es.addEventListener('uso', m=>{ try{ const ev=JSON.parse(m.data); anotarEvento(ev); impulsar(ev); }catch(_){} pintarVivo(); });
   es.addEventListener('enlace', m=>{ try{ VIVO.enlace=JSON.parse(m.data); pintarVivo(); }catch(_){} });
   es.onerror=()=>{ // EventSource reconecta solo; lo unico que hace falta es no mentir mientras tanto
     if(VIVO.enlace.estado!=='apagado'){ VIVO.enlace={estado:'caido',detalle:'se corto el stream del panel'}; pintarVivo(); }
@@ -682,10 +1072,46 @@ addEventListener('resize',resize); resize();
 const GRAPH={memory:null, code:null};
 let PULSE=null, since=null;
 
+// Un pedido de grafo EN VUELO por lente, compartido. Dos caminos pueden pedir el mismo grafo a
+// la vez —el arranque en paralelo y el primer poll— y bajarlo dos veces son 1,6 MB y dos ranuras
+// de conexión al pedo, justo cuando las ranuras son el recurso escaso.
+const _bajando={};
 async function fetchGraph(which){
-  const r=await fetch('/api/graph?lens='+which,{cache:'no-store'});
-  if(!r.ok) throw 0;
-  GRAPH[which]=await r.json();
+  if(_bajando[which]) return _bajando[which];
+  _bajando[which]=(async()=>{
+    try{
+      const r=await fetch('/api/graph?lens='+which,{cache:'no-store'});
+      if(!r.ok) throw 0;
+      GRAPH[which]=await r.json();
+    } finally { _bajando[which]=null; }
+  })();
+  return _bajando[which];
+}
+
+// fetchCenso: baja el CENSO DE ACTORES (quien llama al cerebro y cuanto).
+//
+// Va por su propio camino y no por el pulso a proposito: el volumen historico de cada actor
+// cambia en horas, y meterlo en un sondeo de 5 s seria pagarlo 720 veces por hora para ver el
+// mismo numero. El servidor ademas lo cachea 60 s (ver cmd/musubi/actores.go).
+//
+// NUNCA TIRA. Un censo que no llega deja `estado` diciendo por que, y la lente dibuja las
+// terminales sola — que es exactamente como se veia antes de que el censo existiera.
+async function fetchCenso(){
+  if(_bajandoCenso) return _bajandoCenso;
+  _bajandoCenso=(async()=>{
+    try{
+      const r=await fetch('/api/actores',{cache:'no-store'});
+      if(!r.ok) throw 0;
+      const j=await r.json();
+      // El cuerpo del central viaja anidado en `censo` como texto JSON crudo. Se desanida aca
+      // para que el resto del panel vea una sola forma.
+      CENSO={ estado:j.estado, detalle:j.detalle||'', destino:j.destino||'',
+              censo:j.censo||null };
+    }catch(_){
+      CENSO={ estado:'caido', detalle:'el panel no pudo pedir el censo', censo:null };
+    } finally { _bajandoCenso=null; }
+  })();
+  return _bajandoCenso;
 }
 
 // aplicaDeltas: mete lo que trajo el pulso en el grafo cacheado. No toca el render ni la
@@ -722,7 +1148,17 @@ function hudShape(){
     project:p.project, version:p.version };
 }
 
+// EL PANEL SE AHOGABA SOLO, y este guardia es el arreglo. `/api/pulse` corre el diagnóstico
+// completo del cerebro; sobre una base de 54 MB con 56 MB de WAL eso MIDE 45-51 s. Con un
+// setInterval de 5 s se lanzaba un pedido nuevo antes de que volviera el anterior: a los 30 s ya
+// había seis en vuelo, que es el tope de conexiones por origen de un navegador, y desde ahí TODO
+// fetch quedaba encolado para siempre. El síntoma no era "lento": era el panel entero en «—» sin
+// un solo error en consola, porque las promesas no se resolvían ni fallaban. Medido: 8 conexiones
+// ESTABLISHED contra el panel y ningún poll completado.
+let sondeando=false;
 async function poll(){
+  if(sondeando) return;
+  sondeando=true;
   try{
     const r=await fetch('/api/pulse'+(since?('?since='+encodeURIComponent(since)):''),{cache:'no-store'});
     if(!r.ok) throw 0;
@@ -733,6 +1169,7 @@ async function poll(){
     renderLens(); renderHUD(hudShape());
     $('liveTxt').textContent='en vivo';
   }catch(e){ $('liveTxt').textContent='reconectando'; }
+  finally{ sondeando=false; }
 }
 
 // CONSTRUIDO recuerda DE QUE OBJETO se armo el grafo que se esta dibujando.
@@ -768,9 +1205,17 @@ function renderLens(){
 function setMotion(v){ motion=v; const b=$('motionBtn'); if(b){ b.textContent=motion?'❚❚ pausar':'▶ reanudar'; b.classList.toggle('paused',!motion); b.setAttribute('aria-pressed',String(!motion)); } }
 $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motion);
 
-// setLens: conmuta memoria↔código. Reconstruye el grafo, repinta leyendas/etiquetas y el HUD.
+// setLens: conmuta memoria↔código. Son DOS y no tres: la lente de personas aparte se retiró
+// cuando sus dos piezas —los árboles y el impulso— pasaron a la escena principal. Tenerla al
+// lado habría sido una tercera vista contando lo mismo, y dos lugares donde arreglar cada cosa.
 function setLens(v){ lens=v; const b=$('lensBtn');
-  if(b){ b.textContent=lens==='code'?'◉ código':'◉ memoria'; b.classList.toggle('code',lens==='code'); b.setAttribute('aria-pressed',String(lens==='code')); }
+  // Cambiar de lente SIEMPRE rehace las mallas. El disparador de abajo compara cantidades, y dos
+  // grafos distintos con la misma cantidad de nodos no se distinguen ahí: es poco probable, pero
+  // el modo de falla es dibujar un grafo con las mallas del otro.
+  needsRebuild=true;
+  if(b){ b.textContent = lens==='code'?'◉ código':'◉ memoria';
+    b.classList.toggle('code',lens==='code');
+    b.setAttribute('aria-pressed',String(lens!=='memory')); }
   applyLensLabels();
   // La lente de código se baja on-demand: no viaja en el pulso ni tiene por qué estar en
   // memoria si nadie la miró. Si falta, se pide y recién ahí se dibuja.
@@ -780,18 +1225,145 @@ function setLens(v){ lens=v; const b=$('lensBtn');
 // títulos, guía). Se llama al togglear, no en cada poll.
 function applyLensLabels(){ const code=lens==='code';
   const set=(id,t)=>{ const e=$(id); if(e) e.textContent=t; };
+  // Los contadores de la cabecera describen la MEMORIA: es el universo del que sale este grafo,
+  // y renombrarlos por lo que se dibuja encima sería mentir con datos ciertos.
   set('lblNodes', code?'nodos':'neuronas'); set('lblEdges', code?'aristas':'sinapsis');
-  set('domTitle', code?'Módulos':'Dominios'); set('lblActive', code?'Nodos':'Memorias activas');
-  set('lblSyn', code?'Aristas':'Sinapsis'); set('lblDomains', code?'Módulos':'Dominios');
+  set('domTitle', code?'Módulos':'Personas');
+  set('lblActive', code?'Nodos':'Memorias activas');
+  set('lblSyn', code?'Aristas':'Sinapsis');
+  set('lblDomains', code?'Módulos':'Personas');
+  pistas(`<span><b>arrastrá</b> para rotar</span><span class="sep">·</span>`+
+    `<span><b>rueda</b> para acercar</span><span class="sep">·</span>`+
+    `<span><b>hover</b> revela el detalle</span>`);
   const al=$('actlegend'); if(al) al.innerHTML = code
     ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
-    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
+    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`+
+      // El IMPULSO va rotulado APARTE de la actividad de la memoria. Son dos lenguajes distintos
+      // sobre la misma escena —lo que le pasa a una NOTA contra quién LLAMÓ al cerebro— y sin el
+      // rótulo el ámbar aparece dos veces queriendo decir dos cosas.
+      `<div class="lg" style="opacity:.5;margin-left:6px">impulso:</div>`+
+      `<div class="lg"><span class="sw" style="background:rgba(255,255,255,.32);color:rgba(255,255,255,.32)"></span>sondeo</div>`+
+      `<div class="lg"><span class="sw" style="background:#fff;color:#fff"></span>trabajo real</div>`+
+      `<div class="lg"><span class="sw" style="background:#ff9905;color:#ff9905"></span>falló</div>`;
   const ht=$('howto'); if(ht) ht.innerHTML = code
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
-    : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
+    : `<span><b>·</b> cada punto es una <b>memoria</b></span>`+
+      `<span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>`+
+      `<span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>`+
+      `<span><b>·</b> la <b>neurona ramificada</b> de cada racimo es una <b>terminal</b>; sus dendritas, cuánto escribió</span>`+
+      `<span><b>·</b> el <b>impulso</b> que la recorre es <b>UNA llamada real a una tool</b>, en el momento en que ocurre. <b>Sin evento no hay luz</b>: si el cerebro está quieto, esto está quieto</span>`;
 }
-const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>setLens(lens==='code'?'memory':'code'));
+// tipTerminal: el detalle de una terminal al pasarle el mouse por su SOMA.
+//
+// Vivía como callback de la vista 2D. Ahora lo llama `hover()` con el mismo `#tip` que usan las
+// memorias: son la misma pieza de UI y duplicarla es garantizar que se despeguen.
+function tipTerminal(nd, px, py) {
+  const tip = document.getElementById('tip');
+  if (!tip) return;
+  if (!nd) { tip.classList.remove('on'); return; }
+  const D = (PERSONAS && PERSONAS.despachos) || [];
+  const lista = (arr, dir) => arr.length
+    ? arr.sort((a,b)=>b.veces-a.veces).slice(0,4).map(d=>`${esc((dir==='sale'?d.a:d.de).toLowerCase())} <b>${d.veces}</b>`).join(' · ')
+    : '—';
+  const salen = D.filter(d => d.de === nd.id), entran = D.filter(d => d.a === nd.id);
+  const num = (n) => (n||0).toLocaleString('es');
+  tip.querySelector('.tt').textContent = nd.id.toLowerCase();
+  if (nd.tipo === 'actor') {
+    // Un ACTOR no tiene notas ni firmas: no escribe. Mostrarle esos campos en cero seria
+    // afirmar que escribio poco, cuando lo cierto es que no es de los que escriben.
+    const L = nd.llamadas || {};
+    tip.querySelector('.tg').innerHTML = nd.exacta === false
+      ? `credencial de <b>${esc(nd.persona)}</b> · por convención del nombre, sin declarar`
+      : `servicio · <b>dueño no declarado</b>${L.proyecto ? ` · proyecto ${esc(L.proyecto)}` : ''}`;
+    tip.querySelector('.tm').innerHTML =
+      `<i>${num(L.calls)} llamadas</i><i>${num(L.trabajo)} trabajo · ${num(L.sondeo)} sondeo</i><i>${L.tools||0} tools distintas</i>`;
+  } else {
+    // Se dice `notas` y `firma` por separado a propósito: son cosas distintas y confundirlas fue
+    // el error que hubo que corregir para saber de quién es cada terminal.
+    tip.querySelector('.tg').innerHTML =
+      `de <b>${esc(nd.persona || 'sin autor')}</b> · ${nd.notas} notas la nombran · ${nd.firmas} las firma`;
+    // Las llamadas van al final y sólo si el censo llegó: son la OTRA naturaleza de la misma
+    // identidad —escribe y ademas llama— y es el numero que explica por que la neurona que mas
+    // late puede ser la que menos escribio.
+    const L = nd.llamadas;
+    tip.querySelector('.tm').innerHTML =
+      `<i>calor ${nd.calor}</i>${L?`<i>${num(L.calls)} llamadas · ${num(L.trabajo)} trabajo</i>`:''}` +
+      `<i>escribe a: ${lista(salen,'sale')}</i><i>recibe de: ${lista(entran,'entra')}</i>`;
+  }
+  // La posicion la manda la vista con el evento que la origino. El `mx/my` global lo
+  // actualiza otro listener y no siempre corrio antes: medido, el tooltip aparecia en
+  // (16,16) tapando la cabecera.
+  const tw = tip.offsetWidth || 240, th = tip.offsetHeight || 80;
+  const ax = (typeof px === 'number' ? px : mx), ay = (typeof py === 'number' ? py : my);
+  let x = ax + 16, y = ay + 16;
+  if (x + tw > innerWidth - 8) x = ax - tw - 16;
+  if (y + th > innerHeight - 8) y = ay - th - 16;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px'; tip.classList.add('on');
+}
 
+// pistas: la barra de abajo dice qué se puede HACER, y eso cambia con la lente. La de personas
+// tiene desplazamiento y doble click, que no existen en las otras dos: dejar el texto viejo es
+// esconder los dos gestos que hacen falta para llegar a una neurona chica.
+function pistas(html){ const e=$('pistas'); if(e) e.innerHTML=html; }
+
+// pintarLeyendaRacimos: quién es quién, con EL MISMO color con que se dibujó su racimo — sale
+// de DOMAINS, que es lo que la escena usó para pintar, y no de una paleta paralela que podía
+// desincronizarse y poner un color en la leyenda y otro en el dibujo.
+//
+// Debajo van las declaraciones. TODAS estas líneas vivían en la lente aparte, o sea que hasta hoy
+// sólo las veía quien se acordaba de cambiar de vista: cuántas notas no tienen autor, cuántas
+// credenciales no tienen dueño declarado, y si el censo llegó. Sin ellas una muestra parcial se
+// lee como un total, y un cerebro apagado se dibuja igual que uno sin actores.
+function pintarLeyendaRacimos(legend){
+  const dl=$('domlegend'); if(!dl) return;
+  const filas=(legend||[]).map(dd=>
+    `<div class="lg"><span class="sw" style="background:${dd.color};color:${dd.color}"></span>${esc(dd.name)} <b>${dd.count}</b></div>`);
+  if(!filas.length) filas.push('<div class="empty">sin racimos</div>');
+  const linea=(t)=>filas.push(`<div class="lg" style="opacity:.55">${t}</div>`);
+  // EL ESTADO DEL CENSO, cuando no está vivo. Sin esta línea, un cerebro apagado y un cerebro sin
+  // actores se dibujan igual — y la única diferencia entre los dos es si lo que ves es la verdad
+  // o una pantalla que nunca preguntó.
+  if(CENSO && CENSO.estado && CENSO.estado!=='vivo')
+    filas.push(`<div class="lg" style="opacity:.7">censo de actores ${esc(CENSO.estado)} · ${esc(CENSO.detalle||'')}</div>`);
+  const acts=(PERSONAS&&PERSONAS.actores)||[];
+  if(acts.length) linea(`${acts.length} actores ◯ · ${acts.reduce((t,a)=>t+a.calls,0).toLocaleString('es')} llamadas`);
+  const sd=PERSONAS?PERSONAS.sinDeclarar||0:0;
+  if(sd) linea(`${sd} sin dueño declarado · no encienden neurona`);
+  const ds=PERSONAS?PERSONAS.despachos:null;
+  // Los DESPACHOS son los mensajes y los PARES son las flechas. Decir "27 despachos" cuando hay
+  // 27 pares que suman 140 mensajes divide la cifra real por cinco.
+  if(ds&&ds.length) linea(`${ds.length} pares se escriben · ${ds.reduce((t,d)=>t+d.veces,0)} despachos`);
+  const sa=PERSONAS?PERSONAS.sinAutor:0;
+  if(sa) linea(`${sa} notas sin autor · no se reparten`);
+  // Los eventos que no encontraron neurona SE DECLARAN. Repartirlos a la neurona de otro para que
+  // la pantalla no quede quieta sería exactamente el tipo de invento que este rediseño vino a sacar.
+  // Y son DOS ausencias distintas: un evento sin `principal` viene del spool de esta máquina, donde
+  // el stdio no lleva credencial — no hay dueño que declarar. Uno CON principal y sin neurona sí.
+  if(SIN_CREDENCIAL) linea(`${SIN_CREDENCIAL} eventos de esta máquina · sin credencial, no se atribuyen`);
+  const sinDueno=Math.max(0, IMPULSOS.cuenta().sinTronco - SIN_CREDENCIAL);
+  if(sinDueno) linea(`${sinDueno} eventos sin neurona · falta declarar su dueño`);
+  dl.innerHTML=filas.join('');
+}
+const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
+  setLens(lens==='memory' ? 'code' : 'memory'));
+
+// La lente se puede fijar por URL (?lens=code). Sirve para dos cosas concretas: que el CRM pueda
+// enlazar directo a una vista, y que una captura automatica pueda verificar una lente sin simular
+// un click. Un valor desconocido se ignora y queda `memory` — incluido el viejo `?lens=personas`,
+// que ahora ES la lente de memoria y por eso no necesita redirigir a ningun lado.
+applyLensLabels();   // la primera carga también: el HTML trae los rótulos de la lente memoria
+const _lensURL=new URLSearchParams(location.search).get('lens');
+if(_lensURL==='code') setLens('code');
+
+// El GRAFO no depende del PULSO, así que se pide EN PARALELO en vez de esperar a que el pulso
+// vuelva. Con el pulso en ~50 s y el grafo en ~9 s, la diferencia es ver el dibujo a los nueve
+// segundos en vez de tener la pantalla vacía casi un minuto. El HUD (contadores, salud, riel) sí
+// necesita el pulso y llena cuando llega.
+fetchGraph(lens==='code'?'code':'memory').then(()=>{ renderLens(); }).catch(()=>{});
+// EL CENSO SE PIDE AL ARRANCAR, y ya no sólo al entrar a una lente. Dejó de ser un adorno de una
+// vista: es lo que traduce el `principal` de un evento en la terminal que tiene que encenderse.
+// Sin él, todo lo que llame con credencial de servicio cae como «sin neurona».
+fetchCenso().then(()=>{ refrescarEncendido(); }).catch(()=>{});
 poll(); setInterval(poll,5000);
 conectarVivo();
 requestAnimationFrame(animate);

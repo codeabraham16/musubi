@@ -182,3 +182,83 @@ test('I5 · settleTick avisa que termino, y solo entonces', () => {
   const despues = settleTick(1);
   assert.deepEqual(despues, { trabajo: false, termino: false }, 'ya no queda nada que asentar');
 });
+
+// ---------- el centrado por RACIMO ----------
+// Custodia la propiedad que hace que «agrupar por persona» sea un dibujo y no una leyenda: los
+// nodos con ancla convergen HACIA SU ANCLA. Y la contracara, que es la que evita una regresión
+// silenciosa en la lente código: un nodo SIN ancla se comporta exactamente como antes.
+
+function mundoConAnclas(n, anclas, semilla = 20260824){
+  const { ns, sy } = mundo(n, n, semilla);
+  ns.forEach((a, i) => { const g = anclas[i % anclas.length]; a.gx = g[0]; a.gy = g[1]; a.gz = g[2]; a._g = i % anclas.length; });
+  return { ns, sy };
+}
+
+test('L-RACIMO-1 · los nodos con ancla se juntan alrededor de la suya', () => {
+  const anclas = [[-120, 0, 0], [120, 0, 0]];
+  const { ns, sy } = mundoConAnclas(300, anclas);
+  const dist0 = ns.map(a => Math.hypot(a.x - a.gx, a.y - a.gy, a.z - a.gz));
+  const medio0 = dist0.reduce((s, d) => s + d, 0) / dist0.length;
+
+  settleStart(ns, sy, () => ({ rx: 200, ry: 170, rz: 200 }), 120);
+  while (settlePendiente() > 0) settleTick(50);
+
+  const dist1 = ns.map(a => Math.hypot(a.x - a.gx, a.y - a.gy, a.z - a.gz));
+  const medio1 = dist1.reduce((s, d) => s + d, 0) / dist1.length;
+  assert.ok(medio1 < medio0, `los nodos tenían que acercarse a su ancla: ${medio0.toFixed(1)} -> ${medio1.toFixed(1)}`);
+
+  // Y lo que de verdad importa: los DOS racimos quedan separados. Que cada nodo se acerque a su
+  // ancla no alcanza si los dos grupos terminan superpuestos — que es exactamente lo que pasaba
+  // sin esta fuerza, con los cuatro racimos reales apilados en una esfera pareja.
+  const cen = anclas.map((_, g) => { const gs = ns.filter(a => a._g === g); return gs.reduce((s, a) => [s[0] + a.x / gs.length, s[1] + a.y / gs.length, s[2] + a.z / gs.length], [0, 0, 0]); });
+  const sep = Math.hypot(cen[0][0] - cen[1][0], cen[0][1] - cen[1][1], cen[0][2] - cen[1][2]);
+  assert.ok(sep > 120, `los dos racimos tenían que separarse; sus centros quedaron a ${sep.toFixed(1)}`);
+});
+
+test('L-RACIMO-2 · un nodo SIN ancla no cae en la fuerza de racimo', () => {
+  // Es la contracara de L-RACIMO-1 y guarda la lente CÓDIGO, que no tiene racimos: si la fuerza
+  // fuerte se aplicara a todos, ese grafo se comprimiría contra el origen y el cambio se leería
+  // como «quedó un poco distinto», que es justo lo que nadie mira.
+  //
+  // La primera versión de este test comparaba un mundo sin `gx` contra otro con `gx=0` esperando
+  // que fueran IDÉNTICOS. Estaba mal: con la constante propia, `gx=0` significa «anclado en el
+  // origen» y usa la fuerza fuerte a propósito. Lo que hay que probar es lo contrario — que los
+  // dos caminos son DISTINTOS —, porque eso es lo único que demuestra que la ausencia de ancla
+  // toma el camino viejo.
+  const sinAncla = mundo(200, 200, 7777);
+  const conAncla0 = mundo(200, 200, 7777);
+  conAncla0.ns.forEach(a => { a.gx = 0; a.gy = 0; a.gz = 0; });
+
+  for (const M of [sinAncla, conAncla0]) {
+    settleStart(M.ns, M.sy, () => ({ rx: 200, ry: 170, rz: 200 }), 120);
+    while (settlePendiente() > 0) settleTick(50);
+  }
+  const radio = (ns) => ns.reduce((s, a) => s + Math.hypot(a.x, a.y, a.z), 0) / ns.length;
+  const rSin = radio(sinAncla.ns), rCon = radio(conAncla0.ns);
+  assert.ok(rCon < rSin * 0.75,
+    `anclar al origen tiene que compactar mucho más que el centrado suave: sin ancla ${rSin.toFixed(1)}, anclado ${rCon.toFixed(1)}`);
+});
+
+test('L-RACIMO-3 · con volumen propio los racimos DEJAN de pisarse', () => {
+  // El invariante que hace que «agrupar por persona» se vea: holgura = separación entre centros
+  // dividida por la suma de radios. Por debajo de 1 los racimos se superponen y en pantalla queda
+  // una esfera pareja — que es exactamente lo que pasaba con el tirón solo (medido: 0,38).
+  const anclas = [[-150, 0, 0], [150, 0, 0]];
+  const RGR = 60;
+  const { ns, sy } = mundo(400, 400, 24680);
+  ns.forEach((a, i) => { const g = i % 2; a.gx = anclas[g][0]; a.gy = anclas[g][1]; a.gz = anclas[g][2]; a.gr = RGR; a._g = g; });
+
+  settleStart(ns, sy, () => ({ rx: 300, ry: 260, rz: 300 }), 140);
+  while (settlePendiente() > 0) settleTick(80);
+
+  // Ningún nodo puede quedar fuera de la esfera de su racimo: es el techo, no una sugerencia.
+  for (const a of ns) {
+    const d = Math.hypot(a.x - a.gx, a.y - a.gy, a.z - a.gz);
+    assert.ok(d <= RGR + 1e-6, `un nodo se escapó de su racimo: ${d.toFixed(2)} > ${RGR}`);
+  }
+  const cen = [0, 1].map(g => { const gs = ns.filter(a => a._g === g); return gs.reduce((s, a) => [s[0] + a.x / gs.length, s[1] + a.y / gs.length, s[2] + a.z / gs.length], [0, 0, 0]); });
+  const rad = [0, 1].map(g => { const gs = ns.filter(a => a._g === g); return gs.reduce((s, a) => s + Math.hypot(a.x - cen[g][0], a.y - cen[g][1], a.z - cen[g][2]), 0) / gs.length; });
+  const sep = Math.hypot(cen[0][0] - cen[1][0], cen[0][1] - cen[1][1], cen[0][2] - cen[1][2]);
+  const holgura = sep / (rad[0] + rad[1]);
+  assert.ok(holgura > 1, `los racimos se pisan: holgura ${holgura.toFixed(2)} (separación ${sep.toFixed(0)}, radios ${rad.map(r => r.toFixed(0)).join('+')})`);
+});

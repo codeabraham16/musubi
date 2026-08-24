@@ -140,6 +140,10 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string, relay
 	// puede decir QUIEN. La base local no tiene ese dato: esta vacio en las 130.471 filas.
 	mux.HandleFunc("/api/stream", relay.handlerStream())
 
+	// /api/actores — el CENSO histórico de quién llama al cerebro, proxeado al central. Es la
+	// contraparte del riel: el riel es el presente y esto es la historia. Ver actores.go.
+	mux.HandleFunc("/api/actores", handlerActores(relay, &cacheCenso{}))
+
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
 	bundle, _ := dashboardAssets.ReadFile("assets/dashboard.bundle.js")
 

@@ -254,6 +254,12 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		_, _ = w.Write([]byte(metrics.render(s.engine)))
 	})
 
+	// /api/actores — el CENSO: quién llama al cerebro, del ledger histórico. Es la contraparte
+	// de /api/stream: el riel es el PRESENTE (quién está llamando ahora) y esto es la HISTORIA
+	// (cuánto llamó cada uno). El panel necesita las dos: sin la historia, un actor que trabajó
+	// todo el día y se calló hace un minuto no existe. Ver actores.go.
+	mux.HandleFunc("/api/actores", s.handlerActores(opt))
+
 	// /api/stream — el FEED EN VIVO por SSE (livefeed.go). Cada invocación de tool sale acá en el
 	// instante en que termina: qué tool, cómo salió, cuánto tardó y de quién fue.
 	//
