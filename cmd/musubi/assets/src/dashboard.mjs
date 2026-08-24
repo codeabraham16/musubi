@@ -183,7 +183,8 @@ function buildGraph(brain){
   // El asentado ya NO congela: se reparte en trozos de pocos ms por frame (ver settleTick).
   // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
   // terminar de asentar, que es cuando las posiciones son las buenas.
-  refrescarPersonas(brain);
+  const _fp=firmaPersonas();
+  if(_fp!==_firmaPersonas){ _firmaPersonas=_fp; refrescarPersonas(brain); }
   POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
   const its=iterParaCambio(NEURONS.length, nuevos, ASENTADO.memory);
   if(its>0){ arrancarAsentado(its,'memory'); needsRebuild=true; }
@@ -370,11 +371,19 @@ let NHOT=null, EHOT=null, resto=0, actViva=false, lastThink=-1;
 const _m=new THREE.Matrix4(), _c=new THREE.Color(), _c2=new THREE.Color(), _pos=new THREE.Vector3(), _scl=new THREE.Vector3(), _eu=new THREE.Euler();
 let framed=false;
 
-function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose(); inst=null; }
+// disposeMeshes: saca las mallas de la escena y libera SOLO lo que es de ellas.
+//
+// LA REGLA: se libera lo que se CLONO, nunca lo compartido. `EGEO`/`DGEO` se clonan por
+// reconstruccion (cada clon lleva sus propios atributos por instancia) y hay que liberarlos o se
+// acumulan. `NGEO` NO: es una sola icosaedro de modulo que usan las 2.219 memorias Y los 11 somas,
+// y se vuelve a usar en la reconstruccion siguiente. Liberarla tira sus buffers de GPU para
+// recrearlos acto seguido, y ademas se estaba haciendo DOS VECES por reconstruccion —una por
+// `inst` y otra por `somaInst`— sobre el mismo objeto.
+function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(edgeInst){ world.remove(edgeInst); edgeInst.geometry.dispose(); edgeInst=null; }
   if(edgeMat){ edgeMat.dispose(); edgeMat=null; }
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
-  if(somaInst){ world.remove(somaInst); somaInst.geometry.dispose(); somaInst=null; }
+  if(somaInst){ world.remove(somaInst); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
   if(despInst){ world.remove(despInst); despInst.geometry.dispose(); despInst=null; }
   if(despMat){ despMat.dispose(); despMat=null; }
@@ -426,6 +435,18 @@ function refrescarEncendido(){
 // refrescarPersonas: las cuatro cosas que salen de quién firma la memoria — las terminales, sus
 // racimos, el mapa de encendido y los árboles. Van juntas porque son la misma lectura del grafo,
 // y separarlas ya dejó una vez el mapa apuntando a un bosque que ya no existía.
+// LA FIRMA de lo que personas+bosque miran. Barata (una pasada sobre 2.221 enteros) contra los
+// 36,8 ms que cuesta rehacerlos: `extraerPersonas` corre regexes sobre todos los gists (22,7 ms) y
+// `bosque` genera 12.010 segmentos (14,1 ms). Eso pasaba en CADA poll —cada 5 s, en el hilo
+// principal— y el presupuesto de un cuadro a 60 fps son 16,6 ms: se saltaban dos o tres cuadros
+// cada cinco segundos para recalcular casi siempre lo mismo.
+//
+// Va el CALOR y no solo la cantidad: `extraerPersonas` deriva el calor de cada terminal de la suma
+// del de sus notas, y con una firma que solo mirara cuantas hay, ese numero se congelaba hasta que
+// entrara una memoria nueva. El tooltip diria un calor viejo sin que nada avisara.
+let _firmaPersonas='';
+function firmaPersonas(){ let h=0; for(const n of NEURONS) h+=n.heat||0; return NEURONS.length+':'+h; }
+
 function refrescarPersonas(brain){
   PERSONAS=extraerPersonas(brain);
   refrescarEncendido();
@@ -462,6 +483,10 @@ function rebuildDendritas(){
   denInst.frustumCulled=false;   // la malla envuelve toda la escena, igual que las aristas
 
   let i=0;
+  // Los pulsos vivos guardan el INDICE de su tronco, y los indices acaban de cambiar. Uno que
+  // sobreviva enciende, por lo que le quede de vida, la neurona equivocada — sin error de ninguna
+  // clase, y atribuyendole la llamada a quien no fue.
+  IMPULSOS.limpiar();
   BOSQUE.forEach((tr,ti)=>{ _c.set(tr.color||'#7f9cc9');
     TRONCO_DE.set(tr.id, ti); DALC[ti]=tr.alcanceRama||1; DRAD[ti]=tr.rSoma||1;
     for(const sg of tr.segs){

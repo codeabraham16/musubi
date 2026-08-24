@@ -78,6 +78,20 @@ export function crearImpulsos() {
 
     cuenta() { return { vistos, sinTronco }; },
 
+    /**
+     * limpiar: tira los pulsos vivos, sin tocar los contadores.
+     *
+     * Se llama cuando se rehace el bosque, y NO es higiene: los pulsos guardan el ÍNDICE de su
+     * tronco, y al reconstruirse el grafo ese índice puede pasar a nombrar a otro árbol. Un pulso
+     * que sobreviva a la reconstrucción enciende, durante lo que le quede de vida, la neurona
+     * equivocada — o sea el panel le atribuye la llamada a la persona que no fue, que es
+     * exactamente lo que este dibujo existe para no hacer.
+     *
+     * Los contadores NO se reinician: son el total de lo que pasó, y ponerlos en cero al cambiar
+     * de lente borraría la cuenta de eventos que no encontraron neurona.
+     */
+    limpiar() { porTronco.clear(); },
+
     /** vivos: cuántos pulsos siguen viajando. Cero ⇒ no hay nada que redibujar. */
     vivos(ahora) {
       let n = 0;

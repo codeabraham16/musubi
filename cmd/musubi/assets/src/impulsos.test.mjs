@@ -133,6 +133,23 @@ test('I7b · una RÁFAGA de fallas avisa igual de fuerte que una sola', () => {
   assert.ok(m > 0.3 && m < 0.7, 'mitad y mitad tiene que dar un aviso a medias: ' + m.toFixed(3));
 });
 
+test('I7c · un pulso NO sobrevive a la reconstruccion del bosque', () => {
+  // Los pulsos guardan el ÍNDICE de su tronco. Al rehacerse el grafo ese índice puede pasar a
+  // nombrar otro árbol, y el pulso que sobreviva enciende la neurona equivocada durante lo que le
+  // quede de vida: el panel le atribuye la llamada a la persona que no fue. Es la falla que este
+  // dibujo existe para no cometer, y no da error de ninguna clase.
+  const imp = crearImpulsos(), b = bancada(3, 4);
+  imp.nacer(0, EV(), 0);
+  assert.ok(imp.escribir(0.1, b).encendidas > 0, 'el pulso tiene que estar vivo antes de limpiar');
+  imp.limpiar();
+  assert.equal(imp.vivos(0.1), 0, 'no puede quedar ningun pulso vivo');
+  assert.equal(imp.escribir(0.1, b).encendidas, 0, 'y el arbol tiene que quedar apagado');
+  // Los contadores NO se tocan: son el total de lo que paso, y ponerlos en cero al cambiar de
+  // lente borraria la cuenta de eventos que no encontraron neurona.
+  imp.nacer(-1, EV(), 0);
+  assert.deepEqual(imp.cuenta(), { vistos: 2, sinTronco: 1 });
+});
+
 test('I8 · un principal SIN tronco se cuenta, no se traga', () => {
   // Es la señal de «hay un dueño sin declarar». Tragársela deja el panel diciendo que todo está
   // atribuido cuando no lo está.

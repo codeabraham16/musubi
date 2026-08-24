@@ -7,6 +7,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El tirón cada cinco segundos: `renderLens()` recalculaba personas y bosque en cada poll.**
+  Medido: `extraerPersonas` corre regexes sobre los 2.221 gists (**22,7 ms**) y `bosque` genera
+  12.010 segmentos (**14,1 ms**) — **36,8 ms de hilo principal cada 5 s** para obtener casi siempre
+  lo mismo. El presupuesto de un cuadro a 60 fps son 16,6 ms.
+  - Antes / después, midiendo el HUECO más largo entre cuadros y no el promedio, sobre 26 s:
+
+    | | p50 | p99 | máximo | cuadros >33 ms |
+    |---|---|---|---|---|
+    | sin memoizar | 16,5 ms | 21,5 ms | **109,4 ms** | **4** |
+    | memoizado | 16,5 ms | 20,3 ms | 25,1 ms | **0** |
+
+    El **p50 es idéntico en los dos**, que es exactamente por qué el FPS se veía bien y se sentía
+    mal: un pico de 109 ms cada cinco segundos no mueve el promedio y sí se nota.
+  - La firma incluye el **calor**, no sólo la cantidad de notas: `extraerPersonas` deriva el calor
+    de cada terminal de la suma del de sus notas, y una firma que sólo contara lo dejaría congelado
+    hasta que entrara una memoria nueva. El tooltip diría un número viejo sin que nada avisara.
+- **Un pulso podía sobrevivir a la reconstrucción del bosque y encender la neurona equivocada.**
+  Los pulsos guardan el **índice** de su tronco; al rehacerse el grafo ese índice puede pasar a
+  nombrar otro árbol, y el pulso vivo le atribuía la llamada a la persona que no fue — durante
+  hasta 0,85 s, sin error de ninguna clase. Es la falla que este dibujo existe para no cometer.
+  Invariante nuevo (I7c), verificado fallando bajo su sabotaje.
+- **`NGEO` se liberaba dos veces por reconstrucción.** Es la icosaedro de módulo que comparten las
+  2.219 memorias **y** los 11 somas, y `disposeMeshes` la liberaba una vez por cada malla — tirando
+  sus buffers de GPU para recrearlos acto seguido. La regla queda escrita donde se rompe: se libera
+  lo que se **clonó** (`EGEO`/`DGEO`, con sus atributos por instancia), nunca lo compartido.
+
 ### Removed
 - **Se retira la lente `personas` aparte: eran dos vistas contando lo mismo.** El ciclo vuelve a
   ser **memoria ↔ código**. Todo lo que tenía esa vista está ahora en la escena principal — los
