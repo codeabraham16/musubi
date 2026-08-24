@@ -10,7 +10,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento,
-         fusionarActores, mapaDeEncendido } from './personas.mjs';
+         fusionarActores, mapaDeEncendido,
+         grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -25,6 +26,28 @@ const EDGEKIND={ CALLS:'#38bdf8', IMPORTS:'#a78bfa', CONTAINS:'#5b6b86' };
 const edgeBase=s=>(s&&s.kind&&EDGEKIND[s.kind])||REPOSO;
 let DOMCOL=new Map(), DOMAINS=[];
 const domColor=d=>DOMCOL.get(d)||'#64748b';
+// Los racimos que NO son personas van en gris, fuera de la paleta. La distinción tiene que
+// entrar por el ojo antes que por la leyenda: si el libro mayor —el 46,3 % de la memoria— tuviera
+// un color de la paleta, sería el racimo más vistoso de la pantalla y se leería como una persona.
+// Grises CLAROS, no oscuros. El primer intento usó #5b6472/#3f4652 y el resultado medido en
+// pantalla fue que los dos racimos —el 64 % de la memoria— quedaban casi invisibles sobre el
+// fondo negro, sobre todo el libro mayor, que es viejo y por eso el factor de recencia lo apaga
+// todavía más. «No compite por atención» no puede significar «no se ve»: la mitad del acervo
+// desapareciendo es una afirmación falsa sobre cuánto hay.
+const GRIS_LIBRO='#98a2b3', GRIS_SIN='#78839a';
+// quienEscribio: lo que el tooltip dice del AUTOR. Los tres casos se nombran distinto porque son
+// distintos: una persona, el registro del propio motor, y una nota que no se pudo atribuir. Decir
+// «sin atribuir» a un `git-commit` sería tratar como hueco lo que es una categoría.
+function quienEscribio(n){
+  if(n._grupoTipo==='libro') return 'libro mayor · lo escribe el motor';
+  if(n._grupoTipo==='sin') return 'sin autor · anterior a la columna';
+  return 'de '+(n._grupo||'?');
+}
+function colorDeRacimo(clave,i){
+  if(clave===GRUPO_LIBRO) return GRIS_LIBRO;
+  if(clave===GRUPO_SIN_ATRIBUIR) return GRIS_SIN;
+  return DOMPAL[i%DOMPAL.length];
+}
 function hash01(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0)%1000/1000; }
 
 /* ---------- escala del volumen (proporcional a la población) ---------- */
@@ -81,6 +104,9 @@ let RACIMOS = [], PERSONAS = null;
 // el mapa principal→neurona que sale de fundirlo con las terminales. Los dos arrancan en null y
 // eso NO es "cero actores": es "todavia no se pregunto", que la vista distingue.
 let CENSO = null, ENCENDIDO = null, _bajandoCenso = null;
+// Eventos del spool local, que llegan SIN credencial. Se cuentan aparte de los que sí traen un
+// principal y aun así no encuentran neurona: son dos problemas y tienen dos arreglos distintos.
+let SIN_CREDENCIAL = 0;
 
 // buildGraph: PORTADO del dashboard anterior. Detecta ACTIVIDAD REAL diffeando el snapshot y la tipa
 // (escribir/recordar/relacionar); corre el force-sim si cambió la topología. Marca needsRebuild para
@@ -88,21 +114,46 @@ let CENSO = null, ENCENDIDO = null, _bajandoCenso = null;
 function buildGraph(brain){
   const prev=POS.memory, ns0=brain.neurons||[];
   const N0=240; growth=Math.max(0.85, Math.min(2.2, Math.cbrt((ns0.length||1)/N0))); applyScale();
-  const counts={}; ns0.forEach(n=>counts[n.domain]=(counts[n.domain]||0)+1);
-  const doms=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
+  // EL RACIMO ES LA PERSONA, no el dominio. Es el cambio de sujeto de la escena principal:
+  // antes agrupaba por QUÉ trata una memoria, ahora por QUIÉN la escribió. La maquinaria es la
+  // misma —anclas en una esfera de Fibonacci y el layout tira de cada nodo hacia la suya—, y por
+  // eso hereda los 60 FPS que el canvas 2D de la lente aparte no podía dar (medido: 60,3 contra
+  // 13,8, con 11.012 strokes por cuadro).
+  //
+  // Se cachea el grupo EN la neurona (`_grupo`) porque se consulta dos veces por nodo acá y una
+  // más en el tooltip; recalcularlo es barato pero repetirlo escondería que es el mismo criterio.
+  ns0.forEach(n=>{ const g=grupoDeNeurona(n); n._grupo=g.clave; n._grupoTipo=g.tipo; });
+  const counts={}; ns0.forEach(n=>counts[n._grupo]=(counts[n._grupo]||0)+1);
+  // ordenarRacimos deja al LIBRO MAYOR y a lo SIN ATRIBUIR al final aunque pesen más: no son
+  // personas, y ordenarlos por tamaño entre ellas afirmaría que lo son. Medido, el libro mayor
+  // es el 46,3 % — el racimo más grande de todos.
+  const doms=ordenarRacimos(Object.keys(counts), counts);
   DOMCOL=new Map(); DOMAINS=[]; const dIdx=new Map();
-  doms.forEach((d,i)=>{ const col=DOMPAL[i%DOMPAL.length]; DOMCOL.set(d,col); dIdx.set(d,i);
+  // ANCLA a 0,62 del radio y VOLUMEN PROPIO de 0,32, escalado por la raíz cúbica del tamaño para
+  // que todos los racimos queden con la misma DENSIDAD (si no, el libro mayor —1.028 nodos— sería
+  // una masa apretada al lado de davantis, y el tamaño se leería como intensidad).
+  // Los dos números salen de un banco con los parámetros reales, no de probar a ojo: con ancla
+  // 0,52 y sin volumen propio la holgura entre racimos daba 0,38 (se pisaban); así da 1,26. Y
+  // 0,62+0,39 = 1,01 del radio, o sea el conjunto entra justo en el cuadro que encuadra la cámara.
+  const FRAC_ANCLA=0.62, FRAC_RADIO=0.32, medioRacimo=Math.max(1,ns0.length/Math.max(doms.length,1));
+  doms.forEach((d,i)=>{ const col=colorDeRacimo(d,i); DOMCOL.set(d,col); dIdx.set(d,i);
     const k=i+0.5, phi=Math.acos(1-2*k/Math.max(doms.length,1)), th=Math.PI*(1+Math.sqrt(5))*k;
-    DOMAINS.push({name:d,color:col,count:counts[d], ax:Math.cos(th)*Math.sin(phi)*rx*0.52, ay:Math.cos(phi)*ry*0.52, az:Math.sin(th)*Math.sin(phi)*rz*0.52}); });
+    DOMAINS.push({name:d,color:col,count:counts[d],
+      ax:Math.cos(th)*Math.sin(phi)*rx*FRAC_ANCLA, ay:Math.cos(phi)*ry*FRAC_ANCLA, az:Math.sin(th)*Math.sin(phi)*rz*FRAC_ANCLA,
+      ar:rx*FRAC_RADIO*Math.cbrt(counts[d]/medioRacimo)}); });
 
   // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
   const prevIds=new Set(prev.keys());
   NEURONS=ns0.map(n=>{ const p=prev.get(n.id); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
     const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.importance,0))*0.72+Math.log(1+(n.heat||0))*0.38)); // tamaño del prototipo (más chico)
     const rec=Math.max(0.10, Math.min(1, 1-(n.recency_days||0)/45));
-    return {...n, x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec, col:domColor(n.domain),
+    // El ancla del racimo viaja EN el nodo y no en una tabla aparte: la física recorre nodos, y
+    // hacerle consultar un índice por cada uno, en cada iteración, sería el costo del layout.
+    const anc=dIdx.has(n._grupo)?DOMAINS[dIdx.get(n._grupo)]:null;
+    return {...n, x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec, col:domColor(n._grupo),
+      gx:anc?anc.ax:0, gy:anc?anc.ay:0, gz:anc?anc.az:0, gr:anc?anc.ar:0,
       ph:(p&&p.ph!=null)?p.ph:Math.random()*6.283, phx:Math.random()*6.283, phz:Math.random()*6.283,
-      di:dIdx.has(n.domain)?dIdx.get(n.domain):-1, act:0, ak:0, adj:[], _new:!p}; });
+      di:dIdx.has(n._grupo)?dIdx.get(n._grupo):-1, act:0, ak:0, adj:[], _new:!p}; });
   const idx=new Map(NEURONS.map((n,i)=>[n.id,i]));
   SYN=(brain.synapses||[]).filter(s=>idx.has(s.source)&&idx.has(s.target))
     .map(s=>{ const hs=hash01(s.source+'>'+s.target); return {...s, a:idx.get(s.source), b:idx.get(s.target), off:hs}; });
@@ -323,12 +374,12 @@ function hover(){ if(drag>=0 || !inst){ tip.classList.remove('on'); return; } ra
       let tg=esc(n.gist||'(sin ruta)');
       if(Array.isArray(n._exp) && n._exp.length) tg+='<div class="why">'+n._exp.slice(0,3).map(e=>`<span>${esc(e.topic_key)}</span>`).join('')+'</div>';
       tip.querySelector('.tg').innerHTML=tg;
-      let meta=`<i>${esc(n.mem_type||'')}</i><i>${esc(n.domain)}</i><i>centralidad ${n.heat}</i>`;
+      let meta=`<i>${esc(quienEscribio(n))}</i><i>${esc(n.domain)}</i><i>centralidad ${n.heat}</i>`;
       if(Array.isArray(n._exp)) meta+= n._exp.length?`<i style="color:var(--purple)">explicado ×${n._exp.length}</i>`:`<i style="opacity:.55">sin memorias</i>`;
       tip.querySelector('.tm').innerHTML=meta;
     } else {
       tip.querySelector('.tg').textContent=n.gist||'(sin resumen)';
-      tip.querySelector('.tm').innerHTML=`<i>${esc(n.domain)}</i><i>${esc(n.mem_type||'sin tipo')}</i><i>calor ${n.heat}</i>`;
+      tip.querySelector('.tm').innerHTML=`<i>${esc(quienEscribio(n))}</i><i>${esc(n.domain)}</i><i>calor ${n.heat}</i>`;
     }
     const tw=tip.offsetWidth||220, th=tip.offsetHeight||70; let x=mx+16,y=my+16; if(x+tw>innerWidth-8)x=mx-tw-16; if(y+th>innerHeight-8)y=my-th-16;
     tip.style.left=x+'px'; tip.style.top=y+'px'; tip.classList.add('on'); } else tip.classList.remove('on'); }
@@ -490,16 +541,21 @@ function renderHUD(d){
   // DOMAINS se arma de la muestra dibujada y sirve para COLOREAR: usarlo para contar decía 46
   // donde había 90. En lente código el equivalente del universo es total_modules.
   const gdoms=((d.graph||{}).domains)||[];
+  // PERSONAS cuenta personas. El libro mayor y lo sin atribuir son racimos y no personas: sumarlos
+  // pondría un número cierto bajo un rótulo falso. Y ya NO se usa `graph.domains` del servidor
+  // acá: ese conteo es por DOMINIO, que dejó de ser el sujeto de esta escena. Mezclarlos daría
+  // «90» bajo el rótulo «Personas».
+  const personasVisibles=DOMAINS.filter(dd=>dd.name!==GRUPO_LIBRO&&dd.name!==GRUPO_SIN_ATRIBUIR).length;
   $('kDomains').textContent=code
     ?(cg.total_modules?(cg.truncated&&DOMAINS.length<cg.total_modules?`${DOMAINS.length}/${cg.total_modules}`:cg.total_modules):DOMAINS.length)
-    :(gdoms.length||DOMAINS.length);
+    :personasVisibles;
   // La leyenda también: su ranking y sus conteos salían del top-N por saliencia, que está
   // sesgado por recencia y calor — un dominio grande y frío no aparecía. El color se sigue
   // tomando de DOMCOL (la muestra); los que no entraron se pintan en reposo.
-  const legend=(!code&&gdoms.length)
-    ?gdoms.slice().sort((x,y)=>(y.count-x.count)||String(x.domain).localeCompare(String(y.domain))).slice(0,10)
-      .map(dd=>({name:dd.domain,count:dd.count,color:(DOMCOL&&DOMCOL.get(dd.domain))||'#7f9cc9'}))
-    :DOMAINS.slice(0,10);
+  // La leyenda sale de DOMAINS, que ahora es la lista de RACIMOS armada sobre el grafo entero
+  // (el tope de 300 se fue: el payload trae las 2.217). Antes salía de `graph.domains`, que el
+  // servidor calcula por dominio en SQL — otro sujeto, y ya no aplica.
+  const legend=DOMAINS.slice(0,10);
   // En la lente personas esta tarjeta muestra a las PERSONAS, no a los dominios. El guardia va
   // acá y no en renderLens porque renderHUD corre en CADA poll: sin él, la leyenda de personas
   // vivía cinco segundos y volvía a ser la de dominios sola.
@@ -693,6 +749,12 @@ function impulsar(ev){
   if(lens!=='personas' || !VISTA_PERSONAS.activa() || !ev || !ev.tool) return;
   // El MAPA manda. Se arma al construir el grafo y sale del censo: sin el, un servicio no
   // tiene donde caer y el evento se cuenta como "sin neurona" en vez de repartirse a dedo.
+  // DOS AUSENCIAS DISTINTAS, y confundirlas manda a una acción imposible. Un evento sin
+  // `principal` viene del spool de ESTA máquina, donde el stdio no tiene credencial: no hay dueño
+  // que declarar. Uno CON principal y sin neurona sí es un dueño sin declarar. Medido en una
+  // ventana de 40 s: 8 eventos locales sin credencial y 0 principales sin neurona — o sea el
+  // contador decía «falta declarar su dueño» para los 8 casos donde eso no aplica.
+  if(!String(ev.principal||'').trim()) SIN_CREDENCIAL++;
   const n=neuronaDeEvento(ev, ENCENDIDO), c=clasificarEvento(ev);
   VISTA_PERSONAS.pulsar(n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
                           : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms});
@@ -909,10 +971,10 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
   // Los contadores de la cabecera siguen describiendo la MEMORIA aun en la lente personas: son
   // el universo del que sale este grafo, y renombrarlos ahí sí sería mentir.
   set('lblNodes', code?'nodos':'neuronas'); set('lblEdges', code?'aristas':'sinapsis');
-  set('domTitle', per?'Personas':(code?'Módulos':'Dominios'));
+  set('domTitle', per?'Personas':(code?'Módulos':'Personas'));
   set('lblActive', per?'Terminales':(code?'Nodos':'Memorias activas'));
   set('lblSyn', per?'Despachos':(code?'Aristas':'Sinapsis'));
-  set('lblDomains', per?'Personas':(code?'Módulos':'Dominios'));
+  set('lblDomains', per?'Personas':(code?'Módulos':'Personas'));
   if(per){
     const al0=$('actlegend'); if(al0) al0.innerHTML =
       `<div class="lg"><span class="sw" style="background:rgba(255,255,255,.30);color:rgba(255,255,255,.30)"></span>sondeo</div>`+
@@ -944,7 +1006,7 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
     : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
   const ht=$('howto'); if(ht) ht.innerHTML = code
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
-    : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>color</b> agrupa por dominio · el <b>brillo</b>, recencia · el <b>tamaño</b>, importancia</span>`;
+    : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>`;
 }
 // El detalle de una terminal al pasarle el mouse. Reusa el MISMO `#tip` que la lente de
 // memoria: son la misma pieza de UI y duplicarla es garantizar que se despeguen. En esta lente
@@ -1030,7 +1092,10 @@ function pintarLeyendaPersonas(){
   // (`b1-adjudicador`, `crm-cabina`): repartirlos a la neurona de otro para que la pantalla no
   // quede quieta seria exactamente el tipo de invento que este rediseño vino a sacar.
   const cp=VISTA_PERSONAS.cuentaPulsos();
-  if(cp.sinNeurona) filas.push(`<div class="lg" style="opacity:.55">${cp.sinNeurona} eventos sin neurona · falta declarar su dueño</div>`);
+  // El de ESTA máquina no es un dueño sin declarar: es que el stdio local no lleva credencial.
+  if(SIN_CREDENCIAL) filas.push(`<div class="lg" style="opacity:.55">${SIN_CREDENCIAL} eventos de esta máquina · sin credencial, no se atribuyen</div>`);
+  const sinDueno=Math.max(0, cp.sinNeurona - SIN_CREDENCIAL);
+  if(sinDueno) filas.push(`<div class="lg" style="opacity:.55">${sinDueno} eventos sin neurona · falta declarar su dueño</div>`);
   dl.innerHTML=filas.join('');
 }
 const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
@@ -1039,6 +1104,7 @@ const lensBtn=$('lensBtn'); if(lensBtn) lensBtn.addEventListener('click',()=>
 // La lente se puede fijar por URL (?lens=personas). Sirve para dos cosas concretas: que el
 // CRM pueda enlazar directo a una vista, y que una captura automatica pueda verificar una
 // lente sin simular un click. Un valor desconocido se ignora y queda `memory`.
+applyLensLabels();   // la primera carga también: el HTML trae los rótulos de la lente memoria
 const _lensURL=new URLSearchParams(location.search).get('lens');
 if(_lensURL==='code'||_lensURL==='personas') setLens(_lensURL);
 

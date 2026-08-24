@@ -4,6 +4,7 @@ import {
   extraerPersonas, agruparPorPersona, personaDe,
   neuronaDeEvento, clasificarEvento,
   fusionarActores, mapaDeEncendido, RACIMO_SERVICIOS, DUENOS, ACTORES,
+  grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR, GENEROS_DEL_MOTOR,
 } from './personas.mjs';
 
 // Fixture chico y EXPLÍCITO: cada nota está puesta para tensar un invariante distinto, y por
@@ -377,4 +378,50 @@ test('P25 · los cuatro dueños declarados son los que la memoria documenta', ()
     assert.equal(v, 'davantis', `${k} está declarado a nombre de ${v}`);
     assert.ok(!ACTORES[k], `${k} no puede estar en las dos tablas: un servicio no es una terminal`);
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EL AGRUPAMIENTO DE LA ESCENA PRINCIPAL: de dominio a persona.
+
+test('P26 · el GÉNERO del motor gana sobre el autor, y no se mueve con un backfill', () => {
+  // Un `git-commit` es el registro del repo, tenga o no autor en la fila. Si el autor mandara,
+  // el día que alguien rellene ese campo en los 524 commits el racimo entero se mudaría de
+  // golpe al de una persona — un cambio de dibujo enorme causado por un backfill, no por un
+  // cambio real en quién trabajó.
+  assert.deepEqual(grupoDeNeurona({ domain: 'git-commit', author: 'gio' }),
+    { clave: GRUPO_LIBRO, tipo: 'libro' });
+  assert.deepEqual(grupoDeNeurona({ topic: 'sdd/lo-que-sea/design', author: 'davantis-admin' }),
+    { clave: GRUPO_LIBRO, tipo: 'libro' });
+  // Y el prefijo tiene que ser de SEGMENTO: `sddx/algo` no es del libro mayor.
+  assert.equal(grupoDeNeurona({ topic: 'sddx/algo', author: 'gio' }).tipo, 'persona');
+});
+
+test('P27 · sin género y sin autor NO se inventa una persona: se declara sin atribuir', () => {
+  const g = grupoDeNeurona({ topic: 'gotchas/lo-que-sea', domain: 'gotchas' });
+  assert.deepEqual(g, { clave: GRUPO_SIN_ATRIBUIR, tipo: 'sin' });
+  // El caso que importa medido: 1.379 de 2.217 neuronas están así. Repartirlas a la persona
+  // más probable llenaría de trabajo ajeno el racimo de alguien.
+  assert.equal(grupoDeNeurona({}).tipo, 'sin');
+  assert.equal(grupoDeNeurona(null).tipo, 'sin');
+});
+
+test('P28 · el autor colapsa credenciales en UNA persona', () => {
+  for (const a of ['davantis', 'davantis-admin', 'davantis-mando-admin', 'davantis-altura']) {
+    assert.deepEqual(grupoDeNeurona({ topic: 'x/y', author: a }), { clave: 'davantis', tipo: 'persona' });
+  }
+});
+
+test('P29 · los racimos que NO son personas van últimos, aunque pesen más', () => {
+  // El libro mayor son 1.027 de 2.217 (46,3 %) — más que cualquier persona. Ordenarlo por
+  // tamaño lo pondría primero y afirmaría que es la persona que más escribió.
+  const cuenta = { [GRUPO_LIBRO]: 1027, gio: 507, [GRUPO_SIN_ATRIBUIR]: 390, davantis: 295 };
+  const orden = ordenarRacimos(Object.keys(cuenta), cuenta);
+  assert.deepEqual(orden, ['gio', 'davantis', GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR]);
+  assert.ok(cuenta[orden[0]] < cuenta[GRUPO_LIBRO], 'el fixture perdió sentido si el libro mayor no es el más grande');
+});
+
+test('P30 · la lista de géneros es CERRADA y sólo tiene lo que escribe el motor', () => {
+  // Los géneros que inventa cada equipo viven en `conflicts.ledger_prefixes` del config, no acá.
+  // Una entrada de más es la costumbre de un usuario metida adentro del producto.
+  assert.deepEqual([...GENEROS_DEL_MOTOR].sort(), ['git-commit', 'sdd']);
 });

@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **La escena principal agrupa por QUIÉN, no por dominio.** El sujeto del panel cambia: cada
+  memoria sigue siendo un punto, pero el racimo y el color pasan a ser la persona que la escribió.
+  - **Los racimos ahora existen de verdad.** `layout.mjs` decía «SIN atractores de dominio»: el
+    dominio nunca fue una posición, sólo un color. Con 90 dominios eso se veía como parches; con 4
+    racimos de 500-1.000 nodos la repulsión gana y queda una esfera pareja (medido: a los 50 s de
+    asentado, cero separación). Ahora el centrado tira hacia el ancla del racimo y cada uno tiene
+    su propio volumen. Un nodo sin ancla usa el camino de antes, así que la lente código no cambia.
+  - **Los dos números que lo gobiernan salen de un banco, no de probar a ojo.** «Holgura» =
+    separación entre centros / suma de radios; por debajo de 1 los racimos se pisan. Con el tirón
+    solo daba **0,38**, y alejando las anclas hasta el borde llegaba a 0,70 — nunca a 1, porque la
+    repulsión está calibrada para llenar el elipsoide. Con volumen propio: **1,26**.
+  - **Tres clases, no una.** Sólo 802 de 2.217 memorias (36,2 %) traen `author`. Agrupar por
+    persona a secas dejaría el 62 % en una mancha gris. Pero 1.027 de esas huérfanas son
+    `git-commit` y `sdd/` — los dos géneros que **escribe el propio motor**, y que Musubi ya llama
+    LIBRO MAYOR en `internal/config/config.go:355`. Van a su racimo, declarado, y no compiten entre
+    personas. Lo que de verdad no se pudo atribuir (390) también se declara.
+  - El género gana sobre el autor: un `git-commit` es el registro del repo aunque la fila diga
+    quién lo firmó. Si mandara el autor, un backfill mudaría el racimo entero de golpe.
+
+### Fixed
+- **El lag de la lente de personas, medido y con causa.** 11.012 `stroke()` por cuadro —155.068
+  llamadas de dibujo por segundo, todas en CPU— daban **13,8 FPS** (p50 69,4 ms). La misma escena
+  en WebGL, en la misma GPU, da **60,3 FPS** (p50 16,6 ms). Al mover el agrupamiento por persona a
+  la escena WebGL, hereda esos 60.
+- **Un contador que mandaba a una acción imposible.** «N eventos sin neurona · falta declarar su
+  dueño» contaba también los del spool de esta máquina, que llegan sin credencial: ahí no hay dueño
+  que declarar. Medido en 40 s: los 8 que reportaba eran los 8 locales, y los principales sin
+  neurona eran cero. Ahora son dos contadores con dos frases.
+
 ### Added
 - **El censo de actores: quién LLAMA al cerebro, no sólo quién escribe.** El ledger guarda
   `principal` en cada invocación desde el primer día, pero lo único que se podía preguntar era

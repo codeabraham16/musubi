@@ -110,6 +110,12 @@ const _bhOut=new Float64Array(3);
 let NS=[], SY=[], RADIOS=()=>({rx:118,ry:94,rz:87});
 let _setQ=0, _setCut2=0, _setCharge=0, _setRest=0, _setBH=false;
 const _setKS=0.09, _setKC=0.0042, _setDamp=0.86;   // resortes cortos+fuertes: conectadas mas juntas
+// _setKR es el tiron hacia el ANCLA DEL RACIMO, y es una constante APARTE de _setKC a proposito.
+// kC (0,0042) es un centrado suave: sólo tiene que impedir que la bola se disperse. Un racimo
+// tiene otro trabajo — vencer la repulsion de sus PROPIOS 500-1000 nodos — y con kC no alcanza:
+// medido, los nodos se ALEJABAN de su ancla (134 -> 182) en vez de juntarse. Separarlas ademas
+// deja intacto el caso sin ancla, que asi sigue bit-identico (ver L-RACIMO-2).
+const _setKR=0.055;
 
 /* ---------- UNA ITERACION TAMBIEN SE CORTA A LA MITAD ----------
    Repartir el asentado en iteraciones NO alcanzo, y el numero lo dice: UNA iteracion cuesta
@@ -134,8 +140,25 @@ let _setFase=0;        // 0 = falta armar el arbol · 1 = repulsion en curso · 
 let _setI=0;           // por que nodo va la repulsion de ESTA pasada
 let _setRoot=0;        // raiz del arbol de ESTA pasada
 
-// clampBrain mantiene el nodo dentro del elipsoide.
+// clampBrain mantiene el nodo dentro de su volumen: el elipsoide entero, o —si el nodo pertenece
+// a un racimo— una esfera propia de radio `gr` alrededor de su ancla.
+//
+// POR QUÉ LA ESFERA POR RACIMO Y NO SÓLO UNA FUERZA MÁS FUERTE. Medido con los parámetros reales
+// (2.218 nodos, 4 racimos, rx=248): con el tirón solo, la holgura —separación entre centros
+// dividida por la suma de los radios— daba 0,38, y alejando las anclas hasta el borde subía a
+// 0,70. Nunca a 1. La causa es que la repulsión está calibrada para LLENAR el elipsoide, así que
+// cada racimo se expande hasta ocupar todo el espacio disponible sin importar cuánto se lo tire.
+// Darle a cada uno su propio techo es lo que convierte cuatro nubes superpuestas en cuatro
+// racimos, y deja la repulsión intacta adentro de cada uno — que es lo que les da forma orgánica.
 function clampBrain(n, rx, ry, rz){
+  if(n.gr){
+    const dx=n.x-(n.gx||0), dy=n.y-(n.gy||0), dz=n.z-(n.gz||0);
+    const d2=dx*dx+dy*dy+dz*dz;
+    if(d2>n.gr*n.gr){ const s=n.gr/Math.sqrt(d2);
+      n.x=(n.gx||0)+dx*s; n.y=(n.gy||0)+dy*s; n.z=(n.gz||0)+dz*s;
+      n.vx*=0.4; n.vy*=0.4; n.vz*=0.4; }
+    return;
+  }
   const q=(n.x*n.x)/(rx*rx)+(n.y*n.y)/(ry*ry)+(n.z*n.z)/(rz*rz);
   if(q>1){ const s=1/Math.sqrt(q); n.x*=s; n.y*=s; n.z*=s; n.vx*=0.4; n.vy*=0.4; n.vz*=0.4; }
 }
@@ -149,7 +172,15 @@ function clampBrain(n, rx, ry, rz){
 export function settleStart(neuronas, sinapsis, leerRadios, iters){
   NS=neuronas; SY=sinapsis; RADIOS=leerRadios;
   const n=NS.length; if(!n){ _setQ=0; return; }
-  // SIN atractores de dominio (esparce como el prototipo) · más repulsión + resortes cortos
+  // El CENTRADO puede tirar hacia el origen o hacia el ANCLA DEL RACIMO de cada nodo (`gx/gy/gz`).
+  // Un nodo sin ancla usa 0, que es exactamente lo que hacía antes: la lente código y cualquier
+  // grafo sin racimos se comportan bit-idéntico. Ver el centrado en settlePasada.
+  //
+  // POR QUÉ HIZO FALTA: el comentario que estaba acá decía «SIN atractores de dominio», y era
+  // cierto — el dominio nunca fue una posición, sólo un color. Con 90 dominios eso alcanzaba: se
+  // veían parches de color. Con 4 racimos de 500-1000 nodos la repulsión interna le gana a todo y
+  // queda una esfera pareja. Medido: a los 50 s de asentado los cuatro racimos seguían sin
+  // separarse ni un poco. Sin esta fuerza, «agrupar por persona» es una leyenda, no un dibujo.
   const rx=RADIOS().rx;
   const cut=rx*0.85; _setCut2=cut*cut; _setCharge=rx*rx*0.06; _setRest=rx*0.044;
   _setBH = n>=BH_MIN; if(_setBH) bhGrow(Math.max(1024, n*4));
@@ -195,7 +226,8 @@ export function settlePasada(t0, ms){
         const hasta=Math.min(n, _setI+_setTROZO);
         for(let i=_setI;i<hasta;i++){ const a=NS[i];
           bhForce(_setRoot,i,a.x,a.y,a.z,cut2,charge,_bhOut);
-          a.vx+=_bhOut[0]*.5-a.x*kC; a.vy+=_bhOut[1]*.5-a.y*kC; a.vz+=_bhOut[2]*.5-a.z*kC; }
+          const k=a.gx!==undefined?_setKR:kC, gx=a.gx||0, gy=a.gy||0, gz=a.gz||0;
+          a.vx+=_bhOut[0]*.5-(a.x-gx)*k; a.vy+=_bhOut[1]*.5-(a.y-gy)*k; a.vz+=_bhOut[2]*.5-(a.z-gz)*k; }
         _setI=hasta;
         // El chequeo va DESPUES del trozo: siempre se avanza algo, nunca se gira en falso.
         if(_setI<n && performance.now()-t0>=ms) return false;
@@ -208,7 +240,8 @@ export function settlePasada(t0, ms){
         for(let j=i+1;j<n;j++){ const b=NS[j]; let dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z, d2=dx*dx+dy*dy+dz*dz;
           if(d2>cut2||d2<1e-3) continue; const f=charge/d2, d=Math.sqrt(d2), ux=dx/d,uy=dy/d,uz=dz/d;
           fx+=ux*f; fy+=uy*f; fz+=uz*f; b.vx-=ux*f*.5; b.vy-=uy*f*.5; b.vz-=uz*f*.5; }
-        a.vx+=fx*.5-a.x*kC; a.vy+=fy*.5-a.y*kC; a.vz+=fz*.5-a.z*kC; }
+        const k=a.gx!==undefined?_setKR:kC, gx=a.gx||0, gy=a.gy||0, gz=a.gz||0;
+        a.vx+=fx*.5-(a.x-gx)*k; a.vy+=fy*.5-(a.y-gy)*k; a.vz+=fz*.5-(a.z-gz)*k; }
       _setI=n;
     }
     _setFase=2;

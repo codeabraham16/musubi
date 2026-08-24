@@ -264,6 +264,66 @@ export function clasificarEvento(ev) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DE UNA MEMORIA A SU GRUPO: quién la escribió, o por qué no es de nadie.
+//
+// Esto es lo que reemplaza al agrupamiento por DOMINIO en la escena principal. Y hay un dato
+// que obliga a que sean TRES clases y no una: medido sobre las 2.217 neuronas del cerebro
+// local el 2026-08-24, sólo 802 (36,2 %) traen `author`. Agrupar por persona a secas dejaría
+// el 62 % en una mancha gris llamada «sin autor», que es menos informativa que el dominio que
+// vino a reemplazar.
+//
+// La salida es que 1.027 de esas 1.415 huérfanas (72 %) NO son la memoria de nadie: son
+// `git-commit` y `sdd/`, los dos géneros que ESCRIBE EL PROPIO MOTOR. Musubi ya los nombra
+// LIBRO MAYOR en internal/config/config.go:355 — «se leen y se citan, pero nadie puede pedir un
+// veredicto que los REEMPLACE» —, así que acá se los trata igual: un racimo propio, declarado,
+// que no compite entre personas. Mismo criterio que el racimo `(servicios)` de los actores.
+
+// Los dos géneros que escribe el motor. Es una LISTA CERRADA y sólo tiene lo que Musubi produce
+// por su cuenta. Los géneros que inventa cada equipo —actas, bitácoras, correspondencia— son
+// convención del DESPLIEGUE y viven en `conflicts.ledger_prefixes` del config; el panel no los
+// ve, así que caen en «sin atribuir» y se cuentan ahí. Es una limitación conocida, no un olvido:
+// meterlos acá sería hardcodear la costumbre de un usuario adentro del producto, que es
+// exactamente lo que ese config existe para no hacer.
+export const GENEROS_DEL_MOTOR = ['git-commit', 'sdd'];
+export const GRUPO_LIBRO = 'libro mayor';
+export const GRUPO_SIN_ATRIBUIR = '(sin atribuir)';
+
+/**
+ * grupoDeNeurona: a qué racimo va una memoria.
+ *
+ * EL GÉNERO GANA SOBRE EL AUTOR, y es deliberado. Un `git-commit` es el registro del repo aunque
+ * la fila traiga quién lo firmó: si el autor mandara, el día que se rellene ese campo para los
+ * 524 commits el racimo entero se mudaría de golpe al de una persona. Con el género primero, el
+ * agrupamiento no depende de un backfill.
+ *
+ * @returns {{clave: string, tipo: 'persona'|'libro'|'sin'}}
+ */
+export function grupoDeNeurona(n) {
+  const topic = String((n && n.topic) || '');
+  const dominio = String((n && n.domain) || '');
+  for (const g of GENEROS_DEL_MOTOR) {
+    if (dominio === g || topic === g || topic.startsWith(g + '/')) {
+      return { clave: GRUPO_LIBRO, tipo: 'libro' };
+    }
+  }
+  const persona = personaDe(n && n.author);
+  if (persona) return { clave: persona, tipo: 'persona' };
+  return { clave: GRUPO_SIN_ATRIBUIR, tipo: 'sin' };
+}
+
+/**
+ * ordenarRacimos: las personas primero y por tamaño; después el LIBRO MAYOR; último lo que no se
+ * pudo atribuir. Los dos racimos que no son personas van al final SIEMPRE, aunque pesen más —
+ * ordenarlos por tamaño entre las personas afirmaría que lo son. Es la misma regla que
+ * `agruparPorPersona` aplica al racimo de servicios, y por el mismo motivo.
+ */
+export function ordenarRacimos(claves, cuenta) {
+  const rango = (k) => (k === GRUPO_SIN_ATRIBUIR ? 2 : k === GRUPO_LIBRO ? 1 : 0);
+  return [...claves].sort((a, b) =>
+    rango(a) - rango(b) || (cuenta[b] || 0) - (cuenta[a] || 0) || String(a).localeCompare(String(b)));
+}
+
 const textoDe = (n) => `${n.topic || ''} ${n.gist || ''}`.toUpperCase();
 
 // rolEn: qué terminal nombra este fragmento, o null. Devuelve UNA, la más larga que matchee.
