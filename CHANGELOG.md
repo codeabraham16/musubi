@@ -8,6 +8,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Los despachos entre terminales entran a la escena.** 27 axones que van de quien escribe a
+  quien se le escribe (`PRINCIPAL -> PLANIFICADOR`, 21 veces). Cian cuando **cruzan personas** —
+  trabajo que salio de una cabeza y entro en otra— y azul dentro de la misma.
+  - **Son estaticos, y esa es la decision.** Un despacho no es un evento en vivo sino un hecho de
+    la memoria: una nota firmada por A y dirigida a B. Ponerle una luz viajando seria el mismo
+    bucle inventado que este rediseno vino a sacar; se veria igual de vivo con el cerebro apagado.
+  - La **direccion** se dibuja con el adelgazamiento que ya tenia el shader de dendritas: el axon
+    nace grueso en quien escribe y termina fino en quien recibe. Una punta de flecha habria que
+    orientarla contra la camara en cada giro.
+  - Un despacho a una terminal que no esta en la escena **no se dibuja ni se acomoda a la mas
+    cercana**: la nota existe, el destinatario no esta, y colgarlo de otro seria inventarlo.
+
+### Fixed
+- **Los arboles se filtraban a la lente codigo.** `BOSQUE` queda cargado al cambiar de lente, y
+  las dendritas se dibujaban encima del grafo de codigo en las posiciones viejas —los anclajes de
+  racimo de la lente anterior—, como una mancha blanca flotando que no era nada. Se ve **solo
+  entrando por memoria y cambiando despues**: el atajo `?lens=code` no lo muestra porque ahi
+  `BOSQUE` nunca se llena, que es exactamente el escenario comodo escondiendo el bug. Ademas,
+  cambiar de lente ahora **siempre** rehace las mallas: el disparador comparaba cantidades de
+  nodos, y dos grafos distintos con la misma cantidad no se distinguen ahi.
 - **El impulso entra a la escena principal: una llamada real recorre el árbol de quien la hizo.**
   Hasta ahora los troncos estaban puestos pero quietos; el pulso sólo existía en la lente aparte.
   - **La regla que manda: un pulso = un evento real.** `impulsos.mjs` no tiene bucle, temporizador

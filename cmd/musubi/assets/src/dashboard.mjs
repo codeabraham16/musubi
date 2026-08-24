@@ -14,7 +14,7 @@ import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { bosque } from './dendritas.mjs';
 import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
-import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
+import { crearVista, colorPersona } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
 /* ---------- paletas ---------- */
@@ -25,6 +25,10 @@ const AK=['#7f9cc9','#43e08b','#31c9ff','#f5c451'];
 const REPOSO=AK[0];
 // LENTE CÓDIGO: color de arista por TIPO (llama / importa / contiene). En reposo cada tubo toma su color.
 const EDGEKIND={ CALLS:'#38bdf8', IMPORTS:'#a78bfa', CONTAINS:'#5b6b86' };
+// DESPACHOS: una terminal le escribe a otra («PRINCIPAL → PLANIFICADOR»). Azul cuando el par
+// pertenece a la misma persona, cian cuando CRUZA personas — que es el caso interesante, porque
+// es trabajo que salió de una cabeza y entró en otra.
+const COLOR_DESPACHO='#8a99ff', COLOR_CRUCE='#2dd4bf';
 const edgeBase=s=>(s&&s.kind&&EDGEKIND[s.kind])||REPOSO;
 let DOMCOL=new Map(), DOMAINS=[];
 const domColor=d=>DOMCOL.get(d)||'#64748b';
@@ -353,6 +357,9 @@ let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
 // TRONCO_DE traduce el id de una terminal al índice de su árbol. Es la última milla del camino
 // `principal` -> persona -> terminal -> árbol, y sin ella un evento real no tiene dónde caer.
 let TRONCO_DE=new Map();
+// DESPACHOS: los axones entre terminales. Van en su propia malla y no con las sinapsis de la
+// memoria porque son otra cosa — una sinapsis une dos NOTAS, un despacho une dos PERSONAS.
+let despInst=null, despMat=null;
 // El registro de pulsos vivos. NO hay ningún bucle que los fabrique: `impulsar()` es la única
 // puerta, y la llama el riel cuando llega una invocación de verdad (ver impulsos.mjs).
 const IMPULSOS=crearImpulsos();
@@ -371,6 +378,8 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose();
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
   if(somaInst){ world.remove(somaInst); somaInst.geometry.dispose(); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
+  if(despInst){ world.remove(despInst); despInst.geometry.dispose(); despInst=null; }
+  if(despMat){ despMat.dispose(); despMat=null; }
   ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DDIST=DTRONCO=DALC=DRAD=null;
   TRONCO_DE=new Map(); }
 // OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
@@ -423,6 +432,12 @@ function refrescarPersonas(brain){
 }
 
 function rebuildDendritas(){
+  // LOS ÁRBOLES SON DE LA MEMORIA. En la lente código el sujeto son símbolos, no personas, y
+  // BOSQUE sigue cargado con los troncos que armó la lente anterior: sin este corte se dibujaban
+  // encima del grafo de código, en las posiciones viejas —los anclajes de racimo ya no existen—,
+  // y quedaba una mancha blanca flotando que no era nada. Se ve sólo entrando por memoria y
+  // cambiando después; el atajo `?lens=code` no lo mostraba porque ahí BOSQUE nunca se llena.
+  if(lens==='code') return;
   const total=BOSQUE.reduce((k,t)=>k+t.segs.length,0);
   if(!total) return;
   DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
@@ -472,6 +487,63 @@ function rebuildDendritas(){
   denSucio=true;   // buffers recién creados: el primer frame tiene que subirlos
   somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
   world.add(somaInst);
+  rebuildDespachos();
+}
+
+// rebuildDespachos: los axones entre terminales, de quien escribe a quien se le escribe.
+//
+// SON ESTÁTICOS, y esa es la decisión: un despacho no es un evento en vivo sino un hecho de la
+// memoria (una nota firmada por A y dirigida a B). Ponerle una luz viajando sería exactamente el
+// bucle inventado que este rediseño vino a sacar — se vería igual de vivo con el cerebro apagado.
+// Lo que sí sale del dato: la dirección y el grosor.
+//
+// La DIRECCIÓN se dibuja con el adelgazamiento del shader de dendritas, que ya está: el axón nace
+// grueso en quien escribe y termina fino en quien recibe. Sin eso, un axón es una línea y una
+// línea no tiene lado; con una punta de flecha habría que orientar un triángulo por instancia
+// contra la cámara, y eso se recalcula en cada giro.
+function rebuildDespachos(){
+  const ds=(PERSONAS&&PERSONAS.despachos)||[];
+  const pares=[];
+  for(const d of ds){
+    const a=TRONCO_DE.get(d.de), b=TRONCO_DE.get(d.a);
+    // Un despacho a alguien que no tiene árbol no se dibuja ni se acomoda a otro lado: la nota
+    // existe, pero la terminal destino no está en esta escena y colgarla de la más cercana sería
+    // inventar el destinatario.
+    if(a===undefined||b===undefined||a===b) continue;
+    pares.push({a, b, veces:Math.max(1, Number(d.veces)||1), cruza:BOSQUE[a].persona!==BOSQUE[b].persona});
+  }
+  if(!pares.length) return;
+  const col=new Float32Array(pares.length*3), glw=new Float32Array(pares.length),
+        bas=new Float32Array(pares.length), tap=new Float32Array(pares.length),
+        wrn=new Float32Array(pares.length);
+  const geo=DGEO.clone();
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(col,3));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(glw,1));
+  geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(bas,1));
+  geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(tap,1));
+  geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(wrn,1));
+  despMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
+  despInst=new THREE.InstancedMesh(geo, despMat, pares.length);
+  despInst.frustumCulled=false;
+  // El grosor va en LOG sobre `veces`: el reparto medido va de 1 a 21, y en lineal el par más
+  // escrito sería veintiún veces más gordo que el resto y taparía media escena.
+  pares.forEach((p,i)=>{
+    const A=BOSQUE[p.a], B=BOSQUE[p.b];
+    _va.set(A.centro[0],A.centro[1],A.centro[2]); _vb.set(B.centro[0],B.centro[1],B.centro[2]);
+    _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
+    _qd.setFromUnitVectors(_UP,_vd.normalize());
+    const r=0.35+Math.log(1+p.veces)*0.30;
+    _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(r,len,r));
+    despInst.setMatrixAt(i,_m);
+    _c.set(p.cruza?COLOR_CRUCE:COLOR_DESPACHO);
+    col[i*3]=_c.r; col[i*3+1]=_c.g; col[i*3+2]=_c.b;
+    tap[i]=0.22;   // nace grueso en quien escribe, termina fino en quien recibe
+    bas[i]=p.cruza?0.34:0.20;
+    glw[i]=0; wrn[i]=0;
+  });
+  despInst.instanceMatrix.needsUpdate=true;
+  world.add(despInst);
 }
 
 function rebuildMeshes(){
@@ -1129,6 +1201,10 @@ $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motio
 
 // setLens: conmuta memoria↔código. Reconstruye el grafo, repinta leyendas/etiquetas y el HUD.
 function setLens(v){ lens=v; const b=$('lensBtn');
+  // Cambiar de lente SIEMPRE rehace las mallas. El disparador de abajo compara cantidades, y dos
+  // grafos distintos con la misma cantidad de nodos no se distinguen ahí: es poco probable, pero
+  // el modo de falla es dibujar un grafo con las mallas del otro.
+  needsRebuild=true;
   const cvB=document.getElementById('brain'), cvP=document.getElementById('personas');
   const esPer = lens==='personas';
   // Se OCULTA el WebGL en vez de dejarlo debajo: sigue costando GPU aunque no se vea.
