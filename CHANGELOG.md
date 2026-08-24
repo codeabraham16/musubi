@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Las neuronas con dendritas viven DENTRO de la escena principal.** Cada terminal es un tronco
+  con su árbol, plantado en el racimo de su persona, y las memorias de esa persona lo orbitan.
+  - **12.010 segmentos en UNA draw call**, con el adelgazamiento resuelto en el vertex shader
+    (`position.xz *= mix(1.0, aTaper, altura)`). Lo que hace que una rama se lea como dendrita y
+    no como un palito es que la punta sea más fina que la base; en canvas 2D eso era una propiedad
+    del trazo, acá es geometría — y emitir un cono por segmento serían 12.010 geometrías.
+  - Costo medido: **59,9 FPS · p50 16,6 ms** con los árboles puestos, contra 60,3 sin ellos.
+  - `dendritas.mjs` es geometría pura y corre en `node --test`: 7 invariantes, cada uno verificado
+    fallando bajo un sabotaje. Custodian lo que se vería como un cambio estético y por eso nadie
+    miraría — que el árbol sea el MISMO en cada recarga (PRNG semillado, no `Math.random`), que
+    adelgace, que el conteo tenga techo, y que la distancia que usa el impulso se mida **a lo
+    largo de la rama** y no en línea recta.
+  - **El libro mayor y lo sin atribuir NO llevan tronco.** Nadie los firma, así que no hay neurona
+    que dibujar; fabricarles una sería inventar un autor. Se ven como lo que son: nubes de puntos.
+  - Y un bug que no daba excepción: `disposeMeshes()` limpiaba el bosque y `rebuildMeshes()`
+    empieza llamándolo, así que la geometría llegaba VACÍA al constructor de la malla.
+
 ### Changed
 - **La escena principal agrupa por QUIÉN, no por dominio.** El sujeto del panel cambia: cada
   memoria sigue siendo un punto, pero el racimo y el color pasan a ser la persona que la escribió.

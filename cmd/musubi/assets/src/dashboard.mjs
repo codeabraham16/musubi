@@ -12,6 +12,7 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento,
          fusionarActores, mapaDeEncendido,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
+import { bosque } from './dendritas.mjs';
 import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -179,6 +180,7 @@ function buildGraph(brain){
   // El asentado ya NO congela: se reparte en trozos de pocos ms por frame (ver settleTick).
   // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
   // terminar de asentar, que es cuando las posiciones son las buenas.
+  BOSQUE=construirBosque(brain);
   POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
   const its=iterParaCambio(NEURONS.length, nuevos, ASENTADO.memory);
   if(its>0){ arrancarAsentado(its,'memory'); needsRebuild=true; }
@@ -288,6 +290,34 @@ const FRAG=['precision highp float;','uniform float uTime;',
   'float band(float y){ float p=fract(y); return smoothstep(0.0,0.06,p)*(1.0-smoothstep(0.06,0.36,p)); }',
   'void main(){ float y=vUv.y-uTime*vSpeed; float pulse=band(y)+band(y+0.5); float i=vBase+pulse*vGlow; gl_FragColor=vec4(vColor*i,i); }'].join('\n');
 
+// ── DENDRITAS ────────────────────────────────────────────────────────────────────────────────
+// Mismo truco que las aristas —UN cilindro instanciado, atributos por instancia— con dos cosas
+// que una arista no necesita:
+//
+//   1. ADELGAZAMIENTO. Lo que hace que una rama se lea como dendrita y no como un palito es que
+//      la punta sea más fina que la base. En canvas 2D eso era una propiedad del trazo; acá es
+//      geometría, y se resuelve en el vertex shader escalando `position.xz` según la altura. Sin
+//      esto habría que emitir un cilindro cónico por segmento, o sea 22.000 geometrías.
+//   2. EL IMPULSO viaja por `aGlow`, que JS escribe por frame igual que en las aristas. No hay un
+//      bucle que lo fabrique: se enciende cuando llega un evento del riel.
+const DGEO=new THREE.CylinderGeometry(1,1,1,5,1,true);
+// El shader va como template literal y no como array + join: GLSL acepta los saltos reales, y
+// asi el fuente se lee igual que el shader que corre.
+const DVERT=`
+attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase;
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY;
+void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vY=position.y+0.5;
+  vec3 p=position; p.xz*=mix(1.0,aTaper,vY);
+  gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(p,1.0); }
+`;
+// El brillo cae hacia la punta: una dendrita real se apaga en los extremos, y sin eso las
+// puntas finas quedan como un halo de polvo blanco alrededor del arbol.
+const DFRAG=`
+precision highp float;
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY;
+void main(){ float i=vBase+vGlow*(1.0-0.35*vY); gl_FragColor=vec4(vColor*i,i); }
+`;
+
 // post: MSAA + bloom + SMAA
 const _dbs=new THREE.Vector2(); renderer.getDrawingBufferSize(_dbs);
 const composer=new EffectComposer(renderer, new THREE.WebGLRenderTarget(_dbs.x,_dbs.y,{samples:4}));
@@ -303,6 +333,12 @@ controls.rotateSpeed=2.4; controls.zoomSpeed=1.3; controls.panSpeed=0.6; control
 // (edgeInst) con sus atributos por instancia; ya no hay un array de mallas ni de materiales.
 let inst=null, N=0, BX,BY,BZ,RAD,PHX,PHY,PHZ,GX,GY,GZ,PULL,QROT,ADJ;
 let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
+// DENDRITAS: una instancia por segmento de todos los árboles, y los somas aparte. BOSQUE guarda
+// los árboles con su `dist` para que el impulso sepa por dónde va el frente; DSEG mapea cada
+// instancia a (tronco, segmento) sin buscar nada, que es lo que permite escribir el brillo por
+// frame sin recorrer estructuras anidadas.
+let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null;
+let BOSQUE=[], DSEG=null, DDIST=null, DTRONCO=null;
 // Estado para no rehacer trabajo que no cambio. NHOT/EHOT recuerdan si el color escrito para esa
 // instancia es el TENIDO POR ACTIVIDAD, para poder devolverlo al base UNA vez al apagarse en vez
 // de reescribirlo todos los frames. `resto` es el residuo del arrastre y `actViva` si hay pulso.
@@ -314,7 +350,80 @@ let framed=false;
 function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose(); inst=null; }
   if(edgeInst){ world.remove(edgeInst); edgeInst.geometry.dispose(); edgeInst=null; }
   if(edgeMat){ edgeMat.dispose(); edgeMat=null; }
-  ECOL=ESPD=EGLW=EBAS=null; }
+  if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
+  if(somaInst){ world.remove(somaInst); somaInst.geometry.dispose(); somaInst=null; }
+  if(denMat){ denMat.dispose(); denMat=null; }
+  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DSEG=DDIST=DTRONCO=null; }
+// OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
+// una malla. Limpiarlo desde disposeMeshes lo borraba justo antes de usarlo, porque
+// rebuildMeshes() empieza llamando a disposeMeshes(): el bosque se armaba con 12.010 segmentos y
+// llegaba vacío al constructor de la malla. Sin excepción y sin dendritas.
+
+// construirBosque: los TRONCOS de la escena. Una neurona con dendritas por cada TERMINAL, dentro
+// del racimo de su persona.
+//
+// Los racimos que no son personas —libro mayor, sin atribuir— NO llevan tronco, y es lo correcto:
+// nadie los firma, así que no hay neurona que dibujar. Fabricarles una sería inventar un autor.
+const _qd=new THREE.Quaternion(), _va=new THREE.Vector3(), _vb=new THREE.Vector3(), _vd=new THREE.Vector3();
+const _UP=new THREE.Vector3(0,1,0);
+function construirBosque(brain){
+  const { terminales } = extraerPersonas(brain);
+  const porPersona=new Map();
+  for(const t of terminales){ const p=t.persona||''; if(!p) continue;
+    if(!porPersona.has(p)) porPersona.set(p,[]); porPersona.get(p).push({id:t.id, notas:t.notas}); }
+  const racimos=DOMAINS.filter(d=>porPersona.has(d.name)).map(d=>({
+    persona:d.name, color:d.color, centro:[d.ax,d.ay,d.az], radio:d.ar,
+    troncos:porPersona.get(d.name).slice().sort((a,b)=>b.notas-a.notas),
+  }));
+  // La escala ata el tamaño del árbol al del racimo: sin esto, un racimo chico tendría el mismo
+  // árbol que uno grande y se le saldría por los bordes.
+  const R=racimos.length?racimos.reduce((s2,r)=>s2+r.radio,0)/racimos.length:60;
+  const { troncos } = bosque(racimos, { escala:Math.max(0.6, R/34), topePorArbol:2200 });
+  return troncos;
+}
+
+function rebuildDendritas(){
+  const total=BOSQUE.reduce((k,t)=>k+t.segs.length,0);
+  if(!total) return;
+  DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
+  DTAP=new Float32Array(total); DDIST=new Float32Array(total); DTRONCO=new Int32Array(total);
+  const geo=DGEO.clone();
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(DCOL,3));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DGLW,1));
+  geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(DBAS,1));
+  geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(DTAP,1));
+  denMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
+  denInst=new THREE.InstancedMesh(geo, denMat, total);
+  denInst.frustumCulled=false;   // la malla envuelve toda la escena, igual que las aristas
+
+  let i=0;
+  BOSQUE.forEach((tr,ti)=>{ _c.set(tr.color||'#7f9cc9');
+    for(const sg of tr.segs){
+      _va.set(sg.a[0],sg.a[1],sg.a[2]); _vb.set(sg.b[0],sg.b[1],sg.b[2]);
+      _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
+      _qd.setFromUnitVectors(_UP,_vd.normalize());
+      _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(sg.w0,len,sg.w0));
+      denInst.setMatrixAt(i,_m);
+      DCOL[i*3]=_c.r; DCOL[i*3+1]=_c.g; DCOL[i*3+2]=_c.b;
+      DTAP[i]=Math.max(0.05, sg.w1/sg.w0);
+      // El brillo en reposo cae con el nivel: el tronco se ve y las puntas se insinúan. Plano,
+      // el árbol se lee como una maraña de alambre del mismo peso.
+      DBAS[i]=Math.max(0.09, 0.62*Math.pow(0.74,sg.nivel));
+      DDIST[i]=sg.dist; DTRONCO[i]=ti; DGLW[i]=0; i++;
+    } });
+  denInst.instanceMatrix.needsUpdate=true;
+  world.add(denInst);
+
+  // Los SOMAS, en su propia malla: son once esferas y no justifican un shader, pero sí que se
+  // vean como cuerpos y no como el nacimiento de las ramas.
+  somaInst=new THREE.InstancedMesh(NGEO, nodeMat, BOSQUE.length);
+  BOSQUE.forEach((tr,k)=>{ _m.compose(_pos.set(tr.centro[0],tr.centro[1],tr.centro[2]),
+    new THREE.Quaternion(), _scl.setScalar(tr.rSoma));
+    somaInst.setMatrixAt(k,_m); somaInst.setColorAt(k,_c.set(tr.color||'#7f9cc9')); });
+  somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
+  world.add(somaInst);
+}
 
 function rebuildMeshes(){
   disposeMeshes(); N=NEURONS.length; if(!N) return;
@@ -350,6 +459,7 @@ function rebuildMeshes(){
   } else {
     for(const s of SYN){ ADJ[s.a].push(s.b); ADJ[s.b].push(s.a); }
   }
+  rebuildDendritas();
   if(!framed && N){ let mr=0; for(const n of NEURONS){ const d=Math.hypot(n.x,n.y,n.z); if(d>mr)mr=d; } camera.position.set(0,20,Math.max(240,mr*2.7)); framed=true; }
   needsRebuild=false;
 }
