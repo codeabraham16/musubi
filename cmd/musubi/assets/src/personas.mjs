@@ -286,6 +286,18 @@ export function clasificarEvento(ev) {
 // meterlos acá sería hardcodear la costumbre de un usuario adentro del producto, que es
 // exactamente lo que ese config existe para no hacer.
 export const GENEROS_DEL_MOTOR = ['git-commit', 'sdd'];
+
+// AUTORES_DEL_MOTOR: lo mismo que arriba, pero cuando el motor firma como AUTOR en vez de escribir
+// bajo un género propio. Lista aparte y no una entrada más en `GENEROS_DEL_MOTOR` porque se mira en
+// otro campo: aquélla compara `domain`/`topic`, ésta compara `author`. Meterlo ahí no habría
+// matcheado nunca y el racimo habría seguido apareciendo como persona sin que nada avisara.
+//
+// `destilador` es el que destila memoria. Medido contra el central el 2026-08-24: **925 notas**, o
+// sea el racimo MÁS GRANDE de los cuatro, y se estaba pintando con color propio como si fuera
+// alguien. No lo es. Es la misma clase de cosa que `git-commit` y `sdd`: el sistema escribiéndose.
+//
+// CERRADA, igual que la otra: una entrada de más acá borra a una persona del dibujo.
+export const AUTORES_DEL_MOTOR = ['destilador'];
 export const GRUPO_LIBRO = 'libro mayor';
 export const GRUPO_SIN_ATRIBUIR = '(sin atribuir)';
 
@@ -306,6 +318,9 @@ export function grupoDeNeurona(n) {
     if (dominio === g || topic === g || topic.startsWith(g + '/')) {
       return { clave: GRUPO_LIBRO, tipo: 'libro' };
     }
+  }
+  if (AUTORES_DEL_MOTOR.includes(String((n && n.author) || '').trim().toLowerCase())) {
+    return { clave: GRUPO_LIBRO, tipo: 'libro' };
   }
   const persona = personaDe(n && n.author);
   if (persona) return { clave: persona, tipo: 'persona' };

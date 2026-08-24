@@ -7,7 +7,47 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El esqueleto del árbol de memoria** (`arbol-memoria.mjs`): de las memorias de un racimo a una
+  dendrita donde **cada punta es una memoria**. Primera fase del rediseño; todavía no se dibuja.
+  - **Una sola regla de corte, adaptativa**: se parte por el siguiente segmento del `topic` mientras
+    eso divida de verdad, y cuando no divide, por **tiempo**. Que sean dos criterios lo decidió el
+    dato: el tema divide precioso a las personas (davantis, 812 notas en 72 temas) y **no divide
+    nada** donde escribe la máquina (`destilador`: 925 notas en UN tema). Cada nodo **declara** por
+    cuál partió y **en qué nivel** del topic — sin el nivel, «partió por tema» es ambiguo, porque un
+    corte en el nivel 0 separa `server/` de `gotchas/` y uno en el nivel 1 separa dos subtemas de
+    `server/`.
+  - **Bifurca de a 2-3, nunca en abanico.** Es la diferencia entre «ramificado» y «ramificado como
+    una dendrita»: `design-corpus` da 955 subtemas para 959 notas, y colgarlos del mismo punto es un
+    plumero. Los niveles intermedios respetan el orden (alfabético o temporal), así que cada rama se
+    puede rotular con el tramo que separa.
+  - **El grosor sale de la ley de Rall** (`r_padre^2,5 = Σ r_hijo^2,5`), que es la física de una
+    dendrita real: una rama que carga 200 memorias nace gorda y una que carga 3 nace fina. Antes el
+    adelgazamiento era un 0,62 fijo por nivel, o sea decoración.
+  - Medido contra los dos cerebros: **central** 3.000 memorias → 29 neuronas, 5.842 segmentos,
+    profundidad 6-9, 85 ms; **local** 2.221 → 21 neuronas, 4.308 segmentos, profundidad 7-10, 31 ms.
+    Ninguna memoria sin posición, en ninguno de los dos. Son **menos de la mitad** de los 12.010
+    segmentos decorativos de hoy.
+  - **14 invariantes**, cada uno verificado fallando bajo un sabotaje dirigido.
+
+### Changed
+- **`destilador` deja de pintarse como una persona.** Con 925 notas era el racimo **más grande** del
+  central, con color propio, como si fuera alguien. Es el motor destilando — la misma clase de cosa
+  que `git-commit` y `sdd`. Va a una lista `AUTORES_DEL_MOTOR` **aparte** de `GENEROS_DEL_MOTOR`, y
+  la separación no es cosmética: aquélla compara `domain`/`topic` y ésta compara `author`, así que
+  agregarlo a la otra **no habría matcheado nunca** y el racimo habría seguido saliendo como persona
+  sin que nada fallara. El libro mayor pasa a 56,7 % del central; con ramas deja de ser una bola.
+
 ### Fixed
+- **El corte por tema cruzaba padres.** Cuando el segmento se rechazaba, el código probaba el
+  siguiente — y eso metía `gordo/sub-0` junto a `medio/sub-0` porque comparten el segundo segmento,
+  dejando una rama rotulada «sub-0» con dos temas que no tienen nada que ver. Ahora sólo se baja de
+  segmento cuando el rechazo fue **«todos comparten éste»**, que es el único caso donde el siguiente
+  sigue estando dentro del mismo padre.
+- **El rechazo de un corte se medía sobre los GRUPOS y no sobre las MEMORIAS.** Un racimo con dos
+  temas gordos y cuarenta sueltos tiene el 95 % de sus grupos unitarios y el 91 % de sus memorias
+  bien agrupadas: contando grupos se tiraba la única división buena que había.
+
 - **El tirón cada cinco segundos: `renderLens()` recalculaba personas y bosque en cada poll.**
   Medido: `extraerPersonas` corre regexes sobre los 2.221 gists (**22,7 ms**) y `bosque` genera
   12.010 segmentos (**14,1 ms**) — **36,8 ms de hilo principal cada 5 s** para obtener casi siempre
