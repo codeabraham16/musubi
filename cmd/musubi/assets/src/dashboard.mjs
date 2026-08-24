@@ -13,6 +13,7 @@ import { extraerPersonas, agruparPorPersona, neuronaDeEvento, clasificarEvento,
          fusionarActores, mapaDeEncendido,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { bosque } from './dendritas.mjs';
+import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { crearVista, colorPersona, COLOR_DESPACHO, COLOR_CRUCE } from './personasview.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -180,7 +181,7 @@ function buildGraph(brain){
   // El asentado ya NO congela: se reparte en trozos de pocos ms por frame (ver settleTick).
   // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
   // terminar de asentar, que es cuando las posiciones son las buenas.
-  BOSQUE=construirBosque(brain);
+  refrescarPersonas(brain);
   POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
   const its=iterParaCambio(NEURONS.length, nuevos, ASENTADO.memory);
   if(its>0){ arrancarAsentado(its,'memory'); needsRebuild=true; }
@@ -304,9 +305,9 @@ const DGEO=new THREE.CylinderGeometry(1,1,1,5,1,true);
 // El shader va como template literal y no como array + join: GLSL acepta los saltos reales, y
 // asi el fuente se lee igual que el shader que corre.
 const DVERT=`
-attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase;
-varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY;
-void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vY=position.y+0.5;
+attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase; attribute float aWarn;
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
+void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vWarn=aWarn; vY=position.y+0.5;
   vec3 p=position; p.xz*=mix(1.0,aTaper,vY);
   gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(p,1.0); }
 `;
@@ -314,8 +315,16 @@ void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vY=position.y+0.5;
 // puntas finas quedan como un halo de polvo blanco alrededor del arbol.
 const DFRAG=`
 precision highp float;
-varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY;
-void main(){ float i=vBase+vGlow*(1.0-0.35*vY); gl_FragColor=vec4(vColor*i,i); }
+varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
+void main(){ float i=vBase+vGlow*(1.0-0.35*vY);
+  // EL FRENTE SATURA: un impulso fuerte quema hacia el blanco, uno debil apenas tine la rama.
+  vec3 c=mix(vColor, vec3(1.0), clamp(vGlow*0.5, 0.0, 0.8));
+  // Y si fallo, el nucleo se va a AMBAR ENTERO, sin dejar nada del color de la rama. Las dos
+  // formas intermedias que probe no se leian, y las dos por la misma razon —quedaba cian adentro
+  // del nucleo—: tenir el DESTINO de la saturacion deja el 20 % que el clamp no cubre, y tenir
+  // con el ambar palido del HUD sobre un medio aditivo es casi blanco (ver impulsos.mjs).
+  c=mix(c, vec3(${AMBAR_FRENTE.join(", ")}), vWarn);
+  gl_FragColor=vec4(c*i,i); }
 `;
 
 // post: MSAA + bloom + SMAA
@@ -333,12 +342,21 @@ controls.rotateSpeed=2.4; controls.zoomSpeed=1.3; controls.panSpeed=0.6; control
 // (edgeInst) con sus atributos por instancia; ya no hay un array de mallas ni de materiales.
 let inst=null, N=0, BX,BY,BZ,RAD,PHX,PHY,PHZ,GX,GY,GZ,PULL,QROT,ADJ;
 let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
-// DENDRITAS: una instancia por segmento de todos los árboles, y los somas aparte. BOSQUE guarda
-// los árboles con su `dist` para que el impulso sepa por dónde va el frente; DSEG mapea cada
-// instancia a (tronco, segmento) sin buscar nada, que es lo que permite escribir el brillo por
-// frame sin recorrer estructuras anidadas.
-let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null;
-let BOSQUE=[], DSEG=null, DDIST=null, DTRONCO=null;
+// DENDRITAS: una instancia por segmento de todos los árboles, y los somas aparte.
+//
+// Los buffers están APLANADOS a propósito. `DTRONCO[i]` y `DDIST[i]` dicen de qué árbol es la
+// instancia i y a qué distancia del soma está, medida A LO LARGO de la rama. Con eso, escribir el
+// brillo de las 12.010 instancias es un solo barrido lineal sin bajar por ninguna estructura
+// anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
+let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null;
+let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
+// TRONCO_DE traduce el id de una terminal al índice de su árbol. Es la última milla del camino
+// `principal` -> persona -> terminal -> árbol, y sin ella un evento real no tiene dónde caer.
+let TRONCO_DE=new Map();
+// El registro de pulsos vivos. NO hay ningún bucle que los fabrique: `impulsar()` es la única
+// puerta, y la llama el riel cuando llega una invocación de verdad (ver impulsos.mjs).
+const IMPULSOS=crearImpulsos();
+let denSucio=false;
 // Estado para no rehacer trabajo que no cambio. NHOT/EHOT recuerdan si el color escrito para esa
 // instancia es el TENIDO POR ACTIVIDAD, para poder devolverlo al base UNA vez al apagarse en vez
 // de reescribirlo todos los frames. `resto` es el residuo del arrastre y `actViva` si hay pulso.
@@ -353,7 +371,8 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose();
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
   if(somaInst){ world.remove(somaInst); somaInst.geometry.dispose(); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
-  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DSEG=DDIST=DTRONCO=null; }
+  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DDIST=DTRONCO=DALC=DRAD=null;
+  TRONCO_DE=new Map(); }
 // OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
 // una malla. Limpiarlo desde disposeMeshes lo borraba justo antes de usarlo, porque
 // rebuildMeshes() empieza llamando a disposeMeshes(): el bosque se armaba con 12.010 segmentos y
@@ -366,8 +385,7 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst.geometry.dispose();
 // nadie los firma, así que no hay neurona que dibujar. Fabricarles una sería inventar un autor.
 const _qd=new THREE.Quaternion(), _va=new THREE.Vector3(), _vb=new THREE.Vector3(), _vd=new THREE.Vector3();
 const _UP=new THREE.Vector3(0,1,0);
-function construirBosque(brain){
-  const { terminales } = extraerPersonas(brain);
+function construirBosque(terminales){
   const porPersona=new Map();
   for(const t of terminales){ const p=t.persona||''; if(!p) continue;
     if(!porPersona.has(p)) porPersona.set(p,[]); porPersona.get(p).push({id:t.id, notas:t.notas}); }
@@ -382,16 +400,45 @@ function construirBosque(brain){
   return troncos;
 }
 
+// refrescarEncendido: el mapa `principal` -> terminal. Se rehace aparte del grafo porque su otra
+// mitad —el censo de actores— llega por su propio camino y varios segundos después: sin esto, los
+// eventos que caen en una persona por su credencial de servicio (`davantis-crm`, `crm-cabina`) se
+// contarían como sin neurona hasta el siguiente rearmado del grafo.
+function refrescarEncendido(){
+  if(!PERSONAS) return;
+  const fus=fusionarActores(PERSONAS.terminales, CENSO && CENSO.censo);
+  PERSONAS.actores=fus.actores; PERSONAS.sinDeclarar=fus.sinDeclarar; PERSONAS.censo=CENSO;
+  ENCENDIDO=mapaDeEncendido(PERSONAS.terminales, fus.actores);
+}
+
+// refrescarPersonas: las cuatro cosas que salen de quién firma la memoria — las terminales, sus
+// racimos, el mapa de encendido y los árboles. Van juntas porque son la misma lectura del grafo,
+// y separarlas ya dejó una vez el mapa apuntando a un bosque que ya no existía.
+function refrescarPersonas(brain){
+  PERSONAS=extraerPersonas(brain);
+  refrescarEncendido();
+  RACIMOS=agruparPorPersona(PERSONAS.terminales, PERSONAS.actores);
+  BOSQUE=construirBosque(PERSONAS.terminales);
+  return PERSONAS;
+}
+
 function rebuildDendritas(){
   const total=BOSQUE.reduce((k,t)=>k+t.segs.length,0);
   if(!total) return;
   DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
   DTAP=new Float32Array(total); DDIST=new Float32Array(total); DTRONCO=new Int32Array(total);
+  DWARN=new Float32Array(total);
+  // El alcance de cada árbol se copia a un array plano: el frente del impulso se calcula contra
+  // él una vez por tronco y por frame, y buscarlo en BOSQUE adentro del bucle grande sería
+  // bajar por un objeto doce mil veces para leer siempre el mismo número.
+  DALC=new Float32Array(BOSQUE.length); DRAD=new Float32Array(BOSQUE.length);
+  TRONCO_DE=new Map();
   const geo=DGEO.clone();
   geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(DCOL,3));
   geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DGLW,1));
   geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(DBAS,1));
   geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(DTAP,1));
+  geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(DWARN,1));
   denMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
     transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
   denInst=new THREE.InstancedMesh(geo, denMat, total);
@@ -399,6 +446,7 @@ function rebuildDendritas(){
 
   let i=0;
   BOSQUE.forEach((tr,ti)=>{ _c.set(tr.color||'#7f9cc9');
+    TRONCO_DE.set(tr.id, ti); DALC[ti]=tr.alcanceRama||1; DRAD[ti]=tr.rSoma||1;
     for(const sg of tr.segs){
       _va.set(sg.a[0],sg.a[1],sg.a[2]); _vb.set(sg.b[0],sg.b[1],sg.b[2]);
       _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
@@ -421,6 +469,7 @@ function rebuildDendritas(){
   BOSQUE.forEach((tr,k)=>{ _m.compose(_pos.set(tr.centro[0],tr.centro[1],tr.centro[2]),
     new THREE.Quaternion(), _scl.setScalar(tr.rSoma));
     somaInst.setMatrixAt(k,_m); somaInst.setColorAt(k,_c.set(tr.color||'#7f9cc9')); });
+  denSucio=true;   // buffers recién creados: el primer frame tiene que subirlos
   somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
   world.add(somaInst);
 }
@@ -598,6 +647,29 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         at.aColor.needsUpdate=true; at.aSpeed.needsUpdate=true; at.aGlow.needsUpdate=true; }
     }
     resto=rMax; actViva=hayAct;
+    }
+  }
+  // ── EL IMPULSO ───────────────────────────────────────────────────────────────────────────
+  // Va FUERA del bloque de arriba y con su propia condición a propósito: un pulso tiene que
+  // recorrer su árbol aunque la animación esté en pausa y aunque no se haya movido un solo nodo.
+  // Metido adentro, pausar el panel congelaba el impulso a mitad de camino.
+  //
+  // `denSucio` es lo que apaga el árbol UNA vez cuando muere el último pulso, en vez de reescribir
+  // doce mil ceros en cada frame de reposo — que es el 98 % de los frames.
+  if(denInst && DALC){
+    const vivos=IMPULSOS.vivos(t);
+    if(vivos>0 || denSucio){
+      const r=IMPULSOS.escribir(t,{glow:DGLW, warn:DWARN, dist:DDIST, tronco:DTRONCO, alcances:DALC});
+      const at=denInst.geometry.attributes;
+      at.aGlow.needsUpdate=true; at.aWarn.needsUpdate=true;
+      // El SOMA fogonea con el arranque. La rotación de estas instancias es la identidad, así que
+      // la escala son los tres elementos de la diagonal y se escriben directo: recomponer once
+      // matrices por frame para cambiar un número sería el mismo gasto que costaba el grafo entero.
+      if(somaInst){ const SM=somaInst.instanceMatrix.array;
+        for(let k=0;k<DRAD.length;k++){ const e=DRAD[k]*(1+0.9*r.flash[k]), o=k*16;
+          SM[o]=e; SM[o+5]=e; SM[o+10]=e; }
+        somaInst.instanceMatrix.needsUpdate=true; }
+      denSucio = vivos>0;
     }
   }
   const _tJS = STATS ? performance.now()-_t0 : 0;
@@ -856,7 +928,7 @@ setInterval(tictac, 1000);
 // Tampoco se acumulan con la lente apagada: `reloj` no avanza mientras la vista no esta viva, y
 // los pulsos encolados ahi saldrian todos juntos al volver, mintiendo sobre cuando ocurrieron.
 function impulsar(ev){
-  if(lens!=='personas' || !VISTA_PERSONAS.activa() || !ev || !ev.tool) return;
+  if(!ev || !ev.tool) return;
   // El MAPA manda. Se arma al construir el grafo y sale del censo: sin el, un servicio no
   // tiene donde caer y el evento se cuenta como "sin neurona" en vez de repartirse a dedo.
   // DOS AUSENCIAS DISTINTAS, y confundirlas manda a una acción imposible. Un evento sin
@@ -866,8 +938,13 @@ function impulsar(ev){
   // contador decía «falta declarar su dueño» para los 8 casos donde eso no aplica.
   if(!String(ev.principal||'').trim()) SIN_CREDENCIAL++;
   const n=neuronaDeEvento(ev, ENCENDIDO), c=clasificarEvento(ev);
-  VISTA_PERSONAS.pulsar(n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
-                          : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms});
+  const pu = n ? {terminal:n.terminal, exacta:n.exacta, capa:c.capa, falla:c.falla, ms:c.ms}
+               : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms};
+  if(VISTA_PERSONAS.activa()) VISTA_PERSONAS.pulsar(pu);
+  // La escena principal. El reloj es el MISMO que usa animate(): si el impulso naciera con otro,
+  // el frente arrancaría corrido y en el peor caso ya vencido.
+  const ti = n ? TRONCO_DE.get(n.terminal) : undefined;
+  IMPULSOS.nacer(ti===undefined ? -1 : ti, pu, performance.now()/1000);
 }
 
 function conectarVivo(){
@@ -1028,15 +1105,10 @@ function renderLens(){
     // Se alimenta del MISMO grafo de memoria que ya esta en cache: no pide nada nuevo al
     // server. La persona sale de `author`, que viaja en el grafo desde 0.107.0.
     if(!GRAPH.memory) return;
-    const datos = extraerPersonas(GRAPH.memory);
     // El censo se FUNDE sobre las terminales (les suma su volumen de llamadas) y devuelve los
     // actores que no tienen terminal. Si el censo no llego, `CENSO` es null y esto degrada a
     // exactamente lo que habia antes: las mismas terminales, ningun actor, ninguno inventado.
-    const fus = fusionarActores(datos.terminales, CENSO && CENSO.censo);
-    datos.actores = fus.actores; datos.sinDeclarar = fus.sinDeclarar; datos.censo = CENSO;
-    RACIMOS = agruparPorPersona(datos.terminales, fus.actores);
-    ENCENDIDO = mapaDeEncendido(datos.terminales, fus.actores);
-    PERSONAS = datos;
+    const datos = refrescarPersonas(GRAPH.memory);
     VISTA_PERSONAS.cargar(datos, RACIMOS);
     pintarLeyendaPersonas();
     return;
@@ -1070,9 +1142,6 @@ function setLens(v){ lens=v; const b=$('lensBtn');
   // La lente de código se baja on-demand: no viaja en el pulso ni tiene por qué estar en
   // memoria si nadie la miró. Si falta, se pide y recién ahí se dibuja.
   if(lens==='code' && !GRAPH.code){ fetchGraph('code').then(()=>{ renderLens(); if(PULSE) renderHUD(hudShape()); }).catch(()=>{}); return; }
-  // El censo se pide UNA vez, la primera que alguien entra a personas. Si nunca se abre la
-  // lente, no se le pregunta nada al central: el panel de memoria no necesita saber quien llama.
-  if(esPer && !CENSO && !_bajandoCenso){ fetchCenso().then(()=>{ renderLens(); }).catch(()=>{}); }
   renderLens(); if(PULSE) renderHUD(hudShape()); }
 // applyLensLabels: intercambia los textos estáticos del HUD según la lente (leyenda de aristas,
 // títulos, guía). Se llama al togglear, no en cada poll.
@@ -1113,10 +1182,21 @@ function applyLensLabels(){ const code=lens==='code', per=lens==='personas';
     `<span><b>hover</b> revela el detalle</span>`);
   const al=$('actlegend'); if(al) al.innerHTML = code
     ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
-    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`;
+    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`+
+      // El IMPULSO va rotulado APARTE de la actividad de la memoria. Son dos lenguajes distintos
+      // sobre la misma escena —lo que le pasa a una NOTA contra quién LLAMÓ al cerebro— y sin el
+      // rótulo el ámbar aparece dos veces queriendo decir dos cosas.
+      `<div class="lg" style="opacity:.5;margin-left:6px">impulso:</div>`+
+      `<div class="lg"><span class="sw" style="background:rgba(255,255,255,.32);color:rgba(255,255,255,.32)"></span>sondeo</div>`+
+      `<div class="lg"><span class="sw" style="background:#fff;color:#fff"></span>trabajo real</div>`+
+      `<div class="lg"><span class="sw" style="background:#ff9905;color:#ff9905"></span>falló</div>`;
   const ht=$('howto'); if(ht) ht.innerHTML = code
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
-    : `<span><b>·</b> cada punto es una <b>memoria</b></span><span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span><span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>`;
+    : `<span><b>·</b> cada punto es una <b>memoria</b></span>`+
+      `<span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>`+
+      `<span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>`+
+      `<span><b>·</b> la <b>neurona ramificada</b> de cada racimo es una <b>terminal</b>; sus dendritas, cuánto escribió</span>`+
+      `<span><b>·</b> el <b>impulso</b> que la recorre es <b>UNA llamada real a una tool</b>, en el momento en que ocurre. <b>Sin evento no hay luz</b>: si el cerebro está quieto, esto está quieto</span>`;
 }
 // El detalle de una terminal al pasarle el mouse. Reusa el MISMO `#tip` que la lente de
 // memoria: son la misma pieza de UI y duplicarla es garantizar que se despeguen. En esta lente
@@ -1223,6 +1303,10 @@ if(_lensURL==='code'||_lensURL==='personas') setLens(_lensURL);
 // segundos en vez de tener la pantalla vacía casi un minuto. El HUD (contadores, salud, riel) sí
 // necesita el pulso y llena cuando llega.
 fetchGraph(lens==='code'?'code':'memory').then(()=>{ renderLens(); }).catch(()=>{});
+// EL CENSO SE PIDE AL ARRANCAR, y ya no sólo al entrar a una lente. Dejó de ser un adorno de una
+// vista: es lo que traduce el `principal` de un evento en la terminal que tiene que encenderse.
+// Sin él, todo lo que llame con credencial de servicio cae como «sin neurona».
+fetchCenso().then(()=>{ refrescarEncendido(); if(lens==='personas') renderLens(); }).catch(()=>{});
 poll(); setInterval(poll,5000);
 conectarVivo();
 requestAnimationFrame(animate);

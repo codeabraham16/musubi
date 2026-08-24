@@ -8,6 +8,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El impulso entra a la escena principal: una llamada real recorre el árbol de quien la hizo.**
+  Hasta ahora los troncos estaban puestos pero quietos; el pulso sólo existía en la lente aparte.
+  - **La regla que manda: un pulso = un evento real.** `impulsos.mjs` no tiene bucle, temporizador
+    ni nada que fabrique luz — `nacer()` es la única puerta y la llama el riel. Verificado **en
+    pantalla, no en el buffer**: con la animación pausada, un cuadro sin evento contra el anterior
+    da **0 píxeles de diferencia** en el lienzo, y una ráfaga de gio da 215.994.
+  - **La atribución se ve**: gio y `davantis-mando-admin` encienden centros separados por **217 px**.
+    Un principal desconocido (`pepe-inventado`), uno sin credencial y uno con dueño declarado pero
+    sin terminal propia (`b1-adjudicador`) encienden **exactamente cero**: tener dueño decide el
+    racimo, no prende una neurona. Ninguno se reparte a dedo.
+  - **Las dos capas se separan por brillo**: el trabajo real llega **4,8×** más fuerte que el
+    sondeo sobre la misma neurona. En la ventana medida el 98,1 % del tráfico es sondeo, así que
+    sin esa separación el 1,9 % que importa quedaría enterrado.
+  - Costo medido bajo ráfaga sostenida: **0,50 ms de JS por cuadro** — 3 % del presupuesto de un
+    frame a 60 fps, y sólo mientras hay pulsos vivos. El resto del tiempo no se escribe nada.
+  - 12 invariantes en `node --test`, **cada uno verificado fallando bajo un sabotaje dirigido**.
+    Uno salió VACUO en el primer intento: el vencimiento del pulso estaba defendido en dos lugares
+    y el segundo tapaba al sabotaje, así que ahora vive en uno solo.
+
+### Fixed
+- **Un evento sin neurona encendía el tronco más grande.** `Number(null)` es `0`, no `NaN`, así
+  que coercionar el índice mandaba todo principal sin declarar al tronco 0 — y los racimos van
+  ordenados por volumen, o sea que el panel le atribuía la llamada a la terminal que más escribe.
+  Lo agarró su propio test antes de llegar a la pantalla.
+- **El ámbar de una falla era invisible.** Dos defectos encadenados, los dos medidos en pantalla:
+  el aviso tomaba el **máximo** de las fallas y lo dividía por la **suma** de la carga, así que
+  ocho fallas apiladas daban 1/8 de aviso; y el ámbar del HUD (`#f5c451`) sobre un medio aditivo
+  es casi blanco. La relación azul/rojo del frente no se movía ni un punto entre una ráfaga que
+  salía bien y una que fallaba entera: **0,498 contra 0,497**. Ahora el aviso se suma como la carga
+  y el frente usa el **mismo tono (41°) a saturación plena**: **0,487 contra 0,089**, un factor 5,5.
+  Arreglar sólo el primero llevaba a 0,445 — real, medible y todavía invisible con las dos capturas
+  puestas al lado, que es por qué la verificación era mirar y no sólo medir.
 - **Las neuronas con dendritas viven DENTRO de la escena principal.** Cada terminal es un tronco
   con su árbol, plantado en el racimo de su persona, y las memorias de esa persona lo orbitan.
   - **12.010 segmentos en UNA draw call**, con el adelgazamiento resuelto en el vertex shader
