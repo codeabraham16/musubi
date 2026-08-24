@@ -7,6 +7,41 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **Se van las esferas: la memoria ES la rama.** La escena principal deja de ser cuatro nubes de
+  puntos con dendritas decorativas adentro. Ahora cada racimo es una masa de árboles y **cada
+  memoria es una punta** — un botón terminal sobre la rama que la contiene.
+  - **La posición sale del árbol**, no de un sorteo. `randInBrain()` y el asentado con fuerzas
+    quedan **sólo para la lente código**, donde el sujeto son símbolos y no hay jerarquía que
+    ramificar. Dos cargas del mismo grafo dan ahora el mismo dibujo, byte a byte.
+  - **Sin física en la lente memoria**: no hay nada que relajar cuando la posición ya es la buena.
+    Se va con eso el tirón del asentado y también la deriva.
+  - **Sin vaivén**: la memoria es la punta de una rama y la rama es geometría fija; con el vaivén
+    puesto el punto se despega de su rama y el dibujo deja de decir lo que dice. Efecto lateral: el
+    bucle por nodo y por arista deja de reescribir 2.219 matrices en el 98 % de los cuadros.
+  - Medido con el grafo local entero: **0 cuadros por encima de 33 ms** en 26 s (máximo 25,2),
+    20 draw calls, 230k triángulos, cero errores de consola.
+  - **Tres calibraciones, las tres medidas y no a ojo**: la escala del árbol (`ar/54` da alcance 73
+    en un racimo de radio 77, o sea llena el suyo y no invade el de al lado); el grosor
+    (`radioHoja` 0,55 daba un tronco de 5,8 —el 8 % del radio del racimo— y el árbol se leía como
+    coral; a 0,17 queda 1:40, que es la relación de una dendrita); y el brillo en reposo, donde el
+    decaimiento 0,74 por nivel —bueno para un árbol decorativo de 4 niveles— dejaba el 80 % de las
+    ramas de éste, que tiene 10, por debajo del piso.
+- **El encuadre es por lente.** La esfera de código se mira de lejos porque su borde es liso; el
+  árbol tiene el detalle en las puntas y pide estar cerca. Un solo número servía cuando las dos
+  lentes dibujaban una esfera; ahora cada una se encuadra sola al entrar.
+
+### Removed
+- **`dendritas.mjs`**, las dendritas decorativas. Sus tres ideas buenas sobreviven en
+  `arbol-memoria.mjs` con sus propios invariantes: el PRNG semillado (T6), el `dist` medido a lo
+  largo de la rama (T8) y el adelgazamiento (T7, ahora por la ley de Rall). Lo que se va es que la
+  forma no dijera nada.
+- **Los despachos entre terminales, por ahora.** Quedaron sin cuerpo del que colgar: una terminal ya
+  no es una neurona —con el 7,5 % de las notas firmadas, las neuronas son tramos del árbol de
+  temas— y colgar el axón de una neurona cualquiera del racimo sería elegir a dedo de dónde sale.
+  Vuelven como líneas de campo entre racimos. **La leyenda los sigue contando** («27 pares se
+  escriben · 152 despachos») para que su ausencia del dibujo no se lea como que no existen.
+
 ### Added
 - **El esqueleto del árbol de memoria** (`arbol-memoria.mjs`): de las memorias de un racimo a una
   dendrita donde **cada punta es una memoria**. Primera fase del rediseño; todavía no se dibuja.
