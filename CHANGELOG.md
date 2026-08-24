@@ -7,6 +7,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La rama se arquea: deja de parecer un alambre.** Cada tramo lleva una panza perpendicular a su
+  eje, máxima al medio y **cero en los dos extremos** — la rama se curva pero sigue naciendo y
+  muriendo donde manda el dato, así que la punta no se despega de la memoria que representa.
+  - **Es tortuosidad, no zigzag.** El lado hacia el que se arquea un tramo se HEREDA del padre y se
+    gira un poco, en vez de sortearse de nuevo cada vez: una rama entera se arquea del mismo lado y
+    se va torciendo despacio. Sorteando, la rama tiembla.
+  - **La primera versión curvaba «hacia donde siguen los hijos» y no servía**: en una bifurcación
+    simétrica —que es el caso normal— la dirección media de los hijos ES la del padre, así que la
+    panza daba cero. Se curvaba el **11 %** de los tramos. Ahora, el 100 %.
+  - Va en el **vertex shader**, después de `instanceMatrix`: son 30 vértices por instancia en vez de
+    10, contra triplicar las 6.000 instancias que habría costado partir cada rama en tres tramos.
+    Y en coordenadas del árbol, no del cilindro — el marco local del cilindro lo arma el renderer
+    con un giro arbitrario, así que la misma curva daría una panza distinta en cada reconstrucción.
+  - **Es la única licencia del dibujo, y se declara**: los EXTREMOS de cada tramo salen del dato
+    —qué memoria, en qué rama, con qué grosor—; lo licenciado es el camino que la línea toma ENTRE
+    esos dos puntos. Es una propiedad del trazo, no una afirmación sobre la memoria.
+  - Costo medido: **403k triángulos contra 230k**, 20 draw calls igual, **0 cuadros por encima de
+    33 ms** en 26 s (máximo 27,7 contra 25,2). 16 invariantes, cada uno fallando bajo su sabotaje.
+
+### Fixed
+- **El banco de sabotajes leía «ningún test corrió» como «el invariante resistió».** Un patrón mal
+  escrito (`^T15b` contra un test llamado `T15`) no corre nada, `node --test` sale 0, y eso se lee
+  igual que un invariante sano. Es el valor de fallo idéntico al tranquilizador. Ahora el banco
+  exige ver que corrió exactamente un test y avisa `SIN TEST` si no. Ya me había dado por bueno un
+  invariante inexistente.
+
 ### Changed
 - **Se van las esferas: la memoria ES la rama.** La escena principal deja de ser cuatro nubes de
   puntos con dendritas decorativas adentro. Ahora cada racimo es una masa de árboles y **cada

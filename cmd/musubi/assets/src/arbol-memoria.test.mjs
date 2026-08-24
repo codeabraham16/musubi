@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   construirNodo, construirRacimo, cortarNeuronas, cortarPorTema, cortarPorTiempo,
-  bifurcar, colocar, horquilla, rng,
+  bifurcar, colocar, horquilla, ladear, rng,
 } from './arbol-memoria.mjs';
 
 // ── bancadas ─────────────────────────────────────────────────────────────────────────────────
@@ -233,6 +233,41 @@ test('T12 · bifurcar respeta el ORDEN de los grupos', () => {
   const orden = [];
   (function ver(x) { if (Array.isArray(x)) { orden.push(x[0]); return; } x.grupos.forEach(ver); })(b);
   assert.deepEqual(orden, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 'la bifurcación intercaló los grupos');
+});
+
+test('T15 · la panza es PERPENDICULAR al tramo y PERSISTE a lo largo de la rama', () => {
+  // Perpendicular: una componente en la dirección del tramo no lo arquea, lo ALARGA — la punta se
+  // despegaría de la memoria que representa, que es lo único que el dibujo no puede hacer.
+  //
+  // Y persiste: lo que curva una dendrita real es tortuosidad, no zigzag. Si el lado se sorteara de
+  // nuevo en cada tramo, la rama temblaría en vez de arquearse. La primera versión curvaba «hacia
+  // donde siguen los hijos» y daba CERO en una bifurcación simétrica —el caso normal—, así que sólo
+  // se curvaba el 11 % de los tramos.
+  const r = rng(3);
+  const dir = [0, 1, 0];
+  const a = ladear(null, dir, r);
+  assert.ok(Math.abs(Math.hypot(a[0], a[1], a[2]) - 1) < 1e-9, 'tiene que ser unitario');
+  assert.ok(Math.abs(a[0] * dir[0] + a[1] * dir[1] + a[2] * dir[2]) < 1e-9, 'tiene que ser perpendicular');
+  // Heredando, el lado se parece al del padre aunque el tramo haya girado.
+  const giro = [0.26, 0.94, 0.21];
+  const l = Math.hypot(...giro), d2 = giro.map((v) => v / l);
+  let prev = a, juntos = 0;
+  for (let k = 0; k < 40; k++) {
+    const b = ladear(prev, d2, r);
+    assert.ok(Math.abs(b[0] * d2[0] + b[1] * d2[1] + b[2] * d2[2]) < 1e-9, 'perdió la perpendicularidad');
+    if (prev[0] * b[0] + prev[1] * b[1] + prev[2] * b[2] > 0.6) juntos++;
+    prev = b;
+  }
+  assert.ok(juntos > 30, 'el lado tiene que PERSISTIR: sólo ' + juntos + ' de 40 se parecieron al anterior');
+  // Y en el árbol entero: todas las panzas perpendiculares, todas presentes.
+  const { segs } = colocar(construirNodo(personas(300)), { escala: 1, semilla: 7 });
+  let sinCurva = 0, torcidas = 0;
+  for (const s2 of segs) {
+    if (Math.hypot(s2.curva[0], s2.curva[1], s2.curva[2]) < 1e-9) sinCurva++;
+    if (Math.abs(s2.curva[0] * s2.dir[0] + s2.curva[1] * s2.dir[1] + s2.curva[2] * s2.dir[2]) > 1e-6) torcidas++;
+  }
+  assert.equal(torcidas, 0, torcidas + ' panzas no eran perpendiculares a su tramo');
+  assert.equal(sinCurva, 0, sinCurva + ' tramos quedaron rectos de ' + segs.length);
 });
 
 test('T13 · un racimo vacío no rompe, y uno de una sola memoria da una neurona', () => {

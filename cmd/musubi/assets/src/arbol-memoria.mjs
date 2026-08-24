@@ -258,6 +258,33 @@ export function horquilla(dir, pesos, apertura, r) {
   });
 }
 
+/**
+ * ladear: hacia qué lado se arquea un tramo, heredando del padre.
+ *
+ * Devuelve un vector UNITARIO y PERPENDICULAR a `dir`. Se parte del lado del padre, se le saca la
+ * parte que ya no es perpendicular (porque el tramo giró) y se lo rota un poco alrededor del eje.
+ * Girar poco es lo que hace que la curva PERSISTA: una rama entera se arquea del mismo lado y se va
+ * torciendo despacio, en vez de zigzaguear tramo a tramo.
+ *
+ * Sin padre —o si el padre quedó degenerado, que pasa cuando el giro fue de 180°— se elige un
+ * perpendicular con el PRNG. Semillado, como todo acá.
+ */
+export function ladear(previo, dir, r) {
+  const up = Math.abs(dir[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const e1 = norm(cross(dir, up)), e2 = norm(cross(dir, e1));
+  let base;
+  if (previo) {
+    const proy = previo[0] * dir[0] + previo[1] * dir[1] + previo[2] * dir[2];
+    const p = [previo[0] - dir[0] * proy, previo[1] - dir[1] * proy, previo[2] - dir[2] * proy];
+    base = Math.hypot(p[0], p[1], p[2]) > 1e-6 ? norm(p) : null;
+  }
+  if (!base) { const t = r() * Math.PI * 2; base = norm(add(mul(e1, Math.cos(t)), mul(e2, Math.sin(t)))); return base; }
+  // rotación chica alrededor de `dir`: la curva se tuerce, no salta
+  const ang = (r() - 0.5) * 0.9;
+  const lat = norm(cross(dir, base));
+  return norm(add(mul(base, Math.cos(ang)), mul(lat, Math.sin(ang))));
+}
+
 // EXP_RALL: la ley de Rall — el radio del padre elevado a `e` es la suma de los de los hijos
 // elevados a `e`. Es la física de una dendrita real (y la regla de Da Vinci para árboles), y es lo
 // que hace que el grosor sea DATO: una rama que carga 200 memorias nace gorda y una que carga 3
@@ -280,13 +307,14 @@ export function colocar(raiz, opciones) {
   const escala = Math.max(0.001, Number(o.escala) || 1);
   const apertura = Number(o.apertura) || 0.62;
   const r = rng((Number(o.semilla) || 1) >>> 0);
+  const curvatura = Number(o.curvatura) === 0 ? 0 : (Number(o.curvatura) || 0.22);
   const r0 = Math.max(0.05, Number(o.radioHoja) || 0.30) * escala;
   const L0 = (Number(o.largo) || 9) * escala;
 
   const segs = [], puntas = [];
   let alcanceRama = 0, alcance = 0;
 
-  function bajar(nodo, origen, dir, largo, nivel, dist) {
+  function bajar(nodo, origen, dir, largo, nivel, dist, curvaPadre) {
     if (!nodo.hijos.length) {                      // una MEMORIA: la punta
       puntas.push({ id: nodo.mem && nodo.mem.id, x: origen[0], y: origen[1], z: origen[2], mem: nodo.mem });
       return;
@@ -299,15 +327,30 @@ export function colocar(raiz, opciones) {
       const l2 = largo * (0.58 + 0.34 * Math.cbrt(h.n / Math.max(1, nodo.n)));
       const fin = add(origen, mul(dirs[i], l2));
       const hasta = dist + l2;
+      const idx = segs.length;
       segs.push({
         a: origen, b: fin, w0: radioDe(nodo.n, r0), w1: radioDe(h.n, r0),
         nivel, dist: hasta, criterio: nodo.criterio, etiqueta: h.etiqueta || '',
         mem: h.hijos.length ? null : (h.mem && h.mem.id) || null,
+        dir: dirs[i], largo: l2, curva: [0, 0, 0],
       });
+      // LA PANZA DEL TRAMO. Se calcula bajando y heredando la del padre, no mirando a los hijos:
+      // la primera versión curvaba «hacia donde siguen los hijos» y daba CERO en una bifurcación
+      // simétrica —que es el caso normal—, así que sólo se curvaba el 11 % de los tramos.
+      //
+      // Lo que curva una dendrita real es la TORTUOSIDAD: la rama no va derecho entre dos puntos,
+      // se arquea, y el arqueo persiste a lo largo del recorrido en vez de sortearse de nuevo en
+      // cada tramo. Por eso la dirección de la panza se hereda y se gira un poco, y no se elige.
+      //
+      // ESTA ES LA ÚNICA LICENCIA DEL DIBUJO, y se declara: los EXTREMOS de cada tramo salen del
+      // dato —qué memoria, en qué rama, con qué grosor—; lo licenciado es el camino que la línea
+      // toma ENTRE esos dos puntos. Es una propiedad del trazo, no una afirmación sobre la memoria.
+      const bow = ladear(curvaPadre, dirs[i], r);
+      segs[idx].curva = mul(bow, l2 * curvatura);
       if (hasta > alcanceRama) alcanceRama = hasta;
       const dd = Math.hypot(fin[0] - centro[0], fin[1] - centro[1], fin[2] - centro[2]);
       if (dd > alcance) alcance = dd;
-      bajar(h, fin, dirs[i], l2, nivel + 1, hasta);
+      bajar(h, fin, dirs[i], l2, nivel + 1, hasta, bow);
     });
   }
 
@@ -316,9 +359,10 @@ export function colocar(raiz, opciones) {
   // de la nada.
   const rSoma = radioDe(raiz.n, r0) * 1.25;
   const dir0 = norm(o.direccion || [0, 1, 0]);
-  bajar(raiz, add(centro, mul(dir0, rSoma)), dir0, L0, 0, rSoma);
+  bajar(raiz, add(centro, mul(dir0, rSoma)), dir0, L0, 0, rSoma, null);
   return { segs, puntas, alcance: Math.max(alcance, rSoma), alcanceRama: Math.max(alcanceRama, rSoma), rSoma };
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // LA PUERTA

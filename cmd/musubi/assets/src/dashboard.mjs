@@ -325,15 +325,27 @@ const FRAG=['precision highp float;','uniform float uTime;',
 //      esto habría que emitir un cilindro cónico por segmento, o sea 22.000 geometrías.
 //   2. EL IMPULSO viaja por `aGlow`, que JS escribe por frame igual que en las aristas. No hay un
 //      bucle que lo fabrique: se enciende cuando llega un evento del riel.
-const DGEO=new THREE.CylinderGeometry(1,1,1,5,1,true);
+// 5 tramos a lo ALTO (el segundo 5) y no uno: sin ellos el cilindro no tiene por donde doblarse y
+// la panza no existe. Son 5 radiales x 6 anillos = 30 vertices por instancia contra 10 — el costo de
+// la curva es ese, y no una instancia mas: partir cada rama en tres tramos habria triplicado las
+// 6.000 instancias.
+const DGEO=new THREE.CylinderGeometry(1,1,1,5,5,true);
 // El shader va como template literal y no como array + join: GLSL acepta los saltos reales, y
 // asi el fuente se lee igual que el shader que corre.
 const DVERT=`
 attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase; attribute float aWarn;
+attribute vec3 aCurva;
 varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
 void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vWarn=aWarn; vY=position.y+0.5;
   vec3 p=position; p.xz*=mix(1.0,aTaper,vY);
-  gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(p,1.0); }
+  // LA PANZA. Se aplica DESPUES de instanceMatrix porque aCurva viene en las coordenadas del
+  // arbol, no del cilindro: el marco local del cilindro lo arma el renderer con un giro arbitrario
+  // alrededor del eje, asi que la misma curva daria una panza distinta en cada reconstruccion.
+  // El seno la deja en cero en los dos extremos: la rama se arquea pero sigue naciendo y muriendo
+  // donde manda el dato — la punta no se despega de la memoria que representa.
+  vec4 wp=instanceMatrix*vec4(p,1.0);
+  wp.xyz+=aCurva*sin(vY*3.14159265);
+  gl_Position=projectionMatrix*modelViewMatrix*wp; }
 `;
 // El brillo cae hacia la punta: una dendrita real se apaga en los extremos, y sin eso las
 // puntas finas quedan como un halo de polvo blanco alrededor del arbol.
@@ -372,7 +384,7 @@ let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
 // instancia i y a qué distancia del soma está, medida A LO LARGO de la rama. Con eso, escribir el
 // brillo de las 12.010 instancias es un solo barrido lineal sin bajar por ninguna estructura
 // anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
-let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null;
+let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null, DCURV=null;
 let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
 // POSMEM: la posición de cada memoria, que ahora SALE DEL ÁRBOL. Es el reemplazo de `randInBrain()`.
 let POSMEM=new Map();
@@ -410,7 +422,7 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
   if(somaInst){ world.remove(somaInst); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
-  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DDIST=DTRONCO=DALC=DRAD=null;
+  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DCURV=DDIST=DTRONCO=DALC=DRAD=null;
   NEURONAS_DE=new Map(); }
 // OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
 // una malla. Limpiarlo desde disposeMeshes lo borraba justo antes de usarlo, porque
@@ -497,7 +509,7 @@ function rebuildDendritas(){
   if(!total) return;
   DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
   DTAP=new Float32Array(total); DDIST=new Float32Array(total); DTRONCO=new Int32Array(total);
-  DWARN=new Float32Array(total);
+  DWARN=new Float32Array(total); DCURV=new Float32Array(total*3);
   // El alcance de cada árbol se copia a un array plano: el frente del impulso se calcula contra
   // él una vez por tronco y por frame, y buscarlo en BOSQUE adentro del bucle grande sería
   // bajar por un objeto doce mil veces para leer siempre el mismo número.
@@ -509,6 +521,7 @@ function rebuildDendritas(){
   geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(DBAS,1));
   geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(DTAP,1));
   geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(DWARN,1));
+  geo.setAttribute('aCurva', new THREE.InstancedBufferAttribute(DCURV,3));
   denMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
     transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
   denInst=new THREE.InstancedMesh(geo, denMat, total);
@@ -541,6 +554,7 @@ function rebuildDendritas(){
       // niveles: este tiene 10, y con esa caida el 80 % de las ramas —que son las puntas, donde
       // estan las memorias— quedaba por debajo del piso y el arbol se veia como cuatro palitos.
       DBAS[i]=Math.max(0.17, 0.52*Math.pow(0.90,sg.nivel));
+      if(sg.curva){ DCURV[i*3]=sg.curva[0]; DCURV[i*3+1]=sg.curva[1]; DCURV[i*3+2]=sg.curva[2]; }
       DDIST[i]=sg.dist; DTRONCO[i]=ti; DGLW[i]=0; i++;
     } });
   denInst.instanceMatrix.needsUpdate=true;
