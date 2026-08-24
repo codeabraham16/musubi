@@ -33,7 +33,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     es la misma identidad con dos naturalezas. Los que no tienen dueño declarado van a un racimo
     **`(servicios)`** que se ordena SIEMPRE último —no es una persona— y el panel dice cuántos son
     en vez de repartirlos a dedo.
-  - 13 invariantes nuevos entre Go y `node --test`, cada uno verificado fallando bajo un sabotaje
+  - **Los dueños de los servicios están DECLARADOS, con su cita.** `crm-cabina` y
+    `b1-adjudicador` no eran huérfanos: estaban documentados en la memoria y yo había leído el
+    `project_id` vacío de la cabina como falta de información cuando era una decisión de diseño
+    («el project_id existe para ATRIBUIR lo que un principal ESCRIBE; una cabina no escribe»).
+    La tabla `DUEÑOS` es aparte de `ACTORES` a propósito: una dice de quién ES una credencial,
+    la otra dice qué terminal ES. Tener dueño decide el racimo, no enciende una neurona.
+  - Lo declarado se dibuja entero y lo inferido del nombre, **punteado**. Hoy quedan tres
+    credenciales punteadas (`davantis-musubi-design`, `-lienzo-corpus-reader`,
+    `-renaissance-seed`): nadie escribió de quién son, sólo lo sugiere el prefijo.
+  - 15 invariantes nuevos entre Go y `node --test`, cada uno verificado fallando bajo un sabotaje
     que ataca lo que ese test declara. Uno de ellos encontró una fuga real: el proxy reenviaba el
     cuerpo de error del central al navegador, y con él el bearer.
 

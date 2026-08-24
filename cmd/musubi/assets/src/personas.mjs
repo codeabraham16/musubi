@@ -62,6 +62,37 @@ export const ACTORES = {
 };
 
 /**
+ * DUEÑOS: de quién es un principal que NO tiene terminal.
+ *
+ * Es una tabla APARTE de ACTORES y no una entrada más, porque responde otra pregunta. ACTORES
+ * dice «esta credencial ES esta terminal»; ésta dice «esta credencial es DE esta persona». Un
+ * servicio no es una terminal: no escribe, no firma, no tiene dendritas. Meterlo en ACTORES lo
+ * haría encender la neurona de alguien que sí escribe, y el volumen de un poller se sumaría al
+ * trabajo de un humano.
+ *
+ * ACÁ SÓLO ENTRA LO QUE ALGUIEN ESCRIBIÓ, con su cita. Lo que se deduce del nombre —cualquier
+ * `davantis-*`— NO entra: para eso está el repliegue por persona, que se dibuja PUNTEADO
+ * justamente para no afirmar con la misma tinta lo declarado y lo inferido.
+ *
+ * · `crm-cabina` → la APP del CRM. «la identidad con la que la APP del CRM lee el cerebro […]
+ *   POR QUÉ NO LLEVA project_id: el project_id existe para ATRIBUIR lo que un principal ESCRIBE.
+ *   Una cabina no escribe.» (arquitectura/cabina-crm, 2026-07-13). El `project_id` vacío NO era
+ *   un dueño desconocido: era una decisión de diseño. Yo lo había leído al revés.
+ * · `b1-adjudicador` → el adjudicador nocturno del server. «~/b1-workspace/mcp.json apunta a
+ *   localhost:7717/mcp con Bearer del principal davantis b1-adjudicador»
+ *   (server/b1-adjudicador-nocturno, 2026-07-23).
+ * · `davantis-crm` → el DAEMON del repo del CRM, que sí escribe. «Son dos identidades con dos
+ *   trabajos distintos y hay que no confundirlas» (misma nota que crm-cabina).
+ * · `davantis-admin` → la credencial admin de la persona que administra el cerebro.
+ */
+export const DUENOS = {
+  'crm-cabina': 'davantis',
+  'b1-adjudicador': 'davantis',
+  'davantis-crm': 'davantis',
+  'davantis-admin': 'davantis',
+};
+
+/**
  * fusionarActores: el CENSO de quién llama, convertido en nodos del grafo.
  *
  * El censo (/api/actores) y las terminales son DOS POBLACIONES: una sale del token, la otra de
@@ -124,14 +155,19 @@ export function fusionarActores(terminales, censo) {
       continue;
     }
 
-    // Casos 2 y 3: nodo propio.
+    // Casos 2 y 3: nodo propio. El dueño DECLARADO gana sobre el que sugiere el nombre, y la
+    // diferencia se conserva en `exacta` en vez de perderse: lo declarado se dibuja entero y lo
+    // inferido punteado. Si las dos coinciden, igual manda la declaración — es la que alguien
+    // se hizo cargo de escribir.
     const persona = personaDe(principal);
-    const suya = ACTORES[persona] ? persona : '';
+    const declarado = DUENOS[principal] || '';
+    const porNombre = ACTORES[persona] ? persona : '';
+    const suya = declarado || porNombre;
     if (!suya) sinDeclarar++;
     actores.push({
       id: principal, principal, tipo: 'actor',
       persona: suya || RACIMO_SERVICIOS,
-      exacta: !!suya,
+      exacta: !!declarado,
       ...llamadas,
     });
   }

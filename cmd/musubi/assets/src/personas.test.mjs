@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extraerPersonas, agruparPorPersona, personaDe,
   neuronaDeEvento, clasificarEvento,
-  fusionarActores, mapaDeEncendido, RACIMO_SERVICIOS,
+  fusionarActores, mapaDeEncendido, RACIMO_SERVICIOS, DUENOS, ACTORES,
 } from './personas.mjs';
 
 // Fixture chico y EXPLÍCITO: cada nota está puesta para tensar un invariante distinto, y por
@@ -146,14 +146,18 @@ test('P13 · un principal declarado enciende SU terminal, y se marca exacta', ()
   assert.equal(m.terminal, 'SALA DE MANDO', 'el sufijo -mando-admin es la sala de mando');
 });
 
-test('P14 · un servicio sin dueño declarado NO enciende nada ni inventa una neurona', () => {
+test('P14 · un servicio SIN TERMINAL no enciende nada ni inventa una neurona', () => {
   // El nombre de la terminal tiene que salir de la TABLA, nunca derivarse del principal.
   // Derivarlo —`persona.toUpperCase()` y listo— haría que `b1-adjudicador` encendiera una
-  // neurona «B1» que no existe en el grafo, y `crm-cabina` una «CRM». Son servicios reales
-  // cuyo dueño no se deduce del dato, y se prefiere no dibujar antes que dibujar una mentira.
+  // neurona «B1» que no existe en el grafo, y `crm-cabina` una «CRM».
+  //
+  // TENER DUEÑO NO ES TENER NEURONA, y por eso `crm-cabina` sigue acá aunque DUENOS ya diga de
+  // quién es: el dueño decide en qué RACIMO se dibuja, no qué neurona enciende. Sin censo no
+  // hay nodo propio, y sin nodo no hay dónde caer. Confundir las dos cosas haría que el
+  // volumen de un servicio se le sumara al trabajo de un humano.
   for (const p of ['b1-adjudicador', 'crm-cabina', 'algun-bot-nuevo', 'auditor-x']) {
     const n = neuronaDeEvento({ principal: p });
-    assert.equal(n, null, `${p} no puede encender nada: no está declarado`);
+    assert.equal(n, null, `${p} no puede encender nada: no tiene terminal`);
   }
   assert.equal(neuronaDeEvento({ principal: '' }), null);
   assert.equal(neuronaDeEvento({}), null);
@@ -257,7 +261,8 @@ test('P18 · varias credenciales de la misma terminal se ACUMULAN', () => {
 test('P19 · un servicio sin dueño va al racimo SERVICIOS, y su racimo NO sale de personaDe()', () => {
   const { terminales } = extraerPersonas(GRAFO);
   const { actores, sinDeclarar } = fusionarActores(terminales, {
-    actores: [act('crm-cabina', 400), act('b1-adjudicador', 50)],
+    // Nombres que NO estan en DUENOS ni en ACTORES: el caso que la tabla existe para no tapar.
+    actores: [act('kong-gateway', 400), act('f18-puente', 50)],
   });
   assert.equal(actores.length, 2);
   assert.equal(sinDeclarar, 2, 'el panel tiene que poder decir cuántos quedaron sin dueño');
@@ -309,7 +314,7 @@ test('P22 · el censo apagado degrada a la tabla declarada, no a cero', () => {
 test('P23 · el racimo SERVICIOS va último aunque pese más, y no compite por notas', () => {
   const { terminales } = extraerPersonas(GRAFO);
   const { actores } = fusionarActores(terminales, {
-    actores: [act('crm-cabina', 166371), act('b1-adjudicador', 9000)],
+    actores: [act('kong-gateway', 166371), act('f18-puente', 9000)],
   });
   const racimos = agruparPorPersona(terminales, actores);
   const ultimo = racimos[racimos.length - 1];
@@ -321,4 +326,55 @@ test('P23 · el racimo SERVICIOS va último aunque pese más, y no compite por n
   // competencia, no la altera.
   const personas = racimos.slice(0, -1).map((r) => r.notas);
   assert.deepEqual(personas, [...personas].sort((a, b) => b - a));
+});
+
+test('P24 · un dueño DECLARADO gana sobre el que sugiere el nombre, y se dibuja exacto', () => {
+  const { terminales } = extraerPersonas(GRAFO);
+
+  // El caso donde las dos fuentes DISCREPAN hay que fabricarlo: hoy ninguna entrada real de
+  // DUENOS contradice a su prefijo, asi que sin esto la mitad del test seria vacua — pasaria
+  // igual con el orden invertido, que es exactamente lo que un sabotaje me mostro.
+  // `davantis-de-gio` se llama como davantis y es de gio: la unica forma de saberlo es que
+  // alguien lo haya escrito, que es para lo que la tabla existe.
+  const previo = DUENOS['davantis-de-gio'];
+  DUENOS['davantis-de-gio'] = 'gio';
+  try {
+    const { actores, sinDeclarar } = fusionarActores(terminales, {
+      actores: [act('davantis-de-gio', 12), act('crm-cabina', 400),
+                act('davantis-musubi-design', 30), act('kong-gateway', 9)],
+    });
+    const por = new Map(actores.map((a) => [a.id, a]));
+
+    // LO DECLARADO MANDA. El prefijo dice davantis y la tabla dice gio: gana la tabla.
+    assert.equal(por.get('davantis-de-gio').persona, 'gio', 'la declaración le gana al nombre');
+    assert.equal(por.get('davantis-de-gio').exacta, true);
+
+    // `crm-cabina` no tiene prefijo de persona: sin la tabla iria a servicios. Con ella es de
+    // davantis, y EXACTO porque alguien lo escribio (arquitectura/cabina-crm).
+    assert.equal(por.get('crm-cabina').persona, 'davantis');
+    assert.equal(por.get('crm-cabina').exacta, true);
+
+    // `davantis-musubi-design` cae en davantis por la CONVENCION del nombre, no por declaracion.
+    // Se dibuja punteado: lo inferido no puede afirmarse con la misma tinta que lo declarado.
+    assert.equal(por.get('davantis-musubi-design').persona, 'davantis');
+    assert.equal(por.get('davantis-musubi-design').exacta, false);
+
+    // Y lo que no tiene ni tabla ni prefijo sigue yendo a servicios, contado.
+    assert.equal(por.get('kong-gateway').persona, RACIMO_SERVICIOS);
+    assert.equal(sinDeclarar, 1, 'solo el que de verdad no tiene dueño cuenta como tal');
+  } finally {
+    if (previo === undefined) delete DUENOS['davantis-de-gio']; else DUENOS['davantis-de-gio'] = previo;
+  }
+});
+
+test('P25 · los cuatro dueños declarados son los que la memoria documenta', () => {
+  // Un test de la TABLA, no del codigo. Existe porque una entrada de mas acá es una atribucion
+  // inventada con cara de dato, y es el unico lugar del modulo donde eso puede entrar sin que
+  // ninguna otra prueba lo note.
+  assert.deepEqual(Object.keys(DUENOS).sort(),
+    ['b1-adjudicador', 'crm-cabina', 'davantis-admin', 'davantis-crm']);
+  for (const [k, v] of Object.entries(DUENOS)) {
+    assert.equal(v, 'davantis', `${k} está declarado a nombre de ${v}`);
+    assert.ok(!ACTORES[k], `${k} no puede estar en las dos tablas: un servicio no es una terminal`);
+  }
 });
