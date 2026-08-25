@@ -1,0 +1,8 @@
+# EL BUNDLE NO SE COMMITEA. A diferencia del panel —cuyo dashboard.bundle.js sí va, porque lo
+# consume go:embed sin node— esto es un boceto: no lo embebe nadie y se reconstruye en 80 ms.
+*.js
+
+# ⛔ NI LOS DATOS. `grafo-local.json` son las notas REALES del cerebro de quien corre el boceto
+# (2.267 en la máquina donde se hizo), con sus temas y sus gists. Este repo es PÚBLICO. El README
+# dice cómo generarlo en local; acá no entra nunca.
+grafo-local.json

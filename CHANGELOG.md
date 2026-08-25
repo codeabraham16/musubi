@@ -8,6 +8,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Un boceto del panel donde la rama no existe: existen los hilos.** Vive en
+  `cmd/musubi/assets/boceto/`, fuera del bundle y fuera de `go:embed` — se construye con el mismo
+  motor (three 0.169 + esbuild vendorizados) y con datos reales del cerebro local.
+  - **El grosor deja de ser una fórmula y pasa a ser una suma.** `hilos(padre) = Σ hilos(hijos)`:
+    un axón no aparece ni desaparece en una bifurcación, así que los 459 hilos del núcleo son,
+    contados, todas las hojas del árbol. Reemplaza a la ley de Rall, que **estimaba** eso mismo.
+  - **Deja de parecer un árbol, y no por el trazo sino por la topología.** Un tronco vertical tiene
+    suelo y copa. Acá la raíz es un núcleo y los actores salen en todas las direcciones, repartidos
+    por Fibonacci sobre la esfera. Medido: el sesgo de las direcciones de primer nivel da **0,03**;
+    un árbol da ~1.
+  - **Se puede señalar cualquiera, no un montón.** Un pase de identidad por GPU redibuja la escena
+    en 21×21 píxeles bajo el cursor y lee ese pedacito: **31.176 elementos señalables de 31.617
+    dibujados**, contra los 441 de antes. Señalás un hilo, una neurona o una nota concreta.
+  - **El amontonamiento era en la PANTALLA, no en el espacio.** 0,24 % de los pares de ramas se
+    cruzan en 3D y cero entre actores distintos, pero el **36 %** de las celdas de pantalla tenía
+    dos o más ramas encima. Con el reparto corregido baja a **25,5 %** y los hilos quedan además un
+    10 % más gruesos — el único punto del barrido que mejora las dos cosas a la vez.
+  - **Contorno por profundidad** (halos de tractografía) para el 24 % que queda: el 83 % de esos
+    píxeles tiene un salto de profundidad grande, así que el cruce se vuelve oclusión legible.
+  - **`A` aísla una rama y `0` vuelve al todo.** La separación por colocación tiene techo medido,
+    así que lo que falta no se consigue moviendo ramas sino apagando las otras — apagando, no
+    escondiendo: esconder contesta «cómo es esta rama» pero borra «dónde está».
+  - 16 invariantes en `node --test`, cada uno **verificado fallando** bajo un sabotaje dirigido, y
+    33 más en la página (`#prueba`) para los que necesitan una GPU.
+
+### Fixed
+- **La niebla del panel llevaba meses sin hacer nada.** `scene.fog` estaba puesto y se pasaba por
+  configuración, pero no llegaba a ningún material: los `ShaderMaterial` se crean con `fog = false`
+  y además hay que incluir `<fog_fragment>` a mano. Era una perilla desconectada que parecía viva.
+  El boceto la reemplaza por una rampa de profundidad **anclada a la órbita**, porque el rango de
+  profundidad de la escena es apenas 2,3× y una densidad fija no tiene recorrido para decir nada.
+
 - **Vuelven los despachos, y ahora una terminal tiene cuerpo.** Un axón por cada par de terminales
   que se escribieron, del centroide de lo que firmó quien escribe al de quien recibe.
   - **La posición no se elige: se calcula.** Es el centroide de las puntas de las memorias que esa

@@ -1,0 +1,175 @@
+// sabotajes.mjs — CADA INVARIANTE, VISTO FALLAR.
+//
+// Un test que pasa no prueba nada por sí solo: prueba que pasa. Lo que dice si sirve es verlo
+// FALLAR cuando se rompe justo lo que declara defender. Este banco rompe el código a propósito,
+// una cosa por vez, y exige el rojo.
+//
+// DOS TRAMPAS QUE YA NOS MORDIERON, y por eso el banco es más estricto de lo que parece:
+//
+//   1. UN PATRÓN QUE NO MATCHEA NINGÚN TEST sale con código 0, y «no falló» se lee igual que
+//      «el invariante aguantó». Por eso se exige ver `tests 1` en la salida: si el filtro no
+//      corrió exactamente un test, el sabotaje se reporta SIN TEST y cuenta como error.
+//   2. LA DEFENSA EN PROFUNDIDAD tapa el sabotaje: si lo mismo se valida en dos lugares, romper
+//      uno no cambia nada y el test queda vacuo pareciendo sano. Por eso cada sabotaje ataca el
+//      invariante que el test DECLARA, no una validación cualquiera cerca.
+//
+// Correr:  node sabotajes.mjs
+
+import { readFileSync, writeFileSync, copyFileSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+
+const OBJ = 'comun.mjs';
+const BAK = 'comun.mjs.sabotaje-bak';
+
+const SABOTAJES = [
+  {
+    test: 'B1',
+    que: 'el frente deja de avanzar (devuelve siempre lo mismo)',
+    de: '  const f = (Math.max(0, ms) / 1000) * vel;',
+    a: '  const f = 1;',
+  },
+  {
+    test: 'B2',
+    que: 'el frente NUNCA se apaga: la luz queda prendida para siempre',
+    de: '  return f > max + ancho ? -1 : f;',
+    a: '  return f;',
+  },
+  {
+    test: 'B3',
+    que: 'el apagado ignora el ancho del frente y corta la cola',
+    de: '  return f > max + ancho ? -1 : f;',
+    a: '  return f > max ? -1 : f;',
+  },
+  {
+    test: 'B4',
+    que: 'el grosor deja de salir de la carga',
+    de: 'export const radioRall = (n, r0) => r0 * Math.pow(Math.max(1, n), 1 / EXP_RALL);',
+    a: 'export const radioRall = (n, r0) => r0 * 2;',
+  },
+  {
+    test: 'B5',
+    que: 'el recorte NO se declara: lo que no entra desaparece en silencio',
+    de: '      s.absorbidas = nodo.n;',
+    a: '      s.absorbidas = s.memorias.length;',
+  },
+  {
+    test: 'B5',
+    que: 'el cero vuelve a leerse como ausente en maxNivel',
+    de: '  const maxNivel = num(o.maxNivel, 7);',
+    a: '  const maxNivel = Number(o.maxNivel) || 7;',
+  },
+  {
+    test: 'B6',
+    que: 'la carga deja de ser la suma real del subárbol',
+    de: '      carga: nodo.n,',
+    a: '      carga: nodo.n + (nodo.hijos && nodo.hijos.length ? 3 : 0),',
+  },
+  {
+    test: 'B7',
+    que: 'el penacho brota también de hilos que no terminan en una hoja',
+    de: '    if (!e.ultimo || secciones[e.sec].hijos.length) continue;',
+    a: '    if (!e.ultimo) continue;',
+  },
+  {
+    test: 'B8',
+    que: 'un NaN se cuela en la geometría del hilo (desaparece sin error)',
+    de: '  const co = Math.cos(ph) * rho, si = Math.sin(ph) * rho;',
+    a: '  const co = Math.cos(ph) * rho, si = Math.sin(ph) * rho * (t > 0.9 ? NaN : 1);',
+  },
+  {
+    test: 'B9',
+    que: 'el núcleo vuelve a medir lo mismo que un actor',
+    de: '  raiz.largo = nucleo;',
+    a: '  raiz.largo = L0 * 3;',
+  },
+  {
+    test: 'B10',
+    que: 'el árbol deja de ser determinista',
+    de: 'export const rng = (s) => () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);',
+    a: 'export const rng = () => () => Math.random();',
+  },
+
+  /* ── LOS HILOS: lo que se agregó en esta vuelta ──────────────────────────────────────────── */
+  {
+    test: 'B11',
+    que: 'un hilo aparece de la nada en cada bifurcación',
+    de: '      s.fibras = t;                     // ← LA CONSERVACIÓN. No es una estimación: es una suma.',
+    a: '      s.fibras = t + 1;',
+  },
+  {
+    test: 'B12',
+    que: 'las ranuras se pisan: dos hijas creen tener los mismos hilos',
+    de: '    for (const h of s.hijos) { secciones[h].ranura = off; off += secciones[h].fibras; }',
+    a: '    for (const h of s.hijos) { secciones[h].ranura = off; off += 1; }',
+  },
+  {
+    test: 'B13',
+    que: 'el grosor deja de contarse: toda hoja lleva un solo hilo',
+    de: '      s.fibras = Math.max(1, Math.min(maxHoja, Math.ceil(s.carga / porMemoria)));',
+    a: '      s.fibras = 1;',
+  },
+  {
+    test: 'B14',
+    que: 'desaparece la hendidura: las neuronas de un hilo se tocan',
+    de: '        const tb = t1 - (t1 - t0) * hendidura;',
+    a: '        const tb = t1;',
+  },
+  {
+    test: 'B15',
+    que: 'vuelve a ser un árbol: todos los actores salen para arriba',
+    de: '    const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;',
+    a: '    const y = 0.9;',
+  },
+];
+
+const original = readFileSync(OBJ, 'utf8');
+copyFileSync(OBJ, BAK);
+let errores = 0;
+
+console.log('BANCO DE SABOTAJES · ' + SABOTAJES.length + ' invariantes\n');
+
+for (const s of SABOTAJES) {
+  const veces = original.split(s.de).length - 1;
+  if (veces !== 1) {
+    console.log(`  ✗ ${s.test}  ANCLA AMBIGUA (${veces} coincidencias) — ${s.que}`);
+    errores++;
+    continue;
+  }
+  writeFileSync(OBJ, original.replace(s.de, s.a), 'utf8');
+  let salida = '';
+  let fallo = false;
+  try {
+    salida = execFileSync(process.execPath,
+      ['--test', '--test-name-pattern', '^' + s.test + ' ', 'comun.test.mjs'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    salida = String(e.stdout || '') + String(e.stderr || '');
+    fallo = true;
+  }
+  writeFileSync(OBJ, original, 'utf8');
+
+  // ¿CORRIÓ EXACTAMENTE UN TEST? Sin esto, un patrón que no matchea nada sale con código 0 y
+  // «no falló» se lee igual que «el invariante aguantó». Ya nos pasó.
+  const m = /^# tests (\d+)$/m.exec(salida) || /tests (\d+)/.exec(salida);
+  const corridos = m ? Number(m[1]) : 0;
+  if (corridos !== 1) {
+    console.log(`  ✗ ${s.test}  SIN TEST (corrieron ${corridos}) — ${s.que}`);
+    errores++;
+  } else if (!fallo) {
+    console.log(`  ✗ ${s.test}  VACUO: el sabotaje NO lo hizo fallar — ${s.que}`);
+    errores++;
+  } else {
+    console.log(`  ✓ ${s.test}  falla como debe — ${s.que}`);
+  }
+}
+
+try { unlinkSync(BAK); } catch (_) {}
+// PARANOIA: el archivo tiene que haber quedado EXACTAMENTE como estaba. Un banco de sabotajes que
+// deja el sabotaje puesto es la peor herramienta posible.
+if (readFileSync(OBJ, 'utf8') !== original) {
+  console.log('\n🔴 EL ARCHIVO NO QUEDÓ COMO ESTABA');
+  process.exit(2);
+}
+console.log(`\n${SABOTAJES.length - errores}/${SABOTAJES.length} invariantes verificados fallando`);
+console.log('comun.mjs restaurado byte a byte');
+process.exit(errores ? 1 : 0);
