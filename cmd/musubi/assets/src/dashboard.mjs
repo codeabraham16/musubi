@@ -9,7 +9,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { extraerPersonas, neuronaDeEvento, clasificarEvento,
+import { extraerPersonas, firmanteDe, neuronaDeEvento, clasificarEvento,
          fusionarActores, mapaDeEncendido,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { construirRacimo } from './arbol-memoria.mjs';
@@ -156,6 +156,7 @@ function buildGraph(brain){
     refrescarPersonas(brain);
     const b=construirBosqueMemoria(ns0);
     BOSQUE=b.neuronas; POSMEM=b.posiciones;
+    CENTRO_TERM=centrosDeTerminal(ns0, POSMEM);
   }
 
   // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
@@ -418,6 +419,10 @@ let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
 // anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
 let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null, DCURV=null;
 let auraInst=null, auraMat=null, ACAMPO=null;
+// DESPACHOS: los axones entre terminales. Malla aparte de las sinapsis porque son otra cosa — una
+// sinapsis une dos NOTAS, un despacho une dos PERSONAS que se escribieron.
+let despInst=null, despMat=null, DESPGLW=null, DESPRAC=null;
+let CENTRO_TERM=new Map();
 let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
 // POSMEM: la posición de cada memoria, que ahora SALE DEL ÁRBOL. Es el reemplazo de `randInBrain()`.
 let POSMEM=new Map();
@@ -455,6 +460,9 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
   if(somaInst){ world.remove(somaInst); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
+  if(despInst){ world.remove(despInst); despInst.geometry.dispose(); despInst=null; }
+  if(despMat){ despMat.dispose(); despMat=null; }
+  DESPGLW=DESPRAC=null;
   if(auraInst){ world.remove(auraInst); auraInst.geometry.dispose(); auraInst=null; }
   if(auraMat){ auraMat.dispose(); auraMat=null; }
   ACAMPO=null;
@@ -492,6 +500,28 @@ function construirBosqueMemoria(ns0){
     r.neuronas.forEach((nu,k)=>neuronas.push({ ...nu, id:d.name+'#'+k, color:d.color, racimo:d.name }));
   }
   return { neuronas, posiciones };
+}
+
+// centrosDeTerminal: DÓNDE ESTÁ cada terminal en la escena, ahora que ya no es una neurona.
+//
+// Es el centroide de las puntas de las memorias que ESA TERMINAL FIRMÓ. No es una posición
+// elegida: sale del mismo hecho del texto que se usa para contar cuántas firmó, así que el punto
+// y el número no pueden discrepar. Y es lo que le devuelve un cuerpo al despacho: un axón necesita
+// dos extremos, y sin esto el 89 % de los despachos —los que van entre dos terminales de la misma
+// persona— no tenían dónde empezar ni dónde terminar.
+//
+// Una terminal que nunca firmó no aparece, y eso es correcto: nombrarla no es escribir.
+function centrosDeTerminal(ns0, posiciones){
+  const acum=new Map();
+  for(const n of ns0){
+    const r=firmanteDe(n); if(!r) continue;
+    const p=posiciones.get(n.id); if(!p) continue;
+    let a=acum.get(r); if(!a){ a={x:0,y:0,z:0,n:0}; acum.set(r,a); }
+    a.x+=p.x; a.y+=p.y; a.z+=p.z; a.n++;
+  }
+  const out=new Map();
+  for(const [r,a] of acum) out.set(r,{x:a.x/a.n, y:a.y/a.n, z:a.z/a.n, notas:a.n});
+  return out;
 }
 
 
@@ -627,6 +657,74 @@ function rebuildDendritas(){
   });
   auraInst.instanceMatrix.needsUpdate=true;
   world.add(auraInst);
+  rebuildDespachos();
+}
+
+// rebuildDespachos: el axón de cada par de terminales que se escribieron.
+//
+// SE DIBUJAN TODOS, no sólo los que cruzan personas. Medido: de los 152 despachos del cerebro
+// local, 135 —el 89 %— van entre dos terminales de la MISMA persona. Quedarse con los que cruzan
+// habría dejado dos arcos en pantalla y escondido casi todo, que es mentir por omisión.
+//
+// Son ESTÁTICOS en su forma: un despacho no es un evento en vivo sino un hecho de la memoria (una
+// nota firmada por A y dirigida a B). Lo que sí es vivo es lo que CONDUCEN — se encienden cuando
+// hay campo en alguno de sus dos extremos, que es el uso real pasando por ahí.
+function rebuildDespachos(){
+  const ds=(PERSONAS&&PERSONAS.despachos)||[];
+  const arcos=[];
+  for(const d of ds){
+    const A=CENTRO_TERM.get(d.de), B=CENTRO_TERM.get(d.a);
+    // Una terminal que no firmó nada no tiene cuerpo. El despacho existe —la nota lo dice— pero no
+    // hay dónde anclarlo, y ponerlo en el centro del racimo sería inventarle una posición.
+    if(!A||!B) continue;
+    const ra=RACIMO_DE.get(d.de)||'', rb=RACIMO_DE.get(d.a)||'';
+    arcos.push({A,B,veces:Math.max(1,Number(d.veces)||1), cruza:ra!==rb, ra, rb});
+  }
+  if(!arcos.length) return;
+  const col=new Float32Array(arcos.length*3), tap=new Float32Array(arcos.length),
+        bas=new Float32Array(arcos.length), wrn=new Float32Array(arcos.length),
+        cur=new Float32Array(arcos.length*3);
+  DESPGLW=new Float32Array(arcos.length);
+  DESPRAC=new Array(arcos.length);
+  const geo=DGEO.clone();
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(col,3));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DESPGLW,1));
+  geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(bas,1));
+  geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(tap,1));
+  geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(wrn,1));
+  geo.setAttribute('aCurva', new THREE.InstancedBufferAttribute(cur,3));
+  despMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
+  despInst=new THREE.InstancedMesh(geo, despMat, arcos.length);
+  despInst.frustumCulled=false;
+  arcos.forEach((x,i)=>{
+    _va.set(x.A.x,x.A.y,x.A.z); _vb.set(x.B.x,x.B.y,x.B.z);
+    _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
+    _qd.setFromUnitVectors(_UP,_vd.normalize());
+    // El grosor va en LOG sobre `veces`: el reparto medido va de 1 a 21, y en lineal el par más
+    // escrito sería veintiún veces más gordo que el resto y taparía media escena.
+    const r=0.09+Math.log(1+x.veces)*0.09;
+    _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(r,len,r));
+    despInst.setMatrixAt(i,_m);
+    _c.set(x.cruza?COLOR_CRUCE:COLOR_DESPACHO);
+    col[i*3]=_c.r; col[i*3+1]=_c.g; col[i*3+2]=_c.b;
+    // ARQUEADO, y hacia lados opuestos según la dirección: A->B y B->A son dos despachos
+    // distintos, y con los dos rectos quedaban uno encima del otro y se leían como uno solo.
+    // `cross(dir, arriba)` cambia de signo al invertir `dir`, así que la separación sale sola.
+    const px=_vd.z*1, py=0, pz=-_vd.x;
+    const pl=Math.hypot(px,py,pz)||1;
+    const k=len*0.16;
+    cur[i*3]=px/pl*k; cur[i*3+1]=py/pl*k; cur[i*3+2]=pz/pl*k;
+    // Nace grueso en quien escribe y termina fino en quien recibe: es la dirección, sin una punta
+    // de flecha que habría que orientar contra la cámara en cada giro.
+    tap[i]=0.20;
+    // TENUES en reposo. Con 0,30 los 27 axones se leian mas fuerte que los arboles y la escena
+    // pasaba a ser un manojo de cables con dendritas de fondo — al reves de lo que dice.
+    bas[i]=x.cruza?0.15:0.085;
+    DESPRAC[i]=[x.ra,x.rb];
+  });
+  despInst.instanceMatrix.needsUpdate=true;
+  world.add(despInst);
 }
 
 // LOS DESPACHOS QUEDARON SIN CUERPO DEL QUE COLGAR, y por eso no se dibujan en esta fase.
@@ -883,6 +981,17 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
       if(auraInst && ACAMPO){
         for(let k=0;k<ACAMPO.length;k++) ACAMPO[k]=1-Math.exp(-(r.campo[k]||0)*0.42);
         auraInst.geometry.attributes.aCampo.needsUpdate=true; }
+      // LOS DESPACHOS CONDUCEN. Se encienden cuando hay campo en alguno de sus dos extremos: el
+      // axón existe siempre —es un hecho de la memoria— pero sólo brilla cuando ese uso está
+      // pasando de verdad. Sin evento, base y nada más.
+      if(despInst && DESPGLW){
+        const porRac=new Map();
+        for(const [rac,idxs] of NEURONAS_DE){ let m=0;
+          for(const k of idxs) if(r.campo[k]>m) m=r.campo[k];
+          porRac.set(rac,m); }
+        for(let i=0;i<DESPGLW.length;i++){ const p=DESPRAC[i];
+          DESPGLW[i]=Math.min(0.75, Math.max(porRac.get(p[0])||0, porRac.get(p[1])||0)*0.45); }
+        despInst.geometry.attributes.aGlow.needsUpdate=true; }
       denSucio = vivos>0;
     }
   }

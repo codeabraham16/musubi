@@ -8,6 +8,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Vuelven los despachos, y ahora una terminal tiene cuerpo.** Un axón por cada par de terminales
+  que se escribieron, del centroide de lo que firmó quien escribe al de quien recibe.
+  - **La posición no se elige: se calcula.** Es el centroide de las puntas de las memorias que esa
+    terminal FIRMÓ, y sale del mismo hecho del texto que se usa para contar cuántas firmó — así el
+    punto y el número no pueden discrepar. `firmanteDe()` es ahora una sola función que usan los
+    dos, en vez de la lógica copiada: con dos copias, la segunda se desincroniza y la terminal
+    queda dibujada donde el contador dice que no está.
+  - **Se dibujan TODOS, no sólo los que cruzan personas.** Medido: de los 152 despachos del cerebro
+    local, **135 —el 89 %— van entre dos terminales de la MISMA persona**. Quedarse con los que
+    cruzan dejaba **dos arcos** en pantalla y escondía el resto, que es mentir por omisión.
+  - **Estáticos en su forma, vivos en lo que conducen.** Un despacho es un hecho de la memoria, no
+    un evento; pero se enciende cuando hay campo en alguno de sus dos extremos — o sea cuando ese
+    uso está pasando de verdad. Sin evento, base y nada más.
+  - Arqueados a **lados opuestos** según la dirección: `A→B` y `B→A` son dos despachos distintos y
+    rectos quedaban uno encima del otro, leyéndose como uno solo. `cross(dir, arriba)` cambia de
+    signo al invertir `dir`, así que la separación sale sola.
+  - Una terminal que **nunca firmó no aparece**, y es correcto: nombrarla no es escribir.
+  - Medido con todo puesto: 22 draw calls, 407k triángulos, **0 cuadros por encima de 33 ms**,
+    «mis bucles» en 0,3 ms. Y los invariantes intactos: 0 píxeles sin evento, atribución a 415 px.
 - **El campo: así se ven las señales de uso.** Un halo por neurona cuya intensidad sale de `campo`
   —la suma de la fuerza de sus frentes VIVOS— y de nada más. No lleva calor ni nada histórico: un
   halo permanente convertiría el reposo en luz y el panel dejaría de poder decir «acá no está
