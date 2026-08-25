@@ -42,14 +42,23 @@
 // LOS TRES DE ESTA VUELTA — «un negro raro que opaca al resto», «las conexiones no se ven
 // naturales», «no termino de saber qué presioné»
 //
-//   1. EL NEGRO ERA EL CONTORNO, y no era una cuestión de gusto: crecía en unidades de MUNDO.
-//      Un hilo de 0,52 con grosor 3 se vuelve una funda de 1,56, y como los hilos de un haz están
-//      a 2,4 de distancia, las fundas se TOCAN y el haz entero proyecta una losa maciza sobre lo
-//      que tenga detrás. Medido: de cerca apagaba el 7,9 % del contenido con 9.064 píxeles de
-//      mancha maciza; de lejos, 1,6 % y ninguna. Por eso no aparecía revisando la vista general.
-//      Un contorno se mide EN PANTALLA: 2,5 px de reborde, siempre. Quedó en 2,9 % de cerca y
-//      3,3 % de lejos —el mismo número, que es la señal de que ahora es un contorno— con 9 px de
-//      mancha en vez de 9.064. Ver `CONTORNO_V`.
+//   1. EL NEGRO ERA EL CONTORNO, y al final NO se arregló: se sacó. Era el halo por profundidad
+//      —la técnica estándar de tractografía— y se le dieron tres vueltas antes de aceptar que la
+//      premisa era el problema:
+//
+//        engordaba en unidades de MUNDO   de cerca apagaba el 7,9 % del contenido, 9.064 px de
+//                                         mancha maciza; de lejos 1,6 % y ninguna
+//        reborde de 2,5 PÍXELES           la mancha bajó a 9 px, pero medido por OSCURECIMIENTO
+//                                         seguía velando 123.766 px con 31/255 de media
+//        salto por instancia              123.766 → 78.193 px. Mejor, y todavía un velo
+//
+//      Lo cerró mirar las dos imágenes al lado: sin contorno, el haz que cruza por detrás aparece
+//      ENTERO en vez de con una cuña negra de borde duro comida encima. Un haz de hilos YA es
+//      opaco por acumulación y el buffer de profundidad ya resuelve el cruce; lo único que
+//      agregaba el halo era pintar fondo sobre los huecos ENTRE hilos, que es justo lo que hace
+//      que un haz se lea como fibras. La descripción del usuario era la firma exacta de un
+//      oclusor: «negro raro» (pintado del color del fondo), «al moverme desaparece» (depende del
+//      punto de vista) y «al lado de las ramas» (pegado a lo que lo proyecta).
 //
 //      Y el gris del centro era otro: el núcleo se pintaba de un gris propio «porque no le
 //      pertenece a nadie». Es falso — es de todos a la vez. Ahora cada hilo lleva el color de la
@@ -65,6 +74,19 @@
 //      LA CÁMARA, así que lo elegido dejaba de estar donde estaba. Ahora un clic elige y no mueve
 //      nada, el doble clic vuela, y lo elegido queda marcado con un anillo de tamaño constante en
 //      pantalla, puesto en el punto exacto del eje que señalaste (medido: 0 px de error).
+//
+//   4. LA CALIDAD DEL DIBUJO, que es lo que quedaba cuando el negro se fue:
+//      · el haz era una PANA PLANA. Ahora lleva oclusión dentro del haz (un hilo del centro
+//        recibe menos luz que uno de la superficie) y el lado del HAZ que mira a la luz, con la
+//        normal radial. El `dif` del fragmento ilumina cada hilo por separado y todos son
+//        paralelos, así que no podía redondear el conjunto.
+//      · el soma era una BOLITA pegada al arranque de cada eslabón, y en un hilo fino eso es un
+//        collar de cuentas. Ahora es un huso alineado con la fibra: se lee como engrosamiento, y
+//        además es la forma real del cuerpo de una neurona de tracto.
+//      · los hilos eran perfectamente rectos y equiespaciados — tejido a máquina. Ahora ondulan
+//        DENTRO del haz, desfasados entre vecinos.
+//      · lo elegido se lavaba a CIAN BLANCO: la selección se sumaba DESPUÉS del rolloff. Ahora es
+//        una ganancia antes, así que sube de brillo conservando el tono.
 //
 //   UNA HIPÓTESIS MÍA QUE EL DATO REFUTÓ, y queda anotada para que nadie la reponga: sospeché de
 //   la ATMÓSFERA —la rampa de profundidad— porque apagada la escena se ve más vívida. Medido, no
@@ -97,7 +119,7 @@ contarFibras(S, HILOS);
                se leen como una sola cosa desde donde te pares.
      AJENAS %  qué fracción de las celdas de pantalla tiene dos secciones NO emparentadas encima,
                sobre 12 puntos de vista. Es lo que el ojo ve de golpe — y se mitiga girando, y con
-               el contorno por profundidad.
+               girando.
 
    Lo que destapó medir el enredo: **183 de los 191 choques —el 96 %— eran entre HERMANAS**, y son
    inevitables mientras nazcan todas del mismo punto. A distancia cero no hay ángulo que separe.

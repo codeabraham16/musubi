@@ -73,8 +73,8 @@ const SABOTAJES = [
   {
     test: 'B8',
     que: 'un NaN se cuela en la geometría del hilo (desaparece sin error)',
-    de: '  const co = Math.cos(ph) * rho, si = Math.sin(ph) * rho;',
-    a: '  const co = Math.cos(ph) * rho, si = Math.sin(ph) * rho * (t > 0.9 ? NaN : 1);',
+    de: '  const co = Math.cos(ph) * rw, si = Math.sin(ph) * rw;',
+    a: '  const co = Math.cos(ph) * rw, si = Math.sin(ph) * rw * (t > 0.9 ? NaN : 1);',
   },
   {
     test: 'B9',

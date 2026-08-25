@@ -146,14 +146,18 @@ void main(){
   // vVol es el sombreado A NIVEL DE HAZ: sin el, todos los hilos paralelos reciben la luz igual y
   // el cable se ve como pana plana. Multiplica el termino base y NO el impulso — el impulso tiene
   // que verse igual de fuerte del lado en sombra, o dejaria de decir por donde viaja.
-  vec3 base = (vC * mielina * prof * (0.74 + 1.30 * dif) + vC * fres * 0.66) * vVol;
+  // LA SELECCION ES UNA GANANCIA, no una suma, y va ANTES del rolloff. Sumando color despues de
+  // comprimir, la rama elegida se pasa de 1 en dos canales y sale CIAN BLANCO: se pierde de quien
+  // es justo en lo que estas mirando. Multiplicando antes, sube de brillo conservando el tono y el
+  // rolloff se encarga de que no llegue a 1. Es el mismo error que ya nos comio el color de aviso.
+  vec3 base = (vC * mielina * prof * (0.74 + 1.30 * dif) + vC * fres * 0.66) * vVol
+            * (1.0 + vSel * 1.60);
   // ROLLOFF SUAVE en vez de recorte duro. Sin esto hay que elegir entre dos males: con ganancia
   // alta el turquesa saturado se pasa de 1 en dos canales y el haz cercano se lava a CIAN BLANCO
   // —se pierde el hilo, que es lo unico que importa mostrar—; con ganancia baja las puntas se
   // hunden en el negro. La compresion deja subir la ganancia sin que nada llegue a 1: comprime los
   // altos y casi no toca los bajos, y conserva el TONO, que un recorte por canal destruye.
   vec3 c = base / (1.0 + 0.34 * base);
-  c += vC * vSel * 1.15;                       // la sección elegida y su camino a la raíz
   // CONDUCCIÓN SALTATORIA: el impulso no brilla parejo, brilla EN LOS NODOS. En un axón real la
   // corriente entra por los nodos de Ranvier y el internodo sólo la transmite, así que la luz
   // salta de estrangulamiento en estrangulamiento. Es la animación y es el hecho, a la vez.
@@ -173,83 +177,32 @@ void main(){
   gl_FragColor = vec4(c, min(1.0, 0.90 + 0.10 * vSel + p * 0.4) * (0.35 + 0.65 * vFam));
 }`;
 
-/* ── EL CONTORNO POR PROFUNDIDAD ──────────────────────────────────────────────────────────────
-   Es LA pieza que hace legible un haz denso, y no es un efecto: es la tecnica estandar de la
-   tractografia (halos dependientes de la profundidad, Everts et al.). El problema que resuelve se
-   midio antes de escribirla:
+/* ── EL CONTORNO POR PROFUNDIDAD: SE PROBO TRES VECES Y SE SACO ──────────────────────
+   Aca vivia un halo por profundidad —la tecnica estandar de tractografia, Everts et al.—: cada
+   hilo dibujado dos veces, la segunda mas gordo, del color del fondo y empujado hacia atras, para
+   que un cruce se leyera como oclusion. Queda ANOTADO, con lo que costo cada vuelta, para que
+   nadie lo reponga sin medir de nuevo:
 
-     · el 24 % de los pixeles ocupados tiene DOS O MAS secciones distintas encima;
-     · pero el 83 % de esos pixeles tiene un salto de profundidad mayor a cuatro diametros de hilo,
-       con una MEDIANA de 29 unidades.
+     1a vuelta   engordaba en unidades de MUNDO. Las fundas de hilos vecinos se tocaban y el haz
+                 proyectaba una losa maciza del triple de su area. De cerca apagaba el 7,9 % del
+                 contenido con 9.064 px de mancha; de lejos 1,6 % y ninguna.
+     2a vuelta   reborde de 2,5 PIXELES, constante en pantalla. La mancha maciza bajo a 9 px —
+                 pero medido por OSCURECIMIENTO y no por apagado total, seguia velando 123.766 px
+                 con 31/255 de media, y el velo corre a lo largo de cada haz.
+     3a vuelta   salto por instancia = el ancho del propio haz, para que un reborde no alcance a
+                 sus hermanos. 123.766 -> 78.193 px. Mejor, y todavia un velo.
 
-   O sea: casi todo lo que se ve amontonado NO esta amontonado — esta a distintas profundidades y no
-   hay ninguna señal que lo diga. La niebla no puede decirlo: el rango de profundidad de la escena
-   entera es apenas 2,3x entre lo mas cerca y lo mas lejos, asi que cualquier atenuacion por
-   distancia tiene casi nada de recorrido.
+   Lo que lo cerro fue mirar las dos imagenes al lado: sin contorno, el haz verde que cruza por
+   detras del azul aparece ENTERO en vez de con una cuña negra de borde duro comida encima. La
+   premisa era el problema, no la implementacion — un haz de hilos YA es opaco por acumulacion y
+   el buffer de profundidad ya resuelve el cruce; lo unico que agregaba el halo era pintar fondo
+   sobre los huecos ENTRE hilos, que es justo lo que hace que un haz se lea como fibras y no como
+   un caño. La separacion por profundidad la da la atmosfera, que desatura en vez de tapar.
 
-   COMO FUNCIONA: cada hilo se dibuja DOS veces. Primero una vaina mas gorda, del color del fondo,
-   EMPUJADA HACIA ATRAS una distancia fija en espacio de camara; despues el hilo de verdad. La
-   vaina gorda tapa lo que este mas atras que ese empujon y deja un hueco oscuro alrededor del hilo
-   de adelante. Lo que este MAS CERCA que el empujon no se tapa — y eso es justamente lo que salva
-   a los hilos vecinos del mismo haz, que estan a 1,4 unidades unos de otros: con un halo comun se
-   comerian entre si y el haz se volveria una mancha negra con cuatro hilos encima. Por eso el halo
-   tiene que DEPENDER DE LA PROFUNDIDAD y no ser un contorno a secas.
-
-   Y AUN ASI SE LOS COMIA, porque el salto se defendia del vecino de al lado y no del de ATRAS.
-   Los hilos de un mismo haz estan a 1,4 unidades de costado, si — pero un haz gordo mide 58 de
-   punta a punta EN PROFUNDIDAD, o sea cinco veces el salto. El halo del hilo de adelante caia
-   entonces sobre el hilo de atras DEL MISMO HAZ y le masticaba un pozo negro. Medido de cerca:
-   apagaba el 7,9 % del contenido y el 15 % de eso eran manchas macizas, no bordes; de lejos, 1,6 %
-   y ninguna mancha. Por eso no se veia revisando la vista general: el defecto CRECE con el zoom, y
-   es justo donde el usuario estaba mirando.
-
-   PROBE PRIMERO OTRA COSA Y NO PAGO, asi que queda anotado para que nadie la reponga: hacer que
-   solo proyectara la CASCARA del haz (los hilos cerca de la superficie) cambia la imagen pero baja
-   el apagado de 59.696 a 59.363 pixeles — un 0,6 %. El interior no era el que se comia nada.
-
-   LO QUE SI ERA: el halo crecia en unidades de MUNDO. Un hilo de 0,52 con `uGrosor` 3 se vuelve
-   una funda de 1,56, y como los hilos de un haz estan a 2,4 de distancia, las fundas SE TOCAN y el
-   haz entero proyecta una losa maciza del triple de su area sobre todo lo que tenga detras. De
-   lejos esa losa mide menos de un pixel y no se ve; de cerca se come un bocado del haz de atras
-   con borde duro. Eso explica los dos numeros —1,6 % lejos, 7,9 % cerca— y explica por que
-   revisando la vista general no aparecia.
-
-   Un contorno se mide EN PANTALLA, no en el mundo: son dos pixeles y medio de reborde, siempre.
-   Lejos, los hilos caen a menos de un pixel entre si y los rebordes se funden en la silueta del
-   HAZ, que es exactamente el contorno que se buscaba. Cerca, los hilos estan a diez pixeles y el
-   reborde no llega al vecino. La misma linea de codigo hace las dos cosas. */
-const CONTORNO_V = `
-attribute vec3 aCurva; attribute vec4 aTNS; attribute vec4 aDLVF;
-uniform float uPx; uniform float uSalto;
-void main(){
-  float y = position.y + 0.5;
-  // EL REBORDE, EN PIXELES. uPx son las unidades de mundo que mide un pixel a un metro de
-  // profundidad; multiplicado por la profundidad del eje del hilo da el ancho de mundo que hay que
-  // sumarle para que el reborde salga siempre del mismo grosor en pantalla. Y hay que dividirlo
-  // por el radio de la instancia porque el cilindro viene con radio 1 y lo engorda la matriz: sin
-  // eso, un hilo fino recibiria un reborde mas fino, que es justo al reves de lo que hace falta.
-  vec4 eje = modelViewMatrix * instanceMatrix * vec4(0.0, position.y, 0.0, 1.0);
-  float rInst = max(length(instanceMatrix[0].xyz), 1e-4);
-  float k = mix(1.0, aTNS.x, y) + (uPx * max(-eje.z, 1.0)) / rInst;
-  // Un hilo apagado NO proyecta contorno: si lo hiciera, seguiria tapando a la rama que estas
-  // mirando y aislar dejaria de servir — verias un hueco negro delante de lo que querias ver.
-  if (aDLVF.w < 0.5) k = 0.0;
-  vec3 p = vec3(position.x * k, position.y, position.z * k);
-  vec4 wp = instanceMatrix * vec4(p, 1.0);
-  // La panza se aplica IGUAL que en la vaina real. Si no, el contorno no queda concentrico con su
-  // hilo y se ve como una sombra corrida — el mismo error de espacios que ya nos mordio dos veces.
-  wp.xyz += aCurva * sin(y * 3.14159265);
-  vec4 mv = modelViewMatrix * wp;
-  // La camara mira hacia -Z, asi que restar aleja. Este numero ES el invariante del efecto: separa
-  // lo que esta a mas de uSalto por detras y no toca a los vecinos de adentro del haz.
-  mv.z -= uSalto;
-  gl_Position = projectionMatrix * mv;
-}`;
-
-const CONTORNO_F = `
-precision highp float;
-uniform vec3 uFondo;
-void main(){ gl_FragColor = vec4(uFondo, 1.0); }`;
+   EL RECLAMO QUE LO DESTAPO, textual: «se ve negro raro como un overlay de todo, y al moverme de
+   direccion desaparece; es literal a un lado de las ramas». Las tres partes son la firma exacta de
+   un oclusor: pintado con el color del fondo (negro raro), dependiente del punto de vista
+   (desaparece al girar) y pegado al costado de lo que lo proyecta. */
 
 const CUERPO_V = `
 attribute vec3 aColor; attribute vec2 aSF;   // (seleccion, familia)
@@ -618,23 +571,6 @@ export function montar(cfg) {
   const vainas = new THREE.InstancedMesh(gVaina, mVaina, nF);
   vainas.frustumCulled = false; mundo.add(vainas);
 
-  // El contorno comparte la MISMA geometria y el MISMO instanceMatrix que la vaina: son los mismos
-  // hilos, dibujados una vez mas gordos y corridos hacia atras. Compartir el atributo en vez de
-  // copiarlo evita 16.437 matrices duplicadas y, sobre todo, evita que las dos versiones se
-  // desincronicen si algun dia las instancias se recalculan.
-  const PX_CONT = cfg.pxContorno != null ? cfg.pxContorno : 2.5;   // ancho del reborde, EN PIXELES
-  const uCont = {
-    // Se recalcula al redimensionar: el mismo mundo por pixel depende del alto de la ventana.
-    uPx:     { value: 1 },
-    uSalto:  { value: cfg.saltoContorno  != null ? cfg.saltoContorno  : 11.0 },
-    uFondo:  { value: new THREE.Color(cfg.fondo || '#05070d') },
-  };
-  const contorno = new THREE.InstancedMesh(gVaina,
-    new THREE.ShaderMaterial({ vertexShader: CONTORNO_V, fragmentShader: CONTORNO_F,
-      uniforms: uCont, side: THREE.DoubleSide }), nF);
-  contorno.instanceMatrix = vainas.instanceMatrix;
-  contorno.frustumCulled = false; contorno.renderOrder = -1; mundo.add(contorno);
-
   /* ── 2 · los somas: UN CUERPO CELULAR POR NEURONA ───────────────────────────────────────── */
   // Detalle 1 y no 2: son miles, y a este tamaño en pantalla la diferencia entre 80 y 320 caras no
   // se ve — el costo sí.
@@ -762,7 +698,17 @@ export function montar(cfg) {
     // mundo, girar alrededor de una rama muestra su lado iluminado y su lado en sombra, que es
     // exactamente la informacion que faltaba.
     const dd = e.nrad[0] * LUZW[0] + e.nrad[1] * LUZW[1] + e.nrad[2] * LUZW[2];
-    DLVF[i * 4 + 2] = (0.46 + 0.54 * (0.5 + 0.5 * dd)) * (0.80 + 0.20 * e.borde);
+    // DOS TERMINOS, y hacen cosas distintas — juntos son lo que convierte una PANA PLANA en un
+    // cable redondo, que era el reclamo de «la calidad de las neuronas»:
+    //   · OCLUSION DENTRO DEL HAZ: un hilo del centro tiene vecinos en todas las direcciones y le
+    //     llega menos luz que a uno de la superficie. Es cierto y es lo que le da cuerpo — sin
+    //     esto el haz se ve igual de brillante de borde a borde, o sea plano.
+    //   · EL LADO DEL HAZ QUE MIRA A LA LUZ, con la normal RADIAL respecto del eje del haz. El
+    //     `dif` del fragmento ilumina cada hilo por separado y todos son paralelos, asi que da lo
+    //     mismo para todos: no puede redondear el conjunto. Este si.
+    const ao = 0.52 + 0.48 * e.borde * e.borde;
+    const lado = 0.34 + 0.66 * (0.5 + 0.5 * dd);
+    DLVF[i * 4 + 2] = ao * lado;
     TNS[i * 4 + 1] = e.nodos; TNS[i * 4 + 3] = e.nivel;
     DLVF[i * 4] = e.dist; DLVF[i * 4 + 1] = e.largo;
     ACUR[i * 3] = e.curva[0]; ACUR[i * 3 + 1] = e.curva[1]; ACUR[i * 3 + 2] = e.curva[2];
@@ -778,8 +724,13 @@ export function montar(cfg) {
     // del haz, así que se agrupan en un anillo denso al principio de cada sección: eso es un
     // NÚCLEO DE RELEVO, y también es real — los cuerpos celulares de una vía no están
     // desparramados por el tracto, están juntos donde la vía hace relevo.
+    // FUSIFORME, no una bolita. Un soma esferico pegado al arranque de cada eslabon convierte un
+    // hilo fino en un COLLAR DE CUENTAS —se ve clarisimo de cerca, y a esa escala es lo unico que
+    // se mira— porque la esfera mide el doble que el tubo y no comparte ninguna direccion con el.
+    // Un huso alineado con la fibra se lee como un ENGROSAMIENTO de la fibra, que es lo que es; y
+    // ademas es la forma real del cuerpo celular de una neurona de tracto, que es bipolar.
     const rs = e.r * (e.orden === 0 ? 2.1 : 1.8);
-    _m.compose(_p, _q, _s.set(rs, rs, rs));
+    _m.compose(_p, _q, _s.set(rs * 0.64, rs * 1.75, rs * 0.64));
     somas.setMatrixAt(i, _m);
   });
 
@@ -1506,12 +1457,10 @@ export function montar(cfg) {
   }
   // MUNDO POR PIXEL. El FOV de three es VERTICAL, asi que el alto de la ventana es lo que fija
   // cuanto mundo entra en un pixel a una unidad de profundidad. Se recalcula al redimensionar o el
-  // reborde cambiaria de grosor con el tamaño de la ventana.
+  // anillo del foco cambiaria de tamaño con el de la ventana.
   function ajustarPx() {
     const h = Math.max(1, renderer.domElement.clientHeight || innerHeight);
-    const mundoPorPx = (2 * Math.tan((camera.fov * Math.PI) / 360)) / h;
-    uCont.uPx.value = PX_CONT * mundoPorPx;
-    uRet.uPx.value = mundoPorPx;
+    uRet.uPx.value = (2 * Math.tan((camera.fov * Math.PI) / 360)) / h;
   }
   ajustarPx();
 
@@ -1536,7 +1485,7 @@ export function montar(cfg) {
                   BASE_NEURONA, BASE_MEM, BASE_RAM,
                   FAMSEC, get aislado() { return aislado; }, get encuadre0() { return ENCUADRE0; },
                   get cuadros() { return cuadros; },
-                  RAM, PEN_DE, FIB, FIB_SEC, uPulso, uCont, contorno, lanzarPulso, avanzarPulso,
+                  RAM, PEN_DE, FIB, FIB_SEC, uPulso, lanzarPulso, avanzarPulso,
                   get sel() { return sel; },
                   POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco,
                   set _foco(h) { foco = h; },

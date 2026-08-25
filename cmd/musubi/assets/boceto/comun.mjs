@@ -787,7 +787,14 @@ export function destinoDeHilo(secciones) {
 function puntoHilo(s, t, rho, phi0, torsion, e1, e2) {
   const c = enCurva(s, t);
   const ph = phi0 + torsion * t;
-  const co = Math.cos(ph) * rho, si = Math.sin(ph) * rho;
+  // ONDULACION. Los hilos perfectamente rectos y perfectamente equiespaciados se leen como un
+  // TEJIDO A MAQUINA: de cerca el haz parece pana, no tejido. En un fascículo real las fibras se
+  // acercan y se separan de a poco mientras viajan juntas. La fase sale de `phi0`, que ya es la
+  // identidad del hilo dentro del haz, asi que vecinos ondulan desfasados y el haz no respira
+  // entero como un acordeon. Va sobre `rho` y no sobre el eje: una fibra se mueve DENTRO del haz,
+  // no lo desplaza.
+  const rw = rho * (1 + 0.17 * Math.sin(t * 9.4247780 + phi0 * 3.7));
+  const co = Math.cos(ph) * rw, si = Math.sin(ph) * rw;
   return [c[0] + e1[0] * co + e2[0] * si,
           c[1] + e1[1] * co + e2[1] * si,
           c[2] + e1[2] * co + e2[2] * si];
