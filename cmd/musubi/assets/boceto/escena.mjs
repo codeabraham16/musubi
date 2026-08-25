@@ -342,6 +342,7 @@ void main(){
 const SIN_F = `
 precision highp float;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
+uniform float uSinA; uniform float uSinB;
 void main(){
   // Se desvanece en los DOS extremos: un arco de brillo parejo choca contra el botón y se ve como
   // un palo clavado. Naciendo y muriendo tenue, el contacto se lee como contacto.
@@ -351,7 +352,7 @@ void main(){
   // hay tracto en vez de repartirse por toda la pantalla. Medido en la vista general: de los
   // píxeles que tocan, los que llegan a 6/255 de contraste pasan del 21 % al 40 % subiendo la base
   // de 0,035 a 0,075. Antes, subirla convertía la escena en una madeja; ahora dibuja fascículos.
-  float a = (0.075 + 0.22 * vConf + 0.80 * vSel) * extremo;
+  float a = (uSinA + uSinB * vConf + 0.80 * vSel) * extremo;
   gl_FragColor = vec4(vC * (0.5 + 1.6 * vSel), a * vFam);
 }`;
 
@@ -896,6 +897,10 @@ export function montar(cfg) {
     gSin.setAttribute('aSF', new THREE.InstancedBufferAttribute(YSF, 2));
     sinInst = new THREE.InstancedMesh(gSin,
       new THREE.ShaderMaterial({ vertexShader: SIN_V, fragmentShader: SIN_F, transparent: true,
+        // LA PRESENCIA DE LAS RELACIONES ES POR FORMA, no una constante: en «la corona» lo único
+        // que cruza el medio del cuadro son ellas, y con el alfa del núcleo ahí no se vería nada.
+        uniforms: { uSinA: { value: cfg.alfaSinapsis != null ? cfg.alfaSinapsis : 0.075 },
+                    uSinB: { value: cfg.alfaConfianza != null ? cfg.alfaConfianza : 0.22 } },
         blending: THREE.AdditiveBlending, depthWrite: false }), nSeg);
     sinInst.frustumCulled = false; sinInst.renderOrder = 1; mundo.add(sinInst);
     const _u = new THREE.Vector3();
@@ -1528,6 +1533,10 @@ export function montar(cfg) {
                   get sel() { return sel; },
                   POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco,
                   pintarSeleccion, rot, composer, uHov,
+                  // Lo que ESTA forma afirma. `probar` corre fuera de `montar`, asi que no ve la
+                  // configuracion: lo que necesite tiene que viajar por acá. (El cazador de errores
+                  // destapo justamente eso — `cfg is not defined` en pantalla, no en la consola.)
+                  sesgoMax: cfg.sesgoMax === null ? null : (cfg.sesgoMax || 0.35),
                   set _hov(i) { hov = i; uHov.value = i; },
                   // LA CUENTA DE SUBIDAS A LA GPU. `version` de un BufferAttribute sube cada vez
                   // que alguien le pone `needsUpdate`, o sea cada vez que ese buffer se vuelve a
@@ -1681,8 +1690,13 @@ function probar(v) {
     const sy = d1.reduce((a, s) => a + s.dir[1], 0) / Math.max(1, d1.length);
     const sz = d1.reduce((a, s) => a + s.dir[2], 0) / Math.max(1, d1.length);
     const sesgo = Math.hypot(sx, sy, sz);
+    // UNA FORMA QUE NO AFIRMA ESTO NO PUEDE FALLARLO. «Las láminas» crece hacia arriba a propósito
+    // —la profundidad ES la altura— así que exigirle isotropía sería reprobarla por hacer lo que
+    // vino a hacer. Se mide igual y se MUESTRA: pasa de invariante a dato, que no es lo mismo que
+    // esconderlo. Las otras cuatro sí lo afirman y sí lo tienen que cumplir.
+    const sesgoMax = v.sesgoMax === null ? null : (v.sesgoMax || 0.35);
     out.push(['el nucleo no tiene arriba', 'sesgo ' + sesgo.toFixed(2) + ' (un arbol da ~1)',
-              sesgo < 0.35]);
+              sesgoMax === null ? 'dato' : sesgo < sesgoMax]);
 
     // 4 · NAVEGACION. Se mide el DESPLAZAMIENTO REAL de la camara, no que la funcion no tire error.
     const c0 = v.cuadros;

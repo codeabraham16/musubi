@@ -94,32 +94,15 @@
 //   Y probé restringir el contorno a la CÁSCARA del haz: cambia la imagen y baja el apagado de
 //   59.696 a 59.363 píxeles, un 0,6 %. Ninguna de las dos era el problema.
 
-import { cargar, seccionar, colocarNucleo, contarFibras, medirEnredo } from './comun.mjs';
-import { armarRaiz } from './datos.mjs';
-import { montar } from './escena.mjs';
+import { colocarNucleo, medirEnredo } from './comun.mjs';
+import { construir, HEBRA } from './forma.mjs';
 
-const t0 = performance.now();
-const datos = await cargar('./grafo-local.json');
-const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' });
-
-// maxNivel 8 y minCarga 10: medido sobre el cerebro local, da ~440 secciones. Con minCarga 1 el
-// árbol baja hasta la nota suelta y salen miles de tramos de una memoria — la maraña otra vez,
-// pero con más geometría. El tope se DECLARA en la ficha de cada sección hoja («absorbe N»).
-const S = seccionar(raiz, { maxNivel: 8, minCarga: 10 });
-// UNA SOLA FUENTE PARA LA DENSIDAD DE HILOS, y tiene que correr ANTES de colocar: la separación
-// entre hermanas se calcula sobre el RADIO REAL de sus haces, y ese radio sale de `fibras`. Las
-// mismas opciones van después a `montar` — dos conteos distintos separarían las ramas sobre un
-// grosor que después no se dibuja.
-const HILOS = { porMemoria: 6, maxHoja: 22 };
-const HEBRA = { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6 };
-contarFibras(S, HILOS);
 /* ── DOS MÉTRICAS QUE NO DICEN LO MISMO, Y HAY QUE MIRAR LAS DOS ───────────────────────────────
      ENREDO    con cuántos haces AJENOS se cruza un haz en promedio, en el ESPACIO
                (`medirEnredo`). Un cruce real no lo arregla ningún ángulo de cámara: los dos haces
                se leen como una sola cosa desde donde te pares.
      AJENAS %  qué fracción de las celdas de pantalla tiene dos secciones NO emparentadas encima,
-               sobre 12 puntos de vista. Es lo que el ojo ve de golpe — y se mitiga girando, y con
-               girando.
+               sobre 12 puntos de vista. Es lo que el ojo ve de golpe — y se mitiga girando.
 
    Lo que destapó medir el enredo: **183 de los 191 choques —el 96 %— eran entre HERMANAS**, y son
    inevitables mientras nazcan todas del mismo punto. A distancia cero no hay ángulo que separe.
@@ -133,62 +116,23 @@ contarFibras(S, HILOS);
    gruesos en pantalla. Dos cosas más que el barrido refutó: el TROPISMO empeora (el empuje es el
    mismo para todas las hermanas, así que las junta justo después de separarlas) y MENOS curvatura
    separa más que más. */
-colocarNucleo(S, {
-  origen: [0, 0, 0], nucleo: 40, largo: 150, curvatura: 0.12, tropismo: 0, semilla: 11,
-  // `aire` es EL parámetro: cuántos radios de haz de negro se exige entre dos hermanas.
-  aire: 3.0, naciente: 0.85, aperturaMax: 1.30, polarEje: 0.20,
-  // PISO DEL ÁNGULO. `aire` está en radios, así que para dos ramas finas pide un hueco de 2,5
-  // unidades: alcanza para que no se toquen y son menos de dos píxeles en pantalla. El enredo
-  // bajaba y el ojo seguía viendo una sola cosa. Con el piso, ajenas 23,3 → 22,0.
-  polarMin: 0.85,
-  // Los MISMOS que van a `enhebrar`: la separación se mide sobre el grosor que se dibuja.
-  radioHilo: HEBRA.radioHilo, separacion: HEBRA.separacion,
+const { S } = await construir({
+  id: 'a',
+  nota: 'las ramas no se dibujan: son los hilos que pasan por ellas',
+  seccionado: { maxNivel: 8, minCarga: 10 },
+  colocar: (Sec) => colocarNucleo(Sec, {
+    origen: [0, 0, 0], nucleo: 40, largo: 150, curvatura: 0.12, tropismo: 0, semilla: 11,
+    // `aire` es EL parámetro: cuántos radios de haz de negro se exige entre dos hermanas.
+    aire: 3.0, naciente: 0.85, aperturaMax: 1.30, polarEje: 0.20,
+    // PISO DEL ÁNGULO. `aire` está en radios, así que para dos ramas finas pide un hueco de 2,5
+    // unidades: alcanza para que no se toquen y son menos de dos píxeles en pantalla. El enredo
+    // bajaba y el ojo seguía viendo una sola cosa. Con el piso, ajenas 23,3 → 22,0.
+    polarMin: 0.85,
+    // Los MISMOS que van a `enhebrar`: la separación se mide sobre el grosor que se dibuja.
+    radioHilo: HEBRA.radioHilo, separacion: HEBRA.separacion,
+  }),
+  montaje: { camara: { az: 0.55, el: 0.20, min: 8, max: 3000 } },   // sin dist: lo encuadra la caja
 });
-
-const vista = montar({
-  secciones: S, colorDe, titulo: 'memoria',
-  sinapsis: datos.synapses,
-  // UN HILO CADA 6 MEMORIAS. Es la única constante libre de todo esto y define la densidad: con 1
-  // el tronco tendría 2.267 hilos y se vería como una pared sólida; con 30, ocho hilos y volvería
-  // a ser un caño. Con 6 el tronco lleva ~370 y todavía se cuentan de a uno acercándose.
-  // 0,52 de radio y 2,6 de separación: un hilo de 0,30 medía MENOS DE UN PÍXEL a distancia de
-  // encuadre, así que el antialias lo promediaba contra el fondo negro y el haz entero se veía gris.
-  // Es submuestreo, no color — se arregla con hilos más gordos y más juntos, no subiendo el brillo
-  // hasta que se lave.
-  ...HILOS, ...HEBRA,
-  fondo: '#04060e', bloom: 0.80,
-  nivelesPenacho: 3, escalaPenacho: 0.62,
-  camara: { az: 0.55, el: 0.20, min: 8, max: 3000 },   // sin dist: lo encuadra la caja
-});
-
-/* ── la leyenda: quién es cada color, y el conteo que hace auditable el dibujo ─────────────── */
-const N = (x) => x.toLocaleString('es');
-const c = vista.conteos;
-// LO QUE NO ENTRÓ SE DICE. `apretada` marca las bifurcaciones donde el haz padre era más corto que
-// lo que sus hijas necesitaban para no tocarse (bit 1) o donde el ángulo que hacía falta pasaba el
-// tope (bit 2). Callarlas sería afirmar una separación que el dibujo no tiene.
-const apretadas = S.filter((x) => x.apretada).length;
-const leyenda = document.createElement('div');
-leyenda.className = 'leyenda';
-leyenda.innerHTML = `
-  <div class="titulo">El núcleo</div>
-  <div class="sub">las ramas no se dibujan: son los hilos que pasan por ellas</div>
-  ${racimos.slice(0, 8).map((r) => `<div class="r"><i style="background:${r.color}"></i>${
-    r.nombre}${r.detalle ? `<em>${r.detalle}</em>` : ''} <b>${N(r.n)}</b></div>`).join('')}
-  <div class="pie"><span class="cifra">${N(c.hilos)}</span> hilos en el núcleo · <span
-    class="cifra">${N(c.neuronas)}</span> neuronas<br>${N(c.secciones)} haces · ${
-    N(c.ramitas)} terminales · ${N(c.botones)} botones<br>${
-    N(c.sinapsis)} sinapsis en ${N(c.tramosSinapsis)} tramos${
-    c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
-    }${apretadas ? `<br><span class="dim">${N(apretadas)} bifurcaciones sin el aire que piden</span>` : ''
-    }<br><span class="cifra">${N(c.señalables)}</span> se pueden señalar de uno
-    <span class="dim">(los ${N(c.secciones)} halos y las ${N(c.sinapsis)} sinapsis no)</span>
-    <br><span class="dim">el impulso sale de elegir un haz, no de un reloj</span></div>`;
-document.body.appendChild(leyenda);
-
-console.log('[boceto A]', c, ((performance.now() - t0) | 0) + ' ms');
-// Se expone para la verificación por píxeles: pausar y medir necesita poder tocar la escena.
-globalThis.__boceto = vista;
 
 // LA MEDICIÓN DEL ENREDO VA A PEDIDO (`?enredo`): son ~90.000 pares por 64 pruebas segmento a
 // segmento cada uno, varios segundos. Ponerlo en el camino de carga sería pagar el diagnóstico en

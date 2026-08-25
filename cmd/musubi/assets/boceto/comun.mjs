@@ -206,6 +206,15 @@ export function horquilla(dir, pesos, apertura, r) {
  * @returns {{cuna:number[], polar:number[], acimut:number[], escalon:number[],
  *            orden:number[], apretada:number}}  arrays indexados como `hijas`
  */
+/** anilloDe: el paso angular que `bifurcar` decidió entre dos hermanas vecinas. Es lo que el
+ *  abanico plano necesita conservar, y sale del propio reparto para no inventar un segundo
+ *  número que después divergiría del que separa en volumen. */
+export function anilloDe(B) {
+  let mx = 0;
+  for (let i = 0; i < B.polar.length; i++) if (B.polar[i] > mx) mx = B.polar[i];
+  return mx || 0.5;
+}
+
 export function bifurcar(padre, hijas, opciones) {
   const o = opciones || {};
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -472,6 +481,97 @@ export function colocarLaminas(secciones, opciones) {
   return secciones;
 }
 
+/**
+ * colocarCorona: las hojas repartidas parejo sobre un anillo, el árbol adentro, el medio vacío.
+ *
+ * LAS OTRAS CUATRO FORMAS RESPONDEN «¿DE QUIÉN ES ESTO?». Ésta responde «¿QUÉ SE HABLA CON QUÉ?»,
+ * y para eso hay que invertir la prioridad: la ramificación pasa a ser el andamio y las relaciones
+ * pasan a ser el dibujo. El truco es geométrico y viejo —es el diagrama de aristas agrupadas de
+ * Holten, el mismo del que ya sale `rutaSinapsis`— y consiste en dos decisiones:
+ *
+ *   1. LAS HOJAS SE REPARTEN PAREJO SOBRE UN ANILLO, en orden de recorrido. Parejo, y ahí está la
+ *      diferencia con «el corte»: allá una hoja cae donde la mandó su rama, así que los actores
+ *      grandes ocupan más borde y los chicos se apiñan. Acá cada memoria terminal tiene el mismo
+ *      pedazo de circunferencia, y el orden de recorrido garantiza que las hermanas queden juntas
+ *      — o sea que el anillo sigue contando la jerarquía aunque esté aplanado.
+ *   2. EL MEDIO QUEDA VACÍO. Lo único que lo cruza son las relaciones, porque una relación entre
+ *      dos hojas lejanas sube hasta su ancestro común, que está cerca del centro. Ver el hueco.
+ *
+ * LO QUE SE PAGA: la profundidad deja de ser distancia recorrida y pasa a ser posición radial, así
+ * que dos ramas de largos muy distintos se dibujan iguales. Es el mismo precio que las láminas.
+ */
+export function colocarCorona(secciones, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const r = rng(num(o.semilla, 29) >>> 0);
+  const R = num(o.radio, 265);
+  const hueco = num(o.hueco, 62);
+  const curvatura = num(o.curvatura, 0.10);
+  // Un desnivel MÍNIMO por nivel: perfectamente plano, dos ramas que se cruzan comparten píxeles
+  // exactos y el z-fighting hace parpadear el haz entero. Con medio radio de haz de desnivel se
+  // sigue leyendo como un plano y el cruce se resuelve.
+  const relieve = num(o.relieve, 7);
+
+  // 1 · LAS HOJAS EN ORDEN DE RECORRIDO. El orden es lo que mantiene juntas a las hermanas: con las
+  //     hojas mezcladas, el anillo sería un listado alfabético y la jerarquía se perdería del todo.
+  const hojas = [];
+  (function dfs(i) {
+    const s = secciones[i];
+    if (!s.hijos.length) { hojas.push(i); return; }
+    for (const h of s.hijos) dfs(h);
+  })(0);
+  const L = Math.max(1, hojas.length);
+  let maxNivel = 1;
+  for (const s of secciones) if (s.nivel > maxNivel) maxNivel = s.nivel;
+
+  const ang = new Float64Array(secciones.length);
+  hojas.forEach((i, k) => { ang[i] = ((k + 0.5) / L) * Math.PI * 2; });
+  // 2 · el ángulo de un nodo interno es el promedio de los de sus hijas. El recorrido es en
+  //     preorden, así que toda hija tiene índice mayor que su padre: yendo de atrás para adelante
+  //     una sola pasada alcanza, igual que en `contarFibras`.
+  for (let i = secciones.length - 1; i >= 0; i--) {
+    const s = secciones[i];
+    if (!s.hijos.length) continue;
+    let a = 0;
+    for (const h of s.hijos) a += ang[h];
+    ang[i] = a / s.hijos.length;
+  }
+
+  // 3 · el radio: TODA hoja va al anillo, pase por donde pase. Es lo que hace que el borde esté
+  //     parejo; los internos se reparten entre el hueco y el anillo por profundidad.
+  const radio = (s) => (s.hijos.length
+    ? hueco + (R - hueco) * ((s.nivel - 1) / Math.max(1, maxNivel - 1))
+    : R);
+  const pos = (s) => (s.idx === 0 ? [0, 0, 0]
+    : [Math.cos(ang[s.idx]) * radio(s), (r() - 0.5) * relieve, Math.sin(ang[s.idx]) * radio(s)]);
+
+  const raiz = secciones[0];
+  raiz.a = [0, -hueco * 0.22, 0];
+  raiz.b = [0, hueco * 0.22, 0];
+  raiz.dir = [0, 1, 0];
+  raiz.largo = hueco * 0.44;
+  raiz.curva = [0, 0, 0];
+  raiz.dist = raiz.largo;
+
+  (function bajar(s) {
+    for (const hi of s.hijos) {
+      const h = secciones[hi];
+      h.a = s.b.slice();
+      h.b = pos(h);
+      const d = sub(h.b, h.a);
+      h.largo = Math.hypot(d[0], d[1], d[2]) || 0.001;
+      h.dir = norm(d);
+      // La panza la da `ladear` como en todas las formas: sin ella los tramos son cuerdas rectas y
+      // el anillo se ve como un diagrama de nodos y aristas, no como tejido.
+      h.curva = mul(ladear(null, h.dir, r), h.largo * curvatura);
+      h.dist = (s.dist || 0) + h.largo;
+      bajar(h);
+    }
+  })(raiz);
+
+  return secciones;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
    PARTE 1b · EL NÚCLEO — dejar de ser un árbol
    ═══════════════════════════════════════════════════════════════════════════════════════════ */
@@ -508,6 +608,46 @@ export function marco(dir) {
  * el reparto más separado que existe para k puntos sin privilegiar ningún eje. Con tres actores
  * salen tres brazos a ~109° — la forma de un ganglio, no la de un árbol.
  */
+/**
+ * marcoPlano: como `marco`, pero el PRIMER eje es siempre horizontal.
+ *
+ * `marco` devuelve dos perpendiculares cualesquiera, y para el volumen da igual cuáles. Para
+ * aplanar NO da igual: hay que saber cuál de los dos ejes sale del plano para poder achatar ése y
+ * sólo ése. `dir × Y` es perpendicular a Y por construcción, o sea horizontal; el otro se lleva
+ * toda la componente vertical.
+ */
+export function marcoPlano(dir) {
+  const d = norm(dir);
+  let u1 = [d[2], 0, -d[0]];                       // = d × (0,1,0)
+  const l = Math.hypot(u1[0], u1[1], u1[2]);
+  // Si la rama apunta casi vertical no hay horizontal privilegiada: cualquiera sirve y se elige
+  // una fija para que el dibujo siga siendo determinista.
+  u1 = l < 1e-6 ? [1, 0, 0] : [u1[0] / l, u1[1] / l, u1[2] / l];
+  const u2 = [d[1] * u1[2] - d[2] * u1[1], d[2] * u1[0] - d[0] * u1[2], d[0] * u1[1] - d[1] * u1[0]];
+  return [u1, u2];
+}
+
+/**
+ * dirDeReparto: hacia dónde sale el actor `k` de `m`, según la forma elegida.
+ *
+ *   esfera   espiral de Fibonacci: ningún eje privilegiado. No hay arriba, y por eso deja de
+ *            leerse como un árbol. Es la forma del boceto A.
+ *   anillo   una corona en el plano: los actores salen hacia afuera desde un círculo y el medio
+ *            queda VACÍO, así que las relaciones lo cruzan y pasan a ser lo que se mira.
+ *   plano    un abanico sobre el plano: todo cae en una lámina, como un corte teñido. No hay
+ *            oclusión entre ramas, que es lo que lo hace legible de un vistazo.
+ */
+export function dirDeReparto(reparto, k, m, fase) {
+  if (reparto === 'anillo' || reparto === 'plano') {
+    const th = (k / Math.max(1, m)) * Math.PI * 2 + fase;
+    return [Math.cos(th), 0, Math.sin(th)];
+  }
+  const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;
+  const rad = Math.sqrt(Math.max(0, 1 - y * y));
+  const th = k * 2.399963 + fase;
+  return norm([Math.cos(th) * rad, y, Math.sin(th) * rad]);
+}
+
 export function colocarNucleo(secciones, opciones) {
   const o = opciones || {};
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -560,6 +700,27 @@ export function colocarNucleo(secciones, opciones) {
   const nucleo = num(o.nucleo, 30);
   const origen = o.origen || [0, 0, 0];
   const fase = num(o.fase, 0.7);
+  /* ── LA FORMA. Tres perillas, y las tres cambian el DIBUJO sin tocar el DATO ───────────────
+     La conservación de hilos, el reparto de ranuras y las cuñas de `bifurcar` siguen mandando
+     igual en todas: lo que cambia es hacia dónde crece el tejido. Por eso son variantes de lo
+     mismo y no cinco dibujos distintos.
+
+       reparto   de dónde salen los actores: esfera · anillo · plano
+       plano     true = todo el tejido cae en una lámina. Es un interruptor y NO un continuo: los
+                 valores intermedios mezclan dos esquemas de reparto distintos —la rueda 3D y el
+                 abanico plano— y mezclarlos hace que dos hermanas se pisen. Medido: con 0,5 el
+                 ángulo mínimo entre hermanas daba 0,000
+       campo     0..1, cuánto tira el crecimiento hacia una CÁSCARA de radio `cascara`: las hojas
+                 terminan en la superficie y los tractos quedan adentro, que es como está armado
+                 un cerebro de verdad — corteza afuera, sustancia blanca adentro */
+  const reparto = o.reparto || 'esfera';
+  const aplanado = o.plano ? 1 : 0;
+  const campo = Math.max(0, Math.min(1, num(o.campo, 0)));
+  const cascara = num(o.cascara, 0);
+  // Medio abanico: 1,25 rad a cada lado del eje del padre. Mas que eso y las hermanas de los
+  // extremos salen para atras, cruzando el propio tejido del que nacieron.
+  const apMaxPlano = num(o.aperturaPlana, 1.25);
+  const anillo0 = num(o.anillo, 0);
 
   const raiz = secciones[0];
   // EL NÚCLEO ES UN CUERPO, NO UN TRAMO. Se le da un largo corto y un eje cualquiera: lo que se ve
@@ -575,13 +736,16 @@ export function colocarNucleo(secciones, opciones) {
   const m = hijos.length || 1;
   hijos.forEach((hi, k) => {
     const h = secciones[hi];
-    // FIBONACCI SOBRE LA ESFERA: la altura se reparte pareja en [-1,1] y el ángulo avanza el
-    // áureo. Ningún eje queda privilegiado, que es exactamente lo que hay que romper.
-    const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;
-    const rad = Math.sqrt(Math.max(0, 1 - y * y));
-    const th = k * 2.399963 + fase;
-    const d = norm([Math.cos(th) * rad, y, Math.sin(th) * rad]);
-    const l = L0 * (0.60 + 0.55 * Math.cbrt(h.carga / Math.max(1, raiz.carga)));
+    const d = dirDeReparto(reparto, k, m, fase);
+    // CON CORONA, EL ACTOR ES UN RAYO QUE LLEGA HASTA ELLA. Arrancarlo directamente sobre el anillo
+    // dejaba al núcleo flotando solo en el medio, sin nada que lo uniera a nadie: el dibujo decía
+    // que los actores no salen de ningún lado. El radio lo recorre el haz, y recién ahí ramifica.
+    let l = anillo0 > 0 ? Math.max(L0 * 0.35, anillo0 - nucleo * 0.55)
+                        : L0 * (0.60 + 0.55 * Math.cbrt(h.carga / Math.max(1, raiz.carga)));
+    // EL ACTOR TAMPOCO PASA LA CÁSCARA. Sin esto, un tramo de nivel 1 mas largo que el radio la
+    // atraviesa de entrada y todo su subarbol nace ya afuera: con cascara 110 y actores de 126, el
+    // 73 % de las hojas quedaba fuera de la superficie que dice contenerlas.
+    if (campo > 0 && cascara > 0) l = Math.min(l, Math.max(L0 * 0.22, cascara - nucleo * 0.55));
     h.dir = d; h.largo = l;
     // Nace en la SUPERFICIE del núcleo, no en su centro: el haz sale del cuerpo, no lo atraviesa.
     h.a = add(origen, mul(d, nucleo * 0.55));
@@ -617,8 +781,15 @@ export function colocarNucleo(secciones, opciones) {
        `ang` del eje, la hija esta como mucho a `ang + anillo` <= alfa. No hace falta recortar nada. */
     const B = bifurcar(s, hijas, { aire, naciente, aperturaMax, polarEje, polarMin });
     s.apretada = B.apretada;                    // ← se declara, no se corrige a escondidas
+    // El abanico plano tiene su propio apreton, y va al MISMO bit para que la leyenda lo cuente
+    // junto con los demas: lo que el usuario tiene que saber es cuantas bifurcaciones no consiguen
+    // el aire que piden, no por cual de los dos motivos.
+    if (aplanado && Math.min(anilloDe(B), apMaxPlano / Math.max(1, Math.ceil((k - 1) / 2)))
+        < anilloDe(B) - 1e-9) s.apretada |= 1;
 
-    const [u1, u2] = marco(s.dir);
+    // Con `aplanado` hay que saber CUÁL de los dos ejes sale del plano; sin aplanar da igual y se
+    // usa el marco barato de siempre.
+    const [u1, u2] = aplanado > 0 ? marcoPlano(s.dir) : marco(s.dir);
     /* ── LAS TIAS ────────────────────────────────────────────────────────────────────────────
        Separar hermanas no alcanza: la rama que sale aca tambien se puede meter en el volumen de
        una HERMANA DEL PADRE, y ese choque no lo ve nadie desde adentro de la bifurcacion. La rueda
@@ -646,7 +817,47 @@ export function colocarNucleo(secciones, opciones) {
 
     s.hijos.forEach((hi, i) => {
       const h = secciones[hi];
-      let d2 = enCono(s.dir, u1, u2, B.polar[i], fase0 + B.acimut[i]);
+      /* EN UN PLANO LA RUEDA SE VUELVE ABANICO, y no alcanza con plegar el acimut a 0 o π. Lo
+         probé y lo midió el test: con cuatro hijas, los acimutes 0 y 2π/3 pliegan LOS DOS a 0 y,
+         como comparten `anillo` de polar, salen en la MISMA dirección exacta. El ángulo mínimo
+         entre hermanas daba 0,000 — la maraña entera de vuelta, disfrazada de aplanado.
+
+         El abanico reparte las k hijas a lado y lado del eje del padre conservando `anillo` entre
+         vecinas, que es justo la separación que `bifurcar` calculó que hacía falta. La más gorda
+         va al medio (el orden ya viene por grosor) y las demás alternan hacia afuera, que es cómo
+         se ve una bifurcación real vista de plano. */
+      const q = B.orden.indexOf(i);
+      const t = (q % 2 === 0 ? 1 : -1) * Math.ceil(q / 2);   // 0, +1, -1, +2, -2, …
+      // EL ABANICO TIENE TOPE, y sin el se enrolla: con 72 hermanas y un paso de 0,9 rad el
+      // abanico pedia 32 radianes, daba la vuelta, y dos hermanas terminaban a 0,0008 una de otra
+      // — o sea encimadas. Lo destapo el test, no el ojo. Cuando no entra, se APRIETA y se
+      // declara, igual que en volumen: callarlo seria afirmar una separacion que no existe.
+      const brazos = Math.max(1, Math.ceil((k - 1) / 2));
+      const pasoP = Math.min(anilloDe(B), apMaxPlano / brazos);
+      const po = aplanado ? Math.abs(t) * pasoP : B.polar[i];
+      const ac = aplanado ? (t >= 0 ? 0 : Math.PI) : B.acimut[i];
+      // Y LA RUEDA NO PUEDE GIRAR CUANDO SE APLANA. `fase0` es el giro que elige la busqueda de
+      // tias, y girar es gratis en volumen; en un plano NO lo es, porque saca la separacion fuera
+      // del plano y despues el achatado la borra. Medido: con el giro puesto, aplanado 1 dejaba el
+      // angulo minimo entre hermanas en 0,000 — o sea la maraña entera de vuelta.
+      let d2 = enCono(s.dir, u1, u2, po, fase0 * (1 - aplanado) + ac);
+      if (aplanado > 0) {
+        // Y lo que quede fuera del plano se achata al final: `u2` es el eje vertical del marco.
+        const fy = d2[1] * (1 - aplanado);
+        d2 = norm([d2[0], fy, d2[2]]);
+      }
+      if (campo > 0 && cascara > 0) {
+        // LA CÁSCARA, y es un ATRACTOR en los dos sentidos: adentro empuja hacia afuera, afuera
+        // tira hacia adentro. Sólo empujando —lo primero que probé— las hojas quedaban repartidas
+        // entre 160 y 230 en vez de sobre la superficie: la dispersión bajaba de 35 a 25 y nada
+        // más, porque los largos se achican geométricamente y muchas ramas nunca llegan. Tirando
+        // de los dos lados, el tejido converge a la superficie y el interior queda para el tracto,
+        // que es de lo que trata esta forma.
+        const rv = sub(s.b, origen), rl = Math.hypot(rv[0], rv[1], rv[2]) || 1;
+        const ur = mul(rv, 1 / rl);
+        const e = (cascara - rl) / cascara;      // >0 adentro · <0 afuera
+        d2 = norm(add(d2, mul(ur, campo * Math.max(-1, Math.min(1, e * 1.8)))));
+      }
       if (tropismo > 0 && h.nivel >= 2) {
         const rv = sub(s.b, origen), rl = Math.hypot(rv[0], rv[1], rv[2]);
         if (rl > 0.001) {
@@ -654,11 +865,29 @@ export function colocarNucleo(secciones, opciones) {
           d2 = norm(add(d2, mul(mul(rv, 1 / rl), t)));
         }
       }
-      const l = hijas[i].largo * B.escalon[i];
+      let l = hijas[i].largo * B.escalon[i];
+      // DE DÓNDE SALE. La hija no nace donde muere el padre —la hendidura sináptica sigue intacta—
+      // ni todas en el mismo lugar, que es lo que cambió con `bifurcar`.
+      const cuna = enCurva(s, B.cuna[i]);
+      /* Y CON CÁSCARA, EL LARGO NO LA PASA. Torcer la dirección no alcanza: un tramo largo se pasa
+         antes de que la próxima bifurcación pueda corregir. Escalarlo en proporción tampoco —lo
+         probé— porque la cuna no está en el centro: acortar el tramo a la mitad no acerca el punto
+         a la mitad. Lo que hace falta es DÓNDE CORTA el rayo a la esfera, que es una cuadrática y
+         da el largo exacto. El precio se declara: en esta forma el largo deja de ser distancia
+         recorrida. */
+      if (campo > 0 && cascara > 0) {
+        const b0 = sub(cuna, origen);
+        const bd = b0[0] * d2[0] + b0[1] * d2[1] + b0[2] * d2[2];
+        const bb = b0[0] * b0[0] + b0[1] * b0[1] + b0[2] * b0[2];
+        const disc = bd * bd - (bb - cascara * cascara);
+        if (disc >= 0) {
+          // 1,05 porque la cuna se corre otro 5 % del largo antes de arrancar el tramo.
+          const t = (-bd + Math.sqrt(disc)) / 1.05;
+          if (t > 0 && t < l) l = Math.max(l * 0.22, t);
+        }
+      }
       h.dir = d2; h.largo = l;
-      // LA CUNA: la hija no nace donde muere el padre —la hendidura sinaptica sigue intacta— ni
-      // todas en el mismo lugar, que es lo que cambio.
-      h.a = add(enCurva(s, B.cuna[i]), mul(d2, l * 0.05));
+      h.a = add(cuna, mul(d2, l * 0.05));
       h.b = add(h.a, mul(d2, l));
       const bow = ladear(curvaPadre, d2, r);
       h.curva = mul(bow, l * curvatura);

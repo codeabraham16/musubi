@@ -17,16 +17,8 @@
 // LO QUE SE PAGA, y hay que decirlo: pierde lo orgánico. Se parece más a un tejido cultivado en
 // placa que a tejido vivo. A cambio, la pregunta «¿de qué cuelga esto?» se contesta sin buscar.
 
-import { cargar, seccionar, colocarLaminas, ALTURA_LAMINA } from './comun.mjs';
-import { armarRaiz } from './datos.mjs';
-import { montar } from './escena.mjs';
-
-const t0 = performance.now();
-const datos = await cargar('./grafo-local.json');
-const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' });
-
-const S = seccionar(raiz, { maxNivel: 6, minCarga: 12 });
-colocarLaminas(S, { paso: 46, radioBase: 34, curvatura: 0.13, radioHoja: 0.30, semilla: 23 });
+import { colocarLaminas, ALTURA_LAMINA } from './comun.mjs';
+import { construir } from './forma.mjs';
 
 /* ── los anillos de Sholl: la regla contra la que se lee la profundidad ─────────────────────── */
 function anillos(mundo, secciones, THREE) {
@@ -47,10 +39,19 @@ function anillos(mundo, secciones, THREE) {
   }
 }
 
-const vista = montar({
-  secciones: S, colorDe, titulo: 'memoria', ornamento: anillos,
-  fondo: '#05070e', niebla: 0.0009,
-  camara: { az: 0.7, el: 0.40, min: 14, max: 2600 },    // sin dist: lo encuadra la caja
+const { vista, S } = await construir({
+  id: 'b',
+  nota: 'la profundidad es la altura: todo lo del nivel N vive en la lámina N',
+  seccionado: { maxNivel: 6, minCarga: 12 },
+  colocar: (Sec) => colocarLaminas(Sec, {
+    paso: 46, radioBase: 34, curvatura: 0.13, radioHoja: 0.30, semilla: 23 }),
+  montaje: {
+    ornamento: anillos, camara: { az: 0.7, el: 0.40, min: 14, max: 2600 },
+    // ESTA FORMA NO AFIRMA QUE NO TIENE ARRIBA: crece hacia arriba a propósito, porque la
+    // profundidad ES la altura. El sesgo se sigue midiendo y se muestra como dato — declararlo no
+    // aplicable no es lo mismo que esconderlo.
+    sesgoMax: null,
+  },
 });
 
 /* ── el selector de lámina: «moverse entre ramas» sin tocar el mouse ───────────────────────── */
@@ -60,7 +61,7 @@ for (let nv = 0; nv <= maxNivel; nv++) porNivel.push(S.filter((s) => s.nivel ===
 
 const sel = document.createElement('div');
 sel.className = 'laminas';
-sel.innerHTML = `<div class="t">lámina</div>` + porNivel.map((ss, nv) =>
+sel.innerHTML = '<div class="t">lámina</div>' + porNivel.map((ss, nv) =>
   `<button data-nv="${nv}">${nv}<span>${ss.length}</span></button>`).join('');
 document.body.appendChild(sel);
 sel.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
@@ -72,18 +73,3 @@ sel.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => 
   let mejor = ss[0]; for (const s of ss) if (s.carga > mejor.carga) mejor = s;
   vista.elegir(mejor.idx);
 }));
-
-const leyenda = document.createElement('div');
-leyenda.className = 'leyenda';
-leyenda.innerHTML = `
-  <div class="titulo">Boceto B · Las láminas</div>
-  <div class="sub">la profundidad es la posición: nivel N ⇒ lámina N</div>
-  ${racimos.slice(0, 7).map((r) => `<div class="r"><i style="background:${r.color}"></i>${
-    r.nombre} <b>${r.n.toLocaleString('es')}</b></div>`).join('')}
-  <div class="pie">${datos.neurons.length.toLocaleString('es')} memorias · ${
-    vista.conteos.secciones} secciones-neurona · ${vista.conteos.nodos} nodos de Ranvier · ${
-    vista.conteos.botones.toLocaleString('es')} botones</div>`;
-document.body.appendChild(leyenda);
-
-console.log('[boceto B]', vista.conteos, ((performance.now() - t0) | 0) + ' ms');
-globalThis.__boceto = vista;

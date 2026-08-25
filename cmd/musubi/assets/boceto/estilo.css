@@ -230,3 +230,37 @@ body::after {
 }
 .ficha .elegido b { font-family: var(--sans); font-size: 12.5px; font-weight: 620; letter-spacing: 0 }
 .ficha .elegido .d, .tip .d { color: var(--apagado); font-size: 10.5px }
+
+/* ── EL CONMUTADOR DE FORMAS ──────────────────────────────────────────────────────────────────
+   Cinco variantes que no se pueden comparar no son cinco opciones: son cinco páginas. La barra
+   vive arriba al centro, que es la única franja que ningún panel usa, y dice el NOMBRE y la
+   apuesta de cada una — un «a b c d e» obligaría a abrirlas todas para saber cuál es cuál. */
+.formas {
+  position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 12; display: flex; gap: 4px;
+  padding: 4px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--hilo);
+  backdrop-filter: blur(9px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .45);
+}
+.formas a {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 5px 11px 6px; border-radius: 8px;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background .14s, border-color .14s;
+}
+.formas a b {
+  font: 620 12px/1.2 var(--sans); letter-spacing: .01em; color: var(--tinta-2);
+}
+.formas a span { font: 400 10px/1.15 var(--sans); color: var(--tenue); }
+.formas a:hover { background: rgba(106, 168, 255, .10); }
+.formas a:hover b { color: var(--tinta); }
+.formas a.hoy {
+  background: rgba(106, 168, 255, .14);
+  border-color: rgba(106, 168, 255, .48);
+}
+.formas a.hoy b { color: var(--acento); }
+.formas a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+/* En una ventana angosta la barra se comería el ancho: se queda el nombre y se va la apuesta. */
+@media (max-width: 1100px) { .formas a span { display: none; } }

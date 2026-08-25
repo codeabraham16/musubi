@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
-         destinoDeHilo, pasoMezcla, rutaSinapsis } from './comun.mjs';
+         destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -82,6 +82,12 @@ const ganglio = () => ({
 });
 
 const OPC_HILOS = { porMemoria: 6, maxHoja: 22 };
+/** prep0: seccionado y contado, SIN colocar. Cada forma coloca a su manera y sobre lo mismo. */
+function prep0() {
+  const S = seccionar(ganglio(), { maxNivel: 8, minCarga: 10 });
+  contarFibras(S, OPC_HILOS);
+  return S;
+}
 const OPC_HEBRA = { radioHilo: 0.3, separacion: 3.4, largoNeurona: 17, torsion: 0.6 };
 /** prep: el camino completo del boceto A — seccionar, contar hilos, colocar en el núcleo. */
 function prep(opc) {
@@ -473,4 +479,118 @@ test('B26 · con agrupamiento la relación SE DESVÍA de la cuerda recta', () =>
   // ruta llega a ~7,7. Con el agrupamiento apagado da 0. Va en 3.
   assert.ok(desvio(0.86) > 3,
     `con beta 0,86 se desvía ${desvio(0.86).toFixed(2)}: la relación sigue siendo una cuerda`);
+});
+
+
+/* ── LAS CINCO FORMAS ─────────────────────────────────────────────────────────────────────────
+   Las variantes cambian HACIA DÓNDE crece el tejido, no qué se dibuja. Cada una tiene una promesa
+   propia, y una promesa que no se puede ver fallar es una decoración. */
+
+const ang3 = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+const hojasDe = (S) => S.filter((s) => !s.hijos.length);
+/** El ángulo mínimo entre dos hermanas, sobre todo el árbol. Es lo que se pierde al aplanar mal. */
+const minHermanas = (S) => {
+  let m = Math.PI;
+  for (const s of S) {
+    if (s.hijos.length < 2) continue;
+    for (let i = 0; i < s.hijos.length; i++) {
+      for (let j = i + 1; j < s.hijos.length; j++) {
+        m = Math.min(m, ang3(S[s.hijos[i]].dir, S[s.hijos[j]].dir));
+      }
+    }
+  }
+  return m;
+};
+
+test('B27 · LA CORONA pone toda hoja en el anillo, y parejo', () => {
+  const S = prep0();
+  colocarCorona(S, { radio: 265, hueco: 62, semilla: 29 });
+  const hs = hojasDe(S);
+  assert.ok(hs.length > 50, `el fixture da ${hs.length} hojas y hacen falta más`);
+  // 1 · TODAS en el anillo. Es lo que distingue esta forma del corte: allá la hoja cae donde la
+  //     mandó su rama, acá el borde está parejo pase lo que pase con la jerarquía.
+  // Y CONTRA EL RADIO QUE SE PIDIÓ, no sólo entre ellas: comparando las hojas nada más, mandarlas
+  // a todas a otro radio pasa el test igual — el banco lo marcó VACUO por exactamente eso.
+  const rs = hs.map((s) => Math.hypot(s.b[0], s.b[2]));
+  const fuera = rs.filter((x) => Math.abs(x - 265) > 1e-6).length;
+  assert.equal(fuera, 0,
+    `${fuera} hojas fuera del anillo de 265 (van de ${Math.min(...rs).toFixed(1)} a ${Math.max(...rs).toFixed(1)})`);
+  // 2 · y a PASOS IGUALES. Sin esto, «parejo» sería una intención y no una propiedad.
+  const th = hs.map((s) => Math.atan2(s.b[2], s.b[0])).sort((a, b) => a - b);
+  const ds = []; for (let i = 1; i < th.length; i++) ds.push(th[i] - th[i - 1]);
+  const esperado = (2 * Math.PI) / hs.length;
+  assert.ok(Math.max(...ds) - Math.min(...ds) < esperado * 0.02,
+    `el paso angular va de ${Math.min(...ds).toFixed(5)} a ${Math.max(...ds).toFixed(5)}`);
+});
+
+test('B28 · y un subárbol ocupa un arco CONTIGUO: las hermanas no se mezclan', () => {
+  // El anillo aplana la jerarquía, así que lo único que la sigue contando es el ORDEN. Con las
+  // hojas mezcladas sería un listado y no un árbol.
+  const S = prep0();
+  colocarCorona(S, { radio: 265, hueco: 62, semilla: 29 });
+  const orden = new Map();
+  const hs = hojasDe(S)
+    .map((s) => ({ i: s.idx, th: Math.atan2(s.b[2], s.b[0]) }))
+    .sort((a, b) => a.th - b.th);
+  hs.forEach((h, k) => orden.set(h.i, k));
+  const total = hs.length;
+  // las hojas de cada subárbol, por recorrido
+  const bajo = (i, acc) => {
+    const s = S[i];
+    if (!s.hijos.length) { acc.push(orden.get(i)); return acc; }
+    for (const h of s.hijos) bajo(h, acc);
+    return acc;
+  };
+  let peor = null;
+  for (const s of S) {
+    if (!s.hijos.length || s.idx === 0) continue;
+    const ks = bajo(s.idx, []).sort((a, b) => a - b);
+    // CONTIGUO EN UN CÍRCULO ES MÓDULO 2π, y el test tuvo que aprenderlo: el subárbol que se sienta
+    // sobre el ángulo cero aparece partido en dos al ordenar por ángulo, y eso NO es un defecto —
+    // es la costura. Se permite exactamente un salto, y sólo si el conjunto toca las dos puntas.
+    const huecos = []; for (let i = 1; i < ks.length; i++) huecos.push(ks[i] - ks[i - 1]);
+    let saltos = huecos.filter((h) => h > 1).length;
+    if (saltos === 1 && ks[0] === 0 && ks[ks.length - 1] === total - 1) saltos = 0;
+    if (saltos > 0 && (peor === null || saltos > peor.saltos)) peor = { idx: s.idx, saltos, n: ks.length };
+  }
+  assert.equal(peor, null,
+    peor && `la sección ${peor.idx} tiene sus ${peor.n} hojas partidas en ${peor.saltos + 1} arcos`);
+});
+
+test('B29 · APLANAR no junta hermanas', () => {
+  // Es LA trampa de esta forma: achatar la rueda de hijas manda a dos hermanas a la misma
+  // dirección y devuelve la maraña, disfrazada de corte prolijo. Medido sobre este fixture:
+  //     con el abanico plano   0,019 rad de separación mínima
+  //     con el paso en cero    0,000                        ← el sabotaje de este test
+  // El umbral va en 0,006: bien arriba del roto y bien abajo del real.
+  const S = prep0();
+  colocarNucleo(S, { origen: [0, 0, 0], nucleo: 34, largo: 150, semilla: 11,
+    reparto: 'plano', plano: true, aire: 3, polarMin: 0.9, radioHilo: 0.52, separacion: 2.60 });
+  // 1 · aplana de verdad
+  let maxY = 0;
+  for (const s of S) if (s.idx !== 0) maxY = Math.max(maxY, Math.abs(s.dir[1]));
+  assert.ok(maxY < 0.02, `hay ramas a ${maxY.toFixed(3)} fuera del plano`);
+  // 2 · y NO junta
+  const m = minHermanas(S);
+  assert.ok(m > 0.006, `dos hermanas quedaron a ${m.toFixed(5)} rad: es el mismo punto`);
+});
+
+test('B30 · LA CÁSCARA deja las hojas EN la superficie', () => {
+  // La promesa de «la corteza» es que las memorias quedan afuera y adentro sólo hay tracto. Sin
+  // acortar el tramo al punto donde el rayo corta la esfera, el campo tuerce pero no alcanza:
+  //     sin campo    13 % de las hojas a menos del 12 % de la cáscara
+  //     con campo    96 %                                              ← lo que se afirma
+  const arma = (campo) => {
+    const S = prep0();
+    colocarNucleo(S, { origen: [0, 0, 0], nucleo: 34, largo: 110, semilla: 11,
+      campo, cascara: 150, aire: 3, polarMin: 0.85, radioHilo: 0.52, separacion: 2.60 });
+    const rs = hojasDe(S).map((s) => Math.hypot(s.b[0], s.b[1], s.b[2]));
+    return rs.filter((x) => Math.abs(x - 150) < 150 * 0.12).length / rs.length;
+  };
+  // CONTROL: sin campo tiene que dar MAL. Sin esto el test pasaría igual con un árbol que ya
+  // naciera del tamaño de la cáscara, que es la otra manera de que el número salga bien.
+  const sin = arma(0);
+  assert.ok(sin < 0.30, `sin campo ya da ${(100 * sin).toFixed(0)} %: el fixture no prueba nada`);
+  const con = arma(1);
+  assert.ok(con > 0.80, `con campo sólo el ${(100 * con).toFixed(0)} % llega a la cáscara`);
 });

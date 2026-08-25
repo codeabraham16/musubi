@@ -47,12 +47,22 @@ cd cmd/musubi/assets/boceto && python -m http.server 7731
 # → http://127.0.0.1:7731/boceto-a.html
 ```
 
-## Los dos bocetos
+## Las cinco formas
 
-| | |
-|---|---|
-| **`boceto-a`** · *El núcleo* | El elegido. Los actores salen de un núcleo central en todas las direcciones, repartidos por Fibonacci sobre la esfera: **no hay arriba**, y por eso deja de leerse como un árbol. |
-| **`boceto-b`** · *Las láminas* | La alternativa. La profundidad es la posición: todo lo que está al nivel *N* vive en la lámina *N*. Calcado del análisis de Sholl y de la laminación cortical. |
+Las cinco dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en
+secciones, el mismo conteo de hilos, las mismas cuñas, los mismos invariantes—. Lo único que cambia
+es **hacia dónde crece el tejido**, y eso es a propósito: si cada boceto tuviera su propio pipeline,
+comparar dos sería comparar dos programas y no dos formas. Lo compartido vive en `forma.mjs`.
+
+| | qué contesta | qué paga |
+|---|---|---|
+| **`a`** · *El núcleo* | ¿de quién es esto? Los actores salen de un centro en todas las direcciones (Fibonacci sobre la esfera): **no hay arriba** | oclusión: mirar una rama es tener otras trece detrás |
+| **`b`** · *Las láminas* | ¿de qué cuelga esto? Nivel *N* ⇒ lámina *N*, siempre. Sholl y laminación cortical | lo orgánico: parece tejido en placa. Y **no afirma** que no tiene arriba |
+| **`c`** · *El corte* | ¿cómo está repartida? Todo aplastado en una lámina, **nada tapado** de frente | el volumen, y las ramas que se esquivaban por profundidad ahora se cruzan |
+| **`d`** · *La corona* | ¿qué se habla con qué? Las hojas **parejas** en un anillo y el medio vacío: lo que lo cruza son relaciones | la profundidad deja de ser distancia recorrida |
+| **`e`** · *La corteza* | ¿dónde está lo que sé y dónde el camino? Un campo empuja hasta una cáscara: memorias afuera, tractos adentro | una superficie tiene menos lugar que un volumen: **108 de 220 bifurcaciones se aprietan** |
+
+Se cambia de forma con la barra de arriba, sin volver a buscar la URL.
 
 ## Qué se puede hacer adentro
 
@@ -73,11 +83,18 @@ invariantes en la página y los muestra medidos).
 
 ```bash
 cd cmd/musubi/assets/boceto
-node --test comun.test.mjs   # 26 invariantes puros
+node --test comun.test.mjs   # 30 invariantes puros
 node sabotajes.mjs           # cada uno, VISTO FALLAR bajo un sabotaje dirigido
 ```
 
-Y `#prueba` en la página, que es donde corren los 37 que necesitan una GPU.
+Y `#prueba` en la página, que es donde corren los 39 que necesitan una GPU — **en cada una de las
+cinco**, porque una forma nueva puede romper un invariante viejo y ya pasó: «las láminas» reprobaba
+«el núcleo no tiene arriba» hasta que se hizo lo correcto, que es que cada forma DECLARE lo que
+afirma. Lo que no afirma se mide igual y se muestra como dato: declarar no aplicable no es esconder.
+
+También hay `#perf`, que reparte el presupuesto de cuadro entre sondeo, selección y rótulos.
+⚠ Bajo `--virtual-time-budget` `performance.now()` **no avanza** y todo daría 0,00 ms — que se lee
+igual que «instantáneo». El panel comprueba el reloj y dice «no se pudo medir» en vez de mentir.
 
 Los invariantes puros están en `node --test` y no sólo en la página por una razón medida: en
 headless con `--virtual-time-budget` el navegador **no corre un solo cuadro**, así que cualquier
@@ -91,5 +108,6 @@ Un sabotaje ahí no se distingue de un arnés roto.
 | `comun.mjs` | matemática pura, sin escena: seccionar, contar hilos, colocar, enhebrar, la cámara, los rótulos |
 | `escena.mjs` | los shaders, las instancias, el pase de identidad para señalar, la navegación y el HUD |
 | `datos.mjs` | agrupa las memorias reales por actor y por tema |
-| `boceto-a.mjs` / `boceto-b.mjs` | los parámetros de cada uno, y su leyenda |
+| `forma.mjs` | lo que las cinco comparten: cargar, seccionar, contar hilos, montar, la leyenda y el conmutador |
+| `boceto-a.mjs` … `boceto-e.mjs` | **sólo lo que distingue a cada forma**: su colocación, su encuadre y su apuesta |
 | `comun.test.mjs` / `sabotajes.mjs` | los invariantes y el banco que los rompe a propósito |

@@ -153,6 +153,32 @@ const SABOTAJES = [
     a: '    for (let c = 0; c < 3; c++) P[i][c] = pA[c] + (pB[c] - pA[c]) * t;',
   },
 
+  /* ── LAS CINCO FORMAS ────────────────────────────────────────────────────────────────────── */
+  {
+    test: 'B27',
+    que: 'las hojas de la corona dejan de estar en el anillo',
+    de: '    : R);',
+    a: '    : hueco + (R - hueco) * 0.5);',
+  },
+  {
+    test: 'B28',
+    que: 'el orden de las hojas se mezcla: un subarbol queda partido en arcos sueltos',
+    de: '    if (!s.hijos.length) { hojas.push(i); return; }',
+    a: '    if (!s.hijos.length) { if (i % 3) hojas.push(i); else hojas.unshift(i); return; }',
+  },
+  {
+    test: 'B29',
+    que: 'el abanico plano pierde su paso: todas las hermanas salen en la misma direccion',
+    de: '      const pasoP = Math.min(anilloDe(B), apMaxPlano / brazos);',
+    a: '      const pasoP = 0;',
+  },
+  {
+    test: 'B30',
+    que: 'el tramo deja de cortarse en la cascara y la atraviesa',
+    de: '          const t = (-bd + Math.sqrt(disc)) / 1.05;',
+    a: '          const t = l * 4;',
+  },
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',
@@ -181,8 +207,8 @@ const SABOTAJES = [
   {
     test: 'B15',
     que: 'vuelve a ser un árbol: todos los actores salen para arriba',
-    de: '    const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;',
-    a: '    const y = 0.9;',
+    de: '  const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;',
+    a: '  const y = 0.9;',
   },
 ];
 
