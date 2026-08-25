@@ -69,7 +69,12 @@ comparar dos sería comparar dos programas y no dos formas. Lo compartido vive e
 |---|---|---|---|---|
 | `a` el núcleo | 483 **±94** | 60 % | **0,03** | 4 |
 | `d` la corona | 268 **±0** | **5 %** | 0,31 | 0 |
-| `f` el nudo | 286 **±1,7** | 55 % | **0,03** | 3 |
+| `f` el nudo | irregular **±63** | 55 % | **0,03** | 3 |
+
+⚠ **El borde parejo se probó y se sacó.** Clavar las hojas a un radio da un borde perfecto — y una
+**pelota**, que es exactamente lo que ya hacía `la corteza`. Lo que el treemap aporta es el reparto
+parejo **en ángulo**; la distancia la sigue poniendo el crecimiento, así que la silueta queda
+irregular como en el núcleo. Y encima el enredo baja: 0,209 → 0,063.
 
 El nudo se queda con el borde de la corona y la isotropía del núcleo. Lo que **no** hereda entero es
 el reparto perfecto: 55 % contra el 5 % de la corona — el trazo orgánico no puede aterrizar tan
@@ -107,6 +112,7 @@ Se cambia de forma con la barra de arriba, sin volver a buscar la URL.
 | | |
 |---|---|
 | clic | señala **un hilo, una neurona o una nota** — no el haz. Queda marcado con un anillo y **la cámara no se mueve**. |
+| arrastrar | gira **alrededor de lo que agarraste**: al apoyar el dedo, lo que hay bajo el cursor pasa a ser el eje. Sin suavizado — el gesto es 1 a 1. |
 | doble clic | vuela hasta lo que señalaste. |
 | `↑ ↓ ← →` | padre · hija · hermanas. Moverse entre ramas no es puntería: es recorrer el árbol. |
 | `A` | **ver esta sola** — apaga el resto y deja la rama legible hilo por hilo. |

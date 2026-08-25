@@ -853,6 +853,17 @@ export function colocarNucleo(secciones, opciones) {
      Mejora las cinco a la vez y no cuesta nada: el ángulo entre las hermanas más apretadas se
      multiplica por 4,8 y el enredo cae a la mitad. Se queda en 0. */
   const rampa = Math.max(0, Math.min(1, num(o.rampa, 0)));
+  /* 🔴 ¿LA HOJA ATERRIZA EN EL RADIO? Pegarla da un borde perfecto — y una PELOTA. Fue el reclamo
+     textual: «volvimos a lo de antes, una esfera, y eso no lo queremos». Y es cierto: con todas las
+     hojas al mismo radio la silueta es un círculo perfecto desde cualquier lado, que es exactamente
+     lo que ya hacía «la corteza» y no se eligió.
+
+     Lo que el borde parejo tenía para aportar es que las hojas se repartan PAREJO EN ÁNGULO —eso lo
+     da el treemap y se conserva—, no que caigan todas a la misma distancia. Sin pegar, la silueta
+     vuelve a ser irregular como en el núcleo y encima el enredo BAJA (0,209 → 0,063), porque las
+     ramas ya no se apiñan contra una cáscara. Lo único que se pierde es el borde: 1,7 → 62,6, y esa
+     es justamente la métrica que estaba dibujando la pelota. */
+  const pegar = o.pegar !== false;
   const radioDestino = num(o.radio, 0);
   const anillo0 = num(o.anillo, 0);
 
@@ -1031,7 +1042,7 @@ export function colocarNucleo(secciones, opciones) {
       // Y CON DESTINO, LA HOJA ATERRIZA EN EL RADIO PEDIDO. Sin esto el borde vuelve a ser
       // disparejo —cada hoja termina donde la dejó su cadena de largos— y se pierde lo único que
       // la corona tenía para aportar.
-      if (destino && radioDestino > 0 && !h.hijos.length) {
+      if (pegar && destino && radioDestino > 0 && !h.hijos.length) {
         const q0 = sub(cuna, origen);
         const qd = q0[0] * d2[0] + q0[1] * d2[1] + q0[2] * d2[2];
         const qq = q0[0] * q0[0] + q0[1] * q0[1] + q0[2] * q0[2];
@@ -1574,6 +1585,40 @@ export function crearCamara(camera, dom, opciones) {
   const meta = { az: est.az, el: est.el, dist: est.dist, foco: est.foco.clone() };
   const topeEl = (x) => Math.max(-LIM_EL, Math.min(LIM_EL, x));
 
+  /* 🔴 EL PIVOTE ES LO QUE AGARRÁS ────────────────────────────────────────────────────────────
+     Tercera vez que el usuario dice que mover el 3D «es muy raro», y las dos anteriores lo afiné a
+     ciegas: amortiguación, inercia, zoom hacia el cursor. Nada de eso era la causa.
+
+     LA CAUSA: el punto alrededor del cual gira la escena NO cambiaba nunca al arrastrar. Se movía
+     al volar (clic) y al panear, y nada más. O sea que si te acercabas a una rama que está lejos
+     de ese punto, arrastrar no la giraba: la hacía CRUZAR LA PANTALLA en un arco enorme, porque el
+     eje de giro estaba a cien unidades de lo que estabas mirando. Se siente como que el visor tiene
+     voluntad propia, que es exactamente lo que se describió.
+
+     El arreglo tiene dos mitades y la segunda es la que lo hace invisible:
+       1. al apoyar el dedo se sondea qué hay abajo del cursor y ESO pasa a ser el pivote;
+       2. y al cambiarlo, la CÁMARA NO SE MUEVE — se recalculan az/el/dist desde su posición
+          actual, así que el pivote cambia sin que la imagen dé un salto. Sin esta mitad, cada
+          clic teletransportaría la vista y el arreglo sería peor que el defecto. */
+  function fijarPivote(p) {
+    if (!p) return;
+    // La posición ACTUAL de la cámara, que es lo que hay que conservar. Se usa `est` y no `meta`
+    // porque `est` es donde la cámara está de verdad; `meta` es a dónde va.
+    const ce = Math.cos(est.el), se = Math.sin(est.el);
+    const px = est.foco.x + Math.sin(est.az) * ce * est.dist;
+    const py = est.foco.y + se * est.dist;
+    const pz = est.foco.z + Math.cos(est.az) * ce * est.dist;
+    const vx = px - p[0], vy = py - p[1], vz = pz - p[2];
+    const d = Math.hypot(vx, vy, vz);
+    if (!(d > 0.001)) return;                    // el pivote encima de la cámara no define un eje
+    est.foco.set(p[0], p[1], p[2]);
+    est.dist = Math.max(MIN, Math.min(MAX, d));
+    est.el = topeEl(Math.asin(Math.max(-1, Math.min(1, vy / d))));
+    est.az = Math.atan2(vx, vz);
+    // Y el destino se lleva el MISMO pivote, o el suavizado tiraría la vista de vuelta al viejo.
+    meta.foco.copy(est.foco); meta.dist = est.dist; meta.el = est.el; meta.az = est.az;
+  }
+
   let arrastre = null, vuelo = null, reloj = 0;
   let vAz = 0, vEl = 0;                 // velocidad angular, para la inercia
   const _der = new THREE.Vector3(), _arr = new THREE.Vector3(), _z = new THREE.Vector3();
@@ -1582,6 +1627,8 @@ export function crearCamara(camera, dom, opciones) {
     arrastre = { x: ev.clientX, y: ev.clientY, t: 0,
                  pan: ev.button === 1 || ev.button === 2 || ev.shiftKey };
     vuelo = null; vAz = 0; vEl = 0;
+    // Sólo al girar: paneando, mover el pivote sería pelearle al gesto.
+    if (!arrastre.pan && o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));
     try { dom.setPointerCapture(ev.pointerId); } catch (_) {}
   });
   const soltar = () => {
@@ -1641,6 +1688,11 @@ export function crearCamara(camera, dom, opciones) {
     camera.matrixWorld.extractBasis(_der, _arr, _z);
     meta.foco.addScaledVector(_der, nx * tan * (camera.aspect || 1) * d)
              .addScaledVector(_arr, ny * tan * d);
+    // Y SE REENGANCHA A LO QUE HAY ABAJO DEL CURSOR. Corriendo el foco de costado en cada paso de
+    // rueda, el pivote se va alejando de la geometría hasta quedar flotando en el vacío — y ahí
+    // volver a girar vuelve a sentirse raro aunque el pivote se fije al apoyar el dedo. Se
+    // reengancha cada vez que se puede, y como `fijarPivote` no mueve la cámara, no se nota.
+    if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));
   }, { passive: false });
 
   /** suave: cúbica in-out. Arranca de cero y llega a cero — un vuelo con velocidad en los extremos
@@ -1703,8 +1755,12 @@ export function crearCamara(camera, dom, opciones) {
         if (Math.abs(vAz) < 2e-4) vAz = 0;
         if (Math.abs(vEl) < 2e-4) vEl = 0;
       }
-      // ← EL ARREGLO DE FONDO: el factor sale del tiempo, no del cuadro.
-      const k = 1 - Math.exp(-15 * dt);
+      /* 🔴 MIENTRAS ARRASTRÁS NO HAY SUAVIZADO. La amortiguación existe para que el frenado y los
+         vuelos no den cortes, y para eso es buenísima — pero aplicada al gesto en curso mete cinco
+         cuadros de retraso entre la mano y la imagen, y eso NO se lee como suavidad: se lee como
+         que la escena viene atrás tuyo. La manipulación directa tiene que ser 1 a 1; lo que se
+         suaviza es lo que la cámara hace SOLA. */
+      const k = arrastre ? 1 : 1 - Math.exp(-15 * dt);
       est.az += (meta.az - est.az) * k;
       est.el += (meta.el - est.el) * k;
       est.dist = Math.max(0.001, est.dist) * Math.pow(meta.dist / Math.max(0.001, est.dist), k);
@@ -1720,7 +1776,9 @@ export function crearCamara(camera, dom, opciones) {
     camera.lookAt(est.foco);
   }
 
-  return { est, meta, tick, volarA, get volando() { return vuelo != null; } };
+  return { est, meta, tick, volarA, fijarPivote,
+           get volando() { return vuelo != null; },
+           get arrastrando() { return arrastre != null; } };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════════════════

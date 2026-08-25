@@ -201,6 +201,20 @@ const SABOTAJES = [
     a: '  const rampa = 1;',
   },
 
+  /* ── LA CAMARA ───────────────────────────────────────────────────────────────────────────── */
+  {
+    test: 'C1',
+    que: 'cambiar el pivote teletransporta la vista en vez de dejarla quieta',
+    de: '    est.dist = Math.max(MIN, Math.min(MAX, d));',
+    a: '    est.dist = est.dist;',
+  },
+  {
+    test: 'C2',
+    que: 'vuelve el suavizado durante el arrastre: la escena viene atras de la mano',
+    de: '      const k = arrastre ? 1 : 1 - Math.exp(-15 * dt);',
+    a: '      const k = 1 - Math.exp(-15 * dt);',
+  },
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',

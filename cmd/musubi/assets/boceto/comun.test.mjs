@@ -5,12 +5,13 @@
 // dependa del bucle de render devuelve el mismo valor cuando funciona y cuando está roto. Un
 // sabotaje ahí no se distingue de un arnés roto, y un test que no puede fallar no es un test.
 
+import * as THREE from 'three';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
          destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
-         colocarNudo, repartirEsfera } from './comun.mjs';
+         colocarNudo, repartirEsfera, crearCamara } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -746,4 +747,68 @@ test('B33 · las hermanas apuntan a SU parcela desde que nacen', () => {
   // absoluto que el sabotaje no alcanza.
   assert.ok(sinRampa > 0.30,
     `sin rampa el decil más apretado sigue a ${sinRampa.toFixed(3)} rad: nacen juntas igual`);
+});
+
+
+/* ── LA CÁMARA ────────────────────────────────────────────────────────────────────────────────
+   «El movimiento en 3D está muy roto, es muy raro mover las neuronas» — dicho TRES veces. Las dos
+   primeras lo afiné a ciegas (amortiguación, inercia, zoom hacia el cursor) y ninguna era la
+   causa: la escena giraba siempre alrededor del mismo punto, así que acercarse a una rama lejana
+   convertía el arrastre en un arco enorme que cruzaba la pantalla. Sin un invariante, eso se
+   «arregla» tres veces sin arreglarse. Acá está. */
+
+/** unDom: lo mínimo que `crearCamara` necesita, y que además deja disparar los eventos a mano. */
+function unDom() {
+  const h = {};
+  return {
+    clientHeight: 800, clientWidth: 1200,
+    addEventListener: (n, f) => { (h[n] = h[n] || []).push(f); },
+    setPointerCapture: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 800 }),
+    disparar: (n, ev) => { for (const f of (h[n] || [])) f(Object.assign({ preventDefault() {} }, ev)); },
+  };
+}
+const unaCamara = () => {
+  const c = new THREE.PerspectiveCamera(50, 1.5, 0.1, 5000);
+  c.updateMatrixWorld(true);
+  return c;
+};
+
+test('C1 · cambiar el PIVOTE no mueve la cámara', () => {
+  // Es la mitad que hace invisible al arreglo. Si mover el eje de giro corriera la vista, cada vez
+  // que apoyás el dedo la escena daría un salto — peor que el defecto que se venía a arreglar.
+  const cámara = unaCamara();
+  const cam2 = crearCamara(cámara, unDom(), { az: 0.6, el: 0.3, dist: 300 });
+  cam2.tick(1); cam2.tick(1);                       // que la cámara llegue a su lugar
+  const antes = cámara.position.clone();
+  cam2.fijarPivote([48, -26, 17]);
+  cam2.tick(1 / 60);
+  const corrio = antes.distanceTo(cámara.position);
+  assert.ok(corrio < 0.5, `la vista se movió ${corrio.toFixed(1)} unidades al cambiar el pivote`);
+  // Y el pivote SÍ cambió: sin esto el test pasaría con una función que no hace nada.
+  assert.ok(cam2.est.foco.distanceTo(new THREE.Vector3(48, -26, 17)) < 1e-6,
+    `el pivote quedó en ${cam2.est.foco.toArray().map((x) => x.toFixed(1))}`);
+});
+
+test('C2 · arrastrar es 1 a 1: no hay retraso entre la mano y la imagen', () => {
+  // La amortiguación es buenísima para el frenado y los vuelos, y es exactamente lo que NO puede
+  // aplicarse al gesto en curso: mete cinco cuadros entre lo que hacés y lo que ves, y eso no se
+  // lee como suavidad sino como que la escena viene atrás tuyo.
+  const cámara = unaCamara();
+  const dom = unDom();
+  const cam = crearCamara(cámara, dom, { az: 0, el: 0.2, dist: 300 });
+  cam.tick(1); cam.tick(1);
+  dom.disparar('pointerdown', { clientX: 600, clientY: 400, button: 0, pointerId: 1 });
+  dom.disparar('pointermove', { clientX: 700, clientY: 400, button: 0, pointerId: 1 });
+  const pedido = cam.meta.az;
+  cam.tick(1 / 60);
+  assert.ok(Math.abs(cam.est.az - pedido) < 1e-9,
+    `pediste ${pedido.toFixed(4)} y la cámara fue a ${cam.est.az.toFixed(4)}: viene atrás`);
+  // CONTROL: soltando, el suavizado TIENE que volver — si no, este test pasaría con la
+  // amortiguación borrada del todo, que es la otra manera de que no haya retraso.
+  dom.disparar('pointerup', { pointerId: 1 });
+  cam.meta.az += 1.0;
+  cam.tick(1 / 60);
+  assert.ok(Math.abs(cam.est.az - cam.meta.az) > 0.05,
+    'sin arrastre la cámara ya no suaviza: el frenado y los vuelos van a dar cortes');
 });

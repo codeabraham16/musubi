@@ -496,7 +496,11 @@ export function montar(cfg) {
   // NO se pone scene.fog: estaba puesto y NO HACIA NADA (ningun ShaderMaterial la consume), asi que
   // era codigo que parecia vivo. La profundidad la da `atmosfera()` adentro de cada shader.
   const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.5, 9000);
-  const cam = crearCamara(camera, renderer.domElement, cfg.camara || {});
+  // `puntoBajo` es una DECLARACION de funcion, asi que esta izada y se puede pasar acá aunque su
+  // cuerpo viva 500 lineas mas abajo: cuando se la llama —al apoyar el dedo— ya existe todo lo que
+  // usa. Es lo que le deja a la camara girar alrededor de lo que agarraste.
+  const cam = crearCamara(camera, renderer.domElement,
+                          Object.assign({}, cfg.camara || {}, { puntoBajo }));
 
   // BLOOM. Las reconstrucciones reales se ven así porque el tejido teñido EMITE: sin un halo
   // alrededor de lo brillante, un tubo de color plano se lee como plástico. El umbral alto (0,55)
@@ -1186,35 +1190,59 @@ export function montar(cfg) {
   const _mf = new THREE.Matrix4();
   const _ejeY = new THREE.Vector3(), _cen = new THREE.Vector3(), _rr = new THREE.Raycaster();
   const _pp = new THREE.Vector2(), _w1 = new THREE.Vector3(), _w2 = new THREE.Vector3();
+  const _sal = new THREE.Vector3();
+
+  const mallaDe = (h) => (!h ? null
+    : h.tipo === 'neurona' ? vainas
+    : h.tipo === 'memoria' ? (totBot ? botones : null)
+    : h.tipo === 'terminal' ? (RAM.length ? penacho : null) : null);
+
+  /**
+   * puntoDe: el punto 3D exacto que hay bajo el cursor para un acierto del pase de identidad.
+   *
+   * Lo usan DOS cosas —el anillo que marca lo elegido y el pivote de la cámara— y por eso vive una
+   * sola vez: dos copias de esta cuenta es como el anillo y el eje de giro terminan cayendo en
+   * lugares distintos, y ahí «girar se siente raro» vuelve por la puerta de atrás.
+   *
+   * No alcanza con el centro de la instancia: un eslabón es un cilindro largo y su centro puede
+   * quedar a decenas de píxeles de donde señalaste. Se devuelve el punto del EJE más cercano al
+   * rayo que sale del píxel.
+   */
+  function puntoDe(h) {
+    const malla = mallaDe(h);
+    if (!malla) return null;
+    malla.getMatrixAt(h.i, _mf);
+    _cen.setFromMatrixPosition(_mf);
+    _ejeY.set(_mf.elements[4], _mf.elements[5], _mf.elements[6]);
+    if (h.px == null || _ejeY.lengthSq() < 1e-9) return [_cen.x, _cen.y, _cen.z];
+    _pp.set((h.px / innerWidth) * 2 - 1, -(h.py / innerHeight) * 2 + 1);
+    _rr.setFromCamera(_pp, camera);
+    const o = _rr.ray.origin, d = _rr.ray.direction;
+    _w1.copy(_cen).sub(o);
+    _w2.copy(_ejeY).multiplyScalar(0.5);
+    const u = _w2.clone().normalize();
+    const b = d.dot(u), c1 = _w1.dot(d), c2 = _w1.dot(u), den = 1 - b * b;
+    let t = Math.abs(den) < 1e-6 ? 0 : (c2 - b * c1) / -den;
+    const semi = _w2.length();
+    t = Math.max(-semi, Math.min(semi, t));
+    _sal.copy(_cen).addScaledVector(u, t);
+    return [_sal.x, _sal.y, _sal.z];
+  }
+
+  /** puntoBajo: lo que la cámara necesita para girar alrededor de lo que agarraste. */
+  function puntoBajo(x, y) {
+    const h = sondear(x, y);
+    return h ? puntoDe(h) : null;
+  }
+
   function marcarFoco() {
-    const malla = !foco ? null
-      : foco.tipo === 'neurona' ? vainas
-      : foco.tipo === 'memoria' ? (totBot ? botones : null)
-      : foco.tipo === 'terminal' ? (RAM.length ? penacho : null) : null;
+    const malla = mallaDe(foco);
     if (!malla) { reticula.visible = false; return; }
     malla.getMatrixAt(foco.i, _mf);
     _cen.setFromMatrixPosition(_mf);
-    // El eje del cilindro es la SEGUNDA columna de la matriz, y su largo es el largo del tramo:
-    // el centro mas media columna en cada sentido son las dos puntas.
-    _ejeY.set(_mf.elements[4], _mf.elements[5], _mf.elements[6]);
-    if (foco.px == null || _ejeY.lengthSq() < 1e-9) {
-      uRet.uPos.value.copy(_cen);
-    } else {
-      // El punto del eje mas cercano al rayo que sale del pixel clickeado. Es lo que convierte
-      // «marque esta instancia» en «marque ACA», que es lo que se pregunta el que hizo clic.
-      _pp.set((foco.px / innerWidth) * 2 - 1, -(foco.py / innerHeight) * 2 + 1);
-      _rr.setFromCamera(_pp, camera);
-      const o = _rr.ray.origin, d = _rr.ray.direction;
-      _w1.copy(_cen).sub(o);                       // del origen del rayo al centro del tramo
-      _w2.copy(_ejeY).multiplyScalar(0.5);         // media longitud, en el sentido del eje
-      const u = _w2.clone().normalize();
-      // minimos cuadrados entre dos rectas; si son casi paralelas, el centro es la mejor respuesta
-      const b = d.dot(u), c1 = _w1.dot(d), c2 = _w1.dot(u), den = 1 - b * b;
-      let t = Math.abs(den) < 1e-6 ? 0 : (c2 - b * c1) / -den;
-      const semi = _w2.length();
-      t = Math.max(-semi, Math.min(semi, t));
-      uRet.uPos.value.copy(_cen).addScaledVector(u, t);
-    }
+    const q = puntoDe(foco);
+    if (!q) { reticula.visible = false; return; }
+    uRet.uPos.value.set(q[0], q[1], q[2]);
     reticula.visible = true;
   }
 
