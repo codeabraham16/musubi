@@ -69,13 +69,36 @@ comparar dos sería comparar dos programas y no dos formas. Lo compartido vive e
 |---|---|---|---|---|
 | `a` el núcleo | 483 **±94** | 60 % | **0,03** | 4 |
 | `d` la corona | 268 **±0** | **5 %** | 0,31 | 0 |
-| `f` el nudo | 250 **±7** | 55 % | **0,03** | 9 |
+| `f` el nudo | 286 **±1,7** | 55 % | **0,03** | 3 |
 
 El nudo se queda con el borde de la corona y la isotropía del núcleo. Lo que **no** hereda entero es
 el reparto perfecto: 55 % contra el 5 % de la corona — el trazo orgánico no puede aterrizar tan
 parejo como un dendrograma, y `imán` es literalmente esa perilla (en 1 vuelve a ser un dendrograma).
 El reparto de parcelas **sí** es parejo por su cuenta (13 % de variación); lo que lo afloja es el
 camino, no el destino.
+
+### 🔴 La rampa del imán, que era lo que apretaba
+
+Las ramas salían, se doblaban y se **plegaban sobre sí mismas** hasta formar un puño. La causa era
+que la fuerza del imán crecía con la profundidad — la idea era que arriba la rama tuviera lugar para
+abrirse y abajo se acomodara, y el efecto es el contrario: dos hermanas nacen apuntando casi para el
+mismo lado y recién se despegan varios niveles después. Es `bifurcar` otra vez con otro disfraz:
+**lo que pasa al nacer manda.**
+
+| | borde | ángulo P10 | mediana | enredo | apretadas |
+|---|---|---|---|---|---|
+| rampa (como estaba) | 7,1 | 0,128 | 0,462 | 0,794 | 9 |
+| **apunta al nacer** | **1,7** | **0,657** | **1,796** | **0,209** | **3** |
+
+Cinco métricas mejor a la vez, sin nada que pagar. Se mide el **percentil 10** del ángulo y no la
+mediana: la mediana puede estar perfecta y el 10 % más apretado seguir pegado, que es justo lo que
+se ve como amontonado.
+
+Dos cosas más que el barrido de parámetros refutó, y quedan anotadas:
+- **Más `curvatura` APRIETA**, no afloja: de 0 a 0,55 el ángulo P10 cae un 31 %. Y la sospecha de
+  que la panza mete tramos en el hueco central es falsa — esa métrica queda plana.
+- **`polarMin` sola no llega**: la frena `aperturaMax`. 1,30 · 1,45 · 1,60 devolvían **filas
+  idénticas** y sólo subía el contador de apretadas. Se suben las dos juntas o no se mueve nada.
 
 Se cambia de forma con la barra de arriba, sin volver a buscar la URL.
 

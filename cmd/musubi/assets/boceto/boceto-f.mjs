@@ -30,8 +30,13 @@ await construir({
   seccionado: { maxNivel: 8, minCarga: 10 },
   colocar: (S) => colocarNudo(S, {
     origen: [0, 0, 0], nucleo: 40, largo: 130, curvatura: 0.12, tropismo: 0, semilla: 11,
-    radio: 250, 'imán': 0.80,
-    aire: 3.0, naciente: 0.85, aperturaMax: 1.30, polarEje: 0.20, polarMin: 0.85,
+    // EL IMÁN VA ALTO Y SIN RAMPA, que es lo contrario de lo que yo suponía: con 0,80 y rampa la
+    // hermana nace apuntando casi para el mismo lado que su vecina. Ver `rampa` en `colocarNucleo`.
+    radio: 285, 'imán': 0.92,
+    // Y LAS DOS SE SUBEN JUNTAS: `polarMin` sola no llega, la frena `aperturaMax`. El barrido lo
+    // destapó por el delator de siempre — 1,30 · 1,45 · 1,60 devolvían FILAS IDÉNTICAS y sólo
+    // subía el contador de apretadas, o sea la perilla no llegaba y nada más prometía.
+    aire: 3.0, naciente: 0.85, aperturaMax: 1.60, polarEje: 0.20, polarMin: 1.60,
     radioHilo: HEBRA.radioHilo, separacion: HEBRA.separacion,
   }),
   montaje: {

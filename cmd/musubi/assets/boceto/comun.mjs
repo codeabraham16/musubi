@@ -833,6 +833,26 @@ export function colocarNucleo(secciones, opciones) {
      aterrizar donde le toca. */
   const destino = Array.isArray(o.destino) ? o.destino : null;
   const iman = Math.max(0, Math.min(1, num(o.imán, 0)));
+  /* 🔴 LA RAMPA DEL IMÁN, y resultó ser LA perilla — no una más ────────────────────────────────
+     El reclamo fue «que en vez de estar para adentro sean un poco más sueltas». Se veía como ramas
+     que salen, se doblan y se PLIEGAN sobre sí mismas hasta formar un puño.
+
+     La causa era que la fuerza del imán CRECÍA con la profundidad: la idea era que arriba la rama
+     tuviera lugar para abrirse y abajo se acomodara. El efecto real es el contrario — dos hermanas
+     nacen apuntando casi para el mismo lado y recién se despegan varios niveles después, así que
+     corren pegadas un buen trecho y después cada una se engancha hacia su parcela. Es la misma
+     falla que ya nos mordió con `bifurcar`, con otro disfraz: LO QUE PASA AL NACER MANDA.
+
+     Con la rampa plana la hija apunta a su parcela desde el primer tramo, y como las parcelas de
+     dos hermanas están genuinamente separadas, salen separadas. Medido sobre el cerebro local:
+
+                                 borde   ángulo P10   mediana   enredo   apretadas
+       rampa 1 (como estaba)      7,1       0,128      0,462     0,794       9
+       rampa 0 (apunta al nacer)  2,6       0,608      1,830     0,313       9
+
+     Mejora las cinco a la vez y no cuesta nada: el ángulo entre las hermanas más apretadas se
+     multiplica por 4,8 y el enredo cae a la mitad. Se queda en 0. */
+  const rampa = Math.max(0, Math.min(1, num(o.rampa, 0)));
   const radioDestino = num(o.radio, 0);
   const anillo0 = num(o.anillo, 0);
 
@@ -983,14 +1003,11 @@ export function colocarNucleo(secciones, opciones) {
         const hacia = sub(meta, s.b);
         const hl = Math.hypot(hacia[0], hacia[1], hacia[2]);
         if (hl > 1e-6) {
-          // UNA HOJA RECIBE EL IMÁN ENTERO. La fuerza crece con la profundidad porque arriba la
-          // rama todavía tiene lugar para abrirse y abajo ya tiene que aterrizar — pero una hoja
-          // NO tiene abajo: si se la deja a media fuerza, cae donde la dejó su cadena de largos y
-          // el borde vuelve a ser disparejo. Medido: el radio de las hojas pasa de 250 ±33 a
-          // 250 ±9 sólo con esto.
-          const f = h.hijos.length
-            ? iman * Math.min(1, h.nivel / Math.max(2, maxNivelSec - 1))
-            : iman;
+          // UNA HOJA RECIBE EL IMÁN ENTERO, pase lo que pase con la rampa: no tiene un nivel más
+          // abajo donde acomodarse, así que a media fuerza cae donde la dejó su cadena de largos y
+          // el borde vuelve a ser disparejo.
+          const prog = Math.min(1, h.nivel / Math.max(2, maxNivelSec - 1));
+          const f = h.hijos.length ? iman * (rampa * prog + (1 - rampa)) : iman;
           d2 = norm(add(mul(d2, 1 - f), mul(mul(hacia, 1 / hl), f)));
         }
       }

@@ -701,3 +701,49 @@ test('B32 · el imán deja la hoja EN el radio pedido', () => {
   const con = arma(0.8);
   assert.ok(con < 1, `con imán las hojas todavía se reparten ±${con.toFixed(1)} en radio`);
 });
+
+
+test('B33 · las hermanas apuntan a SU parcela desde que nacen', () => {
+  // 🔴 EL RECLAMO: «que en vez de estar para adentro sean un poco más sueltas». Se veía como ramas
+  // que salen, se doblan y se pliegan sobre sí mismas hasta formar un puño.
+  //
+  // La causa era la RAMPA del imán: la fuerza crecía con la profundidad, así que dos hermanas
+  // nacían apuntando casi para el mismo lado y recién se despegaban varios niveles después. Es la
+  // misma falla que `bifurcar` con otro disfraz — lo que pasa AL NACER manda.
+  //
+  // Se mide el ángulo entre hermanas, y el PERCENTIL 10 y no la mediana: la mediana puede estar
+  // perfecta y el 10 % más apretado seguir pegado, que es justo lo que se ve como amontonado.
+  const p10 = (rampa) => {
+    // SOBRE EL FIXTURE RAMIFICADO, no el otro: el de 120 hijas de una satura el anillo de
+    // `bifurcar` y ahí el ángulo entre hermanas lo fija el tope, no el imán — los dos brazos dan
+    // 0,224 idénticos y el test no puede ver nada. El árbol real bifurca de a 2-3.
+    const S = seccionar(ramificado(700), { maxNivel: 8, minCarga: 10 });
+    contarFibras(S, OPC_HILOS);
+    colocarNudo(S, { origen: [0, 0, 0], nucleo: 40, largo: 130, curvatura: 0.12, tropismo: 0,
+      semilla: 11, radio: 285, 'imán': 0.92, rampa, aire: 3.0, naciente: 0.85,
+      aperturaMax: 1.60, polarEje: 0.20, polarMin: 1.60, radioHilo: 0.52, separacion: 2.60 });
+    const a = [];
+    for (const s of S) {
+      if (s.hijos.length < 2) continue;
+      for (let i = 0; i < s.hijos.length; i++) {
+        for (let j = i + 1; j < s.hijos.length; j++) {
+          const u = S[s.hijos[i]].dir, v = S[s.hijos[j]].dir;
+          a.push(Math.acos(Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2]))));
+        }
+      }
+    }
+    a.sort((x, y) => x - y);
+    return a[Math.floor(a.length * 0.1)];
+  };
+  // CONTROL: con la rampa puesta TIENE que apretar. Sin esto el test pasaría igual con un árbol
+  // que ya naciera abierto por otra razón, que es la otra manera de que el número salga bien.
+  const conRampa = p10(1);
+  const sinRampa = p10(0);
+  assert.ok(conRampa < sinRampa * 0.6,
+    `la rampa no aprieta: ${conRampa.toFixed(3)} contra ${sinRampa.toFixed(3)} sin ella`);
+  // EL UMBRAL, CALIBRADO CONTRA EL SABOTAJE. Sobre el cerebro local: 0,128 con rampa y 0,657 sin
+  // ella. Sobre este fixture los valores son otros, así que se exige la RELACIÓN y además un piso
+  // absoluto que el sabotaje no alcanza.
+  assert.ok(sinRampa > 0.30,
+    `sin rampa el decil más apretado sigue a ${sinRampa.toFixed(3)} rad: nacen juntas igual`);
+});

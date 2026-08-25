@@ -194,6 +194,13 @@ const SABOTAJES = [
   },
 
 
+  {
+    test: 'B33',
+    que: 'vuelve la rampa: las hermanas nacen apuntando para el mismo lado y se pliegan',
+    de: '  const rampa = Math.max(0, Math.min(1, num(o.rampa, 0)));',
+    a: '  const rampa = 1;',
+  },
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',
