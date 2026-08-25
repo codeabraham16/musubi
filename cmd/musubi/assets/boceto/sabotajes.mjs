@@ -215,6 +215,19 @@ const SABOTAJES = [
     a: '      const k = 1 - Math.exp(-15 * dt);',
   },
 
+  {
+    test: 'C3',
+    que: 'el pivote vuelve a engancharse a la rueda y el zoom se cancela a si mismo',
+    de: '             .addScaledVector(_arr, ny * tan * d);',
+    a: '             .addScaledVector(_arr, ny * tan * d); if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));',
+  },
+  {
+    test: 'C4',
+    que: 'el pivote se refija en CADA movimiento y la distancia cambia mientras giras',
+    de: '    const s = 2.7 / Math.max(320, dom.clientHeight || 800);',
+    a: '    if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY)); const s = 2.7 / Math.max(320, dom.clientHeight || 800);',
+  },
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',

@@ -1688,11 +1688,12 @@ export function crearCamara(camera, dom, opciones) {
     camera.matrixWorld.extractBasis(_der, _arr, _z);
     meta.foco.addScaledVector(_der, nx * tan * (camera.aspect || 1) * d)
              .addScaledVector(_arr, ny * tan * d);
-    // Y SE REENGANCHA A LO QUE HAY ABAJO DEL CURSOR. Corriendo el foco de costado en cada paso de
-    // rueda, el pivote se va alejando de la geometría hasta quedar flotando en el vacío — y ahí
-    // volver a girar vuelve a sentirse raro aunque el pivote se fije al apoyar el dedo. Se
-    // reengancha cada vez que se puede, y como `fijarPivote` no mueve la cámara, no se nota.
-    if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));
+    /* 🔴 ACÁ NO VA `fijarPivote`, Y LO MIDO PORQUE YA LO PUSE UNA VEZ. `fijarPivote` deriva el
+       destino de DONDE ESTÁ la cámara, así que llamarlo justo después de fijar una distancia nueva
+       PISA esa distancia con la vieja: el zoom se cancela a sí mismo en cada paso. Medido con diez
+       pasos de rueda seguidos: 300 → 287,8 en vez de 300 → 80,1. Y encima, sondear qué hay bajo el
+       cursor en cada evento de rueda —que llegan de a cien por segundo— frena la tubería de la GPU
+       en cada uno. El pivote se fija al APOYAR EL DEDO y nada más. */
   }, { passive: false });
 
   /** suave: cúbica in-out. Arranca de cero y llega a cero — un vuelo con velocidad en los extremos

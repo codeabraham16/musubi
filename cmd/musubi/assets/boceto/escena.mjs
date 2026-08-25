@@ -1229,10 +1229,34 @@ export function montar(cfg) {
     return [_sal.x, _sal.y, _sal.z];
   }
 
-  /** puntoBajo: lo que la cámara necesita para girar alrededor de lo que agarraste. */
+  /**
+   * puntoBajo: lo que la cámara necesita para girar alrededor de lo que agarraste.
+   *
+   * 🔴 VA POR EL RAYCAST ANALÍTICO Y NO POR EL PASE DE IDENTIDAD, y la diferencia se siente: el
+   * pase de identidad hace una lectura SINCRÓNICA del framebuffer, que frena la tubería de la GPU
+   * hasta que termina. Eso, al empezar CADA arrastre, es un tirón justo en el momento en que la
+   * mano espera que la escena la siga — o sea, exactamente lo que se describió como «tosco».
+   *
+   * Y para un pivote no hace falta esa puntería: da igual el hilo exacto, alcanza con el punto de
+   * la CURVA del haz más cercano al rayo. Son ~441 secciones por 9 muestras, todo en CPU, sin
+   * tocar la GPU.
+   */
+  const _pb = new THREE.Vector2(), _pr = new THREE.Raycaster(), _pv = new THREE.Vector3();
   function puntoBajo(x, y) {
-    const h = sondear(x, y);
-    return h ? puntoDe(h) : null;
+    _pb.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+    _pr.setFromCamera(_pb, camera);
+    let mejor = null, mejorD = Infinity;
+    for (const s of S) {
+      for (let k = 0; k <= 8; k++) {
+        const q = enCurva(s, k / 8);
+        _pv.set(q[0], q[1], q[2]);
+        const d = _pr.ray.distanceToPoint(_pv);
+        // La tolerancia es el grosor del haz con un piso: una rama fina pide más puntería que el
+        // tronco, que es lo natural, pero un pivote no puede exigir precisión de cirujano.
+        if (d < Math.max(6, (s.Rhaz || 1) * 1.6) && d < mejorD) { mejorD = d; mejor = q; }
+      }
+    }
+    return mejor;
   }
 
   function marcarFoco() {

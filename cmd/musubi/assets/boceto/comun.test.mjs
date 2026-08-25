@@ -812,3 +812,56 @@ test('C2 · arrastrar es 1 a 1: no hay retraso entre la mano y la imagen', () =>
   assert.ok(Math.abs(cam.est.az - cam.meta.az) > 0.05,
     'sin arrastre la cámara ya no suaviza: el frenado y los vuelos van a dar cortes');
 });
+
+
+test('C3 · diez pasos de rueda ACUMULAN, aunque haya pivote', () => {
+  // 🔴 EL BUG QUE ESTE TEST EXISTE PARA QUE NO VUELVA. Enganché el pivote a la rueda «para que no
+  // se aleje de la geometría», y `fijarPivote` deriva el destino de DONDE ESTÁ la cámara: pisaba la
+  // distancia recién fijada con la vieja, así que cada paso de rueda cancelaba su propio zoom.
+  // Medido: 300 → 287,8 en diez pasos, cuando tiene que dar 300 → 80,1. Se sintió como «al hacer
+  // scroll se daña todo», y era exactamente eso.
+  const camina = (conPivote) => {
+    const cámara = unaCamara(), dom = unDom();
+    const cam = crearCamara(cámara, dom, Object.assign({ az: 0.6, el: 0.3, dist: 300 },
+      conPivote ? { puntoBajo: () => [12, -4, 9] } : {}));
+    for (let i = 0; i < 40; i++) cam.tick(1 / 60);
+    for (let i = 0; i < 10; i++) {
+      dom.disparar('wheel', { deltaY: -120, clientX: 600, clientY: 400 });
+      cam.tick(1 / 60);
+    }
+    return cam.meta.dist;
+  };
+  const esperado = 300 * Math.exp(-1200 * 0.0011);
+  // 1 · sin pivote tiene que dar exacto — es el control de que la cuenta del zoom está bien
+  assert.ok(Math.abs(camina(false) - esperado) < 0.5,
+    `sin pivote la rueda da ${camina(false).toFixed(1)} y debería dar ${esperado.toFixed(1)}`);
+  // 2 · y CON pivote tiene que dar lo mismo: el pivote no puede tocar el zoom
+  assert.ok(Math.abs(camina(true) - esperado) < 0.5,
+    `con pivote la rueda da ${camina(true).toFixed(1)} y debería dar ${esperado.toFixed(1)}`);
+});
+
+test('C4 · una vez agarrado, mover el mouse no cambia la distancia', () => {
+  // El pivote se fija AL APOYAR EL DEDO y una sola vez. Refijándolo en cada movimiento, la
+  // distancia —y con ella la velocidad del paneo y el paso del zoom— cambia mientras girás, que es
+  // la otra manera de que el gesto se sienta con voluntad propia.
+  const cámara = unaCamara(), dom = unDom();
+  // EL PUNTO TIENE QUE DEPENDER DEL CURSOR, como en la realidad: con uno fijo, refijar el pivote en
+  // cada movimiento es un no-op después del primero y el sabotaje no muerde. El banco lo marcó
+  // VACUO por exactamente eso.
+  const cam = crearCamara(cámara, dom,
+    { az: 0.6, el: 0.3, dist: 300, puntoBajo: (x, y) => [x * 0.05, -4, y * 0.05] });
+  for (let i = 0; i < 40; i++) cam.tick(1 / 60);
+  dom.disparar('pointerdown', { clientX: 600, clientY: 400, button: 0, pointerId: 1 });
+  cam.tick(1 / 60);
+  // CONTROL: apoyar el dedo SÍ tiene que haber movido el pivote. Sin esto el test pasaría con la
+  // función desconectada, que es la otra manera de que la distancia no cambie.
+  assert.ok(Math.abs(cam.est.dist - 300) > 1,
+    'apoyar el dedo no movió el pivote: el test no está probando nada');
+  const antes = cam.est.dist;
+  for (let i = 0; i < 8; i++) {
+    dom.disparar('pointermove', { clientX: 600 + i * 20, clientY: 400 + i * 7, button: 0, pointerId: 1 });
+    cam.tick(1 / 60);
+  }
+  assert.ok(Math.abs(cam.est.dist - antes) < 1e-6,
+    `la distancia cambió de ${antes.toFixed(2)} a ${cam.est.dist.toFixed(2)} girando`);
+});
