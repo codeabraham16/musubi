@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
          destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
-         colocarNudo, repartirEsfera, crearCamara } from './comun.mjs';
+         colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -774,46 +774,6 @@ const unaCamara = () => {
   return c;
 };
 
-test('C1 · cambiar el PIVOTE no mueve la cámara', () => {
-  // Es la mitad que hace invisible al arreglo. Si mover el eje de giro corriera la vista, cada vez
-  // que apoyás el dedo la escena daría un salto — peor que el defecto que se venía a arreglar.
-  const cámara = unaCamara();
-  const cam2 = crearCamara(cámara, unDom(), { az: 0.6, el: 0.3, dist: 300 });
-  cam2.tick(1); cam2.tick(1);                       // que la cámara llegue a su lugar
-  const antes = cámara.position.clone();
-  cam2.fijarPivote([48, -26, 17]);
-  cam2.tick(1 / 60);
-  const corrio = antes.distanceTo(cámara.position);
-  assert.ok(corrio < 0.5, `la vista se movió ${corrio.toFixed(1)} unidades al cambiar el pivote`);
-  // Y el pivote SÍ cambió: sin esto el test pasaría con una función que no hace nada.
-  assert.ok(cam2.est.foco.distanceTo(new THREE.Vector3(48, -26, 17)) < 1e-6,
-    `el pivote quedó en ${cam2.est.foco.toArray().map((x) => x.toFixed(1))}`);
-});
-
-test('C2 · arrastrar es 1 a 1: no hay retraso entre la mano y la imagen', () => {
-  // La amortiguación es buenísima para el frenado y los vuelos, y es exactamente lo que NO puede
-  // aplicarse al gesto en curso: mete cinco cuadros entre lo que hacés y lo que ves, y eso no se
-  // lee como suavidad sino como que la escena viene atrás tuyo.
-  const cámara = unaCamara();
-  const dom = unDom();
-  const cam = crearCamara(cámara, dom, { az: 0, el: 0.2, dist: 300 });
-  cam.tick(1); cam.tick(1);
-  dom.disparar('pointerdown', { clientX: 600, clientY: 400, button: 0, pointerId: 1 });
-  dom.disparar('pointermove', { clientX: 700, clientY: 400, button: 0, pointerId: 1 });
-  const pedido = cam.meta.az;
-  cam.tick(1 / 60);
-  assert.ok(Math.abs(cam.est.az - pedido) < 1e-9,
-    `pediste ${pedido.toFixed(4)} y la cámara fue a ${cam.est.az.toFixed(4)}: viene atrás`);
-  // CONTROL: soltando, el suavizado TIENE que volver — si no, este test pasaría con la
-  // amortiguación borrada del todo, que es la otra manera de que no haya retraso.
-  dom.disparar('pointerup', { pointerId: 1 });
-  cam.meta.az += 1.0;
-  cam.tick(1 / 60);
-  assert.ok(Math.abs(cam.est.az - cam.meta.az) > 0.05,
-    'sin arrastre la cámara ya no suaviza: el frenado y los vuelos van a dar cortes');
-});
-
-
 test('C3 · diez pasos de rueda ACUMULAN, aunque haya pivote', () => {
   // 🔴 EL BUG QUE ESTE TEST EXISTE PARA QUE NO VUELVA. Enganché el pivote a la rueda «para que no
   // se aleje de la geometría», y `fijarPivote` deriva el destino de DONDE ESTÁ la cámara: pisaba la
@@ -822,8 +782,8 @@ test('C3 · diez pasos de rueda ACUMULAN, aunque haya pivote', () => {
   // scroll se daña todo», y era exactamente eso.
   const camina = (conPivote) => {
     const cámara = unaCamara(), dom = unDom();
-    const cam = crearCamara(cámara, dom, Object.assign({ az: 0.6, el: 0.3, dist: 300 },
-      conPivote ? { puntoBajo: () => [12, -4, 9] } : {}));
+    void conPivote;
+    const cam = crearCamara(cámara, dom, { az: 0.6, el: 0.3, dist: 300 });
     for (let i = 0; i < 40; i++) cam.tick(1 / 60);
     for (let i = 0; i < 10; i++) {
       dom.disparar('wheel', { deltaY: -120, clientX: 600, clientY: 400 });
@@ -832,36 +792,89 @@ test('C3 · diez pasos de rueda ACUMULAN, aunque haya pivote', () => {
     return cam.meta.dist;
   };
   const esperado = 300 * Math.exp(-1200 * 0.0011);
-  // 1 · sin pivote tiene que dar exacto — es el control de que la cuenta del zoom está bien
   assert.ok(Math.abs(camina(false) - esperado) < 0.5,
-    `sin pivote la rueda da ${camina(false).toFixed(1)} y debería dar ${esperado.toFixed(1)}`);
-  // 2 · y CON pivote tiene que dar lo mismo: el pivote no puede tocar el zoom
-  assert.ok(Math.abs(camina(true) - esperado) < 0.5,
-    `con pivote la rueda da ${camina(true).toFixed(1)} y debería dar ${esperado.toFixed(1)}`);
+    `diez pasos de rueda dan ${camina(false).toFixed(1)} y deberían dar ${esperado.toFixed(1)}`);
+  // CONTROL: un paso solo tiene que mover MENOS que diez. Sin esto el test pasaría con una rueda
+  // que saltara al valor final en el primer paso, que es la otra manera de que el número dé bien.
+  const cámara = unaCamara(), dom = unDom();
+  const cam = crearCamara(cámara, dom, { az: 0.6, el: 0.3, dist: 300 });
+  for (let i = 0; i < 40; i++) cam.tick(1 / 60);
+  dom.disparar('wheel', { deltaY: -120, clientX: 600, clientY: 400 });
+  assert.ok(cam.meta.dist > esperado * 2,
+    `un paso solo ya llegó a ${cam.meta.dist.toFixed(1)}: la rueda no es progresiva`);
 });
 
-test('C4 · una vez agarrado, mover el mouse no cambia la distancia', () => {
-  // El pivote se fija AL APOYAR EL DEDO y una sola vez. Refijándolo en cada movimiento, la
-  // distancia —y con ella la velocidad del paneo y el paso del zoom— cambia mientras girás, que es
-  // la otra manera de que el gesto se sienta con voluntad propia.
+test('C4 · el punto bajo el cursor SE QUEDA bajo el cursor al hacer zoom', () => {
+  // Es la promesa del zoom hacia el cursor, y la única que se puede comprobar sin mirar: se
+  // proyecta un punto del mundo a pantalla antes y después de un paso de rueda apuntado a ÉL.
   const cámara = unaCamara(), dom = unDom();
-  // EL PUNTO TIENE QUE DEPENDER DEL CURSOR, como en la realidad: con uno fijo, refijar el pivote en
-  // cada movimiento es un no-op después del primero y el sabotaje no muerde. El banco lo marcó
-  // VACUO por exactamente eso.
-  const cam = crearCamara(cámara, dom,
-    { az: 0.6, el: 0.3, dist: 300, puntoBajo: (x, y) => [x * 0.05, -4, y * 0.05] });
+  const cam = crearCamara(cámara, dom, { az: 0.6, el: 0.3, dist: 300 });
   for (let i = 0; i < 40; i++) cam.tick(1 / 60);
-  dom.disparar('pointerdown', { clientX: 600, clientY: 400, button: 0, pointerId: 1 });
-  cam.tick(1 / 60);
-  // CONTROL: apoyar el dedo SÍ tiene que haber movido el pivote. Sin esto el test pasaría con la
-  // función desconectada, que es la otra manera de que la distancia no cambie.
-  assert.ok(Math.abs(cam.est.dist - 300) > 1,
-    'apoyar el dedo no movió el pivote: el test no está probando nada');
-  const antes = cam.est.dist;
-  for (let i = 0; i < 8; i++) {
-    dom.disparar('pointermove', { clientX: 600 + i * 20, clientY: 400 + i * 7, button: 0, pointerId: 1 });
-    cam.tick(1 / 60);
+  const P = new THREE.Vector3(30, 12, -8);
+  const aPantalla = () => {
+    cámara.updateMatrixWorld(true);
+    const v = P.clone().project(cámara);
+    return [(v.x * 0.5 + 0.5) * 1200, (-v.y * 0.5 + 0.5) * 800];
+  };
+  const [x0, y0] = aPantalla();
+  dom.disparar('wheel', { deltaY: -240, clientX: x0, clientY: y0 });
+  for (let i = 0; i < 60; i++) cam.tick(1 / 60);
+  const [x1, y1] = aPantalla();
+  const corrio = Math.hypot(x1 - x0, y1 - y0);
+  assert.ok(corrio < 2, `el punto bajo el cursor se corrió ${corrio.toFixed(1)} px al acercar`);
+  // CONTROL: la cámara SÍ se acercó. Sin esto el test pasaría con la rueda desconectada.
+  assert.ok(cam.est.dist < 290, `la rueda no acercó nada: ${cam.est.dist.toFixed(1)}`);
+});
+
+
+
+/* ── EL COLOR ─────────────────────────────────────────────────────────────────────────────────
+   «Que se vea natural». El acervo de diseño reparte el trabajo así: el TONO lleva la identidad, el
+   BRILLO lleva la forma, y la saturación alta es para lo interactivo — no para tejido. Las dos
+   reglas de abajo son eso, escritas de manera que se las pueda ver fallar. */
+
+/** aHSL: el hex a tono/saturación/luz, para poder afirmar algo sobre la paleta. */
+function aHSL(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const sa = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, sa, l];
+}
+
+test('D1 · la paleta es UNA regla, no seis elecciones sueltas', () => {
+  const hs = PALETA.map(aHSL);
+  // 1 · MISMA saturación y MISMA luz: si un actor viene más saturado o más claro, pesa más en la
+  //     pantalla sin que eso signifique nada. Antes iban 66/86/89 % y 50/70/63 %.
+  const ss = hs.map((x) => x[1]), ls = hs.map((x) => x[2]);
+  assert.ok(Math.max(...ss) - Math.min(...ss) < 0.06,
+    `la saturación va de ${(100 * Math.min(...ss)).toFixed(0)} % a ${(100 * Math.max(...ss)).toFixed(0)} %`);
+  assert.ok(Math.max(...ls) - Math.min(...ls) < 0.06,
+    `la luz va de ${(100 * Math.min(...ls)).toFixed(0)} % a ${(100 * Math.max(...ls)).toFixed(0)} %`);
+  // 2 · y SATURACIÓN CONTENIDA: alta es «tocame», y esto es tejido. Antes llegaba a 89 %.
+  assert.ok(Math.max(...ss) < 0.62,
+    `la saturación llega a ${(100 * Math.max(...ss)).toFixed(0)} %: se lee como plástico`);
+  // 3 · ningún tono cae en las franjas que la marca reserva para ESTADO (ámbar · verde ok · rojo),
+  //     o un actor y un aviso se ven igual.
+  const chocan = hs.filter(([h]) => (h > 28 && h < 58) || (h > 138 && h < 162) || h > 342 || h < 12);
+  assert.equal(chocan.length, 0,
+    `${chocan.length} colores de la paleta caen sobre un color de estado`);
+});
+
+test('D2 · la variación entre hilos va en BRILLO, no en tono', () => {
+  // Era ±15° de tono, y el tono es lo ÚNICO que dice de quién es la rama: un haz salía como confeti
+  // de tres colores parecidos. Un tejido real son fibras del mismo tejido con luz distinta.
+  const hh = [], ll = [];
+  for (let f = 0; f < 600; f++) {
+    const j = jitterHilo(f, f % 7);
+    hh.push(j.h); ll.push(j.l);
   }
-  assert.ok(Math.abs(cam.est.dist - antes) < 1e-6,
-    `la distancia cambió de ${antes.toFixed(2)} a ${cam.est.dist.toFixed(2)} girando`);
+  const rango = (v) => Math.max(...v) - Math.min(...v);
+  assert.equal(rango(hh), 0, `el tono varía ${rango(hh)} entre hilos: ensucia la identidad`);
+  // CONTROL: y el brillo SÍ tiene que variar. Sin esto el test pasaría con el jitter borrado del
+  // todo, que es la otra manera de que el tono no varíe — y deja el haz como pana plana.
+  assert.ok(rango(ll) > 0.25, `el brillo apenas varía ${rango(ll).toFixed(3)}: el haz queda plano`);
 });

@@ -201,32 +201,34 @@ const SABOTAJES = [
     a: '  const rampa = 1;',
   },
 
-  /* ── LA CAMARA ───────────────────────────────────────────────────────────────────────────── */
+  /* ── EL COLOR ────────────────────────────────────────────────────────────────────────────── */
   {
-    test: 'C1',
-    que: 'cambiar el pivote teletransporta la vista en vez de dejarla quieta',
-    de: '    est.dist = Math.max(MIN, Math.min(MAX, d));',
-    a: '    est.dist = est.dist;',
+    test: 'D1',
+    que: 'un actor vuelve a venir mas saturado que los otros y pesa mas sin significar nada',
+    de: "export const PALETA = ['#5bc8ba', '#c85b93', '#5b85c8', '#9c5bc8', '#5badc8', '#6d5bc8',",
+    a: "export const PALETA = ['#2dd4bf', '#f472b6', '#5b85c8', '#9c5bc8', '#5badc8', '#6d5bc8',",
   },
   {
-    test: 'C2',
-    que: 'vuelve el suavizado durante el arrastre: la escena viene atras de la mano',
-    de: '      const k = arrastre ? 1 : 1 - Math.exp(-15 * dt);',
-    a: '      const k = 1 - Math.exp(-15 * dt);',
+    test: 'D2',
+    que: 'el jitter vuelve al TONO: el haz se lee como confeti y se ensucia la identidad',
+    de: '  return { h: 0, s: 0, l: (v - 0.5) * 0.34 };',
+    a: '  return { h: (v - 0.5) * 0.085, s: 0, l: (v - 0.5) * 0.34 };',
   },
 
+  /* ── LA CAMARA ───────────────────────────────────────────────────────────────────────────── */
   {
     test: 'C3',
-    que: 'el pivote vuelve a engancharse a la rueda y el zoom se cancela a si mismo',
-    de: '             .addScaledVector(_arr, ny * tan * d);',
-    a: '             .addScaledVector(_arr, ny * tan * d); if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));',
+    que: 'la rueda deja de ser progresiva y salta al valor final en el primer paso',
+    de: '    meta.dist = Math.max(MIN, Math.min(MAX, meta.dist * Math.exp(ev.deltaY * 0.0011)));',
+    a: '    meta.dist = Math.max(MIN, Math.min(MAX, meta.dist * Math.exp(ev.deltaY * 0.011)));',
   },
   {
     test: 'C4',
-    que: 'el pivote se refija en CADA movimiento y la distancia cambia mientras giras',
-    de: '    const s = 2.7 / Math.max(320, dom.clientHeight || 800);',
-    a: '    if (o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY)); const s = 2.7 / Math.max(320, dom.clientHeight || 800);',
+    que: 'el zoom deja de ir hacia el cursor: el punto se corre de abajo del puntero',
+    de: '    meta.foco.addScaledVector(_der, nx * tan * (camera.aspect || 1) * d)',
+    a: '    meta.foco.addScaledVector(_der, 0)',
   },
+
 
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {

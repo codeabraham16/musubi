@@ -26,7 +26,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { crearCamara, crearRotulos, frenteEn, enCurva,
-         contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis } from './comun.mjs';
+         contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis, jitterHilo } from './comun.mjs';
 
 export { enCurva };
 
@@ -151,7 +151,21 @@ void main(){
   // comprimir, la rama elegida se pasa de 1 en dos canales y sale CIAN BLANCO: se pierde de quien
   // es justo en lo que estas mirando. Multiplicando antes, sube de brillo conservando el tono y el
   // rolloff se encarga de que no llegue a 1. Es el mismo error que ya nos comio el color de aviso.
-  vec3 base = (vC * mielina * prof * (0.74 + 1.30 * dif) + vC * fres * 0.66) * vVol
+  /* 🔴 LA SOMBRA DE UN TEJIDO NO ES GRIS: ES CÁLIDA. Es lo que separa carne de plástico. En un
+     material translúcido la luz entra, se dispersa adentro y sale por el lado en sombra teñida de
+     rojo — por eso una mano contra una linterna se ve roja y no negra. Un plástico opaco no hace
+     eso: su sombra es su propio color, más oscuro. Acá es una línea: el término en sombra se
+     inclina hacia un rojo apagado en vez de caer al negro, y cuanto menos luz recibe, más se
+     inclina. No cambia el tono de identidad —eso vive en la parte iluminada— y cambia por completo
+     de qué parece hecha la rama. */
+  // NEUTRA EN LUMINANCIA: sólo TIÑE, no apaga. Lo primero que probé fue (0,38 · 0,11 · 0,09), que
+  // además de teñir hundía el verde al 11 % — la escena entera se fue a marrón oscuro. Un tejido
+  // translúcido no se oscurece del lado en sombra: se pone CÁLIDO. Los tres factores promedian ~1.
+  vec3 subsup = mix(vec3(1.26, 0.90, 0.82), vec3(1.0), dif);
+  // GANANCIA UN POCO MAS ALTA que con la paleta neon, y no es capricho: bajar la saturacion baja
+  // la energia del color, asi que a igual ganancia la escena se apaga. Medido: 63,7 -> 53,2 de
+  // brillo medio con la paleta nueva. Se compensa acá, que es donde corresponde.
+  vec3 base = (vC * subsup * mielina * prof * (0.88 + 1.46 * dif) + vC * fres * 0.72) * vVol
             * (1.0 + vSel * 1.60);
   // ROLLOFF SUAVE en vez de recorte duro. Sin esto hay que elegir entre dos males: con ganancia
   // alta el turquesa saturado se pasa de 1 en dos canales y el haz cercano se lava a CIAN BLANCO
@@ -496,11 +510,7 @@ export function montar(cfg) {
   // NO se pone scene.fog: estaba puesto y NO HACIA NADA (ningun ShaderMaterial la consume), asi que
   // era codigo que parecia vivo. La profundidad la da `atmosfera()` adentro de cada shader.
   const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.5, 9000);
-  // `puntoBajo` es una DECLARACION de funcion, asi que esta izada y se puede pasar acá aunque su
-  // cuerpo viva 500 lineas mas abajo: cuando se la llama —al apoyar el dedo— ya existe todo lo que
-  // usa. Es lo que le deja a la camara girar alrededor de lo que agarraste.
-  const cam = crearCamara(camera, renderer.domElement,
-                          Object.assign({}, cfg.camara || {}, { puntoBajo }));
+  const cam = crearCamara(camera, renderer.domElement, cfg.camara || {});
 
   // BLOOM. Las reconstrucciones reales se ven así porque el tejido teñido EMITE: sin un halo
   // alrededor de lo brillante, un tubo de color plano se lee como plástico. El umbral alto (0,55)
@@ -717,9 +727,11 @@ export function montar(cfg) {
     // de nadie solo si se lo mira como un objeto; mirado como hilos, es de todos.
     const d = DEST[fib];
     _c.copy(COLSEC[d >= 0 ? d : sec]);
-    const h1 = ((fib * 2654435761) % 1000) / 1000;
-    const h2 = ((fib * 40503 + orden * 7919) % 1000) / 1000;
-    _c.offsetHSL((h1 - 0.5) * 0.085, 0, (h2 - 0.5) * 0.20);
+    // El apartamiento de UN hilo respecto del color de su rama. Vive en `comun.mjs` y no acá
+    // porque es la regla que dice que el jitter va en BRILLO y no en tono — y eso hay que poder
+    // verlo fallar bajo sabotaje, que es algo que sólo se puede hacer del lado puro.
+    const j = jitterHilo(fib, orden);
+    _c.offsetHSL(j.h, j.s, j.l);
     return _c;
   }
 
@@ -1227,36 +1239,6 @@ export function montar(cfg) {
     t = Math.max(-semi, Math.min(semi, t));
     _sal.copy(_cen).addScaledVector(u, t);
     return [_sal.x, _sal.y, _sal.z];
-  }
-
-  /**
-   * puntoBajo: lo que la cámara necesita para girar alrededor de lo que agarraste.
-   *
-   * 🔴 VA POR EL RAYCAST ANALÍTICO Y NO POR EL PASE DE IDENTIDAD, y la diferencia se siente: el
-   * pase de identidad hace una lectura SINCRÓNICA del framebuffer, que frena la tubería de la GPU
-   * hasta que termina. Eso, al empezar CADA arrastre, es un tirón justo en el momento en que la
-   * mano espera que la escena la siga — o sea, exactamente lo que se describió como «tosco».
-   *
-   * Y para un pivote no hace falta esa puntería: da igual el hilo exacto, alcanza con el punto de
-   * la CURVA del haz más cercano al rayo. Son ~441 secciones por 9 muestras, todo en CPU, sin
-   * tocar la GPU.
-   */
-  const _pb = new THREE.Vector2(), _pr = new THREE.Raycaster(), _pv = new THREE.Vector3();
-  function puntoBajo(x, y) {
-    _pb.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
-    _pr.setFromCamera(_pb, camera);
-    let mejor = null, mejorD = Infinity;
-    for (const s of S) {
-      for (let k = 0; k <= 8; k++) {
-        const q = enCurva(s, k / 8);
-        _pv.set(q[0], q[1], q[2]);
-        const d = _pr.ray.distanceToPoint(_pv);
-        // La tolerancia es el grosor del haz con un piso: una rama fina pide más puntería que el
-        // tronco, que es lo natural, pero un pivote no puede exigir precisión de cirujano.
-        if (d < Math.max(6, (s.Rhaz || 1) * 1.6) && d < mejorD) { mejorD = d; mejor = q; }
-      }
-    }
-    return mejor;
   }
 
   function marcarFoco() {

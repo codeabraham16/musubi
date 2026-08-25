@@ -1302,10 +1302,16 @@ export function enhebrar(secciones, opciones) {
         const cm = Math.cos(phm), sm = Math.sin(phm);
         const nrad = rho < 1e-6 ? [0, 0, 0]
           : [e1[0] * cm + e2[0] * sm, e1[1] * cm + e2[1] * sm, e1[2] * cm + e2[2] * sm];
+        /* 🔴 NINGÚN AXÓN MIDE LO MISMO QUE SU VECINO. Todas las fibras con el radio exacto se
+           leen como cable de fábrica: es la otra mitad de por qué el tejido parecía sintético, y
+           está en la FORMA, no en el color. En un tracto real el calibre varía varias veces entre
+           la fibra más fina y la más gruesa. Determinista por hilo, así que el dibujo sigue siendo
+           el mismo en cada apertura. */
+        const cal = 0.68 + 0.62 * (((gi * 1103515245 + 12345) >>> 8) % 1000) / 1000;
         esl.push({
           a: A, b: B,
           curva: [M[0] - (A[0] + B[0]) / 2, M[1] - (A[1] + B[1]) / 2, M[2] - (A[2] + B[2]) / 2],
-          r: rFib, sec: s.idx, fib: gi, nivel: s.nivel, orden: k,
+          r: rFib * cal, sec: s.idx, fib: gi, nivel: s.nivel, orden: k,
           ultimo: k + 2 === cortes.length,
           dist: d0 + (s.largo || 0) * t0, largo,
           nodos: Math.max(2, Math.min(6, Math.round(largo / Math.max(0.6, rFib * 18)))),
@@ -1574,6 +1580,17 @@ function distTramos(p1, q1, p2, q2) {
  * elevación, distancia— y el `up` es siempre +Y. Trackball no tiene concepto de arriba y por eso la
  * escena terminaba tumbada sin manera de enderezarla.
  */
+/* ⛔ ESTA ES LA CÁMARA DE LA VERSIÓN 35, REPUESTA A PEDIDO — NO REHACERLA SIN QUE SE PIDA.
+   Después de la v35 le hice dos vueltas: pivote bajo el cursor al apoyar el dedo, y arrastre sin
+   suavizado. Las dos las probé, las dos las medí, y las dos EMPEORARON el manejo para quien lo usa
+   — «cada vez degrada más», y la segunda encima trajo un bug real (el pivote enganchado a la rueda
+   cancelaba el zoom, 300 → 287,8 en diez pasos en vez de 300 → 80,1).
+
+   Lo que queda anotado, porque el hallazgo sigue siendo cierto aunque el arreglo no se quiera:
+     · el pivote no cambia al arrastrar, así que girar lejos del foco describe un arco grande;
+     · si algún día se toca, el pivote se fija AL APOYAR EL DEDO y NUNCA en la rueda, y se resuelve
+       con el raycast analítico y no con el pase de identidad, que frena la GPU.
+   Pero el veredicto de quien lo usa mandó, y manda. */
 export function crearCamara(camera, dom, opciones) {
   const o = opciones || {};
   const MIN = Number(o.min) || 8, MAX = Number(o.max) || 4000;
@@ -1585,40 +1602,6 @@ export function crearCamara(camera, dom, opciones) {
   const meta = { az: est.az, el: est.el, dist: est.dist, foco: est.foco.clone() };
   const topeEl = (x) => Math.max(-LIM_EL, Math.min(LIM_EL, x));
 
-  /* 🔴 EL PIVOTE ES LO QUE AGARRÁS ────────────────────────────────────────────────────────────
-     Tercera vez que el usuario dice que mover el 3D «es muy raro», y las dos anteriores lo afiné a
-     ciegas: amortiguación, inercia, zoom hacia el cursor. Nada de eso era la causa.
-
-     LA CAUSA: el punto alrededor del cual gira la escena NO cambiaba nunca al arrastrar. Se movía
-     al volar (clic) y al panear, y nada más. O sea que si te acercabas a una rama que está lejos
-     de ese punto, arrastrar no la giraba: la hacía CRUZAR LA PANTALLA en un arco enorme, porque el
-     eje de giro estaba a cien unidades de lo que estabas mirando. Se siente como que el visor tiene
-     voluntad propia, que es exactamente lo que se describió.
-
-     El arreglo tiene dos mitades y la segunda es la que lo hace invisible:
-       1. al apoyar el dedo se sondea qué hay abajo del cursor y ESO pasa a ser el pivote;
-       2. y al cambiarlo, la CÁMARA NO SE MUEVE — se recalculan az/el/dist desde su posición
-          actual, así que el pivote cambia sin que la imagen dé un salto. Sin esta mitad, cada
-          clic teletransportaría la vista y el arreglo sería peor que el defecto. */
-  function fijarPivote(p) {
-    if (!p) return;
-    // La posición ACTUAL de la cámara, que es lo que hay que conservar. Se usa `est` y no `meta`
-    // porque `est` es donde la cámara está de verdad; `meta` es a dónde va.
-    const ce = Math.cos(est.el), se = Math.sin(est.el);
-    const px = est.foco.x + Math.sin(est.az) * ce * est.dist;
-    const py = est.foco.y + se * est.dist;
-    const pz = est.foco.z + Math.cos(est.az) * ce * est.dist;
-    const vx = px - p[0], vy = py - p[1], vz = pz - p[2];
-    const d = Math.hypot(vx, vy, vz);
-    if (!(d > 0.001)) return;                    // el pivote encima de la cámara no define un eje
-    est.foco.set(p[0], p[1], p[2]);
-    est.dist = Math.max(MIN, Math.min(MAX, d));
-    est.el = topeEl(Math.asin(Math.max(-1, Math.min(1, vy / d))));
-    est.az = Math.atan2(vx, vz);
-    // Y el destino se lleva el MISMO pivote, o el suavizado tiraría la vista de vuelta al viejo.
-    meta.foco.copy(est.foco); meta.dist = est.dist; meta.el = est.el; meta.az = est.az;
-  }
-
   let arrastre = null, vuelo = null, reloj = 0;
   let vAz = 0, vEl = 0;                 // velocidad angular, para la inercia
   const _der = new THREE.Vector3(), _arr = new THREE.Vector3(), _z = new THREE.Vector3();
@@ -1627,8 +1610,6 @@ export function crearCamara(camera, dom, opciones) {
     arrastre = { x: ev.clientX, y: ev.clientY, t: 0,
                  pan: ev.button === 1 || ev.button === 2 || ev.shiftKey };
     vuelo = null; vAz = 0; vEl = 0;
-    // Sólo al girar: paneando, mover el pivote sería pelearle al gesto.
-    if (!arrastre.pan && o.puntoBajo) fijarPivote(o.puntoBajo(ev.clientX, ev.clientY));
     try { dom.setPointerCapture(ev.pointerId); } catch (_) {}
   });
   const soltar = () => {
@@ -1688,12 +1669,6 @@ export function crearCamara(camera, dom, opciones) {
     camera.matrixWorld.extractBasis(_der, _arr, _z);
     meta.foco.addScaledVector(_der, nx * tan * (camera.aspect || 1) * d)
              .addScaledVector(_arr, ny * tan * d);
-    /* 🔴 ACÁ NO VA `fijarPivote`, Y LO MIDO PORQUE YA LO PUSE UNA VEZ. `fijarPivote` deriva el
-       destino de DONDE ESTÁ la cámara, así que llamarlo justo después de fijar una distancia nueva
-       PISA esa distancia con la vieja: el zoom se cancela a sí mismo en cada paso. Medido con diez
-       pasos de rueda seguidos: 300 → 287,8 en vez de 300 → 80,1. Y encima, sondear qué hay bajo el
-       cursor en cada evento de rueda —que llegan de a cien por segundo— frena la tubería de la GPU
-       en cada uno. El pivote se fija al APOYAR EL DEDO y nada más. */
   }, { passive: false });
 
   /** suave: cúbica in-out. Arranca de cero y llega a cero — un vuelo con velocidad en los extremos
@@ -1756,12 +1731,8 @@ export function crearCamara(camera, dom, opciones) {
         if (Math.abs(vAz) < 2e-4) vAz = 0;
         if (Math.abs(vEl) < 2e-4) vEl = 0;
       }
-      /* 🔴 MIENTRAS ARRASTRÁS NO HAY SUAVIZADO. La amortiguación existe para que el frenado y los
-         vuelos no den cortes, y para eso es buenísima — pero aplicada al gesto en curso mete cinco
-         cuadros de retraso entre la mano y la imagen, y eso NO se lee como suavidad: se lee como
-         que la escena viene atrás tuyo. La manipulación directa tiene que ser 1 a 1; lo que se
-         suaviza es lo que la cámara hace SOLA. */
-      const k = arrastre ? 1 : 1 - Math.exp(-15 * dt);
+      // ← EL ARREGLO DE FONDO: el factor sale del tiempo, no del cuadro.
+      const k = 1 - Math.exp(-15 * dt);
       est.az += (meta.az - est.az) * k;
       est.el += (meta.el - est.el) * k;
       est.dist = Math.max(0.001, est.dist) * Math.pow(meta.dist / Math.max(0.001, est.dist), k);
@@ -1777,9 +1748,7 @@ export function crearCamara(camera, dom, opciones) {
     camera.lookAt(est.foco);
   }
 
-  return { est, meta, tick, volarA, fijarPivote,
-           get volando() { return vuelo != null; },
-           get arrastrando() { return arrastre != null; } };
+  return { est, meta, tick, volarA, get volando() { return vuelo != null; } };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
@@ -1918,19 +1887,53 @@ export async function cargar(url) {
 // mismo color, y como Musubi es el 63 % de la memoria, davantis desaparecía adentro. Acá los tres
 // actores están a ~90° de tono unos de otros, que es lo que hace falta para distinguirlos cuando
 // además hay bloom encima lavando la saturación.
-/* ⚠ LOS COLORES DE ESTADO NO SE REPARTEN COMO IDENTIDAD. La marca de Musubi reserva el ámbar
+/* 🔴 SATURACIÓN ALTA = «tocame». Es para lo interactivo, no para tejido, y por eso la escena se
+   leía como plástico de colores en vez de como materia. Medido antes de tocar nada:
+
+     gio       H 172  S 66 %  L 50 %
+     davantis  H 329  S 86 %  L 70 %
+     Musubi    H 217  S 89 %  L 63 %
+
+   Dos problemas juntos. El primero, la saturación: a 86-89 % el color satura el canal y ya no
+   queda recorrido para que el SOMBREADO diga nada — el volumen del haz existe en el shader pero no
+   se ve, porque el color ya está en el techo. El segundo, que las tres luminosidades son distintas
+   (50 / 70 / 63): un actor grita más fuerte que otro sin que eso signifique nada.
+
+   El reparto correcto es el del acervo: EL TONO LLEVA LA IDENTIDAD —tres categorías sin orden, tres
+   tonos— y EL BRILLO LLEVA LA FORMA. Así que el tono se conserva (son los colores que ya se
+   reconocen), la saturación baja a ~46 % para dejarle lugar al sombreado, y las tres luminosidades
+   se igualan en ~55 % para que ninguna pese más que otra.
+
+   ⚠ LOS COLORES DE ESTADO NO SE REPARTEN COMO IDENTIDAD. La marca de Musubi reserva el ámbar
    (#FBBF24, aviso), el verde (#34D399, ok) y el rosa-rojo (#FB7185, error) para decir ESTADO. Con
    un actor pintado de ámbar, un aviso y una persona se ven igual — y el dibujo ya usa el ámbar
    para el impulso y el rojo para una relación que se contradice. Los dos primeros no se mueven:
    son los que el usuario viene mirando hace días. Del tercero en adelante se eligieron tonos que
    NO chocan con ningún estado. */
-export const PALETA = ['#2dd4bf', '#f472b6', '#8ab4f8', '#c792ea', '#5eead4', '#93c5fd',
-                       '#fb923c', '#f87171', '#a3e635', '#e879f9', '#38bdf8', '#facc15'];
+// Los seis salen de UNA regla, no de elegirlos a ojo: S 50 % · L 57 % y sólo cambia el tono
+// (172 · 329 · 217 · 276 · 195 · 250). Misma saturación y misma luz = ningún actor grita más que
+// otro, y los tonos esquivan las tres franjas reservadas para estado (ámbar, verde, rojo).
+export const PALETA = ['#5bc8ba', '#c85b93', '#5b85c8', '#9c5bc8', '#5badc8', '#6d5bc8',
+                       '#c85bc8', '#6dc85b', '#95c85b', '#5b62c8', '#c85bad', '#5b9ac8'];
 
 // MUSUBI tiene color propio, y esa es la corrección: antes sus 1.437 notas iban a dos grises que
 // se leían como «archivo muerto» y «nota huérfana». Azul, lejos del turquesa de gio y del rosa de
 // davantis — Musubi es un actor, pero no es una persona, y la diferencia tiene que verse.
-export const COLOR_MUSUBI = '#4d8df5';
+/**
+ * jitterHilo: cuánto se aparta UN hilo del color de su rama.
+ *
+ * 🔴 VA EN BRILLO Y NUNCA EN TONO, y vive acá —fuera de la escena— justamente para que eso se
+ * pueda probar. El tono es el ÚNICO canal que dice de quién es la rama: ensuciarlo convierte un haz
+ * en confeti de tres colores parecidos, y era la mitad de por qué el tejido se leía sintético.
+ * Estaba en ±15° de tono. Un tejido real no tiene fibras de tonos distintos — tiene fibras del
+ * mismo tejido recibiendo luz distinta, que es una diferencia de BRILLO.
+ */
+export function jitterHilo(fib, orden) {
+  const v = ((fib * 40503 + orden * 7919) % 1000) / 1000;
+  return { h: 0, s: 0, l: (v - 0.5) * 0.34 };
+}
+
+export const COLOR_MUSUBI = '#5b85c8';
 // EL NUCLEO: lo unico que no pertenece a nadie. Antes iba gris apagado a proposito —para no darle
 // color de actor— y con la forma nueva eso lo convirtio en un grumo sucio justo en el centro del
 // cuadro, que es donde converge todo. Plata fria: sigue sin ser el color de nadie, pero se lee
