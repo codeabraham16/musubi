@@ -363,6 +363,38 @@ void main(){ float i=vBase+vGlow*(1.0-0.35*vY);
   gl_FragColor=vec4(c*i,i); }
 `;
 
+// ── EL CAMPO ─────────────────────────────────────────────────────────────────────────────────
+// Un halo por neurona. NO ES DECORACION: es como se ven las senales de uso. Su intensidad sale de
+// `campo` —la suma de la fuerza de los frentes VIVOS de esa neurona— y de nada mas. Sin llamada no
+// hay campo, y con `aCampo` en cero el fragmento sale NEGRO, que sobre blending aditivo es
+// exactamente invisible: la regla no depende de acordarse de apagarlo.
+//
+// Es un CARTEL (billboard) y no una esfera: una esfera con caida radial se ve igual desde cualquier
+// lado pero cuesta geometria y se mete adentro de las ramas; el cartel siempre mira a la camara y
+// son cuatro vertices.
+const AGEO=new THREE.PlaneGeometry(1,1);
+const AVERT=`
+attribute vec3 aColor; attribute float aRadio; attribute float aCampo;
+varying vec2 vUv; varying vec3 vColor; varying float vCampo;
+void main(){ vUv=uv; vColor=aColor; vCampo=aCampo;
+  // el centro de la instancia en espacio de camara, y el cartel se abre ahi: asi encara siempre
+  vec4 c=modelViewMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0);
+  c.xy+=position.xy*aRadio;
+  gl_Position=projectionMatrix*c; }
+`;
+const AFRAG=`
+precision highp float;
+varying vec2 vUv; varying vec3 vColor; varying float vCampo;
+void main(){
+  float d=length(vUv*2.0-1.0);
+  if(d>1.0) discard;
+  // La caida es fuerte a proposito (exponente alto): un halo plano se lee como una mancha y tapa
+  // el arbol que uno fue a mirar. Asi queda denso junto al soma y se disuelve antes del borde.
+  float k=pow(max(0.0,1.0-d),2.6);
+  float i=k*vCampo;
+  gl_FragColor=vec4(vColor*i,i); }
+`;
+
 // post: MSAA + bloom + SMAA
 const _dbs=new THREE.Vector2(); renderer.getDrawingBufferSize(_dbs);
 const composer=new EffectComposer(renderer, new THREE.WebGLRenderTarget(_dbs.x,_dbs.y,{samples:4}));
@@ -385,6 +417,7 @@ let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
 // brillo de las 12.010 instancias es un solo barrido lineal sin bajar por ninguna estructura
 // anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
 let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null, DCURV=null;
+let auraInst=null, auraMat=null, ACAMPO=null;
 let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
 // POSMEM: la posición de cada memoria, que ahora SALE DEL ÁRBOL. Es el reemplazo de `randInBrain()`.
 let POSMEM=new Map();
@@ -422,6 +455,9 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(denInst){ world.remove(denInst); denInst.geometry.dispose(); denInst=null; }
   if(somaInst){ world.remove(somaInst); somaInst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
+  if(auraInst){ world.remove(auraInst); auraInst.geometry.dispose(); auraInst=null; }
+  if(auraMat){ auraMat.dispose(); auraMat=null; }
+  ACAMPO=null;
   ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DCURV=DDIST=DTRONCO=DALC=DRAD=null;
   NEURONAS_DE=new Map(); }
 // OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
@@ -569,6 +605,28 @@ function rebuildDendritas(){
   denSucio=true;   // buffers recién creados: el primer frame tiene que subirlos
   somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
   world.add(somaInst);
+
+  // EL CAMPO de cada neurona. Nace en cero — o sea invisible — y sólo lo enciende un evento real.
+  const acol=new Float32Array(BOSQUE.length*3), arad=new Float32Array(BOSQUE.length);
+  ACAMPO=new Float32Array(BOSQUE.length);
+  const ageo=AGEO.clone();
+  ageo.setAttribute('aColor', new THREE.InstancedBufferAttribute(acol,3));
+  ageo.setAttribute('aRadio', new THREE.InstancedBufferAttribute(arad,1));
+  ageo.setAttribute('aCampo', new THREE.InstancedBufferAttribute(ACAMPO,1));
+  auraMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:AVERT, fragmentShader:AFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, depthTest:false });
+  auraInst=new THREE.InstancedMesh(ageo, auraMat, BOSQUE.length);
+  auraInst.frustumCulled=false;
+  BOSQUE.forEach((tr,k)=>{
+    _m.compose(_pos.set(tr.centro[0],tr.centro[1],tr.centro[2]), new THREE.Quaternion(), _scl.setScalar(1));
+    auraInst.setMatrixAt(k,_m);
+    _c.set(tr.color||'#7f9cc9'); acol[k*3]=_c.r; acol[k*3+1]=_c.g; acol[k*3+2]=_c.b;
+    // El halo envuelve al ÁRBOL, no al soma: su radio sale del alcance de la neurona. Atado al
+    // soma sería una bolita en el medio de una mata de ramas apagadas.
+    arad[k]=(tr.alcance||10)*2.3;
+  });
+  auraInst.instanceMatrix.needsUpdate=true;
+  world.add(auraInst);
 }
 
 // LOS DESPACHOS QUEDARON SIN CUERPO DEL QUE COLGAR, y por eso no se dibujan en esta fase.
@@ -609,9 +667,17 @@ function rebuildMeshes(){
     edgeInst=new THREE.InstancedMesh(geo, edgeMat, E);
     edgeInst.frustumCulled=false;   // la malla envuelve todo el cerebro: cullearla por su bbox la haría desaparecer entera
     for(let i=0;i<E;i++){ const s=SYN[i]; ADJ[s.a].push(s.b); ADJ[s.b].push(s.a);
-      s.__i=i; s.__r=0.28+(s.confidence||0)*0.5;
+      // MÁS FINAS que las ramas, no más gordas. Con 0,28-0,78 una sinapsis era el doble de gruesa
+      // que la rama que tocaba, y 3.430 de esas tapan el árbol que uno fue a mirar.
       _c.set(edgeBase(s)); ECOL[i*3]=_c.r; ECOL[i*3+1]=_c.g; ECOL[i*3+2]=_c.b;
-      ESPD[i]=0.42+(s.confidence||0)*0.5; EGLW[i]=0.55; EBAS[i]=0.06; }
+      // EN REPOSO NO VIAJA NADA. `aGlow` en cero apaga la banda del shader y deja sólo la línea
+      // tenue. Antes la luz recorría los axones para siempre, sin que hubiera pasado nada — es el
+      // mismo bucle inventado que este rediseño sacó de la lente de personas, y había quedado vivo
+      // acá. La banda vuelve sola cuando `thinking` sube, y `thinking` sube por deltas REALES.
+      // La base tiene que ALCANZAR PARA VERSE. Con 0,05 las 586 relaciones del grafo local no
+      // dibujaban un solo pixel: el panel decia «las lineas son relaciones» y no habia ninguna
+      // linea, que es mentir por omision. A 0,17 se leen como un tejido tenue entre los arboles.
+      ESPD[i]=0.42+(s.confidence||0)*0.5; EGLW[i]=0; EBAS[i]=0.17; }
     world.add(edgeInst);
   } else {
     for(const s of SYN){ ADJ[s.a].push(s.b); ADJ[s.b].push(s.a); }
@@ -676,8 +742,12 @@ async function fetchExplain(n){ if(n._exp!==undefined || n._expLoading) return; 
 //
 // Efecto lateral bueno: sin movimiento, el bucle por nodo y por arista no reescribe nada en reposo
 // (ya habia un guardia para eso) — o sea que el 98 % de los frames dejan de tocar 2.219 matrices.
+// Se DERIVA de la lente en cada cuadro y no se guarda en una variable que alguien tenga que
+// acordarse de poner al dia: estaba en `setLens`, que en una carga limpia NO CORRE —sin `?lens=`
+// nadie la llama—, asi que la lente memoria arrancaba respirando y las memorias se despegaban de
+// sus ramas. El valor de fallo era el estado normal.
 const AMP_CODIGO=2.4;
-let AMP=2.4;
+const vaiven=()=>(motion && lens==='code') ? AMP_CODIGO : 0;
 /* ---------- MEDIDOR (opt-in con ?stats=1) ----------
    Existe porque "se siente pesado" no es una medicion. `renderer.info.reset()` ya se llamaba
    todos los frames y NADIE leia renderer.info: la mitad del plumbing estaba puesta.
@@ -707,21 +777,25 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     // objetivo de arrastre (coords locales)
     if(drag>=0){ ray.setFromCamera(ptr,camera); if(ray.ray.intersectPlane(_plane,_dt)) world.worldToLocal(_dt); else drag=-1; }
     let Dkx=0,Dky=0,Dkz=0;
-    if(drag>=0){ const fx=BX[drag]+Math.sin(t*0.5+PHX[drag])*AMP, fy=BY[drag]+Math.sin(t*0.44+PHY[drag])*AMP, fz=BZ[drag]+Math.sin(t*0.57+PHZ[drag])*AMP;
+    const dr=vaiven();
+    if(drag>=0){ const fx=BX[drag]+Math.sin(t*0.5+PHX[drag])*dr, fy=BY[drag]+Math.sin(t*0.44+PHY[drag])*dr, fz=BZ[drag]+Math.sin(t*0.57+PHZ[drag])*dr;
       Dkx=_dt.x-fx; Dky=_dt.y-fy; Dkz=_dt.z-fz; GX[drag]=Dkx; GY[drag]=Dky; GZ[drag]=Dkz; }
     // ¿SE MOVIÓ ALGO DE VERDAD? Con la animación en pausa, sin arrastre y con el residuo del
     // último ya decaido, las posiciones son idénticas a las del frame anterior — y los dos bucles
     // de abajo escribirían exactamente lo mismo que ya está. Medido en la lente código del central
     // (8193 nodos, 17661 aristas): eran 16,5 ms de JS y 2 MB de subida a la GPU POR FRAME, cuando
     // el presupuesto entero de un frame a 60 fps son 16,6 ms.
-    if(motion || drag>=0 || resto>0.002 || actViva || asentando){
+    // El gate mira el VAIVEN, no `motion`: en la lente memoria nada se mueve aunque la animacion
+    // este andando, asi que reescribir 2.231 matrices y 586 aristas por cuadro era trabajo tirado.
+    // Tras cada reconstruccion `resto` vale 1, que lo abre una vez — y esa pasada es la que coloca
+    // las aristas, que no se siembran al construir la malla.
+    if(dr>0 || drag>=0 || resto>0.002 || actViva || asentando){
     let rMax=0, hayAct=false, colorSucio=false;
     // La 3x3 (rotación x escala) es CONSTANTE por nodo y ya quedó sembrada en rebuildMeshes: por
     // frame sólo cambian los 3 floats de traslación, escritos DIRECTO en el buffer de instancias.
     // compose+setMatrixAt costaba 6,20 ms a 8193 nodos; esto, 1,57 ms.
     const NM=inst.instanceMatrix.array;
     for(let i=0;i<N;i++){ const n=NEURONS[i];
-      const dr=motion?AMP:0;
       const fx=BX[i]+Math.sin(t*0.5+PHX[i])*dr, fy=BY[i]+Math.sin(t*0.44+PHY[i])*dr, fz=BZ[i]+Math.sin(t*0.57+PHZ[i])*dr;
       if(i===drag){} else if(PULL[i]>0){ const p=PULL[i]; GX[i]+=(Dkx*p-GX[i])*0.14; GY[i]+=(Dky*p-GY[i])*0.14; GZ[i]+=(Dkz*p-GZ[i])*0.14; }
       else { GX[i]*=0.945; GY[i]*=0.945; GZ[i]*=0.945; }
@@ -756,7 +830,17 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         // determinante sale negativo, se invierte el winding y el back-face culling se come las
         // aristas. Verificado sobre 200.004 casos: det>0 en todos.
         const qx=py*dz-pz*dy, qy=pz*dx-px*dz, qz=px*dy-py*dx;
-        const r=s.__r, o=si*16;
+        // EL RADIO SE CALCULA ACA, no se guarda en el objeto de la sinapsis.
+        //
+        // Estaba sembrado como `s.__r` al construir la malla, y `buildGraph` RECREA los objetos de
+        // SYN en cada poll: desde el segundo sondeo `s.__r` era undefined, el radio salia NaN, y
+        // dos columnas de la matriz de instancia quedaban en NaN. Una instancia con NaN en su
+        // matriz DESAPARECE sin un solo error — las 586 sinapsis estaban dibujandose en la nada.
+        //
+        // Antes lo tapaba el asentado: reconstruia las mallas seguido y volvia a sembrar el campo.
+        // Al sacar la fisica en la lente memoria, la falla quedo permanente. Calcularlo acá cuesta
+        // una multiplicacion por arista y no puede quedar viejo.
+        const r=0.10+(s.confidence||0)*0.16, o=si*16;
         EM[o   ]=px*r;    EM[o+1 ]=py*r;    EM[o+2 ]=pz*r;    EM[o+3 ]=0;
         EM[o+4 ]=dx*len;  EM[o+5 ]=dy*len;  EM[o+6 ]=dz*len;  EM[o+7 ]=0;
         EM[o+8 ]=qx*r;    EM[o+9 ]=qy*r;    EM[o+10]=qz*r;    EM[o+11]=0;
@@ -764,7 +848,7 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         const act=Math.max(a.act,b.act), ak=(a.act>=b.act?a.ak:b.ak);
         if(act>0.06 && ak>0){ _c.set(AK[ak]); EGLW[si]=0.55+act*3.6; ESPD[si]=1.0+act*1.6;   // ACTIVIDAD: brillante
           ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=1; attrSucio=true; }
-        else if(EHOT[si] || pensando){ _c.set(edgeBase(s)); EGLW[si]=0.5+thinking*0.35; ESPD[si]=0.42+(s.confidence||0)*0.5;   // REPOSO: color por tipo (código) o azul tenue (memoria)
+        else if(EHOT[si] || pensando){ _c.set(edgeBase(s)); EGLW[si]=thinking*0.85; ESPD[si]=0.42+(s.confidence||0)*0.5;   // REPOSO: sin banda; sólo conduce cuando el cerebro trabajó de verdad
           ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=0; attrSucio=true; } }
       edgeInst.instanceMatrix.needsUpdate=true;
       if(attrSucio){ const at=edgeInst.geometry.attributes;
@@ -793,6 +877,12 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         for(let k=0;k<DRAD.length;k++){ const e=DRAD[k]*(1+0.9*r.flash[k]), o=k*16;
           SM[o]=e; SM[o+5]=e; SM[o+10]=e; }
         somaInst.instanceMatrix.needsUpdate=true; }
+      // EL CAMPO. Se comprime con una exponencial en vez de recortarse: una ráfaga de veinte
+      // llamadas y una de cinco tienen que verse distinto, y con un `min(1, x)` las dos saturan
+      // igual y el dibujo deja de poder distinguir un pico de un goteo.
+      if(auraInst && ACAMPO){
+        for(let k=0;k<ACAMPO.length;k++) ACAMPO[k]=1-Math.exp(-(r.campo[k]||0)*0.42);
+        auraInst.geometry.attributes.aCampo.needsUpdate=true; }
       denSucio = vivos>0;
     }
   }
@@ -1059,7 +1149,14 @@ function impulsar(ev){
   // dice con certeza es de quién es. Elegir una sería inventarlo.
   const ahora = performance.now()/1000;
   const ns = n ? (NEURONAS_DE.get(RACIMO_DE.get(n.terminal)) || null) : null;
-  if(ns && ns.length) for(const ti of ns) IMPULSOS.nacer(ti, pu, ahora);
+  if(ns && ns.length){
+    // SE REPARTE, no se multiplica. Una llamada vale una llamada: si cada neurona del racimo
+    // recibiera la fuerza entera, una persona cuyo árbol quedó cortado en nueve neuronas brillaría
+    // nueve veces más que otra cortada en dos, por el MISMO evento — y lo único distinto sería la
+    // forma de su árbol, no cuánto trabajó.
+    const rep = 1/ns.length;
+    for(const ti of ns) IMPULSOS.nacer(ti, {...pu, reparto:rep}, ahora);
+  }
   else IMPULSOS.nacer(-1, pu, ahora);
 }
 
@@ -1234,7 +1331,7 @@ $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motio
 // setLens: conmuta memoria↔código. Son DOS y no tres: la lente de personas aparte se retiró
 // cuando sus dos piezas —los árboles y el impulso— pasaron a la escena principal. Tenerla al
 // lado habría sido una tercera vista contando lo mismo, y dos lugares donde arreglar cada cosa.
-function setLens(v){ lens=v; AMP = lens==='code' ? AMP_CODIGO : 0;
+function setLens(v){ lens=v;
   // Cada lente se encuadra sola. Sin esto, la primera que se abre fija la camara y la otra hereda
   // una distancia pensada para un dibujo con otra forma.
   framed=false;

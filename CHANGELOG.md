@@ -8,6 +8,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El campo: así se ven las señales de uso.** Un halo por neurona cuya intensidad sale de `campo`
+  —la suma de la fuerza de sus frentes VIVOS— y de nada más. No lleva calor ni nada histórico: un
+  halo permanente convertiría el reposo en luz y el panel dejaría de poder decir «acá no está
+  pasando nada», que es la mitad de lo que dice.
+  - Con `aCampo` en cero el fragmento sale **negro**, que sobre blending aditivo es exactamente
+    invisible: la regla no depende de acordarse de apagar nada.
+  - Es un **cartel** (billboard) y no una esfera: cuatro vértices que siempre encaran a la cámara,
+    contra una malla que además se metería adentro de las ramas.
+  - Verificado en pantalla, con la animación pausada: **0 píxeles** de diferencia sin evento;
+    654.509 con una ráfaga de gio. Atribución a **431 px** entre gio y `davantis-mando-admin`.
+    Ámbar del fallo: relación azul/rojo **1,184 contra 0,216**.
+- **Una llamada vale una llamada: el impulso se REPARTE entre las neuronas del racimo.** Un evento
+  no sabe en qué neurona de la persona cayó, así que enciende todas — pero dividiéndose. Sin esto,
+  una persona cuyo árbol quedó cortado en nueve neuronas brillaba nueve veces más que otra cortada
+  en dos **por el mismo evento**, y lo único distinto era la forma de su árbol, no cuánto trabajó.
+
+### Fixed
+- **Las 586 sinapsis se dibujaban en la nada, sin un solo error.** El radio de cada arista se
+  sembraba como `s.__r` al construir la malla, y `buildGraph` **recrea los objetos de `SYN` en cada
+  poll**: desde el segundo sondeo `s.__r` era `undefined`, el radio salía `NaN`, y dos columnas de
+  la matriz de instancia quedaban en `NaN` — **una instancia con NaN en su matriz desaparece en
+  silencio**. Antes lo tapaba el asentado, que reconstruía las mallas seguido y volvía a sembrar el
+  campo; al sacar la física en la lente memoria, la falla quedó permanente. Ahora el radio se
+  calcula en el bucle: cuesta una multiplicación por arista y no puede quedar viejo.
+  - Lo encontró una sonda, no la lectura del código: subir el brillo de las aristas a 0,9 no hizo
+    aparecer ni una línea, y eso descartó «es muy tenue» y dejó sólo «no está donde dice».
+- **La lente memoria respiraba, y no debía.** `AMP` se ponía en `setLens`, que **en una carga limpia
+  no corre** —sin `?lens=` nadie la llama—, así que las memorias se despegaban de sus ramas y los
+  dos bucles reescribían 2.231 matrices y 586 aristas por cuadro para nada. El valor de fallo era el
+  estado normal. Ahora el vaivén se **deriva** de la lente en cada cuadro y el gate mira el
+  movimiento real: **«mis bucles» de 1,7 ms a 0,3 ms**, y 0 cuadros por encima de 33 ms en tres
+  corridas seguidas de 26 s (máximo 22,6–24,4).
+- **Las relaciones tenían una banda de luz viajando para siempre**, sin que hubiera pasado nada — el
+  mismo bucle inventado que este rediseño sacó de la lente de personas, y que había quedado vivo
+  acá. En reposo ya no viaja nada; la banda vuelve cuando `thinking` sube, y `thinking` sube por
+  deltas REALES. Y son **más finas que las ramas**: con 0,28-0,78 una sinapsis era el doble de
+  gruesa que la rama que tocaba.
 - **La rama se arquea: deja de parecer un alambre.** Cada tramo lleva una panza perpendicular a su
   eje, máxima al medio y **cero en los dos extremos** — la rama se curva pero sigue naciendo y
   muriendo donde manda el dato, así que la punta no se despega de la memoria que representa.
