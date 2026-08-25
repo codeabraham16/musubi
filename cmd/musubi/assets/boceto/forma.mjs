@@ -25,6 +25,7 @@ export const FORMAS = [
   { id: 'c', nombre: 'El corte', sub: 'una sola lámina, sin oclusión' },
   { id: 'd', nombre: 'La corona', sub: 'el medio vacío, las relaciones lo cruzan' },
   { id: 'e', nombre: 'La corteza', sub: 'las hojas afuera, los tractos adentro' },
+  { id: 'f', nombre: 'El nudo', sub: 'la esfera pareja, atada por dentro' },
 ];
 
 // UN HILO CADA 6 MEMORIAS, y los mismos números para las cinco. Es la única constante libre de
@@ -61,7 +62,10 @@ export async function construir(v) {
   const vista = montar(Object.assign({
     secciones: S, colorDe, titulo: 'memoria', sinapsis: datos.synapses,
     ...HILOS, ...HEBRA,
-    fondo: '#04060e', bloom: 0.80,
+    // FONDO AZUL-NOCHE, NO NEGRO PURO. Sale de la marca de Musubi, y no es capricho: sobre negro
+    // absoluto los azules oscuros —que acá son un actor entero— se hunden hasta desaparecer, y el
+    // panel deja de tener un piso contra el cual medir. #0C1020 da ese piso sin levantar la escena.
+    fondo: '#0C1020', bloom: 0.80,
     nivelesPenacho: 3, escalaPenacho: 0.62,
   }, v.montaje || {}));
 

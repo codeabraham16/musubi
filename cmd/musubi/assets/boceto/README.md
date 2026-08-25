@@ -47,9 +47,9 @@ cd cmd/musubi/assets/boceto && python -m http.server 7731
 # → http://127.0.0.1:7731/boceto-a.html
 ```
 
-## Las cinco formas
+## Las seis formas
 
-Las cinco dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en
+Las seis dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en
 secciones, el mismo conteo de hilos, las mismas cuñas, los mismos invariantes—. Lo único que cambia
 es **hacia dónde crece el tejido**, y eso es a propósito: si cada boceto tuviera su propio pipeline,
 comparar dos sería comparar dos programas y no dos formas. Lo compartido vive en `forma.mjs`.
@@ -61,6 +61,21 @@ comparar dos sería comparar dos programas y no dos formas. Lo compartido vive e
 | **`c`** · *El corte* | ¿cómo está repartida? Todo aplastado en una lámina, **nada tapado** de frente | el volumen, y las ramas que se esquivaban por profundidad ahora se cruzan |
 | **`d`** · *La corona* | ¿qué se habla con qué? Las hojas **parejas** en un anillo y el medio vacío: lo que lo cruza son relaciones | la profundidad deja de ser distancia recorrida |
 | **`e`** · *La corteza* | ¿dónde está lo que sé y dónde el camino? Un campo empuja hasta una cáscara: memorias afuera, tractos adentro | una superficie tiene menos lugar que un volumen: **108 de 220 bifurcaciones se aprietan** |
+| **`f`** · *El nudo* | **la fusión de `a` y `d`.** El treemap esférico decide DÓNDE va cada hoja; el crecimiento del núcleo decide CÓMO llega | la esfera esconde su mitad de atrás: girar deja de ser opcional |
+
+### Cómo se fusionan `a` y `d`, medido
+
+| | borde (radio de las hojas) | reparto (variación del vecino) | isotropía (sesgo) | apretadas |
+|---|---|---|---|---|
+| `a` el núcleo | 483 **±94** | 60 % | **0,03** | 4 |
+| `d` la corona | 268 **±0** | **5 %** | 0,31 | 0 |
+| `f` el nudo | 250 **±7** | 55 % | **0,03** | 9 |
+
+El nudo se queda con el borde de la corona y la isotropía del núcleo. Lo que **no** hereda entero es
+el reparto perfecto: 55 % contra el 5 % de la corona — el trazo orgánico no puede aterrizar tan
+parejo como un dendrograma, y `imán` es literalmente esa perilla (en 1 vuelve a ser un dendrograma).
+El reparto de parcelas **sí** es parejo por su cuenta (13 % de variación); lo que lo afloja es el
+camino, no el destino.
 
 Se cambia de forma con la barra de arriba, sin volver a buscar la URL.
 

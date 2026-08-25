@@ -859,7 +859,10 @@ export function montar(cfg) {
   // dos que piden una decisión: `conflicts_with` (algo se contradice) y `supersedes` (algo quedó
   // reemplazado). Las demás son tejido conectivo: importan por dónde pasan, no por su tono.
   const NEUTRO = '#9fb6d8';
-  const RELCOL = { conflicts_with: '#ff5d5d', supersedes: '#c08bff' };
+  // Y LOS DOS QUE SÍ LLEVAN COLOR LO LLEVAN DEL ESTADO, no de una paleta aparte: `conflicts_with`
+  // es un error (algo se contradice) y `supersedes` es un aviso (algo quedó reemplazado). Son los
+  // tonos que la marca reserva justo para eso, así que significan lo mismo acá que en el resto.
+  const RELCOL = { conflicts_with: '#fb7185', supersedes: '#fbbf24' };
   const SIN = [];
   for (const y of (cfg.sinapsis || [])) {
     const A = POSMEM.get(y.source), B = POSMEM.get(y.target);

@@ -179,6 +179,21 @@ const SABOTAJES = [
     a: '          const t = l * 4;',
   },
 
+  /* ── EL NUDO: la fusión ──────────────────────────────────────────────────────────────────── */
+  {
+    test: 'B31',
+    que: 'el treemap corta siempre por el mismo lado: las parcelas salen como tiras',
+    de: '      if (arcoLat >= arcoLon) {',
+    a: '      if (true) {',
+  },
+  {
+    test: 'B32',
+    que: 'la hoja deja de aterrizar en el radio: el borde vuelve a ser disparejo',
+    de: '        if (raiz2 >= 0) l = Math.max(l * 0.25, (-qd + Math.sqrt(raiz2)) / 1.05);',
+    a: '        if (raiz2 >= 0) l = l;',
+  },
+
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',

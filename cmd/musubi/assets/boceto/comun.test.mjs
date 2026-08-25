@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
-         destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona } from './comun.mjs';
+         destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
+         colocarNudo, repartirEsfera } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -82,6 +83,33 @@ const ganglio = () => ({
 });
 
 const OPC_HILOS = { porMemoria: 6, maxHoja: 22 };
+/**
+ * ramificado: un árbol que bifurca de a 2-3, que es lo que produce el pipeline de verdad.
+ *
+ * El otro fixture arma nodos con 120 hijas de una — sirve para lo que sirve, pero para el reparto
+ * de la esfera es un caso patológico: cortar un rectángulo en 120 pedazos deja tiras finísimas y
+ * la medida de «parejo» se va al 79 % en un reparto que sobre el dato real da 13 %. Un umbral
+ * calibrado ahí no diría nada del dibujo. Se prueba sobre la forma que el árbol tiene de verdad.
+ */
+const ramificado = (n) => {
+  let id = 0;
+  const nodo = (k, prof) => {
+    if (k <= 1 || prof > 7) {
+      const ms = []; for (let j = 0; j < Math.max(1, k); j++) ms.push(mem(id++, 'r/' + prof));
+      return grupo('h' + prof + '-' + id, ms);
+    }
+    const partes = k % 3 === 0 ? 3 : 2;
+    const hijos = [];
+    for (let p = 0; p < partes; p++) {
+      const c = Math.floor(k / partes) + (p < k % partes ? 1 : 0);
+      if (c > 0) hijos.push(nodo(c, prof + 1));
+    }
+    return { n: k, criterio: 'tema', etiqueta: 't' + prof, hijos };
+  };
+  const raiz = nodo(n, 0);
+  raiz.criterio = 'raiz'; raiz.etiqueta = 'todo'; raiz.mem = null;
+  return raiz;
+};
 /** prep0: seccionado y contado, SIN colocar. Cada forma coloca a su manera y sobre lo mismo. */
 function prep0() {
   const S = seccionar(ganglio(), { maxNivel: 8, minCarga: 10 });
@@ -593,4 +621,83 @@ test('B30 · LA CÁSCARA deja las hojas EN la superficie', () => {
   assert.ok(sin < 0.30, `sin campo ya da ${(100 * sin).toFixed(0)} %: el fixture no prueba nada`);
   const con = arma(1);
   assert.ok(con > 0.80, `con campo sólo el ${(100 * con).toFixed(0)} % llega a la cáscara`);
+});
+
+
+/* ── EL NUDO: la fusión ───────────────────────────────────────────────────────────────────────
+   Junta el borde parejo de la corona con el trazo orgánico del núcleo. Son dos promesas y cada una
+   tiene su forma de romperse, así que van separadas. */
+
+test('B31 · el reparto de la esfera es PAREJO y COMPACTO', () => {
+  // Es la mitad «corona» de la fusión. Se mide con la distancia al vecino más cercano: si el
+  // reparto es parejo, todas se parecen; si es grumoso, la dispersión se dispara.
+  const S = seccionar(ramificado(700), { maxNivel: 8, minCarga: 10 });
+  contarFibras(S, OPC_HILOS);
+  const D = repartirEsfera(S);
+  const hs = S.filter((s) => !s.hijos.length).map((s) => D[s.idx]);
+  assert.ok(hs.length > 50, `el fixture da ${hs.length} hojas y hacen falta más`);
+  const vec = [];
+  for (let i = 0; i < hs.length; i++) {
+    let m = 9;
+    for (let j = 0; j < hs.length; j++) {
+      if (i === j) continue;
+      const e = Math.hypot(hs[i][0] - hs[j][0], hs[i][1] - hs[j][1], hs[i][2] - hs[j][2]);
+      if (e < m) m = e;
+    }
+    vec.push(m);
+  }
+  // 1 · NINGUNA PARCELA VACÍA: dos hojas en el mismo punto serían una hoja invisible.
+  assert.ok(Math.min(...vec) > 1e-3, `dos hojas caen a ${Math.min(...vec)} una de otra`);
+  // 2 · y PAREJO. El umbral está calibrado contra el sabotaje: cortando siempre por el mismo lado
+  //     salen tiras y el coeficiente de variación se dispara. Medido sobre el cerebro local: 15 %
+  //     con el corte por arco, muy por encima de 60 % cortando siempre igual.
+  const mv = vec.reduce((a, b) => a + b, 0) / vec.length;
+  const dv = Math.sqrt(vec.reduce((a, x) => a + (x - mv) * (x - mv), 0) / vec.length);
+  assert.ok(dv / mv < 0.35, `el vecino más cercano varía un ${(100 * dv / mv).toFixed(0)} %`);
+  // 3 · y COMPACTO: un subárbol no puede quedar desparramado por toda la esfera, o el borde deja
+  //     de contar la jerarquía — que es exactamente para lo que sirve.
+  let peor = 0, quien = null;
+  for (const s of S) {
+    if (!s.hijos.length || s.idx === 0) continue;
+    const dd = [];
+    (function b(i) {
+      const x = S[i];
+      if (!x.hijos.length) { dd.push(D[i]); return; }
+      for (const h of x.hijos) b(h);
+    })(s.idx);
+    if (dd.length < 3) continue;
+    let c = [0, 0, 0];
+    for (const q of dd) c = [c[0] + q[0], c[1] + q[1], c[2] + q[2]];
+    const l = Math.hypot(c[0], c[1], c[2]) || 1;
+    c = [c[0] / l, c[1] / l, c[2] / l];
+    let mx = 0;
+    for (const q of dd) {
+      mx = Math.max(mx, Math.acos(Math.max(-1, Math.min(1, q[0] * c[0] + q[1] * c[1] + q[2] * c[2]))));
+    }
+    // el casquete que le tocaría por área:  2π(1 − cos α) = 4π · fracción
+    const ideal = Math.acos(Math.max(-1, 1 - 2 * (dd.length / hs.length)));
+    if (mx / ideal > peor) { peor = mx / ideal; quien = { idx: s.idx, n: dd.length }; }
+  }
+  assert.ok(peor < 2.4,
+    `la sección ${quien && quien.idx} ocupa ${peor.toFixed(1)}× el casquete que le toca`);
+});
+
+test('B32 · el imán deja la hoja EN el radio pedido', () => {
+  // Es la otra mitad: sin esto la hoja cae donde la dejó su cadena de largos y el borde vuelve a
+  // ser disparejo, que es justo lo que la corona tenía para aportar.
+  const arma = (im) => {
+    const S = prep0();
+    colocarNudo(S, { origen: [0, 0, 0], nucleo: 40, largo: 130, curvatura: 0.12, tropismo: 0,
+      semilla: 11, radio: 250, 'imán': im, aire: 3.0, naciente: 0.85, aperturaMax: 1.30,
+      polarEje: 0.20, polarMin: 0.85, radioHilo: 0.52, separacion: 2.60 });
+    const rs = S.filter((s) => !s.hijos.length).map((s) => Math.hypot(s.b[0], s.b[1], s.b[2]));
+    const m = rs.reduce((a, b) => a + b, 0) / rs.length;
+    return Math.sqrt(rs.reduce((a, x) => a + (x - m) * (x - m), 0) / rs.length);
+  };
+  // CONTROL: sin imán el borde TIENE que ser disparejo. Sin esto el test pasaría igual con un
+  // árbol que ya naciera esférico, que es la otra manera de que el número salga bien.
+  const sin = arma(0);
+  assert.ok(sin > 3, `sin imán la dispersión ya es ${sin.toFixed(1)}: el fixture no prueba nada`);
+  const con = arma(0.8);
+  assert.ok(con < 1, `con imán las hojas todavía se reparten ±${con.toFixed(1)} en radio`);
 });

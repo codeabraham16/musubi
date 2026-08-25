@@ -572,6 +572,112 @@ export function colocarCorona(secciones, opciones) {
   return secciones;
 }
 
+/**
+ * repartirEsfera: a cada sección, SU PEDAZO de esfera — compacto y proporcional a lo que carga.
+ *
+ * Es la mitad «corona» de la fusión: que el borde quede parejo y que un subárbol ocupe una parcela
+ * seguida, en vez de caer donde lo mande la ramificación.
+ *
+ * 🔴 NO ES UNA ESPIRAL, y ésta es la decisión que sostiene todo. Se probaron dos y las dos fallan
+ * por motivos opuestos:
+ *
+ *   Fibonacci      avanza el ángulo áureo en cada paso: reparte parejo pero DESTRUYE la vecindad,
+ *                  así que las hojas de una misma rama quedan salpicadas por toda la superficie y
+ *                  el borde deja de contar la jerarquía — que es justo lo que la corona sí hace.
+ *   espiral lenta  conserva la vecindad, pero la latitud baja monótona con el recorrido, así que
+ *                  cada actor se queda con una FRANJA horizontal y quedan apilados de arriba
+ *                  abajo. O sea: le devuelve el «arriba» al dibujo, que es exactamente lo que el
+ *                  núcleo venía a sacar. Se vio en el render, no leyendo el código.
+ *
+ * Lo que funciona es un TREEMAP ESFÉRICO. En coordenadas (cos θ, φ) el área de un rectángulo es
+ * literalmente su área sobre la esfera —de ahí sale todo—, así que repartir la esfera entre las
+ * hijas es repartir un rectángulo: las parcelas TESELAN, ni se pisan ni dejan huecos. El corte va
+ * por el lado más largo MEDIDO EN ARCO y no en parámetro: cerca de los polos un grado de longitud
+ * es mucho menos que uno de latitud, y cortando por el parámetro salen tiras deformes.
+ *
+ * @returns {Array<[number,number,number]>} una dirección unitaria por sección.
+ */
+export function repartirEsfera(secciones) {
+  const hojas = new Float64Array(secciones.length);
+  for (let i = secciones.length - 1; i >= 0; i--) {
+    const s = secciones[i];
+    if (!s.hijos.length) { hojas[i] = 1; continue; }
+    let t = 0; for (const h of s.hijos) t += hojas[h];
+    hojas[i] = t;
+  }
+  const dir = new Array(secciones.length).fill(null);
+  const deCelda = (c0, c1, f0, f1) => {
+    const c = (c0 + c1) / 2, f = (f0 + f1) / 2;
+    const sn = Math.sqrt(Math.max(0, 1 - c * c));
+    return [Math.cos(f) * sn, c, Math.sin(f) * sn];
+  };
+  (function repartir(i, c0, c1, f0, f1) {
+    const s = secciones[i];
+    dir[i] = deCelda(c0, c1, f0, f1);
+    if (!s.hijos.length) return;
+    // EL LADO SE REELIGE EN CADA CORTE, no una vez por nodo. Con fan-out chico da igual, pero un
+    // nodo con 120 hijas cortado siempre por el mismo lado da 120 tiras finísimas: medido sobre un
+    // fixture con esa forma, la variación del vecino más cercano se va al 69 %. Reeligiendo, el
+    // rectángulo que queda se va achicando por el lado largo y las parcelas salen casi cuadradas.
+    const cl = (x) => Math.max(-1, Math.min(1, x));
+    let g0 = c0, g1 = c1, h0 = f0, h1 = f1;      // lo que queda por repartir
+    let resto = hojas[i] || 1;
+    for (const h of s.hijos) {
+      const frac = hojas[h] / Math.max(1e-9, resto);
+      const arcoLat = Math.abs(Math.acos(cl(g1)) - Math.acos(cl(g0)));
+      const cm = (g0 + g1) / 2;
+      const arcoLon = (h1 - h0) * Math.sqrt(Math.max(0.02, 1 - cm * cm));
+      if (arcoLat >= arcoLon) {
+        const b = g0 + (g1 - g0) * frac;
+        repartir(h, g0, b, h0, h1); g0 = b;
+      } else {
+        const b = h0 + (h1 - h0) * frac;
+        repartir(h, g0, g1, h0, b); h0 = b;
+      }
+      resto -= hojas[h];
+    }
+  })(0, -1, 1, 0, Math.PI * 2);
+  return dir;
+}
+
+/**
+ * colocarNudo: la fusión del núcleo y la corona.
+ *
+ * El núcleo y la corona ganan cosas distintas y pagan cosas distintas:
+ *
+ *   el núcleo   isotropía —no hay arriba—, volumen y un trazo ORGÁNICO: la rama se abre donde el
+ *               dato la abre. Paga oclusión, y un borde disparejo.
+ *   la corona   borde PAREJO y hueco central, así que lo único que cruza el medio son las
+ *               relaciones y pasan a ser el dibujo. Paga ser plana y perder lo orgánico: es un
+ *               dendrograma, o sea cuerdas rectas de un radio al siguiente.
+ *
+ * 🔴 EL DENDROGRAMA SOBRE UNA ESFERA NO ES LA FUSIÓN — lo construí entero y se ve mal: sale un
+ * estallido de cuerdas rectas desde el centro, porque una hoja poco profunda tiene que saltar de
+ * su radio hasta la cáscara de una sola tirada. Gana el borde parejo y pierde exactamente lo que
+ * hacía bueno al núcleo.
+ *
+ * La fusión que SÍ es fusión: el treemap decide DÓNDE va cada hoja y el crecimiento del núcleo
+ * decide CÓMO llega. Cada rama sigue abriéndose como en el núcleo —con sus cuñas, su aire entre
+ * hermanas y su curvatura— pero se la va llevando hacia su parcela, cada vez más fuerte a medida
+ * que baja. El resultado tiene el trazo del núcleo y el borde de la corona.
+ *
+ * Y se llama el NUDO porque eso es lo que se ve: lo que ata la esfera pasa por adentro. En Musubi
+ * el nudo (結び) no es un adorno que se dibuja — aparece cuando hay vínculo, y acá lo hay.
+ */
+export function colocarNudo(secciones, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const destino = repartirEsfera(secciones);
+  return colocarNucleo(secciones, Object.assign({}, o, {
+    destino,
+    radio: num(o.radio, 250),
+    // CUÁNTO MANDA EL DESTINO. En 0 es el núcleo tal cual; en 1 la rama apunta a su parcela desde
+    // el primer tramo y vuelve a ser un dendrograma. En el medio, la rama se abre por su cuenta
+    // arriba y se va acomodando abajo, que es lo que deja el trazo orgánico Y el borde parejo.
+    imán: num(o.imán, 0.62),
+  }));
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
    PARTE 1b · EL NÚCLEO — dejar de ser un árbol
    ═══════════════════════════════════════════════════════════════════════════════════════════ */
@@ -720,7 +826,18 @@ export function colocarNucleo(secciones, opciones) {
   // Medio abanico: 1,25 rad a cada lado del eje del padre. Mas que eso y las hermanas de los
   // extremos salen para atras, cruzando el propio tejido del que nacieron.
   const apMaxPlano = num(o.aperturaPlana, 1.25);
+  /* ── EL IMÁN. Una dirección de destino por sección y cuánto manda ────────────────────────
+     Sirve para «el nudo»: el reparto de la esfera dice a qué parcela va cada rama y esto la va
+     llevando, sin quitarle la apertura ni la curvatura que la hacen orgánica. La fuerza crece con
+     la profundidad porque arriba la rama todavía tiene lugar para abrirse y abajo ya tiene que
+     aterrizar donde le toca. */
+  const destino = Array.isArray(o.destino) ? o.destino : null;
+  const iman = Math.max(0, Math.min(1, num(o.imán, 0)));
+  const radioDestino = num(o.radio, 0);
   const anillo0 = num(o.anillo, 0);
+
+  let maxNivelSec = 1;
+  for (const s of secciones) if (s.nivel > maxNivelSec) maxNivelSec = s.nivel;
 
   const raiz = secciones[0];
   // EL NÚCLEO ES UN CUERPO, NO UN TRAMO. Se le da un largo corto y un eje cualquiera: lo que se ve
@@ -858,6 +975,25 @@ export function colocarNucleo(secciones, opciones) {
         const e = (cascara - rl) / cascara;      // >0 adentro · <0 afuera
         d2 = norm(add(d2, mul(ur, campo * Math.max(-1, Math.min(1, e * 1.8)))));
       }
+      if (destino && iman > 0 && destino[hi]) {
+        // Hacia SU parcela, no hacia afuera a secas: la diferencia es que dos hermanas tiran a
+        // lugares distintos, así que el imán no las vuelve a juntar — que es lo que sí hace el
+        // tropismo, y por eso el tropismo está en cero desde que se midió.
+        const meta = radioDestino > 0 ? mul(destino[hi], radioDestino) : destino[hi];
+        const hacia = sub(meta, s.b);
+        const hl = Math.hypot(hacia[0], hacia[1], hacia[2]);
+        if (hl > 1e-6) {
+          // UNA HOJA RECIBE EL IMÁN ENTERO. La fuerza crece con la profundidad porque arriba la
+          // rama todavía tiene lugar para abrirse y abajo ya tiene que aterrizar — pero una hoja
+          // NO tiene abajo: si se la deja a media fuerza, cae donde la dejó su cadena de largos y
+          // el borde vuelve a ser disparejo. Medido: el radio de las hojas pasa de 250 ±33 a
+          // 250 ±9 sólo con esto.
+          const f = h.hijos.length
+            ? iman * Math.min(1, h.nivel / Math.max(2, maxNivelSec - 1))
+            : iman;
+          d2 = norm(add(mul(d2, 1 - f), mul(mul(hacia, 1 / hl), f)));
+        }
+      }
       if (tropismo > 0 && h.nivel >= 2) {
         const rv = sub(s.b, origen), rl = Math.hypot(rv[0], rv[1], rv[2]);
         if (rl > 0.001) {
@@ -875,6 +1011,17 @@ export function colocarNucleo(secciones, opciones) {
          a la mitad. Lo que hace falta es DÓNDE CORTA el rayo a la esfera, que es una cuadrática y
          da el largo exacto. El precio se declara: en esta forma el largo deja de ser distancia
          recorrida. */
+      // Y CON DESTINO, LA HOJA ATERRIZA EN EL RADIO PEDIDO. Sin esto el borde vuelve a ser
+      // disparejo —cada hoja termina donde la dejó su cadena de largos— y se pierde lo único que
+      // la corona tenía para aportar.
+      if (destino && radioDestino > 0 && !h.hijos.length) {
+        const q0 = sub(cuna, origen);
+        const qd = q0[0] * d2[0] + q0[1] * d2[1] + q0[2] * d2[2];
+        const qq = q0[0] * q0[0] + q0[1] * q0[1] + q0[2] * q0[2];
+        const raiz2 = qd * qd - (qq - radioDestino * radioDestino);
+        // 1,05 porque la cuna se corre otro 5 % del largo antes de arrancar el tramo.
+        if (raiz2 >= 0) l = Math.max(l * 0.25, (-qd + Math.sqrt(raiz2)) / 1.05);
+      }
       if (campo > 0 && cascara > 0) {
         const b0 = sub(cuna, origen);
         const bd = b0[0] * d2[0] + b0[1] * d2[1] + b0[2] * d2[2];
@@ -1695,7 +1842,13 @@ export async function cargar(url) {
 // mismo color, y como Musubi es el 63 % de la memoria, davantis desaparecía adentro. Acá los tres
 // actores están a ~90° de tono unos de otros, que es lo que hace falta para distinguirlos cuando
 // además hay bloom encima lavando la saturación.
-export const PALETA = ['#2dd4bf', '#f472b6', '#fbbf24', '#4ade80', '#a78bfa', '#22d3ee',
+/* ⚠ LOS COLORES DE ESTADO NO SE REPARTEN COMO IDENTIDAD. La marca de Musubi reserva el ámbar
+   (#FBBF24, aviso), el verde (#34D399, ok) y el rosa-rojo (#FB7185, error) para decir ESTADO. Con
+   un actor pintado de ámbar, un aviso y una persona se ven igual — y el dibujo ya usa el ámbar
+   para el impulso y el rojo para una relación que se contradice. Los dos primeros no se mueven:
+   son los que el usuario viene mirando hace días. Del tercero en adelante se eligieron tonos que
+   NO chocan con ningún estado. */
+export const PALETA = ['#2dd4bf', '#f472b6', '#8ab4f8', '#c792ea', '#5eead4', '#93c5fd',
                        '#fb923c', '#f87171', '#a3e635', '#e879f9', '#38bdf8', '#facc15'];
 
 // MUSUBI tiene color propio, y esa es la corrección: antes sus 1.437 notas iban a dos grises que

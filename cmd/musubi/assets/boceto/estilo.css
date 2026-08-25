@@ -240,7 +240,6 @@ body::after {
   z-index: 12; display: flex; gap: 4px;
   padding: 4px; border-radius: 12px;
   background: var(--panel); border: 1px solid var(--hilo);
-  backdrop-filter: blur(9px);
   box-shadow: 0 8px 26px rgba(0, 0, 0, .45);
 }
 .formas a {
