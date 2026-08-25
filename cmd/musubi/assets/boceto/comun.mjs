@@ -1355,7 +1355,10 @@ export function crearRotulos(host) {
     while (vivos.length > items.length) capa.removeChild(vivos.pop().el);
     while (vivos.length < items.length) {
       const el = document.createElement('div');
-      el.style.cssText = 'position:absolute;transform:translate(-50%,-50%);white-space:nowrap;'
+      // `left/top` obliga al navegador a RECALCULAR EL LAYOUT de la capa entera en cada cuadro, y
+      // son sesenta rotulos moviendose siempre. `translate3d` se resuelve en la composicion, sin
+      // tocar el layout. Es la mitad barata de sacarle lag al cuadro.
+      el.style.cssText = 'position:absolute;left:0;top:0;will-change:transform;white-space:nowrap;'
         + 'font:600 11px/1.1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;'
         + 'text-shadow:0 1px 3px #000,0 0 10px #000;transition:opacity .18s';
       capa.appendChild(el); vivos.push({ el });
@@ -1386,7 +1389,9 @@ export function crearRotulos(host) {
       _v.set(v.p[0], v.p[1], v.p[2]).project(camera);
       // Se ocultan los de atrás de la cámara y los que quedan fuera de su rango de zoom: mostrar
       // los rótulos de nivel 5 desde lejos es volver a la maraña, pero de texto.
-      if (_v.z >= 1 || dist >= v.rango) { v.el.style.opacity = 0; continue; }
+      // Y NO SE ESCRIBE LO QUE NO CAMBIO. Asignar una propiedad de estilo al mismo valor igual
+      // ensucia el estilo del elemento; con sesenta rotulos por cuadro se nota.
+      if (_v.z >= 1 || dist >= v.rango) { if (v.vis !== 0) { v.vis = 0; v.el.style.opacity = 0; } continue; }
       const x = (_v.x * 0.5 + 0.5) * innerWidth;
       let y = (-_v.y * 0.5 + 0.5) * innerHeight;
       const choca = (yy) => puestos.some((q) =>
@@ -1404,13 +1409,16 @@ export function crearRotulos(host) {
             else if (!choca(y + dy)) libre = y + dy;
           }
         }
-        if (libre === null) { v.el.style.opacity = 0; continue; }
+        if (libre === null) { if (v.vis !== 0) { v.vis = 0; v.el.style.opacity = 0; } continue; }
         y = libre;
       }
       puestos.push({ x, y, w: v.ancho });
-      v.el.style.opacity = 1;
-      v.el.style.left = x + 'px';
-      v.el.style.top = y + 'px';
+      if (v.vis !== 1) { v.vis = 1; v.el.style.opacity = 1; }
+      const px = Math.round(x), py = Math.round(y);
+      if (px !== v.px || py !== v.py) {
+        v.px = px; v.py = py;
+        v.el.style.transform = 'translate3d(' + (px - v.ancho * 0.5) + 'px,' + (py - 8) + 'px,0)';
+      }
     }
   }
   return { set, tick, capa };

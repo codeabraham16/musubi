@@ -74,8 +74,8 @@ const VAINA_V = `
 //   aTNS  = (taper, nodos,  sel, nivel)
 //   aDLVF = (dist,  largo,  vol, familia)
 attribute vec3 aColor; attribute vec3 aCurva;
-attribute vec4 aTNS; attribute vec4 aDLVF;
-uniform float uFrente; uniform float uAncho;
+attribute vec4 aTNS; attribute vec4 aDLVF; attribute float aSec;
+uniform float uFrente; uniform float uAncho; uniform float uHov;
 varying vec3 vC; varying float vY; varying float vNod; varying float vSel; varying float vNiv;
 varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; varying float vFam;
 ${ATM_VARY}
@@ -92,7 +92,8 @@ void main(){
   vec4 mv = modelViewMatrix * wp;
   vNrm = normalize(normalMatrix * mat3(instanceMatrix) * normal);
   vView = normalize(-mv.xyz);
-  vC = aColor; vNod = aTNS.y; vSel = aTNS.z; vNiv = aTNS.w;
+  vC = aColor; vNod = aTNS.y; vNiv = aTNS.w;
+  vSel = max(aTNS.z, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   // EL FRENTE DEL IMPULSO se calcula POR VÉRTICE contra la distancia recorrida desde la raíz, no
   // por instancia: así la luz entra por un extremo de la sección y sale por el otro, en vez de que
   // el tramo entero se encienda de golpe. Es lo que hace que se vea VIAJAR.
@@ -205,7 +206,8 @@ void main(){
    (desaparece al girar) y pegado al costado de lo que lo proyecta. */
 
 const CUERPO_V = `
-attribute vec3 aColor; attribute vec2 aSF;   // (seleccion, familia)
+attribute vec3 aColor; attribute vec2 aSF; attribute float aSec;   // (seleccion, familia)
+uniform float uHov;
 varying vec3 vC; varying float vSel; varying vec3 vNrm; varying vec3 vView; varying float vFam;
 ${ATM_VARY}
 void main(){
@@ -214,7 +216,8 @@ void main(){
   vec4 mv = modelViewMatrix * wp;
   vNrm = normalize(normalMatrix * mat3(instanceMatrix) * normal);
   vView = normalize(-mv.xyz);
-  vC = aColor; vSel = aSF.x; vProf = -mv.z;
+  vC = aColor; vProf = -mv.z;
+  vSel = max(aSF.x, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -239,9 +242,10 @@ void main(){
 // es simplificar, es dibujar lo que son, y el contraste entre la textura estriada del tronco y la
 // lisa de las puntas es justamente lo que hace que se lea como tejido.
 const PENACHO_V = `
-attribute vec3 aColor; attribute vec3 aCurva;
+attribute vec3 aColor; attribute vec3 aCurva; attribute float aSec;
 attribute vec3 aSDF;   // (seleccion, distancia desde la raiz, familia)
 uniform float uFrente; uniform float uAncho; uniform float uT; uniform float uVaiven;
+uniform float uHov;
 varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varying float vFam;
 varying vec3 vNrm; varying vec3 vView;
 ${ATM_VARY}
@@ -265,7 +269,8 @@ void main(){
   vec4 mv = modelViewMatrix * wp;
   vNrm = normalize(normalMatrix * mat3(instanceMatrix) * normal);
   vView = normalize(-mv.xyz);
-  vC = aColor; vSel = aSDF.x;
+  vC = aColor;
+  vSel = max(aSDF.x, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   vPul = uFrente < 0.0 ? 0.0 : max(0.0, 1.0 - abs(aSDF.y - uFrente) / uAncho);
   vProf = -mv.z;
   gl_Position = projectionMatrix * mv;
@@ -295,10 +300,12 @@ void main(){
 // reconstrucciones reales el soma es lo único que se ve incandescente, y sin esto un icosaedro
 // mate a media distancia se pierde entre las ramas que salen de él.
 const HALO_V = `
-attribute vec3 aColor; attribute float aR; attribute vec2 aSF;
+attribute vec3 aColor; attribute float aR; attribute vec2 aSF; attribute float aSec;
+uniform float uHov;
 varying vec3 vC; varying vec2 vUv; varying float vSel; varying float vFam;
 void main(){
-  vC = aColor; vUv = uv * 2.0 - 1.0; vSel = aSF.x; vFam = aSF.y;
+  vC = aColor; vUv = uv * 2.0 - 1.0; vFam = aSF.y;
+  vSel = max(aSF.x, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   vec4 c = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
   gl_Position = projectionMatrix * (c + vec4(position.x * aR, position.y * aR, 0.0, 0.0));
 }`;
@@ -552,14 +559,33 @@ export function montar(cfg) {
   gVaina.setAttribute('aTNS', new THREE.InstancedBufferAttribute(TNS, 4));
   gVaina.setAttribute('aCurva', new THREE.InstancedBufferAttribute(ACUR, 3));
   gVaina.setAttribute('aDLVF', new THREE.InstancedBufferAttribute(DLVF, 4));
+  // A QUE SECCION PERTENECE CADA INSTANCIA. Se sube UNA vez y no cambia jamas: es identidad, no
+  // estado. La vaina y el soma comparten el mismo buffer porque comparten el orden de FIB.
+  const ASEC = new THREE.InstancedBufferAttribute(new Float32Array(nF), 1);
+  gVaina.setAttribute('aSec', ASEC);
   // Los uniforms del impulso son UN SOLO objeto compartido por la vaina y el penacho: si fueran
   // dos, un desfase de un cuadro entre ellos partiría el frente en dos justo en la unión.
   // uAtm son los DOS EXTREMOS de la rampa de profundidad, en unidades de vista, y se recalculan
   // cada cuadro desde la orbita. Un solo objeto compartido por los cuatro materiales: dos objetos
   // separados se desincronizan en un cuadro y la escena se parte en dos atmosferas.
-  const uAtm = { uFondo: { value: new THREE.Color(cfg.fondo || '#05070d') },
+  /* ── EL HOVER NO SE DIBUJA CON ATRIBUTOS ─────────────────────────────────────────────────
+     El reclamo fue «al pasar el clic arriba de las neuronas se siente lag». No era el sondeo: era
+     que CADA VEZ que el puntero cambiaba de sección se llamaba a `pintarSeleccion`, que recorre
+     42.000 instancias y vuelve a subir a la GPU 670 KB de atributos —aTNS, aSF de somas, de
+     botones, aSDF del penacho, el halo y las sinapsis— para cambiar el brillo de UNA rama. Barrer
+     el mouse por la escena dispara eso varias veces por segundo.
+
+     Un resaltado no es un dato por instancia: es una PREGUNTA sobre cuál está señalada. Va como
+     uniform, cada instancia lleva su número de sección —que no cambia nunca y se sube una sola
+     vez— y el shader compara. El hover pasa a costar CERO subidas.
+
+     Las SINAPSIS quedan afuera a propósito: una relación tiene dos extremos, así que necesitaría
+     su propia comparación doble, y encender 584 relaciones mientras el mouse pasea es ruido. El
+     clic —que sí es una decisión— las sigue encendiendo por `pintarSeleccion`. */
+  const uHov = { value: -1 };
+  const uAtm = { uHov, uFondo: { value: new THREE.Color(cfg.fondo || '#05070d') },
                  uAtm: { value: new THREE.Vector2(1, 2) } };
-  const uPulso = { uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
+  const uPulso = { uHov, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
                    uT: { value: 0 }, uVaiven: { value: cfg.vaiven != null ? cfg.vaiven : 0.9 },
                    uFondo: uAtm.uFondo, uAtm: uAtm.uAtm };
   // OPACO, y no es un detalle de rendimiento. Con 5.000 cilindros transparentes el orden de
@@ -579,6 +605,7 @@ export function montar(cfg) {
   for (let k = 0; k < nF; k++) SSF[k * 2 + 1] = 1;
   gSoma.setAttribute('aColor', new THREE.InstancedBufferAttribute(SC, 3));
   gSoma.setAttribute('aSF', new THREE.InstancedBufferAttribute(SSF, 2));
+  gSoma.setAttribute('aSec', ASEC);
   // Se fabrican DOS materiales con el MISMO objeto de uniforms en vez de clonar uno: clonar un
   // ShaderMaterial deep-copia los uniforms (cloneUniforms), asi que los botones se quedarian con la
   // atmosfera del primer cuadro — y eso no se ve como error, se ve como que los botones no respiran.
@@ -595,6 +622,8 @@ export function montar(cfg) {
   for (let k = 0; k < Math.max(1, totBot); k++) BSF[k * 2 + 1] = 1;
   gBot.setAttribute('aColor', new THREE.InstancedBufferAttribute(BC, 3));
   gBot.setAttribute('aSF', new THREE.InstancedBufferAttribute(BSF, 2));
+  const BSEC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, totBot)), 1);
+  gBot.setAttribute('aSec', BSEC);
   const botones = new THREE.InstancedMesh(gBot, cuerpoMat(), Math.max(1, totBot));
   botones.frustumCulled = false; mundo.add(botones);
   const BOT_DE = new Int32Array(Math.max(1, totBot));
@@ -623,6 +652,8 @@ export function montar(cfg) {
   gPen.setAttribute('aColor', new THREE.InstancedBufferAttribute(PC, 3));
   gPen.setAttribute('aCurva', new THREE.InstancedBufferAttribute(PCUR, 3));
   gPen.setAttribute('aSDF', new THREE.InstancedBufferAttribute(PSDF, 3));
+  const PSEC = new THREE.InstancedBufferAttribute(new Float32Array(nR), 1);
+  gPen.setAttribute('aSec', PSEC);
   const mPen = new THREE.ShaderMaterial({ vertexShader: PENACHO_V, fragmentShader: PENACHO_F,
     uniforms: uPulso, transparent: true, side: THREE.DoubleSide, depthWrite: false });
   const penacho = new THREE.InstancedMesh(gPen, mPen, Math.max(1, RAM.length));
@@ -636,9 +667,14 @@ export function montar(cfg) {
   gHalo.setAttribute('aColor', new THREE.InstancedBufferAttribute(HC, 3));
   gHalo.setAttribute('aR', new THREE.InstancedBufferAttribute(HR, 1));
   gHalo.setAttribute('aSF', new THREE.InstancedBufferAttribute(HSF, 2));
+  // El halo i ES la seccion i, asi que el atributo se llena de una vez.
+  const HSEC = new Float32Array(n);
+  for (let k = 0; k < n; k++) HSEC[k] = k;
+  gHalo.setAttribute('aSec', new THREE.InstancedBufferAttribute(HSEC, 1));
   const halos = new THREE.InstancedMesh(gHalo,
     new THREE.ShaderMaterial({ vertexShader: HALO_V, fragmentShader: HALO_F,
-      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), n);
+      uniforms: { uHov }, transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false }), n);
   halos.frustumCulled = false; halos.renderOrder = 2; mundo.add(halos);
 
   // El anillo va en la ESCENA y no en `mundo`: no tiene que heredar ninguna transformacion del
@@ -687,6 +723,7 @@ export function montar(cfg) {
   let totNodos = 0;
   FIB.forEach((e, i) => {
     FIB_SEC[i] = e.sec;
+    ASEC.array[i] = e.sec;
     totNodos += e.nodos;
     tintar(e.sec, e.fib, e.orden);
     AC[i * 3] = _c.r; AC[i * 3 + 1] = _c.g; AC[i * 3 + 2] = _c.b;
@@ -773,7 +810,7 @@ export function montar(cfg) {
       BOT_MEM[iB] = mm[k] || null;
       tintar(i, e.fib, 3);
       BC[iB * 3] = _c.r; BC[iB * 3 + 1] = _c.g; BC[iB * 3 + 2] = _c.b;
-      BOT_DE[iB] = i; iB++;
+      BOT_DE[iB] = i; BSEC.array[iB] = i; iB++;
     }
   });
 
@@ -805,7 +842,7 @@ export function montar(cfg) {
     PC[i * 3] = _c.r; PC[i * 3 + 1] = _c.g; PC[i * 3 + 2] = _c.b;
     PCUR[i * 3] = x.curva[0]; PCUR[i * 3 + 1] = x.curva[1]; PCUR[i * 3 + 2] = x.curva[2];
     PSDF[i * 3 + 1] = x.dist;
-    PEN_DE[i] = x.seccion;
+    PEN_DE[i] = x.seccion; PSEC.array[i] = x.seccion;
   });
 
   vainas.instanceMatrix.needsUpdate = true;
@@ -1181,7 +1218,6 @@ export function montar(cfg) {
     // de allá», que es la información que hace falta para no perderse.
     c.forEach((k, d) => { SELSEC[k] = Math.max(0.10, 1 - d * 0.17); });
     for (const h of S[sel].hijos) SELSEC[h] = Math.max(SELSEC[h], 0.34);
-    if (hov >= 0 && hov !== sel) SELSEC[hov] = Math.max(SELSEC[hov], 0.55);
     for (let k = 0; k < nF; k++) { const v = SELSEC[FIB_SEC[k]]; TNS[k * 4 + 2] = v; SSF[k * 2] = v; }
     for (let k = 0; k < totBot; k++) BSF[k * 2] = SELSEC[BOT_DE[k]];
     for (let k = 0; k < RAM.length; k++) PSDF[k * 3] = SELSEC[PEN_DE[k]];
@@ -1410,7 +1446,7 @@ export function montar(cfg) {
   }
 
   /* ── bucle ──────────────────────────────────────────────────────────────────────────────── */
-  let ultimoHov = 0, cuadros = 0, tPrev = 0;
+  let ultimoHov = 0, cuadros = 0, tPrev = 0, hovX = -1, hovY = -1;
   function frame() {
     requestAnimationFrame(frame);
     cuadros++;
@@ -1429,12 +1465,15 @@ export function montar(cfg) {
     // instancias— y aunque el costo de fragmento sea nulo (21x21 pixeles), el de vertice es el
     // mismo que el del pase visual. A 11 Hz el señalado se sigue sintiendo instantaneo y se libera
     // la mitad del presupuesto. El CLIC no pasa por este freno: ese va siempre.
-    if (ahora - ultimoHov > 90 && !abajo) {
-      ultimoHov = ahora;
+    // Y SOLO SI EL PUNTERO SE MOVIO. Con el mouse quieto el sondeo contestaba lo mismo once veces
+    // por segundo, cada una con un pase de identidad y una lectura sincronica del framebuffer —que
+    // frena la tuberia de la GPU hasta que termina. Quieto no hay nada que preguntar.
+    if (ahora - ultimoHov > 90 && !abajo && (mx !== hovX || my !== hovY)) {
+      ultimoHov = ahora; hovX = mx; hovY = my;
       const h = sondear(mx, my);
       const i = h ? h.sec : -1;
       if (i !== hov) {
-        hov = i; pintarSeleccion();
+        hov = i; uHov.value = i;
         renderer.domElement.style.cursor = i >= 0 ? 'pointer' : '';
       }
       if (h) {
@@ -1488,6 +1527,17 @@ export function montar(cfg) {
                   RAM, PEN_DE, FIB, FIB_SEC, uPulso, lanzarPulso, avanzarPulso,
                   get sel() { return sel; },
                   POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco,
+                  pintarSeleccion, rot, composer, uHov,
+                  set _hov(i) { hov = i; uHov.value = i; },
+                  // LA CUENTA DE SUBIDAS A LA GPU. `version` de un BufferAttribute sube cada vez
+                  // que alguien le pone `needsUpdate`, o sea cada vez que ese buffer se vuelve a
+                  // mandar. Es el numero exacto que hace falta para que «el hover no cuesta nada»
+                  // sea un invariante medible y no una afirmacion.
+                  subidas: () => gVaina.attributes.aTNS.version + gSoma.attributes.aSF.version
+                    + (totBot ? gBot.attributes.aSF.version : 0)
+                    + (RAM.length ? gPen.attributes.aSDF.version : 0)
+                    + gHalo.attributes.aSF.version
+                    + (sinInst ? sinInst.geometry.attributes.aSF.version : 0),
                   set _foco(h) { foco = h; },
                   conteos: { secciones: n, neuronas: nF, hilos: S[0].fibras, nodos: totNodos,
                              señalables: ID_TOTAL,
@@ -1504,6 +1554,10 @@ export function montar(cfg) {
      Cada linea es un invariante con su valor de fallo distinto del valor bueno: si la camara no
      se mueve, el desplazamiento da 0 y se ve 0. */
   if (location.hash === '#prueba') setTimeout(() => probar(vista), 900);
+  // #perf — CUANTO CUESTA CADA COSA DEL CUADRO, medido acá y no estimado. El reclamo fue «al pasar
+  // el clic arriba de las neuronas se siente lag», y un reclamo de latencia no se contesta
+  // mirando código: se contesta con el reparto del presupuesto de cuadro.
+  if (location.hash === '#perf') setTimeout(() => medirCostos(vista), 900);
   // #seccion=N — aterriza en una seccion al cargar. Sirve para capturar SIEMPRE el mismo primer
   // plano entre una version y la siguiente: comparar dos renders con encuadres distintos no dice
   // nada sobre si el cambio mejoro algo.
@@ -1525,6 +1579,43 @@ export function montar(cfg) {
     for (let k = 0; k < 140; k++) cam.tick(1 / 60);
   }, 400);
   return vista;
+}
+
+/** medirCostos: el reparto REAL del presupuesto de cuadro, en la maquina que lo esta corriendo. */
+function medirCostos(v) {
+  const filas = [];
+  // ⚠ EL RELOJ SE PUEDE CONGELAR. Bajo `--virtual-time-budget` (o sea, en cualquier captura
+  // headless) `performance.now()` no avanza y TODO da 0,00 ms — que se lee exactamente igual que
+  // «instantaneo», o sea el valor tranquilizador. Se comprueba con una carga que no puede tardar
+  // cero, y si el reloj esta muerto el panel lo DICE en vez de mentir con ceros.
+  let x = 0;
+  const tc = performance.now();
+  for (let k = 0; k < 3e6; k++) x += Math.sqrt(k);
+  const relojVivo = performance.now() - tc > 0 && x > 0;
+  const cron = (nom, veces, fn) => {
+    fn(); fn();                                  // dos de calentamiento, para no medir la compilacion
+    const t0 = performance.now();
+    for (let k = 0; k < veces; k++) fn(k);
+    const ms = (performance.now() - t0) / veces;
+    filas.push([nom, relojVivo ? ms.toFixed(2) + ' ms' : 'reloj congelado', relojVivo ? ms : 0]);
+    return ms;
+  };
+  const W = innerWidth, H = innerHeight;
+  cron('un cuadro entero (composer.render)', 20, () => v.composer.render());
+  cron('sondear — el pase de identidad', 30, (k) => v.sondear(W * 0.5 + (k % 17), H * 0.5 + (k % 13)));
+  cron('pintarSeleccion — repinta TODO', 30, (k) => { v._hov = k % v.S.length; v.pintarSeleccion(); });
+  cron('los rotulos (rot.tick)', 60, () => v.rot.tick(v.camera, v.cam.est.dist));
+  v._hov = -1; v.pintarSeleccion();
+  const total = filas.reduce((a, f) => a + f[2], 0);
+  const caja = document.createElement('div');
+  caja.className = 'prueba';
+  caja.innerHTML = '<div class="t">reparto del presupuesto de cuadro — medido aca</div>'
+    + filas.map(([q, val, ms]) => '<div class="l ' + (ms > 8 ? 'mal' : ms > 3 ? 'dato' : 'ok')
+      + '"><i>' + (ms > 8 ? '!' : '·') + '</i><span>' + q + '</span><b>' + val + '</b></div>').join('')
+    + '<div class="r">' + (relojVivo
+        ? '16,7 ms es el cuadro a 60 Hz · suma medida ' + total.toFixed(1) + ' ms'
+        : 'performance.now() no avanza en este navegador: NO SE PUDO MEDIR') + '</div>';
+  document.body.appendChild(caja);
 }
 
 function probar(v) {
@@ -1819,6 +1910,23 @@ function probar(v) {
     out.push(['toda relacion arranca y muere en su boton',
               relTot ? relBien + ' de ' + relTot + ' (peor ' + peorRel.toFixed(3) + ' u)' : 'sin relaciones',
               relTot > 0 && relBien === relTot]);
+
+    // 12e · EL HOVER NO CUESTA NADA. Era el lag: cada cambio de seccion bajo el puntero
+    //       repintaba 42.000 instancias y resubia 670 KB de atributos para cambiar el brillo de UNA
+    //       rama. Ahora es un uniform. El numero de fallo (subidas > 0) es distinto del bueno (0),
+    //       que es lo que hace que este test pueda fallar.
+    const v0 = v.subidas();
+    for (let k = 0; k < 40; k++) v._hov = (k * 37) % v.S.length;
+    const subidasHov = v.subidas() - v0;
+    out.push(['pasear el puntero no resube nada', subidasHov + ' subidas en 40 cambios',
+              subidasHov === 0]);
+    // Y EL CONTROL: elegir SI tiene que resubir. Sin esto el test pasaria igual con el dibujo
+    // entero congelado, que es la otra manera de que nada se resuba.
+    const v1 = v.subidas();
+    v.elegir(objetivo2 ? objetivo2.idx : 1, true);
+    const subidasSel = v.subidas() - v1;
+    out.push(['y elegir SI resube', subidasSel + ' subidas', subidasSel > 0]);
+    v._hov = -1;
 
     // 13 · AISLAR apaga el resto y deja el subarbol entero encendido
     v.aislar(objetivo2 ? objetivo2.idx : 1);
