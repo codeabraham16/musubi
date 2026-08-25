@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
          destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
-         colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA } from './comun.mjs';
+         colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA,
+         CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
+         escalaTinta, TINTA_SINAPSIS } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -877,4 +879,71 @@ test('D2 · la variación entre hilos va en BRILLO, no en tono', () => {
   // CONTROL: y el brillo SÍ tiene que variar. Sin esto el test pasaría con el jitter borrado del
   // todo, que es la otra manera de que el tono no varíe — y deja el haz como pana plana.
   assert.ok(rango(ll) > 0.25, `el brillo apenas varía ${rango(ll).toFixed(3)}: el haz queda plano`);
+});
+
+/* ── LOS DOS CEREBROS ────────────────────────────────────────────────────────────────────────
+   El boceto se hizo contra el local y el panel va a mirar el central. Que se pueda saltar entre
+   los dos es lo que hace comparable la pregunta «¿aguanta?»; que el salto pierda el cerebro es
+   cómo se termina comparando dos formas sobre dos datos distintos sin enterarse. */
+
+test('E1 · cambiar de FORMA no te devuelve al otro cerebro', () => {
+  for (const c of CEREBROS) {
+    for (const id of FORMAS_IDS) {
+      const href = enlaceCon(`./boceto-${id}.html`, c.id);
+      // El enlace tiene que APUNTAR a la forma pedida...
+      assert.ok(href.startsWith(`./boceto-${id}.html`), `${href} no apunta a la forma ${id}`);
+      // ...y volver a leerse como el MISMO cerebro. Se comprueba con `cerebroDe`, que es lo que
+      // la página usa de verdad: afirmar sobre el texto de la URL probaría el formato, no el viaje.
+      const q = href.includes('?') ? href.slice(href.indexOf('?')) : '';
+      const vuelta = cerebroDe(q);
+      assert.equal(vuelta.id, c.id,
+        `desde «${c.id}», el enlace a ${id} (${href}) aterriza en «${vuelta.id}»`);
+    }
+  }
+});
+
+test('E2 · un cerebro que no existe cae al local, no a un 404', () => {
+  // LISTA CERRADA, como ROLES y ACTORES: lo desconocido no se convierte en un archivo a pedir.
+  for (const basura of ['?cerebro=chorizo', '?cerebro=', '?cerebro=../secreto', '?otra=cosa', '']) {
+    const c = cerebroDe(basura);
+    assert.equal(c.id, CEREBROS[0].id, `«${basura}» dio el cerebro «${c.id}»`);
+    assert.ok(CEREBROS.includes(c), `«${basura}» inventó un cerebro fuera de la lista`);
+  }
+  // CONTROL: y uno que SÍ está tiene que llegar. Sin esto el test pasaría con `cerebroDe`
+  // devolviendo siempre el local, que es la otra forma de no tener conmutador.
+  assert.equal(cerebroDe('?cerebro=central').id, 'central', 'el central no se puede elegir');
+});
+
+test('F1 · la tinta de las relaciones es un PRESUPUESTO: dibujar más no ilumina más', () => {
+  // La alfa se afinó a ojo contra 584 relaciones y quedó escrita como si fuera del diseño. Contra
+  // el central —3.476— la misma alfa acumulaba seis veces más luz y el centro se lavaba a blanco:
+  // 11.254 píxeles brillantes sin color contra los 1.801 del local. Apagando las relaciones el
+  // central quedaba tan limpio como el local, así que el 84 % del lavado era esta capa.
+  const ref = TINTA_SINAPSIS.referencia;
+  const luz = (n) => n * escalaTinta(n);
+  // El presupuesto gobierna hasta que el piso lo releva; ahí es una decisión declarada, no un
+  // descuido, y el cruce tiene que quedar LEJOS del dato real o el presupuesto no regula nada.
+  const cruce = ref / TINTA_SINAPSIS.piso;
+  assert.ok(cruce > 2 * 3476,
+    `el piso releva al presupuesto en ${cruce | 0} y el central ya tiene 3.476: no queda margen`);
+  for (const n of [ref + 1, 2 * ref, 3476, cruce]) {
+    assert.ok(luz(n) <= ref * 1.001,
+      `con ${n} relaciones la capa mete ${(luz(n) / ref).toFixed(1)}× la luz de referencia`);
+  }
+  // CONTROL: por debajo de la referencia NO se atenúa nada. Sin esto, el test pasaría con la capa
+  // apagada del todo — que es la otra manera de que la luz no crezca, y borra las relaciones.
+  assert.equal(escalaTinta(100), 1, 'un cerebro chico no se atenúa');
+  assert.equal(escalaTinta(ref), 1, 'el cerebro de referencia no se atenúa');
+});
+
+test('F2 · la capa de relaciones NO se apaga sola', () => {
+  // Una capa que se desvanece miente igual que una que satura: diría «no hay relaciones» cuando
+  // lo que hay es demasiadas. El presupuesto tiene piso.
+  assert.ok(TINTA_SINAPSIS.piso > 0.02, `el piso es ${TINTA_SINAPSIS.piso}: se apaga igual`);
+  assert.ok(escalaTinta(1e6) >= TINTA_SINAPSIS.piso,
+    `con un millón de relaciones la capa cae a ${escalaTinta(1e6)}`);
+  // CONTROL: y en el tamaño REAL del central el piso todavía no muerde. Si ya estuviera
+  // clampeando ahí, F1 no estaría midiendo el presupuesto sino el piso, y sería vacuo.
+  assert.ok(escalaTinta(3476) > TINTA_SINAPSIS.piso,
+    'el piso ya actúa en el central: F1 no está midiendo el presupuesto');
 });

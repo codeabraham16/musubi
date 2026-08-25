@@ -14,7 +14,8 @@
 //   · el impulso sale de un acto, no de un reloj
 //   · las relaciones están todas las que tienen sus dos extremos dibujados
 
-import { cargar, seccionar, contarFibras } from './comun.mjs';
+import { cargar, seccionar, contarFibras, CEREBROS, cerebroDe, enlaceCon,
+         FORMAS_IDS, escalaTinta } from './comun.mjs';
 import { armarRaiz } from './datos.mjs';
 import { montar } from './escena.mjs';
 
@@ -49,7 +50,11 @@ const N = (x) => x.toLocaleString('es');
  */
 export async function construir(v) {
   const t0 = performance.now();
-  const datos = await cargar('./grafo-local.json');
+  // DE QUÉ CEREBRO. Sale de la URL y no de una constante: cambiar de cerebro tiene que costar un
+  // clic, o en la práctica se mira uno solo y se opina sobre ése — que es lo mismo que pasaba con
+  // las formas antes del conmutador.
+  const cerebro = cerebroDe(globalThis.location ? location.search : '');
+  const datos = await cargar(cerebro.archivo);
   const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' });
 
   const S = seccionar(raiz, v.seccionado || { maxNivel: 8, minCarga: 10 });
@@ -59,6 +64,13 @@ export async function construir(v) {
   contarFibras(S, HILOS);
   v.colocar(S);
 
+  // LA TINTA DE LAS RELACIONES SE REPARTE. La forma declara la alfa que quiere para el cerebro de
+  // referencia; acá se divide entre las relaciones que este cerebro traiga. Ver `escalaTinta`.
+  const tinta = escalaTinta((datos.synapses || []).length);
+  const montaje = Object.assign({}, v.montaje || {});
+  if (montaje.alfaSinapsis != null) montaje.alfaSinapsis *= tinta;
+  if (montaje.alfaConfianza != null) montaje.alfaConfianza *= tinta;
+
   const vista = montar(Object.assign({
     secciones: S, colorDe, titulo: 'memoria', sinapsis: datos.synapses,
     ...HILOS, ...HEBRA,
@@ -67,7 +79,7 @@ export async function construir(v) {
     // panel deja de tener un piso contra el cual medir. #0C1020 da ese piso sin levantar la escena.
     fondo: '#0C1020', bloom: 0.80,
     nivelesPenacho: 3, escalaPenacho: 0.62,
-  }, v.montaje || {}));
+  }, montaje));
 
   const info = FORMAS.find((f) => f.id === v.id) || FORMAS[0];
   const c = vista.conteos;
@@ -79,7 +91,7 @@ export async function construir(v) {
   // haz padre era más corto que lo que sus hijas necesitaban para no tocarse, o donde el ángulo
   // que hacía falta pasaba el tope. Callarlas sería afirmar una separación que el dibujo no tiene.
   leyenda.innerHTML = `
-    <div class="titulo">${info.nombre}</div>
+    <div class="titulo">${info.nombre} <em>${cerebro.nombre}</em></div>
     <div class="sub">${v.nota || info.sub}</div>
     ${racimos.slice(0, 8).map((r) => `<div class="r"><i style="background:${r.color}"></i>${
       r.nombre}${r.detalle ? `<em>${r.detalle}</em>` : ''} <b>${N(r.n)}</b></div>`).join('')}
@@ -87,6 +99,7 @@ export async function construir(v) {
       class="cifra">${N(c.neuronas)}</span> neuronas<br>${N(c.secciones)} haces · ${
       N(c.ramitas)} terminales · ${N(c.botones)} botones<br>${
       N(c.sinapsis)} sinapsis en ${N(c.tramosSinapsis)} tramos${
+      tinta < 1 ? ` <span class="dim">al ${Math.round(100 * tinta)} % de tinta</span>` : ''}${
       c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
       }${apretadas ? `<br><span class="dim">${N(apretadas)} bifurcaciones sin el aire que piden</span>` : ''
       }<br><span class="cifra">${N(c.señalables)}</span> se pueden señalar de uno
@@ -97,13 +110,22 @@ export async function construir(v) {
   // si cambiar de boceto cuesta, en la práctica se mira uno solo y se opina sobre ése.
   const barra = document.createElement('nav');
   barra.className = 'formas';
-  barra.innerHTML = FORMAS.map((f) => `<a href="./boceto-${f.id}.html"${
+  barra.innerHTML = FORMAS.map((f) => `<a href="${enlaceCon(`./boceto-${f.id}.html`, cerebro.id)}"${
     f.id === v.id ? ' class="hoy" aria-current="page"' : ''}><b>${f.nombre}</b><span>${
     f.sub}</span></a>`).join('');
   document.body.appendChild(barra);
 
-  console.log('[boceto ' + v.id + ']', c, ((performance.now() - t0) | 0) + ' ms');
+  // EL CONMUTADOR DE CEREBRO. Va aparte del de formas porque es otro eje: aquél cambia el DIBUJO
+  // sobre el mismo dato, éste cambia el DATO con el mismo dibujo. Juntarlos en una barra sola
+  // insinuaría que «el central» es una forma más.
+  const cbarra = document.createElement('nav');
+  cbarra.className = 'cerebros';
+  cbarra.innerHTML = CEREBROS.map((c) => `<a href="${enlaceCon(`./boceto-${v.id}.html`, c.id)}"${
+    c.id === cerebro.id ? ' class="hoy" aria-current="page"' : ''}>${c.nombre}</a>`).join('');
+  document.body.appendChild(cbarra);
+
+  console.log('[boceto ' + v.id + ' · ' + cerebro.id + ']', c, ((performance.now() - t0) | 0) + ' ms');
   // Se expone para la verificación por píxeles: pausar y medir necesita poder tocar la escena.
   globalThis.__boceto = vista;
-  return { vista, S, datos, racimos };
+  return { vista, S, datos, racimos, cerebro };
 }

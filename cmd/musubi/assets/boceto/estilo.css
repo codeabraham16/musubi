@@ -263,3 +263,34 @@ body::after {
 .formas a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 /* En una ventana angosta la barra se comería el ancho: se queda el nombre y se va la apuesta. */
 @media (max-width: 1100px) { .formas a span { display: none; } }
+
+/* ── DE QUÉ CEREBRO ────────────────────────────────────────────────────────────
+   El mismo dibujo sobre dos datos distintos se ve DISTINTO, así que la pantalla tiene que decir
+   cuál está mirando. Sin esto, comparar dos capturas es comparar dos cosas sin saberlo. */
+.leyenda .titulo em {
+  font-style: normal; font-weight: 500; letter-spacing: .04em; text-transform: none;
+  color: var(--acento); margin-left: 6px;
+}
+.leyenda .titulo em::before { content: '· '; color: var(--tenue) }
+
+/* El conmutador de cerebro va DEBAJO del de formas, no dentro: son dos ejes distintos —aquél
+   cambia el dibujo sobre el mismo dato, éste cambia el dato con el mismo dibujo—. */
+.cerebros {
+  position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+  z-index: 12; display: flex; gap: 3px;
+  padding: 3px; border-radius: 9px;
+  background: var(--panel); border: 1px solid var(--hilo);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .40);
+}
+.cerebros a {
+  padding: 3px 10px 4px; border-radius: 6px; text-decoration: none;
+  border: 1px solid transparent;
+  font: 560 10.5px/1.2 var(--sans); letter-spacing: .03em; color: var(--tenue);
+  transition: background .14s, border-color .14s, color .14s;
+}
+.cerebros a:hover { background: rgba(106, 168, 255, .10); color: var(--tinta-2) }
+.cerebros a.hoy {
+  background: rgba(106, 168, 255, .14); border-color: rgba(106, 168, 255, .48);
+  color: var(--acento);
+}
+.cerebros a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px }

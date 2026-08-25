@@ -30,6 +30,15 @@ musubi dashboard --port 7729 &                      # el panel, contra tu .musub
 curl -s http://127.0.0.1:7729/api/graph > grafo-local.json
 ```
 
+Y hay un **segundo cerebro**: el central. Se elige con `?cerebro=central` —hay un conmutador al
+lado del de formas— y sale del dashboard que corre en el server, que escucha **sólo en loopback**:
+
+```bash
+ssh -o ProxyCommand="tailscale nc %h %p" musubi@100.79.126.62   'curl -s "http://127.0.0.1:7719/api/graph?lens=memory"' > grafo-central.json
+```
+
+Tampoco entra al repo, y por más motivo: son las notas de **todas** las máquinas de la malla.
+
 **2 · El bundle.** Tampoco se commitea (se rehace en ~80 ms y no lo embebe nadie):
 
 ```bash
@@ -46,6 +55,48 @@ cd cmd/musubi/assets
 cd cmd/musubi/assets/boceto && python -m http.server 7731
 # → http://127.0.0.1:7731/boceto-a.html
 ```
+
+## Los dos cerebros
+
+El boceto se construyó entero contra el **local** y el panel va a mirar el **central**. Son dos
+formas distintas del mismo dato, así que el dibujo tiene que aguantar las dos. Medido el
+2026-08-25, mismo pipeline y misma configuración de «el nudo»:
+
+| | notas | sinapsis | por nota | racimos | haces | ángulo P10 | enredo |
+|---|---|---|---|---|---|---|---|
+| local | 2.267 | 584 | 0,26 | 3 | 441 | 0,735 | 0,063 |
+| central | 3.902 | 3.476 | **0,89** | 3 | 603 | **0,741** | **0,315** |
+
+Dos cosas que el número dice y la intuición no. **La geometría aguanta**: el percentil 10 del
+ángulo entre hermanas —la cola, que es lo que el ojo lee como amontonado— queda igual con 1,4×
+más haces. Lo que se multiplica por cinco es el **enredo**, que es cruce entre haces ajenos, y lo
+empuja la densidad de relaciones: 3,4× más por nota. *(El plan estimaba 6×; medido son 3,4×.)*
+
+### 🔴 La tinta de las relaciones era una constante y tenía que ser un presupuesto
+
+Contra el central el centro se **lavaba a blanco**. Medido acotando al lienzo y contando píxeles
+brillantes que perdieron su color:
+
+| | brillantes | lavados a blanco |
+|---|---|---|
+| local | 10.416 | 1.801 · 17,3 % |
+| central | 37.827 | **11.254 · 29,8 %** |
+| central **sin sinapsis** | 9.852 | 1.819 · 18,5 % |
+| central **con presupuesto** | 11.612 | 1.819 · **15,7 %** |
+
+La tercera fila es la que decide: apagando las relaciones, el central queda **tan limpio como el
+local**. O sea el tejido aguanta 3.902 notas sin despeinarse y el **84 % del lavado lo ponía la
+capa de relaciones** — una alfa afinada a ojo contra 584 trazos, aplicada a 3.476.
+
+Así que la forma declara la tinta que quiere **para el cerebro de referencia** y `escalaTinta` la
+reparte entre las relaciones que haya: más relaciones, cada una más tenue, misma luz total. La
+cuarta fila es el resultado, y la leyenda **declara la atenuación** (`al 17 % de tinta`) porque
+mostrar menos relación de la que hay sin decirlo sería la mentira de siempre.
+
+⚠ El presupuesto tiene **piso**, y el piso y el presupuesto se pelean: pasadas
+`referencia / piso` = **9.733** relaciones el piso gana y la luz total vuelve a crecer. Es una
+decisión —una capa que se apaga sola miente igual que una que satura—, hoy el central está en
+3.476 y un test vigila que el cruce siga lejos del dato real.
 
 ## Las seis formas
 

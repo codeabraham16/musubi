@@ -1873,11 +1873,103 @@ export function frenteEn(ms, vel, max, ancho) {
   return f > max + ancho ? -1 : f;
 }
 
-/** cargar: el grafo del cerebro local, tal cual lo sirve el panel. */
+/** cargar: el grafo de un cerebro, tal cual lo sirve el panel. */
 export async function cargar(url) {
-  const r = await fetch(url || './grafo-local.json');
-  if (!r.ok) throw new Error('no se pudo leer el grafo: ' + r.status);
+  const u = url || CEREBROS[0].archivo;
+  const r = await fetch(u);
+  // EL ARCHIVO VA EN EL MENSAJE. «no se pudo leer el grafo: 404» no dice CUÁL grafo, y con dos
+  // cerebros en juego eso es la diferencia entre «el boceto se rompió» y «ese dump no está bajado».
+  if (!r.ok) throw new Error(`no se pudo leer ${u}: ${r.status}`);
   return r.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LOS DOS CEREBROS
+//
+// El boceto se construyó entero contra el cerebro LOCAL, y el que va a mirar el panel es el
+// CENTRAL. Son dos formas distintas del mismo dato, y el dibujo tiene que aguantar las dos.
+// Medido el 2026-08-25, con el mismo pipeline y la misma configuración de «el nudo»:
+//
+//                notas   sinapsis   por nota   racimos   haces   ángulo P10   enredo
+//   local        2.267        584       0,26         3     441        0,735    0,063
+//   central      3.902      3.476       0,89         3     603        0,741    0,315
+//
+// Dos cosas que el número dice y la intuición no: la GEOMETRÍA aguanta —el percentil 10 del
+// ángulo entre hermanas queda igual, o sea la cola no se aprieta más— y lo que se multiplica por
+// cinco es el ENREDO, que es cruce entre haces ajenos, empujado por 3,4× más sinapsis por nota.
+// (El plan estimaba 6× de densidad. Medido, 3,4×. Se corrige acá y no se cita más el 6×.)
+//
+// Va como LISTA CERRADA a propósito, igual que `ROLES` y `ACTORES` en personas.mjs: un id
+// desconocido cae al local en vez de pedir un archivo que no existe. Con la lista abierta,
+// `?cerebro=loquesea` da un 404 que se lee como «el boceto se rompió» y no como «pediste algo
+// que no está bajado».
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LA TINTA DE LAS RELACIONES ES UN PRESUPUESTO, NO UNA CONSTANTE
+//
+// `alfaSinapsis` se afinó A OJO contra el cerebro local —584 relaciones— y quedó escrito como si
+// fuera una propiedad del diseño. No lo es: es una propiedad de ESE dato. Contra el central, con
+// 3.476 relaciones sobre la misma pantalla, la misma alfa acumula seis veces más luz y el centro
+// se lava a blanco. Medido, acotando al lienzo y contando píxeles brillantes que perdieron color:
+//
+//                        brillantes   lavados a blanco
+//   local                    10.416     1.801  (17,3 %)
+//   central                  37.827    11.254  (29,8 %)
+//   central SIN sinapsis      9.852     1.819  (18,5 %)   ← la prueba
+//
+// La tercera fila es la que decide: apagando las relaciones, el central queda TAN LIMPIO como el
+// local. O sea el tejido aguanta 3.902 notas sin problema y el 84 % del lavado lo pone la capa de
+// relaciones. No era la densidad del dibujo: era una alfa aplicada a seis veces más trazos.
+//
+// Así que la forma declara la tinta que quiere PARA EL CEREBRO DE REFERENCIA, y acá se reparte
+// entre las relaciones que haya: más relaciones, cada una más tenue, misma luz total. Un
+// presupuesto no es una perilla — no hay nada que afinar cuando cambie el dato.
+//
+// ⚠ Y NO SE DEJA CAER A CERO. El piso existe porque una capa que se apaga sola miente igual que
+// una que satura: diría «no hay relaciones» cuando lo que hay es demasiadas.
+//
+// EL PISO Y EL PRESUPUESTO SE PELEAN, Y SE DICE DÓNDE. Pasadas `referencia / piso` = 9.733
+// relaciones el piso gana y la luz total vuelve a crecer. Es una decisión, no un descuido:
+// preferimos una pantalla más brillante a una capa que se apaga sola. Hoy el central tiene 3.476,
+// o sea que el presupuesto gobierna con 2,8× de margen. Un test lo vigila: el día que el cruce
+// quede por debajo del dato real, el presupuesto dejó de regular y hay que volver a mirarlo.
+export const TINTA_SINAPSIS = { referencia: 584, piso: 0.06 };
+
+/**
+ * escalaTinta: cuánto hay que atenuar la capa de relaciones para este cerebro.
+ *
+ * @param {number} n cuántas relaciones se van a dibujar
+ * @returns {number} un factor en (0, 1] — 1 en el cerebro de referencia o más chico
+ */
+export function escalaTinta(n) {
+  if (!(n > TINTA_SINAPSIS.referencia)) return 1;
+  return Math.max(TINTA_SINAPSIS.piso, TINTA_SINAPSIS.referencia / n);
+}
+
+/** FORMAS_IDS: las seis formas. Vive acá —y no en forma.mjs— porque forma.mjs toca `document` y
+    el test puro no puede importarlo; repetir la lista a mano es como se desincronizan. */
+export const FORMAS_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
+
+export const CEREBROS = [
+  { id: 'local', nombre: 'este cerebro', archivo: './grafo-local.json' },
+  { id: 'central', nombre: 'el central', archivo: './grafo-central.json' },
+];
+
+/** cerebroDe: qué cerebro pide una query string. Lo desconocido cae al primero. */
+export function cerebroDe(busqueda) {
+  const q = new URLSearchParams(String(busqueda || '')).get('cerebro');
+  return CEREBROS.find((c) => c.id === q) || CEREBROS[0];
+}
+
+/**
+ * enlaceCon: un enlace de la barra de formas, CONSERVANDO el cerebro que estás mirando.
+ *
+ * Es el pisón que este conmutador trae servido: mirás el central, tocás otra forma y volvés al
+ * local sin que nada lo diga. Ahí terminás comparando dos formas sobre DOS DATOS DISTINTOS y
+ * atribuyéndole a la forma una diferencia que era del cerebro. El cerebro viaja en cada enlace.
+ */
+export function enlaceCon(href, cerebroId) {
+  const c = CEREBROS.find((x) => x.id === cerebroId);
+  return !c || c === CEREBROS[0] ? href : `${href}?cerebro=${c.id}`;
 }
 
 // PALETA DE PERSONAS, ordenada por SEPARACIÓN DE TONO y no por la del panel.

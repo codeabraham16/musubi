@@ -261,6 +261,30 @@ const SABOTAJES = [
     de: '  const y = m === 1 ? 0 : 1 - (2 * (k + 0.5)) / m;',
     a: '  const y = 0.9;',
   },
+  {
+    test: 'E1',
+    que: 'el enlace a otra forma PIERDE el cerebro y te devuelve al local en silencio',
+    de: '  return !c || c === CEREBROS[0] ? href : `${href}?cerebro=${c.id}`;',
+    a: '  return href;',
+  },
+  {
+    test: 'E2',
+    que: 'la lista deja de ser cerrada: un id cualquiera se convierte en un archivo a pedir',
+    de: "  return CEREBROS.find((c) => c.id === q) || CEREBROS[0];",
+    a: "  return q ? { id: q, nombre: q, archivo: `./grafo-${q}.json` } : CEREBROS[0];",
+  },
+  {
+    test: 'F1',
+    que: 'la alfa deja de repartirse: seis veces más relaciones, seis veces más luz, centro lavado',
+    de: '  return Math.max(TINTA_SINAPSIS.piso, TINTA_SINAPSIS.referencia / n);',
+    a: '  return 1;',
+  },
+  {
+    test: 'F2',
+    que: 'se va el piso: con muchas relaciones la capa se desvanece y dice que no hay ninguna',
+    de: '  return Math.max(TINTA_SINAPSIS.piso, TINTA_SINAPSIS.referencia / n);',
+    a: '  return TINTA_SINAPSIS.referencia / n;',
+  },
 ];
 
 const original = readFileSync(OBJ, 'utf8');
