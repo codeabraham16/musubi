@@ -724,6 +724,65 @@ export function contarFibras(secciones, opciones) {
   return secciones;
 }
 
+const mcd = (a, b) => (b === 0 ? a : mcd(b, a % b));
+
+/**
+ * pasoMezcla: el salto que reparte los hilos de un actor por TODO el disco del haz.
+ *
+ * El problema, que salio del render: las ranuras de un actor son CONTIGUAS por construccion (cada
+ * hija se lleva un bloque seguido), y el girasol pone el hilo j a radio proporcional a raiz de j.
+ * O sea que un bloque contiguo es un ANILLO, y el actor mas grande se queda con el anillo de
+ * afuera — que es el unico que se ve. El nucleo, que lleva hilos de todos, se leia como si fuera
+ * entero del actor mas grande. Es la misma clase de mentira por implicacion que ya nos hizo
+ * repintar los dos baldes grises: el dato estaba bien y el dibujo afirmaba otra cosa.
+ *
+ * Con un paso coprimo con la cantidad de hilos, `j -> (j*K) mod f` es una BIYECCION —no se pierde
+ * ni se duplica ningun hilo, que es el invariante que sostiene todo esto— y manda cada bloque
+ * contiguo a una progresion que recorre el disco entero. K cerca de f/phi es lo que deja los
+ * saltos mas parejos.
+ */
+export function pasoMezcla(f) {
+  if (f <= 2) return 1;
+  // Se busca hacia los DOS lados desde f/phi: bajando a secas, un f con muchos divisores chicos
+  // (6, 12, 30) se queda sin candidato y devuelve 1 — o sea, no mezcla nada, en silencio.
+  const c0 = Math.max(2, Math.round(f * 0.6180339887));
+  for (let d = 0; d < f; d++) {
+    const a = c0 - d, b = c0 + d;
+    if (a > 1 && mcd(f, a) === 1) return a;
+    if (b < f && mcd(f, b) === 1) return b;
+  }
+  return 1;
+}
+
+/**
+ * destinoDeHilo: a QUÉ HOJA va a parar cada hilo, por su número de ranura global.
+ *
+ * Es la consecuencia directa de que las ranuras no se pisen: el hilo 137 del núcleo es el MISMO
+ * hilo 137 de la rama por la que sigue, hasta la hoja donde termina. Entonces un hilo del núcleo
+ * no es «un hilo del tronco»: es el hilo de alguien, y ya se sabe de quién antes de dibujarlo.
+ *
+ * Lo que arregla: el núcleo se pintaba de un gris propio porque «no le pertenece a nadie». Con
+ * 459 hilos y 40 de largo eso no es un tronco discreto, es un LADRILLO GRIS en el centro exacto
+ * del cuadro, y encima el objeto más apagado de la escena. Pero la premisa era falsa: el núcleo
+ * no es de nadie, es de TODOS a la vez, y eso se puede dibujar — cada hilo con el color de donde
+ * va. Deja de ser un bloque y pasa a ser lo que es, el punto donde convergen los actores.
+ *
+ * @returns {Int32Array} índice de sección hoja por ranura global.
+ */
+export function destinoDeHilo(secciones) {
+  let total = 0;
+  for (const s of secciones) total = Math.max(total, (s.ranura || 0) + (s.fibras || 1));
+  // -1 y no 0: el valor de fallo NO puede ser un índice válido, o un hilo sin destino se pintaría
+  // como si fuera del núcleo y nadie se enteraría. Es la misma regla de siempre.
+  const dest = new Int32Array(total).fill(-1);
+  for (const s of secciones) {
+    if (s.hijos.length) continue;
+    const r0 = s.ranura || 0;
+    for (let j = 0; j < (s.fibras || 1); j++) dest[r0 + j] = s.idx;
+  }
+  return dest;
+}
+
 /** puntoHilo: dónde está el hilo `(rho, phi0)` de la sección `s` en el parámetro `t`. */
 function puntoHilo(s, t, rho, phi0, torsion, e1, e2) {
   const c = enCurva(s, t);
@@ -780,6 +839,7 @@ export function enhebrar(secciones, opciones) {
     // más gordo que uno de un par — y es lo que reemplaza a la ley de Rall, que estimaba esto.
     const R = f <= 1 ? 0 : rFib * sep * Math.sqrt(f);   // el radio del GIRASOL de hilos
     s.Rhaz = radioHaz(f, rFib, sep);                   // el radio del HAZ, con piso, compartido
+    const paso = pasoMezcla(f);
     const nE = Math.max(1, Math.min(maxEsl, Math.round((s.largo || 1) / largoN)));
     const d0 = (s.dist || 0) - (s.largo || 0);
     for (let j = 0; j < f; j++) {
@@ -787,7 +847,10 @@ export function enhebrar(secciones, opciones) {
       // un caño y delata que adentro no hay nada.
       const rho = f === 1 ? 0 : R * Math.sqrt((j + 0.5) / f);
       const phi0 = j * 2.399963;
-      const gi = (s.ranura || 0) + j;
+      // QUE HILO OCUPA ESTE LUGAR. La geometria del girasol no se toca —sigue siendo la misma
+      // posicion j— pero el hilo que se sienta ahi sale mezclado, o los actores salen en anillos
+      // concentricos y solo se ve el de afuera. Ver `pasoMezcla`.
+      const gi = (s.ranura || 0) + ((j * paso) % f);
       // ESCALONADO POR HILO, y esto se vio en el render antes de entenderlo: con todas las
       // hendiduras alineadas a lo largo del haz, los huecos y los somas caían en el mismo anillo
       // y el haz se leía como una ORUGA segmentada, no como fibras. En un tracto real los nodos y
@@ -854,6 +917,98 @@ export function enhebrar(secciones, opciones) {
  * Van LISAS, sin estrías: las terminales finas no están mielinizadas. El contraste entre la
  * textura estriada del haz y la lisa de las puntas es real, no un efecto.
  */
+/**
+ * rutaSinapsis: por dónde viaja una relación entre dos memorias.
+ *
+ * LO QUE HABÍA ERA UNA CUERDA. Dos botones unidos por un tubo recto que atraviesa el tejido en
+ * línea recta, y 584 de esas cruzando la escena. El reclamo fue exacto: «no se ven naturales, se
+ * ve anti-física». Y es literal — ningún axón atraviesa la sustancia blanca por el camino más
+ * corto. Sale del soma, SE METE EN UN TRACTO, viaja con los demás mientras el tracto va para
+ * donde le sirve, y recién ahí se desvía hacia su blanco. Un axón hace lo que hace un pasajero,
+ * no lo que hace una bala.
+ *
+ * Así que la relación viaja POR EL ÁRBOL: sube por la rama de una memoria hasta el ancestro común
+ * con la otra, y baja. Los puntos de control son las bifurcaciones del camino — que es lo que
+ * hace que dos relaciones con tramos en común se junten y se vean como un fascículo, en vez de
+ * como dos rayas independientes. Es agrupamiento jerárquico de aristas (Holten 2006), y lo que
+ * en un diagrama es una técnica de legibilidad, acá es además lo que pasa de verdad.
+ *
+ * `beta` es cuánto manda el árbol: 1 pega la curva a las ramas, 0 la devuelve a la cuerda recta.
+ * Medido sobre el cerebro local, lo más lejos que una ruta llega a estar del árbol pasa de 71 a
+ * 22 unidades entre 0,86 y 1,00 — pero pegarla del todo la mete ADENTRO del haz, donde no se ve.
+ * Por eso la ruta no pasa por el eje de cada rama sino por su SUPERFICIE, corrida un radio de haz
+ * hacia afuera y con un ángulo propio por relación: así viaja con el tracto —que es lo que hace
+ * un axón— y además se ve, y dos relaciones que comparten tramo no se apilan en la misma raya.
+ *
+ * Los extremos NO se negocian: la curva arranca exactamente en el botón de origen y termina
+ * exactamente en el de destino. Una relación que no toca lo que dice unir es peor que no
+ * dibujarla. Eso lo garantiza UNA sola cosa —el B-spline lleva los extremos triplicados, y con el
+ * punto de control repetido tres veces la curva pasa por él— y a propósito no hay una segunda
+ * red abajo fijando las puntas a mano: con las dos, romper la triplicación no rompería nada y el
+ * test que dice cuidar los extremos quedaría vacuo pareciendo sano.
+ */
+export function rutaSinapsis(secciones, secA, secB, pA, pB, opciones) {
+  const o = opciones || {};
+  // Sin sección de origen o de destino no hay árbol por donde viajar. La cuerda recta es la
+  // respuesta honesta —une lo que dice unir— y no se disfraza de ruta.
+  if (!(secA >= 0) || !(secB >= 0) || !secciones[secA] || !secciones[secB]) return [pA.slice(), pB.slice()];
+  const beta = Math.max(0, Math.min(1, Number.isFinite(Number(o.beta)) ? Number(o.beta) : 0.95));
+  const muestras = Math.max(2, Math.round(Number(o.muestras) || 20));
+  const riel = Number.isFinite(Number(o.riel)) ? Number(o.riel) : 1.15;
+  const fase = Number(o.fase) || 0;
+
+  // 1 · el camino por el árbol: subir de A, subir de B, encontrarse
+  const subir = (i) => { const c = []; let k = i; while (k != null && k >= 0) { c.push(k); k = secciones[k].padre; } return c; };
+  const ca = subir(secA), cb = subir(secB);
+  const enB = new Map(); cb.forEach((k, d) => enB.set(k, d));
+  let corte = ca.length - 1;
+  for (let d = 0; d < ca.length; d++) if (enB.has(ca[d])) { corte = d; break; }
+  const lca = ca[corte];
+  const camino = ca.slice(0, corte + 1).concat(cb.slice(0, enB.get(lca)).reverse());
+
+  // 2 · los puntos de control: la bifurcación de cada sección del camino, pero corrida a la
+  //     SUPERFICIE del haz. Por el eje la relación queda enterrada adentro del propio tracto y no
+  //     se ve; por afuera viaja con él y se lee. El ángulo sale de la fase de la relación, así que
+  //     dos relaciones que comparten tramo lo recorren por lados distintos del haz.
+  const P = [pA.slice()];
+  for (const k of camino) {
+    const s = secciones[k];
+    const q = (s.a || [0, 0, 0]).slice();
+    const [e1, e2] = marco(s.dir || [0, 1, 0]);
+    const r = (s.Rhaz || 1) * riel;
+    const co = Math.cos(fase) * r, si = Math.sin(fase) * r;
+    q[0] += e1[0] * co + e2[0] * si;
+    q[1] += e1[1] * co + e2[1] * si;
+    q[2] += e1[2] * co + e2[2] * si;
+    P.push(q);
+  }
+  P.push(pB.slice());
+
+  // 3 · el agrupamiento: se tira de cada punto hacia la cuerda recta según `beta`
+  const n = P.length;
+  for (let i = 1; i < n - 1; i++) {
+    const t = i / (n - 1);
+    for (let c = 0; c < 3; c++) P[i][c] = beta * P[i][c] + (1 - beta) * (pA[c] + (pB[c] - pA[c]) * t);
+  }
+
+  // 4 · B-spline cúbico uniforme con los extremos triplicados
+  const C = [P[0], P[0], ...P, P[n - 1], P[n - 1]];
+  const m = C.length;
+  const salida = [];
+  for (let q = 0; q < muestras; q++) {
+    const u = (q / (muestras - 1)) * (m - 3);
+    let i = Math.min(m - 4, Math.floor(u));
+    const t = u - i, t2 = t * t, t3 = t2 * t;
+    const b0 = (-t3 + 3 * t2 - 3 * t + 1) / 6, b1 = (3 * t3 - 6 * t2 + 4) / 6,
+          b2 = (-3 * t3 + 3 * t2 + 3 * t + 1) / 6, b3 = t3 / 6;
+    const q0 = C[i], q1 = C[i + 1], q2 = C[i + 2], q3 = C[i + 3];
+    salida.push([q0[0] * b0 + q1[0] * b1 + q2[0] * b2 + q3[0] * b3,
+                 q0[1] * b0 + q1[1] * b1 + q2[1] * b2 + q3[1] * b3,
+                 q0[2] * b0 + q1[2] * b1 + q2[2] * b2 + q3[2] * b3]);
+  }
+  return salida;
+}
+
 export function deshilachar(eslabones, secciones, opciones) {
   const o = opciones || {};
   const r = rng((Number(o.semilla) || 97) >>> 0);

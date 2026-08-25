@@ -26,7 +26,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { crearCamara, crearRotulos, frenteEn, enCurva,
-         contarFibras, enhebrar, deshilachar } from './comun.mjs';
+         contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis } from './comun.mjs';
 
 export { enCurva };
 
@@ -193,17 +193,47 @@ void main(){
    de adelante. Lo que este MAS CERCA que el empujon no se tapa — y eso es justamente lo que salva
    a los hilos vecinos del mismo haz, que estan a 1,4 unidades unos de otros: con un halo comun se
    comerian entre si y el haz se volveria una mancha negra con cuatro hilos encima. Por eso el halo
-   tiene que DEPENDER DE LA PROFUNDIDAD y no ser un contorno a secas. */
+   tiene que DEPENDER DE LA PROFUNDIDAD y no ser un contorno a secas.
+
+   Y AUN ASI SE LOS COMIA, porque el salto se defendia del vecino de al lado y no del de ATRAS.
+   Los hilos de un mismo haz estan a 1,4 unidades de costado, si — pero un haz gordo mide 58 de
+   punta a punta EN PROFUNDIDAD, o sea cinco veces el salto. El halo del hilo de adelante caia
+   entonces sobre el hilo de atras DEL MISMO HAZ y le masticaba un pozo negro. Medido de cerca:
+   apagaba el 7,9 % del contenido y el 15 % de eso eran manchas macizas, no bordes; de lejos, 1,6 %
+   y ninguna mancha. Por eso no se veia revisando la vista general: el defecto CRECE con el zoom, y
+   es justo donde el usuario estaba mirando.
+
+   PROBE PRIMERO OTRA COSA Y NO PAGO, asi que queda anotado para que nadie la reponga: hacer que
+   solo proyectara la CASCARA del haz (los hilos cerca de la superficie) cambia la imagen pero baja
+   el apagado de 59.696 a 59.363 pixeles — un 0,6 %. El interior no era el que se comia nada.
+
+   LO QUE SI ERA: el halo crecia en unidades de MUNDO. Un hilo de 0,52 con `uGrosor` 3 se vuelve
+   una funda de 1,56, y como los hilos de un haz estan a 2,4 de distancia, las fundas SE TOCAN y el
+   haz entero proyecta una losa maciza del triple de su area sobre todo lo que tenga detras. De
+   lejos esa losa mide menos de un pixel y no se ve; de cerca se come un bocado del haz de atras
+   con borde duro. Eso explica los dos numeros —1,6 % lejos, 7,9 % cerca— y explica por que
+   revisando la vista general no aparecia.
+
+   Un contorno se mide EN PANTALLA, no en el mundo: son dos pixeles y medio de reborde, siempre.
+   Lejos, los hilos caen a menos de un pixel entre si y los rebordes se funden en la silueta del
+   HAZ, que es exactamente el contorno que se buscaba. Cerca, los hilos estan a diez pixeles y el
+   reborde no llega al vecino. La misma linea de codigo hace las dos cosas. */
 const CONTORNO_V = `
 attribute vec3 aCurva; attribute vec4 aTNS; attribute vec4 aDLVF;
-uniform float uGrosor; uniform float uSalto;
+uniform float uPx; uniform float uSalto;
 void main(){
   float y = position.y + 0.5;
+  // EL REBORDE, EN PIXELES. uPx son las unidades de mundo que mide un pixel a un metro de
+  // profundidad; multiplicado por la profundidad del eje del hilo da el ancho de mundo que hay que
+  // sumarle para que el reborde salga siempre del mismo grosor en pantalla. Y hay que dividirlo
+  // por el radio de la instancia porque el cilindro viene con radio 1 y lo engorda la matriz: sin
+  // eso, un hilo fino recibiria un reborde mas fino, que es justo al reves de lo que hace falta.
+  vec4 eje = modelViewMatrix * instanceMatrix * vec4(0.0, position.y, 0.0, 1.0);
+  float rInst = max(length(instanceMatrix[0].xyz), 1e-4);
+  float k = mix(1.0, aTNS.x, y) + (uPx * max(-eje.z, 1.0)) / rInst;
   // Un hilo apagado NO proyecta contorno: si lo hiciera, seguiria tapando a la rama que estas
   // mirando y aislar dejaria de servir — verias un hueco negro delante de lo que querias ver.
-  // Colapsar la instancia a cero no dibuja ni un fragmento; apagar el color no alcanza porque el
-  // contorno escribe PROFUNDIDAD, que es lo que tapa.
-  float k = aDLVF.w < 0.5 ? 0.0 : mix(1.0, aTNS.x, y) * uGrosor;
+  if (aDLVF.w < 0.5) k = 0.0;
   vec3 p = vec3(position.x * k, position.y, position.z * k);
   vec4 wp = instanceMatrix * vec4(p, 1.0);
   // La panza se aplica IGUAL que en la vaina real. Si no, el contorno no queda concentrico con su
@@ -336,13 +366,15 @@ void main(){
 // convierte la escena en una madeja y tapa la ramificación, que es lo que se vino a mirar. Se leen
 // por ACUMULACIÓN, como una corriente de fondo, y se encienden las que tocan lo que elegiste.
 const SIN_V = `
-attribute vec3 aColor; attribute vec3 aCurva; attribute float aConf; attribute vec2 aSF;
+// aT = (t0, t1) DEL TRAMO dentro de su relacion completa. Sin esto el desvanecido de las puntas se
+// aplicaria a CADA tramo y una relacion de catorce tramos se veria punteada, como una linea de
+// guiones. La relacion tiene dos puntas y son las suyas, no las de cada pedazo.
+attribute vec3 aColor; attribute vec2 aT; attribute float aConf; attribute vec2 aSF;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
 void main(){
   vFam = aSF.y;
-  vY = position.y + 0.5;
+  vY = mix(aT.x, aT.y, position.y + 0.5);
   vec4 wp = instanceMatrix * vec4(position, 1.0);
-  wp.xyz += aCurva * sin(vY * 3.14159265);
   vC = aColor; vSel = aSF.x; vConf = aConf;
   gl_Position = projectionMatrix * modelViewMatrix * wp;
 }`;
@@ -354,11 +386,39 @@ void main(){
   // Se desvanece en los DOS extremos: un arco de brillo parejo choca contra el botón y se ve como
   // un palo clavado. Naciendo y muriendo tenue, el contacto se lee como contacto.
   float extremo = sin(vY * 3.14159265);
-  // La de base es MUY tenue: 584 arcos cruzando el árbol con presencia lo convierten en una
-  // madeja y tapan la ramificación, que es lo que se vino a mirar. Se leen por acumulación.
-  float a = (0.035 + 0.13 * vConf + 0.80 * vSel) * extremo;
+  // TENUE, PERO LEGIBLE, y el punto se movió: con la relación viajando por el árbol ya no hace
+  // falta esconderla para que no tape la ramificación — va PEGADA a ella, así que se acumula donde
+  // hay tracto en vez de repartirse por toda la pantalla. Medido en la vista general: de los
+  // píxeles que tocan, los que llegan a 6/255 de contraste pasan del 21 % al 40 % subiendo la base
+  // de 0,035 a 0,075. Antes, subirla convertía la escena en una madeja; ahora dibuja fascículos.
+  float a = (0.075 + 0.22 * vConf + 0.80 * vSel) * extremo;
   gl_FragColor = vec4(vC * (0.5 + 1.6 * vSel), a * vFam);
 }`;
+
+/* ── LA RETICULA ───────────────────────────────────────────────────────────────────────────
+   «no termino de saber que presione».
+
+   Habia dos motivos y ninguno era el picking, que ya acierta. El primero: la unica señal de
+   seleccion era BRILLO, y en una escena donde todo emite y encima pasa por un bloom, mas brillo no
+   es una señal — es mas de lo mismo. El segundo, peor: el clic VOLABA LA CAMARA. Elegis un hilo,
+   la vista se va, y lo que elegiste ya no esta donde lo dejaste. Se resolvio la segunda con la
+   semantica de siempre —un clic elige, dos vuelan— y la primera con una marca que no depende del
+   brillo: un anillo de tamaño CONSTANTE EN PANTALLA, dibujado encima de todo, que no se puede
+   confundir con una rama porque ninguna rama es un circulo perfecto. */
+const RET_V = `
+uniform vec3 uPos; uniform float uPx; uniform float uRad;
+void main(){
+  vec4 c = modelViewMatrix * vec4(uPos, 1.0);
+  // El tamaño sale de la profundidad, igual que el reborde del contorno: si el anillo se achicara
+  // con la distancia, marcaria peor justo cuando mas falta hace — al alejarse a ver donde quedo.
+  float esc = uPx * max(-c.z, 1.0) * uRad;
+  gl_Position = projectionMatrix * (c + vec4(position.x * esc, position.y * esc, 0.0, 0.0));
+}`;
+
+const RET_F = `
+precision highp float;
+uniform vec3 uCol; uniform float uLat;
+void main(){ gl_FragColor = vec4(uCol, uLat); }`;
 
 /* ── EL PASE DE IDENTIDAD ─────────────────────────────────────────────────────────────────────
    «Lo importante es poder seleccionar CUALQUIERA, no un monton.»
@@ -562,8 +622,10 @@ export function montar(cfg) {
   // hilos, dibujados una vez mas gordos y corridos hacia atras. Compartir el atributo en vez de
   // copiarlo evita 16.437 matrices duplicadas y, sobre todo, evita que las dos versiones se
   // desincronicen si algun dia las instancias se recalculan.
+  const PX_CONT = cfg.pxContorno != null ? cfg.pxContorno : 2.5;   // ancho del reborde, EN PIXELES
   const uCont = {
-    uGrosor: { value: cfg.grosorContorno != null ? cfg.grosorContorno : 3.0 },
+    // Se recalcula al redimensionar: el mismo mundo por pixel depende del alto de la ventana.
+    uPx:     { value: 1 },
     uSalto:  { value: cfg.saltoContorno  != null ? cfg.saltoContorno  : 11.0 },
     uFondo:  { value: new THREE.Color(cfg.fondo || '#05070d') },
   };
@@ -643,11 +705,26 @@ export function montar(cfg) {
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), n);
   halos.frustumCulled = false; halos.renderOrder = 2; mundo.add(halos);
 
+  // El anillo va en la ESCENA y no en `mundo`: no tiene que heredar ninguna transformacion del
+  // grupo, porque su posicion se la pasa el uniform ya en coordenadas de mundo.
+  const uRet = { uPos: { value: new THREE.Vector3() }, uPx: { value: 1 },
+                 uRad: { value: 15 }, uCol: { value: new THREE.Color('#ffffff') },
+                 uLat: { value: 0.9 } };
+  const reticula = new THREE.Mesh(new THREE.RingGeometry(0.88, 1.0, 48),
+    new THREE.ShaderMaterial({ vertexShader: RET_V, fragmentShader: RET_F, uniforms: uRet,
+      transparent: true, depthTest: false, depthWrite: false }));
+  reticula.frustumCulled = false; reticula.renderOrder = 40; reticula.visible = false;
+  scene.add(reticula);
+
   /* ── llenado ────────────────────────────────────────────────────────────────────────────── */
   const COLSEC = S.map((s) => new THREE.Color(cfg.colorDe(s)));
   const LUZW = (() => { const v = [-0.45, 0.72, 0.52], l = Math.hypot(v[0], v[1], v[2]);
                         return [v[0] / l, v[1] / l, v[2] / l]; })();
   const _u1 = new THREE.Vector3(), _u2 = new THREE.Vector3(), _u3 = new THREE.Vector3();
+
+  // A DONDE VA CADA HILO. Ver `destinoDeHilo`: la ranura global alcanza para saberlo, porque las
+  // ranuras no se pisan. Es lo que deja pintar el nucleo por convergencia en vez de por gris.
+  const DEST = destinoDeHilo(S);
 
   /** tintar: el color de UN hilo. La sección dice de quién es; el hilo, cuál es.
    *  En una reconstrucción teñida dos células vecinas del mismo tipo se distinguen porque cada una
@@ -655,7 +732,14 @@ export function montar(cfg) {
    *  haz vuelve a leerse como un tubo, que es exactamente lo que veníamos a romper. El corrimiento
    *  es determinista por hilo, así que el dibujo no cambia entre dos corridas. */
   function tintar(sec, fib, orden) {
-    _c.copy(COLSEC[sec]);
+    // EL COLOR DE UN HILO ES EL DE SU DESTINO, no el de la seccion que lo esta llevando. Debajo
+    // del nucleo no cambia nada —una rama de nivel 5 y la hoja donde termina son del mismo actor,
+    // el racimo se hereda hacia abajo— asi que la unica seccion donde esto se ve es la raiz, y ahi
+    // lo cambia todo: el nucleo deja de ser un bloque gris y pasa a ser los 459 hilos de todos
+    // convergiendo, cada uno con el color de adonde va. Es mas cierto, no menos: el nucleo no es
+    // de nadie solo si se lo mira como un objeto; mirado como hilos, es de todos.
+    const d = DEST[fib];
+    _c.copy(COLSEC[d >= 0 ? d : sec]);
     const h1 = ((fib * 2654435761) % 1000) / 1000;
     const h2 = ((fib * 40503 + orden * 7919) % 1000) / 1000;
     _c.offsetHSL((h1 - 0.5) * 0.085, 0, (h2 - 0.5) * 0.20);
@@ -798,42 +882,58 @@ export function montar(cfg) {
   }
   const sinRecortadas = (cfg.sinapsis || []).length - SIN.length;
 
-  let sinInst = null, YSF = null, SIN_SEC = null;
+  let sinInst = null, YSF = null, SIN_SEC = null, nSeg = 0;
   if (SIN.length) {
+    // CADA RELACIÓN ES UNA POLILÍNEA, no un tubo recto. Ver `rutaSinapsis`: viaja por el árbol
+    // hasta el ancestro común en vez de atravesar el tejido por el camino más corto, que era lo
+    // que se leía como anti-físico. El precio son las instancias, y es barato: 13 tramos cada una.
+    const MUESTRAS = cfg.muestrasSinapsis != null ? cfg.muestrasSinapsis : 20;
+    // LA FASE, deterministica y por relacion: es el angulo con el que la ruta rodea cada haz. Sin
+    // ella todas las relaciones que comparten tramo salen por el mismo lado y se apilan en una
+    // raya sola, que es la manera de que 584 relaciones se lean como una.
+    const rutas = SIN.map((y, i) => rutaSinapsis(S, MEM_SEC.get(y.ma), MEM_SEC.get(y.mb), y.A, y.B,
+                                              { beta: cfg.agrupar != null ? cfg.agrupar : 0.95,
+                                                muestras: MUESTRAS,
+                                                fase: (((i * 2654435761) % 1000) / 1000) * Math.PI * 2 }));
+    nSeg = rutas.reduce((a, r) => a + r.length - 1, 0);
     const gSin = new THREE.CylinderGeometry(1, 1, 1, 4, 1, true);
-    const YC = new Float32Array(SIN.length * 3), YCUR = new Float32Array(SIN.length * 3),
-          YCONF = new Float32Array(SIN.length);
-    YSF = new Float32Array(SIN.length * 2);
-    for (let k = 0; k < SIN.length; k++) YSF[k * 2 + 1] = 1;
-    SIN_SEC = new Array(SIN.length);
+    const YC = new Float32Array(nSeg * 3), YT = new Float32Array(nSeg * 2),
+          YCONF = new Float32Array(nSeg);
+    YSF = new Float32Array(nSeg * 2);
+    for (let k = 0; k < nSeg; k++) YSF[k * 2 + 1] = 1;
+    SIN_SEC = new Array(nSeg);
     gSin.setAttribute('aColor', new THREE.InstancedBufferAttribute(YC, 3));
-    gSin.setAttribute('aCurva', new THREE.InstancedBufferAttribute(YCUR, 3));
+    gSin.setAttribute('aT', new THREE.InstancedBufferAttribute(YT, 2));
     gSin.setAttribute('aConf', new THREE.InstancedBufferAttribute(YCONF, 1));
     gSin.setAttribute('aSF', new THREE.InstancedBufferAttribute(YSF, 2));
     sinInst = new THREE.InstancedMesh(gSin,
       new THREE.ShaderMaterial({ vertexShader: SIN_V, fragmentShader: SIN_F, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false }), SIN.length);
+        blending: THREE.AdditiveBlending, depthWrite: false }), nSeg);
     sinInst.frustumCulled = false; sinInst.renderOrder = 1; mundo.add(sinInst);
-    const _u = new THREE.Vector3(), _w = new THREE.Vector3();
+    const _u = new THREE.Vector3();
+    let iS = 0;
     SIN.forEach((y, i) => {
-      _p.set(y.A[0], y.A[1], y.A[2]);
-      _d.set(y.B[0] - y.A[0], y.B[1] - y.A[1], y.B[2] - y.A[2]);
-      const len = _d.length() || 0.001;
-      _q.setFromUnitVectors(_UP, _u.copy(_d).normalize());
+      const R = rutas[i];
+      _c.set(RELCOL[y.rel] || NEUTRO);
+      const par = [MEM_SEC.get(y.ma), MEM_SEC.get(y.mb)];
       // EL RADIO SE CALCULA ACÁ, en el bucle, y no se guarda en el objeto de la relación. Es la
       // lección de las 586 sinapsis que desaparecieron: un NaN en la matriz de una instancia la
       // borra sin error ni warning, y se ve idéntico a «decidimos no dibujar relaciones».
       const r = 0.10 + y.conf * 0.14;
-      _m.compose(_p.clone().addScaledVector(_d, 0.5), _q, _s.set(r, len, r));
-      sinInst.setMatrixAt(i, _m);
-      _c.set(RELCOL[y.rel] || NEUTRO);
-      YC[i * 3] = _c.r; YC[i * 3 + 1] = _c.g; YC[i * 3 + 2] = _c.b;
-      YCONF[i] = y.conf;
-      // Arqueada, y hacia un lado que depende de la dirección: dos relaciones entre el mismo par
-      // quedarían superpuestas si fueran rectas, y se leerían como una sola.
-      _w.set(_u.z, 0.35, -_u.x).normalize().multiplyScalar(len * 0.17);
-      YCUR[i * 3] = _w.x; YCUR[i * 3 + 1] = _w.y; YCUR[i * 3 + 2] = _w.z;
-      SIN_SEC[i] = [MEM_SEC.get(y.ma), MEM_SEC.get(y.mb)];
+      for (let k = 0; k + 1 < R.length; k++) {
+        const a = R[k], b = R[k + 1];
+        _d.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+        const len = _d.length() || 0.001;
+        _q.setFromUnitVectors(_UP, _u.copy(_d).divideScalar(len));
+        _m.compose(_u.set(a[0] + _d.x * 0.5, a[1] + _d.y * 0.5, a[2] + _d.z * 0.5), _q,
+                   _s.set(r, len, r));
+        sinInst.setMatrixAt(iS, _m);
+        YC[iS * 3] = _c.r; YC[iS * 3 + 1] = _c.g; YC[iS * 3 + 2] = _c.b;
+        YT[iS * 2] = k / (R.length - 1); YT[iS * 2 + 1] = (k + 1) / (R.length - 1);
+        YCONF[iS] = y.conf;
+        SIN_SEC[iS] = par;
+        iS++;
+      }
     });
     sinInst.instanceMatrix.needsUpdate = true;
   }
@@ -921,16 +1021,19 @@ export function montar(cfg) {
       if (d < mejorD) { mejorD = d; mejor = id; }
     }
     if (!mejor) return null;
+    // EL PIXEL VIAJA CON EL ACIERTO. No es un dato de mas: un eslabon es un cilindro largo, asi
+    // que «esta instancia» no alcanza para saber DONDE de la instancia. Sin el pixel, la marca
+    // cae en el medio del tramo y puede quedar a 56 pixeles de donde clickeaste — medido.
     if (mejor < BASE_MEM) {
       const i = mejor - BASE_NEURONA;
-      return { tipo: 'neurona', id: mejor, i, sec: FIB[i].sec, fib: FIB[i].fib };
+      return { tipo: 'neurona', id: mejor, i, sec: FIB[i].sec, fib: FIB[i].fib, px: x, py: y };
     }
     if (mejor < BASE_RAM) {
       const i = mejor - BASE_MEM;
-      return { tipo: 'memoria', id: mejor, i, sec: BOT_DE[i], mem: BOT_MEM[i] };
+      return { tipo: 'memoria', id: mejor, i, sec: BOT_DE[i], mem: BOT_MEM[i], px: x, py: y };
     }
     const i = mejor - BASE_RAM;
-    return { tipo: 'terminal', id: mejor, i, sec: PEN_DE[i], fib: RAM[i].fib };
+    return { tipo: 'terminal', id: mejor, i, sec: PEN_DE[i], fib: RAM[i].fib, px: x, py: y };
   }
 
   if (cfg.ornamento) cfg.ornamento(mundo, S, THREE);
@@ -1080,6 +1183,45 @@ export function montar(cfg) {
     }
   }
 
+  // DONDE ESTA LO QUE ELEGISTE. La posicion sale de la MATRIZ DE INSTANCIA y no de los datos: es
+  // la unica fuente que dice donde quedo dibujada de verdad. Sacarla de `FIB[i].a` daria el punto
+  // ANTES del arqueado del shader, y el anillo caeria al lado de la cosa que dice marcar — que es
+  // exactamente el error que ya nos costo el picking analitico.
+  const _mf = new THREE.Matrix4();
+  const _ejeY = new THREE.Vector3(), _cen = new THREE.Vector3(), _rr = new THREE.Raycaster();
+  const _pp = new THREE.Vector2(), _w1 = new THREE.Vector3(), _w2 = new THREE.Vector3();
+  function marcarFoco() {
+    const malla = !foco ? null
+      : foco.tipo === 'neurona' ? vainas
+      : foco.tipo === 'memoria' ? (totBot ? botones : null)
+      : foco.tipo === 'terminal' ? (RAM.length ? penacho : null) : null;
+    if (!malla) { reticula.visible = false; return; }
+    malla.getMatrixAt(foco.i, _mf);
+    _cen.setFromMatrixPosition(_mf);
+    // El eje del cilindro es la SEGUNDA columna de la matriz, y su largo es el largo del tramo:
+    // el centro mas media columna en cada sentido son las dos puntas.
+    _ejeY.set(_mf.elements[4], _mf.elements[5], _mf.elements[6]);
+    if (foco.px == null || _ejeY.lengthSq() < 1e-9) {
+      uRet.uPos.value.copy(_cen);
+    } else {
+      // El punto del eje mas cercano al rayo que sale del pixel clickeado. Es lo que convierte
+      // «marque esta instancia» en «marque ACA», que es lo que se pregunta el que hizo clic.
+      _pp.set((foco.px / innerWidth) * 2 - 1, -(foco.py / innerHeight) * 2 + 1);
+      _rr.setFromCamera(_pp, camera);
+      const o = _rr.ray.origin, d = _rr.ray.direction;
+      _w1.copy(_cen).sub(o);                       // del origen del rayo al centro del tramo
+      _w2.copy(_ejeY).multiplyScalar(0.5);         // media longitud, en el sentido del eje
+      const u = _w2.clone().normalize();
+      // minimos cuadrados entre dos rectas; si son casi paralelas, el centro es la mejor respuesta
+      const b = d.dot(u), c1 = _w1.dot(d), c2 = _w1.dot(u), den = 1 - b * b;
+      let t = Math.abs(den) < 1e-6 ? 0 : (c2 - b * c1) / -den;
+      const semi = _w2.length();
+      t = Math.max(-semi, Math.min(semi, t));
+      uRet.uPos.value.copy(_cen).addScaledVector(u, t);
+    }
+    reticula.visible = true;
+  }
+
   function pintarSeleccion() {
     SELSEC.fill(0);
     const c = camino(sel);
@@ -1100,6 +1242,7 @@ export function montar(cfg) {
       else if (foco.tipo === 'memoria' && totBot) BSF[foco.i * 2] = 1.8;
       else if (foco.tipo === 'terminal' && RAM.length) PSDF[foco.i * 3] = 1.8;
     }
+    marcarFoco();
     if (sinInst && YSF) {
       for (let k = 0; k < YSF.length / 2; k++) {
         const p = SIN_SEC[k];
@@ -1209,17 +1352,25 @@ export function montar(cfg) {
     // Un arrastre NO es un clic. Sin esto, cada vez que girás la cámara terminás seleccionando algo
     // y la vista se va sola: es el modo más rápido de que la navegación se sienta fuera de control.
     if (!movido && abajo) {
+      // UN CLIC ELIGE Y NO MUEVE LA CAMARA. Volar en cada clic era la otra mitad de «no termino
+      // de saber que presione»: elegis algo, la vista se va, y lo que elegiste ya no esta donde
+      // estaba. Para volar esta el doble clic, que es donde todo el mundo lo busca.
       const h = sondear(ev.clientX, ev.clientY);
-      if (h) { foco = h; elegir(h.sec); }
+      if (h) { foco = h; elegir(h.sec, true); }
       else {
         // PLAN B declarado: si el pase de identidad no devuelve nada —un pixel de aire entre dos
         // hilos— se cae al raycast analitico, que agarra el haz. Es peor puntería, pero un clic que
         // no hace NADA se siente roto; y se nota en la ficha, que dice «haz» en vez del elemento.
         const i = bajoElCursor(ev.clientX, ev.clientY);
-        if (i >= 0) { foco = null; elegir(i); }
+        if (i >= 0) { foco = null; elegir(i, true); }
       }
     }
     abajo = null;
+  });
+  renderer.domElement.addEventListener('dblclick', (ev) => {
+    const h = sondear(ev.clientX, ev.clientY);
+    const i = h ? h.sec : bajoElCursor(ev.clientX, ev.clientY);
+    if (i >= 0) { foco = h || null; elegir(i); }
   });
 
   addEventListener('keydown', (ev) => {
@@ -1297,7 +1448,7 @@ export function montar(cfg) {
         <button class="bt${aislado === sel ? ' on' : ''}" data-ac="aislar">${
           aislado === sel ? 'mostrar el resto' : 'ver esta sola'}</button>
       </div>
-      <div class="teclas">↑ padre · ↓ hija · ←→ hermanas · clic: volar · A: ver sola · 0: ver todo<br>
+      <div class="teclas">↑ padre · ↓ hija · ←→ hermanas · clic: elegir · doble clic: volar · A: ver sola · 0: ver todo<br>
         arrastrar: girar · botón del medio o shift: mover · rueda: acercar al cursor</div>`;
     panel.querySelectorAll('.miga').forEach((el) =>
       el.addEventListener('click', () => elegir(Number(el.dataset.i))));
@@ -1353,9 +1504,21 @@ export function montar(cfg) {
     rot.tick(camera, cam.est.dist);
     composer.render();
   }
+  // MUNDO POR PIXEL. El FOV de three es VERTICAL, asi que el alto de la ventana es lo que fija
+  // cuanto mundo entra en un pixel a una unidad de profundidad. Se recalcula al redimensionar o el
+  // reborde cambiaria de grosor con el tamaño de la ventana.
+  function ajustarPx() {
+    const h = Math.max(1, renderer.domElement.clientHeight || innerHeight);
+    const mundoPorPx = (2 * Math.tan((camera.fov * Math.PI) / 360)) / h;
+    uCont.uPx.value = PX_CONT * mundoPorPx;
+    uRet.uPx.value = mundoPorPx;
+  }
+  ajustarPx();
+
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    ajustarPx();
     renderer.getDrawingBufferSize(_dbs); composer.setSize(_dbs.x, _dbs.y);
   });
 
@@ -1375,11 +1538,13 @@ export function montar(cfg) {
                   get cuadros() { return cuadros; },
                   RAM, PEN_DE, FIB, FIB_SEC, uPulso, uCont, contorno, lanzarPulso, avanzarPulso,
                   get sel() { return sel; },
-                  POSMEM, MEM_SEC, SIN, sinInst,
+                  POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco,
+                  set _foco(h) { foco = h; },
                   conteos: { secciones: n, neuronas: nF, hilos: S[0].fibras, nodos: totNodos,
                              señalables: ID_TOTAL,
                              botones: totBot, ramitas: RAM.length,
-                             sinapsis: SIN.length, sinapsisRecortadas: sinRecortadas } };
+                             sinapsis: SIN.length, tramosSinapsis: nSeg,
+                             sinapsisRecortadas: sinRecortadas } };
 
   /* ═══ PRUEBA EN LA PAGINA (#prueba) ═════════════════════════════════════════════════════
      Una captura demuestra que el dibujo se dibuja; no demuestra NADA sobre lo que el usuario
@@ -1631,6 +1796,80 @@ function probar(v) {
               probados ? exactos + ' de ' + probados : 'no se pudo probar', probados > 0 && exactos > probados * 0.25]);
     out.push(['y nunca cae en otra rama',
               probados ? mismaSeccion + ' de ' + probados : '—', probados > 0 && mismaSeccion > probados * 0.7]);
+
+    // 12b · EL ANILLO CAE DONDE CLICKEASTE. Es la respuesta a «no termino de saber que presione»,
+    //       y hay que medirla como se mide el picking: no alcanza con que el anillo aparezca, tiene
+    //       que aparecer ENCIMA de lo señalado. La posicion sale de la matriz de instancia, asi que
+    //       este test tambien defiende que no se saque de los datos crudos —sin el arqueado del
+    //       shader— que es como se corre de lugar sin que nadie lo note.
+    let anillos = 0, anilloOk = 0, peorPx = 0;
+    if (objetivo2) {
+      v.elegir(objetivo2.idx); await asentar();
+      v.camera.updateMatrixWorld(true);
+      for (let k = 0; k < objetivo2.memorias.length && anillos < 20; k++) {
+        const pm = v.POSMEM.get(objetivo2.memorias[k].id);
+        if (!pm) continue;
+        _p3.set(pm[0], pm[1], pm[2]).project(v.camera);
+        if (_p3.z >= 1) continue;
+        const sx = Math.round((_p3.x * 0.5 + 0.5) * innerWidth);
+        const sy = Math.round((-_p3.y * 0.5 + 0.5) * innerHeight);
+        if (sx < 2 || sy < 2 || sx > innerWidth - 2 || sy > innerHeight - 2) continue;
+        const h = v.sondear(sx, sy);
+        if (!h) continue;
+        anillos++;
+        v._foco = h; v.marcarFoco();
+        if (!v.reticula.visible) continue;
+        const q = v.uRet.uPos.value.clone().project(v.camera);
+        const rx = (q.x * 0.5 + 0.5) * innerWidth, ry = (-q.y * 0.5 + 0.5) * innerHeight;
+        const d = Math.hypot(rx - sx, ry - sy);
+        if (d > peorPx) peorPx = d;
+        if (d <= 14) anilloOk++;
+      }
+      v._foco = null; v.marcarFoco();
+    }
+    out.push(['el anillo cae donde señalaste',
+              anillos ? anilloOk + ' de ' + anillos + ' (peor ' + peorPx.toFixed(0) + ' px)' : 'no se pudo probar',
+              anillos > 0 && anilloOk === anillos]);
+
+    // 12c · UN CLIC NO MUEVE LA CAMARA, y el doble clic SI. Las dos mitades, o el test pasa con
+    //       una camara que no se mueve nunca — que seria la otra manera de romperlo.
+    v.elegir(0); await asentar();
+    const antesClic = pos();
+    v.elegir(objetivo2 ? objetivo2.idx : 1, true); await asentar();
+    const quieto = antesClic.distanceTo(pos());
+    v.elegir(objetivo2 ? objetivo2.idx : 1); await asentar();
+    const volo = antesClic.distanceTo(pos());
+    out.push(['elegir sin volar deja la camara quieta', quieto.toFixed(2) + ' u', quieto < 0.5]);
+    out.push(['y volar si la mueve', volo.toFixed(0) + ' u', volo > 5]);
+
+    // 12d · TODA RELACION TOCA SUS DOS BOTONES. Con la ruta por el arbol la sinapsis dejo de ser
+    //       un tubo entre A y B: son catorce tramos, y si el primero o el ultimo no arrancan en el
+    //       boton, la relacion une dos cosas que no son las que dice unir. Se mide sobre las
+    //       MATRICES dibujadas, no sobre la ruta calculada.
+    let relBien = 0, relTot = 0, peorRel = 0;
+    if (v.sinInst && v.SIN.length) {
+      const mm = v.sinInst.instanceMatrix.array;
+      const porRel = (v.conteos.tramosSinapsis / v.SIN.length) | 0;
+      for (let k = 0; k < Math.min(120, v.SIN.length); k++) {
+        const y = v.SIN[k], i0 = k * porRel, i1 = i0 + porRel - 1;
+        if (i1 * 16 + 15 >= mm.length) break;
+        relTot++;
+        // el centro del primer tramo esta a medio tramo del boton A; se compara contra el largo
+        // del tramo, que es la unica cota que no depende de la escala de la escena
+        const cx = mm[i0 * 16 + 12], cy = mm[i0 * 16 + 13], cz = mm[i0 * 16 + 14];
+        const l0 = Math.hypot(mm[i0 * 16 + 4], mm[i0 * 16 + 5], mm[i0 * 16 + 6]);
+        const dA = Math.hypot(cx - y.A[0], cy - y.A[1], cz - y.A[2]);
+        const fx = mm[i1 * 16 + 12], fy = mm[i1 * 16 + 13], fz = mm[i1 * 16 + 14];
+        const l1 = Math.hypot(mm[i1 * 16 + 4], mm[i1 * 16 + 5], mm[i1 * 16 + 6]);
+        const dB = Math.hypot(fx - y.B[0], fy - y.B[1], fz - y.B[2]);
+        const err = Math.max(dA - l0 * 0.51, dB - l1 * 0.51);
+        if (err > peorRel) peorRel = err;
+        if (err < 0.01) relBien++;
+      }
+    }
+    out.push(['toda relacion arranca y muere en su boton',
+              relTot ? relBien + ' de ' + relTot + ' (peor ' + peorRel.toFixed(3) + ' u)' : 'sin relaciones',
+              relTot > 0 && relBien === relTot]);
 
     // 13 · AISLAR apaga el resto y deja el subarbol entero encendido
     v.aislar(objetivo2 ? objetivo2.idx : 1);

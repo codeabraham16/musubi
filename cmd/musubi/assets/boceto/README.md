@@ -58,7 +58,8 @@ cd cmd/musubi/assets/boceto && python -m http.server 7731
 
 | | |
 |---|---|
-| clic | señala **un hilo, una neurona o una nota** — no el haz. La ficha dice cuál. |
+| clic | señala **un hilo, una neurona o una nota** — no el haz. Queda marcado con un anillo y **la cámara no se mueve**. |
+| doble clic | vuela hasta lo que señalaste. |
 | `↑ ↓ ← →` | padre · hija · hermanas. Moverse entre ramas no es puntería: es recorrer el árbol. |
 | `A` | **ver esta sola** — apaga el resto y deja la rama legible hilo por hilo. |
 | `0` · `Esc` | **ver todo** — vuelve al encuadre completo. |
@@ -72,11 +73,11 @@ invariantes en la página y los muestra medidos).
 
 ```bash
 cd cmd/musubi/assets/boceto
-node --test comun.test.mjs   # 16 invariantes puros
+node --test comun.test.mjs   # 26 invariantes puros
 node sabotajes.mjs           # cada uno, VISTO FALLAR bajo un sabotaje dirigido
 ```
 
-Y `#prueba` en la página, que es donde corren los 33 que necesitan una GPU.
+Y `#prueba` en la página, que es donde corren los 37 que necesitan una GPU.
 
 Los invariantes puros están en `node --test` y no sólo en la página por una razón medida: en
 headless con `--virtual-time-budget` el navegador **no corre un solo cuadro**, así que cualquier

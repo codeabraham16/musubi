@@ -8,7 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
-         contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo } from './comun.mjs';
+         contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo,
+         destinoDeHilo, pasoMezcla, rutaSinapsis } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -364,4 +365,112 @@ test('B22 · el radio del haz es UNA sola formula', () => {
     assert.ok(Math.abs(x.Rhaz - radioHaz(x.fibras, 0.52, 2.60)) < 1e-9,
       `la seccion ${x.idx} dibuja ${x.Rhaz} y la formula da ${radioHaz(x.fibras, 0.52, 2.60)}`);
   }
+});
+
+
+/* ── EL HILO ES DE ALGUIEN ────────────────────────────────────────────────────────────────────
+   El núcleo se pintaba de un gris propio porque «no le pertenece a nadie». Pero un hilo del
+   núcleo no es «un hilo del tronco»: es el hilo de una hoja concreta, y se sabe cuál antes de
+   dibujarlo. De ahí salen los dos invariantes de abajo. */
+
+test('B23 · todo hilo termina en una HOJA, y las hojas se reparten el tronco sin pisarse', () => {
+  const S = prep();
+  const D = destinoDeHilo(S);
+  assert.equal(D.length, S[0].fibras,
+    `el tronco lleva ${S[0].fibras} hilos y la tabla de destinos tiene ${D.length}`);
+  // 1 · ninguno sin destino. El -1 es el valor de fallo justamente para que esto se pueda medir:
+  //     si el relleno fuera 0, un hilo huérfano se leería como «va a la sección 0» y pasaría.
+  const huerfanos = Array.from(D).filter((x) => x < 0).length;
+  assert.equal(huerfanos, 0, `${huerfanos} hilos sin destino`);
+  // 2 · y todos los destinos son HOJAS
+  const noHoja = Array.from(D).filter((x) => S[x].hijos.length).length;
+  assert.equal(noHoja, 0, `${noHoja} hilos terminan en una sección que se sigue partiendo`);
+  // 3 · cada hoja se queda exactamente con sus hilos, ni uno más
+  const cuenta = new Map();
+  for (const d of D) cuenta.set(d, (cuenta.get(d) || 0) + 1);
+  for (const x of S) {
+    if (x.hijos.length) continue;
+    assert.equal(cuenta.get(x.idx) || 0, x.fibras,
+      `la hoja ${x.idx} declara ${x.fibras} hilos y la tabla le da ${cuenta.get(x.idx) || 0}`);
+  }
+});
+
+test('B24 · la SUPERFICIE del haz muestra a cada actor en su proporción', () => {
+  // Las ranuras de un actor son contiguas y el girasol pone el hilo j a radio ∝ √j: un bloque
+  // contiguo es un ANILLO, así que sin mezclar, el actor más grande se queda con toda la cáscara
+  // — que es lo único que se ve de un haz gordo. El dibujo afirmaría que el núcleo es suyo.
+  const S = prep();
+  const D = destinoDeHilo(S);
+  const nuc = S[0], f = nuc.fibras, K = pasoMezcla(f);
+  // el paso tiene que ser una BIYECCIÓN o se perderían o duplicarían hilos, que es el invariante
+  // que sostiene todo el dibujo
+  const vistos = new Set();
+  for (let j = 0; j < f; j++) vistos.add((j * K) % f);
+  assert.equal(vistos.size, f, `el paso ${K} no es una biyección sobre ${f} hilos`);
+
+  const raz = (i) => S[i].racimo || '?';
+  const real = new Map(), casc = new Map();
+  let nc = 0;
+  for (let j = 0; j < f; j++) {
+    const r = raz(D[(nuc.ranura || 0) + ((j * K) % f)]);
+    real.set(r, (real.get(r) || 0) + 1);
+    // la cáscara: el 30 % exterior por ÁREA, que es lo que se ve de un haz de costado
+    if ((j + 0.5) / f > 0.70) { casc.set(r, (casc.get(r) || 0) + 1); nc++; }
+  }
+  assert.ok(real.size >= 3, `el fixture tiene ${real.size} actores y hacen falta 3`);
+  let peor = 0, quien = '';
+  for (const [r, n] of real) {
+    const d = Math.abs(100 * (casc.get(r) || 0) / nc - 100 * n / f);
+    if (d > peor) { peor = d; quien = r; }
+  }
+  // EL UMBRAL ESTÁ CALIBRADO CONTRA EL SABOTAJE, no elegido: sin mezclar, la cáscara da 100 % de
+  // un solo actor y el desvío se va a ~60 puntos. Con la mezcla puesta no pasa de 1.
+  assert.ok(peor < 6, `«${quien}» ocupa la cáscara con ${peor.toFixed(1)} puntos de desvío`);
+});
+
+/* ── LA RELACIÓN VIAJA POR EL ÁRBOL ─────────────────────────────────────────────────────────── */
+
+const dosRamas = () => [
+  { idx: 0, padre: -1, a: [0, 0, 0], dir: [0, 1, 0], Rhaz: 5, hijos: [1, 2] },
+  { idx: 1, padre: 0, a: [0, 10, 0], dir: [1, 0, 0], Rhaz: 3, hijos: [] },
+  { idx: 2, padre: 0, a: [0, 10, 0], dir: [-1, 0, 0], Rhaz: 3, hijos: [] },
+];
+/** perp: distancia de un punto a la recta que une los dos botones. */
+const perp = (q, a, b) => {
+  const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const L2 = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+  const w = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
+  const t = L2 ? (w[0] * u[0] + w[1] * u[1] + w[2] * u[2]) / L2 : 0;
+  return Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t);
+};
+
+test('B25 · la relación arranca y muere EXACTAMENTE en sus dos botones', () => {
+  // Una relación que no toca lo que dice unir es peor que no dibujarla: afirma un vínculo entre
+  // dos cosas que no son las que se ven en las puntas.
+  const S = dosRamas();
+  const A = [20, 10, 0], B = [-20, 4, 7];
+  for (const beta of [0, 0.5, 0.86, 1]) {
+    const r = rutaSinapsis(S, 1, 2, A, B, { beta, muestras: 14 });
+    const dA = Math.hypot(r[0][0] - A[0], r[0][1] - A[1], r[0][2] - A[2]);
+    const u = r[r.length - 1];
+    const dB = Math.hypot(u[0] - B[0], u[1] - B[1], u[2] - B[2]);
+    assert.ok(dA < 1e-9, `con beta ${beta} arranca a ${dA} del botón`);
+    assert.ok(dB < 1e-9, `con beta ${beta} muere a ${dB} del botón`);
+  }
+});
+
+test('B26 · con agrupamiento la relación SE DESVÍA de la cuerda recta', () => {
+  // Es lo que separa «viaja por el tracto» de «atraviesa el tejido por el camino más corto», que
+  // fue el reclamo textual: se veía anti-física. Se mide la distancia perpendicular a la cuerda.
+  const S = dosRamas();
+  const A = [20, 10, 0], B = [-20, 10, 0];
+  const desvio = (beta) => rutaSinapsis(S, 1, 2, A, B, { beta, muestras: 14 })
+    .reduce((m, q) => Math.max(m, perp(q, A, B)), 0);
+  // CONTROL: con beta 0 la ruta ES la cuerda. Sin esto, un medidor que devolviera cualquier cosa
+  // pasaría el umbral de abajo sin que nadie se entere.
+  assert.ok(desvio(0) < 1e-9, `con beta 0 tendría que ser la cuerda y se desvía ${desvio(0)}`);
+  // EL UMBRAL, CALIBRADO: el ancestro común está a 6 unidades de la cuerda y con beta 0,86 la
+  // ruta llega a ~7,7. Con el agrupamiento apagado da 0. Va en 3.
+  assert.ok(desvio(0.86) > 3,
+    `con beta 0,86 se desvía ${desvio(0.86).toFixed(2)}: la relación sigue siendo una cuerda`);
 });

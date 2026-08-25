@@ -37,6 +37,40 @@
 //   · Cada memoria es un BOTÓN, ahora montado sobre un hilo concreto y no sobre «la rama».
 //   · Las relaciones están todas las que tienen sus dos extremos dibujados, y las que no se
 //     declaran aparte. Recortar sin decir cuánto es como un dibujo empieza a mentir.
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LOS TRES DE ESTA VUELTA — «un negro raro que opaca al resto», «las conexiones no se ven
+// naturales», «no termino de saber qué presioné»
+//
+//   1. EL NEGRO ERA EL CONTORNO, y no era una cuestión de gusto: crecía en unidades de MUNDO.
+//      Un hilo de 0,52 con grosor 3 se vuelve una funda de 1,56, y como los hilos de un haz están
+//      a 2,4 de distancia, las fundas se TOCAN y el haz entero proyecta una losa maciza sobre lo
+//      que tenga detrás. Medido: de cerca apagaba el 7,9 % del contenido con 9.064 píxeles de
+//      mancha maciza; de lejos, 1,6 % y ninguna. Por eso no aparecía revisando la vista general.
+//      Un contorno se mide EN PANTALLA: 2,5 px de reborde, siempre. Quedó en 2,9 % de cerca y
+//      3,3 % de lejos —el mismo número, que es la señal de que ahora es un contorno— con 9 px de
+//      mancha en vez de 9.064. Ver `CONTORNO_V`.
+//
+//      Y el gris del centro era otro: el núcleo se pintaba de un gris propio «porque no le
+//      pertenece a nadie». Es falso — es de todos a la vez. Ahora cada hilo lleva el color de la
+//      hoja donde termina, que ya se sabe antes de dibujarlo. Ver `destinoDeHilo` y `pasoMezcla`.
+//
+//   2. LAS CONEXIONES eran cuerdas. Ningún axón atraviesa el tejido por el camino más corto: sale
+//      del soma, se mete en un tracto y viaja con los demás. Ahora la relación sube por su rama
+//      hasta el ancestro común y baja — agrupamiento jerárquico de aristas, que acá además es lo
+//      que pasa de verdad. Ver `rutaSinapsis`.
+//
+//   3. «QUÉ PRESIONÉ» tenía dos causas y ninguna era la puntería, que ya acertaba. La señal de
+//      selección era BRILLO, en una escena donde todo emite y encima hay bloom; y el clic VOLABA
+//      LA CÁMARA, así que lo elegido dejaba de estar donde estaba. Ahora un clic elige y no mueve
+//      nada, el doble clic vuela, y lo elegido queda marcado con un anillo de tamaño constante en
+//      pantalla, puesto en el punto exacto del eje que señalaste (medido: 0 px de error).
+//
+//   UNA HIPÓTESIS MÍA QUE EL DATO REFUTÓ, y queda anotada para que nadie la reponga: sospeché de
+//   la ATMÓSFERA —la rampa de profundidad— porque apagada la escena se ve más vívida. Medido, no
+//   es ella: la saturación media del contenido pasa de 0,758 a 0,794 y el brillo de 51,7 a 55,6.
+//   Y probé restringir el contorno a la CÁSCARA del haz: cambia la imagen y baja el apagado de
+//   59.696 a 59.363 píxeles, un 0,6 %. Ninguna de las dos era el problema.
 
 import { cargar, seccionar, colocarNucleo, contarFibras, medirEnredo } from './comun.mjs';
 import { armarRaiz } from './datos.mjs';
@@ -122,7 +156,8 @@ leyenda.innerHTML = `
   <div class="pie"><span class="cifra">${N(c.hilos)}</span> hilos en el núcleo · <span
     class="cifra">${N(c.neuronas)}</span> neuronas<br>${N(c.secciones)} haces · ${
     N(c.ramitas)} terminales · ${N(c.botones)} botones<br>${
-    N(c.sinapsis)} sinapsis${c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
+    N(c.sinapsis)} sinapsis en ${N(c.tramosSinapsis)} tramos${
+    c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
     }${apretadas ? `<br><span class="dim">${N(apretadas)} bifurcaciones sin el aire que piden</span>` : ''
     }<br><span class="cifra">${N(c.señalables)}</span> se pueden señalar de uno
     <span class="dim">(los ${N(c.secciones)} halos y las ${N(c.sinapsis)} sinapsis no)</span>

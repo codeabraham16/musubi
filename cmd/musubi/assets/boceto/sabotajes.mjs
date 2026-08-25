@@ -127,6 +127,32 @@ const SABOTAJES = [
     a: '    s.Rhaz = Math.max(rFib * 1.6, R) * 1.2;',
   },
 
+  /* ── EL HILO ES DE ALGUIEN, Y LA RELACION VIAJA POR EL ARBOL ─────────────────────────────── */
+  {
+    test: 'B23',
+    que: 'casi ningun hilo llega a saber a que hoja va',
+    de: '    for (let j = 0; j < (s.fibras || 1); j++) dest[r0 + j] = s.idx;',
+    a: '    dest[r0] = s.idx;',
+  },
+  {
+    test: 'B24',
+    que: 'los actores vuelven a salir en anillos: el mas grande se queda con toda la cascara',
+    de: '  if (f <= 2) return 1;',
+    a: '  if (f > 0) return 1;',
+  },
+  {
+    test: 'B25',
+    que: 'la relacion deja de tocar sus botones: arranca cerca, no encima',
+    de: '  const C = [P[0], P[0], ...P, P[n - 1], P[n - 1]];',
+    a: '  const C = [...P];',
+  },
+  {
+    test: 'B26',
+    que: 'la relacion vuelve a ser una cuerda recta que atraviesa el tejido',
+    de: '    for (let c = 0; c < 3; c++) P[i][c] = beta * P[i][c] + (1 - beta) * (pA[c] + (pB[c] - pA[c]) * t);',
+    a: '    for (let c = 0; c < 3; c++) P[i][c] = pA[c] + (pB[c] - pA[c]) * t;',
+  },
+
   /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',
