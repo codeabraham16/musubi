@@ -38,7 +38,7 @@
 //   · Las relaciones están todas las que tienen sus dos extremos dibujados, y las que no se
 //     declaran aparte. Recortar sin decir cuánto es como un dibujo empieza a mentir.
 
-import { cargar, seccionar, colocarNucleo } from './comun.mjs';
+import { cargar, seccionar, colocarNucleo, contarFibras, medirEnredo } from './comun.mjs';
 import { armarRaiz } from './datos.mjs';
 import { montar } from './escena.mjs';
 
@@ -50,19 +50,43 @@ const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' 
 // árbol baja hasta la nota suelta y salen miles de tramos de una memoria — la maraña otra vez,
 // pero con más geometría. El tope se DECLARA en la ficha de cada sección hoja («absorbe N»).
 const S = seccionar(raiz, { maxNivel: 8, minCarga: 10 });
-// ── LOS NÚMEROS SALIERON DE MEDIR, NO DE PROBAR HASTA QUE GUSTÓ ────────────────────────────────
-// «Que no se amontone» se midió: se proyectan las 441 secciones desde 12 puntos de vista sobre una
-// grilla de 6 px y se cuenta qué fracción de las celdas ocupadas tiene DOS O MÁS secciones encima.
-// Ese número, y no una impresión, es lo que bajó de 36,0 % a 23,8 %.
-//
-// Y el barrido refutó dos cosas que yo daba por obvias:
-//   · EL TROPISMO EMPEORA. Subirlo de 0,46 a 1,10 llevó el solape de 36 % a 41 %: el empuje radial
-//     manda todo a una cáscara, y una cáscara se proyecta sobre sí misma. Va en CERO.
-//   · MENOS CURVATURA, NO MÁS. La panza cruza ramas vecinas; 0,34 → 0,12 saca 2,5 puntos.
-// Lo que sí ayuda es lo aburrido: abrir la horquilla y estirar los tramos, o sea darles AIRE.
+// UNA SOLA FUENTE PARA LA DENSIDAD DE HILOS, y tiene que correr ANTES de colocar: la separación
+// entre hermanas se calcula sobre el RADIO REAL de sus haces, y ese radio sale de `fibras`. Las
+// mismas opciones van después a `montar` — dos conteos distintos separarían las ramas sobre un
+// grosor que después no se dibuja.
+const HILOS = { porMemoria: 6, maxHoja: 22 };
+const HEBRA = { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6 };
+contarFibras(S, HILOS);
+/* ── DOS MÉTRICAS QUE NO DICEN LO MISMO, Y HAY QUE MIRAR LAS DOS ───────────────────────────────
+     ENREDO    con cuántos haces AJENOS se cruza un haz en promedio, en el ESPACIO
+               (`medirEnredo`). Un cruce real no lo arregla ningún ángulo de cámara: los dos haces
+               se leen como una sola cosa desde donde te pares.
+     AJENAS %  qué fracción de las celdas de pantalla tiene dos secciones NO emparentadas encima,
+               sobre 12 puntos de vista. Es lo que el ojo ve de golpe — y se mitiga girando, y con
+               el contorno por profundidad.
+
+   Lo que destapó medir el enredo: **183 de los 191 choques —el 96 %— eran entre HERMANAS**, y son
+   inevitables mientras nazcan todas del mismo punto. A distancia cero no hay ángulo que separe.
+   Ninguna cantidad de `apertura` podía tocar eso; por eso `apertura` ya no existe.
+
+     colocación                    ajenas %   enredo   px/hilo
+     vieja (apertura fija 1,40)       18,4     0,866      0,68
+     bifurcar (aire 3, pM 0,85)       22,0     0,059      0,81   ← ésta
+
+   Cuesta 3,6 puntos de solape y compra 15× menos interpenetración, y encima deja los hilos más
+   gruesos en pantalla. Dos cosas más que el barrido refutó: el TROPISMO empeora (el empuje es el
+   mismo para todas las hermanas, así que las junta justo después de separarlas) y MENOS curvatura
+   separa más que más. */
 colocarNucleo(S, {
-  origen: [0, 0, 0], nucleo: 40, largo: 150,
-  apertura: 1.40, curvatura: 0.12, tropismo: 0, semilla: 11,
+  origen: [0, 0, 0], nucleo: 40, largo: 150, curvatura: 0.12, tropismo: 0, semilla: 11,
+  // `aire` es EL parámetro: cuántos radios de haz de negro se exige entre dos hermanas.
+  aire: 3.0, naciente: 0.85, aperturaMax: 1.30, polarEje: 0.20,
+  // PISO DEL ÁNGULO. `aire` está en radios, así que para dos ramas finas pide un hueco de 2,5
+  // unidades: alcanza para que no se toquen y son menos de dos píxeles en pantalla. El enredo
+  // bajaba y el ojo seguía viendo una sola cosa. Con el piso, ajenas 23,3 → 22,0.
+  polarMin: 0.85,
+  // Los MISMOS que van a `enhebrar`: la separación se mide sobre el grosor que se dibuja.
+  radioHilo: HEBRA.radioHilo, separacion: HEBRA.separacion,
 });
 
 const vista = montar({
@@ -71,18 +95,12 @@ const vista = montar({
   // UN HILO CADA 6 MEMORIAS. Es la única constante libre de todo esto y define la densidad: con 1
   // el tronco tendría 2.267 hilos y se vería como una pared sólida; con 30, ocho hilos y volvería
   // a ser un caño. Con 6 el tronco lleva ~370 y todavía se cuentan de a uno acercándose.
-  porMemoria: 6, maxHoja: 22,
-  // 0,40 de radio y 3,05 de separación, y no 0,30/3,40: un hilo de 0,30 mide MENOS DE UN PÍXEL a
-  // distancia de encuadre, así que el antialias lo promedia contra el fondo negro y el haz entero
-  // se ve gris apagado. Es submuestreo, no color: se arregla con hilos más gordos y más juntos,
-  // no subiendo el brillo hasta que se lave. Medido mirando el render.
-  // 0,52 de radio y 2,6 de separación. Estirar la escena baja el solape pero la cámara se aleja en
-  // proporción y el hilo queda MÁS FINO en pantalla: se gana separación y se pierde el hilo, que es
-  // lo único que este boceto vino a mostrar. Midiendo las dos cosas a la vez aparece un punto que
-  // mejora las DOS: 25,5 % de solape (contra 36 %) con hilos de 0,68 px (contra 0,62). No es un
-  // empate elegido a ojo — es el único punto del barrido que no cambia una cosa por la otra.
-  radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6,
-  fondo: '#04060e', niebla: 0.0011, bloom: 0.80,
+  // 0,52 de radio y 2,6 de separación: un hilo de 0,30 medía MENOS DE UN PÍXEL a distancia de
+  // encuadre, así que el antialias lo promediaba contra el fondo negro y el haz entero se veía gris.
+  // Es submuestreo, no color — se arregla con hilos más gordos y más juntos, no subiendo el brillo
+  // hasta que se lave.
+  ...HILOS, ...HEBRA,
+  fondo: '#04060e', bloom: 0.80,
   nivelesPenacho: 3, escalaPenacho: 0.62,
   camara: { az: 0.55, el: 0.20, min: 8, max: 3000 },   // sin dist: lo encuadra la caja
 });
@@ -90,6 +108,10 @@ const vista = montar({
 /* ── la leyenda: quién es cada color, y el conteo que hace auditable el dibujo ─────────────── */
 const N = (x) => x.toLocaleString('es');
 const c = vista.conteos;
+// LO QUE NO ENTRÓ SE DICE. `apretada` marca las bifurcaciones donde el haz padre era más corto que
+// lo que sus hijas necesitaban para no tocarse (bit 1) o donde el ángulo que hacía falta pasaba el
+// tope (bit 2). Callarlas sería afirmar una separación que el dibujo no tiene.
+const apretadas = S.filter((x) => x.apretada).length;
 const leyenda = document.createElement('div');
 leyenda.className = 'leyenda';
 leyenda.innerHTML = `
@@ -101,6 +123,7 @@ leyenda.innerHTML = `
     class="cifra">${N(c.neuronas)}</span> neuronas<br>${N(c.secciones)} haces · ${
     N(c.ramitas)} terminales · ${N(c.botones)} botones<br>${
     N(c.sinapsis)} sinapsis${c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
+    }${apretadas ? `<br><span class="dim">${N(apretadas)} bifurcaciones sin el aire que piden</span>` : ''
     }<br><span class="cifra">${N(c.señalables)}</span> se pueden señalar de uno
     <span class="dim">(los ${N(c.secciones)} halos y las ${N(c.sinapsis)} sinapsis no)</span>
     <br><span class="dim">el impulso sale de elegir un haz, no de un reloj</span></div>`;
@@ -109,3 +132,11 @@ document.body.appendChild(leyenda);
 console.log('[boceto A]', c, ((performance.now() - t0) | 0) + ' ms');
 // Se expone para la verificación por píxeles: pausar y medir necesita poder tocar la escena.
 globalThis.__boceto = vista;
+
+// LA MEDICIÓN DEL ENREDO VA A PEDIDO (`?enredo`): son ~90.000 pares por 64 pruebas segmento a
+// segmento cada uno, varios segundos. Ponerlo en el camino de carga sería pagar el diagnóstico en
+// cada apertura de la página.
+if (location.search.includes('enredo')) {
+  console.log('[enredo]', medirEnredo(S, { muestras: 8 }));
+  console.log('[enredo · margen 2]', medirEnredo(S, { muestras: 8, margen: 2 }));
+}

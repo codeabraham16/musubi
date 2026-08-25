@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Las hermanas dejan de nacer del mismo punto: `bifurcar()`.** Medir el enredo destapó que
+  **183 de los 191 cruces entre haces no emparentados —el 96 %— eran entre HERMANAS**, y son
+  inevitables mientras arranquen todas de la punta del padre: a distancia cero no hay ángulo que
+  separe. Ahora cada una se desprende en un punto distinto a lo largo del haz padre, como las
+  colaterales de un axón, con el ángulo despejado de cuánto ocupan sus haces y el largo escalonado.
+  - **El enredo cae de 0,866 a 0,059** — 15× menos interpenetración. Cuesta 3,6 puntos de solape en
+    pantalla (18,4 % → 22,0 %), y se paga: un cruce real no lo arregla ningún ángulo de cámara,
+    mientras que el solape se mitiga girando y con el contorno por profundidad.
+  - **`apertura` se retira.** El ángulo sale del grosor, no de una constante. Se avisa por consola
+    si alguien la pasa, en vez de ignorarla en silencio.
+  - **Lo que no entra se declara**: `apretada` marca las bifurcaciones donde el haz padre era más
+    corto que el aire que sus hijas piden, y la leyenda las cuenta (4 de 220).
+  - `medirEnredo()` es ahora una función del boceto, no un script suelto: cuenta pares de haces no
+    emparentados cuyas curvas se acercan más que la suma de sus radios.
+
+### Changed
+- **El boceto mide dos cosas distintas y hay que mirar las dos.** El ENREDO (cruces en el espacio) y
+  el SOLAPE EN PANTALLA no dicen lo mismo, y bajar uno puede subir el otro — pasó. Lo primero que
+  destapó la doble medición fue un sesgo de la propia métrica de pantalla: contaba PADRE contra HIJA
+  como amontonamiento, que no es maraña sino continuidad.
+
 - **Un boceto del panel donde la rama no existe: existen los hilos.** Vive en
   `cmd/musubi/assets/boceto/`, fuera del bundle y fuera de `go:embed` — se construye con el mismo
   motor (three 0.169 + esbuild vendorizados) y con datos reales del cerebro local.

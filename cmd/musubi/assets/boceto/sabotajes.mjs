@@ -89,7 +89,45 @@ const SABOTAJES = [
     a: 'export const rng = () => () => Math.random();',
   },
 
-  /* ── LOS HILOS: lo que se agregó en esta vuelta ──────────────────────────────────────────── */
+  /* ── LA BIFURCACIÓN: que las hermanas no nazcan del mismo punto ──────────────────────────── */
+  {
+    test: 'B17',
+    que: 'las hermanas vuelven a nacer todas de la punta del padre',
+    de: '    cuna[i] = Math.max(1 - naciente, 1 - atras / L);',
+    a: '    cuna[i] = 1;',
+  },
+  {
+    test: 'B18',
+    que: 'el ángulo vuelve a ser una constante que ignora el grosor',
+    de: '    return 2 * Math.asin(Math.min(1, pide / (2 * ref)));   // clamp: aca es donde saldria NaN',
+    a: '    return 0.5;',
+  },
+  {
+    test: 'B19',
+    que: 'el apretón no se declara: se aprieta en silencio',
+    de: '  const esc = (necesita > disponible && necesita > 0) ? disponible / necesita : 1;',
+    a: '  const esc = 1;',
+  },
+  {
+    test: 'B20',
+    que: 'el escalón deja de normalizarse y cada nivel encoge la escena',
+    de: '  for (let i = 0; i < k; i++) escalon[i] = Math.exp(escalon[i] - suma / k);',
+    a: '  for (let i = 0; i < k; i++) escalon[i] = Math.exp(escalon[i]);',
+  },
+  {
+    test: 'B21',
+    que: 'todas las hermanas salen pegadas al eje del padre: vuelve la maraña',
+    de: '    polar[i] = q === 0 ? (k === 1 ? 0 : polar0) : anillo;',
+    a: '    polar[i] = polar0;',
+  },
+  {
+    test: 'B22',
+    que: 'el radio del haz se calcula con DOS fórmulas que divergen',
+    de: '    s.Rhaz = radioHaz(f, rFib, sep);                   // el radio del HAZ, con piso, compartido',
+    a: '    s.Rhaz = Math.max(rFib * 1.6, R) * 1.2;',
+  },
+
+  /* ── LOS HILOS: lo que se agregó en la vuelta anterior ───────────────────────────────────── */
   {
     test: 'B11',
     que: 'un hilo aparece de la nada en cada bifurcación',

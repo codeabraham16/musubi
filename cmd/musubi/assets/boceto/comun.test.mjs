@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
-         contarFibras, enhebrar, deshilachar } from './comun.mjs';
+         contarFibras, enhebrar, deshilachar, bifurcar, radioHaz, medirEnredo } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -278,4 +278,90 @@ test('B16 · el boceto B sigue colocando: la ley de Rall no quedó huérfana', (
   const S = seccionar(ganglio(), { maxNivel: 8, minCarga: 10 });
   colocarLibre(S, { origen: [0, -78, 0], largo: 62, largoRaiz: 30, semilla: 11, tropismo: 0.42 });
   for (const s of S) assert.ok(Number.isFinite(s.w0) && s.w0 > 0, `sección ${s.idx} sin radio`);
+});
+
+/* ══ LA BIFURCACION ═══════════════════════════════════════════════════════════════════════════
+   El cambio de esta vuelta. Medido antes de escribirlo: 183 de los 191 choques entre haces no
+   emparentados —el 96 %— eran entre HERMANAS, y son inevitables mientras nazcan todas del mismo
+   punto. A distancia cero no hay angulo que separe dos ramas. */
+
+// Padre largo y dos hijas gordas: la bifurcacion tiene lugar de sobra, asi que si se tocan es por
+// el reparto y no por falta de espacio.
+const PADRE = { largo: 120 };
+const DOS = [{ R: 8, largo: 70 }, { R: 6, largo: 60 }];
+
+test('B17 · las hermanas NO nacen en el mismo punto', () => {
+  const B = bifurcar(PADRE, DOS, {});
+  assert.equal(B.apretada & 1, 0, 'el fixture no deberia estar apretado');
+  // Traducido a distancia sobre el haz padre: la separacion tiene que alcanzar para que los dos
+  // haces no se toquen ahi mismo. Es el invariante que traduce el 96 % del problema medido.
+  const sep = Math.abs(B.cuna[0] - B.cuna[1]) * PADRE.largo;
+  assert.ok(sep >= DOS[0].R + DOS[1].R, `nacen a ${sep.toFixed(1)}, necesitan ${DOS[0].R + DOS[1].R}`);
+});
+
+test('B18 · el angulo entre hermanas sale del GROSOR, no de una constante', () => {
+  const finas = bifurcar(PADRE, [{ R: 0.6, largo: 70 }, { R: 0.6, largo: 60 }], { polarMin: 0 });
+  const gordas = bifurcar(PADRE, [{ R: 9, largo: 70 }, { R: 9, largo: 60 }], { polarMin: 0 });
+  assert.ok(gordas.polar[gordas.orden[1]] > finas.polar[finas.orden[1]] * 1.5,
+    'dos haces gordos tienen que abrirse MAS que dos hilos sueltos');
+});
+
+test('B19 · lo que no entra se DECLARA', () => {
+  // Padre cortisimo, hijas gordas: no hay manera de darles el aire que piden.
+  const B = bifurcar({ largo: 6 }, [{ R: 9, largo: 40 }, { R: 9, largo: 40 }], {});
+  assert.equal(B.apretada & 1, 1, 'la bifurcacion tiene que quedar marcada como apretada');
+  for (const c of B.cuna) assert.ok(c >= 0 && c <= 1, 'y las cunas siguen sobre el haz padre');
+});
+
+test('B20 · el escalon de largo no encoge la escena: su media geometrica es 1', () => {
+  for (const k of [2, 3, 4, 7]) {
+    const hijas = Array.from({ length: k }, (_, i) => ({ R: 4 - i * 0.3, largo: 60 }));
+    const B = bifurcar(PADRE, hijas, {});
+    const logs = B.escalon.reduce((t, e) => t + Math.log(e), 0);
+    // Sin normalizar, el factor medio por nivel queda por debajo de 1 y componer siete niveles
+    // achica la escena entera: un escalon que ademas recorta es un recorte disfrazado de detalle.
+    assert.ok(Math.abs(logs) < 1e-9, `k=${k}: producto de escalones = ${Math.exp(logs)}`);
+  }
+});
+
+test('B21 · el dibujo se DESAMONTONA: la metrica lo dice', () => {
+  // EL UMBRAL ESTA CALIBRADO CONTRA EL SABOTAJE, no elegido. Sobre este fixture —que es mucho mas
+  // denso que el cerebro real: 350 secciones para 360 memorias, casi todas hojas de una nota, asi
+  // que su enredo absoluto no es comparable con el 0,06 que da el dato de verdad— los dos valores
+  // que importan son:
+  //     con la separacion puesta        2,31
+  //     con las hermanas pegadas al eje 13,78   ← el sabotaje de este test
+  // El umbral va en 5,0: bien arriba del real y bien abajo del roto.
+  //
+  // LA PRIMERA VERSION DE ESTE TEST ERA RELATIVA —«con separacion tiene que dar 4x mejor que sin»— y
+  // el banco la marco VACUA: el sabotaje degrada LOS DOS brazos y el cociente se sostiene igual. Un
+  // test comparativo cuyo control tambien se rompe no compara nada. El control se queda, pero como
+  // chequeo de la METRICA: prueba que sabe ver maraña, porque un medidor roto que devolviera cero
+  // pasaria cualquier umbral sin que nadie se entere.
+  const armar = (o) => {
+    const S = seccionar(ganglio(), { maxNivel: 8, minCarga: 10 });
+    contarFibras(S, OPC_HILOS);
+    colocarNucleo(S, Object.assign({ origen: [0, 0, 0], nucleo: 34, largo: 118, curvatura: 0.12,
+      tropismo: 0, semilla: 11, radioHilo: 0.52, separacion: 2.60 }, o));
+    enhebrar(S, { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6 });
+    return medirEnredo(S, { muestras: 8 });
+  };
+  const con = armar({ aire: 3, polarMin: 0.85 });
+  const sin = armar({ aire: 0.05, polarMin: 0, naciente: 0.02 });   // control: nacen casi juntas
+  assert.ok(sin.choques > 800,
+    `el control solo se enreda ${sin.choques} veces: la METRICA no ve maraña y el test no prueba nada`);
+  assert.ok(con.pares > 100, 'el fixture no tiene pares suficientes');
+  assert.ok(con.enredo <= 5.0,
+    `enredo = ${con.enredo.toFixed(2)} (choques ${con.choques}, hermanas ${con.entreHermanas})`);
+});
+
+test('B22 · el radio del haz es UNA sola formula', () => {
+  // `enhebrar` y la colocacion tienen que medir el MISMO grosor: si divergieran, la separacion se
+  // calcularia sobre un haz que despues no se dibuja.
+  const S = prep();
+  enhebrar(S, { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6 });
+  for (const x of S) {
+    assert.ok(Math.abs(x.Rhaz - radioHaz(x.fibras, 0.52, 2.60)) < 1e-9,
+      `la seccion ${x.idx} dibuja ${x.Rhaz} y la formula da ${radioHaz(x.fibras, 0.52, 2.60)}`);
+  }
 });

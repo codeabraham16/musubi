@@ -144,6 +144,14 @@ const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+// El clamp NO es defensivo de mas: sin el, un producto punto de 1,0000000002 por redondeo hace que
+// `acos` devuelva NaN, y una instancia con NaN desaparece SIN error. Ya nos paso.
+const angEntre = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot3(norm(a), norm(b)))));
+/** enCono: la direccion a `polar` radianes del eje, con `acimut` en el marco (u1,u2). */
+const enCono = (eje, u1, u2, polar, acimut) =>
+  norm(add(mul(eje, Math.cos(polar)),
+           mul(add(mul(u1, Math.cos(acimut)), mul(u2, Math.sin(acimut))), Math.sin(polar))));
 export const rng = (s) => () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
 
 // Ley de Rall: el área de la sección se conserva en cada bifurcación, con exponente 2,5. Es lo que
@@ -172,6 +180,130 @@ export function horquilla(dir, pesos, apertura, r) {
     const lat = add(mul(u, Math.cos(th)), mul(v, Math.sin(th)));
     return norm(add(mul(d, Math.cos(ang)), mul(lat, Math.sin(ang))));
   });
+}
+
+/**
+ * bifurcar: DONDE Y CON QUE ANGULO SALE CADA HERMANA. Es la respuesta a «que no se amontonen».
+ *
+ * ── POR QUE NO ALCANZABA `horquilla` ──────────────────────────────────────────────────────────
+ * `horquilla` reparte k direcciones en un cono de apertura FIJA alrededor del padre, y todas nacen
+ * en el mismo punto. Eso tiene dos agujeros, y el primero es fatal:
+ *
+ *   1. A DISTANCIA CERO NO HAY ANGULO QUE SEPARE. Dos hermanas que arrancan del mismo punto se
+ *      tocan ahi, siempre, midan lo que midan y se abran lo que se abran. Medido sobre el cerebro
+ *      local: 183 de los 191 choques entre haces no emparentados —el 96 %— son entre hermanas. No
+ *      es un detalle: es EL problema, y ninguna cantidad de `apertura` lo puede tocar.
+ *   2. LA APERTURA NO SABIA DE GROSOR. El mismo cono para dos hilos sueltos que para dos haces de
+ *      13 unidades de radio. Los primeros quedan sobrados; los segundos se ven como uno solo.
+ *
+ * ── LAS TRES PIEZAS, Y LO QUE PAGA CADA UNA ───────────────────────────────────────────────────
+ *   cunas escalonadas   las hermanas nacen en puntos distintos del haz padre   ← la que paga
+ *   angulo por grosor   sola no hace nada (siguen naciendo juntas)
+ *   escalon de largo    corre los penachos a profundidades distintas
+ *
+ * @param {{largo:number}} padre
+ * @param {Array<{R:number, largo:number}>} hijas  R = radio de haz (ver `radioHaz`)
+ * @returns {{cuna:number[], polar:number[], acimut:number[], escalon:number[],
+ *            orden:number[], apretada:number}}  arrays indexados como `hijas`
+ */
+export function bifurcar(padre, hijas, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const aire = num(o.aire, 3.0);          // aire entre hermanas, en radios del haz mas gordo
+  const naciente = Math.min(0.95, Math.max(0, num(o.naciente, 0.85)));
+  const apMax = num(o.aperturaMax, 1.30); // tope de apertura del anillo (~75 grados)
+  const polar0 = num(o.polarEje, 0.20);   // cuanto se desvia la dominante: casi nada
+  // PISO DEL ANILLO, y sale de que las DOS metricas no dicen lo mismo. `aire` esta en radios del
+  // haz, asi que para dos ramas finas —radio 0,83— pide un hueco de 2,5 unidades: suficiente para
+  // que no se TOQUEN en el espacio, y menos de dos pixeles en pantalla a distancia de encuadre. El
+  // enredo baja y el ojo sigue viendo una sola cosa. Medido: enredo 0,87 -> 0,12 mientras el solape
+  // en pantalla SUBIA de 25,5 % a 38 %. El piso le devuelve angulo a las ramas finas, que son las
+  // que el grosor deja sin abrir.
+  const polarMin = num(o.polarMin, 0.20);
+  const k = hijas.length;
+  const L = Math.max(1e-6, num(padre.largo, 1));
+  const cuna = new Array(k).fill(1), polar = new Array(k).fill(0);
+  const acimut = new Array(k).fill(0), escalon = new Array(k).fill(1);
+  if (!k) return { cuna, polar, acimut, escalon, orden: [], apretada: 0 };
+
+  // ORDEN POR GROSOR, con desempate por indice. El desempate no es prolijidad: sin el, dos hermanas
+  // de igual carga pueden salir en cualquier orden y el dibujo deja de ser el mismo dos veces, que
+  // es lo unico que hace comparables dos capturas.
+  const orden = hijas.map((_, i) => i).sort((x, y) => (hijas[y].R - hijas[x].R) || (x - y));
+
+  /* ── 1. EL ESCALON DE LARGO ──────────────────────────────────────────────────────────────────
+     Dos hermanas de igual carga terminan a la misma distancia y sus penachos —la parte mas gorda y
+     mas ruidosa del dibujo— caen en la misma cascara: los ejes quedan separados y las PUNTAS se
+     mezclan igual. El escalon las corre a profundidades distintas.
+
+     Y se NORMALIZA a media geometrica 1 dentro de cada bifurcacion. Sin normalizar el factor medio
+     por nivel queda por debajo de 1 y componer siete niveles encoge la escena entera: un escalon
+     que ademas achica todo es un recorte disfrazado de detalle. */
+  let suma = 0;
+  orden.forEach((i, q) => { escalon[i] = 0.17 * (2 * ((q * 0.6180339887) % 1) - 1); suma += escalon[i]; });
+  for (let i = 0; i < k; i++) escalon[i] = Math.exp(escalon[i] - suma / k);
+
+  /* ── 2. LAS CUNAS: LAS HERMANAS NO NACEN EN EL MISMO PUNTO ───────────────────────────────────
+     Cada una se desprende en un punto distinto del haz padre, separadas por lo que ocupan mas el
+     aire pedido. La mas gruesa sale de la PUNTA —es la continuacion de la via— y las livianas se
+     van desprendiendo hacia atras.
+
+     Es anatomia, no licencia del trazo: las COLATERALES de un axon se desprenden a lo largo del
+     recorrido y no esperan al terminal, de la misma familia que los `boutons en passant` que este
+     archivo ya usa para colgar las memorias. */
+  const huecos = [];
+  for (let q = 1; q < k; q++) {
+    const a = hijas[orden[q - 1]].R, b = hijas[orden[q]].R;
+    huecos.push(a + b + aire * Math.max(a, b));
+  }
+  const necesita = huecos.reduce((t, x) => t + x, 0);
+  const disponible = L * naciente;
+  // NO SE INVENTA LARGO. Si el haz padre es mas corto que lo que sus hijas necesitan para no
+  // tocarse, se aprieta lo que se pueda y la bifurcacion QUEDA MARCADA. Un recorte que no se cuenta
+  // es el modo de falla que este boceto no se permite.
+  const esc = (necesita > disponible && necesita > 0) ? disponible / necesita : 1;
+  let atras = 0;
+  orden.forEach((i, q) => {
+    if (q === 0) { cuna[i] = 1; return; }
+    atras += huecos[q - 1] * esc;
+    cuna[i] = Math.max(1 - naciente, 1 - atras / L);
+  });
+
+  /* ── 3. EL ANGULO NO ES UN NUMERO ELEGIDO: ES EL QUE HACE FALTA ──────────────────────────────
+     Se pide que a MEDIO CAMINO de la mas corta ya haya aire entre las dos, y de ahi se despeja.
+     Asi una bifurcacion de haces gordos se abre y una de hilos sueltos no malgasta cielo. */
+  const psi = (i, j) => {
+    const ref = Math.max(1, Math.min(hijas[i].largo, hijas[j].largo) * 0.5);
+    const pide = hijas[i].R + hijas[j].R + aire * Math.max(hijas[i].R, hijas[j].R);
+    return 2 * Math.asin(Math.min(1, pide / (2 * ref)));   // clamp: aca es donde saldria NaN
+  };
+  const eje = orden[0];
+  let anillo = polar0;
+  for (let q = 1; q < k; q++) anillo = Math.max(anillo, polar0 + psi(eje, orden[q]));
+  if (k >= 3) {
+    // Entre vecinas DEL ANILLO el angulo no es la resta de polares: dos direcciones a polar t
+    // separadas dphi en acimut estan a 2·asin(sin(t)·sin(dphi/2)). Se despeja t, que es lo que hay
+    // que abrir para que la rueda entre entera.
+    const dphi = (Math.PI * 2) / (k - 1);
+    for (let q = 1; q < k; q++) {
+      const j = orden[q === k - 1 ? 1 : q + 1];
+      anillo = Math.max(anillo, Math.asin(Math.min(1,
+        Math.sin(psi(orden[q], j) / 2) / Math.max(1e-6, Math.sin(dphi / 2)))));
+    }
+  }
+  anillo = Math.max(anillo, polarMin);
+  const topeado = anillo > apMax;
+  anillo = Math.min(apMax, anillo);
+  orden.forEach((i, q) => {
+    // La dominante casi no se desvia: en una bifurcacion real la hija principal continua la
+    // direccion del padre. Es lo unico que se conserva de `horquilla`. Con una sola hija, cero.
+    polar[i] = q === 0 ? (k === 1 ? 0 : polar0) : anillo;
+    acimut[i] = q === 0 ? 0 : (q - 1) * ((Math.PI * 2) / Math.max(1, k - 1));
+  });
+
+  // `apretada` es un BITSET y no un booleano: 1 = las cunas no entraron a lo largo del padre,
+  // 2 = el angulo que hacia falta pasaba el tope. Se pueden dar juntas y son problemas distintos.
+  return { cuna, polar, acimut, escalon, orden, apretada: (esc < 1 ? 1 : 0) + (topeado ? 2 : 0) };
 }
 
 /** ladear: la panza del tramo. Se HEREDA del padre y gira un poco — la tortuosidad de una dendrita
@@ -381,9 +513,50 @@ export function colocarNucleo(secciones, opciones) {
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
   const r = rng(num(o.semilla, 11) >>> 0);
   const L0 = num(o.largo, 92);
-  const apertura = num(o.apertura, 0.80);
   const curvatura = num(o.curvatura, 0.24);
-  const tropismo = num(o.tropismo, 0.38);
+  // 0,22 y no 0,46, y por una razon medida: el empuje radial es el MISMO para todas las hermanas,
+  // asi que las vuelve a juntar justo despues de haberlas separado. Se queda porque es lo que hace
+  // que el conjunto llene un volumen en vez de abrirse como abanico; lo que no puede es mandar por
+  // encima de la separacion.
+  const tropismo = num(o.tropismo, 0.22);
+  const aire = num(o.aire, 3.0);                // aire entre hermanas, en radios de haz
+  const naciente = num(o.naciente, 0.85);       // fraccion del haz padre usable para las cunas
+  const aperturaMax = num(o.aperturaMax, 1.30);
+  const polarEje = num(o.polarEje, 0.20);
+  const polarMin = num(o.polarMin, 0.20);
+  /* ── EL ESTIRON DEL ACTOR, y por que NO es un cono ────────────────────────────────────────────
+     Las cuñas separan hermanas pero ensanchan la huella angular de cada subarbol: medido, la mezcla
+     de actores en pantalla subio de 5,2 % a 8,9 %. Y los actores son la UNICA particion que el
+     usuario pidio conservar — son los colores de la leyenda.
+
+     LO OBVIO ERA DARLE A CADA ACTOR SU CONO, y se probo de las dos maneras posibles. Las dos fallan,
+     y cada una de un modo distinto:
+       · RECORTAR la direccion al borde del cono empuja a varias hermanas contra EL MISMO borde y
+         las vuelve a juntar: mezcla 8,9 -> 4,3 pero enredo 0,059 -> 0,485.
+       · Restarle a la APERTURA lo que el padre ya gasto es peor: el presupuesto se consume con la
+         profundidad y nunca se repone, asi que a partir de cierto nivel no queda nada para abrir.
+         enredo 0,059 -> 1,98 y 211 bifurcaciones apretadas de 220.
+     O sea: confinar por ANGULO es incompatible con darles aire a las hermanas. No es que falto
+     afinarlo — las dos direcciones del mismo arreglo empeoran, y por razones opuestas.
+
+     Tambien se probo separarlos por ESPACIO —alargar el tallo de cada actor para alejar las copas—
+     y tampoco paga: estirarlo 5x baja la mezcla de 8,9 a 8,0 y sube el solape. Se saco en vez de
+     dejarlo como perilla: una opcion que no mueve la aguja es ruido, y este proyecto ya tuvo una
+     perilla desconectada durante meses.
+
+     CONCLUSION MEDIDA: la mezcla de actores es EL PRECIO de que las hermanas no se toquen, y no se
+     paga con colocacion. Se paga con la herramienta que ya existe: `aislar` (tecla A) apaga los
+     otros actores, que es exactamente «ver cada uno por separado». */
+  const fasesTia = Math.max(1, num(o.fasesTia, 12));
+  const rFib = num(o.radioHilo, 0.40);          // los MISMOS que se le pasan a `enhebrar`
+  const sepHilo = num(o.separacion, 3.05);
+  // `apertura` ya no existe: el angulo sale del grosor. Se AVISA en vez de ignorarla en silencio —
+  // una opcion muerta que se sigue aceptando es una mentira sobre lo que controla el dibujo, y este
+  // proyecto ya tuvo una perilla desconectada (la niebla) durante meses.
+  if (o.apertura != null && typeof console !== 'undefined') {
+    console.warn('[colocarNucleo] `apertura` ya no se usa: el angulo entre hermanas sale del grosor '
+      + 'de sus haces. Ver `aire` / `aperturaMax`.');
+  }
   const nucleo = num(o.nucleo, 30);
   const origen = o.origen || [0, 0, 0];
   const fase = num(o.fase, 0.7);
@@ -420,16 +593,60 @@ export function colocarNucleo(secciones, opciones) {
   });
 
   function bajar(s, curvaPadre) {
-    if (!s.hijos.length) return;
-    const pesos = s.hijos.map((i) => secciones[i].carga);
-    const dirs = horquilla(s.dir, pesos, apertura, r);
-    s.hijos.forEach((hi, k) => {
+    const k = s.hijos.length;
+    if (!k) return;
+    // CUANTO OCUPA CADA HIJA. Es el numero del que sale todo lo demas, y sale de la MISMA formula
+    // que usa `enhebrar`: asi la separacion se mide sobre el grosor que efectivamente se dibuja.
+    // `fibras` puede no estar todavia (si nadie llamo a `contarFibras`); entonces manda la carga,
+    // que es la misma jerarquia con otra escala.
+    const padreF = Math.max(1, s.fibras || s.carga || 1);
+    const hijas = s.hijos.map((hi) => {
       const h = secciones[hi];
-      const l = s.largo * (0.56 + 0.36 * Math.cbrt(h.carga / Math.max(1, s.carga)));
-      let d2 = dirs[k];
-      // TROPISMO RADIAL EN 3D. En el árbol el empuje era horizontal porque había un eje vertical
-      // privilegiado; acá no lo hay, así que el campo empuja hacia afuera del núcleo en la
-      // dirección que sea. Es lo que hace que el conjunto llene un volumen y no un abanico.
+      const f = Math.max(1, h.fibras || h.carga || 1);
+      return { R: radioHaz(f, rFib, sepHilo),
+               largo: s.largo * (0.56 + 0.36 * Math.cbrt(f / padreF)) };
+    });
+    /* EL CONO COMO PRESUPUESTO, NO COMO RECORTE. Recortar la direccion DESPUES de calcularla
+       —traerla al borde del cono— empuja a varias hermanas contra el MISMO borde y las vuelve a
+       juntar: medido, la mezcla de actores bajaba de 8,9 % a 4,3 % pero el enredo saltaba de 0,059
+       a 0,485, o sea que arreglaba lo que se ve y rompia lo que es. Restarle a la apertura lo que
+       el padre ya se desvio del eje del actor deja que la rueda entera entre adentro del cono SIN
+       tocar la separacion entre hermanas, que es lo unico que no se puede sacrificar.
+
+       Y se sostiene solo por induccion: si la hija esta a `anillo` del padre y el padre esta a
+       `ang` del eje, la hija esta como mucho a `ang + anillo` <= alfa. No hace falta recortar nada. */
+    const B = bifurcar(s, hijas, { aire, naciente, aperturaMax, polarEje, polarMin });
+    s.apretada = B.apretada;                    // ← se declara, no se corrige a escondidas
+
+    const [u1, u2] = marco(s.dir);
+    /* ── LAS TIAS ────────────────────────────────────────────────────────────────────────────
+       Separar hermanas no alcanza: la rama que sale aca tambien se puede meter en el volumen de
+       una HERMANA DEL PADRE, y ese choque no lo ve nadie desde adentro de la bifurcacion. La rueda
+       entera de hijas puede GIRAR sin cambiar ni una de sus separaciones internas, asi que girar
+       sale gratis: se prueban `fasesTia` giros y gana el que deja a las hijas mas lejos de las
+       tias. */
+    let fase0 = r() * Math.PI * 2;              // se consume SIEMPRE: mover el rng rompe capturas
+    const tias = [];
+    if (s.padre >= 0) for (const t of secciones[s.padre].hijos) {
+      if (t !== s.idx && secciones[t].dir) tias.push(secciones[t].dir);
+    }
+    if (tias.length && k > 1) {
+      let mejor = -1, elegida = fase0;
+      for (let c = 0; c < fasesTia; c++) {
+        const f = fase0 + (c / fasesTia) * Math.PI * 2;
+        let peor = Math.PI;
+        for (let i = 0; i < k; i++) {
+          const d = enCono(s.dir, u1, u2, B.polar[i], f + B.acimut[i]);
+          for (const td of tias) peor = Math.min(peor, angEntre(d, td));
+        }
+        if (peor > mejor) { mejor = peor; elegida = f; }
+      }
+      fase0 = elegida;
+    }
+
+    s.hijos.forEach((hi, i) => {
+      const h = secciones[hi];
+      let d2 = enCono(s.dir, u1, u2, B.polar[i], fase0 + B.acimut[i]);
       if (tropismo > 0 && h.nivel >= 2) {
         const rv = sub(s.b, origen), rl = Math.hypot(rv[0], rv[1], rv[2]);
         if (rl > 0.001) {
@@ -437,9 +654,11 @@ export function colocarNucleo(secciones, opciones) {
           d2 = norm(add(d2, mul(mul(rv, 1 / rl), t)));
         }
       }
+      const l = hijas[i].largo * B.escalon[i];
       h.dir = d2; h.largo = l;
-      // La hendidura sináptica: la hija no nace donde muere el padre.
-      h.a = add(s.b, mul(d2, l * 0.05));
+      // LA CUNA: la hija no nace donde muere el padre —la hendidura sinaptica sigue intacta— ni
+      // todas en el mismo lugar, que es lo que cambio.
+      h.a = add(enCurva(s, B.cuna[i]), mul(d2, l * 0.05));
       h.b = add(h.a, mul(d2, l));
       const bow = ladear(curvaPadre, d2, r);
       h.curva = mul(bow, l * curvatura);
@@ -516,6 +735,19 @@ function puntoHilo(s, t, rho, phi0, torsion, e1, e2) {
 }
 
 /**
+ * radioHaz: el radio que ocupan `f` hilos, POR AREA. El doble de hilos no es el doble de ancho: es
+ * raiz de dos — la misma razon por la que un cable de cien pares no es cien veces mas gordo que uno
+ * de un par.
+ *
+ * Vive aca afuera y no adentro de `enhebrar` porque ahora la COLOCACION tambien lo necesita, y
+ * ANTES: para separar dos hermanas hay que saber cuanto ocupa cada una. Dos formulas paralelas para
+ * el mismo grosor darian una separacion medida sobre un haz que no es el que se dibuja — el mismo
+ * modo de falla que ya obligo a que `enCurva` sea la misma formula que usa el shader.
+ */
+export const radioHaz = (f, rFib, sep) =>
+  Math.max(rFib * 1.6, f <= 1 ? 0 : rFib * sep * Math.sqrt(Math.max(1, f)));
+
+/**
  * enhebrar: convierte las secciones en ESLABONES — una neurona cada uno.
  *
  * Cada eslabón es una célula completa: soma en `a`, axón mielinizado hasta `b`, terminal en `b`, y
@@ -546,8 +778,8 @@ export function enhebrar(secciones, opciones) {
     // EL RADIO DEL HAZ SALE DE CUÁNTOS HILOS LLEVA, POR ÁREA. El doble de hilos no es el doble de
     // ancho: es raíz de dos. Es la misma razón por la que un cable de cien pares no es cien veces
     // más gordo que uno de un par — y es lo que reemplaza a la ley de Rall, que estimaba esto.
-    const R = f === 1 ? 0 : rFib * sep * Math.sqrt(f);
-    s.Rhaz = Math.max(rFib * 1.6, R);
+    const R = f <= 1 ? 0 : rFib * sep * Math.sqrt(f);   // el radio del GIRASOL de hilos
+    s.Rhaz = radioHaz(f, rFib, sep);                   // el radio del HAZ, con piso, compartido
     const nE = Math.max(1, Math.min(maxEsl, Math.round((s.largo || 1) / largoN)));
     const d0 = (s.dist || 0) - (s.largo || 0);
     for (let j = 0; j < f; j++) {
@@ -654,6 +886,93 @@ export function deshilachar(eslabones, secciones, opciones) {
   }
 
   return ramitas;
+}
+
+/**
+ * medirEnredo: CUANTO SE AMONTONA el dibujo, en un numero comparable entre versiones.
+ *
+ * Dos haces que no son parientes no tienen por que tocarse nunca. Si se tocan, en pantalla se leen
+ * como una sola maraña — y ese contacto ES, literalmente, el reclamo «que se pueda ver cada una por
+ * separado». Asi que se cuenta en vez de opinarse.
+ *
+ * Un par CHOCA si la distancia minima entre sus dos curvas (muestreadas en `muestras` tramos, la
+ * MISMA curva que dibuja el shader) es menor que la suma de sus radios de haz. Los emparentados se
+ * descartan: un padre y su hija SE TIENEN que tocar, ahi esta la continuidad.
+ *
+ * El titular es `enredo` = 2·choques/n = con cuantos haces AJENOS se cruza un haz en promedio. Se
+ * eligio sobre `choques/pares` porque esa fraccion esta dominada por los cientos de miles de pares
+ * trivialmente lejos: con el dibujo hecho un nudo daria 0,003 y sonaria a sano.
+ *
+ * COSTO: O(n²·muestras²). Es una medicion A PEDIDO, NO va en el camino de carga de la pagina.
+ */
+export function medirEnredo(secciones, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const M = Math.max(2, num(o.muestras, 8));
+  const margen = num(o.margen, 1);        // >1 = «cuanto falta para que se lean como una sola»
+  const S = secciones, n = S.length;
+
+  const P = [], R = [];
+  for (let i = 0; i < n; i++) {
+    const pts = [];
+    for (let k = 0; k <= M; k++) pts.push(enCurva(S[i], k / M));
+    P.push(pts);
+    // Si `enhebrar` ya corrio, el radio es DATO. Si no, se estima con la MISMA formula: el numero
+    // no puede depender de en que orden se llamaron las cosas.
+    R.push(S[i].Rhaz != null ? S[i].Rhaz
+      : radioHaz(Math.max(1, S[i].fibras || 1), num(o.radioHilo, 0.40), num(o.separacion, 3.05)));
+  }
+  const emparentado = (i, j) => {
+    for (let a = i; a >= 0; a = S[a].padre) if (a === j) return true;
+    for (let b = j; b >= 0; b = S[b].padre) if (b === i) return true;
+    return false;
+  };
+  const grado = new Array(n).fill(0);
+  let pares = 0, choques = 0, herm = 0, racimos = 0;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    if (emparentado(i, j)) continue;
+    pares++;
+    const tope = margen * (R[i] + R[j]);
+    let mn = Infinity;
+    for (let a = 0; a < M && mn >= tope; a++)
+      for (let b = 0; b < M; b++) {
+        const d = distTramos(P[i][a], P[i][a + 1], P[j][b], P[j][b + 1]);
+        if (d < mn) mn = d;
+      }
+    if (mn < tope) {
+      choques++; grado[i]++; grado[j]++;
+      if (S[i].padre === S[j].padre) herm++;
+      if (S[i].racimo !== S[j].racimo) racimos++;
+    }
+  }
+  let peor = 0;
+  for (let i = 0; i < n; i++) if (grado[i] > grado[peor]) peor = i;
+  const pegados = grado.reduce((t, g) => t + (g > 0 ? 1 : 0), 0);
+  return {
+    secciones: n, pares, choques,
+    enredo: n ? (2 * choques) / n : 0,
+    pegados, fracPegados: n ? pegados / n : 0,
+    entreHermanas: herm, entreAjenos: choques - herm, entreRacimos: racimos,
+    peor, peorGrado: grado[peor],
+  };
+}
+
+/** distTramos: distancia minima entre dos SEGMENTOS. Segmento-segmento y no punto-punto: dos haces
+ *  se pueden cruzar en X con todas sus muestras lejos una de otra, y ahi el muestreo por puntos
+ *  devuelve «no se tocan» para algo que en pantalla es un nudo. */
+function distTramos(p1, q1, p2, q2) {
+  const d1 = sub(q1, p1), d2 = sub(q2, p2), rr = sub(p1, p2);
+  const a = dot3(d1, d1), e = dot3(d2, d2);
+  const f = dot3(d2, rr), c = dot3(d1, rr), b = dot3(d1, d2);
+  const den = a * e - b * b;
+  // den ~ 0 son segmentos PARALELOS: la formula general divide por cero y sale NaN, que es justo el
+  // valor que desaparece sin avisar. Se cae al extremo, que para paralelos es correcto.
+  let t2 = den > 1e-12 ? Math.min(1, Math.max(0, (b * f - c * e) / den)) : 0;
+  let u = (b * t2 + f) / (e || 1);
+  if (u < 0) { u = 0; t2 = Math.min(1, Math.max(0, -c / (a || 1))); }
+  else if (u > 1) { u = 1; t2 = Math.min(1, Math.max(0, (b - c) / (a || 1))); }
+  const A = add(p1, mul(d1, t2)), B = add(p2, mul(d2, u));
+  return Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════════════════

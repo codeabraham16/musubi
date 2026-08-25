@@ -508,7 +508,10 @@ export function montar(cfg) {
      hijas — un axón no aparece ni desaparece en una bifurcación. Así el grosor deja de ser una
      fórmula sobre el dato (eso era la ley de Rall) y pasa a ser el dato: los hilos del tronco son,
      contados, todas las hojas del árbol.                                                        */
-  contarFibras(S, { porMemoria: cfg.porMemoria || 6, maxHoja: cfg.maxHoja || 22 });
+  // Si el boceto ya conto los hilos —y ahora TIENE que hacerlo, porque la colocacion los necesita
+  // ANTES de colocar— no se vuelven a contar. Contar dos veces con opciones distintas separaria las
+  // ramas sobre un grosor que despues no se dibuja, y eso no daria error: daria un dibujo que miente.
+  if (S[0].fibras == null) contarFibras(S, { porMemoria: cfg.porMemoria || 6, maxHoja: cfg.maxHoja || 22 });
   const FIB = enhebrar(S, {
     radioHilo: cfg.radioHilo || 0.30, separacion: cfg.separacion || 3.4,
     largoNeurona: cfg.largoNeurona || 17, torsion: cfg.torsion || 0.6,
@@ -1584,9 +1587,19 @@ function probar(v) {
     }
     out.push(['ningun id apunta a la nada', rotos + ' rotos de ' + v.ID_TOTAL, rotos === 0]);
 
-    // (b) SEÑALAR EL CIELO NO DEVUELVE NADA. El valor de fallo tiene que ser distinto del bueno:
-    //     si el fondo tuviera id, un clic al vacio se leeria como un acierto.
+    // (b) SEÑALAR EL CIELO NO DEVUELVE NADA. El valor de fallo tiene que ser distinto del bueno: si
+    //     el fondo tuviera id, un clic al vacio se leeria como un acierto.
+    //
+    //     EL VACIO SE FABRICA, NO SE SUPONE. La primera version sondeaba la esquina (4,4) dando por
+    //     hecho que ahi no habia nada — y con la colocacion nueva la escena llega hasta la esquina,
+    //     asi que el test se puso rojo por un supuesto suyo y no por el codigo. Alejando la camara
+    //     4x la escena ocupa un cuarto del cuadro y la esquina esta vacia con certeza.
+    const distPrevia = v.cam.est.dist;
+    v.cam.est.dist = distPrevia * 4; v.cam.meta.dist = distPrevia * 4;
+    v.cam.tick(1 / 60);
     const cielo = v.sondear(4, 4);
+    v.cam.est.dist = distPrevia; v.cam.meta.dist = distPrevia;
+    v.cam.tick(1 / 60);
     out.push(['señalar el vacio no inventa nada', cielo ? 'DEVOLVIO ' + cielo.tipo : 'nada', !cielo]);
 
     // (c) LA PUNTERIA: se proyectan botones REALES a pantalla y se pregunta que hay ahi. Lo que
