@@ -15,7 +15,7 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
          escalaTinta, TINTA_SINAPSIS, enCurva,
          formarColonizado, hashCadena, deHash, tintaTerminal, TINTA_TERMINAL,
-         crecerDelta, emitirBrote } from './comun.mjs';
+         crecerDelta, emitirBrote, PALETA_CYBER, tonoDe } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -1226,4 +1226,23 @@ test('G10 · el brote LLEGA: toda memoria nueva termina en una sección o injert
   const r2 = crecerDelta(b2.bosque, a2, { paso: 16, dk: 18 });
   const br2 = emitirBrote(b2.bosque, a2, r2.consumidoPor, r2.nodosNuevos, {});
   assert.equal(JSON.stringify(br.secciones), JSON.stringify(br2.secciones), 'el delta no es una función');
+});
+
+test('D3 · el cyber es la MISMA identidad con otra ropa', () => {
+  // La paleta cyber se DERIVA de la sobria: mismos doce tonos, S/L propios del modo. Una lista a
+  // mano seria doce elecciones sueltas otra vez — y ya se midio a donde lleva eso.
+  assert.equal(PALETA_CYBER.length, PALETA.length);
+  for (let i = 0; i < PALETA.length; i++) {
+    const a = aHSL(PALETA[i]), b = aHSL(PALETA_CYBER[i]);
+    const dh = Math.min(Math.abs(a[0] - b[0]), 360 - Math.abs(a[0] - b[0]));
+    assert.ok(dh < 4, `el tono ${i} se corrio ${dh.toFixed(1)}° al cambiar de ropa`);
+  }
+  const ss = PALETA_CYBER.map((c) => aHSL(c)[1]), ls = PALETA_CYBER.map((c) => aHSL(c)[2]);
+  assert.ok(Math.max(...ss) - Math.min(...ss) < 0.06, 'la saturacion cyber no es una regla');
+  assert.ok(Math.max(...ls) - Math.min(...ls) < 0.06, 'la luz cyber no es una regla');
+  // CONTROL: y es OTRA ropa de verdad — bien mas saturada que la sobria
+  assert.ok(Math.min(...ss) > 0.75, 'el cyber quedo tibio: no es un modo distinto');
+  // y lo desconocido cae al sobrio, como toda lista cerrada de este proyecto
+  assert.equal(tonoDe('?tono=chorizo'), 'sobrio');
+  assert.equal(tonoDe('?cerebro=central&tono=cyber'), 'cyber');
 });

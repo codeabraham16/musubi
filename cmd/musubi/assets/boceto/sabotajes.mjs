@@ -264,7 +264,7 @@ const SABOTAJES = [
   {
     test: 'E1',
     que: 'el enlace a otra forma PIERDE el cerebro y te devuelve al local en silencio',
-    de: '  return !c || c === CEREBROS[0] ? href : `${href}?cerebro=${c.id}`;',
+    de: "  return partes.length ? href + '?' + partes.join('&') : href;",
     a: '  return href;',
   },
   {
@@ -350,6 +350,12 @@ const SABOTAJES = [
     que: 'lo consumido por madera vieja se pierde: el injerto en passant no se registra',
     de: '      for (const m of atrs[a].mems) injertosMap.get(secV).push(m);',
     a: '      void atrs[a];',
+  },
+  {
+    test: 'D3',
+    que: 'la ropa cyber deja de derivarse: un tono elegido a mano se cuela en la identidad',
+    de: "export const PALETA_CYBER = PALETA.map((cx) => deHSL(hslDe(cx)[0], 0.86, 0.60));",
+    a: "export const PALETA_CYBER = PALETA.map((cx, i) => (i === 4 ? '#ff8800' : deHSL(hslDe(cx)[0], 0.86, 0.60)));",
   },
 ];
 

@@ -2819,6 +2819,24 @@ export function tintaTerminal(area) {
   return Math.max(TINTA_TERMINAL.piso, TINTA_TERMINAL.referencia / area);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// EL TONO CYBER — la MISMA identidad, otra ropa.
+//
+// El neón original (S 86-89 %) se sacó porque con el color en el techo el sombreado no tenía
+// dónde verse: plástico. Eso era cierto ENTONCES, con el color constante bajo cualquier luz. Hoy
+// el fragmento tiene respuesta a la luz —campana de saturación + split de temperatura— que
+// desatura los extremos por su cuenta, así que una paleta intensa ya no aplasta la forma: la
+// forma vive en la LUZ, no en la paleta. Por eso cyber es un MODO y no una vuelta atrás.
+//
+// Y ES DERIVADA, no elegida: los MISMOS doce tonos de PALETA (la identidad no cambia de tono al
+// cambiar de ropa), con S y L propios del modo. Una lista a mano acá volvería a ser doce
+// elecciones sueltas — y ya se midió a dónde lleva eso.
+
+/** tonoDe: qué ropa pide la URL. Lo desconocido cae al sobrio — lista cerrada, como siempre. */
+export function tonoDe(busqueda) {
+  return /(^|[?&])tono=cyber(&|$)/.test(String(busqueda || '')) ? 'cyber' : 'sobrio';
+}
+
 /** FORMAS_IDS: las seis formas. Vive acá —y no en forma.mjs— porque forma.mjs toca `document` y
     el test puro no puede importarlo; repetir la lista a mano es como se desincronizan. */
 export const FORMAS_IDS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
@@ -2841,9 +2859,12 @@ export function cerebroDe(busqueda) {
  * local sin que nada lo diga. Ahí terminás comparando dos formas sobre DOS DATOS DISTINTOS y
  * atribuyéndole a la forma una diferencia que era del cerebro. El cerebro viaja en cada enlace.
  */
-export function enlaceCon(href, cerebroId) {
+export function enlaceCon(href, cerebroId, tono) {
   const c = CEREBROS.find((x) => x.id === cerebroId);
-  return !c || c === CEREBROS[0] ? href : `${href}?cerebro=${c.id}`;
+  const partes = [];
+  if (c && c !== CEREBROS[0]) partes.push('cerebro=' + c.id);
+  if (tono && tono !== 'sobrio') partes.push('tono=' + tono);
+  return partes.length ? href + '?' + partes.join('&') : href;
 }
 
 // PALETA DE PERSONAS, ordenada por SEPARACIÓN DE TONO y no por la del panel.
@@ -2900,6 +2921,27 @@ export function jitterHilo(fib, orden) {
 }
 
 export const COLOR_MUSUBI = '#5b85c8';
+
+const hslDe = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h / 6, s, l];
+};
+const deHSL = (h, s, l) => {
+  const f = (k) => {
+    const t = (k + h * 12) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(t - 3, 9 - t, 1));
+  };
+  const hx = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
+  return '#' + hx(f(0)) + hx(f(8)) + hx(f(4));
+};
+export const PALETA_CYBER = PALETA.map((cx) => deHSL(hslDe(cx)[0], 0.86, 0.60));
+export const COLOR_MUSUBI_CYBER = deHSL(hslDe(COLOR_MUSUBI)[0], 0.86, 0.62);
 // EL NUCLEO: lo unico que no pertenece a nadie. Antes iba gris apagado a proposito —para no darle
 // color de actor— y con la forma nueva eso lo convirtio en un grumo sucio justo en el centro del
 // cuadro, que es donde converge todo. Plata fria: sigue sin ser el color de nadie, pero se lee

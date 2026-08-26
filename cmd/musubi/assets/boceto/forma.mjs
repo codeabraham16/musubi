@@ -15,7 +15,8 @@
 //   · las relaciones están todas las que tienen sus dos extremos dibujados
 
 import { cargar, seccionar, contarFibras, CEREBROS, cerebroDe, enlaceCon,
-         FORMAS_IDS, escalaTinta, hashCadena, deHash, crecerDelta, emitirBrote } from './comun.mjs';
+         FORMAS_IDS, escalaTinta, hashCadena, deHash, crecerDelta, emitirBrote,
+         PALETA_CYBER, COLOR_MUSUBI_CYBER, tonoDe } from './comun.mjs';
 import { armarRaiz } from './datos.mjs';
 import { montar } from './escena.mjs';
 
@@ -55,6 +56,7 @@ export async function construir(v) {
   // clic, o en la práctica se mira uno solo y se opina sobre ése — que es lo mismo que pasaba con
   // las formas antes del conmutador.
   const cerebro = cerebroDe(globalThis.location ? location.search : '');
+  const tono = tonoDe(globalThis.location ? location.search : '');
   const datos = await cargar(cerebro.archivo);
   // #brotar: la demo del vivo RETIENE las 6 memorias más nuevas — brotarlas sin retenerlas
   // primero las dibujaría dos veces, que es justo lo que el banco prohíbe
@@ -65,7 +67,9 @@ export async function construir(v) {
     const fuera = new Set(retenidas.map((m2) => m2.id));
     datos.neurons = datos.neurons.filter((m2) => !fuera.has(m2.id));
   }
-  const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' });
+  const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, tono === 'cyber'
+    ? { titulo: 'memoria', paleta: PALETA_CYBER, colorMusubi: COLOR_MUSUBI_CYBER }
+    : { titulo: 'memoria' });
 
   // DOS CAMINOS AL MISMO CONTRATO. Las formas a–f COLOCAN el árbol semántico (seccionar decide
   // la topología, colocar la geometría); el colonizado lo CRECE (la topología emerge del
@@ -96,7 +100,7 @@ export async function construir(v) {
     // FONDO AZUL-NOCHE, NO NEGRO PURO. Sale de la marca de Musubi, y no es capricho: sobre negro
     // absoluto los azules oscuros —que acá son un actor entero— se hunden hasta desaparecer, y el
     // panel deja de tener un piso contra el cual medir. #0C1020 da ese piso sin levantar la escena.
-    fondo: '#0C1020', bloom: 0.80,
+    fondo: tono === 'cyber' ? '#05070F' : '#0C1020', bloom: tono === 'cyber' ? 1.05 : 0.80,
     nivelesPenacho: 3, escalaPenacho: 0.62,
   }, montaje));
 
@@ -130,7 +134,7 @@ export async function construir(v) {
   // si cambiar de boceto cuesta, en la práctica se mira uno solo y se opina sobre ése.
   const barra = document.createElement('nav');
   barra.className = 'formas';
-  barra.innerHTML = FORMAS.map((f) => `<a href="${enlaceCon(`./boceto-${f.id}.html`, cerebro.id)}"${
+  barra.innerHTML = FORMAS.map((f) => `<a href="${enlaceCon(`./boceto-${f.id}.html`, cerebro.id, tono)}"${
     f.id === v.id ? ' class="hoy" aria-current="page"' : ''}><b>${f.nombre}</b><span>${
     f.sub}</span></a>`).join('');
   document.body.appendChild(barra);
@@ -140,8 +144,11 @@ export async function construir(v) {
   // insinuaría que «el central» es una forma más.
   const cbarra = document.createElement('nav');
   cbarra.className = 'cerebros';
-  cbarra.innerHTML = CEREBROS.map((c) => `<a href="${enlaceCon(`./boceto-${v.id}.html`, c.id)}"${
-    c.id === cerebro.id ? ' class="hoy" aria-current="page"' : ''}>${c.nombre}</a>`).join('');
+  cbarra.innerHTML = CEREBROS.map((c) => `<a href="${enlaceCon(`./boceto-${v.id}.html`, c.id, tono)}"${
+    c.id === cerebro.id ? ' class="hoy" aria-current="page"' : ''}>${c.nombre}</a>`).join('')
+    + '<span class="sep"></span>'
+    + ['sobrio', 'cyber'].map((t) => `<a href="${enlaceCon(`./boceto-${v.id}.html`, cerebro.id, t)}"${
+      t === tono ? ' class="hoy" aria-current="page"' : ''}>${t}</a>`).join('');
   document.body.appendChild(cbarra);
 
   console.log('[boceto ' + v.id + ' · ' + cerebro.id + ']', c, ((performance.now() - t0) | 0) + ' ms');

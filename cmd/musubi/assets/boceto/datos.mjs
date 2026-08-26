@@ -65,9 +65,12 @@ export function armarRaiz(neuronas, opciones) {
   const cuentas = {}; for (const [k, v] of porRacimo) cuentas[k] = v.length;
   const personas = ordenarRacimos([...porRacimo.keys()], cuentas);
 
+  // La ropa la elige el llamador (sobrio o cyber); la IDENTIDAD —qué tono le toca a quién— es
+  // la misma en las dos, porque las paletas comparten los tonos por derivación.
+  const PAL = o.paleta || PALETA;
   const colores = new Map();
-  personas.forEach((nombre, i) => colores.set(nombre, PALETA[i % PALETA.length]));
-  colores.set(RACIMO_MUSUBI, COLOR_MUSUBI);
+  personas.forEach((nombre, i) => colores.set(nombre, PAL[i % PAL.length]));
+  colores.set(RACIMO_MUSUBI, o.colorMusubi || COLOR_MUSUBI);
 
   const hijos = personas.map((nombre) => {
     const sub = construirNodo(porRacimo.get(nombre), 0, nombre);

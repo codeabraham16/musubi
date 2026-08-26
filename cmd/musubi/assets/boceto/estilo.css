@@ -294,3 +294,6 @@ body::after {
   color: var(--acento);
 }
 .cerebros a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px }
+
+/* el separador entre los dos ejes del conmutador chico: cerebro | tono */
+.cerebros .sep { width: 1px; background: var(--hilo); margin: 2px 3px; }
