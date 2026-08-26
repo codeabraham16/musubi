@@ -1502,23 +1502,18 @@ function applyLensLabels(){ const code=lens==='code';
   pistas(`<span><b>arrastrá</b> para rotar</span><span class="sep">·</span>`+
     `<span><b>rueda</b> para acercar</span><span class="sep">·</span>`+
     `<span><b>hover</b> revela el detalle</span>`);
-  const al=$('actlegend'); if(al) al.innerHTML = code
-    ? `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`
-    : `<div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div><div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div><div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div><div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>`+
-      // El IMPULSO va rotulado APARTE de la actividad de la memoria. Son dos lenguajes distintos
-      // sobre la misma escena —lo que le pasa a una NOTA contra quién LLAMÓ al cerebro— y sin el
-      // rótulo el ámbar aparece dos veces queriendo decir dos cosas.
-      `<div class="lg" style="opacity:.5;margin-left:6px">impulso:</div>`+
-      `<div class="lg"><span class="sw" style="background:rgba(255,255,255,.32);color:rgba(255,255,255,.32)"></span>sondeo</div>`+
-      `<div class="lg"><span class="sw" style="background:#fff;color:#fff"></span>trabajo real</div>`+
-      `<div class="lg"><span class="sw" style="background:#ff9905;color:#ff9905"></span>falló</div>`;
+  // La leyenda de actividad es SOLO de la lente código. La vieja lente memoria teñía puntos por
+  // estado y prometía tres clases de impulso; el colonizado no dibuja nada de eso (un pulso único,
+  // sin clases) — y una leyenda que promete lo que la escena no muestra es chrome que miente.
+  const al=$('actlegend'); if(al){ al.style.display = code ? '' : 'none'; if(code) al.innerHTML =
+    `<div class="lg"><span class="sw" style="background:${EDGEKIND.CALLS};color:${EDGEKIND.CALLS}"></span>llama</div><div class="lg"><span class="sw" style="background:${EDGEKIND.IMPORTS};color:${EDGEKIND.IMPORTS}"></span>importa</div><div class="lg"><span class="sw" style="background:${EDGEKIND.CONTAINS};color:${EDGEKIND.CONTAINS}"></span>contiene</div>`; }
   const ht=$('howto'); if(ht) ht.innerHTML = code
     ? `<span><b>·</b> cada punto es un <b>símbolo</b> (función, tipo, archivo)</span><span><b>·</b> las líneas son <b>llamadas / imports</b>; el color agrupa por <b>módulo</b></span><span><b>·</b> el <b>tamaño</b> = centralidad · <b>hover</b> muestra qué memorias lo explican</span>`
-    : `<span><b>·</b> cada punto es una <b>memoria</b></span>`+
-      `<span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>`+
-      `<span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>`+
-      `<span><b>·</b> la <b>neurona ramificada</b> de cada racimo es una <b>terminal</b>; sus dendritas, cuánto escribió</span>`+
-      `<span><b>·</b> el <b>impulso</b> que la recorre es <b>UNA llamada real a una tool</b>, en el momento en que ocurre. <b>Sin evento no hay luz</b>: si el cerebro está quieto, esto está quieto</span>`;
+    : `<span><b>·</b> cada <b>rama</b> es un hilo de <b>memorias</b>: el árbol <b>creció</b> hacia donde fueron naciendo</span>`+
+      `<span><b>·</b> cada <b>actor</b> tiene su territorio; el <b>color</b> dice de quién es, y los troncos se anudan en el <b>centro</b></span>`+
+      `<span><b>·</b> lo <b>grueso</b> carga más hilos; las <b>puntas de luz</b>, el detalle fino</span>`+
+      `<span><b>·</b> el <b>pulso</b> que recorre una rama es <b>UNA llamada real a una tool</b> de esa terminal, al momento. <b>Sin evento no hay luz</b></span>`+
+      `<span><b>·</b> <b>R</b> repite el crecimiento con la historia real</span>`;
 }
 // tipNeurona: qué es este árbol. Dice CUÁNTAS memorias carga y POR QUÉ están juntas — que es la
 // pregunta que el dibujo nuevo abre: si la rama significa algo, hay que poder leer qué.
