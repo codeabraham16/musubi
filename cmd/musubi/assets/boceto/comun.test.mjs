@@ -14,7 +14,7 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
          escalaTinta, TINTA_SINAPSIS, enCurva,
-         formarColonizado, hashCadena, deHash } from './comun.mjs';
+         formarColonizado, hashCadena, deHash, tintaTerminal, TINTA_TERMINAL } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -1141,4 +1141,24 @@ test('G7 · la curva NO MIENTE el camino crecido', () => {
   // CONTROL: si no se revisó ninguna polilínea, el test no vio nada.
   assert.ok(revisadas > 30, `sólo ${revisadas} secciones con polilínea: el fixture no llega`);
   assert.ok(peor <= 2.5 + 1e-6, `la cuadrática se aleja ${peor.toFixed(2)} u de la polilínea real`);
+});
+
+test('G8 · la luz terminal es un PRESUPUESTO: mas terminales no iluminan mas', () => {
+  // La leccion de las sinapsis contra el central, cobrada ANTES de que muerda: la capa aditiva
+  // escala con la superficie que emite, asi que la tinta se reparte. Medido: el local emite
+  // 12.125 u de area y el central 19.825 — sin presupuesto, el central brillaria 1,6x.
+  const ref = TINTA_TERMINAL.referencia;
+  const luz = (a) => a * tintaTerminal(a);
+  const cruce = ref / TINTA_TERMINAL.piso;
+  // el cruce piso/presupuesto LEJOS del dato real, o el presupuesto no regula nada
+  assert.ok(cruce > 3 * 19825,
+    `el piso releva al presupuesto en ${cruce | 0} y el central ya emite 19.825`);
+  for (const a of [ref + 1, 19825, 3 * ref, cruce]) {
+    assert.ok(luz(a) <= ref * 1.001,
+      `con ${a} de area la capa emite ${(luz(a) / ref).toFixed(2)}x la luz de referencia`);
+  }
+  // CONTROL: por debajo de la referencia NO se atenua — sin esto, el test pasaria con la capa
+  // apagada del todo, que es la otra manera de que la luz no crezca.
+  assert.equal(tintaTerminal(ref * 0.5), 1, 'un cerebro chico no se atenua');
+  assert.ok(tintaTerminal(1e9) >= TINTA_TERMINAL.piso, 'el piso aguanta el caso absurdo');
 });

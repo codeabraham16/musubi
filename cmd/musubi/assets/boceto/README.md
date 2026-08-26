@@ -182,6 +182,20 @@ enredo y el CDF de edad sin abrir un navegador. Invariantes G3–G7 en el banco:
 bosque es una función del dato, ninguna hoja sin carga, y la cuadrática no miente el camino
 crecido.
 
+### Carne + luz (el look híbrido del colonizado)
+
+Los tractos con `fibras >= 3` son CARNE (el material opaco de siempre — la estructura se lee como
+materia); por debajo del corte todo el subárbol es LUZ: fragmento sin difuso, blending aditivo, el
+fresnel emitiendo por el borde como un neón. El corte va por `fibras` y no por nivel porque la
+conservación lo hace monótono raíz→hoja: la frontera es limpia. El penacho paga del mismo
+presupuesto.
+
+**La luz terminal es presupuesto** (`TINTA_TERMINAL`, la lección de las sinapsis cobrada antes de
+que muerda): la moneda es área emitida (Σ largo·radio), referencia = 12.125 u medida en el local;
+el central emite 19.825 → la capa se atenúa al 61 % sola. Medido con el arnés de píxeles contra el
+look sólido: cobertura 18,8 → 26 % y lavado a blanco 15,6 → **10,4 %** — más luz repartida, menos
+quemado.
+
 ## Las seis formas
 
 Las seis dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en

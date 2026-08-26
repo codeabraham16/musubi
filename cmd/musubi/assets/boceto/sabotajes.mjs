@@ -333,6 +333,12 @@ const SABOTAJES = [
     de: '        if (!cabeEnCurva(poly)) { poly.pop(); break; }   // la S se parte en dos C',
     a: '        if (false) { poly.pop(); break; }',
   },
+  {
+    test: 'G8',
+    que: 'la luz terminal deja de repartirse: el doble de terminales, el doble de brillo',
+    de: '  return Math.max(TINTA_TERMINAL.piso, TINTA_TERMINAL.referencia / area);',
+    a: '  return 1;',
+  },
 ];
 
 const original = readFileSync(OBJ, 'utf8');

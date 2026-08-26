@@ -2598,6 +2598,25 @@ export function escalaTinta(n) {
   return Math.max(TINTA_SINAPSIS.piso, TINTA_SINAPSIS.referencia / n);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LA LUZ TERMINAL TAMBIÉN ES UN PRESUPUESTO — la misma lección que TINTA_SINAPSIS, aplicada a la
+// capa aditiva del look carne+luz: las terminales finas emiten, y una capa que emite escala con
+// CUÁNTA superficie emite. La moneda es área emitida (Σ largo·radio de los eslabones de luz); la
+// referencia se midió sobre el cerebro local con el corte fibras<3. Más terminales → cada una más
+// tenue → misma luz total. Y el piso existe por lo de siempre: una capa que se apaga sola miente
+// igual que una que satura.
+//
+// Medido 2026-08-26 con el corte fibras<3: el LOCAL emite 12.125 u de área (6.327 de vainas +
+// 5.798 de penacho) y el CENTRAL 19.825 — o sea 1,6× y la capa se atenúa al 61 % ahí. El cruce
+// piso/presupuesto queda en 121.250 u: 6× el central de hoy, con margen. Un test lo vigila.
+export const TINTA_TERMINAL = { referencia: 12125, piso: 0.10 };
+
+/** tintaTerminal: cuánto atenuar la capa de luz para esta área emitida. 1 en la referencia. */
+export function tintaTerminal(area) {
+  if (!(area > TINTA_TERMINAL.referencia)) return 1;
+  return Math.max(TINTA_TERMINAL.piso, TINTA_TERMINAL.referencia / area);
+}
+
 /** FORMAS_IDS: las seis formas. Vive acá —y no en forma.mjs— porque forma.mjs toca `document` y
     el test puro no puede importarlo; repetir la lista a mano es como se desincronizan. */
 export const FORMAS_IDS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];

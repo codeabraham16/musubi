@@ -25,7 +25,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { crearCamara, crearRotulos, frenteEn, enCurva,
+import { tintaTerminal, crearCamara, crearRotulos, frenteEn, enCurva,
          contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis, jitterHilo } from './comun.mjs';
 
 export { enCurva };
@@ -67,6 +67,7 @@ const ATM_VARY = `varying float vProf;`;
 
 const VAINA_V = `
 attribute vec2 aNace; varying float vNace;
+attribute float aLuz; varying float vLuz;
 // ATRIBUTOS EMPAQUETADOS, y no por prolijidad: WebGL garantiza 16 atributos de vértice y esta
 // malla llegó a 17 —position, normal, las CUATRO filas de instanceMatrix y diez escalares—. El
 // síntoma no fue un error visible: fue «Too many attributes (aLargo)» por consola y la malla
@@ -81,6 +82,7 @@ varying vec3 vC; varying float vY; varying float vNod; varying float vSel; varyi
 varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; varying float vFam;
 ${ATM_VARY}
 void main(){
+  vLuz = aLuz;
   vVol = aDLVF.z; vFam = aDLVF.w;
   vY = position.y + 0.5;
   // El nacimiento se interpola A LO LARGO del eslabón: la rama crece por su punta, no aparece
@@ -107,8 +109,32 @@ void main(){
   gl_Position = projectionMatrix * mv;
 }`;
 
+/* LA CAPA DE LUZ. Mismo vertex que la carne (misma geometria, mismas instancias — el patron
+   gemela del pase de ids), fragmento SIN termino difuso: el glow no tiene lado en sombra. El
+   fresnel queda —es lo que hace que el tubo emita por el borde, como un tubo de neon de verdad—
+   y la intensidad la manda uLuzA, que es el PRESUPUESTO repartido (tintaTerminal): mas terminales,
+   cada una mas tenue, misma luz total. AdditiveBlending y sin depthWrite: la luz se ACUMULA. */
+const VAINA_LUZ_F = `
+precision highp float;
+uniform float uReloj; varying float vNace; varying float vLuz;
+uniform float uLuzA; uniform vec3 uAmbar;
+varying vec3 vC; varying float vY; varying float vNod; varying float vSel; varying float vNiv;
+varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; varying float vFam;
+${ATM_VARY}
+void main(){
+  if (vNace > uReloj) discard;
+  if (vLuz < 0.5) discard;
+  vec3 nn = normalize(vNrm);
+  float fres = pow(1.0 - abs(dot(nn, normalize(vView))), 1.6);
+  // La punta se apaga como en el penacho: una terminal que corta en seco se ve cortada.
+  float punta = mix(1.0, 0.45, vY);
+  vec3 c = vC * (0.22 + 0.85 * fres) * punta * vVol * uLuzA * (1.0 + vSel * 1.4);
+  c += uAmbar * vPul * vPul * 1.2;
+  gl_FragColor = vec4(c * vFam, 1.0);
+}`;
+
 const VAINA_F = `
-uniform float uReloj; varying float vNace;
+uniform float uReloj; varying float vNace; varying float vLuz;
 precision highp float;
 // LA LUZ. Un solo direccional en espacio de cámara —arriba, a la izquierda, hacia adelante—, que
 // es la posición clásica de la luz clave. Antes la escena era fresnel puro: fresnel dibuja el
@@ -124,6 +150,7 @@ uniform vec3 uAmbar;
 ${ATM_DECL}
 void main(){
   if (vNace > uReloj) discard;
+  if (vLuz > 0.5) discard;
   // LOS INTERNODOS. la funcion fract sobre el largo da las estrías de la vaina; el valor va a 1 en el
   // estrangulamiento, que es donde está el nodo de Ranvier.
   float banda = abs(fract(vY * vNod) - 0.5) * 2.0;
@@ -308,7 +335,7 @@ precision highp float;
 const vec3 LUZ = normalize(vec3(-0.45, 0.72, 0.52));
 varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varying float vFam;
 varying vec3 vNrm; varying vec3 vView;
-uniform vec3 uAmbar;
+uniform vec3 uAmbar; uniform float uLuzA;
 ${ATM_DECL}
 void main(){
   if (vNace > uReloj) discard;
@@ -318,7 +345,7 @@ void main(){
   // La punta se APAGA hacia el final. Una ramita que termina con el mismo brillo que empieza se
   // ve cortada; el desvanecido es lo que da la sensación de que sigue más allá de lo dibujado.
   float punta = mix(1.0, 0.38, vY);
-  vec3 c = vC * (0.30 + 0.55 * dif + 0.62 * fres) * punta;
+  vec3 c = vC * (0.30 + 0.55 * dif + 0.62 * fres) * punta * uLuzA;
   c += vC * vSel * 0.9;
   c += uAmbar * vPul * vPul * 1.5;
   gl_FragColor = vec4(atmosfera(c * vFam), (0.62 + 0.38 * vSel) * punta * (0.30 + 0.70 * vFam));
@@ -604,6 +631,8 @@ export function montar(cfg) {
   gVaina.setAttribute('aSec', ASEC);
   const NACE = new Float32Array(nF * 2);
   gVaina.setAttribute('aNace', new THREE.InstancedBufferAttribute(NACE, 2));
+  const ALUZ = new Float32Array(nF);
+  gVaina.setAttribute('aLuz', new THREE.InstancedBufferAttribute(ALUZ, 1));
   // Los uniforms del impulso son UN SOLO objeto compartido por la vaina y el penacho: si fueran
   // dos, un desfase de un cuadro entre ellos partiría el frente en dos justo en la unión.
   // uAtm son los DOS EXTREMOS de la rampa de profundidad, en unidades de vista, y se recalculan
@@ -655,6 +684,18 @@ export function montar(cfg) {
     uniforms: uPulso, side: THREE.DoubleSide });
   const vainas = new THREE.InstancedMesh(gVaina, mVaina, nF);
   vainas.frustumCulled = false; mundo.add(vainas);
+  /* ── LA MALLA DE LUZ: carne y luz no pueden ser un solo material ──────────────────────────
+     El blending es por material, no por instancia: la carne es OPACA (el argumento de arriba
+     sigue en pie para los tractos) y la luz es ADITIVA. Misma geometria y mismas matrices —el
+     patron del pase de ids—, cada fragmento descarta la clase del otro. El costo es un draw call
+     y el vertice repetido; el fragmento no, porque cada pixel lo pinta una sola de las dos. */
+  const uLuzA = { value: 1 };
+  const mVainaLuz = new THREE.ShaderMaterial({ vertexShader: VAINA_V, fragmentShader: VAINA_LUZ_F,
+    uniforms: Object.assign({ uLuzA }, uPulso), side: THREE.DoubleSide,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const vainasLuz = new THREE.InstancedMesh(gVaina, mVainaLuz, nF);
+  vainasLuz.instanceMatrix = vainas.instanceMatrix;
+  vainasLuz.frustumCulled = false; vainasLuz.renderOrder = 1; mundo.add(vainasLuz);
 
   /* ── 2 · los somas: UN CUERPO CELULAR POR NEURONA ───────────────────────────────────────── */
   // Detalle 1 y no 2: son miles, y a este tamaño en pantalla la diferencia entre 80 y 320 caras no
@@ -677,6 +718,8 @@ export function montar(cfg) {
   somas.frustumCulled = false; mundo.add(somas);
 
   /* ── 4 · los botones: UNA MEMORIA CADA UNO ──────────────────────────────────────────────── */
+  const corteLuz = cfg.corteLuz != null ? cfg.corteLuz : 3;
+  let areaLuz = 0;
   let totBot = 0; for (const s of S) totBot += s.memorias.length;
   const T_MEM = new Map();
   for (const s of S) for (const m of s.memorias) if (m && m.id) T_MEM.set(m.id, tDe(m));
@@ -721,8 +764,11 @@ export function montar(cfg) {
   gPen.setAttribute('aSec', PSEC);
   const PNACE = new Float32Array(nR);
   gPen.setAttribute('aNace', new THREE.InstancedBufferAttribute(PNACE, 1));
+  // ADITIVO: las terminales son luz — es la mitad nxxcxx del look hibrido. Paga del mismo
+  // presupuesto que la capa de luz de las vainas (uLuzA multiplica en el fragmento).
   const mPen = new THREE.ShaderMaterial({ vertexShader: PENACHO_V, fragmentShader: PENACHO_F,
-    uniforms: uPulso, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+    uniforms: Object.assign({ uLuzA }, uPulso), transparent: true, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false });
   const penacho = new THREE.InstancedMesh(gPen, mPen, Math.max(1, RAM.length));
   penacho.frustumCulled = false; mundo.add(penacho);
   const PEN_DE = new Int32Array(Math.max(1, RAM.length));
@@ -821,6 +867,12 @@ export function montar(cfg) {
     DLVF[i * 4] = e.dist; DLVF[i * 4 + 1] = e.largo;
     const nc = naceEsl(e);
     NACE[i * 2] = nc[0]; NACE[i * 2 + 1] = nc[1];
+    /* CARNE O LUZ, por la CONSERVACION: fibras es monotono no creciente de la raiz a la hoja,
+       asi que fibras < corte define una FRONTERA limpia — cruzada una vez, todo el subarbol es
+       luz. Con nivel no pasa: la profundidad del crecido varia salvajemente entre ramas. */
+    const esLuz = (S[e.sec].fibras || 1) < corteLuz ? 1 : 0;
+    ALUZ[i] = esLuz;
+    if (esLuz) areaLuz += e.largo * e.r;
     // el soma nace con el ARRANQUE de su eslabón: es el cuerpo del relevo, no la punta
     SNACE[i * 2] = nc[0]; SNACE[i * 2 + 1] = nc[0];
     ACUR[i * 3] = e.curva[0]; ACUR[i * 3 + 1] = e.curva[1]; ACUR[i * 3 + 2] = e.curva[2];
@@ -924,9 +976,14 @@ export function montar(cfg) {
     PEN_DE[i] = x.seccion; PSEC.array[i] = x.seccion;
     // la ramita terminal brota cuando su sección TERMINÓ de crecer
     PNACE[i] = S[x.seccion].nace ? S[x.seccion].nace[1] : 0;
+    areaLuz += l * x.w0;
   });
 
   vainas.instanceMatrix.needsUpdate = true;
+  /* EL PRESUPUESTO SE COBRA ACA, cuando el area emitida ya se conoce: la capa de luz reparte su
+     tinta entre lo que emite — la leccion de las sinapsis contra el central, aplicada antes de
+     que muerda. El penacho tambien emite: entra al area con su propia superficie. */
+  uLuzA.value = tintaTerminal(areaLuz);
   somas.instanceMatrix.needsUpdate = true;
   botones.instanceMatrix.needsUpdate = true;
   penacho.instanceMatrix.needsUpdate = true;
