@@ -9,10 +9,10 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { extraerPersonas, neuronaDeEvento, clasificarEvento,
+import { extraerPersonas, firmanteDe, neuronaDeEvento, clasificarEvento,
          fusionarActores, mapaDeEncendido,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
-import { bosque } from './dendritas.mjs';
+import { construirRacimo } from './arbol-memoria.mjs';
 import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -146,14 +146,33 @@ function buildGraph(brain){
       ax:Math.cos(th)*Math.sin(phi)*rx*FRAC_ANCLA, ay:Math.cos(phi)*ry*FRAC_ANCLA, az:Math.sin(th)*Math.sin(phi)*rz*FRAC_ANCLA,
       ar:rx*FRAC_RADIO*Math.cbrt(counts[d]/medioRacimo)}); });
 
+  // EL ARBOL SE ARMA ACA, antes de que las neuronas tengan posicion, porque la posicion SALE de el.
+  // Detras de la firma: armarlo cuesta 85 ms sobre el central y no cambia mientras no cambie la
+  // memoria. Y va DESPUES de DOMAINS porque cada arbol crece dentro del racimo de su persona: sin
+  // el ancla y el radio del racimo no hay donde plantarlo.
+  const _fp=firmaGrafo(ns0);
+  if(_fp!==_firmaPersonas){
+    _firmaPersonas=_fp;
+    refrescarPersonas(brain);
+    const b=construirBosqueMemoria(ns0);
+    BOSQUE=b.neuronas; POSMEM=b.posiciones;
+    CENTRO_TERM=centrosDeTerminal(ns0, POSMEM);
+  }
+
   // los ids previos DE ESTA LENTE, no los de NEURONS (que todavia tiene el grafo de la otra).
   const prevIds=new Set(prev.keys());
-  NEURONS=ns0.map(n=>{ const p=prev.get(n.id); const base=p?{x:p.x,y:p.y,z:p.z}:randInBrain();
-    const r=Math.max(0.9, Math.min(6.0, 0.9+Math.sqrt(Math.max(n.importance,0))*0.72+Math.log(1+(n.heat||0))*0.38)); // tamaño del prototipo (más chico)
-    const rec=Math.max(0.10, Math.min(1, 1-(n.recency_days||0)/45));
-    // El ancla del racimo viaja EN el nodo y no en una tabla aparte: la física recorre nodos, y
-    // hacerle consultar un índice por cada uno, en cada iteración, sería el costo del layout.
+  NEURONS=ns0.map(n=>{ const p=prev.get(n.id);
     const anc=dIdx.has(n._grupo)?DOMAINS[dIdx.get(n._grupo)]:null;
+    // LA POSICIÓN SALE DEL ÁRBOL, no de un sorteo ni de la física. `randInBrain()` y el asentado
+    // con fuerzas quedaron para la lente CÓDIGO, donde el sujeto son símbolos y no hay jerarquía
+    // que ramificar. El respaldo —el centro del racimo— es para una memoria que llegue por un
+    // delta antes de que el árbol se rehaga: cae en el centro y el próximo armado la ubica.
+    const t=POSMEM.get(n.id);
+    const base=t||(anc?{x:anc.ax,y:anc.ay,z:anc.az}:{x:0,y:0,z:0});
+    // El punto se achica: dejó de flotar solo y pasó a ser el BOTÓN TERMINAL de una rama de 0,17
+    // de grosor. Con el tamaño de antes (hasta 4,4) el botón se comía el árbol entero.
+    const r=Math.max(0.40, Math.min(1.9, 0.40+Math.sqrt(Math.max(n.importance,0))*0.34+Math.log(1+(n.heat||0))*0.20));
+    const rec=Math.max(0.10, Math.min(1, 1-(n.recency_days||0)/45));
     return {...n, x:base.x,y:base.y,z:base.z, vx:0,vy:0,vz:0, r, rec, col:domColor(n._grupo),
       gx:anc?anc.ax:0, gy:anc?anc.ay:0, gz:anc?anc.az:0, gr:anc?anc.ar:0,
       ph:(p&&p.ph!=null)?p.ph:Math.random()*6.283, phx:Math.random()*6.283, phz:Math.random()*6.283,
@@ -183,12 +202,15 @@ function buildGraph(brain){
   // El asentado ya NO congela: se reparte en trozos de pocos ms por frame (ver settleTick).
   // POS se siembra igual ahora —asi la proxima vez arranca de donde quedo— y se re-siembra al
   // terminar de asentar, que es cuando las posiciones son las buenas.
-  const _fp=firmaPersonas();
-  if(_fp!==_firmaPersonas){ _firmaPersonas=_fp; refrescarPersonas(brain); }
+  // NO HAY ASENTADO. La posición es determinista y ya está: no hay nada que relajar. Se va con eso
+  // el tirón del layout y también la deriva —dos cargas del mismo grafo dan el mismo dibujo—.
+  //
+  // Lo que se PIERDE y hay que decirlo: la física tiraba de lo relacionado y lo dejaba cerca. Ahora
+  // la posición la manda el tema o el tiempo, así que las sinapsis cruzan más espacio. Es el precio
+  // de que la rama signifique algo.
   POS.memory=new Map(NEURONS.map(n=>[n.id,{x:n.x,y:n.y,z:n.z,ph:n.ph}]));
-  const its=iterParaCambio(NEURONS.length, nuevos, ASENTADO.memory);
-  if(its>0){ arrancarAsentado(its,'memory'); needsRebuild=true; }
-  else if(changed) needsRebuild=true;   // cambio la topologia sin nodos nuevos: recrear las mallas
+  ASENTADO.memory=true;
+  if(changed) needsRebuild=true;
 }
 
 // buildCodeGraph: la LENTE CÓDIGO (Track 20). Mapea el grafo de código a los MISMOS campos que
@@ -304,15 +326,27 @@ const FRAG=['precision highp float;','uniform float uTime;',
 //      esto habría que emitir un cilindro cónico por segmento, o sea 22.000 geometrías.
 //   2. EL IMPULSO viaja por `aGlow`, que JS escribe por frame igual que en las aristas. No hay un
 //      bucle que lo fabrique: se enciende cuando llega un evento del riel.
-const DGEO=new THREE.CylinderGeometry(1,1,1,5,1,true);
+// 5 tramos a lo ALTO (el segundo 5) y no uno: sin ellos el cilindro no tiene por donde doblarse y
+// la panza no existe. Son 5 radiales x 6 anillos = 30 vertices por instancia contra 10 — el costo de
+// la curva es ese, y no una instancia mas: partir cada rama en tres tramos habria triplicado las
+// 6.000 instancias.
+const DGEO=new THREE.CylinderGeometry(1,1,1,5,5,true);
 // El shader va como template literal y no como array + join: GLSL acepta los saltos reales, y
 // asi el fuente se lee igual que el shader que corre.
 const DVERT=`
 attribute vec3 aColor; attribute float aTaper; attribute float aGlow; attribute float aBase; attribute float aWarn;
+attribute vec3 aCurva;
 varying vec3 vColor; varying float vGlow; varying float vBase; varying float vY; varying float vWarn;
 void main(){ vColor=aColor; vGlow=aGlow; vBase=aBase; vWarn=aWarn; vY=position.y+0.5;
   vec3 p=position; p.xz*=mix(1.0,aTaper,vY);
-  gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(p,1.0); }
+  // LA PANZA. Se aplica DESPUES de instanceMatrix porque aCurva viene en las coordenadas del
+  // arbol, no del cilindro: el marco local del cilindro lo arma el renderer con un giro arbitrario
+  // alrededor del eje, asi que la misma curva daria una panza distinta en cada reconstruccion.
+  // El seno la deja en cero en los dos extremos: la rama se arquea pero sigue naciendo y muriendo
+  // donde manda el dato — la punta no se despega de la memoria que representa.
+  vec4 wp=instanceMatrix*vec4(p,1.0);
+  wp.xyz+=aCurva*sin(vY*3.14159265);
+  gl_Position=projectionMatrix*modelViewMatrix*wp; }
 `;
 // El brillo cae hacia la punta: una dendrita real se apaga en los extremos, y sin eso las
 // puntas finas quedan como un halo de polvo blanco alrededor del arbol.
@@ -328,6 +362,38 @@ void main(){ float i=vBase+vGlow*(1.0-0.35*vY);
   // con el ambar palido del HUD sobre un medio aditivo es casi blanco (ver impulsos.mjs).
   c=mix(c, vec3(${AMBAR_FRENTE.join(", ")}), vWarn);
   gl_FragColor=vec4(c*i,i); }
+`;
+
+// ── EL CAMPO ─────────────────────────────────────────────────────────────────────────────────
+// Un halo por neurona. NO ES DECORACION: es como se ven las senales de uso. Su intensidad sale de
+// `campo` —la suma de la fuerza de los frentes VIVOS de esa neurona— y de nada mas. Sin llamada no
+// hay campo, y con `aCampo` en cero el fragmento sale NEGRO, que sobre blending aditivo es
+// exactamente invisible: la regla no depende de acordarse de apagarlo.
+//
+// Es un CARTEL (billboard) y no una esfera: una esfera con caida radial se ve igual desde cualquier
+// lado pero cuesta geometria y se mete adentro de las ramas; el cartel siempre mira a la camara y
+// son cuatro vertices.
+const AGEO=new THREE.PlaneGeometry(1,1);
+const AVERT=`
+attribute vec3 aColor; attribute float aRadio; attribute float aCampo;
+varying vec2 vUv; varying vec3 vColor; varying float vCampo;
+void main(){ vUv=uv; vColor=aColor; vCampo=aCampo;
+  // el centro de la instancia en espacio de camara, y el cartel se abre ahi: asi encara siempre
+  vec4 c=modelViewMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0);
+  c.xy+=position.xy*aRadio;
+  gl_Position=projectionMatrix*c; }
+`;
+const AFRAG=`
+precision highp float;
+varying vec2 vUv; varying vec3 vColor; varying float vCampo;
+void main(){
+  float d=length(vUv*2.0-1.0);
+  if(d>1.0) discard;
+  // La caida es fuerte a proposito (exponente alto): un halo plano se lee como una mancha y tapa
+  // el arbol que uno fue a mirar. Asi queda denso junto al soma y se disuelve antes del borde.
+  float k=pow(max(0.0,1.0-d),2.6);
+  float i=k*vCampo;
+  gl_FragColor=vec4(vColor*i,i); }
 `;
 
 // post: MSAA + bloom + SMAA
@@ -351,14 +417,23 @@ let edgeInst=null, edgeMat=null, ECOL=null, ESPD=null, EGLW=null, EBAS=null;
 // instancia i y a qué distancia del soma está, medida A LO LARGO de la rama. Con eso, escribir el
 // brillo de las 12.010 instancias es un solo barrido lineal sin bajar por ninguna estructura
 // anidada — que es lo que permite hacerlo por frame sin salirse del presupuesto.
-let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null;
+let denInst=null, denMat=null, somaInst=null, DCOL=null, DGLW=null, DBAS=null, DTAP=null, DWARN=null, DCURV=null;
+let auraInst=null, auraMat=null, ACAMPO=null;
+// DESPACHOS: los axones entre terminales. Malla aparte de las sinapsis porque son otra cosa — una
+// sinapsis une dos NOTAS, un despacho une dos PERSONAS que se escribieron.
+let despInst=null, despMat=null, DESPGLW=null, DESPRAC=null;
+let CENTRO_TERM=new Map();
 let BOSQUE=[], DDIST=null, DTRONCO=null, DALC=null, DRAD=null;
-// TRONCO_DE traduce el id de una terminal al índice de su árbol. Es la última milla del camino
-// `principal` -> persona -> terminal -> árbol, y sin ella un evento real no tiene dónde caer.
-let TRONCO_DE=new Map();
-// DESPACHOS: los axones entre terminales. Van en su propia malla y no con las sinapsis de la
-// memoria porque son otra cosa — una sinapsis une dos NOTAS, un despacho une dos PERSONAS.
-let despInst=null, despMat=null;
+// POSMEM: la posición de cada memoria, que ahora SALE DEL ÁRBOL. Es el reemplazo de `randInBrain()`.
+let POSMEM=new Map();
+// NEURONAS_DE traduce un RACIMO a los índices de sus neuronas. Es la última milla del camino
+// `principal` -> persona -> racimo -> árboles.
+//
+// Antes el destino era una terminal y ahora es el racimo entero, y el motivo es medido: sólo el
+// 7,5 % de las notas del central están firmadas por una terminal, así que las neuronas ya no son
+// terminales sino tramos del árbol de temas. Lo que una llamada de `gio` dice con certeza es «esto
+// lo hizo gio»; repartirlo a UNA de sus neuronas sería elegir a dedo. Enciende su racimo.
+let NEURONAS_DE=new Map();
 // El registro de pulsos vivos. NO hay ningún bucle que los fabrique: `impulsar()` es la única
 // puerta, y la llama el riel cuando llega una invocación de verdad (ver impulsos.mjs).
 const IMPULSOS=crearImpulsos();
@@ -387,49 +462,83 @@ function disposeMeshes(){ if(inst){ world.remove(inst); inst=null; }
   if(denMat){ denMat.dispose(); denMat=null; }
   if(despInst){ world.remove(despInst); despInst.geometry.dispose(); despInst=null; }
   if(despMat){ despMat.dispose(); despMat=null; }
-  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DDIST=DTRONCO=DALC=DRAD=null;
-  TRONCO_DE=new Map(); }
+  DESPGLW=DESPRAC=null;
+  if(auraInst){ world.remove(auraInst); auraInst.geometry.dispose(); auraInst=null; }
+  if(auraMat){ auraMat.dispose(); auraMat=null; }
+  ACAMPO=null;
+  ECOL=ESPD=EGLW=EBAS=null; DCOL=DGLW=DBAS=DTAP=DWARN=DCURV=DDIST=DTRONCO=DALC=DRAD=null;
+  NEURONAS_DE=new Map(); }
 // OJO: `BOSQUE` NO se limpia acá. Es DATO —la geometría de los árboles, que arma buildGraph—, no
 // una malla. Limpiarlo desde disposeMeshes lo borraba justo antes de usarlo, porque
 // rebuildMeshes() empieza llamando a disposeMeshes(): el bosque se armaba con 12.010 segmentos y
 // llegaba vacío al constructor de la malla. Sin excepción y sin dendritas.
 
-// construirBosque: los TRONCOS de la escena. Una neurona con dendritas por cada TERMINAL, dentro
-// del racimo de su persona.
-//
-// Los racimos que no son personas —libro mayor, sin atribuir— NO llevan tronco, y es lo correcto:
-// nadie los firma, así que no hay neurona que dibujar. Fabricarles una sería inventar un autor.
 const _qd=new THREE.Quaternion(), _va=new THREE.Vector3(), _vb=new THREE.Vector3(), _vd=new THREE.Vector3();
 const _UP=new THREE.Vector3(0,1,0);
-function construirBosque(terminales){
-  // Cada tronco se lleva su terminal entera. La geometria no la necesita —`dendritas.mjs` sólo
-  // quiere id, notas y centro— pero el tooltip sí: sin esto, pasarle el mouse a una neurona no
-  // podria decir a quien le escribe ni cuantas llamadas hizo, que es la mitad de lo que había
-  // que mirar. Se cuelga acá y no en `bosque()` para que ese modulo siga siendo matematica pura.
-  const porId=new Map(terminales.map(t=>[t.id,t]));
-  const porPersona=new Map();
-  for(const t of terminales){ const p=t.persona||''; if(!p) continue;
-    if(!porPersona.has(p)) porPersona.set(p,[]); porPersona.get(p).push({id:t.id, notas:t.notas}); }
-  const racimos=DOMAINS.filter(d=>porPersona.has(d.name)).map(d=>({
-    persona:d.name, color:d.color, centro:[d.ax,d.ay,d.az], radio:d.ar,
-    troncos:porPersona.get(d.name).slice().sort((a,b)=>b.notas-a.notas),
-  }));
-  // La escala ata el tamaño del árbol al del racimo: sin esto, un racimo chico tendría el mismo
-  // árbol que uno grande y se le saldría por los bordes.
-  const R=racimos.length?racimos.reduce((s2,r)=>s2+r.radio,0)/racimos.length:60;
-  const { troncos } = bosque(racimos, { escala:Math.max(0.6, R/34), topePorArbol:2200 });
-  return troncos.map(t=>({ ...t, term:porId.get(t.id)||null }));
+// construirBosqueMemoria: EL ÁRBOL DE CADA RACIMO, y acá está el cambio de fondo — las memorias
+// dejan de ser puntos sorteados dentro de una esfera y pasan a ser las PUNTAS de la dendrita.
+//
+// La forma ya no sale de un PRNG: sale del dato (ver `arbol-memoria.mjs`). Lo único que se elige acá
+// es la ESCALA — cuánto mide el primer tramo— y se elige contra el radio del racimo: el camino
+// total de una rama es del orden de seis veces el primer tramo, así que con `ar/6` el árbol llega
+// justo al borde de su racimo y no se mete en el de al lado.
+function construirBosqueMemoria(ns0){
+  const porRacimo=new Map();
+  for(const n of ns0){ const k=n._grupo; if(!porRacimo.has(k)) porRacimo.set(k,[]); porRacimo.get(k).push(n); }
+  const neuronas=[], posiciones=new Map();
+  let semilla=13;
+  for(const d of DOMAINS){
+    const ms=porRacimo.get(d.name)||[]; if(!ms.length) continue;
+    const r=construirRacimo(ms, { centro:[d.ax,d.ay,d.az], radio:d.ar,
+      // La ESCALA sale medida, no a ojo: con `ar/54` el alcance del árbol da 73 en un racimo de
+      // radio 77, o sea llena su racimo y no se mete en el de al lado.
+      // El GROSOR también: con `radioHoja:0.55` el tronco salía 5,8 —el 8 % del radio del racimo—
+      // y el árbol se leía como coral, no como dendrita. A 0,17 el tronco queda en ~1,8 sobre un
+      // alcance de 73: relación 1:40, que es la de una dendrita de verdad.
+      escala:Math.max(0.25, d.ar/54), radioHoja:0.17, semilla:(semilla+=577), min:30, max:150 });
+    for(const [id,p] of r.posiciones) posiciones.set(id,p);
+    r.neuronas.forEach((nu,k)=>neuronas.push({ ...nu, id:d.name+'#'+k, color:d.color, racimo:d.name }));
+  }
+  return { neuronas, posiciones };
 }
+
+// centrosDeTerminal: DÓNDE ESTÁ cada terminal en la escena, ahora que ya no es una neurona.
+//
+// Es el centroide de las puntas de las memorias que ESA TERMINAL FIRMÓ. No es una posición
+// elegida: sale del mismo hecho del texto que se usa para contar cuántas firmó, así que el punto
+// y el número no pueden discrepar. Y es lo que le devuelve un cuerpo al despacho: un axón necesita
+// dos extremos, y sin esto el 89 % de los despachos —los que van entre dos terminales de la misma
+// persona— no tenían dónde empezar ni dónde terminar.
+//
+// Una terminal que nunca firmó no aparece, y eso es correcto: nombrarla no es escribir.
+function centrosDeTerminal(ns0, posiciones){
+  const acum=new Map();
+  for(const n of ns0){
+    const r=firmanteDe(n); if(!r) continue;
+    const p=posiciones.get(n.id); if(!p) continue;
+    let a=acum.get(r); if(!a){ a={x:0,y:0,z:0,n:0}; acum.set(r,a); }
+    a.x+=p.x; a.y+=p.y; a.z+=p.z; a.n++;
+  }
+  const out=new Map();
+  for(const [r,a] of acum) out.set(r,{x:a.x/a.n, y:a.y/a.n, z:a.z/a.n, notas:a.n});
+  return out;
+}
+
 
 // refrescarEncendido: el mapa `principal` -> terminal. Se rehace aparte del grafo porque su otra
 // mitad —el censo de actores— llega por su propio camino y varios segundos después: sin esto, los
 // eventos que caen en una persona por su credencial de servicio (`davantis-crm`, `crm-cabina`) se
 // contarían como sin neurona hasta el siguiente rearmado del grafo.
+// RACIMO_DE: de una TERMINAL al racimo donde vive. `personaDe()` no alcanza: el racimo puede ser el
+// libro mayor, y una terminal cuya persona no tiene racimo propio no enciende nada.
+let RACIMO_DE=new Map();
+
 function refrescarEncendido(){
   if(!PERSONAS) return;
   const fus=fusionarActores(PERSONAS.terminales, CENSO && CENSO.censo);
   PERSONAS.actores=fus.actores; PERSONAS.sinDeclarar=fus.sinDeclarar; PERSONAS.censo=CENSO;
   ENCENDIDO=mapaDeEncendido(PERSONAS.terminales, fus.actores);
+  RACIMO_DE=new Map(PERSONAS.terminales.map(t=>[t.id, t.persona||'']));
 }
 
 // refrescarPersonas: las cuatro cosas que salen de quién firma la memoria — las terminales, sus
@@ -445,12 +554,13 @@ function refrescarEncendido(){
 // del de sus notas, y con una firma que solo mirara cuantas hay, ese numero se congelaba hasta que
 // entrara una memoria nueva. El tooltip diria un calor viejo sin que nada avisara.
 let _firmaPersonas='';
-function firmaPersonas(){ let h=0; for(const n of NEURONS) h+=n.heat||0; return NEURONS.length+':'+h; }
+// Mira `ns0` —el grafo crudo— y no NEURONS, porque la firma se consulta ANTES de que NEURONS
+// exista: la posición de cada neurona sale del árbol, así que el árbol tiene que estar primero.
+function firmaGrafo(ns0){ let h=0; for(const n of ns0) h+=n.heat||0; return ns0.length+':'+h; }
 
 function refrescarPersonas(brain){
   PERSONAS=extraerPersonas(brain);
   refrescarEncendido();
-  BOSQUE=construirBosque(PERSONAS.terminales);
   return PERSONAS;
 }
 
@@ -465,18 +575,19 @@ function rebuildDendritas(){
   if(!total) return;
   DCOL=new Float32Array(total*3); DGLW=new Float32Array(total); DBAS=new Float32Array(total);
   DTAP=new Float32Array(total); DDIST=new Float32Array(total); DTRONCO=new Int32Array(total);
-  DWARN=new Float32Array(total);
+  DWARN=new Float32Array(total); DCURV=new Float32Array(total*3);
   // El alcance de cada árbol se copia a un array plano: el frente del impulso se calcula contra
   // él una vez por tronco y por frame, y buscarlo en BOSQUE adentro del bucle grande sería
   // bajar por un objeto doce mil veces para leer siempre el mismo número.
   DALC=new Float32Array(BOSQUE.length); DRAD=new Float32Array(BOSQUE.length);
-  TRONCO_DE=new Map();
+  NEURONAS_DE=new Map();
   const geo=DGEO.clone();
   geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(DCOL,3));
   geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DGLW,1));
   geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(DBAS,1));
   geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(DTAP,1));
   geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(DWARN,1));
+  geo.setAttribute('aCurva', new THREE.InstancedBufferAttribute(DCURV,3));
   denMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
     transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
   denInst=new THREE.InstancedMesh(geo, denMat, total);
@@ -488,7 +599,9 @@ function rebuildDendritas(){
   // clase, y atribuyendole la llamada a quien no fue.
   IMPULSOS.limpiar();
   BOSQUE.forEach((tr,ti)=>{ _c.set(tr.color||'#7f9cc9');
-    TRONCO_DE.set(tr.id, ti); DALC[ti]=tr.alcanceRama||1; DRAD[ti]=tr.rSoma||1;
+    if(!NEURONAS_DE.has(tr.racimo)) NEURONAS_DE.set(tr.racimo, []);
+    NEURONAS_DE.get(tr.racimo).push(ti);
+    DALC[ti]=tr.alcanceRama||1; DRAD[ti]=tr.rSoma||1;
     for(const sg of tr.segs){
       _va.set(sg.a[0],sg.a[1],sg.a[2]); _vb.set(sg.b[0],sg.b[1],sg.b[2]);
       _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
@@ -499,7 +612,15 @@ function rebuildDendritas(){
       DTAP[i]=Math.max(0.05, sg.w1/sg.w0);
       // El brillo en reposo cae con el nivel: el tronco se ve y las puntas se insinúan. Plano,
       // el árbol se lee como una maraña de alambre del mismo peso.
-      DBAS[i]=Math.max(0.09, 0.62*Math.pow(0.74,sg.nivel));
+      //
+      // Y ARRANCA BAJO. Con 0,62 en el nivel 0 el árbol entero saturaba a blanco: son ramas que se
+      // superponen sobre blending ADITIVO y con bloom encima, así que el brillo se suma tres veces
+      // antes de llegar al ojo. El color del racimo desaparecía — cuatro racimos, todos blancos.
+      // El decaimiento tiene que ser SUAVE, no el 0,74 que servia para un arbol decorativo de 4-5
+      // niveles: este tiene 10, y con esa caida el 80 % de las ramas —que son las puntas, donde
+      // estan las memorias— quedaba por debajo del piso y el arbol se veia como cuatro palitos.
+      DBAS[i]=Math.max(0.17, 0.52*Math.pow(0.90,sg.nivel));
+      if(sg.curva){ DCURV[i*3]=sg.curva[0]; DCURV[i*3+1]=sg.curva[1]; DCURV[i*3+2]=sg.curva[2]; }
       DDIST[i]=sg.dist; DTRONCO[i]=ti; DGLW[i]=0; i++;
     } });
   denInst.instanceMatrix.needsUpdate=true;
@@ -514,64 +635,108 @@ function rebuildDendritas(){
   denSucio=true;   // buffers recién creados: el primer frame tiene que subirlos
   somaInst.instanceMatrix.needsUpdate=true; if(somaInst.instanceColor) somaInst.instanceColor.needsUpdate=true;
   world.add(somaInst);
+
+  // EL CAMPO de cada neurona. Nace en cero — o sea invisible — y sólo lo enciende un evento real.
+  const acol=new Float32Array(BOSQUE.length*3), arad=new Float32Array(BOSQUE.length);
+  ACAMPO=new Float32Array(BOSQUE.length);
+  const ageo=AGEO.clone();
+  ageo.setAttribute('aColor', new THREE.InstancedBufferAttribute(acol,3));
+  ageo.setAttribute('aRadio', new THREE.InstancedBufferAttribute(arad,1));
+  ageo.setAttribute('aCampo', new THREE.InstancedBufferAttribute(ACAMPO,1));
+  auraMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:AVERT, fragmentShader:AFRAG,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, depthTest:false });
+  auraInst=new THREE.InstancedMesh(ageo, auraMat, BOSQUE.length);
+  auraInst.frustumCulled=false;
+  BOSQUE.forEach((tr,k)=>{
+    _m.compose(_pos.set(tr.centro[0],tr.centro[1],tr.centro[2]), new THREE.Quaternion(), _scl.setScalar(1));
+    auraInst.setMatrixAt(k,_m);
+    _c.set(tr.color||'#7f9cc9'); acol[k*3]=_c.r; acol[k*3+1]=_c.g; acol[k*3+2]=_c.b;
+    // El halo envuelve al ÁRBOL, no al soma: su radio sale del alcance de la neurona. Atado al
+    // soma sería una bolita en el medio de una mata de ramas apagadas.
+    arad[k]=(tr.alcance||10)*2.3;
+  });
+  auraInst.instanceMatrix.needsUpdate=true;
+  world.add(auraInst);
   rebuildDespachos();
 }
 
-// rebuildDespachos: los axones entre terminales, de quien escribe a quien se le escribe.
+// rebuildDespachos: el axón de cada par de terminales que se escribieron.
 //
-// SON ESTÁTICOS, y esa es la decisión: un despacho no es un evento en vivo sino un hecho de la
-// memoria (una nota firmada por A y dirigida a B). Ponerle una luz viajando sería exactamente el
-// bucle inventado que este rediseño vino a sacar — se vería igual de vivo con el cerebro apagado.
-// Lo que sí sale del dato: la dirección y el grosor.
+// SE DIBUJAN TODOS, no sólo los que cruzan personas. Medido: de los 152 despachos del cerebro
+// local, 135 —el 89 %— van entre dos terminales de la MISMA persona. Quedarse con los que cruzan
+// habría dejado dos arcos en pantalla y escondido casi todo, que es mentir por omisión.
 //
-// La DIRECCIÓN se dibuja con el adelgazamiento del shader de dendritas, que ya está: el axón nace
-// grueso en quien escribe y termina fino en quien recibe. Sin eso, un axón es una línea y una
-// línea no tiene lado; con una punta de flecha habría que orientar un triángulo por instancia
-// contra la cámara, y eso se recalcula en cada giro.
+// Son ESTÁTICOS en su forma: un despacho no es un evento en vivo sino un hecho de la memoria (una
+// nota firmada por A y dirigida a B). Lo que sí es vivo es lo que CONDUCEN — se encienden cuando
+// hay campo en alguno de sus dos extremos, que es el uso real pasando por ahí.
 function rebuildDespachos(){
   const ds=(PERSONAS&&PERSONAS.despachos)||[];
-  const pares=[];
+  const arcos=[];
   for(const d of ds){
-    const a=TRONCO_DE.get(d.de), b=TRONCO_DE.get(d.a);
-    // Un despacho a alguien que no tiene árbol no se dibuja ni se acomoda a otro lado: la nota
-    // existe, pero la terminal destino no está en esta escena y colgarla de la más cercana sería
-    // inventar el destinatario.
-    if(a===undefined||b===undefined||a===b) continue;
-    pares.push({a, b, veces:Math.max(1, Number(d.veces)||1), cruza:BOSQUE[a].persona!==BOSQUE[b].persona});
+    const A=CENTRO_TERM.get(d.de), B=CENTRO_TERM.get(d.a);
+    // Una terminal que no firmó nada no tiene cuerpo. El despacho existe —la nota lo dice— pero no
+    // hay dónde anclarlo, y ponerlo en el centro del racimo sería inventarle una posición.
+    if(!A||!B) continue;
+    const ra=RACIMO_DE.get(d.de)||'', rb=RACIMO_DE.get(d.a)||'';
+    arcos.push({A,B,veces:Math.max(1,Number(d.veces)||1), cruza:ra!==rb, ra, rb});
   }
-  if(!pares.length) return;
-  const col=new Float32Array(pares.length*3), glw=new Float32Array(pares.length),
-        bas=new Float32Array(pares.length), tap=new Float32Array(pares.length),
-        wrn=new Float32Array(pares.length);
+  if(!arcos.length) return;
+  const col=new Float32Array(arcos.length*3), tap=new Float32Array(arcos.length),
+        bas=new Float32Array(arcos.length), wrn=new Float32Array(arcos.length),
+        cur=new Float32Array(arcos.length*3);
+  DESPGLW=new Float32Array(arcos.length);
+  DESPRAC=new Array(arcos.length);
   const geo=DGEO.clone();
   geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(col,3));
-  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(glw,1));
+  geo.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(DESPGLW,1));
   geo.setAttribute('aBase',  new THREE.InstancedBufferAttribute(bas,1));
   geo.setAttribute('aTaper', new THREE.InstancedBufferAttribute(tap,1));
   geo.setAttribute('aWarn',  new THREE.InstancedBufferAttribute(wrn,1));
+  geo.setAttribute('aCurva', new THREE.InstancedBufferAttribute(cur,3));
   despMat=new THREE.ShaderMaterial({ uniforms:{}, vertexShader:DVERT, fragmentShader:DFRAG,
     transparent:true, blending:THREE.AdditiveBlending, depthWrite:false });
-  despInst=new THREE.InstancedMesh(geo, despMat, pares.length);
+  despInst=new THREE.InstancedMesh(geo, despMat, arcos.length);
   despInst.frustumCulled=false;
-  // El grosor va en LOG sobre `veces`: el reparto medido va de 1 a 21, y en lineal el par más
-  // escrito sería veintiún veces más gordo que el resto y taparía media escena.
-  pares.forEach((p,i)=>{
-    const A=BOSQUE[p.a], B=BOSQUE[p.b];
-    _va.set(A.centro[0],A.centro[1],A.centro[2]); _vb.set(B.centro[0],B.centro[1],B.centro[2]);
+  arcos.forEach((x,i)=>{
+    _va.set(x.A.x,x.A.y,x.A.z); _vb.set(x.B.x,x.B.y,x.B.z);
     _vd.subVectors(_vb,_va); const len=_vd.length()||0.001;
     _qd.setFromUnitVectors(_UP,_vd.normalize());
-    const r=0.35+Math.log(1+p.veces)*0.30;
+    // El grosor va en LOG sobre `veces`: el reparto medido va de 1 a 21, y en lineal el par más
+    // escrito sería veintiún veces más gordo que el resto y taparía media escena.
+    const r=0.09+Math.log(1+x.veces)*0.09;
     _m.compose(_pos.copy(_va).addScaledVector(_vd,len*0.5), _qd, _scl.set(r,len,r));
     despInst.setMatrixAt(i,_m);
-    _c.set(p.cruza?COLOR_CRUCE:COLOR_DESPACHO);
+    _c.set(x.cruza?COLOR_CRUCE:COLOR_DESPACHO);
     col[i*3]=_c.r; col[i*3+1]=_c.g; col[i*3+2]=_c.b;
-    tap[i]=0.22;   // nace grueso en quien escribe, termina fino en quien recibe
-    bas[i]=p.cruza?0.34:0.20;
-    glw[i]=0; wrn[i]=0;
+    // ARQUEADO, y hacia lados opuestos según la dirección: A->B y B->A son dos despachos
+    // distintos, y con los dos rectos quedaban uno encima del otro y se leían como uno solo.
+    // `cross(dir, arriba)` cambia de signo al invertir `dir`, así que la separación sale sola.
+    const px=_vd.z*1, py=0, pz=-_vd.x;
+    const pl=Math.hypot(px,py,pz)||1;
+    const k=len*0.16;
+    cur[i*3]=px/pl*k; cur[i*3+1]=py/pl*k; cur[i*3+2]=pz/pl*k;
+    // Nace grueso en quien escribe y termina fino en quien recibe: es la dirección, sin una punta
+    // de flecha que habría que orientar contra la cámara en cada giro.
+    tap[i]=0.20;
+    // TENUES en reposo. Con 0,30 los 27 axones se leian mas fuerte que los arboles y la escena
+    // pasaba a ser un manojo de cables con dendritas de fondo — al reves de lo que dice.
+    bas[i]=x.cruza?0.15:0.085;
+    DESPRAC[i]=[x.ra,x.rb];
   });
   despInst.instanceMatrix.needsUpdate=true;
   world.add(despInst);
 }
+
+// LOS DESPACHOS QUEDARON SIN CUERPO DEL QUE COLGAR, y por eso no se dibujan en esta fase.
+//
+// Un despacho va de una TERMINAL a otra, y las terminales ya no son neuronas: con sólo el 7,5 % de
+// las notas firmadas, las neuronas pasaron a ser tramos del árbol de temas. Colgar el axón de una
+// neurona cualquiera del racimo sería elegir a dedo de dónde sale, que es exactamente el invento
+// que este dibujo no hace.
+//
+// Vuelven como líneas de campo entre RACIMOS —que sí tienen cuerpo— con el resto del campo. La
+// leyenda los sigue contando («27 pares se escriben · 152 despachos») para que su ausencia del
+// dibujo no se lea como que no existen.
 
 function rebuildMeshes(){
   disposeMeshes(); N=NEURONS.length; if(!N) return;
@@ -600,15 +765,27 @@ function rebuildMeshes(){
     edgeInst=new THREE.InstancedMesh(geo, edgeMat, E);
     edgeInst.frustumCulled=false;   // la malla envuelve todo el cerebro: cullearla por su bbox la haría desaparecer entera
     for(let i=0;i<E;i++){ const s=SYN[i]; ADJ[s.a].push(s.b); ADJ[s.b].push(s.a);
-      s.__i=i; s.__r=0.28+(s.confidence||0)*0.5;
+      // MÁS FINAS que las ramas, no más gordas. Con 0,28-0,78 una sinapsis era el doble de gruesa
+      // que la rama que tocaba, y 3.430 de esas tapan el árbol que uno fue a mirar.
       _c.set(edgeBase(s)); ECOL[i*3]=_c.r; ECOL[i*3+1]=_c.g; ECOL[i*3+2]=_c.b;
-      ESPD[i]=0.42+(s.confidence||0)*0.5; EGLW[i]=0.55; EBAS[i]=0.06; }
+      // EN REPOSO NO VIAJA NADA. `aGlow` en cero apaga la banda del shader y deja sólo la línea
+      // tenue. Antes la luz recorría los axones para siempre, sin que hubiera pasado nada — es el
+      // mismo bucle inventado que este rediseño sacó de la lente de personas, y había quedado vivo
+      // acá. La banda vuelve sola cuando `thinking` sube, y `thinking` sube por deltas REALES.
+      // La base tiene que ALCANZAR PARA VERSE. Con 0,05 las 586 relaciones del grafo local no
+      // dibujaban un solo pixel: el panel decia «las lineas son relaciones» y no habia ninguna
+      // linea, que es mentir por omision. A 0,17 se leen como un tejido tenue entre los arboles.
+      ESPD[i]=0.42+(s.confidence||0)*0.5; EGLW[i]=0; EBAS[i]=0.17; }
     world.add(edgeInst);
   } else {
     for(const s of SYN){ ADJ[s.a].push(s.b); ADJ[s.b].push(s.a); }
   }
   rebuildDendritas();
-  if(!framed && N){ let mr=0; for(const n of NEURONS){ const d=Math.hypot(n.x,n.y,n.z); if(d>mr)mr=d; } camera.position.set(0,20,Math.max(240,mr*2.7)); framed=true; }
+  // ENCUADRE, y es POR LENTE. La esfera de codigo se mira desde lejos porque su borde es liso y
+  // llenar el cuadro con ella la desborda; el arbol tiene el detalle en las puntas y pide estar
+  // cerca. Un solo numero servia cuando las dos lentes dibujaban una esfera.
+  if(!framed && N){ let mr=0; for(const n of NEURONS){ const d=Math.hypot(n.x,n.y,n.z); if(d>mr)mr=d; }
+    camera.position.set(0,20,Math.max(200, mr*(lens==='code'?2.7:1.85))); framed=true; }
   needsRebuild=false;
 }
 
@@ -632,7 +809,7 @@ function hover(){ if(drag>=0 || !inst){ tip.classList.remove('on'); return; } ra
   // instancias.
   if(somaInst){ const hs=ray.intersectObject(somaInst);
     if(hs.length){ const tr=BOSQUE[hs[0].instanceId];
-      if(tr&&tr.term){ tipTerminal(tr.term, mx, my); return; } } }
+      if(tr){ tipNeurona(tr, mx, my); return; } } }
   const hit=ray.intersectObject(inst);
   if(hit.length){ const n=NEURONS[hit[0].instanceId]; tip.querySelector('.tt').textContent=n.topic||n.domain;
     if(n._code){
@@ -657,7 +834,18 @@ async function fetchExplain(n){ if(n._exp!==undefined || n._expLoading) return; 
   catch(_){ n._exp=[]; } finally{ n._expLoading=false; } }
 
 /* ---------- loop ---------- */
-const AMP=2.4;
+// AMP: la amplitud del vaiven de cada nodo. En la lente MEMORIA es CERO y no es una decision de
+// gusto: la memoria ahora es la PUNTA de una rama, y la rama es geometria fija. Con el vaiven
+// puesto, el punto se despega de su rama y el dibujo deja de decir lo que dice.
+//
+// Efecto lateral bueno: sin movimiento, el bucle por nodo y por arista no reescribe nada en reposo
+// (ya habia un guardia para eso) — o sea que el 98 % de los frames dejan de tocar 2.219 matrices.
+// Se DERIVA de la lente en cada cuadro y no se guarda en una variable que alguien tenga que
+// acordarse de poner al dia: estaba en `setLens`, que en una carga limpia NO CORRE —sin `?lens=`
+// nadie la llama—, asi que la lente memoria arrancaba respirando y las memorias se despegaban de
+// sus ramas. El valor de fallo era el estado normal.
+const AMP_CODIGO=2.4;
+const vaiven=()=>(motion && lens==='code') ? AMP_CODIGO : 0;
 /* ---------- MEDIDOR (opt-in con ?stats=1) ----------
    Existe porque "se siente pesado" no es una medicion. `renderer.info.reset()` ya se llamaba
    todos los frames y NADIE leia renderer.info: la mitad del plumbing estaba puesta.
@@ -687,21 +875,25 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
     // objetivo de arrastre (coords locales)
     if(drag>=0){ ray.setFromCamera(ptr,camera); if(ray.ray.intersectPlane(_plane,_dt)) world.worldToLocal(_dt); else drag=-1; }
     let Dkx=0,Dky=0,Dkz=0;
-    if(drag>=0){ const fx=BX[drag]+Math.sin(t*0.5+PHX[drag])*AMP, fy=BY[drag]+Math.sin(t*0.44+PHY[drag])*AMP, fz=BZ[drag]+Math.sin(t*0.57+PHZ[drag])*AMP;
+    const dr=vaiven();
+    if(drag>=0){ const fx=BX[drag]+Math.sin(t*0.5+PHX[drag])*dr, fy=BY[drag]+Math.sin(t*0.44+PHY[drag])*dr, fz=BZ[drag]+Math.sin(t*0.57+PHZ[drag])*dr;
       Dkx=_dt.x-fx; Dky=_dt.y-fy; Dkz=_dt.z-fz; GX[drag]=Dkx; GY[drag]=Dky; GZ[drag]=Dkz; }
     // ¿SE MOVIÓ ALGO DE VERDAD? Con la animación en pausa, sin arrastre y con el residuo del
     // último ya decaido, las posiciones son idénticas a las del frame anterior — y los dos bucles
     // de abajo escribirían exactamente lo mismo que ya está. Medido en la lente código del central
     // (8193 nodos, 17661 aristas): eran 16,5 ms de JS y 2 MB de subida a la GPU POR FRAME, cuando
     // el presupuesto entero de un frame a 60 fps son 16,6 ms.
-    if(motion || drag>=0 || resto>0.002 || actViva || asentando){
+    // El gate mira el VAIVEN, no `motion`: en la lente memoria nada se mueve aunque la animacion
+    // este andando, asi que reescribir 2.231 matrices y 586 aristas por cuadro era trabajo tirado.
+    // Tras cada reconstruccion `resto` vale 1, que lo abre una vez — y esa pasada es la que coloca
+    // las aristas, que no se siembran al construir la malla.
+    if(dr>0 || drag>=0 || resto>0.002 || actViva || asentando){
     let rMax=0, hayAct=false, colorSucio=false;
     // La 3x3 (rotación x escala) es CONSTANTE por nodo y ya quedó sembrada en rebuildMeshes: por
     // frame sólo cambian los 3 floats de traslación, escritos DIRECTO en el buffer de instancias.
     // compose+setMatrixAt costaba 6,20 ms a 8193 nodos; esto, 1,57 ms.
     const NM=inst.instanceMatrix.array;
     for(let i=0;i<N;i++){ const n=NEURONS[i];
-      const dr=motion?AMP:0;
       const fx=BX[i]+Math.sin(t*0.5+PHX[i])*dr, fy=BY[i]+Math.sin(t*0.44+PHY[i])*dr, fz=BZ[i]+Math.sin(t*0.57+PHZ[i])*dr;
       if(i===drag){} else if(PULL[i]>0){ const p=PULL[i]; GX[i]+=(Dkx*p-GX[i])*0.14; GY[i]+=(Dky*p-GY[i])*0.14; GZ[i]+=(Dkz*p-GZ[i])*0.14; }
       else { GX[i]*=0.945; GY[i]*=0.945; GZ[i]*=0.945; }
@@ -736,7 +928,17 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         // determinante sale negativo, se invierte el winding y el back-face culling se come las
         // aristas. Verificado sobre 200.004 casos: det>0 en todos.
         const qx=py*dz-pz*dy, qy=pz*dx-px*dz, qz=px*dy-py*dx;
-        const r=s.__r, o=si*16;
+        // EL RADIO SE CALCULA ACA, no se guarda en el objeto de la sinapsis.
+        //
+        // Estaba sembrado como `s.__r` al construir la malla, y `buildGraph` RECREA los objetos de
+        // SYN en cada poll: desde el segundo sondeo `s.__r` era undefined, el radio salia NaN, y
+        // dos columnas de la matriz de instancia quedaban en NaN. Una instancia con NaN en su
+        // matriz DESAPARECE sin un solo error — las 586 sinapsis estaban dibujandose en la nada.
+        //
+        // Antes lo tapaba el asentado: reconstruia las mallas seguido y volvia a sembrar el campo.
+        // Al sacar la fisica en la lente memoria, la falla quedo permanente. Calcularlo acá cuesta
+        // una multiplicacion por arista y no puede quedar viejo.
+        const r=0.10+(s.confidence||0)*0.16, o=si*16;
         EM[o   ]=px*r;    EM[o+1 ]=py*r;    EM[o+2 ]=pz*r;    EM[o+3 ]=0;
         EM[o+4 ]=dx*len;  EM[o+5 ]=dy*len;  EM[o+6 ]=dz*len;  EM[o+7 ]=0;
         EM[o+8 ]=qx*r;    EM[o+9 ]=qy*r;    EM[o+10]=qz*r;    EM[o+11]=0;
@@ -744,7 +946,7 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         const act=Math.max(a.act,b.act), ak=(a.act>=b.act?a.ak:b.ak);
         if(act>0.06 && ak>0){ _c.set(AK[ak]); EGLW[si]=0.55+act*3.6; ESPD[si]=1.0+act*1.6;   // ACTIVIDAD: brillante
           ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=1; attrSucio=true; }
-        else if(EHOT[si] || pensando){ _c.set(edgeBase(s)); EGLW[si]=0.5+thinking*0.35; ESPD[si]=0.42+(s.confidence||0)*0.5;   // REPOSO: color por tipo (código) o azul tenue (memoria)
+        else if(EHOT[si] || pensando){ _c.set(edgeBase(s)); EGLW[si]=thinking*0.85; ESPD[si]=0.42+(s.confidence||0)*0.5;   // REPOSO: sin banda; sólo conduce cuando el cerebro trabajó de verdad
           ECOL[si*3]=_c.r; ECOL[si*3+1]=_c.g; ECOL[si*3+2]=_c.b; EHOT[si]=0; attrSucio=true; } }
       edgeInst.instanceMatrix.needsUpdate=true;
       if(attrSucio){ const at=edgeInst.geometry.attributes;
@@ -773,6 +975,23 @@ function animate(){ requestAnimationFrame(animate); renderer.info.reset();
         for(let k=0;k<DRAD.length;k++){ const e=DRAD[k]*(1+0.9*r.flash[k]), o=k*16;
           SM[o]=e; SM[o+5]=e; SM[o+10]=e; }
         somaInst.instanceMatrix.needsUpdate=true; }
+      // EL CAMPO. Se comprime con una exponencial en vez de recortarse: una ráfaga de veinte
+      // llamadas y una de cinco tienen que verse distinto, y con un `min(1, x)` las dos saturan
+      // igual y el dibujo deja de poder distinguir un pico de un goteo.
+      if(auraInst && ACAMPO){
+        for(let k=0;k<ACAMPO.length;k++) ACAMPO[k]=1-Math.exp(-(r.campo[k]||0)*0.42);
+        auraInst.geometry.attributes.aCampo.needsUpdate=true; }
+      // LOS DESPACHOS CONDUCEN. Se encienden cuando hay campo en alguno de sus dos extremos: el
+      // axón existe siempre —es un hecho de la memoria— pero sólo brilla cuando ese uso está
+      // pasando de verdad. Sin evento, base y nada más.
+      if(despInst && DESPGLW){
+        const porRac=new Map();
+        for(const [rac,idxs] of NEURONAS_DE){ let m=0;
+          for(const k of idxs) if(r.campo[k]>m) m=r.campo[k];
+          porRac.set(rac,m); }
+        for(let i=0;i<DESPGLW.length;i++){ const p=DESPRAC[i];
+          DESPGLW[i]=Math.min(0.75, Math.max(porRac.get(p[0])||0, porRac.get(p[1])||0)*0.45); }
+        despInst.geometry.attributes.aGlow.needsUpdate=true; }
       denSucio = vivos>0;
     }
   }
@@ -1033,8 +1252,21 @@ function impulsar(ev){
                : {terminal:'', capa:c.capa, falla:c.falla, ms:c.ms};
   // La escena principal. El reloj es el MISMO que usa animate(): si el impulso naciera con otro,
   // el frente arrancaría corrido y en el peor caso ya vencido.
-  const ti = n ? TRONCO_DE.get(n.terminal) : undefined;
-  IMPULSOS.nacer(ti===undefined ? -1 : ti, pu, performance.now()/1000);
+  //
+  // Enciende TODAS las neuronas del racimo de esa persona, no una. Con las neuronas siendo tramos
+  // del árbol de temas, no hay forma de saber en cuál cae una llamada a una tool: lo que el evento
+  // dice con certeza es de quién es. Elegir una sería inventarlo.
+  const ahora = performance.now()/1000;
+  const ns = n ? (NEURONAS_DE.get(RACIMO_DE.get(n.terminal)) || null) : null;
+  if(ns && ns.length){
+    // SE REPARTE, no se multiplica. Una llamada vale una llamada: si cada neurona del racimo
+    // recibiera la fuerza entera, una persona cuyo árbol quedó cortado en nueve neuronas brillaría
+    // nueve veces más que otra cortada en dos, por el MISMO evento — y lo único distinto sería la
+    // forma de su árbol, no cuánto trabajó.
+    const rep = 1/ns.length;
+    for(const ti of ns) IMPULSOS.nacer(ti, {...pu, reparto:rep}, ahora);
+  }
+  else IMPULSOS.nacer(-1, pu, ahora);
 }
 
 function conectarVivo(){
@@ -1208,7 +1440,11 @@ $('motionBtn').addEventListener('click',()=>setMotion(!motion)); setMotion(motio
 // setLens: conmuta memoria↔código. Son DOS y no tres: la lente de personas aparte se retiró
 // cuando sus dos piezas —los árboles y el impulso— pasaron a la escena principal. Tenerla al
 // lado habría sido una tercera vista contando lo mismo, y dos lugares donde arreglar cada cosa.
-function setLens(v){ lens=v; const b=$('lensBtn');
+function setLens(v){ lens=v;
+  // Cada lente se encuadra sola. Sin esto, la primera que se abre fija la camara y la otra hereda
+  // una distancia pensada para un dibujo con otra forma.
+  framed=false;
+  const b=$('lensBtn');
   // Cambiar de lente SIEMPRE rehace las mallas. El disparador de abajo compara cantidades, y dos
   // grafos distintos con la misma cantidad de nodos no se distinguen ahí: es poco probable, pero
   // el modo de falla es dibujar un grafo con las mallas del otro.
@@ -1253,6 +1489,25 @@ function applyLensLabels(){ const code=lens==='code';
       `<span><b>·</b> la <b>neurona ramificada</b> de cada racimo es una <b>terminal</b>; sus dendritas, cuánto escribió</span>`+
       `<span><b>·</b> el <b>impulso</b> que la recorre es <b>UNA llamada real a una tool</b>, en el momento en que ocurre. <b>Sin evento no hay luz</b>: si el cerebro está quieto, esto está quieto</span>`;
 }
+// tipNeurona: qué es este árbol. Dice CUÁNTAS memorias carga y POR QUÉ están juntas — que es la
+// pregunta que el dibujo nuevo abre: si la rama significa algo, hay que poder leer qué.
+const COMO={ tema:'mismo tema', tiempo:'misma época', reparto:'reparto', fundido:'fundido con su vecina', orden:'sin criterio (mismo tema y misma fecha)' };
+function tipNeurona(nu, px, py){
+  const tip=document.getElementById('tip'); if(!tip) return;
+  tip.querySelector('.tt').textContent = nu.etiqueta || nu.racimo || 'neurona';
+  tip.querySelector('.tg').innerHTML =
+    `<b>${nu.memorias}</b> memorias · racimo <b>${esc(nu.racimo)}</b>`;
+  tip.querySelector('.tm').innerHTML =
+    `<i>agrupadas por ${esc(COMO[nu.criterio]||nu.criterio)}</i>`+
+    `<i>${nu.segs.length} ramas</i><i>alcance ${Math.round(nu.alcance)}</i>`;
+  const tw=tip.offsetWidth||240, th=tip.offsetHeight||80;
+  const ax=(typeof px==='number'?px:mx), ay=(typeof py==='number'?py:my);
+  let x=ax+16, y=ay+16;
+  if(x+tw>innerWidth-8) x=ax-tw-16;
+  if(y+th>innerHeight-8) y=ay-th-16;
+  tip.style.left=x+'px'; tip.style.top=y+'px'; tip.classList.add('on');
+}
+
 // tipTerminal: el detalle de una terminal al pasarle el mouse por su SOMA.
 //
 // Vivía como callback de la vista 2D. Ahora lo llama `hover()` con el mismo `#tip` que usan las

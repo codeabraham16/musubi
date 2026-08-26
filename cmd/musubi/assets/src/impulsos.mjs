@@ -72,6 +72,11 @@ export function crearImpulsos() {
         // `exacta:false` = el evento cayó en la neurona por la persona, no por credencial propia.
         // Se ve más tenue en vez de mentir que fue una atribución directa.
         exacta: !(ev && ev.exacta === false),
+        // REPARTO. Una llamada no sabe en qué neurona de la persona cayó, así que enciende todas
+        // las de su racimo — pero repartiéndose, no multiplicándose. Sin esto, una persona con
+        // cinco neuronas brilla cinco veces más que una con una por la MISMA llamada, y el dibujo
+        // afirma que trabajó más cuando lo único distinto es cómo quedó cortado su árbol.
+        reparto: Math.max(0.001, Math.min(1, Number(ev && ev.reparto) || 1)),
       });
       return true;
     },
@@ -123,7 +128,7 @@ export function crearImpulsos() {
           en: u * alc,
           radio: ANCHO_FRENTE * alc * p.grosor,
           // se apaga hacia el final del recorrido: llega a la punta y se disipa, no desaparece
-          fuerza: (p.trabajo ? 1 : 0.3) * (1 - u * u) * (p.exacta ? 1 : 0.65) * p.grosor,
+          fuerza: (p.trabajo ? 1 : 0.3) * (1 - u * u) * (p.exacta ? 1 : 0.65) * p.grosor * p.reparto,
           falla: p.falla,
         });
       }
@@ -136,13 +141,17 @@ export function crearImpulsos() {
      * @param {number} ahora  reloj de la escena, en segundos
      * @param {{glow:Float32Array, warn:Float32Array, dist:Float32Array, tronco:Int32Array,
      *          alcances:Float32Array}} b
-     * @returns {{encendidas:number, flash:Float32Array}} `flash` es el fogonazo por SOMA: el
-     *   arranque del impulso, que es lo que hace que se lea «disparó ESTA neurona» y no «apareció
-     *   una luz en el aire».
+     * @returns {{encendidas:number, flash:Float32Array, campo:Float32Array}}
+     *   `flash` es el fogonazo por SOMA: el arranque del impulso, que es lo que hace que se lea
+     *   «disparó ESTA neurona» y no «apareció una luz en el aire».
+     *   `campo` es la actividad VIVA de cada neurona — la suma de la fuerza de sus frentes. Es lo
+     *   que enciende el halo. No lleva calor ni nada histórico: un halo permanente convertiría el
+     *   reposo en luz y el panel dejaría de poder decir «acá no está pasando nada».
      */
     escribir(ahora, b) {
       const nTroncos = b.alcances.length;
       const flash = new Float32Array(nTroncos);
+      const campo = new Float32Array(nTroncos);
       // Un frente por tronco, calculado UNA vez. `null` en un tronco callado es la salida rápida
       // del bucle grande: con nueve actores y once troncos, lo normal es que casi todos lo estén.
       const cache = new Array(nTroncos);
@@ -154,12 +163,13 @@ export function crearImpulsos() {
           hayAlguno = true;
           for (const f of fs) {   // el soma fogonea mientras el frente todavía está encima
             if (f.en < f.radio) flash[ti] = Math.max(flash[ti], f.fuerza * (1 - f.en / f.radio));
+            campo[ti] += f.fuerza;   // el halo mide TODA la actividad viva, esté donde esté el frente
           }
         }
       }
       let encendidas = 0;
       const n = b.glow.length;
-      if (!hayAlguno) { b.glow.fill(0); b.warn.fill(0); return { encendidas: 0, flash }; }
+      if (!hayAlguno) { b.glow.fill(0); b.warn.fill(0); return { encendidas: 0, flash, campo }; }
       for (let i = 0; i < n; i++) {
         const fs = cache[b.tronco[i]];
         if (!fs) { b.glow[i] = 0; b.warn[i] = 0; continue; }
@@ -184,7 +194,7 @@ export function crearImpulsos() {
         b.warn[i] = carga > 0 ? Math.min(1, aviso / carga) : 0;
         if (carga > 0.004) encendidas++;
       }
-      return { encendidas, flash };
+      return { encendidas, flash, campo };
     },
   };
 }
