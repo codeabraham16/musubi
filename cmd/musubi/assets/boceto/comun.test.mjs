@@ -13,7 +13,7 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
          colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
-         escalaTinta, TINTA_SINAPSIS } from './comun.mjs';
+         escalaTinta, TINTA_SINAPSIS, enCurva } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -946,4 +946,78 @@ test('F2 · la capa de relaciones NO se apaga sola', () => {
   // clampeando ahí, F1 no estaría midiendo el presupuesto sino el piso, y sería vacuo.
   assert.ok(escalaTinta(3476) > TINTA_SINAPSIS.piso,
     'el piso ya actúa en el central: F1 no está midiendo el presupuesto');
+});
+
+/* ── EL MEDIO ────────────────────────────────────────────────────────────────────────────────
+   Contra el central, los dos haces de primer nivel más gordos compartían el 26 % de su volumen y
+   el centro del dibujo se veía como tres cintas atravesándose. La causa estaba en el nacimiento:
+   `nucleo` es el LARGO del núcleo y las hijas nacían a `nucleo * 0.55`, pero la PANZA sale de los
+   hilos que lleva — 38,7 contra un largo de 40 — así que nacían DENTRO del cuerpo, donde por
+   conservación de hilos sus discos tapizan el del padre y no pueden no tocarse. */
+
+// UN TRONCO GORDO: el doble del ganglio, para que la panza (36,3) pase el nacimiento viejo (22).
+// Sin esto el fixture no llega al caso y el sabotaje no muerde — la trampa de siempre.
+const troncoGordo = () => {
+  let id = 0;
+  const act = (r, tam) => ({
+    n: tam.reduce((a, b) => a + b, 0) * 2, criterio: 'actor', etiqueta: r, racimo: r,
+    hijos: tam.map((k, j) => {
+      const ms = []; for (let q = 0; q < k * 2; q++) ms.push(mem(id++, r + '/t' + j));
+      return grupo('t' + j, ms);
+    }),
+  });
+  const raiz = { criterio: 'raiz', etiqueta: 'todo', mem: null,
+                 hijos: [act('x', [8, 40, 72]), act('y', [6, 30, 54]), act('z', [9, 21, 120])] };
+  raiz.n = raiz.hijos.reduce((a, h) => a + h.n, 0);
+  return raiz;
+};
+const OPC_NUDO = { origen: [0, 0, 0], largo: 130, curvatura: 0.12, tropismo: 0, semilla: 11,
+                   radio: 285, pegar: false, 'imán': 0.45, aire: 3.0, naciente: 0.85,
+                   aperturaMax: 1.60, polarEje: 0.20, polarMin: 1.60,
+                   radioHilo: 0.52, separacion: 2.60 };
+function elNudo(nucleo) {
+  const S = seccionar(troncoGordo(), { maxNivel: 8, minCarga: 10 });
+  contarFibras(S, OPC_HILOS);
+  colocarNudo(S, Object.assign({ nucleo }, OPC_NUDO));
+  return S;
+}
+
+test('G1 · los haces de PRIMER NIVEL no comparten volumen', () => {
+  const S = elNudo(40);
+  const R = (s) => radioHaz(s.fibras, 0.52, 2.60);
+  const top = S[0].hijos.map((i) => S[i]);
+  // EL FIXTURE TIENE QUE LLEGAR AL CASO: si la panza del núcleo no pasa al nacimiento viejo, este
+  // test pasa con el defecto puesto y no dice nada.
+  assert.ok(R(S[0]) > 40 * 0.55,
+    `el fixture no llega al caso: panza ${R(S[0]).toFixed(1)} contra un nacimiento de ${40 * 0.55}`);
+  const hip = (v) => Math.hypot(v[0], v[1], v[2]);
+  for (let i = 0; i < top.length; i++) {
+    for (let j = i + 1; j < top.length; j++) {
+      const A = top[i], B = top[j], pide = R(A) + R(B);
+      let mn = Infinity;
+      for (let u = 0; u <= 16; u++) {
+        const pa = enCurva(A, u / 16);
+        for (let v = 0; v <= 16; v++) {
+          const pb = enCurva(B, v / 16);
+          mn = Math.min(mn, hip([pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]]));
+        }
+      }
+      assert.ok(mn >= pide,
+        `dos actores se atraviesan un ${(100 * (1 - mn / pide)).toFixed(0)} %: ejes a ${
+          mn.toFixed(1)} y sus haces piden ${pide.toFixed(1)}`);
+    }
+  }
+});
+
+test('G2 · el núcleo no es más ancho que largo', () => {
+  // Un haz más ancho que largo no muestra su recorrido sino su CARA CORTADA: puntas paradas, un
+  // cepillo. Y cada hilo recibe `round(largo / largoNeurona)` eslabones — con 40 son dos.
+  const S = elNudo(40);
+  const panza = radioHaz(S[0].fibras, 0.52, 2.60);
+  assert.ok(S[0].largo >= 2 * panza,
+    `el núcleo mide ${S[0].largo.toFixed(1)} de largo y ${(2 * panza).toFixed(1)} de ancho`);
+  // CONTROL: el piso SUBE lo declarado, no lo pisa. Sin esto pasaría con el largo clavado en un
+  // número grande, y entonces la forma ya no controlaría nada.
+  const G = elNudo(200);
+  assert.equal(G[0].largo, 200, `un núcleo declarado en 200 salió ${G[0].largo}`);
 });

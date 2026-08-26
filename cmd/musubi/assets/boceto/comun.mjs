@@ -874,11 +874,47 @@ export function colocarNucleo(secciones, opciones) {
   // EL NÚCLEO ES UN CUERPO, NO UN TRAMO. Se le da un largo corto y un eje cualquiera: lo que se ve
   // ahí no es un tubo sino el haz completo —todos los hilos juntos— antes de repartirse.
   raiz.dir = norm(o.eje || [0, 1, 0]);
-  raiz.largo = nucleo;
-  raiz.a = add(origen, mul(raiz.dir, -nucleo * 0.5));
-  raiz.b = add(origen, mul(raiz.dir, nucleo * 0.5));
+  /* ── UN HAZ MÁS ANCHO QUE LARGO NO SE LEE COMO UN HAZ ───────────────────────────────────────
+     Con `nucleo` 40 y una panza de 77 el núcleo es un DISCO, y de un disco de hilos no se ve el
+     recorrido sino la CARA CORTADA: 818 puntas paradas, o sea un cepillo. Encima cada hilo recibe
+     `round(largo / largoNeurona)` eslabones — con 40 son DOS, dos salchichas, que es lo contrario
+     de una fibra.
+
+     El piso es su propio diámetro: un haz tiene que ser al menos tan largo como ancho, o deja de
+     tener un «a lo largo» que mirar. Y con el nacimiento ya arreglado sale GRATIS — barrido 40..120
+     en los dos cerebros: el enredo del local queda clavado en 0,113 y el del central se mueve 0,006
+     (0,259 → 0,265, que es ruido). Antes NO era gratis, porque el nacimiento empujaba el árbol. */
+  const rNucleo = radioHaz(Math.max(1, raiz.fibras || 1), rFib, sepHilo);
+  const largoNucleo = Math.max(nucleo, 2 * rNucleo);
+  raiz.largo = largoNucleo;
+  raiz.a = add(origen, mul(raiz.dir, -largoNucleo * 0.5));
+  raiz.b = add(origen, mul(raiz.dir, largoNucleo * 0.5));
   raiz.curva = [0, 0, 0];
-  raiz.dist = nucleo;
+  raiz.dist = largoNucleo;
+
+  /* ── EL NÚCLEO TIENE DOS MEDIDAS, Y NACER MAL EN ÉL ERA EL AMONTONAMIENTO DEL MEDIO ─────────
+     `nucleo` es su LARGO. Su PANZA sale de cuántos hilos lleva, igual que la de cualquier haz, y
+     con 818 hilos mide 38,7 contra un largo de 40. Nacer a `nucleo * 0.55` = 22 es nacer DENTRO
+     del cuerpo, y ahí las hijas NO TIENEN DÓNDE SEPARARSE: por conservación de hilos sus discos
+     tapizan exactamente el disco del padre, así que a una misma altura no pueden no tocarse.
+     Medido contra el central: los dos haces más gordos compartían el 26 % de su volumen, y eso es
+     lo que se veía en el medio como tres cintas atravesándose.
+
+     Y no alcanza con usar la panza para todo: el cuerpo es una CÁPSULA, no una bola. Una hija que
+     sale casi por el eje tiene que nacer en la TAPA —a `nucleo * 0.55`— y no a 38,7, o queda
+     flotando por encima del núcleo, despegada de aquello de lo que dice salir. El punto correcto
+     es por dónde la dirección SALE del cuerpo, y eso pide las dos medidas.
+
+     ⚠ Cuarta vez que un amontonamiento se arregla en la CONDICIÓN INICIAL y no corrigiendo después.
+     Acá ni siquiera hizo falta alargar el núcleo: con el nacimiento bien puesto el solape es 0 en
+     los dos cerebros y `nucleo` deja de cambiar el solape en todo el barrido 40..120. */
+  const nacerEn = (d) => {
+    const ax = Math.abs(d[0] * raiz.dir[0] + d[1] * raiz.dir[1] + d[2] * raiz.dir[2]);
+    const per = Math.sqrt(Math.max(0, 1 - ax * ax));
+    const tapa = ax > 1e-6 ? (largoNucleo * 0.55) / ax : Infinity;
+    const panza = per > 1e-6 ? rNucleo / per : Infinity;
+    return Math.min(tapa, panza);
+  };
 
   const hijos = raiz.hijos;
   const m = hijos.length || 1;
@@ -888,19 +924,25 @@ export function colocarNucleo(secciones, opciones) {
     // CON CORONA, EL ACTOR ES UN RAYO QUE LLEGA HASTA ELLA. Arrancarlo directamente sobre el anillo
     // dejaba al núcleo flotando solo en el medio, sin nada que lo uniera a nadie: el dibujo decía
     // que los actores no salen de ningún lado. El radio lo recorre el haz, y recién ahí ramifica.
-    let l = anillo0 > 0 ? Math.max(L0 * 0.35, anillo0 - nucleo * 0.55)
+    /* ⛔ Y EL LARGO NO SE COMPENSA. Nacer más afuera corre la punta del actor hacia afuera, y el
+       arreglo obvio —descontarle al largo lo que se corrió el nacimiento, para que la punta quede
+       donde estaba— sale PEOR: la rama primaria necesita su largo para parir a las suyas, así que
+       acortarla aprieta sus propias bifurcaciones. Medido en el central: apretadas 5 → 11 y enredo
+       0,259 → 0,332. Se probó y se descarta; que el actor llegue un poco más lejos es más barato. */
+    const n0 = nacerEn(d);
+    let l = anillo0 > 0 ? Math.max(L0 * 0.35, anillo0 - n0)
                         : L0 * (0.60 + 0.55 * Math.cbrt(h.carga / Math.max(1, raiz.carga)));
     // EL ACTOR TAMPOCO PASA LA CÁSCARA. Sin esto, un tramo de nivel 1 mas largo que el radio la
     // atraviesa de entrada y todo su subarbol nace ya afuera: con cascara 110 y actores de 126, el
     // 73 % de las hojas quedaba fuera de la superficie que dice contenerlas.
-    if (campo > 0 && cascara > 0) l = Math.min(l, Math.max(L0 * 0.22, cascara - nucleo * 0.55));
+    if (campo > 0 && cascara > 0) l = Math.min(l, Math.max(L0 * 0.22, cascara - n0));
     h.dir = d; h.largo = l;
     // Nace en la SUPERFICIE del núcleo, no en su centro: el haz sale del cuerpo, no lo atraviesa.
-    h.a = add(origen, mul(d, nucleo * 0.55));
+    h.a = add(origen, mul(d, n0));
     h.b = add(h.a, mul(d, l));
     const bow = ladear(null, d, r);
     h.curva = mul(bow, l * curvatura);
-    h.dist = nucleo + l;
+    h.dist = n0 + l;
     bajar(h, bow);
   });
 

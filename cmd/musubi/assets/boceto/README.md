@@ -98,6 +98,43 @@ mostrar menos relación de la que hay sin decirlo sería la mentira de siempre.
 decisión —una capa que se apaga sola miente igual que una que satura—, hoy el central está en
 3.476 y un test vigila que el cruce siga lejos del dato real.
 
+### 🔴 El medio era una colisión, y la causa estaba en el nacimiento
+
+El centro del dibujo se veía como **tres cintas atravesándose**. No era el color ni la densidad:
+los dos haces de primer nivel más gordos **compartían el 26 % de su volumen**.
+
+`nucleo` es el **largo** del núcleo, y las hijas nacían a `nucleo * 0.55` = 22. Pero la **panza** del
+núcleo sale de los hilos que lleva —igual que la de cualquier haz— y con 818 hilos mide **38,7**.
+O sea que nacían **dentro del cuerpo**, y ahí no tienen dónde separarse: por conservación de hilos
+sus discos **tapizan exactamente** el disco del padre, así que a una misma altura no pueden no
+tocarse. Nacen en la superficie de la **cápsula** —tapa o panza, la que la dirección cruce primero— y
+el solape es **0 en los dos cerebros**, sin alargar nada.
+
+| | solape entre actores | enredo | apretadas |
+|---|---|---|---|
+| central, antes | **26,2 %** | 0,312 | 5 |
+| central, ahora | **0** | 0,265 | 5 |
+| local, antes | 0,2 % | 0,063 | 3 |
+| local, ahora | **0** | 0,113 | 3 |
+
+⛔ **Se probó compensar el largo** —descontarle al actor lo que se corrió su nacimiento, para que la
+punta quede donde estaba— y sale peor: la rama primaria necesita su largo para parir a las suyas.
+Apretadas 5 → 11 y enredo 0,259 → 0,332. Que el actor llegue un poco más lejos es más barato.
+
+### Y un haz más ancho que largo muestra su cara cortada
+
+Con largo 40 y panza 77 el núcleo era un **disco**, y de un disco de hilos no se ve el recorrido sino
+las puntas: un cepillo. Encima cada hilo recibía `round(largo / largoNeurona)` = **dos** eslabones.
+El piso es su propio diámetro, y con el nacimiento ya arreglado sale **gratis**: barriendo 40..120 en
+los dos cerebros el enredo del local queda clavado en 0,113 y el del central se mueve 0,006.
+
+### ⚠ Y una sola muestra no es una medición
+
+Las tres filas de puntería del `#prueba` salían de **una** sección —la última hoja gorda de la lista—.
+Mover el nacimiento siete unidades la mandó detrás de una rama vecina y las tres se fueron de
+`6/8 · 8/8 · 8/8` a `0/8`, **sin que el picking hubiera cambiado**. Con seis secciones repartidas a lo
+largo del árbol: antes `36/55 · 50/55`, después `35/55 · 47/55`. Lo que medía era la suerte de una.
+
 ## Las seis formas
 
 Las seis dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en

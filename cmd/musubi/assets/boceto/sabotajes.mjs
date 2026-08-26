@@ -79,7 +79,7 @@ const SABOTAJES = [
   {
     test: 'B9',
     que: 'el núcleo vuelve a medir lo mismo que un actor',
-    de: '  raiz.largo = nucleo;',
+    de: '  raiz.largo = largoNucleo;',
     a: '  raiz.largo = L0 * 3;',
   },
   {
@@ -284,6 +284,18 @@ const SABOTAJES = [
     que: 'se va el piso: con muchas relaciones la capa se desvanece y dice que no hay ninguna',
     de: '  return Math.max(TINTA_SINAPSIS.piso, TINTA_SINAPSIS.referencia / n);',
     a: '  return TINTA_SINAPSIS.referencia / n;',
+  },
+  {
+    test: 'G1',
+    que: 'las hijas vuelven a nacer DENTRO del núcleo y los actores se atraviesan',
+    de: '    return Math.min(tapa, panza);',
+    a: '    return nucleo * 0.55;',
+  },
+  {
+    test: 'G2',
+    que: 'el núcleo vuelve a ser un disco: más ancho que largo, o sea una cara cortada',
+    de: '  const largoNucleo = Math.max(nucleo, 2 * rNucleo);',
+    a: '  const largoNucleo = nucleo;',
   },
 ];
 

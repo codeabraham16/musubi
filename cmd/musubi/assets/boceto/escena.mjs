@@ -1862,27 +1862,40 @@ function probar(v) {
     //     vuelve tiene que ser ESE boton. No da 100 % y no tiene por que: un boton tapado por un
     //     hilo de adelante devuelve el hilo, que es la respuesta correcta. Lo que el numero mide es
     //     que la sonda acierte a la cosa y no al haz.
+    /* 🔴 SE MIDE SOBRE VARIAS SECCIONES, NO SOBRE UNA. La version anterior tomaba UNA —la ultima
+       hoja gorda de la lista— y de ahi salia todo el numero. Con eso el test dice si a ESA seccion
+       le toco estar tapada, no si el dibujo se puede señalar: mover el nacimiento de las hijas del
+       nucleo siete unidades la mando detras de una rama vecina y las tres filas de punteria se
+       fueron de 6/8 · 8/8 · 8/8 a 0/8, sin que nada del picking hubiera cambiado.
+       Una sola muestra no es una medicion. Se reparten seis a lo largo del arbol. */
     const _p3 = new THREE.Vector3();
+    const gordas = v.S.filter((x) => x.hoja && x.memorias.length > 6);
+    const objetivos = [];
+    for (let q = 0; q < 6 && gordas.length; q++) {
+      const g = gordas[Math.floor((q + 0.5) * gordas.length / 6)];
+      if (g && !objetivos.includes(g)) objetivos.push(g);
+    }
     let probados = 0, exactos = 0, mismaSeccion = 0;
-    const objetivo2 = v.S.reduce((m, x) => (x.hoja && x.memorias.length > 6 ? x : m), null);
-    if (objetivo2) {
-      v.elegir(objetivo2.idx); await asentar();
+    for (const obj of objetivos) {
+      v.elegir(obj.idx); await asentar();
       v.camera.updateMatrixWorld(true);
-      for (let k = 0; k < objetivo2.memorias.length && probados < 60; k++) {
-        const pm = v.POSMEM.get(objetivo2.memorias[k].id);
+      let deEsta = 0;
+      for (let k = 0; k < obj.memorias.length && deEsta < 10; k++) {
+        const pm = v.POSMEM.get(obj.memorias[k].id);
         if (!pm) continue;
         _p3.set(pm[0], pm[1], pm[2]).project(v.camera);
         if (_p3.z >= 1) continue;
         const sx = Math.round((_p3.x * 0.5 + 0.5) * innerWidth);
         const sy = Math.round((-_p3.y * 0.5 + 0.5) * innerHeight);
         if (sx < 2 || sy < 2 || sx > innerWidth - 2 || sy > innerHeight - 2) continue;
-        probados++;
+        probados++; deEsta++;
         const h = v.sondear(sx, sy);
         if (!h) continue;
-        if (h.tipo === 'memoria' && h.mem && h.mem.id === objetivo2.memorias[k].id) exactos++;
-        if (h.sec === objetivo2.idx) mismaSeccion++;
+        if (h.tipo === 'memoria' && h.mem && h.mem.id === obj.memorias[k].id) exactos++;
+        if (h.sec === obj.idx) mismaSeccion++;
       }
     }
+    const objetivo2 = objetivos[0] || null;
     out.push(['señalar un boton devuelve ESE boton',
               probados ? exactos + ' de ' + probados : 'no se pudo probar', probados > 0 && exactos > probados * 0.25]);
     out.push(['y nunca cae en otra rama',
