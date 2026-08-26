@@ -1351,6 +1351,58 @@ export function crecerDelta(bosque, atrs, opciones) {
 }
 
 /**
+ * broteDesdeMemorias: el camino completo del VIVO — memorias nuevas → atractores (parcela del
+ * topic si ya se dibuja, la del actor si el topic es nuevo; un atractor viejo NUNCA se recoloca)
+ * → crecerDelta por actor → emitirBrote. Vivía inline en forma.mjs; se extrajo cuando producción
+ * lo necesitó — dos copias de esta lógica es como el boceto y el panel divergen en silencio.
+ *
+ * @returns {Array<{bosqueIdx:number, brote:{secciones, injertos}}>} — el caller llama a
+ *          vista.brotar(brote) por cada uno y suma los conteos.
+ */
+export function broteDesdeMemorias(estado, nuevas) {
+  const out = [];
+  if (!estado || !nuevas || !nuevas.length) return out;
+  const porActor = new Map();
+  const o2 = estado.opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const R = num(o2.radio, 285), piso = num(o2.piso, 0.45), cola = num(o2.cola, 0.65);
+  for (const m of nuevas) {
+    if (!m || !m.id || estado.idsVistos.has(m.id)) continue;
+    let celda = estado.topicCelda.get(m.topic);
+    let bosqueIdx = -1;
+    if (celda) {
+      for (let bi = 0; bi < estado.bosques.length; bi++) {
+        const B = estado.bosques[bi];
+        if (B.atrs.some((a2) => a2.mems.some((mm) => mm.topic === m.topic))) { bosqueIdx = bi; break; }
+      }
+    }
+    if (bosqueIdx < 0) {
+      bosqueIdx = 0;
+      const racimo = estado.bosques[0] && estado.bosques[0].racimo;
+      celda = celda || (estado.racimoInfo.get(racimo) || { celda: [0, 1, 0, Math.PI] }).celda;
+    }
+    const h = hashCadena(m.id);
+    const cc = (celda[0] + celda[1]) / 2 + (deHash(h, 2) - 0.5) * 0.9 * (celda[1] - celda[0]);
+    const ff = (celda[2] + celda[3]) / 2 + (deHash(h, 3) - 0.5) * 0.9 * (celda[3] - celda[2]);
+    const r = R * (piso + (1 - piso) * Math.pow(deHash(h, 1), cola));
+    const sn = Math.sqrt(Math.max(0, 1 - cc * cc));
+    if (!porActor.has(bosqueIdx)) porActor.set(bosqueIdx, []);
+    porActor.get(bosqueIdx).push({ id: m.id, mems: [m],
+      pos: [Math.cos(ff) * sn * r, cc * r, Math.sin(ff) * sn * r] });
+  }
+  for (const par of porActor) {
+    const bi = par[0], atrs2 = par[1];
+    const B = estado.bosques[bi];
+    if (!B) continue;
+    const r2 = crecerDelta(B.bosque, atrs2, estado.opciones);
+    const brote = emitirBrote(B.bosque, atrs2, r2.consumidoPor, r2.nodosNuevos, estado.opciones);
+    out.push({ bosqueIdx: bi, brote });
+    for (const a2 of atrs2) estado.idsVistos.add(a2.id);
+  }
+  return out;
+}
+
+/**
  * emitirBrote: del delta crecido, secciones NUEVAS injertadas en las viejas.
  *
  * Cada brote cuelga de la sección que contenía su nodo de injerto (el mapa nodoSec que

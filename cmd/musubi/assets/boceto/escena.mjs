@@ -1838,6 +1838,9 @@ export function montar(cfg) {
   let ultimoHov = 0, cuadros = 0, tPrev = 0, hovX = -1, hovY = -1;
   function frame() {
     requestAnimationFrame(frame);
+    // OCULTO = DORMIDO. En producción esta vista convive con la lente de código: cuando no se la
+    // mira, no puede seguir pagando su composer. El rAF sigue (barato) y el trabajo no.
+    if (renderer.domElement.hidden) return;
     cuadros++;
     // EL dt REAL, y se lo pasamos nosotros. La cámara suaviza por tiempo, no por cuadro: si el
     // cuadro se estira —y con miles de instancias se estira—, el movimiento tiene que seguir

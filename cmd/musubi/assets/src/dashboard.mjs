@@ -13,6 +13,7 @@ import { extraerPersonas, firmanteDe, neuronaDeEvento, clasificarEvento,
          fusionarActores, mapaDeEncendido,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { construirRacimo } from './arbol-memoria.mjs';
+import { crearVistaMemoria } from './vista-memoria.mjs';
 import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -108,6 +109,13 @@ let PERSONAS = null;
 // el mapa principal→neurona que sale de fundirlo con las terminales. Los dos arrancan en null y
 // eso NO es "cero actores": es "todavia no se pregunto", que la vista distingue.
 let CENSO = null, ENCENDIDO = null, _bajandoCenso = null;
+/* ── EL COLONIZADO EN PRODUCCIÓN ──────────────────────────────────────────────────────────
+   La lente de memoria ya no se dibuja con las mallas de este archivo: se monta con el MOTOR DEL
+   BOCETO (vista-memoria.mjs), que es donde vive lo que el usuario aprobó mirándolo — el árbol
+   que crece hacia la memoria, el replay cronológico, carne+luz, el nudo. Este archivo conserva
+   entero el camino de la lente de CÓDIGO y todo el chrome (KPIs, salud, riel, actividad).
+   VISTA_MEM se crea UNA vez con el primer grafo; los deltas del pulso llegan como BROTES. */
+let VISTA_MEM = null;
 // Eventos del spool local, que llegan SIN credencial. Se cuentan aparte de los que sí traen un
 // principal y aun así no encuentran neurona: son dos problemas y tienen dos arreglos distintos.
 let SIN_CREDENCIAL = 0;
@@ -864,6 +872,9 @@ if(STATS){
 }
 
 function animate(){ requestAnimationFrame(animate); renderer.info.reset();
+  // Con el colonizado al mando de la lente memoria, esta escena solo trabaja para CODIGO. El
+  // motor de la vista tiene su propio bucle (y duerme cuando su canvas esta oculto).
+  if(lens!=='code' && VISTA_MEM) return;
   const _t0 = STATS ? performance.now() : 0;
   if(needsRebuild || (inst && (N!==NEURONS.length || (edgeInst?edgeInst.count:0)!==SYN.length))) rebuildMeshes();
   // El layout se asienta de a tramos: 6 ms por frame deja ~10 ms para dibujar y mantiene 60 fps
@@ -1257,6 +1268,13 @@ function impulsar(ev){
   // del árbol de temas, no hay forma de saber en cuál cae una llamada a una tool: lo que el evento
   // dice con certeza es de quién es. Elegir una sería inventarlo.
   const ahora = performance.now()/1000;
+  // EN EL COLONIZADO el pulso viaja por el árbol real: de la raíz al actor dueño del evento.
+  // El mapeo principal→terminal→racimo es el de siempre; lo nuevo es sólo a dónde va la luz.
+  if(VISTA_MEM && VISTA_MEM.visible){
+    const racimo = n ? RACIMO_DE.get(n.terminal) : null;
+    if(racimo) VISTA_MEM.pulsoHacia(racimo);
+    return;
+  }
   const ns = n ? (NEURONAS_DE.get(RACIMO_DE.get(n.terminal)) || null) : null;
   if(ns && ns.length){
     // SE REPARTE, no se multiplica. Una llamada vale una llamada: si cada neurona del racimo
@@ -1358,7 +1376,11 @@ function aplicaDeltas(g,p){
   }
   if(p.new_neurons && p.new_neurons.length){
     const vistos=new Set(g.neurons.map(n=>n.id));
-    for(const n of p.new_neurons) if(!vistos.has(n.id)){ g.neurons.push(n); vistos.add(n.id); }
+    const brotan=[];
+    for(const n of p.new_neurons) if(!vistos.has(n.id)){ g.neurons.push(n); vistos.add(n.id); brotan.push(n); }
+    // EL VIVO DE VERDAD: una nota nueva hace crecer la rama que la recibe, delante tuyo. La
+    // misma lógica que el boceto (broteDesdeMemorias) — sin rebuild, sin flash.
+    if(brotan.length && VISTA_MEM){ try{ VISTA_MEM.brotarMemorias(brotan); }catch(_){/*mejor quieto que roto*/} }
   }
   if(p.new_synapses && p.new_synapses.length){
     const vistas=new Set(g.synapses.map(s=>s.source+'|'+s.target));
@@ -1424,14 +1446,23 @@ let CONSTRUIDO=null;
 // renderLens: reconstruye el grafo con la lente activa desde lo que hay en cache (sin re-pollear).
 function renderLens(){
   if(lens==='code'){
+    if(VISTA_MEM) VISTA_MEM.mostrar(false);
+    cv.hidden=false;
     if(!GRAPH.code) return;
     if(CONSTRUIDO===GRAPH.code) return;   // mismo objeto ⇒ mismo grafo ⇒ no hay nada que rehacer
     buildCodeGraph(GRAPH.code); CONSTRUIDO=GRAPH.code; return;
   }
-  // Al volver a memoria, CONSTRUIDO pasa a apuntar al grafo de memoria: si despues se vuelve a
-  // codigo, la comparacion falla y se reconstruye — que es lo correcto, porque NEURONS quedo con
-  // el grafo de la otra lente.
-  if(GRAPH.memory){ buildGraph(GRAPH.memory); CONSTRUIDO=GRAPH.memory; }
+  // MEMORIA = EL COLONIZADO. La vista se monta una sola vez con el grafo entero; después crece
+  // por brotes (aplicaDeltas) en vez de reconstruirse. El canvas viejo se esconde: dos escenas
+  // dibujando el mismo plano es pagar dos composers para mirar uno.
+  if(!GRAPH.memory) return;
+  if(!VISTA_MEM){
+    VISTA_MEM = crearVistaMemoria(GRAPH.memory);
+    pintarLeyendaRacimos((VISTA_MEM.racimos||[]).map(r=>({name:r.nombre, color:r.color, count:r.n})));
+  }
+  VISTA_MEM.mostrar(true);
+  cv.hidden=true;
+  CONSTRUIDO=GRAPH.memory;
 }
 
 function setMotion(v){ motion=v; const b=$('motionBtn'); if(b){ b.textContent=motion?'❚❚ pausar':'▶ reanudar'; b.classList.toggle('paused',!motion); b.setAttribute('aria-pressed',String(!motion)); } }
@@ -1619,6 +1650,11 @@ fetchGraph(lens==='code'?'code':'memory').then(()=>{ renderLens(); }).catch(()=>
 // vista: es lo que traduce el `principal` de un evento en la terminal que tiene que encenderse.
 // Sin él, todo lo que llame con credencial de servicio cae como «sin neurona».
 fetchCenso().then(()=>{ refrescarEncendido(); }).catch(()=>{});
+addEventListener('keydown',(ev)=>{
+  if((ev.key==='r'||ev.key==='R') && lens!=='code' && VISTA_MEM && VISTA_MEM.visible){
+    VISTA_MEM.vista.empezarReplay();
+  }
+});
 poll(); setInterval(poll,5000);
 conectarVivo();
 requestAnimationFrame(animate);

@@ -357,6 +357,12 @@ const SABOTAJES = [
     de: "export const PALETA_CYBER = PALETA.map((cx) => deHSL(hslDe(cx)[0], 0.86, 0.60));",
     a: "export const PALETA_CYBER = PALETA.map((cx, i) => (i === 4 ? '#ff8800' : deHSL(hslDe(cx)[0], 0.86, 0.60)));",
   },
+  {
+    test: 'G11',
+    que: 'el vivo re-siembra lo ya visto: cada poll duplicaria el grafo',
+    de: "    if (!m || !m.id || estado.idsVistos.has(m.id)) continue;",
+    a: "    if (!m || !m.id) continue;",
+  },
 ];
 
 const original = readFileSync(OBJ, 'utf8');
