@@ -26,7 +26,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { tintaTerminal, crearCamara, crearRotulos, frenteEn, enCurva,
-         contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis, jitterHilo } from './comun.mjs';
+         contarFibras, enhebrar, deshilachar, destinoDeHilo, rutaSinapsis, jitterHilo,
+         COLOR_TRONCO } from './comun.mjs';
 
 export { enCurva };
 
@@ -224,7 +225,8 @@ void main(){
   // en el halo que hace «neón». En sobrio este término es exactamente cero.
   // ...pero NO en el núcleo (nivel 0): 469 hilos superpuestos emitiendo + bloom = una bola
   // blanca — la lección del aditivo, otra vez. El cuerpo central ya brilla por acumulación.
-  base += vC * uNeon * (0.22 + 0.55 * fres) * mielina * vVol * prof * min(vNiv, 1.0);
+  base += vC * uNeon * (0.22 + 0.55 * fres) * mielina * vVol * prof * min(vNiv, 1.0)
+        * clamp(vProf / 140.0, 0.25, 1.0);
   // y el CUERPO del núcleo baja la voz en neón: cientos de hilos superpuestos bajo un bloom
   // fuerte se acumulan a blanco aunque no emitan — se atenúa la base ahí, no el bloom global,
   // porque el bloom global ES el material de este modo.
@@ -949,7 +951,11 @@ export function montar(cfg) {
     // se mira— porque la esfera mide el doble que el tubo y no comparte ninguna direccion con el.
     // Un huso alineado con la fibra se lee como un ENGROSAMIENTO de la fibra, que es lo que es; y
     // ademas es la forma real del cuerpo celular de una neurona de tracto, que es bipolar.
-    const rs = e.r * (e.orden === 0 ? 2.1 : 1.8);
+    let rs = e.r * (e.orden === 0 ? 2.1 : 1.8);
+    if (S[e.sec].embudo) {
+      const cercaS = Math.hypot(e.a[0], e.a[1], e.a[2]);
+      rs *= Math.min(1, Math.max(0.30, cercaS / S[e.sec].embudo));
+    }
     _m.compose(_p, _q, _s.set(rs * 0.64, rs * 1.75, rs * 0.64));
     somas.setMatrixAt(i, _m);
   });
@@ -1009,7 +1015,10 @@ export function montar(cfg) {
     // El halo del NUCLEO va mas chico en proporcion: lleva 459 hilos apretados, asi que ya emite
     // por acumulacion, y con el mismo factor que una rama fina salia un bloque blanco tapando el
     // centro del cuadro. Lo que necesita destacarse ahi es la forma, no el brillo.
-    HR[i] = (s.Rhaz || 1) * (i === 0 ? 1.15 : 2.4);
+    HR[i] = s.sinTejido ? 30 : (s.Rhaz || 1) * (i === 0 ? 1.15 : 2.4);
+    // el corazón del nudo: el halo del centro es GRANDE y del color del tronco — el resplandor
+    // donde los tres se funden, en vez de un cuerpo que se dibuje encima de ellos
+    if (s.sinTejido) { _c.set(COLOR_TRONCO); HC[i * 3] = _c.r; HC[i * 3 + 1] = _c.g; HC[i * 3 + 2] = _c.b; }
     HNACE[i] = s.nace ? s.nace[0] : 0;
     _p.set(s.a[0], s.a[1], s.a[2]);
     _m.compose(_p, _q.identity(), _s.set(1, 1, 1));

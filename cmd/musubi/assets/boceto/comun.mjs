@@ -1222,6 +1222,10 @@ export function formarColonizado(raiz, opciones) {
   // La sección 0 EXISTE —lleva la suma de hilos, las migas y la ruta de las sinapsis— pero no
   // teje: sus hilos son los troncos que convergen, y dibujarlos dos veces era el pompón.
   S[0].sinTejido = true;
+  // TODO el tejido se afina cerca del nudo — por distancia, no por parentesco (ver puntoHilo)
+  // 110 y no 58: Musubi arboriza pegado al nudo (r 40-70) y con 58 el afinado no llegaba —
+  // el erizo seguia. El embudo cubre TODA la zona peri-nuclear o no cubre nada.
+  for (const sx of S) sx.embudo = 110;
   S[0].a = [0, -rNudo, 0];
   S[0].b = [0, rNudo, 0];
   S[0].largo = rNudo * 2;
@@ -2038,7 +2042,16 @@ function puntoHilo(s, t, rho, phi0, torsion, e1, e2) {
   // identidad del hilo dentro del haz, asi que vecinos ondulan desfasados y el haz no respira
   // entero como un acordeon. Va sobre `rho` y no sobre el eje: una fibra se mueve DENTRO del haz,
   // no lo desplaza.
-  const rw = rho * (1 + 0.17 * Math.sin(t * 9.4247780 + phi0 * 3.7));
+  let rw = rho * (1 + 0.17 * Math.sin(t * 9.4247780 + phi0 * 3.7));
+  /* EL EMBUDO DEL NUDO: cerca del centro el haz se AFINA — las fibras convergen en vez de llegar
+     como un corte plano de cientos de puntas, que era lo que se veía horrible de cerca. Va por
+     DISTANCIA AL CENTRO y no por sección: la primera versión marcaba los troncos de nivel 1 y
+     Musubi —que ramifica pegado al nudo— dejaba a sus hijas fuera del cuello: el erizo seguía.
+     La geometría no sabe de parentescos. Sólo actúa en las formas que lo piden (s.embudo). */
+  if (s.embudo) {
+    const cerca = Math.hypot(c[0], c[1], c[2]);
+    rw *= Math.min(1, 0.15 + 0.85 * (cerca / s.embudo));
+  }
   const co = Math.cos(ph) * rw, si = Math.sin(ph) * rw;
   return [c[0] + e1[0] * co + e2[0] * si,
           c[1] + e1[1] * co + e2[1] * si,
@@ -2165,7 +2178,17 @@ export function enhebrar(secciones, opciones) {
            está en la FORMA, no en el color. En un tracto real el calibre varía varias veces entre
            la fibra más fina y la más gruesa. Determinista por hilo, así que el dibujo sigue siendo
            el mismo en cada apertura. */
-        const cal = 0.68 + 0.62 * (((gi * 1103515245 + 12345) >>> 8) % 1000) / 1000;
+        let cal = 0.68 + 0.62 * (((gi * 1103515245 + 12345) >>> 8) % 1000) / 1000;
+        /* EL CALIBRE también entra al embudo. Afinar el HAZ no alcanzaba: la zona peri-nuclear
+           de Musubi son cientos de secciones de UN hilo — sin girasol que encoger — y el erizo
+           eran los tubos mismos: cortos y gordos como salchichas. Cerca del nudo el hilo se
+           vuelve seda; el grosor pleno se recupera saliendo. */
+        if (s.embudo) {
+          const cx = (A[0] + B[0]) / 2, cy = (A[1] + B[1]) / 2, cz = (A[2] + B[2]) / 2;
+          // el alcance del calibre es MAS LARGO que el del haz (1,7x): la bola de Musubi vive en
+          // r 60-100, donde el embudo corto ya casi no afinaba — medido mirandola: seguia gorda
+          cal *= Math.min(1, 0.26 + 0.74 * (Math.hypot(cx, cy, cz) / (s.embudo * 1.7)));
+        }
         esl.push({
           a: A, b: B,
           curva: [M[0] - (A[0] + B[0]) / 2, M[1] - (A[1] + B[1]) / 2, M[2] - (A[2] + B[2]) / 2],

@@ -103,7 +103,7 @@ export async function construir(v) {
     // en cyber el material EMITE (neon: 1) y el bloom es parte del material: mas fuerza y un
     // umbral mas abajo — lo que en sobrio borraria los hilos, aca ES el halo que hace neon.
     fondo: tono === 'cyber' ? '#04060D' : '#0C1020',
-    bloom: tono === 'cyber' ? 1.30 : 0.80,
+    bloom: tono === 'cyber' ? 1.15 : 0.80,
     umbralBloom: tono === 'cyber' ? 0.60 : 0.74,
     neon: tono === 'cyber' ? 1 : 0,
     nivelesPenacho: 3, escalaPenacho: 0.62,
