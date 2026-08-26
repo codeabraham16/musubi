@@ -66,6 +66,7 @@ const ATM_VARY = `varying float vProf;`;
 /* ── shaders ───────────────────────────────────────────────────────────────────────────────── */
 
 const VAINA_V = `
+attribute vec2 aNace; varying float vNace;
 // ATRIBUTOS EMPAQUETADOS, y no por prolijidad: WebGL garantiza 16 atributos de vértice y esta
 // malla llegó a 17 —position, normal, las CUATRO filas de instanceMatrix y diez escalares—. El
 // síntoma no fue un error visible: fue «Too many attributes (aLargo)» por consola y la malla
@@ -82,6 +83,9 @@ ${ATM_VARY}
 void main(){
   vVol = aDLVF.z; vFam = aDLVF.w;
   vY = position.y + 0.5;
+  // El nacimiento se interpola A LO LARGO del eslabón: la rama crece por su punta, no aparece
+  // entera de golpe — es el mismo truco por-vértice del frente del impulso, con otro reloj.
+  vNace = mix(aNace.x, aNace.y, vY);
   // El adelgazamiento va acá y no en la matriz: una matriz sola no puede tener dos radios.
   float k = mix(1.0, aTNS.x, vY);
   vec3 p = vec3(position.x * k, position.y, position.z * k);
@@ -104,6 +108,7 @@ void main(){
 }`;
 
 const VAINA_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 // LA LUZ. Un solo direccional en espacio de cámara —arriba, a la izquierda, hacia adelante—, que
 // es la posición clásica de la luz clave. Antes la escena era fresnel puro: fresnel dibuja el
@@ -118,6 +123,7 @@ varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; v
 uniform vec3 uAmbar;
 ${ATM_DECL}
 void main(){
+  if (vNace > uReloj) discard;
   // LOS INTERNODOS. la funcion fract sobre el largo da las estrías de la vaina; el valor va a 1 en el
   // estrangulamiento, que es donde está el nodo de Ranvier.
   float banda = abs(fract(vY * vNod) - 0.5) * 2.0;
@@ -220,11 +226,13 @@ void main(){
    (desaparece al girar) y pegado al costado de lo que lo proyecta. */
 
 const CUERPO_V = `
+attribute vec2 aNace; varying float vNace;
 attribute vec3 aColor; attribute vec2 aSF; attribute float aSec;   // (seleccion, familia)
 uniform float uHov;
 varying vec3 vC; varying float vSel; varying vec3 vNrm; varying vec3 vView; varying float vFam;
 ${ATM_VARY}
 void main(){
+  vNace = aNace.x;
   vFam = aSF.y;
   vec4 wp = instanceMatrix * vec4(position, 1.0);
   vec4 mv = modelViewMatrix * wp;
@@ -236,11 +244,13 @@ void main(){
 }`;
 
 const CUERPO_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 const vec3 LUZ = normalize(vec3(-0.45, 0.72, 0.52));
 varying vec3 vC; varying float vSel; varying vec3 vNrm; varying vec3 vView; varying float vFam;
 ${ATM_DECL}
 void main(){
+  if (vNace > uReloj) discard;
   vec3 nn = normalize(vNrm);
   float fres = pow(1.0 - abs(dot(nn, normalize(vView))), 1.7);
   float dif = 0.5 + 0.5 * dot(nn, LUZ);
@@ -256,6 +266,7 @@ void main(){
 // es simplificar, es dibujar lo que son, y el contraste entre la textura estriada del tronco y la
 // lisa de las puntas es justamente lo que hace que se lea como tejido.
 const PENACHO_V = `
+attribute float aNace; varying float vNace;
 attribute vec3 aColor; attribute vec3 aCurva; attribute float aSec;
 attribute vec3 aSDF;   // (seleccion, distancia desde la raiz, familia)
 uniform float uFrente; uniform float uAncho; uniform float uT; uniform float uVaiven;
@@ -264,6 +275,7 @@ varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varyi
 varying vec3 vNrm; varying vec3 vView;
 ${ATM_VARY}
 void main(){
+  vNace = aNace;
   vFam = aSDF.z;
   vY = position.y + 0.5;
   float k = mix(1.0, 0.45, vY);
@@ -291,6 +303,7 @@ void main(){
 }`;
 
 const PENACHO_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 const vec3 LUZ = normalize(vec3(-0.45, 0.72, 0.52));
 varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varying float vFam;
@@ -298,6 +311,7 @@ varying vec3 vNrm; varying vec3 vView;
 uniform vec3 uAmbar;
 ${ATM_DECL}
 void main(){
+  if (vNace > uReloj) discard;
   vec3 nn = normalize(vNrm);
   float fres = pow(1.0 - abs(dot(nn, normalize(vView))), 2.0);
   float dif = 0.5 + 0.5 * dot(nn, LUZ);
@@ -314,10 +328,12 @@ void main(){
 // reconstrucciones reales el soma es lo único que se ve incandescente, y sin esto un icosaedro
 // mate a media distancia se pierde entre las ramas que salen de él.
 const HALO_V = `
+attribute float aNace; varying float vNace;
 attribute vec3 aColor; attribute float aR; attribute vec2 aSF; attribute float aSec;
 uniform float uHov;
 varying vec3 vC; varying vec2 vUv; varying float vSel; varying float vFam;
 void main(){
+  vNace = aNace;
   vC = aColor; vUv = uv * 2.0 - 1.0; vFam = aSF.y;
   vSel = max(aSF.x, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   vec4 c = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
@@ -325,9 +341,11 @@ void main(){
 }`;
 
 const HALO_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 varying vec3 vC; varying vec2 vUv; varying float vSel; varying float vFam;
 void main(){
+  if (vNace > uReloj) discard;
   float d = length(vUv);
   if (d > 1.0) discard;
   float a = pow(1.0 - d, 2.8);
@@ -340,12 +358,14 @@ void main(){
 // convierte la escena en una madeja y tapa la ramificación, que es lo que se vino a mirar. Se leen
 // por ACUMULACIÓN, como una corriente de fondo, y se encienden las que tocan lo que elegiste.
 const SIN_V = `
+attribute float aNace; varying float vNace;
 // aT = (t0, t1) DEL TRAMO dentro de su relacion completa. Sin esto el desvanecido de las puntas se
 // aplicaria a CADA tramo y una relacion de catorce tramos se veria punteada, como una linea de
 // guiones. La relacion tiene dos puntas y son las suyas, no las de cada pedazo.
 attribute vec3 aColor; attribute vec2 aT; attribute float aConf; attribute vec2 aSF;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
 void main(){
+  vNace = aNace;
   vFam = aSF.y;
   vY = mix(aT.x, aT.y, position.y + 0.5);
   vec4 wp = instanceMatrix * vec4(position, 1.0);
@@ -354,10 +374,12 @@ void main(){
 }`;
 
 const SIN_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
 uniform float uSinA; uniform float uSinB;
 void main(){
+  if (vNace > uReloj) discard;
   // Se desvanece en los DOS extremos: un arco de brillo parejo choca contra el botón y se ve como
   // un palo clavado. Naciendo y muriendo tenue, el contacto se lee como contacto.
   float extremo = sin(vY * 3.14159265);
@@ -419,16 +441,18 @@ void main(){ gl_FragColor = vec4(uCol, uLat); }`;
      · El pase NO pasa por el composer: el bloom promediaria ids vecinos y el SMAA los
        interpolaria, asi que cada pixel de borde saldria con un id que no es de nadie. */
 const ID_F = `
+uniform float uReloj; varying float vNace;
 precision highp float;
 varying vec3 vIdRGB;
-void main(){ gl_FragColor = vec4(vIdRGB, 1.0); }`;
+void main(){
+  if (vNace > uReloj) discard; gl_FragColor = vec4(vIdRGB, 1.0); }`;
 
 // La vaina: mismo afinado y misma panza que el shader visual, o el id no cae donde se ve el hilo.
 const ID_VAINA_V = `
-attribute vec3 aCurva; attribute vec4 aTNS; attribute vec3 aIdRGB;
-varying vec3 vIdRGB;
+attribute vec3 aCurva; attribute vec4 aTNS; attribute vec3 aIdRGB; attribute vec2 aNace;
+varying vec3 vIdRGB; varying float vNace;
 void main(){
-  vIdRGB = aIdRGB;
+  vIdRGB = aIdRGB; vNace = aNace.x;
   float y = position.y + 0.5;
   float k = mix(1.0, aTNS.x, y);
   vec4 wp = instanceMatrix * vec4(position.x * k, position.y, position.z * k, 1.0);
@@ -438,21 +462,21 @@ void main(){
 
 // El soma y el boton no se deforman: alcanza con la matriz de instancia.
 const ID_PLANO_V = `
-attribute vec3 aIdRGB;
-varying vec3 vIdRGB;
+attribute vec3 aIdRGB; attribute vec2 aNace;
+varying vec3 vIdRGB; varying float vNace;
 void main(){
-  vIdRGB = aIdRGB;
+  vIdRGB = aIdRGB; vNace = aNace.x;
   gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
 }`;
 
 // El penacho SI se mueve: el vaiven es parte de donde esta la ramita en este cuadro. Sin
 // replicarlo, el id de una ramita queda medio ancho corrido de la ramita que se ve.
 const ID_PEN_V = `
-attribute vec3 aCurva; attribute vec3 aSDF; attribute vec3 aIdRGB;
+attribute vec3 aCurva; attribute vec3 aSDF; attribute vec3 aIdRGB; attribute float aNace;
 uniform float uT; uniform float uVaiven;
-varying vec3 vIdRGB;
+varying vec3 vIdRGB; varying float vNace;
 void main(){
-  vIdRGB = aIdRGB;
+  vIdRGB = aIdRGB; vNace = aNace;
   float y = position.y + 0.5;
   float k = mix(1.0, 0.45, y);
   vec4 wp = instanceMatrix * vec4(position.x * k, position.y, position.z * k, 1.0);
@@ -578,6 +602,8 @@ export function montar(cfg) {
   // estado. La vaina y el soma comparten el mismo buffer porque comparten el orden de FIB.
   const ASEC = new THREE.InstancedBufferAttribute(new Float32Array(nF), 1);
   gVaina.setAttribute('aSec', ASEC);
+  const NACE = new Float32Array(nF * 2);
+  gVaina.setAttribute('aNace', new THREE.InstancedBufferAttribute(NACE, 2));
   // Los uniforms del impulso son UN SOLO objeto compartido por la vaina y el penacho: si fueran
   // dos, un desfase de un cuadro entre ellos partiría el frente en dos justo en la unión.
   // uAtm son los DOS EXTREMOS de la rampa de profundidad, en unidades de vista, y se recalculan
@@ -598,9 +624,27 @@ export function montar(cfg) {
      su propia comparación doble, y encender 584 relaciones mientras el mouse pasea es ruido. El
      clic —que sí es una decisión— las sigue encendiendo por `pintarSeleccion`. */
   const uHov = { value: -1 };
-  const uAtm = { uHov, uFondo: { value: new THREE.Color(cfg.fondo || '#05070d') },
+  /* ── EL RELOJ DEL CRECIMIENTO ─────────────────────────────────────────────────────────────
+     1e9 = todo nacido (el estado de reposo: cero costo, cero diferencia de píxeles). El replay
+     lo corre de 0 a maxEdad y lo suelta. UN objeto compartido por los seis materiales — three
+     deep-copia los uniforms de cada ShaderMaterial, así que si no fuera el MISMO objeto, cada
+     malla tendría su propio reloj y crecerían desincronizadas. */
+  const uReloj = { value: 1e9 };
+  let maxEdad = 0;
+  for (const s of S) for (const m of s.memorias) maxEdad = Math.max(maxEdad, Number(m.age_days) || 0);
+  const tDe = (m) => maxEdad - (Number(m.age_days) || 0);
+  // el [ini, fin] de un eslabón, interpolado dentro del nace de su sección
+  const naceEsl = (e) => {
+    const s = S[e.sec];
+    if (!s.nace) return [0, 0];
+    const d0 = (s.dist || 0) - (s.largo || 1);
+    const f0 = Math.max(0, Math.min(1, (e.dist - d0) / (s.largo || 1)));
+    const f1 = Math.max(f0, Math.min(1, f0 + e.largo / (s.largo || 1)));
+    return [s.nace[0] + (s.nace[1] - s.nace[0]) * f0, s.nace[0] + (s.nace[1] - s.nace[0]) * f1];
+  };
+  const uAtm = { uHov, uReloj, uFondo: { value: new THREE.Color(cfg.fondo || '#05070d') },
                  uAtm: { value: new THREE.Vector2(1, 2) } };
-  const uPulso = { uHov, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
+  const uPulso = { uHov, uReloj, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
                    uT: { value: 0 }, uVaiven: { value: cfg.vaiven != null ? cfg.vaiven : 0.9 },
                    uFondo: uAtm.uFondo, uAtm: uAtm.uAtm };
   // OPACO, y no es un detalle de rendimiento. Con 5.000 cilindros transparentes el orden de
@@ -621,6 +665,8 @@ export function montar(cfg) {
   gSoma.setAttribute('aColor', new THREE.InstancedBufferAttribute(SC, 3));
   gSoma.setAttribute('aSF', new THREE.InstancedBufferAttribute(SSF, 2));
   gSoma.setAttribute('aSec', ASEC);
+  const SNACE = new Float32Array(nF * 2);
+  gSoma.setAttribute('aNace', new THREE.InstancedBufferAttribute(SNACE, 2));
   // Se fabrican DOS materiales con el MISMO objeto de uniforms en vez de clonar uno: clonar un
   // ShaderMaterial deep-copia los uniforms (cloneUniforms), asi que los botones se quedarian con la
   // atmosfera del primer cuadro — y eso no se ve como error, se ve como que los botones no respiran.
@@ -632,6 +678,8 @@ export function montar(cfg) {
 
   /* ── 4 · los botones: UNA MEMORIA CADA UNO ──────────────────────────────────────────────── */
   let totBot = 0; for (const s of S) totBot += s.memorias.length;
+  const T_MEM = new Map();
+  for (const s of S) for (const m of s.memorias) if (m && m.id) T_MEM.set(m.id, tDe(m));
   const gBot = new THREE.SphereGeometry(1, 6, 5);
   const BC = new Float32Array(totBot * 3), BSF = new Float32Array(Math.max(1, totBot) * 2);
   for (let k = 0; k < Math.max(1, totBot); k++) BSF[k * 2 + 1] = 1;
@@ -639,6 +687,8 @@ export function montar(cfg) {
   gBot.setAttribute('aSF', new THREE.InstancedBufferAttribute(BSF, 2));
   const BSEC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, totBot)), 1);
   gBot.setAttribute('aSec', BSEC);
+  const BNACE = new Float32Array(Math.max(1, totBot) * 2);
+  gBot.setAttribute('aNace', new THREE.InstancedBufferAttribute(BNACE, 2));
   const botones = new THREE.InstancedMesh(gBot, cuerpoMat(), Math.max(1, totBot));
   botones.frustumCulled = false; mundo.add(botones);
   const BOT_DE = new Int32Array(Math.max(1, totBot));
@@ -669,6 +719,8 @@ export function montar(cfg) {
   gPen.setAttribute('aSDF', new THREE.InstancedBufferAttribute(PSDF, 3));
   const PSEC = new THREE.InstancedBufferAttribute(new Float32Array(nR), 1);
   gPen.setAttribute('aSec', PSEC);
+  const PNACE = new Float32Array(nR);
+  gPen.setAttribute('aNace', new THREE.InstancedBufferAttribute(PNACE, 1));
   const mPen = new THREE.ShaderMaterial({ vertexShader: PENACHO_V, fragmentShader: PENACHO_F,
     uniforms: uPulso, transparent: true, side: THREE.DoubleSide, depthWrite: false });
   const penacho = new THREE.InstancedMesh(gPen, mPen, Math.max(1, RAM.length));
@@ -686,9 +738,11 @@ export function montar(cfg) {
   const HSEC = new Float32Array(n);
   for (let k = 0; k < n; k++) HSEC[k] = k;
   gHalo.setAttribute('aSec', new THREE.InstancedBufferAttribute(HSEC, 1));
+  const HNACE = new Float32Array(n);
+  gHalo.setAttribute('aNace', new THREE.InstancedBufferAttribute(HNACE, 1));
   const halos = new THREE.InstancedMesh(gHalo,
     new THREE.ShaderMaterial({ vertexShader: HALO_V, fragmentShader: HALO_F,
-      uniforms: { uHov }, transparent: true, blending: THREE.AdditiveBlending,
+      uniforms: { uHov, uReloj }, transparent: true, blending: THREE.AdditiveBlending,
       depthWrite: false }), n);
   halos.frustumCulled = false; halos.renderOrder = 2; mundo.add(halos);
 
@@ -765,6 +819,10 @@ export function montar(cfg) {
     DLVF[i * 4 + 2] = ao * lado;
     TNS[i * 4 + 1] = e.nodos; TNS[i * 4 + 3] = e.nivel;
     DLVF[i * 4] = e.dist; DLVF[i * 4 + 1] = e.largo;
+    const nc = naceEsl(e);
+    NACE[i * 2] = nc[0]; NACE[i * 2 + 1] = nc[1];
+    // el soma nace con el ARRANQUE de su eslabón: es el cuerpo del relevo, no la punta
+    SNACE[i * 2] = nc[0]; SNACE[i * 2 + 1] = nc[0];
     ACUR[i * 3] = e.curva[0]; ACUR[i * 3 + 1] = e.curva[1]; ACUR[i * 3 + 2] = e.curva[2];
 
     _p.set(e.a[0], e.a[1], e.a[2]);
@@ -825,6 +883,9 @@ export function montar(cfg) {
       botones.setMatrixAt(iB, _m);
       if (mm[k] && mm[k].id) { POSMEM.set(mm[k].id, [px, py, pz]); MEM_SEC.set(mm[k].id, i); }
       BOT_MEM[iB] = mm[k] || null;
+      // el botón nace con SU memoria — la única pieza cuyo instante es exactamente el dato
+      BNACE[iB * 2] = (S[i].nace && mm[k]) ? tDe(mm[k]) : 0;
+      BNACE[iB * 2 + 1] = BNACE[iB * 2];
       tintar(i, e.fib, 3);
       BC[iB * 3] = _c.r; BC[iB * 3 + 1] = _c.g; BC[iB * 3 + 2] = _c.b;
       BOT_DE[iB] = i; BSEC.array[iB] = i; iB++;
@@ -841,6 +902,7 @@ export function montar(cfg) {
     // por acumulacion, y con el mismo factor que una rama fina salia un bloque blanco tapando el
     // centro del cuadro. Lo que necesita destacarse ahi es la forma, no el brillo.
     HR[i] = (s.Rhaz || 1) * (i === 0 ? 1.15 : 2.4);
+    HNACE[i] = s.nace ? s.nace[0] : 0;
     _p.set(s.a[0], s.a[1], s.a[2]);
     _m.compose(_p, _q.identity(), _s.set(1, 1, 1));
     halos.setMatrixAt(i, _m);
@@ -860,6 +922,8 @@ export function montar(cfg) {
     PCUR[i * 3] = x.curva[0]; PCUR[i * 3 + 1] = x.curva[1]; PCUR[i * 3 + 2] = x.curva[2];
     PSDF[i * 3 + 1] = x.dist;
     PEN_DE[i] = x.seccion; PSEC.array[i] = x.seccion;
+    // la ramita terminal brota cuando su sección TERMINÓ de crecer
+    PNACE[i] = S[x.seccion].nace ? S[x.seccion].nace[1] : 0;
   });
 
   vainas.instanceMatrix.needsUpdate = true;
@@ -913,12 +977,15 @@ export function montar(cfg) {
     gSin.setAttribute('aColor', new THREE.InstancedBufferAttribute(YC, 3));
     gSin.setAttribute('aT', new THREE.InstancedBufferAttribute(YT, 2));
     gSin.setAttribute('aConf', new THREE.InstancedBufferAttribute(YCONF, 1));
+    const YNACE = new Float32Array(nSeg);
+    gSin.setAttribute('aNace', new THREE.InstancedBufferAttribute(YNACE, 1));
     gSin.setAttribute('aSF', new THREE.InstancedBufferAttribute(YSF, 2));
     sinInst = new THREE.InstancedMesh(gSin,
       new THREE.ShaderMaterial({ vertexShader: SIN_V, fragmentShader: SIN_F, transparent: true,
         // LA PRESENCIA DE LAS RELACIONES ES POR FORMA, no una constante: en «la corona» lo único
         // que cruza el medio del cuadro son ellas, y con el alfa del núcleo ahí no se vería nada.
-        uniforms: { uSinA: { value: cfg.alfaSinapsis != null ? cfg.alfaSinapsis : 0.075 },
+        uniforms: { uReloj,
+                    uSinA: { value: cfg.alfaSinapsis != null ? cfg.alfaSinapsis : 0.075 },
                     uSinB: { value: cfg.alfaConfianza != null ? cfg.alfaConfianza : 0.22 } },
         blending: THREE.AdditiveBlending, depthWrite: false }), nSeg);
     sinInst.frustumCulled = false; sinInst.renderOrder = 1; mundo.add(sinInst);
@@ -932,6 +999,8 @@ export function montar(cfg) {
       // lección de las 586 sinapsis que desaparecieron: un NaN en la matriz de una instancia la
       // borra sin error ni warning, y se ve idéntico a «decidimos no dibujar relaciones».
       const r = 0.10 + y.conf * 0.14;
+      // la relación existe cuando sus DOS memorias existen
+      const nSin = S[0].nace ? Math.max(T_MEM.get(y.ma) || 0, T_MEM.get(y.mb) || 0) : 0;
       for (let k = 0; k + 1 < R.length; k++) {
         const a = R[k], b = R[k + 1];
         _d.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
@@ -943,6 +1012,7 @@ export function montar(cfg) {
         YC[iS * 3] = _c.r; YC[iS * 3 + 1] = _c.g; YC[iS * 3 + 2] = _c.b;
         YT[iS * 2] = k / (R.length - 1); YT[iS * 2 + 1] = (k + 1) / (R.length - 1);
         YCONF[iS] = y.conf;
+        YNACE[iS] = nSin;
         SIN_SEC[iS] = par;
         iS++;
       }
@@ -977,8 +1047,9 @@ export function montar(cfg) {
   gPen.setAttribute('aIdRGB', idRGB(RAM.length, BASE_RAM));
 
   const mIdVaina = new THREE.ShaderMaterial({ vertexShader: ID_VAINA_V, fragmentShader: ID_F,
-                                              side: THREE.DoubleSide });
-  const mIdPlano = new THREE.ShaderMaterial({ vertexShader: ID_PLANO_V, fragmentShader: ID_F });
+                                              uniforms: { uReloj }, side: THREE.DoubleSide });
+  const mIdPlano = new THREE.ShaderMaterial({ vertexShader: ID_PLANO_V, fragmentShader: ID_F,
+                                              uniforms: { uReloj } });
   const mIdPen = new THREE.ShaderMaterial({ vertexShader: ID_PEN_V, fragmentShader: ID_F,
                                             uniforms: uPulso, side: THREE.DoubleSide });
   // Una escena aparte con mallas que COMPARTEN geometria e instanceMatrix con las visuales: un
@@ -1234,11 +1305,25 @@ export function montar(cfg) {
     _w2.copy(_ejeY).multiplyScalar(0.5);
     const u = _w2.clone().normalize();
     const b = d.dot(u), c1 = _w1.dot(d), c2 = _w1.dot(u), den = 1 - b * b;
-    let t = Math.abs(den) < 1e-6 ? 0 : (c2 - b * c1) / -den;
     const semi = _w2.length();
-    t = Math.max(-semi, Math.min(semi, t));
-    _sal.copy(_cen).addScaledVector(u, t);
-    return [_sal.x, _sal.y, _sal.z];
+    /* CANDIDATOS, no una formula sola. Con el eslabon casi PARALELO al rayo —mirar una fibra de
+       punta, que en el tejido crecido pasa todo el tiempo— el sistema de minimos cuadrados
+       degenera y el clamp puede elegir la punta LEJANA: el anillo se va al punto de fuga del
+       tubo. Medido en la prueba de pagina: 842 px del cursor. Se evaluan el optimo clampeado y
+       las dos puntas; gana el mas cercano al rayo y, en el empate del caso paralelo, el mas
+       cercano a la camara — que es el que esta bajo el cursor. */
+    const tLS = Math.abs(den) < 1e-6 ? 0 : (c2 - b * c1) / -den;
+    let mP = null, mPerp = Infinity, mS = Infinity;
+    for (const tc of [Math.max(-semi, Math.min(semi, tLS)), -semi, semi]) {
+      _sal.copy(_cen).addScaledVector(u, tc);
+      const sx = Math.max(0, _sal.dot(d) - o.dot(d));
+      const px = _w1.copy(_sal).sub(o).addScaledVector(d, -sx).length();
+      if (px < mPerp - 1e-6 || (Math.abs(px - mPerp) <= 1e-6 && sx < mS)) {
+        mPerp = px; mS = sx; mP = [_sal.x, _sal.y, _sal.z];
+      }
+      _w1.copy(_cen).sub(o);
+    }
+    return mP;
   }
 
   function marcarFoco() {
@@ -1289,6 +1374,20 @@ export function montar(cfg) {
   }
 
   /** encuadrar: la distancia sale del TAMAÑO de lo que se va a mirar, no de un número fijo. */
+  // despejeEn: qué tan cerca de `p` pasa el tejido AJENO a la sección `iSec` (resta el radio del
+  // haz: importa la superficie, no el eje). Lo usa el vuelo para no aterrizar adentro del tejido.
+  function despejeEn(p, iSec) {
+    let mn = Infinity;
+    for (const t of S) {
+      if (t.idx === iSec || t.padre === iSec || S[iSec].padre === t.idx) continue;
+      for (let k = 0; k <= 6; k++) {
+        const c = enCurva(t, k / 6);
+        const d = Math.hypot(c[0] - p[0], c[1] - p[1], c[2] - p[2]) - (t.Rhaz || 1);
+        if (d < mn) mn = d;
+      }
+    }
+    return mn;
+  }
   function encuadrar(i, brusco) {
     const s = S[i];
     const q = enCurva(s, 0.5);
@@ -1297,7 +1396,23 @@ export function montar(cfg) {
     let ext = s.largo * 1.1;
     for (const h of s.hijos) ext = Math.max(ext, Math.hypot(
       S[h].b[0] - q[0], S[h].b[1] - q[1], S[h].b[2] - q[2]) * 1.5);
-    cam.volarA(q, Math.max(26, ext * 1.55), brusco ? null : undefined);
+    let dist = Math.max(26, ext * 1.55);
+    /* ── Y LA CÁMARA ATERRIZA EN AIRE, NO EN TEJIDO ─────────────────────────────────────────
+       Con el árbol CRECIDO las hojas son finas (Rhaz 1-2) y el encuadre por tamaño puede caer a
+       26 u — adentro de la trama, con una fibra a DOS unidades del lente. Ahí un clic golpea el
+       tubo borroso pegado a la cámara y el anillo no tiene dónde caer: 842 px medidos. Se prueba
+       la posición futura de la cámara y, si el tejido ajeno pasa a menos de 9 u, se retrocede en
+       pasos de 1,3× (tope 2,2×): mejor mirar la hoja un poco más de lejos que mirarla desde
+       adentro de otra rama. En el nudo este lazo no muerde — el despeje ya daba de sobra. */
+    const ce = Math.cos(cam.est.el), se = Math.sin(cam.est.el);
+    for (let paso = 0; paso < 3; paso++) {
+      const pos = [q[0] + Math.sin(cam.est.az) * ce * dist,
+                   q[1] + se * dist,
+                   q[2] + Math.cos(cam.est.az) * ce * dist];
+      if (despejeEn(pos, i) >= 9 || dist > ext * 1.55 * 2.2) break;
+      dist *= 1.3;
+    }
+    cam.volarA(q, dist, brusco ? null : undefined);
   }
 
   // EL IMPULSO SALE DE UN ACTO, no de un temporizador. Es la misma regla que el panel: sin evento
@@ -1403,6 +1518,7 @@ export function montar(cfg) {
   });
 
   addEventListener('keydown', (ev) => {
+    if (ev.key === 'r' || ev.key === 'R') { empezarReplay(); return; }
     const s = S[sel];
     if (ev.key === 'ArrowUp') { if (s.padre >= 0) elegir(s.padre); }
     else if (ev.key === 'ArrowDown') { if (s.hijos.length) elegir(s.hijos[0]); }
@@ -1477,7 +1593,7 @@ export function montar(cfg) {
         <button class="bt${aislado === sel ? ' on' : ''}" data-ac="aislar">${
           aislado === sel ? 'mostrar el resto' : 'ver esta sola'}</button>
       </div>
-      <div class="teclas">↑ padre · ↓ hija · ←→ hermanas · clic: elegir · doble clic: volar · A: ver sola · 0: ver todo<br>
+      <div class="teclas">↑ padre · ↓ hija · ←→ hermanas · clic: elegir · doble clic: volar · A: ver sola · 0: ver todo · R: ver crecer<br>
         arrastrar: girar · botón del medio o shift: mover · rueda: acercar al cursor</div>`;
     panel.querySelectorAll('.miga').forEach((el) =>
       el.addEventListener('click', () => elegir(Number(el.dataset.i))));
@@ -1488,6 +1604,25 @@ export function montar(cfg) {
   }
 
   /* ── bucle ──────────────────────────────────────────────────────────────────────────────── */
+  /* ── EL REPLAY: la historia real, en tres segundos ────────────────────────────────────────
+     El reloj NO avanza lineal en días: avanza POR CUANTILES de la tabla de nacimientos. Medido
+     en el central, la mitad de la memoria nació en los últimos 8 días de 45 — lineal, el 80 %
+     del replay estaría vacío y el final sería una explosión ilegible. Por cuantiles, el ritmo de
+     nacimientos es constante: la historia se VE entera, y los períodos quietos del calendario no
+     congelan la pantalla. Es una decisión sobre el TIEMPO DE REPRODUCCIÓN, no sobre el dato: el
+     orden de los nacimientos es exactamente el real. */
+  let replayIni = null, tablaReplay = null;
+  function empezarReplay() {
+    if (!S[0].nace || !maxEdad) return;
+    if (!tablaReplay) {
+      tablaReplay = [];
+      for (const s of S) for (const m of s.memorias) tablaReplay.push(tDe(m));
+      tablaReplay.sort((a, b) => a - b);
+    }
+    replayIni = performance.now();
+    uReloj.value = -1;
+  }
+
   let ultimoHov = 0, cuadros = 0, tPrev = 0, hovX = -1, hovY = -1;
   function frame() {
     requestAnimationFrame(frame);
@@ -1532,6 +1667,16 @@ export function montar(cfg) {
     const dOrb = cam.est.dist;
     uAtm.uAtm.value.set(Math.max(1, dOrb - RESC * 0.55), dOrb + RESC * 1.45);
     uPulso.uT.value = ahora * 0.001;
+    if (replayIni != null) {
+      const c = (t - replayIni) / (cfg.replayMs || 3000);
+      if (c >= 1 || !tablaReplay.length) {
+        // TERMINÓ: el reloj se SUELTA (1e9 = todo nacido) y no se toca más — el cuadro quieto
+        // vuelve a dar 0 píxeles de diferencia, que es el invariante de fondo del panel.
+        replayIni = null; uReloj.value = 1e9;
+      } else {
+        uReloj.value = tablaReplay[Math.min(tablaReplay.length - 1, Math.floor(c * tablaReplay.length))] + 1e-3;
+      }
+    }
     if (pulT0 > 0) avanzarPulso(ahora - pulT0);
     rot.tick(camera, cam.est.dist);
     composer.render();
@@ -1554,6 +1699,8 @@ export function montar(cfg) {
 
   pintarSeleccion();
   frame();
+  // La escena abre CRECIENDO su historia — es un evento (cargar la vista), no un latido.
+  empezarReplay();
 
   // UN PULSO AL ABRIR, UNA SOLA VEZ. No es un latido de fondo —eso sería inventar actividad, que
   // es justo lo que este panel no hace—: es la presentación del recorrido. Sale de un evento real
@@ -1563,12 +1710,14 @@ export function montar(cfg) {
 
   const vista = { scene, camera, cam, renderer, elegir, aislar, verTodo, S, camino, bajoElCursor,
                   sondear, get foco() { return foco; }, BOT_DE, BOT_MEM, ID_TOTAL,
+                  empezarReplay, get reloj() { return uReloj.value; },
+                  get replayActivo() { return replayIni != null; },
                   BASE_NEURONA, BASE_MEM, BASE_RAM,
                   FAMSEC, get aislado() { return aislado; }, get encuadre0() { return ENCUADRE0; },
                   get cuadros() { return cuadros; },
                   RAM, PEN_DE, FIB, FIB_SEC, uPulso, lanzarPulso, avanzarPulso,
                   get sel() { return sel; },
-                  POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco,
+                  POSMEM, MEM_SEC, SIN, sinInst, reticula, uRet, marcarFoco, vainas, botones, penacho,
                   pintarSeleccion, rot, composer, uHov,
                   // Lo que ESTA forma afirma. `probar` corre fuera de `montar`, asi que no ve la
                   // configuracion: lo que necesite tiene que viajar por acá. (El cazador de errores
@@ -1686,6 +1835,11 @@ function probar(v) {
   const tecla = (k) => dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
 
   (async () => {
+    // el replay corre con tiempo real: se espera con cuadros de verdad (bajo tiempo virtual
+    // vuelan) hasta que suelte el reloj, o todo lo que sigue mediría una escena a medio nacer
+    for (let esp = 0; esp < 600 && v.replayActivo; esp++) {
+      await new Promise((res) => requestAnimationFrame(res));
+    }
     // 1 · la raiz tiene hijas y el arbol es un ARBOL, no una lista
     const hojas = S.filter((s) => s.hoja).length;
     const maxNiv = S.reduce((m, s) => Math.max(m, s.nivel), 0);
@@ -1907,6 +2061,7 @@ function probar(v) {
     //       este test tambien defiende que no se saque de los datos crudos —sin el arqueado del
     //       shader— que es como se corre de lugar sin que nadie lo note.
     let anillos = 0, anilloOk = 0, peorPx = 0;
+    const _p3v = new THREE.Vector3();
     if (objetivo2) {
       v.elegir(objetivo2.idx); await asentar();
       v.camera.updateMatrixWorld(true);
@@ -1920,20 +2075,54 @@ function probar(v) {
         if (sx < 2 || sy < 2 || sx > innerWidth - 2 || sy > innerHeight - 2) continue;
         const h = v.sondear(sx, sy);
         if (!h) continue;
-        anillos++;
         v._foco = h; v.marcarFoco();
         if (!v.reticula.visible) continue;
+        // CLIC RESOLUBLE O NO CUENTA: si lo golpeado quedó a menos de 10 u del lente, es el tubo
+        // borroso pegado a la cámara — eso lo mide la fila del VUELO, no la del anillo. Meterlo
+        // acá mezclaría dos defectos distintos en un solo número.
+        if (v.uRet.uPos.value.distanceTo(v.camera.position) < 10) continue;
+        anillos++;
         const q = v.uRet.uPos.value.clone().project(v.camera);
         const rx = (q.x * 0.5 + 0.5) * innerWidth, ry = (-q.y * 0.5 + 0.5) * innerHeight;
         const d = Math.hypot(rx - sx, ry - sy);
+        /* LA VARA ES LA FÍSICA DEL PICKING, no un número fijo. El sondeo tiene una ventana de
+           21x21 (snap de ±10 px): si el botón clickeado está tapado, engancha al VECINO y el
+           anillo cae — correctamente — sobre ese vecino, cuyo centro queda a media ventana MÁS
+           su propio radio proyectado del cursor. 14 px a secas estaba calibrado en el nudo,
+           donde el vuelo quedaba lejos y todo proyectaba chico; de cerca, un botón importante
+           mide 40 px él solo. La vara: 14 de base + 11 de ventana + el radio proyectado. */
+        v.camera.getWorldPosition(_p3v);
+        const prof = Math.max(1, _p3v.distanceTo(v.uRet.uPos.value));
+        const M = new THREE.Matrix4();
+        (h.tipo === 'neurona' ? v.vainas : h.tipo === 'memoria' ? v.botones : v.penacho).getMatrixAt(h.i, M);
+        const rObj = Math.hypot(M.elements[0], M.elements[1], M.elements[2]);
+        const pxU = (innerHeight * 0.5) / (Math.tan((v.camera.fov * Math.PI) / 360) * prof);
+        const vara = 14 + 11 + rObj * pxU;
         if (d > peorPx) peorPx = d;
-        if (d <= 14) anilloOk++;
+        if (d <= vara) anilloOk++;
       }
       v._foco = null; v.marcarFoco();
     }
     out.push(['el anillo cae donde señalaste',
               anillos ? anilloOk + ' de ' + anillos + ' (peor ' + peorPx.toFixed(0) + ' px)' : 'no se pudo probar',
               anillos > 0 && anilloOk === anillos]);
+    // 12c · EL VUELO ATERRIZA EN AIRE. Volar a una hoja no puede dejar el lente adentro de la
+    //       trama: una fibra ajena a dos unidades convierte cualquier clic en un golpe al tubo
+    //       borroso. 9 u es el mismo umbral que usa encuadrar para retroceder.
+    if (objetivo2) {
+      v.elegir(objetivo2.idx); await asentar();
+      let libre = Infinity;
+      const cp = v.camera.position;
+      for (const t of S) {
+        for (let k = 0; k <= 6; k++) {
+          const c = enCurva(t, k / 6);
+          const d = Math.hypot(c[0] - cp.x, c[1] - cp.y, c[2] - cp.z) - (t.Rhaz || 1);
+          if (d < libre) libre = d;
+        }
+      }
+      out.push(['el vuelo aterriza en aire, no en tejido',
+                'lo más cerca: ' + libre.toFixed(1) + ' u', libre >= 8]);
+    }
 
     // 12c · UN CLIC NO MUEVE LA CAMARA, y el doble clic SI. Las dos mitades, o el test pasa con
     //       una camara que no se mueve nunca — que seria la otra manera de romperlo.
@@ -2003,11 +2192,34 @@ function probar(v) {
               Array.from(v.FAMSEC).filter((x) => x >= 0.99).length + ' de ' + S.length,
               Array.from(v.FAMSEC).every((x) => x >= 0.99)]);
 
-    // 11 · EL TRONCO no vuelve a ser un tubo largo y vacio: mas corto que las ramas de nivel 1
-    const l1 = S.filter((x) => x.nivel === 1).reduce((a, x) => a + x.largo, 0)
-             / Math.max(1, S.filter((x) => x.nivel === 1).length);
+    // 11 · EL TRONCO no vuelve a ser un tubo largo y vacio: mas corto que un actor. En los
+    // colocados la rama de nivel 1 es el actor entero; en el CRECIDO esa seccion es solo el
+    // primer tramo (se corta en la primera bifurcacion), asi que ahi la vara es el ALCANCE del
+    // subarbol del actor — comparar contra el tramo daria rojo con el arbol perfectamente sano.
+    let vara;
+    if (v.S[0].nace) {
+      const alcance = new Float64Array(S.length);
+      for (let i = S.length - 1; i >= 1; i--) {
+        alcance[i] = Math.max(alcance[i], S[i].dist || 0);
+        if (S[i].padre >= 1) {
+          alcance[S[i].padre] = Math.max(alcance[S[i].padre], alcance[i]);
+        }
+      }
+      vara = Math.min(...S[0].hijos.map((i) => alcance[i] - ((S[i].dist || 0) - (S[i].largo || 0))));
+    } else {
+      vara = S.filter((x) => x.nivel === 1).reduce((a, x) => a + x.largo, 0)
+           / Math.max(1, S.filter((x) => x.nivel === 1).length);
+    }
     out.push(['el tronco es mas corto que un actor',
-              S[0].largo.toFixed(0) + ' vs ' + l1.toFixed(0), S[0].largo < l1]);
+              S[0].largo.toFixed(0) + ' vs ' + vara.toFixed(0), S[0].largo < vara]);
+    if (v.S[0].nace) {
+      // El replay corre al abrir; con el presupuesto de tiempo virtual del arnés ya tiene que
+      // haber terminado Y SOLTADO el reloj — un reloj agarrado es un cuadro que nunca vuelve a
+      // dar 0 píxeles de diferencia.
+      out.push(['el crecimiento termina y suelta el reloj',
+                v.replayActivo ? 'SIGUE CORRIENDO' : (v.reloj > 1e8 ? 'suelto' : 'agarrado en ' + v.reloj.toFixed(1)),
+                !v.replayActivo && v.reloj > 1e8]);
+    }
 
     const caja = document.createElement('div');
     caja.className = 'prueba';
