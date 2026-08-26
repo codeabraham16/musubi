@@ -339,6 +339,18 @@ const SABOTAJES = [
     de: '  return Math.max(TINTA_TERMINAL.piso, TINTA_TERMINAL.referencia / area);',
     a: '  return 1;',
   },
+  {
+    test: 'G9',
+    que: 'el delta empuja la madera vieja: el nodo que brota corre a su padre',
+    de: '      padre.push(nd); nh.push(0); nh[nd]++;   // el delta solo APPENDEA (G9)',
+    a: '      padre.push(nd); nh.push(0); nh[nd]++; px[nd] += paso * 0.2;',
+  },
+  {
+    test: 'G10',
+    que: 'lo consumido por madera vieja se pierde: el injerto en passant no se registra',
+    de: '      for (const m of atrs[a].mems) injertosMap.get(secV).push(m);',
+    a: '      void atrs[a];',
+  },
 ];
 
 const original = readFileSync(OBJ, 'utf8');

@@ -1010,9 +1010,11 @@ export function emitirSecciones(bosques, opciones) {
     const armarCadena = (vDesde, vPrimero) => {
       const poly = [P(vPrimero)];
       const mems = [];
+      const cadena = [];
       let v = vDesde, arco = 0;
       for (;;) {
         poly.push(P(v));
+        cadena.push(v);
         arco += dist2(poly[poly.length - 2], poly[poly.length - 1]);
         if (consumo[v]) for (const a of consumo[v]) mems.push(a);
         const hs = hijosDe[v];
@@ -1025,7 +1027,7 @@ export function emitirSecciones(bosques, opciones) {
         poly.pop();
         v = sig;
       }
-      const tmp = { poly, mems, hijos: [], fin: v };
+      const tmp = { poly, mems, hijos: [], fin: v, nodos: cadena };
       const hs = hijosDe[v];
       if (hs) for (const h of hs) tmp.hijos.push(armarCadena(h, v));
       else if (hijosDe[v] === null && v !== vDesde) { /* hoja real */ }
@@ -1071,6 +1073,9 @@ export function emitirSecciones(bosques, opciones) {
     raicesTmp.sort((x, y) => (y.carga - x.carga) || (x.menor - y.menor));
 
     // ── emisión en preorden, con la geometría de la polilínea ──
+    // nodoSec: en qué sección cayó cada nodo del bosque. Es el mapa que el DELTA necesita para
+    // injertar un brote nuevo en la madera vieja sin adivinar.
+    const nodoSec = B.bosque.nodoSec = new Int32Array(px.length).fill(-1);
     const emitir = (tmp, padreIdx, nivel, esRaizActor) => {
       const poly = tmp.poly;
       const a = poly[0], b = poly[poly.length - 1];
@@ -1111,6 +1116,7 @@ export function emitirSecciones(bosques, opciones) {
         w0: 1, w1: 1, apretada: 0,
       };
       S.push(s);
+      if (tmp.nodos) for (const nv of tmp.nodos) nodoSec[nv] = s.idx;
       S[padreIdx].hijos.push(s.idx);
       for (const a of tmp.mems) S[0].carga += B.atrs[a].mems.length;
       for (const h of tmp.hijos) emitir(h, s.idx, nivel + 1, false);
@@ -1224,8 +1230,204 @@ export function formarColonizado(raiz, opciones) {
   S[0].recortado = S0.reduce((t, x) => t + (x.recortado || 0), 0);
   naceDe(S, o);
   S.forzados = bosques.reduce((t, b) => t + b.bosque.forzados, 0);
+  /* ── EL ESTADO DEL DELTA. El vivo necesita tres cosas que sólo existen acá: los bosques (para
+     crecer SOLO lo nuevo, con la madera vieja congelada), dónde va cada topic (la parcela de su
+     hoja — un atractor viejo NUNCA se recoloca aunque el treemap de una recarga lo movería), y
+     qué ids ya están. Viaja colgado de S: el que no hace deltas no paga nada. */
+  const topicCelda = new Map();
+  const racimoInfo = new Map();
+  for (const s0 of S0) {
+    if (s0.nivel === 1) racimoInfo.set(s0.racimo, { celda: celdas[s0.idx], idx: s0.idx });
+    if (s0.memorias) {
+      for (const m of s0.memorias) {
+        if (m && m.topic != null && !topicCelda.has(m.topic)) topicCelda.set(m.topic, celdas[s0.idx]);
+      }
+    }
+  }
+  const idsVistos = new Set();
+  for (const sx of S) for (const m of sx.memorias) if (m && m.id) idsVistos.add(m.id);
+  let mxE = 0;
+  for (const sx of S) for (const m of sx.memorias) mxE = Math.max(mxE, Number(m.age_days) || 0);
+  S.estado = { bosques, topicCelda, racimoInfo, idsVistos, opciones: o, maxEdad: mxE };
   return S;
 }
+
+/**
+ * crecerDelta: sigue creciendo un bosque EXISTENTE hacia atractores nuevos — y LA MADERA VIEJA
+ * NO SE MUEVE: space colonization nunca recoloca un nodo, y este delta sólo APPENDEA. Es el
+ * invariante G9, con su sabotaje. Fuerza bruta donde crecer usa grid: el delta trae pocos
+ * atractores y el costo es nodos × nuevos, no nodos × todos.
+ *
+ * @returns {{nodosNuevos:number[], consumidoPor:Int32Array, forzados:number}}
+ */
+export function crecerDelta(bosque, atrs, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const paso = num(o.paso, 16);
+  const dk = num(o.dk, 18);
+  const inercia = num(o.inercia, 0.4);
+  const maxIter = num(o.maxIter, 120);
+  const { px, py, pz, padre, nh } = bosque;
+  const dirDe = (v) => {
+    if (padre[v] < 0) return [0, 1, 0];
+    const l = Math.hypot(px[v] - px[padre[v]], py[v] - py[padre[v]], pz[v] - pz[padre[v]]) || 1;
+    return [(px[v] - px[padre[v]]) / l, (py[v] - py[padre[v]]) / l, (pz[v] - pz[padre[v]]) / l];
+  };
+  const n = atrs.length;
+  const cn = new Int32Array(n), cd = new Float64Array(n);
+  const vivo = new Uint8Array(n).fill(1);
+  const consumidoPor = new Int32Array(n).fill(-1);
+  // SÓLO MADERA VISIBLE: un nodo podado (no consumió y nada suyo consumió) no está en ninguna
+  // sección — injertar ahí, o brotar desde ahí, es geometría que nace de la nada. Los nodos del
+  // propio delta (índice más allá de nodoSec) sí valen: el brote los va a dibujar.
+  const visible = (v) => !bosque.nodoSec || v >= bosque.nodoSec.length || bosque.nodoSec[v] >= 0;
+  for (let a = 0; a < n; a++) {
+    const q = atrs[a].pos;
+    let md = Infinity, mn = 0;
+    for (let v = 0; v < px.length; v++) {
+      if (!visible(v)) continue;
+      const d = Math.hypot(q[0] - px[v], q[1] - py[v], q[2] - pz[v]);
+      if (d < md) { md = d; mn = v; }
+    }
+    cd[a] = md; cn[a] = mn;
+    // EN PASSANT: si ya cae a menos de dk de la madera vieja, la memoria está SERVIDA — es un
+    // botón sobre la rama existente. Brotar un tallo para ir a buscar lo que ya tenés al lado
+    // es como el dibujo inventa geometría.
+    if (md <= dk) { vivo[a] = 0; consumidoPor[a] = mn; }
+  }
+  const nodosNuevos = [];
+  let forzados = 0;
+  for (let iter = 0; iter < maxIter; iter++) {
+    const acum = new Map();
+    let vivos = 0;
+    for (let a = 0; a < n; a++) {
+      if (!vivo[a]) continue;
+      vivos++;
+      const nd = cn[a], q = atrs[a].pos;
+      let vx = q[0] - px[nd], vy = q[1] - py[nd], vz = q[2] - pz[nd];
+      const l = Math.hypot(vx, vy, vz) || 1;
+      vx /= l; vy /= l; vz /= l;
+      const ac = acum.get(nd);
+      if (ac) { ac[0] += vx; ac[1] += vy; ac[2] += vz; } else acum.set(nd, [vx, vy, vz]);
+    }
+    if (!vivos) break;
+    const brotes = [];
+    for (const par of acum) {
+      const nd = par[0], ac = par[1];
+      const l = Math.hypot(ac[0], ac[1], ac[2]);
+      if (l < 1e-9) continue;
+      const dp = dirDe(nd);
+      let bx = ac[0] / l + inercia * dp[0];
+      let by = ac[1] / l + inercia * dp[1];
+      let bz = ac[2] / l + inercia * dp[2];
+      const bl = Math.hypot(bx, by, bz) || 1;
+      const idx = px.length;
+      px.push(px[nd] + (bx / bl) * paso);
+      py.push(py[nd] + (by / bl) * paso);
+      pz.push(pz[nd] + (bz / bl) * paso);
+      padre.push(nd); nh.push(0); nh[nd]++;   // el delta solo APPENDEA (G9)
+      brotes.push(idx); nodosNuevos.push(idx);
+    }
+    if (!brotes.length) break;
+    for (let a = 0; a < n; a++) {
+      if (!vivo[a]) continue;
+      const q = atrs[a].pos;
+      for (const nd of brotes) {
+        const d = Math.hypot(q[0] - px[nd], q[1] - py[nd], q[2] - pz[nd]);
+        if (d < cd[a]) { cd[a] = d; cn[a] = nd; }
+        if (d <= dk) { vivo[a] = 0; consumidoPor[a] = nd; break; }
+      }
+    }
+  }
+  for (let a = 0; a < n; a++) {
+    if (!vivo[a]) continue;
+    vivo[a] = 0; consumidoPor[a] = cn[a]; forzados++;
+  }
+  return { nodosNuevos, consumidoPor, forzados };
+}
+
+/**
+ * emitirBrote: del delta crecido, secciones NUEVAS injertadas en las viejas.
+ *
+ * Cada brote cuelga de la sección que contenía su nodo de injerto (el mapa nodoSec que
+ * emitirSecciones dejó en el bosque). Las secciones del brote llevan `padreSec` — el idx REAL de
+ * la sección vieja, o ~k si cuelgan de otra sección del MISMO brote. Un atractor consumido por
+ * madera VIEJA entra como botón en passant de esa sección, sin geometría nueva.
+ *
+ * @returns {{secciones:Array, injertos:Array<{sec:number, mems:Array}>}}
+ */
+export function emitirBrote(bosque, atrs, consumidoPor, nodosNuevos, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const largoMax = num(o.largoMax, 72);
+  const nuevoDesde = nodosNuevos.length ? nodosNuevos[0] : bosque.px.length;
+  const { px, py, pz, padre } = bosque;
+  const P = (v) => [px[v], py[v], pz[v]];
+  const consumo = new Map();
+  const injertosMap = new Map();
+  for (let a = 0; a < consumidoPor.length; a++) {
+    const nd = consumidoPor[a];
+    if (nd < 0) continue;
+    if (nd < nuevoDesde) {
+      const secV = bosque.nodoSec ? bosque.nodoSec[nd] : -1;
+      if (!injertosMap.has(secV)) injertosMap.set(secV, []);
+      for (const m of atrs[a].mems) injertosMap.get(secV).push(m);
+    } else {
+      if (!consumo.has(nd)) consumo.set(nd, []);
+      for (const m of atrs[a].mems) consumo.get(nd).push(m);
+    }
+  }
+  const hijos = new Map();
+  const keep = new Set();
+  for (const v of nodosNuevos) {
+    if (!hijos.has(padre[v])) hijos.set(padre[v], []);
+    hijos.get(padre[v]).push(v);
+  }
+  for (let k = nodosNuevos.length - 1; k >= 0; k--) {
+    const v = nodosNuevos[k];
+    if (consumo.has(v) || (hijos.get(v) || []).some((h) => keep.has(h))) keep.add(v);
+  }
+  const secciones = [];
+  const emitir = (vIni, vPrimero, padreSec, nivel) => {
+    const poly = [P(vPrimero)];
+    const mems = [];
+    let v = vIni, arco = 0;
+    for (;;) {
+      poly.push(P(v));
+      arco += Math.hypot(poly[poly.length - 1][0] - poly[poly.length - 2][0],
+                         poly[poly.length - 1][1] - poly[poly.length - 2][1],
+                         poly[poly.length - 1][2] - poly[poly.length - 2][2]);
+      if (consumo.has(v)) mems.push(...consumo.get(v));
+      const hs = (hijos.get(v) || []).filter((h) => keep.has(h));
+      if (hs.length !== 1 || arco > largoMax) {
+        const a = poly[0], b = poly[poly.length - 1];
+        const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const dl = Math.hypot(d[0], d[1], d[2]) || 0.001;
+        const pm = poly[Math.floor(poly.length / 2)];
+        const idx = secciones.length;
+        secciones.push({
+          padreSec, nivel, a, b, largo: arco || 0.001,
+          dir: [d[0] / dl, d[1] / dl, d[2] / dl],
+          curva: [pm[0] - (a[0] + b[0]) / 2, pm[1] - (a[1] + b[1]) / 2, pm[2] - (a[2] + b[2]) / 2],
+          memorias: mems.slice(),
+        });
+        for (const h of hs) emitir(h, v, ~idx, nivel + 1);
+        return;
+      }
+      v = hs[0];
+    }
+  };
+  for (const v of nodosNuevos) {
+    if (!keep.has(v)) continue;
+    if (padre[v] < nuevoDesde || !keep.has(padre[v])) {
+      const secVieja = padre[v] >= 0 && padre[v] < nuevoDesde && bosque.nodoSec
+        ? bosque.nodoSec[padre[v]] : -1;
+      emitir(v, padre[v] >= 0 ? padre[v] : v, secVieja, 1);
+    }
+  }
+  return { secciones, injertos: [...injertosMap].map((par) => ({ sec: par[0], mems: par[1] })) };
+}
+
 
 /**
  * colocarNudo: la fusión del núcleo y la corona.

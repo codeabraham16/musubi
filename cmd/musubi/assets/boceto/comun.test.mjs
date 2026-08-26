@@ -14,7 +14,8 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
          escalaTinta, TINTA_SINAPSIS, enCurva,
-         formarColonizado, hashCadena, deHash, tintaTerminal, TINTA_TERMINAL } from './comun.mjs';
+         formarColonizado, hashCadena, deHash, tintaTerminal, TINTA_TERMINAL,
+         crecerDelta, emitirBrote } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -1161,4 +1162,68 @@ test('G8 · la luz terminal es un PRESUPUESTO: mas terminales no iluminan mas', 
   // apagada del todo, que es la otra manera de que la luz no crezca.
   assert.equal(tintaTerminal(ref * 0.5), 1, 'un cerebro chico no se atenua');
   assert.ok(tintaTerminal(1e9) >= TINTA_TERMINAL.piso, 'el piso aguanta el caso absurdo');
+});
+
+/* ── EL DELTA EN VIVO ────────────────────────────────────────────────────────────────────────
+   Una memoria nueva hace crecer la rama que la recibe, SIN recomputar el árbol: crecerDelta
+   sólo appendea nodos y emitirBrote injerta las secciones nuevas en las viejas. */
+
+const unDelta = () => {
+  const S = elColonizado();
+  const bosque = S.estado.bosques[0];
+  const n0 = bosque.bosque.px.length;
+  // dos atractores nuevos cerca de la nube del actor: uno alcanzable, otro que cae en madera
+  // vieja (pegado a un nodo existente, para que el injerto en passant también se pruebe)
+  // el ancla del fixture tiene que ser madera VISIBLE: un nodo podado no está en ninguna
+  // sección y el injerto sobre él sería geometría de la nada (que es justo lo que se prohíbe)
+  let vp = n0 - 1;
+  while (vp > 0 && bosque.bosque.nodoSec && bosque.bosque.nodoSec[vp] < 0) vp--;
+  const atrs = [
+    { id: 'n1', mems: [{ id: 'n1', topic: 'x/t0', age_days: 0 }],
+      pos: [bosque.bosque.px[vp] + 55, bosque.bosque.py[vp] + 40, bosque.bosque.pz[vp] + 25] },
+    { id: 'n2', mems: [{ id: 'n2', topic: 'x/t1', age_days: 0 }],
+      pos: [bosque.bosque.px[vp] + 4, bosque.bosque.py[vp] + 3, bosque.bosque.pz[vp] + 2] },
+  ];
+  return { S, bosque, n0, atrs };
+};
+
+test('G9 · la madera vieja NO SE MUEVE', () => {
+  const { bosque, n0, atrs } = unDelta();
+  const B = bosque.bosque;
+  const antes = { px: B.px.slice(0, n0), py: B.py.slice(0, n0), pz: B.pz.slice(0, n0),
+                  padre: B.padre.slice(0, n0) };
+  const r = crecerDelta(B, atrs, { paso: 16, dk: 18 });
+  // CONTROL: el delta CRECIÓ — sin brotes nuevos, la inmovilidad de lo viejo no afirma nada.
+  assert.ok(r.nodosNuevos.length >= 1, 'el delta no brotó ni un nodo');
+  for (let v = 0; v < n0; v++) {
+    assert.ok(B.px[v] === antes.px[v] && B.py[v] === antes.py[v] && B.pz[v] === antes.pz[v],
+      `el nodo viejo ${v} se movió`);
+    assert.equal(B.padre[v], antes.padre[v], `el nodo viejo ${v} cambió de padre`);
+  }
+  // y todo nodo nuevo cuelga de algo que ya existía o de otro nuevo — nunca flota
+  for (const v of r.nodosNuevos) assert.ok(B.padre[v] >= 0 && B.padre[v] < v);
+});
+
+test('G10 · el brote LLEGA: toda memoria nueva termina en una sección o injertada', () => {
+  const { bosque, atrs } = unDelta();
+  const B = bosque.bosque;
+  const r = crecerDelta(B, atrs, { paso: 16, dk: 18 });
+  const br = emitirBrote(B, atrs, r.consumidoPor, r.nodosNuevos, {});
+  const ids = new Set();
+  let repes = 0;
+  for (const s of br.secciones) for (const m of s.memorias) { if (ids.has(m.id)) repes++; ids.add(m.id); }
+  for (const j of br.injertos) for (const m of j.mems) { if (ids.has(m.id)) repes++; ids.add(m.id); }
+  assert.equal(repes, 0, 'una memoria del delta se dibujó dos veces');
+  assert.equal(ids.size, 2, `llegaron ${ids.size} de 2 memorias nuevas`);
+  // el injerto apunta a una sección REAL, y el brote a una vieja o a otra del mismo brote
+  for (const j of br.injertos) assert.ok(j.sec >= 0, 'un injerto quedó sin sección');
+  for (let k = 0; k < br.secciones.length; k++) {
+    const p = br.secciones[k].padreSec;
+    assert.ok(p >= 0 || (~p >= 0 && ~p < k), `la sección ${k} del brote cuelga de la nada (${p})`);
+  }
+  // CONTROL de determinismo: el mismo delta dos veces sobre el mismo estado da lo mismo
+  const { bosque: b2, atrs: a2 } = unDelta();
+  const r2 = crecerDelta(b2.bosque, a2, { paso: 16, dk: 18 });
+  const br2 = emitirBrote(b2.bosque, a2, r2.consumidoPor, r2.nodosNuevos, {});
+  assert.equal(JSON.stringify(br.secciones), JSON.stringify(br2.secciones), 'el delta no es una función');
 });

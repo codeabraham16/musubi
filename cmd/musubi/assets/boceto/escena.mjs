@@ -612,26 +612,31 @@ export function montar(cfg) {
 
   /* ── 1 · los axones: un cilindro por NEURONA ────────────────────────────────────────────── */
   const n = S.length, nF = Math.max(1, FIB.length);
+  /* HOLGURA DEL DELTA: los buffers nacen con lugar de más para que un brote en vivo entre SIN
+     recrear geometria — el costo de recrear no es el malloc, es re-subir todo a la GPU y el
+     churn de un cuadro largo justo cuando el usuario esta mirando. El count arranca en nF y el
+     brote lo empuja; lo que sobra nunca se dibuja. */
+  const CAPF = nF + Math.max(64, Math.ceil(nF * 0.15));
   const gVaina = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
   // DOS vec4 EN VEZ DE OCHO ESCALARES. No es estetica: con ocho, esta malla pedia 17 atributos de
   // vertice y WebGL garantiza 16 — el shader NO COMPILABA y las 16.437 neuronas no se dibujaban,
   // que en pantalla se ve igual que «decidimos no dibujar los hilos».
   //   TNS  = (taper, nodos, seleccion, nivel)
   //   DLVF = (distancia, largo, volumen, familia)
-  const AC = new Float32Array(nF * 3), ACUR = new Float32Array(nF * 3),
-        TNS = new Float32Array(nF * 4), DLVF = new Float32Array(nF * 4);
-  for (let k = 0; k < nF; k++) DLVF[k * 4 + 3] = 1;      // familia: todo visible al arrancar
+  const AC = new Float32Array(CAPF * 3), ACUR = new Float32Array(CAPF * 3),
+        TNS = new Float32Array(CAPF * 4), DLVF = new Float32Array(CAPF * 4);
+  for (let k = 0; k < CAPF; k++) DLVF[k * 4 + 3] = 1;    // familia: todo visible al arrancar
   gVaina.setAttribute('aColor', new THREE.InstancedBufferAttribute(AC, 3));
   gVaina.setAttribute('aTNS', new THREE.InstancedBufferAttribute(TNS, 4));
   gVaina.setAttribute('aCurva', new THREE.InstancedBufferAttribute(ACUR, 3));
   gVaina.setAttribute('aDLVF', new THREE.InstancedBufferAttribute(DLVF, 4));
   // A QUE SECCION PERTENECE CADA INSTANCIA. Se sube UNA vez y no cambia jamas: es identidad, no
   // estado. La vaina y el soma comparten el mismo buffer porque comparten el orden de FIB.
-  const ASEC = new THREE.InstancedBufferAttribute(new Float32Array(nF), 1);
+  const ASEC = new THREE.InstancedBufferAttribute(new Float32Array(CAPF), 1);
   gVaina.setAttribute('aSec', ASEC);
-  const NACE = new Float32Array(nF * 2);
+  const NACE = new Float32Array(CAPF * 2);
   gVaina.setAttribute('aNace', new THREE.InstancedBufferAttribute(NACE, 2));
-  const ALUZ = new Float32Array(nF);
+  const ALUZ = new Float32Array(CAPF);
   gVaina.setAttribute('aLuz', new THREE.InstancedBufferAttribute(ALUZ, 1));
   // Los uniforms del impulso son UN SOLO objeto compartido por la vaina y el penacho: si fueran
   // dos, un desfase de un cuadro entre ellos partiría el frente en dos justo en la unión.
@@ -682,7 +687,8 @@ export function montar(cfg) {
   // único que este cambio vino a mostrar.
   const mVaina = new THREE.ShaderMaterial({ vertexShader: VAINA_V, fragmentShader: VAINA_F,
     uniforms: uPulso, side: THREE.DoubleSide });
-  const vainas = new THREE.InstancedMesh(gVaina, mVaina, nF);
+  const vainas = new THREE.InstancedMesh(gVaina, mVaina, CAPF);
+  vainas.count = nF;
   vainas.frustumCulled = false; mundo.add(vainas);
   /* ── LA MALLA DE LUZ: carne y luz no pueden ser un solo material ──────────────────────────
      El blending es por material, no por instancia: la carne es OPACA (el argumento de arriba
@@ -693,7 +699,8 @@ export function montar(cfg) {
   const mVainaLuz = new THREE.ShaderMaterial({ vertexShader: VAINA_V, fragmentShader: VAINA_LUZ_F,
     uniforms: Object.assign({ uLuzA }, uPulso), side: THREE.DoubleSide,
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-  const vainasLuz = new THREE.InstancedMesh(gVaina, mVainaLuz, nF);
+  const vainasLuz = new THREE.InstancedMesh(gVaina, mVainaLuz, CAPF);
+  vainasLuz.count = nF;
   vainasLuz.instanceMatrix = vainas.instanceMatrix;
   vainasLuz.frustumCulled = false; vainasLuz.renderOrder = 1; mundo.add(vainasLuz);
 
@@ -724,15 +731,17 @@ export function montar(cfg) {
   const T_MEM = new Map();
   for (const s of S) for (const m of s.memorias) if (m && m.id) T_MEM.set(m.id, tDe(m));
   const gBot = new THREE.SphereGeometry(1, 6, 5);
-  const BC = new Float32Array(totBot * 3), BSF = new Float32Array(Math.max(1, totBot) * 2);
-  for (let k = 0; k < Math.max(1, totBot); k++) BSF[k * 2 + 1] = 1;
+  const CAPB = Math.max(1, totBot) + Math.max(32, Math.ceil(totBot * 0.15));
+  const BC = new Float32Array(CAPB * 3), BSF = new Float32Array(CAPB * 2);
+  for (let k = 0; k < CAPB; k++) BSF[k * 2 + 1] = 1;
   gBot.setAttribute('aColor', new THREE.InstancedBufferAttribute(BC, 3));
   gBot.setAttribute('aSF', new THREE.InstancedBufferAttribute(BSF, 2));
-  const BSEC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, totBot)), 1);
+  const BSEC = new THREE.InstancedBufferAttribute(new Float32Array(CAPB), 1);
   gBot.setAttribute('aSec', BSEC);
-  const BNACE = new Float32Array(Math.max(1, totBot) * 2);
+  const BNACE = new Float32Array(CAPB * 2);
   gBot.setAttribute('aNace', new THREE.InstancedBufferAttribute(BNACE, 2));
-  const botones = new THREE.InstancedMesh(gBot, cuerpoMat(), Math.max(1, totBot));
+  const botones = new THREE.InstancedMesh(gBot, cuerpoMat(), CAPB);
+  botones.count = Math.max(1, totBot);
   botones.frustumCulled = false; mundo.add(botones);
   const BOT_DE = new Int32Array(Math.max(1, totBot));
   // Que MEMORIA es cada boton. Sin esto se puede señalar una nota y no se puede decir cual es,
@@ -1661,6 +1670,95 @@ export function montar(cfg) {
   }
 
   /* ── bucle ──────────────────────────────────────────────────────────────────────────────── */
+  /* ── brotar: EL DELTA EN VIVO ─────────────────────────────────────────────────────────────
+     Secciones nuevas (emitirBrote) entran en la holgura de los buffers como eslabones de LUZ —
+     un brote es terminal por definición — y botones nuevos en la de los botones. El nacimiento
+     va en una ventana [maxEdad, maxEdad+1] y el MISMO reloj del replay la recorre: brotar es el
+     replay de un delta. No hay pase de identidad para lo brotado (aIdRGB queda en cero — no
+     señalable hasta recargar, y se declara): el brote es para VER crecer, no para operar.
+     Devuelve cuántas entraron; lo que no cabe en la holgura se DECLARA, no se recorta callado. */
+  let iBrote = 0, iBroteBot = 0, tBrote = 0;
+  function brotar(delta) {
+    if (!S[0].nace) return { eslabones: 0, botones: 0, sinLugar: 0 };
+    const t0v = maxEdad + tBrote;          // cada tanda de brotes vive su propia ventana
+    let sinLugar = 0, nuevosE = 0, nuevosB = 0;
+    const idxReal = new Array(delta.secciones.length);
+    delta.secciones.forEach((d, k) => {
+      const i = nF + iBrote;
+      if (i >= CAPF) { sinLugar++; idxReal[k] = d.padreSec >= 0 ? d.padreSec : 0; return; }
+      // la sección ANFITRIONA para hover/aislar/color: la vieja de la que cuelga el brote
+      let anf = d.padreSec;
+      let sube = 0;
+      while (anf < 0 && sube < 50) { anf = delta.secciones[~anf].padreSec; sube++; }
+      if (anf < 0 || anf >= n) anf = 0;
+      idxReal[k] = anf;
+      _p.set(d.a[0], d.a[1], d.a[2]);
+      _d.set(d.b[0] - d.a[0], d.b[1] - d.a[1], d.b[2] - d.a[2]);
+      const L = _d.length() || 0.001;
+      _q.setFromUnitVectors(_UP, _u1.copy(_d).divideScalar(L));
+      const r = Math.max(0.35, (S[anf].Rhaz || 1) * 0.30);
+      _m.compose(_u2.copy(_p).addScaledVector(_d, 0.5), _q, _s.set(r, L, r));
+      vainas.setMatrixAt(i, _m);
+      tintar(anf, i, 1);
+      AC[i * 3] = _c.r; AC[i * 3 + 1] = _c.g; AC[i * 3 + 2] = _c.b;
+      ACUR[i * 3] = d.curva[0]; ACUR[i * 3 + 1] = d.curva[1]; ACUR[i * 3 + 2] = d.curva[2];
+      TNS[i * 4] = 0.72; TNS[i * 4 + 1] = 2; TNS[i * 4 + 2] = 0; TNS[i * 4 + 3] = (S[anf].nivel || 0) + d.nivel;
+      DLVF[i * 4] = (S[anf].dist || 0) + d.nivel * d.largo; DLVF[i * 4 + 1] = d.largo;
+      DLVF[i * 4 + 2] = 0.9; DLVF[i * 4 + 3] = FAMSEC[anf];
+      ASEC.array[i] = anf;
+      ALUZ[i] = 1;                          // un brote es terminal: siempre luz
+      NACE[i * 2] = t0v + d.nivel * 0.18; NACE[i * 2 + 1] = t0v + d.nivel * 0.18 + 0.22;
+      iBrote++; nuevosE++;
+      // los botones del brote, alrededor de su punta
+      for (let k2 = 0; k2 < d.memorias.length; k2++) {
+        const iB = botones.count + iBroteBot;
+        if (iB >= CAPB) { sinLugar++; continue; }
+        const th = k2 * 2.399963;
+        _u2.set(d.b[0] + Math.cos(th) * r * 2.2, d.b[1] + (k2 % 2 ? 1 : -1) * r * 1.4,
+                d.b[2] + Math.sin(th) * r * 2.2);
+        const rb = r * 1.5;
+        _m.compose(_u2, _q.identity(), _s.set(rb, rb, rb));
+        botones.setMatrixAt(iB, _m);
+        BC[iB * 3] = _c.r; BC[iB * 3 + 1] = _c.g; BC[iB * 3 + 2] = _c.b;
+        BSEC.array[iB] = anf;
+        BNACE[iB * 2] = NACE[i * 2 + 1]; BNACE[iB * 2 + 1] = NACE[i * 2 + 1];
+        iBroteBot++; nuevosB++;
+      }
+    });
+    // los injertos en passant: botones sobre la madera vieja, sin geometría nueva
+    for (const j of (delta.injertos || [])) {
+      if (j.sec < 0 || j.sec >= n) continue;
+      for (let k2 = 0; k2 < j.mems.length; k2++) {
+        const iB = botones.count + iBroteBot;
+        if (iB >= CAPB) { sinLugar++; continue; }
+        const q = enCurva(S[j.sec], (0.25 + 0.5 * ((k2 * 2654435761 >>> 8) % 1000) / 1000));
+        const rb = Math.max(0.4, (S[j.sec].Rhaz || 1) * 0.4);
+        _m.compose(_p.set(q[0], q[1], q[2]), _q.identity(), _s.set(rb, rb, rb));
+        botones.setMatrixAt(iB, _m);
+        tintar(j.sec, k2, 3);
+        BC[iB * 3] = _c.r; BC[iB * 3 + 1] = _c.g; BC[iB * 3 + 2] = _c.b;
+        BSEC.array[iB] = j.sec;
+        BNACE[iB * 2] = t0v; BNACE[iB * 2 + 1] = t0v;
+        iBroteBot++; nuevosB++;
+      }
+    }
+    vainas.count = nF + iBrote; vainasLuz.count = vainas.count;
+    botones.count = Math.max(1, totBot) + iBroteBot;
+    vainas.instanceMatrix.needsUpdate = true;
+    botones.instanceMatrix.needsUpdate = true;
+    for (const at of [gVaina.attributes.aColor, gVaina.attributes.aCurva, gVaina.attributes.aTNS,
+                      gVaina.attributes.aDLVF, gVaina.attributes.aSec, gVaina.attributes.aNace,
+                      gVaina.attributes.aLuz, gBot.attributes.aColor, gBot.attributes.aSec,
+                      gBot.attributes.aNace]) at.needsUpdate = true;
+    // y el brote SE VE CRECER: el reloj del replay recorre la ventana del delta
+    tBrote += 3;
+    tablaReplay = null;                    // la tabla vieja no conoce la ventana nueva
+    replayIni = performance.now();
+    uReloj.value = t0v - 1e-3;
+    replayVentana = [t0v - 0.5, t0v + 1.2];
+    return { eslabones: nuevosE, botones: nuevosB, sinLugar };
+  }
+
   /* ── EL REPLAY: la historia real, en tres segundos ────────────────────────────────────────
      El reloj NO avanza lineal en días: avanza POR CUANTILES de la tabla de nacimientos. Medido
      en el central, la mitad de la memoria nació en los últimos 8 días de 45 — lineal, el 80 %
@@ -1668,7 +1766,7 @@ export function montar(cfg) {
      nacimientos es constante: la historia se VE entera, y los períodos quietos del calendario no
      congelan la pantalla. Es una decisión sobre el TIEMPO DE REPRODUCCIÓN, no sobre el dato: el
      orden de los nacimientos es exactamente el real. */
-  let replayIni = null, tablaReplay = null;
+  let replayIni = null, tablaReplay = null, replayVentana = null;
   function empezarReplay() {
     if (!S[0].nace || !maxEdad) return;
     if (!tablaReplay) {
@@ -1676,6 +1774,7 @@ export function montar(cfg) {
       for (const s of S) for (const m of s.memorias) tablaReplay.push(tDe(m));
       tablaReplay.sort((a, b) => a - b);
     }
+    replayVentana = null;
     replayIni = performance.now();
     uReloj.value = -1;
   }
@@ -1724,7 +1823,11 @@ export function montar(cfg) {
     const dOrb = cam.est.dist;
     uAtm.uAtm.value.set(Math.max(1, dOrb - RESC * 0.55), dOrb + RESC * 1.45);
     uPulso.uT.value = ahora * 0.001;
-    if (replayIni != null) {
+    if (replayIni != null && replayVentana) {
+      const cv = (t - replayIni) / 1200;
+      if (cv >= 1) { replayIni = null; replayVentana = null; uReloj.value = 1e9; }
+      else uReloj.value = replayVentana[0] + (replayVentana[1] - replayVentana[0]) * cv;
+    } else if (replayIni != null) {
       const c = (t - replayIni) / (cfg.replayMs || 3000);
       if (c >= 1 || !tablaReplay.length) {
         // TERMINÓ: el reloj se SUELTA (1e9 = todo nacido) y no se toca más — el cuadro quieto
@@ -1767,7 +1870,7 @@ export function montar(cfg) {
 
   const vista = { scene, camera, cam, renderer, elegir, aislar, verTodo, S, camino, bajoElCursor,
                   sondear, get foco() { return foco; }, BOT_DE, BOT_MEM, ID_TOTAL,
-                  empezarReplay, get reloj() { return uReloj.value; },
+                  empezarReplay, brotar, get reloj() { return uReloj.value; },
                   get replayActivo() { return replayIni != null; },
                   BASE_NEURONA, BASE_MEM, BASE_RAM,
                   FAMSEC, get aislado() { return aislado; }, get encuadre0() { return ENCUADRE0; },

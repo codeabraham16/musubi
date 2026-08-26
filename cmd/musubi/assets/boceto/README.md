@@ -196,6 +196,21 @@ el central emite 19.825 → la capa se atenúa al 61 % sola. Medido con el arné
 look sólido: cobertura 18,8 → 26 % y lavado a blanco 15,6 → **10,4 %** — más luz repartida, menos
 quemado.
 
+### El vivo: guardás una nota y la rama brota
+
+Sólo en el colonizado (necesita `S.estado`). Cada 45 s se re-pide el mismo grafo; **sin ids nuevos
+no pasa nada** — ni evento, ni rebuild, ni luz. Con ids nuevos: la memoria se vuelve atractor (su
+parcela sale del topic si ya existe; **un atractor viejo nunca se recoloca**), `crecerDelta` crece
+SÓLO lo nuevo — **la madera vieja no se mueve** (G9) y lo que cae a menos de `dk` de una rama
+existente entra como botón en passant, sin geometría inventada —, `emitirBrote` injerta las
+secciones nuevas en las viejas, y `brotar()` las mete en la **holgura** de los buffers (15 %,
+declarando lo que no cabe) con el mismo reloj del replay recorriendo la ventana del delta: el
+brote SE VE crecer. La leyenda lo cuenta: `+N brotaron en vivo`.
+
+La demo verificable es `#brotar`: retiene las 6 memorias más nuevas de la carga y las suelta a los
+4 segundos por el mismo camino de código. Lo brotado no entra al pase de identidad hasta recargar
+(no señalable, declarado).
+
 ## Las seis formas
 
 Las seis dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en
