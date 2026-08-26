@@ -128,7 +128,8 @@ void main(){
   float fres = pow(1.0 - abs(dot(nn, normalize(vView))), 1.6);
   // La punta se apaga como en el penacho: una terminal que corta en seco se ve cortada.
   float punta = mix(1.0, 0.45, vY);
-  vec3 c = vC * (0.22 + 0.85 * fres) * punta * vVol * uLuzA * (1.0 + vSel * 1.4);
+  vec3 cS = mix(vec3(dot(vC, vec3(0.2126, 0.7152, 0.0722))), vC, 1.34);
+  vec3 c = cS * (0.22 + 0.85 * fres) * punta * vVol * uLuzA * (1.0 + vSel * 1.4);
   c += uAmbar * vPul * vPul * 1.2;
   gl_FragColor = vec4(c * vFam, 1.0);
 }`;
@@ -195,10 +196,25 @@ void main(){
   // además de teñir hundía el verde al 11 % — la escena entera se fue a marrón oscuro. Un tejido
   // translúcido no se oscurece del lado en sombra: se pone CÁLIDO. Los tres factores promedian ~1.
   vec3 subsup = mix(vec3(1.26, 0.90, 0.82), vec3(1.0), dif);
+  /* ── LA VIDA ES TEMPERATURA, no otra paleta ───────────────────────────────────────────────
+     El diagnóstico de «se ve muerta»: la paleta pareja (S 50 · L 57 para los doce) es correcta
+     como IDENTIDAD y muerta como MATERIA, porque el color era EL MISMO en la luz y en la sombra.
+     Lo que un material vivo hace es responder: la sombra profunda vira FRÍA (el ambiente), la
+     luz vira CÁLIDA (la clave) — el split-toning de toda la fotografía de cine — y la saturación
+     vive en los MEDIOS TONOS: en la luz plena el color se lava hacia la luz, en la sombra hacia
+     el ambiente. Constante en todo el rango = plástico. La paleta NO se toca (D1 sigue siendo
+     una regla): esto es respuesta a la luz, y convive con la subsuperficie cálida — aquélla
+     manda en el TERMINADOR (la piel translúcida), ésta en la sombra honda (el ambiente frío). */
+  vec3 temp = mix(vec3(0.78, 0.92, 1.27), vec3(1.19, 1.02, 0.82), dif);
+  float campana = 4.0 * dif * (1.0 - dif);
+  vec3 cVivo = vC * temp;
+  float lumV = dot(cVivo, vec3(0.2126, 0.7152, 0.0722));
+  cVivo = mix(vec3(lumV), cVivo, 0.80 + 0.42 * campana);
   // GANANCIA UN POCO MAS ALTA que con la paleta neon, y no es capricho: bajar la saturacion baja
   // la energia del color, asi que a igual ganancia la escena se apaga. Medido: 63,7 -> 53,2 de
   // brillo medio con la paleta nueva. Se compensa acá, que es donde corresponde.
-  vec3 base = (vC * subsup * mielina * prof * (0.88 + 1.46 * dif) + vC * fres * 0.72) * vVol
+  vec3 base = (cVivo * subsup * mielina * prof * (0.88 + 1.46 * dif)
+             + vC * vec3(0.74, 0.97, 1.34) * fres * 0.78) * vVol
             * (1.0 + vSel * 1.60);
   // ROLLOFF SUAVE en vez de recorte duro. Sin esto hay que elegir entre dos males: con ganancia
   // alta el turquesa saturado se pasa de 1 en dos canales y el haz cercano se lava a CIAN BLANCO
@@ -284,7 +300,9 @@ void main(){
   // 0,22+0,62 y no 0,30+0,85: con el valor anterior el soma del tronco —que es el mas grande de
   // todos por la ley de Rall— saturaba a blanco puro y se comia el centro de la escena. Un cuerpo
   // celular tiene que leerse como volumen, no como una lampara.
-  vec3 c = (vC * (0.14 + 0.55 * dif + 0.52 * fres) + vC * vSel * 1.3) * vFam;
+  // los cuerpos también responden a la luz: sombra fría, luz cálida — más suave que la vaina
+  vec3 cV = vC * mix(vec3(0.86, 0.95, 1.16), vec3(1.10, 1.00, 0.90), dif);
+  vec3 c = (cV * (0.14 + 0.55 * dif + 0.52 * fres) + vC * vSel * 1.3) * vFam;
   gl_FragColor = vec4(atmosfera(c), 1.0);
 }`;
 
@@ -345,7 +363,8 @@ void main(){
   // La punta se APAGA hacia el final. Una ramita que termina con el mismo brillo que empieza se
   // ve cortada; el desvanecido es lo que da la sensación de que sigue más allá de lo dibujado.
   float punta = mix(1.0, 0.38, vY);
-  vec3 c = vC * (0.30 + 0.55 * dif + 0.62 * fres) * punta * uLuzA;
+  vec3 cV = vC * mix(vec3(0.84, 0.94, 1.18), vec3(1.12, 1.00, 0.88), dif);
+  vec3 c = (cV * (0.30 + 0.55 * dif) + vC * vec3(0.78, 0.97, 1.28) * fres * 0.62) * punta * uLuzA;
   c += vC * vSel * 0.9;
   c += uAmbar * vPul * vPul * 1.5;
   gl_FragColor = vec4(atmosfera(c * vFam), (0.62 + 0.38 * vSel) * punta * (0.30 + 0.70 * vFam));
@@ -836,6 +855,14 @@ export function montar(cfg) {
     // de nadie solo si se lo mira como un objeto; mirado como hilos, es de todos.
     const d = DEST[fib];
     _c.copy(COLSEC[d >= 0 ? d : sec]);
+    /* EL CRECIMIENTO JOVEN ES MÁS VIVO. Un gradiente SISTEMÁTICO por profundidad: el tronco un
+       poco más apagado, las puntas más saturadas y con un giro de tono minúsculo (+5°) hacia su
+       vecino cálido. NO es el jitter por hilo que se prohibió — aquél era ruido POR FIBRA en el
+       canal de la identidad; esto es DATO (la profundidad) aplicado igual a toda la sección, así
+       que las familias siguen separándose y la rama gana un degradé de vida del tronco a la
+       punta, como un coral: viejo en la base, encendido en el borde que crece. */
+    const nivT = Math.min(8, S[sec] ? S[sec].nivel : 0);
+    _c.offsetHSL(nivT * 0.0018, nivT * 0.030 - 0.07, 0);
     // El apartamiento de UN hilo respecto del color de su rama. Vive en `comun.mjs` y no acá
     // porque es la regla que dice que el jitter va en BRILLO y no en tono — y eso hay que poder
     // verlo fallar bajo sabotaje, que es algo que sólo se puede hacer del lado puro.
