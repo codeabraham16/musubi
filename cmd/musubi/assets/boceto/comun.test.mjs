@@ -15,7 +15,7 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
          escalaTinta, TINTA_SINAPSIS, enCurva,
          formarColonizado, hashCadena, deHash, tintaTerminal, TINTA_TERMINAL,
-         crecerDelta, emitirBrote, PALETA_CYBER, tonoDe } from './comun.mjs';
+         crecerDelta, emitirBrote, PALETA_CYBER, tonoDe, broteDesdeMemorias } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -1245,4 +1245,25 @@ test('D3 · el cyber es la MISMA identidad con otra ropa', () => {
   // y lo desconocido cae al sobrio, como toda lista cerrada de este proyecto
   assert.equal(tonoDe('?tono=chorizo'), 'sobrio');
   assert.equal(tonoDe('?cerebro=central&tono=cyber'), 'cyber');
+});
+
+test('G11 · el brote compartido no re-siembra lo ya visto, y agrupa por actor', () => {
+  // broteDesdeMemorias es la logica del VIVO extraida para que produccion use LA MISMA. Su
+  // contrato con dientes: una memoria ya vista NO vuelve a brotar (o cada poll duplicaria el
+  // grafo), y una nueva de topic conocido cae al bosque del actor que ya lo dibuja.
+  const S = elColonizado();
+  const estado = S.estado;
+  const topicViejo = estado.bosques[0].atrs[0].mems[0].topic;
+  const idViejo = estado.bosques[0].atrs[0].mems[0].id;
+  const r1 = broteDesdeMemorias(estado, [
+    { id: idViejo, topic: topicViejo, age_days: 0 },          // ya vista: NO brota
+    { id: 'nv1', topic: topicViejo, age_days: 0 },            // nueva, topic conocido
+  ]);
+  assert.equal(r1.length, 1, 'tenia que brotar exactamente un actor');
+  assert.equal(r1[0].bosqueIdx, 0, 'el topic conocido no cayo en su actor');
+  const tot = r1[0].brote.secciones.reduce((t2, s) => t2 + s.memorias.length, 0)
+            + r1[0].brote.injertos.reduce((t2, j) => t2 + j.mems.length, 0);
+  assert.equal(tot, 1, `broto ${tot} y la ya-vista tenia que quedar afuera`);
+  // CONTROL: y la segunda pasada con la misma nueva da VACIO — quedo registrada como vista
+  assert.equal(broteDesdeMemorias(estado, [{ id: 'nv1', topic: topicViejo, age_days: 0 }]).length, 0);
 });

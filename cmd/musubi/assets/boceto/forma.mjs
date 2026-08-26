@@ -16,7 +16,7 @@
 
 import { cargar, seccionar, contarFibras, CEREBROS, cerebroDe, enlaceCon,
          FORMAS_IDS, escalaTinta, hashCadena, deHash, crecerDelta, emitirBrote,
-         PALETA_CYBER, COLOR_MUSUBI_CYBER, tonoDe } from './comun.mjs';
+         PALETA_CYBER, COLOR_MUSUBI_CYBER, tonoDe, broteDesdeMemorias } from './comun.mjs';
 import { armarRaiz } from './datos.mjs';
 import { montar } from './escena.mjs';
 
@@ -174,45 +174,12 @@ export async function construir(v) {
     const estado = S.estado;
     const brotarMemorias = (nuevas) => {
       if (!nuevas.length) return null;
-      const porActor = new Map();
-      for (const m of nuevas) {
-        // la parcela: la del topic si ya existe; si el topic es nuevo, la del actor del gist
-        let celda = estado.topicCelda.get(m.topic);
-        let racimo = null;
-        // a qué actor pertenece: si el topic ya se dibuja, su bosque es el del actor que lo
-        // dibuja — la MISMA decisión que tomó armarRaiz, leída del estado en vez de re-decidida.
-        let bosqueIdx = -1;
-        if (celda) {
-          for (let bi = 0; bi < estado.bosques.length; bi++) {
-            const B = estado.bosques[bi];
-            if (B.atrs.some((a2) => a2.mems.some((mm) => mm.topic === m.topic))) { bosqueIdx = bi; racimo = B.racimo; break; }
-          }
-        }
-        if (bosqueIdx < 0) {
-          // topic nuevo: al bosque más grande de su... sin autor no hay más dato — al mayor.
-          bosqueIdx = 0; racimo = estado.bosques[0] && estado.bosques[0].racimo;
-          celda = celda || (estado.racimoInfo.get(racimo) || { celda: [0, 1, 0, Math.PI] }).celda;
-        }
-        if (!porActor.has(bosqueIdx)) porActor.set(bosqueIdx, []);
-        const o2 = estado.opciones || {};
-        const R = Number(o2.radio) || 285, piso = Number(o2.piso) || 0.45, cola = Number(o2.cola) || 0.65;
-        const h = hashCadena(m.id);
-        const cc = (celda[0] + celda[1]) / 2 + (deHash(h, 2) - 0.5) * 0.9 * (celda[1] - celda[0]);
-        const ff = (celda[2] + celda[3]) / 2 + (deHash(h, 3) - 0.5) * 0.9 * (celda[3] - celda[2]);
-        const r = R * (piso + (1 - piso) * Math.pow(deHash(h, 1), cola));
-        const sn = Math.sqrt(Math.max(0, 1 - cc * cc));
-        porActor.get(bosqueIdx).push({ id: m.id, mems: [m],
-          pos: [Math.cos(ff) * sn * r, cc * r, Math.sin(ff) * sn * r] });
-      }
+      // La lógica vive en comun.mjs (broteDesdeMemorias): producción usa LA MISMA — dos copias
+      // es como el boceto y el panel divergen en silencio.
       let tot = { eslabones: 0, botones: 0, sinLugar: 0 };
-      for (const [bi, atrs2] of porActor) {
-        const B = estado.bosques[bi];
-        if (!B) continue;
-        const r2 = crecerDelta(B.bosque, atrs2, estado.opciones);
-        const br = emitirBrote(B.bosque, atrs2, r2.consumidoPor, r2.nodosNuevos, estado.opciones);
-        const res = vista.brotar(br);
+      for (const { brote } of broteDesdeMemorias(S.estado, nuevas)) {
+        const res = vista.brotar(brote);
         tot.eslabones += res.eslabones; tot.botones += res.botones; tot.sinLugar += res.sinLugar;
-        for (const m of nuevas) estado.idsVistos.add(m.id);
       }
       // el brote se DECLARA en la leyenda — lo vivo se cuenta, no se insinúa
       const pie = leyenda.querySelector('.pie');

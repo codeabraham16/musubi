@@ -6,7 +6,7 @@
   "description": "Build del brain-dashboard WebGL (three.js) embebido en el binario Go via go:embed. El bundle (dashboard.bundle.js) se COMMITEA; compilar Go NO necesita node. Solo se corre 'npm run build' al cambiar el frontend. Las versiones van EXACTAS, sin ^: three se empaqueta DENTRO del bundle y esbuild decide como se minifica, asi que cualquiera de las dos cambia los bytes de salida — y el job 'panel' del CI compara esos bytes.",
   "scripts": {
     "build": "esbuild src/dashboard.mjs --bundle --minify --format=iife --target=es2020 --legal-comments=none --outfile=dashboard.bundle.js",
-    "test": "node --test src/*.test.mjs"
+    "test": "node --test src/*.test.mjs boceto/comun.test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.1",
