@@ -27,6 +27,7 @@ export const FORMAS = [
   { id: 'd', nombre: 'La corona', sub: 'el medio vacío, las relaciones lo cruzan' },
   { id: 'e', nombre: 'La corteza', sub: 'las hojas afuera, los tractos adentro' },
   { id: 'f', nombre: 'El nudo', sub: 'la esfera pareja, atada por dentro' },
+  { id: 'g', nombre: 'El colonizado', sub: 'la rama CRECE hacia la memoria' },
 ];
 
 // UN HILO CADA 6 MEMORIAS, y los mismos números para las cinco. Es la única constante libre de
@@ -57,12 +58,21 @@ export async function construir(v) {
   const datos = await cargar(cerebro.archivo);
   const { raiz, colorDe, racimos } = armarRaiz(datos.neurons, { titulo: 'memoria' });
 
-  const S = seccionar(raiz, v.seccionado || { maxNivel: 8, minCarga: 10 });
-  // ANTES de colocar, siempre: la separación entre hermanas se calcula sobre el RADIO REAL de sus
-  // haces, y ese radio sale de `fibras`. Dos conteos distintos separarían las ramas sobre un
-  // grosor que después no se dibuja.
+  // DOS CAMINOS AL MISMO CONTRATO. Las formas a–f COLOCAN el árbol semántico (seccionar decide
+  // la topología, colocar la geometría); el colonizado lo CRECE (la topología emerge del
+  // crecimiento y v.formar la emite ya en el contrato). Lo de después no distingue cuál fue.
+  let S;
+  if (v.formar) {
+    S = v.formar(raiz, datos);
+  } else {
+    S = seccionar(raiz, v.seccionado || { maxNivel: 8, minCarga: 10 });
+    // ANTES de colocar, siempre: la separación entre hermanas se calcula sobre el RADIO REAL de
+    // sus haces, y ese radio sale de `fibras`. Dos conteos distintos separarían las ramas sobre
+    // un grosor que después no se dibuja.
+    contarFibras(S, HILOS);
+    v.colocar(S);
+  }
   contarFibras(S, HILOS);
-  v.colocar(S);
 
   // LA TINTA DE LAS RELACIONES SE REPARTE. La forma declara la alfa que quiere para el cerebro de
   // referencia; acá se divide entre las relaciones que este cerebro traiga. Ver `escalaTinta`.
@@ -101,6 +111,7 @@ export async function construir(v) {
       N(c.sinapsis)} sinapsis en ${N(c.tramosSinapsis)} tramos${
       tinta < 1 ? ` <span class="dim">al ${Math.round(100 * tinta)} % de tinta</span>` : ''}${
       c.sinapsisRecortadas ? ` · ${N(c.sinapsisRecortadas)} sin extremo` : ''
+      }${S.forzados ? ` · ${N(S.forzados)} forzadas al final` : ''
       }${apretadas ? `<br><span class="dim">${N(apretadas)} bifurcaciones sin el aire que piden</span>` : ''
       }<br><span class="cifra">${N(c.señalables)}</span> se pueden señalar de uno
       <span class="dim">(los ${N(c.secciones)} halos y las ${N(c.sinapsis)} sinapsis no)</span></div>`;

@@ -13,7 +13,8 @@ import { frenteEn, seccionar, colocarLibre, colocarNucleo, radioRall,
          destinoDeHilo, pasoMezcla, rutaSinapsis, colocarCorona,
          colocarNudo, repartirEsfera, crearCamara, jitterHilo, PALETA,
          CEREBROS, cerebroDe, enlaceCon, FORMAS_IDS,
-         escalaTinta, TINTA_SINAPSIS, enCurva } from './comun.mjs';
+         escalaTinta, TINTA_SINAPSIS, enCurva,
+         formarColonizado, hashCadena, deHash } from './comun.mjs';
 
 /* ── EL IMPULSO SE APAGA ─────────────────────────────────────────────────────────────────────
    El invariante de fondo del panel entero: sin evento no hay luz. Si el frente no se apaga, la
@@ -1048,4 +1049,96 @@ test('H1 · el núcleo es un CUERPO REDONDO, no un ladrillo', () => {
   // el centro, que también deja de salirse del elipsoide y no dibuja nada.
   assert.ok(polo > 0.9, `ningún hilo llega al polo: máximo ${polo.toFixed(2)}`);
   assert.ok(ecuador > 0.9, `ningún hilo llega al ecuador: máximo ${ecuador.toFixed(2)}`);
+});
+
+/* ── EL COLONIZADO ───────────────────────────────────────────────────────────────────────────
+   La séptima forma no coloca: CRECE (space colonization). La topología emerge del proceso, así
+   que los invariantes defienden lo que el proceso podría romper sin que nadie lo vea: memorias
+   que no llegan, cronología rota, no-determinismo, hojas vacías y curvas que mienten. */
+
+const elColonizado = (opc) => formarColonizado(troncoGordo(), Object.assign({
+  radio: 285, paso: 16, di: 80, dk: 18, inercia: 0.6,
+  nucleo: 40, radioHilo: 0.52, separacion: 2.60, depurar: true,
+}, opc));
+
+test('G3 · toda memoria LLEGA: consumida o forzada, ninguna dos veces, lo recortado se declara', () => {
+  const S = elColonizado();
+  const vistas = new Set();
+  let total = 0, repes = 0;
+  for (const s of S) {
+    for (const m of s.memorias) { total++; if (vistas.has(m.id)) repes++; vistas.add(m.id); }
+  }
+  assert.equal(repes, 0, `${repes} memorias dibujadas dos veces`);
+  // El fixture tiene 720 memorias; el cap de seccionar recorta y LO DECLARA. La suma cierra
+  // exacta: emitidas + recortadas = todas. Si el crecimiento pierde una, esto es lo que falla.
+  assert.equal(total + (S[0].recortado || 0), 720,
+    `${total} emitidas + ${S[0].recortado || 0} recortadas ≠ 720`);
+  assert.ok(Number.isFinite(S.forzados) && S.forzados >= 0, 'forzados tiene que venir contado');
+});
+
+test('G4 · ninguna memoria nace ANTES que su tronco', () => {
+  // durMin: 0 para afirmar exacto — el piso de duración es estético y acá estorba.
+  const S = elColonizado({ durMin: 0 });
+  let maxEdad = 0;
+  for (const s of S) for (const m of s.memorias) maxEdad = Math.max(maxEdad, m.age_days || 0);
+  for (const s of S) {
+    // monotonía: la hija arranca cuando el padre termina
+    if (s.padre >= 0) {
+      assert.equal(s.nace[0], S[s.padre].nace[1],
+        `la sección ${s.idx} arranca en ${s.nace[0]} y su padre termina en ${S[s.padre].nace[1]}`);
+    }
+    assert.ok(s.nace[1] >= s.nace[0], `nace al revés: [${s.nace}]`);
+    // y lo con dientes: cuando una memoria aparece, TODO su camino a la raíz ya existe
+    for (const m of s.memorias) {
+      const tm = maxEdad - (m.age_days || 0);
+      for (let p = s.padre; p >= 0; p = S[p].padre) {
+        assert.ok(S[p].nace[1] <= tm + 1e-9,
+          `la memoria ${m.id} (t=${tm.toFixed(1)}) nace antes que su tronco ${p} (fin=${S[p].nace[1].toFixed(1)})`);
+      }
+    }
+  }
+});
+
+test('G5 · el bosque es una FUNCIÓN: dos corridas, el mismo dibujo byte a byte', () => {
+  const foto = (S) => JSON.stringify(S.map((s) => [s.a, s.b, s.curva, s.largo, s.carga, s.hijos]));
+  const uno = elColonizado(), dos = elColonizado();
+  assert.equal(uno.length, dos.length);
+  assert.equal(foto(uno), foto(dos), 'dos corridas dieron árboles distintos');
+  // CONTROL de que el hash de verdad decide: otra semilla de posiciones = otro árbol. Sin esto,
+  // el test pasaría con un formarColonizado que devuelve siempre la misma constante.
+  const tres = elColonizado({ margen: 0.5 });
+  assert.notEqual(foto(uno), foto(tres), 'cambiar el margen no cambió nada: ¿quién decide?');
+});
+
+test('G6 · ninguna hoja sin carga: lo que creció y no comió, se poda', () => {
+  const S = elColonizado();
+  for (const s of S) {
+    if (s.idx === 0 || !s.hoja) continue;
+    assert.ok(s.carga >= 1 && s.memorias.length >= 1,
+      `la hoja ${s.idx} quedó sin memorias: fibras inventadas`);
+  }
+});
+
+test('G7 · la curva NO MIENTE el camino crecido', () => {
+  const S = elColonizado();
+  let peor = 0, revisadas = 0;
+  for (const s of S) {
+    if (!s.poly || s.poly.length < 3) continue;
+    revisadas++;
+    let arco = 0;
+    const arcos = [0];
+    for (let i = 1; i < s.poly.length; i++) {
+      arco += Math.hypot(s.poly[i][0] - s.poly[i - 1][0], s.poly[i][1] - s.poly[i - 1][1],
+                         s.poly[i][2] - s.poly[i - 1][2]);
+      arcos.push(arco);
+    }
+    for (let i = 1; i < s.poly.length - 1; i++) {
+      const m = enCurva(s, arcos[i] / (arco || 1));
+      const d = Math.hypot(s.poly[i][0] - m[0], s.poly[i][1] - m[1], s.poly[i][2] - m[2]);
+      if (d > peor) peor = d;
+    }
+  }
+  // CONTROL: si no se revisó ninguna polilínea, el test no vio nada.
+  assert.ok(revisadas > 30, `sólo ${revisadas} secciones con polilínea: el fixture no llega`);
+  assert.ok(peor <= 2.5 + 1e-6, `la cuadrática se aleja ${peor.toFixed(2)} u de la polilínea real`);
 });

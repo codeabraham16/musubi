@@ -303,6 +303,36 @@ const SABOTAJES = [
     de: '      if (cuerpo > 0) for (let k = 0; k < cortes.length; k++) cortes[k] = 0.5 + (cortes[k] - 0.5) * 2 * mitad;',
     a: '      if (false) for (let k = 0; k < cortes.length; k++) cortes[k] = cortes[k];',
   },
+  {
+    test: 'G3',
+    que: 'los atractores estancados se descartan en silencio: memorias sin botón',
+    de: '    vivo[a] = 0; consumidoPor[a] = mn; forzados++;',
+    a: '    vivo[a] = 0;',
+  },
+  {
+    test: 'G4',
+    que: 'la cronología se deriva con max: la rama nace cuando llega su memoria MÁS NUEVA',
+    de: '    for (const h of s.hijos) C[i] = Math.min(C[i], C[h]);',
+    a: '    for (const h of s.hijos) C[i] = Math.max(C[i], C[h]);',
+  },
+  {
+    test: 'G5',
+    que: 'un Math.random en el jitter: el bosque deja de ser una función del dato',
+    de: '  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;',
+    a: '  return Math.random();',
+  },
+  {
+    test: 'G6',
+    que: 'se salta la poda: las puntas que crecieron sin comer quedan como hojas vacías',
+    de: '      if (consumo[v]) keep[v] = 1;',
+    a: '      keep[v] = 1;',
+  },
+  {
+    test: 'G7',
+    que: 'el colapso ignora la desviación: la cuadrática ya no puede seguir la S crecida',
+    de: '        if (!cabeEnCurva(poly)) { poly.pop(); break; }   // la S se parte en dos C',
+    a: '        if (false) { poly.pop(); break; }',
+  },
 ];
 
 const original = readFileSync(OBJ, 'utf8');

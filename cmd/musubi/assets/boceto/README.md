@@ -154,6 +154,34 @@ Mover el nacimiento siete unidades la mandó detrás de una rama vecina y las tr
 `6/8 · 8/8 · 8/8` a `0/8`, **sin que el picking hubiera cambiado**. Con seis secciones repartidas a lo
 largo del árbol: antes `36/55 · 50/55`, después `35/55 · 47/55`. Lo que medía era la suerte de una.
 
+## La séptima forma: el colonizado — la rama CRECE
+
+Las seis primeras **colocan** el árbol semántico de arriba hacia abajo; la séptima lo **crece**
+(space colonization, Runions 2007): cada **hilo** de memoria —uno cada 6, la constante de todas
+las formas— es un **atractor** puesto en su parcela del treemap, y el tejido crece de abajo hacia
+arriba, bifurcándose donde el dato lo bifurca. Las ramas compiten por los atractores y **se
+esquivan solas**: la anti-colisión que las otras formas parchean a mano acá es una propiedad del
+proceso. El resultado se emite en el **mismo contrato de secciones**, así que todo lo demás
+(conservación, hilos, picking, sinapsis, impulso) no se entera del cambio de paradigma.
+
+Tres hallazgos de la calibración F0, medidos contra los dos cerebros:
+
+- **El atractor es el hilo, no la memoria.** Un atractor por memoria dio 906 hojas de UNA memoria
+  — un alambre por nota, enredo 1,06. Con el hilo (grupos de 6): mediana 6 memorias/hoja y los
+  números vuelven a la clase de las otras formas.
+- **`di` cubre el espaciado o el árbol levanta los atractores EN SERIE.** Con 46: 58 % forzados
+  contra `maxIter`. Con 80: 1 %.
+- **`inercia` y `piso` no llegan al enredo** — barrido con filas idénticas (0,95 ± 0,05). El
+  enredo del colonizado es estructural: la topología emergente no respeta la adyacencia temática
+  en vuelo. Queda 3× arriba del nudo y a juicio del ojo; si se lee como maraña, el paso siguiente
+  es colonización jerárquica, no otra perilla.
+
+Verificación: `node medir-g.mjs grafo-local.json [di=.. dk=..]` mide densidad, erizo, solape,
+enredo y el CDF de edad sin abrir un navegador. Invariantes G3–G7 en el banco: toda memoria llega
+(consumida o forzada, y lo forzado se declara en la leyenda), ninguna nace antes que su tronco, el
+bosque es una función del dato, ninguna hoja sin carga, y la cuadrática no miente el camino
+crecido.
+
 ## Las seis formas
 
 Las seis dibujan **el mismo dato con la misma maquinaria** —las mismas memorias, el mismo corte en

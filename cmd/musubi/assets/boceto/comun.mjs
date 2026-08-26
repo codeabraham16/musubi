@@ -597,7 +597,7 @@ export function colocarCorona(secciones, opciones) {
  *
  * @returns {Array<[number,number,number]>} una dirección unitaria por sección.
  */
-export function repartirEsfera(secciones) {
+export function repartirEsfera(secciones, celdas) {
   const hojas = new Float64Array(secciones.length);
   for (let i = secciones.length - 1; i >= 0; i--) {
     const s = secciones[i];
@@ -614,6 +614,9 @@ export function repartirEsfera(secciones) {
   (function repartir(i, c0, c1, f0, f1) {
     const s = secciones[i];
     dir[i] = deCelda(c0, c1, f0, f1);
+    // La parcela COMPLETA, no sólo su centro: el colonizado siembra atractores DENTRO de la celda
+    // y para eso necesita los bordes. Salida opcional para no tocar a los seis que ya llaman.
+    if (celdas) celdas[i] = [c0, c1, f0, f1];
     if (!s.hijos.length) return;
     // EL LADO SE REELIGE EN CADA CORTE, no una vez por nodo. Con fan-out chico da igual, pero un
     // nodo con 120 hijas cortado siempre por el mismo lado da 120 tiras finísimas: medido sobre un
@@ -638,6 +641,590 @@ export function repartirEsfera(secciones) {
     }
   })(0, -1, 1, 0, Math.PI * 2);
   return dir;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   EL COLONIZADO — la rama CRECE hacia la memoria (space colonization, Runions 2007)
+   ═══════════════════════════════════════════════════════════════════════════════════════════
+
+   Séptima forma, y un cambio de paradigma respecto de las otras seis: en vez de COLOCAR el árbol
+   de arriba hacia abajo por fórmula (bifurcar reparte ángulos, el imán tira a la parcela), acá el
+   árbol CRECE de abajo hacia arriba: cada memoria es un ATRACTOR puesto en su parcela del treemap,
+   y el tejido crece paso a paso hacia donde hay memoria, bifurcándose donde el dato se bifurca.
+
+   Por qué: cuatro rondas de amontonamiento se arreglaron en la condición inicial (nacimiento,
+   rampa, cuñas, solape del núcleo) — todas eran defectos de la colocación por fórmula. En la
+   colonización las ramas COMPITEN por los atractores, así que se esquivan solas: la anti-colisión
+   que veníamos parcheando es una propiedad del proceso, no un arreglo.
+
+   El resultado se emite en el MISMO contrato de secciones que las otras seis formas, así que
+   contarFibras / enhebrar / deshilachar / rutaSinapsis / picking no se enteran del cambio.
+   La conservación hilos(padre) = Σ hilos(hijos) sigue siendo una suma, no una estimación. */
+
+/** hashCadena: FNV-1a de 32 bits. La ÚNICA fuente de pseudoaleatorio del colonizado: todo número
+ *  «al azar» se deriva del hash del id de la memoria, así el bosque es una función del dato. */
+export function hashCadena(txt) {
+  let h = 2166136261 >>> 0;
+  const t = String(txt);
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+/** deHash: el k-ésimo número en [0,1) derivado de un hash. Sin estado: pedir (h,2) dos veces da
+ *  lo mismo, y (h,2) y (h,3) no se parecen en nada. */
+export function deHash(h, k) {
+  let x = (h ^ Math.imul(k + 1, 2654435761)) >>> 0;
+  x = Math.imul(x ^ (x >>> 15), 2246822519) >>> 0;
+  x = Math.imul(x ^ (x >>> 13), 3266489917) >>> 0;
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * atractoresDe: cada HILO del árbol semántico, convertido en un punto del espacio.
+ *
+ * ⚠ EL ATRACTOR ES EL HILO, NO LA MEMORIA — y esto se midió, no se opinó. La primera versión puso
+ * un atractor por memoria: 3.906 atractores → 906 hojas con UNA memoria cada una → un alambre por
+ * memoria, enredo 1,06 contra el 0,315 del nudo. La unidad del tejido en las seis formas nunca fue
+ * la memoria: es el HILO (uno cada `porMemoria` = 6, tope `maxHoja` por hoja — la constante
+ * compartida de forma.mjs). Acá cada hoja temática aporta ceil(carga/6) atractores y sus ~6
+ * memorias viajan JUNTAS: cuando el brote consume el atractor, entran como botones en passant del
+ * tramo — que es exactamente cómo las otras formas cuelgan memorias a lo largo de la sección.
+ * Efecto: los hilos del núcleo dan LA MISMA cuenta que en el nudo, y la comparación entre formas
+ * sigue siendo sobre la forma.
+ *
+ * La dirección sale del CENTRO de la parcela treemap de su sección (repartirEsfera con celdas),
+ * más un corrimiento determinista DENTRO de la parcela (0,9 de la celda: las nubes de dos actores
+ * no se tocan porque sus parcelas de primer nivel son disjuntas por construcción). El radio es
+ * irregular a propósito — clavar las hojas a la cáscara ya se probó y dibuja una pelota — y con
+ * cola interior: un atractor a media profundidad rompe la silueta esférica y guía el crecimiento
+ * en su tramo ciego.
+ *
+ * @returns {Array<{id, mems, pos, edad, hoja, actor}>}
+ */
+export function atractoresDe(S0, celdas, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const R = num(o.radio, 285);
+  const piso = num(o.piso, 0.45);        // fracción del radio donde empieza la nube
+  const cola = num(o.cola, 0.65);        // <1 sesga hacia afuera; la cola interior queda rala
+  const margen = num(o.margen, 0.9);     // cuánto de la celda se usa (1 = hasta el borde)
+  const out = [];
+  const actorDe = new Int32Array(S0.length).fill(-1);
+  for (const s of S0) {
+    actorDe[s.idx] = s.nivel === 1 ? s.idx : (s.nivel > 1 ? actorDe[s.padre] : -1);
+  }
+  const porMemoria = Math.max(1, num(o.porMemoria, 6));
+  for (const s of S0) {
+    if (s.nivel === 0 || !s.memorias || !s.memorias.length) continue;
+    const c = celdas[s.idx];
+    if (!c) continue;
+    for (let g = 0; g < s.memorias.length; g += porMemoria) {
+      const mems = s.memorias.slice(g, g + porMemoria);
+      // El hash sale de la PRIMERA memoria del grupo: agregar memorias al final de una hoja no
+      // mueve los atractores que ya existían — lo que el delta en vivo necesita.
+      const h = hashCadena(mems[0].id);
+      const cc = (c[0] + c[1]) / 2 + (deHash(h, 2) - 0.5) * margen * (c[1] - c[0]);
+      const ff = (c[2] + c[3]) / 2 + (deHash(h, 3) - 0.5) * margen * (c[3] - c[2]);
+      const r = R * (piso + (1 - piso) * Math.pow(deHash(h, 1), cola));
+      const sn = Math.sqrt(Math.max(0, 1 - cc * cc));
+      out.push({
+        id: mems[0].id, mems,
+        pos: [Math.cos(ff) * sn * r, cc * r, Math.sin(ff) * sn * r],
+        edad: mems.reduce((t, m) => Math.max(t, Number(m.age_days) || 0), 0),
+        hoja: s.idx, actor: actorDe[s.idx],
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * crecer: space colonization sobre UN actor. Es una función: cero random propio — dado el mismo
+ * conjunto de atractores y el mismo origen, devuelve byte a byte el mismo bosque.
+ *
+ * El truco de costo: los nodos NUNCA se mueven, así que la distancia de un atractor a su nodo más
+ * cercano es monótona no creciente y se CACHEA — sólo un nodo nuevo puede mejorarla. El grid de
+ * celdas va sobre los atractores (fijos), no sobre los nodos.
+ *
+ * MODO BÚSQUEDA: el nacimiento está en la superficie del núcleo (~r 40) y el atractor más interior
+ * a r ~ 128 > di, así que sin esto el árbol nace sordo y no crece nunca. En hambruna se recalcula
+ * el más-cercano de verdad (fuerza bruta — sólo pasa con el árbol chico) y las puntas avanzan
+ * hacia su comida aunque esté lejos.
+ *
+ * @returns {{px,py,pz,padre,nh,consumidoPor,forzados,iteraciones}}
+ */
+export function crecer(atractores, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const paso = num(o.paso, 16);
+  // El default sale del BARRIDO F0, no del paper: con 46 los atractores quedaban fuera de
+  // influencia y el árbol los levantaba EN SERIE — 58 % forzados. 80 cubre el espaciado típico.
+  const di = num(o.di, 80);              // radio de influencia: qué tan lejos «huele» la rama
+  const dk = num(o.dk, 18);              // radio de muerte: cuántas memorias consume un brote
+  const inercia = num(o.inercia, 0.4);
+  const estanqueMax = num(o.estanqueMax, 25);
+  const maxIter = num(o.maxIter, 300);
+  const og = o.origen || [0, 0, 0];
+  const d0v = o.dir || [0, 1, 0];
+  const d0l = Math.hypot(d0v[0], d0v[1], d0v[2]) || 1;
+
+  const px = [og[0]], py = [og[1]], pz = [og[2]];
+  const padre = [-1], nh = [0];
+  const dx = [d0v[0] / d0l], dy = [d0v[1] / d0l], dz = [d0v[2] / d0l];
+
+  const n = atractores.length;
+  const cn = new Int32Array(n), cd = new Float64Array(n);
+  const vivo = new Uint8Array(n).fill(1);
+  const consumidoPor = new Int32Array(n).fill(-1);
+
+  // Grid de atractores: celda = di. Las claves se consultan sólo por lookup directo en orden fijo
+  // de offsets — nunca iterando el Map — para que el orden no dependa de nada.
+  const G = new Map();
+  const gi = (x) => Math.floor(x / di);
+  for (let a = 0; a < n; a++) {
+    const p = atractores[a].pos;
+    const k = gi(p[0]) + ',' + gi(p[1]) + ',' + gi(p[2]);
+    let arr = G.get(k);
+    if (!arr) { arr = []; G.set(k, arr); }
+    arr.push(a);
+  }
+  for (let a = 0; a < n; a++) {
+    const p = atractores[a].pos;
+    cd[a] = Math.hypot(p[0] - og[0], p[1] - og[1], p[2] - og[2]);
+    cn[a] = 0;
+  }
+
+  // bola: visita los atractores de las celdas que tocan la esfera (X,Y,Z,r), en orden fijo.
+  const bola = (X, Y, Z, r, f) => {
+    for (let i = gi(X - r); i <= gi(X + r); i++) {
+      for (let j = gi(Y - r); j <= gi(Y + r); j++) {
+        for (let k = gi(Z - r); k <= gi(Z + r); k++) {
+          const arr = G.get(i + ',' + j + ',' + k);
+          if (arr) for (const a of arr) f(a);
+        }
+      }
+    }
+  };
+
+  let nuevos = [0], sinConsumo = 0, forzados = 0, iter = 0;
+  const acum = new Map();                // nodo -> [x, y, z] (orden de inserción = determinista)
+
+  for (; iter < maxIter; iter++) {
+    // 1 · los nodos nuevos mejoran el caché de sus atractores vecinos
+    for (const nd of nuevos) {
+      const X = px[nd], Y = py[nd], Z = pz[nd];
+      bola(X, Y, Z, di, (a) => {
+        if (!vivo[a]) return;
+        const p = atractores[a].pos;
+        const d = Math.hypot(p[0] - X, p[1] - Y, p[2] - Z);
+        if (d < cd[a]) { cd[a] = d; cn[a] = nd; }
+      });
+    }
+    // 2 · acumulación de tirones sobre el nodo más cercano de cada atractor a rango
+    acum.clear();
+    const sumar = (a) => {
+      const nd = cn[a], p = atractores[a].pos;
+      let vx = p[0] - px[nd], vy = p[1] - py[nd], vz = p[2] - pz[nd];
+      const l = Math.hypot(vx, vy, vz) || 1;
+      vx /= l; vy /= l; vz /= l;
+      const ac = acum.get(nd);
+      if (ac) { ac[0] += vx; ac[1] += vy; ac[2] += vz; } else acum.set(nd, [vx, vy, vz]);
+    };
+    let alguno = false;
+    for (let a = 0; a < n; a++) { if (vivo[a] && cd[a] <= di) { alguno = true; sumar(a); } }
+    if (!alguno) {
+      // HAMBRUNA: nadie a rango. El caché puede estar rancio (sólo lo refrescan vecindades di),
+      // así que acá se recalcula de verdad contra TODOS los nodos — barato porque la hambruna
+      // ocurre con el árbol chico — y las puntas avanzan hacia su comida lejana.
+      let quedanVivos = false;
+      for (let a = 0; a < n; a++) {
+        if (!vivo[a]) continue;
+        quedanVivos = true;
+        const p = atractores[a].pos;
+        let md = Infinity, mn = 0;
+        for (let q = 0; q < px.length; q++) {
+          const d = Math.hypot(p[0] - px[q], p[1] - py[q], p[2] - pz[q]);
+          if (d < md) { md = d; mn = q; }
+        }
+        cd[a] = md; cn[a] = mn;
+        sumar(a);
+      }
+      if (!quedanVivos) break;
+    }
+    // 3 · brotes: un hijo nuevo por nodo con tirón, con inercia del propio trazo
+    const brotes = [];
+    for (const par of acum) {
+      const nd = par[0], ac = par[1];
+      const l = Math.hypot(ac[0], ac[1], ac[2]);
+      if (l < 1e-9) continue;
+      let bx = ac[0] / l + inercia * dx[nd];
+      let by = ac[1] / l + inercia * dy[nd];
+      let bz = ac[2] / l + inercia * dz[nd];
+      const bl = Math.hypot(bx, by, bz) || 1;
+      bx /= bl; by /= bl; bz /= bl;
+      const idx = px.length;
+      px.push(px[nd] + bx * paso); py.push(py[nd] + by * paso); pz.push(pz[nd] + bz * paso);
+      padre.push(nd); nh.push(0); nh[nd]++;
+      dx.push(bx); dy.push(by); dz.push(bz);
+      brotes.push(idx);
+    }
+    if (!brotes.length) break;
+    // 4 · matanza: un atractor a menos de dk de un brote muere, CONSUMIDO por el más cercano
+    const mat = new Map();               // a -> [dist, nodo]
+    for (const nd of brotes) {
+      const X = px[nd], Y = py[nd], Z = pz[nd];
+      bola(X, Y, Z, dk, (a) => {
+        if (!vivo[a]) return;
+        const p = atractores[a].pos;
+        const d = Math.hypot(p[0] - X, p[1] - Y, p[2] - Z);
+        if (d > dk) return;
+        const m = mat.get(a);
+        if (!m || d < m[0]) mat.set(a, [d, nd]);
+      });
+    }
+    let consumidos = 0;
+    for (const par of mat) { vivo[par[0]] = 0; consumidoPor[par[0]] = par[1][1]; consumidos++; }
+    sinConsumo = consumidos ? 0 : sinConsumo + 1;
+    let quedan = 0;
+    for (let a = 0; a < n; a++) quedan += vivo[a];
+    if (!quedan || sinConsumo > estanqueMax) break;
+    nuevos = brotes;
+  }
+
+  // 5 · TODO ATRACTOR MUERE O SE CUENTA. Lo que quedó vivo se fuerza al nodo más cercano de
+  // verdad (no al caché, que puede estar rancio) y se declara: una memoria sin botón es el modo
+  // de falla que este boceto no se permite.
+  for (let a = 0; a < n; a++) {
+    if (!vivo[a]) continue;
+    const p = atractores[a].pos;
+    let md = Infinity, mn = 0;
+    for (let q = 0; q < px.length; q++) {
+      const d = Math.hypot(p[0] - px[q], p[1] - py[q], p[2] - pz[q]);
+      if (d < md) { md = d; mn = q; }
+    }
+    vivo[a] = 0; consumidoPor[a] = mn; forzados++;
+  }
+  return { px, py, pz, padre, nh, consumidoPor, forzados, iteraciones: iter };
+}
+
+/**
+ * emitirSecciones: del bosque crecido al contrato de secciones — el MISMO que emite seccionar y
+ * llena colocarNucleo, así que todo lo que viene después (contarFibras, enhebrar, deshilachar,
+ * rutaSinapsis, picking, leyenda) no se entera de que el árbol no fue colocado sino crecido.
+ *
+ * El colapso: una sección = cadena maximal de nodos de un solo hijo, cortada por (a) bifurcación,
+ * (b) largoMax — eslabones parejos con largoNeurona — y (c) DESVIACIÓN: la cuadrática de enCurva
+ * no puede hacer una S, así que cuando la polilínea real se aleja de su modelo más que la
+ * tolerancia, la S se parte en dos C. Sin ese corte los hilos flotarían al lado de su camino.
+ *
+ * Cada sección arranca en el ÚLTIMO nodo de su padre (comparten el vértice de empalme, como las
+ * hijas de bifurcar comparten su cuna) y su `largo` es la LONGITUD DE ARCO de la polilínea — los
+ * vértices vienen equiespaciados por `paso`, así que el parámetro t de enCurva y la fracción de
+ * arco coinciden y el modelo se compara con la realidad en el mismo idioma.
+ *
+ * @param {Array<{bosque, atrs, racimo, etiqueta}>} bosques  uno por actor
+ * @returns {Array} secciones en preorden, listas para contarFibras + enhebrar
+ */
+export function emitirSecciones(bosques, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const largoMax = num(o.largoMax, 72);
+  const tol = num(o.tolerancia, 2.5);
+  const nucleoLargo = num(o.nucleoLargo, 40);
+
+  const nodosDe = (carga) =>
+    Math.max(2, Math.min(9, Math.round(2 + Math.log2(Math.max(2, carga)) * 0.9)));
+
+  // ── la sección 0: el núcleo, mismo cuerpo elipsoidal que colocarNucleo. `cuerpo` y el largo
+  //    REAL los fija formarColonizado después de contarFibras — acá va la estimación.
+  const S = [{
+    idx: 0, padre: -1, hijos: [], nivel: 0,
+    carga: 0, etiqueta: 'todo', criterio: 'raiz', racimo: null,
+    nodos: 2, memorias: [], hoja: false,
+    a: [0, -nucleoLargo / 2, 0], b: [0, nucleoLargo / 2, 0],
+    curva: [0, 0, 0], dir: [0, 1, 0], largo: nucleoLargo, dist: nucleoLargo,
+    w0: 1, w1: 1, apretada: 0,
+  }];
+
+  for (const B of bosques) {
+    const { px, py, pz, padre, consumidoPor } = B.bosque;
+    const N = px.length;
+
+    // consumo por nodo, y poda: un nodo vive si su subárbol consumió algo. El índice de un hijo
+    // es SIEMPRE mayor que el de su padre (crecer los empuja en orden), así que una pasada
+    // inversa alcanza — el mismo argumento que contarFibras.
+    const consumo = new Array(N).fill(null);
+    for (let a = 0; a < consumidoPor.length; a++) {
+      const nd = consumidoPor[a];
+      if (nd < 0) continue;
+      (consumo[nd] || (consumo[nd] = [])).push(a);
+    }
+    const keep = new Uint8Array(N);
+    for (let v = N - 1; v >= 0; v--) {
+      if (consumo[v]) keep[v] = 1;
+      if (keep[v] && padre[v] >= 0) keep[padre[v]] = 1;
+    }
+    keep[0] = 1;
+    const hijosDe = new Array(N).fill(null);
+    for (let v = 1; v < N; v++) {
+      if (!keep[v]) continue;
+      (hijosDe[padre[v]] || (hijosDe[padre[v]] = [])).push(v);
+    }
+
+    // ── colapso a secciones temporales {poly, mems, hijos} con corte por largo y desviación ──
+    const P = (v) => [px[v], py[v], pz[v]];
+    const dist2 = (u, w) => Math.hypot(u[0] - w[0], u[1] - w[1], u[2] - w[2]);
+
+    // ¿el modelo cuadrático aguanta esta polilínea? Compara cada vértice contra
+    // a + (b-a)·t + curva·sin(πt) con t = fracción de arco (≡ fracción de índice: paso parejo).
+    const cabeEnCurva = (poly) => {
+      if (poly.length < 4) return true;                  // dos tramos siempre caben
+      const a = poly[0], b = poly[poly.length - 1];
+      const arcos = [0];
+      for (let i = 1; i < poly.length; i++) arcos.push(arcos[i - 1] + dist2(poly[i - 1], poly[i]));
+      const total = arcos[arcos.length - 1] || 1;
+      // curva exacta: el punto a MEDIO arco menos el punto medio de la cuerda
+      let pm = null;
+      for (let i = 1; i < poly.length; i++) {
+        if (arcos[i] >= total / 2) {
+          const f = (total / 2 - arcos[i - 1]) / Math.max(1e-9, arcos[i] - arcos[i - 1]);
+          pm = [poly[i - 1][0] + (poly[i][0] - poly[i - 1][0]) * f,
+                poly[i - 1][1] + (poly[i][1] - poly[i - 1][1]) * f,
+                poly[i - 1][2] + (poly[i][2] - poly[i - 1][2]) * f];
+          break;
+        }
+      }
+      const cv = [pm[0] - (a[0] + b[0]) / 2, pm[1] - (a[1] + b[1]) / 2, pm[2] - (a[2] + b[2]) / 2];
+      for (let i = 1; i < poly.length - 1; i++) {
+        const t = arcos[i] / total, k = Math.sin(t * Math.PI);
+        const mx = a[0] + (b[0] - a[0]) * t + cv[0] * k;
+        const my = a[1] + (b[1] - a[1]) * t + cv[1] * k;
+        const mz = a[2] + (b[2] - a[2]) * t + cv[2] * k;
+        if (Math.hypot(poly[i][0] - mx, poly[i][1] - my, poly[i][2] - mz) > tol) return false;
+      }
+      return true;
+    };
+
+    // armarCadena: desde `desde` (vértice compartido con el padre) baja mientras haya un solo
+    // hijo y el tramo quepa en largo y en curva. Devuelve la sección temporal.
+    const armarCadena = (vDesde, vPrimero) => {
+      const poly = [P(vPrimero)];
+      const mems = [];
+      let v = vDesde, arco = 0;
+      for (;;) {
+        poly.push(P(v));
+        arco += dist2(poly[poly.length - 2], poly[poly.length - 1]);
+        if (consumo[v]) for (const a of consumo[v]) mems.push(a);
+        const hs = hijosDe[v];
+        if (!hs || hs.length !== 1) break;               // hoja o bifurcación: se corta acá
+        const sig = hs[0];
+        const dSig = dist2(poly[poly.length - 1], P(sig));
+        if (arco + dSig > largoMax) break;               // eslabones parejos con largoNeurona
+        poly.push(P(sig));
+        if (!cabeEnCurva(poly)) { poly.pop(); break; }   // la S se parte en dos C
+        poly.pop();
+        v = sig;
+      }
+      const tmp = { poly, mems, hijos: [], fin: v };
+      const hs = hijosDe[v];
+      if (hs) for (const h of hs) tmp.hijos.push(armarCadena(h, v));
+      else if (hijosDe[v] === null && v !== vDesde) { /* hoja real */ }
+      return tmp;
+    };
+
+    // cortes intermedios: si armarCadena frenó por largo/curva pero el nodo tiene UN hijo, la
+    // continuación es una cadena hija — armarCadena ya lo maneja porque recursa sobre hijosDe[fin].
+    const raicesTmp = [];
+    const hs0 = hijosDe[0];
+    if (hs0) for (const h of hs0) raicesTmp.push(armarCadena(h, 0));
+    // memorias consumidas por el propio nodo de nacimiento (raro): a la primera cadena
+    if (consumo[0] && raicesTmp.length) for (const a of consumo[0]) raicesTmp[0].mems.push(a);
+
+    // ── carga, orden determinista y prefijo común de topics, de abajo hacia arriba ──
+    const prep = (tmp) => {
+      let carga = 0;
+      for (const a of tmp.mems) carga += B.atrs[a].mems.length;
+      let menor = Infinity;
+      let pref = null;
+      const junta = (topics) => {
+        if (pref === null) { pref = topics; return; }
+        let k = 0;
+        while (k < pref.length && k < topics.length && pref[k] === topics[k]) k++;
+        pref = pref.slice(0, k);
+      };
+      for (const a of tmp.mems) {
+        const at = B.atrs[a];
+        if (at.orden < menor) menor = at.orden;
+        for (const m of at.mems) junta(String(m.topic || '').split('/'));
+      }
+      for (const h of tmp.hijos) {
+        const r = prep(h);
+        carga += r.carga;
+        if (r.menor < menor) menor = r.menor;
+        junta(r.pref || []);
+      }
+      tmp.carga = carga; tmp.menor = menor; tmp.pref = pref || [];
+      tmp.hijos.sort((x, y) => (y.carga - x.carga) || (x.menor - y.menor));
+      return tmp;
+    };
+    for (const t of raicesTmp) prep(t);
+    raicesTmp.sort((x, y) => (y.carga - x.carga) || (x.menor - y.menor));
+
+    // ── emisión en preorden, con la geometría de la polilínea ──
+    const emitir = (tmp, padreIdx, nivel, esRaizActor) => {
+      const poly = tmp.poly;
+      const a = poly[0], b = poly[poly.length - 1];
+      let arco = 0;
+      const arcos = [0];
+      for (let i = 1; i < poly.length; i++) {
+        arco += dist2(poly[i - 1], poly[i]);
+        arcos.push(arco);
+      }
+      arco = arco || 0.001;
+      let pm = b;
+      for (let i = 1; i < poly.length; i++) {
+        if (arcos[i] >= arco / 2) {
+          const f = (arco / 2 - arcos[i - 1]) / Math.max(1e-9, arcos[i] - arcos[i - 1]);
+          pm = [poly[i - 1][0] + (poly[i][0] - poly[i - 1][0]) * f,
+                poly[i - 1][1] + (poly[i][1] - poly[i - 1][1]) * f,
+                poly[i - 1][2] + (poly[i][2] - poly[i - 1][2]) * f];
+          break;
+        }
+      }
+      const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const dl = Math.hypot(d[0], d[1], d[2]) || 0.001;
+      const s = {
+        poly: o.depurar ? poly : undefined,
+        idx: S.length, padre: padreIdx, hijos: [], nivel,
+        carga: tmp.carga,
+        etiqueta: esRaizActor ? (B.etiqueta || B.racimo || '') : (tmp.pref.length ? tmp.pref[tmp.pref.length - 1] : ''),
+        criterio: esRaizActor ? 'actor' : 'tema',
+        racimo: B.racimo,
+        nodos: nodosDe(tmp.carga),
+        memorias: tmp.mems.flatMap((ai) => B.atrs[ai].mems),
+        hoja: !tmp.hijos.length,
+        a: a.slice(), b: b.slice(),
+        curva: [pm[0] - (a[0] + b[0]) / 2, pm[1] - (a[1] + b[1]) / 2, pm[2] - (a[2] + b[2]) / 2],
+        dir: [d[0] / dl, d[1] / dl, d[2] / dl],
+        largo: arco,
+        dist: (padreIdx === 0 ? Math.hypot(a[0], a[1], a[2]) : S[padreIdx].dist) + arco,
+        w0: 1, w1: 1, apretada: 0,
+      };
+      S.push(s);
+      S[padreIdx].hijos.push(s.idx);
+      for (const a of tmp.mems) S[0].carga += B.atrs[a].mems.length;
+      for (const h of tmp.hijos) emitir(h, s.idx, nivel + 1, false);
+    };
+    for (const t of raicesTmp) emitir(t, 0, 1, true);
+  }
+
+  S[0].nodos = nodosDe(S[0].carga);
+  return S;
+}
+
+/**
+ * naceDe: cuándo nace cada sección, derivado del DATO y no del proceso de crecimiento.
+ *
+ * La forma es estable —el árbol se crece completo— y la cronología es un atributo: t(memoria) =
+ * maxEdad − age_days (0 = la más vieja), C(sección) = min t de su subárbol = el instante en que
+ * llegó su descendiente MÁS VIEJA. Como el padre lleva un superconjunto, C(padre) ≤ C(hijo):
+ * ninguna rama nace antes que su tronco, no hay gajos flotantes. La sección se revela creciendo
+ * de nace[0] = C(padre) a nace[1] = max(C(s), nace[0] + εdur) — el ε evita el /0 en el shader,
+ * que es el NaN que desaparece sin error.
+ *
+ * @returns {{maxEdad:number}} y deja s.nace = [ini, fin] en cada sección
+ */
+export function naceDe(S, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  let maxEdad = 0;
+  for (const s of S) {
+    for (const m of s.memorias) maxEdad = Math.max(maxEdad, Number(m.age_days) || 0);
+  }
+  const durMin = num(o.durMin, Math.max(0.5, maxEdad * 0.004));
+  const C = new Float64Array(S.length).fill(Infinity);
+  for (let i = S.length - 1; i >= 0; i--) {
+    const s = S[i];
+    for (const m of s.memorias) C[i] = Math.min(C[i], maxEdad - (Number(m.age_days) || 0));
+    for (const h of s.hijos) C[i] = Math.min(C[i], C[h]);
+  }
+  // De arriba hacia abajo: la hija ARRANCA cuando el padre TERMINA — contra su fin real (con el
+  // piso de duración puesto), no contra su C, o la punta nace antes de que exista su tronco.
+  for (const s of S) {
+    const ini = s.padre < 0 ? 0 : S[s.padre].nace[1];
+    const fin = Number.isFinite(C[s.idx]) ? C[s.idx] : ini;
+    s.nace = [ini, Math.max(fin, ini + durMin)];
+  }
+  return { maxEdad };
+}
+
+/**
+ * formarColonizado: el camino completo de la séptima forma — del árbol semántico al bosque
+ * crecido, emitido en el contrato de secciones. Reemplaza a seccionar + colocar en construir.
+ *
+ * El elipsoide del núcleo se ESTIMA con el conteo del árbol semántico para saber dónde nacen los
+ * actores (el conteo real recién existe después de crecer), y el cuerpo REAL se fija al final con
+ * el conteo verdadero — la diferencia es de unas pocas unidades y sólo corre el punto de partida
+ * del impulso, no la forma.
+ */
+export function formarColonizado(raiz, opciones) {
+  const o = opciones || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const rFib = num(o.radioHilo, 0.40);
+  const sep = num(o.separacion, 3.05);
+  const nucleo = num(o.nucleo, 40);
+  const hilos = o.hilos || { porMemoria: 6, maxHoja: 22 };
+
+  const S0 = seccionar(raiz, o.seccionado || { maxNivel: 8, minCarga: 10 });
+  contarFibras(S0, hilos);
+  const celdas = new Array(S0.length);
+  repartirEsfera(S0, celdas);
+  const atrs = atractoresDe(S0, celdas, o);
+  // El ORDEN de llegada es dato (lo usa el desempate determinista del orden de hijos).
+  atrs.forEach((a, i) => { a.orden = i; });
+
+  // la estimación del elipsoide, con la MISMA cuenta que colocarNucleo
+  const rN = radioHaz(Math.max(1, S0[0].fibras || 1), rFib, sep);
+  const largoN = Math.max(nucleo, 2 * rN);
+  const nacerEn = (d) => {
+    const ax = Math.abs(d[1]);
+    const per = Math.sqrt(Math.max(0, 1 - ax * ax));
+    const q = Math.hypot(ax / Math.max(1e-6, largoN * 0.5), per / Math.max(1e-6, rN));
+    return q > 1e-9 ? 1.06 / q : largoN * 0.55;
+  };
+
+  const bosques = [];
+  for (const s1 of S0.filter((x) => x.nivel === 1)) {
+    const propios = atrs.filter((a) => a.actor === s1.idx);
+    if (!propios.length) continue;
+    // El actor nace mirando al CENTRO DE MASA de su comida, no a una dirección repartida: es lo
+    // que hace que el primer tramo ya vaya hacia donde el crecimiento lo va a llevar igual.
+    let cx = 0, cy = 0, cz = 0;
+    for (const a of propios) { cx += a.pos[0]; cy += a.pos[1]; cz += a.pos[2]; }
+    const cl = Math.hypot(cx, cy, cz) || 1;
+    const dir = [cx / cl, cy / cl, cz / cl];
+    const r0 = nacerEn(dir);
+    const bosque = crecer(propios, Object.assign({}, o, {
+      origen: [dir[0] * r0, dir[1] * r0, dir[2] * r0], dir,
+    }));
+    bosques.push({ bosque, atrs: propios, racimo: s1.racimo, etiqueta: s1.etiqueta });
+  }
+
+  const S = emitirSecciones(bosques, Object.assign({ nucleoLargo: largoN }, o));
+  contarFibras(S, hilos);
+  // el cuerpo REAL, con el conteo real — la misma cuenta que colocarNucleo hace con el suyo
+  const rReal = radioHaz(Math.max(1, S[0].fibras || 1), rFib, sep);
+  const largoReal = Math.max(nucleo, 2 * rReal);
+  S[0].cuerpo = rFib * sep * Math.sqrt(Math.max(1, S[0].fibras || 1));
+  S[0].a = [0, -largoReal / 2, 0];
+  S[0].b = [0, largoReal / 2, 0];
+  S[0].largo = largoReal;
+  S[0].dist = largoReal;
+  // lo recortado por el cap de seccionar se hereda: memoria recortada no cría rama, y se declara
+  S[0].recortado = S0.reduce((t, x) => t + (x.recortado || 0), 0);
+  naceDe(S, o);
+  S.forzados = bosques.reduce((t, b) => t + b.bosque.forzados, 0);
+  return S;
 }
 
 /**
@@ -2013,7 +2600,7 @@ export function escalaTinta(n) {
 
 /** FORMAS_IDS: las seis formas. Vive acá —y no en forma.mjs— porque forma.mjs toca `document` y
     el test puro no puede importarlo; repetir la lista a mano es como se desincronizan. */
-export const FORMAS_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
+export const FORMAS_IDS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
 
 export const CEREBROS = [
   { id: 'local', nombre: 'este cerebro', archivo: './grafo-local.json' },
