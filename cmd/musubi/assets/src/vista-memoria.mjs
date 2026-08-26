@@ -31,11 +31,12 @@ const HEBRA = { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.
 
 // El CSS mínimo que la vista necesita (la ficha de navegación, el tooltip 3D, la caja de prueba).
 // La fuente de verdad visual es boceto/estilo.css — esto es el subconjunto que viaja en el bundle,
-// con la ficha corrida para no pisar la barra inferior del panel.
+// con la ficha CENTRADA abajo (encima de la barra de pistas): el carril izquierdo es del riel
+// del panel, y ponerla ahí era apilar dos chromes en la misma esquina.
 const CSS_VISTA = `
 .vm-host{position:fixed;inset:0;z-index:0}
 .vm-host canvas{display:block}
-.hud{position:fixed;left:20px;bottom:64px;max-width:min(520px,46vw);z-index:10;
+.hud{position:fixed;left:50%;transform:translateX(-50%);bottom:64px;max-width:min(560px,70vw);z-index:10;
   background:rgba(10,14,24,.92);border:1px solid rgba(120,140,180,.18);border-radius:10px;
   font:12.5px/1.45 'Segoe UI',system-ui,sans-serif;color:#c8d2e4;overflow:hidden}
 .hud .migas{display:flex;flex-wrap:wrap;gap:4px;padding:9px 12px 7px;
