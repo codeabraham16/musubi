@@ -1021,3 +1021,31 @@ test('G2 · el núcleo no es más ancho que largo', () => {
   const G = elNudo(200);
   assert.equal(G[0].largo, 200, `un núcleo declarado en 200 salió ${G[0].largo}`);
 });
+
+test('H1 · el núcleo es un CUERPO REDONDO, no un ladrillo', () => {
+  // Los hilos del núcleo corrían todos de punta a punta, así que la silueta era un cilindro — un
+  // bloque en el medio de la escena. Ahora cada hilo viaja la CUERDA que le toca dentro del
+  // elipsoide: el del eje entero, el del borde apenas un tramo. Sin tocar el conteo de hilos.
+  const S = elNudo(40);
+  const E = enhebrar(S, { radioHilo: 0.52, separacion: 2.60, largoNeurona: 17, torsion: 0.6 });
+  const nuc = E.filter((e) => e.sec === 0);
+  assert.ok(nuc.length > 100, `el núcleo trajo ${nuc.length} eslabones: el fixture no llega al caso`);
+  const a = S[0].largo * 0.5, b = S[0].cuerpo;
+  assert.ok(b > 0, 'el núcleo no quedó declarado como cuerpo');
+  let peor = 0, polo = 0, ecuador = 0;
+  for (const e of nuc) {
+    for (const p of [e.a, e.b]) {
+      const ax = Math.abs(p[0] * S[0].dir[0] + p[1] * S[0].dir[1] + p[2] * S[0].dir[2]);
+      const pr = Math.sqrt(Math.max(0, p[0] * p[0] + p[1] * p[1] + p[2] * p[2] - ax * ax));
+      peor = Math.max(peor, Math.hypot(ax / a, pr / b));
+      polo = Math.max(polo, ax / a); ecuador = Math.max(ecuador, pr / b);
+    }
+  }
+  // 1,20 y no 1,00: la ondulación de `puntoHilo` mueve cada hilo hasta un 17 % de su radio DENTRO
+  // del haz, así que la superficie es peluda a propósito. Un cilindro daría 1,54 en las esquinas.
+  assert.ok(peor <= 1.20, `un hilo del núcleo se sale ${((peor - 1) * 100).toFixed(0)} % del cuerpo`);
+  // CONTROL: y el cuerpo se LLENA. Sin esto el test pasaría con todos los hilos aplastados contra
+  // el centro, que también deja de salirse del elipsoide y no dibuja nada.
+  assert.ok(polo > 0.9, `ningún hilo llega al polo: máximo ${polo.toFixed(2)}`);
+  assert.ok(ecuador > 0.9, `ningún hilo llega al ecuador: máximo ${ecuador.toFixed(2)}`);
+});

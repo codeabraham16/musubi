@@ -886,6 +886,13 @@ export function colocarNucleo(secciones, opciones) {
      (0,259 → 0,265, que es ruido). Antes NO era gratis, porque el nacimiento empujaba el árbol. */
   const rNucleo = radioHaz(Math.max(1, raiz.fibras || 1), rFib, sepHilo);
   const largoNucleo = Math.max(nucleo, 2 * rNucleo);
+  /* 🔴 EL NÚCLEO ES UN CUERPO, Y UN CUERPO ES REDONDO. El comentario de arriba lo decía desde el
+     principio y el dibujo no lo cumplía: los hilos del núcleo corrían todos de punta a punta, así
+     que la silueta era un CILINDRO — un ladrillo azul en el medio de la escena. Marcarlo como
+     cuerpo hace que cada hilo viaje sólo la CUERDA que le toca dentro del elipsoide: el del eje
+     entero, el del borde apenas un tramo. No se agrega ni se saca un hilo —`hilos(padre) = Σ
+     hilos(hijos)` no se toca—, cambia por dónde viaja cada uno. Ver `enhebrar`. */
+  raiz.cuerpo = rFib * sepHilo * Math.sqrt(Math.max(1, raiz.fibras || 1));
   raiz.largo = largoNucleo;
   raiz.a = add(origen, mul(raiz.dir, -largoNucleo * 0.5));
   raiz.b = add(origen, mul(raiz.dir, largoNucleo * 0.5));
@@ -909,11 +916,14 @@ export function colocarNucleo(secciones, opciones) {
      Acá ni siquiera hizo falta alargar el núcleo: con el nacimiento bien puesto el solape es 0 en
      los dos cerebros y `nucleo` deja de cambiar el solape en todo el barrido 40..120. */
   const nacerEn = (d) => {
+    // Por dónde SALE la dirección del elipsoide: semieje `largoNucleo/2` sobre el eje y `rNucleo`
+    // de panza. Un solo número no sirve para las dos medidas, y el mínimo entre tapa y panza —que
+    // es una cápsula— deja una arista donde el cuerpo ya no la tiene.
     const ax = Math.abs(d[0] * raiz.dir[0] + d[1] * raiz.dir[1] + d[2] * raiz.dir[2]);
     const per = Math.sqrt(Math.max(0, 1 - ax * ax));
-    const tapa = ax > 1e-6 ? (largoNucleo * 0.55) / ax : Infinity;
-    const panza = per > 1e-6 ? rNucleo / per : Infinity;
-    return Math.min(tapa, panza);
+    const a = Math.max(1e-6, largoNucleo * 0.5), b = Math.max(1e-6, rNucleo);
+    const q = Math.hypot(ax / a, per / b);
+    return q > 1e-9 ? 1.06 / q : a;
   };
 
   const hijos = raiz.hijos;
@@ -1295,6 +1305,10 @@ export function enhebrar(secciones, opciones) {
     const paso = pasoMezcla(f);
     const nE = Math.max(1, Math.min(maxEsl, Math.round((s.largo || 1) / largoN)));
     const d0 = (s.dist || 0) - (s.largo || 0);
+    // UN CUERPO ES REDONDO: cada hilo viaja la CUERDA que le toca dentro del elipsoide, no el
+    // largo entero. El del eje lo recorre completo y el del borde apenas un tramo — que es lo que
+    // convierte un cilindro en una esfera sin tocar el conteo de hilos.
+    const cuerpo = Number(s.cuerpo) > 0 ? Number(s.cuerpo) : 0;
     for (let j = 0; j < f; j++) {
       // Girasol: los hilos LLENAN el disco en vez de formar un anillo hueco. Un anillo se ve como
       // un caño y delata que adentro no hay nada.
@@ -1316,10 +1330,20 @@ export function enhebrar(secciones, opciones) {
       // ve, así que la cadena se lee como continua justo ahí. Por debajo de medio paso se funden
       // con el vecino. Lo destapó el test, no el ojo: con el recorte a secas la hendidura mínima
       // daba 0,015 — o sea, ninguna.
+      // La media cuerda de ESTE hilo, en fracción de la sección. Sin cuerpo es media sección
+      // entera, o sea el cilindro de siempre.
+      const mitad = cuerpo > 0 && R > 0
+        ? 0.5 * Math.sqrt(Math.max(0, 1 - (rho / R) * (rho / R))) : 0.5;
+      // Y LOS ESLABONES SALEN DE LO QUE ESTE HILO MIDE, no de lo que mide la sección. Con el
+      // número de la sección, un hilo del borde —que viaja una décima parte— quedaría partido en
+      // astillas de dos unidades, y una astilla no se lee como fibra sino como polvo.
+      const nEf = cuerpo > 0
+        ? Math.max(1, Math.min(maxEsl, Math.round((s.largo || 1) * 2 * mitad / largoN))) : nE;
       const cortes = [0];
-      for (let k = 0; k < nE; k++) cortes.push((k + desf) / nE);
+      for (let k = 0; k < nEf; k++) cortes.push((k + desf) / nEf);
       cortes.push(1);
-      const minPaso = 0.5 / nE;
+      if (cuerpo > 0) for (let k = 0; k < cortes.length; k++) cortes[k] = 0.5 + (cortes[k] - 0.5) * 2 * mitad;
+      const minPaso = 0.5 / nEf;
       if (cortes.length > 2 && cortes[1] - cortes[0] < minPaso) cortes.splice(1, 1);
       const u = cortes.length;
       if (u > 2 && cortes[u - 1] - cortes[u - 2] < minPaso) cortes.splice(u - 2, 1);

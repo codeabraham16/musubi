@@ -128,6 +128,25 @@ las puntas: un cepillo. Encima cada hilo recibía `round(largo / largoNeurona)` 
 El piso es su propio diámetro, y con el nacimiento ya arreglado sale **gratis**: barriendo 40..120 en
 los dos cerebros el enredo del local queda clavado en 0,113 y el del central se mueve 0,006.
 
+### El núcleo es un CUERPO, y un cuerpo es redondo
+
+Con el largo al piso el núcleo dejaba de ser un disco — y pasaba a ser un **ladrillo**: los hilos
+corrían todos de punta a punta, así que la silueta era un cilindro. Ahora cada hilo viaja **la cuerda
+que le toca dentro del elipsoide**: el del eje entero, el del borde apenas un tramo. No se agrega ni
+se saca un hilo, cambia por dónde viaja cada uno.
+
+Y los eslabones salen de lo que mide **ese** hilo, no la sección: con el número de la sección, un
+hilo del borde —que viaja una décima parte— quedaría partido en astillas de dos unidades, y una
+astilla no se lee como fibra sino como polvo.
+
+Medido sobre el central: semiejes **38,7 y 38,7** —una esfera—, ningún hilo más allá de **1,17** del
+radio *(la ondulación de `puntoHilo` mueve cada fibra un 17 % dentro del haz: la superficie es
+peluda a propósito)*, y llega tanto al polo como al ecuador. Un cilindro daría **1,54** en las
+esquinas, que es exactamente lo que se veía.
+
+El nacimiento de las hijas pasa a salir del mismo elipsoide en vez de una cápsula: el mínimo entre
+tapa y panza dejaba una arista donde el cuerpo ya no la tiene.
+
 ### ⚠ Y una sola muestra no es una medición
 
 Las tres filas de puntería del `#prueba` salían de **una** sección —la última hoja gorda de la lista—.

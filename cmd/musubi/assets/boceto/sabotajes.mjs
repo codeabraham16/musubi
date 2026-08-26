@@ -288,7 +288,7 @@ const SABOTAJES = [
   {
     test: 'G1',
     que: 'las hijas vuelven a nacer DENTRO del núcleo y los actores se atraviesan',
-    de: '    return Math.min(tapa, panza);',
+    de: '    return q > 1e-9 ? 1.06 / q : a;',
     a: '    return nucleo * 0.55;',
   },
   {
@@ -296,6 +296,12 @@ const SABOTAJES = [
     que: 'el núcleo vuelve a ser un disco: más ancho que largo, o sea una cara cortada',
     de: '  const largoNucleo = Math.max(nucleo, 2 * rNucleo);',
     a: '  const largoNucleo = nucleo;',
+  },
+  {
+    test: 'H1',
+    que: 'el núcleo vuelve a ser un cilindro: los hilos del borde viajan de punta a punta',
+    de: '      if (cuerpo > 0) for (let k = 0; k < cortes.length; k++) cortes[k] = 0.5 + (cortes[k] - 0.5) * 2 * mitad;',
+    a: '      if (false) for (let k = 0; k < cortes.length; k++) cortes[k] = cortes[k];',
   },
 ];
 
