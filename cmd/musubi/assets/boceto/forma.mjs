@@ -100,7 +100,12 @@ export async function construir(v) {
     // FONDO AZUL-NOCHE, NO NEGRO PURO. Sale de la marca de Musubi, y no es capricho: sobre negro
     // absoluto los azules oscuros —que acá son un actor entero— se hunden hasta desaparecer, y el
     // panel deja de tener un piso contra el cual medir. #0C1020 da ese piso sin levantar la escena.
-    fondo: tono === 'cyber' ? '#05070F' : '#0C1020', bloom: tono === 'cyber' ? 1.05 : 0.80,
+    // en cyber el material EMITE (neon: 1) y el bloom es parte del material: mas fuerza y un
+    // umbral mas abajo — lo que en sobrio borraria los hilos, aca ES el halo que hace neon.
+    fondo: tono === 'cyber' ? '#04060D' : '#0C1020',
+    bloom: tono === 'cyber' ? 1.30 : 0.80,
+    umbralBloom: tono === 'cyber' ? 0.60 : 0.74,
+    neon: tono === 'cyber' ? 1 : 0,
     nivelesPenacho: 3, escalaPenacho: 0.62,
   }, montaje));
 

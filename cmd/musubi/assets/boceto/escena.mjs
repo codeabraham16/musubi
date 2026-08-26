@@ -117,7 +117,7 @@ void main(){
 const VAINA_LUZ_F = `
 precision highp float;
 uniform float uReloj; varying float vNace; varying float vLuz;
-uniform float uLuzA; uniform vec3 uAmbar;
+uniform float uLuzA; uniform vec3 uAmbar; uniform float uNeon;
 varying vec3 vC; varying float vY; varying float vNod; varying float vSel; varying float vNiv;
 varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; varying float vFam;
 ${ATM_VARY}
@@ -129,13 +129,14 @@ void main(){
   // La punta se apaga como en el penacho: una terminal que corta en seco se ve cortada.
   float punta = mix(1.0, 0.45, vY);
   vec3 cS = mix(vec3(dot(vC, vec3(0.2126, 0.7152, 0.0722))), vC, 1.34);
-  vec3 c = cS * (0.22 + 0.85 * fres) * punta * vVol * uLuzA * (1.0 + vSel * 1.4);
+  vec3 c = cS * (0.22 + 0.85 * fres) * punta * vVol * uLuzA * (1.0 + vSel * 1.4) * (1.0 + uNeon * 0.75);
   c += uAmbar * vPul * vPul * 1.2;
   gl_FragColor = vec4(c * vFam, 1.0);
 }`;
 
 const VAINA_F = `
 uniform float uReloj; varying float vNace; varying float vLuz;
+uniform float uNeon;
 precision highp float;
 // LA LUZ. Un solo direccional en espacio de cámara —arriba, a la izquierda, hacia adelante—, que
 // es la posición clásica de la luz clave. Antes la escena era fresnel puro: fresnel dibuja el
@@ -210,12 +211,24 @@ void main(){
   vec3 cVivo = vC * temp;
   float lumV = dot(cVivo, vec3(0.2126, 0.7152, 0.0722));
   cVivo = mix(vec3(lumV), cVivo, 0.80 + 0.42 * campana);
+  // NEÓN: un tubo de gas brilla de SU color hasta en el resalte — el lavado a blanco es de la
+  // materia difusa. Y la temperatura retrocede: el neón ES su propia luz, no la recibe.
+  cVivo = mix(cVivo, vC, uNeon * 0.55);
   // GANANCIA UN POCO MAS ALTA que con la paleta neon, y no es capricho: bajar la saturacion baja
   // la energia del color, asi que a igual ganancia la escena se apaga. Medido: 63,7 -> 53,2 de
   // brillo medio con la paleta nueva. Se compensa acá, que es donde corresponde.
   vec3 base = (cVivo * subsup * mielina * prof * (0.88 + 1.46 * dif)
-             + vC * vec3(0.74, 0.97, 1.34) * fres * 0.78) * vVol
+             + vC * mix(vec3(0.74, 0.97, 1.34), vec3(1.0), uNeon) * fres * (0.78 + 0.55 * uNeon)) * vVol
             * (1.0 + vSel * 1.60);
+  // la EMISIÓN del modo cyber: independiente de la luz — es lo que el bloom recoge y convierte
+  // en el halo que hace «neón». En sobrio este término es exactamente cero.
+  // ...pero NO en el núcleo (nivel 0): 469 hilos superpuestos emitiendo + bloom = una bola
+  // blanca — la lección del aditivo, otra vez. El cuerpo central ya brilla por acumulación.
+  base += vC * uNeon * (0.22 + 0.55 * fres) * mielina * vVol * prof * min(vNiv, 1.0);
+  // y el CUERPO del núcleo baja la voz en neón: cientos de hilos superpuestos bajo un bloom
+  // fuerte se acumulan a blanco aunque no emitan — se atenúa la base ahí, no el bloom global,
+  // porque el bloom global ES el material de este modo.
+  base *= mix(1.0 - uNeon * 0.60, 1.0, min(vNiv, 1.0));
   // ROLLOFF SUAVE en vez de recorte duro. Sin esto hay que elegir entre dos males: con ganancia
   // alta el turquesa saturado se pasa de 1 en dos canales y el haz cercano se lava a CIAN BLANCO
   // —se pierde el hilo, que es lo unico que importa mostrar—; con ganancia baja las puntas se
@@ -349,6 +362,7 @@ void main(){
 
 const PENACHO_F = `
 uniform float uReloj; varying float vNace;
+uniform float uNeon;
 precision highp float;
 const vec3 LUZ = normalize(vec3(-0.45, 0.72, 0.52));
 varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varying float vFam;
@@ -364,7 +378,8 @@ void main(){
   // ve cortada; el desvanecido es lo que da la sensación de que sigue más allá de lo dibujado.
   float punta = mix(1.0, 0.38, vY);
   vec3 cV = vC * mix(vec3(0.84, 0.94, 1.18), vec3(1.12, 1.00, 0.88), dif);
-  vec3 c = (cV * (0.30 + 0.55 * dif) + vC * vec3(0.78, 0.97, 1.28) * fres * 0.62) * punta * uLuzA;
+  vec3 c = (cV * (0.30 + 0.55 * dif) + vC * vec3(0.78, 0.97, 1.28) * fres * 0.62) * punta * uLuzA
+         * (1.0 + uNeon * 0.6);
   c += vC * vSel * 0.9;
   c += uAmbar * vPul * vPul * 1.5;
   gl_FragColor = vec4(atmosfera(c * vFam), (0.62 + 0.38 * vSel) * punta * (0.30 + 0.70 * vFam));
@@ -697,7 +712,12 @@ export function montar(cfg) {
   };
   const uAtm = { uHov, uReloj, uFondo: { value: new THREE.Color(cfg.fondo || '#05070d') },
                  uAtm: { value: new THREE.Vector2(1, 2) } };
-  const uPulso = { uHov, uReloj, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
+  /* uNeon: en cyber la diferencia NO es más saturación — el pase de vida ya deja el render en
+     0,93 de saturación p90, así que subir la base se pierde en la compresión (medido: los dos
+     modos salían casi iguales). Lo que distingue un neón es que EMITE: el resalte brilla de SU
+     color en vez de lavarse a blanco, y la carne suma un término emisivo que el bloom recoge. */
+  const uNeon = { value: cfg.neon ? 1 : 0 };
+  const uPulso = { uHov, uReloj, uNeon, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
                    uT: { value: 0 }, uVaiven: { value: cfg.vaiven != null ? cfg.vaiven : 0.9 },
                    uFondo: uAtm.uFondo, uAtm: uAtm.uAtm };
   // OPACO, y no es un detalle de rendimiento. Con 5.000 cilindros transparentes el orden de
