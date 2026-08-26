@@ -1687,6 +1687,13 @@ export function montar(cfg) {
     return `<b>una terminal</b> · hilo ${N_FMT(RAM[h.i].fib)}<br><span class="d">rama fina, sin mielina</span>`;
   }
   function hud() {
+    // FICHA COMPACTA (producción): en reposo no hay caja — el panel ya tiene su chrome y una
+    // ficha del «haz entero» encima de las tarjetas era mueble tapando mueble. Aparece al elegir.
+    if (cfg.fichaCompacta && sel === 0 && aislado < 0) {
+      panel.style.display = 'none';
+    } else {
+      panel.style.display = '';
+    }
     const s = S[sel];
     const c = camino(sel).reverse();
     const migas = c.map((k, i) => {

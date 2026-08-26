@@ -113,6 +113,7 @@ export function crearVistaMemoria(grafo, o) {
     agrupar: 0.66,
     alfaSinapsis: 0.13 * tinta, alfaConfianza: 0.34 * tinta,
     nivelesPenacho: 3, escalaPenacho: 0.62,
+    fichaCompacta: true,
   });
 
   // racimo → sección raíz de ese actor, para que un evento del riel se vuelva un pulso que viaja

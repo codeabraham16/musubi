@@ -1185,6 +1185,28 @@ export function formarColonizado(raiz, opciones) {
   contarFibras(S0, hilos);
   const celdas = new Array(S0.length);
   repartirEsfera(S0, celdas);
+  /* ── LOS LÓBULOS: el modelo de «separados», con nuestro tejido ─────────────────────────────
+     El treemap TESELA: las parcelas de los actores se tocan, así que sus arborizaciones se
+     entretejen en los bordes y el conjunto se lee como UNA bola. Lo que el usuario pidió del
+     modelo viejo era la separación — cada actor como un lóbulo propio, legible de un vistazo —
+     sin perder el nudo. Acá cada parcela (y todas las de su subárbol) se REPLIEGA hacia su
+     centro: 0,72 deja un pasillo de ~28 % del ancho angular entre vecinos. Los troncos siguen
+     naciendo del nudo y cruzando el pasillo: separados, pero atados. */
+  const kSep = Math.max(0.2, Math.min(1, num(o.separacionActores, 0.72)));
+  if (kSep < 1) {
+    const actorDe0 = new Int32Array(S0.length).fill(-1);
+    for (const s0 of S0) {
+      actorDe0[s0.idx] = s0.nivel === 1 ? s0.idx : (s0.nivel > 1 ? actorDe0[s0.padre] : -1);
+    }
+    for (const s0 of S0) {
+      const a0 = actorDe0[s0.idx];
+      if (a0 < 0 || !celdas[s0.idx] || !celdas[a0]) continue;
+      const A = celdas[a0], C = celdas[s0.idx];
+      const cc = (A[0] + A[1]) / 2, cf = (A[2] + A[3]) / 2;
+      celdas[s0.idx] = [cc + (C[0] - cc) * kSep, cc + (C[1] - cc) * kSep,
+                        cf + (C[2] - cf) * kSep, cf + (C[3] - cf) * kSep];
+    }
+  }
   const atrs = atractoresDe(S0, celdas, o);
   // El ORDEN de llegada es dato (lo usa el desempate determinista del orden de hijos).
   atrs.forEach((a, i) => { a.orden = i; });
