@@ -1189,15 +1189,16 @@ export function formarColonizado(raiz, opciones) {
   // El ORDEN de llegada es dato (lo usa el desempate determinista del orden de hijos).
   atrs.forEach((a, i) => { a.orden = i; });
 
-  // la estimación del elipsoide, con la MISMA cuenta que colocarNucleo
-  const rN = radioHaz(Math.max(1, S0[0].fibras || 1), rFib, sep);
-  const largoN = Math.max(nucleo, 2 * rN);
-  const nacerEn = (d) => {
-    const ax = Math.abs(d[1]);
-    const per = Math.sqrt(Math.max(0, 1 - ax * ax));
-    const q = Math.hypot(ax / Math.max(1e-6, largoN * 0.5), per / Math.max(1e-6, rN));
-    return q > 1e-9 ? 1.06 / q : largoN * 0.55;
-  };
+  /* ── EL CENTRO ES UN NUDO, NO UN CUERPO ─────────────────────────────────────────────────
+     El cuerpo elipsoidal venía del nudo (colocarNudo) y en el colonizado quedó como un POMPÓN:
+     cientos de cuerdas cortadas en todas las orientaciones, en tres colores, peleándose con los
+     troncos lisos que salen de él — el usuario lo dijo: «la verdad nunca me gustó». Y era
+     redundante de fondo: los hilos del núcleo YA se dibujan una vez como los troncos que
+     convergen; el cuerpo los dibujaba una SEGUNDA vez como cuerdas. Acá los troncos nacen casi
+     en el origen y SE FUNDEN — el centro es el entrelazamiento real de los tres, como un quiasma:
+     el nudo (結び) hecho de las mismas ramas que ata. */
+  const rNudo = num(o.radioNudo, 6);
+  const nacerEn = () => rNudo;
 
   const bosques = [];
   for (const s1 of S0.filter((x) => x.nivel === 1)) {
@@ -1216,16 +1217,15 @@ export function formarColonizado(raiz, opciones) {
     bosques.push({ bosque, atrs: propios, racimo: s1.racimo, etiqueta: s1.etiqueta });
   }
 
-  const S = emitirSecciones(bosques, Object.assign({ nucleoLargo: largoN }, o));
+  const S = emitirSecciones(bosques, Object.assign({ nucleoLargo: rNudo * 2 }, o));
   contarFibras(S, hilos);
-  // el cuerpo REAL, con el conteo real — la misma cuenta que colocarNucleo hace con el suyo
-  const rReal = radioHaz(Math.max(1, S[0].fibras || 1), rFib, sep);
-  const largoReal = Math.max(nucleo, 2 * rReal);
-  S[0].cuerpo = rFib * sep * Math.sqrt(Math.max(1, S[0].fibras || 1));
-  S[0].a = [0, -largoReal / 2, 0];
-  S[0].b = [0, largoReal / 2, 0];
-  S[0].largo = largoReal;
-  S[0].dist = largoReal;
+  // La sección 0 EXISTE —lleva la suma de hilos, las migas y la ruta de las sinapsis— pero no
+  // teje: sus hilos son los troncos que convergen, y dibujarlos dos veces era el pompón.
+  S[0].sinTejido = true;
+  S[0].a = [0, -rNudo, 0];
+  S[0].b = [0, rNudo, 0];
+  S[0].largo = rNudo * 2;
+  S[0].dist = rNudo * 2;
   // lo recortado por el cap de seccionar se hereda: memoria recortada no cría rama, y se declara
   S[0].recortado = S0.reduce((t, x) => t + (x.recortado || 0), 0);
   naceDe(S, o);
@@ -2084,6 +2084,9 @@ export function enhebrar(secciones, opciones) {
   const esl = [];
 
   for (const s of secciones) {
+    // sinTejido: la sección cuenta (hilos, migas, rutas) pero NO emite eslabones — es el nudo
+    // central del colonizado, cuyo tejido son los propios troncos que convergen.
+    if (s.sinTejido) continue;
     const f = Math.max(1, s.fibras || 1);
     const [e1, e2] = marco(s.dir);
     // EL RADIO DEL HAZ SALE DE CUÁNTOS HILOS LLEVA, POR ÁREA. El doble de hilos no es el doble de
