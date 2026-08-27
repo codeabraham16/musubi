@@ -39,8 +39,13 @@ global:
   external_labels:
     host: musubi-brain
 
+# UN GLOB, NO UN ARCHIVO. Las reglas están repartidas en TRES archivos porque cada uno se instala
+# bajo su propia condición (las de flota sólo si el cerebro expone `musubi_fleet_*`; la del backup
+# off-host sólo si hay `BACKUP_REMOTE`). Con una ruta fija, `preparar.sh` copiaba el archivo de
+# flota y Prometheus lo IGNORABA — con las 12 reglas en disco y ninguna evaluándose, que es peor
+# que no haberlas instalado: se ven puestas.
 rule_files:
-  - /etc/prometheus/rules/musubi-alerts.yml
+  - /etc/prometheus/rules/*.yml
 
 # LAS ALERTAS SALEN DE ACÁ HACIA ALGUIEN (S10 · A4). Hasta este track, este bloque era un
 # comentario: las reglas se evaluaban y se veían en http://127.0.0.1:9099/alerts, y no notificaban

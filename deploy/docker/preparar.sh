@@ -177,8 +177,26 @@ PROM_URL="${PROM_URL:-http://127.0.0.1:9099}"
 if curl -fsS -m 5 "$PROM_URL/-/ready" >/dev/null 2>&1; then
 	curl -fsS -m 5 -XPOST "$PROM_URL/-/reload" >/dev/null 2>&1 || true
 	sleep 2
-	N="$(curl -fsS -m 5 "$PROM_URL/api/v1/rules" 2>/dev/null | grep -o "\"name\":" | wc -l || echo 0)"
-	if [ "$N" -eq 0 ]; then
+	# SE COMPARA CONTRA LO QUE ACABAMOS DE INSTALAR, no contra cero.
+	#
+	# La versión anterior preguntaba "¿hay alguna regla?" y daba por bueno un 9 que eran las del
+	# cerebro — mientras las 12 de flota estaban en disco y sin cargar, porque `rule_files`
+	# apuntaba a UN archivo en vez de a un glob. Una verificación que pasa por el motivo
+	# equivocado es peor que ninguna: deja el problema puesto y con sello de aprobado.
+	ESPERADAS=0
+	for f in "$DEST"/rules/*.yml; do
+		[ -e "$f" ] || continue
+		ESPERADAS=$((ESPERADAS + $(grep -c "^\s*- alert:" "$f" || true)))
+	done
+	N="$(curl -fsS -m 5 "$PROM_URL/api/v1/rules" 2>/dev/null | grep -o "\"type\":\"alerting\"" | wc -l || echo 0)"
+	if [ "$N" -lt "$ESPERADAS" ]; then
+		echo
+		echo "⚠  INSTALÉ $ESPERADAS ALERTAS Y PROMETHEUS TIENE $N."
+		echo "   Casi siempre es una de dos: la etiqueta de SELinux de los archivos recién"
+		echo "   escritos, o que rule_files apunte a un archivo fijo en vez de a un glob."
+		echo "   Comprobalo:  podman exec musubi-prometheus ls -la /etc/prometheus/rules/"
+		echo "     cd $AQUI && podman compose restart prometheus"
+	elif [ "$N" -eq 0 ]; then
 		echo
 		echo "⚠  PROMETHEUS ESTÁ CORRIENDO Y NO CARGÓ NINGUNA REGLA."
 		echo "   Casi siempre es la etiqueta de SELinux de los archivos recién escritos."
@@ -186,6 +204,6 @@ if curl -fsS -m 5 "$PROM_URL/-/ready" >/dev/null 2>&1; then
 		echo "   Si da 'Permission denied', reiniciá el contenedor para que :z reetiquete:"
 		echo "     cd $AQUI && podman compose restart prometheus"
 	else
-		echo "→ Prometheus tiene reglas cargadas ($N grupos/reglas visibles)."
+		echo "→ Prometheus evalúa las $N alertas instaladas."
 	fi
 fi
