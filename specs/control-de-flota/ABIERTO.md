@@ -4,7 +4,7 @@
 > declarada de por qué NO se va a hacer. Si algo se cierra, se borra de esta tabla; si aparece
 > algo nuevo, se anota acá el mismo día.
 >
-> Última revisión: **2026-08-27** (tras S6c, S7b, la auditoría del registro y la del DESPLIEGUE).
+> Última revisión: **2026-08-27** (tras S6c, S7b, las dos auditorías, y el DESPLIEGUE REAL en `musubi-server`).
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -17,7 +17,9 @@
 |---|---|---|---|
 | A1 | **CPU y memoria en macOS** | Viven detrás de **mach** (`host_processor_info`, `host_statistics64`), no de sysctl. Sin cgo hay que armar el mensaje IPC a mano: mucho código delicado, y una superficie fea en el proceso que corre en todas las máquinas. Hoy macOS mide disco, carga, uptime y CPUs. | **S4c** |
 | A2 | **Temperatura en Windows** | Se saca por WMI (`MSAcpi_ThermalZoneTemperature`). WMI desde Go sin dependencias es COM crudo, y muchos equipos no exponen el sensor igual. | **S4c** |
-| A3 | **Verificación en hardware real de Windows/macOS** | Los colectores **cross-compilan y su aritmética está probada** (`cpudelta_test.go`, `sysctlparse_test.go`), pero **nadie los corrió en un Mac ni en un Windows de verdad**. La capa de syscalls está sin ejercitar. **Windows SÍ es alcanzable ya**: `gio` y `kernelos-pc` están en el tailnet. **macOS está bloqueado**: gio no tiene Mac por ahora (2026-08-27). | **S4c** |
+| A3 | **Verificación en hardware real de ~~Windows~~/macOS** | Los colectores **cross-compilan y su aritmética está probada** (`cpudelta_test.go`, `sysctlparse_test.go`), pero **nadie los corrió en un Mac ni en un Windows de verdad**. La capa de syscalls está sin ejercitar. **WINDOWS: VERIFICADO (2026-08-27)** — el agente corre en `kernelos-pc` (Windows 11, 8 núcleos, 34 GB) y el colector mide CPU 12,8 %, memoria 46,7 %, disco 91,4 % y swap 28,8 % correctamente. Los dos `None` que devuelve son los huecos ya declarados y no fallas: `load1` **no existe** en Windows, y `temp_c` es **A2**. **macOS sigue bloqueado**: gio no tiene Mac por ahora. | **S4c** |
+| A30 | **No hay Tier B para Windows** | El camino sin agente —que el cerebro sondee por SSH— lee `/proc`, que Windows no tiene. Así que **la única forma de medir un Windows es instalarle el agente**, con todo lo que eso arrastra: un binario sin firmar que los VPN con filtrado por proceso bloquean (medido: NordVPN devuelve `WSAEACCES` mientras `curl.exe` al mismo host y puerto da HTTP 200). Con Tier B para Windows nada de eso haría falta. Requiere un colector que hable WMI o PowerShell remoto sobre SSH. | **S7c** |
+| A31 | **El binario de Windows no está firmado** | Es la causa raíz de A30: NordVPN —y cualquier EDR con filtrado por reputación— bloquea la salida de ejecutables sin firma, y el síntoma (`WSAEACCES`) no menciona ni firma ni antivirus. Hoy se sortea con una excepción de *split tunneling* **por ruta**, que hay que rehacer en cada máquina y se rompe si el binario se mueve. Un certificado de firma de código lo cierra de una vez y para todo lo que se despliegue después. | **acción del operador** (cuesta plata y trámite) |
 | A14 | **Grabación de sesión de pantalla** | Decisión legal antes que técnica; no se hace sin que alguien la tome. | sin asignar |
 | A18 | **Pantalla en Android** (scrcpy sobre ADB) | La matriz de S1 concede `screen` a Tier C, pero el motor es otro distinto del de RustDesk. **Su sombra ya está tapada (S6c)**: pedir la pantalla de un Tier C se NIEGA y la capacidad inerte se ve en el inventario y en el panel. Falta el motor. | **S8b** |
 | A20 | **iOS: medir o controlar** | Requiere un MDM con perfil de supervisión — un producto entero. Musubi lo tiene en el inventario y lo dice. **Puede que nunca se haga, y está bien.** | sin asignar |
@@ -152,6 +154,12 @@ custodian lo que se rompe solo: que los TRES archivos que fijan el puerto de Pro
 —si divergen, `up{job="prometheus"}` queda DOWN y falla el instrumento que mide el fallo— y que no
 vuelvan al **9090, que es de Cockpit**: ahí el riesgo no es que no arranque, es que alguien vea una
 UI y crea que Prometheus anda.
+
+**Despliegue real (2026-08-27)** — el track dejó de ser código y pasó a correr. Cerebro
+`0.108.0-flota` en `musubi-server` (Rocky 10), migración 28→35 ensayada antes contra una copia de
+la base de producción, dos máquinas enroladas —una Linux, una Windows— y las 19 alertas evaluando
+contra Telegram. **Cierra la mitad Windows de A3** y abre **A30** y **A31**, que sólo se ven
+cuando el agente tiene que instalarse en una máquina ajena de verdad.
 
 ---
 
