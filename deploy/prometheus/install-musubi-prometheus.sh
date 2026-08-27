@@ -13,7 +13,8 @@
 #
 # Variables de entorno opcionales (con defaults):
 #   PROM_VERSION   versión de Prometheus a instalar              (default: 2.53.2, LTS)
-#   PROM_ADDR      bind de la UI de Prometheus                   (default: 127.0.0.1:9090)
+#   PROM_ADDR      bind de la UI de Prometheus                   (default: 127.0.0.1:9099)
+#                  (9090 lo ocupa Cockpit en muchos servidores Linux)
 #   PROM_USER      usuario de sistema que corre Prometheus       (default: prometheus)
 #   PROM_RETENTION retención de la TSDB                          (default: 30d)
 #   MUSUBI_ADDR    dónde está el /metrics del cerebro            (default: 127.0.0.1:7717)
@@ -23,7 +24,7 @@
 set -euo pipefail
 
 PROM_VERSION="${PROM_VERSION:-2.53.2}"
-PROM_ADDR="${PROM_ADDR:-127.0.0.1:9090}"
+PROM_ADDR="${PROM_ADDR:-127.0.0.1:9099}"
 PROM_USER="${PROM_USER:-prometheus}"
 PROM_RETENTION="${PROM_RETENTION:-30d}"
 MUSUBI_ADDR="${MUSUBI_ADDR:-127.0.0.1:7717}"

@@ -80,10 +80,10 @@ Idempotente: descarga Prometheus (verifica sha256 contra el `sha256sums.txt` del
 crea el usuario de sistema, escribe [`prometheus/prometheus.yml`](prometheus/prometheus.yml)
 (scrape a `127.0.0.1:7717/metrics` con el bearer por `credentials_file` — el token nunca
 toca la config), carga las reglas, **valida con `promtool` antes de arrancar**, y levanta el
-servicio systemd. La UI queda en `127.0.0.1:9090` (loopback; exponela por la malla o túnel
+servicio systemd. La UI queda en `127.0.0.1:9099` (loopback; exponela por la malla o túnel
 SSH si la querés remota).
 
-> Las alertas se **evalúan y se ven** en `http://127.0.0.1:9090/alerts`, pero para que
+> Las alertas se **evalúan y se ven** en `http://127.0.0.1:9099/alerts`, pero para que
 > **notifiquen** (email/Telegram/Slack) hay que sumar Alertmanager + un canal y descomentar
 > el bloque `alerting:` en `prometheus.yml`. Qué hacer ante cada alerta: [`RUNBOOK.md`](RUNBOOK.md).
 

@@ -1,0 +1,118 @@
+# alertmanager.yml — el tramo que faltaba entre «la alerta se evalúa» y «alguien se entera».
+#
+# Cierra A4 del track «Control de flota». Hasta acá las reglas de deploy/musubi-alerts.yml se
+# evaluaban y se veían en la UI de Prometheus (http://127.0.0.1:9099/alerts) y no notificaban a
+# ningún lado. Una alerta que no llega a nadie no es una alerta: es una página web que nadie abre.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# EL SECRETO NO VIVE ACÁ. Los tokens/URLs de los canales entran por variables de entorno del
+# servicio, igual que el bearer del cerebro (service.auth_token_env) y que el token de scrape
+# (credentials_file). Este archivo se puede commitear; el EnvironmentFile no.
+#
+#   /etc/musubi/alertmanager.env   (chmod 600, dueño root)
+#     TELEGRAM_BOT_TOKEN=123456:AA...
+#     TELEGRAM_CHAT_ID=-1001234567890
+#     SMTP_PASSWORD=...
+#
+# Instalación:
+#   1. Copiá este archivo a /etc/alertmanager/alertmanager.yml
+#   2. Escribí /etc/musubi/alertmanager.env con tus credenciales (chmod 600)
+#   3. Descomentá el bloque `alerting:` de prometheus.yml y recargá Prometheus (/-/reload)
+#   4. Ver deploy/RUNBOOK.md#alertmanager para el unit de systemd y la verificación
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # El agrupado es POR ALERTA Y POR MÁQUINA, no sólo por alerta: si 20 máquinas se quedan sin
+  # disco a la vez, querés 20 avisos identificables y no uno que diga "DiscoPorLlenarse (20)".
+  # Con `device` en el group_by, cada máquina tiene su hilo y se resuelve por separado.
+  group_by: ['alertname', 'device']
+  group_wait: 30s        # espera inicial: junta las que llegan juntas (un host que se cae entero)
+  group_interval: 5m     # cada cuánto avisa de novedades DENTRO de un grupo ya notificado
+  repeat_interval: 4h    # cada cuánto insiste con algo que sigue firing
+  receiver: 'default'
+
+  routes:
+    # EL DEAD-MAN'S SWITCH VA PRIMERO Y SE VA POR SU PROPIO CAMINO.
+    #
+    # `MusubiSiempreViva` está SIEMPRE en firing, a propósito. Su valor no está en dispararse
+    # —eso no informa nada— sino en DEJAR DE LLEGAR: si el watchdog calla, lo que se rompió es la
+    # cadena de alertas (Prometheus caído, Alertmanager caído, la red del canal), y entonces el
+    # silencio de todas las demás NO significa que todo esté bien.
+    #
+    # Es la misma idea que la alerta FlotaSinTelemetria, un nivel más arriba: ahí el riesgo era
+    # que desaparecieran las series y las reglas dejaran de disparar; acá, que disparen y no
+    # salgan. Los dos son fallos que se ven como calma.
+    #
+    # Del otro lado hace falta algo que espere este latido y grite si no llega: un Healthchecks.io,
+    # un Dead Man's Snitch, o un cron propio. Sin ese otro lado, esta ruta no hace nada.
+    - matchers:
+        - alertname = "MusubiSiempreViva"
+      receiver: 'watchdog'
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 5m   # corto: es un latido, no un aviso
+
+    # Lo crítico insiste más seguido y no se agrupa con lo demás.
+    - matchers:
+        - severity = "critical"
+      receiver: 'default'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # `info` no despierta a nadie: se junta y se manda espaciado. Mezclarlo con lo crítico es la
+    # forma más rápida de que se silencie el canal entero.
+    - matchers:
+        - severity = "info"
+      receiver: 'default'
+      group_interval: 30m
+      repeat_interval: 24h
+
+inhibit_rules:
+  # Si la máquina está CAÍDA, no tiene sentido avisar además de su disco, su RAM y su temperatura:
+  # son la misma noticia contada cinco veces, y las cuatro de más entierran a la primera.
+  - source_matchers: [alertname = "MaquinaCaida"]
+    target_matchers: [severity =~ "warning|info"]
+    equal: ['device']
+
+  # Lo mismo un nivel más arriba: si NO LLEGA NINGUNA métrica de flota, callar el resto de las
+  # alertas de flota — todas están ciegas y lo único accionable es FlotaSinTelemetria.
+  - source_matchers: [alertname = "FlotaSinTelemetria"]
+    target_matchers: [severity =~ "warning|info"]
+
+  # Y el clásico: lo crítico calla a lo warning de la misma alerta y máquina (DiscoCasiLleno
+  # calla a DiscoPorLlenarse).
+  - source_matchers: [severity = "critical"]
+    target_matchers: [severity = "warning"]
+    equal: ['alertname', 'device']
+
+receivers:
+  # ─── El receptor real ──────────────────────────────────────────────────────────────────────
+  # Telegram porque no necesita un servidor de correo ni una cuenta de un SaaS, y porque el
+  # teléfono ya está en el bolsillo. Cambialo por lo que uses; lo que NO cambia es que el secreto
+  # entra por entorno.
+  - name: 'default'
+    telegram_configs:
+      - bot_token_file: /etc/musubi/telegram_bot_token   # chmod 600, root:root
+        chat_id: 0                                       # ⚠ REEMPLAZAR por tu chat_id numérico
+        parse_mode: ''
+        # El mensaje dice QUÉ, DÓNDE y A DÓNDE IR. Un aviso sin el runbook obliga a buscarlo en
+        # el peor momento posible.
+        message: |
+          {{ range .Alerts }}[{{ .Labels.severity }}] {{ .Labels.alertname }}
+          {{ if .Labels.device }}máquina: {{ .Labels.device }}{{ if .Labels.project }} ({{ .Labels.project }}){{ end }}
+          {{ end }}{{ .Annotations.summary }}
+          {{ if .Annotations.runbook }}→ {{ .Annotations.runbook }}{{ end }}
+          {{ end }}
+
+  # ─── El latido ─────────────────────────────────────────────────────────────────────────────
+  # Un GET periódico a un servicio externo que grita si deja de recibirlo. La URL es un secreto
+  # (quien la tenga puede silenciar el watchdog), así que también entra por archivo.
+  #
+  # Con url_file, Alertmanager relee el archivo en cada envío: rotar la URL no pide reinicio.
+  - name: 'watchdog'
+    webhook_configs:
+      - url_file: /etc/musubi/watchdog_url   # p. ej. https://hc-ping.com/<uuid>
+        send_resolved: false

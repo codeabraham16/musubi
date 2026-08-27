@@ -52,3 +52,184 @@ Diagnóstico rápido (siempre): `musubi doctor` (en el host del cerebro) da un p
 **Acción:**
 1. `musubi doctor` → integridad/esquema. Si hay corrupción, restaurá del último backup off-host.
 2. Mirá `musubi_tool_invocations_total{result="error"}` por tool para aislar cuál falla y correlacioná con los logs.
+
+---
+
+## Alertmanager
+
+**Qué es.** El tramo entre «la regla se evalúa» y «alguien se entera». Antes de S10 no existía:
+las reglas de `musubi-alerts.yml` se veían en `http://127.0.0.1:9099/alerts` y no notificaban a
+ningún lado.
+
+**Montarlo** (systemd nativo, al estilo del resto del deploy):
+
+```bash
+# 1. Binario
+ALERTMANAGER_VERSION=0.28.1
+curl -fsSL -o /tmp/am.tgz \
+  https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}/alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz
+sudo tar -xzf /tmp/am.tgz -C /usr/local/bin --strip-components=1 \
+  alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/alertmanager
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin alertmanager || true
+
+# 2. Config y secretos. El archivo de config se puede commitear; los de /etc/musubi NO.
+sudo install -d -o alertmanager -g alertmanager /etc/alertmanager /var/lib/alertmanager
+sudo install -m 644 deploy/prometheus/alertmanager.yml /etc/alertmanager/alertmanager.yml
+sudo install -d -m 750 -o root -g alertmanager /etc/musubi
+printf '%s' "$TELEGRAM_BOT_TOKEN" | sudo tee /etc/musubi/telegram_bot_token >/dev/null
+printf '%s' "$WATCHDOG_URL"       | sudo tee /etc/musubi/watchdog_url       >/dev/null
+sudo chmod 640 /etc/musubi/telegram_bot_token /etc/musubi/watchdog_url
+sudo chgrp alertmanager /etc/musubi/telegram_bot_token /etc/musubi/watchdog_url
+
+# 3. Editá el chat_id en /etc/alertmanager/alertmanager.yml (el token va por archivo; el chat_id no es secreto)
+
+# 4. Unit
+sudo tee /etc/systemd/system/alertmanager.service >/dev/null <<'UNIT'
+[Unit]
+Description=Alertmanager (Musubi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=alertmanager
+Group=alertmanager
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager \
+  --web.listen-address=127.0.0.1:9093
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/alertmanager
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload && sudo systemctl enable --now alertmanager
+
+# 5. Prometheus ya apunta a 127.0.0.1:9093 (bloque `alerting:` de prometheus.yml). Recargalo:
+curl -X POST http://127.0.0.1:9099/-/reload
+```
+
+**Escucha en loopback a propósito.** Alertmanager tiene una API que puede *silenciar* alertas sin
+autenticación ninguna. Exponerlo al tailnet sería darle a cualquiera con acceso a la red la
+posibilidad de apagar la vigilancia. Si necesitás su UI desde otra máquina, va por túnel SSH.
+
+**Verificarlo de punta a punta** (no alcanza con que el servicio esté `active`):
+
+```bash
+# ¿Prometheus lo ve?
+curl -s http://127.0.0.1:9099/api/v1/alertmanagers | grep -o '"activeAlertmanagers".*'
+# ¿Llega el mensaje? Esto MANDA una alerta de prueba al canal real:
+curl -s -XPOST http://127.0.0.1:9093/api/v2/alerts -H 'Content-Type: application/json' -d \
+  '[{"labels":{"alertname":"PruebaDeCanal","severity":"info","device":"prueba"},"annotations":{"summary":"Si leés esto, el canal funciona."}}]'
+```
+
+Si el binario no llega al teléfono, el problema está entre Alertmanager y el canal, no en Musubi:
+`journalctl -u alertmanager -n 50` lo dice.
+
+## MusubiSiempreViva
+
+**Nunca vas a ver esta alerta disparar como un problema: está SIEMPRE en firing, a propósito.**
+
+Todas las demás reglas comparten un punto ciego. Si Prometheus muere, si Alertmanager muere, si
+el canal se cae — ninguna dispara, y el silencio se ve exactamente igual que «todo bien». Esta
+regla convierte ese silencio en una señal: Alertmanager la rutea al receptor `watchdog`, que
+hace un ping periódico a un servicio externo (Healthchecks.io, Dead Man's Snitch, o un cron
+propio en otra máquina).
+
+**Es media alarma hasta que exista el otro lado.** Sin un servicio que espere el ping y grite
+cuando falte, esta regla no hace absolutamente nada. Si no la vas a completar, es preferible
+saberlo a creer que está cubierto.
+
+**Qué hacer si el watchdog externo avisa que dejó de recibir el ping** — en este orden, porque
+va de lo más probable a lo más raro:
+
+1. `systemctl status alertmanager prometheus musubi` en el host del cerebro.
+2. `curl -s http://127.0.0.1:9099/-/healthy` y `curl -s http://127.0.0.1:9093/-/healthy`.
+3. Conectividad de salida del host (el ping sale a internet, no al tailnet).
+4. La URL del watchdog: `sudo cat /etc/musubi/watchdog_url` — un archivo vacío o rotado la rompe.
+
+**Mientras el watchdog esté callado, no confíes en la ausencia de otras alertas.**
+
+## PoliticaQueNoCura
+
+Una política de auto-heal actuó más de 3 veces en 6 horas sobre lo mismo. **No está curando:
+está tapando.**
+
+Es el modo de fallo propio del auto-heal, y es peor que no tener política: la alerta original
+(disco, memoria) deja de dispararse porque la política baja la métrica justo a tiempo, una y otra
+vez, y el problema de fondo queda invisible. Un `journalctl --vacuum` cada hora durante una semana
+no es mantenimiento — es un servicio escribiendo log sin control que nadie fue a mirar.
+
+```bash
+# Qué corrió, cuándo, y con qué resultado. La acción automática está en la MISMA bitácora
+# que las de las personas, con el nombre del principal de la política.
+musubi_fleet_log --project <proyecto> --limite 50
+```
+
+**Qué hacer:** buscar la causa (el servicio que llena el disco, el proceso que come RAM), no
+subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
+
+## PoliticaSinPermiso
+
+Una política quiso actuar y **no pudo**: quedó inerte. Las dos causas, en orden de frecuencia:
+
+- **`rechazada`** — el principal de la política perdió su concesión `exec` sobre esa máquina, o
+  el comando dejó de estar en su `fleet_exec_allow`. Típicamente alguien editó `principals.yaml`
+  para otra cosa.
+- **`sin_principal`** — el principal ya no existe en `principals.yaml` (se revocó o se renombró).
+  Es el comportamiento correcto y deliberado: **revocar a alguien apaga también lo que actuaba en
+  su nombre**, sin tener que acordarse de un segundo lugar. Pero hay que enterarse.
+
+```bash
+grep -A6 "name: <el-principal-de-la-politica>" .musubi/principals.yaml
+```
+
+Verificá que tenga `fleet: { exec: [...] }` alcanzando esa máquina y, si tiene
+`fleet_exec_allow`, que el comando de la política figure ahí. Recordá que **la sección de
+allowlist, una vez presente, es exhaustiva**: una máquina sin entrada propia y sin `"*"` no
+permite nada.
+
+## Enrolar un Tier B: la clave de host va PRIMERO
+
+Un Tier B se maneja por `ssh`, y Musubi **nunca** afloja `StrictHostKeyChecking`. Si la clave de
+host no está verificada, todo `exec` y toda shell sobre esa máquina fallan con:
+
+```
+la clave de host de "usuario@maquina:2222" no está verificada.
+```
+
+**Y no hay atajo por entorno.** OpenSSH resuelve `~` con `getpwuid`, **no con `$HOME`**: correr el
+cerebro con otro `HOME` no cambia dónde busca `known_hosts` ni las claves. El archivo que importa es
+el del **usuario bajo el que corre el servicio** — si es una unidad systemd con `User=musubi`, es
+`~musubi/.ssh/known_hosts`, no el tuyo.
+
+```sh
+sudo -u musubi ssh-keyscan -p 2222 maquina        # 1. mirá la huella
+# 2. verificala por un canal confiable (consola física, otro camino, el proveedor)
+sudo -u musubi sh -c 'ssh-keyscan -p 2222 maquina >> ~/.ssh/known_hosts'
+```
+
+El paso 2 no es ceremonia: `ssh-keyscan` pregunta por la red, así que confiar en su respuesta sin
+verificar es exactamente el MITM contra el que sirve `StrictHostKeyChecking`.
+
+## Probar el camino SSH sin instalar un servidor
+
+Para verificar `exec` y `musubi shell` de punta a punta sin levantar un servicio en el host — un
+`sshd` **sin privilegios**, en loopback, que sólo acepta al usuario que lo corre. Es como se cerró
+A28; la receta completa está en `specs/flota-shell-contra-sshd-real/tasks.md`.
+
+```sh
+apt-get download openssh-server && dpkg-deb -x openssh-server_*.deb raiz
+ssh-keygen -q -t ed25519 -f hostkey -N ''
+cp ~/.ssh/id_ed25519.pub authorized_keys
+# sshd.conf: Port 2222 · ListenAddress 127.0.0.1 · UsePAM no · StrictModes no · AcceptEnv LINES COLUMNS
+raiz/usr/sbin/sshd -f sshd.conf -E sshd.log
+```
+
+Nada instalado, nada en systemd, nada fuera de loopback. Acordate de sacar la línea de
+`known_hosts` al terminar.

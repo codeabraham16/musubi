@@ -1,0 +1,85 @@
+# compose.yml — la CADENA DE ALERTAS de Musubi (Prometheus + Alertmanager) en Docker.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ ESTE ARCHIVO EXISTE
+#
+# `deploy/` tenía las reglas de alerta (`musubi-alerts.yml`), el ruteo (`alertmanager.yml`) y un
+# instalador systemd — pero en la práctica el cerebro estaba exponiendo /metrics y NADIE lo
+# scrapeaba. Con eso, las 9 reglas de S4b, las de políticas de S10 y el dead-man's switch entero
+# estaban INERTES: escritas, probadas, y sin evaluar. Es el mismo modo de fallo que persigue todo
+# el track — algo que se ve cubierto y no lo está.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ `network_mode: host`
+#
+# Prometheus tiene que llegar al cerebro por `127.0.0.1:7717` y a Alertmanager por
+# `127.0.0.1:9093`. Dentro de una red de Docker, `127.0.0.1` es el CONTENEDOR: los scrapes
+# fallarían con «connection refused» y el bloque `alerting:` no encontraría a nadie. Con red del
+# host, las direcciones del archivo significan lo que dicen — el mismo `prometheus.yml` sirve para
+# esta variante y para la de systemd, sin un segundo archivo que se vaya a la deriva.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ EL 9099 Y NO EL 9090
+#
+# 9090 es el puerto por defecto de **Cockpit**, que viene instalado en muchos servidores Linux
+# —incluido `musubi-server`— y lo ocupa. Prometheus arrancaría con «address already in use», o
+# peor: alguien apuntaría el navegador al 9090, vería una UI, y creería que Prometheus anda.
+# Se corre a 9099 y se documenta el motivo, en vez de dejar una colisión esperando.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# LOOPBACK A PROPÓSITO
+#
+# Ni Prometheus ni Alertmanager tienen autenticación. La API de Alertmanager puede SILENCIAR
+# alertas sin credencial: exponerla al tailnet sería darle a cualquiera en la red la capacidad de
+# apagar la vigilancia. Para ver las UIs desde otra máquina, túnel SSH:
+#
+#   ssh -N -L 9099:127.0.0.1:9099 -L 9093:127.0.0.1:9093 usuario@musubi-server
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# ARRANQUE
+#
+#   cd deploy/docker && docker compose up -d
+#
+# Antes hacen falta tres archivos en el host — los prepara `preparar.sh`, al lado de este archivo.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: musubi-prometheus
+    restart: unless-stopped
+    network_mode: host
+    user: "65534:65534"        # nobody: no necesita root para leer config y escribir su TSDB
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      # 9090 es de Cockpit. Ver arriba.
+      - --web.listen-address=127.0.0.1:9099
+      # Necesario para `curl -X POST /-/reload` (el RUNBOOK lo usa al cambiar reglas).
+      - --web.enable-lifecycle
+    volumes:
+      - /etc/musubi-prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /etc/musubi-prometheus/rules:/etc/prometheus/rules:ro
+      - /etc/musubi-prometheus/musubi.token:/etc/prometheus/musubi.token:ro
+      - prometheus-data:/prometheus
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    container_name: musubi-alertmanager
+    restart: unless-stopped
+    network_mode: host
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=127.0.0.1:9093
+    volumes:
+      - /etc/musubi-prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Los secretos del canal y la URL del watchdog entran POR ARCHIVO, nunca por el yaml:
+      # así rotarlos no toca la configuración ni pide reconstruir nada.
+      - /etc/musubi:/etc/musubi:ro
+      - alertmanager-data:/alertmanager
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

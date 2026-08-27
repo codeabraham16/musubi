@@ -7,6 +7,31 @@
 # El endpoint /metrics EXIGE el mismo bearer token que el resto del cerebro
 # (service.auth_token_env). Se pasa por `credentials_file` para que el secreto NUNCA viva en
 # este archivo — mismo patrón "token por referencia" que el .mcp.json de los clientes.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# PARA VER LAS MÉTRICAS DE LA FLOTA (musubi_fleet_device_*) HACE FALTA UN PASO MÁS
+#
+# Desde el track «Control de flota», /metrics exporta también la telemetría de cada máquina —
+# pero SÓLO las que la credencial del scrape puede ver. Y las capacidades de flota NO se derivan
+# del rol: un token admin SIN concesiones explícitas no ve ni una máquina, a propósito (si no,
+# el token de Prometheus sería una puerta trasera que sortea el eje de capacidades entero).
+#
+# Con el token legacy de arriba vas a ver las métricas del SERVIDOR y ninguna de la flota, y la
+# propia salida de /metrics te lo dice en un comentario. Para verlas, dale a Prometheus su propio
+# principal en .musubi/principals.yaml:
+#
+#   principals:
+#     - name: prometheus
+#       token_sha256: "<sha256 del token que pongas en credentials_file>"
+#       role: reader
+#       read: all                # ve todos los proyectos
+#       fleet:
+#         metrics: ["*"]         # ...y la telemetría de todas las máquinas
+#
+# Nada más: NO le des `exec` ni `screen`. Un scraper sólo necesita mirar, y una credencial que
+# vive en un archivo de configuración de otro servicio es exactamente la que no querés que
+# pueda ejecutar nada.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
 
 global:
   scrape_interval: 30s
@@ -17,15 +42,16 @@ global:
 rule_files:
   - /etc/prometheus/rules/musubi-alerts.yml
 
-# Para que las alertas realmente "paginen" (email / Telegram / Slack) hace falta sumar
-# Alertmanager y un canal de notificación. Sin esto, las alertas igual se evalúan y se ven
-# en la UI de Prometheus (http://127.0.0.1:9090/alerts), pero no notifican a ningún lado.
-# Descomentá y apuntá a tu Alertmanager cuando lo montes:
+# LAS ALERTAS SALEN DE ACÁ HACIA ALGUIEN (S10 · A4). Hasta este track, este bloque era un
+# comentario: las reglas se evaluaban y se veían en http://127.0.0.1:9099/alerts, y no notificaban
+# a ningún lado. La configuración del destino está en alertmanager.yml, al lado de este archivo.
 #
-# alerting:
-#   alertmanagers:
-#     - static_configs:
-#         - targets: ["127.0.0.1:9093"]
+# Si todavía NO montaste Alertmanager, comentá este bloque: Prometheus arranca igual —los envíos
+# fallan y quedan en su log— pero conviene que la ausencia sea una decisión y no un error de fondo.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["127.0.0.1:9093"]
 
 scrape_configs:
   # El cerebro Musubi. El job DEBE llamarse "musubi": la alerta MusubiDown mira up{job="musubi"}.
@@ -41,6 +67,14 @@ scrape_configs:
           instance: musubi-brain
 
   # Prometheus se scrapea a sí mismo: permite distinguir "el cerebro cayó" de "Prometheus cayó".
+  #
+  # EL 9099 NO ES UN CAPRICHO. 9090 es el puerto por defecto de **Cockpit**, que viene instalado
+  # en muchos servidores Linux y lo ocupa. Los dos fallos que evita: Prometheus que no arranca por
+  # «address already in use», y —peor— alguien que apunta el navegador al 9090, ve una UI, y cree
+  # que Prometheus está andando cuando lo que contesta es Cockpit.
+  #
+  # Este target tiene que coincidir con `PROM_ADDR` del instalador systemd y con
+  # `--web.listen-address` del compose. Lo custodia TestElPuertoDePrometheusEsElMismoEnTodosLados.
   - job_name: prometheus
     static_configs:
-      - targets: ["127.0.0.1:9090"]
+      - targets: ["127.0.0.1:9099"]
