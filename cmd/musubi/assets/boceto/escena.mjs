@@ -77,8 +77,8 @@ attribute float aLuz; varying float vLuz;
 //   aTNS  = (taper, nodos,  sel, nivel)
 //   aDLVF = (dist,  largo,  vol, familia)
 attribute vec3 aColor; attribute vec3 aCurva;
-attribute vec4 aTNS; attribute vec4 aDLVF; attribute float aSec;
-uniform float uFrente; uniform float uAncho; uniform float uHov;
+attribute vec4 aTNS; attribute vec4 aDLVF; attribute float aSec; attribute float aRac;
+uniform float uFrente; uniform float uAncho; uniform float uHov; uniform float uVivoR;
 varying vec3 vC; varying float vY; varying float vNod; varying float vSel; varying float vNiv;
 varying vec3 vNrm; varying vec3 vView; varying float vPul; varying float vVol; varying float vFam;
 ${ATM_VARY}
@@ -106,6 +106,11 @@ void main(){
   // el tramo entero se encienda de golpe. Es lo que hace que se vea VIAJAR.
   float d = aDLVF.x - aDLVF.y * (1.0 - vY);
   vPul = uFrente < 0.0 ? 0.0 : max(0.0, 1.0 - abs(d - uFrente) / uAncho);
+  /* EL PULSO ES DEL ACTOR. Sin este gate, el frente —que se mide por distancia desde la raíz—
+     barría el árbol ENTERO a ese radio: todos los actores encendidos por el trabajo de uno.
+     Con actor (uVivoR >= 0) la onda viaja SOLO por sus fibras; con -1 (el nudo, la raíz, el
+     gesto de «ver todo») sigue siendo la onda global de siempre. */
+  vPul *= uVivoR < -0.5 ? 1.0 : step(abs(aRac - uVivoR), 0.4);
   vProf = -mv.z;
   gl_Position = projectionMatrix * mv;
 }`;
@@ -327,9 +332,10 @@ void main(){
 // lisa de las puntas es justamente lo que hace que se lea como tejido.
 const PENACHO_V = `
 attribute float aNace; varying float vNace;
-attribute vec3 aColor; attribute vec3 aCurva; attribute float aSec;
+attribute vec3 aColor; attribute vec3 aCurva; attribute float aSec; attribute float aRac;
 attribute vec3 aSDF;   // (seleccion, distancia desde la raiz, familia)
 uniform float uFrente; uniform float uAncho; uniform float uT; uniform float uVaiven;
+uniform float uVivoR;
 uniform float uHov;
 varying vec3 vC; varying float vY; varying float vSel; varying float vPul; varying float vFam;
 varying vec3 vNrm; varying vec3 vView;
@@ -358,6 +364,7 @@ void main(){
   vC = aColor;
   vSel = max(aSDF.x, abs(uHov - aSec) < 0.5 ? 0.55 : 0.0);
   vPul = uFrente < 0.0 ? 0.0 : max(0.0, 1.0 - abs(aSDF.y - uFrente) / uAncho);
+  vPul *= uVivoR < -0.5 ? 1.0 : step(abs(aRac - uVivoR), 0.4);  // el pulso es del actor
   vProf = -mv.z;
   gl_Position = projectionMatrix * mv;
 }`;
@@ -691,7 +698,9 @@ export function montar(cfg) {
   // A QUE SECCION PERTENECE CADA INSTANCIA. Se sube UNA vez y no cambia jamas: es identidad, no
   // estado. La vaina y el soma comparten el mismo buffer porque comparten el orden de FIB.
   const ASEC = new THREE.InstancedBufferAttribute(new Float32Array(CAPF), 1);
+  const ARAC = new THREE.InstancedBufferAttribute(new Float32Array(CAPF), 1);
   gVaina.setAttribute('aSec', ASEC);
+  gVaina.setAttribute('aRac', ARAC);
   const NACE = new Float32Array(CAPF * 2);
   gVaina.setAttribute('aNace', new THREE.InstancedBufferAttribute(NACE, 2));
   const ALUZ = new Float32Array(CAPF);
@@ -753,6 +762,12 @@ export function montar(cfg) {
     const rr = S[h].racimo;
     if (rr != null && !IDX_RACIMO.has(rr)) IDX_RACIMO.set(rr, IDX_RACIMO.size);
   }
+  // el frente del pulso también pregunta por el actor (VAINA_V / PENACHO_V)
+  uPulso.uVivoR = uVivo.uVivoR;
+  const racimoIdxDe = (sec) => {
+    const ix = sec != null && S[sec] ? IDX_RACIMO.get(S[sec].racimo) : undefined;
+    return ix != null ? ix : -1;
+  };
   // OPACO, y no es un detalle de rendimiento. Con 5.000 cilindros transparentes el orden de
   // dibujo decide qué tapa a qué, así que el haz se veía como una nube lechosa en vez de como
   // fibras: la transparencia es justamente lo que borra la individualidad de cada hilo, que es lo
@@ -842,7 +857,9 @@ export function montar(cfg) {
   gPen.setAttribute('aCurva', new THREE.InstancedBufferAttribute(PCUR, 3));
   gPen.setAttribute('aSDF', new THREE.InstancedBufferAttribute(PSDF, 3));
   const PSEC = new THREE.InstancedBufferAttribute(new Float32Array(nR), 1);
+  const PRAC = new THREE.InstancedBufferAttribute(new Float32Array(nR), 1);
   gPen.setAttribute('aSec', PSEC);
+  gPen.setAttribute('aRac', PRAC);
   const PNACE = new Float32Array(nR);
   gPen.setAttribute('aNace', new THREE.InstancedBufferAttribute(PNACE, 1));
   // ADITIVO: las terminales son luz — es la mitad nxxcxx del look hibrido. Paga del mismo
@@ -930,6 +947,7 @@ export function montar(cfg) {
   FIB.forEach((e, i) => {
     FIB_SEC[i] = e.sec;
     ASEC.array[i] = e.sec;
+    ARAC.array[i] = racimoIdxDe(e.sec);
     totNodos += e.nodos;
     tintar(e.sec, e.fib, e.orden);
     AC[i * 3] = _c.r; AC[i * 3 + 1] = _c.g; AC[i * 3 + 2] = _c.b;
@@ -1069,7 +1087,7 @@ export function montar(cfg) {
     PC[i * 3] = _c.r; PC[i * 3 + 1] = _c.g; PC[i * 3 + 2] = _c.b;
     PCUR[i * 3] = x.curva[0]; PCUR[i * 3 + 1] = x.curva[1]; PCUR[i * 3 + 2] = x.curva[2];
     PSDF[i * 3 + 1] = x.dist;
-    PEN_DE[i] = x.seccion; PSEC.array[i] = x.seccion;
+    PEN_DE[i] = x.seccion; PSEC.array[i] = x.seccion; PRAC.array[i] = racimoIdxDe(x.seccion);
     // la ramita terminal brota cuando su sección TERMINÓ de crecer
     PNACE[i] = S[x.seccion].nace ? S[x.seccion].nace[1] : 0;
     areaLuz += l * x.w0;
@@ -1813,6 +1831,7 @@ export function montar(cfg) {
       DLVF[i * 4] = (S[anf].dist || 0) + d.nivel * d.largo; DLVF[i * 4 + 1] = d.largo;
       DLVF[i * 4 + 2] = 0.9; DLVF[i * 4 + 3] = FAMSEC[anf];
       ASEC.array[i] = anf;
+      ARAC.array[i] = racimoIdxDe(anf);
       ALUZ[i] = 1;                          // un brote es terminal: siempre luz
       NACE[i * 2] = t0v + d.nivel * 0.18; NACE[i * 2 + 1] = t0v + d.nivel * 0.18 + 0.22;
       iBrote++; nuevosE++;
