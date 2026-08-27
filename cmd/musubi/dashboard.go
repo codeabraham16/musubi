@@ -21,7 +21,7 @@ import (
 	"musubi/internal/memory"
 )
 
-//go:embed assets/dashboard.html assets/dashboard.bundle.js
+//go:embed assets/dashboard.html assets/dashboard.bundle.js assets/flota.html
 var dashboardAssets embed.FS
 
 // dashboard.go implementa 'musubi dashboard': una UI LOCAL de solo lectura de la
@@ -143,6 +143,16 @@ func dashboardHandler(engine *memory.DbEngine, budget int, project string, relay
 	// /api/actores — el CENSO histórico de quién llama al cerebro, proxeado al central. Es la
 	// contraparte del riel: el riel es el presente y esto es la historia. Ver actores.go.
 	mux.HandleFunc("/api/actores", handlerActores(relay, &cacheCenso{}))
+
+	// /flota y /api/flota — EL PANEL DE FLOTA (S9). Página aparte del cerebro WebGL: ése dibuja
+	// neuronas de memoria en 3D y esto es una tabla de máquinas. Dos problemas de UI distintos, y
+	// además el bundle se commitea con sus bytes comparados por la CI.
+	mux.HandleFunc("/api/flota", handlerFlota(relay))
+	flotaHTML, _ := dashboardAssets.ReadFile("assets/flota.html")
+	mux.HandleFunc("/flota", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(flotaHTML)
+	})
 
 	page, _ := dashboardAssets.ReadFile("assets/dashboard.html")
 	bundle, _ := dashboardAssets.ReadFile("assets/dashboard.bundle.js")

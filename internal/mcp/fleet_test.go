@@ -1,0 +1,392 @@
+package mcp
+
+// Pruebas del slice S2 del track «Control de flota»: la administración de la flota por parte de
+// las personas y LA PUERTA DEL DISPOSITIVO, que es una puerta aparte a propósito.
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"musubi/internal/embedding"
+	"musubi/internal/fleet"
+)
+
+// enrolarDePrueba da de alta un dispositivo como admin local y devuelve su token crudo.
+func enrolarDePrueba(t *testing.T, s *McpServer, proyecto, nombre string) string {
+	t.Helper()
+	res, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": nombre, "tier": "A", "caps": []string{"metrics", "exec"}, "project": proyecto,
+		"os": "linux", "arch": "amd64",
+	})
+	if e != nil {
+		t.Fatalf("fleet_enroll(%q): %+v", nombre, e)
+	}
+	tok, _ := jsonOf(t, res)["token"].(string)
+	if tok == "" {
+		t.Fatalf("fleet_enroll(%q) no devolvió token", nombre)
+	}
+	return tok
+}
+
+// servidorConFlota levanta un HTTP real con auth de principals + un dispositivo enrolado.
+func servidorConFlota(t *testing.T) (*McpServer, *httptest.Server, string, string) {
+	t.Helper()
+	s := newTestServer(t, embedding.NoopProvider{})
+	tokenDevice := enrolarDePrueba(t, s, "casa", "pc-gio")
+
+	const tokenPersona = "token-de-una-persona"
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
+		reqTimeout: 10 * time.Second, token: tokenPersona, loopbackOnly: true,
+	}))
+	t.Cleanup(ts.Close)
+	return s, ts, tokenDevice, tokenPersona
+}
+
+func postCon(t *testing.T, url, auth, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if auth != "" {
+		req.Header.Set("Authorization", "Bearer "+auth)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	var sb strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		sb.Write(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	return resp.StatusCode, sb.String()
+}
+
+// ── H1 · Las dos puertas no se cruzan ────────────────────────────────────────────────────────
+
+// B1 — LA PRUEBA CENTRAL DEL SLICE. Un token de DISPOSITIVO no autentica en /mcp.
+//
+// Si esto dejara de valer, comprometer cualquier máquina de la flota —la superficie más expuesta
+// del sistema— entregaría musubi_recall sobre la memoria de toda la empresa.
+//
+// Sabotaje que la hace fallar: hacer que el handler de /mcp caiga a DevicePorToken cuando el
+// registro de principals no resuelve (el "unifiquemos los lookups" que alguien va a proponer).
+func TestTokenDeDispositivoNoAbreElMCP(t *testing.T) {
+	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
+	const rpc = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+	code, _ := postCon(t, ts.URL+mcpHTTPPath, tokenDevice, rpc)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("un token de DISPOSITIVO entró a /mcp con status %d: la flota abriría la memoria del equipo", code)
+	}
+	// Control: la puerta funciona para quien sí corresponde.
+	if code, _ := postCon(t, ts.URL+mcpHTTPPath, tokenPersona, rpc); code != http.StatusOK {
+		t.Fatalf("el token de la PERSONA no entró a /mcp: status %d", code)
+	}
+}
+
+// B2 — la separación va en los dos sentidos: un token de PERSONA no late.
+//
+// Si valiera, `last_seen` sería escribible por cualquiera con una credencial de lectura y el
+// panel mostraría vivas máquinas apagadas.
+//
+// Sabotaje: resolver también contra opt.registry en handlerLatido.
+func TestTokenDePersonaNoLate(t *testing.T) {
+	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
+
+	code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenPersona, "")
+	if code != http.StatusUnauthorized {
+		t.Fatalf("un token de PERSONA latió con status %d: last_seen sería escribible por cualquiera", code)
+	}
+	// Control: el device sí late.
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, ""); code != http.StatusOK {
+		t.Fatalf("el token del DISPOSITIVO no pudo latir: status %d", code)
+	}
+}
+
+// B3 — el 401 no es un oráculo: desconocido, revocado y basura dicen lo MISMO.
+// Sabotaje: devolver un motivo distinto según el caso.
+func TestElRechazoNoDiceCualExistio(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	// Un token que nunca existió.
+	_, cuerpoDesconocido := postCon(t, ts.URL+fleetHeartbeatPath, "token-que-jamas-existio", "")
+	// Uno que existió y fue revocado.
+	if _, e := call(t, s, "musubi_fleet_revoke", map[string]any{"name": "pc-gio", "project": "casa"}); e != nil {
+		t.Fatalf("fleet_revoke: %+v", e)
+	}
+	codeRevocado, cuerpoRevocado := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, "")
+	// Uno con formato raro.
+	_, cuerpoBasura := postCon(t, ts.URL+fleetHeartbeatPath, "@@@no-es-un-token@@@", "")
+
+	if codeRevocado != http.StatusUnauthorized {
+		t.Fatalf("el device revocado latió igual: status %d", codeRevocado)
+	}
+	if cuerpoDesconocido != cuerpoRevocado || cuerpoRevocado != cuerpoBasura {
+		t.Errorf("el rechazo distingue casos y funciona como oráculo:\n desconocido=%s revocado=%s basura=%s",
+			cuerpoDesconocido, cuerpoRevocado, cuerpoBasura)
+	}
+}
+
+// ── H2 · El latido dice la verdad ────────────────────────────────────────────────────────────
+
+// B4 — el cuerpo del POST no puede cambiar quién es el dispositivo.
+// Sabotaje: leer un `device_id` del cuerpo y usarlo en vez del token.
+func TestElCuerpoDelLatidoNoPuedeSuplantar(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+	otroToken := enrolarDePrueba(t, s, "casa", "servidor-critico")
+
+	otro, _, err := s.engine.DevicePorToken(otroToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// pc-gio late diciendo ser el servidor crítico.
+	cuerpo := `{"device_id":"` + otro.ID + `","name":"servidor-critico","project":"casa"}`
+	code, resp := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpo)
+	if code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	if strings.Contains(resp, "servidor-critico") {
+		t.Fatalf("el latido se atribuyó a la máquina que declaró el CUERPO: %s", resp)
+	}
+	if !strings.Contains(resp, "pc-gio") {
+		t.Fatalf("el latido no se atribuyó a la máquina del TOKEN: %s", resp)
+	}
+	// Y el servidor crítico sigue sin latir nunca.
+	otroDespues, _, _ := s.engine.DevicePorToken(otroToken)
+	if !otroDespues.LastSeen.IsZero() {
+		t.Error("el latido de pc-gio estampó last_seen en la fila de otra máquina")
+	}
+}
+
+// B5 — el latido estampa last_seen de verdad, y el listado lo ve.
+func TestElLatidoSeVeEnElInventario(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	antes := listarFlota(t, s, "casa")
+	if antes[0]["online"] != false || antes[0]["nunca_latio"] != true {
+		t.Fatalf("una máquina recién enrolada no debería figurar en línea: %+v", antes[0])
+	}
+
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, ""); code != http.StatusOK {
+		t.Fatalf("el latido falló: status %d", code)
+	}
+
+	despues := listarFlota(t, s, "casa")
+	if despues[0]["online"] != true {
+		t.Fatalf("tras latir, la máquina debería figurar en línea: %+v", despues[0])
+	}
+	if _, hay := despues[0]["nunca_latio"]; hay {
+		t.Error("tras latir sigue marcada como que nunca latió")
+	}
+}
+
+// B6 — el lockout anti fuerza-bruta cubre la puerta nueva.
+// Sabotaje: quitar el limiter de handlerLatido → la tabla de dispositivos queda como oráculo de
+// fuerza bruta sin costo.
+func TestLaPuertaDelDispositivoTieneLockout(t *testing.T) {
+	_, ts, _, _ := servidorConFlota(t)
+
+	visto429 := false
+	for i := 0; i < 10; i++ {
+		code, _ := postCon(t, ts.URL+fleetHeartbeatPath, "token-malo", "")
+		if code == http.StatusTooManyRequests {
+			visto429 = true
+			break
+		}
+	}
+	if !visto429 {
+		t.Fatal("10 intentos fallidos seguidos no dispararon el lockout: la puerta es un oráculo de fuerza bruta")
+	}
+}
+
+// El latido rechaza métodos que no son POST.
+func TestElLatidoSoloAceptaPost(t *testing.T) {
+	_, ts, tokenDevice, _ := servidorConFlota(t)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+fleetHeartbeatPath, nil)
+	req.Header.Set("Authorization", "Bearer "+tokenDevice)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET al latido: status %d, esperaba 405", resp.StatusCode)
+	}
+}
+
+// ── H3 · Administración y tenencia ───────────────────────────────────────────────────────────
+
+// B8 — enrolar y revocar son ADMIN; listar no.
+// Sabotaje: quitar el gate isAdmin de toolFleetEnroll.
+func TestEnrolarYRevocarSonAdmin(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	writer := &Principal{Name: "dev", Role: RoleWriter, ProjectID: "casa"}
+	reader := &Principal{Name: "ojos", Role: RoleReader, ProjectID: "casa"}
+
+	for _, tc := range []struct {
+		p    *Principal
+		tool string
+		args map[string]any
+	}{
+		{writer, "musubi_fleet_enroll", map[string]any{"name": "x", "tier": "A"}},
+		{writer, "musubi_fleet_revoke", map[string]any{"name": "x"}},
+		{reader, "musubi_fleet_enroll", map[string]any{"name": "x", "tier": "A"}},
+		{reader, "musubi_fleet_revoke", map[string]any{"name": "x"}},
+	} {
+		_, e := callAsPrincipal(t, s, tc.p, tc.tool, tc.args)
+		if e == nil {
+			t.Errorf("%s: un %s no-admin no debería poder invocarla", tc.tool, tc.p.Role)
+		} else if e.Code != codeUnauthorized {
+			t.Errorf("%s (%s): esperaba unauthorized, obtuve code %d", tc.tool, tc.p.Role, e.Code)
+		}
+	}
+	// Listar el inventario NO es admin: un reader ve su flota.
+	if _, e := callAsPrincipal(t, s, reader, "musubi_fleet_list", map[string]any{}); e != nil {
+		t.Errorf("un reader debería poder listar su flota: %+v", e)
+	}
+}
+
+// B9 — el proyecto sale de la CREDENCIAL. Un admin acotado no enrola en el tenant de otro.
+// Sabotaje: usar args.Project directo en vez de writeOriginFor.
+func TestEnrolarNoPuedeElegirElTenantAjeno(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	// Admin con write=own: administra, pero acotado a su proyecto.
+	acotado := &Principal{Name: "admin-casa", Role: RoleAdmin, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa"}
+
+	res, e := callAsPrincipal(t, s, acotado, "musubi_fleet_enroll", map[string]any{
+		"name": "infiltrada", "tier": "A", "project": "cliente-acme",
+	})
+	if e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	if got := jsonOf(t, res)["project_id"]; got != "casa" {
+		t.Fatalf("la máquina se enroló en %q pese a que la credencial es de `casa`: plantar un agente en la flota ajena", got)
+	}
+	// Y no aparece en el tenant que declaró.
+	if ds, err := s.engine.ListarDevices("cliente-acme", true); err != nil || len(ds) != 0 {
+		t.Fatalf("quedó una máquina en el tenant ajeno: %d (err=%v)", len(ds), err)
+	}
+}
+
+// B10 — listar no cruza tenants: el arg `project` sólo lo respeta read=all.
+// Sabotaje: devolver `declarado` sin chequear las capacidades en fleetReadScopeFor.
+func TestListarNoCruzaTenants(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	enrolarDePrueba(t, s, "cliente-acme", "server-acme")
+
+	acotado := &Principal{Name: "dev", Role: RoleWriter, Read: ReadOwn, ProjectID: "casa"}
+	res, e := callAsPrincipal(t, s, acotado, "musubi_fleet_list", map[string]any{"project": "cliente-acme"})
+	if e != nil {
+		t.Fatalf("list: %+v", e)
+	}
+	out := jsonOf(t, res)
+	if out["project_id"] != "casa" {
+		t.Fatalf("un principal acotado listó %q: cruce de tenants", out["project_id"])
+	}
+
+	// La sala de mando (read=all) SÍ puede mirar la flota de otro proyecto.
+	salaDeMando := &Principal{Name: "mando", Role: RoleWriter, Read: ReadAll, Write: WriteOwn, ProjectID: "casa"}
+	res2, e2 := callAsPrincipal(t, s, salaDeMando, "musubi_fleet_list", map[string]any{"project": "cliente-acme"})
+	if e2 != nil {
+		t.Fatalf("list (read=all): %+v", e2)
+	}
+	if jsonOf(t, res2)["project_id"] != "cliente-acme" {
+		t.Error("un read=all debería poder listar la flota de otro proyecto")
+	}
+}
+
+// B11 — `online` se calcula al servir, con el umbral que pide el llamador.
+// Sabotaje: fijar el umbral e ignorar umbral_segundos.
+func TestOnlineSeCalculaConElUmbralQuePideElLlamador(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, ""); code != http.StatusOK {
+		t.Fatalf("latido: status %d", code)
+	}
+
+	// Con el umbral por defecto está viva.
+	if listarFlota(t, s, "casa")[0]["online"] != true {
+		t.Fatal("con umbral default debería estar en línea")
+	}
+	// Con un umbral imposible de cumplir, la MISMA máquina figura caída: el estado es derivado,
+	// no un booleano guardado.
+	res, e := call(t, s, "musubi_fleet_list", map[string]any{"project": "casa", "umbral_segundos": 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	res, e = call(t, s, "musubi_fleet_list", map[string]any{"project": "casa", "umbral_segundos": 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	devs, _ := jsonOf(t, res)["devices"].([]any)
+	fila, _ := devs[0].(map[string]any)
+	if fila["online"] != false {
+		t.Errorf("con umbral de 1 s y un latido de hace más, debería figurar caída: %+v", fila)
+	}
+}
+
+// La matriz de tiers de S1 se propaga hasta la tool: pedir `screen` en un Tier B falla acá.
+func TestEnrolarRechazaCapacidadFueraDeTier(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	_, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "switch", "tier": "B", "caps": []string{"screen"}, "project": "infra",
+	})
+	if e == nil {
+		t.Fatal("se enroló un Tier B con `screen`: un router no tiene framebuffer")
+	}
+	if e.Code != codeInvalidParams {
+		t.Errorf("esperaba invalid params, obtuve code %d", e.Code)
+	}
+}
+
+// El token se entrega UNA vez y no hay forma de recuperarlo: el listado no lo muestra.
+func TestElTokenDelDispositivoNoApareceEnElInventario(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	token := enrolarDePrueba(t, s, "casa", "pc-gio")
+
+	res, e := call(t, s, "musubi_fleet_list", map[string]any{"project": "casa"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if crudo := textOf(t, res); strings.Contains(crudo, token) || strings.Contains(crudo, fleet.HashToken(token)) {
+		t.Error("el inventario expone la credencial del dispositivo")
+	}
+}
+
+// listarFlota devuelve las filas del inventario de un proyecto (como admin local).
+func listarFlota(t *testing.T, s *McpServer, proyecto string) []map[string]any {
+	t.Helper()
+	res, e := call(t, s, "musubi_fleet_list", map[string]any{"project": proyecto})
+	if e != nil {
+		t.Fatalf("fleet_list: %+v", e)
+	}
+	crudo, _ := jsonOf(t, res)["devices"].([]any)
+	out := make([]map[string]any, 0, len(crudo))
+	for _, f := range crudo {
+		m, _ := f.(map[string]any)
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		t.Fatalf("el inventario de %q vino vacío", proyecto)
+	}
+	return out
+}
+
+// servidorHTTP levanta un HTTP real sobre un McpServer ya construido, sin enrolar nada.
+func servidorHTTP(t *testing.T, s *McpServer) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
+		reqTimeout: 10 * time.Second, token: "token-de-una-persona", loopbackOnly: true,
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}

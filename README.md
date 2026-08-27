@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>62 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>73 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -325,7 +325,7 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **62 herramientas**, agrupadas por dominio:
+El servidor expone **73 herramientas**, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---------|--------------|
@@ -343,6 +343,7 @@ El servidor expone **62 herramientas**, agrupadas por dominio:
 | **Sync híbrido** (cerebro central) | `musubi_promote` · `musubi_sync_status` · `musubi_sync_requeue` · `musubi_sync_pull` |
 | **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` · `musubi_tool_usage` (qué herramientas se usan de verdad; ledger persistente) · `musubi_readiness` (qué tan lista está la instalación, medido por lo que HIZO; una señal no observada puntúa cero) |
 | **Conflictos de memoria** | `musubi_conflicts` · `musubi_judge` |
+| **Flota** (control de dispositivos) | `musubi_fleet_enroll` (**admin**: da de alta una máquina y entrega su token una sola vez; el tier decide qué se le puede pedir) · `musubi_fleet_list` (inventario con `online` DERIVADO de la última señal de vida, no guardado) · `musubi_fleet_metrics` (telemetría del host: CPU, RAM, disco, carga, uptime; sólo las máquinas donde tu credencial tiene concedida `metrics`) · `musubi_fleet_exec` (ejecuta un ARGV en una máquina y espera el resultado; exige la capacidad `exec` sobre ESA máquina) · `musubi_fleet_log` (la bitácora: quién ejecutó qué, dónde y cómo salió — permanente, mientras la salida caduca) · `musubi_fleet_shell` (SHELL INTERACTIVA sobre SSH; exige la capacidad `shell`, que es APARTE de `exec` y no se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Dos techos que aplica el cerebro: vida máxima e inactividad) · `musubi_fleet_shell_log` (quién tuvo un prompt, dónde y por cuánto; el CONTENIDO no se graba) · `musubi_fleet_screen` (sesión de pantalla sobre RustDesk self-hosted: la contraseña se acuña por sesión, dura poco y **Musubi no la guarda**) · `musubi_fleet_sessions` (quién pidió mirar qué pantalla) · `musubi_fleet_probe` (sale a medir lo que no corre un agente: Tier B por SSH, Android por ADB) · `musubi_fleet_revoke` (**admin**: kill-switch; la fila queda para la auditoría). El token de un dispositivo **no** autentica en `/mcp`: late contra `POST /fleet/heartbeat` y nada más, para que comprometer una máquina de la flota no entregue la memoria del equipo |
 | **Identidad y acceso** (cerebro central) | `musubi_whoami` (¿quién soy? read-only) · `musubi_token_new` · `musubi_token_list` · `musubi_token_revoke` (**admin**: alta/baja de miembros por la red, la contracara de `musubi token`) |
 
 > Los tres pilares de Musubi: **Memoria** (ledger durable + grafo bi-temporal + recall model-free),
@@ -668,7 +669,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 62 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 73 herramientas MCP
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

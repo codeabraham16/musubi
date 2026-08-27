@@ -139,4 +139,72 @@ mode: local # local | team
 #   drain_interval_seconds: 10
 #   allow_insecure_token: true # sólo si el transporte ya cifra (p. ej. una malla WireGuard/tailnet)
 
+# --- Flota de máquinas (track «Control de flota», S10) --------------------------------------------
+# El LATIDO PROPIO del cerebro sobre la flota: sondear a los que no tienen agente, dejar caducar las
+# salidas de comandos y, si se declaran, aplicar políticas de auto-heal.
+#
+# OJO: hay otro `fleet:` en este archivo, adentro de `cognition:`, y es otra cosa completamente
+# distinta (la flota ordenada de MOTORES LLM). Éste, de nivel superior, es la flota de MÁQUINAS.
+#
+# fleet:
+#   # Cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por SSH, Tier C por
+#   # ADB). Default 5 min; negativo lo desactiva.
+#   #
+#   # Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de esas
+#   # máquinas (3 × intervalo). Un dispositivo que se visita cada 5 min no puede tener datos más
+#   # frescos que 5 min, y darlo por caído a los 90 s —lo que se hacía antes de S10— pintaba de rojo
+#   # a routers perfectamente sanos hasta que alguien silenciaba la alerta.
+#   probe_minutes: 5
+#
+#   # Cuántos días vive el CONTENIDO de stdout/stderr de los comandos. Default 30; negativo = nunca
+#   # caducan. NO borra la fila: qué se ejecutó, quién y cuándo es permanente. Lo que caduca es la
+#   # salida, que es donde aparecen rutas, hostnames y a veces algo que no debería estar ahí.
+#   command_output_retention_days: 30
+#
+#   # --- Políticas de auto-heal ---------------------------------------------------------------
+#   # NACEN APAGADAS. Sin esta sección no existen, y así tiene que ser: sondear y podar son
+#   # mantenimiento, pero ejecutar comandos sin una persona detrás es una decisión que alguien tiene
+#   # que tomar a mano.
+#   #
+#   # UNA POLÍTICA NO TIENE AUTORIDAD PROPIA. Nombra un principal de principals.yaml y actúa con la
+#   # suya: la misma compuerta (tenencia ∧ concesión ∧ aparato), la misma allowlist, la misma
+#   # bitácora que las personas. Si ese principal no tiene `exec` sobre esa máquina, la política no
+#   # hace nada — y si lo revocás, la política se apaga sola.
+#   #
+#   # Al arrancar se valida TODO: principal inexistente, principal sin ninguna concesión `exec`,
+#   # condición mal escrita o nombres repetidos impiden servir. Una alarma muerta que nadie sabe que
+#   # está muerta es peor que no tener alarma.
+#   policies:
+#     - name: vaciar-journal
+#       principal: auto-heal        # ...y ESTE principal es el que decide qué puede hacer
+#       when: disco_libre_pct       # disco_pct | disco_libre_pct | mem_pct | cpu_pct |
+#                                   # carga_por_core | temp_c
+#       threshold: 10
+#       devices: ["nas-casa"]       # selectores, igual que en las concesiones ("*" = todas)
+#       run: ["journalctl", "--vacuum-size=200M"]
+#       cooldown_minutes: 60        # default 30. Mínimo 1: sin espera dispara en cada tick, porque
+#                                   # la métrica no baja hasta que el comando termine
+#
+#   # EL SENTIDO DE LA COMPARACIÓN LO DA LA CONDICIÓN, no una perilla aparte: `disco_libre_pct`
+#   # dispara al BAJAR de `threshold` (es lo que QUEDA escribible) y todas las demás al superarlo.
+#   # Se mira lo escribible y no lo usado porque la reserva de root (~5 %) no es ninguna de las dos
+#   # cosas: un disco «al 92 % usado» puede tener 0 bytes para una aplicación.
+#
+#   # Un dato que NO SE PUDO MEDIR nunca dispara nada. Una máquina Windows no tiene load average
+#   # —no es que valga 0.00, es que no existe—, y una sin sensor no está a 0 °C.
+#
+# El principal de la política, en .musubi/principals.yaml. `fleet_exec_allow` es lo que hace que
+# `auto-heal` pueda ejecutar en todas las máquinas y aun así SÓLO pueda correr journalctl:
+#
+#   - name: auto-heal
+#     token_sha256: "<sha256>"      # ...aunque una política no presenta token: se la nombra
+#     role: writer
+#     project_id: casa
+#     fleet:
+#       exec: ["*"]
+#     fleet_exec_allow:
+#       "*": ["journalctl"]         # la sección entera es el opt-in y, una vez presente, es
+#                                   # EXHAUSTIVA: una máquina sin entrada propia y sin "*" no
+#                                   # permite NADA. Una lista vacía significa cero comandos.
+
 skills_auto_resolve: true

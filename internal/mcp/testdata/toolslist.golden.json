@@ -1063,6 +1063,274 @@
       }
     },
     {
+      "name": "musubi_fleet_enroll",
+      "description": "ADMIN. Da de alta una MÁQUINA en el plano de control y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). tier decide qué se le puede pedir: A = agente nativo (metrics, exec, screen) · B = por protocolo SSH/SNMP/MQTT, sin binario en el device (metrics, exec — NO screen: un router no tiene framebuffer) · C = móvil (metrics, screen — NO exec). Conceder una capacidad que el tier no sabe honrar FALLA acá, no cuando alguien la use. El proyecto sale de tu credencial, no de lo que declares (salvo write=any). IMPORTANTE: el token que devuelve sirve ÚNICAMENTE para POST /fleet/heartbeat; NO autentica en /mcp, para que comprometer una máquina de la flota no entregue la memoria del equipo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Dirección por la que se lo alcanza (normalmente la IP del tailnet)"
+          },
+          "arch": {
+            "type": "string",
+            "description": "amd64 | arm64 | ..."
+          },
+          "caps": {
+            "type": "array",
+            "description": "Capacidades concedidas: metrics, exec, screen. Vacío = ninguna (fail-closed)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo (único dentro del proyecto; es la clave humana para dirigirle comandos)"
+          },
+          "os": {
+            "type": "string",
+            "description": "linux | windows | darwin | android | ios"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any; uno acotado enrola en el suyo"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Etiquetas libres para agrupar (sala, cliente, criticidad)"
+          },
+          "tier": {
+            "type": "string",
+            "description": "A|agente (nativo) · B|protocolo (SSH/SNMP/MQTT/Redfish) · C|movil"
+          }
+        },
+        "required": [
+          "name",
+          "tier"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_list",
+      "description": "Lista la FLOTA del proyecto: qué máquinas hay, de qué tier, con qué capacidades y cuáles están en línea. `online` se DERIVA de la última señal de vida con un umbral (default 90 s = 3 latidos), no es un estado guardado: una máquina que muere de golpe no puede dejar un booleano en true. Devuelve también silencio_segundos y nunca_latio. Un principal acotado ve su proyecto; sólo read=all puede pedir el de otro.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_revoked": {
+            "type": "boolean",
+            "description": "Incluir las máquinas dadas de baja (default false)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a listar. Sólo lo respeta un principal read=all"
+          },
+          "umbral_segundos": {
+            "type": "number",
+            "description": "Cuánto silencio se tolera antes de dar una máquina por caída (default 90)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_metrics",
+      "description": "Telemetría de la FLOTA: CPU, RAM, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_exec",
+      "description": "Ejecuta un comando en una MÁQUINA de la flota y espera el resultado. Requiere que tu credencial tenga la capacidad `exec` SOBRE ESA MÁQUINA (sección `fleet:` de principals.yaml): ser admin de la memoria NO alcanza. Se pasa un ARGV, no una cadena: [\"systemctl\",\"restart\",\"nginx\"], y si querés una shell la pedís explícita con [\"sh\",\"-c\",\"...\"] — así el comando registrado en la bitácora es exactamente el comando corrido. TODO pedido queda auditado desde ANTES de ejecutarse, con quién lo pidió. El comando vence si el agente no lo levanta en 15 min (no se ejecuta una semana después), tiene timeout obligatorio, y su salida se acota a 64 KiB con marca de truncado. exit_code viaja null mientras no haya terminado: 'todavía no' y 'terminó con 0' son cosas distintas.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "description": "El comando como lista: [\"ls\",\"-la\",\"/tmp\"]. NO una cadena"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "no_wait": {
+            "type": "boolean",
+            "description": "Encolar y volver sin esperar el resultado"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          },
+          "timeout_seg": {
+            "type": "number",
+            "description": "Segundos antes de matar el comando (default 30, máximo 600)"
+          }
+        },
+        "required": [
+          "device",
+          "argv"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell",
+      "description": "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "columnas": {
+            "type": "number",
+            "description": "Ancho de la terminal (default 80)"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "filas": {
+            "type": "number",
+            "description": "Alto de la terminal (default 24). Se fija al abrir y no se redimensiona"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell_log",
+      "description": "La BITÁCORA de sesiones de shell interactiva: quién tuvo un prompt, en qué máquina, cuándo y por cuánto tiempo. Sólo muestra las máquinas sobre las que tenés `shell`. Registra QUE hubo acceso, nunca QUÉ se tecleó: grabar el contenido de una terminal ajena es una decisión legal que nadie tomó. El estado se DERIVA al leer, así que una sesión que venció aparece como vencida aunque nadie la haya ido a marcar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas sesiones devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_log",
+      "description": "La BITÁCORA de ejecución remota: quién ejecutó qué, en qué máquina, cuándo y cómo salió. Sólo muestra los comandos de máquinas sobre las que tenés `exec` — saber qué se corrió en un servidor es casi tan revelador como poder correrlo. La bitácora es PERMANENTE; la salida (stdout/stderr) caduca y se poda, porque puede traer secretos. Informa cuántas entradas quedaron ocultas por permiso.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas entradas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_screen",
+      "description": "Abre una SESIÓN DE PANTALLA sobre una máquina (RustDesk self-hosted) y devuelve la contraseña UNA SOLA VEZ. Requiere la capacidad `screen` sobre ESA máquina — que es un permiso distinto de `exec`: mirar y tocar no son lo mismo. La contraseña se acuña por sesión, dura poco (default 30 min, máximo 4 h) y MUSUBI NO LA GUARDA en ningún lado, ni en claro ni hasheada: se genera, viaja a la máquina y a vos, y se descarta. El vencimiento lo aplica el AGENTE, así que la sesión se cierra aunque el cerebro se caiga. Un dispositivo de Tier B (por protocolo) nunca tiene pantalla. IMPORTANTE: el consentimiento del usuario sentado frente a la máquina lo aplica RustDesk con su propia configuración, no Musubi.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "minutos": {
+            "type": "number",
+            "description": "Cuánto vale la sesión (default 30, máximo 240)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_sessions",
+      "description": "La bitácora de SESIONES DE PANTALLA: quién pidió mirar qué máquina, cuándo y hasta cuándo. Nunca la contraseña — no existe guardada. Sólo muestra las máquinas sobre las que tenés `screen`. El estado `vencida` se DERIVA del reloj, no es una columna que alguien tenga que ir a actualizar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_probe",
+      "description": "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Sondear una sola máquina"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_revoke",
+      "description": "ADMIN. KILL-SWITCH de una máquina: su token deja de autenticar en el acto y su fila QUEDA para la auditoría (no se borra: perder a quién pertenecía la telemetría es justo lo que no querés después de un incidente). Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo a dar de baja"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
       "name": "musubi_token_revoke",
       "description": "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
       "inputSchema": {

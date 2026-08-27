@@ -20,6 +20,12 @@ import (
 // estático (*PrincipalRegistry, modo legacy sin archivo) y el recargable (*reloadableRegistry).
 type principalResolver interface {
 	resolve(token string) (*Principal, bool)
+	// porNombre resuelve SIN token: lo necesitan las políticas de flota (S10), que actúan con la
+	// autoridad de alguien declarado en principals.yaml pero no presentan credencial ninguna.
+	// Está en la misma interfaz que resolve a propósito — son la misma fuente de verdad, y dos
+	// interfaces separadas invitarían a que una política mire un registro más viejo que el que
+	// autentica a las personas.
+	porNombre(nombre string) (*Principal, bool)
 }
 
 // principalsReloadInterval es cada cuánto se chequea el mtime del registro. 10s da una revocación
@@ -51,6 +57,17 @@ func (rr *reloadableRegistry) resolve(token string) (*Principal, bool) {
 		return nil, false
 	}
 	return reg.resolve(token)
+}
+
+// porNombre busca en el snapshot vigente (lock-free), igual que resolve. Que las dos preguntas
+// salgan del MISMO snapshot es lo que hace que revocar a alguien en principals.yaml apague, en el
+// mismo instante, tanto su token como las políticas que actuaban en su nombre.
+func (rr *reloadableRegistry) porNombre(nombre string) (*Principal, bool) {
+	reg := rr.cur.Load()
+	if reg == nil {
+		return nil, false
+	}
+	return reg.porNombre(nombre)
 }
 
 // watch re-lee el registro cuando cambia el mtime, hasta que ctx se cancela (shutdown del server).

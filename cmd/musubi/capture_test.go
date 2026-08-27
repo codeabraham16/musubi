@@ -50,7 +50,10 @@ type recordingStore struct {
 	scopeByID map[string]string
 }
 
-func (r *recordingStore) GetMeta(k string) (string, bool, error) { v, ok := r.meta[k]; return v, ok, nil }
+func (r *recordingStore) GetMeta(k string) (string, bool, error) {
+	v, ok := r.meta[k]
+	return v, ok, nil
+}
 func (r *recordingStore) SetMeta(k, v string) error {
 	if r.meta == nil {
 		r.meta = map[string]string{}
@@ -58,6 +61,7 @@ func (r *recordingStore) SetMeta(k, v string) error {
 	r.meta[k] = v
 	return nil
 }
+
 // byID simula la tabla: id → contenido. Es lo que permite testear el UPSERT del gemelo del squash.
 func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, scope string, emb []float32) error {
 	if r.byID == nil {

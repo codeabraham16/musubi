@@ -485,8 +485,10 @@ func TestG7ReaderSigueSinPoderLlamarAlMotor(t *testing.T) {
 // readOnly para un reader, así que la prueba pasaría igual marcando cualquier tool como readOnly.
 // Lo detectó el sabotaje «se marca musubi_recall como readOnly», que quedaba en verde.
 //
-// Estas son las 22 tools que un reader podía llamar antes de este spec. Si el conjunto cambia, la
-// prueba se rompe y hay que decidir a conciencia si el cambio se quería — que es el punto.
+// El conjunto arrancó en 22 tools y crece SÓLO por decisión explícita: cada agregado lleva su
+// comentario diciendo quién lo consume y por qué. Si el conjunto cambia sin que alguien toque
+// este mapa, la prueba se rompe y hay que decidir a conciencia si el cambio se quería — que es
+// el punto.
 func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	reader := &Principal{Name: "cabina", Role: RoleReader}
@@ -507,6 +509,34 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// F1 · Lienzo como capacidad: el motor de diseño es readOnly y se pensó para invocarse desde
 		// donde sea, incluso sin poder mutar; una cabina/reader TIENE que poder llamarlo.
 		"musubi_design": true,
+		// Track «Control de flota» (S2). AMPLIACIÓN DELIBERADA del conjunto: un reader ahora
+		// puede ver el INVENTARIO de la flota de su proyecto.
+		//
+		// Se decidió que sí, y el consumidor es el mismo que motivó `readiness` y `design`: la
+		// CABINA (read=all, write=none) es el panel que muestra las máquinas, y un panel que no
+		// puede listarlas no sirve de nada. Lo que ve es metadato operativo —nombre, tier, OS,
+		// dirección, si está en línea—, nunca la credencial: el inventario no expone el token ni
+		// su hash, y hay una prueba que lo fija (TestElTokenDelDispositivoNoApareceEnElInventario).
+		//
+		// Lo que un reader SIGUE sin poder es enrolar y revocar: ésas son admin, como
+		// musubi_token_new. Ver el inventario y poder tocarlo son cosas distintas, y este mapa es
+		// donde esa distinción queda escrita.
+		"musubi_fleet_list": true,
+		// S4 · telemetría. MISMO razonamiento que fleet_list —la cabina es el panel— pero con
+		// una diferencia que importa: acá el reader NO ve todo por el hecho de poder llamarla.
+		// La tool sólo devuelve las máquinas donde su credencial tiene concedida `metrics` en la
+		// sección `fleet:` de principals.yaml. Poder invocarla y poder ver algo son cosas
+		// distintas: sin concesiones, un reader llama y recibe una lista vacía.
+		"musubi_fleet_metrics": true,
+		// S5 · la bitácora. Mismo razonamiento que fleet_metrics, y con el mismo matiz: poder
+		// INVOCARLA no es poder ver algo. Sólo devuelve los comandos de máquinas sobre las que
+		// la credencial tiene `exec`, así que un reader sin concesiones llama y recibe vacío.
+		// EJECUTAR (musubi_fleet_exec) sigue exigiendo la capacidad, y no está en este mapa.
+		"musubi_fleet_log": true,
+		// S6 · la bitácora de pantalla. Mismo razonamiento y mismo matiz: invocarla no es ver
+		// nada. Sólo devuelve sesiones de máquinas sobre las que la credencial tiene `screen`.
+		// ABRIR una sesión (musubi_fleet_screen) exige la capacidad y NO está en este mapa.
+		"musubi_fleet_sessions": true,
 	}
 
 	for _, e := range s.tools {

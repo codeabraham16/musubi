@@ -56,6 +56,20 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// FTS (búsquedas puras, sin bumpAccess ni ledger). No muta nada; por eso es readOnly y la
 		// puede llamar una cabina (F1 · Lienzo como capacidad del cerebro).
 		"musubi_design": true,
+		// Inventario de la flota (track «Control de flota», S2): lee la tabla `devices` y no
+		// escribe nada. El campo `online` se CALCULA al servir (no hay columna ni UPDATE), así
+		// que listar la flota no muta ni una fila. readOnly ⇒ la puede llamar una cabina, que es
+		// justo el caso de uso: el panel que muestra las máquinas no escribe en ninguna.
+		"musubi_fleet_list": true,
+		// Telemetría de la flota (S4): lee la columna `last_sample` de `devices` y deriva los
+		// porcentajes al servir. No escribe: la muestra la estampa el LATIDO, por la otra puerta.
+		"musubi_fleet_metrics": true,
+		// La bitácora de ejecución remota (S5): lee device_commands y no escribe. Quien ESCRIBE
+		// es musubi_fleet_exec (que encola) y el agente por la otra puerta (que reporta).
+		"musubi_fleet_log": true,
+		// La bitácora de sesiones de pantalla (S6): lee screen_sessions y no escribe. Quien
+		// ESCRIBE es musubi_fleet_screen (que abre la sesión) y el agente por la otra puerta.
+		"musubi_fleet_sessions": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

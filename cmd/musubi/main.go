@@ -96,6 +96,12 @@ func main() {
 		runCalibrate(os.Args[2:])
 	case "conflicts":
 		runConflicts(os.Args[2:])
+	case "shell":
+		// La terminal interactiva (S5b). Va como subcomando propio y no como una bandera de otro:
+		// es lo único de la CLI que toma el control de la terminal, y eso merece verse en el nombre.
+		runShell(os.Args[2:])
+	case "agent":
+		runAgent(os.Args[2:])
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -121,6 +127,10 @@ func printUsage() {
 	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
 	cmd("cerebro", "Canal MCP (stdio) al cerebro CENTRAL: consulta en vivo, no replica")
 	cmd("serve [--addr host:port]", "Servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
+
+	section("Flota")
+	cmd("agent [--brain <url>] [--once]", "Late contra el cerebro para que esta máquina figure en la flota")
+	cmd("shell <maquina> [--project <id>]", "Terminal interactiva en una máquina de la flota (exige la capacidad `shell`, aparte de `exec`)")
 
 	section("Memoria")
 	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
@@ -287,6 +297,15 @@ func runServe(args []string) {
 	// `sync_status` contra el cerebro reportara miles de "pendientes de envío" — una señal de
 	// salud que MIENTE. Con sync configurado (un central encadenado a otro), encola normal.
 	engine.SetOutboxEnabled(cfg.Sync.HasDestination())
+
+	// Flota (S10): intervalo de sondeo, caducidad de las salidas de comandos y políticas de
+	// auto-heal. La validación SINTÁCTICA de las políticas es acá y es fatal — una política mal
+	// escrita no puede convertirse en una alarma que calla. La otra mitad (que su principal exista
+	// y tenga con qué actuar) la hace ListenAndServeHTTP cuando el registro ya está cargado.
+	if err := server.ConfigurarFlota(cfg.Fleet); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -1,0 +1,244 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flota · Musubi</title>
+<!--
+  El panel de flota. HTML+CSS+JS PLANO, sin paso de build y sin una línea de three.js.
+
+  No va dentro del bundle WebGL a propósito: ese bundle es una visualización 3D de neuronas de
+  memoria, y esto es una tabla de máquinas con números. Son dos problemas de UI distintos. Además
+  ese bundle se commitea y la CI compara sus bytes: tocarlo para agregar una tabla sería un riesgo
+  gratuito.
+
+  EL PRINCIPIO QUE GOBIERNA ESTE ARCHIVO: lo desconocido se dibuja como DESCONOCIDO. Un cpu_pct en
+  null se muestra «—», nunca «0 %». Un gráfico no se lee, se mira de reojo — así que un cero
+  inventado engaña más acá que en cualquier JSON.
+-->
+<style>
+  :root {
+    --fondo: #0d1117; --panel: #161b22; --borde: #30363d;
+    --texto: #e6edf3; --tenue: #8b949e;
+    --ok: #3fb950; --mal: #f85149; --tibio: #d29922; --acento: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fondo); color: var(--texto);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 24px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--tenue); font-size: 12px; margin-bottom: 20px; }
+  .aviso {
+    background: var(--panel); border: 1px solid var(--borde); border-left: 3px solid var(--tibio);
+    padding: 14px 16px; border-radius: 6px; margin-bottom: 18px; max-width: 900px;
+  }
+  .aviso b { color: var(--tibio); }
+  table { border-collapse: collapse; width: 100%; max-width: 1400px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--borde); white-space: nowrap; }
+  th { color: var(--tenue); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:hover td { background: var(--panel); }
+  .punto { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+  .viva { background: var(--ok); } .caida { background: var(--mal); }
+  /* «—» es un DATO: significa «no se midió». Se dibuja tenue para que no se confunda con un 0. */
+  .nd { color: var(--tenue); }
+  .barra { display: inline-block; width: 52px; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 8px; }
+  .barra > i { display: block; height: 100%; background: var(--acento); }
+  .barra > i.alto { background: var(--tibio); } .barra > i.critico { background: var(--mal); }
+  .caps { color: var(--tenue); font-size: 12px; }
+  .caps b { color: var(--acento); font-weight: 500; }
+  /* La columna de lo AUTOMÁTICO. Se distingue del resto a propósito: es lo único de esta tabla
+     que describe algo que pasa sin que nadie lo pida. */
+  .auto-col { font-size: 12px; white-space: nowrap; }
+  .auto { display: inline-block; padding: 1px 6px; border-radius: 4px; cursor: help;
+          background: rgba(125,211,252,.10); border: 1px solid rgba(125,211,252,.28); color: #7dd3fc; }
+  /* INERTE = configurada y sin poder actuar. Va en ámbar y no en rojo: no está rota, está
+     desconectada — y en la tabla tiene que saltar a la vista antes que el incidente. */
+  .auto.inerte { background: rgba(251,191,36,.10); border-color: rgba(251,191,36,.38); color: #fbbf24; }
+  .viejo { color: var(--tibio); }
+  /* El camino de vuelta. Va en las DOS páginas: un enlace de ida sin vuelta deja a alguien
+     usando el botón del navegador para algo que la página tendría que ofrecer. */
+  .volver { font-size: 13px; font-weight: 400; text-decoration: none; color: var(--tenue);
+            margin-left: 12px; vertical-align: middle; }
+  .volver:hover { color: var(--acento); }
+  footer { color: var(--tenue); font-size: 12px; margin-top: 22px; }
+</style>
+
+<h1>Flota <a class="volver" href="/" title="Volver al panel del cerebro">← cerebro</a></h1>
+<div class="sub" id="sub">cargando…</div>
+<div id="aviso"></div>
+<table id="tabla" hidden>
+  <thead><tr>
+    <th>máquina</th><th>tier</th><th>os</th><th>cpu</th><th>memoria</th><th>disco</th>
+    <th>carga</th><th>temp</th><th>uptime</th><th>dato</th><th>admite / puedo</th><th>automático</th><th>pantalla</th>
+  </tr></thead>
+  <tbody id="cuerpo"></tbody>
+</table>
+<footer>
+  Sólo lectura. Ejecutar y abrir pantalla se hacen con <code>musubi_fleet_exec</code> y
+  <code>musubi_fleet_screen</code>, que dejan su línea en la bitácora.
+</footer>
+
+<script>
+// ND es «no se midió». Devuelve un guion tenue, NUNCA un cero. Es el invariante del track
+// llegando hasta el píxel: un agente recién arrancado no tiene cpu_pct, un Windows no tiene
+// carga, un macOS no tiene memoria. Los tres dibujan «—» y ninguno dibuja 0.
+const ND = '<span class="nd">—</span>';
+
+function pct(v) {
+  if (v === null || v === undefined) return ND;
+  const n = Number(v);
+  if (!isFinite(n)) return ND;
+  const clase = n >= 90 ? 'critico' : n >= 75 ? 'alto' : '';
+  return `<span class="barra"><i class="${clase}" style="width:${Math.min(100, Math.max(0, n))}%"></i></span>${n.toFixed(0)}%`;
+}
+function num(v, sufijo = '', dec = 0) {
+  if (v === null || v === undefined) return ND;
+  const n = Number(v);
+  return isFinite(n) ? n.toFixed(dec) + sufijo : ND;
+}
+function duracion(seg) {
+  if (seg === null || seg === undefined) return ND;
+  const s = Number(seg);
+  if (!isFinite(s) || s <= 0) return ND;
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+// La EDAD DEL DATO al lado del dato. Una máquina que late pero dejó de medir muestra su última
+// muestra buena para siempre y parece sana; esto es lo que delata ese caso.
+function edad(seg, conMetricas) {
+  if (!conMetricas || seg === null || seg === undefined) return ND;
+  const s = Number(seg);
+  const txt = s < 90 ? `${Math.round(s)}s` : duracion(s);
+  return s > 600 ? `<span class="viejo" title="la máquina late pero su última medición es vieja">${txt} ⚠</span>` : txt;
+}
+function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—'; }
+
+// AUTOMÁTICO — qué actúa en esta máquina SIN una persona detrás.
+//
+// Es la columna que S10 volvió necesaria: el cerebro ejecuta comandos por su cuenta y hasta acá
+// una máquina con auto-heal encima se dibujaba exactamente igual que una sin él.
+//
+// Tres estados, y los tres significan cosas distintas:
+//   —          no hay nada automático sobre esta máquina
+//   ⚙ N        hay N políticas y no podés ver el detalle (te falta `exec`); el CONTEO igual se
+//              muestra, porque «acá pasa algo solo» no es un secreto
+//   ⚙ nombre   con el detalle, y con un ⚠ si la política NO PUEDE actuar
+//
+// El ⚠ es lo que más importa. Una política cuyo principal perdió la concesión se ve idéntica a
+// una que funciona —las dos figuran en la lista y ninguna hace nada visible hasta que la
+// condición se cumple—, así que es una alarma apagada. Acá se ve antes del incidente.
+function automatico(e) {
+  const total = e.politicas_activas || 0;
+  if (!total) return ND;
+  const det = e.politicas;
+  if (!Array.isArray(det) || !det.length) {
+    return `<span class="auto" title="hay ${total} política(s) automática(s) sobre esta máquina. Para ver qué hacen necesitás la capacidad exec sobre ella.">⚙ ${total}</span>`;
+  }
+  return det.map(p => {
+    const t = `${p.nombre} · si ${p.condicion} → ${(p.hacer || []).join(' ')}` +
+      ` · como ${p.principal} · cooldown ${p.cooldown_min} min` +
+      ` · ${p.ultimo_disparo ? 'último disparo ' + p.ultimo_disparo : 'nunca actuó'}`;
+    const clase = p.puede_actuar ? 'auto' : 'auto inerte';
+    const marca = p.puede_actuar ? '' : ' ⚠';
+    const porque = p.puede_actuar ? '' :
+      ' — INERTE: su principal no tiene `exec` sobre esta máquina, o el comando no está en su allowlist. No va a actuar.';
+    return `<span class="${clase}" title="${esc(t + porque)}">⚙ ${esc(p.nombre)}${marca}</span>`;
+  }).join(' ');
+}
+
+// PANTALLA — el id de RustDesk, y si es de fiar.
+//
+// Ese id lo REPORTA la propia máquina en su latido: es entrada no confiable. Si dos máquinas dicen
+// ser la misma, conectarse es una moneda al aire — y hay dos formas de llegar ahí: una imagen
+// clonada (lo más común, porque RustDesk deriva el id de la máquina) o alguien que declaró el id
+// de otra para desviar una sesión.
+//
+// Se dibuja ACÁ y no sólo al fallar una apertura: descubrir el problema en el momento en que hace
+// falta mirar una máquina es descubrirlo tarde.
+function pantalla(e) {
+  // VA PRIMERO: un Tier C no tiene rustdesk_id, así que sin esta rama caía en el `—` de abajo y
+  // se leía igual que un Tier A que todavía no reportó el suyo — o sea, como «ya va a aparecer».
+  // Y no va a aparecer: es otro motor (scrcpy sobre ADB) y todavía no existe.
+  if (e.pantalla_sin_motor) {
+    return `<span class="auto inerte" title="${esc('`screen` está concedido y la concesión es real —un móvil TIENE framebuffer— pero Musubi todavía no tiene motor para su pantalla: el de Android es scrcpy sobre ADB, distinto del de RustDesk. Pedir la pantalla se NIEGA a propósito, en vez de entregar una contraseña para una sesión que nadie levanta.')}">⚠ sin motor</span>`;
+  }
+  if (!e.rustdesk_id) return ND;
+  if (e.rustdesk_id_ambiguo) {
+    const otras = (e.rustdesk_id_tambien_en || []).join(', ');
+    const fuera = e.rustdesk_id_fuera_de_alcance ? ` y ${e.rustdesk_id_fuera_de_alcance} fuera de tu alcance` : '';
+    return `<span class="auto inerte" title="${esc(`id ${e.rustdesk_id} AMBIGUO: lo reclama también ${otras}${fuera}. La pantalla está cerrada a propósito — conectarse sería una moneda al aire. Regenerá el id en la máquina duplicada.`)}">⚠ ambiguo</span>`;
+  }
+  if (e.rustdesk_id_cambio) {
+    return `<span class="auto" title="${esc(`id ${e.rustdesk_id}. CAMBIÓ el ${e.rustdesk_id_cambio}; antes era ${e.rustdesk_id_previo}. Normal si la máquina se reinstaló; si no, alguien está reportando otro id.`)}">${esc(e.rustdesk_id)} ↻</span>`;
+  }
+  return `<span class="auto" title="id de RustDesk">${esc(e.rustdesk_id)}</span>`;
+}
+
+// esc existe porque el nombre de una política y su argv salen de un archivo de configuración, y
+// esta página los mete en un atributo `title`. No es una amenaza probable —quien edita esa config
+// ya manda en el cerebro— pero un panel que interpola texto ajeno sin escaparlo es una costumbre
+// que en algún momento se paga.
+function esc(t) {
+  return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function pintar(d) {
+  const sub = document.getElementById('sub');
+  const aviso = document.getElementById('aviso');
+  const tabla = document.getElementById('tabla');
+  aviso.innerHTML = '';
+
+  // EL ESTADO ES LO PRIMERO QUE SE MIRA. Una tabla vacía puede significar cinco cosas distintas
+  // y las cinco se dibujan igual si lo único que viaja es la lista.
+  if (d.estado !== 'vivo') {
+    tabla.hidden = true;
+    const titulos = {
+      apagado: 'Sin enlace al cerebro central',
+      caido: 'El cerebro no respondió',
+      sin_permiso: 'Tu credencial no ve ninguna máquina',
+      vacio: 'No hay máquinas enroladas',
+    };
+    aviso.innerHTML = `<div class="aviso"><b>${titulos[d.estado] || d.estado}</b><br>${d.detalle || ''}</div>`;
+    sub.textContent = d.destino ? `cerebro: ${d.destino}` : '';
+    return;
+  }
+
+  const equipos = d.equipos || [];
+  const vivas = equipos.filter(e => e.online).length;
+  sub.textContent = `${equipos.length} máquina(s) · ${vivas} en línea · cerebro ${d.destino}`;
+  if (d.sin_permiso > 0) {
+    aviso.innerHTML = `<div class="aviso"><b>${d.sin_permiso} máquina(s) ocultas</b><br>` +
+      `tu credencial no tiene concesiones de flota sobre ellas. Las capacidades NO se derivan del rol: se declaran en la sección <code>fleet:</code> de principals.yaml.</div>`;
+  }
+
+  document.getElementById('cuerpo').innerHTML = equipos.map(e => `
+    <tr>
+      <td><span class="punto ${e.online ? 'viva' : 'caida'}"></span>${e.name}</td>
+      <td>${e.tier}</td>
+      <td>${e.os || ND}</td>
+      <td>${pct(e.cpu_pct)}</td>
+      <td>${pct(e.mem_pct)}</td>
+      <td>${pct(e.disco_pct)}</td>
+      <td>${num(e.load1, '', 2)}</td>
+      <td>${num(e.temp_c, '°', 0)}</td>
+      <td>${duracion(e.uptime_seg)}</td>
+      <td>${edad(e.antiguedad_s, e.con_metricas)}</td>
+      <!-- admite y puedo, POR SEPARADO: lo primero es de la máquina, lo segundo de tu
+           credencial. Mostrar sólo lo primero enseña a ignorar el campo. -->
+      <td class="caps">${lista(e.caps)} / <b>${lista(e.puedo)}</b></td>
+      <td class="auto-col">${automatico(e)}</td>
+      <td class="auto-col">${pantalla(e)}</td>
+    </tr>`).join('');
+  tabla.hidden = false;
+}
+
+async function refrescar() {
+  try {
+    const r = await fetch('/api/flota', { cache: 'no-store' });
+    pintar(await r.json());
+  } catch (err) {
+    pintar({ estado: 'caido', detalle: String(err) });
+  }
+}
+refrescar();
+setInterval(refrescar, 10000);
+</script>

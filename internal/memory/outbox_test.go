@@ -57,8 +57,32 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	// v28 = libro de evidencia del MODO SOMBRA: las dos lecturas de un par (model-free y motor)
 	//       lado a lado. La del motor se descarta; la tabla existe para poder recalibrar los
 	//       umbrales con pares etiquetados, que eran 8.
-	if latestSchemaVersion() != 28 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 28", latestSchemaVersion())
+	// v29 = registro de la FLOTA: el dispositivo como entidad de primera clase (track «Control de
+	//       flota», S1). Sin columna `online` —se deriva de last_seen—, sin el token crudo —sólo
+	//       su SHA-256— y sin borrado físico —revocar es una bandera, para que la auditoría
+	//       sobreviva a la baja.
+	// v30 = la ÚLTIMA muestra de cada máquina de la flota (S4). Una COLUMNA y no una tabla de
+	//       series: Musubi guarda el presente de la flota; la historia, si hace falta, la guarda
+	//       Prometheus. Se escribe en el mismo UPDATE que ya estampa last_seen.
+	// v31 = BITÁCORA DE EJECUCIÓN REMOTA (S5). La tabla más sensible del esquema: quién pidió
+	//       correr qué en qué máquina ajena. La fila se crea AL ENCOLAR, no al terminar, para que
+	//       un pedido que nunca se completó quede igual registrado.
+	// v32 = BITÁCORA DE SESIONES DE PANTALLA (S6) + el rustdesk_id de cada máquina. La tabla NO
+	//       tiene columna para la contraseña, ni en claro ni hasheada: guardarla sería un llavero
+	//       de acceso a la flota entera, y hashearla no serviría (quien verifica es RustDesk).
+	// v33 = COOLDOWN PERSISTENTE DE LAS POLÍTICAS DE FLOTA (S10b). Hasta acá el cooldown vivía
+	//       sólo en memoria, así que reiniciar el cerebro lo rearmaba entero — y reiniciar es lo
+	//       primero que alguien hace justo cuando algo va mal, que es cuando las políticas están
+	//       disparando. Clave compuesta (política, máquina): el cooldown es por par.
+	// v34 = BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b). El registro más sensible del
+	//       esquema, y lo que NO tiene es su diseño: no hay columna para el contenido de la
+	//       sesión. Grabar lo que alguien teclea en una terminal es una decisión legal antes que
+	//       técnica. Se guarda que HUBO acceso: quién, dónde, cuándo y por cuánto.
+	// v35 = PROCEDENCIA DEL rustdesk_id (S6b). Ese id lo REPORTA la máquina, así que es entrada
+	//       no confiable: se guarda CUÁNDO cambió y cuál era el anterior. La colisión —dos
+	//       máquinas diciendo ser la misma— NO se guarda: se deriva, como el «en línea».
+	if latestSchemaVersion() != 35 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 35", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

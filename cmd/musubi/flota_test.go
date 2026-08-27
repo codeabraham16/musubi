@@ -1,0 +1,331 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// cerebroDeFlotaFalso levanta un central que responde tools/call con los textos dados por tool.
+func cerebroDeFlotaFalso(t *testing.T, porTool map[string]string) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var sobre struct {
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&sobre)
+		texto, hay := porTool[sobre.Params.Name]
+		if !hay {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"message":"tool no disponible"}}`))
+			return
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": 1,
+			"result": map[string]any{"content": []map[string]any{{"type": "text", "text": texto}}}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func pedirFlota(t *testing.T, relay *relayVivo) flotaRespuesta {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handlerFlota(relay)(rec, httptest.NewRequest(http.MethodGet, "/api/flota", nil))
+	var out flotaRespuesta
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("respuesta no es JSON: %v (%s)", err, rec.Body.String())
+	}
+	return out
+}
+
+// EL ESTADO ES LO PRIMERO QUE SE MIRA. Una flota vacía puede significar CINCO cosas distintas, y
+// las cinco se dibujan igual si lo único que viaja es la lista.
+//
+// Sabotaje que la hace fallar: colapsar los estados en «devolver la lista vacía».
+func TestUnaFlotaVaciaDistingueSusCincoCausas(t *testing.T) {
+	// 1 · sin enlace al central.
+	if got := pedirFlota(t, nil); got.Estado != "apagado" || !strings.Contains(got.Detalle, "MUSUBI_BRAIN_URL") {
+		t.Errorf("sin relay: estado=%q detalle=%q", got.Estado, got.Detalle)
+	}
+
+	// 2 · el central no responde.
+	muerto := cerebroDeFlotaFalso(t, nil)
+	base := muerto.URL
+	muerto.Close()
+	if got := pedirFlota(t, &relayVivo{base: base, token: "tok"}); got.Estado != "caido" {
+		t.Errorf("central caído: estado=%q", got.Estado)
+	}
+
+	// 3 · la credencial no ve ninguna máquina.
+	sinPermiso := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"project_id":"casa","total":0,"devices":[],"sin_permiso":3}`})
+	got := pedirFlota(t, &relayVivo{base: sinPermiso.URL, token: "tok"})
+	if got.Estado != "sin_permiso" {
+		t.Errorf("sin concesiones: estado=%q", got.Estado)
+	}
+	if got.SinPermiso != 3 || !strings.Contains(got.Detalle, "principals.yaml") {
+		t.Errorf("no dice cuántas ni dónde arreglarlo: %+v", got)
+	}
+
+	// 4 · no hay máquinas enroladas — que NO es lo mismo que lo anterior.
+	vacio := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"project_id":"casa","total":0,"devices":[]}`})
+	got4 := pedirFlota(t, &relayVivo{base: vacio.URL, token: "tok"})
+	if got4.Estado != "vacio" || !strings.Contains(got4.Detalle, "fleet_enroll") {
+		t.Errorf("flota vacía: estado=%q detalle=%q", got4.Estado, got4.Detalle)
+	}
+
+	// 5 · hay flota.
+	viva := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true,"caps":["metrics"],"puedo":["metrics"]}]}`})
+	if got := pedirFlota(t, &relayVivo{base: viva.URL, token: "tok"}); got.Estado != "vivo" {
+		t.Errorf("con flota: estado=%q", got.Estado)
+	}
+}
+
+// I5 — el panel NO inventa permisos: pregunta por las MISMAS tools. Lo que la compuerta no deja
+// ver, el panel no lo ve.
+//
+// Sabotaje: agregar un endpoint «para el panel» que se saltee la compuerta.
+func TestElPanelPreguntaPorLasMismasToolsYNoInventaUnaRutaAparte(t *testing.T) {
+	var pedidas []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/mcp") {
+			t.Errorf("el panel pidió a %q en vez de a /mcp: hay una segunda ruta de datos", r.URL.Path)
+		}
+		var sobre struct {
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&sobre)
+		pedidas = append(pedidas, sobre.Params.Name)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"devices\":[{\"name\":\"pc\"}]}"}]}}`))
+	}))
+	defer ts.Close()
+
+	pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	quiero := map[string]bool{"musubi_fleet_list": true, "musubi_fleet_metrics": true}
+	for _, p := range pedidas {
+		if !quiero[p] {
+			t.Errorf("el panel llamó a %q, que no es una de las tools de flota", p)
+		}
+		delete(quiero, p)
+	}
+	if len(quiero) != 0 {
+		t.Errorf("el panel no pidió %v", quiero)
+	}
+}
+
+// El token NUNCA sale hacia el navegador: viaja del panel al cerebro y nada más.
+//
+// Sabotaje: incluir el token en flotaRespuesta «para que la página pueda refrescar sola».
+func TestElTokenNoViajaAlNavegador(t *testing.T) {
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true}]}`})
+	rec := httptest.NewRecorder()
+	handlerFlota(&relayVivo{base: ts.URL, token: "SECRETO-DEL-CEREBRO"})(rec, httptest.NewRequest(http.MethodGet, "/api/flota", nil))
+	if strings.Contains(rec.Body.String(), "SECRETO-DEL-CEREBRO") {
+		t.Fatalf("el token viajó al navegador:\n%s", rec.Body.String())
+	}
+}
+
+// Si las MÉTRICAS fallan, la tabla se dibuja igual con el inventario: perder los números es
+// molesto, perder la lista de máquinas es quedarse a oscuras.
+//
+// Sabotaje: propagar el error de fleet_metrics → un problema de permisos de métricas borra la
+// flota entera de la pantalla.
+func TestSiFallanLasMetricasIgualSeVeLaFlota(t *testing.T) {
+	// Sólo responde fleet_list; fleet_metrics devuelve error.
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"pc-gio","online":true,"caps":["metrics"],"puedo":[]}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	if got.Estado != "vivo" || len(got.Equipos) != 1 {
+		t.Fatalf("sin métricas se perdió la flota: %+v", got)
+	}
+	if got.Equipos[0]["con_metricas"] != false {
+		t.Errorf("no se marca que la máquina va sin métricas: %+v", got.Equipos[0])
+	}
+	// Y NO se inventan ceros para los campos que no vinieron.
+	for _, campo := range []string{"cpu_pct", "mem_pct"} {
+		if v, hay := got.Equipos[0][campo]; hay && v != nil {
+			t.Errorf("se inventó %s=%v sin haberlo medido", campo, v)
+		}
+	}
+}
+
+// Una máquina que está en el inventario y NO en las métricas se marca como tal, en vez de
+// dibujarse con ceros. Es la compuerta funcionando, no un error.
+func TestUnaMaquinaSinMetricasSeDistingueDeUnaEnCero(t *testing.T) {
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list":    `{"devices":[{"name":"con","online":true},{"name":"sin","online":true}]}`,
+		"musubi_fleet_metrics": `{"devices":[{"name":"con","cpu_pct":42.5,"mem_pct":10}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	if len(got.Equipos) != 2 {
+		t.Fatalf("equipos = %d", len(got.Equipos))
+	}
+	por := map[string]map[string]any{}
+	for _, e := range got.Equipos {
+		por[e["name"].(string)] = e
+	}
+	if por["con"]["con_metricas"] != true || por["con"]["cpu_pct"] != 42.5 {
+		t.Errorf("la máquina CON métricas no las trajo: %+v", por["con"])
+	}
+	if por["sin"]["con_metricas"] != false {
+		t.Errorf("la máquina SIN métricas no se marcó: %+v", por["sin"])
+	}
+	if v, hay := por["sin"]["cpu_pct"]; hay && v != nil {
+		t.Errorf("se inventó un cpu_pct para la máquina sin métricas: %v", v)
+	}
+}
+
+// La página no lleva NI UNA línea de three.js, y no toca el bundle que la CI compara byte a byte.
+func TestLaPaginaDeFlotaNoDependeDelBundleWebGL(t *testing.T) {
+	pagina, err := dashboardAssets.ReadFile("assets/flota.html")
+	if err != nil {
+		t.Fatalf("la página no está embebida: %v", err)
+	}
+	html := string(pagina)
+	for _, prohibido := range []string{"three", "dashboard.bundle.js", "webgl", "WebGL"} {
+		if strings.Contains(strings.ToLower(html), strings.ToLower(prohibido)) &&
+			!strings.Contains(html, "sin una línea de three.js") &&
+			!strings.Contains(html, "bundle WebGL") {
+			t.Errorf("la página de flota depende de %q", prohibido)
+		}
+	}
+	// Y el principio del track llega hasta el píxel: hay un camino para «no medido».
+	if !strings.Contains(html, "const ND") {
+		t.Error("la página no tiene una representación para lo NO MEDIDO: dibujaría ceros")
+	}
+	if !strings.Contains(html, "sin_permiso") {
+		t.Error("la página no distingue «no podés ver» de «no hay»")
+	}
+}
+
+// ── S9b · A21 + A23: se llega, se vuelve, y se ve lo automático ─────────────────────────────
+
+// A21 — A LA FLOTA SE TIENE QUE PODER LLEGAR SIN SABERSE LA URL.
+//
+// Hasta acá `/flota` existía y no había un solo enlace hacia ella: se llegaba escribiendo la
+// dirección. Una pantalla a la que sólo se llega de memoria es una pantalla que nadie mira — y
+// desde S10 esa pantalla es donde se ve qué máquinas tienen algo que actúa solo.
+//
+// EL ENLACE VA EN LA CÁSCARA (dashboard.html), NO EN EL BUNDLE, y ésa es la mitad interesante:
+// la CI reconstruye dashboard.bundle.js desde src/ y exige que no cambie ni un byte, así que
+// tocarlo para agregar un `<a>` habría sido un riesgo gratuito. La cáscara no entra en esa
+// verificación. (El motivo que este cabo tenía anotado en ABIERTO.md —«habría que tocar el
+// bundle»— era simplemente incorrecto.)
+//
+// Sabotaje que la hace fallar: sacar el enlace de dashboard.html.
+func TestSePuedeLlegarALaFlotaYVolverSinEscribirLaURL(t *testing.T) {
+	ida := string(assetsFS(t, "assets/dashboard.html"))
+	if !strings.Contains(ida, `href="/flota"`) {
+		t.Error("el panel del cerebro no enlaza a /flota: a la pantalla de la flota sólo se llega escribiendo la URL")
+	}
+	vuelta := string(assetsFS(t, "assets/flota.html"))
+	if !strings.Contains(vuelta, `href="/"`) {
+		t.Error("el panel de flota no vuelve al del cerebro: un enlace de ida sin vuelta deja a alguien usando el botón del navegador para algo que la página tendría que ofrecer")
+	}
+}
+
+// El bundle WebGL NO se toca para nada de esto. La CI ya lo verifica reconstruyéndolo, pero esta
+// prueba corre en cada `go test` y falla en el momento, no veinte minutos después en el pipeline.
+//
+// Sabotaje que la hace fallar: meter la navegación dentro del bundle.
+func TestElBundleWebGLNoSabeNadaDeLaFlota(t *testing.T) {
+	b := string(assetsFS(t, "assets/dashboard.bundle.js"))
+	if strings.Contains(b, "/api/flota") || strings.Contains(b, "politicas_activas") {
+		t.Error("el bundle WebGL menciona la flota: la navegación y la tabla van en HTML plano, fuera del bundle cuyos bytes compara la CI")
+	}
+}
+
+// A23 — la página dibuja lo que S10 volvió necesario ver, y distingue los tres estados.
+//
+// Sabotaje que la hace fallar: dibujar la columna sin distinguir la política inerte.
+func TestLaPaginaDeFlotaDibujaLoAutomaticoYMarcaLoInerte(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	for _, quiero := range []struct{ frag, porque string }{
+		{"politicas_activas", "sin el conteo no se distingue una máquina con auto-heal de una sin él"},
+		{"puede_actuar", "una política inerte se ve idéntica a una que funciona si esto no se dibuja"},
+		{"inerte", "el estado inerte necesita su propia marca visual"},
+		{"function esc(", "el nombre y el argv de una política salen de un archivo de configuración y se interpolan en un atributo"},
+	} {
+		if !strings.Contains(p, quiero.frag) {
+			t.Errorf("flota.html no contiene %q: %s", quiero.frag, quiero.porque)
+		}
+	}
+	// Una sola fuente para la columna: si el `⚙` apareciera suelto en el HTML además de en la
+	// función, habría dos formas de dibujar lo mismo y una se quedaría vieja.
+	if n := strings.Count(p, "function automatico("); n != 1 {
+		t.Errorf("hay %d definiciones de automatico(): tiene que haber exactamente una", n)
+	}
+}
+
+// assetsFS lee un asset embebido, para que estas pruebas miren EXACTAMENTE lo que se sirve y no
+// una copia del disco que podría no estar embebida.
+func assetsFS(t *testing.T, ruta string) []byte {
+	t.Helper()
+	b, err := dashboardAssets.ReadFile(ruta)
+	if err != nil {
+		t.Fatalf("no se pudo leer el asset embebido %q: %v", ruta, err)
+	}
+	return b
+}
+
+// A13 — el panel dibuja si el id de pantalla es de fiar.
+//
+// Sabotaje que la hace fallar: dibujar el id sin distinguir el caso ambiguo.
+func TestLaPaginaDeFlotaDistingueUnIdDePantallaAmbiguo(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	for _, quiero := range []struct{ frag, porque string }{
+		{"rustdesk_id_ambiguo", "sin esto, una máquina con id duplicado se ve igual que una sana"},
+		{"rustdesk_id_cambio", "un id que cambió merece verse: o se reinstaló la máquina, o alguien miente"},
+		{"moneda al aire", "el aviso tiene que decir POR QUÉ importa, no sólo que pasa algo"},
+	} {
+		if !strings.Contains(p, quiero.frag) {
+			t.Errorf("flota.html no contiene %q: %s", quiero.frag, quiero.porque)
+		}
+	}
+	if n := strings.Count(p, "function pantalla("); n != 1 {
+		t.Errorf("hay %d definiciones de pantalla(): tiene que haber exactamente una", n)
+	}
+	// El id y el nombre de la máquina que colisiona vienen del reporte de una MÁQUINA, o sea que
+	// son texto ajeno interpolado en un atributo: tienen que pasar por esc().
+	if !strings.Contains(p, "esc(e.rustdesk_id)") {
+		t.Error("el id de RustDesk se interpola sin escapar, y ese dato lo reporta la propia máquina")
+	}
+}
+
+// A18 — EL PANEL NO PUEDE DECIR OTRA COSA QUE EL INVENTARIO.
+//
+// La trampa concreta: un Tier C no tiene rustdesk_id, así que caía en el `—` de «sin dato» y se
+// leía como un Tier A al que todavía no le llegó el id — o sea, «ya va a aparecer». Y no va a
+// aparecer nunca: es otro motor. La rama tiene que ir ANTES de ese `—`.
+//
+// Sabotaje: quitar la rama de pantalla_sin_motor, o ponerla después del `if (!e.rustdesk_id)`.
+func TestLaPaginaDeFlotaDistingueUnaPantallaSinMotor(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	if !strings.Contains(p, "pantalla_sin_motor") {
+		t.Fatal("flota.html no dibuja pantalla_sin_motor: una capacidad inerte se ve igual que una viva")
+	}
+	if !strings.Contains(p, "scrcpy") {
+		t.Error("el aviso no dice cuál es el motor que falta, que es lo único que vuelve accionable el dato")
+	}
+	cuerpo := p[strings.Index(p, "function pantalla("):]
+	iMotor := strings.Index(cuerpo, "pantalla_sin_motor")
+	iSinID := strings.Index(cuerpo, "if (!e.rustdesk_id)")
+	if iMotor < 0 || iSinID < 0 || iMotor > iSinID {
+		t.Error("la rama de `sin motor` va DESPUÉS del `—` de «sin id», así que un Tier C nunca la alcanza: se dibuja como «todavía no llegó el id»")
+	}
+}

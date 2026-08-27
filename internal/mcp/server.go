@@ -19,6 +19,7 @@ import (
 	"musubi/internal/cognition"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
 	"musubi/internal/skills"
@@ -146,6 +147,47 @@ type McpServer struct {
 	// telemetria que hay que acordarse de encender termina apagada (la misma leccion que dejo
 	// el ledger de uso, cuyos contadores en memoria murieron dos meses sin que nadie lo notara).
 	live *liveFeed
+
+	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
+	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.
+	cpuRemotos contadoresRemotos
+
+	// ── El latido propio de la flota (S10) ──────────────────────────────────────────────────
+	// sondaIntervalo es cada cuánto se sale a medir a los dispositivos sin agente. 0 = apagado.
+	// Lo lee TAMBIÉN umbralEnLinea, porque el umbral de «caído» de un Tier B se deriva de acá:
+	// una máquina que se visita cada 5 min no puede tener datos más frescos que 5 min (I2).
+	sondaIntervalo time.Duration
+	// retencionSalidasDias es cuántos días viven stdout/stderr de los comandos. 0 = para siempre.
+	retencionSalidasDias int
+	// politicas son las reglas de auto-heal ya validadas. Vacío = ninguna (I15).
+	politicas []fleet.Politica
+	// buscarPrincipal resuelve un principal POR NOMBRE, sin token. Lo usan las políticas, que no
+	// presentan credencial: nombran a alguien de principals.yaml y actúan con su autoridad (I11).
+	// Se guarda el registro y no el principal ya resuelto porque el registro se recarga en
+	// caliente: revocar a alguien tiene que apagar, en el acto, lo que actuaba en su nombre.
+	buscarPrincipal principalResolver
+	// flotaBusy garantiza UN barrido de flota en vuelo. Con 40 máquinas por SSH, dos barridos
+	// solapados son 80 conexiones simultáneas contra la red de alguien (I5).
+	flotaBusy atomic.Bool
+	// ultimoDisparo lleva el cooldown por (política × máquina): "<politica>\x00<device_id>" ->
+	// time.Time. En memoria a propósito y anotado como tal: un reinicio del cerebro rearma los
+	// cooldowns, y el caso malo (reiniciar justo después de un disparo) es acotado y benigno.
+	ultimoDisparo sync.Map
+	// avisosDados evita repetir en cada tick un aviso de configuración que no es un evento sino
+	// un ESTADO (una política sin principal, un rechazo de compuerta). Clave -> true; se borra
+	// cuando la condición se resuelve, así que una recaída vuelve a avisar.
+	avisosDados sync.Map
+	// ultimaPoda es cuándo se vaciaron por última vez las salidas viejas. La poda NO va en cada
+	// tick: es un UPDATE sobre la tabla de comandos y el tick es de minutos.
+	ultimaPoda time.Time
+	// ultimaPodaDePoliticas engancha la limpieza del estado de políticas a la MISMA cadencia que
+	// la de salidas, sin repetir el reloj: se poda cuando ultimaPoda avanzó.
+	ultimaPodaDePoliticas time.Time
+	// shells son las sesiones de shell interactiva VIVAS de este proceso (S5b). En memoria a
+	// propósito: una sesión viva ES un proceso ssh hijo de este cerebro, así que si el cerebro
+	// muere la sesión muere con él. La BITÁCORA sí es durable — pero la bitácora es el registro,
+	// no el canal.
+	shells registroDeShells
 
 	// spool saca el feed a disco para los daemons que NO sirven HTTP. nil ⇒ apagado, que es
 	// lo correcto en el central: ahí ya hay suscriptores por HTTP y escribir además a disco

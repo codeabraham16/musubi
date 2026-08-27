@@ -225,6 +225,28 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", s.readyzHandler)
 
+	// LA PUERTA DEL DISPOSITIVO (track «Control de flota»). Autentica contra la tabla `devices`,
+	// NO contra el registro de principals: una credencial de máquina no abre /mcp y una de
+	// persona no abre esto. La separación y su porqué están en fleet_http.go — en dos líneas:
+	// un agente corre en la superficie más expuesta de la flota, y su credencial no puede ser
+	// la llave de la memoria de la empresa. Comparte el `limiter` con /mcp a propósito.
+	mux.HandleFunc(fleetHeartbeatPath, s.handlerLatido(limiter))
+	// Y la contraparte: por acá el agente reporta cómo salió un comando (S5). Mismo almacén de
+	// credenciales, mismo limiter.
+	mux.HandleFunc(fleetResultPath, s.handlerResultado(limiter))
+
+	// EL RELAY DE SHELL INTERACTIVA (S5b). OJO: estas tres rutas autentican PERSONAS (registro de
+	// principals), al revés que las dos de arriba, que autentican DISPOSITIVOS (tabla `devices`).
+	// Están pegadas en el mux y son puertas distintas; el detalle, en shell_relay.go.
+	mux.HandleFunc(shellOutPath, s.handlerShellOut(opt))
+	mux.HandleFunc(shellInPath, s.handlerShellIn(opt))
+	mux.HandleFunc(shellClosePath, s.handlerShellClose(opt))
+	// Y las dos del AGENTE (S5c), que vuelven a autenticar DISPOSITIVOS. Por ellas viaja todo lo
+	// que la persona teclea, así que su guarda central no es «¿el token vale?» sino «¿esta sesión
+	// es de ESTA máquina?». Ver shell_agente_http.go.
+	mux.HandleFunc(shellAgenteEntradaPath, s.handlerShellAgenteEntrada(limiter))
+	mux.HandleFunc(shellAgenteSalidaPath, s.handlerShellAgenteSalida(limiter))
+
 	// Auto-update del cuerpo por la malla: sirve manifest + binarios desde bodyDir, sin
 	// auth (la frontera es el tailnet, como /readyz). Solo si está configurado.
 	if opt.bodyDir != "" {
@@ -241,17 +263,36 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		}
+		// El principal se CAPTURA, no se descarta. Antes alcanzaba con «¿es válido?» porque
+		// todo lo que se exportaba era del propio servidor; desde el track de flota la salida
+		// incluye telemetría POR MÁQUINA, y qué máquinas se ven depende de quién scrapea.
+		var quien *Principal
 		if opt.registry != nil {
-			if _, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization"))); !ok {
+			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			if !ok {
 				deny()
 				return
 			}
-		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
-			deny()
-			return
+			quien = p
+		} else if opt.token != "" {
+			if !validBearer(r.Header.Get("Authorization"), opt.token) {
+				deny()
+				return
+			}
+			// Token legacy: admin federado SIN capacidades de flota (C1). No ve ninguna máquina,
+			// y el render lo dice en un comentario en vez de quedarse mudo.
+			read, write := capsFromRole(RoleAdmin)
+			quien = &Principal{Name: "legacy", Role: RoleAdmin, Read: read, Write: write}
 		}
+		// quien == nil sólo en loopback sin auth: confianza local, ve todo. Misma regla que el
+		// resto del código (canCall, isAdmin, PuedeSobreDevice).
+
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte(metrics.render(s.engine)))
+		salida := metrics.render(s.engine)
+		var b strings.Builder
+		b.WriteString(salida)
+		renderFlota(&b, s.engine, quien, time.Now(), s.sondaIntervalo)
+		_, _ = w.Write([]byte(b.String()))
 	})
 
 	// /api/actores — el CENSO: quién llama al cerebro, del ledger histórico. Es la contraparte
@@ -462,11 +503,35 @@ func resolveServiceAuth(cfg config.ServiceConfig) (token string, loopback bool, 
 
 // principalsPath resuelve la ruta del registro de principals: cfg.PrincipalsFile si está
 // seteada, si no el default .musubi/principals.yaml bajo la raíz del proyecto (MUSUBI_HOME).
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UNA RUTA RELATIVA SE RESUELVE CONTRA EL WORKSPACE, NUNCA CONTRA EL CWD DEL PROCESO.
+//
+// Antes se devolvía cfg.PrincipalsFile tal cual, y eso abría un hueco silencioso y feo. El
+// `principals_file: ".musubi/principals.yaml"` que cualquiera escribe a mano se resolvía contra
+// el directorio de trabajo del proceso — que en un servicio de systemd es `/`, porque el unit de
+// deploy/install-musubi-brain.sh no fija WorkingDirectory.
+//
+// Y el fallo NO es ruidoso: loadPrincipals con un archivo inexistente NO falla, devuelve el
+// registro LEGACY. O sea que el cerebro arranca perfecto, sirve perfecto, y toda la identidad
+// por-miembro se degrada en silencio a UN SOLO bearer admin-federado que ve todos los proyectos.
+// Hay un WARNING para binds no-loopback (isRemoteLegacyTenancy) y strict_tenancy lo rechaza, pero
+// depender de que alguien lea un warning de arranque para no perder el aislamiento entre tenants
+// es apoyar una garantía de seguridad sobre la atención de una persona.
+//
+// Lo encontró un e2e de S9b: el mismo binario, la misma config y otro directorio de trabajo se
+// negó a arrancar porque leyó OTRO registro. Se negó porque había una política que validar; sin
+// políticas habría arrancado, y nadie se habría enterado.
+// ────────────────────────────────────────────────────────────────────────────────────────────
 func (s *McpServer) principalsPath(cfg config.ServiceConfig) string {
-	if strings.TrimSpace(cfg.PrincipalsFile) != "" {
-		return cfg.PrincipalsFile
+	p := strings.TrimSpace(cfg.PrincipalsFile)
+	if p == "" {
+		return filepath.Join(s.projectPath, ".musubi", "principals.yaml")
 	}
-	return filepath.Join(s.projectPath, ".musubi", "principals.yaml")
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(s.projectPath, p)
 }
 
 // validBearer compara en tiempo constante el header Authorization contra el token
@@ -530,6 +595,13 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 			resolver = registry
 		}
 	}
+	// Las POLÍTICAS DE FLOTA (S10) se atan al registro recién acá, que es cuando existe, y su
+	// validación restante es de ARRANQUE: una política que nombra a un principal inexistente, o a
+	// uno sin ninguna concesión `exec`, impide servir. Está garantizadamente muerta, y una alarma
+	// muerta que nadie sabe que está muerta es peor que no tener alarma.
+	if err := s.vincularRegistroDeFlota(resolver); err != nil {
+		return err
+	}
 	// Tenancy en bind remoto (Track 18): "legacy admin-federado" = sin registro de principals (o
 	// solo el bearer legacy) ⇒ un token con acceso TOTAL a todos los proyectos. En un bind
 	// no-loopback eso es infra compartida SIN aislamiento por miembro. StrictTenancy lo rechaza al
@@ -591,6 +663,11 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	if reload != nil {
 		go reload.watch(ctx)
 	}
+	// El LATIDO PROPIO DE LA FLOTA (S10): sondea a los que no tienen agente, poda las salidas
+	// viejas y aplica las políticas. Arranca acá y no en el entrypoint por la misma razón que el
+	// watch del registro: recién acá el registro existe, y una política sin registro no tiene a
+	// quién nombrar. No-op si el intervalo está en 0 (sondeo desactivado a mano).
+	go s.RunFlotaScheduler(ctx, s.sondaIntervalo)
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {

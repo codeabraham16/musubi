@@ -88,6 +88,20 @@ type serverMetrics struct {
 	// DEGRADA al orden model-free y devuelve ok. Sin este contador, el sistema dejaría de usar el
 	// juez sin que nadie pudiera enterarse.
 	motorDenied atomic.Int64
+	// execAllowDenied cuenta los exec frenados por la ALLOWLIST de la credencial (S10, I8-I10).
+	// Va aparte de authzDenied porque significa otra cosa: authz es «no podés tocar esa máquina»
+	// y esto es «podés, pero no ESE comando». Confundirlos haría que un token bien configurado
+	// que choca contra su propia allowlist se lea como un intento de intrusión.
+	execAllowDenied atomic.Int64
+	// politicaStats cuenta las acciones del AUTO-HEAL por política y resultado (S10, I19).
+	// Clave: "<politica>\x00<resultado>" -> *atomic.Int64.
+	//
+	// A PROPÓSITO SIN LA ETIQUETA DE MÁQUINA. El resto de las series de flota se filtran por la
+	// credencial del scrape (ver renderFlota), pero las políticas son configuración del cerebro y
+	// no cuelgan de ninguna concesión: etiquetar la máquina acá le entregaría el inventario de un
+	// tenant a cualquier scraper. La alerta necesita saber QUE una política actúa en loop; CUÁL
+	// máquina lo dice la bitácora, que sí está compuertada.
+	politicaStats sync.Map
 
 	gaugeCache domainGaugeCache // cache TTL de OperationalStats para no re-COUNT en cada scrape
 }
@@ -246,6 +260,53 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"authz\"} %d\n", m.authzDenied.Load())
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"quota\"} %d\n", m.quotaExceeded.Load())
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"motor_quota\"} %d\n", m.motorDenied.Load())
+	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"fleet_allowlist\"} %d\n", m.execAllowDenied.Load())
+	m.renderPoliticas(b)
+}
+
+// contarPolitica anota una acción de auto-heal. resultado: "ok" | "rechazada" | "error".
+func (m *serverMetrics) contarPolitica(politica, resultado string) {
+	if m == nil {
+		return
+	}
+	clave := politica + "\x00" + resultado
+	v, _ := m.politicaStats.LoadOrStore(clave, new(atomic.Int64))
+	v.(*atomic.Int64).Add(1)
+}
+
+// renderPoliticas emite el contador de acciones automáticas.
+//
+// SE EMITE AUNQUE VALGA CERO una vez que hay políticas configuradas, porque el silencio y el cero
+// no son lo mismo: una serie AUSENTE hace que `rate()` no devuelva nada y la alerta de I19 no
+// pueda distinguir «no actuó» de «el cerebro dejó de exportar». Es la misma trampa que
+// FlotaSinTelemetria cierra un nivel más arriba.
+func (m *serverMetrics) renderPoliticas(b *strings.Builder) {
+	type fila struct {
+		politica, resultado string
+		n                   int64
+	}
+	var filas []fila
+	m.politicaStats.Range(func(k, v interface{}) bool {
+		partes := strings.SplitN(k.(string), "\x00", 2)
+		if len(partes) == 2 {
+			filas = append(filas, fila{partes[0], partes[1], v.(*atomic.Int64).Load()})
+		}
+		return true
+	})
+	if len(filas) == 0 {
+		return
+	}
+	sort.Slice(filas, func(i, j int) bool {
+		if filas[i].politica != filas[j].politica {
+			return filas[i].politica < filas[j].politica
+		}
+		return filas[i].resultado < filas[j].resultado
+	})
+	b.WriteString("# HELP musubi_fleet_policy_actions_total Acciones de política automática (auto-heal), por política y resultado.\n")
+	b.WriteString("# TYPE musubi_fleet_policy_actions_total counter\n")
+	for _, f := range filas {
+		fmt.Fprintf(b, "musubi_fleet_policy_actions_total{policy=%q,result=%q} %d\n", f.politica, f.resultado, f.n)
+	}
 }
 
 // renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un

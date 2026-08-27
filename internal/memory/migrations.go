@@ -948,6 +948,296 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 29,
+			name:    "devices_registro_de_flota",
+			// EL REGISTRO DE LA FLOTA (track «Control de flota», slice S1).
+			//
+			// Hasta acá una máquina existía en Musubi sólo como ORIGEN de sync de memoria: un
+			// project_id y un nombre en un log. No había a-qué-máquina atribuir una métrica, un
+			// comando ni una sesión de pantalla. Esta tabla es esa entidad.
+			//
+			// LO QUE NO TIENE, Y ES EL DISEÑO:
+			//
+			//   - NO hay columna `online`. El estado de conexión se DERIVA de last_seen con un
+			//     umbral que elige quien pregunta (fleet.Device.EnLinea). Un booleano guardado se
+			//     queda en `true` para siempre cuando la máquina muere de golpe — que es
+			//     exactamente cuando querés saber que se cayó. Es la misma lección que la poda de
+			//     procesos muertos del riel local.
+			//   - NO se guarda el token crudo, sólo su SHA-256, igual que principals.yaml. Un
+			//     volcado de esta tabla no entrega credenciales usables.
+			//   - `revoked` es una BANDERA, no un DELETE. Borrar la fila perdería a quién
+			//     pertenecían la telemetría y las sesiones ya ocurridas, que es justo lo que hace
+			//     falta después de un incidente.
+			//
+			// project_id es NOT NULL y el alta lo exige no vacío (fleet.ValidarAlta). No es
+			// ceremonia: ya está medido en este mismo cerebro que una fila sin atribuir se ve
+			// desde TODOS los proyectos — pasó con 2 observaciones de test contaminando 3
+			// proyectos. Un dispositivo sin dueño sería la misma fuga, con exec adosado.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS devices (
+						id            TEXT PRIMARY KEY,
+						name          TEXT NOT NULL,
+						project_id    TEXT NOT NULL,
+						tier          TEXT NOT NULL,
+						caps          TEXT NOT NULL DEFAULT '',
+						os            TEXT NOT NULL DEFAULT '',
+						arch          TEXT NOT NULL DEFAULT '',
+						address       TEXT NOT NULL DEFAULT '',
+						agent_version TEXT NOT NULL DEFAULT '',
+						tags          TEXT NOT NULL DEFAULT '',
+						token_sha256  TEXT NOT NULL DEFAULT '',
+						enrolled_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						last_seen     TEXT,
+						revoked       INTEGER NOT NULL DEFAULT 0
+					)`)
+				if err != nil {
+					return err
+				}
+				// El listado de la flota es siempre por proyecto y casi siempre sin los
+				// revocados: ése es el índice que sirve a la consulta real.
+				if _, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_devices_project ON devices(project_id, revoked)`); err != nil {
+					return err
+				}
+				// UN TOKEN IDENTIFICA A UN DISPOSITIVO. Es único y lo impone la BASE, no el
+				// código: dos máquinas compartiendo credencial hacen que la auditoría no pueda
+				// distinguirlas, y una auditoría que no distingue no es auditoría. Parcial
+				// porque un device de Tier B puede no tener credencial propia (se lo alcanza por
+				// SSH/SNMP con las llaves del cerebro) y varios '' colisionarían.
+				if _, err = x.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token ON devices(token_sha256) WHERE token_sha256 <> ''`); err != nil {
+					return err
+				}
+				// El nombre es la clave HUMANA dentro de un proyecto (la que se escribe en el
+				// CLI y en una alerta). Dos «pc-gio» en el mismo proyecto harían ambiguo
+				// cualquier comando dirigido por nombre.
+				_, err = x.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_nombre ON devices(project_id, name)`)
+				return err
+			},
+		},
+		{
+			version: 30,
+			name:    "devices_ultima_muestra",
+			// LA ÚLTIMA MUESTRA DE CADA MÁQUINA (track «Control de flota», S4).
+			//
+			// UNA COLUMNA, NO UNA TABLA DE SERIES. Es la decisión de diseño del slice y conviene
+			// que quede acá: Musubi guarda el PRESENTE de la flota, no su historia. Una tabla de
+			// muestras con 40 máquinas latiendo cada 30 s son 115.000 filas por día que nadie
+			// consulta salvo para graficar — y graficar series es exactamente para lo que existe
+			// Prometheus, que este repo ya despliega en deploy/prometheus/.
+			//
+			// Es la MISMA separación que el proyecto ya eligió una vez: el ledger de uso es la
+			// HISTORIA (sobrevive al reinicio, se consulta con SQL) y el feed en vivo es el
+			// PRESENTE. Son dos cosas distintas y conviene que no se mezclen. Acá igual.
+			//
+			// Se escribe en el MISMO UPDATE que ya estampa last_seen, así que la telemetría no
+			// agrega ni una escritura: el latido ya tocaba la fila.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "last_sample", "last_sample TEXT NOT NULL DEFAULT ''")
+			},
+		},
+		{
+			version: 31,
+			name:    "device_commands_bitacora",
+			// LA BITÁCORA DE EJECUCIÓN REMOTA (track «Control de flota», S5).
+			//
+			// Es la tabla más sensible que tiene este esquema: guarda quién pidió correr qué, en
+			// qué máquina ajena, y cómo salió. Tres decisiones de diseño viven acá:
+			//
+			// 1. LA FILA SE CREA AL ENCOLAR, NO AL TERMINAR. Si el cerebro se cae, si el agente
+			//    nunca responde, si la máquina se apaga a mitad: el PEDIDO queda registrado
+			//    igual. Una auditoría que sólo guarda lo que terminó bien no sirve para lo único
+			//    que se le pide.
+			//
+			// 2. `principal` ES UNA COLUMNA, NO UNA FK. Tiene que sobrevivir a que esa persona
+			//    sea dada de baja del registro de identidades: la pregunta «¿quién corrió esto?»
+			//    se hace justamente después de que alguien se fue.
+			//
+			// 3. LA SALIDA VIVE EN LA MISMA FILA PERO NO TIENE LA MISMA VIDA. stdout puede traer
+			//    secretos —una clave en un log, datos de un cliente— y se poda; el resto de la
+			//    fila (quién, qué, cuándo, exit code) se conserva. Son dos retenciones sobre una
+			//    tabla, y la poda las separa vaciando las columnas de salida sin borrar la fila.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS device_commands (
+						id          TEXT PRIMARY KEY,
+						device_id   TEXT NOT NULL,
+						project_id  TEXT NOT NULL,
+						principal   TEXT NOT NULL DEFAULT '',
+						argv        TEXT NOT NULL,
+						timeout_seg INTEGER NOT NULL,
+						estado      TEXT NOT NULL,
+						creado      TEXT NOT NULL,
+						entregado   TEXT,
+						terminado   TEXT,
+						exit_code   INTEGER,
+						stdout      TEXT NOT NULL DEFAULT '',
+						stderr      TEXT NOT NULL DEFAULT '',
+						error       TEXT NOT NULL DEFAULT ''
+					)`)
+				if err != nil {
+					return err
+				}
+				// La consulta caliente: «dame lo pendiente de ESTA máquina, lo más viejo
+				// primero». Corre en cada latido de cada máquina de la flota.
+				if _, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_cmd_cola ON device_commands(device_id, estado, creado)`); err != nil {
+					return err
+				}
+				// La consulta de la bitácora: por proyecto, lo más reciente primero.
+				_, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_cmd_bitacora ON device_commands(project_id, creado DESC)`)
+				return err
+			},
+		},
+		{
+			version: 32,
+			name:    "screen_sessions_bitacora",
+			// LA BITÁCORA DE SESIONES DE PANTALLA (S6).
+			//
+			// LO QUE ESTA TABLA NO TIENE ES SU RAZÓN DE SER: **no hay columna para la
+			// contraseña**, ni en claro ni hasheada. La contraseña de una sesión se acuña, viaja
+			// dos veces (a la máquina y a quien la pidió) y se descarta.
+			//
+			// Guardarla en claro convertiría esta tabla en un llavero de acceso a toda la flota:
+			// un volcado y se tiene la pantalla de cada máquina. Hashearla no serviría de nada —
+			// quien verifica la contraseña es RustDesk, no Musubi—, así que sería el costo sin el
+			// beneficio.
+			//
+			// Lo que se guarda es que HUBO acceso: quién, a qué máquina, cuándo y hasta cuándo.
+			// Eso es lo que se mira después de un incidente, y no sirve para entrar.
+			//
+			// `vence` se guarda pero el estado NO se recalcula por un barrido: se DERIVA al leer
+			// (SesionPantalla.Vencida). Una columna de estado que alguien tiene que ir a
+			// actualizar miente en cuanto nadie la actualiza.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS screen_sessions (
+						id         TEXT PRIMARY KEY,
+						device_id  TEXT NOT NULL,
+						project_id TEXT NOT NULL,
+						principal  TEXT NOT NULL DEFAULT '',
+						estado     TEXT NOT NULL,
+						creada     TEXT NOT NULL,
+						vence      TEXT NOT NULL,
+						cerrada    TEXT,
+						error      TEXT NOT NULL DEFAULT ''
+					)`)
+				if err != nil {
+					return err
+				}
+				if _, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_sesion_bitacora ON screen_sessions(project_id, creada DESC)`); err != nil {
+					return err
+				}
+				// El ID de RustDesk de cada máquina: lo reporta el agente, y sin él quien mira no
+				// sabe a qué conectarse. Es un identificador público del cliente, no un secreto.
+				return agregarColumnaSiFalta(x, "devices", "rustdesk_id", "rustdesk_id TEXT NOT NULL DEFAULT ''")
+			},
+		},
+		{
+			version: 33,
+			name:    "fleet_policy_state",
+			// EL COOLDOWN DE LAS POLÍTICAS, QUE HASTA ACÁ VIVÍA SÓLO EN MEMORIA (S10b · A24).
+			//
+			// El cooldown es lo único que separa «una política que corrige algo» de «una tormenta
+			// de comandos idénticos»: la métrica no baja hasta que el comando termine, así que sin
+			// espera la política dispara en cada tick. Con el estado en memoria, un reinicio del
+			// cerebro lo rearmaba entero — y el reinicio no es un evento raro justo cuando algo va
+			// mal: es lo primero que alguien hace.
+			//
+			// El caso concreto que cierra: la política vacía un journal, el operador reinicia el
+			// cerebro treinta segundos después para tocar otra cosa, y la política vuelve a
+			// vaciarlo porque la muestra vieja todavía cruza el umbral. Dos acciones donde tenía
+			// que haber una.
+			//
+			// LA CLAVE PRIMARIA ES (política, máquina) Y NO UN ID: el cooldown es por par, y una
+			// tabla que permitiera dos filas para el mismo par tendría que decidir cuál gana. Con
+			// la clave compuesta, el UPSERT es la operación entera.
+			//
+			// No se guarda el RESULTADO del comando —eso es la bitácora, que ya existe y es la
+			// misma para lo automático y lo manual—. Acá sólo vive «cuándo se decidió actuar».
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS fleet_policy_state (
+						policy     TEXT NOT NULL,
+						device_id  TEXT NOT NULL,
+						last_fired TEXT NOT NULL,
+						PRIMARY KEY (policy, device_id)
+					)`)
+				return err
+			},
+		},
+		{
+			version: 34,
+			name:    "shell_sessions_bitacora",
+			// LA BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b).
+			//
+			// Es el registro más sensible del esquema, y por eso conviene decir qué NO tiene:
+			// **no hay columna para el contenido de la sesión**. Ni lo tecleado ni lo impreso.
+			// Eso es GRABACIÓN, y grabar lo que alguien escribe en una terminal es una decisión
+			// legal antes que técnica — la misma que quedó sin dueño para las sesiones de
+			// pantalla (A14). Lo que se guarda es que HUBO acceso: quién, dónde, cuándo, y por
+			// cuánto tiempo.
+			//
+			// `ultimo_trafico` NO es cosmético: alimenta el techo de INACTIVIDAD, que es distinto
+			// del techo de vida. Sin él, una terminal abierta en una pestaña que nadie mira es un
+			// prompt vivo hasta que venza la vida máxima.
+			//
+			// Ni `vence` ni el vencimiento por inactividad se recalculan con un barrido: se
+			// DERIVAN al leer (SesionShell.Vencida). Una columna de estado que alguien tiene que
+			// ir a actualizar miente en cuanto nadie la actualiza.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS shell_sessions (
+						id             TEXT PRIMARY KEY,
+						device_id      TEXT NOT NULL,
+						project_id     TEXT NOT NULL,
+						principal      TEXT NOT NULL DEFAULT '',
+						estado         TEXT NOT NULL,
+						creada         TEXT NOT NULL,
+						vence          TEXT NOT NULL,
+						ultimo_trafico TEXT NOT NULL DEFAULT '',
+						cerrada        TEXT,
+						error          TEXT NOT NULL DEFAULT ''
+					)`)
+				if err != nil {
+					return err
+				}
+				_, err = x.Exec(`CREATE INDEX IF NOT EXISTS idx_shell_bitacora ON shell_sessions(project_id, creada DESC)`)
+				return err
+			},
+		},
+		{
+			version: 35,
+			name:    "rustdesk_id_procedencia",
+			// DE DÓNDE VIENE EL `rustdesk_id` DE UNA MÁQUINA (S6b · A13).
+			//
+			// Ese id lo REPORTA la propia máquina en su latido, así que es entrada no confiable:
+			// una máquina comprometida puede declarar el id de otra y mandar a un operador a la
+			// pantalla equivocada. No le da acceso a nada —la contraseña de sesión se aplicó en la
+			// máquina que mintió— pero desorienta a alguien en el peor momento.
+			//
+			// Estas dos columnas guardan el CAMBIO, que es lo que no se puede derivar leyendo la
+			// fila: cuándo se movió y cuál era el valor anterior. Un id que cambia solo tiene dos
+			// explicaciones —se reinstaló la máquina, o alguien está mintiendo— y las dos ameritan
+			// que quede escrito.
+			//
+			// La COLISIÓN (dos máquinas con el mismo id) NO se guarda: se DERIVA con una consulta,
+			// como el «en línea». Una columna de colisión habría que ir a actualizarla en cada
+			// alta y en cada latido de cualquier máquina, y el día que alguien olvide una ruta la
+			// columna miente justo cuando importa.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "rustdesk_id_previo", "rustdesk_id_previo TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				if err := agregarColumnaSiFalta(x, "devices", "rustdesk_id_cambiado", "rustdesk_id_cambiado TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				// El índice es por el id REPORTADO: la consulta de colisión pregunta «¿quién más
+				// dice ser esto?», y sin índice recorre la tabla entera en cada apertura de
+				// pantalla y en cada listado.
+				_, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_devices_rustdesk ON devices(rustdesk_id) WHERE rustdesk_id <> ''`)
+				return err
+			},
+		},
 	}
 }
 

@@ -1083,6 +1083,185 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_fleet_enroll",
+				Description: "ADMIN. Da de alta una MÁQUINA en el plano de control y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). tier decide qué se le puede pedir: A = agente nativo (metrics, exec, screen) · B = por protocolo SSH/SNMP/MQTT, sin binario en el device (metrics, exec — NO screen: un router no tiene framebuffer) · C = móvil (metrics, screen — NO exec). Conceder una capacidad que el tier no sabe honrar FALLA acá, no cuando alguien la use. El proyecto sale de tu credencial, no de lo que declares (salvo write=any). IMPORTANTE: el token que devuelve sirve ÚNICAMENTE para POST /fleet/heartbeat; NO autentica en /mcp, para que comprometer una máquina de la flota no entregue la memoria del equipo.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name":    {Type: "string", Description: "Nombre del dispositivo (único dentro del proyecto; es la clave humana para dirigirle comandos)"},
+						"tier":    {Type: "string", Description: "A|agente (nativo) · B|protocolo (SSH/SNMP/MQTT/Redfish) · C|movil"},
+						"caps":    {Type: "array", Description: "Capacidades concedidas: metrics, exec, screen. Vacío = ninguna (fail-closed)"},
+						"os":      {Type: "string", Description: "linux | windows | darwin | android | ios"},
+						"arch":    {Type: "string", Description: "amd64 | arm64 | ..."},
+						"address": {Type: "string", Description: "Dirección por la que se lo alcanza (normalmente la IP del tailnet)"},
+						"tags":    {Type: "array", Description: "Etiquetas libres para agrupar (sala, cliente, criticidad)"},
+						"project": {Type: "string", Description: "project_id del dispositivo. Sólo lo respeta un principal write=any; uno acotado enrola en el suyo"},
+					},
+					Required: []string{"name", "tier"},
+				},
+			},
+			handler: s.toolFleetEnroll,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_list",
+				Description: "Lista la FLOTA del proyecto: qué máquinas hay, de qué tier, con qué capacidades y cuáles están en línea. `online` se DERIVA de la última señal de vida con un umbral (default 90 s = 3 latidos), no es un estado guardado: una máquina que muere de golpe no puede dejar un booleano en true. Devuelve también silencio_segundos y nunca_latio. Un principal acotado ve su proyecto; sólo read=all puede pedir el de otro.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project":         {Type: "string", Description: "project_id a listar. Sólo lo respeta un principal read=all"},
+						"include_revoked": {Type: "boolean", Description: "Incluir las máquinas dadas de baja (default false)"},
+						"umbral_segundos": {Type: "number", Description: "Cuánto silencio se tolera antes de dar una máquina por caída (default 90)"},
+					},
+				},
+			},
+			handler:  s.toolFleetList,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_metrics",
+				Description: "Telemetría de la FLOTA: CPU, RAM, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id a consultar. Sólo lo respeta un principal read=all"},
+						"device":  {Type: "string", Description: "Nombre de una máquina concreta. Vacío = todas las que puedas ver"},
+					},
+				},
+			},
+			handler:  s.toolFleetMetrics,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_exec",
+				Description: "Ejecuta un comando en una MÁQUINA de la flota y espera el resultado. Requiere que tu credencial tenga la capacidad `exec` SOBRE ESA MÁQUINA (sección `fleet:` de principals.yaml): ser admin de la memoria NO alcanza. Se pasa un ARGV, no una cadena: [\"systemctl\",\"restart\",\"nginx\"], y si querés una shell la pedís explícita con [\"sh\",\"-c\",\"...\"] — así el comando registrado en la bitácora es exactamente el comando corrido. TODO pedido queda auditado desde ANTES de ejecutarse, con quién lo pidió. El comando vence si el agente no lo levanta en 15 min (no se ejecuta una semana después), tiene timeout obligatorio, y su salida se acota a 64 KiB con marca de truncado. exit_code viaja null mientras no haya terminado: 'todavía no' y 'terminó con 0' son cosas distintas.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":      {Type: "string", Description: "Nombre de la máquina"},
+						"argv":        {Type: "array", Description: "El comando como lista: [\"ls\",\"-la\",\"/tmp\"]. NO una cadena"},
+						"timeout_seg": {Type: "number", Description: "Segundos antes de matar el comando (default 30, máximo 600)"},
+						"project":     {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"no_wait":     {Type: "boolean", Description: "Encolar y volver sin esperar el resultado"},
+					},
+					Required: []string{"device", "argv"},
+				},
+			},
+			handler: s.toolFleetExec,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_shell",
+				Description: "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":   {Type: "string", Description: "Nombre de la máquina"},
+						"project":  {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"filas":    {Type: "number", Description: "Alto de la terminal (default 24). Se fija al abrir y no se redimensiona"},
+						"columnas": {Type: "number", Description: "Ancho de la terminal (default 80)"},
+					},
+					Required: []string{"device"},
+				},
+			},
+			handler: s.toolFleetShell,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_shell_log",
+				Description: "La BITÁCORA de sesiones de shell interactiva: quién tuvo un prompt, en qué máquina, cuándo y por cuánto tiempo. Sólo muestra las máquinas sobre las que tenés `shell`. Registra QUE hubo acceso, nunca QUÉ se tecleó: grabar el contenido de una terminal ajena es una decisión legal que nadie tomó. El estado se DERIVA al leer, así que una sesión que venció aparece como vencida aunque nadie la haya ido a marcar.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"limite":  {Type: "number", Description: "Cuántas sesiones devolver (default 20, máximo 200)"},
+					},
+				},
+			},
+			handler: s.toolFleetShellLog,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_log",
+				Description: "La BITÁCORA de ejecución remota: quién ejecutó qué, en qué máquina, cuándo y cómo salió. Sólo muestra los comandos de máquinas sobre las que tenés `exec` — saber qué se corrió en un servidor es casi tan revelador como poder correrlo. La bitácora es PERMANENTE; la salida (stdout/stderr) caduca y se poda, porque puede traer secretos. Informa cuántas entradas quedaron ocultas por permiso.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"limite":  {Type: "number", Description: "Cuántas entradas devolver (default 20, máximo 200)"},
+					},
+				},
+			},
+			handler:  s.toolFleetLog,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_screen",
+				Description: "Abre una SESIÓN DE PANTALLA sobre una máquina (RustDesk self-hosted) y devuelve la contraseña UNA SOLA VEZ. Requiere la capacidad `screen` sobre ESA máquina — que es un permiso distinto de `exec`: mirar y tocar no son lo mismo. La contraseña se acuña por sesión, dura poco (default 30 min, máximo 4 h) y MUSUBI NO LA GUARDA en ningún lado, ni en claro ni hasheada: se genera, viaja a la máquina y a vos, y se descarta. El vencimiento lo aplica el AGENTE, así que la sesión se cierra aunque el cerebro se caiga. Un dispositivo de Tier B (por protocolo) nunca tiene pantalla. IMPORTANTE: el consentimiento del usuario sentado frente a la máquina lo aplica RustDesk con su propia configuración, no Musubi.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":  {Type: "string", Description: "Nombre de la máquina"},
+						"minutos": {Type: "number", Description: "Cuánto vale la sesión (default 30, máximo 240)"},
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+					},
+					Required: []string{"device"},
+				},
+			},
+			handler: s.toolFleetScreen,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_sessions",
+				Description: "La bitácora de SESIONES DE PANTALLA: quién pidió mirar qué máquina, cuándo y hasta cuándo. Nunca la contraseña — no existe guardada. Sólo muestra las máquinas sobre las que tenés `screen`. El estado `vencida` se DERIVA del reloj, no es una columna que alguien tenga que ir a actualizar.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"limite":  {Type: "number", Description: "Cuántas devolver (default 20, máximo 200)"},
+					},
+				},
+			},
+			handler:  s.toolFleetSessions,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_probe",
+				Description: "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"device":  {Type: "string", Description: "Sondear una sola máquina"},
+					},
+				},
+			},
+			handler: s.toolFleetProbe,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_revoke",
+				Description: "ADMIN. KILL-SWITCH de una máquina: su token deja de autenticar en el acto y su fila QUEDA para la auditoría (no se borra: perder a quién pertenecía la telemetría es justo lo que no querés después de un incidente). Requiere principal admin.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"name":    {Type: "string", Description: "Nombre del dispositivo a dar de baja"},
+						"project": {Type: "string", Description: "project_id del dispositivo. Sólo lo respeta un principal write=any"},
+					},
+					Required: []string{"name"},
+				},
+			},
+			handler: s.toolFleetRevoke,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_token_revoke",
 				Description: "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
 				InputSchema: InputSchema{

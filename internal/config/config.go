@@ -880,6 +880,96 @@ type Config struct {
 	// UsageLedger es la historia persistente de invocaciones de tools (F0 · «Potencia medida»).
 	// Nace encendido; ver el comentario del tipo para el porqué.
 	UsageLedger UsageLedgerConfig `yaml:"usage_ledger,omitempty"`
+	// Fleet es el LATIDO PROPIO del track «Control de flota» (S10): sondeo automático de las
+	// máquinas sin agente, caducidad de las salidas de comandos y políticas de auto-heal.
+	//
+	// OJO CON EL NOMBRE: hay otro `fleet:` en este archivo, dentro de `cognition:`, y es una cosa
+	// completamente distinta (la flota ordenada de MOTORES LLM, ver CognitionConfig.Fleet). Éste
+	// es la flota de MÁQUINAS. Se conservan los dos nombres porque cada uno es el correcto en su
+	// contexto y renombrar el otro rompería configuraciones desplegadas.
+	Fleet FleetConfig `yaml:"fleet,omitempty"`
+}
+
+// FleetConfig configura el latido de fondo de la flota de máquinas (S10).
+//
+// Todo acá nace en un default sensato salvo las políticas, que nacen APAGADAS (I15): sondear y
+// podar son mantenimiento, pero ejecutar comandos sin una persona detrás es una decisión que
+// alguien tiene que tomar a mano.
+type FleetConfig struct {
+	// ProbeMinutes es cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por
+	// SSH, Tier C por ADB). 0 ⇒ default (5 min). NEGATIVO ⇒ desactivado.
+	//
+	// Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de
+	// esas máquinas (3 × intervalo, ver umbralEnLineaPara). Son la misma cosa mirada dos veces —
+	// un dispositivo que se visita cada 5 min no puede tener datos más frescos que 5 min, y dar
+	// por caído a quien todavía no tocaba visitar es la falla que este slice vino a corregir.
+	ProbeMinutes float64 `yaml:"probe_minutes,omitempty"`
+	// CommandOutputRetentionDays es cuántos días se conserva el CONTENIDO de stdout/stderr de los
+	// comandos. 0 ⇒ default (30). NEGATIVO ⇒ no caducan nunca.
+	//
+	// NO borra la fila: qué se ejecutó, quién y cuándo es PERMANENTE. Lo que caduca es la salida,
+	// que es donde aparecen rutas, hostnames y de vez en cuando algo que no debería estar ahí.
+	CommandOutputRetentionDays int `yaml:"command_output_retention_days,omitempty"`
+	// Policies son las reglas de auto-heal. Vacío ⇒ ninguna, que es el default.
+	Policies []PolicyConfig `yaml:"policies,omitempty"`
+}
+
+// PolicyConfig es una política de auto-heal tal como se escribe en el YAML.
+//
+//	fleet:
+//	  policies:
+//	    - name: vaciar-journal
+//	      principal: auto-heal          # con la autoridad de QUIÉN actúa (obligatorio)
+//	      when: disco_libre_pct         # qué mira
+//	      threshold: 10                 # el número
+//	      devices: ["nas-casa"]         # sobre qué máquinas ("*" para todas)
+//	      run: ["journalctl", "--vacuum-size=200M"]
+//	      cooldown_minutes: 60
+//
+// EL SENTIDO DE LA COMPARACIÓN LO DA LA CONDICIÓN, no una perilla aparte: `disco_libre_pct`
+// dispara al BAJAR de `threshold` (es lo que queda), y todas las demás al SUPERARLO. Un
+// `direction: below` habría sido una segunda fuente de verdad para lo mismo, y de esas discrepa
+// una tarde cualquiera. El log y los errores imprimen el sentido explícito para que no haya duda.
+type PolicyConfig struct {
+	Name      string `yaml:"name"`
+	Principal string `yaml:"principal"`
+	// When: disco_pct | disco_libre_pct | mem_pct | cpu_pct | carga_por_core | temp_c.
+	// Una condición desconocida es un ERROR DE ARRANQUE, nunca una política que silenciosamente
+	// no evalúa: el mismo criterio que `fleet:` en principals.yaml.
+	When      string   `yaml:"when"`
+	Threshold float64  `yaml:"threshold"`
+	Devices   []string `yaml:"devices"`
+	Run       []string `yaml:"run"`
+	// CooldownMinutes es cuánto espera antes de volver a actuar sobre la MISMA máquina. 0 ⇒
+	// default (30 min). Un cooldown corto no es «más reactivo»: la métrica no baja hasta que el
+	// comando termine, así que sin espera la política dispara en cada tick.
+	CooldownMinutes float64 `yaml:"cooldown_minutes,omitempty"`
+}
+
+// EffectiveProbeInterval traduce ProbeMinutes a una duración. Devuelve 0 si está desactivado.
+//
+// Va acá y no en el server para que el default viva en UN lugar: el intervalo lo consultan el
+// scheduler (para sondear) y el umbral de «en línea» (para juzgar), y si cada uno tuviera su
+// propio default, apagar el sondeo dejaría el umbral hablando de un intervalo inexistente.
+func (f FleetConfig) EffectiveProbeInterval() time.Duration {
+	if f.ProbeMinutes < 0 {
+		return 0
+	}
+	if f.ProbeMinutes == 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(f.ProbeMinutes * float64(time.Minute))
+}
+
+// EffectiveOutputRetentionDays devuelve los días de retención de las salidas. 0 ⇒ sin poda.
+func (f FleetConfig) EffectiveOutputRetentionDays() int {
+	if f.CommandOutputRetentionDays < 0 {
+		return 0
+	}
+	if f.CommandOutputRetentionDays == 0 {
+		return 30
+	}
+	return f.CommandOutputRetentionDays
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).

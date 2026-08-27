@@ -14,7 +14,12 @@ package memory
 // Las firmas reflejan las de *DbEngine tal cual (incluido qué métodos toman context):
 // esto es un seam, no una reescritura — no cambia ningún comportamiento.
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"musubi/internal/fleet"
+)
 
 // ObservationStore — persistencia y búsqueda de observaciones (prosa + embeddings).
 type ObservationStore interface {
@@ -357,6 +362,84 @@ type OutboxStore interface {
 
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo
 // debe satisfacer. Embebe io.Closer-equivalente vía Close.
+// DeviceStore — el REGISTRO DE LA FLOTA (track «Control de flota»): dispositivos controlados,
+// su credencial y su última señal de vida. Ver internal/memory/devices.go y el dominio en
+// internal/fleet.
+//
+// Es un rol aparte y no métodos sueltos en otra interfaz porque la flota es un eje distinto de la
+// memoria: un consumidor que sólo administra máquinas (el plano de control) no tiene por qué
+// depender de saber recuperar observaciones, y al revés. Es la misma disciplina de "interfaces
+// chicas, compuestas" del resto de este archivo.
+type DeviceStore interface {
+	// AltaDevice registra un dispositivo. El id lo asigna el motor, NO el cliente; `token` es la
+	// credencial cruda y sólo se guarda su SHA-256.
+	AltaDevice(d fleet.Device, token string) (fleet.Device, error)
+	// DevicePorToken resuelve la identidad de un dispositivo desde su credencial. Es el camino
+	// que hace que un device no pueda afirmar ser otro.
+	DevicePorToken(token string) (fleet.Device, bool, error)
+	DevicePorNombre(projectID, name string) (fleet.Device, bool, error)
+	// ListarDevices devuelve la flota de UN proyecto (aislamiento por tenant).
+	ListarDevices(projectID string, incluirRevocados bool) ([]fleet.Device, error)
+	// LatirDevice estampa la última señal de vida. Devuelve si actualizó; que NO actualice no es
+	// un error (un agente revocado que todavía no se enteró es lo normal).
+	LatirDevice(id string, ahora time.Time, muestra string) (bool, error)
+	// ActualizarAutoreporte guarda la versión del agente y la dirección que la propia máquina
+	// reporta. Es la única escritura que un device hace sobre el registro, y sólo sobre su fila.
+	ActualizarAutoreporte(id, version, direccion string) error
+	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
+	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
+	ProyectosConDevices(tope int) ([]string, error)
+	// ── Ejecución remota (S5) ──
+	// EncolarComando registra el pedido y lo deja pendiente. La fila se crea AL ENCOLAR: si nada
+	// más sale bien, el pedido queda auditado igual.
+	EncolarComando(c fleet.Comando) (fleet.Comando, error)
+	// TomarComandos entrega a una máquina lo que le toca y lo marca entregado, en UNA
+	// transacción (dos latidos concurrentes no pueden llevarse el mismo comando).
+	TomarComandos(deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error)
+	// GuardarResultado registra cómo salió. `deviceID` es la GUARDA: el comando tiene que ser de
+	// esa máquina, o se rechaza.
+	GuardarResultado(deviceID, comandoID string, exit *int, stdout, stderr, errCanal string, ahora time.Time) error
+	ComandoPorID(id string) (fleet.Comando, bool, error)
+	BitacoraDeComandos(projectID, deviceID string, tope int) ([]fleet.Comando, error)
+	// PodarSalidasDeComandos vacía stdout/stderr viejos SIN borrar la fila: la bitácora es
+	// permanente, la salida caduca.
+	PodarSalidasDeComandos(dias int, ahora time.Time) (int64, error)
+
+	// El cooldown de las políticas de flota, que tiene que sobrevivir a un reinicio del cerebro
+	// (S10b · A24): sin esto, reiniciar rearmaba todos los cooldowns, y reiniciar es lo primero
+	// que alguien hace justo cuando algo va mal.
+	CooldownsDePoliticas() (map[string]map[string]time.Time, error)
+	MarcarDisparoDePolitica(politica, deviceID string, cuando time.Time) error
+	PodarEstadoDePoliticas(vivas []string) (int64, error)
+
+	// La BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b). Ninguna de estas firmas tiene por dónde
+	// pasar el CONTENIDO de una sesión: lo que se guarda es que hubo acceso, no qué se tecleó.
+	AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, error)
+	SesionShellPorID(id string) (fleet.SesionShell, bool, error)
+	TocarSesionShell(id string, ahora time.Time) error
+	CerrarSesionShell(id string, estado fleet.EstadoShell, motivo string, ahora time.Time) error
+	SesionShellAbiertaDe(principal, deviceID string, ahora time.Time) (fleet.SesionShell, bool, error)
+	BitacoraDeShell(projectID, deviceID string, tope int) ([]fleet.SesionShell, error)
+	CerrarSesionesShellVencidas(ahora time.Time) (int64, error)
+	// DevicePorID lo necesita el relay: una vez abierta la sesión, lo único que se guarda de la
+	// máquina es su id, y la concesión se re-evalúa contra el device en CADA request.
+	DevicePorID(id string) (fleet.Device, bool, error)
+	// ── Pantalla (S6) ──
+	// Ninguna de estas firmas recibe ni devuelve una contraseña: la garantía G1 se sostiene por
+	// construcción, no por disciplina.
+	AbrirSesionPantalla(s fleet.SesionPantalla) (fleet.SesionPantalla, error)
+	MarcarSesion(deviceID, sesionID string, estado fleet.EstadoSesion, errMsg string, ahora time.Time) error
+	SesionesDePantalla(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionPantalla, error)
+	GuardarRustdeskID(deviceID, rid string) error
+	// QuienMasDiceSer deriva la COLISIÓN de rustdesk_id: qué otras máquinas reportan el mismo id.
+	// Devuelve los nombres del alcance de quien pregunta y un conteo de las de afuera — alcanza
+	// para decir «este id es ambiguo» sin nombrar la máquina de otro tenant.
+	QuienMasDiceSer(deviceID, rid, projectID string) ([]string, int, error)
+	// RevocarDevice es el kill-switch: deja de autenticar en el acto y la fila queda para la
+	// auditoría.
+	RevocarDevice(projectID, name string) (bool, error)
+}
+
 type StorageBackend interface {
 	ObservationStore
 	RecallEngine
@@ -378,6 +461,7 @@ type StorageBackend interface {
 	Calibrator
 	Insighter
 	OutboxStore
+	DeviceStore
 
 	// Close libera los recursos del backend (espera trabajo en background y cierra
 	// la conexión subyacente).
