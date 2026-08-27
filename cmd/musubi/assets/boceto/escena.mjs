@@ -451,7 +451,7 @@ precision highp float;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
 varying vec2 vRac;
 uniform float uSinA; uniform float uSinB;
-uniform float uT; uniform float uVivoR; uniform float uVivoT0;
+uniform float uT; uniform float uVivoR; uniform float uVivoT0; uniform float uVivoEsc;
 void main(){
   if (vNace > uReloj) discard;
   // Se desvanece en los DOS extremos: un arco de brillo parejo choca contra el botón y se ve como
@@ -477,7 +477,9 @@ void main(){
       float eco = e < 1.2 ? 1.0 : exp(-(e - 1.2) * 1.6);
       float y = mix(1.0 - vY, vY, mioA);
       float frente = max(0.0, 1.0 - abs(y - clamp(e / 1.2, 0.0, 1.0)) / 0.18);
-      vivo = eco * (1.6 * frente + 0.35);
+      /* uVivoEsc reparte el presupuesto: la luz extra TOTAL del eco no depende de cuántas
+         relaciones tenga el actor. La acumulación aditiva hace el brillo del bulto. */
+      vivo = eco * (1.6 * frente + 0.35) * uVivoEsc;
     }
   }
   float a = (uSinA + uSinB * vConf + 0.80 * vSel) * extremo + vivo * 0.55 * (0.25 + 0.75 * extremo);
@@ -756,7 +758,14 @@ export function montar(cfg) {
   // EL ECO DE CONEXIONES (ver SIN_F): el estado vivo va en UNIFORMS — la lección del hover que
   // resubía 670 KB por cuadro — y el índice de actor es estable: el orden de los hijos de la
   // raíz, el mismo que usa la leyenda. -1 = «nadie»: en reposo el eco no existe.
-  const uVivo = { uVivoR: { value: -1 }, uVivoT0: { value: -1 } };
+  // uVivoEsc es EL PRESUPUESTO DEL ECO: la luz extra total es constante, así que la escala por
+  // línea baja con cuántas relaciones tiene el actor (REL_RACIMO, contadas al construir). Sin
+  // esto, un alfa fijo por línea × miles de relaciones apiladas en el corredor central en
+  // blending aditivo = la banda nuclear blanca que el usuario reportó. Es la MISMA lección de
+  // TINTA_SINAPSIS, pagada dos veces para que quede escrita acá.
+  const uVivo = { uVivoR: { value: -1 }, uVivoT0: { value: -1 }, uVivoEsc: { value: 1 } };
+  const ECO_REF = 40;
+  let REL_RACIMO = null;
   const IDX_RACIMO = new Map();
   for (const h of S[0].hijos) {
     const rr = S[h].racimo;
@@ -1157,12 +1166,14 @@ export function montar(cfg) {
         // LA PRESENCIA DE LAS RELACIONES ES POR FORMA, no una constante: en «la corona» lo único
         // que cruza el medio del cuadro son ellas, y con el alfa del núcleo ahí no se vería nada.
         uniforms: { uReloj, uT: uPulso.uT, uVivoR: uVivo.uVivoR, uVivoT0: uVivo.uVivoT0,
+                    uVivoEsc: uVivo.uVivoEsc,
                     uSinA: { value: cfg.alfaSinapsis != null ? cfg.alfaSinapsis : 0.075 },
                     uSinB: { value: cfg.alfaConfianza != null ? cfg.alfaConfianza : 0.22 } },
         blending: THREE.AdditiveBlending, depthWrite: false }), nSeg);
     sinInst.frustumCulled = false; sinInst.renderOrder = 1; mundo.add(sinInst);
     const _u = new THREE.Vector3();
     let iS = 0;
+    REL_RACIMO = new Float32Array(Math.max(1, IDX_RACIMO.size));
     SIN.forEach((y, i) => {
       const R = rutas[i];
       _c.set(RELCOL[y.rel] || NEUTRO);
@@ -1172,6 +1183,8 @@ export function montar(cfg) {
       const racDe = (sec) => { const ix = sec != null && S[sec] ? IDX_RACIMO.get(S[sec].racimo) : undefined;
                                return ix != null ? ix : -1; };
       const racA = racDe(par[0]), racB = racDe(par[1]);
+      if (racA >= 0) REL_RACIMO[racA]++;
+      if (racB >= 0 && racB !== racA) REL_RACIMO[racB]++;
       // EL RADIO SE CALCULA ACÁ, en el bucle, y no se guarda en el objeto de la relación. Es la
       // lección de las 586 sinapsis que desaparecieron: un NaN en la matriz de una instancia la
       // borra sin error ni warning, y se ve idéntico a «decidimos no dibujar relaciones».
@@ -1618,6 +1631,8 @@ export function montar(cfg) {
     const rc = IDX_RACIMO.get(S[i] && S[i].racimo);
     uVivo.uVivoR.value = rc != null ? rc : -1;
     uVivo.uVivoT0.value = rc != null ? performance.now() * 0.001 : -1;
+    const nRel = rc != null && REL_RACIMO ? REL_RACIMO[rc] : 0;
+    uVivo.uVivoEsc.value = nRel > ECO_REF ? ECO_REF / nRel : 1;
   }
 
   /** verTodo: saca el aislamiento y vuelve al encuadre completo. Es el boton que pidio el usuario
