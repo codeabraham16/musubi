@@ -297,16 +297,12 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	content := s.redactIfForced(args.Content)
 	topicKey := s.redactIfForced(args.TopicKey)
 
-	var emb []float32
-	if embedding.Enabled(s.embedder) {
-		embCtx, embCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer embCancel()
-		vec, err := s.embedder.Embed(embCtx, content)
-		if err != nil {
-			return nil, rpcErrorf(codeInternalError, "error al generar embedding: %v", err)
-		}
-		emb = vec
-	}
+	// EL EMBED NO PUEDE MATAR EL SAVE. Antes un fallo acá era fatal y la observación se PERDÍA
+	// ENTERA — medido en el central: Ollama colgado 30 s = tres capturas del usuario muertas en
+	// 10 minutos. La regla del repo es «embeddings opcionales con fallback»: se guarda sin vector
+	// y AutoEmbedBackfill la embebe cuando el embedder vuelve. Mismo camino best-effort que la
+	// captura automática usa desde siempre (embedIfEnabled).
+	emb := s.embedIfEnabled(content)
 
 	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
 	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
@@ -2128,16 +2124,23 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 }
 
 // embedIfEnabled genera el vector de text con el embedder activo, o nil si la semántica está
-// apagada o el embedding falla. Best-effort: la captura automática (C4) no debe romperse por un
-// embed. El engine estampa la procedencia (F2.2) que fijó el entrypoint, homogénea con el recall.
+// apagada o el embedding falla. Best-effort: NINGUNA escritura debe romperse por un embed — lo
+// usan la captura automática (C4), distill, ingest y save_observation. El engine estampa la
+// procedencia (F2.2) que fijó el entrypoint, homogénea con el recall.
+//
+// El techo es 8 s y no 30: un embed sano tarda milisegundos, y cuando Ollama se cuelga (medido:
+// colgado total, no cola — /health respondía en 34 ms entre medio) los 30 s solo hacían esperar
+// al caller para perder igual. Lo que no se embebe acá lo levanta AutoEmbedBackfill después; el
+// costo real de un techo corto es un vector que llega tarde, no una observación perdida.
 func (s *McpServer) embedIfEnabled(text string) []float32 {
 	if !embedding.Enabled(s.embedder) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	v, err := s.embedder.Embed(ctx, text)
 	if err != nil {
+		logx.Error("embed en escritura falló, se guarda sin vector (el backfill lo completa)", "error", err)
 		return nil
 	}
 	return v

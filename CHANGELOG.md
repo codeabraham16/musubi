@@ -7,6 +7,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Un fallo del embedder ya no pierde la observación.** `musubi_save_observation` era «embed o
+  muerte»: si Ollama no respondía en 30 s, el central devolvía error y la captura se perdía ENTERA
+  — medido en producción: tres saves muertos en 10 minutos con `ms=30047` clavados. Ahora el save
+  degrada por el mismo camino best-effort que la captura automática usó siempre (`embedIfEnabled`):
+  se guarda sin vector, se loguea, y `AutoEmbedBackfill` lo embebe cuando el embedder vuelve. El
+  techo del embed en escrituras baja de 30 s a 8 s: un embed sano tarda milisegundos, y esperar 30
+  a un colgado sólo demoraba al caller para perder igual. Test nacido rojo contra el código fatal:
+  guardar con embedder caído → encontrarla por keyword → el backfill la embebe.
+
 ### Added
 - **Las hermanas dejan de nacer del mismo punto: `bifurcar()`.** Medir el enredo destapó que
   **183 de los 191 cruces entre haces no emparentados —el 96 %— eran entre HERMANAS**, y son
