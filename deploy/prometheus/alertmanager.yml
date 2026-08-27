@@ -96,7 +96,14 @@ receivers:
   - name: 'default'
     telegram_configs:
       - bot_token_file: /etc/musubi/telegram_bot_token   # chmod 600, root:root
-        chat_id: 0                                       # ⚠ REEMPLAZAR por tu chat_id numérico
+        # SIN chat_id VÁLIDO, ALERTMANAGER SE NIEGA A ARRANCAR (`missing chat_id on telegram_config`).
+        # Es el comportamiento correcto y conviene no "arreglarlo": un canal a medio configurar que
+        # arranca y se traga las alertas es peor que uno que no arranca y lo grita en el log.
+        # Lo sacás con /start a tu bot y luego getUpdates, o con @userinfobot.
+        # `preparar.sh` sustituye este 0 por el contenido de secretos/telegram_chat_id.
+        # NO va escrito acá: Alertmanager no soporta `chat_id_file`, así que el único modo de que
+        # un identificador personal no termine versionado en el repo es sustituirlo al instalar.
+        chat_id: 0
         parse_mode: ''
         # El mensaje dice QUÉ, DÓNDE y A DÓNDE IR. Un aviso sin el runbook obliga a buscarlo en
         # el peor momento posible.

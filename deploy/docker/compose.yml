@@ -36,11 +36,41 @@
 #   ssh -N -L 9099:127.0.0.1:9099 -L 9093:127.0.0.1:9093 usuario@musubi-server
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
+# ROOTLESS POR DEFECTO, Y POR QUÉ IMPORTA
+#
+# `MUSUBI_PROM_DIR` sale del `.env` que escribe `preparar.sh`. Sin root apunta a
+# `$HOME/musubi-prometheus`; con root, a `/etc/musubi-prometheus`. UN solo compose para las dos
+# variantes: dos archivos casi iguales se separan en la primera corrección que alguien aplica a
+# uno solo.
+#
+# La variante rootless no es una comodidad: en un host con SELinux en Enforcing evita de raíz el
+# mapeo de UIDs y los permisos de `/etc`, y no pide contraseña en ningún paso. Es además el patrón
+# que ya funciona en `musubi-server` (todo el stack de Supabase corre así).
+#
+# `:z` en cada montaje pide a Podman que reetiquete el archivo a `container_file_t`. Sin eso, con
+# SELinux en Enforcing, el contenedor no puede leer su propia configuración — y el error no
+# menciona SELinux por ningún lado. Sólo toca archivos que crea `preparar.sh`.
+#
+# `user: "0:0"` NO ES UN PRIVILEGIO ACÁ, Y SIN ÉL NO ARRANCA.
+#
+# Las dos imágenes corren como `nobody` (65534) por defecto. En Podman ROOTLESS ese UID cae en el
+# espacio de *subuid* —o sea, NO es tu usuario— y entonces no puede leer un `musubi.token` en
+# modo 0400 que te pertenece. El síntoma es desconcertante y no menciona permisos:
+#
+#     unable to read authorization credentials file
+#
+# Con `0:0`, el root del contenedor SE MAPEA a tu usuario del host: lee sus archivos y no gana
+# ningún privilegio real (sigue siendo un proceso tuyo, sin root en la máquina). Bajarle los
+# permisos al token en vez de esto sería cambiar un problema de mapeo por uno de secretos.
+#
+# En la variante con root, `0:0` es root de verdad — pero ahí los archivos también son de root y
+# la lectura funciona por el mismo motivo.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
 # ARRANQUE
 #
-#   cd deploy/docker && docker compose up -d
-#
-# Antes hacen falta tres archivos en el host — los prepara `preparar.sh`, al lado de este archivo.
+#   ./preparar.sh                 # sin sudo si vas rootless
+#   podman compose up -d          # o docker compose up -d
 
 services:
   prometheus:
@@ -48,7 +78,7 @@ services:
     container_name: musubi-prometheus
     restart: unless-stopped
     network_mode: host
-    user: "65534:65534"        # nobody: no necesita root para leer config y escribir su TSDB
+    user: "0:0"
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -58,9 +88,9 @@ services:
       # Necesario para `curl -X POST /-/reload` (el RUNBOOK lo usa al cambiar reglas).
       - --web.enable-lifecycle
     volumes:
-      - /etc/musubi-prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - /etc/musubi-prometheus/rules:/etc/prometheus/rules:ro
-      - /etc/musubi-prometheus/musubi.token:/etc/prometheus/musubi.token:ro
+      - ${MUSUBI_PROM_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - ${MUSUBI_PROM_DIR}/rules:/etc/prometheus/rules:ro,z
+      - ${MUSUBI_PROM_DIR}/musubi.token:/etc/prometheus/musubi.token:ro,z
       - prometheus-data:/prometheus
 
   alertmanager:
@@ -68,16 +98,16 @@ services:
     container_name: musubi-alertmanager
     restart: unless-stopped
     network_mode: host
-    user: "65534:65534"
+    user: "0:0"
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --web.listen-address=127.0.0.1:9093
     volumes:
-      - /etc/musubi-prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${MUSUBI_PROM_DIR}/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro,z
       # Los secretos del canal y la URL del watchdog entran POR ARCHIVO, nunca por el yaml:
       # así rotarlos no toca la configuración ni pide reconstruir nada.
-      - /etc/musubi:/etc/musubi:ro
+      - ${MUSUBI_PROM_DIR}/secretos:/etc/musubi:ro,z
       - alertmanager-data:/alertmanager
 
 volumes:
