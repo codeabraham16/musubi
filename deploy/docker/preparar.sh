@@ -54,6 +54,28 @@ install -m 0644 "$REPO/deploy/musubi-alerts.yml"           "$DEST/rules/musubi-a
 # cerebro sin el plano de flota DISPARA de inmediato y para siempre. Una alarma falsa desde el
 # día uno es lo que enseña a ignorar las alarmas — y entonces la próxima, la de verdad, tampoco
 # se mira. Se le pregunta al cerebro en vez de suponer.
+# LA ALERTA DEL BACKUP OFF-HOST SÓLO SE INSTALA SI HAY DESTINO OFF-HOST.
+#
+# `musubi-backup` admite un modo local-only DECLARADO (BACKUP_ALLOW_LOCAL_ONLY=1). Contra esa
+# configuración `musubi_backup_offhost_age_seconds` vale -1 para siempre, así que la regla
+# dispararía todos los días sin que haya NADA que arreglar. Una alarma que no se apaga arreglando
+# algo no es una alarma: es ruido que enseña a ignorar el canal, y se lleva puestas a las demás.
+BACKUP_ENV="${BACKUP_ENV:-/etc/musubi/musubi.env}"
+# El `|| true` NO es decorativo: con `set -e`, un grep que no encuentra nada sale con 1 y aborta
+# el script en la asignación. Y "no encontrar nada" es justamente el caso normal acá.
+DESTINO_OFFHOST="$(grep -hoP "^BACKUP_REMOTE=\K.*" "$BACKUP_ENV" 2>/dev/null | tr -d "\"' " | tail -1 || true)"
+if [ -n "$DESTINO_OFFHOST" ]; then
+	install -m 0644 "$REPO/deploy/musubi-alerts-backup-offhost.yml" "$DEST/rules/musubi-alerts-backup-offhost.yml"
+	echo "→ alerta de backup off-host: INSTALADA (destino: $DESTINO_OFFHOST)"
+else
+	rm -f "$DEST/rules/musubi-alerts-backup-offhost.yml"
+	install -m 0644 "$REPO/deploy/musubi-alerts-backup-offhost.yml" "$DEST/musubi-alerts-backup-offhost.yml.cuando-haya-destino"
+	echo "→ alerta de backup off-host: NO instalada — no hay BACKUP_REMOTE en $BACKUP_ENV."
+	echo "  MODO LOCAL-ONLY: el snapshot queda en el MISMO disco que la base. Protege contra"
+	echo "  borrado accidental y corrupción; NO contra perder el host. Es una decisión válida"
+	echo "  mientras sea DECLARADA — pero que quede escrito qué cubre y qué no."
+fi
+
 BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:7717}"
 if [ -s "$DEST/musubi.token" ] &&
    curl -fsS -m 10 -H "Authorization: Bearer $(cat "$DEST/musubi.token")" "$BRAIN_URL/metrics" 2>/dev/null | grep -q "^musubi_fleet_"; then
@@ -94,6 +116,20 @@ chmod 0400 "$TOKEN_FILE"
 
 SHA="$(sha256sum "$TOKEN_FILE" >/dev/null 2>&1 && printf '%s' "$(cat "$TOKEN_FILE")" | sha256sum | cut -d' ' -f1)"
 
+# ETIQUETA DE SELINUX SOBRE TODO LO QUE ACABAMOS DE ESCRIBIR.
+#
+# `:z` en el compose reetiqueta los volúmenes AL ARRANCAR EL CONTENEDOR. Cualquier archivo que
+# se escriba DESPUÉS —o sea, cada vez que se re-corre este script con los contenedores ya
+# arriba— nace con el contexto del home (`user_home_t`) y el contenedor deja de poder leerlo.
+#
+# Y falla en silencio: Prometheus informa el reload como EXITOSO y se queda con CERO reglas
+# cargadas. Un sistema de alertas que se apaga sin decirlo es peor que uno que nunca se montó,
+# porque el silencio se lee como calma. Por eso también está la verificación del final.
+if command -v chcon >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null || echo Disabled)" != "Disabled" ]; then
+	chcon -R -t container_file_t "$DEST" 2>/dev/null && echo "→ SELinux: etiquetado container_file_t" \
+		|| echo "→ SELinux: no se pudo etiquetar $DEST (revisá si el contenedor puede leer su config)"
+fi
+
 # El compose lee MUSUBI_PROM_DIR de este .env. Es lo que permite que UN solo compose sirva para
 # la variante rootless y la de root, en vez de dos archivos casi iguales que se separan en la
 # primera corrección que alguien aplica a uno solo.
@@ -131,3 +167,25 @@ fi
 echo "═══════════════════════════════════════════════════════════════════════════════════"
 echo
 echo "Después:  cd $AQUI && podman compose up -d   (o docker compose up -d)"
+
+# VERIFICACIÓN FINAL: qué cargó Prometheus DE VERDAD.
+#
+# No alcanza con que el reload diga OK. Un archivo de reglas ilegible da reload exitoso y cero
+# reglas — el fallo que este bloque existe para atrapar. Se pregunta por el resultado, no por el
+# intento; es la misma disciplina que el resto del proyecto.
+PROM_URL="${PROM_URL:-http://127.0.0.1:9099}"
+if curl -fsS -m 5 "$PROM_URL/-/ready" >/dev/null 2>&1; then
+	curl -fsS -m 5 -XPOST "$PROM_URL/-/reload" >/dev/null 2>&1 || true
+	sleep 2
+	N="$(curl -fsS -m 5 "$PROM_URL/api/v1/rules" 2>/dev/null | grep -o "\"name\":" | wc -l || echo 0)"
+	if [ "$N" -eq 0 ]; then
+		echo
+		echo "⚠  PROMETHEUS ESTÁ CORRIENDO Y NO CARGÓ NINGUNA REGLA."
+		echo "   Casi siempre es la etiqueta de SELinux de los archivos recién escritos."
+		echo "   Comprobalo:  podman exec musubi-prometheus cat /etc/prometheus/rules/musubi-alerts.yml"
+		echo "   Si da 'Permission denied', reiniciá el contenedor para que :z reetiquete:"
+		echo "     cd $AQUI && podman compose restart prometheus"
+	else
+		echo "→ Prometheus tiene reglas cargadas ($N grupos/reglas visibles)."
+	fi
+fi
