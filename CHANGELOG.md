@@ -7,6 +7,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Flota en vivo: el panel del central muestra a las terminales trabajando.** La señal ya
+  existía (el live feed publica cada invocación al terminar — tool, outcome, ms; jamás contenido,
+  invariante L1) pero moría en cada máquina. Ahora el daemon local con sync configurado la empuja
+  al central (`RunFlotaVivo` → `POST /api/flota`) con el mismo token del sync, filtrando SOLO
+  trabajo (el sondeo — 99,92 % del tráfico — no cruza la red). El central re-sella identidad,
+  clase y forma server-side y publica con `origen: "flota"`: el censo del panel mapea el
+  principal a su actor y la rama pulsa. Opt-in = la frontera del sync (`flota_vivo: false` lo
+  apaga); best-effort estilo hooks (si el central no está, descarta y sigue); nada persiste.
+  SDD en `specs/flota-en-vivo/` con invariantes I1–I5, cada uno visto ROJO bajo su sabotaje.
+
 ### Fixed
 - **Un fallo del embedder ya no pierde la observación.** `musubi_save_observation` era «embed o
   muerte»: si Ollama no respondía en 30 s, el central devolvía error y la captura se perdía ENTERA
