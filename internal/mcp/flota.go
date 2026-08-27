@@ -139,7 +139,19 @@ func esDeFlota(ev LiveEvent) bool {
 // error — el caller descarta, acá no hay reintentos ni dead-letter a propósito (ver flota.go
 // cabecera: telemetría, no memoria).
 func (c *SyncClient) PushFlota(ctx context.Context, lote []LiveEvent) error {
-	body, err := json.Marshal(lote)
+	// SE SERIALIZA LA STRUCT DEL RECEPTOR, no el LiveEvent entero. Un LiveEvent lleva además seq,
+	// kind, origen, principal y project — todo lo que el receptor RE-SELLA por su cuenta — y como
+	// allá el decode es estricto (I4: no hay dónde poner contenido), mandarlos rebotaba el batch
+	// entero con 400: la feature no entregaba un solo evento y el único síntoma era una línea de
+	// log con freno de un minuto. Mandar exactamente lo que el receptor acepta hace del contrato
+	// de cable una sola struct, y deja el mínimo posible viajando por la red.
+	fuera := make([]flotaEventoEntrante, 0, len(lote))
+	for _, ev := range lote {
+		fuera = append(fuera, flotaEventoEntrante{
+			At: ev.At, Tool: ev.Tool, Outcome: ev.Outcome, DurationMs: ev.DurationMs,
+		})
+	}
+	body, err := json.Marshal(fuera)
 	if err != nil {
 		return fmt.Errorf("flota: marshal: %w", err)
 	}

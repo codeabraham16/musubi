@@ -1887,8 +1887,13 @@ export function montar(cfg) {
     botones.count = Math.max(1, totBot) + iBroteBot;
     vainas.instanceMatrix.needsUpdate = true;
     botones.instanceMatrix.needsUpdate = true;
+    // aRac VA EN ESTA LISTA, y su ausencia era un bug con dientes: el brote escribía el índice de
+    // actor en el array pero sin needsUpdate la GPU se quedaba con el 0 del buffer inicial — y 0
+    // NO es «sin dueño», es el PRIMER actor. Una rama que le creció a davantis se encendía cuando
+    // pulsaba gio, y se quedaba apagada cuando pulsaba davantis. Peor cuanto más tiempo abierto.
     for (const at of [gVaina.attributes.aColor, gVaina.attributes.aCurva, gVaina.attributes.aTNS,
-                      gVaina.attributes.aDLVF, gVaina.attributes.aSec, gVaina.attributes.aNace,
+                      gVaina.attributes.aDLVF, gVaina.attributes.aSec, gVaina.attributes.aRac,
+                      gVaina.attributes.aNace,
                       gVaina.attributes.aLuz, gBot.attributes.aColor, gBot.attributes.aSec,
                       gBot.attributes.aNace]) at.needsUpdate = true;
     // y el brote SE VE CRECER: el reloj del replay recorre la ventana del delta

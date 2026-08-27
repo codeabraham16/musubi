@@ -243,3 +243,44 @@ func TestFlotaPushApuntaAlEndpoint(t *testing.T) {
 		t.Fatal("el POST viajó sin Authorization")
 	}
 }
+
+// EL ROUND-TRIP DE VERDAD: el remitente REAL contra el receptor REAL. Los otros tests construyen
+// el body con `flotaEventoEntrante` —la struct del receptor— así que las dos mitades nunca se
+// probaron una contra la otra: es «el test espera el proxy, no la cosa», y tapó que PushFlota
+// serializa `LiveEvent` entero (seq, kind, origen) mientras el receptor decodifica estricto sin
+// esos campos. Resultado: TODO batch rebotaba con 400 y la feature no entregaba un solo evento,
+// con el único síntoma de una línea de log con freno de un minuto.
+func TestFlotaRoundTripRemitenteContraReceptor(t *testing.T) {
+	s, ts := servidorFlota(t)
+	id, ch, _ := s.live.subscribe("", false)
+	defer s.live.unsubscribe(id)
+
+	t.Setenv("MUSUBI_TEST_FLOTA_RT", "token-flota")
+	cl, err := NewSyncClient(config.SyncConfig{
+		Enabled: true, CentralURL: ts.URL, AuthTokenEnv: "MUSUBI_TEST_FLOTA_RT", AllowInsecureToken: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Un evento tal cual sale del feed local: con seq, kind y origen puestos por publicarUso.
+	lote := []LiveEvent{{
+		Seq: 7, At: time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+		Tool: "musubi_recall", Outcome: "ok", DurationMs: 12.5,
+		Kind: KindTrabajo, Origen: "local", Principal: "mentira", Project: "ajeno",
+	}}
+	if err := cl.PushFlota(t.Context(), lote); err != nil {
+		t.Fatalf("el remitente real no pudo entregarle al receptor real: %v", err)
+	}
+	evs := recogerEventos(t, ch, 1)
+	if evs[0].Tool != "musubi_recall" {
+		t.Fatalf("tool = %q", evs[0].Tool)
+	}
+	// Y el re-sellado sigue en pie aunque el body venga con identidad declarada (I2/I5).
+	if evs[0].Principal != "cabina-flota" || evs[0].Project != "musubi" {
+		t.Fatalf("la identidad del body se coló: %+v", evs[0])
+	}
+	if evs[0].Origen != origenFlota {
+		t.Fatalf("origen = %q, quiero %q", evs[0].Origen, origenFlota)
+	}
+}
