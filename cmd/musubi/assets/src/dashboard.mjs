@@ -14,6 +14,7 @@ import { extraerPersonas, firmanteDe, neuronaDeEvento, clasificarEvento,
          grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR } from './personas.mjs';
 import { construirRacimo } from './arbol-memoria.mjs';
 import { crearVistaMemoria } from './vista-memoria.mjs';
+import { RACIMO_MUSUBI } from '../boceto/datos.mjs';
 import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
 
@@ -572,6 +573,20 @@ function refrescarPersonas(brain){
   return PERSONAS;
 }
 
+// alimentarPersonas: EL CENSO SIGUE VIVO SIN buildGraph. El cutover del colonizado (#349) dejó
+// esta lente sin buildGraph, que era el ÚNICO que llenaba DOMAINS (la leyenda de racimos y el
+// KPI Personas — renderHUD los repinta en CADA poll, así que si DOMAINS queda vacío pisa
+// cualquier leyenda con «sin racimos») y el único que llamaba refrescarPersonas — RACIMO_DE
+// incluido, el mapa que convierte un evento del riel en un pulso hacia su actor. Sin esto,
+// medido en producción: «sin racimos», PERSONAS 0, y ni un solo pulso desde el cutover aunque
+// el stream llegaba entero. Se llama al montar la vista y en cada delta; la firma (conteo+heat)
+// evita re-extraer el censo cuando nada cambió.
+function alimentarPersonas(g){
+  DOMAINS=((VISTA_MEM&&VISTA_MEM.racimos)||[]).map(r=>({name:r.nombre, color:r.color, count:r.n}));
+  const fp=firmaGrafo((g&&g.neurons)||[]);
+  if(fp!==_firmaPersonas){ _firmaPersonas=fp; refrescarPersonas(g); }
+}
+
 function rebuildDendritas(){
   // LOS ÁRBOLES SON DE LA MEMORIA. En la lente código el sujeto son símbolos, no personas, y
   // BOSQUE sigue cargado con los troncos que armó la lente anterior: sin este corte se dibujaban
@@ -1061,7 +1076,7 @@ function renderHUD(d){
   // pondría un número cierto bajo un rótulo falso. Y ya NO se usa `graph.domains` del servidor
   // acá: ese conteo es por DOMINIO, que dejó de ser el sujeto de esta escena. Mezclarlos daría
   // «90» bajo el rótulo «Personas».
-  const personasVisibles=DOMAINS.filter(dd=>dd.name!==GRUPO_LIBRO&&dd.name!==GRUPO_SIN_ATRIBUIR).length;
+  const personasVisibles=DOMAINS.filter(dd=>dd.name!==GRUPO_LIBRO&&dd.name!==GRUPO_SIN_ATRIBUIR&&dd.name!==RACIMO_MUSUBI).length;
   $('kDomains').textContent=code
     ?(cg.total_modules?(cg.truncated&&DOMAINS.length<cg.total_modules?`${DOMAINS.length}/${cg.total_modules}`:cg.total_modules):DOMAINS.length)
     :personasVisibles;
@@ -1271,6 +1286,13 @@ function impulsar(ev){
   // EN EL COLONIZADO el pulso viaja por el árbol real: de la raíz al actor dueño del evento.
   // El mapeo principal→terminal→racimo es el de siempre; lo nuevo es sólo a dónde va la luz.
   if(VISTA_MEM && VISTA_MEM.visible){
+    // EL SONDEO NO PULSA. La lista ya lo esconde (anotarEvento) porque es el 98 % del tráfico y
+    // no es trabajo; acá pesa más todavía: el pulso del colonizado es UNO y global (lanzarPulso
+    // pisa al que está en vuelo), así que 200 sondeos/min serían una luz permanente hacia el
+    // mismo actor que además taparía cualquier pulso de trabajo real. Luz constante sin trabajo
+    // es exactamente lo que «sin evento no hay luz» promete no hacer. El sondeo queda visible
+    // donde ya vivía: el contador «sondeo · N/min» del latido.
+    if(ev.kind==='sondeo') return;
     const racimo = n ? RACIMO_DE.get(n.terminal) : null;
     if(racimo) VISTA_MEM.pulsoHacia(racimo);
     return;
@@ -1380,7 +1402,8 @@ function aplicaDeltas(g,p){
     for(const n of p.new_neurons) if(!vistos.has(n.id)){ g.neurons.push(n); vistos.add(n.id); brotan.push(n); }
     // EL VIVO DE VERDAD: una nota nueva hace crecer la rama que la recibe, delante tuyo. La
     // misma lógica que el boceto (broteDesdeMemorias) — sin rebuild, sin flash.
-    if(brotan.length && VISTA_MEM){ try{ VISTA_MEM.brotarMemorias(brotan); }catch(_){/*mejor quieto que roto*/} }
+    if(brotan.length && VISTA_MEM){ try{ VISTA_MEM.brotarMemorias(brotan); }catch(_){/*mejor quieto que roto*/}
+      alimentarPersonas(g); }
   }
   if(p.new_synapses && p.new_synapses.length){
     const vistas=new Set(g.synapses.map(s=>s.source+'|'+s.target));
@@ -1458,6 +1481,7 @@ function renderLens(){
   if(!GRAPH.memory) return;
   if(!VISTA_MEM){
     VISTA_MEM = crearVistaMemoria(GRAPH.memory);
+    alimentarPersonas(GRAPH.memory);
     pintarLeyendaRacimos((VISTA_MEM.racimos||[]).map(r=>({name:r.nombre, color:r.color, count:r.n})));
   }
   VISTA_MEM.mostrar(true);
