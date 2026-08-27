@@ -117,3 +117,40 @@ func TestElComposeUsaLaRedDelHost(t *testing.T) {
 		}
 	}
 }
+
+// El instalador de Windows tiene que ser ASCII PURO, con BOM.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ ESTO MERECE UNA PRUEBA
+//
+// PowerShell 5.1 —el que viene en Windows— lee un `.ps1` como ANSI si no encuentra BOM. Con
+// caracteres UTF-8 adentro, los bytes se vuelven basura y el parser muere en la primera comilla
+// que quedó partida. Pasó de verdad: un `✓` en un `Write-Host` tumbó el script entero con un
+// «Missing closing '}'» que no tiene NADA que ver con la causa.
+//
+// El arreglo son DOS cosas a la vez, y por eso las dos se custodian acá:
+//
+//   - EL BOM, para que PowerShell lea UTF-8 sin ambigüedad.
+//   - ASCII PURO, para que no pueda romperse ni aunque el BOM se pierda — y se pierde: este
+//     archivo viaja por scp, por `cat >` sobre ssh y por el portapapeles de una consola remota.
+//
+// Un guion largo en un COMENTARIO ya se coló una vez después de establecer la regla. En un
+// comentario no rompe nada, y por eso mismo la vigilancia humana no lo ve: la regla tiene que
+// valer para todo el archivo o no vale.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func TestElInstaladorDeWindowsEsAsciiConBOM(t *testing.T) {
+	crudo, err := os.ReadFile(filepath.Join("..", "..", "deploy", "agente-windows.ps1"))
+	if err != nil {
+		t.Fatalf("no se pudo leer el instalador de Windows: %v", err)
+	}
+	if len(crudo) < 3 || crudo[0] != 0xEF || crudo[1] != 0xBB || crudo[2] != 0xBF {
+		t.Error("el .ps1 no empieza con BOM UTF-8: PowerShell 5.1 lo va a leer como ANSI")
+	}
+	for i, b := range crudo[3:] {
+		if b > 0x7E || (b < 0x20 && b != '\n' && b != '\r' && b != '\t') {
+			linea := 1 + strings.Count(string(crudo[3:i+3]), "\n")
+			t.Fatalf("byte no-ASCII 0x%02X en la línea %d del instalador.\n"+
+				"Un .ps1 que viaja por scp y portapapeles no puede depender de que un carácter sobreviva el viaje: usá ASCII (-- en vez de guion largo, OK/ERR en vez de simbolos).", b, linea)
+		}
+	}
+}

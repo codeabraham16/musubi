@@ -42,7 +42,7 @@ $TaskName = "Musubi Agente de Flota"
 #
 # Registrar una tarea con disparador "al iniciar sesion" exige administrador. Descubrirlo en el
 # ULTIMO paso significa haber copiado el binario, escrito el token y probado el latido para nada
-# — y peor: deja la maquina a medio instalar, con el agente puesto y sin nada que lo arranque.
+# -- y peor: deja la maquina a medio instalar, con el agente puesto y sin nada que lo arranque.
 # El chequeo cuesta tres lineas y va antes de tocar el disco.
 $soyAdminInicial = ([Security.Principal.WindowsPrincipal] `
   [Security.Principal.WindowsIdentity]::GetCurrent()
