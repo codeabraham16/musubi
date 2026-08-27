@@ -426,13 +426,15 @@ attribute float aNace; varying float vNace;
 // aplicaria a CADA tramo y una relacion de catorce tramos se veria punteada, como una linea de
 // guiones. La relacion tiene dos puntas y son las suyas, no las de cada pedazo.
 attribute vec3 aColor; attribute vec2 aT; attribute float aConf; attribute vec2 aSF;
+attribute vec2 aRac;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
+varying vec2 vRac;
 void main(){
   vNace = aNace;
   vFam = aSF.y;
   vY = mix(aT.x, aT.y, position.y + 0.5);
   vec4 wp = instanceMatrix * vec4(position, 1.0);
-  vC = aColor; vSel = aSF.x; vConf = aConf;
+  vC = aColor; vSel = aSF.x; vConf = aConf; vRac = aRac;
   gl_Position = projectionMatrix * modelViewMatrix * wp;
 }`;
 
@@ -440,7 +442,9 @@ const SIN_F = `
 uniform float uReloj; varying float vNace;
 precision highp float;
 varying vec3 vC; varying float vY; varying float vSel; varying float vConf; varying float vFam;
+varying vec2 vRac;
 uniform float uSinA; uniform float uSinB;
+uniform float uT; uniform float uVivoR; uniform float uVivoT0;
 void main(){
   if (vNace > uReloj) discard;
   // Se desvanece en los DOS extremos: un arco de brillo parejo choca contra el botón y se ve como
@@ -451,8 +455,26 @@ void main(){
   // hay tracto en vez de repartirse por toda la pantalla. Medido en la vista general: de los
   // píxeles que tocan, los que llegan a 6/255 de contraste pasan del 21 % al 40 % subiendo la base
   // de 0,035 a 0,075. Antes, subirla convertía la escena en una madeja; ahora dibuja fascículos.
-  float a = (uSinA + uSinB * vConf + 0.80 * vSel) * extremo;
-  gl_FragColor = vec4(vC * (0.5 + 1.6 * vSel), a * vFam);
+  /* EL ECO DE CONEXIONES. Cuando el pulso viaja hacia un actor, SUS relaciones se encienden
+     con él: un destello que SALE de su punta y recorre la línea hacia el otro extremo — la
+     dirección dice de dónde es y con quién conecta — sobre un halo que decae. Honesto por
+     diseño: la telemetría no sabe QUÉ notas tocó una tool (invariante L1), así que se enciende
+     la telaraña del actor que trabaja, nunca una relación inventada. Corte EXACTO a los 6 s:
+     el invariante de reposo (cuadro vs cuadro = 0 px) no se negocia por una exponencial. */
+  float vivo = 0.0;
+  if (uVivoT0 >= 0.0) {
+    float e = uT - uVivoT0;
+    float mioA = step(abs(vRac.x - uVivoR), 0.4);
+    float mio = max(mioA, step(abs(vRac.y - uVivoR), 0.4));
+    if (e >= 0.0 && e < 6.0 && mio > 0.5) {
+      float eco = e < 1.2 ? 1.0 : exp(-(e - 1.2) * 1.6);
+      float y = mix(1.0 - vY, vY, mioA);
+      float frente = max(0.0, 1.0 - abs(y - clamp(e / 1.2, 0.0, 1.0)) / 0.18);
+      vivo = eco * (1.6 * frente + 0.35);
+    }
+  }
+  float a = (uSinA + uSinB * vConf + 0.80 * vSel) * extremo + vivo * 0.55 * (0.25 + 0.75 * extremo);
+  gl_FragColor = vec4(vC * (0.5 + 1.6 * vSel + 1.5 * vivo), a * vFam);
 }`;
 
 /* ── LA RETICULA ───────────────────────────────────────────────────────────────────────────
@@ -722,6 +744,15 @@ export function montar(cfg) {
   const uPulso = { uHov, uReloj, uNeon, uFrente: { value: -1 }, uAncho: { value: 26 }, uAmbar: { value: AMBAR },
                    uT: { value: 0 }, uVaiven: { value: cfg.vaiven != null ? cfg.vaiven : 0.9 },
                    uFondo: uAtm.uFondo, uAtm: uAtm.uAtm };
+  // EL ECO DE CONEXIONES (ver SIN_F): el estado vivo va en UNIFORMS — la lección del hover que
+  // resubía 670 KB por cuadro — y el índice de actor es estable: el orden de los hijos de la
+  // raíz, el mismo que usa la leyenda. -1 = «nadie»: en reposo el eco no existe.
+  const uVivo = { uVivoR: { value: -1 }, uVivoT0: { value: -1 } };
+  const IDX_RACIMO = new Map();
+  for (const h of S[0].hijos) {
+    const rr = S[h].racimo;
+    if (rr != null && !IDX_RACIMO.has(rr)) IDX_RACIMO.set(rr, IDX_RACIMO.size);
+  }
   // OPACO, y no es un detalle de rendimiento. Con 5.000 cilindros transparentes el orden de
   // dibujo decide qué tapa a qué, así que el haz se veía como una nube lechosa en vez de como
   // fibras: la transparencia es justamente lo que borra la individualidad de cada hilo, que es lo
@@ -1092,7 +1123,7 @@ export function montar(cfg) {
     nSeg = rutas.reduce((a, r) => a + r.length - 1, 0);
     const gSin = new THREE.CylinderGeometry(1, 1, 1, 4, 1, true);
     const YC = new Float32Array(nSeg * 3), YT = new Float32Array(nSeg * 2),
-          YCONF = new Float32Array(nSeg);
+          YCONF = new Float32Array(nSeg), YRAC = new Float32Array(nSeg * 2);
     YSF = new Float32Array(nSeg * 2);
     for (let k = 0; k < nSeg; k++) YSF[k * 2 + 1] = 1;
     SIN_SEC = new Array(nSeg);
@@ -1102,11 +1133,12 @@ export function montar(cfg) {
     const YNACE = new Float32Array(nSeg);
     gSin.setAttribute('aNace', new THREE.InstancedBufferAttribute(YNACE, 1));
     gSin.setAttribute('aSF', new THREE.InstancedBufferAttribute(YSF, 2));
+    gSin.setAttribute('aRac', new THREE.InstancedBufferAttribute(YRAC, 2));
     sinInst = new THREE.InstancedMesh(gSin,
       new THREE.ShaderMaterial({ vertexShader: SIN_V, fragmentShader: SIN_F, transparent: true,
         // LA PRESENCIA DE LAS RELACIONES ES POR FORMA, no una constante: en «la corona» lo único
         // que cruza el medio del cuadro son ellas, y con el alfa del núcleo ahí no se vería nada.
-        uniforms: { uReloj,
+        uniforms: { uReloj, uT: uPulso.uT, uVivoR: uVivo.uVivoR, uVivoT0: uVivo.uVivoT0,
                     uSinA: { value: cfg.alfaSinapsis != null ? cfg.alfaSinapsis : 0.075 },
                     uSinB: { value: cfg.alfaConfianza != null ? cfg.alfaConfianza : 0.22 } },
         blending: THREE.AdditiveBlending, depthWrite: false }), nSeg);
@@ -1117,6 +1149,11 @@ export function montar(cfg) {
       const R = rutas[i];
       _c.set(RELCOL[y.rel] || NEUTRO);
       const par = [MEM_SEC.get(y.ma), MEM_SEC.get(y.mb)];
+      // de qué actor es cada punta: la ruta viaja de ma (vY=0) a mb (vY=1), así que el shader
+      // puede hacer salir el destello de la punta del actor VIVO, sea cual sea
+      const racDe = (sec) => { const ix = sec != null && S[sec] ? IDX_RACIMO.get(S[sec].racimo) : undefined;
+                               return ix != null ? ix : -1; };
+      const racA = racDe(par[0]), racB = racDe(par[1]);
       // EL RADIO SE CALCULA ACÁ, en el bucle, y no se guarda en el objeto de la relación. Es la
       // lección de las 586 sinapsis que desaparecieron: un NaN en la matriz de una instancia la
       // borra sin error ni warning, y se ve idéntico a «decidimos no dibujar relaciones».
@@ -1135,6 +1172,7 @@ export function montar(cfg) {
         YT[iS * 2] = k / (R.length - 1); YT[iS * 2 + 1] = (k + 1) / (R.length - 1);
         YCONF[iS] = y.conf;
         YNACE[iS] = nSin;
+        YRAC[iS * 2] = racA; YRAC[iS * 2 + 1] = racB;
         SIN_SEC[iS] = par;
         iS++;
       }
@@ -1556,6 +1594,12 @@ export function montar(cfg) {
     pulMax = (S[i].dist || 0) + (S[i].largo || 0) * 0.6 + 40;
     pulVel = pulMax / 1.25;                       // 1,25 s de la raíz al destino, mida lo que mida
     pulT0 = performance.now();
+    // EL ECO: las conexiones del actor destino se encienden CON el pulso (SIN_F) — la rama, sus
+    // líneas y hacia quién van, todo al mismo tiempo. Una sección sin actor (la raíz, el nudo)
+    // no enciende ninguna: mejor quieto que mentiroso.
+    const rc = IDX_RACIMO.get(S[i] && S[i].racimo);
+    uVivo.uVivoR.value = rc != null ? rc : -1;
+    uVivo.uVivoT0.value = rc != null ? performance.now() * 0.001 : -1;
   }
 
   /** verTodo: saca el aislamiento y vuelve al encuadre completo. Es el boton que pidio el usuario
