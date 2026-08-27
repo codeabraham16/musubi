@@ -130,7 +130,13 @@ export function crearVistaMemoria(grafo, o) {
     /** un evento real del riel enciende el camino hasta el actor que lo produjo */
     pulsoHacia(racimo) {
       const i = RAIZ_DE.get(racimo);
-      vista.lanzarPulso(i != null ? i : 0);
+      // SIN DUEÑO NO HAY PULSO. El censo se refresca en cada delta pero la escena se armó una
+      // vez: una persona que empieza a escribir DESPUÉS de montado el panel está en el censo y
+      // no en RAIZ_DE. Caer a la raíz (0) parecía inofensivo y era lo contrario — la sección 0
+      // no tiene racimo, así que el gate del pulso queda en «todos» y la onda barre el árbol
+      // entero: justo lo que se sacó por invasivo. Mejor quieto que mintiendo de quién es.
+      if (i == null) return;
+      vista.lanzarPulso(i);
     },
     /** el vivo: memorias nuevas del delta brotan en el árbol — la misma lógica del boceto */
     brotarMemorias(nuevas) {

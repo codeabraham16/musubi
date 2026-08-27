@@ -7,6 +7,28 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La flota en vivo no entregaba un solo evento, y el único síntoma era una línea de log.**
+  `PushFlota` serializaba el `LiveEvent` entero (con `seq`, `kind`, `origen`, `principal`) contra
+  un receptor con decode estricto que sólo acepta `at/tool/outcome/ms` — todo batch rebotaba con
+  400. Los ocho tests no lo veían porque cada mitad se probaba contra sí misma: los del receptor
+  construían el body con la struct del receptor, y el del remitente usaba un stub que respondía
+  202 sin decodificar. Ahora el remitente serializa **la struct del receptor** (una sola struct
+  como contrato de cable, y lo mínimo viajando por la red) y hay un test de ida y vuelta —
+  remitente real contra receptor real— que nació ROJO con el `400` exacto de producción.
+- **El brote en vivo encendía al actor equivocado.** El camino del delta escribía `aRac` (índice
+  de actor por fibra) pero no lo incluía en la lista de `needsUpdate`: la GPU se quedaba con el 0
+  del buffer inicial, que no es «sin dueño» sino el PRIMER actor. Una rama recién crecida para
+  davantis se encendía al pulsar gio, y quedaba muerta al pulsar davantis.
+- **Un evento sin dueño conocido volvía a barrer el árbol entero.** `pulsoHacia` caía a la raíz
+  cuando el racimo no estaba en `RAIZ_DE` (una persona que empieza a escribir después de montado
+  el panel), y la raíz no tiene racimo ⇒ el gate quedaba en «todos»: exactamente la onda global
+  que se sacó por invasiva. Ahora, sin dueño no hay pulso.
+- **El riel dibujaba una barra de scroll que no se podía arrastrar.** `#hud` es
+  `pointer-events:none` para que el lienzo reciba el giro de cámara; darle eventos al riel entero
+  mataría el arrastre en toda esa franja. La barra se oculta: el riel sigue scrolleando con la
+  rueda y deja de prometer algo que no responde.
+
 ### Added
 - **Flota en vivo: el panel del central muestra a las terminales trabajando.** La señal ya
   existía (el live feed publica cada invocación al terminar — tool, outcome, ms; jamás contenido,

@@ -111,8 +111,13 @@ body{
 .enl{margin-left:auto; font-family:var(--mono); font-size:9px; letter-spacing:.4px; font-weight:400;
   text-transform:none; color:var(--dim);}
 .enl.ok{color:var(--teal);} .enl.mal{color:var(--amber);}
-.list::-webkit-scrollbar,.checks::-webkit-scrollbar,#hud .rail::-webkit-scrollbar{width:5px;}
-.list::-webkit-scrollbar-thumb,.checks::-webkit-scrollbar-thumb,#hud .rail::-webkit-scrollbar-thumb{background:var(--glass-hi); border-radius:9px;}
+.list::-webkit-scrollbar,.checks::-webkit-scrollbar{width:5px;}
+.list::-webkit-scrollbar-thumb,.checks::-webkit-scrollbar-thumb{background:var(--glass-hi); border-radius:9px;}
+/* El riel scrollea con la rueda (encadenada desde los paneles), pero su barra no se puede
+   ARRASTRAR: #hud es pointer-events:none para que el lienzo reciba el giro, y darle eventos al
+   riel entero mataría el arrastre de la cámara en toda esa franja. Entre dibujar una barra
+   muerta y no dibujarla, no se dibuja: una afordancia que no responde miente más que su ausencia. */
+#hud .rail{scrollbar-width:none;} #hud .rail::-webkit-scrollbar{width:0; height:0;}
 .item{font-size:11.5px; line-height:1.35;}
 .item .tk{font-family:var(--mono); font-size:9.5px; letter-spacing:.4px; color:var(--teal); display:block; margin-bottom:1px; opacity:.85;}
 .item .gg{color:var(--muted); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
