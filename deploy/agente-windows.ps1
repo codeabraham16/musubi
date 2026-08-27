@@ -38,6 +38,22 @@ param(
 $ErrorActionPreference = "Stop"
 $TaskName = "Musubi Agente de Flota"
 
+# SE AVISA AL PRINCIPIO, NO AL FINAL.
+#
+# Registrar una tarea con disparador "al iniciar sesion" exige administrador. Descubrirlo en el
+# ULTIMO paso significa haber copiado el binario, escrito el token y probado el latido para nada
+# — y peor: deja la maquina a medio instalar, con el agente puesto y sin nada que lo arranque.
+# El chequeo cuesta tres lineas y va antes de tocar el disco.
+$soyAdminInicial = ([Security.Principal.WindowsPrincipal] `
+  [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $soyAdminInicial) {
+  Write-Host "ERR Esta PowerShell NO es de administrador." -ForegroundColor Red
+  Write-Host "ERR Registrar la tarea programada lo exige, y sin tarea el agente no arranca solo." -ForegroundColor Red
+  Write-Host "ERR Abri PowerShell como administrador y volve a correr esta misma linea." -ForegroundColor Red
+  exit 1
+}
+
 function Paso($m) { Write-Host "->  $m" -ForegroundColor Cyan }
 function Bien($m) { Write-Host "OK  $m" -ForegroundColor Green }
 function Mal($m)  { Write-Host "ERR $m" -ForegroundColor Red }
