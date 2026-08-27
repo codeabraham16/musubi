@@ -113,6 +113,32 @@ receivers:
           {{ end }}{{ .Annotations.summary }}
           {{ if .Annotations.runbook }}→ {{ .Annotations.runbook }}{{ end }}
           {{ end }}
+    # ─── SEGUNDO CANAL: EL CRM ────────────────────────────────────────────────────────────
+    # Segundo canal para lo mismo que va a Telegram. Telegram avisa; el CRM deja HISTORIA
+    # consultable: qué alertó, sobre qué máquina, cuándo empezó y cuándo se resolvió.
+    #
+    # Va contra `POST /rest/v1/rpc/recibir_alerta` de Supabase. PostgREST mapea las claves de primer
+    # nivel del JSON de Alertmanager a los argumentos de esa función, así que el cuerpo entra tal
+    # cual — sin adaptador. Ver deploy/crm/alertas.sql.
+    #
+    # LA CLAVE ENTRA POR ARCHIVO, y NO por query string: en un `/rpc/`, PostgREST interpreta los
+    # parámetros de la URL como ARGUMENTOS de la función, así que un `?apikey=…` da HTTP 400
+    # (medido). Kong quiere el header `apikey` y PostgREST el `Authorization`, y los dos salen del
+    # mismo archivo — rotar la clave es reemplazar un archivo, sin tocar esta configuración.
+    #
+    # `send_resolved: true` a propósito, al revés que el watchdog: en el CRM interesa cerrar el par
+    # firing/resolved para poder preguntar "qué está activo AHORA" (ver la vista alertas_activas).
+    webhook_configs:
+      - url_file: /etc/musubi/crm_alertas_url
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/musubi/crm_anon_key
+          http_headers:
+            apikey:
+              files: [/etc/musubi/crm_anon_key]
+
 
   # ─── El latido ─────────────────────────────────────────────────────────────────────────────
   # Un GET periódico a un servicio externo que grita si deja de recibirlo. La URL es un secreto
