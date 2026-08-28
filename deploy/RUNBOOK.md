@@ -431,3 +431,27 @@ conocer la base es la forma de la curva.
    sin purga son lo habitual.
 4. El disco de esa máquina lo vigila Musubi por separado (`musubi_fleet_device_disk_*` con
    `device="supabase-altura"`). Esta alerta llega **antes**, cuando todavía es una curva.
+
+## MaquinaSinInventario
+
+Una máquina de Tier A late —o sea, el agente corre y llega al cerebro— y no reporta ningún
+servicio.
+
+**Tres causas, mismo síntoma.** Se descartan en este orden porque van de la más común a la más
+rara:
+
+1. **El agente es viejo.** La enumeración de servicios entró en A42; un binario anterior no la
+   tiene. Miralo en el inventario: `musubi_fleet_list` trae `agent_version` por máquina.
+   Comparalo con el del cerebro (`musubi version`). Si difieren mucho, es esto — desplegá el
+   agente en esa máquina y listo.
+2. **Una fuente de inventario está rota.** El agente manda el inventario **completo o no lo
+   manda**: si `podman ps` (o `systemctl`, o `Get-Service`) está instalado y falla, aborta el
+   lote entero a propósito, porque el cerebro poda por ausencia y media lista da de baja la otra
+   mitad. Buscá el aviso en el log del agente de esa máquina:
+   `journalctl -u musubi-agente | grep "no se pudieron enumerar"`. Dice cuál fuente y por qué.
+3. **El blindaje de la unidad prohíbe la fuente.** Pasó en `musubi-server`: `ProtectHome=read-only`
+   impedía que `podman ps` abriera sus locks, y el síntoma era `exit status 1` sin más. Ver A54
+   y `deploy/systemd/musubi-agente-contenedores.conf`.
+
+**Lo que NO es:** una máquina caída. Ésa la cubre `MaquinaCaida` y esta regla la excluye a
+propósito — una máquina apagada no tiene por qué reportar inventario.

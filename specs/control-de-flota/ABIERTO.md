@@ -405,6 +405,54 @@ encontrar justo lo que decía prohibir, y la otra buscaba la métrica del denomi
 ENTERO — y la encontraba en el comentario que explica el error. Las dos se reescribieron para
 mirar la regla y no el archivo, y ahí sí cayeron.
 
+**2026-08-28 (quinquies) · la auditoría de las 25 reglas: dos ciegas más, y el dato que ya estaba.**
+
+Después de encontrar que la alerta del pooler no podía sonar, se auditaron **las 25 reglas cargadas
+en el Prometheus real**, una por una: se extrajeron los nombres de métrica de cada expresión, se
+consultó cuántas series tiene cada uno, y para las de flota se evaluó el LADO IZQUIERDO del umbral
+contra los valores de hoy. No es una revisión de escritorio: es contra los datos que hay.
+
+Salieron limpias 22 de 25. Las tres que no:
+
+- **`ServicioReiniciandose` estaba ciega para 18 de 54 servicios.** 54 series de
+  `musubi_fleet_service_up` y sólo 36 de `musubi_fleet_service_restarts_total`; los 18 que
+  faltaban eran los contenedores. Un contenedor con `restart: always` en bucle de caída es EL
+  caso para el que existe esa alerta. `podman ps` sí sabe decirlo (`{{.Restarts}}`) y el agente
+  no lo pedía. **Arreglado** — con degradación de formato, porque `docker ps` no conoce ese campo
+  y con la regla nueva («una fuente que está y falla aborta el inventario») pedirlo a secas
+  convertiría «este docker no entiende un campo» en «esta máquina no reporta nada».
+- **`PoliticaQueNoCura` y `PoliticaSinPermiso` no tienen series**, porque no hay ninguna política
+  configurada. Verificado, no supuesto. Es el caso «una regla cuya precondición no se cumple» que
+  este archivo ya discute; son `increase(...) > N`, así que no disparan en falso. Se dejan.
+
+**Y el hallazgo que explica todo lo demás: `agent_version` se guardaba y no se mostraba.**
+
+`kernelos-pc` figuraba **en línea, latiendo cada 30 s, con CERO servicios**. Eso tiene dos causas
+opuestas —binario anterior a la enumeración, o enumerador roto— y no había forma de distinguirlas.
+El dato para hacerlo estaba en la base desde el principio: el agente manda su versión en cada
+latido y `LatirDevice` la escribe. Ninguna tool la mostraba. Una columna llena que no se podía
+leer.
+
+Al sacarla a la luz, la respuesta fue inmediata:
+
+    gio            v0.106.0-28-gdf2ec21-rustdesk
+    kernelos-pc    v0.106.0-28-gdf2ec21-rustdesk
+    musubi-server  0.111.1-trinquete.a3053e3
+
+Las dos Windows corren un binario de **tres commits antes de A42**. No tienen enumeración de
+servicios: no está rota, no existe. **El inventario de servicios cubre hoy una de tres máquinas**,
+y eso no se veía en ningún lado.
+
+Se agregó `MaquinaSinInventario`: un Tier A que late y no dice qué corre adentro. Cubre las tres
+causas del mismo síntoma —binario viejo, enumerador roto, y la fuente que abortó el inventario a
+propósito— porque las tres piden lo mismo: que alguien mire. Validada contra los datos reales:
+dispara para `kernelos-pc`, no para `musubi-server` (que sí reporta) ni para `gio` (que está
+caída, y ésa la cubre `MaquinaCaida`).
+
+**Sobre `gio`, que llevaba dos días anotada como «apagada»:** responde al ping por el tailnet con
+145 ms. La máquina está encendida y el agente no está corriendo. Es una acción del operador
+distinta de la que se venía suponiendo.
+
 ---
 
 ## Cómo se usa este archivo

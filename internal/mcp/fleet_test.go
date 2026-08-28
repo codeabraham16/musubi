@@ -390,3 +390,44 @@ func servidorHTTP(t *testing.T, s *McpServer) *httptest.Server {
 	t.Cleanup(ts.Close)
 	return ts
 }
+
+// QUÉ BINARIO CORRE CADA MÁQUINA, VISIBLE.
+//
+// Nació de una auditoría contra producción, no de una idea: `kernelos-pc` figuraba en línea,
+// latiendo cada 30 s, y con CERO servicios. Eso tiene dos causas opuestas —corre un binario
+// anterior a la enumeración, o corre el nuevo y su enumerador falla— y no había forma de
+// distinguirlas desde afuera. El dato para hacerlo estaba guardado desde el principio: el agente
+// manda su versión en cada latido y `LatirDevice` la escribe en `agent_version`. **Nadie la
+// mostraba.** Una columna llena que no se podía leer.
+//
+// (Resultó ser lo primero: v0.106.0, tres commits anteriores a la enumeración.)
+//
+// La segunda mitad es la que suele salir mal: la AUSENCIA tiene que verse como ausencia. Un
+// `agent_version: ""` en la fila de un Tier B —que no corre nuestro binario y nunca va a tener
+// versión— se lee como «no se pudo averiguar», que es otra cosa.
+//
+// Sabotaje que la hace fallar: sacar el campo de la fila, o escribirlo siempre incluso vacío.
+func TestElInventarioDiceQueBinarioCorreCadaMaquina(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	// Antes del primer latido no hay versión, y el campo NO está.
+	fila := listarFlota(t, s, "casa")[0]
+	if _, hay := fila["agent_version"]; hay {
+		t.Errorf("una máquina que nunca latió trae agent_version: %+v", fila["agent_version"])
+	}
+
+	// El latido la trae.
+	cuerpo := `{"version":"v0.106.0-28-gdf2ec21-rustdesk"}`
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpo); code != http.StatusOK {
+		t.Fatalf("latido: status %d", code)
+	}
+	fila = listarFlota(t, s, "casa")[0]
+	v, hay := fila["agent_version"].(string)
+	if !hay {
+		t.Fatal("después de latir con versión, el inventario no la muestra: " +
+			"«corre un binario viejo» y «su enumerador está roto» quedan indistinguibles")
+	}
+	if v != "v0.106.0-28-gdf2ec21-rustdesk" {
+		t.Errorf("agent_version = %q", v)
+	}
+}

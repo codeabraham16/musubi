@@ -315,3 +315,98 @@ func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
 		t.Fatalf("con la enumeración rota el latido llevó %d servicios: esa lista da de baja lo que no trae: %+v", len(lista), lista)
 	}
 }
+
+// LOS REINICIOS DE UN CONTENEDOR SE REPORTAN, Y SU AUSENCIA NO ES UN CERO.
+//
+// Encontrado auditando las 25 reglas de alerta contra el Prometheus real: 54 servicios con serie
+// `up` y sólo 36 con serie de reinicios. Los 18 que faltaban eran los contenedores — o sea que
+// `ServicioReiniciandose` estaba ciega justo para las cosas que se reinician solas. Un contenedor
+// con `restart: always` en bucle de caída es EL caso para el que existe esa alerta.
+//
+// La otra mitad es la que se rompe callada: un runtime que no conoce `{{.Restarts}}` imprime
+// `<no value>` o directamente no manda el campo. Parsear eso como 0 no deja un hueco, deja la
+// afirmación «este contenedor no se reinició nunca» — que apaga la alerta con confianza.
+//
+// Sabotaje que la hace fallar: devolver `0, true` cuando el campo falta o no es un número.
+func TestLosReiniciosDeUnContenedorViajanYSuAusenciaNoEsCero(t *testing.T) {
+	casos := []struct {
+		nombre    string
+		linea     string
+		reinicios *int
+	}{
+		{"podman con el campo", "vaultwarden\trunning\tUp 17 hours\t3", intPtr(3)},
+		{"cero medido es cero", "supabase-db\trunning\tUp 2 weeks (healthy)\t0", intPtr(0)},
+		{"docker sin el campo", "nginx\trunning\tUp 3 days", nil},
+		{"el literal de un template que no entendió", "raro\trunning\tUp 1 hour\t<no value>", nil},
+		{"basura en el campo", "raro2\trunning\tUp 1 hour\tmuchas", nil},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			rs := parsearContenedores(c.linea, "podman", time.Now())
+			if len(rs) != 1 {
+				t.Fatalf("se parsearon %d reportes", len(rs))
+			}
+			got := rs[0].Salud.Reinicios
+			switch {
+			case c.reinicios == nil && got != nil:
+				t.Errorf("se inventó un contador de reinicios: %d. Un runtime que no lo sabe tiene "+
+					"que dejar un hueco, no afirmar que no se reinició nunca", *got)
+			case c.reinicios != nil && got == nil:
+				t.Error("el contador de reinicios no viajó: la alerta de reinicios queda ciega")
+			case c.reinicios != nil && *got != *c.reinicios:
+				t.Errorf("reinicios = %d, se esperaba %d", *got, *c.reinicios)
+			}
+		})
+	}
+}
+
+// EL FORMATO SE DEGRADA ANTES DE DARSE POR VENCIDO.
+//
+// `{{.Restarts}}` no lo entiende `docker ps` ni un podman viejo. Con la regla de que una fuente
+// que ESTÁ y falla aborta el inventario entero, pedirlo a secas convertiría «este docker no
+// conoce ese campo» en «esta máquina no reporta ningún servicio» — una regresión mucho peor que
+// el hueco que se venía a tapar.
+//
+// Sabotaje que la hace fallar: quedarse con un solo formato, o devolver el error del primer
+// intento en vez de seguir con el siguiente.
+func TestSiElRuntimeNoEntiendeElFormatoRicoSeUsaElPobre(t *testing.T) {
+	original := ejecutarParaEnumerar
+	t.Cleanup(func() { ejecutarParaEnumerar = original })
+
+	var pedidos []string
+	ejecutarParaEnumerar = func(nombre string, args ...string) ([]byte, error) {
+		formato := args[len(args)-1]
+		pedidos = append(pedidos, formato)
+		if strings.Contains(formato, "Restarts") {
+			return nil, errors.New(`template: ps:1:13: can't evaluate field Restarts`)
+		}
+		return []byte("nginx\trunning\tUp 3 days\n"), nil
+	}
+
+	salida, hay, err := contenedoresDe("docker")
+	if err != nil {
+		t.Fatalf("un runtime que no conoce el campo tumbó la enumeración: %v", err)
+	}
+	if !hay {
+		t.Fatal("el runtime está y se reportó como ausente")
+	}
+	if !strings.Contains(salida, "nginx") {
+		t.Errorf("no se cayó al formato pobre: %q", salida)
+	}
+	if len(pedidos) != 2 {
+		t.Fatalf("se intentaron %d formatos, se esperaban 2: %v", len(pedidos), pedidos)
+	}
+	if !strings.Contains(pedidos[0], "Restarts") || strings.Contains(pedidos[1], "Restarts") {
+		t.Errorf("el orden de los formatos no es rico→pobre: %v", pedidos)
+	}
+
+	// Y si NINGUNO anda, sí es una falla: el runtime está y no se pudo consultar.
+	ejecutarParaEnumerar = func(string, ...string) ([]byte, error) {
+		return nil, errors.New("permission denied")
+	}
+	if _, hay, err := contenedoresDe("podman"); err == nil || !hay {
+		t.Errorf("un runtime presente y roto no dio error: hay=%v err=%v", hay, err)
+	}
+}
+
+func intPtr(n int) *int { return &n }

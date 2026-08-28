@@ -226,6 +226,26 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 			// campo, dos filas con el mismo `silencio_segundos` y distinto `online` parecen un bug.
 			"umbral_segundos": int(umbral.Seconds()),
 		}
+		// QUÉ BINARIO CORRE ESTA MÁQUINA. El dato se guardaba desde el principio —el agente lo
+		// manda en cada latido y `LatirDevice` lo escribe en `agent_version`— y NO SE MOSTRABA EN
+		// NINGÚN LADO. Una columna llena que nadie puede leer.
+		//
+		// El costo apareció auditando: `kernelos-pc` figuraba en línea, latiendo, y con CERO
+		// servicios. Eso tiene dos causas posibles y opuestas —corre un binario anterior a la
+		// enumeración, o corre el nuevo y su enumerador falla— y no había forma de distinguirlas.
+		// Es el modo de fallo de todo este track: dos causas distintas con el mismo síntoma.
+		//
+		// Vacío significa «esta máquina nunca latió con una versión», que es cierto para un Tier B
+		// (no corre nuestro binario) y sospechoso para un Tier A. Se omite el campo en vez de
+		// mandar "" para que la ausencia se vea como ausencia.
+		//
+		// NO VA COMO ETIQUETA DE PROMETHEUS, y la decisión es deliberada: la versión cambia en
+		// cada despliegue, así que como label crearía una serie nueva por máquina y por versión —
+		// exactamente el «ninguna etiqueta puede tomar un valor que rota» que este track sostiene.
+		// Acá el lugar correcto es el inventario, que es donde alguien pregunta qué corre dónde.
+		if d.AgentVer != "" {
+			fila["agent_version"] = d.AgentVer
+		}
 		// La allowlist EFECTIVA, cuando la hay. Ausente ⇒ sin restricción; presente y vacía ⇒
 		// ningún comando. Las dos cosas se dibujan distinto a propósito: si «puede todo» y «no
 		// puede nada» compartieran celda, el campo no serviría para decidir nada.

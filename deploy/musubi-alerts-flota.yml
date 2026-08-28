@@ -184,3 +184,29 @@ groups:
         annotations:
           summary: "Hace más de 30 min que {{ $labels.device }} no reporta el estado de {{ $labels.service }}."
           runbook: "deploy/RUNBOOK.md#serviciosinnoticias"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: MaquinaSinInventario
+        # UNA MÁQUINA CON AGENTE QUE NO DICE QUÉ CORRE ADENTRO.
+        #
+        # Nació de una auditoría, no de una hipótesis: `kernelos-pc` figuraba en línea, latiendo
+        # cada 30 s, y con CERO servicios. Resultó ser un binario anterior a la enumeración —
+        # pero el síntoma es idéntico al de un enumerador roto, y al de una fuente que falló y
+        # abortó el inventario a propósito. Las tres causas piden lo mismo: que alguien mire.
+        #
+        # `== 1` y no `unless` sobre el up: una máquina CAÍDA no tiene por qué reportar
+        # inventario, y alertar de eso sería duplicar MaquinaCaida con otro nombre.
+        #
+        # Sólo Tier A: un Tier B no corre nuestro binario y no tiene con qué enumerarse.
+        expr: >-
+          (musubi_fleet_device_up{tier="A"} == 1)
+            unless on(device) count by(device) (musubi_fleet_service_up)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} late pero no dice qué corre adentro"
+          description: >-
+            La máquina reporta su telemetría y no su inventario de servicios. Sostenido 15 minutos,
+            que es el triple del reenvío periódico del inventario.
+          runbook: "deploy/RUNBOOK.md#maquinasininventario"
