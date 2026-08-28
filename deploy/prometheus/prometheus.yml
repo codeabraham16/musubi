@@ -103,6 +103,28 @@ scrape_configs:
         labels:
           instance: musubi-brain
 
+    # UN SOLO PRODUCTOR POR DATO — la mitad que hace que el empuje no sea duplicación.
+    #
+    # `/metrics` sirve DOS cosas: las métricas propias del cerebro (tools, outbox, cuotas, el
+    # estado del propio empuje) y la telemetría de la flota. Cuando `fleet.otlp` está encendido,
+    # esa segunda mitad llega ADEMÁS por el empuje, con `instance: musubi-otlp-push`.
+    #
+    # No se pisan —el label `instance` las distingue— y por eso el daño no se ve como un error:
+    # se ve como que todo anda. Lo que pasa es que CADA REGLA DE FLOTA MATCHEA DOS SERIES y cada
+    # alerta sale DUPLICADA. Medido acá el 2026-08-28, al encender el empuje: 5 alertas, 10 avisos.
+    #
+    # Así que el scrape deja de traer flota y se queda con lo suyo. Cada dato tiene un productor.
+    #
+    # EL COSTO, dicho: si el empuje muere, la flota deja de tener series y las 12 reglas de flota
+    # se quedan sin datos con los que dispararse — no fallan, enmudecen. Eso NO queda descubierto:
+    # lo cazan `MusubiPushOTLPFallando`, `MusubiPushOTLPMudo` y `MusubiPushOTLPNuncaLlego`, que
+    # miran los contadores del empujador. Si alguna vez sacás este bloque, sacá también el empuje;
+    # y si sacás el empuje, sacá este bloque. Van juntos, y hay una prueba que lo custodia.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "musubi_fleet_.*"
+        action: drop
+
   # Prometheus se scrapea a sí mismo: permite distinguir "el cerebro cayó" de "Prometheus cayó".
   #
   # EL 9099 NO ES UN CAPRICHO. 9090 es el puerto por defecto de **Cockpit**, que viene instalado

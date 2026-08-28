@@ -184,6 +184,22 @@ la base de producción, dos máquinas enroladas —una Linux, una Windows— y l
 contra Telegram. **Cierra la mitad Windows de A3** y abre **A30** y **A31**, que sólo se ven
 cuando el agente tiene que instalarse en una máquina ajena de verdad.
 
+**2026-08-28 · el cerebro redesplegado y el empuje ANDANDO en producción:**
+
+- **El redespliegue**, con el script versionado y su ensayo previo contra una copia de la base
+  real: 35 → 37 en 3,6 s, las tres máquinas y sus `rustdesk_id` intactos, y las dos tools nuevas
+  vivas (13 de flota en total).
+- **El empuje OTLP corriendo**: `musubi_push_last_success_seconds 3`, `failures_total 0`,
+  `datapoints 45`. Las series aterrizan con su etiqueta `project`.
+- **Y el problema que encender el empuje CREÓ, medido y cerrado el mismo día.** El scrape y el
+  empuje traían los dos la telemetría de flota con distinto `instance`: no se pisaban, así que
+  no se veía como un error — se veía como que todo andaba. Pero **cada regla de flota matcheaba
+  dos series y cada alerta salía duplicada**: 5 alertas se volvieron 10 avisos. Se resolvió con
+  la tesis del módulo, no con un parche: el scrape descarta `musubi_fleet_*` y se queda con lo
+  del cerebro (98 → 53 series), el empuje se queda con la flota (45). **Un solo productor por
+  dato.** Y las dos mitades quedaron atadas por una prueba, porque el `drop` sólo es correcto
+  mientras exista el empuje, y el empuje sólo es no-duplicación mientras exista el `drop`.
+
 **2026-08-28 · lo que sólo se podía cerrar tocando producción:**
 
 - **A40 — el empuje OTLP, probado contra un Prometheus de verdad.** Se encendió

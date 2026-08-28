@@ -220,3 +220,40 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 		}
 	}
 }
+
+// TestElScrapeYElEmpujeNoTraenLoMismo — la guarda de «un solo productor por dato».
+//
+// `/metrics` sirve las métricas propias del cerebro Y la telemetría de flota. Con `fleet.otlp`
+// encendido, esa segunda mitad llega ADEMÁS por el empuje, con otro `instance`. No se pisan, así
+// que el daño no se ve como un error — se ve como que todo anda. Lo que pasa es que cada regla de
+// flota matchea DOS series y cada alerta sale DUPLICADA. Medido en producción al encenderlo:
+// 5 alertas se convirtieron en 10 avisos.
+//
+// Las dos mitades van juntas y esta prueba las ata: el `drop` en el scrape sólo es correcto
+// mientras exista el empuje, y el empuje sólo es no-duplicación mientras exista el `drop`.
+//
+// Sabotaje que la hace fallar: sacar el bloque metric_relabel_configs de prometheus.yml,
+// o borrar las tres alertas del empujador de musubi-alerts.yml.
+func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
+	prom, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	texto := string(prom)
+
+	tieneDrop := strings.Contains(texto, "metric_relabel_configs") &&
+		strings.Contains(texto, `regex: "musubi_fleet_.*"`) &&
+		strings.Contains(texto, "action: drop")
+	if !tieneDrop {
+		t.Error("el scrape ya no descarta `musubi_fleet_*`: con el empuje encendido, cada máquina tendría dos series y cada alerta de flota saldría duplicada")
+	}
+
+	// Y la contraparte: si el scrape no trae flota, la única fuente es el empuje. Que el empuje
+	// muera no puede ser invisible — las reglas de flota no fallarían, ENMUDECERÍAN.
+	reglas := reglasDeAlerta(t)
+	for _, alerta := range []string{"MusubiPushOTLPFallando", "MusubiPushOTLPMudo", "MusubiPushOTLPNuncaLlego"} {
+		if !strings.Contains(reglas, alerta) {
+			t.Errorf("falta la alerta %s: sin ella, un empuje muerto deja a las 12 reglas de flota sin datos y nadie se entera", alerta)
+		}
+	}
+}
