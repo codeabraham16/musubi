@@ -131,3 +131,25 @@ groups:
         annotations:
           summary: "Latido de la cadena de alertas. Si DEJA de llegar, lo roto es el sistema de alertas y todo el resto está ciego."
           runbook: "deploy/RUNBOOK.md#musubisiempreviva"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: CadenaDeAlertasFallando
+        # UN RECEPTOR QUE NO ENTREGA, MIENTRAS OTRO ENTREGA PERFECTO.
+        #
+        # Encontrado midiendo, no suponiendo: el receptor del dead-man's switch llevaba 32 horas
+        # fallando cada 5 minutos —387 errores— con el mismo Alertmanager mandando por Telegram
+        # sin un solo fallo. El error vivía en el log de un contenedor, que es donde las cosas
+        # van a no ser vistas.
+        #
+        # `by(integration)` y NO por `reason`: el motivo es útil en el mensaje, no para agrupar —
+        # un canal roto que rota entre `clientError` y `other` sería dos alertas distintas.
+        expr: sum by(integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "La cadena de alertas no entrega por {{ $labels.integration }}"
+          description: >-
+            {{ $value | printf "%.0f" }} envíos fallidos en 15 minutos. Los OTROS canales pueden
+            estar entregando bien: esta alerta llegó, así que al menos uno anda.
+          runbook: "deploy/RUNBOOK.md#cadenadealertasfallando"

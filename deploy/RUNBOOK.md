@@ -488,3 +488,35 @@ ping <ip-tailnet-de-la-maquina>
 Exige administrador y registra la tarea **al arranque, como SYSTEM**. Decidilo a conciencia:
 `musubi_fleet_exec` sobre esa máquina pasa a ejecutarse con privilegios de SYSTEM. Es opt-in por
 eso, no por comodidad.
+
+## CadenaDeAlertasFallando
+
+Alertmanager no puede entregar por uno de sus canales. **Que estés leyendo esto significa que otro
+canal sí anda** — si estuvieran todos rotos, este aviso tampoco habría salido. Eso lo cubre el
+dead-man's switch externo, no esta regla.
+
+```
+podman logs --tail 50 musubi-alertmanager 2>&1 | grep -i "notify for alerts failed"
+```
+
+El error dice el receptor y la causa. Los tres que se ven:
+
+| Error | Qué pasó |
+|---|---|
+| `read url_file: open …: no such file or directory` | El receptor apunta a un archivo de secreto que no existe. Es el caso del watchdog: la configuración estaba puesta y el archivo nunca se creó |
+| `unexpected status code 4xx` | La credencial venció, o el destino cambió |
+| `context deadline exceeded` | El destino no contesta. Si es un servicio externo, mirá su estado |
+
+**El caso del dead-man's switch**, que es el que motivó esta regla: `/etc/musubi/watchdog_url` no
+existía y el latido `MusubiSiempreViva` fallaba cada 5 minutos desde hacía 32 horas. Se arma
+creando el archivo con la URL de ping de un servicio externo (healthchecks.io, cronitor, o el que
+uses), con dueño y modo restringidos como los otros secretos:
+
+```
+printf '%s' 'https://<tu-servicio>/ping/<tu-uuid>' | sudo tee /home/musubi/musubi-prometheus/secretos/watchdog_url >/dev/null
+sudo chmod 600 /home/musubi/musubi-prometheus/secretos/watchdog_url
+podman restart musubi-alertmanager
+```
+
+Comprobalo: a los 5 minutos, `podman logs --tail 20 musubi-alertmanager | grep -i watchdog` no
+tiene que decir nada, y el servicio externo tiene que mostrar el ping.

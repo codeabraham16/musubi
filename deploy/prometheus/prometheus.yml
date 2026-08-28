@@ -134,6 +134,28 @@ scrape_configs:
         regex: "musubi_fleet_.*"
         action: drop
 
+  # QUIÉN VIGILA AL VIGILANTE. Sin este job, que la CADENA DE ALERTAS deje de entregar es
+  # invisible: Alertmanager lo escribe en su log de contenedor y nadie lee un log de contenedor.
+  #
+  # No es hipotético. Medido el 2026-08-28: el receptor del dead-man's switch llevaba **32 horas
+  # fallando cada 5 minutos** —387 errores, `url_file` a un archivo que no existe— con el mismo
+  # Alertmanager entregando perfecto por Telegram. 310 intentos por webhook, 279 fallos; 31 por
+  # Telegram, 0 fallos. Un canal roto al lado de uno sano, y nada lo contaba.
+  #
+  # LO QUE ESTE JOB NO PUEDE HACER, dicho: si la cadena entera muere, la alerta que avisa de eso
+  # tampoco sale. Eso no lo arregla ningún scrape — lo arregla el dead-man's switch EXTERNO, que
+  # es justamente lo que estaba roto. Este job cubre el caso real y frecuente: UN receptor caído
+  # mientras otro anda.
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["127.0.0.1:9093"]
+    metric_relabel_configs:
+      # 472 series expone, y 410 son `alertmanager_*`. El resto es el runtime de Go, que para
+      # esto no dice nada.
+      - source_labels: [__name__]
+        regex: "up|alertmanager_.*"
+        action: keep
+
   # Prometheus se scrapea a sí mismo: permite distinguir "el cerebro cayó" de "Prometheus cayó".
   #
   # EL 9099 NO ES UN CAPRICHO. 9090 es el puerto por defecto de **Cockpit**, que viene instalado

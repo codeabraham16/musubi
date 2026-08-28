@@ -303,3 +303,56 @@ func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
 		t.Error("el instalador no avisa qué pasa si la máquina se reinicia sin que nadie inicie sesión")
 	}
 }
+
+// LA CADENA DE ALERTAS SE VIGILA A SÍ MISMA, Y ESO NO ESTABA.
+//
+// Medido el 2026-08-28, no supuesto: el receptor del dead-man's switch llevaba **32 horas
+// fallando cada 5 minutos** —387 errores, un `url_file` a un archivo que no existía— mientras el
+// MISMO Alertmanager entregaba por Telegram sin un solo fallo. 310 intentos por webhook con 279
+// fallos; 31 por Telegram con 0. Un canal roto al lado de uno sano.
+//
+// Nada lo contaba: Prometheus scrapeaba dos targets —el cerebro y a sí mismo— y Alertmanager no
+// era ninguno. El error vivía en el log de un contenedor, que es donde las cosas van a no ser
+// vistas.
+//
+// Las dos mitades tienen que estar juntas o no sirve ninguna: el job sin la regla junta series
+// que nadie mira, y la regla sin el job es una alerta sin datos — que no falla, enmudece, y se
+// ve puesta.
+//
+// Sabotaje que la hace fallar: sacar el job `alertmanager` de prometheus.yml, o la regla de
+// musubi-alerts.yml.
+func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
+	cfg, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cfg), "job_name: alertmanager") {
+		t.Error("Prometheus no scrapea al Alertmanager: que la cadena de alertas deje de entregar " +
+			"queda sólo en el log de un contenedor")
+	}
+	if !strings.Contains(string(cfg), `targets: ["127.0.0.1:9093"]`) {
+		t.Error("el job del alertmanager no apunta al 9093, que es donde escucha y adonde lo manda `alerting:`")
+	}
+
+	reglas, err := os.ReadFile("../../deploy/musubi-alerts.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Se mira la regla y no el archivo: los comentarios de arriba nombran la métrica para
+	// explicar el caso, y un Contains sobre el texto entero se conformaría con la explicación.
+	var utiles []string
+	for _, l := range strings.Split(string(reglas), "\n") {
+		if s := strings.TrimSpace(l); s != "" && !strings.HasPrefix(s, "#") {
+			utiles = append(utiles, s)
+		}
+	}
+	cuerpo := strings.Join(utiles, "\n")
+	if !strings.Contains(cuerpo, "alertmanager_notifications_failed_total") {
+		t.Error("no hay regla sobre los envíos fallidos: el job junta las series y nadie las mira")
+	}
+	// Agrupado por `integration` y no por `reason`: un canal roto que rota entre `clientError` y
+	// `other` produciría dos alertas de la misma cosa.
+	if !strings.Contains(cuerpo, "by(integration)") {
+		t.Error("la regla no agrupa por integración: un mismo canal roto daría una alerta por cada motivo")
+	}
+}

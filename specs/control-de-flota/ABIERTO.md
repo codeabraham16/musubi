@@ -31,8 +31,6 @@
 | A17 | **SNMP / MQTT / Redfish** | Los tres piden una librería (dependencia nueva) o un protocolo binario a mano. SSH cubre routers, NAS, Raspberry Pis y servers sin agente — la mayoría de lo que hay. | **S7c** |
 | A26 | **`musubi shell` no funciona desde Windows** | El modo crudo se pide con `stty`, que no existe en la consola de Windows (ahí es `SetConsoleMode`). Desde Linux o macOS sí, contra cualquier Tier B. | **S5d** |
 | A27 | **La ventana no se redimensiona (SIGWINCH)** | No es «no se hizo»: el transporte elegido no lo permite. En Tier B el pty lo posee el `sshd` remoto y en Tier A lo posee `script`, así que **no tenemos su descriptor maestro** y no hay a quién mandarle un `TIOCSWINSZ`. El tamaño se fija al abrir. **Medido contra un `sshd` real (S7b)**: el `ioctl` del pty remoto da `0 0`, pero `tput` devuelve 24/80 y `top` dibuja — el fallback por `LINES`/`COLUMNS` alcanza para lo que se usa. Si el redimensionado importa de verdad, obliga a escribir el pty a mano —ioctls por OS y por arquitectura— y entonces se paga entero. | **S5d** |
-| A29 | **La cadena de alertas nunca se desplegó** | Se descubrió mirando `musubi-server` (100.79.126.62): el cerebro está vivo y sirviendo `/metrics`, y **nadie lo scrapea**. No hay Prometheus (el 9090 es **Cockpit**) ni Alertmanager. O sea que las 9 reglas de S4b, las de políticas de S10 y el dead-man's switch estaban escritos, probados e **INERTES**. El registro no lo vio porque cubre CÓDIGO y esto es DESPLIEGUE. Ya existe lo que faltaba: `deploy/docker/` (compose + `preparar.sh` + receta verificable). | **acción del operador** (`deploy/docker/README.md` ①) |
-| A34 | **El servidor corre un binario 8 commits atrás, y cambiarlo reinicia el CEREBRO** | `musubi-brain.service` y `musubi-agente.service` **comparten el mismo ejecutable** (`/usr/local/bin/musubi`, `0.108.0-flota.d6a3cb7`, verificado por `/proc/PID/exe`, no por `systemctl is-active`). Así que «actualizar el agente del servidor» no es actualizar un agente: es **redesplegar el cerebro**, con su ventana de indisponibilidad. **Medido, no supuesto**: de los 8 commits de diferencia, siete son de despliegue y documentación y el octavo es el arreglo de la ruta de RustDesk, que es del lado del AGENTE — y `musubi-server` no tiene la capacidad `screen`, así que no lo usa. **Al cerebro no le falta nada.** Queda anotado porque tres máquinas con dos binarios distintos es una divergencia que hay que conocer, no porque haya algo roto. Se cierra en el próximo redespliegue del cerebro, no antes. | **acción del operador** (①) |
 | A35 | **El relay propio está desplegado y VACÍO** | `hbbs`/`hbbr` corren en `musubi-server` atados al tailnet, con su clave generada y los cuatro puertos contestando — y **ningún cliente se registra contra él**: los dos Windows siguen apuntando al servidor PÚBLICO de RustDesk. Cambiar la configuración del cliente por el canal de comandos **cortaría la sesión de RustDesk que gio está usando en ese momento**, así que no se hace de prestado. Ojo con lo que esto NO significa: el plano de pantalla de Musubi **funciona igual** contra el servidor público —la compuerta, la contraseña acuñada, el vencimiento y la bitácora son de Musubi, no del relay—; lo que falta es dejar de depender de infraestructura ajena para el video. | **acción del operador** (②) |
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
@@ -48,7 +46,6 @@
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
-| A47 | **El redespliegue del cerebro que A34 da por trámite se volvió una puerta de una sola dirección** | S12 agrega las migraciones **36 y 37**, así que esta rama lleva el esquema de **v35 a v37**. `applyMigrations` tiene una guarda fail-closed hacia adelante (`internal/memory/migrations.go`): un binario que sólo llega a v35 **se niega a abrir** una base ya migrada, y hace bien. Cruzado con A34 —en `musubi-server`, `musubi-brain.service` y `musubi-agente.service` **comparten el mismo ejecutable**— actualizar deja de ser reversible: apenas el cerebro nuevo arranca y migra, **volver al binario viejo ya no arranca**, y el rollback pasa a ser restaurar la base, no copiar un archivo. A34 dice «al cerebro no le falta nada» y «se cierra en el próximo redespliegue»: las dos frases eran ciertas hasta este trabajo y **ya no lo son**. Antes de tocar `musubi-server`: copia de la base FUERA de la máquina y el redespliegue planificado, no improvisado. **Ningún slice podía ver esto solo** — U2 y U3 no se leían entre sí, y ninguno de los dos leyó A34. | **acción del operador**, ANTES de A34 |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -467,6 +464,45 @@ ejecutarse con privilegios de SYSTEM. Eso es una decisión de seguridad y la tom
 el despliegue. El camino por defecto ahora **avisa en pantalla** qué pasa si la máquina se
 reinicia, y una prueba custodia las dos mitades: que el default no escale, y que su costo esté
 dicho.
+
+**2026-08-28 (sexies) · la limpieza de la tabla, y el vigilante que nadie vigilaba.**
+
+Al preguntar «qué falta», lo primero fue verificar la tabla en vez de recitarla. Tres entradas
+estaban vencidas y se borran, con lo que se midió:
+
+- **A29** «la cadena de alertas nunca se desplegó» → Alertmanager 0.28.0, 23 h de uptime, dos
+  receptores (`default`, `watchdog`), tres alertas en vuelo. Desplegada.
+- **A34** «el servidor corre un binario 8 commits atrás» y **A47** «el redespliegue es una puerta
+  de una sola dirección» → el cerebro corre `0.111.1`. Cruzada, y con vuelta atrás que también
+  deshacía el esquema.
+
+Y **A35 sigue viva y confirmada**: el relay arranca (`Start`, `relay-servers=…`) y su log no
+registra un solo cliente. (El `Failed to store config: Bad configuration directory` que aparece
+dos veces al arrancar **es ruido**: la clave `id_ed25519` está en el volumen desde el 27 y
+sobrevivió al reinicio del 28. Se verificó antes de asustarse.)
+
+**Lo que apareció mirando: el dead-man's switch no estaba «sin armar», estaba FALLANDO.**
+
+`MusubiSiempreViva` sale cada 5 minutos hacia el receptor `watchdog`, y ese receptor apunta a
+`url_file: /etc/musubi/watchdog_url` — un archivo que **no existe**. Medido:
+
+    alertmanager_notifications_failed_total{integration="webhook"}  279
+    alertmanager_notifications_total{integration="webhook"}         310
+    alertmanager_notifications_total{integration="telegram"}         31   (0 fallos)
+
+**387 errores desde el 2026-08-27 13:54**, o sea 32 horas, cada 5 minutos, mientras el MISMO
+Alertmanager entregaba por Telegram sin un solo fallo. Un canal roto al lado de uno sano.
+
+Y nada lo contaba: Prometheus scrapeaba **dos** targets —el cerebro y a sí mismo— y Alertmanager
+no era ninguno. El error vivía en el log de un contenedor, que es donde las cosas van a no ser
+vistas. Se agrega el job y la regla `CadenaDeAlertasFallando`, agrupada por `integration` y no por
+`reason` para que un canal que rota entre motivos no dé varias alertas de lo mismo.
+
+**Lo que esa regla NO puede hacer, dicho:** si la cadena entera muere, la alerta que avisa de eso
+tampoco sale. Eso no lo arregla ningún scrape — lo arregla el dead-man's switch externo, que es
+justamente lo que estaba roto. La regla cubre el caso real y frecuente: un receptor caído mientras
+otro anda. Crear `watchdog_url` sigue siendo **acción del operador** (A22), y ahora el runbook
+tiene los tres comandos exactos.
 
 ---
 
