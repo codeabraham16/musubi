@@ -225,6 +225,15 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	if d := direccionPropia(); d != "" {
 		carga["direccion"] = d
 	}
+	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
+	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su
+	// propia puerta sería un segundo camino de autoridad para el mismo dato.
+	//
+	// Como todo lo demás del latido, NO LLEVA IDENTIDAD: el reporte dice qué corre, y de quién es
+	// la máquina lo decide el token del lado del cerebro (invariante B4/D5).
+	if svs := serviciosDelLatido(); len(svs) > 0 {
+		carga["servicios"] = svs
+	}
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
 		cuerpo = bytes.NewReader(b)

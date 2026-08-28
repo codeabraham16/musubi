@@ -101,7 +101,7 @@ func (s *McpServer) toolFleetServices(ctx context.Context, raw json.RawMessage) 
 			sinPermiso++
 			continue
 		}
-		filas = append(filas, filaDeServicio(sv, d, ahora, s.umbralEnLinea(d)))
+		filas = append(filas, filaDeServicio(sv, d, ahora))
 	}
 
 	return jsonResult(respuestaDeServicios(proyecto, filas, sinPermiso, huerfanos, filtro != ""))
@@ -210,7 +210,13 @@ func (s *McpServer) toolFleetServiceDeclare(ctx context.Context, raw json.RawMes
 //
 // Lo desconocido viaja como null —pid, reinicios y `desde` son punteros— y `estado` es
 // "desconocido" cuando no hay salud, JAMÁS "detenido".
-func filaDeServicio(sv fleet.Servicio, d fleet.Device, ahora time.Time, umbral time.Duration) map[string]interface{} {
+// filaDeServicio arma lo que ve el operador.
+//
+// NO recibe el umbral del dispositivo a propósito. Lo recibía, y ése fue el defecto: la frescura
+// de un SERVICIO se mide contra el ritmo del INVENTARIO (fleet.UmbralInventario), no contra el
+// del latido. Un parámetro que se ignora es peor que no tenerlo — el próximo lo pasa y espera
+// que importe.
+func filaDeServicio(sv fleet.Servicio, d fleet.Device, ahora time.Time) map[string]interface{} {
 	fila := map[string]interface{}{
 		"nombre": sv.Nombre,
 		"device": d.Name,
@@ -219,7 +225,11 @@ func filaDeServicio(sv fleet.Servicio, d fleet.Device, ahora time.Time, umbral t
 		// `fresco` es lo que separa «corriendo» de «lo último que supimos es que corría, hace dos
 		// días». Sin él, un servicio muerto con su última salud buena se lee como sano para
 		// siempre — el mismo modo de falla que el `online` derivado cierra para las máquinas.
-		"fresco":   sv.Fresco(ahora, umbral),
+		// La frescura de un SERVICIO no se mide con el umbral del DISPOSITIVO. El latido va cada
+		// pocos segundos; el inventario, cada `fleet.InventarioCada`. Medirlo con el del
+		// dispositivo dejaba todo servicio en `fresco: false` para siempre — y un false
+		// permanente no es una alarma, es ruido que enseña a ignorar la columna.
+		"fresco":   sv.Fresco(ahora, fleet.UmbralInventario),
 		"revocado": sv.Revocado,
 		// `declarado` se muestra porque cambia QUÉ le va a pasar a esta fila: lo que puso una
 		// persona no lo poda el latido de la máquina, y lo que enumeró la máquina desaparece solo

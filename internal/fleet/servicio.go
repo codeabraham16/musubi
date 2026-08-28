@@ -55,6 +55,25 @@ const (
 	// ServiciosPorLatido es cuántos servicios acepta un latido. 64 alcanza para cualquier host
 	// real (un servidor cargado tiene ~40 units interesantes) y acota el cuerpo.
 	ServiciosPorLatido = 64
+	// InventarioCada es cada cuánto el agente REENVÍA el inventario aunque no haya cambiado.
+	//
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// VIVE ACÁ, EN EL DOMINIO, Y NO EN EL AGENTE, PORQUE EL CEREBRO LA NECESITA IGUAL
+	//
+	// El agente manda el inventario cuando CAMBIÓ, más este piso. El cerebro decide si un
+	// servicio está FRESCO. Si cada lado elige su número por su cuenta, se separan — y se
+	// separaron: la primera versión usaba el umbral de «en línea» del dispositivo (90 s) contra
+	// un piso de 5 minutos, así que TODO servicio se leía viejo para siempre. Un `fresco: false`
+	// permanente no es una alarma, es ruido de fondo que enseña a ignorar la columna.
+	//
+	// Las dos puntas salen de acá, y hay una prueba que exige que el umbral del cerebro sea
+	// MAYOR que este piso.
+	InventarioCada = 5 * time.Minute
+	// UmbralInventario es cuánto aguanta el cerebro sin noticias antes de marcar un servicio
+	// como no fresco. Es DOS veces el piso a propósito: un reenvío perdido —un latido que no
+	// llegó, un reinicio del agente— no puede marcar la flota entera como vieja.
+	UmbralInventario = 2 * InventarioCada
+
 	// NombreServicioMax y DetalleServicioMax se cuentan en RUNAS, no en bytes: el nombre de una
 	// unit y el `Result=` de systemd pueden traer acentos, y cortar a la mitad de un carácter
 	// multibyte deja basura en una columna que después se dibuja.
@@ -75,7 +94,22 @@ var (
 // Es un enum y no texto libre por la misma razón que las tags SÍ son texto libre: la clase va a
 // terminar agrupando y filtrando, y un campo que agrupa con valores libres agrupa mal el día que
 // alguien escriba «Systemd» con mayúscula.
-var clasesConocidas = map[string]bool{"": true, "systemd": true, "windows": true, "docker": true}
+// PODMAN FALTABA, Y SE VIO AL DESPLEGAR. El servidor real corre 18 contenedores con podman
+// rootless; el agente los enumeraba bien y el cerebro les vaciaba la clase en silencio, porque
+// `podman` no estaba en este mapa. El resultado era peor que un error: 18 filas correctas con
+// una columna en blanco, indistinguibles de las que de verdad no saben decir quién las corre.
+//
+// Se agrega también `launchd`, que el enumerador de macOS ya emite.
+//
+// Y NO se agrega nada más. La primera versión de este arreglo metió `kubernetes` por las dudas
+// —«si un día alguien lo reporta»— y dos pruebas existentes se pusieron rojas, porque usaban esa
+// clase justamente como su ejemplo de una desconocida. Tenían razón: el enum se ensancha cuando
+// un enumerador REAL emite el valor, no antes. Una clase que nadie produce es una entrada que
+// sólo sirve para que el enum deje de rechazar algo.
+var clasesConocidas = map[string]bool{
+	"": true, "systemd": true, "windows": true,
+	"docker": true, "podman": true, "launchd": true,
+}
 
 // SaludServicio es el PRESENTE de un servicio, serializado a JSON en UNA columna. Mismo idioma
 // del «no sé» que fleet.Muestra: lo que no se pudo medir es un puntero nil, nunca un cero.

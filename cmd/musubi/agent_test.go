@@ -33,6 +33,13 @@ func TestElLatidoLlevaElTokenEnElHeaderYUnCuerpoChico(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	// El inventario se anula a propósito: esta prueba mide el AUTORREPORTE, y dejarla mirando lo
+	// que corra en la máquina que ejecuta la suite la haría pasar o fallar según el host. Que el
+	// inventario no viaje en cada latido lo custodia TestElInventarioNoViajaEnCadaLatido.
+	anteriorEnum := enumerarServicios
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
+	t.Cleanup(func() { enumerarServicios = anteriorEnum })
+
 	res := latir(ts.URL+"/fleet/heartbeat", "tok-abc", nil)
 	if !res.ok {
 		t.Fatalf("el latido falló: %+v", res)
@@ -40,9 +47,59 @@ func TestElLatidoLlevaElTokenEnElHeaderYUnCuerpoChico(t *testing.T) {
 	if vistoAuth != "Bearer tok-abc" {
 		t.Errorf("Authorization = %q, esperaba el bearer del dispositivo", vistoAuth)
 	}
-	// Sin muestra, el cuerpo es sólo el autorreporte: decenas de bytes, no cientos.
+	// Sin muestra Y SIN INVENTARIO NUEVO, el cuerpo es sólo el autorreporte: decenas de bytes.
+	//
+	// La condición «sin inventario nuevo» es de S12 y hace la guarda MÁS estricta, no menos. El
+	// primer latido lleva el inventario a propósito —si no, la máquina nunca reportaría lo que
+	// corre—, así que lo que se custodia es el ESTADO ESTABLE: el segundo latido, con el mismo
+	// inventario, tiene que volver a ser chico. Sin eso, colgar el inventario de cada latido
+	// manda 7 KB cada diez segundos por máquina, que fue exactamente lo que esta prueba atajó.
 	if largoCuerpo > 512 {
 		t.Errorf("el latido SIN muestra mandó %d bytes: debería ser sólo el autorreporte", largoCuerpo)
+	}
+}
+
+// TestElInventarioNoViajaEnCadaLatido — la contraparte de la guarda de arriba.
+//
+// El inventario se manda cuando CAMBIÓ, y además cada `intervaloInventarioCompleto` para que
+// `last_report` no envejezca. Entre medio, el latido no lo lleva. Que no viaje NO borra nada: la
+// poda del cerebro sólo corre cuando llega una lista.
+//
+// Sabotaje que la hace fallar: devolver siempre `lista` en serviciosDelLatido, sin mirar la huella.
+func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
+	anterior := enumerarServicios
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) {
+		return []fleet.ReporteServicio{{
+			Nombre: "postgres", Clase: "systemd",
+			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoCorriendo},
+		}}, nil
+	}
+	ultimoInventario.Lock()
+	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+	ultimoInventario.Unlock()
+	t.Cleanup(func() {
+		enumerarServicios = anterior
+		ultimoInventario.Lock()
+		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+		ultimoInventario.Unlock()
+	})
+
+	if primero := serviciosDelLatido(); len(primero) != 1 {
+		t.Fatalf("el PRIMER latido no llevó el inventario (%d servicios): la máquina nunca reportaría lo que corre", len(primero))
+	}
+	if segundo := serviciosDelLatido(); segundo != nil {
+		t.Errorf("el segundo latido volvió a mandar el inventario sin que cambiara nada (%d servicios): son 7 KB cada diez segundos por máquina", len(segundo))
+	}
+
+	// Y cuando SÍ cambia, viaja de nuevo — o un servicio que se cae tardaría 5 minutos en verse.
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) {
+		return []fleet.ReporteServicio{{
+			Nombre: "postgres", Clase: "systemd",
+			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoFallado},
+		}}, nil
+	}
+	if cambiado := serviciosDelLatido(); len(cambiado) != 1 {
+		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
 	}
 }
 

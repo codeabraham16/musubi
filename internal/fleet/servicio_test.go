@@ -234,3 +234,63 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return b
 }
+
+// TestLasClasesCubrenLoQueLosEnumeradoresEMITEN — la guarda del defecto que se vio desplegando.
+//
+// El agente enumera contenedores de podman y servicios de launchd, y el cerebro le vaciaba la
+// clase en silencio porque no estaban en el enum. No daba error: dejaba 18 filas correctas con
+// una columna en blanco, indistinguibles de las que de verdad no saben decir quién las corre.
+//
+// Esta prueba ata el enum a lo que los enumeradores producen. Si alguien agrega un enumerador
+// nuevo y olvida la clase, se pone roja acá en vez de perderse el dato en producción.
+//
+// Sabotaje que la hace fallar: sacar "podman" de clasesConocidas.
+func TestLasClasesCubrenLoQueLosEnumeradoresEmiten(t *testing.T) {
+	// Cada una la emite un enumerador de cmd/musubi: systemd y podman/docker en Linux,
+	// windows en Windows, launchd en macOS.
+	for _, c := range []string{"systemd", "podman", "docker", "windows", "launchd"} {
+		if !ClaseValida(c) {
+			t.Errorf("la clase %q la emite un enumerador y el cerebro la descarta: la fila se guarda igual, con la columna en blanco y sin un solo error", c)
+		}
+	}
+	// Y sigue siendo un ENUM: texto libre agruparía mal el día que alguien escriba «Systemd».
+	for _, c := range []string{"cualquier-cosa", "Systemd ", "supervisord"} {
+		if ClaseValida(c) && strings.TrimSpace(strings.ToLower(c)) != "systemd" {
+			t.Errorf("la clase %q se aceptó: dejó de ser un enum acotado", c)
+		}
+	}
+}
+
+// TestElUmbralDeFrescuraAguantaElRitmoDelInventario — la guarda del defecto que se vio en la
+// primera fila que devolvió producción.
+//
+// El agente reenvía el inventario cada `InventarioCada`. El cerebro marca un servicio como no
+// fresco pasado `UmbralInventario`. Si el umbral no le gana holgadamente al piso, TODO servicio
+// se lee viejo para siempre — y un `fresco: false` permanente no es una alarma, es ruido de fondo
+// que enseña a ignorar la columna. Fue exactamente lo que pasó: 90 s de umbral contra 5 min de
+// piso, y las 54 filas de musubi-server salieron todas con `fresco: false`.
+//
+// Sabotaje que la hace fallar: poner UmbralInventario = InventarioCada.
+func TestElUmbralDeFrescuraAguantaElRitmoDelInventario(t *testing.T) {
+	if UmbralInventario <= InventarioCada {
+		t.Fatalf("UmbralInventario (%s) no le gana al piso de reenvío (%s): todo servicio se leería viejo para siempre",
+			UmbralInventario, InventarioCada)
+	}
+	// Tiene que aguantar UN reenvío perdido. Un latido que no llegó o un reinicio del agente no
+	// pueden marcar la flota entera como vieja.
+	if UmbralInventario < 2*InventarioCada {
+		t.Errorf("UmbralInventario (%s) no aguanta un reenvío perdido (haría falta %s): un solo latido caído marcaría todo viejo",
+			UmbralInventario, 2*InventarioCada)
+	}
+
+	// Y el caso concreto: un servicio que reportó hace un intervalo SIGUE fresco.
+	sv := Servicio{UltimoReporte: time.Now().Add(-InventarioCada - 30*time.Second)}
+	if !sv.Fresco(time.Now(), UmbralInventario) {
+		t.Error("un servicio que reportó hace poco más de un intervalo ya se lee viejo")
+	}
+	// Pero uno abandonado, no.
+	viejo := Servicio{UltimoReporte: time.Now().Add(-3 * UmbralInventario)}
+	if viejo.Fresco(time.Now(), UmbralInventario) {
+		t.Error("un servicio que no reporta hace media hora se sigue leyendo fresco: el `fresco` dejó de separar «corriendo» de «lo último que supimos»")
+	}
+}
