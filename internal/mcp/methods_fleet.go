@@ -178,8 +178,8 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 		}
 	}
 
-	proyecto := fleetReadScopeFor(p, args.Project)
-	if proyecto == "" {
+	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	if len(proyectos) == 0 {
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto listar la flota: declaralo en `project`")
 	}
 
@@ -187,128 +187,143 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 	// quiere ver la flota con su propio criterio. Sin él, cada máquina usa el suyo (I2).
 	umbralExplicito := time.Duration(args.UmbralSegundos) * time.Second
 
-	devices, err := s.engine.ListarDevices(proyecto, args.IncluirBajas)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
-	}
-
 	ahora := time.Now()
-	filas := make([]map[string]interface{}, 0, len(devices))
+	filas := make([]map[string]interface{}, 0)
 	enLinea := 0
-	for _, d := range devices {
-		umbral := umbralExplicito
-		if umbral <= 0 {
-			umbral = s.umbralEnLinea(d)
+	for _, proyecto := range proyectos {
+		devices, err := s.engine.ListarDevices(proyecto, args.IncluirBajas)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
-		vivo := d.EnLinea(ahora, umbral)
-		if vivo {
-			enLinea++
-		}
-		fila := map[string]interface{}{
-			"name":      d.Name,
-			"device_id": d.ID,
-			"tier":      string(d.Tier),
-			"caps":      capsComoLista(d.Caps),
-			"os":        d.OS,
-			"arch":      d.Arch,
-			"address":   d.Address,
-			"tags":      d.Tags,
-			"online":    vivo, // DERIVADO, no guardado
-			// C8 — la INTERSECCIÓN real entre lo que la máquina admite y lo que ESTA credencial
-			// tiene concedido. `caps` dice qué se le puede pedir a la máquina; `puedo` dice qué
-			// se le puede pedir DESDE ACÁ. Un inventario que muestra sólo lo primero enseña a
-			// ignorar el campo: la mitad de las veces no se corresponde con lo que pasa al pedirlo.
-			"puedo":       capsComoLista(capsQuePuede(p, d)),
-			"enrolled_at": d.EnrolledAt.UTC().Format(time.RFC3339),
-			"revoked":     d.Revoked,
-			// El umbral viaja POR MÁQUINA porque desde S10 ya no es uno solo: un Tier A se da por
-			// caído a los 90 s y un Tier B al triple de su intervalo de sondeo (I2). Sin este
-			// campo, dos filas con el mismo `silencio_segundos` y distinto `online` parecen un bug.
-			"umbral_segundos": int(umbral.Seconds()),
-		}
-		// QUÉ BINARIO CORRE ESTA MÁQUINA. El dato se guardaba desde el principio —el agente lo
-		// manda en cada latido y `LatirDevice` lo escribe en `agent_version`— y NO SE MOSTRABA EN
-		// NINGÚN LADO. Una columna llena que nadie puede leer.
-		//
-		// El costo apareció auditando: `kernelos-pc` figuraba en línea, latiendo, y con CERO
-		// servicios. Eso tiene dos causas posibles y opuestas —corre un binario anterior a la
-		// enumeración, o corre el nuevo y su enumerador falla— y no había forma de distinguirlas.
-		// Es el modo de fallo de todo este track: dos causas distintas con el mismo síntoma.
-		//
-		// Vacío significa «esta máquina nunca latió con una versión», que es cierto para un Tier B
-		// (no corre nuestro binario) y sospechoso para un Tier A. Se omite el campo en vez de
-		// mandar "" para que la ausencia se vea como ausencia.
-		//
-		// NO VA COMO ETIQUETA DE PROMETHEUS, y la decisión es deliberada: la versión cambia en
-		// cada despliegue, así que como label crearía una serie nueva por máquina y por versión —
-		// exactamente el «ninguna etiqueta puede tomar un valor que rota» que este track sostiene.
-		// Acá el lugar correcto es el inventario, que es donde alguien pregunta qué corre dónde.
-		if d.AgentVer != "" {
-			fila["agent_version"] = d.AgentVer
-		}
-		// La allowlist EFECTIVA, cuando la hay. Ausente ⇒ sin restricción; presente y vacía ⇒
-		// ningún comando. Las dos cosas se dibujan distinto a propósito: si «puede todo» y «no
-		// puede nada» compartieran celda, el campo no serviría para decidir nada.
-		if permitidos, hay := comandosPermitidos(p, d); hay {
-			fila["comandos_permitidos"] = permitidos
-		}
-		// A23 — QUÉ ACTÚA SOLO SOBRE ESTA MÁQUINA. S10 dejó al cerebro ejecutando comandos sin
-		// una persona detrás y eso no se veía en ningún lado: una máquina con auto-heal encima era
-		// indistinguible de una sin él. El detalle exige `exec` (misma regla que la bitácora); el
-		// CONTEO lo ve cualquiera que vea la máquina, porque «acá pasa algo automático» no es un
-		// secreto y ocultarlo dejaría a alguien viendo cambiar una máquina sin ninguna pista.
-		// A13 — el id de pantalla, y si es AMBIGUO. Se dice en el inventario y no sólo al fallar
-		// una apertura: alguien que revisa la flota tiene que poder ver el problema antes de
-		// necesitar la pantalla, no en el momento en que la necesita.
-		if d.RustdeskID != "" && PuedeSobreDevice(p, d, fleet.CapScreen) {
-			fila["rustdesk_id"] = d.RustdeskID
-			if otras, fuera, err := s.engine.QuienMasDiceSer(d.ID, d.RustdeskID, proyecto); err == nil && (len(otras) > 0 || fuera > 0) {
-				fila["rustdesk_id_ambiguo"] = true
-				fila["rustdesk_id_tambien_en"] = otras
-				if fuera > 0 {
-					fila["rustdesk_id_fuera_de_alcance"] = fuera
+		for _, d := range devices {
+			umbral := umbralExplicito
+			if umbral <= 0 {
+				umbral = s.umbralEnLinea(d)
+			}
+			vivo := d.EnLinea(ahora, umbral)
+			if vivo {
+				enLinea++
+			}
+			fila := map[string]interface{}{
+				"name":      d.Name,
+				"device_id": d.ID,
+				// EL PROYECTO VA EN LA FILA, no sólo en el encabezado. Con `read: all` la respuesta
+				// mezcla tenants, y una tabla que no dice de quién es cada máquina es peor que una
+				// que no las muestra: invita a actuar sobre la de otro cliente.
+				"project": d.ProjectID,
+				"tier":    string(d.Tier),
+				"caps":    capsComoLista(d.Caps),
+				"os":      d.OS,
+				"arch":    d.Arch,
+				"address": d.Address,
+				"tags":    d.Tags,
+				"online":  vivo, // DERIVADO, no guardado
+				// C8 — la INTERSECCIÓN real entre lo que la máquina admite y lo que ESTA credencial
+				// tiene concedido. `caps` dice qué se le puede pedir a la máquina; `puedo` dice qué
+				// se le puede pedir DESDE ACÁ. Un inventario que muestra sólo lo primero enseña a
+				// ignorar el campo: la mitad de las veces no se corresponde con lo que pasa al pedirlo.
+				"puedo":       capsComoLista(capsQuePuede(p, d)),
+				"enrolled_at": d.EnrolledAt.UTC().Format(time.RFC3339),
+				"revoked":     d.Revoked,
+				// El umbral viaja POR MÁQUINA porque desde S10 ya no es uno solo: un Tier A se da por
+				// caído a los 90 s y un Tier B al triple de su intervalo de sondeo (I2). Sin este
+				// campo, dos filas con el mismo `silencio_segundos` y distinto `online` parecen un bug.
+				"umbral_segundos": int(umbral.Seconds()),
+			}
+			// QUÉ BINARIO CORRE ESTA MÁQUINA. El dato se guardaba desde el principio —el agente lo
+			// manda en cada latido y `LatirDevice` lo escribe en `agent_version`— y NO SE MOSTRABA EN
+			// NINGÚN LADO. Una columna llena que nadie puede leer.
+			//
+			// El costo apareció auditando: `kernelos-pc` figuraba en línea, latiendo, y con CERO
+			// servicios. Eso tiene dos causas posibles y opuestas —corre un binario anterior a la
+			// enumeración, o corre el nuevo y su enumerador falla— y no había forma de distinguirlas.
+			// Es el modo de fallo de todo este track: dos causas distintas con el mismo síntoma.
+			//
+			// Vacío significa «esta máquina nunca latió con una versión», que es cierto para un Tier B
+			// (no corre nuestro binario) y sospechoso para un Tier A. Se omite el campo en vez de
+			// mandar "" para que la ausencia se vea como ausencia.
+			//
+			// NO VA COMO ETIQUETA DE PROMETHEUS, y la decisión es deliberada: la versión cambia en
+			// cada despliegue, así que como label crearía una serie nueva por máquina y por versión —
+			// exactamente el «ninguna etiqueta puede tomar un valor que rota» que este track sostiene.
+			// Acá el lugar correcto es el inventario, que es donde alguien pregunta qué corre dónde.
+			if d.AgentVer != "" {
+				fila["agent_version"] = d.AgentVer
+			}
+			// La allowlist EFECTIVA, cuando la hay. Ausente ⇒ sin restricción; presente y vacía ⇒
+			// ningún comando. Las dos cosas se dibujan distinto a propósito: si «puede todo» y «no
+			// puede nada» compartieran celda, el campo no serviría para decidir nada.
+			if permitidos, hay := comandosPermitidos(p, d); hay {
+				fila["comandos_permitidos"] = permitidos
+			}
+			// A23 — QUÉ ACTÚA SOLO SOBRE ESTA MÁQUINA. S10 dejó al cerebro ejecutando comandos sin
+			// una persona detrás y eso no se veía en ningún lado: una máquina con auto-heal encima era
+			// indistinguible de una sin él. El detalle exige `exec` (misma regla que la bitácora); el
+			// CONTEO lo ve cualquiera que vea la máquina, porque «acá pasa algo automático» no es un
+			// secreto y ocultarlo dejaría a alguien viendo cambiar una máquina sin ninguna pista.
+			// A13 — el id de pantalla, y si es AMBIGUO. Se dice en el inventario y no sólo al fallar
+			// una apertura: alguien que revisa la flota tiene que poder ver el problema antes de
+			// necesitar la pantalla, no en el momento en que la necesita.
+			if d.RustdeskID != "" && PuedeSobreDevice(p, d, fleet.CapScreen) {
+				fila["rustdesk_id"] = d.RustdeskID
+				if otras, fuera, err := s.engine.QuienMasDiceSer(d.ID, d.RustdeskID, proyecto); err == nil && (len(otras) > 0 || fuera > 0) {
+					fila["rustdesk_id_ambiguo"] = true
+					fila["rustdesk_id_tambien_en"] = otras
+					if fuera > 0 {
+						fila["rustdesk_id_fuera_de_alcance"] = fuera
+					}
+				}
+				// Un id que CAMBIÓ no bloquea nada —reinstalar una máquina es normal— pero se ve:
+				// la otra explicación posible es que alguien esté mintiendo.
+				if !d.RustdeskIDCambiado.IsZero() {
+					fila["rustdesk_id_cambio"] = d.RustdeskIDCambiado.UTC().Format(time.RFC3339)
+					fila["rustdesk_id_previo"] = d.RustdeskIDPrevio
 				}
 			}
-			// Un id que CAMBIÓ no bloquea nada —reinstalar una máquina es normal— pero se ve:
-			// la otra explicación posible es que alguien esté mintiendo.
-			if !d.RustdeskIDCambiado.IsZero() {
-				fila["rustdesk_id_cambio"] = d.RustdeskIDCambiado.UTC().Format(time.RFC3339)
-				fila["rustdesk_id_previo"] = d.RustdeskIDPrevio
+			// A18 — UNA CAPACIDAD INERTE NO PUEDE DIBUJARSE IGUAL QUE UNA VIVA. Es la misma lección
+			// que `puede_actuar` en las políticas (A23): `screen` concedido sobre un tier sin motor
+			// se veía idéntico a `screen` sobre un Tier A, y `puedo` lo listaba como ejercible. Se
+			// dice acá y no sólo al fallar la apertura, por el mismo motivo que el id ambiguo: quien
+			// revisa la flota tiene que poder verlo ANTES de necesitar la pantalla.
+			if PuedeSobreDevice(p, d, fleet.CapScreen) {
+				if _, hayMotor := fleet.MotorDePantalla(d.Tier); !hayMotor {
+					fila["pantalla_sin_motor"] = true
+				}
 			}
-		}
-		// A18 — UNA CAPACIDAD INERTE NO PUEDE DIBUJARSE IGUAL QUE UNA VIVA. Es la misma lección
-		// que `puede_actuar` en las políticas (A23): `screen` concedido sobre un tier sin motor
-		// se veía idéntico a `screen` sobre un Tier A, y `puedo` lo listaba como ejercible. Se
-		// dice acá y no sólo al fallar la apertura, por el mismo motivo que el id ambiguo: quien
-		// revisa la flota tiene que poder verlo ANTES de necesitar la pantalla.
-		if PuedeSobreDevice(p, d, fleet.CapScreen) {
-			if _, hayMotor := fleet.MotorDePantalla(d.Tier); !hayMotor {
-				fila["pantalla_sin_motor"] = true
+			if detalle, total := s.politicasSobre(p, d); total > 0 {
+				fila["politicas_activas"] = total
+				if detalle != nil {
+					fila["politicas"] = detalle
+				}
 			}
-		}
-		if detalle, total := s.politicasSobre(p, d); total > 0 {
-			fila["politicas_activas"] = total
-			if detalle != nil {
-				fila["politicas"] = detalle
+			if d.LastSeen.IsZero() {
+				// Nunca latió. Decirlo explícito evita que un `last_seen` vacío se lea como un
+				// error de serialización.
+				fila["last_seen"] = nil
+				fila["nunca_latio"] = true
+			} else {
+				fila["last_seen"] = d.LastSeen.UTC().Format(time.RFC3339)
+				fila["silencio_segundos"] = int(ahora.Sub(d.LastSeen).Seconds())
 			}
+			filas = append(filas, fila)
 		}
-		if d.LastSeen.IsZero() {
-			// Nunca latió. Decirlo explícito evita que un `last_seen` vacío se lea como un
-			// error de serialización.
-			fila["last_seen"] = nil
-			fila["nunca_latio"] = true
-		} else {
-			fila["last_seen"] = d.LastSeen.UTC().Format(time.RFC3339)
-			fila["silencio_segundos"] = int(ahora.Sub(d.LastSeen).Seconds())
-		}
-		filas = append(filas, fila)
 	}
 
 	res := map[string]interface{}{
-		"project_id": proyecto,
-		"total":      len(filas),
-		"online":     enLinea,
-		"devices":    filas,
+		"projects": proyectos,
+		"total":    len(filas),
+		"online":   enLinea,
+		"devices":  filas,
+	}
+	// `project_id` SE MANTIENE cuando hay uno solo. Es el 99 % de los llamadores y sacarlo sería
+	// romperlos por una generalización que no les toca.
+	if len(proyectos) == 1 {
+		res["project_id"] = proyectos[0]
+	}
+	// Un barrido recortado se DICE. Un panel que muestra 64 proyectos de 80 sin avisar enseña a
+	// creer que ésos son todos.
+	if truncado {
+		res["proyectos_truncados"] = true
 	}
 	// El umbral GLOBAL sólo existe si alguien lo impuso. Publicar uno cuando cada tier usa el
 	// suyo sería peor que no publicar nada: el número saldría en la respuesta y contradiría, en
@@ -379,6 +394,29 @@ func fleetReadScopeFor(p *Principal, declarado string) string {
 	return p.ProjectID
 }
 
+// proyectosParaLeer resuelve QUÉ proyectos responde una tool de LECTURA de flota.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL PANEL NO PODÍA VER NADA, Y EL SÍNTOMA CULPABA AL CEREBRO
+//
+// `fleetReadScopeFor` cae al `ProjectID` del principal cuando no se declara un proyecto. Para el
+// principal del panel —`read: all`, `project_id: ""` a propósito, porque no es de un tenant— eso
+// daba vacío, y las tres tools contestaban «no se pudo determinar de qué proyecto». El panel lo
+// dibujaba como `estado: caido`, que se lee como «el cerebro se cayó» estando el cerebro
+// perfecto. Medido: `musubi_fleet_list`, `_metrics` y `_services` fallaban las tres igual.
+//
+// La salida NO es aflojar el WHERE por proyecto: eso sería un «listar todo» y se llevaría puesto
+// el aislamiento por tenant. Es enumerar los proyectos y consultar CADA UNO POR SEPARADO, con su
+// WHERE intacto — que es exactamente lo que el export federado a Prometheus ya hacía desde S11.
+// Quien tiene `read: all` recibe todos porque eso es lo que su credencial concede; quien está
+// acotado sigue viendo el suyo y nada más.
+func (s *McpServer) proyectosParaLeer(p *Principal, declarado string) (proyectos []string, truncado bool) {
+	if pr := fleetReadScopeFor(p, declarado); pr != "" {
+		return []string{pr}, false
+	}
+	return proyectosVisibles(s.engine, p)
+}
+
 // limpiarTags saca vacíos y espacios. Las tags son texto libre del administrador: no se validan
 // contra un enum (agrupar por «sala», «cliente-x» o «crítico» es cosa de quien opera), pero sí se
 // normalizan para que la columna CSV no acumule basura.
@@ -420,39 +458,48 @@ func (s *McpServer) toolFleetMetrics(ctx context.Context, raw json.RawMessage) (
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyecto := fleetReadScopeFor(p, args.Project)
-	if proyecto == "" {
+	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	if len(proyectos) == 0 {
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto leer las métricas: declaralo en `project`")
-	}
-
-	devices, err := s.engine.ListarDevices(proyecto, false)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 
 	filtro := strings.TrimSpace(args.Device)
 	ahora := time.Now()
-	filas := make([]map[string]interface{}, 0, len(devices))
+	filas := make([]map[string]interface{}, 0)
 	sinPermiso, sinMuestra := 0, 0
 
-	for _, d := range devices {
-		if filtro != "" && d.Name != filtro {
-			continue
+	for _, proyecto := range proyectos {
+		devices, err := s.engine.ListarDevices(proyecto, false)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
-		if !PuedeSobreDevice(p, d, fleet.CapMetrics) {
-			sinPermiso++
-			continue
+		for _, d := range devices {
+			if filtro != "" && d.Name != filtro {
+				continue
+			}
+			if !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+				sinPermiso++
+				continue
+			}
+			if d.UltimaMuestra == nil {
+				sinMuestra++
+				continue
+			}
+			fila := filaDeMetricas(d, *d.UltimaMuestra, ahora, s.umbralEnLinea(d))
+			fila["project"] = d.ProjectID
+			filas = append(filas, fila)
 		}
-		if d.UltimaMuestra == nil {
-			sinMuestra++
-			continue
-		}
-		filas = append(filas, filaDeMetricas(d, *d.UltimaMuestra, ahora, s.umbralEnLinea(d)))
 	}
 
 	res := map[string]interface{}{
-		"project_id": proyecto,
-		"devices":    filas,
+		"projects": proyectos,
+		"devices":  filas,
+	}
+	if len(proyectos) == 1 {
+		res["project_id"] = proyectos[0]
+	}
+	if truncado {
+		res["proyectos_truncados"] = true
 	}
 	// Se DICE cuántas quedaron fuera y por qué. Una lista corta sin explicación se lee como
 	// «no hay más máquinas», que es distinto de «no podés verlas» y de «todavía no reportaron».

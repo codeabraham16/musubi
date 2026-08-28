@@ -431,3 +431,125 @@ func TestElInventarioDiceQueBinarioCorreCadaMaquina(t *testing.T) {
 		t.Errorf("agent_version = %q", v)
 	}
 }
+
+// EL PANEL SIN PROYECTO PROPIO TIENE QUE PODER VER, Y ESO ESTUVO ROTO TODO EL TIEMPO.
+//
+// El principal del panel es `read: all` con `project_id: ""` — vacío A PROPÓSITO, porque no es de
+// ningún cliente. Y las tres tools de lectura resolvían el proyecto cayendo al `ProjectID` del
+// principal, así que las tres contestaban «no se pudo determinar de qué proyecto». Medido contra
+// producción: `fleet_list`, `fleet_metrics` y `fleet_services` fallaban las tres igual.
+//
+// El síntoma MENTÍA, que es lo peor: el panel lo dibujaba como `estado: caido`, o sea «el cerebro
+// se murió», con el cerebro latiendo y exportando 233 series. Un panel que culpa al backend por
+// su propio problema de alcance manda a depurar el lugar equivocado.
+//
+// La salida NO es aflojar el WHERE por proyecto —eso sería un «listar todo» y se llevaría puesto
+// el aislamiento entre tenants—: es enumerar los proyectos y consultar cada uno POR SEPARADO.
+//
+// Sabotaje que la hace fallar: volver `proyectosParaLeer` a `fleetReadScopeFor` a secas.
+func TestUnPanelSinProyectoPropioVeTodoLoQueSuCredencialConcede(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	enrolarDePrueba(t, s, "cliente-acme", "server-acme")
+
+	// El principal del panel, tal cual está en producción.
+	panel := &Principal{Name: "panel-central", Role: RoleReader, Read: ReadAll, Write: WriteNone,
+		ProjectID: "", Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"*"}}}
+
+	res, e := callAsPrincipal(t, s, panel, "musubi_fleet_list", map[string]any{})
+	if e != nil {
+		t.Fatalf("el panel no pudo listar la flota: %+v — es exactamente el «estado: caido» de producción", e)
+	}
+	out := jsonOf(t, res)
+	devs, _ := out["devices"].([]any)
+	if len(devs) != 2 {
+		t.Fatalf("el panel vio %d máquinas de 2: no está barriendo todos los proyectos que su credencial concede", len(devs))
+	}
+
+	// CADA FILA DICE DE QUÉ PROYECTO ES. Con read=all la tabla mezcla tenants, y una fila que no
+	// lo dice invita a actuar sobre la máquina de otro cliente.
+	vistos := map[string]string{}
+	for _, d := range devs {
+		f, _ := d.(map[string]any)
+		nombre, _ := f["name"].(string)
+		proy, hay := f["project"].(string)
+		if !hay || proy == "" {
+			t.Errorf("la fila de %q no dice de qué proyecto es: en una tabla mezclada eso es una trampa", nombre)
+		}
+		vistos[nombre] = proy
+	}
+	if vistos["pc-gio"] != "casa" || vistos["server-acme"] != "cliente-acme" {
+		t.Errorf("las filas se atribuyeron mal: %+v", vistos)
+	}
+
+	// Y un principal ACOTADO sigue viendo lo suyo y nada más: el arreglo no puede haber abierto
+	// una puerta lateral. Ésta es la mitad que impide «arreglarlo» sacando el WHERE.
+	acotado := &Principal{Name: "dev", Role: RoleWriter, Read: ReadOwn, ProjectID: "casa"}
+	res2, e2 := callAsPrincipal(t, s, acotado, "musubi_fleet_list", map[string]any{})
+	if e2 != nil {
+		t.Fatal(e2)
+	}
+	devs2, _ := jsonOf(t, res2)["devices"].([]any)
+	if len(devs2) != 1 {
+		t.Fatalf("un principal acotado vio %d máquinas: el arreglo cruzó tenants", len(devs2))
+	}
+}
+
+// LO MISMO PARA SERVICIOS Y MÉTRICAS, PORQUE LAS TRES ESTABAN ROTAS.
+//
+// Arreglar sólo `fleet_list` dejaría el panel a medias: la tabla de máquinas se dibujaría y las
+// dos secciones que el usuario pidió —los servicios y el estado— seguirían vacías, sin error.
+//
+// Sabotaje que la hace fallar: dejar `fleetReadScopeFor` en toolFleetServices o en toolFleetMetrics.
+func TestElPanelTambienVeLosServiciosYLasMetricasDeTodosLosProyectos(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	// enrolarDePrueba devuelve el TOKEN, no el id: los servicios se reportan contra el device_id,
+	// así que se resuelve por nombre en cada proyecto.
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	enrolarDePrueba(t, s, "cliente-acme", "server-acme")
+	idDe := func(proyecto, nombre string) string {
+		t.Helper()
+		ds, err := s.engine.ListarDevices(proyecto, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range ds {
+			if d.Name == nombre {
+				return d.ID
+			}
+		}
+		t.Fatalf("no se encontró %q en %q", nombre, proyecto)
+		return ""
+	}
+	for _, d := range []string{idDe("casa", "pc-gio"), idDe("cliente-acme", "server-acme")} {
+		if _, _, err := s.engine.ReportarServicios(d, time.Now().UTC(), []fleet.ReporteServicio{
+			{Nombre: "sshd", Clase: "systemd", Salud: fleet.SaludServicio{
+				Tomada: time.Now(), Estado: fleet.EstadoCorriendo}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	panel := &Principal{Name: "panel-central", Role: RoleReader, Read: ReadAll, Write: WriteNone,
+		ProjectID: "", Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"*"}}}
+
+	res, e := callAsPrincipal(t, s, panel, "musubi_fleet_services", map[string]any{})
+	if e != nil {
+		t.Fatalf("el panel no pudo listar los servicios: %+v", e)
+	}
+	svs, _ := jsonOf(t, res)["services"].([]any)
+	if len(svs) != 2 {
+		t.Fatalf("el panel vio %d servicios de 2 (uno por proyecto)", len(svs))
+	}
+	for _, sv := range svs {
+		f, _ := sv.(map[string]any)
+		if p, hay := f["project"].(string); !hay || p == "" {
+			t.Errorf("un servicio no dice de qué proyecto es: %+v", f)
+		}
+	}
+
+	// Métricas: no hay muestras, así que la lista sale vacía — pero SIN ERROR, que es la
+	// diferencia entre «todavía no reportaron» y «no se pudo determinar el proyecto».
+	if _, e := callAsPrincipal(t, s, panel, "musubi_fleet_metrics", map[string]any{}); e != nil {
+		t.Fatalf("el panel no pudo leer las métricas: %+v", e)
+	}
+}

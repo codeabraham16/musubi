@@ -43,6 +43,7 @@
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
 | A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
 | A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
+| A56 | **El principal del panel no tiene concesión de flota, así que ve el inventario y no el estado** | `panel-central` está en `principals.yaml` con `read: all` y SIN sección `fleet:`. Las capacidades de flota no se derivan del rol a propósito (si no, un token de lectura sería una puerta trasera al eje de capacidades entero), así que el panel lista las máquinas y recibe `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios. **No es un bug: es la compuerta funcionando y nadie se la concedió.** Se cierra agregándole `fleet: {metrics: ["*"]}` — y NADA más: ni `exec`, ni `screen`, ni `shell`. Un panel mira; una credencial que vive en la configuración de otro servicio es exactamente la que no querés que pueda ejecutar nada. | **acción del operador** (escribir en `principals.yaml` está fuera de lo que puede hacer el asistente) |
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
@@ -503,6 +504,54 @@ tampoco sale. Eso no lo arregla ningún scrape — lo arregla el dead-man's swit
 justamente lo que estaba roto. La regla cubre el caso real y frecuente: un receptor caído mientras
 otro anda. Crear `watchdog_url` sigue siendo **acción del operador** (A22), y ahora el runbook
 tiene los tres comandos exactos.
+
+**2026-08-28 (septies) · el visualizador existía y estaba tapiado. El síntoma culpaba al cerebro.**
+
+Gio dijo, con razón, que del módulo de monitoreo no había visto nada. Al ir a mirar por la puerta
+por la que él mira —y no por la de atrás, que es la que yo venía usando— el panel de flota
+contestaba esto:
+
+    {"estado":"caido","detalle":"no se pudo determinar de qué proyecto listar la flota"}
+
+**La página `/flota` estaba construida desde S9** —tabla de máquinas, sección de servicios,
+botones de pantalla y exec— y su API no podía traer un solo dato.
+
+La causa: el principal del panel es `panel-central`, `read: all` con `project_id: ""` **vacío a
+propósito**, porque no pertenece a ningún tenant. Y `fleetReadScopeFor` cae al `ProjectID` del
+principal cuando no se declara un proyecto. Vacío → error. **Las tres tools de lectura fallaban
+igual**: `fleet_list`, `fleet_metrics` y `fleet_services`.
+
+Y el síntoma MENTÍA, que es lo peor de todo: el panel dibujaba `estado: caido`, que se lee como
+«el cerebro se murió», con el cerebro latiendo y exportando 233 series. Un panel que culpa al
+backend por su propio problema de alcance manda a depurar el lugar equivocado.
+
+**La salida no fue aflojar el WHERE por proyecto** —eso sería un «listar todo» y se llevaría
+puesto el aislamiento entre tenants—: es enumerar los proyectos y consultar cada uno POR SEPARADO,
+que es lo que el export federado a Prometheus ya hacía desde S11. **La maquinaria estaba
+(`ProyectosConDevices`); las tools no la usaban.** Y cada fila ahora dice de qué proyecto es: con
+`read: all` la tabla mezcla clientes, y una fila que no lo dice invita a actuar sobre la máquina
+de otro.
+
+Cuidado especial en `fleet_services`: filtrar por nombre de máquina no puede volverse un oráculo
+de qué máquinas existen en el proyecto ajeno. Con el lazo, «no está en este proyecto» se saltea en
+silencio y la forma de la respuesta no cambia.
+
+**Verificado contra la base real**, con un cerebro y un panel temporales sobre una copia:
+
+    estado: vivo
+    gio            cpu=2.41%  disco=70.3%  servicios=None
+    kernelos-pc    cpu=6.53%  disco=85.3%  servicios=None
+    musubi-server  cpu=3.52%  disco=49.5%  servicios=54
+
+**Queda una mitad que es del operador, y es config, no código:** `panel-central` no tiene sección
+`fleet:` en `principals.yaml` —el principal `prometheus`, justo debajo, sí la tiene—, así que ve
+QUÉ máquinas hay y no CÓMO están: `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios.
+Es la compuerta funcionando como fue diseñada; nadie se la concedió. Alcanza con
+`fleet: {metrics: ["*"]}` y nada más — un panel mira. Registrado como **A56**.
+
+**La lección de método, que es la que importa:** durante días se reportó un sistema sano mirando
+las tools, Prometheus y las series, y **nunca se abrió la pantalla por la que mira el operador**.
+Todo lo que se verificó era cierto y ninguna de esas verificaciones tocaba el camino que él usa.
 
 ---
 

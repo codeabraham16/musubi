@@ -48,63 +48,71 @@ func (s *McpServer) toolFleetServices(ctx context.Context, raw json.RawMessage) 
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyecto := fleetReadScopeFor(p, args.Project)
-	if proyecto == "" {
+	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	if len(proyectos) == 0 {
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto listar los servicios: declaralo en `project`")
 	}
 
-	// Las máquinas primero: hacen falta para compuertar (PuedeSobreDevice pide el Device entero)
-	// y para traducir el id interno de cada servicio a un nombre que una persona reconozca.
-	devices, err := s.engine.ListarDevices(proyecto, args.IncluirRevocados)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
-	}
-	porID := make(map[string]fleet.Device, len(devices))
-	filtroID := ""
 	filtro := strings.TrimSpace(args.Device)
-	for _, d := range devices {
-		porID[d.ID] = d
-		if filtro != "" && d.Name == filtro {
-			filtroID = d.ID
-		}
-	}
-	if filtro != "" && filtroID == "" {
-		// Se responde VACÍO y no un error: «no existe» y «no la podés ver» tienen que verse
-		// igual desde afuera, o el filtro se vuelve un oráculo de qué máquinas hay en el proyecto.
-		//
-		// Y ESO NO ALCANZABA. La respuesta de acá salía SIN `sin_permiso`, y la del camino normal
-		// —máquina que existe y no podés ver— salía CON él. Dos formas distintas es un oráculo
-		// igual, sólo que más sutil: preguntando por un nombre alcanzaba para saber si estaba.
-		// Verificado por el verificador adversarial con dos llamadas: `{"services":[]}` contra
-		// `{"services":[],"sin_permiso":2}`. Ahora las dos salen por la misma puerta.
-		return jsonResult(respuestaDeServicios(proyecto, nil, 0, 0, filtro != ""))
-	}
-
-	servicios, err := s.engine.ListarServicios(proyecto, filtroID, args.IncluirRevocados)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
-	}
-
 	ahora := time.Now()
-	filas := make([]map[string]interface{}, 0, len(servicios))
+	filas := make([]map[string]interface{}, 0)
 	sinPermiso, huerfanos := 0, 0
-	for _, sv := range servicios {
-		d, hay := porID[sv.DeviceID]
-		if !hay {
-			// Un servicio cuyo device no está en el listado del proyecto. Sin foreign keys esto
-			// es representable (una fila reparada a mano, un backfill), y no hay contra qué
-			// compuertar: se cuenta y no se muestra. Fail-closed.
-			huerfanos++
+
+	// EL LAZO POR PROYECTO NO PUEDE ROMPER EL ORÁCULO. Con `read: all` un mismo nombre de máquina
+	// puede existir en dos proyectos —los nombres son únicos DENTRO del proyecto, no entre
+	// proyectos—, así que el filtro se resuelve por proyecto y el que no lo tiene se saltea. Lo
+	// que NO cambia es la forma de la respuesta: con filtro sigue saliendo sin contadores, así
+	// que «no existe» y «no la podés ver» siguen siendo indistinguibles desde afuera.
+	for _, proyecto := range proyectos {
+		// Las máquinas primero: hacen falta para compuertar (PuedeSobreDevice pide el Device
+		// entero) y para traducir el id interno de cada servicio a un nombre reconocible.
+		devices, err := s.engine.ListarDevices(proyecto, args.IncluirRevocados)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		porID := make(map[string]fleet.Device, len(devices))
+		filtroID := ""
+		for _, d := range devices {
+			porID[d.ID] = d
+			if filtro != "" && d.Name == filtro {
+				filtroID = d.ID
+			}
+		}
+		if filtro != "" && filtroID == "" {
+			// En ESTE proyecto no está. Se saltea sin decir nada: «no existe» y «no la podés
+			// ver» tienen que verse igual desde afuera, o el filtro se vuelve un oráculo de qué
+			// máquinas hay. Verificado por el verificador adversarial con dos llamadas:
+			// `{"services":[]}` contra `{"services":[],"sin_permiso":2}` — dos formas distintas
+			// es un oráculo igual, sólo que más sutil.
 			continue
 		}
-		if !PuedeSobreDevice(p, d, fleet.CapMetrics) {
-			sinPermiso++
-			continue
+
+		servicios, err := s.engine.ListarServicios(proyecto, filtroID, args.IncluirRevocados)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
-		filas = append(filas, filaDeServicio(sv, d, ahora))
+		for _, sv := range servicios {
+			d, hay := porID[sv.DeviceID]
+			if !hay {
+				// Un servicio cuyo device no está en el listado del proyecto. Sin foreign keys esto
+				// es representable (una fila reparada a mano, un backfill), y no hay contra qué
+				// compuertar: se cuenta y no se muestra. Fail-closed.
+				huerfanos++
+				continue
+			}
+			if !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+				sinPermiso++
+				continue
+			}
+			fila := filaDeServicio(sv, d, ahora)
+			// El proyecto va en la fila: con `read: all` la tabla mezcla tenants, y una fila que no
+			// dice de quién es invita a actuar sobre el servicio de otro cliente.
+			fila["project"] = d.ProjectID
+			filas = append(filas, fila)
+		}
 	}
 
-	return jsonResult(respuestaDeServicios(proyecto, filas, sinPermiso, huerfanos, filtro != ""))
+	return jsonResult(respuestaDeServicios(proyectos, filas, sinPermiso, huerfanos, filtro != "", truncado))
 }
 
 // respuestaDeServicios arma la respuesta del listado, y decide si los contadores salen.
@@ -122,11 +130,19 @@ func (s *McpServer) toolFleetServices(ctx context.Context, raw json.RawMessage) 
 // Por eso con filtro salen las dos por la misma puerta y sin contadores — se pierde una pista
 // que quien filtró por una máquina suya no necesita (si tenés `metrics` sobre ella, el contador
 // era cero de todos modos).
-func respuestaDeServicios(proyecto string, filas []map[string]interface{}, sinPermiso, huerfanos int, conFiltro bool) map[string]interface{} {
+func respuestaDeServicios(proyectos []string, filas []map[string]interface{}, sinPermiso, huerfanos int, conFiltro, truncado bool) map[string]interface{} {
 	if filas == nil {
 		filas = []map[string]interface{}{}
 	}
-	res := map[string]interface{}{"project_id": proyecto, "services": filas}
+	res := map[string]interface{}{"projects": proyectos, "services": filas}
+	// `project_id` se mantiene cuando hay uno solo: es el 99 % de los llamadores y sacarlo sería
+	// romperlos por una generalización que no les toca.
+	if len(proyectos) == 1 {
+		res["project_id"] = proyectos[0]
+	}
+	if truncado {
+		res["proyectos_truncados"] = true
+	}
 	if conFiltro {
 		return res
 	}
