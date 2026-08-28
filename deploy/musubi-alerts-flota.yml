@@ -149,3 +149,38 @@ groups:
           summary: "Varios exec de flota rechazados por allowlist en 1 h: o alguien necesita un comando más, o un script quedó viejo."
 
   # ── El latido de la cadena de alertas (S10 · I18) ─────────────────────────────────────────
+
+      # ── Qué corre ADENTRO de cada máquina (A43) ───────────────────────────────────────────
+      #
+      # Las tres se apagan solas si nadie reporta servicios: sin la serie, la expresión no
+      # matchea nada. Un despliegue que todavía no enumera no recibe una sola alarma.
+      - alert: ServicioCaido
+        # `unless on(device) musubi_fleet_device_up == 0` es la mitad que importa: si la MÁQUINA
+        # está caída, todos sus servicios lo están, y avisar por cada uno convierte una caída en
+        # cincuenta mensajes. Que la máquina se cayó ya lo dice MaquinaCaida.
+        expr: (musubi_fleet_service_up == 0) unless on(device) (musubi_fleet_device_up == 0)
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El servicio {{ $labels.service }} de {{ $labels.device }} no está corriendo."
+          runbook: "deploy/RUNBOOK.md#serviciocaido"
+
+      # ANDA A LOS TUMBOS: está corriendo AHORA y se reinició varias veces en la última hora. Es
+      # el estado que `up` no puede mostrar — en cada instante el servicio está arriba.
+      - alert: ServicioReiniciandose
+        expr: increase(musubi_fleet_service_restarts_total[1h]) > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} en {{ $labels.device }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
+          runbook: "deploy/RUNBOOK.md#servicioreiniciandose"
+
+      # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
+      # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
+      - alert: ServicioSinNoticias
+        expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(device) (musubi_fleet_device_up == 0)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace más de 30 min que {{ $labels.device }} no reporta el estado de {{ $labels.service }}."
+          runbook: "deploy/RUNBOOK.md#serviciosinnoticias"

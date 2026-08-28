@@ -156,6 +156,20 @@ func atributosOTLP(d fleet.Device) []otlpAtributo {
 //
 // Devuelve cuerpo nil (sin error) cuando no hay NADA que mandar: un sobre con cero métricas es un
 // POST que no dice nada, y el gauge musubi_push_datapoints en 0 ya cuenta esa historia.
+// atributosDeServicioOTLP son los mismos labels que usa el scrape, en el sobre de OTLP.
+//
+// Sale de labelsDeServicio y no de una segunda lista: dos juegos de labels para el mismo dato
+// discrepan el día que alguien agrega uno, y la discrepancia se descubre semanas después cuando
+// una consulta que cruza las dos salidas devuelve vacío.
+func atributosDeServicioOTLP(sv fleet.Servicio, d fleet.Device) []otlpAtributo {
+	kvs := labelsDeServicio(sv, d)
+	out := make([]otlpAtributo, 0, len(kvs))
+	for _, kv := range kvs {
+		out = append(out, atributoStr(kv[0], kv[1]))
+	}
+	return out
+}
+
 func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Time,
 	intervaloSonda time.Duration) (cuerpo []byte, puntos int, truncado bool, err error) {
 
@@ -192,6 +206,35 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 		if len(datos) == 0 {
 			// Una métrica sin ningún punto no se emite, igual que /metrics no emite HELP/TYPE sin
 			// cuerpo: un nombre de serie sin datos es ruido que el receptor igual indexa.
+			continue
+		}
+		puntos += len(datos)
+		metricas = append(metricas, otlpMetric{
+			Name: serie.Nombre, Description: serie.Ayuda, Unit: serie.Unidad,
+			Gauge: otlpGauge{DataPoints: datos},
+		})
+	}
+
+	// QUÉ CORRE ADENTRO de esas máquinas (A43). Mismas máquinas ya compuertadas, mismo sello de
+	// tiempo: un empuje con dos relojes deja las series de servicio desalineadas de las de la
+	// máquina donde corren, y cualquier consulta que las cruce da vacío.
+	svs, truncadoSvs := serviciosVisiblesParaMetricas(engine, vistos)
+	truncado = truncado || truncadoSvs
+	for _, serie := range seriesDeServicio() {
+		var datos []otlpDataPoint
+		for _, e := range svs {
+			v, ok := serie.Valor(e.sv, ahora)
+			if !ok {
+				continue
+			}
+			valor := v
+			datos = append(datos, otlpDataPoint{
+				Attributes:   atributosDeServicioOTLP(e.sv, e.d),
+				TimeUnixNano: sello,
+				AsDouble:     &valor,
+			})
+		}
+		if len(datos) == 0 {
 			continue
 		}
 		puntos += len(datos)

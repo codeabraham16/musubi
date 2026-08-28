@@ -80,6 +80,10 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	for _, s := range seriesDeFlota(ahora, intervaloSonda) {
 		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
 	}
+	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
+	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
+	// evita un segundo lugar donde olvidarse la compuerta.
+	renderServicios(b, engine, vistos, ahora)
 }
 
 // devicesVisiblesParaMetricas resuelve QUÉ máquinas ve `p`, ya ordenadas por (proyecto, nombre).

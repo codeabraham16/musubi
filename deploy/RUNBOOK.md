@@ -278,3 +278,42 @@ Casi siempre es una de dos cosas, y las dos se arreglan en un minuto:
    `curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:9099/api/v1/otlp/v1/metrics -H "Content-Type: application/json" -d "{}"`
 2. **El path está mal.** Tiene que terminar en `/api/v1/otlp/v1/metrics`. Un path corto de más
    también da 404 y se ve exactamente igual que lo anterior.
+
+
+## ServicioCaido
+
+Un servicio que la máquina reporta como NO corriendo, y la máquina está viva (si estuviera caída
+avisaría `MaquinaCaida` y esta alerta se inhibe sola).
+
+1. Qué dice el inventario: `musubi_fleet_services device=<máquina>` — mirá `estado`, `detalle` y
+   `reinicios`. El `detalle` trae el `Result=` de systemd, que es la mitad del diagnóstico.
+2. En la máquina: `musubi_fleet_exec device=<máquina> argv=["systemctl","status","<servicio>"]`
+   (o `podman ps -a --filter name=<servicio>` si la clase es `podman`).
+3. Si el servicio se declaró A MANO y la máquina nunca lo enumeró, el estado va a decir
+   `desconocido`: nadie lo está midiendo. Eso no es una caída, es una fila sin dueño.
+
+## ServicioReiniciandose
+
+Está corriendo AHORA y se reinició más de cinco veces en la última hora. `up` no lo puede
+mostrar: en cada instante el servicio está arriba.
+
+1. `musubi_fleet_exec device=<máquina> argv=["journalctl","-u","<servicio>","-n","80"]`
+2. Las causas frecuentes, en orden: se queda sin memoria y el kernel lo mata (`Result=oom-kill`),
+   una dependencia que todavía no está lista al arrancar, o una configuración que no valida.
+3. El contador es del supervisor y se reinicia cuando se reinicia la máquina: un pico después de
+   un reboot no significa lo mismo que uno en una máquina con semanas de uptime.
+
+## ServicioSinNoticias
+
+La máquina late pero hace más de 30 minutos que no manda el estado de sus servicios.
+
+El agente reenvía el inventario cuando CAMBIA, más un piso periódico (`fleet.InventarioCada`), así
+que 30 minutos de silencio son varios reenvíos perdidos. **No sabemos cómo está ese servicio**, y
+no saber no es estar bien.
+
+1. ¿Es la máquina entera o un servicio? Si son todos los de esa máquina, el problema es el
+   agente: `musubi_fleet_exec device=<máquina> argv=["systemctl","status","musubi-agente"]`.
+2. Si el agente corre, mirá su salida: un enumerador que falla avisa una vez por motivo y sigue
+   latiendo — el latido llega y el inventario no.
+3. Si es UN servicio y los demás llegan, la máquina dejó de enumerarlo: probablemente lo
+   deshabilitaron. Un servicio deshabilitado y detenido deja de reportarse a propósito.
