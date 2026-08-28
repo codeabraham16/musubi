@@ -1,0 +1,36 @@
+# Recorte REAL del endpoint de exposición de una base gestionada en Supabase.
+# Tomado el 2026-08-28. La referencia del proyecto está reemplazada por PROYECTO.
+# No se editó ningún número: la notación científica, el orden y las etiquetas son los que manda.
+node_filesystem_avail_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 7.994146816e+09
+node_filesystem_avail_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 6.731851776e+10
+node_memory_SwapFree_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 9.48518912e+08
+node_filesystem_size_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 8.416882688e+09
+node_filesystem_size_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 7.6938919936e+10
+node_load15{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 0
+node_filesystem_free_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 8.115781632e+09
+node_filesystem_free_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 6.7345924096e+10
+node_memory_SwapTotal_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 1.073737728e+09
+node_load5{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 0.02
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="idle"} 4.60580516e+06
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="iowait"} 5789.87
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="irq"} 0
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="nice"} 175.27
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="softirq"} 1398.69
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="steal"} 5416.4
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="system"} 24479.65
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="0",mode="user"} 81308.93
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="idle"} 4.60585517e+06
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="iowait"} 5853.65
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="irq"} 0
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="nice"} 191.57
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="softirq"} 1553.52
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="steal"} 5393.42
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="system"} 24391
+node_cpu_seconds_total{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db",cpu="1",mode="user"} 80845.12
+node_load1{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 0.01
+node_memory_MemAvailable_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 1.2061696e+09
+node_memory_MemFree_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 2.279424e+08
+node_memory_MemTotal_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="db"} 1.926144e+09
+# Una familia de aplicación, para que la prueba vea que se ignora lo que no es del host.
+pg_database_size_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="postgresql",datname="postgres"} 9.9962003e+07
+pg_database_size_bytes{supabase_project_ref="PROYECTO",supabase_identifier="PROYECTO",service_type="postgresql",datname="template0"} 7.711891e+06

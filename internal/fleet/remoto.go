@@ -249,6 +249,11 @@ type Transporte string
 const (
 	TransporteSSH Transporte = "ssh" // Tier B: routers, NAS, servers sin agente
 	TransporteADB Transporte = "adb" // Tier C: Android — que ES Linux, con el mismo /proc
+	// TransporteExposicion es Tier B por HTTP contra un endpoint en formato de exposición de
+	// Prometheus. Es el camino para lo que NO DA SHELL y sí publica sus vitales: una base
+	// gestionada en la nube, un appliance, cualquier cosa con un node_exporter adentro y sin
+	// puerta para entrar. El parseo y el viaje viven en exposicion.go.
+	TransporteExposicion Transporte = "exposicion"
 )
 
 // separadorProc parte las secciones de la lectura remota. Se eligió una cadena que no puede

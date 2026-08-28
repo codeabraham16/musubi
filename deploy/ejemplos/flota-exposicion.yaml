@@ -1,0 +1,44 @@
+# flota-exposicion.yaml — qué máquinas de Tier B se miden RASPANDO un endpoint.
+#
+# Va en `$MUSUBI_HOME/.musubi/flota-exposicion.yaml`. Que no exista es lo normal: sin él, todo
+# Tier B se sondea por SSH, como siempre.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# LA CREDENCIAL NO VA ACÁ. ACÁ VA EL NOMBRE DE DÓNDE MIRARLA.
+#
+# `auth_env` es el NOMBRE de una variable de entorno del cerebro, no su valor. El secreto vive en
+# /etc/musubi/musubi.env (modo 600), que es donde ya viven los otros. Este archivo se versiona por
+# error, se copia a un ticket y se pega en un chat: no puede tener nada adentro que duela.
+#
+# Meter la credencial en la URL (`https://usuario:clave@host/…`) tampoco: el cerebro lo RECHAZA y
+# dice por qué. No es una molestia, es que un secreto que ya entró a un archivo versionado no se
+# puede des-filtrar.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# EL MONTAJE IMPORTA MÁS DE LO QUE PARECE
+#
+# `montaje` es qué sistema de archivos mirar, y por defecto es la raíz. En una base gestionada la
+# raíz es el disco del sistema operativo —enorme y vacío— y el que se llena es el volumen de
+# datos. Mirar el equivocado da un panel que se ve bien y una alerta que no salta nunca.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# EL INTERVALO DE SONDEO TIENE QUE SUPERAR EL CACHÉ DEL ENDPOINT
+#
+# Muchos endpoints gestionados cachean su respuesta. Medido contra Supabase: refresca cada ~62 s
+# (tres ciclos seguidos: 62, 66, 62). El porcentaje de CPU es una DERIVADA, así que dos sondeos dentro de la misma
+# ventana de caché no tienen contra qué restar y el valor sale en null — que es lo correcto y no
+# un bug, pero si el intervalo de sondeo es más corto que el caché, sale null SIEMPRE.
+#
+# Musubi devuelve null. El colector viejo que esto reemplaza devolvía 0 en ese caso, que se dibuja
+# como una base ociosa.
+
+dispositivos:
+  # El nombre es el del dispositivo en la flota, tal como se enroló.
+  supabase-altura:
+    url: https://TU-REFERENCIA.supabase.co/customer/v1/privileged/metrics
+    auth_env: SB_METRICS_AUTH
+    montaje: /data
+
+  # Un exporter en la red interna, sin credencial: legítimo y explícito.
+  # nas-de-casa:
+  #   url: http://10.0.0.5:9100/metrics

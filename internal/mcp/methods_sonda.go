@@ -128,13 +128,41 @@ func (s *McpServer) sondearUno(d fleet.Device, ahora time.Time) map[string]inter
 		return fila
 	}
 
-	transporte := fleet.TransporteSSH
-	if d.Tier == fleet.TierMovil {
-		transporte = fleet.TransporteADB
+	// EL TRANSPORTE LO ELIGE LO QUE SE DECLARÓ, NO EL TIER SOLO. Un Tier B es «por su protocolo
+	// nativo», y hay más de uno: una base gestionada en la nube no da shell y sí publica sus
+	// vitales en un endpoint. Que esté en `flota-exposicion.yaml` ES la declaración de por dónde
+	// se llega a ésta.
+	//
+	// UN ARCHIVO DE CONFIGURACIÓN ROTO NO PUEDE TUMBAR A LAS MÁQUINAS QUE NO ESTÁN EN ÉL.
+	//
+	// La primera versión devolvía el error como el resultado del sondeo, y eso convertía una coma
+	// de más en `flota-exposicion.yaml` en «ninguna máquina de la flota se pudo medir» — routers
+	// por SSH incluidos, que no tienen nada que ver con ese archivo. Un YAML que no parsea no
+	// permite saber quién estaba declarado adentro, así que la única salida honesta es sondear a
+	// todos por su transporte por defecto y LLEVAR EL AVISO PEGADO a cada fila.
+	//
+	// No se pierde nada: la máquina que sí necesitaba la exposición va a fallar su sondeo por SSH
+	// con su propio mensaje —«no tiene dirección»—, y el aviso que explica por qué está en la
+	// misma fila, no en un log que nadie mira.
+	destino, porExposicion, errCfg := s.destinoDeExposicion(d.Name)
+	if errCfg != nil {
+		fila["aviso_configuracion"] = errCfg.Error()
 	}
-	fila["transporte"] = string(transporte)
 
-	m, err := fleet.TomarMuestraRemota(d.Address, transporte, s.cpuRemotos.para(d.ID), sondaTimeoutPorDispositivo)
+	var m fleet.Muestra
+	var err error
+	switch {
+	case porExposicion:
+		fila["transporte"] = string(fleet.TransporteExposicion)
+		m, err = fleet.TomarMuestraDeExposicion(destino, s.cpuRemotos.para(d.ID), sondaTimeoutPorDispositivo)
+	default:
+		transporte := fleet.TransporteSSH
+		if d.Tier == fleet.TierMovil {
+			transporte = fleet.TransporteADB
+		}
+		fila["transporte"] = string(transporte)
+		m, err = fleet.TomarMuestraRemota(d.Address, transporte, s.cpuRemotos.para(d.ID), sondaTimeoutPorDispositivo)
+	}
 	if err != nil {
 		fila["ok"] = false
 		fila["error"] = err.Error()

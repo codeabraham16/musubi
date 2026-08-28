@@ -317,3 +317,60 @@ no saber no es estar bien.
    latiendo — el latido llega y el inventario no.
 3. Si es UN servicio y los demás llegan, la máquina dejó de enumerarlo: probablemente lo
    deshabilitaron. Un servicio deshabilitado y detenido deja de reportarse a propósito.
+
+## Enrolar un Tier B que NO da shell (bases gestionadas, appliances)
+
+Para lo que no tiene dónde correr un agente ni por dónde entrar por SSH, pero sí publica un
+endpoint en formato de exposición de Prometheus. El transporte se llama `exposicion` y lo elige
+**la declaración**, no el tier: si la máquina está en `.musubi/flota-exposicion.yaml`, se raspa;
+si no, se sondea por SSH como siempre.
+
+**1 · El secreto va al entorno del cerebro, nunca al archivo.**
+
+```
+sudoedit /etc/musubi/musubi.env      # agregar:  SB_METRICS_AUTH=Bearer …
+sudo systemctl restart musubi-brain
+```
+
+**2 · La declaración.** En `$MUSUBI_HOME/.musubi/flota-exposicion.yaml` (ejemplo completo en
+`deploy/ejemplos/flota-exposicion.yaml`):
+
+```yaml
+dispositivos:
+  supabase-altura:
+    url: https://<referencia>.supabase.co/customer/v1/privileged/metrics
+    auth_env: SB_METRICS_AUTH
+    montaje: /data
+```
+
+`auth_env` es el NOMBRE de la variable, no su valor. Una URL con usuario y clave adentro se
+**rechaza**: un secreto que ya entró a un archivo versionado no se puede des-filtrar.
+
+**3 · El alta**, con `metrics` y nada más — un endpoint de métricas no ejecuta nada:
+
+```
+musubi_fleet_enroll  name=supabase-altura  tier=B  caps=["metrics"]  os=linux
+```
+
+**4 · Verificar**: `musubi_fleet_probe device=supabase-altura`. En la fila tiene que decir
+`"transporte": "exposicion"` y `"ok": true`.
+
+### Lo que se va a ver, y no es un error
+
+- **`cpu_pct: null` en el primer sondeo.** El porcentaje es una derivada.
+- **`cpu_pct: null` siempre, si el intervalo es corto.** Muchos endpoints gestionados **cachean**
+  su respuesta: medido contra Supabase, refresca cada **~62 s**. Dos sondeos dentro de esa ventana
+  ven el mismo contador y no hay contra qué restar. El `probe_minutes` por defecto son 5 min, así
+  que alcanza; si alguien lo baja de 1 minuto, la CPU desaparece y no es un bug.
+- **`uptime_seg: 0`.** Ese endpoint no publica `node_boot_time_seconds`. No se completa con el
+  reloj del cerebro: los relojes difieren y el número saldría con esa deriva encima.
+
+### Cuando algo falla
+
+| Lo que dice | Dónde mirar |
+|---|---|
+| `rechazó la credencial (HTTP 401/403)` | La variable de entorno del cerebro, no el token del otro lado |
+| `declara auth_env: X y esa variable no está en el entorno` | `/etc/musubi/musubi.env` — y acordate de reiniciar el cerebro |
+| `responde pero no publica vitales de host` | La URL apunta a un `/metrics` de aplicación, no del host |
+| `el endpoint redirige` | Apuntá a la URL final: no se siguen redirecciones a propósito |
+| `aviso_configuracion` en TODAS las filas | El YAML no parsea. Las máquinas se siguen sondeando por su transporte de siempre |

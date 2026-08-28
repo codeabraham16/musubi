@@ -45,6 +45,7 @@
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
 | A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
 | A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
+| A55 | **Un endpoint de exposición trae más que vitales de host, y esa parte no tiene dónde caer** | El transporte nuevo convierte un endpoint en `fleet.Muestra`, que es CPU, memoria, disco, carga y uptime. El endpoint real publica además `pg_database_size_bytes` y las conexiones del pooler: no son vitales del host, son hechos del servicio que corre ahí. Hoy se pierden. **No es cosmético**: una de las tres alertas que el colector viejo sostiene mira `pooler_conns > 350`, así que hasta que estos números tengan lugar, `collect-supabase.sh` no se puede apagar y el cuarto sistema sigue vivo. Las salidas plausibles son extender el dominio (caro y contagia a los cuatro colectores), o modelarlos como SALUD DE UN SERVICIO declarado sobre esa máquina —que es lo que son— con un lugar para gauges declaradas por servicio. Lo segundo encaja con lo que ya existe; lo que falta es dónde vive el número. | **sin asignar** (bloquea apagar `collect-supabase.sh`) |
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
@@ -323,6 +324,50 @@ montaje que lo separaba de él.
 **El cabo que queda vivo, y no es este drop-in:** cada capacidad nueva del agente puede chocar con
 su propio blindaje, y el choque se ve como «la función no anda» y no como «la unidad la prohíbe».
 Pasó una vez y va a volver a pasar. Registrado como **A54**.
+
+**2026-08-28 (ter) · Tier B deja de querer decir «SSH»: el transporte de exposición.**
+
+Primer trozo del paso 4 de la unificación. `Tier B` siempre dijo «sin binario en el device, por su
+protocolo nativo», y hasta acá el único protocolo era SSH — lo que dejaba afuera una clase entera
+de máquinas que Musubi tiene que poder mirar: **las que no dan shell y sí publican sus vitales**.
+Una base gestionada en la nube es el caso exacto, y es la que `collect-supabase.sh` viene mirando
+desde afuera del sistema.
+
+- **El parseo** (`internal/fleet/exposicion.go`) lee el formato de exposición de Prometheus sin
+  traer una dependencia: son ocho familias de métricas, y el parser oficial completo —con sus
+  exemplars y sus histogramas nativos— sería pagar todo para usar una esquina. El fixture es un
+  recorte **literal** del endpoint real, con la referencia del proyecto redactada. Eso importó: un
+  fixture inventado habría traído `node_boot_time_seconds`, y su AUSENCIA es justamente el caso
+  que más cuidado necesita.
+- **El viaje** no sigue redirecciones (un 302 hacia otro host es un SSRF con nuestra credencial),
+  acota el cuerpo con un byte de margen (leer justo el techo y parsear lo que entró daría una
+  Muestra armada con texto truncado), y **nunca deja la credencial en un error** — el error de
+  `net/http` lleva la URL entera adentro y esa URL puede traer un token.
+- **La configuración** (`.musubi/flota-exposicion.yaml`) guarda el NOMBRE de la variable de
+  entorno con la credencial, nunca la credencial. Y **rechaza** una URL con usuario y clave
+  adentro: un secreto que ya entró a un archivo versionado no se puede des-filtrar.
+
+**Dos hallazgos de ir a mirar, que ninguna prueba de escritorio da:**
+
+1. **La compuerta del parser y `Muestra.Valida` se contradecían.** La compuerta pedía sólo
+   `MemTotal`; la regla de los pares del dominio exige el total CON su usado. Un endpoint con el
+   total y sin el disponible pasaba la compuerta y lo rechazaban después con «la muestra no es
+   creíble» — cierto, y mandando a mirar el lugar equivocado. Dos guardas sobre lo mismo que no se
+   enteran una de la otra terminan discutiendo en el mensaje de error.
+2. **El endpoint real CACHEA su respuesta.** Medido: el contador de CPU no se mueve en 45 s. El
+   porcentaje es una derivada, así que dos sondeos dentro de esa ventana no tienen contra qué
+   restar y sale **null**. Correcto — y significa que el intervalo de sondeo tiene que superar el
+   caché. El colector que esto reemplaza reportaba **0 %** en ese caso, o sea una base ociosa,
+   dibujada con confianza.
+
+Dieciséis sabotajes, todos ejecutados. Uno de ellos —el de la credencial en el error— **no falló
+la primera vez** porque el parche no había matcheado; se rehízo y ahí sí cayó, filtrando el token
+en el mensaje tal como se predecía.
+
+**Lo que este trozo NO cierra, y por eso `collect-supabase.sh` sigue vivo:** el endpoint publica
+además `pg_database_size_bytes` y las conexiones del pooler, que **no son vitales de host** y no
+entran en `fleet.Muestra`. Una de las tres alertas que hoy existen mira las conexiones del pooler.
+Registrado como **A55**.
 
 ---
 
