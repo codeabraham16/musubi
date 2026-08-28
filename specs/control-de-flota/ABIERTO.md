@@ -45,6 +45,7 @@
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
 | A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
 | A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
+| A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
 | A47 | **El redespliegue del cerebro que A34 da por trámite se volvió una puerta de una sola dirección** | S12 agrega las migraciones **36 y 37**, así que esta rama lleva el esquema de **v35 a v37**. `applyMigrations` tiene una guarda fail-closed hacia adelante (`internal/memory/migrations.go`): un binario que sólo llega a v35 **se niega a abrir** una base ya migrada, y hace bien. Cruzado con A34 —en `musubi-server`, `musubi-brain.service` y `musubi-agente.service` **comparten el mismo ejecutable**— actualizar deja de ser reversible: apenas el cerebro nuevo arranca y migra, **volver al binario viejo ya no arranca**, y el rollback pasa a ser restaurar la base, no copiar un archivo. A34 dice «al cerebro no le falta nada» y «se cierra en el próximo redespliegue»: las dos frases eran ciertas hasta este trabajo y **ya no lo son**. Antes de tocar `musubi-server`: copia de la base FUERA de la máquina y el redespliegue planificado, no improvisado. **Ningún slice podía ver esto solo** — U2 y U3 no se leían entre sí, y ninguno de los dos leyó A34. | **acción del operador**, ANTES de A34 |
@@ -297,6 +298,31 @@ hacía horas. Dos defectos encadenados, ninguno con error en ningún lado:
 Las cuatro pruebas nuevas tienen su sabotaje **ejecutado**, y el par del cerebro está escrito como
 par a propósito: la forma más cómoda de hacer pasar la resurrección —sacar el WHERE y listo— la
 caza la otra mitad.
+
+**2026-08-28 (bis) · el blindaje del agente prohibía el trabajo que A42 le dio.**
+
+La causa raíz de lo de arriba, encontrada porque el arreglo la dijo en voz alta al primer arranque:
+`podman está instalado y no se pudo consultar: exit status 1`. El agente **nunca** pudo enumerar
+contenedores en `musubi-server` — los 18 estaban en la base de una carga anterior, y el primer
+inventario del agente los podó.
+
+`musubi-agente.service` declara `ProtectHome=read-only` y `ProtectSystem=strict`, con este
+comentario: «El agente sólo LEE /proc y habla con loopback. Nada de esto le hace falta». Era cierto
+cuando se escribió. **A42 le dio un trabajo nuevo y nadie volvió a mirar el blindaje** — y
+`podman ps` no es una lectura: medido con strace, abre `db.sql` y seis locks en modo escritura
+bajo el home, más dos en `/run/user/1000`.
+
+Se resuelve con un drop-in versionado (`deploy/systemd/musubi-agente-contenedores.conf`) que abre
+**esas rutas y nada más**. Se evaluó el socket de la API de podman, que necesitaría una excepción
+más chica en la unidad: se descartó porque **concede lo mismo o más** —crear un contenedor con un
+bind-mount del host— así que cambiar de puerta compra código, no seguridad. Lo que la excepción
+concede, dicho sin adorno: el agente puede **manejar** podman, no sólo listarlo. El techo sigue
+siendo el usuario `musubi`, que ya era dueño del store; lo que se pierde es el confinamiento de
+montaje que lo separaba de él.
+
+**El cabo que queda vivo, y no es este drop-in:** cada capacidad nueva del agente puede chocar con
+su propio blindaje, y el choque se ve como «la función no anda» y no como «la unidad la prohíbe».
+Pasó una vez y va a volver a pasar. Registrado como **A54**.
 
 ---
 
