@@ -18,6 +18,7 @@ package fleet
 import (
 	"os"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -43,6 +44,7 @@ func (c *colectorLinux) Tomar() (Muestra, error) {
 		Loadavg: leerArchivo("/proc/loadavg"),
 		Uptime:  leerArchivo("/proc/uptime"),
 		TempMil: leerArchivo("/sys/class/thermal/thermal_zone0/temp"),
+		Procs:   listarProc(),
 		NumCPU:  runtime.NumCPU(),
 	}
 	m := MuestraDesde(l, &c.cpu)
@@ -63,6 +65,26 @@ func leerArchivo(ruta string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// listarProc devuelve los nombres de las entradas de /proc, uno por línea. Si no se puede leer
+// —un contenedor sin /proc montado, un permiso raro— devuelve vacío, que aguas abajo significa
+// «no medido» y no «cero procesos».
+//
+// Devuelve el TEXTO y no el conteo a propósito: el filtro difícil («el nombre es todo dígitos»,
+// que es lo que separa un proceso de `self` o de `cpuinfo`) vive en ContarPids y lo comparte con
+// el Tier B por SSH y con el Tier C por ADB, que no se pueden probar desde esta máquina.
+func listarProc() string {
+	entradas, err := os.ReadDir("/proc")
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range entradas {
+		b.WriteString(e.Name())
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // leerDisco mide el sistema de archivos RAÍZ con statfs, reproduciendo EXACTAMENTE las tres

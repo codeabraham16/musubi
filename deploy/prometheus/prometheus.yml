@@ -33,6 +33,38 @@
 # pueda ejecutar nada.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# SI ENCENDÉS EL EMPUJE OTLP, LAS SERIES DE FLOTA LLEGAN POR DOS CAMINOS Y LAS ALERTAS DISPARAN
+# DOBLE. Hay que decidirlo, no descubrirlo.
+#
+# Desde S11 el cerebro puede EMPUJAR la misma telemetría por OTLP/JSON, además de servirla en
+# /metrics (`fleet.otlp.endpoint` en el config del cerebro). Prometheus lo recibe en
+# /api/v1/otlp/v1/metrics y SÓLO si corre con `--web.enable-otlp-receiver` (está en el instalador
+# systemd y en deploy/docker/compose.yml; sin el flag el POST devuelve 404 y el empuje muere en
+# silencio). Los dos caminos emiten las MISMAS series `musubi_fleet_device_*`, y se distinguen
+# nada más que por `instance`:
+#
+#   scrape → instance="musubi-brain"        (la etiqueta del static_config de abajo)
+#   push   → instance="musubi-otlp-push"    (service.instance.id del payload, constante del código)
+#
+# Con los dos activos, cada máquina tiene DOS series por métrica y las 12 reglas de
+# rules/musubi-alerts-flota.yml se evalúan dos veces: dos avisos por incidente, y —peor— un
+# `count()` o un `sum()` sobre la flota que da el doble.
+#
+# LA RECETA, si encendés el push y querés seguir scrapeando /metrics (recomendado: el scrape trae
+# además las métricas del SERVIDOR, que el push no lleva a propósito): descartá las series de
+# flota del scrape y quedate con las del push, agregando al job `musubi` de abajo:
+#
+#   metric_relabel_configs:
+#     - source_labels: [__name__]
+#       regex: musubi_fleet_device_.*
+#       action: drop
+#
+# La otra salida válida es no encender el push: el tirón ya funciona y no necesita nada de esto.
+# Lo que NO es una opción es dejar los dos sin decidir. Lo custodia
+# TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
 global:
   scrape_interval: 30s
   evaluation_interval: 30s

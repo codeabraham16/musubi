@@ -87,6 +87,12 @@ services:
       - --web.listen-address=127.0.0.1:9099
       # Necesario para `curl -X POST /-/reload` (el RUNBOOK lo usa al cambiar reglas).
       - --web.enable-lifecycle
+      # POST /api/v1/otlp/v1/metrics: por ahí EMPUJA el cerebro la telemetría de la flota
+      # (`fleet.otlp`). Prometheus no acepta OTLP por defecto — sin este flag el POST devuelve 404
+      # y el empuje muere en silencio. Tiene que estar acá Y en el instalador systemd; lo custodia
+      # `despliegue_alertas_test.go`. NO se habilita `--web.enable-remote-write-receiver`: eso es
+      # una puerta de ESCRITURA sobre los datos de los que viven las alertas.
+      - --web.enable-otlp-receiver
     volumes:
       - ${MUSUBI_PROM_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
       - ${MUSUBI_PROM_DIR}/rules:/etc/prometheus/rules:ro,z

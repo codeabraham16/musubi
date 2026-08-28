@@ -56,10 +56,39 @@ const proyectosParaExportar = 64
 // de «caído» de las máquinas sin agente (S10 · I2): con el umbral fijo de 90 s, un Tier B
 // sondeado cada 5 min exportaba up=0 el 97 % del tiempo y `MaquinaCaida` disparaba para siempre.
 // Una alerta que grita sin parar se silencia, y con ella se silencian las que sí importaban.
+//
+// DESDE S11 ESTE YA NO ES EL ÚNICO CAMINO DE SALIDA: el empuje OTLP (fleet_otlp.go) exporta lo
+// mismo por otra boca. Por eso la selección de máquinas, la tabla de series y el juego de labels
+// viven en funciones compartidas y no adentro de este `for` — dos copias discrepan el día que
+// alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
+// muestran cosas distintas.
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time, intervaloSonda time.Duration) {
-	proyectos, truncado := proyectosVisibles(engine, p)
+	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
 
-	var vistos []fleet.Device
+	if len(vistos) == 0 {
+		// Un bloque vacío y mudo manda a alguien a depurar Prometheus cuando el problema está en
+		// principals.yaml. Se dice, en un comentario que el parser ignora.
+		b.WriteString("# musubi_fleet: ninguna máquina visible para esta credencial.\n")
+		b.WriteString("# Las capacidades de flota NO se derivan del rol: declarálas en principals.yaml\n")
+		b.WriteString("#   fleet:\n#     metrics: [\"*\"]\n")
+		return
+	}
+	if truncado {
+		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
+	}
+
+	for _, s := range seriesDeFlota(ahora, intervaloSonda) {
+		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
+	}
+}
+
+// devicesVisiblesParaMetricas resuelve QUÉ máquinas ve `p`, ya ordenadas por (proyecto, nombre).
+//
+// Es el ÚNICO lugar donde se combinan proyectosVisibles y PuedeSobreDevice, y por eso lo comparten
+// el scrape y el empuje: un segundo recorrido de la flota es un segundo lugar donde olvidarse la
+// compuerta, y ese olvido no se ve —exporta de más, calladito— hasta que alguien audita.
+func devicesVisiblesParaMetricas(engine memory.StorageBackend, p *Principal) (vistos []fleet.Device, truncado bool) {
+	proyectos, truncado := proyectosVisibles(engine, p)
 	for _, proy := range proyectos {
 		devices, err := engine.ListarDevices(proy, false)
 		if err != nil {
@@ -77,73 +106,117 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		}
 		return vistos[i].Name < vistos[j].Name
 	})
+	return vistos, truncado
+}
 
-	if len(vistos) == 0 {
-		// Un bloque vacío y mudo manda a alguien a depurar Prometheus cuando el problema está en
-		// principals.yaml. Se dice, en un comentario que el parser ignora.
-		b.WriteString("# musubi_fleet: ninguna máquina visible para esta credencial.\n")
-		b.WriteString("# Las capacidades de flota NO se derivan del rol: declarálas en principals.yaml\n")
-		b.WriteString("#   fleet:\n#     metrics: [\"*\"]\n")
-		return
-	}
-	if truncado {
-		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
-	}
+// serieDeFlota es UNA métrica exportable de una máquina.
+//
+// La lista la produce seriesDeFlota() y la consumen LOS DOS caminos de salida —el scrape de
+// /metrics y el empuje OTLP—, para que no puedan discrepar. El día que alguien agregue un campo a
+// fleet.Muestra lo agrega acá y aparece en los dos lados; con dos copias aparece en uno.
+type serieDeFlota struct {
+	Nombre string
+	Ayuda  string
+	// Unidad es la unidad OTLP (UCUM). El exposition format la ignora: los nombres ya la llevan
+	// en el sufijo, que es la convención de Prometheus.
+	//
+	// OJO CON EL "1" DE LO ADIMENSIONAL, que es la trampa de este campo: el receptor OTLP de
+	// Prometheus NORMALIZA el nombre con la unidad, y a un gauge con unidad "1" le agrega el
+	// sufijo `_ratio` — `musubi_fleet_device_up` llegaría como `musubi_fleet_device_up_ratio` y
+	// las 12 reglas de deploy/musubi-alerts-flota.yml seguirían evaluándose sin disparar NUNCA.
+	// Por eso lo adimensional viaja con unidad VACÍA, y las demás sólo declaran una unidad que el
+	// nombre YA lleva (bytes, seconds, celsius, percent), que es el caso en el que la
+	// normalización no agrega nada. Lo custodia TestNingunaUnidadRenombraLaSerieEnPrometheus.
+	Unidad string
+	// Entera decide la codificación OTLP del punto: asInt (string) o asDouble (número). En el
+	// exposition format no cambia nada —formatearValor ya imprime los enteros sin decimales—,
+	// así que las dos salidas siguen coincidiendo valor por valor.
+	Entera bool
+	Valor  func(d fleet.Device, m *fleet.Muestra) (float64, bool)
+}
 
-	escribirGauge(b, vistos, ahora, "musubi_fleet_device_up",
-		"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
-		func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
-			if d.EnLinea(ahora, umbralEnLineaPara(d, intervaloSonda)) {
-				return 1, true
-			}
-			return 0, true
-		})
+// seriesDeFlota devuelve las 19 series en orden estable: las DOS que salen de la fila del device
+// (up, last_seen) y las 17 que salen de la MUESTRA.
+//
+// `ahora` e `intervaloSonda` entran por parámetro porque tres series son relativas al reloj (up,
+// last_seen, sample_age): con un reloj por serie, `up` podría decir «viva» y `sample_age` medirse
+// contra otro instante. Un solo reloj por export, y el empuje además lo usa para sellar los puntos.
+func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration) []serieDeFlota {
+	return []serieDeFlota{
+		{"musubi_fleet_device_up",
+			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
+			"", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.EnLinea(ahora, umbralEnLineaPara(d, intervaloSonda)) {
+					return 1, true
+				}
+				return 0, true
+			}},
+		{"musubi_fleet_device_last_seen_seconds",
+			"Segundos desde el último latido. Ausente si la máquina nunca latió.",
+			"s", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.LastSeen.IsZero() {
+					return 0, false
+				}
+				return ahora.Sub(d.LastSeen).Seconds(), true
+			}},
 
-	escribirGauge(b, vistos, ahora, "musubi_fleet_device_last_seen_seconds",
-		"Segundos desde el último latido. Ausente si la máquina nunca latió.",
-		func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
-			if d.LastSeen.IsZero() {
-				return 0, false
-			}
-			return ahora.Sub(d.LastSeen).Seconds(), true
-		})
-
-	// De acá abajo, todo sale de la MUESTRA. Una máquina que no reportó no aporta ninguna de
-	// estas series — y ésa es la regla central del export, ver escribirGauge.
-	series := []struct {
-		nombre, ayuda string
-		valor         func(*fleet.Muestra) (float64, bool)
-	}{
+		// De acá abajo, todo sale de la MUESTRA. Una máquina que no reportó no aporta ninguna de
+		// estas series — y ésa es la regla central del export, ver escribirGauge.
 		{"musubi_fleet_device_cpu_percent", "Uso de CPU (0-100), promedio del intervalo entre latidos. AUSENTE en el primer latido de un agente: el porcentaje es una derivada y hace falta una lectura anterior.",
-			func(m *fleet.Muestra) (float64, bool) { return valorDe(m.CPUPct) }},
-		{"musubi_fleet_device_cpus", "Cantidad de CPUs.", func(m *fleet.Muestra) (float64, bool) { return float64(m.NumCPU), m.NumCPU > 0 }},
-		{"musubi_fleet_device_memory_total_bytes", "RAM total.", func(m *fleet.Muestra) (float64, bool) { return float64(m.MemTotal), m.MemTotal > 0 }},
-		{"musubi_fleet_device_memory_used_bytes", "RAM usada (total menos MemAvailable, no menos MemFree: el page cache no cuenta como ocupado).", func(m *fleet.Muestra) (float64, bool) { return float64(m.MemUsada), m.MemTotal > 0 }},
-		{"musubi_fleet_device_swap_total_bytes", "Swap total.", func(m *fleet.Muestra) (float64, bool) { return float64(m.SwapTotal), m.SwapTotal > 0 }},
-		{"musubi_fleet_device_swap_used_bytes", "Swap usada.", func(m *fleet.Muestra) (float64, bool) { return float64(m.SwapUsada), m.SwapTotal > 0 }},
-		{"musubi_fleet_device_disk_total_bytes", "Tamaño del filesystem raíz.", func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoTotal), m.DiscoTotal > 0 }},
-		{"musubi_fleet_device_disk_used_bytes", "Ocupado por archivos (como la columna Used de df).", func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoUsado), m.DiscoTotal > 0 }},
+			"%", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.CPUPct) })},
+		{"musubi_fleet_device_cpus", "Cantidad de CPUs.",
+			"", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.NumCPU), m.NumCPU > 0 })},
+		{"musubi_fleet_device_memory_total_bytes", "RAM total.",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.MemTotal), m.MemTotal > 0 })},
+		{"musubi_fleet_device_memory_used_bytes", "RAM usada (total menos MemAvailable, no menos MemFree: el page cache no cuenta como ocupado).",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.MemUsada), m.MemTotal > 0 })},
+		// AUSENTE en Windows y macOS: ninguno de los dos expone el equivalente de MemFree sin
+		// mentir (ullAvailPhys es el análogo de MemAvailable, no de MemFree).
+		{"musubi_fleet_device_memory_free_bytes", "RAM que el kernel no tiene asignada a nada (MemFree). NO es total menos usada: la usada sale de MemAvailable, y el page cache vive en el medio. AUSENTE en Windows y macOS, que no la exponen sin mentir.",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDeBytes(m.MemLibre) })},
+		{"musubi_fleet_device_swap_total_bytes", "Swap total.",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.SwapTotal), m.SwapTotal > 0 })},
+		{"musubi_fleet_device_swap_used_bytes", "Swap usada.",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.SwapUsada), m.SwapTotal > 0 })},
+		{"musubi_fleet_device_disk_total_bytes", "Tamaño del filesystem raíz.",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoTotal), m.DiscoTotal > 0 })},
+		{"musubi_fleet_device_disk_used_bytes", "Ocupado por archivos (como la columna Used de df).",
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoUsado), m.DiscoTotal > 0 })},
 		{"musubi_fleet_device_disk_available_bytes", "Lo que una aplicación todavía puede escribir (columna Avail de df). NO es total menos usado: entre medio está la reserva de root (~5%). Ésta es la serie para alertar.",
-			func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoDisponible), m.DiscoTotal > 0 }},
+			"By", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.DiscoDisponible), m.DiscoTotal > 0 })},
 		// AUSENTE en Windows: la carga es un concepto de UNIX y ahí no existe, así que la serie
 		// no se emite en vez de emitir un 0 que se leería como «máquina ociosa».
-		{"musubi_fleet_device_load1", "Carga a 1 minuto. AUSENTE en sistemas sin load average (Windows).", func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load1) }},
-		{"musubi_fleet_device_load5", "Carga a 5 minutos. AUSENTE en sistemas sin load average (Windows).", func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load5) }},
-		{"musubi_fleet_device_load15", "Carga a 15 minutos. AUSENTE en sistemas sin load average (Windows).", func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load15) }},
-		{"musubi_fleet_device_uptime_seconds", "Segundos desde el arranque de la máquina.", func(m *fleet.Muestra) (float64, bool) { return float64(m.UptimeSeg), m.UptimeSeg > 0 }},
+		{"musubi_fleet_device_load1", "Carga a 1 minuto. AUSENTE en sistemas sin load average (Windows).",
+			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load1) })},
+		{"musubi_fleet_device_load5", "Carga a 5 minutos. AUSENTE en sistemas sin load average (Windows).",
+			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load5) })},
+		{"musubi_fleet_device_load15", "Carga a 15 minutos. AUSENTE en sistemas sin load average (Windows).",
+			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load15) })},
+		{"musubi_fleet_device_uptime_seconds", "Segundos desde el arranque de la máquina.",
+			"s", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.UptimeSeg), m.UptimeSeg > 0 })},
 		{"musubi_fleet_device_temperature_celsius", "Primera zona térmica. AUSENTE si la máquina no expone sensor.",
-			func(m *fleet.Muestra) (float64, bool) { return valorDe(m.TempC) }},
+			"Cel", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.TempC) })},
+		// El nombre viaja en INGLÉS aunque el campo de la muestra sea `num_procesos`: adentro el
+		// JSON está en castellano, y en Prometheus la convención del ecosistema es inglesa. El
+		// punto de traducción es éste y ninguno más.
+		{"musubi_fleet_device_processes", "Procesos, no hilos (el 4º campo de /proc/loadavg cuenta hilos y da 3 a 5 veces más). AUSENTE en macOS: contarlos ahí exigiría un fork+exec por latido en el proceso que corre en todas las máquinas.",
+			"", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.NumProcesos), m.NumProcesos > 0 })},
 		{"musubi_fleet_device_sample_age_seconds", "Antigüedad de la muestra. Si crece sin parar, el agente late pero dejó de medir.",
-			func(m *fleet.Muestra) (float64, bool) { return ahora.Sub(m.Tomada).Seconds(), !m.Tomada.IsZero() }},
+			"s", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return ahora.Sub(m.Tomada).Seconds(), !m.Tomada.IsZero() })},
 	}
-	for _, s := range series {
-		valor := s.valor
-		escribirGauge(b, vistos, ahora, s.nombre, s.ayuda, func(_ fleet.Device, m *fleet.Muestra) (float64, bool) {
-			if m == nil {
-				return 0, false
-			}
-			return valor(m)
-		})
+}
+
+// deLaMuestra adapta una serie que sólo mira la MUESTRA a la firma que lleva también el device.
+// Una máquina sin muestra no aporta la serie: la comprobación de nil está escrita UNA vez acá y
+// no diecisiete veces, que es como se olvida en la número dieciocho.
+func deLaMuestra(f func(*fleet.Muestra) (float64, bool)) func(fleet.Device, *fleet.Muestra) (float64, bool) {
+	return func(_ fleet.Device, m *fleet.Muestra) (float64, bool) {
+		if m == nil {
+			return 0, false
+		}
+		return f(m)
 	}
 }
 
@@ -159,7 +232,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 //
 // Si ninguna máquina tiene el valor, tampoco se emiten HELP y TYPE: un bloque de cabeceras sin
 // series es ruido.
-func escribirGauge(b *strings.Builder, devices []fleet.Device, ahora time.Time, nombre, ayuda string,
+func escribirGauge(b *strings.Builder, devices []fleet.Device, nombre, ayuda string,
 	valor func(fleet.Device, *fleet.Muestra) (float64, bool)) {
 
 	var cuerpo strings.Builder
@@ -177,12 +250,37 @@ func escribirGauge(b *strings.Builder, devices []fleet.Device, ahora time.Time, 
 	b.WriteString(cuerpo.String())
 }
 
-// etiquetasDe arma el juego de labels de una máquina. Cardinalidad acotada a propósito: nombre,
-// proyecto, tier y OS. Las TAGS quedan afuera —son texto libre del administrador y meterlas
-// haría explotar la cardinalidad de la serie, que es la forma clásica de voltear un Prometheus.
+// labelsDeFlota es EL juego de labels de una máquina, en orden canónico y en UN solo lugar.
+//
+// Cardinalidad acotada a propósito: nombre, proyecto, tier y OS. Las TAGS quedan afuera —son texto
+// libre del administrador y meterlas haría explotar la cardinalidad de la serie, que es la forma
+// clásica de voltear un Prometheus. Y NADA de lo que la máquina reporta de sí misma entra acá
+// (versión del agente, dirección, id de RustDesk): eso la dejaría re-etiquetándose sola.
+//
+// etiquetasDe lo formatea para el exposition format y atributosOTLP para el empuje. Armarlos dos
+// veces es cómo un renombre de `device` a `hostname` deja las 12 reglas de
+// deploy/musubi-alerts-flota.yml evaluándose para siempre sin disparar nunca.
+func labelsDeFlota(d fleet.Device) [4][2]string {
+	return [4][2]string{
+		{"device", d.Name},
+		{"project", d.ProjectID},
+		{"tier", string(d.Tier)},
+		{"os", d.OS},
+	}
+}
+
+// etiquetasDe formatea los labels para el exposition format.
 func etiquetasDe(d fleet.Device) string {
-	return fmt.Sprintf(`device=%s,project=%s,tier=%s,os=%s`,
-		citarLabel(d.Name), citarLabel(d.ProjectID), citarLabel(string(d.Tier)), citarLabel(d.OS))
+	var b strings.Builder
+	for i, kv := range labelsDeFlota(d) {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(kv[0])
+		b.WriteByte('=')
+		b.WriteString(citarLabel(kv[1]))
+	}
+	return b.String()
 }
 
 // citarLabel escapa un valor de label según el exposition format: backslash, comilla y salto de
@@ -238,4 +336,13 @@ func valorDe(p *float64) (float64, bool) {
 		return 0, false
 	}
 	return *p, true
+}
+
+// valorDeBytes es el gemelo de valorDe para los contadores de BYTES opcionales (*uint64). Existe
+// por lo mismo: que la traducción del «no sé» esté escrita una vez y no se le olvide a nadie.
+func valorDeBytes(p *uint64) (float64, bool) {
+	if p == nil {
+		return 0, false
+	}
+	return float64(*p), true
 }

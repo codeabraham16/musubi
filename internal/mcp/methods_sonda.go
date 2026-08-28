@@ -166,6 +166,8 @@ func (s *McpServer) sondearUno(d fleet.Device, ahora time.Time) map[string]inter
 	fila["ok"] = true
 	fila["cpu_pct"] = m.CPUPct // null en el primer sondeo: la derivada necesita una lectura previa
 	fila["mem_pct"] = fleet.PctUsado(m.MemUsada, m.MemTotal)
+	fila["mem_libre"] = m.MemLibre                    // nil ⇒ null: no todo sistema expone MemFree
+	fila["num_procesos"] = enteroONull(m.NumProcesos) // 0 ⇒ null, con el mismo helper que la tool
 	fila["disco_pct"] = fleet.PctUsado(m.DiscoUsado, m.DiscoTotal)
 	fila["uptime_seg"] = m.UptimeSeg
 	return fila

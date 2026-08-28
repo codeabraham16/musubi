@@ -60,6 +60,38 @@ func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 		t.Errorf("MemUsada = %d con total %d: no parece medido", m.MemUsada, m.MemTotal)
 	}
 
+	// I8 — MemLibre se mide DE VERDAD, y se contrasta POR CERCANÍA contra /proc/meminfo.
+	//
+	// Por cercanía y no por igualdad, por la misma razón que la prueba de MemAvailable de más
+	// abajo: entre las dos lecturas la memoria se mueve, y comparar al byte dos lecturas
+	// independientes de una cantidad que cambia es flaky por construcción.
+	//
+	// Sabotaje: dejar de asignar MemFree en ParsearMeminfo — MemLibre queda nil y la primera rama
+	// lo dice.
+	libreKB := leerUnaClaveDeMeminfo(t, "MemFree")
+	if m.MemLibre == nil {
+		t.Error("MemLibre = nil en Linux: /proc/meminfo SIEMPRE trae MemFree, así que esto es que no se parsea")
+	} else if dif := relativa(*m.MemLibre, libreKB*1024); dif > 0.25 {
+		t.Errorf("MemLibre = %d y /proc/meminfo dice %d (%.1f%% de diferencia): la RAM libre se mueve "+
+			"entre dos lecturas, pero no tanto — esto ya no es ruido", *m.MemLibre, libreKB*1024, dif*100)
+	}
+
+	// I8 — Y los procesos, contra un conteo propio de /proc.
+	//
+	// Tolerancia amplia (±25 %) A PROPÓSITO: los procesos entran y salen entre las dos lecturas, y
+	// la suite entera arranca y mata subprocesos. La aserción tiene que discriminar a la escala en
+	// la que vive el bug —confundir procesos con HILOS da 3 a 5 veces más—, no más fina.
+	//
+	// Sabotaje: dejar listarProc() devolviendo "" (NumProcesos queda en 0 y la primera rama lo dice).
+	propios := contarPidsDeProcAMano(t)
+	if m.NumProcesos == 0 {
+		t.Error("NumProcesos = 0 en Linux: /proc siempre tiene pids, así que esto es que no se listó")
+	} else if dif := relativa(uint64(m.NumProcesos), uint64(propios)); dif > 0.25 {
+		t.Errorf("NumProcesos = %d y /proc tiene %d entradas numéricas (%.1f%% de diferencia): "+
+			"si el número es varias veces mayor, se están contando HILOS y no procesos",
+			m.NumProcesos, propios, dif*100)
+	}
+
 	// Disco: el root siempre tiene tamaño.
 	if m.DiscoTotal == 0 {
 		t.Error("DiscoTotal = 0: statfs no midió el filesystem raíz")
@@ -85,8 +117,8 @@ func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 	if err := m.Valida(); err != nil {
 		t.Errorf("una muestra REAL no pasó Valida(): %v", err)
 	}
-	t.Logf("medido: cpu=%s num_cpu=%d mem=%.1f%% disco=%.1f%% load1=%s uptime=%ds temp=%s",
-		fmtPtr(m.CPUPct), m.NumCPU,
+	t.Logf("medido: cpu=%s num_cpu=%d procs=%d mem=%.1f%% disco=%.1f%% load1=%s uptime=%ds temp=%s",
+		fmtPtr(m.CPUPct), m.NumCPU, m.NumProcesos,
 		*PctUsado(m.MemUsada, m.MemTotal), *PctUsado(m.DiscoUsado, m.DiscoTotal),
 		fmtPtr(m.Load1), m.UptimeSeg, fmtPtr(m.TempC))
 }
@@ -228,6 +260,24 @@ func leerUnaClaveDeMeminfo(t *testing.T, clave string) uint64 {
 	}
 	t.Skipf("/proc/meminfo no tiene %s", clave)
 	return 0
+}
+
+// contarPidsDeProcAMano cuenta las entradas numéricas de /proc sin pasar por el código bajo
+// prueba: es la referencia contra la que se contrasta el colector, igual que `df` lo es para el
+// disco. Si usara ContarPids, la prueba se compararía contra sí misma.
+func contarPidsDeProcAMano(t *testing.T) int {
+	t.Helper()
+	entradas, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Skipf("sin /proc: %v", err)
+	}
+	n := 0
+	for _, e := range entradas {
+		if _, err := strconv.ParseUint(e.Name(), 10, 64); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 func relativa(a, b uint64) float64 {

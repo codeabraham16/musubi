@@ -73,6 +73,14 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		// Y su INVENTARIO DE SERVICIOS (S12). Qué corre adentro de las máquinas de otro equipo
+		// —qué base de datos, qué bot, qué puente— es reconocimiento del mismo orden que la
+		// bitácora de comandos: nombra el software interno de otro tenant.
+		if _, err := e.AltaServicio(fleet.Servicio{
+			Nombre: "VICTIMSERVICIO", DeviceID: victima.ID, Clase: "systemd",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Ledger de uso de web (F0): el patrón de uso de OTRO proyecto —qué herramientas usa y con
 	// qué frecuencia— es información de negocio y no debe cruzarse. El marker va en la columna
@@ -147,6 +155,11 @@ func readSweepCases() []readSweepCase {
 		// La bitácora del tenant ajeno. Mismo caso hostil: el atacante DECLARA el proyecto.
 		{"musubi_fleet_log", map[string]any{"project": "web"}, "VICTIMSCRIPT"},
 		{"musubi_fleet_sessions", map[string]any{"project": "web"}, "VICTIMMIRON"},
+		// El inventario de servicios del tenant ajeno. Mismo caso HOSTIL: el atacante DECLARA el
+		// proyecto de la víctima. Va al barrido y NO a noScopedRead, que es la salida falsa: la
+		// tabla `services` SÍ tiene project_id, y meterla en la allowlist apagaría la guarda de
+		// aislamiento sobre ella y quedaría verde para siempre mientras la fuga existe.
+		{"musubi_fleet_services", map[string]any{"project": "web"}, "VICTIMSERVICIO"},
 	}
 }
 

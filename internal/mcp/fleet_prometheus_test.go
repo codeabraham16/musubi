@@ -45,6 +45,19 @@ func TestUnValorDesconocidoNoSeExportaComoCero(t *testing.T) {
 	if strings.Contains(out, "musubi_fleet_device_temperature_celsius") {
 		t.Errorf("se exportó temperatura sin sensor:\n%s", out)
 	}
+	// I10 — los dos campos de este slice juegan la misma regla, y cada uno la juega distinto:
+	// mem_libre es un puntero nil y num_procesos es un entero en 0. Los dos tienen que resolver a
+	// (0, false) y desaparecer de la salida.
+	//
+	// Sabotaje: devolver (0, true) en la fila de la tabla de series (por ejemplo, poner
+	// `float64(m.NumProcesos), true` en musubi_fleet_device_processes). La línea aparece con un 0
+	// y en Prometheus dibuja una caída a cero en cada máquina que no cuenta procesos.
+	if strings.Contains(out, "musubi_fleet_device_memory_free_bytes") {
+		t.Errorf("se exportó mem_libre sin haberla medido: un 0 se lee «no le queda RAM libre»:\n%s", out)
+	}
+	if strings.Contains(out, "musubi_fleet_device_processes") {
+		t.Errorf("se exportó el conteo de procesos sin haberlo medido:\n%s", out)
+	}
 	// Lo que SÍ se midió está.
 	for _, quiero := range []string{
 		`musubi_fleet_device_memory_used_bytes{device="pc-gio",project="casa",tier="A",os="linux"} 25`,
@@ -58,6 +71,27 @@ func TestUnValorDesconocidoNoSeExportaComoCero(t *testing.T) {
 	// Y sin series, tampoco cabeceras: un HELP/TYPE sin líneas es ruido.
 	if strings.Contains(out, "# TYPE musubi_fleet_device_cpu_percent") {
 		t.Error("se emitió TYPE de una métrica sin ninguna serie")
+	}
+
+	// LA OTRA MITAD: una máquina que SÍ los midió los exporta, con la línea exacta y sus cuatro
+	// labels. Sin esto, la mitad de arriba pasaría con una tabla de series que no emite nunca.
+	tok2 := enrolarDePrueba(t, s, "casa", "servidor")
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tok2, cuerpoConMuestra(t, muestraDePrueba())); code != http.StatusOK {
+		t.Fatal("el latido de la máquina medida falló")
+	}
+	out = exportar(t, s, nil)
+	for _, quiero := range []string{
+		`musubi_fleet_device_memory_free_bytes{device="servidor",project="casa",tier="A",os="linux"} 1073741824`,
+		`musubi_fleet_device_processes{device="servidor",project="casa",tier="A",os="linux"} 312`,
+	} {
+		if !strings.Contains(out, quiero) {
+			t.Errorf("falta la serie medida:\n  %s\nen:\n%s", quiero, out)
+		}
+	}
+	// Y la máquina que NO los midió sigue sin aparecer en esas series: la métrica se emite por
+	// MÁQUINA, no por tabla — que una la tenga no hace que la otra reporte un 0.
+	if strings.Contains(out, `musubi_fleet_device_processes{device="pc-gio"`) {
+		t.Errorf("la máquina sin conteo de procesos apareció igual en la serie:\n%s", out)
 	}
 }
 

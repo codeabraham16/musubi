@@ -912,6 +912,77 @@ type FleetConfig struct {
 	CommandOutputRetentionDays int `yaml:"command_output_retention_days,omitempty"`
 	// Policies son las reglas de auto-heal. Vacío ⇒ ninguna, que es el default.
 	Policies []PolicyConfig `yaml:"policies,omitempty"`
+	// OTLP es el EMPUJE de la telemetría de la flota a un receptor OTLP (S11). Nace APAGADO
+	// (Endpoint vacío): encender una salida de datos HACIA AFUERA es una decisión que alguien
+	// toma, no un default que se hereda al actualizar. El tirón de /metrics sigue funcionando
+	// igual, encendido o apagado esto — el empuje no lo reemplaza, es la misma exportación por
+	// otra boca.
+	OTLP OTLPPushConfig `yaml:"otlp,omitempty"`
+}
+
+// OTLPPushConfig configura el empuje OTLP/JSON de la telemetría de la flota (S11).
+//
+//	fleet:
+//	  otlp:
+//	    endpoint: http://127.0.0.1:9099/api/v1/otlp/v1/metrics
+//	    principal: prometheus        # CON LA AUTORIDAD DE QUIÉN se exporta (obligatorio)
+//	    interval_seconds: 30
+//	    timeout_seconds: 10
+//	    auth_token_env: MUSUBI_OTLP_TOKEN
+//
+// El empuje no es un segundo camino de export: comparte con /metrics la selección de máquinas, la
+// tabla de series y el juego de labels. Lo único suyo es el sobre, el POST y el lazo.
+type OTLPPushConfig struct {
+	// Endpoint es la URL COMPLETA del receptor, con su path. Para Prometheus 3.1.0:
+	// http://127.0.0.1:9099/api/v1/otlp/v1/metrics — y ese Prometheus tiene que correr con
+	// `--web.enable-otlp-receiver`, o el POST devuelve 404 y el empuje muere en silencio con la
+	// configuración del cerebro perfecta.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Principal es CON LA AUTORIDAD DE QUIÉN se exporta. Obligatorio si hay Endpoint. No hay
+	// default y no puede haberlo: el default sería «todos los tenants». Un lazo de fondo no tiene
+	// request, así que si nadie lo nombra el empujador nace sin principal — y sin principal el
+	// barrido federa y la compuerta por máquina dice que sí a todo (ver fleet_otlp.go).
+	Principal string `yaml:"principal,omitempty"`
+	// IntervalSeconds es la cadencia del empuje. 0 ⇒ 30 s (la del scrape). NEGATIVO ⇒ apagado.
+	IntervalSeconds float64 `yaml:"interval_seconds,omitempty"`
+	// TimeoutSeconds acota UN POST. 0 ⇒ 10 s. Tiene que ser MENOR que el intervalo, y el arranque
+	// lo exige: con un timeout más largo que el tick, cada empuje lento se come el siguiente y el
+	// lazo pasa la vida salteando ticks.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty"`
+	// AuthTokenEnv es el NOMBRE de la variable de entorno con el bearer del destino. El secreto
+	// entra POR REFERENCIA y nunca se escribe en el YAML — el mismo patrón que
+	// sync.auth_token_env y que el credentials_file de prometheus.yml.
+	AuthTokenEnv string `yaml:"auth_token_env,omitempty"`
+	// AllowInsecureToken habilita un destino http:// que NO es loopback. Fail-closed a propósito:
+	// ahí el bearer viajaría en texto plano por la red.
+	AllowInsecureToken bool `yaml:"allow_insecure_token,omitempty"`
+}
+
+// Activo dice si hay que arrancar el empuje. Sin endpoint no hay nada que encender, y un
+// intervalo negativo es el apagado explícito (mismo vocabulario que ProbeMinutes).
+func (o OTLPPushConfig) Activo() bool {
+	return strings.TrimSpace(o.Endpoint) != "" && o.IntervalSeconds >= 0
+}
+
+// EffectiveInterval traduce IntervalSeconds a una duración. 0 ⇒ 30 s (la cadencia del scrape);
+// negativo ⇒ 0, que apaga el lazo.
+func (o OTLPPushConfig) EffectiveInterval() time.Duration {
+	if o.IntervalSeconds < 0 {
+		return 0
+	}
+	if o.IntervalSeconds == 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(o.IntervalSeconds * float64(time.Second))
+}
+
+// EffectiveTimeout acota un POST. 0 ⇒ 10 s. Un http.Client sin Timeout espera PARA SIEMPRE, y
+// este POST sale del proceso que atiende toda la memoria del equipo.
+func (o OTLPPushConfig) EffectiveTimeout() time.Duration {
+	if o.TimeoutSeconds <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(o.TimeoutSeconds * float64(time.Second))
 }
 
 // PolicyConfig es una política de auto-heal tal como se escribe en el YAML.

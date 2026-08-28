@@ -183,6 +183,27 @@ type McpServer struct {
 	// ultimaPodaDePoliticas engancha la limpieza del estado de políticas a la MISMA cadencia que
 	// la de salidas, sin repetir el reloj: se poda cuando ultimaPoda avanzó.
 	ultimaPodaDePoliticas time.Time
+	// ── El empuje OTLP de la telemetría de flota (S11) ──────────────────────────────────────
+	// empujeCfg es la configuración del empuje ya validada. Endpoint vacío = apagado, que es el
+	// default: encender una salida de datos hacia afuera es una decisión que alguien toma.
+	empujeCfg config.OTLPPushConfig
+	// empujador es el cliente saliente, construido UNA vez en el arranque (con su Timeout y con
+	// el secreto ya resuelto). nil = el empuje está apagado o no validó.
+	empujador *empujadorOTLP
+	// empujeBusy garantiza UN empuje en vuelo. Un destino lento con un tick corto acumularía
+	// goroutines y payloads en memoria en un proceso que vive días. Mismo patrón que flotaBusy.
+	empujeBusy atomic.Bool
+	// empujeUltimoExito es el unix del último POST aceptado. 0 = NUNCA hubo uno, y ese 0 NO se
+	// exporta como una fecha: la serie se OMITE. Un «último éxito: hace 56 años» se lee como un
+	// bug del panel y no como «esto nunca funcionó», que es lo que en realidad pasó.
+	empujeUltimoExito atomic.Int64
+	// empujeFallos cuenta los empujes que no llegaron. De él vive la única forma de enterarse,
+	// desde el tirón, de que el empuje está muerto.
+	empujeFallos atomic.Int64
+	// empujeDatapoints es cuántos puntos llevó el último empuje. Un 0 sostenido significa que el
+	// lazo corre y no exporta nada — que es un fallo distinto de «no llega», y se ve distinto.
+	empujeDatapoints atomic.Int64
+
 	// shells son las sesiones de shell interactiva VIVAS de este proceso (S5b). En memoria a
 	// propósito: una sesión viva ES un proceso ssh hijo de este cerebro, así que si el cerebro
 	// muere la sesión muere con él. La BITÁCORA sí es durable — pero la bitácora es el registro,

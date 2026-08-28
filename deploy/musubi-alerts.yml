@@ -23,6 +23,43 @@ groups:
         annotations:
           summary: "El cerebro Musubi no responde al scrape (>5m)."
           runbook: "deploy/RUNBOOK.md#musubidown"
+      # ── El empuje OTLP se vigila a sí mismo (S11 · A46) ───────────────────────────────────
+      #
+      # Las TRES reglas se APAGAN SOLAS cuando el empuje está apagado, y eso no es casualidad:
+      # `musubi_push_failures_total` vale 0 con el empuje off, y `musubi_push_last_success_seconds`
+      # NO EXISTE hasta el primer empuje aceptado. Así que un despliegue que nunca encendió el
+      # empuje no recibe una sola alarma — que es la única forma de que estas reglas se puedan
+      # instalar SIEMPRE sin enseñarle a nadie a ignorar el canal.
+      - alert: MusubiPushOTLPFallando
+        expr: rate(musubi_push_failures_total[15m]) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El empuje OTLP de la flota no llega a destino."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpfallando"
+
+      # El empuje SE MURIÓ después de haber funcionado. Distinto del de arriba: acá no hay errores
+      # que contar porque puede que ni se esté intentando (el principal perdió su concesión
+      # `metrics` en una recarga en caliente, y eso no cuenta como fallo — ver A50).
+      - alert: MusubiPushOTLPMudo
+        expr: musubi_push_last_success_seconds > 600
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El empuje OTLP funcionó alguna vez y hace más de 10 minutos que no."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpmudo"
+
+      # NUNCA funcionó: hay fallos y no hay un solo éxito. Es la firma exacta del Prometheus sin
+      # `--web.enable-otlp-receiver` (404 en cada POST) y del token mal puesto (401). Se separa de
+      # las otras dos porque el arreglo es completamente distinto: no se cayó nada, nunca anduvo.
+      - alert: MusubiPushOTLPNuncaLlego
+        expr: musubi_push_failures_total > 0 unless musubi_push_last_success_seconds
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El empuje OTLP nunca llegó a destino ni una vez: revisá --web.enable-otlp-receiver y el token."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpnuncallego"
+
       - alert: MusubiOutboxDead
         expr: musubi_sync_outbox{state="dead"} > 0
         for: 15m

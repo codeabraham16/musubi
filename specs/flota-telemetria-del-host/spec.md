@@ -12,10 +12,12 @@ type Muestra struct {
     CPUPct     *float64  // nil = DESCONOCIDO (ver D1), nunca un 0 inventado
     NumCPU     int
     MemTotal, MemUsada, SwapTotal, SwapUsada uint64
+    MemLibre   *uint64   // MemFree. nil = este OS no lo expone (ver D11)
     DiscoTotal, DiscoUsado                   uint64
     Load1, Load5, Load15                     float64
     UptimeSeg                                uint64
     TempC      *float64  // nil = sin sensor
+    NumProcesos int      // PROCESOS, no hilos. 0 = no medido (ver D12)
 }
 
 type Colector interface{ Tomar() (Muestra, error) }   // seam por OS
@@ -70,6 +72,32 @@ más «instantáneo» es pagar latencia por una precisión que nadie pidió.
 
 Sin `thermal_zone0` no hay temperatura. `TempC` viaja `null` y el consumidor decide qué hacer.
 Una flota con máquinas heterogéneas tiene sensores en unas y en otras no.
+
+### D11 — `mem_libre` es MemFree y NO es la contracara de `mem_usada`
+
+`MemUsada` sale de **MemAvailable** y `MemLibre` de **MemFree**: entre las dos vive el page cache,
+y con el fixture real la diferencia son **3,5 GB** (85 % contra 40 % de RAM usada). Tener las dos
+en la struct vuelve tentador derivar una de la otra, y por eso hay dos pruebas custodiando la
+resta —`TestElParseoRemotoTampocoUsaMemFree` y `TestLaMemoriaUsadaSaleDeMemAvailableYNoDeMemFree`.
+
+Viaja como puntero porque **Windows y macOS no la pueden dar sin mentir**:
+`MEMORYSTATUSEX.ullAvailPhys` es el análogo de MemAvailable, no de MemFree, y en macOS haría falta
+mach. `nil` = «este sistema no la expone», que es distinto de «no le queda nada libre».
+
+**Lo que NO se valida, a propósito:** `mem_libre <= mem_total - mem_usada`. Parece obvia y es
+falsa —MemAvailable descuenta los watermarks del kernel y puede ser MENOR que MemFree—, y como una
+muestra inválida se descarta entera (D7), la aserción de más le costaría toda la telemetría a un
+servidor recién arrancado. La única regla es `mem_libre <= mem_total`.
+
+### D12 — `num_procesos` cuenta PROCESOS, y por eso no sale de `/proc/loadavg`
+
+El 4º campo de `/proc/loadavg` («5/1181») está leído, a mano y es **hilos**: da entre 3 y 5 veces
+más. El conteo sale de filtrar el listado de `/proc` por «el nombre es todo dígitos» —los tgid—,
+en `ContarPids`, que comparten las tres fuentes (local, Tier B por SSH, Tier C por ADB).
+
+Es un `int` y no un puntero, como `NumCPU`: una máquina encendida siempre tiene al menos un
+proceso, así que el **0 no es ambiguo** y significa «no medido». La traducción a `null` ocurre en
+la frontera (`enteroONull`), y en Prometheus la serie directamente no se emite.
 
 ### D4 — En un OS sin colector, el agente lo DICE
 
@@ -136,7 +164,11 @@ PRESENTE). Cuando haga falta historia, la guarda Prometheus, que ya está desple
   colectores son sus propios slices (D4 hace que su ausencia se vea en vez de mentir).
   **Esto acota el alcance declarado del track: hoy sólo Linux reporta.**
 - **No mide por proceso ni por interfaz de red.** El agregado del host primero; el detalle,
-  cuando haya una pregunta que lo pida.
+  cuando haya una pregunta que lo pida. El **conteo** de procesos sí entró (D12); la lista de
+  procesos no, y no va a entrar: es cardinalidad sin techo.
+- **No mide `mem_libre` ni procesos en macOS, ni `mem_libre` en Windows.** Está declarado en el
+  encabezado de cada colector y custodiado por la tabla de capacidades de `colector_test.go`, que
+  falla si alguna plataforma empieza —o deja— de medir algo.
 - **No alerta.** Las alertas son S10.
 - **Cero dependencias nuevas.** `/proc` + `syscall.Statfs`, stdlib. `gopsutil` daría los tres
   OS de una — y sería la 7ª dependencia directa de un repo que tiene 6 y un `observability.go`

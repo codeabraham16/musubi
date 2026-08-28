@@ -233,3 +233,48 @@ raiz/usr/sbin/sshd -f sshd.conf -E sshd.log
 
 Nada instalado, nada en systemd, nada fuera de loopback. Acordate de sacar la línea de
 `known_hosts` al terminar.
+
+
+## MusubiPushOTLPFallando
+
+El cerebro está empujando la telemetría de flota por OTLP y el destino la rechaza.
+
+1. Mirá el contador y el último éxito:
+   `curl -sH "Authorization: Bearer $MUSUBI_TOKEN" http://127.0.0.1:7717/metrics | grep musubi_push`
+2. El journal del cerebro dice el motivo la PRIMERA vez de cada clase de error (no una vez por
+   tick, a propósito): `journalctl -u musubi-brain | grep -i otlp | tail -20`
+3. Los tres motivos frecuentes, en orden de probabilidad:
+   - **404** — al Prometheus de destino le falta `--web.enable-otlp-receiver`.
+   - **401 / 403** — el token de `fleet.otlp.auth_token_env` no es el que espera el destino.
+   - **connection refused** — el destino no está escuchando en esa dirección.
+
+El empuje NO frena al cerebro: mientras esto pasa, `/metrics` sigue sirviendo igual y el scrape
+—si lo hay— no se entera. Por eso la alerta existe: sin ella el síntoma es que los gráficos se
+quedan quietos y nadie sabe desde cuándo.
+
+## MusubiPushOTLPMudo
+
+El empuje funcionó y dejó de hacerlo, **sin contar fallos**. Eso descarta el destino: si el
+destino rechazara, subiría `musubi_push_failures_total` y la alerta sería la otra.
+
+La causa conocida es que el principal del empuje **perdió su concesión `metrics`** en una recarga
+en caliente de `principals.yaml` (que se relee cada 10 s). El servidor exige esa concesión al
+arrancar, pero no vuelve a mirarla, así que el empuje se queda sin máquinas que exportar y manda
+cero puntos sin quejarse (A50).
+
+1. `grep -A6 "name: <el principal de fleet.otlp.principal>" .musubi/principals.yaml`
+2. Tiene que tener `fleet: metrics: [...]` con al menos una máquina. Si alguien se la sacó,
+   devolvésela y esperá un tick.
+
+## MusubiPushOTLPNuncaLlego
+
+Hay fallos y **ni un solo éxito desde que arrancó el cerebro**. No se cayó nada: nunca anduvo.
+Casi siempre es una de dos cosas, y las dos se arreglan en un minuto:
+
+1. **Falta el flag en el destino.** Prometheus no acepta OTLP por defecto:
+   `podman inspect musubi-prometheus --format '{{range .Config.Cmd}}{{.}} {{end}}' | grep otlp`
+   Si no aparece `--web.enable-otlp-receiver`, agregalo al compose y `podman compose up -d`.
+   Se comprueba en un solo paso — sin el flag esto da 404, con el flag da 200:
+   `curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:9099/api/v1/otlp/v1/metrics -H "Content-Type: application/json" -d "{}"`
+2. **El path está mal.** Tiene que terminar en `/api/v1/otlp/v1/metrics`. Un path corto de más
+   también da 404 y se ve exactamente igual que lo anterior.

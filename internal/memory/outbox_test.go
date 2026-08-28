@@ -81,8 +81,21 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	// v35 = PROCEDENCIA DEL rustdesk_id (S6b). Ese id lo REPORTA la máquina, así que es entrada
 	//       no confiable: se guarda CUÁNDO cambió y cuál era el anterior. La colisión —dos
 	//       máquinas diciendo ser la misma— NO se guarda: se deriva, como el «en línea».
-	if latestSchemaVersion() != 35 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 35", latestSchemaVersion())
+	// v36 = INVENTARIO DE SERVICIOS POR MÁQUINA (S12): qué corre ADENTRO de cada máquina de la
+	//       flota. Lo que NO tiene es su diseño, y son tres ausencias: ninguna columna de estado
+	//       (se deriva de `last_health` y de la edad de `last_report`, igual que el «en línea»),
+	//       ninguna serie temporal (B5: la historia la guarda Prometheus) y ninguna foreign key
+	//       (no hay ni una en el repo; la integridad se sostiene en el alta, copiando el
+	//       project_id del device). El único es (project_id, device_id, name): el nombre de un
+	//       servicio sólo es único DENTRO de su máquina.
+	// v37 = QUIÉN PUSO CADA SERVICIO EN EL INVENTARIO (`services.declared`), porque eso decide
+	//       quién puede sacarlo. La poda por ausencia da de baja lo que la máquina dejó de
+	//       reportar, y sin esta columna se llevaba puesto lo DECLARADO A MANO — que es, por
+	//       definición, lo que ningún enumerador ve: un Tier B que no enumera, un bot, un puente.
+	//       El backfill marca declaradas las filas con `last_report IS NULL`, que es la firma
+	//       exacta del alta a mano: el agente siempre escribe la fecha del latido.
+	if latestSchemaVersion() != 37 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 37", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

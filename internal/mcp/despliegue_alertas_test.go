@@ -154,3 +154,69 @@ func TestElInstaladorDeWindowsEsAsciiConBOM(t *testing.T) {
 		}
 	}
 }
+
+// EL RECEPTOR OTLP SE HABILITA EN LOS DOS CAMINOS DE INSTALACIÓN, Y LA DUPLICACIÓN ESTÁ DECIDIDA.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// DOS COSAS QUE SE ROMPEN SOLAS, Y LAS DOS SIN SÍNTOMA
+//
+//  1. Prometheus NO ACEPTA OTLP POR DEFECTO. Sin `--web.enable-otlp-receiver` el POST del empuje
+//     devuelve 404 y el empuje muere en silencio con la configuración del cerebro perfecta. El
+//     flag tiene que estar en el instalador systemd Y en el compose — es el mismo patrón de
+//     divergencia entre dos caminos de instalación que esta suite ya custodia para el puerto, y
+//     acá se paga peor: el que se instaló con el otro camino no exporta y no se entera.
+//
+//  2. SI EL MISMO PROMETHEUS SCRAPEA /metrics Y RECIBE EL PUSH, las mismas series
+//     `musubi_fleet_device_*` entran por dos caminos con `instance` distinto, y las 12 reglas de
+//     rules/musubi-alerts-flota.yml disparan DOBLE. Eso es una decisión que hay que escribir, no
+//     descubrir a las 4 de la mañana con dos avisos por incidente.
+//
+// Sabotaje que la hace fallar: agregar el flag sólo al unit systemd; o encender el push sin dejar
+// la receta escrita en prometheus.yml.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *testing.T) {
+	const flag = "--web.enable-otlp-receiver"
+
+	instalador := leerDeploy(t, "prometheus", "install-musubi-prometheus.sh")
+	// En el ExecStart de la unit, no sólo en un comentario: un flag comentado no habilita nada.
+	if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(flag)).MatchString(instalador) {
+		t.Errorf("el instalador systemd no le pasa %s a Prometheus: el POST del empuje va a devolver 404 y el empuje va a morir en silencio", flag)
+	}
+	compose := leerDeploy(t, "docker", "compose.yml")
+	if !regexp.MustCompile(`(?m)^\s+- ` + regexp.QuoteMeta(flag)).MatchString(compose) {
+		t.Errorf("el compose no le pasa %s a Prometheus: los dos caminos de instalación tienen que habilitarlo o el que use el otro no recibe el empuje", flag)
+	}
+
+	// La puerta de ESCRITURA anónima sigue cerrada en los dos: con remote-write habilitado,
+	// cualquiera que llegue al puerto puede inyectar `musubi_fleet_device_up 1` y apagar
+	// MaquinaCaida y FlotaSinTelemetria sin dejar rastro.
+	//
+	// Se miran las DIRECTIVAS y no las menciones: los dos archivos EXPLICAN en un comentario por
+	// qué no se habilita, y contar apariciones sueltas haría que el comentario que documenta la
+	// decisión rompa la prueba que la custodia. Es la misma corrección que ya lleva
+	// TestElComposeUsaLaRedDelHost.
+	for nombre, contenido := range map[string]string{"instalador": instalador, "compose": compose} {
+		for _, l := range strings.Split(contenido, "\n") {
+			limpia := strings.TrimSpace(l)
+			if strings.HasPrefix(limpia, "#") {
+				continue
+			}
+			if strings.Contains(limpia, "--web.enable-remote-write-receiver") {
+				t.Errorf("el %s habilita remote-write: es una puerta de escritura anónima sobre los datos de los que viven las alertas", nombre)
+			}
+		}
+	}
+
+	// La duplicación, DECIDIDA Y ESCRITA donde la va a leer quien encienda el push.
+	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
+	for _, quiero := range []string{
+		flag,                     // dónde se habilita
+		"musubi-otlp-push",       // cómo se distingue lo empujado de lo scrapeado
+		"metric_relabel_configs", // la receta concreta
+		"musubi_fleet_device_.*", // sobre qué series
+	} {
+		if !strings.Contains(cfg, quiero) {
+			t.Errorf("prometheus.yml no declara la duplicación de series del empuje: falta %q.\nSin esa receta, encender el push hace que las 12 reglas de flota disparen dos veces por incidente.", quiero)
+		}
+	}
+}

@@ -98,7 +98,19 @@ puntos 4-6 son la compuerta de S3 haciendo su trabajo por primera vez sobre algo
 - ~~**Sin colector de Windows ni macOS.**~~ **HECHOS en S4c**; lo que sigue abierto no es el
   código sino **A1/A2/A3**: CPU y memoria en macOS (mach), temperatura en Windows (WMI), y que
   NADIE los corrió en hardware real.
-- **Sin métricas por proceso ni por interfaz** (**B4**). El agregado del host primero.
+- **Sin métricas por proceso ni por interfaz** (**B4**). El agregado del host primero. El
+  **conteo** de procesos sí entró después (ver abajo); la LISTA de procesos sigue afuera.
+- ~~**`procs` y `mem_free` del colector externo se perdían en el corte.**~~ **HECHO en U1**:
+  `mem_libre` (*uint64, MemFree) y `num_procesos` (int, procesos y no hilos) viven en
+  `fleet.Muestra`, los miden Linux y —sólo procesos— Windows, viajan como `null` hasta la tool y
+  como serie AUSENTE en Prometheus cuando no se midieron. El inventario de los 22 campos del
+  colector externo quedó en `internal/fleet/testdata/colector-externo.json`, custodiado por
+  `TestNingunCampoDelColectorExternoSePierdeSinMotivo`: un campo que se borre o se renombre pone
+  la suite roja con el nombre del culpable.
+- **La columna de procesos no está en el panel de flota** (**A38**). El dato viaja hasta la tool y
+  hasta Prometheus; `cmd/musubi/assets/flota.html` todavía no lo dibuja.
+- **`num_cpu` sigue publicándose crudo y un 0 se lee «esta máquina no tiene CPUs»** (**A39**).
+  Es el mismo arreglo que se le hizo a `num_procesos` con `enteroONull`, en otro diff.
 - **Cero dependencias nuevas.** `gopsutil` daría los tres OS de una y sería la 7ª dependencia
   directa de un repo que tiene 6. Se prefirió el seam y un colector honesto por OS.
 

@@ -436,8 +436,31 @@ type DeviceStore interface {
 	// para decir «este id es ambiguo» sin nombrar la máquina de otro tenant.
 	QuienMasDiceSer(deviceID, rid, projectID string) ([]string, int, error)
 	// RevocarDevice es el kill-switch: deja de autenticar en el acto y la fila queda para la
-	// auditoría.
+	// auditoría. ARRASTRA los servicios de esa máquina (S12), en la misma transacción.
 	RevocarDevice(projectID, name string) (bool, error)
+}
+
+// ServiceStore es el inventario de QUÉ CORRE ADENTRO de cada máquina de la flota (S12): units de
+// systemd, servicios de Windows, contenedores.
+//
+// Es un rol APARTE de DeviceStore y no seis métodos más colgados de él, por la disciplina de
+// «interfaces chicas, compuestas» que ya sigue el resto del archivo: quien sólo necesita el
+// inventario de máquinas no tiene por qué depender del de servicios.
+//
+// Ninguna firma de acá recibe un `project_id` para ESCRIBIR: el proyecto de un servicio sale
+// siempre del device (que se resuelve adentro), nunca de lo que declare el llamador. Que no haya
+// por dónde pasarlo es la garantía, no la disciplina.
+type ServiceStore interface {
+	AltaServicio(s fleet.Servicio) (fleet.Servicio, error)
+	// ReportarServicios es la escritura del AGENTE: `deviceID` viene del TOKEN y acota TODO lo
+	// que se toca. Devuelve (nuevos, actualizados).
+	ReportarServicios(deviceID string, ahora time.Time, reportes []fleet.ReporteServicio) (int, int, error)
+	ListarServicios(projectID, deviceID string, incluirRevocados bool) ([]fleet.Servicio, error)
+	ServiciosDeDevice(deviceID string) ([]fleet.Servicio, error)
+	RevocarServiciosDeDevice(deviceID string) (int64, error)
+	// PodarServiciosAusentes saca lo que la máquina dejó de reportar. Una lista VACÍA no poda
+	// nada: «no reportó ninguno» es también lo que se ve cuando el agente arrancó a medias.
+	PodarServiciosAusentes(deviceID string, vivos []string) (int64, error)
 }
 
 type StorageBackend interface {
@@ -462,6 +485,7 @@ type StorageBackend interface {
 	Insighter
 	OutboxStore
 	DeviceStore
+	ServiceStore
 
 	// Close libera los recursos del backend (espera trabajo en background y cierra
 	// la conexión subyacente).

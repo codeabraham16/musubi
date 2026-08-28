@@ -1130,7 +1130,7 @@
     },
     {
       "name": "musubi_fleet_metrics",
-      "description": "Telemetría de la FLOTA: CPU, RAM, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+      "description": "Telemetría de la FLOTA: CPU, RAM (usada Y libre, que no son complementarias), procesos, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. `mem_usada` sale de MemAvailable y `mem_libre` es MemFree: NO son complementarias y en un Linux sano difieren en varios GB, porque el page cache vive en el medio. `num_procesos` cuenta PROCESOS, no hilos; `num_procesos` y `mem_libre` viajan como null en los sistemas que no los miden (mem_libre en Windows y macOS, num_procesos en macOS). Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1308,6 +1308,56 @@
             "description": "project_id. Sólo lo respeta un principal read=all"
           }
         }
+      }
+    },
+    {
+      "name": "musubi_fleet_services",
+      "description": "Qué CORRE ADENTRO de cada máquina de la flota: units de systemd, servicios de Windows, contenedores. Requiere la capacidad `metrics` SOBRE CADA MÁQUINA (sección `fleet:` de principals.yaml): qué corre en un host es telemetría del host, del mismo peso que su uso de CPU — accionar sobre un servicio sigue siendo `exec`, con su allowlist por comando. `estado` es corriendo | detenido | fallado | desconocido, y `desconocido` NO ES `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído. Un servicio DECLARADO Y TODAVÍA SIN MEDIR es un estado legítimo y distinto de «caído»: viaja con `ultimo_reporte` en null. `fresco` dice si el último reporte entra en el umbral de esa máquina — un servicio con noticias de hace dos días no está corriendo, está sin noticias. Guarda el PRESENTE, no la historia: no hay serie temporal (ésa la guarda Prometheus). Devuelve además cuántos servicios quedaron fuera por permiso, sin nombrarlos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "incluir_revocados": {
+            "type": "boolean",
+            "description": "Incluir los servicios dados de baja y los de máquinas revocadas (default false)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_service_declare",
+      "description": "ADMIN. Declara A MANO un servicio que corre en una máquina de la flota: un Tier B que no enumera solo, un bot, un puente. El servicio hereda el proyecto DE SU MÁQUINA, nunca del pedido. Nace en estado `desconocido` y con `ultimo_reporte` en null — «declarado y todavía sin medir» es un estado legítimo, no una falla — y pasa a tener estado cuando la máquina lo reporte. El nombre es único DENTRO de su máquina: dos hosts pueden correr cada uno su `postgres`. Lo declarado a mano NO lo poda el latido de la máquina —sale del inventario cuando lo saca una persona—, y volver a declarar uno que se dio de baja lo reactiva. Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clase": {
+            "type": "string",
+            "description": "Quién lo supervisa: systemd | windows | docker. Vacío = no declarada"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina en la que corre"
+          },
+          "nombre": {
+            "type": "string",
+            "description": "La unit, el servicio o el contenedor. Por ejemplo \"postgresql.service\""
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "device",
+          "nombre"
+        ]
       }
     },
     {

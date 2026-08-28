@@ -113,6 +113,16 @@ log "Validando config y reglas con promtool"
 ok "Config y 7 reglas válidas"
 
 # ── 7. Servicio systemd ──────────────────────────────────────────────────────
+#
+# --web.enable-otlp-receiver habilita POST /api/v1/otlp/v1/metrics, que es por donde el cerebro
+# EMPUJA la telemetría de la flota (fleet.otlp en el config del cerebro). Prometheus NO acepta OTLP
+# por defecto: sin el flag el POST devuelve 404 y el empuje muere en silencio con la configuración
+# del cerebro perfecta. Tiene que estar ACÁ y en deploy/docker/compose.yml —los dos caminos de
+# instalación—, o divergen. Lo custodia despliegue_alertas_test.go.
+#
+# Habilita SOLO OTLP, no --web.enable-remote-write-receiver: remote-write es una puerta de
+# ESCRITURA sobre los datos de los que viven las alertas (inyectar musubi_fleet_device_up 1 apaga
+# MaquinaCaida), y no hace falta para el empuje.
 log "Escribiendo unit systemd (bind $PROM_ADDR)"
 cat > "$UNIT" <<EOF
 [Unit]
@@ -129,7 +139,8 @@ ExecStart=/usr/local/bin/prometheus \\
   --storage.tsdb.path=$DATA \\
   --storage.tsdb.retention.time=$PROM_RETENTION \\
   --web.listen-address=$PROM_ADDR \\
-  --web.enable-lifecycle
+  --web.enable-lifecycle \\
+  --web.enable-otlp-receiver
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5

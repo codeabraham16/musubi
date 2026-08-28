@@ -14,6 +14,15 @@ package fleet
 //     máquina Windows de la flota sería indistinguible de una máquina ociosa.
 //   - TEMPERATURA. Se puede sacar por WMI (MSAcpi_ThermalZoneTemperature), pero WMI desde Go sin
 //     dependencias es COM crudo, y muchos equipos no exponen el sensor igual. Queda anotado.
+//   - MEMORIA LIBRE (mem_libre). Y ésta es la que hay que leer despacio, porque el atajo está a
+//     un campo de distancia: MEMORYSTATUSEX.ullAvailPhys es el análogo de MemAvailable, NO de
+//     MemFree — incluye la standby list, que es cache reutilizable. Reportarlo como mem_libre
+//     sería cometer en Windows exactamente la confusión que el repo peleó en Linux (85 % contra
+//     40 % de RAM usada), esta vez en un archivo que casi nadie puede probar localmente. Se
+//     prefiere no medirla: nil, y la tabla de capacidades de colector_test.go lo custodia.
+//
+// LO QUE SÍ SE AGREGÓ: el conteo de PROCESOS, con K32GetPerformanceInfo. Ahí sí Windows da el
+// número exacto y sin ambigüedad.
 //
 // La aritmética del porcentaje de CPU es la MISMA que la de Linux (contadorCPU, en cpudelta.go),
 // y ahí está probada: acá sólo se leen los contadores y se pasan. Esa separación es deliberada —
@@ -33,6 +42,7 @@ var (
 	procGlobalMemoryStatus = kernel32.NewProc("GlobalMemoryStatusEx")
 	procGetDiskFreeSpaceEx = kernel32.NewProc("GetDiskFreeSpaceExW")
 	procGetTickCount64     = kernel32.NewProc("GetTickCount64")
+	procGetPerformanceInfo = kernel32.NewProc("K32GetPerformanceInfo")
 )
 
 // filetime es el FILETIME de Win32: intervalos de 100 ns desde 1601. Acá sólo se usan como
@@ -55,6 +65,26 @@ type memoryStatusEx struct {
 	totalVirtual        uint64
 	disponibleVirtual   uint64
 	extendidaDisponible uint64
+}
+
+// performanceInformation es PERFORMANCE_INFORMATION. Como memoryStatusEx, `cb` lleva el tamaño
+// de la estructura antes de llamar: es el mismo patrón de versionado de Win32.
+//
+// OJO CON LOS TIPOS, porque acá un error no da un fallo sino basura plausible. Los contadores del
+// medio son SIZE_T —`uintptr` en Go, 8 bytes en amd64 y 4 en 386— y los TRES últimos son DWORD
+// (`uint32`). Escribirlos todos del mismo ancho corre los offsets y K32GetPerformanceInfo
+// devuelve números que parecen razonables y no lo son. El padding de 4 bytes que hay entre `cb`
+// (DWORD) y el primer SIZE_T en amd64 lo reproduce el propio compilador de Go si los tipos están
+// bien escritos: no hay que agregar un relleno a mano.
+//
+// La alternativa —K32EnumProcesses— exige reintentar con un búfer más grande hasta que quepan
+// todos los PIDs, y sin ese reintento CORTA EL CONTEO EN SILENCIO cuando el búfer se llena.
+type performanceInformation struct {
+	cb                                                 uint32
+	commitTotal, commitLimit, commitPeak               uintptr
+	physicalTotal, physicalAvailable, systemCache      uintptr
+	kernelTotal, kernelPaged, kernelNonpaged, pageSize uintptr
+	handleCount, processCount, threadCount             uint32
 }
 
 type colectorWindows struct {
@@ -111,7 +141,18 @@ func (c *colectorWindows) Tomar() (Muestra, error) {
 		m.UptimeSeg = uint64(ms) / 1000
 	}
 
-	// Load y temperatura quedan nil: ver el encabezado.
+	// PROCESOS. K32GetPerformanceInfo da el conteo exacto en una llamada, sin enumerar nada.
+	// `processCount` son PROCESOS; `threadCount` está al lado y son HILOS — es el mismo par que
+	// en Linux confunde el 4º campo de /proc/loadavg, y acá está literalmente en el campo de
+	// abajo. Si la llamada falla, NumProcesos queda en 0, que aguas arriba significa «no medido».
+	var pi performanceInformation
+	pi.cb = uint32(unsafe.Sizeof(pi))
+	if r, _, _ := procGetPerformanceInfo.Call(uintptr(unsafe.Pointer(&pi)), uintptr(pi.cb)); r != 0 && pi.processCount > 0 {
+		m.NumProcesos = int(pi.processCount)
+	}
+
+	// Load, temperatura y mem_libre quedan nil: ver el encabezado. La tentación concreta es
+	// emitir `mem.disponibleFisica` como mem_libre, y sería el bug de MemFree al revés.
 	return m, nil
 }
 

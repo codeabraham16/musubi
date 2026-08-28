@@ -18,7 +18,16 @@ package fleet
 //
 // Lo que SÍ mide, que no es poco: DISCO (el que más alerta dispara), CARGA, uptime y CPUs.
 //
-// Cerrarlo del todo —CPU y memoria por mach— está anotado como su propio slice.
+// LOS DOS CAMPOS QUE MACOS TAMPOCO DA, y hay que decirlo antes de que alguien los busque:
+//
+//   - mem_libre. El equivalente de MemFree es `vm_statistics64.free_count`, y sale de
+//     host_statistics64 — la misma llamada mach que falta para la memoria usada.
+//   - num_procesos. Contarlos exigiría `ps -ax | wc -l` o un sysctl KERN_PROC con búfer variable:
+//     un fork+exec cada 30 s en el proceso que corre en TODAS las máquinas de la flota, contra la
+//     promesa escrita en el encabezado del agente. No vale un número.
+//
+// Los dos quedan sin medir: nil y 0, que aguas arriba viajan como null. Cerrarlo del todo —CPU,
+// memoria y procesos por mach— está anotado como su propio slice.
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
@@ -71,6 +80,6 @@ func (colectorDarwin) Tomar() (Muestra, error) {
 	// fija ninguno de los dos — un total sin su usado produce un 0 % que se lee como «vacío»,
 	// que es exactamente la mentira que este diseño evita. Vuelve cuando llegue el slice de mach.
 	//
-	// CPU y carga: nil. Ver el encabezado.
+	// CPU: nil. mem_libre: nil. num_procesos: 0 (= no medido). Ver el encabezado.
 	return m, nil
 }

@@ -1238,6 +1238,113 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 36,
+			name:    "services_inventario_por_maquina",
+			// QUÉ CORRE ADENTRO DE CADA MÁQUINA DE LA FLOTA (S12).
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// CUÁL DE LAS DOS «FLOTAS» ES ÉSTA, porque en este mismo servidor hay dos (B17).
+			//
+			// La sección «Flota» del CRM inventaría BOTS, PUENTES Y SERVICIOS PUBLICADOS A MANO,
+			// leídos de un archivo. Esta tabla es la OTRA: las máquinas de `devices` —que se miden
+			// solas y latan— y las unidades que corren ADENTRO de ellas (una unit de systemd, un
+			// servicio de Windows, un contenedor). Comparten el nombre y no comparten nada más.
+			// Sin esta línea, alguien va a mirar una creyendo que es la otra.
+			// ────────────────────────────────────────────────────────────────────────────────
+			//
+			// LO QUE ESTA TABLA NO TIENE, y las tres ausencias son el diseño:
+			//
+			//   - NINGUNA COLUMNA DE ESTADO (`healthy`, `up`, `activo`). El estado se DERIVA al
+			//     leer, de `last_health` y de la EDAD de `last_report`. Es la misma lección que
+			//     `devices` no tiene columna `online`: un booleano guardado se queda en `true`
+			//     para siempre cuando la cosa muere de golpe, que es justo cuando querés saber
+			//     que se cayó. Hay una prueba de FORMA que recorre el PRAGMA y lo custodia.
+			//   - NINGUNA SERIE TEMPORAL. Se guarda el PRESENTE, igual que `devices.last_sample`.
+			//     La historia la guarda Prometheus (decisión B5): 40 máquinas × 40 servicios cada
+			//     30 s son millones de filas que nadie consulta salvo para graficar.
+			//   - NINGUNA FOREIGN KEY a `devices`. No hay ni una en todo el repo y no hay
+			//     `PRAGMA foreign_keys=ON` en el arranque, así que la primera sólo para esta
+			//     tabla sería una inconsistencia peor que el hueco. La integridad se sostiene en
+			//     el ALTA —se resuelve el device y de ÉL se copia el project_id— y en un escaneo
+			//     tolerante, nunca en el esquema.
+			//
+			// El `project_id` va DENORMALIZADO en la fila y no por JOIN a `devices`, igual que en
+			// `device_commands` y `screen_sessions`: el aislamiento por tenant no puede depender
+			// de que la fila de la máquina siga existiendo con el mismo proyecto.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`CREATE TABLE IF NOT EXISTS services (
+						id            TEXT PRIMARY KEY,
+						name          TEXT NOT NULL,
+						project_id    TEXT NOT NULL,
+						device_id     TEXT NOT NULL,
+						kind          TEXT NOT NULL DEFAULT '',
+						registered_at TEXT NOT NULL DEFAULT '',
+						last_report   TEXT,
+						last_health   TEXT NOT NULL DEFAULT '',
+						revoked       INTEGER NOT NULL DEFAULT 0
+					)`); err != nil {
+					return err
+				}
+				if _, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_services_project ON services(project_id, revoked)`); err != nil {
+					return err
+				}
+				if _, err := x.Exec(`CREATE INDEX IF NOT EXISTS idx_services_device ON services(device_id, revoked)`); err != nil {
+					return err
+				}
+				// EL ÚNICO ES (project_id, device_id, name) Y NO (project_id, name).
+				//
+				// El nombre de un servicio sólo es único DENTRO de su máquina: dos hosts pueden
+				// correr cada uno su `postgres` y son dos servicios distintos. Con el índice por
+				// proyecto y nombre, el segundo host no podría registrar el suyo — y el síntoma
+				// sería «el alta falla en la máquina nueva», que nadie asocia con un índice.
+				//
+				// Y la unicidad la decide el ÍNDICE, no un SELECT previo: entre un SELECT y un
+				// INSERT hay una carrera y la base no la tiene.
+				_, err := x.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_nombre ON services(project_id, device_id, name)`)
+				return err
+			},
+		},
+		{
+			version: 37,
+			name:    "services_declared_no_los_poda_el_latido",
+			// QUIÉN PUSO LA FILA, PORQUE ESO DECIDE QUIÉN PUEDE SACARLA.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// EL AGUJERO QUE CIERRA, Y POR QUÉ TODAVÍA NO SE VEÍA
+			//
+			// La poda por ausencia (PodarServiciosAusentes, disparada por cada latido) da de baja
+			// lo que la máquina dejó de reportar. Hasta acá, la tabla no distinguía un servicio
+			// REPORTADO por el agente de uno DECLARADO a mano con musubi_fleet_service_declare —y
+			// lo declarado a mano es, por definición, lo que ninguna máquina va a reportar nunca:
+			// el bot de un Tier B, un puente, un contenedor en un host que no se enumera solo.
+			//
+			// O sea que el primer latido que traiga un enumerador de systemd se lleva puesto, de
+			// una y en toda la flota a la vez, TODO lo que alguien declaró a mano. Hoy no explota
+			// sólo porque el agente todavía no enumera (A42 abierto): es una mina, no un bug
+			// latente, y el día que se despache ese slice explota en todas las máquinas juntas.
+			//
+			// EL BACKFILL NO ES `DEFAULT 1` NI `DEFAULT 0` A CIEGAS. Las filas que ya existen se
+			// marcan declaradas si NUNCA reportaron (`last_report IS NULL`), que es la firma
+			// exacta e inconfundible de AltaServicio: es el único camino que inserta con
+			// last_report en NULL, y el agente siempre escribe la fecha del latido. Una fila con
+			// last_report vino de un reporte —o alguien la declaró y la máquina la reporta, que es
+			// justo el caso en que la poda dice algo cierto— y queda podable.
+			//
+			// Y NO es una columna de estado de las que este esquema se prohíbe (hay una prueba de
+			// forma que las persigue): no describe cómo está el servicio ni se puede quedar vieja
+			// mientras el mundo cambia. Describe su PROCEDENCIA, que es un hecho del pasado y no
+			// se mueve más.
+			// ────────────────────────────────────────────────────────────────────────────────
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "services", "declared", "declared INTEGER NOT NULL DEFAULT 0"); err != nil {
+					return err
+				}
+				// Idempotente: correrlo dos veces marca las mismas filas.
+				_, err := x.Exec(`UPDATE services SET declared = 1 WHERE last_report IS NULL`)
+				return err
+			},
+		},
 	}
 }
 

@@ -263,13 +263,28 @@ const separadorProc = "@@musubi@@"
 // `2>/dev/null` en la temperatura y en df: en un router o en un Android esos caminos pueden no
 // existir, y un stderr ruidoso ensuciaría la sección siguiente. Lo que falta queda vacío, que es
 // exactamente lo que el parseo interpreta como «no medido».
+//
+// UNA SECCIÓN NUEVA SE APENDEA AL FINAL, SIEMPRE. La de `ls -1 /proc` es la octava, y por eso la
+// de cpuinfo ganó su `echo` separador (antes no lo llevaba, por ser la última). Insertar en el
+// MEDIO corre todos los índices de ParsearLecturaRemota —la memoria se leería como carga— y no
+// rompe nada visible: produce muestras cruzadas, con números plausibles y sin un solo error.
+//
+// ESA ADVERTENCIA YA NO ES SÓLO UN COMENTARIO: la sostienen las dos pruebas de
+// guion_remoto_test.go, que atan el ORDEN de estas secciones a los índices de tomar() —una por el
+// texto del guion, la otra corriéndolo de verdad contra el Linux que las ejecuta—. Durante todo el
+// track esta advertencia no tuvo dueño y el corrimiento pasaba con la suite entera en verde.
+//
+// Apendear también es retrocompatible hacia atrás: `tomar(i)` devuelve "" para un índice que no
+// existe, así que una salida VIEJA de siete secciones sigue parseando igual, con NumProcesos en
+// 0 = «no medido».
 const guionLecturaProc = `cat /proc/stat 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`cat /proc/meminfo 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`cat /proc/loadavg 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`cat /proc/uptime 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`df -B1 / 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; echo '` + separadorProc + `'; ` +
-	`grep -c ^processor /proc/cpuinfo 2>/dev/null`
+	`grep -c ^processor /proc/cpuinfo 2>/dev/null; echo '` + separadorProc + `'; ` +
+	`ls -1 /proc 2>/dev/null`
 
 // EsIOS reconoce un dispositivo Apple móvil por el `os` que se declaró al enrolarlo.
 //
@@ -349,6 +364,7 @@ func ParsearLecturaRemota(salida string) (LecturasProc, bool) {
 	if n, err := strconv.Atoi(strings.TrimSpace(tomar(6))); err == nil && n > 0 {
 		l.NumCPU = n
 	}
+	l.Procs = tomar(7) // octava sección; vacía en un agente/guion viejo, que es «no medido»
 	// SEMÁNTICA: que /proc/stat parsee como jiffies, o que meminfo traiga un MemTotal. Texto
 	// suelto no alcanza.
 	_, _, statOK := ParsearJiffies(l.Stat)

@@ -47,6 +47,13 @@ func TestElParseoDeProcProduceLosMismosNumerosVengaDeDondeVenga(t *testing.T) {
 	if quiero := uint64(7843996) * 1024; m.MemTotal != quiero {
 		t.Errorf("MemTotal = %d, esperaba %d", m.MemTotal, quiero)
 	}
+	// I3 — MemLibre ES MemFree, no otra cosa: el número crudo del fixture, en bytes.
+	// Sabotaje: no asignar MemFree en ParsearMeminfo (queda nil y esta rama lo dice).
+	if m.MemLibre == nil {
+		t.Error("MemLibre = nil con un meminfo que trae MemFree: no se está absorbiendo")
+	} else if quiero := uint64(1204168) * 1024; *m.MemLibre != quiero {
+		t.Errorf("MemLibre = %d, esperaba %d (el MemFree del fixture, en bytes)", *m.MemLibre, quiero)
+	}
 	if quiero := uint64(9941140-8404964) * 1024; m.SwapUsada != quiero {
 		t.Errorf("SwapUsada = %d, esperaba %d", m.SwapUsada, quiero)
 	}
@@ -87,6 +94,80 @@ func TestElParseoRemotoTampocoUsaMemFree(t *testing.T) {
 	if m.MemUsada != conAvailable {
 		t.Errorf("MemUsada = %d, esperaba %d", m.MemUsada, conAvailable)
 	}
+
+	// AHORA QUE MemFree VIVE EN LA STRUCT, el atajo está a un campo de distancia: MemUsada
+	// «tiene» que ser MemTotal - MemLibre, dice la intuición. No lo es, y la distancia entre las
+	// dos cuentas se mide en GIGABYTES, no en ruido.
+	//
+	// Sabotaje: en ParsearMeminfo, calcular MemUsada con vals["MemFree"] en vez de con
+	// `disponible`.
+	if m.MemLibre == nil {
+		t.Fatal("MemLibre = nil: sin el campo, esta guarda no custodia nada")
+	}
+	if m.MemUsada == m.MemTotal-*m.MemLibre {
+		t.Fatalf("MemUsada (%d) es exactamente total menos MemLibre: se derivó del campo equivocado", m.MemUsada)
+	}
+	const gigabyte = 1 << 30
+	if d := (m.MemTotal - *m.MemLibre) - m.MemUsada; d < 3*gigabyte {
+		t.Errorf("entre la cuenta con MemAvailable (%d) y la cuenta con MemFree (%d) hay %d bytes: "+
+			"con este fixture tienen que ser ~3,5 GB (85%% contra 40%% de RAM usada). Si la distancia se achicó, "+
+			"una de las dos cuentas cambió", m.MemUsada, m.MemTotal-*m.MemLibre, d)
+	}
+}
+
+// I4 — EL CONTEO DE PROCESOS NO SALE DEL 4º CAMPO DE /proc/loadavg.
+//
+// Es la única prueba que caza esta trampa, y hace falta porque la trampa NO produce un error:
+// produce un número creíble. En «1.64 2.33 2.31 5/1181 94909» el 1181 son los HILOS del sistema
+// y el 5 los ejecutables en ese instante; ninguno de los dos es la cantidad de procesos, y el
+// dato ya está leído y a mano en LecturasProc.Loadavg.
+//
+// Sabotaje que la hace fallar: derivar NumProcesos del 4º campo de Loadavg (el denominador, 1181,
+// o el numerador, 5) en vez de contar el listado de /proc.
+func TestElConteoDeProcesosNoSaleDelCuartoCampoDeLoadavg(t *testing.T) {
+	// Siete pids de mentira, y de paso la basura que /proc tiene al lado.
+	listado := "1\n2\n847\n1024\n1025\n9931\n94909\nself\nthread-self\ncpuinfo\nmeminfo\nnet\n"
+	l := LecturasProc{
+		Meminfo: meminfoReal,
+		Loadavg: "1.64 2.33 2.31 5/1181 94909",
+		Procs:   listado,
+	}
+	m := MuestraDesde(l, nil)
+
+	if m.NumProcesos != 7 {
+		t.Errorf("NumProcesos = %d, esperaba 7 (los pids del listado)", m.NumProcesos)
+	}
+	if m.NumProcesos == 1181 {
+		t.Error("NumProcesos = 1181: ése es el denominador del 4º campo de loadavg y cuenta HILOS, " +
+			"no procesos — da entre 3 y 5 veces más y no falla nunca, sólo miente")
+	}
+	if m.NumProcesos == 5 {
+		t.Error("NumProcesos = 5: ése es el numerador del 4º campo de loadavg (los ejecutables en este " +
+			"instante), no la cantidad de procesos del sistema")
+	}
+}
+
+// I5 — ContarPids cuenta PROCESOS, no cualquier entrada de /proc.
+//
+// El filtro tiene que ser «el nombre es TODO dígitos». Los parecidos fallan de maneras distintas
+// y todas silenciosas: un HasPrefix numérico deja pasar "12ab", y filtrar por ausencia de "/" no
+// filtra nada.
+//
+// Sabotaje: cambiar el filtro por strings.HasPrefix con un dígito, o por «no contiene /».
+func TestContarPidsIgnoraLoQueNoEsUnPid(t *testing.T) {
+	if n := ContarPids("1\n2\n1234\nself\nthread-self\ncpuinfo\nnet\n12ab\n"); n != 3 {
+		t.Errorf("ContarPids = %d, esperaba 3: sólo 1, 2 y 1234 son pids ("+
+			"«12ab» empieza con dígitos y NO lo es)", n)
+	}
+	// Un listado vacío es «no medido», no «cero procesos»: devuelve 0 y quien lo consume lo
+	// traduce a null.
+	if n := ContarPids(""); n != 0 {
+		t.Errorf("ContarPids(\"\") = %d, esperaba 0", n)
+	}
+	// Espacios sueltos y líneas en blanco no cuentan.
+	if n := ContarPids("\n  \n 42 \n"); n != 1 {
+		t.Errorf("ContarPids con espacios = %d, esperaba 1", n)
+	}
 }
 
 // Lo que no vino queda en nil o en cero-por-par, nunca en un número inventado.
@@ -98,6 +179,15 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	}
 	if m.CPUPct != nil || m.Load1 != nil || m.TempC != nil {
 		t.Errorf("se inventaron valores que no vinieron: cpu=%v load=%v temp=%v", m.CPUPct, m.Load1, m.TempC)
+	}
+	// I9 — los dos campos nuevos hablan el mismo idioma del «no sé»: nil el puntero, 0 el entero.
+	// Sabotaje: inicializar MemLibre con u64(0) cuando no hay MemFree — un 0 se lee «no le queda
+	// nada de RAM libre», que es lo contrario de «no lo sé».
+	if m.MemLibre != nil {
+		t.Errorf("MemLibre = %d sin haber leído meminfo: tiene que ser nil", *m.MemLibre)
+	}
+	if m.NumProcesos != 0 {
+		t.Errorf("NumProcesos = %d sin listado de /proc: tiene que ser 0 (= no medido)", m.NumProcesos)
 	}
 	// REGLA DE LOS PARES: sin meminfo no se fija ni total ni usado.
 	if m.MemTotal != 0 || m.MemUsada != 0 || m.DiscoTotal != 0 {
@@ -127,6 +217,48 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	if viejo.MemTotal == 0 || viejo.MemUsada != 600*1024 {
 		t.Errorf("un kernel viejo con MemFree debería medirse: total=%d usado=%d", viejo.MemTotal, viejo.MemUsada)
 	}
+	// Y ACÁ, SÓLO ACÁ, `MemUsada == MemTotal - MemLibre` ES LEGÍTIMO, y queda escrito para que
+	// nadie lo «arregle»: en el camino del kernel viejo no hay MemAvailable contra qué restar, así
+	// que las dos cuentas coinciden POR CONSTRUCCIÓN. En el camino normal esa igualdad es el bug.
+	if viejo.MemLibre == nil || viejo.MemUsada != viejo.MemTotal-*viejo.MemLibre {
+		t.Errorf("en el camino de kernel viejo las dos cuentas tienen que coincidir: usada=%d total=%d libre=%v",
+			viejo.MemUsada, viejo.MemTotal, viejo.MemLibre)
+	}
+}
+
+// I12 — UNA MUESTRA GUARDADA VIEJA SIGUE LEYÉNDOSE, y lo que le falta se lee como «no medido».
+//
+// Es el despliegue escalonado: el cerebro se actualiza primero y durante días recibe latidos de
+// agentes viejos, además de tener en la columna `last_sample` muestras guardadas antes de este
+// slice. Ninguna de las dos trae mem_libre ni num_procesos, y eso NO es un error.
+//
+// Sabotaje: hacer que MuestraDesdeTexto exija los campos (o que el JSON los rellene con ceros al
+// deserializar, que es el mismo bug con otra cara).
+func TestUnaMuestraSinLosCamposNuevosSeLeeComoNoMedida(t *testing.T) {
+	vieja := `{"tomada":"2026-08-01T10:00:00Z","cpu_pct":12.5,"num_cpu":8,` +
+		`"mem_total":8589934592,"mem_usada":4294967296,"swap_total":0,"swap_usada":0,` +
+		`"disco_total":1000,"disco_usado":100,"disco_disponible":850,` +
+		`"load1":1.5,"load5":1.2,"load15":1.1,"uptime_seg":3600,"temp_c":null}`
+	m, err := MuestraDesdeTexto(vieja)
+	if err != nil {
+		t.Fatalf("una muestra guardada antes de este slice dejó de leerse: %v", err)
+	}
+	if m == nil {
+		t.Fatal("MuestraDesdeTexto devolvió nil sin error")
+	}
+	if m.MemLibre != nil {
+		t.Errorf("MemLibre = %d en una muestra que no lo traía: tiene que ser nil", *m.MemLibre)
+	}
+	if m.NumProcesos != 0 {
+		t.Errorf("NumProcesos = %d en una muestra que no lo traía: tiene que ser 0", m.NumProcesos)
+	}
+	// Y lo que SÍ traía sigue intacto: no se perdió nada en el camino.
+	if m.NumCPU != 8 || m.MemUsada != 4294967296 {
+		t.Errorf("la muestra vieja se leyó mal: %+v", m)
+	}
+	if err := m.Valida(); err != nil {
+		t.Errorf("una muestra vieja dejó de ser válida: %v", err)
+	}
 }
 
 // La lectura remota se parte en secciones, y una salida que NO es de un Linux se rechaza en vez
@@ -144,6 +276,39 @@ func TestUnaSalidaQueNoEsLinuxSeRechaza(t *testing.T) {
 	}
 	if l.NumCPU != 12 || !strings.Contains(l.Meminfo, "MemAvailable") {
 		t.Errorf("secciones mal partidas: %+v", l)
+	}
+
+	// I6 — LA OCTAVA SECCIÓN SE APENDEÓ, y las dos formas tienen que parsear.
+	//
+	// La de arriba es la salida VIEJA, de siete secciones: un guion anterior a este slice, o un
+	// Tier B al que todavía no le llegó. Tiene que seguir dando ok=true, con NumProcesos en 0.
+	if n := ContarPids(l.Procs); n != 0 {
+		t.Errorf("una salida vieja de 7 secciones reportó %d procesos: tomar(7) tiene que dar \"\"", n)
+	}
+
+	// Y la NUEVA, de ocho.
+	//
+	// EL TECHO DE ESTA PRUEBA, ESCRITO PARA QUE NADIE SE CONFÍE: acá el texto de entrada lo arma
+	// ELLA MISMA, así que verifica el PARSER y no el guion. El sabotaje que declaraba antes
+	// —«insertar `ls -1 /proc` en el medio del guion»— NO la ponía roja: el guion no se toca en
+	// este archivo. Ese contrato lo custodia guion_remoto_test.go, y ahí sí se pone rojo.
+	//
+	// Sabotaje que la hace fallar (VERIFICADO): correr los índices de `tomar()` en
+	// ParsearLecturaRemota —leer NumCPU de tomar(5) y Procs de tomar(6), por ejemplo—. Ahí la
+	// memoria se lee como carga y la temperatura como conteo de procesadores.
+	conProcs := completa + "\n" + sep + "\n1\n2\n1234\nself\ncpuinfo\n"
+	l8, ok := ParsearLecturaRemota(conProcs)
+	if !ok {
+		t.Fatal("la salida NUEVA de 8 secciones se rechazó")
+	}
+	if l8.NumCPU != 12 {
+		t.Errorf("NumCPU = %d con 8 secciones: los índices se corrieron", l8.NumCPU)
+	}
+	if !strings.Contains(l8.Meminfo, "MemAvailable") || !strings.HasPrefix(strings.TrimSpace(l8.Loadavg), "1.0") {
+		t.Errorf("con 8 secciones se cruzaron los índices: meminfo=%q loadavg=%q", l8.Meminfo, l8.Loadavg)
+	}
+	if n := ContarPids(l8.Procs); n != 3 {
+		t.Errorf("la octava sección dio %d procesos, esperaba 3: %q", n, l8.Procs)
 	}
 
 	for _, basura := range []string{

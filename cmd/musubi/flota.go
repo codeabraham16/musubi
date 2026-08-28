@@ -42,10 +42,14 @@ type flotaRespuesta struct {
 
 // handlerFlota arma la tabla combinando el inventario y las métricas del cerebro.
 //
-// Se piden LAS DOS porque responden preguntas distintas y la compuerta las gatea distinto:
+// Se piden LAS TRES porque responden preguntas distintas y la compuerta las gatea distinto:
 // `fleet_list` dice qué máquinas hay (y qué podés sobre cada una), `fleet_metrics` dice cómo
-// están (y sólo de las que tenés `metrics`). Una máquina puede aparecer en la primera y no en la
-// segunda — eso NO es un error, es la compuerta, y la tabla lo dibuja como «sin métricas».
+// están y `fleet_services` dice qué corre adentro (las dos últimas, sólo de las que tenés
+// `metrics`). Una máquina puede aparecer en la primera y no en las otras — eso NO es un error, es
+// la compuerta, y la tabla lo dibuja como «sin métricas» y como «sin datos de servicios».
+//
+// SÓLO LA PRIMERA PUEDE TUMBAR LA PÁGINA. Las otras dos se piden con el error ignorado: perder
+// los números o el inventario es molesto; perder la lista de máquinas es quedarse a oscuras.
 func handlerFlota(relay *relayVivo) http.HandlerFunc {
 	cli := &http.Client{Timeout: 20 * time.Second}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +107,30 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 				// NO es un error: puede ser que la máquina nunca reportó, o que esta credencial
 				// no tiene `metrics` sobre ella. La tabla lo dibuja distinto de un cero.
 				e["con_metricas"] = false
+			}
+		}
+		// LOS SERVICIOS (S12) son la TERCERA llamada, y su error se IGNORA igual que el de las
+		// métricas. Propagarlo haría que un problema de permisos sobre los servicios borre la
+		// FLOTA entera de la pantalla — el mismo bug que la decisión de las métricas ya evitó,
+		// repetido con otro nombre.
+		//
+		// Y la ausencia de la llave `servicios` en un equipo NO es «cero servicios»: es «no
+		// sabemos». La página las dibuja distinto, que es todo el punto del track.
+		if svc, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_services", map[string]any{}); err == nil {
+			porMaquina := map[string][]map[string]any{}
+			for _, sv := range aFilas(svc["services"]) {
+				if n, _ := sv["device"].(string); n != "" {
+					porMaquina[n] = append(porMaquina[n], sv)
+				}
+			}
+			for _, e := range equipos {
+				n, _ := e["name"].(string)
+				// La llave se pone SIEMPRE que la tool haya contestado, incluso con la lista
+				// vacía: ahí «no corre nada declarado» sí es un dato, y es distinto de «la tool
+				// no contestó». Sin esta línea, una máquina sin servicios y una consulta fallida
+				// se dibujarían igual.
+				e["servicios"] = porMaquina[n]
+				e["con_servicios"] = true
 			}
 		}
 		responder(flotaRespuesta{Estado: "vivo", Destino: relay.host(), Equipos: equipos, SinPermiso: sinPermiso})

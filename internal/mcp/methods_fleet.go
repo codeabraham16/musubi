@@ -473,8 +473,27 @@ func filaDeMetricas(d fleet.Device, m fleet.Muestra, ahora time.Time, umbral tim
 	fila["load1"] = m.Load1
 	fila["load5"] = m.Load5
 	fila["load15"] = m.Load15
+	// mem_libre es *uint64: nil ⇒ null. Windows y macOS no la exponen, y decir 0 sería decir «no
+	// le queda nada de RAM libre», que es lo contrario de «no lo sé».
+	fila["mem_libre"] = m.MemLibre
+	// num_procesos es un entero, así que el cero se traduce ACÁ. Copiarlo crudo pintaría «esta
+	// máquina no tiene procesos» en todo macOS y en todo agente viejo — y en Prometheus, una
+	// caída a cero en cada gráfico. (`num_cpu` arriba sí se copia crudo y tiene el mismo
+	// problema: es el mismo arreglo pero otro diff, anotado como cabo.)
+	fila["num_procesos"] = enteroONull(m.NumProcesos)
 	fila["mem_pct"] = fleet.PctUsado(m.MemUsada, m.MemTotal)
 	fila["disco_pct"] = fleet.PctUsado(m.DiscoUsado, m.DiscoTotal)
 	fila["swap_pct"] = fleet.PctUsado(m.SwapUsada, m.SwapTotal)
 	return fila
+}
+
+// enteroONull traduce el «0 = no medido» de un contador entero al null del JSON.
+//
+// Es el gemelo de lo que los punteros hacen solos para los float: un contador que no se pudo
+// medir tiene que llegar a la pantalla como un hueco, no como un cero que se cree.
+func enteroONull(n int) interface{} {
+	if n <= 0 {
+		return nil
+	}
+	return n
 }

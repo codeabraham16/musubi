@@ -32,6 +32,7 @@ package mcp
 
 import (
 	jsonpkg "encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -48,7 +49,12 @@ const fleetHeartbeatPath = "/fleet/heartbeat"
 // identidad sale del token y de ningún otro lado, así que una máquina no puede reportar las
 // métricas de otra ni aunque quiera.
 type cuerpoLatido struct {
-	Muestra *fleet.Muestra `json:"muestra"`
+	// Muestra viaja como RawMessage y NO como *fleet.Muestra para poder pesarla CRUDA: el techo
+	// de la telemetría es suyo (fleet.MuestraMaxBytes ≈ 4 KiB) y tiene que seguir siendo suyo
+	// aunque el cuerpo entero haya crecido para hacerle lugar al inventario de servicios. Con un
+	// solo techo compartido, una muestra de 100 KiB entraría por la puerta que se abrió para las
+	// units, y el tope de la telemetría se habría aflojado sin que nadie lo decidiera.
+	Muestra jsonpkg.RawMessage `json:"muestra"`
 	// Version y Direccion son lo que la máquina sabe de SÍ MISMA y el cerebro no puede
 	// averiguar solo: qué build del agente corre y por qué dirección se la alcanza.
 	//
@@ -60,6 +66,13 @@ type cuerpoLatido struct {
 	// RustdeskID es el identificador PÚBLICO del cliente de pantalla (S6). No es un secreto: sin
 	// la contraseña de sesión no sirve para entrar, y sin él quien mira no sabe a qué conectarse.
 	RustdeskID string `json:"rustdesk_id"`
+	// Servicios es QUÉ CORRE ADENTRO de esta máquina (S12): sus units, sus contenedores.
+	//
+	// No rompe B4/D5 por la misma razón que `version` y `direccion`: un fleet.ReporteServicio no
+	// tiene NINGÚN campo de identidad —ni device, ni project, ni id— así que lo único que estas
+	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
+	// castellano a propósito: `nombre`, no `name`.
+	Servicios []fleet.ReporteServicio `json:"servicios,omitempty"`
 }
 
 // respuestaLatido es lo que ve el agente. Deliberadamente pobre: no devuelve nada que no le
@@ -77,6 +90,11 @@ type respuestaLatido struct {
 	// agente no mandó ninguna. El agente lo imprime, así que un colector roto o una capacidad
 	// que falta se ven DESDE LA MÁQUINA en vez de desaparecer en silencio en el cerebro.
 	Muestra string `json:"muestra,omitempty"`
+	// Servicios dice qué pasó con el inventario, por el MISMO motivo que `Muestra`: un bloque
+	// descartado en silencio es indistinguible de uno que nunca se mandó, y quien puede arreglarlo
+	// —el que administra ESA máquina— es justamente el que no ve los logs del cerebro. Vacío = el
+	// agente no mandó ninguno.
+	Servicios string `json:"servicios,omitempty"`
 	// Motivo viaja SÓLO en el 401 y es el mismo texto para todos los rechazos (B3).
 	Motivo string `json:"motivo,omitempty"`
 }
@@ -146,7 +164,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 
 		// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un
 		// desconocido es trabajo gratis para quien lo mande.
-		muestraJSON, notaMuestra := s.leerMuestraDelLatido(r, d)
+		muestraJSON, notaMuestra, notaServicios := s.leerCuerpoDelLatido(r, d)
 
 		// LatirDevice devuelve (false, nil) si la fila ya no está activa. Es una carrera real y
 		// benigna: entre el DevicePorToken de arriba y este UPDATE, un admin pudo revocar. Se
@@ -166,7 +184,8 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		// La cola de ESTA máquina. `d` salió de resolver el token, así que un agente no puede
 		// pedir la cola de otro (F5). Un fallo acá NO tumba el latido: seguir viva es lo que el
 		// latido afirma, y quedarse sin comandos un ciclo es recuperable.
-		resp := respuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID, Muestra: notaMuestra}
+		resp := respuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
+			Muestra: notaMuestra, Servicios: notaServicios}
 		if pendientes, err := s.engine.TomarComandos(d.ID, time.Now(), maxComandosPorLatido); err == nil {
 			for _, c := range pendientes {
 				resp.Comandos = append(resp.Comandos, comandoParaElAgente{
@@ -178,31 +197,37 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 	}
 }
 
-// leerMuestraDelLatido extrae la telemetría del cuerpo, si vino. Devuelve el JSON a guardar
-// (vacío = no tocar la columna) y una nota legible para el agente.
+// leerCuerpoDelLatido extrae del cuerpo lo que la máquina reporta de SÍ MISMA: el autorreporte,
+// el inventario de servicios y la telemetría. Devuelve el JSON de la muestra a guardar (vacío = no
+// tocar la columna) y una nota legible para el agente por cada uno de los dos bloques.
 //
 // NUNCA DEVUELVE ERROR, y es el invariante D7: un cuerpo roto, una muestra absurda o una
 // capacidad que falta descartan la MEDICIÓN, no el LATIDO. Estar viva y saber medirse son cosas
 // distintas, y un agente con el colector roto no debe desaparecer del inventario — es
 // precisamente cuando más querés verlo.
-func (s *McpServer) leerMuestraDelLatido(r *http.Request, d fleet.Device) (json string, nota string) {
+func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, notaMuestra, notaServicios string) {
 	if r.Body == nil || r.ContentLength == 0 {
-		return "", ""
+		return "", "", ""
 	}
 	// D6 — el cuerpo está ACOTADO. Un agente corre en la superficie más expuesta de la flota;
 	// un cuerpo sin tope es un DoS con forma de telemetría. El techo general del transporte
 	// (4 MiB) es absurdamente alto para esta puerta: una muestra son ~300 bytes.
-	crudo, err := io.ReadAll(io.LimitReader(r.Body, fleet.MuestraMaxBytes+1))
+	//
+	// El techo lo fija latidoMaxBytes y no MuestraMaxBytes desde que el cuerpo también lleva el
+	// inventario de servicios: dejarlo en el de la muestra habría hecho que una máquina con 40
+	// units mande un cuerpo sobrado y pierda TAMBIÉN su telemetría, que es la parte que sí
+	// entraba. Los dos techos siguen existiendo por separado y cada uno acota lo suyo.
+	crudo, err := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1))
 	if err != nil {
-		return "", "descartada: no se pudo leer el cuerpo"
+		return "", "descartada: no se pudo leer el cuerpo", ""
 	}
-	if len(crudo) > fleet.MuestraMaxBytes {
-		return "", "descartada: cuerpo demasiado grande"
+	if len(crudo) > latidoMaxBytes {
+		return "", "descartada: cuerpo demasiado grande", ""
 	}
 
 	var cuerpo cuerpoLatido
 	if err := jsonpkg.Unmarshal(crudo, &cuerpo); err != nil {
-		return "", "descartada: JSON inválido"
+		return "", "descartada: JSON inválido", ""
 	}
 	// EL AUTORREPORTE VA ANTES DEL CORTE POR «no vino muestra», y el orden es el invariante.
 	//
@@ -218,29 +243,110 @@ func (s *McpServer) leerMuestraDelLatido(r *http.Request, d fleet.Device) (json 
 	if cuerpo.RustdeskID != "" {
 		_ = s.engine.GuardarRustdeskID(d.ID, cuerpo.RustdeskID)
 	}
+	// EL INVENTARIO DE SERVICIOS VA ANTES DEL CORTE POR «no vino muestra», por el mismo motivo
+	// que el autorreporte: una máquina en un OS sin colector puede saber perfectamente qué corre
+	// adentro suyo, y salir por el `return` de abajo la dejaría sin inventario para siempre.
+	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios)
 
-	if cuerpo.Muestra == nil {
-		return "", ""
+	if len(cuerpo.Muestra) == 0 || string(cuerpo.Muestra) == "null" {
+		return "", "", notaServicios
+	}
+	// EL TECHO DE LA MUESTRA ES SUYO Y SE MIDE SOBRE EL JSON CRUDO. Medirlo después de
+	// deserializar no serviría de nada: los campos que la struct no conoce se pierden en el
+	// camino, así que un cuerpo con 4 MiB de basura adentro de `muestra` volvería a pesar 300
+	// bytes justo antes de que alguien lo mire.
+	if len(cuerpo.Muestra) > fleet.MuestraMaxBytes {
+		return "", "descartada: cuerpo demasiado grande", notaServicios
 	}
 
 	// D8 — LA CAPACIDAD NO ES DECORATIVA. Una máquina a la que no se le concedió `metrics`
 	// late (sigue viva) pero su medición se descarta. Sin esto, conceder capacidades sería un
 	// gesto sin efecto y el inventario diría una cosa mientras la base guarda otra.
 	if !d.Permite(fleet.CapMetrics) {
-		return "", "descartada: esta máquina no tiene concedida la capacidad `metrics`"
+		return "", "descartada: esta máquina no tiene concedida la capacidad `metrics`", notaServicios
 	}
 
+	var m fleet.Muestra
+	if err := jsonpkg.Unmarshal(cuerpo.Muestra, &m); err != nil {
+		return "", "descartada: JSON inválido", notaServicios
+	}
 	// El agente es un cliente y su muestra es entrada NO CONFIABLE, aunque su credencial sea
 	// válida: una máquina comprometida puede reportar 900 % de CPU para ensuciar un panel o
 	// disparar alertas. No se corrige el valor —eso escondería el problema—, se rechaza entera.
-	if err := cuerpo.Muestra.Valida(); err != nil {
-		return "", "descartada: " + err.Error()
+	if err := m.Valida(); err != nil {
+		return "", "descartada: " + err.Error(), notaServicios
 	}
-	texto, err := cuerpo.Muestra.Serializar()
+	texto, err := m.Serializar()
 	if err != nil {
-		return "", "descartada: no se pudo serializar"
+		return "", "descartada: no se pudo serializar", notaServicios
 	}
-	return texto, "guardada"
+	return texto, "guardada", notaServicios
+}
+
+// latidoMaxBytes es el techo del CUERPO ENTERO del latido.
+//
+// Es la muestra (~300 B) más el inventario: fleet.ServiciosPorLatido entradas de a lo sumo
+// fleet.SaludMaxBytes cada una, más el sobre. Sigue siendo ridículamente chico comparado con el
+// techo general del transporte (4 MiB), que es justamente el punto: esta puerta la abre la
+// superficie más expuesta de la flota.
+const latidoMaxBytes = fleet.MuestraMaxBytes + fleet.ServiciosPorLatido*fleet.SaludMaxBytes + (8 << 10)
+
+// guardarServiciosDelLatido registra QUÉ CORRE adentro de la máquina (S12). Devuelve la NOTA que
+// va de vuelta al agente.
+//
+// NUNCA DEVUELVE ERROR, y es el mismo invariante D7 que gobierna la muestra: un bloque de
+// servicios roto, demasiado largo o sin la capacidad concedida descarta EL INVENTARIO, no el
+// LATIDO. Estar viva y saber enumerarse son cosas distintas — y una máquina que no puede
+// enumerar sus units es precisamente cuando más querés verla en la lista.
+//
+// PERO NO SE DESCARTA EN SILENCIO, y por eso hay nota. Un bloque que desaparece sin decir nada se
+// ve, DESDE LA MÁQUINA, idéntico a uno que nunca se mandó; y quien puede arreglarlo —el que
+// administra ESA máquina— es justamente el que no lee los logs del cerebro. Es la misma decisión
+// que ya toma la nota de la muestra, por el mismo motivo.
+//
+// La asimetría con la muestra: si el bloque se pasa del techo se descarta ENTERO en vez de
+// truncarse. Un inventario a medias haría que la poda por ausencia diera de baja los servicios
+// que quedaron afuera del corte, que es peor que no actualizar nada.
+func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio) string {
+	if len(reportes) == 0 {
+		return ""
+	}
+	if len(reportes) > fleet.ServiciosPorLatido {
+		return fmt.Sprintf("descartados: %d servicios superan el techo de %d por latido. Reportá menos servicios por vez.",
+			len(reportes), fleet.ServiciosPorLatido)
+	}
+	// D8 — la capacidad no es decorativa, y se reusa `metrics` a propósito: qué corre en una
+	// máquina es telemetría del host, del mismo peso que su uso de CPU. Inventar una Cap nueva
+	// obligaría a tocar la matriz por tier, la lista de capsQuePuede —cuyo orden dibuja la
+	// columna «admite / puedo» del panel— y seis bucles exhaustivos en tres paquetes.
+	if !d.Permite(fleet.CapMetrics) {
+		return "descartados: esta máquina no tiene concedida la capacidad `metrics`"
+	}
+
+	ahora := time.Now()
+	nuevos, actualizados, err := s.engine.ReportarServicios(d.ID, ahora, reportes)
+	if err != nil {
+		return "descartados: el registro no pudo guardarlos"
+	}
+	// La poda por AUSENCIA: lo que la máquina dejó de reportar se da de baja. `vivos` sale de lo
+	// que vino en ESTE latido, ya recortado igual que al guardarlo, para que los nombres coincidan
+	// con las filas que se acaban de escribir. Una lista vacía no poda nada (lo garantiza el
+	// almacén), así que un bloque entero de reportes inválidos no vacía el inventario.
+	//
+	// Y LO QUE SE DECLARÓ A MANO NO SE PODA, lo garantiza también el almacén (`declared = 0` en el
+	// UPDATE). Es la guarda sin la cual esta línea era una mina con temporizador: la tool de
+	// declarar existe para lo que NINGÚN enumerador ve —un Tier B que no enumera, un bot, un
+	// puente—, así que el día que el agente aprenda a enumerar sus units, este latido habría
+	// borrado de un saque todo lo declarado en toda la flota, y sin vuelta atrás visible.
+	vivos := make([]string, 0, len(reportes))
+	for _, r := range reportes {
+		if r = fleet.RecortarReporte(r); fleet.NombreDeServicioValido(r.Nombre) {
+			vivos = append(vivos, r.Nombre)
+		}
+	}
+	podados, _ := s.engine.PodarServiciosAusentes(d.ID, vivos)
+	return fmt.Sprintf("guardados: %d nuevo(s), %d actualizado(s), %d dado(s) de baja por ausencia",
+		nuevos, actualizados, podados)
 }
 
 func escribirLatido(w http.ResponseWriter, code int, resp respuestaLatido) {

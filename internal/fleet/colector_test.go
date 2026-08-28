@@ -109,11 +109,17 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	quemarCPU(60 * time.Millisecond)
 	m2, _ := c.Tomar()
 
-	type capacidad struct{ cpu, carga, memoria, disco, temp bool }
+	type capacidad struct{ cpu, carga, memoria, disco, temp, procesos, memLibre bool }
 	esperado := map[string]capacidad{
-		"linux":   {cpu: true, carga: true, memoria: true, disco: true, temp: false}, // temp: depende del hardware
-		"windows": {cpu: true, carga: false, memoria: true, disco: true, temp: false},
-		"darwin":  {cpu: false, carga: true, memoria: false, disco: true, temp: false},
+		// temp: depende del hardware, no del OS, así que la tabla dice false y no se afirma.
+		// memLibre: sólo Linux la tiene sin mentir. En Windows el candidato es
+		// MEMORYSTATUSEX.ullAvailPhys, que es el análogo de MemAvailable y NO de MemFree; en
+		// macOS haría falta host_statistics64 (mach). En los dos, medir de más sería mentir.
+		// procesos: Linux cuenta /proc, Windows usa K32GetPerformanceInfo, y macOS necesitaría un
+		// fork+exec por latido en el proceso que corre en todas las máquinas.
+		"linux":   {cpu: true, carga: true, memoria: true, disco: true, temp: false, procesos: true, memLibre: true},
+		"windows": {cpu: true, carga: false, memoria: true, disco: true, temp: false, procesos: true, memLibre: false},
+		"darwin":  {cpu: false, carga: true, memoria: false, disco: true, temp: false, procesos: false, memLibre: false},
 	}
 	quiero, hay := esperado[runtime.GOOS]
 	if !hay {
@@ -131,6 +137,25 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	}
 	if got := m.DiscoTotal > 0; got != quiero.disco {
 		t.Errorf("%s: mide disco = %v, la tabla dice %v", runtime.GOOS, got, quiero.disco)
+	}
+	if got := m.NumProcesos > 0; got != quiero.procesos {
+		t.Errorf("%s: cuenta procesos = %v, la tabla dice %v — actualizá la tabla o el colector",
+			runtime.GOOS, got, quiero.procesos)
+	}
+	// EL QUE MÁS IMPORTA DE LOS DOS NUEVOS, porque el atajo está a un campo de distancia.
+	//
+	// Sabotaje que la hace fallar, corriendo esta prueba en Linux: borrar la asignación de
+	// MemFree en ParsearMeminfo (linux pasa a medir mem_libre = false y la tabla dice true).
+	//
+	// Y el sabotaje que esta fila existe para cazar, que SÓLO se ve corriendo en Windows: emitir
+	// MEMORYSTATUSEX.ullAvailPhys como mem_libre. Es MemAvailable disfrazado —incluye la standby
+	// list, que es cache reutilizable—, así que sería cometer en Windows la misma confusión que el
+	// repo peleó en Linux, y en un archivo que casi nadie puede correr localmente. La tabla es lo
+	// único que lo caza, y por eso la fila de windows dice false y no «no sé».
+	if got := m.MemLibre != nil; got != quiero.memLibre {
+		t.Errorf("%s: mide mem_libre = %v, la tabla dice %v — si es Windows o macOS, lo que se está "+
+			"reportando NO es MemFree sino su primo el «disponible», y son cosas distintas",
+			runtime.GOOS, got, quiero.memLibre)
 	}
 }
 

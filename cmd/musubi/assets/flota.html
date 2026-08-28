@@ -53,6 +53,14 @@
   /* INERTE = configurada y sin poder actuar. Va en ámbar y no en rojo: no está rota, está
      desconectada — y en la tabla tiene que saltar a la vista antes que el incidente. */
   .auto.inerte { background: rgba(251,191,36,.10); border-color: rgba(251,191,36,.38); color: #fbbf24; }
+  /* La columna de SERVICIOS. Tres marcas y tres colores, y ninguno es el mismo que el de al lado:
+     lo sano es verde y CALLADO (un número), lo que no reporta hace rato es ámbar, y lo fallado es
+     rojo. Un servicio `desconocido` NUNCA usa la marca de `detenido`. */
+  .svc-col { font-size: 12px; white-space: nowrap; }
+  .svc { display: inline-block; padding: 1px 6px; border-radius: 4px; cursor: help; margin-right: 4px; }
+  .svc.sano   { background: rgba(63,185,80,.10);  border: 1px solid rgba(63,185,80,.30);  color: var(--ok); }
+  .svc.mal    { background: rgba(248,81,73,.10);  border: 1px solid rgba(248,81,73,.38);  color: var(--mal); }
+  .svc.rancio { background: rgba(251,191,36,.10); border: 1px solid rgba(251,191,36,.38); color: #fbbf24; }
   .viejo { color: var(--tibio); }
   /* El camino de vuelta. Va en las DOS páginas: un enlace de ida sin vuelta deja a alguien
      usando el botón del navegador para algo que la página tendría que ofrecer. */
@@ -68,7 +76,7 @@
 <table id="tabla" hidden>
   <thead><tr>
     <th>máquina</th><th>tier</th><th>os</th><th>cpu</th><th>memoria</th><th>disco</th>
-    <th>carga</th><th>temp</th><th>uptime</th><th>dato</th><th>admite / puedo</th><th>automático</th><th>pantalla</th>
+    <th>carga</th><th>temp</th><th>uptime</th><th>dato</th><th>servicios</th><th>admite / puedo</th><th>automático</th><th>pantalla</th>
   </tr></thead>
   <tbody id="cuerpo"></tbody>
 </table>
@@ -173,6 +181,52 @@ function pantalla(e) {
   return `<span class="auto" title="id de RustDesk">${esc(e.rustdesk_id)}</span>`;
 }
 
+// SERVICIOS — qué corre adentro de la máquina (S12).
+//
+// TRES COSAS QUE SE DIBUJAN DISTINTO PORQUE SON DISTINTAS, y confundirlas es todo lo que este
+// slice existe para evitar:
+//
+//   —            no sabemos. La tool de servicios no contestó (permisos, cerebro viejo), así que
+//                la llave `con_servicios` no llegó. NO es «0 servicios»: un guion nunca es un cero.
+//   0            la tool contestó y esta máquina no tiene NINGÚN servicio declarado. Es un dato.
+//   n/m + fichas n corriendo de m, y una ficha por cada uno que NO está sano.
+//
+// Y dentro de las fichas, el corazón del asunto: un servicio `desconocido` lleva su propia marca
+// (?) y NUNCA la de `detenido` (■). «La máquina no pudo enumerar sus servicios» y «el postgres
+// está caído» son cosas distintas, y la segunda despierta a alguien a las 4 de la mañana.
+//
+// El tercer eje es el FRESCOR, y va aparte del estado a propósito: un servicio que dice
+// «corriendo» con un reporte de hace dos días no está corriendo, está SIN NOTICIAS — se pinta en
+// ámbar con un ⧗ para que se distinga a simple vista de uno sano, que es la pregunta que alguien
+// hace mirando esta columna de reojo.
+function servicios(e) {
+  if (!e.con_servicios) return ND;
+  const svs = Array.isArray(e.servicios) ? e.servicios : [];
+  if (!svs.length) return '<span class="nd">0</span>';
+
+  const marca = { corriendo: '▶', detenido: '■', fallado: '✕', desconocido: '?' };
+  const corriendo = svs.filter(s => s.estado === 'corriendo' && s.fresco).length;
+  const fichas = svs.filter(s => !s.fresco || s.estado !== 'corriendo').map(s => {
+    const est = marca[s.estado] ? s.estado : 'desconocido';
+    // El frescor MANDA sobre el color, no sobre el estado: la ficha sigue diciendo lo último que
+    // se supo, y el ámbar dice que eso ya tiene polvo.
+    const clase = !s.fresco ? 'rancio' : (est === 'fallado' || est === 'detenido') ? 'mal' : 'sano';
+    const polvo = s.fresco ? '' : ' ⧗';
+    const cuando = s.ultimo_reporte
+      ? `último reporte ${s.ultimo_reporte}${s.fresco ? '' : ' — SIN NOTICIAS desde entonces: lo que dice es lo último que se supo, no lo que pasa ahora'}`
+      : 'DECLARADO Y TODAVÍA SIN MEDIR: nadie lo reportó nunca. No es lo mismo que estar caído.';
+    const extra = [
+      s.clase ? `supervisor ${s.clase}` : '',
+      s.pid !== null && s.pid !== undefined ? `pid ${s.pid}` : '',
+      s.reinicios !== null && s.reinicios !== undefined ? `${s.reinicios} reinicio(s)` : '',
+      s.detalle || '',
+    ].filter(Boolean).join(' · ');
+    const titulo = `${s.nombre}: ${est}. ${cuando}${extra ? ' · ' + extra : ''}`;
+    return `<span class="svc ${clase}" title="${esc(titulo)}">${marca[est]} ${esc(s.nombre)}${polvo}</span>`;
+  }).join('');
+  return `<span class="svc sano" title="${esc(`${corriendo} de ${svs.length} servicio(s) corriendo con noticias frescas`)}">${corriendo}/${svs.length}</span>${fichas}`;
+}
+
 // esc existe porque el nombre de una política y su argv salen de un archivo de configuración, y
 // esta página los mete en un atributo `title`. No es una amenaza probable —quien edita esa config
 // ya manda en el cerebro— pero un panel que interpola texto ajeno sin escaparlo es una costumbre
@@ -224,6 +278,7 @@ function pintar(d) {
       <td>${edad(e.antiguedad_s, e.con_metricas)}</td>
       <!-- admite y puedo, POR SEPARADO: lo primero es de la máquina, lo segundo de tu
            credencial. Mostrar sólo lo primero enseña a ignorar el campo. -->
+      <td class="svc-col">${servicios(e)}</td>
       <td class="caps">${lista(e.caps)} / <b>${lista(e.puedo)}</b></td>
       <td class="auto-col">${automatico(e)}</td>
       <td class="auto-col">${pantalla(e)}</td>

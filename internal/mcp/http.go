@@ -291,7 +291,11 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		salida := metrics.render(s.engine)
 		var b strings.Builder
 		b.WriteString(salida)
-		renderFlota(&b, s.engine, quien, time.Now(), s.sondaIntervalo)
+		ahora := time.Now()
+		renderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo)
+		// La AUTO-VIGILANCIA del empuje sale por el tirón, no por el empuje: un mecanismo de
+		// monitoreo cuya única forma de avisar de su propia muerte es él mismo no avisa nunca.
+		s.renderEmpuje(&b, ahora)
 		_, _ = w.Write([]byte(b.String()))
 	})
 
@@ -668,6 +672,12 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// watch del registro: recién acá el registro existe, y una política sin registro no tiene a
 	// quién nombrar. No-op si el intervalo está en 0 (sondeo desactivado a mano).
 	go s.RunFlotaScheduler(ctx, s.sondaIntervalo)
+	// Y EL EMPUJE OTLP (S11), acá y por lo mismo: recién en este punto el registro existe, y un
+	// empujador sin registro no tiene a quién nombrar — y un empujador sin principal exportaría la
+	// telemetría de todos los tenants. En su PROPIO ticker: la cadencia del export es la del scrape
+	// (30 s) y la del sondeo es la del gasto de SSH (5 min). No-op si el empuje está apagado, que
+	// es el default.
+	go s.RunEmpujeOTLP(ctx)
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {

@@ -537,6 +537,12 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// nada. Sólo devuelve sesiones de máquinas sobre las que la credencial tiene `screen`.
 		// ABRIR una sesión (musubi_fleet_screen) exige la capacidad y NO está en este mapa.
 		"musubi_fleet_sessions": true,
+		// S12 · el inventario de servicios. Mismo razonamiento que fleet_metrics y el mismo
+		// matiz: poder INVOCARLA no es poder ver nada. Sólo devuelve los servicios de máquinas
+		// sobre las que la credencial tiene `metrics`, así que un reader sin concesiones llama y
+		// recibe una lista vacía. DECLARAR un servicio (musubi_fleet_service_declare) es admin y
+		// NO está en este mapa.
+		"musubi_fleet_services": true,
 	}
 
 	for _, e := range s.tools {

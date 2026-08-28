@@ -224,7 +224,14 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// (la contraseña se aplicó en la máquina que mintió, no en la otra), pero puede desorientar.
 	// Cerrarlo del todo exigiría que el cerebro verifique el id contra el relay, y eso es un
 	// slice propio.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true, "rustdesk_id": true}
+	//
+	// `servicios` (S12) entra por la misma puerta y con la misma pregunta contestada: un
+	// fleet.ReporteServicio no tiene NINGÚN campo de identidad —ni device, ni project, ni id— así
+	// que lo único que ese bloque puede tocar es el inventario de la máquina del token. El agente
+	// TODAVÍA no lo manda (enumerar systemd, el SCM y Docker es un slice propio, cabo A42), pero
+	// la decisión se declara acá, que es donde se piensa, y la ejercita
+	// TestUnCuerpoConServiciosSigueSinLlevarIdentidad.
+	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true, "rustdesk_id": true, "servicios": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -238,6 +245,52 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	for _, prohibido := range []string{"device_id", "device", "hostname", "project", "token", `"name"`} {
 		if strings.Contains(visto, prohibido) {
 			t.Errorf("el cuerpo menciona %q: la identidad no puede viajar en el cuerpo\n%s", prohibido, visto)
+		}
+	}
+}
+
+// D5 · S12 — EL BLOQUE DE SERVICIOS TAMPOCO LLEVA IDENTIDAD, Y ES EL REGISTRO EN CASTELLANO LO
+// QUE LO SALVA.
+//
+// El barrido de arriba busca la subcadena `"name"` en el JSON ENTERO. Un ReporteServicio con el
+// campo llamado `name` —el nombre obvio, el que sale solo— haría fallar el latido de toda la
+// flota en cuanto el enumerador aterrice, y el que lo escriba no va a estar mirando este archivo.
+// Así que el cuerpo se arma acá tal como viajaría y se le corre el MISMO barrido, hoy, antes.
+//
+// Sabotaje que la hace fallar: renombrar el tag de fleet.ReporteServicio.Nombre de `nombre` a
+// `name` (o agregarle un `device_id`).
+func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
+	pid := 4242
+	carga := map[string]any{
+		"version": version,
+		"servicios": []fleet.ReporteServicio{{
+			Nombre: "postgresql.service", Clase: "systemd",
+			Salud: fleet.SaludServicio{
+				Tomada: time.Now().UTC(), Estado: fleet.EstadoCorriendo, PID: &pid,
+				Detalle: "Result=success",
+			},
+		}},
+	}
+	crudo, err := json.Marshal(carga)
+	if err != nil {
+		t.Fatalf("el cuerpo no serializa: %v", err)
+	}
+	visto := string(crudo)
+
+	var cuerpo map[string]any
+	if err := json.Unmarshal(crudo, &cuerpo); err != nil {
+		t.Fatalf("el cuerpo no es JSON: %v (%s)", err, visto)
+	}
+	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true, "rustdesk_id": true, "servicios": true}
+	for k := range cuerpo {
+		if !permitidas[k] {
+			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)
+		}
+	}
+	// El MISMO barrido que el latido de arriba, sobre el JSON entero.
+	for _, prohibido := range []string{"device_id", "device", "hostname", "project", "token", `"name"`} {
+		if strings.Contains(visto, prohibido) {
+			t.Errorf("el bloque de servicios menciona %q: la identidad no puede viajar en el cuerpo\n%s", prohibido, visto)
 		}
 	}
 }

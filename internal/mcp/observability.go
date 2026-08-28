@@ -355,6 +355,38 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	fmt.Fprintf(b, "musubi_backup_offhost_age_seconds %d\n", st.BackupOffhostAgeSec)
 }
 
+// renderEmpuje emite las TRES series de auto-vigilancia del empuje OTLP (S11).
+//
+// POR QUÉ SALEN POR EL TIRÓN Y NO VIAJAN EN EL PROPIO EMPUJE: un mecanismo de monitoreo cuya
+// única forma de avisar de su propia muerte es él mismo no avisa nunca. Si el POST no llega, un
+// contador de fallos que viajara adentro del POST tampoco llega. Es el mismo punto ciego que
+// FlotaSinTelemetria cierra un nivel más abajo.
+//
+// Se emiten SÓLO si el empuje está configurado —nadie necesita tres series en cero en un cerebro
+// que no empuja— y, una vez configurado, se emiten SIEMPRE aunque valgan cero: el silencio y el
+// cero no son lo mismo, y una serie ausente hace que `rate()` no devuelva nada. Mismo criterio
+// que renderPoliticas.
+//
+// La excepción es last_success, que se OMITE mientras nunca haya habido un empuje aceptado. Un 0
+// ahí sería el unix epoch, o sea «último éxito: hace 56 años» — que se lee como un bug del panel
+// y no como «esto nunca funcionó», que es lo que realmente pasó.
+func (s *McpServer) renderEmpuje(b *strings.Builder, ahora time.Time) {
+	if !s.empujeCfg.Activo() {
+		return
+	}
+	if ultimo := s.empujeUltimoExito.Load(); ultimo > 0 {
+		b.WriteString("# HELP musubi_push_last_success_seconds Segundos desde el último empuje OTLP aceptado. AUSENTE si nunca hubo uno.\n")
+		b.WriteString("# TYPE musubi_push_last_success_seconds gauge\n")
+		fmt.Fprintf(b, "musubi_push_last_success_seconds %d\n", int64(ahora.Sub(time.Unix(ultimo, 0)).Seconds()))
+	}
+	b.WriteString("# HELP musubi_push_failures_total Empujes OTLP que no llegaron a destino.\n")
+	b.WriteString("# TYPE musubi_push_failures_total counter\n")
+	fmt.Fprintf(b, "musubi_push_failures_total %d\n", s.empujeFallos.Load())
+	b.WriteString("# HELP musubi_push_datapoints Puntos que llevó el último empuje. Un 0 sostenido = el empujador corre y no exporta nada.\n")
+	b.WriteString("# TYPE musubi_push_datapoints gauge\n")
+	fmt.Fprintf(b, "musubi_push_datapoints %d\n", s.empujeDatapoints.Load())
+}
+
 // statusRecorder envuelve un ResponseWriter para capturar el código de estado emitido
 // (necesario para clasificar la métrica). Default 200 si el handler no llama WriteHeader.
 type statusRecorder struct {

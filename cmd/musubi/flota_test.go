@@ -116,7 +116,7 @@ func TestElPanelPreguntaPorLasMismasToolsYNoInventaUnaRutaAparte(t *testing.T) {
 	defer ts.Close()
 
 	pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
-	quiero := map[string]bool{"musubi_fleet_list": true, "musubi_fleet_metrics": true}
+	quiero := map[string]bool{"musubi_fleet_list": true, "musubi_fleet_metrics": true, "musubi_fleet_services": true}
 	for _, p := range pedidas {
 		if !quiero[p] {
 			t.Errorf("el panel llamó a %q, que no es una de las tools de flota", p)
@@ -327,5 +327,130 @@ func TestLaPaginaDeFlotaDistingueUnaPantallaSinMotor(t *testing.T) {
 	iSinID := strings.Index(cuerpo, "if (!e.rustdesk_id)")
 	if iMotor < 0 || iSinID < 0 || iMotor > iSinID {
 		t.Error("la rama de `sin motor` va DESPUÉS del `—` de «sin id», así que un Tier C nunca la alcanza: se dibuja como «todavía no llegó el id»")
+	}
+}
+
+// ── S12 · los SERVICIOS en el panel ─────────────────────────────────────────────────────────
+
+// SI FALLA LA TOOL DE SERVICIOS, LA FLOTA SE SIGUE VIENDO.
+//
+// Molde de TestSiFallanLasMetricasIgualSeVeLaFlota, y por el mismo motivo: propagar este error
+// haría que un problema de permisos sobre los servicios borre la FLOTA entera de la pantalla.
+//
+// Sabotaje que la hace fallar: propagar el error de la tercera llamada desde handlerFlota.
+func TestSiFallaLaToolDeServiciosIgualSeVeLaFlota(t *testing.T) {
+	// El cerebro responde list y metrics; fleet_services devuelve error.
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list":    `{"devices":[{"name":"pc-gio","online":true,"caps":["metrics"],"puedo":["metrics"]}]}`,
+		"musubi_fleet_metrics": `{"devices":[{"name":"pc-gio","cpu_pct":10}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	if got.Estado != "vivo" || len(got.Equipos) != 1 {
+		t.Fatalf("sin la tool de servicios se perdió la flota: %+v", got)
+	}
+	// Y la ausencia se DECLARA: sin `con_servicios`, la página dibuja «—» y no «0 servicios».
+	if v, hay := got.Equipos[0]["con_servicios"]; hay && v != false {
+		t.Errorf("con_servicios = %v tras un error: la máquina se dibujaría como «0 servicios», que es un dato que nadie midió", v)
+	}
+	if v, hay := got.Equipos[0]["servicios"]; hay && v != nil {
+		t.Errorf("se inventaron servicios sin haberlos consultado: %v", v)
+	}
+}
+
+// LOS SERVICIOS SE AGRUPAN POR MÁQUINA, Y «SIN NINGUNO» NO ES «NO SABEMOS».
+//
+// Son los dos casos que la página dibuja distinto: una máquina que la tool contestó con cero
+// servicios lleva `con_servicios: true` y una lista vacía; una que no vino en la respuesta lleva
+// lo mismo (la tool contestó, esa máquina no tiene nada). Lo que NO puede pasar es que un error
+// de la tool se confunda con «cero», y eso lo cubre la prueba de arriba.
+//
+// Sabotaje: agrupar por el `name` del servicio en vez de por su `device` — los servicios de una
+// máquina aparecen colgados de la otra.
+func TestLosServiciosSeAgrupanPorSuMaquina(t *testing.T) {
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"nas","online":true},{"name":"pc-gio","online":true}]}`,
+		"musubi_fleet_services": `{"services":[
+			{"nombre":"postgres","device":"nas","estado":"corriendo","fresco":true},
+			{"nombre":"redis","device":"nas","estado":"fallado","fresco":true}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	por := map[string]map[string]any{}
+	for _, e := range got.Equipos {
+		por[e["name"].(string)] = e
+	}
+	svs, _ := por["nas"]["servicios"].([]any)
+	if len(svs) != 2 {
+		t.Fatalf("`nas` quedó con %d servicios de 2: %+v", len(svs), por["nas"])
+	}
+	if por["nas"]["con_servicios"] != true {
+		t.Error("no se marcó que `nas` tiene datos de servicios")
+	}
+	// La otra máquina: la tool contestó y ella no tiene ninguno. Eso ES un dato, y es distinto de
+	// que la tool no haya contestado.
+	if por["pc-gio"]["con_servicios"] != true {
+		t.Error("`pc-gio` no quedó marcada: la tool contestó, así que «no tiene ninguno» es un dato")
+	}
+	if svs, _ := por["pc-gio"]["servicios"].([]any); len(svs) != 0 {
+		t.Errorf("`pc-gio` quedó con servicios ajenos: %+v", svs)
+	}
+}
+
+// LA PÁGINA DISTINGUE A SIMPLE VISTA UN SERVICIO SANO DE UNO QUE NO REPORTA HACE RATO, Y NUNCA
+// DIBUJA UN `desconocido` COMO `detenido`.
+//
+// Es el invariante del slice llegando hasta el píxel. Tres cosas que la columna tiene que separar:
+// «no sabemos» (el guion), «cero servicios» (un dato) y el estado de cada uno — con el FRESCOR
+// como eje aparte del estado, porque un «corriendo» de hace dos días no es un «corriendo».
+//
+// Sabotaje que la hace fallar: usar la misma marca (o la misma clase CSS) para `desconocido` y
+// `detenido`; o sacar el `if (!e.con_servicios) return ND` y dibujar 0.
+func TestLaPaginaDeFlotaNoDibujaUnServicioDesconocidoComoDetenido(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	for _, quiero := range []struct{ frag, porque string }{
+		{"con_servicios", "sin esta llave, «la tool no contestó» y «no corre nada» se dibujan igual"},
+		{"if (!e.con_servicios) return ND", "la ausencia de datos tiene que dar un guion, no un cero"},
+		{"s.fresco", "un «corriendo» de hace dos días no es un «corriendo»: el frescor es un eje aparte"},
+		{"rancio", "«sin noticias» necesita su propia marca visual, distinta de sana y de fallada"},
+		{"esc(s.nombre)", "el nombre del servicio lo reporta la propia máquina y las filas se arman con innerHTML"},
+	} {
+		if !strings.Contains(p, quiero.frag) {
+			t.Errorf("flota.html no contiene %q: %s", quiero.frag, quiero.porque)
+		}
+	}
+	// UNA sola fuente para la columna: dos formas de dibujar lo mismo dejan una vieja.
+	if n := strings.Count(p, "function servicios("); n != 1 {
+		t.Errorf("hay %d definiciones de servicios(): tiene que haber exactamente una", n)
+	}
+	// LAS CUATRO MARCAS SON DISTINTAS ENTRE SÍ. Es lo que impide que `desconocido` se dibuje como
+	// `detenido`: si dos estados compartieran glifo, la columna mentiría en silencio.
+	i := strings.Index(p, "const marca = {")
+	if i < 0 {
+		t.Fatal("flota.html no declara la tabla de marcas por estado")
+	}
+	tabla := p[i : strings.Index(p[i:], "}")+i]
+	for _, estado := range []string{"corriendo", "detenido", "fallado", "desconocido"} {
+		if !strings.Contains(tabla, estado+":") {
+			t.Errorf("el estado %q no tiene marca propia: %s", estado, tabla)
+		}
+	}
+	glifos := map[string]bool{}
+	for _, campo := range strings.Split(tabla[strings.Index(tabla, "{")+1:], ",") {
+		partes := strings.SplitN(campo, ":", 2)
+		if len(partes) != 2 {
+			continue
+		}
+		g := strings.Trim(strings.TrimSpace(partes[1]), "'\"")
+		if g == "" {
+			continue
+		}
+		if glifos[g] {
+			t.Errorf("dos estados comparten la marca %q: un `desconocido` se dibujaría como otra cosa\n%s", g, tabla)
+		}
+		glifos[g] = true
+	}
+	if len(glifos) != 4 {
+		t.Errorf("se declararon %d marcas distintas, esperaba 4: %s", len(glifos), tabla)
+	}
+	// Y NINGÚN BOTÓN: el invariante I4 del panel sigue en pie en un slice de visualización.
+	if strings.Contains(p, "<button") || strings.Contains(p, "onclick") {
+		t.Error("la página de flota ganó un botón: reiniciar un servicio se hace con musubi_fleet_exec, que deja su línea en la bitácora")
 	}
 }

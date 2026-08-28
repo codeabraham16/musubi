@@ -34,7 +34,12 @@ type LecturasProc struct {
 	Uptime  string // /proc/uptime
 	Df      string // salida de `df -B1 /` (o vacío)
 	TempMil string // /sys/class/thermal/thermal_zone0/temp, en miligrados
-	NumCPU  int    // cuántos procesadores; 0 = desconocido
+	// Procs es el LISTADO de /proc (un nombre por línea), no un archivo: local sale de
+	// os.ReadDir, remoto de `ls -1 /proc`. Se comparte como TEXTO —y no ya contado— para que el
+	// filtro difícil, «el nombre es todo dígitos», esté escrito UNA vez y lo usen las tres
+	// fuentes; dos de las tres no se pueden probar desde esta máquina.
+	Procs  string
+	NumCPU int // cuántos procesadores; 0 = desconocido
 }
 
 // MuestraDesde arma una Muestra a partir de los textos. `cpu` lleva el estado entre llamadas para
@@ -52,7 +57,38 @@ func MuestraDesde(l LecturasProc, cpu *contadorCPU) Muestra {
 	m.UptimeSeg = ParsearUptime(l.Uptime)
 	ParsearDf(l.Df, &m)
 	m.TempC = ParsearTempMiligrados(l.TempMil)
+	m.NumProcesos = ContarPids(l.Procs)
 	return m
+}
+
+// ContarPids cuenta los procesos de un listado de /proc.
+//
+// El filtro es «el nombre es todo dígitos»: ésos son los tgid, o sea los procesos. Todo lo demás
+// que vive en /proc —`self`, `thread-self`, `cpuinfo`, `net`— no lo es.
+//
+// Y LO QUE NO SE USA, que es la parte importante: el 4º campo de /proc/loadavg («5/1181») ya está
+// leído y a mano, pero ese 1181 son los HILOS del sistema, no los procesos. Da entre 3 y 5 veces
+// más y no falla nunca: produce un número plausible y equivocado. Los hilos viven en
+// /proc/<pid>/task y por eso no aparecen en este conteo.
+func ContarPids(listado string) int {
+	n := 0
+	for _, linea := range strings.Split(listado, "\n") {
+		nombre := strings.TrimSpace(linea)
+		if nombre == "" {
+			continue
+		}
+		todoDigitos := true
+		for _, r := range nombre {
+			if r < '0' || r > '9' {
+				todoDigitos = false
+				break
+			}
+		}
+		if todoDigitos {
+			n++
+		}
+	}
+	return n
 }
 
 // ParsearJiffies devuelve (ocupado, total) de la primera línea de /proc/stat.
@@ -116,6 +152,15 @@ func ParsearMeminfo(texto string, m *Muestra) {
 		if total >= disponible && disponible > 0 {
 			m.MemTotal, m.MemUsada = total, total-disponible
 		}
+	}
+	// MemFree se guarda TAL CUAL, y no se toca la cuenta de arriba: MemUsada SIGUE saliendo de
+	// MemAvailable. Tener las dos en la struct vuelve tentador el atajo —«libre es lo contrario de
+	// usada»— y con el fixture real esa confusión son 3,5 GB: 85 % contra 40 %.
+	//
+	// Se absorbe acá, en el parseo que ya está, y no en una función nueva: duplicar el parseo de
+	// meminfo es exactamente lo que el encabezado de este archivo existe para evitar.
+	if libre, hay := vals["MemFree"]; hay {
+		m.MemLibre = u64(libre)
 	}
 	if total, hay := vals["SwapTotal"]; hay && total > 0 {
 		if libre, hayLibre := vals["SwapFree"]; hayLibre && total >= libre {

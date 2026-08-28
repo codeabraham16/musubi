@@ -36,10 +36,17 @@ type Muestra struct {
 	CPUPct *float64 `json:"cpu_pct"`
 	NumCPU int      `json:"num_cpu"`
 
-	MemTotal  uint64 `json:"mem_total"`
-	MemUsada  uint64 `json:"mem_usada"`
-	SwapTotal uint64 `json:"swap_total"`
-	SwapUsada uint64 `json:"swap_usada"`
+	MemTotal uint64 `json:"mem_total"`
+	MemUsada uint64 `json:"mem_usada"`
+	// MemLibre es MemFree: la RAM que el kernel no tiene asignada a NADA, ni siquiera a page
+	// cache. NO es la contracara de MemUsada —ésa sale de MemAvailable— y las dos difieren en
+	// varios GB en cualquier Linux sano: con el fixture real, 1,1 GB contra 3,0 GB. Viaja como
+	// puntero porque Windows no la puede dar sin mentir (ullAvailPhys es el análogo de
+	// MemAvailable, no de MemFree) y macOS no la puede dar sin mach: nil = «este sistema no la
+	// expone», que es distinto de «no le queda nada libre».
+	MemLibre  *uint64 `json:"mem_libre"`
+	SwapTotal uint64  `json:"swap_total"`
+	SwapUsada uint64  `json:"swap_usada"`
 
 	// Disco es el sistema de archivos RAÍZ. No se enumeran todos los puntos de montaje: en una
 	// máquina con contenedores son decenas, casi todos irrelevantes, y el agregado del host es
@@ -70,6 +77,15 @@ type Muestra struct {
 
 	// TempC es la primera zona térmica. nil = la máquina no expone ninguna (D3).
 	TempC *float64 `json:"temp_c"`
+
+	// NumProcesos son los PROCESOS, no los hilos. La diferencia no es cosmética: el 4º campo de
+	// /proc/loadavg («5/1181») cuenta HILOS y da entre 3 y 5 veces más, así que el atajo que está
+	// a mano produce un número creíble y equivocado.
+	//
+	// Es `int` a secas y no puntero por la misma razón que NumCPU: una máquina encendida siempre
+	// tiene al menos un proceso, así que el 0 no es ambiguo — significa «no medido», y los
+	// consumidores lo traducen a null antes de mostrarlo.
+	NumProcesos int `json:"num_procesos"`
 }
 
 // Colector lee el estado del host. Es un seam por sistema operativo: la implementación real vive
@@ -132,6 +148,27 @@ func (m Muestra) Valida() error {
 			return fmt.Errorf("%s negativo: %v", nombre, *l)
 		}
 	}
+	// LA ÚNICA REGLA QUE SE PUEDE AFIRMAR DE mem_libre, y conviene escribir la que NO va.
+	//
+	// `mem_libre <= mem_total - mem_usada` parece obvia y es FALSA: MemUsada sale de
+	// MemAvailable, que DESCUENTA los watermarks del kernel, así que en una máquina con poco
+	// cache reclamable MemAvailable puede ser MENOR que MemFree y la resta da negativa sin que
+	// nada esté mal. Y el rechazo no es barato: una muestra inválida se descarta ENTERA (D7), así
+	// que la aserción de más le costaría toda la telemetría a un servidor recién arrancado —
+	// justo el que más se mira. Lo único siempre cierto es que la RAM libre no supera la total.
+	// SIN el `MemTotal > 0`, que era la guarda original y dejaba el único campo nuevo sin techo
+	// justo cuando el total llega en cero. La muestra es entrada NO CONFIABLE —la manda el agente,
+	// que puede estar comprometido— y `{"mem_total":0,"mem_libre":9223372036854775808}` pasaba.
+	// Con mem_total en 0, «libre» sólo puede ser 0: no hay memoria de la que sobre.
+	if m.MemLibre != nil && *m.MemLibre > m.MemTotal {
+		return fmt.Errorf("mem_libre (%d) supera mem_total (%d)", *m.MemLibre, m.MemTotal)
+	}
+	// Tampoco se valida un techo para NumProcesos: un conteo alto es raro, no imposible (un build
+	// server con miles de procesos existe), y no vale perder la muestra entera por él.
+	if m.NumProcesos < 0 {
+		return fmt.Errorf("num_procesos negativo: %d", m.NumProcesos)
+	}
+
 	// La regla de los pares, verificada: un total sin su usado produciría un 0 % engañoso.
 	if m.MemTotal > 0 && m.MemUsada == 0 {
 		return fmt.Errorf("mem_total sin mem_usada: un total sin su usado se lee como 0%% de memoria en uso")
@@ -170,3 +207,8 @@ func MuestraDesdeTexto(s string) (*Muestra, error) {
 // f64 devuelve un puntero a v. Los colectores lo usan para decir «esto SÍ lo medí», frente al nil
 // que significa «este sistema operativo no expone esta métrica».
 func f64(v float64) *float64 { return &v }
+
+// u64 devuelve un puntero a v. Gemelo de f64 para los contadores de BYTES que un sistema
+// operativo puede no exponer: el nil dice «acá no se mide», el puntero a 0 diría «medí y da
+// cero», y son cosas distintas.
+func u64(v uint64) *uint64 { return &v }

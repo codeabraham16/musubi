@@ -26,6 +26,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,7 +48,7 @@ const sondasEnParalelo = 4
 const podaCadaTanto = time.Hour
 
 // ConfigurarFlota deja el servidor listo para su latido propio y valida lo que se puede validar
-// SIN el registro de principals delante: la sintaxis de cada política.
+// SIN el registro de principals delante: la sintaxis de cada política y el destino del empuje OTLP.
 //
 // La validación va en DOS TIEMPOS y no es una complicación gratuita: esta mitad no necesita el
 // registro y por eso puede correr en el arranque de cualquier entrypoint, incluso uno sin archivo
@@ -84,6 +85,9 @@ func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 		politicas = append(politicas, pol)
 	}
 	s.politicas = politicas
+	if err := s.configurarEmpujeOTLP(cfg.OTLP); err != nil {
+		return err
+	}
 	// El cooldown persistido se recupera ACÁ, antes de que el scheduler pueda arrancar: si se
 	// cargara después del primer tick, ese tick correría sin cooldowns y el reinicio seguiría
 	// siendo una ventana para actuar de más — que es justo lo que A24 vino a cerrar.
@@ -104,6 +108,9 @@ func (s *McpServer) vincularRegistroDeFlota(lookup principalResolver) error {
 		if err := s.validarPrincipalDePolitica(pol, lookup); err != nil {
 			return err
 		}
+	}
+	if err := s.validarPrincipalDeEmpuje(lookup); err != nil {
+		return err
 	}
 	// Los avisos de intérpretes salen acá, una vez, con el resto del arranque (I10b).
 	switch reg := lookup.(type) {
@@ -129,6 +136,61 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	// la peor hora posible para descubrirlo.
 	if len(pr.Fleet[fleet.CapExec]) == 0 {
 		return fmt.Errorf("política %q: el principal %q no tiene ninguna concesión `exec` en su sección `fleet:`, así que la política nunca podría actuar. Las políticas NO tienen autoridad propia: sólo la de su principal", pol.Nombre, pol.Principal)
+	}
+	return nil
+}
+
+// configurarEmpujeOTLP guarda la configuración del empuje y valida lo que se puede validar SIN el
+// registro delante: que haya principal nombrado, que el timeout entre en el intervalo, y que el
+// destino sea un destino (esquema, host, sin credencial en la URL).
+//
+// Es la MISMA validación en dos tiempos que las políticas, y por la misma razón: esta mitad corre
+// en cualquier entrypoint, incluso uno sin principals.yaml. La otra —que el principal exista y
+// tenga con qué exportar— la hace validarPrincipalDeEmpuje cuando el registro ya está cargado.
+func (s *McpServer) configurarEmpujeOTLP(cfg config.OTLPPushConfig) error {
+	s.empujeCfg = cfg
+	s.empujador = nil
+	if !cfg.Activo() {
+		return nil // apagado: ni endpoint, o un intervalo negativo (el apagado explícito)
+	}
+	if strings.TrimSpace(cfg.Principal) == "" {
+		return fmt.Errorf("fleet.otlp.endpoint está configurado pero fleet.otlp.principal está vacío. El empuje exporta CON LA AUTORIDAD DE ALGUIEN y no hay default posible: el default sería «todos los tenants». Nombrá un principal de principals.yaml que tenga `fleet: {metrics: [...]}`")
+	}
+	if to, iv := cfg.EffectiveTimeout(), cfg.EffectiveInterval(); to >= iv {
+		return fmt.Errorf("fleet.otlp.timeout_seconds (%s) no puede ser mayor o igual que interval_seconds (%s): cada empuje lento se comería el siguiente tick y el lazo pasaría la vida salteando. Bajá el timeout o subí el intervalo", to, iv)
+	}
+	emp, err := nuevoEmpujadorOTLP(cfg)
+	if err != nil {
+		return err
+	}
+	s.empujador = emp
+	return nil
+}
+
+// validarPrincipalDeEmpuje comprueba lo que sólo se puede saber con el registro delante.
+//
+// ES UN ERROR DE ARRANQUE, no un warning. Un empuje que nombra a alguien que no existe queda mudo
+// para siempre —y mudo es exactamente igual que «todo tranquilo» desde afuera—, así que nadie se
+// entera hasta un incidente en el que los gráficos están vacíos.
+func (s *McpServer) validarPrincipalDeEmpuje(lookup principalResolver) error {
+	if !s.empujeCfg.Activo() {
+		return nil
+	}
+	nombre := strings.TrimSpace(s.empujeCfg.Principal)
+	ejemplo := fmt.Sprintf("Declaralo en principals.yaml:\n  - name: %s\n    token_sha256: \"<sha256 de su token>\"\n    role: reader\n    read: all\n    fleet:\n      metrics: [\"*\"]", nombre)
+	if lookup == nil {
+		return fmt.Errorf("el empuje OTLP nombra al principal %q pero no hay registro de principals. %s", nombre, ejemplo)
+	}
+	pr, existe := lookup.porNombre(nombre)
+	if !existe {
+		return fmt.Errorf("el empuje OTLP nombra al principal %q, que no existe en principals.yaml. %s", nombre, ejemplo)
+	}
+	// Sin ninguna concesión `metrics` el empuje queda garantizadamente vacío: va a resolver, va a
+	// barrer y no va a ver una sola máquina (C1 — el rol NO otorga capacidades de flota, ni
+	// siquiera el de admin). Un POST con cero series cada 30 s es peor que no empujar: parece que
+	// anda.
+	if len(pr.Fleet[fleet.CapMetrics]) == 0 {
+		return fmt.Errorf("el empuje OTLP nombra al principal %q, que no tiene ninguna concesión `metrics` en su sección `fleet:`, así que no exportaría ni una máquina. Las capacidades de flota NO se derivan del rol. %s", nombre, ejemplo)
 	}
 	return nil
 }

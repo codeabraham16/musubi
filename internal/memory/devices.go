@@ -226,19 +226,49 @@ func (e *DbEngine) LatirDevice(id string, ahora time.Time, muestra string) (bool
 // pero un hash que sobrevive a la baja es material que no hace falta conservar, y además libera
 // el índice único por si el mismo token se re-emite. La identidad, el proyecto y las fechas —lo
 // que la auditoría necesita— siguen intactos.
+//
+// Y ARRASTRA SUS SERVICIOS (S12), en la MISMA transacción. Sin esto, los servicios de una máquina
+// revocada seguirían apareciendo en el listado del proyecto como si nada, y el hueco pasa
+// desapercibido justo hasta un incidente — que es cuando alguien revoca y después mira.
+//
+// Se eligió esto sobre las otras dos opciones: un JOIN a `devices` al LEER contradiría el patrón
+// denormalizado de todo el resto de la flota, y «no hacer nada» deja un servicio visible de una
+// máquina que ya no existe, que es exactamente lo que no querés ver después de un incidente. Las
+// filas QUEDAN revocadas, igual que la del device: la auditoría necesita saber qué corría ahí.
 func (e *DbEngine) RevocarDevice(projectID, name string) (bool, error) {
-	res, err := e.db.Exec(
-		`UPDATE devices SET revoked = 1, token_sha256 = '' WHERE project_id = ? AND name = ? AND revoked = 0`,
-		strings.TrimSpace(projectID), strings.TrimSpace(name),
-	)
+	projectID, name = strings.TrimSpace(projectID), strings.TrimSpace(name)
+
+	tx, err := e.db.Begin()
 	if err != nil {
+		return false, fmt.Errorf("error al abrir la transacción para revocar %q: %w", name, err)
+	}
+	defer tx.Rollback()
+
+	// El id se lee ADENTRO de la transacción y con el mismo WHERE que el UPDATE: es lo que ata
+	// la baja de la máquina con la de sus servicios. Resolverlo afuera dejaría una ventana en la
+	// que otra baja concurrente cambia la fila entre las dos sentencias.
+	var id string
+	err = tx.QueryRow(
+		`SELECT id FROM devices WHERE project_id = ? AND name = ? AND revoked = 0`, projectID, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil // no hay una máquina activa con ese nombre: el llamador lo traduce
+	}
+	if err != nil {
+		return false, fmt.Errorf("error al buscar el dispositivo %q para revocarlo: %w", name, err)
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE devices SET revoked = 1, token_sha256 = '' WHERE id = ?`, id); err != nil {
 		return false, fmt.Errorf("error al revocar el dispositivo %q: %w", name, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("error al leer el resultado de revocar %q: %w", name, err)
+	if _, err := tx.Exec(
+		`UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0`, id); err != nil {
+		return false, fmt.Errorf("error al revocar los servicios de %q: %w", name, err)
 	}
-	return n > 0, nil
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("error al confirmar la baja de %q: %w", name, err)
+	}
+	return true, nil
 }
 
 // ActualizarAutoreporte guarda lo que una máquina sabe de SÍ MISMA: la versión del agente que

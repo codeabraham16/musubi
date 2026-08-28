@@ -70,6 +70,11 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// La bitácora de sesiones de pantalla (S6): lee screen_sessions y no escribe. Quien
 		// ESCRIBE es musubi_fleet_screen (que abre la sesión) y el agente por la otra puerta.
 		"musubi_fleet_sessions": true,
+		// El inventario de SERVICIOS de la flota (S12): lee la tabla `services` y deriva el
+		// estado y el frescor al servir (no hay columna de estado ni UPDATE). Quien ESCRIBE es el
+		// LATIDO, por la puerta del dispositivo, y musubi_fleet_service_declare — que NO es
+		// readOnly y por eso está en mustWrite.
+		"musubi_fleet_services": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
@@ -87,6 +92,9 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// del proyecto. Marcarlas readOnly las metería en la clase de lectura aislada, que es
 		// justo lo que no son.
 		"musubi_promote_skill", "musubi_install_skill",
+		// S12 — declarar un servicio a mano ESCRIBE en la tabla `services`. Marcarla readOnly la
+		// metería en la clase de lectura aislada, que es justo lo que no es.
+		"musubi_fleet_service_declare",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
 		// El destilador y el afilador (Musubi Renaissance) escriben tarjetas + aristas en el acervo:
 		// jamás readOnly. Son lockSelf (I/O externa) pero eso es concurrencia, no autorización.
