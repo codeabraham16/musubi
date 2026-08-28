@@ -121,6 +121,47 @@ if [[ $falla -ne 0 ]]; then
   die "el relay quedó a medias — arreglá lo de arriba antes de configurar ningún cliente"
 fi
 
+# ── La identidad del relay, donde el respaldo la pueda encontrar ─────────────────────────────
+#
+# `data/id_ed25519` es la identidad del relay. Si se pierde, el relay vuelve con OTRA clave y
+# TODA la flota deja de conectar hasta que alguien reconfigure cada cliente a mano. Es un archivo
+# de 88 bytes que no cambia nunca y cuya pérdida cuesta una tarde por máquina.
+#
+# Se deja una copia donde el backup del cerebro ya mira. **Lo que eso protege y lo que no**, dicho
+# sin adornos: protege contra que el volumen se borre, contra un `preparar.sh` mal corrido, contra
+# que el contenedor se lleve el archivo. **NO protege contra perder el disco** — para eso hace
+# falta que el backup salga del host (`BACKUP_REMOTE`), que es otra decisión y de otra persona.
+BACKUP="${MUSUBI_BACKUP_DIR:-$HOME/musubi-brain/.musubi/backups}"
+if [[ -d "$BACKUP" ]]; then
+  install -m 0700 -d "$BACKUP/rustdesk-relay"
+  # 0600, más cerrado que como lo deja el contenedor (0644): es una clave privada.
+  install -m 0600 "$DIR/data/id_ed25519" "$BACKUP/rustdesk-relay/id_ed25519"
+  install -m 0644 "$DIR/data/id_ed25519.pub" "$BACKUP/rustdesk-relay/id_ed25519.pub"
+  cat > "$BACKUP/rustdesk-relay/LEEME.txt" <<LEEME
+Identidad del relay de pantalla (RustDesk hbbs/hbbr) de la flota Musubi.
+
+PARA QUE SIRVE
+  Si el relay se reconstruye sin estos dos archivos, arranca con una clave NUEVA y
+  todos los clientes de la flota dejan de conectar hasta reconfigurarlos uno por uno.
+
+COMO SE RESTAURA
+  1. Parar el relay:        cd $DIR && podman compose down
+  2. Copiar los dos archivos a  $DIR/data/
+  3. chmod 600 $DIR/data/id_ed25519
+  4. Levantar:              cd $DIR && podman compose up -d
+  5. Verificar que la clave publica coincide con la que tienen los clientes:
+       cat $DIR/data/id_ed25519.pub
+
+LO QUE ESTA COPIA **NO** HACE
+  Vive en el MISMO disco que el original. No protege contra perder el host.
+  Para eso el backup tiene que salir de esta maquina (BACKUP_REMOTE).
+LEEME
+  ok "identidad del relay copiada a $BACKUP/rustdesk-relay (misma máquina: no protege contra perder el disco)"
+else
+  aviso "no se encontró el directorio de respaldos ($BACKUP): la identidad del relay queda SÓLO en $DIR/data."
+  aviso "Si se pierde ese archivo, toda la flota deja de conectar hasta reconfigurar cada cliente."
+fi
+
 CLAVE="$(cat "$DIR/data/id_ed25519.pub")"
 ok "Relay listo. En CADA máquina de la flota, en el cliente RustDesk:"
 echo "    ID Server:    ${BIND}:21116"

@@ -164,3 +164,31 @@ func TestElComposeDelRelayNoUsaLaRedDelHost(t *testing.T) {
 	}
 	_ = re
 }
+
+// TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege.
+//
+// `data/id_ed25519` son 88 bytes que no cambian nunca y cuya pérdida cuesta una tarde POR MÁQUINA:
+// el relay vuelve con otra clave y toda la flota deja de conectar hasta reconfigurar cada cliente
+// a mano. Que se copie no alcanza — la copia vive en el MISMO disco, y un respaldo que se presenta
+// como protección sin decir contra qué NO protege es peor que no tenerlo, porque alguien deja de
+// buscar el de verdad.
+//
+// Sabotajes que la hacen fallar: sacar la copia de `preparar.sh`, o borrar la salvedad de que no
+// protege contra perder el disco.
+func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.T) {
+	texto := leerDespliegueRelay(t, "preparar.sh")
+
+	if !strings.Contains(texto, "id_ed25519") {
+		t.Fatal("preparar.sh no toca la identidad del relay: si ese archivo se pierde, toda la flota deja de conectar y no hay copia en ningún lado")
+	}
+	// La privada tiene que quedar más cerrada que como la deja el contenedor (0644).
+	if !regexp.MustCompile(`install -m 0600 .*id_ed25519\b`).MatchString(texto) {
+		t.Error("la copia de la clave PRIVADA no se instala con 0600: el original queda 0644 y copiarlo tal cual esparce el permiso flojo")
+	}
+	// Y la salvedad, con todas las letras.
+	for _, quiero := range []string{"NO protege", "BACKUP_REMOTE"} {
+		if !strings.Contains(texto, quiero) {
+			t.Errorf("preparar.sh no dice %q: presentaría como respaldo algo que vive en el mismo disco que el original", quiero)
+		}
+	}
+}
