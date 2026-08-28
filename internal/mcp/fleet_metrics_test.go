@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,11 +16,16 @@ import (
 
 func muestraDePrueba() *fleet.Muestra {
 	cpu := 42.5
+	libre := uint64(1 << 30)
 	return &fleet.Muestra{
 		Tomada: time.Now().UTC(), CPUPct: &cpu, NumCPU: 8,
 		MemTotal: 8 << 30, MemUsada: 3 << 30,
+		// mem_libre NO es «total menos usada» (serían 5 GiB): sale de MemFree y el page cache vive
+		// en el medio. El fixture lo refleja a propósito, para que ninguna prueba pueda pasar
+		// derivando uno del otro.
+		MemLibre:   &libre,
 		DiscoTotal: 500 << 30, DiscoUsado: 100 << 30, DiscoDisponible: 375 << 30,
-		Load1: f64ptr(1.5), UptimeSeg: 3600,
+		Load1: f64ptr(1.5), UptimeSeg: 3600, NumProcesos: 312,
 	}
 }
 
@@ -107,9 +113,9 @@ func TestElServidorNoLeeElCuerpoEnteroAMemoria(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	escritos := contador.leidos
+	escritos := contador.Leidos()
 	// Techo con margen de sobra: medido, el caso bueno coloca ~1,3 MiB y el malo 20 MiB.
-	const techo = 5 << 20
+	const techo int64 = 5 << 20
 	if escritos > techo {
 		t.Errorf("el cliente colocó %d bytes de %d: el servidor siguió leyendo, así que el tope sólo rechaza DESPUÉS de tragarse el cuerpo entero",
 			escritos, tam)
@@ -118,9 +124,19 @@ func TestElServidorNoLeeElCuerpoEnteroAMemoria(t *testing.T) {
 }
 
 // lectorQueCuenta entrega bytes y lleva la cuenta de cuántos le pidieron.
+//
+// EL CONTADOR ES ATÓMICO Y NO ES UN LUJO (A48). Quien llama a Read no es la goroutine de la
+// prueba: es el `writeLoop` de net/http, que sigue mandando el cuerpo DESPUÉS de que `Do()`
+// volvió — `Do()` vuelve con los headers de respuesta, no cuando terminó de escribir. Leer
+// `leidos` con un `int` común es una carrera de las de verdad, y `go test -race ./...` —el job
+// canónico de la CI— la reportaba en 3 de 3 corridas. La suite sin `-race` pasaba entera, así que
+// el rojo vivía en un job que nadie miraba.
+//
+// `restante` NO necesita candado: lo toca sólo Read, siempre desde la misma goroutine del
+// writeLoop. Ponerle atómico también sugeriría que alguien más lo mira, y no es cierto.
 type lectorQueCuenta struct {
 	restante int
-	leidos   int
+	leidos   atomic.Int64
 }
 
 func (l *lectorQueCuenta) Read(p []byte) (int, error) {
@@ -135,9 +151,13 @@ func (l *lectorQueCuenta) Read(p []byte) (int, error) {
 		p[i] = 'A'
 	}
 	l.restante -= n
-	l.leidos += n
+	l.leidos.Add(int64(n))
 	return n, nil
 }
+
+// Leidos es el único camino de lectura del contador: obliga a pasar por el atómico y deja la
+// carrera imposible de reintroducir por distracción.
+func (l *lectorQueCuenta) Leidos() int64 { return l.leidos.Load() }
 
 // D7 — un cuerpo inválido descarta la MEDICIÓN, no el LATIDO.
 // Sabotaje: devolver 400 ante un JSON roto → un agente con el colector roto desaparece del
@@ -273,9 +293,42 @@ func TestLoDesconocidoViajaComoNullHastaLaRespuesta(t *testing.T) {
 	if !strings.Contains(crudo, `"temp_c":null`) {
 		t.Errorf("temp_c no viajó como null: %s", crudo)
 	}
+	// I11 — LOS DOS CAMPOS NUEVOS, y el de procesos es el que necesita traducción explícita:
+	// NumProcesos es un `int`, así que copiarlo crudo publica un 0 que se lee como «esta máquina
+	// no tiene procesos» en todo macOS y en todo agente viejo.
+	//
+	// Sabotaje: poner `fila["num_procesos"] = m.NumProcesos` en filaDeMetricas (aparece
+	// `"num_procesos":0`); o `fila["mem_libre"] = *m.MemLibre` con un nil-check que devuelva 0.
+	if !strings.Contains(crudo, `"num_procesos":null`) {
+		t.Errorf("num_procesos no viajó como null: un 0 crudo se lee como «esta máquina no tiene procesos»: %s", crudo)
+	}
+	if strings.Contains(crudo, `"num_procesos":0`) {
+		t.Errorf("num_procesos viajó como 0: %s", crudo)
+	}
+	if !strings.Contains(crudo, `"mem_libre":null`) {
+		t.Errorf("mem_libre no viajó como null: %s", crudo)
+	}
 	// Y lo que SÍ se midió sale derivado.
 	if !strings.Contains(crudo, `"mem_pct":25`) {
 		t.Errorf("mem_pct no se derivó: %s", crudo)
+	}
+
+	// EL CAMINO POSITIVO, sobre otra máquina: lo que SÍ se midió llega con su número y no con
+	// null. Sin esta mitad, la prueba pasaría con un filaDeMetricas que devuelve null siempre.
+	tok2 := enrolarDePrueba(t, s, "casa", "servidor")
+	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tok2, cuerpoConMuestra(t, muestraDePrueba())); code != http.StatusOK {
+		t.Fatal("el latido de la máquina medida falló")
+	}
+	res2, e2 := call(t, s, "musubi_fleet_metrics", map[string]any{"project": "casa", "device": "servidor"})
+	if e2 != nil {
+		t.Fatal(e2)
+	}
+	medido := textOf(t, res2)
+	if !strings.Contains(medido, `"num_procesos":312`) {
+		t.Errorf("num_procesos medido no llegó a la respuesta: %s", medido)
+	}
+	if !strings.Contains(medido, `"mem_libre":1073741824`) {
+		t.Errorf("mem_libre medido no llegó a la respuesta: %s", medido)
 	}
 }
 
