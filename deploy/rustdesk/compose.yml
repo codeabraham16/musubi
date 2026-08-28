@@ -1,0 +1,87 @@
+# compose.yml — el RELAY DE PANTALLA (RustDesk hbbs + hbbr) en contenedores.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ HAY UNA VARIANTE EN CONTENEDOR SI YA ESTÁ install-rustdesk-relay.sh
+#
+# El instalador systemd hace falta root: /opt, useradd, unidades. En el servidor real donde esto
+# se desplegó, `sudo` pide contraseña —y con razón—, así que un despliegue que EXIGE root es un
+# despliegue que se queda sin hacer. Podman rootless ya corre ahí la cadena de alertas entera, y
+# los puertos del relay son todos ≥1024, así que no hace falta ni un privilegio.
+#
+# Los dos caminos conviven a propósito: el systemd para quien administra el server como server,
+# éste para quien ya tiene el runtime de contenedores andando. Lo que NO puede pasar es que se
+# vayan a la deriva — por eso el bind, los puertos y el `-k _` están escritos igual en los dos.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ **NO** `network_mode: host`, AL REVÉS QUE LA CADENA DE ALERTAS
+#
+# Prometheus usa red del host porque necesita que `127.0.0.1` signifique el host. Acá el problema
+# es el opuesto: con red del host, hbbs y hbbr escuchan en 0.0.0.0 —incluidas las interfaces
+# públicas— y quedan a un `firewall-cmd --add-port` de distancia de estar en internet. Un relay de
+# pantalla abierto al mundo no es una molestia, es la puerta.
+#
+# Se publican los puertos ATADOS A LA IP DEL TAILNET (`MUSUBI_RUSTDESK_BIND`). Eso es cierto
+# independientemente de cómo esté el firewall, que es la propiedad que se quiere: no depende de
+# haber leído bien una configuración que ni siquiera se puede leer sin root.
+#
+# El costo, dicho: con puertos publicados, el contenedor ve la dirección reescrita por la red de
+# podman en vez de la del cliente. hbbs la usa para adivinar el tipo de NAT. En un tailnet, donde
+# todos los pares se alcanzan directo, eso no cambia nada — el P2P anda y el relay queda de
+# reserva. Para el «acceso híbrido» del README (máquinas fuera de la malla) hay que volver al
+# instalador systemd, que ata a la interfaz de verdad.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# LOS PUERTOS, Y LOS DOS QUE NO ESTÁN
+#
+#   21115/tcp  hbbs — prueba de tipo de NAT
+#   21116/tcp  hbbs — registro de IDs
+#   21116/udp  hbbs — latido  ← el UDP no es opcional: sin él los clientes no se registran
+#   21117/tcp  hbbr — relay cuando el P2P no sale
+#
+# FALTAN 21118 y 21119 a propósito: son el cliente web. Nadie de esta flota lo usa, y un puerto
+# que no se abre es una superficie que no hay que defender. Si algún día hace falta, se agregan
+# acá y se documenta por qué.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# `-k _` NO ES DECORACIÓN
+#
+# Le dice al servidor que EXIJA la clave. Sin eso, cualquier cliente que apunte a esta dirección
+# se registra, y el relay propio pasa a ser tan abierto como el público — con la diferencia de que
+# uno cree que no lo es.
+
+services:
+  hbbs:
+    image: docker.io/rustdesk/rustdesk-server:1.1.14
+    container_name: musubi-rustdesk-hbbs
+    # `-r` es la dirección que hbbs le PASA A LOS CLIENTES para que encuentren al relay. Tiene que
+    # ser una dirección que el cliente pueda resolver — la del tailnet, no la del contenedor.
+    command: hbbs -k _ -r ${MUSUBI_RUSTDESK_BIND}:21117
+    ports:
+      - "${MUSUBI_RUSTDESK_BIND}:21115:21115/tcp"
+      - "${MUSUBI_RUSTDESK_BIND}:21116:21116/tcp"
+      - "${MUSUBI_RUSTDESK_BIND}:21116:21116/udp"
+    volumes:
+      # `:z` para SELinux, igual que la cadena de alertas: sin la etiqueta el contenedor no puede
+      # leer ni escribir, y el síntoma es un servicio que arranca y no guarda nada.
+      - ${MUSUBI_RUSTDESK_DIR}/data:/root:z
+    restart: unless-stopped
+    # EL ERROR DEL LOG QUE **NO** ES UN PROBLEMA. Al arrancar, hbbs escribe dos veces:
+    #   ERROR ... Failed to store  config: Bad configuration directory: "" is a root or prefix
+    # Asusta —«no pudo guardar la configuración»— y lo primero que uno teme es que la clave se
+    # regenere en cada reinicio, lo que dejaría a TODA la flota afuera de golpe. **Se probó**:
+    # se reinició el contenedor y `id_ed25519.pub` quedó idéntica. El error es de otro almacén de
+    # config que el servidor no usa; el par de claves vive en el volumen y sobrevive. Queda escrito
+    # acá para que el próximo que lea el log no salga a arreglar algo que anda.
+
+  hbbr:
+    image: docker.io/rustdesk/rustdesk-server:1.1.14
+    container_name: musubi-rustdesk-hbbr
+    command: hbbr -k _
+    ports:
+      - "${MUSUBI_RUSTDESK_BIND}:21117:21117/tcp"
+    volumes:
+      # MISMO directorio que hbbs: los dos tienen que usar la MISMA clave. Con volúmenes separados
+      # cada uno genera la suya, hbbr rechaza a los clientes que hbbs aceptó, y el síntoma es una
+      # conexión que se establece y se cae al segundo — sin un error que lo explique.
+      - ${MUSUBI_RUSTDESK_DIR}/data:/root:z
+    restart: unless-stopped

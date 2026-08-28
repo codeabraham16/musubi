@@ -31,11 +31,6 @@ import (
 	"musubi/internal/fleet"
 )
 
-// binarioRustdesk es el ejecutable del cliente. Es `var` para poder apuntarlo a un doble en las
-// pruebas: la integración con el binario real es lo único de este archivo que no se puede
-// verificar sin una máquina con RustDesk instalado.
-var binarioRustdesk = "rustdesk"
-
 // sesionAbierta recuerda si hay una contraseña puesta, para poder cerrarla al arrancar o al
 // vencer. Es estado de proceso, no de disco: si el agente muere, el arranque siguiente cierra por
 // las dudas.
@@ -84,7 +79,13 @@ func aplicarSesionPantalla(c comandoRecibido) resultadoDeComando {
 // track que depende de un binario externo, y por eso está aislada acá: todo lo demás del slice
 // —la acuñación, el vencimiento, la bitácora, la compuerta— se prueba sin RustDesk instalado.
 func ponerPassRustdesk(pass string) error {
-	cmd := exec.Command(binarioRustdesk, "--password", pass)
+	bin, err := rutaRustdesk()
+	if err != nil {
+		// Este error se ve en la bitácora del comando y en la respuesta de musubi_fleet_screen.
+		// Que diga DÓNDE se buscó es la diferencia entre «arreglalo en un minuto» y «probá cosas».
+		return err
+	}
+	cmd := exec.Command(bin, "--password", pass)
 	salida, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(salida)))
@@ -129,11 +130,25 @@ func sinSecreto(msg, pass string) string {
 }
 
 // idRustdeskLocal lee el identificador público del cliente. Vacío si RustDesk no está instalado
-// o no responde: no es un error, es una máquina sin pantalla configurada todavía.
+// o no responde.
+//
+// Devolver "" SIGUE SIENDO correcto —el latido no puede fallar porque falte una pieza opcional—
+// pero ya no es mudo. Antes, una máquina con RustDesk instalado y una sin él producían el mismo
+// silencio, y eso ocultó durante todo un track que el binario simplemente no se encontraba
+// (Windows no lo pone en el PATH). El aviso sale UNA vez por motivo: el latido corre cada pocos
+// segundos y un aviso por latido es ruido, que es otra forma de silencio.
 func idRustdeskLocal() string {
-	cmd := exec.Command(binarioRustdesk, "--get-id")
+	bin, err := rutaRustdesk()
+	if err != nil {
+		avisarUnaVez("rustdesk-ausente", "el plano de pantalla no está disponible: %v", err)
+		return ""
+	}
+	cmd := exec.Command(bin, "--get-id")
 	salida, err := cmd.Output()
 	if err != nil {
+		// Acá SÍ hay algo roto: el binario está y no contesta. Un permiso, una instalación a
+		// medias, un cliente que no arrancó todavía.
+		avisarUnaVez("rustdesk-mudo", "RustDesk está en %s pero no devuelve su id: %v", bin, err)
 		return ""
 	}
 	id := strings.TrimSpace(string(salida))
@@ -141,4 +156,18 @@ func idRustdeskLocal() string {
 		return ""
 	}
 	return id
+}
+
+// avisarUnaVez imprime un aviso a stderr la PRIMERA vez que se ve cada motivo.
+//
+// El agente late cada pocos segundos; un aviso por latido llena el journal y deja de leerse, que
+// es exactamente el mismo resultado que no avisar. Una vez por motivo y por vida del proceso: si
+// el problema se arregla y vuelve, el reinicio del agente lo vuelve a decir.
+var avisosDados sync.Map
+
+func avisarUnaVez(motivo, formato string, args ...any) {
+	if _, ya := avisosDados.LoadOrStore(motivo, true); ya {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", cYellow("!"), fmt.Sprintf(formato, args...))
 }
