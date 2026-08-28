@@ -45,7 +45,6 @@
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
 | A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
 | A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
-| A55 | **Un endpoint de exposición trae más que vitales de host, y esa parte no tiene dónde caer** | El transporte nuevo convierte un endpoint en `fleet.Muestra`, que es CPU, memoria, disco, carga y uptime. El endpoint real publica además `pg_database_size_bytes` y las conexiones del pooler: no son vitales del host, son hechos del servicio que corre ahí. Hoy se pierden. **No es cosmético**: una de las tres alertas que el colector viejo sostiene mira `pooler_conns > 350`, así que hasta que estos números tengan lugar, `collect-supabase.sh` no se puede apagar y el cuarto sistema sigue vivo. Las salidas plausibles son extender el dominio (caro y contagia a los cuatro colectores), o modelarlos como SALUD DE UN SERVICIO declarado sobre esa máquina —que es lo que son— con un lugar para gauges declaradas por servicio. Lo segundo encaja con lo que ya existe; lo que falta es dónde vive el número. | **sin asignar** (bloquea apagar `collect-supabase.sh`) |
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
@@ -367,7 +366,44 @@ en el mensaje tal como se predecía.
 **Lo que este trozo NO cierra, y por eso `collect-supabase.sh` sigue vivo:** el endpoint publica
 además `pg_database_size_bytes` y las conexiones del pooler, que **no son vitales de host** y no
 entran en `fleet.Muestra`. Una de las tres alertas que hoy existen mira las conexiones del pooler.
-Registrado como **A55**.
+Registrado como **A55** — y cerrado el mismo día, más abajo, con una salida que no era ninguna de las dos que esta nota anticipaba.
+
+**2026-08-28 (quater) · A55 cerrado, y NO como decía la nota: el plano de aplicación es de
+Prometheus.**
+
+A55 quedó anotado con dos salidas —extender el dominio, o modelar los números como salud de un
+servicio— y al ir a hacerlo, las dos eran la equivocada. La tool de Musubi dice, y sostiene,
+que **guarda el PRESENTE y que la serie temporal la guarda Prometheus**. Construir adentro de
+Musubi un mecanismo para cargar gauges arbitrarias contradice ese límite escrito, y lo contradice
+justo para reimplementar lo que Prometheus ya hace mejor.
+
+Así que: **Musubi mide la máquina, Prometheus mide la aplicación**, sobre el mismo host y sin
+pisarse. No es duplicación —son datos distintos— y la regla del track sigue en pie porque el
+scrape nuevo TIRA todo `node_*`: de los vitales del host el productor es Musubi. Sin ese descarte
+habría dos series de memoria para la misma máquina y las alertas saldrían dobles, exactamente
+como pasó al encender el empuje OTLP.
+
+- `deploy/prometheus/scrapes/altura-db.yml.ejemplo` — el scrape, cargado por un glob nuevo
+  (`scrape_config_files`) con la misma lógica que las reglas: la referencia real del proyecto no
+  viaja en el repo. Verificado contra promtool 3.1.0, incluido el detalle de que el archivo de
+  sitio necesita la clave `scrape_configs:` adentro y una lista pelada se rechaza.
+- `deploy/musubi-alerts-altura.yml` — cuatro reglas, validadas contra el Prometheus real.
+
+**El hallazgo: una de las tres alertas de producción no podía sonar.** El alerter tenía
+`("pooler_conns", 350, "Conexiones del pooler (de 400)")` sobre
+`sum(pgbouncer_pools_server_used_connections)`. Dos números tipeados a mano y de cosas distintas:
+el 400 es `pgbouncer_config_max_client_connections` —el límite del lado **cliente**— y lo que
+sumaba son las conexiones del lado **servidor**, que es otro pool y mucho más chico (medido:
+`free_servers` 50, `used_servers` 0, las tres sumas en 0). Vigilaba un número que tendría que
+multiplicarse por siete para tocar su umbral. **Nunca sonó, y «nunca sonó» se lee igual que
+«todo bien».** La regla nueva divide por la métrica que el propio pooler publica: si Supabase
+cambia el plan, se ajusta sola.
+
+Veintitrés sabotajes en total en este trozo y el anterior. **Dos de las pruebas de este archivo
+estaban mal escritas y el sabotaje las dejó en verde:** una tenía un lazo que hacía `return` al
+encontrar justo lo que decía prohibir, y la otra buscaba la métrica del denominador en el TEXTO
+ENTERO — y la encontraba en el comentario que explica el error. Las dos se reescribieron para
+mirar la regla y no el archivo, y ahí sí cayeron.
 
 ---
 

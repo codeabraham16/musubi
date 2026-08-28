@@ -374,3 +374,60 @@ musubi_fleet_enroll  name=supabase-altura  tier=B  caps=["metrics"]  os=linux
 | `responde pero no publica vitales de host` | La URL apunta a un `/metrics` de aplicación, no del host |
 | `el endpoint redirige` | Apuntá a la URL final: no se siguen redirecciones a propósito |
 | `aviso_configuracion` en TODAS las filas | El YAML no parsea. Las máquinas se siguen sondeando por su transporte de siempre |
+
+## AlturaEndpointMudo
+
+El scrape del endpoint de métricas de la base de Altura falla hace 5 minutos.
+
+**Lo primero, porque no es obvio:** mientras esto dure, `AlturaPoolerLlenandose`,
+`AlturaPoolerCaido` y `AlturaBaseCreciendoRapido` están **mudas**. No fallan — se quedan sin
+series con las que dispararse. Esta alerta existe para que ese silencio tenga voz.
+
+1. `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: $(cat /etc/prometheus/altura-db.token)" https://<ref>.supabase.co/customer/v1/privileged/metrics`
+2. **401/403** → el token venció o se rotó. Está en `/etc/prometheus/altura-db.token` (modo 600) y
+   también en `/etc/musubi/musubi.env` para el sondeo de Musubi: **son dos copias y hay que
+   cambiar las dos.**
+3. **000 / timeout** → red o el proyecto pausado. Miralo en el panel de Supabase.
+4. Ojo con confundirlo: que Musubi siga midiendo la máquina no dice nada de esto. Musubi va al
+   mismo endpoint por otro camino y con otra credencial.
+
+## AlturaPoolerLlenandose
+
+Los clientes conectados al pooler pasan el 85 % del límite que el propio pooler declara.
+
+**El umbral no está tipeado en ningún lado**: el denominador es
+`pgbouncer_config_max_client_connections`, que sale del endpoint. Si Supabase cambia el plan, la
+alerta se ajusta sola. Esto reemplaza a la del alerter viejo, que comparaba las conexiones del
+lado SERVIDOR contra el límite del lado CLIENTE — dos pools distintos, y por eso nunca sonó.
+
+1. `pgbouncer_used_clients{job="altura-db"}` contra `pgbouncer_config_max_client_connections`.
+2. Cuando llegue al 100 %, las conexiones nuevas **se rechazan**: la aplicación ve errores de
+   conexión, no lentitud. No hay degradación gradual.
+3. Casi siempre es la aplicación no devolviendo conexiones al pool, no la base. Mirá
+   `pgbouncer_pools_client_waiting_connections`: si hay clientes esperando, el cuello está en el
+   lado servidor (`pool_size`), no en el límite de clientes.
+
+## AlturaPoolerCaido
+
+`pgbouncer_up == 0`: el endpoint contesta y el pooler no.
+
+Es distinto de `AlturaEndpointMudo`, y la diferencia importa: **la base puede estar perfecta y ser
+inalcanzable**, porque la aplicación va por el pooler. Un chequeo directo a la base no lo detecta.
+
+1. Panel de Supabase → estado del connection pooler.
+2. Si la base responde por el puerto directo (5432) y no por el del pooler (6543), es esto.
+
+## AlturaBaseCreciendoRapido
+
+La base creció más de 20 % en 24 horas.
+
+**No es un umbral de tamaño**, a propósito: el tamaño normal depende de la base y un número
+absoluto habría que ajustarlo a mano cada tanto — o sea, caducaría. Lo que se puede afirmar sin
+conocer la base es la forma de la curva.
+
+1. Mirá `pg_database_size_bytes{datname="postgres"}` en el gráfico: ¿escalón o pendiente?
+2. **Escalón** → una migración, una carga masiva, o un backup restaurado. Suele ser esperado.
+3. **Pendiente sostenida** → algo escribe y nadie borra. Tablas de log, de auditoría, o de cola
+   sin purga son lo habitual.
+4. El disco de esa máquina lo vigila Musubi por separado (`musubi_fleet_device_disk_*` con
+   `device="supabase-altura"`). Esta alerta llega **antes**, cuando todavía es una curva.

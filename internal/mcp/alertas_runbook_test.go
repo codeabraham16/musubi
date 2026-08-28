@@ -51,7 +51,7 @@ func TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste(t *testing.T) {
 	}
 }
 
-// reglasDeAlerta junta los TRES archivos de reglas.
+// reglasDeAlerta junta los CUATRO archivos de reglas.
 //
 // Se repartieron a propósito, y cada uno se instala bajo su propia condición: las de flota sólo
 // si el cerebro expone `musubi_fleet_*`, la del backup off-host sólo si hay `BACKUP_REMOTE`.
@@ -70,6 +70,7 @@ func reglasDeAlerta(t *testing.T) string {
 		"../../deploy/musubi-alerts.yml",
 		"../../deploy/musubi-alerts-flota.yml",
 		"../../deploy/musubi-alerts-backup-offhost.yml",
+		"../../deploy/musubi-alerts-altura.yml",
 	} {
 		b, err := os.ReadFile(f)
 		if err != nil {
