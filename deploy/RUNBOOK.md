@@ -455,3 +455,36 @@ rara:
 
 **Lo que NO es:** una máquina caída. Ésa la cubre `MaquinaCaida` y esta regla la excluye a
 propósito — una máquina apagada no tiene por qué reportar inventario.
+
+## MaquinaCaida en un equipo Windows: mirá esto PRIMERO
+
+Antes de ir a ver si la máquina está encendida.
+
+El agente de Windows se instala como **tarea programada con disparador «al iniciar sesión»**
+(`agente-windows.ps1`, `-AtLogOn`). Eso significa que **el agente vive mientras haya alguien
+logueado**. Un equipo que se reinició de madrugada y quedó en la pantalla de bloqueo figura caído
+en la flota y está perfectamente vivo.
+
+Costó dos días leerlo mal: `gio` figuraba apagada mientras respondía al ping por el tailnet en
+145 ms.
+
+**Cómo distinguirlo en treinta segundos:**
+
+```
+ping <ip-tailnet-de-la-maquina>
+```
+
+- **Responde** → la máquina está viva y el agente no corre. Iniciá sesión (o usá `-AlArranque`,
+  abajo). No hay nada que prender.
+- **No responde** → puede estar apagada, fuera del tailnet, o con ICMP bloqueado. Ojo: algunas
+  Windows no contestan ping y sí latean, porque el latido es saliente y no necesita ICMP entrante.
+
+**Para que sobreviva a un reinicio**, reinstalá con:
+
+```powershell
+.\agente-windows.ps1 -BrainUrl "http://100.79.126.62:7717" -DeviceToken "<el del enroll>" -AlArranque
+```
+
+Exige administrador y registra la tarea **al arranque, como SYSTEM**. Decidilo a conciencia:
+`musubi_fleet_exec` sobre esa máquina pasa a ejecutarse con privilegios de SYSTEM. Es opt-in por
+eso, no por comodidad.

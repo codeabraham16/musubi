@@ -449,9 +449,24 @@ propósito— porque las tres piden lo mismo: que alguien mire. Validada contra 
 dispara para `kernelos-pc`, no para `musubi-server` (que sí reporta) ni para `gio` (que está
 caída, y ésa la cubre `MaquinaCaida`).
 
-**Sobre `gio`, que llevaba dos días anotada como «apagada»:** responde al ping por el tailnet con
-145 ms. La máquina está encendida y el agente no está corriendo. Es una acción del operador
-distinta de la que se venía suponiendo.
+**Sobre `gio`, que llevaba dos días anotada como «apagada»: la causa es de diseño y estaba escrita.**
+
+Responde al ping por el tailnet con 145 ms: la máquina está encendida y el agente no está
+corriendo. El porqué estaba en el propio instalador: `agente-windows.ps1` registra la tarea con
+**`-AtLogOn`**. El agente vive mientras haya alguien logueado, así que un equipo que se reinició
+de madrugada y quedó en la pantalla de bloqueo **figura caído estando vivo**.
+
+La elección estaba justificada en un comentario del script («un servicio de Windows exige
+elevacion y un envoltorio») — lo que faltaba era **la consecuencia**, y sin ella el síntoma se
+leyó como «la máquina está apagada» durante dos días.
+
+Ahora el instalador tiene `-AlArranque`: registra al arranque y como SYSTEM, sin depender de que
+nadie inicie sesión. Es **opt-in y no el default a propósito**, porque correr el agente como
+SYSTEM cambia lo que la flota puede hacer en esa máquina — `musubi_fleet_exec` pasaría a
+ejecutarse con privilegios de SYSTEM. Eso es una decisión de seguridad y la toma el operador, no
+el despliegue. El camino por defecto ahora **avisa en pantalla** qué pasa si la máquina se
+reinicia, y una prueba custodia las dos mitades: que el default no escale, y que su costo esté
+dicho.
 
 ---
 

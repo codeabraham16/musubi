@@ -257,3 +257,49 @@ func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 		}
 	}
 }
+
+// EL AGENTE DE WINDOWS CORRE AL INICIAR SESIÓN, Y ESO TIENE QUE SEGUIR SIENDO EL DEFAULT.
+//
+// La tarea programada por defecto arranca `-AtLogOn`: el agente vive mientras haya alguien
+// logueado. La consecuencia costó dos días de lectura equivocada — `gio` figuraba apagada
+// mientras respondía al ping por el tailnet en 145 ms; la máquina andaba y el agente no estaba
+// corriendo, porque nadie había iniciado sesión desde el reinicio.
+//
+// El arreglo existe (`-AlArranque`, que registra al arranque y como SYSTEM) y es OPT-IN a
+// propósito: correr el agente como SYSTEM cambia lo que la flota puede hacer en esa máquina —
+// `musubi_fleet_exec` pasaría a ejecutarse con privilegios de SYSTEM. Es una decisión de
+// seguridad, no una comodidad, y no puede tomarse sola por conveniencia de despliegue.
+//
+// Esta prueba custodia las dos mitades: que el default NO escale, y que la consecuencia del
+// default esté DICHA. Un default seguro cuyo costo nadie ve es cómo se pierden dos días.
+//
+// Sabotaje que la hace fallar: hacer que -AlArranque sea el camino por defecto, o borrar el
+// aviso que explica qué pasa si la máquina se reinicia.
+func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/agente-windows.ps1")
+	if err != nil {
+		t.Fatalf("falta el instalador de Windows: %v", err)
+	}
+	ps := string(b)
+
+	if !strings.Contains(ps, "$AlArranque") {
+		t.Fatal("no existe la opción -AlArranque: una máquina que se reinicia y nadie loguea " +
+			"figura caída estando viva, y no hay forma declarada de evitarlo")
+	}
+	// SYSTEM sólo puede aparecer DENTRO de la rama opt-in. Si el bloque `if ($AlArranque)`
+	// desaparece, el registro como SYSTEM pasa a ser incondicional.
+	iRama := strings.Index(ps, "if ($AlArranque)")
+	iSystem := strings.Index(ps, `-UserId "SYSTEM"`)
+	if iRama < 0 || iSystem < 0 || iSystem < iRama {
+		t.Error("el registro como SYSTEM no está dentro de la rama opt-in: el default escalaría privilegios")
+	}
+	// Y exige elevación explícitamente: registrar una tarea como SYSTEM sin admin falla con un
+	// error de PowerShell que no dice nada útil.
+	if !strings.Contains(ps, "-AlArranque exige administrador") {
+		t.Error("-AlArranque no comprueba admin antes de intentarlo")
+	}
+	// La consecuencia del default, dicha al usuario y no sólo en un comentario del código.
+	if !strings.Contains(ps, "va a figurar CAIDA en la flota estando viva") {
+		t.Error("el instalador no avisa qué pasa si la máquina se reinicia sin que nadie inicie sesión")
+	}
+}
