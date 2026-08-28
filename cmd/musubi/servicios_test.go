@@ -10,6 +10,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -232,5 +233,85 @@ func TestUnNombreInvalidoNoViajaYNoTumbaAlResto(t *testing.T) {
 		if !fleet.NombreDeServicioValido(r.Nombre) {
 			t.Errorf("viajó un nombre inválido: %q", r.Nombre)
 		}
+	}
+}
+
+// UNA FUENTE QUE NO ESTÁ Y UNA FUENTE ROTA NO SON LO MISMO, Y LA DIFERENCIA ES DESTRUCTIVA.
+//
+// La versión anterior las mezclaba: cualquier falla de `podman ps` era un `continue`, con el
+// razonamiento de que no tener docker instalado es lo normal. Pero el cerebro PODA POR AUSENCIA
+// —la lista no dice «encontré esto», dice «esto es lo que corre acá»—, así que saltear una fuente
+// rota no manda menos información: manda la afirmación de que sus servicios dejaron de existir.
+// En el servidor real eso dio de baja 18 contenedores, y como no hay error en ningún lado, el
+// síntoma fue que 18 filas desaparecieron y nadie supo por qué.
+//
+// Los tres desenlaces tienen que quedar separados:
+//
+//	no está          → se saltea, sin ruido, y el inventario sigue siendo completo
+//	está y falló     → error, y el llamador NO manda inventario (no mandar no borra nada)
+//	anduvo           → su salida
+//
+// Sabotaje que la hace fallar: devolver `("", false, nil)` en el caso `default` de enumerarFuente,
+// que es exactamente el `continue` de antes.
+func TestUnaFuenteRotaNoSeConfundeConUnaQueNoEstaInstalada(t *testing.T) {
+	original := ejecutarParaEnumerar
+	t.Cleanup(func() { ejecutarParaEnumerar = original })
+
+	casos := []struct {
+		nombre  string
+		err     error
+		hay     bool
+		esperaE bool
+	}{
+		{"no está instalada", &exec.Error{Name: "docker", Err: exec.ErrNotFound}, false, false},
+		{"está y falló", errors.New("permission denied"), true, true},
+		{"está y salió con código", &exec.ExitError{}, true, true},
+		{"anduvo", nil, true, false},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			ejecutarParaEnumerar = func(string, ...string) ([]byte, error) {
+				return []byte("una-salida"), c.err
+			}
+			salida, hay, err := enumerarFuente("podman", "ps")
+			if hay != c.hay {
+				t.Errorf("hayFuente=%v, se esperaba %v", hay, c.hay)
+			}
+			if (err != nil) != c.esperaE {
+				t.Errorf("err=%v, se esperaba error=%v", err, c.esperaE)
+			}
+			if c.esperaE && !strings.Contains(err.Error(), "podman") {
+				t.Errorf("el error no nombra la fuente que falló: %v", err)
+			}
+			if !c.esperaE && !c.hay && salida != "" {
+				t.Errorf("una fuente ausente devolvió salida: %q", salida)
+			}
+		})
+	}
+}
+
+// Y LA CONSECUENCIA, QUE ES DISTINTA DE TestUnaFuenteRotaNoSeLlevaAlLatido.
+//
+// Aquélla mira el caso en que no quedó NADA (lista nil y error) y exige que el agente lata igual.
+// Ésta mira el que de verdad hizo daño: quedó ALGO —systemd anduvo, podman no— y hay error. La
+// tentación acá es aprovechar lo que se juntó, y es justo lo que no se puede: la poda del cerebro
+// leería esa lista como «los contenedores ya no están». Nil no es una pérdida, es la única
+// respuesta honesta, y no borra nada porque la poda sólo corre cuando llega una lista.
+//
+// Sabotaje que la hace fallar: en serviciosDelLatido, devolver `lista` en vez de `nil` cuando
+// enumerarServicios da error.
+func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
+	original := enumerarServicios
+	t.Cleanup(func() { enumerarServicios = original })
+	ultimoInventario.Lock()
+	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+	ultimoInventario.Unlock()
+
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) {
+		return []fleet.ReporteServicio{repDe("sshd", fleet.EstadoCorriendo)},
+			fmt.Errorf("podman está instalado y no se pudo consultar: %w", errors.New("permission denied"))
+	}
+	if lista := serviciosDelLatido(); lista != nil {
+		t.Fatalf("con la enumeración rota el latido llevó %d servicios: esa lista da de baja lo que no trae: %+v", len(lista), lista)
 	}
 }

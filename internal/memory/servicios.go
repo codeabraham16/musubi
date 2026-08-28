@@ -186,11 +186,31 @@ func (e *DbEngine) ReportarServicios(deviceID string, ahora time.Time, reportes 
 		// LA ESCRITURA, con el mismo CASE que LatirDevice: una salud vacía NO borra la anterior.
 		// Ésa es la otra mitad — el servicio que hoy no se pudo medir conserva la última medición
 		// buena y avanza su `last_report`, en vez de perder las dos cosas a la vez.
+		//
+		// Y `revoked = 0`: UN REPORTE RESUCITA LO QUE LA PODA SE LLEVÓ, pero sólo eso.
+		//
+		// La versión anterior no resucitaba nada, y el efecto en producción fue que el inventario
+		// resultó ser un TRINQUETE: sólo podía achicarse. Un `podman ps` que falló UNA vez —o un
+		// arranque en el que el runtime todavía no estaba— mandaba un inventario sin los 18
+		// contenedores, la poda por ausencia los daba de baja, y a partir de ahí la máquina los
+		// reportaba en cada latido para siempre sin que ninguno volviera. No había error en
+		// ningún lado: 18 filas revocadas, 18 reportes descartados en silencio.
+		//
+		// La asimetría era el error: podar por ausencia y NO despodar por presencia. Si la fila
+		// está acá porque la máquina la reporta (`declared = 0`) y se fue porque la máquina dejó
+		// de reportarla, entonces que la reporte de nuevo es exactamente la condición que la
+		// trajo la primera vez.
+		//
+		// Lo que NO resucita es la fila que puso una PERSONA (`declared = 1`): ésa se da de alta
+		// de nuevo por `fleet_service_declare`, que es una decisión de alguien. Ahí sí vale el
+		// «que vuelva a aparecer tiene que ser una decisión» — el error era aplicárselo también a
+		// la mitad que nadie decidió.
 		res, err := tx.Exec(
 			`UPDATE services SET last_report = ?,
 			        last_health = CASE WHEN ? = '' THEN last_health ELSE ? END,
-			        kind        = CASE WHEN ? = '' THEN kind        ELSE ? END
-			  WHERE name = ? AND device_id = ? AND revoked = 0`,
+			        kind        = CASE WHEN ? = '' THEN kind        ELSE ? END,
+			        revoked     = 0
+			  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,
 			ahora.UTC().Format(time.RFC3339), salud, salud, r.Clase, r.Clase, r.Nombre, deviceID)
 		if err != nil {
 			return 0, 0, fmt.Errorf("error al reportar el servicio %q: %w", r.Nombre, err)
@@ -214,8 +234,9 @@ func (e *DbEngine) ReportarServicios(deviceID string, ahora time.Time, reportes 
 			ahora.UTC().Format(time.RFC3339), ahora.UTC().Format(time.RFC3339), salud,
 		); err != nil {
 			if esViolacionDeUnicidad(err) {
-				// La fila existe REVOCADA: no se resucita sola. Que vuelva a aparecer en el
-				// inventario tiene que ser una decisión de alguien, no el efecto de que la
+				// La fila existe, revocada, y la puso una PERSONA (si fuera de la máquina, el
+				// UPDATE de arriba ya la habría resucitado y no estaríamos acá). Que vuelva a
+				// aparecer en el inventario es una decisión de alguien, no el efecto de que la
 				// máquina siga reportándola.
 				continue
 			}

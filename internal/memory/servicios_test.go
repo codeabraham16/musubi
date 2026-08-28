@@ -514,3 +514,118 @@ func TestLoQueReportaLaMaquinaSeAcotaAlGuardarlo(t *testing.T) {
 		t.Errorf("el detalle guardado tiene %d runas, esperaba %d", n, fleet.DetalleServicioMax)
 	}
 }
+
+// EL INVENTARIO NO ES UN TRINQUETE: LO QUE LA PODA SE LLEVÓ VUELVE CUANDO LA MÁQUINA LO REPORTA.
+//
+// Ésta es la mitad que faltaba del par, y su ausencia costó 18 contenedores en el servidor real.
+// La poda por ausencia daba de baja lo que un latido no traía, y NADA lo volvía a traer: el
+// UPDATE del reporte llevaba `AND revoked = 0`, así que la fila revocada no se actualizaba, y el
+// INSERT chocaba con el índice único y se descartaba en silencio. La máquina reportaba sus 18
+// contenedores en cada latido, para siempre, sin efecto y sin error en ningún lado.
+//
+// Podar por ausencia y no despodar por presencia es una asimetría, no una precaución: si la fila
+// está acá porque la máquina la reporta, que la reporte de nuevo es exactamente la condición que
+// la creó. Lo que NO vuelve solo es lo que puso una persona — eso lo custodia el par de abajo, y
+// las dos mitades tienen que estar porque la forma más fácil de romper cada una es la otra.
+//
+// Sabotaje que la hace fallar: devolver el UPDATE a `WHERE name = ? AND device_id = ? AND
+// revoked = 0` y sacarle el `revoked = 0` del SET.
+func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
+	e := newTestEngine(t)
+	d, _ := altaDePrueba(t, e, "casa", "nas")
+
+	reportar := func(clase string, nombres ...string) {
+		t.Helper()
+		var rs []fleet.ReporteServicio
+		for _, n := range nombres {
+			rs = append(rs, fleet.ReporteServicio{Nombre: n, Clase: clase,
+				Salud: saludDePrueba(fleet.EstadoCorriendo)})
+		}
+		if _, _, err := e.ReportarServicios(d.ID, time.Now().UTC(), rs); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// La máquina reporta su unit y sus dos contenedores.
+	reportar("systemd", "sshd")
+	reportar("podman", "vaultwarden", "musubi-prometheus")
+
+	// Una corrida en la que `podman ps` falla: el inventario llega con la unit sola y la poda se
+	// lleva los dos contenedores. Esto es lo que pasó de verdad.
+	if n, err := e.PodarServiciosAusentes(d.ID, []string{"sshd"}); err != nil || n != 2 {
+		t.Fatalf("la poda del caso: n=%d err=%v", n, err)
+	}
+	if vivos, _ := e.ServiciosDeDevice(d.ID); len(vivos) != 1 {
+		t.Fatalf("después de la poda quedaron %d servicios, se esperaba 1", len(vivos))
+	}
+
+	// El latido siguiente ya ve podman de nuevo. Los dos tienen que volver.
+	reportar("podman", "vaultwarden", "musubi-prometheus")
+	vivos, err := e.ServiciosDeDevice(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vivos) != 3 {
+		t.Fatalf("volvieron %d servicios de 3: el inventario sólo sabe achicarse: %+v", len(vivos), vivos)
+	}
+
+	// Y vuelven ACTUALIZADOS, no como cáscaras: la clase es la que la máquina acaba de mandar.
+	// En producción el síntoma iba con éste — las 18 filas tenían la clase en blanco, y sin la
+	// resurrección el reporte que la traía bien tampoco podía escribirla.
+	por := map[string]fleet.Servicio{}
+	for _, s := range vivos {
+		por[s.Nombre] = s
+	}
+	for _, n := range []string{"vaultwarden", "musubi-prometheus"} {
+		if por[n].Clase != "podman" {
+			t.Errorf("%s volvió con la clase %q en vez de podman", n, por[n].Clase)
+		}
+		if por[n].Salud == nil || por[n].EstadoActual() != fleet.EstadoCorriendo {
+			t.Errorf("%s volvió sin la salud del reporte que lo resucitó: %+v", n, por[n])
+		}
+	}
+
+	// Ni una fila de más: la resurrección es un UPDATE de la que ya estaba, no una segunda.
+	todas, _ := e.ListarServicios("casa", "", true)
+	if len(todas) != 3 {
+		t.Fatalf("quedaron %d filas para 3 servicios: la resurrección duplicó", len(todas))
+	}
+}
+
+// LA RESURRECCIÓN LLEGA HASTA DONDE EMPIEZA LA DECISIÓN DE UNA PERSONA.
+//
+// Es el borde exacto del arreglo de arriba, y sin esta prueba la forma más cómoda de hacerlo
+// pasar —sacar el WHERE del UPDATE y listo— quedaría verde. Un servicio dado de alta a mano
+// (`declared = 1`) que alguien revocó NO puede volver porque la máquina lo siga viendo: vuelve
+// por `fleet_service_declare`, que es alguien decidiéndolo.
+//
+// Sabotaje que la hace fallar: cambiar el WHERE del UPDATE por `AND (revoked = 0 OR 1 = 1)`, o
+// sea sacarle el `declared = 0` a la condición de resurrección.
+func TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo(t *testing.T) {
+	e := newTestEngine(t)
+	d, _ := altaDePrueba(t, e, "casa", "nas")
+	sv, err := e.AltaServicio(fleet.Servicio{Nombre: "postgres", DeviceID: d.ID, Clase: "systemd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RevocarServiciosDeDevice(d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.ReportarServicios(d.ID, time.Now().UTC(), []fleet.ReporteServicio{
+		{Nombre: "postgres", Clase: "systemd", Salud: saludDePrueba(fleet.EstadoCorriendo)}}); err != nil {
+		t.Fatal(err)
+	}
+	if vivos, _ := e.ServiciosDeDevice(d.ID); len(vivos) != 0 {
+		t.Fatalf("el servicio declarado a mano volvió por un reporte: %+v", vivos)
+	}
+	// Y tampoco recibió la medición por la puerta de atrás: una fila de baja que acumula
+	// telemetría fresca es la que engaña al que la reactive meses después.
+	var reporte, salud string
+	if err := e.db.QueryRow(
+		`SELECT COALESCE(last_report,''), last_health FROM services WHERE id = ?`, sv.ID).Scan(&reporte, &salud); err != nil {
+		t.Fatal(err)
+	}
+	if reporte != "" || salud != "" {
+		t.Errorf("la fila declarada y revocada siguió recibiendo telemetría: last_report=%q last_health=%q", reporte, salud)
+	}
+}

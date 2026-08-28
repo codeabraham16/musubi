@@ -269,6 +269,35 @@ cuando el agente tiene que instalarse en una máquina ajena de verdad.
   **Falta que los clientes lo usen: eso es A35, y es acción del operador a propósito.**
 
 
+**2026-08-28 · el inventario era un trinquete: sólo sabía achicarse.**
+
+Encontrado **verificando A43 en producción**, no por una prueba. Prometheus exportaba 36 series de
+servicio de `musubi-server` y la máquina corre **54**: los 18 contenedores estaban en la base
+**revocados y con la clase en blanco**, y el agente los venía reportando bien en cada latido desde
+hacía horas. Dos defectos encadenados, ninguno con error en ningún lado:
+
+- **El agente mandaba inventarios incompletos** (`cmd/musubi/servicios.go`,
+  `servicios_linux.go`). Cualquier falla de una fuente era un `continue`, con este razonamiento
+  escrito: «perder el inventario entero porque una fuente falló sería cambiar información parcial
+  por ninguna». Es falso — **el cerebro poda por ausencia**, así que la lista no dice «encontré
+  esto», dice «esto es lo que corre acá». Un `podman ps` que falla una vez no manda menos
+  información: manda la afirmación de que esos 18 contenedores dejaron de existir. Ahora
+  `enumerarFuente` separa los tres desenlaces —no está / está y falló / anduvo— y una fuente rota
+  **aborta el inventario del latido**. No mandarlo no borra nada, y no es silencioso: los
+  servicios se ponen `fresco: false` y salta `ServicioSinNoticias`.
+- **El cerebro no deshacía la poda** (`internal/memory/servicios.go`). El UPDATE del reporte
+  llevaba `AND revoked = 0` y el INSERT chocaba con el índice único y se descartaba: la fila
+  revocada no volvía **nunca**, aunque la máquina la reportara para siempre. Podar por ausencia y
+  no despodar por presencia es una asimetría, no una precaución. Ahora un reporte resucita lo que
+  la poda se llevó (`declared = 0`) y **sólo eso**: lo que dio de alta una persona sigue volviendo
+  por `fleet_service_declare`, que es alguien decidiéndolo. El comentario original —«que vuelva a
+  aparecer tiene que ser una decisión»— era correcto; el error fue aplicárselo también a la mitad
+  que nadie decidió.
+
+Las cuatro pruebas nuevas tienen su sabotaje **ejecutado**, y el par del cerebro está escrito como
+par a propósito: la forma más cómoda de hacer pasar la resurrección —sacar el WHERE y listo— la
+caza la otra mitad.
+
 ---
 
 ## Cómo se usa este archivo

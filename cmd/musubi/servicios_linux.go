@@ -27,27 +27,37 @@ var propiedadesPedidas = []string{
 	"ActiveEnterTimestamp", "Result", "UnitFileState",
 }
 
+// enumerarServiciosDelSistema junta las dos fuentes. Cualquiera que ESTÉ y falle aborta el
+// inventario entero, porque el cerebro poda por ausencia y media lista es una baja falsa — el
+// porqué largo está en enumerarFuente, en servicios.go.
+//
+// Una sola marca de tiempo para las dos fuentes: son la misma foto, y dos `time.Now()` separados
+// harían que servicios medidos en la misma corrida tengan `Tomada` distinto sin motivo.
 func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
 	var todo []fleet.ReporteServicio
+	ahora := time.Now()
 
-	salida, err := salidaDeComando("systemctl", append([]string{"show", "*.service", "--no-pager"},
+	salida, hay, err := enumerarFuente("systemctl", append([]string{"show", "*.service", "--no-pager"},
 		"--property="+strings.Join(propiedadesPedidas, ","))...)
-	avisarDeEnumeracionParcial("systemd", err)
-	if err == nil {
-		todo = append(todo, parsearSystemctlShow(salida, time.Now())...)
+	if err != nil {
+		return nil, err
+	}
+	if hay {
+		todo = append(todo, parsearSystemctlShow(salida, ahora)...)
 	}
 
 	// Los contenedores son la otra mitad de «qué corre acá», y en este servidor son 18. Se
 	// prueban las dos herramientas porque una máquina puede tener cualquiera de las dos, y
-	// tenerlas a las dos es normal.
+	// tenerlas a las dos es normal. No tenerlas es normal también: eso es `hay == false`.
 	for _, cli := range []string{"podman", "docker"} {
-		s, err := salidaDeComando(cli, "ps", "--all", "--format",
+		s, hay, err := enumerarFuente(cli, "ps", "--all", "--format",
 			"{{.Names}}\t{{.State}}\t{{.Status}}")
 		if err != nil {
-			// No se avisa por cada uno: no tener docker instalado es lo normal, no una falla.
-			continue
+			return nil, err
 		}
-		todo = append(todo, parsearContenedores(s, cli, time.Now())...)
+		if hay {
+			todo = append(todo, parsearContenedores(s, cli, ahora)...)
+		}
 	}
 	return todo, nil
 }

@@ -26,7 +26,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -173,13 +175,40 @@ func salidaDeComando(nombre string, args ...string) (string, error) {
 	return string(b), nil
 }
 
-// avisarDeEnumeracionParcial deja constancia de que una FUENTE falló sin tirar abajo las otras.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UN INVENTARIO PARCIAL NO ES MENOS INFORMACIÓN: ES UNA AFIRMACIÓN FALSA
 //
-// Una máquina puede tener systemd andando y podman roto. Perder el inventario entero porque una
-// de las dos fuentes falló sería cambiar información parcial por ninguna.
-func avisarDeEnumeracionParcial(fuente string, err error) {
-	if err == nil {
-		return
+// Acá había una `avisarDeEnumeracionParcial` que avisaba de la fuente rota y mandaba igual lo que
+// las demás hubieran conseguido, con este razonamiento escrito: «perder el inventario entero
+// porque una de las dos fuentes falló sería cambiar información parcial por ninguna».
+//
+// Es falso, y se pagó en producción. El cerebro PODA POR AUSENCIA: la lista no dice «encontré
+// esto», dice «esto es lo que corre acá». Un `podman ps` que falla no le saca 18 filas al mensaje
+// — le agrega la afirmación de que esos 18 contenedores dejaron de existir. La poda los dio de
+// baja y los 18 quedaron invisibles.
+//
+// Así que la regla es: el inventario se manda COMPLETO o NO SE MANDA. Que no se mande no borra
+// nada —la poda sólo corre cuando llega una lista— y no es silencioso: los servicios que ya
+// estaban dejan de recibir noticias, se ponen `fresco: false` y salta `ServicioSinNoticias`.
+// «No pude armar un inventario confiable» tiene que verse; parchearlo con uno incompleto es
+// justamente lo que lo escondía.
+//
+// enumerarFuente separa los TRES desenlaces que la versión anterior mezclaba en dos:
+//
+//	("", false, nil)  la herramienta no está instalada — normal, no es una falla; se saltea
+//	("", true,  err)  está y falló — no hay inventario confiable; el llamador aborta
+//	(salida, true, nil) anduvo
+//
+// La distinción es `exec.ErrNotFound` y no un `LookPath` previo: entre mirar si está y correrlo
+// hay una carrera, y una fuente que desaparece justo en el medio caería del lado equivocado.
+func enumerarFuente(cli string, args ...string) (salida string, hayFuente bool, err error) {
+	salida, err = salidaDeComando(cli, args...)
+	switch {
+	case err == nil:
+		return salida, true, nil
+	case errors.Is(err, exec.ErrNotFound):
+		return "", false, nil
+	default:
+		return "", true, fmt.Errorf("%s está instalado y no se pudo consultar: %w", cli, err)
 	}
-	avisarUnaVez("servicios-fuente-"+fuente, "no se pudo enumerar %s (las otras fuentes siguen): %v", fuente, err)
 }
