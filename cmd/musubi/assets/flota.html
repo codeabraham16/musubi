@@ -51,6 +51,26 @@
   .heredado { color: var(--tenue); }
   .heredado sup { opacity: .7; }
   .mono { font-family: var(--mono, monospace); font-size: 11px; }
+
+  /* ── EL CAJÓN DE DETALLE ──────────────────────────────────────────────────────────────
+     Se abre DEBAJO de su fila y no en una ventana aparte, y eso es deliberado: una máquina
+     no se mira sola, se mira CONTRA las otras. Sacarla a un modal esconde la tabla justo
+     cuando alguien está comparando. */
+  tr.det > td { padding: 0; border-top: none; }
+  .cajon { padding: 14px 18px 18px; background: rgba(120,140,180,.05); border-left: 2px solid var(--acento, #2dd4bf); }
+  .cajon h4 { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--tenue); font-weight: 500; }
+  .cajon section { margin-bottom: 16px; }
+  .cajon section:last-child { margin-bottom: 0; }
+  .rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 20px; }
+  .dato { font-size: 13px; }
+  .dato b { display: block; color: var(--tenue); font-weight: 400; font-size: 11px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { font-size: 11px; padding: 2px 7px; border-radius: 3px; background: rgba(120,140,180,.12); font-family: var(--mono, monospace); }
+  .chip.mal { color: var(--rojo, #f87171); background: rgba(248,113,113,.12); }
+  .chip.viejo { opacity: .55; }
+  .clic { cursor: pointer; }
+  .clic:hover td:first-child { text-decoration: underline; }
+  .vacio { color: var(--tenue); font-size: 12px; font-style: italic; }
   .caps b { color: var(--acento); font-weight: 500; }
   /* La columna de lo AUTOMÁTICO. Se distingue del resto a propósito: es lo único de esta tabla
      que describe algo que pasa sin que nadie lo pida. */
@@ -182,6 +202,86 @@ function automatico(e) {
 //
 // El grado sin declarar NO se dibuja como vacío: rige el default y eso es un hecho, no una
 // ausencia. Se marca como heredado para que se distinga de una decisión.
+// cajon arma el DETALLE de una máquina: todo lo que la fila no puede mostrar sin volverse
+// ilegible. Se abre debajo de la fila —no en un modal— porque una máquina no se mira sola, se
+// mira contra las otras, y un modal esconde la tabla justo cuando alguien está comparando.
+//
+// LAS TRES SECCIONES CONTESTAN TRES PREGUNTAS DISTINTAS, y por eso están separadas:
+//   vitales    · ¿cómo está?
+//   servicios  · ¿qué corre adentro?
+//   acceso     · ¿quién puede entrar, quién está adentro, y qué se le debe a quien la usa?
+function cajon(e) {
+  return `<div class="cajon">
+    ${seccionVitales(e)}
+    ${seccionServicios(e)}
+    ${seccionAcceso(e)}
+  </div>`;
+}
+
+function seccionVitales(e) {
+  if (!e.con_metricas) {
+    return `<section><h4>vitales</h4><div class="vacio">Sin telemetría: o esta máquina nunca reportó, o tu credencial no tiene <code>metrics</code> sobre ella. No es lo mismo que estar en cero.</div></section>`;
+  }
+  const d = (t, v) => `<div class="dato"><b>${t}</b>${v}</div>`;
+  return `<section><h4>vitales</h4><div class="rejilla">
+    ${d('cpu', pct(e.cpu_pct))}${d('memoria', pct(e.mem_pct))}${d('disco', pct(e.disco_pct))}
+    ${d('carga', num(e.load1, '', 2))}${d('núcleos', num(e.num_cpu, '', 0))}${d('temperatura', num(e.temp_c, '°', 0))}
+    ${d('uptime', duracion(e.uptime_seg))}${d('último dato', edad(e.antiguedad_s, e.con_metricas))}
+    ${d('dirección', esc(e.address || '—'))}${d('arquitectura', esc(e.arch || '—'))}
+  </div></section>`;
+}
+
+// seccionServicios AGRUPA POR CLASE. Cincuenta y cuatro servicios en una lista plana no se leen;
+// agrupados por quién los corre —systemd, podman— se leen de un vistazo. Y los que NO están
+// corriendo van PRIMERO: es la fila que uno vino a buscar.
+function seccionServicios(e) {
+  if (!e.con_servicios) {
+    return `<section><h4>servicios</h4><div class="vacio">No se pudo consultar el inventario de servicios.</div></section>`;
+  }
+  const svs = e.servicios || [];
+  if (!svs.length) {
+    return `<section><h4>servicios</h4><div class="vacio">Ninguno declarado ni enumerado. En una máquina con agente reciente eso puede significar que una fuente falló: mirá <code>MaquinaSinInventario</code>.</div></section>`;
+  }
+  const porClase = {};
+  for (const s of svs) (porClase[s.clase || 'sin clase'] ??= []).push(s);
+  const bloques = Object.keys(porClase).sort().map(cl => {
+    const lista = porClase[cl].slice().sort((a, b) => {
+      const p = x => x.estado === 'fallado' ? 0 : x.estado === 'detenido' ? 1 : x.estado === 'corriendo' ? 2 : 3;
+      return p(a) - p(b) || String(a.nombre).localeCompare(String(b.nombre));
+    });
+    const chips = lista.map(s => {
+      const mal = s.estado === 'fallado' || s.estado === 'detenido';
+      const viejo = s.fresco === false;
+      const t = `${s.estado}${viejo ? ' · sin noticias recientes' : ''}${s.reinicios ? ' · ' + s.reinicios + ' reinicios' : ''}`;
+      return `<span class="chip ${mal ? 'mal' : ''} ${viejo ? 'viejo' : ''}" title="${esc(t)}">${esc(s.nombre)}</span>`;
+    }).join('');
+    return `<div style="margin-bottom:8px"><b style="font-size:11px;color:var(--tenue)">${esc(cl)} · ${lista.length}</b><div class="chips" style="margin-top:4px">${chips}</div></div>`;
+  }).join('');
+  return `<section><h4>servicios · ${svs.length}</h4>${bloques}</section>`;
+}
+
+// seccionAcceso junta los TRES ejes que deciden qué se puede hacer con esta máquina, y que hasta
+// ahora vivían en tres lugares distintos: lo que la máquina ADMITE, lo que TU credencial puede, y
+// lo que se le DEBE a quien la está usando. Más quién está adentro ahora mismo.
+function seccionAcceso(e) {
+  const chips = (xs, cl) => (xs && xs.length)
+    ? xs.map(x => `<span class="chip ${cl || ''}">${esc(x)}</span>`).join('')
+    : '<span class="vacio">ninguna</span>';
+  let ses = '<span class="vacio">no se pudo consultar</span>';
+  if (e.con_sesiones) {
+    const abiertas = (e.sesiones || []).filter(s => s.abierta);
+    ses = abiertas.length
+      ? abiertas.map(s => `<span class="chip mal" title="${esc('abierta desde ' + s.creada + ' · vence ' + s.vence)}">${esc(s.modalidad)} · ${esc(s.principal)}</span>`).join('')
+      : '<span class="vacio">nadie adentro</span>';
+  }
+  return `<section><h4>acceso</h4><div class="rejilla">
+    <div class="dato"><b>la máquina admite</b><div class="chips">${chips(e.caps)}</div></div>
+    <div class="dato"><b>vos podés</b><div class="chips">${chips(e.puedo)}</div></div>
+    <div class="dato"><b>se le debe a quien la usa</b>${acceso(e)}</div>
+    <div class="dato"><b>sesiones abiertas</b><div class="chips">${ses}</div></div>
+  </div></section>`;
+}
+
 function acceso(e) {
   const ef = e.consentimiento_efectivo;
   if (!ef) return ND;
@@ -306,8 +406,9 @@ function pintar(d) {
       `tu credencial no tiene concesiones de flota sobre ellas. Las capacidades NO se derivan del rol: se declaran en la sección <code>fleet:</code> de principals.yaml.</div>`;
   }
 
-  document.getElementById('cuerpo').innerHTML = equipos.map(e => `
-    <tr>
+  const cuerpo = document.getElementById('cuerpo');
+  cuerpo.innerHTML = equipos.map(e => `
+    <tr class="clic" data-maq="${esc(e.name)}">
       <td><span class="punto ${e.online ? 'viva' : 'caida'}"></span>${e.name}</td>
       <td>${e.tier}</td>
       <td>${e.os || ND}</td>
@@ -326,8 +427,20 @@ function pintar(d) {
       <td class="caps">${agente(e)}</td>
       <td class="auto-col">${automatico(e)}</td>
       <td class="auto-col">${pantalla(e)}</td>
-    </tr>`).join('');
+    </tr>
+    <tr class="det" data-det="${esc(e.name)}" hidden><td colspan="16">${cajon(e)}</td></tr>`).join('');
   tabla.hidden = false;
+
+  // EL DETALLE SE ABRE CON UN CLIC Y NO CON HOVER: quien recorre la tabla con el mouse no quiere
+  // que se le abran cajones al pasar. Y se pueden tener VARIOS abiertos a la vez — cerrar el
+  // anterior al abrir el siguiente convierte una comparación entre dos máquinas en un ejercicio
+  // de memoria, que es justo lo que un panel viene a evitar.
+  for (const fila of cuerpo.querySelectorAll('tr.clic')) {
+    fila.addEventListener('click', () => {
+      const det = cuerpo.querySelector(`tr.det[data-det="${CSS.escape(fila.dataset.maq)}"]`);
+      if (det) det.hidden = !det.hidden;
+    });
+  }
 }
 
 async function refrescar() {

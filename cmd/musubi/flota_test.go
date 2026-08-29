@@ -117,7 +117,18 @@ func TestElPanelPreguntaPorLasMismasToolsYNoInventaUnaRutaAparte(t *testing.T) {
 	defer ts.Close()
 
 	pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
-	quiero := map[string]bool{"musubi_fleet_list": true, "musubi_fleet_metrics": true, "musubi_fleet_services": true}
+	// LA LISTA ES EXHAUSTIVA EN LAS DOS DIRECCIONES, y por eso hay que tocarla al agregar una
+	// llamada: no sólo prohíbe pedir algo raro, también EXIGE que se pidan las cuatro. Agregar
+	// una llamada al panel sin declararla acá lo rompe, que es lo que se busca — una ruta de
+	// datos nueva no puede entrar sin que alguien la mire.
+	quiero := map[string]bool{
+		"musubi_fleet_list":     true,
+		"musubi_fleet_metrics":  true,
+		"musubi_fleet_services": true,
+		// Las sesiones: quién está adentro de cada máquina. Es lo que el plano de ENTRAR
+		// construyó y ninguna pantalla mostraba.
+		"musubi_fleet_sessions": true,
+	}
 	for _, p := range pedidas {
 		if !quiero[p] {
 			t.Errorf("el panel llamó a %q, que no es una de las tools de flota", p)
@@ -502,5 +513,98 @@ func TestLaPaginaDeFlotaDibujaElEjeDeAcceso(t *testing.T) {
 	// que aparece sin explicación se ignora.
 	if !strings.Contains(html, "musubi_fleet_consent") {
 		t.Error("el pie no dice cómo se cambia la política de acceso")
+	}
+}
+
+// EL SUB-PANEL POR MÁQUINA: TODO LO DE UNA MÁQUINA EN UN LUGAR.
+//
+// Es lo que la tabla no puede mostrar sin volverse ilegible, y contesta tres preguntas que hasta
+// ahora vivían en tres tools distintas: cómo está, qué corre adentro, y quién puede entrar.
+//
+// Las cuatro decisiones que se custodian, y las cuatro tienen un modo de fallo real:
+//
+//  1. Se abre DEBAJO de la fila, no en un modal. Una máquina no se mira sola, se mira contra las
+//     otras; un modal esconde la tabla justo cuando alguien compara.
+//  2. Se pueden tener VARIOS abiertos. Cerrar el anterior al abrir el siguiente convierte una
+//     comparación en un ejercicio de memoria.
+//  3. Los servicios se agrupan POR CLASE y lo roto va primero. Cincuenta y cuatro en una lista
+//     plana no se leen.
+//  4. «No se pudo consultar» se dibuja distinto de «no hay». Un panel mudo que se ve tranquilo es
+//     el peor resultado posible.
+//
+// Sabotaje que la hace fallar: cerrar los otros cajones al abrir uno; dibujar los servicios sin
+// agrupar; colapsar la ausencia de dato con el cero.
+func TestElSubPanelPorMaquinaMuestraTodoEnUnLugar(t *testing.T) {
+	b, err := os.ReadFile("assets/flota.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+
+	if !strings.Contains(html, "function cajon(e)") {
+		t.Fatal("no hay sub-panel por máquina")
+	}
+	// Las tres secciones contestan tres preguntas distintas y por eso están separadas.
+	for _, fn := range []string{"seccionVitales", "seccionServicios", "seccionAcceso"} {
+		if !strings.Contains(html, "function "+fn) {
+			t.Errorf("falta la sección %s", fn)
+		}
+	}
+	// SE ABRE DEBAJO DE LA FILA: la fila de detalle es un <tr> hermano, no un modal.
+	if !strings.Contains(html, `<tr class="det"`) {
+		t.Error("el detalle no es una fila hermana: si es un modal, esconde la tabla justo cuando " +
+			"alguien está comparando dos máquinas")
+	}
+	// VARIOS A LA VEZ: el clic ALTERNA el suyo y no toca los demás. Un `hidden = true` sobre
+	// todos los otros sería el sabotaje.
+	if !strings.Contains(html, "det.hidden = !det.hidden") {
+		t.Error("el detalle no alterna sólo el suyo: cerrar el anterior al abrir el siguiente " +
+			"convierte una comparación en un ejercicio de memoria")
+	}
+	// Los servicios agrupados por clase, y lo roto primero.
+	// SE MIRA LA AGRUPACIÓN, NO EL NOMBRE DE LA VARIABLE. Buscar `porClase` a secas dejaba
+	// pasar un borrado parcial: la variable seguía nombrada más abajo y el sabotaje quedaba en
+	// verde. Lo que hay que exigir es la línea que AGRUPA.
+	if !strings.Contains(html, "porClase[s.clase") {
+		t.Error("los servicios no se agrupan por su clase: 54 en una lista plana no se leen, y " +
+			"agrupados por quién los corre se leen de un vistazo")
+	}
+	if !strings.Contains(html, "'fallado'") || !strings.Contains(html, "'detenido'") {
+		t.Error("los servicios no priorizan lo roto: es la fila que uno vino a buscar")
+	}
+	// «No se pudo consultar» distinto de «no hay», en las tres secciones que pueden faltar.
+	for _, guarda := range []string{"e.con_metricas", "e.con_servicios", "e.con_sesiones"} {
+		if !strings.Contains(html, guarda) {
+			t.Errorf("el sub-panel no distingue «no se pudo consultar» de «no hay» en %s: "+
+				"un panel mudo se leería como uno tranquilo", guarda)
+		}
+	}
+}
+
+// EL PANEL PIDE LAS SESIONES, QUE ES LO QUE EL PLANO DE ENTRAR CONSTRUYÓ Y NADIE MOSTRABA.
+//
+// Y su error se ignora, igual que el de métricas y servicios: un problema de permisos sobre el
+// plano de entrar no puede borrar la FLOTA de la pantalla. Es el mismo bug que la decisión de las
+// métricas ya evitó, y que se repite con cada llamada nueva si nadie lo cuida.
+//
+// Sabotaje que la hace fallar: propagar el error de fleet_sessions al estado de la respuesta.
+func TestElPanelPideLasSesionesYSuErrorNoBorraLaFlota(t *testing.T) {
+	b, err := os.ReadFile("flota.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if !strings.Contains(src, `"musubi_fleet_sessions"`) {
+		t.Error("el panel no pide las sesiones: quién está adentro de cada máquina no se ve en ningún lado")
+	}
+	// La llave se pone SIEMPRE que la tool haya contestado, incluso vacía: «nadie adentro» es un
+	// dato y «no se pudo preguntar» es otro.
+	if !strings.Contains(src, `e["con_sesiones"] = true`) {
+		t.Error("no se marca que la consulta de sesiones respondió: una lista vacía y una consulta " +
+			"fallida se dibujarían igual")
+	}
+	// El error NO se propaga: se pide dentro de un `if ... err == nil`.
+	if !strings.Contains(src, `if ses, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_sessions"`) {
+		t.Error("el error de las sesiones no está acotado: podría borrar la flota entera de la pantalla")
 	}
 }

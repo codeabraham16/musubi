@@ -133,6 +133,29 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 				e["con_servicios"] = true
 			}
 		}
+		// LAS SESIONES (S13) son la CUARTA llamada, y su error se ignora por el mismo motivo que
+		// las otras dos: un problema de permisos sobre el plano de entrar no puede borrar la
+		// flota de la pantalla.
+		//
+		// Es lo que el plano de ENTRAR construyó y nadie mostraba: quién está adentro de cada
+		// máquina, ahora. Un panel de control que no lo dice obliga a preguntárselo a una tool,
+		// que es donde nadie va a mirar mientras algo se está cayendo.
+		if ses, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_sessions", map[string]any{}); err == nil {
+			porMaquina := map[string][]map[string]any{}
+			for _, x := range aFilas(ses["sesiones"]) {
+				if n, _ := x["device"].(string); n != "" {
+					porMaquina[n] = append(porMaquina[n], x)
+				}
+			}
+			for _, e := range equipos {
+				n, _ := e["name"].(string)
+				// Misma regla que los servicios: la llave se pone SIEMPRE que la tool haya
+				// contestado, incluso vacía. «Nadie adentro» es un dato; «no se pudo preguntar»
+				// es otro, y dibujarlos igual haría que un panel mudo se lea como uno tranquilo.
+				e["sesiones"] = porMaquina[n]
+				e["con_sesiones"] = true
+			}
+		}
 		responder(flotaRespuesta{Estado: "vivo", Destino: relay.host(), Equipos: equipos, SinPermiso: sinPermiso})
 	}
 }
