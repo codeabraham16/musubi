@@ -57,15 +57,16 @@ const homeBrandProject = "musubi"
 // contexto de quien lo llama no es una herramienta, es un riesgo.
 const designBriefBudget = 2600
 
-// designBrandBudget acota la marca. Es generoso a propósito (el doc de Altura pesa ~1.050 tokens y
-// entra entero): la marca es la regla ESPECÍFICA del proyecto y gana por precedencia, así que es lo
-// último que se recorta. Pero un tope tiene que ser un tope, o I-PRE2 es una intención.
-const designBrandBudget = 2000
-
 // designMethodItemMax acota UNA tarjeta de método. La más larga del acervo real mide 1.087 chars, así
 // que esto no toca nada legítimo — existe para que una sola tarjeta gorda no se lleve el brief puesto.
 const designMethodItemMax = 1200
 
+// La marca NO tiene un tope propio, y es deliberado: es la regla ESPECÍFICA del proyecto y gana por
+// precedencia, así que es lo ÚLTIMO que cede. Su límite efectivo es el presupuesto total — cuando ya
+// no queda material que soltar, la escalera de `cederUnItem` le recorta exactamente lo que sobra. Una
+// constante `designBrandBudget` aparte existió un rato y quedó sin uso al reescribir la escalera: una
+// perilla que no hace nada pero cuyo comentario dice que sí es peor que no tenerla.
+//
 // avisoMarcaRecortada es lo que se pega al final de una marca que no entró entera. Va RUIDOSO a
 // propósito: un doc de marca suele llevar sus prohibiciones al final ("⛔ no cruzar la identidad de
 // X"), así que un corte mudo las desaparecería justo cuando más importan.
