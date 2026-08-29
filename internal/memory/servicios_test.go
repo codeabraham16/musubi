@@ -629,3 +629,86 @@ func TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo(t *testin
 		t.Errorf("la fila declarada y revocada siguió recibiendo telemetría: last_report=%q last_health=%q", reporte, salud)
 	}
 }
+
+// LA VISTA ÚNICA DEL PLANO DE ENTRAR TRAE LAS DOS MODALIDADES, ORDENADAS Y CON NOMBRE.
+//
+// Es lo que la consola necesita para preguntar «¿quién está adentro de mis máquinas?». Los tres
+// modos de fallo, en orden de gravedad:
+//
+//  1. Falta una modalidad. Una lista que sólo trae pantallas se lee como «no hay nadie con una
+//     shell abierta», que es una afirmación y no una ausencia.
+//  2. El orden no es estable. Dos sesiones creadas en el mismo instante —abrir pantalla y shell
+//     juntas desde un panel— saldrían distinto en cada llamada, y una lista que se reordena sola
+//     mientras se mira es una lista en la que nadie confía.
+//  3. El nombre de la máquina no viaja. Una lista de ids opacos no la lee nadie.
+//
+// Sabotaje que la hace fallar: leer una sola de las dos tablas; sacar el desempate por id.
+func TestLaVistaUnicaDeSesionesTraeLasDosModalidades(t *testing.T) {
+	e := newTestEngine(t)
+	d, _ := altaDePrueba(t, e, "casa", "nas")
+	ahora := time.Now().UTC()
+
+	// Los ids los ACUÑA el storage, no el llamador: se capturan de la respuesta en vez de
+	// suponerlos. (La primera versión de esta prueba los fijaba a mano y fallaba por eso, no por
+	// lo que dice custodiar.)
+	sp, err := e.AbrirSesionPantalla(fleet.SesionPantalla{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "gio",
+		Estado: fleet.SesionSolicitada, Creada: ahora, Vence: ahora.Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// MISMO instante de creación, a propósito: es el caso que rompe un orden sin desempate.
+	ss, err := e.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "gio",
+		Estado: fleet.ShellActiva, Creada: ahora, Vence: ahora.Add(30 * time.Minute),
+		UltimoTrafico: ahora,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primeroPorID := sp.ID
+	if ss.ID < primeroPorID {
+		primeroPorID = ss.ID
+	}
+
+	vistas, err := e.SesionesVivas("casa", "", 50, ahora)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = err
+	if len(vistas) != 2 {
+		t.Fatalf("la vista trajo %d sesiones de 2: falta una modalidad, y eso se lee como «no hay»", len(vistas))
+	}
+	porMod := map[fleet.Modalidad]fleet.SesionViva{}
+	for _, v := range vistas {
+		porMod[v.Modalidad] = v
+		if v.Device != "nas" {
+			t.Errorf("una sesión vino sin el nombre de su máquina: %+v", v)
+		}
+	}
+	if _, hay := porMod[fleet.ModalidadPantalla]; !hay {
+		t.Error("no vino la sesión de pantalla")
+	}
+	if _, hay := porMod[fleet.ModalidadShell]; !hay {
+		t.Error("no vino la sesión de shell")
+	}
+
+	// ORDEN ESTABLE: dos llamadas seguidas tienen que devolver lo mismo.
+	otra, _ := e.SesionesVivas("casa", "", 50, ahora)
+	for i := range vistas {
+		if vistas[i].ID != otra[i].ID {
+			t.Fatalf("el orden cambió entre dos llamadas: %v contra %v",
+				[]string{vistas[0].ID, vistas[1].ID}, []string{otra[0].ID, otra[1].ID})
+		}
+	}
+	// Y con creadas iguales, desempata el id: sale primero el menor.
+	if vistas[0].ID != primeroPorID {
+		t.Errorf("el desempate no es por id: primera = %q, se esperaba %q", vistas[0].ID, primeroPorID)
+	}
+
+	// El aislamiento por tenant no se pierde en la vista.
+	if ajenas, _ := e.SesionesVivas("otro-cliente", "", 50, ahora); len(ajenas) != 0 {
+		t.Errorf("la vista cruzó tenants: %d sesiones de otro proyecto", len(ajenas))
+	}
+}

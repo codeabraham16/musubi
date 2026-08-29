@@ -630,6 +630,45 @@ Cuatro sabotajes más (48 en la tanda). **Lo que falta:** la mitad del agente �
 reportar `puede_preguntar`—. Hasta entonces `pide` es honesto: bloquea, en vez de fingir.
 Registrado como **A57**.
 
+**2026-08-28 (decies) · la sesión única resultó ser una VISTA, no una tabla. La maqueta decía otra
+cosa y estaba equivocada.**
+
+La maqueta de tres planos proponía fusionar `screen_sessions` y `shell_sessions` en una sola tabla:
+tienen casi las mismas columnas y eso invita. **Al ir a hacerlo, la encuesta del código dijo que
+no.** Las TABLAS se parecen; los COMPORTAMIENTOS no:
+
+    shell     UltimoTrafico (techo de inactividad) · una sola abierta por (principal × máquina)
+              · un barrendero que cierra las vencidas
+    pantalla  ninguna de las tres
+
+Una tabla común tendría columnas que sólo aplican a la mitad de sus filas — el olor de esquema que
+este repo evita en todos lados, y el mismo error que sería meter `UltimoTrafico` en la vista y
+dejar que su cero se lea como «sin tráfico» en vez de «no aplica».
+
+Lo que sí se comparte es la FORMA DE AUDITORÍA —quién, dónde, cuándo, cómo terminó— y eso es una
+vista. La consola necesita listar; no necesita que sean la misma fila. Queda escrito en el código
+por qué la maqueta decía otra cosa, y bajo qué condición valdría revisarlo: el día que aparezca una
+tercera modalidad que se comporte como una de las dos.
+
+- **`fleet.SesionViva`** — la forma común, con la modalidad viajando (una lista que junta pantallas
+  y shells sin distinguirlas no sirve para decidir nada) y SIN los campos propios de cada una.
+  `Abierta` se DERIVA: una columna de estado miente en cuanto nadie la actualiza, y acá mentiría
+  diciendo que alguien sigue adentro de una máquina cuando ya salió. Las tres formas de estar
+  cerrada están cubiertas, incluida la que se olvida — una sesión **sin vencimiento no es eterna,
+  es una fila mal formada**.
+- **`SesionesVivas`** — lee las dos tablas y las junta. El tope se aplica POR MODALIDAD y después
+  al total: sin eso, un proyecto con miles de shells devolvería sus tres pantallas fuera del corte
+  y se leería como «acá no hay sesiones de pantalla», que es distinto de «hay, y no entraron». Los
+  nombres se piden CON las máquinas revocadas: una sesión sobre una máquina dada de baja sigue
+  siendo un hecho de la auditoría, y perder su nombre justo ahí es perderlo cuando más se necesita.
+  El orden desempata por id porque dos sesiones creadas en el mismo instante —abrir pantalla y
+  shell juntas desde un panel— saldrían distinto en cada llamada.
+
+Seis sabotajes más (**54 en la tanda**). Y una prueba volvió a corregir a su autor: fijaba los ids
+a mano cuando los acuña el storage, así que fallaba por eso y no por lo que decía custodiar.
+
+**Lo que falta:** exponer la vista en `musubi_fleet_sessions`, que hoy sólo lista pantallas.
+
 ---
 
 ## Cómo se usa este archivo

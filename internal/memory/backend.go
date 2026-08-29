@@ -389,6 +389,10 @@ type DeviceStore interface {
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)
+	// SesionesVivas lista el plano de ENTRAR de un proyecto por todas las modalidades, en una
+	// sola lista y con el nombre de cada máquina ya resuelto. Lee las dos tablas de sesión y NO
+	// las fusiona: sus comportamientos difieren donde importa (ver internal/fleet/sesion_viva.go).
+	SesionesVivas(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionViva, error)
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.
 	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
