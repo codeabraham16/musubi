@@ -1004,13 +1004,23 @@ func (o OTLPPushConfig) EffectiveTimeout() time.Duration {
 type PolicyConfig struct {
 	Name      string `yaml:"name"`
 	Principal string `yaml:"principal"`
-	// When: disco_pct | disco_libre_pct | mem_pct | cpu_pct | carga_por_core | temp_c.
+	// When: disco_pct | disco_libre_pct | mem_pct | cpu_pct | carga_por_core | temp_c |
+	// servicio_caido | servicio_reinicios.
 	// Una condición desconocida es un ERROR DE ARRANQUE, nunca una política que silenciosamente
 	// no evalúa: el mismo criterio que `fleet:` en principals.yaml.
 	When      string   `yaml:"when"`
 	Threshold float64  `yaml:"threshold"`
 	Devices   []string `yaml:"devices"`
 	Run       []string `yaml:"run"`
+	// Service es QUÉ servicio mira la política. Obligatorio para las condiciones de servicio y
+	// prohibido para las de host — las dos mitades se validan al arrancar.
+	//
+	// SE NOMBRA UNO SOLO. No existe «el que se haya caído»: el nombre del servicio lo REPORTA LA
+	// MÁQUINA, y sustituirlo dentro del comando haría que un dato no confiable termine siendo un
+	// argumento de algo que el cerebro ejecuta — con la allowlist validada antes de saber qué se
+	// va a ejecutar de verdad. Diez servicios que vigilar son diez políticas, y cada una dice en
+	// su nombre qué hace.
+	Service string `yaml:"service,omitempty"`
 	// CooldownMinutes es cuánto espera antes de volver a actuar sobre la MISMA máquina. 0 ⇒
 	// default (30 min). Un cooldown corto no es «más reactivo»: la métrica no baja hasta que el
 	// comando termine, así que sin espera la política dispara en cada tick.

@@ -101,8 +101,18 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       `pide` sobre una máquina que no puede preguntar se degrada a PROHIBIDO, no a libre—.
 	//       `consentimiento` arranca VACÍO y no en un grado: el default vive en el dominio, y
 	//       tenerlo también acá dejaría las filas viejas atrás el día que cambie.
-	if latestSchemaVersion() != 38 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 38", latestSchemaVersion())
+	// v39 = EL ENFRIAMIENTO DE UNA POLÍTICA DEJA DE SER POR MÁQUINA (`fleet_policy_state.alcance`,
+	//       y la PK pasa a ser (policy, device_id, alcance)). Era el bloqueo anotado de A44 y era
+	//       real: dos políticas sobre servicios distintos de la MISMA máquina caían en la misma
+	//       fila, así que reiniciar uno dejaba muda a la política del otro durante todo el
+	//       cooldown — y el segundo se quedaba caído por haber actuado sobre el primero. Se
+	//       RECREA la tabla porque SQLite no sabe cambiar una PRIMARY KEY; lo existente se copia
+	//       con `alcance = ''`, que es lo que corresponde a los cooldowns de políticas de host.
+	//       Se llama `alcance` y no `servicio` a propósito: lo que representa es QUÉ toca la
+	//       política adentro de la máquina, y lo próximo que se vigile ahí (un contenedor, un
+	//       montaje, una interfaz) va a querer el mismo espaciado sin migrar de nuevo.
+	if latestSchemaVersion() != 39 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 39", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

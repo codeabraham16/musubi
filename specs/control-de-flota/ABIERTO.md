@@ -37,7 +37,6 @@
 | A38 | **La columna de procesos no está en el panel** | U1 absorbió `num_procesos` y `mem_libre` en la muestra: los dos llegan a `musubi_fleet_metrics` y a Prometheus (`musubi_fleet_device_processes`, `musubi_fleet_device_memory_free_bytes`), y **el panel no los dibuja**. `cmd/musubi/assets/flota.html` no cambió, a propósito: la vista es un slice aparte y meterla en el de la medición mezcla dos diffs que se revisan distinto. Ojo con el dato: la columna tiene que distinguir «0 procesos» de «no medido» —macOS y los agentes viejos mandan 0— o repite en la pantalla el cero mentiroso que el resto del track evita. | **sin asignar** (slice de panel) |
 | A39 | **`num_cpu` se publica crudo y un 0 se lee «esta máquina no tiene CPUs»** | `methods_fleet.go` copia `m.NumCPU` tal cual a la respuesta de la tool. Es exactamente la clase de cero mentiroso que U1 arregló para `num_procesos` con `enteroONull`, y el helper ya está escrito al lado. **No se hizo en U1 a propósito**: cambiarlo toca el camino de una métrica que ya se está mirando en producción, y merece su propio diff y su propia prueba en vez de viajar de polizón. Barato de hacer, barato de olvidar. | **sin asignar** (un diff de tres líneas) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A44 | **No hay política de flota sobre la salud de un servicio** | Las políticas de S10 pueden reiniciar algo cuando el disco se llena, y **no** cuando un servicio se cae. La razón es de esquema, no de diseño: `fleet_policy_state` tiene clave `(policy, device_id)` y una política sobre un SERVICIO no entra en esa clave sin migrar la tabla — dos servicios de la misma máquina compartirían cooldown, que es peor que no tener la política. Queda anotado ahora, que es barato, en vez de cerrarse la puerta. | **sin asignar** (después de A42 y A43) |
 | A45 | **`go test -race ./...` no termina en 30 minutos** | No es un deadlock ni una carrera: **la corrida completa reporta CERO `DATA RACE`**. Es que `modernc.org/sqlite` —el SQLite en Go puro que evita cgo— corre ~10× más lento bajo el detector, y **cada prueba abre una base nueva que aplica las 37 migraciones**. Medido: una sola base cuesta **13,5 s** bajo `-race`; con cientos de pruebas, `internal/mcp` e `internal/memory` se comen el `-timeout 30m` parseando SQL (`runnable` dentro de `applyMigrations`, no bloqueado). **Empeora sola con cada migración nueva, y este trabajo agregó dos**: medido contra un worktree limpio de HEAD, 12,7 s → 13,5 s, un **6 %**. Casi todo el costo es anterior. La CI usa `-race` y nadie lo miraba porque `go test ./...` sin él pasa entero. Lo que se necesita es que las pruebas **compartan una base migrada** (una plantilla que se copia) en vez de migrar de cero cada una. | **sin asignar** |
 | A49 | **Nada verifica lo que sale por el cable del empuje** | `receptorDePrueba` no mira el método, ni un header, ni el cuerpo; `ultimoCuerpo` es **código muerto** — está definida y no la llama ninguna prueba. El verificador dejó tres sabotajes en verde con la suite entera: si alguien toca `enviar` y borra el `Content-Type`, Prometheus contesta 400 a cada POST y nada se pone rojo. **Media parte tapada (2026-08-28)**: la prueba nueva contra un Prometheus de verdad (`fleet_otlp_real_test.go`) sí ejercita el cable completo — pero es **opt-in**, no corre en CI, así que la suite de todos los días sigue sin mirar el sobre. Falta una prueba de unidad sobre método, headers y `Content-Type`. | **sin asignar** |
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
@@ -774,6 +773,49 @@ siempre: la misma alarma eterna, mudada al canal que sí se lee. La salida corre
 kube-prometheus con su Watchdog, y reactivar el dead-man's switch es cambiar una palabra.
 
 **67 sabotajes en la tanda.**
+
+**2026-08-29 (quater) · A44 cerrado: el módulo deja de sólo mirar.**
+
+El bloqueo anotado era el COOLDOWN, y era real. Se llevaba por (política × máquina): dos políticas
+sobre `nginx` y `postgres` de la misma máquina caían en la misma fila, así que reiniciar uno
+**dejaría muda** a la política del otro durante todo el enfriamiento — y el segundo se quedaría
+caído sin que nada actúe, justo por haber actuado sobre el primero. Peor que no tener la política:
+da la sensación de que algo vigila.
+
+La **migración 39** recrea `fleet_policy_state` con la clave `(policy, device_id, alcance)`. Se
+recrea porque SQLite no sabe cambiar una PRIMARY KEY. La columna se llama `alcance` y no
+`servicio` a propósito: representa QUÉ toca la política adentro de la máquina, y lo próximo que se
+vigile ahí —un contenedor, un montaje, una interfaz— va a querer el mismo espaciado sin migrar de
+nuevo.
+
+**La decisión de seguridad: no existe «reiniciá el que se cayó».** El nombre del servicio lo
+REPORTA LA MÁQUINA; sustituirlo dentro de un argv haría que un dato no confiable termine siendo
+argumento de algo que el cerebro ejecuta, con la allowlist validada ANTES de saber qué se va a
+ejecutar. Sería decoración exactamente en el camino donde no hay una persona mirando. Con el
+servicio nombrado, el argv es fijo al validar.
+
+**La bifurcación es de la DECISIÓN, no de la ACCIÓN.** Las políticas de servicio no pasan por las
+guardas de la muestra —son de la telemetría del host— y comparten todo lo demás: cooldown,
+compuerta del principal, allowlist, bitácora. Dos caminos con reglas distintas para ejecutar es
+cómo uno se queda sin una guarda el día que se toca el otro.
+
+Y tres asimetrías que llegan por fin al plano de actuar: **`desconocido` no es `caído`** (no pudo
+enumerar ≠ está caído), **un inventario viejo no dispara** (el agente deja de mandarlo a propósito
+cuando una fuente falla, así que «sin noticias» es un estado que producimos nosotros), y **un
+servicio ausente del inventario no es un servicio caído** (una política que reinicia lo que no
+existe se lleva puesto el host donde alguien escribió mal el nombre).
+
+**Una pieza faltaba y sólo apareció al montar el andamiaje:** `config.PolicyConfig` no tenía el
+campo `service`. El dominio soportaba políticas de servicio y no había forma de declararlas —
+habría quedado una función completa, probada e inalcanzable.
+
+**Y cuatro sabotajes seguidos obligaron a rehacer una prueba, siempre por lo mismo:** el andamiaje
+no ejercitaba lo que la prueba decía. Miraba el cooldown (que se escribe DESPUÉS de la compuerta),
+después el aviso (que el servidor de prueba no puede emitir sin registro), después usó el principal
+equivocado, y por último forzó una frescura que ya estaba. Ninguno era un bug del código: los
+cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo revela.
+
+**84 sabotajes en la tanda.**
 
 ---
 

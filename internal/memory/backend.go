@@ -418,7 +418,7 @@ type DeviceStore interface {
 	// (S10b · A24): sin esto, reiniciar rearmaba todos los cooldowns, y reiniciar es lo primero
 	// que alguien hace justo cuando algo va mal.
 	CooldownsDePoliticas() (map[string]map[string]time.Time, error)
-	MarcarDisparoDePolitica(politica, deviceID string, cuando time.Time) error
+	MarcarDisparoDePolitica(politica, deviceID, alcance string, cuando time.Time) error
 	PodarEstadoDePoliticas(vivas []string) (int64, error)
 
 	// La BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b). Ninguna de estas firmas tiene por dónde

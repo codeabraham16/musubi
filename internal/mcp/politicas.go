@@ -21,6 +21,7 @@ package mcp
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
+	"strings"
 	"time"
 
 	"musubi/internal/fleet"
@@ -63,6 +64,20 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 	if d.Revoked {
 		return false
 	}
+	// LAS POLÍTICAS DE SERVICIO SE DECIDEN POR OTRO CAMINO, Y SE BIFURCA ACÁ ARRIBA.
+	//
+	// Las guardas de abajo son de la MUESTRA del host: que exista, que la máquina esté en línea,
+	// que no sea rancia. Una política de servicio no las necesita —no mira la muestra— y
+	// aplicárselas la volvería inútil justo cuando más importa: una máquina cuyo colector murió
+	// sigue reportando su inventario de servicios, y ahí es donde uno quiere que la política actúe.
+	//
+	// Lo que sí comparte es TODO lo de después: el cooldown, la compuerta del principal, la
+	// allowlist y la bitácora. Bifurcar sólo la decisión y no la acción es lo que impide que el
+	// plano de actuar tenga dos caminos con reglas distintas.
+	if pol.EsDeServicio() {
+		return s.evaluarPoliticaDeServicio(pol, d, ahora)
+	}
+
 	// I13 — NO SE ACTÚA SOBRE UNA MUESTRA RANCIA.
 	//
 	// Es la guarda que más veces va a evitar un desastre y la más fácil de olvidar. Si la máquina
@@ -86,6 +101,64 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 	if !dispara {
 		return false
 	}
+	// El valor de una métrica del host SIEMPRE se midió si la política disparó: `Dispara` no
+	// devuelve true sin número. Se envuelve para compartir la firma con el camino de servicios,
+	// donde el «no medido» sí existe.
+	medido := valor
+	// I14 — cooldown por (política × máquina × alcance), contado desde el DISPARO y no desde el
+	// resultado: lo que hay que espaciar es la decisión de actuar, y el comando puede tardar.
+	return s.actuarSiCorresponde(pol, d, &medido, ahora)
+}
+
+// evaluarPoliticaDeServicio decide una política que mira un SERVICIO adentro de la máquina.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// NO PIDE QUE LA MÁQUINA ESTÉ EN LÍNEA, Y ESA AUSENCIA ES DELIBERADA
+//
+// Las guardas de la muestra —que exista, que la máquina lata, que el dato no sea rancio— son de
+// la TELEMETRÍA. Un servicio no se mide con la muestra: se mide con el inventario, que tiene su
+// propia frescura y su propio umbral. Copiar las guardas de la muestra acá volvería la política
+// inútil justo donde más sirve — una máquina cuyo colector murió sigue mandando su inventario, y
+// ahí es donde uno quiere que algo actúe.
+//
+// La frescura del inventario SÍ se exige, y la decide el dominio: ver DisparaSobreServicio.
+func (s *McpServer) evaluarPoliticaDeServicio(pol fleet.Politica, d fleet.Device, ahora time.Time) bool {
+	servicios, err := s.engine.ServiciosDeDevice(d.ID)
+	if err != nil {
+		// No se puede leer el inventario: no se actúa. Es la misma regla que la muestra ausente —
+		// no saber no es una razón para tocar una máquina.
+		return false
+	}
+	umbral := fleet.UmbralInventario
+	for _, sv := range servicios {
+		if sv.Nombre != pol.Servicio {
+			continue
+		}
+		fresco := !sv.UltimoReporte.IsZero() && ahora.Sub(sv.UltimoReporte) <= umbral
+		valor, dispara := pol.DisparaSobreServicio(sv, fresco)
+		if !dispara {
+			return false
+		}
+		v := 0.0
+		if valor != nil {
+			v = *valor
+		}
+		return s.actuarSiCorresponde(pol, d, &v, ahora)
+	}
+	// EL SERVICIO NO ESTÁ EN EL INVENTARIO DE ESA MÁQUINA, y eso NO dispara. Podría tentar
+	// tratarlo como «caído» —no está, algo pasó— pero es exactamente al revés: la ausencia
+	// significa que la máquina no lo enumera, no que se cayó. Una política que reinicia lo que no
+	// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.
+	return false
+}
+
+// actuarSiCorresponde es TODO lo que las dos clases de política comparten: el cooldown, la
+// compuerta del principal, la allowlist, la ejecución y la bitácora.
+//
+// Está separado para que bifurcar la DECISIÓN no bifurque la ACCIÓN. Dos caminos con reglas
+// distintas para ejecutar es cómo una de las dos se queda sin una guarda el día que se toca la
+// otra — y acá las guardas son las que impiden que el cerebro corra un comando que nadie autorizó.
+func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valor *float64, ahora time.Time) bool {
 	// I14 — cooldown por (política × máquina), contado desde el DISPARO y no desde el resultado:
 	// lo que hay que espaciar es la decisión de actuar, y el comando puede tardar.
 	clave := pol.ClaveDeCooldown(d.ID)
@@ -159,14 +232,14 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 	// Un fallo al persistir NO cancela la acción: el comando ya está decidido y auditado, y el
 	// costo del fallo es un cooldown que no sobrevive al próximo reinicio. Cancelar la acción por
 	// no poder anotar el cooldown sería dejar el problema sin atender para proteger la anotación.
-	if err := s.engine.MarcarDisparoDePolitica(pol.Nombre, d.ID, ahora); err != nil {
+	if err := s.engine.MarcarDisparoDePolitica(pol.Nombre, d.ID, pol.Servicio, ahora); err != nil {
 		logx.Error("política: no se pudo persistir el cooldown (sobrevive en memoria, no a un reinicio)",
 			"politica", pol.Nombre, "device", d.Name, "error", err)
 	}
 
 	logx.Info("política dispara",
 		"politica", pol.Nombre, "device", d.Name, "principal", pol.Principal,
-		"condicion", pol.Umbral(), "medido", valor, "hacer", pol.Hacer)
+		"condicion", pol.Umbral(), "medido", medidoParaLog(valor), "hacer", pol.Hacer)
 
 	if err := s.correrAccionDePolitica(pol, pr, d, ahora); err != nil {
 		logx.Error("política: la acción falló", "politica", pol.Nombre, "device", d.Name, "error", err)
@@ -236,9 +309,23 @@ func (s *McpServer) cargarCooldowns() {
 		logx.Warn("políticas: no se pudo cargar el cooldown persistido; se arranca sin él (una política podría actuar antes de tiempo, una vez)", "error", err)
 		return
 	}
+	// LA CLAVE SE REARMA CON LA MISMA FUNCIÓN DEL DOMINIO y no concatenando a mano. La base
+	// devuelve `device_id\x00alcance`; si acá se compusiera la clave por separado, el día que
+	// ClaveDeCooldown cambie de forma los cooldowns persistidos dejarían de encontrarse — en
+	// silencio, y sólo después de un reinicio, que es cuando menos se mira.
+	//
+	// SE SIEMBRA SÓLO LO QUE CORRESPONDE A LA POLÍTICA TAL COMO ESTÁ CONFIGURADA HOY. Una fila
+	// cuyo alcance ya no coincide (alguien le cambió el `servicio` a la política) se ignora, y
+	// eso es correcto: es otra cosa la que se está vigilando ahora, y su enfriamiento no se
+	// hereda del anterior.
 	n := 0
 	for _, pol := range s.politicas {
-		for deviceID, cuando := range porPolitica[pol.Nombre] {
+		esperada := strings.TrimSpace(pol.Servicio)
+		for compuesta, cuando := range porPolitica[pol.Nombre] {
+			deviceID, alcance, _ := strings.Cut(compuesta, "\x00")
+			if alcance != esperada {
+				continue
+			}
 			s.ultimoDisparo.Store(pol.ClaveDeCooldown(deviceID), cuando)
 			n++
 		}
@@ -322,4 +409,17 @@ func (s *McpServer) politicaPuedeActuar(pol fleet.Politica, d fleet.Device) bool
 		return false
 	}
 	return PuedeSobreDevice(pr, d, fleet.CapExec) && argvPermitido(pr, d, pol.Hacer)
+}
+
+// medidoParaLog traduce el «no sé» del dominio al del log.
+//
+// Un nil no puede salir como 0 en la línea que deja constancia de por qué el cerebro ejecutó algo:
+// «se reinició 0 veces» y «esta plataforma no sabe contarlos» explican la misma acción de dos
+// maneras opuestas, y la línea del disparo es lo primero que alguien lee cuando pregunta por qué
+// se tocó una máquina.
+func medidoParaLog(v *float64) any {
+	if v == nil {
+		return "no medido"
+	}
+	return *v
 }

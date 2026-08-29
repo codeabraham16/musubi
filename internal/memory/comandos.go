@@ -285,21 +285,27 @@ func escanearComando(row escaneable) (fleet.Comando, error) {
 // entero. Estas tres funciones lo hacen durar. Nada más: el RESULTADO de la acción sigue estando
 // en la bitácora, que es la misma para lo automático y lo manual.
 
-// CooldownsDePoliticas devuelve el último disparo de cada par (política, máquina).
+// CooldownsDePoliticas devuelve el último disparo de cada (política, máquina, alcance).
+//
+// LA CLAVE DEL MAPA INTERIOR ES `device_id\x00alcance`, y no el device solo. El alcance vacío es
+// una política de host; con contenido, lo que toca adentro de la máquina (hoy, un servicio). Se
+// devuelve compuesta y no en tres niveles para que el llamador arme la misma clave que usa en
+// memoria con una sola función del dominio — dos formas de componer la misma clave es cómo se
+// desincronizan.
 //
 // Se lee TODO de una vez, al arrancar, y no fila por fila en cada evaluación: con 40 máquinas y 5
 // políticas serían 200 consultas por tick para un dato que sólo cambia cuando algo dispara. El
 // servidor lo siembra en su mapa en memoria y desde ahí escribe hacia los dos lados.
 func (e *DbEngine) CooldownsDePoliticas() (map[string]map[string]time.Time, error) {
-	rows, err := e.db.Query(`SELECT policy, device_id, last_fired FROM fleet_policy_state`)
+	rows, err := e.db.Query(`SELECT policy, device_id, alcance, last_fired FROM fleet_policy_state`)
 	if err != nil {
 		return nil, fmt.Errorf("error al leer el estado de las políticas: %w", err)
 	}
 	defer rows.Close()
 	out := make(map[string]map[string]time.Time)
 	for rows.Next() {
-		var politica, device, cuando string
-		if err := rows.Scan(&politica, &device, &cuando); err != nil {
+		var politica, device, alcance, cuando string
+		if err := rows.Scan(&politica, &device, &alcance, &cuando); err != nil {
 			return nil, fmt.Errorf("error al escanear el estado de una política: %w", err)
 		}
 		t, err := time.Parse(time.RFC3339, cuando)
@@ -312,7 +318,7 @@ func (e *DbEngine) CooldownsDePoliticas() (map[string]map[string]time.Time, erro
 		if out[politica] == nil {
 			out[politica] = make(map[string]time.Time)
 		}
-		out[politica][device] = t.UTC()
+		out[politica][device+"\x00"+alcance] = t.UTC()
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error al recorrer el estado de las políticas: %w", err)
@@ -324,15 +330,18 @@ func (e *DbEngine) CooldownsDePoliticas() (map[string]map[string]time.Time, erro
 //
 // UPSERT sobre la clave compuesta: el par no puede tener dos filas, así que no hay que decidir
 // cuál gana.
-func (e *DbEngine) MarcarDisparoDePolitica(politica, deviceID string, cuando time.Time) error {
+func (e *DbEngine) MarcarDisparoDePolitica(politica, deviceID, alcance string, cuando time.Time) error {
 	politica, deviceID = strings.TrimSpace(politica), strings.TrimSpace(deviceID)
+	// `alcance` SÍ puede venir vacío: es lo que corresponde a una política de host. No se valida
+	// contra vacío porque el vacío es un valor legítimo, no una omisión.
+	alcance = strings.TrimSpace(alcance)
 	if politica == "" || deviceID == "" {
 		return fmt.Errorf("marcar el disparo de una política exige política y dispositivo")
 	}
 	_, err := e.db.Exec(
-		`INSERT INTO fleet_policy_state (policy, device_id, last_fired) VALUES (?, ?, ?)
-		 ON CONFLICT(policy, device_id) DO UPDATE SET last_fired = excluded.last_fired`,
-		politica, deviceID, cuando.UTC().Format(time.RFC3339))
+		`INSERT INTO fleet_policy_state (policy, device_id, alcance, last_fired) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(policy, device_id, alcance) DO UPDATE SET last_fired = excluded.last_fired`,
+		politica, deviceID, alcance, cuando.UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("error al marcar el disparo de la política %q: %w", politica, err)
 	}

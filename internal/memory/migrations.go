@@ -1386,6 +1386,65 @@ func schemaMigrations() []migration {
 					"puede_preguntar INTEGER NOT NULL DEFAULT 0")
 			},
 		},
+		{
+			version: 39,
+			name:    "cooldown_de_politica_por_alcance",
+			// EL ENFRIAMIENTO DEJA DE SER POR MÁQUINA Y PASA A SER POR LO QUE LA POLÍTICA TOCA.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// EL BLOQUEO QUE A44 TENÍA ANOTADO, Y POR QUÉ ERA REAL
+			//
+			// La clave era (policy, device_id). Para una política de HOST alcanza: hay un solo
+			// disco por máquina, una sola memoria. Para una de SERVICIO no, y el daño es peor
+			// que no tener la política:
+			//
+			// Dos políticas sobre `nginx` y sobre `postgres` de la misma máquina caerían en la
+			// misma fila. Reiniciar uno DEJARÍA MUDO al otro durante todo el enfriamiento, y el
+			// segundo servicio se quedaría caído sin que nada actúe — justo por haber actuado
+			// sobre el primero. Y el panel mostraría las dos políticas instaladas y activas.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// SE RECREA LA TABLA PORQUE SQLITE NO SABE CAMBIAR UNA PRIMARY KEY
+			//
+			// Agregar la columna con `ALTER TABLE` no alcanza: la clave seguiría siendo
+			// (policy, device_id) y la base rechazaría la segunda fila del par. Así que se crea
+			// la tabla nueva, se copia con `alcance = ''` —que es lo que corresponde a todo lo
+			// que hay: son cooldowns de políticas de host— y se reemplaza.
+			//
+			// LA COPIA VA PRIMERO Y EL DROP DESPUÉS, en la misma transacción de la migración: si
+			// algo falla en el medio, no queda ni media tabla. Y el nombre nuevo se renombra al
+			// viejo para que ninguna consulta de arriba tenga que enterarse.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// `alcance` Y NO `servicio`, y el nombre importa
+			//
+			// Hoy lo único que llena esa columna es un nombre de servicio. Pero lo que la
+			// columna representa es «QUÉ, dentro de la máquina, toca esta política» — y la
+			// próxima cosa que se vigile adentro de un host (un contenedor por id, un punto de
+			// montaje, una interfaz) va a querer el mismo espaciado sin que haya que migrar de
+			// nuevo. Un nombre que describe la posición y no el ejemplo actual.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`CREATE TABLE IF NOT EXISTS fleet_policy_state_v2 (
+						policy     TEXT NOT NULL,
+						device_id  TEXT NOT NULL,
+						alcance    TEXT NOT NULL DEFAULT '',
+						last_fired TEXT NOT NULL,
+						PRIMARY KEY (policy, device_id, alcance)
+					)`); err != nil {
+					return err
+				}
+				// Idempotente: `INSERT OR IGNORE` deja correr la migración dos veces sin duplicar.
+				if _, err := x.Exec(`INSERT OR IGNORE INTO fleet_policy_state_v2 (policy, device_id, alcance, last_fired)
+					SELECT policy, device_id, '', last_fired FROM fleet_policy_state`); err != nil {
+					return err
+				}
+				if _, err := x.Exec(`DROP TABLE fleet_policy_state`); err != nil {
+					return err
+				}
+				_, err := x.Exec(`ALTER TABLE fleet_policy_state_v2 RENAME TO fleet_policy_state`)
+				return err
+			},
+		},
 	}
 }
 

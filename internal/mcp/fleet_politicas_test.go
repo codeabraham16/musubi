@@ -487,7 +487,7 @@ func TestElCooldownSobreviveUnReinicioDelCerebro(t *testing.T) {
 // la tabla entera).
 func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	if err := s.engine.MarcarDisparoDePolitica("vaciar-journal", "dev-1", time.Now()); err != nil {
+	if err := s.engine.MarcarDisparoDePolitica("vaciar-journal", "dev-1", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.engine.PodarEstadoDePoliticas(nil); err != nil || n != 0 {
@@ -497,8 +497,11 @@ func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, hay := cds["vaciar-journal"]["dev-1"]; !hay {
-		t.Fatal("la fila desapareció")
+	// LA CLAVE INTERIOR ES COMPUESTA desde la v39: `device_id\x00alcance`. El alcance vacío es
+	// una política de host, que es lo que esta fila representa. Se compone acá igual que en el
+	// dominio para que no haya dos formas de armar la misma clave.
+	if _, hay := cds["vaciar-journal"]["dev-1\x00"]; !hay {
+		t.Fatalf("la fila desapareció: %+v", cds["vaciar-journal"])
 	}
 	// Con al menos una política viva, sí limpia lo que sobra.
 	if n, err := s.engine.PodarEstadoDePoliticas([]string{"otra-politica"}); err != nil || n != 1 {
@@ -616,5 +619,132 @@ func TestSinPoliticasElInventarioNoMencionaNada(t *testing.T) {
 	fila := jsonOf(t, res)["devices"].([]any)[0].(map[string]any)
 	if _, hay := fila["politicas_activas"]; hay {
 		t.Error("aparece politicas_activas sin políticas configuradas")
+	}
+}
+
+// registroQuePermiteSystemctl es el registro de las pruebas de A44. Se arma uno propio en vez de
+// reusar el de referencia para no torcer el COMANDO de la prueba: el de referencia sólo permite
+// `journalctl`, y cambiar `systemctl restart nginx` por otra cosa haría que la prueba ejercite un
+// camino distinto del que dice ejercitar.
+func registroQuePermiteSystemctl() *PrincipalRegistry {
+	return registroDePrueba(Principal{
+		Name: "curador", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet:     map[fleet.Cap][]string{fleet.CapExec: {"*"}, fleet.CapMetrics: {"*"}},
+		ExecAllow: map[string][]string{"*": {"systemctl"}},
+	})
+}
+
+// UNA POLÍTICA DE SERVICIO ACTÚA SOBRE EL INVENTARIO, NO SOBRE LA MUESTRA.
+//
+// Es la bifurcación de A44, y su ausencia más importante es deliberada: NO se exige que la máquina
+// esté en línea ni que su telemetría esté fresca. Esas guardas son de la MUESTRA, y un servicio no
+// se mide con la muestra — se mide con el inventario, que tiene su propia frescura.
+//
+// Copiarlas volvería la política inútil justo donde más sirve: una máquina cuyo colector murió
+// sigue mandando su inventario de servicios, y ahí es donde uno quiere que algo actúe.
+//
+// Sabotaje que la hace fallar: mandar las políticas de servicio por el camino de la muestra.
+func TestUnaPoliticaDeServicioActuaSinTelemetriaDelHost(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	ds, _ := s.engine.ListarDevices("casa", false)
+	d := ds[0]
+	ahora := time.Now().UTC()
+
+	// La máquina NO tiene muestra: nunca reportó telemetría, o su colector murió.
+	if d.UltimaMuestra != nil {
+		t.Fatal("la máquina de prueba tiene muestra: no ejercita el caso")
+	}
+	// Pero SÍ reportó su inventario, y nginx está caído.
+	if _, _, err := s.engine.ReportarServicios(d.ID, ahora, []fleet.ReporteServicio{
+		{Nombre: "nginx", Clase: "systemd", Salud: fleet.SaludServicio{
+			Tomada: ahora, Estado: fleet.EstadoFallado}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	pol := fleet.Politica{
+		Nombre: "revivir-nginx", Principal: "curador", Cuando: fleet.CondServicioCaido,
+		Sobre: []string{"*"}, Servicio: "nginx",
+		Hacer: []string{"systemctl", "restart", "nginx"}, Cooldown: 10 * time.Minute,
+	}
+	if err := pol.Validar(); err != nil {
+		t.Fatalf("la política de prueba no es válida: %v", err)
+	}
+
+	// SE MONTA EL PRINCIPAL DE VERDAD para que la decisión llegue hasta el final. Sin registro,
+	// `actuarSiCorresponde` corta antes de cualquier punto observable, y la prueba fallaría por el
+	// andamiaje y no por lo que custodia — que fue exactamente lo que pasó con sus dos primeras
+	// versiones.
+	s.buscarPrincipal = registroQuePermiteSystemctl()
+	s.politicas = []fleet.Politica{pol}
+	s.evaluarPolitica(pol, d, ahora)
+
+	// El cooldown se marca ANTES de ejecutar, así que su presencia prueba que la decisión
+	// atravesó las guardas de la muestra —que no le corresponden— y llegó al tramo de acción.
+	if _, hay := s.ultimoDisparo.Load(pol.ClaveDeCooldown(d.ID)); !hay {
+		t.Error("la política de servicio no llegó a decidir: la mataron las guardas de la MUESTRA, " +
+			"que no le corresponden — un servicio no se mide con la telemetría del host, y esta " +
+			"máquina no tiene ninguna")
+	}
+
+	// PERO EL INVENTARIO VIEJO SÍ LA FRENA, y ésa es la guarda que le corresponde. No se hereda
+	// del host: se calcula con el umbral del INVENTARIO, que es otro. Sin esto, una máquina que
+	// dejó de enumerar sus servicios —lo que el agente hace a propósito cuando una fuente falla—
+	// tendría políticas actuando eternamente sobre el último estado conocido.
+	otro := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, otro, "casa", "pc-gio")
+	ds2, _ := otro.engine.ListarDevices("casa", false)
+	d2 := ds2[0]
+	if _, _, err := otro.engine.ReportarServicios(d2.ID, ahora, []fleet.ReporteServicio{
+		{Nombre: "nginx", Clase: "systemd", Salud: fleet.SaludServicio{
+			Tomada: ahora, Estado: fleet.EstadoFallado}}}); err != nil {
+		t.Fatal(err)
+	}
+	otro.buscarPrincipal = registroQuePermiteSystemctl()
+	otro.politicas = []fleet.Politica{pol}
+	// Muy después: el inventario quedó viejo aunque el estado guardado siga diciendo «fallado».
+	tarde := ahora.Add(3 * fleet.UmbralInventario)
+	if otro.evaluarPolitica(pol, d2, tarde) {
+		t.Error("actuó sobre un inventario viejo")
+	}
+	if _, hay := otro.ultimoDisparo.Load(pol.ClaveDeCooldown(d2.ID)); hay {
+		t.Error("llegó a decidir con el inventario viejo: la frescura del INVENTARIO no se está " +
+			"mirando, y el agente deja de mandarlo a propósito cuando una fuente falla")
+	}
+}
+
+// UN SERVICIO QUE NO ESTÁ EN EL INVENTARIO NO SE TRATA COMO CAÍDO.
+//
+// Tienta al revés: no está, algo pasó, reinicialo. Pero la ausencia significa que la máquina NO LO
+// ENUMERA — no que se cayó. Una política que reinicia lo que no existe es la que se lleva puesto
+// un host donde alguien escribió mal el nombre del servicio, y lo hace en silencio y para siempre.
+//
+// Sabotaje que la hace fallar: devolver true cuando el servicio no aparece en el inventario.
+func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	ds, _ := s.engine.ListarDevices("casa", false)
+	d := ds[0]
+	ahora := time.Now().UTC()
+
+	// La máquina reporta OTRO servicio: el inventario existe y el nombre buscado no está.
+	if _, _, err := s.engine.ReportarServicios(d.ID, ahora, []fleet.ReporteServicio{
+		{Nombre: "sshd", Clase: "systemd", Salud: fleet.SaludServicio{
+			Tomada: ahora, Estado: fleet.EstadoCorriendo}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	pol := fleet.Politica{
+		Nombre: "revivir-el-que-no-existe", Principal: "curador", Cuando: fleet.CondServicioCaido,
+		Sobre: []string{"*"}, Servicio: "nombre-mal-escrito",
+		Hacer: []string{"systemctl", "restart", "nginx"}, Cooldown: 10 * time.Minute,
+	}
+	s.buscarPrincipal = registroQuePermiteSystemctl()
+	s.politicas = []fleet.Politica{pol}
+	if s.evaluarPolitica(pol, d, ahora) {
+		t.Error("actuó sobre un servicio que la máquina no enumera: la ausencia se tomó como caída")
+	}
+	if _, llego := s.ultimoDisparo.Load(pol.ClaveDeCooldown(d.ID)); llego {
+		t.Error("llegó al tramo de acción sobre un servicio que la máquina no enumera")
 	}
 }

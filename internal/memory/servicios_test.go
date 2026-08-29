@@ -712,3 +712,65 @@ func TestLaVistaUnicaDeSesionesTraeLasDosModalidades(t *testing.T) {
 		t.Errorf("la vista cruzó tenants: %d sesiones de otro proyecto", len(ajenas))
 	}
 }
+
+// LA MIGRACIÓN 39 CONSERVA LOS COOLDOWNS EXISTENTES Y PERMITE LOS NUEVOS.
+//
+// Recrear una tabla es la migración que más fácil pierde datos, y acá perder datos tiene un costo
+// concreto: un cooldown que desaparece es una política que puede actuar antes de tiempo, una vez,
+// justo después de un despliegue — que es cuando más cosas están disparando.
+//
+// Las dos mitades:
+//
+//  1. Lo que había sigue estando, con `alcance` vacío (son cooldowns de políticas de host).
+//  2. Dos políticas sobre servicios distintos de la MISMA máquina pueden coexistir, que es lo que
+//     la clave vieja impedía y lo que bloqueaba A44.
+//
+// Sabotaje que la hace fallar: cambiar el INSERT ... SELECT por un CREATE a secas (se pierden los
+// cooldowns), o dejar la PRIMARY KEY sin `alcance` (la segunda fila del par se rechaza).
+func TestLaMigracion39ConservaLosCooldownsYPermiteElAlcance(t *testing.T) {
+	e := newTestEngine(t)
+	ahora := time.Now().UTC().Truncate(time.Second)
+
+	// Un cooldown de política de HOST, como los que ya existían.
+	if err := e.MarcarDisparoDePolitica("purgar-disco", "dev-1", "", ahora); err != nil {
+		t.Fatal(err)
+	}
+	// Y DOS de servicio sobre la misma máquina: es lo que la clave vieja no admitía.
+	if err := e.MarcarDisparoDePolitica("revivir", "dev-1", "nginx", ahora); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MarcarDisparoDePolitica("revivir", "dev-1", "postgres", ahora.Add(time.Minute)); err != nil {
+		t.Fatalf("dos servicios de la misma máquina no pudieron tener cooldown propio: %v", err)
+	}
+
+	todos, err := e.CooldownsDePoliticas()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := todos["purgar-disco"]["dev-1\x00"]; !got.Equal(ahora) {
+		t.Errorf("el cooldown de la política de host se perdió o cambió de clave: %v", todos["purgar-disco"])
+	}
+	revivir := todos["revivir"]
+	if len(revivir) != 2 {
+		t.Fatalf("la política de servicio guardó %d cooldowns de 2: los dos servicios comparten fila", len(revivir))
+	}
+	if !revivir["dev-1\x00nginx"].Equal(ahora) {
+		t.Errorf("el cooldown de nginx no está o cambió: %v", revivir)
+	}
+	if !revivir["dev-1\x00postgres"].Equal(ahora.Add(time.Minute)) {
+		t.Errorf("el cooldown de postgres no está o lo pisó el de nginx: %v", revivir)
+	}
+
+	// Y el UPSERT sigue siendo por la clave completa: volver a marcar nginx no toca a postgres.
+	despues := ahora.Add(10 * time.Minute)
+	if err := e.MarcarDisparoDePolitica("revivir", "dev-1", "nginx", despues); err != nil {
+		t.Fatal(err)
+	}
+	todos, _ = e.CooldownsDePoliticas()
+	if !todos["revivir"]["dev-1\x00nginx"].Equal(despues) {
+		t.Error("el upsert no actualizó el cooldown de nginx")
+	}
+	if !todos["revivir"]["dev-1\x00postgres"].Equal(ahora.Add(time.Minute)) {
+		t.Error("marcar nginx pisó el cooldown de postgres: la clave del upsert no lleva el alcance")
+	}
+}

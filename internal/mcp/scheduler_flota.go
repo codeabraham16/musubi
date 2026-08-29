@@ -69,6 +69,7 @@ func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 			Cuando:    fleet.Condicion(pc.When),
 			Supera:    pc.Threshold,
 			Sobre:     pc.Devices,
+			Servicio:  pc.Service,
 			Hacer:     pc.Run,
 			Cooldown:  time.Duration(pc.CooldownMinutes * float64(time.Minute)),
 		}
