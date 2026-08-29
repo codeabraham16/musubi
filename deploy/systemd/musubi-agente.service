@@ -1,0 +1,68 @@
+# musubi-agente.service — la unidad del agente de flota (Tier A).
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# ESTE ARCHIVO ES LA REFERENCIA QUE UNA PRUEBA CUSTODIA (A54)
+#
+# `TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA` compara lo que el agente declara que va a
+# tocar (cmd/musubi/blindaje.go) contra lo que esta unidad y sus drop-ins conceden. Si mañana el
+# agente gana una capacidad que necesita una ruta nueva, la suite se pone roja ACÁ — que es la
+# mitad de A54 que faltaba: hasta ahora eso se descubría en producción, en silencio y dos días
+# después.
+#
+# NO ES UNA COPIA DE LA QUE CORRE. La instalada puede diferir en rutas y en el usuario; ésta es
+# la que la prueba compara y la que un despliegue nuevo usa de base. Antes de copiarla a una
+# máquina, mirá lo que ya hay ahí.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# EL BLINDAJE SE VERIFICA, NO SE SUPONE
+#
+#   musubi agent --revisar-blindaje
+#
+# Corrido ADENTRO del confinamiento prueba cada ruta tocándola de verdad y dice la línea exacta
+# que falta. Desde un shell normal sale todo en verde y no prueba nada: tu shell no tiene
+# ProtectHome. `musubi agent --help` trae la invocación con systemd-run.
+#
+[Unit]
+Description=Agente de flota Musubi (Tier A) — mide este host y late contra el cerebro
+Documentation=file:///home/musubi/musubi-alertas/specs
+After=network-online.target musubi-brain.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=musubi
+Group=musubi
+
+# El cerebro es LOCAL: el agente no sale a la red. Si algún día el cerebro se muda, esta es la
+# única línea que cambia.
+Environment=MUSUBI_BRAIN_URL=http://127.0.0.1:7717
+
+# EL TOKEN DEL DISPOSITIVO, QUE NO ES EL DE NINGUNA PERSONA.
+# Son dos almacenes de credenciales que no se cruzan — ni siquiera comparten el nombre de la
+# variable de entorno (MUSUBI_DEVICE_TOKEN vs MUSUBI_TOKEN), a propósito. Este token sirve
+# ÚNICAMENTE para POST /fleet/heartbeat: no abre /mcp ni con viento a favor.
+# Entra por archivo (modo 600) para poder rotarlo sin editar la unidad.
+ExecStart=/bin/sh -c "MUSUBI_DEVICE_TOKEN=$(cat /home/musubi/.config/musubi-agente/token) exec /usr/local/bin/musubi agent"
+
+Restart=always
+RestartSec=15
+
+# EL BLINDAJE, Y LA FRASE QUE ESTUVO ACÁ Y ERA MENTIRA.
+#
+# Decía: «El agente sólo LEE /proc y habla con loopback. Nada de esto le hace falta.» Fue cierto
+# hasta que A42 le dio un trabajo nuevo —enumerar contenedores— y dejó de serlo sin que nadie
+# volviera a leerla. `podman ps` NO es una lectura: abre su base de estado en escritura y toma
+# media docena de locks. Costó dos días, y esta línea es parte de por qué: describía un agente
+# que ya no existía, con tanta seguridad que la unidad nunca fue sospechosa.
+#
+# Lo que el agente necesita HOY no se supone: se declara en cmd/musubi/blindaje.go y se comprueba
+# con `musubi agent --revisar-blindaje`, y una prueba compara las dos cosas. Las excepciones van
+# en drop-ins (ver musubi-agente-contenedores.conf), nunca acá.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/musubi/.config/musubi-agente
+
+[Install]
+WantedBy=multi-user.target

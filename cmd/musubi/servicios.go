@@ -209,6 +209,14 @@ func enumerarFuente(cli string, args ...string) (salida string, hayFuente bool, 
 	case errors.Is(err, exec.ErrNotFound):
 		return "", false, nil
 	default:
-		return "", true, fmt.Errorf("%s está instalado y no se pudo consultar: %w", cli, err)
+		// EL MENSAJE TIENE QUE NOMBRAR AL SOSPECHOSO QUE NADIE MIRA (A54). Un `podman ps` que
+		// sale con código 1 no dice «permiso denegado» en ningún lado, y la unidad de systemd
+		// —que está bien escrita para el agente que describe— es lo último en lo que alguien
+		// piensa. Costó dos días la primera vez. El error apunta al verificador en vez de
+		// repetir acá una lista de rutas que se quedaría vieja.
+		return "", true, fmt.Errorf("%s está instalado y no se pudo consultar: %w"+
+			" · si esto corre bajo systemd, revisá el blindaje de la unidad con"+
+			" `musubi agent --revisar-blindaje`: enumerar contenedores NO es una lectura"+
+			" y ProtectHome/ProtectSystem lo prohíben sin un drop-in", cli, err)
 	}
 }

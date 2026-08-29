@@ -38,7 +38,6 @@
 | A45 | **`go test -race ./...` no termina en 30 minutos** | No es un deadlock ni una carrera: **la corrida completa reporta CERO `DATA RACE`**. Es que `modernc.org/sqlite` —el SQLite en Go puro que evita cgo— corre ~10× más lento bajo el detector, y **cada prueba abre una base nueva que aplica las 37 migraciones**. Medido: una sola base cuesta **13,5 s** bajo `-race`; con cientos de pruebas, `internal/mcp` e `internal/memory` se comen el `-timeout 30m` parseando SQL (`runnable` dentro de `applyMigrations`, no bloqueado). **Empeora sola con cada migración nueva, y este trabajo agregó dos**: medido contra un worktree limpio de HEAD, 12,7 s → 13,5 s, un **6 %**. Casi todo el costo es anterior. La CI usa `-race` y nadie lo miraba porque `go test ./...` sin él pasa entero. Lo que se necesita es que las pruebas **compartan una base migrada** (una plantilla que se copia) en vez de migrar de cero cada una. | **sin asignar** |
 | A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. | **sin asignar** (fase 1 de la maqueta) |
 | A56 | **El principal del panel no tiene concesión de flota, así que ve el inventario y no el estado** | `panel-central` está en `principals.yaml` con `read: all` y SIN sección `fleet:`. Las capacidades de flota no se derivan del rol a propósito (si no, un token de lectura sería una puerta trasera al eje de capacidades entero), así que el panel lista las máquinas y recibe `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios. **No es un bug: es la compuerta funcionando y nadie se la concedió.** Se cierra agregándole `fleet: {metrics: ["*"]}` — y NADA más: ni `exec`, ni `screen`, ni `shell`. Un panel mira; una credencial que vive en la configuración de otro servicio es exactamente la que no querés que pueda ejecutar nada. | **acción del operador** (escribir en `principals.yaml` está fuera de lo que puede hacer el asistente) |
-| A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
 | A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
 
@@ -65,6 +64,72 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (2) · A54 — el agente declara lo que va a tocar, y el despliegue lo verifica.**
+
+Lo que quedaba abierto no era el arreglo de contenedores —ése ya estaba— sino que **nada ataba
+una capacidad del agente a las rutas que necesita**. La próxima iba a repetir la forma exacta: la
+función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien.
+
+- **La declaración** (`cmd/musubi/blindaje.go`): cada necesidad lleva ruta, modo de acceso, si es
+  opcional, la directiva exacta de systemd que la concede, y —el campo por el que existe— **el
+  SÍNTOMA**. A54 costó dos días porque el fallo no dijo «permiso denegado» en ningún lado: fue un
+  `podman ps` con código 1. La ruta se deduce de un strace; el síntoma es lo que alguien tiene
+  delante *dos días antes* de pensar en correr un strace.
+- **Se declara lo que ESTA máquina va a hacer.** Sin podman ni docker instalados, esas rutas no
+  son una necesidad — y es la MISMA señal que decide si el trabajo corre (`hayEnPath`, el criterio
+  de `enumerarFuente`) la que decide si su blindaje importa, no dos listas que se desincronicen.
+  Una necesidad de más manda a alguien a abrir un permiso que nadie usa.
+- **El verificador** (`musubi agent --revisar-blindaje`): prueba cada ruta **tocándola de verdad**.
+  No alcanza con `access(W_OK)` ni con mirar permisos — el confinamiento de systemd es un MONTAJE
+  de sólo lectura y los bits del inodo siguen diciendo que se puede. El único chequeo que ve un
+  `ReadWritePaths` faltante es crear un archivo y borrarlo, que es lo que `podman ps` hace y lo
+  que fallaba. No pide token: un diagnóstico que exige credencial es inútil justo cuando hace falta.
+- **TRES desenlaces y no dos.** «Falta» y «no se puede» tienen arreglos distintos —un `mkdir`
+  contra una línea de systemd— y la primera versión los mezclaba: **reproduje el bug de A54
+  mientras lo arreglaba**, con el verificador echándole la culpa al blindaje por una ruta que
+  simplemente no existía. Un verificador así manda a alguien a editar una unidad que está bien.
+- **Verificado contra la máquina real.** Corrido bajo `ProtectHome=read-only` en `musubi-server`,
+  las tres rutas dieron `read-only file system` y el informe nombró **las tres líneas exactas que
+  el drop-in ya tiene** — derivadas de forma independiente. Fuera del confinamiento sale todo en
+  verde, y eso está dicho en la ayuda: correrlo desde un shell normal no prueba nada.
+- **Casi repito el bug adentro del arreglo.** La primera versión resolvía el directorio de
+  runtime leyendo `XDG_RUNTIME_DIR`. Medido contra el agente real: el proceso tiene `HOME` y
+  `USER` y **NO tiene `XDG_RUNTIME_DIR`** — systemd sólo la exporta en unidades de USUARIO, y el
+  agente es una unidad de sistema con `User=`. Podman lo sabe y cae a `/run/user/<uid>`, que es
+  por qué encuentra sus locks igual y por qué el drop-in tuvo que conceder esas rutas. Leyendo
+  sólo la variable, el verificador declaraba **nada** para `/run` en la única máquina donde
+  importa: salía en verde sin mirar las tres rutas que rompieron A42. Ahora busca donde busca
+  podman, y tiene su prueba y su sabotaje.
+- **La guarda estructural**: `TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA` compara la
+  declaración contra la unidad y sus drop-ins. **De acá en más, una capacidad nueva sin su ruta
+  rompe la SUITE, no la producción.** Y la guarda corre en las dos direcciones: una ruta que la
+  unidad concede y el agente no pide también falla, porque un permiso que sobrevive a la
+  capacidad que lo justificaba es un agujero que nadie va a cerrar — nadie se acuerda de para qué
+  estaba.
+- **Y no da consejo donde no aplica.** Fuera de Linux el verificador se calla y sale con 0:
+  `ReadWritePaths` es una directiva de systemd, y en un Windows —donde corren dos de las tres
+  máquinas de esta flota— habría emitido `ReadWritePaths=C:\Users\gio\...`, un consejo con
+  forma de respuesta que no aplica a nada. Dar una instrucción equivocada con confianza es el
+  modo de falla que A54 documenta; hacerlo adentro del arreglo sería el colmo.
+- **La unidad base entró al repo.** `deploy/systemd/musubi-agente.service` sólo existía en el
+  servidor: el blindaje del que el agente depende no estaba versionado, así que la guarda no tenía
+  contra qué comparar. Se trajo del servidor (esa dirección es la segura) tras revisar que no
+  lleva un solo secreto — la unidad nombra la RUTA del archivo del token, nunca su valor.
+- **La frase que era mentira, corregida donde vive.** La unidad decía «El agente sólo LEE /proc
+  y habla con loopback. Nada de esto le hace falta.» Fue cierta hasta A42 y después no, sin que
+  nadie volviera a leerla — y es parte de por qué la unidad nunca fue sospechosa: describía con
+  seguridad un agente que ya no existía. La copia del repo ahora cuenta lo que pasó y remite al
+  verificador. **La unidad instalada conserva el texto viejo**: el drop-in ya cubre lo funcional
+  y editar una unidad viva por un comentario no vale el riesgo — queda como cambio cosmético para
+  el próximo despliegue del agente.
+- Y el error de enumeración ahora nombra al sospechoso: un `podman ps` que falla manda a
+  `musubi agent --revisar-blindaje` en vez de dejar el mensaje que costó dos días.
+
+**Doce sabotajes ejecutados.** Uno no rompió nada la primera vez y **no fue debilidad de la
+prueba sino mía**: gofmt había alineado la clave del struct y mi reemplazo no coincidió, así que
+el sabotaje nunca llegó a aplicarse. Aplicado bien, falla.
+
 
 **2026-08-29 · A38, A39, A49, A50, A51 y A52 — seis cabos de la misma familia.**
 Todos eran lo mismo: código en producción cuyo modo de falla NO se veía desde

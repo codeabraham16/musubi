@@ -84,6 +84,11 @@ func runAgent(args []string) {
 			// Un solo latido y sale. Es lo que necesita un cron/systemd timer, y lo que hace
 			// verificable la instalación sin dejar un proceso colgado.
 			unaVez = true
+		case "--revisar-blindaje":
+			// SALE ANTES DE PEDIR CREDENCIAL. Verificar el blindaje es lo que se hace ANTES de
+			// tener el agente andando —o cuando dejó de andar—, y exigirle un token a un
+			// diagnóstico lo vuelve inútil justo cuando hace falta.
+			os.Exit(revisarBlindajeDelAgente())
 		case "--help", "-h":
 			ayudaAgent()
 			return
@@ -288,6 +293,7 @@ func ayudaAgent() {
 	fmt.Println()
 	fmt.Println(cCyan("Uso:"))
 	fmt.Println("  musubi agent [--brain <url>] [--interval <segundos>] [--once]")
+	fmt.Println("  musubi agent --revisar-blindaje")
 	fmt.Println()
 	fmt.Println(cCyan("Entorno:"))
 	fmt.Printf("  %s  token del dispositivo (lo devuelve musubi_fleet_enroll, UNA sola vez)\n", cBold(envToken))
@@ -297,6 +303,16 @@ func ayudaAgent() {
 	fmt.Println("  · El token del dispositivo NO sirve para /mcp: no da acceso a la memoria.")
 	fmt.Println("  · Si el cerebro responde 401, el dispositivo fue dado de baja y el agente se detiene.")
 	fmt.Println("  · Con --once late una vez y sale (para cron o systemd timer).")
+	fmt.Println("  · --revisar-blindaje prueba, tocándolas de verdad, las rutas que este agente")
+	fmt.Println("    necesita en ESTA máquina, y dice la línea de systemd que falta. No pide token.")
+	fmt.Println("    " + cBold("Correlo adentro del confinamiento o no prueba nada") + ": desde tu shell")
+	fmt.Println("    va a salir todo en verde porque tu shell no tiene ProtectHome. Así:")
+	fmt.Println("      systemd-run -p ProtectHome=read-only -p ProtectSystem=strict \\")
+	fmt.Println("        --uid=musubi --pty --wait /usr/local/bin/musubi agent --revisar-blindaje")
+	fmt.Println("    Agregale los -p que la unidad tenga de más; los que importan son los que")
+	fmt.Println("    tocan el MONTAJE (Protect*, ReadWritePaths, PrivateTmp), que son los que")
+	fmt.Println("    hacen que una ruta escribible deje de serlo:")
+	fmt.Println("      systemctl cat musubi-agente.service | grep -E 'Protect|ReadWrite|Private'")
 }
 
 // tomarMuestra devuelve la telemetría del host, o nil si este sistema operativo no tiene colector
