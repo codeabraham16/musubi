@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El motor de diseño pasa de traer material a ELEGIRLO** (Musubi Renaissance · F4). Tres defectos
+  medidos el 2026-08-29, los tres del mismo origen: el brief entregaba lo que salía del ranking, sin
+  criterio propio.
+  - **El método sigue al pedido.** El hash del bloque de método era IDÉNTICO para un ERP de
+    escritorio, un juego móvil, una landing y un gráfico de series — no respondía nada sobre el
+    pedido. Ahora el pool se parte en dos salidas (`particionarPorPrefijo`): el método va ordenado
+    por relevancia y el resto al corpus. El vector de la consulta ya estaba calculado, así que **no
+    cuesta una llamada más** al embebedor.
+  - **Sólo donde hay puntaje.** Por FTS el método sigue saliendo por importancia: un match léxico no
+    es una medida de relevancia, y usarlo para elegir hacía desaparecer tarjetas buenas en silencio.
+    `method_source` declara cuál se usó: `relevancia` | `importancia` | `static`.
+  - **Los artículos completos vuelven a entrar.** 1.438 micro-tarjetas contra 268 artículos los
+    desplazaban SIEMPRE — medido: en un pool de 58 salieron 58 tarjetas y 0 artículos, con toda la
+    profundidad del acervo del otro lado. Ahora el pool mira hasta 300 candidatos (`designPoolMax`,
+    por encima de `maxLimit` a propósito: uno acota lo que se puede PEDIR, el otro lo que el motor
+    MIRA) y `elegirCorpus` les reserva lugar sin dar vuelta la prioridad de lo curado.
+  - **El top-k deja de ser k variaciones de lo mismo.** Para «tabla densa con filtros» servía
+    colapsar filas, filtros post-búsqueda, filtros drill-down y cortina de dos niveles: cuatro veces
+    la misma idea en cuatro de los seis lugares. `diversificar` es MMR con solape léxico, model-free
+    y determinista.
+  - Dos cosas que los propios tests agarraron: en modo semántico **no hay fallback por importancia**
+    (caer ahí volvía a meter las tarjetas que el piso acababa de descartar, deshaciendo en silencio
+    la decisión recién tomada); y `TestDesignMethodExcluidoDelCorpus` **venía pasando por
+    coincidencia** desde F1+F2 — afirmaba que el método aparecía en `Principles` y seguía verde sólo
+    porque el núcleo estático repite la misma frase que la tarjeta sembrada.
+  - ⚠ **La magnitud de la mejora no está medida.** M3 y M8 dependen del embebedor y del acervo
+    reales; el banco corre sobre FTS, donde la selección deliberadamente no se aplica. Se mide con la
+    sonda después de desplegar.
+
 ### Added
 - **El motor de diseño ya sabe cuándo NO sabe** (Musubi Renaissance · F3). Medido el 2026-08-29:
   «receta de empanadas» devolvía seis patrones de diseño con `degraded` apagado, igual que un

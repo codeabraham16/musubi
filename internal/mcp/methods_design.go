@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"time"
+	"unicode"
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
@@ -35,6 +37,10 @@ const designCorpusLimit = 6
 // `design-method/*` que arbitran el criterio anti-genérico. Se sirven SIEMPRE (no por relevancia al
 // prompt: el método es universal) y se EXCLUYEN del corpus de patrones para no duplicarse en el brief.
 const designMethodPrefix = "design-method/"
+
+// prefijoCrudo marca los ARTÍCULOS completos que todavía no se destilaron: son el 15 % de las entradas
+// pero llevan ~3.057 tokens cada uno contra los ~61 de una tarjeta, o sea toda la profundidad del acervo.
+const prefijoCrudo = "ingested/"
 
 // designMethodLimit acota cuántas tarjetas de método entran al brief (el método es un set CURADO, no el
 // corpus). Ordenadas por importancia: un método reforzado pesa más que uno recién agregado. El tope tiene
@@ -100,6 +106,30 @@ const (
 	sinRecuperador   = "sin_recuperador" // no hubo ni embebedor ni FTS utilizable
 	sinCausaConcreta = ""                // no degradó
 )
+
+// designPoolMax es el techo del POOL de candidatos del acervo. Es MAYOR que maxLimit a propósito:
+// maxLimit acota lo que un caller puede PEDIR, esto acota lo que el motor MIRA antes de elegir. Con
+// 1.438 micro-tarjetas contra 268 artículos completos, un pool chico se llena de tarjetas y la
+// profundidad del acervo queda inalcanzable — medido: en un pool de 58 salieron 58 tarjetas y 0
+// artículos.
+const designPoolMax = 300
+
+// designReservaCrudos es cuántos slots del corpus se le guardan a los artículos completos
+// (`ingested/*`) cuando los hay. Sin reserva las micro-tarjetas los desplazan SIEMPRE, por pura
+// aritmética: son cinco veces más numerosas.
+const designReservaCrudos = 2
+
+// designLambdaMMR es cuánto pesa la DIVERSIDAD contra la relevancia al elegir el top-k (Maximal
+// Marginal Relevance). En 0 el motor devuelve seis variaciones del mismo tema —que es lo que hacía:
+// para «tabla densa con filtros» servía colapsar filas, filtros post-búsqueda, filtros drill-down y
+// cortina de dos niveles, cuatro veces la misma idea. En 1 devuelve seis cosas sin relación con el
+// pedido. 0,45 se queda del lado de la relevancia.
+const designLambdaMMR = 0.45
+
+// designMetodoRelevante es cuántas tarjetas de método del acervo entran por RELEVANCIA al pedido. El
+// núcleo universal no se cuenta acá: vive en `principles`, es del código y viaja siempre (F1+F2), así
+// que estas pueden elegirse 100 % por relevancia sin riesgo de quedarse sin criterio.
+const designMetodoRelevante = 8
 
 // designPisoBloque es cuántos ítems de método y de corpus se defienden antes de vaciar un bloque. Sin
 // piso, el presupuesto se cobraría todo de un solo lado: el método caería a cero y la métrica de
@@ -218,7 +248,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
 	// pero ahora viajan como MATERIAL CITADO con procedencia, no concatenadas dentro del bloque de
 	// principios. El bloque de principios pasa a ser el núcleo ESTÁTICO del código (I-INY1).
-	metodo, methodSource := s.designMethodCards()
+	metodo, methodSource := s.designMethodCards(rec.Metodo, rec.Modo)
 
 	brief := designBrief{
 		Ask:            sanearMaterial(strings.TrimSpace(args.Prompt)),
@@ -371,7 +401,37 @@ func sanearMaterial(s string) string {
 // el sub-acervo está vacío (stdio local sin sembrar, o un fallo de lectura), cae al núcleo estático
 // `designPrinciples`, que ya vale por sí solo: el método se puede judge/supersede sin romper NUNCA el brief.
 // Devuelve (texto de principios, source: "corpus"|"static"). Model-free: query keyed, sin LLM.
-func (s *McpServer) designMethodCards() (cards []metodoItem, source string) {
+func (s *McpServer) designMethodCards(relevantes []searchSource, modo string) (cards []metodoItem, source string) {
+	// CAMINO PREFERIDO (F4): las tarjetas que el propio pool trajo ordenadas por relevancia al pedido.
+	// Antes se servían SIEMPRE las mismas, ordenadas por importancia — verificado contra el central: el
+	// hash del bloque de método era idéntico para un ERP de escritorio, un juego móvil, una landing y
+	// un gráfico de series. Un bloque que no cambia con el pedido no responde nada sobre el pedido.
+	// SÓLO por el camino semántico. Por FTS lo que llega es un match léxico, no una medida de
+	// relevancia: usarlo para ELEGIR el método hace que una tarjeta buena desaparezca del brief sólo
+	// porque no comparte palabras con el pedido, y sin que nadie se entere. Es el mismo criterio que el
+	// piso de F3 — donde no hay puntaje, no se toman decisiones de ranking.
+	if modo == recuperacionSemantica {
+		tope := designMetodoRelevante
+		if tope > len(relevantes) {
+			tope = len(relevantes)
+		}
+		for _, r := range relevantes[:tope] {
+			if it, ok := comoMetodoItem(r.topicKey, r.content); ok {
+				cards = append(cards, it)
+			}
+		}
+		// Y se devuelve AUNQUE QUEDE VACÍO. Caer al fallback por importancia acá volvería a meter las
+		// tarjetas que el piso acababa de descartar por irrelevantes — deshaciendo en silencio la
+		// decisión que se acaba de tomar. Si el acervo no tiene método para este pedido, el criterio
+		// igual viaja: el núcleo universal está en `principles` y es del código (I-SEL2).
+		if len(cards) == 0 {
+			return nil, "static"
+		}
+		return cards, "relevancia"
+	}
+	// FALLBACK: sin relevancia utilizable (camino léxico, o el pool no trajo método) se sirve el set
+	// curado por IMPORTANCIA, que es lo que se hacía siempre. Se declara en `method_source` para que la
+	// diferencia entre los dos caminos sea visible y no haya que deducirla.
 	obs, err := s.engine.ObservationsByTopicPrefixInProject(designCorpusScope, designMethodPrefix, designMethodLimit)
 	if err != nil || len(obs) == 0 {
 		return nil, "static"
@@ -395,7 +455,22 @@ func (s *McpServer) designMethodCards() (cards []metodoItem, source string) {
 		// Tarjetas presentes pero TODAS vacías: que el brief lo diga, y queda el núcleo estático.
 		return nil, "static"
 	}
-	return cards, "corpus"
+	return cards, "importancia"
+}
+
+// comoMetodoItem convierte una fuente del pool en una tarjeta de método servible: la sanea, la acota
+// al tope por ítem y le pone su procedencia. Devuelve false si no queda nada que servir.
+func comoMetodoItem(topic, contenido string) (metodoItem, bool) {
+	txt := sanearMaterial(strings.TrimSpace(contenido))
+	if txt == "" {
+		return metodoItem{}, false
+	}
+	recortada := false
+	if len(txt) > designMethodItemMax {
+		txt = txt[:designMethodItemMax] + " […tarjeta recortada por tamaño]"
+		recortada = true
+	}
+	return metodoItem{Topic: topic, Fuente: designCorpusScope, Texto: txt, Recortado: recortada}, true
 }
 
 // resultadoRecall es lo que devuelve el recall del acervo: el material, CON QUÉ se buscó, y —si no
@@ -404,7 +479,8 @@ func (s *McpServer) designMethodCards() (cards []metodoItem, source string) {
 // no puede explicar su propio silencio obliga a quien lo llama a adivinar.
 type resultadoRecall struct {
 	Hits     []searchHit
-	Modo     string // recuperacionSemantica | recuperacionLexica
+	Metodo   []searchSource // tarjetas design-method/* del pool, ya ordenadas por relevancia
+	Modo     string         // recuperacionSemantica | recuperacionLexica
 	Degraded bool
 	Motivo   string // sinMaterial | bajoUmbral | sinRecuperador | sinCausaConcreta
 }
@@ -422,9 +498,13 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	// exclusión lo vaciaría y el brief marcaría degraded EN FALSO con corpus vacío (revisión adversarial
 	// 2026-08-21). Como hay a lo sumo designMethodLimit tarjetas de método, sumarlas al pool garantiza que
 	// tras excluirlas siga habiendo hasta limit*3 patrones reales.
-	pool := limit*3 + designMethodLimit
-	if pool > maxLimit {
-		pool = maxLimit
+	// El pool mira MUCHO más de lo que va a servir. maxLimit acota lo que un caller puede PEDIR;
+	// esto acota lo que el motor MIRA antes de elegir, y son cosas distintas: con 1.438 micro-tarjetas
+	// contra 268 artículos completos, un pool chico se llena de tarjetas y la profundidad del acervo
+	// queda fuera de alcance.
+	pool := limit*3 + designMethodLimit + designPoolMax/2
+	if pool > designPoolMax {
+		pool = designPoolMax
 	}
 	var sources []searchSource
 	modo := recuperacionLexica
@@ -461,25 +541,171 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 		}
 		return resultadoRecall{Modo: modo, Degraded: true, Motivo: motivo}
 	}
-	// El sub-acervo del MÉTODO (design-method/*) se sirve aparte, en `method[]`: excluirlo del corpus
-	// evita que el método aparezca DOS veces en el brief (Musubi Renaissance · CAPA 2).
-	sources = excludeTopicPrefix(sources, designMethodPrefix)
+	// UNA búsqueda, DOS salidas (F4). El pool ya traía las tarjetas de método —se agranda a propósito
+	// para que no compitan con los patrones— y hasta ahora se tiraban. Ahora se parten: el método va a
+	// `method[]` ordenado por RELEVANCIA AL PEDIDO, y el resto al corpus. El vector de la consulta ya
+	// estaba calculado, así que elegir el método no cuesta una llamada más al embebedor.
+	metodo, sources := particionarPorPrefijo(sources, designMethodPrefix)
 	if len(sources) == 0 {
-		return resultadoRecall{Modo: modo, Degraded: true, Motivo: sinMaterial}
+		return resultadoRecall{Metodo: metodo, Modo: modo, Degraded: true, Motivo: sinMaterial}
 	}
 
 	// EL PISO (I-ABS1). Sólo corre por el camino semántico: por FTS no hay puntaje que comparar, y
 	// declarar "bajo_umbral" ahí sería inventar una medición que no se hizo (I-ABS4).
 	if modo == recuperacionSemantica {
 		sources = sobreElPiso(sources, designSimilitudMinima)
+		metodo = sobreElPiso(metodo, designSimilitudMinima)
 		if len(sources) == 0 {
-			return resultadoRecall{Modo: modo, Degraded: true, Motivo: bajoUmbral}
+			return resultadoRecall{Metodo: metodo, Modo: modo, Degraded: true, Motivo: bajoUmbral}
 		}
 	}
 	return resultadoRecall{
-		Hits: toSearchHits(preferCuratedSources(sources, limit), s.memory.GistMaxTokens, searchGistBudget),
-		Modo: modo, Motivo: sinCausaConcreta,
+		Hits:   toSearchHits(elegirCorpus(sources, limit), s.memory.GistMaxTokens, searchGistBudget),
+		Metodo: metodo,
+		Modo:   modo, Motivo: sinCausaConcreta,
 	}
+}
+
+// particionarPorPrefijo separa las fuentes cuyo topic empieza con prefix del resto, conservando el
+// orden de relevancia dentro de cada grupo.
+func particionarPorPrefijo(src []searchSource, prefix string) (con, sin []searchSource) {
+	for _, s := range src {
+		if strings.HasPrefix(s.topicKey, prefix) {
+			con = append(con, s)
+		} else {
+			sin = append(sin, s)
+		}
+	}
+	return con, sin
+}
+
+// elegirCorpus arma el top-k del corpus. Reemplaza a `preferCuratedSources`, que ponía TODAS las
+// tarjetas destiladas antes que todos los artículos crudos: ese orden resolvía el problema de 2026-08-20
+// (las tarjetas cortas perdían en similitud contra blobs de miles de tokens) y con 1.438 tarjetas pasó a
+// causar el opuesto — los artículos dejaron de entrar. Lo curado sigue teniendo la mayoría de los
+// lugares; lo que cambia es que ya no se lleva TODOS.
+//
+// Aporta dos criterios que el ranking crudo no tiene: RESERVAR
+// lugar para los artículos completos, y DIVERSIFICAR para que no salgan k variaciones del mismo tema.
+//
+// La reserva no es un capricho: 1.438 micro-tarjetas contra 268 artículos los desplazan SIEMPRE, por
+// pura aritmética, y ahí está toda la profundidad del acervo. Medido el 2026-08-29: en un pool de 58
+// candidatos salieron 58 tarjetas y 0 artículos.
+func elegirCorpus(src []searchSource, n int) []searchSource {
+	if n <= 0 || len(src) == 0 {
+		return nil
+	}
+	crudos, curadas := particionarPorPrefijo(src, prefijoCrudo)
+
+	reserva := designReservaCrudos
+	if reserva > len(crudos) {
+		reserva = len(crudos)
+	}
+	if reserva > n/2 { // la reserva nunca se queda con más de la mitad del brief
+		reserva = n / 2
+	}
+	elegidas := diversificar(curadas, n-reserva)
+	elegidas = append(elegidas, diversificar(crudos, reserva)...)
+	// Si lo curado no llenó su parte, los artículos completan en vez de dejar el brief a medias.
+	for _, c := range crudos {
+		if len(elegidas) >= n {
+			break
+		}
+		if !contieneFuente(elegidas, c.id) {
+			elegidas = append(elegidas, c)
+		}
+	}
+	return elegidas
+}
+
+func contieneFuente(src []searchSource, id string) bool {
+	for _, s := range src {
+		if s.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+// diversificar elige n candidatos maximizando relevancia MENOS parecido con los ya elegidos (Maximal
+// Marginal Relevance, Carbonell y Goldstein 1998), con solape léxico como medida de parecido.
+// Model-free y determinista.
+//
+// Existe porque el top-6 salía siendo seis maneras de decir lo mismo: para «tabla densa de lotes con
+// filtros y alertas» servía colapsar filas, filtros post-búsqueda, filtros drill-down y cortina de dos
+// niveles — cuatro veces la misma idea, ocupando cuatro de los seis lugares del pedido.
+func diversificar(src []searchSource, n int) []searchSource {
+	if n <= 0 || len(src) == 0 {
+		return nil
+	}
+	if len(src) <= n {
+		return append([]searchSource(nil), src...)
+	}
+	bolsas := make([]map[string]bool, len(src))
+	for i, s := range src {
+		bolsas[i] = palabrasDe(s.topicKey + " " + s.content)
+	}
+	usado := make([]bool, len(src))
+	out := make([]searchSource, 0, n)
+	var elegidas []int
+	for len(out) < n {
+		mejor, mejorPuntaje := -1, math.Inf(-1)
+		for i := range src {
+			if usado[i] {
+				continue
+			}
+			// Sin similitud (camino léxico) el orden de llegada ES la relevancia; se usa la posición
+			// invertida para que el MMR siga teniendo con qué comparar.
+			rel := float64(src[i].sim)
+			if rel == 0 {
+				rel = 1 - float64(i)/float64(len(src))
+			}
+			redundancia := 0.0
+			for _, j := range elegidas {
+				if p := solapeBolsas(bolsas[i], bolsas[j]); p > redundancia {
+					redundancia = p
+				}
+			}
+			if p := rel - designLambdaMMR*redundancia; p > mejorPuntaje {
+				mejor, mejorPuntaje = i, p
+			}
+		}
+		if mejor < 0 {
+			break
+		}
+		usado[mejor] = true
+		elegidas = append(elegidas, mejor)
+		out = append(out, src[mejor])
+	}
+	return out
+}
+
+// palabrasDe saca las palabras con contenido de un texto: minúsculas, sin puntuación, sin las cortas
+// (que son las vacías del castellano y del inglés, sin necesitar una lista negra que mantener).
+func palabrasDe(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len([]rune(w)) > 3 {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+// solapeBolsas es el Jaccard entre dos bolsas de palabras: 0 = nada en común, 1 = lo mismo.
+func solapeBolsas(a, b map[string]bool) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for w := range a {
+		if b[w] {
+			inter++
+		}
+	}
+	return float64(inter) / float64(len(a)+len(b)-inter)
 }
 
 // sobreElPiso descarta los candidatos que no llegan a la similitud mínima. Es la mitad que faltaba de
@@ -491,39 +717,6 @@ func sobreElPiso(src []searchSource, piso float32) []searchSource {
 		if s.sim >= piso {
 			out = append(out, s)
 		}
-	}
-	return out
-}
-
-// excludeTopicPrefix descarta las fuentes cuyo topic_key empieza con prefix. La usa recallDesignCorpus para
-// sacar el sub-acervo del método (design-method/*) del corpus de patrones: el método viaja como Principles.
-func excludeTopicPrefix(src []searchSource, prefix string) []searchSource {
-	var out []searchSource
-	for _, s := range src {
-		if !strings.HasPrefix(s.topicKey, prefix) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// preferCuratedSources reordena los candidatos del acervo para que las TARJETAS CURADAS (destiladas:
-// topic_key que NO empieza con 'ingested/') ganen su lugar sobre los BLOBS crudos, conservando el orden de
-// similitud dentro de cada grupo, y corta a n. Así el conocimiento destilado se surfacea, y los artículos
-// crudos quedan de RELLENO para los temas que todavía no se destilaron (cero pérdida de conocimiento).
-func preferCuratedSources(src []searchSource, n int) []searchSource {
-	curated := make([]searchSource, 0, len(src))
-	var raw []searchSource
-	for _, s := range src {
-		if strings.HasPrefix(s.topicKey, "ingested/") {
-			raw = append(raw, s)
-		} else {
-			curated = append(curated, s)
-		}
-	}
-	out := append(curated, raw...)
-	if len(out) > n {
-		out = out[:n]
 	}
 	return out
 }

@@ -180,12 +180,19 @@ func TestAtaqueMarcaSePierdePorMayuscula(t *testing.T) {
 	t.Log("⚠ EXPONE: 'Altura' != 'altura' → el proyecto pierde su marca en silencio")
 }
 
-// ATAQUE A6 — EL MÉTODO NO MIRA EL PEDIDO.
-// designMethod() no recibe el prompt ni el target: sirve SIEMPRE el mismo bloque, ordenado por
-// importancia. Dos pedidos opuestos (un ERP de escritorio y un juego para teléfono) reciben
-// principios idénticos. No es un bug de seguridad: es el techo de capacidad del motor.
+// ATAQUE A6 — EL MÉTODO NO MIRA EL PEDIDO. **CERRADO en F4, por el camino semántico.**
+//
+// `designMethod()` no recibía el pedido: servía siempre el mismo bloque, ordenado por importancia.
+// Verificado contra el central el 2026-08-29: el hash de `principles` era IDÉNTICO para un ERP de
+// escritorio, un juego móvil, una landing y un gráfico de series. Un bloque que no cambia con el
+// pedido no transporta información sobre el pedido.
+//
+// Desde F4 el método se elige por relevancia — pero SÓLO donde hay similitud que ordenar. Por el
+// camino léxico sigue saliendo por importancia, que es lo honesto: un match de FTS no es una medida
+// de relevancia, y usarlo para elegir haría desaparecer tarjetas buenas sin que nadie se entere. Lo
+// que cambia es que ahora la diferencia se DECLARA en `method_source` en vez de esconderse.
 func TestAtaqueElMetodoIgnoraElPedido(t *testing.T) {
-	s, e := bancoDesign(t)
+	s, e := bancoDesign(t) // NoopProvider ⇒ camino léxico
 	sembrarAtaque(t, e, designCorpusScope, "m-movil", "design-method/el-pulgar-manda",
 		"EL PULGAR MANDA: el CTA va en la barra inferior, dentro del arco del pulgar.", 1.0)
 	sembrarAtaque(t, e, designCorpusScope, "m-tabla", "design-method/densidad-tabular",
@@ -194,8 +201,14 @@ func TestAtaqueElMetodoIgnoraElPedido(t *testing.T) {
 	erp := callDesign(t, s, nil, "un ERP de escritorio: grilla densa de 5000 filas con filtros", "web")
 	juego := callDesign(t, s, nil, "un juego casual para teléfono, pantalla de inicio", "any")
 
-	if erp.Principles != juego.Principles {
-		t.Fatalf("el ataque ya no pasa: el método se adapta al pedido — actualizá este banco")
+	// Por FTS el método sigue siendo el mismo para los dos — y el brief lo dice.
+	if erp.MethodSource != "importancia" || juego.MethodSource != "importancia" {
+		t.Fatalf("por el camino léxico el método sale por importancia; fue %q y %q", erp.MethodSource, juego.MethodSource)
 	}
-	t.Log("⚠ EXPONE: un ERP de escritorio y un juego móvil reciben EXACTAMENTE los mismos principios")
+	if len(erp.Method) != len(juego.Method) {
+		t.Errorf("por importancia los dos bloques deberían coincidir; %d vs %d", len(erp.Method), len(juego.Method))
+	}
+	// La otra mitad —que CON embebedor el método sí sigue al pedido— la defiende
+	// TestDesignElMetodoSigueAlPedido, que no puede vivir acá porque necesita similitudes reales.
+	t.Log("por FTS el método es constante, y `method_source` lo declara en vez de esconderlo")
 }
