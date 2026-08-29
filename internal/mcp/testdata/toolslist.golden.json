@@ -1294,6 +1294,42 @@
       }
     },
     {
+      "name": "musubi_fleet_cronologia",
+      "description": "QUÉ LE PASÓ A UNA MÁQUINA en una ventana de tiempo: comandos, sesiones de pantalla y sesiones de shell CRUZADOS en una sola línea de tiempo, del más nuevo al más viejo. Es la pregunta que se hace de verdad cuando algo anda mal («¿qué le hicimos a este server el martes?») y que hoy exige llamar a tres bitácoras distintas y ordenarlas a mano. LA COMPUERTA ES POR HECHO Y NO POR LA LISTA: cada línea pide SU capacidad —`exec` los comandos, `screen:view` las pantallas, `shell` las shells—, así que dos personas distintas ven dos cronologías distintas de la misma máquina y ninguna de las dos ve de más. Un hecho que esta versión no sabe clasificar NO SE MUESTRA A NADIE y se cuenta aparte: el default es no mostrar. LAS POLÍTICAS APARECEN COMO LO QUE SON: su acción se encola en la misma bitácora que la de una persona (I16), con el principal de la política en la columna `principal`; no hay una columna que diga «esto fue automático», así que el origen se lee del nombre, por convención. LO QUE ESTA LISTA NO CONTIENE VIAJA EN LA RESPUESTA (`no_visto`), y hay que leerlo antes de concluir nada: no hay serie temporal (Musubi guarda el presente; la historia la guarda Prometheus), no hay logs del host, no hay historial de salud de servicios ni de disparos de política que no encolaron comando, y no hay contenido de sesiones. Una cronología vacía significa «no pasó nada DE LO QUE YO MIRO», no «no pasó nada». Los tres contadores se leen distinto: `truncado` = hubo más adentro de la ventana (subí `limite`), `ocultos_por_permiso` = hubo más y no los podés ver (pedí la capacidad), `sin_clasificar` = hubo más y este cerebro no sabe qué son (actualizalo). Una máquina REVOCADA conserva su cronología: la revocación es el kill-switch para operar, no para auditar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339 (ej: 2026-08-25T14:00:00Z). Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio: la cronología es de UNA máquina; para la vista por plano están musubi_fleet_log y musubi_fleet_sessions"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo (sin `desde`), mira las 24 h anteriores a ese momento: es lo que se pide investigando hacia atrás desde el incidente"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`: mandar las dos cosas es un error, no algo que se resuelva eligiendo una"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántos hechos devolver (default 50, máximo 300). Si el tope corta algo que estaba adentro de la ventana, `truncado` viene en true"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre de máquina existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
       "name": "musubi_fleet_probe",
       "description": "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente), Tier B por EXPOSICIÓN (bases gestionadas y appliances que no dan shell y sí publican un endpoint de métricas: se declaran en `.musubi/flota-exposicion.yaml` y eso ES lo que elige el transporte) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada — y sigue en null si dos sondeos caen dentro del CACHÉ de un endpoint de exposición (medido: ~62 s en una base gestionada), porque ahí tampoco hubo dos lecturas distintas. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
       "inputSchema": {

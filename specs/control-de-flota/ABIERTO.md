@@ -12,8 +12,9 @@
 > (gio despriorizó el watchdog externo, y una decisión tomada no puede seguir figurando como
 > pendiente).
 >
-> De 29 cabos abiertos al empezar el día quedan **18**, y **ninguno sin dueño o sin una razón
-> declarada de por qué no se hace**.
+> **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
+> la **fase 5** con su primer slice (**S13 · la cronología**), que dejó **A59** anotado el mismo día.
+> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -40,6 +41,7 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
+| A59 | **La bitácora no distingue el origen AUTOMÁTICO del manual** | Una política y una persona escriben en `device_commands` con la MISMA forma: no hay columna que diga «esto lo disparó una regla». La diferencia se lee del nombre del principal —`auto-heal` contra `gio`—, que es una CONVENCIÓN y no una garantía: nada impide que un principal de política se llame como una persona, y entonces la cronología y la bitácora dirían que alguien hizo a mano lo que hizo una regla. **Apareció al escribir la cronología (S13)**, que es donde más pesa: una línea de tiempo se lee como el relato de lo que pasó, y «auto-heal reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició cuarenta veces» son dos relatos distintos. **Hoy no rompe nada** porque los principales de política se declaran aparte en `config.yaml` y el dato es recuperable cruzando. Arreglarlo es una columna `origen` en la tabla, su migración y pasarla por las dos superficies. **Se revisa cuando haya más de un puñado de políticas, o el día que alguien lea la bitácora sin saber qué principales son reglas.** | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -66,6 +68,80 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (8) · FASE 5 ARRANCA — S13, la cronología: qué le pasó a UNA máquina, en UNA ventana.**
+
+Las tres bitácoras contestan «lo último que pasó en este plano». Ninguna contesta la pregunta que
+alguien hace de verdad cuando algo anda mal, que es **«¿qué le pasó a esta máquina?»** — y hoy eso
+se responde llamando a tres tools y ordenando a mano, o sea que no se responde. Al cruzarlas a mano
+se pierde justo lo que importa: ver que la sesión de shell de las 14:02 y el comando de las 14:03
+son la misma historia.
+
+Es la FUNDACIÓN de la fase 5 y no su final. Correlacionar «desde el martes anda lenta» con algo
+exige, primero, poder listar qué pasó el martes; lo que se cruza con la memoria y con el grafo de
+código se apoya en esto.
+
+- **SÓLO TABLAS APPEND-ONLY.** La tentación es armarla con todo lo que tenga fecha: `last_seen`,
+  `last_report`, `last_fired`. Ésas guardan el ÚLTIMO valor, así que una política que disparó
+  cuarenta veces el martes saldría como UNA línea con la hora de la última — y la cronología
+  mostraría, con toda confianza, un martes tranquilo. **Un renglón que resume cuarenta es peor que
+  un renglón ausente: el ausente se nota.** Las políticas SÍ están igual, porque su acción se
+  encola en la misma bitácora que la de una persona (I16).
+- **LA COMPUERTA VIAJA CON EL HECHO, no con la consulta.** Las tres fuentes tienen tres compuertas
+  (`exec`, `screen:view`, `shell`). Compuertar la lista entera con UNA falla en las DOS
+  direcciones: con la más laxa le muestra a alguien con `exec` quién tuvo un prompt; con la más
+  estricta le esconde sus propios comandos a quien puede correrlos.
+- **EL TIPO LO DECIDE LO QUE EL HECHO REVELA, no la tabla.** Una fila de `device_commands` cuyo
+  argv es `musubi:pantalla` revela que alguien miró una pantalla: pide `screen:view`.
+- **EL DEFAULT ES NO MOSTRAR.** Una operación interna que este cerebro no conoce no se le muestra a
+  nadie, ni al que tenga todo, y se cuenta aparte. Si el default fuera `exec`, una operación nueva
+  aparecería ante todo el que pueda ejecutar antes de que nadie decida quién puede verla. Ese
+  fail-closed sería correcto Y SILENCIOSO, así que lo rompe una prueba que **lee el fuente**: toda
+  `"musubi:*"` que el cerebro o el agente nombren tiene que estar clasificada. Se lee el fuente y
+  no una lista declarada porque una lista declarada es justo lo que alguien se olvida de actualizar.
+- **SIN NINGÚN PLANO VISIBLE SE EXPLICA, no se devuelve vacío**, y es lo contrario de lo que hacen
+  las otras cuatro lecturas de flota. Una lista vacía en una LÍNEA DE TIEMPO se lee como una
+  conclusión —«no pasó nada en esa máquina»—, no como una ausencia de datos.
+- **`no_visto` VIAJA SIEMPRE**, también en una respuesta llena: no hay serie temporal (B5), ni logs
+  del host, ni historial de salud de servicios, ni contenido de sesiones. Un registro que no aclara
+  contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad.
+
+**EL BUG QUE ENCONTRÓ EL CONTROL POSITIVO, Y NO LA ASERCIÓN DE FUGA.** El barrido de aislamiento
+exige dos cosas: que el atacante NO vea el marcador ajeno y que el admin federado SÍ lo vea. Lo
+primero pasó de una; lo segundo falló, y ahí estaba el bug: las fechas se guardan en RFC3339 **sin
+fracción de segundo**, así que una ventana que termina «ahora» —`22:29:58.7`— se formatea como
+`22:29:58`, y con el borde superior abierto **el comando encolado en ese mismo segundo queda
+afuera**. El síntoma es el que más engaña de todos: alguien reinicia un servicio, entra a mirar y ve
+la cronología vacía. Ahora las dos puntas se redondean hacia AFUERA, y una punta sin fracción no se
+mueve — así el mosaico de ventanas consecutivas sigue sin contar dos veces el hecho del borde.
+
+**Y una consecuencia del arreglo que valía por sí sola**: la comparación léxica de fechas era una
+COSTUMBRE, no una regla. Dos consultas que ya existían dependían de que todo estuviera guardado en
+UTC —el vencimiento de la cola y la poda de salidas— y funcionaban porque en producción nadie pasa
+una fecha propia. Los cinco INSERT de flota ahora normalizan con `.UTC()`: la garantía pasó a ser
+por construcción y no por suerte.
+
+**Otras dos cosas que este slice ordenó de paso:** el saneo del argv de pantalla estaba escrito en
+la tool de la bitácora y la cronología habría sido la segunda copia —y la copia que se queda vieja
+es siempre la del camino que se usa menos—, así que bajó al dominio (`fleet.ArgvDeBitacora`) y se
+aplica al CONSTRUIR el hecho, donde ninguna superficie futura puede olvidarse de llamarlo. Y los
+nombres de las operaciones internas (`musubi:pantalla` y las otras tres) bajaron con él: estaban
+como literales sueltos en tres paquetes.
+
+**El barrido de aislamiento también mejoró**: `respText` abortaba el test ante un `RpcError`, lo que
+dejaba fuera del barrido a toda tool que le NIEGUE el pedido al atacante en vez de devolverle una
+lista vacía — o sea que la conducta mejor era la que no se podía verificar. Ahora el error también
+se revisa contra el marcador, porque un mensaje que nombrara el dato ajeno filtraría igual que una
+fila.
+
+**22 sabotajes ejecutados.** Dos no rompieron a la primera: uno porque la normalización de la
+ventana está en DOS capas y la prueba sólo cubría una (se agregó la que faltaba, en el motor), y
+otros dos porque el sabotaje **no compilaba**, que no prueba nada — se rehicieron para que
+compilaran y fuera la prueba la que fallara.
+
+**LO QUE ESTE SLICE DEJA ABIERTO, y hay que decirlo:** la bitácora no distingue el origen automático
+del manual. Una política y una persona escriben con la misma forma y la diferencia se lee del nombre
+del principal, por convención. Registrado como **A59**.
 
 **2026-08-29 (7) · A57 CERRADO — `pide` ya puede preguntar, y el eje de consentimiento se usa entero.**
 

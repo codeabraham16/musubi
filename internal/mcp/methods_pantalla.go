@@ -239,17 +239,19 @@ func explicarColision(d fleet.Device, otras []string, fuera int) string {
 //
 // El prefijo `musubi:` existe para que no pueda colisionar con un binario real del sistema, y
 // para que en cualquier log se lea como lo que es: una operación interna, no un comando del host.
-const comandoPantalla = "musubi:pantalla"
+// EL VALOR VIVE EN EL DOMINIO (fleet.OpPantalla): la cronología tiene que clasificar por
+// este mismo nombre, y dos literales iguales en dos paquetes es cómo uno se queda viejo.
+const comandoPantalla = fleet.OpPantalla
 
 // comandoAviso es la operación con la que el cerebro le habla al usuario de una máquina (A57).
 // Igual que la de pantalla: NO es un ejecutable del host y el agente la intercepta antes de
 // intentar lanzarla.
-const comandoAviso = "musubi:avisar"
+const comandoAviso = fleet.OpAvisar
 
 // comandoPreguntar es la operación con la que el cerebro le PIDE PERMISO al usuario de una
 // máquina (A57). Distinta de la de avisar porque espera respuesta: el agente contesta por
 // /fleet/result y recién ahí la sesión sale de `esperando_permiso`.
-const comandoPreguntar = "musubi:preguntar"
+const comandoPreguntar = fleet.OpPreguntar
 
 // EsComandoDePantalla dice si un argv es la operación interna de pantalla.
 func EsComandoDePantalla(argv []string) bool {
@@ -263,20 +265,7 @@ func EsComandoDePantalla(argv []string) bool {
 // cual. Sin esta función, `musubi_fleet_log` entregaría contraseñas de sesión a cualquiera que
 // pueda leer la bitácora, y la garantía G1 se caería por la puerta de al lado.
 func ocultarArgvDePantalla(argv []string) []string {
-	if !EsComandoDePantalla(argv) {
-		return argv
-	}
-	// Se conserva el id de sesión (sirve para cruzar con la bitácora de pantalla) y se tapa el
-	// resto. El largo del resultado no depende del secreto.
-	//
-	// El marcador va SIN ángulos: `encoding/json` escapa `<` y `>` por default (protección
-	// anti-XSS heredada), así que un `<oculto>` sale como `\u003coculto\u003e` y una bitácora
-	// leída en crudo se vuelve ilegible justo en la línea que más se mira.
-	id := ""
-	if len(argv) > 1 {
-		id = argv[1]
-	}
-	return []string{comandoPantalla, id, "[oculto]"}
+	return fleet.ArgvDeBitacora(argv)
 }
 
 // toolFleetSessions devuelve la bitácora de sesiones de pantalla.

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,15 @@ func readSweepCases() []readSweepCase {
 		// tabla `services` SÍ tiene project_id, y meterla en la allowlist apagaría la guarda de
 		// aislamiento sobre ella y quedaría verde para siempre mientras la fuga existe.
 		{"musubi_fleet_services", map[string]any{"project": "web"}, "VICTIMSERVICIO"},
+		// La CRONOLOGÍA de una máquina ajena (fase 5 · S11). Mismo caso HOSTIL: el atacante
+		// DECLARA el proyecto de la víctima Y el nombre de su máquina.
+		//
+		// EL MARCADOR ES `VICTIMSCRIPT` Y NO `VICTIMDEVICE` A PROPÓSITO: el nombre de la máquina
+		// es el ARGUMENTO que manda el atacante, así que un eco suyo en el mensaje de error se
+		// vería como fuga sin serlo — y peor, taparía la fuga de verdad detrás de un falso
+		// positivo permanente. El marcador tiene que ser algo que SÓLO se puede saber leyendo el
+		// dato ajeno, y el argv de un comando de web lo es.
+		{"musubi_fleet_cronologia", map[string]any{"device": "VICTIMDEVICE", "project": "web"}, "VICTIMSCRIPT"},
 	}
 }
 
@@ -178,8 +188,16 @@ func TestReadSurfaceClassIsolation(t *testing.T) {
 		raw, _ := json.Marshal(args)
 		params, _ := json.Marshal(CallToolRequest{Name: tool, Arguments: raw})
 		out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), p), params)
+		// UN ERROR TAMBIÉN ES UNA RESPUESTA, Y TAMBIÉN PUEDE FILTRAR. Antes esto abortaba el
+		// test, lo que dejaba fuera del barrido a toda tool que le NIEGUE el pedido al atacante
+		// en vez de devolverle una lista vacía —que es la forma más correcta de negar, y la que
+		// usa la cronología—. O sea que la conducta mejor era la que no se podía verificar.
+		//
+		// Se devuelve el texto del error para que la misma aserción de marcador corra sobre él:
+		// un mensaje que dijera «no existe ninguna máquina VICTIMDEVICE en el proyecto web»
+		// filtraría igual que una fila.
 		if rpcErr != nil {
-			t.Fatalf("%s: %+v", tool, rpcErr)
+			return fmt.Sprintf("%+v", rpcErr)
 		}
 		return out.(CallToolResponse).Content[0].Text
 	}

@@ -393,6 +393,12 @@ type DeviceStore interface {
 	// sola lista y con el nombre de cada máquina ya resuelto. Lee las dos tablas de sesión y NO
 	// las fusiona: sus comportamientos difieren donde importa (ver internal/fleet/sesion_viva.go).
 	SesionesVivas(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionViva, error)
+	// CronologiaDeDevice cruza los TRES registros append-only (comandos, pantallas, shells) de
+	// UNA máquina dentro de una ventana, del más nuevo al más viejo. La ventana va en el WHERE y
+	// no se filtra después: con el filtro en Go, un tope alcanzado devolvería vacío para una
+	// ventana vieja y ese vacío se lee como «no pasó nada». `truncado` dice si el tope cortó algo
+	// que estaba ADENTRO de la ventana.
+	CronologiaDeDevice(projectID, deviceID string, v fleet.Ventana, tope int, ahora time.Time) ([]fleet.Hecho, bool, error)
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.
 	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)

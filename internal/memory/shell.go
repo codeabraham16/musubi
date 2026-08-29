@@ -44,7 +44,7 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 		`INSERT INTO shell_sessions (id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.DeviceID, s.ProjectID, s.Principal, string(s.Estado),
-		s.Creada.Format(time.RFC3339), s.Vence.Format(time.RFC3339), s.UltimoTrafico.Format(time.RFC3339),
+		s.Creada.UTC().Format(time.RFC3339), s.Vence.UTC().Format(time.RFC3339), s.UltimoTrafico.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fleet.SesionShell{}, fmt.Errorf("error al abrir la sesión de shell: %w", err)

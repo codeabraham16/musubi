@@ -136,7 +136,7 @@ func (s *McpServer) abrirCanalShell(d fleet.Device, filas, columnas int) (fleet.
 // guarda que S6 puso ahí: `musubi:*` no se puede encolar con `musubi_fleet_exec` (si no, alguien
 // con `exec` se fabricaría una sesión de shell sin tener `shell`, que es justo la separación que
 // S5b vino a establecer).
-const comandoShell = "musubi:shell"
+const comandoShell = fleet.OpShell
 
 // avisarAlAgenteDeLaShell encola el pedido para que el agente se conecte.
 //

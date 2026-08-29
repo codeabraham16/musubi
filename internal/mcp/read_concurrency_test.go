@@ -75,6 +75,12 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// LATIDO, por la puerta del dispositivo, y musubi_fleet_service_declare — que NO es
 		// readOnly y por eso está en mustWrite.
 		"musubi_fleet_services": true,
+		// La CRONOLOGÍA de una máquina (fase 5 · S11): lee las TRES bitácoras append-only
+		// (device_commands, screen_sessions, shell_sessions) y no escribe ninguna. El
+		// vencimiento de una sesión de pantalla se DERIVA al servir, igual que en
+		// musubi_fleet_sessions: no hay UPDATE que lo estampe. readOnly ⇒ la puede llamar una
+		// cabina, que es el caso de uso — investigar qué le pasó a un server no muta el server.
+		"musubi_fleet_cronologia": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

@@ -80,7 +80,7 @@ func (e *DbEngine) AltaServicio(s fleet.Servicio) (fleet.Servicio, error) {
 	_, err = e.db.Exec(
 		`INSERT INTO services (id, name, project_id, device_id, kind, registered_at, last_report, last_health, revoked, declared)
 		 VALUES (?, ?, ?, ?, ?, ?, NULL, '', 0, 1)`,
-		s.ID, s.Nombre, s.ProjectID, s.DeviceID, s.Clase, s.Registrado.Format(time.RFC3339),
+		s.ID, s.Nombre, s.ProjectID, s.DeviceID, s.Clase, s.Registrado.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		if esViolacionDeUnicidad(err) {
@@ -104,7 +104,7 @@ func (e *DbEngine) revivirServicioDeclarado(s fleet.Servicio, d fleet.Device) (f
 	res, err := e.db.Exec(
 		`UPDATE services SET revoked = 0, declared = 1, kind = ?, registered_at = ?, last_report = NULL, last_health = ''
 		  WHERE project_id = ? AND device_id = ? AND name = ? AND revoked = 1`,
-		s.Clase, s.Registrado.Format(time.RFC3339), s.ProjectID, s.DeviceID, s.Nombre)
+		s.Clase, s.Registrado.UTC().Format(time.RFC3339), s.ProjectID, s.DeviceID, s.Nombre)
 	if err != nil {
 		return fleet.Servicio{}, fmt.Errorf("error al reactivar el servicio %q: %w", s.Nombre, err)
 	}

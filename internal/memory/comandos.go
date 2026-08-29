@@ -47,7 +47,7 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 		`INSERT INTO device_commands (id, device_id, project_id, principal, argv, timeout_seg, estado, creado)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.DeviceID, c.ProjectID, c.Principal, argv,
-		int(c.Timeout.Seconds()), string(c.Estado), c.Creado.Format(time.RFC3339),
+		int(c.Timeout.Seconds()), string(c.Estado), c.Creado.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fleet.Comando{}, fmt.Errorf("error al encolar el comando para %q: %w", c.DeviceID, err)

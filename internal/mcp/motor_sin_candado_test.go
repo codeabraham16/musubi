@@ -544,6 +544,17 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// recibe una lista vacía. DECLARAR un servicio (musubi_fleet_service_declare) es admin y
 		// NO está en este mapa.
 		"musubi_fleet_services": true,
+		// Fase 5 · S11 · la CRONOLOGÍA de una máquina. Mismo razonamiento que las otras cuatro
+		// lecturas de flota —la cabina es el panel, y un panel que no puede contar qué le pasó a
+		// una máquina no sirve para investigar nada—, con UN MATIZ PROPIO que conviene dejar
+		// escrito: acá un reader sin concesiones NO recibe una lista vacía, recibe una
+		// explicación de qué capacidad le falta.
+		//
+		// Es a propósito y es lo contrario de lo que hacen las otras: una lista vacía en una
+		// LÍNEA DE TIEMPO se lee como «no pasó nada en esa máquina», que es una conclusión, no
+		// una ausencia de datos. Las otras cuatro devuelven inventarios, donde el vacío se lee
+		// como vacío.
+		"musubi_fleet_cronologia": true,
 	}
 
 	for _, e := range s.tools {

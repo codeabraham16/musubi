@@ -52,7 +52,7 @@ func (e *DbEngine) AbrirSesionPantalla(s fleet.SesionPantalla) (fleet.SesionPant
 		`INSERT INTO screen_sessions (id, device_id, project_id, principal, estado, creada, vence)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.DeviceID, s.ProjectID, s.Principal, string(s.Estado),
-		s.Creada.Format(time.RFC3339), s.Vence.Format(time.RFC3339),
+		s.Creada.UTC().Format(time.RFC3339), s.Vence.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fleet.SesionPantalla{}, fmt.Errorf("error al abrir la sesión de pantalla: %w", err)

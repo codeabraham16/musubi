@@ -69,7 +69,7 @@ func (e *DbEngine) AltaDevice(d fleet.Device, token string) (fleet.Device, error
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, '', '', ?)`,
 		d.ID, d.Name, d.ProjectID, string(d.Tier), fleet.CapsComoTexto(d.Caps),
 		d.OS, d.Arch, d.Address, d.AgentVer, strings.Join(d.Tags, ","),
-		d.EnrolledAt.Format(time.RFC3339), hash,
+		d.EnrolledAt.UTC().Format(time.RFC3339), hash,
 	)
 	if err != nil {
 		// El índice único (project_id, name) es quien decide, no una consulta previa: entre un
