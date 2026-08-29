@@ -3,6 +3,8 @@ package mcp
 // Pruebas de la SONDA (S7b/S8): el cerebro saliendo a medir lo que no corre un agente.
 
 import (
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -343,5 +345,125 @@ func TestUnaMaquinaQueNoCuentaProcesosMandaNullYNoCero(t *testing.T) {
 		t.Error("mem_libre desapareció de la fila en vez de viajar como null")
 	} else if v != nil {
 		t.Errorf("mem_libre = %#v sin MemFree en el meminfo", v)
+	}
+}
+
+// ── A39, tercera superficie: la fila del SONDEO también tiene que coincidir ──────────────────
+
+// SON TRES SUPERFICIES, NO DOS, Y ÉSA FUE LA LECCIÓN.
+//
+// A39 ató `filaDeMetricas` con el exportador de Prometheus y dio el asunto por cerrado. La fila
+// del SONDEO quedó afuera de esa guarda, y el bug apareció USANDO el sistema: al enrolar la base
+// de Altura como Tier B por exposición, el sondeo devolvió `uptime_seg: 0`. El endpoint de
+// Supabase no expone `node_boot_time_seconds` —cero líneas, medido contra el endpoint real—, así
+// que ese 0 significaba «no se midió» y se leía como «arrancó recién»: plausible, falso, y manda
+// a investigar un reinicio que no pasó.
+//
+// Esta prueba compara la fila del sondeo con la de métricas CAMPO POR CAMPO sobre la misma
+// muestra. No hay razón para que las dos superficies que muestran los mismos números difieran en
+// cuál es «no medido», y ahora una que se olvide rompe la suite.
+//
+// Sabotaje que la hace fallar: devolver `m.UptimeSeg` crudo en sondearUno (o `m.NumCPU`).
+func TestLaFilaDelSondeoYLaDeMetricasCoincidenEnQueEsNoMedido(t *testing.T) {
+	ahora := time.Now().UTC()
+	d := fleet.Device{Name: "altura-db", Tier: fleet.TierProtocolo, OS: "linux", ProjectID: "infra"}
+
+	casos := []struct {
+		nombre  string
+		muestra fleet.Muestra
+	}{
+		// El caso REAL que destapó el bug: un endpoint de exposición que da memoria y disco y no
+		// tiene uptime ni cantidad de CPUs.
+		{"una base gestionada: sin uptime ni num_cpu", fleet.Muestra{
+			Tomada: ahora, MemTotal: 8 << 30, MemUsada: 3 << 30,
+			DiscoTotal: 8 << 30, DiscoUsado: 1 << 30, DiscoDisponible: 6 << 30,
+		}},
+		{"un Linux completo por SSH", muestraSana(40, ahora)},
+		{"nada medido", fleet.Muestra{Tomada: ahora}},
+	}
+
+	// Los campos que las DOS filas publican. `num_procesos` y `mem_libre` ya los cubría A52; los
+	// otros dos son los que se habían escapado.
+	comunes := []string{"cpu_pct", "mem_libre", "num_procesos", "uptime_seg", "num_cpu"}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if err := c.muestra.Valida(); err != nil {
+				t.Fatalf("el fixture no es una muestra válida y nunca llegaría a una fila: %v", err)
+			}
+			metricas := filaDeMetricas(d, c.muestra, ahora, umbralEnLineaDefault)
+
+			// SE LLAMA AL CÓDIGO REAL, no a una copia. La primera versión de esta prueba
+			// rehacía este tramo a mano y por eso sus dos sabotajes —devolver `uptime_seg` y
+			// `num_cpu` crudos— la dejaban en VERDE: verificaba su propia copia. Por eso
+			// `completarFilaDeSondeo` está extraída de sondearUno.
+			sondeo := map[string]interface{}{}
+			completarFilaDeSondeo(sondeo, c.muestra)
+
+			for _, campo := range comunes {
+				vm, hayM := metricas[campo]
+				vs, hayS := sondeo[campo]
+				if !hayM || !hayS {
+					t.Fatalf("el campo %q no está en las dos filas (métricas=%v, sondeo=%v): el "+
+						"par quedó colgado y la prueba dejó de mirarlo", campo, hayM, hayS)
+				}
+				mNulo := vm == nil || esNilTipado(vm)
+				sNulo := vs == nil || esNilTipado(vs)
+				if mNulo != sNulo {
+					t.Errorf("desacuerdo en %q: la tool de métricas %s y la fila del sondeo %s "+
+						"(valores %#v / %#v). Las dos muestran el mismo número sobre la misma "+
+						"muestra; no pueden discrepar en si se midió.",
+						campo,
+						map[bool]string{true: "manda null", false: "trae valor"}[mNulo],
+						map[bool]string{true: "manda null", false: "trae valor"}[sNulo],
+						vm, vs)
+				}
+			}
+		})
+	}
+}
+
+// LA GUARDA DE ARRIBA REHACE EL TRAMO FINAL DE sondearUno, así que hay que atarla al original: si
+// alguien agrega un campo a la fila del sondeo y no acá, la comparación deja de cubrirlo en
+// silencio. Se compara la LISTA de campos que sondearUno publica contra la que la prueba conoce.
+//
+// Sabotaje que la hace fallar: agregarle un campo nuevo a sondearUno sin sumarlo a esta lista.
+func TestLaGuardaDelSondeoConoceTodosLosCamposQueSondearUnoPublica(t *testing.T) {
+	crudo, err := os.ReadFile("methods_sonda.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Los campos que describen la MEDICIÓN. Los que sondearUno escribe por su cuenta —device,
+	// tier, transporte, ok, error— son del sondeo y no de la muestra, y por eso quedan afuera.
+	fuente := string(crudo)
+	i := strings.Index(fuente, "func completarFilaDeSondeo(")
+	if i < 0 {
+		t.Fatal("no existe completarFilaDeSondeo: la guarda no está mirando lo que cree")
+	}
+	tramo := fuente[i:]
+	if fin := strings.Index(tramo, "\n}\n"); fin > 0 {
+		tramo = tramo[:fin]
+	}
+	re := regexp.MustCompile(`fila\["([a-z_]+)"\]`)
+	publicados := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(tramo, -1) {
+		publicados[m[1]] = true
+	}
+	if len(publicados) < 5 {
+		t.Fatalf("sólo se detectaron %d campos en completarFilaDeSondeo: el barrido no está mirando "+
+			"donde cree", len(publicados))
+	}
+	// Los que la guarda de arriba compara, más los que son propios del sondeo y no de la muestra.
+	conocidos := map[string]bool{
+		"cpu_pct": true, "mem_pct": true, "mem_libre": true,
+		"num_procesos": true, "disco_pct": true, "uptime_seg": true, "num_cpu": true,
+	}
+	for campo := range publicados {
+		if !conocidos[campo] {
+			t.Errorf("completarFilaDeSondeo publica %q y la guarda de coincidencia no lo conoce.\n"+
+				"  Agregalo a `comunes` (si la tool de métricas también lo publica) o a\n"+
+				"  `conocidos` (si es propio del sondeo). Un campo nuevo sin revisar es\n"+
+				"  exactamente cómo `uptime_seg` se pasó el primer arreglo de A39.", campo)
+		}
 	}
 }

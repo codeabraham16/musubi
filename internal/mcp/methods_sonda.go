@@ -192,11 +192,32 @@ func (s *McpServer) sondearUno(d fleet.Device, ahora time.Time) map[string]inter
 		return fila
 	}
 	fila["ok"] = true
+	completarFilaDeSondeo(fila, m)
+	return fila
+}
+
+// completarFilaDeSondeo escribe en la fila lo que se MIDIÓ, y está separada de sondearUno por una
+// razón que se pagó cara: una prueba que REHACE este tramo en vez de llamarlo verifica su propia
+// copia. La primera versión de la guarda de coincidencia hacía exactamente eso, y los dos
+// sabotajes que tenía declarados —devolver `uptime_seg` y `num_cpu` crudos— la dejaban en VERDE.
+//
+// Con la costura acá, la prueba llama al mismo código que corre en producción y el sabotaje se ve.
+func completarFilaDeSondeo(fila map[string]interface{}, m fleet.Muestra) {
 	fila["cpu_pct"] = m.CPUPct // null en el primer sondeo: la derivada necesita una lectura previa
 	fila["mem_pct"] = fleet.PctUsado(m.MemUsada, m.MemTotal)
 	fila["mem_libre"] = m.MemLibre                    // nil ⇒ null: no todo sistema expone MemFree
 	fila["num_procesos"] = enteroONull(m.NumProcesos) // 0 ⇒ null, con el mismo helper que la tool
 	fila["disco_pct"] = fleet.PctUsado(m.DiscoUsado, m.DiscoTotal)
-	fila["uptime_seg"] = m.UptimeSeg
-	return fila
+	// EL MISMO CERO MENTIROSO QUE A39, EN LA TERCERA SUPERFICIE.
+	//
+	// A39 arregló `filaDeMetricas` y el exportador, y ató los dos con una prueba. Esta fila —la
+	// del SONDEO— quedó afuera, y el bug apareció usando el sistema: al enrolar la base de Altura
+	// como Tier B por exposición, el sondeo devolvió `uptime_seg: 0`. El endpoint de Supabase NO
+	// expone `node_boot_time_seconds` —cero líneas, medido—, así que ese 0 significa «no se midió»
+	// y se leía como «esta máquina arrancó recién»: plausible, falso, y manda a investigar un
+	// reinicio que no pasó.
+	//
+	// `num_cpu` va por el mismo camino y por el mismo motivo.
+	fila["uptime_seg"] = enteroONull(m.UptimeSeg)
+	fila["num_cpu"] = enteroONull(m.NumCPU)
 }

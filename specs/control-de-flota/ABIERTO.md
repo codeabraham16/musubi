@@ -40,7 +40,6 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A58 | **La exposición Tier B está construida y NO LA USA NADIE** | El parseo del formato de exposición (`internal/fleet/exposicion.go`), la configuración por máquina y el sondeo sin redirecciones existen, están probados y están desplegados. Y en producción **`flota-exposicion.yaml` no existe y la base de Supabase no está enrolada como Tier B**: se construyó para ese caso exacto y quedó sin cablear. Consecuencia concreta: `collect-supabase.sh` es hoy el único que mira esa base, así que **no se puede apagar** —el plan de fase 4 decía que sí y estaba equivocado—. Cablearlo necesita el `SB_METRICS_URL` y su credencial: la configuración guarda el NOMBRE de una variable de entorno, nunca el valor, así que el paso que falta es exportarla en el entorno del cerebro. | **acción del operador** (la credencial la pone gio) |
 | A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. **DESBLOQUEADO el 2026-08-29**: gio decidió los dos parámetros que faltaban — el diálogo espera **60 segundos**, y si nadie contesta **se NIEGA**. Falla cerrada, consistente con toda la matriz: quien escribió `pide` pidió que nadie entre sin permiso, y el silencio no es permiso. El costo aceptado y dicho: una máquina desatendida en `pide` queda inaccesible por pantalla hasta que alguien le cambie el grado. | **sin asignar** (fase 1 de la maqueta) |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -68,6 +67,43 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (5) · A58 cerrado, y el bug que apareció al USARLO.**
+
+La exposición Tier B estaba construida, probada y desplegada, y **no la usaba nadie**. Se cableó
+contra la base de Altura en Supabase: `altura-db` enrolada como Tier B con `metrics` y nada más,
+`.musubi/flota-exposicion.yaml` apuntando al endpoint, y la credencial en el entorno del cerebro
+—sólo su NOMBRE viaja en el archivo—. El sondeo mide por exposición y devuelve CPU, memoria y disco.
+
+**EL `montaje` NO ERA UNA SUTILEZA.** El endpoint expone dos sistemas de archivos:
+
+    /       71,7 GiB   ← el sistema operativo del contenedor
+    /data    7,8 GiB   ← el volumen de la base, que es el que se llena
+
+Sin declarar `montaje: /data` se mira la raíz, y entonces **una base LLENA se ve como ~10 % de
+disco usado**. No es una imprecisión: es una alarma que no suena nunca. Medido con el endpoint
+real: `/` al 12,5 % contra `/data` al 5,0 %.
+
+**Y AL MIRAR LA PRIMERA RESPUESTA APARECIÓ A39 OTRA VEZ, EN LA TERCERA SUPERFICIE.**
+
+El sondeo devolvió `uptime_seg: 0`. El endpoint de Supabase **no expone `node_boot_time_seconds`**
+—cero líneas, medido—, así que ese 0 significaba «no se midió» y se leía como «arrancó recién»:
+plausible, falso, y manda a investigar un reinicio que no pasó. `num_cpu` igual.
+
+A39 arregló `filaDeMetricas` y el exportador **y ató los dos con una prueba**. La fila del SONDEO
+quedó afuera de esa guarda, y A52 —que sí probó esa fila— cubrió `mem_libre` y `num_procesos` pero
+no estos dos. **Son TRES superficies, no dos**, y no lo encontró ninguna prueba: lo encontró usar
+el sistema.
+
+**Y la primera guarda que escribí para taparlo no servía.** REHACÍA el tramo final de `sondearUno`
+en vez de llamarlo, así que verificaba su propia copia: los dos sabotajes declarados la dejaban en
+VERDE, y el comentario que le puse afirmaba lo contrario. Se extrajo `completarFilaDeSondeo` para
+que la prueba llame al MISMO código que corre en producción. Con la costura real, los cuatro
+sabotajes disparan.
+
+La segunda guarda ata la lista de campos: si alguien agrega uno a la fila del sondeo y no lo
+clasifica, la suite se pone roja. Es lo que le faltó a A39 la primera vez.
+
 
 **2026-08-29 (4) · FASE 4 — Musubi aprende a medir lo que un servicio HACE, no sólo si corre.**
 
