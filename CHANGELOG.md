@@ -7,6 +7,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El brief del motor de diseño deja de contradecirse, de inundar a quien lo llama y de dejarse
+  dictar la conducta por el acervo** (Musubi Renaissance · F1+F2). Los tres defectos salían del
+  mismo error: el brief era una concatenación plana sin jerarquía ni contrato.
+  - **Precedencia declarada** (*lex specialis*): la marca del proyecto le gana al método universal
+    cuando chocan. Cierra el choque real de Altura, cuya marca pide `glass + sombra` mientras el
+    método universal las prohíbe — sin regla ganaba el bloque que más pesaba (el método, 68 % del
+    texto) y el motor terminaba borrándole la marca al proyecto que sí la tenía cargada.
+  - **La marca sube al principio.** El orden pasa a `ask · precedence · material_note · role ·
+    principles · brand · corpus · method · emit · instructions`. Antes la marca viajaba al ~70 % de
+    profundidad, enterrada bajo 4.182 tokens de método constante — la peor posición posible, porque
+    los modelos leen en U y pierden más del 30 % de eficacia sobre lo que queda en el medio.
+  - **Presupuesto duro con el recorte declarado.** 2.600 tokens de tope, tope por tarjeta, y
+    `truncated` diciendo qué bloque se recortó y de cuánto. Cede primero el método (universal),
+    después el corpus, y la marca al final — con un aviso ruidoso, porque un doc de marca lleva sus
+    prohibiciones justo al final. Antes: 11.131 tokens con `limit=100` y 285.023 desde una sola
+    tarjeta grande.
+  - **`principles` pasa a ser el núcleo estático del código y el acervo viaja en `method[]`**, cada
+    tarjeta con su `topic` y su tenant. El método sigue viniendo del acervo y sigue siendo
+    arbitrable — lo que cambia es quién AFIRMA cada bloque. Cierra la inyección indirecta: quien
+    escribiera una observación en `musubi-design` le dictaba la conducta a todos los agentes de
+    todos los proyectos, y la `importance` le dejaba además elegir la posición.
+  - **El `emit` deja de cruzar la marca de Musubi.** `designEmitWeb` y `designEmitPainter` decían
+    «fondo oscuro, un acento, no serifas, no glow, no glass/blur»: prohibiciones de Musubi servidas
+    a cualquier cliente por una constante universal, y de frente contra Altura.
+  - El saneamiento es **estructural, no un filtro**: sólo se limpian caracteres de control. Filtrar
+    corchetes angulares habría roto el método real, que cita `<button>` y `<div role="button">` como
+    ejemplos, y un filtro siempre se puede rodear.
+  - Medido por el banco: **M4 p50 6.419 → 2.457** · **M4 máximo 7.268 → 2.598** (tope duro 2.600) ·
+    **M5 fracción variable 0,047 → 0,146** · **M6 acervo→instrucción 0,00 → 1,00**. Umbrales
+    apretados en consecuencia. Dos ataques del banco (A1 inyección por el acervo, A3 una tarjeta
+    inunda el brief) pasaron de afirmar la vulnerabilidad a defender el arreglo.
+
 ### Added
 - **El motor de diseño tiene marcador.** El 2026-08-21 `musubi_design` se degradó de golpe —el
   bloque de método pasó de 8 principios constantes a 30 tarjetas del acervo, 24× más texto— y

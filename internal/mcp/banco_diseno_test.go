@@ -241,7 +241,7 @@ func TestBancoDiseno(t *testing.T) {
 		{"M4 tokens del brief · máximo", float64(maxTokens), must(t, umb, "m4_tokens_max"), false, "%.0f"},
 		{"M5 fracción variable por pedido", m5, must(t, umb, "m5_fraccion_variable_min"), true, "%.2f"},
 		{"M6 payload del prompt fuera de instrucción", m6instr, must(t, umb, "m6_prompt_a_instruccion_min"), true, "%.2f"},
-		{"M6 payload del prompt fuera del eco", m6eco, must(t, umb, "m6_prompt_en_eco_min"), true, "%.2f"},
+		{"M6 eco del pedido en ask (informativo)", m6eco, must(t, umb, "m6_prompt_en_eco_min"), true, "%.2f"},
 		{"M6 payload del acervo fuera de instrucción", m6acervo, must(t, umb, "m6_acervo_a_instruccion_min"), true, "%.2f"},
 	}, umb))
 

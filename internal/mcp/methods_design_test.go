@@ -316,17 +316,33 @@ func TestDesignMethodDelAcervoVivo(t *testing.T) {
 	if brief.MethodSource != "corpus" {
 		t.Fatalf("con sub-acervo sembrado, method_source debe ser 'corpus'; fue %q", brief.MethodSource)
 	}
-	if !strings.Contains(brief.Principles, "EL COLOR SE GANA") || !strings.Contains(brief.Principles, "MATAR EL LOOK DE IA") {
-		t.Errorf("los principios deben traer las tarjetas de método del acervo; got=%.200q", brief.Principles)
+	// Desde F1+F2 el método del acervo viaja en `method[]` como MATERIAL CITADO, no dentro de
+	// `principles` (que pasó a ser el nucleo estatico del codigo). La capacidad no cambia —el metodo
+	// sigue saliendo del acervo y sigue siendo arbitrable— cambia quien AFIRMA cada bloque.
+	if len(brief.Method) != 2 {
+		t.Fatalf("esperaba las 2 tarjetas del acervo en method[]; hubo %d", len(brief.Method))
 	}
 	// Orden por importancia: la tarjeta de importancia 1.0 (color) va ANTES que la de 0.5 (ia).
-	if i, j := strings.Index(brief.Principles, "EL COLOR SE GANA"), strings.Index(brief.Principles, "MATAR EL LOOK DE IA"); i < 0 || j < 0 || i > j {
-		t.Errorf("el método más importante debe ir primero; color en %d, ia en %d", i, j)
+	if !strings.Contains(brief.Method[0].Texto, "EL COLOR SE GANA") {
+		t.Errorf("el metodo mas importante debe ir primero; primero fue %.60q", brief.Method[0].Texto)
+	}
+	if !strings.Contains(brief.Method[1].Texto, "MATAR EL LOOK DE IA") {
+		t.Errorf("segunda tarjeta inesperada: %.60q", brief.Method[1].Texto)
+	}
+	// Cada item declara su procedencia: quien lee el brief tiene derecho a saber quien afirma que.
+	for _, m := range brief.Method {
+		if !strings.HasPrefix(m.Topic, designMethodPrefix) || m.Fuente != designCorpusScope {
+			t.Errorf("material sin procedencia util: topic=%q fuente=%q", m.Topic, m.Fuente)
+		}
+	}
+	// Y el nucleo estatico sigue estando SIEMPRE, venga o no el acervo.
+	if !strings.Contains(brief.Principles, "JERARQU") {
+		t.Error("principles debe traer el nucleo estatico del codigo")
 	}
 }
 
 // TestDesignMethodExcluidoDelCorpus valida que el sub-acervo del método NO se duplica: una tarjeta
-// `design-method/*` que matchea el pedido viaja como Principles, NUNCA como patrón del corpus.
+// `design-method/*` que matchea el pedido viaja como `method[]`, NUNCA como patrón del corpus.
 func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {

@@ -118,14 +118,18 @@ func TokensDeBrief(b designBrief) int {
 // JSON produce ruido de comas y llaves que no dice nada sobre el contenido.
 func bloquesDe(b designBrief) map[string]string {
 	corpus, _ := json.Marshal(b.Corpus)
+	metodo, _ := json.Marshal(b.Method)
 	return map[string]string{
-		"ask":          b.Ask,
-		"role":         b.Role,
-		"principles":   b.Principles,
-		"brand":        b.Brand,
-		"emit":         b.Emit,
-		"instructions": b.Instructions,
-		"corpus":       string(corpus),
+		"ask":           b.Ask,
+		"precedence":    b.Precedence,
+		"material_note": b.MaterialNote,
+		"role":          b.Role,
+		"principles":    b.Principles,
+		"brand":         b.Brand,
+		"corpus":        string(corpus),
+		"method":        string(metodo),
+		"emit":          b.Emit,
+		"instructions":  b.Instructions,
 	}
 }
 
@@ -172,7 +176,12 @@ type CanalInyeccion struct {
 // payload aparezca acá es la falla grave: no es material que el agente evalúa, es conducta que
 // obedece.
 func bloquesDeInstruccion(b designBrief) string {
-	return b.Role + "\x00" + b.Principles + "\x00" + b.Emit + "\x00" + b.Instructions
+	// Los seis son PROPIEDAD DEL CÓDIGO desde F1+F2. Si alguna vez una cadena del acervo aparece en
+	// uno de ellos, la frontera se rompió y M6 tiene que verlo — por eso la lista se mantiene junto a
+	// la struct del brief y no se deduce.
+	return strings.Join([]string{
+		b.Role, b.Principles, b.Precedence, b.MaterialNote, b.Emit, b.Instructions,
+	}, "\x00")
 }
 
 // DondeCayo busca la marca de un payload en cada canal del brief. Se compara contra una FIRMA del
