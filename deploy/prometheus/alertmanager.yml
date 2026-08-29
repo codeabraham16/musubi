@@ -48,9 +48,32 @@ route:
     #
     # Del otro lado hace falta algo que espere este latido y grite si no llega: un Healthchecks.io,
     # un Dead Man's Snitch, o un cron propio. Sin ese otro lado, esta ruta no hace nada.
+    # LA RUTA APUNTA A LA NADA MIENTRAS NO HAYA WATCHDOG EXTERNO, y eso NO es lo mismo que
+    # borrarla ni que dejarla rota. Las tres opciones se probaron; sólo una es correcta.
+    #
+    # ROTA (apuntando a un `url_file` que no existe) fue el estado real durante 32 horas: 387
+    # fallos de entrega, uno cada 5 minutos, en el log de un contenedor que nadie mira. Y con la
+    # regla CadenaDeAlertasFallando puesta, eso pasa a ser una alerta que dispara y NO SE APAGA
+    # NUNCA — y una alarma que no se apaga arreglando algo enseña a ignorar el canal entero.
+    #
+    # BORRADA fue peor, y se descubrió en el acto al intentarlo: `MusubiSiempreViva` está SIEMPRE
+    # en firing a propósito, así que sin ruta propia cae al receptor por defecto y el latido pasa
+    # a notificar por Telegram y al CRM cada 4 horas, para siempre. La misma alarma eterna, en el
+    # canal que sí se lee.
+    #
+    # A LA NADA es lo correcto: la alerta SE SIGUE VIENDO en el Alertmanager —el latido existe y
+    # se puede mirar— y no le llega a nadie. Es el patrón que usa kube-prometheus con su Watchdog.
+    #
+    # LO QUE SE PIERDE MIENTRAS TANTO, dicho: si se cae Prometheus, o el propio Alertmanager, o la
+    # red del canal, NINGUNA alerta sale — y ese silencio se ve igual que la calma. Es el único
+    # fallo que el sistema no puede detectar desde adentro, por definición.
+    #
+    # PARA REACTIVARLO: creá un check en Healthchecks.io (o Dead Man's Snitch, o un cron propio),
+    # poné su URL de ping en `secretos/watchdog_url` con modo 600, y cambiá `null` por `watchdog`
+    # abajo. Una palabra.
     - matchers:
         - alertname = "MusubiSiempreViva"
-      receiver: 'watchdog'
+      receiver: 'null'
       group_wait: 0s
       group_interval: 5m
       repeat_interval: 5m   # corto: es un latido, no un aviso
@@ -145,6 +168,10 @@ receivers:
   # (quien la tenga puede silenciar el watchdog), así que también entra por archivo.
   #
   # Con url_file, Alertmanager relee el archivo en cada envío: rotar la URL no pide reinicio.
+  # EL RECEPTOR QUE NO MANDA A NINGÚN LADO. Existe para que una alerta pueda estar VISIBLE sin
+  # notificar, que no es lo mismo que no tener la alerta. Sin configs, Alertmanager la descarta a
+  # propósito, y el latido sigue apareciendo en su interfaz para quien lo quiera mirar.
+  - name: 'null'
   - name: 'watchdog'
     webhook_configs:
       - url_file: /etc/musubi/watchdog_url   # p. ej. https://hc-ping.com/<uuid>

@@ -238,8 +238,8 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyecto := fleetReadScopeFor(p, args.Project)
-	if proyecto == "" {
+	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	if len(proyectos) == 0 {
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
 	tope := bitacoraTopeDefault
@@ -250,10 +250,6 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 		tope = bitacoraTopeMax
 	}
 
-	devices, err := s.engine.ListarDevices(proyecto, true)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
-	}
 	// G8 — sólo las máquinas sobre las que podés ver ese plano. Saber quién mira la pantalla de un
 	// servidor, o quién tuvo un prompt en él, es información sensible por sí sola.
 	//
@@ -270,18 +266,29 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 		// puede ver esa pantalla, así que negarle saber quién más la vio no protege nada.
 		return PuedeSobreDevice(p, d, fleet.CapScreenView)
 	}
-	porID := make(map[string]fleet.Device, len(devices))
-	for _, d := range devices {
-		porID[d.ID] = d
-	}
-
+	porID := map[string]fleet.Device{}
 	ahora := time.Now()
 	// Se piden de más y se recorta después de compuertar: el tope es de lo que VAS A VER, no de
 	// lo que se leyó. Sin el margen, una credencial acotada recibiría una lista corta que se lee
 	// como «no hay más sesiones» cuando lo que pasa es que las siguientes no las puede ver.
-	crudas, err := s.engine.SesionesVivas(proyecto, strings.TrimSpace(args.Device), tope*4, ahora)
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "%v", err)
+	// EL LAZO POR PROYECTO, igual que en las otras tres tools de lectura. Esta se quedó afuera
+	// del arreglo original y el síntoma fue exacto: el panel —`read: all` sin proyecto propio—
+	// recibía «no se pudo determinar el proyecto» y su columna de sesiones quedaba muda. Tres de
+	// cuatro arregladas es el mismo bug con una cuarta parte de la superficie.
+	var crudas []fleet.SesionViva
+	for _, proyecto := range proyectos {
+		devices, err := s.engine.ListarDevices(proyecto, true)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		for _, d := range devices {
+			porID[d.ID] = d
+		}
+		vivas, err := s.engine.SesionesVivas(proyecto, strings.TrimSpace(args.Device), tope*4, ahora)
+		if err != nil {
+			return nil, rpcErrorf(codeInternalError, "%v", err)
+		}
+		crudas = append(crudas, vivas...)
 	}
 	filas := make([]map[string]interface{}, 0, tope)
 	ocultos := 0
@@ -317,7 +324,13 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 		}
 		filas = append(filas, fila)
 	}
-	res := map[string]interface{}{"project_id": proyecto, "total": len(filas), "sesiones": filas}
+	res := map[string]interface{}{"projects": proyectos, "total": len(filas), "sesiones": filas}
+	if len(proyectos) == 1 {
+		res["project_id"] = proyectos[0]
+	}
+	if truncado {
+		res["proyectos_truncados"] = true
+	}
 	if ocultos > 0 {
 		res["sin_permiso"] = ocultos
 	}

@@ -4,6 +4,7 @@ package mcp
 // las personas y LA PUERTA DEL DISPOSITIVO, que es una puerta aparte a propósito.
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -769,5 +770,80 @@ func TestLaPoliticaDeConsentimientoSeVeEnElInventario(t *testing.T) {
 	if fila["puede_preguntar"] != false {
 		t.Errorf("puede_preguntar = %v: sin eso, la diferencia entre declarado y efectivo no se "+
 			"puede explicar mirando la fila", fila["puede_preguntar"])
+	}
+}
+
+// TODAS LAS TOOLS DE LECTURA DE FLOTA TIENEN QUE FUNCIONAR PARA UN `read: all` SIN PROYECTO.
+//
+// Ésta es la guarda que faltaba, y su ausencia costó exactamente lo que se veía venir: el arreglo
+// del alcance se aplicó a TRES tools y la cuarta quedó afuera. El síntoma fue mudo — la columna de
+// sesiones del panel vacía, sin un error a la vista, porque el panel ignora a propósito los
+// errores de esa llamada para no borrar la flota de la pantalla.
+//
+// La prueba es sobre la CLASE y no sobre cada tool, y ésa es toda la idea: una quinta tool de
+// lectura que se agregue mañana sin manejar este caso rompe acá. Una prueba por tool no habría
+// evitado nada — la cuarta simplemente no tenía la suya.
+//
+// El principal es el del panel tal cual está en producción: `read: all` con `project_id` VACÍO a
+// propósito, porque no pertenece a ningún tenant.
+//
+// Sabotaje que la hace fallar: volver cualquiera de las cuatro a `fleetReadScopeFor` a secas.
+func TestNingunaToolDeLecturaDeFlotaSeQuedaSinProyecto(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+	enrolarDePrueba(t, s, "cliente-acme", "server-acme")
+
+	panel := &Principal{Name: "panel-central", Role: RoleReader, Read: ReadAll, Write: WriteNone,
+		ProjectID: "", Fleet: map[fleet.Cap][]string{
+			fleet.CapMetrics: {"*"}, fleet.CapScreenView: {"*"}, fleet.CapShell: {"*"},
+		}}
+
+	// La lista es EXHAUSTIVA a propósito: si mañana aparece una tool de lectura nueva, agregarla
+	// acá es parte de escribirla.
+	lecturas := []string{
+		"musubi_fleet_list",
+		"musubi_fleet_metrics",
+		"musubi_fleet_services",
+		"musubi_fleet_sessions",
+	}
+	for _, tool := range lecturas {
+		t.Run(tool, func(t *testing.T) {
+			_, e := callAsPrincipal(t, s, panel, tool, map[string]any{})
+			if e != nil {
+				t.Fatalf("%s falló para un `read: all` sin proyecto propio: %s\n"+
+					"Es el bug del panel: la credencial no pertenece a ningún tenant, así que "+
+					"resolver el proyecto cayendo a su ProjectID da vacío.", tool, e.Message)
+			}
+		})
+	}
+
+	// NO ALCANZA CON QUE NO FALLE, Y LA PRIMERA VERSIÓN DE ESTA PRUEBA SE CONFORMABA CON ESO.
+	//
+	// El sabotaje —volver a `fleetReadScopeFor`— NO produce un error: para un principal con
+	// `ProjectID` vacío devuelve la lista `[""]`, que tiene UN elemento, así que la guarda de
+	// `len(proyectos) == 0` no salta. El resultado es una respuesta vacía y exitosa: el modo de
+	// fallo más caro de todos, y justo el que este track persigue.
+	//
+	// Así que se exige que las cuatro digan haber barrido LOS DOS proyectos. Ése es el invariante
+	// compartido: `projects` es lo único que distingue «barrí todo lo que puedo ver» de «barrí un
+	// proyecto que no existe».
+	for _, tool := range lecturas {
+		res, e := callAsPrincipal(t, s, panel, tool, map[string]any{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		crudos, hay := jsonOf(t, res)["projects"].([]any)
+		if !hay {
+			t.Errorf("%s no dice qué proyectos barrió: una respuesta de uno y una de todos se ven igual", tool)
+			continue
+		}
+		vistos := map[string]bool{}
+		for _, x := range crudos {
+			vistos[fmt.Sprint(x)] = true
+		}
+		if !vistos["casa"] || !vistos["cliente-acme"] {
+			t.Errorf("%s barrió %v: un `read: all` sin proyecto propio tiene que barrer los dos, "+
+				"y una respuesta vacía y exitosa es peor que un error", tool, crudos)
+		}
 	}
 }

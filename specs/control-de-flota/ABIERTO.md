@@ -735,6 +735,46 @@ explicación se ignora.
 
 **63 sabotajes en la tanda.**
 
+**2026-08-29 (ter) · los tres pasos del operador, y tres errores propios en el camino.**
+
+Los tres quedaron cerrados —el panel ve la flota completa, el watchdog quedó declarado como
+ausente, y el binario corre—. Lo que vale la pena registrar son los errores del camino, porque los
+tres son de clases distintas y los tres se cazaron **usando** el sistema.
+
+**1 · Se arreglaron TRES de cuatro tools de lectura.** El arreglo del alcance del panel se aplicó a
+`fleet_list`, `fleet_metrics` y `fleet_services`; `fleet_sessions` se escribió después y quedó
+afuera. **El síntoma fue mudo**: la columna de sesiones del panel vacía, sin error a la vista,
+porque el panel ignora a propósito los errores de esa llamada para no borrar la flota de la
+pantalla. Una protección propia escondió un bug propio.
+
+La guarda que faltaba no es una prueba por tool: es una sobre **la clase entera**, que enumera las
+cuatro y exige que todas funcionen para un `read: all` sin proyecto. Una quinta que se agregue
+mañana rompe ahí.
+
+**2 · Y esa prueba, en su primera versión, no cazaba el sabotaje.** Verificaba que la llamada no
+diera error. Pero el fallback no da error: para un principal con `ProjectID` vacío devuelve la
+lista `[""]` —UN elemento, no cero— así que la guarda de `len == 0` no salta, la consulta corre
+sobre un proyecto que no existe, y la tool **devuelve vacío y exitoso**. Se reescribió para exigir
+que las cuatro digan haber barrido LOS DOS proyectos. *«No falló» no es «hizo lo que dice».*
+
+**3 · Se copió el `alertmanager.yml` del REPO encima del del SERVIDOR, y se reinició.** El del repo
+lleva `chat_id: 0` como marcador —lo reemplaza `preparar.sh` al instalar—, así que quedó una
+configuración inválida y el Alertmanager arrancó roto. Lo salvó el respaldo hecho antes de tocar
+nada; fueron ~2 minutos con la cadena degradada.
+
+**El repo y el servidor NO son copias.** El repo tiene marcadores donde el servidor tiene secretos,
+y esa asimetría está escrita en los comentarios del propio archivo. Regla que queda: en cualquier
+archivo de despliegue con secretos, **se edita el del servidor; nunca se copia el del repo encima**.
+
+**Y una regresión propia, cazada antes de que llegara al teléfono:** comentar la ruta de
+`MusubiSiempreViva` no la desactiva — la manda al receptor por defecto. Como esa alerta está
+SIEMPRE en firing a propósito, habría pasado a notificar por Telegram y al CRM cada 4 horas, para
+siempre: la misma alarma eterna, mudada al canal que sí se lee. La salida correcta es un receptor
+**`null`**: la alerta se sigue viendo en el Alertmanager y no le llega a nadie. Es el patrón de
+kube-prometheus con su Watchdog, y reactivar el dead-man's switch es cambiar una palabra.
+
+**67 sabotajes en la tanda.**
+
 ---
 
 ## Cómo se usa este archivo
