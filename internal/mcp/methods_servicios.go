@@ -291,6 +291,36 @@ func filaDeServicio(sv fleet.Servicio, d fleet.Device, ahora time.Time) map[stri
 		if sv.Salud.Desde != nil {
 			fila["desde"] = sv.Salud.Desde.UTC().Format(time.RFC3339)
 		}
+		// EL RENDIMIENTO VIAJA ENTERO O NO VIAJA (fase 4). No se aplana en columnas sueltas
+		// —`atendidas`, `fallidas`, `p95`— por una razón concreta: sin su VENTANA al lado, «47»
+		// no significa nada, y una columna suelta invita a leerla sin la de al lado. El objeto
+		// mantiene juntos los números que sólo se entienden juntos.
+		//
+		// AUSENTE cuando no se midió, que es lo normal en un servicio de systemd: el supervisor
+		// sabe si corre, no cuánto trabajo hizo. Un objeto en cero para todos diría que se midió.
+		if r := sv.Salud.Rendimiento; r != nil {
+			rend := map[string]interface{}{
+				"ventana_seg": r.VentanaSeg,
+				// CERO ES UNA MEDICIÓN acá, al revés que en el resto del track: «miré y no pasó
+				// nada» es lo que distingue un bot callado de un colector muerto.
+				"atendidas": r.Atendidas,
+				"fallidas":  r.Fallidas,
+				// nulls, no ceros: un p95 de 0 ms no es rápido, es la ausencia de percentil.
+				"latencia_p95_ms": r.LatenciaP95Ms,
+				"latencia_max_ms": r.LatenciaMaxMs,
+			}
+			// La tasa NO se calcula en el cliente: sobre cero atendidas no es 0 %, es la ausencia
+			// de una tasa, y un 0 % pintado sobre algo que no atendió nada se lee «todo perfecto».
+			if tasa, hay := r.TasaDeError(); hay {
+				rend["tasa_error_pct"] = tasa
+			} else {
+				rend["tasa_error_pct"] = nil
+			}
+			if len(r.Desglose) > 0 {
+				rend["desglose"] = r.Desglose
+			}
+			fila["rendimiento"] = rend
+		}
 	}
 	return fila
 }

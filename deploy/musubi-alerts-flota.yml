@@ -210,3 +210,42 @@ groups:
             La máquina reporta su telemetría y no su inventario de servicios. Sostenido 15 minutos,
             que es el triple del reenvío periódico del inventario.
           runbook: "deploy/RUNBOOK.md#maquinasininventario"
+
+      # ── El RENDIMIENTO de un servicio (fase 4) ────────────────────────────────────────────
+      #
+      # Estas tres miran algo que `musubi_fleet_service_up` NO PUEDE VER: un servicio cuyo proceso
+      # está perfectamente vivo mientras hace mal su trabajo. Para un bot es la única señal que
+      # importa — systemd lo ve corriendo tanto si contesta bien como si contesta cualquier cosa.
+      #
+      # LAS TRES SE APAGAN SOLAS donde no aplican: `musubi_fleet_service_handled` está AUSENTE en
+      # todo servicio que no reporte rendimiento, que es la enorme mayoría. Un servicio de systemd
+      # no dispara ninguna de éstas nunca, y por eso se pueden instalar siempre.
+      - alert: ServicioFallandoPorDentro
+        # Sobre la ventana que el propio colector declaró, no sobre una inventada acá.
+        expr: >
+          100 * musubi_fleet_service_failed / musubi_fleet_service_handled > 20
+          and musubi_fleet_service_handled > 10
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} en {{ $labels.device }} corre y falla más de 1 de cada 5."
+          runbook: "deploy/RUNBOOK.md#serviciofallandopordentro"
+
+      # EL COLECTOR SE MURIÓ, que NO es lo mismo que «el servicio no tuvo trabajo». La diferencia
+      # es exactamente por qué el colector empuja un 0 en vez de callarse: con el 0, la serie
+      # existe y vale cero; sin colector, la serie DESAPARECE. Esta regla mira la desaparición.
+      - alert: ColectorDeRendimientoMudo
+        expr: musubi_fleet_service_last_report_seconds > 600 and on(device, service) musubi_fleet_service_handled
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} reportaba rendimiento y hace más de 10 minutos que no."
+          runbook: "deploy/RUNBOOK.md#colectorderendimientomudo"
+
+      - alert: ServicioLento
+        expr: musubi_fleet_service_latency_p95_ms > 5000
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El p95 de {{ $labels.service }} en {{ $labels.device }} pasa los 5 segundos."
+          runbook: "deploy/RUNBOOK.md#serviciolento"

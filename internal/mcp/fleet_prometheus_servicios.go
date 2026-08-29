@@ -92,11 +92,29 @@ type serieDeServicio struct {
 	Valor func(sv fleet.Servicio, ahora time.Time) (float64, bool)
 }
 
-// seriesDeServicio son TRES, y son tres a propósito.
+// seriesDeServicio son las tres del ESTADO más las cuatro del RENDIMIENTO.
 //
 // `up` dice el ESTADO y `last_report_seconds` dice si esa afirmación es reciente. Combinarlas en
 // una sola —«up sólo si además está fresco»— parece más simple y esconde el porqué: no se
 // distinguiría un servicio caído de uno que dejó de reportar, que se arreglan distinto.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LAS DEL RENDIMIENTO (fase 4) SALEN JUNTO A LAS OTRAS, Y NO EN UN EXPORTADOR APARTE
+//
+// La tool `musubi_fleet_services` muestra el rendimiento; si el exportador no lo emitiera, las dos
+// superficies que leen la MISMA fila dirían cosas distintas — que es exactamente el bug que A39
+// cerró un nivel más arriba, con el gráfico mostrando un hueco y la tabla un número.
+//
+// EL DESGLOSE NO SE EXPORTA, y es la única decisión que hace falta explicar. Sus claves las elige
+// quien reporta, con el vocabulario de SU dominio (`no_puedo`, `vacio`), y una etiqueta cuyos
+// valores decide un tercero es cardinalidad sin techo: el dominio ya la acota a
+// fleet.DesgloseMax por servicio, pero por FLOTA no hay tope. El desglose se mira en la tool y en
+// el panel, donde una clave nueva cuesta una columna y no una serie más por máquina.
+//
+// `atendidas` y `fallidas` SÍ salen aunque valgan 0, al revés que casi todo el resto de este
+// archivo: acá el cero es una MEDICIÓN —«miré y no pasó nada»— y omitirlo borraría el latido que
+// distingue un bot callado de un colector muerto. Lo que se omite es el servicio que no reporta
+// rendimiento en absoluto, que es la mayoría.
 func seriesDeServicio() []serieDeServicio {
 	return []serieDeServicio{
 		{"musubi_fleet_service_up",
@@ -126,7 +144,54 @@ func seriesDeServicio() []serieDeServicio {
 				}
 				return float64(*sv.Salud.Reinicios), true
 			}},
+
+		// ── Rendimiento: qué HIZO el servicio, no en qué estado está (fase 4) ────────────────
+		{"musubi_fleet_service_handled",
+			"Unidades de trabajo que el servicio atendió en su última ventana. AUSENTE si el servicio no reporta rendimiento (la mayoría: un supervisor sabe si algo corre, no cuánto trabajo hizo). Un 0 SÍ se emite y es un dato: «se midió y no pasó nada», que es lo que distingue un servicio callado de un colector muerto. Se lee junto a musubi_fleet_service_window_seconds: un conteo sin su ventana no es una tasa.",
+			"",
+			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
+				if r := rendimientoDe(sv); r != nil {
+					return float64(r.Atendidas), true
+				}
+				return 0, false
+			}},
+		{"musubi_fleet_service_failed",
+			"De las atendidas, cuántas salieron mal. Es un SUBCONJUNTO de musubi_fleet_service_handled, nunca un total aparte. AUSENTE con el mismo criterio que aquélla.",
+			"",
+			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
+				if r := rendimientoDe(sv); r != nil {
+					return float64(r.Fallidas), true
+				}
+				return 0, false
+			}},
+		{"musubi_fleet_service_window_seconds",
+			"Cuánto tiempo cubren las dos series de arriba. Existe porque «47 atendidas» no significa nada sin saber en cuánto tiempo, y deducirlo del intervalo del colector ataría el gráfico a un número que vive en otra máquina.",
+			"s",
+			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
+				if r := rendimientoDe(sv); r != nil && r.VentanaSeg > 0 {
+					return float64(r.VentanaSeg), true
+				}
+				return 0, false
+			}},
+		{"musubi_fleet_service_latency_p95_ms",
+			"Percentil 95 de latencia en la última ventana. AUSENTE si no se midió — y sobre cero unidades atendidas NO HAY percentil, así que ahí también está ausente: un 0 hundiría el promedio justo en los minutos tranquilos.",
+			"ms",
+			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
+				if r := rendimientoDe(sv); r != nil && r.LatenciaP95Ms != nil {
+					return float64(*r.LatenciaP95Ms), true
+				}
+				return 0, false
+			}},
 	}
+}
+
+// rendimientoDe saca el rendimiento de un servicio, o nil. Una sola definición de «este servicio
+// mide trabajo», para que las cuatro series de arriba no puedan discrepar entre ellas.
+func rendimientoDe(sv fleet.Servicio) *fleet.Rendimiento {
+	if sv.Salud == nil {
+		return nil
+	}
+	return sv.Salud.Rendimiento
 }
 
 // labelsDeServicio son los de la máquina más los dos del servicio.

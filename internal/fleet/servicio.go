@@ -129,6 +129,14 @@ type SaludServicio struct {
 	// Detalle es texto de la máquina (el `Result=` de systemd, el mensaje del SCM). ENTRADA NO
 	// CONFIABLE: se acota a DetalleServicioMax runas al recibir y se escapa al dibujar.
 	Detalle string `json:"detalle,omitempty"`
+	// Rendimiento es QUÉ HIZO el servicio en una ventana, y es lo que le faltaba a este modelo
+	// para poder sostener un bot (ver rendimiento.go). nil = no se midió, que es lo normal en un
+	// servicio de systemd: el supervisor sabe si corre, no cuánto trabajo hizo.
+	//
+	// VA ADENTRO DE LA SALUD Y NO EN UNA COLUMNA PROPIA porque `last_health` ya es un TEXT con el
+	// JSON de esta struct: el campo viaja sin migración, y una fila vieja deserializa con él en
+	// nil, que es exactamente lo que significa.
+	Rendimiento *Rendimiento `json:"rendimiento,omitempty"`
 }
 
 // Servicio es el servicio tal como lo conoce el registro.
@@ -206,6 +214,13 @@ func (s SaludServicio) Valida() error {
 	}
 	if s.Reinicios != nil && *s.Reinicios < 0 {
 		return fmt.Errorf("reinicios negativo: %d", *s.Reinicios)
+	}
+	// El rendimiento se valida ENTERO acá y no por su cuenta: si viene y no se puede creer, el
+	// reporte de este servicio se saltea completo. Guardar un estado bueno con un rendimiento
+	// imposible al lado es peor que no guardar nada — el panel dibujaría un servicio sano con una
+	// tasa de error del 233 %, y nadie sabría cuál de los dos números mirar.
+	if err := s.Rendimiento.Valida(); err != nil {
+		return fmt.Errorf("rendimiento: %w", err)
 	}
 	return nil
 }
@@ -292,6 +307,21 @@ func RecortarReporte(r ReporteServicio) ReporteServicio {
 		r.Clase = ""
 	}
 	r.Salud.Detalle = recortarRunas(strings.TrimSpace(r.Salud.Detalle), DetalleServicioMax)
+	// LAS CLAVES DEL DESGLOSE SE NORMALIZAN, NO SE RECHAZAN, por el mismo criterio que la clase:
+	// son nombres del dominio de quien reporta y perder el servicio entero por un espacio de más
+	// sería peor que mostrarlo prolijo. Lo que SÍ rechaza Valida es que sean demasiadas o
+	// demasiado largas, porque eso ya no es prolijidad sino cardinalidad.
+	if r.Salud.Rendimiento != nil && len(r.Salud.Rendimiento.Desglose) > 0 {
+		limpio := make(map[string]int, len(r.Salud.Rendimiento.Desglose))
+		for k, v := range r.Salud.Rendimiento.Desglose {
+			if k := strings.TrimSpace(k); k != "" {
+				// Se SUMA en vez de pisar: dos claves que sólo diferían en espacios son la misma
+				// cosa contada dos veces, y quedarse con la última perdería la otra mitad.
+				limpio[k] += v
+			}
+		}
+		r.Salud.Rendimiento.Desglose = limpio
+	}
 	return r
 }
 

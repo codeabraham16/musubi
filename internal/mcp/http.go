@@ -234,6 +234,9 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// Y la contraparte: por acá el agente reporta cómo salió un comando (S5). Mismo almacén de
 	// credenciales, mismo limiter.
 	mux.HandleFunc(fleetResultPath, s.handlerResultado(limiter))
+	// La puerta del RENDIMIENTO (fase 4): salud para servicios DECLARADOS que ninguna máquina
+	// enumera —un bot, un puente—. Mismo token que el latido; ni poda ni estampa señal de vida.
+	mux.HandleFunc(fleetSaludPath, s.handlerSaludDeServicios(limiter))
 
 	// EL RELAY DE SHELL INTERACTIVA (S5b). OJO: estas tres rutas autentican PERSONAS (registro de
 	// principals), al revés que las dos de arriba, que autentican DISPOSITIVOS (tabla `devices`).

@@ -41,6 +41,7 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
+| A58 | **La exposición Tier B está construida y NO LA USA NADIE** | El parseo del formato de exposición (`internal/fleet/exposicion.go`), la configuración por máquina y el sondeo sin redirecciones existen, están probados y están desplegados. Y en producción **`flota-exposicion.yaml` no existe y la base de Supabase no está enrolada como Tier B**: se construyó para ese caso exacto y quedó sin cablear. Consecuencia concreta: `collect-supabase.sh` es hoy el único que mira esa base, así que **no se puede apagar** —el plan de fase 4 decía que sí y estaba equivocado—. Cablearlo necesita el `SB_METRICS_URL` y su credencial: la configuración guarda el NOMBRE de una variable de entorno, nunca el valor, así que el paso que falta es exportarla en el entorno del cerebro. | **acción del operador** (la credencial la pone gio) |
 | A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. | **sin asignar** (fase 1 de la maqueta) |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -67,6 +68,67 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (4) · FASE 4 — Musubi aprende a medir lo que un servicio HACE, no sólo si corre.**
+
+`musubi_fleet_service_declare` existe —lo dice su propia descripción— para declarar «un Tier B que
+no enumera solo, **un bot**, un puente». Y hasta hoy **un bot declarado se quedaba en
+`desconocido` para siempre**: su salud «pasa a tener estado cuando la máquina lo reporte», y a un
+bot que vive en una base gestionada en la nube no lo reporta ninguna máquina. La capacidad estaba
+declarada y era inalcanzable — el mismo patrón que este track viene persiguiendo, esta vez en el
+plano de control.
+
+Y lo que un bot tiene para decir tampoco entraba en `SaludServicio`: no es «corriendo» ni
+«fallado», es «atendí 47 consultas en el último minuto, 3 salieron mal, el p95 fue 820 ms».
+
+- **`fleet.Rendimiento`** (`internal/fleet/rendimiento.go`): ventana, atendidas, fallidas,
+  desglose por resultado y latencias. **Acá el CERO es un dato, y es el más importante** — al revés
+  que en todo el resto del track. `atendidas: 0` significa «miré y no pasó nada», que es lo que
+  distingue un bot callado de un colector muerto. La distinción vive un nivel más arriba:
+  `Rendimiento == nil` es «no se midió». Por eso los conteos son `int` y las latencias punteros.
+- **La ventana viaja con los números.** «47 atendidas» no significa nada sin saber en cuánto
+  tiempo, y deducirla del intervalo del colector ata el gráfico a un número que vive en otra
+  máquina — el mismo error que `scheduler_flota.go` documenta al negarse a colgar el empuje del
+  intervalo de sondeo.
+- **`POST /fleet/service-health`**, con el token del DISPOSITIVO. **No poda y no estampa señal de
+  vida**, y las dos cosas son el motivo de que sea una puerta aparte: podar borraría los otros 53
+  servicios de la máquina (un colector de un bot no está en condiciones de afirmar un inventario),
+  y estampar vida haría que un host cuyo AGENTE murió pero cuyo colector vive figure sano — y el
+  colector es lo que menos se cae, porque es un cron de un minuto.
+- **No crea servicios, y no es prudencia sino un bug evitado.** El camino del latido crea con
+  `declared = 0`, podable por ausencia; el siguiente latido del agente —que enumera systemd y
+  contenedores— borraría el bot. El colector lo recrearía un minuto después y el servicio
+  parpadearía en el panel para siempre. Un bot entra por `service_declare`, que lo hace inmune.
+- **Un reporte imposible no pisa la última salud buena.** Acá NO vale la asimetría del latido
+  —guardar el servicio con la salud vacía— porque el servicio ya existe: no hay nada que crear.
+- **Las dos superficies coinciden**, con la misma clase de guarda que cerró A39 un nivel más
+  arriba: la tool trae `rendimiento` y el exportador emite `_handled`, `_failed`,
+  `_window_seconds` y `_latency_p95_ms`, y una prueba las ata. **El desglose NO se exporta**: sus
+  claves las elige quien reporta, y una etiqueta cuyos valores decide un tercero es cardinalidad
+  sin techo. Se mira en la tool y en el panel, donde una clave nueva cuesta una columna.
+- **El panel lo dibuja**, y marca con ⚠ el servicio que corre y falla más de 1 de cada 5 — algo
+  que `musubi_fleet_service_up` NO PUEDE VER: systemd ve el proceso vivo conteste bien o mal.
+- **Tres reglas de alerta** con su runbook: `ServicioFallandoPorDentro`,
+  `ColectorDeRendimientoMudo` (que mira la DESAPARICIÓN de la serie, no su cero) y `ServicioLento`.
+  Las tres se apagan solas donde no aplican: un servicio de systemd no dispara ninguna nunca.
+- **`deploy/colectores/reportar-bot.py`** reemplaza a `collect-bot.py`. Mismo SQL, mismo marcador,
+  mismos números — si algo se rompe al migrar, que se rompa en el transporte y no en la medición.
+
+**Veintiséis sabotajes ejecutados** (10 del dominio, 7 de la puerta, 5 del panel, 4 de la guarda
+cruzada), incluido el que importa de verdad: quitarle el `AND device_id = ?` al UPDATE, que dejaría
+a cualquier máquina de la flota reportando que el postgres de producción está caído.
+
+**LO QUE FASE 4 NO CIERRA, Y HAY QUE DECIRLO:**
+
+- **`collect-supabase.sh` NO es redundante todavía, al contrario de lo que decía el plan.** Al ir a
+  mirar: `.musubi/flota-exposicion.yaml` **no existe** en producción y la base de Supabase **no
+  está enrolada** — o sea que **el parseo de exposición Tier B está construido, probado, desplegado
+  y sin usar**. Ese colector es hoy el ÚNICO que mira esa base, y apagarlo la dejaría ciega.
+  Registrado como **A58**.
+- **`collect-infra.sh` sí es redundante campo por campo** —mide exactamente lo que el agente de
+  Musubi mide, y nada que Musubi no tenga— pero empuja a OpenObserve, que alimenta la sección
+  Monitoreo del CRM. Apagarlo es una decisión de **A33**, no una limpieza.
+
 
 **2026-08-29 · A56 — el panel ya tiene su concesión, y la ficha se había quedado abierta.**
 Gio la agregó el mismo día y el panel pasó a mostrar vitales y servicios; la fila quedó en la

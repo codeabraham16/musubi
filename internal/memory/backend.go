@@ -464,6 +464,9 @@ type ServiceStore interface {
 	// ReportarServicios es la escritura del AGENTE: `deviceID` viene del TOKEN y acota TODO lo
 	// que se toca. Devuelve (nuevos, actualizados).
 	ReportarServicios(deviceID string, ahora time.Time, reportes []fleet.ReporteServicio) (int, int, error)
+	// ReportarSaludDeServicios actualiza salud SIN crear ni podar: es el camino de un colector
+	// externo para un servicio DECLARADO (un bot, un puente) que ninguna máquina enumera.
+	ReportarSaludDeServicios(deviceID string, ahora time.Time, reportes []fleet.ReporteServicio) (int, []string, error)
 	ListarServicios(projectID, deviceID string, incluirRevocados bool) ([]fleet.Servicio, error)
 	ServiciosDeDevice(deviceID string) ([]fleet.Servicio, error)
 	RevocarServiciosDeDevice(deviceID string) (int64, error)

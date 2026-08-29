@@ -292,6 +292,44 @@ Casi siempre es una de dos cosas, y las dos se arreglan en un minuto:
    también da 404 y se ve exactamente igual que lo anterior.
 
 
+## ServicioFallandoPorDentro
+
+El proceso está vivo y su trabajo sale mal. **`musubi_fleet_service_up` no puede ver esto**:
+systemd ve el proceso corriendo tanto si contesta bien como si contesta cualquier cosa. Para un
+bot es la única señal que importa.
+
+1. Qué está fallando, con los nombres del dominio de quien reporta:
+   `musubi_fleet_services device=<máquina>` → mirá `rendimiento.desglose`. Los conteos por
+   resultado (`ok`, `no_puedo`, `vacio`…) los elige el colector, no Musubi.
+2. `rendimiento.ventana_seg` dice sobre cuánto tiempo son esos números. Sin eso, «47 fallidas» no
+   se puede leer.
+3. Si el desglose **suma menos** que `atendidas`, no es un bug: quien reporta no supo clasificar
+   todo, y forzarlo a que cierre lo empujaría a inventar una categoría que no midió.
+
+## ColectorDeRendimientoMudo
+
+Un servicio que reportaba rendimiento dejó de hacerlo. **No es lo mismo que «no tuvo trabajo»**, y
+esa diferencia es exactamente por qué el colector empuja un 0 en vez de callarse:
+
+| Lo que se ve | Qué pasó |
+|---|---|
+| `musubi_fleet_service_handled` **existe y vale 0** | El servicio está vivo y no tuvo trabajo. Normal de madrugada. |
+| la serie **desapareció** | El colector se murió. Esta alerta. |
+
+1. `systemctl status <la unidad o el cron del colector>` en la máquina que reporta.
+2. Si el colector corre por cron, su log: un scrape que falla **no empuja** a propósito —un `0`
+   falso dispararía esta misma alerta por el motivo equivocado— así que el silencio es el síntoma
+   correcto y el motivo está en el log.
+3. La respuesta de la puerta trae `desconocidos`: si el colector apunta a un nombre que nadie
+   declaró, ahí va a estar. Se arregla con `musubi_fleet_service_declare`, no tocando el colector.
+
+## ServicioLento
+
+El p95 pasa los 5 segundos sostenido. Ojo con una cosa: **sobre cero unidades atendidas no hay
+percentil**, así que esta serie está ausente en los minutos tranquilos por diseño. Un p95 que
+aparece y desaparece no es un bug del colector: es que a veces no hubo nada que medir.
+
+
 ## ServicioCaido
 
 Un servicio que la máquina reporta como NO corriendo, y la máquina está viva (si estuviera caída

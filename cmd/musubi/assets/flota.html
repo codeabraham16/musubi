@@ -247,6 +247,35 @@ function seccionVitales(e) {
   </div></section>`;
 }
 
+// EL RENDIMIENTO ES LO QUE UN SERVICIO HIZO, no en qué estado está — y para un bot es lo ÚNICO
+// que importa: su proceso puede estar perfectamente vivo mientras contesta mal todas las consultas.
+//
+// Ausente = no se midió, que es lo normal en un servicio de systemd; el supervisor sabe si corre,
+// no cuánto trabajo hizo. Un cero, en cambio, SÍ se dibuja: «miré y no pasó nada» es un dato, y es
+// el que distingue un bot callado de un colector muerto.
+function rendimientoTexto(r) {
+  if (!r) return '';
+  const v = r.ventana_seg ? ` en ${duracion(r.ventana_seg) === ND ? r.ventana_seg + 's' : duracion(r.ventana_seg)}` : '';
+  let t = ` · ${r.atendidas} atendidas${v}`;
+  if (r.fallidas) t += `, ${r.fallidas} fallidas`;
+  // La tasa sale del servidor y puede ser null: sobre cero atendidas no es 0 %, es la ausencia de
+  // una tasa. Calcularla acá repetiría esa decisión en un segundo lugar donde se puede olvidar.
+  if (r.tasa_error_pct !== null && r.tasa_error_pct !== undefined) t += ` (${Number(r.tasa_error_pct).toFixed(1)} % error)`;
+  if (r.latencia_p95_ms !== null && r.latencia_p95_ms !== undefined) t += ` · p95 ${r.latencia_p95_ms} ms`;
+  const claves = r.desglose ? Object.keys(r.desglose).sort() : [];
+  if (claves.length) t += ` · ${claves.map(k => `${k}=${r.desglose[k]}`).join(' ')}`;
+  return t;
+}
+
+// tasaAlta marca el servicio que corre y falla. El umbral es explícito y alto a propósito: por
+// debajo de 20 % hay dominios donde fallar es normal —una búsqueda que no encuentra nada—, y una
+// marca que aparece siempre deja de mirarse.
+const TASA_ERROR_ALTA = 20;
+function tasaAlta(r) {
+  if (!r || r.tasa_error_pct === null || r.tasa_error_pct === undefined) return false;
+  return Number(r.tasa_error_pct) >= TASA_ERROR_ALTA;
+}
+
 // seccionServicios AGRUPA POR CLASE. Cincuenta y cuatro servicios en una lista plana no se leen;
 // agrupados por quién los corre —systemd, podman— se leen de un vistazo. Y los que NO están
 // corriendo van PRIMERO: es la fila que uno vino a buscar.
@@ -268,8 +297,12 @@ function seccionServicios(e) {
     const chips = lista.map(s => {
       const mal = s.estado === 'fallado' || s.estado === 'detenido';
       const viejo = s.fresco === false;
-      const t = `${s.estado}${viejo ? ' · sin noticias recientes' : ''}${s.reinicios ? ' · ' + s.reinicios + ' reinicios' : ''}`;
-      return `<span class="chip ${mal ? 'mal' : ''} ${viejo ? 'viejo' : ''}" title="${esc(t)}">${esc(s.nombre)}</span>`;
+      const t = `${s.estado}${viejo ? ' · sin noticias recientes' : ''}${s.reinicios ? ' · ' + s.reinicios + ' reinicios' : ''}${rendimientoTexto(s.rendimiento)}`;
+      // UN SERVICIO CORRIENDO CON LA MITAD DE SU TRABAJO FALLANDO NO ESTÁ SANO, y el estado del
+      // supervisor no lo dice: systemd ve el proceso vivo. Por eso la marca de error entra en el
+      // mismo lugar visual que `mal`, y no en una columna aparte que nadie mira.
+      const rotoPorDentro = tasaAlta(s.rendimiento);
+      return `<span class="chip ${mal || rotoPorDentro ? 'mal' : ''} ${viejo ? 'viejo' : ''}" title="${esc(t)}">${esc(s.nombre)}${rotoPorDentro ? ' ⚠' : ''}</span>`;
     }).join('');
     return `<div style="margin-bottom:8px"><b style="font-size:11px;color:var(--tenue)">${esc(cl)} · ${lista.length}</b><div class="chips" style="margin-top:4px">${chips}</div></div>`;
   }).join('');

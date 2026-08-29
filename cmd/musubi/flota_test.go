@@ -650,3 +650,50 @@ func TestElPanelDibujaLosProcesosYLaMemoriaLibre(t *testing.T) {
 		t.Error("bytes() trata el 0 como ausencia: un 0 medido es un dato, y es el que más importa")
 	}
 }
+
+// Fase 4 — el panel dibuja el RENDIMIENTO, que para un bot es lo único que importa.
+//
+// Un bot puede tener su proceso perfectamente vivo mientras contesta mal todas las consultas: el
+// estado del supervisor dice «corriendo» y no está sano. Si el panel no lo dibuja, el dato queda
+// guardado y nadie lo ve — el patrón exacto que este track persigue.
+//
+// Sabotaje que la hace fallar: sacar rendimientoTexto del título del chip.
+// Sabotaje que la hace fallar: sacar la marca de tasa alta del chip.
+func TestElPanelDibujaElRendimientoDeUnServicio(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	for _, quiero := range []struct{ frag, porque string }{
+		{"function rendimientoTexto(", "sin la función el rendimiento no se dibuja en ningún lado"},
+		{"rendimientoTexto(s.rendimiento)", "la función tiene que estar ENGANCHADA al chip, no sólo definida"},
+		{"function tasaAlta(", "un servicio que corre y falla la mitad de las veces no está sano, y el estado del supervisor no lo dice"},
+		{"tasaAlta(s.rendimiento)", "la marca tiene que estar enganchada al chip"},
+		{"TASA_ERROR_ALTA", "el umbral tiene que estar nombrado, no metido a mano en una comparación"},
+	} {
+		if !strings.Contains(p, quiero.frag) {
+			t.Errorf("flota.html no contiene %q: %s", quiero.frag, quiero.porque)
+		}
+	}
+
+	// EL CERO SE DIBUJA Y EL AUSENTE NO. Es al revés que el resto del panel y es lo que sostiene
+	// todo el diseño del colector: `atendidas: 0` significa «miré y no pasó nada» —el latido que
+	// distingue un bot callado de un colector muerto— y tiene que verse. `rendimiento` ausente
+	// significa «no se midió», que es lo normal en un servicio de systemd.
+	i := strings.Index(p, "function rendimientoTexto(")
+	cuerpo := p[i:]
+	if fin := strings.Index(cuerpo, "\nfunction "); fin > 0 {
+		cuerpo = cuerpo[:fin]
+	}
+	if !strings.Contains(cuerpo, "if (!r) return") {
+		t.Errorf("rendimientoTexto no distingue el ausente: un servicio de systemd sin rendimiento "+
+			"dibujaría un texto vacío o «undefined».\n%s", cuerpo)
+	}
+	if strings.Contains(cuerpo, "if (!r.atendidas)") || strings.Contains(cuerpo, "r.atendidas === 0 ? ''") {
+		t.Errorf("rendimientoTexto trata el 0 como ausencia: ese cero es el latido del colector, "+
+			"y sin él «el bot no tuvo consultas» y «el colector murió» se ven igual.\n%s", cuerpo)
+	}
+	// La tasa viene del SERVIDOR y puede ser null. Recalcularla acá repetiría en un segundo lugar
+	// la decisión de que sobre cero atendidas no hay tasa — y ahí es donde se olvida.
+	if strings.Contains(cuerpo, "r.fallidas / r.atendidas") || strings.Contains(cuerpo, "r.fallidas/r.atendidas") {
+		t.Errorf("el panel recalcula la tasa de error en vez de usar la del servidor: sobre cero "+
+			"atendidas no hay tasa, y esa decisión no puede vivir en dos lados.\n%s", cuerpo)
+	}
+}

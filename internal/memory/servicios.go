@@ -250,6 +250,92 @@ func (e *DbEngine) ReportarServicios(deviceID string, ahora time.Time, reportes 
 	return nuevos, actualizados, nil
 }
 
+// ReportarSaludDeServicios actualiza la salud de servicios QUE YA EXISTEN en esta máquina, sin
+// crear ninguno y sin podar nada. Devuelve cuántos se actualizaron y los nombres que no existen.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ NO CREA, Y NO ES PRUDENCIA SINO UN BUG EVITADO
+//
+// El camino del latido crea con `declared = 0` —esa fila la trajo la máquina, así que la poda por
+// ausencia puede sacarla—. Si este camino creara igual, el bot nacería con `declared = 0` y **el
+// siguiente latido del agente lo podaría**: el agente enumera systemd y contenedores, y el bot no
+// está en ninguno de los dos. El colector lo recrearía un minuto después, el agente lo podaría de
+// nuevo, y el servicio aparecería y desaparecería del panel para siempre sin que nada dijera por
+// qué.
+//
+// Un bot entra al inventario por `musubi_fleet_service_declare`, que lo marca `declared = 1` y lo
+// hace inmune a esa poda. Esta función sólo le pone salud a lo que alguien ya decidió que existe.
+//
+// TAMPOCO ESTAMPA SEÑAL DE VIDA, y eso es lo otro que la separa del latido: si un reporte de salud
+// marcara viva a la máquina, un host cuyo AGENTE murió pero cuyo colector sigue corriendo figuraría
+// sano. La vida de la máquina la afirma quien la mide; ésta afirma otra cosa.
+func (e *DbEngine) ReportarSaludDeServicios(deviceID string, ahora time.Time,
+	reportes []fleet.ReporteServicio) (actualizados int, desconocidos []string, err error) {
+
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" || len(reportes) == 0 {
+		return 0, nil, nil
+	}
+	d, existe, err := e.DevicePorID(deviceID)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !existe || d.Revoked {
+		return 0, nil, nil
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return 0, nil, fmt.Errorf("error al abrir la transacción del reporte de salud: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, r := range reportes {
+		r = fleet.RecortarReporte(r)
+		if !fleet.NombreDeServicioValido(r.Nombre) {
+			continue
+		}
+		// LA SALUD SE VALIDA Y SE DESCARTA ENTERA SI NO SE PUEDE CREER. Acá NO vale la asimetría
+		// del latido —guardar el servicio con la salud vacía—, porque el servicio ya existe: no
+		// hay nada que crear, y pisar una salud buena con una vacía sería perder el último dato
+		// bueno por culpa de un reporte roto.
+		if err := r.Salud.Valida(); err != nil {
+			desconocidos = append(desconocidos, r.Nombre+": "+err.Error())
+			continue
+		}
+		salud, err := r.Salud.Serializar()
+		if err != nil {
+			return 0, nil, fmt.Errorf("error al serializar la salud de %q: %w", r.Nombre, err)
+		}
+		// `revoked = 0` NO se toca: un servicio dado de baja no vuelve por un reporte de salud.
+		// Es la misma regla que el latido aplica a lo declarado, y por el mismo motivo — que algo
+		// vuelva al inventario es una decisión de alguien.
+		res, err := tx.Exec(
+			`UPDATE services SET last_report = ?, last_health = ?
+			  WHERE name = ? AND device_id = ? AND revoked = 0`,
+			ahora.UTC().Format(time.RFC3339), salud, r.Nombre, deviceID)
+		if err != nil {
+			return 0, nil, fmt.Errorf("error al reportar la salud de %q: %w", r.Nombre, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, nil, fmt.Errorf("error al leer el resultado de %q: %w", r.Nombre, err)
+		}
+		if n == 0 {
+			// SE DICE CUÁL, y no se traga en silencio. Un colector apuntando a un nombre que no
+			// existe es el error más probable de este camino —un typo, un servicio que nadie
+			// declaró— y su síntoma sin esto sería un panel que nunca cambia.
+			desconocidos = append(desconocidos, r.Nombre)
+			continue
+		}
+		actualizados++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, nil, fmt.Errorf("error al confirmar el reporte de salud: %w", err)
+	}
+	return actualizados, desconocidos, nil
+}
+
 // ListarServicios devuelve los servicios de UN proyecto, opcionalmente los de UNA máquina.
 //
 // SOBRE LA GUARDA DE projectID VACÍO: no es lo que impide devolver «todos» —el WHERE ya lo

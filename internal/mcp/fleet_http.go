@@ -461,3 +461,109 @@ func (s *McpServer) marcarSesionSiEsDePantalla(deviceID string, cuerpo cuerpoRes
 	}
 	_ = s.engine.MarcarSesion(deviceID, cmd.Argv[1], estado, motivo, time.Now())
 }
+
+// ── La puerta del RENDIMIENTO: salud para lo que ninguna máquina enumera (fase 4) ────────────
+
+// fleetSaludPath es la ruta por la que un colector le pone salud a un servicio DECLARADO.
+const fleetSaludPath = "/fleet/service-health"
+
+// cuerpoSalud es lo que manda un colector. NO trae identidad, igual que el latido y el resultado:
+// la máquina sale del TOKEN. Que no tenga POR DÓNDE pasarla es la garantía, no la disciplina.
+type cuerpoSalud struct {
+	Servicios []fleet.ReporteServicio `json:"servicios"`
+}
+
+// saludMaxBytes acota el cuerpo. Es chico a propósito: por acá entra un puñado de servicios
+// DECLARADOS, no un inventario de 54 units como el del latido.
+const saludMaxBytes = 64 << 10
+
+// respuestaSalud es lo que contesta la puerta. Los `desconocidos` viajan porque el error más
+// probable de este camino es apuntar a un nombre que nadie declaró —un typo, un servicio que se
+// dio de baja— y su síntoma, sin esto, sería un panel que nunca cambia y un colector convencido
+// de que está reportando.
+type respuestaSalud struct {
+	OK           bool     `json:"ok"`
+	Device       string   `json:"device,omitempty"`
+	Actualizados int      `json:"actualizados"`
+	Desconocidos []string `json:"desconocidos,omitempty"`
+	Motivo       string   `json:"motivo,omitempty"`
+}
+
+// handlerSaludDeServicios recibe salud (y rendimiento) para servicios de ESTA máquina.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ ES UNA PUERTA APARTE Y NO UN CAMPO MÁS DEL LATIDO
+//
+// El latido hace DOS cosas que acá serían un bug:
+//
+//  1. PODA POR AUSENCIA. Un colector que manda un solo servicio por el camino del latido borraría
+//     los otros 53 de esa máquina. La poda es correcta para un inventario —«esto es TODO lo que
+//     corre acá»— y es una afirmación que un colector de un bot no está en condiciones de hacer.
+//  2. ESTAMPA SEÑAL DE VIDA. Si este reporte marcara viva a la máquina, un host cuyo AGENTE murió
+//     pero cuyo colector sigue corriendo figuraría sano — y el colector es justamente lo que menos
+//     se cae, porque es un cron de un minuto.
+//
+// Misma puerta y mismo almacén de credenciales que el latido: el token del dispositivo, que no
+// abre /mcp. No amplía lo que ese token puede hacer: por el latido ya podía escribir la salud de
+// los servicios de su propia máquina. Lo que hace es dejarlo escribir SIN afirmar las otras dos
+// cosas.
+func (s *McpServer) handlerSaludDeServicios(limiter *authLimiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ip := clientIP(r)
+		if limiter.locked(ip, time.Now()) {
+			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+			return
+		}
+		d, ok, err := s.engine.DevicePorToken(bearerToken(r.Header.Get("Authorization")))
+		if err != nil {
+			http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !ok {
+			limiter.fail(ip, time.Now())
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			escribirSalud(w, http.StatusUnauthorized, respuestaSalud{OK: false, Motivo: motivoRechazo})
+			return
+		}
+		limiter.reset(ip)
+
+		crudo, err := io.ReadAll(io.LimitReader(r.Body, saludMaxBytes+1))
+		if err != nil || len(crudo) > saludMaxBytes {
+			http.Error(w, "cuerpo demasiado grande", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var cuerpo cuerpoSalud
+		if err := jsonpkg.Unmarshal(crudo, &cuerpo); err != nil {
+			escribirSalud(w, http.StatusBadRequest, respuestaSalud{OK: false, Motivo: "cuerpo inválido"})
+			return
+		}
+		if len(cuerpo.Servicios) > fleet.ServiciosPorLatido {
+			escribirSalud(w, http.StatusRequestEntityTooLarge, respuestaSalud{OK: false,
+				Motivo: "demasiados servicios en un reporte"})
+			return
+		}
+
+		actualizados, desconocidos, err := s.engine.ReportarSaludDeServicios(d.ID, time.Now(), cuerpo.Servicios)
+		if err != nil {
+			escribirSalud(w, http.StatusServiceUnavailable, respuestaSalud{OK: false, Motivo: "no se pudo guardar"})
+			return
+		}
+		// UN NOMBRE DESCONOCIDO NO ES UN ERROR HTTP. El reporte llegó y se aplicó lo que se pudo;
+		// devolver 4xx haría que un colector con un typo en UN servicio deje de reportar los otros
+		// —o peor, que su cron loguee un error rojo cada minuto y alguien lo silencie—. Se contesta
+		// 200 con la lista, que es la información que hace falta para arreglarlo.
+		escribirSalud(w, http.StatusOK, respuestaSalud{
+			OK: true, Device: d.Name, Actualizados: actualizados, Desconocidos: desconocidos})
+	}
+}
+
+func escribirSalud(w http.ResponseWriter, code int, r respuestaSalud) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = jsonpkg.NewEncoder(w).Encode(r)
+}
