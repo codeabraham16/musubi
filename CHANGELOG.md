@@ -8,6 +8,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Changed
+- **Pedir lo mismo de dos maneras devuelve lo mismo** (Musubi Renaissance · F5). Medido el
+  2026-08-29: cinco paráfrasis del mismo pedido daban un solape Jaccard de **0,09**, con tres pedidos
+  en **0,00** — dos formas de pedir lo mismo sin un solo patrón en común. Y con 256 bytes de contexto
+  extra se perdían dos tercios del corpus: el motor **castigaba la especificidad**.
+  - **El orden deja de fingir precisión que no tiene.** En una consulta real el pool va de 0,643 a
+    0,515: decenas de candidatos separados por milésimas, que una reformulación da vuelta. Ahora la
+    similitud se cuantiza a `designResolucionSim` y el empate se rompe por id, con un sort estable.
+    Entre dos candidatos que difieren por menos que el ruido de una paráfrasis el motor **no sabe**
+    cuál es mejor; cuando no se sabe, contestar siempre lo mismo es estrictamente mejor que contestar
+    cualquier cosa.
+  - **La consulta se corta por ORACIONES, no por caracteres.** El primer diseño usaba un tope de
+    caracteres y hubo que tirarlo: con un pedido de 50 chars y un tope de 600 entran 550 de relleno y
+    el vector sigue arrastrado — el test lo demostró. Un pedido de diseño cabe en una o dos oraciones;
+    lo que sigue es contexto para el agente, no para la búsqueda.
+  - **El recorte se declara** en `query_normalized`, con el largo original y el usado.
+  - **El eco dejó de comerse el corpus.** `ask` devolvía el pedido crudo, y con un pedido largo eso
+    consumía presupuesto y le sacaba lugares al material: el brief con contexto traía menos patrones
+    que el mismo pedido sin contexto. Ahora lleva la consulta normalizada — quien llamó ya tiene su
+    prompt entero, lo escribió. Lo encontró el propio test de ruido.
+  - Se evaluó y se **descartó** la fusión de rankings semántico + léxico (RRF): choca con el piso de
+    F3, que compara similitudes, y un puntaje de fusión no es una similitud.
+  - ⚠ **La magnitud no está medida.** Cuánto sube M1 depende del embebedor y del acervo reales; los
+    invariantes prueban el mecanismo. El número sale de la sonda después de desplegar.
+
+### Changed
 - **El motor de diseño pasa de traer material a ELEGIRLO** (Musubi Renaissance · F4). Tres defectos
   medidos el 2026-08-29, los tres del mismo origen: el brief entregaba lo que salía del ranking, sin
   criterio propio.

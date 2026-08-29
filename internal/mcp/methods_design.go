@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -131,6 +132,32 @@ const designLambdaMMR = 0.45
 // que estas pueden elegirse 100 % por relevancia sin riesgo de quedarse sin criterio.
 const designMetodoRelevante = 8
 
+// designConsultaMax es cuánto texto del pedido viaja al embebedor. Medido el 2026-08-29: con 256
+// bytes de contexto extra pegados atrás se perdían DOS TERCIOS del corpus, y con 10 KB el solape con
+// el pedido limpio caía a CERO. Un pedido de diseño ocupa unos cientos de caracteres; lo que sigue
+// suele ser contexto para el agente, no para la búsqueda, y promedia el vector hasta sacarlo del
+// vecindario del pedido. El motor terminaba castigando la especificidad — al revés de lo que debería.
+//
+// Se queda con la CABEZA porque un pedido lleva el pedido adelante y el contexto atrás. Y el recorte
+// se declara, como todo recorte en este motor.
+const designConsultaMax = 600
+
+// designConsultaFrases es cuántas oraciones del pedido viajan al buscador. Un pedido de diseño cabe
+// en una o dos («tabla densa de inventario con lotes, filtros y alertas de stock bajo»); lo que viene
+// después suele ser contexto para el agente. Es una heurística, y por eso el recorte se DECLARA: el
+// caller ve exactamente con qué se buscó.
+const designConsultaFrases = 2
+
+// designResolucionSim es la diferencia mínima de similitud que el motor trata como REAL. Por debajo,
+// dos candidatos se consideran empatados y el empate se rompe por un criterio estable.
+//
+// No es una heurística de conveniencia: en una consulta real el pool se reparte entre 0,643 y 0,515,
+// así que hay decenas de candidatos separados por milésimas. Una reformulación mueve el vector lo
+// suficiente para dar vuelta esos empates y rehacer el top-6 entero — medido, cinco maneras de pedir
+// lo mismo daban un solape de 0,09. El orden entre candidatos que difieren por menos que el ruido de
+// una paráfrasis YA ERA arbitrario; lo que se arregla no es hacerlo correcto, es hacerlo CONSISTENTE.
+const designResolucionSim = 0.005
+
 // designPisoBloque es cuántos ítems de método y de corpus se defienden antes de vaciar un bloque. Sin
 // piso, el presupuesto se cobraría todo de un solo lado: el método caería a cero y la métrica de
 // inyección por el acervo se "ganaría" por inanición en vez de por diseño.
@@ -152,6 +179,55 @@ type recorteBloque struct {
 	Servidos int    `json:"servidos"`
 	Total    int    `json:"total"`
 	Unidad   string `json:"unidad"`
+}
+
+// recorteConsultaBrief declara que el pedido no viajó entero al buscador, y de cuánto a cuánto.
+type recorteConsultaBrief struct {
+	CharsOriginales int `json:"chars_originales"`
+	CharsUsados     int `json:"chars_usados"`
+}
+
+// normalizarConsulta prepara el pedido para el buscador: junta los espacios y lo acota a la cabeza.
+// Devuelve la consulta y —si hubo recorte— su declaración.
+//
+// Sólo toca lo que va al EMBEBEDOR. El pedido completo sigue viajando en `ask`, porque el agente que
+// compone sí necesita el contexto entero; el que no lo necesitaba era el buscador.
+func normalizarConsulta(prompt string) (string, *recorteConsultaBrief) {
+	limpia := strings.Join(strings.Fields(prompt), " ")
+	original := len([]rune(limpia))
+
+	// Se corta por ORACIONES antes que por caracteres, y ése es el punto. Un tope de caracteres a
+	// secas no sirve cuando el pedido es corto y el contexto largo: con «tabla densa» (11 chars) más
+	// 600 de relleno, el tope deja pasar 589 caracteres de ruido y el vector sigue arrastrado. El
+	// pedido de diseño casi siempre es la PRIMERA oración o las dos primeras; lo que viene después es
+	// contexto para el agente. Cortar por oraciones aísla el pedido; el tope de caracteres queda como
+	// segunda red para una oración kilométrica.
+	usada := primerasOraciones(limpia, designConsultaFrases)
+	if len([]rune(usada)) > designConsultaMax {
+		usada = string([]rune(usada)[:designConsultaMax])
+	}
+	if len([]rune(usada)) >= original {
+		return limpia, nil
+	}
+	return usada, &recorteConsultaBrief{CharsOriginales: original, CharsUsados: len([]rune(usada))}
+}
+
+// primerasOraciones devuelve las primeras n oraciones del texto. Es deliberadamente simple —corta en
+// `.`, `!`, `?` y `;`— porque no hay que entender el texto, sólo quedarse con la cabeza.
+func primerasOraciones(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	vistas := 0
+	for i, r := range s {
+		if r == '.' || r == '!' || r == '?' || r == ';' {
+			vistas++
+			if vistas >= n {
+				return strings.TrimSpace(s[:i+1])
+			}
+		}
+	}
+	return s
 }
 
 // recorteBrief es la declaración de todo lo que el presupuesto dejó afuera (I-PRE3).
@@ -198,6 +274,9 @@ type designBrief struct {
 	Emit         string        `json:"emit"`                   // cómo entregar según el target (relleno con los tokens)
 	Instructions string        `json:"instructions"`           // qué hace el caller ahora
 	Truncated    *recorteBrief `json:"truncated,omitempty"`    // qué dejó afuera el presupuesto, y de cuánto
+	// QueryNormalized aparece cuando el pedido era más largo que lo que viaja al buscador. Un recorte
+	// mudo haría creer que se buscó lo que se escribió (I-REP3).
+	QueryNormalized *recorteConsultaBrief `json:"query_normalized,omitempty"`
 	// Retrieval dice CON QUÉ se buscó el corpus: semantico | fts. Siempre presente (I-ABS2). La caída
 	// silenciosa a léxico —con el campo `similarity` desapareciendo sin explicación— era uno de los dos
 	// silencios que esta capa cierra.
@@ -227,6 +306,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// CAPA 3 — marca por proyecto: se resuelve por el PRINCIPAL autenticado (nunca por texto libre),
 	// así "sólo la del target, nunca se cruza" sale del propio modelo. El acervo (materia prima +
 	// método) es compartido; la marca es del proyecto.
+	consulta, recorteConsulta := normalizarConsulta(args.Prompt)
 	brandScope := brandScopeFor(principalFrom(ctx), args.Brand)
 	brandText, brandSource, brandTok := s.brandFor(brandScope)
 	limit := args.Limit
@@ -242,7 +322,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 
 	// Recall del acervo, best-effort: si algo falla, el brief conserva el NÚCLEO estático (rol +
 	// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
-	rec := s.recallDesignCorpus(ctx, corpusCtx, args.Prompt, limit)
+	rec := s.recallDesignCorpus(ctx, corpusCtx, consulta, limit)
 
 	// CAPA 2 — el MÉTODO vivo: las tarjetas del sub-acervo arbitrable `design-method/*`. Siguen
 	// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
@@ -251,26 +331,33 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	metodo, methodSource := s.designMethodCards(rec.Metodo, rec.Modo)
 
 	brief := designBrief{
-		Ask:            sanearMaterial(strings.TrimSpace(args.Prompt)),
-		Target:         target,
-		Precedence:     designPrecedence,
-		MaterialNote:   designMaterialNote,
-		Role:           designRole,
-		Principles:     designPrinciples,
-		Brand:          sanearMaterial(brandText),
-		BrandScope:     brandScope,
-		BrandSource:    brandSource,
-		BrandTokens:    brandTok,
-		Corpus:         rec.Hits,
-		CorpusScope:    designCorpusScope,
-		CorpusNote:     "Cada item es un gist (titular). Para traer el patrón completo, expandí su id con musubi_memory_expand — 1 o 2, no más.",
-		Method:         metodo,
-		MethodSource:   methodSource,
-		Emit:           designEmitFor(target, brandTok),
-		Instructions:   designInstructions,
-		Retrieval:      rec.Modo,
-		Degraded:       rec.Degraded,
-		DegradedReason: rec.Motivo,
+		// El eco lleva la consulta NORMALIZADA, no el pedido crudo. Quien llamó ya tiene su prompt
+		// entero —lo escribió— así que devolvérselo completo es presupuesto gastado en nada, y encima
+		// desplazaba al corpus: un pedido con contexto largo se comía los lugares del material (lo
+		// encontró TestDesignElRuidoNoCambiaElMaterial). Además `ask` es el primer campo del brief, la
+		// posición de máxima atención, así que cuanto menos texto ajeno viva ahí, mejor. Lo recortado se
+		// declara en `query_normalized`.
+		Ask:             sanearMaterial(consulta),
+		Target:          target,
+		Precedence:      designPrecedence,
+		MaterialNote:    designMaterialNote,
+		Role:            designRole,
+		Principles:      designPrinciples,
+		Brand:           sanearMaterial(brandText),
+		BrandScope:      brandScope,
+		BrandSource:     brandSource,
+		BrandTokens:     brandTok,
+		Corpus:          rec.Hits,
+		CorpusScope:     designCorpusScope,
+		CorpusNote:      "Cada item es un gist (titular). Para traer el patrón completo, expandí su id con musubi_memory_expand — 1 o 2, no más.",
+		Method:          metodo,
+		MethodSource:    methodSource,
+		Emit:            designEmitFor(target, brandTok),
+		Instructions:    designInstructions,
+		QueryNormalized: recorteConsulta,
+		Retrieval:       rec.Modo,
+		Degraded:        rec.Degraded,
+		DegradedReason:  rec.Motivo,
 	}
 	aplicarPresupuesto(&brief)
 	return jsonResult(brief)
@@ -541,6 +628,10 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 		}
 		return resultadoRecall{Modo: modo, Degraded: true, Motivo: motivo}
 	}
+	// El orden que llega del buscador finge una precisión que no tiene: candidatos separados por
+	// milésimas quedan ordenados por el azar del ranking, y una reformulación los da vuelta (F5).
+	estabilizarOrden(sources)
+
 	// UNA búsqueda, DOS salidas (F4). El pool ya traía las tarjetas de método —se agranda a propósito
 	// para que no compitan con los patrones— y hasta ahora se tiraban. Ahora se parten: el método va a
 	// `method[]` ordenado por RELEVANCIA AL PEDIDO, y el resto al corpus. El vector de la consulta ya
@@ -706,6 +797,30 @@ func solapeBolsas(a, b map[string]bool) float64 {
 		}
 	}
 	return float64(inter) / float64(len(a)+len(b)-inter)
+}
+
+// estabilizarOrden vuelve REPRODUCIBLE el orden de los candidatos: agrupa por similitud cuantizada a
+// designResolucionSim y, dentro de cada grupo, ordena por id. Es un sort ESTABLE sobre una clave que
+// no depende de cómo llegaron las filas.
+//
+// La afirmación que sostiene esto: entre dos candidatos que difieren por menos que el ruido de una
+// paráfrasis, el motor NO SABE cuál es mejor. Cuando no se sabe, contestar siempre lo mismo es
+// estrictamente mejor que contestar cualquier cosa: el caller puede confiar en lo que recibe, y una
+// diferencia en el brief pasa a significar una diferencia en el pedido.
+func estabilizarOrden(src []searchSource) {
+	sort.SliceStable(src, func(i, j int) bool {
+		ci, cj := cuantizarSim(src[i].sim), cuantizarSim(src[j].sim)
+		if ci != cj {
+			return ci > cj
+		}
+		return src[i].id < src[j].id
+	})
+}
+
+// cuantizarSim lleva una similitud a la rejilla de designResolucionSim. Todo lo que cae en el mismo
+// escalón es, para el motor, indistinguible.
+func cuantizarSim(sim float32) int {
+	return int(math.Round(float64(sim) / designResolucionSim))
 }
 
 // sobreElPiso descarta los candidatos que no llegan a la similitud mínima. Es la mitad que faltaba de
