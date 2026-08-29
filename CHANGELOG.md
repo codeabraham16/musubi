@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El motor de diseño tiene marcador.** El 2026-08-21 `musubi_design` se degradó de golpe —el
+  bloque de método pasó de 8 principios constantes a 30 tarjetas del acervo, 24× más texto— y
+  nadie lo notó durante ocho días, hasta que el usuario lo sintió usándolo en Altura. Las suites
+  seguían verdes todo el tiempo porque miden que el brief **se arme**, no que sirva. Ahora hay un
+  banco (Musubi Renaissance · F0):
+  - `TestBancoDiseno` — offline, sin red ni LLM, contra un acervo de fixture dimensionado a
+    propósito **por encima de `designMethodLimit`**, para que la perilla que causó el incidente
+    quede atada y su movimiento se vea. Mide tamaño del brief, cuánta parte del brief depende del
+    pedido, abstención y por dónde entra un payload de inyección, con **umbrales versionados** que
+    ponen en rojo cualquier regresión. Verificado: subir `designMethodLimit` de 40 a 60 reproduce
+    el incidente y el banco lo atrapa.
+  - `TestSondaDiseno` (`-tags sonda`) — contra el central real, para lo que sólo se puede medir con
+    el embebedor y el acervo vivos. **Línea base 2026-08-29:** estabilidad de paráfrasis **0,09**
+    (objetivo 0,80; tres pedidos en 0,00), precisión temática **0,22**, abstención **0,00**,
+    latencia p50 571 ms, 190 ids distintos servidos.
+  - Set dorado de 16 pedidos reales de los proyectos vivos en 3 formas cada uno, 8 consultas fuera
+    de dominio y 8 payloads de inyección, con guardas que rechazan un set degenerado y un umbral
+    sin procedencia.
+  - La métrica de inyección reporta **tres canales por separado** (prompt→instrucción,
+    prompt→eco, acervo→instrucción) porque cada uno lo arregla una fase distinta del track, y una
+    métrica única los taparía entre sí. Envolver un payload en etiquetas de cita sin sacarlo del
+    bloque de instrucciones **no** lo neutraliza, y hay un test que lo defiende.
+  - Banco de ataque del motor (`methods_design_ataque_test.go`): 6 ataques que afirman el
+    comportamiento vulnerable de hoy, para que el arreglo tenga que romperlos a propósito.
+  - Plan del track en `specs/renaissance-rey-del-diseno/`, SDD de la fase en
+    `specs/renaissance-f0-banco/`. Esta fase **no arregla nada del motor: sólo lo mide.**
+
 ### Fixed
 - **La flota en vivo no entregaba un solo evento, y el único síntoma era una línea de log.**
   `PushFlota` serializaba el `LiveEvent` entero (con `seq`, `kind`, `origen`, `principal`) contra

@@ -1,0 +1,14 @@
+{
+  "fijado": "2026-08-29",
+  "commit": "05c016a",
+  "nota": "Linea base del motor de diseno ANTES de arreglar nada (renaissance-f0-banco). Los valores estan clavados en lo MEDIDO contra el fixture del banco, incluidos los malos: un banco que naciera exigiendo el objetivo estaria rojo desde el commit uno y se apagaria a la semana. OJO: los numeros de M4 son del FIXTURE, no del acervo de produccion — el fixture se dimensiona a proposito por encima de designMethodLimit para que la perilla que causo el incidente del 2026-08-21 quede atada y su movimiento se vea. La regla es que SOLO SE APRIETAN: cada fase del track mueve su umbral al aterrizar y el movimiento se ve en el diff del PR. Los objetivos finales estan en specs/renaissance-rey-del-diseno/proposal.md.",
+  "umbrales": {
+    "m2_abstencion_min": 0.25,
+    "m4_tokens_p50_max": 6600,
+    "m4_tokens_max": 7500,
+    "m5_fraccion_variable_min": 0.04,
+    "m6_prompt_a_instruccion_min": 1.0,
+    "m6_prompt_en_eco_min": 0.0,
+    "m6_acervo_a_instruccion_min": 0.0
+  }
+}
