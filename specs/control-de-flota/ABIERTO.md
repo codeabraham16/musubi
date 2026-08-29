@@ -553,6 +553,44 @@ Es la compuerta funcionando como fue diseñada; nadie se la concedió. Alcanza c
 las tools, Prometheus y las series, y **nunca se abrió la pantalla por la que mira el operador**.
 Todo lo que se verificó era cierto y ninguna de esas verificaciones tocaba el camino que él usa.
 
+**2026-08-28 (octies) · fase 1 de la maqueta: el modelo de autoridad empieza por el dominio.**
+
+Después de investigar seis proyectos de referencia (MeshCentral, Teleport, Guacamole, Fleet/osquery,
+Netdata/Zabbix, Tactical RMM) y escribir la maqueta de tres planos, arranca la fase 1 por el
+dominio, que es lo que no se puede agregar después.
+
+**`screen` partido en dos.** Era un solo bit, así que dárselo a alguien para que DIAGNOSTICARA le
+daba también el teclado y el mouse; la alternativa era no dárselo, y entonces no podía ayudar.
+Ahora hay `screen:view` y `screen`, con una implicación **asimétrica**: quien controla puede mirar
+—negárselo sería un absurdo—, quien mira no puede controlar —si pudiera, la capacidad nueva sería
+decoración—. Copiado de MeshCentral (`MESHRIGHT_REMOTECONTROL` contra `MESHRIGHT_REMOTEVIEWONLY`).
+
+**Compatibilidad hacia atrás, que no es un detalle:** `screen` sigue significando exactamente lo
+que significaba. Redefinirlo como «sólo mirar» habría sacado el control a todos los que hoy lo
+tienen, en silencio, hasta que alguien lo necesitara.
+
+**El eje de consentimiento.** Es la ausencia más grave que tenía el modelo: una sesión de pantalla
+se abría y la persona sentada enfrente no se enteraba. Cuatro grados ORDENADOS —`libre` < `avisa`
+< `pide` < `prohibido`— y de ese orden sale la única regla que importa: **cuando dos fuentes
+discrepan, gana la más restrictiva**. No es una cascada donde lo específico pisa a lo general: con
+cascada, un `libre` en la fila de UN dispositivo anularía un `pide` puesto en el proyecto entero, y
+el agujero se abriría por el lado que menos se audita.
+
+El default es `avisa`, y las dos alternativas fallan por motivos opuestos, los dos escritos en el
+código: `libre` deja cada máquina nueva sin protección sin que nadie lo haya decidido; `pide` traba
+sesiones por algo que nadie configuró, y eso enseña a poner `libre` en todos lados para que deje de
+molestar — un default demasiado estricto termina en menos seguridad.
+
+**Una prueba encontró un bug propio antes de que existiera:** `ResolverConsentimiento` arrancaba el
+acumulador en el default y tomaba el máximo, con lo cual `avisa` quedaba de PISO y **`libre` era
+inalcanzable** aun declarándolo en todas las fuentes — contradiciendo el comentario que la propia
+función tenía escrito arriba. Quedó con prueba propia porque la forma de romperlo (un acumulador
+que arranca en el default) es demasiado natural para no volver.
+
+Seis sabotajes en este trozo, todos ejecutados. **Lo que falta de la fase 1:** el eje existe y está
+probado, y **todavía no está enchufado** — falta dónde se guarda por máquina y que el agente sepa
+preguntar. Eso, más la sesión como objeto del dominio, es lo que sigue.
+
 ---
 
 ## Cómo se usa este archivo

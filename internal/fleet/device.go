@@ -48,7 +48,22 @@ type Cap string
 const (
 	CapMetrics Cap = "metrics" // leer telemetría del host
 	CapExec    Cap = "exec"    // ejecutar comandos / abrir terminal
-	CapScreen  Cap = "screen"  // sesión de pantalla
+	CapScreen  Cap = "screen"  // sesión de pantalla CON control
+	// CapScreenView es MIRAR la pantalla sin poder tocarla, y es una capacidad aparte porque
+	// mirar y controlar son actos distintos con consecuencias distintas.
+	//
+	// Hasta acá `screen` era un solo bit, así que dárselo a alguien para que DIAGNOSTICARA —ver
+	// qué pasa en la pantalla de una máquina— le daba también el teclado y el mouse. La
+	// alternativa era no dárselo, y entonces no podía ayudar. MeshCentral separa exactamente esto
+	// (`MESHRIGHT_REMOTECONTROL` contra `MESHRIGHT_REMOTEVIEWONLY`) y tiene además un tercer
+	// grado (`DESKLIMITEDINPUT`) que acá no hace falta todavía.
+	//
+	// COMPATIBILIDAD HACIA ATRÁS, que no es un detalle: `screen` sigue significando EXACTAMENTE
+	// lo que significaba —control—, así que ninguna concesión existente cambia de sentido al
+	// desplegar esto. Lo nuevo es una capacidad MÁS ACOTADA, no una redefinición de la vieja.
+	// Redefinir `screen` como «sólo mirar» habría sacado silenciosamente el control a todos los
+	// que hoy lo tienen, y nadie se habría enterado hasta necesitarlo.
+	CapScreenView Cap = "screen:view" // sesión de pantalla, SÓLO mirar
 	// CapShell es la SHELL INTERACTIVA, y es una capacidad aparte de CapExec a propósito (S5b · T1).
 	//
 	// S10 partió `exec` en dos permisos: poder ejecutar (la concesión) y poder ejecutar CUALQUIER
@@ -77,9 +92,9 @@ const (
 // fallar recién cuando alguien la use— cambia un error de configuración visible por un bug
 // intermitente en producción.
 var capsPorTier = map[Tier][]Cap{
-	TierAgente:    {CapMetrics, CapExec, CapScreen, CapShell},
+	TierAgente:    {CapMetrics, CapExec, CapScreen, CapScreenView, CapShell},
 	TierProtocolo: {CapMetrics, CapExec, CapShell},
-	TierMovil:     {CapMetrics, CapScreen},
+	TierMovil:     {CapMetrics, CapScreen, CapScreenView},
 }
 
 // Errores del dominio. Se exportan para que la capa de transporte los traduzca a códigos JSON-RPC
@@ -154,7 +169,7 @@ func NormalizarCaps(in []string) ([]Cap, error) {
 			continue
 		}
 		switch c {
-		case CapMetrics, CapExec, CapScreen, CapShell:
+		case CapMetrics, CapExec, CapScreen, CapScreenView, CapShell:
 			vistas[c] = true
 		default:
 			return nil, fmt.Errorf("%w: %q (esperaba metrics, exec o screen)", ErrCapDesconocida, s)
@@ -166,7 +181,7 @@ func NormalizarCaps(in []string) ([]Cap, error) {
 // ordenar devuelve las capacidades en el orden canónico (el de la matriz), no alfabético:
 // metrics < exec < screen es también el orden de poder, y así se lee la fila.
 func ordenar(set map[Cap]bool) []Cap {
-	orden := map[Cap]int{CapMetrics: 0, CapExec: 1, CapScreen: 2, CapShell: 3}
+	orden := map[Cap]int{CapMetrics: 0, CapExec: 1, CapScreenView: 2, CapScreen: 3, CapShell: 4}
 	out := make([]Cap, 0, len(set))
 	for c := range set {
 		out = append(out, c)
@@ -201,6 +216,22 @@ func TierAdmite(t Tier, c Cap) bool {
 // mal armado o de un JSON incompleto— no permite NADA. Y un dispositivo revocado tampoco, aunque
 // la fila conserve sus capacidades: revocar tiene que cortar sin depender de que alguien además
 // vacíe la lista.
+// Implica dice si tener `otorgada` alcanza para lo que pide `pedida`.
+//
+// HAY UNA SOLA IMPLICACIÓN Y NO ES SIMÉTRICA: `screen` (controlar) alcanza para `screen:view`
+// (mirar), porque quien mueve el mouse ya está viendo la pantalla — negarle mirar sería un
+// absurdo. Al revés NO, y ésa es toda la razón de haber partido la capacidad: si `screen:view`
+// alcanzara para controlar, la capacidad nueva no acotaría nada y sería decoración.
+//
+// Se escribe como una función y no como un mapa de «caps equivalentes» a propósito. Un mapa
+// invita a agregar pares simétricos sin pensar, y la asimetría es justamente el punto.
+func Implica(otorgada, pedida Cap) bool {
+	if otorgada == pedida {
+		return true
+	}
+	return otorgada == CapScreen && pedida == CapScreenView
+}
+
 func (d Device) Permite(c Cap) bool {
 	if d.Revoked {
 		return false
@@ -285,7 +316,7 @@ func CapsDesdeTexto(s string) []Cap {
 	set := make(map[Cap]bool)
 	for _, p := range strings.Split(s, ",") {
 		switch c := Cap(strings.ToLower(strings.TrimSpace(p))); c {
-		case CapMetrics, CapExec, CapScreen, CapShell:
+		case CapMetrics, CapExec, CapScreen, CapScreenView, CapShell:
 			set[c] = true
 		}
 	}

@@ -69,9 +69,21 @@ func alcanzaElProyecto(p *Principal, projectID string) bool {
 // Nil map ⇒ false, que es el caso más importante de todos: un principal sin sección `fleet:`
 // —incluido un admin con write=any— no puede nada (C1).
 func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {
-	for _, selector := range p.Fleet[c] {
-		if selector == comodinFlota || selector == nombreDevice {
-			return true
+	// SE RECORREN TODAS LAS CONCESIONES, no sólo la de la capacidad pedida, porque una puede
+	// IMPLICAR a otra: quien tiene `screen` (controlar) puede mirar, y pedirle además un
+	// `screen:view` explícito sería una trampa de configuración — el permiso estaría concedido y
+	// la acción se negaría.
+	//
+	// El recorrido es sobre lo OTORGADO y no sobre una lista de implicaciones al revés, así que
+	// una capacidad nueva que no implique nada sigue funcionando sin tocar esto.
+	for otorgada, selectores := range p.Fleet {
+		if !fleet.Implica(otorgada, c) {
+			continue
+		}
+		for _, selector := range selectores {
+			if selector == comodinFlota || selector == nombreDevice {
+				return true
+			}
 		}
 	}
 	return false
@@ -81,9 +93,10 @@ func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {
 // máquina, ahora. Es lo que el inventario muestra en `puedo` (C8).
 //
 // Se recorre la matriz del tier y no las caps declaradas del device para que el resultado siga
-// el orden canónico (metrics < exec < screen) sin depender de cómo se escribió la fila.
+// el orden canónico (metrics < exec < screen:view < screen < shell) sin depender de cómo se
+// escribió la fila.
 func capsQuePuede(p *Principal, d fleet.Device) []fleet.Cap {
-	todas := []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreen, fleet.CapShell}
+	todas := []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreenView, fleet.CapScreen, fleet.CapShell}
 	out := make([]fleet.Cap, 0, len(todas))
 	for _, c := range todas {
 		if PuedeSobreDevice(p, d, c) {
