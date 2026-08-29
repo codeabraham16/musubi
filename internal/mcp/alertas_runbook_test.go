@@ -146,17 +146,62 @@ func TestElDeadMansSwitchSigueSiendoIncondicional(t *testing.T) {
 	t.Error("el dead-man's switch tiene un `for:`: un latido que espera antes de latir no es un latido")
 }
 
-// Y la contraparte del switch: Alertmanager tiene que RUTEARLO a un receptor propio. Una regla
-// que siempre dispara mandada al canal normal es ruido cada cinco minutos, y el canal se silencia.
+// Y la contraparte del switch: Alertmanager tiene que RUTEARLO FUERA DEL CANAL NORMAL.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE SE EXIGE ES LA RUTA PROPIA, NO UN RECEPTOR CONCRETO
+//
+// La primera versión pedía literalmente `receiver: 'watchdog'`, y eso resultó ser más estricto de
+// lo que el invariante necesita. Hay DOS destinos legítimos y la diferencia es de despliegue, no
+// de diseño:
+//
+//	'watchdog'  hay un dead-man's switch externo escuchando el latido
+//	'null'      no lo hay, y se declara: la alerta se ve en Alertmanager y no le llega a nadie
+//
+// Lo que NO puede pasar —y es todo el invariante— es que el latido caiga al receptor por DEFECTO.
+// `MusubiSiempreViva` está SIEMPRE en firing a propósito, así que sin ruta propia notifica por el
+// canal real cada `repeat_interval`, para siempre. Medido: pasó al comentar la ruta, y hubo que
+// revertirlo en el acto. Una alarma que no se apaga enseña a ignorar el canal entero.
+//
+// Por eso la prueba mira que la ruta EXISTA y que su receptor NO sea 'default', en vez de fijar
+// un nombre: fijarlo obligaba a elegir entre tener el guarda o poder declarar que no hay watchdog.
+//
+// Sabotaje que la hace fallar: borrar la ruta de MusubiSiempreViva, o apuntarla a 'default'.
 func TestElDeadMansSwitchTieneSuPropiaRutaYReceptor(t *testing.T) {
 	b, err := os.ReadFile("../../deploy/prometheus/alertmanager.yml")
 	if err != nil {
 		t.Fatalf("no hay configuración de Alertmanager: las alertas se evalúan y no le llegan a nadie (A4): %v", err)
 	}
 	texto := string(b)
-	for _, quiero := range []string{`alertname = "MusubiSiempreViva"`, "receiver: 'watchdog'", "- name: 'watchdog'"} {
-		if !strings.Contains(texto, quiero) {
-			t.Error(fmt.Sprintf("alertmanager.yml no contiene %q: el latido saldría por el canal normal y sería ruido cada cinco minutos", quiero))
+	i := strings.Index(texto, `alertname = "MusubiSiempreViva"`)
+	if i < 0 {
+		t.Fatal("el latido no tiene ruta propia en Alertmanager: cae al receptor por defecto y " +
+			"notifica por el canal real cada repeat_interval, para siempre")
+	}
+	// El receptor de ESA ruta es la línea `receiver:` que sigue al matcher.
+	resto := texto[i:]
+	j := strings.Index(resto, "receiver:")
+	if j < 0 {
+		t.Fatal("la ruta del latido no declara receptor")
+	}
+	linea := resto[j:]
+	if k := strings.IndexByte(linea, '\n'); k > 0 {
+		linea = linea[:k]
+	}
+	if strings.Contains(linea, "'default'") {
+		t.Error("el latido va al receptor por DEFECTO: está siempre en firing, así que sería " +
+			"ruido en el canal real cada repeat_interval, para siempre")
+	}
+	if !strings.Contains(linea, "'watchdog'") && !strings.Contains(linea, "'null'") {
+		t.Errorf("el latido va a %q, que no es ni el watchdog externo ni el receptor nulo: "+
+			"los dos son legítimos y cualquier otro hay que justificarlo", strings.TrimSpace(linea))
+	}
+	// Los dos receptores tienen que EXISTIR, se use el que se use: cambiar de uno a otro es
+	// cambiar una palabra, y eso sólo vale si el otro está declarado.
+	for _, r := range []string{"- name: 'watchdog'", "- name: 'null'"} {
+		if !strings.Contains(texto, r) {
+			t.Error(fmt.Sprintf("falta el receptor %q: pasar de tener dead-man's switch a no "+
+				"tenerlo tiene que ser cambiar una palabra, no editar la lista de receptores", r))
 		}
 	}
 	// El secreto no puede vivir en un archivo que se commitea.

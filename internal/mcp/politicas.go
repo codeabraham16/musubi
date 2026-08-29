@@ -88,7 +88,7 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 	}
 	// I14 — cooldown por (política × máquina), contado desde el DISPARO y no desde el resultado:
 	// lo que hay que espaciar es la decisión de actuar, y el comando puede tardar.
-	clave := pol.Nombre + "\x00" + d.ID
+	clave := pol.ClaveDeCooldown(d.ID)
 	if previo, hay := s.ultimoDisparo.Load(clave); hay {
 		if t, ok := previo.(time.Time); ok && ahora.Sub(t) < pol.CooldownEfectivo() {
 			return false
@@ -239,7 +239,7 @@ func (s *McpServer) cargarCooldowns() {
 	n := 0
 	for _, pol := range s.politicas {
 		for deviceID, cuando := range porPolitica[pol.Nombre] {
-			s.ultimoDisparo.Store(pol.Nombre+"\x00"+deviceID, cuando)
+			s.ultimoDisparo.Store(pol.ClaveDeCooldown(deviceID), cuando)
 			n++
 		}
 	}
@@ -298,7 +298,7 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[
 		// son cosas distintas, y una fecha inventada las confundiría — el mismo criterio que
 		// gobierna exit_code y los porcentajes en todo el track.
 		fila["ultimo_disparo"] = nil
-		if v, hay := s.ultimoDisparo.Load(pol.Nombre + "\x00" + d.ID); hay {
+		if v, hay := s.ultimoDisparo.Load(pol.ClaveDeCooldown(d.ID)); hay {
 			if t, ok := v.(time.Time); ok {
 				fila["ultimo_disparo"] = t.UTC().Format(time.RFC3339)
 			}
