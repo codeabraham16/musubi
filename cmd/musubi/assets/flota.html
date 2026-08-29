@@ -44,6 +44,13 @@
   .barra > i { display: block; height: 100%; background: var(--acento); }
   .barra > i.alto { background: var(--tibio); } .barra > i.critico { background: var(--mal); }
   .caps { color: var(--tenue); font-size: 12px; }
+  /* El acceso se colorea por RIESGO y no por bonito: `prohibido` y `pide` cambian lo que va a
+     pasar cuando alguien pida entrar, y `libre`/`avisa` no. */
+  .grave { color: var(--rojo, #f87171); font-weight: 500; }
+  .ojo { color: var(--ambar, #fbbf24); }
+  .heredado { color: var(--tenue); }
+  .heredado sup { opacity: .7; }
+  .mono { font-family: var(--mono, monospace); font-size: 11px; }
   .caps b { color: var(--acento); font-weight: 500; }
   /* La columna de lo AUTOMÁTICO. Se distingue del resto a propósito: es lo único de esta tabla
      que describe algo que pasa sin que nadie lo pida. */
@@ -76,13 +83,16 @@
 <table id="tabla" hidden>
   <thead><tr>
     <th>máquina</th><th>tier</th><th>os</th><th>cpu</th><th>memoria</th><th>disco</th>
-    <th>carga</th><th>temp</th><th>uptime</th><th>dato</th><th>servicios</th><th>admite / puedo</th><th>automático</th><th>pantalla</th>
+    <th>carga</th><th>temp</th><th>uptime</th><th>dato</th><th>servicios</th><th>admite / puedo</th><th>acceso</th><th>agente</th><th>automático</th><th>pantalla</th>
   </tr></thead>
   <tbody id="cuerpo"></tbody>
 </table>
 <footer>
   Sólo lectura. Ejecutar y abrir pantalla se hacen con <code>musubi_fleet_exec</code> y
   <code>musubi_fleet_screen</code>, que dejan su línea en la bitácora.
+  <br>La columna <b>acceso</b> es un eje SEPARADO de <b>puedo</b>: aquélla dice qué podés hacer vos,
+  ésta qué se le debe a quien está usando la máquina. Se cambia con <code>musubi_fleet_consent</code>,
+  que es admin — si quien entra pudiera aflojarla, no protegería nada.
 </footer>
 
 <script>
@@ -162,6 +172,38 @@ function automatico(e) {
 //
 // Se dibuja ACÁ y no sólo al fallar una apertura: descubrir el problema en el momento en que hace
 // falta mirar una máquina es descubrirlo tarde.
+// acceso dibuja QUÉ SE LE DEBE a la persona que está usando la máquina cuando alguien pide
+// entrar. Es un eje SEPARADO de `puedo`: esa columna dice qué podés hacer vos, ésta dice qué pasa
+// con quien está del otro lado.
+//
+// SE DIBUJAN LOS DOS VALORES CUANDO DIFIEREN, y ésa es toda la razón de la columna. Un `pide`
+// sobre una máquina que no puede preguntarle a nadie se endurece a `prohibido`, y descubrirlo el
+// día que una sesión no abre es descubrirlo tarde. Acá se ve antes.
+//
+// El grado sin declarar NO se dibuja como vacío: rige el default y eso es un hecho, no una
+// ausencia. Se marca como heredado para que se distinga de una decisión.
+function acceso(e) {
+  const ef = e.consentimiento_efectivo;
+  if (!ef) return ND;
+  const declarado = e.consentimiento;
+  const clase = ef === 'prohibido' ? 'grave' : (ef === 'pide' ? 'ojo' : '');
+  if (declarado && declarado !== ef) {
+    return `<span class="${clase}" title="${esc('declarado `' + declarado + '`, pero esta máquina no declara poder preguntarle a nadie (su agente no reporta esa capacidad), así que se endurece. Quien escribió `pide` pidió que nadie entre sin permiso: si el permiso no se puede pedir, no se entra.')}">${ef} ⚠</span>`;
+  }
+  if (!declarado) {
+    return `<span class="heredado" title="${esc('nadie lo declaró sobre esta máquina: rige el default. No es lo mismo que alguien haya decidido este grado.')}">${ef}<sup>·</sup></span>`;
+  }
+  return `<span class="${clase}">${ef}</span>`;
+}
+
+// agente dibuja QUÉ BINARIO corre esta máquina. Estaba guardado desde el principio y no se
+// mostraba en ningún lado, y eso costó dos días: una máquina en línea con cero servicios tiene
+// dos causas opuestas —binario viejo, o enumerador roto— y sin este dato no se distinguen.
+function agente(e) {
+  if (!e.agent_version) return ND;
+  return `<span class="mono" title="${esc('versión del binario que corre el agente de esta máquina')}">${esc(e.agent_version)}</span>`;
+}
+
 function pantalla(e) {
   // VA PRIMERO: un Tier C no tiene rustdesk_id, así que sin esta rama caía en el `—` de abajo y
   // se leía igual que un Tier A que todavía no reportó el suyo — o sea, como «ya va a aparecer».
@@ -280,6 +322,8 @@ function pintar(d) {
            credencial. Mostrar sólo lo primero enseña a ignorar el campo. -->
       <td class="svc-col">${servicios(e)}</td>
       <td class="caps">${lista(e.caps)} / <b>${lista(e.puedo)}</b></td>
+      <td class="auto-col">${acceso(e)}</td>
+      <td class="caps">${agente(e)}</td>
       <td class="auto-col">${automatico(e)}</td>
       <td class="auto-col">${pantalla(e)}</td>
     </tr>`).join('');

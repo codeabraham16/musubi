@@ -722,3 +722,52 @@ func TestLaBitacoraDeSesionesSeCompuertaPorModalidad(t *testing.T) {
 		t.Errorf("con las dos capacidades vio %d sesiones de 2", len(filas2))
 	}
 }
+
+// LA POLÍTICA DE CONSENTIMIENTO SE PUEDE VER, NO SÓLO ESCRIBIR.
+//
+// Encontrado verificando el despliegue en producción: `musubi_fleet_consent` escribía la política
+// y NINGUNA tool la mostraba. Una política de acceso que no se puede leer no se puede auditar, y
+// es el mismo hueco exacto que tenía `agent_version` — el dato guardado, y nadie que lo muestre.
+//
+// VIAJAN LOS DOS VALORES. El efectivo es lo que RIGE; el declarado sólo aparece si alguien lo
+// decidió, porque su ausencia dice algo distinto de su presencia: «nadie lo decidió, rige el
+// default» no es lo mismo que «alguien puso avisa». Colapsarlos escondería la pregunta que un
+// auditor hace primero.
+//
+// Sabotaje que la hace fallar: mostrar sólo uno de los dos, o escribir `consentimiento` siempre
+// (con lo que la ausencia de decisión se vería idéntica a una decisión).
+func TestLaPoliticaDeConsentimientoSeVeEnElInventario(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+
+	// Sin declarar: rige el default y NO aparece el campo declarado.
+	fila := listarFlota(t, s, "casa")[0]
+	if fila["consentimiento_efectivo"] != string(fleet.ConsentimientoPorDefecto) {
+		t.Errorf("el efectivo sin declarar es %v, se esperaba el default %q",
+			fila["consentimiento_efectivo"], fleet.ConsentimientoPorDefecto)
+	}
+	if _, hay := fila["consentimiento"]; hay {
+		t.Error("aparece un `consentimiento` declarado sobre una máquina donde nadie decidió nada: " +
+			"la ausencia de decisión se vería idéntica a una decisión")
+	}
+
+	// Declarado: aparecen los dos, y con `pide` sobre una máquina que no puede preguntar el
+	// efectivo DIFIERE — que es justo lo que hay que poder ver antes de que una sesión no abra.
+	ds, _ := s.engine.ListarDevices("casa", false)
+	if _, err := s.engine.FijarConsentimiento(ds[0].ID, fleet.ConsentimientoPide); err != nil {
+		t.Fatal(err)
+	}
+	fila = listarFlota(t, s, "casa")[0]
+	if fila["consentimiento"] != "pide" {
+		t.Errorf("el declarado no viajó: %v", fila["consentimiento"])
+	}
+	if fila["consentimiento_efectivo"] != "prohibido" {
+		t.Errorf("el efectivo es %v: una máquina que no puede preguntar endurece `pide`, y verlo "+
+			"en el inventario es lo que evita descubrirlo el día que una sesión no abre",
+			fila["consentimiento_efectivo"])
+	}
+	if fila["puede_preguntar"] != false {
+		t.Errorf("puede_preguntar = %v: sin eso, la diferencia entre declarado y efectivo no se "+
+			"puede explicar mirando la fila", fila["puede_preguntar"])
+	}
+}

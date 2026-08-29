@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -452,5 +453,54 @@ func TestLaPaginaDeFlotaNoDibujaUnServicioDesconocidoComoDetenido(t *testing.T) 
 	// Y NINGÚN BOTÓN: el invariante I4 del panel sigue en pie en un slice de visualización.
 	if strings.Contains(p, "<button") || strings.Contains(p, "onclick") {
 		t.Error("la página de flota ganó un botón: reiniciar un servicio se hace con musubi_fleet_exec, que deja su línea en la bitácora")
+	}
+}
+
+// LA PÁGINA DIBUJA EL EJE DE ACCESO, Y LO DISTINGUE DE «qué puedo hacer yo».
+//
+// Son dos preguntas distintas y la columna `puedo` sólo contesta la primera. Sin la de acceso, un
+// operador ve que PUEDE abrir una pantalla y no ve que la máquina la tiene PROHIBIDA — y se entera
+// cuando la sesión no abre.
+//
+// Las tres cosas que la página tiene que distinguir, y que son fáciles de colapsar en una:
+//
+//	declarado y efectivo iguales   → el grado, a secas
+//	declarado ≠ efectivo           → el efectivo CON marca: se endureció, y hay que poder verlo antes
+//	nada declarado                 → el default, marcado como heredado: no es lo mismo que decidirlo
+//
+// Sabotaje que la hace fallar: dibujar sólo `consentimiento` (el declarado), que es nil en la
+// mayoría de las máquinas y dejaría la columna vacía justo donde el default está rigiendo.
+func TestLaPaginaDeFlotaDibujaElEjeDeAcceso(t *testing.T) {
+	b, err := os.ReadFile("assets/flota.html")
+	if err != nil {
+		t.Fatalf("falta la página de flota: %v", err)
+	}
+	html := string(b)
+
+	if !strings.Contains(html, "<th>acceso</th>") {
+		t.Error("la tabla no tiene columna de acceso: se ve qué podés hacer vos y no qué se le " +
+			"debe a quien usa la máquina")
+	}
+	// El EFECTIVO es lo que rige; dibujar sólo el declarado dejaría la columna vacía en toda
+	// máquina donde nadie decidió nada, que hoy son todas.
+	if !strings.Contains(html, "consentimiento_efectivo") {
+		t.Error("la página no mira el consentimiento EFECTIVO: dibujaría vacío donde rige el default")
+	}
+	// Y tiene que poder marcar la diferencia entre declarado y efectivo, que es cuando un `pide`
+	// se endureció a `prohibido`.
+	if !strings.Contains(html, "declarado !== ef") {
+		t.Error("la página no distingue el declarado del efectivo: un `pide` endurecido a " +
+			"`prohibido` se vería igual que un `prohibido` decidido, y la degradación se " +
+			"descubriría el día que una sesión no abre")
+	}
+	// La versión del agente, que es lo que distingue «binario viejo» de «enumerador roto».
+	if !strings.Contains(html, "<th>agente</th>") || !strings.Contains(html, "e.agent_version") {
+		t.Error("la página no muestra la versión del agente: una máquina en línea con cero " +
+			"servicios tiene dos causas opuestas y no se distinguen sin este dato")
+	}
+	// El pie NO puede seguir diciendo sólo «sólo lectura» sin explicar el eje nuevo: una columna
+	// que aparece sin explicación se ignora.
+	if !strings.Contains(html, "musubi_fleet_consent") {
+		t.Error("el pie no dice cómo se cambia la política de acceso")
 	}
 }

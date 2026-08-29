@@ -702,6 +702,39 @@ tiene dos, no uno. El orden va de menos a más poder.
 **58 sabotajes en la tanda.** Con esto la fase 1 queda sustancialmente cerrada del lado del
 cerebro; lo que falta es A57, la mitad del agente.
 
+**2026-08-29 (bis) · verificado en producción, y otro dato guardado que nadie podía leer.**
+
+El despliegue de la fase 1 entró y se verificó contra la flota real. **La implicación funciona
+sobre datos existentes**: `gio` y `kernelos-pc` están enroladas sólo con `screen` —ninguna declara
+`screen:view`— y su `puedo` ahora lista las dos. Ése era el bug retroactivo que habría vaciado la
+bitácora de sesiones de toda la flota.
+
+Y la compuerta admin del consentimiento se verificó del modo correcto: el token del asistente es
+`writer`, así que la tool lo rechazó.
+
+**El hueco que apareció al verificar:** `musubi_fleet_consent` escribía la política y NINGUNA tool
+la mostraba. Una política de acceso que no se puede leer no se puede auditar — el mismo hueco
+exacto que tenía `agent_version`, encontrado del mismo modo: usando la cosa, no escribiéndola.
+
+Ahora el inventario trae **los dos valores y no uno**: `consentimiento_efectivo` (lo que RIGE) y
+`consentimiento` sólo si alguien lo DECLARÓ. Su ausencia dice algo distinto de su presencia —
+«nadie lo decidió, rige el default» no es «alguien puso avisa»— y ésa es la pregunta que un auditor
+hace primero. Más `puede_preguntar`, que es lo que explica la diferencia cuando difieren.
+
+**Y llegó al panel.** `/flota` gana dos columnas:
+
+- **acceso**, con tres estados que se distinguen a propósito: el grado a secas, el grado marcado
+  como heredado cuando nadie declaró nada, y el efectivo CON marca cuando se endureció. Sin ese
+  tercero, un `pide` degradado se vería igual que un `prohibido` decidido y la degradación se
+  descubriría el día que una sesión no abre.
+- **agente**, que es lo que distingue «binario viejo» de «enumerador roto» — las dos causas
+  opuestas del mismo síntoma que costaron dos días.
+
+El pie de la página explica que `acceso` y `puedo` son ejes distintos: una columna que aparece sin
+explicación se ignora.
+
+**63 sabotajes en la tanda.**
+
 ---
 
 ## Cómo se usa este archivo

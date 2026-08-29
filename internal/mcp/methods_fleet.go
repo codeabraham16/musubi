@@ -250,6 +250,24 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 			if d.AgentVer != "" {
 				fila["agent_version"] = d.AgentVer
 			}
+			// QUÉ SE LE DEBE A QUIEN USA ESTA MÁQUINA. Una política de acceso que se puede
+			// escribir y no se puede leer no se puede auditar — y es el mismo hueco exacto que
+			// tenía `agent_version`: el dato guardado, y ninguna tool que lo muestre. Se encontró
+			// verificando el despliegue, no escribiendo el código.
+			//
+			// VIAJAN LOS DOS VALORES Y NO UNO. `consentimiento_efectivo` es lo que RIGE, y es lo
+			// que hay que mirar para saber qué va a pasar. `consentimiento` sólo aparece si
+			// alguien lo DECLARÓ, y su ausencia dice algo distinto de su presencia: «nadie lo
+			// decidió, rige el default» no es lo mismo que «alguien puso avisa». Colapsarlos
+			// escondería la pregunta que un auditor hace primero — ¿esto lo decidió alguien?
+			//
+			// Cuando los dos difieren, la máquina no puede preguntarle a nadie y un `pide` se
+			// endureció a `prohibido`. Verlo acá evita descubrirlo el día que una sesión no abre.
+			fila["consentimiento_efectivo"] = string(d.ConsentimientoEfectivo())
+			if d.Consentimiento != "" {
+				fila["consentimiento"] = string(d.Consentimiento)
+			}
+			fila["puede_preguntar"] = d.PuedePreguntar
 			// La allowlist EFECTIVA, cuando la hay. Ausente ⇒ sin restricción; presente y vacía ⇒
 			// ningún comando. Las dos cosas se dibujan distinto a propósito: si «puede todo» y «no
 			// puede nada» compartieran celda, el campo no serviría para decidir nada.
