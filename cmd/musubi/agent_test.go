@@ -288,7 +288,13 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// TODAVÍA no lo manda (enumerar systemd, el SCM y Docker es un slice propio, cabo A42), pero
 	// la decisión se declara acá, que es donde se piensa, y la ejercita
 	// TestUnCuerpoConServiciosSigueSinLlevarIdentidad.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true, "rustdesk_id": true, "servicios": true}
+	// `puede_preguntar` y `motivo_no_preguntar` entran a la lista blanca tras el examen que el
+	// mensaje de abajo exige: NINGUNA de las dos dice QUIÉN ES esta máquina. La primera es una
+	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
+	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
+	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
+	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -338,7 +344,13 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	if err := json.Unmarshal(crudo, &cuerpo); err != nil {
 		t.Fatalf("el cuerpo no es JSON: %v (%s)", err, visto)
 	}
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true, "rustdesk_id": true, "servicios": true}
+	// `puede_preguntar` y `motivo_no_preguntar` entran a la lista blanca tras el examen que el
+	// mensaje de abajo exige: NINGUNA de las dos dice QUIÉN ES esta máquina. La primera es una
+	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
+	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
+	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
+	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)

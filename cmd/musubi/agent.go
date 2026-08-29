@@ -230,6 +230,19 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	if d := direccionPropia(); d != "" {
 		carga["direccion"] = d
 	}
+	// LA CAPACIDAD DE PREGUNTAR (A57), MEDIDA EN ESTA MÁQUINA. Va SIEMPRE, aunque sea `false`:
+	// el campo es opcional en el cuerpo justamente para que un agente VIEJO —que no lo manda— se
+	// distinga de uno nuevo que midió y dijo que no. Si este agente se lo saltea cuando no puede,
+	// se hace pasar por viejo y el cerebro conserva un valor que ya no es cierto.
+	//
+	// Y el MOTIVO viaja pegado: sin él, un `pide` endurecido a `prohibido` en toda la flota es un
+	// cero sin explicación, y las tres causas —no hay escritorio, falta un paquete, el agente
+	// corre como servicio— se arreglan distinto.
+	cap := medirCapacidadDeAvisar()
+	carga["puede_preguntar"] = cap.Puede
+	if !cap.Puede && cap.Motivo != "" {
+		carga["motivo_no_preguntar"] = cap.Motivo
+	}
 	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
 	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su
 	// propia puerta sería un segundo camino de autoridad para el mismo dato.

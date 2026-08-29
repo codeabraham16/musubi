@@ -325,6 +325,11 @@ func RecortarReporte(r ReporteServicio) ReporteServicio {
 	return r
 }
 
+// RecortarRunas es recortarRunas, exportada: la usa también el texto de los avisos al usuario
+// (A57), que se interpola en un diálogo del escritorio de otra persona y por lo tanto tiene la
+// misma razón para no cortarse a la mitad de un carácter.
+func RecortarRunas(s string, max int) string { return recortarRunas(s, max) }
+
 // recortarRunas corta por RUNAS y no por bytes: el nombre de una unit puede traer acentos, y
 // cortar a la mitad de un carácter multibyte deja basura en una celda que después se dibuja.
 func recortarRunas(s string, max int) string {

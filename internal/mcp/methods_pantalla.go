@@ -87,11 +87,20 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 				"sin permiso, y si el permiso no se puede pedir, no se entra.",
 			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
 	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que
-		// ningún agente sabe dar todavía sería exactamente lo que este eje viene a evitar: una
-		// configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea, y
-		// hacerlo cerraría el acceso a toda la flota por una capacidad que nadie desplegó aún.
+		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
+		// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:
+		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
+		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
+		// —un servidor sin escritorio— por razones que no son de seguridad.
 		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+	case consent.AvisaAlUsuario():
+		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). Se hace ACÁ y no después de crear
+		// la sesión, y el orden importa: el aviso dice «alguien está por entrar», y entregarlo
+		// después de que la pantalla ya está abierta lo convierte en una notificación de algo que
+		// ya pasó. El agente lo va a recoger en su próximo latido — hasta 30 s— y esa demora es
+		// el precio de no ponerlo a escuchar un puerto, que es la superficie que este track evita
+		// desde S2.
+		s.encolarAvisoDePantalla(d, p)
 	}
 
 	if !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {
@@ -196,6 +205,11 @@ func explicarColision(d fleet.Device, otras []string, fuera int) string {
 // El prefijo `musubi:` existe para que no pueda colisionar con un binario real del sistema, y
 // para que en cualquier log se lea como lo que es: una operación interna, no un comando del host.
 const comandoPantalla = "musubi:pantalla"
+
+// comandoAviso es la operación con la que el cerebro le habla al usuario de una máquina (A57).
+// Igual que la de pantalla: NO es un ejecutable del host y el agente la intercepta antes de
+// intentar lanzarla.
+const comandoAviso = "musubi:avisar"
 
 // EsComandoDePantalla dice si un argv es la operación interna de pantalla.
 func EsComandoDePantalla(argv []string) bool {
@@ -357,6 +371,39 @@ func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre string, c fleet.Conse
 	logx.Warn("flota: se abrió una pantalla y el aviso al usuario NO se pudo entregar",
 		"device", nombre, "consentimiento", string(c),
 		"motivo", "el agente de esta máquina no declara saber notificar (devices.puede_preguntar = 0)")
+}
+
+// encolarAvisoDePantalla le manda al agente el aviso que `avisa` promete (A57).
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EL TEXTO NOMBRA A QUIEN ENTRA, Y ESO ES EL AVISO
+//
+// «Alguien está viendo tu pantalla» no le sirve a nadie. Lo que convierte esto en información es
+// QUIÉN: un aviso sin nombre no se puede accionar —no hay a quién preguntarle— y se vuelve ruido
+// que la persona aprende a cerrar sin leer.
+//
+// El nombre del principal es entrada de configuración (sale de principals.yaml, no de la red),
+// pero igual se acota: termina interpolado en un diálogo del escritorio de otra persona.
+//
+// BEST-EFFORT A PROPÓSITO. Si encolar falla, la sesión se abre igual: `avisa` NO bloquea —ése es
+// el grado siguiente— y convertir un fallo de la cola en un acceso denegado le daría a `avisa` la
+// semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
+// por eso queda la línea.
+func (s *McpServer) encolarAvisoDePantalla(d fleet.Device, p *Principal) {
+	quien := nombrePrincipal(p)
+	if quien == "" {
+		quien = "un operador"
+	}
+	texto := fmt.Sprintf("Musubi: %s está abriendo una sesión de pantalla en esta máquina.",
+		fleet.RecortarRunas(quien, 64))
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
+		Argv:    []string{comandoAviso, texto},
+		Timeout: fleet.ComandoTimeoutDefault,
+	}); err != nil {
+		logx.Warn("flota: no se pudo encolar el aviso al usuario; la pantalla se abre igual",
+			"device", d.Name, "error", err)
+	}
 }
 
 // toolFleetConsent fija la política de consentimiento de una máquina.

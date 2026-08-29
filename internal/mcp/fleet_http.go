@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 )
 
 // fleetHeartbeatPath es la ruta del latido. Bajo /fleet/ para que la separación se vea en el
@@ -73,6 +74,21 @@ type cuerpoLatido struct {
 	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
 	// castellano a propósito: `nombre`, no `name`.
 	Servicios []fleet.ReporteServicio `json:"servicios,omitempty"`
+	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
+	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
+	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va
+	// a pedir.
+	//
+	// PUNTERO Y NO bool, y ésa es la diferencia que importa: un agente VIEJO no manda el campo, y
+	// con un bool pelado eso sería indistinguible de un agente nuevo que midió y dijo que no. El
+	// nil se saltea y conserva lo que hubiera; el `false` explícito SÍ escribe. Sin esto, la
+	// primera flota con agentes mezclados vería a los viejos «declarando» que no pueden preguntar
+	// cuando en realidad no opinaron.
+	PuedePreguntar *bool `json:"puede_preguntar,omitempty"`
+	// MotivoNoPreguntar dice POR QUÉ no puede, cuando no puede. Sin él, un `pide` endurecido a
+	// `prohibido` en toda la flota es un cero sin explicación, y las tres causas posibles —no hay
+	// escritorio, falta un paquete, el agente corre como servicio— se arreglan distinto.
+	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
 }
 
 // respuestaLatido es lo que ve el agente. Deliberadamente pobre: no devuelve nada que no le
@@ -242,6 +258,31 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	}
 	if cuerpo.RustdeskID != "" {
 		_ = s.engine.GuardarRustdeskID(d.ID, cuerpo.RustdeskID)
+	}
+	// LA CAPACIDAD DE PREGUNTAR (A57), y el nil se saltea a propósito.
+	//
+	// Un agente VIEJO no manda el campo. Escribir `false` en ese caso sería afirmar «esta máquina
+	// midió y no puede» cuando la verdad es «esta máquina no opinó» — y como `puede_preguntar`
+	// endurece un `pide` a `prohibido`, esa afirmación cerraría el acceso por pantalla a una
+	// máquina que quizás sí puede, sin que nada lo dijera. El puntero es lo que hace posible la
+	// distinción; sin él, una flota con agentes mezclados se rompe callada.
+	//
+	// El `false` explícito SÍ se escribe: una máquina que perdió su escritorio tiene que dejar de
+	// declarar que puede.
+	if cuerpo.PuedePreguntar != nil {
+		_ = s.engine.FijarCapacidadDePreguntar(d.ID, *cuerpo.PuedePreguntar)
+		if !*cuerpo.PuedePreguntar && cuerpo.MotivoNoPreguntar != "" {
+			// UNA VEZ POR MÁQUINA Y NO POR LATIDO. Es un ESTADO —el agente corre como servicio,
+			// falta zenity— que dura hasta que alguien cambie algo, y un aviso cada 30 s deja de
+			// leerse, que es lo mismo que no avisar.
+			s.avisarUnaVez("no_puede_preguntar\x00"+d.ID, func() {
+				logx.Info("flota: esta máquina no puede pedirle permiso a nadie; un `pide` se le "+
+					"endurece a `prohibido`",
+					"device", d.Name, "motivo", recortar(cuerpo.MotivoNoPreguntar, fleet.AvisoTextoMax))
+			})
+		} else if *cuerpo.PuedePreguntar {
+			s.avisosDados.Delete("no_puede_preguntar\x00" + d.ID)
+		}
 	}
 	// EL INVENTARIO DE SERVICIOS VA ANTES DEL CORTE POR «no vino muestra», por el mismo motivo
 	// que el autorreporte: una máquina en un OS sin colector puede saber perfectamente qué corre

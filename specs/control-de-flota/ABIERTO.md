@@ -40,7 +40,7 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. **DESBLOQUEADO el 2026-08-29**: gio decidió los dos parámetros que faltaban — el diálogo espera **60 segundos**, y si nadie contesta **se NIEGA**. Falla cerrada, consistente con toda la matriz: quien escribió `pide` pidió que nadie entre sin permiso, y el silencio no es permiso. El costo aceptado y dicho: una máquina desatendida en `pide` queda inaccesible por pantalla hasta que alguien le cambie el grado. | **sin asignar** (fase 1 de la maqueta) |
+| A57 | **`pide` todavía no puede preguntar: falta el camino de ida y vuelta** | **La mitad del `avisa` está CERRADA (2026-08-29)**: el agente mide si sabe avisar, lo reporta en el latido, el cerebro lo guarda y encola el aviso cuando se abre una pantalla en una máquina con `avisa`. El agente sabe dibujar en Linux (zenity/kdialog), macOS (osascript) y Windows (MessageBox), y `preguntar()` con su plazo de 60 s ya está escrito y probado. **Lo que falta es el CAMINO**: una pregunta no puede ser una llamada que bloquea, porque el latido es cada 30 s y la respuesta tarda hasta 90 s en volver. Hace falta que `musubi_fleet_screen` sobre un `pide` cree la sesión en un estado nuevo —`esperando_consentimiento`—, devuelva su id sin contraseña, y que el agente conteste por `/fleet/result`; el operador vuelve a pedir y recibe la contraseña si le dijeron que sí. **Los dos parámetros ya están decididos** (60 s, y el silencio NIEGA), así que lo que queda es el transporte, no la política. | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -67,6 +67,59 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (6) · A57, la mitad del `avisa`: el agente aprende a hablarle a la persona.**
+
+El eje de consentimiento estaba completo del lado del cerebro —la política se fija, se guarda, se
+resuelve por la más restrictiva, se aplica— y **vacío del otro**: nadie en la máquina destino sabía
+dibujar nada. Mientras tanto `puede_preguntar` era 0 para toda la flota, así que un `pide` se
+endurecía a `prohibido`, y un `avisa` abría la sesión dejando un WARN que decía que el aviso no se
+pudo entregar. Las dos cosas honestas, ninguna suficiente.
+
+- **«Saber avisar» se MIDE, y se miden las DOS mitades**: que haya dónde dibujar Y con qué. Una
+  sola no alcanza — un Linux con `DISPLAY` y sin `zenity` no puede avisarle a nadie, y un servidor
+  con `zenity` y sin sesión gráfica tampoco.
+- **El motivo viaja pegado al `false`.** Sin él, un `pide` endurecido a `prohibido` en toda la
+  flota es un cero sin explicación, y las tres causas —no hay escritorio, falta un paquete, el
+  agente corre como servicio— se arreglan distinto.
+- **`puede_preguntar` es un PUNTERO en el cuerpo del latido**, y ésa es la decisión que evita
+  romper una flota mezclada: un agente VIEJO no manda el campo, y con un bool pelado eso sería
+  indistinguible de uno que midió y dijo que no. El nil se saltea; el `false` explícito sí escribe.
+- **La trampa de Windows, atajada donde vive.** Desde Vista los servicios corren en la SESIÓN 0,
+  aislada del escritorio: un `MessageBox` lanzado desde ahí **no falla y no lo ve nadie**, y el
+  proceso espera un clic que nunca llega. Eso es un `pide` que parece funcionar, tarda 60 s y
+  termina en «nadie contestó» cuando la verdad es que no había dónde preguntar. La detección mira
+  la SESIÓN del proceso, no si el binario existe.
+- **Y se resolvió con stdlib pura.** `golang.org/x/sys/windows` trae `ProcessIdToSessionId`
+  envuelto — y usarla la promovería de indirecta a DIRECTA, o sea la **séptima** dependencia de un
+  repo que tiene seis por decisión. Se usó `syscall.NewLazyDLL`, el mismo patrón que
+  `colector_windows.go`. `go.mod` no se movió.
+- **En zenity el exit 0 NO es «anduvo», es «dijo que sí»**, y en osascript el exit code no sirve
+  para nada porque vale 0 para cualquier botón. Leer mal cualquiera de los dos concedería acceso
+  cada vez que la ventana llega a abrirse; están escritos con su porqué al lado.
+- **`notify-send` se declara como NO capaz.** Avisa pero no pregunta, y la capacidad que este eje
+  mide es la de PREGUNTAR: media capacidad reportada como entera endurecería mal un `pide`.
+- **El texto del aviso nombra a quien entra.** «Alguien está viendo tu pantalla» no le sirve a
+  nadie: sin el nombre no hay a quién preguntarle, y el aviso se vuelve ruido que se cierra sin leer.
+- **No se encola un aviso que la máquina no puede mostrar**: quedaría pendiente para siempre en su
+  cola y ensuciaría la bitácora. Se deja la constancia en el log, como antes.
+
+- **Un aviso que espera un clic no es un aviso, es una pregunta sin opciones.** `zenity --warning`
+  BLOQUEA hasta que alguien aprieta OK: la primera versión dejaba al agente esperando los diez
+  segundos del timeout en CADA aviso, y como atiende los comandos EN SERIE, esa máquina se quedaba
+  sin atender nada más —ni exec, ni pantalla, ni shell—. El cerebro la vería latiendo y muda, que
+  es el peor estado porque parece sano. Ahora el aviso prefiere `notify-send` (vuelve en el acto)
+  y el zenity de respaldo lleva `--timeout`. Son dos preguntas distintas —«¿con qué aviso?» y
+  «¿con qué pregunto?»— y la herramienta buena para una es mala para la otra.
+- **Y la guarda del cuerpo del latido hizo su trabajo**: `TestElCuerpoNoLlevaIdentidadNunca` tiene
+  lista BLANCA, así que las dos claves nuevas rompieron la suite hasta que se las declaró — con el
+  examen que su propio mensaje exige. Ninguna dice QUIÉN ES la máquina: son lo que sabe de SÍ
+  MISMA, como `version` y `direccion`, y la única fila que pueden tocar sigue siendo la del token.
+
+**Nueve sabotajes ejecutados.** Uno de ellos no lo atrapa una prueba sino el COMPILADOR —hacer que
+`sin_respuesta` sea un alias de `negada` produce dos `case` idénticos en un switch— y queda anotado
+así en vez de atribuírselo a la suite.
+
 
 **2026-08-29 (5) · A58 cerrado, y el bug que apareció al USARLO.**
 

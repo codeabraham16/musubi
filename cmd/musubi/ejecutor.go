@@ -80,6 +80,9 @@ func ejecutar(c comandoRecibido, base, token string) resultadoDeComando {
 			// techos del cerebro y, como red de seguridad, el techo local del propio agente.
 			return atenderShellDelCerebro(c.ID, base, token, argv)
 		}
+		if argv[0] == comandoAvisarAgente {
+			return atenderAviso(c.ID, argv)
+		}
 		res.Error = "operación interna desconocida: " + argv[0]
 		return res
 	}

@@ -396,6 +396,7 @@ type DeviceStore interface {
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.
 	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
+	FijarCapacidadDePreguntar(deviceID string, puede bool) error
 	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
 	// alguien. Va aparte de la política porque son hechos de dueños distintos.
 	// ── Ejecución remota (S5) ──
