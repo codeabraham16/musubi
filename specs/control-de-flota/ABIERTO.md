@@ -669,6 +669,39 @@ a mano cuando los acuña el storage, así que fallaba por eso y no por lo que de
 
 **Lo que falta:** exponer la vista en `musubi_fleet_sessions`, que hoy sólo lista pantallas.
 
+**2026-08-29 · la vista llega a la tool, y partir una capacidad tenía una mitad olvidada.**
+
+`musubi_fleet_sessions` deja de listar sólo pantallas y trae las dos modalidades. Con eso
+aparecieron dos cosas, y las dos las encontraron pruebas.
+
+**El bug: partir `screen` exigía tocar DOS ejes y sólo se tocó uno.** La implicación quedó puesta
+en el de la credencial (`tieneGrant`) y NO en el del aparato (`Device.Permite`), que comparaba por
+igualdad. Una máquina enrolada con `caps: ["screen"]` —o sea TODAS las existentes— no tiene
+`screen:view` en su lista, así que figuraba incapaz de mirar la pantalla que ya deja controlar.
+El efecto habría sido **silencioso y retroactivo**: la bitácora de sesiones vacía para toda la
+flota, sin un solo error. Lo cazó una prueba que ya existía.
+
+**La compuerta de la bitácora es POR MODALIDAD.** Antes la tool listaba sólo pantallas, así que
+`screen` alcanzaba para todo lo que devolvía; ahora también trae shells, y usar la misma capacidad
+para las dos dejaría ver **quién tuvo un prompt** a alguien que no puede abrir uno. Las pantallas
+piden `screen:view` —quien ya puede mirar esa pantalla no gana nada con que le oculten quién más
+la vio— y las shells piden `shell`.
+
+**Y una invariante declarada sin prueba es decoración:** el sabotaje de generalizar esa compuerta
+NO falló nada la primera vez. El cambio más sensible de la tool no tenía guarda. Se escribió, y
+ahora la fuga que el comentario describía tiene quien la cace.
+
+`abierta` viaja DERIVADO y no el estado guardado: una sesión puede figurar `activa` habiendo
+vencido sin que nadie la marcara, y dibujar el estado crudo mostraría gente adentro de máquinas de
+las que ya salió.
+
+Y `puedo` ahora lista las capacidades IMPLICADAS, que es lo correcto: `puedo` no dice qué te
+concedieron —eso es `caps`— dice qué podés EJERCER ahora. Un panel que decide qué botones habilitar
+tiene dos, no uno. El orden va de menos a más poder.
+
+**58 sabotajes en la tanda.** Con esto la fase 1 queda sustancialmente cerrada del lado del
+cerebro; lo que falta es A57, la mitad del agente.
+
 ---
 
 ## Cómo se usa este archivo

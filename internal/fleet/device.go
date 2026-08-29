@@ -258,7 +258,16 @@ func (d Device) Permite(c Cap) bool {
 		return false
 	}
 	for _, tiene := range d.Caps {
-		if tiene == c {
+		// LA IMPLICACIÓN VALE TAMBIÉN ACÁ, y olvidarlo fue un bug real que cazó una prueba
+		// existente al partir `screen`: una máquina enrolada con `caps: ["screen"]` no tiene
+		// `screen:view` en su lista, así que una comparación por igualdad la daba por incapaz de
+		// algo que obviamente puede — mirar la pantalla que ya deja controlar.
+		//
+		// La consecuencia era silenciosa y fea: la bitácora de sesiones dejaba de mostrar las
+		// pantallas de TODAS las máquinas existentes, porque ninguna declara la capacidad nueva.
+		// Partir una capacidad sin propagar la implicación a la matriz del aparato le saca, sin
+		// avisar, algo que la máquina siempre pudo.
+		if Implica(tiene, c) {
 			// Cinturón y tirantes: aunque la fila diga `screen`, un Tier B no la puede honrar.
 			// Sin esto, una fila escrita por una versión anterior (o a mano) elude A4.
 			return TierAdmite(d.Tier, c)

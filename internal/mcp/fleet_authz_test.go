@@ -169,6 +169,18 @@ func TestStdioLocalConservaAccesoPleno(t *testing.T) {
 }
 
 // capsQuePuede devuelve la intersección, en orden canónico.
+//
+// LAS IMPLICADAS TAMBIÉN SALEN, y es lo correcto aunque sorprenda. `puedo` no dice «qué te
+// concedieron» —eso es `caps`— dice QUÉ PODÉS EJERCER sobre esta máquina ahora mismo (C8). Quien
+// tiene `screen` puede mirar, así que esconderle `screen:view` sería mentirle por omisión a un
+// panel que necesita saber qué botones habilitar: el de mirar y el de controlar son dos.
+//
+// El orden canónico lleva `screen:view` ANTES de `screen`, y eso encoded la escalada: la lista se
+// lee de menos a más poder, así que un vistazo al final de la fila dice hasta dónde llega esta
+// credencial.
+//
+// Sabotaje que la hace fallar: sacar CapScreenView de la lista de `todas` en capsQuePuede, o
+// ponerlo después de CapScreen.
 func TestCapsQuePuedeEsLaInterseccionEnOrden(t *testing.T) {
 	d := devicePrueba("pc-gio", "casa")
 	p := &Principal{
@@ -176,8 +188,26 @@ func TestCapsQuePuedeEsLaInterseccionEnOrden(t *testing.T) {
 		Fleet: map[fleet.Cap][]string{fleet.CapScreen: {"*"}, fleet.CapMetrics: {"pc-gio"}},
 	}
 	got := capsQuePuede(p, d)
-	if len(got) != 2 || got[0] != fleet.CapMetrics || got[1] != fleet.CapScreen {
-		t.Fatalf("esperaba [metrics screen] en orden canónico, obtuve %v", got)
+	quiero := []fleet.Cap{fleet.CapMetrics, fleet.CapScreenView, fleet.CapScreen}
+	if len(got) != len(quiero) {
+		t.Fatalf("esperaba %v, obtuve %v", quiero, got)
+	}
+	for i := range quiero {
+		if got[i] != quiero[i] {
+			t.Fatalf("esperaba %v en orden canónico (de menos a más poder), obtuve %v", quiero, got)
+		}
+	}
+
+	// Y quien tiene SÓLO `screen:view` no ve `screen` en su `puedo`: la implicación no se
+	// devuelve al revés, o el panel habilitaría el botón de controlar a alguien que no puede.
+	soloMira := &Principal{
+		Name: "ojos", Role: RoleReader, Read: ReadOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreenView: {"*"}},
+	}
+	for _, c := range capsQuePuede(soloMira, d) {
+		if c == fleet.CapScreen {
+			t.Error("quien sólo puede mirar figura pudiendo controlar: el panel habilitaría el botón equivocado")
+		}
 	}
 }
 

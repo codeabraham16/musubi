@@ -648,3 +648,77 @@ func TestLaPoliticaDeConsentimientoNoLaAflojaQuienEntra(t *testing.T) {
 		t.Error("se aceptó un grado ilegible: la fila diría una cosa y el sistema haría otra")
 	}
 }
+
+// LA BITÁCORA DE SESIONES SE COMPUERTA POR MODALIDAD, Y NO POR UNA SOLA CAPACIDAD.
+//
+// Es el cambio con más filo de unificar la vista. Antes `musubi_fleet_sessions` listaba SÓLO
+// pantallas, así que `screen` alcanzaba para todo lo que devolvía. Ahora también trae shells — y
+// usar `screen` para las dos dejaría ver QUIÉN TUVO UN PROMPT en una máquina a alguien que no
+// puede abrir uno. Saber quién entró por shell a un servidor es información sensible por sí sola,
+// y `shell` es una capacidad APARTE de `screen` justamente porque son riesgos distintos.
+//
+// La fuga sería por generalizar la compuerta junto con la consulta: un descuido natural, sin
+// error visible, y que sólo se nota leyendo la respuesta con cuidado.
+//
+// Sabotaje que la hace fallar: usar la misma capacidad para las dos modalidades en toolFleetSessions.
+func TestLaBitacoraDeSesionesSeCompuertaPorModalidad(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "screen", "shell"},
+		"project": "casa", "os": "linux", "arch": "amd64",
+	}); e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	ds, _ := s.engine.ListarDevices("casa", false)
+	d := ds[0]
+	ahora := time.Now().UTC()
+
+	if _, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "otro", Estado: fleet.SesionSolicitada,
+		Creada: ahora, Vence: ahora.Add(5 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.engine.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "otro", Estado: fleet.ShellActiva,
+		Creada: ahora, Vence: ahora.Add(30 * time.Minute), UltimoTrafico: ahora,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tiene `screen` sobre la máquina y NO tiene `shell`.
+	soloPantalla := &Principal{Name: "soporte", Role: RoleWriter, Read: ReadOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreen: {"*"}}}
+	res, e := callAsPrincipal(t, s, soloPantalla, "musubi_fleet_sessions", map[string]any{})
+	if e != nil {
+		t.Fatalf("sessions: %+v", e)
+	}
+	out := jsonOf(t, res)
+	filas, _ := out["sesiones"].([]any)
+	for _, f := range filas {
+		m, _ := f.(map[string]any)
+		if m["modalidad"] == "shell" {
+			t.Error("quien no tiene `shell` vio quién tuvo un prompt: la compuerta se generalizó " +
+				"junto con la consulta, y eso es una fuga")
+		}
+	}
+	if len(filas) != 1 {
+		t.Fatalf("vio %d sesiones: se esperaba sólo la de pantalla", len(filas))
+	}
+	// Y se DICE cuántas quedaron fuera, sin nombrarlas: una lista corta sin explicación se lee
+	// como «no hay más», que es distinto de «no las podés ver».
+	if _, hay := out["sin_permiso"]; !hay {
+		t.Error("no se dijo que había sesiones ocultas por permiso")
+	}
+
+	// Con `shell` además, ve las dos.
+	ambas := &Principal{Name: "admin-casa", Role: RoleWriter, Read: ReadOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreen: {"*"}, fleet.CapShell: {"*"}}}
+	res2, e2 := callAsPrincipal(t, s, ambas, "musubi_fleet_sessions", map[string]any{})
+	if e2 != nil {
+		t.Fatal(e2)
+	}
+	if filas2, _ := jsonOf(t, res2)["sesiones"].([]any); len(filas2) != 2 {
+		t.Errorf("con las dos capacidades vio %d sesiones de 2", len(filas2))
+	}
+}

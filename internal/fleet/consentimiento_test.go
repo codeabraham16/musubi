@@ -227,3 +227,46 @@ func TestPedirDondeNadiePuedeContestarCierraLaPuerta(t *testing.T) {
 		t.Errorf("un valor ilegible resolvió %q en vez del default", got)
 	}
 }
+
+// LA IMPLICACIÓN VALE TAMBIÉN EN LA MATRIZ DEL APARATO, Y OLVIDARLO LE SACA ALGO QUE SIEMPRE PUDO.
+//
+// Lo cazó una prueba existente al partir `screen`, y el modo de fallo es de los peores: silencioso
+// y retroactivo. Una máquina enrolada con `caps: ["screen"]` NO tiene `screen:view` en su lista,
+// así que una comparación por igualdad la daba por incapaz de mirar la pantalla que ya deja
+// controlar. En producción eso vaciaba la bitácora de sesiones de TODAS las máquinas existentes
+// —ninguna declara la capacidad nueva— sin un solo error.
+//
+// La lección general: partir una capacidad en dos exige propagar la implicación a los DOS ejes,
+// el de la credencial y el del aparato. Arreglar sólo uno deja el otro mintiendo.
+//
+// Sabotaje que la hace fallar: volver `Permite` a comparar con `==`.
+func TestElAparatoQueAdmiteControlarAdmiteMirar(t *testing.T) {
+	// Enrolada a la vieja usanza: sólo `screen`, que es como están TODAS las filas existentes.
+	d := Device{Tier: TierAgente, Caps: []Cap{CapMetrics, CapScreen}}
+
+	if !d.Permite(CapScreen) {
+		t.Fatal("no admite lo que declara")
+	}
+	if !d.Permite(CapScreenView) {
+		t.Error("una máquina que admite CONTROLAR la pantalla no admite MIRARLA: partir la " +
+			"capacidad le sacó, sin avisar, algo que siempre pudo")
+	}
+	// Y al revés no: declarar sólo `screen:view` no habilita controlar.
+	soloMirar := Device{Tier: TierAgente, Caps: []Cap{CapScreenView}}
+	if soloMirar.Permite(CapScreen) {
+		t.Error("una máquina que sólo admite mirar admite controlar: la implicación se volvió simétrica")
+	}
+	if !soloMirar.Permite(CapScreenView) {
+		t.Error("no admite lo que declara")
+	}
+	// Y el tier sigue mandando: un Tier B con `screen` escrito a mano no admite ninguna de las dos.
+	tierB := Device{Tier: TierProtocolo, Caps: []Cap{CapScreen, CapScreenView}}
+	if tierB.Permite(CapScreen) || tierB.Permite(CapScreenView) {
+		t.Error("un Tier B admitió pantalla: la implicación eludió la matriz del tier (A4)")
+	}
+	// Una máquina revocada no admite nada, implicación incluida (C6).
+	revocada := Device{Tier: TierAgente, Caps: []Cap{CapScreen}, Revoked: true}
+	if revocada.Permite(CapScreenView) {
+		t.Error("una máquina revocada admitió mirar por la puerta de la implicación")
+	}
+}

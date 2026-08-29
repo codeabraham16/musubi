@@ -1274,7 +1274,7 @@
     },
     {
       "name": "musubi_fleet_sessions",
-      "description": "La bitácora de SESIONES DE PANTALLA: quién pidió mirar qué máquina, cuándo y hasta cuándo. Nunca la contraseña — no existe guardada. Sólo muestra las máquinas sobre las que tenés `screen`. El estado `vencida` se DERIVA del reloj, no es una columna que alguien tenga que ir a actualizar.",
+      "description": "Quién estuvo ADENTRO de tus máquinas y por dónde: pantallas y shells en UNA sola lista, más nuevas primero. `modalidad` es `pantalla` o `shell` y cambia qué significa todo lo demás — una shell abierta y una pantalla abierta no son el mismo riesgo. `abierta` es DERIVADO y no el estado guardado: una sesión puede figurar `activa` habiendo vencido sin que nadie la marcara, y dibujar el estado crudo mostraría gente adentro de máquinas de las que ya salió. LA COMPUERTA ES POR MODALIDAD: las pantallas piden `screen:view` sobre esa máquina y las shells piden `shell`. No se generaliza a una sola capacidad a propósito — usar `screen` para las dos dejaría ver quién tuvo un prompt a alguien que no puede abrir uno. Devuelve cuántas quedaron fuera por permiso, sin nombrarlas. NO guarda lo que pasó adentro de la sesión: eso es contenido, y esta es la bitácora de accesos.",
       "inputSchema": {
         "type": "object",
         "properties": {

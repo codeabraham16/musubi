@@ -254,25 +254,40 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
-	// G8 — sólo las máquinas sobre las que tenés `screen`. Saber quién mira la pantalla de un
-	// servidor es información sensible por sí sola.
-	nombrePorID := make(map[string]string, len(devices))
-	for _, d := range devices {
-		if PuedeSobreDevice(p, d, fleet.CapScreen) {
-			nombrePorID[d.ID] = d.Name
+	// G8 — sólo las máquinas sobre las que podés ver ese plano. Saber quién mira la pantalla de un
+	// servidor, o quién tuvo un prompt en él, es información sensible por sí sola.
+	//
+	// LA COMPUERTA ES POR MODALIDAD, y ése es el cambio que trae la vista única. Antes esta tool
+	// listaba SÓLO pantallas, así que `screen` alcanzaba para todo lo que devolvía. Ahora también
+	// trae shells, y usar `screen` para las dos dejaría ver quién tuvo un prompt en una máquina a
+	// alguien que no tiene `shell` sobre ella — una fuga por generalizar la compuerta junto con
+	// la consulta.
+	puedeVer := func(d fleet.Device, m fleet.Modalidad) bool {
+		if m == fleet.ModalidadShell {
+			return PuedeSobreDevice(p, d, fleet.CapShell)
 		}
+		// Mirar la bitácora de pantallas alcanza con poder MIRAR: quien tiene `screen:view` ya
+		// puede ver esa pantalla, así que negarle saber quién más la vio no protege nada.
+		return PuedeSobreDevice(p, d, fleet.CapScreenView)
+	}
+	porID := make(map[string]fleet.Device, len(devices))
+	for _, d := range devices {
+		porID[d.ID] = d
 	}
 
 	ahora := time.Now()
-	crudas, err := s.engine.SesionesDePantalla(proyecto, strings.TrimSpace(args.Device), tope*4, ahora)
+	// Se piden de más y se recorta después de compuertar: el tope es de lo que VAS A VER, no de
+	// lo que se leyó. Sin el margen, una credencial acotada recibiría una lista corta que se lee
+	// como «no hay más sesiones» cuando lo que pasa es que las siguientes no las puede ver.
+	crudas, err := s.engine.SesionesVivas(proyecto, strings.TrimSpace(args.Device), tope*4, ahora)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 	filas := make([]map[string]interface{}, 0, tope)
 	ocultos := 0
 	for _, ses := range crudas {
-		nombre, puede := nombrePorID[ses.DeviceID]
-		if !puede {
+		d, hay := porID[ses.DeviceID]
+		if !hay || !puedeVer(d, ses.Modalidad) {
 			ocultos++
 			continue
 		}
@@ -281,11 +296,18 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 		}
 		fila := map[string]interface{}{
 			"session_id": ses.ID,
-			"device":     nombre,
-			"principal":  ses.Principal,
-			"estado":     string(ses.Estado),
-			"creada":     ses.Creada.UTC().Format(time.RFC3339),
-			"vence":      ses.Vence.UTC().Format(time.RFC3339),
+			// LA MODALIDAD VA PRIMERO ENTRE LOS DATOS porque cambia qué significa todo lo demás:
+			// una shell abierta y una pantalla abierta no son el mismo riesgo ni piden lo mismo.
+			"modalidad": string(ses.Modalidad),
+			"device":    ses.Device,
+			"principal": ses.Principal,
+			"estado":    string(ses.Estado),
+			// `abierta` es DERIVADO y viaja explícito: el estado guardado puede decir `activa`
+			// sobre una sesión que ya venció y que nadie vino a marcar, y un panel que dibuja el
+			// estado crudo mostraría gente adentro de máquinas de las que ya salió.
+			"abierta": ses.Abierta(ahora),
+			"creada":  ses.Creada.UTC().Format(time.RFC3339),
+			"vence":   ses.Vence.UTC().Format(time.RFC3339),
 		}
 		if !ses.Cerrada.IsZero() {
 			fila["cerrada"] = ses.Cerrada.UTC().Format(time.RFC3339)
