@@ -608,3 +608,45 @@ func TestElPanelPideLasSesionesYSuErrorNoBorraLaFlota(t *testing.T) {
 		t.Error("el error de las sesiones no está acotado: podría borrar la flota entera de la pantalla")
 	}
 }
+
+// A38 — los dos campos que U1 absorbió y el panel no dibujaba.
+//
+// `num_procesos` y `mem_libre` llegan a `musubi_fleet_metrics` y a Prometheus desde U1, y el panel
+// —que es donde alguien los mira— no los tenía. Es el patrón que este track viene persiguiendo:
+// datos guardados que ninguna interfaz muestra.
+//
+// Sabotaje que la hace fallar: sacar la fila de `procesos`/`RAM libre` de seccionVitales.
+// Sabotaje que la hace fallar: dibujar `mem_libre` con num() en vez de bytes() (un GiB se vería
+// como 1073741824).
+func TestElPanelDibujaLosProcesosYLaMemoriaLibre(t *testing.T) {
+	p := string(assetsFS(t, "assets/flota.html"))
+	for _, quiero := range []struct{ frag, porque string }{
+		{"e.num_procesos", "el conteo de procesos llega desde U1 y no se dibujaba en ningún lado"},
+		{"bytes(e.mem_libre)", "la RAM libre son bytes crudos: sin formatear se lee 1073741824 y nadie la mira"},
+		{"function bytes(", "el formateo de bytes tiene que existir una sola vez, no repetido en cada celda"},
+	} {
+		if !strings.Contains(p, quiero.frag) {
+			t.Errorf("flota.html no contiene %q: %s", quiero.frag, quiero.porque)
+		}
+	}
+	// EL NULL NO PUEDE DIBUJARSE COMO CERO, que es la regla central del track llevada al panel:
+	// `mem_libre` no existe en Windows ni en macOS. Si `bytes()` no chequea null, un Windows
+	// mostraría «0 B» de RAM libre — que se lee como una máquina a punto de morir.
+	i := strings.Index(p, "function bytes(")
+	if i < 0 {
+		t.Fatal("no hay función bytes(): el chequeo de abajo no mira nada")
+	}
+	cuerpo := p[i:]
+	if fin := strings.Index(cuerpo, "\nfunction "); fin > 0 {
+		cuerpo = cuerpo[:fin]
+	}
+	if !strings.Contains(cuerpo, "=== null") || !strings.Contains(cuerpo, "ND") {
+		t.Errorf("bytes() no devuelve el marcador de «sin dato» ante un null: un Windows sin "+
+			"MemFree dibujaría 0 B, que se lee como una máquina sin RAM libre.\n%s", cuerpo)
+	}
+	// Y el 0 MEDIDO sí se dibuja: un disco lleno tiene 0 disponibles de verdad. Si bytes()
+	// tratara el 0 como ausencia, taparía justo el número por el que suena la alarma.
+	if strings.Contains(cuerpo, "if (!v)") || strings.Contains(cuerpo, "n === 0") {
+		t.Error("bytes() trata el 0 como ausencia: un 0 medido es un dato, y es el que más importa")
+	}
+}

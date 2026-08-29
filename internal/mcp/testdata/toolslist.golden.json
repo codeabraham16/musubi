@@ -1130,7 +1130,7 @@
     },
     {
       "name": "musubi_fleet_metrics",
-      "description": "Telemetría de la FLOTA: CPU, RAM (usada Y libre, que no son complementarias), procesos, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. `mem_usada` sale de MemAvailable y `mem_libre` es MemFree: NO son complementarias y en un Linux sano difieren en varios GB, porque el page cache vive en el medio. `num_procesos` cuenta PROCESOS, no hilos; `num_procesos` y `mem_libre` viajan como null en los sistemas que no los miden (mem_libre en Windows y macOS, num_procesos en macOS). Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+      "description": "Telemetría de la FLOTA: CPU, RAM (usada Y libre, que no son complementarias), procesos, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. `mem_usada` sale de MemAvailable y `mem_libre` es MemFree: NO son complementarias y en un Linux sano difieren en varios GB, porque el page cache vive en el medio. `num_procesos` cuenta PROCESOS, no hilos. Lo que no se midió viaja como null en TODOS los campos, y las dos superficies coinciden en cuáles: `mem_libre` (ausente en Windows y macOS), `num_procesos` (ausente en macOS), `num_cpu` y `uptime_seg`, y los pares de memoria y disco, que se compuertan por SU TOTAL y no por su propio valor — `disco_libre: 0` en un disco lleno es un cero MEDIDO y sale como 0, que es justo el número por el que suena la alarma. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1322,7 +1322,7 @@
           },
           "incluir_revocados": {
             "type": "boolean",
-            "description": "Incluir los servicios dados de baja y los de máquinas revocadas (default false)"
+            "description": "Incluir los servicios dados de baja Y los de máquinas revocadas (default false). Son dos bajas distintas: `revocado` es del SERVICIO (se dejó de usar en una máquina que sigue viva) y `device_revocado` es de la MÁQUINA (salió de la flota con todo adentro; sólo aparece cuando es true). Leer el historial de una máquina revocada exige la MISMA concesión `metrics` que hacía falta cuando estaba viva: la revocación levanta el kill-switch para operar, no para auditar."
           },
           "project": {
             "type": "string",

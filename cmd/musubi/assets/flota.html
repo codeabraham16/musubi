@@ -133,6 +133,21 @@ function num(v, sufijo = '', dec = 0) {
   const n = Number(v);
   return isFinite(n) ? n.toFixed(dec) + sufijo : ND;
 }
+// bytes en unidades binarias. NULL ES «no medido» y NO cero — misma regla que el resto del
+// panel: `mem_libre` no existe en Windows ni en macOS, y dibujar «0 B» ahí diría que la máquina
+// no tiene un solo byte libre, que es lo contrario de «no lo sé».
+//
+// El 0 SÍ se dibuja cuando viene medido: un disco lleno tiene 0 disponibles de verdad, y ése es
+// justo el número que alguien vino a mirar.
+function bytes(v) {
+  if (v === null || v === undefined) return ND;
+  let n = Number(v);
+  if (!isFinite(n) || n < 0) return ND;
+  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+}
 function duracion(seg) {
   if (seg === null || seg === undefined) return ND;
   const s = Number(seg);
@@ -227,6 +242,7 @@ function seccionVitales(e) {
     ${d('cpu', pct(e.cpu_pct))}${d('memoria', pct(e.mem_pct))}${d('disco', pct(e.disco_pct))}
     ${d('carga', num(e.load1, '', 2))}${d('núcleos', num(e.num_cpu, '', 0))}${d('temperatura', num(e.temp_c, '°', 0))}
     ${d('uptime', duracion(e.uptime_seg))}${d('último dato', edad(e.antiguedad_s, e.con_metricas))}
+    ${d('procesos', num(e.num_procesos, '', 0))}${d('RAM libre', bytes(e.mem_libre))}
     ${d('dirección', esc(e.address || '—'))}${d('arquitectura', esc(e.arch || '—'))}
   </div></section>`;
 }

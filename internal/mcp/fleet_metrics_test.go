@@ -429,3 +429,108 @@ func TestElAutorreporteSeRecorta(t *testing.T) {
 
 // f64ptr construye un *float64 para las muestras de prueba.
 func f64ptr(v float64) *float64 { return &v }
+
+// ── A39 · La tabla y el gráfico tienen que coincidir en qué es «no medido» ───────────────────
+
+// paresDeSuperficie ata cada serie del exportador de Prometheus con SU campo en la fila de la
+// tool. Las dos leen la MISMA muestra, así que tienen que decidir lo mismo sobre cada campo.
+//
+// DOS SUPERFICIES QUE NO COINCIDEN ES PEOR QUE UNA SOLA EQUIVOCADA: el gráfico muestra un hueco,
+// la tabla muestra un 0, y no hay forma de saber cuál miente. Fue exactamente lo que pasó con
+// `num_cpu` y `uptime_seg` (A39): el exportador los compuertaba con `> 0` desde siempre y la tool
+// los copiaba crudos.
+var paresDeSuperficie = []struct{ serie, campo string }{
+	{"musubi_fleet_device_cpu_percent", "cpu_pct"},
+	{"musubi_fleet_device_cpus", "num_cpu"},
+	{"musubi_fleet_device_memory_total_bytes", "mem_total"},
+	{"musubi_fleet_device_memory_used_bytes", "mem_usada"},
+	{"musubi_fleet_device_memory_free_bytes", "mem_libre"},
+	{"musubi_fleet_device_disk_total_bytes", "disco_total"},
+	{"musubi_fleet_device_disk_used_bytes", "disco_usado"},
+	{"musubi_fleet_device_disk_available_bytes", "disco_libre"},
+	{"musubi_fleet_device_load1", "load1"},
+	{"musubi_fleet_device_load5", "load5"},
+	{"musubi_fleet_device_load15", "load15"},
+	{"musubi_fleet_device_uptime_seconds", "uptime_seg"},
+	{"musubi_fleet_device_temperature_celsius", "temp_c"},
+	{"musubi_fleet_device_processes", "num_procesos"},
+}
+
+// Sabotaje que la hace fallar: copiar `m.NumCPU` crudo a la fila (o `m.UptimeSeg`).
+// Sabotaje que la hace fallar: cambiar `siMedido(hayDisco, ...)` por `enteroONull(...)` — un disco
+// LLENO tiene `disco_libre: 0` medido, y el exportador sí emite ese punto.
+func TestLaTablaYElExportadorCoincidenEnQueEsNoMedido(t *testing.T) {
+	ahora := time.Now().UTC()
+	d := fleet.Device{Name: "x", Tier: fleet.TierAgente, OS: "linux", ProjectID: "casa", LastSeen: ahora}
+
+	// Cada caso es una máquina real que existe en la flota de gio o que el track ya midió.
+	casos := []struct {
+		nombre  string
+		muestra fleet.Muestra
+	}{
+		{"nada medido (el agente late y no mide)", fleet.Muestra{Tomada: ahora}},
+		{"un Linux completo", muestraSana(40, ahora)},
+		{"un disco LLENO: los ceros de acá son MEDIDOS", fleet.Muestra{
+			Tomada: ahora, NumCPU: 8, UptimeSeg: 3600, NumProcesos: 210,
+			MemTotal: 8 << 30, MemUsada: 7 << 30,
+			DiscoTotal: 500 << 30, DiscoUsado: 500 << 30, DiscoDisponible: 0,
+		}},
+		{"un Windows: sin carga y sin mem_libre", fleet.Muestra{
+			Tomada: ahora, NumCPU: 8, UptimeSeg: 7200, NumProcesos: 180,
+			MemTotal: 34 << 30, MemUsada: 16 << 30,
+			DiscoTotal: 900 << 30, DiscoUsado: 800 << 30, DiscoDisponible: 80 << 30,
+		}},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if err := c.muestra.Valida(); err != nil {
+				t.Fatalf("el fixture no es una muestra válida y nunca llegaría a la fila: %v", err)
+			}
+			fila := filaDeMetricas(d, c.muestra, ahora, umbralEnLineaDefault)
+
+			// Qué series emitiría el exportador para esta misma muestra.
+			emite := map[string]bool{}
+			for _, serie := range seriesDeFlota(ahora, 5*time.Minute) {
+				_, ok := serie.Valor(d, &c.muestra)
+				emite[serie.Nombre] = ok
+			}
+
+			for _, par := range paresDeSuperficie {
+				serieEmite, conocida := emite[par.serie]
+				if !conocida {
+					t.Fatalf("la serie %q no existe: el par quedó colgado y esta prueba dejó de "+
+						"mirar el campo %q", par.serie, par.campo)
+				}
+				valor, presente := fila[par.campo]
+				if !presente {
+					t.Errorf("la fila no trae %q: el hueco tiene que ser visible (null), no ausente", par.campo)
+					continue
+				}
+				filaTiene := valor != nil && !esNilTipado(valor)
+				if filaTiene != serieEmite {
+					t.Errorf("desacuerdo en %q: el exportador %s y la tabla %s (valor %#v). "+
+						"Un gráfico con hueco y una tabla con número no se pueden reconciliar.",
+						par.campo,
+						map[bool]string{true: "SÍ emite", false: "NO emite"}[serieEmite],
+						map[bool]string{true: "trae valor", false: "manda null"}[filaTiene],
+						valor)
+				}
+			}
+		})
+	}
+}
+
+// esNilTipado reconoce un puntero nil guardado en un interface{} — que NO es igual a nil y es
+// justo la forma en que `mem_libre`, `cpu_pct` y las cargas viajan cuando no se midieron.
+func esNilTipado(v interface{}) bool {
+	switch p := v.(type) {
+	case *float64:
+		return p == nil
+	case *uint64:
+		return p == nil
+	case *int:
+		return p == nil
+	}
+	return false
+}

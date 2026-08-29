@@ -100,11 +100,28 @@ func (s *McpServer) toolFleetServices(ctx context.Context, raw json.RawMessage) 
 				huerfanos++
 				continue
 			}
-			if !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+			// LA COMPUERTA CAMBIA DE PREGUNTA CUANDO SE PIDE EL HISTORIAL (A51). Con
+			// `incluir_revocados` la pregunta deja de ser «¿podés operar sobre esta máquina?» y
+			// pasa a ser «¿podés leer lo que quedó registrado de ella?». Sin esto, las filas de
+			// una máquina revocada NO SALÍAN NUNCA —el kill-switch de la revocación las tumbaba
+			// antes de mirar la concesión— y la descripción de la tool prometía lo contrario.
+			puede := PuedeSobreDevice(p, d, fleet.CapMetrics)
+			if args.IncluirRevocados {
+				puede = PuedeVerHistorialDeDevice(p, d, fleet.CapMetrics)
+			}
+			if !puede {
 				sinPermiso++
 				continue
 			}
 			fila := filaDeServicio(sv, d, ahora)
+			// LA MÁQUINA REVOCADA SE DICE EN LA FILA. `revocado` ya existe y es del SERVICIO: un
+			// servicio dado de baja en una máquina viva. Son dos bajas distintas y confundirlas
+			// hace leer «esto se dejó de usar» donde lo que pasó es «esta máquina salió de la
+			// flota con todo adentro». Sólo viaja cuando es true: una columna que dice `false` en
+			// el 99,9 % de las filas es ruido.
+			if d.Revoked {
+				fila["device_revocado"] = true
+			}
 			// El proyecto va en la fila: con `read: all` la tabla mezcla tenants, y una fila que no
 			// dice de quién es invita a actuar sobre el servicio de otro cliente.
 			fila["project"] = d.ProjectID

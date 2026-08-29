@@ -666,3 +666,174 @@ func cuantosServicios(t *testing.T, s *McpServer) int {
 	filas, _ := jsonOf(t, res)["services"].([]any)
 	return len(filas)
 }
+
+// ── A51 · El historial de una máquina revocada ──────────────────────────────────────────────
+
+// maquinaRevocadaConServicios enrola una máquina, le reporta dos servicios y la revoca. Devuelve
+// el servidor listo para preguntarle por el historial.
+func maquinaRevocadaConServicios(t *testing.T) *McpServer {
+	t.Helper()
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+	cuerpo := cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "postgresql.service", Clase: "systemd", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "nginx.service", Clase: "systemd", Salud: saludViva(fleet.EstadoFallado)},
+	)
+	if code, body := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpo); code != http.StatusOK {
+		t.Fatalf("el latido con servicios devolvió %d: %s", code, body)
+	}
+	if _, e := call(t, s, "musubi_fleet_revoke", map[string]any{"name": "pc-gio", "project": "casa"}); e != nil {
+		t.Fatalf("fleet_revoke: %+v", e)
+	}
+	return s
+}
+
+func nombresDeServicios(t *testing.T, res interface{}) []string {
+	t.Helper()
+	out := jsonOf(t, res)
+	crudas, _ := out["services"].([]any)
+	var nombres []string
+	for _, f := range crudas {
+		nombres = append(nombres, f.(map[string]any)["nombre"].(string))
+	}
+	return nombres
+}
+
+// `incluir_revocados: true` prometía en su propia descripción los servicios «de máquinas
+// revocadas», y ésa era la mitad falsa: el kill-switch de la revocación tumbaba el device ANTES de
+// mirar la concesión, así que las filas —que la migración 36 conserva A PROPÓSITO para la
+// auditoría— no salían nunca y no había forma de verlas.
+//
+// Una auditoría que nadie puede leer no es una auditoría.
+//
+// Sabotaje que la hace fallar: volver a `PuedeSobreDevice` en la rama de `IncluirRevocados`.
+func TestElHistorialDeUnaMaquinaRevocadaSePuedeAuditar(t *testing.T) {
+	s := maquinaRevocadaConServicios(t)
+	auditor := principalDeFlota("auditor", "casa", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}})
+
+	// Sin pedirlo, la máquina revocada no aparece: el default no cambia.
+	res, e := callAsPrincipal(t, s, auditor, "musubi_fleet_services", map[string]any{"project": "casa"})
+	if e != nil {
+		t.Fatalf("services: %+v", e)
+	}
+	if n := nombresDeServicios(t, res); len(n) != 0 {
+		t.Errorf("sin incluir_revocados salieron %v: el default tiene que seguir mostrando sólo lo vivo", n)
+	}
+
+	res, e = callAsPrincipal(t, s, auditor, "musubi_fleet_services",
+		map[string]any{"project": "casa", "incluir_revocados": true})
+	if e != nil {
+		t.Fatalf("services con incluir_revocados: %+v", e)
+	}
+	nombres := nombresDeServicios(t, res)
+	if len(nombres) != 2 {
+		t.Fatalf("el historial trajo %v; se esperaban los dos servicios de la máquina revocada", nombres)
+	}
+
+	// LA FILA DICE QUE LA MÁQUINA ESTÁ REVOCADA, y no sólo el servicio. Son dos bajas distintas:
+	// `revocado` es «este servicio se dejó de usar» y `device_revocado` es «esta máquina salió de
+	// la flota con todo adentro». Confundirlas hace leer un retiro deliberado donde hubo una baja.
+	fila := jsonOf(t, res)["services"].([]any)[0].(map[string]any)
+	if fila["device_revocado"] != true {
+		t.Errorf("la fila no dice que la MÁQUINA está revocada: %#v", fila["device_revocado"])
+	}
+	if _, hay := fila["revocado"]; !hay {
+		t.Error("desapareció `revocado`, que es la baja del SERVICIO: las dos tienen que verse")
+	}
+}
+
+// LA MITAD QUE IMPORTA. Levantar el kill-switch para auditar no puede convertirse en una puerta
+// lateral: la concesión `metrics` sigue haciendo falta, y la tenencia también. Quien no podía ver
+// los servicios de esa máquina mientras vivía tampoco los ve después.
+//
+// Sin esta prueba, el arreglo de A51 sería indistinguible de «con incluir_revocados se ve todo».
+//
+// Sabotaje que la hace fallar: que PuedeVerHistorialDeDevice devuelva true directamente, o que
+// saltee alcanzaElProyecto / tieneGrant en vez de delegar en PuedeSobreDevice.
+func TestAuditarUnaMaquinaRevocadaSigueExigiendoLaConcesionYLaTenencia(t *testing.T) {
+	s := maquinaRevocadaConServicios(t)
+
+	// (a) Del mismo proyecto y SIN concesión `metrics`: no ve nada, y se cuenta.
+	sinConcesion := principalDeFlota("mirón", "casa", map[fleet.Cap][]string{})
+	res, e := callAsPrincipal(t, s, sinConcesion, "musubi_fleet_services",
+		map[string]any{"project": "casa", "incluir_revocados": true})
+	if e != nil {
+		t.Fatalf("services: %+v", e)
+	}
+	if n := nombresDeServicios(t, res); len(n) != 0 {
+		t.Errorf("una credencial SIN concesión `metrics` auditó una máquina revocada: %v", n)
+	}
+	if sp := jsonOf(t, res)["sin_permiso"]; sp != float64(2) {
+		t.Errorf("sin_permiso = %v; las dos filas tapadas tienen que contarse, no desaparecer", sp)
+	}
+
+	// (b) De OTRO proyecto y CON la concesión: la tenencia se aplica antes que el grant, así que
+	// nombrar la máquina ajena en principals.yaml no la alcanza. Ni siquiera llega a `sin_permiso`
+	// —el proyecto ajeno no está en su barrido— y eso es lo correcto: no es un oráculo.
+	ajeno := principalDeFlota("vecino", "otra-casa", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}})
+	res, e = callAsPrincipal(t, s, ajeno, "musubi_fleet_services",
+		map[string]any{"project": "casa", "incluir_revocados": true})
+	if e == nil {
+		if n := nombresDeServicios(t, res); len(n) != 0 {
+			t.Errorf("una credencial de otro tenant auditó la máquina revocada del vecino: %v", n)
+		}
+	}
+
+	// (c) LA TENENCIA, DIRECTO CONTRA LA COMPUERTA. El caso (b) de arriba pasa por la tool, y ahí
+	// el barrido por proyecto filtra al vecino ANTES de llegar a PuedeVerHistorialDeDevice — así
+	// que (b) no ejercita la tenencia de la compuerta, y sacarle `alcanzaElProyecto` a la variante
+	// de auditoría lo dejaba en verde. Medido: el sabotaje de la tenencia sólo lo atrapaba la
+	// guarda del TIER, que es otro invariante. Acá se llama a la función a mano.
+	d, ok, err := s.engine.DevicePorNombre("casa", "pc-gio")
+	if err != nil || !ok {
+		t.Fatalf("no se pudo releer la máquina revocada: %v", err)
+	}
+	if PuedeVerHistorialDeDevice(ajeno, d, fleet.CapMetrics) {
+		t.Error("la variante de auditoría salteó la tenencia: nombrar la máquina de otro tenant en " +
+			"principals.yaml no puede alcanzarla, ni viva ni revocada")
+	}
+	// Y el control positivo, para que la línea de arriba no pase por estar rota de otra forma.
+	propio := principalDeFlota("auditor", "casa", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}})
+	if !PuedeVerHistorialDeDevice(propio, d, fleet.CapMetrics) {
+		t.Error("el auditor del proyecto propio tampoco puede: la compuerta está cerrada de más")
+	}
+}
+
+// LA REVOCACIÓN SIGUE SIENDO ABSOLUTA PARA TODO LO QUE TOQUE LA MÁQUINA. El arreglo de A51 abre
+// una puerta de LECTURA de lo ya escrito, y es fácil que se filtre a las otras: exec, pantalla y
+// shell pasan por PuedeSobreDevice, donde el kill-switch manda (C6).
+//
+// Sabotaje que la hace fallar: mover el `d.Revoked = false` adentro de PuedeSobreDevice.
+func TestAuditarNoAflojaElKillSwitchParaOperar(t *testing.T) {
+	s := maquinaRevocadaConServicios(t)
+	d, ok, err := s.engine.DevicePorNombre("casa", "pc-gio")
+	if err != nil || !ok {
+		t.Fatalf("no se pudo releer la máquina revocada: %v", err)
+	}
+	if !d.Revoked {
+		t.Fatal("la máquina no quedó revocada: el escenario de la prueba no es el que dice")
+	}
+	poderoso := principalDeFlota("root", "casa", map[fleet.Cap][]string{
+		fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}, fleet.CapScreen: {"*"}, fleet.CapShell: {"*"},
+	})
+	for _, c := range []fleet.Cap{fleet.CapExec, fleet.CapScreen, fleet.CapScreenView, fleet.CapShell, fleet.CapMetrics} {
+		if PuedeSobreDevice(poderoso, d, c) {
+			t.Errorf("PuedeSobreDevice concedió %q sobre una máquina REVOCADA: el kill-switch se aflojó", c)
+		}
+	}
+	// Y el historial sólo se abre para leer: la variante de auditoría concede `metrics`…
+	if !PuedeVerHistorialDeDevice(poderoso, d, fleet.CapMetrics) {
+		t.Error("la variante de auditoría no deja leer el historial de una máquina revocada")
+	}
+	// …y NO abre nada más por su cuenta: lo que concede sigue saliendo de la concesión Y DEL TIER.
+	// Se prueba contra un tier que NO admite la capacidad —un Tier C no da `shell`— porque el
+	// techo del aparato es el otro invariante que un `d.Revoked = false` mal ubicado se llevaría
+	// puesto. No se usa t.Skip: una prueba omitida se lee igual que una que no existe.
+	movil := d
+	movil.Tier = fleet.TierMovil
+	if fleet.TierAdmite(movil.Tier, fleet.CapShell) {
+		t.Fatal("el fixture eligió un tier que SÍ admite shell: la línea de abajo no probaría nada")
+	}
+	if PuedeVerHistorialDeDevice(poderoso, movil, fleet.CapShell) {
+		t.Error("la variante de auditoría concedió `shell` en un tier que no lo admite: aflojó más que la revocación")
+	}
+}

@@ -541,14 +541,29 @@ func filaDeMetricas(d fleet.Device, m fleet.Muestra, ahora time.Time, umbral tim
 		"online":       d.EnLinea(ahora, umbral),
 		"tomada":       m.Tomada.UTC().Format(time.RFC3339),
 		"antiguedad_s": int(ahora.Sub(m.Tomada).Seconds()),
-		"num_cpu":      m.NumCPU,
-		"uptime_seg":   m.UptimeSeg,
-		"mem_total":    m.MemTotal,
-		"mem_usada":    m.MemUsada,
-		"disco_total":  m.DiscoTotal,
-		"disco_usado":  m.DiscoUsado,
-		"disco_libre":  m.DiscoDisponible,
 	}
+	// LOS PARES SE COMPUERTAN POR SU TOTAL, NO POR SU PROPIO VALOR (A39). Es la diferencia que
+	// `enteroONull` no puede hacer y que importa justo cuando alguien está mirando:
+	//
+	//   `disco_libre: 0` en un disco LLENO es un cero MEDIDO y verdadero — el peor momento para
+	//   convertirlo en «no sé», porque es exactamente el número por el que suena la alarma.
+	//
+	// Así que la pregunta no es «¿este campo vale cero?» sino «¿se midió este subsistema?», y eso
+	// lo contesta el total. Es la MISMA condición que usa el exportador de Prometheus para decidir
+	// si emite el punto (`m.DiscoTotal > 0`), y ésa es la idea: una sola definición de «no medido»
+	// para las dos superficies que leen la misma muestra.
+	siMedido := func(medido bool, v interface{}) interface{} {
+		if !medido {
+			return nil
+		}
+		return v
+	}
+	hayMem, hayDisco := m.MemTotal > 0, m.DiscoTotal > 0
+	fila["mem_total"] = siMedido(hayMem, m.MemTotal)
+	fila["mem_usada"] = siMedido(hayMem, m.MemUsada)
+	fila["disco_total"] = siMedido(hayDisco, m.DiscoTotal)
+	fila["disco_usado"] = siMedido(hayDisco, m.DiscoUsado)
+	fila["disco_libre"] = siMedido(hayDisco, m.DiscoDisponible)
 	// Los campos que pueden ser DESCONOCIDOS viajan como null, nunca como 0 (D1/D3). Un 0
 	// inventado es indistinguible de un 0 medido, y la diferencia importa justo cuando alguien
 	// está mirando el panel para entender una caída.
@@ -561,11 +576,22 @@ func filaDeMetricas(d fleet.Device, m fleet.Muestra, ahora time.Time, umbral tim
 	// mem_libre es *uint64: nil ⇒ null. Windows y macOS no la exponen, y decir 0 sería decir «no
 	// le queda nada de RAM libre», que es lo contrario de «no lo sé».
 	fila["mem_libre"] = m.MemLibre
-	// num_procesos es un entero, así que el cero se traduce ACÁ. Copiarlo crudo pintaría «esta
-	// máquina no tiene procesos» en todo macOS y en todo agente viejo — y en Prometheus, una
-	// caída a cero en cada gráfico. (`num_cpu` arriba sí se copia crudo y tiene el mismo
-	// problema: es el mismo arreglo pero otro diff, anotado como cabo.)
+	// LOS TRES ENTEROS QUE NO SON PUNTEROS SE TRADUCEN ACÁ (A39). Un `int` no puede distinguir
+	// «cero» de «no vino», así que el cero se convierte en null en el borde de salida, que es el
+	// único lugar donde todavía se sabe qué significa.
+	//
+	// `num_procesos` copiado crudo pinta «esta máquina no tiene procesos» en todo macOS y en todo
+	// agente viejo. `num_cpu` pinta «esta máquina no tiene CPUs». `uptime_seg` pinta «arrancó
+	// recién», que es peor que las otras dos: es plausible, y manda a alguien a investigar un
+	// reinicio que no pasó.
+	//
+	// EL EXPORTADOR DE PROMETHEUS YA LOS TRATABA ASÍ —las tres series salen con `> 0` como
+	// condición de emisión— y esta tool no. Dos superficies que leen la MISMA muestra y no
+	// coinciden en qué es «no medido» es peor que una sola equivocada: el gráfico y la tabla
+	// muestran cosas distintas y no hay forma de saber cuál miente.
 	fila["num_procesos"] = enteroONull(m.NumProcesos)
+	fila["num_cpu"] = enteroONull(m.NumCPU)
+	fila["uptime_seg"] = enteroONull(m.UptimeSeg)
 	fila["mem_pct"] = fleet.PctUsado(m.MemUsada, m.MemTotal)
 	fila["disco_pct"] = fleet.PctUsado(m.DiscoUsado, m.DiscoTotal)
 	fila["swap_pct"] = fleet.PctUsado(m.SwapUsada, m.SwapTotal)
@@ -576,7 +602,13 @@ func filaDeMetricas(d fleet.Device, m fleet.Muestra, ahora time.Time, umbral tim
 //
 // Es el gemelo de lo que los punteros hacen solos para los float: un contador que no se pudo
 // medir tiene que llegar a la pantalla como un hueco, no como un cero que se cree.
-func enteroONull(n int) interface{} {
+// ES GENÉRICA PORQUE LOS TRES CAMPOS QUE LA NECESITAN NO COMPARTEN TIPO: `num_procesos` y
+// `num_cpu` son `int` y `uptime_seg` es `uint64`. La alternativa —dos funciones con el mismo
+// cuerpo— es exactamente cómo una de las dos se queda sin el arreglo la próxima vez.
+func enteroONull[T ~int | ~int64 | ~uint64](n T) interface{} {
+	// `<= 0` y no `== 0`: en los con signo un negativo es igual de imposible que el cero —no hay
+	// «menos tres procesos»— y se lee igual de mal en un gráfico. En los sin signo es lo mismo que
+	// == 0 y el compilador lo resuelve solo.
 	if n <= 0 {
 		return nil
 	}

@@ -255,16 +255,28 @@ quedan quietos y nadie sabe desde cuándo.
 ## MusubiPushOTLPMudo
 
 El empuje funcionó y dejó de hacerlo, **sin contar fallos**. Eso descarta el destino: si el
-destino rechazara, subiría `musubi_push_failures_total` y la alerta sería la otra.
+destino rechazara, subiría `musubi_push_failures_total` y la alerta sería la otra. Lo que quedó
+del otro lado es el empuje quedándose **sin nada que exportar**, y eso tiene tres causas
+distintas con tres arreglos distintos.
 
-La causa conocida es que el principal del empuje **perdió su concesión `metrics`** en una recarga
-en caliente de `principals.yaml` (que se relee cada 10 s). El servidor exige esa concesión al
-arrancar, pero no vuelve a mirarla, así que el empuje se queda sin máquinas que exportar y manda
-cero puntos sin quejarse (A50).
+**El log dice cuál es** (A50, cerrado 2026-08-29). Antes no lo decía y había que deducirlo:
 
-1. `grep -A6 "name: <el principal de fleet.otlp.principal>" .musubi/principals.yaml`
-2. Tiene que tener `fleet: metrics: [...]` con al menos una máquina. Si alguien se la sacó,
-   devolvésela y esperá un tick.
+```
+journalctl -u musubi-brain --since "-1h" | grep "empuje OTLP:"
+```
+
+| Lo que dice el log | Qué pasó | Arreglo |
+|---|---|---|
+| `el principal ya no está en principals.yaml` | Le borraron la entrada entera. | Devolvésela; **sí cuenta un fallo**, así que puede llegar también `MusubiPushOTLPFallando`. |
+| `ya NO tiene ninguna concesión \`metrics\`` | La entrada está, la sección `fleet:` no. Las capacidades de flota **no se derivan del rol**: ni el admin exporta sin la concesión. | `fleet: {metrics: ["*"]}` y esperá un tick. |
+| `no alcanza a NINGUNA máquina` | La concesión existe y apunta a proyectos donde no hay ni una máquina — casi siempre un proyecto renombrado. El log dice a qué apunta. | Corregí el alcance, o comprobá que el barrido vea máquinas. |
+
+Ninguno de los tres cuenta como fallo de entrega salvo el primero: `musubi_push_failures_total`
+significa «no llegó a destino», y en los otros dos ni se intentó llegar. `musubi_push_datapoints`
+sí baja a **0** en los tres, y ése es el gauge para mirar en el tablero.
+
+Si el log no dice ninguna de las tres, el empujador ni está corriendo: revisá que
+`fleet.otlp.endpoint` esté declarado (`journalctl -u musubi-brain | grep "empuje OTLP activo"`).
 
 ## MusubiPushOTLPNuncaLlego
 

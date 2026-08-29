@@ -450,14 +450,40 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 			logx.Warn("empuje OTLP: el principal ya no está en principals.yaml; no se empuja nada (no se repite este aviso hasta que se resuelva)",
 				"principal", s.empujeCfg.Principal)
 		})
+		s.empujeDatapoints.Store(0)
 		s.empujeFallos.Add(1)
 		return
 	}
 	s.avisosDados.Delete("empuje_sin_principal")
 
+	// LA MISMA COMPROBACIÓN QUE EL ARRANQUE, PERO EN CADA TICK (A50).
+	//
+	// validarPrincipalDeEmpuje exige la concesión `metrics` y se NIEGA A ARRANCAR sin ella. Pero
+	// principals.yaml se recarga en caliente cada 10 s, así que la concesión se puede ir DESPUÉS
+	// de un arranque perfectamente válido — y ahí el empuje seguía corriendo, armando un payload
+	// vacío y volviéndose por el `len(cuerpo) == 0` de más abajo SIN DEJAR RASTRO. La alerta
+	// terminaba disparando (MusubiPushOTLPMudo, a los diez minutos, porque last_success envejece),
+	// pero el log no decía por qué, y la causa —una línea que alguien sacó de un YAML— es
+	// justamente la que no se deduce mirando el empuje.
+	//
+	// NO CUENTA UN FALLO: `musubi_push_failures_total` significa «no llegó a destino», y acá no se
+	// intentó llegar. Ensuciar ese contador rompería MusubiPushOTLPNuncaLlego, que distingue «se
+	// cayó» de «nunca anduvo» justamente por él.
+	if len(p.Fleet[fleet.CapMetrics]) == 0 {
+		s.avisarUnaVez("empuje_sin_concesion", func() {
+			logx.Error("empuje OTLP: el principal existe pero ya NO tiene ninguna concesión `metrics` en su sección `fleet:`; no se exporta ni una máquina (no se repite este aviso hasta que se resuelva)",
+				"principal", s.empujeCfg.Principal,
+				"arreglo", "devolvele `fleet: {metrics: [\"*\"]}` en principals.yaml; las capacidades de flota NO se derivan del rol")
+		})
+		s.empujeDatapoints.Store(0)
+		return
+	}
+	s.avisosDados.Delete("empuje_sin_concesion")
+
 	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo)
 	if err != nil {
 		logx.Error("empuje OTLP: no se pudo armar el payload", "error", err)
+		s.empujeDatapoints.Store(0)
 		s.empujeFallos.Add(1)
 		return
 	}
@@ -471,8 +497,19 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	}
 	s.empujeDatapoints.Store(int64(puntos))
 	if len(cuerpo) == 0 {
-		return // nada visible para ese principal: no se manda un sobre vacío
+		// Nada visible para ese principal: no se manda un sobre vacío. Pero SE DICE (A50). Este
+		// es el tercer modo de quedarse mudo y el más difícil de ver de los tres: el principal
+		// existe y tiene su concesión, sólo que apunta a proyectos donde no hay ni una máquina
+		// —alguien renombró el proyecto, o el barrido todavía no vio a nadie—. Desde afuera es
+		// idéntico a los otros dos: cero puntos, cero fallos, silencio.
+		s.avisarUnaVez("empuje_vacio", func() {
+			logx.Warn("empuje OTLP: el principal tiene concesión `metrics` pero no alcanza a NINGUNA máquina; no se manda un sobre vacío (no se repite este aviso hasta que vuelva a haber puntos)",
+				"principal", s.empujeCfg.Principal,
+				"concesion", strings.Join(p.Fleet[fleet.CapMetrics], ","))
+		})
+		return
 	}
+	s.avisosDados.Delete("empuje_vacio")
 
 	if err := s.empujador.enviar(ctx, cuerpo); err != nil {
 		s.empujeFallos.Add(1)

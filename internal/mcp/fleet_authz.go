@@ -54,6 +54,28 @@ func PuedeSobreDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {
 	return tieneGrant(p, c, d.Name)
 }
 
+// PuedeVerHistorialDeDevice responde una pregunta DISTINTA de PuedeSobreDevice: ¿esta credencial
+// puede ver lo que quedó REGISTRADO de una máquina que ya no está en la flota? (A51)
+//
+// Es PuedeSobreDevice con el kill-switch de la revocación levantado y NADA MÁS aflojado: misma
+// tenencia, misma concesión, mismo tier. Quien podía ver los servicios de esa máquina mientras
+// vivía los sigue viendo; nadie más. Se implementa limpiando el flag y delegando —no repitiendo
+// la cadena— para que no puedan desincronizarse: una regla nueva en PuedeSobreDevice aplica acá
+// sola, que es justo lo que una copia no garantiza.
+//
+// POR QUÉ NO ES «ADMIN Y LISTO»: eso derivaría una capacidad de flota del ROL, que es exactamente
+// lo que C1 prohíbe en todo este eje. Un admin sin concesión `metrics` no ve el estado de una
+// máquina viva; no hay razón para que vea el de una muerta.
+//
+// SÓLO PARA LEER LO YA ESCRITO. La revocación sigue siendo absoluta para todo lo que TOQUE la
+// máquina: exec, pantalla y shell pasan por PuedeSobreDevice y ahí el kill-switch manda. El
+// motivo de que las filas existan es la auditoría —la migración 36 y RevocarServiciosDeDevice las
+// conservan a propósito—, y una auditoría que nadie puede leer no es una auditoría.
+func PuedeVerHistorialDeDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {
+	d.Revoked = false // copia por valor: no toca el device del que llama
+	return PuedeSobreDevice(p, d, c)
+}
+
 // alcanzaElProyecto dice si la credencial ve ese proyecto. read=all ve todos (sala de mando,
 // cabina); el resto, sólo el suyo. Es el mismo criterio que recallScopeFor usa para la memoria:
 // una sola definición de "qué alcanzo", no dos que se puedan desincronizar.

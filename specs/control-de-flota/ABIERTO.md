@@ -4,7 +4,7 @@
 > declarada de por qué NO se va a hacer. Si algo se cierra, se borra de esta tabla; si aparece
 > algo nuevo, se anota acá el mismo día.
 >
-> Última revisión: **2026-08-28** (tras S6c, S7b, las dos auditorías, el DESPLIEGUE REAL en `musubi-server`,
+> Última revisión: **2026-08-29** (tras S6c, S7b, las dos auditorías, el DESPLIEGUE REAL en `musubi-server`,
 > el **despliegue del relay de pantalla + el arreglo de la ruta de RustDesk**, y la **integración de
 > U1 (procesos y memoria libre), S11 (empuje OTLP) y S12 (servicios)** — de donde salen A46 y A47,
 > que ningún slice podía ver solo).
@@ -34,14 +34,8 @@
 | A35 | **El relay propio está desplegado y VACÍO** | `hbbs`/`hbbr` corren en `musubi-server` atados al tailnet, con su clave generada y los cuatro puertos contestando — y **ningún cliente se registra contra él**: los dos Windows siguen apuntando al servidor PÚBLICO de RustDesk. Cambiar la configuración del cliente por el canal de comandos **cortaría la sesión de RustDesk que gio está usando en ese momento**, así que no se hace de prestado. Ojo con lo que esto NO significa: el plano de pantalla de Musubi **funciona igual** contra el servidor público —la compuerta, la contraseña acuñada, el vencimiento y la bitácora son de Musubi, no del relay—; lo que falta es dejar de depender de infraestructura ajena para el video. | **acción del operador** (②) |
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
-| A38 | **La columna de procesos no está en el panel** | U1 absorbió `num_procesos` y `mem_libre` en la muestra: los dos llegan a `musubi_fleet_metrics` y a Prometheus (`musubi_fleet_device_processes`, `musubi_fleet_device_memory_free_bytes`), y **el panel no los dibuja**. `cmd/musubi/assets/flota.html` no cambió, a propósito: la vista es un slice aparte y meterla en el de la medición mezcla dos diffs que se revisan distinto. Ojo con el dato: la columna tiene que distinguir «0 procesos» de «no medido» —macOS y los agentes viejos mandan 0— o repite en la pantalla el cero mentiroso que el resto del track evita. | **sin asignar** (slice de panel) |
-| A39 | **`num_cpu` se publica crudo y un 0 se lee «esta máquina no tiene CPUs»** | `methods_fleet.go` copia `m.NumCPU` tal cual a la respuesta de la tool. Es exactamente la clase de cero mentiroso que U1 arregló para `num_procesos` con `enteroONull`, y el helper ya está escrito al lado. **No se hizo en U1 a propósito**: cambiarlo toca el camino de una métrica que ya se está mirando en producción, y merece su propio diff y su propia prueba en vez de viajar de polizón. Barato de hacer, barato de olvidar. | **sin asignar** (un diff de tres líneas) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A45 | **`go test -race ./...` no termina en 30 minutos** | No es un deadlock ni una carrera: **la corrida completa reporta CERO `DATA RACE`**. Es que `modernc.org/sqlite` —el SQLite en Go puro que evita cgo— corre ~10× más lento bajo el detector, y **cada prueba abre una base nueva que aplica las 37 migraciones**. Medido: una sola base cuesta **13,5 s** bajo `-race`; con cientos de pruebas, `internal/mcp` e `internal/memory` se comen el `-timeout 30m` parseando SQL (`runnable` dentro de `applyMigrations`, no bloqueado). **Empeora sola con cada migración nueva, y este trabajo agregó dos**: medido contra un worktree limpio de HEAD, 12,7 s → 13,5 s, un **6 %**. Casi todo el costo es anterior. La CI usa `-race` y nadie lo miraba porque `go test ./...` sin él pasa entero. Lo que se necesita es que las pruebas **compartan una base migrada** (una plantilla que se copia) en vez de migrar de cero cada una. | **sin asignar** |
-| A49 | **Nada verifica lo que sale por el cable del empuje** | `receptorDePrueba` no mira el método, ni un header, ni el cuerpo; `ultimoCuerpo` es **código muerto** — está definida y no la llama ninguna prueba. El verificador dejó tres sabotajes en verde con la suite entera: si alguien toca `enviar` y borra el `Content-Type`, Prometheus contesta 400 a cada POST y nada se pone rojo. **Media parte tapada (2026-08-28)**: la prueba nueva contra un Prometheus de verdad (`fleet_otlp_real_test.go`) sí ejercita el cable completo — pero es **opt-in**, no corre en CI, así que la suite de todos los días sigue sin mirar el sobre. Falta una prueba de unidad sobre método, headers y `Content-Type`. | **sin asignar** |
-| A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
-| A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
-| A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
 | A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. | **sin asignar** (fase 1 de la maqueta) |
 | A56 | **El principal del panel no tiene concesión de flota, así que ve el inventario y no el estado** | `panel-central` está en `principals.yaml` con `read: all` y SIN sección `fleet:`. Las capacidades de flota no se derivan del rol a propósito (si no, un token de lectura sería una puerta trasera al eje de capacidades entero), así que el panel lista las máquinas y recibe `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios. **No es un bug: es la compuerta funcionando y nadie se la concedió.** Se cierra agregándole `fleet: {metrics: ["*"]}` — y NADA más: ni `exec`, ni `screen`, ni `shell`. Un panel mira; una credencial que vive en la configuración de otro servicio es exactamente la que no querés que pueda ejecutar nada. | **acción del operador** (escribir en `principals.yaml` está fuera de lo que puede hacer el asistente) |
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
@@ -71,6 +65,89 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 · A38, A39, A49, A50, A51 y A52 — seis cabos de la misma familia.**
+Todos eran lo mismo: código en producción cuyo modo de falla NO se veía desde
+ninguna prueba, y en dos de los tres casos tampoco desde el log.
+
+- **A50 · el empuje se quedaba mudo de tres maneras y sólo decía una.** El arranque exige la
+  concesión `metrics` y se niega a arrancar sin ella, pero `principals.yaml` se recarga en
+  caliente cada 10 s: la concesión se puede ir DESPUÉS de un arranque válido. Ahora
+  `empujarUnaVez` la vuelve a mirar en cada tick y avisa —una vez, rearmándose al recuperarse—
+  distinguiendo los tres modos: el principal borrado, el principal sin sección `fleet:`, y la
+  concesión que apunta a proyectos sin máquinas. **Ninguno cuenta un fallo, y eso es la decisión**:
+  `musubi_push_failures_total` significa «no llegó a destino» y en dos de los tres ni se intentó;
+  ensuciarlo rompería `MusubiPushOTLPNuncaLlego`, que separa «se cayó» de «nunca anduvo».
+  De paso apareció algo peor y más viejo: **`musubi_push_datapoints` no podía valer 0 nunca**.
+  Su propio HELP dice «un 0 sostenido = el empujador corre y no exporta nada», y todos los
+  caminos de salida temprana se salteaban el `Store` — el gauge publicaba el último conteo bueno
+  para siempre. Un tablero que lo mirara veía el empuje sano mientras estaba muerto.
+  El runbook ahora tabula los tres modos con el `grep` que los distingue.
+- **A38 · la columna de procesos, y la RAM libre, en el panel.** Los dos campos llegan a
+  `musubi_fleet_metrics` y a Prometheus desde U1 y **el panel no los dibujaba** — el mismo patrón
+  que `agent_version`: dato guardado que ninguna interfaz muestra. Entran al cajón de vitales.
+  La RAM libre pasa por un `bytes()` nuevo: sin formatear se lee `1073741824` y nadie la mira. Y
+  `bytes()` distingue las dos cosas que este track no deja confundir — **null se dibuja «sin
+  dato»** (Windows y macOS no exponen MemFree, y «0 B libres» se lee como una máquina a punto de
+  morir) **y el 0 MEDIDO se dibuja 0**, porque un disco lleno tiene cero disponibles de verdad y
+  ése es justo el número por el que suena la alarma. Las dos mitades tienen su sabotaje.
+- **A39 · el cero mentiroso era más grande que el cabo.** Estaba anotado como «un diff de tres
+  líneas» sobre `num_cpu`. Al ir a hacerlo apareció que **`uptime_seg` tenía el mismo problema** y
+  es peor: un `num_cpu: 0` se lee como imposible y alguien sospecha, pero un `uptime_seg: 0` se lee
+  como «arrancó recién» —plausible— y manda a investigar un reinicio que no pasó. Y los pares de
+  memoria y disco también salían crudos.
+  **El exportador de Prometheus ya lo tenía bien** —las series se emiten con `> 0` o con
+  `Total > 0` como condición— y la tool no. Dos superficies que leen la MISMA muestra y no
+  coinciden en qué es «no medido» es peor que una sola equivocada: el gráfico muestra un hueco, la
+  tabla muestra un 0, y no hay forma de saber cuál miente.
+  **Los pares se compuertan por su TOTAL, no por su propio valor**, y ésa es la parte que
+  `enteroONull` no puede hacer: `disco_libre: 0` en un disco LLENO es un cero MEDIDO y verdadero —
+  el peor momento posible para convertirlo en «no sé», porque es exactamente el número por el que
+  suena la alarma. Lo custodia un caso de prueba propio.
+  Lo cierra `TestLaTablaYElExportadorCoincidenEnQueEsNoMedido`, que **ata las catorce series del
+  exportador a sus catorce campos de la fila** y falla si una de las dos superficies cambia de
+  opinión sin la otra. Una serie renombrada rompe la prueba en vez de dejar el par colgado.
+  De paso, `enteroONull` pasó a ser genérica: los tres campos que la necesitan no comparten tipo
+  (`int` y `uint64`), y dos funciones con el mismo cuerpo es exactamente cómo una de las dos se
+  queda sin el arreglo la próxima vez.
+- **A49 · nada miraba el sobre.** `receptorDePrueba` leía el cuerpo y contaba requests: ni el
+  método, ni el path, ni un header. `ultimoCuerpo` estaba **definida y sin llamar**. Se le agregó
+  la captura del sobre y dos pruebas: el POST de `application/json` al path configurado con el
+  cuerpo OTLP bien formado, y el bearer viajando en el header y nunca en la URL.
+- **A51 · `incluir_revocados` prometía en su propia descripción algo que no podía dar.** Los
+  servicios de una máquina revocada no salían NUNCA: el kill-switch de la revocación tumbaba el
+  device antes de mirar la concesión, y las filas —que la migración 36 y `RevocarServiciosDeDevice`
+  conservan A PROPÓSITO para la auditoría— no tenían por dónde verse. **Se arregló el
+  comportamiento, no la promesa**: una auditoría que nadie puede leer no es una auditoría, y
+  «datos guardados que ninguna interfaz muestra» es el patrón que este track viene persiguiendo.
+  El arreglo es `PuedeVerHistorialDeDevice`, que limpia el flag y **delega** en `PuedeSobreDevice`
+  en vez de repetir la cadena: misma tenencia, misma concesión, mismo tier, y una regla nueva
+  aplica sola en los dos lados. **No es «admin y listo»** — eso derivaría una capacidad de flota
+  del rol, que es justo lo que C1 prohíbe. Y la revocación sigue siendo absoluta para todo lo que
+  TOQUE la máquina: exec, pantalla y shell pasan por `PuedeSobreDevice` y ahí el kill-switch manda.
+  La fila trae `device_revocado` aparte de `revocado`: son dos bajas distintas y confundirlas hace
+  leer «esto se dejó de usar» donde lo que pasó es «esta máquina salió de la flota con todo adentro».
+- **A52 · la fila del sondeo de Tier B.** El agujero no era una aserción que faltaba sino un
+  **fixture que no llegaba a los campos**: `lecturaProcFalsa` tiene siete secciones de ocho y un
+  meminfo sin `MemFree`, así que producía `MemLibre = nil` y `NumProcesos = 0` — borrar
+  `fila["mem_libre"]` del código no cambiaba nada observable. Con `lecturaProcCompleta` los dos
+  sabotajes del verificador disparan, más un tercero: cruzar `MemFree` con `MemAvailable`, que en
+  una máquina real son 3,5 GB de diferencia y dos números igual de plausibles.
+
+**Costura nueva en `logx`.** El aviso de A50 no cambia ningún contador a propósito, así que su
+único efecto observable es la línea de log — y una prueba que mirara sólo la contabilidad interna
+del «avisar una vez» quedaría en verde con la línea borrada. `logx.Capturar` existe para eso. El
+logger pasó a vivir en un `atomic.Pointer`: el empuje y el barrido loguean desde sus propias
+goroutines, y una variable pelada sería una carrera de manual justo en las pruebas que existen
+para atrapar fallas silenciosas.
+
+**Veintiún sabotajes ejecutados**, y dos de ellos **no rompieron nada la primera vez**. El de A50: la aserción buscaba
+«concesión \`metrics\`», que también aparece en el mensaje del caso de al lado, así que la prueba
+pasaba por el motivo equivocado. Se afiló a la frase que sólo dice ese caso. El de A51 —saltear
+la tenencia al auditar— lo atrapaba la guarda del TIER y no la de tenencia: el caso de prueba
+pasaba por la tool, donde el barrido por proyecto filtra al vecino ANTES de llegar a la compuerta.
+Se agregó la aserción directa contra la función, con su control positivo al lado.
+
 
 S1 registro · S2 agente + las dos puertas · S3 la compuerta de tres lados · S4 telemetría Linux ·
 S4b export a Prometheus + autorreporte + `README.en.md` + 9 reglas de alerta ·

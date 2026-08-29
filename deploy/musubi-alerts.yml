@@ -39,8 +39,14 @@ groups:
           runbook: "deploy/RUNBOOK.md#musubipushotlpfallando"
 
       # El empuje SE MURIÓ después de haber funcionado. Distinto del de arriba: acá no hay errores
-      # que contar porque puede que ni se esté intentando (el principal perdió su concesión
-      # `metrics` en una recarga en caliente, y eso no cuenta como fallo — ver A50).
+      # que contar porque puede que ni se esté intentando — el principal perdió su concesión
+      # `metrics` en una recarga en caliente, o la concesión quedó apuntando a un proyecto sin
+      # máquinas. Eso NO cuenta como fallo a propósito: `musubi_push_failures_total` significa «no
+      # llegó a destino», y acá ni se intentó llegar; contarlo rompería MusubiPushOTLPNuncaLlego,
+      # que separa «se cayó» de «nunca anduvo» justamente por ese contador.
+      #
+      # Desde A50 el LOG dice cuál de los tres modos es, y el runbook los tabula. La alerta detecta;
+      # el log diagnostica. Antes esta regla disparaba a los diez minutos y no había con qué seguir.
       - alert: MusubiPushOTLPMudo
         expr: musubi_push_last_success_seconds > 600
         for: 5m

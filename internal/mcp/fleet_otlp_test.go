@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 )
 
 // ── Andamios ────────────────────────────────────────────────────────────────────────────────
@@ -76,6 +78,29 @@ type receptorDePrueba struct {
 	ecoAuth  bool // responde con el header Authorization en el cuerpo (para probar que no se filtra)
 	bloqueo  chan struct{}
 	recibido chan struct{}
+
+	// EL SOBRE, no sólo el contenido (A49). Hasta acá el receptor leía el cuerpo y contaba
+	// requests, y nada más: el verificador borró el `Content-Type` de `enviar` y la suite entera
+	// quedó en verde, con Prometheus contestando 400 a cada POST en producción.
+	mu    sync.Mutex
+	sobre sobreRecibido
+}
+
+// sobreRecibido es lo que el destino ve ANTES de mirar el cuerpo.
+type sobreRecibido struct {
+	Metodo  string
+	Path    string
+	Headers http.Header
+}
+
+func (r *receptorDePrueba) ultimoSobre(t *testing.T) sobreRecibido {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sobre.Metodo == "" {
+		t.Fatal("el receptor no recibió ningún request")
+	}
+	return r.sobre
 }
 
 // nuevoReceptor levanta un destino que responde `estado` y acumula los cuerpos recibidos.
@@ -83,6 +108,9 @@ func nuevoReceptor(t *testing.T, estado int) *receptorDePrueba {
 	t.Helper()
 	r := &receptorDePrueba{cuerpos: make(chan []byte, 16), estado: estado}
 	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.sobre = sobreRecibido{Metodo: req.Method, Path: req.URL.Path, Headers: req.Header.Clone()}
+		r.mu.Unlock()
 		crudo, _ := io.ReadAll(req.Body)
 		r.pedidos.Add(1)
 		select {
@@ -1052,5 +1080,285 @@ func TestUn404DiceQueFaltaElFlagDeProm(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "/api/v1/otlp/v1/metrics") {
 		t.Errorf("el 404 no nombra el path correcto: %v", err)
+	}
+}
+
+// ── A50 · Los TRES modos de quedarse mudo, y por qué ninguno contaba un fallo ────────────────
+
+// capturarLog redirige logx a un buffer mientras dura la prueba y devuelve el buffer.
+//
+// LA PRUEBA MIRA LA LÍNEA DE LOG Y NO UN CONTADOR, y eso es a propósito: el aviso de A50 no
+// cuenta un fallo —no llegó a intentar entregar nada— así que el log ES el efecto observable.
+// Una prueba que mirara sólo `avisosDados` quedaría en verde con la línea borrada.
+func capturarLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var b strings.Builder
+	t.Cleanup(logx.Capturar(&b))
+	return &b
+}
+
+// El arranque EXIGE la concesión `metrics` y se niega a arrancar sin ella; pero principals.yaml se
+// recarga en caliente cada 10 s, así que se la pueden sacar DESPUÉS de un arranque válido. Antes de
+// A50 el empuje seguía corriendo, armaba un payload vacío y volvía sin dejar rastro.
+//
+// Sabotaje: borrar el bloque `if len(p.Fleet[fleet.CapMetrics]) == 0` de empujarUnaVez.
+func TestSacarleLaConcesionMetricsEnCalienteLoDiceEnElLog(t *testing.T) {
+	destino := nuevoReceptor(t, http.StatusOK)
+	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	s.empujarUnaVez(context.Background(), ahora)
+	if n := destino.pedidos.Load(); n != 1 {
+		t.Fatalf("el primer empuje no llegó (%d requests)", n)
+	}
+	if p := s.empujeDatapoints.Load(); p == 0 {
+		t.Fatalf("el empuje bueno no dejó puntos: la prueba no puede distinguir el después del antes")
+	}
+	fallosAntes := s.empujeFallos.Load()
+
+	// Alguien le saca la sección `fleet:` al principal. El principal SIGUE EXISTIENDO — este es el
+	// caso que TestRevocarAlPrincipalDelEmpujeLoApagaEnElActo no cubre.
+	log := capturarLog(t)
+	sinConcesion := principalDePrometheus()
+	sinConcesion.Fleet = map[fleet.Cap][]string{}
+	s.buscarPrincipal = registroDePrueba(sinConcesion)
+
+	s.empujarUnaVez(context.Background(), ahora.Add(30*time.Second))
+	s.empujarUnaVez(context.Background(), ahora.Add(60*time.Second))
+
+	if n := destino.pedidos.Load(); n != 1 {
+		t.Errorf("siguió empujando sin la concesión `metrics` (%d requests)", n)
+	}
+	texto := log.String()
+	// LA FRASE TIENE QUE SER LA DE ESTE CASO Y NO LA DEL OTRO. El aviso de `empuje_vacio` también
+	// dice «concesión `metrics`», así que buscar eso deja pasar el sabotaje: sin el bloque de la
+	// concesión el empuje cae en la rama de abajo, avisa OTRA cosa, y la prueba quedaba en verde.
+	if !strings.Contains(texto, "ya NO tiene ninguna concesión") {
+		t.Errorf("el log no nombra la causa; el operador ve MusubiPushOTLPMudo y nada más.\nlog:\n%s", texto)
+	}
+	if strings.Contains(texto, "no alcanza a NINGUNA máquina") {
+		t.Errorf("avisó el caso equivocado: la concesión no está VACÍA DE PROYECTOS, no existe.\nlog:\n%s", texto)
+	}
+	if !strings.Contains(texto, "prometheus") {
+		t.Errorf("el log no nombra al principal que hay que arreglar en principals.yaml.\nlog:\n%s", texto)
+	}
+	// UNA sola vez: es un ESTADO que dura hasta que alguien edite el archivo, no un evento. Dos
+	// ticks, una línea.
+	if n := strings.Count(texto, "ya NO tiene ninguna concesión"); n != 1 {
+		t.Errorf("avisó %d veces en dos ticks; a 30 s son 2.880 líneas idénticas por día", n)
+	}
+	// NO cuenta un fallo: `musubi_push_failures_total` significa «no llegó a destino» y acá ni se
+	// intentó. Ensuciarlo rompería MusubiPushOTLPNuncaLlego, que separa «se cayó» de «nunca anduvo».
+	if n := s.empujeFallos.Load(); n != fallosAntes {
+		t.Errorf("contó %d fallos nuevos: no llegar a intentar no es fallar en entregar", n-fallosAntes)
+	}
+	// Y el gauge deja de mentir: sin esto sigue publicando el último conteo bueno para siempre.
+	if p := s.empujeDatapoints.Load(); p != 0 {
+		t.Errorf("musubi_push_datapoints quedó en %d con el empuje mudo: el gauge cuyo HELP dice "+
+			"«un 0 sostenido = el empujador corre y no exporta nada» nunca llega a mostrar un 0", p)
+	}
+}
+
+// El gauge de puntos se quedaba con el último conteo BUENO en todos los caminos de salida
+// temprana. Su propio HELP declara que un 0 sostenido es la firma de que el empujador corre sin
+// exportar — y no había forma de que llegara a valer 0 en esa situación.
+//
+// Sabotaje: quitar `s.empujeDatapoints.Store(0)` de la rama `if !ok` de principalDelEmpuje.
+func TestElGaugeDePuntosNoSeQuedaConElUltimoConteoBueno(t *testing.T) {
+	destino := nuevoReceptor(t, http.StatusOK)
+	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	s.empujarUnaVez(context.Background(), ahora)
+	buenos := s.empujeDatapoints.Load()
+	if buenos == 0 {
+		t.Fatalf("el empuje bueno no dejó puntos: la prueba no distingue el después del antes")
+	}
+
+	s.buscarPrincipal = registroDePrueba() // desaparece de principals.yaml
+	s.empujarUnaVez(context.Background(), ahora.Add(30*time.Second))
+
+	if p := s.empujeDatapoints.Load(); p != 0 {
+		t.Errorf("musubi_push_datapoints siguió publicando %d puntos sin principal; "+
+			"un tablero que mira ese gauge ve el empuje sano mientras está muerto", p)
+	}
+}
+
+// El tercer modo, y el más difícil de ver: el principal existe Y tiene su concesión, pero la
+// concesión apunta a proyectos donde no hay ni una máquina. Desde afuera es idéntico a los otros
+// dos —cero puntos, cero fallos, silencio— y el arreglo es completamente distinto.
+//
+// Sabotaje: borrar el bloque `avisarUnaVez("empuje_vacio", ...)` de empujarUnaVez.
+func TestUnEmpujeQueNoAlcanzaNingunaMaquinaLoDice(t *testing.T) {
+	destino := nuevoReceptor(t, http.StatusOK)
+	// La concesión es real y no está vacía: apunta a un proyecto que no existe.
+	perdido := principalDePrometheus()
+	perdido.Fleet = map[fleet.Cap][]string{fleet.CapMetrics: {"proyecto-que-alguien-renombro"}}
+	s := prepararEmpuje(t, destino.URL, registroDePrueba(perdido), nil)
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	log := capturarLog(t)
+	s.empujarUnaVez(context.Background(), ahora)
+	s.empujarUnaVez(context.Background(), ahora.Add(30*time.Second))
+
+	if n := destino.pedidos.Load(); n != 0 {
+		t.Fatalf("mandó %d sobres vacíos: el escenario de la prueba no es el que dice", n)
+	}
+	texto := log.String()
+	if !strings.Contains(texto, "no alcanza a NINGUNA máquina") {
+		t.Errorf("se quedó mudo sin decirlo.\nlog:\n%s", texto)
+	}
+	// Dice a QUÉ apunta la concesión: sin eso el operador tiene el síntoma y no el archivo.
+	if !strings.Contains(texto, "proyecto-que-alguien-renombro") {
+		t.Errorf("el log no dice a qué apunta la concesión que no alcanza a nadie.\nlog:\n%s", texto)
+	}
+	if n := strings.Count(texto, "no alcanza a NINGUNA máquina"); n != 1 {
+		t.Errorf("avisó %d veces en dos ticks; es un estado, no un evento", n)
+	}
+}
+
+// El aviso se REARMA cuando el problema se resuelve. Un «avisar una vez» que no se rearma
+// convierte el segundo incidente en silencio total, que es peor que el ruido que evita.
+//
+// Sabotaje: quitar `s.avisosDados.Delete("empuje_sin_concesion")` (o el de "empuje_vacio").
+func TestElAvisoDelEmpujeMudoSeRearmaCuandoVuelveLaConcesion(t *testing.T) {
+	destino := nuevoReceptor(t, http.StatusOK)
+	sinConcesion := principalDePrometheus()
+	sinConcesion.Fleet = map[fleet.Cap][]string{}
+	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	log := capturarLog(t)
+	s.buscarPrincipal = registroDePrueba(sinConcesion)
+	s.empujarUnaVez(context.Background(), ahora) // avisa
+
+	s.buscarPrincipal = registroDePrueba(principalDePrometheus())
+	s.empujarUnaVez(context.Background(), ahora.Add(30*time.Second)) // se arregla: empuja
+	if n := destino.pedidos.Load(); n != 1 {
+		t.Fatalf("no se recuperó al devolverle la concesión (%d requests)", n)
+	}
+
+	s.buscarPrincipal = registroDePrueba(sinConcesion)
+	s.empujarUnaVez(context.Background(), ahora.Add(60*time.Second)) // vuelve a romperse: avisa DE NUEVO
+
+	if n := strings.Count(log.String(), "ya NO tiene ninguna concesión"); n != 2 {
+		t.Errorf("avisó %d veces en dos incidentes separados por una recuperación; "+
+			"el segundo incidente pasó en silencio", n)
+	}
+}
+
+// ── A49 · El SOBRE del empuje, no sólo lo que va adentro ─────────────────────────────────────
+
+// Hasta A49 ninguna prueba miraba el método, el path ni un solo header del POST: el receptor leía
+// el cuerpo y contaba requests. El verificador borró el `Content-Type` de `enviar` y las cuatro
+// suites quedaron en verde — mientras Prometheus, del otro lado, contesta 400 a cada POST y nada
+// se pone rojo porque un 400 cae en el `default` que sí cuenta un fallo... media hora después de
+// que alguien mire el contador.
+//
+// Existe una prueba contra un Prometheus DE VERDAD (fleet_otlp_real_test.go) que sí ejercita el
+// cable entero, pero es opt-in y no corre en CI. Ésta es la de todos los días.
+//
+// Sabotaje que la hace fallar: quitar `req.Header.Set("Content-Type", "application/json")`.
+// Sabotaje que la hace fallar: cambiar http.MethodPost por http.MethodPut (o MethodGet).
+func TestElEmpujeMandaUnPOSTDeJSONAlPathQueSeConfiguro(t *testing.T) {
+	destino := nuevoReceptor(t, http.StatusOK)
+	s := prepararEmpuje(t, destino.URL+"/api/v1/otlp/v1/metrics",
+		registroDePrueba(principalDePrometheus()), nil)
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	s.empujarUnaVez(context.Background(), ahora)
+	if n := destino.pedidos.Load(); n != 1 {
+		t.Fatalf("el empuje no llegó (%d requests)", n)
+	}
+	sobre := destino.ultimoSobre(t)
+
+	if sobre.Metodo != http.MethodPost {
+		t.Errorf("el empuje salió como %s; OTLP/HTTP es POST y cualquier otra cosa da 405", sobre.Metodo)
+	}
+	// EL PATH VIAJA ENTERO. Un `enviar` que arme la URL a mano en vez de usar la configurada
+	// manda al host correcto y al endpoint equivocado — que es el 404 que el propio código de
+	// error del 404 explica, y el modo de falla más caro de este slice.
+	if sobre.Path != "/api/v1/otlp/v1/metrics" {
+		t.Errorf("el POST fue a %q y no al path configurado: Prometheus contesta 404 en cualquier otro", sobre.Path)
+	}
+	if ct := sobre.Headers.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q; sin `application/json` el receptor OTLP contesta 400 a cada POST", ct)
+	}
+	// Sin `auth_token_env` NO se manda un Authorization vacío: un `Bearer ` pelado es peor que la
+	// ausencia del header —algunos receptores lo toman como un intento fallido de autenticar y
+	// contestan 401 en vez de aceptar la request anónima.
+	if a := sobre.Headers.Get("Authorization"); a != "" {
+		t.Errorf("salió un Authorization (%q) sin auth_token_env configurado", a)
+	}
+	// Y el cuerpo es el sobre OTLP, no cualquier JSON: se usa `ultimoCuerpo`, que hasta A49 estaba
+	// DEFINIDA Y SIN LLAMAR — el helper para mirar el payload existía y ninguna prueba lo usaba.
+	var sobreOTLP struct {
+		ResourceMetrics []struct {
+			ScopeMetrics []struct {
+				Metrics []struct {
+					Name string `json:"name"`
+				} `json:"metrics"`
+			} `json:"scopeMetrics"`
+		} `json:"resourceMetrics"`
+	}
+	if err := json.Unmarshal(destino.ultimoCuerpo(t), &sobreOTLP); err != nil {
+		t.Fatalf("el cuerpo no es JSON: %v", err)
+	}
+	if len(sobreOTLP.ResourceMetrics) == 0 {
+		t.Fatal("el cuerpo no trae resourceMetrics: el sobre no es OTLP")
+	}
+	var nombres []string
+	for _, rm := range sobreOTLP.ResourceMetrics {
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				nombres = append(nombres, m.Name)
+			}
+		}
+	}
+	if len(nombres) == 0 {
+		t.Fatal("el sobre OTLP llegó sin una sola métrica adentro")
+	}
+	for _, n := range nombres {
+		if !strings.HasPrefix(n, "musubi_") {
+			t.Errorf("métrica %q sin el prefijo musubi_: se mezclaría con las del propio Prometheus", n)
+		}
+	}
+}
+
+// El bearer viaja en el header y NUNCA en la URL. La URL de un destino termina en un log de
+// diagnóstico el primer día malo —`urlSinSecretos` existe justamente por eso— así que si el
+// secreto viajara ahí, taparlo en el log no alcanzaría.
+//
+// Sabotaje que la hace fallar: quitar el `req.Header.Set("Authorization", ...)` de enviar.
+func TestElBearerDelEmpujeViajaEnElHeaderYNoEnLaURL(t *testing.T) {
+	const variable = "MUSUBI_TEST_OTLP_TOKEN_A49"
+	t.Setenv(variable, "s3cr3t0-del-empuje")
+
+	destino := nuevoReceptor(t, http.StatusOK)
+	s := prepararEmpuje(t, destino.URL+"/api/v1/otlp/v1/metrics",
+		registroDePrueba(principalDePrometheus()), func(c *config.OTLPPushConfig) {
+			c.AuthTokenEnv = variable
+		})
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
+
+	s.empujarUnaVez(context.Background(), ahora)
+	sobre := destino.ultimoSobre(t)
+
+	if a := sobre.Headers.Get("Authorization"); a != "Bearer s3cr3t0-del-empuje" {
+		t.Errorf("Authorization = %q; el destino contesta 401 para siempre y el mensaje manda a "+
+			"revisar la variable, que está bien puesta", a)
+	}
+	if strings.Contains(sobre.Path, "s3cr3t0") {
+		t.Error("el secreto viajó en el path: cualquier access log del destino lo guarda en claro")
+	}
+	// Y el log del propio cerebro no lo repite: urlSinSecretos custodia la otra mitad.
+	if u := urlSinSecretos(s.empujador.url); strings.Contains(u, "s3cr3t0") {
+		t.Errorf("urlSinSecretos dejó pasar el token: %q", u)
 	}
 }
