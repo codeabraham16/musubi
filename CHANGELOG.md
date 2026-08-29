@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El motor de diseño ya sabe cuándo NO sabe** (Musubi Renaissance · F3). Medido el 2026-08-29:
+  «receta de empanadas» devolvía seis patrones de diseño con `degraded` apagado, igual que un
+  pedido legítimo — siete de siete consultas basura entraron con confianza total. La separación
+  existía (basura 0,362–0,442; pedidos reales 0,533–0,558) y nadie trazaba la línea, porque
+  `degraded` sólo se encendía con CERO filas y por el camino semántico eso no pasa nunca.
+  - **Piso de similitud** (`designSimilitudMinima` = 0,48, calibrado contra la separación medida):
+    lo que no llega no se sirve, y si nada llega el motor lo dice en vez de rellenar.
+  - **`degraded_reason`**: `sin_material` (no hay nada) · `bajo_umbral` (hay y es malo) ·
+    `sin_recuperador` (no se pudo buscar). Un bool no distinguía tres problemas con tres arreglos
+    distintos.
+  - **`retrieval`** declara siempre con qué se buscó (`semantico` | `fts`). La caída silenciosa a
+    léxico —con el campo `similarity` desapareciendo sin explicación— era el segundo silencio.
+  - **Timeout del embebedor 30 s → 5 s.** Con un prompt de 25 KB el motor quemaba los 30 enteros y
+    recién ahí caía a léxico, callado; con una persona esperando eso no es una espera sino un fallo,
+    y de paso era un vector de saturación barato contra un embebedor compartido con recall y save.
+  - El piso corre **sólo por el camino semántico**: por FTS no hay puntaje que comparar, y declarar
+    `bajo_umbral` ahí sería inventar una medición. Por eso el modo se declara — la diferencia entre
+    los dos caminos pasa a ser visible.
+  - La sonda mide el **riesgo junto al beneficio**: cuenta cuántos pedidos LEGÍTIMOS terminan
+    abstenidos. Si ese número no es cero, el piso está mal y baja.
+
+### Fixed
+- **`versioninfo.json` volvía a divergir de `VERSION`.** `TestVersioninfoMatchesVERSION` existe
+  exactamente para eso y estaba en rojo: bumpeé `VERSION` sin regenerar el recurso de Windows. Se me
+  pasó porque leí el exit code de un pipe (`go test ./... | grep`) en vez del de `go test`, y
+  reporté verde una suite que estaba roja.
+
 ### Changed
 - **El brief del motor de diseño deja de contradecirse, de inundar a quien lo llama y de dejarse
   dictar la conducta por el acervo** (Musubi Renaissance · F1+F2). Los tres defectos salían del

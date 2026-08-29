@@ -71,6 +71,35 @@ const designMethodItemMax = 1200
 // X"), así que un corte mudo las desaparecería justo cuando más importan.
 const avisoMarcaRecortada = "\n\n[⚠ LA MARCA SE RECORTÓ POR PRESUPUESTO: puede faltar el final, que es donde suelen vivir las prohibiciones. Traela entera con musubi_recall sobre el topic 'diseno/marca' de este proyecto antes de decidir nada que dependa de ellas.]"
 
+// designSimilitudMinima es el PISO de similitud: un patrón que no llega no se sirve, y si ninguno
+// llega el motor lo dice en vez de rellenar. Sin piso, un recuperador por similitud SIEMPRE devuelve
+// sus k mejores aunque los mejores sean pésimos — medido el 2026-08-29, «receta de empanadas»
+// devolvía seis patrones de diseño con `degraded` apagado, igual que un pedido legítimo.
+//
+// El valor sale de la separación medida contra el acervo real: pedidos legítimos 0,533–0,558, basura
+// y temas ajenos 0,362–0,442. 0,48 cae en el medio con margen para los dos lados. Es una calibración,
+// no una constante universal: la sonda cuenta cuántos pedidos LEGÍTIMOS terminan abstenidos, y si ese
+// número deja de ser cero, este número baja.
+const designSimilitudMinima = 0.48
+
+// designEmbedTimeout acota la espera del embebedor. Era 30 s: con un prompt de 25 KB el motor los
+// quemaba enteros y recién ahí caía a búsqueda léxica, en silencio. Con una persona esperando, 30 s
+// no es una espera sino un fallo — y de paso era un vector de saturación barato contra un embebedor
+// que se comparte con recall y save. La latencia real medida es p50 571 ms; 5 s es holgado.
+const designEmbedTimeout = 5 * time.Second
+
+// Modos de recuperación y causas de degradación. Se DECLARAN siempre (I-ABS2): la caída silenciosa a
+// búsqueda léxica era justo el silencio que esta fase cierra.
+const (
+	recuperacionSemantica = "semantico"
+	recuperacionLexica    = "fts"
+
+	sinMaterial      = "sin_material"    // la búsqueda no devolvió una sola fila
+	bajoUmbral       = "bajo_umbral"     // devolvió filas, pero ninguna llegó al piso
+	sinRecuperador   = "sin_recuperador" // no hubo ni embebedor ni FTS utilizable
+	sinCausaConcreta = ""                // no degradó
+)
+
 // designPisoBloque es cuántos ítems de método y de corpus se defienden antes de vaciar un bloque. Sin
 // piso, el presupuesto se cobraría todo de un solo lado: el método caería a cero y la métrica de
 // inyección por el acervo se "ganaría" por inanición en vez de por diseño.
@@ -138,7 +167,15 @@ type designBrief struct {
 	Emit         string        `json:"emit"`                   // cómo entregar según el target (relleno con los tokens)
 	Instructions string        `json:"instructions"`           // qué hace el caller ahora
 	Truncated    *recorteBrief `json:"truncated,omitempty"`    // qué dejó afuera el presupuesto, y de cuánto
-	Degraded     bool          `json:"degraded,omitempty"`     // true si el acervo no devolvió nada
+	// Retrieval dice CON QUÉ se buscó el corpus: semantico | fts. Siempre presente (I-ABS2). La caída
+	// silenciosa a léxico —con el campo `similarity` desapareciendo sin explicación— era uno de los dos
+	// silencios que esta capa cierra.
+	Retrieval string `json:"retrieval"`
+	Degraded  bool   `json:"degraded,omitempty"` // true si no hay material utilizable para el pedido
+	// DegradedReason dice POR QUÉ no hay material: sin_material | bajo_umbral | sin_recuperador. Un
+	// `degraded` pelado no distingue «no existe nada» de «existe y es malo», que son dos problemas
+	// distintos con dos arreglos distintos.
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
@@ -174,7 +211,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 
 	// Recall del acervo, best-effort: si algo falla, el brief conserva el NÚCLEO estático (rol +
 	// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
-	hits, degraded := s.recallDesignCorpus(ctx, corpusCtx, args.Prompt, limit)
+	rec := s.recallDesignCorpus(ctx, corpusCtx, args.Prompt, limit)
 
 	// CAPA 2 — el MÉTODO vivo: las tarjetas del sub-acervo arbitrable `design-method/*`. Siguen
 	// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
@@ -183,24 +220,26 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	metodo, methodSource := s.designMethodCards()
 
 	brief := designBrief{
-		Ask:          sanearMaterial(strings.TrimSpace(args.Prompt)),
-		Target:       target,
-		Precedence:   designPrecedence,
-		MaterialNote: designMaterialNote,
-		Role:         designRole,
-		Principles:   designPrinciples,
-		Brand:        sanearMaterial(brandText),
-		BrandScope:   brandScope,
-		BrandSource:  brandSource,
-		BrandTokens:  brandTok,
-		Corpus:       hits,
-		CorpusScope:  designCorpusScope,
-		CorpusNote:   "Cada item es un gist (titular). Para traer el patrón completo, expandí su id con musubi_memory_expand — 1 o 2, no más.",
-		Method:       metodo,
-		MethodSource: methodSource,
-		Emit:         designEmitFor(target, brandTok),
-		Instructions: designInstructions,
-		Degraded:     degraded,
+		Ask:            sanearMaterial(strings.TrimSpace(args.Prompt)),
+		Target:         target,
+		Precedence:     designPrecedence,
+		MaterialNote:   designMaterialNote,
+		Role:           designRole,
+		Principles:     designPrinciples,
+		Brand:          sanearMaterial(brandText),
+		BrandScope:     brandScope,
+		BrandSource:    brandSource,
+		BrandTokens:    brandTok,
+		Corpus:         rec.Hits,
+		CorpusScope:    designCorpusScope,
+		CorpusNote:     "Cada item es un gist (titular). Para traer el patrón completo, expandí su id con musubi_memory_expand — 1 o 2, no más.",
+		Method:         metodo,
+		MethodSource:   methodSource,
+		Emit:           designEmitFor(target, brandTok),
+		Instructions:   designInstructions,
+		Retrieval:      rec.Modo,
+		Degraded:       rec.Degraded,
+		DegradedReason: rec.Motivo,
 	}
 	aplicarPresupuesto(&brief)
 	return jsonResult(brief)
@@ -358,10 +397,21 @@ func (s *McpServer) designMethodCards() (cards []metodoItem, source string) {
 	return cards, "corpus"
 }
 
+// resultadoRecall es lo que devuelve el recall del acervo: el material, CON QUÉ se buscó, y —si no
+// hay material— POR QUÉ. Antes devolvía sólo (hits, degraded bool), y ese bool no distinguía «no
+// existe nada» de «existe pero es malo» ni decía si la búsqueda había caído a léxico. Un motor que
+// no puede explicar su propio silencio obliga a quien lo llama a adivinar.
+type resultadoRecall struct {
+	Hits     []searchHit
+	Modo     string // recuperacionSemantica | recuperacionLexica
+	Degraded bool
+	Motivo   string // sinMaterial | bajoUmbral | sinRecuperador | sinCausaConcreta
+}
+
 // recallDesignCorpus trae los patrones más relevantes del acervo para el pedido. Prioriza la búsqueda
 // semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
-// Cualquier error es best-effort: devuelve lo que tenga (o vacío) y marca degraded, nunca falla la tool.
-func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query string, limit int) (hits []searchHit, degraded bool) {
+// Cualquier error es best-effort: devuelve lo que tenga (o vacío) y lo DECLARA, nunca falla la tool.
+func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query string, limit int) resultadoRecall {
 	// Traemos un POOL más grande que `limit` para poder re-rankear: las TARJETAS destiladas (cortas) pierden
 	// en similitud cruda contra los ARTÍCULOS crudos (blobs de miles de tokens), así que primero juntamos
 	// candidatos de más y después preferimos lo curado (Musubi Renaissance · F4 — que el destilado se surfacee).
@@ -376,35 +426,72 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 		pool = maxLimit
 	}
 	var sources []searchSource
+	modo := recuperacionLexica
 	if embedding.Enabled(s.embedder) {
-		embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		embCtx, cancel := context.WithTimeout(ctx, designEmbedTimeout)
 		vec, err := s.embedder.Embed(embCtx, query)
 		cancel()
 		if err == nil {
 			if results, serr := s.engine.SearchObservations(corpusCtx, vec, pool); serr == nil {
+				modo = recuperacionSemantica
 				for _, r := range results {
 					sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
 				}
 			}
 		}
 	}
+	ftsRoto := false
 	if len(sources) == 0 { // Fallback léxico (FTS5): siempre disponible, sin embedder. Best-effort.
-		if results, ferr := s.engine.SearchObservationsFTS(corpusCtx, query, pool); ferr == nil {
-			for _, r := range results {
-				sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content})
-			}
+		modo = recuperacionLexica
+		results, ferr := s.engine.SearchObservationsFTS(corpusCtx, query, pool)
+		if ferr != nil {
+			ftsRoto = true
+		}
+		for _, r := range results {
+			sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content})
 		}
 	}
 	if len(sources) == 0 {
-		return nil, true
+		// «No hay nada que matchee» y «no pude buscar» son cosas distintas: la primera es un hueco del
+		// acervo y la segunda una falla del motor. Confundirlas manda a arreglar lo que no está roto.
+		motivo := sinMaterial
+		if ftsRoto {
+			motivo = sinRecuperador
+		}
+		return resultadoRecall{Modo: modo, Degraded: true, Motivo: motivo}
 	}
-	// El sub-acervo del MÉTODO (design-method/*) se sirve como Principles del brief, NO como patrón de
-	// corpus: excluirlo evita que el método aparezca DOS veces (Musubi Renaissance · CAPA 2).
+	// El sub-acervo del MÉTODO (design-method/*) se sirve aparte, en `method[]`: excluirlo del corpus
+	// evita que el método aparezca DOS veces en el brief (Musubi Renaissance · CAPA 2).
 	sources = excludeTopicPrefix(sources, designMethodPrefix)
 	if len(sources) == 0 {
-		return nil, true
+		return resultadoRecall{Modo: modo, Degraded: true, Motivo: sinMaterial}
 	}
-	return toSearchHits(preferCuratedSources(sources, limit), s.memory.GistMaxTokens, searchGistBudget), false
+
+	// EL PISO (I-ABS1). Sólo corre por el camino semántico: por FTS no hay puntaje que comparar, y
+	// declarar "bajo_umbral" ahí sería inventar una medición que no se hizo (I-ABS4).
+	if modo == recuperacionSemantica {
+		sources = sobreElPiso(sources, designSimilitudMinima)
+		if len(sources) == 0 {
+			return resultadoRecall{Modo: modo, Degraded: true, Motivo: bajoUmbral}
+		}
+	}
+	return resultadoRecall{
+		Hits: toSearchHits(preferCuratedSources(sources, limit), s.memory.GistMaxTokens, searchGistBudget),
+		Modo: modo, Motivo: sinCausaConcreta,
+	}
+}
+
+// sobreElPiso descarta los candidatos que no llegan a la similitud mínima. Es la mitad que faltaba de
+// un recuperador honesto: sin piso, el top-k SIEMPRE se llena, aunque los mejores candidatos no tengan
+// nada que ver con lo que se pidió.
+func sobreElPiso(src []searchSource, piso float32) []searchSource {
+	out := src[:0:0]
+	for _, s := range src {
+		if s.sim >= piso {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // excludeTopicPrefix descarta las fuentes cuyo topic_key empieza con prefix. La usa recallDesignCorpus para

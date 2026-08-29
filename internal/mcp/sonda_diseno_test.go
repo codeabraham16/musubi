@@ -140,7 +140,12 @@ func TestSondaDiseno(t *testing.T) {
 		precision []float64
 		servidos  = map[string]bool{}
 		abstuvo   int
-		peor      = struct {
+		// FALSA ABSTENCIÓN: pedidos LEGÍTIMOS que el piso dejó sin material. Es el riesgo principal de
+		// F3 y por eso se mide junto al beneficio: una sonda que sólo reporta la cara que conviene es
+		// un expediente, no un instrumento. Si esto no es cero, el piso está mal y baja.
+		falsaAbstencion []string
+		causas          = map[string]int{}
+		peor            = struct {
 			id string
 			j  float64
 		}{"", 2}
@@ -160,6 +165,10 @@ func TestSondaDiseno(t *testing.T) {
 				servidos[id] = true
 			}
 			precision = append(precision, TocaLosEjes(b, p.Ejes))
+			if Abstuvo(b) {
+				falsaAbstencion = append(falsaAbstencion, p.ID+" ("+b.DegradedReason+")")
+			}
+			causas[b.Retrieval]++
 		}
 		suma, n := 0.0, 0
 		for i := range conjuntos {
@@ -188,7 +197,9 @@ func TestSondaDiseno(t *testing.T) {
 		lat = append(lat, d)
 		if Abstuvo(b) {
 			abstuvo++
+			causas[b.DegradedReason]++
 		}
+		causas[b.Retrieval]++
 	}
 
 	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
