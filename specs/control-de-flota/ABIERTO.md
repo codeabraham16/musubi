@@ -40,7 +40,6 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A57 | **`pide` todavía no puede preguntar: falta el camino de ida y vuelta** | **La mitad del `avisa` está CERRADA (2026-08-29)**: el agente mide si sabe avisar, lo reporta en el latido, el cerebro lo guarda y encola el aviso cuando se abre una pantalla en una máquina con `avisa`. El agente sabe dibujar en Linux (zenity/kdialog), macOS (osascript) y Windows (MessageBox), y `preguntar()` con su plazo de 60 s ya está escrito y probado. **Lo que falta es el CAMINO**: una pregunta no puede ser una llamada que bloquea, porque el latido es cada 30 s y la respuesta tarda hasta 90 s en volver. Hace falta que `musubi_fleet_screen` sobre un `pide` cree la sesión en un estado nuevo —`esperando_consentimiento`—, devuelva su id sin contraseña, y que el agente conteste por `/fleet/result`; el operador vuelve a pedir y recibe la contraseña si le dijeron que sí. **Los dos parámetros ya están decididos** (60 s, y el silencio NIEGA), así que lo que queda es el transporte, no la política. | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -67,6 +66,68 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 (7) · A57 CERRADO — `pide` ya puede preguntar, y el eje de consentimiento se usa entero.**
+
+Faltaba el transporte, no la política: el latido va cada 30 s y el diálogo espera 60, así que una
+respuesta tarda hasta minuto y medio. **Bloquear la llamada habría puesto un timeout de red en el
+camino de una decisión humana**, donde el vencimiento significa otra cosa. Se partió en dos.
+
+- **Un `pide` devuelve la espera y NO una contraseña.** El pedido crea la sesión en
+  `esperando_permiso`, encola la pregunta y devuelve el id. **No se acuña nada todavía**: una
+  credencial que existe se puede filtrar aunque nadie la use, y no se sabe si van a decir que sí.
+  El operador vuelve y recibe la contraseña —o el motivo—.
+- **Preguntar dos veces no está permitido.** Si ya hay una espera en curso se informa, no se
+  repregunta: dos ventanas encima de la misma persona por el mismo pedido es cómo se le enseña a
+  alguien a apretar «permitir» sin leer. Y una espera VENCIDA no bloquea las siguientes.
+- **El permiso no es la credencial.** La vuelta pasa otra vez por toda la compuerta de
+  capacidades: entre que se concedió y que se pide la contraseña pueden haber revocado la máquina,
+  y el permiso del usuario no vale como autorización del sistema.
+- **La respuesta viaja en stdout y no en el código de salida.** Un exit distinto de cero se lee
+  como «el comando falló», y «el usuario dijo que no» NO es una falla: es el sistema haciendo lo
+  que se le pidió. Con prefijo fijo, para que una salida inesperada no se interprete como respuesta.
+- **Los TRES «no» se distinguen y cada uno dice qué hacer**: `negada` es una decisión que hay que
+  respetar; `sin_respuesta` dice que esa máquina quizás no debería estar en `pide`; `no_se_pudo`
+  que le falta software o le sobra aislamiento. Viven en **columna propia** (migración 40) y no en
+  el texto de `error`, porque metidos en un texto libre la diferencia sobrevive exactamente hasta
+  que alguien mejora la redacción del mensaje.
+- **Una máquina no puede contestar por otra**, y la defensa es doble: la puerta de `/fleet/result`
+  ya rechaza el comando ajeno, y `ResponderConsentimiento` lo rechaza otra vez con su propio
+  `AND device_id = ?`. La segunda es la que sobrevive si alguien reordena el handler.
+- **Sólo se contesta una vez**, y esa condición está en el WHERE: sin eso un agente podría mandar
+  «negada» y después «concedida», y la bitácora registraría la última — que es la que un atacante
+  elegiría.
+- **`entregarPantalla` está EXTRAÍDA y no duplicada**, porque ahora tiene dos llamadores. Copiarla
+  dejaría dos lugares donde acuñar credenciales y dos donde recordar que el argv no puede llegar a
+  la bitácora; la copia que se queda vieja es siempre la del camino que se usa menos, que acá es
+  justo el de mayor autoridad.
+
+**DOS ERRORES MÍOS, LOS DOS ATRAPADOS POR PRUEBAS:**
+
+**Inserté la migración 40 ANTES de la 39.** `latestSchemaVersion()` devuelve la versión del ÚLTIMO
+elemento del slice, no la mayor, así que pasó a decir 39 con la 40 ya escrita. Lo atrapó de rebote
+la guarda de la plantilla de A45 —escrita hoy para otra cosa—, y eso fue suerte: **no había nada
+que exigiera el orden**. Ahora sí: `TestLasMigracionesEstanEnOrdenAscendenteYSinHuecos`.
+
+**`AbrirSesionPantalla` pisaba el estado** con `solicitada` siempre. Estaba bien mientras ése era
+el único comienzo posible; A57 agregó el otro. Se abrió la lista a los DOS estados iniciales
+legítimos, cerrada a propósito: sin esa restricción un llamador podría abrir una sesión
+directamente en `activa` y la bitácora registraría un acceso que nunca pasó por la compuerta.
+
+**Y un sabotaje declarado que no rompía nada**: quitar el `cerrada = nil` al conceder. No afecta el
+flujo — pero sí el PANEL, que mostraría como terminada una pantalla que alguien está usando. La
+prueba no lo cubría; ahora sí, y entonces el sabotaje sí falla.
+
+**Y una tercera mentira, encontrada mirando el panel y no el código.** Una sesión en
+`esperando_permiso` tiene `cerrada` vacío y tres minutos de ventana por delante, así que pasaba
+las dos condiciones de `SesionViva.Abierta` — el panel de sesiones vivas habría dicho **«alguien
+está mirando esta pantalla» cuando todavía nadie dio permiso y no hay contraseña acuñada**. Es
+peor que un falso negativo: manda a alguien a interrumpir una sesión que no existe, o le enseña
+que la columna miente. `sin_permiso` no necesita excepción porque cae por `cerrada`; éste es el
+único estado que sí, y por eso se nombra en vez de barrer con una lista.
+
+**Nueve sabotajes ejecutados** en esta parte.
+
 
 **2026-08-29 (6) · A57, la mitad del `avisa`: el agente aprende a hablarle a la persona.**
 

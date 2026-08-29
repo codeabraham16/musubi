@@ -113,3 +113,41 @@ func TestLaCapacidadDeAvisarLlevaSuMotivo(t *testing.T) {
 		t.Error("una capacidad afirmativa no dice con qué herramienta")
 	}
 }
+
+// UN PEDIDO DE PERMISO NO ES UNA SESIÓN ABIERTA, y ésa es la mentira exacta que el panel de
+// sesiones vivas existe para no decir.
+//
+// Una sesión en `esperando_permiso` tiene `cerrada` vacío y tres minutos de ventana por delante,
+// así que pasaba las dos condiciones de `Abierta` — y el panel habría dicho «alguien está mirando
+// esta pantalla» cuando todavía nadie dio permiso y no hay contraseña acuñada. Manda a alguien a
+// interrumpir una sesión que no existe, o le enseña que la columna miente.
+//
+// Sabotaje que la hace fallar: sacar la guarda de SesionEsperandoPermiso de Abierta.
+func TestUnPedidoDePermisoNoFiguraComoSesionAbierta(t *testing.T) {
+	ahora := time.Now().UTC()
+	esperando := DesdeSesionPantalla(SesionPantalla{
+		ID: "s1", Estado: SesionEsperandoPermiso, Principal: "gio",
+		Creada: ahora, Vence: ahora.Add(VentanaDePermiso),
+	}, "pc-gio")
+	if esperando.Abierta(ahora) {
+		t.Error("un pedido de permiso figura como sesión ABIERTA: el panel diría que alguien " +
+			"está mirando esa pantalla cuando todavía nadie dio permiso")
+	}
+	// Y una sesión de verdad SÍ figura abierta: la guarda no puede tapar el caso normal.
+	viva := DesdeSesionPantalla(SesionPantalla{
+		ID: "s2", Estado: SesionSolicitada, Principal: "gio",
+		Creada: ahora, Vence: ahora.Add(30 * time.Minute),
+	}, "pc-gio")
+	if !viva.Abierta(ahora) {
+		t.Error("una sesión solicitada y vigente NO figura abierta: la guarda se llevó puesto el " +
+			"caso normal, y el panel dejaría de mostrar a quien sí está adentro")
+	}
+	// Una negada tampoco: cae por `cerrada`, que se estampa al negar.
+	negada := DesdeSesionPantalla(SesionPantalla{
+		ID: "s3", Estado: SesionSinPermiso, Principal: "gio", Consentimiento: RespuestaNegada,
+		Creada: ahora, Vence: ahora.Add(VentanaDePermiso), Cerrada: ahora,
+	}, "pc-gio")
+	if negada.Abierta(ahora) {
+		t.Error("una sesión negada figura abierta")
+	}
+}

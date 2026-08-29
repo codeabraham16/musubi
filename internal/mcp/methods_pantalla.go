@@ -133,6 +133,22 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	ttl := fleet.NormalizarDuracion(time.Duration(args.MinutosTTL) * time.Minute)
 	ahora := time.Now().UTC()
 
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// `pide`: SE PREGUNTA PRIMERO, Y ESO NO PUEDE SER UNA LLAMADA QUE BLOQUEA (A57)
+	//
+	// El latido va cada 30 s y el diálogo espera hasta 60: una respuesta tarda hasta minuto y
+	// medio en volver. Bloquear acá dejaría al operador mirando una llamada colgada, y —peor—
+	// pondría un timeout de red en el camino de una decisión humana, donde el vencimiento
+	// significa otra cosa.
+	//
+	// Así que se parte en dos: este pedido crea la sesión ESPERANDO PERMISO, encola la pregunta
+	// y devuelve el id SIN contraseña. El operador vuelve a llamar y recibe la contraseña si le
+	// dijeron que sí. Si ya hay una espera en curso para esta máquina y este principal, no se
+	// abre otra: se informa la que hay.
+	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
+		return s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)
+	}
+
 	// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una
 	// pantalla es información de auditoría tanto como que lo haya logrado.
 	ses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{
@@ -142,6 +158,18 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
+
+	return s.entregarPantalla(d, p, proyecto, ses, ttl)
+}
+
+// entregarPantalla acuña la contraseña y se la manda a la máquina.
+//
+// ESTÁ EXTRAÍDA Y NO DUPLICADA porque tiene DOS llamadores: el camino normal y el de `pide`
+// cuando el usuario dijo que sí. Copiarla habría dejado dos lugares donde acuñar credenciales y
+// dos donde recordar que el argv no puede llegar a la bitácora — y la copia que se queda vieja
+// es siempre la del camino que se usa menos, que acá es justo el de mayor autoridad.
+func (s *McpServer) entregarPantalla(d fleet.Device, p *Principal, proyecto string,
+	ses fleet.SesionPantalla, ttl time.Duration) (interface{}, *RpcError) {
 
 	pass, err := fleet.NuevaPassPantalla()
 	if err != nil {
@@ -163,7 +191,7 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 
-	return jsonResult(map[string]interface{}{
+	salida := map[string]interface{}{
 		"session_id":  ses.ID,
 		"device":      d.Name,
 		"rustdesk_id": d.RustdeskID,
@@ -171,7 +199,14 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		"vence":       ses.Vence.Format(time.RFC3339),
 		"minutos":     int(ttl.Minutes()),
 		"aviso":       "la contraseña se muestra UNA vez y no se guarda en ningún lado. Vence sola en la máquina aunque el cerebro se caiga. Si la perdés, pedí otra sesión.",
-	})
+	}
+	// CUANDO HUBO QUE PEDIR PERMISO, SE DICE QUE SE CONCEDIÓ. La bitácora ya lo tiene, pero quien
+	// abre la pantalla merece saber que del otro lado alguien apretó «permitir»: es la diferencia
+	// entre entrar a una máquina y entrar con el consentimiento de quien la está usando.
+	if ses.Consentimiento != "" {
+		salida["consentimiento"] = string(ses.Consentimiento)
+	}
+	return jsonResult(salida)
 }
 
 // explicarColision arma el mensaje de un rustdesk_id ambiguo.
@@ -210,6 +245,11 @@ const comandoPantalla = "musubi:pantalla"
 // Igual que la de pantalla: NO es un ejecutable del host y el agente la intercepta antes de
 // intentar lanzarla.
 const comandoAviso = "musubi:avisar"
+
+// comandoPreguntar es la operación con la que el cerebro le PIDE PERMISO al usuario de una
+// máquina (A57). Distinta de la de avisar porque espera respuesta: el agente contesta por
+// /fleet/result y recién ahí la sesión sale de `esperando_permiso`.
+const comandoPreguntar = "musubi:preguntar"
 
 // EsComandoDePantalla dice si un argv es la operación interna de pantalla.
 func EsComandoDePantalla(argv []string) bool {
@@ -371,6 +411,131 @@ func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre string, c fleet.Conse
 	logx.Warn("flota: se abrió una pantalla y el aviso al usuario NO se pudo entregar",
 		"device", nombre, "consentimiento", string(c),
 		"motivo", "el agente de esta máquina no declara saber notificar (devices.puede_preguntar = 0)")
+}
+
+// pedirPermisoParaPantalla es el camino de `pide`: preguntar, y volver sin contraseña (A57).
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// TRES SITUACIONES, TRES RESPUESTAS, Y NINGUNA ES UNA ESPERA
+//
+//  1. NO HAY NADA PEDIDO → se crea la sesión en `esperando_permiso`, se encola la pregunta y se
+//     devuelve el id. NO SE ACUÑA CONTRASEÑA: una credencial que existe es una credencial que se
+//     puede filtrar, aunque nadie la haya usado, y todavía no se sabe si la respuesta va a ser sí.
+//  2. YA HAY UNA ESPERA EN CURSO → se informa, no se pregunta de nuevo. Preguntar dos veces le
+//     pone dos ventanas encima a la misma persona por el mismo pedido, que es cómo se le enseña a
+//     alguien a apretar «permitir» sin leer.
+//  3. YA CONTESTARON → si dijeron que sí, sigue el camino normal y se acuña la contraseña; si no,
+//     se niega DICIENDO CUÁL DE LOS TRES «no» fue.
+//
+// EL PERMISO NO ES LA CREDENCIAL, y por eso la vuelta pasa otra vez por toda la compuerta de
+// capacidades de arriba: entre que se concedió el permiso y que se pide la contraseña pueden
+// haber revocado la máquina o sacado la capacidad, y el permiso del usuario no vale como
+// autorización del sistema.
+func (s *McpServer) pedirPermisoParaPantalla(d fleet.Device, p *Principal, proyecto string,
+	ttl time.Duration, ahora time.Time) (interface{}, *RpcError) {
+
+	quien := nombrePrincipal(p)
+	previa, hay, err := s.sesionEsperandoDe(d, quien, ahora)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	if hay {
+		switch {
+		case previa.Estado == fleet.SesionEsperandoPermiso:
+			return jsonResult(map[string]interface{}{
+				"session_id": previa.ID, "device": d.Name, "estado": string(previa.Estado),
+				"aviso": "ya se le preguntó al usuario de esta máquina y todavía no contestó. " +
+					"El agente recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo " +
+					"espera " + fleet.AvisoTimeout.String() + ". Volvé a pedir la pantalla en un rato.",
+			})
+		case previa.ConcedeElAcceso():
+			// DIJERON QUE SÍ: se sigue por el camino normal. La sesión previa ya quedó en
+			// `solicitada`, así que se reusa en vez de abrir otra — abrir una nueva dejaría la
+			// concedida colgada y la bitácora con dos filas para un solo permiso.
+			return s.entregarPantalla(d, p, proyecto, previa, ttl)
+		default:
+			return nil, rpcErrorf(codeUnauthorized, "%s", explicarSinPermiso(d, previa))
+		}
+	}
+
+	// Nada pedido todavía: se pregunta.
+	ses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Estado: fleet.SesionEsperandoPermiso,
+		Creada: ahora,
+		// LA VENTANA DE LA ESPERA NO ES LA DE LA SESIÓN. Acá `vence` acota cuánto vale el PEDIDO
+		// —lo que tarda el latido más el diálogo, con margen—, no cuánto va a durar el acceso.
+		// Usar el ttl de la sesión dejaría un pedido de ocho horas esperando una respuesta que
+		// venció hace rato.
+		Vence: ahora.Add(fleet.VentanaDePermiso),
+	})
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	texto := fmt.Sprintf("Musubi: %s pide permiso para ver esta pantalla. ¿Lo permitís?",
+		fleet.RecortarRunas(quien, 64))
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Argv:    []string{comandoPreguntar, ses.ID, texto},
+		Timeout: fleet.ComandoTimeoutDefault,
+	}); err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	return jsonResult(map[string]interface{}{
+		"session_id": ses.ID, "device": d.Name, "estado": string(fleet.SesionEsperandoPermiso),
+		"aviso": "esta máquina exige el permiso de quien la está usando. Se le preguntó; el agente " +
+			"recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo espera " +
+			fleet.AvisoTimeout.String() + ". Volvé a pedir la pantalla en un rato: si dijeron que " +
+			"sí vas a recibir la contraseña, y si no, el motivo.",
+	})
+}
+
+// explicarSinPermiso arma el mensaje de los TRES «no», que se arreglan distinto.
+func explicarSinPermiso(d fleet.Device, ses fleet.SesionPantalla) string {
+	base := fmt.Sprintf("no se abre la pantalla de %q: ", d.Name)
+	switch ses.Consentimiento {
+	case fleet.RespuestaNegada:
+		return base + "la persona que está usando esa máquina dijo que NO. " +
+			"Es el eje funcionando como se configuró; si creés que corresponde igual, hablá con ella."
+	case fleet.RespuestaSinRespuesta:
+		return base + "se le preguntó y nadie contestó en " + fleet.AvisoTimeout.String() + ". " +
+			"El silencio NO es permiso, así que se niega. Si esta máquina está siempre " +
+			"desatendida, no debería estar en `pide` — miralo con musubi_fleet_consent."
+	case fleet.RespuestaNoSePudo:
+		return base + "el agente no tuvo con qué preguntar (no hay escritorio, o le falta la " +
+			"herramienta de diálogo). El motivo exacto está en el log del cerebro, en la línea " +
+			"«esta máquina no puede pedirle permiso a nadie»."
+	default:
+		return base + "el pedido de permiso no prosperó."
+	}
+}
+
+// sesionEsperandoDe busca el pedido de permiso VIGENTE de este principal sobre esta máquina.
+//
+// SE ACOTA AL PRINCIPAL, y eso no es cosmética: el permiso se le dio a QUIEN preguntó. Sin este
+// filtro, un operador aprovecharía el «sí» que la persona le dio a otro — y la pregunta nombra a
+// quien entra justamente para que la respuesta sea sobre esa persona.
+func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.Time) (fleet.SesionPantalla, bool, error) {
+	sesiones, err := s.engine.SesionesDePantalla(d.ProjectID, d.ID, 20, ahora)
+	if err != nil {
+		return fleet.SesionPantalla{}, false, err
+	}
+	for _, ses := range sesiones {
+		if ses.Principal != quien || ses.Consentimiento == "" && ses.Estado != fleet.SesionEsperandoPermiso {
+			continue
+		}
+		// UNA ESPERA VENCIDA NO CUENTA: se vuelve a preguntar. Si no, un pedido que nadie
+		// contestó hace dos horas bloquearía todos los siguientes con un «ya se preguntó» que
+		// nunca se va a resolver.
+		if ses.Vencida(ahora) && ses.Estado == fleet.SesionEsperandoPermiso {
+			continue
+		}
+		if ses.Estado == fleet.SesionEsperandoPermiso || ses.Estado == fleet.SesionSinPermiso ||
+			(ses.Estado == fleet.SesionSolicitada && ses.Consentimiento != "") {
+			return ses, true, nil
+		}
+	}
+	return fleet.SesionPantalla{}, false, nil
 }
 
 // encolarAvisoDePantalla le manda al agente el aviso que `avisa` promete (A57).

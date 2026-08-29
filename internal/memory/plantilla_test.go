@@ -244,3 +244,52 @@ func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 		t.Fatalf("el barrido sólo miró %d archivos .go: no está mirando donde cree", vistos)
 	}
 }
+
+// LAS MIGRACIONES TIENEN QUE ESTAR EN ORDEN ASCENDENTE, Y NO HABÍA NADA QUE LO EXIGIERA.
+//
+// `latestSchemaVersion()` devuelve la versión del ÚLTIMO elemento del slice, no la mayor. Así que
+// insertar una migración nueva en el medio —cosa fácil de hacer buscando «la de al lado» para
+// copiar su forma— deja al binario creyendo que la última versión es una anterior:
+//
+//   - `applyMigrations` corre de todas formas todo lo pendiente, así que el esquema queda BIEN;
+//   - pero la guarda de «esta base viene del futuro» compara contra un número más chico, y una
+//     base migrada por un binario nuevo se vería como corrupta desde uno viejo… y al revés.
+//
+// Pasó mientras se escribía la migración 40: se insertó antes de la 39 y `latestSchemaVersion`
+// pasó a decir 39 con la 40 ya escrita. Lo atrapó de rebote la guarda de la plantilla de A45, que
+// existe para otra cosa. Esta prueba lo atrapa de frente.
+//
+// Sabotaje que la hace fallar: mover cualquier migración de lugar en el slice.
+func TestLasMigracionesEstanEnOrdenAscendenteYSinHuecos(t *testing.T) {
+	ms := schemaMigrations()
+	if len(ms) < 30 {
+		t.Fatalf("sólo hay %d migraciones: la prueba no está mirando lo que cree", len(ms))
+	}
+	for i := 1; i < len(ms); i++ {
+		if ms[i].version <= ms[i-1].version {
+			t.Errorf("la migración %d (%q) viene después de la %d (%q): el slice no está en orden "+
+				"ascendente, y latestSchemaVersion() devuelve la versión del ÚLTIMO elemento — no "+
+				"la mayor. Con esto, la guarda de «base del futuro» compara contra el número "+
+				"equivocado.", ms[i].version, ms[i].name, ms[i-1].version, ms[i-1].name)
+		}
+	}
+	// Y el último es el mayor, que es lo que latestSchemaVersion() afirma sin comprobarlo.
+	mayor := 0
+	for _, m := range ms {
+		if m.version > mayor {
+			mayor = m.version
+		}
+	}
+	if got := latestSchemaVersion(); got != mayor {
+		t.Errorf("latestSchemaVersion() = %d y la migración más alta es la %d", got, mayor)
+	}
+	// Sin nombres repetidos: el nombre es lo que se lee en un diagnóstico, y dos iguales mandan a
+	// mirar la migración equivocada.
+	vistos := map[string]int{}
+	for _, m := range ms {
+		if otra, ya := vistos[m.name]; ya {
+			t.Errorf("las migraciones %d y %d comparten el nombre %q", otra, m.version, m.name)
+		}
+		vistos[m.name] = m.version
+	}
+}

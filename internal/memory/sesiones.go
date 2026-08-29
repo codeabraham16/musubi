@@ -17,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const columnasSesion = `id, device_id, project_id, principal, estado, creada, vence, cerrada, error`
+const columnasSesion = `id, device_id, project_id, principal, estado, creada, vence, cerrada, error, consentimiento`
 
 // AbrirSesionPantalla registra que alguien pidió mirar una pantalla.
 //
@@ -29,7 +29,19 @@ func (e *DbEngine) AbrirSesionPantalla(s fleet.SesionPantalla) (fleet.SesionPant
 		return fleet.SesionPantalla{}, fmt.Errorf("una sesión necesita dispositivo y proyecto")
 	}
 	s.ID = uuid.NewString()
-	s.Estado = fleet.SesionSolicitada
+	// EL ESTADO INICIAL LO DECIDE EL LLAMADOR, PERO SÓLO ENTRE DOS.
+	//
+	// Antes se pisaba con `solicitada` siempre, y estaba bien mientras ése era el único comienzo
+	// posible. A57 agregó el otro: un `pide` nace en `esperando_permiso`, sin contraseña acuñada,
+	// hasta que la persona conteste.
+	//
+	// La lista es CERRADA a propósito. Sin ella, un llamador podría abrir una sesión directamente
+	// en `activa` —o en `sin_permiso`— y la bitácora registraría un acceso que nunca pasó por la
+	// compuerta. Que los estados de llegada sólo se alcancen por transición es lo que hace que la
+	// bitácora signifique algo.
+	if s.Estado != fleet.SesionEsperandoPermiso {
+		s.Estado = fleet.SesionSolicitada
+	}
 	if s.Creada.IsZero() {
 		s.Creada = time.Now().UTC()
 	}
@@ -75,6 +87,52 @@ func (e *DbEngine) MarcarSesion(deviceID, sesionID string, estado fleet.EstadoSe
 		string(estado), errMsg, cerrada, sesionID)
 	if err != nil {
 		return fmt.Errorf("error al marcar la sesión %q: %w", sesionID, err)
+	}
+	return nil
+}
+
+// ResponderConsentimiento registra CÓMO contestó el usuario de la máquina (A57) y cierra —o
+// habilita— la sesión según eso.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA GUARDA ES LA MISMA QUE MarcarSesion, Y POR EL MISMO MOTIVO
+//
+// `deviceID` sale del TOKEN del agente, y la sesión tiene que ser SUYA. Sin esa comprobación,
+// una máquina comprometida podría contestar «concedida» a la pregunta que se le hizo al usuario
+// de OTRA — y el permiso de entrar a una pantalla ajena se conseguiría sin tocar esa máquina.
+//
+// SÓLO SE PUEDE CONTESTAR UNA VEZ, y esa condición está en el WHERE. Una sesión que ya salió de
+// `esperando_permiso` no vuelve: sin eso, un agente podría mandar «negada» y después «concedida»
+// —o repetir la respuesta después de que la sesión venció— y la bitácora registraría la última,
+// que es exactamente la que un atacante elegiría.
+func (e *DbEngine) ResponderConsentimiento(deviceID, sesionID string, r fleet.RespuestaAviso,
+	ahora time.Time) error {
+
+	deviceID, sesionID = strings.TrimSpace(deviceID), strings.TrimSpace(sesionID)
+	if deviceID == "" || sesionID == "" || !r.Valida() {
+		return ErrComandoAjeno
+	}
+	estado := fleet.SesionSinPermiso
+	var cerrada any = ahora.UTC().Format(time.RFC3339)
+	if r.Concede() {
+		// CONCEDIDA NO ES ACTIVA: la sesión pasa a `solicitada`, que es donde estaría si nunca
+		// hubiera hecho falta preguntar. Recién ahí se acuña la contraseña y se le manda a la
+		// máquina — o sea que el permiso y la credencial siguen siendo dos pasos, y entre los dos
+		// vuelve a pasar por la compuerta de capacidades.
+		estado, cerrada = fleet.SesionSolicitada, nil
+	}
+	res, err := e.db.Exec(
+		`UPDATE screen_sessions SET estado = ?, consentimiento = ?, cerrada = ?
+		  WHERE id = ? AND device_id = ? AND estado = ?`,
+		string(estado), string(r), cerrada, sesionID, deviceID, string(fleet.SesionEsperandoPermiso))
+	if err != nil {
+		return fmt.Errorf("error al registrar el consentimiento de %q: %w", sesionID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		// La sesión no es de esta máquina, no existe, o ya se contestó. Las tres dan el MISMO
+		// error, por el mismo motivo que motivoRechazo en la puerta del dispositivo: distinguirlas
+		// convertiría esto en un oráculo de qué sesiones existen en otras máquinas.
+		return ErrComandoAjeno
 	}
 	return nil
 }
@@ -220,14 +278,19 @@ func escanearSesion(row escaneable) (fleet.SesionPantalla, error) {
 		s                     fleet.SesionPantalla
 		estado, creada, vence string
 		cerrada               sql.NullString
+		consentimiento        string
 	)
-	if err := row.Scan(&s.ID, &s.DeviceID, &s.ProjectID, &s.Principal, &estado, &creada, &vence, &cerrada, &s.Error); err != nil {
+	if err := row.Scan(&s.ID, &s.DeviceID, &s.ProjectID, &s.Principal, &estado, &creada, &vence,
+		&cerrada, &s.Error, &consentimiento); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.SesionPantalla{}, err
 		}
 		return fleet.SesionPantalla{}, fmt.Errorf("error al escanear una sesión: %w", err)
 	}
 	s.Estado = fleet.EstadoSesion(estado)
+	// Vacío es el valor de casi todas las filas y significa «no hizo falta preguntar». No se
+	// traduce a nada: interpretarlo acá obligaría a des-interpretarlo en cada lectura.
+	s.Consentimiento = fleet.RespuestaAviso(consentimiento)
 	if t, ok := parseObsTime(creada); ok {
 		s.Creada = t
 	}

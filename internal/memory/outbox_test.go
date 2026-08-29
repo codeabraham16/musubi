@@ -111,8 +111,8 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       Se llama `alcance` y no `servicio` a propósito: lo que representa es QUÉ toca la
 	//       política adentro de la máquina, y lo próximo que se vigile ahí (un contenedor, un
 	//       montaje, una interfaz) va a querer el mismo espaciado sin migrar de nuevo.
-	if latestSchemaVersion() != 39 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 39", latestSchemaVersion())
+	if latestSchemaVersion() != 40 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 40", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

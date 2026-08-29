@@ -439,6 +439,9 @@ type DeviceStore interface {
 	// construcción, no por disciplina.
 	AbrirSesionPantalla(s fleet.SesionPantalla) (fleet.SesionPantalla, error)
 	MarcarSesion(deviceID, sesionID string, estado fleet.EstadoSesion, errMsg string, ahora time.Time) error
+	// ResponderConsentimiento registra cómo contestó el usuario de la máquina (A57). La sesión
+	// tiene que ser de ESE device y estar todavía esperando: sólo se contesta una vez.
+	ResponderConsentimiento(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
 	SesionesDePantalla(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionPantalla, error)
 	GuardarRustdeskID(deviceID, rid string) error
 	// QuienMasDiceSer deriva la COLISIÓN de rustdesk_id: qué otras máquinas reportan el mismo id.

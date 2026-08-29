@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"musubi/internal/fleet"
@@ -469,6 +470,8 @@ func (s *McpServer) handlerResultado(limiter *authLimiter) http.HandlerFunc {
 		// distingue «se aplicó» de «la máquina no pudo» — que es justo lo que se va a mirar
 		// cuando alguien diga «no me deja entrar».
 		s.marcarSesionSiEsDePantalla(d.ID, cuerpo)
+		// Y si era un PEDIDO DE PERMISO, su respuesta saca la sesión de `esperando_permiso`.
+		s.registrarRespuestaDePermiso(d.ID, cuerpo)
 
 		// F3 — la guarda: el comando tiene que pertenecer a la máquina del TOKEN. Un rechazo acá
 		// es un intento de escribir en la bitácora de otro, así que gasta cuota del limiter.
@@ -502,6 +505,46 @@ func (s *McpServer) marcarSesionSiEsDePantalla(deviceID string, cuerpo cuerpoRes
 	}
 	_ = s.engine.MarcarSesion(deviceID, cmd.Argv[1], estado, motivo, time.Now())
 }
+
+// registrarRespuestaDePermiso recoge lo que contestó el usuario de la máquina (A57).
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA SESIÓN SALE DEL COMANDO, NO DEL CUERPO
+//
+// El agente contesta con el `command_id`, y de ahí se saca la sesión. Es la misma garantía que
+// usa el resultado de pantalla: sin ella, un agente podría nombrar la sesión de OTRA máquina y
+// contestarle «concedida» a una pregunta que se le hizo a otra persona. La comprobación final
+// —que la sesión sea de este device— vive una capa más abajo, en ResponderConsentimiento.
+//
+// UNA RESPUESTA QUE NO SE ENTIENDE NO SE DEGRADA A «NEGADA» EN SILENCIO. Parece seguro y esconde
+// que hay un agente hablando un protocolo que este cerebro no conoce; se registra `no_se_pudo`,
+// que es la categoría honesta —la máquina no pudo darnos una respuesta— y deja rastro.
+func (s *McpServer) registrarRespuestaDePermiso(deviceID string, cuerpo cuerpoResultado) {
+	cmd, existe, err := s.engine.ComandoPorID(cuerpo.ComandoID)
+	if err != nil || !existe || cmd.DeviceID != deviceID || len(cmd.Argv) < 2 ||
+		cmd.Argv[0] != comandoPreguntar {
+		return
+	}
+	r := fleet.RespuestaNoSePudo
+	if cuerpo.Error == "" {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(cuerpo.Stdout), prefijoRespuestaPermiso); ok {
+			if cand := fleet.RespuestaAviso(strings.TrimSpace(v)); cand.Valida() {
+				r = cand
+			}
+		}
+	}
+	if err := s.engine.ResponderConsentimiento(deviceID, cmd.Argv[1], r, time.Now()); err != nil {
+		// Incluye la sesión ajena, la inexistente y la YA CONTESTADA: las tres dan el mismo error
+		// una capa más abajo, a propósito. Acá se logea porque un agente que insiste en contestar
+		// sesiones que no son suyas es una señal, no un detalle.
+		logx.Warn("flota: se descartó una respuesta de permiso", "device_id", deviceID,
+			"comando", cuerpo.ComandoID, "error", err)
+	}
+}
+
+// prefijoRespuestaPermiso es cómo el agente marca su respuesta en stdout. Un prefijo y no un
+// stdout pelado: sin él, cualquier salida inesperada se interpretaría como una respuesta.
+const prefijoRespuestaPermiso = "musubi-permiso: "
 
 // ── La puerta del RENDIMIENTO: salud para lo que ninguna máquina enumera (fase 4) ────────────
 

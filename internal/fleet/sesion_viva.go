@@ -63,6 +63,20 @@ type SesionViva struct {
 // mentiría diciendo que alguien sigue adentro de una máquina cuando ya salió, que es la mentira
 // más cara que puede decir un panel de este plano.
 func (s SesionViva) Abierta(ahora time.Time) bool {
+	// UN PEDIDO DE PERMISO NO ES UNA SESIÓN ABIERTA (A57), y confundirlos es la mentira exacta
+	// que este panel existe para no decir.
+	//
+	// Una sesión en `esperando_permiso` tiene `cerrada` vacío y una ventana de tres minutos por
+	// delante, así que las dos condiciones de abajo se cumplen — y el panel diría «alguien está
+	// mirando esta pantalla» cuando todavía NADIE dio permiso y no hay contraseña acuñada. Es
+	// peor que un falso negativo: manda a alguien a interrumpir una sesión que no existe, o le
+	// enseña que la columna miente.
+	//
+	// `sin_permiso` cae por `cerrada`, que sí se estampa al negar. Éste es el único estado que
+	// necesita la excepción, y por eso se nombra en vez de barrer con una lista.
+	if s.Estado == string(SesionEsperandoPermiso) {
+		return false
+	}
 	return s.Cerrada.IsZero() && !s.Vence.IsZero() && ahora.Before(s.Vence)
 }
 

@@ -170,3 +170,44 @@ func atenderAviso(comandoID string, argv []string) resultadoDeComando {
 	res.Stdout = "aviso entregado"
 	return res
 }
+
+// comandoPreguntarAgente es la operación que PIDE PERMISO. A diferencia de avisar, espera.
+const comandoPreguntarAgente = "musubi:preguntar"
+
+// atenderPregunta ejecuta `musubi:preguntar <sesionID> <texto>` y contesta.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// BLOQUEA HASTA UN MINUTO, Y ESO TIENE UN COSTO QUE HAY QUE DECIR
+//
+// El agente atiende los comandos EN SERIE, así que mientras esta ventana está abierta esa máquina
+// no atiende nada más: ni exec, ni otra pantalla, ni shell. Es aceptable porque un `pide` es un
+// evento raro y humano —alguien está por entrar a tu escritorio— y porque el plazo está acotado
+// por el dominio. Lo que NO sería aceptable es que no tuviera plazo: sin él, una ventana que nadie
+// cierra deja la máquina muda para siempre y el cerebro la ve latiendo, que parece sano.
+//
+// LA RESPUESTA VIAJA EN stdout Y NO EN EL CÓDIGO DE SALIDA. Un exit distinto de cero se lee como
+// «el comando falló», y «el usuario dijo que no» NO es una falla: es el sistema haciendo lo que
+// se le pidió. Mezclarlos haría que la bitácora registre un error donde hubo una decisión.
+func atenderPregunta(comandoID string, argv []string) resultadoDeComando {
+	res := resultadoDeComando{ComandoID: comandoID}
+	if len(argv) < 3 {
+		res.Error = "musubi:preguntar necesita <sesion> <texto>"
+		return res
+	}
+	texto := strings.TrimSpace(strings.Join(argv[2:], " "))
+	if texto == "" {
+		res.Error = "musubi:preguntar con texto vacío"
+		return res
+	}
+	r := preguntar(texto)
+	cero := 0
+	res.ExitCode = &cero
+	// El formato lo lee el cerebro: prefijo fijo más la respuesta. Se prefiere un prefijo a un
+	// stdout pelado para que una salida inesperada —un binario que imprime algo raro— no se
+	// interprete como una respuesta.
+	res.Stdout = prefijoRespuestaPermiso + string(r)
+	return res
+}
+
+// prefijoRespuestaPermiso marca la salida como una respuesta de permiso y no como texto suelto.
+const prefijoRespuestaPermiso = "musubi-permiso: "

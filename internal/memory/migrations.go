@@ -1445,6 +1445,33 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 40,
+			name:    "consentimiento_en_la_sesion_de_pantalla",
+			// CÓMO CONTESTÓ EL USUARIO CUANDO HUBO QUE PREGUNTARLE (A57).
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// COLUMNA PROPIA Y NO UN TEXTO ADENTRO DE `error`
+			//
+			// «Me dijeron que no» NO ES UN ERROR: es el sistema funcionando como se pidió. Y las
+			// tres formas de no conceder se arreglan distinto:
+			//
+			//   negada        → una decisión de una persona, que hay que respetar
+			//   sin_respuesta → nadie estaba; si pasa siempre, esa máquina no debería estar en `pide`
+			//   no_se_pudo    → no había con qué preguntar; le falta software o le sobra aislamiento
+			//
+			// Metidas las tres en un texto libre, la diferencia sobrevive exactamente hasta que
+			// alguien mejora la redacción del mensaje. Con columna, cualquier consulta las separa.
+			//
+			// VACÍA ES UN VALOR LEGÍTIMO Y ES EL DE CASI TODAS LAS FILAS: significa «no hizo
+			// falta preguntar», que es lo que pasa con `libre` y con `avisa`. Por eso el DEFAULT
+			// es '' y no algo como 'desconocido' — inventar un tercer significado para las filas
+			// viejas obligaría a interpretarlo en cada lectura.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "screen_sessions", "consentimiento",
+					"consentimiento TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

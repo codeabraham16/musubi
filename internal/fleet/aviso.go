@@ -39,6 +39,18 @@ const (
 	// respuesta es no.
 	AvisoTimeout = 60 * time.Second
 
+	// VentanaDePermiso es cuánto vale un pedido de permiso que todavía nadie contestó.
+	//
+	// NO ES LA DURACIÓN DE LA SESIÓN, y confundirlas es el error que este nombre evita: una
+	// sesión puede durar ocho horas, y un pedido de permiso que sigue «esperando» ocho horas
+	// después bloquearía todos los siguientes con un «ya se preguntó» que nunca se va a resolver.
+	//
+	// El número sale de sumar lo que tarda el camino: hasta 30 s para que el agente recoja la
+	// pregunta en su próximo latido, más los 60 del diálogo, más margen para un agente que estaba
+	// atendiendo otra cosa —los comandos se atienden EN SERIE—. Tres minutos deja el doble de lo
+	// medido y sigue siendo corto para que un pedido olvidado no estorbe.
+	VentanaDePermiso = 3 * time.Minute
+
 	// AvisoTextoMax acota lo que se dibuja. El texto lo arma el cerebro y termina en un diálogo
 	// del escritorio de otra persona: un mensaje de diez mil caracteres no es un aviso, es una
 	// ventana que tapa la pantalla y que alguien va a cerrar sin leer.

@@ -43,6 +43,20 @@ const (
 	SesionActiva     EstadoSesion = "activa"     // la máquina confirmó que la aplicó
 	SesionVencida    EstadoSesion = "vencida"    // pasó su ventana
 	SesionFallida    EstadoSesion = "fallida"    // la máquina no pudo aplicarla
+
+	// SesionEsperandoPermiso es un `pide` en curso: se le preguntó al usuario de la máquina y
+	// todavía no contestó (A57).
+	//
+	// ES UN ESTADO PROPIO Y NO UNA `solicitada` CON UNA MARCA, porque lo que significa es
+	// distinto: en `solicitada` la contraseña YA EXISTE y está viajando; acá **no se acuñó
+	// ninguna**. Confundirlas dejaría una credencial creada esperando una respuesta que puede
+	// ser «no» — y una contraseña que existe es una contraseña que se puede filtrar, aunque
+	// nadie la haya usado.
+	SesionEsperandoPermiso EstadoSesion = "esperando_permiso"
+	// SesionSinPermiso es un `pide` que no se concedió. El POR QUÉ vive en Consentimiento, no
+	// acá: «me dijeron que no», «nadie contestó» y «no había con qué preguntar» terminan todas
+	// en este estado y se arreglan distinto.
+	SesionSinPermiso EstadoSesion = "sin_permiso"
 )
 
 // SesionPantalla es el REGISTRO de que alguien tuvo acceso a una pantalla. No es un canal ni una
@@ -60,6 +74,29 @@ type SesionPantalla struct {
 
 	// Error explica por qué falló, si falló. Nunca contiene la contraseña.
 	Error string
+
+	// Consentimiento es CÓMO contestó el usuario de la máquina, cuando hubo que preguntarle
+	// (A57). Vacío = no hizo falta preguntar (`libre` o `avisa`).
+	//
+	// TIENE COLUMNA PROPIA Y NO VIAJA EN `Error` POR UNA RAZÓN QUE SE PAGA DESPUÉS: «me dijeron
+	// que no» no es un error, es el sistema funcionando. Y las tres formas de no conceder
+	// —negada, sin_respuesta, no_se_pudo— se arreglan distinto: la primera es una decisión que
+	// hay que respetar, la segunda dice que esa máquina quizás no debería estar en `pide`, y la
+	// tercera que le falta con qué preguntar. Metidas todas en un texto libre, la diferencia
+	// sobrevive hasta que alguien cambia una palabra del mensaje.
+	Consentimiento RespuestaAviso
+}
+
+// ConcedeElAcceso dice si esta sesión llegó a tener permiso.
+//
+// Una sesión que NUNCA tuvo que pedirlo (`libre`, `avisa`) lo tiene por definición: el eje de
+// consentimiento no es el de capacidad, y confundirlos cerraría el acceso a toda la flota que no
+// usa `pide`.
+func (s SesionPantalla) ConcedeElAcceso() bool {
+	if s.Consentimiento == "" {
+		return true
+	}
+	return s.Consentimiento.Concede()
 }
 
 // Vencida dice si la ventana ya pasó. Se DERIVA, igual que el «en línea» de un dispositivo: una

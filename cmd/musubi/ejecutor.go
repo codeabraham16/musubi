@@ -83,6 +83,9 @@ func ejecutar(c comandoRecibido, base, token string) resultadoDeComando {
 		if argv[0] == comandoAvisarAgente {
 			return atenderAviso(c.ID, argv)
 		}
+		if argv[0] == comandoPreguntarAgente {
+			return atenderPregunta(c.ID, argv)
+		}
 		res.Error = "operación interna desconocida: " + argv[0]
 		return res
 	}
