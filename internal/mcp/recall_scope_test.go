@@ -7,6 +7,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestRecallScopeFor(t *testing.T) {
@@ -32,7 +33,7 @@ func TestRecallScopeFor(t *testing.T) {
 // un proyecto solo recupera memoria de ESE proyecto (más la sin atribuir), mientras un admin
 // ve todos los proyectos — todo derivado del principal en el contexto, sin que el cliente lo pida.
 func TestToolRecallEnforcesPrincipalScope(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

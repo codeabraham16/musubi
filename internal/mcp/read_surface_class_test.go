@@ -10,6 +10,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // read_surface_class_test.go SELLA POR CONTRATO la clase "superficie de lectura aislada por
@@ -164,7 +165,7 @@ func readSweepCases() []readSweepCase {
 }
 
 func TestReadSurfaceClassIsolation(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestReadSurfaceClassIsolation(t *testing.T) {
 // scopeadas". Asi una tool de lectura nueva NO puede agregarse sin que alguien decida si necesita
 // scope de proyecto — cierra el whack-a-mole por contrato, no por vigilancia.
 func TestEveryReadOnlyToolClassified(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

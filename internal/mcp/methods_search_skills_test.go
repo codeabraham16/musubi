@@ -13,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // catalogJSON construye un JSON de catálogo con las entradas dadas como fragmento JSON.
@@ -53,7 +54,7 @@ const entradaRust = `{
 // newServerConCatalog construye un McpServer apuntando al servidor httptest dado.
 func newServerConCatalog(t *testing.T, catalogURL string) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestSearchSkillsCatalogCaidoDevuelveTextGracioso(t *testing.T) {
 // TestSearchSkillsSourcingDeshabilitado verifica que cuando sourcing.Enabled=false
 // la herramienta devuelve un mensaje descriptivo sin contactar el catálogo.
 func TestSearchSkillsSourcingDeshabilitado(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestSearchSkillsMaxCandidatesRespetado(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

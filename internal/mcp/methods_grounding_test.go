@@ -11,6 +11,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del GROUNDING FIEL (specs/grounding-fiel). Lo que se prueba acá es el PROMPT que
@@ -31,6 +32,7 @@ func newAskServer(t *testing.T, files map[string]string) (*McpServer, string, *f
 			t.Fatal(err)
 		}
 	}
+	memtest.Sembrar(t, root)
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)

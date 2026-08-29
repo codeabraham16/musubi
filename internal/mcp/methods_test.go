@@ -11,6 +11,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 	"musubi/internal/skills"
 
 	"gopkg.in/yaml.v3"
@@ -31,14 +32,14 @@ func (f fakeEmbedder) Embed(context.Context, string) ([]float32, error) {
 func (f fakeEmbedder) Dimensions() int { return len(f.vec) }
 func (f fakeEmbedder) Name() string    { return "fake" }
 
+// LA BASE SALE DE UNA PLANTILLA YA MIGRADA, y ése es todo el arreglo de A45.
+//
+// Antes cada una de las 280 pruebas de este paquete aplicaba las 39 migraciones de cero. Sin
+// `-race` eso son décimas; con `-race` son ~7 s cada una, y la suite no entraba en el
+// `-timeout 30m` de la CI. Ver internal/memory/memtest para el porqué largo.
 func newTestServer(t *testing.T, embedder embedding.Provider) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewDbEngine error: %v", err)
-	}
-	t.Cleanup(func() { engine.Close() })
-	return NewMcpServer(engine, t.TempDir(), embedder)
+	return NewMcpServer(memtest.NuevoEngine(t, t.TempDir()), t.TempDir(), embedder)
 }
 
 func TestSaveSkillActualizaHuellaDeStack(t *testing.T) {
@@ -46,6 +47,7 @@ func TestSaveSkillActualizaHuellaDeStack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module ej\n\ngo 1.26\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	memtest.Sembrar(t, dir)
 	engine, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
@@ -605,7 +607,7 @@ func TestSaveObservationDedupViaTool(t *testing.T) {
 // newTestServerWithPath construye un McpServer con un projectPath explícito.
 func newTestServerWithPath(t *testing.T, projectPath string) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

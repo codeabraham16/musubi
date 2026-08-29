@@ -10,6 +10,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // footprint_test.go SIMULA una sesión realista contra el código real de Track 9
@@ -125,6 +126,7 @@ func TestTokenFootprintRealisticSession(t *testing.T) {
 	rootA := t.TempDir()
 	writeFile(t, rootA, "go.mod", "module ejemplo.com/app\n\ngo 1.26.4\n")
 	writeFile(t, rootA, "package.json", `{"name":"app","dependencies":{"react":"^18.0.0"}}`)
+	memtest.Sembrar(t, rootA)
 	engA, err := memory.NewDbEngine(rootA)
 	if err != nil {
 		t.Fatalf("NewDbEngine A: %v", err)
@@ -147,6 +149,7 @@ func TestTokenFootprintRealisticSession(t *testing.T) {
 	rootB := t.TempDir()
 	writeFile(t, rootB, "go.mod", "module ejemplo.com/app\n\ngo 1.26.4\n")
 	writeFile(t, rootB, "package.json", `{"name":"app","dependencies":{"react":"^18.0.0"}}`)
+	memtest.Sembrar(t, rootB)
 	engB, err := memory.NewDbEngine(rootB)
 	if err != nil {
 		t.Fatalf("NewDbEngine B: %v", err)

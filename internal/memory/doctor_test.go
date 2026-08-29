@@ -176,7 +176,7 @@ func TestRepairApplyCreaBackup(t *testing.T) {
 // directorio arbitrario (el que usa `musubi backup --out` para stagear antes de
 // shipear off-host), lo crea si falta, y el snapshot es una base válida con los datos.
 func TestBackupToCustomDir(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,10 +4,16 @@
 > declarada de por qué NO se va a hacer. Si algo se cierra, se borra de esta tabla; si aparece
 > algo nuevo, se anota acá el mismo día.
 >
-> Última revisión: **2026-08-29** (tras S6c, S7b, las dos auditorías, el DESPLIEGUE REAL en `musubi-server`,
-> el **despliegue del relay de pantalla + el arreglo de la ruta de RustDesk**, y la **integración de
-> U1 (procesos y memoria libre), S11 (empuje OTLP) y S12 (servicios)** — de donde salen A46 y A47,
-> que ningún slice podía ver solo).
+> Última revisión: **2026-08-29**, tras una tanda larga: **A44** (políticas sobre la salud de un
+> servicio), los **seis cabos de la misma familia** —A38, A39, A49, A50, A51, A52: código cuyo modo
+> de falla no se veía desde ninguna prueba—, **A54** (el agente declara lo que va a tocar y el
+> despliegue lo verifica) y **A45 + A53** (`go test -race ./...` vuelve a terminar: 8m12s contra
+> «nunca en 30 minutos»). Se cerraron además **A56** (verificado en producción) y **A22 → B13**
+> (gio despriorizó el watchdog externo, y una decisión tomada no puede seguir figurando como
+> pendiente).
+>
+> De 29 cabos abiertos al empezar el día quedan **18**, y **ninguno sin dueño o sin una razón
+> declarada de por qué no se hace**.
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -35,11 +41,7 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A45 | **`go test -race ./...` no termina en 30 minutos** | No es un deadlock ni una carrera: **la corrida completa reporta CERO `DATA RACE`**. Es que `modernc.org/sqlite` —el SQLite en Go puro que evita cgo— corre ~10× más lento bajo el detector, y **cada prueba abre una base nueva que aplica las 37 migraciones**. Medido: una sola base cuesta **13,5 s** bajo `-race`; con cientos de pruebas, `internal/mcp` e `internal/memory` se comen el `-timeout 30m` parseando SQL (`runnable` dentro de `applyMigrations`, no bloqueado). **Empeora sola con cada migración nueva, y este trabajo agregó dos**: medido contra un worktree limpio de HEAD, 12,7 s → 13,5 s, un **6 %**. Casi todo el costo es anterior. La CI usa `-race` y nadie lo miraba porque `go test ./...` sin él pasa entero. Lo que se necesita es que las pruebas **compartan una base migrada** (una plantilla que se copia) en vez de migrar de cero cada una. | **sin asignar** |
 | A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. | **sin asignar** (fase 1 de la maqueta) |
-| A56 | **El principal del panel no tiene concesión de flota, así que ve el inventario y no el estado** | `panel-central` está en `principals.yaml` con `read: all` y SIN sección `fleet:`. Las capacidades de flota no se derivan del rol a propósito (si no, un token de lectura sería una puerta trasera al eje de capacidades entero), así que el panel lista las máquinas y recibe `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios. **No es un bug: es la compuerta funcionando y nadie se la concedió.** Se cierra agregándole `fleet: {metrics: ["*"]}` — y NADA más: ni `exec`, ni `screen`, ni `shell`. Un panel mira; una credencial que vive en la configuración de otro servicio es exactamente la que no querés que pueda ejecutar nada. | **acción del operador** (escribir en `principals.yaml` está fuera de lo que puede hacer el asistente) |
-| A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
-| A22 | **El otro lado del dead-man's switch — y no es sólo el de Musubi** | `MusubiSiempreViva` late hacia un receptor `watchdog`, pero hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, o un cron en otra máquina). **No era media alarma: era NINGUNA**, y el motivo anotado acá tapaba algo más grande (ver A29). Es el eslabón 4 de 4. **Y hay un segundo latido igual de desarmado en la misma máquina** (2026-08-27): `monitoring/infra/alerter.py` tiene escrito su propio dead-man —late a `HEARTBEAT_URL` en cada corrida, y sólo si el puente de WhatsApp responde, que es un diseño mejor que el nuestro— pero **`HEARTBEAT_URL` está vacía en `meta.env`**. Dos sistemas independientes con el mismo hueco y por el mismo motivo: el código está, el endpoint externo no. **Una sola cuenta de watchdog resuelve los dos**, con un check por cada uno — nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro. | **acción del operador**, después de A29 (`deploy/docker/README.md`) |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -55,6 +57,7 @@
 | B8 | **Acciones de política que no sean un comando** | Nada de webhooks ni de «apagar la máquina» como primitiva: todo lo que hace una política es *un exec que ya podrías haber hecho a mano*, con la autoridad de alguien y en la misma bitácora. Cada acción nueva es un camino de autoridad nuevo que habría que compuertar por separado. **Se revisa si aparece un caso que el exec no cubra.** |
 | B12 | **Verificar el `rustdesk_id` contra el relay** | Era el plan de A13 y **no es viable ni serviría**: hbbs (el relay OSS) no expone API para eso —habría que hablarle su protobuf, o sea reimplementar medio cliente— y aunque la expusiera sólo diría qué CONEXIÓN reclama ese id ahora, no cuál de nuestras máquinas es. Se cerró A13 por el otro lado: detectando la COLISIÓN, que es la firma del ataque y además el caso benigno frecuente (imágenes clonadas). **Queda sin cubrir** una máquina que declare un id que no colisiona con ninguna de las nuestras; de ésa se ve que el id CAMBIÓ. **Se revisa si RustDesk Pro o un hbbs con API entran en el despliegue.** |
 | B10 | **Grabación del contenido de una sesión de shell** | Misma decisión legal que A14 (grabación de pantalla) y mismo dueño: nadie. `SesionShell` no tiene dónde guardarlo, y hay una prueba de FORMA que custodia esa ausencia — la única manera de proteger algo que no existe. **Se revisa si alguien toma la decisión, no antes.** |
+| B13 | **El watchdog externo del dead-man's switch** | `MusubiSiempreViva` late hacia un receptor `watchdog` y hace falta un servicio EXTERNO que espere ese ping y grite si falta (Healthchecks.io, Dead Man's Snitch, un cron en otra máquina). **Gio lo despriorizó el 2026-08-29**, con sus palabras: «ya no tenemos algo así ahorita, no es muy importante hacer eso externo por si acaso». Era A22 y estaba anotado como pendiente del operador; una decisión tomada que sigue figurando como pendiente ensucia la lista y hace que se deje de leer. **Lo que esto deja descubierto, dicho sin adorno**: si el cerebro entero muere, nadie afuera se entera — el latido que avisaría de su muerte sale del propio cerebro. Hoy eso lo cubre, de hecho y no por diseño, que gio mire el panel. **Y hay un segundo latido igual de desarmado en la misma máquina**: `monitoring/infra/alerter.py` tiene su propio dead-man pero `HEARTBEAT_URL` está vacía en `meta.env`. Una sola cuenta de watchdog resolvería los dos, con un check por cada uno —nunca compartiendo el mismo, porque entonces un latido tapa la muerte del otro—. **Se revisa si el cerebro pasa a sostener algo que gio no mira todos los días.** |
 | B11 | **Reconectar a una sesión de shell viva** | Si el relay se corta, la sesión MUERE: no queda un proceso huérfano esperando que alguien vuelva. Reconectar sale caro (hay que retener la salida de un cliente ausente, con todo lo que eso implica para la contrapresión) y su beneficio es comodidad. **Se revisa si las desconexiones resultan frecuentes en uso real.** |
 | B17 | **«Flota» significa dos cosas distintas en el mismo servidor** | La sección **Flota** del CRM inventaría *bots, puentes y servicios*, publicada a mano con `flota publicar` y leída de un archivo. La **flota** de Musubi son *máquinas midiéndose solas*. Comparten nombre y no comparten nada más, así que en algún momento alguien va a mirar una creyendo que es la otra. **No se renombra todavía** porque tocar la barra lateral del CRM es decisión de gio y el costo de la confusión hoy es bajo (un solo usuario, que sabe la diferencia). **Se revisa el día que alguien más use el CRM.** |
 | B13 | **Probar contra un `sshd` con PAM, contraseñas o `ForceCommand`** | El `sshd` de S7b corre **sin root y sin PAM a propósito** —es lo que permite levantarlo sin instalar nada— así que esa rama queda sin ejercitar. Musubi nunca manda contraseñas (`BatchMode=yes`), y `ForceCommand` rompería cualquier RMM por igual. **Se revisa si aparece un host que las exija.** |
@@ -64,6 +67,85 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-29 · A56 — el panel ya tiene su concesión, y la ficha se había quedado abierta.**
+Gio la agregó el mismo día y el panel pasó a mostrar vitales y servicios; la fila quedó en la
+tabla por olvido. **Verificado en producción el 2026-08-29**: `panel-central` tiene
+`fleet: {metrics: ["*"]}` y NADA más — ni `exec`, ni `screen`, ni `shell` —, igual que
+`prometheus`. Un panel mira; una credencial que vive en la configuración de otro servicio es
+exactamente la que no querés que pueda ejecutar nada.
+
+**2026-08-29 (3) · A45 y A53 — `go test -race ./...` termina, y la suite de todos los días corre
+3× más rápido de paso.**
+
+A45 no era un deadlock ni una carrera: la corrida instrumentada nunca reportó un solo `DATA RACE`.
+Era que `modernc.org/sqlite` —el SQLite en Go puro que evita cgo— corre ~10× más lento bajo el
+detector, y **cada prueba abría una base nueva y aplicaba las 39 migraciones de cero**. Son 280
+pruebas en `internal/mcp` y 82 en `internal/memory`.
+
+**Medido antes de tocar nada**, que es lo que decidió el arreglo:
+
+| | sin `-race` | con `-race` |
+|---|---|---|
+| una prueba con base | 0,79 s | **7,8 s** |
+| quince pruebas de `internal/mcp` | — | **69,8 s → 12,9 s** |
+
+Y el resultado, medido igual:
+
+| | antes | ahora |
+|---|---|---|
+| `internal/memory` sin `-race` | 135 s | **34,6 s** |
+| `internal/mcp` sin `-race` | 170 s | **39 s** |
+| **`-race ./...` completo** | **nunca terminó en 30 min** | **8 min 12 s, todo verde** |
+
+- **El arreglo es una plantilla que se copia.** Las migraciones son deterministas: se pagan UNA
+  VEZ por binario de prueba y después se copia el archivo. La prueba lo siembra ANTES de llamar a
+  `NewDbEngine`, cuyo `runMigrations` lee `user_version` = la última y no hace nada.
+- **No agrega una sola rama a `NewDbEngine`**, y ésa es la propiedad que importa: una optimización
+  de pruebas que metiera una rama en producción compraría velocidad con el riesgo de que el camino
+  que corre en la CI no sea el que corre en el servidor. Acá el código es el MISMO en los dos lados.
+- **Vive en `internal/memory` y no en `memtest`** porque las pruebas de `internal/memory` son del
+  paquete `memory` y no pueden importar `memtest` sin cerrar un ciclo. `memtest` es un envoltorio
+  fino con `*testing.T` para los paquetes de afuera; la alternativa era duplicar treinta líneas en
+  dos lados, que es exactamente cómo una de las dos copias se queda vieja.
+- **`TestLaBaseSembradaEsIdenticaALaMigradaDeCero`** compara el DDL objeto por objeto contra una
+  base migrada de cero. Es la garantía de que el arreglo no cambia lo que las pruebas prueban: una
+  suite que corre rápido sobre un esquema distinto del de producción es peor que una lenta.
+
+Y el desglose de la corrida verde bajo `-race`: `cmd/musubi` 136 s · `internal/mcp` 379 s ·
+`internal/memory` 454 s. La CI usa `-timeout 20m` POR PAQUETE, así que el más lento queda con
+2,6× de margen.
+
+**A53 · el plazo, no la carrera.** `TestPushDelPorteDeProduccionCruzaEntero` federa 14.000 nodos
+(5,2 MB crudos, a propósito por encima de `maxRequestBody`) con plazos de 60 s; bajo el detector
+comprimir y serializar eso pasa de 90 s. Se escala el PLAZO a 300 s cuando corre instrumentado,
+con build tags en archivos `_test.go` para que la etiqueta no toque el binario de producción.
+Achicar el grafo no era opción: su razón de ser es superar el tope de 4 MiB, así que tiene piso.
+**Y el diagnóstico viejo estaba incompleto**: la ficha decía «falla aislado», y aislado el paquete
+entero pasa en 288 s — lo que lo tumba es la CONTENCIÓN de la corrida completa, con todos los
+paquetes instrumentados peleando por CPU. Mismo causante, mismo arreglo, pero el motivo anotado
+mandaba a buscar donde no era.
+
+**Un error mío que casi entra, y su prueba.** En el pase manual de los últimos ocho sitios convertí
+`servidorSobre`, que **reabre el mismo directorio a propósito** para simular un reinicio del
+cerebro. Sembrar ahí pisa la base con la plantilla vacía. Lo revertí, y después reapliqué el error
+para confirmar que el peligro era real y no teórico: `TestElCooldownSobreviveUnReinicioDelCerebro`
+falla con «el cerebro reiniciado actuó 0 veces: esperaba 1». La sustitución MASIVA era segura por
+construcción —cada `t.TempDir()` devuelve un directorio nuevo—; el riesgo estaba sólo en el pase
+a mano.
+
+**Y un sabotaje declarado que no existía.** Puse un `wal_checkpoint` explícito diciendo que era
+imprescindible; al ejecutar su sabotaje la suite quedó VERDE. Medido en vez de supuesto:
+
+    abierto  →  memory.db = 4.096 bytes,  memory.db-wal = 910.552 bytes
+    cerrado  →  memory.db = 434.176 bytes, el -wal ya no existe
+
+`Close()` hace checkpoint solo al cerrar la última conexión. Se sacó la llamada en vez de dejarla
+con un comentario que decía lo contrario, y los números medidos ocupan el lugar de la afirmación
+falsa. Lo load-bearing no era el checkpoint sino **el ORDEN**, y eso sí tiene sabotaje real:
+registrar la plantilla sin cerrar da un archivo de 4 KB con `user_version` en 0, y la prueba lo
+dice con esas palabras.
+
 
 **2026-08-29 (2) · A54 — el agente declara lo que va a tocar, y el despliegue lo verifica.**
 

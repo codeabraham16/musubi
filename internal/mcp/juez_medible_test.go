@@ -11,6 +11,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del spec «El juez se puede medir» (specs/juez-medible/) que viven en este paquete.
@@ -49,7 +50,7 @@ func (m *motorEspia) prompt() (string, string) {
 // deterministas y las libera del ranking (que no es lo que están midiendo).
 func servidorConJuez(t *testing.T, motor cognition.Provider) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

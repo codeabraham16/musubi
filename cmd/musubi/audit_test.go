@@ -7,6 +7,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // audit_test.go audita el FOOTPRINT de tokens de Musubi: cuántos tokens inyecta
@@ -22,6 +23,7 @@ import (
 // sub-agentes, system prompt) NO lo controla ni lo ve Musubi.
 func TestTokenConsumptionAudit(t *testing.T) {
 	root := t.TempDir()
+	memtest.Sembrar(t, root)
 	eng, err := memory.NewDbEngine(root)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)

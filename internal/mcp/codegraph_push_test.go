@@ -10,6 +10,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestCodegraphPushAttributesToPrincipal valida el invariante crítico de la federación (Track 20 ·
@@ -75,7 +76,7 @@ func TestCodegraphPushBestEffortSwallowsFailure(t *testing.T) {
 	}))
 	defer stub.Close()
 
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

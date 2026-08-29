@@ -5,6 +5,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // REGRESIÓN (auditoría 2026-07-26, #3): cgStale/graphFreshness calculaban frescura leyendo el disco
@@ -12,7 +13,7 @@ import (
 // cuyos archivos no existen en el central) ⇒ TODO salía fantasma/stale y la cabina mostraba el código
 // federado como podrido. Ahora, con forceRedact (el bind compartido), no se juzga frescura.
 func TestCgStaleNotMarkedOnSharedCentral(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del spec «El motor no traba la casa» (specs/motor-sin-candado/).
@@ -168,7 +169,7 @@ func sembrar(t *testing.T, s *McpServer, n int) {
 // expone CountObservations, que es lo que necesita exigeSembradas para verificar la precondición.
 func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.CognitionConfig, emb embedding.Provider) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -318,7 +319,7 @@ func TestG1ClasePorDefaultEsLaDeHoy(t *testing.T) {
 func TestG2EscriturasConcurrentesNoSePisan(t *testing.T) {
 	// El engine se arma acá y no con newTestServer porque la aserción necesita el *DbEngine
 	// concreto: s.engine es la interfaz StorageBackend y no expone CountObservations.
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

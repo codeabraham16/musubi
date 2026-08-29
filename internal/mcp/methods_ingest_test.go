@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestIngestToolSiempreRegistrada: musubi_ingest_url se registra tanto en el daemon local como en el
 // central. La seguridad en infra compartida la da la guarda SSRF del handler (RestrictToPublic), no
 // esconder la tool.
 func TestIngestToolSiempreRegistrada(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

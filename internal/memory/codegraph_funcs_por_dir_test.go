@@ -34,7 +34,7 @@ func sembrarPorDirs(t *testing.T, e *DbEngine) {
 
 func motorSembrado(t *testing.T) *DbEngine {
 	t.Helper()
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

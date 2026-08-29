@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestForceRedactScrubsLocalIngest valida la redacción forzada server-side (Track 16 F1
@@ -20,7 +21,7 @@ func TestForceRedactScrubsLocalIngest(t *testing.T) {
 
 	saveLocalAndFetch := func(t *testing.T, forceRedact bool) string {
 		t.Helper()
-		engine, err := memory.NewDbEngine(t.TempDir())
+		engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 		if err != nil {
 			t.Fatal(err)
 		}

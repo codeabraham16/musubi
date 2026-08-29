@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestClassifyCommit(t *testing.T) {
@@ -321,7 +322,7 @@ func (f *fakeGit) CommitsSince(last string) ([]commit, error) {
 
 func newEngine(t *testing.T) *memory.DbEngine {
 	t.Helper()
-	e, err := memory.NewDbEngine(t.TempDir())
+	e, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}

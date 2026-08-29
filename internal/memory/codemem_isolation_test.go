@@ -10,7 +10,7 @@ import (
 // dos proyectos con el mismo path se pisaban el gist; ahora conviven por UNIQUE(path, project_id)
 // y cada credencial lee el suyo (prefiriendo el propio sobre la fila sin atribuir).
 func TestCodeMemoryProjectIsolationAndNoCollision(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

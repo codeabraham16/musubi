@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestEnsureWorkspaceCreaConfig(t *testing.T) {
@@ -198,7 +199,7 @@ func TestSetupProjectWithInyectaTodo(t *testing.T) {
 }
 
 func TestMaintenanceCycleDBVacia(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

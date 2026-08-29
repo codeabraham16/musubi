@@ -8,6 +8,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestTeamModeAutoShared valida C5.2: con team mode ON, una captura SIN scope explícito se persiste
@@ -16,7 +17,7 @@ import (
 // el outbox, que solo encola observaciones shared.
 func TestTeamModeAutoShared(t *testing.T) {
 	newServer := func(teamMode bool) (*McpServer, *memory.DbEngine) {
-		engine, err := memory.NewDbEngine(t.TempDir())
+		engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 		if err != nil {
 			t.Fatal(err)
 		}

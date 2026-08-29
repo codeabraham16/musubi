@@ -6,12 +6,13 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestNewMcpServerExistingCallerSyntaxUnchanged verifica que la llamada de 3 argumentos
 // sigue compilando sin modificación (compatibilidad retroactiva del variadic opts).
 func TestNewMcpServerExistingCallerSyntaxUnchanged(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -27,7 +28,7 @@ func TestNewMcpServerExistingCallerSyntaxUnchanged(t *testing.T) {
 // TestWithSourcingSetsCampo verifica que WithSourcing aplica la configuración al
 // campo sourcing del servidor.
 func TestWithSourcingSetsCampo(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestWithSourcingSetsCampo(t *testing.T) {
 // TestRemainingOptionsSetCampos verifica que el resto de los Option aplican su
 // configuración al campo correspondiente del servidor.
 func TestRemainingOptionsSetCampos(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

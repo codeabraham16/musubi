@@ -67,7 +67,7 @@ func TestReadyStepsRespetaDependencias(t *testing.T) {
 }
 
 func TestWorkflowRunLifecycle(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 
 // El journal registra cada transición del run en orden de seq.
 func TestWorkflowJournalRecordsEvents(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestWorkflowJournalRecordsEvents(t *testing.T) {
 
 // Un complete repetido con la misma idempotency_key es un no-op seguro.
 func TestCompleteWorkflowStepIdempotent(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestCompleteWorkflowStepIdempotent(t *testing.T) {
 }
 
 func TestCompleteStepRechazaStepDesconocido(t *testing.T) {
-	engine, _ := NewDbEngine(t.TempDir())
+	engine, _ := NewDbEngine(dirSembrado(t))
 	defer engine.Close()
 	def, _ := ParseWorkflowDef([]byte(sampleWorkflowYAML))
 	engine.StartWorkflowRun("r", def)
@@ -205,7 +205,7 @@ func TestCompleteStepRechazaStepDesconocido(t *testing.T) {
 }
 
 func TestWorkflowRepeatWhileLoop(t *testing.T) {
-	engine, _ := NewDbEngine(t.TempDir())
+	engine, _ := NewDbEngine(dirSembrado(t))
 	defer engine.Close()
 	yaml := `
 id: loopy
@@ -247,7 +247,7 @@ steps:
 }
 
 func TestWorkflowRepeatWhileRespectaCap(t *testing.T) {
-	engine, _ := NewDbEngine(t.TempDir())
+	engine, _ := NewDbEngine(dirSembrado(t))
 	defer engine.Close()
 	yaml := `
 id: capped
@@ -279,7 +279,7 @@ steps:
 }
 
 func TestWorkflowListRuns(t *testing.T) {
-	engine, _ := NewDbEngine(t.TempDir())
+	engine, _ := NewDbEngine(dirSembrado(t))
 	defer engine.Close()
 	def, _ := ParseWorkflowDef([]byte(sampleWorkflowYAML))
 	engine.StartWorkflowRun("a", def)

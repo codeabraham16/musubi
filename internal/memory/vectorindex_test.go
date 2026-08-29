@@ -358,7 +358,7 @@ func TestIVFConcurrentRace(t *testing.T) {
 // engine real y el umbral bajado para forzar ANN, la ruta IVF de SearchObservations
 // devuelve esencialmente el mismo top-k que el full-scan exacto.
 func TestSearchObservationsIVFMatchesExact(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestSearchObservationsIVFMatchesExact(t *testing.T) {
 // TestSearchObservationsArchivedExcludedFromIVF verifica que una observación
 // archivada NO aparece en los resultados ANN (re-filtro SQL + Remove del índice).
 func TestSearchObservationsArchivedExcludedFromIVF(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

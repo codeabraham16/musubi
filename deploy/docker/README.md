@@ -58,7 +58,20 @@ vigilancia. Para las UIs desde otra máquina:
 ssh -N -L 9099:127.0.0.1:9099 -L 9093:127.0.0.1:9093 usuario@musubi-server
 ```
 
-## ② El watchdog externo (A22)
+## ② El watchdog externo (B13 · POSPUESTO por gio el 2026-08-29)
+
+**Este paso NO está pendiente: está decidido que por ahora no se hace.** Con sus palabras: «ya no
+tenemos algo así ahorita, no es muy importante hacer eso externo por si acaso». Era el cabo A22 y
+pasó a `B13` en `specs/control-de-flota/ABIERTO.md`, entre las decisiones revisables.
+
+Lo que queda descubierto, dicho sin adorno: **si el cerebro entero muere, nadie afuera se entera**
+— el latido que avisaría de su muerte sale del propio cerebro. Hoy eso lo cubre, de hecho y no por
+diseño, que alguien mire el panel. Se revisa si el cerebro pasa a sostener algo que nadie mira
+todos los días.
+
+El procedimiento queda escrito acá abajo para el día que se retome, y no cuesta nada tenerlo listo.
+
+---
 
 Recién **después** de que ① esté verificado. `MusubiSiempreViva` está siempre en firing a propósito;
 su valor está en **dejar de llegar**. Necesita del otro lado un servicio que espere el ping y grite

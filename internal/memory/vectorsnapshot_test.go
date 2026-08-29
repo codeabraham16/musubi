@@ -72,7 +72,7 @@ func TestReadIndexSnapshotRejectsCorrupt(t *testing.T) {
 // el snapshot existe, y restaurar desde él (índice fresco) da los MISMOS resultados ANN que
 // el índice entrenado por k-means (mismos centroides ⇒ misma asignación).
 func TestVectorIndexWarmStart(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestVectorIndexWarmStart(t *testing.T) {
 // snapshot tiene otra dimensión que los embeddings actuales, el warm-start falla (false) y
 // el caller re-entrena.
 func TestVectorIndexWarmStartDimMismatch(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestVectorIndexWarmStartDimMismatch(t *testing.T) {
 // de T5.8): un snapshot con muchos más centroides que los naturales para el n actual (dataset
 // que se encogió entre sesiones) se descarta para no degradar el recall con NProbe fijo.
 func TestVectorIndexWarmStartRejectsStaleK(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

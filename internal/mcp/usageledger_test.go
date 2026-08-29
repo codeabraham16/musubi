@@ -12,6 +12,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del LEDGER DE USO (specs/ledger-de-uso). Lo que se prueba es que TODA invocación
@@ -123,7 +124,7 @@ func TestL0TodaLlamadaQuedaRegistrada(t *testing.T) {
 // rechazados" y el test no los ejercitaba: un invariante probado a medias no está probado.
 func TestL0LosRechazosTambienQuedanRegistrados(t *testing.T) {
 	sink := &sinkEspia{}
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

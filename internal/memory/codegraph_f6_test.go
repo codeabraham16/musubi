@@ -10,7 +10,7 @@ import (
 // (3) NO toca el de otro proyecto — el invariante crítico de aislamiento por tenant (R3/E2) en la
 // capa de persistencia. Reusa el helper vizNode de codegraph_viz_test.go.
 func TestReplaceProjectGraphIsolatesAndReplaces(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 // hallazgo de la verificación adversarial: las goroutines de rebuild sobrevivían a
 // Close y consultaban una base ya cerrada.
 func TestEngineCloseBlocksNewBackgroundWork(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestEngineCloseBlocksNewBackgroundWork(t *testing.T) {
 // el índice. Antes el disparador miraba solo las altas del proceso (dirty arranca en
 // 0), así que nunca se entrenaba; ahora autobuild siembra dirty con el conteo absoluto.
 func TestProactiveTrainAcrossThreshold(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

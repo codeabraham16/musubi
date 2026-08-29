@@ -13,7 +13,7 @@ func sqliteTime(t time.Time) string { return t.UTC().Format(sqliteTimeLayout) }
 // archivadas vencidas, conserva archivadas recientes y las activas, y limpia
 // embeddings (FK CASCADE) y relaciones semánticas (sin FK).
 func TestPurgeArchivedDeletesOldKeepsRest(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestPurgeArchivedDeletesOldKeepsRest(t *testing.T) {
 
 // TestPurgeArchivedDisabled verifica que olderThanDays <= 0 desactiva la purga.
 func TestPurgeArchivedDisabled(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestPurgeArchivedDisabled(t *testing.T) {
 
 // TestCompactRuns verifica que Compact (checkpoint + optimize + VACUUM) corre sin error.
 func TestCompactRuns(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestCompactRuns(t *testing.T) {
 
 // TestMaintainPipeline verifica el ciclo completo end-to-end sobre datos sembrados.
 func TestMaintainPipeline(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestMaintainPipeline(t *testing.T) {
 // sobre el mismo dataset y orden. Saltear candidatos sin trigramas compartidos no
 // cambia el resultado (su Jaccard es 0).
 func TestConsolidateInvertedIndexMatchesBruteForce(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestConsolidateInvertedIndexMatchesBruteForce(t *testing.T) {
 // TestMigrationV2ArchivedIndex verifica que la migración v2 agrega idx_obs_archived
 // y que el esquema queda en la última versión.
 func TestMigrationV2ArchivedIndex(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestMigrationV2ArchivedIndex(t *testing.T) {
 // observación que era FUENTE de un supersede, los punteros superseded_by se re-apuntan
 // al canónico (la oculta sigue oculta), en vez de quedar en NULL (que la resucitaría).
 func TestConsolidateRepointsSupersededToCanonical(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

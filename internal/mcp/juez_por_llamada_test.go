@@ -8,6 +8,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // juez_por_llamada_test.go — «quién paga los 8,5 segundos».
@@ -25,7 +26,7 @@ import (
 // servidorConDial arma un servidor con motor falso y el dial de la config en el estado pedido.
 func servidorConDial(t *testing.T, motor *motorEspia, dialEncendido bool) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestElRerankPorLlamadaSeAnunciaConSuCosto(t *testing.T) {
 // una puerta para vaciar la cuota del motor con sólo pedirlo, y el freno dejaría de ser un freno.
 func TestElPedidoExplicitoNoSalteaElFreno(t *testing.T) {
 	motor := &motorEspia{respuesta: `["c","b","a"]`}
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

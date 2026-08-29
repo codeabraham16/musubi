@@ -19,7 +19,7 @@ import (
 // convierte el bump en un read-modify-write de Go (leer, sumar en memoria, escribir), los recalls
 // concurrentes empiezan a perder incrementos y esta prueba se pone roja.
 func TestG10RecallsConcurrentesNoPierdenAccesos(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

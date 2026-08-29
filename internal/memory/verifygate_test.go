@@ -5,7 +5,7 @@ import "testing"
 // vgRun arma a → check(verify, maxIters) → b y completa a. Devuelve el engine.
 func vgRun(t *testing.T, runID string, maxIters int) *DbEngine {
 	t.Helper()
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestVerifyGateExhaustsToFailed(t *testing.T) {
 
 // Un step sin verify se completa done directo (sin verifying).
 func TestVerifyGateNoVerifyDirectDone(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

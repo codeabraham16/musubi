@@ -13,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // failingIngestEngine envuelve un engine real y hace fallar IngestShared para un id concreto,
@@ -61,7 +62,7 @@ func TestDrainInboundIngestsAndAdvancesCursor(t *testing.T) {
 	}))
 	defer stub.Close()
 
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestDrainInboundDoesNotAdvancePastFailedRow(t *testing.T) {
 	}))
 	defer stub.Close()
 
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

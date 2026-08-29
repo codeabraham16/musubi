@@ -7,6 +7,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // conflicts_triage_test.go cubre los filtros de musubi_conflicts.
@@ -22,7 +23,7 @@ import (
 // pendientesEn siembra n relaciones pendientes con confianzas crecientes y devuelve el server.
 func pendientesEn(t *testing.T, n int) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +191,7 @@ func TestConflictsRechazaArgumentosInvalidos(t *testing.T) {
 // tirar sin querer: si el WHERE del scope se pierde al armar la consulta filtrada, un tenant vería
 // la cola de otro.
 func TestConflictsFiltradoSigueAcotadoAlProyecto(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

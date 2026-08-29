@@ -20,7 +20,7 @@ func oneFileGraph(path, fp string) ([]GraphNode, []GraphEdge) {
 // TestPruneGraphFilesProjectIsolation valida que podar un archivo en un proyecto (F5) NO toca las
 // filas de otro tenant con el mismo path (R6).
 func TestPruneGraphFilesProjectIsolation(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestPruneGraphFilesProjectIsolation(t *testing.T) {
 
 // TestGraphFileFingerprintsCtx valida que se devuelven los path→fingerprint del grafo, scopeados.
 func TestGraphFileFingerprintsCtx(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
