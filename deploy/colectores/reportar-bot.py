@@ -54,7 +54,17 @@ import urllib.error
 import urllib.request
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.path.join(DIR, "bot-salud-state.json")
+# EL MARCADOR ES PROPIO Y NO EL DEL COLECTOR VIEJO, y esto es load-bearing durante la migración.
+#
+# `collect-bot.py` usa `bot-salud-state.json` en este MISMO directorio. Compartirlo mientras los dos
+# conviven es una carrera silenciosa: cada corrida lee `last_id`, agrega `id > last_id` y escribe el
+# nuevo máximo, así que el que corre primero se lleva la ventana y el otro la ve vacía. Los dos
+# reportarían la mitad de las consultas, cada uno una mitad distinta, y ninguno de los dos números
+# serviría — justo cuando el sentido de tenerlos juntos es poder COMPARARLOS.
+#
+# Con marcadores separados, los dos ven la misma tabla entera y sus totales tienen que coincidir.
+# Ésa es la comprobación que hace segura la migración.
+STATE_FILE = os.path.join(DIR, "reportar-bot-state.json")
 
 CEREBRO = os.environ.get("MUSUBI_BRAIN_URL", "http://127.0.0.1:7717").rstrip("/")
 SERVICIO = os.environ.get("MUSUBI_BOT_SERVICIO", "alturito20")
