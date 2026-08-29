@@ -271,8 +271,8 @@ func TestIVFRemoveBatchEquivalente(t *testing.T) {
 	got := newIVFIndex()
 	got.Rebuild(data, cfg, vectorIndexSeed)
 	batch := append([]string{}, toRemove...)
-	batch = append(batch, toRemove...)                 // repetidos: deben ser idempotentes
-	batch = append(batch, "fantasma-1", "fantasma-2")  // ausentes: deben ignorarse
+	batch = append(batch, toRemove...)                // repetidos: deben ser idempotentes
+	batch = append(batch, "fantasma-1", "fantasma-2") // ausentes: deben ignorarse
 	got.RemoveBatch(batch)
 
 	refState := snapshotIndexState(t, ref)

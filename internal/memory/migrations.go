@@ -1345,6 +1345,47 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version: 38,
+			name:    "consentimiento_por_maquina",
+			// QUÉ SE LE DEBE A LA PERSONA QUE ESTÁ EN LA MÁQUINA, Y SI HAY ALGUIEN A QUIEN
+			// PREGUNTARLE.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// SON DOS COLUMNAS Y NO UNA, PORQUE SON DOS HECHOS DE DUEÑOS DISTINTOS
+			//
+			// `consentimiento` es una POLÍTICA: la escribe quien administra la máquina y dice qué
+			// se le debe a quien la usa —nada, un aviso, un permiso, o nunca—. No cambia sola.
+			//
+			// `puede_preguntar` es una CAPACIDAD MEDIDA: la reporta el agente y dice si en esa
+			// máquina hay dónde dibujar un diálogo y quién lo conteste. Un servidor headless
+			// contesta que no; un escritorio con sesión abierta, que sí. Cambia con el mundo.
+			//
+			// Juntarlas en una sola columna obligaría a que la política mienta sobre el hardware o
+			// a que el hardware pise la política. Separadas, el dominio las cruza:
+			// `pide` sobre una máquina que no puede preguntar se degrada a PROHIBIDO —no a
+			// libre—, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el
+			// permiso no se puede pedir, no se entra.
+			//
+			// EL DEFAULT DE `consentimiento` ES EL VACÍO Y NO UN GRADO. El dominio resuelve el
+			// vacío al default (`avisa`), y escribirlo acá sería tener el mismo default en dos
+			// lugares que se pueden desincronizar: cambiarlo en el código dejaría las filas
+			// viejas con el anterior, en silencio.
+			//
+			// `puede_preguntar` ARRANCA EN 0 PARA TODOS, y eso es correcto aunque sea incómodo:
+			// ningún agente desplegado sabe preguntar todavía. Arrancar en 1 sería afirmar una
+			// capacidad que nadie midió, y `pide` se comportaría como si hubiera alguien del otro
+			// lado cuando no lo hay. Se llena cuando el agente lo reporte, no antes.
+			// ────────────────────────────────────────────────────────────────────────────────
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "consentimiento",
+					"consentimiento TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "puede_preguntar",
+					"puede_preguntar INTEGER NOT NULL DEFAULT 0")
+			},
+		},
 	}
 }
 

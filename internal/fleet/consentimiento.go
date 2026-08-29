@@ -136,6 +136,35 @@ func ResolverConsentimiento(fuentes ...Consentimiento) Consentimiento {
 	return res
 }
 
+// AplicarACapacidadDePreguntar degrada `pide` cuando del otro lado NO HAY A QUIÉN PREGUNTARLE.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// DEGRADA A `prohibido`, NO A `libre`, Y ES LA DECISIÓN ENTERA DE ESTA FUNCIÓN
+//
+// Un servidor sin escritorio, un contenedor, una máquina en la pantalla de bloqueo: no hay dónde
+// dibujar un diálogo ni quién lo conteste. `pide` ahí es una promesa que el sistema no puede
+// cumplir, y hay que elegir qué hacer con una promesa incumplible.
+//
+// La salida cómoda es abrir igual —«nadie puede negarse, entonces adelante»— y es exactamente al
+// revés de lo que alguien quiso decir al escribir `pide`. Quien lo escribió pidió que NADIE entre
+// sin permiso; si el permiso no se puede pedir, no se entra. Degradar hacia abajo convertiría la
+// configuración más estricta en la más permisiva justo en las máquinas donde nadie está mirando.
+//
+// El costo es real y hay que decirlo: alguien que ponga `pide` en un servidor headless va a
+// encontrarse con que no puede entrar. Eso es un error de configuración VISIBLE, que es la clase
+// buena. Lo otro es una puerta abierta invisible.
+//
+// `avisa` NO se degrada: se puede dejar constancia del acceso —en el log de la máquina, en la
+// bitácora— aunque no haya nadie leyendo en ese momento. Avisar no necesita interlocutor;
+// preguntar sí.
+func (c Consentimiento) AplicarACapacidadDePreguntar(puedePreguntar bool) Consentimiento {
+	n := normalizar(c)
+	if n == ConsentimientoPide && !puedePreguntar {
+		return ConsentimientoProhibido
+	}
+	return n
+}
+
 // PideAprobacion dice si hay que esperar un sí antes de abrir.
 func (c Consentimiento) PideAprobacion() bool { return normalizar(c) == ConsentimientoPide }
 

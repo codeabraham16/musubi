@@ -726,6 +726,7 @@ func applyRegenGists(e *DbEngine) (int, error) {
 //   - TARGET HISTÓRICO: el destino es un commit o un artefacto SDD (libro mayor: se cita, no se
 //     tacha). complementaryPair hoy saltea el par; las viejas quedaron encoladas para siempre.
 //   - RECÍPROCO DUPLICADO: existen A→B y B→A (la contradicción es simétrica); sobra una dirección.
+//
 // Ninguna clase toca observaciones ni relaciones ya RESUELTAS: sólo poda pendings que no aportan un
 // veredicto posible. Reversible en el sentido de que se regenerarían si el par fuera real (no lo es).
 func checkStaleConflicts(e *DbEngine) CheckResult {

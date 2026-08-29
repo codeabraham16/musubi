@@ -389,6 +389,11 @@ type DeviceStore interface {
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)
+	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
+	// false si no hay fila viva con ese id.
+	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
+	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
+	// alguien. Va aparte de la política porque son hechos de dueños distintos.
 	// ── Ejecución remota (S5) ──
 	// EncolarComando registra el pedido y lo deja pendiente. La fila se crea AL ENCOLAR: si nada
 	// más sale bien, el pedido queda auditado igual.

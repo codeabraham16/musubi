@@ -126,6 +126,16 @@ type Device struct {
 	AgentVer  string   // versión del agente, vacío en Tier B
 	Tags      []string // etiquetas libres para agrupar (sala, cliente, criticidad)
 
+	// Consentimiento es la POLÍTICA: qué se le debe a quien está usando esta máquina cuando
+	// alguien pide entrar. Vacío = no declarado, y lo resuelve el default del dominio — no se
+	// guarda un grado concreto para que cambiar el default no deje las filas viejas atrás.
+	Consentimiento Consentimiento
+	// PuedePreguntar es la CAPACIDAD MEDIDA: si en esta máquina hay dónde dibujar un diálogo y
+	// quién lo conteste. La reporta el agente. Falso mientras nadie la haya medido, que es lo
+	// honesto: afirmar que se puede preguntar sin haberlo comprobado haría que `pide` se comporte
+	// como si hubiera alguien del otro lado.
+	PuedePreguntar bool
+
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió
 	Revoked    bool
@@ -216,6 +226,17 @@ func TierAdmite(t Tier, c Cap) bool {
 // mal armado o de un JSON incompleto— no permite NADA. Y un dispositivo revocado tampoco, aunque
 // la fila conserve sus capacidades: revocar tiene que cortar sin depender de que alguien además
 // vacíe la lista.
+// ConsentimientoEfectivo cruza la POLÍTICA de esta máquina con lo que la máquina PUEDE hacer.
+//
+// Es el único lugar donde se juntan las dos, y por eso está acá y no en el llamador: si cada
+// camino que abre una sesión resolviera por su cuenta, el de pantalla y el de shell terminarían
+// discrepando el día que uno de los dos se toque. Las `extra` son las otras fuentes —el proyecto,
+// un grupo— y se acumulan con la regla de siempre: gana la más restrictiva.
+func (d Device) ConsentimientoEfectivo(extra ...Consentimiento) Consentimiento {
+	fuentes := append([]Consentimiento{d.Consentimiento}, extra...)
+	return ResolverConsentimiento(fuentes...).AplicarACapacidadDePreguntar(d.PuedePreguntar)
+}
+
 // Implica dice si tener `otorgada` alcanza para lo que pide `pedida`.
 //
 // HAY UNA SOLA IMPLICACIÓN Y NO ES SIMÉTRICA: `screen` (controlar) alcanza para `screen:view`

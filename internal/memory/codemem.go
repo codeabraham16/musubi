@@ -24,7 +24,7 @@ type CodeMemory struct {
 }
 
 // SaveCodeMemory inserta o actualiza el gist de un archivo, atribuido al project_id del engine
-// (backward-compat / federado si ''). Ver SaveCodeMemoryFrom.
+// (backward-compat / federado si ”). Ver SaveCodeMemoryFrom.
 func (e *DbEngine) SaveCodeMemory(cm CodeMemory) error {
 	return e.SaveCodeMemoryFrom("", cm)
 }
@@ -61,7 +61,7 @@ func (e *DbEngine) GetCodeMemory(path string) (CodeMemory, bool, error) {
 }
 
 // GetCodeMemoryCtx acota la lectura al proyecto de la credencial (ctx, Track 17): con scope,
-// solo el gist del proyecto pedido o el sin atribuir (project_id=''), PREFIRIENDO el del proyecto
+// solo el gist del proyecto pedido o el sin atribuir (project_id=”), PREFIRIENDO el del proyecto
 // sobre el sin atribuir. Ausencia de scope ⇒ federado (la primera fila del path).
 func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemory, bool, error) {
 	sc := projectScopeFrom(ctx)
@@ -97,7 +97,7 @@ func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemor
 // DEVUELVE UN SOLO GIST POR PATH, prefiriendo el del proyecto sobre el sin atribuir — la misma
 // regla de desempate que ya usa GetCodeMemoryCtx. Hace falta porque la tabla admite las dos filas
 // (la PK es (path, project_id)) y en una base real conviven: los gists anteriores a la atribución
-// multi-tenant quedaron con project_id='' y el mismo archivo volvió a gistearse después con el
+// multi-tenant quedaron con project_id=” y el mismo archivo volvió a gistearse después con el
 // suyo. Medido en altura-erp el 2026-08-12: 25 filas locales, 23 paths distintos, 2 duplicados
 // con el viejo de junio y el nuevo de julio.
 //

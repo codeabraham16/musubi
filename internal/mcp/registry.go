@@ -1280,6 +1280,22 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_fleet_consent",
+				Description: "ADMIN. Fija QUÉ SE LE DEBE a la persona que está usando una máquina cuando alguien pide entrar por pantalla o shell. Es un EJE SEPARADO de las capacidades: `screen` decide quién PUEDE entrar; esto decide qué pasa con quien está adentro, y lo responde el dueño de la máquina, no quien administra la flota. Cuatro grados ORDENADOS: `libre` (ni se entera), `avisa` (se le notifica, no puede negarse), `pide` (tiene que aceptar) y `prohibido` (no se abre NUNCA, aunque la capacidad esté perfectamente concedida). Cuando dos fuentes discrepan gana LA MÁS RESTRICTIVA: una máquina puede endurecer lo que el proyecto dijo, jamás aflojarlo. Sin declarar rige `avisa` — no `libre`, porque la ausencia de configuración no puede ser la opción menos segura. OJO con `pide` sobre una máquina que no puede preguntarle a nadie (un servidor sin escritorio): se endurece a `prohibido` y NO se afloja a `libre`, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":  {Type: "string", Description: "Nombre de la máquina"},
+						"grado":   {Type: "string", Description: "libre | avisa | pide | prohibido"},
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+					},
+					Required: []string{"device", "grado"},
+				},
+			},
+			handler: s.toolFleetConsent,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_fleet_revoke",
 				Description: "ADMIN. KILL-SWITCH de una máquina: su token deja de autenticar en el acto y su fila QUEDA para la auditoría (no se borra: perder a quién pertenecía la telemetría es justo lo que no querés después de un incidente). Requiere principal admin.",
 				InputSchema: InputSchema{

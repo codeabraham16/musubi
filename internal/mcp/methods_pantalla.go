@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 )
 
 // toolFleetScreen acuña una sesión de pantalla.
@@ -67,6 +68,32 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 				"Se niega en vez de fallar callado: abrir igual te entregaría una contraseña de sesión, de un solo uso, para una sesión que nadie va a levantar.",
 			nombre, d.Tier)
 	}
+	// EL CONSENTIMIENTO SE MIRA ACÁ, ANTES DE ACUÑAR NADA, y por el mismo motivo que el motor:
+	// el daño de mirarlo tarde no es fallar, es ENTREGAR una contraseña de sesión —que se muestra
+	// una sola vez— para una sesión que no se tenía que abrir.
+	//
+	// Va DESPUÉS de la capacidad y no antes: quien no tiene `screen` no puede enterarse de la
+	// política de consentimiento de una máquina que no debería ni saber que existe.
+	//
+	// Es un eje SEPARADO del permiso, así que el error lo dice: la capacidad puede estar
+	// perfectamente concedida y la sesión igual no abrirse. Confundirlos mandaría a alguien a
+	// revisar `principals.yaml` buscando un permiso que ya está.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.Bloquea():
+		return nil, rpcErrorf(codeUnauthorized,
+			"no se abre la pantalla de %q: %v. "+
+				"El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, "+
+				"un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre "+
+				"sin permiso, y si el permiso no se puede pedir, no se entra.",
+			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
+		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que
+		// ningún agente sabe dar todavía sería exactamente lo que este eje viene a evitar: una
+		// configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea, y
+		// hacerlo cerraría el acceso a toda la flota por una capacidad que nadie desplegó aún.
+		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+	}
+
 	if !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {
 		return nil, rpcErrorf(codeInvalidParams,
 			"%q no está latiendo: no hay a quién entregarle la contraseña de sesión. Mirá su estado con musubi_fleet_list.", nombre)
@@ -271,6 +298,96 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 	res := map[string]interface{}{"project_id": proyecto, "total": len(filas), "sesiones": filas}
 	if ocultos > 0 {
 		res["sin_permiso"] = ocultos
+	}
+	return jsonResult(res)
+}
+
+// avisarUnaVezPorDevice deja constancia de que se debía un aviso al usuario de la máquina y no se
+// pudo entregar, porque su agente todavía no sabe notificar.
+//
+// UNA VEZ POR MÁQUINA Y POR VIDA DEL PROCESO: una sesión de pantalla se abre a mano, no en un
+// lazo, pero un operador que abre veinte en una tarde no necesita veinte líneas iguales. Lo que
+// tiene que quedar es que la deuda existe.
+//
+// Esto NO reemplaza al aviso: cuando el agente sepa notificar, este camino desaparece y la
+// notificación viaja de verdad. Mientras tanto, la ausencia se ve en el log del cerebro en vez de
+// ser silenciosa — que es la diferencia entre una función a medio hacer y una que miente.
+func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre string, c fleet.Consentimiento) {
+	// Se reusa `avisosDados`, que es exactamente para esto: un aviso de CONFIGURACIÓN que no es
+	// un evento sino un ESTADO. La clave lleva prefijo para no chocar con los del empuje.
+	clave := "consentimiento_sin_aviso\x00" + deviceID
+	if _, ya := s.avisosDados.LoadOrStore(clave, true); ya {
+		return
+	}
+	logx.Warn("flota: se abrió una pantalla y el aviso al usuario NO se pudo entregar",
+		"device", nombre, "consentimiento", string(c),
+		"motivo", "el agente de esta máquina no declara saber notificar (devices.puede_preguntar = 0)")
+}
+
+// toolFleetConsent fija la política de consentimiento de una máquina.
+//
+// ES ADMIN, y no `screen`. Quien puede entrar a una máquina no es necesariamente quien decide si
+// hay que pedirle permiso a su usuario — al revés: si el que entra pudiera aflojar la política,
+// el eje entero sería decoración. Es la misma razón por la que `fleet_service_declare` es admin:
+// escribe en el plano de control, no en el de datos.
+func (s *McpServer) toolFleetConsent(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	p := principalFrom(ctx)
+	if !p.isAdmin() {
+		return nil, rpcErrorf(codeUnauthorized,
+			"musubi_fleet_consent escribe la política de acceso de una máquina: requiere un principal admin. "+
+				"Tener `screen` sobre ella no alcanza —si quien entra pudiera aflojar la política, el eje no protegería nada.")
+	}
+	var args struct {
+		Device  string `json:"device"`
+		Grado   string `json:"grado"`
+		Project string `json:"project"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
+	}
+	nombre := strings.TrimSpace(args.Device)
+	grado := fleet.Consentimiento(strings.TrimSpace(args.Grado))
+	if nombre == "" {
+		return nil, rpcErrorf(codeInvalidParams, "falta `device`")
+	}
+	// SE VALIDA ACÁ Y NO EN EL STORAGE. Un grado que no se entiende no puede guardarse: el
+	// dominio lo resolvería al default y quedaría una fila que dice una cosa y significa otra —
+	// exactamente la configuración que se ve puesta y no lo está.
+	if !grado.Valido() {
+		return nil, rpcErrorf(codeInvalidParams,
+			"`grado` tiene que ser uno de: libre, avisa, pide, prohibido. Vino %q. "+
+				"No se acepta cualquier cosa porque un valor ilegible se resolvería al default y la fila "+
+				"diría una cosa mientras el sistema hace otra.", args.Grado)
+	}
+	proyecto := fleetReadScopeFor(p, args.Project)
+	if proyecto == "" {
+		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
+	}
+	d, existe, err := s.engine.DevicePorNombre(proyecto, nombre)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	if !existe {
+		return nil, rpcErrorf(codeInvalidParams, "no hay una máquina %q en el proyecto %q", nombre, proyecto)
+	}
+	if _, err := s.engine.FijarConsentimiento(d.ID, grado); err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+
+	// SE DEVUELVE EL EFECTIVO Y NO SÓLO LO GUARDADO. Es lo que evita la sorpresa de poner `pide`
+	// en un servidor headless y descubrir mucho después que quedó en `prohibido`: la degradación
+	// se dice en el momento de configurar, no cuando alguien no puede entrar.
+	d.Consentimiento = grado
+	efectivo := d.ConsentimientoEfectivo()
+	res := map[string]interface{}{
+		"device":     d.Name,
+		"project_id": d.ProjectID,
+		"guardado":   string(grado),
+		"efectivo":   string(efectivo),
+	}
+	if efectivo != grado {
+		res["nota"] = "el grado efectivo difiere del guardado porque esta máquina no declara poder " +
+			"preguntarle a nadie (su agente no reporta esa capacidad): un `pide` se endurece a `prohibido`."
 	}
 	return jsonResult(res)
 }

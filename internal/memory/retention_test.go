@@ -211,9 +211,9 @@ func TestConsolidateInvertedIndexMatchesBruteForce(t *testing.T) {
 		"la pizarra compartida coordina sub agentes model free",
 	}
 	for _, b := range bases {
-		contents = append(contents, b)       // original
-		contents = append(contents, b+".")   // casi-dup (puntuación)
-		contents = append(contents, b+"  ")  // casi-dup (espacios)
+		contents = append(contents, b)      // original
+		contents = append(contents, b+".")  // casi-dup (puntuación)
+		contents = append(contents, b+"  ") // casi-dup (espacios)
 	}
 	// algunos únicos sin parentesco
 	contents = append(contents,

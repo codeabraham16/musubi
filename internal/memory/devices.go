@@ -27,7 +27,7 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 
 // columnasDevice es la lista de columnas en el orden que espera escanearDevice. Una sola copia:
 // que el SELECT y el Scan se desincronicen es el bug clásico de esta capa.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado`
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -364,11 +364,14 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		revoked          int
 		muestra          string
 		cambiado         string
+		consent          string
+		puedePreguntar   int
 	)
 	if err := row.Scan(
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
+		&consent, &puedePreguntar,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice
@@ -377,6 +380,11 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 	}
 	d.Tier = fleet.Tier(tier)
 	d.Caps = fleet.CapsDesdeTexto(caps)
+	// SE GUARDA CRUDO, se resuelve al usarlo. Un valor ilegible en la columna no se corrige acá:
+	// el dominio lo trata como el default, y corregirlo en la lectura escondería que alguien
+	// escribió algo que no se entiende.
+	d.Consentimiento = fleet.Consentimiento(consent)
+	d.PuedePreguntar = puedePreguntar != 0
 	if tags != "" {
 		d.Tags = strings.Split(tags, ",")
 	}
@@ -412,4 +420,45 @@ func esViolacionDeUnicidad(err error) bool {
 	}
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "unique constraint") || strings.Contains(s, "constraint failed")
+}
+
+// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina.
+//
+// Es su propio método y no un `ActualizarDevice` genérico a propósito. Un update genérico sobre
+// la fila del dispositivo es una puerta por la que, con el tiempo, se terminan pisando el tier,
+// las capacidades o el project_id — los tres campos que sostienen el aislamiento. Un método por
+// campo mutable cuesta más de escribir y no admite ese accidente.
+//
+// NO VALIDA EL GRADO ACÁ: la validación es del dominio y la hace el llamador, que es quien puede
+// devolver un error útil. Guardar un valor ilegible tampoco abre nada —el dominio lo resuelve al
+// default— así que el peor caso de un bypass es una fila rara, no una puerta abierta.
+func (e *DbEngine) FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error) {
+	res, err := e.db.Exec(
+		`UPDATE devices SET consentimiento = ? WHERE id = ? AND revoked = 0`, string(c), deviceID)
+	if err != nil {
+		return false, fmt.Errorf("error al fijar el consentimiento: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("error al leer el resultado: %w", err)
+	}
+	return n > 0, nil
+}
+
+// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta: si en esa máquina hay dónde dibujar
+// un diálogo y quién lo conteste.
+//
+// Va aparte de FijarConsentimiento porque son hechos de dueños distintos —uno es política de
+// quien administra, el otro es una medición del agente— y mezclarlos en un método dejaría que un
+// latido pise la política, o que un administrador afirme una capacidad que nadie midió.
+func (e *DbEngine) FijarCapacidadDePreguntar(deviceID string, puede bool) error {
+	v := 0
+	if puede {
+		v = 1
+	}
+	if _, err := e.db.Exec(
+		`UPDATE devices SET puede_preguntar = ? WHERE id = ? AND revoked = 0`, v, deviceID); err != nil {
+		return fmt.Errorf("error al fijar la capacidad de preguntar: %w", err)
+	}
+	return nil
 }

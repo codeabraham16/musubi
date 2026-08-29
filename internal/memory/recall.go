@@ -868,9 +868,9 @@ const topeTerminosDeDocumento = 48
 // Medido el 2026-08-12 contra la base real (1.372 observaciones), el pool léxico del detector de
 // conflictos costaba:
 //
-//	   500 caracteres →    24,6 ms        8.000 caracteres →   746,9 ms
-//	 1.500 caracteres →    78,2 ms       18.000 caracteres → 2.504,8 ms
-//	 3.500 caracteres →   230,6 ms
+//	  500 caracteres →    24,6 ms        8.000 caracteres →   746,9 ms
+//	1.500 caracteres →    78,2 ms       18.000 caracteres → 2.504,8 ms
+//	3.500 caracteres →   230,6 ms
 //
 // 36 veces más largo costaba 102 veces más tiempo: SUPERLINEAL. Y como el detector corre en CADA
 // guardado, eso era el 96-99 % del costo de guardar una observación, contra 4-8 ms de persistir la

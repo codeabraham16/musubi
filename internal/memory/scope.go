@@ -73,7 +73,7 @@ func projectScopeFrom(ctx context.Context) ProjectScope {
 }
 
 // scopeClause devuelve el fragmento SQL (con su AND inicial) + args que acotan una query al
-// proyecto pedido CONSERVANDO las filas sin atribuir (project_id NULL o ''), idéntico criterio
+// proyecto pedido CONSERVANDO las filas sin atribuir (project_id NULL o ”), idéntico criterio
 // que filterCandidatesByProject del recall. Federate o ProjectID vacío ⇒ ("", nil): no filtra.
 // alias es el prefijo de la tabla observations (p.ej. "o"); vacío para columnas sin calificar.
 func (sc ProjectScope) scopeClause(alias string) (string, []interface{}) {

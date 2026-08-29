@@ -81,7 +81,7 @@ type otlpVal struct {
 	BoolValue   *bool   `json:"boolValue,omitempty"`
 }
 
-func kvStr(key, val string) otlpKV  { return otlpKV{Key: key, Value: otlpVal{StringValue: &val}} }
+func kvStr(key, val string) otlpKV { return otlpKV{Key: key, Value: otlpVal{StringValue: &val}} }
 func kvInt(key string, n int) otlpKV {
 	s := strconv.Itoa(n)
 	return otlpKV{Key: key, Value: otlpVal{IntValue: &s}}

@@ -184,3 +184,46 @@ func TestMirarNoEsControlarYControlarSiEsMirar(t *testing.T) {
 		t.Error("un tier con pantalla no admite mirarla")
 	}
 }
+
+// `pide` EN UNA MÁQUINA SIN NADIE A QUIEN PREGUNTARLE SE CIERRA, NO SE ABRE.
+//
+// Un servidor sin escritorio, un contenedor, una máquina en la pantalla de bloqueo: no hay dónde
+// dibujar el diálogo ni quién lo conteste. Hay que decidir qué hacer con una promesa que el
+// sistema no puede cumplir, y la salida cómoda —abrir igual, «nadie puede negarse»— es
+// exactamente al revés de lo que alguien quiso decir al escribir `pide`.
+//
+// Quien lo escribió pidió que nadie entre sin permiso. Si el permiso no se puede pedir, no se
+// entra. Degradar hacia abajo convertiría la configuración MÁS ESTRICTA en la MÁS PERMISIVA justo
+// en las máquinas donde nadie está mirando — que son las que más se parecen a un servidor de
+// producción.
+//
+// Sabotaje que la hace fallar: degradar `pide` a `libre` (o a `avisa`) cuando no se puede
+// preguntar.
+func TestPedirDondeNadiePuedeContestarCierraLaPuerta(t *testing.T) {
+	if got := ConsentimientoPide.AplicarACapacidadDePreguntar(false); got != ConsentimientoProhibido {
+		t.Errorf("`pide` sin interlocutor quedó en %q: la configuración más estricta se volvió la más permisiva", got)
+	}
+	if got := ConsentimientoPide.AplicarACapacidadDePreguntar(true); got != ConsentimientoPide {
+		t.Errorf("`pide` con interlocutor quedó en %q", got)
+	}
+
+	// `avisa` NO se degrada: se puede dejar constancia aunque no haya nadie leyendo en ese
+	// momento. Avisar no necesita interlocutor; preguntar sí. Degradarlo cerraría el acceso a
+	// todos los servidores de la flota por un default que no bloquea nada.
+	if got := ConsentimientoAvisa.AplicarACapacidadDePreguntar(false); got != ConsentimientoAvisa {
+		t.Errorf("`avisa` se degradó a %q sin interlocutor: dejar constancia no necesita quien conteste", got)
+	}
+	// Y los otros dos no se mueven en ningún caso.
+	for _, c := range []Consentimiento{ConsentimientoLibre, ConsentimientoProhibido} {
+		for _, puede := range []bool{true, false} {
+			if got := c.AplicarACapacidadDePreguntar(puede); got != c {
+				t.Errorf("%q con puedePreguntar=%v quedó en %q", c, puede, got)
+			}
+		}
+	}
+	// Un valor ilegible pasa por el default antes de decidir: sin esto, la basura eludiría la
+	// degradación por el camino de atrás.
+	if got := Consentimiento("Pide").AplicarACapacidadDePreguntar(false); got != ConsentimientoPorDefecto {
+		t.Errorf("un valor ilegible resolvió %q en vez del default", got)
+	}
+}

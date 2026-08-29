@@ -61,7 +61,7 @@ func gistsDeProyecto(t *testing.T, e *DbEngine, proyecto string) []CodeMemory {
 }
 
 // EL DESEMPATE. La tabla admite dos gists del mismo archivo —la PK es (path, project_id)— y en una
-// base real conviven: los anteriores a la atribución multi-tenant quedaron con project_id='' y el
+// base real conviven: los anteriores a la atribución multi-tenant quedaron con project_id=” y el
 // mismo archivo volvió a gistearse después con el suyo. Medido en altura-erp el 2026-08-12: 25
 // filas, 23 paths, 2 duplicados (uno de junio sin atribuir, otro de julio atribuido).
 //

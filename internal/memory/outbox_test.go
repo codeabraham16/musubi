@@ -94,8 +94,15 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       definición, lo que ningún enumerador ve: un Tier B que no enumera, un bot, un puente.
 	//       El backfill marca declaradas las filas con `last_report IS NULL`, que es la firma
 	//       exacta del alta a mano: el agente siempre escribe la fecha del latido.
-	if latestSchemaVersion() != 37 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 37", latestSchemaVersion())
+	// v38 = QUÉ SE LE DEBE A QUIEN ESTÁ EN LA MÁQUINA (`devices.consentimiento`) y SI HAY ALGUIEN
+	//       A QUIEN PREGUNTARLE (`devices.puede_preguntar`). Son dos columnas y no una porque son
+	//       hechos de dueños distintos: la primera es una POLÍTICA que escribe quien administra;
+	//       la segunda es una CAPACIDAD MEDIDA que reporta el agente. El dominio las cruza —
+	//       `pide` sobre una máquina que no puede preguntar se degrada a PROHIBIDO, no a libre—.
+	//       `consentimiento` arranca VACÍO y no en un grado: el default vive en el dominio, y
+	//       tenerlo también acá dejaría las filas viejas atrás el día que cambie.
+	if latestSchemaVersion() != 38 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 38", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

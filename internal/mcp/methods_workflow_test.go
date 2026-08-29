@@ -128,13 +128,13 @@ func TestWorkflowToolResume(t *testing.T) {
 func TestWorkflowToolErrorPaths(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	cases := []map[string]interface{}{
-		{"action": "boom"},                                       // action inválida
-		{"action": "start", "definition": wfYAML},                // falta run_id
-		{"action": "start", "run_id": "x"},                       // falta workflow/definition
+		{"action": "boom"},                                            // action inválida
+		{"action": "start", "definition": wfYAML},                     // falta run_id
+		{"action": "start", "run_id": "x"},                            // falta workflow/definition
 		{"action": "start", "run_id": "x", "definition": "id: ::bad"}, // YAML/def inválida
-		{"action": "next"},                                       // falta run_id
-		{"action": "complete", "run_id": "x"},                    // falta step
-		{"action": "status", "run_id": "noexiste"},               // run inexistente
+		{"action": "next"},                                            // falta run_id
+		{"action": "complete", "run_id": "x"},                         // falta step
+		{"action": "status", "run_id": "noexiste"},                    // run inexistente
 	}
 	for i, args := range cases {
 		if _, e := call(t, s, "musubi_workflow", args); e == nil {

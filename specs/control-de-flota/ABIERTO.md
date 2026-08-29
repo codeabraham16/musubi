@@ -43,6 +43,7 @@
 | A50 | **Revocar la concesión `metrics` en caliente deja el empuje mudo** | El arranque exige que el principal del empuje tenga `metrics`, pero `principals.yaml` **se recarga cada 10 s**: si alguien le saca la concesión después, `empujarUnaVez` deja de mandar puntos y **no avisa ni cuenta un fallo** — `pedidos` se congela y `puntos` queda en 0. Medido por el verificador con tres ticks. El empuje muere en silencio con la configuración perfecta, que es el modo de fallo que este track persigue. | **sin asignar** |
 | A51 | **`incluir_revocados: true` promete algo que no puede dar** | El esquema de `musubi_fleet_services` dice «Incluir los servicios dados de baja **y los de máquinas revocadas**». La segunda mitad es falsa: los servicios de una máquina revocada no salen nunca, porque el listado los filtra por `PuedeSobreDevice` sobre un device que ya no está en el barrido. Las filas existen en la base —la migración 36 y `RevocarServiciosDeDevice` las conservan a propósito para la auditoría— y no hay forma de verlas. **O se arregla el comportamiento, o se arregla la promesa**; hoy la tool miente en su propia descripción. | **sin asignar** |
 | A52 | **La fila del sondeo de Tier B no tiene ninguna prueba** | El verificador borró la línea `fila["mem_libre"] = m.MemLibre` y cambió `enteroONull(m.NumProcesos)` por el entero crudo, y `go test ./internal/mcp -run 'Sond\|Barrido\|TierB'` quedó en **ok**. Un operador que sondea un Tier B ve la respuesta sin `mem_libre` y con `num_procesos: 0` —el cero que significa «no sé», que es justo el bug que el campo nuevo vino a evitar— sin que nada se ponga rojo. | **sin asignar** |
+| A57 | **El agente no sabe pedir consentimiento, así que `pide` bloquea en vez de preguntar** | El eje de consentimiento está en el dominio, en el esquema (v38) y aplicado en el camino de pantalla. Lo que falta es la mitad del AGENTE: dibujar un diálogo en la máquina destino, esperar la respuesta, y reportar `puede_preguntar` en el latido. Mientras no exista, `puede_preguntar` es 0 para toda la flota y un `pide` se endurece a `prohibido` — que es honesto y es el comportamiento correcto, pero significa que **el grado más útil del eje todavía no se puede usar**. También falta la entrega del `avisa`: hoy se abre la sesión y queda un WARN en el log del cerebro diciendo que el aviso no se pudo entregar. Es visible, no silencioso, y no alcanza. | **sin asignar** (fase 1 de la maqueta) |
 | A56 | **El principal del panel no tiene concesión de flota, así que ve el inventario y no el estado** | `panel-central` está en `principals.yaml` con `read: all` y SIN sección `fleet:`. Las capacidades de flota no se derivan del rol a propósito (si no, un token de lectura sería una puerta trasera al eje de capacidades entero), así que el panel lista las máquinas y recibe `sin_permiso: 3` en métricas y `sin_permiso: 54` en servicios. **No es un bug: es la compuerta funcionando y nadie se la concedió.** Se cierra agregándole `fleet: {metrics: ["*"]}` — y NADA más: ni `exec`, ni `screen`, ni `shell`. Un panel mira; una credencial que vive en la configuración de otro servicio es exactamente la que no querés que pueda ejecutar nada. | **acción del operador** (escribir en `principals.yaml` está fuera de lo que puede hacer el asistente) |
 | A54 | **El blindaje del agente no se revisa cuando el agente gana una capacidad** | `musubi-agente.service` se blindó para «lee /proc y habla con loopback» (`ProtectHome=read-only`, `ProtectSystem=strict`). A42 le dio un trabajo nuevo —enumerar contenedores— y el blindaje lo prohibía. El síntoma no fue «permiso denegado» en ningún lado: fue `podman ps` saliendo con código 1, y **hasta este track, en silencio**. Resuelto para contenedores con un drop-in acotado; lo que queda abierto es que **no hay nada que ate una capacidad del agente a las rutas que necesita**. La próxima —leer un log, tocar un socket, escribir un cache— va a repetir la forma exacta: la función no anda, la unidad no dice por qué, y nadie sospecha del archivo que está bien. Lo que se necesita es que el agente **declare** lo que va a tocar y que el despliegue lo verifique, en vez de descubrirlo en producción. | **sin asignar** |
 | A53 | **`TestPushDelPorteDeProduccionCruzaEntero` falla bajo `-race`, solo y sin carga** | Federa 14.000 nodos (5,2 MB crudos) con un plazo de 60 s para cliente y servidor. Bajo el detector de carreras, comprimir y serializar eso tarda **más de 90 s**, y el test muere con `context deadline exceeded` — **no es una carrera**: la corrida no reporta un solo `DATA RACE`. **No lo puso este trabajo, y se midió en vez de suponerse**: en un worktree limpio de HEAD falla igual, 93,04 s y el mismo mensaje. Distinto de A45 (que es la suite entera comiéndose el timeout por acumulación): éste falla **aislado**. El arreglo es del test, no del código: o su plazo se escala cuando corre instrumentado, o el grafo de prueba baja de tamaño sin dejar de cruzar `maxRequestBody`. | **sin asignar** |
@@ -590,6 +591,44 @@ que arranca en el default) es demasiado natural para no volver.
 Seis sabotajes en este trozo, todos ejecutados. **Lo que falta de la fase 1:** el eje existe y está
 probado, y **todavía no está enchufado** — falta dónde se guarda por máquina y que el agente sepa
 preguntar. Eso, más la sesión como objeto del dominio, es lo que sigue.
+
+**2026-08-28 (nonies) · el consentimiento deja de ser un tipo suelto y se aplica.**
+
+La migración **38** agrega DOS columnas a `devices` y no una, porque son hechos de dueños
+distintos: `consentimiento` es una POLÍTICA que escribe quien administra y no cambia sola;
+`puede_preguntar` es una CAPACIDAD MEDIDA que reporta el agente y cambia con el mundo. Juntarlas
+obligaría a que la política mienta sobre el hardware, o a que un latido pise la política.
+
+`consentimiento` arranca VACÍO y no en un grado: el default vive en el dominio, y tenerlo también
+en el esquema dejaría las filas viejas atrás el día que cambie. `puede_preguntar` arranca en 0
+para todos, y eso es correcto aunque incomode — ningún agente desplegado sabe preguntar todavía, y
+arrancar en 1 sería afirmar una capacidad que nadie midió.
+
+**`musubi_fleet_consent`**, la tool que faltaba: una columna que nadie puede escribir es
+decoración. Es **admin y no `screen`** a propósito — si quien tiene acceso pudiera aflojar la
+política, se estaría autorizando a sí mismo a no avisar y el eje sería adorno.
+
+**El camino de pantalla lo consulta antes de acuñar nada**, en el mismo lugar donde se verifica el
+motor y por el mismo motivo: el daño de mirarlo tarde no es fallar, es ENTREGAR una contraseña de
+sesión —que se muestra una sola vez— para una sesión que no se tenía que abrir. Va después de la
+compuerta de capacidad: quien no tiene `screen` no puede enterarse de la política de una máquina
+que no debería saber que existe.
+
+**Tres decisiones que quedan escritas:**
+
+1. **`pide` sin interlocutor se endurece a `prohibido`, no se afloja a `libre`.** La salida cómoda
+   convierte la configuración más estricta en la más permisiva justo en las máquinas donde nadie
+   está mirando. El costo es real: `pide` en un servidor headless traba el acceso. Es un error de
+   configuración VISIBLE, que es la clase buena.
+2. **La degradación se dice al configurar**, no cuando alguien no puede entrar: la tool devuelve
+   `guardado` y `efectivo` con la nota de por qué difieren.
+3. **`avisa` no bloquea y deja constancia de que el aviso no se entregó.** Bloquear cerraría la
+   flota por una capacidad que nadie desplegó; prometerlo en silencio sería justo lo que este eje
+   viene a evitar.
+
+Cuatro sabotajes más (48 en la tanda). **Lo que falta:** la mitad del agente —dibujar el diálogo y
+reportar `puede_preguntar`—. Hasta entonces `pide` es honesto: bloquea, en vez de fingir.
+Registrado como **A57**.
 
 ---
 

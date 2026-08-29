@@ -553,3 +553,98 @@ func TestElPanelTambienVeLosServiciosYLasMetricasDeTodosLosProyectos(t *testing.
 		t.Fatalf("el panel no pudo leer las métricas: %+v", e)
 	}
 }
+
+// UNA MÁQUINA CON EL ACCESO PROHIBIDO NO ABRE PANTALLA, AUNQUE LA CAPACIDAD ESTÉ CONCEDIDA.
+//
+// Es la prueba de que el consentimiento es un EJE SEPARADO del permiso y no una capacidad más.
+// El principal tiene `screen` sobre esa máquina —perfectamente concedido— y la sesión igual no se
+// abre, porque el dueño de la máquina dijo que no. Un permiso del administrador no puede más que
+// el candado de quien usa el equipo.
+//
+// Y el mensaje tiene que mandar a mirar el lugar correcto: si dijera «sin permiso» a secas,
+// alguien revisaría `principals.yaml` durante media hora buscando algo que ya está.
+//
+// Sabotaje que la hace fallar: sacar el `switch consent` de toolFleetScreen.
+func TestElConsentimientoProhibidoPesaMasQueLaCapacidadConcedida(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	// SE ENROLA CON `screen` DE VERDAD: el punto de la prueba es que la capacidad esté
+	// perfectamente concedida y la sesión igual no se abra. Con una máquina sin `screen`, el
+	// rechazo vendría de la compuerta de capacidad y la prueba pasaría por el motivo equivocado
+	// — que es exactamente el error que tuvo su primera versión.
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "screen"},
+		"project": "casa", "os": "linux", "arch": "amd64",
+	}); e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	ds, _ := s.engine.ListarDevices("casa", false)
+	d := ds[0]
+	if !d.Permite(fleet.CapScreen) {
+		t.Fatal("la máquina de prueba no admite `screen`: la prueba no ejercitaría el consentimiento")
+	}
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoProhibido); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Principal{Name: "operador", Role: RoleAdmin, Read: ReadAll, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreen: {"*"}}}
+	_, e := callAsPrincipal(t, s, p, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e == nil {
+		t.Fatal("se abrió la pantalla de una máquina con el acceso PROHIBIDO: " +
+			"el candado del dueño de la máquina no pesó nada")
+	}
+	if !strings.Contains(e.Message, "consentimiento") {
+		t.Errorf("el error no manda a mirar el consentimiento, así que manda a revisar permisos "+
+			"que ya están: %s", e.Message)
+	}
+}
+
+// LA POLÍTICA DE CONSENTIMIENTO ES ADMIN, Y NO LA PUEDE TOCAR QUIEN ENTRA.
+//
+// Si quien tiene `screen` sobre una máquina pudiera aflojar su política de consentimiento, el eje
+// entero sería decoración: la persona que va a entrar se autorizaría a sí misma a no avisar. Es
+// la misma razón por la que `fleet_service_declare` es admin — escribe en el plano de control.
+//
+// Sabotaje que la hace fallar: cambiar la guarda de `isAdmin` por PuedeSobreDevice(CapScreen).
+func TestLaPoliticaDeConsentimientoNoLaAflojaQuienEntra(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarDePrueba(t, s, "casa", "pc-gio")
+
+	// Tiene `screen` sobre todo y NO es admin.
+	conPantalla := &Principal{Name: "soporte", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreen: {"*"}}}
+	_, e := callAsPrincipal(t, s, conPantalla, "musubi_fleet_consent",
+		map[string]any{"device": "pc-gio", "grado": "libre"})
+	if e == nil {
+		t.Fatal("quien tiene `screen` pudo aflojar la política de consentimiento: se autorizó a sí mismo a no avisar")
+	}
+
+	// Un admin sí puede, y la respuesta dice lo GUARDADO y lo EFECTIVO.
+	admin := &Principal{Name: "jefe", Role: RoleAdmin, Read: ReadAll, Write: WriteAny, ProjectID: "casa"}
+	res, e2 := callAsPrincipal(t, s, admin, "musubi_fleet_consent",
+		map[string]any{"device": "pc-gio", "grado": "pide"})
+	if e2 != nil {
+		t.Fatalf("un admin no pudo fijar la política: %+v", e2)
+	}
+	out := jsonOf(t, res)
+	if out["guardado"] != "pide" {
+		t.Errorf("guardado = %v", out["guardado"])
+	}
+	// LA DEGRADACIÓN SE DICE AL CONFIGURAR, no cuando alguien no puede entrar. La máquina de
+	// prueba no declara poder preguntar, así que `pide` queda en `prohibido` — y quien lo
+	// configuró tiene que enterarse ahí mismo.
+	if out["efectivo"] != "prohibido" {
+		t.Errorf("efectivo = %v, se esperaba `prohibido`: una máquina que no puede preguntar "+
+			"endurece `pide`, y eso tiene que decirse al configurarlo", out["efectivo"])
+	}
+	if _, hay := out["nota"]; !hay {
+		t.Error("no se explicó por qué el efectivo difiere del guardado")
+	}
+
+	// Y un grado que no existe se rechaza en vez de guardarse: guardarlo dejaría una fila que
+	// dice una cosa y significa otra, porque el dominio lo resolvería al default.
+	if _, e3 := callAsPrincipal(t, s, admin, "musubi_fleet_consent",
+		map[string]any{"device": "pc-gio", "grado": "Pide"}); e3 == nil {
+		t.Error("se aceptó un grado ilegible: la fila diría una cosa y el sistema haría otra")
+	}
+}
