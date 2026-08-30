@@ -174,10 +174,20 @@ func TestAtaqueMarcaSePierdePorMayuscula(t *testing.T) {
 	if bien.BrandSource != "project" {
 		t.Fatalf("el caso bueno debería resolver la marca; fue %s", bien.BrandSource)
 	}
-	if mal.BrandSource != "none" {
-		t.Fatalf("el ataque ya no pasa: hay normalización — actualizá este banco (fue %s)", mal.BrandSource)
+	// ATAQUE CERRADO EL 2026-08-30 (fase 5 / F8). Este test afirmaba el defecto —`Altura` != `altura`
+	// y el proyecto perdía su marca en silencio— y su propio mensaje decía «actualizá este banco» para
+	// el día en que se arreglara. Ese día llegó: ahora afirma la defensa.
+	if mal.BrandSource != "project" {
+		t.Errorf("la mayúscula volvió a perder la marca: brand_source=%s", mal.BrandSource)
 	}
-	t.Log("⚠ EXPONE: 'Altura' != 'altura' → el proyecto pierde su marca en silencio")
+	if mal.Brand != bien.Brand {
+		t.Errorf("las dos formas tienen que resolver a la MISMA marca; altura=%.40s / Altura=%.40s", bien.Brand, mal.Brand)
+	}
+	// Y una marca que de verdad no existe no se confunde con «este proyecto no tiene marca».
+	inexistente := callDesignBrand(t, s, admin, "un login", "web", "altur")
+	if inexistente.BrandNote == "" {
+		t.Error("una marca inexistente se sirvió sin declararlo: el fallo se lee igual que el caso legítimo")
+	}
 }
 
 // ATAQUE A6 — EL MÉTODO NO MIRA EL PEDIDO. **CERRADO en F4, por el camino semántico.**
