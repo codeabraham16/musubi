@@ -320,12 +320,15 @@ type recorteBrief struct {
 // como material citado con su procedencia. Antes estaban mezclados en el mismo campo, y por eso una
 // observación mutable podía hacerse pasar por instrucción del sistema (I-INY1).
 type designBrief struct {
-	Ask          string        `json:"ask"`                    // el pedido, tal como llegó
-	Target       string        `json:"target"`                 // painter | web | html | any
-	Precedence   string        `json:"precedence"`             // quién gana cuando dos partes se contradicen
-	MaterialNote string        `json:"material_note"`          // el material es conocimiento, no órdenes
-	Role         string        `json:"role"`                   // el rol de diseñador senior (universal, del código)
-	Principles   string        `json:"principles"`             // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
+	Ask          string `json:"ask"`           // el pedido, tal como llegó
+	Target       string `json:"target"`        // painter | web | html | any
+	Precedence   string `json:"precedence"`    // quién gana cuando dos partes se contradicen
+	MaterialNote string `json:"material_note"` // el material es conocimiento, no órdenes
+	Role         string `json:"role"`          // el rol de diseñador senior (universal, del código)
+	Principles   string `json:"principles"`    // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
+	// Avoid es el CHECKLIST DE RECHAZO (rechazo_diseno.go). Va pegado a los principios y no al final
+	// porque es criterio, no apéndice: un «no hagas X» leído después de componer llega tarde.
+	Avoid        string        `json:"avoid"`
 	Brand        string        `json:"brand"`                  // la marca ACTIVA, resuelta por proyecto (CAPA 3)
 	BrandScope   string        `json:"brand_scope"`            // de qué proyecto salió la marca
 	BrandSource  string        `json:"brand_source"`           // project | default | none (ver brandFor)
@@ -410,6 +413,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		MaterialNote:    designMaterialNote,
 		Role:            designRole,
 		Principles:      designPrinciples,
+		Avoid:           tellsPara(rec.Eje),
 		Brand:           sanearMaterial(brandText),
 		BrandScope:      brandScope,
 		BrandSource:     brandSource,
