@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El piso de similitud dejaba mudo al método en los pedidos de dominio** (Musubi Renaissance).
+  Medido en producción el 2026-08-30, con F0–F5 recién desplegado: un pedido concreto —«tabla densa
+  de inventario de Altura con lotes, filtros y alertas»— recibía el bloque de método **vacío**
+  (`method_source: static`, 0 tarjetas). Ninguna de las 30 tarjetas arbitradas llegaba a 0,48;
+  con «el color se gana: un acento dominante» llegaban tres.
+  - La causa: **un principio UNIVERSAL es por construcción menos parecido a un pedido concreto** que
+    un patrón que habla justo de eso. El piso se calibró contra similitudes del CORPUS y se aplicó
+    también al método, así que retenía criterio bueno por «poco parecido».
+  - El arreglo no es bajar el piso sino **sacárselo al método**: el piso existe para que el corpus no
+    sirva patrones específicos que no vienen al caso, y para el método no hay nada equivalente que
+    evitar — la cantidad ya la acota `designMetodoRelevante`. La abstención tampoco se pierde: la
+    señala el corpus, y un brief degradado con el criterio universal adentro dice «no tengo material
+    específico para esto, pero el criterio es éste».
+  - El piso del corpus **no se tocó**, y hay un test que lo defiende junto al de la regresión.
+    Sabotaje verificado: volver a aplicarle el piso al método reproduce el síntoma exacto de
+    producción (`method_source: static`).
+
 ### Changed
 - **Pedir lo mismo de dos maneras devuelve lo mismo** (Musubi Renaissance · F5). Medido el
   2026-08-29: cinco paráfrasis del mismo pedido daban un solape Jaccard de **0,09**, con tres pedidos
