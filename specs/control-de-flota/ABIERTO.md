@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -45,6 +45,7 @@
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
+| A63 | **`gio` lleva dos días sin latir, con 11.007 comandos muertos en su bitácora** | Última señal **2026-08-28T08:33Z**. La máquina es Windows con agente `v0.106.0` y NordVPN filtrando por ruta (A31), así que la causa más probable es que el binario se movió o el servicio no arrancó. **No es urgente y no rompe nada**: F10 vence todo lo encolado antes de entregarlo, y desde hoy el techo de cola (A62) impide que se repita. Lo que sí queda es una bitácora con once mil filas de ruido que va a tapar cualquier comando real en la cronología de esa máquina para siempre — y podarlas es borrar auditoría, que este repo no hace. **Se resuelve del lado del operador**: levantar el agente y, si molesta el ruido, decidir explícitamente si esas filas se archivan. | **acción del operador** |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -72,6 +73,38 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 (3) · A62 — la cola de un dispositivo ya no crece sin techo. Lo pidió una medición.**
+
+Al ir a mirar por qué el agente de `gio` no levantaba su cola, el número no era el que yo había
+dicho: **11.007 comandos pendientes**, no cien. Encolados entre el 28 a las 08:33 y el 29 a las
+19:06 —treinta y cuatro horas a cinco por minuto— contra una máquina que llevaba dos días sin
+latir. El lazo paró solo; no había nada que apagar.
+
+**NO EXPLOTÓ NADA, Y ESO ERA SUERTE DE DISEÑO.** F10 vence todo lo que pasa de quince minutos
+antes de entregarlo, así que ni uno se habría ejecutado cuando la máquina volviera. Pero eso es
+una consecuencia, no un límite: `EncolarComando` aceptaba lo que le dieran, la tabla crecía sin
+tope y la bitácora de esa máquina quedaba ilegible para siempre. **El día que el lazo corra contra
+una máquina VIVA, lo que se acumula sí se ejecuta.**
+
+- **EL TECHO VA EN `EncolarComando` Y NO EN LA TOOL**, porque ésa es la única puerta de escritura:
+  la comparten el exec, la pantalla, la shell y el motor de políticas. Un techo en una sola de las
+  cuatro es un techo que se esquiva por las otras tres.
+- **SE CUENTA SÓLO LO QUE TODAVÍA PODRÍA EJECUTARSE**, y ésa es la parte que hay que pensar. Si
+  contara todo lo pendiente, una máquina que estuvo caída un día quedaría bloqueada PARA SIEMPRE
+  —sus miles de filas muertas ocupando el cupo— y destrabarla exigiría borrar bitácora, que es
+  justo lo que este repo no hace. Lo vencido no es presión de cola: es historia.
+- **DE PASO ES UN FRENO DE RITMO**: cincuenta dentro de cualquier ventana de quince minutos. El
+  lazo de `gio` iba a setenta y cinco por ventana, así que habría rebotado a los cincuenta incluso
+  contra una máquina viva.
+- **«COLA LLENA» NO ES UN ARGUMENTO INVÁLIDO.** Devolverlo como tal manda a la persona a corregir
+  su comando cuando el problema es la MÁQUINA: el mismo argv sobre otro host entra sin chistar. El
+  mensaje dice qué mirar y con qué tool.
+
+**Tres sabotajes.** Uno no compiló la primera vez —variable sin usar— y no probaba nada hasta
+rehacerlo. Y una prueba mía mentía sobre lo que simulaba: encolaba el «pasado» de una máquina
+caída con todas las marcas de tiempo IGUALES, y así cada comando ve a los otros como frescos y el
+techo salta con razón. Una acumulación real viene repartida en el tiempo, y así quedó.
 
 **2026-08-30 (2) · A59 CERRADO — la cronología ya puede decir qué lo hizo una regla.**
 

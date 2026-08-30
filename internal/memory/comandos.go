@@ -34,11 +34,34 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 		return fleet.Comando{}, err
 	}
 	c.Argv = fleet.LimpiarArgv(c.Argv)
-	c.ID = uuid.NewString()
-	c.Estado = fleet.EstadoPendiente
+	// ── EL TECHO DE LA COLA, ANTES DE ESCRIBIR NADA ─────────────────────────────────────────
+	//
+	// Va acá y no en la tool porque ÉSTA es la única puerta de escritura: la comparten el exec,
+	// las sesiones de pantalla, la shell y el motor de políticas. Un techo en una sola de esas
+	// cuatro es un techo que se esquiva por las otras tres.
+	//
+	// SE CUENTA SÓLO LO QUE TODAVÍA PODRÍA EJECUTARSE, y ésa es la parte que hay que pensar: si
+	// contara todo lo pendiente, una máquina que estuvo caída un día quedaría bloqueada PARA
+	// SIEMPRE —sus miles de filas muertas ocupando el cupo— y destrabarla exigiría borrar
+	// bitácora, que es justo lo que este repo no hace. Lo vencido no es presión de cola: es
+	// historia.
 	if c.Creado.IsZero() {
 		c.Creado = time.Now().UTC()
 	}
+	vivos := c.Creado.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
+	var enCola int
+	if err := e.db.QueryRow(
+		`SELECT COUNT(*) FROM device_commands WHERE device_id = ? AND estado = ? AND creado >= ?`,
+		c.DeviceID, string(fleet.EstadoPendiente), vivos,
+	).Scan(&enCola); err != nil {
+		return fleet.Comando{}, fmt.Errorf("error al medir la cola de %q: %w", c.DeviceID, err)
+	}
+	if enCola >= fleet.ColaMaxPorDevice {
+		return fleet.Comando{}, fmt.Errorf("%w: %d comandos esperando en %q y el máximo es %d; casi seguro su agente no está levantando la cola",
+			fleet.ErrColaLlena, enCola, c.DeviceID, fleet.ColaMaxPorDevice)
+	}
+	c.ID = uuid.NewString()
+	c.Estado = fleet.EstadoPendiente
 	argv, err := fleet.ArgvComoTexto(c.Argv)
 	if err != nil {
 		return fleet.Comando{}, err

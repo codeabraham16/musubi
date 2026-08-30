@@ -39,6 +39,26 @@ const (
 	// cubrir un agente que se reinicia y es demasiado poco para que el mundo cambie debajo.
 	ComandoVidaMax = 15 * time.Minute
 
+	// ColaMaxPorDevice es cuántos comandos TODAVÍA EJECUTABLES puede tener encolados una máquina.
+	//
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// EL TECHO QUE FALTABA, Y LA MEDICIÓN QUE LO PIDIÓ
+	//
+	// Hasta acá `EncolarComando` aceptaba lo que le dieran. Medido en producción el 2026-08-30:
+	// una máquina caída hacía dos días tenía **11.007 comandos pendientes**, encolados por un
+	// lazo que corrió treinta y cuatro horas a cinco por minuto contra un agente que no iba a
+	// levantar ninguno.
+	//
+	// No explotó nada —F10 los vence a todos antes de entregarlos, así que ni uno se habría
+	// ejecutado— pero eso es suerte de diseño, no un límite: la tabla crece sin tope y la
+	// bitácora de esa máquina queda ilegible para siempre. Y el día que el lazo corra contra una
+	// máquina VIVA, lo que se acumula sí se ejecuta.
+	//
+	// CINCUENTA PORQUE MÁS QUE ESO NO ES UNA COLA, ES UN LAZO. Una persona encola un puñado; una
+	// política encola uno por disparo y tiene enfriamiento. Cincuenta pendientes significan que
+	// la máquina va a correr cincuenta cosas en cuanto vuelva, que ya es mucho.
+	ColaMaxPorDevice = 50
+
 	// SalidaMaxBytes acota stdout y stderr POR SEPARADO. Un `cat` sobre un log de 4 GB no puede
 	// volcar 4 GB ni en el agente ni en el cerebro. 64 KiB alcanza para el resultado de cualquier
 	// comando de operación; lo que necesita más, necesita un archivo, no una consola.
@@ -57,6 +77,10 @@ var (
 	ErrArgvVacio     = errors.New("un comando necesita al menos un ejecutable")
 	ErrArgvDemasiado = errors.New("el comando excede los límites de tamaño")
 	ErrTimeoutMalo   = errors.New("timeout fuera de rango")
+	// ErrColaLlena es que esta MÁQUINA ya tiene demasiado esperando. Es un error de la máquina,
+	// no del comando: el mismo argv sobre otro host entra sin problema, y por eso el mensaje
+	// tiene que hablar de la máquina y no del pedido.
+	ErrColaLlena = errors.New("la cola de esa máquina está llena")
 )
 
 // Comando es un pedido de ejecución sobre una máquina.

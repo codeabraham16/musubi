@@ -10,6 +10,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -118,6 +119,13 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 		Argv:   args.Argv, Timeout: timeout,
 	})
 	if err != nil {
+		// LA COLA LLENA NO ES UN ARGUMENTO INVÁLIDO, y confundirlos manda a la persona a
+		// corregir su comando cuando el problema es la MÁQUINA. El mismo argv sobre otro host
+		// entra sin chistar; lo que hay que mirar es por qué ese agente no levanta su cola.
+		if errors.Is(err, fleet.ErrColaLlena) {
+			return nil, rpcErrorf(codeUnauthorized,
+				"%v. Mirá `musubi_fleet_list` para ver desde cuándo no late, y `musubi_fleet_cronologia` para ver qué se le acumuló", err)
+		}
 		return nil, rpcErrorf(codeInvalidParams, "%v", err)
 	}
 
