@@ -7,6 +7,41 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
+  Reproducido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
+  DEFINIDA para este proyecto» y le decía al agente que **no usara la identidad de otro proyecto** —
+  cuando la correcta era justamente la de Altura, que existe con el tenant en minúscula. El mensaje
+  de fallo no sólo callaba: desorientaba.
+  - El argumento `brand` se normaliza (es texto libre que escribe una persona); el `ProjectID` del
+    principal NO, porque sale del token y es autoritativo.
+  - **«Este proyecto no definió su marca» y «pediste una marca que no existe» dejan de decirse
+    igual.** Era el antipatrón de la casa —el valor de fallo idéntico al tranquilizador—: un dedazo
+    como `brand: "altur"` devolvía un brief que se leía legítimo y componía con el método
+    universal, sin un solo indicio. Ahora el brief trae `brand_note` con el aviso.
+  - El test de ataque de F0 que **afirmaba este defecto** se dio vuelta y ahora afirma la defensa. Su
+    propio mensaje decía «actualizá este banco» para el día en que se arreglara.
+
+
+### Added
+- **El brief dice qué NO entregar** (Musubi Renaissance, fase 4 del plan de cierre). El pedido que
+  abrió el track fue «lo usé mucho en Altura y no me gusta nada, todo full malo», y el brief le decía
+  al agente qué hacer y nunca qué **rechazar**.
+  - **Los tells salen del propio acervo, no de otro motor.** Medido sobre las 1.438 tarjetas de
+    `design-corpus/*`: **315 (22 %) contienen una prohibición** — 347 frases. El ranking real de lo
+    que este acervo advierte: jerga interna (39), ícono sin etiqueta (37), jerarquía difusa (27),
+    color decorativo (22), dato inventado (17). Nunca faltaron: estaban **diluidas**, o sea que sólo
+    llegaban al brief si el ranking enganchaba justo esa tarjeta.
+  - **Va FILTRADO POR EJE y no fijo**, y eso lo decidió una medición: un bloque constante de ~400
+    tokens habría bajado M5 —la compuerta del banco— de 0,44 a ~0,39, debajo de su propio umbral. El
+    freno que se puso para que no volviera el sermón habría frenado esto, **y con razón**: servir los
+    mismos catorce avisos para una tabla y para un login ES un sermón. Con el ruteo por eje ya se sabe
+    de qué habla el pedido, así que viaja un núcleo corto universal más los tells de ese eje.
+  - Medido con el bloque puesto: M4 p50 3.143 → 3.342, **M5 0,44 → 0,45 (no bajó)**.
+  - ⚠️ **Límite declarado:** el banco corre sobre FTS y sin embebedor, así que no rutea y sólo mide el
+    núcleo de 5 tells. La parte por eje sale de la sonda, igual que M1/M3/M8.
+
+
 ### Added
 - **El brief dice qué NO entregar** (Musubi Renaissance, fase 4 del plan de cierre). El pedido que
   abrió el track fue «lo usé mucho en Altura y no me gusta nada, todo full malo», y el brief le decía
