@@ -555,6 +555,10 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// una ausencia de datos. Las otras cuatro devuelven inventarios, donde el vacío se lee
 		// como vacío.
 		"musubi_fleet_cronologia": true,
+		// Fase 5 · S14 · el cruce con la memoria. Mismo razonamiento que la cronología, y con el
+		// mismo matiz propio: sin concesiones, un reader recibe la actividad en cero y sus
+		// contadores de ocultos en más de cero — que es la respuesta correcta, no una vacía.
+		"musubi_fleet_contexto": true,
 	}
 
 	for _, e := range s.tools {

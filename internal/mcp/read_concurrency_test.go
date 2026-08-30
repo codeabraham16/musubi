@@ -81,6 +81,12 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// musubi_fleet_sessions: no hay UPDATE que lo estampe. readOnly ⇒ la puede llamar una
 		// cabina, que es el caso de uso — investigar qué le pasó a un server no muta el server.
 		"musubi_fleet_cronologia": true,
+		// Fase 5 · S14 · el CRUCE con la memoria. Lee cinco superficies —las tres bitácoras,
+		// `services`, `observations` y `code_memory`— y no escribe ninguna. En particular NO
+		// bumpea acceso ni deja ledger sobre las observaciones que devuelve: es una lectura de
+		// correlación, no un recall, y contarla como uso inflaría la señal de «esta nota se
+		// usa» con cada investigación de una máquina.
+		"musubi_fleet_contexto": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name

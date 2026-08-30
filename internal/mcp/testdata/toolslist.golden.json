@@ -1330,6 +1330,38 @@
       }
     },
     {
+      "name": "musubi_fleet_contexto",
+      "description": "CRUZA lo que le pasó a una máquina con lo que el equipo SABÍA: la actividad de la ventana (comandos, pantallas, shells) junto a las notas de la memoria y los archivos de código que se tocaron en ese mismo rato. Es la pregunta que ningún panel de monitoreo puede contestar —«¿por qué esta máquina anda distinta desde el martes?»— porque ninguno tiene al lado la memoria del equipo. ES CORRELACIÓN, NO CAUSA, y la respuesta lo dice: Musubi junta los hechos y declara CÓMO enlazó cada uno; quien concluye es quien lee. Una tool que adivinara la causa mandaría a alguien a arreglar lo que no está roto. CADA HALLAZGO TRAE SU `enlace`, que es el campo que más importa: `termino` = el texto NOMBRA la máquina o uno de sus servicios (es evidencia, aunque puede ser homónimo); `ventana` = SÓLO coincide en el tiempo y en el proyecto (no es evidencia de nada por sí solo). Mezclarlos sería la mentira de esta tool. LOS TÉRMINOS SALEN DEL INVENTARIO, no del texto de los comandos: el nombre de la máquina y sus servicios, que son pocos, exactos y explicables — sacar palabras de un argv produce basura (`cmd`, `type`, `/c`) y una lista con ruido hace que se deje de mirar la herramienta. Se devuelven declarados, para que puedas juzgar si un enlace vale. LA COMPUERTA APLICA A LOS TÉRMINOS: la lista de servicios de una máquina exige `metrics`, así que sin esa capacidad los términos de servicio no se arman y la respuesta marca `servicios_ocultos: true` en vez de devolver una lista corta que se leería como «esta máquina no corre nada». La actividad se compuerta hecho por hecho, igual que musubi_fleet_cronologia. La memoria se lee en el proyecto de LA MÁQUINA, no en el alcance de quien pregunta: traer notas de otro tenant no sería una fuga pero sí una respuesta falsa. Para la línea de tiempo completa está musubi_fleet_cronologia; ésta devuelve el resumen y el cruce.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339. Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo, mira las 24 h anteriores a ese momento"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
       "name": "musubi_fleet_probe",
       "description": "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente), Tier B por EXPOSICIÓN (bases gestionadas y appliances que no dan shell y sí publican un endpoint de métricas: se declaran en `.musubi/flota-exposicion.yaml` y eso ES lo que elige el transporte) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada — y sigue en null si dos sondeos caen dentro del CACHÉ de un endpoint de exposición (medido: ~62 s en una base gestionada), porque ahí tampoco hubo dos lecturas distintas. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
       "inputSchema": {

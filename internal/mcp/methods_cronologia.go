@@ -64,39 +64,12 @@ func (s *McpServer) toolFleetCronologia(ctx context.Context, raw json.RawMessage
 		return nil, rpcErrorf(codeInvalidParams, "falta `device`: la cronología es de UNA máquina. Sin eso sería la bitácora, que ya existe")
 	}
 
-	// EL LAZO POR PROYECTO, no `fleetReadScopeFor` a secas. El principal del panel es `read: all`
-	// SIN proyecto propio, así que resolver el alcance con el atajo devuelve vacío y la tool
-	// contesta «no se pudo determinar el proyecto» estando todo bien. Ese bug ya se pagó en
-	// cuatro tools de lectura; escribir la quinta con el atajo sería reproducirlo a sabiendas.
-	proyectos, _ := s.proyectosParaLeer(p, args.Project)
-	if len(proyectos) == 0 {
-		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
-	}
-	var (
-		device   fleet.Device
-		proyecto string
-		hallados int
-	)
-	for _, pr := range proyectos {
-		d, existe, err := s.engine.DevicePorNombre(pr, nombre)
-		if err != nil {
-			return nil, rpcErrorf(codeInternalError, "%v", err)
-		}
-		if existe {
-			hallados++
-			device, proyecto = d, pr
-		}
-	}
-	// DOS MÁQUINAS CON EL MISMO NOMBRE EN DOS TENANTS NO SE DESEMPATAN SOLAS. El nombre sólo es
-	// único dentro de su proyecto, así que elegir una —la primera, la última— le devolvería a
-	// quien ve varios tenants la cronología de una máquina que no es la que preguntó, sin decirlo.
-	if hallados > 1 {
-		return nil, rpcErrorf(codeInvalidParams,
-			"hay %d máquinas llamadas %q en los proyectos que alcanzás: declará `project` para elegir cuál", hallados, nombre)
-	}
-	if hallados == 0 {
-		return nil, rpcErrorf(codeUnauthorized,
-			"no hay ninguna máquina %q en los proyectos que alcanzás", nombre)
+	// La resolución vive en methods_contexto.go y la usan LAS DOS tools de fase 5. Estaba escrita
+	// acá primero; copiarla al escribir el contexto habría dejado dos lugares donde recordar que
+	// dos máquinas homónimas en dos tenants no se desempatan solas.
+	device, proyecto, rpcErr := s.resolverDeviceUnico(p, nombre, args.Project)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// ¿Puede ver ALGÚN plano de esta máquina? Sin esto la respuesta sería una lista vacía con un
@@ -112,9 +85,9 @@ func (s *McpServer) toolFleetCronologia(ctx context.Context, raw json.RawMessage
 	}
 
 	ahora := time.Now().UTC()
-	ventana, rpcErr := ventanaDeArgs(args.Desde, args.Hasta, args.Horas, ahora)
-	if rpcErr != nil {
-		return nil, rpcErr
+	ventana, rpcErrV := ventanaDeArgs(args.Desde, args.Hasta, args.Horas, ahora)
+	if rpcErrV != nil {
+		return nil, rpcErrV
 	}
 	// SE NORMALIZA ACÁ Y NO SÓLO ADENTRO DE LA CONSULTA porque esta ventana también se DEVUELVE.
 	// Contestar con la ventana pedida mientras se aplica otra es la clase de mentira chica que
@@ -135,24 +108,9 @@ func (s *McpServer) toolFleetCronologia(ctx context.Context, raw json.RawMessage
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 
-	filas := make([]map[string]interface{}, 0, len(hechos))
-	ocultos, sinClasificar := 0, 0
-	for _, h := range hechos {
-		necesaria, clasificado := fleet.CapDeHecho(h.Tipo)
-		if !clasificado {
-			// NO es «oculto por permiso» y por eso se cuenta aparte: nadie lo puede ver, ni
-			// siquiera quien tenga todo. Mezclarlos en un contador diría «pedile permiso a
-			// alguien» sobre algo que ningún permiso destraba.
-			sinClasificar++
-			continue
-		}
-		// PuedeVerHistorialDeDevice y no PuedeSobreDevice: una máquina revocada conserva su
-		// cronología y quien podía verla mientras vivía la sigue viendo (A51). La revocación es
-		// el kill-switch para OPERAR, no para auditar.
-		if !PuedeVerHistorialDeDevice(p, device, necesaria) {
-			ocultos++
-			continue
-		}
+	visibles, ocultos, sinClasificar := hechosVisiblesPara(p, device, hechos)
+	filas := make([]map[string]interface{}, 0, len(visibles))
+	for _, h := range visibles {
 		filas = append(filas, filaDeHecho(h))
 	}
 
@@ -179,6 +137,39 @@ func (s *McpServer) toolFleetCronologia(ctx context.Context, raw json.RawMessage
 		// MIRO», y esa diferencia es la que hace que alguien deje de buscar la causa real.
 		"no_visto": fleet.HuecosDeLaCronologia(),
 	})
+}
+
+// hechosVisiblesPara aplica LA compuerta, y es UNA SOLA para las dos tools de fase 5.
+//
+// Está extraída y no copiada porque tiene dos consumidores —la cronología y el contexto— y una
+// compuerta duplicada es la peor duplicación posible de este repo: la copia que se queda vieja es
+// la del camino que se usa menos, y acá «quedarse vieja» significa mostrarle a alguien un plano
+// que no le corresponde.
+//
+// Devuelve TRES cosas porque hay tres motivos distintos por los que un hecho no aparece, y cada
+// uno se arregla distinto: se ve, no se puede ver (falta capacidad), o nadie puede verlo (esta
+// versión no sabe qué es).
+func hechosVisiblesPara(p *Principal, d fleet.Device, hechos []fleet.Hecho) (visibles []fleet.Hecho, ocultos, sinClasificar int) {
+	visibles = make([]fleet.Hecho, 0, len(hechos))
+	for _, h := range hechos {
+		necesaria, clasificado := fleet.CapDeHecho(h.Tipo)
+		if !clasificado {
+			// NO es «oculto por permiso» y por eso se cuenta aparte: nadie lo puede ver, ni
+			// siquiera quien tenga todo. Mezclarlos en un contador diría «pedile permiso a
+			// alguien» sobre algo que ningún permiso destraba.
+			sinClasificar++
+			continue
+		}
+		// PuedeVerHistorialDeDevice y no PuedeSobreDevice: una máquina revocada conserva su
+		// cronología y quien podía verla mientras vivía la sigue viendo (A51). La revocación es
+		// el kill-switch para OPERAR, no para auditar.
+		if !PuedeVerHistorialDeDevice(p, d, necesaria) {
+			ocultos++
+			continue
+		}
+		visibles = append(visibles, h)
+	}
+	return visibles, ocultos, sinClasificar
 }
 
 // algunPlanoVisible dice si esta credencial alcanza a ver al menos un plano de esta máquina.

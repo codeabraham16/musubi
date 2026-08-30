@@ -171,6 +171,15 @@ func readSweepCases() []readSweepCase {
 		// positivo permanente. El marcador tiene que ser algo que SÓLO se puede saber leyendo el
 		// dato ajeno, y el argv de un comando de web lo es.
 		{"musubi_fleet_cronologia", map[string]any{"device": "VICTIMDEVICE", "project": "web"}, "VICTIMSCRIPT"},
+		// Fase 5 · S14 · el CRUCE con la memoria del tenant ajeno, que es el caso más peligroso de
+		// todo el barrido: esta tool sale del plano de flota y va a leer `observations`. Si el
+		// scope de memoria se derivara del alcance de QUIEN PREGUNTA en vez del proyecto de la
+		// MÁQUINA, un atacante con una máquina propia se llevaría la memoria ajena por una puerta
+		// que ninguna de las guardas de recall vigila.
+		//
+		// El marcador es `VICTIMOBS` —una observación de web—, y el admin federado la ve por el
+		// enlace `ventana`: se sembró recién y la ventana default son 24 h.
+		{"musubi_fleet_contexto", map[string]any{"device": "VICTIMDEVICE", "project": "web"}, "VICTIMOBS"},
 	}
 }
 

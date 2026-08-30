@@ -13,8 +13,8 @@
 > pendiente).
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
-> la **fase 5** con su primer slice (**S13 · la cronología**), que dejó **A59** y **A60** anotados el mismo día.
-> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
+> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -43,6 +43,7 @@
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A59 | **La bitácora no distingue el origen AUTOMÁTICO del manual** | Una política y una persona escriben en `device_commands` con la MISMA forma: no hay columna que diga «esto lo disparó una regla». La diferencia se lee del nombre del principal —`auto-heal` contra `gio`—, que es una CONVENCIÓN y no una garantía: nada impide que un principal de política se llame como una persona, y entonces la cronología y la bitácora dirían que alguien hizo a mano lo que hizo una regla. **Apareció al escribir la cronología (S13)**, que es donde más pesa: una línea de tiempo se lee como el relato de lo que pasó, y «auto-heal reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició cuarenta veces» son dos relatos distintos. **Hoy no rompe nada** porque los principales de política se declaran aparte en `config.yaml` y el dato es recuperable cruzando. Arreglarlo es una columna `origen` en la tabla, su migración y pasarla por las dos superficies. **Se revisa cuando haya más de un puñado de políticas, o el día que alguien lea la bitácora sin saber qué principales son reglas.** | **sin asignar** |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
+| A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -69,6 +70,57 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 · FASE 5 · S14 — EL CRUCE: la flota le pregunta a la memoria.**
+
+S13 contesta qué HIZO Musubi en una máquina. Esto contesta qué SABÍA — y cruzarlas es lo único de
+todo el track que ningún panel del mercado puede dar, porque ninguno tiene al lado la memoria del
+equipo y su código.
+
+- **CORRELACIÓN, NO CAUSA, y no es una advertencia legal: es el diseño.** Lo tentador es que
+  conteste «anda lenta PORQUE el martes se desplegó X». Lo haría ADIVINANDO, y una causa adivinada
+  con aire de certeza es peor que no decir nada: manda a alguien a arreglar lo que no está roto y,
+  la segunda vez que acierta, se le empieza a creer. Junta los hechos y declara cómo los enlazó.
+- **LOS DOS ENLACES NO SE MEZCLAN, y el fuerte gana.** `termino` es que el texto NOMBRA la máquina
+  o uno de sus servicios; `ventana` es que sólo coincide en el tiempo. Presentados iguales,
+  cualquier coincidencia temporal se lee como una pista. Cuando una nota entra por las dos vías se
+  conserva el fuerte: al revés perdería justo el peso que la hace útil.
+- **LOS TÉRMINOS SALEN DEL INVENTARIO, no del texto de los comandos.** Sacar palabras del argv
+  parece obvio y sobre datos reales produce basura —`cmd`, `type`, `/c`, una ruta de Windows—.
+  Salen el nombre de la máquina y sus servicios: pocos, exactos, explicables. Un término que no
+  sirve pasa a ser un problema de inventario, que sí se arregla.
+- **LOS TÉRMINOS SON INFORMACIÓN Y SE COMPUERTAN.** Decir «busqué postgres en esta máquina» es
+  decir que ahí corre un postgres, que es lo que `metrics` protege. Sin esa capacidad no se arman,
+  y la respuesta marca `servicios_ocultos` en vez de devolver una lista corta que se leería como
+  «esta máquina no corre nada».
+- **LA MEMORIA SE LEE EN EL PROYECTO DE LA MÁQUINA**, no en el alcance de quien pregunta. Un
+  `read: all` que usara SU alcance traería notas de otro tenant: no sería una fuga —puede verlas
+  por otra puerta— pero sí una RESPUESTA FALSA, con el sello de una herramienta que dice haber
+  correlacionado.
+- **LA MURALLA 2 VALE TAMBIÉN POR ESTA PUERTA.** El predicado canónico lo cumplen nueve consultas
+  de recall; ésta es la décima y la PRIMERA QUE LLEGA DESDE FUERA DEL RECALL, que es por donde una
+  muralla se rodea sin querer.
+- **LA COMPUERTA Y LA RESOLUCIÓN DE MÁQUINA SE EXTRAJERON de S13**, no se copiaron. Una compuerta
+  duplicada es la peor duplicación posible acá: la copia que se queda vieja es la del camino que se
+  usa menos, y «quedarse vieja» significa mostrarle a alguien un plano que no le corresponde.
+
+**LAS FECHAS, QUE ES DONDE ESTO SE ROMPE EN SILENCIO (A61).** En la misma base conviven dos
+formatos: la flota escribe RFC3339 desde Go y la memoria deja que SQLite ponga `CURRENT_TIMESTAMP`.
+Comparar con el equivocado NO da error: da vacío, y ese vacío se lee como «no había nada escrito
+ese día». Y hay una trampa arriba de la trampa: **el driver convierte al LEER y no al COMPARAR**
+—`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—,
+así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar.
+
+**18 SABOTAJES, Y LOS TRES QUE NO ROMPIERON FUERON PRUEBAS MÍAS DEMASIADO FLOJAS.** No código
+débil: verificación débil, que es peor porque no se nota.
+
+- Comparar la ventana en RFC3339 quedaba verde con una ventana de 24 h, porque a esa escala
+  **manda la fecha y no la hora**. La guarda se rehízo con la hora FIJADA y una ventana del mismo
+  día.
+- Sacar el predicado de visibilidad quedaba verde porque **ninguna prueba sembraba una observación
+  tapada**.
+- Contar el mínimo de un término en bytes quedaba verde porque elegí «año»: 4 bytes y 3 runas,
+  que pasa contando de las dos formas. Con «ño» las dos cuentas se separan.
 
 **2026-08-29 (8) · FASE 5 ARRANCA — S13, la cronología: qué le pasó a UNA máquina, en UNA ventana.**
 

@@ -399,6 +399,12 @@ type DeviceStore interface {
 	// ventana vieja y ese vacío se lee como «no pasó nada». `truncado` dice si el tope cortó algo
 	// que estaba ADENTRO de la ventana.
 	CronologiaDeDevice(projectID, deviceID string, v fleet.Ventana, tope int, ahora time.Time) ([]fleet.Hecho, bool, error)
+	// ObservacionesEnVentana y CodigoTocadoEnVentana son las dos lecturas que la FLOTA le hace a
+	// la MEMORIA (fase 5 · S14): qué se escribió y qué código se tocó dentro de una ventana. El
+	// aislamiento por proyecto sale del ctx, igual que en el resto del recall — y OJO con las
+	// fechas: estas tablas guardan el formato de `CURRENT_TIMESTAMP` de SQLite, no RFC3339.
+	ObservacionesEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]Observation, error)
+	CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]ArchivoTocado, error)
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.
 	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
