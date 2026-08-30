@@ -7,6 +7,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
+  Reproducido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
+  DEFINIDA para este proyecto» y le decía al agente que **no usara la identidad de otro proyecto** —
+  cuando la correcta era justamente la de Altura, que existe con el tenant en minúscula. El mensaje
+  de fallo no sólo callaba: desorientaba.
+  - El argumento `brand` se normaliza (es texto libre que escribe una persona); el `ProjectID` del
+    principal NO, porque sale del token y es autoritativo.
+  - **«Este proyecto no definió su marca» y «pediste una marca que no existe» dejan de decirse
+    igual.** Era el antipatrón de la casa —el valor de fallo idéntico al tranquilizador—: un dedazo
+    como `brand: "altur"` devolvía un brief que se leía legítimo y componía con el método
+    universal, sin un solo indicio. Ahora el brief trae `brand_note` con el aviso.
+  - El test de ataque de F0 que **afirmaba este defecto** se dio vuelta y ahora afirma la defensa. Su
+    propio mensaje decía «actualizá este banco» para el día en que se arreglara.
+
+
 ### Added
 - **El brief dice qué NO entregar** (Musubi Renaissance, fase 4 del plan de cierre). El pedido que
   abrió el track fue «lo usé mucho en Altura y no me gusta nada, todo full malo», y el brief le decía

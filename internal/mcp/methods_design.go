@@ -74,6 +74,11 @@ const brandTopicKey = "diseno/marca"
 // un proyecto ajeno SIN marca propia NO la hereda (ver brandFor → designBrandNeutral).
 const homeBrandProject = "musubi"
 
+// brandSourceNone es el valor de `brand_source` cuando no se encontró marca. Va como constante y no
+// como literal suelto porque ahora hay código que lo compara para distinguir «no hay marca» de
+// «pediste una que no existe».
+const brandSourceNone = "none"
+
 // designBriefBudget es el TOPE DURO del brief, en tokens estimados. Existe porque antes no había
 // ninguno: medido el 2026-08-29, un `limit=100` daba 11.131 tokens y UNA tarjeta grande del acervo
 // llegó a producir 285.023 — el tope acotaba la CANTIDAD de tarjetas, nunca su TAMAÑO. Un motor que
@@ -328,10 +333,14 @@ type designBrief struct {
 	Principles   string `json:"principles"`    // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
 	// Avoid es el CHECKLIST DE RECHAZO (rechazo_diseno.go). Va pegado a los principios y no al final
 	// porque es criterio, no apéndice: un «no hagas X» leído después de componer llega tarde.
-	Avoid        string        `json:"avoid"`
-	Brand        string        `json:"brand"`                  // la marca ACTIVA, resuelta por proyecto (CAPA 3)
-	BrandScope   string        `json:"brand_scope"`            // de qué proyecto salió la marca
-	BrandSource  string        `json:"brand_source"`           // project | default | none (ver brandFor)
+	Avoid       string `json:"avoid"`
+	Brand       string `json:"brand"`        // la marca ACTIVA, resuelta por proyecto (CAPA 3)
+	BrandScope  string `json:"brand_scope"`  // de qué proyecto salió la marca
+	BrandSource string `json:"brand_source"` // project | default | none (ver brandFor)
+	// BrandNote aparece cuando se pidió una marca por nombre y NO se encontró. Sin esto, el brief
+	// que sale de un dedazo se lee exactamente igual que el de un proyecto que todavía no definió
+	// su identidad, y el agente compone con el método universal sin saber que le falta la marca.
+	BrandNote    string        `json:"brand_note,omitempty"`
 	BrandTokens  *brandTokens  `json:"brand_tokens,omitempty"` // tokens estructurados de la marca, si los hay
 	Corpus       []patronItem  `json:"corpus"`                 // patrones del acervo, con su CONTENIDO COMPLETO
 	CorpusScope  string        `json:"corpus_scope"`           // de qué tenant salió el acervo
@@ -417,6 +426,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Brand:           sanearMaterial(brandText),
 		BrandScope:      brandScope,
 		BrandSource:     brandSource,
+		BrandNote:       avisoDeMarca(args.Brand, brandScope, brandSource),
 		BrandTokens:     brandTok,
 		Corpus:          rec.Patrones,
 		CorpusScope:     designCorpusScope,
@@ -1041,7 +1051,16 @@ func sobreElPiso(src []searchSource, piso float32) []searchSource {
 // de mando), que puede diseñar a nombre de OTRO proyecto; un principal acotado lo ignora y usa el suyo.
 // Sin principal (stdio local) ⇒ homeBrandProject (Musubi).
 func brandScopeFor(p *Principal, argBrand string) string {
-	if argBrand = strings.TrimSpace(argBrand); argBrand != "" && brandArgAllowed(p) {
+	// EL ARGUMENTO SE NORMALIZA; EL PROYECTO DEL PRINCIPAL NO. El argumento es texto libre que
+	// escribe una persona, así que `Altura` y `altura` tienen que llegar al mismo lado. El
+	// ProjectID del principal sale del token y es autoritativo: tocarlo sería inventarle otro
+	// tenant a una credencial.
+	//
+	// Medido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
+	// DEFINIDA para este proyecto» y le decía al agente que NO usara la identidad de otro — cuando
+	// la correcta era justamente la de Altura, que existe con el tenant en minúscula. El proyecto
+	// perdía su marca por una mayúscula, y el mensaje de fallo era indistinguible del legítimo.
+	if argBrand = strings.ToLower(strings.TrimSpace(argBrand)); argBrand != "" && brandArgAllowed(p) {
 		return argBrand
 	}
 	if p != nil && p.ProjectID != "" {
@@ -1080,7 +1099,16 @@ func (s *McpServer) brandFor(scope string) (identity, source string, tokens *bra
 	if scope == homeBrandProject {
 		return designBrand, "default", musubiBrandTokens
 	}
-	return designBrandNeutral, "none", nil
+	return designBrandNeutral, brandSourceNone, nil
+}
+
+// brandPedidaNoExiste distingue «este proyecto no definió su marca» de «pediste una marca que no
+// existe». Hasta el 2026-08-30 las dos daban `brand_source: none` con el mismo texto, que es el
+// antipatrón de la casa: el valor de fallo idéntico al tranquilizador. Quien pide `brand: "altur"`
+// por un dedazo recibía un brief que se lee como legítimo y compone con el método universal, sin un
+// solo indicio de que la marca que pidió nunca se buscó.
+func brandPedidaNoExiste(argBrand, source string) bool {
+	return strings.TrimSpace(argBrand) != "" && source == brandSourceNone
 }
 
 // normalizeDesignTarget acota el target a los cuatro emisores conocidos. Vacío/desconocido ⇒ "any"
@@ -1225,3 +1253,15 @@ kind ∈ card | panel | button | text | eyebrow | divider | dot | chip | row | c
 tint (rol de color) ∈ INK (principal) | MUTED (secundario) | FAINT (tenue) | CORD (acento primario de la marca; en Musubi, índigo) | BRAIN (acento secundario) | BODY (positivo/verde) | WARN (ámbar). Los VALORES concretos de cada rol salen de la marca del brief, no son fijos.
 fill (cuerpo de una caja) ∈ "CORD" (sólido nombrado) | "solid:BODY" | "grad:CORD,BRAIN,vertical|horizontal|diagonal" | "grad:BRAIN,CORD,radial" | "image:foto" | "image:textura".
 REGLAS DE SALIDA: SÓLO el JSON (sin ` + "```" + `json, sin comentarios, sin prosa antes ni después), JSON válido (comillas dobles, sin comas colgantes), todo dentro del frame 340×520, un CTA por pantalla.`
+
+// avisoDeMarca arma la nota cuando se pidió una marca por nombre y no se encontró. Devuelve "" en
+// el caso normal: una nota que aparece siempre es ruido, y una que nunca aparece es un silencio.
+func avisoDeMarca(argBrand, scope, source string) string {
+	if !brandPedidaNoExiste(argBrand, source) {
+		return ""
+	}
+	return "⚠ PEDISTE LA MARCA '" + strings.TrimSpace(argBrand) + "' Y NO EXISTE (se buscó el tenant '" +
+		scope + "'). Esto NO es «el proyecto todavía no definió su marca»: es que no se encontró la que " +
+		"pediste. Antes de componer, confirmá el nombre del proyecto — si seguís, el diseño va a salir con " +
+		"el método universal y SIN la identidad que querías."
+}
