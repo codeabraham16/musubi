@@ -7,6 +7,48 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El presupuesto del brief protege el material, no el sermón** (Musubi Renaissance). Pedido del
+  usuario: *«no hay problema si gasta un poco más, lo importante es que haga un diseño bueno y no
+  genérico»*. Tenía razón y el dato lo respalda — F1+F2 bajaron el brief de 5.850 a 2.400 tokens y
+  **M3 se movió de 0,22 a 0,26 y M1 quedó clavada en 0,09**: el recorte compró abstención y cerró la
+  inyección, o sea seguridad, no calidad de diseño.
+  - Medido contra el central sobre un brief real de 2.533 tokens: **el 66 % era constante** y el
+    corpus —lo único que cambia con el pedido— eran **cuatro titulares de 86 a 92 chars, el 10 %**.
+    El motor entregaba cuatro títulos y un sermón universal, y mandaba a `musubi_memory_expand` a
+    buscar el material de verdad. **El tope no estaba mal calibrado, estaba mal REPARTIDO.**
+  - **El corpus viaja entero**: `patronItem` reemplaza a `searchHit` en el brief, con la misma forma
+    que `metodoItem` (topic + fuente + texto + procedencia). Tope por tarjeta
+    (`designPatronItemMax` = 1.800) para que un artículo `ingested/*` de 12.000 chars no se lleve el
+    brief puesto, con `recortado` y `full_tokens` declarados.
+  - `designBriefBudget` **2.600 → 6.000**, y la gobernanza se comprimió: `role`, `precedence`,
+    `material_note` e `instructions` sumaban 2.475 chars **explicando las reglas del brief**. Mismos
+    invariantes, un tercio del canal.
+  - **La compuerta del banco pasa de M4 a M5.** `m5_fraccion_variable_min` 0,13 → **0,40**: para
+    gastar más, el motor tiene que traer más material específico. Verificado con sabotaje, no
+    supuesto — reponiendo el sermón constante **M5 se derrumba de 0,45 a 0,243 y el banco se pone
+    rojo, mientras `m4_tokens_max` queda en 5.946, bajo el techo**. El tamaño solo no lo habría
+    atrapado; es la falla que M4 no supo ver a tiempo el 2026-08-21.
+  - Resultado del banco: M4 p50 2.457 → 3.143, máximo 2.591 → 4.461, **M5 0,146 → 0,45 (3,1×)**.
+    M2 y los tres canales de M6 sin moverse.
+
+### Fixed
+- **Una marca gigante dejaba el brief sin una sola pieza de conocimiento de diseño** (Musubi
+  Renaissance). Lo encontró el banco al instrumentar el presupuesto, y ninguna métrica lo miraba.
+  - `cederUnItem` vaciaba método y corpus **hasta cero** antes de tocar la marca: con una marca que
+    sola no entraba, el brief salía con `corpus: 0`, `method: 0` y **`degraded` en FALSO**. Un brief
+    inútil con cara de completo, entregado a quien pidió que le diseñen algo.
+  - Que la marca gane por **precedencia** no es ganar por **espacio**: la precedencia decide quién
+    manda cuando dos partes se contradicen, no la autoriza a quedarse con todo el canal. Ahora la
+    marca cede —con su aviso ruidoso y su declaración en `truncated`— antes de que el corpus baje de
+    `designPisoCorpus` (5) o el método de `designPisoBloque` (3). El tope duro sigue siendo lo único
+    innegociable: como último recurso los pisos se rompen, y queda declarado.
+  - El piso del corpus es **más alto** que el del método a propósito: cuando falta lugar sobrevive lo
+    específico, no lo universal.
+- **El recorte por tamaño partía caracteres en dos.** `txt[:max]` a secas corta una vocal acentuada
+  entre sus dos bytes y el JSON sale con un U+FFFD donde había una letra. Con tarjetas de 245 chars
+  casi no se veía; con artículos de 12.000 iba a pasar seguido. Alcanza a la marca y al método.
+
 ### Fixed
 - **El método no compite por los lugares del pool** (Musubi Renaissance). Segunda vuelta sobre la
   misma regresión, y la primera corrección estaba mal diagnosticada.

@@ -456,7 +456,7 @@ func TestBancoInyeccionNoSeGanaConEtiquetas(t *testing.T) {
 	// Lo que sí cuenta como neutralizado: que el payload viva en el material y no en las órdenes.
 	limpio := designBrief{
 		Principles: "PRINCIPIOS:\n- EL COLOR SE GANA.",
-		Corpus:     []searchHit{{ID: "x", TopicKey: "design-corpus/x", Gist: payload}},
+		Corpus:     []patronItem{{ID: "x", Topic: "design-corpus/x", Texto: payload}},
 	}
 	c := DondeCayo(limpio, payload)
 	if c.EnInstruccion {
