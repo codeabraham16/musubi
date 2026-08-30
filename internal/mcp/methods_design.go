@@ -489,60 +489,71 @@ func sanearMaterial(s string) string {
 // `designPrinciples`, que ya vale por sí solo: el método se puede judge/supersede sin romper NUNCA el brief.
 // Devuelve (texto de principios, source: "corpus"|"static"). Model-free: query keyed, sin LLM.
 func (s *McpServer) designMethodCards(relevantes []searchSource, modo string) (cards []metodoItem, source string) {
-	// CAMINO PREFERIDO (F4): las tarjetas que el propio pool trajo ordenadas por relevancia al pedido.
-	// Antes se servían SIEMPRE las mismas, ordenadas por importancia — verificado contra el central: el
-	// hash del bloque de método era idéntico para un ERP de escritorio, un juego móvil, una landing y
-	// un gráfico de series. Un bloque que no cambia con el pedido no responde nada sobre el pedido.
-	// SÓLO por el camino semántico. Por FTS lo que llega es un match léxico, no una medida de
-	// relevancia: usarlo para ELEGIR el método hace que una tarjeta buena desaparezca del brief sólo
-	// porque no comparte palabras con el pedido, y sin que nadie se entere. Es el mismo criterio que el
-	// piso de F3 — donde no hay puntaje, no se toman decisiones de ranking.
-	if modo == recuperacionSemantica {
-		tope := designMetodoRelevante
-		if tope > len(relevantes) {
-			tope = len(relevantes)
-		}
-		for _, r := range relevantes[:tope] {
-			if it, ok := comoMetodoItem(r.topicKey, r.content); ok {
-				cards = append(cards, it)
-			}
-		}
-		// Y se devuelve AUNQUE QUEDE VACÍO. Caer al fallback por importancia acá volvería a meter las
-		// tarjetas que el piso acababa de descartar por irrelevantes — deshaciendo en silencio la
-		// decisión que se acaba de tomar. Si el acervo no tiene método para este pedido, el criterio
-		// igual viaja: el núcleo universal está en `principles` y es del código (I-SEL2).
-		if len(cards) == 0 {
-			return nil, "static"
-		}
-		return cards, "relevancia"
-	}
-	// FALLBACK: sin relevancia utilizable (camino léxico, o el pool no trajo método) se sirve el set
-	// curado por IMPORTANCIA, que es lo que se hacía siempre. Se declara en `method_source` para que la
-	// diferencia entre los dos caminos sea visible y no haya que deducirla.
+	// EL MÉTODO NO COMPITE POR LOS LUGARES DEL POOL, y ésta es la corrección de fondo (medida en
+	// producción 2026-08-30, dos veces).
+	//
+	// La versión anterior tomaba el método de lo que el pool hubiera traído. Pero el pool es un top-N
+	// por similitud sobre el tenant ENTERO —1.438 tarjetas de corpus y 268 artículos contra 30 de
+	// método— así que en un pedido de dominio concreto las tarjetas de método NI SIQUIERA ENTRABAN.
+	// Medido contra el central: «el color se gana: un acento dominante» traía 5; «tabla densa de
+	// inventario de Altura con lotes» traía CERO, y «un formulario de alta con validación», una.
+	//
+	// Primero creí que era el piso de similitud y se lo saqué al método (#367). No alcanzó, porque el
+	// problema estaba una etapa ANTES: no es que se filtraran, es que nunca llegaban. Un criterio
+	// UNIVERSAL no puede ganarle en similitud a un patrón que habla justo del pedido, así que ponerlos
+	// a competir por los mismos lugares garantiza que el universal pierda siempre.
+	//
+	// Ahora el set base sale de su propia consulta —acotada al sub-acervo, ordenada por importancia— y
+	// el pool sólo se usa para REORDENARLO cuando trajo señal. Así el método está SIEMPRE, y además
+	// está ordenado por relevancia cuando hay con qué.
 	obs, err := s.engine.ObservationsByTopicPrefixInProject(designCorpusScope, designMethodPrefix, designMethodLimit)
 	if err != nil || len(obs) == 0 {
 		return nil, "static"
 	}
-	for _, o := range obs {
-		txt := sanearMaterial(strings.TrimSpace(o.Content))
-		if txt == "" {
-			continue
+
+	source = "importancia"
+	if modo == recuperacionSemantica && len(relevantes) > 0 {
+		obs = reordenarPorRelevancia(obs, relevantes)
+		source = "relevancia"
+	}
+
+	tope := designMetodoRelevante
+	if tope > len(obs) {
+		tope = len(obs)
+	}
+	for _, o := range obs[:tope] {
+		if it, ok := comoMetodoItem(o.TopicKey, o.Content); ok {
+			cards = append(cards, it)
 		}
-		// Una tarjeta sola no puede llevarse el brief puesto. La más larga del acervo real mide
-		// 1.087 chars, así que este tope no toca nada legítimo — existe porque el tope de CANTIDAD
-		// nunca fue un tope de TAMAÑO, y una tarjeta de 1 MB producía 285.023 tokens de brief.
-		recortada := false
-		if len(txt) > designMethodItemMax {
-			txt = txt[:designMethodItemMax] + " […tarjeta recortada por tamaño]"
-			recortada = true
-		}
-		cards = append(cards, metodoItem{Topic: o.TopicKey, Fuente: designCorpusScope, Texto: txt, Recortado: recortada})
 	}
 	if len(cards) == 0 {
 		// Tarjetas presentes pero TODAS vacías: que el brief lo diga, y queda el núcleo estático.
 		return nil, "static"
 	}
-	return cards, "importancia"
+	return cards, source
+}
+
+// reordenarPorRelevancia pone adelante las tarjetas que el pool trajo —en el orden en que las trajo,
+// que es el de similitud al pedido— y detrás el resto, conservando su orden por importancia. No
+// DESCARTA nada: el pool decide qué sube, nunca qué se cae.
+func reordenarPorRelevancia(obs []memory.ObsLite, relevantes []searchSource) []memory.ObsLite {
+	rango := make(map[string]int, len(relevantes))
+	for i, r := range relevantes {
+		if _, visto := rango[r.topicKey]; !visto {
+			rango[r.topicKey] = i
+		}
+	}
+	arriba := make([]memory.ObsLite, 0, len(relevantes))
+	abajo := make([]memory.ObsLite, 0, len(obs))
+	for _, o := range obs {
+		if _, hay := rango[o.TopicKey]; hay {
+			arriba = append(arriba, o)
+		} else {
+			abajo = append(abajo, o)
+		}
+	}
+	sort.SliceStable(arriba, func(i, j int) bool { return rango[arriba[i].TopicKey] < rango[arriba[j].TopicKey] })
+	return append(arriba, abajo...)
 }
 
 // comoMetodoItem convierte una fuente del pool en una tarjeta de método servible: la sanea, la acota
