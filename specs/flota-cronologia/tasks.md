@@ -13,6 +13,7 @@
 | T7 | La tool `musubi_fleet_cronologia` (readOnly): resolución de máquina por proyecto, compuerta por hecho, los tres contadores y `no_visto` | `internal/mcp/methods_cronologia.go`, `internal/mcp/registry.go` |
 | T8 | Las cinco guardas que se ponen rojas solas al agregar una tool readOnly, y el golden regenerado | `read_concurrency_test.go`, `read_surface_class_test.go`, `motor_sin_candado_test.go`, los dos README, `testdata/toolslist.golden.json` |
 | T9 | `respText` del barrido de aislamiento deja de abortar ante un `RpcError` y verifica el marcador TAMBIÉN en el mensaje de error | `internal/mcp/read_surface_class_test.go` |
+| T10 | **`Comando.EstadoActual`**: el vencimiento de un comando se DERIVA al leer, cableado en las DOS superficies. `Comando.Vencido` existía desde S5 sin ningún llamador | `internal/fleet/comando.go`, `internal/memory/cronologia.go`, `internal/mcp/methods_exec.go` |
 
 ## Invariantes
 
@@ -34,10 +35,11 @@
 | **C15** | `TestLaCronologiaDeclaraLoQueNoVio` | devolver nil desde `HuecosDeLaCronologia` → ✅ falla |
 | **C16** | `TestLaDuracionDiceSiSeSabe` | devolver sólo la duración, sin el booleano → ✅ falla |
 | **C17** | `TestElArgvDeBitacoraNuncaLlevaLaContrasena` · `TestUnaOperacionDePantallaNoSeLeMuestraAQuienSoloPuedeEjecutar` | que `ArgvDeBitacora` devuelva el argv tal cual → ✅ falla |
+| **C18** | `TestUnComandoPendienteYViejoSeMuestraExpirado` · `TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto` | que `EstadoActual` devuelva `c.Estado`; volver a poner el crudo en la bitácora; sacar la derivación de la cronología; devolver `expirado` siempre (control positivo) → ✅ fallan los cuatro |
 | — | `TestOrdenarHechosEsEstableYDelMasNuevoAlMasViejo` | sacar el desempate por referencia → ✅ falla |
 | — | `TestLasOperacionesInternasDeHoyEstanClasificadas` · `TestLaCronologiaCruzaLosTresPlanos` · `TestHorasConDesdeOHastaEsUnError` · `TestVentanaHastaAplicaLosDefaults` | dejar que `horas` le gane a `desde` en silencio → ✅ falla |
 
-**22 sabotajes ejecutados.** Dos no rompieron a la primera y los dos enseñaron algo:
+**26 sabotajes ejecutados.** Dos no rompieron a la primera y los dos enseñaron algo:
 
 - **`I`** (sacar `Normalizada` del motor) no rompió porque la tool también normaliza. La defensa
   doble es correcta —`CronologiaDeDevice` es parte de la interfaz del motor y la puede llamar
@@ -53,3 +55,4 @@
 | # | Qué | Registro |
 |---|---|---|
 | A59 | La bitácora no distingue el origen AUTOMÁTICO del manual: una política y una persona escriben en la misma tabla con la misma forma, y la diferencia se lee del nombre del principal por convención | `specs/control-de-flota/ABIERTO.md` |
+| A60 | Un comando `entregado` que nunca reporta se queda así para siempre. No se puede derivar con la regla de `pendiente`: su reloj es el `timeout` del comando, no `ComandoVidaMax` | `specs/control-de-flota/ABIERTO.md` |

@@ -512,3 +512,75 @@ func TestTodaOperacionInternaDelCodigoEstaClasificada(t *testing.T) {
 		}
 	}
 }
+
+// LAS DOS SUPERFICIES CUENTAN LA MISMA HISTORIA sobre la misma tabla.
+//
+// Un comando que nadie levantó y que pasó su vida máxima se muestra `expirado` en la bitácora Y
+// en la cronología. `expirado` sólo se ESTAMPA cuando el agente viene a pedir su cola, así que
+// una máquina cuyo agente no vuelve deja sus comandos en `pendiente` para siempre — y las dos
+// vistas los dibujaban así. Medido en producción: 50 comandos de 10 horas, vida máxima 15 min.
+//
+// Es la lección de A39 aplicada al eje del tiempo: una guarda sobre UNA superficie deja la otra
+// mintiendo, y la que miente es siempre la que menos se mira.
+//
+// Sabotaje: devolver `string(c.Estado)` en cualquiera de las dos → falla acá, en esa mitad.
+func TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+
+	// Un comando encolado hace diez horas que nadie levantó nunca: exactamente el caso real.
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: "infra", Principal: "davantis",
+		Creado: time.Now().UTC().Add(-10 * time.Hour),
+		Argv:   []string{"cmd", "/c", "MARCAVENCIDO"}, Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := conCaps("infra", map[fleet.Cap][]string{fleet.CapExec: {"*"}})
+
+	estadoDe := func(tool string, args map[string]any, filas string, marca string) string {
+		t.Helper()
+		res, e := callAsPrincipal(t, s, p, tool, args)
+		if e != nil {
+			t.Fatalf("%s: %+v", tool, e)
+		}
+		for _, f := range jsonOf(t, res)[filas].([]any) {
+			fila := f.(map[string]any)
+			argv, _ := fila["argv"].([]any)
+			for _, a := range argv {
+				if a == marca {
+					return fila["estado"].(string)
+				}
+			}
+		}
+		t.Fatalf("%s: no apareció el comando marcado: %s", tool, textOf(t, res))
+		return ""
+	}
+
+	enBitacora := estadoDe("musubi_fleet_log", map[string]any{"limite": 50}, "comandos", "MARCAVENCIDO")
+	enCronologia := estadoDe("musubi_fleet_cronologia",
+		map[string]any{"device": "pc-gio", "horas": 24, "limite": 100}, "hechos", "MARCAVENCIDO")
+
+	if enBitacora != string(fleet.EstadoExpirado) {
+		t.Errorf("la BITÁCORA muestra %q para un comando de 10 h que nadie levantó, esperaba %q",
+			enBitacora, fleet.EstadoExpirado)
+	}
+	if enCronologia != string(fleet.EstadoExpirado) {
+		t.Errorf("la CRONOLOGÍA muestra %q para un comando de 10 h que nadie levantó, esperaba %q",
+			enCronologia, fleet.EstadoExpirado)
+	}
+	if enBitacora != enCronologia {
+		t.Errorf("las dos superficies discrepan sobre la MISMA fila: bitácora=%q cronología=%q",
+			enBitacora, enCronologia)
+	}
+
+	// CONTROL: uno recién encolado sigue `pendiente` en las dos. Sin esto, marcar todo como
+	// expirado pasaría las tres aserciones de arriba.
+	if got := estadoDe("musubi_fleet_log", map[string]any{"limite": 50}, "comandos", "MARCASCRIPT"); got != string(fleet.EstadoPendiente) {
+		t.Errorf("un comando recién encolado se muestra %q en la bitácora", got)
+	}
+	if got := estadoDe("musubi_fleet_cronologia",
+		map[string]any{"device": "pc-gio", "horas": 24, "limite": 100}, "hechos", "MARCASCRIPT"); got != string(fleet.EstadoPendiente) {
+		t.Errorf("un comando recién encolado se muestra %q en la cronología", got)
+	}
+}

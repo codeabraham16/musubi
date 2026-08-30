@@ -173,3 +173,22 @@ hecho**, así que ninguna superficie futura puede olvidarse de llamarlo.
   eso está declarado en `no_visto` en vez de disimulado con un `last_*`.
 - **No infiere causas.** Devuelve hechos correlacionados en una ventana; quién concluye es quien
   lee. Una tool que adivinara la causa sería exactamente lo que este repo evita.
+
+---
+
+## C18 · el estado de un comando se DERIVA al leer
+
+**Encontrado usando la tool contra la flota real, no leyendo el código.** La primera cronología de
+una máquina Windows devolvió cincuenta comandos en `pendiente`, encolados **diez horas antes**, con
+una vida máxima de quince minutos.
+
+`expirado` se estampa en un solo lugar —adentro de `TomarComandos`, o sea **cuando el agente viene a
+pedir su cola**—. Eso alcanza para lo que esa función decide (que el comando no se ejecute) y es
+exactamente insuficiente para lo que un panel muestra: si el agente no vuelve, nadie estampa nada.
+
+`Comando.Vencido` **ya existía desde S5, escrita y probada, sin un solo llamador** — el mismo patrón
+de A58. Ahora `Comando.EstadoActual(ahora)` la usa, y por ahí pasan **las dos** superficies: la
+bitácora y la cronología. Una guarda sobre una sola dejaría a la otra mintiendo (A39).
+
+Sólo vence lo `pendiente`. Un `entregado` que nunca reportó es otra cosa y queda abierto como
+**A60**: su reloj es el `timeout` del propio comando, no `ComandoVidaMax`.

@@ -13,8 +13,8 @@
 > pendiente).
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
-> la **fase 5** con su primer slice (**S13 · la cronología**), que dejó **A59** anotado el mismo día.
-> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> la **fase 5** con su primer slice (**S13 · la cronología**), que dejó **A59** y **A60** anotados el mismo día.
+> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -42,6 +42,7 @@
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A59 | **La bitácora no distingue el origen AUTOMÁTICO del manual** | Una política y una persona escriben en `device_commands` con la MISMA forma: no hay columna que diga «esto lo disparó una regla». La diferencia se lee del nombre del principal —`auto-heal` contra `gio`—, que es una CONVENCIÓN y no una garantía: nada impide que un principal de política se llame como una persona, y entonces la cronología y la bitácora dirían que alguien hizo a mano lo que hizo una regla. **Apareció al escribir la cronología (S13)**, que es donde más pesa: una línea de tiempo se lee como el relato de lo que pasó, y «auto-heal reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició cuarenta veces» son dos relatos distintos. **Hoy no rompe nada** porque los principales de política se declaran aparte en `config.yaml` y el dato es recuperable cruzando. Arreglarlo es una columna `origen` en la tabla, su migración y pasarla por las dos superficies. **Se revisa cuando haya más de un puñado de políticas, o el día que alguien lea la bitácora sin saber qué principales son reglas.** | **sin asignar** |
+| A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -138,6 +139,23 @@ fila.
 ventana está en DOS capas y la prueba sólo cubría una (se agregó la que faltaba, en el motor), y
 otros dos porque el sabotaje **no compilaba**, que no prueba nada — se rehicieron para que
 compilaran y fuera la prueba la que fallara.
+
+**Y UN HALLAZGO QUE NO SALIÓ DE NINGUNA PRUEBA, SINO DE USAR LA TOOL CONTRA LA FLOTA REAL.** La
+primera cronología de una máquina Windows devolvió cincuenta comandos, todos en `pendiente`,
+encolados **diez horas antes** — con una vida máxima de quince minutos. La causa: `expirado` se
+estampa en UN solo lugar, adentro de `TomarComandos`, o sea **cuando el agente viene a pedir su
+cola**. Si el agente no vuelve, nadie estampa nada.
+
+Es la regla que este repo aplica en todos lados —«una columna de estado que hay que ir a actualizar
+miente en cuanto nadie la actualiza»— y que las dos clases de sesión ya respetaban. Los comandos se
+habían quedado afuera. Peor: **`Comando.Vencido` YA EXISTÍA, escrita y probada desde S5, y no la
+llamaba nadie** — el mismo patrón de A58, capacidad construida e inalcanzable.
+
+Se cableó por `EstadoActual` en **las dos** superficies, que es la lección de A39: una guarda sobre
+una sola deja la otra mintiendo. Y ahí hubo un segundo error mío que atrapó justo esa prueba: puse
+la derivación en la fila de la bitácora y `conResultado` la pisaba con el estado crudo dos líneas
+después, así que el arreglo era **código muerto**. La prueba que compara las dos superficies lo
+encontró; leer el diff, no.
 
 **LO QUE ESTE SLICE DEJA ABIERTO, y hay que decirlo:** la bitácora no distingue el origen automático
 del manual. Una política y una persona escriben con la misma forma y la diferencia se lee del nombre

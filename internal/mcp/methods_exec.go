@@ -172,7 +172,7 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 		base["nota"] = "todavía sin resultado: la máquina puede estar caída, o el comando sigue corriendo. NO se canceló; buscá el resultado con musubi_fleet_log."
 		return jsonResult(base)
 	}
-	return jsonResult(conResultado(base, final))
+	return jsonResult(conResultado(base, final, time.Now()))
 }
 
 // esperarComando relee el comando hasta que termine o se agote la paciencia.
@@ -250,6 +250,10 @@ func (s *McpServer) toolFleetLog(ctx context.Context, raw json.RawMessage) (inte
 	}
 	filas := make([]map[string]interface{}, 0, tope)
 	ocultos := 0
+	// UNA sola lectura del reloj para toda la bitácora: con `time.Now()` por fila, dos comandos
+	// del mismo instante podrían caer a distinto lado del vencimiento dentro de la MISMA
+	// respuesta, y una lista que se contradice a sí misma no la explica nadie.
+	ahora := time.Now()
 	for _, c := range crudos {
 		nombre, puede := nombrePorID[c.DeviceID]
 		if !puede {
@@ -269,10 +273,9 @@ func (s *McpServer) toolFleetLog(ctx context.Context, raw json.RawMessage) (inte
 			// garantía G1 («Musubi nunca guarda la contraseña») se caería por la puerta de al
 			// lado: no la guardaría, pero la mostraría.
 			"argv":   ocultarArgvDePantalla(c.Argv),
-			"estado": string(c.Estado),
 			"creado": c.Creado.UTC().Format(time.RFC3339),
 		}
-		filas = append(filas, conResultado(fila, c))
+		filas = append(filas, conResultado(fila, c, ahora))
 	}
 	res := map[string]interface{}{"project_id": proyecto, "total": len(filas), "comandos": filas}
 	if ocultos > 0 {
@@ -284,8 +287,16 @@ func (s *McpServer) toolFleetLog(ctx context.Context, raw json.RawMessage) (inte
 // conResultado agrega los campos del resultado a una fila. Vive acá porque exec y log tienen que
 // mostrar EXACTAMENTE lo mismo: dos formateos distintos del mismo dato es cómo un panel y una
 // consola terminan discrepando sobre si un comando salió bien.
-func conResultado(fila map[string]interface{}, c fleet.Comando) map[string]interface{} {
-	fila["estado"] = string(c.Estado)
+func conResultado(fila map[string]interface{}, c fleet.Comando, ahora time.Time) map[string]interface{} {
+	// DERIVADO, no el estado guardado — y va acá porque ÉSTE es el único lugar que escribe la
+	// clave: la fila de la bitácora ya lo derivaba un poco más arriba y esta línea lo pisaba con
+	// el crudo, así que el arreglo era código muerto. Lo cazó la prueba que compara las dos
+	// superficies, no la lectura del diff.
+	//
+	// `expirado` sólo se ESTAMPA cuando el agente viene a pedir su cola. Una máquina cuyo agente
+	// no vuelve deja sus comandos en `pendiente` para siempre — medido en producción: cincuenta
+	// comandos de diez horas con una vida máxima de quince minutos, dibujados como pendientes.
+	fila["estado"] = string(c.EstadoActual(ahora))
 	// exit_code viaja como null mientras no haya terminado: «todavía no» y «terminó con 0» son
 	// cosas distintas, y un 0 por default las confundiría.
 	fila["exit_code"] = c.ExitCode
@@ -334,7 +345,7 @@ func (s *McpServer) ejecutarEnTierB(d fleet.Device, cmd fleet.Comando, timeout t
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 	base["transporte"] = "ssh"
-	return jsonResult(conResultado(base, final))
+	return jsonResult(conResultado(base, final, time.Now()))
 }
 
 // correrPorSSH ejecuta un comando ya encolado en un Tier B y guarda su resultado.

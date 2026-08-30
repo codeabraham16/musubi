@@ -272,3 +272,40 @@ func TestLaCronologiaDeclaraLoQueNoVio(t *testing.T) {
 		}
 	}
 }
+
+// UN COMANDO PENDIENTE Y VIEJO SE MUESTRA `expirado`, aunque la fila diga otra cosa.
+//
+// `expirado` sólo se ESTAMPA cuando el agente viene a pedir su cola. Si el agente no vuelve
+// nunca, nadie estampa nada — y la fila dice `pendiente` para siempre. Medido en producción:
+// cincuenta comandos de diez horas con una vida máxima de quince minutos.
+//
+// Sabotaje: que EstadoActual devuelva `c.Estado` a secas → falla acá.
+func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
+	ahora := time.Date(2026, 8, 30, 5, 0, 0, 0, time.UTC)
+
+	viejo := Comando{Estado: EstadoPendiente, Creado: ahora.Add(-10 * time.Hour)}
+	if got := viejo.EstadoActual(ahora); got != EstadoExpirado {
+		t.Errorf("un pendiente de 10 h se muestra %q, esperaba %q", got, EstadoExpirado)
+	}
+
+	// EL DE RECIÉN NO VENCE, y el control importa: sin él, un EstadoActual que devolviera
+	// `expirado` siempre pasaría la aserción de arriba.
+	nuevo := Comando{Estado: EstadoPendiente, Creado: ahora.Add(-time.Minute)}
+	if got := nuevo.EstadoActual(ahora); got != EstadoPendiente {
+		t.Errorf("un pendiente de 1 min se muestra %q, esperaba %q", got, EstadoPendiente)
+	}
+
+	// LO ENTREGADO NO VENCE POR ACÁ. Su reloj es el timeout del comando, no la vida en la cola:
+	// marcar expirado a los 15 min haría que un comando legítimo de 9 minutos aparezca muerto
+	// mientras corre. Que un `entregado` que nunca reporta se quede así es OTRO agujero (A60).
+	corriendo := Comando{Estado: EstadoEntregado, Creado: ahora.Add(-10 * time.Hour)}
+	if got := corriendo.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un entregado viejo se muestra %q: su reloj es el timeout, no ComandoVidaMax", got)
+	}
+
+	// Y lo terminado no se toca nunca.
+	listo := Comando{Estado: EstadoTerminado, Creado: ahora.Add(-10 * time.Hour)}
+	if got := listo.EstadoActual(ahora); got != EstadoTerminado {
+		t.Errorf("un terminado viejo se muestra %q", got)
+	}
+}

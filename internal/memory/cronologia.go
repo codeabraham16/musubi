@@ -91,7 +91,7 @@ func (e *DbEngine) CronologiaDeDevice(projectID, deviceID string, v fleet.Ventan
 
 	// `>= desde` y `< hasta`: la ventana es semiabierta, igual que fleet.Ventana.Contiene. Dos
 	// ventanas consecutivas no pueden contar dos veces el hecho del borde.
-	comandos, err := e.hechosDeComandos(projectID, deviceID, desde, hasta, tope, nombre)
+	comandos, err := e.hechosDeComandos(projectID, deviceID, desde, hasta, tope, nombre, ahora)
 	if err != nil {
 		return nil, false, err
 	}
@@ -126,7 +126,7 @@ func (e *DbEngine) CronologiaDeDevice(projectID, deviceID string, v fleet.Ventan
 	return out, truncado, nil
 }
 
-func (e *DbEngine) hechosDeComandos(projectID, deviceID, desde, hasta string, tope int, nombre string) ([]fleet.Hecho, error) {
+func (e *DbEngine) hechosDeComandos(projectID, deviceID, desde, hasta string, tope int, nombre string, ahora time.Time) ([]fleet.Hecho, error) {
 	rows, err := e.db.Query(
 		`SELECT `+columnasComando+` FROM device_commands
 		  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?
@@ -142,6 +142,10 @@ func (e *DbEngine) hechosDeComandos(projectID, deviceID, desde, hasta string, to
 		if err != nil {
 			return nil, err
 		}
+		// El vencimiento se DERIVA al leer, igual que el de las sesiones de pantalla. Sin esto,
+		// un comando de una máquina cuyo agente no volvió figura `pendiente` para siempre —
+		// medido: 50 comandos de 10 horas con una vida máxima de 15 minutos.
+		c.Estado = c.EstadoActual(ahora)
 		out = append(out, fleet.HechoDeComando(c, nombre))
 	}
 	return out, rows.Err()

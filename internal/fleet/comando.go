@@ -86,6 +86,43 @@ type Comando struct {
 	Error string
 }
 
+// EstadoActual es el estado que hay que MOSTRAR, a esta hora.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// SE DERIVA AL LEER, Y NO ERA ASÍ — LO ENCONTRÓ USAR LA CRONOLOGÍA, NO LEER EL CÓDIGO
+//
+// `expirado` se estampa en UN solo lugar: adentro de `TomarComandos`, o sea CUANDO EL AGENTE
+// VIENE A PEDIR SU COLA. Eso está bien para lo que esa función decide —que el comando no se
+// ejecute— y es exactamente insuficiente para lo que un panel MUESTRA: si el agente no vuelve
+// nunca, nadie estampa nada y la fila dice `pendiente` para siempre.
+//
+// Medido en producción el 2026-08-30: cincuenta comandos sobre una máquina cuyo agente estaba
+// caído, encolados diez HORAS antes, todos figurando `pendiente` con una vida máxima de 15
+// minutos. Los mostraban las dos superficies de lectura, la vieja y la nueva.
+//
+// Es la misma regla que el resto del dominio aplica en todos lados —«una columna de estado que
+// hay que ir a actualizar miente en cuanto nadie la actualiza»— y que las dos clases de sesión ya
+// respetaban (`SesionPantalla.Vencida`, `SesionShell.Vencida`). Los comandos se habían quedado
+// afuera, y el modo de falla sólo se ve cuando una máquina se cae y NO VUELVE: mientras los
+// agentes andan, cada latido estampa el `expirado` de rebote y la mentira dura minutos.
+//
+// LA ESCRITURA SIGUE EXISTIENDO Y NO SE TOCA: la de `TomarComandos` es la que impide que se
+// ejecute, que es una decisión, no una vista. Ésta sólo dice qué mostrar.
+//
+// SÓLO VENCE LO `pendiente`, y de eso se encarga `Vencido` más abajo. Un comando `entregado` que
+// nunca reportó es otra cosa —el agente se lo llevó y se murió a mitad— y no tiene estado propio
+// todavía: registrado como A60.
+//
+// EXISTE PARA QUE LAS SUPERFICIES NO REPITAN LA CONDICIÓN: dos consumidores decidiendo cada uno
+// cuándo vence un comando terminan discrepando, y el que se olvida es el que dibuja `pendiente`
+// sobre algo muerto hace horas.
+func (c Comando) EstadoActual(ahora time.Time) EstadoComando {
+	if c.Vencido(ahora) {
+		return EstadoExpirado
+	}
+	return c.Estado
+}
+
 // ValidarComando chequea lo que tiene que ser cierto antes de encolar. Fail-closed.
 func ValidarComando(argv []string, timeout time.Duration) error {
 	limpio := LimpiarArgv(argv)
@@ -132,6 +169,10 @@ func LimpiarArgv(argv []string) []string {
 }
 
 // Vencido dice si el comando esperó demasiado sin que nadie lo levantara (F10).
+//
+// ESTUVO ESCRITA Y SIN LLAMAR desde S5. La derivación existía, estaba probada, y ninguna
+// superficie la usaba — así que la bitácora dibujaba `pendiente` sobre comandos vencidos hacía
+// horas. Su único llamador es `EstadoActual`, que es por donde tienen que pasar todas las vistas.
 //
 // Sólo aplica a los PENDIENTES: uno ya entregado está corriendo, y su reloj es el timeout, no
 // éste. Confundirlos haría que un comando legítimo de 9 minutos se marque expirado a los 15 y
