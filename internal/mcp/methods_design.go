@@ -643,9 +643,21 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 
 	// EL PISO (I-ABS1). Sólo corre por el camino semántico: por FTS no hay puntaje que comparar, y
 	// declarar "bajo_umbral" ahí sería inventar una medición que no se hizo (I-ABS4).
+	// EL PISO ES DEL CORPUS, NO DEL MÉTODO (medido en producción 2026-08-30).
+	//
+	// La primera versión se lo aplicaba a los dos y el resultado fue que en un pedido de dominio
+	// concreto —«tabla densa de inventario de Altura con lotes»— el bloque de método salía VACÍO:
+	// ninguna tarjeta llegaba a 0,48. Con «el color se gana: un acento dominante» sí llegaban tres.
+	// La diferencia no es de calidad: un principio UNIVERSAL es por construcción menos parecido a un
+	// pedido concreto que un patrón que habla justo de eso. Filtrarlo por poco parecido dejaba mudas
+	// las 30 tarjetas arbitradas de la capa 2 justo donde alguien está diseñando.
+	//
+	// El piso existe para que el CORPUS no sirva patrones específicos que no vienen al caso; para el
+	// método no hay nada equivalente que evitar, y la cantidad ya la acota designMetodoRelevante. La
+	// abstención tampoco se pierde: la señala el corpus, y un brief degradado con el criterio
+	// universal adentro dice «no tengo material específico para esto, pero el criterio es éste».
 	if modo == recuperacionSemantica {
 		sources = sobreElPiso(sources, designSimilitudMinima)
-		metodo = sobreElPiso(metodo, designSimilitudMinima)
 		if len(sources) == 0 {
 			return resultadoRecall{Metodo: metodo, Modo: modo, Degraded: true, Motivo: bajoUmbral}
 		}

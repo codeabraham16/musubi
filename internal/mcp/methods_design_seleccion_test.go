@@ -83,12 +83,47 @@ func TestDesignElMetodoSigueAlPedido(t *testing.T) {
 	if b.MethodSource != "relevancia" {
 		t.Fatalf("con embebedor el método debe salir por relevancia; fue %q", b.MethodSource)
 	}
-	var topics []string
-	for _, m := range b.Method {
-		topics = append(topics, m.Topic)
+	// Lo que F4 garantiza es el ORDEN, no la exclusión: la tarjeta que habla del pedido va PRIMERO.
+	// Excluir por poco parecido fue un error que costó una regresión en producción — ver
+	// TestDesignElMetodoLlegaAUnPedidoDeDominio.
+	if len(b.Method) == 0 {
+		t.Fatal("el método del acervo tiene que servirse")
 	}
-	if len(topics) != 1 || topics[0] != "design-method/pega" {
-		t.Errorf("esperaba sólo la tarjeta relevante; sirvió %v", topics)
+	if b.Method[0].Topic != "design-method/pega" {
+		var topics []string
+		for _, m := range b.Method {
+			topics = append(topics, m.Topic)
+		}
+		t.Errorf("la tarjeta relevante al pedido tiene que ir primero; salió %v", topics)
+	}
+}
+
+// REGRESIÓN DE PRODUCCIÓN (2026-08-30). Con el piso aplicado también al método, un pedido de dominio
+// concreto —«tabla densa de inventario de Altura con lotes»— recibía el bloque de método VACÍO:
+// ninguna de las 30 tarjetas arbitradas llegaba a 0,48, porque un principio UNIVERSAL es por
+// construcción menos parecido a un pedido concreto que un patrón que habla justo de eso.
+//
+// Medido en el central: con «el color se gana: un acento dominante» servía 3 tarjetas; con el pedido
+// de Altura, cero. La capa 2 quedaba muda justo donde alguien está diseñando.
+func TestDesignElMetodoLlegaAUnPedidoDeDominio(t *testing.T) {
+	// El método queda LEJOS del pedido (0,30, bajo el piso del corpus) y el patrón cerca.
+	s := acervoDirigido(t, []entradaDirigida{
+		{"design-method/universal", "criterio que aplica a toda pantalla", 0.30},
+		{"design-corpus/patron", "un patrón que habla del pedido", 0.90},
+	})
+	b := callDesign(t, s, nil, "CONSULTA", "web")
+
+	if len(b.Method) == 0 {
+		t.Error("REGRESIÓN: el método universal no llegó a un pedido de dominio concreto")
+	}
+	if b.MethodSource != "relevancia" {
+		t.Errorf("esperaba method_source 'relevancia'; fue %q", b.MethodSource)
+	}
+	// Y el piso SIGUE mandando sobre el corpus: eso no se tocó.
+	for _, h := range b.Corpus {
+		if h.Similarity < designSimilitudMinima {
+			t.Errorf("el piso del corpus se aflojó: %s con %.3f", h.TopicKey, h.Similarity)
+		}
 	}
 }
 
@@ -105,10 +140,13 @@ func TestDesignElNucleoNoDependeDelAcervo(t *testing.T) {
 	if !strings.Contains(b.Principles, "JERARQU") || !strings.Contains(b.Principles, "UN CTA") {
 		t.Errorf("el núcleo estático tiene que estar completo; got=%.140q", b.Principles)
 	}
-	for _, m := range b.Method {
-		if m.Topic == "design-method/lejana" {
-			t.Error("una tarjeta bajo el piso no debería servirse como método")
-		}
+	// Y el método lejano SÍ se sirve: es universal, y retenerlo por poco parecido era la regresión.
+	// Lo que lo acota es la cantidad (designMetodoRelevante), no un umbral de similitud.
+	if len(b.Method) == 0 {
+		t.Error("el método universal tiene que llegar aunque no se parezca al pedido")
+	}
+	if len(b.Method) > designMetodoRelevante {
+		t.Errorf("el método se acota por CANTIDAD: %d supera el tope %d", len(b.Method), designMetodoRelevante)
 	}
 }
 
