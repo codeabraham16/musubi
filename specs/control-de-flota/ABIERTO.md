@@ -72,6 +72,33 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-08-30 (7) · LA VERSIÓN SE DERIVA, NO SE TIPEA — y el que numeraba mal era yo.**
+
+El redespliegue imprimió `de: 0.115.0-reparto.cc2ae9c` → `a: 0.133.0-rename.7219b3e`, que se lee
+como un salto de dieciocho versiones o como un rollback, según de qué lado se mire. No era ninguna
+de las dos: **era el mismo tronco**. La otra sesión leía el archivo `VERSION` del repo (0.115.0) y
+le ponía el sufijo de su track; yo venía inventando números a mano —0.127, 0.128, 0.130, 0.133—
+durante seis despliegues seguidos.
+
+**El que estaba mal era yo**, y lo confirmé mirando el binario respaldado antes de acusar a nadie:
+el que decía `0.115.0` tenía adentro la cronología, el contexto, la búsqueda por frase y la
+migración 41. El código era actual; el número, mío.
+
+**Y ESO NO ES COSMÉTICO.** El `de:`/`a:` del script de redespliegue es el ÚNICO registro de qué
+estuvo corriendo —no hay tabla que lo guarde— y hoy fue exactamente lo que permitió descubrir que
+dos sesiones se estaban pisando los binarios. Con dos esquemas de numeración conviviendo, ese
+aviso pasa a mentir: un rollback real se ve igual que un choque de convenciones.
+
+`deploy/construir.sh` deriva la versión de dos cosas que no se pueden discutir: el archivo
+`VERSION` y el commit. Y agrega **`-sucio`** cuando el árbol tiene cambios sin commitear — no lo
+prohíbe (a veces hace falta probar algo rápido) pero lo DECLARA, porque un binario construido de
+un árbol sucio no se puede reconstruir después: el commit que anuncia no es el código que corre.
+Hoy la etiqueta ajena se pudo auditar justamente porque su commit existía.
+
+**No se redesplegó para corregir la etiqueta**: el código que corre es el mismo commit, y reiniciar
+el cerebro por un número sería pagar una indisponibilidad por cosmética. Se corrige solo en el
+próximo.
+
 **2026-08-30 (6) · A64 CERRADO — renombrar una máquina existe, y avisa lo que va a cambiar.**
 
 Se abrió hoy porque `kernelos-pc` (Musubi), `davantis-1` (tailscale) y «Davantis» (quien la usa)
