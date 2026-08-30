@@ -7,6 +7,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El motor de diseño rutea por EJE, no por similitud** (Musubi Renaissance, fase 2 del plan de
+  cierre). Es lo primero que mueve M1 desde que arrancó el track.
+  - **El problema, medido:** dos maneras de pedir lo mismo devolvían material distinto — **M1 = 0,10**
+    sobre los 16 pedidos del set dorado, con tres en 0,00. Y no lo arreglaba nada: servir el corpus
+    completo lo dejó en 0,10, y cambiar qué parte de un artículo se sirve tampoco movió nada. La causa
+    es que **dos tarjetas de diseño al azar se parecen tanto como una consulta a su mejor resultado**
+    (coseno p99 entre pares al azar 0,668 contra 0,533–0,643 de una consulta real): a esa granularidad
+    el embebedor no separa nada, así que ningún cambio de ranking podía servir.
+  - **El hallazgo:** el MISMO embebedor sí discrimina entre **19 ejes bien separados**. El eje top-1
+    coincide entre las tres paráfrasis de un pedido el **73 %** de las veces, contra el **10 %** de las
+    tarjetas. El paso consulta→eje es 7× más estable que consulta→tarjeta. No era un embebedor malo:
+    era la granularidad equivocada.
+  - **M1 simulada sobre el acervo real, ANTES de escribir código:** motor hoy 0,10 · ruteo léxico 0,23
+    · eje top-2 0,30 · **eje top-1 0,50**. Top-1 y no top-2: sumar el segundo eje EMPEORA, porque es
+    bastante menos estable y sólo aporta varianza.
+  - `internal/mcp/ejes_diseno.go`: 19 ejes con descripción y vocabulario. Se embebe la **descripción**
+    y no el nombre — el acervo casi nunca dice «a11y», dice «contraste» y «lector de pantalla». Los 19
+    vectores se calculan una vez por proceso; el eje sale del **mismo vector** de la consulta que ya se
+    calculaba, así que no cuesta una llamada más al embebedor.
+  - Dentro del eje las tarjetas se ordenan por **importancia**, no por similitud: el orden por
+    similitud es justo el que no es reproducible entre paráfrasis. El brief declara `retrieval: "eje"`
+    y `axis`. Por debajo del piso no se rutea y se cae al camino de siempre.
+
+### Fixed
+- **La relevancia del MMR dependía de cuántos candidatos se hubieran traído.** Sin similitud, el
+  desempate usaba `1 - i/len(src)`, así que el valor de la sexta tarjeta cambiaba según el tamaño del
+  lote que se hubiera pedido — con pocos candidatos el escalón entre puestos se comía a la diversidad.
+  Ahora es rango recíproco `1/(1+i)`, libre de escala. Era un bug latente que el ruteo volvió visible,
+  porque sus candidatos llegan sin similitud: el top-6 salía con seis clones aunque hubiera una tarjeta
+  distinta esperando.
+- **El ruteo se saltaba la diversificación de F4** y el top-6 podía volver a ser seis paráfrasis de la
+  misma idea. Se trae `designHolguraEje` candidatos por lugar para que `elegirCorpus` tenga de dónde
+  elegir. Lo agarró `TestDesignElTopKNoColapsaEnLoMismo`, cuyo fixture además se corrigió: modelaba la
+  diversidad como una tarjeta de OTRO tema, y con el ruteo eso ya no puede pasar ni debe — el defecto
+  real que F4 arregló eran cuatro maneras de decir lo mismo DENTRO del tema pedido.
+
 ### Changed
 - **El presupuesto del brief protege el material, no el sermón** (Musubi Renaissance). Pedido del
   usuario: *«no hay problema si gasta un poco más, lo importante es que haga un diseño bueno y no

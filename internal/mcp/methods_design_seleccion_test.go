@@ -164,9 +164,15 @@ func TestDesignElTopKNoColapsaEnLoMismo(t *testing.T) {
 			sim:   0.95,
 		})
 	}
+	// EL CANDIDATO DISTINTO ES DEL MISMO TEMA, y eso cambió el 2026-08-30 con el ruteo por eje.
+	// La versión anterior lo hacía de OTRO tema («contraste tipográfico, escala vertical, ritmo»), o
+	// sea que medía la diversidad como salirse del tema — y con el ruteo eso ya no puede pasar ni
+	// debe: un pedido sobre tablas con filtros no mejora porque le metan una tarjeta de tipografía.
+	// El defecto REAL que esta fase arregló era otro y sigue vivo: cuatro maneras de decir lo mismo
+	// DENTRO del tema pedido. Eso es lo que este fixture modela ahora.
 	entradas = append(entradas, entradaDirigida{
 		topic: "design-corpus/distinto",
-		texto: "contraste tipografico escala vertical ritmo respiracion margenes",
+		texto: "tabla columnas encabezado fijo al desplazar celdas numericas alineadas a la derecha",
 		sim:   0.72,
 	})
 	s := acervoDirigido(t, entradas)
