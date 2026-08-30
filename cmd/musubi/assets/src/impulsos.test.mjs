@@ -150,6 +150,53 @@ test('I7c · un pulso NO sobrevive a la reconstruccion del bosque', () => {
   assert.deepEqual(imp.cuenta(), { vistos: 2, sinTronco: 1 });
 });
 
+test('I12 · el CAMPO es la actividad viva, y sin evento no hay campo', () => {
+  // El halo alrededor de una neurona sale de acá. La regla es la misma de siempre: si no pasó nada,
+  // no hay campo. Un halo permanente —por calor, por ejemplo— convertiría el reposo en luz y el
+  // panel dejaría de poder decir «acá no está pasando nada», que es la mitad de lo que dice.
+  const imp = crearImpulsos(), b = bancada(3, 4);
+  const quieto = imp.escribir(0.2, b).campo;
+  for (const c of quieto) assert.equal(c, 0, 'hay campo sin que haya pasado nada');
+  imp.nacer(1, EV(), 0);
+  const uno = imp.escribir(0.2, b).campo;
+  assert.ok(uno[1] > 0, 'la neurona que pulsó tiene que tener campo');
+  assert.equal(uno[0], 0); assert.equal(uno[2], 0);
+  // Y SUMA: dos llamadas a la vez dan más campo que una. Si tomara el máximo, una ráfaga y un
+  // evento suelto se verían igual, que es justo lo que hay que poder distinguir.
+  const imp2 = crearImpulsos();
+  imp2.nacer(1, EV(), 0); imp2.nacer(1, EV(), 0); imp2.nacer(1, EV(), 0);
+  assert.ok(imp2.escribir(0.2, b).campo[1] > uno[1] * 2.4, 'tres llamadas tienen que dar mucho más campo que una');
+  // Y se apaga solo cuando el último pulso vence.
+  assert.equal(imp.escribir(DUR_PULSO + 0.01, b).campo[1], 0, 'el campo tiene que apagarse con el pulso');
+});
+
+test('I13 · una llamada vale LO MISMO repartida en cinco neuronas que en una', () => {
+  // Un evento no sabe en qué neurona de la persona cayó, así que enciende todo su racimo. Si cada
+  // una recibiera la fuerza entera, una persona cuyo árbol quedó cortado en cinco neuronas
+  // brillaría cinco veces más que una cortada en una — por la MISMA llamada. El dibujo estaría
+  // diciendo «trabajó más» cuando lo único distinto es la forma de su árbol.
+  const luz = (nNeuronas) => {
+    const imp = crearImpulsos(), b = bancada(nNeuronas, 4);
+    for (let ti = 0; ti < nNeuronas; ti++) imp.nacer(ti, EV({ reparto: 1 / nNeuronas }), 0);
+    imp.escribir(0.2, b);
+    return suma(b.glow);
+  };
+  const una = luz(1), cinco = luz(5);
+  assert.ok(Math.abs(cinco - una) / una < 0.02,
+    'la misma llamada tiene que dar la misma luz total: 1 neurona ' + una.toFixed(3) + ' vs 5 ' + cinco.toFixed(3));
+  // Y el campo, igual: la suma sobre el racimo es la misma.
+  const campoDe = (nNeuronas) => {
+    const imp = crearImpulsos(), b = bancada(nNeuronas, 4);
+    for (let ti = 0; ti < nNeuronas; ti++) imp.nacer(ti, EV({ reparto: 1 / nNeuronas }), 0);
+    return suma(imp.escribir(0.2, b).campo);
+  };
+  assert.ok(Math.abs(campoDe(5) - campoDe(1)) / campoDe(1) < 0.02, 'el campo total también tiene que ser el mismo');
+  // Sin `reparto` no se rompe nada: vale 1, que es el caso de una neurona sola.
+  const imp = crearImpulsos(), b = bancada(1, 4);
+  imp.nacer(0, EV(), 0); imp.escribir(0.2, b);
+  assert.ok(Math.abs(suma(b.glow) - una) / una < 0.02, 'sin reparto tiene que comportarse como reparto 1');
+});
+
 test('I8 · un principal SIN tronco se cuenta, no se traga', () => {
   // Es la señal de «hay un dueño sin declarar». Tragársela deja el panel diciendo que todo está
   // atribuido cuando no lo está.

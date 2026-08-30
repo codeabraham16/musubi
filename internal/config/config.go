@@ -545,6 +545,12 @@ type SyncConfig struct {
 	// AllowInsecureToken permite un CentralURL http:// (token en texto plano). Default false
 	// => fail-closed: sólo tailnet/dev con opt-in explícito.
 	AllowInsecureToken bool `yaml:"allow_insecure_token"`
+	// FlotaVivo publica la telemetría de invocaciones al central (tool, outcome, ms — JAMÁS
+	// contenido: invariante L1 del live feed) para que su panel muestre la flota trabajando en
+	// vivo. Es *bool a propósito: nil = activo cuando hay destino de sync — la telemetría viaja
+	// DENTRO de la frontera de confianza que el sync ya cruza con la memoria entera, así que no
+	// pide un opt-in aparte — y false la apaga explícito sin tocar el sync.
+	FlotaVivo *bool `yaml:"flota_vivo,omitempty"`
 }
 
 // HasDestination responde la ÚNICA pregunta que importa para el outbox: ¿este nodo tiene a
@@ -557,6 +563,13 @@ type SyncConfig struct {
 // después se purgaba a sí mismo. Con un solo predicado los tres lugares no pueden discrepar.
 func (s SyncConfig) HasDestination() bool {
 	return s.Enabled && strings.TrimSpace(s.CentralURL) != ""
+}
+
+// FlotaVivoActivo dice si esta máquina publica su telemetría de invocaciones al central. La
+// frontera es la del sync (HasDestination): sin destino no hay a quién contarle nada, y con
+// destino el default es contar — apagable con flota_vivo: false. Ver SyncConfig.FlotaVivo.
+func (s SyncConfig) FlotaVivoActivo() bool {
+	return s.HasDestination() && (s.FlotaVivo == nil || *s.FlotaVivo)
 }
 
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.

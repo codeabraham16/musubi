@@ -7,7 +7,405 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **Pedir lo mismo de dos maneras devuelve lo mismo** (Musubi Renaissance · F5). Medido el
+  2026-08-29: cinco paráfrasis del mismo pedido daban un solape Jaccard de **0,09**, con tres pedidos
+  en **0,00** — dos formas de pedir lo mismo sin un solo patrón en común. Y con 256 bytes de contexto
+  extra se perdían dos tercios del corpus: el motor **castigaba la especificidad**.
+  - **El orden deja de fingir precisión que no tiene.** En una consulta real el pool va de 0,643 a
+    0,515: decenas de candidatos separados por milésimas, que una reformulación da vuelta. Ahora la
+    similitud se cuantiza a `designResolucionSim` y el empate se rompe por id, con un sort estable.
+    Entre dos candidatos que difieren por menos que el ruido de una paráfrasis el motor **no sabe**
+    cuál es mejor; cuando no se sabe, contestar siempre lo mismo es estrictamente mejor que contestar
+    cualquier cosa.
+  - **La consulta se corta por ORACIONES, no por caracteres.** El primer diseño usaba un tope de
+    caracteres y hubo que tirarlo: con un pedido de 50 chars y un tope de 600 entran 550 de relleno y
+    el vector sigue arrastrado — el test lo demostró. Un pedido de diseño cabe en una o dos oraciones;
+    lo que sigue es contexto para el agente, no para la búsqueda.
+  - **El recorte se declara** en `query_normalized`, con el largo original y el usado.
+  - **El eco dejó de comerse el corpus.** `ask` devolvía el pedido crudo, y con un pedido largo eso
+    consumía presupuesto y le sacaba lugares al material: el brief con contexto traía menos patrones
+    que el mismo pedido sin contexto. Ahora lleva la consulta normalizada — quien llamó ya tiene su
+    prompt entero, lo escribió. Lo encontró el propio test de ruido.
+  - Se evaluó y se **descartó** la fusión de rankings semántico + léxico (RRF): choca con el piso de
+    F3, que compara similitudes, y un puntaje de fusión no es una similitud.
+  - ⚠ **La magnitud no está medida.** Cuánto sube M1 depende del embebedor y del acervo reales; los
+    invariantes prueban el mecanismo. El número sale de la sonda después de desplegar.
+
+### Changed
+- **El motor de diseño pasa de traer material a ELEGIRLO** (Musubi Renaissance · F4). Tres defectos
+  medidos el 2026-08-29, los tres del mismo origen: el brief entregaba lo que salía del ranking, sin
+  criterio propio.
+  - **El método sigue al pedido.** El hash del bloque de método era IDÉNTICO para un ERP de
+    escritorio, un juego móvil, una landing y un gráfico de series — no respondía nada sobre el
+    pedido. Ahora el pool se parte en dos salidas (`particionarPorPrefijo`): el método va ordenado
+    por relevancia y el resto al corpus. El vector de la consulta ya estaba calculado, así que **no
+    cuesta una llamada más** al embebedor.
+  - **Sólo donde hay puntaje.** Por FTS el método sigue saliendo por importancia: un match léxico no
+    es una medida de relevancia, y usarlo para elegir hacía desaparecer tarjetas buenas en silencio.
+    `method_source` declara cuál se usó: `relevancia` | `importancia` | `static`.
+  - **Los artículos completos vuelven a entrar.** 1.438 micro-tarjetas contra 268 artículos los
+    desplazaban SIEMPRE — medido: en un pool de 58 salieron 58 tarjetas y 0 artículos, con toda la
+    profundidad del acervo del otro lado. Ahora el pool mira hasta 300 candidatos (`designPoolMax`,
+    por encima de `maxLimit` a propósito: uno acota lo que se puede PEDIR, el otro lo que el motor
+    MIRA) y `elegirCorpus` les reserva lugar sin dar vuelta la prioridad de lo curado.
+  - **El top-k deja de ser k variaciones de lo mismo.** Para «tabla densa con filtros» servía
+    colapsar filas, filtros post-búsqueda, filtros drill-down y cortina de dos niveles: cuatro veces
+    la misma idea en cuatro de los seis lugares. `diversificar` es MMR con solape léxico, model-free
+    y determinista.
+  - Dos cosas que los propios tests agarraron: en modo semántico **no hay fallback por importancia**
+    (caer ahí volvía a meter las tarjetas que el piso acababa de descartar, deshaciendo en silencio
+    la decisión recién tomada); y `TestDesignMethodExcluidoDelCorpus` **venía pasando por
+    coincidencia** desde F1+F2 — afirmaba que el método aparecía en `Principles` y seguía verde sólo
+    porque el núcleo estático repite la misma frase que la tarjeta sembrada.
+  - ⚠ **La magnitud de la mejora no está medida.** M3 y M8 dependen del embebedor y del acervo
+    reales; el banco corre sobre FTS, donde la selección deliberadamente no se aplica. Se mide con la
+    sonda después de desplegar.
+
+### Added
+- **El motor de diseño ya sabe cuándo NO sabe** (Musubi Renaissance · F3). Medido el 2026-08-29:
+  «receta de empanadas» devolvía seis patrones de diseño con `degraded` apagado, igual que un
+  pedido legítimo — siete de siete consultas basura entraron con confianza total. La separación
+  existía (basura 0,362–0,442; pedidos reales 0,533–0,558) y nadie trazaba la línea, porque
+  `degraded` sólo se encendía con CERO filas y por el camino semántico eso no pasa nunca.
+  - **Piso de similitud** (`designSimilitudMinima` = 0,48, calibrado contra la separación medida):
+    lo que no llega no se sirve, y si nada llega el motor lo dice en vez de rellenar.
+  - **`degraded_reason`**: `sin_material` (no hay nada) · `bajo_umbral` (hay y es malo) ·
+    `sin_recuperador` (no se pudo buscar). Un bool no distinguía tres problemas con tres arreglos
+    distintos.
+  - **`retrieval`** declara siempre con qué se buscó (`semantico` | `fts`). La caída silenciosa a
+    léxico —con el campo `similarity` desapareciendo sin explicación— era el segundo silencio.
+  - **Timeout del embebedor 30 s → 5 s.** Con un prompt de 25 KB el motor quemaba los 30 enteros y
+    recién ahí caía a léxico, callado; con una persona esperando eso no es una espera sino un fallo,
+    y de paso era un vector de saturación barato contra un embebedor compartido con recall y save.
+  - El piso corre **sólo por el camino semántico**: por FTS no hay puntaje que comparar, y declarar
+    `bajo_umbral` ahí sería inventar una medición. Por eso el modo se declara — la diferencia entre
+    los dos caminos pasa a ser visible.
+  - La sonda mide el **riesgo junto al beneficio**: cuenta cuántos pedidos LEGÍTIMOS terminan
+    abstenidos. Si ese número no es cero, el piso está mal y baja.
+
 ### Fixed
+- **`versioninfo.json` volvía a divergir de `VERSION`.** `TestVersioninfoMatchesVERSION` existe
+  exactamente para eso y estaba en rojo: bumpeé `VERSION` sin regenerar el recurso de Windows. Se me
+  pasó porque leí el exit code de un pipe (`go test ./... | grep`) en vez del de `go test`, y
+  reporté verde una suite que estaba roja.
+
+### Changed
+- **El brief del motor de diseño deja de contradecirse, de inundar a quien lo llama y de dejarse
+  dictar la conducta por el acervo** (Musubi Renaissance · F1+F2). Los tres defectos salían del
+  mismo error: el brief era una concatenación plana sin jerarquía ni contrato.
+  - **Precedencia declarada** (*lex specialis*): la marca del proyecto le gana al método universal
+    cuando chocan. Cierra el choque real de Altura, cuya marca pide `glass + sombra` mientras el
+    método universal las prohíbe — sin regla ganaba el bloque que más pesaba (el método, 68 % del
+    texto) y el motor terminaba borrándole la marca al proyecto que sí la tenía cargada.
+  - **La marca sube al principio.** El orden pasa a `ask · precedence · material_note · role ·
+    principles · brand · corpus · method · emit · instructions`. Antes la marca viajaba al ~70 % de
+    profundidad, enterrada bajo 4.182 tokens de método constante — la peor posición posible, porque
+    los modelos leen en U y pierden más del 30 % de eficacia sobre lo que queda en el medio.
+  - **Presupuesto duro con el recorte declarado.** 2.600 tokens de tope, tope por tarjeta, y
+    `truncated` diciendo qué bloque se recortó y de cuánto. Cede primero el método (universal),
+    después el corpus, y la marca al final — con un aviso ruidoso, porque un doc de marca lleva sus
+    prohibiciones justo al final. Antes: 11.131 tokens con `limit=100` y 285.023 desde una sola
+    tarjeta grande.
+  - **`principles` pasa a ser el núcleo estático del código y el acervo viaja en `method[]`**, cada
+    tarjeta con su `topic` y su tenant. El método sigue viniendo del acervo y sigue siendo
+    arbitrable — lo que cambia es quién AFIRMA cada bloque. Cierra la inyección indirecta: quien
+    escribiera una observación en `musubi-design` le dictaba la conducta a todos los agentes de
+    todos los proyectos, y la `importance` le dejaba además elegir la posición.
+  - **El `emit` deja de cruzar la marca de Musubi.** `designEmitWeb` y `designEmitPainter` decían
+    «fondo oscuro, un acento, no serifas, no glow, no glass/blur»: prohibiciones de Musubi servidas
+    a cualquier cliente por una constante universal, y de frente contra Altura.
+  - El saneamiento es **estructural, no un filtro**: sólo se limpian caracteres de control. Filtrar
+    corchetes angulares habría roto el método real, que cita `<button>` y `<div role="button">` como
+    ejemplos, y un filtro siempre se puede rodear.
+  - Medido por el banco: **M4 p50 6.419 → 2.457** · **M4 máximo 7.268 → 2.598** (tope duro 2.600) ·
+    **M5 fracción variable 0,047 → 0,146** · **M6 acervo→instrucción 0,00 → 1,00**. Umbrales
+    apretados en consecuencia. Dos ataques del banco (A1 inyección por el acervo, A3 una tarjeta
+    inunda el brief) pasaron de afirmar la vulnerabilidad a defender el arreglo.
+
+### Added
+- **El motor de diseño tiene marcador.** El 2026-08-21 `musubi_design` se degradó de golpe —el
+  bloque de método pasó de 8 principios constantes a 30 tarjetas del acervo, 24× más texto— y
+  nadie lo notó durante ocho días, hasta que el usuario lo sintió usándolo en Altura. Las suites
+  seguían verdes todo el tiempo porque miden que el brief **se arme**, no que sirva. Ahora hay un
+  banco (Musubi Renaissance · F0):
+  - `TestBancoDiseno` — offline, sin red ni LLM, contra un acervo de fixture dimensionado a
+    propósito **por encima de `designMethodLimit`**, para que la perilla que causó el incidente
+    quede atada y su movimiento se vea. Mide tamaño del brief, cuánta parte del brief depende del
+    pedido, abstención y por dónde entra un payload de inyección, con **umbrales versionados** que
+    ponen en rojo cualquier regresión. Verificado: subir `designMethodLimit` de 40 a 60 reproduce
+    el incidente y el banco lo atrapa.
+  - `TestSondaDiseno` (`-tags sonda`) — contra el central real, para lo que sólo se puede medir con
+    el embebedor y el acervo vivos. **Línea base 2026-08-29:** estabilidad de paráfrasis **0,09**
+    (objetivo 0,80; tres pedidos en 0,00), precisión temática **0,22**, abstención **0,00**,
+    latencia p50 571 ms, 190 ids distintos servidos.
+  - Set dorado de 16 pedidos reales de los proyectos vivos en 3 formas cada uno, 8 consultas fuera
+    de dominio y 8 payloads de inyección, con guardas que rechazan un set degenerado y un umbral
+    sin procedencia.
+  - La métrica de inyección reporta **tres canales por separado** (prompt→instrucción,
+    prompt→eco, acervo→instrucción) porque cada uno lo arregla una fase distinta del track, y una
+    métrica única los taparía entre sí. Envolver un payload en etiquetas de cita sin sacarlo del
+    bloque de instrucciones **no** lo neutraliza, y hay un test que lo defiende.
+  - Banco de ataque del motor (`methods_design_ataque_test.go`): 6 ataques que afirman el
+    comportamiento vulnerable de hoy, para que el arreglo tenga que romperlos a propósito.
+  - Plan del track en `specs/renaissance-rey-del-diseno/`, SDD de la fase en
+    `specs/renaissance-f0-banco/`. Esta fase **no arregla nada del motor: sólo lo mide.**
+
+### Fixed
+- **La flota en vivo no entregaba un solo evento, y el único síntoma era una línea de log.**
+  `PushFlota` serializaba el `LiveEvent` entero (con `seq`, `kind`, `origen`, `principal`) contra
+  un receptor con decode estricto que sólo acepta `at/tool/outcome/ms` — todo batch rebotaba con
+  400. Los ocho tests no lo veían porque cada mitad se probaba contra sí misma: los del receptor
+  construían el body con la struct del receptor, y el del remitente usaba un stub que respondía
+  202 sin decodificar. Ahora el remitente serializa **la struct del receptor** (una sola struct
+  como contrato de cable, y lo mínimo viajando por la red) y hay un test de ida y vuelta —
+  remitente real contra receptor real— que nació ROJO con el `400` exacto de producción.
+- **El brote en vivo encendía al actor equivocado.** El camino del delta escribía `aRac` (índice
+  de actor por fibra) pero no lo incluía en la lista de `needsUpdate`: la GPU se quedaba con el 0
+  del buffer inicial, que no es «sin dueño» sino el PRIMER actor. Una rama recién crecida para
+  davantis se encendía al pulsar gio, y quedaba muerta al pulsar davantis.
+- **Un evento sin dueño conocido volvía a barrer el árbol entero.** `pulsoHacia` caía a la raíz
+  cuando el racimo no estaba en `RAIZ_DE` (una persona que empieza a escribir después de montado
+  el panel), y la raíz no tiene racimo ⇒ el gate quedaba en «todos»: exactamente la onda global
+  que se sacó por invasiva. Ahora, sin dueño no hay pulso.
+- **El riel dibujaba una barra de scroll que no se podía arrastrar.** `#hud` es
+  `pointer-events:none` para que el lienzo reciba el giro de cámara; darle eventos al riel entero
+  mataría el arrastre en toda esa franja. La barra se oculta: el riel sigue scrolleando con la
+  rueda y deja de prometer algo que no responde.
+
+### Added
+- **Flota en vivo: el panel del central muestra a las terminales trabajando.** La señal ya
+  existía (el live feed publica cada invocación al terminar — tool, outcome, ms; jamás contenido,
+  invariante L1) pero moría en cada máquina. Ahora el daemon local con sync configurado la empuja
+  al central (`RunFlotaVivo` → `POST /api/flota`) con el mismo token del sync, filtrando SOLO
+  trabajo (el sondeo — 99,92 % del tráfico — no cruza la red). El central re-sella identidad,
+  clase y forma server-side y publica con `origen: "flota"`: el censo del panel mapea el
+  principal a su actor y la rama pulsa. Opt-in = la frontera del sync (`flota_vivo: false` lo
+  apaga); best-effort estilo hooks (si el central no está, descarta y sigue); nada persiste.
+  SDD en `specs/flota-en-vivo/` con invariantes I1–I5, cada uno visto ROJO bajo su sabotaje.
+
+### Fixed
+- **Un fallo del embedder ya no pierde la observación.** `musubi_save_observation` era «embed o
+  muerte»: si Ollama no respondía en 30 s, el central devolvía error y la captura se perdía ENTERA
+  — medido en producción: tres saves muertos en 10 minutos con `ms=30047` clavados. Ahora el save
+  degrada por el mismo camino best-effort que la captura automática usó siempre (`embedIfEnabled`):
+  se guarda sin vector, se loguea, y `AutoEmbedBackfill` lo embebe cuando el embedder vuelve. El
+  techo del embed en escrituras baja de 30 s a 8 s: un embed sano tarda milisegundos, y esperar 30
+  a un colgado sólo demoraba al caller para perder igual. Test nacido rojo contra el código fatal:
+  guardar con embedder caído → encontrarla por keyword → el backfill la embebe.
+
+### Added
+- **Las hermanas dejan de nacer del mismo punto: `bifurcar()`.** Medir el enredo destapó que
+  **183 de los 191 cruces entre haces no emparentados —el 96 %— eran entre HERMANAS**, y son
+  inevitables mientras arranquen todas de la punta del padre: a distancia cero no hay ángulo que
+  separe. Ahora cada una se desprende en un punto distinto a lo largo del haz padre, como las
+  colaterales de un axón, con el ángulo despejado de cuánto ocupan sus haces y el largo escalonado.
+  - **El enredo cae de 0,866 a 0,059** — 15× menos interpenetración. Cuesta 3,6 puntos de solape en
+    pantalla (18,4 % → 22,0 %), y se paga: un cruce real no lo arregla ningún ángulo de cámara,
+    mientras que el solape se mitiga girando y con el contorno por profundidad.
+  - **`apertura` se retira.** El ángulo sale del grosor, no de una constante. Se avisa por consola
+    si alguien la pasa, en vez de ignorarla en silencio.
+  - **Lo que no entra se declara**: `apretada` marca las bifurcaciones donde el haz padre era más
+    corto que el aire que sus hijas piden, y la leyenda las cuenta (4 de 220).
+  - `medirEnredo()` es ahora una función del boceto, no un script suelto: cuenta pares de haces no
+    emparentados cuyas curvas se acercan más que la suma de sus radios.
+
+### Changed
+- **El boceto mide dos cosas distintas y hay que mirar las dos.** El ENREDO (cruces en el espacio) y
+  el SOLAPE EN PANTALLA no dicen lo mismo, y bajar uno puede subir el otro — pasó. Lo primero que
+  destapó la doble medición fue un sesgo de la propia métrica de pantalla: contaba PADRE contra HIJA
+  como amontonamiento, que no es maraña sino continuidad.
+
+- **Un boceto del panel donde la rama no existe: existen los hilos.** Vive en
+  `cmd/musubi/assets/boceto/`, fuera del bundle y fuera de `go:embed` — se construye con el mismo
+  motor (three 0.169 + esbuild vendorizados) y con datos reales del cerebro local.
+  - **El grosor deja de ser una fórmula y pasa a ser una suma.** `hilos(padre) = Σ hilos(hijos)`:
+    un axón no aparece ni desaparece en una bifurcación, así que los 459 hilos del núcleo son,
+    contados, todas las hojas del árbol. Reemplaza a la ley de Rall, que **estimaba** eso mismo.
+  - **Deja de parecer un árbol, y no por el trazo sino por la topología.** Un tronco vertical tiene
+    suelo y copa. Acá la raíz es un núcleo y los actores salen en todas las direcciones, repartidos
+    por Fibonacci sobre la esfera. Medido: el sesgo de las direcciones de primer nivel da **0,03**;
+    un árbol da ~1.
+  - **Se puede señalar cualquiera, no un montón.** Un pase de identidad por GPU redibuja la escena
+    en 21×21 píxeles bajo el cursor y lee ese pedacito: **31.176 elementos señalables de 31.617
+    dibujados**, contra los 441 de antes. Señalás un hilo, una neurona o una nota concreta.
+  - **El amontonamiento era en la PANTALLA, no en el espacio.** 0,24 % de los pares de ramas se
+    cruzan en 3D y cero entre actores distintos, pero el **36 %** de las celdas de pantalla tenía
+    dos o más ramas encima. Con el reparto corregido baja a **25,5 %** y los hilos quedan además un
+    10 % más gruesos — el único punto del barrido que mejora las dos cosas a la vez.
+  - **Contorno por profundidad** (halos de tractografía) para el 24 % que queda: el 83 % de esos
+    píxeles tiene un salto de profundidad grande, así que el cruce se vuelve oclusión legible.
+  - **`A` aísla una rama y `0` vuelve al todo.** La separación por colocación tiene techo medido,
+    así que lo que falta no se consigue moviendo ramas sino apagando las otras — apagando, no
+    escondiendo: esconder contesta «cómo es esta rama» pero borra «dónde está».
+  - 16 invariantes en `node --test`, cada uno **verificado fallando** bajo un sabotaje dirigido, y
+    33 más en la página (`#prueba`) para los que necesitan una GPU.
+
+### Fixed
+- **La niebla del panel llevaba meses sin hacer nada.** `scene.fog` estaba puesto y se pasaba por
+  configuración, pero no llegaba a ningún material: los `ShaderMaterial` se crean con `fog = false`
+  y además hay que incluir `<fog_fragment>` a mano. Era una perilla desconectada que parecía viva.
+  El boceto la reemplaza por una rampa de profundidad **anclada a la órbita**, porque el rango de
+  profundidad de la escena es apenas 2,3× y una densidad fija no tiene recorrido para decir nada.
+
+- **Vuelven los despachos, y ahora una terminal tiene cuerpo.** Un axón por cada par de terminales
+  que se escribieron, del centroide de lo que firmó quien escribe al de quien recibe.
+  - **La posición no se elige: se calcula.** Es el centroide de las puntas de las memorias que esa
+    terminal FIRMÓ, y sale del mismo hecho del texto que se usa para contar cuántas firmó — así el
+    punto y el número no pueden discrepar. `firmanteDe()` es ahora una sola función que usan los
+    dos, en vez de la lógica copiada: con dos copias, la segunda se desincroniza y la terminal
+    queda dibujada donde el contador dice que no está.
+  - **Se dibujan TODOS, no sólo los que cruzan personas.** Medido: de los 152 despachos del cerebro
+    local, **135 —el 89 %— van entre dos terminales de la MISMA persona**. Quedarse con los que
+    cruzan dejaba **dos arcos** en pantalla y escondía el resto, que es mentir por omisión.
+  - **Estáticos en su forma, vivos en lo que conducen.** Un despacho es un hecho de la memoria, no
+    un evento; pero se enciende cuando hay campo en alguno de sus dos extremos — o sea cuando ese
+    uso está pasando de verdad. Sin evento, base y nada más.
+  - Arqueados a **lados opuestos** según la dirección: `A→B` y `B→A` son dos despachos distintos y
+    rectos quedaban uno encima del otro, leyéndose como uno solo. `cross(dir, arriba)` cambia de
+    signo al invertir `dir`, así que la separación sale sola.
+  - Una terminal que **nunca firmó no aparece**, y es correcto: nombrarla no es escribir.
+  - Medido con todo puesto: 22 draw calls, 407k triángulos, **0 cuadros por encima de 33 ms**,
+    «mis bucles» en 0,3 ms. Y los invariantes intactos: 0 píxeles sin evento, atribución a 415 px.
+- **El campo: así se ven las señales de uso.** Un halo por neurona cuya intensidad sale de `campo`
+  —la suma de la fuerza de sus frentes VIVOS— y de nada más. No lleva calor ni nada histórico: un
+  halo permanente convertiría el reposo en luz y el panel dejaría de poder decir «acá no está
+  pasando nada», que es la mitad de lo que dice.
+  - Con `aCampo` en cero el fragmento sale **negro**, que sobre blending aditivo es exactamente
+    invisible: la regla no depende de acordarse de apagar nada.
+  - Es un **cartel** (billboard) y no una esfera: cuatro vértices que siempre encaran a la cámara,
+    contra una malla que además se metería adentro de las ramas.
+  - Verificado en pantalla, con la animación pausada: **0 píxeles** de diferencia sin evento;
+    654.509 con una ráfaga de gio. Atribución a **431 px** entre gio y `davantis-mando-admin`.
+    Ámbar del fallo: relación azul/rojo **1,184 contra 0,216**.
+- **Una llamada vale una llamada: el impulso se REPARTE entre las neuronas del racimo.** Un evento
+  no sabe en qué neurona de la persona cayó, así que enciende todas — pero dividiéndose. Sin esto,
+  una persona cuyo árbol quedó cortado en nueve neuronas brillaba nueve veces más que otra cortada
+  en dos **por el mismo evento**, y lo único distinto era la forma de su árbol, no cuánto trabajó.
+
+### Fixed
+- **Las 586 sinapsis se dibujaban en la nada, sin un solo error.** El radio de cada arista se
+  sembraba como `s.__r` al construir la malla, y `buildGraph` **recrea los objetos de `SYN` en cada
+  poll**: desde el segundo sondeo `s.__r` era `undefined`, el radio salía `NaN`, y dos columnas de
+  la matriz de instancia quedaban en `NaN` — **una instancia con NaN en su matriz desaparece en
+  silencio**. Antes lo tapaba el asentado, que reconstruía las mallas seguido y volvía a sembrar el
+  campo; al sacar la física en la lente memoria, la falla quedó permanente. Ahora el radio se
+  calcula en el bucle: cuesta una multiplicación por arista y no puede quedar viejo.
+  - Lo encontró una sonda, no la lectura del código: subir el brillo de las aristas a 0,9 no hizo
+    aparecer ni una línea, y eso descartó «es muy tenue» y dejó sólo «no está donde dice».
+- **La lente memoria respiraba, y no debía.** `AMP` se ponía en `setLens`, que **en una carga limpia
+  no corre** —sin `?lens=` nadie la llama—, así que las memorias se despegaban de sus ramas y los
+  dos bucles reescribían 2.231 matrices y 586 aristas por cuadro para nada. El valor de fallo era el
+  estado normal. Ahora el vaivén se **deriva** de la lente en cada cuadro y el gate mira el
+  movimiento real: **«mis bucles» de 1,7 ms a 0,3 ms**, y 0 cuadros por encima de 33 ms en tres
+  corridas seguidas de 26 s (máximo 22,6–24,4).
+- **Las relaciones tenían una banda de luz viajando para siempre**, sin que hubiera pasado nada — el
+  mismo bucle inventado que este rediseño sacó de la lente de personas, y que había quedado vivo
+  acá. En reposo ya no viaja nada; la banda vuelve cuando `thinking` sube, y `thinking` sube por
+  deltas REALES. Y son **más finas que las ramas**: con 0,28-0,78 una sinapsis era el doble de
+  gruesa que la rama que tocaba.
+- **La rama se arquea: deja de parecer un alambre.** Cada tramo lleva una panza perpendicular a su
+  eje, máxima al medio y **cero en los dos extremos** — la rama se curva pero sigue naciendo y
+  muriendo donde manda el dato, así que la punta no se despega de la memoria que representa.
+  - **Es tortuosidad, no zigzag.** El lado hacia el que se arquea un tramo se HEREDA del padre y se
+    gira un poco, en vez de sortearse de nuevo cada vez: una rama entera se arquea del mismo lado y
+    se va torciendo despacio. Sorteando, la rama tiembla.
+  - **La primera versión curvaba «hacia donde siguen los hijos» y no servía**: en una bifurcación
+    simétrica —que es el caso normal— la dirección media de los hijos ES la del padre, así que la
+    panza daba cero. Se curvaba el **11 %** de los tramos. Ahora, el 100 %.
+  - Va en el **vertex shader**, después de `instanceMatrix`: son 30 vértices por instancia en vez de
+    10, contra triplicar las 6.000 instancias que habría costado partir cada rama en tres tramos.
+    Y en coordenadas del árbol, no del cilindro — el marco local del cilindro lo arma el renderer
+    con un giro arbitrario, así que la misma curva daría una panza distinta en cada reconstrucción.
+  - **Es la única licencia del dibujo, y se declara**: los EXTREMOS de cada tramo salen del dato
+    —qué memoria, en qué rama, con qué grosor—; lo licenciado es el camino que la línea toma ENTRE
+    esos dos puntos. Es una propiedad del trazo, no una afirmación sobre la memoria.
+  - Costo medido: **403k triángulos contra 230k**, 20 draw calls igual, **0 cuadros por encima de
+    33 ms** en 26 s (máximo 27,7 contra 25,2). 16 invariantes, cada uno fallando bajo su sabotaje.
+
+### Fixed
+- **El banco de sabotajes leía «ningún test corrió» como «el invariante resistió».** Un patrón mal
+  escrito (`^T15b` contra un test llamado `T15`) no corre nada, `node --test` sale 0, y eso se lee
+  igual que un invariante sano. Es el valor de fallo idéntico al tranquilizador. Ahora el banco
+  exige ver que corrió exactamente un test y avisa `SIN TEST` si no. Ya me había dado por bueno un
+  invariante inexistente.
+
+### Changed
+- **Se van las esferas: la memoria ES la rama.** La escena principal deja de ser cuatro nubes de
+  puntos con dendritas decorativas adentro. Ahora cada racimo es una masa de árboles y **cada
+  memoria es una punta** — un botón terminal sobre la rama que la contiene.
+  - **La posición sale del árbol**, no de un sorteo. `randInBrain()` y el asentado con fuerzas
+    quedan **sólo para la lente código**, donde el sujeto son símbolos y no hay jerarquía que
+    ramificar. Dos cargas del mismo grafo dan ahora el mismo dibujo, byte a byte.
+  - **Sin física en la lente memoria**: no hay nada que relajar cuando la posición ya es la buena.
+    Se va con eso el tirón del asentado y también la deriva.
+  - **Sin vaivén**: la memoria es la punta de una rama y la rama es geometría fija; con el vaivén
+    puesto el punto se despega de su rama y el dibujo deja de decir lo que dice. Efecto lateral: el
+    bucle por nodo y por arista deja de reescribir 2.219 matrices en el 98 % de los cuadros.
+  - Medido con el grafo local entero: **0 cuadros por encima de 33 ms** en 26 s (máximo 25,2),
+    20 draw calls, 230k triángulos, cero errores de consola.
+  - **Tres calibraciones, las tres medidas y no a ojo**: la escala del árbol (`ar/54` da alcance 73
+    en un racimo de radio 77, o sea llena el suyo y no invade el de al lado); el grosor
+    (`radioHoja` 0,55 daba un tronco de 5,8 —el 8 % del radio del racimo— y el árbol se leía como
+    coral; a 0,17 queda 1:40, que es la relación de una dendrita); y el brillo en reposo, donde el
+    decaimiento 0,74 por nivel —bueno para un árbol decorativo de 4 niveles— dejaba el 80 % de las
+    ramas de éste, que tiene 10, por debajo del piso.
+- **El encuadre es por lente.** La esfera de código se mira de lejos porque su borde es liso; el
+  árbol tiene el detalle en las puntas y pide estar cerca. Un solo número servía cuando las dos
+  lentes dibujaban una esfera; ahora cada una se encuadra sola al entrar.
+
+### Removed
+- **`dendritas.mjs`**, las dendritas decorativas. Sus tres ideas buenas sobreviven en
+  `arbol-memoria.mjs` con sus propios invariantes: el PRNG semillado (T6), el `dist` medido a lo
+  largo de la rama (T8) y el adelgazamiento (T7, ahora por la ley de Rall). Lo que se va es que la
+  forma no dijera nada.
+- **Los despachos entre terminales, por ahora.** Quedaron sin cuerpo del que colgar: una terminal ya
+  no es una neurona —con el 7,5 % de las notas firmadas, las neuronas son tramos del árbol de
+  temas— y colgar el axón de una neurona cualquiera del racimo sería elegir a dedo de dónde sale.
+  Vuelven como líneas de campo entre racimos. **La leyenda los sigue contando** («27 pares se
+  escriben · 152 despachos») para que su ausencia del dibujo no se lea como que no existen.
+
+### Added
+- **El esqueleto del árbol de memoria** (`arbol-memoria.mjs`): de las memorias de un racimo a una
+  dendrita donde **cada punta es una memoria**. Primera fase del rediseño; todavía no se dibuja.
+  - **Una sola regla de corte, adaptativa**: se parte por el siguiente segmento del `topic` mientras
+    eso divida de verdad, y cuando no divide, por **tiempo**. Que sean dos criterios lo decidió el
+    dato: el tema divide precioso a las personas (davantis, 812 notas en 72 temas) y **no divide
+    nada** donde escribe la máquina (`destilador`: 925 notas en UN tema). Cada nodo **declara** por
+    cuál partió y **en qué nivel** del topic — sin el nivel, «partió por tema» es ambiguo, porque un
+    corte en el nivel 0 separa `server/` de `gotchas/` y uno en el nivel 1 separa dos subtemas de
+    `server/`.
+  - **Bifurca de a 2-3, nunca en abanico.** Es la diferencia entre «ramificado» y «ramificado como
+    una dendrita»: `design-corpus` da 955 subtemas para 959 notas, y colgarlos del mismo punto es un
+    plumero. Los niveles intermedios respetan el orden (alfabético o temporal), así que cada rama se
+    puede rotular con el tramo que separa.
+  - **El grosor sale de la ley de Rall** (`r_padre^2,5 = Σ r_hijo^2,5`), que es la física de una
+    dendrita real: una rama que carga 200 memorias nace gorda y una que carga 3 nace fina. Antes el
+    adelgazamiento era un 0,62 fijo por nivel, o sea decoración.
+  - Medido contra los dos cerebros: **central** 3.000 memorias → 29 neuronas, 5.842 segmentos,
+    profundidad 6-9, 85 ms; **local** 2.221 → 21 neuronas, 4.308 segmentos, profundidad 7-10, 31 ms.
+    Ninguna memoria sin posición, en ninguno de los dos. Son **menos de la mitad** de los 12.010
+    segmentos decorativos de hoy.
+  - **14 invariantes**, cada uno verificado fallando bajo un sabotaje dirigido.
+
+### Changed
+- **`destilador` deja de pintarse como una persona.** Con 925 notas era el racimo **más grande** del
+  central, con color propio, como si fuera alguien. Es el motor destilando — la misma clase de cosa
+  que `git-commit` y `sdd`. Va a una lista `AUTORES_DEL_MOTOR` **aparte** de `GENEROS_DEL_MOTOR`, y
+  la separación no es cosmética: aquélla compara `domain`/`topic` y ésta compara `author`, así que
+  agregarlo a la otra **no habría matcheado nunca** y el racimo habría seguido saliendo como persona
+  sin que nada fallara. El libro mayor pasa a 56,7 % del central; con ramas deja de ser una bola.
+
+### Fixed
+- **El corte por tema cruzaba padres.** Cuando el segmento se rechazaba, el código probaba el
+  siguiente — y eso metía `gordo/sub-0` junto a `medio/sub-0` porque comparten el segundo segmento,
+  dejando una rama rotulada «sub-0» con dos temas que no tienen nada que ver. Ahora sólo se baja de
+  segmento cuando el rechazo fue **«todos comparten éste»**, que es el único caso donde el siguiente
+  sigue estando dentro del mismo padre.
+- **El rechazo de un corte se medía sobre los GRUPOS y no sobre las MEMORIAS.** Un racimo con dos
+  temas gordos y cuarenta sueltos tiene el 95 % de sus grupos unitarios y el 91 % de sus memorias
+  bien agrupadas: contando grupos se tiraba la única división buena que había.
+
 - **El tirón cada cinco segundos: `renderLens()` recalculaba personas y bosque en cada poll.**
   Medido: `extraerPersonas` corre regexes sobre los 2.221 gists (**22,7 ms**) y `bosque` genera
   12.010 segmentos (**14,1 ms**) — **36,8 ms de hilo principal cada 5 s** para obtener casi siempre

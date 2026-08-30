@@ -36,7 +36,8 @@ body{
 #hud{position:fixed; inset:0; z-index:2; pointer-events:none;
   display:grid; grid-template-columns:290px 1fr 290px; grid-template-rows:auto 1fr auto;
   gap:18px; padding:18px 20px 16px; }
-#hud .rail{display:flex; flex-direction:column; gap:14px; align-self:start; min-height:0;}
+#hud .rail{display:flex; flex-direction:column; gap:14px; align-self:stretch; min-height:0;
+  overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable;}
 #hud .rail.r{grid-column:3;}
 #hud .center{grid-column:2; grid-row:2; align-self:end; justify-self:center;}
 .panel{pointer-events:auto; background:var(--glass); border:1px solid var(--glass-line);
@@ -83,11 +84,11 @@ body{
 .howto{margin-top:11px; padding-top:10px; border-top:1px solid var(--glass-line); display:flex; flex-direction:column; gap:4px;}
 .howto span{font-size:10.5px; color:var(--dim); line-height:1.3;}
 .howto b{color:var(--muted); font-weight:600;}
-.list{display:flex; flex-direction:column; gap:8px; max-height:210px; overflow:auto;}
+.list{display:flex; flex-direction:column; gap:8px; max-height:clamp(120px, 24vh, 210px); overflow:auto;}
 /* Riel en vivo. Densidad alta a proposito: son eventos, no lectura; lo que importa es el ritmo. */
 /* scrollbar-gutter reserva el canal SIEMPRE. Sin esto, la fila 20 hace aparecer la barra, el
    ancho util se achica de golpe y todo el texto del riel se re-acomoda de costado. */
-.vivo{gap:3px; max-height:264px; scrollbar-gutter:stable;}
+.vivo{gap:3px; max-height:clamp(150px, 30vh, 264px); scrollbar-gutter:stable;}
 .ev{display:flex; align-items:baseline; gap:7px; font-family:var(--mono); font-size:10.5px;
   line-height:1.5; color:var(--muted); padding:1px 0; animation:entra .32s cubic-bezier(.2,.8,.2,1);}
 @keyframes entra{from{opacity:0; transform:translateX(7px);} to{opacity:1; transform:none;}}
@@ -113,14 +114,20 @@ body{
 .enl{margin-left:auto; font-family:var(--mono); font-size:9px; letter-spacing:.4px; font-weight:400;
   text-transform:none; color:var(--dim);}
 .enl.ok{color:var(--teal);} .enl.mal{color:var(--amber);}
-.list::-webkit-scrollbar{width:5px;} .list::-webkit-scrollbar-thumb{background:var(--glass-hi); border-radius:9px;}
+.list::-webkit-scrollbar,.checks::-webkit-scrollbar{width:5px;}
+.list::-webkit-scrollbar-thumb,.checks::-webkit-scrollbar-thumb{background:var(--glass-hi); border-radius:9px;}
+/* El riel scrollea con la rueda (encadenada desde los paneles), pero su barra no se puede
+   ARRASTRAR: #hud es pointer-events:none para que el lienzo reciba el giro, y darle eventos al
+   riel entero mataría el arrastre de la cámara en toda esa franja. Entre dibujar una barra
+   muerta y no dibujarla, no se dibuja: una afordancia que no responde miente más que su ausencia. */
+#hud .rail{scrollbar-width:none;} #hud .rail::-webkit-scrollbar{width:0; height:0;}
 .item{font-size:11.5px; line-height:1.35;}
 .item .tk{font-family:var(--mono); font-size:9.5px; letter-spacing:.4px; color:var(--teal); display:block; margin-bottom:1px; opacity:.85;}
 .item .gg{color:var(--muted); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
 .run{display:flex; align-items:center; gap:8px; font-size:11px;}
 .run .rl{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); color:var(--muted);}
 .run .rp{font-family:var(--mono); font-size:10px; color:var(--dim);}
-.checks{display:flex; flex-direction:column; gap:6px;}
+.checks{display:flex; flex-direction:column; gap:6px; max-height:clamp(110px, 24vh, 999px); overflow:auto;}
 .chk{display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); font-family:var(--mono);}
 .chk .s{width:6px; height:6px; border-radius:50%; flex:0 0 auto;}
 .empty{color:var(--dim); font-size:11px; font-style:italic;}
@@ -210,16 +217,11 @@ body{
     <div class="panel">
       <h2><span class="ic" style="background:var(--purple)"></span><span id="domTitle">Dominios</span></h2>
       <div class="legend" id="domlegend"><div class="empty">…</div></div>
-      <div class="legend" style="margin:10px 0;padding-top:10px;border-top:1px solid var(--glass-line)" id="actlegend">
-        <div class="lg"><span class="sw" style="background:#7f9cc9;color:#7f9cc9"></span>reposo</div>
-        <div class="lg"><span class="sw" style="background:#43e08b;color:#43e08b"></span>escribir</div>
-        <div class="lg"><span class="sw" style="background:#31c9ff;color:#31c9ff"></span>recordar</div>
-        <div class="lg"><span class="sw" style="background:#f5c451;color:#f5c451"></span>relacionar</div>
-      </div>
+      <div class="legend" style="display:none;margin:10px 0;padding-top:10px;border-top:1px solid var(--glass-line)" id="actlegend"></div>
       <div class="howto" id="howto">
-        <span><b>·</b> cada punto es una <b>memoria</b></span>
-        <span><b>·</b> las líneas, <b>relaciones</b>; la luz que viaja = <b>recuerdo activándose</b></span>
-        <span><b>·</b> el <b>racimo</b> y el <b>color</b> agrupan por <b>quién la escribió</b> · gris = no es de una persona</span>
+        <span><b>·</b> cada <b>rama</b> es un hilo de <b>memorias</b>: el árbol <b>creció</b> hacia donde fueron naciendo</span>
+        <span><b>·</b> cada <b>actor</b> tiene su territorio; el <b>color</b> dice de quién es</span>
+        <span><b>·</b> el <b>pulso</b> que recorre una rama es <b>UNA llamada real a una tool</b>. <b>Sin evento no hay luz</b></span>
       </div>
     </div>
   </div>

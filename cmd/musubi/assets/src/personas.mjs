@@ -24,6 +24,29 @@ export const ROLES = [
 // porque buscamos por inclusión y un rol corto puede estar DENTRO de otro más largo.
 const ROLES_LARGO = [...ROLES].sort((a, b) => b.length - a.length);
 
+/**
+ * firmanteDe: qué TERMINAL firma esta nota, o '' si no la firma ninguna.
+ *
+ * FIRMAR es EMPEZAR el gist con el rol: «📮 EMISARIO → PLANIFICADOR, …». Nombrar una terminal y
+ * escribir COMO esa terminal no es lo mismo, y confundirlos da respuestas falsas: `ALTURA` la
+ * menciona más gio que Gabriel, así que por menciones el racimo se la llevaba gio — cuando ALTURA
+ * es una terminal de Gabriel.
+ *
+ * Y tiene que ser EMPEZAR, no «aparecer cerca del principio»: con un umbral de los primeros N
+ * caracteres, cualquier nota corta que mencione el rol cuenta como firma. Medido: con 48
+ * caracteres, las cuatro notas del test firmaban y sólo una lo hacía.
+ *
+ * Existe como función aparte porque hay DOS lugares que necesitan la misma respuesta —contar
+ * cuántas firmó cada terminal, y saber DÓNDE está una terminal en la escena (el centroide de lo
+ * que firmó)—. Con la lógica copiada en los dos, la segunda copia se desincroniza y la terminal
+ * queda dibujada en un lugar que no corresponde a lo que el contador dice.
+ */
+export function firmanteDe(n) {
+  const cabeza = String((n && n.gist) || '').toUpperCase().replace(/^[^A-ZÁÉÍÓÚÑ]+/, '');
+  for (const r of ROLES_LARGO) if (cabeza.startsWith(r)) return r;
+  return '';
+}
+
 // personaDe: colapsa un `author` en la persona que hay detrás. Un mismo humano escribe con
 // varias credenciales —davantis, davantis-admin, davantis-mando-admin, davantis-altura— y
 // dibujarlas como cuatro personas distintas es exactamente el error que este grafo existe para
@@ -286,6 +309,18 @@ export function clasificarEvento(ev) {
 // meterlos acá sería hardcodear la costumbre de un usuario adentro del producto, que es
 // exactamente lo que ese config existe para no hacer.
 export const GENEROS_DEL_MOTOR = ['git-commit', 'sdd'];
+
+// AUTORES_DEL_MOTOR: lo mismo que arriba, pero cuando el motor firma como AUTOR en vez de escribir
+// bajo un género propio. Lista aparte y no una entrada más en `GENEROS_DEL_MOTOR` porque se mira en
+// otro campo: aquélla compara `domain`/`topic`, ésta compara `author`. Meterlo ahí no habría
+// matcheado nunca y el racimo habría seguido apareciendo como persona sin que nada avisara.
+//
+// `destilador` es el que destila memoria. Medido contra el central el 2026-08-24: **925 notas**, o
+// sea el racimo MÁS GRANDE de los cuatro, y se estaba pintando con color propio como si fuera
+// alguien. No lo es. Es la misma clase de cosa que `git-commit` y `sdd`: el sistema escribiéndose.
+//
+// CERRADA, igual que la otra: una entrada de más acá borra a una persona del dibujo.
+export const AUTORES_DEL_MOTOR = ['destilador'];
 export const GRUPO_LIBRO = 'libro mayor';
 export const GRUPO_SIN_ATRIBUIR = '(sin atribuir)';
 
@@ -306,6 +341,9 @@ export function grupoDeNeurona(n) {
     if (dominio === g || topic === g || topic.startsWith(g + '/')) {
       return { clave: GRUPO_LIBRO, tipo: 'libro' };
     }
+  }
+  if (AUTORES_DEL_MOTOR.includes(String((n && n.author) || '').trim().toLowerCase())) {
+    return { clave: GRUPO_LIBRO, tipo: 'libro' };
   }
   const persona = personaDe(n && n.author);
   if (persona) return { clave: persona, tipo: 'persona' };
@@ -368,7 +406,7 @@ export function extraerPersonas(grafo) {
     // Y tiene que ser EMPEZAR, no «aparecer cerca del principio»: con un umbral de los
     // primeros N caracteres, cualquier nota corta que mencione el rol cuenta como firma. Lo
     // medí: con 48 caracteres, las cuatro notas del test firmaban y sólo una lo hacía.
-    const cabeza = (n.gist || '').toUpperCase().replace(/^[^A-ZÁÉÍÓÚÑ]+/, '');
+    const firma = firmanteDe(n);
     for (const r of ROLES) {
       if (!txt.includes(r)) continue;
       let t = term.get(r);
@@ -385,10 +423,10 @@ export function extraerPersonas(grafo) {
       // La FIRMA es un hecho del texto y se cuenta SIEMPRE, tenga autor la nota o no: con el
       // 65 % de la memoria local sin `author`, contarla sólo cuando hay autor haría parecer
       // que casi ninguna terminal escribe.
-      if (cabeza.startsWith(r)) t.firmadas++;
+      if (firma === r) t.firmadas++;
       if (persona) {
         t.autores.set(persona, (t.autores.get(persona) || 0) + 1);
-        if (cabeza.startsWith(r)) t.firmas.set(persona, (t.firmas.get(persona) || 0) + 1);
+        if (firma === r) t.firmas.set(persona, (t.firmas.get(persona) || 0) + 1);
       }
     }
 
