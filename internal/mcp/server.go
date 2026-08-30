@@ -146,6 +146,12 @@ type McpServer struct {
 	// telemetria que hay que acordarse de encender termina apagada (la misma leccion que dejo
 	// el ledger de uso, cuyos contadores en memoria murieron dos meses sin que nadie lo notara).
 	live *liveFeed
+	// ejesVec cachea los 19 vectores de la taxonomía de diseño (ejes_diseno.go). Son constantes del
+	// binario: recalcularlos por pedido serían 19 llamadas al embebedor para obtener siempre lo
+	// mismo, contra un embebedor que se comparte con recall y save. nil ⇒ todavía no se calcularon
+	// o no hay embebedor, y el motor de diseño cae al camino por similitud.
+	ejesVec map[string][]float32
+	ejesMu  sync.Mutex
 
 	// spool saca el feed a disco para los daemons que NO sirven HTTP. nil ⇒ apagado, que es
 	// lo correcto en el central: ahí ya hay suscriptores por HTTP y escribir además a disco
