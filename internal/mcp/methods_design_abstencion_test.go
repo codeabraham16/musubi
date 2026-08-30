@@ -122,7 +122,7 @@ func TestDesignAbstieneBajoElPiso(t *testing.T) {
 	}
 	for _, h := range b3.Corpus {
 		if h.Similarity < designSimilitudMinima {
-			t.Errorf("se sirvió un hit por debajo del piso: %s con %.3f", h.TopicKey, h.Similarity)
+			t.Errorf("se sirvió un hit por debajo del piso: %s con %.3f", h.Topic, h.Similarity)
 		}
 	}
 }

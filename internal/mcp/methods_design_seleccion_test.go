@@ -122,7 +122,7 @@ func TestDesignElMetodoLlegaAUnPedidoDeDominio(t *testing.T) {
 	// Y el piso SIGUE mandando sobre el corpus: eso no se tocó.
 	for _, h := range b.Corpus {
 		if h.Similarity < designSimilitudMinima {
-			t.Errorf("el piso del corpus se aflojó: %s con %.3f", h.TopicKey, h.Similarity)
+			t.Errorf("el piso del corpus se aflojó: %s con %.3f", h.Topic, h.Similarity)
 		}
 	}
 }
@@ -174,14 +174,14 @@ func TestDesignElTopKNoColapsaEnLoMismo(t *testing.T) {
 	b := callDesign(t, s, nil, "CONSULTA", "web")
 	var hallado bool
 	for _, h := range b.Corpus {
-		if h.TopicKey == "design-corpus/distinto" {
+		if h.Topic == "design-corpus/distinto" {
 			hallado = true
 		}
 	}
 	if !hallado {
 		var ids []string
 		for _, h := range b.Corpus {
-			ids = append(ids, h.TopicKey)
+			ids = append(ids, h.Topic)
 		}
 		t.Errorf("el candidato DISTINTO no entró al top-k; salieron %v", ids)
 	}
@@ -243,14 +243,14 @@ func TestDesignLosArticulosCompletosTienenLugar(t *testing.T) {
 	b := callDesign(t, s, nil, "CONSULTA", "web")
 	crudos := 0
 	for _, h := range b.Corpus {
-		if strings.HasPrefix(h.TopicKey, prefijoCrudo) {
+		if strings.HasPrefix(h.Topic, prefijoCrudo) {
 			crudos++
 		}
 	}
 	if crudos == 0 {
 		var ids []string
 		for _, h := range b.Corpus {
-			ids = append(ids, h.TopicKey)
+			ids = append(ids, h.Topic)
 		}
 		t.Errorf("ningún artículo completo entró al corpus; salieron %v", ids)
 	}
