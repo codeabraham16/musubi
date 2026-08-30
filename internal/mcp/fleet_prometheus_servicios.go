@@ -175,7 +175,25 @@ func seriesDeServicio() []serieDeServicio {
 			}},
 		{"musubi_fleet_service_latency_p95_ms",
 			"Percentil 95 de latencia en la última ventana. AUSENTE si no se midió — y sobre cero unidades atendidas NO HAY percentil, así que ahí también está ausente: un 0 hundiría el promedio justo en los minutos tranquilos.",
-			"ms",
+			// LA UNIDAD VA VACÍA AUNQUE LA MÉTRICA SEA EN MILISEGUNDOS, Y NO ES UN DESCUIDO.
+			//
+			// El receptor OTLP de Prometheus AGREGA la unidad canónica al nombre cuando el nombre
+			// no termina en ella. Con `Unit: "ms"`, `musubi_fleet_service_latency_p95_ms` entra a
+			// Prometheus como `musubi_fleet_service_latency_p95_ms_milliseconds` — y la regla
+			// `ServicioLento`, que consulta el nombre sin el sufijo, NO PUEDE DISPARARSE NUNCA.
+			//
+			// Medido en producción el 2026-08-30, al cablear el primer servicio que reporta
+			// latencia: la serie estaba, con el nombre mutado, y la alerta llevaba un día
+			// existiendo sin poder cumplirse. Dos omisiones se tapaban entre sí —las reglas de la
+			// fase 4 no estaban desplegadas y ningún servicio reportaba latencia—, así que el
+			// silencio se veía exactamente igual que «todo bien».
+			//
+			// `_seconds` no sufre esto porque `seconds` ES la forma canónica de `s` y Prometheus
+			// deduplica. `ms` no lo es. La unidad vive en el NOMBRE, que es la convención de
+			// Prometheus y la del repo; el campo `Unit` de OTLP sólo la duplicaría.
+			//
+			// TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP custodia esto para todas.
+			"",
 			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
 				if r := rendimientoDe(sv); r != nil && r.LatenciaP95Ms != nil {
 					return float64(*r.LatenciaP95Ms), true

@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -41,7 +41,6 @@
 | A26 | **`musubi shell` no funciona desde Windows** | El modo crudo se pide con `stty`, que no existe en la consola de Windows (ahí es `SetConsoleMode`). Desde Linux o macOS sí, contra cualquier Tier B. | **S5d** |
 | A27 | **La ventana no se redimensiona (SIGWINCH)** | No es «no se hizo»: el transporte elegido no lo permite. En Tier B el pty lo posee el `sshd` remoto y en Tier A lo posee `script`, así que **no tenemos su descriptor maestro** y no hay a quién mandarle un `TIOCSWINSZ`. El tamaño se fija al abrir. **Medido contra un `sshd` real (S7b)**: el `ioctl` del pty remoto da `0 0`, pero `tput` devuelve 24/80 y `top` dibuja — el fallback por `LINES`/`COLUMNS` alcanza para lo que se usa. Si el redimensionado importa de verdad, obliga a escribir el pty a mano —ioctls por OS y por arquitectura— y entonces se paga entero. | **S5d** |
 | A35 | **El relay propio está desplegado y VACÍO** | `hbbs`/`hbbr` corren en `musubi-server` atados al tailnet, con su clave generada y los cuatro puertos contestando — y **ningún cliente se registra contra él**: los dos Windows siguen apuntando al servidor PÚBLICO de RustDesk. Cambiar la configuración del cliente por el canal de comandos **cortaría la sesión de RustDesk que gio está usando en ese momento**, así que no se hace de prestado. Ojo con lo que esto NO significa: el plano de pantalla de Musubi **funciona igual** contra el servidor público —la compuerta, la contraseña acuñada, el vencimiento y la bitácora son de Musubi, no del relay—; lo que falta es dejar de depender de infraestructura ajena para el video. | **acción del operador** (②) |
-| A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
@@ -73,6 +72,52 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 (4) · A36 CERRADO — y en el camino apareció una alerta que NO PODÍA DISPARARSE.**
+
+A36 decía «no hay regla de alerta ni target de scrape» y hacía falta un `blackbox_exporter`. Eso
+quedó viejo: el inventario de servicios (S12) llegó después, el agente enumera los dos
+contenedores del relay solos, y `ServicioCaido` ya avisa si el proceso muere. **Media pieza estaba
+puesta y nadie lo había mirado.**
+
+Lo que faltaba era la otra mitad, la que rompe de verdad: **un contenedor levantado que no acepta
+conexiones**. Para `musubi_fleet_service_up` eso se ve idéntico a sano —es exactamente la
+distinción que motivó la fase 4— hasta que alguien no puede abrir una pantalla, que era el síntoma
+anotado.
+
+- **`reportar-relay.py`**, con el molde de `reportar-bot.py`: abre los tres puertos TCP del relay
+  y reporta por `/fleet/service-health`. Sin pieza nueva: reusa el camino que la fase 4 ya dejó
+  desplegado.
+- **SERVICIO PROPIO Y NO EL DEL CONTENEDOR.** Reportar sobre `musubi-rustdesk-hbbs` lo pondría a
+  pelear con el AGENTE por la misma fila, y la salud la decidiría una carrera entre dos
+  reportantes. `relay-rustdesk` significa otra cosa —«responde en sus puertos»— y son dos
+  preguntas distintas.
+- **EL UDP NO SE PRUEBA.** Sin handshake no hay forma de distinguir «llegó y nadie contestó» de
+  «se perdió el paquete», y una medición que no distingue esas dos cosas es ruido con forma de dato.
+
+**Y ACÁ APARECIÓ LO GRUESO.** Al verificar la cadena completa, el dato estaba guardado
+(`latencia_p95_ms: 1`) y la serie NO existía en Prometheus. La causa: **el receptor OTLP le agrega
+la unidad canónica al nombre** cuando el nombre no termina en ella, así que
+`musubi_fleet_service_latency_p95_ms` con `Unit: "ms"` entra como
+`musubi_fleet_service_latency_p95_ms_milliseconds` — y `ServicioLento`, que consulta el nombre
+declarado, **no podía dispararse nunca**.
+
+Estuvo escondido porque DOS omisiones se tapaban entre sí: las reglas de la fase 4 no estaban
+desplegadas *y* ningún servicio reportaba latencia todavía. Con cualquiera de las dos presente el
+síntoma seguía siendo silencio, que se ve igual que «todo bien». Y este camino **no tiene otra
+red**: el scrape de `/metrics` descarta `musubi_fleet_.*` a propósito —para que cada dato tenga un
+solo productor—, así que una serie mal nombrada en el empuje no existe en ningún lado.
+
+**Y NO ERA LA PRIMERA VEZ.** En el TSDB quedó `musubi_fleet_device_cpus_bytes`, un fantasma sin
+muestras: un binario anterior declaraba la CANTIDAD DE NÚCLEOS con unidad `By`. Se arregló en
+algún momento sin que nadie escribiera por qué — el mecanismo se descubrió, se corrigió y se
+olvidó. Por eso ahora es una prueba y no un comentario:
+`TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP` recorre las 26 series y exige que la unidad esté
+vacía o que el nombre ya termine en su forma canónica.
+
+**La prueba se negó a suponer**: al escribirla marcó dos unidades que yo no había mapeado (`%` y
+`Cel`) en vez de dejarlas pasar. Las dos se verificaron CONTRA EL PROMETHEUS DE PRODUCCIÓN antes de
+darlas por buenas.
 
 **2026-08-30 (3) · A62 — la cola de un dispositivo ya no crece sin techo. Lo pidió una medición.**
 
