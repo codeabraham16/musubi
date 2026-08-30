@@ -1,0 +1,14 @@
+{
+  "fijado": "2026-08-29",
+  "commit": "f1f2-precedencia-y-material",
+  "nota": "Umbrales del banco del motor de diseno. Se APRIETAN al aterrizar cada fase del track y nunca se aflojan; el movimiento se ve en el diff del PR. OJO: los numeros de M4 son del FIXTURE, no del acervo de produccion — el fixture se dimensiona a proposito por encima de designMethodLimit para que la perilla que causo el incidente del 2026-08-21 quede atada y su movimiento se vea. APRETADOS EN F1+F2 (precedencia, presupuesto y el acervo como material): M4 p50 6419->2457, M4 max 7268->2591 (tope duro designBriefBudget=2600), M5 0,047->0,146, M6 acervo->instruccion 0,00->1,00. m6_prompt_en_eco queda en 0,00 A PROPOSITO y es INFORMATIVO: el brief siempre devuelve el pedido en 'ask' porque para eso existe, y quien lo escribio es el propio caller, que ya lo tenia. Lo que importa es que no llegue a posicion de INSTRUCCION, y eso lo mide m6_prompt_a_instruccion. Objetivos finales del track en specs/renaissance-rey-del-diseno/proposal.md. CORRECCION en el mismo PR: la primera medicion de M5 dio 0,22 porque bloquesDe todavia no conocia los campos nuevos (precedence, material_note, method) y el metodo quedaba fuera de la cuenta. Con la definicion completa da 0,146 — sigue siendo 3,1x la linea base, pero el 0,22 era un artefacto de la medicion, no una mejora.",
+  "umbrales": {
+    "m2_abstencion_min": 0.25,
+    "m4_tokens_p50_max": 2500,
+    "m4_tokens_max": 2600,
+    "m5_fraccion_variable_min": 0.13,
+    "m6_prompt_a_instruccion_min": 1.0,
+    "m6_prompt_en_eco_min": 0.0,
+    "m6_acervo_a_instruccion_min": 1.0
+  }
+}

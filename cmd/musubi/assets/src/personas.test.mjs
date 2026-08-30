@@ -4,7 +4,7 @@ import {
   extraerPersonas, agruparPorPersona, personaDe,
   neuronaDeEvento, clasificarEvento,
   fusionarActores, mapaDeEncendido, RACIMO_SERVICIOS, DUENOS, ACTORES,
-  grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR, GENEROS_DEL_MOTOR,
+  grupoDeNeurona, ordenarRacimos, GRUPO_LIBRO, GRUPO_SIN_ATRIBUIR, GENEROS_DEL_MOTOR, AUTORES_DEL_MOTOR,
 } from './personas.mjs';
 
 // Fixture chico y EXPLÍCITO: cada nota está puesta para tensar un invariante distinto, y por
@@ -424,4 +424,21 @@ test('P30 · la lista de géneros es CERRADA y sólo tiene lo que escribe el mot
   // Los géneros que inventa cada equipo viven en `conflicts.ledger_prefixes` del config, no acá.
   // Una entrada de más es la costumbre de un usuario metida adentro del producto.
   assert.deepEqual([...GENEROS_DEL_MOTOR].sort(), ['git-commit', 'sdd']);
+  assert.deepEqual([...AUTORES_DEL_MOTOR].sort(), ['destilador']);
+});
+
+test('P31 · el motor que firma como AUTOR va al libro mayor, no a una persona', () => {
+  // Medido contra el central el 2026-08-24: `destilador` tiene 925 notas — el racimo MÁS GRANDE de
+  // los cuatro— y se pintaba con color propio como si fuera alguien. Es el sistema destilando.
+  //
+  // Se mira en `author` y no en `topic`/`domain`, que es donde mira GENEROS_DEL_MOTOR: por eso son
+  // dos listas. Agregarlo a la otra no habría matcheado NUNCA y el racimo habría seguido saliendo
+  // como persona sin que nada fallara.
+  const g = grupoDeNeurona({ author: 'destilador', topic: 'design-corpus/patron-7', domain: 'design' });
+  assert.equal(g.clave, GRUPO_LIBRO);
+  assert.equal(g.tipo, 'libro');
+  // Y no se lleva puesto a nadie más: una persona con un topic parecido sigue siendo persona.
+  assert.equal(grupoDeNeurona({ author: 'davantis', topic: 'design-corpus/patron-7' }).tipo, 'persona');
+  // Ni por mayúsculas ni por espacios se escapa — el campo viene de una base, no de un formulario.
+  assert.equal(grupoDeNeurona({ author: ' Destilador ', topic: 'x/y' }).clave, GRUPO_LIBRO);
 });
