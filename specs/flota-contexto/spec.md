@@ -82,6 +82,20 @@ escribió algo alguna vez.
 El criterio no es adivinar cuál importa: `Declarado` **ya significa** que una persona lo puso a
 mano. Viene del inventario, no de una heurística sobre el nombre.
 
+### K15 — el fragmento muestra DÓNDE apareció el término
+
+El primer recorte mostraba los primeros 400 caracteres de la nota. Medido contra la memoria real:
+la nota que enlazó por `NetworkManager` lo nombra en el carácter **1598 de 4456**, así que la
+respuesta afirmaba «enlazado por NetworkManager» y mostraba un texto donde NetworkManager no
+aparece.
+
+El enlace era **correcto** —verificado contra la base— y aun así inservible: toda la promesa de
+esta tool es declarar cómo enlazó cada cosa, y **una declaración que no se puede comprobar hay que
+creerla**, que es justo lo que la tool existe para no pedir.
+
+`snippet()` devuelve el pasaje alrededor del match. Sin marcas de resaltado: esto lo lee un panel
+o un agente, y unos `<b>` serían basura en medio del texto.
+
 ### K7 — LOS TÉRMINOS SON INFORMACIÓN Y SE COMPUERTAN
 
 Decirle a alguien «busqué `postgres` en esta máquina» le está diciendo que ahí corre un postgres —

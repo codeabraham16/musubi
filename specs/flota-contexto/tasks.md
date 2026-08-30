@@ -31,9 +31,10 @@
 | — | `TestUnaNotaLargaSeRecortaConMarca` | recortar sin dejar la marca → ✅ falla |
 | **K13** | `TestElEnlacePorTerminoBuscaLaFraseYNoSusPedazos` | volver a `SearchObservationsFTS` (OR de tokens); armar la frase uniendo con OR → ✅ fallan los dos |
 | **K14** | `TestUnServicioDeclaradoGanaLaRanuraAntesQueUnaUnitDelSistema` · `TestElServicioDeclaradoLlegaALosTerminosAunqueElHostEnumereMuchos` | recorrer los reportados antes que los declarados; mandar todos a `reportados` sin mirar `sv.Declarado` → ✅ fallan |
+| **K15** | `TestElFragmentoMuestraDondeAparecioElTermino` | volver a `o.content` (el principio de la nota) en vez de `snippet()` → ✅ falla |
 | — | `TestElCruceTraeMemoriaCodigoYActividad` · `TestElContextoNoEsUnOraculoDeMaquinasAjenas` · `TestUnaVentanaVaciaSigueDiciendoQueNoMiro` · `TestLasLecturasDeContextoRechazanUnaVentanaInvalida` | — |
 
-**22 sabotajes ejecutados en este slice.** Cinco no rompieron a la primera, y los cinco fueron
+**23 sabotajes ejecutados en este slice.** Cinco no rompieron a la primera, y los cinco fueron
 **pruebas mías demasiado flojas**, no código débil — que es peor, porque no se nota:
 
 - **`U`** (comparar la ventana en RFC3339) quedaba verde con una ventana de 24 h: `2026-08-30

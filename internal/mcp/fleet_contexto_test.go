@@ -416,3 +416,47 @@ func TestElServicioDeclaradoLlegaALosTerminosAunqueElHostEnumereMuchos(t *testin
 		t.Fatalf("el servicio DECLARADO por una persona no llegó a los términos: %v", out["terminos"])
 	}
 }
+
+// EL FRAGMENTO MUESTRA EL PASAJE DEL MATCH, no el principio de la nota.
+//
+// Medido contra la memoria real: una nota de 4456 caracteres nombraba `NetworkManager` en el
+// carácter 1598, y la respuesta afirmaba «enlazado por NetworkManager» mostrando un texto donde
+// NetworkManager no aparecía. El enlace era CORRECTO —lo verifiqué contra la base— y aun así
+// inservible: toda la promesa de esta tool es declarar cómo enlazó cada cosa, y una declaración
+// que no se puede comprobar hay que creerla, que es justo lo que la tool existe para no pedir.
+//
+// Sabotaje: volver a `o.content` en el SELECT (el principio de la nota) → falla acá.
+func TestElFragmentoMuestraDondeAparecioElTermino(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+	if _, err := s.engine.AltaServicio(fleet.Servicio{
+		Nombre: "servicioescondido", ProjectID: "infra", DeviceID: d.ID, Clase: "systemd",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// El término aparece MUY DESPUÉS del recorte: como en la nota real que lo destapó.
+	larga := "MARCAINICIO " + strings.Repeat("relleno que no dice nada ", 120) +
+		" acá sí: servicioescondido se reinició anoche " + strings.Repeat("más relleno ", 120)
+	if len([]rune(larga)) < fleet.ContenidoMax*3 {
+		t.Fatalf("la nota de prueba tiene que ser bastante más larga que el recorte (%d)", fleet.ContenidoMax)
+	}
+	if err := s.engine.SaveObservationTypedFrom("infra", "", "obs-escondida", "infra/escondida",
+		larga, 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+	p := conCaps("infra", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}})
+	out := contextoDe(t, s, p, map[string]any{"device": "pc-gio", "horas": 24})
+
+	for _, m := range out["memoria"].([]any) {
+		fila := m.(map[string]any)
+		if fila["termino"] != "servicioescondido" {
+			continue
+		}
+		txt := fila["contenido"].(string)
+		if !strings.Contains(txt, "servicioescondido") {
+			t.Fatalf("el fragmento afirma enlazar por `servicioescondido` y no lo contiene — no hay forma de verificarlo:\n%s", txt)
+		}
+		return
+	}
+	t.Fatal("la nota que nombra el servicio no apareció enlazada por término")
+}

@@ -119,8 +119,23 @@ func (e *DbEngine) ObservacionesQueNombran(ctx context.Context, termino string, 
 	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
 	args := append([]interface{}{frase}, scopeArgs...)
 	args = append(args, tope)
+	// ── snippet() Y NO EL PRINCIPIO DE LA NOTA ──────────────────────────────────────────────
+	//
+	// El primer recorte mostraba los primeros 400 caracteres. Medido contra la memoria real: la
+	// nota que enlazó por `NetworkManager` lo nombra en el carácter 1598 de 4456, así que la
+	// respuesta afirmaba «esto está enlazado por NetworkManager» y mostraba un texto donde
+	// NetworkManager no aparecía.
+	//
+	// Eso no es un enlace equivocado —el término está, lo verifiqué contra la base— es algo
+	// peor de otra forma: un enlace CORRECTO que no se puede verificar. Toda la promesa de esta
+	// tool es declarar cómo enlazó cada cosa, y una declaración que no se puede comprobar hay
+	// que creerla, que es justo lo que la tool existe para no pedir.
+	//
+	// `snippet()` devuelve el pasaje ALREDEDOR del match. La columna 1 es `content` (la 0 es
+	// `topic_key`, UNINDEXED). Sin marcas de resaltado: esto lo lee un panel o un agente, y unos
+	// `<b>` serían basura en el medio del texto. 30 tokens alcanza para ver la frase entera.
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT o.id, o.topic_key, o.content, o.created_at
+		SELECT o.id, o.topic_key, snippet(observations_fts, 1, '', '', '…', 30), o.created_at
 		FROM observations_fts f
 		JOIN observations o ON o.rowid = f.rowid
 		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+scopeSQL+`
