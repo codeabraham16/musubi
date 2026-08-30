@@ -1272,6 +1272,23 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_fleet_rename",
+				Description: "**admin**: le cambia el NOMBRE a una máquina CONSERVANDO SU ID — y con él su bitácora entera, sus sesiones, su inventario de servicios y su token (el agente sigue latiendo sin reinstalar nada). Antes de esto, cambiar un nombre obligaba a dar de baja y volver a enrolar, lo que daba un id nuevo: la máquina aparecía vacía y todo su historial quedaba colgando de un device revocado. RENOMBRAR NO ES COSMÉTICO, ES UN CAMBIO DE AUTORIZACIÓN DISFRAZADO: tres cosas de este sistema indexan por NOMBRE y ninguna por id — las concesiones de capacidad de `principals.yaml`, la allowlist de comandos por máquina (`exec_allow`) y el alcance de las políticas. Renombrar puede SACARLE `exec` a alguien, DÁRSELO, o meter una máquina adentro del alcance de una política que la va a tocar sola, todo en silencio. POR ESO NO RENOMBRA EN EL PRIMER LLAMADO: informa qué credenciales y políticas nombran el nombre viejo (las que van a dejar de alcanzarla) Y las que ya nombran el nombre NUEVO (cuya autorización la máquina HEREDA sin que nadie se la haya dado, que es el sentido que a nadie se le ocurre mirar), dice qué editar en cada archivo, y se planta. Con `confirmar: true` renombra. NO EDITA `principals.yaml`: eso sería el cerebro cambiando la credencial de una persona, y las concesiones se escriben a mano a propósito. El rename queda en el log del cerebro con las dos puntas, porque es de las pocas operaciones que no deja rastro en ninguna tabla.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":    {Type: "string", Description: "El nombre ACTUAL de la máquina"},
+						"nuevo":     {Type: "string", Description: "El nombre nuevo. Único dentro del proyecto, sin caracteres de control, comas ni comillas: viaja a las etiquetas de Prometheus y a los selectores de principals.yaml"},
+						"project":   {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"confirmar": {Type: "boolean", Description: "Sin esto NO renombra: devuelve el informe de impacto y se planta. El default de «no lo pensé» es que no pase nada"},
+					},
+					Required: []string{"device", "nuevo"},
+				},
+			},
+			handler: s.toolFleetRename,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_fleet_probe",
 				Description: "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente), Tier B por EXPOSICIÓN (bases gestionadas y appliances que no dan shell y sí publican un endpoint de métricas: se declaran en `.musubi/flota-exposicion.yaml` y eso ES lo que elige el transporte) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada — y sigue en null si dos sondeos caen dentro del CACHÉ de un endpoint de exposición (medido: ~62 s en una base gestionada), porque ahí tampoco hubo dos lecturas distintas. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
 				InputSchema: InputSchema{

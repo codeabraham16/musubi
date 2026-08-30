@@ -370,6 +370,34 @@ func avisosDeInterpretes(p Principal) []string {
 // Devuelve una COPIA. Sin ella, quien la reciba tendría un puntero al snapshot vigente del
 // registro, y el registro se recarga en caliente cada 10 s: una política podría quedarse
 // evaluando contra una credencial que ya se revocó. Con copia, cada evaluación resuelve de nuevo.
+// impactoDeNombre recorre el registro buscando quién NOMBRA esta máquina (A64).
+//
+// NO cuenta el comodín `*`: una concesión sobre todas las máquinas sobrevive a cualquier rename y
+// listarla sería ruido que tapa lo que sí importa. Lo que importa es exactamente lo que se rompe:
+// las que nombran a ESTA.
+func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
+	var imp ImpactoDeNombre
+	if r == nil || strings.TrimSpace(device) == "" {
+		return imp
+	}
+	for i := range r.principals {
+		p := &r.principals[i]
+		for _, selectores := range p.Fleet {
+			for _, sel := range selectores {
+				if sel == device {
+					imp.Concesiones = append(imp.Concesiones, p.Name)
+					goto allow
+				}
+			}
+		}
+	allow:
+		if _, hay := p.ExecAllow[device]; hay {
+			imp.Allowlists = append(imp.Allowlists, p.Name)
+		}
+	}
+	return imp
+}
+
 func (r *PrincipalRegistry) porNombre(nombre string) (*Principal, bool) {
 	for i := range r.principals {
 		if r.principals[i].Name == nombre {

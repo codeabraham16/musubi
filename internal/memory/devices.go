@@ -216,6 +216,51 @@ func (e *DbEngine) LatirDevice(id string, ahora time.Time, muestra string) (bool
 	return n > 0, nil
 }
 
+// RenombrarDevice cambia el NOMBRE de una máquina conservando su id, y con él todo su historial
+// (A64).
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ HACÍA FALTA UNA OPERACIÓN Y NO ALCANZABA CON «dar de baja y volver a enrolar»
+//
+// El id es lo que referencian la bitácora de comandos, las dos clases de sesión y el inventario
+// de servicios. Volver a enrolar da un id NUEVO: la máquina aparece vacía, sin nada de lo que le
+// pasó, y lo viejo queda colgando de un device revocado con otro nombre. O sea que el único
+// camino que existía convertía un cambio de nombre en una pérdida de auditoría.
+//
+// EL NOMBRE ES ÚNICO POR PROYECTO Y LO IMPONE LA BASE (idx_devices_nombre). Un choque no se
+// chequea con un SELECT previo —entre el SELECT y el UPDATE hay una carrera y la base no la
+// tiene—: se deja fallar y se traduce el error, que es la misma regla que usa el alta.
+//
+// NO TOCA NADA MÁS, y eso es deliberado: las concesiones de `principals.yaml` y los alcances de
+// las políticas nombran máquinas por NOMBRE, y arreglarlos desde acá sería que el cerebro edite
+// la credencial de alguien. Quién decide eso es una persona; lo que hace este motor es cambiar el
+// nombre, y lo que hace la superficie de arriba es DECIR qué quedó apuntando a un nombre que ya
+// no existe.
+func (e *DbEngine) RenombrarDevice(projectID, viejo, nuevo string) (fleet.Device, error) {
+	projectID, viejo, nuevo = strings.TrimSpace(projectID), strings.TrimSpace(viejo), strings.TrimSpace(nuevo)
+	if projectID == "" || viejo == "" || nuevo == "" {
+		return fleet.Device{}, fmt.Errorf("renombrar necesita proyecto, nombre viejo y nombre nuevo")
+	}
+	if viejo == nuevo {
+		return fleet.Device{}, fmt.Errorf("el nombre nuevo es el mismo que el viejo")
+	}
+	res, err := e.db.Exec(`UPDATE devices SET name = ? WHERE project_id = ? AND name = ?`,
+		nuevo, projectID, viejo)
+	if err != nil {
+		// El único choque posible es el nombre ya tomado. Se traduce a algo legible: un
+		// "UNIQUE constraint failed" en la respuesta de una tool no le dice nada a nadie.
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return fleet.Device{}, fmt.Errorf("ya hay una máquina llamada %q en el proyecto %q", nuevo, projectID)
+		}
+		return fleet.Device{}, fmt.Errorf("error al renombrar %q: %w", viejo, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fleet.Device{}, fmt.Errorf("no hay ninguna máquina %q en el proyecto %q", viejo, projectID)
+	}
+	d, _, err := e.DevicePorNombre(projectID, nuevo)
+	return d, err
+}
+
 // RevocarDevice da de baja un dispositivo: deja de autenticar en el acto y la fila QUEDA.
 //
 // Es una bandera y no un DELETE (invariante A9). Borrar la fila perdería a quién pertenecían la

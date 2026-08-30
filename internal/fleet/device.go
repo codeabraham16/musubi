@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Tier es cuánto se puede hacer sobre un dispositivo, y lo decide CÓMO se llega a él, no una
@@ -297,6 +298,38 @@ func (d Device) EnLinea(ahora time.Time, umbral time.Duration) bool {
 		return false
 	}
 	return ahora.Sub(d.LastSeen) <= umbral
+}
+
+// NombreDeviceMax acota el nombre de una máquina. Se cuenta en RUNAS y no en bytes, igual que el
+// de un servicio: `münchen-01` son diez caracteres y once bytes, y cortar por bytes parte el
+// carácter al medio.
+const NombreDeviceMax = 64
+
+// NombreDeDeviceValido acota lo que puede llamarse una máquina (A64).
+//
+// EL NOMBRE VIAJA A LUGARES QUE NO PERDONAN: es una ETIQUETA de Prometheus, es el selector de las
+// concesiones de `principals.yaml`, es la clave de la allowlist por comando, y sale en cada línea
+// de log del cerebro. Un carácter de control ahí parte un log en dos; una coma se confunde con el
+// separador de las columnas CSV que viven al lado (`caps`, `tags`); y una comilla rompe la
+// etiqueta de Prometheus.
+//
+// NO SE APLICA EN EL ALTA TODAVÍA, y hay que decirlo: `ValidarAlta` sólo exige que el nombre no
+// esté vacío, así que una flota vieja puede tener nombres que esta función rechazaría. Apretarlo
+// también ahí es un cambio aparte —hay que mirar qué hay enrolado antes de empezar a rechazar— y
+// no se hace de rebote en el slice de renombrar.
+func NombreDeDeviceValido(n string) bool {
+	n = strings.TrimSpace(n)
+	if n == "" {
+		return false
+	}
+	runas := 0
+	for _, r := range n {
+		if unicode.IsControl(r) || r == ',' || r == '"' {
+			return false
+		}
+		runas++
+	}
+	return runas <= NombreDeviceMax
 }
 
 // ValidarAlta chequea lo que tiene que ser cierto ANTES de que el dispositivo exista en el

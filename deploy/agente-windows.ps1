@@ -204,7 +204,7 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
 # queda esperando, la tarea sigue en Running y el reinicio automatico sigue valiendo.
 #
 # Es exactamente la clase de detalle que convierte un arreglo en una regresion silenciosa: la
-# ventana desaparece —que es lo que se ve— y la red de contencion tambien —que es lo que no—.
+# ventana desaparece --que es lo que se ve-- y la red de contencion tambien --que es lo que no--.
 if ($Oculto) {
   $shim = Join-Path $InstallDir "agente-oculto.vbs"
   @"

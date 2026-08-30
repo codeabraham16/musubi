@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -45,7 +45,6 @@
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
-| A64 | **El nombre en la flota y el nombre real de la máquina divergieron** | `kernelos-pc` en Musubi, `davantis-1` en tailscale, «Davantis» para quien la usa: tres nombres para el mismo equipo. **No es cosmético y ya costó**: el 2026-08-30 se corrió un diagnóstico en la máquina equivocada por esta razón. La próxima vez que haya que ejecutar algo urgente, el riesgo es correrlo donde no era — y un `exec` en la máquina equivocada no se deshace. **Renombrar un device no existe hoy como operación**: el nombre se fija al enrolar y sólo se puede cambiar dando de baja y volviendo a enrolar, lo que pierde su historial (bitácora, sesiones, servicios). Arreglarlo pide una tool `musubi_fleet_rename` que conserve el id — y una decisión sobre qué pasa con las concesiones de `principals.yaml`, que nombran máquinas por NOMBRE. **Se revisa si aparece una tercera máquina con nombre divergente, o antes si alguien vuelve a equivocarse.** | **sin asignar** |
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -72,6 +71,55 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 (6) · A64 CERRADO — renombrar una máquina existe, y avisa lo que va a cambiar.**
+
+Se abrió hoy porque `kernelos-pc` (Musubi), `davantis-1` (tailscale) y «Davantis» (quien la usa)
+son el mismo equipo, y esa divergencia hizo que un diagnóstico se corriera en la máquina
+equivocada. Hasta ahora renombrar no existía: había que dar de baja y volver a enrolar, lo que da
+un id NUEVO — la máquina aparece vacía y su bitácora, sus sesiones y sus servicios quedan colgando
+de un device revocado con otro nombre. **Cambiar un nombre costaba el historial entero.**
+
+**Y AL IR A DISEÑARLO APARECIÓ LO QUE IMPORTABA DE VERDAD: renombrar NO es cosmético, es un cambio
+de autorización disfrazado.** Tres cosas de este repo indexan por NOMBRE y ninguna por id:
+
+	tieneGrant        → las concesiones de capacidad de `principals.yaml`
+	argvPermitido     → la allowlist de comandos por máquina (`exec_allow`)
+	Politica.Alcanza  → a qué máquinas alcanza una política (`config.yaml`)
+
+Un rename puede sacarle `exec` a alguien, dárselo, o meter una máquina adentro del alcance de una
+política que la va a tocar sola. Todo en silencio, con el síntoma apareciendo días después como
+«esto dejó de andar».
+
+- **NO RENOMBRA EN EL PRIMER LLAMADO.** Informa y se planta. Es la misma forma que tiene todo lo
+  caro de este track: el default de «no lo pensé» es que no pase nada.
+- **INFORMA LAS DOS DIRECCIONES.** Lo que va a dejar de alcanzarla (quien nombra el nombre viejo)
+  y —el sentido que a nadie se le ocurre mirar— **lo que la máquina va a HEREDAR**: si algo ya
+  nombraba el nombre nuevo, la renombrada se queda con esa autorización sin que nadie se la haya
+  dado.
+- **EL COMODÍN NO SE LISTA.** Una concesión sobre todas las máquinas sobrevive a cualquier rename;
+  listarla sería ruido que tapa lo que sí se rompe.
+- **LA ALLOWLIST VA APARTE DE LAS CONCESIONES** porque se pierden distinto: quedarse sin concesión
+  niega el acceso, que es ruidoso y se nota; quedarse sin entrada de `exec_allow` con la SECCIÓN
+  presente deniega TODO comando por el paso 4 de `argvPermitido` — igual de silencioso y mucho más
+  confuso.
+- **NO EDITA `principals.yaml`.** Eso sería el cerebro cambiando la credencial de una persona, y
+  las concesiones se escriben a mano a propósito (B3). Lo que sí hace es decir exactamente qué
+  editar y dónde.
+- **QUEDA EN EL LOG DEL CEREBRO** con las dos puntas: un rename cambia una columna y no deja
+  rastro en ninguna tabla, así que sin esa línea la pregunta «¿por qué esta máquina se llama
+  distinto?» no tiene respuesta en ningún lado.
+
+De paso entró `fleet.NombreDeDeviceValido`: el nombre viaja a etiquetas de Prometheus, a los
+selectores de `principals.yaml` y a cada línea de log, así que no puede llevar control, comas ni
+comillas. **NO se aplica en el alta todavía** —`ValidarAlta` sólo exige que no esté vacío— y eso
+está dicho en el propio comentario: apretarlo ahí exige mirar qué hay enrolado antes de empezar a
+rechazar, y no se hace de rebote.
+
+**Siete sabotajes.** Y una lección del MÉTODO, repetida: la tanda se pasó del tiempo y dejó uno
+aplicado en el árbol. Esta vez lo verifiqué a propósito antes de seguir —`diff` contra los
+respaldos— en vez de que lo cazara el test siguiente por un motivo que no tenía nada que ver.
+La segunda tanda corrió en segundo plano y terminó con esa verificación adentro del script.
 
 **2026-08-30 (5) · A63 CERRADO — la causa no era la red: era una ventana que estorbaba.**
 

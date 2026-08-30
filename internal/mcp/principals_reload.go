@@ -18,8 +18,38 @@ import (
 
 // principalResolver abstrae "resolver un bearer a un principal": lo satisfacen el registro
 // estático (*PrincipalRegistry, modo legacy sin archivo) y el recargable (*reloadableRegistry).
+// ImpactoDeNombre dice QUÉ AUTORIZACIONES NOMBRAN a una máquina, y existe porque renombrar un
+// device NO es cosmético: es un cambio de autorización disfrazado (A64).
+//
+// Tres cosas de este repo indexan por NOMBRE de máquina y ninguna por id:
+//
+//	tieneGrant        → las concesiones de capacidad de `principals.yaml`
+//	argvPermitido     → la allowlist de comandos por máquina (`exec_allow`)
+//	Politica.Alcanza  → a qué máquinas alcanza una política (`config.yaml`)
+//
+// Así que un rename le puede SACAR `exec` a alguien, o DÁRSELO, o meter una máquina adentro del
+// alcance de una política — sin que nadie lo haya pedido y sin que quede rastro de por qué. Este
+// tipo es lo que permite decirlo ANTES, en vez de que se descubra cuando algo deja de andar.
+type ImpactoDeNombre struct {
+	// Concesiones son los principals cuya sección `fleet:` nombra esta máquina.
+	Concesiones []string
+	// Allowlists son los principals con una entrada de `exec_allow` para esta máquina. Van
+	// aparte de las concesiones porque se pierden distinto: quedarse sin concesión niega el
+	// acceso —ruidoso, se nota—; quedarse sin entrada de allowlist con la SECCIÓN presente
+	// deniega TODO comando por el paso 4 de argvPermitido, que es igual de silencioso y mucho
+	// más confuso.
+	Allowlists []string
+}
+
+func (i ImpactoDeNombre) Vacio() bool { return len(i.Concesiones) == 0 && len(i.Allowlists) == 0 }
+
 type principalResolver interface {
 	resolve(token string) (*Principal, bool)
+	// impactoDeNombre lista qué credenciales NOMBRAN esta máquina. Va en esta interfaz y no en
+	// una aparte por el mismo motivo que porNombre: es la misma fuente de verdad, y dos
+	// interfaces separadas invitarían a que el informe de impacto mire un registro más viejo que
+	// el que autentica.
+	impactoDeNombre(device string) ImpactoDeNombre
 	// porNombre resuelve SIN token: lo necesitan las políticas de flota (S10), que actúan con la
 	// autoridad de alguien declarado en principals.yaml pero no presentan credencial ninguna.
 	// Está en la misma interfaz que resolve a propósito — son la misma fuente de verdad, y dos
@@ -62,6 +92,16 @@ func (rr *reloadableRegistry) resolve(token string) (*Principal, bool) {
 // porNombre busca en el snapshot vigente (lock-free), igual que resolve. Que las dos preguntas
 // salgan del MISMO snapshot es lo que hace que revocar a alguien en principals.yaml apague, en el
 // mismo instante, tanto su token como las políticas que actuaban en su nombre.
+// impactoDeNombre delega en el snapshot VIGENTE, igual que las otras dos. Que las tres lean el
+// mismo puntero es lo que impide que el informe de impacto de un rename describa un registro que
+// ya no es el que autoriza.
+func (rr *reloadableRegistry) impactoDeNombre(device string) ImpactoDeNombre {
+	if reg := rr.cur.Load(); reg != nil {
+		return reg.impactoDeNombre(device)
+	}
+	return ImpactoDeNombre{}
+}
+
 func (rr *reloadableRegistry) porNombre(nombre string) (*Principal, bool) {
 	reg := rr.cur.Load()
 	if reg == nil {

@@ -467,6 +467,10 @@ type DeviceStore interface {
 	// RevocarDevice es el kill-switch: deja de autenticar en el acto y la fila queda para la
 	// auditoría. ARRASTRA los servicios de esa máquina (S12), en la misma transacción.
 	RevocarDevice(projectID, name string) (bool, error)
+	// RenombrarDevice cambia el nombre CONSERVANDO EL ID, y con él la bitácora, las sesiones y
+	// el inventario de servicios. Dar de baja y volver a enrolar daba un id nuevo, o sea que
+	// cambiar un nombre costaba el historial entero (A64).
+	RenombrarDevice(projectID, viejo, nuevo string) (fleet.Device, error)
 }
 
 // ServiceStore es el inventario de QUÉ CORRE ADENTRO de cada máquina de la flota (S12): units de

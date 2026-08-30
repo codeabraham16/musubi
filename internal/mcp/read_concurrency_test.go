@@ -104,6 +104,10 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// del proyecto. Marcarlas readOnly las metería en la clase de lectura aislada, que es
 		// justo lo que no son.
 		"musubi_promote_skill", "musubi_install_skill",
+		// A64 — renombrar ESCRIBE la columna `name`. Marcarla readOnly la metería en la clase de
+		// lectura concurrente, que es justo lo que no es: dos renames a la vez sobre la misma
+		// máquina se pisarían.
+		"musubi_fleet_rename",
 		// S12 — declarar un servicio a mano ESCRIBE en la tabla `services`. Marcarla readOnly la
 		// metería en la clase de lectura aislada, que es justo lo que no es.
 		"musubi_fleet_service_declare",
