@@ -42,11 +42,20 @@ groups:
       # Se alerta sobre AVAILABLE, no sobre usado. No es lo mismo: el kernel reserva ~5% para
       # root, así que un disco "al 92% usado" puede tener 0 bytes escribibles para una aplicación.
       - alert: DiscoPorLlenarse
-        expr: musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.10
+        # EL UMBRAL SUBIÓ DE 0.10 A 0.15 AL ABSORBER LA ALERTA DE `alerter.py` (A33).
+        #
+        # No fue un ajuste de gusto: al ir a apagar la regla duplicada resultó que NO era la
+        # misma. `alerter.py` avisaba al 85 % usado; ésta, con 0.10, recién al 90 %. Apagar la
+        # vieja sin mirar habría bajado la sensibilidad cinco puntos sin que nadie lo notara —
+        # exactamente la clase de pérdida silenciosa que una "limpieza de duplicados" produce.
+        #
+        # Medido al decidirlo: `kernelos-pc` estaba al 86,6 % usado, o sea en la zona ciega entre
+        # los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
+        expr: musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15
         for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "A {{ $labels.device }} le queda menos del 10% de disco escribible."
+          summary: "A {{ $labels.device }} le queda menos del 15% de disco escribible."
           runbook: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
 
       - alert: DiscoCasiLleno
