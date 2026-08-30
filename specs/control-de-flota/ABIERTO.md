@@ -14,7 +14,10 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+>
+> **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
+> pueda decir qué disparó una regla y qué pidió una persona.
 >
 > **La regla 2 de abajo ya no depende de que alguien se acuerde**: la verifica
 > `TestNingunCaboDeFlotaSeQuedaSinRegistro`. Un cabo nuevo sin número de registro rompe la suite.
@@ -41,7 +44,6 @@
 | A36 | **Al relay no lo vigila nadie** | Si `hbbs` muere, la primera noticia es que alguien no puede abrir una pantalla. No hay regla de alerta ni target de scrape: el relay no expone métricas de Prometheus, así que haría falta un `blackbox_exporter` (una pieza más) o una regla sobre el latido del contenedor. **Sale del mismo nudo que A33**: montar más vigilancia antes de decidir cuál de los tres stacks es el de verdad es agrandar el problema. | **sin asignar** (después de A33) |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
-| A59 | **La bitácora no distingue el origen AUTOMÁTICO del manual** | Una política y una persona escriben en `device_commands` con la MISMA forma: no hay columna que diga «esto lo disparó una regla». La diferencia se lee del nombre del principal —`auto-heal` contra `gio`—, que es una CONVENCIÓN y no una garantía: nada impide que un principal de política se llame como una persona, y entonces la cronología y la bitácora dirían que alguien hizo a mano lo que hizo una regla. **Apareció al escribir la cronología (S13)**, que es donde más pesa: una línea de tiempo se lee como el relato de lo que pasó, y «auto-heal reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició cuarenta veces» son dos relatos distintos. **Hoy no rompe nada** porque los principales de política se declaran aparte en `config.yaml` y el dato es recuperable cruzando. Arreglarlo es una columna `origen` en la tabla, su migración y pasarla por las dos superficies. **Se revisa cuando haya más de un puñado de políticas, o el día que alguien lea la bitácora sin saber qué principales son reglas.** | **sin asignar** |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
 
@@ -70,6 +72,41 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 (2) · A59 CERRADO — la cronología ya puede decir qué lo hizo una regla.**
+
+Se abrió esta mañana, escribiendo S13: una política y una persona escriben en `device_commands`
+con la MISMA forma, y la diferencia se leía del nombre del principal. En una línea de tiempo eso
+importa: «auto-heal reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició
+cuarenta veces» son dos relatos distintos, y sólo uno es cierto.
+
+- **SE GUARDA, NO SE DERIVA** (migración 41, `device_commands.origen`). Derivarlo del nombre del
+  principal contra `config.yaml` sería lo barato y sería falso: las políticas se agregan y se
+  sacan, así que un comando de hace tres meses disparado por un principal que hoy ya no es una
+  política se etiquetaría como manual. El resto del dominio deriva lo que sigue siendo cierto
+  ahora —que una sesión venció, que un comando expiró— y guarda lo que OCURRIÓ. Ésta es de las
+  segundas.
+- **EL DEFAULT `''` SIGNIFICA «NO SE SABE» Y NO «PERSONA».** Es el cero mentiroso de A39 llevado al
+  origen: rellenar las filas viejas con `persona` haría que cada disparo automático anterior a la
+  migración figure como una acción humana. En la cronología de una máquina eso es atribuirle a
+  alguien algo que no hizo. Un backfill por nombre de principal tampoco sirve: reproduciría la
+  convención que la columna viene a reemplazar.
+- **`automatico` ES LISTA BLANCA**: lo desconocido no es automático **y tampoco es manual**. Las dos
+  superficies lo emiten en null, que es la única forma de que un panel pueda dibujar la diferencia.
+- **LAS DOS SUPERFICIES, otra vez** (A39): la bitácora y la cronología leen la misma tabla y no
+  pueden contar dos historias.
+
+**Ocho sabotajes, y tres enseñaron lo mismo que ya había enseñado el día**: probar el CABLEADO y no
+el campo. Sembrar el comando a mano con `Origen: politica` puesto verifica que el campo viaja, no
+que alguien lo setea donde tiene que setearlo — así que el sabotaje de quitarle el origen al motor
+de políticas quedaba verde. La verificación se movió al test que ya recorría el camino entero
+(`TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas`), y el control de `persona` pasó a
+entrar por `musubi_fleet_exec` en vez de por el motor.
+
+**Y un tropiezo del método, no del código**: la tanda de sabotajes se pasó del tiempo ANTES de
+restaurar el último, así que quedó aplicado en el árbol. Lo cazó el test siguiente, que falló por
+un motivo que no tenía nada que ver con lo que estaba probando. Un sabotaje que no se revierte es
+un bug introducido a mano.
 
 **2026-08-30 · FASE 5 · S14 — EL CRUCE: la flota le pregunta a la memoria.**
 

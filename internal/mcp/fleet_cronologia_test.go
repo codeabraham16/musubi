@@ -584,3 +584,89 @@ func TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto(t *testing.T) 
 		t.Errorf("un comando recién encolado se muestra %q en la cronología", got)
 	}
 }
+
+// LAS DOS SUPERFICIES DICEN EL MISMO ORIGEN, y un origen desconocido viaja en NULL — nunca como
+// «persona» (A59).
+//
+// Una política y una persona escriben en la misma tabla con la misma forma. Sin esta columna, la
+// cronología de una máquina con auto-heal cuenta cuarenta reinicios como si los hubiera pedido
+// alguien. Y las filas anteriores a la migración 41 no lo dicen: dibujarlas como manuales le
+// atribuiría a una persona cada disparo automático viejo.
+//
+// Sabotaje: emitir `"persona"` cuando el origen está vacío → falla acá, en la mitad del control.
+// Sabotaje: no escribir el origen en politicas.go → falla la primera aserción.
+func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: "infra", Principal: "auto-heal",
+		Argv: []string{"systemctl", "restart", "MARCAAUTO"}, Timeout: 30 * time.Second,
+		Origen: fleet.OrigenPolitica,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Un comando SIN origen: exactamente lo que hay en la base de antes de la migración.
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: "infra", Principal: "auto-heal",
+		Argv: []string{"systemctl", "restart", "MARCAVIEJA41"}, Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p := conCaps("infra", map[fleet.Cap][]string{fleet.CapExec: {"*"}})
+
+	// EL CONTROL PASA POR LA TOOL, no por el motor. Sembrar el comando a mano con
+	// `Origen: OrigenPersona` probaría que el campo viaja y NO que alguien lo setea donde tiene
+	// que setearlo — que es justo el error que ya me comí una vez hoy: la prueba verde con el
+	// cableado sin hacer.
+	if _, e := callAsPrincipal(t, s, p, "musubi_fleet_exec", map[string]any{
+		"device": "pc-gio", "argv": []string{"echo", "MARCAMANUAL"}, "no_wait": true,
+	}); e != nil {
+		t.Fatalf("exec: %+v", e)
+	}
+
+	buscar := func(tool, filas, marca string, args map[string]any) map[string]any {
+		t.Helper()
+		res, e := callAsPrincipal(t, s, p, tool, args)
+		if e != nil {
+			t.Fatalf("%s: %+v", tool, e)
+		}
+		for _, f := range jsonOf(t, res)[filas].([]any) {
+			fila := f.(map[string]any)
+			argv, _ := fila["argv"].([]any)
+			for _, a := range argv {
+				if a == marca {
+					return fila
+				}
+			}
+		}
+		t.Fatalf("%s: no apareció %s", tool, marca)
+		return nil
+	}
+	crono := map[string]any{"device": "pc-gio", "horas": 24, "limite": 100}
+	log := map[string]any{"limite": 50}
+
+	for _, c := range []struct{ tool, filas string }{{"musubi_fleet_cronologia", "hechos"}, {"musubi_fleet_log", "comandos"}} {
+		args := crono
+		if c.tool == "musubi_fleet_log" {
+			args = log
+		}
+		auto := buscar(c.tool, c.filas, "MARCAAUTO", args)
+		if auto["origen"] != string(fleet.OrigenPolitica) || auto["automatico"] != true {
+			t.Errorf("%s: un comando de política salió origen=%v automatico=%v", c.tool, auto["origen"], auto["automatico"])
+		}
+		vieja := buscar(c.tool, c.filas, "MARCAVIEJA41", args)
+		if vieja["origen"] != nil || vieja["automatico"] != nil {
+			t.Errorf("%s: un comando SIN origen salió origen=%v automatico=%v — lo desconocido no se inventa",
+				c.tool, vieja["origen"], vieja["automatico"])
+		}
+		// CONTROL: un comando de persona SÍ dice persona. Sin esto, devolver null siempre pasaría
+		// las dos aserciones de arriba.
+		manual := buscar(c.tool, c.filas, "MARCAMANUAL", args)
+		if manual["origen"] != string(fleet.OrigenPersona) || manual["automatico"] != false {
+			t.Errorf("%s: un comando pedido por una persona salió origen=%v automatico=%v",
+				c.tool, manual["origen"], manual["automatico"])
+		}
+	}
+}

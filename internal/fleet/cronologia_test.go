@@ -309,3 +309,62 @@ func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
 		t.Errorf("un terminado viejo se muestra %q", got)
 	}
 }
+
+// EL ORIGEN VACÍO NO ES «PERSONA», y ésa es toda la regla de A59.
+//
+// Las filas anteriores a la migración 41 no dicen quién las originó. Rellenarlas con `persona`
+// haría que cada disparo automático viejo figure como una acción humana — en la cronología de una
+// máquina eso es atribuirle a alguien algo que no hizo.
+//
+// Sabotaje: que `EsAutomatico` devuelva `o != OrigenPersona` (lista NEGRA en vez de blanca) → lo
+// desconocido pasa a contarse como automático, que es la mentira simétrica.
+func TestUnOrigenDesconocidoNoEsPersonaNiAutomatico(t *testing.T) {
+	if OrigenDesconocido.EsAutomatico() {
+		t.Error("lo desconocido no puede contarse como automático")
+	}
+	if OrigenPersona.EsAutomatico() {
+		t.Error("una persona no es automática")
+	}
+	if !OrigenPolitica.EsAutomatico() {
+		t.Error("una política SÍ es automática: si no, la columna no distingue nada")
+	}
+	// Y lo desconocido tampoco es persona: la comparación tiene que poder distinguirlos.
+	if OrigenDesconocido == OrigenPersona {
+		t.Error("desconocido y persona no pueden ser el mismo valor")
+	}
+}
+
+// Lo que no está en la lista se guarda como DESCONOCIDO, no como una categoría nueva.
+//
+// Fail-closed en el borde: un llamador futuro que mande `"cron"` no puede crear un valor que
+// ninguna superficie sabe dibujar. Lo desconocido ya tiene significado; lo inventado, no.
+//
+// Sabotaje: que `OrigenValido` devuelva `o` tal cual → falla acá.
+func TestUnOrigenRaroSeGuardaComoDesconocido(t *testing.T) {
+	for _, raro := range []OrigenComando{"cron", "PERSONA", "politica ", "robot"} {
+		if got := OrigenValido(raro); got != OrigenDesconocido {
+			t.Errorf("OrigenValido(%q) = %q, esperaba desconocido", raro, got)
+		}
+	}
+	for _, bueno := range []OrigenComando{OrigenPersona, OrigenPolitica} {
+		if got := OrigenValido(bueno); got != bueno {
+			t.Errorf("OrigenValido(%q) = %q: los válidos no se tocan", bueno, got)
+		}
+	}
+}
+
+// El hecho de la cronología ARRASTRA el origen del comando. Sin esto la columna existe en la
+// tabla y no llega a ninguna superficie — que es el patrón de A58, otra vez.
+//
+// Sabotaje: no copiar `Origen` en HechoDeComando → falla acá.
+func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
+	h := HechoDeComando(Comando{Argv: []string{"systemctl", "restart", "nginx"}, Origen: OrigenPolitica}, "pc")
+	if h.Origen != OrigenPolitica {
+		t.Errorf("el hecho perdió el origen: %q", h.Origen)
+	}
+	// Una sesión no tiene origen: la abre siempre alguien, y un campo vacío ahí se leería como
+	// «no se sabe» cuando sí se sabe.
+	if s := HechoDeSesionShell(SesionShell{}, "pc"); s.Origen != OrigenDesconocido {
+		t.Errorf("una sesión no debería llevar origen: %q", s.Origen)
+	}
+}

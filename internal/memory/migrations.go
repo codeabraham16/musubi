@@ -1472,6 +1472,34 @@ func schemaMigrations() []migration {
 					"consentimiento TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 41,
+			name:    "origen_del_comando",
+			// QUIÉN LO ORIGINÓ: una persona o una regla (A59).
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// SE GUARDA PORQUE ES UN HECHO DEL PASADO, NO UN ESTADO DERIVABLE
+			//
+			// Hoy la diferencia se lee del NOMBRE del principal —`auto-heal` contra `gio`—, que
+			// es una convención sostenida por `config.yaml`. Derivarla al leer sería lo barato y
+			// sería falso: las políticas se agregan y se sacan, así que un comando de hace tres
+			// meses, disparado por un principal que hoy ya no es una política, se etiquetaría
+			// como manual. «Esto lo originó una regla» es un hecho de CUANDO PASÓ.
+			//
+			// El resto del dominio deriva lo que sigue siendo cierto ahora (que una sesión venció,
+			// que un comando expiró) y guarda lo que ocurrió. Ésta es de las segundas.
+			//
+			// EL DEFAULT ES '' Y SIGNIFICA «NO SE SABE», NO «PERSONA». Es la regla del cero
+			// mentiroso llevada al origen: las filas anteriores a esta migración no dicen quién
+			// las originó, y rellenarlas con `persona` haría que cada disparo automático viejo
+			// figure como una acción humana — en la cronología de una máquina, eso es atribuirle
+			// a alguien algo que no hizo. Un backfill por nombre de principal tampoco sirve:
+			// reproduciría la misma convención que esta columna viene a reemplazar.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "device_commands", "origen",
+					"origen TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

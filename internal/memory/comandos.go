@@ -23,7 +23,7 @@ import (
 var ErrComandoAjeno = errors.New("ese comando no pertenece a este dispositivo")
 
 const columnasComando = `id, device_id, project_id, principal, argv, timeout_seg, estado,
-	creado, entregado, terminado, exit_code, stdout, stderr, error`
+	creado, entregado, terminado, exit_code, stdout, stderr, error, origen`
 
 // EncolarComando registra el pedido y lo deja pendiente. Devuelve el comando con su ID.
 //
@@ -43,11 +43,15 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 	if err != nil {
 		return fleet.Comando{}, err
 	}
+	// EL ORIGEN SE NORMALIZA AL ESCRIBIR, no al leer: un valor raro que entre desde un llamador
+	// nuevo se guarda como desconocido en vez de crear una categoría que ninguna superficie sabe
+	// dibujar. Lo desconocido ya tiene significado; lo inventado, no.
+	c.Origen = fleet.OrigenValido(c.Origen)
 	_, err = e.db.Exec(
-		`INSERT INTO device_commands (id, device_id, project_id, principal, argv, timeout_seg, estado, creado)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO device_commands (id, device_id, project_id, principal, argv, timeout_seg, estado, creado, origen)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.DeviceID, c.ProjectID, c.Principal, argv,
-		int(c.Timeout.Seconds()), string(c.Estado), c.Creado.UTC().Format(time.RFC3339),
+		int(c.Timeout.Seconds()), string(c.Estado), c.Creado.UTC().Format(time.RFC3339), string(c.Origen),
 	)
 	if err != nil {
 		return fleet.Comando{}, fmt.Errorf("error al encolar el comando para %q: %w", c.DeviceID, err)
@@ -243,13 +247,14 @@ func escanearComando(row escaneable) (fleet.Comando, error) {
 	var (
 		c                    fleet.Comando
 		argv, estado, creado string
+		origen               string
 		entregado, terminado sql.NullString
 		exit                 sql.NullInt64
 		timeoutSeg           int
 	)
 	if err := row.Scan(
 		&c.ID, &c.DeviceID, &c.ProjectID, &c.Principal, &argv, &timeoutSeg, &estado,
-		&creado, &entregado, &terminado, &exit, &c.Stdout, &c.Stderr, &c.Error,
+		&creado, &entregado, &terminado, &exit, &c.Stdout, &c.Stderr, &c.Error, &origen,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Comando{}, err
@@ -259,6 +264,10 @@ func escanearComando(row escaneable) (fleet.Comando, error) {
 	c.Argv = fleet.ArgvDesdeTexto(argv)
 	c.Timeout = time.Duration(timeoutSeg) * time.Second
 	c.Estado = fleet.EstadoComando(estado)
+	// Se normaliza también al LEER: una fila escrita a mano o por una versión futura no puede
+	// meter una categoría que las superficies no saben dibujar. Lo que no reconozco es
+	// desconocido, que ya tiene significado propio.
+	c.Origen = fleet.OrigenValido(fleet.OrigenComando(origen))
 	if t, ok := parseObsTime(creado); ok {
 		c.Creado = t
 	}

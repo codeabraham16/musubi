@@ -71,6 +71,9 @@ type Comando struct {
 	Argv      []string
 	Timeout   time.Duration
 	Estado    EstadoComando
+	// Origen es QUIÉN lo originó (A59). Vacío = no se sabe, que es el valor de todo lo anterior
+	// a la migración 41 y NO significa «una persona».
+	Origen OrigenComando
 
 	Creado    time.Time
 	Entregado time.Time
@@ -166,6 +169,47 @@ func LimpiarArgv(argv []string) []string {
 		return nil
 	}
 	return out
+}
+
+// OrigenComando es QUIÉN originó un comando: una persona o una regla (A59).
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EXISTE PORQUE UNA LÍNEA DE TIEMPO ES UN RELATO, Y «QUIÉN» ES LA MITAD DEL RELATO
+//
+// La acción de una política va a la MISMA bitácora que la de una persona, con el mismo peso y
+// las mismas columnas (I16) — y eso está bien: un registro aparte «para lo automático» es cómo
+// se termina auditando sólo la mitad de lo que pasa, y la mitad automática es justo la que nadie
+// miró ejecutarse.
+//
+// Lo que faltaba es poder DISTINGUIRLAS al leer. Hasta acá la diferencia se leía del nombre del
+// principal, por convención; con cuarenta reinicios seguidos en una cronología, «auto-heal
+// reinició nginx cuarenta veces» y «alguien llamado auto-heal lo reinició cuarenta veces» son dos
+// relatos distintos y sólo uno es cierto.
+type OrigenComando string
+
+const (
+	// OrigenPersona: alguien lo pidió, por una tool o por el canal de una sesión.
+	OrigenPersona OrigenComando = "persona"
+	// OrigenPolitica: lo disparó una regla del motor de políticas, sin que nadie mirara.
+	OrigenPolitica OrigenComando = "politica"
+	// OrigenDesconocido es el VACÍO, y es el valor de todas las filas anteriores a la migración
+	// 41. NO es sinónimo de `persona`: rellenarlas así le atribuiría a alguien acciones que
+	// disparó una regla. Se muestra como null, no como un tercer nombre inventado.
+	OrigenDesconocido OrigenComando = ""
+)
+
+// EsAutomatico dice si esto lo disparó una regla. Es una lista BLANCA: lo desconocido NO es
+// automático y tampoco es manual — no se sabe, y la superficie lo dice.
+func (o OrigenComando) EsAutomatico() bool { return o == OrigenPolitica }
+
+// OrigenValido acota lo que se puede guardar. Fail-closed: un valor que no está en la lista se
+// guarda como desconocido en vez de inventar una categoría nueva desde el borde.
+func OrigenValido(o OrigenComando) OrigenComando {
+	switch o {
+	case OrigenPersona, OrigenPolitica:
+		return o
+	}
+	return OrigenDesconocido
 }
 
 // Vencido dice si el comando esperó demasiado sin que nadie lo levantara (F10).

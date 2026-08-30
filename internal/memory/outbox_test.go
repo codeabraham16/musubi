@@ -111,8 +111,19 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       Se llama `alcance` y no `servicio` a propósito: lo que representa es QUÉ toca la
 	//       política adentro de la máquina, y lo próximo que se vigile ahí (un contenedor, un
 	//       montaje, una interfaz) va a querer el mismo espaciado sin migrar de nuevo.
-	if latestSchemaVersion() != 40 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 40", latestSchemaVersion())
+	// v40 = CÓMO CONTESTÓ EL USUARIO cuando hubo que pedirle permiso (`screen_sessions.
+	//       consentimiento`). Columna propia y no un texto adentro de `error`: «me dijeron que no»
+	//       NO es un error, es el sistema funcionando, y las tres formas de no conceder —negada,
+	//       sin_respuesta, no_se_pudo— se arreglan distinto. Vacía es el valor de casi todas las
+	//       filas y significa «no hizo falta preguntar».
+	// v41 = QUIÉN ORIGINÓ EL COMANDO (`device_commands.origen`): una persona o una regla. Se
+	//       GUARDA en vez de derivarse porque es un hecho del pasado: hoy la diferencia se lee del
+	//       nombre del principal, y las políticas se agregan y se sacan, así que un comando de
+	//       hace tres meses se etiquetaría mal. EL DEFAULT '' SIGNIFICA «NO SE SABE» Y NO
+	//       «PERSONA» — rellenar las filas viejas con `persona` le atribuiría a alguien cada
+	//       disparo automático anterior a esta migración.
+	if latestSchemaVersion() != 41 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 41", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

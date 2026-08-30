@@ -280,6 +280,19 @@ func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T)
 			t.Errorf("la bitácora de las personas no muestra %q de la acción automática:\n%s", quiero, crudo)
 		}
 	}
+	// MISMA BITÁCORA, PERO DISTINGUIBLE (A59). Estar en la misma tabla con las mismas columnas
+	// es lo correcto —un registro aparte «para lo automático» es cómo se termina auditando sólo
+	// la mitad de lo que pasa—; no poder DISTINGUIRLAS al leer es otra cosa. Sin esto, cuarenta
+	// reinicios de auto-heal en una cronología se leen como cuarenta pedidos de una persona.
+	//
+	// Sabotaje: quitarle `Origen: fleet.OrigenPolitica` a correrAccionDePolitica → falla acá, y
+	// es el ÚNICO lugar donde ese cableado se verifica: sembrar el comando a mano con el origen
+	// puesto probaría que el campo viaja, no que alguien lo setea.
+	for _, quiero := range []string{`"origen":"politica"`, `"automatico":true`} {
+		if !strings.Contains(crudo, quiero) {
+			t.Errorf("la acción automática no se distingue de una manual: falta %q en\n%s", quiero, crudo)
+		}
+	}
 }
 
 // El alcance de la política es un selector de máquina, igual que el de las concesiones. Una

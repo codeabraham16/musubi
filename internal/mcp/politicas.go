@@ -259,7 +259,11 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 func (s *McpServer) correrAccionDePolitica(pol fleet.Politica, pr *Principal, d fleet.Device, ahora time.Time) error {
 	cmd, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: pr.Name,
-		Argv: pol.Hacer, Timeout: fleet.ComandoTimeoutDefault,
+		// LO ÚNICO AUTOMÁTICO DE TODO EL CANAL. Va a la misma bitácora que una persona (I16) y
+		// ahora además se puede DISTINGUIR al leer: cuarenta reinicios seguidos son un relato
+		// distinto según si los pidió alguien o los disparó una regla.
+		Origen: fleet.OrigenPolitica,
+		Argv:   pol.Hacer, Timeout: fleet.ComandoTimeoutDefault,
 	})
 	if err != nil {
 		return err

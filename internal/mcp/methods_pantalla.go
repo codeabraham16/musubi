@@ -182,6 +182,7 @@ func (s *McpServer) entregarPantalla(d fleet.Device, p *Principal, proyecto stri
 	// propósito. El agente reconoce este comando por su primer argumento.
 	_, err = s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
+		Origen: fleet.OrigenPersona,
 		// La contraseña va en el argv, así que este comando NUNCA debe llegar a la bitácora
 		// legible: se poda abajo. Ver el comentario de `ocultarArgvDePantalla`.
 		Argv:    []string{comandoPantalla, ses.ID, pass, ttl.String()},
@@ -465,6 +466,7 @@ func (s *McpServer) pedirPermisoParaPantalla(d fleet.Device, p *Principal, proye
 		fleet.RecortarRunas(quien, 64))
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Origen:  fleet.OrigenPersona,
 		Argv:    []string{comandoPreguntar, ses.ID, texto},
 		Timeout: fleet.ComandoTimeoutDefault,
 	}); err != nil {
@@ -552,6 +554,7 @@ func (s *McpServer) encolarAvisoDePantalla(d fleet.Device, p *Principal) {
 		fleet.RecortarRunas(quien, 64))
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
+		Origen:  fleet.OrigenPersona,
 		Argv:    []string{comandoAviso, texto},
 		Timeout: fleet.ComandoTimeoutDefault,
 	}); err != nil {

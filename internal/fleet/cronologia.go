@@ -311,6 +311,12 @@ type Hecho struct {
 	// «corrió algo sin argumentos».
 	Argv []string
 
+	// Origen es QUIÉN lo originó: una persona o una regla (A59). Vacío = no se sabe, y eso NO es
+	// «persona»: las filas anteriores a la migración 41 no lo dicen, y rellenarlas con «persona»
+	// le atribuiría a alguien lo que disparó una regla. Sólo lo llevan los hechos que salen de
+	// `device_commands`; una sesión la abre siempre alguien.
+	Origen OrigenComando
+
 	// Termino es cuándo dejó de estar en curso. Cero = no terminó, o no se sabe. No se rellena
 	// con `Cuando` para que no parezca instantáneo lo que duró dos horas.
 	Termino time.Time
@@ -343,6 +349,7 @@ func HechoDeComando(c Comando, device string) Hecho {
 		Principal:  c.Principal,
 		Referencia: c.ID,
 		Estado:     string(c.Estado),
+		Origen:     c.Origen,
 		Argv:       ArgvDeBitacora(c.Argv),
 		Termino:    c.Terminado,
 	}

@@ -114,7 +114,8 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 	// lo que pase: se caiga el cerebro, muera el agente, se apague la máquina.
 	cmd, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
-		Argv: args.Argv, Timeout: timeout,
+		Origen: fleet.OrigenPersona,
+		Argv:   args.Argv, Timeout: timeout,
 	})
 	if err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "%v", err)
@@ -297,6 +298,16 @@ func conResultado(fila map[string]interface{}, c fleet.Comando, ahora time.Time)
 	// no vuelve deja sus comandos en `pendiente` para siempre — medido en producción: cincuenta
 	// comandos de diez horas con una vida máxima de quince minutos, dibujados como pendientes.
 	fila["estado"] = string(c.EstadoActual(ahora))
+	// El ORIGEN, con la misma regla que la cronología: null cuando no se sabe, jamás "persona".
+	// Las dos superficies leen la misma tabla y no pueden contar dos historias — la lección de
+	// A39, otra vez.
+	if c.Origen == fleet.OrigenDesconocido {
+		fila["origen"] = nil
+		fila["automatico"] = nil
+	} else {
+		fila["origen"] = string(c.Origen)
+		fila["automatico"] = c.Origen.EsAutomatico()
+	}
 	// exit_code viaja como null mientras no haya terminado: «todavía no» y «terminó con 0» son
 	// cosas distintas, y un 0 por default las confundiría.
 	fila["exit_code"] = c.ExitCode

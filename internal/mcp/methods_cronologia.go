@@ -263,6 +263,18 @@ func filaDeHecho(h fleet.Hecho) map[string]interface{} {
 		"referencia": h.Referencia,
 		"estado":     h.Estado,
 	}
+	// `origen` viaja en NULL cuando no se sabe, nunca como "persona". Un comando anterior a la
+	// migración 41 no dice quién lo originó, y dibujarlo como manual le atribuiría a alguien un
+	// disparo automático — en una línea de tiempo, eso es acusar a la persona equivocada.
+	// `automatico` va al lado porque es la pregunta que se hace de verdad, y es lista BLANCA:
+	// lo desconocido no es automático Y TAMPOCO es manual.
+	if h.Origen == fleet.OrigenDesconocido {
+		fila["origen"] = nil
+		fila["automatico"] = nil
+	} else {
+		fila["origen"] = string(h.Origen)
+		fila["automatico"] = h.Origen.EsAutomatico()
+	}
 	// El argv YA viene sin secreto (fleet.ArgvDeBitacora, aplicado al construir el hecho). Va
 	// null y no `[]` cuando no aplica: una lista vacía se leería como «corrió algo sin
 	// argumentos», que es un hecho distinto de «esto no es un comando».

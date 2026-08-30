@@ -147,6 +147,8 @@ const comandoShell = fleet.OpShell
 func (s *McpServer) avisarAlAgenteDeLaShell(d fleet.Device, ses fleet.SesionShell, filas, columnas int) error {
 	_, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: ses.ProjectID, Principal: ses.Principal,
+		// El canal lo abre el cerebro, pero lo PIDIÓ una persona: sin ella no hay sesión.
+		Origen:  fleet.OrigenPersona,
 		Argv:    []string{comandoShell, ses.ID, strconv.Itoa(filas), strconv.Itoa(columnas)},
 		Timeout: fleet.ComandoTimeoutDefault,
 	})

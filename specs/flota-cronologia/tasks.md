@@ -50,9 +50,28 @@
   Se rehicieron con `_, _ = desde, hasta` para que el sabotaje compile y sea la PRUEBA la que
   falle.
 
-## Lo que este slice deja abierto
+## A59, abierto y cerrado el mismo día
 
-| # | Qué | Registro |
+| # | Qué | Dónde |
 |---|---|---|
-| A59 | La bitácora no distingue el origen AUTOMÁTICO del manual: una política y una persona escriben en la misma tabla con la misma forma, y la diferencia se lee del nombre del principal por convención | `specs/control-de-flota/ABIERTO.md` |
+| T11 | Migración **41** (`device_commands.origen`), `OrigenComando` con su lista blanca, y el campo en `Hecho` | `internal/memory/migrations.go`, `internal/fleet/comando.go`, `internal/fleet/cronologia.go` |
+| T12 | El origen se marca en los CINCO lugares que encolan: exec, shell, pantalla (×3) y el motor de políticas | `internal/mcp/methods_exec.go`, `methods_shell.go`, `methods_pantalla.go`, `politicas.go` |
+| T13 | `origen` y `automatico` en las DOS superficies, en null cuando no se sabe | `internal/mcp/methods_cronologia.go`, `internal/mcp/methods_exec.go` |
+
+| Inv | Test | Sabotaje — **verificado corriéndolo** |
+|---|---|---|
+| **C19** | `TestUnOrigenDesconocidoNoEsPersonaNiAutomatico` · `TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa` | dibujar lo desconocido como persona en la cronología; y en la bitácora; hacer `EsAutomatico` lista NEGRA → ✅ fallan |
+| **C20** | `TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas` | quitarle `Origen: OrigenPolitica` al motor de políticas → ✅ falla |
+| **C21** | `TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa` | quitarle el origen a `musubi_fleet_exec`; no leer la columna al escanear → ✅ fallan |
+| — | `TestUnOrigenRaroSeGuardaComoDesconocido` · `TestElHechoArrastraElOrigenDelComando` | devolver el valor tal cual desde `OrigenValido`; no copiar `Origen` en `HechoDeComando` → ✅ fallan |
+
+**Ocho sabotajes más.** Tres enseñaron lo mismo que ya venía enseñando el día: **probar el CABLEADO
+y no el campo**. Sembrar el comando a mano con el origen puesto verifica que el campo viaja, no que
+alguien lo setea donde tiene que setearlo — así que quitarle el origen al motor de políticas
+quedaba verde. La verificación se movió al test que ya recorría el camino entero, y el control de
+`persona` pasó a entrar por `musubi_fleet_exec`.
+
+**Y un tropiezo del método**: la tanda se pasó del tiempo ANTES de restaurar el último sabotaje, y
+quedó aplicado en el árbol. Lo cazó el test siguiente, que falló por un motivo que no tenía nada
+que ver con lo que probaba. Un sabotaje que no se revierte es un bug introducido a mano.
 | A60 | Un comando `entregado` que nunca reporta se queda así para siempre. No se puede derivar con la regla de `pendiente`: su reloj es el `timeout` del comando, no `ComandoVidaMax` | `specs/control-de-flota/ABIERTO.md` |
