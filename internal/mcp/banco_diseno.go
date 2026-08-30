@@ -20,6 +20,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -259,7 +260,13 @@ func TocaLosEjes(b designBrief, ejes []string) float64 {
 	}
 	tocan := 0
 	for _, h := range b.Corpus {
-		heno := strings.ToLower(h.TopicKey + " " + h.Gist)
+		// EL PAJAR NO CRECE CUANDO CRECE LO SERVIDO, y es a propósito. Desde el 2026-08-30 el corpus
+		// viaja con su texto completo en vez de un gist de ~90 chars. Si M3 buscara el eje en TODO el
+		// texto, subiría sola por tener más dónde buscar: un patrón de 1.800 chars menciona «tabla»
+		// por casualidad mucho más seguido que su titular, y el número mediría el tamaño del bloque
+		// disfrazado de precisión. Midiendo siempre la CABEZA, el antes y el después del cambio de
+		// reparto son comparables, y una mejora de M3 sólo puede venir de traer mejores tarjetas.
+		heno := strings.ToLower(h.Topic + " " + cabeza(h.Texto, cabezaM3))
 		for _, eje := range ejes {
 			if strings.Contains(heno, strings.ToLower(eje)) {
 				tocan++
@@ -268,6 +275,23 @@ func TocaLosEjes(b designBrief, ejes []string) float64 {
 		}
 	}
 	return float64(tocan) / float64(len(b.Corpus))
+}
+
+// cabezaM3 es cuánto texto de cada patrón mira M3. Sale del gist que el motor servía hasta el
+// 2026-08-30 (86 a 92 chars medidos contra el central): así la métrica no cambia de escala junto con
+// el cambio que tiene que juzgar.
+const cabezaM3 = 90
+
+// cabeza devuelve los primeros n bytes de s sin partir un carácter por la mitad.
+func cabeza(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	corte := n
+	for corte > 0 && !utf8.RuneStart(s[corte]) {
+		corte--
+	}
+	return s[:corte]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

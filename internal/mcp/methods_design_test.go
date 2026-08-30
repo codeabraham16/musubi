@@ -421,8 +421,8 @@ func TestDesignMethodNoStarveaCorpus(t *testing.T) {
 		if h.ID == "patron1" {
 			found = true
 		}
-		if strings.HasPrefix(h.TopicKey, designMethodPrefix) {
-			t.Errorf("una tarjeta de método se coló en el corpus: %s", h.TopicKey)
+		if strings.HasPrefix(h.Topic, designMethodPrefix) {
+			t.Errorf("una tarjeta de método se coló en el corpus: %s", h.Topic)
 		}
 	}
 	if !found {
@@ -430,7 +430,7 @@ func TestDesignMethodNoStarveaCorpus(t *testing.T) {
 	}
 }
 
-func corpusIDs(hits []searchHit) []string {
+func corpusIDs(hits []patronItem) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
 		out[i] = h.ID
