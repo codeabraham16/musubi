@@ -79,13 +79,18 @@ func TestDesignPresupuestoEsTopeDuroYSeDeclara(t *testing.T) {
 		"MARCA: "+strings.Repeat("regla de identidad muy detallada. ", 900), 1.0)
 
 	admin := &Principal{Name: "sala", ProjectID: "musubi", Read: "all", Write: "all"}
+	// `recorta` es parte del contrato del caso, no una observación. Un test que sólo verificara «si
+	// hubo recorte, se declaró» pasaría verde el día que el motor deje de recortar nunca —y también
+	// el día que deje de servir nada— porque la premisa se evapora y la aserción no se ejecuta. Cada
+	// caso declara de antemano de qué lado del tope cae.
 	for _, caso := range []struct {
 		nombre, brand string
 		limit         int
+		recorta       bool
 	}{
-		{"limit por defecto", "", 0},
-		{"limit máximo", "", 100},
-		{"marca gigante", "cliente-gordo", 100},
+		{"limit por defecto", "", 0, false},
+		{"limit máximo", "", 100, false},
+		{"marca gigante", "cliente-gordo", 100, true},
 	} {
 		args := map[string]any{"prompt": "una tabla densa con filtros", "target": "web"}
 		if caso.brand != "" {
@@ -106,6 +111,22 @@ func TestDesignPresupuestoEsTopeDuroYSeDeclara(t *testing.T) {
 		}
 		if n := tokensDeBrief(b); n > designBriefBudget {
 			t.Errorf("%s: el brief quedó en %d tokens, sobre el tope %d", caso.nombre, n, designBriefBudget)
+		}
+		// EL MATERIAL TIENE PISO DURO. Un brief que entra en el presupuesto quedándose sin una sola
+		// pieza de conocimiento de diseño no es un brief recortado, es un brief inútil con cara de
+		// completo — y salía así, medido, cuando la marca era gigante (corpus 0, método 0, `degraded`
+		// en falso). El tope se respeta cediendo material hasta el piso y recortando la marca después.
+		if len(b.Corpus) < designPisoCorpus {
+			t.Errorf("%s: el corpus cayó a %d, bajo su piso duro de %d", caso.nombre, len(b.Corpus), designPisoCorpus)
+		}
+		if len(b.Method) < designPisoBloque {
+			t.Errorf("%s: el método cayó a %d, bajo su piso de %d", caso.nombre, len(b.Method), designPisoBloque)
+		}
+		if !caso.recorta {
+			if b.Truncated != nil {
+				t.Errorf("%s: no debía haber recorte y se declaró uno: %+v", caso.nombre, b.Truncated)
+			}
+			continue
 		}
 		if b.Truncated == nil {
 			t.Errorf("%s: hubo recorte y no se declaró", caso.nombre)
