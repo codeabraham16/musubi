@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -44,7 +44,6 @@
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
-| A63 | **El agente de Windows muere cuando alguien cierra su ventana** | **CAUSA ENCONTRADA 2026-08-30**, y no era la red ni NordVPN: `gio` llevaba tres días fuera de la flota y su tarea decía `LastTaskResult 3221225786` = **0xC000013A = STATUS_CONTROL_C_EXIT** — alguien cerró la consola negra porque estorbaba. Una pieza de infraestructura que vive dentro de una ventana molesta se apaga sola, tarde o temprano. **El instalador ya trae `-Oculto`** (lanzador `.vbs`, sin ventana, siguiendo como el usuario para conservar el eje de consentimiento de A57 — `-AlArranque` también la esconde pero mete al agente en la SESIÓN 0 y ahí `puede_preguntar` pasa a false). **Falta aplicarlo en las DOS Windows ya instaladas**, que no necesitan reinstalar: se reapunta la tarea al lanzador oculto. Quedan además sus 11.007 comandos vencidos como ruido permanente en la bitácora de `gio`. | **acción del operador** |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
 | A64 | **El nombre en la flota y el nombre real de la máquina divergieron** | `kernelos-pc` en Musubi, `davantis-1` en tailscale, «Davantis» para quien la usa: tres nombres para el mismo equipo. **No es cosmético y ya costó**: el 2026-08-30 se corrió un diagnóstico en la máquina equivocada por esta razón. La próxima vez que haya que ejecutar algo urgente, el riesgo es correrlo donde no era — y un `exec` en la máquina equivocada no se deshace. **Renombrar un device no existe hoy como operación**: el nombre se fija al enrolar y sólo se puede cambiar dando de baja y volviendo a enrolar, lo que pierde su historial (bitácora, sesiones, servicios). Arreglarlo pide una tool `musubi_fleet_rename` que conserve el id — y una decisión sobre qué pasa con las concesiones de `principals.yaml`, que nombran máquinas por NOMBRE. **Se revisa si aparece una tercera máquina con nombre divergente, o antes si alguien vuelve a equivocarse.** | **sin asignar** |
 
@@ -73,6 +72,40 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-30 (5) · A63 CERRADO — la causa no era la red: era una ventana que estorbaba.**
+
+`gio` llevaba TRES DÍAS fuera de la flota. La máquina estaba viva —ping en 2,9 ms, tailscale la
+veía, puerto 22 abierto—, así que lo muerto era el agente. Y el motivo estaba en una sola línea:
+
+    LastTaskResult 3221225786  =  0xC000013A  =  STATUS_CONTROL_C_EXIT
+
+**Alguien cerró la consola negra porque molestaba.** No se apagó la máquina, no falló la red, y no
+fue NordVPN —que sólo afecta a la OTRA Windows, algo que yo había supuesto mal y corregí al ir a
+mirar—.
+
+**UNA PIEZA DE INFRAESTRUCTURA QUE VIVE DENTRO DE UNA VENTANA MOLESTA SE APAGA SOLA**, tarde o
+temprano. Eso no es comodidad: es un modo de falla, y llevaba tres días activo sin que nadie
+supiera por qué. El instalador ahora trae `-Oculto` y las dos Windows ya corren así.
+
+**LA FORMA OBVIA DE OCULTARLA ERA LA EQUIVOCADA.** `-AlArranque` también esconde la ventana, y de
+paso sobrevive al cierre de sesión — pero corre como SYSTEM, o sea en la SESIÓN 0, y ahí no hay a
+quién dibujarle: `puede_preguntar` pasa a false y todo el eje de consentimiento de A57 se apaga en
+esa máquina. Esconder una ventana no puede costar la capacidad de preguntarle a la persona. Con
+`-Oculto` el agente sigue siendo el usuario, en su sesión.
+
+**Y EL DETALLE QUE HABRÍA CONVERTIDO EL ARREGLO EN UNA REGRESIÓN SILENCIOSA**: el tercer argumento
+del `Run` del lanzador. Con `False`, el `.vbs` arranca el agente y sale, la tarea se da por
+CUMPLIDA en el acto, y el `-RestartCount 999` deja de protegerla — si el agente muere, nadie lo
+levanta. La ventana desaparece (lo que se ve) y la red de contención también (lo que no). Va con
+`True`.
+
+**LO QUE QUEDA Y SE ACEPTA, dicho para no volver a discutirlo:** los 11.007 comandos vencidos de
+`gio` siguen en su bitácora. Podarlos es borrar auditoría, y el daño real está acotado —la
+cronología es por VENTANA, así que sólo los ve quien mire el 28 y el 29 de agosto—. Se quedan.
+
+Y el agente sigue muriendo al cerrar sesión: eso es lo que `-AlArranque` arregla, con su costo, y
+es una decisión que hoy no hace falta tomar.
 
 **2026-08-30 (4) · A36 CERRADO — y en el camino apareció una alerta que NO PODÍA DISPARARSE.**
 
