@@ -147,6 +147,12 @@ type McpServer struct {
 	// telemetria que hay que acordarse de encender termina apagada (la misma leccion que dejo
 	// el ledger de uso, cuyos contadores en memoria murieron dos meses sin que nadie lo notara).
 	live *liveFeed
+	// ejesVec cachea los 19 vectores de la taxonomía de diseño (ejes_diseno.go). Son constantes del
+	// binario: recalcularlos por pedido serían 19 llamadas al embebedor para obtener siempre lo
+	// mismo, contra un embebedor que se comparte con recall y save. nil ⇒ todavía no se calcularon
+	// o no hay embebedor, y el motor de diseño cae al camino por similitud.
+	ejesVec map[string][]float32
+	ejesMu  sync.Mutex
 
 	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
 	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.
