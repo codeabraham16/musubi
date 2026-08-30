@@ -27,7 +27,9 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"musubi/internal/fleet"
 )
@@ -69,6 +71,73 @@ func parseFechaDeMemoria(s string) time.Time {
 type ArchivoTocado struct {
 	Path   string
 	Cuando time.Time
+}
+
+// buildFTSFrase arma una consulta de FRASE: los tokens del término, adyacentes, entre comillas.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// NO SE REUSA `buildFTSQuery`, Y LA DIFERENCIA LA ENCONTRÉ USANDO LA TOOL CONTRA LA FLOTA REAL
+//
+// `buildFTSQuery` parte el texto en tokens y los une con **OR**, que es lo correcto para el
+// RECALL: ahí la consulta es lenguaje natural y cada palabra suma señal al ranking.
+//
+// Para un ENLACE POR TÉRMINO es exactamente lo contrario. El término es el nombre de un servicio
+// —`avahi-daemon`, `cognicion-db`, `NetworkManager-wait-online`— y con OR se convierte en
+// `"avahi" OR "daemon"`: cualquier nota que diga «db» queda enlazada a un servicio que no
+// menciona. Medido en producción: la primera corrida devolvió una nota sobre decisiones de
+// roadmap enlazada a `avahi-daemon`.
+//
+// Eso no es un enlace flojo, es un enlace FALSO — la respuesta afirma que el texto NOMBRA algo de
+// esa máquina y no lo nombra. Un `ventana` mal puesto sólo agrega ruido; un `termino` mal puesto
+// inventa evidencia, que es el único error que esta tool no se puede permitir.
+//
+// Como FRASE, los tokens tienen que aparecer ADYACENTES, así que `cognicion-db` sólo enlaza con
+// texto que diga «cognicion db» (o «cognicion-db», que tokeniza igual). NO hay respaldo a OR si
+// la frase no encuentra nada: ese respaldo devolvería justo los enlaces falsos que esto elimina.
+func buildFTSFrase(q string) string {
+	tokens := strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if len(tokens) == 0 {
+		return ""
+	}
+	return `"` + strings.Join(tokens, " ") + `"`
+}
+
+// ObservacionesQueNombran devuelve las observaciones cuyo texto NOMBRA el término, como frase.
+//
+// Es la búsqueda del enlace `termino`. Mismo aislamiento por proyecto y mismo predicado canónico
+// de visibilidad que el resto del recall: esta puerta nueva no puede ver más que las otras.
+func (e *DbEngine) ObservacionesQueNombran(ctx context.Context, termino string, tope int) ([]Observation, error) {
+	if tope <= 0 {
+		return nil, nil
+	}
+	frase := buildFTSFrase(termino)
+	if frase == "" {
+		return nil, nil
+	}
+	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("o")
+	args := append([]interface{}{frase}, scopeArgs...)
+	args = append(args, tope)
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT o.id, o.topic_key, o.content, o.created_at
+		FROM observations_fts f
+		JOIN observations o ON o.rowid = f.rowid
+		WHERE observations_fts MATCH ? AND `+visibleObsPredicate+scopeSQL+`
+		ORDER BY rank LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("error al buscar el término %q: %w", termino, err)
+	}
+	defer rows.Close()
+	var out []Observation
+	for rows.Next() {
+		var o Observation
+		if err := rows.Scan(&o.ID, &o.TopicKey, &o.Content, &o.CreatedAt); err != nil {
+			return nil, fmt.Errorf("error al escanear un acierto de término: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 // ObservacionesEnVentana devuelve lo que se escribió en la memoria dentro de la ventana.

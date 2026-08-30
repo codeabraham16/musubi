@@ -327,3 +327,92 @@ func TestUnaVentanaVaciaSigueDiciendoQueNoMiro(t *testing.T) {
 		t.Error("los términos no dependen de la ventana y tienen que seguir declarándose")
 	}
 }
+
+// EL ENLACE POR TÉRMINO ES UNA FRASE, NO EL OR DE SUS TOKENS.
+//
+// Un servicio llamado `cognicion-db` buscado con OR enlaza cualquier nota que diga «db» — y la
+// respuesta afirmaría que ese texto NOMBRA algo de la máquina cuando no lo nombra. Un `ventana`
+// mal puesto agrega ruido; un `termino` mal puesto INVENTA EVIDENCIA, que es el único error que
+// esta tool no se puede permitir.
+//
+// Lo encontré usando la tool contra la flota real: la primera corrida devolvió una nota sobre
+// decisiones de roadmap enlazada a `avahi-daemon`.
+//
+// Sabotaje: volver a `SearchObservationsFTS` (que une los tokens con OR) → falla acá.
+func TestElEnlacePorTerminoBuscaLaFraseYNoSusPedazos(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+	if _, err := s.engine.AltaServicio(fleet.Servicio{
+		Nombre: "cognicionmarca-db", ProjectID: "infra", DeviceID: d.ID, Clase: "systemd",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Una nota que dice SÓLO uno de los pedazos: con OR entraría como `termino`.
+	if err := s.engine.SaveObservationTypedFrom("infra", "", "obs-pedazo", "infra/otro",
+		"MARCAPEDAZO: hablamos de la db de otro sistema", 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Y una que SÍ lo nombra entero.
+	if err := s.engine.SaveObservationTypedFrom("infra", "", "obs-entero", "infra/ese",
+		"MARCAENTERO: se reinició cognicionmarca-db anoche", 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+	p := conCaps("infra", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}})
+	out := contextoDe(t, s, p, map[string]any{"device": "pc-gio", "horas": 24})
+
+	for _, m := range out["memoria"].([]any) {
+		fila := m.(map[string]any)
+		txt, _ := fila["contenido"].(string)
+		if strings.Contains(txt, "MARCAPEDAZO") && fila["enlace"] == string(fleet.EnlacePorTermino) {
+			t.Errorf("EVIDENCIA INVENTADA: una nota que sólo dice «db» quedó enlazada por término a `cognicionmarca-db`: %v", fila)
+		}
+		if strings.Contains(txt, "MARCAENTERO") && fila["enlace"] != string(fleet.EnlacePorTermino) {
+			t.Errorf("la nota que NOMBRA el servicio entero no enlazó por término: %v", fila)
+		}
+	}
+}
+
+// LA TOOL LEE `Declarado` DE VERDAD, no sólo el dominio sabe ordenarlos.
+//
+// Un host enumera decenas de units y el tope de términos se llena con las primeras. El servicio
+// que una PERSONA declaró a mano —el bot, el puente— es el único del que suele haber algo escrito,
+// y es justo el que se perdía. Medido contra la flota real: `alturito20` quedó afuera mientras
+// entraban `avahi-daemon` y `NetworkManager-wait-online`.
+//
+// Sabotaje: mandar todos los servicios a `reportados` sin mirar `sv.Declarado` → falla acá.
+func TestElServicioDeclaradoLlegaALosTerminosAunqueElHostEnumereMuchos(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+
+	// Lo que enumera la máquina: más units que ranuras.
+	var reportes []fleet.ReporteServicio
+	for i := 0; i < fleet.TerminosMax+5; i++ {
+		reportes = append(reportes, fleet.ReporteServicio{
+			Nombre: "aaaunitdelsistema" + string(rune('a'+i)), Clase: "systemd", Salud: fleet.SaludServicio{Tomada: time.Now().UTC(), Estado: fleet.EstadoCorriendo},
+		})
+	}
+	if _, _, err := s.engine.ReportarServicios(d.ID, time.Now().UTC(), reportes); err != nil {
+		t.Fatal(err)
+	}
+	// Y lo que declaró una persona. EL NOMBRE ARRANCA CON `zzz` A PROPÓSITO: con un nombre que
+	// ordena primero, gana la ranura por orden alfabético y la prueba pasa aunque nadie mire
+	// `Declarado`. Lo descubrí ejecutando el sabotaje, que quedaba verde.
+	if _, err := s.engine.AltaServicio(fleet.Servicio{
+		Nombre: "zzzalturitomarca", ProjectID: "infra", DeviceID: d.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p := conCaps("infra", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}})
+	out := contextoDe(t, s, p, map[string]any{"device": "pc-gio", "horas": 24})
+
+	hay := false
+	for _, tm := range out["terminos"].([]any) {
+		if tm.(map[string]any)["texto"] == "zzzalturitomarca" {
+			hay = true
+		}
+	}
+	if !hay {
+		t.Fatalf("el servicio DECLARADO por una persona no llegó a los términos: %v", out["terminos"])
+	}
+}

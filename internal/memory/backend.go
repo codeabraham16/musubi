@@ -404,6 +404,10 @@ type DeviceStore interface {
 	// aislamiento por proyecto sale del ctx, igual que en el resto del recall — y OJO con las
 	// fechas: estas tablas guardan el formato de `CURRENT_TIMESTAMP` de SQLite, no RFC3339.
 	ObservacionesEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]Observation, error)
+	// ObservacionesQueNombran busca el término como FRASE, no como el OR de sus tokens: el
+	// enlace `termino` afirma que el texto NOMBRA algo de esa máquina, y con OR un servicio
+	// llamado `cognicion-db` quedaría enlazado a cualquier nota que diga «db».
+	ObservacionesQueNombran(ctx context.Context, termino string, tope int) ([]Observation, error)
 	CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]ArchivoTocado, error)
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.

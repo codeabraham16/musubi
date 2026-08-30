@@ -63,6 +63,25 @@ Nadie escribe `nginx.service` en una nota. Se recortan `.service`, `.timer`, `.s
 `.target`; un servicio llamado `api.altura` conserva su nombre entero, porque ahí el punto es
 parte del nombre. La limpieza es de cuatro sufijos conocidos, **no genérica**.
 
+### K13 — el enlace por término busca la FRASE, no el OR de sus tokens
+
+`buildFTSQuery` une los tokens con OR. Es correcto para el **recall** —lenguaje natural, cada
+palabra suma señal— y es falso para un **enlace**: `avahi-daemon` se busca como `"avahi" OR
+"daemon"`, y cualquier nota que diga «daemon» queda enlazada a un servicio que no menciona.
+
+Medido en la primera corrida contra la flota real: una nota sobre decisiones de roadmap enlazada a
+`avahi-daemon`. Eso no es un enlace flojo, es **evidencia inventada** — y no hay respaldo a OR si
+la frase no encuentra nada, porque ese respaldo devolvería exactamente lo que esto elimina.
+
+### K14 — los servicios DECLARADOS por una persona van primero
+
+Un host enumera decenas de units y el tope se llena con las primeras. Medido: las doce ranuras se
+gastaron en units del sistema y quedó afuera `alturito20`, el único servicio del que alguien
+escribió algo alguna vez.
+
+El criterio no es adivinar cuál importa: `Declarado` **ya significa** que una persona lo puso a
+mano. Viene del inventario, no de una heurística sobre el nombre.
+
 ### K7 — LOS TÉRMINOS SON INFORMACIÓN Y SE COMPUERTAN
 
 Decirle a alguien «busqué `postgres` en esta máquina» le está diciendo que ahí corre un postgres —

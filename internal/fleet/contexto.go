@@ -75,9 +75,21 @@ var sufijosDeUnidad = []string{".service", ".timer", ".socket", ".target"}
 // una persona, es único en el proyecto y no depende de que nadie haya declarado servicios—, así
 // que si el tope recorta, recorta lo otro.
 //
-// `servicios` tiene que venir YA COMPUERTADO por el llamador: un término es información sobre la
-// máquina, y la lista de sus servicios exige `metrics`. Ver el comentario de la tool.
-func TerminosDeContexto(device string, servicios []string) []Termino {
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LOS DECLARADOS ANTES QUE LOS REPORTADOS, Y NO ES UNA PREFERENCIA ESTÉTICA
+//
+// Un host enumera decenas de units de systemd —`avahi-daemon`, `NetworkManager-wait-online`,
+// `systemd-udevd`— y el tope se llena con las primeras que vengan. Medido en producción: la
+// primera corrida contra `musubi-server` gastó las doce ranuras en units del sistema y dejó
+// afuera `alturito20`, que es el ÚNICO servicio del que alguien escribió algo alguna vez.
+//
+// El criterio no es adivinar cuál importa: `Declarado` ya significa **una persona puso esto acá a
+// mano**. Eso es exactamente la señal de que a alguien le importó, y viene del inventario, no de
+// una heurística sobre el nombre.
+//
+// Las dos listas tienen que venir YA COMPUERTADAS por el llamador: un término es información
+// sobre la máquina, y la lista de sus servicios exige `metrics`. Ver el comentario de la tool.
+func TerminosDeContexto(device string, declarados, reportados []string) []Termino {
 	out := make([]Termino, 0, TerminosMax)
 	vistos := map[string]bool{}
 
@@ -104,7 +116,10 @@ func TerminosDeContexto(device string, servicios []string) []Termino {
 	}
 
 	agregar(device, TerminoDeMaquina)
-	for _, s := range servicios {
+	for _, s := range declarados {
+		agregar(s, TerminoDeServicio)
+	}
+	for _, s := range reportados {
 		agregar(s, TerminoDeServicio)
 	}
 	return out

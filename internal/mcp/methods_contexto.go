@@ -82,15 +82,23 @@ func (s *McpServer) toolFleetContexto(ctx context.Context, raw json.RawMessage) 
 	}
 
 	// ── 2. Los términos, compuertados por lo que la credencial PUEDE VER ─────────────────────
-	var nombresDeServicio []string
+	var declarados, reportados []string
 	serviciosOcultos := false
 	if PuedeVerHistorialDeDevice(p, device, fleet.CapMetrics) {
 		servicios, err := s.engine.ListarServicios(proyecto, device.ID, false)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
+		// SE SEPARAN POR QUIÉN LOS PUSO. Un host enumera decenas de units del sistema y el tope
+		// se llenaría con las primeras alfabéticamente, dejando afuera justo el bot que alguien
+		// declaró a mano — que es el único del que hay algo escrito. `Declarado` ya significa
+		// «una persona puso esto acá», así que no hace falta adivinar cuál importa.
 		for _, sv := range servicios {
-			nombresDeServicio = append(nombresDeServicio, sv.Nombre)
+			if sv.Declarado {
+				declarados = append(declarados, sv.Nombre)
+			} else {
+				reportados = append(reportados, sv.Nombre)
+			}
 		}
 	} else {
 		// NO se devuelve una lista corta y ya: sin esta marca, una credencial sin `metrics`
@@ -98,7 +106,7 @@ func (s *McpServer) toolFleetContexto(ctx context.Context, raw json.RawMessage) 
 		// dos cosas se leen igual y significan lo contrario.
 		serviciosOcultos = true
 	}
-	terminos := fleet.TerminosDeContexto(device.Name, nombresDeServicio)
+	terminos := fleet.TerminosDeContexto(device.Name, declarados, reportados)
 
 	// ── 3. La memoria, en el proyecto de la MÁQUINA ──────────────────────────────────────────
 	memCtx := memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: proyecto, Federate: false})
@@ -113,7 +121,10 @@ func (s *McpServer) toolFleetContexto(ctx context.Context, raw json.RawMessage) 
 	// es el FUERTE. Al revés, un acierto de término quedaría rotulado «coincidió en el tiempo» y
 	// perdería justo el peso que lo hace útil.
 	for _, t := range terminos {
-		obs, err := s.engine.SearchObservationsFTS(memCtx, t.Texto, fleet.ContextoTopeMemoria)
+		// Como FRASE y no como el OR de sus tokens (ver buildFTSFrase): con OR, un servicio
+		// llamado `cognicion-db` enlazaría cualquier nota que diga «db», y el enlace `termino`
+		// pasaría de ser evidencia a ser evidencia INVENTADA.
+		obs, err := s.engine.ObservacionesQueNombran(memCtx, t.Texto, fleet.ContextoTopeMemoria)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
