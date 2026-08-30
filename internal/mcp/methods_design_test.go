@@ -314,20 +314,36 @@ func TestDesignMethodDelAcervoVivo(t *testing.T) {
 	}
 
 	brief := callDesign(t, s, nil, "un login", "web")
-	if brief.MethodSource != "corpus" {
-		t.Fatalf("con sub-acervo sembrado, method_source debe ser 'corpus'; fue %q", brief.MethodSource)
+	if brief.MethodSource != "importancia" {
+		t.Fatalf("sin embebedor el método sale por importancia; fue %q", brief.MethodSource)
 	}
-	if !strings.Contains(brief.Principles, "EL COLOR SE GANA") || !strings.Contains(brief.Principles, "MATAR EL LOOK DE IA") {
-		t.Errorf("los principios deben traer las tarjetas de método del acervo; got=%.200q", brief.Principles)
+	// Desde F1+F2 el método del acervo viaja en `method[]` como MATERIAL CITADO, no dentro de
+	// `principles` (que pasó a ser el nucleo estatico del codigo). La capacidad no cambia —el metodo
+	// sigue saliendo del acervo y sigue siendo arbitrable— cambia quien AFIRMA cada bloque.
+	if len(brief.Method) != 2 {
+		t.Fatalf("esperaba las 2 tarjetas del acervo en method[]; hubo %d", len(brief.Method))
 	}
 	// Orden por importancia: la tarjeta de importancia 1.0 (color) va ANTES que la de 0.5 (ia).
-	if i, j := strings.Index(brief.Principles, "EL COLOR SE GANA"), strings.Index(brief.Principles, "MATAR EL LOOK DE IA"); i < 0 || j < 0 || i > j {
-		t.Errorf("el método más importante debe ir primero; color en %d, ia en %d", i, j)
+	if !strings.Contains(brief.Method[0].Texto, "EL COLOR SE GANA") {
+		t.Errorf("el metodo mas importante debe ir primero; primero fue %.60q", brief.Method[0].Texto)
+	}
+	if !strings.Contains(brief.Method[1].Texto, "MATAR EL LOOK DE IA") {
+		t.Errorf("segunda tarjeta inesperada: %.60q", brief.Method[1].Texto)
+	}
+	// Cada item declara su procedencia: quien lee el brief tiene derecho a saber quien afirma que.
+	for _, m := range brief.Method {
+		if !strings.HasPrefix(m.Topic, designMethodPrefix) || m.Fuente != designCorpusScope {
+			t.Errorf("material sin procedencia util: topic=%q fuente=%q", m.Topic, m.Fuente)
+		}
+	}
+	// Y el nucleo estatico sigue estando SIEMPRE, venga o no el acervo.
+	if !strings.Contains(brief.Principles, "JERARQU") {
+		t.Error("principles debe traer el nucleo estatico del codigo")
 	}
 }
 
 // TestDesignMethodExcluidoDelCorpus valida que el sub-acervo del método NO se duplica: una tarjeta
-// `design-method/*` que matchea el pedido viaja como Principles, NUNCA como patrón del corpus.
+// `design-method/*` que matchea el pedido viaja como `method[]`, NUNCA como patrón del corpus.
 func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
@@ -348,9 +364,19 @@ func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
 	}
 
 	brief := callDesign(t, s, nil, "jerarquia", "web")
-	// El método aparece en Principles...
-	if brief.MethodSource != "corpus" || !strings.Contains(brief.Principles, "una sola cosa manda") {
-		t.Errorf("la tarjeta de método debe servir como Principles; source=%q principles=%.120q", brief.MethodSource, brief.Principles)
+	// ⚠ ESTE TEST PASABA POR COINCIDENCIA. Hasta ahora afirmaba que la tarjeta de método aparecía en
+	// `Principles`, y desde F1+F2 eso es falso: `Principles` es el núcleo ESTÁTICO del código. Seguía en
+	// verde porque el núcleo estático dice, palabra por palabra, «una sola cosa manda por pantalla» — la
+	// misma frase que la tarjeta sembrada. Un test que pasa por el texto de otra cosa no defiende nada.
+	// Ahora afirma el contrato real: el método viaja en `method[]`, nunca en el corpus.
+	var enMetodo bool
+	for _, m := range brief.Method {
+		if m.Topic == "design-method/jerarquia" {
+			enMetodo = true
+		}
+	}
+	if !enMetodo {
+		t.Errorf("la tarjeta de método debe servirse en method[]; got=%+v", brief.Method)
 	}
 	// ...pero NUNCA en el corpus de patrones (evita la duplicación).
 	for _, h := range brief.Corpus {

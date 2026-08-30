@@ -525,6 +525,12 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 	}
 	server.SetSyncClient(client, cfg)
 	go server.RunOutboxScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
+	// FLOTA EN VIVO (flota.go): la telemetría de invocaciones de esta máquina viaja al feed del
+	// central para que su panel muestre a la flota trabajando. Mismo token, misma frontera de
+	// confianza que el sync que se configuró recién arriba; flota_vivo: false la apaga sola.
+	if cfg.FlotaVivoActivo() {
+		go server.RunFlotaVivo(ctx)
+	}
 	// Sync ENTRANTE (C5.3b): baja la memoria shared del proyecto DESDE el central. RunInboundScheduler
 	// gatea internamente en team_mode (un proyecto local no baja nada). Mismo intervalo que el drain.
 	go server.RunInboundScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)

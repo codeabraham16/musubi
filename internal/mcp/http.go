@@ -308,6 +308,12 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// todo el día y se calló hace un minuto no existe. Ver actores.go.
 	mux.HandleFunc("/api/actores", s.handlerActores(opt))
 
+	// /api/flota — la telemetría de las máquinas de la flota (flota.go): cada daemon local con
+	// sync empuja acá su trabajo (nunca su sondeo, nunca contenido) y el central lo publica en su
+	// propio feed con origen "flota". Así el panel del central muestra a las terminales
+	// trabajando EN VIVO, no sólo lo que le llega por sync.
+	mux.HandleFunc("/api/flota", s.handlerFlota(opt))
+
 	// /api/stream — el FEED EN VIVO por SSE (livefeed.go). Cada invocación de tool sale acá en el
 	// instante en que termina: qué tool, cómo salió, cuánto tardó y de quién fue.
 	//
