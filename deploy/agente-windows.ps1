@@ -41,6 +41,9 @@
   Uso:
     .\agente-windows.ps1 -BrainUrl "http://100.79.126.62:7717" -DeviceToken "<el del enroll>"
 
+  Sin la ventana de consola (recomendado en un escritorio):
+    .\agente-windows.ps1 -BrainUrl "..." -DeviceToken "..." -Oculto
+
   Para desinstalar:
     Unregister-ScheduledTask -TaskName "Musubi Agente de Flota" -Confirm:$false
 #>
@@ -53,7 +56,25 @@ param(
   # Registra la tarea AL ARRANQUE y como SYSTEM, para que el agente no dependa de que alguien
   # inicie sesion. Exige administrador. Ver el bloque de arriba: cambia lo que la flota puede
   # hacer en esta maquina.
-  [switch]$AlArranque
+  [switch]$AlArranque,
+  # SIN VENTANA DE CONSOLA, siguiendo como el usuario que inicia sesion.
+  #
+  # ------------------------------------------------------------------------------------------
+  # ESTO NO ES COMODIDAD: LA VENTANA MATA AGENTES
+  #
+  # Medido el 2026-08-30. La maquina `gio` llevaba TRES DIAS fuera de la flota y el motivo estaba
+  # en el resultado de su tarea: LastTaskResult 3221225786 = 0xC000013A = STATUS_CONTROL_C_EXIT.
+  # Nadie la apago ni fallo la red: alguien cerro la consola negra porque estorbaba. Una pieza de
+  # infraestructura que vive dentro de una ventana molesta se apaga sola, tarde o temprano.
+  #
+  # POR QUE NO SE RESUELVE CON -AlArranque, que tambien la esconde: correr como SYSTEM pone al
+  # agente en la SESION 0, y ahi no hay a quien dibujarle. El eje de consentimiento (A57) deja de
+  # funcionar en esa maquina: `puede_preguntar` pasa a false y `pide` se endurece a `prohibido`.
+  # Esconder la ventana no deberia costar la capacidad de preguntarle a la persona.
+  #
+  # Con -Oculto el agente sigue siendo VOS, en TU sesion, y puede avisarte. Lo que no cambia es
+  # que muere al cerrar sesion: eso lo arregla -AlArranque y su costo.
+  [switch]$Oculto
 )
 $ErrorActionPreference = "Stop"
 $TaskName = "Musubi Agente de Flota"
@@ -175,7 +196,27 @@ set /p MUSUBI_DEVICE_TOKEN=<"$tokenFile"
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
-$accion   = New-ScheduledTaskAction -Execute $lanzador
+# EL LANZADOR OCULTO, CON UN DETALLE QUE NO ES OPCIONAL: `Run(..., 0, True)`.
+#
+# El tercer argumento es "esperar a que termine". Con False, el .vbs lanza el agente y sale, la
+# tarea se da por CUMPLIDA en el acto y el `-RestartCount 999` de arriba deja de protegerla: si el
+# agente muere, nadie lo levanta porque para el planificador ya termino bien. Con True, wscript se
+# queda esperando, la tarea sigue en Running y el reinicio automatico sigue valiendo.
+#
+# Es exactamente la clase de detalle que convierte un arreglo en una regresion silenciosa: la
+# ventana desaparece —que es lo que se ve— y la red de contencion tambien —que es lo que no—.
+if ($Oculto) {
+  $shim = Join-Path $InstallDir "agente-oculto.vbs"
+  @"
+' Lanza el agente SIN ventana. El 0 es el estilo de ventana (oculta); el True es esperar a que
+' termine, y sin el la tarea se daria por cumplida al instante y perderia su reinicio automatico.
+CreateObject("WScript.Shell").Run """$lanzador""", 0, True
+"@ | Set-Content -Encoding ASCII $shim
+  Paso "lanzador oculto en $shim"
+  $accion = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B ""$shim"""
+} else {
+  $accion = New-ScheduledTaskAction -Execute $lanzador
+}
 $ajustes  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit 0 `
               -MultipleInstances IgnoreNew
