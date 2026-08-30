@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El método no compite por los lugares del pool** (Musubi Renaissance). Segunda vuelta sobre la
+  misma regresión, y la primera corrección estaba mal diagnosticada.
+  - Medido en producción con el fix anterior (#367) YA desplegado: «tabla densa de inventario de
+    Altura con lotes» seguía trayendo **cero** tarjetas de método. Sacarle el piso de similitud no
+    alcanzó porque el problema estaba una etapa antes.
+  - La causa real: el método salía del POOL, que es un top-N por similitud sobre el tenant entero —
+    **1.438 tarjetas de corpus y 268 artículos contra 30 de método**. En un pedido de dominio las de
+    método ni siquiera entraban. No es que se filtraran: **nunca llegaban**. Un criterio universal no
+    le puede ganar en similitud a un patrón que habla justo del pedido, así que ponerlos a competir
+    por los mismos lugares garantiza que el universal pierda siempre. Medido: «el color se gana»
+    traía 5 tarjetas, «formulario de alta» una, el pedido de Altura cero.
+  - Ahora el set base sale de su **propia consulta** al sub-acervo, ordenada por importancia, y el
+    pool sólo se usa para **reordenarlo** cuando trajo señal. `reordenarPorRelevancia` sube lo que el
+    pool vio y no descarta nada: el pool decide qué sube, nunca qué se cae.
+  - Sabotaje verificado: volver a tomar el método sólo del pool reproduce el síntoma exacto
+    (`method_source: static`, bloque vacío).
+
+### Fixed
 - **El piso de similitud dejaba mudo al método en los pedidos de dominio** (Musubi Renaissance).
   Medido en producción el 2026-08-30, con F0–F5 recién desplegado: un pedido concreto —«tabla densa
   de inventario de Altura con lotes, filtros y alertas»— recibía el bloque de método **vacío**

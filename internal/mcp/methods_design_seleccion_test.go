@@ -259,3 +259,41 @@ func TestDesignLosArticulosCompletosTienenLugar(t *testing.T) {
 		t.Errorf("la reserva se llevó %d de %d lugares; debería ser minoría", crudos, len(b.Corpus))
 	}
 }
+
+// REGRESIÓN DE PRODUCCIÓN, SEGUNDA VUELTA (2026-08-30). La primera corrección (#367) le sacó el piso
+// de similitud al método y NO alcanzó: medido contra el central con ese fix ya desplegado, «tabla
+// densa de inventario de Altura con lotes» seguía trayendo CERO tarjetas.
+//
+// La causa estaba una etapa antes: el método salía del POOL, que es un top-N por similitud sobre el
+// tenant entero —1.438 tarjetas de corpus y 268 artículos contra 30 de método— así que en un pedido
+// de dominio las de método ni siquiera entraban. No es que se filtraran: nunca llegaban. Un criterio
+// UNIVERSAL no le puede ganar en similitud a un patrón que habla justo del pedido.
+func TestDesignElMetodoNoCompitePorElPool(t *testing.T) {
+	s, e := bancoDesign(t)
+	sembrarAtaque(t, e, designCorpusScope, "m1", "design-method/jerarquia",
+		"JERARQUIA: una sola cosa manda por pantalla.", 1.0)
+	sembrarAtaque(t, e, designCorpusScope, "m2", "design-method/el-color-se-gana",
+		"EL COLOR SE GANA: un acento dominante, el resto neutro.", 0.9)
+
+	// El caso exacto: el pool NO trajo una sola tarjeta de método. El set base tiene que salir igual.
+	cards, source := s.designMethodCards(nil, recuperacionSemantica)
+	if len(cards) == 0 {
+		t.Error("REGRESIÓN: sin método en el pool, el bloque quedó vacío")
+	}
+	if source != "importancia" {
+		t.Errorf("sin señal de relevancia el orden es por importancia; fue %q", source)
+	}
+
+	// Y cuando el pool SÍ trae señal, la usa para reordenar sin descartar nada.
+	conSenal := []searchSource{{id: "x", topicKey: "design-method/el-color-se-gana", content: "…", sim: 0.9}}
+	cards2, source2 := s.designMethodCards(conSenal, recuperacionSemantica)
+	if source2 != "relevancia" {
+		t.Errorf("con señal del pool el orden es por relevancia; fue %q", source2)
+	}
+	if len(cards2) != len(cards) {
+		t.Errorf("reordenar no puede DESCARTAR: %d con señal vs %d sin señal", len(cards2), len(cards))
+	}
+	if cards2[0].Topic != "design-method/el-color-se-gana" {
+		t.Errorf("lo que el pool trajo va primero; fue %q", cards2[0].Topic)
+	}
+}
