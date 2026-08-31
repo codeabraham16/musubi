@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **19 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -45,8 +45,6 @@
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A60 | **Un comando `entregado` que nunca reporta se queda así para siempre** | El agente se lleva el comando, lo marca `entregado`, y si se muere a mitad **nadie vuelve a tocar esa fila**. No hay estado para «se lo llevó y no volvió», y no se puede derivar con la regla de `pendiente`: el reloj de un entregado es el `timeout` del propio comando —hasta 10 min—, no `ComandoVidaMax`, así que marcarlo a los 15 min haría figurar muerto un comando legítimo que está corriendo. **Apareció al arreglar el vencimiento de los pendientes (S13)**: se cerró la mitad que sí se puede derivar y ésta quedó a la vista. Arreglarlo pide un estado nuevo (`perdido`) o una regla sobre `entregado + timeout + margen`, y las dos son decisiones de dominio, no un ajuste. **Se revisa si aparece una fila `entregado` vieja en la bitácora de producción** — hoy no hay ninguna. | **sin asignar** |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
-| A65 | **`musubi-tool.sh` no dice con qué credencial habló** | El script toma `MUSUBI_TOKEN` y sólo cae a `MUSUBI_TOKEN_FILE` **si el primero está vacío**, así que una variable exportada hace media hora —incluso a medio pegar— le gana en silencio al archivo recién creado, y el archivo no se lee ni una vez. Cuando el brain rechaza contesta `401 unauthorized` en TEXTO PLANO, que el script traduce a «el cerebro no devolvió JSON (¿URL o token mal?)»: nombra dos causas y la real puede ser una tercera —token bueno pero **todavía no recargado**, la ventana de 10 s del vigía de `mtime`— o una cuarta —token bueno en un archivo que nunca se abrió—. **Apareció dando de alta `davantis-consola` (2026-08-31)**: cuatro intentos fallidos con el YAML, el hash, la ruta, el proceso y la recarga TODOS verificados correctos; la causa estaba en el shell del operador. Lo cierra un mensaje que diga **qué fuente usó** y, ante un 401, que sugiera esperar el tick de recarga. | **sin asignar** |
-| A66 | **Un rename deja el nombre viejo vivo en Prometheus** | `musubi_fleet_rename` enumera lo que nombra a una máquina en `principals.yaml` y `config.yaml`, y con eso promete decir todo lo que un rename cambia. Pero `device` es una **etiqueta** de Prometheus: al renombrar, las series viejas no se migran ni se borran —dejan de actualizarse y envejecen con la retención— y las nuevas arrancan sin historia. Cualquier consulta, panel o alerta que filtre `device="<nombre viejo>"` queda apuntando a un fantasma: no falla, no avisa, no vuelve a disparar nunca. **Verificado al renombrar `kernelos-pc` → `davantis-1` (2026-08-31)**: las dos etiquetas convivieron hasta que la vieja se cayó de la ventana, y ninguna de las 29 reglas desplegadas (4 grupos, preguntado a Prometheus, no al repo) selecciona por nombre de máquina, así que esta vez no rompió nada — pero eso es una propiedad de cómo están escritas las alertas, no una garantía del rename. Lo cierra sumar la telemetría al informe de impacto: contar las series con el nombre viejo y decirlo ANTES de confirmar. | **sin asignar** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -74,6 +72,72 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-08-31 · EL MOTOR DE POLÍTICAS ESTABA VACÍO, Y ESO TAPABA DOS BICHOS.**
+
+Se cerró **A64 en producción** —`kernelos-pc` pasó a `davantis-1`, y los tres nombres (Musubi,
+tailscale, quien la usa) dicen por fin lo mismo— y se sacó **`davantis-admin`**, que era una
+credencial de admin VIVA cuyo valor en claro no controlaba nadie. En su lugar quedó
+`davantis-consola`, con el token en un archivo modo 600 y `MUSUBI_TOKEN_FILE` en el perfil.
+
+Pero lo que importa del día es otra cosa. **El motor de políticas llevaba desde S10 desplegado,
+validado, con cooldown persistido y métrica propia — y sin UNA SOLA REGLA configurada.** El
+`acciones=0` de cada barrido lo venía diciendo hace meses. Al poner la primera política real y
+hacerla disparar, aparecieron dos fallas que ninguna de las dos mitades habría mostrado sola.
+
+**Uno · el scrape descartaba la única métrica que el empuje no lleva.** El job `musubi` tenía
+`metric_relabel_configs` sobre `musubi_fleet_.*`, con buen motivo: la telemetría de flota llega
+además por OTLP y con las dos series cada alerta salía duplicada (medido: 5 alertas, 10 avisos).
+Pero `musubi_fleet_policy_actions_total` es la ÚNICA de esa familia con un solo productor —sale
+del scrape y el empuje no la lleva— y la regla ancha la barría. `PoliticaQueNoCura` y
+`PoliticaSinPermiso` **no podían dispararse nunca**, ni con políticas configuradas y actuando.
+
+En este mismo archivo eso figuraba explicado: «no tienen series porque no hay ninguna política
+configurada. Verificado, no supuesto». **Era cierto y tapaba lo de abajo.** Dos causas apiladas, y
+la de arriba alcanzaba para cerrar la pregunta. Sólo se vio haciendo las dos mitades: configurar
+la política Y verla disparar. Con una sola, la conclusión hubiera sido «ahora sí anda» o «sigue
+sin haber políticas».
+
+**Dos · la serie nacía en la primera acción y moría en cada reinicio.** `politicaStats` declara
+desde S10 que se emite aunque valga cero, «porque el silencio y el cero no son lo mismo». El
+código nunca lo hizo: el mapa nacía vacío y `renderPoliticas` cortaba. Las dos alertas son
+`increase(...)`, y un `increase()` sobre una serie ausente no devuelve nada — o sea que no podían
+distinguir «no actuó» de «el cerebro dejó de exportar», que es la distinción entera por la que ese
+comentario existe. Se vio al reiniciar después de configurar la primera política: la serie que
+acababa de aparecer desapareció, sin log, sin nada.
+
+**EL PATRÓN DEL DÍA, Y ES INCÓMODO: las tres cosas estaban DOCUMENTADAS BIEN y el código hacía
+otra cosa.** El comentario de `prometheus.yml` decía `musubi_fleet_device_.*` mientras la regla
+decía `musubi_fleet_.*`. El de `politicaStats` prometía emitir en cero mientras el render cortaba.
+Y este archivo explicaba la falta de series con una razón verdadera que tapaba la real. Nadie
+mintió; nadie comparó. **Cuando un comentario y su código discrepan, el comentario suele ser el
+que tenía razón** — es lo que alguien pensó despacio; el código es lo que salió apurado.
+
+**A65 CERRADO — `musubi-tool.sh` ya dice con qué credencial habló.** `MUSUBI_TOKEN` le gana a
+`MUSUBI_TOKEN_FILE` (correcto: una variable es una decisión más reciente) pero lo hacía en
+silencio, así que una variable a medio setear de hace media hora le ganaba al archivo recién
+creado y el archivo no se abría ni una vez. Costó cuatro intentos con el YAML, el hash, la ruta,
+el proceso y la recarga todos verificados correctos: la causa estaba en el shell, el único lugar
+donde nadie miró porque nada apuntaba ahí. Ahora avisa cuando las dos fuentes están puestas, y un
+401 dice qué credencial usó, cuántos caracteres tenía, y nombra la ventana de recarga de 10 s
+—que era la causa más probable y no figuraba en el mensaje viejo—. Probado contra los cuatro
+caminos, incluido el feliz.
+
+**A66 CERRADO — el informe de un rename declara lo que NO puede ver.** Enumeraba `principals.yaml`
+y `config.yaml`, y con eso se leía como exhaustivo. No lo era: `device` es también una etiqueta de
+Prometheus, donde el nombre viejo no se migra ni se borra —sus series quedan huérfanas, las nuevas
+arrancan sin historia— y una alerta que filtre por el viejo no falla: deja de disparar. El cerebro
+no puede comprobarlo (le EMPUJA métricas, no le consulta), así que **declara el hecho en vez de
+inventarse una verificación que no puede hacer**. Un informe que calla lo que no mira se lee como
+si lo hubiera mirado.
+
+**LOS ERRORES PROPIOS, que fueron tres.** Se dio un `sed -i` sobre un archivo bind-montado en
+podman: `sed -i` no edita, REEMPLAZA —cambia el inodo— y el contenedor quedó mirando el archivo
+anterior, que ya no tenía nombre. Peor: la recarga contestó `200`, honesta y perfectamente inútil,
+porque Prometheus releyó con éxito el archivo equivocado. (`install`, que usa `preparar.sh`, SÍ
+conserva el inodo: se midió antes de acusarlo.) Se le echó la culpa a una carrera con la recarga
+de 10 s cuando la recarga había funcionado bien desde el principio. Y se puso un bloque de
+RESULTADOS dentro de un recuadro de código, que se ejecutó como si fueran comandos.
 
 **2026-08-30 (7) · LA VERSIÓN SE DERIVA, NO SE TIPEA — y el que numeraba mal era yo.**
 

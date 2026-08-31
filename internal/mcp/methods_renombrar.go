@@ -99,6 +99,24 @@ func (s *McpServer) toolFleetRename(ctx context.Context, raw json.RawMessage) (i
 			"su inventario de servicios y la salud de cada uno",
 			"su token: el agente sigue latiendo sin reinstalar nada",
 		},
+		// LO QUE ESTE INFORME NO PUEDE VER SE DICE, EN VEZ DE CALLARLO (A66).
+		//
+		// El informe enumera lo que nombra a esta máquina DENTRO del cerebro —`principals.yaml` y
+		// `config.yaml`— y con eso da la impresión de ser exhaustivo. No lo es: `device` es también
+		// una ETIQUETA de Prometheus, y ahí el nombre viejo no se migra ni se borra. Sus series
+		// dejan de actualizarse y envejecen con la retención; las nuevas arrancan sin historia. Una
+		// consulta, un panel o una alerta que filtre por el nombre viejo no falla — deja de
+		// disparar, que es peor.
+		//
+		// El cerebro no puede COMPROBARLO: le empuja métricas a Prometheus, no le consulta. Así que
+		// se declara el hecho en vez de inventarle una verificación que no puede hacer. Un informe
+		// que calla lo que no mira se lee como si lo hubiera mirado.
+		"no_puedo_ver": []string{
+			"Prometheus: `device` es una etiqueta, así que las series del nombre viejo quedan " +
+				"huérfanas (envejecen con la retención) y las del nuevo arrancan sin historia. " +
+				"Revisá consultas, paneles y alertas que filtren por el nombre viejo: no fallan, " +
+				"dejan de disparar.",
+		},
 	}
 
 	if !args.Confirmar {

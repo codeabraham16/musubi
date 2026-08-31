@@ -171,3 +171,53 @@ func renombrarOk(t *testing.T, s *McpServer, p *Principal, args map[string]any) 
 	}
 	return res
 }
+
+// TestElInformeDeclaraLoQueNoPuedeVer — un informe que calla lo que no mira se lee como si lo
+// hubiera mirado.
+//
+// El informe enumera lo que nombra a la máquina DENTRO del cerebro (`principals.yaml`,
+// `config.yaml`) y con eso parece exhaustivo. No lo es: `device` es también una etiqueta de
+// Prometheus, y ahí el nombre viejo no se migra ni se borra — sus series quedan huérfanas y las
+// nuevas arrancan sin historia. Una alerta que filtre por el nombre viejo no falla: DEJA DE
+// DISPARAR, que es peor.
+//
+// Verificado al renombrar `kernelos-pc` → `davantis-1` en producción el 2026-08-31: las dos
+// etiquetas convivieron hasta que la vieja se cayó de la ventana. Esa vez no rompió nada porque
+// ninguna de las 29 reglas desplegadas filtra por nombre de máquina — pero eso es una propiedad
+// de cómo están escritas las alertas, no una garantía del rename.
+//
+// SE DECLARA Y NO SE VERIFICA a propósito: el cerebro le EMPUJA métricas a Prometheus, no le
+// consulta. Inventarle una comprobación que no puede hacer sería peor que decir la verdad.
+//
+// Sabotaje: sacar el campo `no_puedo_ver` del informe.
+func TestElInformeDeclaraLoQueNoPuedeVer(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+	s.buscarPrincipal = regConNombres("pc-gio", "pc-gio")
+
+	args := map[string]any{"device": "pc-gio", "nuevo": "davantis-1", "project": "infra"}
+
+	// LOS DOS CAMINOS. Olvidarse en el confirmado es el error natural: quien renombra de verdad es
+	// justamente quien más necesita el aviso, y es el único que ya no va a volver a leer el informe.
+	for _, caso := range []struct {
+		nombre    string
+		confirmar bool
+	}{{"informe sin confirmar", false}, {"rename confirmado", true}} {
+		a := map[string]any{}
+		for k, v := range args {
+			a[k] = v
+		}
+		if caso.confirmar {
+			a["confirmar"] = true
+		}
+		crudo := textOf(t, renombrarOk(t, s, nil, a))
+		for _, quiero := range []string{"no_puedo_ver", "Prometheus", "etiqueta"} {
+			if !strings.Contains(crudo, quiero) {
+				t.Errorf("%s: el informe no declara %q, así que se lee como exhaustivo sin serlo: %s",
+					caso.nombre, quiero, crudo)
+			}
+		}
+		// Los dos casos usan los MISMOS argumentos: el primero no confirma, así que no renombra
+		// nada y deja la máquina lista para que el segundo la renombre de verdad.
+	}
+}

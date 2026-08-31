@@ -33,13 +33,29 @@ if [ -z "$TOOL" ]; then
   exit 2
 fi
 
+# LA FUENTE DE LA CREDENCIAL SE NOMBRA, Y LA PRECEDENCIA SE AVISA (A65).
+#
+# `MUSUBI_TOKEN` GANA sobre `MUSUBI_TOKEN_FILE`, y eso es correcto —una variable puesta a mano es
+# una decisión más reciente que un archivo— pero es silencioso, y ahí está el problema: una
+# variable a medio setear de hace media hora le gana al archivo que acabás de crear, y el 401 que
+# vuelve no menciona ninguna de las dos.
+#
+# Costó cuatro intentos el 2026-08-31, con el YAML, el hash, la ruta, el proceso y la recarga
+# TODOS verificados correctos. La causa estaba en el shell, que era el único lugar donde nadie
+# miró porque nada apuntaba ahí.
 TOKEN="${MUSUBI_TOKEN:-}"
+FUENTE="la variable MUSUBI_TOKEN"
 if [ -z "$TOKEN" ] && [ -n "${MUSUBI_TOKEN_FILE:-}" ]; then
   TOKEN="$(cat "$MUSUBI_TOKEN_FILE")"
+  FUENTE="el archivo $MUSUBI_TOKEN_FILE"
 fi
 if [ -z "$TOKEN" ]; then
   echo "falta la credencial: exportá MUSUBI_TOKEN o MUSUBI_TOKEN_FILE" >&2
   exit 2
+fi
+if [ -n "${MUSUBI_TOKEN:-}" ] && [ -n "${MUSUBI_TOKEN_FILE:-}" ]; then
+  echo "aviso: MUSUBI_TOKEN y MUSUBI_TOKEN_FILE están las dos puestas. Se usa LA VARIABLE; el archivo ni se abre." >&2
+  echo "       Si querías el archivo: unset MUSUBI_TOKEN" >&2
 fi
 
 # El JSON se arma con python y no con printf: los argumentos llevan comillas, y concatenar a mano
@@ -55,16 +71,44 @@ print(json.dumps({"jsonrpc": "2.0", "id": "cli", "method": "tools/call",
                   "params": {"name": sys.argv[1], "arguments": args}}))
 ' "$TOOL" "$ARGS")"
 
-printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+# EL CÓDIGO HTTP VIAJA CON EL CUERPO, en su propia última línea. Sin él, un 401 (que contesta
+# `unauthorized` en texto plano) y una URL equivocada (que contesta un 404 en HTML) daban EL MISMO
+# mensaje: «no devolvió JSON». Dos causas muy distintas con un solo diagnóstico, y ninguna de las
+# dos veces que pasó era la que el mensaje nombraba.
+RESPUESTA="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
   | curl -sS -K - -X POST "$URL/mcp" \
       -H "Content-Type: application/json" \
       --data-binary "$CUERPO" \
-  | python3 -c '
+      -w '\n%{http_code}')"
+
+printf '%s' "$RESPUESTA" | python3 -c '
 import json, sys
+crudo = sys.stdin.read()
+cuerpo, _, codigo = crudo.rpartition("\n")
+fuente, largo, url = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# UN 401 NO ES «URL O TOKEN MAL» (A65): son varias causas y la más probable no es ninguna de esas
+# dos. Se nombran en orden de probabilidad REAL, medido: las dos veces que pasó el 2026-08-31, la
+# causa fue una de las dos primeras.
+if codigo == "401":
+    sys.exit(
+        "el cerebro RECHAZÓ la credencial (HTTP 401).\n"
+        "  se usó: %s (%s caracteres)\n"
+        "  causas, en orden de probabilidad:\n"
+        "   1. la credencial es buena pero el cerebro TODAVÍA NO LA RECARGÓ. El vigía mira el\n"
+        "      mtime de principals.yaml cada 10 s: si la acabás de dar de alta, esperá y reintentá.\n"
+        "   2. estás mandando otra credencial de la que creés. Mirá la línea «se usó» de arriba:\n"
+        "      MUSUBI_TOKEN le gana a MUSUBI_TOKEN_FILE, y una variable vieja gana en silencio.\n"
+        "   3. el principal fue revocado, o su token_sha256 no es el SHA-256 de este token."
+        % (fuente, largo))
+
+if codigo not in ("200", ""):
+    sys.exit("el cerebro contestó HTTP %s en %s/mcp\n  cuerpo: %s" % (codigo, url, cuerpo[:300]))
+
 try:
-    r = json.load(sys.stdin)
+    r = json.loads(cuerpo)
 except json.JSONDecodeError:
-    sys.exit("el cerebro no devolvió JSON (¿URL o token mal?)")
+    sys.exit("el cerebro contestó HTTP %s pero el cuerpo no es JSON:\n  %s" % (codigo, cuerpo[:300]))
 if "error" in r:
     e = r["error"]
     sys.exit("ERROR %s: %s" % (e.get("code"), e.get("message")))
@@ -80,4 +124,4 @@ for c in res.get("content", []):
         break
 else:
     print(json.dumps(res, indent=2, ensure_ascii=False))
-'
+' "$FUENTE" "${#TOKEN}" "$URL"
