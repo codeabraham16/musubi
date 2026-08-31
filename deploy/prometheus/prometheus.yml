@@ -57,7 +57,7 @@
 #
 #   metric_relabel_configs:
 #     - source_labels: [__name__]
-#       regex: musubi_fleet_device_.*
+#       regex: musubi_fleet_(device|service)_.*
 #       action: drop
 #
 # La otra salida válida es no encender el push: el tirón ya funciona y no necesita nada de esto.
@@ -129,9 +129,19 @@ scrape_configs:
     # lo cazan `MusubiPushOTLPFallando`, `MusubiPushOTLPMudo` y `MusubiPushOTLPNuncaLlego`, que
     # miran los contadores del empujador. Si alguna vez sacás este bloque, sacá también el empuje;
     # y si sacás el empuje, sacá este bloque. Van juntos, y hay una prueba que lo custodia.
+    # SE NOMBRAN LAS DOS FAMILIAS EMPUJADAS, no se barre con `musubi_fleet_.*`. La regla ancha
+    # tiraba también `musubi_fleet_policy_actions_total`, que es la ÚNICA de esa familia con UN
+    # SOLO PRODUCTOR: sale del scrape y el empuje no la lleva. Con la regla ancha esa serie no
+    # existía en Prometheus, y las dos alertas que la miran —`PoliticaQueNoCura` y
+    # `PoliticaSinPermiso`— no podían dispararse NUNCA, ni con políticas configuradas.
+    #
+    # Medido el 2026-08-31: se configuró la primera política real, disparó (`acciones=1` en el
+    # barrido, con su línea «política dispara» en el journal), el cerebro contó la acción... y
+    # la serie seguía sin existir. La razón anotada hasta entonces —«no hay ninguna política
+    # configurada»— era cierta y tapaba ésta. Dos causas, y la de arriba escondía a la de abajo.
     metric_relabel_configs:
       - source_labels: [__name__]
-        regex: "musubi_fleet_.*"
+        regex: "musubi_fleet_(device|service)_.*"
         action: drop
 
   # QUIÉN VIGILA AL VIGILANTE. Sin este job, que la CADENA DE ALERTAS deje de entregar es

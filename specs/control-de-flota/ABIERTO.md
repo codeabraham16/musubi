@@ -1232,6 +1232,23 @@ Salieron limpias 22 de 25. Las tres que no:
   configurada. Verificado, no supuesto. Es el caso «una regla cuya precondición no se cumple» que
   este archivo ya discute; son `increase(...) > N`, así que no disparan en falso. Se dejan.
 
+  > **ESTA EXPLICACIÓN ERA CIERTA Y TAPABA LA REAL (2026-08-31).** Se configuró la primera
+  > política de verdad, disparó —`acciones=1` en el barrido, con su línea «política dispara» en
+  > el journal— y la serie **seguía sin existir**. El `metric_relabel_configs` del job `musubi`
+  > descartaba `musubi_fleet_.*` entero, y `musubi_fleet_policy_actions_total` es la ÚNICA de esa
+  > familia que el empuje OTLP **no** lleva: sale sólo del scrape. Así que las dos alertas no
+  > podían dispararse **nunca**, ni con políticas configuradas y actuando.
+  >
+  > Dos causas apiladas, y la de arriba alcanzaba para cerrar la pregunta. Sólo se vio porque se
+  > hicieron las DOS mitades —configurar una política *y* verla disparar—; con una sola, la
+  > conclusión hubiera sido «ahora sí anda» o «sigue sin haber políticas».
+  >
+  > Y el dato que más incomoda: el comentario del propio `prometheus.yml` documentaba la regla
+  > correcta (`musubi_fleet_device_.*`) mientras el código decía otra cosa. La documentación
+  > tenía razón hacía meses y nadie las comparó. **Arreglado**: el drop nombra las dos familias
+  > empujadas (`device_` y `service_`), y `TestElScrapeYElEmpujeNoTraenLoMismo` ahora falla
+  > también si alguien lo ensancha de vuelta — sabotaje ejecutado, no supuesto.
+
 **Y el hallazgo que explica todo lo demás: `agent_version` se guardaba y no se mostraba.**
 
 `kernelos-pc` figuraba **en línea, latiendo cada 30 s, con CERO servicios**. Eso tiene dos causas

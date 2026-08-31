@@ -210,10 +210,10 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 	// La duplicación, DECIDIDA Y ESCRITA donde la va a leer quien encienda el push.
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 	for _, quiero := range []string{
-		flag,                     // dónde se habilita
-		"musubi-otlp-push",       // cómo se distingue lo empujado de lo scrapeado
-		"metric_relabel_configs", // la receta concreta
-		"musubi_fleet_device_.*", // sobre qué series
+		flag,                               // dónde se habilita
+		"musubi-otlp-push",                 // cómo se distingue lo empujado de lo scrapeado
+		"metric_relabel_configs",           // la receta concreta
+		"musubi_fleet_(device|service)_.*", // sobre qué series: las DOS familias empujadas, y sólo ésas
 	} {
 		if !strings.Contains(cfg, quiero) {
 			t.Errorf("prometheus.yml no declara la duplicación de series del empuje: falta %q.\nSin esa receta, encender el push hace que las 12 reglas de flota disparen dos veces por incidente.", quiero)
@@ -233,7 +233,8 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 // mientras exista el empuje, y el empuje sólo es no-duplicación mientras exista el `drop`.
 //
 // Sabotaje que la hace fallar: sacar el bloque metric_relabel_configs de prometheus.yml,
-// o borrar las tres alertas del empujador de musubi-alerts.yml.
+// borrar las tres alertas del empujador de musubi-alerts.yml, o —el que costó descubrir—
+// ENSANCHAR el drop de vuelta a `musubi_fleet_.*`.
 func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 	prom, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
@@ -242,10 +243,22 @@ func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 	texto := string(prom)
 
 	tieneDrop := strings.Contains(texto, "metric_relabel_configs") &&
-		strings.Contains(texto, `regex: "musubi_fleet_.*"`) &&
+		strings.Contains(texto, `regex: "musubi_fleet_(device|service)_.*"`) &&
 		strings.Contains(texto, "action: drop")
 	if !tieneDrop {
-		t.Error("el scrape ya no descarta `musubi_fleet_*`: con el empuje encendido, cada máquina tendría dos series y cada alerta de flota saldría duplicada")
+		t.Error("el scrape ya no descarta las dos familias empujadas (`device_` y `service_`): con el empuje encendido, cada máquina tendría dos series y cada alerta de flota saldría duplicada")
+	}
+
+	// Y LA MITAD OPUESTA, que es la que faltaba: el drop no puede ser TAN ancho como para tirar
+	// la única serie de la familia que el empuje NO lleva.
+	//
+	// `musubi_fleet_policy_actions_total` sale sólo del scrape. Con un drop sobre
+	// `musubi_fleet_.*` no llegaba nunca a Prometheus, así que `PoliticaQueNoCura` y
+	// `PoliticaSinPermiso` no podían dispararse ni con una política configurada Y disparando.
+	// Es el modo de fallo que este repo persigue: la ausencia de la serie se explicaba con una
+	// razón verdadera —«no hay políticas configuradas»— que tapaba la real.
+	if strings.Contains(texto, `regex: "musubi_fleet_.*"`) {
+		t.Error("el drop volvió a ser `musubi_fleet_.*`: eso también tira `musubi_fleet_policy_actions_total`, que el empuje NO lleva, y deja a las alertas de políticas sin serie para siempre")
 	}
 
 	// Y la contraparte: si el scrape no trae flota, la única fuente es el empuje. Que el empuje
