@@ -335,6 +335,10 @@ type designBrief struct {
 	// material: es criterio de composición, no dato. Vacío cuando el eje no tiene formas plausibles
 	// —color, a11y, tipografía son propiedades, no esqueletos— y ese vacío es una respuesta.
 	Shape string `json:"shape,omitempty"`
+	// ShapeHistory dice si hubo formas anteriores en este proyecto y le pide al caller que anote la
+	// que use. Va SIEMPRE que haya bloque de forma: si sólo apareciera cuando ya hay historia, nunca
+	// existiría la primera anotación y la rotación no arrancaría nunca.
+	ShapeHistory string `json:"shape_history,omitempty"`
 	// Demand es lo que el diseño TIENE que lograr (exigencia_diseno.go). Va ANTES de `avoid` a
 	// propósito: primero qué hacer, después qué no. Al revés, el agente lee cuatro prohibiciones,
 	// se pone conservador, y cuando llega la exigencia ya decidió jugar a lo seguro.
@@ -417,6 +421,16 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// principios. El bloque de principios pasa a ser el núcleo ESTÁTICO del código (I-INY1).
 	metodo, methodSource := s.designMethodCards(rec.Metodo, rec.Modo)
 
+	// LA ROTACIÓN (formas_diseno.go). Se llavea por el proyecto DEL PRINCIPAL y no por la marca
+	// pedida: `brand` deja diseñar a nombre de otro proyecto, y llavear por marca haría que la sala
+	// de mando le escriba la rotación a Altura.
+	var forma, notaDeForma string
+	if f := formasPara(rec.Eje, nil); f != "" {
+		usadas, hubo := s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))
+		forma = formasPara(rec.Eje, usadas)
+		notaDeForma = notaDeRotacion(hubo)
+	}
+
 	brief := designBrief{
 		// El eco lleva la consulta NORMALIZADA, no el pedido crudo. Quien llamó ya tiene su prompt
 		// entero —lo escribió— así que devolvérselo completo es presupuesto gastado en nada, y encima
@@ -430,7 +444,8 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		MaterialNote:    designMaterialNote,
 		Role:            designRole,
 		Principles:      designPrinciples,
-		Shape:           formasPara(rec.Eje, nil),
+		Shape:           forma,
+		ShapeHistory:    notaDeForma,
 		Demand:          exigenciasPara(rec.Eje),
 		Avoid:           tellsPara(rec.Eje),
 		Brand:           sanearMaterial(brandText),
