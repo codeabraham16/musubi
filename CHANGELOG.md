@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **El set dorado del banco pasa de 16 a 67 pedidos** (201 formas), y al hacerlo corrigió un número
+  que veníamos reportando mal.
+  - **Por qué:** un bootstrap pareado sobre los 16 originales dio una semi-amplitud de IC del 95 %
+    de **0,188** — el instrumento no distinguía 0,50 de 0,60, y todas las decisiones que quedan del
+    track dependen de diferencias de ese tamaño. Hacen falta ~64 pedidos para bajarla a 0,094.
+  - **De dónde salen los 51 nuevos:** pantallas que EXISTEN — 16 páginas del CRM, 11 vistas del
+    cuerpo, 6 lentes del panel del cerebro, 6 superficies de Altura y 12 tareas genéricas. Los ejes
+    del CRM se cruzaron contra marcadores **medidos en su código** (`<table>`, `<form>`,
+    `Recharts`, `isLoading`…), no contra lo que se supusiera de esas pantallas.
+  - 🔴 **LO QUE REVELÓ: M1 real es 0,32, no 0,50.** Los 16 pedidos originales eran más fáciles que
+    la realidad. La mejora relativa medida antes y después sobre el MISMO set sigue en pie; lo que
+    estaba inflado era el nivel absoluto. M3 0,27 → 0,24 por la misma razón.
+  - ⚠️ **Sesgo declarado dentro del propio archivo:** las tres paráfrasis de cada pedido las escribió
+    el mismo agente que mide el motor. Si se parecen más entre sí de lo que se parecería el pedido de
+    otra persona, M1 sale mejor de lo que es.
+
+
 ### Fixed
 - **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
   Reproducido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA

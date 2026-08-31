@@ -1,12 +1,16 @@
 {
-  "armado": "2026-08-29",
-  "nota": "Set dorado del banco del motor de diseño (renaissance-f0-banco). Los pedidos salen de pantallas que EXISTEN en los proyectos vivos: si un pedido deja de tener pantalla, se retira. Cada pedido trae 3 formas de pedir lo mismo — la primera es la canónica — y los ejes que un corpus útil tendría que tocar.",
+  "armado": "2026-08-30 (ampliado de 16 a 67 pedidos)",
+  "nota": "Set dorado del banco del motor de diseño (renaissance-f0-banco). Los pedidos salen de pantallas que EXISTEN en los proyectos vivos: si un pedido deja de tener pantalla, se retira. Cada pedido trae 3 formas de pedir lo mismo — la primera es la canónica — y los ejes que un corpus útil tendría que tocar.\n\nAMPLIACION 2026-08-30: de 16 a 67 pedidos (201 formas). POR QUE: un bootstrap pareado sobre los 16 originales dio una semi-amplitud de IC del 95% de 0,188 — el instrumento NO distinguia 0,50 de 0,60, y todas las decisiones que quedaban del track dependen de diferencias de ese tamano. Se midio que hacen falta ~64 pedidos para que la semi-amplitud baje a 0,094. DE DONDE SALEN LOS 51 NUEVOS: 16 paginas reales del CRM (crm-musubi/src/app/*/page.tsx), 11 vistas del cuerpo (musubi-body/gpui-spike/src/*.rs), 6 lentes del panel del cerebro (cmd/musubi/assets/src/*.mjs), 6 superficies de Altura y 12 tareas de diseno genericas frecuentes. Los ejes de las pantallas del CRM se cruzaron contra marcadores MEDIDOS en su codigo (<table>, <form>, Recharts, isLoading, Skeleton...); donde el codigo no alcanza — el cuerpo esta en Rust y el panel en canvas — el eje sale de lo que la pantalla evidentemente ES. ⚠ SESGO DECLARADO, y este archivo no puede sacarselo solo: LAS TRES PARAFRASIS DE CADA PEDIDO LAS ESCRIBIO EL MISMO AGENTE QUE MIDE EL MOTOR. Si las tres formas se parecen mas entre si de lo que se pareceria el pedido de otra persona, M1 sale MEJOR de lo que es. Se mitigo variando registro (tecnico/coloquial), la palabra de entrada (sustantivo/verbo) y el vocabulario, pero quien lea un numero de M1 tiene que saber de donde salen las parafrasis. La correccion barata es que el usuario reescriba una forma de cada pedido con sus propias palabras.",
   "pedidos": [
     {
       "id": "altura-inventario",
       "proyecto": "altura",
       "target": "web",
-      "ejes": ["tabla", "densidad", "filtros"],
+      "ejes": [
+        "tabla",
+        "densidad",
+        "filtros"
+      ],
       "formas": [
         "tabla densa de inventario con lotes por producto, filtros y alertas de stock bajo",
         "listado de inventario: muchas filas de lotes, se filtra y avisa cuando queda poco stock",
@@ -17,7 +21,11 @@
       "id": "altura-despachos",
       "proyecto": "altura",
       "target": "web",
-      "ejes": ["tabla", "estado", "navegacion"],
+      "ejes": [
+        "tabla",
+        "estado",
+        "navegacion"
+      ],
       "formas": [
         "pantalla de despachos con su estado y el enlace a la orden que los originó",
         "lista de envíos donde se vea en qué etapa está cada uno y a qué pedido pertenece",
@@ -28,7 +36,11 @@
       "id": "altura-orden-produccion",
       "proyecto": "altura",
       "target": "web",
-      "ejes": ["formulario", "layout", "jerarquia"],
+      "ejes": [
+        "formulario",
+        "layout",
+        "jerarquia"
+      ],
       "formas": [
         "formulario para cargar una orden de producción con su receta y sus lotes de insumo",
         "pantalla de alta de orden: se elige la receta y se van agregando los lotes que consume",
@@ -39,7 +51,11 @@
       "id": "altura-reporte-mermas",
       "proyecto": "altura",
       "target": "web",
-      "ejes": ["dataviz", "tabla", "microcopy"],
+      "ejes": [
+        "dataviz",
+        "tabla",
+        "microcopy"
+      ],
       "formas": [
         "reporte de mermas por producto y por mes, sin que acuse a nadie",
         "informe de pérdidas de inventario agrupado por artículo y período, en tono neutro",
@@ -50,7 +66,11 @@
       "id": "altura-kiosko-fichaje",
       "proyecto": "altura",
       "target": "web",
-      "ejes": ["movil", "estado-vacio", "microcopy"],
+      "ejes": [
+        "movil",
+        "estado-vacio",
+        "microcopy"
+      ],
       "formas": [
         "kiosko de fichaje a pantalla completa para una tablet en la planta",
         "pantalla de marcación de entrada y salida, para un dispositivo fijo en la fábrica",
@@ -61,7 +81,11 @@
       "id": "cuerpo-login",
       "proyecto": "musubi",
       "target": "painter",
-      "ejes": ["login", "jerarquia", "layout"],
+      "ejes": [
+        "login",
+        "jerarquia",
+        "layout"
+      ],
       "formas": [
         "pantalla de login oscura para el cuerpo de Musubi, con un solo campo y un botón",
         "acceso al programa: se pega una credencial, se analiza y se entra",
@@ -72,7 +96,11 @@
       "id": "cuerpo-hilo-chat",
       "proyecto": "musubi",
       "target": "painter",
-      "ejes": ["chat", "densidad", "microcopy"],
+      "ejes": [
+        "chat",
+        "densidad",
+        "microcopy"
+      ],
       "formas": [
         "ventana de chat con el agente, mensajes largos y una barra de actividad anclada",
         "conversación con el asistente: burbujas, texto con formato y lo que está haciendo abajo",
@@ -83,7 +111,11 @@
       "id": "cuerpo-memoria",
       "proyecto": "musubi",
       "target": "painter",
-      "ejes": ["dataviz", "dashboard", "jerarquia"],
+      "ejes": [
+        "dataviz",
+        "dashboard",
+        "jerarquia"
+      ],
       "formas": [
         "panel de la memoria con cinco dimensiones de salud y sus valores",
         "tablero que muestre qué tan sana está la base de conocimiento en varios ejes",
@@ -94,7 +126,11 @@
       "id": "cuerpo-agentes",
       "proyecto": "musubi",
       "target": "painter",
-      "ejes": ["tabla", "estado", "motion"],
+      "ejes": [
+        "tabla",
+        "estado",
+        "motion"
+      ],
       "formas": [
         "tablero de agentes trabajando en paralelo, con el estado de cada uno en vivo",
         "pantalla que lista los sub-agentes activos y va actualizando en qué anda cada uno",
@@ -105,7 +141,10 @@
       "id": "cuerpo-estado-vacio",
       "proyecto": "musubi",
       "target": "painter",
-      "ejes": ["estado-vacio", "microcopy"],
+      "ejes": [
+        "estado-vacio",
+        "microcopy"
+      ],
       "formas": [
         "estado vacío de una lista que todavía no tiene nada, que explique qué la va a llenar",
         "pantalla sin datos que diga por qué está vacía y qué hacer para que deje de estarlo",
@@ -116,7 +155,11 @@
       "id": "crm-cabina",
       "proyecto": "crm",
       "target": "web",
-      "ejes": ["dashboard", "dataviz", "jerarquia"],
+      "ejes": [
+        "dashboard",
+        "dataviz",
+        "jerarquia"
+      ],
       "formas": [
         "cabina de mando del CRM con los indicadores del mes y lo que necesita atención",
         "tablero principal de ventas: unos pocos números grandes y las alertas arriba",
@@ -127,7 +170,11 @@
       "id": "crm-ficha-cliente",
       "proyecto": "crm",
       "target": "web",
-      "ejes": ["layout", "navegacion", "densidad"],
+      "ejes": [
+        "layout",
+        "navegacion",
+        "densidad"
+      ],
       "formas": [
         "ficha de cliente con sus datos, su historial y las acciones que se pueden tomar",
         "detalle de un contacto: información, línea de tiempo de lo que pasó y qué hacer",
@@ -138,7 +185,11 @@
       "id": "panel-grafo",
       "proyecto": "musubi",
       "target": "html",
-      "ejes": ["dataviz", "color", "motion"],
+      "ejes": [
+        "dataviz",
+        "color",
+        "motion"
+      ],
       "formas": [
         "visualización 3D de un grafo de memoria con miles de nodos y sus conexiones",
         "vista tridimensional de la red de conocimiento, con las relaciones dibujadas",
@@ -149,7 +200,11 @@
       "id": "generico-onboarding",
       "proyecto": "musubi",
       "target": "web",
-      "ejes": ["onboarding", "formulario", "microcopy"],
+      "ejes": [
+        "onboarding",
+        "formulario",
+        "microcopy"
+      ],
       "formas": [
         "flujo de alta en tres pasos, con progreso visible y sin pedir de más",
         "onboarding de un producto nuevo: pocos pasos, se ve cuánto falta",
@@ -160,7 +215,11 @@
       "id": "generico-ajustes",
       "proyecto": "musubi",
       "target": "web",
-      "ejes": ["formulario", "navegacion", "a11y"],
+      "ejes": [
+        "formulario",
+        "navegacion",
+        "a11y"
+      ],
       "formas": [
         "pantalla de ajustes con secciones, cada opción explicada y operable con teclado",
         "configuración agrupada por temas, con descripciones y accesible sin mouse",
@@ -171,11 +230,773 @@
       "id": "generico-tabla-accesible",
       "proyecto": "musubi",
       "target": "web",
-      "ejes": ["a11y", "tabla", "color"],
+      "ejes": [
+        "a11y",
+        "tabla",
+        "color"
+      ],
       "formas": [
         "tabla de datos accesible, que no codifique el estado sólo con color",
         "grilla que funcione para daltonismo: estado con forma además de color",
         "listado de datos donde la condición de cada fila se lea sin depender del tono"
+      ]
+    },
+    {
+      "id": "crm-acceso",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "estado"
+      ],
+      "formas": [
+        "una pantalla para pedir acceso al sistema, con el formulario y el estado de la solicitud",
+        "cómo se ve el alta de un usuario nuevo mientras espera aprobación",
+        "solicitud de acceso: qué carga la persona y cómo sabe en qué anda su pedido"
+      ]
+    },
+    {
+      "id": "crm-actividad",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "estado-vacio",
+        "microcopy"
+      ],
+      "formas": [
+        "el registro de actividad reciente, incluido qué mostrar cuando todavía no pasó nada",
+        "feed de lo que fue ocurriendo en la cuenta, con su estado vacío",
+        "listar los últimos movimientos; si no hubo ninguno, que la pantalla lo explique"
+      ]
+    },
+    {
+      "id": "crm-finanzas",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "dashboard",
+        "filtros",
+        "dataviz"
+      ],
+      "formas": [
+        "el panel de finanzas: totales del mes, evolución y filtros por período",
+        "resumen económico con gráficos y la posibilidad de acotar por fecha",
+        "cómo ver la plata: cuánto entró, cuánto salió, y poder recortar el rango"
+      ]
+    },
+    {
+      "id": "crm-facturas",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "filtros",
+        "estado"
+      ],
+      "formas": [
+        "el listado de facturas con su estado de cobro y filtros",
+        "tabla de comprobantes emitidos, que se pueda filtrar por estado y cliente",
+        "ver todas las facturas de un vistazo y encontrar rápido las impagas"
+      ]
+    },
+    {
+      "id": "crm-flota",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "estado",
+        "filtros"
+      ],
+      "formas": [
+        "la tabla de máquinas de la flota con si están vivas o caídas",
+        "listado de equipos y su último latido, filtrable",
+        "monitorear el parque de máquinas: cuáles responden y cuáles no"
+      ]
+    },
+    {
+      "id": "crm-login",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "login",
+        "formulario",
+        "estado"
+      ],
+      "formas": [
+        "la pantalla de inicio de sesión del CRM",
+        "entrar al sistema: usuario, contraseña y qué pasa si están mal",
+        "cómo se autentica alguien y qué ve mientras el servidor responde"
+      ]
+    },
+    {
+      "id": "crm-monitoreo",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "estado",
+        "dashboard"
+      ],
+      "formas": [
+        "la vista de monitoreo con el estado de cada servicio",
+        "tablero de salud del sistema: qué anda y qué no",
+        "cómo mostrar en vivo si los servicios están arriba"
+      ]
+    },
+    {
+      "id": "crm-notas",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "filtros",
+        "microcopy"
+      ],
+      "formas": [
+        "las notas del equipo: escribirlas, buscarlas y leerlas",
+        "libreta compartida con búsqueda",
+        "dónde se anotan las cosas y cómo se encuentran después"
+      ]
+    },
+    {
+      "id": "crm-organizacion",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "filtros",
+        "jerarquia"
+      ],
+      "formas": [
+        "la pantalla de la organización: personas, roles y a qué equipo pertenecen",
+        "quién es quién en la empresa, con su rol y su área",
+        "estructura del equipo: buscar a alguien y ver de qué se ocupa"
+      ]
+    },
+    {
+      "id": "crm-pedidos",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "filtros",
+        "estado"
+      ],
+      "formas": [
+        "el listado de pedidos con su estado de avance y filtros",
+        "órdenes en curso: en qué etapa está cada una",
+        "seguir los pedidos de los clientes hasta que se entregan"
+      ]
+    },
+    {
+      "id": "crm-proyectos",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "navegacion",
+        "filtros",
+        "jerarquia"
+      ],
+      "formas": [
+        "el índice de proyectos, con la entrada a cada uno",
+        "listado de proyectos activos y cómo se abre el detalle",
+        "desde dónde se elige un proyecto para trabajar adentro"
+      ]
+    },
+    {
+      "id": "crm-proyecto-detalle",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "layout",
+        "navegacion",
+        "estado"
+      ],
+      "formas": [
+        "la ficha de un proyecto con sus secciones y el estado general",
+        "pantalla interna de un proyecto: pestañas, avance, lo que falta",
+        "cuando entrás a un proyecto, qué ves y cómo te movés adentro"
+      ]
+    },
+    {
+      "id": "crm-seguridad",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "login",
+        "microcopy"
+      ],
+      "formas": [
+        "la pantalla de seguridad: cambiar clave y ver las sesiones abiertas",
+        "ajustes de cuenta relacionados con el acceso",
+        "dónde alguien cierra sesiones y rota su contraseña"
+      ]
+    },
+    {
+      "id": "crm-tickets",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "filtros",
+        "estado"
+      ],
+      "formas": [
+        "el tablero de tickets con prioridad y responsable",
+        "cola de soporte: qué está abierto y quién lo tiene",
+        "ver los reclamos pendientes y encontrar los urgentes"
+      ]
+    },
+    {
+      "id": "crm-home",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "dashboard",
+        "jerarquia"
+      ],
+      "formas": [
+        "la portada del CRM con lo más importante arriba",
+        "pantalla de inicio: qué mira alguien apenas entra",
+        "el resumen del día cuando abrís el sistema"
+      ]
+    },
+    {
+      "id": "crm-cerebro",
+      "proyecto": "crm",
+      "target": "web",
+      "ejes": [
+        "estado-vacio",
+        "dataviz"
+      ],
+      "formas": [
+        "la vista del cerebro embebida en el CRM, incluido cuando no hay datos",
+        "panel de la memoria dentro del CRM",
+        "cómo se ve el cerebro central desde adentro del sistema de gestión"
+      ]
+    },
+    {
+      "id": "cuerpo-hilo",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "chat",
+        "microcopy",
+        "estado"
+      ],
+      "formas": [
+        "la conversación del Hilo con el agente, incluido lo que pasa mientras piensa",
+        "chat principal: mensajes, respuestas y la señal de que está trabajando",
+        "hablar con el agente y ver en qué anda sin perder el hilo"
+      ]
+    },
+    {
+      "id": "cuerpo-banco",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "tabla",
+        "estado",
+        "dataviz"
+      ],
+      "formas": [
+        "el Banco de endurecimiento: corridas, hallazgos y resultados",
+        "pantalla donde se rompe el código a propósito y se anota qué se rompió",
+        "ver las pruebas que se corrieron y qué encontraron"
+      ]
+    },
+    {
+      "id": "cuerpo-grafo",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "dataviz",
+        "navegacion",
+        "densidad"
+      ],
+      "formas": [
+        "el grafo de la memoria y el código, con su lente para elegir qué mirar",
+        "visualización de nodos y aristas del cerebro, navegable",
+        "explorar visualmente cómo se conecta todo lo que el sistema sabe"
+      ]
+    },
+    {
+      "id": "cuerpo-lienzo",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "color",
+        "layout",
+        "formulario"
+      ],
+      "formas": [
+        "el Lienzo: pedir un diseño por chat y ver el resultado",
+        "módulo de diseño manejado por conversación",
+        "dónde se compone una pantalla nueva sin escribir código"
+      ]
+    },
+    {
+      "id": "cuerpo-forge",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "navegacion",
+        "filtros",
+        "onboarding"
+      ],
+      "formas": [
+        "la Forja: buscar skills en la comunidad e instalarlas",
+        "catálogo de habilidades con instalación",
+        "encontrar una skill que alguien ya escribió y traerla al proyecto"
+      ]
+    },
+    {
+      "id": "cuerpo-orch",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "estado",
+        "tabla",
+        "densidad"
+      ],
+      "formas": [
+        "el Orquestador: varios agentes trabajando a la vez y su estado",
+        "cabina del enjambre, con cada agente y en qué anda",
+        "mirar muchas terminales corriendo en paralelo sin marearse"
+      ]
+    },
+    {
+      "id": "cuerpo-adversario",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "estado",
+        "microcopy",
+        "jerarquia"
+      ],
+      "formas": [
+        "la terminal adversaria que intenta romper lo que se construyó",
+        "vista del agente que ataca el propio código y reporta",
+        "pantalla donde se ve qué se intentó romper y si aguantó"
+      ]
+    },
+    {
+      "id": "cuerpo-bridge",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "estado",
+        "microcopy"
+      ],
+      "formas": [
+        "el puente con el cerebro central y si la conexión está viva",
+        "estado del enlace al central, con el error cuando se cae",
+        "saber si el cuerpo está hablando con el cerebro o quedó solo"
+      ]
+    },
+    {
+      "id": "cuerpo-taller",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "formulario",
+        "onboarding"
+      ],
+      "formas": [
+        "el Taller donde se arma una skill nueva paso a paso",
+        "asistente para crear una habilidad desde cero",
+        "guiar a alguien para que escriba su primera skill"
+      ]
+    },
+    {
+      "id": "cuerpo-workspace",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "navegacion",
+        "layout",
+        "estado-vacio"
+      ],
+      "formas": [
+        "el selector de proyecto al abrir el cuerpo, incluido cuando no hay ninguno",
+        "elegir sobre qué carpeta se va a trabajar",
+        "la primera pantalla: qué proyecto abro"
+      ]
+    },
+    {
+      "id": "cuerpo-textfield",
+      "proyecto": "cuerpo",
+      "target": "painter",
+      "ejes": [
+        "formulario",
+        "motion",
+        "a11y"
+      ],
+      "formas": [
+        "el campo de texto del chat: cursor que titila, foco y pegar",
+        "el compositor donde se escribe el mensaje",
+        "cómo se comporta el input mientras alguien tipea"
+      ]
+    },
+    {
+      "id": "panel-arbol-memoria",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "dataviz",
+        "jerarquia",
+        "densidad"
+      ],
+      "formas": [
+        "el árbol de la memoria: cada rama es un tema y su grosor dice cuánto hay",
+        "visualizar la memoria como estructura, no como lista",
+        "ver de qué habla el cerebro y cuánto pesa cada cosa"
+      ]
+    },
+    {
+      "id": "panel-impulsos",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "motion",
+        "dataviz",
+        "estado"
+      ],
+      "formas": [
+        "los impulsos que viajan por el grafo cuando algo se usa",
+        "animación de actividad sobre las conexiones del cerebro",
+        "mostrar en vivo qué partes de la memoria se están tocando"
+      ]
+    },
+    {
+      "id": "panel-personas",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "dataviz",
+        "tabla",
+        "jerarquia"
+      ],
+      "formas": [
+        "la lente de personas: quién llama al cerebro y cuánto",
+        "censo de actores con su volumen de uso",
+        "quién usa el sistema y para qué, de un vistazo"
+      ]
+    },
+    {
+      "id": "panel-vista-memoria",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "densidad",
+        "filtros",
+        "navegacion"
+      ],
+      "formas": [
+        "la vista de memoria con su selector de lente y filtros",
+        "explorar las observaciones guardadas y acotar lo que se ve",
+        "buscar dentro de todo lo que el cerebro recuerda"
+      ]
+    },
+    {
+      "id": "panel-dashboard",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "dashboard",
+        "jerarquia",
+        "densidad"
+      ],
+      "formas": [
+        "el tablero del cerebro con sus indicadores principales",
+        "resumen de salud de la memoria en una pantalla",
+        "los números que hay que mirar todos los días del cerebro"
+      ]
+    },
+    {
+      "id": "panel-flota",
+      "proyecto": "panel",
+      "target": "html",
+      "ejes": [
+        "tabla",
+        "estado",
+        "densidad"
+      ],
+      "formas": [
+        "el panel de flota con las máquinas y sus piezas",
+        "estado de cada equipo de la malla y sus servicios",
+        "ver de un vistazo si algo del entorno está caído"
+      ]
+    },
+    {
+      "id": "altura-lote-trazabilidad",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "navegacion",
+        "jerarquia"
+      ],
+      "formas": [
+        "la trazabilidad de un lote: de dónde salió y a dónde fue",
+        "seguir un lote hacia atrás y hacia adelante en la producción",
+        "historia completa de un lote de producto"
+      ]
+    },
+    {
+      "id": "altura-alta-producto",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "microcopy",
+        "estado"
+      ],
+      "formas": [
+        "el alta de un producto nuevo con sus unidades y su receta",
+        "cargar un producto al sistema sin equivocarse",
+        "formulario para dar de alta algo que se produce"
+      ]
+    },
+    {
+      "id": "altura-panel-planta",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "dashboard",
+        "estado",
+        "densidad"
+      ],
+      "formas": [
+        "el panel de la planta: qué se está produciendo ahora",
+        "estado de la producción en vivo para el encargado",
+        "pantalla que se mira desde el piso de planta"
+      ]
+    },
+    {
+      "id": "altura-ajuste-inventario",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "microcopy",
+        "estado"
+      ],
+      "formas": [
+        "el ajuste manual de inventario y por qué se hizo",
+        "corregir el stock a mano dejando registro del motivo",
+        "cuando el conteo no coincide, cómo se arregla y se explica"
+      ]
+    },
+    {
+      "id": "altura-turnos",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "densidad",
+        "filtros"
+      ],
+      "formas": [
+        "la grilla de turnos del personal por semana",
+        "quién trabaja cuándo, en una vista de semana",
+        "planificar los turnos de la gente de planta"
+      ]
+    },
+    {
+      "id": "altura-alertas-stock",
+      "proyecto": "altura",
+      "target": "web",
+      "ejes": [
+        "estado",
+        "jerarquia",
+        "microcopy"
+      ],
+      "formas": [
+        "las alertas de stock bajo y cuál mirar primero",
+        "avisos de faltante ordenados por urgencia",
+        "qué productos están por agotarse y cuánto apura cada uno"
+      ]
+    },
+    {
+      "id": "generico-precios",
+      "proyecto": "",
+      "target": "html",
+      "ejes": [
+        "jerarquia",
+        "layout",
+        "microcopy"
+      ],
+      "formas": [
+        "una página de precios con tres planes y uno destacado",
+        "comparar planes de suscripción para que se elija uno",
+        "mostrar cuánto sale el producto en sus distintas variantes"
+      ]
+    },
+    {
+      "id": "generico-perfil",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "navegacion",
+        "estado"
+      ],
+      "formas": [
+        "la pantalla de perfil de usuario con sus datos editables",
+        "ajustes de la cuenta personal",
+        "dónde alguien cambia su nombre, su foto y su mail"
+      ]
+    },
+    {
+      "id": "generico-busqueda",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "filtros",
+        "estado-vacio",
+        "densidad"
+      ],
+      "formas": [
+        "los resultados de una búsqueda, incluido cuando no hay ninguno",
+        "pantalla de resultados con facetas para acotar",
+        "buscar algo en el sistema y refinar hasta encontrarlo"
+      ]
+    },
+    {
+      "id": "generico-notificaciones",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "microcopy",
+        "jerarquia",
+        "estado"
+      ],
+      "formas": [
+        "el centro de notificaciones con lo leído y lo no leído",
+        "bandeja de avisos ordenada por importancia",
+        "dónde se enteran las personas de lo que pasó mientras no estaban"
+      ]
+    },
+    {
+      "id": "generico-checkout",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "formulario",
+        "estado",
+        "microcopy"
+      ],
+      "formas": [
+        "el paso de pago de una compra, con sus errores posibles",
+        "cerrar una compra: datos, confirmación y qué pasa si falla",
+        "la última pantalla antes de que alguien pague"
+      ]
+    },
+    {
+      "id": "generico-error-500",
+      "proyecto": "",
+      "target": "html",
+      "ejes": [
+        "estado",
+        "microcopy",
+        "jerarquia"
+      ],
+      "formas": [
+        "la pantalla de error cuando el servidor se cae",
+        "qué mostrar cuando algo se rompió del lado nuestro",
+        "página de falla que no deje a la persona sin salida"
+      ]
+    },
+    {
+      "id": "generico-comparador",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "tabla",
+        "densidad",
+        "jerarquia"
+      ],
+      "formas": [
+        "una tabla que compara varias opciones fila por fila",
+        "comparativa de productos con sus atributos enfrentados",
+        "poner dos o tres cosas lado a lado para decidir"
+      ]
+    },
+    {
+      "id": "generico-calendario",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "densidad",
+        "navegacion",
+        "estado"
+      ],
+      "formas": [
+        "una vista de calendario mensual con eventos",
+        "agenda del mes, con lo que hay cada día",
+        "ver qué viene esta semana sin abrir cada cosa"
+      ]
+    },
+    {
+      "id": "generico-timeline",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "jerarquia",
+        "densidad",
+        "motion"
+      ],
+      "formas": [
+        "una línea de tiempo de eventos con su orden y su peso",
+        "cronología de lo que fue pasando",
+        "mostrar una secuencia de hechos para que se entienda la historia"
+      ]
+    },
+    {
+      "id": "generico-modo-oscuro",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "color",
+        "a11y",
+        "jerarquia"
+      ],
+      "formas": [
+        "cómo se comporta la paleta al pasar a modo oscuro",
+        "adaptar los colores para pantalla oscura sin perder contraste",
+        "que el mismo diseño funcione de noche"
+      ]
+    },
+    {
+      "id": "generico-carga-archivo",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "estado",
+        "formulario",
+        "microcopy"
+      ],
+      "formas": [
+        "la subida de un archivo con su progreso y sus errores",
+        "cargar un documento y saber si llegó",
+        "arrastrar un archivo a la pantalla y ver qué pasa"
+      ]
+    },
+    {
+      "id": "generico-confirmacion",
+      "proyecto": "",
+      "target": "web",
+      "ejes": [
+        "microcopy",
+        "jerarquia",
+        "estado"
+      ],
+      "formas": [
+        "el diálogo que pide confirmar algo irreversible",
+        "confirmación antes de borrar",
+        "cómo se pregunta '¿seguro?' sin que la gente apriete de más"
       ]
     }
   ],
