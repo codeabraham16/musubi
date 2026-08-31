@@ -85,6 +85,24 @@ var ejesDeDiseno = []ejeDiseno{
 		"chat mensaje mensajes conversacion burbuja hilo escribir responder"},
 	{"onboarding", "onboarding: bienvenida, primeros pasos, guia inicial, configuracion inicial",
 		"onboarding bienvenida primer paso tutorial guia alta configuracion"},
+
+	// ── LOS DOS EJES QUE FALTABAN, y que el usuario nombro el 2026-08-30 cuando se le preguntó qué
+	// les faltaba a los diseños: PRESENCIA VISUAL y TERMINACIÓN DE PRODUCTO. Medido antes de
+	// agregarlos: de 1.736 entradas del acervo, 14 hablaban de un momento focal, 9 de terminación
+	// fina y 7 de contraste dramático — y NINGUNO de los 19 ejes los cubría, así que ese
+	// conocimiento era inalcanzable por ruteo aunque existiera. `jerarquia` y `color` son primos
+	// lejanos: hablan de ORDENAR y de PALETA, no de que algo IMPACTE ni de que esté TERMINADO.
+	{"presencia", "presencia visual: que la pantalla impacte y se recuerde. Escala grande de verdad, un solo protagonista, contraste dramatico, una decision visual que se note. No es orden ni paleta: es fuerza",
+		"presencia impacto escala protagonista dramatico audaz memorable enorme grande contundente foco focal fuerza"},
+	// TIPOGRAFIA — el hueco lo destapó una verificación, no una teoría: con los ejes desplegados,
+	// «que fuente uso para los titulos, que no se vea de plantilla» ruteaba a `dataviz`. Es de las
+	// palancas mas grandes del diseño y no tenia donde caer: `microcopy` es sobre las PALABRAS y
+	// `presencia` sobre la fuerza, ninguno sobre la letra.
+	{"tipografia", "tipografia: que fuentes usar y como componerlas. Pareja de display y cuerpo, escala de tamanos, peso, interletra, altura de linea, medida de la columna de texto",
+		"tipografia fuente fuentes tipo letra serif serifa sans display cuerpo interletra tracking kerning altura linea leading peso weight familia"},
+
+	{"terminacion", "terminacion de producto: los detalles que separan un boceto de software que se compra. Alineacion optica, cifras tabulares, estados completos, transiciones cortas, microtipografia",
+		"terminacion detalle acabado pulido optica optico tabular tabulares kerning microtipografia remate refinado estados transicion"},
 }
 
 // designEjeMinHits es cuántos términos del vocabulario de un eje tiene que compartir una tarjeta
@@ -152,11 +170,28 @@ var vocabDeEje = func() map[string]map[string]bool {
 	return m
 }()
 
-// ejesDeTarjeta etiqueta una tarjeta: devuelve los ejes cuyo vocabulario comparte al menos
-// designEjeMinHits términos con su topic + contenido.
+// ejesDeTarjeta etiqueta una tarjeta por DOS caminos, y el orden importa.
+//
+//  1. EL SLUG DECLARA. Si el topic es `design-corpus/<eje>-loquesea`, la tarjeta ES de ese eje y no
+//     se discute. Es exacto, sin ambigüedad, y le da a quien escribe una tarjeta una manera de
+//     ponerla donde quiere — igual que `design-method/` ya declara su naturaleza por prefijo.
+//     Apareció escribiendo las primeras 28 tarjetas de `presencia` y `terminacion`: sólo 6 y 5 de 14
+//     caían por vocabulario, porque el vocabulario lo había inventado yo en vez de sacarlo del
+//     material. Derivarlo del material tampoco sirvió: salían palabras genéricas de diseño
+//     («patrón», «elemento», «tamaño») que habrían etiquetado medio acervo.
+//  2. EL VOCABULARIO DESCUBRE. Para las 1.438 tarjetas que ya existían y nadie va a renombrar, el
+//     solape de términos sigue siendo el único camino. Los dos suman: el slug es preciso y el
+//     vocabulario es amplio.
 func ejesDeTarjeta(topic, contenido string) map[string]bool {
 	bolsa := palabrasNormalizadas(topic + " " + contenido)
 	out := map[string]bool{}
+	if slug := strings.TrimPrefix(topic, designCorpusPrefix); slug != topic {
+		for nombre := range vocabDeEje {
+			if strings.HasPrefix(slug, nombre+"-") {
+				out[nombre] = true
+			}
+		}
+	}
 	for nombre, vocab := range vocabDeEje {
 		hits := 0
 		for w := range vocab {

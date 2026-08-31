@@ -212,3 +212,35 @@ func (e *embebedorDeEje) EmbedBatch(ctx context.Context, txts []string) ([][]flo
 	}
 	return out, nil
 }
+
+// I-EJE6 · EL SLUG DECLARA EL EJE, Y EL VOCABULARIO NO PUEDE SER LA ÚNICA VÍA.
+//
+// Al sembrar las primeras 28 tarjetas de `presencia` y `terminacion`, sólo 6 y 5 de 14 caían por
+// vocabulario — porque el vocabulario lo había inventado yo en vez de sacarlo del material. Y
+// derivarlo del material tampoco servía: salían palabras genéricas de diseño («patrón», «elemento»,
+// «tamaño») que habrían etiquetado medio acervo. Quien escribe una tarjeta necesita una manera
+// EXACTA de decir a qué eje pertenece.
+//
+// SABOTAJE: sacar el camino del slug ⇒ una tarjeta que nombra su eje en el topic y no repite su
+// vocabulario en el cuerpo queda sin etiquetar, o sea inalcanzable por ruteo.
+func TestEjesElSlugDeclaraElEje(t *testing.T) {
+	// EL FIXTURE NO PUEDE ETIQUETARSE POR VOCABULARIO, o el test pasa por el otro camino y no prueba
+	// nada. La primera versión usaba el topic real `presencia-un-solo-protagonista`, que trae DOS
+	// palabras del vocabulario en el propio slug —«presencia» y «protagonista»— así que el sabotaje
+	// quedaba verde. Acá el resto del slug y el cuerpo evitan el vocabulario a propósito.
+	const cuerpo = "Antes de componer, decidí cuál es el único bloque que justifica abrir esto."
+	const slug = "presencia-el-bloque-que-manda"
+
+	// Guarda de la premisa: SIN el prefijo del eje, esto NO se etiqueta.
+	if control := ejesDeTarjeta(designCorpusPrefix+"otro-el-bloque-que-manda", cuerpo); control["presencia"] {
+		t.Fatal("el fixture etiqueta por vocabulario: el test pasaría sin el camino del slug")
+	}
+
+	ejes := ejesDeTarjeta(designCorpusPrefix+slug, cuerpo)
+	if !ejes["presencia"] {
+		t.Errorf("el slug declaraba 'presencia' y quedó sin etiquetar: %v", clavesDe(ejes))
+	}
+	if ejes["terminacion"] {
+		t.Errorf("el slug de presencia también reclamó terminacion: %v", clavesDe(ejes))
+	}
+}

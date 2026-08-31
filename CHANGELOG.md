@@ -7,6 +7,143 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La rotación por memoria: el motor no repite el esqueleto anterior de ese proyecto** (Musubi
+  Renaissance). Es el mecanismo que las skills del rubro tienen que **falsificar**: ellas estampan un
+  comentario en el CSS del artefacto esperando reencontrarlo la próxima vez, porque no tienen estado.
+  Musubi lo lee de la memoria del proyecto, con fecha y procedencia, y sobrevive a que se borre el
+  archivo y a que cambie la máquina.
+  - **El motor sigue siendo readOnly, y no es un rodeo: es la arquitectura.** En este código
+    `readOnly` decide la AUTORIZACIÓN — un principal con `write=none` sólo llama tools de lectura, y
+    el motor de diseño está marcado así a propósito para que la cabina y una sesión stdio puedan
+    diseñar. Escribir la historia lo volvería inalcanzable para todos los lectores, además de ponerlo
+    bajo candado exclusivo. Así que **escribe el caller**: el brief le pide que anote con qué forma
+    compuso.
+  - **La historia se llavea por el proyecto DEL PRINCIPAL, no por la marca pedida.** `brand` deja
+    diseñar a nombre de otro proyecto; llavear por marca haría que la sala de mando le escriba la
+    rotación a Altura.
+  - **`shape_history` se declara siempre**, con o sin historia, y pide la anotación. Si la nota sólo
+    apareciera cuando ya hay historia, nunca existiría la primera y la rotación no arrancaría jamás.
+  - **La nota se lee con tolerancia.** La escribe un agente, no un formato: se reconocen
+    `tabla-densa`, «tabla densa» en prosa y `forma: TABLA DENSA · fecha`. Exigir estructura exacta
+    apagaría la rotación —en silencio— ante la primera nota redactada distinto.
+  - 4 invariantes, cada sabotaje visto en rojo. Dos de los sabotajes **no compilaban** en su primera
+    versión (variable sin usar), así que el test fallaba por el build y no por el invariante: un
+    sabotaje que no compila es un sabotaje que no se ejecutó.
+
+### Added
+- **La capa de FORMA: el brief propone el esqueleto de la pantalla** (Musubi Renaissance). Hasta acá
+  el brief decía DE QUÉ HABLA el pedido —el eje— y nunca QUÉ FORMA tiene la pantalla. Según el
+  consenso del campo anti-slop, eso es la causa real de que un diseño generado se reconozca: *«la
+  igualdad ESTRUCTURAL es la huella de la IA, no la visual»*.
+  - **El catálogo es nuestro, y no por orgullo:** las 21 macroestructuras de referencia (bento,
+    manifiesto, especimen tipográfico, carta) están pensadas para landings, y de nuestros 67 pedidos
+    dorados la mayoría son tablas de inventario y tableros de planta. Las 12 formas salieron de
+    agrupar esos 67 pedidos **por esqueleto y no por tema**: cubren el **96 %**.
+  - Los 3 que no caen —«estado vacío», «actividad reciente», «modo oscuro»— **no son formas de
+    pantalla**, y que queden afuera valida el corte: el vacío es un ESTADO de otra forma.
+  - **El motor acota, no elige.** Sirve 2-3 candidatas con su descripción y el agente decide: elegir
+    es un juicio y el camino caliente es model-free. Un eje que es una PROPIEDAD —color, a11y,
+    tipografía, terminación— no propone forma.
+  - 5 invariantes, cada sabotaje visto en rojo. Uno es el defecto que se le encontró a otra skill del
+    rubro auditándola: **toda forma referenciada existe en el catálogo**, y al revés, una forma que
+    ningún eje alcanza es material muerto.
+
+### Fixed
+- **El bloque de forma podía emitir el encabezado sin ninguna opción** — un brief que dice «elegí UNA
+  de estas» y no lista ninguna, que es peor que no mandar nada. Lo destapó un sabotaje que quedaba
+  VERDE porque el test comparaba contra la cadena vacía y la función devolvía el encabezado solo.
+  Ahora el test **cuenta opciones**.
+
+### Added
+- **Dos ejes nuevos en la taxonomía de diseño: presencia y terminación**, más 28 tarjetas que los
+  llenan. Sale de preguntarle al usuario con diseños delante, no de una teoría: en una prueba a
+  ciegas nombró **presencia visual** y **terminación de producto** como lo que faltaba.
+  - **La carencia era literal.** De 1.736 entradas del acervo: 14 hablaban de un momento focal, 9 de
+    terminación fina, 7 de contraste dramático — contra 126 de escala tipográfica y cientos de
+    validación y tablas. Y ninguno de los 19 ejes lo cubría: jerarquía habla de ordenar y color de
+    paleta, no de fuerza ni de acabado. Ese conocimiento era **inalcanzable por ruteo aunque
+    existiera**: en producción, «que esta pantalla impacte» ruteaba a a11y y «terminar como
+    producto» a movil.
+  - **El slug declara el eje.** Un topic `design-corpus/<eje>-loquesea` pertenece a ese eje sin
+    depender del vocabulario. Apareció porque al sembrar las 28 primeras sólo 6 y 5 de 14 caían: el
+    vocabulario lo había inventado yo en vez de sacarlo del material. Derivarlo del material tampoco
+    servía — salían palabras genéricas de diseño que habrían etiquetado medio acervo.
+
+### Fixed
+- **`musubi_save_observation` acepta `project_id`, que el handler ya leía.** El parámetro existía y
+  pasaba por la misma guarda fail-closed que `musubi_ingest_url` (`writeOriginFor`: sólo lo respeta
+  una credencial write=any), pero **nunca se declaró en el schema**, así que no se podía invocar. Sin
+  esto, la única puerta para sembrar un acervo compartido era ingerir una URL.
+
+### Added
+- **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
+  usuario, no de una teoría.
+  - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
+    (completo / sin corpus / sin brief), mezclados— y eligió **uno de cada condición**, que es lo
+    que saldría al azar: **el contenido del brief no determinaba lo que prefiere**. Sobre los tres
+    dijo lo mismo, «no son tan potentes», y al preguntarle qué faltaba nombró **presencia visual** y
+    **terminación de producto**.
+  - **El diagnóstico:** todo lo que el brief traía era para **no equivocarse** — precedencia, tokens,
+    anchos de celda, y un bloque de rechazo que empuja aún más a lo conservador. No había una sola
+    línea pidiendo una decisión fuerte. Medido contra el acervo, además, el conocimiento falta: de
+    1.736 entradas, **14** hablan de un momento focal, **9** de terminación fina y **7** de contraste
+    dramático, contra cientos de validación y tablas.
+  - El bloque nuevo va **antes** del de rechazo a propósito, e incluye **cómo conviven**: la
+    exigencia dice DÓNDE gastar la audacia —en un solo lugar— y la prohibición dónde no. Sin esa
+    frase, el agente recibe orden y contraorden y baja las dos, que es lo que venía pasando.
+  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767 (techo 3.900),
+    M5 0,45 — no bajó.
+
+### Fixed
+- **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
+  la segunda prueba a ciegas: «esas rayitas no me gustan, se ven muy raras». Vale anotar cómo se
+  perdió: la lista de tells de TidyFactor/Styler lo trae como su número 7 y se descartó entera por
+  construir la nuestra desde el acervo propio. No copiar sigue estando bien; lo que estuvo mal fue no
+  mirar lo ajeno como **hipótesis a verificar**. Y es un tic propio, usado por reflejo para marcar
+  importancia sin ganársela con jerarquía.
+
+### Changed
+- **El set dorado del banco pasa de 16 a 67 pedidos** (201 formas), y al hacerlo corrigió un número
+  que veníamos reportando mal.
+  - **Por qué:** un bootstrap pareado sobre los 16 originales dio una semi-amplitud de IC del 95 %
+    de **0,188** — el instrumento no distinguía 0,50 de 0,60, y todas las decisiones que quedan del
+    track dependen de diferencias de ese tamaño. Hacen falta ~64 pedidos para bajarla a 0,094.
+  - **De dónde salen los 51 nuevos:** pantallas que EXISTEN — 16 páginas del CRM, 11 vistas del
+    cuerpo, 6 lentes del panel del cerebro, 6 superficies de Altura y 12 tareas genéricas. Los ejes
+    del CRM se cruzaron contra marcadores **medidos en su código** (`<table>`, `<form>`,
+    `Recharts`, `isLoading`…), no contra lo que se supusiera de esas pantallas.
+  - 🔴 **LO QUE REVELÓ: M1 real es 0,32, no 0,50.** Los 16 pedidos originales eran más fáciles que
+    la realidad. La mejora relativa medida antes y después sobre el MISMO set sigue en pie; lo que
+    estaba inflado era el nivel absoluto. M3 0,27 → 0,24 por la misma razón.
+  - ⚠️ **Sesgo declarado dentro del propio archivo:** las tres paráfrasis de cada pedido las escribió
+    el mismo agente que mide el motor. Si se parecen más entre sí de lo que se parecería el pedido de
+    otra persona, M1 sale mejor de lo que es.
+### Added
+- **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
+  usuario, no de una teoría.
+  - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
+    (completo / sin corpus / sin brief), mezclados— y eligió **uno de cada condición**, que es lo
+    que saldría al azar: **el contenido del brief no determinaba lo que prefiere**. Sobre los tres
+    dijo lo mismo, «no son tan potentes», y al preguntarle qué faltaba nombró **presencia visual** y
+    **terminación de producto**.
+  - **El diagnóstico:** todo lo que el brief traía era para **no equivocarse** — precedencia, tokens,
+    anchos de celda, y un  que empuja aún más a lo conservador. No había una línea pidiendo
+    una decisión fuerte. Medido contra el acervo, además, el conocimiento falta: de 1.736 entradas,
+    **14** hablan de un momento focal, **9** de terminación fina y **7** de contraste dramático.
+  - El bloque  va **antes** de  a propósito, e incluye **cómo conviven**: la exigencia
+    dice DÓNDE gastar la audacia —en un lugar— y la prohibición dónde no. Sin esa frase el agente
+    recibe orden y contraorden y baja las dos.
+  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767, M5 0,45 (no bajó).
+
+### Fixed
+- **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
+  la segunda prueba a ciegas («esas rayitas no me gustan, se ven muy raras»). Vale anotar cómo se
+  perdió: la lista de TidyFactor/Styler lo trae como su #7 y se descartó entera por construir la
+  nuestra desde el acervo propio. No copiar sigue estando bien; lo que estuvo mal fue no mirar lo
+  ajeno como hipótesis a verificar.
+
+
 ### Fixed
 - **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
   Reproducido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
