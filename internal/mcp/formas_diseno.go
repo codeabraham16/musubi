@@ -137,3 +137,82 @@ func formasPara(eje string, usadas map[string]bool) string {
 	}
 	return b.String()
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// LA ROTACIÓN POR MEMORIA
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+// formaUsadaTopic es donde el CALLER anota qué forma usó al entregar. Vive en el proyecto de quien
+// diseña, no en el acervo compartido: la historia de formas es de cada proyecto.
+const formaUsadaTopic = "diseno/forma-usada"
+
+// EL MOTOR NO ESCRIBE, Y NO ES UN RODEO: ES LA ARQUITECTURA.
+//
+// `musubi_design` está declarada readOnly, y en este código readOnly decide la AUTORIZACIÓN — un
+// principal con write=none sólo puede llamar tools de lectura. Está así a propósito para que la
+// cabina del cuerpo y una sesión stdio puedan diseñar. Si el motor escribiera para recordar la
+// forma anterior habría que marcarla readOnly=false, y eso le sacaría el motor de diseño a todos
+// los lectores, además de ponerla bajo candado exclusivo en cada llamada.
+//
+// Así que escribe el CALLER: el brief le pide que, al entregar, guarde con qué forma lo hizo. Es la
+// misma división que ya sostiene todo el motor —el cerebro sirve conocimiento, el agente compone— y
+// la misma que hace posible que el camino caliente sea model-free.
+//
+// De paso: es exactamente el mecanismo que las skills del rubro tienen que falsificar. Ellas
+// estampan un comentario en el CSS del artefacto esperando reencontrarlo la próxima vez, porque no
+// tienen estado. Nosotros tenemos un cerebro que recuerda por proyecto, con fecha y procedencia, y
+// sobrevive a que se borre el archivo y a que cambie la máquina.
+
+// formasUsadasPor lee del proyecto la última forma anotada. Devuelve el conjunto a excluir y si
+// había historia — las dos cosas, porque «no hay historia» y «hay historia y da vacío» son
+// distintas y el brief las declara distinto.
+//
+// La clave es el proyecto DEL PRINCIPAL, no la marca pedida. Son cosas distintas y se confunden
+// fácil: `musubi_design` acepta `brand` para diseñar a nombre de otro proyecto, y si la historia se
+// llaveara por marca, la sala de mando le escribiría la rotación a Altura.
+func (s *McpServer) formasUsadasPor(proyecto string) (usadas map[string]bool, hubo bool) {
+	if strings.TrimSpace(proyecto) == "" {
+		return nil, false
+	}
+	txt, found, err := s.engine.LatestObservationByTopicInProject(formaUsadaTopic, proyecto)
+	if err != nil || !found {
+		return nil, false
+	}
+	// El contenido lo escribe un agente, así que se lee con tolerancia: alcanza con que el nombre
+	// de una forma del catálogo aparezca ahí adentro. Exigir un formato exacto haría que la
+	// rotación se apague ante la primera nota escrita a mano, y se apagaría en silencio.
+	bajo := strings.ToLower(txt)
+	usadas = map[string]bool{}
+	for clave, f := range formasDeDiseno {
+		if strings.Contains(bajo, clave) || strings.Contains(bajo, strings.ToLower(f.Nombre)) {
+			usadas[clave] = true
+		}
+	}
+	if len(usadas) == 0 {
+		return nil, false
+	}
+	return usadas, true
+}
+
+// notaDeRotacion es lo que el brief le pide al caller para que la rotación exista la próxima vez.
+// Va SIEMPRE que haya bloque de forma: si sólo apareciera cuando ya hay historia, nunca habría una
+// primera anotación y el mecanismo no arrancaría jamás.
+func notaDeRotacion(hubo bool) string {
+	base := "Al entregar, guardá con qué forma compusiste: musubi_save_observation con topic_key='" +
+		formaUsadaTopic + "' y el nombre de la forma en el contenido. Es lo que hace que el próximo " +
+		"diseño de este proyecto no repita el mismo esqueleto."
+	if hubo {
+		return "HISTORIA: este proyecto ya usó otra forma hace poco y quedó excluida de las candidatas de arriba. " + base
+	}
+	return "HISTORIA: no hay registro de formas anteriores en este proyecto, así que las candidatas de arriba son todas. " + base
+}
+
+// proyectoDelPrincipal devuelve el tenant de quien llama, o "" si no hay principal (stdio local).
+// Existe como función y no inline para que quede UN solo lugar donde se decide de quién es la
+// historia de formas — el bug fácil acá es tomarla del argumento `brand`.
+func proyectoDelPrincipal(p *Principal) string {
+	if p == nil {
+		return ""
+	}
+	return p.ProjectID
+}
