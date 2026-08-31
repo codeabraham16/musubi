@@ -47,6 +47,15 @@ var tellsDeDiseno = []tellDiseno{
 	{"", "NO uses el color como adorno. Un tono se gana teniendo un trabajo — estado, categoría, o el acento de la marca. Repartirlo por todos lados lo vacía."},
 	{"", "NO inventes datos para llenar la pantalla. Un vacío se explica diciendo qué lo va a llenar; un error NUNCA se disfraza de dato."},
 	{"", "NO tapes un layout flojo con sombras, glows o gradientes. Si la composición no se sostiene en gris, no la arregla el brillo."},
+	// ── Este tell entró el 2026-08-30 por el camino más caro y más confiable: el usuario lo vio.
+	// En una prueba a ciegas eligió los tres diseños del brief nuevo y sobre uno dijo «esas rayitas
+	// no me gustan, se ven muy raras», señalando la franja de color al costado de un bloque de
+	// alerta. Vale anotar cómo se perdió: la lista de tells de TidyFactor/Styler lo trae como su
+	// #7 («arbitrary 4px colored left-borders on content cards») y yo lo descarté entero por
+	// construir la lista desde NUESTRO acervo. La decisión de no copiar sigue siendo correcta; lo
+	// que estuvo mal fue no mirar lo ajeno como hipótesis a verificar. Y es un tic propio: lo uso
+	// por reflejo cuando quiero marcar importancia sin ganármela con jerarquía.
+	{"", "NO uses una franja de color al costado de un bloque para marcar que importa. Es adorno con cara de semántica: no dice QUÉ pasa ni CUÁNTO, y se lee como decoración pegada. Si algo importa, ganátelo con escala, peso o superficie — no con una rayita."},
 
 	// ── POR EJE.
 	{"jerarquia", "NO destaques todo. Lo que se destaca se define por lo que NO se destaca; si todo pesa igual, el ojo no tiene por dónde entrar."},
