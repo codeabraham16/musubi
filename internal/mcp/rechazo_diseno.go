@@ -57,6 +57,29 @@ var tellsDeDiseno = []tellDiseno{
 	// por reflejo cuando quiero marcar importancia sin ganármela con jerarquía.
 	{"", "NO uses una franja de color al costado de un bloque para marcar que importa. Es adorno con cara de semántica: no dice QUÉ pasa ni CUÁNTO, y se lee como decoración pegada. Si algo importa, ganátelo con escala, peso o superficie — no con una rayita."},
 
+	// ── LA CARA DE «HECHO POR IA», 2026 ─────────────────────────────────────────────────────
+	// Estos NO salieron del acervo: salieron de mirar qué produce hoy un modelo cuando no se le
+	// exige nada, y de la lista de TidyFactor/Styler. Se traen como HIPÓTESIS VERIFICABLES y no
+	// como copia — la distinción dejó de ser teórica el 2026-08-30, cuando el usuario señaló la
+	// franja de color al costado (el #7 de esa lista) sin conocerla. Discardar lo ajeno entero
+	// costó ese tell; verificarlo es lo que corresponde.
+	//
+	// Ojo con la fecha: el look de IA SE MUEVE. El violeta-a-azul de 2024 ya no engaña a nadie y
+	// el crema con serifas de 2026 sí. Esta lista se revisa, no se acumula.
+	{"", "NO caigas en las dos paletas por defecto de 2026: crema #F4F1EA con serifa de display y acento terracota, o casi-negro con un solo acento verde ácido o bermellón. Las dos se reconocen a un metro. Elegir una a propósito para una marca que la pide está bien; llegar a ella sin decidir es la firma de que nadie eligió."},
+	{"layout", "NO abras con un degradado violeta-a-azul de ancho completo. Es el hero de plantilla; ya no dice «moderno», dice «no había dirección de arte»."},
+	{"", "NO pongas el mismo radio grande en todo. `rounded-2xl` en tarjetas, botones, inputs y avatares por igual es el tell más rápido de interfaz sin terminar. El radio tiene jerarquía: píldoras full, controles 8-12, superficies 12-16, y el contenedor siempre mayor que su contenido."},
+	{"layout", "NO pongas la misma sombra en todo. `shadow-lg` en cada bloque aplana la jerarquía en vez de crearla: si todo flota a la misma altura, nada está adelante."},
+	{"layout", "NO centres todo. Una página donde cada bloque está centrado no tiene composición, tiene una columna. La alineación a la izquierda es la que deja leer; el centrado se reserva para lo que de verdad es un momento."},
+	{"jerarquia", "NO pongas un eyebrow en mayúsculas arriba de cada sección. Un rótulo tracked-out sobre cada título deja de jerarquizar apenas se repite: es ornamento con forma de estructura."},
+	{"jerarquia", "NO numeres cosas que no son una secuencia. Los marcadores 01/02/03 sólo informan si el orden importa de verdad; sobre tres beneficios sueltos, son decoración que finge método."},
+	{"microcopy", "NO uses emoji como marcador de sección ni como ícono de sistema. En una interfaz de trabajo se lee como plantilla, y encima cambia de forma según el sistema operativo de quien mira."},
+	{"color", "NO apliques degradado al texto. `background-clip: text` sobre un titular es el recurso que se usa cuando el titular no se sostiene solo, y en cuerpos de texto además arruina la legibilidad."},
+	{"a11y", "NO uses gris tenue para lo que hay que leer. #94a3b8 sobre blanco no llega a 4.5:1: se ve elegante en el mock y desaparece en una pantalla real con luz."},
+	{"color", "NO llenes el fondo con grillas de plano, mallas de puntos o glows ambientales. Decoran el vacío en vez de resolverlo; si la sección necesita textura para no verse pobre, lo que falta es contenido o jerarquía."},
+	{"motion", "NO animes todo al mismo tiempo al entrar. Diez elementos apareciendo en cascada no es una entrada orquestada: es que se aplicó el mismo efecto a todo. Si algo se anima, que sea porque merece la atención."},
+	{"", "NO entregues un componente que se vería igual en un ERP, un e-commerce y un blog. Si el mismo bloque sirve para cualquier rubro sin tocarlo, no está diseñado para éste: está tomado de un catálogo."},
+
 	// ── POR EJE.
 	{"jerarquia", "NO destaques todo. Lo que se destaca se define por lo que NO se destaca; si todo pesa igual, el ojo no tiene por dónde entrar."},
 	{"microcopy", "NO expliques con texto lo que el diseño debería mostrar solo. Un cartel que aclara la interfaz es una interfaz que falló."},

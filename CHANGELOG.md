@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La capa de FORMA: el brief propone el esqueleto de la pantalla** (Musubi Renaissance). Hasta acá
+  el brief decía DE QUÉ HABLA el pedido —el eje— y nunca QUÉ FORMA tiene la pantalla. Según el
+  consenso del campo anti-slop, eso es la causa real de que un diseño generado se reconozca: *«la
+  igualdad ESTRUCTURAL es la huella de la IA, no la visual»*.
+  - **El catálogo es nuestro, y no por orgullo:** las 21 macroestructuras de referencia (bento,
+    manifiesto, especimen tipográfico, carta) están pensadas para landings, y de nuestros 67 pedidos
+    dorados la mayoría son tablas de inventario y tableros de planta. Las 12 formas salieron de
+    agrupar esos 67 pedidos **por esqueleto y no por tema**: cubren el **96 %**.
+  - Los 3 que no caen —«estado vacío», «actividad reciente», «modo oscuro»— **no son formas de
+    pantalla**, y que queden afuera valida el corte: el vacío es un ESTADO de otra forma.
+  - **El motor acota, no elige.** Sirve 2-3 candidatas con su descripción y el agente decide: elegir
+    es un juicio y el camino caliente es model-free. Un eje que es una PROPIEDAD —color, a11y,
+    tipografía, terminación— no propone forma.
+  - 5 invariantes, cada sabotaje visto en rojo. Uno es el defecto que se le encontró a otra skill del
+    rubro auditándola: **toda forma referenciada existe en el catálogo**, y al revés, una forma que
+    ningún eje alcanza es material muerto.
+
+### Fixed
+- **El bloque de forma podía emitir el encabezado sin ninguna opción** — un brief que dice «elegí UNA
+  de estas» y no lista ninguna, que es peor que no mandar nada. Lo destapó un sabotaje que quedaba
+  VERDE porque el test comparaba contra la cadena vacía y la función devolvía el encabezado solo.
+  Ahora el test **cuenta opciones**.
+
+### Added
 - **Dos ejes nuevos en la taxonomía de diseño: presencia y terminación**, más 28 tarjetas que los
   llenan. Sale de preguntarle al usuario con diseños delante, no de una teoría: en una prueba a
   ciegas nombró **presencia visual** y **terminación de producto** como lo que faltaba.
