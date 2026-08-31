@@ -94,6 +94,13 @@ var ejesDeDiseno = []ejeDiseno{
 	// lejanos: hablan de ORDENAR y de PALETA, no de que algo IMPACTE ni de que esté TERMINADO.
 	{"presencia", "presencia visual: que la pantalla impacte y se recuerde. Escala grande de verdad, un solo protagonista, contraste dramatico, una decision visual que se note. No es orden ni paleta: es fuerza",
 		"presencia impacto escala protagonista dramatico audaz memorable enorme grande contundente foco focal fuerza"},
+	// TIPOGRAFIA — el hueco lo destapó una verificación, no una teoría: con los ejes desplegados,
+	// «que fuente uso para los titulos, que no se vea de plantilla» ruteaba a `dataviz`. Es de las
+	// palancas mas grandes del diseño y no tenia donde caer: `microcopy` es sobre las PALABRAS y
+	// `presencia` sobre la fuerza, ninguno sobre la letra.
+	{"tipografia", "tipografia: que fuentes usar y como componerlas. Pareja de display y cuerpo, escala de tamanos, peso, interletra, altura de linea, medida de la columna de texto",
+		"tipografia fuente fuentes tipo letra serif serifa sans display cuerpo interletra tracking kerning altura linea leading peso weight familia"},
+
 	{"terminacion", "terminacion de producto: los detalles que separan un boceto de software que se compra. Alineacion optica, cifras tabulares, estados completos, transiciones cortas, microtipografia",
 		"terminacion detalle acabado pulido optica optico tabular tabulares kerning microtipografia remate refinado estados transicion"},
 }
