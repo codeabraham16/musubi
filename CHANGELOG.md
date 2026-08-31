@@ -8,6 +8,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Las tres formas candidatas se ELIGEN por contraste, no se buscan en una tabla.** `formasPorEje`
+  era un mapa fijo de eje → exactamente tres formas, así que para `tabla` salían siempre las mismas y
+  la rotación sólo excluía la del pedido anterior. El defecto es medible: dos pedidos opuestos —«esta
+  tabla no se puede comparar» y «esta tabla no me dice qué hacer»— recibían **las mismas tres
+  candidatas**. El motor no tenía por dónde enterarse de que son problemas distintos.
+  - Cada forma gana un **perfil de seis dimensiones** (densidad, comparación, decisión, profundidad,
+    guía, presencia) y el mapa pasa a ser el **pozo de lo plausible** (cinco o seis por eje). Las tres
+    que viajan se eligen por **mérito en lo que se pidió ganar + contraste entre sí**, y cada una llega
+    etiquetada con en qué gana — derivado del perfil, no escrito aparte.
+  - Sigue siendo model-free: una tabla de perfiles, distancia Manhattan y selección greedy max-min —
+    la misma familia que el MMR que ya usa el corpus. Elegir cuál de las tres se usa lo sigue haciendo
+    el agente.
+- **`keep` y `change`: las dos mitades de un rediseño.** `musubi_design` no tenía dónde decir qué se
+  **conserva**, y no era sólo un campo que faltaba: la consulta se recorta a dos oraciones antes de
+  buscar en el acervo, así que en un pedido real —*«rediseñá las notas, mantené la esencia, pero
+  cambiá modelos y cuadrículas»*— **la mitad de «conservar» se caía del buscador**. El motor salía a
+  buscar material de rediseño sin saber qué no podía tocar. Ahora viajan enteras y `change` decide
+  qué dimensiones separan a las candidatas.
+- **Skill `redisenar`**: la mitad que no puede vivir en el motor. Destila el pedido en keep/change,
+  pregunta sólo lo que cambia el trabajo, muestra los tres modelos como bocetos —barato de
+  descartar— y recién compone el elegido entero. Preguntar es un juicio y el camino caliente es
+  model-free: por eso es una skill y no una rama del motor.
+
+### Fixed
+- **Se proponía lo más lejano en vez de lo mejor.** La primera versión del contraste sólo maximizaba
+  distancia, y al pedido «esta tabla no se puede comparar» le contestaba con «detalle con lados», que
+  tiene comparación 0: la distancia premia igual subir que bajar, y una tabla ya está arriba, así que
+  lo más lejano era lo **peor** en lo que se estaba pidiendo. Lo nombrado pasa a ser **mérito**.
+- **Una palabra estructural tapaba a una específica.** «cambiar modelos, cuadrículas» cortocircuitaba
+  en `modelo` y devolvía las seis dimensiones, con lo que el pedido de Altura recibía exactamente lo
+  mismo que un pedido sin intención ninguna.
+
+### Added
 - **El motor decide los números, no los adjetivos** (Musubi Renaissance). Medido contra el central
   sobre un pedido real —tabla densa de inventario, marca Altura, target web— contando valores
   concretos (hex, px, ms, ch, razones de contraste) por bloque del brief:

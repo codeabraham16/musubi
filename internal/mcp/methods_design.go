@@ -350,6 +350,17 @@ type designBrief struct {
 	// que use. Va SIEMPRE que haya bloque de forma: si sólo apareciera cuando ya hay historia, nunca
 	// existiría la primera anotación y la rotación no arrancaría nunca.
 	ShapeHistory string `json:"shape_history,omitempty"`
+	// Keep es lo que el rediseno CONSERVA, dicho por quien pide (intencion_diseno.go). Va ANTES de
+	// `shape` porque condiciona la eleccion de forma: es el punto del que hay que alejarse.
+	//
+	// Existe como campo propio y no dentro de `prompt` por una razon medida: la consulta se recorta a
+	// `designConsultaFrases` oraciones y `designConsultaMax` chars antes de buscar en el acervo, y en
+	// un pedido de rediseno la mitad de «conservar» viene despues de las dos primeras oraciones. O
+	// sea que se caia justo la parte que dice que NO tocar.
+	Keep string `json:"keep,omitempty"`
+	// Change es lo que el rediseno ATACA. Ademas de viajar como bloque, decide QUE dimensiones
+	// separan a las formas candidatas: sin esto, dos pedidos opuestos recibian las mismas tres.
+	Change string `json:"change,omitempty"`
 	// Scale son LOS NÚMEROS (escala_diseno.go): escala tipográfica, interlineado, tracking, ritmo de
 	// espaciado, alto de fila, duraciones, contraste. Va pegado a `shape` porque el registro numérico
 	// SALE de la forma, y va antes de `demand` porque la exigencia se cumple con números.
@@ -403,6 +414,8 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Target string `json:"target"`
 		Brand  string `json:"brand"`
 		Limit  int    `json:"limit"`
+		Keep   string `json:"keep"`
+		Change string `json:"change"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -442,12 +455,14 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// LA ROTACIÓN (formas_diseno.go). Se llavea por el proyecto DEL PRINCIPAL y no por la marca
 	// pedida: `brand` deja diseñar a nombre de otro proyecto, y llavear por marca haría que la sala
 	// de mando le escriba la rotación a Altura.
+	intencion := intencionDeDiseno{Keep: args.Keep, Change: args.Change}
+
 	var forma, notaDeForma string
 	var candidatas []string
 	if len(formasPorEje[rec.Eje]) > 0 {
 		usadas, hubo := s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))
-		candidatas = candidatasDeForma(rec.Eje, usadas)
-		forma = formasPara(rec.Eje, usadas)
+		candidatas = candidatasDeForma(rec.Eje, usadas, intencion)
+		forma = formasPara(rec.Eje, usadas, intencion)
 		notaDeForma = notaDeRotacion(hubo)
 	}
 
@@ -466,6 +481,8 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Principles:      designPrinciples,
 		Shape:           forma,
 		ShapeHistory:    notaDeForma,
+		Keep:            bloqueDeConservacion(args.Keep),
+		Change:          bloqueDeCambio(args.Change),
 		Scale:           escalaPara(candidatas),
 		Demand:          exigenciasPara(rec.Eje),
 		Avoid:           tellsPara(rec.Eje),
@@ -1215,6 +1232,8 @@ func (s *McpServer) designToolEntry() toolEntry {
 					"target": {Type: "string", Description: "Formato de ENTREGA que orienta el brief: 'painter' (spec de bloques del cuerpo/Lienzo) | 'web' (React + Tailwind + tokens, para CRM/Altura) | 'html' (mock HTML autocontenido) | 'any' (default: el caller elige el mejor)."},
 					"brand":  {Type: "string", Description: "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."},
 					"limit":  {Type: "number", Description: "Cuántos patrones del acervo traer (default 6, máximo 100)."},
+					"keep":   {Type: "string", Description: "Opcional, para un REDISEÑO: qué se CONSERVA — la esencia, la identidad, lo que ya funciona, y de qué forma parte hoy la pantalla ('hoy es una tabla densa'). El motor lo usa para saber de dónde ALEJARSE al proponer formas, y lo sirve como bloque para que no se pise lo que no había que tocar. Sin esto, la mitad de 'conservar' se pierde: la consulta se recorta a 2 oraciones para buscar en el acervo."},
+					"change": {Type: "string", Description: "Opcional, para un REDISEÑO: qué se ATACA ('cambiar el modelo y las cuadrículas', 'no se puede comparar nada', 'no me dice qué hacer'). Determina QUÉ dimensiones mueven las formas candidatas —densidad, comparación, decisión, profundidad, guía, presencia—, así que dos pedidos distintos reciben propuestas distintas en vez de las mismas tres de siempre."},
 				},
 				Required: []string{"prompt"},
 			},
