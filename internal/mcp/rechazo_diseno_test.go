@@ -90,3 +90,32 @@ func TestRechazoCadaTellDiceElPorQue(t *testing.T) {
 		}
 	}
 }
+
+// I-RCH5 · LOS TELLS DE «CARA DE IA» LLEVAN SU AÑO, PORQUE CADUCAN.
+//
+// El look de una interfaz generada se mueve cada ~18 meses: el violeta-a-azul de 2024 ya no engaña
+// a nadie y el crema con serifas de 2026 sí. Una lista que sólo acumula termina prohibiendo cosas
+// que dejaron de ser un tell y dejando pasar las que sí lo son — y nadie la revisa si no dice
+// cuándo se escribió.
+//
+// SABOTAJE: sacar el año del bloque ⇒ este test se pone rojo y la lista pierde su fecha de revisión.
+func TestRechazoLosTellsDeIALlevanSuAnio(t *testing.T) {
+	// El año vive en el comentario del bloque, así que se verifica sobre el texto de los tells que
+	// nombran defaults concretos: si una paleta se cita como «el default de <año>», el año está.
+	var conAnio, deDefault int
+	for _, x := range tellsDeDiseno {
+		if !strings.Contains(x.Texto, "por defecto") && !strings.Contains(x.Texto, "default") {
+			continue
+		}
+		deDefault++
+		if strings.Contains(x.Texto, "2026") || strings.Contains(x.Texto, "2027") {
+			conAnio++
+		}
+	}
+	if deDefault == 0 {
+		t.Fatal("no hay ningún tell sobre defaults de la época: la lista anti-IA se vació")
+	}
+	if conAnio == 0 {
+		t.Errorf("%d tells citan un look «por defecto» y ninguno dice de qué año: la lista no se puede revisar", deDefault)
+	}
+}
