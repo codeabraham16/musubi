@@ -30,6 +30,10 @@
               "description": ""
             }
           },
+          "project_id": {
+            "type": "string",
+            "description": "Opcional: tenant DESTINO de la escritura, para sembrar un acervo compartido (ej. 'musubi-design'). Es un ORIGEN DECLARADO que sólo respeta una credencial write=any; una write=own lo ignora y escribe en el suyo, así que no abre la muralla entre proyectos. Vacío ⇒ el proyecto de la credencial."
+          },
           "topic_key": {
             "type": "string",
             "description": "Clave de agrupación temática (ej. architecture/auth)"
