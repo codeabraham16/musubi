@@ -28,7 +28,7 @@ import (
 	"strings"
 )
 
-// Las seis dimensiones en las que una forma puede destacar. Son las que DISCRIMINAN el catálogo: se
+// Las siete dimensiones en las que una forma puede destacar. Son las que DISCRIMINAN el catálogo: se
 // eligieron porque separan las doce formas, no porque suenen bien. Una dimensión en la que todas
 // puntúan parecido no sirve para elegir por contraste — es peso muerto que diluye la distancia.
 const (
@@ -38,6 +38,7 @@ const (
 	dimProfundidad        // si podés entrar al detalle sin cambiar de pantalla
 	dimGuia               // si te lleva paso a paso
 	dimPresencia          // si tiene un momento visual que se recuerda
+	dimVivo               // si muestra lo que está pasando AHORA
 	dimsTotal
 )
 
@@ -49,6 +50,7 @@ var nombreDim = [dimsTotal]string{
 	dimProfundidad: "profundidad",
 	dimGuia:        "guía",
 	dimPresencia:   "presencia",
+	dimVivo:        "estado en vivo",
 }
 
 // perfilDeForma puntúa cada forma de 0 a 3 en cada dimensión. Es el corazón del contraste: dos formas
@@ -60,20 +62,27 @@ var nombreDim = [dimsTotal]string{
 // (decisión 0); un tablero de un número te lo dice de un vistazo (decisión 3, presencia 3) y no
 // compara nada (0). El invariante C-CON1 verifica que no haya dos perfiles idénticos.
 var perfilDeForma = map[string][dimsTotal]int{
-	//                     dens comp deci prof guia pres
-	"tabla-densa":       {3, 3, 0, 1, 0, 0},
-	"rejilla-temporal":  {3, 3, 1, 0, 0, 1},
-	"monitor-procesos":  {2, 2, 2, 1, 0, 1},
-	"catalogo-elegir":   {2, 2, 1, 1, 1, 1},
-	"lista-priorizada":  {1, 1, 3, 0, 1, 1},
-	"tablero-un-numero": {0, 0, 3, 0, 0, 3},
-	"detalle-con-lados": {1, 0, 1, 3, 0, 1},
-	"lienzo-inspector":  {2, 1, 0, 3, 0, 2},
-	"formulario-guiado": {0, 0, 1, 1, 3, 0},
-	"narrativa":         {0, 0, 0, 2, 3, 3},
-	"interrupcion":      {0, 0, 3, 0, 2, 2},
-	"conversacion":      {1, 0, 1, 1, 1, 2},
+	//                     dens comp deci prof guia pres vivo
+	"tabla-densa":       {3, 3, 0, 1, 0, 0, 0},
+	"rejilla-temporal":  {3, 3, 1, 0, 0, 1, 1},
+	"monitor-procesos":  {2, 2, 2, 1, 0, 1, 3},
+	"catalogo-elegir":   {2, 2, 1, 1, 1, 1, 0},
+	"lista-priorizada":  {1, 1, 3, 0, 1, 1, 1},
+	"tablero-un-numero": {0, 0, 3, 0, 0, 3, 1},
+	"detalle-con-lados": {1, 0, 1, 3, 0, 1, 0},
+	"lienzo-inspector":  {2, 1, 0, 3, 0, 2, 1},
+	"formulario-guiado": {0, 0, 1, 1, 3, 0, 0},
+	"narrativa":         {0, 0, 0, 2, 3, 3, 0},
+	"interrupcion":      {0, 0, 3, 0, 2, 2, 1},
+	// La conversación NO gana en presencia: puntuaba 2 ahí sólo por ser el menos bajo de sus seis
+	// valores, y el brief terminaba afirmando que un chat destaca por su momento visual. Lo que un
+	// chat sí hace es avanzar de a poco —preguntás, contesta, actuás— y acompañar: decisión y guía.
+	"conversacion": {1, 0, 2, 1, 1, 1, 2},
 }
+
+// destacaPiso es cuánto hay que puntuar para poder AFIRMAR que se gana en algo. Dos de tres: con uno
+// la afirmación es falsa y con tres sólo podría destacar la mitad del catálogo.
+const destacaPiso = 2
 
 // destacaDe dice EN QUÉ destaca una forma, y se DERIVA del perfil en vez de escribirse aparte. Es
 // deliberado: una etiqueta escrita a mano se desincroniza del número la primera vez que alguien
@@ -90,7 +99,12 @@ func destacaDe(forma string) []string {
 			max = v
 		}
 	}
-	if max == 0 {
+	// PISO PARA AFIRMAR QUE GANA. Sin esto, `destacaDe` devuelve el máximo aunque sea 1, y una forma
+	// floja en las siete dimensiones queda anunciada como que «gana» en su valor menos bajo. Fue lo
+	// que pasó con la conversación: puntuaba 2 en presencia por descarte y el brief decía que un chat
+	// destaca por su momento visual. Si nada llega a 2, la forma no gana en nada y se calla — el
+	// mismo criterio que la abstención del motor.
+	if max < destacaPiso {
 		return nil
 	}
 	var out []string
@@ -112,10 +126,11 @@ var vocabularioDeCambio = [dimsTotal][]string{
 	dimProfundidad: {"detalle", "profundidad", "inspector", "expandir", "desglose", "sin salir", "entrar", "drill", "contexto al lado"},
 	dimGuia:        {"guiar", "guia", "guía", "paso a paso", "onboarding", "acompañar", "acompanar", "flujo", "asistente", "wizard"},
 	dimPresencia:   {"presencia", "impacto", "potente", "potencia", "fuerte", "memorable", "protagonista", "caracter", "carácter", "identidad", "aburrido", "generico", "genérico", "soso"},
+	dimVivo:        {"en vivo", "ahora", "tiempo real", "esta corriendo", "está corriendo", "en curso", "progreso", "avance", "estado actual", "monitorear", "seguimiento", "que pasa", "qué pasa"},
 }
 
 // palabrasEstructurales son las que piden repensar el ESQUELETO entero y no una dimensión. Cuando
-// aparecen, se mueven las seis: pedir «cambiar el modelo» y recibir tres variantes que sólo difieren
+// aparecen, se mueven las siete: pedir «cambiar el modelo» y recibir tres variantes que sólo difieren
 // en densidad sería contestar otra pregunta.
 var palabrasEstructurales = []string{"modelo", "estructura", "esqueleto", "layout", "disposicion", "disposición", "replantear", "de cero", "otra cosa"}
 
@@ -224,7 +239,7 @@ func distanciaEn(a, b string, dims []int) int {
 // desempate estable el brief dejaría de ser una función de sus entradas.
 // Las dos mitades del puntaje se pesan IGUAL y a propósito: mérito y contraste llegan los dos a la
 // escala 0–18 (mérito se normaliza por cuántas dimensiones se pidieron; el contraste es Manhattan
-// sobre las seis). Sólo mérito daría tres formas que ganan en lo mismo —una propuesta con tres
+// sobre las siete). Sólo mérito daría tres formas que ganan en lo mismo —una propuesta con tres
 // nombres—; sólo contraste da lo que ya falló en la medición: la más lejana es la peor en lo pedido.
 const escalaMerito = 6
 
@@ -240,7 +255,17 @@ func meritoEn(forma string, dims []int) int {
 	return total * escalaMerito / len(dims)
 }
 
-func elegirPorContraste(pozo []string, origen string, dims []int, n int) []string {
+// `conMerito` es false cuando el pedido NO nombró ninguna dimensión, y entonces el mérito NO PESA.
+//
+// Lo destapó un test que ya existía: al eje `tabla` dejó de proponerle «tabla densa». Con el pedido
+// mudo, `dims` son las siete, así que el mérito pasa a ser «suma de todas las capacidades» y rankea
+// primero a las formas más parejas — un criterio que nadie pidió y que además castiga a las formas
+// especialistas, que son justo las buenas cuando sí sabés qué querés.
+//
+// Sin mérito, la primera es la primera del pozo (la más plausible para ese eje) y las otras dos
+// contrastan con ella. O sea: **un pedido normal se comporta como antes** y sólo un rediseño con un
+// reclamo dicho re-ordena. Cero regresión para quien ya usaba el motor.
+func elegirPorContraste(pozo []string, origen string, dims []int, conMerito bool, n int) []string {
 	idx := map[string]int{}
 	for i, f := range pozo {
 		idx[f] = i
@@ -256,7 +281,10 @@ func elegirPorContraste(pozo []string, origen string, dims []int, n int) []strin
 	for len(elegidas) < n && len(restantes) > 0 {
 		mejor, mejorPuntaje := -1, -1
 		for i, cand := range restantes {
-			puntaje := meritoEn(cand, dims)
+			var puntaje int
+			if conMerito {
+				puntaje = meritoEn(cand, dims)
+			}
 			if len(elegidas) == 0 {
 				// La primera: la que más gana en lo pedido, y a igualdad la que más se aleja del
 				// punto de partida. Si no hay origen, el desempate lo hace el orden del pozo.
@@ -305,7 +333,7 @@ func notaDeContraste(origen string, dims []int, estructural, explicito bool) str
 	case !explicito:
 		b.WriteString("El pedido no nombró ninguna dimensión, así que se buscaron las que más se separan entre sí — NO lo leas como que se pidió cambiar todo")
 	case len(dims) == dimsTotal:
-		b.WriteString("El pedido habla de replantear el esqueleto entero, así que juegan las seis dimensiones")
+		b.WriteString("El pedido habla de replantear el esqueleto entero, así que juegan las siete dimensiones")
 	default:
 		b.WriteString("Lo que el pedido dice querer GANAR: " + strings.Join(ns, ", ") + " — las candidatas se eligieron por cuánto ganan en eso, no sólo por qué tan distintas son")
 		if estructural {
