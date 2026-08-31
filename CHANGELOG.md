@@ -7,6 +7,97 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
+  Reproducido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
+  DEFINIDA para este proyecto» y le decía al agente que **no usara la identidad de otro proyecto** —
+  cuando la correcta era justamente la de Altura, que existe con el tenant en minúscula. El mensaje
+  de fallo no sólo callaba: desorientaba.
+  - El argumento `brand` se normaliza (es texto libre que escribe una persona); el `ProjectID` del
+    principal NO, porque sale del token y es autoritativo.
+  - **«Este proyecto no definió su marca» y «pediste una marca que no existe» dejan de decirse
+    igual.** Era el antipatrón de la casa —el valor de fallo idéntico al tranquilizador—: un dedazo
+    como `brand: "altur"` devolvía un brief que se leía legítimo y componía con el método
+    universal, sin un solo indicio. Ahora el brief trae `brand_note` con el aviso.
+  - El test de ataque de F0 que **afirmaba este defecto** se dio vuelta y ahora afirma la defensa. Su
+    propio mensaje decía «actualizá este banco» para el día en que se arreglara.
+
+
+### Added
+- **El brief dice qué NO entregar** (Musubi Renaissance, fase 4 del plan de cierre). El pedido que
+  abrió el track fue «lo usé mucho en Altura y no me gusta nada, todo full malo», y el brief le decía
+  al agente qué hacer y nunca qué **rechazar**.
+  - **Los tells salen del propio acervo, no de otro motor.** Medido sobre las 1.438 tarjetas de
+    `design-corpus/*`: **315 (22 %) contienen una prohibición** — 347 frases. El ranking real de lo
+    que este acervo advierte: jerga interna (39), ícono sin etiqueta (37), jerarquía difusa (27),
+    color decorativo (22), dato inventado (17). Nunca faltaron: estaban **diluidas**, o sea que sólo
+    llegaban al brief si el ranking enganchaba justo esa tarjeta.
+  - **Va FILTRADO POR EJE y no fijo**, y eso lo decidió una medición: un bloque constante de ~400
+    tokens habría bajado M5 —la compuerta del banco— de 0,44 a ~0,39, debajo de su propio umbral. El
+    freno que se puso para que no volviera el sermón habría frenado esto, **y con razón**: servir los
+    mismos catorce avisos para una tabla y para un login ES un sermón. Con el ruteo por eje ya se sabe
+    de qué habla el pedido, así que viaja un núcleo corto universal más los tells de ese eje.
+  - Medido con el bloque puesto: M4 p50 3.143 → 3.342, **M5 0,44 → 0,45 (no bajó)**.
+  - ⚠️ **Límite declarado:** el banco corre sobre FTS y sin embebedor, así que no rutea y sólo mide el
+    núcleo de 5 tells. La parte por eje sale de la sonda, igual que M1/M3/M8.
+
+
+### Added
+- **El brief dice qué NO entregar** (Musubi Renaissance, fase 4 del plan de cierre). El pedido que
+  abrió el track fue «lo usé mucho en Altura y no me gusta nada, todo full malo», y el brief le decía
+  al agente qué hacer y nunca qué **rechazar**.
+  - **Los tells salen del propio acervo, no de otro motor.** Medido sobre las 1.438 tarjetas de
+    `design-corpus/*`: **315 (22 %) contienen una prohibición** — 347 frases. El ranking real de lo
+    que este acervo advierte: jerga interna (39), ícono sin etiqueta (37), jerarquía difusa (27),
+    color decorativo (22), dato inventado (17). Nunca faltaron: estaban **diluidas**, o sea que sólo
+    llegaban al brief si el ranking enganchaba justo esa tarjeta.
+  - **Va FILTRADO POR EJE y no fijo**, y eso lo decidió una medición: un bloque constante de ~400
+    tokens habría bajado M5 —la compuerta del banco— de 0,44 a ~0,39, debajo de su propio umbral. El
+    freno que se puso para que no volviera el sermón habría frenado esto, **y con razón**: servir los
+    mismos catorce avisos para una tabla y para un login ES un sermón. Con el ruteo por eje ya se sabe
+    de qué habla el pedido, así que viaja un núcleo corto universal más los tells de ese eje.
+  - Medido con el bloque puesto: M4 p50 3.143 → 3.342, **M5 0,44 → 0,45 (no bajó)**.
+  - ⚠️ **Límite declarado:** el banco corre sobre FTS y sin embebedor, así que no rutea y sólo mide el
+    núcleo de 5 tells. La parte por eje sale de la sonda, igual que M1/M3/M8.
+
+
+### Added
+- **El motor de diseño rutea por EJE, no por similitud** (Musubi Renaissance, fase 2 del plan de
+  cierre). Es lo primero que mueve M1 desde que arrancó el track.
+  - **El problema, medido:** dos maneras de pedir lo mismo devolvían material distinto — **M1 = 0,10**
+    sobre los 16 pedidos del set dorado, con tres en 0,00. Y no lo arreglaba nada: servir el corpus
+    completo lo dejó en 0,10, y cambiar qué parte de un artículo se sirve tampoco movió nada. La causa
+    es que **dos tarjetas de diseño al azar se parecen tanto como una consulta a su mejor resultado**
+    (coseno p99 entre pares al azar 0,668 contra 0,533–0,643 de una consulta real): a esa granularidad
+    el embebedor no separa nada, así que ningún cambio de ranking podía servir.
+  - **El hallazgo:** el MISMO embebedor sí discrimina entre **19 ejes bien separados**. El eje top-1
+    coincide entre las tres paráfrasis de un pedido el **73 %** de las veces, contra el **10 %** de las
+    tarjetas. El paso consulta→eje es 7× más estable que consulta→tarjeta. No era un embebedor malo:
+    era la granularidad equivocada.
+  - **M1 simulada sobre el acervo real, ANTES de escribir código:** motor hoy 0,10 · ruteo léxico 0,23
+    · eje top-2 0,30 · **eje top-1 0,50**. Top-1 y no top-2: sumar el segundo eje EMPEORA, porque es
+    bastante menos estable y sólo aporta varianza.
+  - `internal/mcp/ejes_diseno.go`: 19 ejes con descripción y vocabulario. Se embebe la **descripción**
+    y no el nombre — el acervo casi nunca dice «a11y», dice «contraste» y «lector de pantalla». Los 19
+    vectores se calculan una vez por proceso; el eje sale del **mismo vector** de la consulta que ya se
+    calculaba, así que no cuesta una llamada más al embebedor.
+  - Dentro del eje las tarjetas se ordenan por **importancia**, no por similitud: el orden por
+    similitud es justo el que no es reproducible entre paráfrasis. El brief declara `retrieval: "eje"`
+    y `axis`. Por debajo del piso no se rutea y se cae al camino de siempre.
+
+### Fixed
+- **La relevancia del MMR dependía de cuántos candidatos se hubieran traído.** Sin similitud, el
+  desempate usaba `1 - i/len(src)`, así que el valor de la sexta tarjeta cambiaba según el tamaño del
+  lote que se hubiera pedido — con pocos candidatos el escalón entre puestos se comía a la diversidad.
+  Ahora es rango recíproco `1/(1+i)`, libre de escala. Era un bug latente que el ruteo volvió visible,
+  porque sus candidatos llegan sin similitud: el top-6 salía con seis clones aunque hubiera una tarjeta
+  distinta esperando.
+- **El ruteo se saltaba la diversificación de F4** y el top-6 podía volver a ser seis paráfrasis de la
+  misma idea. Se trae `designHolguraEje` candidatos por lugar para que `elegirCorpus` tenga de dónde
+  elegir. Lo agarró `TestDesignElTopKNoColapsaEnLoMismo`, cuyo fixture además se corrigió: modelaba la
+  diversidad como una tarjeta de OTRO tema, y con el ruteo eso ya no puede pasar ni debe — el defecto
+  real que F4 arregló eran cuatro maneras de decir lo mismo DENTRO del tema pedido.
+
 ### Changed
 - **El presupuesto del brief protege el material, no el sermón** (Musubi Renaissance). Pedido del
   usuario: *«no hay problema si gasta un poco más, lo importante es que haga un diseño bueno y no

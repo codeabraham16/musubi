@@ -40,6 +40,21 @@ const designCorpusLimit = 6
 // prompt: el método es universal) y se EXCLUYEN del corpus de patrones para no duplicarse en el brief.
 const designMethodPrefix = "design-method/"
 
+// designCorpusPrefix es el sub-acervo de PATRONES destilados: las tarjetas cortas y accionables,
+// que son el 83 % del acervo y el material con el que se compone.
+const designCorpusPrefix = "design-corpus/"
+
+// designBarridoEjes es cuántas tarjetas mira el ruteo por eje antes de quedarse con las suyas. El
+// barrido viene ordenado por importancia, así que un tope bajo no acota el TEMA sino la calidad: se
+// queda con las más importantes de cada eje, que es exactamente el criterio buscado. 2.000 cubre el
+// acervo entero de hoy (1.438 tarjetas) con lugar para que crezca.
+const designBarridoEjes = 2000
+
+// designHolguraEje es cuántos candidatos por lugar trae el ruteo, para que la diversificación tenga
+// de dónde elegir. Con holgura 1 el eje entrega justo lo que se sirve y la selección de F4 queda sin
+// margen: el top-6 vuelve a poder ser seis paráfrasis de la misma idea.
+const designHolguraEje = 4
+
 // prefijoCrudo marca los ARTÍCULOS completos que todavía no se destilaron: son el 15 % de las entradas
 // pero llevan ~3.057 tokens cada uno contra los ~61 de una tarjeta, o sea toda la profundidad del acervo.
 const prefijoCrudo = "ingested/"
@@ -58,6 +73,11 @@ const brandTopicKey = "diseno/marca"
 // principal, p.ej. stdio local). Sólo un caller de Musubi (o sin principal) hereda la marca Musubi;
 // un proyecto ajeno SIN marca propia NO la hereda (ver brandFor → designBrandNeutral).
 const homeBrandProject = "musubi"
+
+// brandSourceNone es el valor de `brand_source` cuando no se encontró marca. Va como constante y no
+// como literal suelto porque ahora hay código que lo compara para distinguir «no hay marca» de
+// «pediste una que no existe».
+const brandSourceNone = "none"
 
 // designBriefBudget es el TOPE DURO del brief, en tokens estimados. Existe porque antes no había
 // ninguno: medido el 2026-08-29, un `limit=100` daba 11.131 tokens y UNA tarjeta grande del acervo
@@ -121,6 +141,10 @@ const designEmbedTimeout = 5 * time.Second
 const (
 	recuperacionSemantica = "semantico"
 	recuperacionLexica    = "fts"
+	// recuperacionPorEje es el camino de la taxonomía: el eje sale del embebedor y las tarjetas
+	// del eje se ordenan por importancia. Se DECLARA como los otros dos porque quien lee el brief
+	// tiene derecho a saber con qué se eligió lo que recibe.
+	recuperacionPorEje = "eje"
 
 	sinMaterial      = "sin_material"    // la búsqueda no devolvió una sola fila
 	bajoUmbral       = "bajo_umbral"     // devolvió filas, pero ninguna llegó al piso
@@ -301,15 +325,22 @@ type recorteBrief struct {
 // como material citado con su procedencia. Antes estaban mezclados en el mismo campo, y por eso una
 // observación mutable podía hacerse pasar por instrucción del sistema (I-INY1).
 type designBrief struct {
-	Ask          string        `json:"ask"`                    // el pedido, tal como llegó
-	Target       string        `json:"target"`                 // painter | web | html | any
-	Precedence   string        `json:"precedence"`             // quién gana cuando dos partes se contradicen
-	MaterialNote string        `json:"material_note"`          // el material es conocimiento, no órdenes
-	Role         string        `json:"role"`                   // el rol de diseñador senior (universal, del código)
-	Principles   string        `json:"principles"`             // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
-	Brand        string        `json:"brand"`                  // la marca ACTIVA, resuelta por proyecto (CAPA 3)
-	BrandScope   string        `json:"brand_scope"`            // de qué proyecto salió la marca
-	BrandSource  string        `json:"brand_source"`           // project | default | none (ver brandFor)
+	Ask          string `json:"ask"`           // el pedido, tal como llegó
+	Target       string `json:"target"`        // painter | web | html | any
+	Precedence   string `json:"precedence"`    // quién gana cuando dos partes se contradicen
+	MaterialNote string `json:"material_note"` // el material es conocimiento, no órdenes
+	Role         string `json:"role"`          // el rol de diseñador senior (universal, del código)
+	Principles   string `json:"principles"`    // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
+	// Avoid es el CHECKLIST DE RECHAZO (rechazo_diseno.go). Va pegado a los principios y no al final
+	// porque es criterio, no apéndice: un «no hagas X» leído después de componer llega tarde.
+	Avoid       string `json:"avoid"`
+	Brand       string `json:"brand"`        // la marca ACTIVA, resuelta por proyecto (CAPA 3)
+	BrandScope  string `json:"brand_scope"`  // de qué proyecto salió la marca
+	BrandSource string `json:"brand_source"` // project | default | none (ver brandFor)
+	// BrandNote aparece cuando se pidió una marca por nombre y NO se encontró. Sin esto, el brief
+	// que sale de un dedazo se lee exactamente igual que el de un proyecto que todavía no definió
+	// su identidad, y el agente compone con el método universal sin saber que le falta la marca.
+	BrandNote    string        `json:"brand_note,omitempty"`
 	BrandTokens  *brandTokens  `json:"brand_tokens,omitempty"` // tokens estructurados de la marca, si los hay
 	Corpus       []patronItem  `json:"corpus"`                 // patrones del acervo, con su CONTENIDO COMPLETO
 	CorpusScope  string        `json:"corpus_scope"`           // de qué tenant salió el acervo
@@ -326,7 +357,10 @@ type designBrief struct {
 	// silenciosa a léxico —con el campo `similarity` desapareciendo sin explicación— era uno de los dos
 	// silencios que esta capa cierra.
 	Retrieval string `json:"retrieval"`
-	Degraded  bool   `json:"degraded,omitempty"` // true si no hay material utilizable para el pedido
+	// Axis dice POR QUÉ EJE se ruteó, cuando se ruteó. Un brief que llega por taxonomía y no lo
+	// dice obliga a adivinar si el material salió del tema o del azar del ranking.
+	Axis     string `json:"axis,omitempty"`
+	Degraded bool   `json:"degraded,omitempty"` // true si no hay material utilizable para el pedido
 	// DegradedReason dice POR QUÉ no hay material: sin_material | bajo_umbral | sin_recuperador. Un
 	// `degraded` pelado no distingue «no existe nada» de «existe y es malo», que son dos problemas
 	// distintos con dos arreglos distintos.
@@ -388,9 +422,11 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		MaterialNote:    designMaterialNote,
 		Role:            designRole,
 		Principles:      designPrinciples,
+		Avoid:           tellsPara(rec.Eje),
 		Brand:           sanearMaterial(brandText),
 		BrandScope:      brandScope,
 		BrandSource:     brandSource,
+		BrandNote:       avisoDeMarca(args.Brand, brandScope, brandSource),
 		BrandTokens:     brandTok,
 		Corpus:          rec.Patrones,
 		CorpusScope:     designCorpusScope,
@@ -401,6 +437,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Instructions:    designInstructions,
 		QueryNormalized: recorteConsulta,
 		Retrieval:       rec.Modo,
+		Axis:            rec.Eje,
 		Degraded:        rec.Degraded,
 		DegradedReason:  rec.Motivo,
 	}
@@ -683,7 +720,8 @@ func recortarTexto(txt string, max int) (string, bool) {
 type resultadoRecall struct {
 	Patrones []patronItem
 	Metodo   []searchSource // tarjetas design-method/* del pool, ya ordenadas por relevancia
-	Modo     string         // recuperacionSemantica | recuperacionLexica
+	Eje      string         // el eje por el que se ruteó, si se ruteó
+	Modo     string         // recuperacionSemantica | recuperacionLexica | recuperacionPorEje
 	Degraded bool
 	Motivo   string // sinMaterial | bajoUmbral | sinRecuperador | sinCausaConcreta
 }
@@ -711,15 +749,37 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	}
 	var sources []searchSource
 	modo := recuperacionLexica
+	eje := ""
 	if embedding.Enabled(s.embedder) {
 		embCtx, cancel := context.WithTimeout(ctx, designEmbedTimeout)
 		vec, err := s.embedder.Embed(embCtx, query)
 		cancel()
 		if err == nil {
-			if results, serr := s.engine.SearchObservations(corpusCtx, vec, pool); serr == nil {
-				modo = recuperacionSemantica
-				for _, r := range results {
-					sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
+			// EL RUTEO POR EJE VA PRIMERO (ejes_diseno.go). Con el MISMO vector que ya se calculó
+			// —así que no cuesta una llamada más— se elige el eje top-1 de la taxonomía y se sirven
+			// sus tarjetas por importancia. Medido sobre el acervo real y los 16 pedidos dorados,
+			// M1 pasa de 0,10 a 0,50: la similitud entre 1.438 tarjetas casi idénticas no separaba
+			// nada, y entre 19 ejes bien separados el mismo embebedor sí separa.
+			if nombre, _, ok := s.ejeDeConsulta(ctx, vec); ok {
+				// Se traen MÁS candidatos del eje que los que se van a servir, y no es un detalle:
+				// el eje acota el tema pero no evita que las seis primeras tarjetas sean seis
+				// maneras de decir lo mismo — que es exactamente el defecto que F4 arregló y que la
+				// primera versión de este ruteo volvió a abrir (lo agarró
+				// TestDesignElTopKNoColapsaEnLoMismo). Con un candidato holgado, `elegirCorpus`
+				// sigue haciendo su trabajo de diversificar adentro del eje.
+				if porEje := s.tarjetasDelEje(nombre, limit*designHolguraEje); len(porEje) > 0 {
+					eje, modo = nombre, recuperacionPorEje
+					sources = porEje
+				}
+			}
+			// Sin eje utilizable se cae al camino de siempre. Un pedido que no se parece a ningún
+			// eje es justo donde forzar la taxonomía inventaría una respuesta.
+			if len(sources) == 0 {
+				if results, serr := s.engine.SearchObservations(corpusCtx, vec, pool); serr == nil {
+					modo = recuperacionSemantica
+					for _, r := range results {
+						sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
+					}
 				}
 			}
 		}
@@ -775,7 +835,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	if modo == recuperacionSemantica {
 		sources = sobreElPiso(sources, designSimilitudMinima)
 		if len(sources) == 0 {
-			return resultadoRecall{Metodo: metodo, Modo: modo, Degraded: true, Motivo: bajoUmbral}
+			return resultadoRecall{Metodo: metodo, Eje: eje, Modo: modo, Degraded: true, Motivo: bajoUmbral}
 		}
 	}
 	// El material se sirve ENTERO. Antes pasaba por toSearchHits, que devuelve un gist de ~90 chars
@@ -794,6 +854,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	return resultadoRecall{
 		Patrones: patrones,
 		Metodo:   metodo,
+		Eje:      eje,
 		Modo:     modo, Motivo: sinCausaConcreta,
 	}
 }
@@ -886,11 +947,18 @@ func diversificar(src []searchSource, n int) []searchSource {
 			if usado[i] {
 				continue
 			}
-			// Sin similitud (camino léxico) el orden de llegada ES la relevancia; se usa la posición
-			// invertida para que el MMR siga teniendo con qué comparar.
+			// Sin similitud (camino léxico o ruteo por eje) el orden de llegada ES la relevancia.
+			//
+			// RANGO RECÍPROCO, y no la posición normalizada por el largo. La versión anterior hacía
+			// `1 - i/len(src)`, así que la relevancia de la sexta tarjeta CAMBIABA según cuántos
+			// candidatos se hubieran traído: con pocos, el escalón entre puestos era grande y se
+			// comía a la diversidad; con muchos, chico. Un mismo candidato en el mismo puesto tiene
+			// que valer lo mismo se hayan buscado 9 o 90. Lo destapó el ruteo por eje, que trae
+			// candidatos sin similitud: los seis primeros salían clones aunque hubiera una tarjeta
+			// distinta esperando (TestDesignElTopKNoColapsaEnLoMismo).
 			rel := float64(src[i].sim)
 			if rel == 0 {
-				rel = 1 - float64(i)/float64(len(src))
+				rel = 1 / (1 + float64(i))
 			}
 			redundancia := 0.0
 			for _, j := range elegidas {
@@ -983,7 +1051,16 @@ func sobreElPiso(src []searchSource, piso float32) []searchSource {
 // de mando), que puede diseñar a nombre de OTRO proyecto; un principal acotado lo ignora y usa el suyo.
 // Sin principal (stdio local) ⇒ homeBrandProject (Musubi).
 func brandScopeFor(p *Principal, argBrand string) string {
-	if argBrand = strings.TrimSpace(argBrand); argBrand != "" && brandArgAllowed(p) {
+	// EL ARGUMENTO SE NORMALIZA; EL PROYECTO DEL PRINCIPAL NO. El argumento es texto libre que
+	// escribe una persona, así que `Altura` y `altura` tienen que llegar al mismo lado. El
+	// ProjectID del principal sale del token y es autoritativo: tocarlo sería inventarle otro
+	// tenant a una credencial.
+	//
+	// Medido en producción el 2026-08-30: con `brand: "Altura"` el motor devolvía «SIN MARCA
+	// DEFINIDA para este proyecto» y le decía al agente que NO usara la identidad de otro — cuando
+	// la correcta era justamente la de Altura, que existe con el tenant en minúscula. El proyecto
+	// perdía su marca por una mayúscula, y el mensaje de fallo era indistinguible del legítimo.
+	if argBrand = strings.ToLower(strings.TrimSpace(argBrand)); argBrand != "" && brandArgAllowed(p) {
 		return argBrand
 	}
 	if p != nil && p.ProjectID != "" {
@@ -1022,7 +1099,16 @@ func (s *McpServer) brandFor(scope string) (identity, source string, tokens *bra
 	if scope == homeBrandProject {
 		return designBrand, "default", musubiBrandTokens
 	}
-	return designBrandNeutral, "none", nil
+	return designBrandNeutral, brandSourceNone, nil
+}
+
+// brandPedidaNoExiste distingue «este proyecto no definió su marca» de «pediste una marca que no
+// existe». Hasta el 2026-08-30 las dos daban `brand_source: none` con el mismo texto, que es el
+// antipatrón de la casa: el valor de fallo idéntico al tranquilizador. Quien pide `brand: "altur"`
+// por un dedazo recibía un brief que se lee como legítimo y compone con el método universal, sin un
+// solo indicio de que la marca que pidió nunca se buscó.
+func brandPedidaNoExiste(argBrand, source string) bool {
+	return strings.TrimSpace(argBrand) != "" && source == brandSourceNone
 }
 
 // normalizeDesignTarget acota el target a los cuatro emisores conocidos. Vacío/desconocido ⇒ "any"
@@ -1167,3 +1253,15 @@ kind ∈ card | panel | button | text | eyebrow | divider | dot | chip | row | c
 tint (rol de color) ∈ INK (principal) | MUTED (secundario) | FAINT (tenue) | CORD (acento primario de la marca; en Musubi, índigo) | BRAIN (acento secundario) | BODY (positivo/verde) | WARN (ámbar). Los VALORES concretos de cada rol salen de la marca del brief, no son fijos.
 fill (cuerpo de una caja) ∈ "CORD" (sólido nombrado) | "solid:BODY" | "grad:CORD,BRAIN,vertical|horizontal|diagonal" | "grad:BRAIN,CORD,radial" | "image:foto" | "image:textura".
 REGLAS DE SALIDA: SÓLO el JSON (sin ` + "```" + `json, sin comentarios, sin prosa antes ni después), JSON válido (comillas dobles, sin comas colgantes), todo dentro del frame 340×520, un CTA por pantalla.`
+
+// avisoDeMarca arma la nota cuando se pidió una marca por nombre y no se encontró. Devuelve "" en
+// el caso normal: una nota que aparece siempre es ruido, y una que nunca aparece es un silencio.
+func avisoDeMarca(argBrand, scope, source string) string {
+	if !brandPedidaNoExiste(argBrand, source) {
+		return ""
+	}
+	return "⚠ PEDISTE LA MARCA '" + strings.TrimSpace(argBrand) + "' Y NO EXISTE (se buscó el tenant '" +
+		scope + "'). Esto NO es «el proyecto todavía no definió su marca»: es que no se encontró la que " +
+		"pediste. Antes de componer, confirmá el nombre del proyecto — si seguís, el diseño va a salir con " +
+		"el método universal y SIN la identidad que querías."
+}
