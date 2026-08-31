@@ -761,3 +761,53 @@ func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 		t.Error("llegó al tramo de acción sobre un servicio que la máquina no enumera")
 	}
 }
+
+// TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion — el CERO y el SILENCIO no son lo mismo.
+//
+// Las dos alertas que viven de `musubi_fleet_policy_actions_total` son `increase(...)`, y un
+// `increase()` sobre una serie AUSENTE no devuelve nada. Así que sin esta siembra no podían
+// distinguir «ninguna política actuó» de «el cerebro dejó de exportar» — la distinción entera por
+// la que `politicaStats` lleva ese comentario desde S10.
+//
+// El código no lo cumplía: el mapa nacía vacío y `renderPoliticas` cortaba, así que la serie
+// aparecía recién con la primera acción y DESAPARECÍA en el próximo reinicio. Verificado en
+// producción el 2026-08-31: se configuró la primera política real, disparó, la serie apareció,
+// se reinició el cerebro y volvió a haber cero series.
+//
+// Sabotaje que la hace fallar: sacar la llamada a `sembrarPoliticas` de `ConfigurarFlota`.
+func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
+	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
+
+	out := s.metrics.render(nil)
+	for _, quiero := range []string{
+		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="ok"} 0`,
+		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="rechazada"} 0`,
+		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="sin_principal"} 0`,
+		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="error"} 0`,
+	} {
+		if !strings.Contains(out, quiero) {
+			t.Errorf("falta la serie en cero %q: sin ella `increase()` no devuelve nada y la alerta no puede distinguir «no actuó» de «el cerebro dejó de exportar»", quiero)
+		}
+	}
+}
+
+// TestSembrarNoPisaUnContadorQueYaCuenta — la siembra tiene que ser idempotente.
+//
+// Una recarga de configuración vuelve a sembrar. Si sembrara con `Store` en vez de `LoadOrStore`,
+// cada recarga pondría los contadores en cero y borraría la historia de la ventana de `increase()`
+// — o sea, apagaría las alertas justo cuando alguien está tocando la configuración, que es
+// exactamente cuando más importan.
+//
+// Sabotaje: cambiar el `LoadOrStore` de sembrarPoliticas por un `Store`.
+func TestSembrarNoPisaUnContadorQueYaCuenta(t *testing.T) {
+	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
+
+	s.metrics.contarPolitica("vaciar-journal", "ok")
+	s.metrics.contarPolitica("vaciar-journal", "ok")
+	s.metrics.sembrarPoliticas([]string{"vaciar-journal"}) // como haría una recarga
+
+	quiero := `musubi_fleet_policy_actions_total{policy="vaciar-journal",result="ok"} 2`
+	if out := s.metrics.render(nil); !strings.Contains(out, quiero) {
+		t.Errorf("la siembra pisó un contador que ya venía contando: se esperaba %q", quiero)
+	}
+}

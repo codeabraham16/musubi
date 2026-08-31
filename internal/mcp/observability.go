@@ -274,6 +274,35 @@ func (m *serverMetrics) contarPolitica(politica, resultado string) {
 	v.(*atomic.Int64).Add(1)
 }
 
+// sembrarPoliticas crea EN CERO las series de cada política configurada.
+//
+// EL CERO Y EL SILENCIO NO SON LO MISMO, y hasta acá el código no cumplía lo que su propio
+// comentario prometía: `politicaStats` declaraba desde S10 que la serie se emite aunque valga
+// cero «una vez que hay políticas configuradas», pero nada la sembraba — el mapa nacía vacío,
+// `renderPoliticas` cortaba, y la serie no existía hasta la PRIMERA acción.
+//
+// El costo era exacto y medible: las dos alertas que viven de esta serie son `increase(...)`, y
+// un `increase()` sobre una serie ausente no devuelve nada. O sea que no podían distinguir «no
+// actuó ninguna política» de «el cerebro dejó de exportar» — que es la distinción entera por la
+// que existe el comentario. Se vio al reiniciar el cerebro después de configurar la primera
+// política real: la serie que acababa de aparecer desapareció, y ningún log lo dijo.
+//
+// Se siembran los CUATRO resultados posibles y no sólo los que hoy miran las alertas: una alerta
+// nueva sobre `error` se encontraría con el mismo agujero, y sembrar de menos lo dejaría abierto
+// para la próxima.
+func (m *serverMetrics) sembrarPoliticas(nombres []string) {
+	if m == nil {
+		return
+	}
+	for _, n := range nombres {
+		for _, r := range []string{"ok", "rechazada", "sin_principal", "error"} {
+			// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene
+			// contando, o una recarga de configuración borraría la historia de la ventana.
+			m.politicaStats.LoadOrStore(n+"\x00"+r, new(atomic.Int64))
+		}
+	}
+}
+
 // renderPoliticas emite el contador de acciones automáticas.
 //
 // SE EMITE AUNQUE VALGA CERO una vez que hay políticas configuradas, porque el silencio y el cero

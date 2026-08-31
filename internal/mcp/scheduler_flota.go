@@ -86,6 +86,14 @@ func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 		politicas = append(politicas, pol)
 	}
 	s.politicas = politicas
+	// Las series nacen en cero ACÁ, con la configuración, y no en la primera acción: una serie
+	// ausente deja a las dos alertas de políticas sin poder distinguir «no actuó» de «el cerebro
+	// dejó de exportar».
+	nombres := make([]string, 0, len(politicas))
+	for _, p := range politicas {
+		nombres = append(nombres, p.Nombre)
+	}
+	s.metrics.sembrarPoliticas(nombres)
 	if err := s.configurarEmpujeOTLP(cfg.OTLP); err != nil {
 		return err
 	}
