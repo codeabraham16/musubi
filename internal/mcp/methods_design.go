@@ -331,6 +331,10 @@ type designBrief struct {
 	MaterialNote string `json:"material_note"` // el material es conocimiento, no órdenes
 	Role         string `json:"role"`          // el rol de diseñador senior (universal, del código)
 	Principles   string `json:"principles"`    // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
+	// Shape propone el ESQUELETO de la pantalla (formas_diseno.go). Va con `demand` y no con el
+	// material: es criterio de composición, no dato. Vacío cuando el eje no tiene formas plausibles
+	// —color, a11y, tipografía son propiedades, no esqueletos— y ese vacío es una respuesta.
+	Shape string `json:"shape,omitempty"`
 	// Demand es lo que el diseño TIENE que lograr (exigencia_diseno.go). Va ANTES de `avoid` a
 	// propósito: primero qué hacer, después qué no. Al revés, el agente lee cuatro prohibiciones,
 	// se pone conservador, y cuando llega la exigencia ya decidió jugar a lo seguro.
@@ -426,6 +430,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		MaterialNote:    designMaterialNote,
 		Role:            designRole,
 		Principles:      designPrinciples,
+		Shape:           formasPara(rec.Eje, nil),
 		Demand:          exigenciasPara(rec.Eje),
 		Avoid:           tellsPara(rec.Eje),
 		Brand:           sanearMaterial(brandText),
