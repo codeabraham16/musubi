@@ -295,10 +295,17 @@ func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
 		t.Errorf("un pendiente de 1 min se muestra %q, esperaba %q", got, EstadoPendiente)
 	}
 
-	// LO ENTREGADO NO VENCE POR ACÁ. Su reloj es el timeout del comando, no la vida en la cola:
-	// marcar expirado a los 15 min haría que un comando legítimo de 9 minutos aparezca muerto
-	// mientras corre. Que un `entregado` que nunca reporta se quede así es OTRO agujero (A60).
-	corriendo := Comando{Estado: EstadoEntregado, Creado: ahora.Add(-10 * time.Hour)}
+	// LO ENTREGADO NO VENCE POR ACÁ. Su reloj es el suyo —lo mide `Perdido` (A60)— y no la vida
+	// en la cola: marcar expirado a los 15 min haría que un comando legítimo de 9 minutos
+	// aparezca muerto mientras corre.
+	//
+	// Se le pone `Entregado` RECIÉN a propósito. Sin ese campo la fila cae por el agujero de
+	// datos de `Perdido` y la aserción pasaría sin probar nada de lo que dice probar.
+	corriendo := Comando{
+		Estado:    EstadoEntregado,
+		Creado:    ahora.Add(-10 * time.Hour),
+		Entregado: ahora.Add(-time.Minute),
+	}
 	if got := corriendo.EstadoActual(ahora); got != EstadoEntregado {
 		t.Errorf("un entregado viejo se muestra %q: su reloj es el timeout, no ComandoVidaMax", got)
 	}
@@ -366,5 +373,79 @@ func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
 	// «no se sabe» cuando sí se sabe.
 	if s := HechoDeSesionShell(SesionShell{}, "pc"); s.Origen != OrigenDesconocido {
 		t.Errorf("una sesión no debería llevar origen: %q", s.Origen)
+	}
+}
+
+// UN COMANDO ENTREGADO QUE NUNCA REPORTA TERMINA EN `perdido` (A60).
+//
+// El agente se lo llevó y se murió a mitad. `terminado` lo estampa el reporte, y ese reporte no va
+// a llegar nunca, así que la fila se quedaba en `entregado` PARA SIEMPRE — indistinguible de un
+// comando que está corriendo ahora mismo.
+//
+// Sabotaje: sacar la rama de `Perdido` en EstadoActual → falla el primer bloque.
+func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	muerto := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-EsperaMaxDeEntregado - time.Minute),
+	}
+	if got := muerto.EstadoActual(ahora); got != EstadoPerdido {
+		t.Errorf("un entregado que pasó la espera máxima se muestra %q, esperaba %q", got, EstadoPerdido)
+	}
+
+	// EL CONTROL POSITIVO: sin él, un Perdido que devolviera true siempre pasaría lo de arriba.
+	vivo := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-time.Minute),
+	}
+	if got := vivo.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un entregado de hace un minuto se muestra %q, esperaba %q", got, EstadoEntregado)
+	}
+}
+
+// EL ÚLTIMO DE UNA TANDA LARGA ESTÁ VIVO AUNQUE SU PROPIO TIMEOUT HAYA PASADO HACE RATO.
+//
+// Ésta es la prueba que existe por el error que casi se comete. La regla obvia para A60
+// —`entregado + timeout + margen`— es INCORRECTA: el agente corre la tanda EN ORDEN Y DE A UNO, y
+// el último de diez espera a los nueve de adelante antes de que su propio timeout empiece siquiera
+// a correr. Con la regla obvia, un comando de 30 s entregado hace una hora se dibujaría muerto
+// mientras está esperando su turno.
+//
+// Y ES EL ERROR CARO DE LOS DOS: un comando vivo marcado perdido manda a alguien a relanzarlo —dos
+// veces el mismo `systemctl`, dos veces el mismo borrado—. Uno perdido marcado tarde sólo se ve
+// tarde.
+//
+// Sabotaje: cambiar EsperaMaxDeEntregado por `c.Timeout + MargenDeReporte` → falla acá.
+func TestElUltimoDeUnaTandaLargaNoSeMarcaPerdidoMientrasEspera(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	// Nueve comandos de diez minutos por delante: casi hora y media de espera legítima.
+	esperando := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-89 * time.Minute),
+	}
+	if got := esperando.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un comando esperando su turno en la tanda se muestra %q: la regla `timeout + margen` "+
+			"lo mata vivo, que es el error caro", got)
+	}
+}
+
+// UN `entregado` SIN FECHA DE ENTREGA ES UN AGUJERO DE DATOS, NO UN COMANDO MUERTO.
+//
+// Las filas anteriores a que el campo existiera no tienen `entregado`. Dibujarles `perdido` sería
+// inventar: no se sabe cuándo se las llevaron, así que no se puede saber si tardaron de más. Es la
+// misma regla que gobierna todo el track — un dato ausente no es un cero.
+//
+// Sabotaje: sacar la guarda de `Entregado.IsZero()` en Perdido → falla acá.
+func TestUnEntregadoSinFechaDeEntregaNoEsPerdido(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	agujero := Comando{Estado: EstadoEntregado, Timeout: 30 * time.Second, Creado: ahora.Add(-10 * time.Hour)}
+	if got := agujero.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("una fila vieja sin fecha de entrega se muestra %q: un dato ausente no es un comando muerto", got)
 	}
 }

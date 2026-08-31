@@ -20,6 +20,9 @@ const (
 	EstadoEntregado EstadoComando = "entregado" // el agente se lo llevó; está corriendo
 	EstadoTerminado EstadoComando = "terminado" // hay resultado (haya salido bien o mal)
 	EstadoExpirado  EstadoComando = "expirado"  // venció antes de que nadie lo levantara (F10)
+	// EstadoPerdido es «el agente se lo llevó y no volvió» (A60). Se DERIVA, nunca se guarda:
+	// una columna que hay que ir a actualizar miente en cuanto nadie la actualiza.
+	EstadoPerdido EstadoComando = "perdido"
 )
 
 // Límites del canal. Todos existen porque del otro lado hay una máquina que no se puede voltear.
@@ -38,6 +41,36 @@ const (
 	// ejecutándose siete días después sobre un estado que ya no existe. 15 minutos alcanza para
 	// cubrir un agente que se reinicia y es demasiado poco para que el mundo cambie debajo.
 	ComandoVidaMax = 15 * time.Minute
+
+	// ComandosPorEntregaMax es cuántos comandos se lleva un agente de una sola vez. Vive ACÁ y no
+	// en el transporte porque la derivación de `perdido` depende de él: si el transporte lo sube
+	// y esta constante no se entera, la cota se vuelve incorrecta en silencio.
+	ComandosPorEntregaMax = 10
+
+	// MargenDeReporte cubre el viaje de vuelta del resultado. El agente reporta apenas termina
+	// cada comando —no espera al próximo latido— así que es un round-trip HTTP, no un ciclo de
+	// sondeo. Dos minutos es holgado a propósito.
+	MargenDeReporte = 2 * time.Minute
+
+	// EsperaMaxDeEntregado es cuánto puede estar `entregado` un comando VIVO, en el peor caso.
+	//
+	// LA REGLA OBVIA —`entregado + timeout + margen`— ES INCORRECTA, y descubrirlo es lo que
+	// costó de A60. El agente ejecuta la tanda EN ORDEN Y DE A UNO, reportando cada resultado
+	// antes de pasar al siguiente. Así que el último de una tanda de diez espera a los nueve de
+	// adelante ANTES de que su propio timeout empiece a correr: puede estar legítimamente
+	// `entregado` casi cien minutos sin que nada esté mal.
+	//
+	// Con la regla obvia, ese comando se dibujaría muerto mientras corre. Es el error CARO de los
+	// dos: un comando vivo marcado perdido manda a alguien a relanzarlo —dos veces el mismo
+	// `systemctl`, dos veces el mismo borrado— mientras que uno perdido marcado tarde sólo se ve
+	// tarde. Se prefiere tarde y cierto a temprano y falso.
+	//
+	// SE PODRÍA AJUSTAR y a propósito no se hace todavía: como el agente reporta de a uno, los
+	// comandos que siguen `entregado` en una máquina son exactamente los que faltan, y los creados
+	// antes que uno son los que tiene por delante. Esa cota decae sola y sería mucho más fina.
+	// Pide contexto de la máquina entera, y `EstadoActual` es un método de UN comando con tres
+	// llamadores, dos de los cuales no tienen la lista. Se deja anotado, no olvidado.
+	EsperaMaxDeEntregado = ComandosPorEntregaMax*ComandoTimeoutMax + MargenDeReporte
 
 	// ColaMaxPorDevice es cuántos comandos TODAVÍA EJECUTABLES puede tener encolados una máquina.
 	//
@@ -136,9 +169,10 @@ type Comando struct {
 // LA ESCRITURA SIGUE EXISTIENDO Y NO SE TOCA: la de `TomarComandos` es la que impide que se
 // ejecute, que es una decisión, no una vista. Ésta sólo dice qué mostrar.
 //
-// SÓLO VENCE LO `pendiente`, y de eso se encarga `Vencido` más abajo. Un comando `entregado` que
-// nunca reportó es otra cosa —el agente se lo llevó y se murió a mitad— y no tiene estado propio
-// todavía: registrado como A60.
+// SON DOS MUERTES DISTINTAS Y TIENEN DOS ESTADOS DISTINTOS. `Vencido` es «nadie lo levantó
+// nunca» (`expirado`); `Perdido` es «el agente se lo llevó y no volvió» (`perdido`, A60). Darles
+// el mismo nombre haría indistinguible un agente que nunca vino de uno que se murió a mitad, que
+// son problemas de máquinas distintas y se arreglan mirando lugares distintos.
 //
 // EXISTE PARA QUE LAS SUPERFICIES NO REPITAN LA CONDICIÓN: dos consumidores decidiendo cada uno
 // cuándo vence un comando terminan discrepando, y el que se olvida es el que dibuja `pendiente`
@@ -146,6 +180,9 @@ type Comando struct {
 func (c Comando) EstadoActual(ahora time.Time) EstadoComando {
 	if c.Vencido(ahora) {
 		return EstadoExpirado
+	}
+	if c.Perdido(ahora) {
+		return EstadoPerdido
 	}
 	return c.Estado
 }
@@ -247,6 +284,21 @@ func OrigenValido(o OrigenComando) OrigenComando {
 // aparezca dos veces en la bitácora.
 func (c Comando) Vencido(ahora time.Time) bool {
 	return c.Estado == EstadoPendiente && ahora.Sub(c.Creado) > ComandoVidaMax
+}
+
+// Perdido dice si un comando ENTREGADO ya no va a reportar nunca (A60).
+//
+// El agente se lo llevó y se murió a mitad: la fila queda en `entregado` para siempre, porque
+// `terminado` lo estampa el reporte y ese reporte no va a llegar. No es lo mismo que `expirado`
+// —ése ni se levantó— y por eso no se puede derivar con la regla de los pendientes.
+//
+// `Entregado` en cero se trata como NO perdido: una fila vieja sin ese dato es un agujero de
+// datos, no un comando muerto, y dibujar `perdido` sobre un agujero es inventar.
+func (c Comando) Perdido(ahora time.Time) bool {
+	if c.Estado != EstadoEntregado || c.Entregado.IsZero() {
+		return false
+	}
+	return ahora.Sub(c.Entregado) > EsperaMaxDeEntregado
 }
 
 // TruncarSalida acota una salida y DEJA LA MARCA. Devuelve también si cortó, para que el
