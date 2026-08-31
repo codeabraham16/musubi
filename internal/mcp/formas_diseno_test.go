@@ -17,7 +17,7 @@ import (
 // SABOTAJE: devolver una sola candidata ⇒ el motor pasó a elegir y este test se pone rojo.
 func TestFormasElMotorAcotaNoElige(t *testing.T) {
 	for eje := range formasPorEje {
-		b := formasPara(eje, nil)
+		b := formasPara(eje, nil, intencionDeDiseno{})
 		if b == "" {
 			t.Errorf("el eje %q está en la tabla y no propuso ninguna forma", eje)
 			continue
@@ -41,12 +41,12 @@ func TestFormasElMotorAcotaNoElige(t *testing.T) {
 // SABOTAJE: darle candidatas a esos ejes ⇒ el motor propone esqueleto donde no hay pantalla.
 func TestFormasUnaPropiedadNoTieneForma(t *testing.T) {
 	for _, eje := range []string{"color", "a11y", "tipografia", "terminacion", "estado-vacio"} {
-		if b := formasPara(eje, nil); b != "" {
+		if b := formasPara(eje, nil, intencionDeDiseno{}); b != "" {
 			t.Errorf("el eje %q es una PROPIEDAD y le propusieron forma: %.60s…", eje, b)
 		}
 	}
 	// Guarda de la premisa: si NINGÚN eje propusiera forma, este test pasaría por vacuidad.
-	if formasPara("tabla", nil) == "" {
+	if formasPara("tabla", nil, intencionDeDiseno{}) == "" {
 		t.Fatal("ningún eje propone forma: el test pasaría sin que la capa exista")
 	}
 }
@@ -65,7 +65,7 @@ func TestFormasLaRotacionNoDejaSinForma(t *testing.T) {
 	}
 	// Una usada: tiene que proponer las otras y NO la usada.
 	usadas := map[string]bool{cands[0]: true}
-	b := formasPara("tabla", usadas)
+	b := formasPara("tabla", usadas, intencionDeDiseno{})
 	if strings.Contains(b, formasDeDiseno[cands[0]].Nombre) {
 		t.Errorf("propuso la forma ya usada %q", cands[0])
 	}
@@ -80,7 +80,7 @@ func TestFormasLaRotacionNoDejaSinForma(t *testing.T) {
 	// SE CUENTAN LAS OPCIONES, no se mira si la cadena es vacía. La primera versión comparaba
 	// contra "" y el sabotaje pasaba verde: sin candidatas la función devolvía el ENCABEZADO SOLO,
 	// o sea un bloque que dice «elegí UNA de estas» sin listar ninguna. Peor que no mandar nada.
-	repliegue := formasPara("tabla", todas)
+	repliegue := formasPara("tabla", todas, intencionDeDiseno{})
 	if n := strings.Count(repliegue, "\n- "); n == 0 {
 		t.Errorf("con todas las formas usadas no quedó ninguna opción (bloque=%q); la rotación es preferencia, no prohibición", repliegue)
 	}
