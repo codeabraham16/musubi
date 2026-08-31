@@ -33,7 +33,11 @@ func TestEsqueletoTodaFormaSeDibuja(t *testing.T) {
 	}
 }
 
-var reRect = regexp.MustCompile(`<rect x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"`)
+// Acepta comilla simple o doble a propósito: el invariante es sobre la GEOMETRÍA, no sobre el
+// delimitador. La primera versión sólo miraba comillas dobles y, al pasar el SVG a comillas simples
+// —para que no se escapen dentro del JSON—, reportó «0 cajas, prácticamente vacío» en las doce formas.
+// El test falló fuerte, que está bien, pero el mensaje señalaba al dibujo cuando el roto era él.
+var reRect = regexp.MustCompile(`<rect[^>]*?x=['"]([-\d.]+)['"] y=['"]([-\d.]+)['"] width=['"]([-\d.]+)['"] height=['"]([-\d.]+)['"]`)
 
 // C-ESQ2 · NINGÚN BOCETO SE SALE DEL MARCO NI DIBUJA EN LA NADA.
 //
@@ -69,6 +73,13 @@ func TestEsqueletoNadaSeSaleNiDesaparece(t *testing.T) {
 		}
 		if !strings.HasPrefix(svg, "<svg viewBox=") || !strings.HasSuffix(svg, "</svg>") {
 			t.Errorf("%s: el SVG no está cerrado o no declara viewBox — sin viewBox el navegador lo dibuja de 300×150", clave)
+		}
+		// LAS COMILLAS SON SIMPLES, y no es cosmética: el SVG viaja dentro de un string JSON, donde
+		// cada comilla doble se escapa y cuesta el doble. Medido contra el pedido real de las notas
+		// del CRM, con comillas dobles los tres bocetos pesaban 4.357 tokens y hacían que el brief se
+		// pasara del tope duro.
+		if strings.Contains(svg, `="`) {
+			t.Errorf("%s: el SVG usa comillas dobles; dentro del JSON se escapan y cuestan el doble", clave)
 		}
 		// currentColor y NADA de color propio: el boceto es estructura, y una paleta acá se cruzaría
 		// con la marca del proyecto.

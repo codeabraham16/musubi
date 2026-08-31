@@ -7,6 +7,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **Los bocetos esquivaban el presupuesto.** Los agregué sin tocar `cederUnItem` y el brief se pasaba
+  del tope duro sin que nada se pusiera rojo: medido contra un pedido REAL —el rediseño de las notas
+  del CRM— **8.084 tokens con un tope de 6.600**. El presupuesto se aplicaba, no encontraba nada más
+  que ceder (el corpus ya estaba en su piso) y devolvía un brief que inundaba el contexto de quien
+  llamó, que es exactamente lo que ese tope existe para impedir. Ahora los bocetos **ceden primeros y
+  todos juntos**, con su recorte declarado: son un dibujo de `shape`, así que soltarlos cuesta
+  comodidad y no conocimiento; y servir dos de tres convierte «mirá estos y elegí uno» en una
+  comparación tramposa donde la que no tiene dibujo pierde por no estar.
+- **El SVG pesaba el doble de lo que yo había medido.** Había medido el dibujo crudo (2.650 chars),
+  pero viaja dentro de un string JSON, donde **cada comilla doble se escapa y cuesta el doble**.
+  Comillas simples —XML válido, en JSON no se escapan— más una hoja de estilo para los atributos que
+  se repiten en las ~40 cajas de cada boceto.
+- **La rejilla temporal se dibujaba como 35 tarjetas**: 73 cajas y 5.303 chars, más que los otros dos
+  bocetos juntos, y era lo que empujaba el brief contra el tope. Una rejilla temporal son **líneas**;
+  ahora son 25 cajas y 1.792 chars, y además se lee mejor — un calendario se reconoce por la retícula,
+  no por el borde de cada casilla. Brief final del mismo pedido: **5.556 tokens**.
+- El regex del banco de bocetos sólo aceptaba comillas dobles; al cambiar el formato reportó «0 cajas,
+  prácticamente vacío» en las doce formas. Ahora acepta las dos y hay una comprobación aparte, con su
+  motivo, de que el SVG use comillas simples.
+
 ### Added
 - **Los tres bocetos: el motor DIBUJA las candidatas.** Cierra el pedido del usuario —*«si querés te
   muestro 3 lienzos y de ahí partimos con un modelo»*— con el flujo escalonado que eligió: bocetos

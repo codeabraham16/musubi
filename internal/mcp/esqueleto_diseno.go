@@ -20,6 +20,7 @@ package mcp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -92,7 +93,7 @@ var esqueletosDeForma = map[string][]banda{
 	},
 	"rejilla-temporal": {
 		{1, []celda{{"titular", 1, 0, 0}}},
-		{9, []celda{{"tarjeta", 1, 5, 7}}},
+		{9, []celda{{"rejilla", 1, 5, 7}}},
 	},
 	"narrativa": {
 		{4, []celda{{"titular", 1, 0, 0}}},
@@ -167,11 +168,22 @@ func bocetoDe(forma string) string {
 	anchoUtil := float64(bocetoAncho - 2*bocetoMargen)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, `<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-label="boceto: %s">`,
+	fmt.Fprintf(&sb, `<svg viewBox='0 0 %d %d' width='100%%' role='img' aria-label='boceto: %s'>`,
 		bocetoAncho, bocetoAlto, formasDeDiseno[forma].Nombre)
+	// DOS AHORROS, Y EL SEGUNDO ES EL QUE IMPORTA.
+	//
+	// (1) Los atributos que se repiten viven en esta hoja de estilo y no en cada caja: un boceto tiene
+	// ~40 cajas y `fill="currentColor"` en todas costaba 22 chars por caja.
+	//
+	// (2) LAS COMILLAS SON SIMPLES. El SVG viaja adentro de un string JSON, donde cada `"` se escapa a
+	// `\"` y cuesta el DOBLE; la comilla simple es XML válido y en JSON no se escapa. Sin esto, medido
+	// contra el pedido real de las notas del CRM, los tres bocetos pesaban 4.357 tokens —mucho más que
+	// los ~1.500 chars que yo había medido sobre el SVG crudo— y hacían que el brief entero se pasara
+	// del tope. El tamaño que importa es el del JSON, no el del dibujo.
+	sb.WriteString(`<style>rect{fill:currentColor}.m{fill:none;stroke:currentColor}</style>`)
 	// El marco de la pantalla. `currentColor` en todo el boceto: así hereda el color del contenedor y
 	// se ve igual en claro y en oscuro sin declarar una paleta — el boceto es estructura, no marca.
-	fmt.Fprintf(&sb, `<rect x="1" y="1" width="%d" height="%d" rx="6" fill="none" stroke="currentColor" stroke-opacity=".18"/>`,
+	fmt.Fprintf(&sb, `<rect class='m' x='1' y='1' width='%d' height='%d' rx='6' opacity='.18'/>`,
 		bocetoAncho-2, bocetoAlto-2)
 
 	y := float64(bocetoMargen)
@@ -201,16 +213,16 @@ func caja(sb *strings.Builder, x, y, w, h, r, op float64) {
 	if w <= 0 || h <= 0 {
 		return
 	}
-	fmt.Fprintf(sb, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="%.1f" fill="currentColor" fill-opacity="%.2f"/>`,
-		x, y, w, h, r, op)
+	fmt.Fprintf(sb, `<rect x='%d' y='%d' width='%d' height='%d' rx='%d' opacity='%s'/>`,
+		red(x), red(y), red(w), red(h), red(r), op2(op))
 }
 
 func marco(sb *strings.Builder, x, y, w, h, r float64) {
 	if w <= 0 || h <= 0 {
 		return
 	}
-	fmt.Fprintf(sb, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="%.1f" fill="none" stroke="currentColor" stroke-opacity=".22"/>`,
-		x, y, w, h, r)
+	fmt.Fprintf(sb, `<rect class='m' x='%d' y='%d' width='%d' height='%d' rx='%d' opacity='.22'/>`,
+		red(x), red(y), red(w), red(h), red(r))
 }
 
 // apilar reparte `n` sub-bloques en una caja, en `cols` columnas, y llama a `f` con cada uno. Está
@@ -260,7 +272,7 @@ func dibujarCelda(sb *strings.Builder, c celda, x, y, w, h float64, reg registro
 		apilar(x, y, w, h, n, 1, func(cx, cy, cw, ch float64) {
 			caja(sb, cx, cy, cw*0.34, ch*0.62, 1.5, .30)         // la columna por la que se mira
 			caja(sb, cx+cw*0.62, cy, cw*0.16, ch*0.62, 1.5, .20) // números a la derecha
-			caja(sb, cx+cw*0.84, cy, cw*0.16, ch*0.62, 1.5, .20) //
+			caja(sb, cx+cw*0.84, cy, cw*0.16, ch*0.62, 1.5, .20) // (la tercera columna)
 		})
 
 	case "destacado":
@@ -324,6 +336,30 @@ func dibujarCelda(sb *strings.Builder, c celda, x, y, w, h float64, reg registro
 			caja(sb, cx, cy, cw*0.94, minF(ch*0.36, 5), 1.5, .20)
 		})
 
+	case "rejilla":
+		// UNA REJILLA TEMPORAL SON LÍNEAS, NO TREINTA Y CINCO TARJETAS. Dibujada con `tarjeta` salían
+		// 70 cajas —marco + etiqueta por celda— y 5.303 chars, más que los otros dos bocetos juntos, y
+		// era lo que empujaba el brief contra el tope duro. Con líneas son ~20 cajas, y además se lee
+		// mejor: un calendario se reconoce por la retícula, no por el borde de cada casilla.
+		//
+		// (Antes probé un guard de «no dibujes el detalle si la celda es chica» creyendo que las
+		// celdas medían 5 px. Medí: miden 25. El guard no disparaba nunca y su comentario afirmaba un
+		// arreglo que no existía.)
+		cols, filas := maxInt(c.Cols, 1), maxInt(c.Repite, 1)
+		for i := 0; i <= cols; i++ {
+			caja(sb, x+w*float64(i)/float64(cols), y, 1, h, 0, .10)
+		}
+		for j := 0; j <= filas; j++ {
+			caja(sb, x, y+h*float64(j)/float64(filas), w, 1, 0, .10)
+		}
+		// Lo ocupado: la POSICIÓN es el dato, así que se marcan unas pocas casillas y no todas.
+		cw, ch := w/float64(cols), h/float64(filas)
+		for _, p := range [][2]int{{1, 0}, {2, 0}, {4, 1}, {0, 2}, {3, 2}, {5, 2}, {2, 3}, {6, 4}} {
+			if p[0] < cols && p[1] < filas {
+				caja(sb, x+cw*float64(p[0])+2, y+ch*float64(p[1])+2, cw-4, ch-4, 2, .30)
+			}
+		}
+
 	case "lienzo":
 		marco(sb, x, y, w, h, 4)
 		caja(sb, x+w*0.22, y+h*0.24, w*0.34, h*0.30, 3, .30)
@@ -338,6 +374,18 @@ func dibujarCelda(sb *strings.Builder, c celda, x, y, w, h float64, reg registro
 	default:
 		marco(sb, x, y, w, h, 3)
 	}
+}
+
+// red redondea al pixel entero. La miniatura mide 300x190: la decima de pixel no se ve y costaba dos
+// caracteres por numero en ~200 numeros por boceto.
+func red(v float64) int { return int(v + 0.5) }
+
+// op2 escribe la opacidad sin el cero de adelante ni ceros de mas: ".3" en vez de "0.30".
+func op2(op float64) string {
+	s := strconv.FormatFloat(op, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	return strings.TrimPrefix(s, "0")
 }
 
 func maxInt(a, b int) int {
