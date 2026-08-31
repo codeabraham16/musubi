@@ -361,6 +361,13 @@ type designBrief struct {
 	// Change es lo que el rediseno ATACA. Ademas de viajar como bloque, decide QUE dimensiones
 	// separan a las formas candidatas: sin esto, dos pedidos opuestos recibian las mismas tres.
 	Change string `json:"change,omitempty"`
+	// Sketches son los BOCETOS de las candidatas, sólo con sketch:true. Van apagados por default
+	// porque un SVG por forma cuesta presupuesto y no sirve en un pedido desde cero — el mismo
+	// criterio que `keep` y `change`: se paga cuando se usa.
+	Sketches []bocetoCandidata `json:"sketches,omitempty"`
+	// SketchNote dice qué hacer con ellos. Va SÓLO cuando hay bocetos: una instrucción sobre algo que
+	// no vino es ruido, y peor, sugiere que el motor mandó algo que no mandó.
+	SketchNote string `json:"sketch_note,omitempty"`
 	// Scale son LOS NÚMEROS (escala_diseno.go): escala tipográfica, interlineado, tracking, ritmo de
 	// espaciado, alto de fila, duraciones, contraste. Va pegado a `shape` porque el registro numérico
 	// SALE de la forma, y va antes de `demand` porque la exigencia se cumple con números.
@@ -416,6 +423,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		Limit  int    `json:"limit"`
 		Keep   string `json:"keep"`
 		Change string `json:"change"`
+		Sketch bool   `json:"sketch"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -483,6 +491,8 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		ShapeHistory:    notaDeForma,
 		Keep:            bloqueDeConservacion(args.Keep),
 		Change:          bloqueDeCambio(args.Change),
+		Sketches:        bocetosSiSePiden(args.Sketch, candidatas),
+		SketchNote:      notaSiHayBocetos(args.Sketch, candidatas),
 		Scale:           escalaPara(candidatas),
 		Demand:          exigenciasPara(rec.Eje),
 		Avoid:           tellsPara(rec.Eje),
@@ -1233,7 +1243,8 @@ func (s *McpServer) designToolEntry() toolEntry {
 					"brand":  {Type: "string", Description: "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."},
 					"limit":  {Type: "number", Description: "Cuántos patrones del acervo traer (default 6, máximo 100)."},
 					"keep":   {Type: "string", Description: "Opcional, para un REDISEÑO: qué se CONSERVA — la esencia, la identidad, lo que ya funciona, y de qué forma parte hoy la pantalla ('hoy es una tabla densa'). El motor lo usa para saber de dónde ALEJARSE al proponer formas, y lo sirve como bloque para que no se pise lo que no había que tocar. Sin esto, la mitad de 'conservar' se pierde: la consulta se recorta a 2 oraciones para buscar en el acervo."},
-					"change": {Type: "string", Description: "Opcional, para un REDISEÑO: qué se ATACA ('cambiar el modelo y las cuadrículas', 'no se puede comparar nada', 'no me dice qué hacer'). Determina QUÉ dimensiones mueven las formas candidatas —densidad, comparación, decisión, profundidad, guía, presencia—, así que dos pedidos distintos reciben propuestas distintas en vez de las mismas tres de siempre."},
+					"sketch": {Type: "boolean", Description: "Opcional: si es true, el brief incluye un BOCETO SVG de cada forma candidata para mostrárselos a la persona y que elija UNO antes de componer. Apagado por default porque cuesta presupuesto y sólo sirve en un rediseño; los dibuja el motor —no quien compone— para que las tres sean comparables, y la cantidad de filas de cada uno sale del alto de fila de su registro, así que la densidad se VE."},
+					"change": {Type: "string", Description: "Opcional, para un REDISEÑO: qué se ATACA ('cambiar el modelo y las cuadrículas', 'no se puede comparar nada', 'no me dice qué hacer'). Determina QUÉ dimensiones mueven las formas candidatas —densidad, comparación, decisión, profundidad, guía, presencia, estado en vivo—, así que dos pedidos distintos reciben propuestas distintas en vez de las mismas tres de siempre."},
 				},
 				Required: []string{"prompt"},
 			},

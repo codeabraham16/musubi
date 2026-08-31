@@ -8,6 +8,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Los tres bocetos: el motor DIBUJA las candidatas.** Cierra el pedido del usuario —*«si querés te
+  muestro 3 lienzos y de ahí partimos con un modelo»*— con el flujo escalonado que eligió: bocetos
+  primero, el elegido después, porque descartar tiene que ser barato.
+  - **Los dibuja el motor y no quien compone**, y no es un detalle de implementación: si cada boceto lo
+    improvisa el agente, las tres salen con criterios distintos y elegir deja de ser elegir un modelo
+    para pasar a ser elegir cuál quedó mejor dibujado.
+  - **Hace visible `scale`**: la cantidad de filas de cada boceto NO está escrita a mano, sale del alto
+    de fila del registro de esa forma (12 · 9 · 8 según compacto, estándar o editorial). La decisión de
+    densidad se ve en vez de leerse.
+  - SVG autocontenido en `currentColor`, sin paleta propia — el boceto es estructura, y un color acá se
+    cruzaría con la marca del proyecto. Model-free: aritmética de cajas, mismo pedido = mismo SVG.
+  - Apagado por default (`sketch: true`), igual que `keep` y `change`: se paga cuando se usa.
+- **Séptima dimensión, `estado en vivo`.** `monitor-procesos` quedaba anunciado como que gana en
+  «densidad y comparación y decisión» —tres cosas, que no diferencia nada— porque su fuerza real,
+  mostrar lo que pasa AHORA, no estaba entre las dimensiones.
+
+### Fixed
+- **Se afirmaba que una forma gana donde apenas puntúa.** `destacaDe` devolvía el máximo aunque fuera
+  1 o 2 por descarte: la conversación quedaba anunciada como que **gana en presencia**, o sea que un
+  chat destaca por su momento visual. Ahora hay un piso (2 de 3) y, si nada lo alcanza, la forma no
+  gana en nada y se calla — el mismo criterio que la abstención del motor.
+- **Sin intención declarada, el mérito no puede pesar.** Con el pedido mudo, `dims` son las siete, así
+  que el mérito pasaba a ser «suma de todas las capacidades» y rankeaba primero a las formas más
+  parejas — un criterio que nadie pidió, y que además castiga a las especialistas, que son justo las
+  buenas cuando sí sabés qué querés. Lo destapó un test que ya existía: al eje `tabla` había dejado de
+  proponerle «tabla densa». **Un pedido normal vuelve a comportarse como antes**; sólo un rediseño con
+  un reclamo dicho re-ordena.
+
+### Added
 - **Las tres formas candidatas se ELIGEN por contraste, no se buscan en una tabla.** `formasPorEje`
   era un mapa fijo de eje → exactamente tres formas, así que para `tabla` salían siempre las mismas y
   la rotación sólo excluía la del pedido anterior. El defecto es medible: dos pedidos opuestos —«esta

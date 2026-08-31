@@ -82,7 +82,7 @@ var formasDeDiseno = map[string]formaDiseno{
 // El ORDEN dentro de cada pozo importa: es el desempate cuando dos candidatas contrastan igual, así
 // que va de más a menos plausible para ese eje.
 var formasPorEje = map[string][]string{
-	"tabla":      {"tabla-densa", "detalle-con-lados", "catalogo-elegir", "rejilla-temporal", "lista-priorizada", "lienzo-inspector"},
+	"tabla":      {"tabla-densa", "detalle-con-lados", "catalogo-elegir", "rejilla-temporal", "lista-priorizada", "lienzo-inspector", "monitor-procesos"},
 	"dataviz":    {"tablero-un-numero", "lienzo-inspector", "narrativa", "rejilla-temporal", "monitor-procesos", "tabla-densa"},
 	"dashboard":  {"tablero-un-numero", "monitor-procesos", "lista-priorizada", "rejilla-temporal", "tabla-densa", "detalle-con-lados"},
 	"formulario": {"formulario-guiado", "detalle-con-lados", "interrupcion", "narrativa", "lista-priorizada"},
@@ -137,8 +137,8 @@ func candidatasDeForma(eje string, usadas map[string]bool, intencion intencionDe
 		disponibles = pozo
 	}
 
-	dims, _, _ := dimensionesAMover(intencion.Change)
-	return elegirPorContraste(disponibles, origen, dims, designFormasPropuestas)
+	dims, _, explicito := dimensionesAMover(intencion.Change)
+	return elegirPorContraste(disponibles, origen, dims, explicito, designFormasPropuestas)
 }
 
 // formasPara arma el bloque de forma para un eje, excluyendo las que ya se usaron (`usadas`, que

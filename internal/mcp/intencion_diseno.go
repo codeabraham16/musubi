@@ -77,7 +77,7 @@ func bloqueDeCambio(change string) string {
 			ns = append(ns, nombreDim[d])
 		}
 		if len(dims) == dimsTotal {
-			b.WriteString("\nEL MOTOR LEYÓ: un replanteo del esqueleto entero, así que las candidatas se separan en las seis dimensiones (" +
+			b.WriteString("\nEL MOTOR LEYÓ: un replanteo del esqueleto entero, así que las candidatas se separan en las siete dimensiones (" +
 				strings.Join(ns, ", ") + ").")
 		} else {
 			b.WriteString("\nEL MOTOR LEYÓ que hay que mover: " + strings.Join(ns, ", ") +
