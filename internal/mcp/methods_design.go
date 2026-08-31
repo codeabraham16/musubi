@@ -315,7 +315,11 @@ type recorteBrief struct {
 	Motivo string         `json:"motivo"`
 	Method *recorteBloque `json:"method,omitempty"`
 	Corpus *recorteBloque `json:"corpus,omitempty"`
-	Brand  *recorteBloque `json:"brand,omitempty"`
+	// Sketches: los bocetos son lo PRIMERO que cede, porque son un dibujo de `shape` y no información
+	// que no esté en otro lado. Se declara igual: pedir tres bocetos y no recibir ninguno, en
+	// silencio, se lee como que la tool está rota.
+	Sketches *recorteBloque `json:"sketches,omitempty"`
+	Brand    *recorteBloque `json:"brand,omitempty"`
 	// TarjetasRecortadas son las tarjetas que SÍ se sirvieron pero con el texto cortado por el tope
 	// por ítem. Va aparte de `Method` a propósito: perder una tarjeta entera y recibirla a medias son
 	// dos pérdidas distintas, y juntarlas en un número escondería la segunda.
@@ -527,14 +531,14 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 // cobraría todo de un solo lado y el método caería a cero, con lo que la métrica de inyección por el
 // acervo quedaría "ganada" por inanición en vez de por diseño.
 func aplicarPresupuesto(b *designBrief) {
-	metodoTotal, corpusTotal, brandTotal := len(b.Method), len(b.Corpus), len(b.Brand)
+	metodoTotal, corpusTotal, brandTotal, bocetosTotal := len(b.Method), len(b.Corpus), len(b.Brand), len(b.Sketches)
 
 	// La declaración del recorte PESA, y pesa dentro del presupuesto. La primera versión trimeaba
 	// hasta entrar y recién después agregaba `truncated`: el banco midió 2.628 y 2.656 tokens contra
 	// un tope declarado de 2.600 — el brief se pasaba por su propio aviso de que se había recortado.
 	// Por eso se declara en cada vuelta y se mide con la declaración puesta.
 	for {
-		declararRecorte(b, metodoTotal, corpusTotal, brandTotal)
+		declararRecorte(b, metodoTotal, corpusTotal, brandTotal, bocetosTotal)
 		if tokensDeBrief(*b) <= designBriefBudget {
 			return
 		}
@@ -554,6 +558,24 @@ func aplicarPresupuesto(b *designBrief) {
 // quedaría "ganada" por inanición en vez de por diseño.
 func cederUnItem(b *designBrief) bool {
 	switch {
+	// LOS BOCETOS CEDEN PRIMERO, Y TODOS JUNTOS.
+	//
+	// Los agregué sin tocar esta escalera y el brief se pasó del tope sin que nada se pusiera rojo:
+	// medido contra el pedido real de las notas del CRM, 8.084 tokens con un tope duro de 6.600. El
+	// presupuesto se aplicaba, no encontraba nada más que ceder —el corpus ya estaba en su piso— y
+	// devolvía un brief que inundaba el contexto de quien llamó. Exactamente lo que este tope existe
+	// para impedir.
+	//
+	// Ceden PRIMEROS porque son lo único del brief que no aporta INFORMACIÓN: son un dibujo de
+	// `shape`, que viaja igual y dice las mismas tres formas con su descripción. Soltarlos cuesta
+	// comodidad; soltar una tarjeta de método o un patrón del corpus cuesta conocimiento.
+	//
+	// Y ceden TODOS JUNTOS, no de a uno: el paso entero es «mirá estos tres y elegí uno». Servir dos
+	// bocetos y una forma sin dibujo no es una versión más barata de eso, es una comparación
+	// tramposa donde la que no tiene dibujo pierde por no estar.
+	case len(b.Sketches) > 0:
+		b.Sketches = nil
+		b.SketchNote = ""
 	case len(b.Method) > designPisoBloque:
 		b.Method = b.Method[:len(b.Method)-1]
 	case len(b.Corpus) > designPisoCorpus:
@@ -610,8 +632,11 @@ func recortarMarca(b *designBrief) bool {
 
 // declararRecorte deja el brief diciendo qué dejó afuera y de cuánto (I-PRE3). Recortar sin declarar
 // el total es el modo de falla de esta casa: entrega un brief mutilado con cara de completo.
-func declararRecorte(b *designBrief, metodoTotal, corpusTotal, brandTotal int) {
+func declararRecorte(b *designBrief, metodoTotal, corpusTotal, brandTotal, bocetosTotal int) {
 	var r recorteBrief
+	if len(b.Sketches) < bocetosTotal {
+		r.Sketches = &recorteBloque{Servidos: len(b.Sketches), Total: bocetosTotal, Unidad: "bocetos (se pidieron y no entraron en el presupuesto)"}
+	}
 	if len(b.Method) < metodoTotal {
 		r.Method = &recorteBloque{Servidos: len(b.Method), Total: metodoTotal, Unidad: "tarjetas de método"}
 	}
@@ -626,7 +651,7 @@ func declararRecorte(b *designBrief, metodoTotal, corpusTotal, brandTotal int) {
 			r.TarjetasRecortadas++
 		}
 	}
-	if r.Method == nil && r.Corpus == nil && r.Brand == nil && r.TarjetasRecortadas == 0 {
+	if r.Method == nil && r.Corpus == nil && r.Brand == nil && r.Sketches == nil && r.TarjetasRecortadas == 0 {
 		b.Truncated = nil
 		return
 	}
