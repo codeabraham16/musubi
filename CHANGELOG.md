@@ -7,6 +7,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
+  usuario, no de una teoría.
+  - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
+    (completo / sin corpus / sin brief), mezclados— y eligió **uno de cada condición**, que es lo
+    que saldría al azar: **el contenido del brief no determinaba lo que prefiere**. Sobre los tres
+    dijo lo mismo, «no son tan potentes», y al preguntarle qué faltaba nombró **presencia visual** y
+    **terminación de producto**.
+  - **El diagnóstico:** todo lo que el brief traía era para **no equivocarse** — precedencia, tokens,
+    anchos de celda, y un bloque de rechazo que empuja aún más a lo conservador. No había una sola
+    línea pidiendo una decisión fuerte. Medido contra el acervo, además, el conocimiento falta: de
+    1.736 entradas, **14** hablan de un momento focal, **9** de terminación fina y **7** de contraste
+    dramático, contra cientos de validación y tablas.
+  - El bloque nuevo va **antes** del de rechazo a propósito, e incluye **cómo conviven**: la
+    exigencia dice DÓNDE gastar la audacia —en un solo lugar— y la prohibición dónde no. Sin esa
+    frase, el agente recibe orden y contraorden y baja las dos, que es lo que venía pasando.
+  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767 (techo 3.900),
+    M5 0,45 — no bajó.
+
+### Fixed
+- **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
+  la segunda prueba a ciegas: «esas rayitas no me gustan, se ven muy raras». Vale anotar cómo se
+  perdió: la lista de tells de TidyFactor/Styler lo trae como su número 7 y se descartó entera por
+  construir la nuestra desde el acervo propio. No copiar sigue estando bien; lo que estuvo mal fue no
+  mirar lo ajeno como **hipótesis a verificar**. Y es un tic propio, usado por reflejo para marcar
+  importancia sin ganársela con jerarquía.
+
 ### Changed
 - **El set dorado del banco pasa de 16 a 67 pedidos** (201 formas), y al hacerlo corrigió un número
   que veníamos reportando mal.
@@ -23,6 +50,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - ⚠️ **Sesgo declarado dentro del propio archivo:** las tres paráfrasis de cada pedido las escribió
     el mismo agente que mide el motor. Si se parecen más entre sí de lo que se parecería el pedido de
     otra persona, M1 sale mejor de lo que es.
+### Added
+- **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
+  usuario, no de una teoría.
+  - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
+    (completo / sin corpus / sin brief), mezclados— y eligió **uno de cada condición**, que es lo
+    que saldría al azar: **el contenido del brief no determinaba lo que prefiere**. Sobre los tres
+    dijo lo mismo, «no son tan potentes», y al preguntarle qué faltaba nombró **presencia visual** y
+    **terminación de producto**.
+  - **El diagnóstico:** todo lo que el brief traía era para **no equivocarse** — precedencia, tokens,
+    anchos de celda, y un  que empuja aún más a lo conservador. No había una línea pidiendo
+    una decisión fuerte. Medido contra el acervo, además, el conocimiento falta: de 1.736 entradas,
+    **14** hablan de un momento focal, **9** de terminación fina y **7** de contraste dramático.
+  - El bloque  va **antes** de  a propósito, e incluye **cómo conviven**: la exigencia
+    dice DÓNDE gastar la audacia —en un lugar— y la prohibición dónde no. Sin esa frase el agente
+    recibe orden y contraorden y baja las dos.
+  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767, M5 0,45 (no bajó).
+
+### Fixed
+- **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
+  la segunda prueba a ciegas («esas rayitas no me gustan, se ven muy raras»). Vale anotar cómo se
+  perdió: la lista de TidyFactor/Styler lo trae como su #7 y se descartó entera por construir la
+  nuestra desde el acervo propio. No copiar sigue estando bien; lo que estuvo mal fue no mirar lo
+  ajeno como hipótesis a verificar.
 
 
 ### Fixed
