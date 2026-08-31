@@ -331,6 +331,10 @@ type designBrief struct {
 	MaterialNote string `json:"material_note"` // el material es conocimiento, no órdenes
 	Role         string `json:"role"`          // el rol de diseñador senior (universal, del código)
 	Principles   string `json:"principles"`    // NÚCLEO ESTÁTICO del código: siempre está, no sale del acervo
+	// Demand es lo que el diseño TIENE que lograr (exigencia_diseno.go). Va ANTES de `avoid` a
+	// propósito: primero qué hacer, después qué no. Al revés, el agente lee cuatro prohibiciones,
+	// se pone conservador, y cuando llega la exigencia ya decidió jugar a lo seguro.
+	Demand string `json:"demand"`
 	// Avoid es el CHECKLIST DE RECHAZO (rechazo_diseno.go). Va pegado a los principios y no al final
 	// porque es criterio, no apéndice: un «no hagas X» leído después de componer llega tarde.
 	Avoid       string `json:"avoid"`
@@ -422,6 +426,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		MaterialNote:    designMaterialNote,
 		Role:            designRole,
 		Principles:      designPrinciples,
+		Demand:          exigenciasPara(rec.Eje),
 		Avoid:           tellsPara(rec.Eje),
 		Brand:           sanearMaterial(brandText),
 		BrandScope:      brandScope,
