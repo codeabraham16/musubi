@@ -8,6 +8,55 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El motor decide los números, no los adjetivos** (Musubi Renaissance). Medido contra el central
+  sobre un pedido real —tabla densa de inventario, marca Altura, target web— contando valores
+  concretos (hex, px, ms, ch, razones de contraste) por bloque del brief:
+
+  | bloque | chars | valores concretos |
+  |---|---|---|
+  | `role` | 337 | **0** |
+  | `principles` | 681 | **0** |
+  | `shape` | 537 | **0** |
+  | `corpus` | 2.249 | **0** |
+  | `avoid` | 2.101 | 1 |
+  | `demand` | 1.622 | 3 |
+  | `brand` | 4.192 | **28** |
+
+  Texto de criterio sin corpus ni marca: **11.249 chars y 32 valores — uno cada 351 caracteres**, y
+  los 32 salían del doc de marca del tenant, no del motor. O sea que **todo lo que el motor decía
+  sobre cómo diseñar eran adjetivos**: decía «usá el rango entero de la escala tipográfica» y no decía
+  cuáles; decía «el encabezado queda fijo» y no decía cuánto mide una fila. Cada número —tamaños,
+  interlineado, tracking, ritmo de espaciado, alto de fila, duraciones, contraste— lo terminaba
+  inventando quien compone, y esas son justo las decisiones que separan una pantalla buena de una
+  mediocre.
+  - **Bloque `scale`** con tres registros por densidad —compacto, estándar, editorial— de escala
+    tipográfica **calculada** (base × razón, redondeada al medio píxel), interlineado, ritmo de
+    espaciado, alto de fila y medida; más un núcleo universal de duraciones, contraste, foco, toque,
+    filete y radio. Sigue siendo model-free: es una tabla y una progresión geométrica, no un juicio.
+  - **El registro sale de la FORMA**, y la forma la sigue eligiendo el agente: se sirven los registros
+    de las candidatas, distintos, en orden de densidad. El motor acota; no elige por el agente.
+  - **`scale` nunca sale vacío**, a diferencia de `shape`: una pregunta sobre la paleta también se
+    compone sobre una pantalla y necesita sus medidas.
+
+### Fixed
+- **El brief servía DOS escalas tipográficas que se contradecían.** `principles` traía
+  `11/12/13/15/18/24/30` (que ni siquiera es geométrica) y el `emit` de painter traía la suya
+  (`título 22–30, cuerpo 13–15`). Dos sistemas rivales en el mismo brief, y quien compone agarra el
+  que llega primero — el mecanismo exacto por el que un motor con **más** material entrega un diseño
+  **peor**. Los dos apuntan ahora a `scale`, y el invariante C-ESC5 lo ata.
+- **La razón de la escala se imprimía mal.** `numPx` redondea a una decimal porque es la resolución
+  del píxel, y con eso la razón 1,25 salía escrita «1,20» al lado de unos pasos que sí eran 1,25: el
+  brief declaraba un sistema distinto del que mostraba. C-ESC3 lo ata leyendo el número **impreso**.
+
+### Changed
+- `designBriefBudget` 6.000 → 6.600, y el motivo no es «que entre más»: el bloque son +578 tokens de
+  **constante**, y un tope que no se mueve cuando la constante crece no protege al caller — le achica
+  en silencio la porción que le queda al material. Sube exactamente lo que subió la constante. Medido:
+  M4 p50 3.963→4.541, M4 máximo 5.289→**5.867** (o sea que seguía entrando bajo el tope viejo).
+  **M5 bajó de 0,45 a 0,44** y se declara: es constante nueva, así que diluye. Sigue sobre su piso de
+  0,40, y el piso no se toca.
+
+### Added
 - **La rotación por memoria: el motor no repite el esqueleto anterior de ese proyecto** (Musubi
   Renaissance). Es el mecanismo que las skills del rubro tienen que **falsificar**: ellas estampan un
   comentario en el CSS del artefacto esperando reencontrarlo la próxima vez, porque no tienen estado.
