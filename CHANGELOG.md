@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La rotación por memoria: el motor no repite el esqueleto anterior de ese proyecto** (Musubi
+  Renaissance). Es el mecanismo que las skills del rubro tienen que **falsificar**: ellas estampan un
+  comentario en el CSS del artefacto esperando reencontrarlo la próxima vez, porque no tienen estado.
+  Musubi lo lee de la memoria del proyecto, con fecha y procedencia, y sobrevive a que se borre el
+  archivo y a que cambie la máquina.
+  - **El motor sigue siendo readOnly, y no es un rodeo: es la arquitectura.** En este código
+    `readOnly` decide la AUTORIZACIÓN — un principal con `write=none` sólo llama tools de lectura, y
+    el motor de diseño está marcado así a propósito para que la cabina y una sesión stdio puedan
+    diseñar. Escribir la historia lo volvería inalcanzable para todos los lectores, además de ponerlo
+    bajo candado exclusivo. Así que **escribe el caller**: el brief le pide que anote con qué forma
+    compuso.
+  - **La historia se llavea por el proyecto DEL PRINCIPAL, no por la marca pedida.** `brand` deja
+    diseñar a nombre de otro proyecto; llavear por marca haría que la sala de mando le escriba la
+    rotación a Altura.
+  - **`shape_history` se declara siempre**, con o sin historia, y pide la anotación. Si la nota sólo
+    apareciera cuando ya hay historia, nunca existiría la primera y la rotación no arrancaría jamás.
+  - **La nota se lee con tolerancia.** La escribe un agente, no un formato: se reconocen
+    `tabla-densa`, «tabla densa» en prosa y `forma: TABLA DENSA · fecha`. Exigir estructura exacta
+    apagaría la rotación —en silencio— ante la primera nota redactada distinto.
+  - 4 invariantes, cada sabotaje visto en rojo. Dos de los sabotajes **no compilaban** en su primera
+    versión (variable sin usar), así que el test fallaba por el build y no por el invariante: un
+    sabotaje que no compila es un sabotaje que no se ejecutó.
+
+### Added
 - **La capa de FORMA: el brief propone el esqueleto de la pantalla** (Musubi Renaissance). Hasta acá
   el brief decía DE QUÉ HABLA el pedido —el eje— y nunca QUÉ FORMA tiene la pantalla. Según el
   consenso del campo anti-slop, eso es la causa real de que un diseño generado se reconozca: *«la
