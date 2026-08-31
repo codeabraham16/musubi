@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Dos ejes nuevos en la taxonomía de diseño: presencia y terminación**, más 28 tarjetas que los
+  llenan. Sale de preguntarle al usuario con diseños delante, no de una teoría: en una prueba a
+  ciegas nombró **presencia visual** y **terminación de producto** como lo que faltaba.
+  - **La carencia era literal.** De 1.736 entradas del acervo: 14 hablaban de un momento focal, 9 de
+    terminación fina, 7 de contraste dramático — contra 126 de escala tipográfica y cientos de
+    validación y tablas. Y ninguno de los 19 ejes lo cubría: jerarquía habla de ordenar y color de
+    paleta, no de fuerza ni de acabado. Ese conocimiento era **inalcanzable por ruteo aunque
+    existiera**: en producción, «que esta pantalla impacte» ruteaba a a11y y «terminar como
+    producto» a movil.
+  - **El slug declara el eje.** Un topic `design-corpus/<eje>-loquesea` pertenece a ese eje sin
+    depender del vocabulario. Apareció porque al sembrar las 28 primeras sólo 6 y 5 de 14 caían: el
+    vocabulario lo había inventado yo en vez de sacarlo del material. Derivarlo del material tampoco
+    servía — salían palabras genéricas de diseño que habrían etiquetado medio acervo.
+
+### Fixed
+- **`musubi_save_observation` acepta `project_id`, que el handler ya leía.** El parámetro existía y
+  pasaba por la misma guarda fail-closed que `musubi_ingest_url` (`writeOriginFor`: sólo lo respeta
+  una credencial write=any), pero **nunca se declaró en el schema**, así que no se podía invocar. Sin
+  esto, la única puerta para sembrar un acervo compartido era ingerir una URL.
+
+### Added
 - **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
   usuario, no de una teoría.
   - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
