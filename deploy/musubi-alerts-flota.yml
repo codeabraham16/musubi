@@ -49,8 +49,8 @@ groups:
         # vieja sin mirar habría bajado la sensibilidad cinco puntos sin que nadie lo notara —
         # exactamente la clase de pérdida silenciosa que una "limpieza de duplicados" produce.
         #
-        # Medido al decidirlo: `kernelos-pc` estaba al 86,6 % usado, o sea en la zona ciega entre
-        # los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
+        # Medido al decidirlo: `kernelos-pc` (hoy `davantis-1`) estaba al 86,6 % usado, o sea en la
+        # zona ciega entre los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
         expr: musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15
         for: 15m
         labels: { severity: warning }
@@ -198,10 +198,11 @@ groups:
       - alert: MaquinaSinInventario
         # UNA MÁQUINA CON AGENTE QUE NO DICE QUÉ CORRE ADENTRO.
         #
-        # Nació de una auditoría, no de una hipótesis: `kernelos-pc` figuraba en línea, latiendo
-        # cada 30 s, y con CERO servicios. Resultó ser un binario anterior a la enumeración —
-        # pero el síntoma es idéntico al de un enumerador roto, y al de una fuente que falló y
-        # abortó el inventario a propósito. Las tres causas piden lo mismo: que alguien mire.
+        # Nació de una auditoría, no de una hipótesis: `kernelos-pc` (hoy `davantis-1`) figuraba en
+        # línea, latiendo cada 30 s, y con CERO servicios. Resultó ser un binario anterior a la
+        # enumeración — pero el síntoma es idéntico al de un enumerador roto, y al de una
+        # fuente que falló y abortó el inventario a propósito. Las tres causas piden lo mismo:
+        # que alguien mire.
         #
         # `== 1` y no `unless` sobre el up: una máquina CAÍDA no tiene por qué reportar
         # inventario, y alertar de eso sería duplicar MaquinaCaida con otro nombre.
