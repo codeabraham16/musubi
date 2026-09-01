@@ -1132,6 +1132,14 @@
             "type": "string",
             "description": "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."
           },
+          "change": {
+            "type": "string",
+            "description": "Opcional, para un REDISEÑO: qué se ATACA ('cambiar el modelo y las cuadrículas', 'no se puede comparar nada', 'no me dice qué hacer'). Determina QUÉ dimensiones mueven las formas candidatas —densidad, comparación, decisión, profundidad, guía, presencia, estado en vivo—, así que dos pedidos distintos reciben propuestas distintas en vez de las mismas tres de siempre."
+          },
+          "keep": {
+            "type": "string",
+            "description": "Opcional, para un REDISEÑO: qué se CONSERVA — la esencia, la identidad, lo que ya funciona, y de qué forma parte hoy la pantalla ('hoy es una tabla densa'). El motor lo usa para saber de dónde ALEJARSE al proponer formas, y lo sirve como bloque para que no se pise lo que no había que tocar. Sin esto, la mitad de 'conservar' se pierde: la consulta se recorta a 2 oraciones para buscar en el acervo."
+          },
           "limit": {
             "type": "number",
             "description": "Cuántos patrones del acervo traer (default 6, máximo 100)."
@@ -1139,6 +1147,10 @@
           "prompt": {
             "type": "string",
             "description": "Descripción en lenguaje libre de lo que querés diseñar (tipo de pantalla, tono, contexto)."
+          },
+          "sketch": {
+            "type": "boolean",
+            "description": "Opcional: si es true, el brief incluye un BOCETO SVG de cada forma candidata para mostrárselos a la persona y que elija UNO antes de componer. Apagado por default porque cuesta presupuesto y sólo sirve en un rediseño; los dibuja el motor —no quien compone— para que las tres sean comparables, y la cantidad de filas de cada uno sale del alto de fila de su registro, así que la densidad se VE."
           },
           "target": {
             "type": "string",

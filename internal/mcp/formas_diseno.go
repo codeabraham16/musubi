@@ -60,31 +60,52 @@ var formasDeDiseno = map[string]formaDiseno{
 		"secciones que se leen en orden y construyen un argumento. El ritmo entre secciones importa más que cada sección"},
 }
 
-// formasPorEje acota qué formas tienen sentido para cada eje. NO es una elección: es el recorte que
-// deja al agente elegir entre candidatas plausibles en vez de entre las doce.
+// formasPorEje es el POZO de lo plausible para cada eje. **Ya no es la respuesta.**
+//
+// Hasta el 2026-08-31 tenía exactamente tres formas por eje y esas tres eran las que viajaban, así
+// que para `tabla` salían siempre las mismas y la rotación sólo excluía la del pedido anterior. El
+// defecto es medible: dos pedidos opuestos —«esta tabla no se puede comparar» y «esta tabla no me
+// dice qué hacer»— recibían LAS MISMAS tres candidatas. El motor no tenía por dónde enterarse de que
+// son problemas distintos.
+//
+// Ahora hay cinco o seis por eje y las tres que viajan se eligen de acá por CONTRASTE
+// (contraste_diseno.go): lejos del punto de partida y lejos entre sí, sobre las dimensiones que el
+// pedido dice querer mover. El pozo sigue existiendo para que las propuestas sean PLAUSIBLES —sin él,
+// un login podría recibir «tabla densa»—, pero elegir tres de seis por distancia es lo que hace que
+// dejen de ser genéricas y siempre las mismas.
 //
 // Un eje que no está acá NO propone forma, y es deliberado: `color`, `a11y`, `tipografia`,
 // `estado-vacio` y `terminacion` son PROPIEDADES de una pantalla, no esqueletos. Proponerle una
 // forma a «cómo se comporta la paleta en modo oscuro» sería inventar una respuesta — el mismo
 // criterio que ya usa la abstención.
+//
+// El ORDEN dentro de cada pozo importa: es el desempate cuando dos candidatas contrastan igual, así
+// que va de más a menos plausible para ese eje.
+//
+// Y EL TAMAÑO TAMBIÉN, POR ARITMÉTICA PURA. Con un pozo de 4, sacar el origen deja 3 y hay que elegir
+// 3: existe UN SOLO conjunto posible, así que el contraste sólo puede cambiar el ORDEN y las tres
+// propuestas son siempre las mismas — exactamente lo que el usuario objetó. Medido sobre 12 pedidos
+// distintos: pozo 4 → 1 conjunto (chat, login, microcopy, onboarding), pozo 5 → 3-4, pozo 6 → 5-6,
+// pozo 7 → 7. Por eso `designPozoMinimo`, y por eso esos cuatro ejes se llevaron a 6: 5 alcanza para
+// que haya elección pero ya está contra su propio techo (C(4,3) = 4 conjuntos posibles).
 var formasPorEje = map[string][]string{
-	"tabla":      {"tabla-densa", "detalle-con-lados", "catalogo-elegir"},
-	"dataviz":    {"tablero-un-numero", "lienzo-inspector", "narrativa"},
-	"dashboard":  {"tablero-un-numero", "monitor-procesos", "lista-priorizada"},
-	"formulario": {"formulario-guiado", "detalle-con-lados", "interrupcion"},
-	"login":      {"formulario-guiado", "interrupcion", "narrativa"},
-	"filtros":    {"catalogo-elegir", "tabla-densa", "lista-priorizada"},
-	"navegacion": {"catalogo-elegir", "detalle-con-lados", "lienzo-inspector"},
-	"jerarquia":  {"lista-priorizada", "tablero-un-numero", "narrativa"},
-	"estado":     {"monitor-procesos", "interrupcion", "lista-priorizada"},
-	"chat":       {"conversacion", "detalle-con-lados", "lienzo-inspector"},
-	"onboarding": {"formulario-guiado", "narrativa", "interrupcion"},
-	"densidad":   {"tabla-densa", "rejilla-temporal", "tablero-un-numero"},
-	"layout":     {"detalle-con-lados", "narrativa", "rejilla-temporal"},
-	"movil":      {"lista-priorizada", "conversacion", "formulario-guiado"},
-	"motion":     {"monitor-procesos", "lienzo-inspector", "interrupcion"},
-	"microcopy":  {"interrupcion", "narrativa", "conversacion"},
-	"presencia":  {"tablero-un-numero", "narrativa", "lienzo-inspector"},
+	"tabla":      {"tabla-densa", "detalle-con-lados", "catalogo-elegir", "rejilla-temporal", "lista-priorizada", "lienzo-inspector", "monitor-procesos"},
+	"dataviz":    {"tablero-un-numero", "lienzo-inspector", "narrativa", "rejilla-temporal", "monitor-procesos", "tabla-densa"},
+	"dashboard":  {"tablero-un-numero", "monitor-procesos", "lista-priorizada", "rejilla-temporal", "tabla-densa", "detalle-con-lados"},
+	"formulario": {"formulario-guiado", "detalle-con-lados", "interrupcion", "narrativa", "lista-priorizada"},
+	"login":      {"formulario-guiado", "interrupcion", "detalle-con-lados", "narrativa", "catalogo-elegir", "tablero-un-numero"},
+	"filtros":    {"catalogo-elegir", "tabla-densa", "lista-priorizada", "rejilla-temporal", "lienzo-inspector"},
+	"navegacion": {"catalogo-elegir", "detalle-con-lados", "lienzo-inspector", "lista-priorizada", "narrativa"},
+	"jerarquia":  {"lista-priorizada", "tablero-un-numero", "narrativa", "detalle-con-lados", "tabla-densa"},
+	"estado":     {"monitor-procesos", "interrupcion", "lista-priorizada", "tablero-un-numero", "rejilla-temporal"},
+	"chat":       {"conversacion", "detalle-con-lados", "lienzo-inspector", "monitor-procesos", "lista-priorizada", "narrativa"},
+	"onboarding": {"formulario-guiado", "narrativa", "conversacion", "interrupcion", "lista-priorizada", "catalogo-elegir"},
+	"densidad":   {"tabla-densa", "rejilla-temporal", "tablero-un-numero", "lista-priorizada", "catalogo-elegir", "monitor-procesos"},
+	"layout":     {"detalle-con-lados", "narrativa", "rejilla-temporal", "lienzo-inspector", "tablero-un-numero", "tabla-densa"},
+	"movil":      {"lista-priorizada", "conversacion", "formulario-guiado", "interrupcion", "catalogo-elegir"},
+	"motion":     {"monitor-procesos", "lienzo-inspector", "interrupcion", "narrativa", "tablero-un-numero"},
+	"microcopy":  {"interrupcion", "narrativa", "conversacion", "lista-priorizada", "detalle-con-lados", "formulario-guiado"},
+	"presencia":  {"tablero-un-numero", "narrativa", "lienzo-inspector", "interrupcion", "lista-priorizada"},
 }
 
 // designFormasPropuestas es cuántas candidatas viajan. Dos o tres: con una el motor estaría
@@ -92,32 +113,44 @@ var formasPorEje = map[string][]string{
 // un catálogo que el agente tiene que leer entero.
 const designFormasPropuestas = 3
 
+// designPozoMinimo es el piso de cada pozo, y NO es un número elegido a gusto: se deriva. Hay que
+// poder sacar el origen (−1) y que todavía sobre al menos una forma más que las que se proponen, o el
+// conjunto queda determinado y el contraste no puede hacer nada.
+const designPozoMinimo = designFormasPropuestas + 2
+
 // candidatasDeForma elige QUÉ formas viajan, sin escribir todavía una sola palabra del brief. Está
 // separada de `formasPara` porque la elección tiene ahora DOS lectores: el bloque de forma, que la
 // describe, y el bloque de escala, que saca de ella el registro numérico. Con la elección adentro del
 // armador de texto, la escala habría tenido que rehacerla —y dos maneras de elegir lo mismo es como
 // el brief termina proponiendo una forma y sirviendo los números de otra.
-func candidatasDeForma(eje string, usadas map[string]bool) []string {
-	cands := formasPorEje[eje]
-	if len(cands) == 0 {
+func candidatasDeForma(eje string, usadas map[string]bool, intencion intencionDeDiseno) []string {
+	pozo := formasPorEje[eje]
+	if len(pozo) == 0 {
 		return nil
 	}
-	var elegidas []string
-	for _, c := range cands {
-		if usadas[c] {
+
+	// El punto de partida sale de lo que se pidió CONSERVAR: un rediseño dice «hoy es una tabla», y
+	// esa forma es de la que hay que alejarse. Si el origen no está en el pozo igual sirve como
+	// referencia de distancia — de hecho ahí es donde más sirve.
+	origen := formaMencionada(intencion.Keep)
+
+	// La rotación y el origen se sacan del pozo, no del cálculo: proponer como novedad la forma que
+	// el proyecto acaba de usar, o la que el pedido pide cambiar, es contestar otra pregunta.
+	var disponibles []string
+	for _, c := range pozo {
+		if usadas[c] || c == origen {
 			continue
 		}
-		elegidas = append(elegidas, c)
-		if len(elegidas) >= designFormasPropuestas {
-			break
-		}
+		disponibles = append(disponibles, c)
 	}
-	// Si la historia excluyó todo, se vuelve a la lista completa: quedarse sin forma por rotación
-	// sería peor que repetir una. La rotación es una preferencia, no una prohibición.
-	if len(elegidas) == 0 {
-		elegidas = cands
+	// Si la historia y el origen vaciaron el pozo, se vuelve a él entero: quedarse sin forma por
+	// rotación sería peor que repetir una. La rotación es una preferencia, no una prohibición.
+	if len(disponibles) == 0 {
+		disponibles = pozo
 	}
-	return elegidas
+
+	rs, _, _ := dimensionesAMover(intencion.Change)
+	return elegirPorContraste(disponibles, origen, rs, hayDireccion(rs), designFormasPropuestas)
 }
 
 // formasPara arma el bloque de forma para un eje, excluyendo las que ya se usaron (`usadas`, que
@@ -125,8 +158,8 @@ func candidatasDeForma(eje string, usadas map[string]bool) []string {
 //
 // Devuelve "" cuando el eje no tiene formas plausibles. Un bloque vacío es correcto y se declara:
 // proponerle una forma a un pedido sobre la paleta sería inventar una respuesta.
-func formasPara(eje string, usadas map[string]bool) string {
-	elegidas := candidatasDeForma(eje, usadas)
+func formasPara(eje string, usadas map[string]bool, intencion intencionDeDiseno) string {
+	elegidas := candidatasDeForma(eje, usadas, intencion)
 
 	// Sin opciones no se emite el encabezado. Un bloque que dice «elegí UNA de estas» y no lista
 	// ninguna es peor que no mandar nada: le pide al agente que elija de un conjunto vacío. Lo
@@ -142,9 +175,21 @@ func formasPara(eje string, usadas map[string]bool) string {
 		f := formasDeDiseno[c]
 		b.WriteString("\n- ")
 		b.WriteString(f.Nombre)
+		// EN QUÉ DESTACA, al lado del nombre. Sin esto, tres formas elegidas por contraste se leen
+		// igual que tres sacadas de una lista y el agente no tiene cómo saber que cada una gana en
+		// algo distinto — que es todo el punto de haberlas elegido así.
+		if d := destacaDe(c); len(d) > 0 {
+			b.WriteString(" [gana en ")
+			b.WriteString(strings.Join(d, " y "))
+			b.WriteString("]")
+		}
 		b.WriteString(": ")
 		b.WriteString(f.Desc)
 	}
+
+	rs, estructural, explicito := dimensionesAMover(intencion.Change)
+	b.WriteString("\n")
+	b.WriteString(notaDeContraste(formaMencionada(intencion.Keep), rs, estructural, explicito))
 	return b.String()
 }
 

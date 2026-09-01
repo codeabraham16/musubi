@@ -27,6 +27,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -240,24 +241,61 @@ func (s *McpServer) vectoresDeEje(ctx context.Context) map[string][]float32 {
 	return vecs
 }
 
-// ejeDeConsulta elige el eje top-1 para el vector de una consulta. Devuelve el nombre, su similitud
-// y si superó el piso.
+// rutaDeEje es a qué eje se ruteó Y CONTRA QUÉ. El segundo candidato viaja porque sin él nadie puede
+// juzgar si la decisión fue holgada o una moneda al aire — y una moneda al aire vale distinto.
+type rutaDeEje struct {
+	Eje     string
+	Sim     float32
+	Segundo string
+	SimSeg  float32
+}
+
+// ejeDeConsulta elige el eje top-1 para el vector de una consulta, Y DEVUELVE TAMBIÉN AL SEGUNDO.
 //
-// TOP-1 Y NO TOP-2: medido el 2026-08-30, sumar el segundo eje BAJA M1 de 0,50 a 0,30. El segundo
-// eje es mucho menos estable entre paráfrasis y lo único que agrega es varianza.
-func (s *McpServer) ejeDeConsulta(ctx context.Context, vec []float32) (string, float32, bool) {
+// POR QUÉ EL SEGUNDO. Antes se descartaba, y con eso se perdía la única señal que distingue un ruteo
+// firme de uno al borde. Medido contra el central el 2026-08-31: «un panel de tickets» ruteaba a
+// `login` —y el brief salía con exigencias de pantalla de acceso y la prohibición del mensaje
+// «usuario o contraseña incorrectos» para un panel de soporte—, mientras que «un panel de
+// incidencias», «un panel de reclamos de soporte», «un panel» a secas y hasta «un panel de tickets DE
+// SOPORTE» ruteaban todos a `dashboard`. Una decisión que se da vuelta agregando dos palabras estaba
+// contra un borde, y el brief no tenía cómo decirlo.
+//
+// La causa es polisemia, no un bug del ruteo: «ticket» también es entrada y credencial. Nueve de diez
+// pedidos de una batería rutean bien, así que lo que hace falta NO es cambiar el criterio sino
+// DECLARAR contra qué se decidió — el mismo trato que ya reciben el recorte, la abstención y la
+// dirección del reclamo.
+func (s *McpServer) ejeDeConsulta(ctx context.Context, vec []float32) (rutaDeEje, bool) {
 	vecs := s.vectoresDeEje(ctx)
 	if len(vecs) == 0 || len(vec) == 0 {
-		return "", 0, false
+		return rutaDeEje{}, false
 	}
-	mejor, mejorSim := "", float32(-1)
+	var r rutaDeEje
+	r.Sim, r.SimSeg = -1, -1
 	for _, e := range ejesDeDiseno { // recorrido en orden fijo: el desempate no puede salir de un map
 		sim := cosenoDe(vec, vecs[e.Nombre])
-		if sim > mejorSim {
-			mejor, mejorSim = e.Nombre, sim
+		switch {
+		case sim > r.Sim:
+			r.Segundo, r.SimSeg = r.Eje, r.Sim
+			r.Eje, r.Sim = e.Nombre, sim
+		case sim > r.SimSeg:
+			r.Segundo, r.SimSeg = e.Nombre, sim
 		}
 	}
-	return mejor, mejorSim, mejorSim >= designEjeMinSim
+	return r, r.Sim >= designEjeMinSim
+}
+
+// notaDeRuteo declara a qué eje se ruteó y contra qué. Se emite SIEMPRE que haya ruteo, con los dos
+// números: es un dato, no un adjetivo, y quien compone decide si el margen le alcanza. Sin umbral
+// inventado — poner uno sería fijar a ojo dónde empieza «ajustado» sin haberlo medido.
+func notaDeRuteo(r rutaDeEje) string {
+	if r.Eje == "" {
+		return ""
+	}
+	n := fmt.Sprintf("RUTEO: el pedido se asignó al eje «%s» (%.2f de similitud)", r.Eje, r.Sim)
+	if r.Segundo != "" {
+		n += fmt.Sprintf(", contra «%s» (%.2f)", r.Segundo, r.SimSeg)
+	}
+	return n + ". Todo el material de abajo sale de ese eje. Si el eje NO le pega a lo que pediste —pasa con palabras que significan dos cosas, como «ticket», que también es entrada y credencial— agregá una palabra de contexto al pedido y volvé a llamar: el material cambia entero."
 }
 
 // cosenoDe asume vectores del mismo largo; si no lo son devuelve 0 en vez de entrar en pánico.

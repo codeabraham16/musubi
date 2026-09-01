@@ -8,6 +8,141 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El brief declara contra QUÉ se decidió el eje.** El ruteo elegía el top-1 y **descartaba al
+  segundo**, así que se perdía la única señal que distingue una decisión firme de una moneda al aire.
+  Medido en vivo contra el central: *«un panel de tickets»* ruteaba a **`login`** —y el brief salía con
+  exigencias de pantalla de acceso y la prohibición del mensaje «usuario o contraseña incorrectos»
+  para un panel de soporte—, mientras que «un panel de incidencias», «un panel de reclamos de
+  soporte», «un panel» a secas y hasta «un panel de tickets **de soporte**» ruteaban todos a
+  `dashboard`. Nueve de diez pedidos de la batería rutean bien: la causa es **polisemia** («ticket»
+  también es entrada y credencial), no un defecto del criterio.
+  - `axis_note` trae ahora los dos ejes con sus dos similitudes, y qué hacer si el eje no le pega:
+    agregar una palabra de contexto y volver a llamar. **Sin umbral de «ajustado»**, porque ponerlo
+    sería fijar a ojo dónde empieza sin haberlo medido — se sirve el dato y decide quien compone.
+
+### Fixed
+- **Cuatro ejes seguían dando siempre las mismas tres formas, por aritmética.** Con un pozo de 4,
+  sacar el origen deja 3 y hay que elegir 3: **existe un solo conjunto posible**, así que el contraste
+  sólo podía cambiar el orden. Medido sobre doce pedidos que barren las siete dimensiones en sus tres
+  direcciones:
+
+  | pozo | conjuntos distintos | ejes |
+  |---|---|---|
+  | 4 | **1** | `chat` · `login` · `microcopy` · `onboarding` |
+  | 5 | 3–4 | (saturados: el techo es 4) |
+  | 6 | 5–6 | |
+  | 7 | 7 | `tabla` |
+
+  Los cuatro ejes de 4 pasaron a 6, y hay un piso —`designPozoMinimo`— que **se deriva** en vez de
+  elegirse: el conjunto queda determinado en cuanto `n−1 ≤ propuestas`, así que el mínimo que todavía
+  deja elegir es `propuestas+2`. El invariante verifica la derivación en las dos direcciones, porque
+  bajar la constante sola no rompe nada hoy y el número quedaría suelto.
+
+### Fixed
+- **«Cambiá X» no es «quiero más X», y el motor los confundía.** Toda dimensión nombrada se trataba
+  como «hay que ganar en esto», así que al pedido real del usuario —*«cambiar modelos, cuadrículas»*—
+  el motor entendía «quiero más densidad» y proponía una **tabla densa** para una pantalla de notas.
+  Y no es un caso raro: «cambiá X» es la manera normal de pedir un rediseño, y es justo la que no dice
+  hacia dónde.
+  - Cada dimensión viaja ahora con su **polaridad**, leída por CLÁUSULA: *ganar* (déficit o deseo:
+    «no se puede», «cuesta», «falta», «quiero más»), *ceder* (exceso: «demasiado», «sobra», «abruma»)
+    o *mover* (cambio sin dirección: «cambiar», «otro», «distinto»).
+  - El mérito la respeta: ganar suma el perfil, ceder suma su complemento, y **mover no suma nada** —
+    se cae a puro contraste, que es la lectura correcta de «cambialo, no sé a qué».
+  - **El verbo gobierna lo que le sigue.** En «cambiar modelos, cuadrículas» sólo la primera cláusula
+    trae el verbo, así que una cláusula sin marcador **hereda** el de la anterior. Sin eso,
+    «cuadrículas» caía a un default — y el default era justo el equivocado.
+  - Medido, la misma dimensión en tres direcciones da tres primeras candidatas distintas:
+    «quiero más densidad» → tabla densa (densidad 3) · «está demasiado denso» → lista priorizada
+    (densidad 1) · «cambiar las cuadrículas» → **lienzo con inspector**, la más lejana del punto de
+    partida. El caso que falló en vivo ahora sale bien **sin reformular el pedido**.
+  - El brief declara la dirección que leyó, no sólo la dimensión: «hay que GANAR en …», «hay que CEDER
+    en …», o «se nombra … como lo que hay que cambiar, PERO NO hacia dónde».
+
+### Fixed
+- **Los bocetos esquivaban el presupuesto.** Los agregué sin tocar `cederUnItem` y el brief se pasaba
+  del tope duro sin que nada se pusiera rojo: medido contra un pedido REAL —el rediseño de las notas
+  del CRM— **8.084 tokens con un tope de 6.600**. El presupuesto se aplicaba, no encontraba nada más
+  que ceder (el corpus ya estaba en su piso) y devolvía un brief que inundaba el contexto de quien
+  llamó, que es exactamente lo que ese tope existe para impedir. Ahora los bocetos **ceden primeros y
+  todos juntos**, con su recorte declarado: son un dibujo de `shape`, así que soltarlos cuesta
+  comodidad y no conocimiento; y servir dos de tres convierte «mirá estos y elegí uno» en una
+  comparación tramposa donde la que no tiene dibujo pierde por no estar.
+- **El SVG pesaba el doble de lo que yo había medido.** Había medido el dibujo crudo (2.650 chars),
+  pero viaja dentro de un string JSON, donde **cada comilla doble se escapa y cuesta el doble**.
+  Comillas simples —XML válido, en JSON no se escapan— más una hoja de estilo para los atributos que
+  se repiten en las ~40 cajas de cada boceto.
+- **La rejilla temporal se dibujaba como 35 tarjetas**: 73 cajas y 5.303 chars, más que los otros dos
+  bocetos juntos, y era lo que empujaba el brief contra el tope. Una rejilla temporal son **líneas**;
+  ahora son 25 cajas y 1.792 chars, y además se lee mejor — un calendario se reconoce por la retícula,
+  no por el borde de cada casilla. Brief final del mismo pedido: **5.556 tokens**.
+- El regex del banco de bocetos sólo aceptaba comillas dobles; al cambiar el formato reportó «0 cajas,
+  prácticamente vacío» en las doce formas. Ahora acepta las dos y hay una comprobación aparte, con su
+  motivo, de que el SVG use comillas simples.
+
+### Added
+- **Los tres bocetos: el motor DIBUJA las candidatas.** Cierra el pedido del usuario —*«si querés te
+  muestro 3 lienzos y de ahí partimos con un modelo»*— con el flujo escalonado que eligió: bocetos
+  primero, el elegido después, porque descartar tiene que ser barato.
+  - **Los dibuja el motor y no quien compone**, y no es un detalle de implementación: si cada boceto lo
+    improvisa el agente, las tres salen con criterios distintos y elegir deja de ser elegir un modelo
+    para pasar a ser elegir cuál quedó mejor dibujado.
+  - **Hace visible `scale`**: la cantidad de filas de cada boceto NO está escrita a mano, sale del alto
+    de fila del registro de esa forma (12 · 9 · 8 según compacto, estándar o editorial). La decisión de
+    densidad se ve en vez de leerse.
+  - SVG autocontenido en `currentColor`, sin paleta propia — el boceto es estructura, y un color acá se
+    cruzaría con la marca del proyecto. Model-free: aritmética de cajas, mismo pedido = mismo SVG.
+  - Apagado por default (`sketch: true`), igual que `keep` y `change`: se paga cuando se usa.
+- **Séptima dimensión, `estado en vivo`.** `monitor-procesos` quedaba anunciado como que gana en
+  «densidad y comparación y decisión» —tres cosas, que no diferencia nada— porque su fuerza real,
+  mostrar lo que pasa AHORA, no estaba entre las dimensiones.
+
+### Fixed
+- **Se afirmaba que una forma gana donde apenas puntúa.** `destacaDe` devolvía el máximo aunque fuera
+  1 o 2 por descarte: la conversación quedaba anunciada como que **gana en presencia**, o sea que un
+  chat destaca por su momento visual. Ahora hay un piso (2 de 3) y, si nada lo alcanza, la forma no
+  gana en nada y se calla — el mismo criterio que la abstención del motor.
+- **Sin intención declarada, el mérito no puede pesar.** Con el pedido mudo, `dims` son las siete, así
+  que el mérito pasaba a ser «suma de todas las capacidades» y rankeaba primero a las formas más
+  parejas — un criterio que nadie pidió, y que además castiga a las especialistas, que son justo las
+  buenas cuando sí sabés qué querés. Lo destapó un test que ya existía: al eje `tabla` había dejado de
+  proponerle «tabla densa». **Un pedido normal vuelve a comportarse como antes**; sólo un rediseño con
+  un reclamo dicho re-ordena.
+
+### Added
+- **Las tres formas candidatas se ELIGEN por contraste, no se buscan en una tabla.** `formasPorEje`
+  era un mapa fijo de eje → exactamente tres formas, así que para `tabla` salían siempre las mismas y
+  la rotación sólo excluía la del pedido anterior. El defecto es medible: dos pedidos opuestos —«esta
+  tabla no se puede comparar» y «esta tabla no me dice qué hacer»— recibían **las mismas tres
+  candidatas**. El motor no tenía por dónde enterarse de que son problemas distintos.
+  - Cada forma gana un **perfil de seis dimensiones** (densidad, comparación, decisión, profundidad,
+    guía, presencia) y el mapa pasa a ser el **pozo de lo plausible** (cinco o seis por eje). Las tres
+    que viajan se eligen por **mérito en lo que se pidió ganar + contraste entre sí**, y cada una llega
+    etiquetada con en qué gana — derivado del perfil, no escrito aparte.
+  - Sigue siendo model-free: una tabla de perfiles, distancia Manhattan y selección greedy max-min —
+    la misma familia que el MMR que ya usa el corpus. Elegir cuál de las tres se usa lo sigue haciendo
+    el agente.
+- **`keep` y `change`: las dos mitades de un rediseño.** `musubi_design` no tenía dónde decir qué se
+  **conserva**, y no era sólo un campo que faltaba: la consulta se recorta a dos oraciones antes de
+  buscar en el acervo, así que en un pedido real —*«rediseñá las notas, mantené la esencia, pero
+  cambiá modelos y cuadrículas»*— **la mitad de «conservar» se caía del buscador**. El motor salía a
+  buscar material de rediseño sin saber qué no podía tocar. Ahora viajan enteras y `change` decide
+  qué dimensiones separan a las candidatas.
+- **Skill `redisenar`**: la mitad que no puede vivir en el motor. Destila el pedido en keep/change,
+  pregunta sólo lo que cambia el trabajo, muestra los tres modelos como bocetos —barato de
+  descartar— y recién compone el elegido entero. Preguntar es un juicio y el camino caliente es
+  model-free: por eso es una skill y no una rama del motor.
+
+### Fixed
+- **Se proponía lo más lejano en vez de lo mejor.** La primera versión del contraste sólo maximizaba
+  distancia, y al pedido «esta tabla no se puede comparar» le contestaba con «detalle con lados», que
+  tiene comparación 0: la distancia premia igual subir que bajar, y una tabla ya está arriba, así que
+  lo más lejano era lo **peor** en lo que se estaba pidiendo. Lo nombrado pasa a ser **mérito**.
+- **Una palabra estructural tapaba a una específica.** «cambiar modelos, cuadrículas» cortocircuitaba
+  en `modelo` y devolvía las seis dimensiones, con lo que el pedido de Altura recibía exactamente lo
+  mismo que un pedido sin intención ninguna.
+
+### Added
 - **El motor decide los números, no los adjetivos** (Musubi Renaissance). Medido contra el central
   sobre un pedido real —tabla densa de inventario, marca Altura, target web— contando valores
   concretos (hex, px, ms, ch, razones de contraste) por bloque del brief:
