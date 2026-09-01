@@ -409,6 +409,11 @@ type designBrief struct {
 	// silenciosa a léxico —con el campo `similarity` desapareciendo sin explicación— era uno de los dos
 	// silencios que esta capa cierra.
 	Retrieval string `json:"retrieval"`
+	// AxisNote dice contra QUÉ se decidió ese eje, con los dos números. Un eje solo no deja juzgar si
+	// la decisión fue holgada o una moneda al aire — y medido en vivo, «un panel de tickets» ruteaba a
+	// `login` mientras «un panel de tickets de soporte» ruteaba a `dashboard`: una decisión que se da
+	// vuelta con dos palabras. Sin el segundo candidato eso pasa en silencio.
+	AxisNote string `json:"axis_note,omitempty"`
 	// Axis dice POR QUÉ EJE se ruteó, cuando se ruteó. Un brief que llega por taxonomía y no lo
 	// dice obliga a adivinar si el material salió del tema o del azar del ranking.
 	Axis     string `json:"axis,omitempty"`
@@ -515,6 +520,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		QueryNormalized: recorteConsulta,
 		Retrieval:       rec.Modo,
 		Axis:            rec.Eje,
+		AxisNote:        notaDeRuteo(rec.Ruta),
 		Degraded:        rec.Degraded,
 		DegradedReason:  rec.Motivo,
 	}
@@ -819,7 +825,10 @@ type resultadoRecall struct {
 	Patrones []patronItem
 	Metodo   []searchSource // tarjetas design-method/* del pool, ya ordenadas por relevancia
 	Eje      string         // el eje por el que se ruteó, si se ruteó
-	Modo     string         // recuperacionSemantica | recuperacionLexica | recuperacionPorEje
+	// Ruta es CONTRA QUÉ se decidió ese eje. Sin el segundo candidato nadie puede juzgar si el ruteo
+	// fue holgado o una moneda al aire, y las dos cosas valen distinto.
+	Ruta     rutaDeEje
+	Modo     string // recuperacionSemantica | recuperacionLexica | recuperacionPorEje
 	Degraded bool
 	Motivo   string // sinMaterial | bajoUmbral | sinRecuperador | sinCausaConcreta
 }
@@ -848,6 +857,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	var sources []searchSource
 	modo := recuperacionLexica
 	eje := ""
+	var ruta rutaDeEje
 	if embedding.Enabled(s.embedder) {
 		embCtx, cancel := context.WithTimeout(ctx, designEmbedTimeout)
 		vec, err := s.embedder.Embed(embCtx, query)
@@ -858,7 +868,8 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 			// sus tarjetas por importancia. Medido sobre el acervo real y los 16 pedidos dorados,
 			// M1 pasa de 0,10 a 0,50: la similitud entre 1.438 tarjetas casi idénticas no separaba
 			// nada, y entre 19 ejes bien separados el mismo embebedor sí separa.
-			if nombre, _, ok := s.ejeDeConsulta(ctx, vec); ok {
+			if r, ok := s.ejeDeConsulta(ctx, vec); ok {
+				nombre := r.Eje
 				// Se traen MÁS candidatos del eje que los que se van a servir, y no es un detalle:
 				// el eje acota el tema pero no evita que las seis primeras tarjetas sean seis
 				// maneras de decir lo mismo — que es exactamente el defecto que F4 arregló y que la
@@ -867,6 +878,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 				// sigue haciendo su trabajo de diversificar adentro del eje.
 				if porEje := s.tarjetasDelEje(nombre, limit*designHolguraEje); len(porEje) > 0 {
 					eje, modo = nombre, recuperacionPorEje
+					ruta = r
 					sources = porEje
 				}
 			}
@@ -933,7 +945,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	if modo == recuperacionSemantica {
 		sources = sobreElPiso(sources, designSimilitudMinima)
 		if len(sources) == 0 {
-			return resultadoRecall{Metodo: metodo, Eje: eje, Modo: modo, Degraded: true, Motivo: bajoUmbral}
+			return resultadoRecall{Metodo: metodo, Eje: eje, Ruta: ruta, Modo: modo, Degraded: true, Motivo: bajoUmbral}
 		}
 	}
 	// El material se sirve ENTERO. Antes pasaba por toSearchHits, que devuelve un gist de ~90 chars
@@ -953,6 +965,7 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 		Patrones: patrones,
 		Metodo:   metodo,
 		Eje:      eje,
+		Ruta:     ruta,
 		Modo:     modo, Motivo: sinCausaConcreta,
 	}
 }
