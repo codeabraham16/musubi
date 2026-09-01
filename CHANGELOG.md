@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Cuatro ejes seguían dando siempre las mismas tres formas, por aritmética.** Con un pozo de 4,
+  sacar el origen deja 3 y hay que elegir 3: **existe un solo conjunto posible**, así que el contraste
+  sólo podía cambiar el orden. Medido sobre doce pedidos que barren las siete dimensiones en sus tres
+  direcciones:
+
+  | pozo | conjuntos distintos | ejes |
+  |---|---|---|
+  | 4 | **1** | `chat` · `login` · `microcopy` · `onboarding` |
+  | 5 | 3–4 | (saturados: el techo es 4) |
+  | 6 | 5–6 | |
+  | 7 | 7 | `tabla` |
+
+  Los cuatro ejes de 4 pasaron a 6, y hay un piso —`designPozoMinimo`— que **se deriva** en vez de
+  elegirse: el conjunto queda determinado en cuanto `n−1 ≤ propuestas`, así que el mínimo que todavía
+  deja elegir es `propuestas+2`. El invariante verifica la derivación en las dos direcciones, porque
+  bajar la constante sola no rompe nada hoy y el número quedaría suelto.
+
+### Fixed
 - **«Cambiá X» no es «quiero más X», y el motor los confundía.** Toda dimensión nombrada se trataba
   como «hay que ganar en esto», así que al pedido real del usuario —*«cambiar modelos, cuadrículas»*—
   el motor entendía «quiero más densidad» y proponía una **tabla densa** para una pantalla de notas.

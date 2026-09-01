@@ -81,23 +81,30 @@ var formasDeDiseno = map[string]formaDiseno{
 //
 // El ORDEN dentro de cada pozo importa: es el desempate cuando dos candidatas contrastan igual, así
 // que va de más a menos plausible para ese eje.
+//
+// Y EL TAMAÑO TAMBIÉN, POR ARITMÉTICA PURA. Con un pozo de 4, sacar el origen deja 3 y hay que elegir
+// 3: existe UN SOLO conjunto posible, así que el contraste sólo puede cambiar el ORDEN y las tres
+// propuestas son siempre las mismas — exactamente lo que el usuario objetó. Medido sobre 12 pedidos
+// distintos: pozo 4 → 1 conjunto (chat, login, microcopy, onboarding), pozo 5 → 3-4, pozo 6 → 5-6,
+// pozo 7 → 7. Por eso `designPozoMinimo`, y por eso esos cuatro ejes se llevaron a 6: 5 alcanza para
+// que haya elección pero ya está contra su propio techo (C(4,3) = 4 conjuntos posibles).
 var formasPorEje = map[string][]string{
 	"tabla":      {"tabla-densa", "detalle-con-lados", "catalogo-elegir", "rejilla-temporal", "lista-priorizada", "lienzo-inspector", "monitor-procesos"},
 	"dataviz":    {"tablero-un-numero", "lienzo-inspector", "narrativa", "rejilla-temporal", "monitor-procesos", "tabla-densa"},
 	"dashboard":  {"tablero-un-numero", "monitor-procesos", "lista-priorizada", "rejilla-temporal", "tabla-densa", "detalle-con-lados"},
 	"formulario": {"formulario-guiado", "detalle-con-lados", "interrupcion", "narrativa", "lista-priorizada"},
-	"login":      {"formulario-guiado", "interrupcion", "narrativa", "tablero-un-numero"},
+	"login":      {"formulario-guiado", "interrupcion", "detalle-con-lados", "narrativa", "catalogo-elegir", "tablero-un-numero"},
 	"filtros":    {"catalogo-elegir", "tabla-densa", "lista-priorizada", "rejilla-temporal", "lienzo-inspector"},
 	"navegacion": {"catalogo-elegir", "detalle-con-lados", "lienzo-inspector", "lista-priorizada", "narrativa"},
 	"jerarquia":  {"lista-priorizada", "tablero-un-numero", "narrativa", "detalle-con-lados", "tabla-densa"},
 	"estado":     {"monitor-procesos", "interrupcion", "lista-priorizada", "tablero-un-numero", "rejilla-temporal"},
-	"chat":       {"conversacion", "detalle-con-lados", "lienzo-inspector", "lista-priorizada"},
-	"onboarding": {"formulario-guiado", "narrativa", "interrupcion", "catalogo-elegir"},
+	"chat":       {"conversacion", "detalle-con-lados", "lienzo-inspector", "monitor-procesos", "lista-priorizada", "narrativa"},
+	"onboarding": {"formulario-guiado", "narrativa", "conversacion", "interrupcion", "lista-priorizada", "catalogo-elegir"},
 	"densidad":   {"tabla-densa", "rejilla-temporal", "tablero-un-numero", "lista-priorizada", "catalogo-elegir", "monitor-procesos"},
 	"layout":     {"detalle-con-lados", "narrativa", "rejilla-temporal", "lienzo-inspector", "tablero-un-numero", "tabla-densa"},
 	"movil":      {"lista-priorizada", "conversacion", "formulario-guiado", "interrupcion", "catalogo-elegir"},
 	"motion":     {"monitor-procesos", "lienzo-inspector", "interrupcion", "narrativa", "tablero-un-numero"},
-	"microcopy":  {"interrupcion", "narrativa", "conversacion", "formulario-guiado"},
+	"microcopy":  {"interrupcion", "narrativa", "conversacion", "lista-priorizada", "detalle-con-lados", "formulario-guiado"},
 	"presencia":  {"tablero-un-numero", "narrativa", "lienzo-inspector", "interrupcion", "lista-priorizada"},
 }
 
@@ -105,6 +112,11 @@ var formasPorEje = map[string][]string{
 // eligiendo —y no puede, es un juicio—, y con más de tres el bloque deja de acotar y vuelve a ser
 // un catálogo que el agente tiene que leer entero.
 const designFormasPropuestas = 3
+
+// designPozoMinimo es el piso de cada pozo, y NO es un número elegido a gusto: se deriva. Hay que
+// poder sacar el origen (−1) y que todavía sobre al menos una forma más que las que se proponen, o el
+// conjunto queda determinado y el contraste no puede hacer nada.
+const designPozoMinimo = designFormasPropuestas + 2
 
 // candidatasDeForma elige QUÉ formas viajan, sin escribir todavía una sola palabra del brief. Está
 // separada de `formasPara` porque la elección tiene ahora DOS lectores: el bloque de forma, que la
