@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **«Cambiá X» no es «quiero más X», y el motor los confundía.** Toda dimensión nombrada se trataba
+  como «hay que ganar en esto», así que al pedido real del usuario —*«cambiar modelos, cuadrículas»*—
+  el motor entendía «quiero más densidad» y proponía una **tabla densa** para una pantalla de notas.
+  Y no es un caso raro: «cambiá X» es la manera normal de pedir un rediseño, y es justo la que no dice
+  hacia dónde.
+  - Cada dimensión viaja ahora con su **polaridad**, leída por CLÁUSULA: *ganar* (déficit o deseo:
+    «no se puede», «cuesta», «falta», «quiero más»), *ceder* (exceso: «demasiado», «sobra», «abruma»)
+    o *mover* (cambio sin dirección: «cambiar», «otro», «distinto»).
+  - El mérito la respeta: ganar suma el perfil, ceder suma su complemento, y **mover no suma nada** —
+    se cae a puro contraste, que es la lectura correcta de «cambialo, no sé a qué».
+  - **El verbo gobierna lo que le sigue.** En «cambiar modelos, cuadrículas» sólo la primera cláusula
+    trae el verbo, así que una cláusula sin marcador **hereda** el de la anterior. Sin eso,
+    «cuadrículas» caía a un default — y el default era justo el equivocado.
+  - Medido, la misma dimensión en tres direcciones da tres primeras candidatas distintas:
+    «quiero más densidad» → tabla densa (densidad 3) · «está demasiado denso» → lista priorizada
+    (densidad 1) · «cambiar las cuadrículas» → **lienzo con inspector**, la más lejana del punto de
+    partida. El caso que falló en vivo ahora sale bien **sin reformular el pedido**.
+  - El brief declara la dirección que leyó, no sólo la dimensión: «hay que GANAR en …», «hay que CEDER
+    en …», o «se nombra … como lo que hay que cambiar, PERO NO hacia dónde».
+
+### Fixed
 - **Los bocetos esquivaban el presupuesto.** Los agregué sin tocar `cederUnItem` y el brief se pasaba
   del tope duro sin que nada se pusiera rojo: medido contra un pedido REAL —el rediseño de las notas
   del CRM— **8.084 tokens con un tope de 6.600**. El presupuesto se aplicaba, no encontraba nada más

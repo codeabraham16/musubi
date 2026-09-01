@@ -251,3 +251,127 @@ func TestContrasteNoDecirNadaNoEsDecirTodo(t *testing.T) {
 		t.Error("con un pedido estructural, la nota dice que no se nombró nada")
 	}
 }
+
+// C-CON9 · LA MISMA DIMENSIÓN EN TRES DIRECCIONES DA TRES RESPUESTAS.
+//
+// Es el invariante de la polaridad. Nombrar una dimensión no dice hacia dónde, y la versión anterior
+// trataba las tres igual: al pedido real del usuario —«cambiar modelos, cuadrículas»— entendía «quiero
+// más densidad» y proponía una TABLA para una pantalla de notas.
+func TestContrasteLaDireccionCambiaLaRespuesta(t *testing.T) {
+	keep := "hoy es un catálogo para elegir"
+	primera := func(cambio string) string {
+		c := candidatasDeForma("filtros", nil, intencionDeDiseno{Keep: keep, Change: cambio})
+		if len(c) == 0 {
+			t.Fatalf("%q: sin candidatas", cambio)
+		}
+		return c[0]
+	}
+	ganar := primera("quiero más densidad, no cabe nada")
+	ceder := primera("está demasiado denso, abruma, sobra información")
+	mover := primera("cambiar modelos, cuadriculas, etc")
+
+	if ganar == ceder {
+		t.Errorf("pedir MÁS densidad y pedir MENOS densidad dan la misma primera candidata (%q)", ganar)
+	}
+	// Y cada una tiene que ir para su lado en el perfil, no sólo diferir.
+	if pg, pc := perfilDeForma[ganar][dimDensidad], perfilDeForma[ceder][dimDensidad]; pg <= pc {
+		t.Errorf("pedir MÁS densidad propuso %q (densidad %d) y pedir MENOS propuso %q (densidad %d)",
+			ganar, pg, ceder, pc)
+	}
+	// `mover` no puede coincidir con las dos: si coincidiera, la dirección no estaría haciendo nada.
+	if mover == ganar && mover == ceder {
+		t.Error("«cambiá X» da lo mismo que «más X» y que «menos X»: la polaridad no se está usando")
+	}
+}
+
+// C-CON10 · «CAMBIÁ X» NO ASUME DIRECCIÓN.
+//
+// El caso exacto que falló en vivo, con el texto del usuario. Sin dirección declarada el mérito no
+// puede pesar: la elección se cae a puro contraste, que es la lectura correcta de «cambialo, no sé a
+// qué». Se verifica contra el PERFIL y no contra un nombre de forma, para que el test no se rompa el
+// día que se agregue una forma mejor al pozo.
+func TestContrasteCambiarNoEsQuererMas(t *testing.T) {
+	rs, estructural, explicito := dimensionesAMover("cambiar modelos, cuadriculas, etc")
+	if !explicito {
+		t.Fatal("no se reconoció ninguna dimensión: la premisa del caso no se cumple")
+	}
+	if !estructural {
+		t.Error("«cambiar modelos» no se leyó como estructural")
+	}
+	if hayDireccion(rs) {
+		t.Errorf("se asumió una dirección donde el pedido no la dijo: %+v", rs)
+	}
+	// Y el efecto: la primera candidata es la más LEJANA del origen, no la que más densidad tiene.
+	origen := "catalogo-elegir"
+	cands := candidatasDeForma("filtros", nil, intencionDeDiseno{
+		Keep: "hoy es un catálogo para elegir", Change: "cambiar modelos, cuadriculas, etc"})
+	lejos, mejorDist := "", -1
+	for _, f := range formasPorEje["filtros"] {
+		if f == origen {
+			continue
+		}
+		if d := distanciaEn(f, origen, todasLasDims()); d > mejorDist {
+			lejos, mejorDist = f, d
+		}
+	}
+	if cands[0] != lejos {
+		t.Errorf("sin dirección declarada la primera debería ser la más lejana del origen (%q, distancia %d) y fue %q",
+			lejos, mejorDist, cands[0])
+	}
+}
+
+// C-CON11 · EL VERBO GOBIERNA LO QUE LE SIGUE.
+//
+// «cambiar modelos, cuadrículas» son dos cláusulas y sólo la primera trae el verbo. Si cada una se
+// leyera aislada, «cuadrículas» quedaría sin dirección propia y caería a un default — y el default
+// que importaba era justo el equivocado. Por eso una cláusula sin marcador HEREDA la de la anterior.
+func TestContrasteLaDireccionSeHereda(t *testing.T) {
+	// La premisa: la segunda cláusula, SOLA, no declara dirección ninguna.
+	if _, ok := polaridadDe("cuadriculas"); ok {
+		t.Fatal("la premisa no se cumple: «cuadriculas» sola ya declara una dirección")
+	}
+	rs, _, _ := dimensionesAMover("no se puede comparar nada, y encontrar cuesta")
+	for _, r := range rs {
+		if r.Pol != polGanar {
+			t.Errorf("%s se leyó como %v y toda la frase es un déficit", nombreDim[r.Dim], r.Pol)
+		}
+	}
+	// Y al revés: el exceso también se hereda.
+	rs2, _, _ := dimensionesAMover("sobra de todo: densidad, filas")
+	if !hayDireccion(rs2) {
+		t.Fatal("«sobra de todo: densidad» no declaró dirección")
+	}
+	for _, r := range rs2 {
+		if r.Pol != polPerder {
+			t.Errorf("%s se leyó como %v y la frase dice que sobra", nombreDim[r.Dim], r.Pol)
+		}
+	}
+}
+
+// C-CON12 · UNA MENCIÓN SIN DIRECCIÓN NO PISA A UNA QUE SÍ LA TENÍA.
+//
+// La gente se corrige mientras habla: «está todo vacío… quiero más densidad». La dirección explícita
+// tiene que sobrevivir a una mención posterior que no diga nada.
+func TestContrasteLaDireccionExplicitaNoSePisa(t *testing.T) {
+	// EL CASO TIENE QUE EJERCER LA GUARDA. La primera versión usaba «quiero más densidad, y la
+	// cuadricula»: la segunda cláusula no trae marcador, así que HEREDA el mismo «ganar» y sobrescribir
+	// no cambia nada — el sabotaje pasó verde. Hace falta que en el medio aparezca OTRA dirección, para
+	// que lo heredado por la mención muda sea distinto de lo que la dimensión ya tenía declarado.
+	const pedido = "quiero más densidad. Cambiá el modelo, la cuadricula"
+	if _, ok := polaridadDe("la cuadricula"); ok {
+		t.Fatal("la premisa no se cumple: «la cuadricula» sola ya declara una dirección")
+	}
+	if _, ok := polaridadDe("cambiá el modelo"); !ok {
+		t.Fatal("la premisa no se cumple: «cambiá el modelo» tiene que declarar una dirección para pisar")
+	}
+
+	rs, _, _ := dimensionesAMover(pedido)
+	if !hayDireccion(rs) {
+		t.Fatal("se perdió la dirección: «quiero más densidad» la declaraba")
+	}
+	for _, r := range rs {
+		if r.Dim == dimDensidad && r.Pol != polGanar {
+			t.Errorf("la densidad quedó en %v: una mención posterior SIN dirección propia le pisó el «quiero más» que sí la tenía", r.Pol)
+		}
+	}
+}

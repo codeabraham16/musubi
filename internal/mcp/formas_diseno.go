@@ -137,8 +137,8 @@ func candidatasDeForma(eje string, usadas map[string]bool, intencion intencionDe
 		disponibles = pozo
 	}
 
-	dims, _, explicito := dimensionesAMover(intencion.Change)
-	return elegirPorContraste(disponibles, origen, dims, explicito, designFormasPropuestas)
+	rs, _, _ := dimensionesAMover(intencion.Change)
+	return elegirPorContraste(disponibles, origen, rs, hayDireccion(rs), designFormasPropuestas)
 }
 
 // formasPara arma el bloque de forma para un eje, excluyendo las que ya se usaron (`usadas`, que
@@ -175,9 +175,9 @@ func formasPara(eje string, usadas map[string]bool, intencion intencionDeDiseno)
 		b.WriteString(f.Desc)
 	}
 
-	dims, estructural, explicito := dimensionesAMover(intencion.Change)
+	rs, estructural, explicito := dimensionesAMover(intencion.Change)
 	b.WriteString("\n")
-	b.WriteString(notaDeContraste(formaMencionada(intencion.Keep), dims, estructural, explicito))
+	b.WriteString(notaDeContraste(formaMencionada(intencion.Keep), rs, estructural, explicito))
 	return b.String()
 }
 
