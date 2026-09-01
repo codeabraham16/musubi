@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"sort"
 	"strings"
 	"testing"
 )
@@ -372,6 +373,67 @@ func TestContrasteLaDireccionExplicitaNoSePisa(t *testing.T) {
 	for _, r := range rs {
 		if r.Dim == dimDensidad && r.Pol != polGanar {
 			t.Errorf("la densidad quedó en %v: una mención posterior SIN dirección propia le pisó el «quiero más» que sí la tenía", r.Pol)
+		}
+	}
+}
+
+// pedidosDeBanco son doce reclamos que barren las siete dimensiones en sus tres direcciones. Vive acá
+// y no en producción: es el instrumento con el que se mide si un pozo puede contrastar.
+var pedidosDeBanco = []string{
+	"", "cambiar el modelo",
+	"no se puede comparar nada", "está demasiado denso, sobra información",
+	"no me dice qué hacer, es urgente", "quiero entrar al detalle sin salir",
+	"hay que acompañar paso a paso", "está aburrido, no tiene carácter",
+	"quiero ver qué está corriendo ahora", "quiero más densidad, no cabe nada",
+	"sobra guía, abruma", "no se ve el progreso en vivo",
+}
+
+// C-CON13 · UN POZO TIENE QUE PODER DAR MÁS DE UN CONJUNTO.
+//
+// Es aritmética, no gusto: con un pozo de 4, sacar el origen deja 3 y hay que elegir 3 — existe UN
+// SOLO conjunto posible. El contraste sólo puede cambiar el orden y las tres propuestas son siempre
+// las mismas, que es exactamente lo que el usuario objetó. Medido antes del arreglo: chat, login,
+// microcopy y onboarding daban 1 conjunto para los doce pedidos del banco.
+func TestContrasteNingunPozoEstaForzado(t *testing.T) {
+	// EL PISO SE DERIVA, no se elige. Con un pozo de n, sacar el origen deja n−1 y hay que elegir
+	// `designFormasPropuestas`: el conjunto queda determinado en cuanto n−1 ≤ propuestas. Así que el
+	// mínimo que todavía deja elegir es propuestas+2, y eso se verifica acá — bajar la constante sola
+	// no rompe nada hoy (ningún pozo está en el límite), así que sin esta comprobación el número
+	// quedaría suelto y el próximo pozo chico entraría sin que nada avise.
+	if designPozoMinimo-1 <= designFormasPropuestas {
+		t.Errorf("designPozoMinimo=%d deja %d formas tras sacar el origen y se proponen %d: el conjunto queda forzado",
+			designPozoMinimo, designPozoMinimo-1, designFormasPropuestas)
+	}
+	if designPozoMinimo-2 > designFormasPropuestas {
+		t.Errorf("designPozoMinimo=%d es más alto de lo que hace falta: con %d ya se podía elegir",
+			designPozoMinimo, designPozoMinimo-1)
+	}
+
+	// UNA FORMA QUE NUNCA GANA INFLA EL POZO SIN DAR VARIEDAD. Se midió y con este catálogo NO PASA:
+	// ninguna de las doce formas está dominada por otra en las siete dimensiones, así que todas ganan
+	// al menos uno de los doce pedidos del banco. Por eso no hay un invariante aparte para eso: un
+	// test que no puede fallar es ruido, y el sabotaje —meterle cuatro formas de relleno al eje
+	// `estado`— pasó VERDE justo porque las cuatro sí ganaban algo.
+	for eje, pozo := range formasPorEje {
+		if len(pozo) < designPozoMinimo {
+			t.Errorf("el pozo de %q tiene %d formas y el piso es %d: sacando el origen queda un único conjunto posible",
+				eje, len(pozo), designPozoMinimo)
+		}
+		// Y se verifica el EFECTO, no sólo el tamaño: el peor caso es rediseñar la forma más típica
+		// del eje, que es la primera del pozo.
+		origen := "hoy es un " + formasDeDiseno[pozo[0]].Nombre
+		sets := map[string]bool{}
+		for _, p := range pedidosDeBanco {
+			c := candidatasDeForma(eje, nil, intencionDeDiseno{Keep: origen, Change: p})
+			if len(c) == 0 {
+				t.Fatalf("%s: el eje no propuso ninguna forma", eje)
+			}
+			orden := append([]string(nil), c...)
+			sort.Strings(orden)
+			sets[strings.Join(orden, "|")] = true
+		}
+		if len(sets) < 2 {
+			t.Errorf("%s: los doce pedidos del banco reciben SIEMPRE el mismo conjunto de tres", eje)
 		}
 	}
 }
