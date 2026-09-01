@@ -86,6 +86,17 @@ type Muestra struct {
 	// tiene al menos un proceso, así que el 0 no es ambiguo — significa «no medido», y los
 	// consumidores lo traducen a null antes de mostrarlo.
 	NumProcesos int `json:"num_procesos"`
+
+	// Alcance son las sondas de alcanzabilidad desde ESTA máquina (A67): «¿llego a ese puerto?».
+	//
+	// Viaja DENTRO de la muestra y no en una tabla propia porque es exactamente eso: una medición
+	// que la máquina toma de su entorno, con la misma frecuencia y el mismo dueño que la CPU o el
+	// disco. Y `last_sample` es una columna de TEXTO con este JSON, así que no cuesta esquema.
+	//
+	// `omitempty` NO es cosmético: una máquina sin destinos configurados no reporta sondas, y eso
+	// significa «nadie le pidió que mirara», no «no llega». Una muestra vieja —anterior a este
+	// campo— se lee igual, con la lista vacía. Ausente no es falso.
+	Alcance []SondaDeAlcance `json:"alcance,omitempty"`
 }
 
 // Colector lee el estado del host. Es un seam por sistema operativo: la implementación real vive

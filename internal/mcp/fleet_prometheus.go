@@ -139,8 +139,8 @@ type serieDeFlota struct {
 	Valor  func(d fleet.Device, m *fleet.Muestra) (float64, bool)
 }
 
-// seriesDeFlota devuelve las 19 series en orden estable: las DOS que salen de la fila del device
-// (up, last_seen) y las 17 que salen de la MUESTRA.
+// seriesDeFlota devuelve las 20 series en orden estable: las DOS que salen de la fila del device
+// (up, last_seen) y las 18 que salen de la MUESTRA.
 //
 // `ahora` e `intervaloSonda` entran por parámetro porque tres series son relativas al reloj (up,
 // last_seen, sample_age): con un reloj por serie, `up` podría decir «viva» y `sample_age` medirse
@@ -209,6 +209,19 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration) []serieDeFlota
 			"", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.NumProcesos), m.NumProcesos > 0 })},
 		{"musubi_fleet_device_sample_age_seconds", "Antigüedad de la muestra. Si crece sin parar, el agente late pero dejó de medir.",
 			"s", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return ahora.Sub(m.Tomada).Seconds(), !m.Tomada.IsZero() })},
+		{"musubi_fleet_device_reach_up",
+			"1 si esta máquina alcanza TODOS los destinos que le declararon (A67), 0 si falla alguno. AUSENTE si no tiene ninguno configurado: nadie le pidió que mirara, que no es lo mismo que no llegar. CUÁL destino falla se mira en musubi_fleet_list, no acá — sus valores los elige quien configura cada máquina y como etiqueta serían cardinalidad sin techo, la misma decisión que el desglose de servicios.",
+			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) {
+				if len(m.Alcance) == 0 {
+					return 0, false
+				}
+				for _, s := range m.Alcance {
+					if !s.Alcanza {
+						return 0, true
+					}
+				}
+				return 1, true
+			})},
 	}
 }
 

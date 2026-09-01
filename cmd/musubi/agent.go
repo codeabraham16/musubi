@@ -342,6 +342,10 @@ func tomarMuestra(col fleet.Colector) *fleet.Muestra {
 	if err != nil {
 		return nil
 	}
+	// LAS SONDAS DE ALCANCE VIAJAN CON LA MUESTRA (A67), no por una puerta propia: son una
+	// medición que esta máquina toma de su entorno, con el mismo dueño y la misma frecuencia que
+	// la CPU o el disco. Sin destinos configurados devuelve nil y el campo ni aparece.
+	m.Alcance = sondearAlcance()
 	return &m
 }
 

@@ -37,6 +37,13 @@ Group=musubi
 # única línea que cambia.
 Environment=MUSUBI_BRAIN_URL=http://127.0.0.1:7717
 
+# LOS DESTINOS QUE ESTA MÁQUINA TIENE QUE PODER ALCANZAR (A67). Opcional; sin esto el agente no
+# sondea nada y la máquina NO emite `musubi_fleet_device_reach_up` — que es lo correcto: «nadie le
+# pidió que mirara» no es «no llega», y una flota entera emitiendo 0 haría sonar la alerta desde el
+# día uno. Formato `host:puerto`, separados por coma, hasta 4. Ejemplo, para vigilar el relay
+# propio DESDE EL CLIENTE, que es el único punto de vista que responde la pregunta real:
+#Environment=MUSUBI_ALCANCE=100.79.126.62:21115,100.79.126.62:21116,100.79.126.62:21117
+
 # EL TOKEN DEL DISPOSITIVO, QUE NO ES EL DE NINGUNA PERSONA.
 # Son dos almacenes de credenciales que no se cruzan — ni siquiera comparten el nombre de la
 # variable de entorno (MUSUBI_DEVICE_TOKEN vs MUSUBI_TOKEN), a propósito. Este token sirve

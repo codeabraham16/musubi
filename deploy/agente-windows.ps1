@@ -50,6 +50,11 @@
 param(
   [Parameter(Mandatory=$true)][string]$BrainUrl,
   [Parameter(Mandatory=$true)][string]$DeviceToken,
+  # Destinos que esta maquina tiene que poder alcanzar (A67): `host:puerto`, separados por coma,
+  # hasta 4. Sin esto la maquina NO emite `musubi_fleet_device_reach_up`, y eso es lo correcto:
+  # "nadie le pidio que mirara" no es "no llega". Es el unico punto de vista que puede responder
+  # si un cliente alcanza el relay; el sondeo desde el servidor mira el lugar donde siempre anda.
+  [string]$Alcance = "",
   [string]$ExePath = "",
   [string]$InstallDir = "$env:LOCALAPPDATA\Musubi",
   [switch]$SkipFirewall,
@@ -186,9 +191,13 @@ Bien "el cerebro registro el latido"
 
 # -- 4. La tarea programada ------------------------------------------------------------------
 $lanzador = Join-Path $InstallDir "agente.cmd"
+# La linea sale VACIA cuando no se paso -Alcance: un `set MUSUBI_ALCANCE=` a secas dejaria la
+# variable definida y vacia, que el agente tendria que distinguir de ausente. Mejor no escribirla.
+$lineaAlcance = ""
+if ($Alcance -ne "") { $lineaAlcance = "`r`nset MUSUBI_ALCANCE=$Alcance" }
 @"
 @echo off
-set MUSUBI_BRAIN_URL=$BrainUrl
+set MUSUBI_BRAIN_URL=$BrainUrl$lineaAlcance
 set /p MUSUBI_DEVICE_TOKEN=<"$tokenFile"
 "$destino" agent
 "@ | Set-Content -Encoding ASCII $lanzador

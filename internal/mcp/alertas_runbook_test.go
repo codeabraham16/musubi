@@ -39,7 +39,14 @@ func TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste(t *testing.T) {
 		t.Fatalf("sólo se detectaron %d secciones en el runbook; el parser de títulos se rompió y la prueba no probaría nada", len(anclas))
 	}
 
-	reRunbook := regexp.MustCompile(`runbook:\s*"?deploy/RUNBOOK\.md#([a-z0-9-]+)`)
+	// LA REFERENCIA SE BUSCA ESTÉ DONDE ESTÉ, no sólo al principio de la anotación.
+	//
+	// El patrón anterior exigía que `runbook:` empezara con `deploy/RUNBOOK.md#`, así que una
+	// anotación que da una instrucción y CIERRA con «Ver deploy/RUNBOOK.md#loquesea» —forma que
+	// ya usaban dos alertas— no se verificaba nunca. Se descubrió agregando una alerta con un
+	// ancla inventada: la prueba pasó en verde y el operador habría llegado a un archivo que no
+	// le dice nada, que es exactamente lo que esta prueba existe para impedir.
+	reRunbook := regexp.MustCompile(`deploy/RUNBOOK\.md#([a-z0-9-]+)`)
 	citas := reRunbook.FindAllStringSubmatch(string(reglas), -1)
 	if len(citas) == 0 {
 		t.Fatal("ninguna regla cita el runbook: o se borraron todas las anotaciones, o el patrón cambió")

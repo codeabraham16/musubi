@@ -570,3 +570,35 @@ podman restart musubi-alertmanager
 
 Comprobalo: a los 5 minutos, `podman logs --tail 20 musubi-alertmanager | grep -i watchdog` no
 tiene que decir nada, y el servicio externo tiene que mostrar el ping.
+
+## MaquinaQueNoAlcanzaSuDestino
+
+Esa máquina **no llega** a alguno de los puertos que le declararon en `MUSUBI_ALCANCE`. La sonda
+la toma el agente en cada latido, así que lo que la alerta afirma es «desde ESA máquina no se
+llega» — no «el destino está caído».
+
+**La distinción es el punto entero de esta alerta.** Nació de un caso real: el relay de RustDesk se
+veía sano por las tres vías que existían —los dos contenedores arriba y sus tres puertos
+contestando— y ningún cliente lograba registrarse. El chequeo sondeaba desde el propio servidor,
+que es el único lugar desde el que siempre anda.
+
+Primero, cuál destino falla:
+
+```bash
+./musubi-tool.sh musubi_fleet_list '{}' | grep -A3 no_alcanza
+```
+
+Después, en orden de frecuencia:
+
+- **La red de esa máquina.** Un VPN que captura todo el tráfico es la causa más común y la más
+  difícil de ver desde afuera: la máquina sigue latiendo contra el cerebro y todo parece normal.
+  Si el VPN tiene *split tunneling*, excluir la aplicación o el rango del tailnet
+  (`100.64.0.0/10`) resuelve sin apagarlo.
+- **El destino caído.** Se distingue solo: si TODAS las máquinas dejan de alcanzarlo a la vez, es
+  el destino; si es una sola, es esa máquina.
+- **Un destino mal escrito.** El formato es `host:puerto`. Los inválidos se descartan al arrancar
+  el agente y avisa una vez por su salida estándar, así que un typo se ve como una serie que
+  **nunca aparece**, no como un `0`.
+
+Una máquina sin destinos configurados **no emite la serie** y no puede disparar esta alerta.
+Ausente no es falso: significa que nadie le pidió que mirara.

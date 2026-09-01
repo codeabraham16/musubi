@@ -308,6 +308,24 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 					fila["pantalla_sin_motor"] = true
 				}
 			}
+			// EL DETALLE DEL ALCANCE VIVE ACÁ Y NO EN UNA ETIQUETA (A67). La métrica dice si la
+			// máquina llega a TODO; cuál destino falla se responde acá, porque los valores de
+			// `destino` los elige quien configura cada máquina y como etiqueta serían
+			// cardinalidad sin techo — la misma decisión que el desglose de servicios.
+			//
+			// Sólo se listan los que NO llegan: una lista de todos los que sí sería ruido en cada
+			// fila de una flota sana, y lo que se busca al abrir esta tool es qué está mal.
+			if m := d.UltimaMuestra; m != nil {
+				var caidos []string
+				for _, sonda := range m.Alcance {
+					if !sonda.Alcanza {
+						caidos = append(caidos, sonda.Destino)
+					}
+				}
+				if len(caidos) > 0 {
+					fila["no_alcanza"] = caidos
+				}
+			}
 			if detalle, total := s.politicasSobre(p, d); total > 0 {
 				fila["politicas_activas"] = total
 				if detalle != nil {

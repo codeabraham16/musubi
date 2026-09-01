@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -45,7 +45,6 @@
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 | A61 | **Dos formatos de fecha conviven en la misma base** | Las tablas de FLOTA escriben desde Go con `time.RFC3339` (`2026-08-29T19:06:17Z`); las de MEMORIA dejan que SQLite ponga `CURRENT_TIMESTAMP` (`2026-08-29 18:56:39`). Comparar una ventana con el formato equivocado **no da error: da vacío**, y un vacío se lee como «no había nada escrito ese día». Peor: **el driver convierte al LEER y no al COMPARAR** —`modernc.org/sqlite` devuelve RFC3339 sobre una columna `DATETIME` aunque los bytes no lo estén—, así que mirar lo que vuelve en Go lleva a la conclusión equivocada sobre cómo comparar. **Apareció al escribir el cruce (S14)**, que es la primera consulta que toca las dos familias de tabla. Hoy está contenido: el formato vive en una constante con nombre, el parseo acepta los dos, y hay una prueba con la hora fijada que lo custodia. Unificarlo sería mejor y es un cambio de su propio tamaño: tocar cómo se escribe `created_at` afecta a nueve consultas de recall que hoy andan. **Se revisa si aparece una tercera consulta que cruce las dos familias.** | **sin asignar** |
 
-| A67 | **El chequeo del relay mira desde adentro, que es el único lugar desde donde siempre anda** | `reportar-relay.py` sondea 21115/21116/21117 **desde el propio `musubi-server`**, así que verifica que el servicio CONTESTA AHÍ, no que un cliente pueda ALCANZARLO — que es la única pregunta que importa en un relay. Vino reportando `OK` desde que se instaló mientras la tabla `peer` estaba en cero y ningún cliente había llegado nunca. **Medido el 2026-09-01**: con el relay «sano» por las tres vías (dos contenedores arriba + los tres puertos contestando), `davantis-1` daba `tcp21116=False` y `gio` daba `True` — o sea que la salud era distinta según quién preguntara, y el chequeo sólo conocía la respuesta del que nunca falla. La causa era el NordVPN de una máquina (A31), pero el problema del chequeo es independiente de la causa. Lo cierra una sonda **desde el lado del cliente**: que cada agente Tier A pruebe alcanzar los puertos del relay y lo reporte como su propia métrica, para que «el relay anda» deje de significar «anda para el servidor». | **sin asignar** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -73,6 +72,48 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-01 · A67 CERRADO — la alcanzabilidad se le pregunta al CLIENTE, no al servidor.**
+
+El colector del relay sondeaba sus tres puertos desde el propio `musubi-server`. Eso verifica que
+el servicio contesta ahí, que es lo único que ese punto de vista puede ver — y no es la pregunta.
+La pregunta de un relay es si un CLIENTE lo alcanza.
+
+Vino diciendo `OK` desde que se instaló mientras la tabla `peer` estaba en cero y ningún cliente
+había llegado nunca. Medido el 2026-09-01, con el relay «sano» por las tres vías que existían —dos
+contenedores arriba y los tres puertos contestando—: `davantis-1` daba `tcp21116=False` y `gio`
+daba `True` contra el MISMO puerto. **La salud era distinta según quién preguntara, y el chequeo
+sólo conocía la respuesta del que nunca falla.** La causa concreta fue el VPN de una de las dos
+(A31), pero el agujero es independiente de la causa: un punto de vista único no puede medir
+alcanzabilidad.
+
+**Cómo se cerró.** El agente sondea, en cada latido, los destinos que le declararon en
+`MUSUBI_ALCANCE` (`host:puerto`, hasta cuatro, en paralelo para que cuatro timeouts no se sumen
+adentro de un latido de 30 s). El resultado viaja **dentro de la muestra**: es una medición que la
+máquina toma de su entorno, con el mismo dueño y la misma frecuencia que la CPU. Y como
+`last_sample` es una columna de TEXTO con ese JSON, **no costó migración** — una muestra vieja sin
+el campo se lee igual, con la lista vacía.
+
+**AUSENTE NO ES FALSO, y acá decide si la alerta sirve o es ruido.** Una máquina sin destinos no
+emite la serie. Si emitiera `0`, toda la flota sin configurar dispararía desde el día uno — que es
+exactamente cómo se le enseña a alguien a ignorar el canal entero.
+
+**La métrica dice «llego a TODO» y no lleva etiqueta `destino`.** Sus valores los elige quien
+configura cada máquina, así que como etiqueta serían cardinalidad sin techo por flota. Cuál falla
+se responde en `musubi_fleet_list` (`no_alcanza`, y sólo los caídos), que es la misma decisión que
+este track ya había tomado con el desglose de servicios. Se llama `musubi_fleet_device_reach_up`
+—familia `device_`— así que cae bajo el `drop` del scrape que se angostó ayer y no hizo falta
+tocar la config de Prometheus.
+
+**Y EN EL CAMINO CAYÓ UNA GUARDA QUE NO GUARDABA.** La alerta nueva citaba
+`deploy/RUNBOOK.md#maquinaquenoalcanzasudestino`, una sección que todavía no existía, y
+`TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste` **pasó en verde**: su patrón exigía que la
+anotación EMPEZARA con `deploy/RUNBOOK.md#`, y la forma «...instrucción. Ver deploy/RUNBOOK.md#x»
+—que ya usaba otra alerta— nunca se verificaba. Se ensanchó el patrón y ahora falla por los dos
+lados: ancla inventada, y sección borrada del runbook. Los dos sabotajes, ejecutados.
+
+Es el mismo hallazgo que el resto de estos días: una comprobación que contesta con seguridad sobre
+algo que no mira.
 
 **2026-08-31 (bis) · A60 CERRADO — y la regla que proponía esta misma nota era incorrecta.**
 

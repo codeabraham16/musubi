@@ -136,6 +136,28 @@ groups:
           summary: "La política {{ $labels.policy }} actuó {{ $value | printf \"%.0f\" }} veces en 6 h: está tapando el síntoma, no curándolo."
           runbook: "deploy/RUNBOOK.md#politicaquenocura"
 
+      # UNA MÁQUINA QUE NO ALCANZA LO QUE NECESITA ALCANZAR (A67).
+      #
+      # Nace de un caso concreto: el relay propio se veía sano por las tres vías que existían —dos
+      # contenedores arriba y sus tres puertos contestando— y NINGÚN cliente llegaba. El chequeo
+      # sondeaba desde el propio servidor, que es el único lugar desde el que siempre anda.
+      #
+      # Esta regla mira la sonda que toma CADA MÁQUINA, así que un `0` significa «desde acá no se
+      # llega». La causa puede ser el destino caído o la red de esa máquina —un VPN que se come la
+      # ruta fue la real— y por eso el summary nombra la máquina y no el destino: quien atiende
+      # tiene que ir a mirar ESA máquina.
+      #
+      # AUSENTE NO DISPARA: una máquina sin destinos configurados no emite la serie, así que no
+      # entra acá. Si emitiera 0, toda la flota sin configurar sonaría desde el día uno — que es
+      # exactamente cómo se le enseña a alguien a ignorar las alarmas.
+      - alert: MaquinaQueNoAlcanzaSuDestino
+        expr: musubi_fleet_device_reach_up == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.device }} no alcanza alguno de los destinos que le declararon: mirá `no_alcanza` en musubi_fleet_list."
+          runbook: "El destino puede estar caído, o la red de ESA máquina puede estar cortando la ruta (un VPN con todo el tráfico capturado es la causa más común). Ver deploy/RUNBOOK.md#maquinaquenoalcanzasudestino"
+
       # La política está viva pero NO PUEDE actuar: su principal perdió la concesión `exec`, o el
       # comando dejó de estar en su allowlist. Es una alarma apagada, y una alarma apagada en
       # silencio es la razón por la que existe la mitad de este slice.
