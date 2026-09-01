@@ -7,6 +7,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El brief declara contra QUÉ se decidió el eje.** El ruteo elegía el top-1 y **descartaba al
+  segundo**, así que se perdía la única señal que distingue una decisión firme de una moneda al aire.
+  Medido en vivo contra el central: *«un panel de tickets»* ruteaba a **`login`** —y el brief salía con
+  exigencias de pantalla de acceso y la prohibición del mensaje «usuario o contraseña incorrectos»
+  para un panel de soporte—, mientras que «un panel de incidencias», «un panel de reclamos de
+  soporte», «un panel» a secas y hasta «un panel de tickets **de soporte**» ruteaban todos a
+  `dashboard`. Nueve de diez pedidos de la batería rutean bien: la causa es **polisemia** («ticket»
+  también es entrada y credencial), no un defecto del criterio.
+  - `axis_note` trae ahora los dos ejes con sus dos similitudes, y qué hacer si el eje no le pega:
+    agregar una palabra de contexto y volver a llamar. **Sin umbral de «ajustado»**, porque ponerlo
+    sería fijar a ojo dónde empieza sin haberlo medido — se sirve el dato y decide quien compone.
+
 ### Fixed
 - **Cuatro ejes seguían dando siempre las mismas tres formas, por aritmética.** Con un pozo de 4,
   sacar el origen deja 3 y hay que elegir 3: **existe un solo conjunto posible**, así que el contraste
