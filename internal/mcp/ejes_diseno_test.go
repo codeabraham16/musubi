@@ -11,6 +11,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -107,7 +108,7 @@ func TestEjesSinTablaCompletaNoSeRutea(t *testing.T) {
 	if v := s.vectoresDeEje(t.Context()); v != nil {
 		t.Errorf("con un eje sin embeber la tabla tiene que ser nil; salió con %d entradas", len(v))
 	}
-	if _, _, ok := s.ejeDeConsulta(t.Context(), []float32{1, 0, 0}); ok {
+	if _, ok := s.ejeDeConsulta(t.Context(), []float32{1, 0, 0}); ok {
 		t.Error("sin tabla no se puede rutear, y dijo que sí")
 	}
 }
@@ -243,4 +244,102 @@ func TestEjesElSlugDeclaraElEje(t *testing.T) {
 	if ejes["terminacion"] {
 		t.Errorf("el slug de presencia también reclamó terminacion: %v", clavesDe(ejes))
 	}
+}
+
+// C-EJE-R1 · EL RUTEO DECLARA CONTRA QUÉ SE DECIDIÓ.
+//
+// Nació de un caso medido en vivo (2026-08-31): «un panel de tickets» ruteaba a `login` —y el brief
+// salía con exigencias de pantalla de acceso y la prohibición del mensaje «usuario o contraseña
+// incorrectos» para un panel de soporte—, mientras que «un panel de incidencias», «un panel de
+// reclamos de soporte», «un panel» a secas y hasta «un panel de tickets DE SOPORTE» ruteaban todos a
+// `dashboard`. Una decisión que se da vuelta con dos palabras estaba contra un borde, y el brief no
+// tenía cómo decirlo porque el segundo candidato se descartaba.
+func TestRuteoDeclaraElSegundoCandidato(t *testing.T) {
+	// TRES NIVELES DE SIMILITUD, Y EL ALTO VA DESPUÉS DEL MEDIO. La primera versión usaba el
+	// embebedor de eje fijo, donde todo lo que no es el elegido puntúa 0: ahí el «segundo» es
+	// cualquier otro eje con 0, y sale igual con el código sano que con el saboteado. El sabotaje que
+	// borra el ascenso del ganador anterior a segundo puesto pasó VERDE.
+	//
+	// Para que el caso distinga hace falta un segundo IDENTIFICABLE, y que el ganador aparezca DESPUÉS
+	// en el recorrido — si apareciera antes, el segundo se llenaría por la otra rama y el sabotaje
+	// seguiría escondido.
+	// Y HAY QUE PROBAR LOS DOS ÓRDENES. El segundo puesto se llena por DOS ramas distintas —el ganador
+	// anterior que baja, y un candidato nuevo que no llega a primero— y con un solo orden cada rama
+	// tapa a la otra: saboteando cualquiera de las dos, el test pasaba VERDE por culpa de la que
+	// quedaba viva. Con el segundo ANTES del ganador se ejerce el ascenso; con el segundo DESPUÉS se
+	// ejerce la otra.
+	primero, ultimo := ejesDeDiseno[0].Nombre, ejesDeDiseno[len(ejesDeDiseno)-1].Nombre
+	if primero == ultimo {
+		t.Fatal("la premisa no se cumple: hacen falta al menos dos ejes")
+	}
+	for _, caso := range []struct{ nombre, alto, medio string }{
+		{"el segundo aparece ANTES que el ganador", ultimo, primero},
+		{"el segundo aparece DESPUÉS que el ganador", primero, ultimo},
+	} {
+		t.Run(caso.nombre, func(t *testing.T) { probarRuteo(t, caso.alto, caso.medio) })
+	}
+}
+
+func probarRuteo(t *testing.T, alto, medio string) {
+	t.Helper()
+	engine, err := memory.NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	s := NewMcpServer(engine, t.TempDir(), &embebedorGraduado{alto: alto, medio: medio})
+
+	ruta, ok := s.ejeDeConsulta(t.Context(), []float32{1, 0, 0})
+	if !ok {
+		t.Fatal("el fixture no ruteó: la premisa del caso no se cumple")
+	}
+	if ruta.Eje != alto {
+		t.Fatalf("ruteó a %q y el fixture pone arriba a %q", ruta.Eje, alto)
+	}
+	if ruta.Segundo != medio {
+		t.Errorf("el segundo es %q (%.3f) y el fixture pone segundo a %q: el ganador anterior no se está ascendiendo",
+			ruta.Segundo, ruta.SimSeg, medio)
+	}
+	if ruta.SimSeg > ruta.Sim {
+		t.Errorf("el segundo (%.3f) le gana al primero (%.3f): el orden está al revés", ruta.SimSeg, ruta.Sim)
+	}
+
+	// Y la nota tiene que llevar LOS DOS NOMBRES Y LOS DOS NÚMEROS. Un dato, no un adjetivo: poner
+	// un umbral de «ajustado» sería fijar a ojo dónde empieza, sin haberlo medido.
+	nota := notaDeRuteo(ruta)
+	for _, quiero := range []string{ruta.Eje, ruta.Segundo,
+		fmt.Sprintf("%.2f", ruta.Sim), fmt.Sprintf("%.2f", ruta.SimSeg)} {
+		if !strings.Contains(nota, quiero) {
+			t.Errorf("la nota de ruteo no dice %q: %s", quiero, nota)
+		}
+	}
+	// Sin ruteo no se estampa una nota: un aviso sobre algo que no pasó es ruido.
+	if n := notaDeRuteo(rutaDeEje{}); n != "" {
+		t.Errorf("sin eje ruteado se emitió una nota igual: %q", n)
+	}
+}
+
+// embebedorGraduado da TRES niveles de similitud contra la consulta {1,0,0}: 1,0 para `alto`, 0,8
+// para `medio` y 0 para el resto. Con eso el segundo puesto tiene nombre propio y se puede afirmar
+// cuál debería ser.
+type embebedorGraduado struct{ alto, medio string }
+
+func (e *embebedorGraduado) Enabled() bool   { return true }
+func (e *embebedorGraduado) Dimensions() int { return 3 }
+func (e *embebedorGraduado) ModelID() string { return "graduado" }
+func (e *embebedorGraduado) Name() string    { return "graduado" }
+func (e *embebedorGraduado) Embed(_ context.Context, txt string) ([]float32, error) {
+	for _, x := range ejesDeDiseno {
+		if x.Desc != txt {
+			continue
+		}
+		switch x.Nombre {
+		case e.alto:
+			return []float32{1, 0, 0}, nil
+		case e.medio:
+			return []float32{0.8, 0.6, 0}, nil
+		}
+		return []float32{0, 0, 1}, nil // ortogonal
+	}
+	return []float32{1, 0, 0}, nil // la consulta
 }
