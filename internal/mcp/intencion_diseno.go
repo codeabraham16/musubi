@@ -70,21 +70,39 @@ func bloqueDeCambio(change string) string {
 	b.WriteString("SE ATACA — acá sí hay permiso para romper: ")
 	b.WriteString(change)
 
-	dims, _, explicito := dimensionesAMover(change)
-	if explicito {
-		var ns []string
-		for _, d := range dims {
-			ns = append(ns, nombreDim[d])
-		}
-		if len(dims) == dimsTotal {
-			b.WriteString("\nEL MOTOR LEYÓ: un replanteo del esqueleto entero, así que las candidatas se separan en las siete dimensiones (" +
-				strings.Join(ns, ", ") + ").")
-		} else {
-			b.WriteString("\nEL MOTOR LEYÓ que hay que mover: " + strings.Join(ns, ", ") +
-				". Si leyó mal, la elección de formas de abajo está sesgada y conviene reformular el pedido antes de componer.")
-		}
-	} else {
+	rs, _, explicito := dimensionesAMover(change)
+	switch {
+	case !explicito:
 		b.WriteString("\nEL MOTOR NO RECONOCIÓ ninguna dimensión concreta en esto, así que las candidatas se separan parejo. NO lo leas como que se pidió cambiar todo.")
+	case !hayDireccion(rs):
+		// «CAMBIÁ X» NO ES «QUIERO MÁS X», y confundirlos ya nos costó una propuesta mala en vivo: al
+		// pedido «cambiar modelos, cuadrículas» el motor entendía «más densidad» y proponía una TABLA
+		// para una pantalla de notas. Nombrar la dimensión no dice hacia dónde.
+		var ns []string
+		for _, r := range rs {
+			ns = append(ns, nombreDim[r.Dim])
+		}
+		b.WriteString("\nEL MOTOR LEYÓ que se nombra " + strings.Join(ns, ", ") +
+			" como lo que hay que cambiar, PERO NO hacia dónde. Así que no asumió una dirección: las candidatas se eligieron por qué tan lejos quedan del punto de partida. Si querés más o menos de algo, decilo y las propuestas cambian.")
+	default:
+		var ganar, perder []string
+		for _, r := range rs {
+			switch r.Pol {
+			case polGanar:
+				ganar = append(ganar, nombreDim[r.Dim])
+			case polPerder:
+				perder = append(perder, nombreDim[r.Dim])
+			}
+		}
+		var partes []string
+		if len(ganar) > 0 {
+			partes = append(partes, "GANAR en "+strings.Join(ganar, ", "))
+		}
+		if len(perder) > 0 {
+			partes = append(partes, "CEDER en "+strings.Join(perder, ", "))
+		}
+		b.WriteString("\nEL MOTOR LEYÓ que hay que " + strings.Join(partes, " y ") +
+			". Si leyó mal, la elección de formas de abajo está sesgada y conviene reformular el pedido antes de componer.")
 	}
 	return b.String()
 }

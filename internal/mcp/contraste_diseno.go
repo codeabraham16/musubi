@@ -134,26 +134,94 @@ var vocabularioDeCambio = [dimsTotal][]string{
 // en densidad sería contestar otra pregunta.
 var palabrasEstructurales = []string{"modelo", "estructura", "esqueleto", "layout", "disposicion", "disposición", "replantear", "de cero", "otra cosa"}
 
-// dimensionesAMover lee del pedido qué dimensiones hay que atacar. Devuelve también si el pedido dijo
-// algo: «no dijo nada» y «dijo todo» dan el mismo conjunto pero no son lo mismo, y el brief las
-// declara distinto — el motor no puede afirmar que el usuario pidió mover las seis cuando en realidad
-// no pidió ninguna.
-// LO QUE SE NOMBRA ES LO QUE HAY QUE GANAR, no de lo que hay que alejarse.
+// polaridad es HACIA DÓNDE hay que mover una dimensión. Existe porque nombrar una dimensión no dice
+// en qué dirección: «cambiar las cuadrículas» y «quiero más densidad» nombran la misma y piden cosas
+// distintas.
+type polaridad int
+
+const (
+	polMover  polaridad = iota // se nombra como lo que se cambia, sin decir hacia dónde
+	polGanar                   // falta: la pantalla tiene que ganar en eso
+	polPerder                  // sobra: la pantalla tiene que ceder en eso
+)
+
+// reclamo es una dimensión con su dirección.
+type reclamo struct {
+	Dim int
+	Pol polaridad
+}
+
+// Marcadores de dirección. Se buscan POR CLÁUSULA, no en todo el texto: quién gobierna a quién
+// importa, y un «no» al principio de la frase no convierte en déficit a todo lo que venga después.
+var (
+	marcasPerder = []string{"demasiado", "demasiada", "demasiadas", "demasiados", "de más", "de mas",
+		"sobra", "sobran", "exceso", "abruma", "satura", "ruido", "menos", "sacar", "quitar", "achicar"}
+	marcasGanar = []string{"no se puede", "no puedo", "no se ve", "no me dice", "no dice", "no hay",
+		"no llego", "no entra", "no cabe", "cuesta", "dificil", "difícil", "imposible", "falta", "faltan",
+		"quiero", "necesito", "me gustaria", "me gustaría", "más", "mejor", "que se pueda", "hay que poder"}
+	marcasMover = []string{"cambiar", "cambiá", "cambia ", "cambiale", "otro", "otra", "distinto",
+		"distinta", "reemplazar", "replantear"}
+)
+
+// polaridadDe lee la dirección de UNA cláusula. Devuelve `ok=false` si la cláusula no declara ninguna,
+// para que pueda heredar la de la cláusula anterior.
 //
-// La primera versión sólo maximizaba distancia, y salió mal en la medición: al pedido «esta tabla no
-// se puede comparar» le contestaba con «detalle con lados», que tiene comparación 0. La distancia
-// premia igual subir que bajar, y una tabla ya está en comparación 3, así que lo más lejano es lo
-// PEOR en lo que se estaba pidiendo. Por eso las dimensiones nombradas se usan como MÉRITO —cuánto
-// gana la forma en eso— y la distancia queda para que las tres no sean la misma propuesta.
+// El exceso se chequea PRIMERO porque es más específico: «no quiero tanta densidad» tiene un «no» y
+// un «tanta», y lo que manda es el segundo.
+func polaridadDe(clausula string) (polaridad, bool) {
+	for _, w := range marcasPerder {
+		if strings.Contains(clausula, w) {
+			return polPerder, true
+		}
+	}
+	for _, w := range marcasGanar {
+		if strings.Contains(clausula, w) {
+			return polGanar, true
+		}
+	}
+	for _, w := range marcasMover {
+		if strings.Contains(clausula, w) {
+			return polMover, true
+		}
+	}
+	return polMover, false
+}
+
+// enClausulas parte el pedido para poder leer cada reclamo con su propia dirección. El verbo de una
+// cláusula gobierna lo que le sigue hasta el próximo corte, así que en «cambiar modelos, cuadrículas»
+// el «cambiar» alcanza también a las cuadrículas — por eso una cláusula sin marcador HEREDA la de la
+// anterior en vez de caer al default.
+func enClausulas(txt string) []string {
+	for _, sep := range []string{";", ".", "·", ":", "\n", " pero ", " aunque "} {
+		txt = strings.ReplaceAll(txt, sep, ",")
+	}
+	var out []string
+	for _, c := range strings.Split(txt, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// dimensionesAMover lee del pedido QUÉ dimensiones hay que atacar y HACIA DÓNDE.
 //
-// Y una palabra estructural («cambiar el modelo») ya no tapa a una específica que venga al lado:
-// «cambiar modelos, cuadrículas» nombra la densidad, y la versión anterior cortocircuitaba en
-// `modelo` y devolvía las seis, con lo que el pedido de Altura recibía exactamente lo mismo que un
-// pedido sin intención ninguna. Ahora lo estructural abre el juego y lo específico sigue pesando.
-func dimensionesAMover(cambio string) (dims []int, estructural, explicito bool) {
+// LA DIRECCIÓN NO ESTABA, Y SE NOTÓ EN VIVO. La versión anterior trataba toda dimensión nombrada como
+// «hay que ganar en esto», así que al pedido real del usuario —«cambiar modelos, cuadrículas»—
+// entendía «quiero más densidad» y le proponía una TABLA para una pantalla de notas. Y no es un caso
+// raro: «cambiá X» es la manera normal de pedir un rediseño, y es justo la que no dice hacia dónde.
+//
+// Ahora cada dimensión viene con su polaridad y el mérito la respeta: ganar suma el perfil, perder
+// suma su complemento, y mover NO SUMA NADA — se cae a puro contraste, que es la lectura correcta de
+// «cambialo, no sé a qué». Medido: con esto, «cambiar modelos, cuadrículas» sobre un catálogo propone
+// primero «lienzo con inspector», que es lo más lejos del punto de partida.
+//
+// Devuelve también si el pedido dijo algo: «no dijo nada» y «dijo todo» dan el mismo conjunto y no son
+// lo mismo, y el brief los declara distinto.
+func dimensionesAMover(cambio string) (rs []reclamo, estructural, explicito bool) {
 	bajo := strings.ToLower(cambio)
 	if strings.TrimSpace(bajo) == "" {
-		return todasLasDims(), true, false
+		return todosLosReclamos(polMover), true, false
 	}
 	for _, w := range palabrasEstructurales {
 		if strings.Contains(bajo, w) {
@@ -161,18 +229,54 @@ func dimensionesAMover(cambio string) (dims []int, estructural, explicito bool) 
 			break
 		}
 	}
-	for d := 0; d < dimsTotal; d++ {
-		for _, w := range vocabularioDeCambio[d] {
-			if strings.Contains(bajo, w) {
-				dims = append(dims, d)
+
+	// Una dimensión puede aparecer varias veces con direcciones distintas («está vacío… quiero más
+	// densidad»). Gana la ÚLTIMA explícita: la gente se corrige mientras habla, y lo que dice al
+	// final es lo que quiso decir. Una mención sin dirección no pisa a una que sí la tenía.
+	pol := map[int]polaridad{}
+	explicita := map[int]bool{}
+	var orden []int
+	heredada, hayHeredada := polMover, false
+
+	for _, c := range enClausulas(bajo) {
+		p, ok := polaridadDe(c)
+		if ok {
+			heredada, hayHeredada = p, true
+		} else if hayHeredada {
+			p = heredada
+		}
+		for d := 0; d < dimsTotal; d++ {
+			for _, w := range vocabularioDeCambio[d] {
+				if !strings.Contains(c, w) {
+					continue
+				}
+				if _, visto := pol[d]; !visto {
+					orden = append(orden, d)
+				}
+				if ok || !explicita[d] {
+					pol[d] = p
+					explicita[d] = explicita[d] || ok
+				}
 				break
 			}
 		}
 	}
-	if len(dims) == 0 {
-		return todasLasDims(), true, estructural
+
+	if len(orden) == 0 {
+		return todosLosReclamos(polMover), true, estructural
 	}
-	return dims, estructural, true
+	for _, d := range orden {
+		rs = append(rs, reclamo{Dim: d, Pol: pol[d]})
+	}
+	return rs, estructural, true
+}
+
+func todosLosReclamos(p polaridad) []reclamo {
+	rs := make([]reclamo, dimsTotal)
+	for i := range rs {
+		rs[i] = reclamo{Dim: i, Pol: p}
+	}
+	return rs
 }
 
 func todasLasDims() []int {
@@ -243,16 +347,54 @@ func distanciaEn(a, b string, dims []int) int {
 // nombres—; sólo contraste da lo que ya falló en la medición: la más lejana es la peor en lo pedido.
 const escalaMerito = 6
 
-func meritoEn(forma string, dims []int) int {
+// meritoEn puntúa cuánto RESPONDE una forma al reclamo, con su dirección:
+//   - ganar  → suma el perfil (más es mejor)
+//   - perder → suma el complemento (menos es mejor)
+//   - mover  → NO SUMA NADA, porque el pedido no dijo hacia dónde. Ahí sólo manda el contraste, que
+//     es la lectura correcta de «cambialo, no sé a qué».
+//
+// El promedio va sobre las que SÍ tienen dirección: si sumaran las de `mover`, un pedido con una
+// dirección y cinco menciones sueltas diluiría la única que dijo algo.
+func meritoEn(forma string, rs []reclamo) int {
 	p, ok := perfilDeForma[forma]
-	if !ok || len(dims) == 0 {
+	if !ok {
 		return 0
 	}
-	total := 0
-	for _, d := range dims {
-		total += p[d]
+	total, n := 0, 0
+	for _, r := range rs {
+		switch r.Pol {
+		case polGanar:
+			total += p[r.Dim]
+			n++
+		case polPerder:
+			total += 3 - p[r.Dim]
+			n++
+		}
 	}
-	return total * escalaMerito / len(dims)
+	if n == 0 {
+		return 0
+	}
+	return total * escalaMerito / n
+}
+
+// hayDireccion dice si algún reclamo declaró hacia dónde. Sin eso el mérito no puede pesar y la
+// elección se cae a puro contraste — el mismo camino que un pedido sin intención ninguna.
+func hayDireccion(rs []reclamo) bool {
+	for _, r := range rs {
+		if r.Pol != polMover {
+			return true
+		}
+	}
+	return false
+}
+
+// dimsDe extrae los índices, para la distancia (que no mira dirección: alejarse es alejarse).
+func dimsDe(rs []reclamo) []int {
+	out := make([]int, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, r.Dim)
+	}
+	return out
 }
 
 // `conMerito` es false cuando el pedido NO nombró ninguna dimensión, y entonces el mérito NO PESA.
@@ -265,7 +407,7 @@ func meritoEn(forma string, dims []int) int {
 // Sin mérito, la primera es la primera del pozo (la más plausible para ese eje) y las otras dos
 // contrastan con ella. O sea: **un pedido normal se comporta como antes** y sólo un rediseño con un
 // reclamo dicho re-ordena. Cero regresión para quien ya usaba el motor.
-func elegirPorContraste(pozo []string, origen string, dims []int, conMerito bool, n int) []string {
+func elegirPorContraste(pozo []string, origen string, rs []reclamo, conMerito bool, n int) []string {
 	idx := map[string]int{}
 	for i, f := range pozo {
 		idx[f] = i
@@ -283,7 +425,7 @@ func elegirPorContraste(pozo []string, origen string, dims []int, conMerito bool
 		for i, cand := range restantes {
 			var puntaje int
 			if conMerito {
-				puntaje = meritoEn(cand, dims)
+				puntaje = meritoEn(cand, rs)
 			}
 			if len(elegidas) == 0 {
 				// La primera: la que más gana en lo pedido, y a igualdad la que más se aleja del
@@ -316,7 +458,7 @@ func elegirPorContraste(pozo []string, origen string, dims []int, conMerito bool
 // notaDeContraste explica, en el brief, POR QUÉ vinieron esas tres y no otras. Va siempre: sin esto,
 // tres formas elegidas por distancia se leen igual que tres sacadas de una lista, y el agente no
 // tiene cómo saber que cada una gana en algo distinto.
-func notaDeContraste(origen string, dims []int, estructural, explicito bool) string {
+func notaDeContraste(origen string, rs []reclamo, estructural, explicito bool) string {
 	var b strings.Builder
 	b.WriteString("POR QUÉ ESTAS TRES: no salen de una lista fija — se eligieron por CONTRASTE, lo más lejos posible entre sí")
 	if origen != "" {
@@ -325,19 +467,41 @@ func notaDeContraste(origen string, dims []int, estructural, explicito bool) str
 		b.WriteString(")")
 	}
 	b.WriteString(". ")
-	var ns []string
-	for _, d := range dims {
-		ns = append(ns, nombreDim[d])
+
+	var ganar, perder, mover []string
+	for _, r := range rs {
+		switch r.Pol {
+		case polGanar:
+			ganar = append(ganar, nombreDim[r.Dim])
+		case polPerder:
+			perder = append(perder, nombreDim[r.Dim])
+		default:
+			mover = append(mover, nombreDim[r.Dim])
+		}
 	}
+
 	switch {
 	case !explicito:
 		b.WriteString("El pedido no nombró ninguna dimensión, así que se buscaron las que más se separan entre sí — NO lo leas como que se pidió cambiar todo")
-	case len(dims) == dimsTotal:
-		b.WriteString("El pedido habla de replantear el esqueleto entero, así que juegan las siete dimensiones")
+	case !hayDireccion(rs):
+		// «Cambiá X» nombra la dimensión y NO dice hacia dónde. Tratarlo como «quiero más X» es el
+		// error que el motor cometió en vivo con «cambiar modelos, cuadrículas».
+		b.WriteString("El pedido nombra qué cambiar (" + strings.Join(mover, ", ") +
+			") pero NO dice hacia dónde, así que no se asumió una dirección: las candidatas se eligieron por qué tan lejos quedan del punto de partida y entre sí")
 	default:
-		b.WriteString("Lo que el pedido dice querer GANAR: " + strings.Join(ns, ", ") + " — las candidatas se eligieron por cuánto ganan en eso, no sólo por qué tan distintas son")
+		var partes []string
+		if len(ganar) > 0 {
+			partes = append(partes, "GANAR en "+strings.Join(ganar, ", "))
+		}
+		if len(perder) > 0 {
+			partes = append(partes, "CEDER en "+strings.Join(perder, ", "))
+		}
+		b.WriteString("Lo que el pedido dice querer: " + strings.Join(partes, " y "))
+		if len(mover) > 0 {
+			b.WriteString(" (y nombra " + strings.Join(mover, ", ") + " sin decir hacia dónde, así que ahí no se asumió nada)")
+		}
 		if estructural {
-			b.WriteString(" (y además habla de cambiar el modelo, así que ninguna forma quedó descartada de entrada)")
+			b.WriteString(". Además habla de cambiar el modelo, así que ninguna forma quedó descartada de entrada")
 		}
 	}
 	b.WriteString(". Cada una gana en algo distinto y eso está dicho al lado de su nombre; elegí por lo que el trabajo necesite, no por cuál suena mejor.")
