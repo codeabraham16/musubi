@@ -92,15 +92,15 @@ var formasPorEje = map[string][]string{
 // un catálogo que el agente tiene que leer entero.
 const designFormasPropuestas = 3
 
-// formasPara arma el bloque de forma para un eje, excluyendo las que ya se usaron (`usadas`, que
-// viene de la memoria del proyecto y hoy llega vacía — la rotación es la fase siguiente).
-//
-// Devuelve "" cuando el eje no tiene formas plausibles. Un bloque vacío es correcto y se declara:
-// proponerle una forma a un pedido sobre la paleta sería inventar una respuesta.
-func formasPara(eje string, usadas map[string]bool) string {
+// candidatasDeForma elige QUÉ formas viajan, sin escribir todavía una sola palabra del brief. Está
+// separada de `formasPara` porque la elección tiene ahora DOS lectores: el bloque de forma, que la
+// describe, y el bloque de escala, que saca de ella el registro numérico. Con la elección adentro del
+// armador de texto, la escala habría tenido que rehacerla —y dos maneras de elegir lo mismo es como
+// el brief termina proponiendo una forma y sirviendo los números de otra.
+func candidatasDeForma(eje string, usadas map[string]bool) []string {
 	cands := formasPorEje[eje]
 	if len(cands) == 0 {
-		return ""
+		return nil
 	}
 	var elegidas []string
 	for _, c := range cands {
@@ -117,6 +117,16 @@ func formasPara(eje string, usadas map[string]bool) string {
 	if len(elegidas) == 0 {
 		elegidas = cands
 	}
+	return elegidas
+}
+
+// formasPara arma el bloque de forma para un eje, excluyendo las que ya se usaron (`usadas`, que
+// viene de la memoria del proyecto y hoy llega vacía — la rotación es la fase siguiente).
+//
+// Devuelve "" cuando el eje no tiene formas plausibles. Un bloque vacío es correcto y se declara:
+// proponerle una forma a un pedido sobre la paleta sería inventar una respuesta.
+func formasPara(eje string, usadas map[string]bool) string {
+	elegidas := candidatasDeForma(eje, usadas)
 
 	// Sin opciones no se emite el encabezado. Un bloque que dice «elegí UNA de estas» y no lista
 	// ninguna es peor que no mandar nada: le pide al agente que elija de un conjunto vacío. Lo
