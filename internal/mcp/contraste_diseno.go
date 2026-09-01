@@ -388,15 +388,6 @@ func hayDireccion(rs []reclamo) bool {
 	return false
 }
 
-// dimsDe extrae los índices, para la distancia (que no mira dirección: alejarse es alejarse).
-func dimsDe(rs []reclamo) []int {
-	out := make([]int, 0, len(rs))
-	for _, r := range rs {
-		out = append(out, r.Dim)
-	}
-	return out
-}
-
 // `conMerito` es false cuando el pedido NO nombró ninguna dimensión, y entonces el mérito NO PESA.
 //
 // Lo destapó un test que ya existía: al eje `tabla` dejó de proponerle «tabla densa». Con el pedido
