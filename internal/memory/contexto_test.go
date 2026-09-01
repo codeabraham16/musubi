@@ -184,3 +184,81 @@ func TestLasLecturasDeContextoRechazanUnaVentanaInvalida(t *testing.T) {
 		t.Error("una ventana vacía tiene que dar error en CodigoTocadoEnVentana")
 	}
 }
+
+// LAS DOS SUPOSICIONES SOBRE EL DRIVER, CLAVADAS (A61).
+//
+// Toda la contención de A61 se apoya en una asimetría de `modernc.org/sqlite`: convierte al LEER y
+// no al COMPARAR. Si esa asimetría cambia —una actualización del driver, un cambio de tipo
+// declarado— el síntoma NO es un error: es una ventana que devuelve vacío, y un vacío se lee como
+// «no había nada escrito ese día». Esta prueba existe para que ese cambio se entere acá y no en
+// producción seis meses después.
+//
+// Se miden las dos mitades por separado y con DOS filas, porque cada una necesita algo distinto:
+// la primera necesita que la fecha la escriba SQLITE (es lo que se está midiendo) y la segunda
+// necesita una hora FIJA (con una ventana que cruce la medianoche, las dos formas coinciden porque
+// manda la fecha, y la prueba pasaría por el motivo equivocado — ya pasó en este archivo).
+//
+// Sabotajes: `const formatoDeMemoria = time.RFC3339` rompe la segunda mitad; declarar la columna
+// como TEXT en vez de DATETIME rompe la primera.
+func TestElDriverConvierteAlLeerYNoAlComparar(t *testing.T) {
+	e := newTestEngine(t)
+
+	// ── MITAD 1: qué escribe SQLite, y qué devuelve el driver ────────────────────────────────
+	if err := e.SaveObservationTypedFrom("infra", "", "obs-driver", "infra/tema",
+		"MARCADRIVER", 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Los BYTES GUARDADOS, preguntados DENTRO de SQLite para que el driver no pueda entrometerse.
+	// El GLOB exige el separador ESPACIO: si algún día se guardara con `T`, esto lo dice.
+	var conFormatoDeSQLite int
+	if err := e.db.QueryRow(
+		`SELECT count(*) FROM observations WHERE id = ? AND created_at GLOB '????-??-?? ??:??:??'`,
+		"obs-driver").Scan(&conFormatoDeSQLite); err != nil {
+		t.Fatal(err)
+	}
+	if conFormatoDeSQLite != 1 {
+		t.Error("CURRENT_TIMESTAMP dejó de escribir `YYYY-MM-DD HH:MM:SS`: el WHERE de todas las ventanas de memoria compara contra ese formato")
+	}
+
+	// Y lo que RECIBE Go de la misma columna: RFC3339, aunque los bytes de arriba no lo sean.
+	// Ésa es la trampa entera — mirar esto lleva a la conclusión equivocada sobre cómo comparar.
+	var leido string
+	if err := e.db.QueryRow(`SELECT created_at FROM observations WHERE id = ?`, "obs-driver").Scan(&leido); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := time.Parse(time.RFC3339, leido); err != nil {
+		t.Errorf("el driver dejó de convertir al leer (devolvió %q): el parseo dual de parseFechaDeMemoria era lo que sostenía esto", leido)
+	}
+
+	// ── MITAD 2: el WHERE compara los bytes crudos, y el formato equivocado NO da error ───────
+	//
+	// Hora FIJA y ventana del MISMO DÍA: es lo único que hace que decida la hora y no la fecha.
+	const cuando = "2026-05-05 12:00:00"
+	if err := e.SaveObservationTypedFrom("infra", "", "obs-comparar", "infra/tema",
+		"MARCACOMPARAR", 1.0, "semantic", "local", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET created_at = ? WHERE id = ?`, cuando, "obs-comparar"); err != nil {
+		t.Fatal(err)
+	}
+	corte := time.Date(2026, 5, 5, 11, 0, 0, 0, time.UTC)
+
+	var conBueno, conMalo int
+	if err := e.db.QueryRow(`SELECT count(*) FROM observations WHERE id = ? AND created_at >= ?`,
+		"obs-comparar", corte.Format(formatoDeMemoria)).Scan(&conBueno); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.QueryRow(`SELECT count(*) FROM observations WHERE id = ? AND created_at >= ?`,
+		"obs-comparar", corte.Format(time.RFC3339)).Scan(&conMalo); err != nil {
+		t.Fatal(err)
+	}
+	if conBueno != 1 {
+		t.Error("el formato de SQLite dejó de encontrar una fila que SÍ está dentro de la ventana")
+	}
+	// Lo que se afirma acá no es «RFC3339 está mal»: es que estar mal NO SE NOTA. Devuelve cero
+	// filas y ningún error, y ese cero se lee como «no había nada escrito ese día».
+	if conMalo != 0 {
+		t.Error("comparar con RFC3339 encontró la fila: si eso cambia, el motivo por el que existe formatoDeMemoria dejó de valer y hay que revisar las ventanas")
+	}
+}
