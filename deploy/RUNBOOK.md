@@ -571,6 +571,62 @@ podman restart musubi-alertmanager
 Comprobalo: a los 5 minutos, `podman logs --tail 20 musubi-alertmanager | grep -i watchdog` no
 tiene que decir nada, y el servicio externo tiene que mostrar el ping.
 
+## AlertmanagerCaido
+
+El último eslabón no contesta: Prometheus sigue evaluando y las alertas quedan FIRING, pero **no
+sale ninguna a Telegram ni al CRM**.
+
+**Leé esto sabiendo cómo llegaste acá.** Si te enteraste por un mensaje, no fue por esta alerta —
+esta alerta no se puede entregar a sí misma. Te enteraste por el panel, por
+`deploy/verificar-despliegue.sh`, o por el watchdog externo. Esta regla existe para que el estado
+sea *visible* sin salir del sistema, no para avisarte: el aviso de verdad es el watchdog externo
+(B13 en `specs/control-de-flota/ABIERTO.md`, despriorizado).
+
+```
+podman ps -a --filter name=musubi-alertmanager
+podman logs --tail 50 musubi-alertmanager
+```
+
+| Lo que ves | Qué pasó |
+|---|---|
+| El contenedor no está en `ps` | Se cayó o nunca arrancó. `podman start musubi-alertmanager` y mirá el log |
+| `Reason: Error` al arrancar | La configuración no parsea y **no llegó a levantar**. Ver `ConfiguracionSinRecargar` abajo, mismo arreglo |
+| Corre pero `up == 0` | Contesta al `ps` y no al scrape: puerto, red del contenedor, o está trabado |
+
+Mientras dure, el único canal es mirar Prometheus. Todo lo que se dispare en ese lapso **no se
+reenvía al recuperarse**: Alertmanager entrega lo que está firing cuando vuelve, no el historial.
+
+## ConfiguracionSinRecargar
+
+Alguien escribió una configuración inválida y la recarga la rechazó. **El proceso no se cayó**:
+sigue corriendo con la configuración VIEJA. Ese es el punto — el target está `up`, las alertas
+evalúan, todo parece normal, y sin embargo lo que corre no es lo que dice el repo.
+
+Primero, cuál de los dos:
+
+```
+curl -s http://127.0.0.1:9099/api/v1/query?query=prometheus_config_last_reload_successful
+curl -s http://127.0.0.1:9099/api/v1/query?query=alertmanager_config_last_reload_successful
+```
+
+El que devuelve `0` es el que rechazó. El log dice la línea exacta:
+
+```
+podman logs --tail 30 musubi-alertmanager 2>&1 | grep -i "error\|invalid"
+podman logs --tail 30 musubi-prometheus   2>&1 | grep -i "error\|invalid"
+```
+
+Corregí el archivo y recargá. **Validá ANTES de recargar**, que es lo que evita volver acá:
+
+```
+podman run --rm -v $PWD/deploy/prometheus:/c prom/alertmanager amtool check-config /c/alertmanager.yml
+promtool check rules deploy/musubi-alerts*.yml
+```
+
+Ojo con la trampa de esta alerta: **corregir el archivo no la apaga**. La métrica sigue en `0`
+hasta que la recarga *tenga éxito*, así que después de editar hay que recargar de verdad
+(`podman kill -s HUP` o reiniciar el contenedor) y recién ahí se apaga.
+
 ## MaquinaQueNoAlcanzaSuDestino
 
 Esa máquina **no llega** a alguno de los puertos que le declararon en `MUSUBI_ALCANCE`. La sonda

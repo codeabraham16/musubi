@@ -177,6 +177,39 @@ groups:
       # archivo.
       #
       # `absent()` conserva las etiquetas del matcher, así que `{{ $labels.job }}` nombra cuál
+      # EL ÚLTIMO ESLABÓN CAÍDO. `ScrapeQueElRepoDeclaraYNoExiste` (abajo) cubre «el job ni
+      # siquiera está configurado»; esto cubre la otra mitad, que es «está configurado y no
+      # contesta». Sin ninguna de las dos, Alertmanager se podía morir un domingo y no lo decía
+      # nada: se auditó el 2026-09-02 y `up{job="alertmanager"} == 0` no existía en ningún archivo.
+      #
+      # LEELA SABIENDO LO QUE NO PUEDE HACER, que es la parte honesta: si Alertmanager está caído,
+      # esta alerta NO se entrega — la entrega es justamente lo que está roto. Lo que sí hace es
+      # quedar FIRING y visible en Prometheus, que es donde la lee `deploy/verificar-despliegue.sh`
+      # y donde la ve quien abre el panel. El dead-man's-switch de verdad sigue siendo un watchdog
+      # EXTERNO (B13 en specs/control-de-flota/ABIERTO.md, despriorizado por gio): esto no lo
+      # reemplaza, lo hace visible sin salir del sistema.
+      - alert: AlertmanagerCaido
+        expr: up{job="alertmanager"} == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Alertmanager no contesta: ninguna alerta se está entregando a nadie."
+          nota: "Prometheus sigue evaluando y las alertas quedan FIRING en su UI, pero no salen ni a Telegram ni al CRM. Mientras dure, el único canal es mirar Prometheus. Ver deploy/RUNBOOK.md#alertmanagercaido"
+
+      # UNA CONFIGURACIÓN QUE NO RECARGÓ ES PEOR QUE UNA CAÍDA, porque no se ve. Si alguien escribe
+      # un YAML inválido y recarga, el proceso NO se muere: sigue corriendo con la configuración
+      # VIEJA. Todo parece normal —el target está up, las alertas evalúan— y sin embargo lo que
+      # corre no es lo que dice el repo. Las dos series ya están en el TSDB (prometheus.yml scrapea
+      # el job `alertmanager` con `regex: "up|alertmanager_.*"` y también se scrapea a sí mismo),
+      # así que esto no cuesta un scrape nuevo: son dos líneas sobre datos que ya se pagan.
+      - alert: ConfiguracionSinRecargar
+        expr: alertmanager_config_last_reload_successful == 0 or prometheus_config_last_reload_successful == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.job }} rechazó su última recarga: está corriendo una configuración vieja."
+          nota: "El proceso NO se cae ante un config inválido, sigue con el anterior — así que nada más lo delata. Revisá el log del servicio, corregí el archivo y recargá. Ver deploy/RUNBOOK.md#configuracionsinrecargar"
+
       # falta. Los tres jobs son los que el repo declara en prometheus.yml, y una prueba los
       # compara contra esta lista: agregar un scrape sin vigilarlo rompe la suite.
       - alert: ScrapeQueElRepoDeclaraYNoExiste

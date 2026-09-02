@@ -50,6 +50,34 @@ SNAPSHOT="$("$MUSUBI_BIN" backup --out "$BACKUP_LOCAL_DIR")" || die "falló 'mus
 [ -f "$SNAPSHOT" ] || die "el snapshot no existe: $SNAPSHOT"
 log "Snapshot OK: $SNAPSHOT ($(du -h "$SNAPSHOT" | cut -f1))"
 
+# 1 bis. EL REGISTRO DE PRINCIPALS VIAJA CON LA BASE, O LA RESTAURACIÓN NO SIRVE.
+#
+# `musubi backup` hace VACUUM INTO de memory.db y NADA MÁS. Pero la identidad de cada máquina de la
+# flota se resuelve SÓLO por su token (no hay ningún campo en el latido que diga quién es), y las
+# capacidades de flota se declaran en `principals.yaml` — NO se derivan del rol. Así que un cerebro
+# restaurado sin ese archivo le contesta 401 a todos los agentes, y un 401 los DETIENE SIN
+# REINTENTAR (cmd/musubi/agent.go: «agente detenido (no se reintenta)»). O sea: se pierde la flota
+# entera y hay que ir máquina por máquina a levantarla a mano. Encontrado auditando el 2026-09-02.
+#
+# NO existir es legítimo (modo legacy de un solo bearer), así que eso es AVISO. Existir y no poder
+# copiarse es FALLA: es la mitad del backup que decide si el restore devuelve una flota o un ladrillo.
+#
+# OJO CON EL DESTINO: principals.yaml lleva los token_sha256 de cada persona y de cada máquina. Son
+# hashes, no tokens, pero el destino off-host tiene que estar tan protegido como la base.
+PRINCIPALS_FILE="${PRINCIPALS_FILE:-$MUSUBI_HOME/.musubi/principals.yaml}"
+ENVIAR="$SNAPSHOT"
+if [ -f "$PRINCIPALS_FILE" ]; then
+  # Mismo sufijo que el snapshot, para que un restore sepa qué principals acompaña a qué base.
+  SUFIJO="${SNAPSHOT##*memory.db.}"
+  COPIA_PRINCIPALS="$BACKUP_LOCAL_DIR/principals.yaml.$SUFIJO"
+  cp "$PRINCIPALS_FILE" "$COPIA_PRINCIPALS" || die "no se pudo copiar $PRINCIPALS_FILE: sin él, restaurar la base deja la flota entera apagada"
+  chmod 600 "$COPIA_PRINCIPALS" 2>/dev/null || true
+  ENVIAR="$ENVIAR $COPIA_PRINCIPALS"
+  log "Registro de principals incluido: $COPIA_PRINCIPALS"
+else
+  log "AVISO: no hay $PRINCIPALS_FILE (modo legacy de un solo bearer). El backup NO lleva registro de identidades."
+fi
+
 # 2. Copia OFF-HOST. DR segura por default: sin destino remoto el backup NO es DR (queda en el
 #    mismo disco), así que se FALLA-CERRADO salvo que se acepte local-only EXPLÍCITAMENTE. Un exit≠0
 #    hace que systemd marque la unidad como failed → el operador lo ve en `systemctl status`, en vez
@@ -63,9 +91,9 @@ if [ -z "$BACKUP_REMOTE" ]; then
 else
   log "Enviando off-host ($BACKUP_METHOD) → $BACKUP_REMOTE ..."
   case "$BACKUP_METHOD" in
-    rsync)  rsync -a --mkpath "$SNAPSHOT" "$BACKUP_REMOTE/" || die_offhost "rsync falló" ;;
-    rclone) rclone copy "$SNAPSHOT" "$BACKUP_REMOTE" || die_offhost "rclone falló" ;;
-    cp)     mkdir -p "$BACKUP_REMOTE" && cp "$SNAPSHOT" "$BACKUP_REMOTE/" || die_offhost "cp falló" ;;
+    rsync)  rsync -a --mkpath $ENVIAR "$BACKUP_REMOTE/" || die_offhost "rsync falló" ;;
+    rclone) for f in $ENVIAR; do rclone copy "$f" "$BACKUP_REMOTE" || die_offhost "rclone falló"; done ;;
+    cp)     mkdir -p "$BACKUP_REMOTE" && cp $ENVIAR "$BACKUP_REMOTE/" || die_offhost "cp falló" ;;
     *)      die_offhost "BACKUP_METHOD inválido: $BACKUP_METHOD (usá rsync|rclone|cp)" ;;
   esac
   log "Copia off-host OK."
@@ -78,7 +106,7 @@ fi
 
 # 3. Retención local (los snapshots off-host se retienen en el destino remoto).
 if [ "$BACKUP_RETENTION_DAYS" -gt 0 ]; then
-  PRUNED="$(find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'memory.db.*' -type f -mtime "+$BACKUP_RETENTION_DAYS" -print -delete | wc -l)"
+  PRUNED="$(find "$BACKUP_LOCAL_DIR" -maxdepth 1 \( -name 'memory.db.*' -o -name 'principals.yaml.*' \) -type f -mtime "+$BACKUP_RETENTION_DAYS" -print -delete | wc -l)"
   log "Retención local: purgados $PRUNED snapshot(s) > $BACKUP_RETENTION_DAYS días."
 fi
 
