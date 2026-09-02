@@ -59,7 +59,11 @@
 
 **Lo que esto cambia es que ya hay una respuesta, no una búsqueda.** Dieciséis GB son caché pura y se recuperan sin perder absolutamente nada: `Temp` (9,1) y `go-build` (7,0), que Go regenera solo compilando. Otros 30,4 son el disco virtual de Docker Desktop, que en una máquina que no lo usa es el 13 % del disco entero. Con esos tres, `davantis-1` pasa de 15,8 GB libres a ~62 y `DiscoPorLlenarse` se apaga sola.
 
-**Nada de eso se toca desde acá.** Borrar archivos en la máquina de alguien es del dueño, y la flota mide y recomienda; no limpia. Lo que le faltaba a este cabo era el dato, y el dato ya está. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
+**LIMPIADO EL 2026-09-02, con permiso explícito de gio y SÓLO las dos cachés que autorizó**: `Temp` (9,02 GB liberados; 34 archivos en uso que no se pudieron borrar, y así tiene que ser) y `go-build` (7,16 GB, entero). **15,6 GB libres → 32,1**, el doble.
+
+**Y `DiscoPorLlenarse` SIGUE DISPARANDO, que es lo correcto y hay que decirlo**: 32,1 de 232,1 es **13,7 %**, y el umbral es 15 % — faltan 2,7 GB. La alerta no se apagó porque la máquina sigue estando llena de verdad. Bajar el umbral para que se calle sería exactamente lo que este track no hace.
+
+**La palanca que queda es Docker (30,4 GB) y gio dijo que no se toca.** Con eso el cabo queda esperando una decisión del dueño de la máquina, no una medición: el dato está completo y la única acción pendiente es de él. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
 
 
 
