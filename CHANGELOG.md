@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.130.0] - 2026-09-02
+
 ### Added
 - **El brief declara contra QUÉ se decidió el eje.** El ruteo elegía el top-1 y **descartaba al
   segundo**, así que se perdía la única señal que distingue una decisión firme de una moneda al aire.
@@ -37,8 +39,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   elegirse: el conjunto queda determinado en cuanto `n−1 ≤ propuestas`, así que el mínimo que todavía
   deja elegir es `propuestas+2`. El invariante verifica la derivación en las dos direcciones, porque
   bajar la constante sola no rompe nada hoy y el número quedaría suelto.
-
-### Fixed
 - **«Cambiá X» no es «quiero más X», y el motor los confundía.** Toda dimensión nombrada se trataba
   como «hay que ganar en esto», así que al pedido real del usuario —*«cambiar modelos, cuadrículas»*—
   el motor entendía «quiero más densidad» y proponía una **tabla densa** para una pantalla de notas.
@@ -58,8 +58,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     partida. El caso que falló en vivo ahora sale bien **sin reformular el pedido**.
   - El brief declara la dirección que leyó, no sólo la dimensión: «hay que GANAR en …», «hay que CEDER
     en …», o «se nombra … como lo que hay que cambiar, PERO NO hacia dónde».
-
-### Fixed
 - **Los bocetos esquivaban el presupuesto.** Los agregué sin tocar `cederUnItem` y el brief se pasaba
   del tope duro sin que nada se pusiera rojo: medido contra un pedido REAL —el rediseño de las notas
   del CRM— **8.084 tokens con un tope de 6.600**. El presupuesto se aplicaba, no encontraba nada más
@@ -115,10 +113,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   la rotación sólo excluía la del pedido anterior. El defecto es medible: dos pedidos opuestos —«esta
   tabla no se puede comparar» y «esta tabla no me dice qué hacer»— recibían **las mismas tres
   candidatas**. El motor no tenía por dónde enterarse de que son problemas distintos.
-  - Cada forma gana un **perfil de seis dimensiones** (densidad, comparación, decisión, profundidad,
-    guía, presencia) y el mapa pasa a ser el **pozo de lo plausible** (cinco o seis por eje). Las tres
-    que viajan se eligen por **mérito en lo que se pidió ganar + contraste entre sí**, y cada una llega
-    etiquetada con en qué gana — derivado del perfil, no escrito aparte.
+  - Cada forma gana un **perfil de siete dimensiones** (densidad, comparación, decisión,
+    profundidad, guía, presencia, estado en vivo) y el mapa pasa a ser el **pozo de lo plausible**
+    (cinco o seis por eje). Las tres que viajan se eligen por **mérito en lo que se pidió ganar +
+    contraste entre sí**, y cada una llega etiquetada con en qué gana — derivado del perfil, no
+    escrito aparte.
   - Sigue siendo model-free: una tabla de perfiles, distancia Manhattan y selección greedy max-min —
     la misma familia que el MMR que ya usa el corpus. Elegir cuál de las tres se usa lo sigue haciendo
     el agente.
@@ -214,8 +213,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - 4 invariantes, cada sabotaje visto en rojo. Dos de los sabotajes **no compilaban** en su primera
     versión (variable sin usar), así que el test fallaba por el build y no por el invariante: un
     sabotaje que no compila es un sabotaje que no se ejecutó.
-
-### Added
 - **La capa de FORMA: el brief propone el esqueleto de la pantalla** (Musubi Renaissance). Hasta acá
   el brief decía DE QUÉ HABLA el pedido —el eje— y nunca QUÉ FORMA tiene la pantalla. Según el
   consenso del campo anti-slop, eso es la causa real de que un diseño generado se reconozca: *«la
@@ -276,8 +273,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El bloque nuevo va **antes** del de rechazo a propósito, e incluye **cómo conviven**: la
     exigencia dice DÓNDE gastar la audacia —en un solo lugar— y la prohibición dónde no. Sin esa
     frase, el agente recibe orden y contraorden y baja las dos, que es lo que venía pasando.
-  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767 (techo 3.900),
-    M5 0,45 — no bajó.
+  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767, M5 0,45 —
+    no bajó.
 
 ### Fixed
 - **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
@@ -303,30 +300,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - ⚠️ **Sesgo declarado dentro del propio archivo:** las tres paráfrasis de cada pedido las escribió
     el mismo agente que mide el motor. Si se parecen más entre sí de lo que se parecería el pedido de
     otra persona, M1 sale mejor de lo que es.
-### Added
-- **El brief EXIGE, no sólo prohíbe** (Musubi Renaissance). Sale de una prueba a ciegas con el
-  usuario, no de una teoría.
-  - **Cómo se descubrió:** se le mostraron 9 diseños —3 pedidos reales de Altura × 3 briefs
-    (completo / sin corpus / sin brief), mezclados— y eligió **uno de cada condición**, que es lo
-    que saldría al azar: **el contenido del brief no determinaba lo que prefiere**. Sobre los tres
-    dijo lo mismo, «no son tan potentes», y al preguntarle qué faltaba nombró **presencia visual** y
-    **terminación de producto**.
-  - **El diagnóstico:** todo lo que el brief traía era para **no equivocarse** — precedencia, tokens,
-    anchos de celda, y un  que empuja aún más a lo conservador. No había una línea pidiendo
-    una decisión fuerte. Medido contra el acervo, además, el conocimiento falta: de 1.736 entradas,
-    **14** hablan de un momento focal, **9** de terminación fina y **7** de contraste dramático.
-  - El bloque  va **antes** de  a propósito, e incluye **cómo conviven**: la exigencia
-    dice DÓNDE gastar la audacia —en un lugar— y la prohibición dónde no. Sin esa frase el agente
-    recibe orden y contraorden y baja las dos.
-  - **Verificado en una segunda prueba a ciegas: ganó 3 de 3.** M4 p50 3.342 → 3.767, M5 0,45 (no bajó).
-
-### Fixed
-- **La franja de color al costado de un bloque entra al checklist de rechazo.** La vio el usuario en
-  la segunda prueba a ciegas («esas rayitas no me gustan, se ven muy raras»). Vale anotar cómo se
-  perdió: la lista de TidyFactor/Styler lo trae como su #7 y se descartó entera por construir la
-  nuestra desde el acervo propio. No copiar sigue estando bien; lo que estuvo mal fue no mirar lo
-  ajeno como hipótesis a verificar.
-
 
 ### Fixed
 - **La marca de un proyecto se perdía por una mayúscula** (Musubi Renaissance, fase 5 / F8).
@@ -361,9 +334,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - Medido con el bloque puesto: M4 p50 3.143 → 3.342, **M5 0,44 → 0,45 (no bajó)**.
   - ⚠️ **Límite declarado:** el banco corre sobre FTS y sin embebedor, así que no rutea y sólo mide el
     núcleo de 5 tells. La parte por eje sale de la sonda, igual que M1/M3/M8.
-
-
-### Added
 - **El motor de diseño rutea por EJE, no por similitud** (Musubi Renaissance, fase 2 del plan de
   cierre). Es lo primero que mueve M1 desde que arrancó el track.
   - **El problema, medido:** dos maneras de pedir lo mismo devolvían material distinto — **M1 = 0,10**
@@ -441,8 +411,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 - **El recorte por tamaño partía caracteres en dos.** `txt[:max]` a secas corta una vocal acentuada
   entre sus dos bytes y el JSON sale con un U+FFFD donde había una letra. Con tarjetas de 245 chars
   casi no se veía; con artículos de 12.000 iba a pasar seguido. Alcanza a la marca y al método.
-
-### Fixed
 - **El método no compite por los lugares del pool** (Musubi Renaissance). Segunda vuelta sobre la
   misma regresión, y la primera corrección estaba mal diagnosticada.
   - Medido en producción con el fix anterior (#367) YA desplegado: «tabla densa de inventario de
@@ -459,8 +427,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     pool vio y no descarta nada: el pool decide qué sube, nunca qué se cae.
   - Sabotaje verificado: volver a tomar el método sólo del pool reproduce el síntoma exacto
     (`method_source: static`, bloque vacío).
-
-### Fixed
 - **El piso de similitud dejaba mudo al método en los pedidos de dominio** (Musubi Renaissance).
   Medido en producción el 2026-08-30, con F0–F5 recién desplegado: un pedido concreto —«tabla densa
   de inventario de Altura con lotes, filtros y alertas»— recibía el bloque de método **vacío**
@@ -502,8 +468,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     F3, que compara similitudes, y un puntaje de fusión no es una similitud.
   - ⚠ **La magnitud no está medida.** Cuánto sube M1 depende del embebedor y del acervo reales; los
     invariantes prueban el mecanismo. El número sale de la sonda después de desplegar.
-
-### Changed
 - **El motor de diseño pasa de traer material a ELEGIRLO** (Musubi Renaissance · F4). Tres defectos
   medidos el 2026-08-29, los tres del mismo origen: el brief entregaba lo que salía del ranking, sin
   criterio propio.
@@ -573,8 +537,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     principles · brand · corpus · method · emit · instructions`. Antes la marca viajaba al ~70 % de
     profundidad, enterrada bajo 4.182 tokens de método constante — la peor posición posible, porque
     los modelos leen en U y pierden más del 30 % de eficacia sobre lo que queda en el medio.
-  - **Presupuesto duro con el recorte declarado.** 2.600 tokens de tope, tope por tarjeta, y
-    `truncated` diciendo qué bloque se recortó y de cuánto. Cede primero el método (universal),
+  - **Presupuesto duro con el recorte declarado.** Un tope duro en tokens —2.600 al nacer, hoy
+    **6.600** después de las dos subidas que están más arriba—, tope por tarjeta, y `truncated`
+    diciendo qué bloque se recortó y de cuánto. Cede primero el método (universal),
     después el corpus, y la marca al final — con un aviso ruidoso, porque un doc de marca lleva sus
     prohibiciones justo al final. Antes: 11.131 tokens con `limit=100` y 285.023 desde una sola
     tarjeta grande.
@@ -589,8 +554,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El saneamiento es **estructural, no un filtro**: sólo se limpian caracteres de control. Filtrar
     corchetes angulares habría roto el método real, que cita `<button>` y `<div role="button">` como
     ejemplos, y un filtro siempre se puede rodear.
-  - Medido por el banco: **M4 p50 6.419 → 2.457** · **M4 máximo 7.268 → 2.598** (tope duro 2.600) ·
-    **M5 fracción variable 0,047 → 0,146** · **M6 acervo→instrucción 0,00 → 1,00**. Umbrales
+  - Medido por el banco en su momento: **M4 p50 6.419 → 2.457** · **M4 máximo 7.268 → 2.598**
+    (contra el tope de entonces, 2.600) · **M5 fracción variable 0,047 → 0,146** ·
+    **M6 acervo→instrucción 0,00 → 1,00**. Umbrales
     apretados en consecuencia. Dos ataques del banco (A1 inyección por el acervo, A3 una tarjeta
     inunda el brief) pasaron de afirmar la vulnerabilidad a defender el arreglo.
 
@@ -673,7 +639,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   colaterales de un axón, con el ángulo despejado de cuánto ocupan sus haces y el largo escalonado.
   - **El enredo cae de 0,866 a 0,059** — 15× menos interpenetración. Cuesta 3,6 puntos de solape en
     pantalla (18,4 % → 22,0 %), y se paga: un cruce real no lo arregla ningún ángulo de cámara,
-    mientras que el solape se mitiga girando y con el contorno por profundidad.
+    mientras que el solape se mitiga girando y con la rampa de profundidad anclada a la órbita.
   - **`apertura` se retira.** El ángulo sale del grosor, no de una constante. Se avisa por consola
     si alguien la pasa, en vez de ignorarla en silencio.
   - **Lo que no entra se declara**: `apretada` marca las bifurcaciones donde el haz padre era más
@@ -704,8 +670,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     cruzan en 3D y cero entre actores distintos, pero el **36 %** de las celdas de pantalla tenía
     dos o más ramas encima. Con el reparto corregido baja a **25,5 %** y los hilos quedan además un
     10 % más gruesos — el único punto del barrido que mejora las dos cosas a la vez.
-  - **Contorno por profundidad** (halos de tractografía) para el 24 % que queda: el 83 % de esos
-    píxeles tiene un salto de profundidad grande, así que el cruce se vuelve oclusión legible.
   - **`A` aísla una rama y `0` vuelve al todo.** La separación por colocación tiene techo medido,
     así que lo que falta no se consigue moviendo ramas sino apagando las otras — apagando, no
     escondiendo: esconder contesta «cómo es esta rama» pero borra «dónde está».
@@ -719,8 +683,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   El boceto la reemplaza por una rampa de profundidad **anclada a la órbita**, porque el rango de
   profundidad de la escena es apenas 2,3× y una densidad fija no tiene recorrido para decir nada.
 
-- **Vuelven los despachos, y ahora una terminal tiene cuerpo.** Un axón por cada par de terminales
-  que se escribieron, del centroide de lo que firmó quien escribe al de quien recibe.
+- **Los despachos entre terminales entran a la escena, y una terminal tiene cuerpo.** Un axón por
+  cada par de terminales que se escribieron —**27 pares**, y `PRINCIPAL → PLANIFICADOR` 21 veces—,
+  del centroide de lo que firmó quien escribe al de quien recibe. Cian cuando **cruzan personas**
+  —trabajo que salió de una cabeza y entró en otra— y azul dentro de la misma.
   - **La posición no se elige: se calcula.** Es el centroide de las puntas de las memorias que esa
     terminal FIRMÓ, y sale del mismo hecho del texto que se usa para contar cuántas firmó — así el
     punto y el número no pueden discrepar. `firmanteDe()` es ahora una sola función que usan los
@@ -735,6 +701,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - Arqueados a **lados opuestos** según la dirección: `A→B` y `B→A` son dos despachos distintos y
     rectos quedaban uno encima del otro, leyéndose como uno solo. `cross(dir, arriba)` cambia de
     signo al invertir `dir`, así que la separación sale sola.
+  - La **dirección** también se lee en el grosor: el axón nace grueso en quien escribe y termina
+    fino en quien recibe. Una punta de flecha habría que orientarla contra la cámara en cada giro.
   - Una terminal que **nunca firmó no aparece**, y es correcto: nombrarla no es escribir.
   - Medido con todo puesto: 22 draw calls, 407k triángulos, **0 cuadros por encima de 33 ms**,
     «mis bucles» en 0,3 ms. Y los invariantes intactos: 0 píxeles sin evento, atribución a 415 px.
@@ -753,8 +721,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   no sabe en qué neurona de la persona cayó, así que enciende todas — pero dividiéndose. Sin esto,
   una persona cuyo árbol quedó cortado en nueve neuronas brillaba nueve veces más que otra cortada
   en dos **por el mismo evento**, y lo único distinto era la forma de su árbol, no cuánto trabajó.
-
-### Fixed
 - **Las 586 sinapsis se dibujaban en la nada, sin un solo error.** El radio de cada arista se
   sembraba como `s.__r` al construir la malla, y `buildGraph` **recrea los objetos de `SYN` en cada
   poll**: desde el segundo sondeo `s.__r` era `undefined`, el radio salía `NaN`, y dos columnas de
@@ -793,8 +759,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     esos dos puntos. Es una propiedad del trazo, no una afirmación sobre la memoria.
   - Costo medido: **403k triángulos contra 230k**, 20 draw calls igual, **0 cuadros por encima de
     33 ms** en 26 s (máximo 27,7 contra 25,2). 16 invariantes, cada uno fallando bajo su sabotaje.
-
-### Fixed
 - **El banco de sabotajes leía «ningún test corrió» como «el invariante resistió».** Un patrón mal
   escrito (`^T15b` contra un test llamado `T15`) no corre nada, `node --test` sale 0, y eso se lee
   igual que un invariante sano. Es el valor de fallo idéntico al tranquilizador. Ahora el banco
@@ -830,11 +794,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `arbol-memoria.mjs` con sus propios invariantes: el PRNG semillado (T6), el `dist` medido a lo
   largo de la rama (T8) y el adelgazamiento (T7, ahora por la ley de Rall). Lo que se va es que la
   forma no dijera nada.
-- **Los despachos entre terminales, por ahora.** Quedaron sin cuerpo del que colgar: una terminal ya
-  no es una neurona —con el 7,5 % de las notas firmadas, las neuronas son tramos del árbol de
-  temas— y colgar el axón de una neurona cualquiera del racimo sería elegir a dedo de dónde sale.
-  Vuelven como líneas de campo entre racimos. **La leyenda los sigue contando** («27 pares se
-  escriben · 152 despachos») para que su ausencia del dibujo no se lea como que no existen.
 
 ### Added
 - **El esqueleto del árbol de memoria** (`arbol-memoria.mjs`): de las memorias de un racimo a una
@@ -899,7 +858,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   hasta 0,85 s, sin error de ninguna clase. Es la falla que este dibujo existe para no cometer.
   Invariante nuevo (I7c), verificado fallando bajo su sabotaje.
 - **`NGEO` se liberaba dos veces por reconstrucción.** Es la icosaedro de módulo que comparten las
-  2.219 memorias **y** los 11 somas, y `disposeMeshes` la liberaba una vez por cada malla — tirando
+  2.221 memorias **y** los 11 somas, y `disposeMeshes` la liberaba una vez por cada malla — tirando
   sus buffers de GPU para recrearlos acto seguido. La regla queda escrita donde se rompe: se libera
   lo que se **clonó** (`EGEO`/`DGEO`, con sus atributos por instancia), nunca lo compartido.
 
@@ -910,7 +869,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   se dejó de tener dos lugares donde arreglar cada cosa.
   - **El tooltip de una terminal** era un callback de la vista 2D y ahora lo dispara `hover()`
     sobre el soma, con el mismo `#tip` que usan las memorias. Los somas se consultan **primero**:
-    son once contra 2.219 memorias y están dentro de la nube de puntos de su racimo, así que con
+    son once contra 2.221 memorias y están dentro de la nube de puntos de su racimo, así que con
     el criterio de «el más cercano» la neurona queda tapada por cualquier punto que le pase por
     delante y no hay forma de mirarla. Verificado: pasar el mouse por el soma de gio devuelve
     `auditor · de gio · 232 notas la nombran · 56 las firma · calor 441 · escribe a…`.
@@ -926,19 +885,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     memorias que dibujar, así que aparecen contados en la leyenda y no en la escena. La función
     que los repartía queda aparcada y verificada en `personas.mjs` para cuando se decida cómo
     mostrarlos.
-
-### Added
-- **Los despachos entre terminales entran a la escena.** 27 axones que van de quien escribe a
-  quien se le escribe (`PRINCIPAL -> PLANIFICADOR`, 21 veces). Cian cuando **cruzan personas** —
-  trabajo que salio de una cabeza y entro en otra— y azul dentro de la misma.
-  - **Son estaticos, y esa es la decision.** Un despacho no es un evento en vivo sino un hecho de
-    la memoria: una nota firmada por A y dirigida a B. Ponerle una luz viajando seria el mismo
-    bucle inventado que este rediseno vino a sacar; se veria igual de vivo con el cerebro apagado.
-  - La **direccion** se dibuja con el adelgazamiento que ya tenia el shader de dendritas: el axon
-    nace grueso en quien escribe y termina fino en quien recibe. Una punta de flecha habria que
-    orientarla contra la camara en cada giro.
-  - Un despacho a una terminal que no esta en la escena **no se dibuja ni se acomoda a la mas
-    cercana**: la nota existe, el destinatario no esta, y colgarlo de otro seria inventarlo.
 
 ### Fixed
 - **Los arboles se filtraban a la lente codigo.** `BOSQUE` queda cargado al cambiar de lente, y
@@ -966,8 +912,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - 12 invariantes en `node --test`, **cada uno verificado fallando bajo un sabotaje dirigido**.
     Uno salió VACUO en el primer intento: el vencimiento del pulso estaba defendido en dos lugares
     y el segundo tapaba al sabotaje, así que ahora vive en uno solo.
-
-### Fixed
 - **Un evento sin neurona encendía el tronco más grande.** `Number(null)` es `0`, no `NaN`, así
   que coercionar el índice mandaba todo principal sin declarar al tronco 0 — y los racimos van
   ordenados por volumen, o sea que el panel le atribuía la llamada a la terminal que más escribe.
@@ -987,11 +931,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     no como un palito es que la punta sea más fina que la base; en canvas 2D eso era una propiedad
     del trazo, acá es geometría — y emitir un cono por segmento serían 12.010 geometrías.
   - Costo medido: **59,9 FPS · p50 16,6 ms** con los árboles puestos, contra 60,3 sin ellos.
-  - `dendritas.mjs` es geometría pura y corre en `node --test`: 7 invariantes, cada uno verificado
-    fallando bajo un sabotaje. Custodian lo que se vería como un cambio estético y por eso nadie
-    miraría — que el árbol sea el MISMO en cada recarga (PRNG semillado, no `Math.random`), que
-    adelgace, que el conteo tenga techo, y que la distancia que usa el impulso se mida **a lo
-    largo de la rama** y no en línea recta.
   - **El libro mayor y lo sin atribuir NO llevan tronco.** Nadie los firma, así que no hay neurona
     que dibujar; fabricarles una sería inventar un autor. Se ven como lo que son: nubes de puntos.
   - Y un bug que no daba excepción: `disposeMeshes()` limpiaba el bosque y `rebuildMeshes()`
@@ -1009,19 +948,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     separación entre centros / suma de radios; por debajo de 1 los racimos se pisan. Con el tirón
     solo daba **0,38**, y alejando las anclas hasta el borde llegaba a 0,70 — nunca a 1, porque la
     repulsión está calibrada para llenar el elipsoide. Con volumen propio: **1,26**.
-  - **Tres clases, no una.** Sólo 802 de 2.217 memorias (36,2 %) traen `author`. Agrupar por
-    persona a secas dejaría el 62 % en una mancha gris. Pero 1.027 de esas huérfanas son
+  - **Tres clases, no una.** Sólo 801 de 2.221 memorias (36,1 %) traen `author`. Agrupar por
+    persona a secas dejaría el 64 % en una mancha gris. Pero 1.027 de esas huérfanas son
     `git-commit` y `sdd/` — los dos géneros que **escribe el propio motor**, y que Musubi ya llama
     LIBRO MAYOR en `internal/config/config.go:355`. Van a su racimo, declarado, y no compiten entre
-    personas. Lo que de verdad no se pudo atribuir (390) también se declara.
+    personas. Lo que de verdad no se pudo atribuir (393) también se declara.
   - El género gana sobre el autor: un `git-commit` es el registro del repo aunque la fila diga
     quién lo firmó. Si mandara el autor, un backfill mudaría el racimo entero de golpe.
 
 ### Fixed
-- **El lag de la lente de personas, medido y con causa.** 11.012 `stroke()` por cuadro —155.068
-  llamadas de dibujo por segundo, todas en CPU— daban **13,8 FPS** (p50 69,4 ms). La misma escena
-  en WebGL, en la misma GPU, da **60,3 FPS** (p50 16,6 ms). Al mover el agrupamiento por persona a
-  la escena WebGL, hereda esos 60.
 - **Un contador que mandaba a una acción imposible.** «N eventos sin neurona · falta declarar su
   dueño» contaba también los del spool de esta máquina, que llegan sin credencial: ahí no hay dueño
   que declarar. Medido en 40 s: los 8 que reportaba eran los 8 locales, y los principales sin
@@ -1066,10 +1001,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     que ataca lo que ese test declara. Uno de ellos encontró una fuga real: el proxy reenviaba el
     cuerpo de error del central al navegador, y con él el bearer.
 
-- **El panel tiene una tercera lente: `personas`.** Memoria y código dibujan QUÉ sabe el cerebro;
-  ésta dibuja **quién lo escribe**. Cada terminal es una neurona con dendritas en 3D, los despachos
-  entre ellas son axones dirigidos, y cada persona es un racimo. Se llega con el botón de lente o
-  directo por URL con `?lens=personas`, que además le sirve al CRM para enlazar una vista concreta.
+- **El panel aprende QUIÉN escribe, no sólo QUÉ sabe.** Memoria y código dibujan lo que el cerebro
+  sabe; esta capa saca del propio dato la persona y la terminal detrás de cada nota: cada terminal
+  es una neurona, los despachos entre ellas son axones dirigidos, y cada persona es un racimo.
+  ⚠️ Nació como una **tercera lente aparte** y quedó **absorbida por la de memoria dentro de este
+  mismo release** (ver el `Removed` de `personasview.mjs` más arriba). En v0.130.0 el panel tiene
+  **dos** lentes —memoria y código—, el botón alterna entre esas dos y `?lens=personas` ya no
+  resuelve a nada: sólo `?lens=code` se lee de la URL. Lo que sigue describe la capa tal como
+  nació; el conocimiento —el parser, la regla de `author`, la regla de firma— vive hoy en
+  `personas.mjs` dentro de la lente de memoria.
   - **La persona sale de `author`**, no de una lista escrita a mano, y las credenciales del mismo
     humano colapsan en una sola: `davantis`, `davantis-admin`, `davantis-mando-admin` y
     `davantis-altura` son una persona, no cuatro.
@@ -1081,9 +1021,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     `ALTURA` la menciona más gio que Gabriel, así que por menciones el racimo se la llevaba gio.
     Con la regla de firma el dato se lee solo: `ALTURA` tiene 80 menciones y **1** firma — es un
     dominio, no una terminal— y `GIO` tiene 91 menciones y **0** firmas, porque es una persona.
-  - El render es canvas 2D y no three.js aunque three ya esté en el bundle: lo que hace que una
-    rama parezca dendrita es el trazo que adelgaza hacia la punta, y eso en 2D es una propiedad
-    del stroke y en 3D es geometría por segmento.
   - **El HUD acompaña a la lente.** La tarjeta de dominios pasa a ser la de **personas** —cada una
     con el mismo color con que se dibujó su racimo—, los KPI cambian de sujeto (terminales,
     despachos, personas) y la guía explica lo que esta lente muestra. Se declaran además los dos
@@ -1092,44 +1029,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - El encuadre se **mide del DOM**: la escena se centra en el rectángulo que el HUD no tapa, y se
     calcula sobre los nodos y sus etiquetas, dejando que las dendritas se salgan del cuadro — que
     es lo que hace que el dibujo se lea frondoso y no tímido.
-  - **Se mueve, y cada movimiento dice algo.** Por cada axón viajan luces: una **luz = un despacho**,
-    y cuántas viajan a la vez sale de `veces`, o sea de cuántas veces esas dos terminales se
-    escribieron. Cada neurona **late** según su **calor** —cuánto se recupera lo que escribió— y la
-    que nadie consulta **se queda quieta**, que también es información. El giro lento se **detiene**
-    en cuanto hay hover, zoom o desplazamiento: ahí ya estás mirando algo.
-    - Se descartó animar por **recencia**: medido sobre el cerebro local, las once terminales
-      tienen su nota más nueva a menos de medio día, así que ese canal las pinta a todas igual.
-      El calor sí tiene rango real (0 en `REFUTADOR`, 435 en `AUDITOR`).
-  - **Zoom hasta 40× para entrar en las neuronas chicas**, que era el punto: `SALA DE MANDO` tiene
-    10 notas y a escala 1 es un punto de 3 px. La rueda acerca **hacia el puntero** (si no, el zoom
-    tira siempre al centro y las del borde son inalcanzables), `shift+arrastrá` desplaza y el
-    **doble click entra** en una neurona con una transición suave; en el vacío, vuelve a la vista
-    completa. Lo que hace que eso no cueste un frame es el **LOD por nivel de rama** —cada
-    duplicación del zoom habilita un nivel más, y los niveles finos ni se recorren de lejos— más el
-    **descarte por pantalla** por neurona antes de proyectar su copa.
   - **El hover explica la terminal**: de quién es, cuántas notas la nombran, cuántas la firman, su
     calor, y a quién le escribe y de quién recibe. Reusa el mismo `#tip` que la lente de memoria.
-- **El impulso eléctrico de la lente `personas` sale de invocaciones REALES, y de nada más.** Cada
-  llamada a una tool que llega por el riel en vivo enciende **un** frente que recorre las dendritas
-  de la neurona que la disparó, desde el soma hacia las puntas.
-  - **Un pulso = un evento.** Se eliminó el bucle de luces que recorría los axones sin que hubiera
-    pasado nada: eran despachos reales, pero el *momento* en que viajaban era inventado. Ahora si
-    el cerebro está quieto, el dibujo está quieto — y eso también es información.
-  - La neurona sale del `principal` del evento por una **tabla declarada**, no inferida.
-    `personaDe()` colapsa en el primer guion y aplicada a los tokens inventaría personas:
-    `b1-adjudicador` daría «b1» y `crm-cabina` daría «crm», que son **servicios, no personas**.
-    Los que no están declarados **no pulsan**, y el panel dice cuántos eventos quedaron sin neurona.
-  - `kind` (lo clasifica el servidor) separa las dos capas: el **sondeo** es un frente tenue y el
-    **trabajo real** uno saturado. Medido sobre 7 días: 225.967 invocaciones, **98,2 % sondeo**.
-    Un `kind` desconocido cae del lado del trabajo, nunca del sondeo: esconder ahí algo que no
-    sabemos qué es sería perder cognición en el ruido.
-  - `outcome` pinta el ámbar de «falló» —el mismo que ya usa el HUD para aviso— y `ms` da el
-    grosor, en escala logarítmica porque el rango medido va de 0,15 ms a 60.041 ms.
-  - El frente se dibuja **aditivo** (`globalCompositeOperation = 'lighter'`) con halo y núcleo:
-    donde dos ramas encendidas se cruzan el brillo se suma. Medido, es la diferencia entre un
-    impulso que mueve el brillo del cuadro 0,3 % (invisible) y uno que lo mueve 1,67 %.
-  - El **backlog no pulsa**: al conectar llegan de golpe los eventos ya ocurridos (230 en la
-    corrida medida) y dispararlos sería mostrar como presente algo pasado.
 
 ### Fixed
 - **El panel se ahogaba solo y quedaba en blanco.** `/api/pulse` corre el diagnóstico completo del
@@ -1143,11 +1044,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     nunca; los contadores llenan cuando vuelve el pulso.
   - Queda pendiente lo de fondo: correr `Diagnose()` entero en cada pulso de 5 s es caro y no hace
     falta a esa frecuencia.
-- **La lente de personas dibujaba ENCIMA de la de memoria.** `#brain` tenía `display:block` por
-  selector de ID, que le gana a la regla `[hidden]{display:none}` del navegador, así que ocultar
-  el canvas desde JS **no ocultaba nada**: las 2171 neuronas con bloom seguían pintadas debajo y
-  la pantalla se volvía una mancha blanca. Sólo se reproduce entrando por la lente de memoria y
-  cambiando después — entrando por `?lens=personas` la esfera nunca llega a dibujarse.
 - **`npm test` del panel corría UN archivo, no los tests.** El script decía
   `node --test src/layout.test.mjs`, así que cualquier test nuevo quedaba fuera de CI sin que nada
   se pusiera rojo. Ahora es `src/*.test.mjs`.
@@ -1196,6 +1092,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     ataca lo que declara. **Uno tiene un hueco, y está escrito en el propio test**: el candado del
     escritor no lo cubre ninguna prueba local — saboteado, pasó 20 de 20— y lo custodia la CI con
     `-race`.
+
+### Changed
+- **Dependencias al día en el binario publicado**: `modernc.org/sqlite` 1.56.0 → 1.57.0 (el driver
+  de la base, sin CGo), `github.com/odvcencio/gotreesitter` 0.49.0 → 0.51.0 (los parsers del grafo
+  de código) y `actions/setup-node` 6 → 7 en CI. Las tres pasaron la suite por separado y **también
+  juntas sobre `main`**, que es la única corrida que dice algo sobre lo que se publica.
 
 ## [0.106.0] - 2026-08-22
 
@@ -5656,6 +5558,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   telemetría de errores.
 
 [Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.106.0...HEAD
+[0.130.0]: https://github.com/codeabraham16/musubi/compare/v0.106.0...v0.130.0
 [0.106.0]: https://github.com/codeabraham16/musubi/compare/v0.105.0...v0.106.0
 [0.105.0]: https://github.com/codeabraham16/musubi/compare/v0.104.0...v0.105.0
 [0.104.0]: https://github.com/codeabraham16/musubi/compare/v0.103.0...v0.104.0
