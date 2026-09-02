@@ -178,7 +178,7 @@ func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 		"\"Spooler\",\"Stopped\",\"Auto\",\"1067\"\n" +
 		"\"MapsBroker\",\"Stopped\",\"Auto\",\"0\"\n" +
 		"\"Manual y sano\",\"Stopped\",\"Manual\",\"0\"\n" +
-		"\"Manual y roto\",\"Stopped\",\"Manual\",\"1067\"\n"
+		"\"Manual nunca arrancado\",\"Stopped\",\"Manual\",\"1077\"\n"
 	rs := parsearServiciosWindows(csv, time.Now())
 	nombres := map[string]fleet.EstadoServicio{}
 	for _, r := range rs {
@@ -196,8 +196,14 @@ func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 	if _, hay := nombres["Manual y sano"]; hay {
 		t.Error("se reportó un servicio Manual y detenido limpio: Windows tiene cientos")
 	}
-	if nombres["Manual y roto"] != fleet.EstadoFallado {
-		t.Error("un Manual que se MURIÓ no se reportó: el filtro deja pasar lo roto aunque nadie lo haya declarado")
+	// LA FILA QUE COSTÓ 75 ALARMAS FALSAS. Un servicio Manual apagado reporta ExitCode=1077
+	// —«nunca se intentó arrancar desde el boot»— que en un Automatic es una falla y en un Manual
+	// es lo NORMAL. Windows trae cientos. Si el código de salida se mira ANTES de filtrar por
+	// tipo de arranque, todos entran como `fallado` y el canal se llena.
+	//
+	// Sabotaje: mover el filtro de `auto` para DESPUÉS de calcular el estado → falla acá.
+	if _, hay := nombres["Manual nunca arrancado"]; hay {
+		t.Errorf("se reportó un Manual con ExitCode 1077: eso es lo normal en un Manual, y son cientos: %v", nombres)
 	}
 }
 

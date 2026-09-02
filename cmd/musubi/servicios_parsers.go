@@ -46,13 +46,21 @@ func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServ
 		if nombre == "" {
 			continue
 		}
-		estado := estadoDeWindows(tomar(f, "state"), tomar(f, "exitcode"))
+		// SÓLO LOS `Automatic`, Y EL FILTRO VA ANTES DE MIRAR EL CÓDIGO DE SALIDA.
+		//
+		// Ponerlo después costó 75 alarmas falsas —cinco veces peor que el problema que este
+		// archivo vino a arreglar— y la causa es una sola línea de datos: un servicio Manual
+		// apagado reporta `ExitCode=1077`, que es «nunca se intentó arrancar desde el boot». En
+		// un Automatic eso ES una falla; en un Manual es lo NORMAL. Windows trae cientos, y
+		// dejarlos entrar como `fallado` llenó el canal.
+		//
+		// El código de salida sólo responde una pregunta —«¿se apagó porque terminó o porque
+		// murió?»— y esa pregunta sólo tiene sentido sobre algo que alguien declaró que corra.
 		arranque := strings.ToLower(tomar(f, "startmode"))
-		// Automatic = alguien lo declaró. Lo demás sólo entra si está roto — un servicio Manual
-		// que se murió importa igual, y uno Manual apagado es el ruido que este filtro evita.
-		if !strings.HasPrefix(arranque, "auto") && estado != fleet.EstadoFallado {
+		if !strings.HasPrefix(arranque, "auto") {
 			continue
 		}
+		estado := estadoDeWindows(tomar(f, "state"), tomar(f, "exitcode"))
 		rs = append(rs, fleet.ReporteServicio{
 			Nombre: nombre,
 			Clase:  "windows",
