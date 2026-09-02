@@ -29,6 +29,12 @@
 > pero no en la tabla) y **A75** (el eje de consentimiento sólo lo consulta el camino de pantalla:
 > `exec` y `shell` no lo miran). Con eso son **17 cabos abiertos**, todos con dueño o razón.
 >
+> **Y esa misma tarde se anotaron dos más, que salieron de construir el mapa de cobertura**:
+> **A76** (los contenedores de una máquina Windows son invisibles para la flota — 11 corriendo en
+> `davantis-1` y ninguno reportado, con dos rotos hacía días) y **A77** (dos máquinas del tailnet
+> no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
+> dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
+>
 > **Y la regla 2 sumó dos guardas**, porque estas tres cosas se rompieron a mano y a mano se iban a
 > volver a romper: en `internal/mcp/specs_sin_cabos_test.go`, un número repetido en las tablas rompe
 > la suite, y un cabo VIVO que apunte a un número que el registro no define en ningún lado, también.
@@ -85,6 +91,8 @@
 | A75 | **El consentimiento no cubre `exec` ni `shell`** | El eje —cuatro grados ordenados, `libre` < `avisa` < `pide` < `prohibido`, default `avisa`— se resuelve en `Device.ConsentimientoEfectivo` y **lo consulta un solo camino: el de pantalla** (`internal/mcp/methods_pantalla.go`, dos veces: antes de acuñar la sesión y para preguntar). `musubi_fleet_exec` y `musubi_fleet_shell` **no lo invocan**, así que en una máquina declarada `pide`, mirar la pantalla pregunta y **abrir una shell no**. La asimetría no está escrita en ningún lado, y hay dos señales de que no fue deliberada: el comentario de `ConsentimientoEfectivo` justifica vivir en el dominio para que «el de pantalla y el de shell» no discrepen —como si los dos lo usaran—, y la nota que abrió el eje lo modela sobre MeshCentral, que sí tiene los gemelos para terminal. **No se cablea de una, y por eso es decisión y no bug**: prender el eje sobre `exec` cambia el comportamiento de máquinas ajenas —una política de auto-heal que hoy corre sola pasaría a esperar a una persona que quizá no está enfrente—, y `avisa` en cada exec convierte el aviso en ruido, que es exactamente cómo se enseña a poner `libre` en todo y a apagar el eje entero. Lo que hay que decidir: **qué le debe Musubi a quien está sentado en la máquina cuando lo que se abre es una shell y no una pantalla**, y si la respuesta cambia según el `origen` del comando (persona o política), que la migración 41 ya distingue. | **sin asignar** (decisión de gio) |
 
 | A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
+| A76 | **Los contenedores de una máquina Windows son invisibles para la flota** | El agente enumera contenedores desde A42 y los reporta como servicios — pero **sólo en Linux**, con `podman ps`. La asimetría se midió el 2026-09-02: `musubi-server` reporta 57 servicios de los cuales **14 son contenedores**; `davantis-1` reporta 64 y **ninguno**, con **11 contenedores de Docker Desktop corriendo** (el Supabase local de `altura-erp`). **El costo ya se pagó ese mismo día**: `supabase_vector_altura-erp` llevaba días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se encontraron **con la mano**, buscando espacio en disco — ninguna alerta existía, porque la serie no existe. Es el mismo colector con otra fuente (`docker ps` en vez de `podman ps`), y en cuanto los reporte, `ServicioCaido` y `ServicioReiniciandose` empiezan a cubrirlos sin escribir una regla nueva. **Ojo con el segundo**: hoy está declarado `ausente_en: os=windows` porque el SCM no expone reinicios, y un contenedor SÍ los expone — esa declaración va a necesitar afinarse a «servicios del SCM» cuando esto entre. | **sin asignar** |
+| A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -112,6 +120,53 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (qui) · EL MAPA DE COBERTURA — «¿esa regla vigila a ESTA máquina?»**
+
+No cierra un cabo numerado: cierra una PREGUNTA que no se podía contestar desde ningún lado, y que
+resultó ser la de un nivel más adentro que la de A73.
+
+`verificar-despliegue.sh` contesta «¿está la regla cargada?». Con las 35 reglas desplegadas y
+**todas sus métricas presentes** —verificado, no supuesto—, se midió esto:
+
+	TemperaturaAlta        1 serie de 4 máquinas
+	CargaPorCoreAlta       2 de 4
+	ServicioReiniciandose  54 series, TODAS del servidor  → 0 de las 2 Windows
+	ServicioLento          1 serie                        → 1 servicio de 184
+
+Cada hueco tenía una razón buena —Windows no tiene load average, el SCM no expone reinicios, A2
+sigue abierto— y **ninguna se podía leer**. La regla cargada, su métrica presente, y esa dimensión
+de esa máquina a ciegas. Verde por el motivo equivocado, sin que hubiera un bug en ningún lado.
+
+`deploy/verificar-cobertura.sh` cruza, por máquina y por regla, si existen las series que esa
+expresión necesita. Hoy: `musubi-server` 18/19, las dos Windows 13/16, `altura-db` 9/10.
+
+**LA RAZÓN LA ESCRIBE LA REGLA**, en su anotación `ausente_en:`, no el verificador. Misma forma que
+el `# despliegue:` de A73 y por lo mismo: un catálogo de excepciones que vive en el verificador se
+desincroniza de las reglas y termina perdonando huecos que ya no corresponden.
+
+**TRES CASILLEROS, y ésa es la decisión de diseño que hace útil el informe.** Un límite estructural
+(`os=windows`: no hay load average que activar, no lo va a haber nunca) NO es lo mismo que una
+cobertura opt-in sin activar (`sin-declarar`: la serie aparece en cuanto alguien la configura).
+Meter la segunda en la primera habría borrado del informe que `ServicioLento` cubre 1 servicio de
+184 — que no es una falla, pero tampoco es cobertura.
+
+**DOS BUGS DE MODELADO PROPIOS, y salieron de leer las expresiones en vez de contar métricas.**
+`A unless B` exigía `B` como cobertura, lo que invierte el sentido de `MaquinaSinInventario` —que
+existe justamente para avisar que esa serie FALTA—. Y una regla que ya se auto-limita con
+`{tier="A"}` no necesita que nadie le declare el hueco: pedir la declaración sería escribir dos
+veces la misma decisión, y dos copias se contradicen el día que alguien cambia una.
+
+**Y UN FALSO VERDE PROPIO, que es lo que más vale de la entrada.** Al juntar las 25 consultas en una
+sola conexión (100 s → 2,7 s) las que llevaban espacios se partieron en varios argumentos. No volvió
+una sola serie, y el informe dijo `0/0 · toda ausencia de cobertura está declarada` — **la frase más
+tranquilizadora posible sobre nada**. Es exactamente la enfermedad que este verificador vino a cazar,
+cometida por el verificador. Ahora corta con error sobre el conjunto vacío y una prueba lo custodia.
+
+Cinco sabotajes ejecutados, uno end-to-end contra producción. **Y quedó anotado lo que NO mira**: el
+contenido de cada regla (un umbral que cambió tiene el mismo nombre), y las máquinas que no están
+enroladas — que es justamente **A77**.
+
 
 **2026-09-02 (qui) · A72 CERRADO — 31 GB, y el hallazgo es que casi nada era basura.**
 
