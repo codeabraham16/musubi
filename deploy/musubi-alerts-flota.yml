@@ -99,6 +99,7 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Carga a 5 min de {{ $value | printf \"%.1f\" }}× la cantidad de cores."
+          ausente_en: "os=windows — el load average es un concepto de UNIX y ahí no existe; emitir un 0 lo haría indistinguible de una máquina ociosa."
 
       # --- Temperatura ---
       # Sólo dispara donde hay sensor: la serie no existe en las máquinas sin él, así que esto
@@ -109,6 +110,7 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "A {{ $value | printf \"%.0f\" }}°C."
+          ausente_en: "os=windows — el sensor se saca por WMI y eso sigue abierto (A2); tier=B — un host sondeado por SSH no expone su zona térmica."
 
       # --- LA TRAMPA SILENCIOSA ---
       # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
@@ -144,6 +146,7 @@ groups:
         annotations:
           summary: "Su agente corre un release distinto del cerebro."
           nota: "Cuál versión corre cada máquina sale de `musubi_fleet_list` — la versión no viaja como etiqueta a propósito. Ver deploy/RUNBOOK.md#agentedesactualizado"
+          ausente_en: "tier=B — un Tier B no corre nuestro binario, así que no hay versión que comparar."
 
 
   # ── El auto-heal se vigila a sí mismo (S10 · A10) ─────────────────────────────────────────
@@ -189,6 +192,7 @@ groups:
           summary: "No alcanza alguno de los destinos que le declararon. Cuál, en `no_alcanza` de musubi_fleet_list."
           nota: "El destino puede estar caído, o la red de ESA máquina puede estar cortando la ruta (un VPN con todo el tráfico capturado es la causa más común)."
           runbook: "deploy/RUNBOOK.md#maquinaquenoalcanzasudestino"
+          ausente_en: "sin-declarar — la sonda mira los destinos de MUSUBI_ALCANCE y es opt-in por máquina (A67): nadie le pidió que mirara no es lo mismo que no llega."
 
       # La política está viva pero NO PUEDE actuar: su principal perdió la concesión `exec`, o el
       # comando dejó de estar en su allowlist. Es una alarma apagada, y una alarma apagada en
@@ -228,6 +232,7 @@ groups:
         annotations:
           summary: "El servicio {{ $labels.service }} no está corriendo."
           runbook: "deploy/RUNBOOK.md#serviciocaido"
+          ausente_en: "tier=B — un Tier B no reporta servicios: no corre nuestro agente y el sondeo por SSH no los enumera."
 
       # ANDA A LOS TUMBOS: está corriendo AHORA y se reinició varias veces en la última hora. Es
       # el estado que `up` no puede mostrar — en cada instante el servicio está arriba.
@@ -238,6 +243,7 @@ groups:
         annotations:
           summary: "{{ $labels.service }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
           runbook: "deploy/RUNBOOK.md#servicioreiniciandose"
+          ausente_en: "os=windows — el SCM no expone cuántas veces se reinició un servicio, y un 0 inventado se leería «nunca se reinició»; tier=B — un Tier B no reporta servicios."
 
       # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
       # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
@@ -248,6 +254,7 @@ groups:
         annotations:
           summary: "Hace más de 30 min que no reporta el estado de {{ $labels.service }}."
           runbook: "deploy/RUNBOOK.md#serviciosinnoticias"
+          ausente_en: "tier=B — un Tier B no reporta servicios."
 
       # ────────────────────────────────────────────────────────────────────────────────────
       - alert: MaquinaSinInventario
@@ -295,6 +302,7 @@ groups:
         annotations:
           summary: "{{ $labels.service }} corre y falla más de 1 de cada 5."
           runbook: "deploy/RUNBOOK.md#serviciofallandopordentro"
+          ausente_en: "sin-declarar — el conteo de atendidos/fallados lo empuja cada servicio y es opt-in; tier=B — un Tier B no reporta servicios."
 
       # EL COLECTOR SE MURIÓ, que NO es lo mismo que «el servicio no tuvo trabajo». La diferencia
       # es exactamente por qué el colector empuja un 0 en vez de callarse: con el 0, la serie
@@ -306,6 +314,7 @@ groups:
         annotations:
           summary: "{{ $labels.service }} reportaba rendimiento y hace más de 10 minutos que no."
           runbook: "deploy/RUNBOOK.md#colectorderendimientomudo"
+          ausente_en: "sin-declarar — sólo aplica a los servicios que YA empujaban rendimiento, que es opt-in; tier=B — un Tier B no reporta servicios."
 
       - alert: ServicioLento
         expr: musubi_fleet_service_latency_p95_ms > 5000
@@ -314,6 +323,7 @@ groups:
         annotations:
           summary: "El p95 de {{ $labels.service }} pasa los 5 segundos."
           runbook: "deploy/RUNBOOK.md#serviciolento"
+          ausente_en: "sin-declarar — la latencia la empuja cada servicio con el colector de rendimiento, que es opt-in; tier=B — un Tier B no reporta servicios."
 
   # ── LA CUSTODIA CRUZADA (A73) ─────────────────────────────────────────────────────────────
   #
