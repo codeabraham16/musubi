@@ -369,3 +369,46 @@ func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
 		t.Error("la regla no agrupa por integración: un mismo canal roto daría una alerta por cada motivo")
 	}
 }
+
+// SI LA TAREA CORRE COMO SYSTEM, SYSTEM TIENE QUE PODER LEER EL TOKEN.
+//
+// El instalador endurece el `device.token` con `SetAccessRuleProtection($true, $false)`: corta la
+// herencia y NO copia las reglas heredadas, así que después queda UNA sola regla, la del usuario
+// que instaló. Con `-AlArranque` el agente no es ese usuario: es SYSTEM. No puede leer su propio
+// token y muere al arrancar.
+//
+// MEDIDO EN PRODUCCIÓN el 2026-09-02, en `gio`: la tarea decía «Attempted to run», volvía a
+// `Ready` al instante, y la máquina quedaba fuera de la flota SIN UN SOLO MENSAJE DE ERROR.
+//
+// Y ESTA ES LA PARTE QUE IMPORTA: el instalador no lo veía. Su prueba de latido pasa el token por
+// VARIABLE DE ENTORNO y corriendo como el usuario, así que nunca abre el archivo — probaba un
+// camino distinto del que la tarea iba a usar, y daba verde sobre una instalación muerta. Es el
+// mismo modo de fallo que este repo persigue en todos lados: verde por el motivo equivocado.
+//
+// Negarle el archivo a SYSTEM tampoco era una defensa: SYSTEM puede tomar posesión de cualquier
+// archivo de la máquina. Lo único que lograba era romper el arranque.
+//
+// Sabotaje: borrar la regla de SYSTEM del bloque `if ($AlArranque)` → falla acá.
+func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/agente-windows.ps1")
+	if err != nil {
+		t.Fatalf("falta el instalador de Windows: %v", err)
+	}
+	ps := string(b)
+
+	if !strings.Contains(ps, `SetAccessRuleProtection($true, $false)`) {
+		t.Skip("el instalador ya no corta la herencia del token; esta guarda dejó de aplicar")
+	}
+	if !strings.Contains(ps, `"NT AUTHORITY\SYSTEM", "FullControl", "Allow"`) {
+		t.Error("con -AlArranque la tarea corre como SYSTEM y el token queda ilegible para él: " +
+			"el agente muere al arrancar y la máquina figura caída sin ningún error")
+	}
+	// Y LA REGLA VA DENTRO DEL OPT-IN. Darle el token a SYSTEM en una instalación normal —donde la
+	// tarea corre como la persona— sería aflojar el endurecimiento sin que nadie lo pidiera.
+	i := strings.Index(ps, `"NT AUTHORITY\SYSTEM", "FullControl", "Allow"`)
+	antes := ps[:i]
+	if !strings.Contains(antes[max(0, len(antes)-400):], "if ($AlArranque)") {
+		t.Error("la regla de SYSTEM sobre el token no está dentro de `if ($AlArranque)`: " +
+			"una instalación normal no debería aflojar los permisos del token")
+	}
+}

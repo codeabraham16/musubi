@@ -122,8 +122,31 @@ $acl = Get-Acl $tokenFile
 $acl.SetAccessRuleProtection($true, $false)         # corta la herencia
 $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
   "$env:USERDOMAIN\$env:USERNAME", "FullControl", "Allow")))
+# CON -AlArranque, EL AGENTE NO ES VOS: ES SYSTEM. Y ESTE ENDURECIMIENTO LO DEJABA AFUERA.
+#
+# El $false de SetAccessRuleProtection dice "corta la herencia y NO copies las reglas heredadas",
+# asi que despues de la linea de arriba queda UNA sola regla: la del usuario que instalo. Con la
+# tarea corriendo como SYSTEM, el agente no puede leer su propio token y muere al arrancar.
+#
+# Medido el 2026-09-02 en `gio`: la tarea decia "Attempted to run", volvia a Ready al instante, y
+# la maquina quedaba fuera de la flota sin un solo mensaje de error.
+#
+# Y EL INSTALADOR NO LO VEIA, que es la parte que importa: su prueba de latido pasa el token por
+# VARIABLE DE ENTORNO y corriendo como el usuario, asi que nunca abre el archivo. Probaba un
+# camino distinto del que la tarea iba a usar, y por eso daba verde sobre una instalacion muerta.
+#
+# Negarle el archivo a SYSTEM tampoco era una defensa real: SYSTEM puede tomar posesion de
+# cualquier archivo de la maquina cuando quiera. Lo unico que lograba era romper el arranque.
+if ($AlArranque) {
+  $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "NT AUTHORITY\SYSTEM", "FullControl", "Allow")))
+}
 Set-Acl $tokenFile $acl
-Paso "token guardado, solo legible por $env:USERNAME"
+if ($AlArranque) {
+  Paso "token guardado, legible por $env:USERNAME y por SYSTEM (la tarea corre como SYSTEM)"
+} else {
+  Paso "token guardado, solo legible por $env:USERNAME"
+}
 
 # -- 3. Prueba UN latido antes de crear nada -------------------------------------------------
 # Si la credencial o la URL estan mal, se ve ACA y no dentro de una tarea que falla en silencio.
