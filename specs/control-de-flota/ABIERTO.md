@@ -63,7 +63,11 @@
 
 **Y `DiscoPorLlenarse` SIGUE DISPARANDO, que es lo correcto y hay que decirlo**: 32,1 de 232,1 es **13,7 %**, y el umbral es 15 % — faltan 2,7 GB. La alerta no se apagó porque la máquina sigue estando llena de verdad. Bajar el umbral para que se calle sería exactamente lo que este track no hace.
 
-**La palanca que queda es Docker (30,4 GB) y gio dijo que no se toca.** Con eso el cabo queda esperando una decisión del dueño de la máquina, no una medición: el dato está completo y la única acción pendiente es de él. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
+**Remedido después de limpiar**, que es donde se ve qué quedó: `Users` bajó de 102,1 a **86,4 GB** y `AppData` de 77,1 a **61,5**. Con las dos cachés grandes fuera, el ranking de `AppData\Local` queda `Docker` **30,4** · `Google` 7,5 · `Roblox` 4,0 · `Programs` 2,4 · `hermes` 1,9 · `Packages` 1,7 · `ms-playwright` 1,4 · `npm-cache` 1,2. Los últimos dos son caché pura y no estaban a la vista antes: los tapaban los 16 GB que se fueron.
+
+**`Temp` VUELVE A CRECER**, y eso importa para no contarlo dos veces: en veinte minutos ya había recuperado medio giga. No es espacio ganado de forma permanente — es espacio que se libera y se vuelve a llenar.
+
+**Para apagar la alerta faltan 3,1 GB** (15 % de 232,1 son 34,8 y hay 31,7). `npm-cache` + `ms-playwright` suman 2,6 y no alcanzan solos. **La única palanca del tamaño necesario es Docker (30,4 GB), y gio dijo que no se toca.** Así que el cabo queda esperando una decisión del dueño de la máquina, no una medición: el dato está completo y la única acción pendiente es de él. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
 
 
 
