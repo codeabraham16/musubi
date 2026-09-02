@@ -62,7 +62,8 @@ const proyectosParaExportar = 64
 // viven en funciones compartidas y no adentro de este `for` — dos copias discrepan el día que
 // alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
 // muestran cosas distintas.
-func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time, intervaloSonda time.Duration) {
+func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
+	intervaloSonda time.Duration, versionCerebro string) {
 	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
 
 	if len(vistos) == 0 {
@@ -77,7 +78,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
 	}
 
-	for _, s := range seriesDeFlota(ahora, intervaloSonda) {
+	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
 		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
 	}
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
@@ -139,13 +140,16 @@ type serieDeFlota struct {
 	Valor  func(d fleet.Device, m *fleet.Muestra) (float64, bool)
 }
 
-// seriesDeFlota devuelve las 20 series en orden estable: las DOS que salen de la fila del device
-// (up, last_seen) y las 18 que salen de la MUESTRA.
+// seriesDeFlota devuelve las 21 series en orden estable: las TRES que salen de la fila del device
+// (up, last_seen, agent_stale) y las 18 que salen de la MUESTRA.
 //
 // `ahora` e `intervaloSonda` entran por parámetro porque tres series son relativas al reloj (up,
 // last_seen, sample_age): con un reloj por serie, `up` podría decir «viva» y `sample_age` medirse
 // contra otro instante. Un solo reloj por export, y el empuje además lo usa para sellar los puntos.
-func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration) []serieDeFlota {
+// `versionCerebro` entra por lo mismo y por una razón más: `internal/mcp` no puede leer la variable
+// que el build inyecta en `main`, así que la referencia contra la que se compara cada agente viaja
+// desde arriba o no existe.
+func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro string) []serieDeFlota {
 	return []serieDeFlota{
 		{"musubi_fleet_device_up",
 			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
@@ -222,6 +226,22 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration) []serieDeFlota
 				}
 				return 1, true
 			})},
+		// NO SALE DE LA MUESTRA: sale de la FILA del device (A68). `agent_version` la escribe
+		// `LatirDevice` en cada latido y sobrevive a que la máquina se muera, así que una máquina
+		// caída sigue diciendo en qué versión se quedó — que es lo que se quiere saber de ella.
+		{"musubi_fleet_device_agent_stale",
+			"1 si el agente corre un release distinto del cerebro, 0 si es el mismo. Compara el NÚCLEO semver y no el commit: el binario de cada máquina se cruza a mano y el del cerebro se redespliega varias veces por día, así que comparar commits dejaría a la flota entera marcada después de cada despliegue. AUSENTE en las máquinas sin agente (un Tier B sondeado por SSH no tiene versión que comparar) y AUSENTE también si el cerebro no sabe la suya: sin referencia, marcar a toda la flota sería culparla de un problema del build propio. CUÁL versión corre cada una se mira en musubi_fleet_list — ninguna de las dos viaja como etiqueta, que dejaría la serie re-etiquetándose sola en cada actualización y las viejas huérfanas.",
+			"", false,
+			func(d fleet.Device, _ *fleet.Muestra) (float64, bool) {
+				difiere, comparable := fleet.VersionDelAgenteDifiere(d.AgentVer, versionCerebro)
+				if !comparable {
+					return 0, false
+				}
+				if difiere {
+					return 1, true
+				}
+				return 0, true
+			}},
 	}
 }
 

@@ -74,6 +74,17 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 // Se usa en NewMcpServer para configuración aditiva sin romper callers existentes.
 type Option func(*McpServer)
 
+// WithVersion le dice al servidor qué versión de Musubi es (A68).
+//
+// Entra por Option y no por una constante porque la versión se INYECTA en el build
+// (`-ldflags -X main.version`), y `internal/mcp` no puede leer una variable de `main`. Sin ella el
+// servidor no sabe su propia versión y `musubi_fleet_device_agent_stale` NO se emite para ninguna
+// máquina — a propósito: sin referencia, marcar a la flota entera sería culparla de un problema
+// del build propio. Lo custodia TestTodoServidorQueSeSirveDeclaraSuVersion.
+func WithVersion(v string) Option {
+	return func(s *McpServer) { s.version = v }
+}
+
 // WithSpoolLocal enciende el vertedero del feed en `dir`, para que un panel de ESTA máquina
 // pueda ver lo que hace un daemon stdio. Se usa en `musubi daemon`, no en `musubi serve`:
 // el central ya reparte por HTTP y escribir además a disco serían ~100.000 líneas diarias
@@ -153,6 +164,11 @@ type McpServer struct {
 	// o no hay embebedor, y el motor de diseño cae al camino por similitud.
 	ejesVec map[string][]float32
 	ejesMu  sync.Mutex
+
+	// version es la versión de ESTE binario, inyectada por WithVersion desde main. Vacía o
+	// ilegible ("dev") ⇒ el exportador no puede comparar contra nada y apaga
+	// `musubi_fleet_device_agent_stale` para toda la flota (A68).
+	version string
 
 	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
 	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.

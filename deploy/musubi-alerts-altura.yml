@@ -1,5 +1,10 @@
 # musubi-alerts-altura.yml — el plano de APLICACIÓN de la base gestionada de Altura.
 #
+# despliegue: condicional — sólo si existe el scrape `altura-db`.
+#
+# Sin él estas reglas no tienen datos y enmudecen sin fallar, que es peor que no instalarlas: se
+# ven puestas.
+#
 # Va en /etc/prometheus/rules/. Se instala SÓLO si existe el scrape `altura-db`; sin él estas
 # reglas no tienen datos y enmudecen sin fallar, que es peor que no instalarlas: se ven puestas.
 #

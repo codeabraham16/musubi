@@ -1,5 +1,12 @@
 # musubi-alerts.yml — reglas de alerta Prometheus para el cerebro central de Musubi (Track 18).
 #
+# despliegue: siempre
+#
+# Esta línea NO es decoración: `deploy/verificar-despliegue.sh` la lee para saber si un archivo
+# que no está cargado es una falla o una decisión. Sin ella, un archivo parkeado a propósito se
+# denuncia como drift y el informe entero empieza a ignorarse. Los valores son dos: `siempre`, o
+# `condicional — <la razón, en prosa>`.
+#
 # Cierra el hueco que marcó la auditoría: /metrics exponía contadores ricos (rechazos de cuota/
 # authz, outbox muerto, índice sin entrenar, staleness del backup) pero NADA disparaba sobre ellos
 # — operabilidad reactiva, no 24/7. Estas reglas hacen PAGINABLES los eventos de mayor consecuencia.
@@ -159,3 +166,47 @@ groups:
             {{ $value | printf "%.0f" }} envíos fallidos en 15 minutos. Los OTROS canales pueden
             estar entregando bien: esta alerta llegó, así que al menos uno anda.
           runbook: "deploy/RUNBOOK.md#cadenadealertasfallando"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # LO QUE FALTABA PARA QUE LA REGLA DE ARRIBA PUDIERA SIQUIERA DISPARARSE (A73)
+      #
+      # `CadenaDeAlertasFallando` mira `alertmanager_notifications_failed_total`, que sólo existe
+      # si Prometheus SCRAPEA al Alertmanager. El 2026-09-02 se midió que ese job no estaba
+      # desplegado: la regla llevaba días cargada y no podía dispararse nunca. Su guarda de repo
+      # pasaba en verde porque leía `deploy/prometheus/prometheus.yml`, y el servidor corría otro
+      # archivo.
+      #
+      # `absent()` conserva las etiquetas del matcher, así que `{{ $labels.job }}` nombra cuál
+      # falta. Los tres jobs son los que el repo declara en prometheus.yml, y una prueba los
+      # compara contra esta lista: agregar un scrape sin vigilarlo rompe la suite.
+      - alert: ScrapeQueElRepoDeclaraYNoExiste
+        expr: absent(up{job="musubi"}) or absent(up{job="prometheus"}) or absent(up{job="alertmanager"})
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El scrape `{{ $labels.job }}` no existe: lo que dependa de sus métricas está ciego, no en verde."
+          nota: "Es distinto de un target caído — `up == 0` significa «no contesta»; acá el job ni siquiera está configurado, así que ninguna regla que use sus métricas puede dispararse. Ver deploy/RUNBOOK.md#scrapequeelrepodeclaraynoexiste"
+
+      # LA CUSTODIA CRUZADA, LA MITAD DE ESTE ARCHIVO. La otra vive en musubi-alerts-flota.yml y
+      # vigila a éste. El porqué del cruce está explicado allá, en el grupo `musubi-custodia`:
+      # un archivo que declara su propio conteo se despliega junto con el conteo y nunca falla.
+      #
+      # ESTE ARCHIVO SE INSTALA SIEMPRE; EL DE FLOTA NO, y de ahí sale la forma rara del `or`.
+      # Las reglas de flota se instalan sólo si el cerebro expone `musubi_fleet_*` (ver el
+      # encabezado de aquél y deploy/docker/preparar.sh), así que exigir que existan haría sonar
+      # esta alerta desde el día uno en cualquier cerebro sin plano de flota — que es exactamente
+      # el error que aquel encabezado explica y que este archivo no puede repetir.
+      #
+      # La precondición la responde la telemetría misma: si hay UNA máquina exportando, el plano
+      # de flota está desplegado y sus reglas TIENEN que estar cargadas. Sin máquinas, el `absent`
+      # queda apagado y sólo se comprueba el conteo si el archivo está.
+      - alert: ReglasDeFlotaSinDesplegar
+        expr: >-
+          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 22
+          or (absent(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"})
+          and on() (count(musubi_fleet_device_up) > 0))
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Las reglas de flota que corren no son las que declara el repo."
+          nota: "Quedó una versión vieja del archivo cargada. `deploy/verificar-despliegue.sh` dice exactamente cuáles reglas faltan o sobran. Ver deploy/RUNBOOK.md#reglasdeflotasindesplegar"

@@ -602,3 +602,101 @@ Después, en orden de frecuencia:
 
 Una máquina sin destinos configurados **no emite la serie** y no puede disparar esta alerta.
 Ausente no es falso: significa que nadie le pidió que mirara.
+
+## AgenteDesactualizado
+
+El agente de esa máquina corre un **release distinto** del que corre el cerebro. La serie compara
+el núcleo semver (`0.130.0`), no el commit: dos binarios del mismo release construidos de commits
+distintos son lo normal y **no** disparan esto.
+
+**Por qué importa, con el caso que lo abrió.** El 2026-09-01 el cerebro corría `0.130.0` y los dos
+Windows `v0.106.0`, veinticuatro versiones atrás. Se descubrió de casualidad, mirando otra cosa. El
+costo fue concreto: A67 se había desplegado el día anterior y **no podía correr en las dos máquinas
+para las que se escribió**, porque su binario no tenía la capacidad. Un agente atrasado se veía
+idéntico a uno al día.
+
+Qué versión corre cada una:
+
+```bash
+./musubi-tool.sh musubi_fleet_list '{}' | grep -E 'name|agent_version'
+```
+
+La versión **no viaja como etiqueta de Prometheus** a propósito: la serie se re-etiquetaría sola en
+cada actualización y las viejas quedarían huérfanas. Por eso la métrica es un booleano y el detalle
+sale de la tool.
+
+Para actualizar:
+
+- **Linux (el propio servidor).** El cerebro y el agente comparten ejecutable: `deploy/redesplegar-cerebro.sh`.
+- **Windows.** Se cruza el binario nuevo a la máquina y se corre `cambiar-agente.cmd`, que lo
+  reemplaza con prueba de latido y vuelta atrás. Ojo con el zombi: si un agente viejo quedó vivo
+  desde `musubi.exe.viejo`, gana la carrera del latido y la máquina sigue figurando en la versión
+  anterior aunque el log del cambio diga «exitoso».
+
+**Lo que esta alerta no puede ver:** una capacidad que entró al cerebro sin tocar el archivo
+`VERSION`. La comparación mide lo que VERSION declara, y VERSION lo bumpea una persona.
+
+## ScrapeQueElRepoDeclaraYNoExiste
+
+Prometheus **no tiene configurado** un job que el repo declara. No es un target caído: `up == 0`
+significa «no contesta», y acá el job ni siquiera existe, así que **ninguna regla que use sus
+métricas puede dispararse**. Se ve en verde.
+
+Es el caso exacto que abrió A73. El job `alertmanager` no estaba desplegado, así que
+`alertmanager_notifications_failed_total` no existía y `CadenaDeAlertasFallando` —la alerta que
+vigila que las alertas se entreguen— llevaba días cargada sin poder sonar.
+
+```bash
+# qué jobs tiene de verdad
+curl -s 'http://127.0.0.1:9099/api/v1/targets?state=any' \
+  | python3 -c 'import sys,json;print(sorted({t["labels"]["job"] for t in json.load(sys.stdin)["data"]["activeTargets"]}))'
+```
+
+El arreglo es copiar `deploy/prometheus/prometheus.yml` al servidor y recargar. **Copiálo con
+`cat >` o `install`, nunca con `sed -i`**: el archivo está bind-monteado en el contenedor y `sed -i`
+reemplaza el inodo — el contenedor se queda leyendo el archivo anterior, que ya no tiene nombre, y
+la recarga contesta `200` sobre el archivo equivocado.
+
+```bash
+curl -X POST http://127.0.0.1:9099/-/reload
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+## ReglasDeFlotaSinDesplegar
+
+## ReglasDelCerebroSinDesplegar
+
+Las dos son la misma cosa mirada desde cada lado: **lo que Prometheus tiene cargado no es lo que
+declara el repo**. Cada archivo de reglas vigila el conteo del OTRO, cruzado a propósito — un
+archivo que declara su propio conteo se despliega junto con el conteo, las dos mitades se mueven a
+la vez y la comprobación no falla nunca.
+
+Primero, qué falta y en qué dirección:
+
+```bash
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+Ese informe distingue tres cosas que se ven parecidas y se arreglan distinto: un archivo **sin
+desplegar**, uno **desplegado a medias**, y reglas **cargadas que el repo ya no tiene** (quedaron
+de un despliegue anterior). También deja sin denunciar los archivos que están parkeados a
+propósito, que lo declaran en su propia línea `# despliegue:`.
+
+Después, copiar y recargar:
+
+```bash
+# desde la máquina que tiene el repo
+scp deploy/musubi-alerts.yml deploy/musubi-alerts-flota.yml \
+    musubi-server:/tmp/
+ssh musubi-server 'for f in musubi-alerts.yml musubi-alerts-flota.yml; do
+  cat "/tmp/$f" > "$HOME/musubi-prometheus/rules/$f"; done
+  curl -sS -X POST http://127.0.0.1:9099/-/reload'
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+**`cat >` y no `cp`**, por lo mismo que arriba: conserva el inodo del bind-mount.
+
+**Si la alerta suena y el despliegue está bien**, lo que se pudrió es el número: alguien agregó una
+regla y no actualizó el conteo del archivo que la custodia. Eso lo detecta la suite
+(`TestCadaArchivoDeReglasCustodiaElConteoDelOtro`) antes de llegar a producción, así que si suena
+en producción es que se desplegó sin correr las pruebas.

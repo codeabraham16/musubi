@@ -16,7 +16,7 @@ import (
 func exportar(t *testing.T, s *McpServer, p *Principal) string {
 	t.Helper()
 	var b strings.Builder
-	renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo)
+	renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo, versionDePrueba)
 	return b.String()
 }
 
@@ -246,3 +246,10 @@ func TestUnaMaquinaSinMuestraAportaSoloSuEstado(t *testing.T) {
 		t.Errorf("se exportó last_seen de una máquina que nunca latió:\n%s", out)
 	}
 }
+
+// versionDePrueba es la versión que las pruebas del exportador le atribuyen al cerebro.
+//
+// Es una versión REAL de producción y no un "1.0.0" de fantasía a propósito: `agent_stale` compara
+// núcleos semver, y el sufijo `-flota.<commit>` es justamente la parte que la comparación tiene que
+// ignorar. Una constante sin sufijo dejaría el caso interesante sin ejercitar en ninguna prueba.
+const versionDePrueba = "0.130.0-flota.38a0a9f"

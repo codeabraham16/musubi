@@ -141,6 +141,26 @@ done
 echo
 ok "REDESPLIEGUE COMPLETO — $VERSION_NUEVA"
 echo
+
+# ── EL BINARIO NO ES LO ÚNICO QUE SE DESPLIEGA (A73) ─────────────────────────────────────────
+#
+# Las reglas de alerta viven en archivos aparte, se copian por otro camino, y NADA comparaba lo
+# que corre contra lo que el repo dice. El 2026-09-02 se midió: 29 reglas cargadas contra 31, y
+# las dos que faltaban eran `CadenaDeAlertasFallando` —la que vigila que las alertas se
+# entreguen— y una recién escrita. Su guarda de repo pasaba en verde.
+#
+# El script vive en el repo, y este redespliegue se corre EN EL SERVIDOR (systemctl, /usr/local).
+# Si el repo está acá, se corre; si no, se dice qué correr y desde dónde. Un redespliegue que
+# calla esto se lee como si hubiera desplegado todo.
+VERIFICAR="$(dirname "${BASH_SOURCE[0]}")/verificar-despliegue.sh"
+if [[ -x "$VERIFICAR" ]]; then
+  echo "─── comparando las reglas de alerta contra el repo ───"
+  "$VERIFICAR" || aviso "las reglas de alerta que corren NO son las del repo (ver arriba). El binario sí quedó desplegado."
+else
+  aviso "Falta comparar las reglas de alerta contra el repo. Desde la máquina que lo tiene:"
+  echo "    MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh"
+fi
+echo
 aviso "El punto de retorno queda guardado. Para volver atrás A MANO:"
 echo "    systemctl stop ${SERVICIOS[*]}"
 echo "    cp -a $BIN_VIEJO $DESTINO"

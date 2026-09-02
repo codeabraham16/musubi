@@ -81,7 +81,7 @@ func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) 
 	maquinaConMuestra(t, s, "casa", maquina, muestraSana(42, ahora), ahora)
 
 	p := ptrPrincipal(principalDePrometheus())
-	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo)
+	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, versionDePrueba)
 	if err != nil {
 		t.Fatalf("no se pudo armar el payload: %v", err)
 	}

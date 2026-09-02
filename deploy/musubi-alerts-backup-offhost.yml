@@ -1,5 +1,9 @@
 # musubi-alerts-backup-offhost.yml — la alerta del backup FUERA del host.
 #
+# despliegue: condicional — sólo si el backup tiene un destino fuera del host (BACKUP_REMOTE).
+#
+# Hoy no lo tiene: es una decisión declarada del operador (A37).
+#
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # POR QUÉ ESTÁ EN UN ARCHIVO APARTE
 #

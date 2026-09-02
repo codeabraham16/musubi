@@ -171,7 +171,7 @@ func atributosDeServicioOTLP(sv fleet.Servicio, d fleet.Device) []otlpAtributo {
 }
 
 func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration) (cuerpo []byte, puntos int, truncado bool, err error) {
+	intervaloSonda time.Duration, versionCerebro string) (cuerpo []byte, puntos int, truncado bool, err error) {
 
 	// EL RECHAZO DEL nil ES EL INVARIANTE CENTRAL DEL ARCHIVO (ver el encabezado). No se degrada
 	// a «ve todo» como el stdio local: acá nadie está sentado en la máquina, y lo que hay del otro
@@ -184,7 +184,7 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 	sello := strconv.FormatInt(ahora.UnixNano(), 10)
 
 	var metricas []otlpMetric
-	for _, serie := range seriesDeFlota(ahora, intervaloSonda) {
+	for _, serie := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
 		var datos []otlpDataPoint
 		for _, d := range vistos {
 			v, ok := serie.Valor(d, d.UltimaMuestra)
@@ -480,7 +480,7 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	}
 	s.avisosDados.Delete("empuje_sin_concesion")
 
-	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo)
+	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, s.version)
 	if err != nil {
 		logx.Error("empuje OTLP: no se pudo armar el payload", "error", err)
 		s.empujeDatapoints.Store(0)

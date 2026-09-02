@@ -1,5 +1,13 @@
 # musubi-alerts-flota.yml — las alertas del track «Control de flota».
 #
+# despliegue: condicional — sólo si el cerebro expone `musubi_fleet_*`.
+#
+# Sin plano de flota, `FlotaSinTelemetria` es `absent(...)` y dispara desde el día uno, para
+# siempre.
+#
+# La lee `deploy/verificar-despliegue.sh` para no denunciar como drift un archivo que está sin
+# cargar a propósito.
+#
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # POR QUÉ ESTÁN EN UN ARCHIVO APARTE
 #
@@ -113,6 +121,29 @@ groups:
         annotations:
           summary: "No llega NINGUNA métrica de flota: el resto de las alertas de flota están ciegas."
           nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
+
+      # --- EL AGENTE SE QUEDÓ ATRÁS (A68) ---
+      #
+      # Nació de un caso medido: el cerebro en 0.130.0 y los dos Windows en 0.106.0, veinticuatro
+      # versiones atrás, descubierto DE CASUALIDAD mirando otra cosa. El costo fue concreto: A67 se
+      # desplegó y no podía correr en las dos máquinas para las que se escribió, porque su binario
+      # no tenía la capacidad — y nada lo habría dicho. Un agente atrasado se veía idéntico a uno
+      # al día.
+      #
+      # EL `for` LARGO ES LA REGLA, NO UN AJUSTE DE GUSTO. Bumpear VERSION y redesplegar el cerebro
+      # deja a la flota legítimamente atrasada hasta que alguien cruce el binario a cada máquina, y
+      # eso es trabajo manual en Windows. Seis horas dejan pasar el flujo normal —bump, despliegue,
+      # actualización el mismo día— y marcan lo que se quedó de verdad.
+      #
+      # La serie compara NÚCLEOS semver: dos commits del mismo release no son un agente atrasado.
+      # Ver internal/fleet/version.go, que explica lo que esto NO puede ver.
+      - alert: AgenteDesactualizado
+        expr: musubi_fleet_device_agent_stale == 1
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "Su agente corre un release distinto del cerebro."
+          nota: "Cuál versión corre cada máquina sale de `musubi_fleet_list` — la versión no viaja como etiqueta a propósito. Ver deploy/RUNBOOK.md#agentedesactualizado"
 
 
   # ── El auto-heal se vigila a sí mismo (S10 · A10) ─────────────────────────────────────────
@@ -283,3 +314,35 @@ groups:
         annotations:
           summary: "El p95 de {{ $labels.service }} pasa los 5 segundos."
           runbook: "deploy/RUNBOOK.md#serviciolento"
+
+  # ── LA CUSTODIA CRUZADA (A73) ─────────────────────────────────────────────────────────────
+  #
+  # Este grupo no vigila a la flota: vigila al OTRO ARCHIVO DE REGLAS. Y eso tiene una razón
+  # exacta que vale entender antes de tocarlo.
+  #
+  # A73 salió de un caso real: `TestLaCadenaDeAlertasSeVigilaASiMisma` pasaba en verde mientras el
+  # job `alertmanager` NO estaba desplegado, así que `CadenaDeAlertasFallando` —la alerta que
+  # vigila que las alertas se entreguen— no podía dispararse nunca. La guarda leía el repo; el
+  # servidor corría otro archivo. Había 29 reglas cargadas contra 31 en el repo.
+  #
+  # POR QUÉ CRUZADO Y NO CADA ARCHIVO SOBRE SÍ MISMO. Un archivo que declara su propio conteo se
+  # despliega junto con el conteo: las dos mitades se mueven a la vez y la comprobación nunca
+  # falla. Cruzándolos, un despliegue a medias rompe la simetría en la dirección que sea — se
+  # copió éste y no aquél, o al revés— y alguno de los dos grita.
+  #
+  # EL NÚMERO NO PUEDE PUDRIRSE EN EL REPO: lo calcula
+  # `TestCadaArchivoDeReglasCustodiaElConteoDelOtro` a partir del YAML, así que agregar una alerta
+  # sin actualizar el conteo rompe la suite acá abajo, en el repo, antes de llegar a producción.
+  - name: musubi-custodia
+    rules:
+      - alert: ReglasDelCerebroSinDesplegar
+        # `absent(sum(...))` cubre «el archivo no está cargado» y el `!=` cubre «está cargado pero
+        # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.
+        expr: >-
+          absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}))
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 13
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Las reglas del cerebro que corren no son las que declara el repo."
+          nota: "O el archivo no está cargado, o quedó una versión vieja. `deploy/verificar-despliegue.sh` dice exactamente cuáles faltan o sobran. Ver deploy/RUNBOOK.md#reglasdelcerebrosindesplegar"
