@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -50,6 +50,8 @@
 
 
 | A72 | **`davantis-1` está al 6,8 % de disco y 102 GB están en `Users`** | Medido el 2026-09-02: 15,8 GB libres de 232,1. El desglose de primer nivel dice `Users` 101,9 GB, `Riot Games` 42,3, `Windows` 26,5, `Program Files (x86)` 19,7, `Proyectos` 11,5. Los 42 GB de juegos son la palanca grande y son **decisión del dueño de la máquina**, no de la flota. Lo que queda sin medir es el adentro de `Users`: 102 GB sin desglosar, que es donde vive lo que no se puede borrar a ciegas —perfiles, cachés de navegador, descargas, proyectos—. **Falta el desglose de segundo nivel** antes de poder recomendar nada. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
+
+| A73 | **Las guardas validan el REPO y producción diverge sin que nada lo diga** | `TestLaCadenaDeAlertasSeVigilaASiMisma` pasaba en verde mientras **el job `alertmanager` no estaba desplegado**: sin ese scrape, `alertmanager_notifications_failed_total` no existe y `CadenaDeAlertasFallando` —la alerta que vigila que las alertas se entreguen— **no podía dispararse nunca**. La guarda leía `deploy/prometheus/prometheus.yml`; el servidor corría otro archivo. **Medido el 2026-09-02**: 29 reglas cargadas contra 31 en el repo, y las dos que faltaban eran justamente `CadenaDeAlertasFallando` y `MaquinaQueNoAlcanzaSuDestino` (escrita esa misma noche). Se desplegaron y ahora sí están vivas. Pero **el agujero es estructural, no de esas dos reglas**: nada compara lo que corre con lo que dice el repo, así que la próxima divergencia también va a verse como verde. Lo cierra una comprobación que le pregunte a Prometheus por sus reglas cargadas y las contraste con los archivos —desde el propio cerebro, que ya lo scrapea— o, más barato, una alerta sobre el hash de la configuración. **No es lo mismo que un despliegue olvidado**: el despliegue se hace, lo que falta es quién avise cuando no. | **sin asignar** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
