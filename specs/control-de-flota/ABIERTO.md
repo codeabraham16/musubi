@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -48,6 +48,8 @@
 
 | A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
 
+
+| A72 | **`davantis-1` está al 6,8 % de disco y 102 GB están en `Users`** | Medido el 2026-09-02: 15,8 GB libres de 232,1. El desglose de primer nivel dice `Users` 101,9 GB, `Riot Games` 42,3, `Windows` 26,5, `Program Files (x86)` 19,7, `Proyectos` 11,5. Los 42 GB de juegos son la palanca grande y son **decisión del dueño de la máquina**, no de la flota. Lo que queda sin medir es el adentro de `Users`: 102 GB sin desglosar, que es donde vive lo que no se puede borrar a ciegas —perfiles, cachés de navegador, descargas, proyectos—. **Falta el desglose de segundo nivel** antes de poder recomendar nada. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
