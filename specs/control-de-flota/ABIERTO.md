@@ -131,6 +131,41 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-02 (sáb) · UNA MÁQUINA CAÍDA DEJA DE PRODUCIR TRES ALERTAS.**
+
+Prometheus no borra la serie de una máquina muerta: **la CONGELA**. Conserva el último valor hasta
+que caduca, así que una comparación sobre ese valor se sostiene indefinidamente — y el `for:`, que
+existe para filtrar picos, **la confirma en vez de descartarla**.
+
+Medido con `davantis-1` caída: el tablero mostraba `MaquinaCaida` (verdadera) **más `CPUSostenida` y
+`MaquinaLateSinMedir`** disparando sobre la última muestra que llegó antes de morir. Dos de las tres
+describían una máquina que no estaba, y `MaquinaLateSinMedir` afirmaba textualmente «late pero dejó
+de medir» de algo que no late.
+
+**El patrón que lo arregla YA EXISTÍA** —`ServicioCaido` usa `unless on(device) (musubi_fleet_device_up
+== 0)` desde S12— y estaba aplicado en **3 de 15** reglas. Ahora está en las 12 que leen una serie
+que se congela. `unless` y no `and up == 1` por una razón concreta: conserva las etiquetas del lado
+izquierdo, y con `and` el mensaje perdería su `{{ $labels.service }}`.
+
+**EL CASO INCÓMODO, aceptado a sabiendas**: si una máquina se cae PORQUE se le llenó el disco,
+`DiscoPorLlenarse` deja de sonar y sólo queda `MaquinaCaida`. Sobre una máquina que no está no se
+puede accionar nada, el dato sigue en Prometheus, y un aviso que no se puede atender sólo entrena a
+ignorar el canal.
+
+**LA PRUEBA FALLA CERRADA**, que es lo que la hace durar: la lista es de EXCEPCIONES, no de reglas a
+vigilar. Una métrica de flota nueva entra vigilada por default y hay que declararla si no
+corresponde; al revés, nacería sin guarda y en silencio.
+
+**Y UN SABOTAJE ENCONTRÓ UN AGUJERO EN MI PROPIA PRUEBA.** La comprobación de las excepciones estaba
+DESPUÉS del filtro «¿lee una serie que se congela?», y `MaquinaCaida` lee `musubi_fleet_device_up`,
+que está en la lista de las que no se congelan — así que esa rama era **inalcanzable justo para las
+dos que más importan**. Se le podía poner la guarda a `MaquinaCaida`, dejándola imposible de
+disparar —la flota entera sin aviso de máquina caída— y el test pasaba en verde. Tres sabotajes: dos
+fallaron como debían y el tercero encontró esto.
+
+Resultado en producción, con la máquina todavía caída: **de tres alertas por un evento a una.**
+
+
 **2026-09-02 (vie) · A69 CERRADO — gio vuelve al servidor público, y la flota queda partida en dos.**
 
 El cabo decía que migrar al relay propio dejó afuera a todo cliente que no esté en la malla: una PC
