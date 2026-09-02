@@ -42,6 +42,9 @@
 > entera antes de poder medirlo), y se anota como lo que es: un modo de falla del código. Con eso
 > son **20 cabos**.
 >
+> **Y a las 11:48 se cerró A69 por decisión de gio**: su PC volvió al servidor público de
+> RustDesk, que era la opción (c) de las tres anotadas. Quedan **19**.
+>
 > **Y la regla 2 sumó dos guardas**, porque estas tres cosas se rompieron a mano y a mano se iban a
 > volver a romper: en `internal/mcp/specs_sin_cabos_test.go`, un número repetido en las tablas rompe
 > la suite, y un cabo VIVO que apunte a un número que el registro no define en ningún lado, también.
@@ -97,7 +100,6 @@
 
 | A75 | **El consentimiento no cubre `exec` ni `shell`** | El eje —cuatro grados ordenados, `libre` < `avisa` < `pide` < `prohibido`, default `avisa`— se resuelve en `Device.ConsentimientoEfectivo` y **lo consulta un solo camino: el de pantalla** (`internal/mcp/methods_pantalla.go`, dos veces: antes de acuñar la sesión y para preguntar). `musubi_fleet_exec` y `musubi_fleet_shell` **no lo invocan**, así que en una máquina declarada `pide`, mirar la pantalla pregunta y **abrir una shell no**. La asimetría no está escrita en ningún lado, y hay dos señales de que no fue deliberada: el comentario de `ConsentimientoEfectivo` justifica vivir en el dominio para que «el de pantalla y el de shell» no discrepen —como si los dos lo usaran—, y la nota que abrió el eje lo modela sobre MeshCentral, que sí tiene los gemelos para terminal. **No se cablea de una, y por eso es decisión y no bug**: prender el eje sobre `exec` cambia el comportamiento de máquinas ajenas —una política de auto-heal que hoy corre sola pasaría a esperar a una persona que quizá no está enfrente—, y `avisa` en cada exec convierte el aviso en ruido, que es exactamente cómo se enseña a poner `libre` en todo y a apagar el eje entero. Lo que hay que decidir: **qué le debe Musubi a quien está sentado en la máquina cuando lo que se abre es una shell y no una pantalla**, y si la respuesta cambia según el `origen` del comando (persona o política), que la migración 41 ya distingue. | **sin asignar** (decisión de gio) |
 
-| A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
 | A76 | **Los contenedores de una máquina Windows son invisibles para la flota** | El agente enumera contenedores desde A42 y los reporta como servicios — pero **sólo en Linux**, con `podman ps`. La asimetría se midió el 2026-09-02: `musubi-server` reporta 57 servicios de los cuales **14 son contenedores**; `davantis-1` reporta 64 y **ninguno**, con **11 contenedores de Docker Desktop corriendo** (el Supabase local de `altura-erp`). **El costo ya se pagó ese mismo día**: `supabase_vector_altura-erp` llevaba días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se encontraron **con la mano**, buscando espacio en disco — ninguna alerta existía, porque la serie no existe. Es el mismo colector con otra fuente (`docker ps` en vez de `podman ps`), y en cuanto los reporte, `ServicioCaido` y `ServicioReiniciandose` empiezan a cubrirlos sin escribir una regla nueva. **Ojo con el segundo**: hoy está declarado `ausente_en: os=windows` porque el SCM no expone reinicios, y un contenedor SÍ los expone — esa declaración va a necesitar afinarse a «servicios del SCM» cuando esto entre. | **sin asignar** |
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A78 | **Un inventario de servicios VACÍO deja a la máquina muda para siempre, y el agente cree que reportó** | `serviciosDelLatido()` sella `ultimoInventario.enviado = time.Now()` **antes** de que el llamador decida si manda algo, y el llamador es `if svs := serviciosDelLatido(); len(svs) > 0`. Con una lista vacía las dos mitades se contradicen en silencio: el agente marca «enviado», el latido no lleva nada, y a los 5 minutos se repite igual — **para siempre, sin un solo error en ningún lado**. El cerebro no borra nada (la poda sólo corre cuando llega una lista), así que su inventario queda congelado y sólo ENVEJECE. La única señal es `musubi_fleet_service_last_report_seconds` creciendo, y lo único que la mira es `ServicioSinNoticias` a los 30 minutos. **La rama de ERROR no tiene este problema** y conviene tenerlas separadas: ahí se hace `return nil` sin tocar `enviado`, así que reintenta en cada latido — pero `avisarUnaVez` la anuncia **una sola vez por vida del proceso**, o sea que un agente que lleva días sin poder enumerar lo dijo una vez y nadie lo vio. **Encontrado el 2026-09-02 leyendo el código**, mientras se perseguía por qué `davantis-1` llevaba 129 minutos sin reportar servicios; **no quedó probado que fuera la causa de ESE caso** —la máquina se cayó entera antes de poder medirlo— y por eso se anota como lo que es: un modo de falla que existe en el código, no un diagnóstico. Se cierra sellando `enviado` sólo cuando el latido de verdad se lleva la lista, y haciendo que una lista vacía sea un hecho reportable en vez de un silencio. | **sin asignar** |
@@ -128,6 +130,46 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (vie) · A69 CERRADO — gio vuelve al servidor público, y la flota queda partida en dos.**
+
+El cabo decía que migrar al relay propio dejó afuera a todo cliente que no esté en la malla: una PC
+de logística sin tailnet dejó de ver a `gio`. Se anotaron tres salidas y **gio eligió la (c)**:
+devolver esa máquina al servidor público.
+
+**Hecho y verificado contra el servidor, no contra el archivo**, que es la distinción que este track
+paga cada vez que la saltea:
+
+	rendezvous_server = 'rs-ny.rustdesk.com:21116'   ← lo escribió RustDesk al registrarse
+	--get-id: 132570932                              ← el MISMO id de antes
+	rs-ny.rustdesk.com:21116 -> True
+
+**EL ID NO CAMBIÓ, Y ESO NO FUE SUERTE.** El `RustDesk.toml` ya traía `rs-ny = true` en
+`keys_confirmed`: la máquina había estado en el público antes de la migración y su registro seguía
+vivo ahí. Por eso la vuelta fue limpia y **no hubo que tocar `rustdesk_id` en el cerebro** — con un
+id nuevo habría que haberlo actualizado a mano, y la detección de colisiones (A13) habría visto un
+cambio que no era un ataque.
+
+**LA LECCIÓN DE A35 SE APLICÓ, Y ESTA VEZ EN EL ORDEN CORRECTO.** Editar el `.toml` de una app viva
+no sirve: el proceso que sobrevive lo reescribe desde memoria. El script **aborta y vuelve a
+levantar RustDesk** si al momento de escribir queda un proceso; midió `procesos vivos: 0` antes de
+tocar nada. Y son **DOS configuraciones**, la de `meirn` y la del servicio en
+`C:\Windows\ServiceProfiles\LocalService`: la del servicio es la que manda, y es la que la
+interfaz nunca hubiera arreglado sola. Las dos quedaron sin rastro del relay propio, con las cuatro
+copias de respaldo al lado.
+
+**Se sacaron cuatro líneas y ninguna más**: `rendezvous_server`, `custom-rendezvous-server`,
+`relay-server` y `key`. El `RustDesk.toml` —id cifrado, contraseña, par de claves— **no se tocó**.
+
+**LA CONSECUENCIA, QUE NO ES UN CABO PERO HAY QUE DECIRLA.** La flota queda con las dos Windows en
+servidores de ID DISTINTOS: `gio` en el público y `davantis-1` en el relay propio. **No se ven entre
+ellas** — es exactamente la situación que en A35 dejó a `davantis-1` sin poder llegar a `gio` para
+arreglarla. Hoy no molesta porque `davantis-1` está caída, pero va a molestar cuando vuelva.
+
+Y queda una pregunta abierta para el operador, que no se decide desde acá: **el relay propio ahora
+sirve a UNA sola máquina**. Si `davantis-1` también volviera al público, el relay no tendría a
+nadie; si se queda, hay que sostener un relay para un solo cliente.
+
 
 **2026-09-02 (qui) · EL MAPA DE COBERTURA — «¿esa regla vigila a ESTA máquina?»**
 
