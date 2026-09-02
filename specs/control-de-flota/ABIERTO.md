@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **17 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -48,7 +48,6 @@
 
 | A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
 
-| A71 | **`cambiar-agente.cmd` se rompe cuando el agente corre como SYSTEM** | El script arma su carpeta con `set DIR=%LOCALAPPDATA%\Musubi`. Con `-AlArranque` el agente es SYSTEM, y ahí `%LOCALAPPDATA%` es `C:\WINDOWS\system32\config\systemprofile\AppData\Local` — **no** la carpeta de instalación. El script no encuentra `musubi-nuevo.exe`, imprime «NO HAY BINARIO NUEVO» en su log y sale con código 2 **sin tocar nada**: falla en silencio, que es justo lo que ese script fue escrito para no hacer. **Medido el 2026-09-02 en `gio`**, recién pasada a SYSTEM: el `Invoke-WebRequest` del agente escribió en el perfil de sistema y el `cambio.log` quedó con la entrada del día anterior. Se salvó pasando rutas absolutas y fijando `$env:LOCALAPPDATA` antes del `Start-Process`. Lo cierra que el script tome su carpeta de **la ruta de su propio ejecutable** (`%~dp0`), que es lo único que no depende de quién lo corra. Vale para los dos Windows: hoy sólo `gio` es SYSTEM, pero el script es el mismo. | **sin asignar** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -77,6 +76,38 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (ter) · A71 CERRADO — el script que actualiza el agente vivía sólo en las máquinas.**
+
+`cambiar-agente.cmd` reemplaza el binario del agente, con prueba de latido y vuelta atrás. Y hasta
+hoy **no estaba en el repo**: existía en las dos Windows, escrito a mano, sin versionar y sin una
+sola prueba. Eso es lo que explica que tuviera dos fallas y que ninguna se hubiera visto — no eran
+sutiles, no había dónde mirarlas.
+
+**Una · tomaba su carpeta de `%LOCALAPPDATA%`.** Con el agente corriendo como SYSTEM eso apunta a
+`C:\WINDOWS\system32\config\systemprofile\AppData\Local`, no a la instalación. El script no
+encontraba el binario nuevo, escribía «NO HAY BINARIO NUEVO» y salía sin tocar nada: **fallaba en
+silencio, que es justo lo que ese script existe para no hacer.** Ahora usa `%~dp0`, lo único que no
+depende de quién lo ejecuta.
+
+**Dos · no mataba al proceso viejo.** `schtasks /end` termina la tarea, no al hijo que el envoltorio
+oculto dejó corriendo. Y como el paso [2] RENOMBRA el binario en uso —el truco que hace posible
+todo esto— ese proceso sigue vivo desde `musubi.exe.viejo`. En `davantis-1` un agente **v0.106.0
+zombi llevaba horas latiendo** después de una actualización que el log daba por exitosa, y por eso
+la máquina figuraba en la versión vieja: el zombi ganaba la carrera del latido. Además tomaba el
+archivo, así que el `del` daba «Access is denied» y disparaba el rollback.
+
+**La matanza va por RUTA EXACTA, no por nombre de imagen**, y eso no es prolijidad: en estas
+máquinas también corre la app de escritorio en `AppData\Local\Programs\musubi\musubi.exe`. Un
+`taskkill /IM musubi.exe` la cerraría de un saque. Se descubrió mirando la lista de procesos antes
+de matar — un patrón ancho (`*\Musubi\*`) que se había escrito para el arreglo la habría barrido.
+
+El instalador ahora lo copia de su lado, así que una máquina nueva nace pudiendo actualizarse. Si
+falta, lo dice en amarillo y sigue: no poder auto-actualizarse no es motivo para no instalar.
+
+Tres sabotajes ejecutados. Y la prueba **falló primero contra el script correcto**: su aserción de
+«no matar por nombre de imagen» matcheaba el COMENTARIO que explica por qué no se hace. Una guarda
+que no distingue el código de su explicación prohíbe documentar la decisión.
 
 **2026-09-02 (bis) · `Automatic` no significa lo mismo en Windows que `enabled` en systemd.**
 

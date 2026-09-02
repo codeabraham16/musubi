@@ -103,6 +103,9 @@ if (-not $soyAdminInicial) {
 function Paso($m) { Write-Host "->  $m" -ForegroundColor Cyan }
 function Bien($m) { Write-Host "OK  $m" -ForegroundColor Green }
 function Mal($m)  { Write-Host "ERR $m" -ForegroundColor Red }
+# Aviso es lo que NO impide instalar pero hay que enterarse. Va en amarillo y no en rojo a
+# proposito: mezclarlo con los errores es como se aprende a no leer ninguno de los dos.
+function Aviso($m) { Write-Host "!   $m" -ForegroundColor Yellow }
 
 # -- 1. El binario ---------------------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -211,6 +214,21 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 Bien "el cerebro registro el latido"
+
+# -- 3b. El script de cambio de binario ------------------------------------------------------
+# VIAJA CON EL INSTALADOR, no se escribe a mano en cada maquina.
+#
+# Hasta el 2026-09-02 este archivo existia SOLO en las dos maquinas Windows, creado a mano y sin
+# versionar. Nadie lo revisaba, no tenia pruebas, y sus dos fallas -tomar la carpeta de
+# %LOCALAPPDATA% y no matar al proceso viejo- sobrevivieron meses porque no habia donde verlas.
+# Se copia del lado del instalador si esta presente; si no, se avisa y se sigue.
+$cambiador = Join-Path $PSScriptRoot "cambiar-agente.cmd"
+if (Test-Path $cambiador) {
+  Copy-Item -Force $cambiador (Join-Path $InstallDir "cambiar-agente.cmd")
+  Paso "cambiar-agente.cmd instalado"
+} else {
+  Aviso "no vino cambiar-agente.cmd al lado del instalador: esta maquina no va a poder actualizarse sola"
+}
 
 # -- 4. La tarea programada ------------------------------------------------------------------
 $lanzador = Join-Path $InstallDir "agente.cmd"

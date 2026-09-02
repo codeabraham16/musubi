@@ -412,3 +412,73 @@ func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
 			"una instalación normal no debería aflojar los permisos del token")
 	}
 }
+
+// EL SCRIPT QUE REEMPLAZA EL BINARIO DEL AGENTE VIVE EN EL REPO Y TIENE DOS INVARIANTES.
+//
+// Hasta el 2026-09-02 existía SÓLO en las dos máquinas Windows, escrito a mano y sin versionar.
+// Nadie lo revisaba y no tenía pruebas, así que sus dos fallas sobrevivieron meses — no porque
+// fueran sutiles, sino porque no había dónde verlas.
+//
+// LAS DOS, Y LAS DOS SE MIDIERON EN PRODUCCIÓN:
+//
+//  1. Tomaba su carpeta de `%LOCALAPPDATA%`. Con el agente corriendo como SYSTEM eso apunta al
+//     perfil de sistema, no a la instalación: el script no encontraba el binario nuevo, escribía
+//     «NO HAY BINARIO NUEVO» y salía sin tocar nada. Fallaba EN SILENCIO, que es justo lo que
+//     existe para no hacer. `%~dp0` es lo único que no depende de quién lo ejecuta.
+//
+//  2. No mataba al proceso viejo. `schtasks /end` termina la tarea, no al hijo que el envoltorio
+//     oculto dejó corriendo; y como el paso [2] RENOMBRA el binario en uso, ese proceso sigue
+//     vivo desde `musubi.exe.viejo`, latiendo con la versión anterior. En `davantis-1` un agente
+//     v0.106.0 zombi llevaba HORAS latiendo después de una actualización «exitosa», y su archivo
+//     no se podía borrar — lo que disparaba el rollback y dejaba la máquina en la versión vieja.
+//
+// Y LA MATANZA VA POR RUTA EXACTA. En estas máquinas también corre la app de escritorio en
+// `AppData\Local\Programs\musubi\musubi.exe`: un `taskkill /IM musubi.exe` la cerraría de un
+// saque. Es el mismo nombre de imagen y una cosa completamente distinta.
+//
+// Sabotajes: volver a `%LOCALAPPDATA%`, sacar el Stop-Process, o cambiarlo por `/IM`.
+func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/cambiar-agente.cmd")
+	if err != nil {
+		t.Fatalf("falta deploy/cambiar-agente.cmd: vive sólo en las máquinas otra vez: %v", err)
+	}
+	cmd := string(b)
+
+	if !strings.Contains(cmd, "set DIR=%~dp0") {
+		t.Error("el script no toma su carpeta de `%~dp0`: con el agente como SYSTEM, `%LOCALAPPDATA%` " +
+			"apunta al perfil de sistema y el script no encuentra el binario nuevo — falla en silencio")
+	}
+	if strings.Contains(cmd, "set DIR=%LOCALAPPDATA%") {
+		t.Error("el script volvió a armar su carpeta con `%LOCALAPPDATA%`: eso lo rompe en cualquier " +
+			"máquina instalada con -AlArranque")
+	}
+	if !strings.Contains(cmd, "Stop-Process") {
+		t.Error("el script no mata al proceso viejo: sobrevive corriendo desde musubi.exe.viejo, late " +
+			"con la versión anterior, y toma el archivo — lo que dispara el rollback")
+	}
+	// POR RUTA, NO POR NOMBRE DE IMAGEN — y se miran SÓLO LAS LÍNEAS EJECUTABLES.
+	//
+	// La primera versión de esta prueba fallaba contra el script CORRECTO, porque su comentario
+	// nombra `taskkill /IM musubi.exe` justamente para explicar por qué no se usa. Una aserción
+	// que no distingue el código del comentario que lo explica prohíbe documentar la decisión.
+	for _, l := range strings.Split(cmd, "\n") {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(l)), "REM") {
+			continue
+		}
+		if strings.Contains(strings.ToLower(l), "/im musubi.exe") {
+			t.Errorf("el script mata por nombre de imagen (%q): en estas máquinas eso también cierra "+
+				"la app de escritorio, que corre desde otra carpeta con el mismo nombre de ejecutable",
+				strings.TrimSpace(l))
+		}
+	}
+	if !strings.Contains(cmd, `$_.Path -eq '%DIR%\musubi.exe.viejo'`) {
+		t.Error("el script no mata al proceso que corre desde `musubi.exe.viejo`: ése es EL zombi")
+	}
+	// ASCII PURO, por lo mismo que el instalador: PowerShell 5.1 y cmd.exe con UTF-8 sin BOM ya
+	// rompieron una vez en este repo.
+	for i, r := range cmd {
+		if r > 127 {
+			t.Fatalf("byte no-ASCII en la posición %d (%q): cmd.exe lo va a leer mal", i, r)
+		}
+	}
+}
