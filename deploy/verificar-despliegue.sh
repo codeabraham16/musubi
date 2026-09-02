@@ -141,7 +141,17 @@ parece_html() { head -c 400 "$CUERPO" | grep -qiE '<!doctype html|<html|<head'; 
 # Por qué no hubo respuesta, en las palabras de curl y con qué hacer al respecto.
 razon_muda() {
   local err
-  err="$(tr -d '\r' <"$CURL_ERR" | tr '\n' ' ' | sed 's/[[:space:]]\{2,\}/ /g; s/^ //; s/ $//')"
+  # UNA sola línea, porque curl agrega tres de contexto para el certificado y un mensaje de cinco
+  # renglones se deja de leer entero. Pero NO la primera a secas: por el camino MUSUBI_SSH el
+  # stderr de ssh y el de curl caen mezclados en el mismo archivo, y ssh escribe primero
+  # («Warning: Permanently added ... to the list of known hosts.» sale en toda conexión nueva).
+  # Esa línea no tiene ninguna de las palabras del case, así que un certificado inválido caería en
+  # la rama genérica y al operador se le mostraría el warning de known_hosts como si fuera la razón.
+  # Por eso: la línea de curl si la hay, y recién si no, la primera no vacía (un fallo puramente de
+  # ssh —«Permission denied (publickey)»— sigue reportándose).
+  err="$(grep -m1 '^curl:' "$CURL_ERR" 2>/dev/null || true)"
+  [ -z "$err" ] && err="$(grep -m1 . "$CURL_ERR" 2>/dev/null || true)"
+  err="$(printf '%s' "$err" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   case "$err" in
     *ertificate*|*SSL*|*TLS*|*elf-signed*|*elf\ signed*)
       printf 'el certificado no valida (%s). Si es el certificado propio del servidor y lo esperabas, repetí con MUSUBI_TLS_INSECURE=1; si no lo esperabas, hay otra cosa contestando ahí' "$err" ;;

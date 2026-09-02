@@ -136,6 +136,9 @@ inhibit_rules:
   # (`PoliticaQueNoCura`, `PoliticaSinPermiso`, `AllowlistDeFlotaRechazando`): salen de
   # `musubi_fleet_policy_actions_total` y `musubi_tool_rejections_total`, que siguen llegando por
   # el scrape aunque no haya telemetría de ninguna máquina. No están ciegas: no hay que callarlas.
+  # Y queda fuera también `ReglasDelCerebroSinDesplegar` (warning, sin `device` porque sale de
+  # `absent(sum(prometheus_rule_group_rules{...}))`): mira las reglas CARGADAS, no la telemetría,
+  # así que una flota muda no la deja ciega y callarla escondería un despliegue viejo.
   - source_matchers: [alertname = "FlotaSinTelemetria"]
     target_matchers:
       - severity =~ "warning|info"
