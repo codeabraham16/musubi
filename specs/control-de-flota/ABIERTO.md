@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **15 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -40,7 +40,6 @@
 | A17 | **SNMP / MQTT / Redfish** | Los tres piden una librería (dependencia nueva) o un protocolo binario a mano. SSH cubre routers, NAS, Raspberry Pis y servers sin agente — la mayoría de lo que hay. | **S7c** |
 | A26 | **`musubi shell` no funciona desde Windows** | El modo crudo se pide con `stty`, que no existe en la consola de Windows (ahí es `SetConsoleMode`). Desde Linux o macOS sí, contra cualquier Tier B. | **S5d** |
 | A27 | **La ventana no se redimensiona (SIGWINCH)** | No es «no se hizo»: el transporte elegido no lo permite. En Tier B el pty lo posee el `sshd` remoto y en Tier A lo posee `script`, así que **no tenemos su descriptor maestro** y no hay a quién mandarle un `TIOCSWINSZ`. El tamaño se fija al abrir. **Medido contra un `sshd` real (S7b)**: el `ioctl` del pty remoto da `0 0`, pero `tput` devuelve 24/80 y `top` dibuja — el fallback por `LINES`/`COLUMNS` alcanza para lo que se usa. Si el redimensionado importa de verdad, obliga a escribir el pty a mano —ioctls por OS y por arquitectura— y entonces se paga entero. | **S5d** |
-| A35 | **El relay propio tiene UNA de dos máquinas** | `hbbs`/`hbbr` corren en `musubi-server` atados al tailnet, con su clave y los tres puertos contestando. **`davantis-1` ya está registrada** (peer `1740888405`, alta 2026-09-01 17:52). **Falta `gio`**, que sigue en el servidor PÚBLICO de RustDesk. Lo que se aprendió haciéndolo, que es lo que hay que releer antes de retomar: **(1)** editar el `.toml` por `exec` sólo pega si NO hay ningún RustDesk corriendo — el que queda vivo reescribe el archivo con lo que tiene en memoria y borra el cambio, medido en `gio`; **(2)** en `gio` eso es insalvable por `exec` porque el agente corre como `GIO\meirn` **sin administrador** (medido, no supuesto) y no puede parar el servicio ni matar los procesos elevados, así que va **por la interfaz, con el candado destrabado** — sin destrabarlo se escribe sólo la config del usuario y el servicio sigue con la vieja; **(3)** `davantis-1` necesitó **split tunneling de NordVPN** para alcanzar el relay (A31): antes daba `tcp21116=False` mientras `gio` daba `True`; **(4)** EL ORDEN IMPORTA Y SE VIOLÓ: con una máquina migrada y la otra no, **quedan en servidores de ID distintos y no se ven entre sí**, así que desde `davantis-1` ya no se puede llegar a `gio` para arreglarla. Para retomar hay que **vaciar los tres campos en `davantis-1`** (vuelve al público), conectarse a `gio`, migrar `gio`, y recién entonces devolverle los valores a `davantis-1`. Datos: ID y Relay `100.79.126.62`, API vacío, key `ttFLlso8qEcMu48HarZL4Gs8gEYI99yn0RcuGMxGEGA=`. | **operador** |
 | A37 | **La identidad del relay sólo está a salvo de la mitad de las cosas** | `~/musubi-rustdesk/data/id_ed25519` es la identidad del relay: si se pierde, el relay vuelve con OTRA clave y **todos los clientes de la flota dejan de conectar hasta que alguien los reconfigure uno por uno**. **Media parte resuelta (2026-08-27)**: `preparar.sh` deja una copia en `.musubi/backups/rustdesk-relay/` con permiso 0600 —más cerrado que el 0644 del original— y un `LEEME.txt` con el procedimiento de restauración. Eso cubre que el volumen se borre, un `preparar.sh` mal corrido, o que el contenedor se lleve el archivo. **Lo que sigue abierto es lo otro**: la copia vive en el MISMO disco, y el backup del cerebro **sigue siendo local-only** por decisión de gio del 2026-08-27. Contra perder el host no protege nada, y eso está dicho en la salida del script y custodiado por una prueba — un respaldo que no aclara contra qué NO protege es peor que ninguno, porque alguien deja de buscar el de verdad. | **acción del operador** (③ · `BACKUP_REMOTE`) |
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 
@@ -74,6 +73,54 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 · A35 CERRADO — las dos máquinas en el relay propio, y el instalador tenía un bicho.**
+
+El relay llevaba desde el 27 de agosto corriendo, sano por las tres vías que existían, y con la
+tabla `peer` **en cero**. Hoy tiene dos:
+
+    1740888405  ·  davantis-1  ·  2026-09-01 17:52
+     132570932  ·  gio         ·  2026-09-02 02:53
+
+**Cada máquina falló por un motivo distinto y ninguno era el relay.**
+
+`davantis-1` tenía la config bien y no llegaba: el NordVPN le cortaba la ruta al tailnet. Se
+resolvió con split tunneling. Y ahí se midió lo que quedó anotado en A31: **la autorización es por
+ARCHIVO** — desde esa máquina PowerShell no alcanza ni el puerto del cerebro mientras el agente le
+late cada 30 s. Toda administración remota que no sea el propio agente está cortada ahí, y
+cualquier medición hecha con otra herramienta mide otra cosa. Costó dos diagnósticos equivocados.
+
+`gio` tenía la red bien y la config se le revertía. La causa: **editar el `.toml` de una app que
+está corriendo no sirve** — el proceso que sobrevive lo reescribe con lo que tiene en memoria. La
+primera vez se vio «Access is denied» en dos procesos del `taskkill` y se siguió igual; por eso se
+perdió. La segunda vez, con el agente ya como SYSTEM, `procesos vivos: 0` antes de escribir, y las
+DOS configs —la del usuario y la del SERVICIO— quedaron. La del servicio es la que manda y es la
+que la interfaz nunca hubiera arreglado sin el candado.
+
+**EL ORDEN IMPORTABA Y SE VIOLÓ.** Con una migrada y la otra no, las dos quedan en servidores de ID
+distintos y **no se ven**, así que desde `davantis-1` ya no se llegaba a `gio` para arreglarla. La
+regla «la máquina desde la que operás, al final» estaba escrita desde el principio; se rompió
+porque el camino automatizado funcionó justo en la que no correspondía y nadie re-evaluó el orden
+cuando eso pasó.
+
+**Y EN EL CAMINO CAYÓ UN BICHO DEL INSTALADOR, que es el hallazgo más limpio de la sesión.**
+`-AlArranque` y el endurecimiento del `device.token` eran **mutuamente incompatibles**: el token
+queda con una sola regla ACL —el usuario que instaló— y la tarea corre como SYSTEM, que entonces no
+puede leer su propio token. La tarea decía «Attempted to run», volvía a `Ready` al instante, y la
+máquina quedaba fuera de la flota sin un solo mensaje de error.
+
+Lo que hace que valga la pena contarlo: **el instalador tiene un paso que existe justamente para no
+fallar en silencio** —prueba un latido real antes de crear la tarea— y ese paso pasa el token por
+VARIABLE DE ENTORNO, corriendo como el usuario. Nunca abre el archivo. Probaba un camino distinto
+del que la tarea iba a usar, y daba verde sobre una instalación muerta.
+
+Arreglado, con guarda y dos sabotajes ejecutados. Y de paso quedó dicho que negarle el token a
+SYSTEM no era una defensa: SYSTEM puede tomar posesión de cualquier archivo de la máquina.
+
+**Lo que `gio` ganó de yapa:** corre al arranque como SYSTEM, así que ya no depende de que alguien
+inicie sesión —el modo de fallo que la dejó tres días fuera de la flota— y `exec` tiene permisos de
+administrador. El precio, tomado a sabiendas: sesión 0, `puede_preguntar` en false, y un `pide` que
+se endurece a `prohibido` en esa máquina.
 
 **2026-09-01 · A67 CERRADO — la alcanzabilidad se le pregunta al CLIENTE, no al servidor.**
 
