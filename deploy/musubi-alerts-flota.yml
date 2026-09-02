@@ -24,8 +24,8 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "La máquina {{ $labels.device }} ({{ $labels.project }}) no late hace más de 5 min."
-          runbook: "Revisá el agente: `systemctl status musubi-agent` en esa máquina, o si fue revocada (musubi_fleet_list --include_revoked)."
+          summary: "No late hace más de 5 minutos."
+          nota: "Revisá el agente: `systemctl status musubi-agent` en esa máquina, o si fue revocada (musubi_fleet_list --include_revoked)."
 
       # --- El agente late pero dejó de MEDIR ---
       # Es el fallo silencioso que un `up` no detecta: el proceso vive, el colector murió. Sin
@@ -35,8 +35,8 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }} late pero su última muestra tiene {{ $value | humanizeDuration }}."
-          runbook: "El agente vive y el colector no. Mirá su salida: puede ser un OS sin colector, o /proc inaccesible."
+          summary: "Late, pero su última muestra tiene {{ $value | humanizeDuration }}."
+          nota: "El agente vive y el colector no. Mirá su salida: puede ser un OS sin colector, o /proc inaccesible."
 
       # --- Disco ---
       # Se alerta sobre AVAILABLE, no sobre usado. No es lo mismo: el kernel reserva ~5% para
@@ -55,15 +55,15 @@ groups:
         for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "A {{ $labels.device }} le queda menos del 15% de disco escribible."
-          runbook: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
+          summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
+          nota: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
 
       - alert: DiscoCasiLleno
         expr: musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "A {{ $labels.device }} le queda menos del 3% de disco escribible."
+          summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
 
       # --- Memoria y CPU sostenidas ---
       # `for` largo a propósito: un pico de 5 minutos es trabajo, no un incidente. Lo que importa
@@ -73,15 +73,15 @@ groups:
         for: 20m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }} lleva 20 min con más del 92% de RAM usada."
-          runbook: "Usada = total - MemAvailable, así que el page cache NO cuenta: esto es presión real."
+          summary: "Lleva 20 min con la RAM al {{ $value | humanizePercentage }}."
+          nota: "Usada = total - MemAvailable, así que el page cache NO cuenta: esto es presión real."
 
       - alert: CPUSostenida
         expr: musubi_fleet_device_cpu_percent > 90
         for: 30m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }} lleva 30 min con la CPU por encima del 90%."
+          summary: "Lleva 30 min con la CPU al {{ $value | printf \"%.0f\" }}%."
 
       # --- Carga por core ---
       # Normalizada por CPUs: una carga de 8 es normal en 12 cores y grave en 2.
@@ -90,7 +90,7 @@ groups:
         for: 20m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }}: carga a 5 min de {{ $value | printf \"%.1f\" }}× la cantidad de cores."
+          summary: "Carga a 5 min de {{ $value | printf \"%.1f\" }}× la cantidad de cores."
 
       # --- Temperatura ---
       # Sólo dispara donde hay sensor: la serie no existe en las máquinas sin él, así que esto
@@ -100,7 +100,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }} a {{ $value | printf \"%.0f\" }}°C."
+          summary: "A {{ $value | printf \"%.0f\" }}°C."
 
       # --- LA TRAMPA SILENCIOSA ---
       # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
@@ -112,7 +112,7 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "No llega NINGUNA métrica de flota: el resto de las alertas de flota están ciegas."
-          runbook: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
+          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
 
 
   # ── El auto-heal se vigila a sí mismo (S10 · A10) ─────────────────────────────────────────
@@ -155,8 +155,9 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.device }} no alcanza alguno de los destinos que le declararon: mirá `no_alcanza` en musubi_fleet_list."
-          runbook: "El destino puede estar caído, o la red de ESA máquina puede estar cortando la ruta (un VPN con todo el tráfico capturado es la causa más común). Ver deploy/RUNBOOK.md#maquinaquenoalcanzasudestino"
+          summary: "No alcanza alguno de los destinos que le declararon. Cuál, en `no_alcanza` de musubi_fleet_list."
+          nota: "El destino puede estar caído, o la red de ESA máquina puede estar cortando la ruta (un VPN con todo el tráfico capturado es la causa más común)."
+          runbook: "deploy/RUNBOOK.md#maquinaquenoalcanzasudestino"
 
       # La política está viva pero NO PUEDE actuar: su principal perdió la concesión `exec`, o el
       # comando dejó de estar en su allowlist. Es una alarma apagada, y una alarma apagada en
@@ -167,7 +168,8 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "La política {{ $labels.policy }} quiso actuar y NO PUDO ({{ $labels.result }}): quedó inerte."
-          runbook: "Revisá la sección `fleet:` y `fleet_exec_allow:` del principal de esa política en principals.yaml. Ver deploy/RUNBOOK.md#politicasinpermiso"
+          nota: "Revisá la sección `fleet:` y `fleet_exec_allow:` del principal de esa política en principals.yaml."
+          runbook: "deploy/RUNBOOK.md#politicasinpermiso"
 
       # Credenciales bien configuradas que chocan contra su propia allowlist. NO es un intento de
       # intrusión —para llegar acá ya había que tener `exec` sobre esa máquina— y por eso va
@@ -193,7 +195,7 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "El servicio {{ $labels.service }} de {{ $labels.device }} no está corriendo."
+          summary: "El servicio {{ $labels.service }} no está corriendo."
           runbook: "deploy/RUNBOOK.md#serviciocaido"
 
       # ANDA A LOS TUMBOS: está corriendo AHORA y se reinició varias veces en la última hora. Es
@@ -203,7 +205,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.service }} en {{ $labels.device }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
+          summary: "{{ $labels.service }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
           runbook: "deploy/RUNBOOK.md#servicioreiniciandose"
 
       # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
@@ -213,7 +215,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "Hace más de 30 min que {{ $labels.device }} no reporta el estado de {{ $labels.service }}."
+          summary: "Hace más de 30 min que no reporta el estado de {{ $labels.service }}."
           runbook: "deploy/RUNBOOK.md#serviciosinnoticias"
 
       # ────────────────────────────────────────────────────────────────────────────────────
@@ -237,7 +239,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.device }} late pero no dice qué corre adentro"
+          summary: "Late pero no dice qué corre adentro."
           description: >-
             La máquina reporta su telemetría y no su inventario de servicios. Sostenido 15 minutos,
             que es el triple del reenvío periódico del inventario.
@@ -260,7 +262,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "{{ $labels.service }} en {{ $labels.device }} corre y falla más de 1 de cada 5."
+          summary: "{{ $labels.service }} corre y falla más de 1 de cada 5."
           runbook: "deploy/RUNBOOK.md#serviciofallandopordentro"
 
       # EL COLECTOR SE MURIÓ, que NO es lo mismo que «el servicio no tuvo trabajo». La diferencia
@@ -279,5 +281,5 @@ groups:
         for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "El p95 de {{ $labels.service }} en {{ $labels.device }} pasa los 5 segundos."
+          summary: "El p95 de {{ $labels.service }} pasa los 5 segundos."
           runbook: "deploy/RUNBOOK.md#serviciolento"

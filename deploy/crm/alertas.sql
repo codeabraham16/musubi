@@ -34,6 +34,12 @@ create table if not exists public.alertas (
   proyecto     text,
   resumen      text,
   runbook      text,
+  -- `nota` es la ACLARACIÓN en prosa; `runbook` es la referencia a una sección de
+  -- deploy/RUNBOOK.md. Se separaron el 2026-09-02: hasta entonces las dos vivían en `runbook` y
+  -- el aviso de Telegram las dibujaba igual, con una flecha que prometía un enlace y a veces era
+  -- una nota. Acá la separación importa por lo mismo: quien consulta la vista tiene que poder
+  -- distinguir «andá a leer esto» de «ojo con esto».
+  nota         text,
   inicio       timestamptz,
   fin          timestamptz,
   -- La huella que calcula Alertmanager. Es lo que permite unir el `firing` con su `resolved`
@@ -41,6 +47,11 @@ create table if not exists public.alertas (
   huella       text,
   crudo        jsonb not null          -- la alerta entera, por si algún día hace falta un campo
 );
+
+-- PARA UNA BASE QUE YA EXISTE: `create table if not exists` NO agrega columnas nuevas, así que
+-- una instalación anterior se quedaría sin `nota` y el insert de abajo fallaría en cada alerta —
+-- silenciosamente, del lado del webhook. El alter es aditivo y se puede correr las veces que sea.
+alter table public.alertas add column if not exists nota text;
 
 create index if not exists idx_alertas_recientes on public.alertas (recibida_en desc);
 create index if not exists idx_alertas_device    on public.alertas (device, recibida_en desc)
@@ -71,7 +82,7 @@ declare
 begin
   for a in select * from jsonb_array_elements(coalesce(alerts, '[]'::jsonb)) loop
     insert into public.alertas
-      (estado, nombre, severidad, device, proyecto, resumen, runbook, inicio, fin, huella, crudo)
+      (estado, nombre, severidad, device, proyecto, resumen, runbook, nota, inicio, fin, huella, crudo)
     values (
       coalesce(a->>'status', status, 'firing'),
       coalesce(a->'labels'->>'alertname', '(sin nombre)'),
@@ -80,6 +91,7 @@ begin
       a->'labels'->>'project',
       a->'annotations'->>'summary',
       a->'annotations'->>'runbook',
+      a->'annotations'->>'nota',
       nullif(a->>'startsAt','')::timestamptz,
       -- Alertmanager manda un endsAt del año 0001 cuando la alerta sigue activa. Guardarlo como
       -- fecha real haría que cualquier consulta por rango la trajera de la nada.
@@ -100,7 +112,11 @@ grant execute on function public.recibir_alerta(
 -- Lo que vas a mirar: qué está activo ahora, sin el ruido de los resueltos.
 create or replace view public.alertas_activas as
 select distinct on (huella)
-       nombre, severidad, device, resumen, runbook, inicio, recibida_en, estado
+       -- `nota` va AL FINAL y no junto a `resumen`, aunque ahí se leería mejor: `create or
+       -- replace view` de Postgres sólo admite AGREGAR columnas al final. Meterla en el medio
+       -- falla con «cannot change name of view column» en cualquier base que ya exista, que son
+       -- todas las que importan.
+       nombre, severidad, device, resumen, runbook, inicio, recibida_en, estado, nota
   from public.alertas
  where huella is not null
  order by huella, recibida_en desc;
