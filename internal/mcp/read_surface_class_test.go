@@ -47,10 +47,10 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 	// peor que una fuga de memoria: le dibuja a un tenant el mapa de la infraestructura de otro.
 	if victima, err := e.AltaDevice(fleet.Device{
 		Name: "VICTIMDEVICE", ProjectID: "web", Tier: fleet.TierAgente,
-		// La máquina víctima admite metrics Y exec: el barrido cubre las dos superficies, y
-		// sin exec en el DEVICE la compuerta cortaría por C5 (el aparato) antes que por la
-		// tenencia — probando otra vez la defensa equivocada.
-		Caps: []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreen}, OS: "VICTIMOS",
+		// La máquina víctima admite metrics, exec, screen Y shell: el barrido cubre las cuatro
+		// superficies, y sin la capacidad en el DEVICE la compuerta cortaría por C5 (el aparato)
+		// antes que por la tenencia — probando otra vez la defensa equivocada.
+		Caps: []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreen, fleet.CapShell}, OS: "VICTIMOS",
 	}, "token-del-device-victima"); err != nil {
 		t.Fatal(err)
 	} else {
@@ -72,6 +72,14 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 		// es información de personas, no sólo de infraestructura.
 		if _, err := e.AbrirSesionPantalla(fleet.SesionPantalla{
 			DeviceID: victima.ID, ProjectID: "web", Principal: "VICTIMMIRON",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Y su bitácora de SHELL (S5b). Quién tuvo un PROMPT en una máquina ajena es lo más
+		// revelador de las tres bitácoras: no dice qué comando corrió, dice que pudo correr
+		// cualquiera. El marker va en `principal`, que es lo que llega a la fila.
+		if _, err := e.AbrirSesionShell(fleet.SesionShell{
+			DeviceID: victima.ID, ProjectID: "web", Principal: "VICTIMPROMPT",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -157,6 +165,10 @@ func readSweepCases() []readSweepCase {
 		// La bitácora del tenant ajeno. Mismo caso hostil: el atacante DECLARA el proyecto.
 		{"musubi_fleet_log", map[string]any{"project": "web"}, "VICTIMSCRIPT"},
 		{"musubi_fleet_sessions", map[string]any{"project": "web"}, "VICTIMMIRON"},
+		// La bitácora de SHELL del tenant ajeno. Entra al barrido desde que la tool se marcó
+		// readOnly: lee `shell_sessions`, que tiene project_id, así que la clasificación que
+		// exige el guard de completitud es ésta y no la allowlist de "no lee tablas scopeadas".
+		{"musubi_fleet_shell_log", map[string]any{"project": "web"}, "VICTIMPROMPT"},
 		// El inventario de servicios del tenant ajeno. Mismo caso HOSTIL: el atacante DECLARA el
 		// proyecto de la víctima. Va al barrido y NO a noScopedRead, que es la salida falsa: la
 		// tabla `services` SÍ tiene project_id, y meterla en la allowlist apagaría la guarda de
@@ -225,7 +237,7 @@ func TestReadSurfaceClassIsolation(t *testing.T) {
 	// («el dato existe y el filtro no rompe legacy») no podría verlo nunca. El rol admin NO
 	// otorga capacidades de flota — ésa es la valla C1 del track — así que hay que declararlas.
 	grantsDeFlota := map[fleet.Cap][]string{
-		fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}, fleet.CapScreen: {"*"},
+		fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}, fleet.CapScreen: {"*"}, fleet.CapShell: {"*"},
 	}
 	crm := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm", Fleet: grantsDeFlota} // atacante: otro proyecto
 	admin := &Principal{Name: "root", Role: RoleAdmin, Fleet: grantsDeFlota}                   // federado: control

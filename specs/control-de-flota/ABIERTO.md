@@ -6,8 +6,9 @@
 >
 > Última revisión: **2026-09-02**. Se cerraron **A68** (un agente atrasado ya avisa) y **A73**
 > (el repo y producción se comparan, a pedido y desatendido). Con eso **no queda ningún cabo sin
-> dueño ni sin una razón declarada**: los 16 que siguen abiertos tienen slice, operador, o una
-> decisión de gio anotada.
+> dueño ni sin una razón declarada**: los 15 que siguen abiertos tienen slice, operador, o una
+> decisión de gio anotada. **A72 se cerró el mismo día**: el disco de `davantis-1`
+> pasó de 6,8 % a 20,1 % libre.
 >
 > Revisión anterior: **2026-08-29**, tras una tanda larga: **A44** (políticas sobre la salud de un
 > servicio), los **seis cabos de la misma familia** —A38, A39, A49, A50, A51, A52: código cuyo modo
@@ -19,7 +20,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **15 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -53,7 +54,6 @@
 | A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
 
 
-| A72 | **`davantis-1` está al 6,8 % de disco y 102 GB están en `Users`** | Medido el 2026-09-02: 15,8 GB libres de 232,1. El desglose de primer nivel dice `Users` 101,9 GB, `Riot Games` 42,3, `Windows` 26,5, `Program Files (x86)` 19,7, `Proyectos` 11,5. Los 42 GB de juegos son la palanca grande y son **decisión del dueño de la máquina**, no de la flota. Lo que queda sin medir es el adentro de `Users`: 102 GB sin desglosar, que es donde vive lo que no se puede borrar a ciegas —perfiles, cachés de navegador, descargas, proyectos—. **Desglose hecho el 2026-09-02** y el resultado acota el problema a una sola rama: de los 102 GB de `Users`, **102,1 están en el perfil `Administrator`** —el resto de los perfiles suman menos de 0,2— y adentro de ése, **77,1 GB están en `AppData`**. Lo que queda afuera de AppData es chico y conocido: `go` 4,6, `.claude` 4,2, `Desktop` 3,5, `curseforge` 3,4, `.cargo` 2,1, `.vscode` 1,7. Y adentro de AppData, **73,1 GB están en `Local`**, con el desglose ya hecho:
 
 &nbsp;&nbsp;`Docker` **30,4** · `Temp` **9,1** · `Google` **7,5** · `go-build` **7,0** · `Roblox` 4,0 · `Programs` 2,4 · `hermes` 1,9 · `Packages` 1,7
 
@@ -97,6 +97,50 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (qui) · A72 CERRADO — 31 GB, y el hallazgo es que casi nada era basura.**
+
+`davantis-1` estaba al **6,8 %** de disco (15,8 GB de 232,1) con `DiscoPorLlenarse` disparando. Hoy
+está al **20,1 %** (46,8 GB). Pero lo que enseñó el cabo no es el número: es lo que costó llegar a
+él.
+
+**LA HIPÓTESIS INICIAL ERA QUE SOBRABA BASURA, Y ERA FALSA.** Se pidió «limpiá todo lo que no se
+use», y al verificarlo **casi todo estaba instalado y en uso**:
+
+  · `Riot Games`, 42,25 GB —el ítem más grande del disco— tenía escritura de ayer. No era el
+    anti-cheat tocando archivos al arrancar: el `LeagueClient.log` mostraba una sesión de las 17:03
+    a las 23:49. Se jugó. Descartado como candidato **por evidencia, no por prudencia**.
+  · `Docker`, 30,37 GB, tenía once contenedores arriba hacía 21 horas: el Supabase local de
+    `altura-erp`. Infraestructura viva, no un resto olvidado.
+
+Lo que de verdad no se usaba sumaba **1,89 GB** (`hermes`, 56 días sin tocarse). Nada más. El resto
+del espacio salió de **cachés que se regeneran** —`Temp` 9,02, `go-build` 7,16, modcache de Go 4,39,
+`.cargo/registry` 1,29, `npm-cache` 1,19, shaders de AMD 0,99— y de **datos que gio decidió soltar**
+(`curseforge` 3,44 y `.lunarclient` 1,31, sin uso hacía un mes).
+
+**EL MÉTODO FUE EL DATO, NO LA HEURÍSTICA.** Cada carpeta se juzgó con tres hechos: si el programa
+figura instalado, si su proceso corre ahora, y cuál es el archivo más nuevo que tiene adentro. Sin
+eso, `Riot Games` era el candidato obvio por tamaño — y borrarlo habría sido borrar algo que se usa
+todos los días.
+
+**LO QUE SE DECIDIÓ NO HACER, Y POR QUÉ.** Quedan 7,99 GB reclamados **adentro** del disco virtual de
+Docker (38 imágenes → 28, cero huérfanas) que NO aparecen en `C:`: un `.vhdx` no se encoge solo.
+Devolverlos exige apagar Docker y correr `diskpart` sobre el archivo donde vive la base del Supabase.
+Cuando se planteó, el umbral ya se había cruzado sin eso — **la razón para aceptar el riesgo se había
+evaporado mientras se trabajaba**, y se volvió a preguntar en vez de ejecutar la respuesta vieja.
+Gio eligió no compactar. El purgado igual sirve: el disco virtual deja de crecer.
+
+**Y UN GOTCHA DEL CANAL DE EXEC, que ya está en la memoria.** La primera tanda intentó borrar seis
+cachés (310.000 archivos) en un solo comando, se pasó del `timeout_seg: 540` y **el agente la mató a
+mitad**. La salida sólo llega cuando el comando TERMINA, así que un corte deja sin saber qué se
+borró. Con caché da igual —npm, Go y Cargo se re-descargan— pero el mismo patrón sobre datos deja una
+instalación a medias en silencio. Desde entonces: **un comando por objetivo**. Medido de paso:
+`Remove-Item -Recurse` hace unos 300 archivos por segundo; `go clean -modcache` liberó 4,39 GB en
+298 s haciendo el trabajo por fuera del pipeline de PowerShell.
+
+**Sin efecto colateral**: los once contenedores siguieron arriba durante todo el purgado, y
+`DiscoPorLlenarse` se apagó sola — no se tocó su umbral.
+
 
 **2026-09-02 (qua) · A68 Y A73 CERRADOS — y los dos son la misma enfermedad vista de dos alturas.**
 

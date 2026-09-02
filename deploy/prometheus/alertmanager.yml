@@ -96,14 +96,50 @@ route:
 inhibit_rules:
   # Si la máquina está CAÍDA, no tiene sentido avisar además de su disco, su RAM y su temperatura:
   # son la misma noticia contada cinco veces, y las cuatro de más entierran a la primera.
+  #
+  # QUÉ SIGNIFICA `equal` CUANDO EL LABEL NO ESTÁ, dicho porque no es obvio y porque de eso
+  # depende que esta regla sea segura: Alertmanager compara el VALOR del label en las dos puntas,
+  # y un label ausente vale «». O sea que dos alertas que NO tienen `device` cuentan como iguales
+  # y la inhibición sí se aplica entre ellas. `equal` acota por coincidencia de valor, no por
+  # presencia del label.
+  #
+  # Acá eso no hace daño porque el origen está fijado a `MaquinaCaida`, que sale de
+  # `musubi_fleet_device_up` y por lo tanto SIEMPRE trae `device`: nunca hay un origen con
+  # `device` vacío que pueda emparejarse con el resto del sistema. Si alguna vez MaquinaCaida
+  # pasara a poder dispararse sin `device` —una agregación, un `absent()`— esta regla silenciaría
+  # todo warning e info que tampoco lo tenga: el cerebro, Altura y el backup. Que es exactamente
+  # el fallo que tenía la regla de acá abajo.
   - source_matchers: [alertname = "MaquinaCaida"]
     target_matchers: [severity =~ "warning|info"]
     equal: ['device']
 
   # Lo mismo un nivel más arriba: si NO LLEGA NINGUNA métrica de flota, callar el resto de las
   # alertas de flota — todas están ciegas y lo único accionable es FlotaSinTelemetria.
+  #
+  # ESTÁ ACOTADA A LA FLOTA POR `device != ""`, Y NO POR `equal`. Sin acotar —como estuvo— esta
+  # regla, al dispararse, callaba TODO warning e info DEL SISTEMA ENTERO: el cerebro, Altura, el
+  # backup off-host. Un problema de credenciales del scrape de flota apagaba el resto del panel.
+  #
+  # `equal` no sirve para arreglarlo, y conviene saber por qué antes de "mejorarlo": el origen es
+  # `absent(musubi_fleet_device_up)`, una serie SIN etiquetas de máquina, así que no tiene
+  # `device` con qué emparejar. Un `equal: ['device']` haría LO CONTRARIO de lo que se busca —
+  # `device=""` en el origen sólo casaría con los destinos que TAMPOCO lo tienen, o sea callaría
+  # al cerebro, a Altura y al backup, y dejaría pasar justo las alertas de flota que sí están
+  # ciegas. Peor que no tener la regla, porque además parece acotada.
+  #
+  # La presencia de `device` es el marcador de dominio que hay: sólo las series
+  # `musubi_fleet_device_*` y `musubi_fleet_service_*` lo llevan, y son exactamente las que
+  # desaparecen cuando el scrape pierde sus concesiones. Ninguna alerta del cerebro, de Altura ni
+  # del backup tiene `device`.
+  #
+  # QUEDAN FUERA A PROPÓSITO las alertas de flota que no viven de esas series
+  # (`PoliticaQueNoCura`, `PoliticaSinPermiso`, `AllowlistDeFlotaRechazando`): salen de
+  # `musubi_fleet_policy_actions_total` y `musubi_tool_rejections_total`, que siguen llegando por
+  # el scrape aunque no haya telemetría de ninguna máquina. No están ciegas: no hay que callarlas.
   - source_matchers: [alertname = "FlotaSinTelemetria"]
-    target_matchers: [severity =~ "warning|info"]
+    target_matchers:
+      - severity =~ "warning|info"
+      - device != ""
 
   # Y el clásico: lo crítico calla a lo warning de la misma alerta y máquina (DiscoCasiLleno
   # calla a DiscoPorLlenarse).

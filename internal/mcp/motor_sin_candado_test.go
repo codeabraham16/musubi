@@ -538,6 +538,14 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// nada. Sólo devuelve sesiones de máquinas sobre las que la credencial tiene `screen`.
 		// ABRIR una sesión (musubi_fleet_screen) exige la capacidad y NO está en este mapa.
 		"musubi_fleet_sessions": true,
+		// S5b · la bitácora de SHELL. AMPLIACIÓN DELIBERADA, y la que cierra la asimetría que
+		// nadie decidió: la de comandos (`musubi_fleet_log`) y la de pantallas ya estaban acá, y
+		// la de shells no — o sea que una cabina veía QUÉ se corrió y no QUIÉN tuvo un prompt,
+		// que es la mitad más grave de la misma auditoría. Mismo matiz que sus hermanas: poder
+		// INVOCARLA no es poder ver nada — sólo devuelve sesiones de máquinas sobre las que la
+		// credencial tiene `shell`, así que un reader sin concesiones llama y recibe vacío.
+		// ABRIR una shell (musubi_fleet_shell) exige la capacidad y NO está en este mapa.
+		"musubi_fleet_shell_log": true,
 		// S12 · el inventario de servicios. Mismo razonamiento que fleet_metrics y el mismo
 		// matiz: poder INVOCARLA no es poder ver nada. Sólo devuelve los servicios de máquinas
 		// sobre las que la credencial tiene `metrics`, así que un reader sin concesiones llama y

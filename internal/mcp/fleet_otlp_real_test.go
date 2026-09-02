@@ -27,6 +27,25 @@ package mcp
 // Ese Prometheus tiene que correr con `--web.enable-otlp-receiver`, que NO viene por defecto.
 // Si falta, el POST devuelve 404 y la prueba lo dice con esas palabras en vez de dejarte
 // mirando un error de red.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Y MIENTRAS TANTO, EL CAMINO NO SE EJERCITABA NUNCA (ítem 8)
+//
+// «No corre sola» terminó significando «no corre»: en la práctica nadie tiene ese Prometheus
+// encendido al correr la suite, y el ÚNICO camino vivo por el que la telemetría llega a las
+// reglas de flota —el scrape descarta `musubi_fleet_.*` a propósito— quedaba sin ejercitarse de
+// punta a punta. El cuerpo de esta prueba también: si alguien le erraba al path o a la consulta,
+// no se enteraba nadie.
+//
+// Ahora el cuerpo es UNO SOLO —ejercerElCaminoOTLPDePuntaAPunta— y lo corren dos pruebas:
+//
+//	contra el doble (otlp_prometheus_de_mentira_test.go)   SIEMPRE
+//	contra un Prometheus de verdad                          con MUSUBI_OTLP_REAL, como siempre
+//
+// El doble NO reemplaza a la de verdad y no pretende hacerlo: codifica nuestra creencia sobre el
+// receptor, así que no puede refutarla. Lo que sí caza —y hoy no cazaba nadie— es una unidad
+// emitida en el PAYLOAD que no está en las tablas de series, que es justo el sabotaje medido acá
+// abajo.
 
 import (
 	"encoding/json"
@@ -67,11 +86,65 @@ import (
 // veinticuatro pruebas de fleet_otlp_test.go siguen en verde porque el sobre que revisan es
 // impecable: el que cambia de opinión es el otro lado. Eso es exactamente lo que un doble no
 // puede decirte, y por eso esta prueba no es redundante con las otras.
+//
+// (El doble de ítem 8 emula ese renombrado y por eso ahora también caza ESE sabotaje. Lo que
+// sigue sin poder decir es si la regla que emula es la verdadera: para eso hace falta esto.)
 func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("MUSUBI_OTLP_REAL"), "/")
 	if base == "" {
 		t.Skip("MUSUBI_OTLP_REAL sin definir: esta prueba necesita un Prometheus 3.x de verdad con --web.enable-otlp-receiver")
 	}
+	// Quince intentos de a un segundo: un TSDB de verdad no deja la muestra consultable en el
+	// mismo instante en que contesta 200.
+	_, puntos, consulta := ejercerElCaminoOTLPDePuntaAPunta(t, base, 15)
+	t.Logf("Prometheus aceptó %d puntos y devolvió %s con su project", puntos, consulta)
+}
+
+// TestElCaminoOTLPDePuntaAPuntaContraUnReceptorQueGuardaYContesta corre lo mismo, siempre, contra
+// el doble. Es la mitad del camino que no depende de tener un proceso externo encendido: el sobre
+// se arma con el principal de verdad, sale por el empujador de verdad, entra por un receptor que
+// normaliza el nombre como el de Prometheus, y la serie tiene que quedar consultable con sus
+// etiquetas.
+//
+// Sabotaje que la hace fallar: poner `Unit: "By"` en vez de `serie.Unidad` en armarPayloadOTLP —el
+// mismo que hasta ahora sólo cazaba un Prometheus encendido—, o sacarle el `Content-Type` a
+// `enviar`, o cambiarle el path al endpoint.
+func TestElCaminoOTLPDePuntaAPuntaContraUnReceptorQueGuardaYContesta(t *testing.T) {
+	prom := nuevoPrometheusDeMentira(t)
+	// Un solo intento a propósito: el doble guarda en el mismo request. Si hiciera falta esperar,
+	// sería porque algo quedó asincrónico donde no debería.
+	cuerpo, puntos, _ := ejercerElCaminoOTLPDePuntaAPunta(t, prom.URL, 1)
+
+	// Y TODAS las series, no sólo `up`: lo que se compara es el nombre DECLARADO EN EL PAYLOAD
+	// contra el nombre con el que quedaron del otro lado. Las pruebas de nombres miran las tablas
+	// (seriesDeFlota / seriesDeServicio), así que una unidad hardcodeada dentro de armarPayloadOTLP
+	// las esquiva enteras; esto no.
+	ingeridos := prom.nombresIngeridos()
+	declarados := map[string]bool{}
+	for _, p := range puntosDelPayload(t, cuerpo) {
+		declarados[p.Metrica] = true
+	}
+	if len(declarados) == 0 {
+		t.Fatal("el payload no declaró ninguna métrica: la comparación de nombres pasaría vacía y en verde")
+	}
+	for nombre := range declarados {
+		if !ingeridos[nombre] {
+			t.Errorf("la serie %q se empujó con ese nombre y del otro lado NO existe: el receptor la renombró al ingerirla y toda regla que la consulte queda MUDA. Revisá la `unit` con la que sale del payload", nombre)
+		}
+	}
+	prom.revisarQuejas(t)
+	t.Logf("%d puntos empujados, %d nombres de serie declarados y los %d consultables del otro lado", puntos, len(declarados), len(ingeridos))
+}
+
+// ejercerElCaminoOTLPDePuntaAPunta empuja la telemetría de una máquina recién enrolada contra
+// `base` y exige que la serie quede CONSULTABLE con su valor y su project. Devuelve el cuerpo que
+// se mandó, cuántos puntos llevaba y la consulta que se verificó.
+//
+// `intentos` es cuántas veces se le pregunta al destino antes de darlo por perdido, de a un
+// segundo: un TSDB de verdad necesita margen, un doble no.
+func ejercerElCaminoOTLPDePuntaAPunta(t *testing.T, base string, intentos int) (cuerpo []byte, puntos int, consulta string) {
+	t.Helper()
+	base = strings.TrimRight(base, "/")
 
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -90,7 +163,7 @@ func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) 
 	}
 
 	emp, err := nuevoEmpujadorOTLP(config.OTLPPushConfig{
-		Endpoint:  base + "/api/v1/otlp/v1/metrics",
+		Endpoint:  base + pathOTLPDePrometheus,
 		Principal: "prometheus",
 	})
 	if err != nil {
@@ -100,23 +173,25 @@ func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) 
 		if strings.Contains(err.Error(), "404") {
 			t.Fatalf("el receptor OTLP contestó 404: a ese Prometheus le falta --web.enable-otlp-receiver. Error: %v", err)
 		}
-		t.Fatalf("Prometheus RECHAZÓ el sobre — las pruebas con receptor de mentira no lo habrían visto: %v", err)
+		t.Fatalf("el receptor RECHAZÓ el sobre — las pruebas que sólo miran el cuerpo no lo habrían visto: %v", err)
 	}
 
 	// Aceptar el POST no es lo mismo que haber guardado la serie. Prometheus puede devolver 200
 	// y descartar puntos (fuera de ventana, nombre inválido). Lo que importa es que se pueda
 	// CONSULTAR, que es para lo que se empuja.
-	consulta := fmt.Sprintf(`musubi_fleet_device_up{device=%q}`, maquina)
+	consulta = fmt.Sprintf(`musubi_fleet_device_up{device=%q}`, maquina)
 	var valor string
-	for intento := 0; intento < 15; intento++ {
+	for intento := 0; intento < intentos; intento++ {
 		if v, ok := consultarPrometheus(t, base, consulta); ok {
 			valor = v
 			break
 		}
-		time.Sleep(time.Second)
+		if intento < intentos-1 {
+			time.Sleep(time.Second)
+		}
 	}
 	if valor == "" {
-		t.Fatalf("Prometheus aceptó el sobre (200) y quince segundos después la serie %s NO se puede consultar: el empuje se ve exitoso y no deja nada", consulta)
+		t.Fatalf("el receptor aceptó el sobre (200) y la serie %s NO se puede consultar después de %d intento(s): el empuje se ve exitoso y no deja nada", consulta, intentos)
 	}
 	if valor != "1" {
 		t.Errorf("la serie llegó con valor %q y se empujó un 1: el valor se corrompió en el camino", valor)
@@ -127,7 +202,7 @@ func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) 
 	if v, ok := consultarPrometheus(t, base, fmt.Sprintf(`musubi_fleet_device_up{device=%q,project="casa"}`, maquina)); !ok || v != "1" {
 		t.Error("la serie llegó SIN la etiqueta project: sin ella dos tenants comparten Prometheus y no hay forma de separar sus alertas")
 	}
-	t.Logf("Prometheus aceptó %d puntos y devolvió %s = %s con su project", puntos, consulta, valor)
+	return cuerpo, puntos, consulta
 }
 
 // consultarPrometheus hace una consulta instantánea y devuelve el valor de la primera serie.

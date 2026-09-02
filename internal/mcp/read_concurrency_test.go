@@ -70,6 +70,12 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// La bitácora de sesiones de pantalla (S6): lee screen_sessions y no escribe. Quien
 		// ESCRIBE es musubi_fleet_screen (que abre la sesión) y el agente por la otra puerta.
 		"musubi_fleet_sessions": true,
+		// La bitácora de sesiones de SHELL (S5b): lee shell_sessions y no escribe. El
+		// vencimiento se DERIVA al servir (quien lo estampa es el barrido de flota, por la otra
+		// puerta) y quien ESCRIBE la fila es musubi_fleet_shell. Estaba sin marcar mientras sus
+		// siete hermanas de flota sí lo estaban, y como readOnly gobierna la AUTORIZACIÓN, una
+		// cabina write=none veía la bitácora de comandos y no la de shells.
+		"musubi_fleet_shell_log": true,
 		// El inventario de SERVICIOS de la flota (S12): lee la tabla `services` y deriva el
 		// estado y el frescor al servir (no hay columna de estado ni UPDATE). Quien ESCRIBE es el
 		// LATIDO, por la puerta del dispositivo, y musubi_fleet_service_declare — que NO es

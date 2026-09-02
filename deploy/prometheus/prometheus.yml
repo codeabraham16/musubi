@@ -47,9 +47,13 @@
 #   scrape → instance="musubi-brain"        (la etiqueta del static_config de abajo)
 #   push   → instance="musubi-otlp-push"    (service.instance.id del payload, constante del código)
 #
-# Con los dos activos, cada máquina tiene DOS series por métrica y las 12 reglas de
+# Con los dos activos, cada máquina tiene DOS series por métrica y TODAS las reglas de
 # rules/musubi-alerts-flota.yml se evalúan dos veces: dos avisos por incidente, y —peor— un
 # `count()` o un `sum()` sobre la flota que da el doble.
+#
+# (Este comentario decía «las 12 reglas» cuando ya eran 22. Un número copiado a mano envejece solo
+# y sin avisar, así que acá no va ninguno: el único lugar donde el conteo es cierto es el archivo
+# mismo — `grep -c "^      - alert:" deploy/musubi-alerts-flota.yml`.)
 #
 # LA RECETA, si encendés el push y querés seguir scrapeando /metrics (recomendado: el scrape trae
 # además las métricas del SERVIDOR, que el push no lleva a propósito): descartá las series de
@@ -74,8 +78,8 @@ global:
 # UN GLOB, NO UN ARCHIVO. Las reglas están repartidas en TRES archivos porque cada uno se instala
 # bajo su propia condición (las de flota sólo si el cerebro expone `musubi_fleet_*`; la del backup
 # off-host sólo si hay `BACKUP_REMOTE`). Con una ruta fija, `preparar.sh` copiaba el archivo de
-# flota y Prometheus lo IGNORABA — con las 12 reglas en disco y ninguna evaluándose, que es peor
-# que no haberlas instalado: se ven puestas.
+# flota y Prometheus lo IGNORABA — con TODAS las reglas de flota en disco y ninguna evaluándose,
+# que es peor que no haberlas instalado: se ven puestas.
 rule_files:
   - /etc/prometheus/rules/*.yml
 
@@ -124,8 +128,9 @@ scrape_configs:
     #
     # Así que el scrape deja de traer flota y se queda con lo suyo. Cada dato tiene un productor.
     #
-    # EL COSTO, dicho: si el empuje muere, la flota deja de tener series y las 12 reglas de flota
-    # se quedan sin datos con los que dispararse — no fallan, enmudecen. Eso NO queda descubierto:
+    # EL COSTO, dicho: si el empuje muere, la flota deja de tener series y TODAS las reglas de
+    # flota se quedan sin datos con los que dispararse — no fallan, enmudecen. Eso NO queda
+    # descubierto:
     # lo cazan `MusubiPushOTLPFallando`, `MusubiPushOTLPMudo` y `MusubiPushOTLPNuncaLlego`, que
     # miran los contadores del empujador. Si alguna vez sacás este bloque, sacá también el empuje;
     # y si sacás el empuje, sacá este bloque. Van juntos, y hay una prueba que lo custodia.

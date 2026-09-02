@@ -1159,7 +1159,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_fleet_shell",
-				Description: "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero.",
+				Description: "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero. EL CONSENTIMIENTO NO SE CONSULTA EN ESTE CAMINO: el grado que fija musubi_fleet_consent gobierna hoy sólo la pantalla, así que una máquina en `pide` o `prohibido` igual abre el prompt y nadie le avisa a quien la está usando.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1187,6 +1187,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolFleetShellLog,
+			// readOnly: es pura lectura (SELECT sobre shell_sessions; el vencimiento se DERIVA al
+			// leer y no escribe nada), igual que sus hermanas musubi_fleet_log y
+			// musubi_fleet_sessions. Sin esto una cabina write=none veía la bitácora de comandos y
+			// no la de shells: dos mitades de la misma auditoría separadas por un olvido.
+			readOnly: true,
 		},
 		{
 			Tool: Tool{
@@ -1342,7 +1347,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_fleet_consent",
-				Description: "ADMIN. Fija QUÉ SE LE DEBE a la persona que está usando una máquina cuando alguien pide entrar por pantalla o shell. Es un EJE SEPARADO de las capacidades: `screen` decide quién PUEDE entrar; esto decide qué pasa con quien está adentro, y lo responde el dueño de la máquina, no quien administra la flota. Cuatro grados ORDENADOS: `libre` (ni se entera), `avisa` (se le notifica, no puede negarse), `pide` (tiene que aceptar) y `prohibido` (no se abre NUNCA, aunque la capacidad esté perfectamente concedida). Cuando dos fuentes discrepan gana LA MÁS RESTRICTIVA: una máquina puede endurecer lo que el proyecto dijo, jamás aflojarlo. Sin declarar rige `avisa` — no `libre`, porque la ausencia de configuración no puede ser la opción menos segura. OJO con `pide` sobre una máquina que no puede preguntarle a nadie (un servidor sin escritorio): se endurece a `prohibido` y NO se afloja a `libre`, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
+				Description: "ADMIN. Fija QUÉ SE LE DEBE a la persona que está usando una máquina cuando alguien pide entrar. Es un EJE SEPARADO de las capacidades: `screen` decide quién PUEDE entrar; esto decide qué pasa con quien está adentro, y lo responde el dueño de la máquina, no quien administra la flota. Cuatro grados ORDENADOS: `libre` (ni se entera), `avisa` (se le notifica, no puede negarse), `pide` (tiene que aceptar) y `prohibido` (no se abre NUNCA, aunque la capacidad esté perfectamente concedida). Cuando dos fuentes discrepan gana LA MÁS RESTRICTIVA: una máquina puede endurecer lo que el proyecto dijo, jamás aflojarlo. Sin declarar rige `avisa` — no `libre`, porque la ausencia de configuración no puede ser la opción menos segura. OJO con `pide` sobre una máquina que no puede preguntarle a nadie (un servidor sin escritorio): se endurece a `prohibido` y NO se afloja a `libre`, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra. LO QUE ESTE GRADO GOBIERNA HOY ES EL CAMINO DE PANTALLA Y NADA MÁS: musubi_fleet_screen lo consulta antes de acuñar la contraseña; musubi_fleet_shell y musubi_fleet_exec NO lo consultan — abren el prompt o corren el comando aunque acá diga `pide` o `prohibido`, y a quien está sentado adelante no se le avisa. Se declara en vez de disimularse: extenderlo a esos dos caminos cambia lo que pasa en máquinas de otras personas y es una decisión pendiente, no un descuido. Si lo que querés es que nadie entre por shell, la puerta que HOY cierra de verdad es no conceder la capacidad `shell` en principals.yaml.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

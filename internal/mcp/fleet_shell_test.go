@@ -153,6 +153,47 @@ func TestUnaShellQueNoLlegaAConectarQuedaAuditadaIgual(t *testing.T) {
 	}
 }
 
+// T4b — LA BITÁCORA DE SHELL LA LEE UNA CABINA `write=none`, IGUAL QUE LA DE COMANDOS.
+//
+// `musubi_fleet_shell_log` no muta nada (es un SELECT sobre shell_sessions; el vencimiento se
+// DERIVA al leer), pero no estaba marcada readOnly mientras sus siete hermanas de flota sí lo
+// estaban. Como readOnly es el eje de AUTORIZACIÓN (Principal.canCall), la consecuencia era muda
+// y torcida: una cabina de sólo lectura veía QUÉ COMANDOS se corrieron y no QUIÉN tuvo un prompt
+// — la mitad más grave de la misma auditoría, tapada por un olvido y no por una decisión.
+//
+// La segunda mitad de la prueba es la que la mantiene honesta: leer la bitácora NO es abrir una
+// shell. Si alguien "arreglara" esto marcando readOnly a musubi_fleet_shell, acá se cae.
+//
+// Sabotaje que la hace fallar: quitarle `readOnly: true` a musubi_fleet_shell_log en el registro.
+func TestLaBitacoraDeShellLaLeeUnaCabinaSinEscritura(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConShell(t, s, "casa", "nas")
+	restaurar := fleet.SSHFalsoParaTest(t, "exit 255")
+	defer restaurar()
+	// Alguien con permiso de escritura deja una sesión en la bitácora.
+	_, _ = callAsPrincipal(t, s, conShell("casa"), "musubi_fleet_shell", map[string]any{"device": "nas"})
+
+	// La cabina: ve la flota, no la toca. Tiene la capacidad `shell` concedida, así que lo único
+	// que puede frenarla es su autoridad — que es justo lo que esta prueba mide.
+	cabina := conShell("casa")
+	cabina.Name = "panel"
+	cabina.Role = RoleReader
+	cabina.Write = WriteNone
+
+	res, e := callAsPrincipal(t, s, cabina, "musubi_fleet_shell_log", map[string]any{})
+	if e != nil {
+		t.Fatalf("una cabina write=none no pudo leer la bitácora de shell: %+v", e)
+	}
+	if crudo := textOf(t, res); !strings.Contains(crudo, `"device":"nas"`) {
+		t.Errorf("la cabina leyó la bitácora pero sin la sesión de `nas`:\n%s", crudo)
+	}
+
+	// Y LEER NO ES ENTRAR: la misma cabina no abre un prompt.
+	if _, e := callAsPrincipal(t, s, cabina, "musubi_fleet_shell", map[string]any{"device": "nas"}); e == nil {
+		t.Error("una cabina write=none abrió una shell interactiva: leer la bitácora y tener un prompt no son la misma autoridad")
+	}
+}
+
 // ── T5 · los techos ─────────────────────────────────────────────────────────────────────────
 
 // T5 — SON DOS TECHOS Y SON DISTINTOS: la vida máxima y la inactividad cubren casos que el otro
