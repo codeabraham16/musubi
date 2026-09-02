@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,14 @@ import (
 // Es lo único de S6 que no se puede probar contra el binario real sin una máquina con RustDesk.
 func rustdeskFalso(t *testing.T, cuerpo string) (registro string) {
 	t.Helper()
+	// Mismo techo que el doble de ssh: el guion es `#!/bin/sh` y va SIN extensión. Windows
+	// no tiene shebang y `exec.LookPath` exige `.exe`/`.bat`/`.cmd`, así que el proceso ni
+	// arranca, y el error —`executable file not found in %PATH%`— no habla de lo que la
+	// prueba verifica: qué argumentos recibe el cliente, que el secreto no llegue a la
+	// bitácora, el acotado del TTL. Se saltea acá, en la puerta, y no en cada prueba.
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de rustdesk es un guion #!/bin/sh sin extensión: no corre en Windows")
+	}
 	dir := t.TempDir()
 	registro = filepath.Join(dir, "llamadas.txt")
 	guion := filepath.Join(dir, "rustdesk")

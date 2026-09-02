@@ -217,7 +217,15 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 		if n := latidos.Load(); n != 2 {
 			t.Errorf("latió %d veces, esperaba detenerse en el segundo (el revocado)", n)
 		}
-	case <-time.After(5 * time.Second):
+	// 30s Y NO 5: NO SE AFLOJA EL INVARIANTE, SE AFLOJA LA RED. Lo que esta prueba ata es
+	// que el bucle SE DETENGA ante un 401; el reloj es sólo el guardia contra un cuelgue, y
+	// un kill-switch roto no vuelve NUNCA, así que sigue fallando igual a los 30s.
+	//
+	// Medido el 2026-09-02 en una PC Windows real: `latir()` llama a `serviciosDelLatido()`
+	// en CADA latido y, con 79 servicios, cada uno cuesta ~2,3s. Dos latidos = 4,6s contra un
+	// presupuesto de 5, así que la prueba PASA cuando corre sola y se cae en 5,00s bajo la
+	// carga del paquete. Era un flake de reloj, no un fallo del kill-switch.
+	case <-time.After(30 * time.Second):
 		t.Fatal("el agente siguió latiendo tras ser revocado: el kill-switch no se entiende desde la máquina")
 	}
 }

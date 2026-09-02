@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,12 @@ import (
 // TestLoQueLlegaALaShellRemotaEsEjecutable, que corre por una shell real lo que ssh entrega.
 func sshFalso(t *testing.T, cuerpo string) (registro string) {
 	t.Helper()
+	// Mismo motivo que en SSHFalsoParaTest: el doble es un guion `#!/bin/sh` sin extensión y
+	// Windows no puede ejecutarlo. Se saltea acá, en la puerta, para no repetir la guarda en
+	// cada prueba que lo use.
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de ssh es un guion #!/bin/sh sin extensión: no puede ejecutarse en Windows")
+	}
 	dir := t.TempDir()
 	registro = filepath.Join(dir, "args.txt")
 	guion := filepath.Join(dir, "ssh")

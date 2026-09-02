@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -224,7 +225,23 @@ func minInt(a, b int) int {
 // (internal/mcp, que ejercita el ruteo por tier). `binarioSSH` es privado a propósito —nadie
 // fuera de acá debería poder apuntar el cliente a otro lado— y ésta es la única puerta, explícita
 // y nombrada, para abrirlo en una prueba.
-func SSHFalsoParaTest(t interface{ Fatal(...any) }, cuerpo string) (restaurar func()) {
+//
+// SALTEA EN WINDOWS, y no es pereza: el doble es un guion `#!/bin/sh` SIN extensión. Windows no
+// tiene shebang y `exec.LookPath` exige `.exe`/`.bat`/`.cmd`, así que el proceso ni arranca y el
+// error que sale —`executable file not found in %PATH%`— no dice nada sobre lo que la prueba
+// quería verificar. Lo que se ejercita a través de este doble (la forma del argv de `ssh`,
+// `BatchMode`, el 255 como fallo de canal, el ruteo por tier) es una preocupación POSIX, y el
+// cerebro que invoca `ssh` corre en Linux. Se saltea la prueba en vez de dejarla fallar: un rojo
+// permanente que nadie puede arreglar enseña a ignorar el rojo.
+func SSHFalsoParaTest(t interface {
+	Fatal(...any)
+	Skip(...any)
+	Helper()
+}, cuerpo string) (restaurar func()) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de ssh es un guion #!/bin/sh sin extensión: no puede ejecutarse en Windows")
+	}
 	dir, err := os.MkdirTemp("", "sshfalso")
 	if err != nil {
 		t.Fatal(err)

@@ -5,11 +5,19 @@ name: CI
 # idénticas de 7 jobs cada una. No es sólo gasto de minutos — duplica la exposición a los tests
 # flaky, así que un PR sano se ve rojo con el doble de frecuencia (pasó en el #265).
 #
-# Acotar `push` a main conserva las dos cosas que importan: las ramas se validan por su PR, y main
-# se valida en cada merge (que es donde un rojo importa de verdad).
+# Acotar `push` a estas ramas conserva las dos cosas que importan: las ramas se validan por su PR,
+# y las de integracion se validan en cada merge (que es donde un rojo importa de verdad).
+#
+# LA PREMISA «las ramas se validan por su PR» TIENE UNA EXCEPCION MEDIDA, y por eso hay dos ramas
+# en la lista: feat/control-de-flota no usa PRs (de 100 commits por encima de main, 8 citan uno) y
+# de ella sale el binario del cerebro central, asi que quedaba SIN NINGUNA validacion automatica.
 on:
   push:
-    branches: [main]
+    # feat/control-de-flota se agrega porque NO ENTRABA POR NINGUNA PUERTA: no es main, y sus
+    # commits se pushean derecho a la rama (de 100 commits por encima de main, solo 8 citan un PR).
+    # Medido: en 60 corridas de Actions esa rama no aparece ni una vez, y de ella sale el binario
+    # que corre en el cerebro central. El rojo solo se veia cuando alguien cortaba un PR desde ahi.
+    branches: [main, feat/control-de-flota]
   pull_request:
 
 jobs:

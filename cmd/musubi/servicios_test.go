@@ -1,3 +1,9 @@
+// Este archivo es `package main` y ejercita simbolos que viven en servicios_linux.go, detras de
+// //go:build linux (estadoDeSystemd, parsearSystemctlShow, fechaDeSystemd, parsearContenedores,
+// contenedoresDe). Sin esta guarda el paquete NO COMPILA en Windows —ocho `undefined`— y el fallo
+// se lleva puesta toda la suite de cmd/musubi, no solo estas pruebas.
+//go:build linux
+
 package main
 
 // servicios_test.go custodia la enumeración de servicios del agente (A42).

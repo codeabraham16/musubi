@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,7 @@ func conPodman(c string) bool { return c == "podman" }
 //
 // Sabotaje que la hace fallar: declarar las rutas de contenedores sin consultar hayCLI.
 func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	ns := necesidadesDelAgente("/home/musubi", "/run/user/1000", sinCLI)
 	for _, n := range ns {
 		if strings.Contains(n.Trabajo, "contenedores") {
@@ -62,6 +64,7 @@ func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 // Sabotaje que la hace fallar: sacar `Opcional: true` de las rutas de runtimeDir.
 // Sabotaje que la hace fallar: emitir la directiva sin el `-`.
 func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	for _, n := range necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman) {
 		enRuntime := strings.HasPrefix(n.Ruta, "/run/")
 		if enRuntime && !n.Opcional {
@@ -154,6 +157,7 @@ func TestElVerificadorNoLeEchaLaCulpaAlBlindajeCuandoLaRutaNoExiste(t *testing.T
 //
 // Sabotaje que la hace fallar: devolver estadoOK siempre que Opcional sea true.
 func TestLoOpcionalEsElExistirYNuncaElPoder(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	base := t.TempDir()
 	ausente := necesidad{Trabajo: "t", Ruta: filepath.Join(base, "nunca"), Acceso: accesoEscritura,
 		Opcional: true, Sintoma: "x", Directiva: "ReadWritePaths=-x"}
@@ -253,6 +257,7 @@ func unidadYDropIns(t *testing.T) string {
 // Sabotaje que la hace fallar: borrar una línea ReadWritePaths del drop-in de contenedores.
 // Sabotaje que la hace fallar: agregarle al agente una necesidad nueva sin tocar deploy/systemd/.
 func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	// Los valores de la máquina de producción, que son los que los archivos tienen escritos.
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
 	unidad := unidadYDropIns(t)
@@ -284,6 +289,7 @@ func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
 //
 // Sabotaje que la hace fallar: agregar un ReadWritePaths inventado al drop-in.
 func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
 	declaradas := map[string]bool{}
 	for _, n := range necesidadesDelAgente(homeProd, runtimeProd, conPodman) {
@@ -318,6 +324,7 @@ func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a `os.Getenv("XDG_RUNTIME_DIR")` pelado.
 func TestSinXDGRuntimeDirElVerificadorNoSeQuedaCiego(t *testing.T) {
+	saltarSiNoEsPosix(t)
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	d := dirDeRuntime()
 	if os.Getuid() == 0 {
@@ -379,5 +386,19 @@ func TestElVerificadorSeCallaFueraDeLinux(t *testing.T) {
 	}
 	if !strings.Contains(guarda, "return 0") {
 		t.Errorf("la rama de no-Linux no devuelve 0: un Windows sano quedaría en rojo.\n%s", guarda)
+	}
+}
+
+// saltarSiNoEsPosix corta las pruebas que verifican la unidad de systemd y las rutas de /run.
+//
+// NO ES UN TECHO DE HERRAMIENTA, ES DE DOMINIO: acá se comprueba que el blindaje de una unidad
+// systemd conceda exactamente lo que el agente declara tocar, y que `dirDeRuntime()` caiga en
+// `/run/user/<uid>`, que es donde podman busca. En Windows no hay systemd, ni /run, ni uid:
+// `os.Getuid()` devuelve -1 y `filepath.Join` arma rutas con barra invertida, así que la
+// prueba no puede ni plantearse. El cerebro que genera esas unidades corre en Linux.
+func saltarSiNoEsPosix(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd, /run/user/<uid> y os.Getuid() no existen en Windows")
 	}
 }
