@@ -4,7 +4,12 @@
 > declarada de por qué NO se va a hacer. Si algo se cierra, se borra de esta tabla; si aparece
 > algo nuevo, se anota acá el mismo día.
 >
-> Última revisión: **2026-08-29**, tras una tanda larga: **A44** (políticas sobre la salud de un
+> Última revisión: **2026-09-02**. Se cerraron **A68** (un agente atrasado ya avisa) y **A73**
+> (el repo y producción se comparan, a pedido y desatendido). Con eso **no queda ningún cabo sin
+> dueño ni sin una razón declarada**: los 16 que siguen abiertos tienen slice, operador, o una
+> decisión de gio anotada.
+>
+> Revisión anterior: **2026-08-29**, tras una tanda larga: **A44** (políticas sobre la salud de un
 > servicio), los **seis cabos de la misma familia** —A38, A39, A49, A50, A51, A52: código cuyo modo
 > de falla no se veía desde ninguna prueba—, **A54** (el agente declara lo que va a tocar y el
 > despliegue lo verifica) y **A45 + A53** (`go test -race ./...` vuelve a terminar: 8m12s contra
@@ -14,7 +19,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **18 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -44,14 +49,12 @@
 | A41 | **El empuje no tiene backoff con memoria entre ticks** | Un destino caído se reintenta cada 30 s para siempre, con el mismo intervalo. No hay outbox ni espaciado creciente: el reintento ES el próximo tick. Está acotado a propósito —el aviso de un fallo permanente sale UNA vez y `musubi_push_failures_total` cuenta el resto—, así que el costo real de un destino muerto es un POST fallido cada 30 s contra loopback. **Se revisa si el destino alguna vez deja de ser loopback**: contra un collector remoto, reintentar sin espaciar es exactamente cómo se martilla a alguien que ya está caído. | **sin asignar** (después de que el push tenga un destino remoto) |
 
 
-| A68 | **Un agente que se quedó atrás es invisible hasta que alguien lo lee** | `agent_version` se guarda y `musubi_fleet_list` lo muestra —eso lo cerró un hallazgo anterior— pero **nada avisa**: no hay métrica ni alerta, así que un agente veinticuatro versiones atrás se ve idéntico a uno al día. **Medido el 2026-09-01**: con el cerebro en `0.130.0`, los dos Windows corrían `v0.106.0-28-gdf2ec21`, y se descubrió de casualidad al mirar otra cosa. El costo fue concreto: A67 se desplegó y **no puede correr en las dos máquinas para las que se escribió**, porque su binario no tiene la capacidad — y nada lo habría dicho. La versión NO puede ser una etiqueta de Prometheus (queda anotado en `fleet_prometheus.go`: la serie se re-etiquetaría sola en cada actualización, y las viejas quedarían huérfanas), así que la forma es un **booleano**: `musubi_fleet_device_agent_stale`, 1 cuando la versión del agente difiere de la del cerebro, sin llevar ninguna de las dos en una etiqueta. **AUSENTE en las máquinas sin agente** —un Tier B sondeado por SSH no tiene versión que comparar— por la misma regla que el resto del track. | **sin asignar** |
 
 | A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
 
 
 | A72 | **`davantis-1` está al 6,8 % de disco y 102 GB están en `Users`** | Medido el 2026-09-02: 15,8 GB libres de 232,1. El desglose de primer nivel dice `Users` 101,9 GB, `Riot Games` 42,3, `Windows` 26,5, `Program Files (x86)` 19,7, `Proyectos` 11,5. Los 42 GB de juegos son la palanca grande y son **decisión del dueño de la máquina**, no de la flota. Lo que queda sin medir es el adentro de `Users`: 102 GB sin desglosar, que es donde vive lo que no se puede borrar a ciegas —perfiles, cachés de navegador, descargas, proyectos—. **Falta el desglose de segundo nivel** antes de poder recomendar nada. `DiscoPorLlenarse` está disparando por esto y es una alerta VERDADERA: no se silencia, se resuelve. | **operador** |
 
-| A73 | **Las guardas validan el REPO y producción diverge sin que nada lo diga** | `TestLaCadenaDeAlertasSeVigilaASiMisma` pasaba en verde mientras **el job `alertmanager` no estaba desplegado**: sin ese scrape, `alertmanager_notifications_failed_total` no existe y `CadenaDeAlertasFallando` —la alerta que vigila que las alertas se entreguen— **no podía dispararse nunca**. La guarda leía `deploy/prometheus/prometheus.yml`; el servidor corría otro archivo. **Medido el 2026-09-02**: 29 reglas cargadas contra 31 en el repo, y las dos que faltaban eran justamente `CadenaDeAlertasFallando` y `MaquinaQueNoAlcanzaSuDestino` (escrita esa misma noche). Se desplegaron y ahora sí están vivas. Pero **el agujero es estructural, no de esas dos reglas**: nada compara lo que corre con lo que dice el repo, así que la próxima divergencia también va a verse como verde. Lo cierra una comprobación que le pregunte a Prometheus por sus reglas cargadas y las contraste con los archivos —desde el propio cerebro, que ya lo scrapea— o, más barato, una alerta sobre el hash de la configuración. **No es lo mismo que un despliegue olvidado**: el despliegue se hace, lo que falta es quién avise cuando no. | **sin asignar** |
 
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
@@ -80,6 +83,82 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (qua) · A68 Y A73 CERRADOS — y los dos son la misma enfermedad vista de dos alturas.**
+
+**A68 · un agente que se quedó atrás era invisible.** `agent_version` se guardaba y
+`musubi_fleet_list` la mostraba, pero nada AVISABA: un agente veinticuatro versiones atrás se veía
+idéntico a uno al día. Se descubrió de casualidad el 2026-09-01, mirando otra cosa, y el costo fue
+concreto — A67 se había desplegado el día anterior y **no podía correr en las dos máquinas para las
+que se escribió**, porque su binario no tenía la capacidad.
+
+Ahora lo dice `musubi_fleet_device_agent_stale`, y **la decisión que hace útil a la métrica es qué
+compara**. El cerebro corre `0.130.0-flota.38a0a9f` y los Windows `0.130.0-flota.e140e0c`: mismo
+release, commits distintos, que es lo normal —el binario de Windows se cruza a mano y el del
+cerebro se redespliega varias veces por día—. Comparando la cadena entera, **la flota entera queda
+marcada después de cada despliegue**, y se queda así hasta que alguien cruce el binario a cada
+máquina. Una alarma encendida siempre es una alarma apagada. Por eso compara el NÚCLEO semver.
+
+**Y eso deja un hueco que está declarado, no descubierto después**: una capacidad que entra al
+cerebro sin tocar el archivo `VERSION` no se ve. La comparación mide lo que VERSION declara, y
+VERSION lo bumpea una persona.
+
+**Los tres «no sé» son distintos y se separan a propósito.** Un Tier B no corre nuestro binario:
+ausente. El CEREBRO sin su versión (un build sin ldflags): ausente también, porque marcar a la
+flota entera sería culparla de un problema nuestro y mandar a alguien a revisar diez agentes sanos.
+Una versión ilegible: ésa SÍ se responde, con 1 — no sabemos cuánto se atrasó, sabemos que no es la
+nuestra.
+
+La versión **no viaja como etiqueta**, y eso ya estaba escrito en `labelsDeFlota` desde antes: una
+etiqueta con la versión deja la serie re-etiquetándose sola en cada actualización, con las viejas
+huérfanas. Ahora además hay una prueba que lo custodia.
+
+**A73 · las guardas validaban el repo y producción divergía.** `TestLaCadenaDeAlertasSeVigilaASiMisma`
+pasaba en verde mientras el job `alertmanager` no estaba desplegado: sin ese scrape,
+`CadenaDeAlertasFallando` —la alerta que vigila que las alertas se entreguen— no podía dispararse
+nunca. La guarda leía `deploy/prometheus/prometheus.yml`; el servidor corría otro archivo.
+
+Se cierra por **dos caminos, porque las dos mitades del problema son distintas**.
+
+**A pedido**: `deploy/verificar-despliegue.sh` le pregunta a las APIs —no a los archivos—, que es la
+única respuesta que importa: un archivo correcto que Prometheus no releyó se ve igual que uno bueno.
+Es el error que costó una hora el 2026-08-31, cuando un `sed -i` sobre un bind-mount cambió el inodo
+y la recarga contestó 200 sobre el archivo equivocado. Distingue tres cosas que se ven parecidas y
+se arreglan distinto —sin desplegar, desplegado a medias, y reglas huérfanas de un despliegue
+anterior— y **no denuncia los archivos parkeados a propósito**, que lo declaran en su propia línea
+`# despliegue:`. Un informe que denuncia lo que está bien deja de leerse a las dos semanas.
+
+**Desatendido**: cada archivo de reglas vigila el conteo del OTRO. **Cruzado, y ése es el punto**: un
+archivo que declara su propio conteo se despliega junto con el conteo, las dos mitades se mueven a la
+vez y la comprobación no falla nunca. Cruzándolos, un despliegue a medias rompe la simetría en la
+dirección que sea y alguno de los dos grita. Se probó en producción de la única forma que vale: las
+dos alertas estuvieron disparando mientras el repo tenía 4 reglas que el servidor no, y se apagaron
+solas al desplegarlas.
+
+Y `ScrapeQueElRepoDeclaraYNoExiste` cubre el caso exacto que abrió el cabo, con la distinción que
+importa: `up == 0` es «no contesta»; acá el job **ni existe**, así que ninguna regla que use sus
+métricas puede dispararse. Una prueba compara esa lista contra los `job_name` del repo, en las dos
+direcciones — un scrape nuevo sin vigilar rompe la suite, y vigilar uno que no existe también.
+
+**EL NÚMERO DE LA CUSTODIA NO PUEDE PUDRIRSE**, que era el riesgo obvio de esta forma. Lo calcula la
+suite desde el YAML: agregar una alerta sin actualizar el conteo del archivo que la custodia rompe
+las pruebas **en el repo**, antes de que la alarma quede encendida en producción para siempre.
+
+**LO QUE NINGUNO DE LOS DOS MIRA, dicho acá y en el encabezado del script.** El contenido de cada
+regla: un umbral que cambió en el repo y no en producción tiene el mismo nombre y no se ve. Los
+scrapes de sitio, que son por sitio a propósito. Y las máquinas de la flota, que las cubre A68.
+
+**Ocho sabotajes ejecutados, y el primero enseñó lo de siempre**: no compilaba (`declared and not
+used`), así que la prueba ni corrió y el silencio se veía igual que una guarda que funciona. Se
+reescribió para que compilara, y ahí sí falló — con el síntoma exacto que se buscaba: la máquina al
+día marcada como atrasada.
+
+**Y EN EL CAMINO CAYÓ EL MISMO BICHO EN LA MÁQUINA QUE NO ESTÁ EN LA FLOTA.** El `musubi` local de
+`Davantis` era `0.107.0` del 27 de agosto —veintitrés versiones atrás— y su daemon MCP no arrancaba:
+`el esquema de la base es más nuevo que este binario`. El fail-closed de las migraciones hizo
+exactamente su trabajo y dijo qué hacer. Es A68 otra vez, y **`agent_stale` no lo habría visto**:
+esa máquina no está enrolada. Queda dicho porque el patrón es el mismo y el remedio no alcanza.
+
 
 **2026-09-02 (ter) · A71 CERRADO — el script que actualiza el agente vivía sólo en las máquinas.**
 
