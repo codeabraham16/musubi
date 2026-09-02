@@ -98,7 +98,7 @@ func TestUnEstadoDeTransicionNoEsCorriendo(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"StartPending", "StopPending", "ContinuePending"} {
-		if got := estadoDeWindows(s); got == fleet.EstadoCorriendo {
+		if got := estadoDeWindows(s, "0"); got == fleet.EstadoCorriendo {
 			t.Errorf("Windows %s se reporta como corriendo", s)
 		}
 	}
@@ -106,7 +106,7 @@ func TestUnEstadoDeTransicionNoEsCorriendo(t *testing.T) {
 	if estadoDeSystemd("active", "running") != fleet.EstadoCorriendo {
 		t.Error("un servicio activo y corriendo dejó de reportarse como corriendo")
 	}
-	if estadoDeWindows("Running") != fleet.EstadoCorriendo {
+	if estadoDeWindows("Running", "0") != fleet.EstadoCorriendo {
 		t.Error("un servicio Running de Windows dejó de reportarse como corriendo")
 	}
 }
@@ -173,12 +173,13 @@ func TestUnaFechaQueNoSeEntiendeQuedaEnNilYNoEnLaEpoca(t *testing.T) {
 //
 // Sabotaje que la hace fallar: partir por comas a mano en vez de usar encoding/csv.
 func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
-	csv := "\"Name\",\"Status\",\"StartType\"\n" +
-		"\"SQL Server (MSSQLSERVER), instancia\",\"Running\",\"Automatic\"\n" +
-		"\"Spooler\",\"Stopped\",\"Automatic\"\n" +
-		"\"Manual y sano\",\"Stopped\",\"Manual\"\n" +
-		"\"Manual y roto\",\"Cualquiera\",\"Manual\"\n"
-	rs := parsearGetService(csv, time.Now())
+	csv := "\"Name\",\"State\",\"StartMode\",\"ExitCode\"\n" +
+		"\"SQL Server (MSSQLSERVER), instancia\",\"Running\",\"Auto\",\"0\"\n" +
+		"\"Spooler\",\"Stopped\",\"Auto\",\"1067\"\n" +
+		"\"MapsBroker\",\"Stopped\",\"Auto\",\"0\"\n" +
+		"\"Manual y sano\",\"Stopped\",\"Manual\",\"0\"\n" +
+		"\"Manual y roto\",\"Stopped\",\"Manual\",\"1067\"\n"
+	rs := parsearServiciosWindows(csv, time.Now())
 	nombres := map[string]fleet.EstadoServicio{}
 	for _, r := range rs {
 		nombres[r.Nombre] = r.Salud.Estado
@@ -189,11 +190,49 @@ func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 	if _, hay := nombres["SQL Server (MSSQLSERVER), instancia"]; !hay {
 		t.Errorf("un nombre con coma y paréntesis se cortó: %v", nombres)
 	}
-	if nombres["Spooler"] != fleet.EstadoDetenido {
-		t.Error("un servicio Automatic y detenido no se reportó: es la fila que uno quiere ver")
+	if nombres["Spooler"] != fleet.EstadoFallado {
+		t.Errorf("un Automatic detenido con ExitCode 1067 no se reportó fallado: %v", nombres["Spooler"])
 	}
 	if _, hay := nombres["Manual y sano"]; hay {
-		t.Error("se reportó un servicio Manual y detenido: Windows tiene cientos")
+		t.Error("se reportó un servicio Manual y detenido limpio: Windows tiene cientos")
+	}
+	if nombres["Manual y roto"] != fleet.EstadoFallado {
+		t.Error("un Manual que se MURIÓ no se reportó: el filtro deja pasar lo roto aunque nadie lo haya declarado")
+	}
+}
+
+// EN WINDOWS, `Automatic` NO SIGNIFICA «tiene que estar corriendo» (A70).
+//
+// Es la diferencia con systemd, donde `enabled` sí lo significa, y creer que eran lo mismo llenó
+// el canal de dieciséis alarmas falsas: `sppsvc`, `MapsBroker`, `edgeupdate` y los updaters son
+// automáticos y se apagan solos cuando terminan su trabajo. Medido en `gio` el 2026-09-02: 8 de
+// 102 automáticos detenidos, los ocho con ExitCode 0.
+//
+// Lo que los separa es un DATO y no una heurística sobre el tipo de arranque: el código de
+// salida. Cero es «terminó bien»; 1067 es «se murió»; 1077 es «nunca arrancó desde el boot».
+//
+// Sabotaje: devolver EstadoDetenido en vez de EstadoOcioso para "stopped" → falla acá, y el
+// exportador vuelve a emitir up=0 para servicios que están bien.
+func TestUnAutomaticoQueSeApagoLimpioEsOciosoYNoCaido(t *testing.T) {
+	if got := estadoDeWindows("Stopped", "0"); got != fleet.EstadoOcioso {
+		t.Errorf("un servicio apagado con salida limpia se reporta %q: eso dispara ServicioCaido sin que nada esté mal", got)
+	}
+	if got := estadoDeWindows("Stopped", "1067"); got != fleet.EstadoFallado {
+		t.Errorf("un servicio que MURIÓ se reporta %q: es justo el que hay que ver", got)
+	}
+	if got := estadoDeWindows("Stopped", "1077"); got != fleet.EstadoFallado {
+		t.Errorf("un servicio que nunca arrancó desde el boot se reporta %q: debía arrancar y no lo hizo", got)
+	}
+	// Y EL CÓDIGO NO MANDA SOBRE UNO QUE ESTÁ CORRIENDO: un servicio vivo puede arrastrar el
+	// ExitCode de una caída anterior de la que ya se recuperó, y mirarlo ahí lo dibujaría
+	// fallado mientras funciona.
+	if got := estadoDeWindows("Running", "1067"); got != fleet.EstadoCorriendo {
+		t.Errorf("un servicio corriendo con un ExitCode viejo se reporta %q", got)
+	}
+	// OCIOSO NO CUENTA COMO CAÍDO para las políticas: si contara, un `servicio_caido` sobre una
+	// máquina Windows dispararía acciones automáticas contra servicios que están perfectos.
+	if fleet.EstadoCuentaComoCaido(fleet.EstadoOcioso) {
+		t.Error("`ocioso` cuenta como caído: una política actuaría sobre un servicio que está bien")
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 	"musubi/internal/fleet"
 )
 
-func parsearGetService(salida string, ahora time.Time) []fleet.ReporteServicio {
+func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServicio {
 	r := csv.NewReader(strings.NewReader(strings.ReplaceAll(salida, "\r\n", "\n")))
 	r.FieldsPerRecord = -1
 	filas, err := r.ReadAll()
@@ -46,9 +46,10 @@ func parsearGetService(salida string, ahora time.Time) []fleet.ReporteServicio {
 		if nombre == "" {
 			continue
 		}
-		estado := estadoDeWindows(tomar(f, "status"))
-		arranque := strings.ToLower(tomar(f, "starttype"))
-		// Automatic = alguien lo declaró. Lo demás sólo entra si está roto.
+		estado := estadoDeWindows(tomar(f, "state"), tomar(f, "exitcode"))
+		arranque := strings.ToLower(tomar(f, "startmode"))
+		// Automatic = alguien lo declaró. Lo demás sólo entra si está roto — un servicio Manual
+		// que se murió importa igual, y uno Manual apagado es el ruido que este filtro evita.
 		if !strings.HasPrefix(arranque, "auto") && estado != fleet.EstadoFallado {
 			continue
 		}
@@ -66,18 +67,24 @@ func parsearGetService(salida string, ahora time.Time) []fleet.ReporteServicio {
 	return rs
 }
 
-// estadoDeWindows traduce el estado del SCM.
-//
-// Los estados de transición (StartPending, StopPending, ...) NO son «corriendo»: un servicio
-// atascado en StartPending lleva minutos sin arrancar y llamarlo corriendo lo esconde.
-func estadoDeWindows(s string) fleet.EstadoServicio {
-	switch strings.ToLower(strings.TrimSpace(s)) {
+func estadoDeWindows(estado, exitCode string) fleet.EstadoServicio {
+	corriendo := strings.EqualFold(strings.TrimSpace(estado), "running")
+	// EL CÓDIGO DE SALIDA MANDA SOBRE EL ESTADO, y sólo cuando NO está corriendo.
+	//
+	// Un servicio vivo puede arrastrar el ExitCode de una caída anterior de la que ya se
+	// recuperó; mirarlo ahí lo dibujaría fallado mientras funciona. Apagado, en cambio, el
+	// código es exactamente la pregunta que importa: ¿se apagó porque terminó, o porque murió?
+	if !corriendo {
+		if c := strings.TrimSpace(exitCode); c != "" && c != "0" {
+			return fleet.EstadoFallado
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(estado)) {
 	case "running":
 		return fleet.EstadoCorriendo
-	case "stopped":
-		return fleet.EstadoDetenido
-	case "paused":
-		return fleet.EstadoDetenido
+	case "stopped", "paused":
+		// Apagado y con salida limpia: OCIOSO, no caído. Es la distinción entera de A70.
+		return fleet.EstadoOcioso
 	default:
 		return fleet.EstadoDesconocido
 	}

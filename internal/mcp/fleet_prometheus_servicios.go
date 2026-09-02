@@ -121,10 +121,25 @@ func seriesDeServicio() []serieDeServicio {
 			"1 si el servicio está corriendo según su último reporte, 0 si no. NO dice si ese reporte es reciente: para eso está musubi_fleet_service_last_report_seconds.",
 			"",
 			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
-				if sv.EstadoActual() == fleet.EstadoCorriendo {
+				switch sv.EstadoActual() {
+				case fleet.EstadoCorriendo:
 					return 1, true
+				case fleet.EstadoOcioso:
+					// OCIOSO NO SE EXPORTA, ni como 0 ni como 1 (A70). No es «no sé» —eso es
+					// `desconocido`— sino «la pregunta no aplica»: este servicio está apagado
+					// PORQUE NADIE LO PIDIÓ, y un 0 acá dice «se cayó».
+					//
+					// Es la misma regla que gobierna el resto del exportador, con el mismo
+					// motivo: la serie ausente deja a `ServicioCaido` sin nada que matchear, y
+					// un 0 la habría hecho sonar dieciséis veces por máquina Windows. Una
+					// alarma que suena sin que nada esté mal enseña a ignorar el canal.
+					//
+					// Cuando ese mismo servicio se muera de verdad, el agente lo reporta
+					// `fallado`, la serie aparece en 0, y la alerta dispara.
+					return 0, false
+				default:
+					return 0, true
 				}
-				return 0, true
 			}},
 		{"musubi_fleet_service_last_report_seconds",
 			"Segundos desde que la máquina reportó este servicio. AUSENTE si nunca lo reportó — un servicio declarado a mano y todavía sin muestras no tiene antigüedad, y un 0 diría «recién reportado».",

@@ -14,7 +14,7 @@
 >
 > **2026-08-29 (cierre del día)**: cerrados además **A56**, **A57**, **A58** y la **fase 4** entera, y abierta
 > la **fase 5** con sus dos primeros slices (**S13 · la cronología** y **S14 · el cruce con la memoria**), que dejó **A59**, **A60** y **A61** anotados el mismo día.
-> Quedan **15 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
+> Quedan **16 cabos**, y **ninguno sin dueño o sin una razón declarada de por qué no se hace**.
 >
 > **A59 se abrió y se cerró el mismo día**: la columna `origen` (migración 41) hace que la cronología
 > pueda decir qué disparó una regla y qué pidió una persona.
@@ -46,6 +46,8 @@
 
 | A68 | **Un agente que se quedó atrás es invisible hasta que alguien lo lee** | `agent_version` se guarda y `musubi_fleet_list` lo muestra —eso lo cerró un hallazgo anterior— pero **nada avisa**: no hay métrica ni alerta, así que un agente veinticuatro versiones atrás se ve idéntico a uno al día. **Medido el 2026-09-01**: con el cerebro en `0.130.0`, los dos Windows corrían `v0.106.0-28-gdf2ec21`, y se descubrió de casualidad al mirar otra cosa. El costo fue concreto: A67 se desplegó y **no puede correr en las dos máquinas para las que se escribió**, porque su binario no tiene la capacidad — y nada lo habría dicho. La versión NO puede ser una etiqueta de Prometheus (queda anotado en `fleet_prometheus.go`: la serie se re-etiquetaría sola en cada actualización, y las viejas quedarían huérfanas), así que la forma es un **booleano**: `musubi_fleet_device_agent_stale`, 1 cuando la versión del agente difiere de la del cerebro, sin llevar ninguna de las dos en una etiqueta. **AUSENTE en las máquinas sin agente** —un Tier B sondeado por SSH no tiene versión que comparar— por la misma regla que el resto del track. | **sin asignar** |
 
+| A69 | **Migrar al relay propio dejó afuera a todo cliente que no esté en la malla** | El relay escucha en `100.79.126.62`, una IP del tailnet, así que una máquina sin tailscale **no tiene por dónde llegar**. Hasta la migración, `gio` estaba en el servidor público de RustDesk y se alcanzaba desde cualquier lado; ahora sólo desde la malla. **Apareció el 2026-09-02, minutos después de cerrar A35**: una PC de logística que no puede entrar al tailnet dejó de ver a `gio` — el ID figura en su lista con el punto en naranja. No es una falla: es el costo de la decisión, que no estaba escrito. Las tres salidas, y cuál corresponde depende de dos datos que todavía no están: **(a)** si esa PC comparte LAN con algún nodo del tailnet → un *subnet router* la resuelve sin instalar nada ni tocar su config; **(b)** si no → exponer 21115-21117 del router de `musubi-server` a internet, que es una decisión de seguridad real (el relay queda alcanzable desde cualquier lado, protegido sólo por su clave); **(c)** o devolver esa máquina al servidor público, perdiendo el relay propio en ella. | **operador** |
+
 
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
@@ -73,6 +75,40 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-02 (bis) · `Automatic` no significa lo mismo en Windows que `enabled` en systemd.**
+
+Actualizar los dos agentes Windows encendió **dieciséis `ServicioCaido`** de golpe. Ninguno era
+real: `sppsvc`, `MapsBroker`, `edgeupdate`, los updaters de Google y Edge, `asus`. Todos
+**automáticos y apagados por diseño** — `sppsvc` corre cuando Windows valida la licencia y se
+apaga, `MapsBroker` sólo si alguien abre Mapas, los updaters cuando toca actualizar.
+
+**La primera explicación fue equivocada y conviene decirlo**: se leyó como «servicios manuales que
+no deberían reportarse», y el filtro que los descarta ya existía y estaba bien. Al medirlo, los
+cinco daban `StartMode=Auto`. El problema no era el filtro: era su premisa.
+
+`enabled` en systemd significa «arranca al boot y tiene que estar corriendo». `Automatic` en
+Windows **no significa eso**: un servicio puede declararse automático y ser *delayed* o
+*trigger-start*, y quedarse apagado hasta que algo lo despierte. El código estaba bien escrito
+para el sistema equivocado.
+
+**Lo que lo separa es un dato, no una heurística.** Medido en `gio`: los 8 automáticos detenidos
+tenían `ExitCode=0` y `ServiceSpecificExitCode=0`. Cero es «terminó bien»; 1067 es «se murió»;
+1077 es «nunca arrancó desde el boot». `Get-Service` no expone ese campo — `Win32_Service` sí, y
+en la misma llamada— así que se cambió de fuente.
+
+**Estado nuevo: `ocioso`**, que es «detenido POR DISEÑO». No emite `musubi_fleet_service_up` ni en
+0 ni en 1, que es la misma regla que gobierna el resto del exportador: un valor que no aplica no
+se exporta como cero. La serie ausente deja a `ServicioCaido` sin nada que matchear. Cuando ese
+mismo servicio se muera de verdad, el agente lo reporta `fallado`, la serie aparece en 0, y la
+alerta dispara — lo que desaparece es el ruido, no la señal. Y `ocioso` no cuenta como caído para
+las políticas, así que ninguna acción automática se dispara contra un servicio que está bien.
+
+**Tres sabotajes ejecutados, y el segundo enseñó algo.** El primer intento de sabotear la regla
+del ExitCode **no aplicó el cambio** —el `python` no matcheó— y no imprimió nada; el segundo
+intento **no compiló** (`declared and not used`), así que la prueba tampoco corrió. Recién el
+tercero, escrito para compilar, la hizo fallar. *Un sabotaje que no llega a ejecutarse se ve
+igual que una guarda que funciona*, y las dos veces lo que se vio fue silencio.
 
 **2026-09-02 · A35 CERRADO — las dos máquinas en el relay propio, y el instalador tenía un bicho.**
 

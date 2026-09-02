@@ -837,3 +837,58 @@ func TestAuditarNoAflojaElKillSwitchParaOperar(t *testing.T) {
 		t.Error("la variante de auditoría concedió `shell` en un tier que no lo admite: aflojó más que la revocación")
 	}
 }
+
+// UN SERVICIO `ocioso` NO EMITE `service_up`, NI EN 0 NI EN 1 (A70).
+//
+// No es «no sé» —eso es `desconocido`— sino «la pregunta no aplica»: está apagado PORQUE NADIE LO
+// PIDIÓ. Un 0 acá dice «se cayó», y `ServicioCaido` dispara sobre cualquier `service_up == 0`.
+//
+// Medido en producción el 2026-09-02: al actualizar los agentes Windows aparecieron DIECISÉIS
+// alarmas de servicios que estaban perfectos —`sppsvc`, `MapsBroker`, `edgeupdate`, los updaters—
+// todos automáticos y apagados por diseño, los ocho con ExitCode 0. Una alarma que suena sin que
+// nada esté mal es cómo se le enseña a alguien a ignorar el canal entero.
+//
+// LA SERIE AUSENTE NO ES UN AGUJERO: cuando ese mismo servicio se muera de verdad, el agente lo
+// reporta `fallado`, la serie aparece en 0, y la alerta dispara. Lo que desaparece es el ruido.
+//
+// Sabotaje: devolver (0, true) para EstadoOcioso en seriesDeServicio → falla acá.
+func TestUnServicioOciosoNoEmiteLaSerieDeUp(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	cuerpo := cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "vivo.service", Clase: "windows", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "MapsBroker", Clase: "windows", Salud: saludViva(fleet.EstadoOcioso)},
+		fleet.ReporteServicio{Nombre: "roto.service", Clase: "windows", Salud: saludViva(fleet.EstadoFallado)},
+	)
+	if code, body := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpo); code != http.StatusOK {
+		t.Fatalf("el latido con servicios devolvió %d: %s", code, body)
+	}
+
+	out := exportar(t, s, nil)
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "musubi_fleet_service_up{") && strings.Contains(l, `"MapsBroker"`) {
+			t.Errorf("se exportó service_up para un servicio ocioso: %q — eso hace sonar ServicioCaido sin que nada esté mal", l)
+		}
+	}
+	// LOS DOS CONTROLES, sin los cuales un exportador que no emitiera NADA pasaría lo de arriba.
+	if !strings.Contains(out, `musubi_fleet_service_up{`) {
+		t.Fatal("no se exportó ninguna serie de service_up: la prueba no probaría nada")
+	}
+	var vivo, roto bool
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "musubi_fleet_service_up{") {
+			if strings.Contains(l, `"vivo.service"`) && strings.HasSuffix(l, " 1") {
+				vivo = true
+			}
+			if strings.Contains(l, `"roto.service"`) && strings.HasSuffix(l, " 0") {
+				roto = true
+			}
+		}
+	}
+	if !vivo {
+		t.Error("un servicio corriendo dejó de exportar up=1")
+	}
+	if !roto {
+		t.Error("un servicio FALLADO dejó de exportar up=0: ése es justo el que la alerta tiene que ver")
+	}
+}

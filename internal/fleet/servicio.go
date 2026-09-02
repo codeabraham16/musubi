@@ -44,6 +44,19 @@ const (
 	EstadoDetenido    EstadoServicio = "detenido"
 	EstadoFallado     EstadoServicio = "fallado"
 	EstadoDesconocido EstadoServicio = "desconocido"
+	// EstadoOcioso es «detenido POR DISEÑO»: nadie lo pidió y por eso no corre. No es una falla,
+	// y confundirlo con `detenido` es lo que llenó el canal de alarmas falsas (A70).
+	//
+	// EXISTE PORQUE WINDOWS LO NECESITA. En systemd, `enabled` significa «arranca al boot y
+	// tiene que estar corriendo». En Windows, `Automatic` NO significa eso: un servicio
+	// declarado automático puede ser *delayed* o *trigger-start* y quedarse apagado hasta que
+	// algo lo despierte. Medido en `gio` el 2026-09-02: 8 de 102 automáticos detenidos, los ocho
+	// con `ExitCode=0` — o sea apagados limpiamente, ninguno roto.
+	//
+	// Lo que lo distingue de `detenido` es un dato, no una heurística: el código de salida. Cero
+	// es «terminó bien»; cualquier otro (1067, 1077…) es «se murió» o «nunca arrancó», y ésos
+	// siguen siendo `fallado`.
+	EstadoOcioso EstadoServicio = "ocioso"
 )
 
 // Techos. Todos existen por la misma razón que MuestraMaxBytes: lo que entra por la puerta del
@@ -202,9 +215,9 @@ type ReporteServicio struct {
 // servicio que se deja de ver.
 func (s SaludServicio) Valida() error {
 	switch s.Estado {
-	case EstadoCorriendo, EstadoDetenido, EstadoFallado, EstadoDesconocido:
+	case EstadoCorriendo, EstadoDetenido, EstadoFallado, EstadoDesconocido, EstadoOcioso:
 	default:
-		return fmt.Errorf("estado de servicio desconocido: %q (esperaba corriendo, detenido, fallado o desconocido)", s.Estado)
+		return fmt.Errorf("estado de servicio desconocido: %q (esperaba corriendo, detenido, fallado, ocioso o desconocido)", s.Estado)
 	}
 	if s.Tomada.IsZero() {
 		return errors.New("la salud no dice cuándo se tomó: sin `tomada` no hay forma de saber si es de hace un minuto o de hace una semana")
