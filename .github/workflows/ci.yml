@@ -11,6 +11,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A MANO, SOBRE CUALQUIER RAMA. Acotar `push` a main fue correcto —evita la corrida doble en
+  # cada PR— pero dejó un efecto colateral que costó 149 commits: una rama de larga vida SIN PR es
+  # invisible para CI, y si su PR está en conflicto GitHub no puede construir `refs/pull/N/merge`,
+  # así que el evento `pull_request` tampoco nace y el PR muestra CERO checks. No rojo: nada.
+  #
+  # Con esto se puede pedir la suite sobre el HEAD de la rama sin depender de que el merge se
+  # pueda calcular:  gh workflow run ci.yml --ref <rama>
+  #
+  # OJO: el trigger tiene que estar declarado en la rama DEFAULT para que la API lo acepte, Y en
+  # la rama que se despacha, porque `--ref` corre el ci.yml de ESA rama. Declararlo en una sola da
+  # 422 «Workflow does not have workflow_dispatch trigger».
+  workflow_dispatch:
 
 jobs:
   test:
@@ -30,17 +42,27 @@ jobs:
         run: go build ./...
 
       # `-timeout 20m` es EXPLÍCITO porque el default de Go —10 min POR PAQUETE— dejó de alcanzar.
-      # Medido en la corrida verde de main @67f2d80 (2026-08-11), con -race y cobertura:
-      #     internal/memory  372,9 s   internal/mcp  246,7 s   cmd/musubi  68,8 s
-      # O sea que internal/memory usa el 62 % de los 600 s en un runner sano. Un runner 1,6× más
-      # lento —normal en infraestructura compartida— lo pasa, y el rojo que produce no dice «hay un
-      # bug» sino «hoy la máquina estaba cargada». Ese rojo es peor que no tener CI: entrena a
-      # relanzar sin leer, y el día que el fallo sea real nadie lo va a mirar.
       #
-      # 20 min deja 3,2× de margen sobre lo medido y SIGUE atrapando un deadlock de verdad (un
-      # cuelgue quema 20 min en vez de 10, y es un evento raro). Subir el techo NO arregla que
-      # internal/memory tarde 6 minutos: eso se mide y se ataca aparte. Lo que arregla es que el
-      # rojo vuelva a significar algo.
+      # MEDICIÓN VIGENTE (2026-08-29, tras A45), corrida verde completa con -race en 8m12s:
+      #     internal/memory  454 s   internal/mcp  379 s   cmd/musubi  136 s
+      # El más lento usa el 38 % de los 1.200 s, o sea 2,6× de margen. Un runner 2× más lento
+      # —normal en infraestructura compartida— lo pasa, y el rojo que produce no diría «hay un bug»
+      # sino «hoy la máquina estaba cargada». Ese rojo es peor que no tener CI: entrena a relanzar
+      # sin leer, y el día que el fallo sea real nadie lo va a mirar.
+      #
+      # LA MEDICIÓN ANTERIOR (main @67f2d80, 2026-08-11) decía memory 372,9 s / mcp 246,7 s, y para
+      # el 2026-08-29 había crecido a más de 1.200 s: la suite NO TERMINABA en 30 minutos y nadie lo
+      # miraba porque `go test ./...` sin -race pasaba entero. La causa no era una carrera —cero
+      # `DATA RACE` reportados— sino que cada prueba aplicaba las 39 migraciones de cero, con
+      # modernc.org/sqlite corriendo ~10× más lento bajo el detector. Lo arregló A45: las pruebas
+      # comparten una plantilla ya migrada (internal/memory/plantilla.go).
+      #
+      # ESTOS NÚMEROS SE REMIDEN CUANDO SE TOCAN LAS MIGRACIONES. Un comentario que justifica un
+      # timeout con datos viejos es peor que ninguno: el de arriba envejeció tres veces sin que
+      # nadie lo notara, y el techo dejó de significar lo que dice.
+      #
+      # 20 min SIGUE atrapando un deadlock de verdad (un cuelgue quema 20 min en vez de 10, y es un
+      # evento raro). Subir el techo nunca fue el arreglo; medir por qué tardaba, sí.
       - name: Test (race + coverage)
         run: go test -race -timeout 20m -coverprofile=coverage.out ./...
 
@@ -65,6 +87,26 @@ jobs:
           echo "Cobertura total: ${total}%"
           awk -v t="$total" 'BEGIN { if (t+0 < 70.0) { print "ERROR: cobertura " t "% < piso 70%"; exit 1 } }'
 
+
+  # govulncheck EN SU PROPIO JOB, y a propósito no bloqueante.
+  #
+  # Estaba adentro de `test`, el job canónico. Eso lo vuelve un rojo que LLEGA SOLO: se pone rojo
+  # el día que se publica un CVE en una dependencia, sin que el PR haya tocado una línea. Un check
+  # obligatorio que se pone rojo por su cuenta enseña a relanzar sin leer, y ahí deja de proteger
+  # de nada — es el mismo mecanismo por el que `bench-scale` lleva siete semanas en rojo sin que
+  # nadie mire su log.
+  #
+  # Separado, `test` puede exigirse como check obligatorio sin heredar esa inestabilidad, y esto
+  # sigue avisando. `continue-on-error` porque un CVE nuevo es una noticia, no un defecto de este
+  # cambio: lo que corresponde es leerlo y decidir, no que frene un merge ajeno al problema.
+  vulns:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
       - name: Vulnerability scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
