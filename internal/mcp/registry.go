@@ -958,7 +958,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_code_graph",
-				Description: "Consulta el grafo de código SIN leer archivos (Track 20). Con 'symbol' (node_key 'path#kind:name') devuelve el nodo + sus callees (a quién llama), callers (quién lo llama) e imports de su archivo. Con 'path' devuelve los símbolos que contiene el archivo + sus imports. Marca 'stale' si el archivo cambió desde que se indexó (conviene re-indexar). Salida compacta (claves, no cuerpos): la forma barata en tokens de navegar el código.",
+				Description: "Consulta el grafo de código SIN leer archivos (Track 20). Con 'symbol' (node_key 'path#kind:name') devuelve el nodo + sus callees (a quién llama), callers (quién lo llama) e imports de su archivo. Con 'path' devuelve los símbolos que contiene el archivo + sus imports. Marca 'stale' si el archivo cambió desde que se indexó (conviene re-indexar). Salida compacta (claves, no cuerpos): la forma barata en tokens de navegar el código. Si NO encuentra lo pedido, dice POR QUÉ ('hint'): si el archivo está indexado y qué símbolos sí tiene, si existe en disco, y de qué commit es el índice ('indexed_head') — un miss en otra rama no es un grafo roto.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
