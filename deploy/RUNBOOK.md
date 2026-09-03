@@ -915,3 +915,40 @@ entorno: el que los sube tiene que medir qué le hace a la cardinalidad de Prome
 **Lo que NO es:** un problema de rendimiento del cerebro. El recorte ocurre al armar la respuesta,
 así que el scrape sigue siendo rápido — ése es justamente el motivo por el que el techo existe y
 por el que su efecto es invisible sin esta alerta.
+
+## MusubiBackupLocalStale
+
+No hay marca de snapshot local, o la que hay es más vieja que 26 horas. La alerta lee
+`.last_snapshot` en `$MUSUBI_HOME/.musubi/backups/`, que el guion de backup escribe al terminar.
+
+**Antes de tocar el timer, comprobá si el snapshot EXISTE.** El valor `-1` significa «no hay
+marca», y eso no es lo mismo que «no hay backup»: pasó el 2026-09-03 y llevó un rato entenderlo.
+
+```
+ls -lt ~/musubi-brain/.musubi/backups/memory.db.* | head -3   # ¿hay snapshot reciente?
+ls -la ~/musubi-brain/.musubi/backups/.last_snapshot          # ¿está la marca?
+systemctl list-timers --all | grep backup                      # ¿corrió el timer?
+```
+
+Tres desenlaces, y sólo uno es un backup roto:
+
+1. **Hay snapshot reciente y NO hay marca** → el backup anda; lo que está viejo es el **guion
+   desplegado**. `/usr/local/bin/musubi-backup` es una copia, no un enlace al repo, y una versión
+   anterior a `fc76d9e` no escribe la marca. Comparalo y redesplegalo:
+
+   ```
+   sha256sum deploy/musubi-backup.sh /usr/local/bin/musubi-backup   # ¿coinciden?
+   sudo install -m 0755 deploy/musubi-backup.sh /usr/local/bin/musubi-backup
+   ```
+
+   Es el caso que se vio primero, y la alerta tenía razón en un sentido que su texto no dice: lo
+   que detectó fue **deriva del despliegue**, no un backup caído.
+
+2. **No hay snapshot y el timer no corrió** → eso sí es un backup roto.
+   `systemctl status musubi-backup.service` y `journalctl -u musubi-backup` dicen por qué.
+
+3. **Hay marca y es vieja** → el timer dejó de dispararse, o el guion falla antes de escribirla.
+
+**Lo que NO cubre esta alerta:** que el backup salga de la máquina. Eso es
+`MusubiBackupOffhostStale`, y hoy vale `-1` para siempre porque el destino off-host es local por
+decisión (A37). Un snapshot fresco al lado de la base no sobrevive a que se pierda el disco.

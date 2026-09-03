@@ -32,7 +32,7 @@ PORT="${BRAIN_ADDR##*:}"
 # script (main no tiene branch protection), así que no verificaría nada. El pin vive acá, en el
 # archivo que el operador ya confía porque lo corre con sudo desde su clone. Si cambiás
 # deploy/musubi-backup.sh, actualizá este valor: sha256sum deploy/musubi-backup.sh
-BACKUP_SHA256="03454540dc1e6c5ac645a576b52a1569daa26cd213be510aab2872e1c4f0cb1f"
+BACKUP_SHA256="631b9bdbe55851911ec02f46724595eddcbf70a35973a6bfe692229024e44498"
 BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh"
 BACKUP_BIN="/usr/local/bin/musubi-backup"
 # Directorio del propio instalador: cuando se corre desde el clone (sudo ./install-musubi-brain.sh),
