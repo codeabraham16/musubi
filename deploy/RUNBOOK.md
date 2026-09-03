@@ -757,16 +757,31 @@ regla y no actualizó el conteo del archivo que la custodia. Eso lo detecta la s
 (`TestCadaArchivoDeReglasCustodiaElConteoDelOtro`) antes de llegar a producción, así que si suena
 en producción es que se desplegó sin correr las pruebas.
 
-## MaquinaSeReiniciaSola
+## MaquinaSeReinicio
 
-La máquina se reinició **dos o más veces en 24 horas** sin que nadie lo pidiera.
+La máquina arrancó hace menos de media hora. Si nadie pidió ese reinicio, es un corte.
 
 Esta regla existe porque el caso real pasó desapercibido. El 2026-09-03, `davantis-1` llevaba
 **trece apagones sucios en diez días** y la flota no había dicho nada: `musubi_fleet_device_uptime_seconds`
 se exportaba desde siempre y ninguna regla lo miraba. `MaquinaCaida` sí disparó cada vez, y ahí
 está la trampa —**se resolvía sola a los pocos minutos**, cuando la máquina volvía—. Trece avisos
-que aparecen y se apagan solos se leen como ruido de red. El patrón sólo existe si alguien lo
-cuenta.
+que aparecen y se apagan solos se leen como ruido de red.
+
+**Esta alerta avisa de UN reinicio, no del patrón**, y conviene saberlo antes de leerla: la versión
+que contaba (`resets(uptime[24h]) >= 2`) se midió contra los datos reales antes de desplegarla y
+**no habría disparado nunca** —máximo 1 en diez días, porque los cortes de esa máquina caen a 44
+horas uno del otro—. El patrón hay que contarlo, y abajo está cómo.
+
+**Para contar los anteriores**, en Prometheus:
+
+```
+resets(musubi_fleet_device_uptime_seconds{device="<maquina>"}[7d])
+```
+
+Ojo con dos cosas: sólo cuenta lo que el TSDB tenga guardado (si Prometheus se reinició, su
+historia arranca ahí, sin importar la retención declarada), y **un corte largo no cuenta como
+reinicio** —la serie se pone stale y al volver no hay caída que ver—. El registro de eventos de la
+máquina es siempre la fuente más completa; lo de abajo es cómo preguntárselo.
 
 **Lo primero: distinguir un reinicio LIMPIO de un corte.** No es lo mismo y se pregunta distinto
 según el sistema.
