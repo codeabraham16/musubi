@@ -558,13 +558,82 @@ func validBearer(authHeader, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// proxiesConfiables son los CIDR desde los que se acepta `X-Forwarded-For`. Vacío ⇒ no se lee el
+// header nunca, que es el default y el único comportamiento seguro sin configurar.
+//
+// Es una variable de paquete y no un campo del servidor porque `clientIP` la consultan cuatro
+// puertas distintas (el MCP, el latido, el resultado y la shell del agente) y pasarla por cada
+// firma haría que la próxima puerta se olvide. Se fija UNA vez al arrancar.
+var proxiesConfiables []*net.IPNet
+
 // clientIP devuelve la IP del cliente (sin el puerto) para el lockout anti fuerza-bruta.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ EL HEADER SE LEE SÓLO DESDE UN ORIGEN DECLARADO
+//
+// `X-Forwarded-For` lo escribe QUIEN LLAMA. Leerlo sin acotar el origen convierte el lockout en
+// decorativo: quien está probando tokens manda una IP inventada distinta en cada intento y no se
+// bloquea nunca. Por eso el default es no mirarlo, y encenderlo exige nombrar los CIDR.
+//
+// Y se recorre DE DERECHA A IZQUIERDA saltando proxies confiables. La cadena es
+// `cliente, proxy1, proxy2`: el primero por la izquierda lo puso el cliente y puede ser mentira
+// entera; el primero por la DERECHA que no sea un proxy confiable es el último salto que un
+// proxy nuestro vio de verdad, y es lo más cerca del cliente real que se puede afirmar.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
+	if len(proxiesConfiables) == 0 || !ipConfiable(host) {
+		return host
+	}
+	partes := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(partes) - 1; i >= 0; i-- {
+		cand := strings.TrimSpace(partes[i])
+		if cand == "" || net.ParseIP(cand) == nil {
+			continue // basura en el header: se ignora, no se confía
+		}
+		if !ipConfiable(cand) {
+			return cand
+		}
+	}
+	// Todos los saltos son proxies nuestros (o el header vino vacío): la IP directa es lo mejor
+	// que hay, y es la de un proxy — que es la verdad, aunque no sirva para distinguir clientes.
 	return host
+}
+
+// ipConfiable dice si una IP está en alguno de los CIDR declarados.
+func ipConfiable(ip string) bool {
+	dir := net.ParseIP(ip)
+	if dir == nil {
+		return false
+	}
+	for _, red := range proxiesConfiables {
+		if red.Contains(dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// fijarProxiesConfiables parsea los CIDR de la config. Fail-closed: un CIDR ilegible es error de
+// arranque y no una lista a medias, por la misma razón que el resto del arranque — una lista a
+// medias deja el lockout mirando la IP equivocada sin que nadie se entere.
+func fijarProxiesConfiables(cidrs []string) error {
+	redes := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, red, err := net.ParseCIDR(c)
+		if err != nil {
+			return fmt.Errorf("service.trusted_proxies: %q no es un CIDR válido (ej: 10.0.0.0/8): %w", c, err)
+		}
+		redes = append(redes, red)
+	}
+	proxiesConfiables = redes
+	return nil
 }
 
 // bearerToken extrae el token de un header "Authorization: Bearer <token>" ("" si no
@@ -619,6 +688,12 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// solo el bearer legacy) ⇒ un token con acceso TOTAL a todos los proyectos. En un bind
 	// no-loopback eso es infra compartida SIN aislamiento por miembro. StrictTenancy lo rechaza al
 	// arranque (fail-closed opt-in); apagado, un WARNING siempre lo hace visible.
+	// Los proxies confiables se fijan ANTES de servir: el lockout los consulta desde la primera
+	// request, y un CIDR ilegible tiene que impedir arrancar, no descubrirse con la primera IP
+	// mal atribuida.
+	if err := fijarProxiesConfiables(cfg.TrustedProxies); err != nil {
+		return err
+	}
 	if isRemoteLegacyTenancy(loopback, registry) {
 		if cfg.StrictTenancy {
 			return fmt.Errorf("strict_tenancy: un bind no-loopback (%q) exige un registro de principals con al menos un miembro; configurá principals.yaml (musubi token new) o desactivá service.strict_tenancy a conciencia", cfg.Addr)
