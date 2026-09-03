@@ -105,6 +105,11 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 	// Primero vencer lo viejo. Se hace acá y no en un barrido de fondo porque el momento en que
 	// importa es JUSTO antes de entregar: es la única ventana donde un comando podría colarse.
 	limite := ahora.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
+	// Lo que vence sin entregarse también lleva su secreto encima, y ya no va a servirle a nadie:
+	// se tapa ANTES de marcarlo, en la misma transacción, por la misma razón que abajo.
+	if err := taparPantallasPendientesVencidas(tx, deviceID, limite); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(
 		`UPDATE device_commands SET estado = ?, terminado = ?, error = ?
 		  WHERE device_id = ? AND estado = ? AND creado < ?`,
@@ -143,6 +148,16 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 		); err != nil {
 			return nil, fmt.Errorf("error al marcar entregado %q: %w", out[i].ID, err)
 		}
+		// EL SECRETO SE TAPA EN LA MISMA TRANSACCIÓN QUE ENTREGA (A74). La contraseña de una
+		// sesión de pantalla viaja en el argv y el agente la acaba de recibir en `out`: desde este
+		// instante la fila no la necesita para nada —quien cierra la sesión lee sólo argv[0] y
+		// argv[1], que se conservan— y dejarla cruda en la tabla era una copia en claro que ninguna
+		// superficie de lectura mostraba pero cualquier `sqlite3` sí. Va acá y no en una poda
+		// diferida porque la sesión dura horas y una poda a los treinta días llega tarde por
+		// definición.
+		if err := taparArgvConSecreto(tx, out[i].ID, out[i].Argv); err != nil {
+			return nil, err
+		}
 		out[i].Estado = fleet.EstadoEntregado
 		out[i].Entregado = ahora
 	}
@@ -150,6 +165,68 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 		return nil, fmt.Errorf("error al confirmar la entrega de comandos: %w", err)
 	}
 	return out, nil
+}
+
+// taparArgvConSecreto reescribe el argv GUARDADO de un comando que lleva secreto a la forma de
+// fleet.ArgvDeBitacora, que conserva la operación y el id de sesión y tapa el resto.
+//
+// Se acota por argv[0] EXACTO y no por prefijo `musubi:`: de las operaciones internas sólo la de
+// pantalla lleva una contraseña, y tapar las demás (avisar, preguntar) borraría el texto que se
+// le mostró al usuario — que es justo lo que la cronología necesita para explicar qué pasó. El
+// argv en memoria NO se toca: el llamador ya lo tiene y se lo debe al agente tal cual.
+func taparArgvConSecreto(tx *sql.Tx, id string, argv []string) error {
+	if len(argv) == 0 || argv[0] != fleet.OpPantalla {
+		return nil
+	}
+	texto, err := fleet.ArgvComoTexto(fleet.ArgvDeBitacora(argv))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE device_commands SET argv = ? WHERE id = ?`, texto, id); err != nil {
+		return fmt.Errorf("error al tapar la contraseña de pantalla del comando %q: %w", id, err)
+	}
+	return nil
+}
+
+// taparPantallasPendientesVencidas tapa el secreto de las operaciones de pantalla que están por
+// vencer sin haberse entregado. El prefijo del LIKE es sólo un filtro barato para no traer la
+// cola entera de una máquina que estuvo caída; la decisión la toma argv[0], exacto, en Go.
+func taparPantallasPendientesVencidas(tx *sql.Tx, deviceID, limite string) error {
+	prefijo, err := fleet.ArgvComoTexto([]string{fleet.OpPantalla})
+	if err != nil {
+		return err
+	}
+	// `["musubi:pantalla"]` → `["musubi:pantalla",%`: el cierre se cambia por la coma que sigue
+	// al primer elemento cuando hay más de uno.
+	prefijo = strings.TrimSuffix(prefijo, "]") + ",%"
+	rows, err := tx.Query(
+		`SELECT id, argv FROM device_commands
+		  WHERE device_id = ? AND estado = ? AND creado < ? AND argv LIKE ?`,
+		deviceID, string(fleet.EstadoPendiente), limite, prefijo)
+	if err != nil {
+		return fmt.Errorf("error al buscar pantallas vencidas de %q: %w", deviceID, err)
+	}
+	type fila struct{ id, argv string }
+	var vencidas []fila
+	for rows.Next() {
+		var f fila
+		if err := rows.Scan(&f.id, &f.argv); err != nil {
+			rows.Close()
+			return fmt.Errorf("error al escanear una pantalla vencida: %w", err)
+		}
+		vencidas = append(vencidas, f)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error al recorrer las pantallas vencidas de %q: %w", deviceID, err)
+	}
+	rows.Close()
+	for _, f := range vencidas {
+		if err := taparArgvConSecreto(tx, f.id, fleet.ArgvDesdeTexto(f.argv)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GuardarResultado registra cómo salió un comando.
