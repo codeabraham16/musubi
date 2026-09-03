@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"musubi/internal/fleet"
 
@@ -83,7 +84,13 @@ type Principal struct {
 	// NO-NIL ⇒ EXHAUSTIVA: una máquina sin entrada y sin "*" de respaldo no permite nada. La
 	// sección entera es el opt-in; una vez adentro, no hay huecos silenciosos.
 	ExecAllow map[string][]string
-	hash      string // hex del SHA-256 del token (nunca el token crudo)
+	// Expires es cuándo deja de valer esta credencial. CERO ⇒ no vence.
+	//
+	// Un token que vale para siempre es lo que un auditor mira primero (SOC2 CC6.1, ISO A.5.17):
+	// una credencial filtrada hace tres meses sigue abriendo la puerta hoy, y la única forma de
+	// cerrarla es que alguien se acuerde de borrar la línea a mano.
+	Expires time.Time
+	hash    string // hex del SHA-256 del token (nunca el token crudo)
 }
 
 // capsFromRole traduce el rol histórico al par (alcance, autoridad). Es la tabla de
@@ -147,6 +154,14 @@ type principalEntry struct {
 	//	  nas-casa: ["systemctl", "journalctl"]
 	//	  "*":      ["uptime", "df"]
 	ExecAllow map[string][]string `yaml:"fleet_exec_allow,omitempty"`
+	// Expires es la fecha de vencimiento de la credencial, en RFC3339 (`2026-12-31T23:59:59Z`).
+	// Opcional; AUSENTE ⇒ no vence, que es como se comportaba todo el registro hasta hoy y por
+	// eso ningún principals.yaml existente cambia de significado al estrenar esto.
+	//
+	// Es texto y no time.Time acá a propósito: una fecha ilegible tiene que poder DISTINGUIRSE
+	// de una ausente, y `yaml` con un time.Time convierte «basura» en «cero» sin decir nada —
+	// o sea, convierte un error de configuración en una credencial eterna.
+	Expires string `yaml:"expires,omitempty"`
 }
 
 type principalsFileYAML struct {
@@ -258,6 +273,17 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		if err != nil {
 			return nil, err
 		}
+		// UNA FECHA ILEGIBLE ES UN ERROR DE ARRANQUE, no un principal sin vencimiento.
+		//
+		// Es la misma regla fail-closed que gobierna el resto de este archivo, y acá importa más
+		// que en ningún otro campo: un `expires: 2026-13-45` que se ignorara en silencio
+		// produciría exactamente lo contrario de lo que quiso quien lo escribió — una credencial
+		// ETERNA donde alguien pidió una que venza. El modo de falla de un typo tiene que ser que
+		// el cerebro no arranque, no que la puerta quede abierta para siempre.
+		vence, err := parsearVencimiento(name, p.Expires)
+		if err != nil {
+			return nil, err
+		}
 		reg.principals = append(reg.principals, Principal{
 			Name:      name,
 			ProjectID: projectID,
@@ -266,6 +292,7 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 			Write:     write,
 			Fleet:     grants,
 			ExecAllow: permitidos,
+			Expires:   vence,
 			hash:      h,
 		})
 	}
@@ -411,6 +438,29 @@ func (r *PrincipalRegistry) porNombre(nombre string) (*Principal, bool) {
 // resolve autentica un bearer contra el registro. Devuelve el principal y true si el token
 // matchea una entrada; el token legacy matchea como principal admin ("legacy"). La
 // comparación es en tiempo constante (no filtra por timing qué entrada matcheó).
+// parsearVencimiento lleva el `expires:` del YAML al dominio. Vacío ⇒ cero ⇒ no vence.
+func parsearVencimiento(nombre, valor string) (time.Time, error) {
+	valor = strings.TrimSpace(valor)
+	if valor == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, valor)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("principal %q: `expires: %s` no es una fecha RFC3339 (ej: 2026-12-31T23:59:59Z): %w", nombre, valor, err)
+	}
+	return t, nil
+}
+
+// ahoraParaVencimiento es el reloj del registro, como variable para que las pruebas puedan fijarlo.
+// Una prueba de vencimiento contra el reloj real o duerme, o depende de fechas escritas a mano que
+// caducan — y una prueba que empieza a fallar sola en 2027 se borra en vez de arreglarse.
+var ahoraParaVencimiento = time.Now
+
+// Vencida dice si la credencial ya no vale. Cero ⇒ nunca vence.
+func (p Principal) Vencida(ahora time.Time) bool {
+	return !p.Expires.IsZero() && !ahora.Before(p.Expires)
+}
+
 func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 	if token == "" {
 		return nil, false
@@ -423,6 +473,15 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 		}
 	}
 	if match != nil {
+		// EL VENCIMIENTO SE MIRA ACÁ Y NO EN LA COMPUERTA: acá es donde una credencial deja de
+		// ser una identidad. Mirarlo más arriba dejaría a cada llamador con la obligación de
+		// acordarse, y el que se olvide no falla — pasa.
+		//
+		// Devuelve el MISMO (nil, false) que un token desconocido, a propósito: distinguir
+		// «vencido» de «no existe» le diría a quien prueba tokens que ése existió alguna vez.
+		if match.Vencida(ahoraParaVencimiento()) {
+			return nil, false
+		}
 		return match, true
 	}
 	if r.legacyHash != "" && subtle.ConstantTimeCompare([]byte(h), []byte(r.legacyHash)) == 1 {
