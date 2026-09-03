@@ -566,7 +566,11 @@ else
 fi
 
 if [ -z "$VER_VIVA" ]; then
-  gris "no se pudo preguntar la versión del cerebro (\`musubi version\`); queda sin comparar"
+  # `dudoso`, no `gris`: el encabezado promete «sale 0 si todo coincide Y TODO SE PUDO PREGUNTAR».
+  # Con `gris` esto salía 0 sin haber comparado nada — el mismo falso verde que el resto del script
+  # cierra en todos sus otros caminos, colado justo en el último. No poder preguntar la versión es
+  # grave por sí solo: es el único chequeo que dice si el binario que corre es el que se desplegó.
+  dudoso "no se pudo preguntar la versión del cerebro (\`musubi version\`): no se comparó contra el repo ($VER_REPO). Si es por ssh, probá \`MUSUBI_SSH=<host>\`; si es local, que \`musubi\` esté en el PATH del que corre esto"
 else
   # Se compara el NÚCLEO, por lo mismo que agent_stale (A68): el cerebro se redespliega varias
   # veces por día desde commits distintos del mismo release, y comparar commits daría rojo siempre.

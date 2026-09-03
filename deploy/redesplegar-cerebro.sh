@@ -28,6 +28,10 @@ set -uo pipefail
 log(){ printf '\033[36m▶ %s\033[0m\n' "$*"; }
 ok(){  printf '\033[32m✓ %s\033[0m\n' "$*"; }
 aviso(){ printf '\033[33m! %s\033[0m\n' "$*"; }
+# Código de salida del redespliegue. Se pone en 1 si el verificador divergió o no pudo mirar: el
+# binario queda desplegado igual (por eso no se aborta), pero terminar en 0 sería decir que el
+# redespliegue salió bien cuando su propia comprobación dice que no, o que no se sabe.
+SALIDA=0
 die(){ printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 NUEVO="${1:-}"; SHA_ESPERADO="${2:-}"
@@ -155,7 +159,17 @@ echo
 VERIFICAR="$(dirname "${BASH_SOURCE[0]}")/verificar-despliegue.sh"
 if [[ -x "$VERIFICAR" ]]; then
   echo "─── comparando las reglas de alerta contra el repo ───"
-  "$VERIFICAR" || aviso "las reglas de alerta que corren NO son las del repo (ver arriba). El binario sí quedó desplegado."
+  # Los dos códigos del verificador dicen cosas DISTINTAS y colapsarlos era afirmar de más: con 2
+  # («no pude preguntar») el mensaje viejo aseguraba que las reglas NO eran las del repo, cuando lo
+  # único cierto es que nadie las miró. Y como `aviso` sólo imprime, este redespliegue terminaba en
+  # 0 en los dos casos: un redespliegue que dejó las reglas divergiendo se leía como exitoso.
+  "$VERIFICAR"; RC_VERIF=$?
+  case "$RC_VERIF" in
+    0) ;;
+    1) SALIDA=1; aviso "las reglas de alerta que corren NO son las del repo (ver arriba). El binario SÍ quedó desplegado; lo que falta es \`deploy/docker/preparar.sh\` y recargar Prometheus." ;;
+    2) SALIDA=1; aviso "NO se pudo verificar el despliegue (ver los «?» de arriba): no es que esté mal, es que nadie lo miró. El binario SÍ quedó desplegado. Resolvé lo que pide cada «?» y volvé a correr \`$VERIFICAR\`." ;;
+    *) SALIDA=1; aviso "el verificador terminó con un código inesperado ($RC_VERIF). El binario SÍ quedó desplegado, pero el despliegue quedó SIN verificar." ;;
+  esac
 else
   aviso "Falta comparar las reglas de alerta contra el repo. Desde la máquina que lo tiene:"
   echo "    MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh"
@@ -168,3 +182,7 @@ echo "    cp -a $RESPALDO $BASE && rm -f $BASE-wal $BASE-shm && chown musubi:mus
 echo "    systemctl start ${SERVICIOS[*]}"
 echo
 aviso "Borralos recién cuando estés seguro: el esquema NO vuelve solo, y sin ese .db no hay vuelta."
+
+# El exit va DESPUÉS del punto de retorno a propósito: quien corre esto necesita las instrucciones
+# de vuelta atrás en pantalla aunque la verificación haya salido mal — sobre todo si salió mal.
+exit "$SALIDA"
