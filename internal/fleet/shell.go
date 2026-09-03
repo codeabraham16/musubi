@@ -52,6 +52,31 @@ const (
 	ShellCerrada  EstadoShell = "cerrada"  // terminó (por quien la abrió, o por el otro lado)
 	ShellVencida  EstadoShell = "vencida"  // la mató un techo: vida o inactividad
 	ShellFallida  EstadoShell = "fallida"  // no se pudo abrir
+
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// LOS TRES ESTADOS DEL EJE DE CONSENTIMIENTO (A75), CALCADOS DE LA PANTALLA
+	//
+	// Una máquina en `pide` no da un prompt hasta que quien la está usando diga que sí, y eso
+	// parte la apertura en DOS pedidos: uno que pregunta y otro que conecta. Los nombres son los
+	// mismos que en SesionPantalla a propósito —`esperando_permiso`, `sin_permiso`— porque
+	// SesionViva.Abierta los mira por su TEXTO para no dibujar a nadie adentro de una máquina
+	// donde todavía nadie entró. Dos vocabularios para el mismo estado dejarían ese panel
+	// mintiendo en la mitad de sus filas.
+
+	// ShellEsperandoPermiso es un `pide` en curso: se preguntó y nadie contestó todavía. NO hay
+	// canal abierto ni nada reservado del otro lado; es un PEDIDO con fecha de vencimiento.
+	ShellEsperandoPermiso EstadoShell = "esperando_permiso"
+	// ShellSinPermiso es un `pide` que no se concedió. El POR QUÉ vive en Consentimiento y no
+	// acá: «me dijeron que no», «nadie contestó» y «no había con qué preguntar» terminan las
+	// tres en este estado y se arreglan distinto.
+	ShellSinPermiso EstadoShell = "sin_permiso"
+	// ShellPermitida es el permiso ya dado y la shell TODAVÍA SIN CONECTAR.
+	//
+	// ES UN ESTADO PROPIO Y NO UN `abriendo` CON UNA MARCA, y la razón es T7: `abriendo` cuenta
+	// como sesión VIVA, así que el permiso concedido se leería como «ya tenías una shell abierta
+	// acá» y el segundo pedido —el que viene a conectar— recibiría esa fila en vez de un prompt.
+	// El permiso no es la sesión: dura lo que dura la ventana del pedido y se consume una vez.
+	ShellPermitida EstadoShell = "permitida"
 )
 
 // SesionShell es el REGISTRO de que alguien tuvo un prompt en una máquina ajena.
@@ -73,6 +98,29 @@ type SesionShell struct {
 
 	// Error explica por qué falló o cómo terminó. Nunca contiene nada de lo que pasó por el canal.
 	Error string
+
+	// Consentimiento es CÓMO contestó quien está usando la máquina, cuando hubo que preguntarle
+	// (A75). Vacío = no hizo falta preguntar (`libre` o `avisa`).
+	//
+	// TIENE COLUMNA PROPIA Y NO VIAJA EN `Error`, por lo mismo que en SesionPantalla: «me dijeron
+	// que no» no es un error, es el sistema funcionando. Y las tres formas de no conceder
+	// —negada, sin_respuesta, no_se_pudo— se arreglan distinto: la primera es una decisión que
+	// hay que respetar, la segunda dice que esa máquina quizás no debería estar en `pide`, y la
+	// tercera que le falta con qué preguntar. Metidas en un texto libre, la diferencia sobrevive
+	// hasta que alguien mejora la redacción del mensaje.
+	Consentimiento RespuestaAviso
+}
+
+// ConcedeElAcceso dice si esta sesión llegó a tener permiso.
+//
+// Una que NUNCA tuvo que pedirlo (`libre`, `avisa`) lo tiene por definición: el eje de
+// consentimiento no es el de capacidad, y confundirlos cerraría la shell de toda la flota que no
+// usa `pide`.
+func (s SesionShell) ConcedeElAcceso() bool {
+	if s.Consentimiento == "" {
+		return true
+	}
+	return s.Consentimiento.Concede()
 }
 
 // Vencida dice si algún techo ya la mató, y CUÁL. Se DERIVA y no se guarda: una columna de estado
@@ -82,6 +130,23 @@ type SesionShell struct {
 // Devuelve el motivo además del booleano porque "se cerró sola" y "se cerró sola porque te fuiste
 // a almorzar" son mensajes distintos para quien vuelve y encuentra la terminal muerta.
 func (s SesionShell) Vencida(ahora time.Time) (bool, string) {
+	// UN PEDIDO DE PERMISO VENCIDO NO ES UNA SESIÓN QUE LLEGÓ A SU VIDA MÁXIMA (A75), y el
+	// motivo importa porque es lo que el barrendero deja escrito en la bitácora. Estas filas
+	// vencen en VentanaDePermiso —tres minutos— y no en las dos horas del techo de vida: decir
+	// «alcanzó su vida máxima (2h)» sobre un pedido de tres minutos manda a mirar el techo
+	// equivocado, y sobre todo esconde el único diagnóstico útil, que es que nadie contestó.
+	if s.Estado == ShellEsperandoPermiso || s.Estado == ShellPermitida {
+		if !s.Vence.IsZero() && ahora.After(s.Vence) {
+			if s.Estado == ShellPermitida {
+				return true, fmt.Sprintf("el permiso se concedió y nadie vino a conectarse en %s", VentanaDePermiso)
+			}
+			return true, fmt.Sprintf("nadie contestó el pedido de permiso en %s", VentanaDePermiso)
+		}
+		// NO se le aplica el techo de INACTIVIDAD: no hay canal, así que «sin tráfico» es su
+		// estado normal y no una sesión olvidada. Con el techo puesto, la fila moriría por el
+		// motivo equivocado en cuanto la ventana pasara los quince minutos.
+		return false, ""
+	}
 	if !s.Vence.IsZero() && ahora.After(s.Vence) {
 		return true, fmt.Sprintf("la sesión alcanzó su vida máxima (%s)", ShellVidaMax)
 	}

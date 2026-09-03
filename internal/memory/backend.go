@@ -447,6 +447,11 @@ type DeviceStore interface {
 	SesionShellAbiertaDe(principal, deviceID string, ahora time.Time) (fleet.SesionShell, bool, error)
 	BitacoraDeShell(projectID, deviceID string, tope int) ([]fleet.SesionShell, error)
 	CerrarSesionesShellVencidas(ahora time.Time) (int64, error)
+	// El eje de CONSENTIMIENTO en la shell (A75). Son los gemelos de los de pantalla y valen las
+	// mismas dos garantías: la sesión tiene que ser de ESE device, y se contesta una sola vez.
+	// Reanudar consume el permiso —una vez— y recién ahí la fila cuenta como sesión.
+	ResponderConsentimientoShell(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
+	ReanudarSesionShellPermitida(sesionID string, ahora time.Time) (fleet.SesionShell, bool, error)
 	// DevicePorID lo necesita el relay: una vez abierta la sesión, lo único que se guarda de la
 	// máquina es su id, y la concesión se re-evalúa contra el device en CADA request.
 	DevicePorID(id string) (fleet.Device, bool, error)

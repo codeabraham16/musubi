@@ -111,6 +111,24 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 			"tu credencial puede ejecutar en %q, pero no ese comando: la allowlist (`fleet_exec_allow` en principals.yaml) permite %v sobre esa máquina", d.Name, permitidos)
 	}
 
+	// EL EJE DE CONSENTIMIENTO TAMBIÉN GATEA EL exec (A75), y hasta acá no lo hacía.
+	//
+	// Va DESPUÉS de las tres compuertas de permiso —concesión, allowlist y `musubi:*`— y ANTES de
+	// encolar, y los dos lados importan:
+	//
+	//   - después, porque un argv que la allowlist rechaza no tiene por qué molestar con una
+	//     notificación a quien está usando la máquina: no iba a correr de todas formas;
+	//   - antes de encolar, porque el daño de mirarlo tarde no es fallar: es haber dejado ya un
+	//     comando en la cola de una máquina cuyo dueño dijo que ahí no se entra. F1 escribe la
+	//     bitácora antes de ejecutar, y esa fila es también el pedido que el agente va a levantar.
+	//
+	// `pide` NO pregunta acá: un exec es de una sola vez y no hay un «después» donde volver a
+	// buscar el sí, así que se endurece a `prohibido`. El por qué entero —y la consecuencia, que
+	// un servidor headless en `pide` deja de aceptar exec— está en consentimientoParaExec.
+	if e := s.aplicarConsentimiento(d, p, consentimientoParaExec(d), accesoExec); e != nil {
+		return nil, e
+	}
+
 	// F1 — LA BITÁCORA SE ESCRIBE ANTES DE EJECUTAR. Desde acá, el pedido está registrado pase
 	// lo que pase: se caiga el cerebro, muera el agente, se apague la máquina.
 	cmd, err := s.engine.EncolarComando(fleet.Comando{

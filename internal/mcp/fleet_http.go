@@ -564,13 +564,36 @@ func (s *McpServer) registrarRespuestaDePermiso(deviceID string, cuerpo cuerpoRe
 			}
 		}
 	}
-	if err := s.engine.ResponderConsentimiento(deviceID, cmd.Argv[1], r, time.Now()); err != nil {
+	if err := s.responderConsentimientoDeLaSesion(deviceID, cmd.Argv[1], r); err != nil {
 		// Incluye la sesión ajena, la inexistente y la YA CONTESTADA: las tres dan el mismo error
 		// una capa más abajo, a propósito. Acá se logea porque un agente que insiste en contestar
 		// sesiones que no son suyas es una señal, no un detalle.
 		logx.Warn("flota: se descartó una respuesta de permiso", "device_id", deviceID,
 			"comando", cuerpo.ComandoID, "error", err)
 	}
+}
+
+// responderConsentimientoDeLaSesion manda la respuesta a la tabla que le corresponde (A75).
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA MODALIDAD SE DEDUCE DE LA SESIÓN Y NO DEL COMANDO, Y NO ES POR COMODIDAD
+//
+// Desde A75 hay DOS clases de pedido de permiso —una pantalla y una terminal— y las dos viajan
+// como el MISMO `musubi:preguntar`. Podrían haber sido dos operaciones distintas, y sería peor:
+// el agente ya desplegado sólo entiende ésta, así que una operación nueva dejaría el `pide` de
+// shell muerto en toda la flota que no se actualice, y muerto del lado que concede —o sea, en
+// silencio y a favor de quien entra.
+//
+// Así que la pregunta la contesta el id: si la sesión existe en la bitácora de shell, la
+// respuesta es de una shell. La guarda de «esta sesión es de ESTA máquina» NO se toca acá —vive
+// en el WHERE de cada Responder…— porque un chequeo en el llamador es un chequeo que la próxima
+// puerta se olvida.
+func (s *McpServer) responderConsentimientoDeLaSesion(deviceID, sesionID string, r fleet.RespuestaAviso) error {
+	ahora := time.Now()
+	if _, esShell, err := s.engine.SesionShellPorID(sesionID); err == nil && esShell {
+		return s.engine.ResponderConsentimientoShell(deviceID, sesionID, r, ahora)
+	}
+	return s.engine.ResponderConsentimiento(deviceID, sesionID, r, ahora)
 }
 
 // prefijoRespuestaPermiso es cómo el agente marca su respuesta en stdout. Un prefijo y no un

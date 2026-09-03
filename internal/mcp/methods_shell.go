@@ -10,6 +10,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -65,8 +66,32 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// simultáneos de la misma persona en la misma máquina son, casi siempre, una sesión olvidada
 	// más una nueva — y la olvidada es la peligrosa. Se devuelve la que ya está en vez de abrir
 	// otra, para que quien perdió su terminal pueda volver a ella y cerrarla.
+	//
+	// VA ANTES DEL CONSENTIMIENTO A PROPÓSITO (A75): quien ya tiene un prompt abierto en esta
+	// máquina no entra de nuevo, así que no hay nada que avisar ni que preguntar. Al revés
+	// —consentimiento primero— cada intento de recuperar la terminal que uno perdió le pondría
+	// otra ventana encima a quien está sentado ahí, y así se le enseña a apretar «permitir» sin
+	// leer.
 	if previa, hay, err := s.engine.SesionShellAbiertaDe(nombrePrincipal(p), d.ID, ahora); err == nil && hay {
 		return jsonResult(respuestaShell(previa, d, "ya tenías una sesión abierta en esta máquina; se devuelve ésa. Cerrala si querés una nueva."))
+	}
+
+	// EL EJE DE CONSENTIMIENTO TAMBIÉN GATEA LA SHELL (A75), y hasta acá no lo hacía: en una
+	// máquina marcada `pide`, mirar la pantalla preguntaba y abrir una TERMINAL en la misma
+	// máquina no preguntaba nada. Una terminal es más invasiva que mirar, no menos.
+	//
+	// La tabla es LA MISMA que la de pantalla y vive en aplicarConsentimiento. Acá sólo se la
+	// llama, y va antes de escribir la fila de la bitácora: `prohibido` no deja ni el intento de
+	// conectarse.
+	consent := d.ConsentimientoEfectivo()
+	if e := s.aplicarConsentimiento(d, p, consent, accesoShell); e != nil {
+		return nil, e
+	}
+	// `pide` PARTE LA APERTURA EN DOS PEDIDOS, igual que en pantalla: éste pregunta y devuelve la
+	// espera, y el siguiente recoge el sí. El por qué de que no sea una llamada que bloquea está
+	// en pedirPermisoParaShell.
+	if consent == fleet.ConsentimientoPide {
+		return s.pedirPermisoParaShell(d, p, proyecto, args.Filas, args.Columnas, ahora)
 	}
 
 	// LA BITÁCORA SE ESCRIBE ANTES DE CONECTAR — misma regla que F1 de S5 y G7 de S6. Si el SSH
@@ -78,8 +103,18 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
+	return s.conectarShell(d, ses, args.Filas, args.Columnas)
+}
 
-	canal, err := s.abrirCanalShell(d, args.Filas, args.Columnas)
+// conectarShell abre el canal de una sesión YA REGISTRADA y devuelve cómo hablarle.
+//
+// ESTÁ EXTRAÍDA Y NO DUPLICADA porque tiene DOS llamadores: el camino normal y el de `pide`
+// cuando quien usa la máquina dijo que sí. Es la misma razón por la que `entregarPantalla` vive
+// aparte: copiarla dejaría dos lugares donde recordar que un canal que no prende tiene que
+// cerrar su fila, y la copia que se queda vieja es siempre la del camino de mayor autoridad,
+// que acá es justo el que pasó por el permiso de una persona.
+func (s *McpServer) conectarShell(d fleet.Device, ses fleet.SesionShell, filas, columnas int) (interface{}, *RpcError) {
+	canal, err := s.abrirCanalShell(d, filas, columnas)
 	if err != nil {
 		// El fallo también se audita, en la misma fila.
 		s.cerrarShell(ses.ID, fleet.ShellFallida, err.Error(), time.Now())
@@ -91,7 +126,7 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// engancharse nunca y se cierra ACÁ en vez de dejar a alguien esperando un prompt que no
 	// viene.
 	if d.Tier == fleet.TierAgente {
-		if err := s.avisarAlAgenteDeLaShell(d, ses, args.Filas, args.Columnas); err != nil {
+		if err := s.avisarAlAgenteDeLaShell(d, ses, filas, columnas); err != nil {
 			s.cerrarShell(ses.ID, fleet.ShellFallida, "no se pudo avisarle al agente: "+err.Error(), time.Now())
 			return nil, rpcErrorf(codeInternalError, "no se pudo avisarle al agente de %q: %v", d.Name, err)
 		}
@@ -107,7 +142,14 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 
 	logx.Info("shell interactiva abierta",
 		"sesion", ses.ID, "device", d.Name, "principal", ses.Principal, "vence", ses.Vence.Format(time.RFC3339))
-	return jsonResult(respuestaShell(ses, d, ""))
+	nota := ""
+	// CUANDO HUBO QUE PEDIR PERMISO, SE DICE QUE SE CONCEDIÓ. La bitácora ya lo tiene, pero quien
+	// abre la terminal merece saber que del otro lado alguien apretó «permitir»: es la diferencia
+	// entre entrar a una máquina y entrar con el consentimiento de quien la está usando.
+	if ses.Consentimiento != "" {
+		nota = "quien está usando esta máquina dio permiso (" + string(ses.Consentimiento) + ")."
+	}
+	return jsonResult(respuestaShell(ses, d, nota))
 }
 
 // abrirCanalShell elige el transporte según el tier.
@@ -153,6 +195,166 @@ func (s *McpServer) avisarAlAgenteDeLaShell(d fleet.Device, ses fleet.SesionShel
 		Timeout: fleet.ComandoTimeoutDefault,
 	})
 	return err
+}
+
+// ── `pide`: preguntarle a quien está usando la máquina antes de darle un prompt a otro (A75) ──
+
+// pedirPermisoParaShell es el camino de `pide`: preguntar, y volver sin prompt.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// TRES SITUACIONES, TRES RESPUESTAS, Y NINGUNA ES UNA ESPERA
+//
+//  1. NO HAY NADA PEDIDO → se registra la sesión en `esperando_permiso`, se encola la pregunta y
+//     se devuelve el id. NO SE ABRE NINGÚN CANAL: un pty reservado del otro lado, o una conexión
+//     SSH prendida, son acceso a la máquina — y todavía no se sabe si la respuesta va a ser sí.
+//  2. YA HAY UNA ESPERA EN CURSO → se informa, no se pregunta de nuevo. Preguntar dos veces le
+//     pone dos ventanas encima a la misma persona por el mismo pedido, que es cómo se le enseña a
+//     alguien a apretar «permitir» sin leer.
+//  3. YA CONTESTARON → si dijeron que sí, se consume el permiso y se conecta; si no, se niega
+//     DICIENDO CUÁL DE LOS TRES «no» fue.
+//
+// NO PUEDE SER UNA LLAMADA QUE BLOQUEA, y es la misma razón que en pantalla: el latido va cada
+// 30 s y el diálogo espera hasta 60, así que una respuesta tarda hasta minuto y medio en volver.
+// Bloquear acá dejaría al operador mirando una llamada colgada y —peor— pondría un timeout de red
+// en el camino de una decisión humana, donde el vencimiento significa otra cosa.
+//
+// EL PERMISO NO ES LA CAPACIDAD, y por eso la vuelta pasa otra vez por toda la compuerta de
+// arriba: entre que se concedió el permiso y que se viene a conectar pueden haber revocado la
+// máquina o sacado la concesión `shell`, y el sí de una persona no vale como autorización del
+// sistema.
+func (s *McpServer) pedirPermisoParaShell(d fleet.Device, p *Principal, proyecto string,
+	filas, columnas int, ahora time.Time) (interface{}, *RpcError) {
+
+	quien := nombrePrincipal(p)
+	previa, hay, err := s.sesionShellEsperandoDe(d, quien, ahora)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	if hay {
+		switch {
+		case previa.Estado == fleet.ShellEsperandoPermiso:
+			return jsonResult(map[string]interface{}{
+				"session_id": previa.ID, "device": d.Name, "estado": string(previa.Estado),
+				"aviso": "ya se le preguntó a quien está usando esta máquina y todavía no contestó. " +
+					"El agente recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo " +
+					"espera " + fleet.AvisoTimeout.String() + ". Volvé a pedir la shell en un rato.",
+			})
+		case previa.ConcedeElAcceso():
+			// DIJERON QUE SÍ: se consume el permiso y se conecta reusando ESA fila. Abrir una
+			// nueva dejaría la concedida colgada y la bitácora con dos filas para un solo
+			// permiso — y la que quedaría abierta es la que nadie usó.
+			//
+			// El consumo es atómico y de una sola vez (ver ReanudarSesionShellPermitida): si otro
+			// pedido llegó primero, acá no hay fila y se vuelve a preguntar en vez de reusar un
+			// sí que ya se gastó.
+			ses, reanudada, err := s.engine.ReanudarSesionShellPermitida(previa.ID, ahora)
+			if err != nil {
+				return nil, rpcErrorf(codeInternalError, "%v", err)
+			}
+			if !reanudada {
+				return nil, rpcErrorf(codeInvalidParams,
+					"el permiso para abrir una shell en %q ya se usó o venció. Pedí la shell otra vez: "+
+						"un sí vale para UN prompt, no para todos los que vengan después.", d.Name)
+			}
+			return s.conectarShell(d, ses, filas, columnas)
+		default:
+			return nil, rpcErrorf(codeUnauthorized, "%s", explicarShellSinPermiso(d, previa))
+		}
+	}
+
+	// Nada pedido todavía: se pregunta.
+	//
+	// LA VENTANA DE LA ESPERA NO ES LA DE LA SESIÓN. Acá `vence` acota cuánto vale el PEDIDO —lo
+	// que tarda el latido más el diálogo, con margen— y no cuánto va a durar el prompt. Usar el
+	// techo de vida de una shell dejaría un pedido de dos horas esperando una respuesta que
+	// venció hace rato, y bloqueando todos los siguientes con un «ya se preguntó».
+	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Estado: fleet.ShellEsperandoPermiso,
+		Creada: ahora,
+		Vence:  ahora.Add(fleet.VentanaDePermiso),
+	})
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	// EL TEXTO DICE QUE ES UNA TERMINAL Y NO UNA PANTALLA. Quien contesta tiene que poder decidir,
+	// y «alguien quiere entrar» no alcanza para eso: mirar y tener un prompt son dos permisos
+	// distintos para quien está sentado ahí, y el segundo además escribe.
+	texto := fmt.Sprintf("Musubi: %s pide permiso para abrir una terminal en esta máquina. ¿Lo permitís?",
+		fleet.RecortarRunas(quien, 64))
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Origen:  fleet.OrigenPersona,
+		Argv:    []string{comandoPreguntar, ses.ID, texto},
+		Timeout: fleet.ComandoTimeoutDefault,
+	}); err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	return jsonResult(map[string]interface{}{
+		"session_id": ses.ID, "device": d.Name, "estado": string(fleet.ShellEsperandoPermiso),
+		"aviso": "esta máquina exige el permiso de quien la está usando. Se le preguntó; el agente " +
+			"recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo espera " +
+			fleet.AvisoTimeout.String() + ". Volvé a pedir la shell en un rato: si dijeron que sí " +
+			"vas a recibir el prompt, y si no, el motivo.",
+	})
+}
+
+// sesionShellEsperandoDe busca el pedido de permiso VIGENTE de este principal sobre esta máquina.
+//
+// SE ACOTA AL PRINCIPAL, y eso no es cosmética: el permiso se le dio a QUIEN preguntó. Sin este
+// filtro, un operador aprovecharía el «sí» que la persona le dio a otro — y la pregunta nombra a
+// quien entra justamente para que la respuesta sea sobre esa persona.
+//
+// Se lee de la bitácora del proyecto y se filtra acá, igual que su gemela de pantalla: no hace
+// falta una consulta propia para veinte filas, y una consulta más es un lugar más donde el filtro
+// por principal se puede olvidar.
+func (s *McpServer) sesionShellEsperandoDe(d fleet.Device, quien string, ahora time.Time) (fleet.SesionShell, bool, error) {
+	sesiones, err := s.engine.BitacoraDeShell(d.ProjectID, d.ID, 20)
+	if err != nil {
+		return fleet.SesionShell{}, false, err
+	}
+	for _, ses := range sesiones {
+		if ses.Principal != quien {
+			continue
+		}
+		switch ses.Estado {
+		case fleet.ShellEsperandoPermiso, fleet.ShellPermitida:
+			// UNA ESPERA VENCIDA NO CUENTA: se vuelve a preguntar. Si no, un pedido que nadie
+			// contestó hace dos horas bloquearía todos los siguientes con un «ya se preguntó»
+			// que nunca se va a resolver. Lo mismo con un permiso concedido que nadie usó.
+			if vencida, _ := ses.Vencida(ahora); vencida {
+				continue
+			}
+			return ses, true, nil
+		case fleet.ShellSinPermiso:
+			return ses, true, nil
+		}
+	}
+	return fleet.SesionShell{}, false, nil
+}
+
+// explicarShellSinPermiso arma el mensaje de los TRES «no», que se arreglan distinto.
+//
+// Es el gemelo de explicarSinPermiso (pantalla) y no una llamada a ella: los dos textos nombran
+// lo que NO se abrió, y un mensaje que dice «no se abre la pantalla» cuando alguien pidió una
+// terminal manda a mirar el eje correcto por el camino equivocado.
+func explicarShellSinPermiso(d fleet.Device, ses fleet.SesionShell) string {
+	base := fmt.Sprintf("no se abre una shell en %q: ", d.Name)
+	switch ses.Consentimiento {
+	case fleet.RespuestaNegada:
+		return base + "la persona que está usando esa máquina dijo que NO. " +
+			"Es el eje funcionando como se configuró; si creés que corresponde igual, hablá con ella."
+	case fleet.RespuestaSinRespuesta:
+		return base + "se le preguntó y nadie contestó en " + fleet.AvisoTimeout.String() + ". " +
+			"El silencio NO es permiso, así que se niega. Si esta máquina está siempre " +
+			"desatendida, no debería estar en `pide` — miralo con musubi_fleet_consent."
+	case fleet.RespuestaNoSePudo:
+		return base + "el agente no tuvo con qué preguntar (no hay escritorio, o le falta la " +
+			"herramienta de diálogo). El motivo exacto está en el log del cerebro, en la línea " +
+			"«esta máquina no puede pedirle permiso a nadie»."
+	default:
+		return base + "el pedido de permiso no prosperó."
+	}
 }
 
 func errShellTierNoSoportado(t fleet.Tier) error {

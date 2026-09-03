@@ -72,9 +72,17 @@ func (s SesionViva) Abierta(ahora time.Time) bool {
 	// peor que un falso negativo: manda a alguien a interrumpir una sesión que no existe, o le
 	// enseña que la columna miente.
 	//
-	// `sin_permiso` cae por `cerrada`, que sí se estampa al negar. Éste es el único estado que
-	// necesita la excepción, y por eso se nombra en vez de barrer con una lista.
-	if s.Estado == string(SesionEsperandoPermiso) {
+	// `sin_permiso` cae por `cerrada`, que sí se estampa al negar.
+	//
+	// LA SHELL AGREGA UN SEGUNDO ESTADO A LA EXCEPCIÓN (A75): `permitida` es el permiso ya dado
+	// y la shell TODAVÍA SIN CONECTAR —existe porque el permiso y la sesión son dos pedidos— y
+	// tiene la misma forma que un `esperando_permiso`: `cerrada` vacío y una ventana por delante.
+	// Sin nombrarlo acá, el panel diría «alguien tiene un prompt en esta máquina» durante los
+	// tres minutos que dura un permiso que quizás nadie vaya a usar.
+	//
+	// Se NOMBRAN en vez de barrer con una lista: un estado nuevo tiene que pasar por acá a mano,
+	// que es lo que obliga a decidir si dibuja a alguien adentro o no.
+	if s.Estado == string(SesionEsperandoPermiso) || s.Estado == string(ShellPermitida) {
 		return false
 	}
 	return s.Cerrada.IsZero() && !s.Vence.IsZero() && ahora.Before(s.Vence)

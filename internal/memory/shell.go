@@ -17,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const columnasShell = `id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico, cerrada, error`
+const columnasShell = `id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico, cerrada, error, consentimiento`
 
 // AbrirSesionShell registra que alguien pidió un prompt en una máquina ajena.
 //
@@ -29,7 +29,17 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 		return fleet.SesionShell{}, fmt.Errorf("una sesión de shell necesita dispositivo y proyecto")
 	}
 	s.ID = uuid.NewString()
-	s.Estado = fleet.ShellAbriendo
+	// EL ESTADO Y LA VENTANA LOS PUEDE DECLARAR EL LLAMADOR, Y ES LO QUE HABILITA EL `pide` (A75).
+	//
+	// Antes se forzaban los dos acá. Una sesión que arranca en `esperando_permiso` no es una
+	// sesión abriéndose: es un PEDIDO que dura VentanaDePermiso —tres minutos— y no las dos horas
+	// del techo de vida. Forzar `abriendo` la haría contar como sesión viva (T7) y forzar el
+	// techo de vida dejaría pedidos de permiso vigentes durante dos horas.
+	//
+	// Los defaults NO cambian: quien no declara nada sigue abriendo una shell normal.
+	if s.Estado == "" {
+		s.Estado = fleet.ShellAbriendo
+	}
 	if s.Creada.IsZero() {
 		s.Creada = time.Now().UTC()
 	}
@@ -40,6 +50,9 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 	// primer byte, una sesión que se abre y a la que nadie se conecta jamás quedaría con el
 	// campo vacío y sin techo de inactividad: viva hasta el techo de vida, que son dos horas.
 	s.UltimoTrafico = s.Creada
+	// `consentimiento` NO va en el INSERT: al abrir todavía NADIE contestó nada, y el default de
+	// la columna ('') significa exactamente eso. Escribirlo desde acá dejaría que un llamador
+	// registre una respuesta que ninguna persona dio.
 	_, err := e.db.Exec(
 		`INSERT INTO shell_sessions (id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -49,7 +62,87 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 	if err != nil {
 		return fleet.SesionShell{}, fmt.Errorf("error al abrir la sesión de shell: %w", err)
 	}
+	s.Consentimiento = ""
 	return s, nil
+}
+
+// ResponderConsentimientoShell registra CÓMO contestó quien está usando la máquina (A75) y deja
+// la sesión donde corresponda según eso.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ES EL GEMELO DE ResponderConsentimiento (sesiones.go) Y TIENE LAS MISMAS DOS GUARDAS
+//
+//  1. `deviceID` sale del TOKEN del agente, y la sesión tiene que ser SUYA. Sin eso, una máquina
+//     comprometida contestaría «concedida» a la pregunta que se le hizo al usuario de OTRA, y el
+//     permiso para tener un prompt en una máquina ajena se conseguiría sin tocarla.
+//  2. SÓLO SE PUEDE CONTESTAR UNA VEZ, y la condición está en el WHERE. Una sesión que ya salió
+//     de `esperando_permiso` no vuelve: sin eso, un agente mandaría «negada» y después
+//     «concedida» —o repetiría la respuesta después de que el pedido venció— y valdría la
+//     última, que es justo la que elegiría un atacante.
+//
+// CONCEDER NO ABRE LA SHELL: deja la fila en `permitida`, que NO cuenta como sesión viva. El
+// permiso y el prompt siguen siendo dos pedidos, y entre los dos se vuelve a pasar por la
+// compuerta de capacidades — porque entre el sí de una persona y la conexión pueden haber
+// revocado la máquina.
+func (e *DbEngine) ResponderConsentimientoShell(deviceID, sesionID string, r fleet.RespuestaAviso,
+	ahora time.Time) error {
+
+	deviceID, sesionID = strings.TrimSpace(deviceID), strings.TrimSpace(sesionID)
+	if deviceID == "" || sesionID == "" || !r.Valida() {
+		return ErrComandoAjeno
+	}
+	estado := fleet.ShellSinPermiso
+	var cerrada any = ahora.UTC().Format(time.RFC3339)
+	if r.Concede() {
+		estado, cerrada = fleet.ShellPermitida, nil
+	}
+	res, err := e.db.Exec(
+		`UPDATE shell_sessions SET estado = ?, consentimiento = ?, cerrada = ?
+		  WHERE id = ? AND device_id = ? AND estado = ?`,
+		string(estado), string(r), cerrada, sesionID, deviceID, string(fleet.ShellEsperandoPermiso))
+	if err != nil {
+		return fmt.Errorf("error al registrar el consentimiento de la shell %q: %w", sesionID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		// Ajena, inexistente o ya contestada: las tres dan el MISMO error, por el mismo motivo
+		// que en pantalla — distinguirlas convertiría esto en un oráculo de qué sesiones existen
+		// en otras máquinas.
+		return ErrComandoAjeno
+	}
+	return nil
+}
+
+// ReanudarSesionShellPermitida consume un permiso ya concedido y deja la fila lista para conectar.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// SE CONSUME UNA VEZ, Y ESO LO GARANTIZA EL `WHERE estado = 'permitida'`
+//
+// El permiso se le dio a una persona para UN prompt. Sin la condición en el WHERE, dos pedidos
+// simultáneos —o uno repetido— reusarían el mismo sí para abrir dos shells, y la respuesta de
+// quien dijo «dale» valdría por tiempo indefinido. Que la transición sea la misma sentencia que
+// el chequeo es lo que hace que no haya ventana entre las dos.
+//
+// LA VENTANA SE REHACE ACÁ: la fila venía con la del PEDIDO (tres minutos), que es lo que dura
+// un permiso sin usar. Al conectar pasa a valer el techo de vida de una shell, porque desde este
+// momento es una sesión y no un pedido. Dejarle la ventana corta mataría la terminal a los dos
+// minutos y medio, por un vencimiento que ya no significa nada.
+func (e *DbEngine) ReanudarSesionShellPermitida(sesionID string, ahora time.Time) (fleet.SesionShell, bool, error) {
+	sesionID = strings.TrimSpace(sesionID)
+	if sesionID == "" {
+		return fleet.SesionShell{}, false, nil
+	}
+	res, err := e.db.Exec(
+		`UPDATE shell_sessions SET estado = ?, vence = ?, ultimo_trafico = ?
+		  WHERE id = ? AND estado = ? AND cerrada IS NULL`,
+		string(fleet.ShellAbriendo), ahora.Add(fleet.ShellVidaMax).UTC().Format(time.RFC3339),
+		ahora.UTC().Format(time.RFC3339), sesionID, string(fleet.ShellPermitida))
+	if err != nil {
+		return fleet.SesionShell{}, false, fmt.Errorf("error al reanudar la sesión de shell %q: %w", sesionID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return fleet.SesionShell{}, false, nil
+	}
+	return e.SesionShellPorID(sesionID)
 }
 
 // SesionShellPorID lee una sesión. La usa CADA request del stream, no sólo la que abre: una
@@ -200,15 +293,16 @@ func (e *DbEngine) CerrarSesionesShellVencidas(ahora time.Time) (int64, error) {
 
 func escanearSesionShell(row escaneable) (fleet.SesionShell, error) {
 	var (
-		s                                    fleet.SesionShell
-		estado, creada, vence, ultimoTrafico string
-		cerrada                              sql.NullString
+		s                                                    fleet.SesionShell
+		estado, creada, vence, ultimoTrafico, consentimiento string
+		cerrada                                              sql.NullString
 	)
 	if err := row.Scan(&s.ID, &s.DeviceID, &s.ProjectID, &s.Principal, &estado,
-		&creada, &vence, &ultimoTrafico, &cerrada, &s.Error); err != nil {
+		&creada, &vence, &ultimoTrafico, &cerrada, &s.Error, &consentimiento); err != nil {
 		return fleet.SesionShell{}, err
 	}
 	s.Estado = fleet.EstadoShell(estado)
+	s.Consentimiento = fleet.RespuestaAviso(consentimiento)
 	s.Creada, _ = time.Parse(time.RFC3339, creada)
 	s.Vence, _ = time.Parse(time.RFC3339, vence)
 	if ultimoTrafico != "" {

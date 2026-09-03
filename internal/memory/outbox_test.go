@@ -122,8 +122,14 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       hace tres meses se etiquetaría mal. EL DEFAULT '' SIGNIFICA «NO SE SABE» Y NO
 	//       «PERSONA» — rellenar las filas viejas con `persona` le atribuiría a alguien cada
 	//       disparo automático anterior a esta migración.
-	if latestSchemaVersion() != 41 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 41", latestSchemaVersion())
+	// v42 = CÓMO CONTESTÓ EL USUARIO cuando hubo que pedirle permiso PARA UNA SHELL
+	//       (`shell_sessions.consentimiento`). Es la gemela de la v40 y existe porque el eje de
+	//       consentimiento gateaba sólo el camino de pantalla (A75): en una máquina en `pide`,
+	//       mirar la pantalla preguntaba y abrir una TERMINAL no preguntaba nada — y una terminal
+	//       es más invasiva, no menos. El `pide` parte la apertura en dos pedidos, así que la
+	//       sesión de shell necesita dónde registrar la respuesta. Vacía = no hizo falta preguntar.
+	if latestSchemaVersion() != 42 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 42", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

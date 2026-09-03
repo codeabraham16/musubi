@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
-	"musubi/internal/logx"
 )
 
 // toolFleetScreen acuña una sesión de pantalla.
@@ -72,35 +71,12 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	// el daño de mirarlo tarde no es fallar, es ENTREGAR una contraseña de sesión —que se muestra
 	// una sola vez— para una sesión que no se tenía que abrir.
 	//
-	// Va DESPUÉS de la capacidad y no antes: quien no tiene `screen` no puede enterarse de la
-	// política de consentimiento de una máquina que no debería ni saber que existe.
-	//
-	// Es un eje SEPARADO del permiso, así que el error lo dice: la capacidad puede estar
-	// perfectamente concedida y la sesión igual no abrirse. Confundirlos mandaría a alguien a
-	// revisar `principals.yaml` buscando un permiso que ya está.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.Bloquea():
-		return nil, rpcErrorf(codeUnauthorized,
-			"no se abre la pantalla de %q: %v. "+
-				"El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, "+
-				"un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre "+
-				"sin permiso, y si el permiso no se puede pedir, no se entra.",
-			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
-		// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:
-		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
-		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
-		// —un servidor sin escritorio— por razones que no son de seguridad.
-		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
-	case consent.AvisaAlUsuario():
-		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). Se hace ACÁ y no después de crear
-		// la sesión, y el orden importa: el aviso dice «alguien está por entrar», y entregarlo
-		// después de que la pantalla ya está abierta lo convierte en una notificación de algo que
-		// ya pasó. El agente lo va a recoger en su próximo latido — hasta 30 s— y esa demora es
-		// el precio de no ponerlo a escuchar un puerto, que es la superficie que este track evita
-		// desde S2.
-		s.encolarAvisoDePantalla(d, p)
+	// LA TABLA VIVE EN aplicarConsentimiento Y NO ACÁ (A75): la misma decisión gatea ahora tres
+	// puertas —pantalla, shell y exec— y tenerla escrita en cada tool dejaría tres lugares donde
+	// recordar que `prohibido` gana. Lo que era exclusivo de esta función y sigue siéndolo es lo
+	// de abajo: el camino de ida y vuelta de `pide`.
+	if e := s.aplicarConsentimiento(d, p, d.ConsentimientoEfectivo(), accesoPantalla); e != nil {
+		return nil, e
 	}
 
 	if !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {
@@ -381,28 +357,6 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 	return jsonResult(res)
 }
 
-// avisarUnaVezPorDevice deja constancia de que se debía un aviso al usuario de la máquina y no se
-// pudo entregar, porque su agente todavía no sabe notificar.
-//
-// UNA VEZ POR MÁQUINA Y POR VIDA DEL PROCESO: una sesión de pantalla se abre a mano, no en un
-// lazo, pero un operador que abre veinte en una tarde no necesita veinte líneas iguales. Lo que
-// tiene que quedar es que la deuda existe.
-//
-// Esto NO reemplaza al aviso: cuando el agente sepa notificar, este camino desaparece y la
-// notificación viaja de verdad. Mientras tanto, la ausencia se ve en el log del cerebro en vez de
-// ser silenciosa — que es la diferencia entre una función a medio hacer y una que miente.
-func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre string, c fleet.Consentimiento) {
-	// Se reusa `avisosDados`, que es exactamente para esto: un aviso de CONFIGURACIÓN que no es
-	// un evento sino un ESTADO. La clave lleva prefijo para no chocar con los del empuje.
-	clave := "consentimiento_sin_aviso\x00" + deviceID
-	if _, ya := s.avisosDados.LoadOrStore(clave, true); ya {
-		return
-	}
-	logx.Warn("flota: se abrió una pantalla y el aviso al usuario NO se pudo entregar",
-		"device", nombre, "consentimiento", string(c),
-		"motivo", "el agente de esta máquina no declara saber notificar (devices.puede_preguntar = 0)")
-}
-
 // pedirPermisoParaPantalla es el camino de `pide`: preguntar, y volver sin contraseña (A57).
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -527,40 +481,6 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 		}
 	}
 	return fleet.SesionPantalla{}, false, nil
-}
-
-// encolarAvisoDePantalla le manda al agente el aviso que `avisa` promete (A57).
-//
-// ════════════════════════════════════════════════════════════════════════════════════════════
-// EL TEXTO NOMBRA A QUIEN ENTRA, Y ESO ES EL AVISO
-//
-// «Alguien está viendo tu pantalla» no le sirve a nadie. Lo que convierte esto en información es
-// QUIÉN: un aviso sin nombre no se puede accionar —no hay a quién preguntarle— y se vuelve ruido
-// que la persona aprende a cerrar sin leer.
-//
-// El nombre del principal es entrada de configuración (sale de principals.yaml, no de la red),
-// pero igual se acota: termina interpolado en un diálogo del escritorio de otra persona.
-//
-// BEST-EFFORT A PROPÓSITO. Si encolar falla, la sesión se abre igual: `avisa` NO bloquea —ése es
-// el grado siguiente— y convertir un fallo de la cola en un acceso denegado le daría a `avisa` la
-// semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
-// por eso queda la línea.
-func (s *McpServer) encolarAvisoDePantalla(d fleet.Device, p *Principal) {
-	quien := nombrePrincipal(p)
-	if quien == "" {
-		quien = "un operador"
-	}
-	texto := fmt.Sprintf("Musubi: %s está abriendo una sesión de pantalla en esta máquina.",
-		fleet.RecortarRunas(quien, 64))
-	if _, err := s.engine.EncolarComando(fleet.Comando{
-		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
-		Origen:  fleet.OrigenPersona,
-		Argv:    []string{comandoAviso, texto},
-		Timeout: fleet.ComandoTimeoutDefault,
-	}); err != nil {
-		logx.Warn("flota: no se pudo encolar el aviso al usuario; la pantalla se abre igual",
-			"device", d.Name, "error", err)
-	}
 }
 
 // toolFleetConsent fija la política de consentimiento de una máquina.

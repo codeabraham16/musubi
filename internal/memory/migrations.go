@@ -1500,6 +1500,34 @@ func schemaMigrations() []migration {
 					"origen TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 42,
+			name:    "consentimiento_en_la_sesion_de_shell",
+			// CÓMO CONTESTÓ EL USUARIO CUANDO HUBO QUE PREGUNTARLE, PARA LA SHELL (A75).
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// ES LA MISMA COLUMNA QUE LA v40 Y ESO NO ES COPIAR: SON DOS TABLAS
+			//
+			// El eje de consentimiento gateaba SÓLO el camino de pantalla. Mirar la pantalla de
+			// una máquina en `pide` preguntaba; abrir una TERMINAL en la misma máquina no
+			// preguntaba nada — y una terminal es más invasiva, no menos. Cerrar ese hueco
+			// obliga a que la sesión de shell pueda registrar la respuesta, igual que la de
+			// pantalla, porque el `pide` parte la apertura en dos pedidos y entre uno y otro hay
+			// que saber qué contestaron.
+			//
+			// La alternativa —fusionar las dos tablas para tener una sola columna— está
+			// descartada y el por qué vive en internal/fleet/sesion_viva.go: las tablas se
+			// parecen, los COMPORTAMIENTOS no.
+			//
+			// VACÍA ES UN VALOR LEGÍTIMO Y ES EL DE TODAS LAS FILAS VIEJAS: significa «no hizo
+			// falta preguntar», que es lo que pasa con `libre` y con `avisa`. Por eso el DEFAULT
+			// es '' y no algo como 'desconocido' — inventar un tercer significado para las filas
+			// anteriores obligaría a interpretarlo en cada lectura.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "shell_sessions", "consentimiento",
+					"consentimiento TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 
