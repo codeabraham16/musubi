@@ -96,3 +96,38 @@ SSH si la querés remota).
 - Re-ejecutar `install-musubi-brain.sh` NO regenera el token (no rompe a los clientes).
 - Usar SIEMPRE la **IP del tailnet** (no nombres MagicDNS): con NordVPN activo el DNS no
   resuelve los nombres de la malla.
+
+### Al reemplazar un archivo de reglas: `cat >`, nunca `install` ni `cp`
+
+Pasó el 2026-09-03 y el síntoma no nombra la causa. Se subieron los dos archivos de reglas con
+`install -m 644`, con el dueño correcto y el modo correcto, y la recarga contestó **HTTP 500**:
+
+```
+loading groups failed  err="open /etc/prometheus/rules/musubi-alerts-flota.yml: permission denied"
+```
+
+**`permission denied` sobre un archivo `-rw-r--r-- musubi musubi` no es de permisos POSIX: es
+SELinux.** El servidor los tiene puestos, y un archivo NUEVO nace con la etiqueta del directorio
+del usuario (`user_home_t`) en lugar de la que el contenedor puede leer (`container_file_t`).
+`install` y `cp` crean un archivo nuevo; `cat >` y `sed -i`… no: **`cat >` escribe DENTRO del
+inodo que ya existe y hereda su etiqueta, `sed -i` lo reemplaza igual que `install`.**
+
+Verlo:
+
+```
+ls -lZ /home/musubi/musubi-prometheus/rules/*.yml
+```
+
+Arreglarlo sin adivinar la etiqueta —copiándola de un archivo que sí funcionaba—:
+
+```
+chcon --reference=<un .bak que cargaba> <el archivo nuevo>
+```
+
+**Lo que salvó la situación fue que Prometheus falla seguro**: rechaza el juego entero y deja
+corriendo el anterior («previous rule set restored»), así que el monitoreo no se cayó. Pero la
+trampa queda armada: los archivos malos ya están en disco, y **un reinicio del contenedor no
+tendría un juego anterior que restaurar**. Por eso se arregla en el momento, no después.
+
+`verificar-despliegue.sh` lo detecta —lo reporta como «desplegado A MEDIAS»— pero no puede decir
+que la causa es la etiqueta: eso está acá.
