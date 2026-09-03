@@ -56,8 +56,26 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 			"no podés abrir una shell en %q: o no existe en el proyecto %q, o tu credencial no tiene la capacidad `shell` sobre esa máquina. OJO: `shell` NO se deriva de `exec` — una shell interactiva se saltea cualquier allowlist de comandos, así que se concede aparte (sección `fleet:` de principals.yaml).",
 			nombre, proyecto)
 	}
-	if err := fleet.ValidarAperturaShell(d); err != nil {
-		return nil, rpcErrorf(codeInvalidParams, "%v", err)
+	// EL CONSENTIMIENTO, CON LA MISMA TABLA QUE PANTALLA (A75, primera mitad).
+	//
+	// Una shell es una SESIÓN, igual que una pantalla: empieza, dura y termina. Por eso acá sí
+	// corresponde la tabla entera y no sólo el techo —el aviso es por sesión, no por tecla, así
+	// que no hay ruido que administrar— y por eso el exec, que es de una sola vez, recibe otro
+	// trato (ver el comentario en methods_exec.go).
+	//
+	// Y es la que MÁS lo necesitaba: una shell interactiva se saltea cualquier allowlist de
+	// comandos. Que la pantalla preguntara y la terminal no era la asimetría al revés.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.Bloquea():
+		return nil, rpcErrorf(codeUnauthorized,
+			"no se abre una shell en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
+			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
+		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Mismo criterio que pantalla:
+		// prometer una notificación que el agente de ESTA máquina no sabe dar sería justo lo que
+		// el eje viene a evitar. Bloquear tampoco: `avisa` no bloquea, y hacerlo cerraría el
+		// acceso por una capacidad que esa máquina puede no tener nunca.
+		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
 	}
 
 	ahora := time.Now()

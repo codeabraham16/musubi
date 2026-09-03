@@ -78,6 +78,30 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 			"no podés ejecutar en %q: o no existe en el proyecto %q, o tu credencial no tiene la capacidad `exec` sobre esa máquina (ver la sección `fleet:` de principals.yaml)", nombre, proyecto)
 	}
 
+	// EL TECHO DEL DUEÑO DE LA MÁQUINA TAMBIÉN VALE ACÁ (A75, primera mitad).
+	//
+	// `prohibido` quiere decir «en esta máquina no entra nadie de forma interactiva», y hasta hoy
+	// lo miraba UN SOLO camino: el de pantalla. O sea que en una máquina marcada `prohibido`,
+	// mirar la pantalla se rechazaba y EJECUTAR UN COMANDO no — siendo que un exec puede más que
+	// una pantalla. La asimetría no estaba escrita en ningún lado y no fue deliberada: el propio
+	// comentario de `ConsentimientoEfectivo` justifica vivir en el dominio para que «el de
+	// pantalla y el de shell» no discrepen, como si los dos lo usaran.
+	//
+	// Se mira DESPUÉS de la capacidad, igual que en pantalla: quien no tiene `exec` no puede
+	// enterarse de la política de una máquina que no debería saber que existe.
+	//
+	// LO QUE ESTO **NO** HACE, y es decisión de gio, no olvido: `avisa` y `pide` no cambian nada
+	// en el exec. Un exec es de una sola vez, no una sesión, y avisar en cada uno convierte el
+	// aviso en ruido — que es exactamente cómo se le enseña a alguien a poner `libre` en todas
+	// las máquinas para dejar de ver la ventanita. Acá se aplica sólo el grado que BLOQUEA, que
+	// es el único cuyo significado no depende de esa decisión. Ver A75 en
+	// specs/control-de-flota/ABIERTO.md.
+	if consent := d.ConsentimientoEfectivo(); consent.Bloquea() {
+		return nil, rpcErrorf(codeUnauthorized,
+			"no se ejecuta en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
+			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	}
+
 	timeout := fleet.ComandoTimeoutDefault
 	if args.Timeout > 0 {
 		timeout = time.Duration(args.Timeout) * time.Second
