@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -49,9 +50,60 @@ const (
 	//
 	// El techo existe por una razón concreta: un backoff sin tope, tras una noche de cerebro
 	// caído, deja al agente esperando horas y la máquina figura muerta MUCHO después de que la
-	// red volvió. 5 minutos es el peor caso de "cuánto tarda en reaparecer" y es aceptable.
+	// red volvió.
+	//
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// POR QUÉ 2 MINUTOS Y NO LOS 5 QUE HABÍA
+	//
+	// El techo no es «cuánto tarda en reaparecer una máquina», es cuánto tarda en reaparecer
+	// LA FLOTA ENTERA cuando el cerebro vuelve — y la flota entera se cae junta cada vez que se
+	// redespliega el cerebro, que hoy PARA los servicios. Con 2000 agentes, los que llegaron al
+	// escalón más alto tardan el techo entero en enterarse de que el cerebro volvió, y mientras
+	// tanto figuran caídos.
+	//
+	// El presupuesto lo fija `MaquinaCaida` (deploy/musubi-alerts-flota.yml): `for: 5m` sobre
+	// `up == 0`, y `up` lo pone en cero el cerebro a los 90 s de silencio (umbralEnLineaDefault).
+	// La alerta suena si (corte) + (lo que le queda de sueño al agente) − 90 s ≥ 5 min. El sueño
+	// que le queda es, como mucho, el techo CON su jitter (2 min × 1,2 = 2 min 24 s), así que el
+	// techo tiene que cumplir:
+	//
+	//     techo × 1,2  <  5 min − 90 s  =  3 min 30 s
+	//
+	// Con 5 min no se cumplía: un corte de apenas 90 s alcanzaba para que la alerta sonara en
+	// toda la flota, y una vuelta del cerebro dejaba `up=0` hasta ~6,5 min. Con 2 min hace falta
+	// un corte de más de 4 min — y a los 4 min la alerta ya dice la verdad. Lo custodia
+	// TestElBackoffTieneTecho: si alguien mueve el `for` o el umbral, hay que volver a hacer esta
+	// cuenta.
+	// ────────────────────────────────────────────────────────────────────────────────────────
 	esperaMinima = 5 * time.Second
-	esperaMaxima = 5 * time.Minute
+	esperaMaxima = 2 * time.Minute
+
+	// jitterDeEspera es la dispersión de cada espera del backoff: ±20 %.
+	//
+	// Sin jitter el backoff es determinista, y determinista es SINCRONIZADO: los 2000 agentes
+	// que vieron caer al cerebro en la misma ventana calculan la misma tabla de reintentos y
+	// vuelven a golpear la puerta EN EL MISMO SEGUNDO, escalón tras escalón. Eso es una
+	// estampida, y contra un cerebro que recién levanta es la forma más segura de volver a
+	// tirarlo. El 20 % desparrama cada escalón en una ventana de ±20 % de su largo: en el techo,
+	// casi un minuto entero.
+	//
+	// El intervalo SANO (intervaloLatidoDefault) NO lleva jitter a propósito: está atado al
+	// umbral del cerebro por el factor 3, y un +20 % lo convierte en 36 s — tres latidos son
+	// 108 s, más que el umbral, y perder DOS ya pinta la máquina de rojo. La dispersión del
+	// tráfico sano la da el desfase de arranque, que es de una sola vez.
+	jitterDeEspera = 0.20
+
+	// desfaseDeArranqueMaximo es cuánto puede demorar el PRIMER latido al arrancar: 0 a 30 s.
+	//
+	// Es la otra mitad de la estampida. Un despliegue masivo —o un apagón que vuelve— arranca
+	// los 2000 agentes en la misma ventana, y sin desfase el primer latido de todos cae en el
+	// mismo segundo, y el segundo, y el tercero: el intervalo es fijo, así que la sincronía del
+	// arranque se conserva PARA SIEMPRE. 30 s es un intervalo entero: desparrama la flota sobre
+	// todo el ciclo, y ninguna máquina tarda más de lo que ya tarda en latir en figurar viva.
+	//
+	// NO se aplica con --once: ahí el punto es verificar la instalación y salir, y 30 s de
+	// espera se leen como «se colgó».
+	desfaseDeArranqueMaximo = 30 * time.Second
 
 	// envToken y envCerebro son de dónde salen las credenciales. Variables de entorno y no un
 	// archivo: es lo que ya usan connect-brain-{linux,windows} para el token del cerebro, y
@@ -153,13 +205,43 @@ func runAgent(args []string) {
 	marcarSesionAbierta(true)
 	cerrarSesionPantalla("arranque del agente")
 
-	fmt.Printf("%s agente activo · cerebro %s · latido cada %s\n", cGreen("▶"), cBold(cerebro), intervalo)
+	desfase := desfaseDeArranque()
+	fmt.Printf("%s agente activo · cerebro %s · latido cada %s · el primero en %s\n",
+		cGreen("▶"), cBold(cerebro), intervalo, desfase.Round(time.Second))
 	if _, err := col.Tomar(); err != nil {
 		// D4 — sin colector para este OS, se dice UNA vez al arrancar y el agente sigue latiendo.
 		// Estar viva es información útil aunque no se pueda medir cómo está.
 		fmt.Printf("%s sin telemetría: %v\n", cYellow("!"), err)
 	}
-	bucleDeLatidos(base, token, intervalo, col)
+	bucleDeLatidos(base, token, intervalo, desfase, col)
+}
+
+// azarDelAgente es la ÚNICA fuente de aleatoriedad del agente: un número en [0, 1).
+//
+// Es `var` por la misma razón que enumerarServicios: para que las pruebas lo claven y el jitter
+// y el desfase se vuelvan deterministas. Una prueba que mide «está dentro de ±20 %» contra un
+// generador real pasa casi siempre, y «casi siempre» en CI es un flaky con nombre propio.
+var azarDelAgente = rand.Float64
+
+// conJitter desparrama una espera en ±jitterDeEspera de su largo. La base (`espera`) queda
+// intacta en el llamador: el jitter se aplica a lo que se duerme, no a lo que se duplica, o el
+// azar se acumularía escalón a escalón y el techo dejaría de ser un techo.
+func conJitter(espera time.Duration) time.Duration {
+	factor := 1 - jitterDeEspera + 2*jitterDeEspera*azarDelAgente()
+	return time.Duration(float64(espera) * factor)
+}
+
+// siguienteEspera es el escalón que sigue en el backoff: el doble, acotado por esperaMaxima.
+func siguienteEspera(espera time.Duration) time.Duration {
+	if espera *= 2; espera > esperaMaxima {
+		espera = esperaMaxima
+	}
+	return espera
+}
+
+// desfaseDeArranque es cuánto espera el agente antes del PRIMER latido: [0, desfaseDeArranqueMaximo).
+func desfaseDeArranque() time.Duration {
+	return time.Duration(azarDelAgente() * float64(desfaseDeArranqueMaximo))
 }
 
 // bucleDeLatidos late hasta que lo maten o hasta que el cerebro diga que este dispositivo ya no
@@ -167,12 +249,16 @@ func runAgent(args []string) {
 //
 // Escucha SIGINT/SIGTERM: un agente que ignora la señal de apagado deja al systemd de cada máquina
 // esperando el timeout de kill, y eso se nota en el apagado de un servidor.
-func bucleDeLatidos(base, token string, intervalo time.Duration, col fleet.Colector) {
+//
+// `desfase` es cuánto tarda el PRIMER latido. Se recibe y no se sortea acá adentro para que el
+// desfase quede bajo el mismo select que las señales —un `systemctl stop` durante esos 30 s
+// tiene que cortar en el acto, no al final del sueño— y para que las pruebas del bucle pasen 0.
+func bucleDeLatidos(base, token string, intervalo, desfase time.Duration, col fleet.Colector) {
 	señales := make(chan os.Signal, 1)
 	signal.Notify(señales, os.Interrupt, syscall.SIGTERM)
 
 	espera := esperaMinima
-	tick := time.NewTimer(0) // el primer latido sale ya, sin esperar un intervalo entero
+	tick := time.NewTimer(desfase) // sin desfase, el primer latido sale ya: no espera un intervalo entero
 	defer tick.Stop()
 
 	for {
@@ -198,12 +284,12 @@ func bucleDeLatidos(base, token string, intervalo time.Duration, col fleet.Colec
 			atenderComandos(base, token, res.comandos)
 			tick.Reset(intervalo)
 		default:
-			// B7 — el cerebro caído NO mata al agente. Backoff exponencial acotado.
-			fmt.Fprintf(os.Stderr, "%s %s · reintento en %s\n", cYellow("!"), res.describir(), espera)
-			tick.Reset(espera)
-			if espera *= 2; espera > esperaMaxima {
-				espera = esperaMaxima
-			}
+			// B7 — el cerebro caído NO mata al agente. Backoff exponencial acotado, y con jitter:
+			// lo que se duerme es el escalón desparramado; lo que se duplica es el escalón limpio.
+			demora := conJitter(espera)
+			fmt.Fprintf(os.Stderr, "%s %s · reintento en %s\n", cYellow("!"), res.describir(), demora.Round(time.Second))
+			tick.Reset(demora)
+			espera = siguienteEspera(espera)
 		}
 	}
 }

@@ -217,19 +217,141 @@ func TestElClienteDelLatidoTieneTimeout(t *testing.T) {
 }
 
 // El backoff crece pero no sin fin: tras una noche de cerebro caído, la máquina tiene que
-// reaparecer en minutos, no en horas.
+// reaparecer en minutos, no en horas. Y el techo está atado a `MaquinaCaida`: es lo que la
+// flota entera tarda en reaparecer cuando el cerebro vuelve, y tiene que entrar en el `for` de
+// la alerta menos el umbral del cerebro (la cuenta completa está sobre esperaMaxima).
+//
+// Sabotaje que la hace fallar: volver esperaMaxima a 5 min → el peor caso con jitter (6 min)
+// supera los 3 min 30 s de presupuesto. O quitar el tope en siguienteEspera.
 func TestElBackoffTieneTecho(t *testing.T) {
 	espera := esperaMinima
 	for i := 0; i < 100; i++ {
-		if espera *= 2; espera > esperaMaxima {
-			espera = esperaMaxima
-		}
+		espera = siguienteEspera(espera)
 	}
 	if espera != esperaMaxima {
 		t.Errorf("tras 100 fallos la espera es %s, esperaba el techo %s", espera, esperaMaxima)
 	}
-	if esperaMaxima > 10*time.Minute {
-		t.Errorf("el techo del backoff es %s: demasiado para que una máquina reaparezca tras una caída", esperaMaxima)
+
+	// Los dos números de afuera, replicados con su origen a la vista: no se pueden importar y
+	// si alguien los mueve esta prueba tiene que decirlo.
+	const forMaquinaCaida = 5 * time.Minute   // deploy/musubi-alerts-flota.yml · MaquinaCaida
+	const umbralDelCerebro = 90 * time.Second // internal/mcp/methods_fleet.go · umbralEnLineaDefault
+	presupuesto := forMaquinaCaida - umbralDelCerebro
+
+	// El PEOR caso es el techo con el jitter en su extremo alto: el seam en 1 lo pone ahí.
+	anterior := azarDelAgente
+	azarDelAgente = func() float64 { return 1 }
+	t.Cleanup(func() { azarDelAgente = anterior })
+	if peor := conJitter(esperaMaxima); peor >= presupuesto {
+		t.Errorf("el techo del backoff con jitter es %s y el presupuesto de MaquinaCaida es %s (for %s − umbral %s): "+
+			"una vuelta del cerebro dispara la alerta en toda la flota",
+			peor, presupuesto, forMaquinaCaida, umbralDelCerebro)
+	}
+}
+
+// EL BACKOFF LLEVA JITTER DE ±20 % Y EL TECHO ES DE 2 MINUTOS.
+//
+// Sin jitter, 2000 agentes que vieron caer al cerebro juntos vuelven a golpearlo EN EL MISMO
+// SEGUNDO, escalón tras escalón. Con el seam clavado, la espera es una función y se puede
+// medir exacta: en el extremo bajo 0,8×, en el medio 1×, en el alto 1,2×.
+//
+// Sabotaje que la hace fallar: volver esperaMaxima a 5 min → rojo por el techo. Hacer que
+// conJitter devuelva `espera` sin tocarla → rojo porque el extremo bajo y el alto coinciden.
+// Subir jitterDeEspera a 0,5 → rojo porque se sale de ±20 %.
+func TestElBackoffTieneTechoDeDosMinutosYJitterDeVeintePorCiento(t *testing.T) {
+	if esperaMaxima != 2*time.Minute {
+		t.Errorf("el techo del backoff es %s, esperaba 2 min: la cuenta contra MaquinaCaida está sobre esperaMaxima", esperaMaxima)
+	}
+
+	anterior := azarDelAgente
+	t.Cleanup(func() { azarDelAgente = anterior })
+	fijar := func(v float64) { azarDelAgente = func() float64 { return v } }
+
+	casos := []struct {
+		azar   float64
+		factor float64
+	}{
+		{0, 0.8},   // extremo bajo: −20 %
+		{0.5, 1.0}, // el medio: la espera limpia
+		{1, 1.2},   // extremo alto: +20 %
+	}
+	for _, base := range []time.Duration{esperaMinima, 40 * time.Second, esperaMaxima} {
+		for _, c := range casos {
+			fijar(c.azar)
+			quiero := time.Duration(float64(base) * c.factor)
+			if got := conJitter(base); got != quiero {
+				t.Errorf("conJitter(%s) con azar=%.1f = %s, esperaba %s (×%.1f)", base, c.azar, got, quiero, c.factor)
+			}
+		}
+	}
+
+	// Y que sea JITTER de verdad: los extremos tienen que ser distintos entre sí, y ninguno
+	// puede salirse de ±20 %. Esto es lo que se pone rojo si alguien «simplifica» conJitter.
+	fijar(0)
+	bajo := conJitter(esperaMaxima)
+	fijar(1)
+	alto := conJitter(esperaMaxima)
+	if bajo == alto {
+		t.Errorf("el jitter no dispersa nada: con azar 0 y 1 la espera es la misma (%s). 2000 agentes vuelven en el mismo segundo", bajo)
+	}
+	if bajo < time.Duration(float64(esperaMaxima)*0.8) || alto > time.Duration(float64(esperaMaxima)*1.2) {
+		t.Errorf("el jitter se sale de ±20 %%: [%s, %s] para un techo de %s", bajo, alto, esperaMaxima)
+	}
+}
+
+// EL ARRANQUE SE ESCALONA: el primer latido sale en un instante al azar de [0, 30 s).
+//
+// Un apagón que vuelve arranca los 2000 agentes en la misma ventana; el intervalo es fijo, así
+// que sin desfase esa sincronía se conserva para siempre. 30 s es un intervalo entero: reparte
+// la flota sobre todo el ciclo sin que ninguna máquina tarde más que un latido en figurar viva.
+//
+// Sabotaje que la hace fallar: que desfaseDeArranque devuelva 0 siempre → rojo por el medio.
+// Subir desfaseDeArranqueMaximo por encima del intervalo → rojo por el tope.
+func TestElPrimerLatidoSeDesfasaAlAzarHastaTreintaSegundos(t *testing.T) {
+	anterior := azarDelAgente
+	t.Cleanup(func() { azarDelAgente = anterior })
+
+	azarDelAgente = func() float64 { return 0 }
+	if d := desfaseDeArranque(); d != 0 {
+		t.Errorf("con azar 0 el desfase es %s, esperaba 0", d)
+	}
+	azarDelAgente = func() float64 { return 0.5 }
+	if d := desfaseDeArranque(); d != 15*time.Second {
+		t.Errorf("con azar 0,5 el desfase es %s, esperaba 15 s", d)
+	}
+	// El tope no puede superar un intervalo: más que eso, y una máquina recién arrancada tarda
+	// más en figurar viva de lo que tarda en latir.
+	if desfaseDeArranqueMaximo > intervaloLatidoDefault {
+		t.Errorf("el desfase máximo (%s) supera el intervalo (%s)", desfaseDeArranqueMaximo, intervaloLatidoDefault)
+	}
+}
+
+// Y el bucle RESPETA el desfase que le pasan: el primer latido no sale antes.
+//
+// Sabotaje que la hace fallar: volver a `time.NewTimer(0)` en bucleDeLatidos, ignorando el
+// parámetro → el latido llega en el acto y la prueba lo ve.
+func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
+	const desfase = 150 * time.Millisecond
+	arranque := time.Now()
+	var primero atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primero.CompareAndSwap(0, int64(time.Since(arranque)))
+		w.WriteHeader(http.StatusUnauthorized) // revocado: el bucle termina solo tras el primero
+	}))
+	defer ts.Close()
+
+	listo := make(chan struct{})
+	go func() {
+		bucleDeLatidos(ts.URL, "tok", 10*time.Millisecond, desfase, nil)
+		close(listo)
+	}()
+	select {
+	case <-listo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("el bucle no terminó")
+	}
+	if tardo := time.Duration(primero.Load()); tardo < desfase {
+		t.Errorf("el primer latido salió a los %s, antes del desfase de %s: el arranque no se escalona", tardo, desfase)
 	}
 }
 
@@ -259,7 +381,7 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, "tok", 10*time.Millisecond, nil)
+		bucleDeLatidos(ts.URL, "tok", 10*time.Millisecond, 0, nil)
 		close(listo)
 	}()
 
