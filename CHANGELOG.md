@@ -42,6 +42,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     `node_key` no tiene el formato `path#kind:name`.
   - El **modo archivo** también explica: devolvía dos listas vacías, que se lee igual que «este
     archivo no tiene símbolos» cuando la verdad podía ser que no estuviera indexado.
+  - Y un **lenguaje que el grafo no cubre no se manda a re-indexar**: el grafo deriva del AST y sólo
+    entiende `.go` (más TS/TSX/JS/JSX/Py con `-tags treesitter`), así que para un `.cpp` la pista
+    «corré `codegraph_index`» sería falsa — indexar no lo va a agregar nunca. Ahora nombra la causa
+    real y manda a `musubi_recall_code`, que es agnóstico del lenguaje. Sale de una nota del
+    2026-08-15 sobre el árbol del juego de gio, donde la pestaña «Código» salía vacía y el miss era
+    correcto pero mudo.
 - **`musubi_code_context` deja de explicar lo que no encontró.** `explained_by` vivía FUERA del
   `if found`, así que un símbolo inventado volvía con `found:false` **y hasta cinco documentos que
   «lo explicaban»**. Lo diagnosticó el EMISARIO el 2026-08-09 y seguía vivo un mes después; medido

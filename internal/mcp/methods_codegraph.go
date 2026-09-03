@@ -544,8 +544,17 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 
 	// El archivo no está en el grafo. Que exista o no en disco separa «falta indexar» de «otra rama».
 	if _, err := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo))); err == nil {
-		res["hint"] = "«" + archivo + "» existe en disco pero NO está en el grafo: corré musubi_codegraph_index (mode='incremental')"
 		res[pathConocido] = true
+		// Y si existe pero su LENGUAJE no se indexa, indexar no lo va a arreglar nunca. El grafo
+		// deriva del AST: Go siempre, y TS/TSX/JS/JSX/Py sólo con `-tags treesitter`. C/C++, SQL,
+		// Java y demás no entran por `IndexableForGraph`, que filtra por extensión. Se documentó el
+		// 2026-08-15 al mirar el árbol del juego de gio, donde la pestaña «Código» salía vacía y
+		// nadie sabía por qué; mandarlo a re-indexar sería mandarlo a perder el tiempo.
+		if !codeintel.IndexableForGraph(archivo) {
+			res["hint"] = "«" + archivo + "» existe, pero su lenguaje NO entra al grafo: se deriva del AST y sólo cubre .go (y TS/TSX/JS/JSX/Py con -tags treesitter). Re-indexar no lo va a agregar; para este archivo usá musubi_recall_code, que es agnóstico del lenguaje"
+			return res
+		}
+		res["hint"] = "«" + archivo + "» existe en disco pero NO está en el grafo: corré musubi_codegraph_index (mode='incremental')"
 		return res
 	}
 	res["hint"] = "«" + archivo + "» no existe en el árbol indexado. El grafo indexa la rama CHECKOUTEADA: si el símbolo vive en otra rama, no está acá y el miss es correcto"

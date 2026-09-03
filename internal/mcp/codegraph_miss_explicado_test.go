@@ -64,8 +64,12 @@ func TestMissDeArchivoSinIndexarMandaAIndexar(t *testing.T) {
 	if hint == "" {
 		t.Fatal("un miss sin hint es el defecto que este test custodia")
 	}
-	if !contieneAlguna(hint, "codegraph_index", "indexar") {
-		t.Errorf("un archivo en disco fuera del grafo debe mandar a INDEXAR, obtuve %q", hint)
+	// La aserción pide el NOMBRE DE LA TOOL, no la palabra «indexar» suelta: la pista del lenguaje
+	// no indexable dice «Re-indexar no lo va a agregar», así que un `contains("indexar")` la daba
+	// por buena y este test pasaba con la pista EQUIVOCADA. Lo destapó el sabotaje que manda todo
+	// por el camino del lenguaje: G10 caía y éste seguía verde.
+	if !contieneAlguna(hint, "codegraph_index") {
+		t.Errorf("un archivo en disco fuera del grafo debe mandar a musubi_codegraph_index, obtuve %q", hint)
 	}
 	// Y NO debe hablar de otra rama: el archivo está acá.
 	if contieneAlguna(hint, "otra rama", "CHECKOUTEADA") {
@@ -212,6 +216,44 @@ func TestCodeContextSiExplicaLoQueSiEncontro(t *testing.T) {
 	}
 	if hint, _ := cc2["hint"].(string); hint == "" {
 		t.Errorf("y aun así debe explicar por qué no lo encontró, obtuve %v", cc2)
+	}
+}
+
+// G10 — un lenguaje que el grafo NO indexa no se manda a re-indexar.
+//
+// El grafo deriva del AST y sólo cubre .go (y TS/TSX/JS/JSX/Py con -tags treesitter);
+// `IndexableForGraph` filtra por extensión. Para un .cpp, «corré codegraph_index» es una pista
+// FALSA: indexar no lo va a agregar nunca. Se documentó el 2026-08-15 mirando el árbol del juego de
+// gio, donde la pestaña «Código» salía vacía y nadie sabía por qué — el miss era correcto y mudo.
+func TestUnLenguajeNoIndexableNoSeMandaAReindexar(t *testing.T) {
+	s, dir := proyectoIndexado(t)
+	writeFile(t, filepath.Join(dir, "motor", "cliente.cpp"), "int main(){ return 0; }\n")
+
+	cg := decodeCG(t, mustCall(t, s, "musubi_code_graph",
+		map[string]interface{}{"symbol": "motor/cliente.cpp#func:main"}))
+
+	hint, _ := cg["hint"].(string)
+	if hint == "" {
+		t.Fatal("un miss sin hint es el defecto que este archivo custodia")
+	}
+	if contieneAlguna(hint, "codegraph_index") {
+		t.Errorf("indexar NUNCA va a agregar un .cpp: mandar a re-indexar es una pista falsa, obtuve %q", hint)
+	}
+	if !contieneAlguna(hint, "lenguaje") {
+		t.Errorf("la pista debe nombrar la causa real (el lenguaje), obtuve %q", hint)
+	}
+	// Y tiene que dar la salida que SÍ funciona para ese archivo.
+	if !contieneAlguna(hint, "recall_code") {
+		t.Errorf("debe mandar a la memoria de código, que es agnóstica del lenguaje, obtuve %q", hint)
+	}
+
+	// Contraste: un .go sin indexar SÍ se manda a indexar. Sin este par, una pista que nunca
+	// nombrara codegraph_index pasaría el test de arriba.
+	writeFile(t, filepath.Join(dir, "otro", "z.go"), "package otro\n\nfunc Zeta() {}\n")
+	cg2 := decodeCG(t, mustCall(t, s, "musubi_code_graph",
+		map[string]interface{}{"symbol": "otro/z.go#func:Zeta"}))
+	if h2, _ := cg2["hint"].(string); !contieneAlguna(h2, "codegraph_index") {
+		t.Errorf("un .go en disco fuera del grafo SÍ se manda a indexar, obtuve %q", h2)
 	}
 }
 
