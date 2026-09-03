@@ -64,6 +64,13 @@ services:
       # `:z` para SELinux, igual que la cadena de alertas: sin la etiqueta el contenedor no puede
       # leer ni escribir, y el síntoma es un servicio que arranca y no guarda nada.
       - ${MUSUBI_RUSTDESK_DIR}/data:/root:z
+    # `unless-stopped` y NO `always`, a propósito y medido. `podman-restart.service` —que es lo que
+    # levanta los contenedores al bootear— NO filtra por `restart-policy=always` como suele
+    # creerse: filtra por `should-start-on-boot=true`, y ESE filtro incluye `unless-stopped`.
+    # Verificado en el reboot del 2026-08-31 03:17:10: este contenedor volvió a las 03:18:05, 55
+    # segundos después, sin que nadie tocara nada. Cambiarlo a `always` sería PEOR: levantaría
+    # también lo que alguien paró a propósito. Lo que sí hace falta —y lo deja `preparar.sh`— es
+    # que el linger del usuario y `podman-restart.service` estén activos.
     restart: unless-stopped
     # EL ERROR DEL LOG QUE **NO** ES UN PROBLEMA. Al arrancar, hbbs escribe dos veces:
     #   ERROR ... Failed to store  config: Bad configuration directory: "" is a root or prefix

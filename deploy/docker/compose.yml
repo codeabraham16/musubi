@@ -76,6 +76,13 @@ services:
   prometheus:
     image: prom/prometheus:v3.1.0
     container_name: musubi-prometheus
+    # `unless-stopped` y NO `always`, a propósito y medido. `podman-restart.service` —que es lo que
+    # levanta los contenedores al bootear— NO filtra por `restart-policy=always` como suele
+    # creerse: filtra por `should-start-on-boot=true`, y ESE filtro incluye `unless-stopped`.
+    # Verificado en el reboot del 2026-08-31 03:17:10: este contenedor volvió a las 03:18:05, 55
+    # segundos después, sin que nadie tocara nada. Cambiarlo a `always` sería PEOR: levantaría
+    # también lo que alguien paró a propósito. Lo que sí hace falta —y lo deja `preparar.sh`— es
+    # que el linger del usuario y `podman-restart.service` estén activos.
     restart: unless-stopped
     network_mode: host
     user: "0:0"

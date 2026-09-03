@@ -644,7 +644,12 @@ corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
   fi
 }
 LINGER="$(corre_alla 'loginctl show-user "$(id -un)" --property=Linger 2>/dev/null')"
-PRESTART="$(corre_alla 'systemctl --user is-enabled podman-restart.service 2>/dev/null; systemctl is-enabled podman-restart.service 2>/dev/null')"
+# LOS DOS UNITS POR SEPARADO, y el que manda es el de USUARIO. Los contenedores de acá son
+# rootless (corren como el usuario del cerebro, no como root), así que el `podman-restart` del
+# sistema no los levanta. Juntar las dos salidas en una sola variable daba un VERDE FALSO cuando
+# el de usuario estaba apagado y el del sistema no — se cazó saboteando esta misma sección.
+PRESTART="$(corre_alla 'systemctl --user is-enabled podman-restart.service 2>/dev/null')"
+PRESTART_SIS="$(corre_alla 'systemctl is-enabled podman-restart.service 2>/dev/null')"
 
 if [ -z "$LINGER" ] && [ -z "$PRESTART" ]; then
   dudoso "no se pudo preguntar si la cadena vuelve de un reboot (hace falta correr esto EN el servidor, o con MUSUBI_SSH=<host>)"
@@ -657,12 +662,14 @@ else
     rojo "linger APAGADO: al cerrar sesión se caen los servicios de usuario, y en el próximo reboot la cadena no vuelve. Arreglo: loginctl enable-linger \$(id -un)"
   fi
 
-  if printf '%s' "$PRESTART" | grep -q 'enabled'; then
-    verde "podman-restart habilitado — los contenedores con should-start-on-boot vuelven al arrancar"
+  # `= enabled` exacto, no `grep enabled`: «disabled» no contiene «enabled» pero «enabled-runtime»
+  # sí, y ése NO sobrevive un reboot — es justo el caso que este chequeo existe para cazar.
+  if [ "$PRESTART" = "enabled" ]; then
+    verde "podman-restart (usuario) habilitado — los contenedores con should-start-on-boot vuelven al arrancar"
   elif [ -z "$PRESTART" ]; then
-    dudoso "no se pudo leer el estado de podman-restart.service"
+    dudoso "no se pudo leer el estado de podman-restart.service del usuario"
   else
-    rojo "podman-restart NO habilitado: después de un reboot los contenedores NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. Arreglo: systemctl --user enable podman-restart.service"
+    rojo "podman-restart del USUARIO está en «$PRESTART»: después de un reboot los contenedores rootless NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. El unit del sistema (hoy «${PRESTART_SIS:-?}») NO los cubre: son rootless. Arreglo: systemctl --user enable podman-restart.service"
   fi
 fi
 
