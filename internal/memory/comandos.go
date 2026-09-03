@@ -102,6 +102,27 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 	}
 	defer tx.Rollback()
 
+	out, err := tomarComandosEnTx(tx, deviceID, ahora, tope)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("error al confirmar la entrega de comandos: %w", err)
+	}
+	return out, nil
+}
+
+// tomarComandosEnTx es el CUERPO de la entrega, sin abrir ni cerrar la transacción.
+//
+// Se partió así para que el LATIDO pueda meter el vencimiento y la entrega en la misma
+// transacción en la que estampa la señal de vida (ver latido.go): a 2000 máquinas cada 30 s, dos
+// transacciones separadas por latido son dos fsync donde alcanzaba uno. El paso de la
+// transacción por parámetro es lo que hace que la operación siga siendo indivisible desde las
+// DOS puertas — dos latidos concurrentes de la misma máquina no pueden llevarse el mismo comando,
+// que es la razón por la que esto era una transacción desde el principio.
+//
+// Asume `deviceID` ya recortado y `tope > 0`: las guardas son del llamador.
+func tomarComandosEnTx(tx *sql.Tx, deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error) {
 	// Primero vencer lo viejo. Se hace acá y no en un barrido de fondo porque el momento en que
 	// importa es JUSTO antes de entregar: es la única ventana donde un comando podría colarse.
 	limite := ahora.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
@@ -160,9 +181,6 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 		}
 		out[i].Estado = fleet.EstadoEntregado
 		out[i].Entregado = ahora
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("error al confirmar la entrega de comandos: %w", err)
 	}
 	return out, nil
 }

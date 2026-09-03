@@ -199,9 +199,24 @@ func (e *DbEngine) LatirDevice(id string, ahora time.Time, muestra string) (bool
 	if id == "" {
 		return false, nil
 	}
+	return latirDeviceCon(e.db, id, ahora, muestra)
+}
+
+// latirDeviceCon es el UPDATE del latido, y existe para que la MISMA sentencia corra en
+// autocommit (LatirDevice, que la usan la sonda y el exec) y adentro de una transacción ajena
+// (LatirYTomarComandos, ver latido.go).
+//
+// LA SENTENCIA VIVE EN UN SOLO LUGAR A PROPÓSITO. Copiarla en el camino transaccional habría
+// dejado dos definiciones de qué significa «latir», y la primera vez que alguien agregue una
+// columna al latido va a tocar una sola — la máquina quedaría con la mitad del latido escrito
+// según por qué puerta entró, y nada lo diría.
+//
+// Asume `id` ya recortado y no vacío: la guarda es del llamador, que es quien puede devolver
+// `false` sin tocar la base.
+func latirDeviceCon(x execQuerier, id string, ahora time.Time, muestra string) (bool, error) {
 	// El COALESCE-por-parámetro: cuando `muestra` es vacío la columna se reasigna a sí misma.
 	// Una sola sentencia para los dos casos, en vez de dos caminos que se pueden desincronizar.
-	res, err := e.db.Exec(
+	res, err := x.Exec(
 		`UPDATE devices SET last_seen = ?, last_sample = CASE WHEN ? = '' THEN last_sample ELSE ? END
 		 WHERE id = ? AND revoked = 0`,
 		ahora.UTC().Format(time.RFC3339), muestra, muestra, id,

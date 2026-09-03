@@ -187,11 +187,24 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		// desconocido es trabajo gratis para quien lo mande.
 		muestraJSON, notaMuestra, notaServicios := s.leerCuerpoDelLatido(r, d)
 
-		// LatirDevice devuelve (false, nil) si la fila ya no está activa. Es una carrera real y
+		// UNA SOLA TRANSACCIÓN PARA LAS DOS ESCRITURAS QUE SIEMPRE OCURREN: la señal de vida y
+		// el paso por la cola (que vence lo viejo y marca entregado lo que se lleva). Eran dos
+		// —`LatirDevice` y `TomarComandos`— y a 2000 máquinas cada 30 s eso es un fsync de más
+		// 67 veces por segundo, todos los segundos. El por qué completo está en
+		// internal/memory/latido.go; lo que importa acá es que el TOPE de escrituras por latido
+		// es una propiedad de ESTA función, y lo fija una prueba (latido_una_tx_test.go).
+		//
+		// `actualizado == false` significa que la fila ya no está activa. Es una carrera real y
 		// benigna: entre el DevicePorToken de arriba y este UPDATE, un admin pudo revocar. Se
-		// trata igual que un token inválido — el agente tiene que dejar de latir — y NO como un
-		// error del servidor.
-		actualizado, err := s.engine.LatirDevice(d.ID, time.Now(), muestraJSON)
+		// trata igual que un token inválido —el agente tiene que dejar de latir— y NO como un
+		// error del servidor. En ese caso tampoco se entrega nada de la cola, que es lo que uno
+		// espera de una máquina que acaba de ser dada de baja.
+		//
+		// La cola es la de ESTA máquina: `d` salió de resolver el token, así que un agente no
+		// puede pedir la de otro (F5). Un fallo de la cola sigue sin tumbar el latido — eso lo
+		// garantiza el motor, no este handler.
+		actualizado, pendientes, err := s.engine.LatirYTomarComandos(
+			d.ID, time.Now(), muestraJSON, maxComandosPorLatido)
 		if err != nil {
 			http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
 			return
@@ -202,17 +215,12 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			return
 		}
 
-		// La cola de ESTA máquina. `d` salió de resolver el token, así que un agente no puede
-		// pedir la cola de otro (F5). Un fallo acá NO tumba el latido: seguir viva es lo que el
-		// latido afirma, y quedarse sin comandos un ciclo es recuperable.
 		resp := respuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
 			Muestra: notaMuestra, Servicios: notaServicios}
-		if pendientes, err := s.engine.TomarComandos(d.ID, time.Now(), maxComandosPorLatido); err == nil {
-			for _, c := range pendientes {
-				resp.Comandos = append(resp.Comandos, comandoParaElAgente{
-					ID: c.ID, Argv: c.Argv, TimeoutSeg: int(c.Timeout.Seconds()),
-				})
-			}
+		for _, c := range pendientes {
+			resp.Comandos = append(resp.Comandos, comandoParaElAgente{
+				ID: c.ID, Argv: c.Argv, TimeoutSeg: int(c.Timeout.Seconds()),
+			})
 		}
 		escribirLatido(w, http.StatusOK, resp)
 	}
@@ -258,10 +266,34 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	//
 	// Tampoco depende de `metrics`: qué build corre una máquina y por dónde se la alcanza es
 	// INVENTARIO, no telemetría. Best-effort — si falla, el latido sigue valiendo.
-	if cuerpo.Version != "" || cuerpo.Direccion != "" {
-		_ = s.engine.ActualizarAutoreporte(d.ID, recortar(cuerpo.Version, 64), recortar(cuerpo.Direccion, 128))
+	//
+	// Y NO SE REESCRIBE SI DICE LO MISMO QUE YA ESTÁ GUARDADO. El agente manda su versión en
+	// TODOS los latidos, así que este UPDATE ocurría 67 veces por segundo en una flota de 2000
+	// máquinas para no cambiar NADA: la versión de un agente cambia cuando alguien lo actualiza,
+	// o sea nunca, y la dirección cuando se muda de red. Un UPDATE que reasigna una fila a sí
+	// misma cuesta exactamente lo mismo que uno que la cambia —página sucia, frame de WAL y
+	// fsync— y no hay nada del otro lado que lo compense.
+	//
+	// LA COMPARACIÓN ES CONTRA `d`, que es la fila que se leyó al resolver el token unas líneas
+	// más arriba: no cuesta ni una lectura de más. Se compara YA RECORTADO Y SIN ESPACIOS, que es
+	// la forma exacta en la que ActualizarAutoreporte lo iba a guardar; comparar el crudo haría
+	// que un agente que manda su versión con un espacio al final reescriba en cada latido.
+	//
+	// El sesgo del error es el seguro: si la comparación se equivoca, escribe de más (una
+	// escritura idéntica, inofensiva), nunca de menos.
+	version := strings.TrimSpace(recortar(cuerpo.Version, 64))
+	direccion := strings.TrimSpace(recortar(cuerpo.Direccion, 128))
+	if (version != "" && version != d.AgentVer) || (direccion != "" && direccion != d.Address) {
+		_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)
 	}
-	if cuerpo.RustdeskID != "" {
+	// Mismo criterio para el id de RustDesk, que también viene en cada latido de una máquina con
+	// escritorio remoto. Saltearlo cuando no cambió no pierde nada: el UPDATE de
+	// GuardarRustdeskID anota el «previo» sólo cuando el valor es DISTINTO, así que un reporte
+	// idéntico ya no cambiaba ninguna de las tres columnas.
+	//
+	// El 32 es el mismo recorte que aplica el motor. Si divergiera, el peor caso es volver a
+	// escribir un valor que ya estaba — nunca saltear un cambio real.
+	if rid := strings.TrimSpace(recortar(cuerpo.RustdeskID, 32)); rid != "" && rid != d.RustdeskID {
 		_ = s.engine.GuardarRustdeskID(d.ID, cuerpo.RustdeskID)
 	}
 	// LA CAPACIDAD DE PREGUNTAR (A57), y el nil se saltea a propósito.
@@ -275,7 +307,19 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	// El `false` explícito SÍ se escribe: una máquina que perdió su escritorio tiene que dejar de
 	// declarar que puede.
 	if cuerpo.PuedePreguntar != nil {
-		_ = s.engine.FijarCapacidadDePreguntar(d.ID, *cuerpo.PuedePreguntar)
+		// TAMPOCO SE REESCRIBE SI NO CAMBIÓ, por lo mismo que el autorreporte: el campo viene en
+		// todos los latidos y su valor se mueve cuando alguien instala o saca un escritorio, o
+		// sea casi nunca. La distinción que importa —«no opinó» contra «opinó que no»— la sigue
+		// haciendo el `nil` de arriba, que es la guarda de A57 y no se toca: acá adentro ya hay
+		// una opinión, y lo único que se decide es si hace falta guardarla.
+		//
+		// El aviso queda AFUERA de esta guarda a propósito. No es una escritura de la base, es
+		// una decisión sobre qué se le dice a quien mira los logs, y ya tiene su propio
+		// «una vez por máquina» (avisarUnaVez). Meterlo adentro haría que el aviso dependa de si
+		// la columna ya estaba en ese valor, que es una relación que nadie querría explicar.
+		if *cuerpo.PuedePreguntar != d.PuedePreguntar {
+			_ = s.engine.FijarCapacidadDePreguntar(d.ID, *cuerpo.PuedePreguntar)
+		}
 		if !*cuerpo.PuedePreguntar && cuerpo.MotivoNoPreguntar != "" {
 			// UNA VEZ POR MÁQUINA Y NO POR LATIDO. Es un ESTADO —el agente corre como servicio,
 			// falta zenity— que dura hasta que alguien cambie algo, y un aviso cada 30 s deja de
