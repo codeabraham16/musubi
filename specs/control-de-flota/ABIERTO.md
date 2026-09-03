@@ -35,7 +35,36 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
-> **2026-09-03 (tarde) — arranca la Ola 0 del plan «De Cuatro a Dos Mil», y con ella se cierran
+> **2026-09-03 (noche) — OLA 0 COMPLETA.** Los siete cambios entregados, cada uno con su prueba de
+> sabotaje corrida de verdad. Lo que se cerró: el consentimiento en `exec` y `shell` (A75, mitad),
+> el techo del export por proyecto con su serie `musubi_fleet_export_truncated` y su alerta, el
+> backoff con jitter y desfase de arranque, `expires:` en `principals.yaml`, `strict_tenancy` en el
+> instalador, el TLS con `ServerName` para verificar contra el nombre discando la IP, la sección de
+> flota del modelo de amenazas, y el banco de carga.
+>
+> **Y el banco dio los primeros números medidos del plan**, que hasta hoy eran proyecciones. Estado
+> estacionario, 300 agentes: **escrituras por latido 3,20 → 1,16**, lecturas 2,00 → 1,00, **p99 de
+> 48,5 ms a 31,1 ms**, 74,8 latidos/s. El criterio de salida pedía p99 < 200 ms y ≤ 1 transacción
+> de escritura por latido: los dos se cumplen.
+>
+> **Tres agujeros los encontró el sabotaje y no la revisión**, y los tres tienen la misma forma —un
+> instrumento que no puede ponerse rojo se ve idéntico a uno que funciona—: (1) la prueba del
+> desfase de arranque medía el reloj de pared contra un umbral de 150 ms y el arranque del agente
+> gasta ~2,4 s, así que se cumplía sola; (2) la prueba del techo por proyecto nombraba los
+> proyectos «chico» y «grande» y, como se barren ordenados, el chico entraba primero y sobrevivía
+> igual con un techo global; (3) el espía del banco contaba llamadas por NOMBRE de método y no
+> envolvía la combinada nueva, así que reportaba 1,20 escrituras donde había 2,20 — el número que
+> el banco existe para dar, mal y con pinta de mejora.
+>
+> **Y un merge que casi borra la autorización de flota entera**: la rama de `expires` que produjo
+> un agente estaba basada en `5dc0a97`, de otro track, y su `Principal` no tenía `Fleet` ni
+> `ExecAllow`. El conflicto lo hizo visible y se rehízo a mano sobre la base correcta. La causa fue
+> una instrucción mía que le decía al agente que continuara una rama existente, y la rama existente
+> era huérfana de una corrida anterior que había muerto.
+>
+> **A82 anotado**: la herramienta de despliegue documentada rompe el despliegue.
+>
+> > **2026-09-03 (tarde) — arranca la Ola 0 del plan «De Cuatro a Dos Mil», y con ella se cierran
 > dos cabos viejos.**
 >
 > **A74 cerrado** (por la otra sesión, `aa92edb`): la contraseña de pantalla se tapa en la MISMA
@@ -60,7 +89,7 @@
 > ponerse roja se ve idéntica a una que funciona.**
 >
 > Con eso son **20 cabos**: se cerraron A74 y A75-como-bug, y entraron A81 y la mitad de A75 que
-> es decisión.
+> es decisión. Con A82 son **21**.
 >
 > > **2026-09-03 — se cerró A78 y se abrió A79, y los dos salieron del mismo cuelgue.**
 >
@@ -164,6 +193,7 @@
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
 | A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
+| A82 | **La herramienta de despliegue documentada rompe el despliegue: `preparar.sh` contradice al README de su propio directorio** | `deploy/README.md` documenta desde `4cf31b3` que al reemplazar un archivo bind-montado hay que usar `cat >` y **nunca `install` ni `cp`**: un archivo nuevo nace con la etiqueta SELinux del directorio del usuario y el contenedor deja de leerlo, con una recarga que contesta **HTTP 500** sobre un archivo cuyo dueño y modo POSIX son perfectos. **La doc se arregló y la herramienta no**: `deploy/docker/preparar.sh` usa `install -m 0644` en SIETE lugares (31, 32, 49, 68, 72, 82, 87) y un `sed -i` en la 42. **El `sed -i` es el peor de los ocho** y por partida doble: reemplaza el inodo igual que `install` —pero quien lee el script ve los `install` y asume que el problema son ésos— y está en el camino del `chat_id`, o sea que rompe justo el canal que se está configurando. Lo encontró la otra sesión el 2026-09-03 al desplegar `alertmanager.yml`, y por eso lo hizo a mano. **La salida no es cambiar `install` por `cat >` y listo**: `cat >` exige que el destino YA EXISTA, así que `preparar.sh` necesita dos caminos —una primera instalación que cree el archivo (y ahí `install` está bien) y un reemplazo distinto—, o la primera corrida en una máquina limpia falla. Mientras tanto **la herramienta documentada no se puede usar para redesplegar**, que es exactamente cuando alguien la va a buscar. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
