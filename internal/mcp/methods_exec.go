@@ -11,10 +11,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 )
 
 // esperaPasoExec es cada cuánto se relee el comando mientras se espera su resultado.
@@ -44,6 +46,72 @@ const (
 )
 
 // toolFleetExec encola un comando y espera su resultado hasta el timeout.
+// ventanaDeAvisoDeExec es cuánto calla el aviso de `avisa` después de haber avisado, por máquina.
+//
+// Una hora y no cinco minutos: el aviso responde «¿alguien está trabajando en mi máquina?», y esa
+// pregunta se contesta una vez por tanda de trabajo, no una vez por comando. Y no es un techo de
+// seguridad —el eje que protege es `prohibido`, que no se estrangula—: es la frecuencia con la que
+// una notificación sigue significando algo para quien la recibe.
+const ventanaDeAvisoDeExec = time.Hour
+
+// aplicarConsentimientoDeExec aplica el eje de consentimiento al camino del exec.
+//
+// `prohibido` (incluido un `pide` que se endureció por no haber a quién preguntarle) rechaza.
+// `avisa` encola un aviso al usuario de la máquina, estrangulado por ventana. `libre` no hace nada.
+func (s *McpServer) aplicarConsentimientoDeExec(d fleet.Device, p *Principal, nombre string) *RpcError {
+	consent := d.ConsentimientoEfectivo()
+	switch {
+	case consent.Bloquea():
+		return rpcErrorf(codeUnauthorized,
+			"no se ejecuta en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
+			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
+		// El agente de esta máquina no sabe notificar. Se ejecuta igual —`avisa` no bloquea— y la
+		// constancia queda en el log, una vez por máquina: prometer una notificación que no se
+		// puede entregar es justo lo que este eje viene a evitar.
+		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+	case consent.AvisaAlUsuario():
+		s.encolarAvisoDeExecConVentana(d, p)
+	}
+	return nil
+}
+
+// encolarAvisoDeExecConVentana encola el aviso al usuario de la máquina, como mucho uno por
+// `ventanaDeAvisoDeExec`.
+//
+// La ventana vive EN MEMORIA del cerebro y no en la base, y es la decisión de esta función: si el
+// cerebro se reinicia, el próximo exec vuelve a avisar. El sesgo del error es el correcto —avisar
+// de más, nunca de menos— y la alternativa (una columna más, escrita en cada exec) le agrega una
+// escritura por comando al camino que la Ola 0 acaba de bajar a una por latido.
+func (s *McpServer) encolarAvisoDeExecConVentana(d fleet.Device, p *Principal) {
+	clave := "aviso_exec\x00" + d.ID
+	ahora := time.Now()
+	if previo, hay := s.avisosDados.Load(clave); hay {
+		if t, ok := previo.(time.Time); ok && ahora.Sub(t) < ventanaDeAvisoDeExec {
+			return
+		}
+	}
+	s.avisosDados.Store(clave, ahora)
+
+	quien := nombrePrincipal(p)
+	if quien == "" {
+		quien = "un operador"
+	}
+	// El texto dice QUÉ está pasando y no sólo quién: «está ejecutando comandos» es lo que le
+	// permite a quien lo lee distinguir esto de una sesión de pantalla, que avisa distinto.
+	texto := fmt.Sprintf("Musubi: %s está ejecutando comandos en esta máquina.",
+		fleet.RecortarRunas(quien, 64))
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
+		Origen:  fleet.OrigenPersona,
+		Argv:    []string{comandoAviso, texto},
+		Timeout: fleet.ComandoTimeoutDefault,
+	}); err != nil {
+		logx.Warn("flota: no se pudo encolar el aviso al usuario; el comando se ejecuta igual",
+			"device", d.Name, "error", err)
+	}
+}
+
 func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	p := principalFrom(ctx)
 	var args struct {
@@ -90,16 +158,28 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 	// Se mira DESPUÉS de la capacidad, igual que en pantalla: quien no tiene `exec` no puede
 	// enterarse de la política de una máquina que no debería saber que existe.
 	//
-	// LO QUE ESTO **NO** HACE, y es decisión de gio, no olvido: `avisa` y `pide` no cambian nada
-	// en el exec. Un exec es de una sola vez, no una sesión, y avisar en cada uno convierte el
-	// aviso en ruido — que es exactamente cómo se le enseña a alguien a poner `libre` en todas
-	// las máquinas para dejar de ver la ventanita. Acá se aplica sólo el grado que BLOQUEA, que
-	// es el único cuyo significado no depende de esa decisión. Ver A75 en
-	// specs/control-de-flota/ABIERTO.md.
-	if consent := d.ConsentimientoEfectivo(); consent.Bloquea() {
-		return nil, rpcErrorf(codeUnauthorized,
-			"no se ejecuta en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
-			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	// Y `avisa` AVISA, PERO UNA VEZ POR VENTANA Y NO UNA POR COMANDO (A75, cerrado por gio el
+	// 2026-09-03).
+	//
+	// Ésta era la pregunta que quedaba abierta, y las tres opciones estaban escritas: no avisar
+	// nunca, avisar siempre, o avisar con estrangulador. Se eligió el estrangulador y el motivo
+	// es el modo de falla de las otras dos.
+	//
+	// «Avisar siempre» convierte el aviso en ruido: quien trabaja en una máquina encadena diez o
+	// veinte exec, y veinte ventanitas seguidas es exactamente cómo se le enseña a alguien a
+	// poner `libre` en todas sus máquinas para dejar de verlas. El eje entero se apaga solo, y
+	// nadie escribe que lo apagó.
+	//
+	// «No avisar nunca» deja al eje diciendo una mentira más chica pero peor: la máquina está
+	// marcada `avisa` y quien está sentado adelante no se entera de que le ejecutaron algo. Y el
+	// exec puede MÁS que la pantalla, así que sería justo al revés de lo que hay que proteger.
+	//
+	// Con la ventana, el primer comando de una tanda avisa —«alguien está trabajando en tu
+	// máquina»— y los siguientes no repiten. La unidad honesta de este aviso no es el comando: es
+	// la SESIÓN DE TRABAJO, y la ventana es lo más cerca que se puede estar de eso sin inventar
+	// un concepto de sesión que el exec no tiene.
+	if e := s.aplicarConsentimientoDeExec(d, p, nombre); e != nil {
+		return nil, e
 	}
 
 	timeout := fleet.ComandoTimeoutDefault
