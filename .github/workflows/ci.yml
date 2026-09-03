@@ -11,6 +11,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A MANO, SOBRE CUALQUIER RAMA. Acotar `push` a main fue correcto —evita la corrida doble en
+  # cada PR— pero dejó un efecto colateral que costó 149 commits: una rama de larga vida SIN PR es
+  # invisible para CI, y si su PR está en conflicto GitHub no puede construir `refs/pull/N/merge`,
+  # así que el evento `pull_request` tampoco nace y el PR muestra CERO checks. No rojo: nada.
+  #
+  # Con esto se puede pedir la suite sobre el HEAD de la rama sin depender de que el merge se
+  # pueda calcular:  gh workflow run ci.yml --ref <rama>
+  #
+  # OJO: el trigger tiene que estar declarado en la rama DEFAULT para que la API lo acepte, Y en
+  # la rama que se despacha, porque `--ref` corre el ci.yml de ESA rama. Declararlo en una sola da
+  # 422 «Workflow does not have workflow_dispatch trigger».
+  workflow_dispatch:
 
 jobs:
   test:
@@ -75,6 +87,26 @@ jobs:
           echo "Cobertura total: ${total}%"
           awk -v t="$total" 'BEGIN { if (t+0 < 70.0) { print "ERROR: cobertura " t "% < piso 70%"; exit 1 } }'
 
+
+  # govulncheck EN SU PROPIO JOB, y a propósito no bloqueante.
+  #
+  # Estaba adentro de `test`, el job canónico. Eso lo vuelve un rojo que LLEGA SOLO: se pone rojo
+  # el día que se publica un CVE en una dependencia, sin que el PR haya tocado una línea. Un check
+  # obligatorio que se pone rojo por su cuenta enseña a relanzar sin leer, y ahí deja de proteger
+  # de nada — es el mismo mecanismo por el que `bench-scale` lleva siete semanas en rojo sin que
+  # nadie mire su log.
+  #
+  # Separado, `test` puede exigirse como check obligatorio sin heredar esa inestabilidad, y esto
+  # sigue avisando. `continue-on-error` porque un CVE nuevo es una noticia, no un defecto de este
+  # cambio: lo que corresponde es leerlo y decidir, no que frene un merge ajeno al problema.
+  vulns:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
       - name: Vulnerability scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
