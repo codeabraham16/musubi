@@ -76,7 +76,7 @@ func TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP(t *testing.T) {
 	}
 
 	n := 0
-	for _, s := range seriesDeFlota(ahora, time.Minute, versionDePrueba) {
+	for _, s := range seriesDeFlota(ahora, time.Minute, versionDePrueba, nil) {
 		revisar(s.Nombre, s.Unidad)
 		n++
 	}

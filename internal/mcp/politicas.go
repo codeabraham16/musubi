@@ -42,9 +42,41 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 		logx.Error("políticas: no se pudieron listar los dispositivos", "proyecto", proyecto, "error", err)
 		return 0
 	}
+	// LA VENTANA DE MANTENIMIENTO FRENA LAS POLÍTICAS, Y ES LA MITAD QUE UN SILENCE NO PUEDE
+	// (Ola 1 del plan empresa).
+	//
+	// Un `amtool silence` calla el aviso y no toca esto: las políticas no leen alertas, leen la
+	// muestra y actúan solas. Sin esta guarda, un reinicio planificado de postgres dispara
+	// `servicio_caido`, el auto-heal lo levanta EN MITAD DEL MANTENIMIENTO, y el silence sólo
+	// garantiza que nadie se entere — la automatización actuando con el canal que lo contaría
+	// apagado.
+	//
+	// Se consulta UNA vez por proyecto y no una por (política × máquina): son las mismas ventanas
+	// para todas las políticas del barrido, y preguntarlo adentro del bucle sería una consulta por
+	// combinación.
+	//
+	// Si la consulta falla NO se saltea nada: un error leyendo las ventanas no puede convertirse
+	// en «no hay mantenimiento» (dispararía en medio de uno) ni en «hay mantenimiento en todas»
+	// (apagaría el auto-heal de la flota entera). Se sigue con el comportamiento de siempre y se
+	// dice, que es el sesgo con el que ya se equivocaba antes de que esto existiera.
+	enMantenimiento, err := s.engine.DevicesEnMantenimiento(ahora)
+	if err != nil {
+		logx.Error("políticas: no se pudieron leer las ventanas de mantenimiento; se evalúa como si no hubiera ninguna",
+			"proyecto", proyecto, "error", err)
+		enMantenimiento = nil
+	}
+
 	acciones := 0
 	for _, pol := range s.politicas {
 		for _, d := range devices {
+			if enMantenimiento[d.ID] {
+				// Se CUENTA, con resultado propio. Un salteo silencioso se ve igual que una
+				// política que nunca tuvo que actuar, y la pregunta «¿el auto-heal no actuó
+				// porque no hizo falta, o porque estaba en mantenimiento?» se contesta acá o no
+				// se contesta.
+				s.metrics.contarPolitica(pol.Nombre, "mantenimiento")
+				continue
+			}
 			if s.evaluarPolitica(pol, d, ahora) {
 				acciones++
 			}

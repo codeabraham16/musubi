@@ -952,3 +952,43 @@ Tres desenlaces, y sólo uno es un backup roto:
 **Lo que NO cubre esta alerta:** que el backup salga de la máquina. Eso es
 `MusubiBackupOffhostStale`, y hoy vale `-1` para siempre porque el destino off-host es local por
 decisión (A37). Un snapshot fresco al lado de la base no sobrevive a que se pierda el disco.
+
+## MantenimientoEterno
+
+Una máquina lleva más de 25 horas con una ventana de mantenimiento activa.
+
+**Por qué es una alerta y no una curiosidad:** mientras la ventana esté activa, esa máquina no
+alerta **y** su auto-heal no actúa. Una ventana olvidada no se nota — la máquina queda ciega y el
+panel se ve en verde, que es exactamente el estado contra el que existe todo este monitoreo.
+
+El dominio pone un techo duro de 24 h por ventana (`fleet.MantenimientoMax`), así que esto **no
+puede pasar por un `hasta` mal escrito**. Lo que sí puede: que alguien encadene ventanas, o que un
+guion las renueve solo y nadie se acuerde de por qué.
+
+**Ver quién la declaró y para qué** — el motivo y el principal quedan en la fila:
+
+```sql
+-- en la base del cerebro
+SELECT id, principal, desde, hasta, motivo, cancelada
+  FROM device_maintenance
+ WHERE device_id = (SELECT id FROM devices WHERE name = '<máquina>')
+ ORDER BY desde DESC LIMIT 10;
+```
+
+**Cerrarla**, con el id que devolvió el alta:
+
+```
+musubi_fleet_maintenance {"device": "<máquina>", "cancelar": "<id>"}
+```
+
+La fila **no se borra, se marca**: la cronología se construye sólo sobre tablas que no se editan,
+y «hubo un mantenimiento y lo cancelaron a los diez minutos» explica el comportamiento de esa
+máquina mejor que la ausencia de toda fila.
+
+**Si el mantenimiento sigue siendo legítimo**, declará otra ventana en vez de subir el techo. Que
+alguien tenga que volver a decir «sigue» cada 24 h es el punto, no un obstáculo: un mantenimiento
+que nadie renueva en un día no es un mantenimiento, es algo que se olvidaron de cerrar.
+
+**Lo que NO cubre:** una máquina silenciada por un `silence` de Alertmanager. Eso no deja rastro
+en la base y no lo ve esta alerta — y tampoco frena el auto-heal, que es la razón por la que las
+ventanas viven en el dominio y no ahí.

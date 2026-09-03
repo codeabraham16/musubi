@@ -65,6 +65,13 @@ const proyectosParaExportar = 64
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
 	intervaloSonda time.Duration, versionCerebro string) {
 	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	// Un error leyendo las ventanas NO puede convertirse en «todas en mantenimiento» (apagaría
+	// las alertas de la flota entera) ni hacer fallar el scrape. Se sigue con el mapa vacío, que
+	// es el comportamiento de antes de que esto existiera.
+	enMantenimiento, errMant := engine.DevicesEnMantenimiento(ahora)
+	if errMant != nil {
+		enMantenimiento = nil
+	}
 
 	if len(vistos) == 0 {
 		// Un bloque vacío y mudo manda a alguien a depurar Prometheus cuando el problema está en
@@ -78,7 +85,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
 	}
 
-	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
+	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro, enMantenimiento) {
 		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
 	}
 	// EL TRUNCADO DEJA DE SER UN COMENTARIO Y PASA A SER UNA SERIE (Ola 0 del plan empresa).
@@ -179,8 +186,33 @@ type serieDeFlota struct {
 // `versionCerebro` entra por lo mismo y por una razón más: `internal/mcp` no puede leer la variable
 // que el build inyecta en `main`, así que la referencia contra la que se compara cada agente viaja
 // desde arriba o no existe.
-func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro string) []serieDeFlota {
+// `enMantenimiento` es el conjunto de máquinas con una ventana activa. Entra como parámetro y no
+// se consulta adentro de cada `Valor` porque la tabla se arma UNA vez por scrape y los `Valor` se
+// llaman una vez por máquina y por serie: una consulta ahí adentro serían 21 consultas por
+// máquina y por scrape.
+func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro string, enMantenimiento map[string]bool) []serieDeFlota {
 	return []serieDeFlota{
+		// LA VENTANA DE MANTENIMIENTO, COMO SERIE (Ola 1).
+		//
+		// Es lo que le permite a una regla decir «no alertes de esta máquina ahora» con la misma
+		// forma con la que ya dice «no alertes de una máquina caída»:
+		//
+		//     unless on(project, device) (musubi_fleet_device_maintenance == 1)
+		//
+		// Vale 0 fuera de la ventana y no se omite, al revés que las series de medición: acá el 0
+		// es un hecho que el cerebro conoce con certeza —«esta máquina NO está en mantenimiento»—
+		// y no un «no se pudo medir». Y hace falta que exista: un `unless` contra una serie que
+		// sólo aparece durante la ventana funciona igual, pero nadie podría graficar ni auditar
+		// cuánto tiempo estuvo una máquina en mantenimiento.
+		{"musubi_fleet_device_maintenance",
+			"1 si la máquina tiene una ventana de mantenimiento ACTIVA. Lo declara una persona con musubi_fleet_maintenance; mientras vale 1, las políticas de auto-heal no actúan sobre ella y las reglas que la miran no alertan.",
+			"", true,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if enMantenimiento[d.ID] {
+					return 1, true
+				}
+				return 0, true
+			}},
 		{"musubi_fleet_device_up",
 			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
 			"", false,

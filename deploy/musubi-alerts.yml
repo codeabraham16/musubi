@@ -157,6 +157,30 @@ groups:
             pueden dispararse. No es que esté todo bien: es que no se está mirando.
           runbook: "deploy/RUNBOOK.md#exportaciontruncada"
 
+      # --- Una ventana de mantenimiento que nadie cerró ---
+      #
+      # Una ventana silencia las alertas de esa máquina Y frena su auto-heal. O sea que una
+      # ventana olvidada no se nota: la máquina queda ciega y todo se ve en verde, que es
+      # exactamente el estado que este proyecto persigue.
+      #
+      # El dominio ya pone un techo duro de 24 h por ventana (fleet.MantenimientoMax), así que
+      # esto no puede pasar por un `hasta` mal escrito. Lo que SÍ puede pasar es que alguien
+      # encadene ventanas, o que un guion las renueve solo y nadie se acuerde de por qué.
+      #
+      # `for: 25h` y no menos: por debajo del techo de una ventana legítima esto sonaría en cada
+      # mantenimiento largo, y una alerta que suena cuando todo va bien enseña a ignorar el canal.
+      - alert: MantenimientoEterno
+        expr: musubi_fleet_device_maintenance == 1
+        for: 25h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lleva más de 25 horas en mantenimiento."
+          description: >-
+            Mientras la ventana esté activa esta máquina no alerta y su auto-heal no actúa. Una
+            ventana que nadie cierra es una máquina ciega con el panel en verde.
+          runbook: "deploy/RUNBOOK.md#mantenimientoeterno"
+
       - alert: MusubiVectorIndexUntrained
         expr: musubi_vector_index_trained == 0 and musubi_embeddings_active > 10000
         for: 15m

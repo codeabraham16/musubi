@@ -121,6 +121,7 @@ groups:
         expr: >-
           (musubi_fleet_device_uptime_seconds < 1800)
             unless on(project, device) (musubi_fleet_device_up == 0)
+            unless on(project, device) (musubi_fleet_device_maintenance == 1)
         # Sin `for`: el evento dura lo que dura el arranque, y esperar cinco minutos para avisar de
         # algo que pasó hace tres es perder la mitad de la ventana. El techo de 1800 s ya es la
         # ventana: el aviso vive media hora y se apaga solo.
@@ -144,6 +145,7 @@ groups:
       # esta regla, el panel muestra la última muestra buena para siempre y parece sana.
       - alert: MaquinaLateSinMedir
         expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -164,6 +166,7 @@ groups:
         # Medido al decidirlo: `kernelos-pc` (hoy `davantis-1`) estaba al 86,6 % usado, o sea en la
         # zona ciega entre los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
         expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
         labels: { severity: warning }
         annotations:
@@ -172,6 +175,7 @@ groups:
 
       - alert: DiscoCasiLleno
         expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
         labels: { severity: critical }
         annotations:
@@ -182,6 +186,7 @@ groups:
       # es lo sostenido.
       - alert: MemoriaSostenida
         expr: (musubi_fleet_device_memory_used_bytes / musubi_fleet_device_memory_total_bytes > 0.92) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 20m
         labels: { severity: warning }
         annotations:
@@ -190,6 +195,7 @@ groups:
 
       - alert: CPUSostenida
         expr: (musubi_fleet_device_cpu_percent > 90) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 30m
         labels: { severity: warning }
         annotations:
@@ -199,6 +205,7 @@ groups:
       # Normalizada por CPUs: una carga de 8 es normal en 12 cores y grave en 2.
       - alert: CargaPorCoreAlta
         expr: (musubi_fleet_device_load5 / musubi_fleet_device_cpus > 2) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 20m
         labels: { severity: warning }
         annotations:
@@ -210,6 +217,7 @@ groups:
       # no alerta por ausencia de dato (que es justamente lo que un 0 inventado habría hecho).
       - alert: TemperaturaAlta
         expr: (musubi_fleet_device_temperature_celsius > 85) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -245,6 +253,7 @@ groups:
       # Ver internal/fleet/version.go, que explica lo que esto NO puede ver.
       - alert: AgenteDesactualizado
         expr: (musubi_fleet_device_agent_stale == 1) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 6h
         labels: { severity: warning }
         annotations:
@@ -290,6 +299,7 @@ groups:
       # exactamente cómo se le enseña a alguien a ignorar las alarmas.
       - alert: MaquinaQueNoAlcanzaSuDestino
         expr: (musubi_fleet_device_reach_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -331,6 +341,7 @@ groups:
         # está caída, todos sus servicios lo están, y avisar por cada uno convierte una caída en
         # cincuenta mensajes. Que la máquina se cayó ya lo dice MaquinaCaida.
         expr: (musubi_fleet_service_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -342,6 +353,7 @@ groups:
       # el estado que `up` no puede mostrar — en cada instante el servicio está arriba.
       - alert: ServicioReiniciandose
         expr: (increase(musubi_fleet_service_restarts_total[1h]) > 5) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -353,6 +365,7 @@ groups:
       # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
       - alert: ServicioSinNoticias
         expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -402,6 +415,7 @@ groups:
           (100 * musubi_fleet_service_failed / musubi_fleet_service_handled > 20
           and musubi_fleet_service_handled > 10)
           unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -414,6 +428,7 @@ groups:
       # existe y vale cero; sin colector, la serie DESAPARECE. Esta regla mira la desaparición.
       - alert: ColectorDeRendimientoMudo
         expr: (musubi_fleet_service_last_report_seconds > 600 and on(project, device, service) musubi_fleet_service_handled) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -423,6 +438,7 @@ groups:
 
       - alert: ServicioLento
         expr: (musubi_fleet_service_latency_p95_ms > 5000) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
         labels: { severity: warning }
         annotations:
@@ -455,7 +471,7 @@ groups:
         # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.
         expr: >-
           absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}))
-          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 18
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 19
         for: 30m
         labels: { severity: warning }
         annotations:

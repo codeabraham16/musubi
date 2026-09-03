@@ -491,7 +491,7 @@ func TestLaTablaYElExportadorCoincidenEnQueEsNoMedido(t *testing.T) {
 
 			// Qué series emitiría el exportador para esta misma muestra.
 			emite := map[string]bool{}
-			for _, serie := range seriesDeFlota(ahora, 5*time.Minute, versionDePrueba) {
+			for _, serie := range seriesDeFlota(ahora, 5*time.Minute, versionDePrueba, nil) {
 				_, ok := serie.Valor(d, &c.muestra)
 				emite[serie.Nombre] = ok
 			}

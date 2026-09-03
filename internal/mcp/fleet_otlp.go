@@ -181,10 +181,15 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 	}
 
 	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	// Mismo criterio que el scrape: un error leyendo las ventanas no apaga las alertas de nadie.
+	enMantenimiento, errMant := engine.DevicesEnMantenimiento(ahora)
+	if errMant != nil {
+		enMantenimiento = nil
+	}
 	sello := strconv.FormatInt(ahora.UnixNano(), 10)
 
 	var metricas []otlpMetric
-	for _, serie := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
+	for _, serie := range seriesDeFlota(ahora, intervaloSonda, versionCerebro, enMantenimiento) {
 		var datos []otlpDataPoint
 		for _, d := range vistos {
 			v, ok := serie.Valor(d, d.UltimaMuestra)

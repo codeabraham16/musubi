@@ -122,8 +122,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       hace tres meses se etiquetaría mal. EL DEFAULT '' SIGNIFICA «NO SE SABE» Y NO
 	//       «PERSONA» — rellenar las filas viejas con `persona` le atribuiría a alguien cada
 	//       disparo automático anterior a esta migración.
-	if latestSchemaVersion() != 41 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 41", latestSchemaVersion())
+	// v42 = VENTANAS DE MANTENIMIENTO (`device_maintenance`). Es un hecho del DOMINIO y no un
+	//       silence de Alertmanager, porque un silence calla el aviso y no frena las POLÍTICAS:
+	//       un reinicio planificado dispara `servicio_caido`, el auto-heal levanta el servicio en
+	//       mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Append-only
+	//       como las otras dos bitácoras: cancelar una ventana es escribir otra fila.
+	if latestSchemaVersion() != 42 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 42", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.
