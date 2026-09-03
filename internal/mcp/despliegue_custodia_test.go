@@ -22,6 +22,8 @@ package mcp
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -290,5 +292,46 @@ func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 			t.Errorf("la alerta vigila el job %q, que prometheus.yml no declara: nunca va a existir "+
 				"y la alerta queda encendida para siempre", j)
 		}
+	}
+}
+
+// TestElPinDelGuionDeBackupEsElVerdadero custodia un acoplamiento que ya mordió, y a quien lo creó.
+//
+// EL CABO: `install-musubi-brain.sh` verifica el sha256 de `deploy/musubi-backup.sh` contra un pin
+// escrito en el propio instalador. Es la decisión correcta —un `.sha256` publicado junto al script
+// lo controla el mismo que controla el script, y `main` no tiene branch protection, así que no
+// verificaría nada— pero deja un número escrito a mano que se pudre en cuanto alguien toca el
+// guion. Y un pin podrido no degrada: el instalador MUERE, y muere en la máquina de quien está
+// levantando un cerebro nuevo, que es el peor momento para descubrirlo.
+//
+// PASÓ EL MISMO DÍA QUE SE CREÓ EL ACOPLAMIENTO. El commit que lo introdujo avisó por escrito a
+// las otras terminales de que tocar el guion exigía actualizar el pin — y esa misma tarde otro
+// commit del MISMO autor le agregó la marca `.last_snapshot` al guion sin tocar el pin. Lo cazó
+// una persona leyendo, no una prueba. Por eso esta existe: el aviso escrito no es una guarda.
+func TestElPinDelGuionDeBackupEsElVerdadero(t *testing.T) {
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-backup.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/musubi-backup.sh: %v", err)
+	}
+	real := fmt.Sprintf("%x", sha256.Sum256(guion))
+
+	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^BACKUP_SHA256="([a-f0-9]{64})"`).FindSubmatch(inst)
+	if m == nil {
+		t.Fatal("install-musubi-brain.sh no declara BACKUP_SHA256=\"<sha256>\": " +
+			"o se quitó la verificación del guion de backup —y entonces se instala sin verificar " +
+			"un script que un timer corre como el usuario del cerebro— o cambió de forma y esta " +
+			"guarda dejó de mirar donde debe")
+	}
+	if pin := string(m[1]); pin != real {
+		t.Errorf("el pin del guion de backup quedó viejo:\n"+
+			"  install-musubi-brain.sh dice: %s\n"+
+			"  deploy/musubi-backup.sh es:   %s\n"+
+			"Alguien editó el guion y no actualizó el pin. NO es cosmético: el instalador hace `die` "+
+			"y no instala el backup, en la máquina de quien está levantando un cerebro nuevo.\n"+
+			"Arreglo:  sha256sum deploy/musubi-backup.sh", pin, real)
 	}
 }
