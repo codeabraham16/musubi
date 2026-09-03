@@ -94,6 +94,13 @@ cat >> "$CFG" <<EOF
 service:
     enabled: true
     addr: "$BRAIN_ADDR"
+    # OLA 0 DEL PLAN EMPRESA (2026-09-03): fail-closed contra el modo legacy en bind remoto.
+    # Sin registro de principals (o con solo el bearer legacy), un bind no-loopback es un unico
+    # token con acceso TOTAL a todos los proyectos. Apagado, el cerebro solo lo AVISA en el log
+    # al arrancar —y un aviso en un log que nadie lee es lo mismo que nada—. Encendido, se niega
+    # a servir hasta que exista principals.yaml con al menos un miembro. Hoy es un cinturon que
+    # no aprieta: el registro existe. El dia que alguien lo borre, esto lo va a decir en la cara.
+    strict_tenancy: true
     auth_token_env: "MUSUBI_TOKEN"
     allow_insecure_token: true
     request_timeout_seconds: 60
