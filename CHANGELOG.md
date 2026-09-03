@@ -42,6 +42,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     `node_key` no tiene el formato `path#kind:name`.
   - El **modo archivo** también explica: devolvía dos listas vacías, que se lee igual que «este
     archivo no tiene símbolos» cuando la verdad podía ser que no estuviera indexado.
+- **`musubi_code_context` deja de explicar lo que no encontró.** `explained_by` vivía FUERA del
+  `if found`, así que un símbolo inventado volvía con `found:false` **y hasta cinco documentos que
+  «lo explicaban»**. Lo diagnosticó el EMISARIO el 2026-08-09 y seguía vivo un mes después; medido
+  el 2026-09-03, `inventado/no/existe.go#func:FuncionQueNuncaExistio` devolvía **siete** — entre
+  ellos la propia auditoría que reportaba el defecto. El daño no es el ruido: `found:false` con
+  siete referencias al lado **se lee como que la tool contestó**.
+  - El corte NO es «encontrado o no», es si el **archivo** existe. Para `pkg/a.go#func:Nope`
+    —archivo real, nombre mal escrito— una nota sobre `pkg/a.go` sigue siendo pertinente y se
+    devuelve; para una ruta inventada se corta. Un `explained_by` binario se equivoca en una de las
+    dos, y el «nunca» habría roto en silencio el weld que `TestCodeContextWeldsMemory` custodia
+    desde F3 — lo agarró ese test, no yo.
 - **El índice declara de qué commit es** (`indexed_head`, vía `meta`). Sin eso la pista de la rama es
   una hipótesis sin evidencia: quien pregunta no puede compararla contra su propio `HEAD`. Se
   registra al **indexar** y no al consultar, porque es un hecho del momento del índice — registrarlo

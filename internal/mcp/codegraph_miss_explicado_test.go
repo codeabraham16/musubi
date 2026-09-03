@@ -155,6 +155,90 @@ func TestArchivoSinSimbolosTambienExplica(t *testing.T) {
 	}
 }
 
+// G7 — `musubi_code_context` no puede devolver bibliografía de algo que NO ENCONTRÓ.
+//
+// Lo diagnosticó el EMISARIO el 2026-08-09 («code_context NO tiene caso nulo: explained_by está
+// FUERA del if found») y seguía vivo un mes después. Medido el 2026-09-03 contra el repo real, un
+// símbolo inventado volvía con `found:false` y SIETE documentos que «lo explicaban» — entre ellos la
+// propia auditoría que reportaba el defecto.
+//
+// El daño no es el ruido: `found:false` con referencias al lado SE LEE COMO QUE LA TOOL CONTESTÓ.
+func TestCodeContextNoExplicaLoQueNoEncontro(t *testing.T) {
+	s, _ := proyectoIndexado(t)
+
+	cc := decodeCG(t, mustCall(t, s, "musubi_code_context",
+		map[string]interface{}{"symbol": "inventado/no/existe.go#func:NuncaExistio"}))
+
+	if cc["found"] != false {
+		t.Fatalf("un símbolo inventado no debería encontrarse: %v", cc)
+	}
+	if _, hay := cc["explained_by"]; hay {
+		t.Errorf("no se devuelve bibliografía de un símbolo que no existe, obtuve %v", cc["explained_by"])
+	}
+	if hint, _ := cc["hint"].(string); hint == "" {
+		t.Errorf("un miss de code_context debe explicarse igual que el de code_graph, obtuve %v", cc)
+	}
+}
+
+// G8 — y el contraste, para que G7 no se cumpla simplemente no devolviendo NUNCA bibliografía. Son
+// DOS contrastes porque el corte no es «encontrado o no», es si el ARCHIVO existe:
+//
+//	pkg/a.go#func:Alpha  -> encontrado                  -> weld
+//	pkg/a.go#func:Nope   -> NO encontrado, archivo real -> weld (lo custodia TestCodeContextWeldsMemory)
+//	inventado/...#func:X -> NO encontrado, ruta falsa   -> sin weld (G7)
+//
+// Sin este par, borrar la línea del weld pasaría G7 y rompería el contrato de F3 en silencio.
+func TestCodeContextSiExplicaLoQueSiEncontro(t *testing.T) {
+	s, _ := proyectoIndexado(t)
+
+	cc := decodeCG(t, mustCall(t, s, "musubi_code_context",
+		map[string]interface{}{"symbol": "pkg/a.go#func:Alpha"}))
+	if cc["found"] != true {
+		t.Fatalf("Alpha debería encontrarse: %v", cc)
+	}
+	if _, hay := cc["explained_by"]; !hay {
+		t.Errorf("un símbolo encontrado debe conservar su weld con la memoria, obtuve %v", cc)
+	}
+
+	// Nombre mal escrito sobre un archivo REAL: sigue habiendo weld, porque una nota sobre
+	// `pkg/a.go` explica algo aunque el símbolo no exista.
+	cc2 := decodeCG(t, mustCall(t, s, "musubi_code_context",
+		map[string]interface{}{"symbol": "pkg/a.go#func:Nope"}))
+	if cc2["found"] != false {
+		t.Fatalf("Nope no debería encontrarse: %v", cc2)
+	}
+	if _, hay := cc2["explained_by"]; !hay {
+		t.Errorf("con el archivo real el weld se conserva aunque el símbolo no exista, obtuve %v", cc2)
+	}
+	if hint, _ := cc2["hint"].(string); hint == "" {
+		t.Errorf("y aun así debe explicar por qué no lo encontró, obtuve %v", cc2)
+	}
+}
+
+// G9 — la señal interna que decide el corte NO se filtra a la respuesta. Un campo con guion bajo
+// viajando al cliente es contrato accidental: alguien lo lee y queda imposible de sacar.
+func TestLaSenalInternaNoViajaEnLaRespuesta(t *testing.T) {
+	s, _ := proyectoIndexado(t)
+
+	for _, args := range []map[string]interface{}{
+		{"symbol": "pkg/a.go#func:Nope"},
+		{"symbol": "inventado/no/existe.go#func:X"},
+	} {
+		cg := decodeCG(t, mustCall(t, s, "musubi_code_graph", args))
+		if _, hay := cg[pathConocido]; hay {
+			t.Errorf("code_graph filtró la señal interna con %v: %v", args, cg)
+		}
+		cc := decodeCG(t, mustCall(t, s, "musubi_code_context", args))
+		if _, hay := cc[pathConocido]; hay {
+			t.Errorf("code_context filtró la señal interna con %v: %v", args, cc)
+		}
+	}
+	cgp := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"path": "pkg/fantasma.go"}))
+	if _, hay := cgp[pathConocido]; hay {
+		t.Errorf("el modo archivo filtró la señal interna: %v", cgp)
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────────────────────
 
 func contieneAlguna(s string, quiere ...string) bool {
