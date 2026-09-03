@@ -324,7 +324,7 @@ explore → plan → code → verify, reminding the agent of the phase each turn
 
 ## MCP tools
 
-The server exposes **79 tools**, grouped by domain:
+The server exposes **80 tools**, grouped by domain:
 
 | Domain | Tools |
 |---------|--------------|

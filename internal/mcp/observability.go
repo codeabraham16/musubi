@@ -264,7 +264,8 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 	m.renderPoliticas(b)
 }
 
-// contarPolitica anota una acción de auto-heal. resultado: "ok" | "rechazada" | "error".
+// contarPolitica anota una acción de auto-heal.
+// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento".
 func (m *serverMetrics) contarPolitica(politica, resultado string) {
 	if m == nil {
 		return
@@ -295,7 +296,7 @@ func (m *serverMetrics) sembrarPoliticas(nombres []string) {
 		return
 	}
 	for _, n := range nombres {
-		for _, r := range []string{"ok", "rechazada", "sin_principal", "error"} {
+		for _, r := range []string{"ok", "rechazada", "sin_principal", "error", "mantenimiento"} {
 			// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene
 			// contando, o una recarga de configuración borraría la historia de la ventana.
 			m.politicaStats.LoadOrStore(n+"\x00"+r, new(atomic.Int64))

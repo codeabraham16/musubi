@@ -507,6 +507,18 @@ type ServiceStore interface {
 	// `vacioAfirma` es la excepción y hay que ganársela: sólo cuando la máquina DIJO que no corre
 	// nada —el bloque vino y vino vacío— la lista vacía poda el inventario entero (A78).
 	PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error)
+
+	// ── Ventanas de mantenimiento (Ola 1) ───────────────────────────────────────────────────
+	// «De tal hora a tal hora esta máquina va a estar rara a propósito». Vive acá y no en un
+	// silence de Alertmanager porque un silence calla el aviso y NO frena las políticas: el
+	// auto-heal levantaría el servicio en mitad del mantenimiento y nadie se enteraría.
+	AbrirMantenimiento(m fleet.Mantenimiento) (fleet.Mantenimiento, error)
+	CancelarMantenimiento(id string) (bool, error)
+	// DevicesEnMantenimiento devuelve el CONJUNTO de máquinas en ventana ahora. Conjunto y no
+	// lista de ventanas: los dos llamadores preguntan lo mismo, y dos copias de una comparación
+	// de bordes se separan.
+	DevicesEnMantenimiento(ahora time.Time) (map[string]bool, error)
+	MantenimientosDeDevice(deviceID string, tope int) ([]fleet.Mantenimiento, error)
 }
 
 type StorageBackend interface {

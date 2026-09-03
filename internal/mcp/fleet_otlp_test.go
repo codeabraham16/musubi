@@ -926,7 +926,7 @@ func TestElSobreOTLPTieneLaFormaDeLaEspecificacion(t *testing.T) {
 // especificación de OTLP para lo adimensional, y es justo lo que rompe acá).
 func TestNingunaUnidadRenombraLaSerieEnPrometheus(t *testing.T) {
 	sufijos := map[string]string{"By": "_bytes", "s": "_seconds", "Cel": "_celsius", "%": "_percent"}
-	for _, serie := range seriesDeFlota(time.Now(), 0, versionDePrueba) {
+	for _, serie := range seriesDeFlota(time.Now(), 0, versionDePrueba, nil) {
 		if serie.Unidad == "" {
 			continue
 		}

@@ -1500,6 +1500,52 @@ func schemaMigrations() []migration {
 					"origen TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 42,
+			name:    "ventanas_de_mantenimiento",
+			// LA VENTANA DE MANTENIMIENTO ES UN HECHO DEL DOMINIO, NO UN SILENCE DE ALERTMANAGER.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// POR QUÉ NO ALCANZA CON SILENCIAR LA ALERTA
+			//
+			// Un `amtool silence` calla el aviso y NO frena nada más. Pero las políticas
+			// (scheduler_flota.go) no leen alertas: leen la muestra y actúan solas. Así que un
+			// reinicio planificado de postgres dispara `servicio_caido`, la política lo levanta
+			// EN MITAD DEL MANTENIMIENTO, y el silence sólo garantiza que nadie se entere.
+			//
+			// Es la peor combinación posible: la automatización sigue actuando y el canal que lo
+			// contaría está apagado. Por eso la ventana vive acá, donde el scheduler la puede
+			// leer, y no en la configuración de la herramienta que sólo entrega mensajes.
+			//
+			// APPEND-ONLY, como device_commands y shell_sessions: la cronología de una máquina se
+			// construye SOLO sobre tablas que no se editan, y «hubo un mantenimiento de tal hora
+			// a tal hora» es exactamente la clase de hecho que explica por qué esa máquina estuvo
+			// callada. Cancelar una ventana es escribir otra fila, no borrar la primera.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS device_maintenance (
+						id          TEXT PRIMARY KEY,
+						device_id   TEXT NOT NULL,
+						project_id  TEXT NOT NULL,
+						principal   TEXT NOT NULL,
+						desde       TEXT NOT NULL,
+						hasta       TEXT NOT NULL,
+						motivo      TEXT NOT NULL DEFAULT '',
+						cancelada   INTEGER NOT NULL DEFAULT 0,
+						creado      TEXT NOT NULL
+					)`); err != nil {
+					return fmt.Errorf("error al crear device_maintenance: %w", err)
+				}
+				// El índice cubre la única consulta caliente: «¿esta máquina está en ventana
+				// AHORA?», que el scheduler hace en cada barrido y el exportador en cada scrape.
+				if _, err := x.Exec(`
+					CREATE INDEX IF NOT EXISTS idx_maintenance_device_hasta
+					ON device_maintenance(device_id, hasta)`); err != nil {
+					return fmt.Errorf("error al indexar device_maintenance: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }
 
