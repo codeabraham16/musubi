@@ -159,6 +159,7 @@ principals:
     token_sha256: "<sha256-del-token>"   # el servidor solo ve el hash
     project_id: crm-musubi               # aísla su recall a este proyecto (con 16.1c-3)
     role: writer                         # reader (solo lectura) | writer (lee+escribe) | admin
+    expires: "2026-12-31T23:59:59Z"      # opcional (RFC3339): pasada esa fecha el token deja de autenticar
 ```
 
 - **Roles:** `reader` solo puede tools de lectura; `writer` lee y escribe; `admin` todo.

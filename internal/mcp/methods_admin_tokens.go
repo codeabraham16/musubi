@@ -87,8 +87,10 @@ func (s *McpServer) toolTokenList(ctx context.Context, _ json.RawMessage) (inter
 			"name":       p.Name,
 			"project_id": p.ProjectID,
 			"role":       p.Role,
-			"read":       p.Read,  // capacidad EFECTIVA (own|all), ya resuelta del rol
-			"write":      p.Write, // capacidad EFECTIVA (none|own|any)
+			"read":       p.Read,    // capacidad EFECTIVA (own|all), ya resuelta del rol
+			"write":      p.Write,   // capacidad EFECTIVA (none|own|any)
+			"expires":    p.Expires, // RFC3339 tal cual el registro; "" ⇒ no vence
+			"expired":    p.Expired, // true ⇒ el server ya no la autentica aunque siga listada
 		})
 	}
 	return jsonResult(map[string]interface{}{"principals": out})

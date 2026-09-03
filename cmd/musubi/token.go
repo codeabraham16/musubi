@@ -90,7 +90,7 @@ func tokenList(args []string) {
 		return
 	}
 	fmt.Printf("Principals en %s:\n", path)
-	fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", "NOMBRE", "ROL", "PROYECTO", "VE", "ESCRIBE")
+	fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %-7s  %s\n", "NOMBRE", "ROL", "PROYECTO", "VE", "ESCRIBE", "VENCE")
 	for _, p := range infos {
 		proj := p.ProjectID
 		if proj == "" {
@@ -102,7 +102,15 @@ func tokenList(args []string) {
 		if p.Read == mcp.ReadAll {
 			ve = "TODO"
 		}
-		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", p.Name, p.Role, proj, ve, p.Write)
+		// El vencimiento se edita a mano en principals.yaml (campo expires, RFC3339); acá sólo se
+		// muestra, marcando las que YA vencieron para que no parezcan vigentes.
+		vence := p.Expires
+		if vence == "" {
+			vence = "nunca"
+		} else if p.Expired {
+			vence += "  (VENCIDA)"
+		}
+		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %-7s  %s\n", p.Name, p.Role, proj, ve, p.Write, vence)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,11 @@ type PrincipalInfo struct {
 	// declara): sin esto, un `token list` no distingue una cabina de un reader normal.
 	Read  string
 	Write string
+	// Expires es el vencimiento tal cual está en el registro ("" ⇒ no vence); Expired dice si ya
+	// pasó. Sin esto, `token list` mostraría como vigente a alguien a quien el server ya le cierra
+	// la puerta, y el operador no tendría dónde ver QUÉ credenciales están por caer.
+	Expires string
+	Expired bool
 }
 
 // GenerateToken produce un token opaco aleatorio (256 bits) con prefijo "msb_". Es el
@@ -168,9 +174,20 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 		return nil, err
 	}
 	out := make([]PrincipalInfo, 0, len(f.Principals))
+	now := time.Now()
 	for _, p := range f.Principals {
 		r, w := EffectiveCaps(p.Role, p.Read, p.Write)
-		out = append(out, PrincipalInfo{Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w})
+		info := PrincipalInfo{Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w}
+		// Un expires ilegible no se rechaza acá (el listado es informativo; el que falla cerrado es
+		// loadPrincipals): se muestra crudo para que el operador VEA el typo que le está tirando
+		// abajo la carga del registro.
+		if v := strings.TrimSpace(p.Expires); v != "" {
+			info.Expires = v
+			if ts, err := time.Parse(time.RFC3339, v); err == nil && !now.Before(ts) {
+				info.Expired = true
+			}
+		}
+		out = append(out, info)
 	}
 	return out, nil
 }

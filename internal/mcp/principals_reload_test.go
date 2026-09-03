@@ -81,3 +81,47 @@ func TestReloadableRegistryKeepsSnapshotOnBadReload(t *testing.T) {
 		t.Error("una recarga fallida NO debía revocar el snapshot vigente")
 	}
 }
+
+// TestReloadableRegistryRecargaExpires valida que el vencimiento NO necesita mecanismo propio de
+// recarga: editar `expires` en principals.yaml (extender una credencial que venció, o acortar una
+// vigente) lo toma el watcher de mtime como cualquier otro cambio, porque cada re-lectura pasa por
+// loadPrincipals. Y a la inversa: una credencial vence con el archivo QUIETO, porque el chequeo
+// vive en resolve y no en la carga.
+//
+// Sabotaje que la hace fallar: en reloadIfChanged (principals_reload.go) borrá la línea
+// `rr.cur.Store(reg)` (no publicar el snapshot nuevo) — la extensión no surte efecto.
+func TestReloadableRegistryRecargaExpires(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "principals.yaml")
+	tok := "alice-token"
+	t0 := time.Unix(1_000_000, 0)
+	entry := func(expires string) string {
+		return "principals:\n  - name: alice\n    token_sha256: \"" + hashToken(tok) + "\"\n    project_id: crm\n    role: writer\n    expires: \"" + expires + "\"\n"
+	}
+
+	// Alice vence en 2020: con el archivo quieto, resolve ya la niega (reloj real).
+	writeRegAt(t, path, entry("2020-01-01T00:00:00Z"), t0)
+	reg, err := loadPrincipals(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, _ := os.Stat(path)
+	rr := newReloadableRegistry(path, "", reg, fi.ModTime())
+	if _, ok := rr.resolve(tok); ok {
+		t.Fatal("alice vencida no debía resolver, sin que nadie edite el archivo")
+	}
+
+	// El operador extiende la fecha (mtime posterior): en el próximo tick vuelve a entrar.
+	writeRegAt(t, path, entry("2100-01-01T00:00:00Z"), t0.Add(time.Minute))
+	rr.reloadIfChanged()
+	if _, ok := rr.resolve(tok); !ok {
+		t.Fatal("tras extender expires y recargar en caliente, alice debía volver a resolver")
+	}
+
+	// Un expires roto a medio editar NO deja al equipo afuera: se conserva el snapshot vigente
+	// (mismo fail-safe que cualquier otro error del archivo).
+	writeRegAt(t, path, entry("manana"), t0.Add(2*time.Minute))
+	rr.reloadIfChanged()
+	if _, ok := rr.resolve(tok); !ok {
+		t.Fatal("con un expires ilegible en disco, debía conservarse el snapshot vigente (alice sigue entrando)")
+	}
+}

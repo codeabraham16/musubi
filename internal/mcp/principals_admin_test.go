@@ -75,3 +75,45 @@ func TestAddListRevokeRoundTrip(t *testing.T) {
 		t.Fatalf("revoke inexistente: found=%v err=%v", found, err)
 	}
 }
+
+// TestAddRevokeConservaExpires valida que dar de alta o revocar a OTRA persona no le borra el
+// vencimiento a los que ya estaban. AddPrincipal/RemovePrincipal reescriben el archivo entero
+// re-serializando principalEntry, así que un `expires` que no round-trippee por el YAML se
+// perdería en silencio en el primer `musubi token new`: todas las credenciales acotadas volverían
+// a valer para siempre y nadie lo notaría hasta que el contratista que se fue en marzo siga
+// entrando en octubre.
+//
+// Sabotaje que la hace fallar: en principals.go, en principalEntry, cambiá la etiqueta del campo
+// Expires por `yaml:"-"` — el alta de bob le borra el expires a alice.
+func TestAddRevokeConservaExpires(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".musubi", "principals.yaml")
+	if _, err := AddPrincipal(path, "alice", "crm", "writer"); err != nil {
+		t.Fatalf("AddPrincipal alice: %v", err)
+	}
+	// El operador le pone el vencimiento a alice a mano: no hay comando que lo haga (la rotación
+	// es de la Ola 2), así que el campo tiene que sobrevivir a las reescrituras del CLI.
+	f, err := readPrincipalsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Principals[0].Expires = "2030-06-01T00:00:00Z"
+	if err := writePrincipalsFile(path, f); err != nil {
+		t.Fatal(err)
+	}
+
+	// Alta y baja de un tercero: las dos reescriben el archivo entero.
+	if _, err := AddPrincipal(path, "bob", "crm", "reader"); err != nil {
+		t.Fatalf("AddPrincipal bob: %v", err)
+	}
+	if found, err := RemovePrincipal(path, "bob"); err != nil || !found {
+		t.Fatalf("RemovePrincipal bob: found=%v err=%v", found, err)
+	}
+
+	infos, err := ListPrincipalsInfo(path)
+	if err != nil || len(infos) != 1 || infos[0].Name != "alice" {
+		t.Fatalf("ListPrincipalsInfo: %+v err=%v", infos, err)
+	}
+	if infos[0].Expires != "2030-06-01T00:00:00Z" {
+		t.Fatalf("el expires de alice debía sobrevivir al alta y la baja de bob, quedó %q", infos[0].Expires)
+	}
+}

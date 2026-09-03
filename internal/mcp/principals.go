@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,10 +56,11 @@ const (
 type Principal struct {
 	Name      string
 	ProjectID string
-	Role      string // conservado para logs y compat; el comportamiento lo deciden Read/Write
-	Read      string // ReadOwn | ReadAll
-	Write     string // WriteNone | WriteOwn | WriteAny
-	hash      string // hex del SHA-256 del token (nunca el token crudo)
+	Role      string    // conservado para logs y compat; el comportamiento lo deciden Read/Write
+	Read      string    // ReadOwn | ReadAll
+	Write     string    // WriteNone | WriteOwn | WriteAny
+	Expires   time.Time // vencimiento de la credencial; cero ⇒ no vence (compat con todo registro previo)
+	hash      string    // hex del SHA-256 del token (nunca el token crudo)
 }
 
 // capsFromRole traduce el rol histórico al par (alcance, autoridad). Es la tabla de
@@ -95,7 +97,17 @@ func (p *Principal) caps() (read, write string) {
 // PrincipalRegistry es el conjunto de principals cargado del archivo de registro.
 type PrincipalRegistry struct {
 	principals []Principal
-	legacyHash string // SHA-256 del MUSUBI_TOKEN legacy (si hay); actúa como admin federado
+	legacyHash string           // SHA-256 del MUSUBI_TOKEN legacy (si hay); actúa como admin federado
+	now        func() time.Time // reloj para decidir vencimientos; nil ⇒ time.Now (seam para las pruebas)
+}
+
+// clock devuelve el reloj del registro (time.Now salvo que una prueba inyecte otro). Existe para
+// que "vencido" sea verificable sin dormir ni depender de la hora real de la máquina.
+func (r *PrincipalRegistry) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 type principalEntry struct {
@@ -108,6 +120,11 @@ type principalEntry struct {
 	// (sala de mando: read=all + write=own; cabina: read=all + write=none).
 	Read  string `yaml:"read,omitempty"`
 	Write string `yaml:"write,omitempty"`
+	// expires es OPCIONAL (RFC3339): ausente ⇒ la credencial no vence, que es lo que significaba
+	// todo registro anterior a este campo. Presente, la credencial deja de autenticar a partir de
+	// ese instante aunque la línea siga en el archivo. Hasta acá un token msb_ valía para siempre:
+	// a escala de empresa eso es un contratista que se fue en marzo y sigue entrando en octubre.
+	Expires string `yaml:"expires,omitempty"`
 }
 
 type principalsFileYAML struct {
@@ -207,12 +224,28 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		if projectID == "" && read == ReadOwn {
 			return nil, fmt.Errorf("principal %q: project_id es obligatorio cuando read=own (sin proyecto, el recall no tiene a qué acotarse y vería todos los proyectos)", name)
 		}
+		// VENCIMIENTO: una fecha ILEGIBLE rechaza el archivo entero, igual que un rol o un hash
+		// inválidos. La alternativa —ignorar el campo— sería fail-open: el operador CREE que acotó
+		// la credencial y el token siguió valiendo para siempre por un typo. En cambio una fecha
+		// legible YA PASADA no es error: es un dato válido (la credencial venció, resolve la niega).
+		// Si rechazáramos aquí las vencidas, el archivo dejaría de cargar en cuanto venciera UN
+		// miembro y la recarga en caliente conservaría el snapshot viejo, bloqueando de paso las
+		// altas y revocaciones de TODOS los demás.
+		var expires time.Time
+		if v := strings.TrimSpace(p.Expires); v != "" {
+			ts, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return nil, fmt.Errorf("principal %q: expires ilegible %q (usá RFC3339, p.ej. 2026-12-31T23:59:59Z)", name, v)
+			}
+			expires = ts
+		}
 		reg.principals = append(reg.principals, Principal{
 			Name:      name,
 			ProjectID: projectID,
 			Role:      role,
 			Read:      read,
 			Write:     write,
+			Expires:   expires,
 			hash:      h,
 		})
 	}
@@ -220,8 +253,15 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 }
 
 // resolve autentica un bearer contra el registro. Devuelve el principal y true si el token
-// matchea una entrada; el token legacy matchea como principal admin ("legacy"). La
+// matchea una entrada VIGENTE; el token legacy matchea como principal admin ("legacy"). La
 // comparación es en tiempo constante (no filtra por timing qué entrada matcheó).
+//
+// El vencimiento se decide ACÁ, en cada request, y no al cargar el archivo: la recarga en
+// caliente (principals_reload.go) sólo re-lee cuando cambia el mtime, así que una credencial que
+// vence con el archivo quieto tiene que morir igual, sin que nadie lo edite. Y al revés, la
+// recarga ya cubre lo que falta: el operador corre (o acorta) la fecha en principals.yaml y el
+// watcher la toma en ≤10s sin reiniciar, porque cada re-lectura pasa por loadPrincipals y éste
+// vuelve a parsear expires (verificado: reloadIfChanged no cachea nada por fuera del snapshot).
 func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 	if token == "" {
 		return nil, false
@@ -234,6 +274,11 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 		}
 	}
 	if match != nil {
+		// Vencida ⇒ NO autentica, y tampoco cae al legacy: un token vencido es tan ajeno como uno
+		// desconocido (el caller lo cuenta como intento fallido para el lockout por IP).
+		if !match.Expires.IsZero() && !r.clock().Before(match.Expires) {
+			return nil, false
+		}
 		return match, true
 	}
 	if r.legacyHash != "" && subtle.ConstantTimeCompare([]byte(h), []byte(r.legacyHash)) == 1 {
