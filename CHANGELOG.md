@@ -7,6 +7,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.131.0] - 2026-09-03
+
 ### Changed
 - **El grafo de código se OFRECE en vez de esperar a que lo llamen.** La inyección de estructura al
   leer un archivo nació opt-in (`MUSUBI_CODEGRAPH_HOOK`) por prudencia de tokens, y esa prudencia
@@ -5617,6 +5619,7 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   telemetría de errores.
 
 [Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.106.0...HEAD
+[0.131.0]: https://github.com/codeabraham16/musubi/compare/v0.130.0...v0.131.0
 [0.130.0]: https://github.com/codeabraham16/musubi/compare/v0.106.0...v0.130.0
 [0.106.0]: https://github.com/codeabraham16/musubi/compare/v0.105.0...v0.106.0
 [0.105.0]: https://github.com/codeabraham16/musubi/compare/v0.104.0...v0.105.0
