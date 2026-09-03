@@ -35,7 +35,38 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
-> **2026-09-03 (cierre) — A75 CERRADO ENTERO, por decisión de gio.** Faltaba qué hace `avisa`
+> **2026-09-03 (noche) — OLA 1 ARRANCADA: lo que no necesita ninguna decisión, hecho.**
+>
+> **Los 19 joins llevan `project`.** Con un solo tenant `on(device)` se comporta igual, y por eso
+> el error era invisible: el día que dos clientes tengan cada uno un `srv-01`, Prometheus descarta
+> la regla ENTERA por emparejamiento muchos-con-muchos y `MaquinaCaida` deja de vigilar a toda la
+> flota, en silencio. Lo mismo en el `group_by` y las inhibiciones de Alertmanager, donde falla
+> distinto: sin `project`, un `resolved` de un cliente cierra el aviso del otro.
+>
+> **La ventana de mantenimiento, como hecho del dominio.** Es la pieza que un `silence` no puede
+> dar: las políticas no leen alertas, leen la muestra y actúan solas, así que un reinicio
+> planificado disparaba el auto-heal en mitad del mantenimiento con el aviso ya silenciado. Techo
+> duro de 24 h —una ventana olvidada es una máquina ciega con el panel en verde—, append-only,
+> serie propia, guarda en 16 reglas, `MantenimientoEterno` y su tool compuertada por `metrics`.
+>
+> **`service.trusted_proxies`**, para que detrás de un proxy cinco tokens malos dejen de bloquear a
+> la célula entera — leyendo `X-Forwarded-For` sólo desde orígenes declarados y de derecha a
+> izquierda, que es lo que resiste a un cliente que falsifica el header.
+>
+> **Y las recording rules del SLA**, con el peor equipo de cada cliente y una serie de HUECO: un
+> reporte que no distingue «100 % disponible» de «no medimos» no es un reporte.
+>
+> **Cuatro agujeros los encontró el sabotaje**, y dos eran de las guardas que más importaban: la
+> tool de mantenimiento sin exigir `metrics` (declarar una ventana sobre una máquina ajena es
+> apagarle el monitoreo a otro) y el salteo del scheduler sin custodiar (las pruebas miraban el
+> almacén, y el almacén puede estar perfecto mientras `aplicarPoliticas` lo ignora). Los otros
+> dos: la prueba de tenant no distinguía las dos direcciones de recorrido del `X-Forwarded-For`
+> hasta que se le puso el caso del header FALSIFICADO, que es el ataque; y un sabotaje que no
+> compilaba, que no cuenta como rojo.
+>
+> **Sigue en 20 cabos.**
+>
+> > **2026-09-03 (cierre) — A75 CERRADO ENTERO, por decisión de gio.** Faltaba qué hace `avisa`
 > sobre un `exec`, con tres opciones anotadas. Se eligió **avisar con estrangulador**: el primer
 > comando de una tanda avisa a quien está sentado adelante, y los siguientes no repiten, con una
 > ventana de una hora por máquina. El motivo es el modo de falla de las otras dos. «Avisar
