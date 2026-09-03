@@ -331,11 +331,25 @@ func TestElPrimerLatidoSeDesfasaAlAzarHastaTreintaSegundos(t *testing.T) {
 // Sabotaje que la hace fallar: volver a `time.NewTimer(0)` en bucleDeLatidos, ignorando el
 // parámetro → el latido llega en el acto y la prueba lo ve.
 func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
-	const desfase = 150 * time.Millisecond
-	arranque := time.Now()
-	var primero atomic.Int64
+	// SE MIRA LA ESPERA QUE SE PIDE, NO LA QUE SE SUFRE.
+	//
+	// La versión anterior de esta prueba medía el reloj de pared contra un umbral de 150 ms y era
+	// HUECA: el arranque del agente gasta ~2,4 s antes del primer POST, así que el umbral se
+	// cumplía solo. Medido con el sabotaje puesto (`nuevoTimer(0)`): el primer latido llegó a los
+	// 2,37 s y la prueba pasó en VERDE. Lo cazó el sabotaje, no la revisión.
+	//
+	// Sabotaje que la hace fallar: en bucleDeLatidos, `nuevoTimer(0)` en vez de
+	// `nuevoTimer(desfase)` — o pasarle el intervalo, que es el otro error plausible.
+	const desfase = 7 * time.Second // grande a propósito: si se durmiera de verdad, se notaría
+	var pedidas []time.Duration
+	anterior := nuevoTimer
+	nuevoTimer = func(d time.Duration) *time.Timer {
+		pedidas = append(pedidas, d)
+		return time.NewTimer(0) // no se espera nada: la prueba mide la INTENCIÓN, no el reloj
+	}
+	t.Cleanup(func() { nuevoTimer = anterior })
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		primero.CompareAndSwap(0, int64(time.Since(arranque)))
 		w.WriteHeader(http.StatusUnauthorized) // revocado: el bucle termina solo tras el primero
 	}))
 	defer ts.Close()
@@ -347,11 +361,15 @@ func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
 	}()
 	select {
 	case <-listo:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("el bucle no terminó")
 	}
-	if tardo := time.Duration(primero.Load()); tardo < desfase {
-		t.Errorf("el primer latido salió a los %s, antes del desfase de %s: el arranque no se escalona", tardo, desfase)
+
+	if len(pedidas) == 0 {
+		t.Fatal("el bucle no pidió ningún timer: el seam quedó sin usar y esta prueba no custodia nada")
+	}
+	if pedidas[0] != desfase {
+		t.Errorf("la PRIMERA espera del bucle fue %s y el desfase sorteado era %s: el arranque no se escalona, y con 2000 agentes eso es una estampida contra un cerebro que recién levanta", pedidas[0], desfase)
 	}
 }
 

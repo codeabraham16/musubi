@@ -216,6 +216,10 @@ func runAgent(args []string) {
 	bucleDeLatidos(base, token, intervalo, desfase, col)
 }
 
+// nuevoTimer es el seam del reloj del bucle, por la misma razón que azarDelAgente: para que una
+// prueba pueda ver QUÉ ESPERA se pidió sin tener que esperarla.
+var nuevoTimer = time.NewTimer
+
 // azarDelAgente es la ÚNICA fuente de aleatoriedad del agente: un número en [0, 1).
 //
 // Es `var` por la misma razón que enumerarServicios: para que las pruebas lo claven y el jitter
@@ -258,7 +262,17 @@ func bucleDeLatidos(base, token string, intervalo, desfase time.Duration, col fl
 	signal.Notify(señales, os.Interrupt, syscall.SIGTERM)
 
 	espera := esperaMinima
-	tick := time.NewTimer(desfase) // sin desfase, el primer latido sale ya: no espera un intervalo entero
+	// EL TIMER SALE DE UN SEAM, Y NO ES CEREMONIA: ES LA ÚNICA MANERA DE PROBAR ESTO.
+	//
+	// La primera versión de la prueba medía el reloj de pared —«el primer latido tardó al menos
+	// el desfase»— y era HUECA: el arranque del agente gasta ~2,4 s antes del primer POST
+	// (idRustdeskLocal y direccionPropia salen a preguntarle cosas al sistema), así que cualquier
+	// umbral chico se cumple solo, con desfase o sin él. Se midió: con `NewTimer(0)` el primer
+	// latido llegó igual a los 2,37 s contra un umbral de 150 ms, y la prueba pasaba en verde.
+	//
+	// Subir el umbral por encima del ruido haría la prueba lenta y flaky en CI. Mirar la
+	// DURACIÓN QUE SE PIDE en vez de la que se sufre la vuelve exacta y de microsegundos.
+	tick := nuevoTimer(desfase) // sin desfase, el primer latido sale ya: no espera un intervalo entero
 	defer tick.Stop()
 
 	for {
