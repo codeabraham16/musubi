@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
@@ -82,5 +83,82 @@ func TestElConsentimientoProhibidoTambienCierraExecYShell(t *testing.T) {
 				t.Errorf("%s: el mensaje no distingue el candado del dueño de una falta de permiso: %s", c.nombre, e.Message)
 			}
 		})
+	}
+}
+
+// A75 CERRADO — `avisa` AVISA EN EL EXEC, PERO UNA VEZ POR VENTANA.
+//
+// Era la mitad que quedaba abierta, y las tres opciones estaban escritas en la fila: no avisar
+// nunca, avisar siempre, o avisar con estrangulador. Se eligió el estrangulador porque el modo de
+// falla de las otras dos es peor: avisar en cada comando convierte el aviso en ruido —veinte
+// ventanitas seguidas es cómo se le enseña a alguien a poner `libre` en todas sus máquinas— y no
+// avisar nunca deja al eje mintiendo, en el camino que puede MÁS que la pantalla.
+//
+// Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de
+// aplicarConsentimientoDeExec (deja de avisar), o sacar el chequeo de la ventana en
+// encolarAvisoDeExecConVentana (avisa en cada comando).
+func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "exec"},
+		"project": "casa", "os": "linux", "arch": "amd64",
+	}); e != nil {
+		t.Fatalf("no se pudo enrolar: %+v", e)
+	}
+	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+		t.Fatal(err)
+	}
+	// El agente tiene que declarar que SABE avisar; si no, el camino correcto es el del log.
+	if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	acumulados := 0
+	avisos := func() int {
+		t.Helper()
+		n := acumulados
+		// TomarComandos entrega y MARCA entregado, así que se llama una sola vez por medición y
+		// se acumula: llamarla dos veces devolvería vacío la segunda y la prueba contaría 0 sin
+		// que nada esté mal.
+		cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+		if err != nil {
+			t.Fatalf("no se pudo leer la cola: %v", err)
+		}
+		for _, c := range cmds {
+			if len(c.Argv) > 0 && c.Argv[0] == comandoAviso {
+				n++
+			}
+		}
+		acumulados = n
+		return n
+	}
+
+	ctx := context.Background()
+	correr := func() {
+		t.Helper()
+		if _, e := s.toolFleetExec(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio","argv":["echo","hola"]}`)); e != nil {
+			t.Fatalf("el exec se rechazó y `avisa` no bloquea: %s", e.Message)
+		}
+	}
+
+	correr()
+	if n := avisos(); n != 1 {
+		t.Fatalf("el primer exec dejó %d avisos, esperaba 1: en una máquina marcada `avisa`, quien está sentado adelante no se entera de que le ejecutaron algo", n)
+	}
+	// Una tanda de trabajo: cinco comandos más, ningún aviso más.
+	for i := 0; i < 5; i++ {
+		correr()
+	}
+	if n := avisos(); n != 1 {
+		t.Errorf("seis exec dejaron %d avisos: una ventanita por comando es exactamente cómo se le enseña a alguien a poner `libre` en todas sus máquinas", n)
+	}
+
+	// Y pasada la ventana, vuelve a avisar: el estrangulador no puede volverse un silencio
+	// permanente. Se envejece la marca en vez de dormir la prueba.
+	s.avisosDados.Store("aviso_exec\x00"+d.ID, time.Now().Add(-ventanaDeAvisoDeExec-time.Minute))
+	correr()
+	if n := avisos(); n != 2 {
+		t.Errorf("pasada la ventana quedaron %d avisos, esperaba 2: el estrangulador se volvió un silencio permanente", n)
 	}
 }

@@ -35,7 +35,20 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
-> **2026-09-03 (noche) — OLA 0 COMPLETA.** Los siete cambios entregados, cada uno con su prueba de
+> **2026-09-03 (cierre) — A75 CERRADO ENTERO, por decisión de gio.** Faltaba qué hace `avisa`
+> sobre un `exec`, con tres opciones anotadas. Se eligió **avisar con estrangulador**: el primer
+> comando de una tanda avisa a quien está sentado adelante, y los siguientes no repiten, con una
+> ventana de una hora por máquina. El motivo es el modo de falla de las otras dos. «Avisar
+> siempre» convierte el aviso en ruido —veinte ventanitas seguidas es exactamente cómo se le
+> enseña a alguien a poner `libre` en todas sus máquinas, y el eje entero se apaga solo sin que
+> nadie escriba que lo apagó—. «No avisar nunca» deja al eje mintiendo en el camino que puede MÁS
+> que la pantalla. La unidad honesta de este aviso no es el comando: es la sesión de trabajo, y la
+> ventana es lo más cerca de eso sin inventarle al exec un concepto de sesión que no tiene. La
+> ventana vive en memoria del cerebro a propósito: si se reinicia, el próximo exec vuelve a
+> avisar — el sesgo del error es avisar de más, nunca de menos, y la alternativa era una escritura
+> por comando en el camino que esta misma ola acaba de bajar a una por latido. **20 cabos.**
+>
+> > **2026-09-03 (noche) — OLA 0 COMPLETA.** Los siete cambios entregados, cada uno con su prueba de
 > sabotaje corrida de verdad. Lo que se cerró: el consentimiento en `exec` y `shell` (A75, mitad),
 > el techo del export por proyecto con su serie `musubi_fleet_export_truncated` y su alerta, el
 > backoff con jitter y desfase de arranque, `expires:` en `principals.yaml`, `strict_tenancy` en el
@@ -186,7 +199,6 @@
 
 
 
-| A75 | **Falta decidir qué hace `avisa` y `pide` sobre un `exec`** (la mitad que queda) | **El techo se cerró el 2026-09-03**: `prohibido` ahora también cierra `exec` y `shell`, y `shell` recibe la tabla ENTERA de consentimiento —la misma que pantalla— porque una shell es una SESIÓN: empieza, dura y termina, así que el aviso es por sesión y no por tecla. Era la asimetría al revés: una shell interactiva se saltea cualquier allowlist de comandos, o sea que puede estrictamente más que una pantalla, y era la única que no miraba el candado del dueño. **Lo que queda abierto es sólo el exec**, y sigue siendo decisión y no bug: un exec es de UNA SOLA VEZ, no una sesión, y avisarle a quien está sentado adelante en cada comando convierte el aviso en ruido — que es exactamente cómo se le enseña a alguien a poner `libre` en todas las máquinas para dejar de ver la ventanita. Las opciones son (a) no avisar nunca en exec y declararlo, (b) avisar una vez por máquina y por ventana de tiempo con el mismo estrangulador que ya usa pantalla (`avisarUnaVezPorDevice`), o (c) avisar siempre y aceptar el ruido. **La excepción está escrita en el código**, en `methods_exec.go`, donde se lee — no sólo acá. | **decisión de gio** |
 
 | A76 | **Los contenedores de una máquina Windows son invisibles para la flota** | El agente enumera contenedores desde A42 y los reporta como servicios — pero **sólo en Linux**, con `podman ps`. La asimetría se midió el 2026-09-02: `musubi-server` reporta 57 servicios de los cuales **14 son contenedores**; `davantis-1` reporta 64 y **ninguno**, con **11 contenedores de Docker Desktop corriendo** (el Supabase local de `altura-erp`). **El costo ya se pagó ese mismo día**: `supabase_vector_altura-erp` llevaba días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se encontraron **con la mano**, buscando espacio en disco — ninguna alerta existía, porque la serie no existe. Es el mismo colector con otra fuente (`docker ps` en vez de `podman ps`), y en cuanto los reporte, `ServicioCaido` y `ServicioReiniciandose` empiezan a cubrirlos sin escribir una regla nueva. **Ojo con el segundo**: hoy está declarado `ausente_en: os=windows` porque el SCM no expone reinicios, y un contenedor SÍ los expone — esa declaración va a necesitar afinarse a «servicios del SCM» cuando esto entre. | **sin asignar** |
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
