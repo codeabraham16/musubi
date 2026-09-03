@@ -133,13 +133,27 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	return preEnvelope(strings.Join(parts, "\n\n"))
 }
 
-// codegraphHookEnabled indica si el usuario habilitó la inyección del grafo en el hook (opt-in).
+// codegraphHookEnabled indica si se inyecta la estructura del grafo al LEER un archivo.
+//
+// NACIÓ OPT-IN Y AHORA VIENE ENCENDIDO, con el apagador a mano. El opt-in se eligió por prudencia de
+// tokens (la estructura de un archivo real mide ~1.745 chars), pero medido el 2026-09-03 esa
+// prudencia salía carísima: contra el ledger del cerebro central en 14 días, el grafo se ALIMENTÓ
+// 161 veces y se LEYÓ 14 — y `musubi_impact`, `musubi_code_graph_viz` y `musubi_entity_context`
+// tenían CERO invocaciones. Un default apagado no es neutral: es la decisión de que nadie lo use.
+//
+// El costo se paga contra la alternativa, no contra cero: para «quién llama a formasPara», el grafo
+// devolvió 450 chars con callers Y callees, y `grep` 1.367 sin poder distinguir una llamada de una
+// mención en un comentario. Inyectar es TRES VECES más barato que el camino que reemplaza — y es
+// inerte si el archivo no está indexado, así que en un repo sin grafo no cuesta nada.
+//
+// El escape queda explícito (MUSUBI_CODEGRAPH_HOOK=0) porque un default nuevo sin apagador es un
+// default impuesto: quien mida que en su repo no le conviene tiene que poder salirse sin parchear.
 func codegraphHookEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("MUSUBI_CODEGRAPH_HOOK"))) {
-	case "1", "true", "yes", "on":
-		return true
+	case "0", "false", "no", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // Cotas para que el contexto del grafo sea compacto (la palanca de tokens, no un volcado).

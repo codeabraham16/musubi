@@ -153,21 +153,24 @@ func TestSinGrafoElRadioDeImpactoNoDiceNada(t *testing.T) {
 // CADA Read (medido: 1.745 caracteres en un archivo real de este repo) y por eso nació opt-in; la
 // de edición son tres líneas y dispara mucho menos seguido. Dejarla detrás del mismo flag la
 // habría condenado a lo mismo que condenó a musubi_impact: existir apagada.
+// (Actualizado el 2026-09-03: el flag de lectura pasó a venir ENCENDIDO, así que apagarlo ahora es
+// explícito — "0". Lo que el test ata no cambió: son dos superficies con gobierno SEPARADO, y el
+// radio de impacto no depende del flag de lectura en ninguna de sus dos posiciones.)
 func TestElRadioDeImpactoNoDependeDelOptInDeLectura(t *testing.T) {
-	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "")
+	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "0")
 	root := t.TempDir()
 	writeFile(t, root, "hoja.go", "package p\nfunc hoja(){}\n")
 
 	in := `{"tool_name":"Edit","tool_input":{"file_path":"hoja.go"},"session_id":"s"}`
 	_, ctx := hookAdditionalContext(t, precheckOutput(cadenaStore(), root, strings.NewReader(in)))
 	if !strings.Contains(ctx, "radio de impacto") {
-		t.Errorf("el radio de impacto debe salir con el opt-in de LECTURA apagado, obtuve %q", ctx)
+		t.Errorf("el radio de impacto debe salir con el flag de LECTURA apagado, obtuve %q", ctx)
 	}
 
-	// Y el contraste: la misma config, leyendo, sigue sin inyectar la estructura.
+	// Y el contraste: la misma config, leyendo, no inyecta la estructura.
 	inRead := `{"tool_name":"Read","tool_input":{"file_path":"hoja.go"},"session_id":"s"}`
 	if out := precheckOutput(cadenaStore(), root, strings.NewReader(inRead)); strings.Contains(out, "grafo de código") {
-		t.Errorf("el opt-in de lectura sigue gobernando la LECTURA y está apagado, obtuve %q", out)
+		t.Errorf("el flag de lectura gobierna la LECTURA y está apagado, obtuve %q", out)
 	}
 }
 
