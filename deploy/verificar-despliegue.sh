@@ -85,8 +85,15 @@ titulo(){ printf '\n\033[1m%s\033[0m\n' "$1"; }
 # porque el modo de falla que trajo este script hasta acá es siempre el mismo: una consulta que no
 # se pudo hacer y un informe que igual terminó en verde.
 dudoso(){ printf '  \033[33m? %s\033[0m\n' "$1"; SIN_VERIFICAR=1; }
+# tibio — una POSTURA que no es del gusto de nadie pero que HOY es la configuración elegida. No es
+# rojo (nada divergió del repo) y no puede ser verde (el riesgo existe). Sale por su propia
+# variable para que el veredicto no mezcle «esto se desplegó mal» con «esto está así a propósito y
+# todavía nadie decidió cambiarlo». Con MUSUBI_EXIGIR_TLS=1 pasa a contar como divergencia: el día
+# que la migración esté hecha, el que la hizo prende la variable y esto queda custodiado.
+tibio(){ printf '  \033[33m~ %s\033[0m\n' "$1"; POSTURA=1; }
 DIVERGE=0
 SIN_VERIFICAR=0
+POSTURA=0
 
 # ── CÓMO SE PREGUNTA ────────────────────────────────────────────────────────────────────────
 # Un GET devuelve TRES cosas y las tres hacen falta: el cuerpo, el código HTTP y el error de curl.
@@ -563,6 +570,42 @@ else
   fi
 fi
 
+# ── Postura de transporte: ¿el bearer viaja cifrado? ────────────────────────────────────────
+#
+# NO es una comprobación de deriva: el repo no declara TLS, así que nada está "mal desplegado".
+# Es una POSTURA, y está acá porque el informe de arriba se lee como un certificado de salud y
+# hoy omitía que el token de admin viaja en texto plano.
+#
+# Lo cubre WireGuard (el tailnet cifra el tramo), y eso alcanza para dormir tranquilo y NO alcanza
+# para una auditoría: no hay cifrado de extremo a extremo, y cualquier proceso del propio servidor
+# que pueda hablarle al loopback ve el bearer. `tailscale cert` emite un certificado válido de
+# Let's Encrypt para el nombre del nodo sin abrir nada — medido el 2026-09-03 en musubi-server: el
+# usuario `musubi` lo obtiene sin sudo.
+#
+# El agente ya sabe verificar contra un nombre discando una IP (MUSUBI_BRAIN_TLS_NAME), que es el
+# nudo que hacía imposible esta migración: con NordVPN el DNS de la malla no resuelve los nombres.
+printf '\n\033[1mpostura de transporte\033[0m\n'
+CFG_REMOTO="${MUSUBI_CFG:-/home/musubi/musubi-brain/.musubi/config.yaml}"
+if [ -n "$SSH_HOST" ]; then
+  POSTURA_TLS="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
+    "grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' $(printf '%q' "$CFG_REMOTO") 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
+else
+  POSTURA_TLS="$(grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' "$CFG_REMOTO" 2>/dev/null | tr -d ' ' || true)"
+fi
+if [ -z "$POSTURA_TLS" ]; then
+  dudoso "no se pudo leer $CFG_REMOTO: no sé si el cerebro sirve TLS (probá MUSUBI_CFG=<ruta>)"
+elif printf '%s' "$POSTURA_TLS" | grep -q '^tls_cert_file:.\+'; then
+  verde "el cerebro tiene certificado configurado — el bearer viaja cifrado de extremo a extremo"
+elif printf '%s' "$POSTURA_TLS" | grep -q '^allow_insecure_token:true'; then
+  if [ "${MUSUBI_EXIGIR_TLS:-0}" = "1" ]; then
+    rojo 'allow_insecure_token: true con MUSUBI_EXIGIR_TLS=1 — se exigió TLS y el cerebro sirve HTTP en claro'
+  else
+    tibio 'allow_insecure_token: true — el bearer viaja en texto plano (lo cifra el tailnet, no el transporte). Migrar: `tailscale cert` en el nodo, tls_cert_file/tls_key_file en el config, MUSUBI_BRAIN_TLS_NAME en los agentes, y prender MUSUBI_EXIGIR_TLS=1 acá'
+  fi
+else
+  verde 'allow_insecure_token no está en true'
+fi
+
 # ── El veredicto ────────────────────────────────────────────────────────────────────────────
 if [ "$DIVERGE" -ne 0 ]; then
   printf '\n\033[31mproducción diverge del repo\033[0m — arriba está qué y en qué dirección\n'
@@ -578,4 +621,10 @@ if [ "$DIVERGE" -ne 0 ]; then
   exit 1
 fi
 printf '\n\033[32mlo que corre coincide con lo que el repo declara y la cadena de alertas contesta entera\033[0m (dentro de lo que esto mira; ver el encabezado)\n'
+# La postura NO cambia el código de salida por default, y decirlo es parte del informe: un verde
+# que además tiene un `~` arriba no es un verde entero, y quien lo automatice tiene que poder
+# leerlo sin adivinar. Se exige con MUSUBI_EXIGIR_TLS=1.
+if [ "$POSTURA" -ne 0 ]; then
+  printf '\033[33mcon una salvedad de postura\033[0m (el `~` de arriba): no divergió nada, pero el transporte está como está. Se exige con MUSUBI_EXIGIR_TLS=1\n'
+fi
 exit 0
