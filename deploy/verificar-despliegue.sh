@@ -29,6 +29,14 @@
 #   · Los scrapes de sitio (`/etc/prometheus/scrapes/*.yml`). Son por sitio a propósito y el repo
 #     sólo trae el `.ejemplo`, así que no hay contra qué compararlos.
 #   · Lo que corre en las máquinas de la flota. Eso lo dice `musubi_fleet_device_agent_stale` (A68).
+#   · **La POSTURA de transporte no puede poner esto en rojo por default.** La sección del final
+#     informa con `~` si el cerebro sirve HTTP en claro y el veredicto sigue en 0, porque no es
+#     deriva: el repo no declara TLS y ésa es la configuración elegida. Dicho de frente: un verde
+#     de este script NO significa «el bearer viaja cifrado». Se exige con `MUSUBI_EXIGIR_TLS=1`,
+#     y ahí sí cuenta como divergencia. Está acá y no sólo abajo porque «informa y no puede
+#     fallar» es la forma exacta de un falso verde, que es el defecto que este script vino a
+#     cerrar — y la única defensa contra su propia excepción es que esté escrita donde se lee el
+#     contrato, no donde se lee el resultado.
 #   · Que el mensaje LLEGUE. La sección «cadena de alertas» comprueba que cada eslabón conteste y
 #     que Alertmanager tenga rutas; que Telegram reciba el mensaje sólo lo prueba el watchdog
 #     externo, y decir «cadena viva» por esto sería el mismo error de un piso más arriba.
