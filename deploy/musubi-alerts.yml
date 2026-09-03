@@ -82,6 +82,31 @@ groups:
           runbook: "deploy/RUNBOOK.md#musubioutboxdead"
 
       # --- Recall degradado: IVF sin entrenar con dataset grande (cae a full-scan) ---
+      # --- El exportador dejó afuera parte de la flota ---
+      #
+      # No es una alerta de rendimiento: es de COBERTURA. Lo que el exportador recorta no tiene
+      # serie, y una alerta no puede dispararse sobre una serie que no existe — así que el efecto
+      # de este truncado es que ServicioCaido (y las demás) dejan de cubrir a las máquinas o los
+      # servicios que quedaron afuera, en silencio y justo cuando la flota crece.
+      #
+      # Hasta la Ola 0 esto se avisaba con una línea `#` en el propio /metrics, que Prometheus
+      # descarta al parsear: el sistema sabía que había recortado y no había forma de que ese
+      # hecho llegara acá.
+      #
+      # `for: 15m` y no menos: el techo se cruza y se descruza solo cuando una máquina reporta un
+      # inventario más chico, y avisar del parpadeo sería ruido. Quince minutos es «se quedó así».
+      - alert: ExportacionTruncada
+        expr: musubi_fleet_export_truncated == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El exportador recorta la flota por el techo de {{ $labels.kind }}."
+          description: >-
+            Lo que queda afuera del export NO tiene serie en Prometheus, así que sus alertas no
+            pueden dispararse. No es que esté todo bien: es que no se está mirando.
+          runbook: "deploy/RUNBOOK.md#exportaciontruncada"
+
       - alert: MusubiVectorIndexUntrained
         expr: musubi_vector_index_trained == 0 and musubi_embeddings_active > 10000
         for: 15m

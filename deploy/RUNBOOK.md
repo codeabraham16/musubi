@@ -821,3 +821,40 @@ frecuencia: la fuente bajo carga, una regleta o un cable flojo, la temperatura. 
 **Lo que NO es:** una máquina caída ahora mismo. Ésa es `MaquinaCaida`, y esta regla la excluye a
 propósito para no dar dos avisos por el mismo evento. La ventana de 24 h se guarda la cuenta: si
 la máquina está abajo, el aviso llega cuando vuelve, que es cuando se puede hacer algo.
+
+## ExportacionTruncada
+
+El exportador de flota dejó afuera parte de lo que tenía que exportar, porque cruzó uno de sus
+dos techos. **Lo que queda afuera no tiene serie en Prometheus**, así que sus alertas no pueden
+dispararse: no es que esté todo bien, es que no se está mirando.
+
+La etiqueta `kind` dice cuál techo se cruzó:
+
+- **`kind="services"`** → algún proyecto pasó los **2000 servicios** exportables. El techo es
+  **por proyecto** (lo era total hasta la Ola 0, y con el total un tenant grande dejaba ciego a
+  uno chico sin que ninguno se enterara). Quién lo cruzó:
+
+  ```
+  musubi_fleet_list                 # cuántas máquinas por proyecto
+  ```
+  ```sql
+  -- en la base del cerebro, servicios vivos por proyecto
+  SELECT project_id, COUNT(*) FROM services WHERE revoked = 0 GROUP BY project_id ORDER BY 2 DESC;
+  ```
+
+  **Antes de subir el techo, preguntá si esos servicios tienen que estar.** Una máquina Windows
+  reporta decenas de servicios del sistema que nadie mira; el agente ya prioriza los fallados y
+  los detenidos, y lo que sobra son los que están corriendo bien. Subir el número es la salida
+  correcta cuando el inventario es legítimo, y la equivocada cuando lo que hay es ruido.
+
+- **`kind="projects"`** → hay más de **64 proyectos** con máquinas. Ese techo protege al scrape
+  de convertirse en un escaneo sin fin de la base, y se cruza recién con muchos tenants.
+
+**Los dos techos están en el código** (`internal/mcp/fleet_prometheus_servicios.go` y
+`internal/mcp/fleet_prometheus.go`) y subirlos es un cambio con prueba, no una variable de
+entorno: el que los sube tiene que medir qué le hace a la cardinalidad de Prometheus. Referencia:
+2000 servicios × 7 series por servicio son 14.000 series por proyecto.
+
+**Lo que NO es:** un problema de rendimiento del cerebro. El recorte ocurre al armar la respuesta,
+así que el scrape sigue siendo rápido — ése es justamente el motivo por el que el techo existe y
+por el que su efecto es invisible sin esta alerta.
