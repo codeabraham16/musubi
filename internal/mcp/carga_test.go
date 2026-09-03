@@ -255,6 +255,7 @@ type almacenQueCuentaLlamadas struct {
 	reportar       atomic.Int64
 	podar          atomic.Int64
 	comandos       atomic.Int64
+	latirYTomar    atomic.Int64
 }
 
 func (a *almacenQueCuentaLlamadas) DevicePorToken(token string) (fleet.Device, bool, error) {
@@ -292,6 +293,17 @@ func (a *almacenQueCuentaLlamadas) PodarServiciosAusentes(deviceID string, vivos
 	return a.StorageBackend.PodarServiciosAusentes(deviceID, vivos, vacioAfirma)
 }
 
+// LatirYTomarComandos es la que de verdad escribe el latido desde que las dos mitades se
+// unieron en una transacción. Sin envolverla, el banco contaba `LatirDevice 0 · TomarComandos 0`
+// y el promedio de escrituras salía SUBESTIMADO — el número que este banco existe para dar,
+// mal, y con pinta de mejora. Lo encontró el refutador de esa rama, y la lección es del espía y
+// no de esa rama: un contador por NOMBRE DE MÉTODO se queda ciego con cada método nuevo, y su
+// ceguera se ve exactamente igual que un cero.
+func (a *almacenQueCuentaLlamadas) LatirYTomarComandos(id string, ahora time.Time, muestra string, tope int) (bool, []fleet.Comando, error) {
+	a.latirYTomar.Add(1)
+	return a.StorageBackend.LatirYTomarComandos(id, ahora, muestra, tope)
+}
+
 func (a *almacenQueCuentaLlamadas) TomarComandos(deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error) {
 	a.comandos.Add(1)
 	return a.StorageBackend.TomarComandos(deviceID, ahora, tope)
@@ -316,6 +328,9 @@ func (a *almacenQueCuentaLlamadas) contadas() []llamadaContada {
 		{"ReportarServicios", &a.reportar, true},
 		{"PodarServiciosAusentes", &a.podar, true},
 		{"LatirDevice", &a.latir, true},
+		// La combinada escribe siempre (sella el latido) y de paso entrega comandos: cuenta como
+		// UNA escritura, que es exactamente el punto de haberlas unido.
+		{"LatirYTomarComandos", &a.latirYTomar, true},
 		// TomarComandos lee la cola de ESTA máquina y escribe sólo si hay algo que entregar. En
 		// este banco la cola está vacía, así que es una lectura y cuenta como tal: meterla en las
 		// escrituras sumaría una por latido que en este escenario no ocurre.

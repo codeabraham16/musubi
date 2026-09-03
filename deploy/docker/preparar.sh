@@ -207,3 +207,35 @@ if curl -fsS -m 5 "$PROM_URL/-/ready" >/dev/null 2>&1; then
 		echo "→ Prometheus evalúa las $N alertas instaladas."
 	fi
 fi
+
+# ── QUE LA CADENA VUELVA DE UN REBOOT, Y QUE ESO VIVA EN UN ARCHIVO ─────────────────────────
+#
+# Esto YA estaba puesto a mano en el servidor y funcionaba —medido: en el reboot del 2026-08-31
+# Alertmanager volvió 55 segundos después—, pero no vivía en ningún archivo del repo. Un servidor
+# reconstruido lo perdía en silencio, y el síntoma no aparece hasta el primer corte de luz.
+#
+# NO hace falta tocar `restart: unless-stopped` en el compose: `podman-restart.service` filtra por
+# `should-start-on-boot=true`, no por `restart-policy=always`, y ese filtro YA incluye
+# `unless-stopped`. Cambiarlo a `always` sería peor: levanta hasta lo que alguien paró a propósito.
+#
+# Todo idempotente y NINGUNO puede abortar el script: se corre con `set -euo pipefail` y esto va
+# al final, después de haber instalado la configuración. Un fallo acá se avisa y no tira abajo un
+# despliegue que ya salió bien.
+echo "→ arranque tras reboot"
+if loginctl show-user "$(id -un)" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
+	echo "   linger: ya estaba activo"
+elif loginctl enable-linger "$(id -un)" 2>/dev/null; then
+	echo "   linger: activado"
+else
+	echo "   ⚠ linger: NO se pudo activar (¿sin sesión de usuario?). Corré: loginctl enable-linger $(id -un)"
+fi
+# `systemctl --user` necesita el bus de la sesión; por ssh o con sudo -u puede no existir.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if systemctl --user is-enabled podman-restart.service >/dev/null 2>&1; then
+	echo "   podman-restart: ya estaba habilitado"
+elif systemctl --user enable podman-restart.service >/dev/null 2>&1; then
+	echo "   podman-restart: habilitado"
+else
+	echo "   ⚠ podman-restart: NO se pudo habilitar (¿sin XDG_RUNTIME_DIR?). Corré, logueado como este usuario:"
+	echo "     systemctl --user enable podman-restart.service"
+fi

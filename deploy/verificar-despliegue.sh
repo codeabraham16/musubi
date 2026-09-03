@@ -618,6 +618,54 @@ else
   verde 'allow_insecure_token no está en true'
 fi
 
+# ── 6 · ¿VUELVE SOLA DE UN REBOOT? ──────────────────────────────────────────────────────────
+#
+# Medido el 2026-09-03, y el resultado contradijo lo que el plan suponía: la cadena SÍ vuelve. En
+# el reboot del 2026-08-31 03:17:10, Alertmanager arrancó a las 03:18:05 —55 segundos después— y
+# el relay de pantalla con él. Lo hace `podman-restart.service`, que NO filtra por
+# `restart-policy=always` como suele creerse, sino por `should-start-on-boot=true`, y ESE filtro
+# incluye `unless-stopped`. Por eso `restart: unless-stopped` alcanza y NO hay que cambiarlo por
+# `always`: `always` levanta hasta lo que alguien paró a propósito, que es peor.
+#
+# LO QUE SE VIGILA ACÁ NO ES LA DISPONIBILIDAD, ES LA REPRODUCIBILIDAD. Esa configuración —el
+# linger del usuario y el servicio habilitado— se puso A MANO y no vive en ningún archivo del
+# repo. Un servidor reconstruido, o una migración al VPS, la pierde EN SILENCIO: todo sigue
+# andando hasta el primer corte de luz, y ahí la cadena no vuelve y el watchdog externo tampoco,
+# porque el watchdog vive adentro de la misma máquina que se apagó.
+#
+# Es ROJO y no amarillo: no es «no pude preguntar», es una divergencia real contra el estado que
+# el despliegue declara querer.
+printf '\n\033[1mvuelve sola de un reboot\033[0m\n'
+corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
+  if [ -n "$SSH_HOST" ]; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
+  else
+    eval "$1" 2>/dev/null || true
+  fi
+}
+LINGER="$(corre_alla 'loginctl show-user "$(id -un)" --property=Linger 2>/dev/null')"
+PRESTART="$(corre_alla 'systemctl --user is-enabled podman-restart.service 2>/dev/null; systemctl is-enabled podman-restart.service 2>/dev/null')"
+
+if [ -z "$LINGER" ] && [ -z "$PRESTART" ]; then
+  dudoso "no se pudo preguntar si la cadena vuelve de un reboot (hace falta correr esto EN el servidor, o con MUSUBI_SSH=<host>)"
+else
+  if printf '%s' "$LINGER" | grep -q 'Linger=yes'; then
+    verde "linger activo — los servicios de usuario sobreviven al cierre de sesión"
+  elif [ -z "$LINGER" ]; then
+    dudoso "no se pudo leer el linger del usuario"
+  else
+    rojo "linger APAGADO: al cerrar sesión se caen los servicios de usuario, y en el próximo reboot la cadena no vuelve. Arreglo: loginctl enable-linger \$(id -un)"
+  fi
+
+  if printf '%s' "$PRESTART" | grep -q 'enabled'; then
+    verde "podman-restart habilitado — los contenedores con should-start-on-boot vuelven al arrancar"
+  elif [ -z "$PRESTART" ]; then
+    dudoso "no se pudo leer el estado de podman-restart.service"
+  else
+    rojo "podman-restart NO habilitado: después de un reboot los contenedores NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. Arreglo: systemctl --user enable podman-restart.service"
+  fi
+fi
+
 # ── El veredicto ────────────────────────────────────────────────────────────────────────────
 if [ "$DIVERGE" -ne 0 ]; then
   printf '\n\033[31mproducción diverge del repo\033[0m — arriba está qué y en qué dirección\n'
