@@ -1,0 +1,61 @@
+# musubi-recording.yml — recording rules para el reporte de SLA por cliente.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# POR QUÉ RECORDING RULES Y NO UNA CONSULTA AD HOC
+#
+# Un MSP factura contra un número, y un número que se calcula distinto cada vez que alguien lo
+# pide no se puede facturar. `avg_over_time(...[30d])` escrito a mano en un panel da un resultado
+# que depende de cuándo se lo miró, de qué rango tenía el gráfico y de si quien lo escribió puso
+# 30d o 720h. Precalculado acá, el mismo mes da el mismo número dos veces.
+#
+# Y hay una razón de costo: `[30d]` sobre las series de una flota grande es una consulta pesada
+# que Prometheus repetiría en cada refresco del panel. Como recording rule se evalúa una vez cada
+# cinco minutos.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# LO QUE ESTOS NÚMEROS NO DICEN, Y HAY QUE DECIRLO ANTES DE MANDARLOS A UN CLIENTE
+#
+#   · `musubi_fleet_device_up` es «el agente late», no «la máquina anda». En un Windows sin
+#     `-AlArranque` el agente vive mientras haya sesión iniciada: una máquina reiniciada de
+#     madrugada figura caída y está perfectamente encendida. Para esas máquinas el número mide
+#     disponibilidad DEL AGENTE.
+#   · Si Prometheus estuvo caído, el promedio tiene un hueco y `avg_over_time` lo IGNORA en vez
+#     de contarlo como caída. O sea que el número es optimista, no pesimista, y quien lo firme
+#     tiene que saberlo. `absent_over_time` sobre la misma ventana dice si hubo hueco.
+#   · La retención de Prometheus acota la ventana real: con 90 días de retención, un `[30d]` es
+#     honesto y un reporte anual no se puede producir. La Ola 4 sube la retención a 400 días.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+groups:
+  - name: musubi-sla
+    interval: 5m
+    rules:
+      # Por MÁQUINA. El `avg_over_time` de un gauge 0/1 es la fracción de tiempo en 1, o sea la
+      # disponibilidad. Conserva todas las etiquetas, así que el reporte puede filtrar por
+      # `project`, `tier` u `os` sin recalcular nada.
+      - record: musubi:device_up:avg7d
+        expr: avg_over_time(musubi_fleet_device_up[7d])
+      - record: musubi:device_up:avg30d
+        expr: avg_over_time(musubi_fleet_device_up[30d])
+
+      # Por CLIENTE. `avg by(project)` promedia las máquinas entre sí: es la disponibilidad media
+      # de la flota de ese cliente, no la del peor equipo. Las dos cosas se preguntan distinto y
+      # el reporte tiene que decir cuál está mostrando.
+      - record: musubi:project_up:avg30d
+        expr: avg by(project) (avg_over_time(musubi_fleet_device_up[30d]))
+
+      # Y el PEOR equipo de cada cliente, que es la pregunta que hace un cliente enojado. Sin
+      # esto, una flota de 40 máquinas con una caída una semana entera sigue mostrando 99,6 %.
+      - record: musubi:project_up:min30d
+        expr: min by(project) (avg_over_time(musubi_fleet_device_up[30d]))
+
+      # Servicios declarados. Misma lógica; se separa porque un servicio puede estar caído en una
+      # máquina que anda, y mezclarlos daría un promedio que no significa nada.
+      - record: musubi:service_up:avg30d
+        expr: avg_over_time(musubi_fleet_service_up[30d])
+
+      # EL HUECO, como serie propia. Es la mitad que hace creíble a las de arriba: vale 1 cuando
+      # NO hubo ningún dato de esa máquina en la ventana, o sea cuando el promedio se calculó
+      # sobre nada. Un reporte que no distingue «100 % disponible» de «no medimos» no es un
+      # reporte, es una afirmación.
+      - record: musubi:device_up:sin_datos30d
+        expr: absent_over_time(musubi_fleet_device_up[30d]) or vector(0)

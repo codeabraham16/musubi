@@ -32,7 +32,11 @@ import (
 
 // laGuarda es el sufijo que neutraliza una serie congelada. `unless` y no `and up == 1` porque
 // conserva las etiquetas del lado izquierdo: con `and`, el mensaje perdería `{{ $labels.service }}`.
-const laGuarda = `unless on(device) (musubi_fleet_device_up == 0)`
+// El emparejamiento lleva `project` desde la Ola 1: con dos clientes que tengan una máquina del
+// mismo nombre, un `on(device)` a secas empareja muchos-con-muchos y Prometheus descarta la regla
+// entera. La forma canónica es una sola y esta prueba la clava: si alguien vuelve a escribir la
+// guarda sin `project`, acá se entera. Ver TestNingunJoinDeFlotaEmparejaSoloPorDevice.
+const laGuarda = `unless on(project, device) (musubi_fleet_device_up == 0)`
 
 // sinGuardaPorDiseno son las alertas que NO deben llevarla, cada una por su razón.
 var sinGuardaPorDiseno = map[string]string{
