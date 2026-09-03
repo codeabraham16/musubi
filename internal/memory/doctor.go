@@ -134,6 +134,13 @@ func checkAbandonedRuns(e *DbEngine) CheckResult {
 // un envío OFF-HOST exitoso. Vive junto a los snapshots locales (<workspace>/.musubi/backups).
 const offhostMarkerName = ".last_offhost"
 
+// snapshotMarkerName es la marca del snapshot LOCAL, que responde una pregunta distinta de la de
+// arriba: «¿se tomó un backup?», no «¿salió de la máquina?». Hace falta porque en modo local-only
+// (BACKUP_REMOTE vacío, decisión declarada) la marca off-host NUNCA se escribe y su gauge vale -1
+// para siempre — indistinguible de «no hay backup configurado». Sin ésta, el único trabajo
+// programado del servidor no tenía UNA sola señal de que siguiera corriendo.
+const snapshotMarkerName = ".last_snapshot"
+
 // offhostErrorMarkerName es el archivo que deploy/musubi-backup.sh escribe cuando el envío
 // off-host FALLA (o BACKUP_REMOTE está vacío sin el escape hatch), y BORRA tras un envío exitoso
 // (Track 18). Su presencia le permite a `musubi doctor` distinguir "backup configurado pero

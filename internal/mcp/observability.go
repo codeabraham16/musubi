@@ -382,6 +382,9 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	b.WriteString("# HELP musubi_backup_offhost_age_seconds Antigüedad del último backup off-host exitoso (-1 si nunca/no configurado).\n")
 	b.WriteString("# TYPE musubi_backup_offhost_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_backup_offhost_age_seconds %d\n", st.BackupOffhostAgeSec)
+	b.WriteString("# HELP musubi_backup_local_age_seconds Antigüedad del último snapshot LOCAL (-1 si nunca). Dice si el timer corre; el de off-host dice si el backup sale de la máquina.\n")
+	b.WriteString("# TYPE musubi_backup_local_age_seconds gauge\n")
+	fmt.Fprintf(b, "musubi_backup_local_age_seconds %d\n", st.BackupLocalAgeSec)
 }
 
 // renderEmpuje emite las TRES series de auto-vigilancia del empuje OTLP (S11).

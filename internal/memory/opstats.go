@@ -33,6 +33,7 @@ type OpStats struct {
 	OutboxDead          int   // filas que agotaron reintentos (requieren atención)
 	OutboxOldestAgeSec  int64 // antigüedad de la pendiente más vieja (0 si no hay): mide atraso del sync
 	BackupOffhostAgeSec int64 // antigüedad del último backup off-host EXITOSO; -1 si no hay marca (T18)
+	BackupLocalAgeSec   int64 // antigüedad del último SNAPSHOT local; -1 si no hay marca. Distinto del de arriba: éste dice si el timer corre, aquél si el backup sale de la máquina
 }
 
 // OperationalStats reúne las métricas operativas del motor para /metrics. Hace unas pocas
@@ -74,9 +75,17 @@ func (e *DbEngine) OperationalStats() (OpStats, error) {
 	// backup que nunca tuvo éxito). Expone el DR a Prometheus para que un backup que dejó de shipear
 	// (o que nunca funcionó) sea PAGINABLE, no solo visible en `musubi doctor`.
 	st.BackupOffhostAgeSec = -1
+	// Y la del SNAPSHOT local, que es la que dice si el timer sigue corriendo. En local-only la de
+	// arriba vale -1 para siempre, así que sin ésta el único trabajo programado del servidor no
+	// tenía ninguna señal: ni al fallar (nadie recoge su exit code) ni al dejar de dispararse.
+	st.BackupLocalAgeSec = -1
 	if e.path != "" {
-		if fi, statErr := os.Stat(filepath.Join(filepath.Dir(e.path), "backups", offhostMarkerName)); statErr == nil {
+		dir := filepath.Join(filepath.Dir(e.path), "backups")
+		if fi, statErr := os.Stat(filepath.Join(dir, offhostMarkerName)); statErr == nil {
 			st.BackupOffhostAgeSec = int64(time.Since(fi.ModTime()).Seconds())
+		}
+		if fi, statErr := os.Stat(filepath.Join(dir, snapshotMarkerName)); statErr == nil {
+			st.BackupLocalAgeSec = int64(time.Since(fi.ModTime()).Seconds())
 		}
 	}
 	return st, nil

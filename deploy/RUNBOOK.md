@@ -22,6 +22,63 @@ Diagnóstico rápido (siempre): `musubi doctor` (en el host del cerebro) da un p
 4. Si es local-only a conciencia, seteá `BACKUP_ALLOW_LOCAL_ONLY=1` (asumiendo el riesgo) — pero preferí configurar un destino off-host real.
 5. Verificá restore de tanto en tanto (runbook de restore en [`Server_Brain_Onboarding.md`](../docs/Server_Brain_Onboarding.md)).
 
+## MusubiBackupLocalStale
+
+No se tomó un snapshot de la base en más de 26 horas, o no se tomó nunca. **Es la memoria
+compartida de todo el equipo**: sin ese archivo no hay vuelta atrás.
+
+Es distinta de `MusubiBackupOffhostStale`. Aquélla avisa si el backup no **sale** de la máquina;
+ésta, si no se **toma**. En modo local-only —hoy la decisión vigente— aquélla no puede avisar de
+nada, porque su marca sólo se escribe tras un envío afuera exitoso.
+
+```
+systemctl status musubi-backup.timer      # ¿está enabled y active? ¿cuándo disparó por última vez?
+journalctl -u musubi-backup.service -n 50 # qué dijo la última corrida
+ls -la ~/.musubi/backups/                 # ¿hay snapshots? ¿de cuándo es el más nuevo?
+```
+
+| Qué ves | Qué pasó |
+|---|---|
+| El timer no está `active` | Alguien lo paró, o un upgrade del SO lo deshabilitó. `systemctl enable --now musubi-backup.timer` |
+| `active` pero `LastTrigger` viejo | El reloj o el `Persistent=true`. Si la máquina estuvo apagada a las 03:30, systemd lo dispara al arrancar — si no lo hizo, mirá la unidad |
+| Disparó y el servicio falló | El log lo dice. Casi siempre es `BACKUP_REMOTE` vacío sin `BACKUP_ALLOW_LOCAL_ONLY=1`: **falla-cerrado a propósito** |
+| Todo bien pero la métrica en `-1` | El script que corre es viejo y no escribe `.last_snapshot`. Reinstalalo con el instalador |
+
+**El caso legítimo del `-1`:** un servidor recién instalado todavía no tomó su primer backup. Por
+eso el `for` es de 3 horas y no de minutos. Si acabás de instalar, corré el trabajo una vez a mano
+para sembrar la marca en vez de esperar a las 03:30:
+
+```
+sudo systemctl start musubi-backup.service && ls -la ~/.musubi/backups/.last_snapshot
+```
+
+## MusubiOutboxAtrasado
+
+El sync tiene una fila que no logra enviar y **tampoco muere**. Distinto de `MusubiOutboxDead`:
+aquélla es cuando ya agotó los reintentos y se rindió; ésta es cuando sigue intentando y no avanza.
+
+**Lo que se pierde mientras tanto** es lo que hace que valga la pena avisar: las observaciones
+marcadas como compartidas se quedan en el cerebro **local**. Cada uno sigue viendo su copia y
+trabajando normal, así que nadie nota nada — hasta que alguien busca en el central algo que otro
+guardó y no está.
+
+Primero, cuánto y desde cuándo:
+
+```
+musubi sync-status        # pendientes, enviadas, dead-letter, y la edad de la más vieja
+```
+
+Después, por qué. Casi siempre es una de tres:
+
+| Qué ves | Qué pasó |
+|---|---|
+| El central no contesta | `curl -s -o /dev/null -w '%{http_code}' http://100.79.126.62:7717/body/index.html`. Si no responde, el problema es el central o el tailnet, no el sync |
+| Contesta pero rechaza | El token del `auth_token_env` venció o le sacaron el proyecto. Mirá el `last_error` de `musubi sync-status` |
+| Contesta y acepta, pero no baja | La fila tiene algo que el central rechaza por contenido (tamaño, proyecto inexistente). Ahí sí termina en dead-letter y salta `MusubiOutboxDead` |
+
+**El drenaje corre cada 30 segundos** (`sync.drain_interval_seconds`), así que media hora de atraso
+son sesenta drenajes perdidos: no es lentitud, es que algo dejó de andar.
+
 ## MusubiOutboxDead
 **Qué significa:** observaciones `shared` que agotaron los reintentos de sync al central — no se están propagando.
 **Acción:**

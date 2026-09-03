@@ -49,6 +49,18 @@ log "Tomando snapshot en $BACKUP_LOCAL_DIR ..."
 SNAPSHOT="$("$MUSUBI_BIN" backup --out "$BACKUP_LOCAL_DIR")" || die "falló 'musubi backup'"
 [ -f "$SNAPSHOT" ] || die "el snapshot no existe: $SNAPSHOT"
 log "Snapshot OK: $SNAPSHOT ($(du -h "$SNAPSHOT" | cut -f1))"
+# MARCA DEL SNAPSHOT LOCAL, que es distinta de la de off-host y hacía falta.
+#
+# `.last_offhost` sólo se escribe tras un envío AFUERA exitoso. En modo local-only —que hoy es la
+# decisión vigente (A37, BACKUP_REMOTE vacío)— esa marca NUNCA se escribe, así que el gauge
+# `musubi_backup_offhost_age_seconds` vale -1 para siempre y es INDISTINGUIBLE de «acá no hay
+# backup configurado». Resultado: el único trabajo programado del servidor corría todas las noches
+# y nadie observaba si seguía corriendo. Un `systemctl mask musubi-backup.timer` no lo veía nadie,
+# y un OnFailure tampoco lo vería: un timer que NO DISPARA no falla.
+#
+# Esta marca responde la pregunta de abajo —«¿se tomó un snapshot?»— sin opinar sobre el DR, que
+# es lo que responde la otra. Las dos son necesarias y ninguna reemplaza a la otra.
+date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_LOCAL_DIR/.last_snapshot" || log "no se pudo escribir la marca .last_snapshot"
 
 # 1 bis. EL REGISTRO DE PRINCIPALS VIAJA CON LA BASE, O LA RESTAURACIÓN NO SIRVE.
 #
