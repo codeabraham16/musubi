@@ -171,7 +171,7 @@ func atributosDeServicioOTLP(sv fleet.Servicio, d fleet.Device) []otlpAtributo {
 }
 
 func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string) (cuerpo []byte, puntos int, truncado bool, err error) {
+	intervaloSonda time.Duration, versionCerebro string, techoServicios int) (cuerpo []byte, puntos int, truncado bool, err error) {
 
 	// EL RECHAZO DEL nil ES EL INVARIANTE CENTRAL DEL ARCHIVO (ver el encabezado). No se degrada
 	// a «ve todo» como el stdio local: acá nadie está sentado en la máquina, y lo que hay del otro
@@ -180,7 +180,8 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 		return nil, 0, false, fmt.Errorf("el empuje OTLP no tiene principal: exportaría la telemetría de TODOS los proyectos. Declará `fleet.otlp.principal` en el config y ese principal en principals.yaml con `fleet: {metrics: [\"*\"]}`")
 	}
 
-	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	vistos, truncadoProyectos := devicesVisiblesParaMetricas(engine, p)
+	truncado = truncadoProyectos
 	sello := strconv.FormatInt(ahora.UnixNano(), 10)
 
 	var metricas []otlpMetric
@@ -218,8 +219,8 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Mismas máquinas ya compuertadas, mismo sello de
 	// tiempo: un empuje con dos relojes deja las series de servicio desalineadas de las de la
 	// máquina donde corren, y cualquier consulta que las cruce da vacío.
-	svs, truncadoSvs := serviciosVisiblesParaMetricas(engine, vistos)
-	truncado = truncado || truncadoSvs
+	svs, truncadoServicios := serviciosVisiblesParaMetricas(engine, vistos, techoServicios)
+	truncado = truncado || truncadoServicios
 	for _, serie := range seriesDeServicio() {
 		var datos []otlpDataPoint
 		for _, e := range svs {
@@ -243,6 +244,39 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 			Gauge: otlpGauge{DataPoints: datos},
 		})
 	}
+	// EL ESTADO DEL EXPORT, POR LA MISMA TABLA QUE USA EL SCRAPE (A80). No hay una segunda copia
+	// de estos nombres acá: si la hubiera, el día que alguien renombre la serie el scrape y el
+	// empuje dirían cosas distintas y la regla `ExportacionTruncada` quedaría muda de un lado.
+	//
+	// LA CONDICIÓN NO ES CAPRICHO: esta serie NO PUEDE RESUCITAR UN SOBRE VACÍO. Un payload sin
+	// una sola máquina visible tiene que seguir volviendo con cuerpo nil, porque es de ahí que
+	// empujarUnaVez deduce el tercer modo de quedarse mudo (A50: el principal existe, tiene su
+	// concesión, y apunta a proyectos sin máquinas). Metiendo la serie siempre, ese POST pasaría a
+	// salir con datos, `musubi_push_last_success_seconds` se refrescaría y el diagnóstico entero
+	// se apagaría en silencio. Con truncado sí sale aunque no haya máquinas: ése es justo el caso
+	// en que el dato importa (la compuerta negó todo y además hay tenants sin barrer).
+	if len(metricas) > 0 || truncado {
+		for _, serie := range seriesDeExport(truncadoProyectos, truncadoServicios) {
+			var datos []otlpDataPoint
+			for _, pt := range serie.Puntos {
+				atributos := make([]otlpAtributo, 0, len(pt.Etiquetas))
+				for _, kv := range pt.Etiquetas {
+					atributos = append(atributos, atributoStr(kv[0], kv[1]))
+				}
+				valor := pt.Valor
+				datos = append(datos, otlpDataPoint{Attributes: atributos, TimeUnixNano: sello, AsDouble: &valor})
+			}
+			if len(datos) == 0 {
+				continue
+			}
+			puntos += len(datos)
+			metricas = append(metricas, otlpMetric{
+				Name: serie.Nombre, Description: serie.Ayuda, Unit: serie.Unidad,
+				Gauge: otlpGauge{DataPoints: datos},
+			})
+		}
+	}
+
 	if len(metricas) == 0 {
 		return nil, 0, truncado, nil
 	}
@@ -480,7 +514,7 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	}
 	s.avisosDados.Delete("empuje_sin_concesion")
 
-	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, s.version)
+	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, s.version, s.techoServiciosPorProyecto)
 	if err != nil {
 		logx.Error("empuje OTLP: no se pudo armar el payload", "error", err)
 		s.empujeDatapoints.Store(0)
@@ -491,8 +525,10 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 		// El push no tiene dónde poner un comentario que el parser ignore —el scrape sí—, así que
 		// el aviso va al log. Una vez: es un estado, no un evento.
 		s.avisarUnaVez("empuje_truncado", func() {
-			logx.Warn("empuje OTLP: se barrieron los primeros proyectos y hay más; la telemetría del resto no se está empujando",
-				"proyectos", proyectosParaExportar)
+			logx.Warn("empuje OTLP: el barrido se truncó y hay telemetría que no se está empujando; lo que quedó afuera no tiene serie, así que ninguna alerta lo cubre",
+				"proyectos_por_scrape", proyectosParaExportar,
+				"servicios_por_proyecto", s.techoServiciosPorProyecto,
+				"cual_mitad", "mirá musubi_fleet_export_truncated{kind=\"services\"|\"projects\"}; el techo de servicios se sube con fleet.services_per_project_export")
 		})
 	}
 	s.empujeDatapoints.Store(int64(puntos))

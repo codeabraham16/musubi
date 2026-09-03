@@ -161,6 +161,21 @@ mode: local # local | team
 #   # salida, que es donde aparecen rutas, hostnames y a veces algo que no debería estar ahí.
 #   command_output_retention_days: 30
 #
+#   # Cuántos servicios de UN PROYECTO entran al export de métricas. Default 2000; negativo = sin
+#   # techo. Vale para las DOS bocas (el tirón de /metrics y el empuje OTLP), para que no puedan
+#   # truncar distinto.
+#   #
+#   # ES POR PROYECTO Y NO POR FLOTA, y ésa es la corrección que lo trajo: era un total de 2000 por
+#   # scrape, o sea un techo COMPARTIDO — el tenant que se barría primero se lo comía y los demás
+#   # salían del export enteros, sin una sola serie. Sin serie, `ServicioCaido` no tiene a qué
+#   # matchear: esas máquinas no quedaban vigiladas en amarillo, quedaban sin vigilar y en verde.
+#   #
+#   # SUBIRLO NO ES GRATIS: son tres series por servicio, y una serie que deja de recibir datos no
+#   # se borra. Cuando corta, lo dice `musubi_fleet_export_truncated{kind="services"}` y lo alerta
+#   # `ExportacionTruncada` (deploy/musubi-alerts.yml). Antes de subirlo, mirá si lo que hay son
+#   # servicios de verdad: nombres que rotan (contenedores efímeros) no se arreglan con más techo.
+#   services_per_project_export: 2000
+#
 #   # --- Empuje OTLP de la telemetría de flota (S11) --------------------------------------------
 #   # NACE APAGADO (sin `endpoint` no existe), y así tiene que ser: encender una salida de datos
 #   # HACIA AFUERA es una decisión que alguien toma, no un default que se hereda al actualizar. El

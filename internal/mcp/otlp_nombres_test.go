@@ -84,6 +84,13 @@ func TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP(t *testing.T) {
 		revisar(s.Nombre, s.Unidad)
 		n++
 	}
+	// La tercera tabla: las series sobre EL EXPORT MISMO (A80). Son adimensionales, y ahí está la
+	// trampa que este barrido tiene que cubrir — con unidad "1" el receptor le agregaría `_ratio`
+	// a `musubi_fleet_export_truncated` y `ExportacionTruncada` no podría dispararse nunca.
+	for _, s := range seriesDeExport(true, true) {
+		revisar(s.Nombre, s.Unidad)
+		n++
+	}
 	// Si las tablas dejaran de encontrarse, la prueba pasaría VACÍA y en verde — el modo de fallo
 	// más peligroso que puede tener un barrido.
 	if n < 15 {

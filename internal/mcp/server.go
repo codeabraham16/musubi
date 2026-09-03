@@ -181,6 +181,11 @@ type McpServer struct {
 	sondaIntervalo time.Duration
 	// retencionSalidasDias es cuántos días viven stdout/stderr de los comandos. 0 = para siempre.
 	retencionSalidasDias int
+	// techoServiciosPorProyecto acota cuántos servicios de UN proyecto entran al export de
+	// métricas. 0 = sin techo. Lo leen las DOS bocas (el tirón de /metrics y el empuje OTLP) para
+	// que no puedan truncar distinto, y cuando corta lo dice la serie
+	// `musubi_fleet_export_truncated{kind="services"}` (A80).
+	techoServiciosPorProyecto int
 	// politicas son las reglas de auto-heal ya validadas. Vacío = ninguna (I15).
 	politicas []fleet.Politica
 	// buscarPrincipal resuelve un principal POR NOMBRE, sin token. Lo usan las políticas, que no
@@ -413,6 +418,12 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		multiagent:  config.Default().MultiAgent,
 		metrics:     &serverMetrics{},
 		live:        newLiveFeed(),
+		// EL TECHO DEL EXPORT NACE EN SU DEFAULT Y NO EN CERO, porque acá cero significa SIN
+		// TECHO (así se escribe el apagado explícito, `services_per_project_export: -1`). Un
+		// servidor que nunca llamó a ConfigurarFlota —un entrypoint sin sección `fleet:`, media
+		// suite de pruebas— exportaría entonces sin ningún límite de cardinalidad, que es
+		// justamente lo que este número existe para evitar.
+		techoServiciosPorProyecto: config.Default().Fleet.EffectiveServicesPerProjectExport(),
 	}
 	for _, opt := range opts {
 		opt(s)

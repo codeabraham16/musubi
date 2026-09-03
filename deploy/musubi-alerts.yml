@@ -73,6 +73,44 @@ groups:
           summary: "El empuje OTLP nunca llegó a destino ni una vez: revisá --web.enable-otlp-receiver y el token."
           runbook: "deploy/RUNBOOK.md#musubipushotlpnuncallego"
 
+      # ── EL EXPORT DEJÓ TELEMETRÍA AFUERA (A80) ────────────────────────────────────────────
+      #
+      # LO QUE ESTA REGLA CUBRE ES UN AGUJERO EN LA COBERTURA, NO UNA MÁQUINA ENFERMA. Cuando el
+      # export trunca, los servicios (o los proyectos) que quedaron afuera NO TIENEN SERIE — y sin
+      # serie, `ServicioCaido` no tiene nada que matchear. O sea que esas máquinas no quedan
+      # cubiertas «en amarillo»: quedan sin vigilancia y en verde, que se ve igual que todo bien.
+      # Es el mismo modo de fallo que persiguen `ScrapeQueElRepoDeclaraYNoExiste` y el mapa de
+      # cobertura, un nivel más abajo.
+      #
+      # `max by(kind)` Y NO LA SERIE CRUDA, por dos razones que se suman:
+      #   - la misma serie puede llegar por LAS DOS BOCAS (el tirón de /metrics y el empuje OTLP),
+      #     con `instance` distinto: sin agregar, un truncado sería DOS avisos del mismo hecho —
+      #     el bug medido el 2026-08-28 con las reglas de flota duplicadas;
+      #   - las dos bocas exportan con credenciales distintas (la del scrape y
+      #     `fleet.otlp.principal`), así que pueden truncar distinto. Con `max`, alcanza que UNA
+      #     de las dos deje algo afuera para que esto suene, que es el sentido correcto del OR.
+      #
+      # `by(kind)` se conserva porque los dos arreglos son distintos: `services` se resuelve
+      # subiendo `fleet.services_per_project_export`; `projects` hay que mirarlo, porque son más
+      # de 64 tenants con máquinas y el techo de proyectos NO es configurable.
+      #
+      # SE APAGA SOLA: la serie vale 0 cuando el export sale completo (no desaparece), así que
+      # arreglar el techo baja la alerta en el próximo scrape. Y en un cerebro sin plano de flota
+      # la serie no existe y la regla nunca dispara, que es lo que permite instalarla SIEMPRE.
+      - alert: ExportacionTruncada
+        expr: max by(kind) (musubi_fleet_export_truncated) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El export de flota deja telemetría afuera ({{ $labels.kind }}): lo truncado no tiene serie y ninguna alerta lo cubre."
+          description: >-
+            kind=services ⇒ algún proyecto pasó el techo de `fleet.services_per_project_export`
+            (default 2000) y sus servicios de más no se exportan, así que ServicioCaido,
+            ServicioReiniciandose y ServicioSinNoticias no los vigilan. kind=projects ⇒ hay más de
+            64 tenants con máquinas y los que sobran no se barren. En los dos casos el hueco es
+            SILENCIOSO: las series no están, no están en cero.
+          runbook: "deploy/RUNBOOK.md#exportaciontruncada"
+
       - alert: MusubiOutboxDead
         expr: musubi_sync_outbox{state="dead"} > 0
         for: 15m

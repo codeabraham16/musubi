@@ -65,3 +65,35 @@ func TestUnConfigSinSeccionDeFlotaUsaLosMismosDefaults(t *testing.T) {
 		t.Error("las políticas tienen que nacer apagadas")
 	}
 }
+
+// EL TECHO DE SERVICIOS DEL EXPORT DISTINGUE EL DEFAULT DEL APAGADO, igual que la retención.
+//
+// La distinción no es cosmética acá: 0 es el valor que el exportador lee como SIN TECHO, así que
+// si el default fuera 0 en vez de 2000, un cerebro sin sección `fleet:` exportaría los servicios
+// de un tenant entero sin ninguna cota de cardinalidad — que es la falla que este número existe
+// para evitar. Y al revés, si el negativo cayera en el default, el apagado explícito no existiría.
+//
+// Sabotaje que la hace fallar: en EffectiveServicesPerProjectExport, devolver 0 cuando el campo
+// está en 0 (o devolver 2000 cuando es negativo).
+func TestElTechoDeServiciosDelExportDistingueElDefaultDelApagado(t *testing.T) {
+	casos := []struct {
+		nombre  string
+		cfg     FleetConfig
+		esperar int
+	}{
+		{"sin escribir nada ⇒ 2000 por proyecto", FleetConfig{}, 2000},
+		{"explícito", FleetConfig{ServicesPerProjectExport: 4000}, 4000},
+		{"negativo ⇒ sin techo", FleetConfig{ServicesPerProjectExport: -1}, 0},
+	}
+	for _, c := range casos {
+		if got := c.cfg.EffectiveServicesPerProjectExport(); got != c.esperar {
+			t.Errorf("%s: techo = %d, esperaba %d", c.nombre, got, c.esperar)
+		}
+	}
+	// Y un Config sin sección `fleet:` da lo mismo que una sección vacía: estrenar la perilla no
+	// cambia el comportamiento de nadie que no la haya tocado.
+	var vacio Config
+	if vacio.Fleet.EffectiveServicesPerProjectExport() != (FleetConfig{}).EffectiveServicesPerProjectExport() {
+		t.Error("un Config sin sección fleet: no coincide con una sección vacía")
+	}
+}

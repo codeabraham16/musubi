@@ -47,6 +47,11 @@ import (
 // Existe porque el scrape corre cada 15 s y no puede convertirse en un escaneo sin fin de la
 // base. No es un límite de la flota: es un límite de cuántos TENANTS distintos se barren por
 // scrape, y si alguna vez se alcanza, la salida lo dice (nunca se trunca en silencio).
+//
+// «LO DICE» PASÓ A SIGNIFICAR UNA SERIE Y NO UN COMENTARIO (A80). El aviso era una línea `#`, y
+// Prometheus DESCARTA las líneas `#` que no son HELP ni TYPE: el truncado se anunciaba a nadie.
+// Ahora sale además en `musubi_fleet_export_truncated{kind="projects"}`, que es lo que puede
+// alertar. Ver seriesDeExport.
 const proyectosParaExportar = 64
 
 // renderFlota agrega al exposition format las métricas de las máquinas que `p` puede ver.
@@ -63,8 +68,8 @@ const proyectosParaExportar = 64
 // alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
 // muestran cosas distintas.
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string) {
-	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	intervaloSonda time.Duration, versionCerebro string, techoServicios int) {
+	vistos, truncadoProyectos := devicesVisiblesParaMetricas(engine, p)
 
 	if len(vistos) == 0 {
 		// Un bloque vacío y mudo manda a alguien a depurar Prometheus cuando el problema está en
@@ -72,11 +77,15 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		b.WriteString("# musubi_fleet: ninguna máquina visible para esta credencial.\n")
 		b.WriteString("# Las capacidades de flota NO se derivan del rol: declarálas en principals.yaml\n")
 		b.WriteString("#   fleet:\n#     metrics: [\"*\"]\n")
-		return
 	}
-	if truncado {
+	if truncadoProyectos {
 		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
 	}
+
+	// LOS SERVICIOS SE RESUELVEN ACÁ Y NO ADENTRO DE renderServicios, porque su truncado tiene que
+	// salir como SERIE y quien la emite es esta función. Con dos barridos, la serie podría
+	// declarar un truncado distinto del que se aplicó de verdad.
+	svs, truncadoServicios := serviciosVisiblesParaMetricas(engine, vistos, techoServicios)
 
 	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
 		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
@@ -84,7 +93,105 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
-	renderServicios(b, engine, vistos, ahora)
+	renderServicios(b, svs, truncadoServicios, techoServicios, ahora)
+	// Y EL ESTADO DEL EXPORT MISMO, SIEMPRE, incluso cuando no hay ni una máquina visible: es la
+	// única serie del archivo que también vale 0. Ver seriesDeExport.
+	for _, s := range seriesDeExport(truncadoProyectos, truncadoServicios) {
+		escribirSerieDeExport(b, s)
+	}
+}
+
+// ── El export hablando DE SÍ MISMO (A80) ────────────────────────────────────────────────────
+
+// serieDeExport es una serie sobre EL EXPORT, no sobre una máquina ni sobre un servicio.
+//
+// No entra en `seriesDeFlota` porque ésa cierra sobre `(Device, Muestra)` y esto no tiene device:
+// describe el barrido entero. Pero SÍ es UNA SOLA TABLA compartida por las dos bocas, por el
+// mismo motivo que explica el encabezado de renderFlota — el scrape la recorre acá y el empuje
+// OTLP la recorre en armarPayloadOTLP, y así no pueden discrepar. Una segunda copia de esta
+// tabla dentro del empuje sería exactamente el bug que este archivo evita en todo lo demás.
+type serieDeExport struct {
+	Nombre string
+	Ayuda  string
+	// Unidad va VACÍA en las dos que hay, y no es un descuido: el receptor OTLP de Prometheus
+	// renombra la serie cuando el nombre no termina en la forma canónica de la unidad, y con
+	// unidad "1" le agregaría `_ratio` — dejando `ExportacionTruncada` sin poder dispararse
+	// nunca. Lo custodia TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP.
+	Unidad string
+	Puntos []puntoDeExport
+}
+
+// puntoDeExport es un valor con sus etiquetas. Van juntos bajo un mismo Nombre porque HELP y TYPE
+// se declaran UNA vez por métrica: dos bloques con el mismo nombre es un error de formato.
+type puntoDeExport struct {
+	Etiquetas [][2]string
+	Valor     float64
+}
+
+// seriesDeExport describe si este barrido se truncó, y por qué mitad.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ACÁ EL CERO SÍ SE EMITE, AL REVÉS QUE EN TODO EL RESTO DEL EXPORTADOR
+//
+// La regla central (escribirGauge) es que lo DESCONOCIDO no viaja como 0. Pero «no se truncó» no
+// es un desconocido: es una MEDICIÓN, la misma que hizo el barrido para decidir que no hacía
+// falta cortar. Y emitirla importa dos veces:
+//
+//   - una serie que sólo aparece cuando hay problema no se puede distinguir de un export que se
+//     murió, así que nadie sabe si el silencio es «todo bien» o «nadie está mirando»;
+//   - `ExportacionTruncada` se APAGA sola cuando se arregla, porque la serie pasa a 0 en vez de
+//     desaparecer y quedar con el último valor congelado hasta que caduque.
+//
+// LAS DOS MITADES SE SEPARAN CON LA ETIQUETA `kind` y no en dos nombres de métrica distintos:
+// son el mismo hecho («este export no está completo») con dos causas y dos arreglos —subir
+// `fleet.services_per_project_export` o mirar por qué hay más de 64 tenants—, y una etiqueta es
+// lo que deja alertar por las dos con una sola regla y todavía saber cuál fue.
+func seriesDeExport(truncadoProyectos, truncadoServicios bool) []serieDeExport {
+	unoSi := func(b bool) float64 {
+		if b {
+			return 1
+		}
+		return 0
+	}
+	return []serieDeExport{{
+		Nombre: "musubi_fleet_export_truncated",
+		Ayuda: "1 si este export dejó telemetría afuera, 0 si salió completo. kind=\"services\": " +
+			"algún proyecto pasó el techo de fleet.services_per_project_export y sus servicios de " +
+			"más no tienen serie, así que ServicioCaido no los cubre. kind=\"projects\": hay más " +
+			"tenants con máquinas que los que se barren por scrape. SIEMPRE PRESENTE, también en 0: " +
+			"una serie que sólo existe cuando hay problema no se distingue de un export muerto.",
+		Puntos: []puntoDeExport{
+			{Etiquetas: [][2]string{{"kind", "services"}}, Valor: unoSi(truncadoServicios)},
+			{Etiquetas: [][2]string{{"kind", "projects"}}, Valor: unoSi(truncadoProyectos)},
+		},
+	}}
+}
+
+// escribirSerieDeExport emite una serieDeExport en el exposition format: un HELP, un TYPE y una
+// línea por punto.
+func escribirSerieDeExport(b *strings.Builder, s serieDeExport) {
+	if len(s.Puntos) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "# HELP %s %s\n# TYPE %s gauge\n", s.Nombre, s.Ayuda, s.Nombre)
+	for _, pt := range s.Puntos {
+		fmt.Fprintf(b, "%s{%s} %s\n", s.Nombre, etiquetasCrudas(pt.Etiquetas), formatearValor(pt.Valor))
+	}
+}
+
+// etiquetasCrudas formatea pares clave/valor con el mismo citado que etiquetasDe. Existe porque
+// aquélla cierra sobre un fleet.Device y estas series no tienen ninguno.
+func etiquetasCrudas(kvs [][2]string) string {
+	var b strings.Builder
+	for i, kv := range kvs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(kv[0])
+		b.WriteByte('=')
+		b.WriteString(citarLabel(kv[1]))
+	}
+	return b.String()
 }
 
 // devicesVisiblesParaMetricas resuelve QUÉ máquinas ve `p`, ya ordenadas por (proyecto, nombre).

@@ -821,3 +821,80 @@ frecuencia: la fuente bajo carga, una regleta o un cable flojo, la temperatura. 
 **Lo que NO es:** una máquina caída ahora mismo. Ésa es `MaquinaCaida`, y esta regla la excluye a
 propósito para no dar dos avisos por el mismo evento. La ventana de 24 h se guarda la cuenta: si
 la máquina está abajo, el aviso llega cuando vuelve, que es cuando se puede hacer algo.
+
+## ExportacionTruncada
+
+**El export dejó telemetría afuera, y lo que quedó afuera no tiene serie.** Ésa es la parte que
+importa: no hay un gráfico a la mitad ni un valor en cero — no hay nada. Y sin serie, `ServicioCaido`,
+`ServicioReiniciandose` y `ServicioSinNoticias` **no tienen a qué matchear**, así que esas máquinas
+no quedan vigiladas en amarillo: quedan sin vigilar y en verde.
+
+Es el modo de fallo que motivó la regla. Con el techo viejo —2000 servicios **en total** por
+scrape— alcanzaban unas 35 máquinas con 60 servicios para pasarlo, y el proyecto que se barría
+último salía del export entero. Cuál era el último lo decidía el orden de un map de Go.
+
+**Primero, cuál mitad es.** La etiqueta `kind` lo dice y los dos arreglos son distintos:
+
+```bash
+curl -s 'http://127.0.0.1:9099/api/v1/query?query=musubi_fleet_export_truncated' \
+  | python3 -m json.tool
+```
+
+### `kind="services"`: un proyecto pasó el techo por proyecto
+
+Cuántos servicios tiene cada tenant, para saber cuál se cortó y por cuánto:
+
+```bash
+curl -s 'http://127.0.0.1:9099/api/v1/query?query=count%20by(project)(musubi_fleet_service_up)' \
+  | python3 -m json.tool
+```
+
+Ojo con esa consulta: **cuenta lo que SÍ se exportó**, así que el proyecto cortado se ve pegado al
+techo exacto (2000 por default) y no en su número real. El real se pregunta al cerebro, que no
+trunca:
+
+La tool `musubi_fleet_services` (por MCP, con `project: "<proyecto>"`) lee la base directamente y
+no trunca, así que ahí se ve el inventario completo del tenant cortado.
+
+El arreglo es subir el techo en `.musubi/config.yaml` del cerebro y reiniciarlo:
+
+```yaml
+fleet:
+  services_per_project_export: 4000   # default 2000; negativo = sin techo
+```
+
+**Subirlo no es gratis y el número no es cosmético**: son tres series por servicio, así que 4000
+servicios en un proyecto son 12.000 series que Prometheus indexa y guarda para siempre (una serie
+que deja de recibir datos no se borra). Antes de subirlo conviene mirar si lo que hay son servicios
+de verdad o basura que no debería estar en el inventario — un `podman ps` que enumera contenedores
+efímeros mete nombres que rotan, y **eso** no se arregla con un techo más alto: se arregla dejando
+de reportarlos.
+
+`services_per_project_export: -1` desactiva el techo. Es una decisión, no un atajo: sin techo, un
+tenant con un inventario desbocado puede voltear el Prometheus, que es la falla que el techo
+existe para evitar.
+
+### `kind="projects"`: hay más de 64 tenants con máquinas
+
+Este techo **no es configurable** (`proyectosParaExportar` en `internal/mcp/fleet_prometheus.go`),
+y a diferencia del otro no se sube con una perilla porque el costo no es de cardinalidad sino de
+tiempo: el scrape corre cada 15 s y barrer tenants sin fin lo convierte en un escaneo de la base.
+
+Cuántos hay:
+
+```bash
+curl -s 'http://127.0.0.1:9099/api/v1/query?query=count(count%20by(project)(musubi_fleet_device_up))'
+```
+
+Si son más de 64 de verdad, esto necesita una decisión de diseño (barrido rotativo, o un export por
+tenant), no un número más grande. Si son menos, lo que sobra son **proyectos con máquinas
+revocadas o de prueba** que siguen contando: se limpian dando de baja las máquinas que no existen.
+
+**Mientras dure, lo que quedó afuera está a ciegas.** No hay forma de cubrirlo desde Prometheus —la
+serie no está— así que hasta arreglarlo el estado de esos servicios se mira con la tool
+(`musubi_fleet_services`), que lee la base y no trunca.
+
+**Si la alerta suena y ningún techo está cerca**, mirá el log del cerebro: el empuje OTLP escribe
+una vez `empuje OTLP: el barrido se truncó...` con los dos techos vigentes, y el tirón de `/metrics`
+deja el mismo aviso como comentario `#` arriba del bloque de servicios (`curl -s
+localhost:7717/metrics | grep '^# musubi_fleet'`).
