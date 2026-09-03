@@ -255,7 +255,7 @@ func TestUnaFuenteRotaNoSeLlevaAlLatido(t *testing.T) {
 	}
 	t.Cleanup(func() { enumerarServicios = anterior })
 
-	if svs := serviciosDelLatido(); svs != nil {
+	if svs, mandar, _ := serviciosDelLatido(); mandar || svs != nil {
 		t.Errorf("con el enumerador roto se reportaron %d servicios", len(svs))
 	}
 }
@@ -356,7 +356,7 @@ func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
 		return []fleet.ReporteServicio{repDe("sshd", fleet.EstadoCorriendo)},
 			fmt.Errorf("podman está instalado y no se pudo consultar: %w", errors.New("permission denied"))
 	}
-	if lista := serviciosDelLatido(); lista != nil {
+	if lista, mandar, _ := serviciosDelLatido(); mandar || lista != nil {
 		t.Fatalf("con la enumeración rota el latido llevó %d servicios: esa lista da de baja lo que no trae: %+v", len(lista), lista)
 	}
 }

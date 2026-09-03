@@ -67,6 +67,49 @@ groups:
           summary: "No late hace más de 5 minutos."
           nota: "Revisá el agente: `systemctl status musubi-agent` en esa máquina, o si fue revocada (musubi_fleet_list --include_revoked)."
 
+      # --- La máquina se REINICIA sola ---
+      #
+      # ESTA REGLA NACIÓ DE UN AGUJERO MEDIDO, NO DE UNA HIPÓTESIS (A79).
+      #
+      # El 2026-09-03, persiguiendo por qué `davantis-1` se había caído, el registro de eventos de
+      # Windows mostró TRECE apagones sucios en diez días —evento 41, doce de ellos con
+      # `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio
+      # todos y no dijo nada. `musubi_fleet_device_uptime_seconds` se exportaba desde el principio
+      # y NINGUNA regla lo miraba.
+      #
+      # Lo peor no es que faltara la alerta: es que `MaquinaCaida` SÍ funcionó cada vez y se
+      # apagó sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se
+      # resuelven solos se leen como ruido, no como «esta PC se está cayendo». El patrón sólo
+      # existe si alguien lo cuenta, y contar es justo lo que un humano no hace.
+      #
+      # `resets()` sobre el uptime es exactamente eso: el uptime crece como un contador y CAE a
+      # cero en cada arranque, así que cada caída es un reinicio. Dos en 24 h no es un
+      # mantenimiento, es un síntoma.
+      #
+      # Lleva la guarda porque una máquina caída congela su uptime: `resets()` sobre una serie
+      # congelada da 0, así que no habría falso positivo — pero cuando VUELVE y vuelve a caerse,
+      # `MaquinaCaida` ya está gritando y este aviso encima sería el segundo por el mismo evento.
+      # La ventana de 24 h se lo guarda: dispara cuando la máquina está arriba, que es cuando se
+      # puede hacer algo.
+      - alert: MaquinaSeReiniciaSola
+        expr: >-
+          (resets(musubi_fleet_device_uptime_seconds[24h]) >= 2)
+            unless on(device) (musubi_fleet_device_up == 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Se reinició {{ $value }} veces en las últimas 24 horas."
+          description: >-
+            Reinicios que nadie pidió. Dos o más en un día no son mantenimiento: son una fuente,
+            la corriente de pared, la térmica, o un cuelgue duro.
+          runbook: "deploy/RUNBOOK.md#maquinasereiniciasola"
+          # `altura-db` late con su token (es un Tier B SIN shell: address vacío), y el guion que
+          # arma esa muestra no llena `uptime_seg`. Cero es el centinela de «no medido», así que la
+          # serie no existe. NO es un límite de la plataforma —`/proc/uptime` está ahí— sino de ese
+          # empujador en particular; queda anotado en A80 para que la excusa no se vuelva eterna.
+          ausente_en: "tier=B — altura-db empuja su propia muestra y ese guion no manda uptime_seg; el 0 se lee «no medido» y la serie no existe. Arreglable, no estructural: ver A80."
+
       # --- El agente late pero dejó de MEDIR ---
       # Es el fallo silencioso que un `up` no detecta: el proceso vive, el colector murió. Sin
       # esta regla, el panel muestra la última muestra buena para siempre y parece sana.

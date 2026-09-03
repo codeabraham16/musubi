@@ -35,6 +35,35 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-03 — se cerró A78 y se abrió A79, y los dos salieron del mismo cuelgue.**
+>
+> **A78 cerrado**: el inventario vacío ya no deja muda a la máquina. El arreglo tiene tres partes
+> porque el agujero tenía tres, y ninguna sola alcanzaba. (a) `serviciosDelLatido` devuelve ahora
+> *qué* mandar, *si* hay que mandarlo y *con qué* sellarlo — un solo valor de retorno no podía
+> distinguir «no hay novedad» de «la novedad es que acá no corre nada». (b) El sello pasó al único
+> punto donde consta que el cerebro se llevó la lista: sellar al armarla es creerle al remitente en
+> vez de al receptor. (c) **Y del otro lado el cerebro hacía lo mismo**: `len(reportes) == 0`
+> confundía «no vino el bloque» con «vino vacío», así que el `[]` recién arreglado se habría caído
+> en un pozo. Ahora `nil` es ausencia y `[]` es una afirmación que **poda** —respetando siempre lo
+> declarado a mano—, y una máquina que dice que no corre nada cae en `MaquinaSinInventario` a los
+> 15 minutos en vez de mostrar servicios fantasma para siempre.
+>
+> **Dos de las cinco pruebas nuevas las escribió el sabotaje, no yo.** Con `vacioAfirma := true`
+> fijo todo seguía en verde: faltaba el tramo del lote roto —reportes que llegaron y se quedaron
+> sin ningún nombre válido, que es la tercera manera de llegar a la poda con la lista vacía y la
+> única que sigue siendo un accidente—. Y un comentario mío afirmaba que `NOT IN ()` es SQL
+> inválido; el sabotaje lo desmintió (SQLite lo acepta) y el comentario dice ahora lo que es
+> verdad y por qué la rama se escribe igual.
+>
+> **A79 abierto**: trece reinicios duros en diez días que la flota vio y no contó. Ver la fila.
+>
+> **Y A80, que lo encontró el mapa de cobertura al estrenar la regla nueva**: `altura-db` era su
+> único hueco, y la razón no era estructural. Empuja su propia muestra con un guion que no llena
+> `uptime_seg`, y un empujador con campos faltantes se ve idéntico a una plataforma que no los
+> tiene. Con eso son **20 cabos**, todos con dueño o razón declarada.
+>
+> Revisión anterior: **2026-09-02 (auditoría del propio registro, la segunda).**
+>
 > **Y esa misma tarde, uno más: A78**, encontrado leyendo el código mientras se perseguía por qué
 > `davantis-1` llevaba 129 minutos sin reportar servicios. Un inventario VACÍO deja a la máquina
 > muda para siempre mientras el agente cree que reportó — las dos mitades de la condición se
@@ -43,7 +72,8 @@
 > son **20 cabos**.
 >
 > **Y a las 11:48 se cerró A69 por decisión de gio**: su PC volvió al servidor público de
-> RustDesk, que era la opción (c) de las tres anotadas. Quedan **19**.
+> RustDesk, que era la opción (c) de las tres anotadas. Quedan **19** — y el 2026-09-03, con A78
+> cerrado y A79 y A80 abiertos, quedan **20**.
 >
 > **Y la regla 2 sumó dos guardas**, porque estas tres cosas se rompieron a mano y a mano se iban a
 > volver a romper: en `internal/mcp/specs_sin_cabos_test.go`, un número repetido en las tablas rompe
@@ -102,7 +132,8 @@
 
 | A76 | **Los contenedores de una máquina Windows son invisibles para la flota** | El agente enumera contenedores desde A42 y los reporta como servicios — pero **sólo en Linux**, con `podman ps`. La asimetría se midió el 2026-09-02: `musubi-server` reporta 57 servicios de los cuales **14 son contenedores**; `davantis-1` reporta 64 y **ninguno**, con **11 contenedores de Docker Desktop corriendo** (el Supabase local de `altura-erp`). **El costo ya se pagó ese mismo día**: `supabase_vector_altura-erp` llevaba días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se encontraron **con la mano**, buscando espacio en disco — ninguna alerta existía, porque la serie no existe. Es el mismo colector con otra fuente (`docker ps` en vez de `podman ps`), y en cuanto los reporte, `ServicioCaido` y `ServicioReiniciandose` empiezan a cubrirlos sin escribir una regla nueva. **Ojo con el segundo**: hoy está declarado `ausente_en: os=windows` porque el SCM no expone reinicios, y un contenedor SÍ los expone — esa declaración va a necesitar afinarse a «servicios del SCM» cuando esto entre. | **sin asignar** |
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
-| A78 | **Un inventario de servicios VACÍO deja a la máquina muda para siempre, y el agente cree que reportó** | `serviciosDelLatido()` sella `ultimoInventario.enviado = time.Now()` **antes** de que el llamador decida si manda algo, y el llamador es `if svs := serviciosDelLatido(); len(svs) > 0`. Con una lista vacía las dos mitades se contradicen en silencio: el agente marca «enviado», el latido no lleva nada, y a los 5 minutos se repite igual — **para siempre, sin un solo error en ningún lado**. El cerebro no borra nada (la poda sólo corre cuando llega una lista), así que su inventario queda congelado y sólo ENVEJECE. La única señal es `musubi_fleet_service_last_report_seconds` creciendo, y lo único que la mira es `ServicioSinNoticias` a los 30 minutos. **La rama de ERROR no tiene este problema** y conviene tenerlas separadas: ahí se hace `return nil` sin tocar `enviado`, así que reintenta en cada latido — pero `avisarUnaVez` la anuncia **una sola vez por vida del proceso**, o sea que un agente que lleva días sin poder enumerar lo dijo una vez y nadie lo vio. **Encontrado el 2026-09-02 leyendo el código**, mientras se perseguía por qué `davantis-1` llevaba 129 minutos sin reportar servicios; **no quedó probado que fuera la causa de ESE caso** —la máquina se cayó entera antes de poder medirlo— y por eso se anota como lo que es: un modo de falla que existe en el código, no un diagnóstico. Se cierra sellando `enviado` sólo cuando el latido de verdad se lleva la lista, y haciendo que una lista vacía sea un hecho reportable en vez de un silencio. | **sin asignar** |
+| A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReiniciaSola` (`resets(...[24h]) >= 2`, con la guarda de máquina caída y su sección de runbook), que sube las reglas de flota a 23. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
+| A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |

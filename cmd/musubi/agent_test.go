@@ -84,11 +84,21 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 		ultimoInventario.Unlock()
 	})
 
-	if primero := serviciosDelLatido(); len(primero) != 1 {
-		t.Fatalf("el PRIMER latido no llevó el inventario (%d servicios): la máquina nunca reportaría lo que corre", len(primero))
+	primero, mandar, confirmar := serviciosDelLatido()
+	if !mandar || len(primero) != 1 {
+		t.Fatalf("el PRIMER latido no llevó el inventario (mandar=%v, %d servicios): la máquina nunca reportaría lo que corre", mandar, len(primero))
 	}
-	if segundo := serviciosDelLatido(); segundo != nil {
-		t.Errorf("el segundo latido volvió a mandar el inventario sin que cambiara nada (%d servicios): son 7 KB cada diez segundos por máquina", len(segundo))
+
+	// SIN CONFIRMAR TODAVÍA NO SE SELLÓ, y eso es la mitad de A78: el sello dice «el cerebro se lo
+	// llevó», no «yo lo armé». Un latido que se armó y no llegó tiene que volver a intentarlo.
+	// Sabotaje: sellar dentro de serviciosDelLatido, como antes → esto pasa a devolver nil.
+	if _, otraVez, _ := serviciosDelLatido(); !otraVez {
+		t.Error("el inventario se dio por enviado ANTES de que el cerebro lo aceptara: si ese latido falla, el inventario no vuelve a viajar hasta que cambie")
+	}
+
+	confirmar()
+	if _, segundo, _ := serviciosDelLatido(); segundo {
+		t.Error("el latido volvió a mandar el inventario después de confirmado y sin que cambiara nada: son 7 KB cada diez segundos por máquina")
 	}
 
 	// Y cuando SÍ cambia, viaja de nuevo — o un servicio que se cae tardaría 5 minutos en verse.
@@ -98,8 +108,48 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoFallado},
 		}}, nil
 	}
-	if cambiado := serviciosDelLatido(); len(cambiado) != 1 {
+	if cambiado, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
 		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
+	}
+}
+
+// A78 — UN INVENTARIO VACÍO ES UNA NOTICIA, NO UN SILENCIO.
+//
+// El bug: `serviciosDelLatido` sellaba `enviado` antes de que el llamador decidiera, y el llamador
+// decidía con `len(svs) > 0`. Con una lista vacía las dos mitades se contradecían sin ruido — el
+// agente marcaba «enviado», el latido no llevaba nada, y a los cinco minutos igual, PARA SIEMPRE.
+// El cerebro no borra por su cuenta, así que su inventario quedaba congelado y sólo envejecía.
+//
+// Encontrado el 2026-09-02 leyendo el código, no por un síntoma.
+//
+// Sabotaje que la hace fallar: devolver `false` cuando la lista está vacía.
+func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
+	anterior := enumerarServicios
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
+	ultimoInventario.Lock()
+	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+	ultimoInventario.Unlock()
+	t.Cleanup(func() {
+		enumerarServicios = anterior
+		ultimoInventario.Lock()
+		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+		ultimoInventario.Unlock()
+	})
+
+	lista, mandar, confirmar := serviciosDelLatido()
+	if !mandar {
+		t.Fatal("un inventario VACÍO no se manda: la máquina queda muda para siempre mientras el agente cree que reportó (A78)")
+	}
+	if confirmar == nil {
+		t.Fatal("hay que mandar pero no vino con qué sellar: el próximo latido lo mandaría de nuevo eternamente")
+	}
+	// NO nil: `null` del otro lado no es «una lista vacía», es «no vino el campo» — que es
+	// exactamente el silencio del que veníamos.
+	if lista == nil {
+		t.Error("la lista vacía viaja como nil y se serializa `null`: el cerebro lo lee como «no vino el bloque» y no poda nada")
+	}
+	if len(lista) != 0 {
+		t.Errorf("se inventaron %d servicios donde no había ninguno", len(lista))
 	}
 }
 

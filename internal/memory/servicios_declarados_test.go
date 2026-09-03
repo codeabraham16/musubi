@@ -54,7 +54,7 @@ func TestLaPodaPorAusenciaNoSeLlevaLoDeclaradoAMano(t *testing.T) {
 	}
 
 	// El latido siguiente ya no trae `cron.service` — y nunca trajo el bot.
-	podados, err := e.PodarServiciosAusentes(d.ID, []string{"sshd.service"})
+	podados, err := e.PodarServiciosAusentes(d.ID, []string{"sshd.service"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado(t *testing.T
 	}
 
 	// Y ahora la máquina deja de reportarlo. Sigue siendo de quien lo declaró.
-	if _, err := e.PodarServiciosAusentes(d.ID, []string{"otra-cosa.service"}); err != nil {
+	if _, err := e.PodarServiciosAusentes(d.ID, []string{"otra-cosa.service"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if !nombresDeServicios(t, e, d.ID)["postgres"] {

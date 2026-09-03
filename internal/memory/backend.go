@@ -496,7 +496,9 @@ type ServiceStore interface {
 	RevocarServiciosDeDevice(deviceID string) (int64, error)
 	// PodarServiciosAusentes saca lo que la máquina dejó de reportar. Una lista VACÍA no poda
 	// nada: «no reportó ninguno» es también lo que se ve cuando el agente arrancó a medias.
-	PodarServiciosAusentes(deviceID string, vivos []string) (int64, error)
+	// `vacioAfirma` es la excepción y hay que ganársela: sólo cuando la máquina DIJO que no corre
+	// nada —el bloque vino y vino vacío— la lista vacía poda el inventario entero (A78).
+	PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error)
 }
 
 type StorageBackend interface {

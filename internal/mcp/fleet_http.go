@@ -354,7 +354,22 @@ const latidoMaxBytes = fleet.MuestraMaxBytes + fleet.ServiciosPorLatido*fleet.Sa
 // truncarse. Un inventario a medias haría que la poda por ausencia diera de baja los servicios
 // que quedaron afuera del corte, que es peor que no actualizar nada.
 func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio) string {
-	if len(reportes) == 0 {
+	// AUSENTE Y VACÍO NO SON LO MISMO, y toda A78 vive en esa distinción.
+	//
+	// `nil` es «el bloque no vino»: el latido de siempre, sin novedad de inventario. No hay nada
+	// que hacer y no hay nada que decir.
+	//
+	// Una lista NO nil y de largo cero es lo contrario de un silencio: la máquina mandó el bloque
+	// para decir que no corre nada. El agente manda el inventario COMPLETO o no lo manda —si una
+	// fuente falla, aborta el lote a propósito y no manda el campo—, así que un `[]` que llega
+	// acá enumeró bien y no encontró nada. Es un hecho, y se guarda como tal.
+	//
+	// En la práctica «cero servicios» en una máquina real no existe: ni systemd ni el SCM tienen
+	// cero. Así que esto casi siempre significa que el enumerador se rompió sin dar error — y por
+	// eso mismo tiene que PODAR: el inventario viejo queda revocado, la máquina cae en
+	// `MaquinaSinInventario` a los 15 minutos, y alguien mira. La alternativa era la de antes:
+	// un panel con servicios fantasma que nadie desmiente nunca.
+	if reportes == nil {
 		return ""
 	}
 	if len(reportes) > fleet.ServiciosPorLatido {
@@ -370,9 +385,13 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 	}
 
 	ahora := time.Now()
-	nuevos, actualizados, err := s.engine.ReportarServicios(d.ID, ahora, reportes)
-	if err != nil {
-		return "descartados: el registro no pudo guardarlos"
+	nuevos, actualizados := 0, 0
+	if len(reportes) > 0 {
+		var err error
+		nuevos, actualizados, err = s.engine.ReportarServicios(d.ID, ahora, reportes)
+		if err != nil {
+			return "descartados: el registro no pudo guardarlos"
+		}
 	}
 	// La poda por AUSENCIA: lo que la máquina dejó de reportar se da de baja. `vivos` sale de lo
 	// que vino en ESTE latido, ya recortado igual que al guardarlo, para que los nombres coincidan
@@ -390,7 +409,15 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 			vivos = append(vivos, r.Nombre)
 		}
 	}
-	podados, _ := s.engine.PodarServiciosAusentes(d.ID, vivos)
+	// LA AUTORIZACIÓN PARA VACIAR SE GANA ACÁ Y EN NINGÚN OTRO LADO: sólo cuando la lista llegó
+	// vacía DE ORIGEN. Un lote que traía reportes y se quedó sin ninguno válido al filtrarlo no
+	// es una máquina diciendo «no corre nada»: es un lote roto, y ésos no podan —que es la guarda
+	// que existía desde antes y sigue entera.
+	vacioAfirma := len(reportes) == 0
+	podados, _ := s.engine.PodarServiciosAusentes(d.ID, vivos, vacioAfirma)
+	if vacioAfirma {
+		return fmt.Sprintf("inventario VACÍO reportado: %d servicio(s) dado(s) de baja. La máquina dice que no corre nada; en un sistema real eso casi siempre es un enumerador roto.", podados)
+	}
 	return fmt.Sprintf("guardados: %d nuevo(s), %d actualizado(s), %d dado(s) de baja por ausencia",
 		nuevos, actualizados, podados)
 }

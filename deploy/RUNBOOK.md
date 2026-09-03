@@ -756,3 +756,53 @@ MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
 regla y no actualizó el conteo del archivo que la custodia. Eso lo detecta la suite
 (`TestCadaArchivoDeReglasCustodiaElConteoDelOtro`) antes de llegar a producción, así que si suena
 en producción es que se desplegó sin correr las pruebas.
+
+## MaquinaSeReiniciaSola
+
+La máquina se reinició **dos o más veces en 24 horas** sin que nadie lo pidiera.
+
+Esta regla existe porque el caso real pasó desapercibido. El 2026-09-03, `davantis-1` llevaba
+**trece apagones sucios en diez días** y la flota no había dicho nada: `musubi_fleet_device_uptime_seconds`
+se exportaba desde siempre y ninguna regla lo miraba. `MaquinaCaida` sí disparó cada vez, y ahí
+está la trampa —**se resolvía sola a los pocos minutos**, cuando la máquina volvía—. Trece avisos
+que aparecen y se apagan solos se leen como ruido de red. El patrón sólo existe si alguien lo
+cuenta.
+
+**Lo primero: distinguir un reinicio LIMPIO de un corte.** No es lo mismo y se pregunta distinto
+según el sistema.
+
+En Windows, el evento 41 es el que importa, y **su `BugcheckCode` es el que decide**:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=41; StartTime=(Get-Date).AddDays(-10)} |
+  ForEach-Object { "$($_.TimeCreated)  BugcheckCode=$($_.Properties[0].Value)" }
+```
+
+- **`BugcheckCode` distinto de 0** → hubo pantalla azul. Windows se cayó y dejó su minidump en
+  `C:\Windows\Minidump`. La causa está adentro: driver, kernel, memoria. Ese volcado se lee.
+- **`BugcheckCode=0`** → **no hubo pantalla azul**. Windows no llegó a caerse: lo cortaron. La
+  causa está **afuera** del sistema operativo —fuente, corriente de pared, térmica, un cuelgue
+  duro que no alcanzó ni a hacer bugcheck— y no hay ningún log de Windows que lo vaya a decir,
+  porque cuando se va la corriente no se escribe nada.
+
+En Linux: `journalctl --list-boots` y `last -x reboot shutdown`. Un arranque sin un `shutdown`
+que lo preceda es un corte.
+
+**Lo segundo: descartar hardware con lo que sí queda registrado.**
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=(Get-Date).AddDays(-10)}
+```
+
+WHEA registra los errores de hardware que el procesador SÍ alcanza a reportar. **Que esté vacío no
+absuelve a la máquina**: un corte de corriente no le da tiempo a escribir nada. Sirve en positivo
+(si hay algo, ahí está la causa), no en negativo.
+
+**Lo tercero, si el sistema operativo no tiene la respuesta**, es lo de afuera, en este orden por
+frecuencia: la fuente bajo carga, una regleta o un cable flojo, la temperatura. La térmica es la
+única de las tres que la flota podría ver sola —`musubi_fleet_device_temperature_celsius`— y hoy
+**la reporta una sola máquina**, así que en el resto hay que ir a mirarla a mano (HWiNFO, `sensors`).
+
+**Lo que NO es:** una máquina caída ahora mismo. Ésa es `MaquinaCaida`, y esta regla la excluye a
+propósito para no dar dos avisos por el mismo evento. La ventana de 24 h se guarda la cuenta: si
+la máquina está abajo, el aviso llega cuando vuelve, que es cuando se puede hacer algo.

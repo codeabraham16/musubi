@@ -171,3 +171,27 @@ func avisarUnaVez(motivo, formato string, args ...any) {
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", cYellow("!"), fmt.Sprintf(formato, args...))
 }
+
+// avisarCada es avisarUnaVez para los problemas que DURAN.
+//
+// «Una vez por vida del proceso» es la política correcta para un hecho que no cambia —no hay
+// RustDesk instalado, el inventario se recortó— y es la política equivocada para una falla que
+// puede estar pasando ahora: el agente arranca, lo dice, y tres días después ese renglón se fue
+// con la rotación del journal. Quien mira el log de hoy ve una máquina en silencio y concluye que
+// está sana.
+//
+// Se separó de avisarUnaVez en vez de agregarle un parámetro porque son dos decisiones distintas
+// y conviene que se lean distinto en el punto de uso: una dice «esto es así», la otra «esto sigue
+// roto».
+var avisosConReloj sync.Map
+
+func avisarCada(motivo string, cada time.Duration, formato string, args ...any) {
+	ahora := time.Now()
+	if previo, hab := avisosConReloj.Load(motivo); hab {
+		if ahora.Sub(previo.(time.Time)) < cada {
+			return
+		}
+	}
+	avisosConReloj.Store(motivo, ahora)
+	fmt.Fprintf(os.Stderr, "%s %s\n", cYellow("!"), fmt.Sprintf(formato, args...))
+}

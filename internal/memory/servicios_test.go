@@ -332,7 +332,7 @@ func TestPodarServiciosAusentesConListaVaciaNoBorraNada(t *testing.T) {
 		}
 	}
 	reportar(d.ID, "postgres", "nginx", "redis")
-	n, err := e.PodarServiciosAusentes(d.ID, nil)
+	n, err := e.PodarServiciosAusentes(d.ID, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestPodarServiciosAusentesConListaVaciaNoBorraNada(t *testing.T) {
 		t.Fatalf("quedaron %d servicios de 3", len(vivos))
 	}
 	// Con una lista NO vacía sí poda, y sólo lo ausente.
-	if n, err := e.PodarServiciosAusentes(d.ID, []string{"postgres", "nginx"}); err != nil || n != 1 {
+	if n, err := e.PodarServiciosAusentes(d.ID, []string{"postgres", "nginx"}, false); err != nil || n != 1 {
 		t.Fatalf("la poda real: n=%d err=%v", n, err)
 	}
 	vivos, _ := e.ServiciosDeDevice(d.ID)
@@ -353,7 +353,7 @@ func TestPodarServiciosAusentesConListaVaciaNoBorraNada(t *testing.T) {
 	// Y la poda NO cruza máquinas: sólo toca las de `deviceID`.
 	otra, _ := altaDePrueba(t, e, "casa", "pc-gio")
 	reportar(otra.ID, "solo-de-la-otra")
-	if _, err := e.PodarServiciosAusentes(d.ID, []string{"postgres"}); err != nil {
+	if _, err := e.PodarServiciosAusentes(d.ID, []string{"postgres"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if deOtra, _ := e.ServiciosDeDevice(otra.ID); len(deOtra) != 1 {
@@ -552,7 +552,7 @@ func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
 
 	// Una corrida en la que `podman ps` falla: el inventario llega con la unit sola y la poda se
 	// lleva los dos contenedores. Esto es lo que pasó de verdad.
-	if n, err := e.PodarServiciosAusentes(d.ID, []string{"sshd"}); err != nil || n != 2 {
+	if n, err := e.PodarServiciosAusentes(d.ID, []string{"sshd"}, false); err != nil || n != 2 {
 		t.Fatalf("la poda del caso: n=%d err=%v", n, err)
 	}
 	if vivos, _ := e.ServiciosDeDevice(d.ID); len(vivos) != 1 {
@@ -772,5 +772,44 @@ func TestLaMigracion39ConservaLosCooldownsYPermiteElAlcance(t *testing.T) {
 	}
 	if !todos["revivir"]["dev-1\x00postgres"].Equal(ahora.Add(time.Minute)) {
 		t.Error("marcar nginx pisó el cooldown de postgres: la clave del upsert no lleva el alcance")
+	}
+}
+
+// A78 — LA LISTA VACÍA AUTORIZADA SÍ PODA, Y NO SE LLEVA LO DECLARADO.
+//
+// Es la excepción exacta a la guarda de arriba, y las dos tienen que valer a la vez: el accidente
+// no poda, el hecho sí. Sin esto, una máquina que dice «no corre nada» deja su inventario viejo
+// congelado en el cerebro, envejeciendo, sin que nada se ponga en rojo — un panel con fantasmas.
+//
+// Y `declared = 0` sigue mandando: lo que puso una persona a mano no lo borra un `[]` que llegó
+// por la red. Ése es el tramo que convierte esta excepción en algo que se puede tener.
+//
+// Sabotaje: pasar `vacioAfirma` a false → no poda nada. O sacarle el `AND declared = 0` al UPDATE
+// → se lleva puesto el servicio declarado.
+func TestUnaListaVaciaAutorizadaPodaTodoMenosLoDeclarado(t *testing.T) {
+	e := newTestEngine(t)
+	d, _ := altaDePrueba(t, e, "casa", "nas")
+
+	rs := []fleet.ReporteServicio{
+		{Nombre: "postgres", Salud: saludDePrueba(fleet.EstadoCorriendo)},
+		{Nombre: "nginx", Salud: saludDePrueba(fleet.EstadoCorriendo)},
+	}
+	if _, _, err := e.ReportarServicios(d.ID, time.Now().UTC(), rs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AltaServicio(fleet.Servicio{Nombre: "bot-telegram", DeviceID: d.ID, Clase: "docker"}); err != nil {
+		t.Fatalf("no se pudo declarar a mano: %v", err)
+	}
+
+	n, err := e.PodarServiciosAusentes(d.ID, nil, true)
+	if err != nil {
+		t.Fatalf("la vacía autorizada dio error: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("la vacía autorizada podó %d de los 2 enumerados", n)
+	}
+	vivos, _ := e.ServiciosDeDevice(d.ID)
+	if len(vivos) != 1 || vivos[0].Nombre != "bot-telegram" {
+		t.Fatalf("un `[]` que llegó por la red se llevó lo declarado a mano: quedaron %+v", vivos)
 	}
 }

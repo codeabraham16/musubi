@@ -402,10 +402,23 @@ func (e *DbEngine) RevocarServiciosDeDevice(deviceID string) (int64, error) {
 // PodarServiciosAusentes marca revocados los servicios de una máquina que ya NO figuran en su
 // reporte: lo que se desinstaló, lo que se renombró.
 //
-// UNA LISTA VACÍA NO PODA NADA, y es deliberado — calcado de PodarEstadoDePoliticas. «Este device
-// no reportó ningún servicio» es también lo que se ve cuando el agente arrancó a medias, cuando
-// systemd no contestó o cuando alguien está editando la configuración. Vaciar el inventario
-// entero por eso es irreversible; conservarlo cuesta unas filas.
+// UNA LISTA VACÍA NO PODA NADA **SALVO QUE EL LLAMADOR AFIRME QUE ES UN HECHO**, y las dos mitades
+// de esa frase costaron A78.
+//
+// La regla original era «vacía no poda, punto», calcada de PodarEstadoDePoliticas, y protegía un
+// caso real: «este device no reportó ningún servicio» es también lo que se ve cuando el agente
+// arrancó a medias, cuando systemd no contestó, o cuando el lote entero de reportes era inválido.
+// Vaciar el inventario por eso es irreversible; conservarlo cuesta unas filas.
+//
+// Lo que faltaba es que hay DOS maneras de llegar acá con la lista vacía y sólo una es un
+// accidente. La otra es que la máquina lo haya DICHO —el bloque `servicios` vino, y vino `[]`—,
+// y ésa es una afirmación: «acá no corre nada de lo que mirás». Tratarla como al accidente deja
+// el inventario del cerebro congelado con servicios que ya no existen, envejeciendo, sin que nada
+// se ponga en rojo. Un panel que muestra fantasmas es peor que uno vacío.
+//
+// Por eso la autorización viaja en un parámetro y no se deduce acá: quién sabe distinguir el
+// hecho del accidente es quien leyó el JSON, no el almacén. `vacioAfirma` en false conserva la
+// guarda vieja entera.
 //
 // Y LO DECLARADO A MANO NO SE PODA NUNCA (`AND declared = 0`), que es la otra mitad de lo mismo.
 // La poda razona «la máquina dejó de reportarlo, así que ya no está», y esa inferencia NO VALE
@@ -413,19 +426,34 @@ func (e *DbEngine) RevocarServiciosDeDevice(deviceID string) (int64, error) {
 // para lo que ningún enumerador ve —un Tier B que no enumera, un bot, un puente—, de modo que sin
 // esta guarda el primer latido con inventario borraría todo lo declarado en toda la flota a la
 // vez. Lo declarado sale del inventario cuando lo saca una persona.
-func (e *DbEngine) PodarServiciosAusentes(deviceID string, vivos []string) (int64, error) {
+func (e *DbEngine) PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error) {
 	deviceID = strings.TrimSpace(deviceID)
-	if deviceID == "" || len(vivos) == 0 {
+	if deviceID == "" {
 		return 0, nil
 	}
-	marcas := strings.TrimSuffix(strings.Repeat("?,", len(vivos)), ",")
+	if len(vivos) == 0 && !vacioAfirma {
+		return 0, nil
+	}
+	// La vacía autorizada se escribe SIN la cláusula `NOT IN`, y conviene decir por qué no es sólo
+	// estilo. SQLite acepta `NOT IN ()` con la lista vacía —se midió: podá igual, es una extensión
+	// suya— pero la mayoría de los motores lo rechazan como error de sintaxis. Apoyar «vaciar el
+	// inventario de una máquina» en una particularidad del dialecto es dejar una mina para el día
+	// que el almacén no sea SQLite: no fallaría acá, fallaría allá, y el síntoma sería una poda
+	// que no ocurre. Escrito así, la intención está en el código y no en el motor.
+	//
+	// Es el mismo UPDATE con las mismas dos guardas (`revoked = 0`, `declared = 0`): lo único que
+	// cambia es que no sobrevive nadie.
+	consulta := `UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0 AND declared = 0`
 	args := make([]any, 0, len(vivos)+1)
 	args = append(args, deviceID)
-	for _, v := range vivos {
-		args = append(args, v)
+	if len(vivos) > 0 {
+		marcas := strings.TrimSuffix(strings.Repeat("?,", len(vivos)), ",")
+		consulta += ` AND name NOT IN (` + marcas + `)`
+		for _, v := range vivos {
+			args = append(args, v)
+		}
 	}
-	res, err := e.db.Exec(
-		`UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0 AND declared = 0 AND name NOT IN (`+marcas+`)`, args...)
+	res, err := e.db.Exec(consulta, args...)
 	if err != nil {
 		return 0, fmt.Errorf("error al podar los servicios ausentes de %q: %w", deviceID, err)
 	}

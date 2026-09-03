@@ -366,6 +366,56 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 	if n := cuantosServicios(t, s); n != 2 {
 		t.Fatalf("un latido mudo dejó %d servicios: vació el inventario por no traer el bloque", n)
 	}
+
+	// PERO UN BLOQUE QUE VINO VACÍO SÍ VACÍA (A78). No es el mismo caso y no puede tratarse igual:
+	// el agente manda el inventario COMPLETO o no manda el campo, así que un `[]` es la máquina
+	// afirmando que no corre nada. Sostener el inventario viejo contra esa afirmación es lo que
+	// dejaba un panel lleno de fantasmas que nadie desmentía nunca.
+	//
+	// Sabotaje: volver el corte de arriba a `len(reportes) == 0` → `[]` y ausente se confunden y
+	// esto queda en 2.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, `{"version":"0.1.0","servicios":[]}`); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 0 {
+		t.Fatalf("la máquina reportó un inventario VACÍO y quedaron %d servicios: el cerebro lo leyó como «no vino el bloque» y el panel muestra servicios que ya no existen", n)
+	}
+
+	// Y `null` explícito se lee como AUSENTE, no como vacío: es lo que manda un agente viejo, o
+	// lo que sale de serializar un slice nil. Confundirlo con `[]` vaciaría inventarios por un
+	// detalle de serialización.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, `{"version":"0.1.0","servicios":null}`); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 1 {
+		t.Fatalf("un `servicios: null` dejó %d servicios: se leyó como una lista vacía y podó por un detalle de serialización", n)
+	}
+
+	// Y UN LOTE QUE TRAJO REPORTES Y SE QUEDÓ SIN NINGUNO VÁLIDO **NO** VACÍA NADA.
+	//
+	// Es la tercera manera de llegar a la poda con `vivos` vacío, y la única que sigue siendo un
+	// accidente: la máquina SÍ dijo que corre algo, pero ningún nombre pasó el filtro. Leerlo como
+	// «no corre nada» sería inventarle a la máquina una afirmación que no hizo.
+	//
+	// Esta prueba existe porque el sabotaje la encontró: con `vacioAfirma := true` fijo, todo lo
+	// demás de este archivo seguía en verde. La autorización se gana en el ORIGEN de la lista, no
+	// después de filtrarla, y sin este tramo esa distinción no la custodiaba nadie.
+	//
+	// Sabotaje: `vacioAfirma := true` en guardarServiciosDelLatido → esto vacía el inventario.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "   ", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "\x01\x02", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 1 {
+		t.Fatalf("un lote con TODOS los nombres inválidos vació el inventario (quedaron %d de 1): un lote roto no es una máquina diciendo «no corre nada»", n)
+	}
 }
 
 // EL LATIDO NO SE LLEVA PUESTO LO QUE SE DECLARÓ A MANO. Es el escenario reportado, entero.

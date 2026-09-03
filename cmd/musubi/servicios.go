@@ -137,12 +137,35 @@ func huellaDelInventario(lista []fleet.ReporteServicio) string {
 // puede impedir que la máquina lata — un agente que se calla porque no pudo listar sus units es
 // una máquina que figura muerta por un motivo que no tiene nada que ver.
 //
-// Devuelve nil cuando el inventario no cambió y todavía no toca el reenvío periódico.
-func serviciosDelLatido() []fleet.ReporteServicio {
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// DEVUELVE TRES COSAS Y NO UNA, Y ESO ES EL ARREGLO DE A78
+//
+// La versión anterior devolvía sólo la lista, y el llamador decidía con `len(svs) > 0`. Con eso,
+// UNA LISTA VACÍA DEJABA A LA MÁQUINA MUDA PARA SIEMPRE: acá se sellaba `enviado = time.Now()`,
+// allá no se mandaba nada, y a los cinco minutos se repetía igual — sin un solo error en ningún
+// lado. El cerebro no borra por su cuenta (la poda sólo corre cuando LLEGA una lista), así que su
+// inventario quedaba congelado y sólo envejecía. La única señal era
+// `musubi_fleet_service_last_report_seconds` creciendo, y eso se mira a los 30 minutos.
+//
+// Las dos mitades se contradecían porque un solo valor de retorno no alcanza para distinguir
+// «no hay novedad» de «la novedad es que acá no corre nada». Son hechos distintos y ahora se
+// dicen distinto: `mandar` decide, `lista` informa —vacía es un dato, no un silencio— y `confirmar`
+// sella recién cuando el latido de verdad se lo llevó.
+//
+// `confirmar` es nil cuando no hay nada que mandar. Llamarlo es obligación del llamador y sólo
+// después de que el cerebro haya aceptado el latido: sellar antes es exactamente el bug que esto
+// cierra, una vuelta más adelante.
+func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar func()) {
 	crudos, err := enumerarServicios()
 	if err != nil {
-		avisarUnaVez("servicios-enumerar", "no se pudieron enumerar los servicios de esta máquina: %v", err)
-		return nil
+		// CADA HORA Y NO UNA VEZ POR VIDA DEL PROCESO.
+		//
+		// Un agente que lleva días sin poder enumerar lo dijo una sola vez, al arrancar, y para
+		// cuando alguien mira el log ese aviso ya se fue con la rotación. Un problema que dura
+		// tiene que sonar mientras dura.
+		avisarCada("servicios-enumerar", time.Hour,
+			"no se pudieron enumerar los servicios de esta máquina: %v", err)
+		return nil, false, nil
 	}
 	lista, afuera := serviciosParaElLatido(crudos)
 	if afuera > 0 {
@@ -157,11 +180,20 @@ func serviciosDelLatido() []fleet.ReporteServicio {
 	ultimoInventario.Lock()
 	defer ultimoInventario.Unlock()
 	if huella == ultimoInventario.huella && time.Since(ultimoInventario.enviado) < intervaloInventarioCompleto {
-		return nil
+		return nil, false, nil
 	}
-	ultimoInventario.huella = huella
-	ultimoInventario.enviado = time.Now()
-	return lista
+	// NUNCA nil cuando hay que mandar: `nil` se serializa como `null` y del otro lado eso no es
+	// «una lista vacía», es «no vino el campo». Una máquina donde no corre nada de lo que miramos
+	// tiene que poder DECIRLO, y para eso el JSON tiene que llevar `[]`.
+	if lista == nil {
+		lista = []fleet.ReporteServicio{}
+	}
+	return lista, true, func() {
+		ultimoInventario.Lock()
+		defer ultimoInventario.Unlock()
+		ultimoInventario.huella = huella
+		ultimoInventario.enviado = time.Now()
+	}
 }
 
 // salidaDeComando corre un comando y devuelve su salida. Los enumeradores la usan en vez de

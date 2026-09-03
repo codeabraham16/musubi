@@ -235,7 +235,7 @@ groups:
       # queda apagado y sólo se comprueba el conteo si el archivo está.
       - alert: ReglasDeFlotaSinDesplegar
         expr: >-
-          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 22
+          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 23
           or (absent(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"})
           and on() (count(musubi_fleet_device_up) > 0))
         for: 30m

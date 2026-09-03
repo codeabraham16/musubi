@@ -249,7 +249,12 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	//
 	// Como todo lo demás del latido, NO LLEVA IDENTIDAD: el reporte dice qué corre, y de quién es
 	// la máquina lo decide el token del lado del cerebro (invariante B4/D5).
-	if svs := serviciosDelLatido(); len(svs) > 0 {
+	//
+	// VA AUNQUE ESTÉ VACÍA, y `confirmar` se llama recién cuando el cerebro aceptó (A78). El
+	// `len(svs) > 0` que había acá se contradecía en silencio con el sellado de adentro: una
+	// lista vacía se daba por enviada y no se enviaba, para siempre.
+	svs, mandarInventario, confirmarInventario := serviciosDelLatido()
+	if mandarInventario {
 		carga["servicios"] = svs
 	}
 	var cuerpo io.Reader
@@ -288,6 +293,12 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 			if n := len(r.Comandos); n > 0 {
 				motivo += fmt.Sprintf(" · %d comando(s)", n)
 			}
+		}
+		// EL SELLO DEL INVENTARIO VA ACÁ Y EN NINGÚN OTRO LADO: es el único punto del programa
+		// donde consta que el cerebro se llevó la lista. Sellar al armarla —que es lo que hacía
+		// antes— es creerle al remitente en vez de al receptor.
+		if confirmarInventario != nil {
+			confirmarInventario()
 		}
 		return resultadoLatido{ok: true, motivo: motivo, comandos: r.Comandos}
 	case http.StatusUnauthorized:
