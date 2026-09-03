@@ -468,6 +468,20 @@ type ServiceConfig struct {
 	// total a todos los proyectos). Default false (backward-compat); un WARNING de arranque avisa
 	// del modo legacy en bind remoto aunque esté apagado.
 	StrictTenancy bool `yaml:"strict_tenancy,omitempty"`
+	// TrustedProxies son los CIDR desde los que se acepta `X-Forwarded-For` para identificar al
+	// cliente en el lockout anti fuerza-bruta (Ola 1 del plan empresa).
+	//
+	// AUSENTE ⇒ NO SE LEE EL HEADER, que es el comportamiento de siempre y el único seguro por
+	// default: `X-Forwarded-For` lo pone quien llama, así que confiar en él sin acotar el origen
+	// convierte el lockout en decorativo — cualquiera manda una IP inventada distinta en cada
+	// intento y nunca se bloquea.
+	//
+	// Hace falta cuando el cerebro queda detrás de un proxy o un VIP (que es lo que trae la HA de
+	// la Ola 5): ahí TODOS los agentes llegan con la IP del proxy, y cinco tokens malos de una
+	// sola máquina bloquean a la célula entera durante un minuto.
+	//
+	//	trusted_proxies: ["100.64.0.0/10", "10.0.0.0/8"]
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
 }
 
 // defaultServiceQuotaPerMinute es la cuota por-principal aplicada cuando QuotaPerMinute==0
