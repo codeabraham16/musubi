@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -509,5 +510,55 @@ func TestElAgenteUsaLaRutaCorrectaParaCadaCosa(t *testing.T) {
 		if !vistas[r] {
 			t.Errorf("nunca se llamó a %s (rutas vistas: %v)", r, vistas)
 		}
+	}
+}
+
+// EL CLIENTE DEL LATIDO VERIFICA EL CERTIFICADO CONTRA UN NOMBRE, Y NO RELAJA NADA.
+//
+// Ola 0 del plan empresa. El cerebro puede servir HTTPS con un certificado de `tailscale cert`,
+// emitido para el NOMBRE del nodo en la malla; los agentes discan la IP a proposito, porque con
+// NordVPN activo el DNS de la malla no resuelve los nombres MagicDNS. Las dos cosas juntas son un
+// certificado que no valida, y la tentacion es `InsecureSkipVerify`. Eso convierte el TLS en
+// teatro: cualquiera que se meta en el medio pasa, y el token del dispositivo viaja adentro.
+//
+// Esta prueba custodia la FORMA del arreglo: se declara el nombre, y nada mas.
+//
+// Sabotaje que la hace fallar: poner `InsecureSkipVerify: true` en clienteParaElCerebro, bajar
+// MinVersion, o devolver un Transport propio cuando el nombre viene vacio.
+func TestElClienteDelLatidoDeclaraElNombreYNoApagaLaVerificacion(t *testing.T) {
+	// Sin nombre: el cliente de siempre, SIN Transport propio. Que el default del stdlib siga
+	// siendo el default es la mitad del punto — un Transport clonado que nadie necesita es una
+	// superficie donde manana alguien mete un flag.
+	if c := clienteParaElCerebro(""); c.Transport != nil {
+		t.Error("sin nombre declarado el cliente trae Transport propio: el default del stdlib dejo de ser el default")
+	}
+	if c := clienteParaElCerebro("   "); c.Transport != nil {
+		t.Error("un nombre en blanco cuenta como nombre: se arma un Transport por unos espacios")
+	}
+
+	const nombre = "musubi-server.tail89e295.ts.net"
+	c := clienteParaElCerebro(nombre)
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("con nombre declarado el Transport no es *http.Transport: %T", c.Transport)
+	}
+	cfg := tr.TLSClientConfig
+	if cfg == nil {
+		t.Fatal("no se configuro TLS: el nombre se declaro y no llego a ninguna parte")
+	}
+	if cfg.ServerName != nombre {
+		t.Errorf("ServerName = %q: el certificado se va a verificar contra otra cosa", cfg.ServerName)
+	}
+	if cfg.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify esta PRENDIDO: el TLS queda decorativo y el token del dispositivo viaja adentro")
+	}
+	if cfg.MinVersion != tls.VersionTLS12 {
+		t.Errorf("MinVersion = %d, esperaba TLS 1.2 (%d)", cfg.MinVersion, tls.VersionTLS12)
+	}
+	if cfg.RootCAs != nil {
+		t.Error("se cambio el pool de raices: el certificado de tailscale lo firma Let's Encrypt y sale del pool del sistema")
+	}
+	if c.Timeout != 10*time.Second {
+		t.Errorf("Timeout = %v, esperaba 10s: el timeout corto es lo que evita que los latidos se apilen", c.Timeout)
 	}
 }

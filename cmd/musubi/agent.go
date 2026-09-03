@@ -19,6 +19,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +58,24 @@ const (
 	// mantener UNA forma de configurar la máquina es más importante que la comodidad de un flag.
 	envToken   = "MUSUBI_DEVICE_TOKEN"
 	envCerebro = "MUSUBI_BRAIN_URL"
+
+	// envNombreTLS existe por un choque de dos cosas que las dos son ciertas (Ola 0 del plan
+	// empresa, 2026-09-03).
+	//
+	// El cerebro puede servir HTTPS con un certificado de `tailscale cert`, que Let's Encrypt
+	// emite para el NOMBRE del nodo en la malla (`musubi-server.tail89e295.ts.net`) y para
+	// ningún otro. Pero los agentes laten contra la IP del tailnet a propósito: con NordVPN
+	// activo el DNS de la malla NO resuelve los nombres MagicDNS, y eso está escrito en
+	// `deploy/README.md` porque costó encontrarlo.
+	//
+	// Las dos cosas juntas son un certificado que no valida: se disca una IP y el certificado
+	// dice un nombre. La salida NO es apagar la verificación —eso convierte el TLS en teatro y
+	// deja pasar a cualquiera que se meta en el medio—: es discar la IP y verificar el
+	// certificado contra el nombre, que es exactamente para lo que existe ServerName.
+	//
+	// Vacío ⇒ comportamiento de siempre: el nombre sale de la URL. Sólo hace falta cuando la
+	// URL trae una IP y el certificado trae un nombre.
+	envNombreTLS = "MUSUBI_BRAIN_TLS_NAME"
 )
 
 // runAgent es el punto de entrada de `musubi agent`.
@@ -212,7 +231,28 @@ func (r resultadoLatido) describir() string {
 // —un proxy a medio caer, un tailnet que se degradó— colgaría el bucle entero y la máquina
 // figuraría viva por el resto de la eternidad sin volver a latir jamás. El timeout tiene que ser
 // menor que el intervalo, o los latidos se apilan.
-var clienteLatido = &http.Client{Timeout: 10 * time.Second}
+var clienteLatido = clienteParaElCerebro(os.Getenv(envNombreTLS))
+
+// clienteParaElCerebro arma el cliente del latido, con el nombre contra el que verificar el
+// certificado si hace falta declararlo aparte de la URL.
+//
+// SÓLO toca ServerName. No apaga la verificación, no cambia el pool de raíces y no baja el piso
+// de versión: un cliente que "arregla" el TLS relajándolo es peor que no tener TLS, porque el
+// candado del panel dice que está seguro. Con `nombre` vacío devuelve el cliente de siempre,
+// sin Transport propio, para que el default del stdlib siga siendo el default.
+func clienteParaElCerebro(nombre string) *http.Client {
+	nombre = strings.TrimSpace(nombre)
+	if nombre == "" {
+		return &http.Client{Timeout: 10 * time.Second}
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	tr.TLSClientConfig.ServerName = nombre
+	tr.TLSClientConfig.MinVersion = tls.VersionTLS12
+	return &http.Client{Timeout: 10 * time.Second, Transport: tr}
+}
 
 // latir hace UN POST, con la muestra si hay. El cuerpo lleva MEDICIONES y nunca IDENTIDAD: no
 // hay ningún campo con el que el dispositivo pueda decir quién es (invariante B4/D5). Quién es
@@ -322,6 +362,8 @@ func ayudaAgent() {
 	fmt.Println(cCyan("Entorno:"))
 	fmt.Printf("  %s  token del dispositivo (lo devuelve musubi_fleet_enroll, UNA sola vez)\n", cBold(envToken))
 	fmt.Printf("  %s     dirección del cerebro, ej http://100.x.y.z:7717\n", cBold(envCerebro))
+	fmt.Printf("  %s  nombre contra el que verificar el certificado, si la URL trae una IP\n", cBold(envNombreTLS))
+	fmt.Printf("                         (ej: musubi-server.tail89e295.ts.net). Vacío: sale de la URL.\n")
 	fmt.Println()
 	fmt.Println(cCyan("Notas:"))
 	fmt.Println("  · El token del dispositivo NO sirve para /mcp: no da acceso a la memoria.")
