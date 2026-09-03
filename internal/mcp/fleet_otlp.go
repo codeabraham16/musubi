@@ -243,6 +243,17 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 			Gauge: otlpGauge{DataPoints: datos},
 		})
 	}
+	// EL TRUNCADO **NO** VIAJA POR ACÁ, Y ES DELIBERADO.
+	//
+	// La primera versión lo metía en este payload y rompió cuatro pruebas de una vez, todas
+	// diciendo lo mismo: este sobre lleva TELEMETRÍA DE MÁQUINAS, con exactamente cuatro
+	// atributos, y nada que no sea de una máquina. Tenían razón — `musubi_fleet_export_truncated`
+	// no es un hecho de ninguna máquina, es del exportador: una métrica del cerebro, como
+	// `musubi_tool_calls_total`.
+	//
+	// Y llega igual a Prometheus, porque el drop del scrape es `musubi_fleet_(device|service)_.*`
+	// y esta serie no matchea: sale por /metrics como el resto de las métricas del cerebro. Por
+	// eso su alerta vive en el grupo `musubi-brain` y no en el de flota.
 	if len(metricas) == 0 {
 		return nil, 0, truncado, nil
 	}

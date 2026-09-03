@@ -33,12 +33,24 @@ import (
 	"musubi/internal/memory"
 )
 
-// serviciosPorExportar es el techo de servicios que salen a métricas, en toda la flota y por
-// scrape. No es el mismo techo que `fleet.ServiciosPorLatido` (que acota UN latido de UNA
-// máquina): éste protege a Prometheus de una flota entera.
+// serviciosPorExportar es el techo de servicios que salen a métricas POR PROYECTO y por scrape.
+// No es el mismo techo que `fleet.ServiciosPorLatido` (que acota UN latido de UNA máquina): éste
+// protege a Prometheus de una flota entera.
 //
 // Cuando se corta, SE DICE. Un recorte silencioso deja series que desaparecen sin que nadie sepa
 // por qué, y eso se lee como «ese servicio ya no existe» — que es una afirmación, no un silencio.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// ERA UN TECHO TOTAL Y PASÓ A SER POR PROYECTO (Ola 0 del plan empresa, 2026-09-03)
+//
+// El total era lo primero que iba a romper, y no de a poco: al llegar a 2000 servicios entre
+// TODA la flota, los que quedaban afuera dejaban de tener serie, y `ServicioCaido` no puede
+// alertar sobre una serie que no existe. O sea: cobertura que desaparece en silencio, y
+// justamente en el momento en que la flota crece. Medido el 2026-09-03: dos máquinas reales ya
+// reportan 121 servicios entre las dos, así que a ~35 máquinas con 60 servicios se cruzaba.
+//
+// Por proyecto, un tenant grande no puede dejar ciego a otro — que con un techo compartido era
+// exactamente lo que pasaba, y sin que ninguno de los dos se enterara.
 const serviciosPorExportar = 2000
 
 // servicioExportable ata un servicio a la máquina donde corre. Los dos hacen falta para las
@@ -50,6 +62,7 @@ type servicioExportable struct {
 
 // serviciosVisiblesParaMetricas devuelve los servicios de las máquinas YA compuertadas.
 func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.Device) (out []servicioExportable, truncado bool) {
+	contadoPorProyecto := map[string]int{}
 	// Se agrupa por proyecto para no pedirle a la base una vez por máquina: `ListarServicios`
 	// trae los del proyecto entero y acá se filtra por las máquinas que pasaron la compuerta.
 	porProyecto := map[string][]fleet.Device{}
@@ -73,13 +86,20 @@ func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.
 				// lado de la compuerta.
 				continue
 			}
-			if len(out) >= serviciosPorExportar {
-				return out, true
+			// EL TECHO SE CUENTA POR PROYECTO, no sobre `out`: con un contador global el
+			// primer tenant en ser barrido se comía el cupo y los demás quedaban sin series.
+			if contadoPorProyecto[d.ProjectID] >= serviciosPorExportar {
+				truncado = true
+				continue
 			}
+			contadoPorProyecto[d.ProjectID]++
 			out = append(out, servicioExportable{sv: sv, d: d})
 		}
 	}
-	return out, false
+	// `truncado` y no `false`: con el corte viejo la función salía por un `return out, true`
+	// temprano, así que el final podía devolver false sin mentir. Ahora el recorte NO corta el
+	// recorrido —sigue para contar los otros proyectos—, y un `false` acá borraría el hecho.
+	return out, truncado
 }
 
 // serieDeServicio es la misma forma que serieDeFlota, para un servicio.
@@ -242,13 +262,24 @@ func labelsDeServicio(sv fleet.Servicio, d fleet.Device) [][2]string {
 }
 
 // renderServicios escribe el bloque de servicios en el formato de exposición.
+// serviciosTruncados responde si el techo POR PROYECTO recortó algo, sin escribir nada.
+//
+// Es una segunda pasada sobre la misma consulta y se acepta a propósito: la alternativa era que
+// renderServicios devolviera el dato y que renderFlota lo llamara ANTES de emitir las series de
+// máquina, lo que cambiaría el orden del exposition format que ya está probado. Un barrido más
+// por scrape es barato al lado de reordenar la salida.
+func serviciosTruncados(engine memory.StorageBackend, vistos []fleet.Device) bool {
+	_, truncado := serviciosVisiblesParaMetricas(engine, vistos)
+	return truncado
+}
+
 func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) {
 	svs, truncado := serviciosVisiblesParaMetricas(engine, vistos)
 	if len(svs) == 0 {
 		return
 	}
 	if truncado {
-		b.WriteString(fmt.Sprintf("# musubi_fleet_service: se exportaron los primeros %d servicios; hay más.\n", serviciosPorExportar))
+		b.WriteString(fmt.Sprintf("# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO; hay más.\n", serviciosPorExportar))
 	}
 	for _, s := range seriesDeServicio() {
 		escribirGaugeDeServicios(b, svs, s, ahora)

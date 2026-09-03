@@ -266,10 +266,19 @@ func seriesDelPayload(t *testing.T, cuerpo []byte) map[string]string {
 }
 
 // seriesDelScrape hace lo mismo con el cuerpo de /metrics, quedándose sólo con las de flota.
+// seriesDelScrape junta `musubi_fleet_device_*` y `musubi_fleet_service_*`, que es EXACTAMENTE lo
+// que el empuje OTLP posee — y exactamente lo que el scrape descarta del job `musubi`
+// (`metric_relabel_configs`, regex `musubi_fleet_(device|service)_.*`).
+//
+// El alcance importa: era sólo `_device_`, y ese recorte le hacía un agujero a la paridad porque
+// del otro lado se juntan TODAS las métricas del payload. Ensancharlo a todo `musubi_fleet_`
+// tampoco sirve: `musubi_fleet_export_truncated` es una métrica del CEREBRO —mide al exportador,
+// no a una máquina— y sale sólo por /metrics a propósito. Con este par de prefijos los dos lados
+// cubren el mismo espacio y la prueba dice lo que su nombre promete.
 func seriesDelScrape(salida string) map[string]string {
 	out := map[string]string{}
 	for _, l := range strings.Split(salida, "\n") {
-		if !strings.HasPrefix(l, "musubi_fleet_device_") {
+		if !strings.HasPrefix(l, "musubi_fleet_device_") && !strings.HasPrefix(l, "musubi_fleet_service_") {
 			continue
 		}
 		i := strings.Index(l, "} ")

@@ -81,10 +81,40 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro) {
 		escribirGauge(b, vistos, s.Nombre, s.Ayuda, s.Valor)
 	}
+	// EL TRUNCADO DEJA DE SER UN COMENTARIO Y PASA A SER UNA SERIE (Ola 0 del plan empresa).
+	//
+	// Los avisos de arriba son líneas que empiezan con `#`, o sea: Prometheus las DESCARTA al
+	// parsear. Estaban escritas para una persona que abriera /metrics a mano, y nadie abre
+	// /metrics a mano. El resultado era el peor de los dos mundos: el sistema sabía que había
+	// recortado la cobertura y no había forma de que ese hecho llegara a una alerta.
+	//
+	// `truncadoDeProyectos` se resuelve acá porque lo de servicios lo sabe renderServicios; se le
+	// pasa para que la serie salga UNA vez con sus dos `kind`, en vez de dos series parecidas.
+	renderTruncado(b, truncado, serviciosTruncados(engine, vistos))
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
 	renderServicios(b, engine, vistos, ahora)
+}
+
+// nombreExportTruncado es la serie que dice que el exportador dejó cosas afuera. Vale 1 cuando se
+// recortó y 0 cuando no: acá el 0 NO es un «no medido» —se sabe con certeza que no se truncó— así
+// que emitirlo es correcto y además necesario, porque una serie que sólo existe cuando hay
+// problema no se puede graficar ni distinguir de «el exportador no corrió».
+const nombreExportTruncado = "musubi_fleet_export_truncated"
+
+// renderTruncado emite la serie con un punto por dimensión recortable.
+func renderTruncado(b *strings.Builder, proyectos, servicios bool) {
+	unoSi := func(v bool) string {
+		if v {
+			return "1"
+		}
+		return "0"
+	}
+	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota por un techo. `kind=projects`: se pasó de %d proyectos por scrape. `kind=services`: algún proyecto pasó de %d servicios. Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
+		nombreExportTruncado, proyectosParaExportar, serviciosPorExportar, nombreExportTruncado)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(proyectos))
+	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(servicios))
 }
 
 // devicesVisiblesParaMetricas resuelve QUÉ máquinas ve `p`, ya ordenadas por (proyecto, nombre).
