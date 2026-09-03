@@ -37,7 +37,18 @@ groups:
   #
   # Por eso toda regla que lea una serie de la MUESTRA (o de los servicios) lleva:
   #
-  #     unless on(device) (musubi_fleet_device_up == 0)
+  #     unless on(project, device) (musubi_fleet_device_up == 0)
+  #
+  # EL JOIN LLEVA `project` Y NO SÓLO `device` (Ola 1 del plan empresa, 2026-09-03).
+  #
+  # Con un solo tenant las dos formas se comportan igual, y por eso el error es invisible HOY: el
+  # día que dos clientes tengan cada uno un `srv-01`, `on(device)` empareja muchos-con-muchos y
+  # Prometheus NO evalúa la regla — la descarta entera con un error. O sea que `MaquinaCaida`
+  # dejaría de vigilar A TODA LA FLOTA, no sólo a esas dos máquinas, y el síntoma sería silencio.
+  #
+  # `project` está en las cuatro etiquetas de toda serie de flota (device, project, tier, os), así
+  # que ponerlo no cuesta nada hoy y evita el modo de falla más caro de mañana. Lo custodia
+  # `TestNingunJoinDeFlotaEmparejaSoloPorDevice`.
   #
   # El patrón ya existía —`ServicioCaido` lo usaba desde S12— y estaba aplicado en 3 de 14 reglas.
   # Lo custodia `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`, así que la regla número 15
@@ -109,7 +120,7 @@ groups:
       - alert: MaquinaSeReinicio
         expr: >-
           (musubi_fleet_device_uptime_seconds < 1800)
-            unless on(device) (musubi_fleet_device_up == 0)
+            unless on(project, device) (musubi_fleet_device_up == 0)
         # Sin `for`: el evento dura lo que dura el arranque, y esperar cinco minutos para avisar de
         # algo que pasó hace tres es perder la mitad de la ventana. El techo de 1800 s ya es la
         # ventana: el aviso vive media hora y se apaga solo.
@@ -132,7 +143,7 @@ groups:
       # Es el fallo silencioso que un `up` no detecta: el proceso vive, el colector murió. Sin
       # esta regla, el panel muestra la última muestra buena para siempre y parece sana.
       - alert: MaquinaLateSinMedir
-        expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -152,7 +163,7 @@ groups:
         #
         # Medido al decidirlo: `kernelos-pc` (hoy `davantis-1`) estaba al 86,6 % usado, o sea en la
         # zona ciega entre los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
-        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 15m
         labels: { severity: warning }
         annotations:
@@ -160,7 +171,7 @@ groups:
           nota: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
 
       - alert: DiscoCasiLleno
-        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 5m
         labels: { severity: critical }
         annotations:
@@ -170,7 +181,7 @@ groups:
       # `for` largo a propósito: un pico de 5 minutos es trabajo, no un incidente. Lo que importa
       # es lo sostenido.
       - alert: MemoriaSostenida
-        expr: (musubi_fleet_device_memory_used_bytes / musubi_fleet_device_memory_total_bytes > 0.92) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_memory_used_bytes / musubi_fleet_device_memory_total_bytes > 0.92) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 20m
         labels: { severity: warning }
         annotations:
@@ -178,7 +189,7 @@ groups:
           nota: "Usada = total - MemAvailable, así que el page cache NO cuenta: esto es presión real."
 
       - alert: CPUSostenida
-        expr: (musubi_fleet_device_cpu_percent > 90) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_cpu_percent > 90) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 30m
         labels: { severity: warning }
         annotations:
@@ -187,7 +198,7 @@ groups:
       # --- Carga por core ---
       # Normalizada por CPUs: una carga de 8 es normal en 12 cores y grave en 2.
       - alert: CargaPorCoreAlta
-        expr: (musubi_fleet_device_load5 / musubi_fleet_device_cpus > 2) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_load5 / musubi_fleet_device_cpus > 2) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 20m
         labels: { severity: warning }
         annotations:
@@ -198,7 +209,7 @@ groups:
       # Sólo dispara donde hay sensor: la serie no existe en las máquinas sin él, así que esto
       # no alerta por ausencia de dato (que es justamente lo que un 0 inventado habría hecho).
       - alert: TemperaturaAlta
-        expr: (musubi_fleet_device_temperature_celsius > 85) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_temperature_celsius > 85) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -233,7 +244,7 @@ groups:
       # La serie compara NÚCLEOS semver: dos commits del mismo release no son un agente atrasado.
       # Ver internal/fleet/version.go, que explica lo que esto NO puede ver.
       - alert: AgenteDesactualizado
-        expr: (musubi_fleet_device_agent_stale == 1) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_agent_stale == 1) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 6h
         labels: { severity: warning }
         annotations:
@@ -278,7 +289,7 @@ groups:
       # entra acá. Si emitiera 0, toda la flota sin configurar sonaría desde el día uno — que es
       # exactamente cómo se le enseña a alguien a ignorar las alarmas.
       - alert: MaquinaQueNoAlcanzaSuDestino
-        expr: (musubi_fleet_device_reach_up == 0) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_device_reach_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -316,10 +327,10 @@ groups:
       # Las tres se apagan solas si nadie reporta servicios: sin la serie, la expresión no
       # matchea nada. Un despliegue que todavía no enumera no recibe una sola alarma.
       - alert: ServicioCaido
-        # `unless on(device) musubi_fleet_device_up == 0` es la mitad que importa: si la MÁQUINA
+        # `unless on(project, device) musubi_fleet_device_up == 0` es la mitad que importa: si la MÁQUINA
         # está caída, todos sus servicios lo están, y avisar por cada uno convierte una caída en
         # cincuenta mensajes. Que la máquina se cayó ya lo dice MaquinaCaida.
-        expr: (musubi_fleet_service_up == 0) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_service_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -330,7 +341,7 @@ groups:
       # ANDA A LOS TUMBOS: está corriendo AHORA y se reinició varias veces en la última hora. Es
       # el estado que `up` no puede mostrar — en cada instante el servicio está arriba.
       - alert: ServicioReiniciandose
-        expr: (increase(musubi_fleet_service_restarts_total[1h]) > 5) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (increase(musubi_fleet_service_restarts_total[1h]) > 5) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -341,7 +352,7 @@ groups:
       # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
       # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
       - alert: ServicioSinNoticias
-        expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -365,7 +376,7 @@ groups:
         # Sólo Tier A: un Tier B no corre nuestro binario y no tiene con qué enumerarse.
         expr: >-
           (musubi_fleet_device_up{tier="A"} == 1)
-            unless on(device) count by(device) (musubi_fleet_service_up)
+            unless on(project, device) count by(project, device) (musubi_fleet_service_up)
         for: 15m
         labels:
           severity: warning
@@ -390,7 +401,7 @@ groups:
         expr: >
           (100 * musubi_fleet_service_failed / musubi_fleet_service_handled > 20
           and musubi_fleet_service_handled > 10)
-          unless on(device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_up == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -402,7 +413,7 @@ groups:
       # es exactamente por qué el colector empuja un 0 en vez de callarse: con el 0, la serie
       # existe y vale cero; sin colector, la serie DESAPARECE. Esta regla mira la desaparición.
       - alert: ColectorDeRendimientoMudo
-        expr: (musubi_fleet_service_last_report_seconds > 600 and on(device, service) musubi_fleet_service_handled) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_service_last_report_seconds > 600 and on(project, device, service) musubi_fleet_service_handled) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -411,7 +422,7 @@ groups:
           ausente_en: "sin-declarar — sólo aplica a los servicios que YA empujaban rendimiento, que es opt-in; tier=B — un Tier B no reporta servicios."
 
       - alert: ServicioLento
-        expr: (musubi_fleet_service_latency_p95_ms > 5000) unless on(device) (musubi_fleet_device_up == 0)
+        expr: (musubi_fleet_service_latency_p95_ms > 5000) unless on(project, device) (musubi_fleet_device_up == 0)
         for: 15m
         labels: { severity: warning }
         annotations:

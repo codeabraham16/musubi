@@ -28,7 +28,12 @@ route:
   # El agrupado es POR ALERTA Y POR MÁQUINA, no sólo por alerta: si 20 máquinas se quedan sin
   # disco a la vez, querés 20 avisos identificables y no uno que diga "DiscoPorLlenarse (20)".
   # Con `device` en el group_by, cada máquina tiene su hilo y se resuelve por separado.
-  group_by: ['alertname', 'device']
+  #
+  # Y `project` VA DELANTE de `device` (Ola 1): dos clientes con una máquina del mismo nombre no
+  # pueden compartir hilo. Sin eso, el `srv-01` de uno y el `srv-01` del otro caen en el mismo
+  # grupo, y un `resolved` de uno cierra el aviso del otro — el peor de los finales, porque el
+  # que queda sin arreglar es el que deja de verse.
+  group_by: ['alertname', 'project', 'device']
   group_wait: 30s        # espera inicial: junta las que llegan juntas (un host que se cae entero)
   group_interval: 5m     # cada cuánto avisa de novedades DENTRO de un grupo ya notificado
   repeat_interval: 4h    # cada cuánto insiste con algo que sigue firing
@@ -131,7 +136,7 @@ inhibit_rules:
   # el fallo que tenía la regla de acá abajo.
   - source_matchers: [alertname = "MaquinaCaida"]
     target_matchers: [severity =~ "warning|info"]
-    equal: ['device']
+    equal: ['project', 'device']
 
   # Lo mismo un nivel más arriba: si NO LLEGA NINGUNA métrica de flota, callar el resto de las
   # alertas de flota — todas están ciegas y lo único accionable es FlotaSinTelemetria.
@@ -168,7 +173,7 @@ inhibit_rules:
   # calla a DiscoPorLlenarse).
   - source_matchers: [severity = "critical"]
     target_matchers: [severity = "warning"]
-    equal: ['alertname', 'device']
+    equal: ['alertname', 'project', 'device']
 
 receivers:
   # ─── El receptor real ──────────────────────────────────────────────────────────────────────
