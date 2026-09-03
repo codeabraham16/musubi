@@ -383,6 +383,14 @@ type DeviceStore interface {
 	// LatirDevice estampa la última señal de vida. Devuelve si actualizó; que NO actualice no es
 	// un error (un agente revocado que todavía no se enteró es lo normal).
 	LatirDevice(id string, ahora time.Time, muestra string) (bool, error)
+	// LatirYTomarComandos es la del CAMINO CALIENTE: la señal de vida y la entrega de la cola en
+	// UNA transacción. La puerta del latido usa ésta y no las dos por separado, porque a 2000
+	// máquinas cada 30 s cada commit de más son ~67 fsync/s de más (ver latido.go).
+	//
+	// LatirDevice sigue existiendo y no es un duplicado: la sonda y el exec estampan vida SIN
+	// tener nada que entregar, y hacerlas pasar por acá les cobraría una transacción de cola que
+	// no necesitan.
+	LatirYTomarComandos(id string, ahora time.Time, muestra string, tope int) (bool, []fleet.Comando, error)
 	// ActualizarAutoreporte guarda la versión del agente y la dirección que la propia máquina
 	// reporta. Es la única escritura que un device hace sobre el registro, y sólo sobre su fila.
 	ActualizarAutoreporte(id, version, direccion string) error
