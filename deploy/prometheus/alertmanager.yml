@@ -73,10 +73,30 @@ route:
     # abajo. Una palabra.
     - matchers:
         - alertname = "MusubiSiempreViva"
-      receiver: 'null'
+      receiver: 'watchdog'
       group_wait: 0s
       group_interval: 5m
       repeat_interval: 5m   # corto: es un latido, no un aviso
+    # EL CASO QUE EL LATIDO SOLO NO CUBRE, y es el más probable de los dos.
+    #
+    # Si se cae Telegram —bot bloqueado, token vencido, la red del canal— con Prometheus y
+    # Alertmanager VIVOS, el latido de arriba sigue saliendo perfecto: el watchdog externo no se
+    # entera de nada. Y la alerta que SÍ lo vería, `CadenaDeAlertasFallando{integration="telegram"}`,
+    # es `severity: critical` y cae en la ruta de abajo, que entrega por... Telegram. Circular.
+    #
+    # Se corta mandándola TAMBIÉN al `/fail` del mismo check: hc-ping acepta `<uuid>/fail` y eso
+    # marca el check caído del lado de afuera, sin un servicio nuevo ni una cuenta más. `continue`
+    # en true a propósito: si Telegram está sólo parcialmente roto el aviso igual tiene que
+    # intentar salir por el canal normal, y el CRM tiene que registrar la fila.
+    #
+    # Va ANTES de la ruta de `critical` porque el primer match gana: al revés nunca se evaluaría.
+    - matchers:
+        - alertname = "CadenaDeAlertasFallando"
+        - integration = "telegram"
+      receiver: 'watchdog-fail'
+      continue: true
+      group_wait: 10s
+      repeat_interval: 1h
 
     # Lo crítico insiste más seguido y no se agrupa con lo demás.
     - matchers:
@@ -248,4 +268,12 @@ receivers:
   - name: 'watchdog'
     webhook_configs:
       - url_file: /etc/musubi/watchdog_url   # p. ej. https://hc-ping.com/<uuid>
+        send_resolved: false
+  # El MISMO check que el de arriba, con `/fail` al final: no es una cuenta ni un servicio nuevo,
+  # es el otro extremo del mismo. Un ping acá lo marca CAÍDO en el acto, sin esperar a que venza
+  # el período. `send_resolved: false` por lo mismo que arriba: el que lo levanta es el latido
+  # siguiente, no un aviso de recuperación.
+  - name: 'watchdog-fail'
+    webhook_configs:
+      - url_file: /etc/musubi/watchdog_fail_url   # el mismo uuid + /fail
         send_resolved: false
