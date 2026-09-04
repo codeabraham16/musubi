@@ -142,6 +142,10 @@ func WithMultiAgent(c config.MultiAgentConfig) Option {
 type McpServer struct {
 	// vidaDeRed guarda, en memoria, si el tailnet ve a una máquina que no está latiendo.
 	// Ver internal/fleet/vidared.go: distingue «apagada» de «el agente no corre».
+	//
+	// EN MEMORIA Y NO EN LA BASE, por lo mismo que la ventana del aviso de exec y el token de una
+	// rotación: es un dato de segundos que se puede volver a medir, y una escritura por máquina y
+	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
 	vidaDeRed sync.Map
 	engine    memory.StorageBackend
 	resolver  *skills.Resolver

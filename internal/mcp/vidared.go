@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -134,8 +133,3 @@ func paresDelTailnet(ctx context.Context) ([]fleet.ParDeTailnet, error) {
 	}
 	return pares, nil
 }
-
-// vidaRedStore es el mapa en memoria. Va acá y no en la base por lo mismo que la ventana del
-// aviso de exec y el token de una rotación: es un dato de segundos que se puede volver a medir,
-// y una escritura por máquina y por tick es exactamente lo que la Ola 0 sacó del camino caliente.
-type vidaRedStore = sync.Map
