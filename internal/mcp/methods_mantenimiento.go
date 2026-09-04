@@ -61,7 +61,13 @@ func (s *McpServer) toolFleetMaintenance(ctx context.Context, raw json.RawMessag
 		// CANCELAR MARCA, NO BORRA. La cronología se construye sólo sobre tablas append-only, y
 		// «hubo un mantenimiento y lo cancelaron a los diez minutos» explica el comportamiento de
 		// esa máquina mejor que la ausencia de toda fila.
-		hubo, err := s.engine.CancelarMantenimiento(id)
+		//
+		// EL DUEÑO VIAJA CON EL ID, y no es de adorno. La compuerta de arriba autorizó sobre `d`,
+		// que es la máquina QUE NOMBRÓ QUIEN LLAMA; el id de una ventana, en cambio, es global.
+		// Mandando sólo el id, esta línea escribía sobre la fila de otro tenant mientras el
+		// permiso se comprobaba contra una máquina propia — y el mensaje de abajo ya decía «en
+		// esta máquina», afirmando un alcance que la consulta no aplicaba. Ahora lo aplica.
+		hubo, err := s.engine.CancelarMantenimiento(d.ID, d.ProjectID, id)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}

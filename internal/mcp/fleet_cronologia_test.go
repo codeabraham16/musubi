@@ -506,9 +506,60 @@ func TestTodaOperacionInternaDelCodigoEstaClasificada(t *testing.T) {
 		if op == fleet.PrefijoOperacionInterna {
 			continue
 		}
+		// DOS FORMAS VÁLIDAS DE ESTAR CLASIFICADA, y ninguna más.
+		//
+		// La normal es que el argv lo diga. La otra —OpsClasificadasPorFila— es para las
+		// operaciones que emiten VARIOS planos con el mismo argv, donde el argv genuinamente no
+		// alcanza y el plano lo declara quien encola. Esa segunda vía no es una excusa: abajo se
+		// comprueba que la única puerta de escritura las rechace sin etiqueta, que es lo que
+		// impide que «se clasifica por fila» se convierta en «no se clasifica».
+		if fleet.OpsClasificadasPorFila[op] {
+			continue
+		}
 		tipo := fleet.TipoDeArgv([]string{op})
 		if tipo == fleet.HechoSinClasificar {
 			t.Errorf("la operación interna %q (en %s) NO está clasificada en fleet.TipoDeArgv: la cronología la escondería de todos sin decir por qué", op, donde)
+		}
+	}
+}
+
+// LA SALIDA «SE CLASIFICA POR FILA» ESTÁ CERRADA CON LLAVE: ENCOLAR SIN PLANO SE RECHAZA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// Sin esta prueba, el guard de exhaustividad de arriba tiene una puerta: agregar una operación a
+// OpsClasificadasPorFila y no etiquetarla en ningún lado deja la suite verde y la cronología
+// escondiendo la fila de todo el mundo — o, si alguien "arregla" eso poniéndole un plano por
+// defecto, vuelve la fuga que la migración 46 cerró.
+//
+// La guarda vive en EncolarComando y no en la tool a propósito: exec, pantalla, shell y el motor
+// de políticas entran todos por ahí. Una comprobación en una de las cuatro es una comprobación
+// que las otras tres esquivan — la misma razón por la que el techo de la cola vive en esa función.
+//
+// Sabotaje que la hace fallar: sacar el `if fleet.OpsClasificadasPorFila[...]` de EncolarComando.
+func TestNoSePuedeEncolarUnAvisoSinDeclararSuPlano(t *testing.T) {
+	s, d := servidorConMaquina(t)
+	for op := range fleet.OpsClasificadasPorFila {
+		base := fleet.Comando{
+			DeviceID: d.ID, ProjectID: d.ProjectID, Principal: "gio",
+			Origen: fleet.OrigenPersona, Timeout: fleet.ComandoTimeoutDefault,
+			Argv: []string{op, "sesion", "Musubi: fulano está haciendo algo acá."},
+		}
+		if _, err := s.engine.EncolarComando(base); err == nil {
+			t.Errorf("se encoló %q SIN plano: esa fila se esconde de todos, o peor, alguien le pone un default y vuelve la fuga entre planos", op)
+		}
+		// Con plano, el camino legítimo sigue funcionando y la fila conserva la etiqueta.
+		conPlano := base
+		conPlano.Clasificacion = fleet.HechoCanalShell
+		enc, err := s.engine.EncolarComando(conPlano)
+		if err != nil {
+			t.Fatalf("no se pudo encolar %q declarando el plano: %v", op, err)
+		}
+		leido, ok, err := s.engine.ComandoPorID(enc.ID)
+		if err != nil || !ok {
+			t.Fatalf("no se pudo releer el comando %q (ok=%v): %v", op, ok, err)
+		}
+		if leido.Clasificacion != fleet.HechoCanalShell {
+			t.Errorf("el plano no sobrevivió al viaje por la base: quedó %q", leido.Clasificacion)
 		}
 	}
 }
@@ -668,5 +719,152 @@ func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
 			t.Errorf("%s: un comando pedido por una persona salió origen=%v automatico=%v",
 				c.tool, manual["origen"], manual["automatico"])
 		}
+	}
+}
+
+// EL AVISO DE UN EXEC NO SE LE MUESTRA A QUIEN SÓLO PUEDE MIRAR LA PANTALLA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA FUGA, MEDIDA EN LA SUPERFICIE DONDE SE VEÍA
+//
+// Los tres caminos encolan `musubi:avisar` con el MISMO argv, y `TipoDeArgv` clasificaba los tres
+// como `canal_pantalla`. Un principal con SÓLO `screen:view` abría la cronología y leía, con el
+// texto entero: «Musubi: fulano está ejecutando comandos en esta máquina» y «...está abriendo una
+// terminal...». Eso es actividad de los planos de ACTUAR y de la SHELL contada a una credencial
+// que no tiene ninguno de los dos — la fuga entrando por una fila de plomería, que es la clase de
+// fila que nadie mira.
+//
+// Este test recorre la superficie real —la tool, con la compuerta de verdad— y usa las MISMAS
+// constantes que los tres llamadores de producción, así que también custodia que cada camino haya
+// declarado su plano y no el del vecino.
+//
+// Sabotaje que lo hace fallar: ponerle `fleet.HechoCanalPantalla` a avisoExec o a avisoShell, o
+// hacer que encolarAvisoDeAcceso ignore `a.clase`.
+func TestElAvisoDeUnExecNoLoVeQuienSoloMiraLaPantalla(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
+
+	// Los tres avisos, por la MISMA función que usan pantalla, shell y exec en producción.
+	for _, a := range []avisoDeAcceso{avisoPantalla, avisoShell, avisoExec} {
+		s.encolarAvisoDeAcceso(d, conCaps("infra", nil), a)
+	}
+
+	// `haciendo` es lo que delata el plano: es el texto que el usuario de la máquina lee.
+	cronologiaDeMaquina := func(maquina string, caps map[fleet.Cap][]string) string {
+		t.Helper()
+		res, e := callAsPrincipal(t, s, conCaps("infra", caps), "musubi_fleet_cronologia",
+			map[string]any{"device": maquina})
+		if e != nil {
+			t.Fatalf("cronologia: %+v", e)
+		}
+		return textOf(t, res)
+	}
+	cronologiaDe := func(caps map[fleet.Cap][]string) string {
+		t.Helper()
+		return cronologiaDeMaquina("pc-gio", caps)
+	}
+
+	verPantalla := cronologiaDe(map[fleet.Cap][]string{fleet.CapScreenView: {"*"}})
+	if strings.Contains(verPantalla, avisoExec.haciendo) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `screen:view` se leyó el aviso de un EXEC (%q) en:\n%s", avisoExec.haciendo, verPantalla)
+	}
+	if strings.Contains(verPantalla, avisoShell.haciendo) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `screen:view` se leyó el aviso de una SHELL (%q) en:\n%s", avisoShell.haciendo, verPantalla)
+	}
+	if !strings.Contains(verPantalla, avisoPantalla.haciendo) {
+		t.Errorf("el aviso de PANTALLA no le llegó a quien sí puede verlo: la reparación se pasó de cerrada\n%s", verPantalla)
+	}
+
+	soloExec := cronologiaDe(map[fleet.Cap][]string{fleet.CapExec: {"*"}})
+	if strings.Contains(soloExec, avisoPantalla.haciendo) || strings.Contains(soloExec, avisoShell.haciendo) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `exec` se leyeron avisos de pantalla o de shell:\n%s", soloExec)
+	}
+	if !strings.Contains(soloExec, avisoExec.haciendo) {
+		t.Errorf("el aviso de EXEC no le llegó a quien sí puede verlo:\n%s", soloExec)
+	}
+
+	soloShell := cronologiaDe(map[fleet.Cap][]string{fleet.CapShell: {"*"}})
+	if strings.Contains(soloShell, avisoPantalla.haciendo) || strings.Contains(soloShell, avisoExec.haciendo) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `shell` se leyeron avisos de pantalla o de exec:\n%s", soloShell)
+	}
+	if !strings.Contains(soloShell, avisoShell.haciendo) {
+		t.Errorf("el aviso de SHELL no le llegó a quien sí puede verlo:\n%s", soloShell)
+	}
+
+	// ── Y LA OTRA MITAD: `musubi:preguntar` ────────────────────────────────────────────────
+	//
+	// Se etiqueta en DOS lugares distintos —uno en el camino de pantalla, otro en el de shell—,
+	// así que no alcanza con cubrir `musubi:avisar`, que tiene un solo encolador. Se comprobó:
+	// sin este bloque, etiquetar la pregunta de la shell como `canal_pantalla` deja la suite
+	// entera en verde, y esa pregunta dice literalmente «pide permiso para abrir una TERMINAL».
+	//
+	// Máquina LIMPIA a propósito: `sembrarLosTresPlanos` deja una sesión de shell abierta, y T7
+	// rechaza el pedido por eso ANTES de llegar al despacho de `pide`. Reusarla dejaría el bloque
+	// verde sin haber encolado nunca la pregunta que viene a custodiar.
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]interface{}{
+		"name": "pc-limpia", "tier": "A", "project": "infra",
+		"caps": []string{"metrics", "exec", "screen", "shell"}, "os": "linux",
+	}); e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	limpia, _, err := s.engine.DevicePorNombre("infra", "pc-limpia")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.engine.FijarConsentimiento(limpia.ID, fleet.ConsentimientoPide); err != nil {
+		t.Fatal(err)
+	}
+	// Sin esto, `pide` se ENDURECE a prohibido —quien no puede preguntar no deja entrar— y el
+	// pedido muere antes de encolar la pregunta.
+	if err := s.engine.FijarCapacidadDePreguntar(limpia.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	pedirShell := conCaps("infra", map[fleet.Cap][]string{fleet.CapShell: {"*"}})
+	if _, e := callAsPrincipal(t, s, pedirShell, "musubi_fleet_shell", map[string]any{"device": "pc-limpia"}); e != nil {
+		t.Fatalf("con `pide` la shell tenía que quedar esperando permiso: %+v", e)
+	}
+	const terminal = "TERMINAL"
+	if crudo := cronologiaDeMaquina("pc-limpia", map[fleet.Cap][]string{fleet.CapScreenView: {"*"}}); strings.Contains(crudo, terminal) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `screen:view` se leyó que alguien pide permiso para abrir una TERMINAL:\n%s", crudo)
+	}
+	if crudo := cronologiaDeMaquina("pc-limpia", map[fleet.Cap][]string{fleet.CapShell: {"*"}}); !strings.Contains(crudo, terminal) {
+		t.Errorf("la pregunta de la shell no le llegó a quien sí puede verla:\n%s", crudo)
+	}
+
+	// Y EL ERROR SIMÉTRICO. Las dos etiquetas de `musubi:preguntar` se escriben en archivos
+	// distintos, así que cubrir una sola deja la otra libre de equivocarse — comprobado: sin este
+	// bloque, etiquetar la pregunta de PANTALLA como `canal_shell` deja la suite en verde, y eso
+	// no sólo se la muestra a quien tiene `shell`: se la esconde a su propio dueño.
+	resEnroll, e := call(t, s, "musubi_fleet_enroll", map[string]interface{}{
+		"name": "pc-mirada", "tier": "A", "project": "infra",
+		"caps": []string{"metrics", "exec", "screen", "shell"}, "os": "linux",
+	})
+	if e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	// La pantalla exige latido: sin agente al otro lado no hay a quién entregarle la contraseña,
+	// y el pedido muere antes de encolar la pregunta.
+	tok, _ := jsonOf(t, resEnroll)["token"].(string)
+	postCon(t, servidorHTTP(t, s).URL+fleetHeartbeatPath, tok, "")
+	mirada, _, err := s.engine.DevicePorNombre("infra", "pc-mirada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.engine.FijarConsentimiento(mirada.ID, fleet.ConsentimientoPide); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.engine.FijarCapacidadDePreguntar(mirada.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	verPantallaCap := conCaps("infra", map[fleet.Cap][]string{fleet.CapScreen: {"*"}, fleet.CapScreenView: {"*"}})
+	if _, e := callAsPrincipal(t, s, verPantallaCap, "musubi_fleet_screen", map[string]any{"device": "pc-mirada"}); e != nil {
+		t.Fatalf("con `pide` la pantalla tenía que quedar esperando permiso: %+v", e)
+	}
+	const verPantallaTxt = "ver esta pantalla"
+	if crudo := cronologiaDeMaquina("pc-mirada", map[fleet.Cap][]string{fleet.CapShell: {"*"}}); strings.Contains(crudo, verPantallaTxt) {
+		t.Errorf("FUGA ENTRE PLANOS: con sólo `shell` se leyó que alguien pide permiso para VER LA PANTALLA:\n%s", crudo)
+	}
+	if crudo := cronologiaDeMaquina("pc-mirada", map[fleet.Cap][]string{fleet.CapScreenView: {"*"}}); !strings.Contains(crudo, verPantallaTxt) {
+		t.Errorf("la pregunta de pantalla no le llegó a quien sí puede verla:\n%s", crudo)
 	}
 }

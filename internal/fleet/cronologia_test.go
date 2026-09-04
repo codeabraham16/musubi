@@ -56,20 +56,21 @@ func TestUnaOperacionInternaDesconocidaNoSeLeMuestraANadie(t *testing.T) {
 	}
 }
 
-// Las cuatro operaciones internas que el cerebro encola HOY sí están clasificadas, y cada una en
-// el plano que le corresponde. Sin esto, el fail-closed de arriba escondería la mitad de la
-// cronología real y nadie lo notaría hasta usarla.
+// Las operaciones internas cuyo plano SÍ se lee del argv están clasificadas, cada una en el suyo.
+// Sin esto, el fail-closed de arriba escondería la mitad de la cronología real y nadie lo notaría
+// hasta usarla.
 func TestLasOperacionesInternasDeHoyEstanClasificadas(t *testing.T) {
 	casos := map[string]struct {
 		tipo TipoDeHecho
 		cap  Cap
 	}{
-		OpPantalla:  {HechoCanalPantalla, CapScreenView},
-		OpAvisar:    {HechoCanalPantalla, CapScreenView},
-		OpPreguntar: {HechoCanalPantalla, CapScreenView},
-		OpShell:     {HechoCanalShell, CapShell},
+		OpPantalla: {HechoCanalPantalla, CapScreenView},
+		OpShell:    {HechoCanalShell, CapShell},
 	}
 	for op, quiero := range casos {
+		if OpsClasificadasPorFila[op] {
+			t.Fatalf("%s figura en OpsClasificadasPorFila y este test lo trata como deducible del argv", op)
+		}
 		tipo := TipoDeArgv([]string{op, "id"})
 		if tipo != quiero.tipo {
 			t.Errorf("%s se clasificó como %q, esperaba %q", op, tipo, quiero.tipo)
@@ -79,12 +80,70 @@ func TestLasOperacionesInternasDeHoyEstanClasificadas(t *testing.T) {
 			t.Errorf("%s pide %q (mostrable=%v), esperaba %q", op, capacidad, mostrable, quiero.cap)
 		}
 		if plano, _ := PlanoDeHecho(tipo); plano != PlanoEntrar {
-			t.Errorf("%s cayó en el plano %q: las operaciones internas son del plano de ENTRAR", op, plano)
+			t.Errorf("%s cayó en el plano %q: estas operaciones internas son del plano de ENTRAR", op, plano)
 		}
 	}
 	// Y un comando de verdad NO es una operación interna.
 	if tipo := TipoDeArgv([]string{"systemctl", "restart", "nginx"}); tipo != HechoComando {
 		t.Errorf("un comando del host se clasificó como %q", tipo)
+	}
+}
+
+// EL AVISO DE UN EXEC NO ES UN HECHO DE PANTALLA, Y ANTES SÍ LO ERA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// `musubi:avisar` y `musubi:preguntar` los encolan los TRES caminos con el mismo argv, y
+// `TipoDeArgv` los mandaba a los tres a `HechoCanalPantalla`. Consecuencia medida en el código:
+// un principal con SÓLO `screen:view` sobre una máquina leía en su cronología, con el texto
+// entero, «Musubi: fulano está ejecutando comandos en esta máquina» y «...está abriendo una
+// terminal...» — dos planos que esa credencial no puede ver.
+//
+// La misma fila, con el mismo argv, tiene que pedir una capacidad DISTINTA según quién la encoló.
+// Por eso el plano viaja en la fila y no en el argv.
+//
+// Sabotaje que lo hace fallar: devolver HechoCanalPantalla para OpAvisar en TipoDeArgv, o hacer
+// que TipoDeComando ignore c.Clasificacion.
+func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
+	casos := []struct {
+		clase TipoDeHecho
+		cap   Cap
+		plano PlanoDeFlota
+	}{
+		{HechoCanalPantalla, CapScreenView, PlanoEntrar},
+		{HechoCanalShell, CapShell, PlanoEntrar},
+		{HechoCanalExec, CapExec, PlanoActuar},
+	}
+	for op := range OpsClasificadasPorFila {
+		// SIN etiqueta no se muestra a nadie: una fila anterior a la migración 46 pudo salir de
+		// cualquiera de los tres caminos, y no hay valor seguro que no sea esconderla.
+		if tipo := TipoDeArgv([]string{op, "texto"}); tipo != HechoSinClasificar {
+			t.Errorf("%s sin etiqueta se clasificó como %q: el argv no distingue el plano y adivinarlo filtra dos de los tres", op, tipo)
+		}
+		for _, c := range casos {
+			cmd := Comando{Argv: []string{op, "texto"}, Clasificacion: c.clase}
+			tipo := TipoDeComando(cmd)
+			if tipo != c.clase {
+				t.Errorf("%s encolado como %q se leyó como %q", op, c.clase, tipo)
+			}
+			capacidad, mostrable := CapDeHecho(tipo)
+			if !mostrable || capacidad != c.cap {
+				t.Errorf("%s en el plano %q pide %q (mostrable=%v), esperaba %q", op, c.clase, capacidad, mostrable, c.cap)
+			}
+			if plano, _ := PlanoDeHecho(tipo); plano != c.plano {
+				t.Errorf("%s en %q cayó en el plano %q, esperaba %q", op, c.clase, plano, c.plano)
+			}
+			// Y lo que de verdad importa: el hecho que llega a la cronología.
+			h := HechoDeComando(Comando{Argv: cmd.Argv, Clasificacion: c.clase}, "pc")
+			if cap, _ := CapDeHecho(h.Tipo); cap != c.cap {
+				t.Errorf("el Hecho de %s en %q pide %q, esperaba %q", op, c.clase, cap, c.cap)
+			}
+		}
+	}
+
+	// UNA ETIQUETA QUE ESTA VERSIÓN NO CONOCE NO SE USA A CIEGAS: cae al argv, que esconde.
+	raro := Comando{Argv: []string{OpAvisar, "x"}, Clasificacion: TipoDeHecho("plano_del_futuro")}
+	if tipo := TipoDeComando(raro); tipo != HechoSinClasificar {
+		t.Errorf("una clasificación desconocida se usó igual (%q): el fail-closed va en los dos sentidos", tipo)
 	}
 }
 

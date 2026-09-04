@@ -23,7 +23,7 @@ import (
 var ErrComandoAjeno = errors.New("ese comando no pertenece a este dispositivo")
 
 const columnasComando = `id, device_id, project_id, principal, argv, timeout_seg, estado,
-	creado, entregado, terminado, exit_code, stdout, stderr, error, origen`
+	creado, entregado, terminado, exit_code, stdout, stderr, error, origen, plano`
 
 // EncolarComando registra el pedido y lo deja pendiente. Devuelve el comando con su ID.
 //
@@ -70,11 +70,28 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 	// nuevo se guarda como desconocido en vez de crear una categoría que ninguna superficie sabe
 	// dibujar. Lo desconocido ya tiene significado; lo inventado, no.
 	c.Origen = fleet.OrigenValido(c.Origen)
+	// ── LA CLASIFICACIÓN SE EXIGE ACÁ, QUE ES LA ÚNICA PUERTA ───────────────────────────────
+	//
+	// Mismo motivo que el techo de la cola de más arriba: exec, pantalla, shell y las políticas
+	// entran todos por esta función. Una etiqueta que se comprueba en la tool es una etiqueta que
+	// el quinto camino no va a llevar, y el modo de falla no es «falta un dato»: es que la fila
+	// cae a `HechoSinClasificar` y desaparece de la cronología sin que nadie se entere —o, peor,
+	// que alguien la clasifique por defecto y vuelva la fuga que la migración 46 vino a cerrar.
+	//
+	// Falla RUIDOSA y no silenciosa: rechazar el encolado se ve en el acto y se arregla en el
+	// llamador. Guardarla sin etiqueta se descubre meses después, mirando una cronología que
+	// calla.
+	if fleet.OpsClasificadasPorFila[primerArgv(c.Argv)] && fleet.TipoDeComando(c) == fleet.HechoSinClasificar {
+		return fleet.Comando{}, fmt.Errorf(
+			"la operación interna %q no puede encolarse sin declarar su plano: el mismo argv lo emiten pantalla, shell y exec, "+
+				"y sin `Clasificacion` la cronología no puede saber a quién mostrársela", primerArgv(c.Argv))
+	}
 	_, err = e.db.Exec(
-		`INSERT INTO device_commands (id, device_id, project_id, principal, argv, timeout_seg, estado, creado, origen)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO device_commands (id, device_id, project_id, principal, argv, timeout_seg, estado, creado, origen, plano)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.DeviceID, c.ProjectID, c.Principal, argv,
 		int(c.Timeout.Seconds()), string(c.Estado), c.Creado.UTC().Format(time.RFC3339), string(c.Origen),
+		string(c.Clasificacion),
 	)
 	if err != nil {
 		return fleet.Comando{}, fmt.Errorf("error al encolar el comando para %q: %w", c.DeviceID, err)
@@ -365,14 +382,14 @@ func escanearComando(row escaneable) (fleet.Comando, error) {
 	var (
 		c                    fleet.Comando
 		argv, estado, creado string
-		origen               string
+		origen, plano        string
 		entregado, terminado sql.NullString
 		exit                 sql.NullInt64
 		timeoutSeg           int
 	)
 	if err := row.Scan(
 		&c.ID, &c.DeviceID, &c.ProjectID, &c.Principal, &argv, &timeoutSeg, &estado,
-		&creado, &entregado, &terminado, &exit, &c.Stdout, &c.Stderr, &c.Error, &origen,
+		&creado, &entregado, &terminado, &exit, &c.Stdout, &c.Stderr, &c.Error, &origen, &plano,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Comando{}, err
@@ -386,6 +403,11 @@ func escanearComando(row escaneable) (fleet.Comando, error) {
 	// meter una categoría que las superficies no saben dibujar. Lo que no reconozco es
 	// desconocido, que ya tiene significado propio.
 	c.Origen = fleet.OrigenValido(fleet.OrigenComando(origen))
+	// La clasificación NO se normaliza acá: TipoDeComando ya trata lo que no reconoce como «no
+	// declarado» y cae al argv. Normalizarla al leer la borraría, y entonces una fila escrita por
+	// una versión futura perdería el dato en vez de conservarlo para cuando esta versión lo
+	// entienda.
+	c.Clasificacion = fleet.TipoDeHecho(plano)
 	if t, ok := parseObsTime(creado); ok {
 		c.Creado = t
 	}
@@ -503,4 +525,13 @@ func (e *DbEngine) PodarEstadoDePoliticas(vivas []string) (int64, error) {
 		return 0, fmt.Errorf("error al leer el resultado de la poda de políticas: %w", err)
 	}
 	return n, nil
+}
+
+// primerArgv devuelve argv[0] recortado, o "" si no hay. Existe para que la guarda de encolado no
+// tenga que repetir el chequeo de largo, que es justo donde se cuela un panic.
+func primerArgv(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(argv[0])
 }

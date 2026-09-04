@@ -211,6 +211,10 @@ const (
 	// como «alguien corrió un comando», que es lo que dice la tabla de la que salen.
 	HechoCanalPantalla TipoDeHecho = "canal_pantalla"
 	HechoCanalShell    TipoDeHecho = "canal_shell"
+	// HechoCanalExec es la plomería del plano de ACTUAR: el aviso que se le da al usuario de la
+	// máquina cuando alguien va a ejecutar ahí. Existe porque `musubi:avisar` lo encolan los tres
+	// caminos con el mismo argv, y sin un valor propio el del exec se leía como pantalla.
+	HechoCanalExec TipoDeHecho = "canal_exec"
 	// HechoSinClasificar es una operación interna que esta versión no conoce. NO SE MUESTRA A
 	// NADIE, y se cuenta aparte: es el default fail-closed de CapDeHecho hecho visible.
 	HechoSinClasificar TipoDeHecho = "sin_clasificar"
@@ -242,6 +246,8 @@ func CapDeHecho(t TipoDeHecho) (Cap, bool) {
 		return CapScreenView, true
 	case HechoShell, HechoCanalShell:
 		return CapShell, true
+	case HechoCanalExec:
+		return CapExec, true
 	}
 	return "", false
 }
@@ -251,7 +257,7 @@ func CapDeHecho(t TipoDeHecho) (Cap, bool) {
 // tuviera exactamente una capacidad, que hoy no es cierto.
 func PlanoDeHecho(t TipoDeHecho) (PlanoDeFlota, bool) {
 	switch t {
-	case HechoComando:
+	case HechoComando, HechoCanalExec:
 		return PlanoActuar, true
 	case HechoPantalla, HechoShell, HechoCanalPantalla, HechoCanalShell:
 		return PlanoEntrar, true
@@ -259,18 +265,60 @@ func PlanoDeHecho(t TipoDeHecho) (PlanoDeFlota, bool) {
 	return "", false
 }
 
-// TipoDeArgv clasifica una fila de `device_commands` por lo que REVELA.
+// OpsClasificadasPorFila son las operaciones internas cuyo plano NO se puede deducir del argv.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EL MISMO ARGV LO ENCOLAN TRES PLANOS DISTINTOS
+//
+// `musubi:avisar` y `musubi:preguntar` los emiten los TRES caminos —pantalla, shell y exec— con
+// exactamente el mismo argv: `["musubi:avisar", texto]`. Desde A75/A83 eso es a propósito: hay un
+// solo encolador para que sumar un camino no sea acordarse de copiar un bloque.
+//
+// La consecuencia no era a propósito. `TipoDeArgv` mandaba los tres a `HechoCanalPantalla`, así
+// que un principal con SÓLO `screen:view` leía en la cronología «Musubi: fulano está ejecutando
+// comandos en esta máquina» y «...está abriendo una terminal...». El texto lo dice todo: quién,
+// cuándo, y en qué plano — dos planos que esa credencial no puede ver. Es la fuga que el eje de
+// capacidades existe para impedir, entrando por la puerta de atrás de una fila de plomería.
+//
+// Un argv no puede resolverlo porque los tres son idénticos, y el TEXTO no se puede parsear: es
+// una cadena de presentación, se reescribe y se traduce. Así que el plano lo DECLARA quien encola
+// y viaja en la fila (columna `plano`, migración 46). `EncolarComando` rechaza estas operaciones
+// sin clasificación: es la única puerta de escritura, y una etiqueta que se puede olvidar es la
+// que se olvida.
+var OpsClasificadasPorFila = map[string]bool{OpAvisar: true, OpPreguntar: true}
+
+// TipoDeArgv clasifica una fila de `device_commands` por lo que REVELA, mirando SÓLO el argv.
+//
+// Para las operaciones de OpsClasificadasPorFila devuelve HechoSinClasificar, y eso NO es un
+// olvido: es lo correcto para una fila sin etiqueta —las anteriores a la migración 46—, donde el
+// plano genuinamente no se sabe. No hay valor seguro que no sea esconder: mostrarla como pantalla
+// filtra el exec y la shell, y mostrarla como exec filtra la pantalla. Ver TipoDeComando, que es
+// la puerta que usa la cronología.
 func TipoDeArgv(argv []string) TipoDeHecho {
 	if !EsOperacionInterna(argv) {
 		return HechoComando
 	}
 	switch strings.TrimSpace(argv[0]) {
-	case OpPantalla, OpAvisar, OpPreguntar:
+	case OpPantalla:
 		return HechoCanalPantalla
 	case OpShell:
 		return HechoCanalShell
 	}
 	return HechoSinClasificar
+}
+
+// TipoDeComando es la clasificación de una fila ENTERA, y es la que vale: prefiere lo que declaró
+// quien encoló y cae al argv sólo si la fila no lo trae.
+//
+// El orden importa y es fail-closed en los dos sentidos. Una etiqueta que esta versión no conoce
+// —una fila escrita por una versión futura— no se usa a ciegas: se cae al argv, que para estas
+// operaciones esconde. Y una fila vieja sin etiqueta tampoco se adivina.
+func TipoDeComando(c Comando) TipoDeHecho {
+	switch c.Clasificacion {
+	case HechoComando, HechoCanalPantalla, HechoCanalShell, HechoCanalExec:
+		return c.Clasificacion
+	}
+	return TipoDeArgv(c.Argv)
 }
 
 // Hecho es una línea de la cronología. Es una VISTA, igual que SesionViva: no hay tabla de
@@ -338,7 +386,7 @@ func (h Hecho) Duracion() (time.Duration, bool) {
 // cuenta terminan discrepando en qué es «cuándo» — y acá eso movería hechos de ventana.
 
 func HechoDeComando(c Comando, device string) Hecho {
-	tipo := TipoDeArgv(c.Argv)
+	tipo := TipoDeComando(c)
 	plano, _ := PlanoDeHecho(tipo)
 	return Hecho{
 		Cuando:     c.Creado,

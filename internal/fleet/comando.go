@@ -132,6 +132,13 @@ type Comando struct {
 	// a la migración 41 y NO significa «una persona».
 	Origen OrigenComando
 
+	// Clasificacion es a qué plano pertenece esta fila, DECLARADO por quien encola. Sólo hace
+	// falta para las operaciones internas cuyo argv es idéntico en varios planos
+	// (fleet.OpsClasificadasPorFila): sin ella, el aviso de un exec se leía como pantalla y lo
+	// veía cualquiera con `screen:view`. Vacío = no se sabe, que es el valor de todo lo anterior
+	// a la migración 46 y NO significa «pantalla». Ver TipoDeComando.
+	Clasificacion TipoDeHecho
+
 	Creado    time.Time
 	Entregado time.Time
 	Terminado time.Time

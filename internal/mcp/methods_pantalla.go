@@ -556,9 +556,11 @@ func (s *McpServer) pedirPermisoParaPantalla(d fleet.Device, p *Principal, proye
 		fleet.RecortarRunas(quien, 64))
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
-		Origen:  fleet.OrigenPersona,
-		Argv:    []string{comandoPreguntar, ses.ID, texto},
-		Timeout: fleet.ComandoTimeoutDefault,
+		Origen: fleet.OrigenPersona,
+		Argv:   []string{comandoPreguntar, ses.ID, texto},
+		// Ver avisoDeAcceso: `musubi:preguntar` también lo emiten dos planos con el mismo argv.
+		Clasificacion: fleet.HechoCanalPantalla,
+		Timeout:       fleet.ComandoTimeoutDefault,
 	}); err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
@@ -628,10 +630,21 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 //
 // «terminal» y no «shell» a propósito: el destinatario no es quien opera. Es la persona en esa
 // máquina, que puede no saber qué es una shell y sí qué es que alguien le abra una terminal.
-const (
-	avisoPantalla = "está abriendo una sesión de pantalla en esta máquina."
-	avisoShell    = "está abriendo una terminal en esta máquina."
-	avisoExec     = "está ejecutando comandos en esta máquina."
+//
+// EL TEXTO Y EL PLANO VIAJAN JUNTOS, y eso es lo que impide que vuelva la fuga de la migración
+// 46. Los tres avisos tienen el MISMO argv, así que el plano al que pertenece cada fila no se
+// puede deducir después: lo tiene que declarar quien encola. Con dos constantes sueltas —un texto
+// acá y una clasificación en el llamador— el cuarto camino iba a traer texto y olvidar el plano,
+// que es exactamente la forma de A83. Emparejados, no se puede agregar uno sin el otro.
+type avisoDeAcceso struct {
+	haciendo string
+	clase    fleet.TipoDeHecho
+}
+
+var (
+	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla}
+	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell}
+	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec}
 )
 
 // encolarAvisoDeAcceso le manda al agente el aviso que `avisa` promete (A57).
@@ -660,20 +673,24 @@ const (
 // semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
 // por eso queda la línea, con la operación adentro para que diga cuál fue.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, haciendo string) {
+func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) {
 	quien := nombrePrincipal(p)
 	if quien == "" {
 		quien = "un operador"
 	}
-	texto := fmt.Sprintf("Musubi: %s %s", fleet.RecortarRunas(quien, 64), haciendo)
+	texto := fmt.Sprintf("Musubi: %s %s", fleet.RecortarRunas(quien, 64), a.haciendo)
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
-		Origen:  fleet.OrigenPersona,
-		Argv:    []string{comandoAviso, texto},
-		Timeout: fleet.ComandoTimeoutDefault,
+		Origen: fleet.OrigenPersona,
+		Argv:   []string{comandoAviso, texto},
+		// EL PLANO, sin el cual esta fila la vería quien tiene `screen:view` sobre la máquina —
+		// incluyendo los avisos de exec y de shell, que son de otros dos planos. EncolarComando
+		// rechaza un aviso sin esto, así que no se puede olvidar en silencio.
+		Clasificacion: a.clase,
+		Timeout:       fleet.ComandoTimeoutDefault,
 	}); err != nil {
 		logx.Warn("flota: no se pudo encolar el aviso al usuario; la operación sigue igual",
-			"device", d.Name, "haciendo", haciendo, "error", err)
+			"device", d.Name, "haciendo", a.haciendo, "error", err)
 	}
 }
 
