@@ -106,12 +106,22 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	}
 
 	// EL AVISO A QUIEN ESTÁ EN LA MÁQUINA, recién cuando ya sabemos que la sesión se abre.
-	if consent := d.ConsentimientoEfectivo(); consent.AvisaAlUsuario() && !d.PuedePreguntar {
+	//
+	// A83 — ACÁ FALTABA LA MITAD QUE AVISA, y era la mitad que importa. Este `if` tenía sólo la
+	// rama del agente que NO SABE notificar; la otra —la máquina que sí sabe— no hacía nada, así
+	// que abrir una shell en `avisa` no le decía una palabra a quien estaba sentado ahí. `exec` y
+	// `pantalla` sí encolan su aviso desde A57, o sea que el camino MÁS invasivo de los tres era
+	// el único mudo: una shell interactiva se saltea cualquier allowlist, que es exactamente el
+	// argumento con el que este archivo justifica la puerta de cuatro ojos veinte líneas arriba.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
 		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Mismo criterio que pantalla:
 		// prometer una notificación que el agente de ESTA máquina no sabe dar sería justo lo que
 		// el eje viene a evitar. Bloquear tampoco: `avisa` no bloquea, y hacerlo cerraría el
 		// acceso por una capacidad que esa máquina puede no tener nunca.
-		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+		s.avisarUnaVezPorDevice(d.ID, nombre, "shell", consent)
+	case consent.AvisaAlUsuario():
+		s.encolarAvisoDeAcceso(d, p, avisoShell)
 	}
 
 	// LA BITÁCORA SE ESCRIBE ANTES DE CONECTAR — misma regla que F1 de S5 y G7 de S6. Si el SSH

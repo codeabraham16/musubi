@@ -162,3 +162,147 @@ func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
 		t.Errorf("pasada la ventana quedaron %d avisos, esperaba 2: el estrangulador se volvió un silencio permanente", n)
 	}
 }
+
+// A83 — TODO CAMINO QUE HONRA `avisa` LE AVISA A QUIEN ESTÁ EN LA MÁQUINA. LOS TRES.
+//
+// La shell no lo hacía. `exec` y `pantalla` encolan su aviso desde A57; la shell tenía SÓLO la
+// rama del agente que no sabe notificar —la que deja una línea en el log— y ninguna para la
+// máquina que SÍ sabe: el `if` no tenía `else`. En la máquina donde el aviso podía entregarse,
+// abrir una terminal no le decía una palabra a quien estaba sentado ahí.
+//
+// Que fuera justo la shell es lo peor: este archivo argumenta que una shell interactiva se lleva
+// puestos los otros dos permisos —«quien obtiene un prompt corre lo que quiera, las veces que
+// quiera, sin que nadie vuelva a mirar un argv»— y methods_shell.go dice de los tres ejes que éste
+// «es el que MÁS le corresponde a la shell». El eje estaba escrito, la razón estaba escrita, y la
+// mitad que avisa no estaba.
+//
+// LA CAUSA ERA MECÁNICA, y por eso esta prueba recorre los TRES y no sólo la shell: el bloque que
+// encola estaba COPIADO en pantalla y en exec, así que sumar un camino exigía acordarse de
+// copiarlo por tercera vez. Arreglar sólo la shell —escribiendo esa tercera copia— dejaba la causa
+// intacta para el cuarto camino. Ahora hay un solo encolarAvisoDeAcceso, y esta tabla es lo que
+// obliga a que el que agregue un camino aparezca acá.
+//
+// NINGUNA PRUEBA LO ATRAPABA porque ninguna combinaba las dos condiciones: `avisa` con una máquina
+// que declara saber notificar. Las de shell probaban `prohibido` (que bloquea) y las de aviso
+// probaban pantalla y exec.
+//
+// Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de cualquiera de los tres.
+func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
+	for _, c := range []struct {
+		nombre, espera string
+		correr         func(*McpServer, context.Context) *RpcError
+	}{
+		{"shell", "terminal", func(s *McpServer, ctx context.Context) *RpcError {
+			_, e := s.toolFleetShell(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio"}`))
+			return e
+		}},
+		// `no_wait` en exec porque la máquina está latiendo y sin él la tool espera el resultado
+		// de un comando que ningún agente va a reportar: 45 s de prueba para medir algo que se
+		// decide al encolar. El aviso no depende de esperar.
+		{"exec", "ejecutando comandos", func(s *McpServer, ctx context.Context) *RpcError {
+			_, e := s.toolFleetExec(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio","argv":["echo","hola"],"no_wait":true}`))
+			return e
+		}},
+		{"pantalla", "sesión de pantalla", func(s *McpServer, ctx context.Context) *RpcError {
+			_, e := s.toolFleetScreen(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio"}`))
+			return e
+		}},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			s := newTestServer(t, embedding.NoopProvider{})
+			if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+				"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "exec", "shell", "screen"},
+				"project": "casa", "os": "linux", "arch": "amd64",
+			}); e != nil {
+				t.Fatalf("no se pudo enrolar: %+v", e)
+			}
+			d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
+			if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+				t.Fatal(err)
+			}
+			// El agente DECLARA que sabe avisar. Sin esto el camino correcto es el del log, que en
+			// la shell era la ÚNICA rama que existía — y la prueba pasaría sobre el defecto.
+			if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+				t.Fatal(err)
+			}
+
+			// LA MÁQUINA TIENE QUE ESTAR LATIENDO para el camino de pantalla: sin latido, esa
+			// tool sale antes con «no hay a quién entregarle la contraseña de sesión» y la prueba
+			// mediría un rechazo, no el aviso. Es la clase de detalle que hace pasar una prueba
+			// por el motivo equivocado, así que se le da un latido a las tres por igual.
+			if _, err := s.engine.LatirDevice(d.ID, time.Now(), ""); err != nil {
+				t.Fatal(err)
+			}
+
+			p := conShell("casa")
+			p.Fleet[fleet.CapScreen] = []string{"*"}
+			ctx := withPrincipal(context.Background(), p)
+			// El resultado de la operación no importa acá —una pantalla puede fallar por no tener
+			// motor— pero el aviso se encola igual, porque se decide ANTES y `avisa` no bloquea.
+			_ = c.correr(s, ctx)
+
+			cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var aviso *fleet.Comando
+			for i := range cmds {
+				if len(cmds[i].Argv) > 0 && cmds[i].Argv[0] == comandoAviso {
+					aviso = &cmds[i]
+				}
+			}
+			if aviso == nil {
+				t.Fatalf("%s en `avisa` no encoló ningún aviso al usuario: %d comando(s) en la cola "+
+					"y ninguno es uno", c.nombre, len(cmds))
+			}
+			// EL TEXTO NOMBRA A QUIEN ENTRA: un aviso sin nombre no se puede accionar —no hay a
+			// quién preguntarle— y se vuelve ruido que se aprende a cerrar sin leer.
+			if len(aviso.Argv) < 2 || !strings.Contains(aviso.Argv[1], "op") {
+				t.Errorf("%s: el aviso no nombra a quien entra: %v", c.nombre, aviso.Argv)
+			}
+			// Y DICE QUÉ ESTÁ PASANDO, distinto en cada camino: sin eso, quien lo recibe no puede
+			// distinguir una terminal de una sesión de pantalla, que son cosas distintas para él.
+			if len(aviso.Argv) < 2 || !strings.Contains(aviso.Argv[1], c.espera) {
+				t.Errorf("%s: el aviso no dice qué está pasando (esperaba %q): %v",
+					c.nombre, c.espera, aviso.Argv)
+			}
+		})
+	}
+}
+
+// Y LA MÁQUINA QUE NO SABE AVISAR SIGUE YENDO POR EL LOG, no por la cola.
+//
+// Es el control negativo de la prueba de arriba: sin él, encolar el aviso SIEMPRE —también donde
+// el agente no lo sabe entregar— la dejaría en verde, y estaríamos prometiendo una notificación
+// que nadie va a mostrar. Que es literalmente lo que el eje viene a evitar.
+//
+// Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar.
+func TestUnaMaquinaQueNoSabeAvisarNoRecibeUnAvisoQueNadieVaAMostrar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "exec", "shell"},
+		"project": "casa", "os": "linux", "arch": "amd64",
+	}); e != nil {
+		t.Fatalf("no se pudo enrolar: %+v", e)
+	}
+	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+		t.Fatal(err)
+	}
+	// PuedePreguntar queda en false: es el default de una máquina cuyo agente no lo declaró.
+
+	ctx := withPrincipal(context.Background(), conShell("casa"))
+	if _, e := s.toolFleetShell(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio"}`)); e != nil {
+		t.Fatalf("no se abrió la shell: %+v", e)
+	}
+	cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cmds {
+		if len(c.Argv) > 0 && c.Argv[0] == comandoAviso {
+			t.Errorf("se encoló un aviso para una máquina que no declara saber notificar: %v — "+
+				"prometer una notificación que no se puede entregar es lo que este eje evita", c.Argv)
+		}
+	}
+}

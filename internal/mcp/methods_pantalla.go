@@ -166,13 +166,13 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
 		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
 		// —un servidor sin escritorio— por razones que no son de seguridad.
-		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+		s.avisarUnaVezPorDevice(d.ID, nombre, "pantalla", consent)
 	case consent.AvisaAlUsuario():
 		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por
 		// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría
 		// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido
 		// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.
-		s.encolarAvisoDePantalla(d, p)
+		s.encolarAvisoDeAcceso(d, p, avisoPantalla)
 	}
 
 	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
@@ -421,22 +421,32 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 // avisarUnaVezPorDevice deja constancia de que se debía un aviso al usuario de la máquina y no se
 // pudo entregar, porque su agente todavía no sabe notificar.
 //
-// UNA VEZ POR MÁQUINA Y POR VIDA DEL PROCESO: una sesión de pantalla se abre a mano, no en un
+// UNA VEZ POR MÁQUINA Y POR OPERACIÓN, y por vida del proceso: una sesión se abre a mano, no en un
 // lazo, pero un operador que abre veinte en una tarde no necesita veinte líneas iguales. Lo que
 // tiene que quedar es que la deuda existe.
+//
+// LA CLAVE LLEVA LA OPERACIÓN, y antes no: era una sola por máquina, así que la primera pantalla
+// se comía el presupuesto y los `exec` y las shells de esa máquina no dejaban NUNCA una línea. La
+// deuda es la misma —el agente no sabe notificar— pero enterarse de que hay shells abriéndose sin
+// aviso es otra noticia que enterarse de que hay pantallas.
+//
+// Y EL TEXTO DECÍA «se abrió una pantalla» EN LOS TRES CAMINOS. Con tres llamadores y un mensaje
+// fijo, dos de cada tres líneas del log nombraban una operación que no había pasado — la misma
+// clase de defecto que un doc pegado a la declaración equivocada, y en el único lugar donde alguien
+// va a mirar cuando `avisa` no avisa.
 //
 // Esto NO reemplaza al aviso: cuando el agente sepa notificar, este camino desaparece y la
 // notificación viaja de verdad. Mientras tanto, la ausencia se ve en el log del cerebro en vez de
 // ser silenciosa — que es la diferencia entre una función a medio hacer y una que miente.
-func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre string, c fleet.Consentimiento) {
+func (s *McpServer) avisarUnaVezPorDevice(deviceID, nombre, operacion string, c fleet.Consentimiento) {
 	// Se reusa `avisosDados`, que es exactamente para esto: un aviso de CONFIGURACIÓN que no es
 	// un evento sino un ESTADO. La clave lleva prefijo para no chocar con los del empuje.
-	clave := "consentimiento_sin_aviso\x00" + deviceID
+	clave := "consentimiento_sin_aviso\x00" + operacion + "\x00" + deviceID
 	if _, ya := s.avisosDados.LoadOrStore(clave, true); ya {
 		return
 	}
-	logx.Warn("flota: se abrió una pantalla y el aviso al usuario NO se pudo entregar",
-		"device", nombre, "consentimiento", string(c),
+	logx.Warn("flota: el aviso al usuario NO se pudo entregar y la operación siguió igual",
+		"device", nombre, "operacion", operacion, "consentimiento", string(c),
 		"motivo", "el agente de esta máquina no declara saber notificar (devices.puede_preguntar = 0)")
 }
 
@@ -566,37 +576,61 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 	return fleet.SesionPantalla{}, false, nil
 }
 
-// encolarAvisoDePantalla le manda al agente el aviso que `avisa` promete (A57).
+// LAS TRES FRASES DEL AVISO, JUNTAS Y NO REPARTIDAS POR LOS TRES ARCHIVOS.
+//
+// Leerlas una debajo de la otra es lo que deja ver si dos se parecen demasiado — y es lo que hace
+// evidente que falta una cuando falta. El texto dice QUÉ está pasando y no sólo quién: sin eso,
+// quien lo recibe no puede distinguir una sesión de pantalla de una terminal, que son cosas
+// distintas para quien está sentado ahí.
+//
+// «terminal» y no «shell» a propósito: el destinatario no es quien opera. Es la persona en esa
+// máquina, que puede no saber qué es una shell y sí qué es que alguien le abra una terminal.
+const (
+	avisoPantalla = "está abriendo una sesión de pantalla en esta máquina."
+	avisoShell    = "está abriendo una terminal en esta máquina."
+	avisoExec     = "está ejecutando comandos en esta máquina."
+)
+
+// encolarAvisoDeAcceso le manda al agente el aviso que `avisa` promete (A57).
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
-// EL TEXTO NOMBRA A QUIEN ENTRA, Y ESO ES EL AVISO
+// ES UNA SOLA FUNCIÓN PARA LOS TRES CAMINOS, Y ESO ES EL ARREGLO DE A83 — NO UN ORDENAMIENTO
 //
-// «Alguien está viendo tu pantalla» no le sirve a nadie. Lo que convierte esto en información es
-// QUIÉN: un aviso sin nombre no se puede accionar —no hay a quién preguntarle— y se vuelve ruido
-// que la persona aprende a cerrar sin leer.
+// Esto eran DOS copias del mismo bloque, una en pantalla y otra en exec, y A83 fue exactamente lo
+// que esa forma produce: al agregar la shell, había que ACORDARSE de copiarlo por tercera vez, y
+// nadie se acordó. El eje `avisa` quedó escrito, argumentado y sin efecto en el único camino que
+// se saltea cualquier allowlist. Escribir una tercera copia habría dejado la causa intacta para el
+// cuarto camino.
 //
-// El nombre del principal es entrada de configuración (sale de principals.yaml, no de la red),
-// pero igual se acota: termina interpolado en un diálogo del escritorio de otra persona.
+// Con un solo encolador, sumar un camino es agregar una frase acá arriba y llamar a esta función:
+// lo que antes se podía olvidar ahora se ve. Y lo que NO se puede olvidar lo custodia
+// TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario, que recorre los tres.
 //
-// BEST-EFFORT A PROPÓSITO. Si encolar falla, la sesión se abre igual: `avisa` NO bloquea —ése es
+// EL TEXTO NOMBRA A QUIEN ENTRA. «Alguien está viendo tu pantalla» no le sirve a nadie: lo que
+// convierte esto en información es QUIÉN. Un aviso sin nombre no se puede accionar —no hay a quién
+// preguntarle— y se vuelve ruido que la persona aprende a cerrar sin leer. El nombre del principal
+// es entrada de configuración (sale de principals.yaml, no de la red), pero igual se acota: termina
+// interpolado en un diálogo del escritorio de otra persona.
+//
+// BEST-EFFORT A PROPÓSITO. Si encolar falla, la operación sigue igual: `avisa` NO bloquea —ése es
 // el grado siguiente— y convertir un fallo de la cola en un acceso denegado le daría a `avisa` la
 // semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
-// por eso queda la línea.
-func (s *McpServer) encolarAvisoDePantalla(d fleet.Device, p *Principal) {
+// por eso queda la línea, con la operación adentro para que diga cuál fue.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, haciendo string) {
 	quien := nombrePrincipal(p)
 	if quien == "" {
 		quien = "un operador"
 	}
-	texto := fmt.Sprintf("Musubi: %s está abriendo una sesión de pantalla en esta máquina.",
-		fleet.RecortarRunas(quien, 64))
+	texto := fmt.Sprintf("Musubi: %s %s", fleet.RecortarRunas(quien, 64), haciendo)
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
 		Origen:  fleet.OrigenPersona,
 		Argv:    []string{comandoAviso, texto},
 		Timeout: fleet.ComandoTimeoutDefault,
 	}); err != nil {
-		logx.Warn("flota: no se pudo encolar el aviso al usuario; la pantalla se abre igual",
-			"device", d.Name, "error", err)
+		logx.Warn("flota: no se pudo encolar el aviso al usuario; la operación sigue igual",
+			"device", d.Name, "haciendo", haciendo, "error", err)
 	}
 }
 
