@@ -671,3 +671,158 @@ func TestUnNoNoLoTapaUnaSolicitudPosterior(t *testing.T) {
 		t.Fatalf("ganó la %s más nueva y tapó el «no»: una negativa se puede borrar pidiendo otra vez", sol.Estado)
 	}
 }
+
+// ── CAMINOS QUE EXISTÍAN SIN NINGUNA PRUEBA (los marcó la misma revisión) ────────────────────
+
+// UNA APROBACIÓN YA USADA NO SE REANIMA. El `WHERE ... AND estado = 'pendiente'` de
+// ResolverAprobacion es lo único que lo impide, y no tenía prueba: sin él, quien aprueba podría
+// volver a poner en `concedida` una solicitud ya gastada y regalar una segunda sesión.
+//
+// Sabotaje: sacar `AND estado = 'pendiente'` del UPDATE de ResolverAprobacion.
+func TestUnaAprobacionUsadaNoSeReanima(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	yo, otra := conPantalla("casa"), otroConPantalla("casa")
+
+	res, _ := callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	id, _ := jsonOf(t, res)["solicitud"].(string)
+	if _, e := callAsPrincipal(t, s, otra, "musubi_fleet_approve", map[string]any{"solicitud": id, "aprobar": true}); e != nil {
+		t.Fatalf("approve: %+v", e)
+	}
+	// Se gasta abriendo la sesión.
+	res, _ = callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if _, hay := jsonOf(t, res)["password"]; !hay {
+		t.Fatal("la sesión no abrió")
+	}
+	// Y ahora se intenta volver a aprobarla.
+	if _, e := callAsPrincipal(t, s, otra, "musubi_fleet_approve", map[string]any{"solicitud": id, "aprobar": true}); e == nil {
+		t.Fatal("se reanimó una aprobación ya usada: alcanza para una segunda sesión que nadie avaló")
+	}
+	res, _ = callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if _, hay := jsonOf(t, res)["password"]; hay {
+		t.Fatal("la aprobación reanimada abrió una segunda sesión")
+	}
+}
+
+// UNA APROBACIÓN VENCIDA NO SIRVE. El `vence > ?` de AprobacionVigenteDe es lo único que lo
+// sostiene: sin él, un «sí» de hace tres días seguiría abriendo sesiones.
+//
+// Sabotaje: sacar `AND vence > ?` de AprobacionVigenteDe.
+func TestUnaAprobacionVencidaNoAbreNada(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	d := devicePorNombreEnPrueba(t, s, "casa", "pc-gio")
+	ahora := time.Now().UTC()
+
+	// Un «sí» que ya venció, escrito a mano: el reloj no se puede adelantar en la prueba.
+	vieja, err := s.engine.AbrirSolicitudDeAprobacion(fleet.SolicitudDeAprobacion{
+		DeviceID: d.ID, ProjectID: "casa", Solicitante: "mirador", Capacidad: fleet.CapScreen,
+		Creada: ahora.Add(-2 * time.Hour), Vence: ahora.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("abrir: %v", err)
+	}
+	// Se concede DENTRO de su ventana, para que quede `concedida` y no `pendiente`.
+	if ok, err := s.engine.ResolverAprobacion(vieja.ID, "revisora", "", true, ahora.Add(-90*time.Minute)); err != nil || !ok {
+		t.Fatalf("conceder: %v (ok=%v)", err, ok)
+	}
+
+	res, e := callAsPrincipal(t, s, conPantalla("casa"), "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("fleet_screen: %+v", e)
+	}
+	m := jsonOf(t, res)
+	if _, hay := m["password"]; hay {
+		t.Fatal("una aprobación VENCIDA abrió la sesión: el «sí» de ayer vale para siempre")
+	}
+	if m["solicitud"] == vieja.ID {
+		t.Fatal("se reusó la solicitud vencida en vez de abrir una nueva")
+	}
+}
+
+// EL UN SOLO USO LO DECIDE LA BASE, y la rama `!gastada` no tenía quien la ejercitara. Se prueba
+// en el almacén, que es donde vive la garantía: dos consumos del mismo permiso, el segundo falla.
+//
+// Sabotaje: sacar `AND estado = 'concedida'` del UPDATE de ConsumirAprobacion.
+func TestConsumirDosVecesElMismoPermisoFallaLaSegunda(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	d := devicePorNombreEnPrueba(t, s, "casa", "pc-gio")
+	ahora := time.Now().UTC()
+
+	sol, err := s.engine.AbrirSolicitudDeAprobacion(fleet.SolicitudDeAprobacion{
+		DeviceID: d.ID, ProjectID: "casa", Solicitante: "mirador", Capacidad: fleet.CapScreen,
+		Creada: ahora, Vence: ahora.Add(fleet.VentanaDeAprobacion),
+	})
+	if err != nil {
+		t.Fatalf("abrir: %v", err)
+	}
+	if ok, err := s.engine.ResolverAprobacion(sol.ID, "revisora", "", true, ahora); err != nil || !ok {
+		t.Fatalf("conceder: %v", err)
+	}
+	if ok, err := s.engine.ConsumirAprobacion(sol.ID, ahora); err != nil || !ok {
+		t.Fatalf("el primer consumo tenía que funcionar: %v (ok=%v)", err, ok)
+	}
+	if ok, err := s.engine.ConsumirAprobacion(sol.ID, ahora); err != nil {
+		t.Fatalf("segundo consumo: %v", err)
+	} else if ok {
+		t.Fatal("el mismo permiso se gastó DOS veces: no es de un solo uso, y esa carrera no la ve ninguna prueba secuencial")
+	}
+}
+
+// LAS DOS SERIES SALEN AUNQUE NO HAYA NADA ESPERANDO. Una serie que sólo existe cuando hay
+// problema no se puede graficar y no se distingue de que el exportador no corrió — la misma
+// regla que musubi_fleet_export_truncated.
+//
+// Sabotaje: emitir las series sólo cuando len(pendientes) > 0.
+func TestLasSeriesDeAprobacionSalenEnCeroCuandoNoHayNadieEsperando(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+
+	var b strings.Builder
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba)
+	salida := b.String()
+
+	for _, linea := range []string{
+		nombreAprobPendientes + `{project="casa"} 0`,
+		nombreAprobEspera + `{project="casa"} 0`,
+	} {
+		if !strings.Contains(salida, linea) {
+			t.Errorf("falta %q: una serie que sólo aparece cuando hay problema no se distingue de que el exportador no corrió", linea)
+		}
+	}
+	for _, tipo := range []string{nombreAprobPendientes, nombreAprobEspera} {
+		if !strings.Contains(salida, "# TYPE "+tipo+" gauge") {
+			t.Errorf("%s sale sin TYPE: Prometheus la toma como untyped", tipo)
+		}
+	}
+}
+
+// APAGAR EL CONTROL TIENE QUE DEVOLVER EL ACCESO. Es el camino de la urgencia —una máquina
+// marcada con un solo par de ojos disponible queda encerrada— y no tenía ninguna prueba: si
+// `requerir: false` no hiciera nada, la única salida sería tocar la base a mano.
+//
+// Sabotaje: que FijarAprobacion ignore el valor y escriba siempre 1.
+func TestApagarElControlDevuelveElAcceso(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	yo := conPantalla("casa")
+
+	res, _ := callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if _, hay := jsonOf(t, res)["password"]; hay {
+		t.Fatal("la máquina marcada abrió sin aprobación")
+	}
+	if _, e := call(t, s, "musubi_fleet_require_approval", map[string]any{
+		"device": "pc-gio", "project": "casa", "requerir": false,
+	}); e != nil {
+		t.Fatalf("apagar: %+v", e)
+	}
+	res, e := callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("fleet_screen tras apagar: %+v", e)
+	}
+	if _, hay := jsonOf(t, res)["password"]; !hay {
+		t.Fatalf("con el control apagado la sesión sigue sin abrir: la máquina quedó encerrada — %v", jsonOf(t, res))
+	}
+}

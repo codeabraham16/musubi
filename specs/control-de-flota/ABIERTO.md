@@ -84,8 +84,17 @@
 > shell con otro nombre y sin segunda persona. El texto decía «`metrics` y `exec` no se tocan», que
 > se lee como tranquilidad. Ahora lo dice como la advertencia que es, en la tool y al encenderlo.
 >
-> **Catorce sabotajes en total, catorce rojos.** Los siete míos y los siete que hicieron falta
-> después de que otro mirara.
+> **Y cinco caminos existían sin ninguna prueba**, que en este registro cuenta como defecto y no
+> como deuda: reanimar una aprobación ya usada (lo impide el `WHERE ... estado = 'pendiente'` de
+> `ResolverAprobacion`, que no tenía quien lo ejercitara), el vencimiento a los 30 minutos, la
+> rama de la carrera del un-solo-uso, las dos series nuevas de Prometheus, y **apagar el control**
+> — que es el camino de la urgencia: una máquina marcada con un solo par de ojos disponible queda
+> encerrada, y si `requerir: false` no hiciera nada la única salida sería tocar la base a mano.
+>
+> **Diecinueve sabotajes en total, diecinueve rojos.** Los siete míos y los doce que hicieron falta
+> después de que otro mirara. Y el arnés dejó un sabotaje APLICADO en el árbol por tercera vez en
+> la sesión, atrapado por el `cmp` contra el respaldo: la comprobación de restauración ya se pagó
+> sola.
 >
 > **2026-09-03 (cierre de la Ola 2) — CUATRO OJOS, EL TERCER EJE.**
 >
