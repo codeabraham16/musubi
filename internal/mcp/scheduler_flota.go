@@ -287,7 +287,7 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 	s.medirVidaDeRedDeLosCaidos(ctx, time.Now())
 
 	podadas := s.podarSalidasSiToca(time.Now())
-	s.podarEstadoDePoliticasSiToca()
+	s.podarEstadoDePoliticasSiToca(time.Now())
 	// Los techos de las sesiones de shell los aplica EL CEREBRO (S5b · T5). Si dependieran de la
 	// máquina remota, una máquina comprometida se los saltearía — y esa máquina es justamente
 	// aquélla de la que uno se protege al ponerle un techo a una sesión de shell.
@@ -401,19 +401,34 @@ func (s *McpServer) podarSalidasSiToca(ahora time.Time) int64 {
 
 // podarEstadoDePoliticasSiToca borra las filas de cooldown de políticas que ya no existen.
 //
-// Cuelga de la misma cadencia que la poda de salidas: es una limpieza, no una operación de cada
-// tick. Sin esto, cada política que alguien renombra o saca deja su fila para siempre — una tabla
-// que sólo crece, alimentada por un archivo que se edita a mano, y que después nadie se anima a
-// limpiar porque no sabe si importa.
-func (s *McpServer) podarEstadoDePoliticasSiToca() {
+// Es una limpieza y no una operación de cada tick. Sin esto, cada política que alguien renombra o
+// saca deja su fila para siempre — una tabla que sólo crece, alimentada por un archivo que se
+// edita a mano, y que después nadie se anima a limpiar porque no sabe si importa.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// TIENE RELOJ PROPIO, Y ANTES COLGABA DEL DE LAS SALIDAS — QUE SE PUEDE APAGAR
+//
+// Esto comparaba contra `s.ultimaPoda`, «para no repetir el reloj». El problema no es el reloj
+// compartido: es QUIÉN LE DA CUERDA. `podarSalidasSiToca` arranca con
+//
+//	if s.retencionSalidasDias <= 0 { return 0 }   // desactivado explícitamente
+//
+// y ese `return` está ANTES de `s.ultimaPoda = ahora`. O sea que en un despliegue que apaga la
+// retención de salidas —una configuración soportada, con su propio comentario— `ultimaPoda` se
+// queda en cero para siempre y esta poda NO CORRE NUNCA. La tabla de cooldowns crece sin techo
+// por una condición que habla de otra cosa.
+//
+// Son dos retenciones distintas porque son dos riesgos distintos (una es privacidad, la otra es
+// una tabla que crece); acoplarlas ahorraba un campo y costaba que apagar una apagara la otra en
+// silencio. Un reloj más es barato; una limpieza que no corre y nadie nota, no.
+func (s *McpServer) podarEstadoDePoliticasSiToca(ahora time.Time) {
 	if len(s.politicas) == 0 {
 		return // con la lista vacía la poda es un no-op deliberado: ver PodarEstadoDePoliticas
 	}
-	if !s.ultimaPoda.Equal(s.ultimaPodaDePoliticas) {
-		s.ultimaPodaDePoliticas = s.ultimaPoda
-	} else {
+	if !s.ultimaPodaDePoliticas.IsZero() && ahora.Sub(s.ultimaPodaDePoliticas) < podaCadaTanto {
 		return
 	}
+	s.ultimaPodaDePoliticas = ahora
 	vivas := make([]string, 0, len(s.politicas))
 	for _, p := range s.politicas {
 		vivas = append(vivas, p.Nombre)

@@ -795,3 +795,81 @@ func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
 		t.Errorf("el servicio sano quedó %q con detalle %q", sano.Salud.Estado, sano.Salud.Detalle)
 	}
 }
+
+// «DESDE CUÁNDO ESTÁ ASÍ» SE CONTESTA CON LA MARCA DEL ESTADO EN QUE ESTÁ.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// `ActiveEnterTimestamp` RESPONDÍA ESO PARA UN ESTADO DE CUATRO
+//
+// El campo se llama `Desde` y su doc dice «cuándo entró en ESE estado». Se llenaba SIEMPRE con
+// `ActiveEnterTimestamp`, que es cuándo la unit entró en ACTIVO. Correcto mientras corre, y una
+// respuesta a otra pregunta en los otros tres:
+//
+//	fallado   → «fallado desde <cuándo arrancó bien>», que puede ser semanas ANTES de la caída.
+//	            Y es justo el dato que uno mira para saber hace cuánto está roto algo.
+//	detenido  → la última vez que estuvo arriba, no cuándo se apagó.
+//
+// No daba error: devolvía una fecha plausible y más vieja de la que corresponde. La clase de dato
+// que nadie cuestiona porque tiene la forma correcta.
+//
+// Sabotaje que lo hace fallar: devolver siempre ActiveEnterTimestamp en desdeDeSystemd.
+func TestElDesdeDeUnServicioHablaDelEstadoEnQueEsta(t *testing.T) {
+	const arranco = "Thu 2026-08-01 03:00:00 EDT"
+	const murio = "Mon 2026-09-01 22:15:00 EDT"
+	props := map[string]string{
+		"ActiveEnterTimestamp":   arranco,
+		"InactiveEnterTimestamp": murio,
+	}
+
+	corriendo := desdeDeSystemd(fleet.EstadoCorriendo, props)
+	if corriendo == nil {
+		t.Fatal("un servicio corriendo se quedó sin `desde`")
+	}
+	if corriendo.Day() != 1 || corriendo.Month() != time.August {
+		t.Errorf("corriendo: esperaba la marca de ARRANQUE (1-08), obtuve %s", corriendo.Format("2006-01-02"))
+	}
+
+	// Los tres que NO corren tienen que mirar la otra marca. Un mes de diferencia: es la distancia
+	// entre «arrancó bien en agosto» y «se murió el 1 de septiembre».
+	for _, estado := range []fleet.EstadoServicio{fleet.EstadoFallado, fleet.EstadoDetenido, fleet.EstadoOcioso} {
+		d := desdeDeSystemd(estado, props)
+		if d == nil {
+			t.Errorf("%s: se quedó sin `desde` teniendo InactiveEnterTimestamp", estado)
+			continue
+		}
+		if d.Month() == time.August {
+			t.Errorf("%s: `desde` contestó con la fecha de ARRANQUE (%s). Eso dice «roto desde hace un mes» sobre algo que se cayó ayer",
+				estado, d.Format("2006-01-02"))
+		}
+		if d.Day() != 1 || d.Month() != time.September {
+			t.Errorf("%s: esperaba la marca de CAÍDA (1-09), obtuve %s", estado, d.Format("2006-01-02"))
+		}
+	}
+
+	// Y lo que no se sabe sigue siendo nil, no una fecha inventada: systemd manda la marca vacía
+	// para lo que nunca arrancó, y la época Unix se dibujaría como 1970.
+	vacias := map[string]string{"ActiveEnterTimestamp": "", "InactiveEnterTimestamp": ""}
+	for _, estado := range []fleet.EstadoServicio{fleet.EstadoCorriendo, fleet.EstadoFallado} {
+		if d := desdeDeSystemd(estado, vacias); d != nil {
+			t.Errorf("%s: con las marcas vacías inventó una fecha: %v", estado, d)
+		}
+	}
+}
+
+// Y la propiedad tiene que PEDIRSE, o el mapa llega sin ella y todo lo de arriba queda en nil sin
+// que nada falle. La lista de propiedades vive en otro archivo que un cambio de arriba no toca.
+func TestSePideLaMarcaDeCaidaASystemd(t *testing.T) {
+	var pedidas []string
+	pedidas = append(pedidas, propiedadesPedidas...)
+	quiero := map[string]bool{"ActiveEnterTimestamp": false, "InactiveEnterTimestamp": false}
+	for _, p := range pedidas {
+		if _, hay := quiero[p]; hay {
+			quiero[p] = true
+		}
+	}
+	for p, pedida := range quiero {
+		if !pedida {
+			t.Errorf("no se le pide %q a systemctl: sin esa propiedad `desde` queda nil para la mitad de los estados y nada falla", p)
+		}
+	}
+}

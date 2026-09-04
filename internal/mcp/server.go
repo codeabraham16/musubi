@@ -213,8 +213,10 @@ type McpServer struct {
 	// ultimaPoda es cuándo se vaciaron por última vez las salidas viejas. La poda NO va en cada
 	// tick: es un UPDATE sobre la tabla de comandos y el tick es de minutos.
 	ultimaPoda time.Time
-	// ultimaPodaDePoliticas engancha la limpieza del estado de políticas a la MISMA cadencia que
-	// la de salidas, sin repetir el reloj: se poda cuando ultimaPoda avanzó.
+	// ultimaPodaDePoliticas es el reloj PROPIO de la limpieza del estado de políticas. Tuvo el
+	// de las salidas —«sin repetir el reloj»— y eso la dejaba sin correr NUNCA en un despliegue
+	// que apaga la retención de salidas: ese camino sale antes de darle cuerda al reloj. Son dos
+	// retenciones distintas y ahora tienen dos relojes. Ver podarEstadoDePoliticasSiToca.
 	ultimaPodaDePoliticas time.Time
 	// ── El empuje OTLP de la telemetría de flota (S11) ──────────────────────────────────────
 	// empujeCfg es la configuración del empuje ya validada. Endpoint vacío = apagado, que es el

@@ -27,7 +27,7 @@ import (
 // garantizado, así que el parser trabaja con un mapa por bloque y nunca por posición.
 var propiedadesPedidas = []string{
 	"Id", "ActiveState", "SubState", "MainPID", "NRestarts",
-	"ActiveEnterTimestamp", "Result", "UnitFileState",
+	"ActiveEnterTimestamp", "InactiveEnterTimestamp", "Result", "UnitFileState",
 }
 
 // enumerarServiciosDelSistema junta las dos fuentes. Cualquiera que ESTÉ y falle aborta el

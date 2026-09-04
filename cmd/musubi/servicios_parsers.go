@@ -217,9 +217,7 @@ func parsearSystemctlShow(salida string, ahora time.Time) []fleet.ReporteServici
 		if n, err := strconv.Atoi(p["NRestarts"]); err == nil {
 			salud.Reinicios = &n
 		}
-		if t := fechaDeSystemd(p["ActiveEnterTimestamp"]); t != nil {
-			salud.Desde = t
-		}
+		salud.Desde = desdeDeSystemd(salud.Estado, p)
 		rs = append(rs, fleet.ReporteServicio{
 			Nombre: strings.TrimSuffix(id, ".service"),
 			Clase:  "systemd",
@@ -259,6 +257,34 @@ func detalleDeSystemd(p map[string]string) string {
 		return ""
 	}
 	return "result=" + res
+}
+
+// desdeDeSystemd elige QUÉ marca de tiempo responde «desde cuándo está en este estado».
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// `ActiveEnterTimestamp` CONTESTA ESO PARA UN SOLO ESTADO DE LOS CUATRO
+//
+// El campo se llama `Desde` y su doc dice «cuándo entró en ESE estado». Se llenaba siempre con
+// `ActiveEnterTimestamp`, que es cuándo la unit entró en ACTIVO — correcto mientras corre, y una
+// respuesta a otra pregunta en los otros tres:
+//
+//	fallado   → decía «fallado desde <cuándo arrancó bien>», que puede ser semanas antes de la
+//	            caída. Es el dato que uno mira para saber hace cuánto está roto algo.
+//	detenido  → lo mismo: la última vez que estuvo arriba, no cuándo se apagó.
+//	ocioso    → una fecha de arranque para algo que nadie pidió que arranque.
+//
+// Y no es un error visible: devuelve una fecha plausible, más vieja de lo que corresponde. La
+// clase de dato que no se cuestiona porque tiene la forma correcta.
+//
+// systemd ya publica la otra mitad (`InactiveEnterTimestamp`); lo que faltaba era pedirla y
+// elegir. Cuando la que corresponde viene vacía —una unit que nunca arrancó no tiene
+// `ActiveEnterTimestamp`— queda nil, que es lo que `Desde` significa por diseño: la máquina no
+// lo sabe.
+func desdeDeSystemd(estado fleet.EstadoServicio, p map[string]string) *time.Time {
+	if estado == fleet.EstadoCorriendo {
+		return fechaDeSystemd(p["ActiveEnterTimestamp"])
+	}
+	return fechaDeSystemd(p["InactiveEnterTimestamp"])
 }
 
 // fechaDeSystemd parsea el formato de systemd. Devuelve nil si no se entiende o si viene vacío:
