@@ -16,7 +16,7 @@ import (
 func exportar(t *testing.T, s *McpServer, p *Principal) string {
 	t.Helper()
 	var b strings.Builder
-	renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo, versionDePrueba)
+	renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo, versionDePrueba, nil)
 	return b.String()
 }
 

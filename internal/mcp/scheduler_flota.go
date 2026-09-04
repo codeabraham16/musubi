@@ -278,6 +278,14 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 		logx.Warn("flota: rotaciones de token abandonadas por vencimiento; el token anterior sigue valiendo",
 			"rotaciones", n)
 	}
+	// LA VIDA DE RED, PARA LAS QUE NO ESTÁN LATIENDO (Ola 3). Va DESPUÉS de sondear y de aplicar
+	// políticas porque es una señal auxiliar: si algo tiene que quedar sin hacer en un tick
+	// apretado, que sea ésta y no el auto-heal.
+	//
+	// Contesta la pregunta que `up == 0` no puede: si la máquina está apagada o si lo único
+	// muerto es el agente. Ver internal/fleet/vidared.go.
+	s.medirVidaDeRedDeLosCaidos(ctx, time.Now())
+
 	podadas := s.podarSalidasSiToca(time.Now())
 	s.podarEstadoDePoliticasSiToca()
 	// Los techos de las sesiones de shell los aplica EL CEREBRO (S5b · T5). Si dependieran de la
@@ -415,4 +423,35 @@ func (s *McpServer) podarEstadoDePoliticasSiToca() {
 	} else if n > 0 {
 		logx.Info("políticas: cooldowns de políticas que ya no existen, borrados", "filas", n)
 	}
+}
+
+// medirVidaDeRedDeLosCaidos junta las máquinas que no están latiendo y le pregunta al tailnet por
+// ellas. Las que SÍ laten se olvidan, para que su serie desaparezca en vez de quedarse en el
+// último valor conocido.
+func (s *McpServer) medirVidaDeRedDeLosCaidos(ctx context.Context, ahora time.Time) {
+	proyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar)
+	if err != nil {
+		return
+	}
+	var caidos []fleet.Device
+	for _, proy := range proyectos {
+		devices, err := s.engine.ListarDevices(proy, false)
+		if err != nil {
+			continue
+		}
+		for _, d := range devices {
+			// SÓLO TIER A. Un Tier B no corre agente por definición, así que «el agente no está
+			// corriendo» no es una hipótesis sobre él: su ausencia ya la explica la sonda de
+			// arriba, y emitir esta serie ahí diría algo sobre una causa que no aplica.
+			if d.Tier != fleet.TierAgente {
+				continue
+			}
+			if d.EnLinea(ahora, s.umbralEnLinea(d)) {
+				s.olvidarVidaDeRed(d.ID)
+				continue
+			}
+			caidos = append(caidos, d)
+		}
+	}
+	s.medirVidaDeRed(ctx, caidos, ahora)
 }

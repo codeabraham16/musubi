@@ -113,7 +113,7 @@ func TestConElCerebroSinVersionNoSeMarcaAtrasadaANadie(t *testing.T) {
 	latirConVersion(t, ts.URL, tok, "0.130.0-flota.e140e0c")
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "dev")
+	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "dev", nil)
 	if strings.Contains(b.String(), "musubi_fleet_device_agent_stale") {
 		t.Errorf("con el cerebro en `dev` se exporta agent_stale igual: la flota entera quedaría "+
 			"marcada por un binario propio construido sin ldflags\n%s", b.String())

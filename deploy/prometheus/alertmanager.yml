@@ -134,7 +134,13 @@ inhibit_rules:
   # pasara a poder dispararse sin `device` —una agregación, un `absent()`— esta regla silenciaría
   # todo warning e info que tampoco lo tenga: el cerebro, Altura y el backup. Que es exactamente
   # el fallo que tenía la regla de acá abajo.
-  - source_matchers: [alertname = "MaquinaCaida"]
+  #
+  # `AgenteCaidoConMaquinaViva` ES FUENTE TAMBIÉN, y no es simetría: cuando el agente deja de
+  # reportar, las series de disco, RAM y temperatura de esa máquina QUEDAN CONGELADAS con su
+  # último valor, y una comparación sobre un valor congelado se sostiene indefinidamente. O sea
+  # que la máquina viva sin agente produce exactamente el mismo eco que la caída — y con el
+  # agravante de que esos valores parecen frescos.
+  - source_matchers: [alertname =~ "MaquinaCaida|AgenteCaidoConMaquinaViva"]
     target_matchers: [severity =~ "warning|info"]
     equal: ['project', 'device']
 

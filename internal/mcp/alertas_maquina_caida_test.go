@@ -40,9 +40,10 @@ const laGuarda = `unless on(project, device) (musubi_fleet_device_up == 0)`
 
 // sinGuardaPorDiseno son las alertas que NO deben llevarla, cada una por su razón.
 var sinGuardaPorDiseno = map[string]string{
-	"MaquinaCaida":         "ES la alerta de la máquina caída: agregarle la guarda la haría imposible de disparar",
-	"FlotaSinTelemetria":   "es `absent(...)` sobre la propia serie de vida; no hay muestra congelada que leer",
-	"MaquinaSinInventario": "se condiciona con `musubi_fleet_device_up{tier=\"A\"} == 1`, que ya exige que esté viva",
+	"MaquinaCaida":              "ES la alerta de la máquina caída: agregarle la guarda la haría imposible de disparar",
+	"AgenteCaidoConMaquinaViva": "su premisa ES `up == 0` —dice «no late PERO la red la ve»—, así que la guarda, que exige `up != 0`, la volvería imposible de disparar. Y `musubi_fleet_device_net_up` no se congela como una muestra: el cerebro sólo la emite mientras la medición está vigente, y la borra en cuanto la máquina vuelve a latir",
+	"FlotaSinTelemetria":        "es `absent(...)` sobre la propia serie de vida; no hay muestra congelada que leer",
+	"MaquinaSinInventario":      "se condiciona con `musubi_fleet_device_up{tier=\"A\"} == 1`, que ya exige que esté viva",
 }
 
 // metricasQueNoSeCongelan salen de la FILA del device y no de la muestra, así que no aplican.

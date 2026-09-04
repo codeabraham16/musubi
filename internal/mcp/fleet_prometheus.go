@@ -62,8 +62,12 @@ const proyectosParaExportar = 64
 // viven en funciones compartidas y no adentro de este `for` — dos copias discrepan el día que
 // alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
 // muestran cosas distintas.
+// vidaDeRedLookup responde si el cerebro alcanza una máquina por fuera de su agente. Un `nil`
+// significa «nadie midió», que es distinto de «no está»: con nil no se emite ninguna serie.
+type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
+
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string) {
+	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup) {
 	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
 	// Un error leyendo las ventanas NO puede convertirse en «todas en mantenimiento» (apagaría
 	// las alertas de la flota entera) ni hacer fallar el scrape. Se sigue con el mapa vacío, que
@@ -105,6 +109,50 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
 	// compuertadas, por lo mismo que servicios.
 	renderAprobaciones(b, engine, vistos, ahora)
+	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
+	renderVidaDeRed(b, vistos, ahora, vidaDe)
+}
+
+// nombreVidaDeRed dice si el CEREBRO alcanza a una máquina por fuera de su agente.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA SERIE FALTA CUANDO NO SE MIDIÓ, Y ÉSE ES EL DISEÑO ENTERO
+//
+// Al revés que `musubi_fleet_export_truncated`, que se emite en 0 porque el 0 es un hecho
+// medido, acá un 0 significa «la máquina NO está en la red» — una afirmación fuerte que manda a
+// alguien a revisar hardware. Un cerebro sin acceso al tailnet, una máquina que no está en el
+// tailnet, o dos pares que dicen llamarse igual, no permiten afirmar eso.
+//
+// Así que la ausencia de serie es «no sé», y sólo hay serie cuando hubo respuesta. La alerta que
+// la consume usa `and on(...)`, que con la serie ausente simplemente no dispara: el eje se apaga
+// solo donde no se puede medir, en vez de mentir.
+//
+// Y SÓLO APARECE PARA LAS QUE NO ESTÁN LATIENDO: en una máquina que late, la pregunta no cambia
+// ninguna decisión, y una serie que existe para toda la flota invita a construir alertas sobre
+// un dato que sólo se refresca para una parte.
+const nombreVidaDeRed = "musubi_fleet_device_net_up"
+
+func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
+	if vidaDe == nil {
+		return
+	}
+	tipoEscrito := false
+	for _, d := range vistos {
+		v, hay := vidaDe(d.ID, ahora)
+		if !hay || v == fleet.VidaNoMedida {
+			continue
+		}
+		if !tipoEscrito {
+			fmt.Fprintf(b, "# HELP %s 1 si el cerebro alcanza esta máquina por la red aunque su agente no lata. Sólo existe para máquinas que NO están latiendo, y FALTA cuando no se pudo medir: su ausencia es «no sé», nunca «no está».\n# TYPE %s gauge\n",
+				nombreVidaDeRed, nombreVidaDeRed)
+			tipoEscrito = true
+		}
+		valor := 0
+		if v == fleet.VidaPresente {
+			valor = 1
+		}
+		fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreVidaDeRed, d.ProjectID, d.Name, valor)
+	}
 }
 
 // nombreAprobPendientes y nombreAprobEspera cuentan las solicitudes de cuatro ojos que esperan.

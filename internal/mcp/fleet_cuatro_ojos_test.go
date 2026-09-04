@@ -482,7 +482,7 @@ func TestElConteoDeAprobacionesRespetaLaCompuertaPorMaquina(t *testing.T) {
 		Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"visible"}},
 	}
 	var b strings.Builder
-	renderFlota(&b, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba)
+	renderFlota(&b, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba, nil)
 	salida := b.String()
 
 	if !strings.Contains(salida, nombreAprobPendientes+`{project="casa"} 0`) {
@@ -781,7 +781,7 @@ func TestLasSeriesDeAprobacionSalenEnCeroCuandoNoHayNadieEsperando(t *testing.T)
 	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba)
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, nil)
 	salida := b.String()
 
 	for _, linea := range []string{

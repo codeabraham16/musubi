@@ -1038,3 +1038,48 @@ Tres cosas que se descubren mal si no están escritas acá:
 una sola persona con esa capacidad —y entonces la marca es un candado, no un control: sacala con
 `musubi_fleet_require_approval requerir=false`—, o esa máquina se toca más de lo que su marca
 supone.
+
+## AgenteCaidoConMaquinaViva
+
+El agente de esa máquina no late, **pero el cerebro sí la alcanza por la red**. La máquina está
+encendida. Lo caído es el agente.
+
+**No mires el hardware.** Esta alerta existe para que no lo hagas: hasta que existió, `MaquinaCaida`
+disparaba igual en los dos casos y mandaba a revisar una fuente de alimentación perfectamente sana.
+Pasó dos veces — `gio` figuró caída tres días respondiendo al ping en 145 ms, y `davantis-1` estuvo
+encendida en medio de una investigación de quince cortes de energía.
+
+**La causa más frecuente en Windows, y la primera que hay que descartar:** la tarea programada del
+agente arranca **al iniciar sesión**. Si la máquina reinició de madrugada y quedó en la pantalla de
+bloqueo, el agente no corre y la máquina está perfecta.
+
+```powershell
+Get-ScheduledTask "Musubi Agente de Flota" | Get-ScheduledTaskInfo
+(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+```
+
+Si `LastRunTime` es **anterior** al último arranque, nadie inició sesión: es eso. Si
+`LastTaskResult` es **3221225786** (`0xC000013A`), alguien **cerró la ventana de consola** — se
+reinstala con `-Oculto`.
+
+`deploy/diagnostico-cortes-windows.ps1` trae las dos cosas y bastante más, en una corrida.
+
+**El arreglo permanente tiene un costo que hay que decidir, no asumir.** Reinstalar el agente con
+`-AlArranque` lo hace correr al arrancar, como SYSTEM, sin depender de que nadie entre. A cambio:
+`musubi_fleet_exec` sobre esa máquina pasa a ejecutarse **como SYSTEM**, y el eje de consentimiento
+deja de funcionar ahí — SYSTEM vive en la sesión 0, no hay a quién dibujarle un diálogo, así que un
+`pide` se endurece a `prohibido`. En una máquina propia suele estar bien; en la de un cliente, no.
+
+**En Linux** la pregunta es otra y más corta: `systemctl status musubi-agente`.
+
+**Si la máquina es la que se está investigando por cortes de energía**, ojo con el diagnóstico
+cruzado: esta alerta dice que AHORA está viva. No dice que no se haya cortado antes. Los cortes de
+verdad están en el registro de eventos de Windows (evento 41), no en la flota.
+
+---
+
+**Y si esta alerta NO aparece pero `MaquinaCaida` sí**, hay dos lecturas y conviene no confundirlas:
+la máquina realmente no está, **o** el cerebro no pudo preguntarle al tailnet. Se distinguen mirando
+si existe la serie: `musubi_fleet_device_net_up{device="<máquina>"}`. Si **falta**, nadie pudo medir
+—no hay `tailscale` en el cerebro, o esa máquina no está en el tailnet— y la ausencia significa «no
+sé», nunca «no está».

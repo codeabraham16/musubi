@@ -70,13 +70,41 @@ groups:
       # --- La máquina dejó de latir ---
       # up == 0 lo deriva el cerebro con su propio umbral (90s = 3 latidos), así que esto no
       # duplica el criterio: lo reexporta.
+      # `up == 0` DECÍA DOS COSAS DISTINTAS Y MANDABA AL LUGAR EQUIVOCADO (Ola 3).
+      #
+      # Vale 0 cuando la máquina está apagada **y también** cuando la máquina está perfecta y el
+      # agente no está corriendo. Son dos problemas, se arreglan en dos lugares, y esta alerta
+      # disparaba igual para los dos: mandaba a revisar el hardware de una máquina encendida.
+      #
+      # Ya costó caro dos veces. `gio` figuró caída TRES DÍAS respondiendo al ping en 145 ms: el
+      # agente arranca al iniciar sesión y nadie había iniciado sesión. Y el 2026-09-04, en plena
+      # investigación de quince cortes de energía en `davantis-1`, la máquina estaba ENCENDIDA
+      # —`tailscale ping` contestaba en 55 ms— y lo único muerto era el agente.
+      #
+      # `musubi_fleet_device_net_up` lo contesta: el cerebro le pregunta al tailnet por las
+      # máquinas que NO están latiendo. Las dos reglas son MUTUAMENTE EXCLUYENTES por
+      # construcción —`unless` y `and` sobre la misma condición—, así que no hace falta ninguna
+      # inhibición entre ellas y nunca llegan las dos.
+      #
+      # SI LA SERIE FALTA, `unless` no quita nada y esta alerta se comporta EXACTAMENTE como
+      # antes. Es la propiedad que hace seguro el cambio: donde no se puede medir —un cerebro sin
+      # tailnet, una máquina que no está en él— el eje se apaga solo en vez de callar la alerta.
       - alert: MaquinaCaida
-        expr: musubi_fleet_device_up == 0
+        expr: musubi_fleet_device_up == 0 unless on(project, device) musubi_fleet_device_net_up == 1
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "No late hace más de 5 minutos."
-          nota: "Revisá el agente: `systemctl status musubi-agent` en esa máquina, o si fue revocada (musubi_fleet_list --include_revoked)."
+          summary: "No late hace más de 5 minutos, y el cerebro tampoco la alcanza por la red."
+          nota: "La máquina no está: apagada, sin red, o revocada (musubi_fleet_list --include_revoked). Si el cerebro NO puede consultar el tailnet, esta alerta también aparece sin haber podido comprobarlo — su ausencia de `musubi_fleet_device_net_up` lo dice. Ver deploy/RUNBOOK.md#maquinacaida-en-un-equipo-windows-mir-esto-primero"
+
+      # --- La máquina está viva y el agente no ---
+      - alert: AgenteCaidoConMaquinaViva
+        expr: musubi_fleet_device_up == 0 and on(project, device) musubi_fleet_device_net_up == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente no late, pero la máquina SÍ está en la red: lo caído es el agente."
+          nota: "No mires el hardware. En Windows la tarea programada arranca AL INICIAR SESIÓN: si la máquina reinició y nadie entró, el agente no corre. `Get-ScheduledTask 'Musubi Agente de Flota' | Get-ScheduledTaskInfo` lo dice, y `deploy/diagnostico-cortes-windows.ps1` lo trae junto con todo lo demás. Ver deploy/RUNBOOK.md#agentecaidoconmaquinaviva"
 
       # --- La máquina se REINICIÓ ---
       #

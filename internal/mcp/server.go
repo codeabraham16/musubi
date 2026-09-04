@@ -140,9 +140,12 @@ func WithMultiAgent(c config.MultiAgentConfig) Option {
 }
 
 type McpServer struct {
-	engine   memory.StorageBackend
-	resolver *skills.Resolver
-	embedder embedding.Provider
+	// vidaDeRed guarda, en memoria, si el tailnet ve a una máquina que no está latiendo.
+	// Ver internal/fleet/vidared.go: distingue «apagada» de «el agente no corre».
+	vidaDeRed sync.Map
+	engine    memory.StorageBackend
+	resolver  *skills.Resolver
+	embedder  embedding.Provider
 	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
 	cognition cognition.Provider
 	// cognitionCfg trae las guardas de CALIDAD del 3er pilar (F3): el vocabulario controlado de

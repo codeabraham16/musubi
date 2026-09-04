@@ -35,6 +35,52 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 (madrugada) — `up == 0` DECÍA DOS COSAS DISTINTAS Y MANDABA AL LUGAR EQUIVOCADO.**
+>
+> Perseguiendo por qué `davantis-1` figuraba caída otra vez, `tailscale ping` contestó en 55 ms:
+> **la máquina estaba encendida y lo único muerto era el agente**. El ping común había fallado y no
+> probaba nada —Windows bloquea ICMP entrante por default—, así que la primera lectura fue la
+> equivocada. Y no es la primera vez: `gio` figuró caída TRES DÍAS respondiendo al ping en 145 ms,
+> porque el agente arranca al iniciar sesión y nadie había iniciado sesión.
+>
+> **El defecto no es del agente: es que la flota no podía distinguir «apagada» de «el agente no
+> corre».** Son dos problemas, se arreglan en dos lugares, y `MaquinaCaida` disparaba igual para
+> los dos — la alerta mandaba a revisar el hardware de una máquina sana. En medio de una
+> investigación de quince cortes de energía, esa confusión cuesta una tarde.
+>
+> Ahora el cerebro le pregunta al tailnet por las máquinas que NO están latiendo y publica
+> `musubi_fleet_device_net_up`. `MaquinaCaida` se partió en dos reglas **mutuamente excluyentes
+> por construcción** —`unless` y `and` sobre la misma condición—, así que no hace falta ninguna
+> inhibición entre ellas y nunca llegan las dos: `MaquinaCaida` («no late y tampoco la alcanzo») y
+> `AgenteCaidoConMaquinaViva` («no late PERO está en la red: no mires el hardware»).
+>
+> **La serie FALTA cuando no se pudo medir, y ése es el diseño entero.** Un 0 acá afirma «la
+> máquina no está en la red», que es lo que manda a alguien a revisar una fuente. Un cerebro sin
+> `tailscale`, una máquina que no está en el tailnet, o **dos pares que dicen llamarse igual**
+> —misma decisión que A13 tomó para el id de pantalla— no permiten afirmarlo. Con la serie
+> ausente, el `unless` no quita nada y `MaquinaCaida` se comporta EXACTAMENTE como antes: el eje
+> se apaga solo donde no se puede medir, en vez de callar una alerta.
+>
+> Tres detalles que no son decoración: se consulta con `status --json` y no con `ping` porque trae
+> todos los pares en UNA llamada —a 300 máquinas, un ping por máquina serían 300 forks por tick—;
+> se pregunta **sólo por las que no laten**, así que el trabajo es proporcional al problema; y una
+> medición vieja NO se emite, porque publicar el último 1 conocido sería fabricar el mismo
+> congelamiento que hace que Prometheus no borre la serie de una máquina muerta.
+>
+> **Y `deploy/diagnostico-cortes-windows.ps1`**, que junta en una corrida lo que hace falta para el
+> otro lado del problema: los eventos 41 con TODOS sus campos —`BugcheckCode` y
+> `PowerButtonTimestamp` son lo único que separa «corte limpio de energía» de «cuelgue» y de «el
+> botón»—, los WHEA, los térmicos, Fast Startup, el pagefile y la tarea del agente. La sección del
+> agente va SEGUNDA a propósito: si la máquina está encendida y el agente no corre, no hubo ningún
+> corte que investigar.
+>
+> **Siete sabotajes, siete rojos — y el arnés se equivocó por cuarta vez en la sesión**, ahora de
+> una forma nueva: los respaldos se nombraban por `basename`, y `internal/fleet/vidared.go` con
+> `internal/mcp/vidared.go` compartieron archivo. La restauración puso el paquete equivocado y los
+> cuatro sabotajes siguientes fueron **fallos de compilación leídos como rojos**. Se detectó al
+> mirar el árbol, no por la salida. Ahora el arnés nombra por RUTA y distingue «no compila» de «la
+> prueba falló», que era la confusión de fondo. **20 cabos.**
+>
 > **2026-09-04 — LA HERRAMIENTA DE DESPLIEGUE VERIFICABA LA MIGRACIÓN CON UN NÚMERO TIPEADO, Y
 > HACÍA SIETE MIGRACIONES QUE NO VERIFICABA NADA.**
 >

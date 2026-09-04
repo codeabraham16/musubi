@@ -29,7 +29,7 @@ func TestElTruncadoDelExportadorSaleComoSerieYNoComoComentario(t *testing.T) {
 	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba)
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, nil)
 	salida := b.String()
 
 	// SIN recorte las dos series existen y valen 0. El 0 es un hecho medido —«no se truncó»—, no

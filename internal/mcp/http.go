@@ -295,7 +295,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		var b strings.Builder
 		b.WriteString(salida)
 		ahora := time.Now()
-		renderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version)
+		renderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe)
 		// La AUTO-VIGILANCIA del empuje sale por el tirón, no por el empuje: un mecanismo de
 		// monitoreo cuya única forma de avisar de su propia muerte es él mismo no avisa nunca.
 		s.renderEmpuje(&b, ahora)

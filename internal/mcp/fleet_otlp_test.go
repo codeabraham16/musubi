@@ -501,7 +501,7 @@ func TestElEmpujeYElScrapeExportanLasMismasSeriesYLosMismosValores(t *testing.T)
 
 	p := ptrPrincipal(principalDePrometheus())
 	var b strings.Builder
-	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba)
+	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, nil)
 	delScrape := seriesDelScrape(b.String())
 
 	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, versionDePrueba)
