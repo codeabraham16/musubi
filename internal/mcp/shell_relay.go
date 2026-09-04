@@ -224,6 +224,10 @@ func (s *McpServer) handlerShellOut(opt httpOptions) http.HandlerFunc {
 			}
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
+		// nosniff acompaña al octet-stream: sin él un navegador puede OLFATEAR el cuerpo y
+		// renderizarlo como HTML pese al tipo declarado. Acá el cuerpo son bytes crudos de un
+		// pty, o sea contenido que elige quien esté del otro lado de la shell.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if errors.Is(lerr, fleet.ErrCanalCerrado) {
 			// El final NORMAL: alguien tecleó `exit`. Se avisa por cabecera y NO por código de
 			// error, porque los bytes que vienen en este mismo cuerpo son las últimas líneas

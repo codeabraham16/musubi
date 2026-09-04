@@ -85,6 +85,10 @@ func (s *McpServer) handlerShellAgenteEntrada(limiter *authLimiter) http.Handler
 
 		datos, err := canal.LeerDeLaPersona(esperaSalidaShell)
 		w.Header().Set("Content-Type", "application/octet-stream")
+		// nosniff acompaña al octet-stream: sin él un navegador puede OLFATEAR el cuerpo y
+		// renderizarlo como HTML pese al tipo declarado. Acá el cuerpo son bytes crudos de un
+		// pty, o sea contenido que elige quien esté del otro lado de la shell.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if err != nil {
 			// El canal se cerró: se le dice al agente que mate el pty y se vaya.
 			w.Header().Set("X-Musubi-Shell", "cerrada")

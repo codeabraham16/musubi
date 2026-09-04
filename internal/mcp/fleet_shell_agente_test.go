@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,5 +241,78 @@ func TestLaSalidaQueSubeElAgenteLlegaYMantieneVivaLaSesion(t *testing.T) {
 	}
 	if !fresca.UltimoTrafico.After(viejo.Add(time.Minute)) {
 		t.Error("la salida del pty no movió el reloj de inactividad: una sesión donde `tail -f` escupe líneas se cerraría por inactividad")
+	}
+}
+
+// LOS DOS CUERPOS QUE LLEVAN BYTES DE UN PTY DECLARAN SU TIPO Y PROHÍBEN QUE SE LO OLFATEEN.
+//
+// `Content-Type: application/octet-stream` solo no alcanza: sin `X-Content-Type-Options: nosniff`
+// un navegador puede ignorar el tipo declarado, olfatear el cuerpo y renderizarlo como HTML. Y el
+// cuerpo acá no es dato nuestro — son bytes crudos de una terminal, o sea contenido que elige
+// quien esté del otro lado de la shell.
+//
+// ESTA PRUEBA EXISTE PORQUE EL ANALIZADOR NO PUEDE. gosec marcó handlerShellAgenteEntrada con G705
+// (XSS por taint) y NO marcó handlerShellOut, que devuelve la salida del pty al operador y es el
+// más expuesto de los dos; su motor tampoco mira cabeceras, así que el nosniff no lo callaba. G705
+// quedó excluida en el job `sast` con esa evidencia escrita, y con la regla afuera lo único que
+// cuida estas dos cabeceras es esto.
+//
+// Sabotaje que la hace fallar: borrar el Set de nosniff en shell_agente_http.go o en shell_relay.go.
+func TestLosCuerposDePtyProhibenElOlfateoDeTipo(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d, tokenAgente := enrolarTierAConShell(t, s, "casa", "pc-gio")
+	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canal := fleet.NuevoCanalAgente()
+	s.shells.guardar(ses.ID, canal)
+	defer s.cerrarShell(ses.ID, fleet.ShellCerrada, "fin de la prueba", time.Now())
+
+	reg := registroDePrueba(Principal{
+		Name: "op", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapShell: {"*"}},
+		hash:  hashToken("el-token-de-op"),
+	})
+	h := s.HTTPHandler(httpOptions{reqTimeout: 5 * time.Second, registry: reg})
+
+	// El cuerpo que BAJA al agente: lo que la persona tecleó.
+	_ = canal.Escribir([]byte("uptime\n"))
+	r := httptest.NewRequest(http.MethodGet, shellAgenteEntradaPath+"?id="+ses.ID, nil)
+	r.Header.Set("Authorization", "Bearer "+tokenAgente)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("entrada del agente: %d — %s", w.Code, w.Body.String())
+	}
+	revisarCabecerasDePty(t, "entrada del agente", w.Result().Header)
+
+	// Y el que SUBE al operador: la salida cruda del pty, que es el peor de los dos. Se le mete
+	// algo que un navegador renderizaría si le dejaran olfatear.
+	_ = canal.EscribirALaPersona([]byte("<script>alert(1)</script>\n"))
+	r = httptest.NewRequest(http.MethodGet, shellOutPath+"?id="+ses.ID, nil)
+	r.Header.Set("Authorization", "Bearer el-token-de-op")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("salida al operador: %d — %s", w.Code, w.Body.String())
+	}
+	// Control de que el cuerpo es el que se cree: sin esto la prueba pasaría sobre una respuesta
+	// vacía, y las cabeceras de un cuerpo vacío no dicen nada.
+	if !strings.Contains(w.Body.String(), "<script>") {
+		t.Fatalf("el cuerpo no trae la salida del pty: %q", w.Body.String())
+	}
+	revisarCabecerasDePty(t, "salida al operador", w.Result().Header)
+}
+
+// revisarCabecerasDePty fija las dos cabeceras que tienen que viajar juntas.
+func revisarCabecerasDePty(t *testing.T, quien string, h http.Header) {
+	t.Helper()
+	if got := h.Get("Content-Type"); got != "application/octet-stream" {
+		t.Errorf("%s: Content-Type = %q, se esperaba application/octet-stream", quien, got)
+	}
+	if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("%s: X-Content-Type-Options = %q, se esperaba nosniff", quien, got)
 	}
 }
