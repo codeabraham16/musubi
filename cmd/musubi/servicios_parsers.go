@@ -152,12 +152,31 @@ func parsearLaunchctl(salida string, ahora time.Time) []fleet.ReporteServicio {
 			continue
 		}
 		salud := fleet.SaludServicio{Tomada: ahora, Estado: fleet.EstadoDetenido}
+		vivo := false
 		if pid, err := strconv.Atoi(campos[0]); err == nil && pid > 0 {
 			salud.PID = &pid
 			salud.Estado = fleet.EstadoCorriendo
+			vivo = true
 		}
+		// EL CÓDIGO DE SALIDA MANDA SOBRE EL ESTADO, Y SÓLO CUANDO NO ESTÁ CORRIENDO.
+		//
+		// Es la misma regla que estadoDeWindows escribe cuarenta líneas más arriba, y launchd era
+		// la única de las cuatro plataformas que no la aplicaba: el `if` del código de salida
+		// pisaba el `corriendo` que acababa de poner el PID.
+		//
+		// La segunda columna de `launchctl list` es el ÚLTIMO estado de salida, no el actual.
+		// launchd reinicia lo que tiene `KeepAlive`, así que un servicio que se cayó una vez,
+		// volvió solo y hoy tiene PID sigue mostrando ese código para siempre: quedaba `fallado`
+		// mientras funcionaba, y de ahí salía un `musubi_fleet_service_up 0` sobre algo vivo.
+		//
+		// Apagado, en cambio, el código es exactamente la pregunta que importa: ¿se apagó porque
+		// terminó, o porque murió? Y el número viaja igual en Detalle —ahora también cuando está
+		// vivo— porque «se recuperó de una salida 2» es justo lo que uno quiere ver al lado de un
+		// servicio que anda a los tumbos.
 		if code, err := strconv.Atoi(campos[1]); err == nil && code != 0 {
-			salud.Estado = fleet.EstadoFallado
+			if !vivo {
+				salud.Estado = fleet.EstadoFallado
+			}
 			salud.Detalle = "salida=" + campos[1]
 		}
 		rs = append(rs, fleet.ReporteServicio{Nombre: etiqueta, Clase: "launchd", Salud: salud})

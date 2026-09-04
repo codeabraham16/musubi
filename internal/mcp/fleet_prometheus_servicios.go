@@ -137,6 +137,26 @@ type serieDeServicio struct {
 // rendimiento en absoluto, que es la mayoría.
 func seriesDeServicio() []serieDeServicio {
 	return []serieDeServicio{
+		// ── QUE EL SERVICIO EXISTE, que es distinto de en qué estado está ──────────────────
+		{"musubi_fleet_service_declared",
+			"1 siempre: este servicio está declarado en esta máquina. NO dice nada de su estado — para eso está musubi_fleet_service_up, que puede estar AUSENTE. Existe justamente para que esa ausencia se pueda nombrar: `musubi_fleet_service_declared unless musubi_fleet_service_up` son los servicios declarados de los que no se sabe si corren.",
+			"",
+			func(sv fleet.Servicio, ahora time.Time) (float64, bool) {
+				// ════════════════════════════════════════════════════════════════════════════
+				// SIN ESTA SERIE, ESCONDER LO NO MEDIDO LO HACÍA INVISIBLE
+				//
+				// `up` se omite para `ocioso` (A70) y ahora también para `desconocido`, que es lo
+				// correcto: son afirmaciones que no se pueden hacer. Pero un servicio DECLARADO Y
+				// NUNCA REPORTADO no tenía ninguna otra serie —`last_report_seconds` falta porque
+				// nunca reportó, `restarts_total` porque nadie lo sabe—, así que desaparecía por
+				// completo del exportador. Un servicio que nadie midió no está sano: está sin
+				// noticias, y sin noticias tiene que poder VERSE.
+				//
+				// Un 1 constante no cuesta cardinalidad (una serie por servicio, las mismas
+				// etiquetas que ya se emiten) y convierte «no se sabe» en algo consultable, que es
+				// lo que el resto del exportador hace con las ausencias en vez de rellenarlas.
+				return 1, true
+			}},
 		{"musubi_fleet_service_up",
 			"1 si el servicio está corriendo según su último reporte, 0 si no. NO dice si ese reporte es reciente: para eso está musubi_fleet_service_last_report_seconds.",
 			"",
@@ -156,6 +176,22 @@ func seriesDeServicio() []serieDeServicio {
 					//
 					// Cuando ese mismo servicio se muera de verdad, el agente lo reporta
 					// `fallado`, la serie aparece en 0, y la alerta dispara.
+					return 0, false
+				case fleet.EstadoDesconocido:
+					// DESCONOCIDO TAMPOCO SE EXPORTA, y por una razón distinta de la de ocioso.
+					//
+					// Ocioso es «la pregunta no aplica». Desconocido es «NO SE SABE»: el servicio
+					// está declarado y todavía no llegó ninguna muestra, o la que llegó no se
+					// pudo interpretar. Un 0 acá no es un matiz perdido — es el exportador
+					// AFIRMANDO «no está corriendo» sobre lo único que el dominio declara no
+					// medido, y `ServicioCaido` lo anuncia como una caída que nadie vio caer.
+					//
+					// Es la regla del cero mentiroso que gobierna el resto del exportador, y el
+					// comentario de acá arriba ya nombraba la distinción —«No es «no sé» —eso es
+					// `desconocido`»— mientras el `default` la borraba.
+					//
+					// Que no se sepa NO queda callado: `musubi_fleet_service_last_report_seconds`
+					// falta o crece, que es la forma correcta de contar una ausencia.
 					return 0, false
 				default:
 					return 0, true

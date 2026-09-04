@@ -51,24 +51,51 @@ func TestLosServiciosDeUnaMaquinaQueNoVeoNoSeExportan(t *testing.T) {
 // da el contador de reinicios. Emitir 0 en cualquiera de los dos casos es una AFIRMACIÓN falsa:
 // «recién reportado» y «nunca se reinició». La serie se omite.
 //
-// Sabotaje que la hace fallar: devolver (0, true) en vez de (0, false) en cualquiera de las dos.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// `up` ESTABA DEL LADO EQUIVOCADO DE SU PROPIA REGLA
+//
+// Esta prueba exigía que `up` SÍ saliera para este mismo servicio, con el argumento de que «no
+// está corriendo es un dato, no una ausencia». El argumento es cierto para `detenido` y para
+// `fallado`, y el fixture no es ninguno de los dos: es Salud nil, o sea `desconocido`. Para él,
+// «no está corriendo» no es el dato — es la suposición. La prueba pedía, en su rama de `up`,
+// exactamente lo que su nombre prohíbe, y sus otras dos ramas ya negaban por el mismo motivo.
+//
+// El contrato del dominio lo dice sin ambigüedad en la descripción de `musubi_fleet_services`:
+// «`desconocido` NO ES `detenido`» y «un servicio declarado y todavía sin medir es un estado
+// legítimo y distinto de «caído»». El exportador lo contradecía, y `ServicioCaido` anunciaba como
+// caída algo que nadie vio caer — la misma forma de A70, un estado más allá.
+//
+// Verificado contra la flota antes de cambiarlo: 182 `corriendo` y 2 `fallado`, ningún
+// `desconocido`. Las dos alertas vivas son reales y siguen sonando; esto no calla ninguna.
+//
+// LA AUSENCIA NO ES INVISIBILIDAD: `musubi_fleet_service_declared` sale igual y en 1, así que el
+// servicio existe en las métricas con sus etiquetas y `declared unless up` nombra exactamente a
+// los declarados de los que no se sabe nada.
+//
+// Sabotaje que la hace fallar: devolver (0, true) para lo desconocido en cualquiera de las tres.
 func TestLoQueNoSeSabeDeUnServicioNoViajaComoCero(t *testing.T) {
 	ahora := time.Now()
 	sinNada := fleet.Servicio{Nombre: "declarado-y-sin-medir"} // UltimoReporte cero, Salud nil
 
+	var declarado bool
 	for _, s := range seriesDeServicio() {
 		v, hay := s.Valor(sinNada, ahora)
 		switch s.Nombre {
-		case "musubi_fleet_service_last_report_seconds", "musubi_fleet_service_restarts_total":
+		case "musubi_fleet_service_last_report_seconds", "musubi_fleet_service_restarts_total",
+			"musubi_fleet_service_up":
 			if hay {
 				t.Errorf("%s emitió %v para un servicio del que no se sabe nada: un 0 ahí es una afirmación", s.Nombre, v)
 			}
-		case "musubi_fleet_service_up":
-			// `up` SÍ tiene que salir: «no está corriendo» es un dato, no una ausencia.
-			if !hay {
-				t.Error("musubi_fleet_service_up se omitió: que un servicio no esté corriendo es un dato, no un desconocido")
+		case "musubi_fleet_service_declared":
+			// Y ÉSTA SÍ, siempre: es lo que impide que esconder lo no medido lo vuelva invisible.
+			if !hay || v != 1 {
+				t.Errorf("musubi_fleet_service_declared dio (%v, %v): sin ella, un servicio declarado y nunca reportado no aparece en NINGUNA serie y deja de poder verse", v, hay)
 			}
+			declarado = true
 		}
+	}
+	if !declarado {
+		t.Error("no existe musubi_fleet_service_declared: esconder lo desconocido sin ella borra el servicio del exportador")
 	}
 }
 
