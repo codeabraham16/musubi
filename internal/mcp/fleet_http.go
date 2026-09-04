@@ -493,13 +493,9 @@ const fleetResultPath = "/fleet/result"
 // cuerpoResultado es lo que manda el agente al terminar. NO trae identidad, igual que el latido:
 // el `command_id` se verifica CONTRA la máquina del token, así que nombrar un comando ajeno no
 // alcanza para escribirlo (F3).
-type cuerpoResultado struct {
-	ComandoID string `json:"command_id"`
-	ExitCode  *int   `json:"exit_code"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	Error     string `json:"error"`
-}
+// Es un ALIAS del tipo del contrato (internal/fleet/protocolo.go) y no una copia: era idéntico
+// byte a byte al del agente, y el porqué de que eso sea peligroso está allá.
+type cuerpoResultado = fleet.ResultadoDeComando
 
 // resultadoMaxBytes acota el cuerpo del reporte: dos salidas de 64 KiB más el sobre.
 const resultadoMaxBytes = 2*fleet.SalidaMaxBytes + (8 << 10)
@@ -622,9 +618,10 @@ func (s *McpServer) registrarRespuestaDePermiso(deviceID string, cuerpo cuerpoRe
 	}
 }
 
-// prefijoRespuestaPermiso es cómo el agente marca su respuesta en stdout. Un prefijo y no un
-// stdout pelado: sin él, cualquier salida inesperada se interpretaría como una respuesta.
-const prefijoRespuestaPermiso = "musubi-permiso: "
+// prefijoRespuestaPermiso sale del CONTRATO, no de un literal repetido acá: el agente y el cerebro
+// tenían el mismo valor declarado dos veces, y el porqué de por qué eso era grave —y asimétrico—
+// está en internal/fleet/protocolo.go.
+const prefijoRespuestaPermiso = fleet.PrefijoRespuestaPermiso
 
 // ── La puerta del RENDIMIENTO: salud para lo que ninguna máquina enumera (fase 4) ────────────
 

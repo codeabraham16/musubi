@@ -71,3 +71,47 @@ type ComandoParaElAgente struct {
 	Argv       []string `json:"argv"`
 	TimeoutSeg int      `json:"timeout_seg"`
 }
+
+// ResultadoDeComando es lo que el agente reporta a POST /fleet/result: la otra mitad del mismo
+// canal que la RespuestaLatido.
+//
+// ESTABA DECLARADO DOS VECES, igual que la respuesta del latido: `resultadoDeComando` en
+// cmd/musubi/ejecutor.go y `cuerpoResultado` en internal/mcp/fleet_http.go, byte a byte iguales.
+// Ahí la duplicación es más peligrosa que en la respuesta, porque el cerebro DECIDE con estos
+// campos y no sólo los muestra:
+//
+//	· de `Stdout` sale la respuesta de permiso del eje `pide` (ver PrefijoRespuestaPermiso). Si el
+//	  tag divergiera, TODA la flota en modo `pide` negaría cada sesión de pantalla con «el agente
+//	  no tuvo con qué preguntar» — habiendo preguntado y habiendo recibido un sí.
+//	· de `ExitCode` y `Error` sale si una sesión de pantalla se marca activa o fallida.
+//
+// Las dos roturas son SILENCIOSAS. Una divergencia en `ComandoID`, en cambio, es ruidosa: el
+// cerebro contesta 403 y el agente lo reporta. Que el modo de falla más grave sea el más callado es
+// exactamente por lo que esto vive en un solo lugar.
+//
+// ExitCode es PUNTERO a propósito: nil = «no terminó» y 0 = «terminó bien». Un exit≠0 es un
+// RESULTADO; `Error` es sólo para fallos del CANAL (no se pudo lanzar, venció el timeout).
+// Confundirlos haría que un grep que no encuentra nada —exit 1, normal— se lea como máquina rota.
+type ResultadoDeComando struct {
+	ComandoID string `json:"command_id"`
+	ExitCode  *int   `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Error     string `json:"error"`
+}
+
+// PrefijoRespuestaPermiso marca el stdout del agente como una RESPUESTA DE PERMISO y no como texto
+// suelto (eje `pide`). Un prefijo y no un stdout pelado: sin él, cualquier salida inesperada —un
+// binario que imprime algo raro— se interpretaría como una respuesta.
+//
+// ESTABA DECLARADO DOS VECES, uno por lado, con el mismo valor y sin nada que los atara. El modo de
+// falla si divergían no era un error: el CutPrefix del cerebro no matchea, la respuesta cae en
+// RespuestaNoSePudo, y toda la flota en modo `pide` niega cada sesión diciendo «el agente no tuvo
+// con qué preguntar». Sin error, sin 4xx, con el agente reportando exit 0.
+//
+// Y era peor de lo que parece por una asimetría: el cerebro hace TrimSpace del stdout ANTES del
+// CutPrefix y del resto DESPUÉS, así que el espacio en blanco que ENVUELVE se absorbe — pero el
+// espacio final que va ADENTRO del literal no. Si el agente perdiera ese espacio y mandara
+// "musubi-permiso:concedida", se rompe; si lo perdiera el cerebro, sigue funcionando. Un modo de
+// falla que depende de QUÉ LADO se equivoca es de los más difíciles de razonar.
+const PrefijoRespuestaPermiso = "musubi-permiso: "

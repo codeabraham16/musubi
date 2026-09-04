@@ -38,13 +38,12 @@ import (
 type comandoRecibido = fleet.ComandoParaElAgente
 
 // resultadoDeComando es lo que se le reporta al cerebro.
-type resultadoDeComando struct {
-	ComandoID string `json:"command_id"`
-	ExitCode  *int   `json:"exit_code"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	Error     string `json:"error"`
-}
+//
+// ALIAS DEL TIPO DEL CONTRATO, no una copia. Era una copia byte a byte de
+// fleet.ResultadoDeComando, y ahí el porqué está escrito: el cerebro DECIDE con estos campos —la
+// respuesta de permiso sale de Stdout, el estado de una sesión de pantalla sale de ExitCode y
+// Error— así que una divergencia rompe dos caminos en silencio.
+type resultadoDeComando = fleet.ResultadoDeComando
 
 // ejecutar corre un comando y devuelve el resultado. NUNCA devuelve error al llamador: un
 // comando que falla es un RESULTADO, no un fallo del agente.
@@ -71,7 +70,7 @@ func ejecutar(c comandoRecibido, base, token string) resultadoDeComando {
 	// si llegara, el error diría «no such file» y —peor— el mensaje podría arrastrar la
 	// contraseña que va en el argv.
 	if strings.HasPrefix(argv[0], "musubi:") {
-		if argv[0] == "musubi:pantalla" {
+		if argv[0] == fleet.OpPantalla {
 			return aplicarSesionPantalla(comandoRecibido{ID: c.ID, Argv: argv, TimeoutSeg: c.TimeoutSeg})
 		}
 		if argv[0] == comandoShellAgente {

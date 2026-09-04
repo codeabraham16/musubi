@@ -35,13 +35,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"musubi/internal/fleet"
 )
+
+// comandoShellAgente es la operación interna con la que el cerebro llama a un Tier A. Sale del
+// DOMINIO y no de un literal: el cerebro hace lo mismo en methods_shell.go, y si el nombre se
+// renombrara de un solo lado la operación caería en el camino del exec — que es lo que
+// ejecutor.go prohíbe, porque no es un ejecutable del host.
+const comandoShellAgente = fleet.OpShell
 
 // esperaEntradaAgente es cuánto bloquea el agente pidiéndole teclas al cerebro. Igual que del
 // lado de la persona: una terminal quieta no genera tráfico y una activa se ve al instante.
-// comandoShellAgente es la operación interna con la que el cerebro llama a un Tier A.
-const comandoShellAgente = "musubi:shell"
-
+//
+// (Este doc estaba pegado a comandoShellAgente desde d6a3cb7, describiendo otra declaración, y
+// esperaEntradaAgente quedaba sin ninguno. Misma clase que los cuatro de 695e219, invisible al
+// linter porque ST1020 sólo mira lo exportado.)
 const esperaEntradaAgente = 25 * time.Second
 
 // vidaMaxDeLaShellLocal es el techo del agente, y es DELIBERADAMENTE MÁS LARGO que el del cerebro.

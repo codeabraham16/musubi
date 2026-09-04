@@ -135,7 +135,11 @@ func primeroDisponible(candidatos ...string) string {
 // comandoAvisarAgente es la operación que el cerebro encola para hablarle al usuario de una
 // máquina. Como `musubi:pantalla`, NO es un ejecutable del host y nunca debe llegar a
 // exec.Command: si llegara, el error diría «no such file» y el mensaje arrastraría el texto.
-const comandoAvisarAgente = "musubi:avisar"
+// SALE DEL DOMINIO, no de un literal repetido acá. El cerebro deriva el nombre de fleet.OpAvisar
+// (methods_shell.go ya lo hace con OpShell) y el agente lo tenía escrito a mano: si el dominio lo
+// renombrara, el agente no seguiría y la operación interna caería en el camino del exec —
+// exactamente lo que el comentario de ejecutor.go prohíbe, porque no es un ejecutable del host.
+const comandoAvisarAgente = fleet.OpAvisar
 
 // atenderAviso ejecuta `musubi:avisar <texto>`.
 //
@@ -172,7 +176,7 @@ func atenderAviso(comandoID string, argv []string) resultadoDeComando {
 }
 
 // comandoPreguntarAgente es la operación que PIDE PERMISO. A diferencia de avisar, espera.
-const comandoPreguntarAgente = "musubi:preguntar"
+const comandoPreguntarAgente = fleet.OpPreguntar // del dominio, ver comandoAvisarAgente
 
 // atenderPregunta ejecuta `musubi:preguntar <sesionID> <texto>` y contesta.
 //
@@ -210,4 +214,6 @@ func atenderPregunta(comandoID string, argv []string) resultadoDeComando {
 }
 
 // prefijoRespuestaPermiso marca la salida como una respuesta de permiso y no como texto suelto.
-const prefijoRespuestaPermiso = "musubi-permiso: "
+// Del CONTRATO: estaba declarado también en el cerebro, con el mismo valor y sin nada que los
+// atara. Ver internal/fleet/protocolo.go para el modo de falla, que es silencioso y asimétrico.
+const prefijoRespuestaPermiso = fleet.PrefijoRespuestaPermiso

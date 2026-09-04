@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,5 +122,68 @@ func TestLosCuatroCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	}
 	if res.tokenNuevo != "msb_el_rotado" {
 		t.Errorf("`token_nuevo` no llegó: %q", res.tokenNuevo)
+	}
+}
+
+// NINGÚN VALOR DE CABLE SE VUELVE A ESCRIBIR FUERA DEL DOMINIO.
+//
+// Los nombres de las operaciones internas (`musubi:avisar`, `musubi:preguntar`, `musubi:pantalla`,
+// `musubi:shell`) y el prefijo de la respuesta de permiso viven en internal/fleet, y estaban
+// TAMBIÉN escritos a mano de este lado. El cerebro ya derivaba del dominio —methods_shell.go hace
+// `const comandoShell = fleet.OpShell`— así que la copia era de un solo lado, que es la peor forma:
+// parece que hay una fuente única y no la hay.
+//
+// LO QUE PASABA SI DIVERGÍAN, que es por qué esto tiene una prueba y no sólo un comentario:
+//
+//	· un nombre de operación renombrado en el dominio y no acá deja de reconocerse como operación
+//	  INTERNA, y el argv cae en el camino del exec — o sea que el agente intentaría lanzar
+//	  `musubi:pantalla` como si fuera un binario del host, que es literalmente lo que el
+//	  comentario de ejecutor.go prohíbe;
+//	· el prefijo del permiso divergido hace que el CutPrefix del cerebro no matchee y TODA la
+//	  flota en modo `pide` niegue cada sesión con «el agente no tuvo con qué preguntar», habiendo
+//	  preguntado y habiendo recibido un sí. Sin error, sin 4xx, con el agente reportando exit 0.
+//
+// EL MATCHEO ES DEL LITERAL COMPLETO —comilla, valor, comilla— y eso NO es un detalle: los mensajes
+// de error de este paquete nombran las operaciones en prosa (`"musubi:avisar sin texto"`), y ahí el
+// valor va seguido de un espacio y no de una comilla. Así la guarda distingue una DECLARACIÓN de
+// una mención, que es lo que la hace usable en vez de un falso positivo permanente.
+//
+// Sabotaje que la hace fallar: volver a poner `const comandoAvisarAgente = "musubi:avisar"`.
+func TestNingunValorDeCableSeRedeclaraFueraDelDominio(t *testing.T) {
+	valores := map[string]string{
+		fleet.OpAvisar:                "fleet.OpAvisar",
+		fleet.OpPreguntar:             "fleet.OpPreguntar",
+		fleet.OpPantalla:              "fleet.OpPantalla",
+		fleet.OpShell:                 "fleet.OpShell",
+		fleet.PrefijoRespuestaPermiso: "fleet.PrefijoRespuestaPermiso",
+	}
+	archivos, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirados := 0
+	for _, f := range archivos {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mirados++
+		for _, l := range strings.Split(string(b), "\n") {
+			for valor, constante := range valores {
+				if strings.Contains(l, `"`+valor+`"`) {
+					t.Errorf("%s escribe el literal %q a mano: usá %s. Un valor de cable con dos "+
+						"declaraciones no tiene fuente única, y si divergen no falla nada — se "+
+						"rompe en silencio.\n    %s", f, valor, constante, strings.TrimSpace(l))
+				}
+			}
+		}
+	}
+	// CONTROL DE QUE LA PRUEBA MIRA ALGO: sin esto, un glob que no matchea nada la deja en verde
+	// sin haber abierto un solo archivo.
+	if mirados < 5 {
+		t.Fatalf("se miraron %d archivos de este paquete; son bastantes más — ¿el glob dejó de matchear?", mirados)
 	}
 }
