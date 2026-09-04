@@ -579,3 +579,90 @@ func TestElCodigoDeSalidaDeWindowsViajaConElServicioFallado(t *testing.T) {
 		t.Errorf("cambiaron los estados: murio=%v ocioso=%v", por["murio"].Salud.Estado, por["ocioso"].Salud.Estado)
 	}
 }
+
+// LAS CUATRO PLATAFORMAS DICEN POR QUÉ FALLÓ UN SERVICIO, NO SÓLO QUE FALLÓ.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ESTA PRUEBA ES DE LA CLASE, Y LA DE ARRIBA ES DEL CASO
+//
+// El defecto que cerró TestElCodigoDeSalidaDeWindowsViajaConElServicioFallado tenía la forma de
+// A83: TRES caminos hacían algo y el CUARTO no. Arreglar el cuarto no impide que aparezca un
+// quinto sin `Detalle`, ni que uno de los otros tres lo pierda en un refactor — y ninguna de las
+// dos cosas rompe nada visible, porque un `Detalle` vacío es exactamente lo que devuelve una
+// plataforma que de verdad no sabe el motivo. Un hueco y una ausencia legítima se ven igual.
+//
+// Así que se recorren los cuatro con una muestra de FALLO real de cada formato, y cada uno tiene
+// que traer su diagnóstico. Lo que dice cada uno es distinto y está bien que lo sea: systemd manda
+// `Result=`, Windows el código de salida, launchctl el último exit, y un contenedor su `Status`
+// legible. Lo que NO puede pasar es que alguno mande vacío.
+//
+// SE PUEDE HACER PORQUE LOS CUATRO PARSERS VIVEN FUERA DE LOS BUILD TAGS, que es todo el punto de
+// ese reparto: dos de las cuatro plataformas no se pueden correr desde acá, así que una prueba de
+// tabla como ésta es la única forma de cubrirlas juntas. Con los parsers detrás de su tag, esta
+// guarda no se podría escribir.
+//
+// Sabotaje que la hace fallar: devolver "" en detalleDeSystemd, detalleDeWindows,
+// detalleDeContenedor, o quitar el `salida=` de parsearLaunchctl. Cada uno rompe su propia fila.
+func TestLasCuatroPlataformasDicenPorQueFalloUnServicio(t *testing.T) {
+	ahora := time.Now()
+	for _, c := range []struct {
+		plataforma string
+		servicio   string
+		reportes   []fleet.ReporteServicio
+		esperaEn   string // un fragmento que el detalle TIENE que contener
+	}{
+		{
+			plataforma: "systemd",
+			servicio:   "roto",
+			reportes: parsearSystemctlShow(
+				"Id=roto.service\nActiveState=failed\nSubState=failed\nUnitFileState=enabled\n"+
+					"MainPID=0\nNRestarts=7\nResult=exit-code", ahora),
+			esperaEn: "exit-code",
+		},
+		{
+			plataforma: "windows",
+			servicio:   "roto",
+			reportes: parsearServiciosWindows("\"Name\",\"State\",\"StartMode\",\"ExitCode\"\n"+
+				"\"roto\",\"Stopped\",\"Auto\",\"1067\"\n", ahora),
+			esperaEn: "1067",
+		},
+		{
+			plataforma: "launchd",
+			servicio:   "com.ejemplo.roto",
+			reportes:   parsearLaunchctl("PID\tStatus\tLabel\n-\t78\tcom.ejemplo.roto\n", ahora),
+			esperaEn:   "78",
+		},
+		{
+			plataforma: "contenedor",
+			servicio:   "roto",
+			reportes:   parsearContenedores("roto\tdead\tExited (137) 2 minutes ago\t3", "podman", ahora),
+			esperaEn:   "137",
+		},
+	} {
+		t.Run(c.plataforma, func(t *testing.T) {
+			// CONTROL DE QUE LA MUESTRA LLEGÓ: sin esto, un parser que dejara de reconocer su
+			// propio formato daría cero reportes y la prueba pasaría sin haber mirado un detalle.
+			if len(c.reportes) != 1 {
+				t.Fatalf("la muestra de %s produjo %d reportes y no 1: el parser no reconoció su "+
+					"propio formato, así que esta fila no está midiendo nada", c.plataforma, len(c.reportes))
+			}
+			r := c.reportes[0]
+			if r.Nombre != c.servicio {
+				t.Fatalf("%s: el reporte es de %q y no de %q", c.plataforma, r.Nombre, c.servicio)
+			}
+			if r.Salud.Estado == fleet.EstadoCorriendo {
+				t.Fatalf("%s: la muestra de FALLO se leyó como corriendo (%q): esta fila prueba el "+
+					"detalle de un servicio fallado, no de uno sano", c.plataforma, r.Salud.Estado)
+			}
+			if strings.TrimSpace(r.Salud.Detalle) == "" {
+				t.Errorf("%s: un servicio fallado no dice POR QUÉ. `fallado` a secas obliga a ir a "+
+					"la máquina, y las otras tres plataformas sí lo dicen — un detalle vacío es "+
+					"indistinguible de una plataforma que de verdad no sabe el motivo", c.plataforma)
+			}
+			if !strings.Contains(r.Salud.Detalle, c.esperaEn) {
+				t.Errorf("%s: el detalle %q no trae el dato que lo hace accionable (%q)",
+					c.plataforma, r.Salud.Detalle, c.esperaEn)
+			}
+		})
+	}
+}
