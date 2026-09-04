@@ -76,3 +76,41 @@ func TestElBinarioDiceElEsquemaAlQueApunta(t *testing.T) {
 		t.Errorf("EsquemaEsperado() = %d y la migración más alta declarada es %d: el guion de despliegue verificaría contra un número equivocado", got, mayor)
 	}
 }
+
+// COMPILAR PARA OTRA PLATAFORMA NO PUEDE TERMINAR EN ROJO.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// UN GUION QUE REPORTA FRACASO CUANDO TUVO ÉXITO ENSEÑA A IGNORAR SU CÓDIGO DE SALIDA
+//
+// `construir.sh` corría `"$SALIDA" version` incondicionalmente. Con `GOOS=windows` —que es como
+// se arma el agente de Windows desde este servidor— eso muere en «cannot execute binary file», y
+// con `set -e` el guion sale en rojo DESPUÉS de haber escrito el binario perfectamente. Ni
+// siquiera llegaba a imprimir el sha256, que es lo único que el otro lado necesita para comprobar
+// que le llegó lo que se compiló.
+//
+// Y el código de salida de ese guion es el que decide si un despliegue sigue.
+//
+// Sabotaje: sacar el `if` que compara GOOS/GOARCH con los del host.
+func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
+	crudo, err := os.ReadFile("../../deploy/construir.sh")
+	if err != nil {
+		t.Fatalf("no pude leer construir.sh: %v", err)
+	}
+	guion := string(crudo)
+
+	if !strings.Contains(guion, "GOHOSTOS") {
+		t.Error("construir.sh ya no compara la plataforma destino con la del host: una compilación cruzada vuelve a terminar en rojo sobre un binario que salió bien")
+	}
+	// El `sha256sum` tiene que quedar FUERA del condicional: es lo que el otro lado usa para
+	// verificar, y perderlo en una compilación cruzada es perder justo el dato del caso remoto.
+	i := strings.Index(guion, "GOHOSTOS")
+	j := strings.LastIndex(guion, "sha256sum")
+	if i < 0 || j < i {
+		t.Error("el sha256sum quedó antes de la comprobación de plataforma: en una compilación cruzada no se imprimiría")
+	}
+	// Y la comprobación tiene que envolver a `version`, no a otra cosa.
+	tramo := guion[i:]
+	if k := strings.Index(tramo, "sha256sum"); k < 0 || !strings.Contains(tramo[:k], `"$SALIDA" version`) {
+		t.Error("`$SALIDA version` no quedó adentro del condicional de plataforma")
+	}
+}

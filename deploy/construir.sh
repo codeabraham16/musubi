@@ -63,5 +63,25 @@ fi
 
 go build -ldflags "$LDFLAGS" -o "$SALIDA" ./cmd/musubi
 echo "✓ $SALIDA"
-"$SALIDA" version
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# EL BINARIO SE INTERROGA SÓLO SI ESTA MÁQUINA PUEDE EJECUTARLO
+#
+# `"$SALIDA" version` era incondicional, así que una compilación cruzada
+# —`GOOS=windows ./deploy/construir.sh flota musubi-nuevo.exe`, que es como se arma el agente de
+# Windows desde acá— moría en «cannot execute binary file» con `set -e` DESPUÉS de haber
+# escrito el binario perfectamente. El guion terminaba en rojo sobre un trabajo que salió bien, y
+# ni siquiera llegaba a imprimir el sha256, que es lo único que el otro lado necesita para
+# comprobar que le llegó lo que se compiló.
+#
+# Un guion que reporta fracaso cuando tuvo éxito es peor que uno que no reporta nada: enseña a
+# ignorar su código de salida, y ése es el que decide si un despliegue sigue.
+DESTINO_OS="${GOOS:-$(go env GOHOSTOS)}"
+DESTINO_ARCH="${GOARCH:-$(go env GOHOSTARCH)}"
+if [[ "$DESTINO_OS" == "$(go env GOHOSTOS)" && "$DESTINO_ARCH" == "$(go env GOHOSTARCH)" ]]; then
+  "$SALIDA" version
+else
+  echo "▶ compilación cruzada para $DESTINO_OS/$DESTINO_ARCH: no se puede correr acá, así que la"
+  echo "  versión no se comprueba. Se llama $VERSION y hay que verificarla EN LA MÁQUINA DESTINO."
+fi
 sha256sum "$SALIDA"
