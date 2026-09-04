@@ -518,3 +518,93 @@ func TestUnTierBInalcanzableNoFiguraVivo(t *testing.T) {
 		t.Error("tras alcanzarla, debería figurar en línea")
 	}
 }
+
+// EL FILTRO `device` DE LA BITÁCORA FILTRA DE VERDAD, Y HACEN FALTA DOS MÁQUINAS PARA SABERLO.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EL DEFECTO, Y POR QUÉ NINGUNA PRUEBA LO VIO
+//
+// Las tres tools de bitácora —`musubi_fleet_log`, `musubi_fleet_shell_log` y
+// `musubi_fleet_sessions`— pasaban `args.Device` (el NOMBRE que tipeó la persona) a un parámetro
+// que la capa de memoria llama `deviceID` y que termina en `AND device_id = ?`, un UUID. Nunca
+// matchea. `musubi_fleet_log {device:"gio"}` contestaba `total: 0` sobre una máquina que SÍ tiene
+// historia.
+//
+// Es el peor modo de falla que puede tener una bitácora: NO FALLA, miente en el sentido
+// tranquilizador — «acá no pasó nada». Y los dos parámetros son `string`, así que cruzarlos no da
+// error de compilación; es el mismo defecto que A78 («el inventario vacío»), una capa que dice
+// NOMBRE y otra que dice ID sin nada que las ate.
+//
+// LA PRUEBA NECESITA DOS MÁQUINAS CON HECHOS EN LAS DOS, y eso es todo el diseño. Con UNA sola
+// máquina y UN solo comando, filtrar por su nombre y filtrar por nada devuelven lo mismo, así que
+// la prueba pasa IGUAL con el filtro roto — que es exactamente por qué esto sobrevivió. Acá se
+// exige que el filtro DEJE AFUERA lo de la otra, que es lo único que distingue un filtro que
+// funciona de uno que se ignora.
+//
+// Sabotaje que la hace fallar: volver a pasar `args.Device` en vez del id resuelto.
+func TestElFiltroPorMaquinaDeLaBitacoraDejaAfueraLaOtra(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConExec(t, s, "casa", "pc-gio")
+	enrolarConExec(t, s, "casa", "nas")
+
+	p := conExec("casa")
+	ids := map[string]string{}
+	for _, maquina := range []string{"pc-gio", "nas"} {
+		res, e := callAsPrincipal(t, s, p, "musubi_fleet_exec", map[string]any{
+			"device": maquina, "argv": []string{"echo", maquina}, "no_wait": true,
+		})
+		if e != nil {
+			t.Fatalf("exec en %s: %+v", maquina, e)
+		}
+		id, _ := jsonOf(t, res)["command_id"].(string)
+		if id == "" {
+			t.Fatalf("no se devolvió command_id para %s", maquina)
+		}
+		ids[maquina] = id
+	}
+
+	// CONTROL POSITIVO: sin filtro están los dos. Sin esto, un fallo del encolado dejaría las dos
+	// aserciones de abajo pasando sobre una bitácora vacía.
+	todo := textOf(t, llamarComo(t, s, p, "musubi_fleet_log", map[string]any{}))
+	for _, maquina := range []string{"pc-gio", "nas"} {
+		if !strings.Contains(todo, ids[maquina]) {
+			t.Fatalf("sin filtro la bitácora no trae el comando de %s: la prueba no está mirando "+
+				"lo que cree\n%s", maquina, todo)
+		}
+	}
+
+	// Y AHORA EL FILTRO, en las dos direcciones: cada uno trae el suyo y NO trae el de la otra.
+	for _, c := range []struct{ pido, ajeno string }{{"pc-gio", "nas"}, {"nas", "pc-gio"}} {
+		t.Run(c.pido, func(t *testing.T) {
+			crudo := textOf(t, llamarComo(t, s, p, "musubi_fleet_log", map[string]any{"device": c.pido}))
+			if !strings.Contains(crudo, ids[c.pido]) {
+				t.Errorf("filtrando por %q no aparece SU comando: la bitácora contesta «acá no pasó "+
+					"nada» sobre una máquina que sí tiene historia\n%s", c.pido, crudo)
+			}
+			if strings.Contains(crudo, ids[c.ajeno]) {
+				t.Errorf("filtrando por %q apareció el comando de %q: el filtro no filtra",
+					c.pido, c.ajeno)
+			}
+		})
+	}
+
+	// UN NOMBRE QUE NO EXISTE ES UN ERROR, NO UNA LISTA VACÍA. Una lista vacía afirma «esa máquina
+	// no tuvo comandos» sobre algo que ni se miró — y es indistinguible del defecto que esta
+	// prueba cierra.
+	if _, e := callAsPrincipal(t, s, p, "musubi_fleet_log", map[string]any{"device": "no-existe"}); e == nil {
+		t.Error("un nombre inexistente devolvió una bitácora en vez de un error: eso se lee como " +
+			"«no pasó nada» y es justo lo que no se puede afirmar")
+	}
+}
+
+// llamarComo llama una tool COMO un principal y falla si la tool falla. Se llama distinto del
+// `mustCall` de methods_codegraph_test.go a propósito: ése no toma principal, y dos helpers con el
+// mismo nombre y distinta compuerta es la clase de confusión que este paquete no necesita.
+func llamarComo(t *testing.T, s *McpServer, p *Principal, tool string, args map[string]any) interface{} {
+	t.Helper()
+	res, e := callAsPrincipal(t, s, p, tool, args)
+	if e != nil {
+		t.Fatalf("%s(%v): %+v", tool, args, e)
+	}
+	return res
+}

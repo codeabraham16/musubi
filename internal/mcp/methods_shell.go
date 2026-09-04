@@ -296,7 +296,36 @@ func (s *McpServer) toolFleetShellLog(ctx context.Context, raw json.RawMessage) 
 		}
 	}
 
-	crudas, err := s.engine.BitacoraDeShell(proyecto, strings.TrimSpace(args.Device), tope*4)
+	// EL FILTRO `device` RECIBE UN NOMBRE Y LA BASE COMPARA CONTRA UN UUID.
+	//
+	// Se pasaba `args.Device` —lo que tipeó la persona, «gio»— a un parámetro llamado `deviceID`
+	// que termina en `AND device_id = ?`. Nunca matchea, así que la bitácora contestaba `total: 0`
+	// sobre una máquina que SÍ tiene historia. Es el peor modo de falla que puede tener una
+	// bitácora: no falla, MIENTE en el sentido tranquilizador — «acá no pasó nada».
+	//
+	// Los dos parámetros son `string`, así que cruzarlos no da error de compilación. Es el mismo
+	// defecto que A78 («el inventario vacío»): una capa dice NOMBRE, la de abajo dice ID, y nadie
+	// las ata.
+	//
+	// SE RESUELVE CONTRA EL MAPA QUE YA SE CALCULÓ, y no con otra consulta: ese mapa tiene
+	// adentro las dos preguntas que hay que hacer —existe en el proyecto Y esta credencial puede
+	// verla— así que un nombre que no está ahí es indistinguible entre «no existe» y «no podés»,
+	// que es exactamente el oráculo que este track evita en todas las demás tools.
+	filtroID := ""
+	if nombre := strings.TrimSpace(args.Device); nombre != "" {
+		for id, n := range nombrePorID {
+			if n == nombre {
+				filtroID = id
+				break
+			}
+		}
+		if filtroID == "" {
+			return nil, rpcErrorf(codeUnauthorized,
+				"no hay bitácora de shell de %q: o no existe en el proyecto %q, o tu credencial no tiene la capacidad `shell` sobre esa máquina", nombre, proyecto)
+		}
+	}
+
+	crudas, err := s.engine.BitacoraDeShell(proyecto, filtroID, tope*4)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}

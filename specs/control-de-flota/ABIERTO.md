@@ -638,6 +638,42 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-04 · EL FILTRO `device` DE LAS TRES BITÁCORAS COMPARABA UN NOMBRE CONTRA UN UUID.**
+
+`musubi_fleet_log {device:"gio"}` devolvía `total: 0`. Sin el filtro, la MISMA consulta traía los
+hechos de gio. Las tres tools de bitácora —`musubi_fleet_log`, `musubi_fleet_shell_log` y
+`musubi_fleet_sessions`— pasaban `args.Device`, el NOMBRE que tipeó la persona, a un parámetro que
+la capa de memoria llama `deviceID` y que termina en `AND device_id = ?`. Nunca matchea.
+
+**ES EL PEOR MODO DE FALLA QUE PUEDE TENER UNA BITÁCORA: no falla, MIENTE en el sentido
+tranquilizador.** «Acá no pasó nada» sobre una máquina que sí tiene historia es peor que un error,
+porque un error manda a mirar y esto manda a dejar de mirar. Y es la superficie donde esa mentira
+cuesta más: la que se consulta cuando hay que reconstruir qué se hizo en una máquina.
+
+**LOS DOS PARÁMETROS SON `string`, así que cruzarlos no da error de compilación.** Es la forma de
+A78 —«el inventario vacío»— otra vez: una capa dice NOMBRE, la de abajo dice ID, y nada las ata. Y
+la asimetría es la de siempre: OCHO tools resuelven el nombre antes de usarlo (exec, screen, shell,
+servicios, mantenimiento, cronología, contexto, renombrar) y estas tres se quedaron afuera.
+
+**EL ARREGLO NO LLAMA A `DevicePorNombre`**, aunque ése sea el patrón del resto: las tres tools YA
+calculan el conjunto de máquinas que esta credencial puede ver, así que el nombre se resuelve contra
+ese mapa. Sale sin consulta extra y da gratis la respuesta uniforme —un nombre que no está ahí es
+indistinguible entre «no existe» y «no podés»— que es el oráculo que el track evita en todas las
+demás. La de sesiones se resuelve POR PROYECTO y no con un mapa único, porque compuerta por
+MODALIDAD: la visibilidad depende de cada fila y no de la máquina.
+
+Y un nombre que no existe pasa a ser un **ERROR** y no una lista vacía, porque una lista vacía
+afirma «esa máquina no tuvo nada» sobre algo que ni se miró — que es el defecto mismo con otra cara.
+
+**LA PRUEBA NECESITA DOS MÁQUINAS CON HECHOS EN LAS DOS, y eso es todo su diseño.** Con UNA sola
+máquina y UN comando, filtrar por su nombre y no filtrar devuelven lo mismo, así que la prueba pasa
+IGUAL con el filtro roto — que es exactamente por qué esto sobrevivió. **Demostrado en vez de
+afirmado:** con el bug puesto, la prueba nueva se pone ROJA y las dos pruebas viejas de la bitácora
+siguen VERDES; y sacando la segunda máquina del test y volviendo a poner el bug, PASA.
+
+REGLA: una prueba de FILTRO necesita al menos dos sujetos y hechos en los dos. Un filtro que se
+ignora y un filtro que funciona son indistinguibles sobre un solo sujeto.
+
 **2026-09-04 · A82 · LA HERRAMIENTA DE DESPLIEGUE LE REEMPLAZABA EL INODO A TRES ARCHIVOS QUE UN
 CONTENEDOR TENÍA MONTADOS — Y EL PEOR NO ESTABA EN EL CABO.**
 
