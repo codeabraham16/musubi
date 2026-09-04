@@ -195,6 +195,55 @@ else
   aviso "Falta comparar las reglas de alerta contra el repo. Desde la máquina que lo tiene:"
   echo "    MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh"
 fi
+# ── Retención de los puntos de retorno (A87) ─────────────────────────────────────────────────
+#
+# Este script CREABA dos archivos en cada corrida y no borraba ninguno: el snapshot
+# `pre-redespliegue-*.db` y el binario apartado `musubi.antes-de-*`. El aviso de más abajo decía
+# «borralos recién cuando estés seguro», y un paso a mano que depende de que alguien se acuerde no
+# se hace: medido el 2026-09-04, **33 snapshots (4,8 GB) y 26 binarios (833 MB)**, el más viejo del
+# 28-08 — al lado de respaldos con 14 días de retención.
+#
+# NO ES SÓLO DISCO. La purga de `musubi-backup` NO los alcanza: su `find` nombra `memory.db.*` y
+# `principals.yaml.*`, y ninguno de estos dos matchea. Así que un secreto que la retención de 14
+# días debería haber vencido sobrevive acá indefinidamente, en una copia que nadie mira. Es
+# exactamente lo que dejó a A81 con dos archivos que ninguna retención habría barrido.
+#
+# SE ORDENA POR NOMBRE, NUNCA POR FECHA. `cp -a` preserva el mtime del ORIGEN, así que dos binarios
+# apartados en corridas distintas de la MISMA versión comparten mtime: medido en el servidor,
+# `musubi.antes-de-20260830-103806` y `...-110348` dicen los dos `10:28:24`. Con `ls -t` el desempate
+# entre esos dos es arbitrario y se borra uno cualquiera. El sello `YYYYmmdd-HHMMSS` del nombre
+# ordena lexicográficamente igual que cronológicamente, y no depende de qué preservó un `cp`.
+#
+# SE PODA ACÁ Y NO ANTES: mientras el despliegue corre, estos archivos SON la vuelta atrás. Si algo
+# murió antes, el script salió por `die` y no llegó hasta acá — que es la dirección segura.
+RETENER="${REDESPLIEGUE_RETENER:-5}"
+podar_puntos_de_retorno(){ # $1 etiqueta · $2 directorio · $3 patrón · $4 el de ESTA corrida
+  local etiqueta="$1" dir="$2" patron="$3" actual="$4"
+  local -a hay
+  mapfile -t hay < <(find "$dir" -maxdepth 1 -name "$patron" -type f -printf '%f\n' 2>/dev/null | sort)
+  local total=${#hay[@]}
+  if (( total <= RETENER )); then
+    log "$etiqueta: $total en disco, se retienen $RETENER — nada que podar"
+    return 0
+  fi
+  local cuantos=$(( total - RETENER )) n=0 f
+  for f in "${hay[@]:0:$cuantos}"; do
+    # Guarda de último recurso: con REDESPLIEGUE_RETENER=0 el más nuevo también caería en la lista,
+    # y el más nuevo es el punto de retorno de la corrida que acaba de pasar.
+    if [[ "$dir/$f" == "$actual" ]]; then
+      aviso "$etiqueta: NO se borra el de esta corrida ($f)"
+      continue
+    fi
+    rm -f -- "$dir/$f" && n=$(( n + 1 ))
+  done
+  ok "$etiqueta: borrados $n, retenidos los $RETENER más nuevos (de $total)"
+}
+
+echo
+log "podando puntos de retorno viejos (retención $RETENER; se cambia con REDESPLIEGUE_RETENER)"
+podar_puntos_de_retorno "snapshots pre-despliegue" "$(dirname "$RESPALDO")"  'pre-redespliegue-*.db' "$RESPALDO"
+podar_puntos_de_retorno "binarios apartados"       "$(dirname "$BIN_VIEJO")" 'musubi.antes-de-*'     "$BIN_VIEJO"
+
 echo
 aviso "El punto de retorno queda guardado. Para volver atrás A MANO:"
 echo "    systemctl stop ${SERVICIOS[*]}"
@@ -202,7 +251,8 @@ echo "    cp -a $BIN_VIEJO $DESTINO"
 echo "    cp -a $RESPALDO $BASE && rm -f $BASE-wal $BASE-shm && chown musubi:musubi $BASE"
 echo "    systemctl start ${SERVICIOS[*]}"
 echo
-aviso "Borralos recién cuando estés seguro: el esquema NO vuelve solo, y sin ese .db no hay vuelta."
+aviso "Los DE ESTA CORRIDA quedan: el esquema NO vuelve solo, y sin ese .db no hay vuelta. Los
+       anteriores más allá de los $RETENER más nuevos ya los podó este script (A87)."
 
 # El exit va DESPUÉS del punto de retorno a propósito: quien corre esto necesita las instrucciones
 # de vuelta atrás en pantalla aunque la verificación haya salido mal — sobre todo si salió mal.
