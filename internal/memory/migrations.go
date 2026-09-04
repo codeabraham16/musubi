@@ -1633,6 +1633,22 @@ func schemaMigrations() []migration {
 	}
 }
 
+// EsquemaEsperado es la versión de esquema a la que apunta ESTE binario.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EXISTE PARA QUE EL GUION DE DESPLIEGUE NO TENGA QUE ADIVINARLA
+//
+// `deploy/redesplegar-cerebro.sh` verificaba la migración con un número TIPEADO A MANO
+// (`[[ "$ESQUEMA" -ge 37 ]]`). Entre la migración 37 y la 44 esa comprobación siguió pasando y
+// dejó de verificar nada: 44 ≥ 37 es cierto, y también lo sería si la migración se hubiera
+// quedado a mitad de camino en la 40. Una comprobación que no puede ponerse roja se ve idéntica
+// a una que funciona — que es el defecto que este repo persigue en todos lados menos, hasta hoy,
+// en la herramienta que lo despliega.
+//
+// Derivada del binario, la comprobación se actualiza sola cada vez que se agrega una migración,
+// y nadie tiene que acordarse.
+func EsquemaEsperado() int { return latestSchemaVersion() }
+
 // latestSchemaVersion es la versión a la que apunta este binario (la mayor migración).
 func latestSchemaVersion() int {
 	ms := schemaMigrations()

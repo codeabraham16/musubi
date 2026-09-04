@@ -172,7 +172,7 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría
 		// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido
 		// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.
-		s.encolarAvisoDePantalla(d, p)
+		s.encolarAvisoDeAcceso(d, p, avisoPantalla)
 	}
 
 	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
@@ -566,14 +566,28 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 	return fleet.SesionPantalla{}, false, nil
 }
 
-// encolarAvisoDePantalla le manda al agente el aviso que `avisa` promete (A57).
+// encolarAvisoDeAcceso es el ÚNICO lugar que le manda al agente el aviso que `avisa` promete (A57).
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
-// EL TEXTO NOMBRA A QUIEN ENTRA, Y ESO ES EL AVISO
+// ESTABA ESCRITO DOS VECES, Y POR ESO LA SHELL SE QUEDÓ SIN AVISO (A83)
+//
+// Había una copia en el camino de pantalla y otra en el de exec, idénticas salvo el texto. El de
+// shell nunca se escribió: `toolFleetShell` sólo llamaba a `avisarUnaVezPorDevice`, que es la
+// rama de «esta máquina NO sabe notificar» y deja una línea en el log del cerebro. O sea que en
+// una máquina que SÍ sabe notificar, abrir una TERMINAL no avisaba nada — y es el camino con más
+// autoridad de los tres, porque una shell interactiva se saltea cualquier allowlist de comandos.
+//
+// La asimetría estaba invertida respecto de lo que cada camino puede hacer, y el motivo es
+// mecánico: con el bloque copiado, agregar un tercer camino exige acordarse de copiarlo otra vez.
+// Con uno solo, el que olvida no compila.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL TEXTO NOMBRA A QUIEN ENTRA Y QUÉ ESTÁ HACIENDO, Y ESO ES EL AVISO
 //
 // «Alguien está viendo tu pantalla» no le sirve a nadie. Lo que convierte esto en información es
 // QUIÉN: un aviso sin nombre no se puede accionar —no hay a quién preguntarle— y se vuelve ruido
-// que la persona aprende a cerrar sin leer.
+// que la persona aprende a cerrar sin leer. Y `haciendo` es lo que le permite a quien lo lee
+// distinguir una pantalla de una terminal de un comando suelto, que se responden distinto.
 //
 // El nombre del principal es entrada de configuración (sale de principals.yaml, no de la red),
 // pero igual se acota: termina interpolado en un diálogo del escritorio de otra persona.
@@ -582,23 +596,30 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 // el grado siguiente— y convertir un fallo de la cola en un acceso denegado le daría a `avisa` la
 // semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
 // por eso queda la línea.
-func (s *McpServer) encolarAvisoDePantalla(d fleet.Device, p *Principal) {
+func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, haciendo string) {
 	quien := nombrePrincipal(p)
 	if quien == "" {
 		quien = "un operador"
 	}
-	texto := fmt.Sprintf("Musubi: %s está abriendo una sesión de pantalla en esta máquina.",
-		fleet.RecortarRunas(quien, 64))
+	texto := fmt.Sprintf("Musubi: %s %s en esta máquina.", fleet.RecortarRunas(quien, 64), haciendo)
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
 		Origen:  fleet.OrigenPersona,
 		Argv:    []string{comandoAviso, texto},
 		Timeout: fleet.ComandoTimeoutDefault,
 	}); err != nil {
-		logx.Warn("flota: no se pudo encolar el aviso al usuario; la pantalla se abre igual",
-			"device", d.Name, "error", err)
+		logx.Warn("flota: no se pudo encolar el aviso al usuario; el acceso sigue igual",
+			"device", d.Name, "haciendo", haciendo, "error", err)
 	}
 }
+
+// Lo que dice cada camino. Son constantes y no literales en el sitio para que las tres frases se
+// lean juntas: si dos se parecen demasiado, el aviso deja de distinguir qué está pasando.
+const (
+	avisoPantalla = "está abriendo una sesión de pantalla"
+	avisoShell    = "está abriendo una TERMINAL"
+	avisoExec     = "está ejecutando comandos"
+)
 
 // toolFleetConsent fija la política de consentimiento de una máquina.
 //

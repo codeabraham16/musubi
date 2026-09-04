@@ -35,6 +35,47 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 — A83 CERRADO, Y LA HERRAMIENTA DE DESPLIEGUE DEJÓ DE VERIFICAR CON UN NÚMERO
+> TIPEADO A MANO.**
+>
+> **`avisa` sobre una shell ya avisa.** El eje promete que en `avisa` se le notifica a quien está
+> usando la máquina; exec y pantalla lo cumplían y la shell no: sólo llamaba a
+> `avisarUnaVezPorDevice`, que es la rama de «esta máquina NO sabe notificar» y deja una línea en
+> el log del cerebro. En una máquina que SÍ sabe, abrir una TERMINAL no avisaba nada — el camino
+> con más autoridad de los tres era el único mudo.
+>
+> **El motivo era mecánico, y por eso el arreglo no fue agregar la rama.** El bloque que encola el
+> aviso estaba COPIADO en pantalla y en exec, idéntico salvo el texto, así que sumar un tercer
+> camino exigía acordarse de copiarlo. Ahora hay un solo `encolarAvisoDeAcceso` y las tres frases
+> viven juntas como constantes: si dos se parecen demasiado, el aviso deja de distinguir qué está
+> pasando, y eso se ve al leerlas una debajo de la otra. Es la misma enfermedad que la otra sesión
+> barrió esta noche en los contratos del latido: **lo que está escrito dos veces se separa**.
+>
+> **La shell no lleva estrangulador, al revés que exec**, y no es olvido: una shell es una SESIÓN
+> —empieza, dura y termina—, así que el aviso es por sesión y no por tecla. No hay ruido que
+> administrar. Con su control negativo: una máquina que no declara saber notificar NO recibe una
+> cola que nadie va a atender.
+>
+> **Y la comprobación de migración del redespliegue no verificaba nada desde hacía siete
+> migraciones.** `redesplegar-cerebro.sh` decía `[[ "$ESQUEMA" -ge 37 ]]`, tipeado cuando la última
+> era la 37. Con la 44 esa línea seguía pasando —y también habría pasado con la migración cortada
+> en la 40—. **Nadie lo notó porque una comprobación que no puede ponerse roja se ve idéntica a una
+> que funciona**, que es el defecto que este repo persigue en todos lados menos, hasta hoy, en la
+> herramienta que lo despliega.
+>
+> Ahora el binario dice a qué esquema apunta (`musubi version --esquema`, derivado de la lista de
+> migraciones) y el guion compara contra eso. **Se exige IGUALDAD y no `-ge`**: un esquema MAYOR
+> significa que la base la migró un binario más nuevo —o sea que este despliegue es un rollback
+> silencioso— y `applyMigrations` se va a negar a abrirla; que eso se vea acá, y no como un cerebro
+> que no arranca, ahorra el peor diagnóstico posible. Un binario viejo que no sepa contestar no
+> tira abajo el despliegue: lo DECLARA y sigue, porque el resto del bloque queda sin verificar.
+>
+> **Y hay una prueba que impide que vuelva a quedarse viejo**: falla si alguien compara `$ESQUEMA`
+> contra un número, o si el guion deja de preguntarle al binario. Un comentario que diga «acordate
+> de actualizar esto» tiene el mismo destino que el número que reemplaza.
+>
+> Cuatro sabotajes, cuatro rojos. **20 cabos.**
+>
 > **2026-09-03 (después del cierre) — MIS SIETE SABOTAJES NO ALCANZABAN, Y UNO DE LOS AGUJEROS
 > ERA UN CANDADO.**
 >
@@ -504,7 +545,6 @@
 | A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
 | A82 | **La herramienta de despliegue documentada rompe el despliegue: `preparar.sh` contradice al README de su propio directorio** | `deploy/README.md` documenta desde `4cf31b3` que al reemplazar un archivo bind-montado hay que usar `cat >` y **nunca `install` ni `cp`**: un archivo nuevo nace con la etiqueta SELinux del directorio del usuario y el contenedor deja de leerlo, con una recarga que contesta **HTTP 500** sobre un archivo cuyo dueño y modo POSIX son perfectos. **La doc se arregló y la herramienta no**: `deploy/docker/preparar.sh` usa `install -m 0644` en SIETE lugares (31, 32, 49, 68, 72, 82, 87) y un `sed -i` en la 42. **El `sed -i` es el peor de los ocho** y por partida doble: reemplaza el inodo igual que `install` —pero quien lee el script ve los `install` y asume que el problema son ésos— y está en el camino del `chat_id`, o sea que rompe justo el canal que se está configurando. Lo encontró la otra sesión el 2026-09-03 al desplegar `alertmanager.yml`, y por eso lo hizo a mano. **La salida no es cambiar `install` por `cat >` y listo**: `cat >` exige que el destino YA EXISTA, así que `preparar.sh` necesita dos caminos —una primera instalación que cree el archivo (y ahí `install` está bien) y un reemplazo distinto—, o la primera corrida en una máquina limpia falla. Mientras tanto **la herramienta documentada no se puede usar para redesplegar**, que es exactamente cuando alguien la va a buscar. | **sin asignar** |
-| A83 | **`avisa` sobre una shell no le avisa a nadie** | El eje de consentimiento promete que en `avisa` «se le notifica a quien está usando la máquina, y no puede negarse». Los tres caminos lo aplican y **uno lo aplica al revés**: `aplicarConsentimientoDeExec` encola el aviso (`encolarAvisoDeExecConVentana`) y `toolFleetScreen` también (`encolarAvisoDePantalla`), pero `toolFleetShell` **sólo llama a `avisarUnaVezPorDevice`**, que es la rama de «esta máquina NO sabe notificar» y deja una línea en el log del cerebro. O sea: en una máquina que SÍ sabe notificar, abrir una shell no notifica nada. **La asimetría está invertida respecto de la autoridad de cada camino**: una shell interactiva se saltea cualquier allowlist de comandos, así que es justo el acceso del que la persona sentada enfrente más tendría que enterarse, y es el único de los tres que no se lo dice. Encontrado el 2026-09-03 al ubicar la puerta de cuatro ojos en ese mismo `switch`; **no se arregló en ese commit a propósito**, para no mezclar el sabotaje de una feature con el de otra. El arreglo no es copiar `encolarAvisoDePantalla`: su texto dice «ver esta pantalla», así que hace falta el equivalente para una terminal, con su prueba. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -532,6 +572,8 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+- **A83 — `avisa` sobre una shell no le avisaba a nadie** (cerrado 2026-09-04). El eje promete que en `avisa` se le notifica a quien usa la máquina; exec y pantalla encolaban el aviso y `toolFleetShell` sólo llamaba a `avisarUnaVezPorDevice`, que es la rama de «no sabe notificar». La causa era la DUPLICACIÓN: el bloque que encola estaba copiado en dos caminos, así que el tercero exigía acordarse de copiarlo. Se unificó en `encolarAvisoDeAcceso` y la shell recibió su rama, sin estrangulador porque es una sesión y no un comando. Con control negativo (una máquina que no sabe notificar no recibe cola).
 
 **2026-09-02 (sáb) · UNA MÁQUINA CAÍDA DEJA DE PRODUCIR TRES ALERTAS.**
 

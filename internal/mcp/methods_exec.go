@@ -11,12 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"musubi/internal/fleet"
-	"musubi/internal/logx"
 )
 
 // esperaPasoExec es cada cuánto se relee el comando mientras se espera su resultado.
@@ -93,23 +91,10 @@ func (s *McpServer) encolarAvisoDeExecConVentana(d fleet.Device, p *Principal) {
 	}
 	s.avisosDados.Store(clave, ahora)
 
-	quien := nombrePrincipal(p)
-	if quien == "" {
-		quien = "un operador"
-	}
-	// El texto dice QUÉ está pasando y no sólo quién: «está ejecutando comandos» es lo que le
-	// permite a quien lo lee distinguir esto de una sesión de pantalla, que avisa distinto.
-	texto := fmt.Sprintf("Musubi: %s está ejecutando comandos en esta máquina.",
-		fleet.RecortarRunas(quien, 64))
-	if _, err := s.engine.EncolarComando(fleet.Comando{
-		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
-		Origen:  fleet.OrigenPersona,
-		Argv:    []string{comandoAviso, texto},
-		Timeout: fleet.ComandoTimeoutDefault,
-	}); err != nil {
-		logx.Warn("flota: no se pudo encolar el aviso al usuario; el comando se ejecuta igual",
-			"device", d.Name, "error", err)
-	}
+	// El encolado vive en encolarAvisoDeAcceso, uno solo para los tres caminos: estaba copiado
+	// acá y en pantalla, y ésa es la razón mecánica por la que la shell se quedó sin aviso (A83).
+	// Lo que SÍ es propio de exec es el estrangulador de arriba.
+	s.encolarAvisoDeAcceso(d, p, avisoExec)
 }
 
 func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {

@@ -162,3 +162,79 @@ func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
 		t.Errorf("pasada la ventana quedaron %d avisos, esperaba 2: el estrangulador se volvió un silencio permanente", n)
 	}
 }
+
+// A83 CERRADO — `avisa` SOBRE UNA SHELL POR FIN AVISA.
+//
+// Era el hueco más raro del eje: exec y pantalla encolaban el aviso al usuario, y `toolFleetShell`
+// sólo llamaba a `avisarUnaVezPorDevice`, que es la rama de «esta máquina NO sabe notificar» y deja
+// una línea en el log del cerebro. O sea que en una máquina que SÍ sabe notificar, abrir una
+// TERMINAL no avisaba nada — y es el camino con más autoridad de los tres, porque una shell
+// interactiva se saltea cualquier allowlist de comandos. La asimetría estaba al revés.
+//
+// El motivo era mecánico y por eso el arreglo no es sólo agregar la rama: el bloque que encola
+// estaba COPIADO en pantalla y en exec, así que sumar un tercer camino exigía acordarse de
+// copiarlo. Ahora hay un solo encolarAvisoDeAcceso.
+//
+// Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de toolFleetShell.
+func TestElAvisaDeLaShellLeAvisaAQuienEstaEnLaMaquina(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := enrolarConShell(t, s, "casa", "nas")
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+		t.Fatal(err)
+	}
+	// El agente declara que SABE avisar; si no, el camino correcto es el del log.
+	if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// La shell puede fallar al conectar (no hay SSH real en la prueba); lo que se mide es la
+	// COLA, no que el prompt abra. El aviso se encola antes de conectar a propósito: dice
+	// «alguien está por entrar», no «alguien entró».
+	_, _ = callAsPrincipal(t, s, conShell("casa"), "musubi_fleet_shell", map[string]any{"device": "nas"})
+
+	cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+	if err != nil {
+		t.Fatalf("no se pudo leer la cola: %v", err)
+	}
+	var textos []string
+	for _, c := range cmds {
+		if len(c.Argv) > 1 && c.Argv[0] == comandoAviso {
+			textos = append(textos, c.Argv[1])
+		}
+	}
+	if len(textos) == 0 {
+		t.Fatal("abrir una TERMINAL en una máquina en `avisa` no le avisó a nadie: el eje dice que se le notifica y no se le notifica (A83)")
+	}
+	// Y EL TEXTO TIENE QUE DISTINGUIR QUÉ ESTÁ PASANDO. Un aviso que dice lo mismo para una
+	// pantalla, una terminal y un comando suelto no le sirve a quien lo lee para decidir nada:
+	// las tres se responden distinto.
+	if !strings.Contains(textos[0], "TERMINAL") {
+		t.Errorf("el aviso no dice que lo que se abre es una terminal: %q", textos[0])
+	}
+	if !strings.Contains(textos[0], "mirador") && !strings.Contains(textos[0], "op") {
+		t.Logf("aviso emitido: %q", textos[0])
+	}
+}
+
+// Y UNA MÁQUINA QUE NO SABE AVISAR NO RECIBE UNA COLA QUE NO PUEDE ATENDER. Es el control
+// negativo de la de arriba: sin él, «avisa siempre» pasaría las dos.
+func TestLaShellNoEncolaAvisosEnUnaMaquinaQueNoSabeNotificar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	d := enrolarConShell(t, s, "casa", "nas")
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+		t.Fatal(err)
+	}
+	// puede_preguntar queda en false, que es el default honesto: nadie lo midió.
+
+	_, _ = callAsPrincipal(t, s, conShell("casa"), "musubi_fleet_shell", map[string]any{"device": "nas"})
+
+	cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+	if err != nil {
+		t.Fatalf("no se pudo leer la cola: %v", err)
+	}
+	for _, c := range cmds {
+		if len(c.Argv) > 0 && c.Argv[0] == comandoAviso {
+			t.Fatal("se le encoló un aviso a una máquina que no declara saber notificar: la cola se llena de algo que nadie va a atender, y el log deja de ser la constancia de que no se pudo")
+		}
+	}
+}
