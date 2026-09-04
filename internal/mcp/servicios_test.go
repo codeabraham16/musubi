@@ -942,3 +942,59 @@ func TestUnServicioOciosoNoEmiteLaSerieDeUp(t *testing.T) {
 		t.Error("un servicio FALLADO dejó de exportar up=0: ése es justo el que la alerta tiene que ver")
 	}
 }
+
+// UN SERVICIO `desconocido` TAMPOCO EMITE `service_up`, POR UNA RAZÓN DISTINTA DE LA DE OCIOSO.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// Ocioso es «la pregunta no aplica». Desconocido es «NO SE SABE»: el servicio está declarado y
+// todavía no llegó ninguna muestra, o la que llegó no se pudo interpretar —el `default` de los
+// cuatro parsers cae acá—. El exportador lo mandaba a `0` junto con `detenido` y `fallado`, o sea
+// AFIRMANDO «no está corriendo» sobre lo único que el dominio declara no medido, y `ServicioCaido`
+// lo anuncia como una caída que nadie vio caer.
+//
+// Es la misma lección de A70 en el estado de al lado, y el comentario del exportador ya nombraba
+// la distinción —«No es «no sé» —eso es `desconocido`»— mientras el `default` la borraba. Un
+// `EstadoActual()` con Salud nil devuelve exactamente esto, así que la ruta no es teórica: un
+// servicio declarado a mano y todavía sin reportar alertaba solo.
+//
+// LO QUE NO SE SABE NO QUEDA CALLADO: `service_last_report_seconds` falta o crece, que es la forma
+// correcta de contar una ausencia — no un 0 con cara de dato.
+//
+// Sabotaje: devolver (0, true) para EstadoDesconocido en seriesDeServicio.
+func TestUnServicioDesconocidoNoEmiteLaSerieDeUp(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	cuerpo := cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "vivo.service", Clase: "windows", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "misterio.service", Clase: "windows", Salud: saludViva(fleet.EstadoDesconocido)},
+		fleet.ReporteServicio{Nombre: "roto.service", Clase: "windows", Salud: saludViva(fleet.EstadoFallado)},
+	)
+	if code, body := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpo); code != http.StatusOK {
+		t.Fatalf("el latido con servicios devolvió %d: %s", code, body)
+	}
+
+	out := exportar(t, s, nil)
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "musubi_fleet_service_up{") && strings.Contains(l, `"misterio.service"`) {
+			t.Errorf("se exportó service_up para un servicio DESCONOCIDO: %q — el exportador está afirmando «no corre» sobre algo que el dominio declara no medido, y ServicioCaido lo anuncia como una caída", l)
+		}
+	}
+	// Los dos controles: sin ellos, un exportador que no emitiera NADA pasaría lo de arriba.
+	var vivo, roto bool
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "musubi_fleet_service_up{") {
+			if strings.Contains(l, `"vivo.service"`) && strings.HasSuffix(l, " 1") {
+				vivo = true
+			}
+			if strings.Contains(l, `"roto.service"`) && strings.HasSuffix(l, " 0") {
+				roto = true
+			}
+		}
+	}
+	if !vivo {
+		t.Error("el servicio corriendo no salió en 1: la prueba no probaría nada")
+	}
+	if !roto {
+		t.Error("el servicio FALLADO no salió en 0: esconder lo desconocido no puede esconder lo caído, que es lo que la alerta existe para ver")
+	}
+}

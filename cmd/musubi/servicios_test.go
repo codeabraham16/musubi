@@ -736,3 +736,62 @@ func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
 			"darwin y el de «el resto»): cambió la forma del paquete y esta guarda dejó de mirar", mirados)
 	}
 }
+
+// UN SERVICIO VIVO NO SE DIBUJA `fallado` POR UNA CAÍDA DE LA QUE YA SE RECUPERÓ.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA REGLA YA ESTABA ESCRITA, EN LA PLATAFORMA DE AL LADO
+//
+// `estadoDeWindows` la dice en su propio comentario: «el código de salida manda sobre el estado, y
+// SÓLO cuando no está corriendo». launchd era la única de las cuatro plataformas que no la
+// aplicaba: el `if` del código pisaba, sin condición, el `corriendo` que acababa de poner el PID.
+//
+// La segunda columna de `launchctl list` es el ÚLTIMO estado de salida, no el actual. launchd
+// reinicia lo que tiene `KeepAlive`, así que un servicio que se cayó una vez, volvió solo y hoy
+// tiene PID sigue mostrando ese código PARA SIEMPRE. Quedaba `fallado` mientras funcionaba, y de
+// ahí salía un `musubi_fleet_service_up 0` sobre algo vivo: la falla más cara de un monitor, que
+// es la que reporta una caída donde no la hubo.
+//
+// EL NÚMERO NO SE PIERDE: viaja en Detalle también cuando está vivo, porque «se recuperó de una
+// salida 78» es justo lo que uno quiere ver al lado de un servicio que anda a los tumbos. Lo que
+// cambia es el VEREDICTO, no el dato.
+//
+// Sabotaje: sacar el `if !vivo` de parsearLaunchctl → com.ejemplo.revivido vuelve a `fallado`.
+func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
+	// Formato real: PID, último código de salida, etiqueta. La fila del medio es el caso: tiene
+	// PID (está corriendo AHORA) y arrastra el código de una caída anterior.
+	salida := "PID\tStatus\tLabel\n" +
+		"431\t0\tcom.ejemplo.sano\n" +
+		"512\t78\tcom.ejemplo.revivido\n" +
+		"-\t78\tcom.ejemplo.muerto\n"
+	porNombre := map[string]fleet.ReporteServicio{}
+	for _, r := range parsearLaunchctl(salida, time.Now()) {
+		porNombre[r.Nombre] = r
+	}
+
+	revivido, hay := porNombre["com.ejemplo.revivido"]
+	if !hay {
+		t.Fatal("no se parseó com.ejemplo.revivido: la prueba no probaría nada")
+	}
+	if revivido.Salud.Estado != fleet.EstadoCorriendo {
+		t.Errorf("un servicio CON PID quedó %q por un código de salida viejo: eso se exporta como service_up 0 y ServicioCaido anuncia una caída sobre algo que está corriendo",
+			revivido.Salud.Estado)
+	}
+	if revivido.Salud.PID == nil || *revivido.Salud.PID != 512 {
+		t.Errorf("el PID no sobrevivió: %v", revivido.Salud.PID)
+	}
+	// El número sigue estando; lo que cambió es el veredicto, no el dato.
+	if revivido.Salud.Detalle != "salida=78" {
+		t.Errorf("se perdió el detalle de la caída anterior: %q — «se recuperó de una salida 78» es lo que hace accionable a un servicio que anda a los tumbos", revivido.Salud.Detalle)
+	}
+
+	// Y LO QUE NO PUEDE CAMBIAR: apagado, el código SÍ manda. Sin este control, «no mires nunca
+	// el código de salida» pasaría el test de arriba y perdería la única señal de que murió.
+	muerto := porNombre["com.ejemplo.muerto"]
+	if muerto.Salud.Estado != fleet.EstadoFallado {
+		t.Errorf("un servicio SIN PID y con salida 78 quedó %q, esperaba fallado: apagado, el código es la pregunta que importa", muerto.Salud.Estado)
+	}
+	if sano := porNombre["com.ejemplo.sano"]; sano.Salud.Estado != fleet.EstadoCorriendo || sano.Salud.Detalle != "" {
+		t.Errorf("el servicio sano quedó %q con detalle %q", sano.Salud.Estado, sano.Salud.Detalle)
+	}
+}
