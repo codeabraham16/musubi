@@ -18,6 +18,9 @@ package mcp
 // «se ve bien».
 
 import (
+	"fmt"
+	"math"
+	"musubi/internal/fleet"
 	"os"
 	"regexp"
 	"strings"
@@ -190,5 +193,101 @@ func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.
 		if !strings.Contains(texto, quiero) {
 			t.Errorf("preparar.sh no dice %q: presentaría como respaldo algo que vive en el mismo disco que el original", quiero)
 		}
+	}
+}
+
+// EL COLECTOR DEL RELAY TIENE QUE PRODUCIR UN REPORTE QUE EL CEREBRO ACEPTE CON TODO CAÍDO.
+//
+// Es la quinta cosa cuyo incumplimiento no rompe nada visible, y era la peor de las cinco.
+//
+// El colector contaba `atendidas` y `fallidas` como DISJUNTAS —una por puerto que contestó, la
+// otra por puerto que no— y el cerebro exige que las fallidas sean un SUBCONJUNTO (Rendimiento.
+// Valida). Con dos puertos caídos salía «atendidas 1, fallidas 2»; con los tres, «0 y 3». Los dos
+// rechazados. Y rechazado NO es «se pierde el rendimiento»: `Salud.Valida()` falla y el UPDATE de
+// last_health y last_report no se hace, así que el cerebro se queda con la última salud BUENA:
+//
+//	· musubi_fleet_service_up{service="relay-rustdesk"} se queda en 1 con el relay muerto, y la
+//	  alerta ServicioCaido no puede disparar NUNCA;
+//	· el panel dibuja el rendimiento congelado del relay sano;
+//	· lo único que suena, 15 minutos tarde, acusa al COLECTOR de haber dejado de reportar —
+//	  siendo que reporta cada minuto y es el cerebro el que lo tira.
+//
+// Y es el único caso para el que ese colector existe: un contenedor levantado que no atiende, que
+// para el agente se ve idéntico a sano.
+//
+// LA PRUEBA MIRA EL TEXTO DEL .py PORQUE LA SUITE ES GO Y EL COLECTOR ES PYTHON, que es el mismo
+// recurso que ya usan las guardas del instalador de Windows y del pin del guion de backup. Es un
+// amarre pobre y es el que hay; por eso además se ejercita el contrato de verdad abajo.
+//
+// Sabotaje que la hace fallar: volver a contar `atendidas` sólo sobre los puertos que contestaron.
+func TestElColectorDelRelayCuentaLasSondasIntentadasYNoLasQueContestaron(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/colectores/reportar-relay.py")
+	if err != nil {
+		t.Fatalf("no se pudo leer el colector del relay: %v", err)
+	}
+	src := string(b)
+	for _, q := range []struct{ frag, porque string }{
+		{`"atendidas": len(PUERTOS)`, "atendidas son las sondas INTENTADAS; contar sólo las que contestaron hace que fallidas las supere y el cerebro descarte el reporte entero"},
+		{`"fallidas": len(caidos)`, "fallidas tiene que ser el subconjunto que falló de esas mismas sondas"},
+	} {
+		if !strings.Contains(src, q.frag) {
+			t.Errorf("el colector del relay ya no dice %s: %s", q.frag, q.porque)
+		}
+	}
+	// Y que no vuelva el contador disjunto que causaba el rechazo.
+	if strings.Contains(src, "atendidas += 1") {
+		t.Error("volvió el contador disjunto `atendidas += 1`: cuenta los puertos que contestaron, " +
+			"no las sondas hechas, y con eso fallidas supera a atendidas en cuanto se cae un puerto")
+	}
+}
+
+// Y EL CONTRATO SE EJERCITA DE VERDAD, no sólo se lee.
+//
+// La guarda de arriba es texto; ésta pasa por Rendimiento.Valida() y por TasaDeError(), que es lo
+// que el cerebro hace con el reporte. Sin ella, alguien podría cambiar la regla del cerebro y las
+// dos pruebas quedarían diciendo cosas distintas sin que ninguna se pusiera roja.
+//
+// Sabotaje que la hace fallar: hacer que TasaDeError devuelva ok=false con atendidas>0, o apretar
+// la regla del desglose a `total >= Atendidas` (con los tres puertos caídos el desglose IGUALA a
+// las sondas, así que ahí un `>=` rechazaría el reporte legítimo).
+//
+// Y uno que NO la hace fallar, anotado porque lo probé y me equivoqué: QUITAR el chequeo de
+// subconjunto de Valida la deja en verde, y hace bien — esta prueba afirma que el reporte se
+// ACEPTA, y quitar una regla sólo puede aceptar más. La que custodia ese chequeo es la de arriba,
+// que mira el colector. Un doc que nombra un sabotaje que no funciona es exactamente la prueba
+// decorativa contra la que existe esta costumbre, así que queda dicho cuál es cuál.
+func TestElReporteDelRelayConLosTresPuertosCaidosLoAceptaElCerebro(t *testing.T) {
+	const sondas = 3
+	for _, c := range []struct {
+		nombre  string
+		caidos  int
+		tasaEsp float64
+	}{
+		{"todo sano", 0, 0},
+		{"un puerto caído", 1, 100.0 / 3},
+		{"dos caídos", 2, 200.0 / 3},
+		{"el relay entero caído", 3, 100},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			desglose := map[string]int{}
+			for i := 0; i < c.caidos; i++ {
+				desglose[fmt.Sprintf("puerto_2111%d", i)] = 1
+			}
+			r := &fleet.Rendimiento{
+				VentanaSeg: 60, Atendidas: sondas, Fallidas: c.caidos, Desglose: desglose,
+			}
+			if err := r.Valida(); err != nil {
+				t.Fatalf("el cerebro rechazaría el reporte con %d puerto(s) caído(s): %v — y "+
+					"rechazarlo NO pierde el rendimiento: deja la última salud BUENA en la base, "+
+					"así que ServicioCaido no puede disparar nunca", c.caidos, err)
+			}
+			tasa, hay := r.TasaDeError()
+			if !hay {
+				t.Fatal("no hay tasa de error con sondas intentadas > 0")
+			}
+			if math.Abs(tasa-c.tasaEsp) > 0.01 {
+				t.Errorf("tasa de error %.2f%%, se esperaba %.2f%%", tasa, c.tasaEsp)
+			}
+		})
 	}
 }

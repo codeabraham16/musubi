@@ -102,25 +102,52 @@ def main():
     if not token:
         return 2
 
-    atendidas, fallidas, latencias, caidos = 0, 0, [], []
+    latencias, caidos = [], []
     for p in PUERTOS:
         ok, ms = probar(HOST, p)
         if ok:
-            atendidas += 1
             latencias.append(ms)
         else:
-            fallidas += 1
             caidos.append(p)
 
     # EL ESTADO SALE DE LOS PUERTOS, no de si el script anduvo. `fallado` con uno solo caído y no
     # con todos: hbbs y hbbr son procesos distintos, y que ande la mitad es una falla completa
     # para quien quiere abrir una pantalla — el registro sin relevo no sirve, y al revés tampoco.
-    estado = "corriendo" if fallidas == 0 else "fallado"
+    estado = "corriendo" if not caidos else "fallado"
 
+    # ═══════════════════════════════════════════════════════════════════════════════════════════
+    # `atendidas` SON LAS SONDAS INTENTADAS, NO LAS QUE CONTESTARON. Y la diferencia no era
+    # cosmética: hacía que el cerebro DESCARTARA EL REPORTE ENTERO justo cuando el relay se caía.
+    #
+    # Antes esto contaba `atendidas` y `fallidas` como cosas DISJUNTAS —una por puerto que
+    # contestó, la otra por puerto que no— y el cerebro exige que las fallidas sean un
+    # SUBCONJUNTO de las atendidas (internal/fleet/rendimiento.go:100). Con dos puertos caídos
+    # salía «atendidas 1, fallidas 2» y con los tres «atendidas 0, fallidas 3»: rechazado.
+    #
+    # Y rechazado no significa «se pierde el rendimiento»: significa que `Salud.Valida()` falla y
+    # el UPDATE de `last_health` y `last_report` NO SE HACE (internal/memory/servicios.go:302).
+    # O sea que el cerebro se queda con la ÚLTIMA SALUD BUENA, la del relay sano, para siempre:
+    #
+    #   · `musubi_fleet_service_up{service="relay-rustdesk"}` se queda en 1 mientras el relay está
+    #     muerto, así que la alerta `ServicioCaido` NO PUEDE DISPARAR NUNCA.
+    #   · el panel dibuja el rendimiento congelado —3 atendidas, 0 fallidas, el p95 bueno— o sea
+    #     el relay más sano que nunca, exactamente cuando no atiende a nadie.
+    #   · lo único que suena es `ColectorDeRendimientoMudo`, a los ~15 min, diciendo que el
+    #     COLECTOR dejó de reportar. Es falso: el colector reporta cada minuto y el cerebro lo
+    #     tira. El runbook manda a revisar el cron, que está perfecto.
+    #
+    # Y ese es el ÚNICO caso para el que este colector existe: un contenedor levantado que no
+    # acepta conexiones, que para el agente se ve idéntico a sano. El de reportar-bot.py ya tenía
+    # la cuenta bien —`min(err, n)`— con la razón escrita al lado; acá faltaba.
+    #
+    # La lectura correcta del contrato: `atendidas` son las UNIDADES DE TRABAJO de la ventana, y
+    # las de este colector son sus tres sondas. Con los tres puertos caídos la tasa de error da
+    # 100 %, que es la verdad, en vez de un reporte que no llega.
+    # ═══════════════════════════════════════════════════════════════════════════════════════════
     rendimiento = {
         "ventana_seg": VENTANA_SEG,
-        "atendidas": atendidas,
-        "fallidas": fallidas,
+        "atendidas": len(PUERTOS),
+        "fallidas": len(caidos),
     }
     # LAS LATENCIAS SÓLO SI HUBO ALGUNA. Un p95 de 0 ms sobre cero conexiones no es un percentil
     # bajo: es la ausencia de uno, y mandarlo como 0 haría que el gráfico dibuje al relay más
