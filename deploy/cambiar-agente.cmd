@@ -63,8 +63,10 @@ move /y "%DIR%\musubi-nuevo.exe" "%DIR%\musubi.exe" >> "%LOG%" 2>&1
 if errorlevel 1 goto rollback
 
 echo [4] probando el nuevo EN SU RUTA DEFINITIVA >> "%LOG%"
+REM La RUTA del token y no su contenido: el `set /p` de antes metia la credencial en el entorno
+REM de este proceso, y ademas probaba un camino distinto del que usa el lanzador de la tarea.
 set MUSUBI_BRAIN_URL=http://100.79.126.62:7717
-set /p MUSUBI_DEVICE_TOKEN=<"%DIR%\device.token"
+set MUSUBI_DEVICE_TOKEN_FILE=%DIR%\device.token
 "%DIR%\musubi.exe" agent --once >> "%LOG%" 2>&1
 if errorlevel 1 goto rollback
 

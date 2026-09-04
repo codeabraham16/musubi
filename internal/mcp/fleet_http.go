@@ -92,47 +92,11 @@ type cuerpoLatido struct {
 	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
 }
 
-// respuestaLatido es lo que ve el agente. Deliberadamente pobre: no devuelve nada que no le
-// pertenezca a esa máquina.
-type respuestaLatido struct {
-	OK      bool   `json:"ok"`
-	Device  string `json:"device,omitempty"`
-	Project string `json:"project,omitempty"`
-	// Comandos son los pedidos de ejecución que le tocan a ESTA máquina (S5). Viajan de vuelta
-	// en la respuesta del latido, por el canal que el agente ya abre él mismo: poner al agente a
-	// escuchar un puerto sería la superficie que este track viene evitando desde S2, y sería
-	// inútil la mitad de las veces porque esa máquina está detrás de un NAT.
-	Comandos []comandoParaElAgente `json:"comandos,omitempty"`
-	// Muestra dice qué pasó con la telemetría: "guardada", "descartada: <razón>" o vacío si el
-	// agente no mandó ninguna. El agente lo imprime, así que un colector roto o una capacidad
-	// que falta se ven DESDE LA MÁQUINA en vez de desaparecer en silencio en el cerebro.
-	Muestra string `json:"muestra,omitempty"`
-	// Servicios dice qué pasó con el inventario, por el MISMO motivo que `Muestra`: un bloque
-	// descartado en silencio es indistinguible de uno que nunca se mandó, y quien puede arreglarlo
-	// —el que administra ESA máquina— es justamente el que no ve los logs del cerebro. Vacío = el
-	// agente no mandó ninguno.
-	Servicios string `json:"servicios,omitempty"`
-	// Motivo viaja SÓLO en el 401 y es el mismo texto para todos los rechazos (B3).
-	Motivo string `json:"motivo,omitempty"`
-	// TokenNuevo es la credencial de una rotación en curso, y viaja SÓLO mientras la rotación
-	// está abierta y el agente todavía late con el token viejo (Ola 2).
-	//
-	// Es la única cosa que este canal manda que no es un comando, y por eso vale decir qué la
-	// hace aceptable: no amplía lo que el cerebro puede pedirle a la máquina —no ejecuta nada—,
-	// va por un canal que el agente ya abre él mismo, y deja de mandarse en cuanto el agente
-	// late con ella. Si el agente no la guarda, sigue llegando; si el plazo vence, la rotación
-	// se abandona y el token viejo sigue valiendo.
-	TokenNuevo string `json:"token_nuevo,omitempty"`
-}
-
-// comandoParaElAgente es lo MÍNIMO que el agente necesita para ejecutar. No viaja quién lo pidió
-// ni por qué: el agente no tiene nada que hacer con esa información, y todo lo que viaja a la
-// máquina más expuesta de la flota es superficie.
-type comandoParaElAgente struct {
-	ID         string   `json:"id"`
-	Argv       []string `json:"argv"`
-	TimeoutSeg int      `json:"timeout_seg"`
-}
+// El CONTRATO del latido —qué contesta el cerebro y qué lee el agente— vive en
+// internal/fleet/protocolo.go, en UN solo tipo que usan los dos lados. Estaba duplicado acá y en
+// cmd/musubi, y esa duplicación es lo que dejó `token_nuevo` y `servicios` sin receptor: encoding/
+// json descarta los campos que el otro lado no declara, sin error y sin log. El porqué largo está
+// allá.
 
 // maxComandosPorLatido acota cuántos se entregan de una. Diez alcanzan para cualquier ráfaga
 // real y evitan que una cola acumulada por una máquina que estuvo caída le caiga encima toda
@@ -190,7 +154,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		if !ok {
 			limiter.fail(ip, time.Now())
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			escribirLatido(w, http.StatusUnauthorized, respuestaLatido{OK: false, Motivo: motivoRechazo})
+			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
 		}
 		limiter.reset(ip)
@@ -240,11 +204,11 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		}
 		if !actualizado {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			escribirLatido(w, http.StatusUnauthorized, respuestaLatido{OK: false, Motivo: motivoRechazo})
+			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
 		}
 
-		resp := respuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
+		resp := fleet.RespuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
 			Muestra: notaMuestra, Servicios: notaServicios}
 		// EL TOKEN NUEVO VIAJA MIENTRAS EL AGENTE SIGA LATIENDO CON EL VIEJO, y deja de viajar en
 		// cuanto late con el nuevo (ahí la rotación ya se completó unas líneas más arriba).
@@ -259,7 +223,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			}
 		}
 		for _, c := range pendientes {
-			resp.Comandos = append(resp.Comandos, comandoParaElAgente{
+			resp.Comandos = append(resp.Comandos, fleet.ComandoParaElAgente{
 				ID: c.ID, Argv: c.Argv, TimeoutSeg: int(c.Timeout.Seconds()),
 			})
 		}
@@ -507,7 +471,7 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 		nuevos, actualizados, podados)
 }
 
-func escribirLatido(w http.ResponseWriter, code int, resp respuestaLatido) {
+func escribirLatido(w http.ResponseWriter, code int, resp fleet.RespuestaLatido) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = jsonpkg.NewEncoder(w).Encode(resp)
@@ -565,7 +529,7 @@ func (s *McpServer) handlerResultado(limiter *authLimiter) http.HandlerFunc {
 		if !ok {
 			limiter.fail(ip, time.Now())
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			escribirLatido(w, http.StatusUnauthorized, respuestaLatido{OK: false, Motivo: motivoRechazo})
+			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
 		}
 		limiter.reset(ip)
@@ -594,10 +558,10 @@ func (s *McpServer) handlerResultado(limiter *authLimiter) http.HandlerFunc {
 		if err := s.engine.GuardarResultado(d.ID, cuerpo.ComandoID, cuerpo.ExitCode,
 			cuerpo.Stdout, cuerpo.Stderr, cuerpo.Error, time.Now()); err != nil {
 			limiter.fail(ip, time.Now())
-			escribirLatido(w, http.StatusForbidden, respuestaLatido{OK: false, Motivo: "ese comando no es de esta máquina"})
+			escribirLatido(w, http.StatusForbidden, fleet.RespuestaLatido{OK: false, Motivo: "ese comando no es de esta máquina"})
 			return
 		}
-		escribirLatido(w, http.StatusOK, respuestaLatido{OK: true, Device: d.Name})
+		escribirLatido(w, http.StatusOK, fleet.RespuestaLatido{OK: true, Device: d.Name})
 	}
 }
 

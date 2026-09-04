@@ -30,11 +30,12 @@ import (
 )
 
 // comandoRecibido es un pedido tal como llega en la respuesta del latido.
-type comandoRecibido struct {
-	ID         string   `json:"id"`
-	Argv       []string `json:"argv"`
-	TimeoutSeg int      `json:"timeout_seg"`
-}
+//
+// ES UN ALIAS DEL TIPO DEL CONTRATO, no una copia. Era una copia byte a byte de
+// fleet.ComandoParaElAgente, y ése es el patrón que dejó dos campos de la respuesta sin receptor
+// —el porqué está en internal/fleet/protocolo.go—. El alias conserva el nombre local, que en este
+// paquete se lee mejor (acá el comando se RECIBE), sin que haya dos declaraciones que mantener.
+type comandoRecibido = fleet.ComandoParaElAgente
 
 // resultadoDeComando es lo que se le reporta al cerebro.
 type resultadoDeComando struct {

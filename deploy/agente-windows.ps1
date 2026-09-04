@@ -153,9 +153,23 @@ if ($AlArranque) {
 
 # -- 3. Prueba UN latido antes de crear nada -------------------------------------------------
 # Si la credencial o la URL estan mal, se ve ACA y no dentro de una tarea que falla en silencio.
+#
+# Y SE PRUEBA POR EL MISMO CAMINO QUE VA A USAR LA TAREA: el ARCHIVO, no la variable.
+#
+# La divergencia estaba nombrada quince lineas mas arriba ("probaba un camino distinto del que la
+# tarea iba a usar, y por eso daba verde sobre una instalacion muerta") y se habia arreglado la
+# CONSECUENCIA (el ACL que dejaba a SYSTEM afuera) dejando la CAUSA en su lugar: esta prueba
+# seguia pasando el token por $env:MUSUBI_DEVICE_TOKEN, asi que nunca abria el archivo ni su ACL.
+# Ahora lo abre, y un permiso mal puesto falla ACA, en voz alta, y no dentro de una tarea muda.
+#
+# LO QUE SIGUE SIN CUBRIR, y va escrito en vez de darse por hecho: con -AlArranque la tarea corre
+# como SYSTEM y esta prueba corre como el usuario. Que el archivo se abra aca demuestra que lo
+# puede leer QUIEN INSTALA, no que lo pueda leer SYSTEM. Esa mitad sigue dependiendo de la regla
+# que se le agrega al ACL mas arriba.
 Paso "probando un latido contra $BrainUrl ..."
 $env:MUSUBI_BRAIN_URL  = $BrainUrl
-$env:MUSUBI_DEVICE_TOKEN = $DeviceToken
+$env:MUSUBI_DEVICE_TOKEN_FILE = $tokenFile
+$env:MUSUBI_DEVICE_TOKEN = ""
 & $destino agent --once
 
 # EL FIREWALL SE TOCA SOLO SI HIZO FALTA, Y RECIEN DESPUES DE FALLAR.
@@ -236,10 +250,19 @@ $lanzador = Join-Path $InstallDir "agente.cmd"
 # variable definida y vacia, que el agente tendria que distinguir de ausente. Mejor no escribirla.
 $lineaAlcance = ""
 if ($Alcance -ne "") { $lineaAlcance = "`r`nset MUSUBI_ALCANCE=$Alcance" }
+# LA RUTA DEL TOKEN, NO SU CONTENIDO. Antes era `set /p MUSUBI_DEVICE_TOKEN=<"$tokenFile"`, y eso
+# metia la credencial en el ENTORNO del proceso: cualquier proceso del mismo usuario la lee, y en
+# Windows tambien la ve un Get-Process -IncludeUserName con las herramientas adecuadas. Peor: el
+# `set /p` corre una sola vez, al arrancar, asi que el agente no podia adoptar el token nuevo que
+# el cerebro le ofrece en la respuesta del latido: la rotacion en caliente vencia siempre.
+#
+# Con la ruta, el agente lee el archivo y lo reescribe cuando rota. El ACL restrictivo del archivo
+# lo pone Set-Acl mas arriba y es lo unico que lo protege: en NTFS no hay bits de modo POSIX, asi
+# que el agente no puede endurecerlo por su cuenta.
 @"
 @echo off
 set MUSUBI_BRAIN_URL=$BrainUrl$lineaAlcance
-set /p MUSUBI_DEVICE_TOKEN=<"$tokenFile"
+set MUSUBI_DEVICE_TOKEN_FILE=$tokenFile
 "$destino" agent
 "@ | Set-Content -Encoding ASCII $lanzador
 

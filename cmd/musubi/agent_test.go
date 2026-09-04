@@ -356,7 +356,7 @@ func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, "tok", 10*time.Millisecond, desfase, nil)
+		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, desfase, nil)
 		close(listo)
 	}()
 	select {
@@ -399,7 +399,7 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, "tok", 10*time.Millisecond, 0, nil)
+		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
 		close(listo)
 	}()
 

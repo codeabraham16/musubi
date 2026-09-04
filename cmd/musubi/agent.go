@@ -111,6 +111,17 @@ const (
 	envToken   = "MUSUBI_DEVICE_TOKEN"
 	envCerebro = "MUSUBI_BRAIN_URL"
 
+	// envTokenFile es el archivo del que sale el token, y es lo que HABILITA la rotación en
+	// caliente (Ola 2): una variable de entorno no se puede reescribir desde adentro del proceso,
+	// así que un agente que sólo la tiene no puede adoptar el token nuevo que el cerebro le
+	// ofrece. El llavero y su porqué están en agent_token.go.
+	//
+	// Y de paso saca la credencial de la ENV. El unit hacía
+	// `MUSUBI_DEVICE_TOKEN=$(cat .../token) exec musubi agent`, así que el token quedaba en
+	// /proc/<pid>/environ —legible por cualquier proceso del mismo usuario— y en la línea del
+	// unit. Leyéndolo del archivo se va el wrapper y se va esa exposición.
+	envTokenFile = "MUSUBI_DEVICE_TOKEN_FILE"
+
 	// envNombreTLS existe por un choque de dos cosas que las dos son ciertas (Ola 0 del plan
 	// empresa, 2026-09-03).
 	//
@@ -133,7 +144,7 @@ const (
 // runAgent es el punto de entrada de `musubi agent`.
 func runAgent(args []string) {
 	cerebro := strings.TrimSpace(os.Getenv(envCerebro))
-	token := strings.TrimSpace(os.Getenv(envToken))
+	cred, errCred := cargarCredencial()
 	intervalo := intervaloLatidoDefault
 	unaVez := false
 
@@ -166,10 +177,17 @@ func runAgent(args []string) {
 		}
 	}
 
-	if token == "" {
+	// UN ARCHIVO QUE ESTÁ Y NO SE PUEDE LEER NO ES LO MISMO QUE NO TENER CREDENCIAL, y decir
+	// «falta el token» ahí manda a alguien a re-enrolar una máquina que sólo tiene un permiso mal.
+	if errCred != nil {
+		fmt.Fprintf(os.Stderr, "%s no se pudo cargar la credencial del dispositivo.\n", cYellow("✗"))
+		fmt.Fprintf(os.Stderr, "  %v\n", errCred)
+		os.Exit(1)
+	}
+	if cred == nil {
 		fmt.Fprintf(os.Stderr, "%s falta la credencial del dispositivo.\n", cYellow("✗"))
-		fmt.Fprintf(os.Stderr, "  Seteá %s con el token que devolvió musubi_fleet_enroll.\n", cBold(envToken))
-		fmt.Fprintf(os.Stderr, "  Ese token se muestra UNA sola vez: si lo perdiste, hay que revocar y volver a enrolar.\n")
+		fmt.Fprintf(os.Stderr, "  Seteá %s con el archivo que la contiene, o %s con el token.\n", cBold(envTokenFile), cBold(envToken))
+		fmt.Fprintf(os.Stderr, "  El token lo devuelve musubi_fleet_enroll UNA sola vez: si lo perdiste, hay que revocar y volver a enrolar.\n")
 		os.Exit(1)
 	}
 	if cerebro == "" {
@@ -190,9 +208,17 @@ func runAgent(args []string) {
 	col := fleet.NuevoColector()
 
 	if unaVez {
-		res := latir(base, token, tomarMuestra(col))
+		res := latir(base, cred.Usar(), tomarMuestra(col))
 		fmt.Println(res.describir())
-		atenderComandos(base, token, res.comandos)
+		atenderComandos(base, cred.Actual(), res.comandos)
+		// CON --once TAMBIÉN SE GUARDA UNA ROTACIÓN OFRECIDA. Es un solo latido, así que no llega
+		// a estrenar el token nuevo —eso lo hará la próxima corrida—, pero dejarlo caer haría que
+		// una máquina que late por timer no pueda rotar nunca.
+		if res.ok {
+			if err := cred.Sumar(res.tokenNuevo); err != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", cYellow("!"), err)
+			}
+		}
 		if !res.ok {
 			os.Exit(1)
 		}
@@ -213,7 +239,7 @@ func runAgent(args []string) {
 		// Estar viva es información útil aunque no se pueda medir cómo está.
 		fmt.Printf("%s sin telemetría: %v\n", cYellow("!"), err)
 	}
-	bucleDeLatidos(base, token, intervalo, desfase, col)
+	bucleDeLatidos(base, cred, intervalo, desfase, col)
 }
 
 // nuevoTimer es el seam del reloj del bucle, por la misma razón que azarDelAgente: para que una
@@ -257,7 +283,7 @@ func desfaseDeArranque() time.Duration {
 // `desfase` es cuánto tarda el PRIMER latido. Se recibe y no se sortea acá adentro para que el
 // desfase quede bajo el mismo select que las señales —un `systemctl stop` durante esos 30 s
 // tiene que cortar en el acto, no al final del sueño— y para que las pruebas del bucle pasen 0.
-func bucleDeLatidos(base, token string, intervalo, desfase time.Duration, col fleet.Colector) {
+func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Duration, col fleet.Colector) {
 	señales := make(chan os.Signal, 1)
 	signal.Notify(señales, os.Interrupt, syscall.SIGTERM)
 
@@ -283,9 +309,22 @@ func bucleDeLatidos(base, token string, intervalo, desfase time.Duration, col fl
 		case <-tick.C:
 		}
 
-		res := latir(base, token, tomarMuestra(col))
+		res := latir(base, cred.Usar(), tomarMuestra(col))
 		switch {
 		case res.revocado:
+			// ANTES DE DARSE DE BAJA SE PRUEBA EL OTRO TOKEN DEL LLAVERO, si el archivo tenía dos.
+			// Es el camino que rescata a la máquina que se cortó justo después de que el cerebro
+			// promoviera la rotación: el token viejo ya murió y el nuevo está en disco, sin
+			// estrenar. Sin esto ese caso es un 401 eterno y una visita a la máquina.
+			//
+			// NO afloja el kill-switch ni golpea el lockout: revocar borra los DOS hashes, así que
+			// los dos dan 401 y se cae al return de abajo. Es un intento por token que el archivo
+			// YA tenía, nunca un reintento del mismo.
+			if cred.Rechazado() {
+				fmt.Printf("%s la credencial en uso fue rechazada; se prueba la otra del llavero.\n", cYellow("!"))
+				tick.Reset(0)
+				continue
+			}
 			// B5 — el kill-switch tiene que ser entendible DESDE LA MÁQUINA. Un agente que no
 			// interpreta el 401 obliga a ir a apagarlo a mano, que es exactamente lo que no se
 			// puede hacer con un equipo remoto.
@@ -295,7 +334,18 @@ func bucleDeLatidos(base, token string, intervalo, desfase time.Duration, col fl
 			return
 		case res.ok:
 			espera = esperaMinima // la red volvió: se resetea el backoff
-			atenderComandos(base, token, res.comandos)
+			// EL COLAPSO VA ANTES DEL SUMAR, y en ese orden: el token que acaba de servir queda
+			// solo en el archivo, y recién ahí se agrega el de una rotación nueva. Al revés, el
+			// colapso se llevaría el que se acaba de guardar.
+			if err := cred.Funciono(); err != nil {
+				fmt.Fprintf(os.Stderr, "%s no se pudo dejar sólo la credencial en uso: %v\n", cYellow("!"), err)
+			}
+			if err := cred.Sumar(res.tokenNuevo); err != nil {
+				// Se DICE y no se traga: una rotación que no se puede adoptar la abandona el
+				// cerebro al vencer, y sin este aviso nadie sabría por qué nunca se completó.
+				fmt.Fprintf(os.Stderr, "%s %v\n", cYellow("!"), err)
+			}
+			atenderComandos(base, cred.Actual(), res.comandos)
 			tick.Reset(intervalo)
 		default:
 			// B7 — el cerebro caído NO mata al agente. Backoff exponencial acotado, y con jitter:
@@ -316,6 +366,8 @@ type resultadoLatido struct {
 	motivo   string
 	// comandos son los pedidos de ejecución que el cerebro devolvió en este latido (S5).
 	comandos []comandoRecibido
+	// tokenNuevo es la credencial de una rotación en curso, si hay una. Vacío es lo normal.
+	tokenNuevo string
 }
 
 func (r resultadoLatido) describir() string {
@@ -422,13 +474,22 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 		// El cerebro dice qué hizo con la telemetría. Se imprime para que una capacidad que
 		// falta o una muestra rechazada se vean DESDE LA MÁQUINA, en vez de desaparecer en
 		// silencio del otro lado.
-		var r struct {
-			Muestra  string            `json:"muestra"`
-			Comandos []comandoRecibido `json:"comandos"`
-		}
+		// SE DECODIFICA EL TIPO DEL CONTRATO, no un struct escrito acá. El struct anónimo que
+		// estaba en su lugar tenía sólo `muestra` y `comandos`, y encoding/json descarta en
+		// silencio lo que el receptor no declara: así se perdieron `token_nuevo` —la rotación de
+		// la Ola 2 no podía completarse— y `servicios`, cuyo único propósito era que un inventario
+		// descartado NO desapareciera en silencio. Con el tipo compartido, un campo nuevo del lado
+		// del cerebro llega acá sin que nadie se acuerde de copiarlo.
+		var r fleet.RespuestaLatido
 		if err := json.NewDecoder(resp.Body).Decode(&r); err == nil {
 			if r.Muestra != "" {
 				motivo += " · muestra " + r.Muestra
+			}
+			// `servicios` se imprime por el mismo motivo que `muestra`, y es la razón por la
+			// que el cerebro lo manda: quien administra ESTA máquina no ve los logs del cerebro,
+			// así que un inventario rechazado tiene que verse acá o no se ve en ningún lado.
+			if r.Servicios != "" {
+				motivo += " · servicios " + r.Servicios
 			}
 			if n := len(r.Comandos); n > 0 {
 				motivo += fmt.Sprintf(" · %d comando(s)", n)
@@ -440,7 +501,7 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 		if confirmarInventario != nil {
 			confirmarInventario()
 		}
-		return resultadoLatido{ok: true, motivo: motivo, comandos: r.Comandos}
+		return resultadoLatido{ok: true, motivo: motivo, comandos: r.Comandos, tokenNuevo: r.TokenNuevo}
 	case http.StatusUnauthorized:
 		return resultadoLatido{revocado: true, motivo: "credencial inválida o revocada"}
 	case http.StatusTooManyRequests:
@@ -460,10 +521,14 @@ func ayudaAgent() {
 	fmt.Println("  musubi agent --revisar-blindaje")
 	fmt.Println()
 	fmt.Println(cCyan("Entorno:"))
-	fmt.Printf("  %s  token del dispositivo (lo devuelve musubi_fleet_enroll, UNA sola vez)\n", cBold(envToken))
-	fmt.Printf("  %s     dirección del cerebro, ej http://100.x.y.z:7717\n", cBold(envCerebro))
-	fmt.Printf("  %s  nombre contra el que verificar el certificado, si la URL trae una IP\n", cBold(envNombreTLS))
-	fmt.Printf("                         (ej: musubi-server.tail89e295.ts.net). Vacío: sale de la URL.\n")
+	fmt.Printf("  %s  archivo con el token del dispositivo. ES EL RECOMENDADO: es el único\n", cBold("MUSUBI_DEVICE_TOKEN_FILE"))
+	fmt.Printf("                            de los dos con el que se puede ROTAR la credencial en\n")
+	fmt.Printf("                            caliente, y deja el token fuera de /proc/<pid>/environ.\n")
+	fmt.Printf("  %s       el token en la variable. Late igual, pero no puede adoptar una\n", cBold("MUSUBI_DEVICE_TOKEN"))
+	fmt.Printf("                            rotación: un proceso no puede reescribir su propio entorno.\n")
+	fmt.Printf("  %s          dirección del cerebro, ej http://100.x.y.z:7717\n", cBold("MUSUBI_BRAIN_URL"))
+	fmt.Printf("  %s     nombre contra el que verificar el certificado, si la URL trae una\n", cBold("MUSUBI_BRAIN_TLS_NAME"))
+	fmt.Printf("                            IP (ej: musubi-server.tail89e295.ts.net). Vacío: sale de la URL.\n")
 	fmt.Println()
 	fmt.Println(cCyan("Notas:"))
 	fmt.Println("  · El token del dispositivo NO sirve para /mcp: no da acceso a la memoria.")
