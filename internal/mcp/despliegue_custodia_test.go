@@ -335,3 +335,61 @@ func TestElPinDelGuionDeBackupEsElVerdadero(t *testing.T) {
 			"Arreglo:  sha256sum deploy/musubi-backup.sh", pin, real)
 	}
 }
+
+// TestLaVersionDeGoNoDiverge custodia el número de versión de Go, que vive en nueve lugares.
+//
+// EL CABO, MEDIDO EL 2026-09-03: `go.mod` declaraba `go 1.26.4` mientras los OCHO pines de los
+// workflows decían `1.26.6`. Alguien ya había averiguado que hacía falta 1.26.6 y lo fijó en cada
+// job — y nunca tocó `go.mod`, que es la fuente de verdad para cualquiera que compile el proyecto.
+//
+// La consecuencia no era estética: `govulncheck` sobre 1.26.4 encontró TRES vulnerabilidades de la
+// biblioteca estándar alcanzables desde código nuestro (crypto/tls post-handshake, la complejidad
+// cuadrática de net/url en `fleet.TomarMuestraDeExposicion`, y el ReadHeaderTimeout de net/http en
+// `mcp.ListenAndServeHTTP`), las tres arregladas en 1.26.6. Los binarios de `release.yml` salían
+// parcheados; el que se compila desde `go.mod` —el que corría en producción— no.
+//
+// Y lo que lo destapó fue una decisión de una línea: el job `vulns` usa `go-version-file: go.mod`
+// en vez de fijar la versión como sus hermanos. Fijarla habría dado verde y tapado la deriva. Un
+// verificador que no lee la fuente de verdad verifica otra cosa.
+func TestLaVersionDeGoNoDiverge(t *testing.T) {
+	mod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatalf("no se pudo leer go.mod: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^go (\d+\.\d+(?:\.\d+)?)$`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("go.mod no declara una directiva `go <version>` reconocible")
+	}
+	quiere := string(m[1])
+
+	flujos, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil || len(flujos) == 0 {
+		t.Fatalf("no se encontraron workflows: %v", err)
+	}
+	pin := regexp.MustCompile(`(?m)^\s*go-version:\s*'?"?(\d+\.\d+(?:\.\d+)?)'?"?\s*$`)
+
+	vistos := 0
+	for _, f := range flujos {
+		crudo, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("no se pudo leer %s: %v", f, err)
+		}
+		for _, hit := range pin.FindAllSubmatch(crudo, -1) {
+			vistos++
+			if got := string(hit[1]); got != quiere {
+				t.Errorf("%s fija go-version: %s y go.mod declara %s.\n"+
+					"No es cosmético: el job que usa `go-version-file: go.mod` compila con OTRA "+
+					"versión que sus hermanos, y si la vieja tiene un CVE de la biblioteca estándar "+
+					"nadie se entera —los binarios de release salen parcheados y el que se compila "+
+					"desde go.mod, no.\nArreglo: que las dos digan lo mismo.",
+					filepath.Base(f), got, quiere)
+			}
+		}
+	}
+	if vistos == 0 {
+		t.Fatal("ningún workflow fija `go-version:`: o cambió la forma de declararlo y esta guarda " +
+			"dejó de mirar donde debe, o se pasaron todos a `go-version-file` (y entonces esta " +
+			"prueba sobra y hay que borrarla a conciencia, no dejarla pasando en verde sobre nada)")
+	}
+	t.Logf("%d pines de go-version comprobados contra go.mod (%s)", vistos, quiere)
+}
