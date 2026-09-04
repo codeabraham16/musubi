@@ -44,7 +44,24 @@ VERSION="${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}"
 echo "▶ versión: $VERSION"
 [[ -n "$SUCIO" ]] && echo "! el árbol tiene cambios SIN COMMITEAR: este binario no se va a poder reconstruir" >&2
 
-go build -ldflags "-X main.version=$VERSION" -o "$SALIDA" ./cmd/musubi
+# LA CLAVE PÚBLICA DE RELEASE SE INYECTA ACÁ, y su ausencia es deliberada por default: un binario
+# de desarrollo NO puede verificar la procedencia de una actualización, y `musubi update` se niega
+# a instalar sin poder verificarla. Sólo el build que se publica la lleva.
+#
+#   MUSUBI_RELEASE_PUBKEY=<64 hex> ./deploy/construir.sh flota /tmp/musubi
+#
+# El par se genera UNA vez con `go run ./deploy/cmd/clave-release`, y la privada vive fuera de
+# línea: si estuviera en el CI, quien comprometa el CI firma lo que quiera y la firma no compra
+# nada — sería un sha256 más caro.
+LDFLAGS="-X main.version=$VERSION"
+if [[ -n "${MUSUBI_RELEASE_PUBKEY:-}" ]]; then
+  LDFLAGS="$LDFLAGS -X main.clavePublicaDeReleaseHex=$MUSUBI_RELEASE_PUBKEY"
+  echo "▶ con clave pública de release embebida"
+else
+  echo "! sin clave pública de release: este binario NO va a poder auto-actualizarse (a propósito)" >&2
+fi
+
+go build -ldflags "$LDFLAGS" -o "$SALIDA" ./cmd/musubi
 echo "✓ $SALIDA"
 "$SALIDA" version
 sha256sum "$SALIDA"
