@@ -4,42 +4,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
-// sshFalso instala un doble del cliente que registra sus argumentos.
+// sshFalso instala un doble del cliente que se COMPORTA como ssh: sale con un código, escribe en
+// stderr, tarda. Ya no registra los argumentos, y eso es un cambio de reparto, no una pérdida:
 //
-// TIENE UN TECHO, y conviene tenerlo escrito acá arriba: este doble nunca corre la shell del otro
-// lado, así que verifica QUÉ se le pasa a ssh y no QUÉ TERMINA EJECUTÁNDOSE. Esa mitad ciega
-// escondió durante todo el track un `--` de más que rompía cada exec de Tier B. La cubre
-// TestLoQueLlegaALaShellRemotaEsEjecutable, que corre por una shell real lo que ssh entrega.
-func sshFalso(t *testing.T, cuerpo string) (registro string) {
+// QUÉ SE LE PASA A ssh lo afirman ahora las pruebas que llaman a argumentosSSH directamente. Es
+// una función pura, así que preguntárselo a ella es más directo, más rápido y corre en las tres
+// plataformas — pasar por un doble ejecutable metía una dependencia de shell POSIX en una
+// aserción que no la necesita, y era lo único que hacía fallar esas dos pruebas en Windows.
+//
+// LO QUE ESTE DOBLE SIGUE SIN VER, y conviene tenerlo escrito: nunca corre la shell del otro
+// lado, así que no dice QUÉ TERMINA EJECUTÁNDOSE. Esa mitad ciega escondió durante todo el track
+// un `--` de más que rompía cada exec de Tier B. La cubre TestLoQueLlegaALaShellRemotaEsEjecutable,
+// que corre por una shell real lo que ssh entrega.
+//
+// Se omite en Windows por el mismo motivo que SSHFalsoParaTest: es un script POSIX.
+func sshFalso(t *testing.T, cuerpo string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de ssh es un script #!/bin/sh y esta plataforma no lo ejecuta")
+	}
 	dir := t.TempDir()
-	registro = filepath.Join(dir, "args.txt")
 	guion := filepath.Join(dir, "ssh")
-	// "$@" con comillas preserva los argumentos tal como llegaron, uno por línea.
-	script := "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\" >> " + registro + "; done\n" + cuerpo
-	if err := os.WriteFile(guion, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(guion, []byte("#!/bin/sh\n"+cuerpo+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	anterior := binarioSSH
 	binarioSSH = guion
 	t.Cleanup(func() { binarioSSH = anterior })
-	return registro
-}
-
-func leerArgs(t *testing.T, ruta string) []string {
-	t.Helper()
-	b, err := os.ReadFile(ruta)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	out = append(out, strings.Split(strings.TrimRight(string(b), "\n"), "\n")...)
-	return out
 }
 
 // H2c — LA VERIFICACIÓN DE HOST KEY NO SE DESACTIVA.
@@ -50,9 +47,10 @@ func leerArgs(t *testing.T, ruta string) []string {
 //
 // Sabotaje que la hace fallar: cambiarlo a `no` o `accept-new`.
 func TestNuncaSeDesactivaLaVerificacionDeHostKey(t *testing.T) {
-	reg := sshFalso(t, "exit 0")
-	EjecutarPorSSH("router.local", []string{"uptime"}, 10*time.Second)
-	args := strings.Join(leerArgs(t, reg), " ")
+	// SE LEE LA FUNCIÓN PURA, NO UN EXEC. Lo que esta prueba afirma —qué flags se le pasan a
+	// ssh— lo decide argumentosSSH y nada más; hacerlo pasar por un doble ejecutable metía una
+	// dependencia de shell POSIX en una aserción que no la necesita, y por eso caía en Windows.
+	args := strings.Join(argumentosSSH("router.local", []string{"uptime"}, 10*time.Second), " ")
 
 	if !strings.Contains(args, "StrictHostKeyChecking=yes") {
 		t.Errorf("no se exige la verificación de host key: %q", args)
@@ -76,9 +74,8 @@ func TestNuncaSeDesactivaLaVerificacionDeHostKey(t *testing.T) {
 //
 // Sabotaje que la hace fallar: pasar el argv sin citarParaShell.
 func TestElArgvSeCitaParaLaShellRemota(t *testing.T) {
-	reg := sshFalso(t, "exit 0")
-	EjecutarPorSSH("host", []string{"echo", "$HOME y *", "un'apostrofe"}, 10*time.Second)
-	args := leerArgs(t, reg)
+	// Misma razón que arriba: el citado lo hace argumentosSSH, así que se lo pregunta a él.
+	args := argumentosSSH("host", []string{"echo", "$HOME y *", "un'apostrofe"}, 10*time.Second)
 
 	// Los últimos tres son el comando, cada uno citado entero.
 	n := len(args)

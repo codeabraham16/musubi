@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,17 @@ import (
 // Es lo único de S6 que no se puede probar contra el binario real sin una máquina con RustDesk.
 func rustdeskFalso(t *testing.T, cuerpo string) (registro string) {
 	t.Helper()
+	// El doble es un script `#!/bin/sh` y Windows no lo ejecuta —además de querer un `.exe`—, así
+	// que la prueba fallaría por el andamio. Se omite acá, en el doble, para que ningún sitio
+	// nuevo se lo olvide.
+	//
+	// ACÁ SÍ QUEDA UN HUECO Y CONVIENE DECIRLO: a diferencia del Tier B, RustDesk en Windows es un
+	// caso REAL —el agente corre ahí—, así que estas cuatro pruebas cubren esa plataforma sólo en
+	// la parte que no toca el binario. Doblarlo en Windows pide un `.cmd` y traducir cada cuerpo a
+	// un segundo dialecto; no se hace acá.
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de rustdesk es un script #!/bin/sh y esta plataforma no lo ejecuta")
+	}
 	dir := t.TempDir()
 	registro = filepath.Join(dir, "llamadas.txt")
 	guion := filepath.Join(dir, "rustdesk")

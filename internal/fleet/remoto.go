@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -224,7 +225,23 @@ func minInt(a, b int) int {
 // (internal/mcp, que ejercita el ruteo por tier). `binarioSSH` es privado a propósito —nadie
 // fuera de acá debería poder apuntar el cliente a otro lado— y ésta es la única puerta, explícita
 // y nombrada, para abrirlo en una prueba.
-func SSHFalsoParaTest(t interface{ Fatal(...any) }, cuerpo string) (restaurar func()) {
+//
+// OMITE LA PRUEBA DONDE NO HAY SHELL POSIX, y lo decide ACÁ y no cada llamador. El doble es un
+// script `#!/bin/sh`: en Windows no es ejecutable, así que EjecutarPorSSH devuelve «executable
+// file not found» y la prueba falla por el andamio, no por lo que afirma. Que la decisión viva en
+// el doble significa que ningún sitio nuevo se la puede olvidar.
+//
+// No es una plataforma que se esté dejando sin cubrir: el cerebro corre en Linux y el Tier B
+// EXISTE porque hay un `ssh` del sistema al que invocar. Lo que sí tiene que andar en Windows es
+// el AGENTE, y eso lo cubren las pruebas que no doblan un binario POSIX.
+func SSHFalsoParaTest(t interface {
+	Fatal(...any)
+	Skip(...any)
+}, cuerpo string) (restaurar func()) {
+	if runtime.GOOS == "windows" {
+		t.Skip("el doble de ssh es un script #!/bin/sh y esta plataforma no lo ejecuta; el cerebro y su Tier B son de Linux")
+		return func() {}
+	}
 	dir, err := os.MkdirTemp("", "sshfalso")
 	if err != nil {
 		t.Fatal(err)

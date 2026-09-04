@@ -320,9 +320,14 @@ func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
 func TestSinXDGRuntimeDirElVerificadorNoSeQuedaCiego(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	d := dirDeRuntime()
-	if os.Getuid() == 0 {
+	// SIN UID POSITIVO NO HAY STORE ROOTLESS, y son DOS los casos: root (uid 0, no existe
+	// /run/user/0) y una máquina sin el concepto de uid, donde os.Getuid() devuelve -1. El
+	// segundo lo destapó `test-cross` en Windows: con `== 0` la prueba caía en la rama de abajo
+	// y exigía un fallback /run/user/<uid> que ahí no significa nada. Devolver "" es lo correcto
+	// en los dos, y así lo dice.
+	if os.Getuid() <= 0 {
 		if d != "" {
-			t.Errorf("como root devolvió %q; no hay /run/user/0 y el store rootless no aplica", d)
+			t.Errorf("sin uid positivo devolvió %q; no hay /run/user/<uid> y el store rootless no aplica", d)
 		}
 		return
 	}

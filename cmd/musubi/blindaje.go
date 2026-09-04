@@ -36,7 +36,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"runtime"
 	"sort"
 	"strconv"
@@ -76,6 +76,13 @@ type necesidad struct {
 // necesidadesDelAgente arma la lista para ESTA máquina.
 //
 // `hayCLI` se inyecta para poder probar las dos ramas sin instalar ni desinstalar nada.
+//
+// LAS RUTAS SE ARMAN CON `path` Y NO CON `path/filepath`, Y NO ES UN DETALLE. Lo que sale de acá
+// no es una ruta del sistema donde corre este binario: es el TEXTO que va adentro de un
+// `ReadWritePaths=` de una unidad de systemd, o sea una ruta de Linux, siempre con `/`.
+// filepath.Join usa el separador del sistema, así que en Windows devolvía `\home\musubi\...` —
+// una directiva que no significa nada. Que nunca se notara es porque la unidad sólo se escribe en
+// Linux; lo destapó `test-cross`, que corre esta función pura en las tres plataformas.
 func necesidadesDelAgente(home, runtimeDir string, hayCLI func(string) bool) []necesidad {
 	var ns []necesidad
 
@@ -83,9 +90,9 @@ func necesidadesDelAgente(home, runtimeDir string, hayCLI func(string) bool) []n
 	if home != "" {
 		ns = append(ns, necesidad{
 			Trabajo: "latido", Acceso: accesoEscritura,
-			Ruta:      filepath.Join(home, ".config", "musubi-agente"),
+			Ruta:      path.Join(home, ".config", "musubi-agente"),
 			Sintoma:   "el agente arranca y sale en el acto diciendo que falta la credencial",
-			Directiva: "ReadWritePaths=" + filepath.Join(home, ".config", "musubi-agente"),
+			Directiva: "ReadWritePaths=" + path.Join(home, ".config", "musubi-agente"),
 		})
 	}
 
@@ -95,22 +102,22 @@ func necesidadesDelAgente(home, runtimeDir string, hayCLI func(string) bool) []n
 		if home != "" {
 			ns = append(ns, necesidad{
 				Trabajo: "inventario de contenedores", Acceso: accesoEscritura,
-				Ruta: filepath.Join(home, ".local", "share", "containers"),
+				Ruta: path.Join(home, ".local", "share", "containers"),
 				Sintoma: "`podman ps` sale con código 1 sin decir que es un permiso, y el agente " +
 					"NO manda inventario ninguno — ni el de systemd. El cerebro poda por ausencia, " +
 					"así que todos los servicios de esta máquina desaparecen del panel a la vez",
-				Directiva: "ReadWritePaths=" + filepath.Join(home, ".local", "share", "containers"),
+				Directiva: "ReadWritePaths=" + path.Join(home, ".local", "share", "containers"),
 			})
 		}
 		if runtimeDir != "" {
 			for _, sub := range []string{"containers", "libpod"} {
 				ns = append(ns, necesidad{
 					Trabajo: "inventario de contenedores", Acceso: accesoEscritura,
-					Ruta: filepath.Join(runtimeDir, sub), Opcional: true,
+					Ruta: path.Join(runtimeDir, sub), Opcional: true,
 					Sintoma: "`podman ps` no puede tomar sus locks de runtime y sale con código 1; " +
 						"mismo desenlace que arriba, y encima intermitente: depende de si logind " +
 						"llegó antes que esta unidad en el arranque",
-					Directiva: "ReadWritePaths=-" + filepath.Join(runtimeDir, sub),
+					Directiva: "ReadWritePaths=-" + path.Join(runtimeDir, sub),
 				})
 			}
 		}
@@ -302,7 +309,7 @@ func dirDeRuntime() string {
 	// El mismo fallback de podman. Con uid 0 no hay /run/user/0 y devolver "" es lo correcto: un
 	// agente corriendo como root no usa el store rootless.
 	if uid := os.Getuid(); uid > 0 {
-		return filepath.Join("/run", "user", strconv.Itoa(uid))
+		return path.Join("/run", "user", strconv.Itoa(uid))
 	}
 	return ""
 }

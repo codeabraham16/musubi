@@ -25,6 +25,7 @@ package mcp
 import (
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -170,6 +171,14 @@ func TestLasDosVerificacionesDeDespliegueExisten(t *testing.T) {
 		fi, err := os.Stat(ruta)
 		if err != nil {
 			t.Errorf("falta %s: %v", s, err)
+			continue
+		}
+		// EL BIT EJECUTABLE SÓLO SE PUEDE AFIRMAR DONDE EXISTE. NTFS no lo tiene y git en
+		// Windows no lo preserva, así que ahí os.Stat devuelve un modo sin `x` para todo archivo
+		// regular y esto fallaría siempre, dijera lo que dijera el repo. La aserción que importa
+		// —que los dos guiones ESTÉN, que es el sabotaje nombrado arriba— sigue corriendo en las
+		// tres plataformas.
+		if runtime.GOOS == "windows" {
 			continue
 		}
 		if fi.Mode()&0o111 == 0 {
