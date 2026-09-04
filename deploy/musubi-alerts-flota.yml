@@ -81,7 +81,7 @@ groups:
       # investigación de quince cortes de energía en `davantis-1`, la máquina estaba ENCENDIDA
       # —`tailscale ping` contestaba en 55 ms— y lo único muerto era el agente.
       #
-      # `musubi_fleet_device_net_up` lo contesta: el cerebro le pregunta al tailnet por las
+      # `musubi_fleet_net_up` lo contesta: el cerebro le pregunta al tailnet por las
       # máquinas que NO están latiendo. Las dos reglas son MUTUAMENTE EXCLUYENTES por
       # construcción —`unless` y `and` sobre la misma condición—, así que no hace falta ninguna
       # inhibición entre ellas y nunca llegan las dos.
@@ -90,16 +90,16 @@ groups:
       # antes. Es la propiedad que hace seguro el cambio: donde no se puede medir —un cerebro sin
       # tailnet, una máquina que no está en él— el eje se apaga solo en vez de callar la alerta.
       - alert: MaquinaCaida
-        expr: musubi_fleet_device_up == 0 unless on(project, device) musubi_fleet_device_net_up == 1
+        expr: musubi_fleet_device_up == 0 unless on(project, device) musubi_fleet_net_up == 1
         for: 5m
         labels: { severity: warning }
         annotations:
           summary: "No late hace más de 5 minutos, y el cerebro tampoco la alcanza por la red."
-          nota: "La máquina no está: apagada, sin red, o revocada (musubi_fleet_list --include_revoked). Si el cerebro NO puede consultar el tailnet, esta alerta también aparece sin haber podido comprobarlo — su ausencia de `musubi_fleet_device_net_up` lo dice. Ver deploy/RUNBOOK.md#maquinacaida-en-un-equipo-windows-mir-esto-primero"
+          nota: "La máquina no está: apagada, sin red, o revocada (musubi_fleet_list --include_revoked). Si el cerebro NO puede consultar el tailnet, esta alerta también aparece sin haber podido comprobarlo — su ausencia de `musubi_fleet_net_up` lo dice. Ver deploy/RUNBOOK.md#maquinacaida-en-un-equipo-windows-mir-esto-primero"
 
       # --- La máquina está viva y el agente no ---
       - alert: AgenteCaidoConMaquinaViva
-        expr: musubi_fleet_device_up == 0 and on(project, device) musubi_fleet_device_net_up == 1
+        expr: musubi_fleet_device_up == 0 and on(project, device) musubi_fleet_net_up == 1
         for: 5m
         labels: { severity: warning }
         annotations:

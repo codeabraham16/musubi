@@ -1107,6 +1107,6 @@ verdad están en el registro de eventos de Windows (evento 41), no en la flota.
 
 **Y si esta alerta NO aparece pero `MaquinaCaida` sí**, hay dos lecturas y conviene no confundirlas:
 la máquina realmente no está, **o** el cerebro no pudo preguntarle al tailnet. Se distinguen mirando
-si existe la serie: `musubi_fleet_device_net_up{device="<máquina>"}`. Si **falta**, nadie pudo medir
+si existe la serie: `musubi_fleet_net_up{device="<máquina>"}`. Si **falta**, nadie pudo medir
 —no hay `tailscale` en el cerebro, o esa máquina no está en el tailnet— y la ausencia significa «no
 sé», nunca «no está».

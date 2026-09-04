@@ -226,10 +226,17 @@ func runAgent(args []string) {
 	}
 
 	// Un agente que vuelve NO hereda una sesión de pantalla de su encarnación anterior: si murió
-	// con una contraseña puesta, se llevó el temporizador y la contraseña quedó. Cerrar acá es
-	// barato y cubre ese hueco.
-	marcarSesionAbierta(true)
-	cerrarSesionPantalla("arranque del agente")
+	// con una contraseña puesta, se llevó el temporizador y la contraseña quedó.
+	//
+	// PERO SÓLO SE CIERRA SI HUBO SESIÓN, y eso lo dice la marca en disco. Acá se forzaba
+	// `marcarSesionAbierta(true)` «por las dudas», y como RustDesk tiene UNA sola ranura de
+	// contraseña permanente, eso significaba que TODO arranque del agente le acuñaba una al azar
+	// y se la ponía — hubiera habido sesión o no. Destruía la contraseña que el dueño de la
+	// máquina había elegido, en cada reinicio. Ver el encabezado de pantalla.go.
+	if hayMarcaDeSesion() {
+		marcarSesionAbierta(true)
+		cerrarSesionPantalla("arranque del agente")
+	}
 
 	desfase := desfaseDeArranque()
 	fmt.Printf("%s agente activo · cerebro %s · latido cada %s · el primero en %s\n",

@@ -130,7 +130,45 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 // Y SÓLO APARECE PARA LAS QUE NO ESTÁN LATIENDO: en una máquina que late, la pregunta no cambia
 // ninguna decisión, y una serie que existe para toda la flota invita a construir alertas sobre
 // un dato que sólo se refresca para una parte.
-const nombreVidaDeRed = "musubi_fleet_device_net_up"
+// EL NOMBRE NO EMPIEZA CON `musubi_fleet_device_`, Y NO ES ESTILO: SI EMPEZARA, SE PIERDE.
+//
+// El scrape descarta `musubi_fleet_(device|service)_.*` con un `metric_relabel_configs` —está en
+// deploy/prometheus/prometheus.yml— porque la telemetría POR MÁQUINA llega por el empuje OTLP y
+// tener las dos copias sería duplicar. Esta serie NO viaja por OTLP: la produce el cerebro, así
+// que llamarla `musubi_fleet_device_net_up` la mandaba derecho al descarte.
+//
+// Y el modo de falla era el peor posible: la serie no llega, la alerta que la consume usa
+// `and on(...)` y con la serie ausente simplemente NO DISPARA. Todo en verde, sin un solo error,
+// y el eje entero apagado. Se desplegó así y se «verificó» aceptando su ausencia como correcta
+// —«toda la flota late, no tiene por qué existir»—, que es exactamente cómo se ve un drop.
+//
+// El nombre correcto además es más honesto: esto no lo reporta la máquina, lo mide el CEREBRO
+// sobre la máquina, igual que `musubi_fleet_approval_pending`. La guarda que impide que vuelva a
+// pasar es TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape.
+const nombreVidaDeRed = "musubi_fleet_net_up"
+
+// seriesSoloDelScrape son las que produce EL CEREBRO y no viajan por el empuje OTLP.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ESTA LISTA EXISTE PARA QUE UNA SERIE NUEVA NO SE PIERDA EN SILENCIO
+//
+// El scrape descarta `musubi_fleet_(device|service)_.*` a propósito: esa familia es telemetría
+// POR MÁQUINA y llega por OTLP, así que la copia del scrape sería duplicación. Las de acá abajo
+// NO tienen copia por OTLP — si el descarte las agarra, no llegan a ningún lado.
+//
+// Y no se nota: la alerta que las consume usa `and on(...)`, y con la serie ausente no dispara.
+// Sin errores, sin logs, sin nada rojo. Pasó con `musubi_fleet_device_net_up`, que se desplegó y
+// se «verificó» aceptando su ausencia como correcta — que es exactamente cómo se ve un drop.
+//
+// La custodia TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape cruza esta lista con el regex
+// del prometheus.yml, y además exige que TODA serie nombrada en este archivo esté o acá o en la
+// tabla de seriesDeFlota: una lista que se puede quedar vieja no protege de nada.
+var seriesSoloDelScrape = []string{
+	nombreExportTruncado,
+	nombreAprobPendientes,
+	nombreAprobEspera,
+	nombreVidaDeRed,
+}
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
 	if vidaDe == nil {

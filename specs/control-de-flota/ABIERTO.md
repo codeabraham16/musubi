@@ -35,6 +35,58 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 — LA SERIE QUE AGREGUÉ PARA DISTINGUIR «APAGADA» DE «AGENTE CAÍDO» NUNCA LLEGÓ A
+> PROMETHEUS, Y LA DI POR BUENA.**
+>
+> La llamé `musubi_fleet_device_net_up`. El scrape descarta `musubi_fleet_(device|service)_.*` con
+> un `metric_relabel_configs` —a propósito: esa familia es telemetría POR MÁQUINA y llega por el
+> empuje OTLP, así que la copia del scrape sería duplicación—. La mía no viaja por OTLP: la produce
+> el cerebro. Se descartaba entera.
+>
+> **Y el modo de falla es el peor que hay: todo verde y el eje apagado.** La alerta que la consume
+> usa `and on(...)`, y con la serie ausente simplemente no dispara. Sin errores, sin logs, sin nada
+> rojo. **Peor todavía fue cómo la verifiqué**: consulté la serie, no estaba, y acepté la ausencia
+> como correcta —«sólo se emite para máquinas que no laten, y las cuatro están arriba»—. Esa frase
+> es verdadera Y es exactamente como se ve un drop. Una verificación que confirma la hipótesis
+> propia con un dato que también es compatible con el fallo no verifica nada.
+>
+> Lo encontró la otra sesión, con una prueba de andamio que mi propio barrido dejó tirada.
+>
+> El nombre nuevo es `musubi_fleet_net_up`, y no es un rodeo: **es el nombre honesto**. Esto no lo
+> reporta la máquina, lo mide el CEREBRO sobre la máquina, igual que `musubi_fleet_approval_pending`.
+>
+> **La guarda es de la clase, no del caso**: `seriesSoloDelScrape` declara qué produce el cerebro
+> sin copia por OTLP, y la prueba cruza esa lista con el regex REAL del `prometheus.yml` desplegable.
+> Y comprueba lo segundo, que es lo que la sostiene: toda serie nombrada en el exportador tiene que
+> estar declarada en algún lado —OTLP o sólo-scrape—, porque una lista que se puede quedar vieja
+> devuelve el agujero intacto el día que alguien agregue una serie y se olvide.
+>
+> **Y EN LA MISMA TANDA: EL ARRANQUE DEL AGENTE PISABA LA CONTRASEÑA DE RUSTDESK EN CADA REINICIO.**
+>
+> Salió de perseguir por qué a gio «se le cambiaba sola» la contraseña. La memoria lo atribuía al
+> vencimiento de la sesión, y leyendo el código resultó ser más ancho: el arranque forzaba
+> `sesionAbierta.hay = true` «por las dudas» y cerraba. Como ese estado es de PROCESO, un agente
+> que arranca no puede saber si su encarnación anterior dejó algo puesto — y suponer que sí
+> significa que **TODO arranque acuñaba una contraseña al azar y se la ponía a RustDesk**, hubiera
+> habido sesión o no. En `davantis-1`, con quince cortes en diez días, una vez por corte.
+>
+> El comentario de cabecera mandaba a ver `cerrarSesionesColgadas`, una función que **no existe**:
+> era su única aparición en el repo. Un doc que nombra código inexistente hace que nadie vaya a
+> mirar lo que sí hay. Ahora la marca vive en disco, al lado del binario y no en `%LOCALAPPDATA%`
+> (A71: con `-AlArranque` el agente es SYSTEM y ahí ese directorio es otro), y ante cualquier error
+> al leerla se contesta «sí había» — el sesgo tiene que costar una contraseña de sesión, no una
+> máquina abierta.
+>
+> **Un sabotaje mío quedó verde y me enseñó lo mismo otra vez**: la prueba del caso «no se pudo
+> mirar» ponía un DIRECTORIO en la ruta, y sobre un directorio `Stat` contesta sin error — así que
+> ejercía la rama de al lado. La decisión se extrajo a `marcaSegunStat` para que la rama sea
+> alcanzable, porque la ruta sale de `os.Executable()` y en una prueba no se puede mover.
+>
+> **Lo que NO se arregló queda en A84**, con la medición que falta escrita como comando: leer el
+> `RustDesk.toml` es ejecutar algo en la máquina personal de gio, y eso no lo autoriza un par.
+>
+> Ocho sabotajes, ocho rojos. **21 cabos.**
+>
 > **2026-09-04 — WINDOWS CALCULABA EL VEREDICTO CON EL CÓDIGO DE SALIDA Y DESPUÉS LO TIRABA.**
 >
 > Salió de mirar dos alertas de `davantis-1` que sospeché que eran ruido. **No lo eran**: el parser
@@ -610,6 +662,7 @@
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
+| A84 | **Una sesión de pantalla se lleva puesta la contraseña de RustDesk del dueño, y no se la devuelve** | RustDesk tiene UNA sola ranura de contraseña permanente y `musubi_fleet_screen` la usa de borrador: `ponerPassRustdesk` corre `rustdesk --password <pass de sesión>`, que es la PERMANENTE. Al vencer, la sesión la reemplaza por una **al azar que nadie conoce** —a propósito: dejarla vacía abriría la máquina—. O sea que la contraseña que eligió el dueño sobrevive hasta la próxima sesión y después no la sabe ni él ni Musubi. **Desde su silla es indistinguible de «RustDesk me cambia la contraseña solo»**, y así se reportó: en `gio` pasó al menos dos veces. **El vencimiento local está bien** y no se toca —que la caducidad no dependa de que el cerebro siga vivo es la decisión correcta—; lo que falta es que la ranura NO ES DE MUSUBI: hay que GUARDAR el campo `password` del RustDesk.toml antes de aplicar y RESTITUIRLO al vencer, en vez de scramblear. Restituir cierra la puerta igual (la sesión termina) y no destruye lo que el dueño puso. **LO QUE FALTA ES UNA MEDICIÓN, y es una línea que corre el dueño de la máquina en su propio PowerShell** — no la puede correr un agente por él, porque leer ese archivo es ejecutar un comando en una máquina personal: `Select-String -Path "$env:APPDATA\RustDesk\config\RustDesk.toml" -Pattern '^password'`. Si el valor sale LEGIBLE, guardar y restituir por `--password` alcanza y son ~20 líneas. Si sale OFUSCADO —como en las versiones nuevas—, `--password` no sirve para devolverlo y hay que escribir el .toml de vuelta, que es otro arreglo y otra prueba. **Mientras tanto el costo está DICHO** en el contrato de la tool, en el aviso que imprime el agente al cerrar y en el runbook: el fantasma pasa a ser un costo declarado. | **gio** (una línea de PowerShell en la máquina) |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
