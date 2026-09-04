@@ -93,7 +93,16 @@
 > **Rotación del token de un dispositivo, en caliente.** Rotar era revocar + enrolar + ir a la
 > máquina; ahora los dos tokens valen hasta que el agente late con el nuevo. El solapamiento no es
 > laxitud: el agente se entera del token nuevo en la RESPUESTA de un latido, o sea después de
-> haber usado el viejo. Dos decisiones que valen más que la función: **el token nuevo vive en
+> haber usado el viejo.
+>
+> **CORRECCIÓN, mismo día:** cuando se escribió lo de arriba el arco NO existía de punta a punta, y
+> la frase «hasta que el agente late con el nuevo» describía algo que no podía pasar. El cerebro
+> mandaba `token_nuevo` en la respuesta del latido y el struct con el que el agente la decodifica
+> tenía sólo `muestra` y `comandos`: `encoding/json` descarta lo desconocido **en silencio**, así
+> que no había error ni log. Toda rotación vencía y se abandonaba. Nada peligroso —el token viejo
+> seguía valiendo, que es justamente para lo que se eligió abandonar en vez de fail-closed— pero la
+> herramienta devolvía éxito y no rotaba nada, y una auditoría de rotación demostrable habría
+> demostrado lo contrario. Cerrado ahora con la mitad del agente; el detalle está abajo. Dos decisiones que valen más que la función: **el token nuevo vive en
 > memoria del cerebro y no en la base** —en reposo hay hashes, y un volcado no puede ser un
 > llavero, que es lo que costó A74—, y **una rotación vencida se ABANDONA**, al revés de lo que
 > decía el plan: rotar es higiene, y hacerla fail-closed le pone el costo de la emergencia a la
@@ -111,6 +120,53 @@
 > El guion hasheaba todo lo que hubiera ahí. Ahora firma una lista blanca y **aborta** si ve algo
 > con pinta de secreto — saltearlo en silencio dejaría a alguien firmando con la clave al lado sin
 > enterarse nunca.
+>
+> **2026-09-03 (tarde) — LA MITAD DEL AGENTE DE LA ROTACIÓN, y el archivo que dejó de ser un token.**
+>
+> El agente lee `token_nuevo`, lo guarda y lo estrena. Lo que costó pensar no fue eso: fue que
+> **ningún orden de dos pasos evita el apagón**. El cerebro mata el viejo al completar la rotación,
+> y hay dos instantes en los que un corte deja la máquina presentando algo que el cerebro no
+> conoce — guardar el nuevo y morir antes de estrenarlo (vence, se abandona, y el nuevo ya no
+> existe del otro lado), o recibir el 200 y morir antes de anotarlo (el viejo acaba de morir).
+> Reordenar sólo elige cuál de las dos ventanas se corre.
+>
+> Así que **el archivo dejó de guardar un token y guarda los que la máquina puede presentar, en
+> orden**: el nuevo se APENDEA, al primer 200 el archivo se colapsa al que sirvió, y al arrancar se
+> prueban en orden. Las dos ventanas quedan cubiertas por el mismo mecanismo, y la segunda se
+> recupera **sin visita**: arranca con el viejo, 401, prueba el nuevo, 200. Un archivo de una línea
+> —lo que hay hoy en todas las máquinas— es un llavero válido, así que no hay migración.
+>
+> El kill-switch no se afloja: revocar borra los dos hashes, los dos dan 401 y el agente se
+> detiene como siempre (B5). Es un intento por token que el archivo YA tenía, nunca un reintento
+> del mismo contra el lockout.
+>
+> **El append no usa el reemplazo atómico de siempre, y es a propósito.** Un temporal + rename crea
+> una entrada de DIRECTORIO nueva, que no es durable sin un fsync del directorio — no disponible en
+> Windows, que es justo donde importa: la máquina que va a rotar lleva 14 cortes con
+> `BugcheckCode=0`, o sea sin apagado ordenado. Apendear no toca el directorio (el archivo ya
+> existe) y con fsync del archivo alcanza en las dos plataformas. Y un append roto es inofensivo:
+> deja una línea truncada que da 401 y se pasa a la siguiente, sin tocar las que estaban. Un rename
+> roto se lleva el archivo entero. El colapso sí usa rename, porque ahí perder la escritura cuesta
+> un 401 de más y nada más.
+>
+> **Y el token salió del entorno del proceso.** El unit hacía
+> `MUSUBI_DEVICE_TOKEN=$(cat .../token) exec musubi agent`, y el lanzador de Windows un `set /p`:
+> las dos cosas dejaban la credencial en `/proc/<pid>/environ` —legible por cualquier proceso del
+> mismo usuario— y las dos la leían UNA sola vez, que es la otra razón por la que no se podía
+> rotar sin reiniciar. Ahora entra la RUTA y el agente lee el archivo.
+>
+> **De paso se cerró una divergencia que este repo ya había nombrado y no había arreglado.** El
+> comentario de `agente-windows.ps1` decía que su prueba de latido «probaba un camino distinto del
+> que la tarea iba a usar, y por eso daba verde sobre una instalación muerta»; se había arreglado la
+> consecuencia (el ACL que dejaba a SYSTEM afuera) y la causa seguía ahí — la prueba pasaba el
+> token por variable, así que nunca abría el archivo ni su ACL. Ahora lo abre. Queda declarado lo
+> que sigue sin cubrir: con `-AlArranque` la tarea corre como SYSTEM y la prueba como el usuario,
+> así que demuestra que lo lee quien instala, no SYSTEM.
+>
+> Siete pruebas, cada una con su sabotaje en rojo. Dos sabotajes hubo que rehacerlos: uno no
+> compilaba —y un sabotaje que no compila no prueba nada— y el otro reveló que **ninguna de las
+> seis primeras atrapaba el defecto original**: todas ejercitaban el llavero en aislamiento y
+> quitar el campo del struct las dejaba todas en verde. La séptima va por el decode HTTP.
 >
 > Sigue en **20 cabos**. Lo que falta de la Ola 2 son las dos cosas que dependen de gio: el
 > certificado de firma de código (A31) y la decisión de OIDC (construir contra proxy).
