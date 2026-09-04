@@ -9,7 +9,6 @@ package mcp
 // ninguna prueba de Go tocaría — así que se prueba desde acá, que es donde vive la suite.
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -207,8 +206,8 @@ func TestElDeadMansSwitchTieneSuPropiaRutaYReceptor(t *testing.T) {
 	// cambiar una palabra, y eso sólo vale si el otro está declarado.
 	for _, r := range []string{"- name: 'watchdog'", "- name: 'null'"} {
 		if !strings.Contains(texto, r) {
-			t.Error(fmt.Sprintf("falta el receptor %q: pasar de tener dead-man's switch a no "+
-				"tenerlo tiene que ser cambiar una palabra, no editar la lista de receptores", r))
+			t.Errorf("falta el receptor %q: pasar de tener dead-man's switch a no "+
+				"tenerlo tiene que ser cambiar una palabra, no editar la lista de receptores", r)
 		}
 	}
 	// El secreto no puede vivir en un archivo que se commitea.

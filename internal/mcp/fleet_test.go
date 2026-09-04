@@ -319,12 +319,11 @@ func TestOnlineSeCalculaConElUmbralQuePideElLlamador(t *testing.T) {
 	}
 	// Con un umbral imposible de cumplir, la MISMA máquina figura caída: el estado es derivado,
 	// no un booleano guardado.
-	res, e := call(t, s, "musubi_fleet_list", map[string]any{"project": "casa", "umbral_segundos": 1})
-	if e != nil {
-		t.Fatal(e)
-	}
+	// Se espera a que el silencio SUPERE el umbral antes de preguntar: con umbral 1 s hay que
+	// dejar pasar más de un segundo, o la máquina todavía figura viva y la prueba mide lo de arriba
+	// otra vez. Antes había una llamada acá que se descartaba sin mirar.
 	time.Sleep(1100 * time.Millisecond)
-	res, e = call(t, s, "musubi_fleet_list", map[string]any{"project": "casa", "umbral_segundos": 1})
+	res, e := call(t, s, "musubi_fleet_list", map[string]any{"project": "casa", "umbral_segundos": 1})
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -203,7 +203,7 @@ func ParsearExposicion(texto, montaje string) (LecturaExposicion, bool) {
 // último campo devolvería una marca de tiempo en milisegundos donde va la memoria. Se toma el
 // PRIMER campo tras las etiquetas, que es lo que dice la especificación.
 func partirLineaExposicion(linea string) (nombre, etiquetas, valor string, ok bool) {
-	resto := linea
+	var resto string
 	if i := strings.IndexByte(linea, '{'); i >= 0 {
 		j := cierreDeEtiquetas(linea, i)
 		if j < 0 {

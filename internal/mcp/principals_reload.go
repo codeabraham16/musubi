@@ -16,8 +16,6 @@ import (
 // goroutine de fondo vigila el mtime del archivo y re-lee cuando cambia. Es model-free y 0-deps
 // (mtime-poll, no fsnotify), fiel al resto del repo.
 
-// principalResolver abstrae "resolver un bearer a un principal": lo satisfacen el registro
-// estático (*PrincipalRegistry, modo legacy sin archivo) y el recargable (*reloadableRegistry).
 // ImpactoDeNombre dice QUÉ AUTORIZACIONES NOMBRAN a una máquina, y existe porque renombrar un
 // device NO es cosmético: es un cambio de autorización disfrazado (A64).
 //
@@ -43,6 +41,8 @@ type ImpactoDeNombre struct {
 
 func (i ImpactoDeNombre) Vacio() bool { return len(i.Concesiones) == 0 && len(i.Allowlists) == 0 }
 
+// principalResolver abstrae "resolver un bearer a un principal": lo satisfacen el registro
+// estático (*PrincipalRegistry, modo legacy sin archivo) y el recargable (*reloadableRegistry).
 type principalResolver interface {
 	resolve(token string) (*Principal, bool)
 	// impactoDeNombre lista qué credenciales NOMBRAN esta máquina. Va en esta interfaz y no en

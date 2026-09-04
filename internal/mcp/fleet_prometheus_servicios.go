@@ -279,7 +279,7 @@ func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []
 		return
 	}
 	if truncado {
-		b.WriteString(fmt.Sprintf("# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO; hay más.\n", serviciosPorExportar))
+		fmt.Fprintf(b, "# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO; hay más.\n", serviciosPorExportar)
 	}
 	for _, s := range seriesDeServicio() {
 		escribirGaugeDeServicios(b, svs, s, ahora)

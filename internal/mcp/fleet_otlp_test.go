@@ -133,7 +133,7 @@ func nuevoReceptor(t *testing.T, estado int) *receptorDePrueba {
 			fmt.Fprintf(w, "rechazado, tu header fue: %s", req.Header.Get("Authorization"))
 		}
 	}))
-	t.Cleanup(r.Server.Close)
+	t.Cleanup(r.Close)
 	return r
 }
 

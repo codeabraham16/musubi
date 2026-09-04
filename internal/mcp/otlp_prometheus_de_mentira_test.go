@@ -95,7 +95,7 @@ func nuevoPrometheusDeMentira(t *testing.T) *prometheusDeMentira {
 			http.NotFound(w, req)
 		}
 	}))
-	t.Cleanup(p.Server.Close)
+	t.Cleanup(p.Close)
 	return p
 }
 

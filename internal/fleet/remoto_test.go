@@ -38,9 +38,7 @@ func leerArgs(t *testing.T, ruta string) []string {
 		return nil
 	}
 	var out []string
-	for _, l := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
-		out = append(out, l)
-	}
+	out = append(out, strings.Split(strings.TrimRight(string(b), "\n"), "\n")...)
 	return out
 }
 

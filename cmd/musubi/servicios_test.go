@@ -455,3 +455,69 @@ func TestSiElRuntimeNoEntiendeElFormatoRicoSeUsaElPobre(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// TestElParserDeMacosSeLeeDesdeLinux es el hermano que faltaba del de Windows, y su ausencia se
+// notó de la peor manera: `parsearLaunchctl` era LO ÚNICO del paquete que ningún archivo llamaba
+// desde Linux, así que el linter lo denunció como código muerto la primera vez que corrió sobre
+// esta rama. No estaba muerto —lo llama servicios_darwin.go— pero SÍ estaba sin probar, que es el
+// hallazgo verdadero: A1/A3 dicen que macOS nunca corrió en hardware, y encima su parser era el
+// único de los tres sin una prueba que lo ejerciera.
+//
+// Los parsers viven fuera de los build tags a propósito, justamente para poder hacer esto desde
+// cualquier máquina. El de Windows ya lo aprovechaba; éste no.
+func TestElParserDeMacosSeLeeDesdeLinux(t *testing.T) {
+	// Formato real de `launchctl list`: PID, último código de salida, etiqueta. Un servicio que no
+	// corre trae "-" en el PID, que NO es un número y por eso queda detenido.
+	salida := "PID\tStatus\tLabel\n" +
+		"431\t0\tcom.ejemplo.corriendo\n" +
+		"-\t0\tcom.ejemplo.detenido\n" +
+		"-\t78\tcom.ejemplo.fallado\n" +
+		"912\t0\tcom.apple.mdworker\n" +
+		"basura\n" +
+		"\n"
+	rs := parsearLaunchctl(salida, time.Now())
+
+	porNombre := map[string]fleet.ReporteServicio{}
+	for _, r := range rs {
+		porNombre[r.Nombre] = r
+		if r.Clase != "launchd" {
+			t.Errorf("%s: clase %q, esperaba launchd", r.Nombre, r.Clase)
+		}
+	}
+
+	if _, hay := porNombre["Label"]; hay {
+		t.Error("el encabezado de launchctl entró como si fuera un servicio")
+	}
+	// Una línea de menos de tres campos no puede leerse: tomarla igual convertiría basura en un
+	// servicio con nombre inventado.
+	if len(rs) != 3 {
+		t.Errorf("esperaba 3 servicios (encabezado, com.apple.* y la línea corta afuera), obtuve %d: %v", len(rs), porNombre)
+	}
+
+	// LO QUE MÁS IMPORTA DEL FILTRO: macOS trae CIENTOS de `com.apple.*`. Sin el descarte, el
+	// inventario de una Mac sería casi entero ruido del sistema y taparía lo que alguien declaró.
+	if _, hay := porNombre["com.apple.mdworker"]; hay {
+		t.Error("se reportó un servicio com.apple.*: macOS trae cientos y ahogan el inventario")
+	}
+
+	if r := porNombre["com.ejemplo.corriendo"]; r.Salud.Estado != fleet.EstadoCorriendo {
+		t.Errorf("un PID numérico > 0 no se leyó como corriendo: %v", r.Salud.Estado)
+	} else if r.Salud.PID == nil || *r.Salud.PID != 431 {
+		t.Errorf("el PID no se guardó: %v", r.Salud.PID)
+	}
+
+	// UN PID "-" NO ES UN CERO NI UN ERROR: es «no corre». Es el mismo invariante que gobierna el
+	// track entero —lo que no se pudo medir no se inventa— aplicado al caso más común de launchctl.
+	if r := porNombre["com.ejemplo.detenido"]; r.Salud.Estado != fleet.EstadoDetenido {
+		t.Errorf("un PID «-» con salida 0 no se leyó como detenido: %v", r.Salud.Estado)
+	} else if r.Salud.PID != nil {
+		t.Errorf("se inventó un PID para un servicio que no corre: %v", *r.Salud.PID)
+	}
+
+	// Y el código de salida distinto de cero manda sobre el estado: no corre Y terminó mal.
+	if r := porNombre["com.ejemplo.fallado"]; r.Salud.Estado != fleet.EstadoFallado {
+		t.Errorf("una salida 78 no se leyó como fallado: %v", r.Salud.Estado)
+	} else if r.Salud.Detalle == "" {
+		t.Error("un servicio fallado no dijo con qué código: el operador queda sin el dato que decide qué mirar")
+	}
+}

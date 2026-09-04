@@ -82,7 +82,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		return
 	}
 	if truncado {
-		b.WriteString(fmt.Sprintf("# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar))
+		fmt.Fprintf(b, "# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar)
 	}
 
 	for _, s := range seriesDeFlota(ahora, intervaloSonda, versionCerebro, enMantenimiento) {

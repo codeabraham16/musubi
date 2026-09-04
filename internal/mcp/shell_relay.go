@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -364,11 +363,13 @@ func (s *McpServer) principalDeRequest(opt httpOptions, w http.ResponseWriter, r
 	return nil, true // sin registro ni token: confianza local, igual que el resto
 }
 
-// tamañoDeTerminal lee filas/columnas de la query, con un default sensato.
-func tamanoDeTerminal(r *http.Request) (filas, columnas int) {
-	filas, _ = strconv.Atoi(r.URL.Query().Get("filas"))
-	columnas, _ = strconv.Atoi(r.URL.Query().Get("columnas"))
-	return filas, columnas
-}
+// EL TAMAÑO DE LA TERMINAL NO SE LEE ACÁ, y conviene decir por qué en vez de dejar el hueco.
+// Vivía en este archivo un `tamanoDeTerminal` que sacaba filas/columnas de la query string y que
+// NADIE llamaba: lo delató `unused` la primera vez que el linter corrió sobre esta rama. No era un
+// cabo suelto sino un duplicado — quien fija el tamaño es el AGENTE, al abrir el PTY
+// (cmd/musubi/shell_agente.go, con default 24x80 y los valores que vienen en el argv del comando).
+// El relay sólo mueve bytes. Se borró en vez de cablearse porque cablearlo habría creado una
+// SEGUNDA fuente para el mismo dato, y dos fuentes de un tamaño de terminal se contradicen el día
+// que alguien redimensiona.
 
 var _ = json.Marshal // el paquete se usa en las respuestas de la tool, en methods_shell.go

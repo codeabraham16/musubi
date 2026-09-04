@@ -1,3 +1,15 @@
+// Package fleet es el DOMINIO del track «Control de flota»: las máquinas administradas, lo que se
+// mide de ellas y lo que se les permite hacer.
+//
+// Vive separado de internal/mcp a propósito. Acá no hay HTTP, ni SQL, ni tools: sólo tipos y
+// reglas que se pueden probar sin levantar nada. Los dos invariantes que gobiernan el paquete
+// entero son de este nivel y no del transporte: UN DATO QUE NO SE PUDO MEDIR VIAJA COMO NULL Y
+// NUNCA COMO CERO —por eso media Muestra son punteros—, y TODA COMPUERTA FALLA CERRADA: un Device
+// cero, el que sale de un scan fallido o de un JSON incompleto, no permite nada.
+//
+// La aritmética difícil (la derivada de CPU, el parseo de /proc, el punto fijo de sysctl) se saca
+// deliberadamente de los build tags para poder probarla desde cualquier máquina; lo que queda
+// detrás de un tag es sólo «leer bytes del sistema operativo».
 package fleet
 
 // fleet es el DOMINIO de la flota: qué es un dispositivo controlado, de qué tier es, qué se le
@@ -220,13 +232,6 @@ func TierAdmite(t Tier, c Cap) bool {
 	return false
 }
 
-// Permite es la pregunta que hace el camino caliente: ¿este dispositivo tiene concedida esta
-// capacidad, ahora mismo?
-//
-// Fail-closed por construcción (A5): un Device cero —el que sale de un scan fallido, de un test
-// mal armado o de un JSON incompleto— no permite NADA. Y un dispositivo revocado tampoco, aunque
-// la fila conserve sus capacidades: revocar tiene que cortar sin depender de que alguien además
-// vacíe la lista.
 // ConsentimientoEfectivo cruza la POLÍTICA de esta máquina con lo que la máquina PUEDE hacer.
 //
 // Es el único lugar donde se juntan las dos, y por eso está acá y no en el llamador: si cada
@@ -254,6 +259,13 @@ func Implica(otorgada, pedida Cap) bool {
 	return otorgada == CapScreen && pedida == CapScreenView
 }
 
+// Permite es la pregunta que hace el camino caliente: ¿este dispositivo tiene concedida esta
+// capacidad, ahora mismo?
+//
+// Fail-closed por construcción (A5): un Device cero —el que sale de un scan fallido, de un test
+// mal armado o de un JSON incompleto— no permite NADA. Y un dispositivo revocado tampoco, aunque
+// la fila conserve sus capacidades: revocar tiene que cortar sin depender de que alguien además
+// vacíe la lista.
 func (d Device) Permite(c Cap) bool {
 	if d.Revoked {
 		return false

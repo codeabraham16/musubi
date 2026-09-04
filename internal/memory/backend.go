@@ -360,8 +360,6 @@ type OutboxStore interface {
 	RequeueDeadOutbox() (int, error)
 }
 
-// StorageBackend es la unión de todos los roles: el contrato que un backend completo
-// debe satisfacer. Embebe io.Closer-equivalente vía Close.
 // DeviceStore — el REGISTRO DE LA FLOTA (track «Control de flota»): dispositivos controlados,
 // su credencial y su última señal de vida. Ver internal/memory/devices.go y el dominio en
 // internal/fleet.
@@ -521,6 +519,8 @@ type ServiceStore interface {
 	MantenimientosDeDevice(deviceID string, tope int) ([]fleet.Mantenimiento, error)
 }
 
+// StorageBackend es la unión de todos los roles: el contrato que un backend completo debe
+// satisfacer. Embebe io.Closer-equivalente vía Close.
 type StorageBackend interface {
 	ObservationStore
 	RecallEngine

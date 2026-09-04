@@ -91,7 +91,11 @@ func atenderShellDelCerebro(comandoID, base, token string, argv []string) result
 	}
 	defer pty.cerrar()
 
-	cli := &http.Client{Timeout: 40 * time.Second} // > el long-poll del cerebro (25 s)
+	// El timeout del cliente tiene que ser MAYOR que el long-poll del cerebro, o el agente corta la
+	// espera justo antes de que la respuesta llegue y se pierde cada tecla. La relación estaba dicha
+	// en un comentario («40 s > el long-poll de 25 s») y ahora la dice el código: si alguien cambia
+	// la espera, el margen la sigue.
+	cli := &http.Client{Timeout: esperaEntradaAgente + 15*time.Second}
 	fin := make(chan error, 2)
 	// Lo que el cerebro tiene tecleado baja al pty.
 	go func() { fin <- bajarTeclas(cli, base, token, sesion, pty) }()

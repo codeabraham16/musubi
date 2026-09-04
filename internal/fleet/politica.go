@@ -267,15 +267,6 @@ func LimpiarSelectores(in []string) []string {
 	return out
 }
 
-// Dispara evalúa la condición contra una muestra. Devuelve el valor medido y si hay que actuar.
-//
-// UN DATO AUSENTE NO DISPARA, Y NO ES LO MISMO QUE UN CERO. Es el invariante que gobierna el
-// track entero desde S4, y acá es más caro que en un panel: una máquina Windows no tiene load
-// average —no es que valga 0.00, es que no existe—, así que una política sobre `carga_por_core`
-// tiene que IGNORARLA, no leerle un 0 y decidir que está sana. Y al revés: un `temp_c` ausente en
-// una máquina sin sensor no puede leerse como 0 °C, que sería «fresquísima».
-//
-// Nunca dispara una condición que no se pudo medir; el que no puede medir, no opina.
 // DisparaSobreServicio evalúa una condición de servicio. Devuelve el valor medido y si dispara.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -332,6 +323,15 @@ func (p Politica) DisparaSobreServicio(sv Servicio, fresco bool) (*float64, bool
 	return nil, false
 }
 
+// Dispara evalúa la condición contra una muestra. Devuelve el valor medido y si hay que actuar.
+//
+// UN DATO AUSENTE NO DISPARA, Y NO ES LO MISMO QUE UN CERO. Es el invariante que gobierna el
+// track entero desde S4, y acá es más caro que en un panel: una máquina Windows no tiene load
+// average —no es que valga 0.00, es que no existe—, así que una política sobre `carga_por_core`
+// tiene que IGNORARLA, no leerle un 0 y decidir que está sana. Y al revés: un `temp_c` ausente en
+// una máquina sin sensor no puede leerse como 0 °C, que sería «fresquísima».
+//
+// Nunca dispara una condición que no se pudo medir; el que no puede medir, no opina.
 func (p Politica) Dispara(m *Muestra) (float64, bool) {
 	if m == nil {
 		return 0, false
