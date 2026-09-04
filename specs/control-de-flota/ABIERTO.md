@@ -743,8 +743,10 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
-**2026-09-04 · A76 · LOS CONTENEDORES DE UNA WINDOWS ERAN INVISIBLES, Y ERAN CUATRO PLATAFORMAS Y NO
-TRES.**
+- **A85 CERRADO** (2026-09-04) — `pide` sobre una shell no preguntaba nada: `AvisaAlUsuario()` es true para `pide` también, así que el switch, que sólo tenía las ramas de `avisa`, mandaba una notificación y abría el prompt en el acto. La persona recibía un aviso que NO PODÍA CONTESTAR mientras el operador ya estaba adentro. Ahora hace el flujo de dos llamadas de pantalla (migración 45, `ResponderConsentimientoDeShell`, y la respuesta ruteada a las dos tablas con el MISMO `musubi:preguntar`). **La lección es por qué no se veía**: la guarda que recorría los tres caminos fijaba `avisa` en las tres filas — generalizaba sobre los CAMINOS y no sobre los GRADOS, y el agujero estaba en el otro eje. La guarda nueva es una matriz caminos × grados, y apenas se escribió encontró otra: pantalla en `pide` mandaba el aviso Y la pregunta. Lo de `exec` queda abierto en A86.
+
+**2026-09-04 · A76 CERRADO — los contenedores de una Windows eran invisibles, y eran cuatro plataformas
+y no tres.**
 
 El agente enumera contenedores desde A42 y lo hacía **sólo en Linux**, porque el bloque vivía
 ADENTRO del enumerador de Linux. Sumar una plataforma exigía acordarse de copiarlo, y nadie se
@@ -823,8 +825,8 @@ siguen VERDES; y sacando la segunda máquina del test y volviendo a poner el bug
 REGLA: una prueba de FILTRO necesita al menos dos sujetos y hechos en los dos. Un filtro que se
 ignora y un filtro que funciona son indistinguibles sobre un solo sujeto.
 
-**2026-09-04 · A82 · LA HERRAMIENTA DE DESPLIEGUE LE REEMPLAZABA EL INODO A TRES ARCHIVOS QUE UN
-CONTENEDOR TENÍA MONTADOS — Y EL PEOR NO ESTABA EN EL CABO.**
+**2026-09-04 · A82 CERRADO — la herramienta de despliegue le reemplazaba el inodo a tres archivos que
+un contenedor tenía montados, y el peor no estaba en el cabo.**
 
 Un bind-mount de ARCHIVO se pega al inodo, no al nombre. `install`, `sed -i` y `mv` no escriben el
 archivo: lo desenlazan y crean otro, así que el contenedor sigue leyendo el anterior —que ya no
@@ -884,8 +886,8 @@ pone roja.
 Cinco sabotajes en rojo, incluido el `mv` sobre el token **por variable** —donde el clasificador
 genérico era ciego— y el fallo cerrado ante una indirección nueva.
 
-**2026-09-04 · A80 · LA COMPARACIÓN QUE NADIE HABÍA HECHO ENCONTRÓ ALGO MEJOR QUE UN CAMPO QUE
-FALTA: UN CAMPO QUE MIENTE.**
+**2026-09-04 · A80 CERRADO — la comparación que nadie había hecho encontró algo mejor que un campo que
+falta: un campo que miente.**
 
 El cabo pedía dos cosas. La primera —`uptime_seg` en cero— **ya estaba contestada y el registro no
 se había enterado**: `deploy/RUNBOOK.md` declara que ese endpoint no publica
@@ -919,7 +921,7 @@ llenan— porque sin eso un parser que dejara de reconocer la métrica daría ce
 aserción pasaría por la razón equivocada. Dos sabotajes en rojo, y el del swap es el defecto tal
 cual estaba.
 
-**2026-09-04 · `avisa` SOBRE UNA SHELL NO LE AVISABA A NADIE, Y LA CAUSA ERA UN BLOQUE COPIADO.**
+**2026-09-04 · A83 CERRADO — `avisa` sobre una shell no le avisaba a nadie, y la causa era un bloque copiado.**
 
 A83. `exec` y `pantalla` encolaban su aviso al usuario de la máquina desde A57. La shell tenía
 **sólo la rama del agente que NO sabe notificar** —la que deja una línea en el log— y ninguna para

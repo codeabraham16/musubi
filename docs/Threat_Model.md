@@ -165,11 +165,34 @@ riesgo ausente.
 - **El gate por device del acceso híbrido no existe todavía.** El proposal declara relay público
   «SÓLO para devices marcados, con su propio gate» (`specs/control-de-flota/proposal.md:75`); en
   código no hay ninguna marca por máquina — al relay lo alcanza cualquiera que tenga su clave.
-- **El consentimiento no cubre `exec` ni `shell`.** El eje —`libre` < `avisa` < `pide` <
-  `prohibido`— lo consulta un solo camino, el de pantalla (`internal/mcp/methods_pantalla.go:81`,
-  `internal/mcp/methods_pantalla.go:148`); `musubi_fleet_exec` y `musubi_fleet_shell` no lo
-  invocan. En una máquina declarada `pide`, mirar la pantalla pregunta y **abrir una shell no**
-  (A75 en `specs/control-de-flota/ABIERTO.md`: decisión abierta, no bug).
+- **El consentimiento cubre `exec` y `shell`, pero `pide` sólo lo honra pantalla.** *(Este punto
+  estaba vencido en tres afirmaciones y se corrigió el 2026-09-04; lo que decía antes está al final,
+  porque su forma importa más que su contenido.)*
+
+  El eje —`libre` < `avisa` < `pide` < `prohibido`— **lo consultan los tres caminos**:
+  `musubi_fleet_exec` (`internal/mcp/methods_exec.go:60`), `musubi_fleet_shell`
+  (`internal/mcp/methods_shell.go:75` y `:116`) y `musubi_fleet_screen`
+  (`internal/mcp/methods_pantalla.go:92`, `:162` y `:178`). `prohibido` cierra los tres y `avisa`
+  notifica en los tres.
+
+  **`pide` es la excepción, y falla de la peor manera: parece honrado y no lo está.**
+  `AvisaAlUsuario()` devuelve true también para `pide` —su propio doc lo dice, «preguntar es avisar
+  y algo más»— así que el camino de la shell, que sólo tiene ramas de `avisa`, le manda a la persona
+  una NOTIFICACIÓN que no puede contestar mientras el operador ya tiene el prompt. Sólo pantalla
+  implementa la mitad que pregunta (`methods_pantalla.go:178`). El grado promete «tiene que aceptar;
+  sin respuesta, no hay sesión» y en una shell eso no pasa.
+
+  **Es LATENTE hoy**: las cuatro máquinas de la flota están sin declarar, o sea en `avisa`. Nadie lo
+  está sufriendo, y por eso no lo destapó ningún incidente sino un barrido.
+
+  **NO es una decisión abierta: es un defecto, y está en curso.** El texto anterior lo remitía a A75
+  como «decisión abierta, no bug», y A75 se CERRÓ ENTERO el 2026-09-03 por decisión de gio. Un
+  agujero descrito correctamente, etiquetado como decidido y apuntando a un cabo cerrado es la forma
+  más eficiente de que nadie vaya a mirarlo: quien lo lee concluye que alguien ya lo pensó.
+
+  **Y ADEMÁS LAS DOS REFERENCIAS DE LÍNEA HABÍAN VENCIDO** —`:81` apunta hoy a un comentario y
+  `:148` a la mitad de una frase—, que es el modo de falla propio de citar líneas en prosa: no rompe
+  nada, no lo avisa nadie, y manda a leer otra cosa con cara de precisión.
 - **No se graba nada de una sesión.** Ni pantalla ni shell: queda que HUBO acceso —quién, a qué
   máquina, cuándo y por cuánto—, no qué se hizo adentro (`internal/fleet/shell.go:9`). Es una
   decisión legal antes que técnica y todavía no tiene dueño (A14 y B10 en `ABIERTO.md`); mientras
