@@ -166,8 +166,19 @@ func TestLoOpcionalEsElExistirYNuncaElPoder(t *testing.T) {
 	if err := os.Mkdir(cerrada, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	if os.Geteuid() == 0 {
-		t.Skip("como root los permisos del inodo no frenan nada; este borde se prueba sin privilegios")
+	// LA PREMISA SE VERIFICA, NO SE SUPONE. Este borde necesita un directorio en el que de verdad
+	// no se pueda escribir, y hay DOS motivos por los que puede no lograrse: correr como root —los
+	// bits del inodo no frenan a root— o una plataforma que no los honra. Windows es el segundo:
+	// os.Mkdir ignora el modo POSIX de un directorio, así que el 0500 de arriba queda escribible.
+	//
+	// Antes esto se adivinaba con `Geteuid() == 0`, que en Windows devuelve -1 y no entraba: la
+	// prueba exigía «bloqueada» sobre un directorio perfectamente escribible y fallaba sin que
+	// hubiera nada roto. Se prueba escribiendo, que además es la MISMA regla que sostiene a
+	// revisarBlindaje —la escritura se prueba escribiendo, no mirando permisos.
+	if sonda, err := os.Create(filepath.Join(cerrada, ".sonda")); err == nil {
+		_ = sonda.Close()
+		_ = os.Remove(sonda.Name())
+		t.Skip("acá un 0500 se puede escribir igual (root, o una plataforma que no mapea los bits de modo): este borde se prueba sin privilegios sobre un FS POSIX")
 	}
 	r := revisarBlindaje([]necesidad{{Trabajo: "t", Ruta: cerrada, Acceso: accesoEscritura,
 		Opcional: true, Sintoma: "x", Directiva: "ReadWritePaths=-" + cerrada}})[0]
