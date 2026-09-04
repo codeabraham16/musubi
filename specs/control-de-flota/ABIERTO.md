@@ -35,7 +35,34 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
-> **2026-09-03 (noche) — OLA 1 ARRANCADA: lo que no necesita ninguna decisión, hecho.**
+> **2026-09-03 (madrugada) — OLA 2, la parte que no necesita comprar nada.**
+>
+> **Rotación del token de un dispositivo, en caliente.** Rotar era revocar + enrolar + ir a la
+> máquina; ahora los dos tokens valen hasta que el agente late con el nuevo. El solapamiento no es
+> laxitud: el agente se entera del token nuevo en la RESPUESTA de un latido, o sea después de
+> haber usado el viejo. Dos decisiones que valen más que la función: **el token nuevo vive en
+> memoria del cerebro y no en la base** —en reposo hay hashes, y un volcado no puede ser un
+> llavero, que es lo que costó A74—, y **una rotación vencida se ABANDONA**, al revés de lo que
+> decía el plan: rotar es higiene, y hacerla fail-closed le pone el costo de la emergencia a la
+> rutina. Para la emergencia está revocar, que es instantáneo.
+>
+> **El canal de actualización verifica procedencia, no sólo integridad.** El `.sha256` lo publica
+> quien publica el binario: verificarlo dice que el archivo llegó entero, no que sea nuestro. Y
+> acá el mismo binario es el cerebro y el agente, así que un release comprometido no entrega una
+> máquina, entrega la flota. Ahora el manifiesto va firmado con ed25519, la clave pública embebida
+> y la privada fuera de línea; **primero la firma y después el hash**, porque al revés el hash
+> verifica la integridad de un dato cuya procedencia todavía no se estableció.
+>
+> **Y la prueba de punta a punta encontró un bug que ninguna unitaria habría visto**: firmé con la
+> clave privada apoyada en el directorio del release y el manifiesto salió con `priv.key` adentro.
+> El guion hasheaba todo lo que hubiera ahí. Ahora firma una lista blanca y **aborta** si ve algo
+> con pinta de secreto — saltearlo en silencio dejaría a alguien firmando con la clave al lado sin
+> enterarse nunca.
+>
+> Sigue en **20 cabos**. Lo que falta de la Ola 2 son las dos cosas que dependen de gio: el
+> certificado de firma de código (A31) y la decisión de OIDC (construir contra proxy).
+>
+> > **2026-09-03 (noche) — OLA 1 ARRANCADA: lo que no necesita ninguna decisión, hecho.**
 >
 > **Los 19 joins llevan `project`.** Con un solo tenant `on(device)` se comporta igual, y por eso
 > el error era invisible: el día que dos clientes tengan cada uno un `srv-01`, Prometheus descarta
