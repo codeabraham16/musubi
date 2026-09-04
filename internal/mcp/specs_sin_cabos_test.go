@@ -259,3 +259,76 @@ func estaDefinido(texto, num string) bool {
 	}
 	return false
 }
+
+// TODA FILA DE UNA TABLA TIENE LAS CELDAS QUE SU ENCABEZADO DECLARA.
+//
+// Lo encontró una fila real, no una hipótesis: `B20` tenía CUATRO celdas —terminaba en
+// `| **decidido** |`— en una tabla cuyo encabezado declara TRES (`| # | Qué | Por qué no |`).
+// Era una fila con forma de tabla 1 metida en la tabla 2, y llevaba así desde que se renumeró.
+//
+// NO ES COSMÉTICO, Y ES POR ESO QUE HAY GUARDA. Markdown no falla con una celda de más: la
+// DESCARTA. Así que lo que se caía al renderizar era exactamente la palabra que esa fila existe
+// para decir —`decidido`—, y donde la gente LEE el registro esa fila se veía igual que una sin
+// resolver. Un formato que se traga el dato más importante de una fila sin avisar es la misma
+// familia que persigue todo este archivo: no falla, miente en silencio.
+//
+// La guarda es general y no nombra a B20: cuenta las celdas del encabezado de CADA tabla y exige
+// que sus filas coincidan. Una tabla nueva queda cubierta sin tocar esta prueba.
+//
+// Sabotaje que la hace fallar: devolverle a B20 su ` | **decidido** |`, o quitarle una celda a
+// cualquier fila de cualquier tabla.
+func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
+	crudo, err := os.ReadFile(filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md"))
+	if err != nil {
+		t.Fatalf("no se pudo leer ABIERTO.md: %v", err)
+	}
+
+	// `| a | b |` son 2 celdas: se cuentan los separadores internos, que es lo que usa el
+	// renderizador para decidir dónde corta.
+	celdas := func(l string) int { return strings.Count(strings.TrimSpace(l), "|") - 1 }
+	// El separador de un encabezado es la línea de guiones: `|---|---|`.
+	esSeparador := func(l string) bool {
+		l = strings.TrimSpace(l)
+		return strings.HasPrefix(l, "|") && strings.Trim(l, "|-: \t") == ""
+	}
+	esFila := func(l string) bool {
+		l = strings.TrimSpace(l)
+		return strings.HasPrefix(l, "|") && strings.HasSuffix(l, "|")
+	}
+
+	lineas := strings.Split(string(crudo), "\n")
+	tablas, filasVistas := 0, 0
+	esperadas, encabezadoEn := 0, 0
+	for i, l := range lineas {
+		switch {
+		case esSeparador(l):
+			// El encabezado es la línea de ARRIBA. Si no era una fila, esto no es una tabla.
+			if i > 0 && esFila(lineas[i-1]) {
+				esperadas, encabezadoEn = celdas(lineas[i-1]), i
+				tablas++
+			} else {
+				esperadas = 0
+			}
+		case esperadas > 0 && esFila(l):
+			filasVistas++
+			if n := celdas(l); n != esperadas {
+				t.Errorf("ABIERTO.md línea %d: la fila tiene %d celdas y su encabezado (línea %d) "+
+					"declara %d.\n    %s\n  Markdown DESCARTA la celda de más sin avisar, así que el "+
+					"dato que sobra no se ve en ningún lado: no es un detalle de formato, es una "+
+					"celda que existe en el archivo y no existe para quien lo lee. Pliegala en la "+
+					"columna que corresponda, o dale a la tabla la columna que le falta.",
+					i+1, n, encabezadoEn, esperadas, recorte(strings.TrimSpace(l), 110))
+			}
+		case esperadas > 0:
+			esperadas = 0 // se terminó la tabla
+		}
+	}
+
+	// CONTROL DE QUE MIRÓ ALGO: si cambiara el formato del archivo —tablas sin línea de guiones,
+	// otro estilo de barras— los reconocedores dejarían de matchear y esta prueba pasaría en verde
+	// sin haber contado una sola celda. Hoy hay 3 tablas y más de 30 filas.
+	if tablas < 3 || filasVistas < 30 {
+		t.Fatalf("se reconocieron %d tabla(s) y %d fila(s) en ABIERTO.md, y son al menos 3 y 30: "+
+			"cambió el formato del archivo y esta guarda dejó de mirar", tablas, filasVistas)
+	}
+}
