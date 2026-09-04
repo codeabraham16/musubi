@@ -114,6 +114,15 @@ type respuestaLatido struct {
 	Servicios string `json:"servicios,omitempty"`
 	// Motivo viaja SÓLO en el 401 y es el mismo texto para todos los rechazos (B3).
 	Motivo string `json:"motivo,omitempty"`
+	// TokenNuevo es la credencial de una rotación en curso, y viaja SÓLO mientras la rotación
+	// está abierta y el agente todavía late con el token viejo (Ola 2).
+	//
+	// Es la única cosa que este canal manda que no es un comando, y por eso vale decir qué la
+	// hace aceptable: no amplía lo que el cerebro puede pedirle a la máquina —no ejecuta nada—,
+	// va por un canal que el agente ya abre él mismo, y deja de mandarse en cuanto el agente
+	// late con ella. Si el agente no la guarda, sigue llegando; si el plazo vence, la rotación
+	// se abandona y el token viejo sigue valiendo.
+	TokenNuevo string `json:"token_nuevo,omitempty"`
 }
 
 // comandoParaElAgente es lo MÍNIMO que el agente necesita para ejecutar. No viaja quién lo pidió
@@ -167,7 +176,10 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		// quién es. Esa ausencia es el invariante B4 — un cuerpo con `device_id` no tendría dónde
 		// aterrizar aunque lo mandaran.
 		token := bearerToken(r.Header.Get("Authorization"))
-		d, ok, err := s.engine.DevicePorToken(token)
+		// RESUELVE POR CUALQUIERA DE LOS DOS TOKENS mientras hay una rotación abierta (Ola 2).
+		// El agente se entera del nuevo en la RESPUESTA de un latido, o sea después de haber
+		// usado el viejo: sin solapamiento quedaría afuera entre que lo recibe y lo guarda.
+		d, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token)
 		if err != nil {
 			// Un fallo de la base NO es un rechazo de credencial: no gasta la cuota del limiter
 			// (si no, una base caída bloquearía por IP a toda la flota legítima) y se responde
@@ -185,6 +197,23 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 
 		// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un
 		// desconocido es trabajo gratis para quien lo mande.
+		// LA ROTACIÓN SE COMPLETA ACÁ, y no al emitir el token: llegar con el nuevo es la ÚNICA
+		// prueba de que el agente lo guardó y lo puede usar. Emitirlo y darlo por cerrado sería
+		// creerle al remitente en vez de al receptor — el mismo error que cerró A78.
+		//
+		// Best-effort: si falla, el viejo sigue valiendo y el próximo latido reintenta. Lo que NO
+		// puede pasar es que el latido se rechace por esto.
+		if conElNuevo {
+			if err := s.engine.CompletarRotacion(d.ID); err != nil {
+				logx.Warn("flota: no se pudo completar la rotación del token; el viejo sigue valiendo y se reintenta en el próximo latido",
+					"device", d.Name, "error", err)
+			} else {
+				// Y el secreto se olvida: completada la rotación no tiene ninguna razón para
+				// seguir existiendo en memoria.
+				s.olvidarRotacion(d.ID)
+				logx.Info("flota: rotación de token completada; el token anterior dejó de valer", "device", d.Name)
+			}
+		}
 		muestraJSON, notaMuestra, notaServicios := s.leerCuerpoDelLatido(r, d)
 
 		// UNA SOLA TRANSACCIÓN PARA LAS DOS ESCRITURAS QUE SIEMPRE OCURREN: la señal de vida y
@@ -217,6 +246,18 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 
 		resp := respuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
 			Muestra: notaMuestra, Servicios: notaServicios}
+		// EL TOKEN NUEVO VIAJA MIENTRAS EL AGENTE SIGA LATIENDO CON EL VIEJO, y deja de viajar en
+		// cuanto late con el nuevo (ahí la rotación ya se completó unas líneas más arriba).
+		//
+		// Repetirlo en cada latido no es un descuido: el agente puede fallar al guardarlo —disco
+		// lleno, permisos— y un token que se manda una sola vez convierte ese fallo en una
+		// rotación que nadie puede completar y nadie sabe por qué. Repetido, el próximo latido lo
+		// vuelve a traer; y como el viejo sigue valiendo, la máquina nunca queda afuera.
+		if !conElNuevo {
+			if tok, hay := s.tokenDeRotacionPendiente(d.ID); hay {
+				resp.TokenNuevo = tok
+			}
+		}
 		for _, c := range pendientes {
 			resp.Comandos = append(resp.Comandos, comandoParaElAgente{
 				ID: c.ID, Argv: c.Argv, TimeoutSeg: int(c.Timeout.Seconds()),

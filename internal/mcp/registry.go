@@ -1346,6 +1346,22 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_fleet_rotate",
+				Description: "ADMIN. Rota el token de una máquina SIN tocarla y sin re-enrolarla. Hasta ahora rotar era revocar + enrolar + ir a la máquina a pegar el token nuevo; con cuarenta máquinas eso no se hace, y una auditoría pide rotación demostrable. Los DOS tokens valen hasta que el agente late con el nuevo (ahí el viejo deja de valer) o hasta que vence la ventana (24 h por default; ahí la rotación se ABANDONA y el viejo sigue). El solapamiento no es descuido: el agente recibe el token nuevo en la RESPUESTA de un latido, o sea después de haber usado el viejo, así que sin ventana quedaría afuera entre que lo recibe y lo guarda. EL TOKEN NUEVO VIVE EN MEMORIA DEL CEREBRO, no en la base: en reposo hay hashes y no credenciales, y un volcado de la base no puede ser un llavero. El costo está declarado: si el cerebro se reinicia, la rotación se pierde y hay que volver a pedirla — el token viejo sigue valiendo, así que la máquina nunca queda afuera. NO ES LA HERRAMIENTA DE LA EMERGENCIA: si el token se FILTRÓ, lo que corta en el acto es musubi_fleet_revoke, que no depende de que el agente coopere. Rotar es higiene, y por eso puede esperar a que el agente conteste.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":  {Type: "string", Description: "Nombre de la máquina"},
+						"horas":   {Type: "integer", Description: "Cuánto se le ofrece el token nuevo al agente. Default 24"},
+						"project": {Type: "string", Description: "project_id de la máquina. Sólo lo respeta un principal read=all"},
+					},
+					Required: []string{"device"},
+				},
+			},
+			handler: s.toolFleetRotate,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_fleet_maintenance",
 				Description: "Declara una VENTANA DE MANTENIMIENTO sobre una máquina: «de acá a tantos minutos, ésta va a estar rara a propósito». Mientras la ventana esté activa pasan DOS cosas, y la segunda es la que un `silence` de Alertmanager no puede: las reglas que miran `musubi_fleet_device_maintenance` no alertan, Y las políticas de auto-heal NO ACTÚAN sobre esa máquina. Sin esto, un reinicio planificado dispara `servicio_caido`, la política levanta el servicio en mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Compuerta: `metrics` sobre ESA máquina — quien puede mirar su telemetría puede decir que va a estar rara; no hace falta ser admin ni tener `exec`, porque declarar una ventana no ejecuta nada. TECHO DURO DE 24 HORAS por ventana, y no es burocracia: una ventana silencia y frena el auto-heal, así que una olvidada es una máquina ciega con el panel en verde. Si el mantenimiento sigue, se declara otra. `MantenimientoEterno` avisa a las 25 h. Para retirarla antes de tiempo, pasá `cancelar` con el id que devolvió el alta: la fila NO se borra, se marca —la cronología se construye sólo sobre tablas que no se editan, y «lo cancelaron a los diez minutos» explica el comportamiento de esa máquina mejor que la ausencia de toda fila.",
 				InputSchema: InputSchema{

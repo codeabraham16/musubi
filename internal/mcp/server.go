@@ -199,6 +199,10 @@ type McpServer struct {
 	// un ESTADO (una política sin principal, un rechazo de compuerta). Clave -> true; se borra
 	// cuando la condición se resuelve, así que una recaída vuelve a avisar.
 	avisosDados sync.Map
+	// rotaciones guarda EN MEMORIA el token nuevo de cada rotación abierta, para poder repetirlo
+	// en cada latido hasta que el agente lo use. En la base sólo va su hash: un volcado de la
+	// base no puede ser un llavero. Ver internal/mcp/rotacion.go para el costo declarado.
+	rotaciones sync.Map
 	// ultimaPoda es cuándo se vaciaron por última vez las salidas viejas. La poda NO va en cada
 	// tick: es un UPDATE sobre la tabla de comandos y el tick es de minutos.
 	ultimaPoda time.Time

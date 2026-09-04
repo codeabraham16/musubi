@@ -267,6 +267,17 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 		fallidos += mal
 		acciones += s.aplicarPoliticas(proy, time.Now())
 	}
+	// LAS ROTACIONES VENCIDAS SE ABANDONAN, no se completan a la fuerza (Ola 2). Se descarta el
+	// token nuevo y sigue valiendo el viejo: rotar es higiene, y hacer que una higiene fallida
+	// deje al agente sin credencial convertiría una operación de rutina en un apagón —y la
+	// máquina más difícil de arreglar es justamente la que dejó de latir. Si lo que hubo fue una
+	// filtración, la herramienta es revocar, no rotar.
+	if n, err := s.engine.AbandonarRotacionesVencidas(time.Now()); err != nil {
+		logx.Error("flota: no se pudieron abandonar las rotaciones vencidas", "error", err)
+	} else if n > 0 {
+		logx.Warn("flota: rotaciones de token abandonadas por vencimiento; el token anterior sigue valiendo",
+			"rotaciones", n)
+	}
 	podadas := s.podarSalidasSiToca(time.Now())
 	s.podarEstadoDePoliticasSiToca()
 	// Los techos de las sesiones de shell los aplica EL CEREBRO (S5b · T5). Si dependieran de la
