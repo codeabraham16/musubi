@@ -387,7 +387,12 @@ groups:
         annotations:
           summary: "{{ $labels.service }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
           runbook: "deploy/RUNBOOK.md#servicioreiniciandose"
-          ausente_en: "os=windows — el SCM no expone cuántas veces se reinició un servicio, y un 0 inventado se leería «nunca se reinició»; tier=B — un Tier B no reporta servicios."
+          # A76 AFINÓ ESTA RAZÓN, y no el selector. El cabo suponía que había que acotarla a «los
+          # servicios del SCM»; es al revés — el selector sólo se consulta cuando la serie ESTÁ
+          # AUSENTE (verificar-cobertura.sh), así que en una Windows que reporta contenedores la
+          # serie existe, la máquina cuenta como cubierta y esta excusa no se mira. Lo que había
+          # que corregir es la prosa, que presentaba al SCM como la historia completa.
+          ausente_en: "os=windows — el SCM no expone cuántas veces se reinició un servicio, y un 0 inventado se leería «nunca se reinició». OJO: desde A76 una Windows SÍ reporta sus contenedores, y un contenedor sí expone reinicios — así que ver esta excusa disparar sobre una Windows significa que esa máquina no corre ninguno, y eso es un dato, no una laguna; tier=B — un Tier B no reporta servicios."
 
       # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
       # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.

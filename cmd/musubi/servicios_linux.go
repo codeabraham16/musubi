@@ -49,17 +49,11 @@ func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
 		todo = append(todo, parsearSystemctlShow(salida, ahora)...)
 	}
 
-	// Los contenedores son la otra mitad de «qué corre acá», y en este servidor son 18. Se
-	// prueban las dos herramientas porque una máquina puede tener cualquiera de las dos, y
-	// tenerlas a las dos es normal. No tenerlas es normal también: eso es `hay == false`.
-	for _, cli := range []string{"podman", "docker"} {
-		s, hay, err := contenedoresDe(cli)
-		if err != nil {
-			return nil, err
-		}
-		if hay {
-			todo = append(todo, parsearContenedores(s, cli, ahora)...)
-		}
+	// Los contenedores son la otra mitad de «qué corre acá», y en este servidor son 18. El bloque
+	// vive en servicios_contenedores.go porque las TRES plataformas lo necesitan (A76).
+	cont, err := enumerarContenedores(ahora)
+	if err != nil {
+		return nil, err
 	}
-	return todo, nil
+	return append(todo, cont...), nil
 }

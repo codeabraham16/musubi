@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"os"
+
+	"path/filepath"
 )
 
 func repDe(nombre string, estado fleet.EstadoServicio) fleet.ReporteServicio {
@@ -664,5 +667,72 @@ func TestLasCuatroPlataformasDicenPorQueFalloUnServicio(t *testing.T) {
 					c.plataforma, r.Salud.Detalle, c.esperaEn)
 			}
 		})
+	}
+}
+
+// TODA PLATAFORMA QUE ENUMERA SERVICIOS ENUMERA TAMBIÉN SUS CONTENEDORES.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// A76, Y POR QUÉ ESTA GUARDA MIRA EL TEXTO
+//
+// El bloque que enumera contenedores vivía ADENTRO del enumerador de Linux, así que sumar una
+// plataforma exigía acordarse de copiarlo — y nadie se acordó. Medido el 2026-09-02:
+// `musubi-server` reportaba 57 servicios de los cuales 14 eran contenedores; `davantis-1`
+// reportaba 64 y NINGUNO, con once de Docker Desktop corriendo. Dos estaban rotos
+// —`supabase_vector` en bucle de reinicio hacía días, `edge-runtime` muerto hacía tres con código
+// 255— y se encontraron A MANO, buscando espacio en disco. Ninguna alerta falló: la serie no
+// existía, así que no había nada que pudiera ponerse rojo.
+//
+// LOS ENUMERADORES VIVEN DETRÁS DE BUILD TAGS y el compilador no puede ayudar acá: desde Linux
+// sólo se compila `servicios_linux.go`, así que ni `go vet` ni una prueba de comportamiento ven a
+// los otros dos. Leer el texto es el único amarre disponible, igual que con el instalador de
+// Windows y el colector del relay. Es pobre y es el que hay.
+//
+// FALLA CERRADA ANTE UN ARCHIVO NUEVO: la lista no está escrita a mano, se descubre por glob. Una
+// plataforma que aparezca mañana con su `enumerarServiciosDelSistema` entra vigilada por default,
+// que es lo contrario de una lista de las que sí hay que revisar — ahí la quinta nacería sin
+// guarda y en silencio.
+//
+// Sabotaje que la hace fallar: sacar la llamada a `enumerarContenedores` de cualquiera de los tres.
+func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
+	archivos, err := filepath.Glob("servicios_*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirados := 0
+	for _, f := range archivos {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		// Sólo los archivos que DEFINEN el enumerador: los de parseo y el de contenedores no lo
+		// hacen, y exigirles la llamada sería ruido.
+		if !strings.Contains(src, "func enumerarServiciosDelSistema(") {
+			continue
+		}
+		mirados++
+		// NO HAY EXCEPCIONES, y eso salió de escribir esta prueba. La primera versión eximía al
+		// stub de «el resto de los sistemas» —parecía razonable: no tiene colector de servicios—
+		// y la guarda lo marcó igual. Tenía razón: `docker` y `podman` no son de un sistema
+		// operativo, y `contenedoresDe` ya trata «la herramienta no está» como `hay == false`. La
+		// excepción habría dejado la misma trampa de A76 un escalón más abajo, y de paso obligaba
+		// a reconocer el stub por su texto, que es un heurístico que envejece.
+		if !strings.Contains(src, "enumerarContenedores(") {
+			t.Errorf("%s define enumerarServiciosDelSistema y NO llama a enumerarContenedores.\n"+
+				"  `docker` corre en las tres plataformas, así que sus contenedores son parte de "+
+				"«qué corre acá». Sin esto la serie no existe para esa máquina, y una serie que no "+
+				"existe no puede poner ninguna alerta en rojo — que es exactamente cómo dos "+
+				"contenedores rotos sobrevivieron días en davantis-1.", f)
+		}
+	}
+	// CONTROL DE QUE MIRÓ ALGO: si el glob o el nombre de la función cambiaran, el bucle no
+	// iteraría y esta prueba pasaría en verde sin haber abierto un solo enumerador.
+	if mirados < 4 {
+		t.Fatalf("se encontraron %d enumeradores de plataforma y son al menos 4 (linux, windows, "+
+			"darwin y el de «el resto»): cambió la forma del paquete y esta guarda dejó de mirar", mirados)
 	}
 }

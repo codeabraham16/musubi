@@ -37,9 +37,28 @@ func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
 	// otro (1067 murió, 1077 nunca arrancó desde el boot) es una falla de verdad. `Get-Service`
 	// no expone ese campo, y por eso se cambia de fuente.
 	const ps = `Get-CimInstance Win32_Service | Select-Object Name,State,StartMode,ExitCode | ConvertTo-Csv -NoTypeInformation`
+	ahora := time.Now()
 	salida, err := salidaDeComando("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
 	if err != nil {
 		return nil, err
 	}
-	return parsearServiciosWindows(salida, time.Now()), nil
+	todo := parsearServiciosWindows(salida, ahora)
+
+	// A76 — LOS CONTENEDORES TAMBIÉN CORREN ACÁ, y hasta hoy eran invisibles para la flota.
+	//
+	// El agente enumera contenedores desde A42 y sólo lo hacía en Linux, porque el bloque vivía
+	// adentro del enumerador de Linux. Medido el 2026-09-02: `musubi-server` reportaba 57
+	// servicios de los cuales 14 eran contenedores; `davantis-1` reportaba 64 y NINGUNO, con once
+	// de Docker Desktop corriendo. Dos de ellos estaban rotos —`supabase_vector` en bucle de
+	// reinicio hacía días, `edge-runtime` muerto hacía tres con código 255— y se encontraron a
+	// mano, buscando espacio en disco. No falló ninguna alerta: la serie no existía.
+	//
+	// En cuanto se reportan, `ServicioCaido` y `ServicioReiniciandose` los cubren sin escribir una
+	// regla nueva. Docker Desktop expone el mismo `docker ps` que Linux, así que es el MISMO
+	// colector con otra fuente.
+	cont, err := enumerarContenedores(ahora)
+	if err != nil {
+		return nil, err
+	}
+	return append(todo, cont...), nil
 }

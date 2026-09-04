@@ -18,9 +18,20 @@ import (
 )
 
 func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
+	ahora := time.Now()
 	salida, err := salidaDeComando("launchctl", "list")
 	if err != nil {
 		return nil, err
 	}
-	return parsearLaunchctl(salida, time.Now()), nil
+	todo := parsearLaunchctl(salida, ahora)
+
+	// A76 — los contenedores también, por el mismo motivo que en Windows: Docker Desktop corre en
+	// macOS y expone el mismo `docker ps`. Acá no hay una medición que lo respalde —no hay ningún
+	// Mac en la flota (A3)— así que se cablea por SIMETRÍA y no por evidencia, que es exactamente
+	// lo que evita que esta plataforma sea la próxima que se queda afuera cuando aparezca un Mac.
+	cont, err := enumerarContenedores(ahora)
+	if err != nil {
+		return nil, err
+	}
+	return append(todo, cont...), nil
 }

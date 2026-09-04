@@ -41,6 +41,41 @@ var formatoContenedores = []string{
 	"{{.Names}}\t{{.State}}\t{{.Status}}",
 }
 
+// enumerarContenedores devuelve lo que corre en podman y en docker, en ESTA máquina.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ES UNA FUNCIÓN Y NO UN BLOQUE COPIADO EN CADA PLATAFORMA, Y ÉSA ES LA MITAD DEL ARREGLO DE A76
+//
+// Vivía adentro del enumerador de Linux, así que sumar una plataforma exigía ACORDARSE de
+// copiarlo — y nadie se acordó. El costo se pagó el 2026-09-02: `davantis-1` reportaba 64
+// servicios y NINGÚN contenedor, con once de Docker Desktop corriendo; `supabase_vector` llevaba
+// días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se
+// encontraron A MANO, buscando espacio en disco. Ninguna alerta existía, porque la serie no
+// existía.
+//
+// Es la misma forma que A83 y que el `Detalle` de Windows: N caminos deberían hacer lo mismo,
+// N-1 lo hacen, y el que falta no rompe nada visible. Escribir la tercera copia habría dejado la
+// trampa armada para la cuarta plataforma.
+//
+// SE PRUEBAN LAS DOS HERRAMIENTAS porque una máquina puede tener cualquiera, y tenerlas a las dos
+// es normal. No tenerlas también: eso es `hay == false` y no un error.
+//
+// Y CUALQUIERA QUE ESTÉ Y FALLE ABORTA EL INVENTARIO ENTERO, igual que systemd: el cerebro poda
+// por ausencia, así que media lista es una baja falsa. El porqué largo está en enumerarFuente.
+func enumerarContenedores(ahora time.Time) ([]fleet.ReporteServicio, error) {
+	var rs []fleet.ReporteServicio
+	for _, cli := range []string{"podman", "docker"} {
+		s, hay, err := contenedoresDe(cli)
+		if err != nil {
+			return nil, err
+		}
+		if hay {
+			rs = append(rs, parsearContenedores(s, cli, ahora)...)
+		}
+	}
+	return rs, nil
+}
+
 // contenedoresDe consulta un runtime, degradando el formato si hace falta.
 func contenedoresDe(cli string) (salida string, hayFuente bool, err error) {
 	for _, formato := range formatoContenedores {
