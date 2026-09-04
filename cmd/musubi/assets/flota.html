@@ -450,9 +450,24 @@ function pintar(d) {
   const equipos = d.equipos || [];
   const vivas = equipos.filter(e => e.online).length;
   sub.textContent = `${equipos.length} máquina(s) · ${vivas} en línea · cerebro ${d.destino}`;
+  // LOS DOS AVISOS SE ACUMULAN, no se pisan: una tabla corta puede estarlo por las dos razones a
+  // la vez —máquinas que no ves y un barrido recortado— y mostrar una sola dejaría la otra sin
+  // decir. Son la MISMA regla: una lista incompleta que no lo declara enseña a creer que está
+  // completa.
+  const avisos = [];
   if (d.sin_permiso > 0) {
-    aviso.innerHTML = `<div class="aviso"><b>${d.sin_permiso} máquina(s) ocultas</b><br>` +
-      `tu credencial no tiene concesiones de flota sobre ellas. Las capacidades NO se derivan del rol: se declaran en la sección <code>fleet:</code> de principals.yaml.</div>`;
+    avisos.push(`<b>${d.sin_permiso} máquina(s) ocultas</b><br>` +
+      `tu credencial no tiene concesiones de flota sobre ellas. Las capacidades NO se derivan del rol: se declaran en la sección <code>fleet:</code> de principals.yaml.`);
+  }
+  // El cerebro recortó el barrido de proyectos. Lo dice desde siempre y hasta ahora no llegaba
+  // hasta acá: la tabla se dibujaba corta sin una palabra, que es exactamente lo que el comentario
+  // del cerebro dice que no hay que hacer.
+  if (d.truncado) {
+    avisos.push(`<b>esta lista está recortada</b><br>` +
+      `el cerebro tocó su techo de proyectos por consulta: hay máquinas que NO figuran acá. Filtrá por proyecto para verlas.`);
+  }
+  if (avisos.length) {
+    aviso.innerHTML = avisos.map(a => `<div class="aviso">${a}</div>`).join('');
   }
 
   const cuerpo = document.getElementById('cuerpo');

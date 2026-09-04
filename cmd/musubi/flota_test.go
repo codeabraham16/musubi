@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -695,5 +696,179 @@ func TestElPanelDibujaElRendimientoDeUnServicio(t *testing.T) {
 	if strings.Contains(cuerpo, "r.fallidas / r.atendidas") || strings.Contains(cuerpo, "r.fallidas/r.atendidas") {
 		t.Errorf("el panel recalcula la tasa de error en vez de usar la del servidor: sobre cero "+
 			"atendidas no hay tasa, y esa decisión no puede vivir en dos lados.\n%s", cuerpo)
+	}
+}
+
+// TODO CAMPO QUE LA PÁGINA DIBUJA TIENE ORIGEN DECLARADO.
+//
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// ESTA PRUEBA EXISTE PORQUE A38 SE DIO POR CERRADO Y NO LO ESTABA, Y SU PROPIA PRUEBA LO CERTIFICÓ
+//
+// A38 decía: «`num_procesos` y `mem_libre` llegan a musubi_fleet_metrics y a Prometheus desde U1, y
+// el panel —que es donde alguien los mira— no los tenía. Es el patrón que este track viene
+// persiguiendo: datos guardados que ninguna interfaz muestra». El diagnóstico era exacto. El
+// arreglo tocó SÓLO el HTML, y TestElPanelDibujaLosProcesosYLaMemoriaLibre verifica que el archivo
+// CONTENGA las cadenas `e.num_procesos` y `bytes(e.mem_libre)` — nunca que el dato LLEGUE.
+//
+// Y no llegaba: el proxy de este mismo paquete copia del resultado de métricas una LISTA BLANCA de
+// campos, y esos dos no estaban. O sea que la página los dibujaba como «no medido» SIEMPRE, en las
+// tres plataformas, anulando el trabajo que el cerebro hace con enteroONull justamente para
+// distinguir un cero medido de un no-medido. A38 quedó abierto con una prueba en verde encima.
+//
+// Es la misma forma que el resto de la noche: una prueba que NOMBRA una cosa y EJERCITA otra.
+// Por eso ésta no mira texto: pasa por el handler de verdad, con un cerebro falso que manda los
+// campos, y exige que salgan del otro lado.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+//
+// Sabotaje que la hace fallar: sacar "mem_libre" o "num_procesos" de la lista blanca del proxy.
+func TestElProxyDelPanelEntregaLasMetricasQueElCerebroMando(t *testing.T) {
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true}]}`,
+		"musubi_fleet_metrics": `{"devices":[{"name":"pc","cpu_pct":42.5,"mem_pct":10,"disco_pct":3,` +
+			`"temp_c":50,"load1":1.5,"uptime_seg":99,"antiguedad_s":2,"num_cpu":8,` +
+			`"mem_libre":1073741824,"num_procesos":317}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	if len(got.Equipos) != 1 {
+		t.Fatalf("equipos = %d", len(got.Equipos))
+	}
+	e := got.Equipos[0]
+	for campo, esperado := range map[string]any{
+		"cpu_pct": 42.5, "mem_pct": 10.0, "disco_pct": 3.0, "temp_c": 50.0, "load1": 1.5,
+		"uptime_seg": 99.0, "antiguedad_s": 2.0, "num_cpu": 8.0,
+		"mem_libre": 1.073741824e9, "num_procesos": 317.0,
+	} {
+		if e[campo] != esperado {
+			t.Errorf("el proxy no entregó %q: got %v (%T), esperaba %v — el cerebro lo mandó y "+
+				"la página lo dibuja; si no lo copia, se ve «no medido» siempre", campo, e[campo], e[campo], esperado)
+		}
+	}
+}
+
+// origenDeclaradoDeLosCampos dice de dónde sale cada campo que la página lee. No es documentación:
+// es lo que hace que agregar una celda nueva obligue a decidir quién la llena.
+var origenDeclaradoDeLosCampos = map[string]string{
+	// De musubi_fleet_list, que el proxy pasa entero.
+	"name": "fleet_list", "tier": "fleet_list", "os": "fleet_list", "arch": "fleet_list",
+	"address": "fleet_list", "online": "fleet_list", "caps": "fleet_list", "puedo": "fleet_list",
+	"agent_version": "fleet_list", "consentimiento": "fleet_list",
+	"consentimiento_efectivo": "fleet_list", "politicas": "fleet_list",
+	"politicas_activas": "fleet_list", "pantalla_sin_motor": "fleet_list",
+	"rustdesk_id": "fleet_list", "rustdesk_id_previo": "fleet_list",
+	"rustdesk_id_cambio": "fleet_list", "rustdesk_id_ambiguo": "fleet_list",
+	"rustdesk_id_tambien_en": "fleet_list", "rustdesk_id_fuera_de_alcance": "fleet_list",
+	// Los pone el proxy para distinguir «no hay» de «no se pudo preguntar».
+	"con_metricas": "proxy", "con_servicios": "proxy", "con_sesiones": "proxy",
+	"servicios": "proxy", "sesiones": "proxy",
+}
+
+// NINGUNA CELDA DE LA TABLA SE LLENA SOLA.
+//
+// La prueba de arriba cubre los campos de métricas ejercitando el camino; ésta cubre la clase: un
+// `e.campo_nuevo` en la página que nadie copia se dibuja como «no medido» para siempre, y en verde,
+// porque no hay error ni log — es exactamente lo que le pasó a A38 durante todo un track.
+//
+// Sabotaje que la hace fallar: agregar un `${e.lo_que_sea}` a flota.html sin tocar nada más.
+func TestNingunaCeldaDelPanelSeLlenaSola(t *testing.T) {
+	pagina := string(assetsFS(t, "assets/flota.html"))
+	// La lista blanca del proxy, leída del código en vez de repetida acá: si se repitiera, esta
+	// prueba pasaría mirando su propia copia mientras el proxy hace otra cosa.
+	src := string(leerFuente(t, "flota.go"))
+	i := strings.Index(src, `for _, campo := range []string{`)
+	if i < 0 {
+		t.Fatal("no se encontró la lista blanca del proxy: esta prueba no está mirando nada")
+	}
+	blanca := src[i : i+strings.Index(src[i:], "}")]
+
+	re := regexp.MustCompile(`\be\.([a-z_0-9]+)`)
+	vistos := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(pagina, -1) {
+		campo := m[1]
+		if vistos[campo] {
+			continue
+		}
+		vistos[campo] = true
+		if origenDeclaradoDeLosCampos[campo] != "" {
+			continue
+		}
+		if strings.Contains(blanca, `"`+campo+`"`) {
+			continue
+		}
+		t.Errorf("la página dibuja e.%s y nadie lo llena: no está en la lista blanca del proxy ni "+
+			"en origenDeclaradoDeLosCampos. Un campo así se ve «no medido» SIEMPRE, sin error y "+
+			"sin log — decidí de dónde sale y anotalo", campo)
+	}
+	if len(vistos) < 20 {
+		t.Fatalf("se encontraron %d campos en la página; son bastantes más — ¿la regex dejó de matchear?", len(vistos))
+	}
+}
+
+// leerFuente lee un archivo .go de este paquete. La prueba de arriba necesita el TEXTO de la lista
+// blanca, no una copia suya: una copia se desincroniza y la prueba pasaría mirándose al espejo.
+func leerFuente(t *testing.T, nombre string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(nombre)
+	if err != nil {
+		t.Fatalf("no se pudo leer %s: %v", nombre, err)
+	}
+	return b
+}
+
+// EL AVISO DE RECORTE LLEGA HASTA DONDE ALGUIEN LO VE.
+//
+// El cerebro recorta el barrido de proyectos y lo DICE —`proyectos_truncados`— con la razón escrita
+// al lado: «un barrido recortado se DICE. Un panel que muestra 64 proyectos de 80 sin avisar enseña
+// a creer que ésos son todos». El panel es literalmente el lector que ese comentario nombra, y era
+// el único que no lo recibía: el proxy no copiaba el campo y la página no lo dibujaba. La tabla
+// salía corta, sin una palabra, en verde.
+//
+// Es el mismo argumento que `SinPermiso` ya tenía escrito en flotaRespuesta —«sin este número, una
+// tabla corta se lee como hay pocas máquinas en vez de hay varias que no podés ver»— entendido para
+// un caso y no para el otro. Los dos avisos se acumulan porque las dos causas pueden darse juntas.
+//
+// CUALQUIERA de las cuatro consultas puede venir recortada, así que se prueban las cuatro: cubrir
+// sólo `fleet_list` dejaría tres caminos por los que el panel vuelve a mentir en silencio.
+//
+// Sabotaje que la hace fallar: sacar el Truncado de la respuesta, o dejar de acumularlo de
+// cualquiera de las cuatro tools.
+func TestElPanelDiceCuandoLaListaVieneRecortada(t *testing.T) {
+	base := map[string]string{
+		"musubi_fleet_list":     `{"devices":[{"name":"pc","online":true}]}`,
+		"musubi_fleet_metrics":  `{"devices":[]}`,
+		"musubi_fleet_services": `{"services":[]}`,
+		"musubi_fleet_sessions": `{"sesiones":[]}`,
+	}
+	// El control NEGATIVO primero: sin recorte, el panel NO tiene que avisar nada. Sin esto, un
+	// `Truncado: true` fijo pasaría las cuatro comprobaciones de abajo.
+	if got := pedirFlota(t, &relayVivo{base: cerebroDeFlotaFalso(t, base).URL, token: "tok"}); got.Truncado {
+		t.Fatal("avisó recorte sin que ninguna tool lo reportara: el aviso sería ruido permanente")
+	}
+	for tool, cuerpo := range map[string]string{
+		"musubi_fleet_list":     `{"devices":[{"name":"pc","online":true}],"proyectos_truncados":true}`,
+		"musubi_fleet_metrics":  `{"devices":[],"proyectos_truncados":true}`,
+		"musubi_fleet_services": `{"services":[],"proyectos_truncados":true}`,
+		"musubi_fleet_sessions": `{"sesiones":[],"proyectos_truncados":true}`,
+	} {
+		t.Run(tool, func(t *testing.T) {
+			respuestas := map[string]string{}
+			for k, v := range base {
+				respuestas[k] = v
+			}
+			respuestas[tool] = cuerpo
+			ts := cerebroDeFlotaFalso(t, respuestas)
+			got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+			if !got.Truncado {
+				t.Errorf("%s reportó el recorte y el panel no lo pasó: la tabla sale corta sin "+
+					"decirlo, que es lo que el cerebro escribió que no hay que hacer", tool)
+			}
+		})
+	}
+	// Y QUE VIAJE NO ALCANZA SI NADIE LO DIBUJA, que es la mitad que A38 dejó afuera del otro
+	// campo: un flag que llega y no se pinta es el mismo silencio un paso más adelante.
+	pagina := string(assetsFS(t, "assets/flota.html"))
+	if !strings.Contains(pagina, "d.truncado") {
+		t.Error("la página no lee d.truncado: el aviso llega hasta el navegador y muere ahí")
+	}
+	if !strings.Contains(pagina, "recortada") {
+		t.Error("la página no dice que la lista está recortada con ninguna palabra que se entienda")
 	}
 }

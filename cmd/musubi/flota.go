@@ -38,6 +38,13 @@ type flotaRespuesta struct {
 	// SinPermiso dice cuántas máquinas quedaron fuera por la compuerta. Sin este número, una
 	// tabla corta se lee como «hay pocas máquinas» en vez de «hay varias que no podés ver».
 	SinPermiso int `json:"sin_permiso,omitempty"`
+	// Truncado dice que el cerebro RECORTÓ el barrido de proyectos, y existe por el MISMO
+	// argumento que SinPermiso — que ya estaba escrito acá arriba y no se había aplicado a este
+	// caso. El cerebro lo dice desde siempre («un barrido recortado se DICE. Un panel que muestra
+	// 64 proyectos de 80 sin avisar enseña a creer que ésos son todos», methods_fleet.go) y este
+	// proxy no lo copiaba, así que ese aviso no llegaba a ningún lado donde alguien lo viera. El
+	// panel es literalmente el lector que ese comentario nombra.
+	Truncado bool `json:"truncado,omitempty"`
 }
 
 // handlerFlota arma la tabla combinando el inventario y las métricas del cerebro.
@@ -76,6 +83,9 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 		// `sin_permiso`, y sin él alguien con el YAML mal configurado cree que no tiene flota.
 		equipos := aFilas(inv["devices"])
 		sinPermiso := aEntero(inv["sin_permiso"])
+		// CUALQUIERA de las llamadas puede venir recortada, así que se acumula con OR: el panel
+		// tiene que avisar si le falta algo, no importa de cuál de las cuatro consultas.
+		truncado := inv["proyectos_truncados"] == true
 		if len(equipos) == 0 {
 			estado, detalle := "vacio", "no hay máquinas enroladas en este proyecto. Se dan de alta con musubi_fleet_enroll."
 			if sinPermiso > 0 {
@@ -90,6 +100,7 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 		// Perder los números es molesto; perder la lista de máquinas es quedarse a oscuras.
 		porNombre := map[string]map[string]any{}
 		if met, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_metrics", map[string]any{}); err == nil {
+			truncado = truncado || met["proyectos_truncados"] == true
 			for _, m := range aFilas(met["devices"]) {
 				if n, _ := m["name"].(string); n != "" {
 					porNombre[n] = m
@@ -99,7 +110,19 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 		for _, e := range equipos {
 			n, _ := e["name"].(string)
 			if m, hay := porNombre[n]; hay {
-				for _, campo := range []string{"cpu_pct", "mem_pct", "disco_pct", "temp_c", "load1", "uptime_seg", "antiguedad_s", "num_cpu"} {
+				// LA LISTA TIENE QUE TENER TODO LO QUE LA PÁGINA DIBUJA, y le faltaban dos.
+				// `mem_libre` y `num_procesos` los manda el cerebro con cuidado —los pasa por
+				// enteroONull JUSTAMENTE para que un «no medido» llegue como null y no como 0,
+				// porque Windows y macOS no los exponen y un 0 se leería como «esta máquina no
+				// tiene procesos»— y este proxy los tiraba. Resultado: la página los dibujaba
+				// como no medidos SIEMPRE, también donde sí se medían. Todo el trabajo de
+				// distinguir cero de nada, anulado por una lista blanca desactualizada.
+				//
+				// La custodia esa lista TestElProxyDelPanelCopiaTodoLoQueLaPaginaDibuja.
+				for _, campo := range []string{
+					"cpu_pct", "mem_pct", "disco_pct", "temp_c", "load1", "uptime_seg",
+					"antiguedad_s", "num_cpu", "mem_libre", "num_procesos",
+				} {
 					e[campo] = m[campo]
 				}
 				e["con_metricas"] = true
@@ -117,6 +140,7 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 		// Y la ausencia de la llave `servicios` en un equipo NO es «cero servicios»: es «no
 		// sabemos». La página las dibuja distinto, que es todo el punto del track.
 		if svc, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_services", map[string]any{}); err == nil {
+			truncado = truncado || svc["proyectos_truncados"] == true
 			porMaquina := map[string][]map[string]any{}
 			for _, sv := range aFilas(svc["services"]) {
 				if n, _ := sv["device"].(string); n != "" {
@@ -141,6 +165,7 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 		// máquina, ahora. Un panel de control que no lo dice obliga a preguntárselo a una tool,
 		// que es donde nadie va a mirar mientras algo se está cayendo.
 		if ses, err := llamarToolDelCerebro(r, cli, relay, "musubi_fleet_sessions", map[string]any{}); err == nil {
+			truncado = truncado || ses["proyectos_truncados"] == true
 			porMaquina := map[string][]map[string]any{}
 			for _, x := range aFilas(ses["sesiones"]) {
 				if n, _ := x["device"].(string); n != "" {
@@ -156,7 +181,8 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 				e["con_sesiones"] = true
 			}
 		}
-		responder(flotaRespuesta{Estado: "vivo", Destino: relay.host(), Equipos: equipos, SinPermiso: sinPermiso})
+		responder(flotaRespuesta{Estado: "vivo", Destino: relay.host(), Equipos: equipos,
+			SinPermiso: sinPermiso, Truncado: truncado})
 	}
 }
 
