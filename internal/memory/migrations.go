@@ -1546,6 +1546,34 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 43,
+			name:    "rotacion_del_token_de_dispositivo",
+			// ROTAR UN TOKEN SIN REINSTALAR EL AGENTE (Ola 2 del plan empresa).
+			//
+			// Hasta acá el token de un device se escribía UNA vez, al enrolar, y se vaciaba al
+			// revocar. No había punto medio: rotar era revocar + enrolar + ir a la máquina a
+			// pegar el token nuevo. Con cuatro máquinas se hace; con cuarenta no, y un auditor
+			// pide rotación demostrable (SOC2 CC6.1, ISO A.5.17).
+			//
+			// DOS HASHES A LA VEZ, Y ES LO ÚNICO QUE HACE POSIBLE LA ROTACIÓN EN CALIENTE. El
+			// agente se entera del token nuevo en la RESPUESTA de un latido, o sea después de
+			// haber usado el viejo. Si el viejo dejara de valer en el instante de emitir el
+			// nuevo, el agente quedaría afuera entre que recibe y guarda — y si ese guardado
+			// falla, para siempre. Con los dos válidos, la ventana existe y está acotada.
+			//
+			// `rotacion_vence` la acota: pasado el plazo, la rotación se ABANDONA (se descarta el
+			// nuevo y sigue el viejo), no se completa a la fuerza. Ver el comentario de
+			// AbandonarRotacionesVencidas para por qué ése es el lado seguro.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "token_sha256_nuevo",
+					"token_sha256_nuevo TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "rotacion_vence",
+					"rotacion_vence TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

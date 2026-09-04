@@ -127,8 +127,8 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       un reinicio planificado dispara `servicio_caido`, el auto-heal levanta el servicio en
 	//       mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Append-only
 	//       como las otras dos bitácoras: cancelar una ventana es escribir otra fila.
-	if latestSchemaVersion() != 42 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 42", latestSchemaVersion())
+	if latestSchemaVersion() != 43 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 43", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

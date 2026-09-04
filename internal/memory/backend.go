@@ -519,6 +519,15 @@ type ServiceStore interface {
 	// de bordes se separan.
 	DevicesEnMantenimiento(ahora time.Time) (map[string]bool, error)
 	MantenimientosDeDevice(deviceID string, tope int) ([]fleet.Mantenimiento, error)
+
+	// ── Rotación del token de un dispositivo (Ola 2) ────────────────────────────────────────
+	// Los DOS tokens valen durante la ventana porque el agente se entera del nuevo en la
+	// RESPUESTA de un latido, o sea después de haber usado el viejo: sin solapamiento quedaría
+	// afuera entre que lo recibe y lo guarda.
+	AbrirRotacion(deviceID string, vence time.Time) (string, error)
+	CompletarRotacion(deviceID string) error
+	AbandonarRotacionesVencidas(ahora time.Time) (int64, error)
+	DevicePorTokenConRotacion(token string) (fleet.Device, bool, bool, error)
 }
 
 type StorageBackend interface {
