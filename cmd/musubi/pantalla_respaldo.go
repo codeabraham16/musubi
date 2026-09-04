@@ -287,14 +287,35 @@ func guardarRespaldo(r respaldoPantalla) error {
 
 // leerRespaldo trae la marca si la hay. Sin marca no es error: es una máquina sin sesión abierta,
 // que es el caso normal en cada arranque.
+//
+// AUSENTE E ILEGIBLE NO SON LO MISMO, Y ÉSA ES TODA LA DECISIÓN DE ESTA FUNCIÓN.
+//
+// Que el archivo NO EXISTA es información positiva y confiable: no quedó ninguna sesión abierta,
+// y el arranque no tiene que tocar nada. Es el caso de todos los arranques normales.
+//
+// Que el archivo EXISTA y no se pueda usar —sin permiso, truncado, con el JSON roto— es lo
+// contrario: alguien lo escribió, así que lo más probable es que sí haya quedado una sesión
+// puesta. Contestar «no había» ahí dejaría la contraseña de sesión viva PARA SIEMPRE en esa
+// máquina, y el error que la causó no vuelve a aparecer nunca porque nadie lo mira.
+//
+// Así que el sesgo va para el lado de cerrar. Cuesta una contraseña —no se sabe qué restituir, y
+// el cierre termina scrambleando, que es el caso que el llamador anuncia en voz alta— y no una
+// máquina abierta. La dirección del sesgo la trajo la otra sesión que persiguió este mismo bug;
+// lo que se agrega acá es no aplicárselo al archivo ausente, que es el 99 % de los arranques y
+// donde ese mismo sesgo destruiría la contraseña del dueño en cada reinicio: exactamente el
+// defecto del que salió todo esto.
 func leerRespaldo() (respaldoPantalla, bool) {
 	b, err := os.ReadFile(rutaRespaldoPantalla()) // #nosec G304 -- ruta propia, no entrada remota
-	if err != nil {
+	switch {
+	case err == nil:
+	case os.IsNotExist(err):
 		return respaldoPantalla{}, false
+	default:
+		return respaldoPantalla{}, true
 	}
 	var r respaldoPantalla
 	if err := json.Unmarshal(b, &r); err != nil {
-		return respaldoPantalla{}, false
+		return respaldoPantalla{}, true
 	}
 	return r, true
 }

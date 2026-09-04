@@ -159,3 +159,38 @@ func leerArchivo(t *testing.T, ruta string) string {
 	}
 	return string(b)
 }
+
+// Una marca ILEGIBLE no es una marca ausente: el archivo está, así que alguien lo escribió y lo
+// más probable es que haya quedado una sesión puesta. El arranque tiene que cerrar igual, aunque
+// no sepa qué restituir — dejar la contraseña de sesión viva para siempre es peor.
+func TestUnaMarcaIlegibleSeTrataComoSesionAbierta(t *testing.T) {
+	ruta := configFalsa(t, "enc_id = 'abc'\npassword = 'DE-SESION'\nsalt = 'sal'\n")
+	reg := rustdeskFalso(t, "exit 0")
+	marcarSesionAbierta(false)
+
+	if err := os.WriteFile(rutaRespaldoPantalla(), []byte("{esto no es json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cerrarSesionColgadaDeArranque()
+
+	if !strings.Contains(leerRegistro(t, reg), "--password") {
+		t.Error("con la marca ilegible no se cerró la sesión: la contraseña de sesión queda viva para siempre")
+	}
+	_ = ruta
+}
+
+// Y el contraste que le da sentido: SIN archivo, el arranque no toca nada. Aplicarle el mismo
+// sesgo al caso ausente es el defecto original —cada reinicio destruía la contraseña del dueño—.
+func TestUnaMarcaAusenteNoEsUnaSesionAbierta(t *testing.T) {
+	configFalsa(t, "enc_id = 'abc'\npassword = 'LA-DEL-DUENO'\nsalt = 'sal'\n")
+	reg := rustdeskFalso(t, "exit 0")
+	marcarSesionAbierta(false)
+	_ = os.Remove(rutaRespaldoPantalla())
+
+	cerrarSesionColgadaDeArranque()
+
+	if llamadas := leerRegistro(t, reg); llamadas != "" {
+		t.Errorf("sin marca no se puede tocar nada, y se invocó a RustDesk: %q", llamadas)
+	}
+}
