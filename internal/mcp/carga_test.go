@@ -364,7 +364,7 @@ type medicionDeCarga struct {
 	primeraNota map[string]string
 }
 
-func (m *medicionDeCarga) anotar(lat time.Duration, status int, errTransporte error, r respuestaLatido, conInventario bool) {
+func (m *medicionDeCarga) anotar(lat time.Duration, status int, errTransporte error, r fleet.RespuestaLatido, conInventario bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.latencias = append(m.latencias, lat)
@@ -534,10 +534,10 @@ func correrBancoDeCarga(t *testing.T, p parametrosDeCarga) {
 		resp, err := cliente.Do(req)
 		lat := time.Since(t0)
 		if err != nil {
-			med.anotar(lat, 0, err, respuestaLatido{}, conInventario)
+			med.anotar(lat, 0, err, fleet.RespuestaLatido{}, conInventario)
 			return
 		}
-		var r respuestaLatido
+		var r fleet.RespuestaLatido
 		_ = json.NewDecoder(resp.Body).Decode(&r)
 		resp.Body.Close()
 		med.anotar(lat, resp.StatusCode, nil, r, conInventario)

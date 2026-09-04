@@ -474,18 +474,22 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 		// El cerebro dice qué hizo con la telemetría. Se imprime para que una capacidad que
 		// falta o una muestra rechazada se vean DESDE LA MÁQUINA, en vez de desaparecer en
 		// silencio del otro lado.
-		var r struct {
-			Muestra  string            `json:"muestra"`
-			Comandos []comandoRecibido `json:"comandos"`
-			// TokenNuevo es una rotación en curso (Ola 2). El cerebro lo repite en CADA latido de
-			// la ventana a propósito: un token que se manda una sola vez convierte un fallo de
-			// guardado en una rotación que nadie puede completar. Que este campo faltara acá era
-			// justamente el agujero — el cerebro lo mandaba y encoding/json lo tiraba en silencio.
-			TokenNuevo string `json:"token_nuevo"`
-		}
+		// SE DECODIFICA EL TIPO DEL CONTRATO, no un struct escrito acá. El struct anónimo que
+		// estaba en su lugar tenía sólo `muestra` y `comandos`, y encoding/json descarta en
+		// silencio lo que el receptor no declara: así se perdieron `token_nuevo` —la rotación de
+		// la Ola 2 no podía completarse— y `servicios`, cuyo único propósito era que un inventario
+		// descartado NO desapareciera en silencio. Con el tipo compartido, un campo nuevo del lado
+		// del cerebro llega acá sin que nadie se acuerde de copiarlo.
+		var r fleet.RespuestaLatido
 		if err := json.NewDecoder(resp.Body).Decode(&r); err == nil {
 			if r.Muestra != "" {
 				motivo += " · muestra " + r.Muestra
+			}
+			// `servicios` se imprime por el mismo motivo que `muestra`, y es la razón por la
+			// que el cerebro lo manda: quien administra ESTA máquina no ve los logs del cerebro,
+			// así que un inventario rechazado tiene que verse acá o no se ve en ningún lado.
+			if r.Servicios != "" {
+				motivo += " · servicios " + r.Servicios
 			}
 			if n := len(r.Comandos); n > 0 {
 				motivo += fmt.Sprintf(" · %d comando(s)", n)
