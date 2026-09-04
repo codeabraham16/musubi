@@ -714,7 +714,6 @@
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
 | A86 | **`pide` sobre un `exec` tampoco pregunta, y eso NO está declarado en ninguna parte** | Es la misma forma que A85 en el tercer camino: `AvisaAlUsuario()` es true para `pide` —es `nivel >= avisa`— así que `aplicarConsentimientoDeExec` cae en su rama de `avisa`, encola el aviso estrangulado y **ejecuta el comando**. El grado promete «tiene que aceptar. Sin respuesta, no hay sesión». **Lo que lo distingue de A85 es que acá NO se arregló, y a propósito**: el doc de esa función enumera `prohibido`, `avisa` y `libre` y se saltea `pide`, así que hoy no hay una decisión escrita — hay un accidente. Y las dos salidas posibles son de POLÍTICA, no de código: (a) endurecer `pide` a `prohibido` para exec es consistente con la regla que el dominio ya aplica cuando no hay a quién preguntarle, pero **rompe el auto-heal** en cualquier máquina en `pide`, que es automatización corriendo sin nadie mirando; (b) preguntar por comando pone un diálogo de hasta minuto y medio en el camino de una sola orden, y un exec viene en ráfagas — es la misma razón por la que A75 le puso estrangulador al aviso. **La celda está MEDIDA, no supuesta**: la matriz caminos × grados de `TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados` la ejerce y la deja escrita como está, con el porqué al lado, para que un cambio de comportamiento se vea. | **gio** (decisión de política) |
-| A87 | **Los respaldos `pre-redespliegue-*.db` no tenían retención — y los binarios apartados tampoco** | La purga de `musubi-backup` es `find … \( -name 'memory.db.*' -o -name 'principals.yaml.*' \) -mtime +$BACKUP_RETENTION_DAYS -delete`, y `pre-redespliegue-*.db` no matchea ninguno de los dos patrones. Al buscarlo apareció el gemelo que el cabo no nombraba: `redesplegar-cerebro.sh` también aparta el binario viejo en `/usr/local/bin/musubi.antes-de-$SELLO` y **tampoco lo borra nadie**. Medido el 2026-09-04: **33 snapshots (4,8 GB de los 7,2 GB del directorio) y 26 binarios (833 MB)**, el más viejo del 28-08, al lado de respaldos con 14 días de retención. La causa no era el script que limpia sino el que CREA: su propio aviso decía «borralos recién cuando estés seguro», un paso a mano que depende de que alguien se acuerde — y nadie se acordó 33 veces. **Y no es sólo disco**: un secreto que la retención debería haber vencido sobrevive ahí indefinidamente, que es lo que dejó a A81 con dos archivos que ninguna retención habría barrido. **ARREGLADO EN EL REPO Y PROBADO** (`deploy/redesplegar-cerebro.sh`): poda al final —nunca antes, porque durante el despliegue esos archivos SON la vuelta atrás—, retención de 5 configurable con `REDESPLIEGUE_RETENER`, y **orden por NOMBRE y no por fecha**, porque `cp -a` preserva el mtime del origen y dos binarios de la misma versión comparten fecha (medido: `musubi.antes-de-20260830-103806` y `...-110348` dicen los dos `10:28:24`, así que con `ls -t` el desempate borra cualquiera de los dos). Lo ejercita `deploy/pruebas/poda-puntos-de-retorno.sh` desde `TestLaPodaDePuntosDeRetornoHaceLoQueDice`, con tres sabotajes verificados que compilan y la ponen en rojo; y `TestTodoArtefactoPorCorridaDelRedespliegueSePoda` obliga a decidir si mañana el guión aparta un tercero. **LO QUE FALTA ES QUE CORRA**: el disco no baja hasta el próximo redespliegue, y ese primer pase va a borrar ~28 snapshots y ~21 binarios (~4,7 GB) de una vez — conviene saberlo antes y no en el momento. Queda afuera `pre-flota-20260827-101917.db`, que no lo crea ningún guión vivo: es un resto suelto, no un goteo. | **corre en el próximo redespliegue** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -742,6 +741,48 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-04 · A87 CERRADO — el redespliegue creaba dos archivos por corrida y no borraba ninguno,
+y su propio aviso decía «borralos cuando estés seguro».**
+
+Salió de cerrar A81: los cuatro respaldos que conservaban el secreto incluían dos
+`pre-redespliegue-*.db`, y ésos no matchean el `find` de la purga de `musubi-backup`, que nombra
+`memory.db.*` y `principals.yaml.*`. Al buscarlo apareció el gemelo que el cabo no nombraba:
+`redesplegar-cerebro.sh` también aparta el binario viejo en `/usr/local/bin/musubi.antes-de-$SELLO`
+y **tampoco lo borraba nadie**. Medido antes del arreglo: **33 snapshots (4,8 GB de 7,2) y 26
+binarios (833 MB)**, el más viejo del 28-08, al lado de respaldos con 14 días de retención.
+
+La causa no estaba en el guión que limpia sino en el que CREA: decía «borralos recién cuando estés
+seguro», que es un paso a mano, y un paso a mano no se hace — no se hizo 33 veces. **Y no es sólo
+disco**: un secreto que la retención debería haber vencido sobrevive ahí indefinidamente, que es
+exactamente lo que dejó a A81 con dos archivos que ninguna retención habría barrido.
+
+La poda va AL FINAL y nunca antes —mientras el despliegue corre, esos archivos SON la vuelta
+atrás—, retención de 5 con `REDESPLIEGUE_RETENER`, y **ordena por NOMBRE y no por fecha**: `cp -a`
+preserva el mtime del origen, así que dos binarios apartados en corridas distintas de la MISMA
+versión comparten fecha (medido: `musubi.antes-de-20260830-103806` y `...-110348` dicen los dos
+`10:28:24`, y con `ls -t` el desempate borra cualquiera de los dos).
+
+La prueba EJERCITA la función real en vez de leerla: `deploy/pruebas/poda-puntos-de-retorno.sh` la
+extrae del archivo con `sed` y la corre contra archivos de verdad, invocada desde
+`TestLaPodaDePuntosDeRetornoHaceLoQueDice`. Una guarda de texto habría dicho que la línea del
+`sort` está, no que la poda haga lo que dice — y nombre-vs-fecha es justo donde las dos se separan.
+
+**Tres sabotajes, los tres COMPILAN y los tres la ponen en rojo.** Uno enseñó algo no previsto: con
+el orden por fecha, el punto de retorno de la corrida ACTUAL caía en la lista de borrado, y lo salvó
+la guarda del `$actual` — que así se ganó el lugar en vez de quedar «por las dudas». El tercero
+—agregar un tercer artefacto con `$SELLO` sin su poda— lo caza
+`TestTodoArtefactoPorCorridaDelRedespliegueSePoda`, que es la forma de A76 acá: obliga a decidir en
+vez de acumular en silencio.
+
+**CORRIÓ EN PRODUCCIÓN el 2026-09-04 a las 14:09:30** (nueve segundos después de sacar el punto de
+retorno de las 14:09:21), con el guión byte a byte idéntico al del repo (sha `abf9b5ad`). Dejó **5
+snapshots y 5 binarios**: el directorio de respaldos bajó de 7,2 GB a 3,2 GB y los binarios de 833
+MB a 166 MB. Los dos directorios quedaron con mtime del mismo segundo, que son las dos llamadas
+seguidas. *El disco total sólo bajó 1 GB neto (39 → 38 GB usados) porque en la misma ventana creció
+otra cosa; no se midió qué, y no se afirma.* Queda afuera `pre-flota-20260827-101917.db`, que no lo
+crea ningún guión vivo: es un resto suelto, no un goteo.
+
 
 **2026-09-04 · A81 CERRADO — el secreto no estaba donde la fila decía, y la fila nunca nombró
 dónde sí estaba.**
