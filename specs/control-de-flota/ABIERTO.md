@@ -586,7 +586,6 @@
 | A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
 | A82 | **La herramienta de despliegue documentada rompe el despliegue: `preparar.sh` contradice al README de su propio directorio** | `deploy/README.md` documenta desde `4cf31b3` que al reemplazar un archivo bind-montado hay que usar `cat >` y **nunca `install` ni `cp`**: un archivo nuevo nace con la etiqueta SELinux del directorio del usuario y el contenedor deja de leerlo, con una recarga que contesta **HTTP 500** sobre un archivo cuyo dueño y modo POSIX son perfectos. **La doc se arregló y la herramienta no**: `deploy/docker/preparar.sh` usa `install -m 0644` en SIETE lugares (31, 32, 49, 68, 72, 82, 87) y un `sed -i` en la 42. **El `sed -i` es el peor de los ocho** y por partida doble: reemplaza el inodo igual que `install` —pero quien lee el script ve los `install` y asume que el problema son ésos— y está en el camino del `chat_id`, o sea que rompe justo el canal que se está configurando. Lo encontró la otra sesión el 2026-09-03 al desplegar `alertmanager.yml`, y por eso lo hizo a mano. **La salida no es cambiar `install` por `cat >` y listo**: `cat >` exige que el destino YA EXISTA, así que `preparar.sh` necesita dos caminos —una primera instalación que cree el archivo (y ahí `install` está bien) y un reemplazo distinto—, o la primera corrida en una máquina limpia falla. Mientras tanto **la herramienta documentada no se puede usar para redesplegar**, que es exactamente cuando alguien la va a buscar. | **sin asignar** |
-| A83 | **`avisa` sobre una shell no le avisa a nadie** | El eje de consentimiento promete que en `avisa` «se le notifica a quien está usando la máquina, y no puede negarse». Los tres caminos lo aplican y **uno lo aplica al revés**: `aplicarConsentimientoDeExec` encola el aviso (`encolarAvisoDeExecConVentana`) y `toolFleetScreen` también (`encolarAvisoDePantalla`), pero `toolFleetShell` **sólo llama a `avisarUnaVezPorDevice`**, que es la rama de «esta máquina NO sabe notificar» y deja una línea en el log del cerebro. O sea: en una máquina que SÍ sabe notificar, abrir una shell no notifica nada. **La asimetría está invertida respecto de la autoridad de cada camino**: una shell interactiva se saltea cualquier allowlist de comandos, así que es justo el acceso del que la persona sentada enfrente más tendría que enterarse, y es el único de los tres que no se lo dice. Encontrado el 2026-09-03 al ubicar la puerta de cuatro ojos en ese mismo `switch`; **no se arregló en ese commit a propósito**, para no mezclar el sabotaje de una feature con el de otra. El arreglo no es copiar `encolarAvisoDePantalla`: su texto dice «ver esta pantalla», así que hace falta el equivalente para una terminal, con su prueba. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -614,6 +613,54 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-04 · `avisa` SOBRE UNA SHELL NO LE AVISABA A NADIE, Y LA CAUSA ERA UN BLOQUE COPIADO.**
+
+A83. `exec` y `pantalla` encolaban su aviso al usuario de la máquina desde A57. La shell tenía
+**sólo la rama del agente que NO sabe notificar** —la que deja una línea en el log— y ninguna para
+la máquina que sí sabe: el `if` no tenía `else`. Así que justo donde el aviso podía entregarse,
+abrir una terminal no le decía una palabra a quien estaba sentado ahí.
+
+Que fuera la shell es lo peor. `methods_shell.go` dice de los tres ejes que éste «es el que MÁS le
+corresponde a la shell», y su propio archivo de pruebas argumenta que una shell interactiva se lleva
+puestos los otros dos permisos: «quien obtiene un prompt corre lo que quiera, las veces que quiera,
+sin que nadie vuelva a mirar un argv». El eje estaba escrito, la razón estaba escrita, y la mitad
+que avisa no estaba.
+
+**ARREGLAR SÓLO LA SHELL DEJABA LA CAUSA INTACTA.** El bloque que encola estaba COPIADO en pantalla
+y en exec, así que sumar un camino exigía acordarse de copiarlo por tercera vez — y la shell fue el
+que nadie copió. La primera versión de este arreglo escribió esa tercera copia; la otra sesión lo
+señaló y tenía razón: habría dejado la misma trampa armada para el cuarto camino. Quedó **un solo
+`encolarAvisoDeAcceso`** con las tres frases juntas en constantes —leerlas una debajo de la otra es
+lo que deja ver si dos se parecen demasiado— y lo único que se queda en `exec` es su
+**estrangulador**, que sí es propio suyo: un exec puede venir en ráfaga, una shell se abre a mano.
+
+**APARECIERON DOS MÁS EN EL MISMO SITIO**, los dos en el único lugar donde alguien mira cuando
+`avisa` no avisa:
+
+- `avisarUnaVezPorDevice` estrangulaba por `deviceID` **solo**. Con tres llamadores, la primera
+  pantalla se comía el presupuesto y los `exec` y las shells de esa máquina **no dejaban nunca una
+  línea**. La clave lleva ahora la operación.
+- Y su texto decía «se abrió una pantalla» **en los tres caminos**: dos de cada tres líneas del log
+  nombraban una operación que no había pasado. Misma clase que un doc pegado a la declaración
+  equivocada, en el peor lugar posible.
+
+**LA GUARDA RECORRE LOS TRES Y NO SÓLO LA SHELL**, porque el defecto era de la forma:
+`TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario` exige que cada camino encole, que el texto NOMBRE a
+quien entra y que diga QUÉ está pasando, distinto en cada uno. Con control negativo: una máquina que
+no declara saber notificar **no** recibe un aviso que nadie va a mostrar, porque prometer una
+notificación que no se puede entregar es lo que este eje viene a evitar.
+
+Ninguna prueba lo atrapaba porque **ninguna combinaba las dos condiciones**: `avisa` con una máquina
+que declara saber notificar. Las de shell probaban `prohibido`, que bloquea antes; las de aviso
+probaban pantalla y exec.
+
+Dos trampas que la prueba encontró y que la habrían hecho pasar por el motivo equivocado: **pantalla
+exige que la máquina esté LATIENDO** (sin latido sale antes con «no hay a quién entregarle la
+contraseña de sesión», y se estaría midiendo un rechazo en vez del aviso), y **`exec` sin `no_wait`
+espera 45 s** el resultado de un comando que ningún agente va a reportar.
+
+Cuatro sabotajes en rojo, uno por camino más el control negativo. Commit `9b56faa`.
 
 **2026-09-02 (sáb) · UNA MÁQUINA CAÍDA DEJA DE PRODUCIR TRES ALERTAS.**
 
