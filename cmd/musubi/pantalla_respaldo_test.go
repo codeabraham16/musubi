@@ -194,3 +194,31 @@ func TestUnaMarcaAusenteNoEsUnaSesionAbierta(t *testing.T) {
 		t.Errorf("sin marca no se puede tocar nada, y se invocó a RustDesk: %q", llamadas)
 	}
 }
+
+// La marca que NO SE PUEDE LEER, que es una rama distinta de la que tiene el JSON roto.
+//
+// ESTA PRUEBA EXISTE PORQUE LA DE AL LADO NO ALCANZABA. Un archivo con basura adentro se LEE
+// perfecto y recién falla al parsear, así que ejercía el `Unmarshal` y dejaba el error de
+// os.ReadFile sin cubrir: sabotear esa rama daba verde. Un directorio en la ruta sí hace fallar
+// a ReadFile con un error que no es IsNotExist, que es exactamente el caso «está y no lo puedo
+// mirar».
+func TestUnaMarcaQueNoSePuedeLeerSeTrataComoSesionAbierta(t *testing.T) {
+	configFalsa(t, "enc_id = 'abc'\npassword = 'DE-SESION'\nsalt = 'sal'\n")
+	reg := rustdeskFalso(t, "exit 0")
+	marcarSesionAbierta(false)
+
+	// Un directorio donde va el archivo: existe, y leerlo falla.
+	_ = os.Remove(rutaRespaldoPantalla())
+	if err := os.MkdirAll(rutaRespaldoPantalla(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, hay := leerRespaldo(); !hay {
+		t.Fatal("la marca ilegible se leyó como ausente: la prueba no probaría lo que dice")
+	}
+
+	cerrarSesionColgadaDeArranque()
+
+	if !strings.Contains(leerRegistro(t, reg), "--password") {
+		t.Error("con la marca ilegible no se cerró la sesión: la contraseña de sesión queda viva para siempre")
+	}
+}
