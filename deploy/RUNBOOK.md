@@ -789,9 +789,13 @@ curl -s 'http://127.0.0.1:9099/api/v1/targets?state=any' \
 ```
 
 El arreglo es copiar `deploy/prometheus/prometheus.yml` al servidor y recargar. **Copiálo con
-`cat >` o `install`, nunca con `sed -i`**: el archivo está bind-monteado en el contenedor y `sed -i`
-reemplaza el inodo — el contenedor se queda leyendo el archivo anterior, que ya no tiene nombre, y
-la recarga contesta `200` sobre el archivo equivocado.
+`cat >`, nunca con `sed -i`, `install` ni `mv`**: el archivo está bind-monteado en el contenedor y
+los tres reemplazan el inodo — el contenedor se queda leyendo el archivo anterior, que ya no tiene
+nombre, y la recarga contesta `200` sobre el archivo equivocado.
+
+*(Esta línea decía «`cat >` o `install`» y se contradecía a sí misma: prohibía `sed -i` por
+reemplazar el inodo y permitía `install`, que lo reemplaza igual. Medido con testigo de hard link;
+la tabla completa está en `deploy/README.md`.)*
 
 ```bash
 curl -X POST http://127.0.0.1:9099/-/reload

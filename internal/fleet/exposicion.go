@@ -325,9 +325,19 @@ func MuestraDesdeExposicion(l LecturaExposicion, cpu *ContadorCPUExportado, ahor
 		v := uint64(libre)
 		m.MemLibre = &v
 	}
+	// EL TOTAL SE ASIGNA ADENTRO DEL PAR, igual que la memoria arriba y el disco abajo. Estaba
+	// AFUERA, y era el único de los tres que rompía la regla que el bloque del disco tiene escrita
+	// tres líneas más abajo: «un disco total con el usado en cero se dibuja como un disco vacío».
+	//
+	// Un endpoint que publica `node_memory_SwapTotal_bytes` y NO publica `SwapFree` dejaba
+	// SwapTotal puesto y SwapUsada en cero. El exportador compuerta las dos series con
+	// `SwapTotal > 0`, así que emitía `swap_used_bytes 0` — que no es «no medido», es la
+	// afirmación «esta máquina tiene swap y no está usando nada», sobre una máquina de la que no
+	// sabemos eso. Con el total adentro del par, sin el libre no se emite ninguna de las dos y el
+	// hueco se ve como hueco.
 	if total, hay := l.Num(ExpSwapTotal); hay {
-		m.SwapTotal = uint64(total)
-		if libre, hay := l.Num(ExpSwapLibre); hay && libre <= total {
+		if libre, hayL := l.Num(ExpSwapLibre); hayL && libre <= total {
+			m.SwapTotal = uint64(total)
 			m.SwapUsada = uint64(total - libre)
 		}
 	}

@@ -471,3 +471,76 @@ func TestLaCompuertaYLaReglaDeLosParesNoSeContradicen(t *testing.T) {
 		t.Errorf("se escribió disco_total=%d sin poder calcular el usado: se dibuja como disco vacío", m.DiscoTotal)
 	}
 }
+
+// UN SWAP TOTAL SIN SU LIBRE NO SE MIDE, IGUAL QUE LA MEMORIA Y EL DISCO.
+//
+// El bloque del disco tiene la regla escrita —«un disco total con el usado en cero se dibuja como
+// un disco vacío»— y el swap era el único de los tres que la rompía: asignaba `SwapTotal` AFUERA
+// del `if` que exige el libre. Un endpoint que publica `node_memory_SwapTotal_bytes` y no publica
+// `SwapFree` dejaba el total puesto y el usado en cero, y como el exportador compuerta las dos
+// series con `SwapTotal > 0`, salía `swap_used_bytes 0`.
+//
+// Ese 0 no dice «no medido»: AFIRMA «esta máquina tiene swap y no usa nada», que es la clase de
+// cero que este dominio persigue desde S4 —«lo desconocido viaja como NULL, nunca como 0»— y es
+// además el que más engaña, porque un swap en cero se lee como una máquina holgada.
+//
+// LA TABLA PRUEBA LOS TRES PARES JUNTOS y no sólo el que fallaba: si la regla vale para la memoria
+// y para el disco, una prueba que mire sólo el swap deja la forma del defecto intacta para el
+// cuarto par que alguien agregue.
+//
+// Sabotaje que la hace fallar: sacar la asignación del total de adentro del `if` del libre, en
+// cualquiera de los tres pares.
+func TestUnTotalSinSuLibreNoSeMide(t *testing.T) {
+	for _, c := range []struct {
+		par       string
+		soloTotal string
+		conElPar  string
+		leerTotal func(Muestra) uint64
+		leerUsado func(Muestra) uint64
+	}{
+		{
+			par:       "swap",
+			soloTotal: "node_memory_SwapTotal_bytes 2.147483648e+09\n",
+			conElPar:  "node_memory_SwapTotal_bytes 2.147483648e+09\nnode_memory_SwapFree_bytes 1.073741824e+09\n",
+			leerTotal: func(m Muestra) uint64 { return m.SwapTotal },
+			leerUsado: func(m Muestra) uint64 { return m.SwapUsada },
+		},
+		{
+			par:       "disco",
+			soloTotal: "node_filesystem_size_bytes{mountpoint=\"/\"} 5.0e+11\n",
+			conElPar:  "node_filesystem_size_bytes{mountpoint=\"/\"} 5.0e+11\nnode_filesystem_free_bytes{mountpoint=\"/\"} 2.0e+11\n",
+			leerTotal: func(m Muestra) uint64 { return m.DiscoTotal },
+			leerUsado: func(m Muestra) uint64 { return m.DiscoUsado },
+		},
+	} {
+		t.Run(c.par, func(t *testing.T) {
+			// CONTROL POSITIVO PRIMERO: con el par completo los dos campos se llenan. Sin esto, un
+			// parser que dejara de reconocer estas métricas daría cero en los dos casos y la
+			// aserción de abajo pasaría por la razón equivocada.
+			l, ok := ParsearExposicion(cuerpoMinimo+c.conElPar, "/")
+			if !ok {
+				t.Fatalf("%s: el cuerpo con el par completo no parseó", c.par)
+			}
+			m := MuestraDesdeExposicion(l, nil, time.Now())
+			if c.leerTotal(m) == 0 || c.leerUsado(m) == 0 {
+				t.Fatalf("%s: con el par completo total=%d usado=%d — esta prueba no está midiendo "+
+					"el parseo que cree", c.par, c.leerTotal(m), c.leerUsado(m))
+			}
+
+			// Y AHORA EL CASO: el total solo no alcanza. Los DOS quedan en cero, o sea sin serie.
+			l, ok = ParsearExposicion(cuerpoMinimo+c.soloTotal, "/")
+			if !ok {
+				t.Fatalf("%s: el cuerpo con sólo el total no parseó", c.par)
+			}
+			m = MuestraDesdeExposicion(l, nil, time.Now())
+			if got := c.leerTotal(m); got != 0 {
+				t.Errorf("%s: sin el libre se guardó un total de %d. El exportador compuerta la "+
+					"serie con total>0, así que va a emitir un usado de 0 — que AFIRMA «no usa "+
+					"nada» sobre algo que nadie midió", c.par, got)
+			}
+			if got := c.leerUsado(m); got != 0 {
+				t.Errorf("%s: se inventó un usado de %d sin tener el libre", c.par, got)
+			}
+		})
+	}
+}

@@ -609,9 +609,7 @@
 | A76 | **Los contenedores de una máquina Windows son invisibles para la flota** | El agente enumera contenedores desde A42 y los reporta como servicios — pero **sólo en Linux**, con `podman ps`. La asimetría se midió el 2026-09-02: `musubi-server` reporta 57 servicios de los cuales **14 son contenedores**; `davantis-1` reporta 64 y **ninguno**, con **11 contenedores de Docker Desktop corriendo** (el Supabase local de `altura-erp`). **El costo ya se pagó ese mismo día**: `supabase_vector_altura-erp` llevaba días en bucle de reinicio y `edge-runtime` había muerto hacía tres con código 255. Se encontraron **con la mano**, buscando espacio en disco — ninguna alerta existía, porque la serie no existe. Es el mismo colector con otra fuente (`docker ps` en vez de `podman ps`), y en cuanto los reporte, `ServicioCaido` y `ServicioReiniciandose` empiezan a cubrirlos sin escribir una regla nueva. **Ojo con el segundo**: hoy está declarado `ausente_en: os=windows` porque el SCM no expone reinicios, y un contenedor SÍ los expone — esa declaración va a necesitar afinarse a «servicios del SCM» cuando esto entre. | **sin asignar** |
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
-| A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
-| A82 | **La herramienta de despliegue documentada rompe el despliegue: `preparar.sh` contradice al README de su propio directorio** | `deploy/README.md` documenta desde `4cf31b3` que al reemplazar un archivo bind-montado hay que usar `cat >` y **nunca `install` ni `cp`**: un archivo nuevo nace con la etiqueta SELinux del directorio del usuario y el contenedor deja de leerlo, con una recarga que contesta **HTTP 500** sobre un archivo cuyo dueño y modo POSIX son perfectos. **La doc se arregló y la herramienta no**: `deploy/docker/preparar.sh` usa `install -m 0644` en SIETE lugares (31, 32, 49, 68, 72, 82, 87) y un `sed -i` en la 42. **El `sed -i` es el peor de los ocho** y por partida doble: reemplaza el inodo igual que `install` —pero quien lee el script ve los `install` y asume que el problema son ésos— y está en el camino del `chat_id`, o sea que rompe justo el canal que se está configurando. Lo encontró la otra sesión el 2026-09-03 al desplegar `alertmanager.yml`, y por eso lo hizo a mano. **La salida no es cambiar `install` por `cat >` y listo**: `cat >` exige que el destino YA EXISTA, así que `preparar.sh` necesita dos caminos —una primera instalación que cree el archivo (y ahí `install` está bien) y un reemplazo distinto—, o la primera corrida en una máquina limpia falla. Mientras tanto **la herramienta documentada no se puede usar para redesplegar**, que es exactamente cuando alguien la va a buscar. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -639,6 +637,102 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-04 · A82 · LA HERRAMIENTA DE DESPLIEGUE LE REEMPLAZABA EL INODO A TRES ARCHIVOS QUE UN
+CONTENEDOR TENÍA MONTADOS — Y EL PEOR NO ESTABA EN EL CABO.**
+
+Un bind-mount de ARCHIVO se pega al inodo, no al nombre. `install`, `sed -i` y `mv` no escriben el
+archivo: lo desenlazan y crean otro, así que el contenedor sigue leyendo el anterior —que ya no
+tiene nombre— y en un host con SELinux ni lo puede leer, con una recarga que contesta 500 sobre un
+archivo de dueño y modo perfectos.
+
+**LO PRIMERO FUE MEDIRLO, con testigo de hard link**, porque comparar el número de inodo no sirve
+(un archivo nuevo puede reusar el número que acaba de quedar libre). Con coreutils 9.4 y sed 4.9:
+**reemplazan** `install`, `sed -i`, `mv`; **escriben dentro** `cat >`, `tee`, `cp`.
+
+Y eso **refutó la doctrina escrita del propio repo**, que es lo que hacía que el defecto sobreviviera
+a su propia documentación. `deploy/README.md` decía «`install` y `cp` crean un archivo nuevo; `cat >`
+y `sed -i`… no» y a renglón seguido «`sed -i` lo reemplaza igual que `install`»: `sed -i` no podía
+estar en las dos listas, `cp` estaba en la equivocada, y **`mv` no se nombraba** — justo el que
+`preparar.sh` usaba sobre el token. Y `deploy/RUNBOOK.md` mandaba «copialo con `cat >` o `install`,
+nunca con `sed -i`», permitiendo lo que prohíbe por la misma razón. Las dos frases corregidas, con
+la tabla medida y la distinción que decide si un `install` es un defecto: **si el mount es de
+ARCHIVO o de DIRECTORIO** (en uno de directorio, un inodo nuevo adentro SÍ lo ve el contenedor).
+
+**SÓLO 3 DE LOS 8 SITIOS QUE EL CABO LISTABA SON DEFECTO**, y eso es la mitad del arreglo: los otros
+cinco escriben en `rules/` —mount de DIRECTORIO— o en archivos que nadie monta. Cambiarlos habría
+sido ruido en cinco lugares.
+
+**PERO EL PEOR NO ESTABA EN LA LISTA DEL CABO**: `preparar.sh` reescribía `musubi.token` —mount de
+archivo— con `mv`, en CADA corrida, y lo hacía guardado por una condición que resultó ser una
+**tautología**. Medido: verdadera con salto final, sin salto, y con el archivo vacío. No se puede
+preguntar por un salto final con `$( )`, porque la sustitución se los come, así que las dos mitades
+del `||` daban verdadero por caminos distintos y el `if` no protegía nada. O sea que cada
+`preparar.sh` dejaba a Prometheus leyendo un token sin nombre, con un 401 y un archivo de permisos
+perfectos — y en la corrida donde el token se acababa de crear, el comentario de arriba promete no
+tocarlo.
+
+**EL ARREGLO SON DOS CAMINOS Y NO UN REEMPLAZO**, porque `cat >` exige que el destino exista: una
+función `poner` que usa `install` cuando el archivo NO está (primera instalación en una máquina
+limpia) y escribe dentro del inodo cuando sí (redespliegue). Verificado con testigo en los tres
+caminos: crea con el modo correcto, `nlink=2` en el redespliegue —incluido el token en `0400`, que
+necesita un `chmod u+w`—, y con el origen ausente **no vacía** el destino, porque `> destino` lo
+trunca en el acto y dejar una configuración vacía es peor que la vieja.
+
+**Y FALTABA LA MITAD QUE ENTREGA**: conservar el inodo no alcanza. Alertmanager relee su
+configuración sólo cuando se lo piden, y el guion recargaba únicamente a Prometheus — así que el
+`chat_id` quedaba en el archivo y no en memoria, con el guion terminando en verde. Agregada su
+recarga, que no aborta si no contesta (este guion también corre antes de que los contenedores
+existan) y dice qué hacer.
+
+**TRES GUARDAS, Y UNA QUE NO SE ESCRIBIÓ A PROPÓSITO.** Una revisión adversaria probó que un
+clasificador estático genérico —«marcá toda escritura a un destino montado»— es DECORATIVO: queda
+ciego exactamente en los sitios peores, porque las escrituras peligrosas pasan por variables
+intermedias (`$TOKEN_FILE`, `$SECRETOS`) y no por el nombre del archivo, y además da falsos
+positivos que dejarían el repo arreglado en rojo. Así que el reparto es otro: **la persona declara
+qué mount es de archivo y qué mount es de directorio** —lo único que un regex no puede saber— y la
+prueba obliga a que esa declaración exista y hace cumplir su consecuencia. Resuelve las asignaciones
+`VAR="$DEST/algo"` y **falla cerrada** si aparece una indirección que no sabe resolver, porque
+dejarla pasar es exactamente cómo esta guarda se apagaría sola. Un mount nuevo sin clasificar la
+pone roja.
+
+Cinco sabotajes en rojo, incluido el `mv` sobre el token **por variable** —donde el clasificador
+genérico era ciego— y el fallo cerrado ante una indirección nueva.
+
+**2026-09-04 · A80 · LA COMPARACIÓN QUE NADIE HABÍA HECHO ENCONTRÓ ALGO MEJOR QUE UN CAMPO QUE
+FALTA: UN CAMPO QUE MIENTE.**
+
+El cabo pedía dos cosas. La primera —`uptime_seg` en cero— **ya estaba contestada y el registro no
+se había enterado**: `deploy/RUNBOOK.md` declara que ese endpoint no publica
+`node_boot_time_seconds` y que no se completa con el reloj del cerebro, «los relojes difieren y el
+número saldría con esa deriva encima». Es la rama legítima de las dos que el cabo ofrecía
+—«declarando que ese camino no puede y por qué»— escrita en otro documento. El cabo seguía
+preguntando algo que el RUNBOOK ya respondía.
+
+La segunda era la que valía: «conviene revisar de paso si le faltan otros campos, nadie comparó
+nunca lo que ese guion manda contra lo que manda el agente». La comparación encontró un defecto
+peor que un campo ausente. En `MuestraDesdeExposicion`, el swap asignaba su TOTAL **afuera** del
+`if` que exige el libre:
+
+    if total, hay := l.Num(ExpSwapTotal); hay {
+        m.SwapTotal = uint64(total)          // ← afuera del par
+        if libre, hay := ...; hay { m.SwapUsada = ... }
+    }
+
+La memoria y el disco lo asignan ADENTRO, y el bloque del disco tiene la regla escrita **tres líneas
+más abajo**: «un disco total con el usado en cero se dibuja como un disco vacío». El swap era el
+único de los tres que la rompía. Un endpoint que publica `SwapTotal` y no publica `SwapFree` dejaba
+el total puesto y el usado en cero, y como el exportador compuerta las dos series con
+`SwapTotal > 0`, emitía **`swap_used_bytes 0`** — que no es «no medido»: AFIRMA «esta máquina tiene
+swap y no usa nada», sobre una máquina de la que nadie midió eso. Y engaña más que la mayoría,
+porque un swap en cero se lee como una máquina holgada.
+
+La guarda prueba **los tres pares juntos** y no sólo el que fallaba: si la regla vale para la memoria
+y para el disco, una prueba que mire sólo el swap deja la forma del defecto intacta para el cuarto
+par que alguien agregue. Con control positivo por fila —con el par completo los dos campos se
+llenan— porque sin eso un parser que dejara de reconocer la métrica daría cero en los dos casos y la
+aserción pasaría por la razón equivocada. Dos sabotajes en rojo, y el del swap es el defecto tal
+cual estaba.
 
 **2026-09-04 · `avisa` SOBRE UNA SHELL NO LE AVISABA A NADIE, Y LA CAUSA ERA UN BLOQUE COPIADO.**
 

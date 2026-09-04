@@ -150,7 +150,7 @@ timer, el cerebro arranca fail-closed y no sirve. Un `systemd timer` semanal má
 vencimiento son parte de la Ola 5 y **todavía no existen**: hasta que existan, la fecha va en el
 calendario de quien opera.
 
-### Al reemplazar un archivo de reglas: `cat >`, nunca `install` ni `cp`
+### Al reemplazar un archivo BIND-MONTADO: `cat >`, nunca `install`, `sed -i` ni `mv`
 
 Pasó el 2026-09-03 y el síntoma no nombra la causa. Se subieron los dos archivos de reglas con
 `install -m 644`, con el dueño correcto y el modo correcto, y la recarga contestó **HTTP 500**:
@@ -162,8 +162,39 @@ loading groups failed  err="open /etc/prometheus/rules/musubi-alerts-flota.yml: 
 **`permission denied` sobre un archivo `-rw-r--r-- musubi musubi` no es de permisos POSIX: es
 SELinux.** El servidor los tiene puestos, y un archivo NUEVO nace con la etiqueta del directorio
 del usuario (`user_home_t`) en lugar de la que el contenedor puede leer (`container_file_t`).
-`install` y `cp` crean un archivo nuevo; `cat >` y `sed -i`… no: **`cat >` escribe DENTRO del
-inodo que ya existe y hereda su etiqueta, `sed -i` lo reemplaza igual que `install`.**
+**MEDIDO, porque esta frase estuvo mal escrita y se contradecía sola.** Decía «`install` y `cp`
+crean un archivo nuevo; `cat >` y `sed -i`… no» y a renglón seguido «`sed -i` lo reemplaza igual que
+`install`»: `sed -i` no podía estar en las dos listas. Y `cp` estaba en la equivocada.
+
+Se midió con un TESTIGO DE HARD LINK, que es la única forma confiable: se hace `ln destino testigo`
+antes de la operación y después se mira qué dice el testigo. Si dice el contenido nuevo, se escribió
+DENTRO del inodo; si dice el viejo, el inodo se reemplazó y el testigo se quedó con el original.
+Comparar el NÚMERO de inodo no sirve: un archivo nuevo puede reusar el número que acaba de quedar
+libre. Con coreutils 9.4 y sed 4.9:
+
+| operación | qué hace | ¿rompe el bind-mount y la etiqueta? |
+|---|---|---|
+| `install` | reemplaza el inodo | **sí** |
+| `sed -i` | reemplaza el inodo | **sí** |
+| `mv` | reemplaza el inodo | **sí** |
+| `cat >` | escribe dentro | no |
+| `tee` | escribe dentro | no |
+| `cp` | escribe dentro | no — pero ver abajo |
+
+**`mv` está en la lista y antes no se nombraba**, y era el que más importaba: `deploy/docker/preparar.sh`
+lo usaba sobre `musubi.token`, que está bind-montado como ARCHIVO.
+
+**Por qué la regla sigue siendo `cat >` y no `cp`**, aunque `cp` escriba dentro: `cp` fracasa sobre un
+destino sin permiso de escritura —el token vive en `0400`— y con `-f` o `--remove-destination` vuelve
+a desenlazarlo. O sea que `cp` es seguro sólo mientras nadie le agregue una bandera. `cat >` no tiene
+ese borde.
+
+**Y la distinción que decide si un `install` es un defecto o no: si el mount es de ARCHIVO o de
+DIRECTORIO.** Un bind-mount de archivo se pega al inodo, así que reemplazarlo deja al contenedor
+leyendo el anterior. Un bind-mount de DIRECTORIO no: un inodo nuevo adentro sí lo ve el contenedor,
+y ahí `install` sólo deja el problema de la etiqueta, que el `chcon -R` de la misma corrida repara.
+En `deploy/docker/compose.yml` son de archivo `prometheus.yml`, `musubi.token` y `alertmanager.yml`;
+son de directorio `rules` y `secretos`.
 
 Verlo:
 

@@ -23,13 +23,49 @@ else
 fi
 SECRETOS="$DEST/secretos"
 
+# ── poner ORIGEN DESTINO [MODO] — instalar sin romperle el archivo a un contenedor que lo tiene
+# montado.
+#
+# DOS CAMINOS, PORQUE SON DOS SITUACIONES Y UNA SOLA RECETA ROMPE UNA DE LAS DOS.
+#
+#   · EL DESTINO NO EXISTE (primera instalación). No hay contenedor que lo tenga montado todavía,
+#     e `install` es lo correcto: crea el archivo con su modo en un solo paso. `cat >` NO sirve acá
+#     porque exige que el destino exista — y por eso «cambiá install por cat > y listo» dejaría la
+#     primera corrida en una máquina limpia sin configuración.
+#
+#   · EL DESTINO YA EXISTE (redespliegue). Puede estar BIND-MONTADO en un contenedor CORRIENDO, y
+#     un bind-mount de ARCHIVO se pega al INODO, no al nombre. `install`, `mv` y `sed -i` no
+#     escriben el archivo: lo desenlazan y crean otro. El contenedor sigue leyendo el anterior —que
+#     ya no tiene nombre— y la recarga contesta 200 sobre el archivo equivocado. Y en un host con
+#     SELinux el inodo nuevo nace con otra etiqueta, así que ni lo puede leer: la recarga contesta
+#     500 sobre un archivo de dueño y modo perfectos. Las dos cosas por la misma razón, porque las
+#     dos viven en el inodo. `cat > destino` escribe DENTRO del que ya existe.
+#
+# La tabla medida de qué operación reemplaza el inodo está en deploy/README.md.
+poner() {
+	origen="$1"; destino="$2"; modo="${3:-0644}"
+	# SE COMPRUEBA ANTES DE TRUNCAR: `> destino` lo vacía en el acto, así que un origen ausente
+	# dejaría al contenedor con una configuración VACÍA en vez de la vieja, que es peor.
+	[ -s "$origen" ] || { echo "poner: origen ausente o vacío: $origen" >&2; return 1; }
+	if [ -f "$destino" ]; then
+		chmod u+w "$destino"          # el token vive en 0400: ni su dueño puede escribirlo
+		cat "$origen" > "$destino"    # MISMO INODO: no rompe el mount ni la etiqueta
+		chmod "$modo" "$destino"
+	else
+		install -m "$modo" "$origen" "$destino"
+	fi
+}
+
 echo "→ directorios ($DEST)"
 install -d -m 0755 "$DEST" "$DEST/rules"
 install -d -m 0700 "$SECRETOS"
 
 echo "→ configuración"
-install -m 0644 "$REPO/deploy/prometheus/prometheus.yml"   "$DEST/prometheus.yml"
-install -m 0644 "$REPO/deploy/prometheus/alertmanager.yml" "$DEST/alertmanager.yml"
+# `poner` y no `install`: los dos son mounts de ARCHIVO (compose.yml). Los de `rules/` y
+# `secretos/` son mounts de DIRECTORIO y ahí `install` está bien — un inodo nuevo adentro sí lo ve
+# el contenedor, y la etiqueta la repara el `chcon -R` de más abajo en la misma corrida.
+poner "$REPO/deploy/prometheus/prometheus.yml"   "$DEST/prometheus.yml"
+poner "$REPO/deploy/prometheus/alertmanager.yml" "$DEST/alertmanager.yml"
 
 # EL chat_id SE SUSTITUYE AL INSTALAR, no se versiona.
 # Alertmanager no tiene `chat_id_file` —sólo `bot_token_file`— así que sin esto un identificador
@@ -39,7 +75,13 @@ install -m 0644 "$REPO/deploy/prometheus/alertmanager.yml" "$DEST/alertmanager.y
 CHAT_FILE="$SECRETOS/telegram_chat_id"
 if [ -s "$CHAT_FILE" ]; then
 	CHAT_ID="$(tr -dc "0-9-" < "$CHAT_FILE")"
-	sed -i "s/^\( *chat_id: \)0$/\1$CHAT_ID/" "$DEST/alertmanager.yml"
+	# NO `sed -i`: reemplaza el inodo igual que `install`, y acá es el peor sitio posible —el
+	# archivo está bind-montado en Alertmanager y ESTA línea es la que configura el canal, así que
+	# rompe justo lo que se está armando. Se filtra a un temporal y se vuelca DENTRO del inodo.
+	TMP_AM="$(mktemp "$DEST/.alertmanager.yml.XXXXXX")"
+	sed "s/^\( *chat_id: \)0$/\1$CHAT_ID/" "$DEST/alertmanager.yml" > "$TMP_AM"
+	poner "$TMP_AM" "$DEST/alertmanager.yml"
+	rm -f "$TMP_AM"
 	echo "→ chat_id de Telegram: puesto desde $CHAT_FILE"
 else
 	echo "→ chat_id de Telegram: FALTA. Alertmanager no va a arrancar hasta que exista."
@@ -109,8 +151,20 @@ else
 fi
 # Sin salto de línea final: Prometheus manda el archivo TAL CUAL como bearer, y un "\n" al final
 # convierte el token en otro que el cerebro no reconoce. Es un fallo silencioso y desconcertante.
-if [ -n "$(tail -c1 "$TOKEN_FILE" | tr -d '\0')" ] || [ -z "$(tail -c1 "$TOKEN_FILE")" ]; then
-	printf '%s' "$(cat "$TOKEN_FILE")" > "$TOKEN_FILE.tmp" && mv "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+# LA CONDICIÓN QUE ESTABA ACÁ ERA UNA TAUTOLOGÍA, medida: verdadera con salto, sin salto y con el
+# archivo vacío. No se puede preguntar por un salto final con `$( )`, porque la sustitución se los
+# come — así que las dos mitades daban verdadero por caminos distintos y el `if` no protegía nada.
+#
+# Consecuencia: reescribía el token en CADA corrida, y lo hacía con `mv`, que le cambia el inodo a
+# un archivo bind-montado como ARCHIVO (compose.yml). O sea que cada `preparar.sh` dejaba a
+# Prometheus leyendo un token sin nombre, con un 401 y un archivo de permisos perfectos. Y en la
+# corrida donde el token se acababa de crear, el comentario de arriba promete no tocarlo.
+#
+# Ahora se pregunta comparando el último byte con y sin saltos, y se escribe DENTRO del inodo.
+if [ "$(tail -c1 "$TOKEN_FILE" | wc -c)" -eq 1 ] && [ "$(tail -c1 "$TOKEN_FILE" | tr -d '\n' | wc -c)" -eq 0 ]; then
+	TOK="$(cat "$TOKEN_FILE")"          # `$( )` se come el salto: es justo lo que hay que sacar
+	chmod u+w "$TOKEN_FILE"
+	printf '%s' "$TOK" > "$TOKEN_FILE"  # MISMO INODO, sin `mv`
 fi
 chmod 0400 "$TOKEN_FILE"
 
@@ -238,4 +292,25 @@ elif systemctl --user enable podman-restart.service >/dev/null 2>&1; then
 else
 	echo "   ⚠ podman-restart: NO se pudo habilitar (¿sin XDG_RUNTIME_DIR?). Corré, logueado como este usuario:"
 	echo "     systemctl --user enable podman-restart.service"
+fi
+
+# Y ALERTMANAGER TAMBIÉN, porque conservar el inodo no alcanza.
+#
+# El `chat_id` ya está adentro del inodo que Alertmanager tiene montado —eso lo arregló `poner`—
+# pero Alertmanager relee su configuración sólo cuando se lo piden. Este guion recargaba únicamente
+# a Prometheus, así que el canal seguía con la configuración vieja y nadie decía nada: el archivo
+# en disco perfecto, el contenedor con lo de antes, y el guion terminando en verde.
+#
+# No aborta si no contesta: `preparar.sh` corre también antes de que los contenedores existan, y
+# fracasar ahí convertiría la primera instalación en un error. Se dice qué hacer, que es lo que
+# falta cuando alguien vuelve mañana a preguntarse por qué el chat_id no tomó.
+ALERT_URL="${ALERT_URL:-http://127.0.0.1:9093}"
+if curl -fsS -m 5 "$ALERT_URL/-/ready" >/dev/null 2>&1; then
+	if curl -fsS -m 5 -XPOST "$ALERT_URL/-/reload" >/dev/null 2>&1; then
+		echo "→ Alertmanager: releyó su configuración"
+	else
+		echo "⚠ Alertmanager está arriba y no aceptó el reload. El chat_id está en el archivo y NO"
+		echo "  en memoria: reiniciá el contenedor (podman restart musubi-alertmanager) o mandale"
+		echo "  un HUP para que lo tome."
+	fi
 fi
