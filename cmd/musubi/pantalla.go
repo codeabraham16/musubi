@@ -181,7 +181,16 @@ func cerrarSesionPantalla(motivo string) {
 		fmt.Printf("%s sesión de pantalla cerrada (%s) · se devolvió la contraseña anterior\n", cDim("■"), motivo)
 		return
 	}
+	// EL CASO QUE QUEDA TAMBIÉN SE DICE, y no es un detalle: acá la máquina se queda con una
+	// contraseña que NADIE conoce. Es el comportamiento correcto —dejarla vacía abriría la
+	// máquina— pero si se anuncia igual que el caso en que sí se devolvió, desde la silla del
+	// dueño sigue siendo «se me cambió sola», nada más que en menos ocasiones. Un fantasma más
+	// chico sigue siendo un fantasma, y ésta es exactamente la mitad que el arreglo de arriba no
+	// puede cubrir: cuando no había nada que devolver, no hay nada que devolver.
 	fmt.Printf("%s sesión de pantalla cerrada (%s)\n", cDim("■"), motivo)
+	fmt.Printf("%s no había una contraseña anterior que devolver, así que RustDesk queda con una "+
+		"al azar que nadie conoce. Si querés una tuya, ponela en RustDesk → Configuración → "+
+		"Seguridad.\n", cYellow("!"))
 }
 
 // cerrarSesionColgadaDeArranque es el cierre que corre al levantar el agente, y es una función
