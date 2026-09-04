@@ -462,9 +462,12 @@ func (s *McpServer) pedirPermisoParaShell(d fleet.Device, p *Principal, proyecto
 		fleet.RecortarRunas(quien, 64))
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
-		Origen:  fleet.OrigenPersona,
-		Argv:    []string{comandoPreguntar, ses.ID, texto},
-		Timeout: fleet.ComandoTimeoutDefault,
+		Origen: fleet.OrigenPersona,
+		Argv:   []string{comandoPreguntar, ses.ID, texto},
+		// El plano es SHELL y no pantalla: sin esto, la pregunta «fulano pide permiso para abrir
+		// una TERMINAL» la leía cualquiera con `screen:view`. Ver avisoDeAcceso.
+		Clasificacion: fleet.HechoCanalShell,
+		Timeout:       fleet.ComandoTimeoutDefault,
 	}); err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}

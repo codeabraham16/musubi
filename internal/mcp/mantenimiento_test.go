@@ -58,7 +58,7 @@ func TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento(t *testing.T) {
 	}
 
 	// Cancelar la retira EN EL ACTO, sin borrar la fila.
-	if hubo, err := s.engine.CancelarMantenimiento(m.ID); err != nil || !hubo {
+	if hubo, err := s.engine.CancelarMantenimiento(d.ID, d.ProjectID, m.ID); err != nil || !hubo {
 		t.Fatalf("no se pudo cancelar (hubo=%v err=%v)", hubo, err)
 	}
 	if set, _ := s.engine.DevicesEnMantenimiento(ahora); set[d.ID] {
@@ -253,4 +253,110 @@ func TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana(t *testing.T) {
 	if filas := comandosEncolados(t, s); len(filas) != 0 {
 		t.Fatalf("se encoló %d comando(s) durante la ventana", len(filas))
 	}
+}
+
+// CANCELAR UNA VENTANA NO PUEDE ALCANZAR LA FILA DE OTRO TENANT.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// MEDIA COMPUERTA: MIRABA UNA MÁQUINA Y ESCRIBÍA OTRA
+//
+// `CancelarMantenimiento` tomaba sólo el id de la ventana y escribía `WHERE id = ? AND
+// cancelada = 0`. El id es global; el permiso, en cambio, se comprobaba contra el device QUE
+// NOMBRA QUIEN LLAMA. Con `metrics` sobre una máquina propia y un id ajeno —que sale del `id`
+// que devuelve la propia tool al abrir, o de la cronología— se cancelaba la ventana de otro
+// cliente.
+//
+// Y no queda en una fuga de lectura: la ventana FRENA EL AUTO-HEAL. Cancelar la ajena devuelve
+// la automatización sobre una máquina que alguien puso a resguardo a propósito, en mitad de su
+// mantenimiento. Del otro lado se ve como un servicio que se levanta solo sin que nadie lo haya
+// pedido — y el `silence` de alertas, si lo hubiera, garantizaría que nadie se entere.
+//
+// Este test recorre el camino entero por la tool, que es por donde entra un llamador real.
+//
+// Sabotaje que lo hace fallar: sacar `device_id`/`project_id` del WHERE de
+// CancelarMantenimiento, o pasarle el id sin el dueño desde methods_mantenimiento.go.
+func TestCancelarMantenimientoNoAlcanzaLaVentanaDeOtroTenant(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolar := func(nombre, proyecto string) fleet.Device {
+		t.Helper()
+		if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+			"name": nombre, "tier": "A", "caps": []string{"metrics"},
+			"project": proyecto, "os": "linux", "arch": "amd64",
+		}); e != nil {
+			t.Fatalf("no se pudo enrolar %q: %+v", nombre, e)
+		}
+		d, _, _ := s.engine.DevicePorNombre(proyecto, nombre)
+		return d
+	}
+	victima := enrolar("pc-cliente", "acme")
+	propia := enrolar("pc-mia", "casa")
+
+	// La víctima abre su ventana por la vía normal.
+	res, e := call(t, s, "musubi_fleet_maintenance", map[string]any{
+		"device": "pc-cliente", "project": "acme", "minutos": 60, "motivo": "migración de postgres",
+	})
+	if e != nil {
+		t.Fatalf("no se pudo abrir la ventana de la víctima: %+v", e)
+	}
+	idAjeno := idDeLaVentana(t, res)
+
+	ahora := time.Now().UTC()
+	if set, _ := s.engine.DevicesEnMantenimiento(ahora); !set[victima.ID] {
+		t.Fatal("la ventana recién abierta no frena el auto-heal: el test no probaría nada")
+	}
+
+	// EL ATAQUE: nombro MI máquina —sobre la que tengo permiso de sobra— y paso el id ajeno.
+	_, e = call(t, s, "musubi_fleet_maintenance", map[string]any{
+		"device": "pc-mia", "project": "casa", "cancelar": idAjeno,
+	})
+	if e == nil {
+		t.Error("la tool aceptó cancelar una ventana de OTRO proyecto nombrando una máquina propia")
+	}
+
+	// Lo que importa no es el error, es la fila: tiene que seguir en pie.
+	set, err := s.engine.DevicesEnMantenimiento(ahora)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set[victima.ID] {
+		t.Fatal("FUGA ENTRE TENANTS: se canceló la ventana de otro cliente y el auto-heal vuelve a actuar sobre su máquina en mitad del mantenimiento")
+	}
+	filas, err := s.engine.MantenimientosDeDevice(victima.ID, 10)
+	if err != nil || len(filas) != 1 {
+		t.Fatalf("no se pudo releer la ventana de la víctima (%d filas, err=%v)", len(filas), err)
+	}
+	if filas[0].Cancelada {
+		t.Error("FUGA ENTRE TENANTS: la fila de otro cliente quedó marcada como cancelada")
+	}
+
+	// Y el motor, directo: ni siquiera nombrando el proyecto correcto con el device equivocado.
+	if hubo, err := s.engine.CancelarMantenimiento(propia.ID, victima.ProjectID, idAjeno); err != nil || hubo {
+		t.Errorf("el UPDATE alcanzó una fila que no es de esa máquina (hubo=%v err=%v)", hubo, err)
+	}
+	if hubo, err := s.engine.CancelarMantenimiento(victima.ID, propia.ProjectID, idAjeno); err != nil || hubo {
+		t.Errorf("el UPDATE alcanzó una fila que no es de ese proyecto (hubo=%v err=%v)", hubo, err)
+	}
+
+	// Y el dueño SÍ puede: la reparación no puede haber roto el camino legítimo.
+	if _, e := call(t, s, "musubi_fleet_maintenance", map[string]any{
+		"device": "pc-cliente", "project": "acme", "cancelar": idAjeno,
+	}); e != nil {
+		t.Fatalf("el dueño de la ventana no pudo cancelarla: %+v", e)
+	}
+	if set, _ := s.engine.DevicesEnMantenimiento(ahora); set[victima.ID] {
+		t.Error("el dueño canceló y la ventana sigue frenando el auto-heal")
+	}
+}
+
+func idDeLaVentana(t *testing.T, res interface{}) string {
+	t.Helper()
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(res.(CallToolResponse).Content[0].Text), &m); err != nil {
+		t.Fatalf("no se pudo leer la respuesta de mantenimiento: %v", err)
+	}
+	id, _ := m["id"].(string)
+	if id == "" {
+		t.Fatalf("la tool no devolvió el id de la ventana: %v", m)
+	}
+	return id
 }

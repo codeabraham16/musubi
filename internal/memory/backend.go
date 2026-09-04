@@ -518,7 +518,7 @@ type ServiceStore interface {
 	// silence de Alertmanager porque un silence calla el aviso y NO frena las políticas: el
 	// auto-heal levantaría el servicio en mitad del mantenimiento y nadie se enteraría.
 	AbrirMantenimiento(m fleet.Mantenimiento) (fleet.Mantenimiento, error)
-	CancelarMantenimiento(id string) (bool, error)
+	CancelarMantenimiento(deviceID, projectID, id string) (bool, error)
 	// DevicesEnMantenimiento devuelve el CONJUNTO de máquinas en ventana ahora. Conjunto y no
 	// lista de ventanas: los dos llamadores preguntan lo mismo, y dos copias de una comparación
 	// de bordes se separan.

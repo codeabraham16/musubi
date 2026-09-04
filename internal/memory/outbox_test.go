@@ -145,8 +145,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       aviso que el usuario no podía contestar y abría el prompt igual, porque
 	//       AvisaAlUsuario() es true para `pide` también. La columna sostiene el flujo de dos
 	//       llamadas que pantalla ya tenía.
-	if latestSchemaVersion() != 45 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 45", latestSchemaVersion())
+	// v46 = EL PLANO DEL COMANDO (`device_commands.plano`). Los tres caminos —pantalla, shell y
+	//       exec— encolan `musubi:avisar` con el MISMO argv, y la cronología clasificaba los tres
+	//       como plomería de pantalla: un principal con sólo `screen:view` leía «fulano está
+	//       ejecutando comandos acá» y «...abriendo una terminal...». El argv no los distingue y
+	//       el texto es de presentación, así que el plano lo declara quien encola.
+	if latestSchemaVersion() != 46 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 46", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

@@ -1653,6 +1653,42 @@ func schemaMigrations() []migration {
 					"consentimiento TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 46,
+			name:    "plano_del_comando",
+			// EL AVISO DE UN EXEC SE LEÍA COMO PANTALLA, Y LO VEÍA CUALQUIERA CON `screen:view`.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// Los tres caminos —pantalla, shell y exec— encolan `musubi:avisar` con EXACTAMENTE
+			// el mismo argv. Eso es a propósito desde A83: un solo encolador, para que sumar un
+			// camino no sea acordarse de copiar un bloque. Lo que no era a propósito es que
+			// `TipoDeArgv` clasificara los tres como plomería de PANTALLA, así que la cronología
+			// le mostraba a un principal con sólo `screen:view` la línea «Musubi: fulano está
+			// ejecutando comandos en esta máquina» y «...está abriendo una terminal...».
+			//
+			// El texto lo dice todo: quién, cuándo y en qué plano. Dos planos que esa credencial
+			// no puede ver, entrando por la puerta de atrás de una fila de plomería.
+			//
+			// NO SE PODÍA ARREGLAR MIRANDO EL ARGV, porque los tres son idénticos, ni parseando
+			// el texto, que es una cadena de presentación y se reescribe. El plano lo declara
+			// quien encola y viaja acá.
+			//
+			// DEFAULT '' Y NO 'canal_pantalla'. Vacío significa «no se sabe», y para estas filas
+			// eso es la verdad: las anteriores a esta migración pudieron salir de cualquiera de
+			// los tres caminos. No hay backfill honesto —el argv no distingue— y no hay valor
+			// seguro que no sea esconderlas: ponerlas en pantalla filtra el exec y la shell,
+			// ponerlas en exec filtra la pantalla. TipoDeComando las deja en HechoSinClasificar,
+			// que es el fail-closed que la cronología ya tenía escrito para lo que no conoce.
+			//
+			// El costo se dice entero: los avisos VIEJOS dejan de aparecer en la cronología. No
+			// se pierde nada que no esté contado —cada aviso acompaña a un hecho que ya está ahí
+			// con su compuerta correcta (la sesión, o el propio exec)— y la fila sigue en la
+			// bitácora de comandos, que es donde se audita si el aviso se entregó.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "device_commands", "plano",
+					"plano TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 
