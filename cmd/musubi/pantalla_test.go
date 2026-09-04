@@ -33,6 +33,10 @@ func rustdeskFalso(t *testing.T, cuerpo string) (registro string) {
 	if err := os.WriteFile(guion, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// La marca de sesión va a un temporal SIEMPRE: sin esto, una prueba que aplica una sesión
+	// escribiría el estado real de la máquina de quien corre los tests (o fallaría por permiso
+	// contra /var/lib/musubi, que fue lo que apareció).
+	t.Setenv(envRespaldoPantalla, filepath.Join(dir, "pantalla-previa.json"))
 	anterior := binarioRustdesk
 	binarioRustdesk = guion
 	t.Cleanup(func() { binarioRustdesk = anterior; marcarSesionAbierta(false) })
