@@ -175,11 +175,32 @@ inhibit_rules:
       - severity =~ "warning|info"
       - device != ""
 
-  # Y el clásico: lo crítico calla a lo warning de la misma alerta y máquina (DiscoCasiLleno
-  # calla a DiscoPorLlenarse).
-  - source_matchers: [severity = "critical"]
-    target_matchers: [severity = "warning"]
-    equal: ['alertname', 'project', 'device']
+  # Y el clásico: lo crítico calla a lo warning DEL MISMO SÍNTOMA y máquina — DiscoCasiLleno
+  # calla a DiscoPorLlenarse.
+  #
+  # ════════════════════════════════════════════════════════════════════════════════════════════
+  # ESTABA EMPAREJANDO POR `alertname`, ASÍ QUE NO PODÍA DISPARARSE NUNCA
+  #
+  #     equal: ['alertname', 'project', 'device']
+  #
+  # Los dos escalones de un mismo síntoma SE LLAMAN DISTINTO por definición: ése es el punto de
+  # tener dos. `DiscoCasiLleno` y `DiscoPorLlenarse` —el ejemplo que este mismo comentario daba—
+  # nunca comparten `alertname`, así que la regla jamás casó. Contado sobre las 49 alertas del
+  # repo: NINGUNA existe a la vez en `critical` y en `warning`, o sea que el conjunto en el que
+  # esta inhibición podía aplicarse estaba VACÍO. Una regla muerta que se lee como una guarda
+  # activa es peor que no tenerla: todo el mundo asume que el escalón de abajo está callado.
+  #
+  # El emparejamiento correcto es por SÍNTOMA, que es una etiqueta que las dos puntas declaran a
+  # propósito (`sintoma: disco`, `sintoma: pooler_altura`).
+  #
+  # LOS `sintoma != ""` NO SON DE ADORNO, y es la misma trampa que este archivo ya documenta
+  # arriba: un label ausente vale «» y `equal` compara VALORES. Sin ese matcher, cualquier
+  # `critical` sin `sintoma` —MusubiDown, AlertmanagerCaido, FlotaSinTelemetria— callaría todo
+  # `warning` sin `sintoma` del mismo project/device, que es la mitad del panel. Acotado así,
+  # sólo participan los pares que alguien emparejó explícitamente.
+  - source_matchers: [severity = "critical", sintoma != ""]
+    target_matchers: [severity = "warning", sintoma != ""]
+    equal: ['sintoma', 'project', 'device']
 
 receivers:
   # ─── El receptor real ──────────────────────────────────────────────────────────────────────

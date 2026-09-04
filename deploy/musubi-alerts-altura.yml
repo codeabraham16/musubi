@@ -59,6 +59,9 @@ groups:
         for: 10m
         labels:
           severity: warning
+          # Empareja con AlturaPoolerCaido para la inhibición por síntoma (ver alertmanager.yml):
+          # si el pooler NO RESPONDE, «se está llenando» es la misma noticia contada peor.
+          sintoma: pooler_altura
         annotations:
           summary: "El pooler de Altura está al {{ $value | humanizePercentage }} de su límite de clientes"
           description: >-
@@ -74,6 +77,7 @@ groups:
         for: 5m
         labels:
           severity: critical
+          sintoma: pooler_altura
         annotations:
           summary: "El pooler de Altura no responde"
           description: >-
