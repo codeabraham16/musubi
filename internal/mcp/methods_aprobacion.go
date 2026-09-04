@@ -21,7 +21,7 @@ import (
 // booleano invita a ignorarlo: `if !ok` se olvida, y olvidarlo abre la sesión sin aprobación.
 // Con dos valores que hay que reenviar, el camino de la distracción no compila.
 func (s *McpServer) puertaDeCuatroOjos(d fleet.Device, p *Principal, proyecto string,
-	cap fleet.Cap, ahora time.Time) (interface{}, *RpcError) {
+	cap fleet.Cap, motivo string, ahora time.Time) (interface{}, *RpcError) {
 
 	if !d.RequiereAprobacion {
 		return nil, nil
@@ -46,32 +46,33 @@ func (s *McpServer) puertaDeCuatroOjos(d fleet.Device, p *Principal, proyecto st
 		case fleet.AprobacionNegada:
 			return nil, rpcErrorf(codeUnauthorized, "%s", explicarNegada(d, sol))
 		case fleet.AprobacionConcedida:
-			// SE GASTA ACÁ Y NO DESPUÉS DE ABRIR LA SESIÓN. Si el consumo fuera después, una
-			// sesión que falla al abrirse dejaría el permiso vivo, y el segundo intento —o el de
-			// otra ventana en paralelo— lo reusaría. Un permiso de un solo uso que sobrevive al
-			// primer uso no es de un solo uso.
-			gastada, err := s.engine.ConsumirAprobacion(sol.ID, ahora)
-			if err != nil {
-				return nil, rpcErrorf(codeInternalError, "%v", err)
-			}
-			if !gastada {
-				// La base dijo que no: se usó entre que la leímos y la quisimos gastar, o venció
-				// justo. Es la carrera que el WHERE existe para perder de este lado.
-				return nil, rpcErrorf(codeUnauthorized,
-					"la aprobación %s ya no sirve: la usó otra sesión o venció mientras se abría ésta. "+
-						"Pedí otra — es de un solo uso a propósito.", sol.ID)
-			}
-			logx.Info("sesión abierta con aprobación de cuatro ojos",
-				"device", d.Name, "capacidad", string(cap),
-				"solicitante", quien, "aprobador", sol.Aprobador, "solicitud", sol.ID)
+			// ════════════════════════════════════════════════════════════════════════════════
+			// ACÁ SÓLO SE COMPRUEBA. EL PERMISO SE GASTA AL ACUÑAR, NO AL MIRAR.
+			//
+			// La primera versión lo consumía acá mismo, y eso TRABABA para siempre una máquina
+			// que además estuviera en `pide`: esta puerta gastaba la aprobación y la llamada
+			// seguía hasta `pedirPermisoParaPantalla`, que devuelve «esperando permiso» sin
+			// abrir nada. La siguiente llamada ya no encontraba aprobación —estaba `usada`— así
+			// que abría OTRA solicitud, y la persona quedaba rebotando entre dos esperas sin que
+			// la sesión se abriera nunca. Dos controles correctos por separado que juntos dan un
+			// candado, y ninguna de las doce pruebas los combinaba.
+			//
+			// Lo encontró una revisión adversaria. Ahora el consumo vive en el punto de acuñar
+			// —uno solo por camino: entregarPantalla y AbrirSesionShell—, que es donde ya se
+			// sabe que la sesión se abre.
 			return nil, nil
 		}
 	}
 
 	// Nada pedido todavía: se abre la solicitud. NO se acuña ni se abre nada más — el llamador
 	// devuelve esto y se corta acá.
+	// EL MOTIVO ES PARA QUIEN APRUEBA, y sin él la segunda persona decide a ciegas: «alguien
+	// quiere una shell en producción» no es información sobre la que se pueda decir que sí o que
+	// no. Viaja vacío si no lo declararon —no se exige, porque exigirlo en una urgencia enseña a
+	// escribir «urgente» y nada más— pero el camino existe y la lista lo muestra.
 	nueva, err := s.engine.AbrirSolicitudDeAprobacion(fleet.SolicitudDeAprobacion{
 		DeviceID: d.ID, ProjectID: proyecto, Solicitante: quien, Capacidad: cap,
+		Motivo: motivo,
 		Creada: ahora, Vence: ahora.Add(fleet.VentanaDeAprobacion),
 	})
 	if err != nil {
@@ -87,6 +88,48 @@ func (s *McpServer) puertaDeCuatroOjos(d fleet.Device, p *Principal, proyecto st
 			". Quien apruebe tiene que tener `" + string(cap) + "` sobre ESTA máquina y no podés ser vos: " +
 			"eso son dos ojos, no cuatro. Cuando te la aprueben, volvé a pedir la sesión.",
 	})
+}
+
+// gastarAprobacion consume el permiso EN EL MOMENTO DE ACUÑAR.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ NO ALCANZA CON HABERLO COMPROBADO EN LA PUERTA
+//
+// Entre la puerta y el acuñe pasan cosas: el consentimiento puede pedirle permiso a una persona,
+// la máquina puede dejar de latir, otra ventana del mismo operador puede estar acuñando a la vez.
+// Un permiso de un solo uso que se marca gastado antes de que exista la sesión se pierde en todos
+// esos caminos; uno que se marca después de acuñar puede acuñar dos veces.
+//
+// Así que se gasta ACÁ, inmediatamente antes de que exista la credencial, y el `WHERE` del UPDATE
+// es quien decide: si devuelve false, alguien más lo usó o venció, y la sesión NO se abre.
+func (s *McpServer) gastarAprobacion(d fleet.Device, p *Principal, cap fleet.Cap, ahora time.Time) *RpcError {
+	if !d.RequiereAprobacion {
+		return nil
+	}
+	quien := nombrePrincipal(p)
+	sol, hay, err := s.engine.AprobacionVigenteDe(d.ID, quien, cap, ahora)
+	if err != nil {
+		return rpcErrorf(codeInternalError, "%v", err)
+	}
+	if !hay || !sol.Utilizable(ahora) {
+		// Se llegó al acuñe sin permiso. No debería pasar —la puerta va antes— pero si pasa, la
+		// respuesta es negarse: este es el último punto donde se puede.
+		return rpcErrorf(codeUnauthorized,
+			"no se abre la sesión en %q: hace falta la aprobación de una segunda persona y no hay ninguna vigente.", d.Name)
+	}
+	gastada, err := s.engine.ConsumirAprobacion(sol.ID, ahora)
+	if err != nil {
+		return rpcErrorf(codeInternalError, "%v", err)
+	}
+	if !gastada {
+		return rpcErrorf(codeUnauthorized,
+			"la aprobación %s ya no sirve: la usó otra sesión o venció mientras se abría ésta. "+
+				"Pedí otra — es de un solo uso a propósito.", sol.ID)
+	}
+	logx.Info("sesión abierta con aprobación de cuatro ojos",
+		"device", d.Name, "capacidad", string(cap),
+		"solicitante", quien, "aprobador", sol.Aprobador, "solicitud", sol.ID)
+	return nil
 }
 
 func explicarNegada(d fleet.Device, sol fleet.SolicitudDeAprobacion) string {
@@ -148,10 +191,23 @@ func (s *McpServer) toolFleetApprove(ctx context.Context, raw json.RawMessage) (
 	// acceso. Y la capacidad se comprueba ANTES que la identidad del que aprueba, para que
 	// alguien sin `shell` sobre esa máquina no se entere de que la solicitud existe.
 	if !existe || !PuedeSobreDevice(p, d, sol.Capacidad) {
+		// ════════════════════════════════════════════════════════════════════════════════════
+		// EL MENSAJE NO INTERPOLA NADA QUE DEPENDA DE SI LA SOLICITUD EXISTE
+		//
+		// La primera versión nombraba `sol.Capacidad` acá. Cuando la solicitud NO existe, `sol`
+		// es el valor cero y esa capacidad sale VACÍA — así que las dos respuestas no eran
+		// iguales y el oráculo que este `if` existe para tapar seguía abierto: probando ids se
+		// distinguía «no hay tal solicitud» de «hay una y no podés», o sea qué máquinas tienen
+		// gente pidiendo entrar. Y en el segundo caso además le contaba a alguien SIN ninguna
+		// capacidad sobre esa máquina QUÉ capacidad se está pidiendo.
+		//
+		// Lo encontró una revisión adversaria. La lección es que un mensaje único no alcanza:
+		// tiene que ser el MISMO texto, y eso hay que probarlo comparándolos.
 		return nil, rpcErrorf(codeUnauthorized,
-			"no podés resolver la solicitud %q: o no existe, o tu credencial no tiene `%s` sobre esa máquina. "+
-				"Aprobar exige LA MISMA capacidad que la sesión que se pide —no `admin`—: la barra es «podrías "+
-				"haberlo hecho vos», así que aprobar no te concede nada que no tuvieras.", id, sol.Capacidad)
+			"no podés resolver la solicitud %q: o no existe, o tu credencial no tiene sobre esa máquina "+
+				"la capacidad que esa sesión pide. Aprobar exige LA MISMA capacidad que la sesión —no "+
+				"`admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada "+
+				"que no tuvieras.", id)
 	}
 
 	quien := nombrePrincipal(p)
@@ -304,7 +360,11 @@ func (s *McpServer) toolFleetRequireApproval(ctx context.Context, raw json.RawMe
 		res["ojo"] = "a partir de ahora `shell` y `screen` sobre esta máquina exigen que OTRO principal, " +
 			"con la misma capacidad sobre ella, apruebe cada sesión. Si en la práctica hay una sola " +
 			"persona con esa capacidad, esta máquina queda sin acceso interactivo: cuatro ojos con un " +
-			"solo par no es un control lento, es un candado. `metrics` y `exec` no se tocan."
+			"solo par no es un control lento, es un candado.\n\n" +
+			"OJO CON `exec`: esta puerta NO lo cubre. Si el principal no tiene `exec_allow` en " +
+			"principals.yaml, `exec` acepta cualquier argv sobre esta máquina —o sea `bash -c`, que es " +
+			"una shell con otro nombre y sin segunda persona—. Marcar la máquina sin acotarle `exec` a " +
+			"una allowlist deja esta puerta puesta y la de atrás abierta."
 	}
 	return jsonResult(res)
 }

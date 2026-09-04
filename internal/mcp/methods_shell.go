@@ -26,6 +26,9 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 		Project  string `json:"project"`
 		Filas    int    `json:"filas"`
 		Columnas int    `json:"columnas"`
+		// Motivo sólo se usa si esta máquina exige cuatro ojos: es lo que va a leer quien
+		// apruebe. Se acepta siempre, por lo mismo que en pantalla.
+		Motivo string `json:"motivo"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -98,7 +101,7 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// De los tres ejes, éste es el que MÁS le corresponde a la shell: una shell interactiva se
 	// saltea cualquier allowlist de comandos, así que es el camino donde una sola persona puede
 	// hacer más sin que nadie se entere hasta después.
-	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, ahora); rpcErr != nil || resp != nil {
+	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {
 		return resp, rpcErr
 	}
 
@@ -114,6 +117,13 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// LA BITÁCORA SE ESCRIBE ANTES DE CONECTAR — misma regla que F1 de S5 y G7 de S6. Si el SSH
 	// nunca prende, el PEDIDO queda registrado igual: que alguien haya intentado abrir una shell
 	// en un servidor es información de auditoría tanto como que lo haya logrado.
+	// EL PERMISO DE CUATRO OJOS SE GASTA ACÁ, inmediatamente antes de que exista la sesión. La
+	// puerta de más arriba sólo comprobó: consumir allá perdía el permiso en cualquier camino
+	// que devolviera sin abrir nada. Ver gastarAprobacion.
+	if e := s.gastarAprobacion(d, p, fleet.CapShell, ahora); e != nil {
+		return nil, e
+	}
+
 	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
 	})

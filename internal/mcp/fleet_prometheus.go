@@ -141,9 +141,25 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 	// Los proyectos salen de las máquinas YA compuertadas: preguntarle al almacén por todos los
 	// proyectos sería un segundo recorrido sin compuerta, que es como se exporta de más sin que
 	// nadie lo note.
+	// ══════════════════════════════════════════════════════════════════════════════════════
+	// LOS PROYECTOS SALEN DE `vistos`, PERO LAS SOLICITUDES TAMBIÉN TIENEN QUE FILTRARSE
+	//
+	// La primera versión hacía sólo la mitad: sacaba los proyectos de `vistos` —ya compuertado
+	// por PuedeSobreDevice— y después le pedía al almacén las pendientes DEL PROYECTO ENTERO.
+	// Una credencial con `metrics: ["srv-01"]` recibía el conteo de todas las máquinas de ese
+	// proyecto, incluidas las que no puede ni listar. Era exactamente «el segundo recorrido
+	// donde uno se olvida la compuerta» que el comentario de al lado decía estar evitando.
+	//
+	// Lo encontró una revisión adversaria, no una prueba: el comentario correcto estaba escrito
+	// AL LADO del código que lo contradecía, que es la forma más difícil de ver un agujero.
+	//
+	// Con el conjunto de ids, lo que se cuenta pasa a ser «pendientes sobre máquinas que ESTA
+	// credencial ve», que es lo único que se le puede decir a quien scrapea.
 	orden := make([]string, 0, 4)
 	visto := map[string]bool{}
+	visibles := make(map[string]bool, len(vistos))
 	for _, d := range vistos {
+		visibles[d.ID] = true
 		if !visto[d.ProjectID] {
 			visto[d.ProjectID] = true
 			orden = append(orden, d.ProjectID)
@@ -163,14 +179,20 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 			// diría «no hay nadie esperando» sin saberlo.
 			continue
 		}
-		espera := 0.0
-		if len(pendientes) > 0 {
-			// La lista viene ordenada por `creada ASC`, así que la primera es la más vieja.
-			if d := ahora.Sub(pendientes[0].Creada).Seconds(); d > 0 {
-				espera = d
+		// La lista viene ordenada por `creada ASC`, así que la primera VISIBLE es la más vieja.
+		n, espera := 0, 0.0
+		for _, sol := range pendientes {
+			if !visibles[sol.DeviceID] {
+				continue
 			}
+			if n == 0 {
+				if d := ahora.Sub(sol.Creada).Seconds(); d > 0 {
+					espera = d
+				}
+			}
+			n++
 		}
-		fmt.Fprintf(b, "%s{project=%q} %d\n", nombreAprobPendientes, proy, len(pendientes))
+		fmt.Fprintf(b, "%s{project=%q} %d\n", nombreAprobPendientes, proy, n)
 		fmt.Fprintf(b, "%s{project=%q} %.0f\n", nombreAprobEspera, proy, espera)
 	}
 }

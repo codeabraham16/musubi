@@ -35,6 +35,58 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-03 (después del cierre) — MIS SIETE SABOTAJES NO ALCANZABAN, Y UNO DE LOS AGUJEROS
+> ERA UN CANDADO.**
+>
+> A los cuatro ojos recién entregados se les corrió una revisión adversaria de cinco dimensiones
+> con refutadores. Encontró **seis cosas reales, y las seis se me habían pasado**. La lección no es
+> que faltaran pruebas: es que **un sabotaje sólo cubre lo que a uno se le ocurrió sabotear**, y lo
+> que no se te ocurre es exactamente lo que no vas a probar.
+>
+> **El peor: `pide` + cuatro ojos no se abría NUNCA.** La puerta consumía la aprobación —de un solo
+> uso— y la llamada seguía hasta `pedirPermisoParaPantalla`, que devuelve «esperando permiso» sin
+> abrir nada. La siguiente llamada ya no encontraba aprobación, así que abría otra solicitud, y la
+> persona rebotaba entre dos esperas para siempre. **Dos controles correctos por separado que
+> juntos dan un candado**, y ninguna de mis doce pruebas los combinaba. Ahora la puerta sólo
+> COMPRUEBA y el permiso se gasta en el punto de acuñar —`entregarPantalla` y `AbrirSesionShell`—,
+> que es donde ya se sabe que la sesión se abre.
+>
+> **El oráculo que creí haber tapado seguía abierto.** El mensaje «o no existe, o no podés»
+> interpolaba `sol.Capacidad`, que sale VACÍA cuando la solicitud no existe: los dos textos eran
+> distinguibles, o sea que probando ids se sabía qué máquinas tienen gente pidiendo entrar. Un
+> mensaje único que interpola algo dependiente del caso no es único, y eso hay que probarlo
+> COMPARANDO los dos, no leyéndolos.
+>
+> **Escribí el comentario que explica el error y después lo cometí, en la línea de al lado.**
+> `renderAprobaciones` sacaba los proyectos de `vistos` —compuertado— y después le pedía al almacén
+> las pendientes del PROYECTO ENTERO. Una credencial con `metrics: ["srv-01"]` recibía el conteo de
+> todas las máquinas de ese proyecto. El comentario que dice «reusar `vistos` es lo que evita un
+> segundo lugar donde olvidarse la compuerta» estaba tres líneas más arriba.
+>
+> **Un «no» se podía tapar pidiendo otra vez.** `AprobacionVigenteDe` ordenaba por `creada DESC`,
+> o sea que ganaba la fila más nueva. Puede haber dos vivas (la puerta lee y después inserta, sin
+> índice único), así que una pendiente posterior escondía una negada. Ahora la precedencia es por
+> ESTADO y es fail-closed: negada gana siempre. **No se puso índice único a propósito**: una fila
+> vencida sigue diciendo `pendiente` —nadie la marca al vencer—, así que un único bloquearía todas
+> las solicitudes futuras después de la primera.
+>
+> **Una prueba quedaba verde bajo el sabotaje que ella misma declaraba.** Decía cuidar la posición
+> de la puerta, y sólo miraba que no viniera contraseña — mover la puerta después de
+> `AbrirSesionPantalla` la dejaba pasando igual. Ahora comprueba además que no se haya registrado
+> ninguna fila de sesión.
+>
+> **Y el campo `motivo` no lo escribía nadie.** Estaba en el dominio, en el INSERT, en la lista, y
+> ningún camino lo poblaba: la segunda persona decidía a ciegas. Ahora `musubi_fleet_screen` y
+> `musubi_fleet_shell` lo aceptan.
+>
+> **Lo que la revisión señaló y NO es un bug, pero había que decirlo mejor**: cuatro ojos no cubre
+> `exec`, y un principal sin `exec_allow` puede correr `bash -c` sobre una máquina marcada — una
+> shell con otro nombre y sin segunda persona. El texto decía «`metrics` y `exec` no se tocan», que
+> se lee como tranquilidad. Ahora lo dice como la advertencia que es, en la tool y al encenderlo.
+>
+> **Catorce sabotajes en total, catorce rojos.** Los siete míos y los siete que hicieron falta
+> después de que otro mirara.
+>
 > **2026-09-03 (cierre de la Ola 2) — CUATRO OJOS, EL TERCER EJE.**
 >
 > Ya había dos ejes y contestaban preguntas distintas: las capacidades dicen QUIÉN puede entrar, y

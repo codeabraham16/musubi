@@ -28,6 +28,10 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		Device     string `json:"device"`
 		Project    string `json:"project"`
 		MinutosTTL int    `json:"minutos"`
+		// Motivo sólo se usa si esta máquina exige cuatro ojos: es lo que va a leer quien
+		// apruebe. Se acepta siempre para no obligar a saber de antemano si la máquina está
+		// marcada — descubrirlo al recibir un error sería un viaje de ida y vuelta de más.
+		Motivo string `json:"motivo"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -150,7 +154,7 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	// Va DESPUÉS de la colisión de id y del «¿está latiendo?» a propósito: ésas son máquinas
 	// donde la sesión no se puede abrir por razones que ninguna aprobación arregla, y pedirle a
 	// alguien que apruebe eso es hacerlo firmar algo que no sirve.
-	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, ahora); rpcErr != nil || resp != nil {
+	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {
 		return resp, rpcErr
 	}
 
@@ -196,6 +200,13 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 // es siempre la del camino que se usa menos, que acá es justo el de mayor autoridad.
 func (s *McpServer) entregarPantalla(d fleet.Device, p *Principal, proyecto string,
 	ses fleet.SesionPantalla, ttl time.Duration) (interface{}, *RpcError) {
+	// EL PERMISO DE CUATRO OJOS SE GASTA ACÁ, en el único lugar que acuña una credencial de
+	// pantalla — y por la MISMA razón por la que esta función está extraída y no duplicada. La
+	// puerta sólo comprobó; entre aquélla y este punto puede haber pasado un diálogo de `pide`
+	// entero, que es donde la primera versión perdía la aprobación. Ver gastarAprobacion.
+	if e := s.gastarAprobacion(d, p, fleet.CapScreen, time.Now().UTC()); e != nil {
+		return nil, e
+	}
 
 	pass, err := fleet.NuevaPassPantalla()
 	if err != nil {

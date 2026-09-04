@@ -5,6 +5,7 @@ package mcp
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
@@ -104,6 +105,20 @@ func TestConCuatroOjosElPrimerPedidoNoAcunaContrasena(t *testing.T) {
 	}
 	if m["estado"] != string(fleet.AprobacionPendiente) {
 		t.Fatalf("estado = %v, esperaba pendiente", m["estado"])
+	}
+	// Y TAMPOCO SE ABRIÓ NINGUNA FILA DE SESIÓN.
+	//
+	// Sin esto, la prueba quedaba VERDE bajo el sabotaje que ella misma declara: mover la puerta
+	// después de AbrirSesionPantalla —pero antes de entregarPantalla— tampoco devuelve
+	// contraseña, así que las dos afirmaciones de arriba se cumplían igual. La declaración del
+	// sabotaje y lo que la prueba miraba no coincidían, que es la forma más silenciosa de un
+	// falso verde: la encontró una revisión adversaria, no yo.
+	ses, e := callAsPrincipal(t, s, conPantalla("casa"), "musubi_fleet_sessions", map[string]any{})
+	if e != nil {
+		t.Fatalf("fleet_sessions: %+v", e)
+	}
+	if filas, _ := jsonOf(t, ses)["sesiones"].([]any); len(filas) != 0 {
+		t.Fatalf("se registró %d sesión(es) de pantalla antes de que nadie aprobara", len(filas))
 	}
 }
 
@@ -394,5 +409,265 @@ func TestLaListaDeAprobacionesDiceLoQueNoMuestra(t *testing.T) {
 	}
 	if fila, _ := filas[0].(map[string]any); fila["podes_aprobarla"] != false {
 		t.Fatal("la lista le dice al solicitante que puede aprobar la suya")
+	}
+}
+
+// ── LO QUE ENCONTRÓ LA REVISIÓN ADVERSARIA (y ninguno de mis siete sabotajes) ────────────────
+
+// LOS DOS RECHAZOS DE `approve` TIENEN QUE SER EL MISMO TEXTO.
+//
+// Un mensaje «único» que interpola algo dependiente del caso NO es único. La primera versión
+// nombraba `sol.Capacidad`, que sale VACÍA cuando la solicitud no existe: probando ids se
+// distinguía «no hay tal solicitud» de «hay una y no podés», o sea qué máquinas tienen gente
+// pidiendo entrar. Y el segundo caso además revelaba QUÉ capacidad se estaba pidiendo a alguien
+// que no tiene ninguna sobre esa máquina.
+//
+// Sabotaje: volver a interpolar sol.Capacidad en el mensaje de toolFleetApprove.
+func TestElRechazoDeAprobarNoDistingueSiLaSolicitudExiste(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+
+	res, _ := callAsPrincipal(t, s, conPantalla("casa"), "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	id, _ := jsonOf(t, res)["solicitud"].(string)
+	if id == "" {
+		t.Fatal("no se abrió la solicitud")
+	}
+	const inventado = "00000000-0000-0000-0000-000000000000"
+
+	// Alguien SIN `screen` sobre esa máquina pregunta por las dos.
+	ajeno := &Principal{
+		Name: "operario", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapExec: {"*"}, fleet.CapMetrics: {"*"}},
+	}
+	_, eReal := callAsPrincipal(t, s, ajeno, "musubi_fleet_approve", map[string]any{"solicitud": id, "aprobar": true})
+	_, eFalsa := callAsPrincipal(t, s, ajeno, "musubi_fleet_approve", map[string]any{"solicitud": inventado, "aprobar": true})
+	if eReal == nil || eFalsa == nil {
+		t.Fatal("alguna de las dos no fue rechazada")
+	}
+	if eReal.Code != eFalsa.Code {
+		t.Fatalf("códigos distintos: %d vs %d", eReal.Code, eFalsa.Code)
+	}
+	// Salvo el id, que el que pregunta ya conoce porque lo escribió él, tienen que ser idénticos.
+	a := strings.Replace(eReal.Message, id, "<id>", 1)
+	b := strings.Replace(eFalsa.Message, inventado, "<id>", 1)
+	if a != b {
+		t.Fatalf("los dos rechazos son distinguibles — es un oráculo de qué solicitudes existen:\n  existe:    %s\n  inventada: %s", a, b)
+	}
+}
+
+// EL CONTADOR DE /metrics NO PUEDE CONTAR MÁQUINAS QUE QUIEN SCRAPEA NO VE.
+//
+// La primera versión sacaba los proyectos de `vistos` (compuertado) y después pedía las
+// pendientes del PROYECTO ENTERO. Una credencial acotada a una máquina recibía el conteo de todas
+// las del proyecto: el segundo recorrido sin compuerta que el comentario de al lado decía estar
+// evitando.
+//
+// Sabotaje: contar len(pendientes) en vez de filtrar por `visibles`.
+func TestElConteoDeAprobacionesRespetaLaCompuertaPorMaquina(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+	// Dos máquinas en el MISMO proyecto. La solicitud es sobre la segunda.
+	maquinaConMuestra(t, s, "casa", "visible", *muestraDePrueba(), ahora)
+	tok := enrolarConPantalla(t, s, "casa", "reservada")
+	ts := servidorHTTP(t, s)
+	postCon(t, ts.URL+fleetHeartbeatPath, tok, "")
+	marcarCuatroOjos(t, s, "casa", "reservada")
+	if _, e := callAsPrincipal(t, s, conPantalla("casa"), "musubi_fleet_screen", map[string]any{"device": "reservada"}); e != nil {
+		t.Fatalf("fleet_screen: %+v", e)
+	}
+
+	// Un principal que SÓLO ve `visible`.
+	acotado := &Principal{
+		Name: "panel", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"visible"}},
+	}
+	var b strings.Builder
+	renderFlota(&b, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba)
+	salida := b.String()
+
+	if !strings.Contains(salida, nombreAprobPendientes+`{project="casa"} 0`) {
+		linea := "(no está)"
+		for _, l := range strings.Split(salida, "\n") {
+			if strings.HasPrefix(l, nombreAprobPendientes+"{") {
+				linea = l
+			}
+		}
+		t.Fatalf("el conteo incluye una solicitud de una máquina que esta credencial no puede ver: %s", linea)
+	}
+}
+
+// EL `motivo` LLEGA HASTA QUIEN APRUEBA. Sin él, la segunda persona decide a ciegas: «alguien
+// quiere una shell en producción» no es información sobre la que se pueda decir que sí o que no.
+// El campo existía en el dominio, en el INSERT y en la lista, y NINGÚN camino lo escribía.
+//
+// Sabotaje: dejar de pasar `motivo` en la llamada a puertaDeCuatroOjos.
+func TestElMotivoLlegaAQuienAprueba(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+
+	if _, e := callAsPrincipal(t, s, conPantalla("casa"), "musubi_fleet_screen", map[string]any{
+		"device": "pc-gio", "motivo": "el disco está al 98 % y hay que mirarlo",
+	}); e != nil {
+		t.Fatalf("fleet_screen: %+v", e)
+	}
+	res, e := callAsPrincipal(t, s, otroConPantalla("casa"), "musubi_fleet_approvals", map[string]any{})
+	if e != nil {
+		t.Fatalf("fleet_approvals: %+v", e)
+	}
+	filas, _ := jsonOf(t, res)["pendientes"].([]any)
+	if len(filas) != 1 {
+		t.Fatalf("esperaba 1 solicitud, hay %d", len(filas))
+	}
+	fila, _ := filas[0].(map[string]any)
+	if fila["motivo"] != "el disco está al 98 % y hay que mirarlo" {
+		t.Fatalf("quien aprueba no recibe el motivo: %q", fila["motivo"])
+	}
+}
+
+// ── LOS DOS CONTROLES JUNTOS: EL CANDADO QUE NINGUNA PRUEBA COMBINABA ────────────────────────
+
+// UNA MÁQUINA EN `pide` Y CON CUATRO OJOS TIENE QUE PODER ABRIRSE.
+//
+// Son dos controles correctos por separado que juntos daban un candado: la puerta gastaba la
+// aprobación y la llamada seguía hasta `pedirPermisoParaPantalla`, que devuelve «esperando
+// permiso» sin abrir nada. La siguiente llamada ya no encontraba aprobación —estaba `usada`— y
+// abría otra solicitud: la persona rebotaba entre dos esperas y la sesión no se abría NUNCA.
+//
+// Sabotaje: volver a consumir la aprobación dentro de puertaDeCuatroOjos.
+func TestPideMasCuatroOjosNoSeTrabaEnUnBucle(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	tok := enrolarConPantalla(t, s, "casa", "pc-gio")
+	ts := servidorHTTP(t, s)
+	postCon(t, ts.URL+fleetHeartbeatPath, tok, "")
+	marcarCuatroOjos(t, s, "casa", "pc-gio")
+	// `pide` exige que la máquina sepa preguntar, si no se endurece a `prohibido`.
+	if err := s.engine.FijarCapacidadDePreguntar(devicePorNombreEnPrueba(t, s, "casa", "pc-gio").ID, true); err != nil {
+		t.Fatalf("puede_preguntar: %v", err)
+	}
+	if _, e := call(t, s, "musubi_fleet_consent", map[string]any{"device": "pc-gio", "grado": "pide", "project": "casa"}); e != nil {
+		t.Fatalf("consent: %+v", e)
+	}
+	yo, otra := conPantalla("casa"), otroConPantalla("casa")
+
+	// 1) Primer pedido: cuatro ojos. NO se gasta nada todavía.
+	res, e := callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("primer pedido: %+v", e)
+	}
+	id, _ := jsonOf(t, res)["solicitud"].(string)
+	if id == "" {
+		t.Fatalf("no se abrió solicitud de cuatro ojos: %v", jsonOf(t, res))
+	}
+	// 2) La segunda persona aprueba.
+	if _, e := callAsPrincipal(t, s, otra, "musubi_fleet_approve", map[string]any{"solicitud": id, "aprobar": true}); e != nil {
+		t.Fatalf("approve: %+v", e)
+	}
+	// 3) Segundo pedido: ya pasa cuatro ojos y ahora le toca preguntarle a quien usa la máquina.
+	res, e = callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("segundo pedido: %+v", e)
+	}
+	m := jsonOf(t, res)
+	if m["estado"] != string(fleet.SesionEsperandoPermiso) {
+		t.Fatalf("con la aprobación puesta tenía que pasar a preguntarle al usuario; devolvió %v", m)
+	}
+	// LO QUE IMPORTA: la aprobación NO se gastó en esa vuelta. Si se hubiera gastado, el próximo
+	// pedido abriría otra solicitud y la sesión no se abriría nunca.
+	sesID, _ := m["session_id"].(string)
+	if sesID == "" {
+		t.Fatal("no se registró la sesión esperando permiso")
+	}
+	if _, ok, err := s.engine.AprobacionVigenteDe(
+		devicePorNombreEnPrueba(t, s, "casa", "pc-gio").ID, "mirador", fleet.CapScreen, time.Now().UTC()); err != nil || !ok {
+		t.Fatal("la aprobación se gastó en una llamada que sólo preguntó: la sesión no se va a abrir nunca")
+	}
+}
+
+// devicePorNombreEnPrueba evita repetir el par (proyecto, nombre) -> Device.
+func devicePorNombreEnPrueba(t *testing.T, s *McpServer, proyecto, nombre string) fleet.Device {
+	t.Helper()
+	d, hay, err := s.engine.DevicePorNombre(proyecto, nombre)
+	if err != nil || !hay {
+		t.Fatalf("no encuentro %q en %q: %v", nombre, proyecto, err)
+	}
+	return d
+}
+
+// LA APROBACIÓN ES DE QUIEN PIDIÓ. El filtro por solicitante es el invariante que
+// AprobacionVigenteDe defiende con más párrafos, y no tenía ninguna prueba que se pusiera roja.
+//
+// Sabotaje: sacar `AND solicitante = ?` de AprobacionVigenteDe.
+func TestLaAprobacionDeUnoNoLeSirveAOtro(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	yo, otra := conPantalla("casa"), otroConPantalla("casa")
+
+	// `yo` pide y `otra` le aprueba.
+	res, _ := callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	id, _ := jsonOf(t, res)["solicitud"].(string)
+	if _, e := callAsPrincipal(t, s, otra, "musubi_fleet_approve", map[string]any{"solicitud": id, "aprobar": true}); e != nil {
+		t.Fatalf("approve: %+v", e)
+	}
+
+	// Y ahora un TERCERO intenta entrar aprovechando ese «sí».
+	tercero := conPantalla("casa")
+	tercero.Name = "colado"
+	res, e := callAsPrincipal(t, s, tercero, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("el tercero tenía que abrir su propia solicitud: %+v", e)
+	}
+	m := jsonOf(t, res)
+	if _, hay := m["password"]; hay {
+		t.Fatal("un tercero usó la aprobación que le dieron a otro: el permiso dejó de ser de quien lo pidió")
+	}
+	if m["solicitud"] == id {
+		t.Fatal("el tercero reusó la solicitud ajena")
+	}
+
+	// Y la de `yo` sigue intacta: el intento del tercero no se la gastó.
+	res, e = callAsPrincipal(t, s, yo, "musubi_fleet_screen", map[string]any{"device": "pc-gio"})
+	if e != nil {
+		t.Fatalf("fleet_screen: %+v", e)
+	}
+	if _, hay := jsonOf(t, res)["password"]; !hay {
+		t.Fatal("el intento de un tercero le gastó la aprobación a quien sí la tenía")
+	}
+}
+
+// UN «NO» NO LO TAPA UNA SOLICITUD MÁS NUEVA. Puede haber dos filas vivas (la puerta lee y
+// después inserta, sin índice único), y con `ORDER BY creada DESC` ganaba la más nueva: una
+// pendiente posterior escondía la negativa.
+//
+// Sabotaje: volver el ORDER BY a `creada DESC` sin la precedencia por estado.
+func TestUnNoNoLoTapaUnaSolicitudPosterior(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	pantallaConCuatroOjos(t, s)
+	d := devicePorNombreEnPrueba(t, s, "casa", "pc-gio")
+	ahora := time.Now().UTC()
+
+	// Se fabrica a mano lo que una carrera produce: dos filas vivas para el mismo trío.
+	negada, err := s.engine.AbrirSolicitudDeAprobacion(fleet.SolicitudDeAprobacion{
+		DeviceID: d.ID, ProjectID: "casa", Solicitante: "mirador", Capacidad: fleet.CapScreen,
+		Creada: ahora.Add(-2 * time.Minute), Vence: ahora.Add(20 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("abrir la primera: %v", err)
+	}
+	if ok, err := s.engine.ResolverAprobacion(negada.ID, "revisora", "hoy no", false, ahora.Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("negar: %v", err)
+	}
+	if _, err := s.engine.AbrirSolicitudDeAprobacion(fleet.SolicitudDeAprobacion{
+		DeviceID: d.ID, ProjectID: "casa", Solicitante: "mirador", Capacidad: fleet.CapScreen,
+		Creada: ahora, Vence: ahora.Add(20 * time.Minute),
+	}); err != nil {
+		t.Fatalf("abrir la segunda: %v", err)
+	}
+
+	sol, hay, err := s.engine.AprobacionVigenteDe(d.ID, "mirador", fleet.CapScreen, ahora)
+	if err != nil || !hay {
+		t.Fatalf("no devolvió ninguna: %v", err)
+	}
+	if sol.Estado != fleet.AprobacionNegada {
+		t.Fatalf("ganó la %s más nueva y tapó el «no»: una negativa se puede borrar pidiendo otra vez", sol.Estado)
 	}
 }

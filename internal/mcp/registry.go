@@ -1165,6 +1165,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{
 						"device":   {Type: "string", Description: "Nombre de la máquina"},
 						"project":  {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+						"motivo":   {Type: "string", Description: "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"},
 						"filas":    {Type: "number", Description: "Alto de la terminal (default 24). Se fija al abrir y no se redimensiona"},
 						"columnas": {Type: "number", Description: "Ancho de la terminal (default 80)"},
 					},
@@ -1217,6 +1218,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"device":  {Type: "string", Description: "Nombre de la máquina"},
+						"motivo":  {Type: "string", Description: "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"},
 						"minutos": {Type: "number", Description: "Cuánto vale la sesión (default 30, máximo 240)"},
 						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
 					},
@@ -1397,7 +1399,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_fleet_require_approval",
-				Description: "ADMIN. Decide si una máquina exige CUATRO OJOS: que un segundo principal apruebe cada sesión de `shell` o `screen` sobre ella. Es un TERCER EJE, distinto de los otros dos: las capacidades deciden QUIÉN puede entrar, el consentimiento decide QUÉ SE LE DEBE a quien está usando la máquina, y esto decide CUÁNTAS PERSONAS hacen falta. Ninguno de los otros dos puede expresarlo — y en un servidor de producción, donde no hay nadie sentado enfrente, el consentimiento no protege a nadie mientras una sola persona con `shell` puede hacer cualquier cosa y la bitácora lo cuenta DESPUÉS. Quien aprueba necesita LA MISMA capacidad sobre ESA máquina (no `admin`): la barra es «podría haberlo hecho por su cuenta», así que aprobar no le concede nada nuevo; lo único que se agrega es que sean dos. Y NADIE puede aprobar su propia solicitud. Viene APAGADO y se enciende máquina por máquina, que es como se sabe cuáles importan: encenderlo en toda la flota deja a cada una esperando un par de ojos que nadie sabe que tiene que dar, y la salida que la gente encuentra es apagar el control entero. ⚠ Si en la práctica hay UNA sola persona con esa capacidad, encender esto deja la máquina sin acceso interactivo: cuatro ojos con un solo par no es un control lento, es un candado. `metrics` y `exec` no se tocan.",
+				Description: "ADMIN. Decide si una máquina exige CUATRO OJOS: que un segundo principal apruebe cada sesión de `shell` o `screen` sobre ella. Es un TERCER EJE, distinto de los otros dos: las capacidades deciden QUIÉN puede entrar, el consentimiento decide QUÉ SE LE DEBE a quien está usando la máquina, y esto decide CUÁNTAS PERSONAS hacen falta. Ninguno de los otros dos puede expresarlo — y en un servidor de producción, donde no hay nadie sentado enfrente, el consentimiento no protege a nadie mientras una sola persona con `shell` puede hacer cualquier cosa y la bitácora lo cuenta DESPUÉS. Quien aprueba necesita LA MISMA capacidad sobre ESA máquina (no `admin`): la barra es «podría haberlo hecho por su cuenta», así que aprobar no le concede nada nuevo; lo único que se agrega es que sean dos. Y NADIE puede aprobar su propia solicitud. Viene APAGADO y se enciende máquina por máquina, que es como se sabe cuáles importan: encenderlo en toda la flota deja a cada una esperando un par de ojos que nadie sabe que tiene que dar, y la salida que la gente encuentra es apagar el control entero. ⚠ Si en la práctica hay UNA sola persona con esa capacidad, encender esto deja la máquina sin acceso interactivo: cuatro ojos con un solo par no es un control lento, es un candado. ⚠⚠ CUATRO OJOS NO CUBRE `musubi_fleet_exec`, y eso importa más de lo que parece: si ese principal no tiene una sección `exec_allow` en principals.yaml, `exec` acepta CUALQUIER argv sobre esa máquina — o sea `bash -c '...'`, que es una shell con otro nombre y sin segunda persona. Marcar una máquina sin acotarle `exec` a una allowlist deja el control puesto en la puerta de adelante y la de atrás abierta. `metrics` tampoco se toca, pero ése sólo lee.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

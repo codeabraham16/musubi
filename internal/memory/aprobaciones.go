@@ -94,6 +94,22 @@ func (e *DbEngine) SolicitudDeAprobacionPorID(id string) (fleet.SolicitudDeAprob
 // acceso es un permiso que alguien tiene que acordarse de mirar, y ese olvido se ve idéntico a
 // que el control funcione.
 //
+// EL ORDEN ES POR QUÉ ESTADO MANDA, NO POR FECHA, y ésa es la parte que se hizo mal primero.
+//
+// Con `ORDER BY creada DESC` ganaba la fila MÁS NUEVA, y eso deja tapar un «no». Puede haber más
+// de una fila viva para el mismo (máquina, solicitante, capacidad): la puerta lee y después
+// inserta, sin índice único, así que dos llamadas simultáneas abren dos solicitudes. Si a una la
+// niegan y la otra queda pendiente, la pendiente —más nueva— ganaba y la negativa desaparecía.
+//
+// La precedencia es fail-closed: **negada gana siempre**, después concedida, y última pendiente.
+// Un «no» no lo puede tapar nada.
+//
+// NO SE PONE UN ÍNDICE ÚNICO, y no es olvido: una fila vencida sigue diciendo `pendiente` —nadie
+// la marca al vencer, se filtra por `vence`—, así que un único sobre (device, solicitante,
+// capacidad) bloquearía TODAS las solicitudes futuras después de la primera. La duplicación es
+// benigna con esta precedencia: dos concedidas exigieron dos segundas personas de verdad, y
+// gastarlas sigue siendo de a una porque el `WHERE` de ConsumirAprobacion no admite carreras.
+//
 // Y UNA NEGADA CUENTA COMO VIGENTE, que es la parte que parece de más y no lo es. Si un «no»
 // desapareciera de esta consulta, el siguiente intento abriría una solicitud nueva y el control
 // se degradaría a «pedir hasta que alguien diga que sí» — que es exactamente cómo el cansancio
@@ -105,7 +121,9 @@ func (e *DbEngine) AprobacionVigenteDe(deviceID, solicitante string, cap fleet.C
 		`SELECT `+columnasAprobacion+` FROM fleet_approvals
 		  WHERE device_id = ? AND solicitante = ? AND capacidad = ?
 		    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?
-		  ORDER BY creada DESC LIMIT 1`,
+		  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,
+		           creada DESC
+		  LIMIT 1`,
 		deviceID, solicitante, string(cap), t)
 	s, err := escanearAprobacion(row)
 	if errors.Is(err, sql.ErrNoRows) {
