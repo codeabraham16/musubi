@@ -713,8 +713,8 @@
 
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
-| A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
 | A86 | **`pide` sobre un `exec` tampoco pregunta, y eso NO está declarado en ninguna parte** | Es la misma forma que A85 en el tercer camino: `AvisaAlUsuario()` es true para `pide` —es `nivel >= avisa`— así que `aplicarConsentimientoDeExec` cae en su rama de `avisa`, encola el aviso estrangulado y **ejecuta el comando**. El grado promete «tiene que aceptar. Sin respuesta, no hay sesión». **Lo que lo distingue de A85 es que acá NO se arregló, y a propósito**: el doc de esa función enumera `prohibido`, `avisa` y `libre` y se saltea `pide`, así que hoy no hay una decisión escrita — hay un accidente. Y las dos salidas posibles son de POLÍTICA, no de código: (a) endurecer `pide` a `prohibido` para exec es consistente con la regla que el dominio ya aplica cuando no hay a quién preguntarle, pero **rompe el auto-heal** en cualquier máquina en `pide`, que es automatización corriendo sin nadie mirando; (b) preguntar por comando pone un diálogo de hasta minuto y medio en el camino de una sola orden, y un exec viene en ráfagas — es la misma razón por la que A75 le puso estrangulador al aviso. **La celda está MEDIDA, no supuesta**: la matriz caminos × grados de `TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados` la ejerce y la deja escrita como está, con el porqué al lado, para que un cambio de comportamiento se vea. | **gio** (decisión de política) |
+| A87 | **Los respaldos `pre-redespliegue-*.db` no tienen retención: se acumulan para siempre** | La purga de `musubi-backup` es `find … \( -name 'memory.db.*' -o -name 'principals.yaml.*' \) -mtime +$BACKUP_RETENTION_DAYS -delete`, y **`pre-redespliegue-*.db` no matchea ninguno de los dos patrones**. Los escribe `redesplegar-cerebro.sh` en el MISMO directorio y con el mismo tamaño (~160 MB cada uno), así que comparten el disco pero no la limpieza. Medido el 2026-09-04: **33 snapshots de pre-despliegue vivos, el más viejo del 28-08, y se comen 4,8 GB de los 7,2 GB del directorio** —contra 18 `memory.db.*` que sí caducan. (También queda afuera `pre-flota-20260827-101917.db`, por el mismo motivo: el patrón de la purga nombra dos prefijos y hay tres.) Dos consecuencias, y la segunda es la que duele: el disco crece sin techo con el ritmo de los redespliegues —hoy los respaldos que caducan pesan menos que los que no—, y **un secreto que la retención debería haber vencido sobrevive indefinidamente en una copia que nadie mira** — que es exactamente lo que dejó a A81 con dos archivos que no caducan. Son de `root`, así que la purga corriendo como `musubi` no podría borrarlos aunque matchearan: el arreglo es del script que los CREA, no del que limpia. | sin asignar |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -742,6 +742,46 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-04 · A81 CERRADO — el secreto no estaba donde la fila decía, y la fila nunca nombró
+dónde sí estaba.**
+
+Esta fila prometía «un `UPDATE` de UNA línea» sobre la base viva. Cuando se fue a correr, la base
+viva **ya estaba limpia**: 0 filas en claro, y la contraseña —16 caracteres— sin aparecer en
+ninguna de las 39 tablas. La había tapado alguien a mano el 03-09, entre las 08:49 y las 15:22
+(lo acotan dos snapshots consecutivos, uno sucio y el siguiente limpio), y no cerró el cabo. Se
+supo por la SERIALIZACIÓN: el `argv` guardado tenía los espacios de `json.dumps` de Python, y
+`json.Marshal` de Go no los produce nunca. Un arreglo correcto que no deja rastro en el registro
+es indistinguible de uno que no se hizo.
+
+**Lo que faltaba no era la base: eran las copias.** La fila existió en claro desde el 02-09 04:32,
+y cuatro snapshots la conservaban —dos `memory.db.*` diarios y dos `pre-redespliegue-*.db`—. Es la
+forma de siempre, N caminos y N-1 arreglados, sólo que acá los N-1 eran respaldos, que es donde
+menos se mira. El daño estuvo acotado a la máquina: el log de `musubi-backup` del 03-09 y del
+04-09 dice `BACKUP_REMOTE vacío y BACKUP_ALLOW_LOCAL_ONLY=1`, así que ningún snapshot salió del
+server. gio corrió el tapado sobre los cuatro el 04-09.
+
+**Se verificó con CUATRO mediciones independientes**, porque la primera no alcanzaba: (1) la
+consulta lógica —0 filas de pantalla sin tapar—; (2) el barrido de las 39 tablas buscando el valor
+del secreto; (3) un barrido de BYTES CRUDOS, porque un `UPDATE` de SQLite manda la página vieja a
+la lista de libres y no la borra, así que una consulta lógica limpia puede convivir con el secreto
+entero en el archivo; y (4) la cola `","30m0s"]` del `argv` viejo, sobre los 53 archivos legibles.
+Las cuatro dan cero.
+
+**La tercera y la cuarta no valían nada hasta tener control positivo.** Un detector que no se probó
+contra un caso sucio sólo demuestra que no encuentra nada. Se armó una base de control local con la
+misma forma —relleno, la fila objetivo, el mismo tapado— y se midió que el secreto ESTÁ en los bytes
+antes del `UPDATE` y NO está después: SQLite sobrescribió el registro en el lugar porque el valor
+tapado es más corto. Recién con esa firma validada el cero del server significa algo.
+
+**Pista falsa que conviene dejar escrita**: el barrido marcó en rojo `device_commands.stdout`. Era
+`argv[3] = "30m0s"` —el TTL—, no la contraseña. Cinco caracteres alcanzan para un falso positivo, y
+la respuesta fue mirar el hash del elemento en vez de creerle a la coincidencia.
+
+De mirar los respaldos salió **A87**: los `pre-redespliegue-*.db` no matchean el patrón de la purga
+y no caducan nunca. Es lo que dejó a este cabo con dos archivos que la retención jamás habría
+barrido.
+
 
 - **A85 CERRADO** (2026-09-04) — `pide` sobre una shell no preguntaba nada: `AvisaAlUsuario()` es true para `pide` también, así que el switch, que sólo tenía las ramas de `avisa`, mandaba una notificación y abría el prompt en el acto. La persona recibía un aviso que NO PODÍA CONTESTAR mientras el operador ya estaba adentro. Ahora hace el flujo de dos llamadas de pantalla (migración 45, `ResponderConsentimientoDeShell`, y la respuesta ruteada a las dos tablas con el MISMO `musubi:preguntar`). **La lección es por qué no se veía**: la guarda que recorría los tres caminos fijaba `avisa` en las tres filas — generalizaba sobre los CAMINOS y no sobre los GRADOS, y el agujero estaba en el otro eje. La guarda nueva es una matriz caminos × grados, y apenas se escribió encontró otra: pantalla en `pide` mandaba el aviso Y la pregunta. Lo de `exec` queda abierto en A86.
 
