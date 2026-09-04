@@ -119,17 +119,11 @@ func (c *colectorWindows) Tomar() (Muestra, error) {
 			m.MemTotal = mem.totalFisica
 			m.MemUsada = mem.totalFisica - mem.disponibleFisica
 		}
-		// El "page file" es lo más cercano al swap. totalPagina incluye la RAM en Windows, así
-		// que el swap real es la diferencia; si no da positiva, no se reporta.
-		if mem.totalPagina > mem.totalFisica {
-			total := mem.totalPagina - mem.totalFisica
-			libre := uint64(0)
-			if mem.disponiblePagina > mem.disponibleFisica {
-				libre = mem.disponiblePagina - mem.disponibleFisica
-			}
-			if total >= libre {
-				m.SwapTotal, m.SwapUsada = total, total-libre
-			}
+		// El "page file" es lo más cercano al swap. La aritmética vive en SwapDeWindows, fuera
+		// del build tag, para que se pueda probar desde cualquier máquina — que es exactamente lo
+		// que faltaba cuando un swap no medible se reportaba como 100 % lleno.
+		if total, usada, ok := SwapDeWindows(mem.totalPagina, mem.totalFisica, mem.disponiblePagina, mem.disponibleFisica); ok {
+			m.SwapTotal, m.SwapUsada = total, usada
 		}
 	}
 

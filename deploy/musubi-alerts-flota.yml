@@ -196,7 +196,11 @@ groups:
         expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15) unless on(project, device) (musubi_fleet_device_up == 0)
           unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
-        labels: { severity: warning }
+        # `sintoma` EMPAREJA ESTA ALERTA CON SU ESCALÓN CRÍTICO, y no es decorativo: la inhibición
+        # «lo crítico calla a lo warning» de alertmanager.yml usa ESTA etiqueta y no `alertname`,
+        # porque los dos escalones de un mismo síntoma se llaman distinto por definición. Con
+        # `equal: ['alertname', ...]` no podía casar nunca — ver el comentario de esa regla.
+        labels: { severity: warning, sintoma: disco }
         annotations:
           summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
           nota: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
@@ -205,7 +209,7 @@ groups:
         expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03) unless on(project, device) (musubi_fleet_device_up == 0)
           unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
-        labels: { severity: critical }
+        labels: { severity: critical, sintoma: disco }
         annotations:
           summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
 
