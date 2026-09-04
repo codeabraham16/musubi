@@ -1182,7 +1182,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
-						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"},
 						"limite":  {Type: "number", Description: "Cuántas sesiones devolver (default 20, máximo 200)"},
 					},
 				},
@@ -1202,7 +1202,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
-						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"},
 						"limite":  {Type: "number", Description: "Cuántas entradas devolver (default 20, máximo 200)"},
 					},
 				},
@@ -1235,7 +1235,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
-						"device":  {Type: "string", Description: "Filtrar por una máquina"},
+						"device":  {Type: "string", Description: "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"},
 						"limite":  {Type: "number", Description: "Cuántas devolver (default 20, máximo 200)"},
 					},
 				},

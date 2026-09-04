@@ -356,6 +356,17 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 	// del arreglo original y el síntoma fue exacto: el panel —`read: all` sin proyecto propio—
 	// recibía «no se pudo determinar el proyecto» y su columna de sesiones quedaba muda. Tres de
 	// cuatro arregladas es el mismo bug con una cuarta parte de la superficie.
+	// EL FILTRO `device` RECIBÍA UN NOMBRE Y LA BASE COMPARA CONTRA UN UUID, así que
+	// `musubi_fleet_sessions {device:"gio"}` contestaba `total: 0` sobre una máquina que SÍ tenía
+	// sesiones. Los dos parámetros son `string` y cruzarlos no da error de compilación. El porqué
+	// largo está en toolFleetLog, que tenía el mismo defecto.
+	//
+	// ACÁ SE RESUELVE POR PROYECTO Y NO CON UN MAPA ÚNICO, porque esta tool compuerta POR
+	// MODALIDAD (`puedeVer` de arriba): la visibilidad depende de cada fila, no de la máquina, así
+	// que no hay un conjunto de «máquinas que ves» que calcular antes. Se traduce el nombre a su
+	// id dentro de cada proyecto y el filtro por permiso sigue actuando fila por fila, después.
+	nombreFiltro := strings.TrimSpace(args.Device)
+	hallada := false
 	var crudas []fleet.SesionViva
 	for _, proyecto := range proyectos {
 		devices, err := s.engine.ListarDevices(proyecto, true)
@@ -365,11 +376,33 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 		for _, d := range devices {
 			porID[d.ID] = d
 		}
-		vivas, err := s.engine.SesionesVivas(proyecto, strings.TrimSpace(args.Device), tope*4, ahora)
+		filtroID := ""
+		if nombreFiltro != "" {
+			for _, d := range devices {
+				if d.Name == nombreFiltro {
+					filtroID = d.ID
+					hallada = true
+					break
+				}
+			}
+			// Ese nombre no está en ESTE proyecto. Seguir con el filtro vacío traería TODAS las
+			// sesiones del proyecto, que es lo contrario de lo que se pidió.
+			if filtroID == "" {
+				continue
+			}
+		}
+		vivas, err := s.engine.SesionesVivas(proyecto, filtroID, tope*4, ahora)
 		if err != nil {
 			return nil, rpcErrorf(codeInternalError, "%v", err)
 		}
 		crudas = append(crudas, vivas...)
+	}
+	// Un nombre que no está en ningún proyecto del alcance es un ERROR y no una lista vacía: una
+	// lista vacía se lee como «esa máquina no tuvo sesiones», que es una afirmación sobre algo que
+	// no se miró. Y no distingue «no existe» de «no la ves», por el oráculo de siempre.
+	if nombreFiltro != "" && !hallada {
+		return nil, rpcErrorf(codeUnauthorized,
+			"no hay sesiones de %q: o no existe en el alcance de tu credencial, o no tenés cómo verla", nombreFiltro)
 	}
 	filas := make([]map[string]interface{}, 0, tope)
 	ocultos := 0

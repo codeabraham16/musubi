@@ -82,10 +82,22 @@
 > ejercía la rama de al lado. La decisión se extrajo a `marcaSegunStat` para que la rama sea
 > alcanzable, porque la ruta sale de `os.Executable()` y en una prueba no se puede mover.
 >
-> **Lo que NO se arregló queda en A84**, con la medición que falta escrita como comando: leer el
-> `RustDesk.toml` es ejecutar algo en la máquina personal de gio, y eso no lo autoriza un par.
+> **La mitad que declaré imposible sin medir, la otra sesión la resolvió — y por un camino mejor
+> que el que yo había propuesto.** Yo dije que restituir la contraseña exigía saber qué guarda el
+> `RustDesk.toml`, porque `rustdesk --password` toma texto plano y el archivo puede guardarlo
+> ofuscado; y que esa medición no la podía pedir un par, porque leer ese archivo es ejecutar algo
+> en una máquina personal. Las dos cosas eran ciertas y la conclusión igual estaba mal: **no hace
+> falta saber el formato**. Se saca una FOTO de las configs antes de aplicar y se compara después
+> — así se aprende cuál archivo cambió y cuál era el valor viejo, sea legible u ofuscado, y se
+> devuelve tal cual. Lo que yo tomé por un bloqueo era una restricción sobre UN camino, no sobre
+> el problema.
 >
-> Ocho sabotajes, ocho rojos. **21 cabos.**
+> Así que A84 nació y murió el mismo día, y mi red de arranque quedó reemplazada por la suya, que
+> hace lo mismo y además restituye. Se retiraron mis cuatro pruebas: mantenerlas exigía resucitar
+> mi mecanismo al lado del suyo.
+>
+> Ocho sabotajes, ocho rojos — y de los ocho quedan en pie los dos de la serie descartada, que
+> es lo único de esta entrada que sigue siendo mío. **20 cabos.**
 >
 > **2026-09-04 — WINDOWS CALCULABA EL VEREDICTO CON EL CÓDIGO DE SALIDA Y DESPUÉS LO TIRABA.**
 >
@@ -662,7 +674,6 @@
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
-| A84 | **Una sesión de pantalla se lleva puesta la contraseña de RustDesk del dueño, y no se la devuelve** | RustDesk tiene UNA sola ranura de contraseña permanente y `musubi_fleet_screen` la usa de borrador: `ponerPassRustdesk` corre `rustdesk --password <pass de sesión>`, que es la PERMANENTE. Al vencer, la sesión la reemplaza por una **al azar que nadie conoce** —a propósito: dejarla vacía abriría la máquina—. O sea que la contraseña que eligió el dueño sobrevive hasta la próxima sesión y después no la sabe ni él ni Musubi. **Desde su silla es indistinguible de «RustDesk me cambia la contraseña solo»**, y así se reportó: en `gio` pasó al menos dos veces. **El vencimiento local está bien** y no se toca —que la caducidad no dependa de que el cerebro siga vivo es la decisión correcta—; lo que falta es que la ranura NO ES DE MUSUBI: hay que GUARDAR el campo `password` del RustDesk.toml antes de aplicar y RESTITUIRLO al vencer, en vez de scramblear. Restituir cierra la puerta igual (la sesión termina) y no destruye lo que el dueño puso. **LO QUE FALTA ES UNA MEDICIÓN, y es una línea que corre el dueño de la máquina en su propio PowerShell** — no la puede correr un agente por él, porque leer ese archivo es ejecutar un comando en una máquina personal: `Select-String -Path "$env:APPDATA\RustDesk\config\RustDesk.toml" -Pattern '^password'`. Si el valor sale LEGIBLE, guardar y restituir por `--password` alcanza y son ~20 líneas. Si sale OFUSCADO —como en las versiones nuevas—, `--password` no sirve para devolverlo y hay que escribir el .toml de vuelta, que es otro arreglo y otra prueba. **Mientras tanto el costo está DICHO** en el contrato de la tool, en el aviso que imprime el agente al cerrar y en el runbook: el fantasma pasa a ser un costo declarado. | **gio** (una línea de PowerShell en la máquina) |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -690,6 +701,42 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-04 · EL FILTRO `device` DE LAS TRES BITÁCORAS COMPARABA UN NOMBRE CONTRA UN UUID.**
+
+`musubi_fleet_log {device:"gio"}` devolvía `total: 0`. Sin el filtro, la MISMA consulta traía los
+hechos de gio. Las tres tools de bitácora —`musubi_fleet_log`, `musubi_fleet_shell_log` y
+`musubi_fleet_sessions`— pasaban `args.Device`, el NOMBRE que tipeó la persona, a un parámetro que
+la capa de memoria llama `deviceID` y que termina en `AND device_id = ?`. Nunca matchea.
+
+**ES EL PEOR MODO DE FALLA QUE PUEDE TENER UNA BITÁCORA: no falla, MIENTE en el sentido
+tranquilizador.** «Acá no pasó nada» sobre una máquina que sí tiene historia es peor que un error,
+porque un error manda a mirar y esto manda a dejar de mirar. Y es la superficie donde esa mentira
+cuesta más: la que se consulta cuando hay que reconstruir qué se hizo en una máquina.
+
+**LOS DOS PARÁMETROS SON `string`, así que cruzarlos no da error de compilación.** Es la forma de
+A78 —«el inventario vacío»— otra vez: una capa dice NOMBRE, la de abajo dice ID, y nada las ata. Y
+la asimetría es la de siempre: OCHO tools resuelven el nombre antes de usarlo (exec, screen, shell,
+servicios, mantenimiento, cronología, contexto, renombrar) y estas tres se quedaron afuera.
+
+**EL ARREGLO NO LLAMA A `DevicePorNombre`**, aunque ése sea el patrón del resto: las tres tools YA
+calculan el conjunto de máquinas que esta credencial puede ver, así que el nombre se resuelve contra
+ese mapa. Sale sin consulta extra y da gratis la respuesta uniforme —un nombre que no está ahí es
+indistinguible entre «no existe» y «no podés»— que es el oráculo que el track evita en todas las
+demás. La de sesiones se resuelve POR PROYECTO y no con un mapa único, porque compuerta por
+MODALIDAD: la visibilidad depende de cada fila y no de la máquina.
+
+Y un nombre que no existe pasa a ser un **ERROR** y no una lista vacía, porque una lista vacía
+afirma «esa máquina no tuvo nada» sobre algo que ni se miró — que es el defecto mismo con otra cara.
+
+**LA PRUEBA NECESITA DOS MÁQUINAS CON HECHOS EN LAS DOS, y eso es todo su diseño.** Con UNA sola
+máquina y UN comando, filtrar por su nombre y no filtrar devuelven lo mismo, así que la prueba pasa
+IGUAL con el filtro roto — que es exactamente por qué esto sobrevivió. **Demostrado en vez de
+afirmado:** con el bug puesto, la prueba nueva se pone ROJA y las dos pruebas viejas de la bitácora
+siguen VERDES; y sacando la segunda máquina del test y volviendo a poner el bug, PASA.
+
+REGLA: una prueba de FILTRO necesita al menos dos sujetos y hechos en los dos. Un filtro que se
+ignora y un filtro que funciona son indistinguibles sobre un solo sujeto.
 
 **2026-09-04 · A82 · LA HERRAMIENTA DE DESPLIEGUE LE REEMPLAZABA EL INODO A TRES ARCHIVOS QUE UN
 CONTENEDOR TENÍA MONTADOS — Y EL PEOR NO ESTABA EN EL CABO.**

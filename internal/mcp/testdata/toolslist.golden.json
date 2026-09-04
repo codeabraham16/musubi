@@ -1222,7 +1222,7 @@
         "properties": {
           "device": {
             "type": "string",
-            "description": "Filtrar por una máquina"
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
           },
           "limite": {
             "type": "number",
@@ -1243,7 +1243,7 @@
         "properties": {
           "device": {
             "type": "string",
-            "description": "Filtrar por una máquina"
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
           },
           "limite": {
             "type": "number",
@@ -1292,7 +1292,7 @@
         "properties": {
           "device": {
             "type": "string",
-            "description": "Filtrar por una máquina"
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
           },
           "limite": {
             "type": "number",
