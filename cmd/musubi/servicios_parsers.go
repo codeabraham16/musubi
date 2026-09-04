@@ -30,6 +30,31 @@ import (
 	"musubi/internal/fleet"
 )
 
+// propiedadesPedidas es lo que se le pide a systemd. El orden en que las devuelve NO está
+// garantizado, así que el parser trabaja con un mapa por bloque y nunca por posición.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// VIVE ACÁ Y NO EN servicios_linux.go, QUE ES DONDE ESTABA
+//
+// Detrás de `//go:build linux` sólo puede quedar QUÉ COMANDO SE EJECUTA — el encabezado de este
+// archivo lo declara así. La LISTA de propiedades es un dato del contrato con systemd, y una
+// prueba tiene que poder afirmar que se piden todas las que el parser lee.
+//
+// No es una preferencia: `TestSePideLaMarcaDeCaidaASystemd` la nombra, y con la lista detrás del
+// tag ese archivo de pruebas —que NO tiene build tag, a propósito— dejaba de compilar en Windows
+// y macOS. `go build` seguía verde porque NO compila los tests; `go vet ./...` en esas dos
+// plataformas moría con «undefined: propiedadesPedidas», y con él se caían `go test` y toda la
+// verificación del paquete del agente en los dos sistemas donde corren agentes de producción.
+//
+// ES LA SEGUNDA VEZ. El encabezado de más arriba ya documenta la primera, palabra por palabra
+// («vet.exe: servicios_test.go:96: undefined: estadoDeSystemd»), y este archivo existe justamente
+// para que no vuelva a pasar. Volvió a pasar igual, con otro símbolo, en el mismo archivo de
+// pruebas — así que la regla queda escrita ACÁ, al lado del dato, y no sólo en un encabezado.
+var propiedadesPedidas = []string{
+	"Id", "ActiveState", "SubState", "MainPID", "NRestarts",
+	"ActiveEnterTimestamp", "InactiveEnterTimestamp", "Result", "UnitFileState",
+}
+
 func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServicio {
 	r := csv.NewReader(strings.NewReader(strings.ReplaceAll(salida, "\r\n", "\n")))
 	r.FieldsPerRecord = -1

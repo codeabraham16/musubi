@@ -146,8 +146,15 @@ func (m Muestra) Valida() error {
 	// `SaludServicio.Valida` ya lo exigía con estas mismas palabras; la muestra del HOST no, y
 	// son la misma clase de dato entrando por la misma puerta no confiable. Con `tomada` en cero
 	// la antigüedad se calcula contra el año 1: `musubi_fleet_metrics` contesta
-	// `antiguedad_s: 63882345600` —sin ninguna guarda que lo tape— y el motor de políticas ve una
+	// `antiguedad_s: 9223372036` —sin ninguna guarda que lo tape— y el motor de políticas ve una
 	// muestra vieja por dos mil años, así que deja de actuar sobre esa máquina en silencio.
+	//
+	// ESE NÚMERO NO ES LA RESTA, Y CONVIENE SABERLO ANTES DE «CORREGIRLO». La diferencia real
+	// contra el año 1 son ~63.882.345.600 segundos, pero `time.Time.Sub` devuelve un
+	// `time.Duration`, que son nanosegundos en un int64 y SATURA a los ~292 años. Así que lo que
+	// sale por la tool es el tope, 9.223.372.036 s, y no la resta. Lo custodia
+	// TestLaAntiguedadDeUnaMuestraSinHoraSatura: si alguien «arregla» este comentario a la resta
+	// cruda, esa prueba se pone roja.
 	//
 	// El exportador SÍ se protege (`!m.Tomada.IsZero()` omite la serie), y esa asimetría es la
 	// pista: una superficie lo sabía y las otras dos no. Se rechaza en la puerta, que es donde

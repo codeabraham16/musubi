@@ -85,7 +85,7 @@ func muestraMinimaValida() Muestra {
 //
 // Lo que eso produce, medido sobre el código de las tres superficies que la consumen:
 //
-//	musubi_fleet_metrics  →  antiguedad_s: 63882345600, sin ninguna guarda que lo tape.
+//	musubi_fleet_metrics  →  antiguedad_s: 9223372036, sin ninguna guarda que lo tape.
 //	motor de políticas    →  la ve vieja por dos mil años y deja de actuar sobre esa máquina,
 //	                         en silencio (fail-closed, pero mudo).
 //	exportador            →  ÉSTE SÍ se protege (`!m.Tomada.IsZero()` omite la serie).
@@ -100,7 +100,7 @@ func TestUnaMuestraSinHoraNoSeGuarda(t *testing.T) {
 	sinHora.Tomada = time.Time{}
 	err := sinHora.Valida()
 	if err == nil {
-		t.Fatal("se aceptó una muestra sin `tomada`: su antigüedad se calcula contra el año 1 y `musubi_fleet_metrics` contesta 63882345600 segundos sin que nada lo tape")
+		t.Fatal("se aceptó una muestra sin `tomada`: su antigüedad se calcula contra el año 1 y `musubi_fleet_metrics` contesta 9223372036 segundos sin que nada lo tape")
 	}
 	if !strings.Contains(err.Error(), "tomada") {
 		t.Errorf("el motivo del rechazo no nombra el campo: %v", err)
@@ -116,5 +116,35 @@ func TestUnaMuestraSinHoraNoSeGuarda(t *testing.T) {
 	// El caso legítimo sigue pasando: esto no es un techo nuevo sobre datos buenos.
 	if err := muestraMinimaValida().Valida(); err != nil {
 		t.Errorf("se rechazó una muestra con hora: %v", err)
+	}
+}
+
+// EL NÚMERO QUE JUSTIFICA LA GUARDA ES EL QUE EL CÓDIGO PRODUCE, NO LA RESTA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// El comentario de Valida() y el de la prueba de arriba citan `antiguedad_s: 9223372036` como el
+// disparate que se veía sin la guarda. La primera versión decía 63882345600 —la diferencia real
+// en segundos contra el año 1— y ESE número el código no lo puede producir: `time.Time.Sub`
+// devuelve un `time.Duration`, que son nanosegundos en un int64 y SATURA a los ~292 años.
+//
+// Una medición citada en un comentario es una afirmación como cualquier otra, y ésta era falsa
+// por un factor de siete. La encontró una revisión adversaria del propio lote, no una prueba: por
+// eso ahora hay una.
+//
+// Sabotaje que la hace fallar: cambiar el número esperado por la resta cruda (63882345600).
+func TestLaAntiguedadDeUnaMuestraSinHoraSatura(t *testing.T) {
+	// La MISMA cuenta que hace musubi_fleet_metrics: ahora.Sub(m.Tomada).Seconds().
+	var sinHora Muestra
+	antiguedad := int(time.Now().UTC().Sub(sinHora.Tomada).Seconds())
+
+	const saturado = 9223372036 // maxInt64 nanosegundos, en segundos
+	if antiguedad != saturado {
+		t.Errorf("la antigüedad de una muestra sin hora dio %d y se documentó %d: el comentario de Valida() cita un número que el código no produce", antiguedad, saturado)
+	}
+	// Y el que NO es: la resta cruda contra el año 1. Está acá para que se vea que la diferencia
+	// no es un detalle de redondeo sino un factor de siete.
+	const restaCruda = 63882345600
+	if antiguedad == restaCruda {
+		t.Error("dio la resta cruda: entonces time.Duration dejó de saturar y los comentarios hay que revisarlos")
 	}
 }
