@@ -87,6 +87,16 @@ func main() {
 	case "dashboard":
 		runDashboard(os.Args[2:])
 	case "version", "--version", "-v":
+		// `--esquema` imprime SÓLO el entero, para que un guion lo consuma sin parsear.
+		//
+		// La salida por default no cambia ni gana una línea: `redesplegar-cerebro.sh` la compara
+		// entera contra la versión que instaló, y `construir.sh` la imprime. Un segundo renglón
+		// acá rompería las dos, y el modo de falla sería un rollback automático en mitad de un
+		// despliegue que en realidad salió bien.
+		if len(os.Args) > 2 && os.Args[2] == "--esquema" {
+			fmt.Println(memory.EsquemaEsperado())
+			return
+		}
 		fmt.Printf("musubi %s\n", version)
 	case "update":
 		runUpdate()

@@ -35,6 +35,42 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 — LA HERRAMIENTA DE DESPLIEGUE VERIFICABA LA MIGRACIÓN CON UN NÚMERO TIPEADO, Y
+> HACÍA SIETE MIGRACIONES QUE NO VERIFICABA NADA.**
+>
+> `deploy/redesplegar-cerebro.sh` decía `[[ "$ESQUEMA" -ge 37 ]]`, escrito a mano cuando la última
+> migración era la 37. Con la 44 esa línea siguió pasando — y también habría pasado con la
+> migración cortada a mitad de camino en la 40. **Nadie lo notó porque una comprobación que no
+> puede ponerse roja se ve idéntica a una que funciona**, que es el defecto que este repo persigue
+> en todos lados menos, hasta hoy, en la herramienta que lo despliega.
+>
+> Importa ahora y no en abstracto: el próximo despliegue trae DOS migraciones (43 y 44), y el
+> esquema es una puerta de una sola dirección — un binario viejo se niega a abrir una base migrada,
+> así que la vuelta atrás exige restaurar binario Y base. Ese guion es el que decide si volver.
+>
+> Ahora el binario dice a qué esquema apunta (`musubi version --esquema`, derivado de la lista de
+> migraciones) y el guion compara contra eso, así que se actualiza solo y nadie tiene que
+> acordarse. **Se exige IGUALDAD y no `-ge`**: un esquema MAYOR significa que la base la migró un
+> binario más nuevo —o sea que ese despliegue es un rollback silencioso— y `applyMigrations` se va
+> a negar a abrirla; que eso se vea en el guion, y no como un cerebro que no arranca, ahorra el peor
+> diagnóstico posible. Un binario anterior a la bandera no tira abajo el despliegue: lo DECLARA y
+> sigue, porque el resto del bloque queda sin verificar y callarlo sería el mismo error otra vez.
+>
+> **La salida por default de `version` no cambia ni gana un renglón**: el guion la compara entera
+> contra la versión que instaló, así que una línea de más habría disparado un rollback automático
+> en mitad de un despliegue que salió bien.
+>
+> **Y una prueba impide que vuelva a quedarse vieja**: falla si alguien compara `$ESQUEMA` contra un
+> número, o si el guion deja de preguntarle al binario. Un comentario que diga «acordate de
+> actualizar esto» tiene el mismo destino que el número que reemplaza.
+>
+> **A83 lo está cerrando la otra sesión** —chocamos: lo hicimos los dos en paralelo—, y su versión
+> encontró algo que la mía no: `avisarUnaVezPorDevice` estrangulaba por máquina SOLA, así que la
+> primera pantalla se comía el presupuesto y los `exec` y las shells de esa máquina no dejaban
+> nunca una línea; y el texto decía «se abrió una pantalla» en los tres caminos. Queda con ellos.
+>
+> Dos sabotajes, dos rojos.
+>
 > **2026-09-03 (después del cierre) — MIS SIETE SABOTAJES NO ALCANZABAN, Y UNO DE LOS AGUJEROS
 > ERA UN CANDADO.**
 >

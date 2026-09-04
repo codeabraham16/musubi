@@ -104,7 +104,7 @@ systemctl stop "${SERVICIOS[@]}" || volver_atras "no se pudieron detener los ser
 install -m 0755 -o root -g root "$NUEVO" "$DESTINO" || volver_atras "no se pudo instalar el binario nuevo"
 ok "binario reemplazado"
 
-log "arrancando (acá corre la migración 35 → 37)"
+log "arrancando (acá corren las migraciones que traiga el binario nuevo)"
 systemctl start "${SERVICIOS[@]}" || volver_atras "no arrancaron los servicios"
 sleep 8
 
@@ -123,9 +123,30 @@ ok "el proceso corre el binario nuevo (inodo verificado)"
 VERSION_CORRIENDO="$("$DESTINO" version 2>&1 | head -1)"
 [[ "$VERSION_CORRIENDO" == "$VERSION_NUEVA" ]] || volver_atras "la versión en disco no es la que se instaló"
 
+# ── LA MIGRACIÓN SE VERIFICA CONTRA LO QUE PIDE EL BINARIO, NO CONTRA UN NÚMERO TIPEADO ─────
+#
+# Acá decía `-ge 37`, escrito a mano cuando la última migración era la 37. Entre la 37 y la 44 esa
+# línea siguió pasando y dejó de verificar NADA: 44 ≥ 37 es cierto, y también lo sería si la
+# migración se hubiera quedado a mitad de camino en la 40. Una comprobación que no puede ponerse
+# roja se ve idéntica a una que funciona — el defecto que este repo persigue en todos lados menos,
+# hasta hoy, en la herramienta que lo despliega.
+#
+# El binario dice a qué esquema apunta (`version --esquema`), así que la comprobación se actualiza
+# sola con cada migración nueva y nadie tiene que acordarse. Y se exige IGUALDAD, no `-ge`: un
+# esquema MAYOR que el que este binario conoce significa que la base la migró un binario más nuevo
+# —o sea que este despliegue es un rollback silencioso—, y `applyMigrations` se niega a abrirla.
+# Que ese caso se vea acá, y no como un cerebro que no arranca, ahorra el peor diagnóstico posible.
+ESPERADO="$("$DESTINO" version --esquema 2>/dev/null || echo "")"
 ESQUEMA="$(python3 -c "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])" "$BASE" 2>/dev/null || echo 0)"
-[[ "$ESQUEMA" -ge 37 ]] || volver_atras "la migración no corrió: el esquema quedó en $ESQUEMA y se esperaba 37"
-ok "esquema migrado: $VERSION_BASE → $ESQUEMA"
+if [[ -z "$ESPERADO" ]]; then
+  # Un binario anterior a `--esquema` no puede decirlo. Se sigue —no es motivo para tirar abajo un
+  # despliegue— pero se DECLARA, porque el resto de este bloque queda sin verificar.
+  aviso "este binario no sabe decir su esquema (\`version --esquema\`): la migración quedó SIN verificar. Esquema en disco: $ESQUEMA"
+elif [[ "$ESQUEMA" != "$ESPERADO" ]]; then
+  volver_atras "la migración no llegó: el esquema quedó en $ESQUEMA y este binario apunta a $ESPERADO"
+else
+  ok "esquema migrado y verificado contra el binario: $VERSION_BASE → $ESQUEMA"
+fi
 
 # Que responda de verdad, no que el puerto esté abierto.
 # Se exige 200, no «cualquier respuesta»: un cerebro que arrancó y contesta 503 está roto
