@@ -609,7 +609,22 @@ func (s *McpServer) registrarRespuestaDePermiso(deviceID string, cuerpo cuerpoRe
 			}
 		}
 	}
-	if err := s.engine.ResponderConsentimiento(deviceID, cmd.Argv[1], r, time.Now()); err != nil {
+	// LA MISMA PREGUNTA SIRVE A LOS DOS CAMINOS, y por eso se prueban los dos con el mismo id.
+	//
+	// El agente no sabe —ni tiene por qué— si la sesión que se le nombró es de pantalla o de
+	// shell: recibe `musubi:preguntar <id> <texto>` y contesta. Acá se busca en las dos tablas.
+	// Un segundo comando `musubi:preguntar-shell` habría sido un contrato nuevo en el cable, y
+	// los contratos escritos dos veces son justo lo que este track viene arreglando todo el día.
+	//
+	// EL ORDEN NO IMPORTA para la corrección: los ids son UUID y una sesión existe en una sola
+	// tabla. Si la primera dice «ajena», puede ser que sea de la otra, así que se sigue.
+	err = s.engine.ResponderConsentimiento(deviceID, cmd.Argv[1], r, time.Now())
+	if err != nil {
+		if e2 := s.engine.ResponderConsentimientoDeShell(deviceID, cmd.Argv[1], r, time.Now()); e2 == nil {
+			return
+		}
+	}
+	if err != nil {
 		// Incluye la sesión ajena, la inexistente y la YA CONTESTADA: las tres dan el mismo error
 		// una capa más abajo, a propósito. Acá se logea porque un agente que insiste en contestar
 		// sesiones que no son suyas es una señal, no un detalle.

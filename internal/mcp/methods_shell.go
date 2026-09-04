@@ -10,6 +10,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +106,28 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 		return resp, rpcErr
 	}
 
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// `pide` SE REPARTE ACÁ, Y VA ANTES DEL AVISO: PREGUNTAR YA ES AVISAR
+	//
+	// Este camino NO preguntaba nada. `AvisaAlUsuario()` es true para `pide` también —es
+	// `nivel >= avisa`— así que el switch de abajo, que sólo tiene las dos ramas de `avisa`,
+	// mandaba una notificación y el prompt se abría en el acto: la persona sentada enfrente
+	// recibía un aviso QUE NO PODÍA CONTESTAR mientras el operador ya estaba adentro. El grado
+	// promete lo contrario con todas las letras: «tiene que aceptar. Sin respuesta, no hay
+	// sesión».
+	//
+	// No se veía porque la ausencia es indistinguible de lo correcto —el aviso llegaba igual y se
+	// leía como un `avisa` bien aplicado— y porque la guarda que recorría los tres caminos fijaba
+	// `avisa` en las tres filas: generalizaba sobre los CAMINOS y no sobre los GRADOS, y el
+	// comportamiento es una matriz.
+	//
+	// VA ANTES DEL AVISO para no mandar las dos cosas. La pregunta ya le dice a la persona que
+	// alguien quiere entrar; agregarle un «alguien está por entrar» es ruido sobre el mismo
+	// hecho, y el ruido es lo que enseña a apretar «permitir» sin leer.
+	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
+		return s.pedirPermisoParaShell(d, p, proyecto, ahora)
+	}
+
 	// EL AVISO A QUIEN ESTÁ EN LA MÁQUINA, recién cuando ya sabemos que la sesión se abre.
 	//
 	// A83 — ACÁ FALTABA LA MITAD QUE AVISA, y era la mitad que importa. Este `if` tenía sólo la
@@ -141,7 +164,20 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 
-	canal, err := s.abrirCanalShell(d, args.Filas, args.Columnas)
+	return s.abrirShellConSesion(d, ses, args.Filas, args.Columnas)
+}
+
+// abrirShellConSesion levanta el canal sobre una sesión YA REGISTRADA.
+//
+// ESTÁ EXTRAÍDA Y NO DUPLICADA porque tiene DOS llamadores: el camino normal y el de `pide`
+// cuando el usuario dijo que sí. Es la misma razón por la que `entregarPantalla` está extraída
+// del suyo: copiarla dejaría dos lugares donde se abre un canal y dos donde recordar cerrarlo si
+// falla — y la copia que se queda vieja es siempre la del camino que se usa menos, que acá es
+// justo el de mayor autoridad.
+func (s *McpServer) abrirShellConSesion(d fleet.Device, ses fleet.SesionShell,
+	filas, columnas int) (interface{}, *RpcError) {
+
+	canal, err := s.abrirCanalShell(d, filas, columnas)
 	if err != nil {
 		// El fallo también se audita, en la misma fila.
 		s.cerrarShell(ses.ID, fleet.ShellFallida, err.Error(), time.Now())
@@ -153,7 +189,7 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// engancharse nunca y se cierra ACÁ en vez de dejar a alguien esperando un prompt que no
 	// viene.
 	if d.Tier == fleet.TierAgente {
-		if err := s.avisarAlAgenteDeLaShell(d, ses, args.Filas, args.Columnas); err != nil {
+		if err := s.avisarAlAgenteDeLaShell(d, ses, filas, columnas); err != nil {
 			s.cerrarShell(ses.ID, fleet.ShellFallida, "no se pudo avisarle al agente: "+err.Error(), time.Now())
 			return nil, rpcErrorf(codeInternalError, "no se pudo avisarle al agente de %q: %v", d.Name, err)
 		}
@@ -370,4 +406,92 @@ func (s *McpServer) toolFleetShellLog(ctx context.Context, raw json.RawMessage) 
 	// acá no va a encontrar lo que se tecleó, y por qué.
 	res["nota"] = "la bitácora registra QUE hubo acceso (quién, dónde, cuándo, cuánto). El CONTENIDO de la sesión no se guarda: grabar lo que alguien teclea es una decisión legal que nadie tomó."
 	return jsonResult(res)
+}
+
+// pedirPermisoParaShell es el camino de `pide` para la terminal, gemelo del de pantalla.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// SE PARTE EN DOS LLAMADAS, Y NO PORQUE QUEDE LINDO
+//
+// El latido va cada 30 s y el diálogo espera hasta 60: una respuesta tarda hasta minuto y medio.
+// Bloquear acá dejaría al operador mirando una llamada colgada y —peor— pondría un timeout de red
+// en el camino de una decisión humana, donde vencer significa otra cosa.
+//
+// Así que la primera llamada registra la sesión en `esperando_permiso`, encola la pregunta y
+// devuelve el id SIN abrir ningún canal ni tocar SSH. El operador vuelve a llamar y recibe el
+// prompt si le dijeron que sí, o el motivo si no.
+//
+// LA SESIÓN SE REGISTRA IGUAL AUNQUE NO SE ABRA. Que alguien haya INTENTADO abrir una shell en un
+// servidor es información de auditoría tanto como que lo haya logrado — la misma regla que ya
+// sostiene el resto de este archivo.
+func (s *McpServer) pedirPermisoParaShell(d fleet.Device, p *Principal, proyecto string,
+	ahora time.Time) (interface{}, *RpcError) {
+
+	quien := nombrePrincipal(p)
+	previa, hay, err := s.engine.SesionShellEsperandoDe(d.ID, quien, ahora)
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	if hay {
+		switch {
+		case previa.Estado == fleet.ShellEsperandoPermiso:
+			return jsonResult(map[string]interface{}{
+				"session_id": previa.ID, "device": d.Name, "estado": string(previa.Estado),
+				"aviso": "ya se le preguntó al usuario de esta máquina y todavía no contestó. " +
+					"El agente recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo " +
+					"espera " + fleet.AvisoTimeout.String() + ". Volvé a pedir la shell en un rato.",
+			})
+		case previa.ConcedeElAcceso():
+			// DIJERON QUE SÍ. La sesión ya quedó en `abriendo`, así que se sigue por el camino
+			// normal SIN registrar otra: abrir una nueva dejaría la concedida colgada y la
+			// bitácora con dos filas para un solo permiso.
+			return s.abrirShellConSesion(d, previa, 0, 0)
+		default:
+			return nil, rpcErrorf(codeUnauthorized, "%s", explicarShellSinPermiso(d, previa))
+		}
+	}
+
+	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Estado: fleet.ShellEsperandoPermiso,
+	})
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	texto := fmt.Sprintf("Musubi: %s pide permiso para abrir una TERMINAL en esta máquina. ¿Lo permitís?",
+		fleet.RecortarRunas(quien, 64))
+	if _, err := s.engine.EncolarComando(fleet.Comando{
+		DeviceID: d.ID, ProjectID: proyecto, Principal: quien,
+		Origen:  fleet.OrigenPersona,
+		Argv:    []string{comandoPreguntar, ses.ID, texto},
+		Timeout: fleet.ComandoTimeoutDefault,
+	}); err != nil {
+		return nil, rpcErrorf(codeInternalError, "%v", err)
+	}
+	return jsonResult(map[string]interface{}{
+		"session_id": ses.ID, "device": d.Name, "estado": string(fleet.ShellEsperandoPermiso),
+		"aviso": "esta máquina exige el permiso de quien la está usando. Se le preguntó; el agente " +
+			"recoge la pregunta en su próximo latido (hasta 30 s) y el diálogo espera " +
+			fleet.AvisoTimeout.String() + ". Volvé a pedir la shell en un rato: si dijeron que sí " +
+			"vas a recibir el prompt, y si no, el motivo.",
+	})
+}
+
+// explicarShellSinPermiso arma el mensaje de los TRES «no», que se arreglan distinto.
+func explicarShellSinPermiso(d fleet.Device, ses fleet.SesionShell) string {
+	base := fmt.Sprintf("no se abre una shell en %q: ", d.Name)
+	switch ses.Consentimiento {
+	case fleet.RespuestaNegada:
+		return base + "la persona que está usando esa máquina dijo que NO. " +
+			"Es el eje funcionando como se configuró; si creés que corresponde igual, hablá con ella."
+	case fleet.RespuestaSinRespuesta:
+		return base + "se le preguntó y nadie contestó en " + fleet.AvisoTimeout.String() + ". " +
+			"El silencio NO es permiso, así que se niega. Si esta máquina está siempre " +
+			"desatendida, no debería estar en `pide` — miralo con musubi_fleet_consent."
+	case fleet.RespuestaNoSePudo:
+		return base + "el agente no tuvo con qué preguntar (no hay escritorio, o le falta la " +
+			"herramienta de diálogo). El motivo exacto está en el log del cerebro."
+	default:
+		return base + "el pedido de permiso no prosperó."
+	}
 }

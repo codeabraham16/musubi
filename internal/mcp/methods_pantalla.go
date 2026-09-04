@@ -158,7 +158,21 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		return resp, rpcErr
 	}
 
-	// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir o va a preguntar.
+	// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.
+	//
+	// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por
+	// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo
+	// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.
+	//
+	// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso
+	// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba
+	// cerrando.
+	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
+		return s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)
+	}
+
+	// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta
+	// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.
 	switch consent := d.ConsentimientoEfectivo(); {
 	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
 		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
@@ -173,10 +187,6 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 		// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido
 		// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.
 		s.encolarAvisoDeAcceso(d, p, avisoPantalla)
-	}
-
-	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
-		return s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)
 	}
 
 	// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una

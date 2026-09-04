@@ -140,8 +140,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       consentimiento no protege a nadie mientras una sola persona con `shell` hace lo que
 	//       quiera. Append-only: usar una aprobación la marca `usada`, no la borra, porque «esta
 	//       sesión la aprobó fulano» es el hecho que el control existe para dejar escrito.
-	if latestSchemaVersion() != 44 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 44", latestSchemaVersion())
+	// v45 = `pide` EN LA SHELL (`shell_sessions.consentimiento`). El grado promete «tiene que
+	//       aceptar; sin respuesta no hay sesión» y ese camino no preguntaba nada: mandaba un
+	//       aviso que el usuario no podía contestar y abría el prompt igual, porque
+	//       AvisaAlUsuario() es true para `pide` también. La columna sostiene el flujo de dos
+	//       llamadas que pantalla ya tenía.
+	if latestSchemaVersion() != 45 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 45", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

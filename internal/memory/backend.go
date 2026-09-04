@@ -464,6 +464,13 @@ type DeviceStore interface {
 	// ResponderConsentimiento registra cómo contestó el usuario de la máquina (A57). La sesión
 	// tiene que ser de ESE device y estar todavía esperando: sólo se contesta una vez.
 	ResponderConsentimiento(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
+	// ResponderConsentimientoDeShell es el gemelo para el camino de shell. Existe porque `pide`
+	// prometía «tiene que aceptar; sin respuesta no hay sesión» y ese camino no preguntaba nada:
+	// abría el prompt y mandaba un aviso que la persona no podía contestar.
+	ResponderConsentimientoDeShell(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
+	// SesionShellEsperandoDe acota por PRINCIPAL: el permiso se le dio a quien preguntó, y la
+	// pregunta que vio la persona lo nombraba.
+	SesionShellEsperandoDe(deviceID, principal string, ahora time.Time) (fleet.SesionShell, bool, error)
 	SesionesDePantalla(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionPantalla, error)
 	GuardarRustdeskID(deviceID, rid string) error
 	// QuienMasDiceSer deriva la COLISIÓN de rustdesk_id: qué otras máquinas reportan el mismo id.

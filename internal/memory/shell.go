@@ -17,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const columnasShell = `id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico, cerrada, error`
+const columnasShell = `id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico, cerrada, error, consentimiento`
 
 // AbrirSesionShell registra que alguien pidió un prompt en una máquina ajena.
 //
@@ -29,7 +29,15 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 		return fleet.SesionShell{}, fmt.Errorf("una sesión de shell necesita dispositivo y proyecto")
 	}
 	s.ID = uuid.NewString()
-	s.Estado = fleet.ShellAbriendo
+	// EL ESTADO LO PUEDE ELEGIR EL LLAMADOR, y sólo entre los dos que tienen sentido al nacer.
+	//
+	// `abriendo` es el camino normal; `esperando_permiso` es el de una máquina en `pide`, donde
+	// la sesión se registra ANTES de tocar nada —para que el intento quede auditado igual— pero
+	// no se abre ningún canal hasta que la persona conteste. Cualquier otro estado inicial sería
+	// una fila que dice algo que no pasó, así que se normaliza en vez de confiar.
+	if s.Estado != fleet.ShellEsperandoPermiso {
+		s.Estado = fleet.ShellAbriendo
+	}
 	if s.Creada.IsZero() {
 		s.Creada = time.Now().UTC()
 	}
@@ -41,8 +49,8 @@ func (e *DbEngine) AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, err
 	// campo vacío y sin techo de inactividad: viva hasta el techo de vida, que son dos horas.
 	s.UltimoTrafico = s.Creada
 	_, err := e.db.Exec(
-		`INSERT INTO shell_sessions (id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO shell_sessions (id, device_id, project_id, principal, estado, creada, vence, ultimo_trafico, consentimiento)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')`,
 		s.ID, s.DeviceID, s.ProjectID, s.Principal, string(s.Estado),
 		s.Creada.UTC().Format(time.RFC3339), s.Vence.UTC().Format(time.RFC3339), s.UltimoTrafico.UTC().Format(time.RFC3339),
 	)
@@ -203,12 +211,17 @@ func escanearSesionShell(row escaneable) (fleet.SesionShell, error) {
 		s                                    fleet.SesionShell
 		estado, creada, vence, ultimoTrafico string
 		cerrada                              sql.NullString
+		consentimiento                       string
 	)
 	if err := row.Scan(&s.ID, &s.DeviceID, &s.ProjectID, &s.Principal, &estado,
-		&creada, &vence, &ultimoTrafico, &cerrada, &s.Error); err != nil {
+		&creada, &vence, &ultimoTrafico, &cerrada, &s.Error, &consentimiento); err != nil {
 		return fleet.SesionShell{}, err
 	}
 	s.Estado = fleet.EstadoShell(estado)
+	// Vacío es el valor de casi todas las filas y significa «no hizo falta preguntar». No se
+	// traduce a nada acá, igual que en pantalla: interpretarlo obligaría a des-interpretarlo en
+	// cada lectura.
+	s.Consentimiento = fleet.RespuestaAviso(consentimiento)
 	s.Creada, _ = time.Parse(time.RFC3339, creada)
 	s.Vence, _ = time.Parse(time.RFC3339, vence)
 	if ultimoTrafico != "" {
@@ -218,4 +231,94 @@ func escanearSesionShell(row escaneable) (fleet.SesionShell, error) {
 		s.Cerrada, _ = time.Parse(time.RFC3339, cerrada.String)
 	}
 	return s, nil
+}
+
+// ResponderConsentimientoDeShell registra CÓMO contestó el usuario de la máquina cuando la shell
+// tuvo que pedirle permiso, y habilita o cierra la sesión según eso.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// ES EL GEMELO DE ResponderConsentimiento Y COMPARTE SUS DOS GUARDAS, QUE NO SON DECORACIÓN
+//
+// `deviceID` sale del TOKEN del agente y la sesión tiene que ser SUYA: sin eso, una máquina
+// comprometida contestaría «concedida» a la pregunta que se le hizo al usuario de OTRA, y el
+// permiso de abrir una shell ajena se conseguiría sin tocar esa máquina.
+//
+// Y SÓLO SE PUEDE CONTESTAR UNA VEZ: la condición viaja en el WHERE. Sin eso, un agente podría
+// mandar «negada» y después «concedida» —o repetir la respuesta después de que la sesión
+// venció— y quedaría registrada la última, que es la que un atacante elegiría.
+//
+// CONCEDIDA NO ABRE NADA: la sesión pasa a `abriendo`, que es donde estaría si nunca hubiera
+// hecho falta preguntar. El canal SSH se levanta después, en la segunda llamada de la tool, que
+// vuelve a pasar por la compuerta de capacidades. Permiso y acceso siguen siendo dos pasos.
+func (e *DbEngine) ResponderConsentimientoDeShell(deviceID, sesionID string, r fleet.RespuestaAviso,
+	ahora time.Time) error {
+
+	deviceID, sesionID = strings.TrimSpace(deviceID), strings.TrimSpace(sesionID)
+	if deviceID == "" || sesionID == "" || !r.Valida() {
+		return ErrComandoAjeno
+	}
+	estado := fleet.ShellSinPermiso
+	var cerrada any = ahora.UTC().Format(time.RFC3339)
+	if r.Concede() {
+		estado, cerrada = fleet.ShellAbriendo, nil
+	}
+	res, err := e.db.Exec(
+		`UPDATE shell_sessions SET estado = ?, consentimiento = ?, cerrada = ?
+		  WHERE id = ? AND device_id = ? AND estado = ?`,
+		string(estado), string(r), cerrada, sesionID, deviceID, string(fleet.ShellEsperandoPermiso))
+	if err != nil {
+		return fmt.Errorf("error al registrar el consentimiento de la shell %q: %w", sesionID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		// Sesión ajena, inexistente o ya contestada: el MISMO error para las tres, por lo mismo
+		// que en pantalla — distinguirlas sería un oráculo de qué sesiones existen en otras
+		// máquinas.
+		return ErrComandoAjeno
+	}
+	return nil
+}
+
+// SesionShellEsperandoDe busca el pedido de permiso VIGENTE de este principal sobre esta máquina.
+//
+// SE ACOTA AL PRINCIPAL, y no es una optimización: el permiso se le dio a QUIEN preguntó, y la
+// pregunta que se le mostró a la persona lo nombraba. Sin este filtro, un operador aprovecharía
+// el «sí» que le dieron a otro. Es la misma regla que sesionEsperandoDe sostiene en pantalla.
+func (e *DbEngine) SesionShellEsperandoDe(deviceID, principal string, ahora time.Time) (fleet.SesionShell, bool, error) {
+	deviceID, principal = strings.TrimSpace(deviceID), strings.TrimSpace(principal)
+	if deviceID == "" || principal == "" {
+		return fleet.SesionShell{}, false, nil
+	}
+	rows, err := e.db.Query(
+		`SELECT `+columnasShell+` FROM shell_sessions
+		  WHERE device_id = ? AND principal = ?
+		    AND estado IN (?, ?, ?)
+		  ORDER BY creada DESC LIMIT 10`,
+		deviceID, principal,
+		string(fleet.ShellEsperandoPermiso), string(fleet.ShellSinPermiso), string(fleet.ShellAbriendo))
+	if err != nil {
+		return fleet.SesionShell{}, false, fmt.Errorf("error al buscar el permiso de shell: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		s, err := escanearSesionShell(rows)
+		if err != nil {
+			return fleet.SesionShell{}, false, err
+		}
+		// UNA ESPERA VENCIDA NO CUENTA: se vuelve a preguntar. Si no, un pedido que nadie
+		// contestó hace dos horas bloquearía todos los siguientes con un «ya se preguntó» que no
+		// se va a resolver nunca. Misma decisión que en pantalla.
+		if s.Estado == fleet.ShellEsperandoPermiso && !s.Vence.IsZero() && ahora.After(s.Vence) {
+			continue
+		}
+		// NO SE FILTRAN LAS `abriendo` SIN CONSENTIMIENTO, y estuvo puesto un rato hasta que el
+		// sabotaje mostró que era código muerto: una sesión normal en `abriendo` y sin cerrar la
+		// devuelve T7 (SesionShellAbiertaDe) antes de que este camino corra, y una cerrada sale
+		// de `abriendo`. La combinación que la guarda cubría no existe.
+		//
+		// Se saca en vez de dejarla «por las dudas»: una guarda inalcanzable con un comentario
+		// que dice qué evita es una promesa que nadie puede comprobar, y este repo ya pagó una
+		// —`cerrarSesionesColgadas`, un nombre que sólo existía en un comentario—.
+		return s, true, nil
+	}
+	return fleet.SesionShell{}, false, rows.Err()
 }

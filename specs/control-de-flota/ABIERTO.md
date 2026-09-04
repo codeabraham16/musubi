@@ -35,6 +35,47 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 — A85 CERRADO: `pide` sobre una shell no preguntaba nada y el prompt se abría igual.**
+>
+> `AvisaAlUsuario()` es true para `pide` también —es `nivel >= avisa`—, así que el switch del
+> camino de shell, que sólo tenía las dos ramas de `avisa`, mandaba una notificación y abría el
+> prompt en el acto. **La persona sentada enfrente recibía un aviso QUE NO PODÍA CONTESTAR
+> mientras el operador ya estaba adentro**, y el grado promete lo contrario con todas las letras:
+> «tiene que aceptar. Sin respuesta, no hay sesión». En el camino con más autoridad de los tres,
+> porque una shell interactiva se saltea cualquier allowlist de comandos.
+>
+> Ahora hace el flujo de dos llamadas que pantalla ya tenía: la primera registra la sesión en
+> `esperando_permiso` **sin tocar SSH**, encola la pregunta y devuelve el id; la segunda entrega el
+> prompt si dijeron que sí, o el motivo —de los tres «no», que se arreglan distinto— si no.
+> Migración 45, `ResponderConsentimientoDeShell`, y la respuesta del agente se rutea a las dos
+> tablas con el MISMO comando `musubi:preguntar`: un segundo comando en el cable habría sido otro
+> contrato escrito dos veces, que es lo que este track viene arreglando todo el día.
+>
+> **LA LECCIÓN NO ES EL ARREGLO, ES POR QUÉ NO SE VEÍA.** Había una guarda que recorría los TRES
+> caminos y daba tranquilidad por haber generalizado — pero fijaba `avisa` en las tres filas y
+> nunca probaba `pide`. **Generalizaba sobre los CAMINOS y no sobre los GRADOS**, y el agujero
+> estaba en el otro eje. Cuando el comportamiento es una matriz, una tabla que cubre UNA de sus dos
+> dimensiones se siente igual de completa que una que cubre las dos. La guarda nueva es la matriz.
+>
+> **Y la matriz encontró otra apenas se escribió**: pantalla en `pide` mandaba el aviso Y la
+> pregunta. Preguntar ya es avisar, y el aviso de más es ruido sobre el mismo hecho — que es
+> exactamente lo que enseña a apretar «permitir» sin leer. Si lo dejaba, creaba una asimetría nueva
+> del mismo tipo que la que estaba cerrando.
+>
+> **Dos sabotajes míos salieron falsos y los dos enseñaron algo.** Uno mutaba el ESTADO de la
+> sesión y la decisión la toma el consentimiento: no cambiaba nada observable, así que el verde era
+> correcto y el sabotaje era el equivocado. El otro descubrió que una guarda que yo había escrito
+> —descartar las `abriendo` sin consentimiento— era **inalcanzable**: T7 atrapa antes las sesiones
+> abiertas. Se sacó en vez de dejarla «por las dudas», porque una guarda que no se puede alcanzar
+> con un comentario que dice qué evita es una promesa que nadie puede comprobar, y este repo ya
+> pagó una: `cerrarSesionesColgadas`, un nombre que sólo existía en un comentario.
+>
+> **`exec` tiene el mismo hueco y queda en A86, sin arreglar y a propósito**: las dos salidas son
+> decisiones de política —endurecerlo rompe el auto-heal; preguntar por comando pone un diálogo de
+> minuto y medio en una sola orden— y la matriz lo deja MEDIDO en vez de supuesto.
+>
+> Cinco sabotajes en rojo. **19 cabos.**
+>
 > **2026-09-04 — LA SERIE QUE AGREGUÉ PARA DISTINGUIR «APAGADA» DE «AGENTE CAÍDO» NUNCA LLEGÓ A
 > PROMETHEUS, Y LA DI POR BUENA.**
 >
@@ -673,6 +714,7 @@
 | A77 | **Dos máquinas del tailnet no están en la flota, y una ya costó** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión no es obvia y por eso queda como cabo y no como tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. La `raspberrypi` es la pregunta más simple —¿sostiene algo?— y hoy nadie la sabe. | **sin asignar** |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. **No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa. | **gio** (el hardware) |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
+| A86 | **`pide` sobre un `exec` tampoco pregunta, y eso NO está declarado en ninguna parte** | Es la misma forma que A85 en el tercer camino: `AvisaAlUsuario()` es true para `pide` —es `nivel >= avisa`— así que `aplicarConsentimientoDeExec` cae en su rama de `avisa`, encola el aviso estrangulado y **ejecuta el comando**. El grado promete «tiene que aceptar. Sin respuesta, no hay sesión». **Lo que lo distingue de A85 es que acá NO se arregló, y a propósito**: el doc de esa función enumera `prohibido`, `avisa` y `libre` y se saltea `pide`, así que hoy no hay una decisión escrita — hay un accidente. Y las dos salidas posibles son de POLÍTICA, no de código: (a) endurecer `pide` a `prohibido` para exec es consistente con la regla que el dominio ya aplica cuando no hay a quién preguntarle, pero **rompe el auto-heal** en cualquier máquina en `pide`, que es automatización corriendo sin nadie mirando; (b) preguntar por comando pone un diálogo de hasta minuto y medio en el camino de una sola orden, y un exec viene en ráfagas — es la misma razón por la que A75 le puso estrangulador al aviso. **La celda está MEDIDA, no supuesta**: la matriz caminos × grados de `TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados` la ejerce y la deja escrita como está, con el porqué al lado, para que un cambio de comportamiento se vea. | **gio** (decisión de política) |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |

@@ -1630,6 +1630,29 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version: 45,
+			name:    "consentimiento_en_la_shell",
+			// `pide` SOBRE UNA SHELL NO PREGUNTABA NADA Y SE ABRÍA IGUAL.
+			//
+			// `AvisaAlUsuario()` es true para `pide` también —es `nivel >= avisa`—, así que el
+			// switch del camino de shell, que sólo tenía las dos ramas de `avisa`, mandaba una
+			// notificación y abría el prompt en el acto. La persona sentada enfrente recibía un
+			// aviso QUE NO PODÍA CONTESTAR mientras el operador ya estaba adentro, y el grado
+			// promete lo contrario: «tiene que aceptar. Sin respuesta, no hay sesión».
+			//
+			// La columna es la que hace posible el flujo de dos llamadas que pantalla ya tiene:
+			// la primera deja la sesión en `esperando_permiso` SIN abrir ningún canal ni tocar
+			// SSH, y la respuesta del usuario la mueve a `abriendo` o a `sin_permiso`.
+			//
+			// DEFAULT '' Y NO 'concedida': vacío significa «no hizo falta preguntar», que es lo
+			// que pasa en `libre` y `avisa` y en todas las filas anteriores a esta migración.
+			// Rellenarlas con «concedida» le atribuiría a alguien un permiso que nadie dio.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "shell_sessions", "consentimiento",
+					"consentimiento TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

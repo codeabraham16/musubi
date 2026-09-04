@@ -43,6 +43,15 @@ const (
 	ShellInactividadMax = 15 * time.Minute
 )
 
+// ConcedeElAcceso dice si esta sesión puede seguir hacia la apertura del canal.
+//
+// Es el gemelo del de pantalla y se escribe igual a propósito: dos definiciones distintas de «me
+// dieron permiso» en el mismo dominio se separan, y la que se queda vieja es siempre la del
+// camino que se usa menos.
+func (s SesionShell) ConcedeElAcceso() bool {
+	return s.Consentimiento.Concede()
+}
+
 // EstadoShell es dónde está una sesión.
 type EstadoShell string
 
@@ -52,6 +61,31 @@ const (
 	ShellCerrada  EstadoShell = "cerrada"  // terminó (por quien la abrió, o por el otro lado)
 	ShellVencida  EstadoShell = "vencida"  // la mató un techo: vida o inactividad
 	ShellFallida  EstadoShell = "fallida"  // no se pudo abrir
+
+	// ShellEsperandoPermiso es un `pide` en curso: se le preguntó al usuario de la máquina y
+	// todavía no contestó. Es el gemelo de SesionEsperandoPermiso, y existe por lo mismo.
+	//
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// EL GRADO `pide` NO PREGUNTABA NADA EN ESTE CAMINO, Y SE ABRÍA IGUAL
+	//
+	// `AvisaAlUsuario()` es true para `pide` también —es `nivel >= avisa`—, así que el switch de
+	// la shell, que sólo tenía las dos ramas de `avisa`, mandaba un aviso y abría el prompt en el
+	// acto. La persona sentada enfrente recibía una notificación QUE NO PODÍA CONTESTAR mientras
+	// el operador ya estaba adentro. El grado promete lo contrario con todas las letras: «tiene
+	// que aceptar. Sin respuesta, no hay sesión».
+	//
+	// No se veía porque la ausencia es indistinguible de lo correcto: el aviso llegaba igual y se
+	// leía como un `avisa` bien aplicado. Y es el camino con MÁS autoridad de los tres, porque
+	// una shell interactiva se saltea cualquier allowlist de comandos.
+	//
+	// ES UN ESTADO PROPIO Y NO UNA `abriendo` CON UNA MARCA, por lo mismo que en pantalla: en
+	// `abriendo` ya se reservó la sesión y se le avisó al agente; acá NO se abrió ningún canal ni
+	// se tocó SSH. Confundirlas dejaría un canal esperando una respuesta que puede ser «no».
+	ShellEsperandoPermiso EstadoShell = "esperando_permiso"
+	// ShellSinPermiso es un `pide` que no se concedió. El POR QUÉ vive en Consentimiento: «dijo
+	// que no», «nadie contestó» y «no había con qué preguntar» terminan acá y se arreglan
+	// distinto.
+	ShellSinPermiso EstadoShell = "sin_permiso"
 )
 
 // SesionShell es el REGISTRO de que alguien tuvo un prompt en una máquina ajena.
@@ -61,6 +95,9 @@ type SesionShell struct {
 	ProjectID string
 	Principal string // QUIÉN. La columna de la que depende toda la auditoría.
 	Estado    EstadoShell
+	// Consentimiento es CÓMO contestó el usuario de la máquina, cuando hubo que preguntarle.
+	// Vacío = no hizo falta (`libre` o `avisa`), que es el caso de casi todas las filas.
+	Consentimiento RespuestaAviso
 
 	Creada  time.Time
 	Vence   time.Time // Creada + ShellVidaMax: el techo duro
