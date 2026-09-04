@@ -521,3 +521,61 @@ func TestElParserDeMacosSeLeeDesdeLinux(t *testing.T) {
 		t.Error("un servicio fallado no dijo con qué código: el operador queda sin el dato que decide qué mirar")
 	}
 }
+
+// EL CÓDIGO DE SALIDA VIAJA CON EL SERVICIO FALLADO, y no sólo su veredicto.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ IMPORTA EL NÚMERO Y NO ALCANZA CON `fallado`
+//
+// Los dos códigos frecuentes significan cosas OPUESTAS para quien tiene que arreglarlo: 1067 es
+// «el proceso terminó de forma inesperada» —arrancó y se murió— y 1077 es «no se intentó
+// arrancarlo desde el último arranque», que en una máquina que viene de apagones sucios habla
+// del arranque y no del servicio. Con `fallado` a secas hay que ir a la máquina para
+// distinguirlas, y en `davantis-1` ir a la máquina es justamente lo caro.
+//
+// Windows era la ÚNICA de las cuatro plataformas que lo tiraba: systemd manda su `Result=`,
+// launchctl su `salida=` y los contenedores su estado. Misma familia que A83 — tres caminos lo
+// hacían y el cuarto no.
+//
+// Sabotaje: devolver "" siempre en detalleDeWindows, o publicar el código también cuando el
+// servicio está corriendo (arrastra el de una caída anterior de la que ya se recuperó).
+func TestElCodigoDeSalidaDeWindowsViajaConElServicioFallado(t *testing.T) {
+	csv := "\"Name\",\"State\",\"StartMode\",\"ExitCode\"\n" +
+		"\"murio\",\"Stopped\",\"Auto\",\"1067\"\n" +
+		"\"nunca-arranco\",\"Stopped\",\"Auto\",\"1077\"\n" +
+		"\"ocioso\",\"Stopped\",\"Auto\",\"0\"\n" +
+		"\"sano-con-cicatriz\",\"Running\",\"Auto\",\"1067\"\n"
+	por := map[string]fleet.ReporteServicio{}
+	for _, r := range parsearServiciosWindows(csv, time.Now()) {
+		por[r.Nombre] = r
+	}
+	if len(por) != 4 {
+		t.Fatalf("se esperaban 4 servicios, hay %d", len(por))
+	}
+
+	// Los dos fallados llevan SU número, y son distinguibles entre sí.
+	if d := por["murio"].Salud.Detalle; d != "salida=1067" {
+		t.Errorf("un servicio que murió no dice por qué: detalle = %q", d)
+	}
+	if d := por["nunca-arranco"].Salud.Detalle; d != "salida=1077" {
+		t.Errorf("un servicio que nunca arrancó no dice por qué: detalle = %q", d)
+	}
+	if por["murio"].Salud.Detalle == por["nunca-arranco"].Salud.Detalle {
+		t.Error("dos fallas de causa opuesta llegan con el mismo detalle: el operador no las puede separar")
+	}
+
+	// Y NO SE PUBLICA DONDE NO APORTA. Un `0` no distingue nada, y en un servicio CORRIENDO el
+	// código es la cicatriz de una caída anterior: mostrarlo pondría un número alarmante al lado
+	// de algo sano.
+	if d := por["ocioso"].Salud.Detalle; d != "" {
+		t.Errorf("un servicio ocioso con salida limpia trae detalle: %q", d)
+	}
+	if d := por["sano-con-cicatriz"].Salud.Detalle; d != "" {
+		t.Errorf("un servicio CORRIENDO publica el código de una caída vieja: %q — se lee como si estuviera roto ahora", d)
+	}
+	// Control: el veredicto sigue siendo el de antes. Sin esto, un cambio que rompiera los
+	// estados pasaría mientras el detalle esté bien.
+	if por["murio"].Salud.Estado != fleet.EstadoFallado || por["ocioso"].Salud.Estado != fleet.EstadoOcioso {
+		t.Errorf("cambiaron los estados: murio=%v ocioso=%v", por["murio"].Salud.Estado, por["ocioso"].Salud.Estado)
+	}
+}

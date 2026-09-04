@@ -393,11 +393,34 @@ Un servicio que la máquina reporta como NO corriendo, y la máquina está viva 
 avisaría `MaquinaCaida` y esta alerta se inhibe sola).
 
 1. Qué dice el inventario: `musubi_fleet_services device=<máquina>` — mirá `estado`, `detalle` y
-   `reinicios`. El `detalle` trae el `Result=` de systemd, que es la mitad del diagnóstico.
+   `reinicios`. El `detalle` trae el `Result=` de systemd o el `salida=` de Windows y macOS, que
+   es la mitad del diagnóstico.
 2. En la máquina: `musubi_fleet_exec device=<máquina> argv=["systemctl","status","<servicio>"]`
    (o `podman ps -a --filter name=<servicio>` si la clase es `podman`).
 3. Si el servicio se declaró A MANO y la máquina nunca lo enumeró, el estado va a decir
    `desconocido`: nadie lo está midiendo. Eso no es una caída, es una fila sin dueño.
+
+### En Windows, el `salida=` dice CUÁL de dos problemas opuestos es
+
+Sólo llegan acá los servicios de arranque **automático** (los `Manual` detenidos son cientos y son
+lo normal), y sólo cuentan como caídos si su código de salida no es cero. Ese número está en
+`detalle` y los dos frecuentes mandan a lugares distintos:
+
+| `detalle` | qué pasó | por dónde empezar |
+|---|---|---|
+| `salida=1067` | el proceso **arrancó y se murió** | el visor de eventos: `Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'} \| Where-Object Message -match '<servicio>'` |
+| `salida=1077` | **no se intentó arrancarlo desde el último arranque** | no es del servicio: algo cortó la secuencia de arranque. En una máquina con apagones sucios, es la pista |
+| `salida=1053` | no respondió a tiempo al arrancar | suele ser dependencia lenta o disco saturado |
+| otro | traducilo con `net helpmsg <n>` | |
+
+**La tabla vive acá y no en el binario a propósito**: una traducción compilada se queda vieja y
+miente con cara de dato. El agente manda el número crudo; la interpretación se corrige editando
+este archivo.
+
+**Y si el servicio es de fábrica** —utilidades del equipo, cosas del fabricante de la placa de
+red— la pregunta no es cómo arreglarlo sino si tiene que estar en automático. Ponerlo en `Manual`
+lo saca del inventario por la puerta correcta: deja de reportarse porque nadie declaró que corra,
+no porque alguien silenció una alerta.
 
 ## ServicioReiniciandose
 

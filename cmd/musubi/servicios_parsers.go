@@ -68,19 +68,50 @@ func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServ
 		if !strings.HasPrefix(arranque, "auto") {
 			continue
 		}
-		estado := estadoDeWindows(tomar(f, "state"), tomar(f, "exitcode"))
+		salida := tomar(f, "exitcode")
+		estado := estadoDeWindows(tomar(f, "state"), salida)
 		rs = append(rs, fleet.ReporteServicio{
 			Nombre: nombre,
 			Clase:  "windows",
 			Salud: fleet.SaludServicio{
 				Tomada: ahora,
 				Estado: estado,
+				// EL CÓDIGO VIAJA, PORQUE `fallado` SOLO NO SE PUEDE ACCIONAR.
+				//
+				// Windows era la única de las cuatro plataformas que tiraba el detalle: systemd
+				// manda su `Result=`, launchctl su `salida=`, los contenedores su estado — y acá
+				// se calculaba el veredicto con el ExitCode y después se descartaba el número.
+				//
+				// Y es justo donde más falta, porque los dos códigos frecuentes significan cosas
+				// OPUESTAS para quien tiene que arreglarlo: 1067 es «el proceso terminó de forma
+				// inesperada» —arrancó y se murió— y 1077 es «no se intentó arrancarlo desde el
+				// último arranque», que en una máquina que viene de apagones sucios es una pista
+				// sobre el arranque y no sobre el servicio. Con `fallado` a secas hay que ir a la
+				// máquina para distinguirlas.
+				//
+				// SE MANDA EL NÚMERO CRUDO Y NO UNA TRADUCCIÓN, en el mismo formato que launchctl.
+				// Una tabla de significados acá se queda vieja y miente con cara de dato; la
+				// interpretación vive en el runbook, donde se corrige sin publicar un binario.
+				Detalle: detalleDeWindows(estado, salida),
 				// PID, Reinicios y Desde quedan en nil: el SCM no los da por acá y un cero
 				// sería una afirmación falsa.
 			},
 		})
 	}
 	return rs
+}
+
+// detalleDeWindows arma el detalle SÓLO cuando aporta algo.
+//
+// Un servicio corriendo puede arrastrar el ExitCode de una caída anterior de la que ya se
+// recuperó —lo dice estadoDeWindows dos funciones más abajo— así que publicarlo ahí dibujaría un
+// número alarmante al lado de algo sano. Y un `0` no distingue nada: es el caso normal.
+func detalleDeWindows(estado fleet.EstadoServicio, exitCode string) string {
+	c := strings.TrimSpace(exitCode)
+	if estado == fleet.EstadoCorriendo || c == "" || c == "0" {
+		return ""
+	}
+	return "salida=" + c
 }
 
 func estadoDeWindows(estado, exitCode string) fleet.EstadoServicio {

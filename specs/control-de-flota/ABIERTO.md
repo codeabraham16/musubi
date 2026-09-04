@@ -35,6 +35,32 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-04 — WINDOWS CALCULABA EL VEREDICTO CON EL CÓDIGO DE SALIDA Y DESPUÉS LO TIRABA.**
+>
+> Salió de mirar dos alertas de `davantis-1` que sospeché que eran ruido. **No lo eran**: el parser
+> ya filtra por arranque automático y usa `ExitCode`, después de dos rondas de falsas alarmas (16 y
+> después 75). La sospecha estaba mal y comprobarla antes de «arreglar» nada fue lo que evitó
+> romper una guarda que ya había costado dos correcciones.
+>
+> Pero al comprobarla apareció otra cosa: **de las cuatro plataformas, Windows era la única que no
+> mandaba el detalle**. systemd manda su `Result=`, launchctl su `salida=`, los contenedores su
+> estado — y el camino de Windows calculaba `fallado` a partir del `ExitCode` y descartaba el
+> número. Misma familia que A83: tres caminos lo hacían y el cuarto no.
+>
+> **Y es justo donde más falta**, porque los dos códigos frecuentes significan cosas OPUESTAS para
+> quien tiene que arreglarlo: `1067` es «arrancó y se murió» y `1077` es «no se intentó arrancarlo
+> desde el último arranque» — que en una máquina que viene de quince apagones sucios habla del
+> ARRANQUE y no del servicio. Con `fallado` a secas hay que ir a la máquina, y en `davantis-1` ir a
+> la máquina es exactamente lo caro.
+>
+> **El número viaja crudo y la traducción vive en el runbook.** Una tabla de significados
+> compilada se queda vieja y miente con cara de dato; en el runbook se corrige sin publicar un
+> binario. Y no se publica donde no aporta: un `0` no distingue nada, y en un servicio CORRIENDO el
+> código es la cicatriz de una caída anterior de la que ya se recuperó —mostrarlo pondría un número
+> alarmante al lado de algo sano—.
+>
+> Dos sabotajes, dos rojos. **20 cabos.**
+>
 > **2026-09-04 (madrugada) — `up == 0` DECÍA DOS COSAS DISTINTAS Y MANDABA AL LUGAR EQUIVOCADO.**
 >
 > Perseguiendo por qué `davantis-1` figuraba caída otra vez, `tailscale ping` contestó en 55 ms:
