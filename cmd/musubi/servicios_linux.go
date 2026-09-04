@@ -23,13 +23,6 @@ import (
 	"musubi/internal/fleet"
 )
 
-// propiedadesPedidas es lo que se le pide a systemd. El orden en que las devuelve NO está
-// garantizado, así que el parser trabaja con un mapa por bloque y nunca por posición.
-var propiedadesPedidas = []string{
-	"Id", "ActiveState", "SubState", "MainPID", "NRestarts",
-	"ActiveEnterTimestamp", "InactiveEnterTimestamp", "Result", "UnitFileState",
-}
-
 // enumerarServiciosDelSistema junta las dos fuentes. Cualquiera que ESTÉ y falle aborta el
 // inventario entero, porque el cerebro poda por ausencia y media lista es una baja falsa — el
 // porqué largo está en enumerarFuente, en servicios.go.
