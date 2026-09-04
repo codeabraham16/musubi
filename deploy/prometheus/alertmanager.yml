@@ -52,9 +52,24 @@ route:
     # salgan. Los dos son fallos que se ven como calma.
     #
     # Del otro lado hace falta algo que espere este latido y grite si no llega: un Healthchecks.io,
-    # un Dead Man's Snitch, o un cron propio. Sin ese otro lado, esta ruta no hace nada.
-    # LA RUTA APUNTA A LA NADA MIENTRAS NO HAYA WATCHDOG EXTERNO, y eso NO es lo mismo que
-    # borrarla ni que dejarla rota. Las tres opciones se probaron; sólo una es correcta.
+    # un Dead Man's Snitch, o un cron propio.
+    #
+    # ── ESO YA EXISTE Y ESTÁ ANDANDO. Medido el 2026-09-04 en el servidor ───────────────────
+    #
+    #     alertmanager_notifications_total{integration="webhook"}         376
+    #     alertmanager_notifications_failed_total{integration="webhook"}    0
+    #
+    # `secretos/watchdog_url` y `secretos/watchdog_fail_url` existen, la ruta de abajo apunta a
+    # `watchdog` y entrega cada 5 minutos sin un solo fallo.
+    #
+    # Lo que sigue estaba escrito para el estado ANTERIOR —la ruta a `null`, sin watchdog— y se
+    # conserva porque explica POR QUÉ el receptor `null` sigue existiendo y qué pasa si alguien
+    # vuelve a él. Lo que NO puede seguir diciendo es «para reactivarlo, cambiá null por watchdog»:
+    # eso ya está hecho, y una instrucción para llegar a un estado en el que ya se está manda a
+    # alguien a «arreglar» algo que anda. Ver más abajo.
+    #
+    # LA RUTA APUNTABA A LA NADA MIENTRAS NO HUBO WATCHDOG EXTERNO, y eso NO era lo mismo que
+    # borrarla ni que dejarla rota. Las tres opciones se probaron; sólo una era correcta.
     #
     # ROTA (apuntando a un `url_file` que no existe) fue el estado real durante 32 horas: 387
     # fallos de entrega, uno cada 5 minutos, en el log de un contenedor que nadie mira. Y con la
@@ -69,13 +84,18 @@ route:
     # A LA NADA es lo correcto: la alerta SE SIGUE VIENDO en el Alertmanager —el latido existe y
     # se puede mirar— y no le llega a nadie. Es el patrón que usa kube-prometheus con su Watchdog.
     #
-    # LO QUE SE PIERDE MIENTRAS TANTO, dicho: si se cae Prometheus, o el propio Alertmanager, o la
-    # red del canal, NINGUNA alerta sale — y ese silencio se ve igual que la calma. Es el único
-    # fallo que el sistema no puede detectar desde adentro, por definición.
+    # EL FALLO QUE ESTO CUBRE, y que el sistema no puede detectar desde adentro por definición:
+    # si se cae Prometheus, o el propio Alertmanager, o la red del canal, NINGUNA alerta sale — y
+    # ese silencio se ve igual que la calma. El watchdog externo es el único que lo ve, porque es
+    # el único que está afuera.
     #
-    # PARA REACTIVARLO: creá un check en Healthchecks.io (o Dead Man's Snitch, o un cron propio),
-    # poné su URL de ping en `secretos/watchdog_url` con modo 600, y cambiá `null` por `watchdog`
-    # abajo. Una palabra.
+    # PARA APAGARLO (no para prenderlo: ya está prendido) se cambia `watchdog` por `null` abajo.
+    # El latido sigue VIÉNDOSE en la interfaz de Alertmanager y no le llega a nadie — que es el
+    # patrón de kube-prometheus con su Watchdog, y la razón de que ese receptor exista.
+    #
+    # LO QUE NO HAY QUE HACER es borrar la ruta: `MusubiSiempreViva` está SIEMPRE en firing, así
+    # que sin ruta propia cae al receptor por defecto y el latido pasa a notificar por Telegram y
+    # al CRM cada 4 horas, para siempre.
     - matchers:
         - alertname = "MusubiSiempreViva"
       receiver: 'watchdog'

@@ -1,6 +1,9 @@
 package fleet
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // UN SWAP QUE NO SE PUDO MEDIR NO SE REPORTA COMO LLENO.
 //
@@ -59,7 +62,7 @@ func TestUnSwapQueNoSePudoMedirNoViajaComoLleno(t *testing.T) {
 	if !ok {
 		t.Fatal("el caso medible dejó de serlo")
 	}
-	m := Muestra{SwapTotal: total, SwapUsada: usada}
+	m := Muestra{Tomada: time.Now().UTC(), SwapTotal: total, SwapUsada: usada}
 	if err := m.Valida(); err != nil {
 		t.Errorf("una muestra con el swap que produce este cálculo no valida: %v", err)
 	}

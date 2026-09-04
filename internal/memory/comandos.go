@@ -279,6 +279,7 @@ func (e *DbEngine) GuardarResultado(deviceID, comandoID string, exit *int, stdou
 	}
 	var dueno, estado string
 	err := e.db.QueryRow(`SELECT device_id, estado FROM device_commands WHERE id = ?`, comandoID).Scan(&dueno, &estado)
+	_ = estado // se lee en la misma consulta que el dueño; el append-once lo decide el WHERE de abajo
 	if err == sql.ErrNoRows {
 		return ErrComandoAjeno
 	}
@@ -288,21 +289,36 @@ func (e *DbEngine) GuardarResultado(deviceID, comandoID string, exit *int, stdou
 	if dueno != deviceID {
 		return ErrComandoAjeno
 	}
-	// Un comando ya terminado no se re-escribe: la bitácora es append-once por fila. Un agente
-	// que reintenta el reporte no puede cambiar un resultado que ya se leyó.
-	if estado == string(fleet.EstadoTerminado) {
-		return nil
-	}
-
+	// ── APPEND-ONCE: LA CONDICIÓN VIVE EN EL WHERE, Y SÓLO AHÍ ──────────────────────────────
+	//
+	// Acá había un `if estado == terminado { return nil }` con la lectura de arriba. Leer el
+	// estado y después escribir son dos viajes a la base, y entre uno y otro no hay nada: dos
+	// reportes del mismo comando —un agente que reintenta porque no vio el ACK, o el que quedó
+	// terminando cuando el servicio se reinició— pasaban los DOS y el segundo pisaba el resultado
+	// del primero. La doc prometía append-once; el SQL no lo sostenía. Misma forma que el crítico
+	// de CancelarMantenimiento: la condición donde se comprueba y no donde se escribe.
+	//
+	// SE SACÓ EL ATAJO EN VEZ DE DEJARLO AL LADO, y eso es deliberado. Con las dos, el `if` gana
+	// siempre en las pruebas y el WHERE —que es la guarda de verdad— queda sin ejercitar: se
+	// puede romper y todo sigue verde. Una segunda barrera que además ESCONDE a la primera no es
+	// defensa en profundidad, es una prueba que miente. El `estado` que se leyó arriba sigue
+	// haciendo falta para la guarda de propiedad, que es de seguridad y no se toca.
 	so, _ := fleet.TruncarSalida(stdout)
 	se, _ := fleet.TruncarSalida(stderr)
-	_, err = e.db.Exec(
+	res, err := e.db.Exec(
 		`UPDATE device_commands SET estado = ?, terminado = ?, exit_code = ?, stdout = ?, stderr = ?, error = ?
-		  WHERE id = ?`,
-		string(fleet.EstadoTerminado), ahora.UTC().Format(time.RFC3339), exit, so, se, errCanal, comandoID,
+		  WHERE id = ? AND estado != ?`,
+		string(fleet.EstadoTerminado), ahora.UTC().Format(time.RFC3339), exit, so, se, errCanal,
+		comandoID, string(fleet.EstadoTerminado),
 	)
 	if err != nil {
 		return fmt.Errorf("error al guardar el resultado de %q: %w", comandoID, err)
+	}
+	// CERO FILAS NO ES UN ERROR: significa que este comando ya tenía resultado. El PRIMERO en
+	// escribir es el que vale, y el que llega tarde se va en silencio — devolver error haría que
+	// el agente reintentara eternamente algo que ya está guardado.
+	if _, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("error al leer el resultado de la escritura de %q: %w", comandoID, err)
 	}
 	return nil
 }

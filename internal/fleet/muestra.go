@@ -11,6 +11,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -139,6 +140,21 @@ func PctUsado(usado, total uint64) *float64 {
 // alertas. No se «corrige» el valor —eso ocultaría el problema—, se RECHAZA la muestra entera y
 // el latido sigue valiendo (D7): estar viva y saber medirse son cosas distintas.
 func (m Muestra) Valida() error {
+	// SIN `tomada` NO HAY MUESTRA, y era el único campo sin guarda pese a ser el que decide si
+	// todo lo demás vale.
+	//
+	// `SaludServicio.Valida` ya lo exigía con estas mismas palabras; la muestra del HOST no, y
+	// son la misma clase de dato entrando por la misma puerta no confiable. Con `tomada` en cero
+	// la antigüedad se calcula contra el año 1: `musubi_fleet_metrics` contesta
+	// `antiguedad_s: 63882345600` —sin ninguna guarda que lo tape— y el motor de políticas ve una
+	// muestra vieja por dos mil años, así que deja de actuar sobre esa máquina en silencio.
+	//
+	// El exportador SÍ se protege (`!m.Tomada.IsZero()` omite la serie), y esa asimetría es la
+	// pista: una superficie lo sabía y las otras dos no. Se rechaza en la puerta, que es donde
+	// alcanza con arreglarlo una vez.
+	if m.Tomada.IsZero() {
+		return errors.New("la muestra no dice cuándo se tomó: sin `tomada` no hay forma de saber si es de hace un minuto o de hace una semana")
+	}
 	if m.CPUPct != nil && (*m.CPUPct < 0 || *m.CPUPct > 100) {
 		return fmt.Errorf("cpu_pct fuera de rango: %v", *m.CPUPct)
 	}
