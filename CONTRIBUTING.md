@@ -68,6 +68,30 @@ por test) y `musubi version` (inyectado desde el tag). No hay que sincronizarlas
    El workflow [`release.yml`](.github/workflows/release.yml) **aborta si el tag no coincide
    con `VERSION`**, regenera el recurso de Windows y compila los binarios cross-platform
    (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256, y publica el release.
+4. **Firmá el release A MANO, en tu máquina, con las claves montadas el rato que dura.** El
+   `sha256sums.txt` que produce el CI dice que el archivo llegó entero, no que sea nuestro: lo
+   publica el mismo que publica el binario. Y como el cerebro y el agente son el MISMO binario, un
+   release ajeno no entrega una máquina: entrega la flota. **Las claves privadas no viven en el CI**
+   — si estuvieran ahí, quien comprometa el CI firma lo que quiera y la firma no compra nada.
+
+   **El orden importa y no es reversible:**
+
+   ```bash
+   # 1) Authenticode sobre el .exe — CAMBIA LOS BYTES del archivo.
+   ./deploy/firmar-windows.sh dist/musubi-windows-amd64.exe ~/claves/musubi-editor.crt ~/claves/musubi-editor.key
+   # 2) Recién ahora el manifiesto ed25519, que hashea los bytes YA firmados.
+   ./deploy/firmar-release.sh X.Y.Z ~/claves/release.key dist/
+   ```
+
+   Al revés, el sha256 del manifiesto deja de corresponder al archivo publicado y `musubi update`
+   falla con «hash mismatch», que no menciona ni firma ni orden. `firmar-windows.sh` aborta si ve
+   un `manifest.json` ya armado al lado, pero la regla se entiende mejor acá que en el error.
+
+   Subí `manifest.json` y `manifest.json.sig` junto con los binarios: sin el manifiesto firmado,
+   `musubi update` **se niega a instalar**. Y en cada máquina Windows, una sola vez,
+   `deploy/confiar-editor-windows.ps1` instala el certificado del editor — con eso una excepción de
+   Defender o una regla de AppLocker se escriben por EDITOR y sobreviven a los releases siguientes,
+   en vez de reautorizar hash por hash.
 
 ## Licencia
 

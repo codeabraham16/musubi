@@ -35,6 +35,59 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-03 (última) — A31 SE RESUELVE SIN COMPRAR NADA, y el motivo no es que hayamos
+> encontrado un atajo: es que la premisa del cabo estaba mal.**
+>
+> gio dijo que no puede pagar el certificado. Antes de buscar un rodeo se miró qué compraba, y la
+> primera columna de A31 se contradice con su propia medición. Dice que NordVPN «bloquea la salida
+> de ejecutables sin firma». La prueba limpia del 2026-08-27 dice otra cosa: el MISMO binario,
+> **sin firmar en los dos casos**, falló como `musubi-nuevo.exe` y latió como `musubi.exe`. Si la
+> firma fuera el discriminante los dos habrían fallado igual — la firma era idéntica: ninguna. El
+> discriminante es la RUTA. **Ningún certificado, pago o propio, mueve una lista blanca por ruta**,
+> así que los ~USD 10/mes nunca iban a arreglar `kernelos-pc` ni `davantis-1`. La medición estaba
+> escrita desde hace una semana debajo de la frase que refuta; nadie la leyó contra ella.
+>
+> **Lo que un certificado sí compra es una identidad de EDITOR estable**, y eso sí hace falta: el
+> sha256 de un release cambia en cada versión y el editor no, así que una regla de AppLocker/WDAC o
+> una excepción de Defender se escriben una vez y sobreviven a los autoupdates por anillos. Sin
+> firma hay que reautorizar hash por hash, en cada máquina, en cada release — que es justamente lo
+> que la Ola 3 no puede pagar en trabajo.
+>
+> **Y esa identidad, dentro de una flota propia, es gratis**: las máquinas se enrolan a mano y con
+> administrador, y en ese mismo acto se les puede decir en quién confiar. Es PKI interna, lo que
+> hace cualquier empresa. `deploy/firmar-windows.sh` crea el certificado y firma el `.exe`;
+> `deploy/confiar-editor-windows.ps1` lo instala del otro lado.
+>
+> **El guion que instala DESCONFÍA del certificado que le dan**, y no por simetría: lo que se le
+> pide a esa máquina es meter algo en su almacén RAÍZ, y un certificado ahí avala todo lo que la
+> máquina verifique. Si además fuera una CA, quien tenga su clave emite certificados para lo que
+> quiera —el TLS de cualquier sitio incluido— y la máquina se los cree. Así que exige
+> `CA:FALSE` y un EKU acotado a firmar código, **puestos por un guion y comprobados por el otro**.
+>
+> **Y ahí apareció una valla que fallaba abierta.** La comprobación de CA leía
+> `$ext.CertificateAuthority` sobre lo que devolvía la colección de extensiones — que sólo entrega
+> objetos TIPADOS para los OID que .NET conoce. Con una extensión genérica esa propiedad es `$null`,
+> el `if` no dispara, **y una CA entraba derecho a la raíz**. Ahora se reparsea a mano antes de
+> preguntar. Una valla que se calla cuando no entiende la entrada no es una valla.
+>
+> **La otra guarda es de orden, y evita un fallo que no dice su causa**: Authenticode cambia los
+> bytes del `.exe`, así que firmar DESPUÉS de armar el manifiesto ed25519 lo invalida en silencio y
+> `musubi update` falla con «hash mismatch», que no menciona ni firma ni orden. El guion aborta si
+> ve un `manifest.json` ya armado al lado.
+>
+> **Lo que sigue costando plata es UN caso y sólo uno: una máquina que no administramos** —o sea,
+> vender a un cliente—, porque ahí no se puede instalar el certificado y no hay sustituto gratis.
+> Cuando llegue ese día lo paga el contrato. **A31 deja de ser una decisión de gio y pasa a ser
+> una medición pendiente**, gratis: `Apply()` ya reemplaza el binario EN LA MISMA RUTA
+> (`internal/selfupdate/updater.go:92`), así que la excepción por ruta debería sobrevivir a una
+> autoactualización — falta correrlo en `kernelos-pc`, que es la única máquina que puede responderlo.
+>
+> **Lo que NO pude probar**: la firma en sí. `osslsigncode` no está instalado y ponerlo pide `sudo`.
+> Las seis guardas del guion están corridas y en rojo cada una; el viaje de ida y vuelta de firmar
+> y verificar, no. Queda declarado acá en vez de darse por hecho.
+>
+> **Sigue en 20 cabos.**
+>
 > **2026-09-03 (madrugada) — OLA 2, la parte que no necesita comprar nada.**
 >
 > **Rotación del token de un dispositivo, en caliente.** Rotar era revocar + enrolar + ir a la
@@ -243,7 +296,7 @@
 | A2 | **Temperatura en Windows** | Se saca por WMI (`MSAcpi_ThermalZoneTemperature`). WMI desde Go sin dependencias es COM crudo, y muchos equipos no exponen el sensor igual. **LA PREMISA CAMBIÓ el 2026-09-02 y conviene anotarlo antes de que se olvide**: desde **A42** el agente de Windows YA lanza PowerShell en cada latido —y desde **A70** lo que pide en esa invocación es `Get-CimInstance Win32_Service`, para los servicios—, así que «COM crudo» dejó de ser el bloqueo. El costo real hoy es otro y es menor: pedir la zona térmica en la MISMA invocación (acoplando dos colectores) o pagar un segundo `powershell` cada 30 s en una máquina ajena. Lo que no cambió es la otra mitad de la nota: muchos equipos no exponen el sensor, así que la serie va a estar AUSENTE en buena parte de la flota — y eso ya está bien manejado (`temp_c` es un puntero). | **S4c** |
 | A3 | **Verificación en hardware real de ~~Windows~~/macOS** | Los colectores **cross-compilan y su aritmética está probada** (`cpudelta_test.go`, `sysctlparse_test.go`), pero **nadie los corrió en un Mac ni en un Windows de verdad**. La capa de syscalls está sin ejercitar. **WINDOWS: VERIFICADO (2026-08-27)** — el agente corre en `kernelos-pc` (Windows 11, 8 núcleos, 34 GB) y el colector mide CPU 12,8 %, memoria 46,7 %, disco 91,4 % y swap 28,8 % correctamente. Los dos `None` que devuelve son los huecos ya declarados y no fallas: `load1` **no existe** en Windows, y `temp_c` es **A2**. **macOS sigue bloqueado**: gio no tiene Mac por ahora. | **S4c** |
 | A30 | **No hay Tier B para Windows** | El camino sin agente —que el cerebro sondee por SSH— lee `/proc`, que Windows no tiene. Así que **la única forma de medir un Windows es instalarle el agente**, con todo lo que eso arrastra: un binario sin firmar que los VPN con filtrado por proceso bloquean (medido: NordVPN devuelve `WSAEACCES` mientras `curl.exe` al mismo host y puerto da HTTP 200). Con Tier B para Windows nada de eso haría falta. Requiere un colector que hable WMI o PowerShell remoto sobre SSH. | **S7c** |
-| A31 | **El binario de Windows no está firmado** | NordVPN —y cualquier EDR con filtrado por reputación— bloquea la salida de ejecutables sin firma, y el síntoma (`WSAEACCES`) no menciona ni firma ni antivirus: `curl.exe` da HTTP 200 y el binario da `WSAEACCES` al mismo host y puerto. Se sortea con una excepción de *split tunneling* **por ruta**, que se rompe si el binario se mueve. **PRUEBA LIMPIA (2026-08-27)**: el MISMO binario, en la MISMA máquina, dio `WSAEACCES` como `musubi-nuevo.exe` y latió sin problema medio minuto después como `musubi.exe` — la excepción de NordVPN es por RUTA, y eso quedó medido en vez de deducido. **ALCANCE MEDIDO: hoy afecta a UNA máquina** (`kernelos-pc`, la única con NordVPN, confirmado por gio 2026-08-27); en el resto el agente conecta sin nada. Por eso NO es urgente y NO justifica todavía el costo de un certificado. **Se revisa si aparece una segunda máquina con filtrado por proceso, o si se despliega fuera de la red propia** — ahí el certificado deja de ser un lujo. | **acción del operador** (cuesta plata y trámite) **Medido de nuevo el 2026-09-01, y el alcance es mayor de lo que decía esta nota**: desde `davantis-1`, PowerShell **no alcanza ni el puerto del cerebro** (`7717 = False`) mientras el agente le late cada 30 s. O sea que la autorización es **por ARCHIVO**, no por aplicación ni por carpeta: en esa máquina lo único que habla con el tailnet es `musubi.exe` en su ruta exacta, más RustDesk desde que se excluyó. La consecuencia operativa es concreta: **toda administración remota que no sea el propio agente está cortada ahí** —no se puede descargar un archivo, ni sondear un puerto, ni probar conectividad— y cualquier medición hecha con PowerShell sobre esa máquina mide otra cosa. Costó dos diagnósticos equivocados el mismo día. `gio`, sin VPN, se actualizó entera por el canal de comandos en 40 segundos. |
+| A31 | **El binario de Windows no está firmado** | NordVPN —y cualquier EDR con filtrado por reputación— bloquea la salida de ejecutables sin firma, y el síntoma (`WSAEACCES`) no menciona ni firma ni antivirus: `curl.exe` da HTTP 200 y el binario da `WSAEACCES` al mismo host y puerto. Se sortea con una excepción de *split tunneling* **por ruta**, que se rompe si el binario se mueve. **PRUEBA LIMPIA (2026-08-27)**: el MISMO binario, en la MISMA máquina, dio `WSAEACCES` como `musubi-nuevo.exe` y latió sin problema medio minuto después como `musubi.exe` — la excepción de NordVPN es por RUTA, y eso quedó medido en vez de deducido. **ALCANCE MEDIDO: hoy afecta a UNA máquina** (`kernelos-pc`, la única con NordVPN, confirmado por gio 2026-08-27); en el resto el agente conecta sin nada. Por eso NO es urgente y NO justifica todavía el costo de un certificado. **Se revisa si aparece una segunda máquina con filtrado por proceso, o si se despliega fuera de la red propia** — ahí el certificado deja de ser un lujo. | ~~**acción del operador** (cuesta plata y trámite)~~ **YA NO CUESTA PLATA — ver abajo.** **Medido de nuevo el 2026-09-01, y el alcance es mayor de lo que decía esta nota**: desde `davantis-1`, PowerShell **no alcanza ni el puerto del cerebro** (`7717 = False`) mientras el agente le late cada 30 s. O sea que la autorización es **por ARCHIVO**, no por aplicación ni por carpeta: en esa máquina lo único que habla con el tailnet es `musubi.exe` en su ruta exacta, más RustDesk desde que se excluyó. La consecuencia operativa es concreta: **toda administración remota que no sea el propio agente está cortada ahí** —no se puede descargar un archivo, ni sondear un puerto, ni probar conectividad— y cualquier medición hecha con PowerShell sobre esa máquina mide otra cosa. Costó dos diagnósticos equivocados el mismo día. `gio`, sin VPN, se actualizó entera por el canal de comandos en 40 segundos. **2026-09-03 — LA PRIMERA COLUMNA DE ESTA FILA ESTÁ REFUTADA POR SU PROPIA MEDICIÓN.** Dice que NordVPN «bloquea la salida de ejecutables sin firma»; la prueba limpia del 2026-08-27 muestra el MISMO binario, **sin firmar en los dos casos**, fallando como `musubi-nuevo.exe` y latiendo como `musubi.exe`. Si la firma fuera el discriminante los dos habrían fallado igual. Es una lista blanca **por ruta**, y ningún certificado la mueve. Lo que un certificado sí compra —una **identidad de editor estable**, para que una regla de AppLocker/WDAC o una excepción de Defender se escriban UNA vez y sobrevivan a los autoupdates por anillos, en vez de reautorizar hash por hash— **se consigue gratis dentro de una flota propia**, porque las máquinas se enrolan a mano y con administrador: `deploy/firmar-windows.sh` firma con certificado propio y `deploy/confiar-editor-windows.ps1` lo instala, **rechazando el certificado si es una CA o si su EKU no está acotado a firmar código** (en el almacén raíz, uno sin acotar vale también para TLS). **Sigue costando plata un solo caso: una máquina que no administramos** —vender a un cliente—, y ahí lo paga el contrato. **Lo que queda acá es una medición gratis**: `Apply()` ya reemplaza el binario en la MISMA ruta (`internal/selfupdate/updater.go:92`), así que la excepción por ruta debería sobrevivir a una autoactualización; falta correrlo en `kernelos-pc`. **Sin probar**: el viaje de ida y vuelta de `osslsigncode` (no está instalado; pide `sudo`). |
 | A32 | **Las alertas no se ven en el CRM** | `public.alertas` se llena y la vista `alertas_activas` existe, pero **ninguna página las muestra**: hoy sólo se ven por Telegram o por SQL. Falta una vista en `crm-musubi.git` (Next.js, ya usa `@supabase/ssr`). **Gio decidió posponerlo el 2026-08-27**: las alertas llegan al teléfono y quedan escritas, que es lo que importa; lo visual espera a que se ordene el monitoreo (era **A33**, hoy **B20**). **Ojo con esa espera**: la decisión se tomó el 2026-08-29 y su consecuencia (d) dice que **desbloquea A32**, así que lo que sigue pendiente acá es la PÁGINA, no la decisión. | **sin asignar** (decisión de gio) |
 | A14 | **Grabación de sesión de pantalla** | Decisión legal antes que técnica; no se hace sin que alguien la tome. | sin asignar |
 | A18 | **Pantalla en Android** (scrcpy sobre ADB) | La matriz de S1 concede `screen` a Tier C, pero el motor es otro distinto del de RustDesk. **Su sombra ya está tapada (S6c)**: pedir la pantalla de un Tier C se NIEGA y la capacidad inerte se ve en el inventario y en el panel. Falta el motor. | **S8b** |
