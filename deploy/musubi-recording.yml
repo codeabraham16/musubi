@@ -15,6 +15,12 @@
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # LO QUE ESTOS NÚMEROS NO DICEN, Y HAY QUE DECIRLO ANTES DE MANDARLOS A UN CLIENTE
 #
+#   · `musubi_fleet_service_up` SE REPUBLICA CON HORA FRESCA MIENTRAS EL AGENTE ESTÁ MUERTO. Es
+#     el ÚLTIMO ESTADO CONOCIDO, no una medición — el propio HELP del exportador lo dice: «NO dice
+#     si ese reporte es reciente». Medido el 2026-09-04: `davantis-1` estuvo caída de 15:51 a
+#     21:21 UTC (`musubi_fleet_device_up` = 0 las seis horas) y sus 64 servicios publicaron `1`
+#     durante TODA la ventana. Sin la guarda de abajo, esas seis horas entran al promedio como
+#     disponibilidad medida: el «uno inventado», simétrico al cero mentiroso.
 #   · `musubi_fleet_device_up` es «el agente late», no «la máquina anda». En un Windows sin
 #     `-AlArranque` el agente vive mientras haya sesión iniciada: una máquina reiniciada de
 #     madrugada figura caída y está perfectamente encendida. Para esas máquinas el número mide
@@ -60,8 +66,21 @@ groups:
       - record: musubi:device_up:norm
         expr: max by(device, project, os, tier) (musubi_fleet_device_up)
 
+      # LA GUARDA DE FRESCURA VA ACÁ, y no es la misma discusión que la de `instance`.
+      #
+      # Las 24 alertas de flota llevan `unless on(project, device) (musubi_fleet_device_up == 0)`
+      # y estas reglas no la llevaban: un servicio de una máquina cuyo agente está muerto sigue
+      # publicando su último estado con hora fresca, así que entraba al promedio como si alguien
+      # lo hubiera medido. Ver la tercera viñeta del encabezado, con la medición.
+      #
+      # LA GUARDA SOLA NO ALCANZA, Y POR ESO VIENE EN PAR CON LA COBERTURA. Al excluir la máquina
+      # caída, la serie no vale 0: DESAPARECE. Y `avg_over_time` ignora los huecos, que es el
+      # mismo modo de falla que el encabezado ya confiesa para «Prometheus caído» — un `avg30d` de
+      # 1.0 calculado sobre 62 minutos medidos se dibuja idéntico a uno sobre 43.200. La guarda
+      # sola movería el defecto de lugar en vez de cerrarlo.
       - record: musubi:service_up:norm
         expr: max by(device, project, os, tier, service, class) (musubi_fleet_service_up)
+          unless on(project, device) (musubi_fleet_device_up == 0)
 
       # ── CUÁNTO DE LA VENTANA SE MIDIÓ DE VERDAD ─────────────────────────────────────────────
       #
@@ -127,3 +146,19 @@ groups:
       # afirmar nada. `musubi_fleet_service_declared` dice cuáles existen.
       - record: musubi:service_up:avg30d
         expr: avg_over_time(musubi:service_up:norm[30d])
+
+      # LA OTRA MITAD DE LA GUARDA: cuánto de la ventana se midió DE VERDAD, por servicio.
+      #
+      # Es la misma cuenta que `musubi:device_up:cobertura30d` un plano más adentro, y existe por
+      # la misma razón: sin ella, «100 % disponible» y «casi no medimos» se dibujan igual. Con la
+      # guarda puesta arriba, las horas en que el agente estuvo muerto ya no inflan el promedio —
+      # pero tampoco lo bajan, así que hace falta un número que diga sobre qué se calculó.
+      #
+      # A 5m de intervalo, 30 días son 8.640 muestras.
+      - record: musubi:service_up:cobertura30d
+        expr: count_over_time(musubi:service_up:norm[30d]) / 8640
+
+      # Por cliente, la PEOR de sus servicios: un reporte se firma con el dato más flojo que lo
+      # sostiene. Mismo criterio que `musubi:project_up:cobertura30d`.
+      - record: musubi:project_service_up:cobertura30d
+        expr: min by(project) (musubi:service_up:cobertura30d)
