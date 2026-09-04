@@ -1574,6 +1574,62 @@ func schemaMigrations() []migration {
 					"rotacion_vence TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 44,
+			name:    "aprobacion_de_cuatro_ojos",
+			// LA SEGUNDA PERSONA (Ola 2 del plan empresa).
+			//
+			// Una shell interactiva se saltea cualquier allowlist de comandos, y hasta acá una
+			// sola persona con `shell` sobre producción podía abrirla sin que nadie se enterara
+			// hasta después. La bitácora lo cuenta DESPUÉS; esto exige que alguien lo sepa ANTES.
+			//
+			// SON DOS COSAS Y VAN JUNTAS PORQUE UNA SIN LA OTRA NO SIRVE: la marca en la máquina
+			// (`requiere_aprobacion`) y la tabla de los pedidos. Con la marca sola no hay dónde
+			// aprobar; con la tabla sola no hay nada que la exija.
+			//
+			// DEFAULT 0, Y ES LA ÚNICA ELECCIÓN DEFENDIBLE. Encender cuatro ojos en toda la flota
+			// de golpe dejaría a cada máquina esperando un segundo par de ojos que nadie sabe que
+			// tiene que dar, y la salida que la gente encuentra es apagar el control entero. Se
+			// enciende máquina por máquina, que es como se sabe cuáles importan.
+			//
+			// LA TABLA ES APPEND-ONLY, como device_commands, shell_sessions y device_maintenance:
+			// «esta sesión la aprobó fulano» es el hecho que este control existe para dejar
+			// escrito. Usar una aprobación la marca `usada`, no la borra — borrarla dejaría la
+			// sesión en la bitácora sin quién la avaló, que es la mitad que importa.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "requiere_aprobacion",
+					"requiere_aprobacion INTEGER NOT NULL DEFAULT 0"); err != nil {
+					return err
+				}
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS fleet_approvals (
+						id           TEXT PRIMARY KEY,
+						device_id    TEXT NOT NULL,
+						project_id   TEXT NOT NULL,
+						solicitante  TEXT NOT NULL,
+						capacidad    TEXT NOT NULL,
+						motivo       TEXT NOT NULL DEFAULT '',
+						estado       TEXT NOT NULL,
+						aprobador    TEXT NOT NULL DEFAULT '',
+						nota         TEXT NOT NULL DEFAULT '',
+						creada       TEXT NOT NULL,
+						vence        TEXT NOT NULL,
+						resuelta     TEXT NOT NULL DEFAULT '',
+						usada        TEXT NOT NULL DEFAULT ''
+					)`); err != nil {
+					return fmt.Errorf("error al crear fleet_approvals: %w", err)
+				}
+				// El índice cubre la consulta caliente, que es la del CAMINO DE ACCESO: «¿este
+				// principal tiene un permiso vigente para esta máquina y esta capacidad?», una
+				// vez por cada intento de abrir una shell o una pantalla.
+				if _, err := x.Exec(`
+					CREATE INDEX IF NOT EXISTS idx_approvals_busqueda
+					ON fleet_approvals(device_id, solicitante, capacidad, estado)`); err != nil {
+					return fmt.Errorf("error al indexar fleet_approvals: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }
 

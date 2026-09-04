@@ -143,6 +143,16 @@ type Device struct {
 	// alguien pide entrar. Vacío = no declarado, y lo resuelve el default del dominio — no se
 	// guarda un grado concreto para que cambiar el default no deje las filas viejas atrás.
 	Consentimiento Consentimiento
+	// RequiereAprobacion es CUÁNTAS PERSONAS hacen falta para abrir una sesión acá: si está en
+	// true, `shell` y `screen` exigen que un segundo principal —con la misma capacidad sobre esta
+	// máquina y distinto del que pide— apruebe antes. Ver internal/fleet/aprobacion.go para por
+	// qué es un eje aparte de las capacidades y del consentimiento, y por qué no es una etiqueta.
+	//
+	// LO ESCRIBE UN ADMINISTRADOR, NUNCA EL LATIDO. Si la máquina pudiera reportarlo, una máquina
+	// comprometida se desmarcaría sola y el control se apagaría justo cuando empieza a hacer
+	// falta. Es la misma regla que sostiene `caps` y `tier`.
+	RequiereAprobacion bool
+
 	// PuedePreguntar es la CAPACIDAD MEDIDA: si en esta máquina hay dónde dibujar un diálogo y
 	// quién lo conteste. La reporta el agente. Falso mientras nadie la haya medido, que es lo
 	// honesto: afirmar que se puede preguntar sin haberlo comprobado haría que `pide` se comporte

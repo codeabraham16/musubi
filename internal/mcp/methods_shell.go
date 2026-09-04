@@ -65,17 +65,14 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	//
 	// Y es la que MÁS lo necesitaba: una shell interactiva se saltea cualquier allowlist de
 	// comandos. Que la pantalla preguntara y la terminal no era la asimetría al revés.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.Bloquea():
+	// EL VETO DEL DUEÑO VA SOLO Y VA PRIMERO, igual que en pantalla: se separó del resto de la
+	// tabla al entrar los cuatro ojos, porque `prohibido` no necesita a nadie para decidir y
+	// pedirle a un segundo operador que apruebe algo que igual no se abre es hacerle perder el
+	// tiempo y contarle que alguien lo intentó.
+	if consent := d.ConsentimientoEfectivo(); consent.Bloquea() {
 		return nil, rpcErrorf(codeUnauthorized,
 			"no se abre una shell en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
 			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Mismo criterio que pantalla:
-		// prometer una notificación que el agente de ESTA máquina no sabe dar sería justo lo que
-		// el eje viene a evitar. Bloquear tampoco: `avisa` no bloquea, y hacerlo cerraría el
-		// acceso por una capacidad que esa máquina puede no tener nunca.
-		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
 	}
 
 	ahora := time.Now()
@@ -85,6 +82,33 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// otra, para que quien perdió su terminal pueda volver a ella y cerrarla.
 	if previa, hay, err := s.engine.SesionShellAbiertaDe(nombrePrincipal(p), d.ID, ahora); err == nil && hay {
 		return jsonResult(respuestaShell(previa, d, "ya tenías una sesión abierta en esta máquina; se devuelve ésa. Cerrala si querés una nueva."))
+	}
+
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// CUATRO OJOS, Y VA DESPUÉS DE T7 A PROPÓSITO
+	//
+	// Volver a tu propia sesión abierta NO es abrir una sesión, y cobrarle una aprobación sería
+	// gastarla en algo que ya está autorizado: quien perdió su terminal tendría que ir a buscar
+	// a una segunda persona para recuperar el prompt que ya tenía. Peor, la aprobación es de un
+	// solo uso — así que reconectarse dos veces consumiría dos permisos y el segundo no existiría.
+	//
+	// Y va ANTES de AbrirSesionShell porque de ahí en adelante ya hay una fila de sesión y un
+	// canal SSH: una aprobación que se pide con la shell a medio abrir deja que limpiar.
+	//
+	// De los tres ejes, éste es el que MÁS le corresponde a la shell: una shell interactiva se
+	// saltea cualquier allowlist de comandos, así que es el camino donde una sola persona puede
+	// hacer más sin que nadie se entere hasta después.
+	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, ahora); rpcErr != nil || resp != nil {
+		return resp, rpcErr
+	}
+
+	// EL AVISO A QUIEN ESTÁ EN LA MÁQUINA, recién cuando ya sabemos que la sesión se abre.
+	if consent := d.ConsentimientoEfectivo(); consent.AvisaAlUsuario() && !d.PuedePreguntar {
+		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Mismo criterio que pantalla:
+		// prometer una notificación que el agente de ESTA máquina no sabe dar sería justo lo que
+		// el eje viene a evitar. Bloquear tampoco: `avisa` no bloquea, y hacerlo cerraría el
+		// acceso por una capacidad que esa máquina puede no tener nunca.
+		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
 	}
 
 	// LA BITÁCORA SE ESCRIBE ANTES DE CONECTAR — misma regla que F1 de S5 y G7 de S6. Si el SSH

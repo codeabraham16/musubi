@@ -992,3 +992,49 @@ que nadie renueva en un día no es un mantenimiento, es algo que se olvidaron de
 **Lo que NO cubre:** una máquina silenciada por un `silence` de Alertmanager. Eso no deja rastro
 en la base y no lo ve esta alerta — y tampoco frena el auto-heal, que es la razón por la que las
 ventanas viven en el dominio y no ahí.
+
+## AprobacionDeCuatroOjosSinAtender
+
+Alguien pidió abrir una `shell` o una `screen` en una máquina marcada con
+`musubi_fleet_require_approval`, y lleva más de 15 minutos esperando que otra persona lo apruebe.
+
+**Por qué es una alerta y no una curiosidad:** la aprobación **no viaja**. Musubi no le manda una
+notificación a quien puede aprobar, porque mandarla exigiría saber a quién —«quién tiene `shell`
+sobre esta máquina» es una consulta sobre `principals.yaml` que este track no invierte—. Así que
+una solicitud que nadie mira **vence sola** a los 30 minutos, y el control se degrada de «hacen
+falta dos personas» a «se niega con media hora de demora». Eso es peor que no tenerlo: parece que
+funciona.
+
+El caso caro es el previsible — alguien está atendiendo un incidente, pide la shell del servidor
+que se cayó, y espera media hora a un aprobador que nunca se enteró.
+
+**Ver qué está esperando** (sólo aparece lo que VOS podrías aprobar: hace falta la misma capacidad
+sobre esa máquina):
+
+```
+musubi_fleet_approvals
+```
+
+Si la lista sale vacía y `fuera_de_tu_alcance` es mayor que cero, la solicitud existe pero es de
+una máquina que tu credencial no maneja: hay que buscar a alguien con esa capacidad. La serie
+`musubi_fleet_approval_pending{project}` dice cuántas hay, y a propósito **no** dice de qué máquina
+ni de quién — un scrape lo lee cualquiera que llegue al endpoint.
+
+**Resolverla:**
+
+```
+musubi_fleet_approve  solicitud=<id>  aprobar=true|false  nota="por qué"
+```
+
+Tres cosas que se descubren mal si no están escritas acá:
+
+- **No podés aprobar la tuya.** Es todo el control; el rechazo lo dice explícitamente.
+- **Un «no» dura hasta que la solicitud vence**, y no se puede volver a pedir en el acto. Si
+  volver a pedirlo funcionara, cuatro ojos se degradaría a «pedir hasta que alguien diga que sí».
+- **La aprobación es de un solo uso.** Habilita esa sesión y ninguna más: reconectarse después
+  necesita otra.
+
+**Si esto suena seguido en la misma máquina**, la pregunta no es operativa sino de diseño: o hay
+una sola persona con esa capacidad —y entonces la marca es un candado, no un control: sacala con
+`musubi_fleet_require_approval requerir=false`—, o esa máquina se toca más de lo que su marca
+supone.

@@ -127,8 +127,21 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       un reinicio planificado dispara `servicio_caido`, el auto-heal levanta el servicio en
 	//       mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Append-only
 	//       como las otras dos bitácoras: cancelar una ventana es escribir otra fila.
-	if latestSchemaVersion() != 43 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 43", latestSchemaVersion())
+	// v43 = ROTACIÓN DEL TOKEN DE UN DISPOSITIVO (`token_sha256_nuevo`, `rotacion_vence`). Los
+	//       DOS hashes valen durante la ventana porque el agente se entera del nuevo en la
+	//       RESPUESTA de un latido, o sea después de haber usado el viejo: sin solapamiento
+	//       quedaría afuera entre que lo recibe y lo guarda. Vencida, la rotación se ABANDONA
+	//       (sigue el viejo) en vez de completarse a la fuerza — rotar es higiene, y para la
+	//       emergencia está revocar, que es instantáneo y no depende de que el agente coopere.
+	// v44 = APROBACIÓN DE CUATRO OJOS (`devices.requiere_aprobacion`, `fleet_approvals`). Es un
+	//       TERCER eje: las capacidades dicen quién puede, el consentimiento qué se le debe a
+	//       quien está en la máquina, y esto CUÁNTAS PERSONAS hacen falta. Ninguno de los otros
+	//       dos puede expresarlo, y en un servidor de producción —donde no hay nadie sentado— el
+	//       consentimiento no protege a nadie mientras una sola persona con `shell` hace lo que
+	//       quiera. Append-only: usar una aprobación la marca `usada`, no la borra, porque «esta
+	//       sesión la aprobó fulano» es el hecho que el control existe para dejar escrito.
+	if latestSchemaVersion() != 44 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 44", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

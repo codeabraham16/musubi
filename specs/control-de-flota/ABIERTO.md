@@ -35,6 +35,76 @@
 > no están enroladas, y una de ellas corría un binario veintitrés versiones atrás sin que nada lo
 > dijera). Con eso son **19 cabos abiertos**, todos con dueño o razón declarada.
 >
+> **2026-09-03 (cierre de la Ola 2) — CUATRO OJOS, EL TERCER EJE.**
+>
+> Ya había dos ejes y contestaban preguntas distintas: las capacidades dicen QUIÉN puede entrar, y
+> el consentimiento QUÉ SE LE DEBE a quien está usando la máquina. Faltaba la tercera, que ninguno
+> de los dos puede expresar: **CUÁNTAS PERSONAS hacen falta**. Con capacidades sólo se puede quitar
+> el acceso, que no es lo mismo que exigir compañía; y el consentimiento protege a quien está
+> SENTADO en la máquina — que en un servidor de producción no es nadie, justo donde más hace falta.
+> Una shell interactiva se saltea cualquier allowlist de comandos, así que una sola persona con
+> `shell` sobre producción podía hacer cualquier cosa y la bitácora lo contaba DESPUÉS.
+>
+> **Me aparté del plan en un punto.** Decía marcar las máquinas con una etiqueta reservada. Las
+> etiquetas de este dominio son texto libre, **no se validan**, y **sólo se escriben al enrolar**.
+> Las dos cosas lo descalifican: `cuatro_ojos` en vez de `cuatro-ojos` apagaría el control en
+> silencio —la configuración que parece puesta y no lo está, que es el modo de falla que este
+> dominio persigue desde A57—, y marcar una máquina como sensible es algo que se aprende DESPUÉS
+> de enrolarla: con etiquetas habría que revocarla y volver a instalarle el agente, o sea ir a la
+> máquina, para encender un control que se quiere encender justo cuando ya no se puede ir. Es un
+> campo propio con su tool de administrador, igual que el consentimiento.
+>
+> **Quien aprueba necesita la MISMA capacidad, no `admin`.** Pedir `admin` está mal por los dos
+> lados: de más, porque obliga a que un administrador esté disponible para cada sesión y un
+> control que hay que esperar se termina desactivando «mientras tanto»; y de menos, porque
+> administrar la flota no es saber si ESTA sesión corresponde. La barra correcta es «podría
+> haberlo hecho por su cuenta»: aprobar no le concede nada que no tuviera, y lo único que se
+> agrega es que sean dos.
+>
+> **Tres decisiones que parecen de más y son el control:**
+>
+> **El un-solo-uso lo garantiza el `WHERE` del UPDATE**, no el llamador. Comprobar el estado en Go
+> y actualizar después deja la ventana clásica —dos sesiones leen «concedida» y las dos abren— y
+> esa ventana no se ve en ninguna prueba secuencial. Un permiso reusable no es cuatro ojos: es una
+> llave que la segunda persona entregó una vez y que después abre siempre.
+>
+> **Un «no» vale hasta que vence.** Si volver a pedir en el acto funcionara, el control se
+> degradaría a «pedir hasta que alguien diga que sí», que es exactamente cómo el cansancio vence a
+> los cuatro ojos en cualquier organización.
+>
+> **La aprobación acota por capacidad Y por solicitante.** Avalar que alguien MIRE una pantalla no
+> es avalar que abra una shell — sin el filtro, el permiso más barato de conseguir habilitaría el
+> más caro.
+>
+> **Y el orden en la fila importa más que el código.** La puerta va DESPUÉS del veto del dueño
+> (`prohibido` no necesita a nadie para decidir, y pedirle a un segundo operador que apruebe algo
+> que igual no se abre es hacerle perder el tiempo y contarle que alguien lo intentó), DESPUÉS de
+> T7 en la shell (volver a tu propia sesión abierta no es abrir una sesión, y cobrarle una
+> aprobación de un solo uso dejaría a quien perdió su terminal buscando a alguien para recuperar
+> el prompt que ya tenía), y ANTES de los avisos: si el aviso fuera primero, la persona sentada en
+> la máquina recibiría «alguien está por entrar» y no entraría nadie durante media hora. Por eso
+> la tabla de consentimiento quedó partida en dos mitades en los dos caminos.
+>
+> **La aprobación NO VIAJA, y eso tenía que tener alerta.** Nadie recibe una notificación —mandarla
+> exigiría saber a quién, y eso es una consulta sobre `principals.yaml` que este track no
+> invierte—, así que una solicitud que nadie mira vence sola y el control se degrada a una
+> negación con demora, que es peor que no tenerlo porque parece que anda. Van dos series
+> (`musubi_fleet_approval_pending` y `..._wait_seconds`) y `AprobacionDeCuatroOjosSinAtender`, que
+> **no lleva `for:`** porque la serie ya mide una duración: un `for:` mediría el tiempo dos veces.
+> Las series llevan **sólo `project`** —ni la máquina, ni quién pidió—: un scrape lo lee cualquiera
+> que llegue al endpoint, y «fulano quiere entrar al servidor de pagos» no tiene por qué estar ahí.
+>
+> **Siete sabotajes, siete rojos**, y el arnés se equivocó primero: la primera corrida dio verde en
+> los dos primeros porque el `head -3` leía paquetes SIN pruebas («ok … no tests to run») en vez
+> del resultado. Se rehízo comprobando el sabotaje contra el respaldo con `cmp`. Y el timeout dejó
+> uno APLICADO en el árbol —lo mismo que ya había pasado con un archivo nuevo—, así que la
+> restauración se verifica ahora en vez de asumirse.
+>
+> **Y buscando dónde poner la puerta apareció un cabo que no era mío: A83.** `avisa` sobre una
+> shell no le avisa a nadie. El camino de exec y el de pantalla encolan el aviso al usuario; la
+> shell sólo deja constancia en el log cuando la máquina NO sabe notificar, y no hace nada cuando
+> sí sabe. Está al revés, y es el camino con más autoridad de los tres. **21 cabos.**
+>
 > **2026-09-03 (última) — A31 SE RESUELVE SIN COMPRAR NADA, y el motivo no es que hayamos
 > encontrado un atajo: es que la premisa del cabo estaba mal.**
 >
@@ -317,6 +387,7 @@
 | A80 | **`altura-db` empuja su propia muestra y le faltan campos, y el 0 se lee como «no medido»** | Es un Tier B **sin shell** (`address` vacío): no lo sondea `TomarMuestraRemota` sino un guion que POSTea el latido con el token del dispositivo. Ese guion llena 16 series y **no llena `uptime_seg`**, que queda en 0 — y 0 es el centinela de «no medido», así que la serie ni existe. Salió el 2026-09-03 del mapa de cobertura, que marcó a `altura-db` como el único hueco de `MaquinaSeReiniciaSola` (A79). **Lo que importa no es el uptime**: es que un empujador con campos faltantes se ve **idéntico** a una plataforma que no puede medirlos, y la diferencia sólo se ve leyendo el guion. Hoy hay un `ausente_en` que lo declara —por eso la cobertura está en verde y no en rojo—, pero una excusa declarada que nadie revisa se vuelve permanente. **Se cierra** llenando `uptime_seg` en el guion, o declarando que ese camino no puede y por qué. **Conviene revisar de paso si le faltan otros campos**: nadie comparó nunca lo que ese guion manda contra lo que manda el agente. | **sin asignar** |
 | A81 | **Una contraseña de pantalla vieja sigue en claro en la base, y es exactamente UNA fila** | A74 se cerró tapando el `argv` en la misma transacción que lo entrega, pero eso vale de ahí en adelante: las filas de `musubi:pantalla` **entregadas antes** conservan el secreto crudo. **Medido el 2026-09-03 contra la base de producción en solo-lectura: 1 fila, en estado `terminado`, 0 ya tapadas.** El daño está acotado y conviene decirlo — el agente vence la contraseña por su cuenta (G2), así que esa contraseña no abre ninguna sesión; lo que queda es un registro histórico de un secreto que G1 promete no tener. Se cierra con un `UPDATE` de UNA línea, y las precauciones son las mismas que las del arreglo: acotado por `argv[0]` exacto (de las ops internas sólo pantalla lleva secreto; tapar avisar/preguntar borraría el texto que se le mostró al usuario, que es lo que la cronología necesita) y dentro de una transacción, no con el cerebro escribiendo la misma fila. **No se corre sin que gio lo autorice: es su base de producción.** | **decisión de gio** |
 | A82 | **La herramienta de despliegue documentada rompe el despliegue: `preparar.sh` contradice al README de su propio directorio** | `deploy/README.md` documenta desde `4cf31b3` que al reemplazar un archivo bind-montado hay que usar `cat >` y **nunca `install` ni `cp`**: un archivo nuevo nace con la etiqueta SELinux del directorio del usuario y el contenedor deja de leerlo, con una recarga que contesta **HTTP 500** sobre un archivo cuyo dueño y modo POSIX son perfectos. **La doc se arregló y la herramienta no**: `deploy/docker/preparar.sh` usa `install -m 0644` en SIETE lugares (31, 32, 49, 68, 72, 82, 87) y un `sed -i` en la 42. **El `sed -i` es el peor de los ocho** y por partida doble: reemplaza el inodo igual que `install` —pero quien lee el script ve los `install` y asume que el problema son ésos— y está en el camino del `chat_id`, o sea que rompe justo el canal que se está configurando. Lo encontró la otra sesión el 2026-09-03 al desplegar `alertmanager.yml`, y por eso lo hizo a mano. **La salida no es cambiar `install` por `cat >` y listo**: `cat >` exige que el destino YA EXISTA, así que `preparar.sh` necesita dos caminos —una primera instalación que cree el archivo (y ahí `install` está bien) y un reemplazo distinto—, o la primera corrida en una máquina limpia falla. Mientras tanto **la herramienta documentada no se puede usar para redesplegar**, que es exactamente cuando alguien la va a buscar. | **sin asignar** |
+| A83 | **`avisa` sobre una shell no le avisa a nadie** | El eje de consentimiento promete que en `avisa` «se le notifica a quien está usando la máquina, y no puede negarse». Los tres caminos lo aplican y **uno lo aplica al revés**: `aplicarConsentimientoDeExec` encola el aviso (`encolarAvisoDeExecConVentana`) y `toolFleetScreen` también (`encolarAvisoDePantalla`), pero `toolFleetShell` **sólo llama a `avisarUnaVezPorDevice`**, que es la rama de «esta máquina NO sabe notificar» y deja una línea en el log del cerebro. O sea: en una máquina que SÍ sabe notificar, abrir una shell no notifica nada. **La asimetría está invertida respecto de la autoridad de cada camino**: una shell interactiva se saltea cualquier allowlist de comandos, así que es justo el acceso del que la persona sentada enfrente más tendría que enterarse, y es el único de los tres que no se lo dice. Encontrado el 2026-09-03 al ubicar la puerta de cuatro ojos en ese mismo `switch`; **no se arregló en ese commit a propósito**, para no mezclar el sabotaje de una feature con el de otra. El arreglo no es copiar `encolarAvisoDePantalla`: su texto dice «ver esta pantalla», así que hace falta el equivalente para una terminal, con su prueba. | **sin asignar** |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |

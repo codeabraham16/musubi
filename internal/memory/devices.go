@@ -27,7 +27,7 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 
 // columnasDevice es la lista de columnas en el orden que espera escanearDevice. Una sola copia:
 // que el SELECT y el Scan se desincronicen es el bug clásico de esta capa.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar`
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -426,12 +426,13 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		cambiado         string
 		consent          string
 		puedePreguntar   int
+		requiereAprob    int
 	)
 	if err := row.Scan(
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
-		&consent, &puedePreguntar,
+		&consent, &puedePreguntar, &requiereAprob,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice
@@ -445,6 +446,7 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 	// escribió algo que no se entiende.
 	d.Consentimiento = fleet.Consentimiento(consent)
 	d.PuedePreguntar = puedePreguntar != 0
+	d.RequiereAprobacion = requiereAprob != 0
 	if tags != "" {
 		d.Tags = strings.Split(tags, ",")
 	}

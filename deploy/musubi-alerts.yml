@@ -319,6 +319,31 @@ groups:
           summary: "El scrape `{{ $labels.job }}` no existe: lo que dependa de sus métricas está ciego, no en verde."
           nota: "Es distinto de un target caído — `up == 0` significa «no contesta»; acá el job ni siquiera está configurado, así que ninguna regla que use sus métricas puede dispararse. Ver deploy/RUNBOOK.md#scrapequeelrepodeclaraynoexiste"
 
+      # CUATRO OJOS: ALGUIEN ESPERA Y NADIE LE AVISÓ A NADIE (Ola 2).
+      #
+      # La aprobación NO VIAJA. Musubi no le manda una notificación a quien puede aprobar, porque
+      # mandarla exigiría saber a quién —«quién tiene `shell` sobre esta máquina» es una consulta
+      # sobre principals.yaml que este track no invierte—. La consecuencia es concreta: una
+      # solicitud que nadie mira VENCE SOLA, y el control se degrada de «hacen falta dos personas»
+      # a «se niega con media hora de demora», que es peor que no tenerlo porque parece que anda.
+      #
+      # SIN `for:`, Y ES DELIBERADO. La serie ya mide una DURACIÓN —hace cuánto espera la más
+      # vieja—, así que un `for:` mediría el tiempo dos veces y retrasaría el aviso justo cuando
+      # la ventana entera son 30 minutos. Con el contador solo haría falta un `for:` y además
+      # dispararía por un flujo sano de solicitudes que entran y salen.
+      #
+      # 900 s = la mitad de la ventana: queda tiempo de sobra para atenderla antes de que venza y
+      # la persona tenga que volver a pedirla.
+      #
+      # NO se inhibe por mantenimiento: alguien trabado está trabado igual, y una ventana de
+      # mantenimiento no dice nada sobre si corresponde aprobar.
+      - alert: AprobacionDeCuatroOjosSinAtender
+        expr: max by (project) (musubi_fleet_approval_wait_seconds) > 900
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace {{ $value | humanizeDuration }} que alguien espera un segundo par de ojos en `{{ $labels.project }}`."
+          nota: "Musubi no le avisa a quien puede aprobar: la solicitud hay que ir a buscarla con `musubi_fleet_approvals`, y sólo la ve quien tiene la MISMA capacidad sobre esa máquina. Si vence, quien la pidió tiene que empezar de nuevo. Ver deploy/RUNBOOK.md#aprobaciondecuatroojossinatender"
+
       # LA CUSTODIA CRUZADA, LA MITAD DE ESTE ARCHIVO. La otra vive en musubi-alerts-flota.yml y
       # vigila a éste. El porqué del cruce está explicado allá, en el grupo `musubi-custodia`:
       # un archivo que declara su propio conteo se despliega junto con el conteo y nunca falla.

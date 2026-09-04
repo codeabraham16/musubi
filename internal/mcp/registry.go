@@ -1159,7 +1159,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_fleet_shell",
-				Description: "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero. EL CONSENTIMIENTO NO SE CONSULTA EN ESTE CAMINO: el grado que fija musubi_fleet_consent gobierna hoy sólo la pantalla, así que una máquina en `pide` o `prohibido` igual abre el prompt y nadie le avisa a quien la está usando.",
+				Description: "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero. EL CONSENTIMIENTO SÍ SE CONSULTA desde A75 (2026-09-03): una máquina en `prohibido` no abre el prompt, y en `avisa` se le notifica a quien la está usando. Y si la máquina está marcada con musubi_fleet_require_approval, la sesión exige CUATRO OJOS: un segundo principal, con `shell` sobre esa misma máquina y distinto de vos, tiene que aprobarla con musubi_fleet_approve. El primer intento devuelve un id de solicitud y NO abre nada; nadie recibe una notificación, así que avisale vos a quien pueda aprobarla.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1393,6 +1393,51 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolFleetConsent,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_require_approval",
+				Description: "ADMIN. Decide si una máquina exige CUATRO OJOS: que un segundo principal apruebe cada sesión de `shell` o `screen` sobre ella. Es un TERCER EJE, distinto de los otros dos: las capacidades deciden QUIÉN puede entrar, el consentimiento decide QUÉ SE LE DEBE a quien está usando la máquina, y esto decide CUÁNTAS PERSONAS hacen falta. Ninguno de los otros dos puede expresarlo — y en un servidor de producción, donde no hay nadie sentado enfrente, el consentimiento no protege a nadie mientras una sola persona con `shell` puede hacer cualquier cosa y la bitácora lo cuenta DESPUÉS. Quien aprueba necesita LA MISMA capacidad sobre ESA máquina (no `admin`): la barra es «podría haberlo hecho por su cuenta», así que aprobar no le concede nada nuevo; lo único que se agrega es que sean dos. Y NADIE puede aprobar su propia solicitud. Viene APAGADO y se enciende máquina por máquina, que es como se sabe cuáles importan: encenderlo en toda la flota deja a cada una esperando un par de ojos que nadie sabe que tiene que dar, y la salida que la gente encuentra es apagar el control entero. ⚠ Si en la práctica hay UNA sola persona con esa capacidad, encender esto deja la máquina sin acceso interactivo: cuatro ojos con un solo par no es un control lento, es un candado. `metrics` y `exec` no se tocan.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"device":   {Type: "string", Description: "Nombre de la máquina"},
+						"requerir": {Type: "boolean", Description: "true enciende los cuatro ojos, false los apaga. SIN DEFAULT: omitirlo es un error, porque un campo olvidado que significara false apagaría el control por distracción"},
+						"project":  {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+					},
+					Required: []string{"device", "requerir"},
+				},
+			},
+			handler: s.toolFleetRequireApproval,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_approve",
+				Description: "Sos la SEGUNDA PERSONA: aprobás o negás la solicitud de otro para abrir una sesión en una máquina marcada con musubi_fleet_require_approval. Exige LA MISMA capacidad que la sesión pedida sobre ESA máquina —no `admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada que no tuvieras. NO PODÉS APROBAR TU PROPIA SOLICITUD: eso son dos ojos, no cuatro. La aprobación es de UN SOLO USO y vence con la solicitud (30 min): habilita esa sesión y ninguna más. Un «no» VALE HASTA QUE VENZA la solicitud y no se puede volver a pedir en el acto — si volver a pedirlo funcionara, el control se degradaría a «pedir hasta que alguien diga que sí», que es como el cansancio vence a los cuatro ojos en cualquier organización. A quien pidió la sesión NO se le avisa: la va a encontrar cuando vuelva a pedirla.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"solicitud": {Type: "string", Description: "El id que devolvió el intento de abrir la sesión"},
+						"aprobar":   {Type: "boolean", Description: "true concede, false niega. SIN DEFAULT: omitirlo es un error, porque negar por distracción le gasta la ventana a otro"},
+						"nota":      {Type: "string", Description: "Por qué. Un «no» sin motivo manda a la otra persona a preguntar por otro lado"},
+					},
+					Required: []string{"solicitud", "aprobar"},
+				},
+			},
+			handler: s.toolFleetApprove,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_fleet_approvals",
+				Description: "Qué solicitudes de CUATRO OJOS están esperando una segunda persona. Existe porque la aprobación NO VIAJA: no hay notificación a quien puede aprobar —mandarla exigiría saber a quién, y eso es una consulta sobre principals.yaml que este track no invierte—, así que sin esta lista una solicitud que nadie mira vence sola y el control se vuelve una negación con demora. SÓLO muestra las que VOS podrías resolver (tenés esa capacidad sobre esa máquina); las demás se cuentan en `fuera_de_tu_alcance` en vez de desaparecer, porque una lista vacía significa «ninguna que yo pueda aprobar», no «no hay nadie esperando». Cada fila dice `podes_aprobarla`: la tuya propia figura en false, porque nadie aprueba su propia solicitud.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"project": {Type: "string", Description: "project_id. Sólo lo respeta un principal read=all"},
+					},
+				},
+			},
+			handler: s.toolFleetApprovals,
 		},
 		{
 			Tool: Tool{

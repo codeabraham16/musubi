@@ -102,6 +102,77 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
 	renderServicios(b, engine, vistos, ahora)
+	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
+	// compuertadas, por lo mismo que servicios.
+	renderAprobaciones(b, engine, vistos, ahora)
+}
+
+// nombreAprobPendientes y nombreAprobEspera cuentan las solicitudes de cuatro ojos que esperan.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ HACEN FALTA DOS SERIES Y NO ALCANZA CON CONTAR
+//
+// La aprobación NO VIAJA: nadie recibe una notificación, así que una solicitud que ningún
+// aprobador mira vence sola y el control se degrada a una negación con demora — que es peor que
+// no tenerlo, porque parece que funciona.
+//
+// El contador solo no alcanza para alertar: con solicitudes que entran y salen, el conteo puede
+// quedarse en 1 sin que NADIE haya esperado mucho, y un `for: 10m` sobre eso dispararía por un
+// flujo sano. La ESPERA MÁS VIEJA mide lo que importa —hace cuánto que hay alguien trabado— y no
+// necesita `for:`.
+//
+// El contador sigue existiendo porque es lo que distingue «nadie espera» de «alguien acaba de
+// pedir»: las dos dan una espera cercana a cero.
+//
+// LOS DOS SE EMITEN EN CERO cuando no hay nada pendiente, por la misma razón que
+// musubi_fleet_export_truncated: una serie que sólo aparece cuando hay problema no se puede
+// graficar y no se distingue de que el exportador no corrió.
+//
+// LAS ETIQUETAS SON SÓLO `project`: ni la máquina, ni quién pidió, ni quién puede aprobar. Un
+// scrape lo lee cualquiera que llegue al endpoint, y «fulano quiere entrar al servidor de pagos»
+// es exactamente la clase de dato que no tiene por qué estar ahí. Para saber QUÉ está esperando
+// está musubi_fleet_approvals, que sí pasa por la compuerta.
+const (
+	nombreAprobPendientes = "musubi_fleet_approval_pending"
+	nombreAprobEspera     = "musubi_fleet_approval_wait_seconds"
+)
+
+func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) {
+	// Los proyectos salen de las máquinas YA compuertadas: preguntarle al almacén por todos los
+	// proyectos sería un segundo recorrido sin compuerta, que es como se exporta de más sin que
+	// nadie lo note.
+	orden := make([]string, 0, 4)
+	visto := map[string]bool{}
+	for _, d := range vistos {
+		if !visto[d.ProjectID] {
+			visto[d.ProjectID] = true
+			orden = append(orden, d.ProjectID)
+		}
+	}
+
+	fmt.Fprintf(b, "# HELP %s Solicitudes de cuatro ojos esperando una segunda persona. La aprobación no viaja: si nadie mira musubi_fleet_approvals, vencen solas a los %s.\n# TYPE %s gauge\n",
+		nombreAprobPendientes, fleet.VentanaDeAprobacion, nombreAprobPendientes)
+	fmt.Fprintf(b, "# HELP %s Hace cuántos segundos espera la solicitud de cuatro ojos MÁS VIEJA de este proyecto. 0 = no hay ninguna esperando.\n# TYPE %s gauge\n",
+		nombreAprobEspera, nombreAprobEspera)
+
+	for _, proy := range orden {
+		pendientes, err := engine.AprobacionesPendientes(proy, ahora, 200)
+		if err != nil {
+			// Un error leyendo esto NO puede romper el scrape entero: la telemetría de la flota
+			// vale más que este contador. Se saltea el proyecto en vez de emitir un cero, que
+			// diría «no hay nadie esperando» sin saberlo.
+			continue
+		}
+		espera := 0.0
+		if len(pendientes) > 0 {
+			// La lista viene ordenada por `creada ASC`, así que la primera es la más vieja.
+			if d := ahora.Sub(pendientes[0].Creada).Seconds(); d > 0 {
+				espera = d
+			}
+		}
+		fmt.Fprintf(b, "%s{project=%q} %d\n", nombreAprobPendientes, proy, len(pendientes))
+		fmt.Fprintf(b, "%s{project=%q} %.0f\n", nombreAprobEspera, proy, espera)
+	}
 }
 
 // nombreExportTruncado es la serie que dice que el exportador dejó cosas afuera. Vale 1 cuando se

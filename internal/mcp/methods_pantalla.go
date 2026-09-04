@@ -78,29 +78,20 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	// Es un eje SEPARADO del permiso, así que el error lo dice: la capacidad puede estar
 	// perfectamente concedida y la sesión igual no abrirse. Confundirlos mandaría a alguien a
 	// revisar `principals.yaml` buscando un permiso que ya está.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.Bloquea():
+	// EL VETO DEL DUEÑO DE LA MÁQUINA VA SOLO Y VA PRIMERO.
+	//
+	// Estaba en la misma tabla que los avisos y se separó al entrar los cuatro ojos, porque las
+	// dos mitades no van en el mismo lugar: `prohibido` no necesita a NADIE para decidir, así que
+	// pedirle a un segundo operador que apruebe una sesión que igual no se va a abrir es hacerle
+	// perder el tiempo y, de paso, contarle que alguien lo intentó. Los avisos, en cambio, tienen
+	// que ir DESPUÉS de la aprobación: ver más abajo.
+	if consent := d.ConsentimientoEfectivo(); consent.Bloquea() {
 		return nil, rpcErrorf(codeUnauthorized,
 			"no se abre la pantalla de %q: %v. "+
 				"El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, "+
 				"un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre "+
 				"sin permiso, y si el permiso no se puede pedir, no se entra.",
 			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
-		// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:
-		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
-		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
-		// —un servidor sin escritorio— por razones que no son de seguridad.
-		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
-	case consent.AvisaAlUsuario():
-		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). Se hace ACÁ y no después de crear
-		// la sesión, y el orden importa: el aviso dice «alguien está por entrar», y entregarlo
-		// después de que la pantalla ya está abierta lo convierte en una notificación de algo que
-		// ya pasó. El agente lo va a recoger en su próximo latido — hasta 30 s— y esa demora es
-		// el precio de no ponerlo a escuchar un puerto, que es la superficie que este track evita
-		// desde S2.
-		s.encolarAvisoDePantalla(d, p)
 	}
 
 	if !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {
@@ -145,6 +136,41 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 	// y devuelve el id SIN contraseña. El operador vuelve a llamar y recibe la contraseña si le
 	// dijeron que sí. Si ya hay una espera en curso para esta máquina y este principal, no se
 	// abre otra: se informa la que hay.
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// CUATRO OJOS VA ANTES QUE TODO LO QUE MOLESTA A UN HUMANO
+	//
+	// Es el tercer eje (ver internal/fleet/aprobacion.go) y su lugar en la fila no es un detalle
+	// de estilo: si fuera después del aviso, la persona sentada en la máquina recibiría «alguien
+	// está por entrar» y no entraría nadie durante media hora, porque la sesión todavía tiene que
+	// esperar a un segundo operador. Un aviso de algo que no pasó enseña a ignorar los avisos.
+	//
+	// Y si fuera después del `pide`, se le gastaría el «sí» a esa persona en una sesión que puede
+	// no abrirse nunca: un permiso que se concede y se tira.
+	//
+	// Va DESPUÉS de la colisión de id y del «¿está latiendo?» a propósito: ésas son máquinas
+	// donde la sesión no se puede abrir por razones que ninguna aprobación arregla, y pedirle a
+	// alguien que apruebe eso es hacerlo firmar algo que no sirve.
+	if resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, ahora); rpcErr != nil || resp != nil {
+		return resp, rpcErr
+	}
+
+	// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir o va a preguntar.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
+		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
+		// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:
+		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
+		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
+		// —un servidor sin escritorio— por razones que no son de seguridad.
+		s.avisarUnaVezPorDevice(d.ID, nombre, consent)
+	case consent.AvisaAlUsuario():
+		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por
+		// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría
+		// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido
+		// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.
+		s.encolarAvisoDePantalla(d, p)
+	}
+
 	if consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {
 		return s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)
 	}

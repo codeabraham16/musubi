@@ -526,6 +526,23 @@ type ServiceStore interface {
 	CompletarRotacion(deviceID string) error
 	AbandonarRotacionesVencidas(ahora time.Time) (int64, error)
 	DevicePorTokenConRotacion(token string) (fleet.Device, bool, bool, error)
+
+	// ── Aprobación de cuatro ojos (Ola 2) ───────────────────────────────────────────────────
+	// CUÁNTAS PERSONAS hacen falta para abrir una sesión. Es un eje aparte de las capacidades
+	// (quién puede) y del consentimiento (qué se le debe a quien está en la máquina): ninguno de
+	// los dos puede expresar «hace falta una segunda persona», y en un servidor de producción
+	// —donde no hay nadie sentado— el consentimiento no protege a nadie.
+	FijarAprobacion(deviceID string, requiere bool) (bool, error)
+	AbrirSolicitudDeAprobacion(s fleet.SolicitudDeAprobacion) (fleet.SolicitudDeAprobacion, error)
+	SolicitudDeAprobacionPorID(id string) (fleet.SolicitudDeAprobacion, bool, error)
+	// AprobacionVigenteDe acota por solicitante Y por capacidad: la aprobación se le dio a QUIEN
+	// pidió para hacer ESO. Sin los dos filtros, el permiso más barato habilita el más caro.
+	AprobacionVigenteDe(deviceID, solicitante string, cap fleet.Cap, ahora time.Time) (fleet.SolicitudDeAprobacion, bool, error)
+	ResolverAprobacion(id, aprobador, nota string, concede bool, ahora time.Time) (bool, error)
+	// ConsumirAprobacion gasta el permiso, y el un-solo-uso lo garantiza el WHERE del UPDATE.
+	// Si devuelve false, el llamador TIENE que negarse: significa que ya se usó o venció.
+	ConsumirAprobacion(id string, ahora time.Time) (bool, error)
+	AprobacionesPendientes(projectID string, ahora time.Time, tope int) ([]fleet.SolicitudDeAprobacion, error)
 }
 
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo debe
