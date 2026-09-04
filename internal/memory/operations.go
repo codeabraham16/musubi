@@ -266,6 +266,16 @@ func (e *DbEngine) effectiveProjectID(originProjectID string) string {
 // El parámetro stamp (F4) es el sello de procedencia/cuarentena. nil ⇒ los defaults del
 // esquema ('human', 1.0, no en cuarentena), que es el camino de siempre.
 func (e *DbEngine) saveObservation(id, topicKey, content string, importance float64, setImportance bool, memType, scope, originProjectID, author string, originPaths []string, embedding []float32, stamp *obsStamp) error {
+	// EL SOBRE DE LA LLAMADA NO ENTRA COMO CONTENIDO, y se rechaza ACÁ porque acá pasan las diez
+	// variantes públicas de SaveObservation*. Una comprobación en una sola la esquivan las otras
+	// nueve — es la forma de A76, y con diez caminos es peor. Va ANTES del Begin: una validación
+	// que no necesita la base no debería abrir una transacción para fallar.
+	//
+	// Ver sobre_de_llamada.go para la medición: 73 observaciones ya guardadas así, y las que
+	// declararon su importance adentro del texto la perdieron.
+	if comido, detalle := SobreDeLlamadaComido(content); comido {
+		return ErrSobreDeLlamada(detalle)
+	}
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("error al iniciar transacción: %w", err)

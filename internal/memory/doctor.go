@@ -77,6 +77,8 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "offhost_backup", run: checkOffhostBackup},
 		{code: "outbox_stall", run: checkOutboxStall},
 		{code: "abandoned_runs", run: checkAbandonedRuns},
+		// deep: recorre el content de las observaciones que matchean el LIKE y decide en Go.
+		{code: "swallowed_envelope", deep: true, run: checkSwallowedEnvelope},
 	}
 }
 

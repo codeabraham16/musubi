@@ -111,6 +111,17 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// relay/equipo). Plegarlo lo hace atómico (una sola fila jamás queda con sync_seq=0) y de paso
 	// dispara el trigger FTS una vez en vez de dos. El subselect en el DO UPDATE ve el sync_seq viejo
 	// de la propia fila, así que MAX+1 es un bump monótono estricto. Single-writer ⇒ sin race.
+	// ACÁ NO VA LA GUARDA DE `SobreDeLlamadaComido`, Y ES UNA DECISIÓN, NO UN OLVIDO.
+	//
+	// Esta puerta no CREA memoria: relaya la que otro nodo ya guardó. El cerebro central tiene 73
+	// observaciones con el sobre comido de antes de la guarda (medidas el 2026-09-04), así que
+	// rechazarlas acá no arreglaría ninguna — rompería el pull del nodo que las tiene, y una
+	// sincronización que se corta por una fila vieja pierde TODO lo que venía detrás.
+	//
+	// La guarda vive donde nace el contenido (saveObservation, ver sobre_de_llamada.go). Si algún
+	// día se quiere limpiar el pasado, el lugar es una reparación explícita sobre las filas
+	// existentes —que además tiene que devolverle a cada una la importance que declaró— y no un
+	// rechazo en el camino de relay.
 	_, err = e.db.Exec(`INSERT INTO observations
 		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, sync_seq)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
