@@ -748,6 +748,40 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · CERRADO — un archivo de secreto con dos líneas no da 401: hace que el pedido no salga.**
+
+Salió de verificar la contradicción de precedencia que otra sesión dejó en **A101**, y es un defecto
+distinto y del lado del código. `config.SecretoDeEnv` hacía `TrimSpace` del archivo entero, que saca
+el `\n` del final y nada más. Con DOS líneas no vacías el secreto vuelve con un salto de línea
+ADENTRO. Medido:
+
+    SecretoDeEnv -> "tokenNUEVO\ntokenVIEJO"
+    net/http     -> invalid header field value for "Authorization"
+
+**No es un 401: el cliente se niega a mandar el pedido**, y el error apunta a la biblioteca HTTP —el
+único lugar donde la causa NO está—. Sin nombrar el archivo, ni la variable, ni el salto de línea. Y
+este mismo par de variables ya costó cuatro intentos de diagnóstico el 2026-08-31 con el YAML, el
+hash, la ruta, el proceso y la recarga TODOS verificados correctos: la causa estaba en el shell, que
+era el único lugar donde nadie miró porque nada apuntaba ahí.
+
+Ahora se rechaza acá, con la variable, la ruta, el conteo de líneas y qué hacer — y **sin filtrar el
+secreto en el mensaje**, que la prueba también custodia.
+
+**SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA, a propósito.** Acá no hay formato multi-token. El que
+sí existe —lista de tokens, el más nuevo primero, para que una rotación tenga fallback— es del token
+de DISPOSITIVO (`MUSUBI_DEVICE_TOKEN_FILE`, en `cmd/musubi/agent_token.go`), que es OTRA variable.
+Quedarse con la primera línea inventaría ese formato para un camino que no lo tiene, y elegiría en
+silencio entre dos credenciales cuando lo honesto es decir que no se sabe cuál se quiso poner.
+
+**Y UNA CORRECCIÓN A MI PROPIO ANÁLISIS, que vale más que el arreglo**: al mirarlo dije que era «el
+mismo binario resolviendo el mismo par en órdenes opuestos». **Era falso.** Son secretos DISTINTOS
+—`MUSUBI_DEVICE_TOKEN[_FILE]` para el agente y `MUSUBI_TOKEN[_FILE]` para el operador— así que
+ninguna variable se resuelve de dos formas. La contradicción es de CONVENCIÓN, que es exactamente
+como la había planteado la otra sesión, y mi «sharpening» la empeoraba. Queda escrito porque el error
+tiene forma de mejora: agregarle precisión a un hallazgo ajeno es donde más fácil se le agrega una
+falsedad.
+
+
 **2026-09-05 · A100 CERRADO EN EL MISMO ACTO — una prueba que no compila no falla, y `go test` contesta `ok`.**
 
 Encontrado por otra sesión sobre su propio trabajo: escribió cinco pruebas del actualizador del

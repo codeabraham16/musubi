@@ -205,3 +205,94 @@ func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 			len(culpables), strings.Join(culpables, "\n  "))
 	}
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// UN ARCHIVO DE VARIAS LÍNEAS FALLA ACÁ Y CON SU MOTIVO, NO LEJOS Y MUDO
+//
+// El Trim saca el `\n` del final y nada más. Con dos líneas no vacías lo que vuelve es un secreto
+// con un salto de línea ADENTRO, y eso NO da 401: `net/http` se niega a mandar el pedido. Medido el
+// 2026-09-05 con un archivo de dos tokens:
+//
+//	SecretoDeEnv -> "tokenNUEVO\ntokenVIEJO"
+//	net/http     -> invalid header field value for "Authorization"
+//
+// Ese error apunta a la biblioteca HTTP, o sea al único lugar donde la causa NO está. Y este mismo
+// par de variables ya costó cuatro intentos de diagnóstico el 2026-08-31 con el YAML, el hash, la
+// ruta, el proceso y la recarga TODOS verificados correctos (A89): la causa estaba en el shell, que
+// era el único lugar donde nadie miró porque nada apuntaba ahí.
+//
+// SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA a propósito: acá no hay formato multi-token. El que sí
+// existe —lista de tokens, el más nuevo primero, para que una rotación tenga fallback— es del token
+// de DISPOSITIVO (`MUSUBI_DEVICE_TOKEN_FILE`, en cmd/musubi/agent_token.go). Quedarse con la primera
+// línea inventaría ese formato para un camino que no lo tiene, y elegiría en silencio entre dos
+// credenciales cuando lo honesto es decir que no se sabe cuál se quiso poner.
+//
+// Sabotaje verificado: quitar la guarda → el caso de dos líneas devuelve el valor con `\n` adentro.
+func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
+	dir := t.TempDir()
+	escribir := func(nombre, contenido string) string {
+		t.Helper()
+		ruta := filepath.Join(dir, nombre)
+		if err := os.WriteFile(ruta, []byte(contenido), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return ruta
+	}
+
+	casos := []struct {
+		nombre    string
+		contenido string
+		quiere    string // "" = se espera error
+		porque    string
+	}{
+		{"una línea, el caso de todos los días", "elsecreto\n", "elsecreto",
+			"un archivo escrito con `echo` termina en \\n y el secreto no lo incluye"},
+		{"una línea sin salto final", "elsecreto", "elsecreto", ""},
+		{"una línea con espacios alrededor", "  elsecreto  \n", "elsecreto", ""},
+		{"varias líneas en blanco alrededor de una sola", "\n\n  elsecreto  \n\n\n", "elsecreto",
+			"los blancos no son un segundo secreto"},
+		{"DOS tokens: se rechaza", "tokenNUEVO\ntokenVIEJO\n", "",
+			"es el formato del token de DISPOSITIVO, no de éste; devolver el valor entero mata el " +
+				"pedido en net/http con un error que no nombra ni el archivo ni la variable"},
+		{"dos líneas con CRLF, como lo escribiría Windows", "tokenA\r\ntokenB\r\n", "",
+			"el CRLF no lo hace menos ambiguo"},
+		{"una línea y un comentario debajo", "elsecreto\n# rotado el 5/9\n", "",
+			"un comentario es una segunda línea no vacía, y adivinar cuál es el secreto sería inventar"},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			ruta := escribir("s.txt", c.contenido)
+			t.Setenv("PRUEBA_SECRETO", "")
+			t.Setenv("PRUEBA_SECRETO_FILE", ruta)
+
+			got, err := SecretoDeEnv("PRUEBA_SECRETO")
+			if c.quiere == "" {
+				if err == nil {
+					t.Fatalf("devolvió %q sin error, y con un salto de línea adentro el pedido muere en "+
+						"net/http con «invalid header field value», que apunta al único lugar donde la "+
+						"causa NO está — %s", got, c.porque)
+				}
+				// El mensaje tiene que servirle a quien lo lee: la variable, el archivo, y qué hacer.
+				for _, aguja := range []string{"PRUEBA_SECRETO_FILE", ruta, "una sola línea"} {
+					if !strings.Contains(err.Error(), aguja) {
+						t.Errorf("el error no menciona %q, así que no alcanza para arreglarlo: %v", aguja, err)
+					}
+				}
+				if strings.Contains(err.Error(), "tokenNUEVO") || strings.Contains(err.Error(), "tokenA") {
+					t.Errorf("el error FILTRA el secreto: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("error inesperado (%s): %v", c.porque, err)
+			}
+			if got != c.quiere {
+				t.Errorf("devolvió %q y se esperaba %q — %s", got, c.quiere, c.porque)
+			}
+			if strings.ContainsAny(got, "\n\r") {
+				t.Errorf("el valor tiene un salto de línea adentro: %q", got)
+			}
+		})
+	}
+}

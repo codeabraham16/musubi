@@ -43,7 +43,43 @@ func SecretoDeEnv(nombre string) (string, error) {
 	}
 	// Un archivo escrito con `echo` termina en \n y el token NO lo incluye; sin este Trim el bearer
 	// viaja con un salto de línea y el central contesta 401 sin decir por qué.
-	return strings.TrimSpace(string(datos)), nil
+	secreto := strings.TrimSpace(string(datos))
+
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// UN ARCHIVO DE VARIAS LÍNEAS SE RECHAZA ACÁ, CON SU MOTIVO, EN VEZ DE MORIR LEJOS Y MUDO
+	//
+	// El Trim de arriba saca el `\n` del final y nada más. Con DOS líneas no vacías, lo que
+	// vuelve es un secreto con un salto de línea ADENTRO — y eso no da 401: `net/http` se niega a
+	// mandar el pedido. Medido el 2026-09-05 con un archivo de dos tokens:
+	//
+	//     SecretoDeEnv -> "tokenNUEVO\ntokenVIEJO"
+	//     net/http     -> invalid header field value for "Authorization"
+	//
+	// El error no nombra el archivo, ni la variable, ni el salto de línea. Apunta a la biblioteca
+	// HTTP, o sea al lugar donde NO está la causa — y este mismo par de variables ya costó cuatro
+	// intentos de diagnóstico el 2026-08-31 con todo lo demás verificado correcto (A89).
+	//
+	// POR QUÉ SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA: acá no hay un formato multi-token
+	// definido. El que SÍ existe —una lista de tokens, el más nuevo primero, para que una rotación
+	// tenga fallback— es del token de DISPOSITIVO y lo lee `cmd/musubi/agent_token.go`, que es otra
+	// variable (`MUSUBI_DEVICE_TOKEN_FILE`). Quedarse con la primera línea acá inventaría ese
+	// formato para un camino que no lo tiene, y elegiría en silencio entre dos credenciales cuando
+	// lo honesto es decir que no se sabe cuál quiso poner.
+	if strings.ContainsAny(secreto, "\n\r") {
+		lineas := 0
+		for _, l := range strings.Split(strings.ReplaceAll(secreto, "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(l) != "" {
+				lineas++
+			}
+		}
+		return "", fmt.Errorf("%s%s apunta a %q y ese archivo tiene %d líneas no vacías: este camino "+
+			"espera UN secreto y no una lista. Un valor con un salto de línea adentro hace que net/http "+
+			"se niegue a mandar el pedido con «invalid header field value», que no nombra ni el archivo "+
+			"ni la variable. Dejá una sola línea. (El formato de varios tokens existe SÓLO para "+
+			"MUSUBI_DEVICE_TOKEN_FILE, el del agente.)",
+			nombre, SufijoArchivoDeSecreto, ruta, lineas)
+	}
+	return secreto, nil
 }
 
 // NombresDeSecreto devuelve las dos formas de nombrar el mismo secreto, para poder decirlas en un
