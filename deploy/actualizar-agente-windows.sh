@@ -99,7 +99,7 @@ limpiar(){
 }
 trap limpiar EXIT
 
-paso "1/5 · compilando el agente de Windows desde un árbol limpio en $REF"
+paso "1/6 · compilando el agente de Windows desde un árbol limpio en $REF"
 git -C "$REPO" worktree add --detach "$WT" "$REF" >/dev/null 2>&1 || {
   rojo "no pude crear el worktree en $REF"; exit 1; }
 COMMIT="$(git -C "$WT" rev-parse --short HEAD)"
@@ -115,7 +115,7 @@ esac
 cp "$REPO/deploy/cambiar-agente.cmd" "$SRV/"
 ok "$VERSION · sha256 $SHA · $(stat -c %s "$SRV/musubi.exe") bytes · commit $COMMIT"
 
-paso "2/5 · sirviendo esos DOS archivos en $IP:$PUERTO (sólo mientras corre este guion)"
+paso "2/6 · sirviendo esos DOS archivos en $IP:$PUERTO (sólo mientras corre este guion)"
 ( cd "$SRV" && exec python3 -m http.server "$PUERTO" --bind "$IP" >/dev/null 2>&1 ) &
 SRVPID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -248,7 +248,7 @@ $d = $conToken[0]
 # SE USA EN LAS DOS MÁQUINAS Y NO SÓLO EN LA QUE LO NECESITA. Tener dos caminos de descarga
 # —`Invoke-WebRequest` acá, `fetch` allá— es exactamente la forma que este repo persigue: el que se
 # usa menos es el que se rompe sin que nadie se entere. La idea es de la sesión musubi-aa.
-paso "3/5 · bajando el binario a $DEVICE con su propio fetch, y verificando el sha EN DESTINO"
+paso "3/6 · bajando el binario a $DEVICE con su propio fetch, y verificando el sha EN DESTINO"
 llamar "$(ps1 "$RESOLVER"'$n = Join-Path $d "musubi-nuevo.exe"
 $r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/musubi.exe" -RedirectStandardOutput $n -NoNewWindow -Wait -PassThru
 if ($r.ExitCode -ne 0) { Remove-Item $n -Force -EA SilentlyContinue; "fetch salio con " + $r.ExitCode; exit 1 }
@@ -257,7 +257,7 @@ $h=(Get-FileHash $n -Algorithm SHA256).Hash.ToLower()
 if ($h -ne "'"$SHA"'") { Remove-Item $n -Force; "SHA DISTINTO: $h -- BORRADO"; exit 1 }
 "sha ok, bytes: " + (Get-Item $n).Length')" 300
 
-paso "4/5 · refrescando cambiar-agente.cmd (el de la máquina puede ser viejo)"
+paso "4/6 · refrescando cambiar-agente.cmd (el de la máquina puede ser viejo)"
 # Mismo motivo que el paso 3: `curl.exe` tampoco está en la lista blanca de `davantis-1`.
 llamar "$(ps1 "$RESOLVER"'$c = Join-Path $d "cambiar-agente.cmd.nuevo"
 $r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/cambiar-agente.cmd" -RedirectStandardOutput $c -NoNewWindow -Wait -PassThru
@@ -265,7 +265,37 @@ if ($r.ExitCode -ne 0 -or -not (Test-Path $c) -or (Get-Item $c).Length -lt 100) 
 Move-Item -Force $c (Join-Path $d "cambiar-agente.cmd")
 "cambiar-agente.cmd: " + (Get-Item (Join-Path $d "cambiar-agente.cmd")).Length + " bytes"')" 120
 
-paso "5/5 · lanzando el cambiador DESPEGADO (el paso 2 del .cmd mata al agente que corre esto)"
+paso "5/6 · migrando el lanzador si trae la forma vieja del token (A102)"
+# EL LANZADOR TAMBIÉN SE DESPLIEGA, Y NADIE LO ACTUALIZABA.
+#
+# `agente.cmd` lo escribe SÓLO el instalador. Este guion refresca el binario y `cambiar-agente.cmd`
+# —con el argumento «el de la máquina puede ser viejo» escrito acá al lado— y nunca tocaba el
+# lanzador. Resultado medido en davantis-1 el 2026-09-05: la máquina seguía con
+# `set /p MUSUBI_DEVICE_TOKEN=<"...\device.token"`, la forma que `agente-windows.ps1:248` reemplazó
+# hace tiempo. El arreglo estaba en el repo y no había llegado a la máquina.
+#
+# Las tres consecuencias son de hoy y están vivas: la credencial queda EN EL ENTORNO del proceso
+# —el mecanismo exacto de A88, donde arreglar el archivo no le llega a un proceso que ya arrancó—;
+# la rotación en caliente no puede completarse porque `set /p` corre UNA sola vez al arrancar; y
+# `set /p` lee sólo la PRIMERA LÍNEA, así que el formato multi-token que existe para dar fallback a
+# una rotación nunca le llega al agente (se cruza con A101).
+#
+# Se migra EN EL LUGAR y no se regenera: el lanzador lleva valores propios de la máquina
+# (`MUSUBI_BRAIN_URL`, `MUSUBI_ALCANCE`, la ruta del token, la ruta del binario) que este guion no
+# conoce. Se cambia la línea del token y NADA más, con respaldo al lado.
+llamar "$(ps1 "$RESOLVER"'$lan = Join-Path $d "agente.cmd"
+if (-not (Test-Path $lan)) { "no hay agente.cmd en " + $d + ": esta maquina no la instalo agente-windows.ps1, no la toco"; exit 1 }
+$txt = Get-Content $lan -Raw
+if ($txt -match "(?im)^\s*set\s+MUSUBI_DEVICE_TOKEN_FILE\s*=") { "el lanzador ya pasa la RUTA del token: nada que migrar"; exit 0 }
+$m = [regex]::Match($txt, "(?im)^\s*set\s*/p\s+MUSUBI_DEVICE_TOKEN\s*=\s*<\s*""?([^""\r\n]+?)""?\s*$")
+if (-not $m.Success) { "el lanzador no tiene ni la forma vieja ni la nueva; NO lo toco. Contenido:"; Get-Content $lan; exit 1 }
+$ruta = $m.Groups[1].Value.Trim()
+Copy-Item -Force $lan ($lan + ".antes-de-la-ruta")
+$nuevo = [regex]::Replace($txt, "(?im)^\s*set\s*/p\s+MUSUBI_DEVICE_TOKEN\s*=\s*<.*$", ("set MUSUBI_DEVICE_TOKEN_FILE=" + $ruta))
+Set-Content -Encoding ASCII -Path $lan -Value $nuevo
+"lanzador migrado a la RUTA del token (" + $ruta + "); respaldo en agente.cmd.antes-de-la-ruta"')" 60
+
+paso "6/6 · lanzando el cambiador DESPEGADO (el paso 2 del .cmd mata al agente que corre esto)"
 llamar "$(ps1 "$RESOLVER"'$cmdPath = Join-Path $d "cambiar-agente.cmd"
 if (-not (Test-Path $cmdPath)) { "no esta el cambiador en " + $cmdPath; exit 1 }
 Start-Process -FilePath "cmd.exe" -ArgumentList "/c",$cmdPath -WindowStyle Hidden
@@ -290,11 +320,28 @@ for m in d.get("devices", []):
     # registrada con `-MultipleInstances IgnoreNew`— la máquina queda SIN AGENTE y este guion la
     # declara actualizada igual. El verde lo daría un campo que la prueba también escribe.
     paso "confirmando EN LA MÁQUINA que quedó un agente vivo, no sólo una versión escrita"
-    if llamar "$(ps1 "$RESOLVER"'$vivos = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $d "musubi.exe") })
-$tarea = (schtasks /query /tn "Musubi Agente de Flota" /fo list 2>&1 | Out-String)
+    if llamar "$(ps1 "$RESOLVER"'$exe = Join-Path $d "musubi.exe"
+$sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+if ($sha -ne "'"$SHA"'") { "el musubi.exe de la carpeta NO es el que se instalo (sha " + $sha + "): el cambiador no llego a ponerlo o algo lo piso"; exit 1 }
+$escrito = (Get-Item $exe).LastWriteTime
+$todos  = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
+$nuevos = @($todos | Where-Object { $_.StartTime -gt $escrito })
+$tarea  = (schtasks /query /tn "Musubi Agente de Flota" /fo list 2>&1 | Out-String)
 $estado = (($tarea -split "`r?`n" | Where-Object { $_ -match "Status|Estado" }) -join " ").Trim()
-if ($vivos.Count -eq 0) { "NO hay ningun proceso corriendo desde " + $d + " -- la version nueva la escribio el latido de PRUEBA del cambiador, no un agente vivo. Tarea: " + $estado; exit 1 }
-"agente vivo: " + $vivos.Count + " proceso(s) en " + $d + " | " + $estado')" 60; then
+if ($todos.Count -eq 0) { "NO hay ningun proceso corriendo desde " + $exe + " -- la version nueva la escribio el latido de PRUEBA del cambiador, no un agente vivo. Tarea: " + $estado; exit 1 }
+if ($nuevos.Count -eq 0) { "hay " + $todos.Count + " proceso(s) desde " + $exe + " y TODOS arrancaron ANTES de que ese archivo se escribiera (" + $escrito + "): corren la imagen VIEJA, que ya no esta en disco, y la version que reporta la fila es la de ellos. Tarea: " + $estado; exit 1 }
+$zombis = @($todos | Where-Object { $_.StartTime -lt $escrito })
+if ($zombis.Count -gt 0) {
+  # UN ZOMBI VIVO HACE FALLAR, NO ADVERTIR. Corre la imagen ANTERIOR —que ya no esta en disco— y
+  # sigue latiendo: puede ganar la proxima escritura de la fila y dejar al cerebro reportando la
+  # version vieja sobre una maquina que si se actualizo. Paso el 2026-09-05 y confundio el
+  # diagnostico durante horas. Ademas significa que el paso [1] del cambiador no logro matarlo.
+  # EL BINARIO YA ESTA PUESTO: esto no se arregla volviendo a correr el actualizador.
+  ($zombis | ForEach-Object { "zombi pid " + $_.Id + " arrancado " + $_.StartTime + " (el binario se escribio " + $escrito + ")" }) -join " | "
+  "El binario NUEVO ya esta instalado y verificado por sha. Lo que falta es matar esos procesos: Stop-Process -Id <pid> -Force"
+  exit 1
+}
+"agente NUEVO vivo: " + $nuevos.Count + " proceso(s), todos arrancados despues de instalar el binario, y sin zombis | " + $estado')" 60; then
       ok "ACTUALIZADA a $VERSION, con agente vivo confirmado en la máquina"
       exit 0
     fi

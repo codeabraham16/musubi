@@ -144,3 +144,54 @@ func TestElActualizadorNoCantaVictoriaSoloPorLaVersionReportada(t *testing.T) {
 		t.Fatal("el guion canta victoria ANTES de confirmar que quedó un agente vivo en la máquina")
 	}
 }
+
+// EL LANZADOR TAMBIÉN SE DESPLIEGA (A102).
+//
+// `agente.cmd` lo escribe SÓLO el instalador. El actualizador refrescaba el binario y
+// `cambiar-agente.cmd` —con el argumento «el de la máquina puede ser viejo» escrito en su propio
+// paso— y nunca el lanzador. Medido el 2026-09-05: `davantis-1` seguía con la forma vieja
+// `set /p MUSUBI_DEVICE_TOKEN=<archivo`, que mete la credencial en el ENTORNO del proceso, corre
+// una sola vez al arrancar —así que la rotación en caliente vence siempre— y lee sólo la PRIMERA
+// línea del archivo, tirando el formato multi-token que existe para dar fallback a esa rotación.
+// El arreglo estaba en el repo desde hacía tiempo y no había llegado a la máquina.
+//
+// Sabotaje que la hace fallar: sacar el paso que migra el lanzador.
+func TestElActualizadorTambienRefrescaElLanzador(t *testing.T) {
+	g := leerDeploy(t, "actualizar-agente-windows.sh")
+	if !strings.Contains(g, "agente.cmd") {
+		t.Fatal("el actualizador dejó de tocar `agente.cmd`: refresca el binario y el cambiador y\n" +
+			"deja el lanzador viejo, que es donde vive la forma insegura del token (cabo A102)")
+	}
+	if !strings.Contains(g, "MUSUBI_DEVICE_TOKEN_FILE") {
+		t.Fatal("el paso del lanzador ya no migra a `MUSUBI_DEVICE_TOKEN_FILE`: sin eso la credencial\n" +
+			"sigue yendo por el entorno y la rotación en caliente no se puede completar")
+	}
+	// El respaldo importa tanto como la migración: se reescribe un archivo que el instalador
+	// generó con valores propios de la máquina.
+	if !strings.Contains(g, "antes-de-la-ruta") {
+		t.Fatal("la migración del lanzador dejó de dejar respaldo antes de reescribirlo")
+	}
+}
+
+// LA CONFIRMACIÓN FINAL NO PUEDE CONFORMARSE CON «HAY UN PROCESO VIVO».
+//
+// El 2026-09-05 la fila de `davantis-1` reportó durante horas una versión que NO ESTABA EN NINGÚN
+// ARCHIVO: la escribía un proceso arrancado antes de que el binario se reemplazara, corriendo una
+// imagen que ya no existía en disco. Un chequeo de «hay proceso vivo en esa carpeta» lo habría
+// dado por bueno. La propiedad que sí distingue es local a la máquina y no necesita relojes
+// sincronizados: el proceso tiene que haber arrancado DESPUÉS de que el archivo se escribiera.
+//
+// Sabotaje que la hace fallar: sacar la comparación de StartTime contra LastWriteTime.
+func TestLaConfirmacionExigeUnProcesoMasNuevoQueElBinario(t *testing.T) {
+	g := leerDeploy(t, "actualizar-agente-windows.sh")
+	for _, frase := range []string{
+		"LastWriteTime",             // cuándo se escribió el binario
+		"$_.StartTime -gt $escrito", // el proceso arrancó después
+		"Get-FileHash $exe",         // y además es EL binario que se instaló
+	} {
+		if !strings.Contains(g, frase) {
+			t.Fatalf("la confirmación final perdió `%s`: sin eso, un zombi corriendo la imagen vieja\n"+
+				"la satisface, que es exactamente lo que confundió el diagnóstico del 2026-09-05", frase)
+		}
+	}
+}
