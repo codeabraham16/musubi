@@ -38,6 +38,10 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	"PoliticaQueNoCura":          "cuenta acciones de política, y la ventana ya impide que la política actúe",
 	"PoliticaSinPermiso":         "cuenta rechazos del motor de políticas, no el estado de una máquina",
 	"AllowlistDeFlotaRechazando": "cuenta rechazos de la allowlist de tools, del lado del cerebro",
+	// Misma familia: cuenta rechazos por consentimiento del motor de políticas. Y la ventana ya
+	// corta la causa DOS niveles antes — durante el mantenimiento la política no se evalúa
+	// (`contarPolitica(pol, "mantenimiento")`), así que el contador de consentimiento no se mueve.
+	"PoliticaFrenadaPorConsentimiento": "cuenta rechazos por consentimiento del motor de políticas, no el estado de una máquina",
 
 	// Las de custodia miran `prometheus_rule_group_rules`: hablan del DESPLIEGUE de los archivos de
 	// reglas, no de ninguna máquina. Una ventana de mantenimiento sobre un equipo no tiene nada que

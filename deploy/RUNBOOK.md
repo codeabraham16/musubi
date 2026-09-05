@@ -231,6 +231,67 @@ musubi_fleet_log --project <proyecto> --limite 50
 **Qué hacer:** buscar la causa (el servicio que llena el disco, el proceso que come RAM), no
 subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
 
+## PoliticaFrenadaPorConsentimiento
+
+**`info`, y a propósito: no es una falla.** El eje de consentimiento hizo exactamente lo que
+promete — la máquina está en `prohibido` (el candado del dueño) o en `pide` (exige que su usuario
+acepte, y un barrido por temporizador no tiene dónde esperar esa respuesta), así que el auto-heal
+no actuó.
+
+**Lo que hay que resolver es una CONTRADICCIÓN, no un error**: hay una política que apunta a esa
+máquina y un grado que no la deja. Mientras siga así, esa máquina **no se auto-cura y nadie más lo
+va a notar** — que es precisamente el motivo de que esta alerta exista.
+
+### Por qué existe esta alerta
+
+La decisión de endurecer `exec` bajo `pide` (**A86**) y de que el eje gobierne al auto-heal
+(**A91**) se tomó pesando dos errores con esta regla: *«los dos errores no cuestan igual: bloquear
+de más SE NOTA —el auto-heal deja de actuar y alguien lo ve—, y ejecutar sin preguntar no se nota
+nunca»*. Medido el 2026-09-05: **ese «alguien lo ve» no existía.** No había métrica ni alerta de un
+rechazo por consentimiento, así que lo único que avisaba era el texto de un rechazo RPC de un `exec`
+pedido a mano. La premisa era falsa y la decisión se había tomado sobre ella. Esto es el mecanismo
+que la vuelve verdadera.
+
+### Qué mirar
+
+La métrica **no lleva etiqueta `device`** —cardinalidad políticas × máquinas × resultados, con dos
+mil máquinas de horizonte—, así que dice QUE pasa y no DÓNDE. El dónde está en el journal, que lo
+nombra una vez y no en cada tick:
+
+```bash
+ssh musubi-server 'journalctl -u musubi-brain --since "24 hours ago" | grep -i "frenada por el consentimiento\|exige que su usuario"'
+```
+
+Y qué grado tiene cada máquina, con el efectivo al lado:
+
+```bash
+./deploy/musubi-tool.sh musubi_fleet_list | python3 -c 'import sys,json
+for d in json.load(sys.stdin)["devices"]:
+    print(f"{d[\"name\"]:16} declarado={d.get(\"consentimiento\",\"-\"):10} efectivo={d.get(\"consentimiento_efectivo\",\"-\")}")'
+```
+
+**Los dos resultados se cuentan separados y significan cosas distintas:**
+
+- `consentimiento_prohibido` — decisión firme del dueño. No hay nada que arreglar en el código: o se
+  baja el grado, o la política deja de incluir a esa máquina. Dejarlo así es válido **si es
+  deliberado**; lo que no es válido es que nadie sepa.
+- `consentimiento_pide` — es **la puerta que quedó abierta**. Se podría encolar un
+  `musubi:preguntar` y actuar en el tick siguiente si la respuesta llegó, pero eso exige guardar y
+  expirar el estado de una aprobación por (política × máquina), que es un mecanismo entero y no una
+  rama de un `switch`. Este contador mide exactamente cuánto se ganaría implementándolo: si está en
+  cero, no vale la pena.
+
+### Lo que NO hay que hacer
+
+**Bajar la máquina a `avisa` «para que el auto-heal siga funcionando» sin preguntarle a su dueño.**
+El grado lo responde quien usa la máquina, no quien administra la flota — es el motivo por el que
+`musubi_fleet_consent` es ADMIN y no `screen`. Si el que entra pudiera aflojar la política, el eje
+entero sería decoración.
+
+**Ojo con el efectivo contra el declarado**: `puede_preguntar = false` endurece un `pide` a
+`prohibido` sola, así que una máquina puede estar frenada por un grado que nadie eligió. Eso es
+**A94** y se ve en la columna `efectivo` del comando de arriba.
+
 ## PoliticaSinPermiso
 
 Una política quiso actuar y **no pudo**: quedó inerte. Las dos causas, en orden de frecuencia:

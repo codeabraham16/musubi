@@ -229,7 +229,15 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 	// Volvió a resolver: se rearma el aviso, para que una segunda revocación se vuelva a avisar.
 	s.avisosDados.Delete("sin_principal:" + pol.Nombre)
 
-	// LAS DOS COMPUERTAS, LAS MISMAS QUE PARA UNA PERSONA. No hay atajo por ser automático.
+	// LAS TRES COMPUERTAS, LAS MISMAS QUE PARA UNA PERSONA. No hay atajo por ser automático.
+	//
+	// Eran DOS —capacidad y allowlist— y el comentario decía «las mismas que para una persona»
+	// mientras una persona ya pasaba TRES. Esa tercera es el eje de consentimiento, y su ausencia
+	// acá es A91: medido el 2026-09-05 corriendo el barrido real, una máquina en `prohibido`
+	// recibía el comando igual, y bajo `avisa` no se encolaba ningún aviso. El eje se describe en
+	// todas las superficies como «el candado del dueño de la máquina, que no se abre NUNCA» y
+	// cerraba los tres caminos con una persona detrás y ninguno cuando la orden la dispara un
+	// temporizador. Decisión de gio (2026-09-05): el eje GOBIERNA al auto-heal.
 	if !PuedeSobreDevice(pr, d, fleet.CapExec) {
 		// Por máquina, y una vez: un rechazo de compuerta también es un estado que dura hasta que
 		// alguien edite el registro, no un evento.
@@ -252,6 +260,55 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 		return false
 	}
 	s.avisosDados.Delete("allowlist:" + pol.Nombre + "\x00" + d.ID)
+
+	// ── TERCERA COMPUERTA · EL EJE DE CONSENTIMIENTO (A91) ─────────────────────────────────────
+	//
+	// EL ORDEN DEL SWITCH NO ES ESTÉTICO Y ES EL DEFECTO DE A83/A85: `AvisaAlUsuario()` es true
+	// para `pide` TAMBIÉN —es `nivel >= avisa`—, así que preguntar por `avisa` primero manda un
+	// aviso y ejecuta igual en una máquina que exigía una respuesta. `pide` va antes.
+	//
+	// `ConsentimientoEfectivo()` ya endurece `pide` a `prohibido` cuando la máquina no sabe
+	// preguntar, así que acá `pide` sólo llega desde una máquina que SÍ podría — y aun así frena.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.Bloquea():
+		// El candado del dueño. Es su decisión y no una falla, así que se dice UNA vez y se cuenta:
+		// esto dura hasta que alguien cambie el grado o saque la máquina de la política, no es un
+		// evento.
+		s.avisarUnaVez("consentimiento:"+pol.Nombre+"\x00"+d.ID, func() {
+			logx.Warn("política frenada por el consentimiento de la máquina: no actúa",
+				"politica", pol.Nombre, "device", d.Name, "grado", string(consent),
+				"nota", "es la decisión del dueño de esa máquina, no un error de configuración; "+
+					"para automatizarla hay que bajarle el grado o sacarla del alcance de la política")
+		})
+		s.metrics.contarPolitica(pol.Nombre, "consentimiento_prohibido")
+		return false
+	case consent == fleet.ConsentimientoPide:
+		// MISMA RAZÓN QUE A86 EN `exec`, Y VALE MÁS ACÁ: `pide` promete que su usuario ACEPTE antes
+		// de que pase algo, y un barrido por temporizador no tiene dónde esperar esa respuesta. Un
+		// `exec` a mano al menos tiene una persona del otro lado que puede reintentar; una política
+		// corre sola, así que actuar sería romper la promesa sin nadie que lo note.
+		//
+		// LA PUERTA QUE QUEDA ABIERTA, dicha para que no se descubra desplegando: se podría encolar
+		// un `musubi:preguntar` y actuar en el tick siguiente si la respuesta llegó. Eso exige
+		// guardar el estado de una aprobación por (política × máquina) y expirarlo, que es un
+		// mecanismo entero y no una rama de un switch. No se hizo, y se cuenta aparte de
+		// `prohibido` justamente para poder medir cuánto costaría.
+		s.avisarUnaVez("consentimiento:"+pol.Nombre+"\x00"+d.ID, func() {
+			logx.Warn("política frenada porque la máquina exige que su usuario ACEPTE, y un barrido no puede esperar",
+				"politica", pol.Nombre, "device", d.Name, "grado", string(consent),
+				"nota", "mismo criterio que A86 para `exec`; si esta máquina tiene que automatizarse, "+
+					"bajala a `avisa`, que sí notifica y no bloquea")
+		})
+		s.metrics.contarPolitica(pol.Nombre, "consentimiento_pide")
+		return false
+	case consent.AvisaAlUsuario():
+		// Y ACÁ SE REUSA EL ENCOLADOR ÚNICO, que es todo el punto de A83: había DOS copias del
+		// bloque de aviso, se agregó un tercer camino, nadie se acordó de copiarlo, y el eje quedó
+		// escrito y sin efecto. Escribir una cuarta copia acá habría dejado la causa intacta para
+		// el quinto camino. Se agrega una frase a `avisoPolitica` y se llama a la función.
+		s.encolarAvisoDeAcceso(d, pr, avisoPolitica)
+	}
+	s.avisosDados.Delete("consentimiento:" + pol.Nombre + "\x00" + d.ID)
 
 	// El cooldown se marca ANTES de ejecutar. Si se marcara después, un comando lento (o un
 	// cerebro que se cae a mitad) dejaría la puerta abierta para que el próximo tick dispare otra

@@ -645,6 +645,16 @@ var (
 	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla}
 	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell}
 	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec}
+	// EL CUARTO CAMINO, y el que no tenía aviso hasta A91. Va con HechoCanalExec porque lo que la
+	// política encola ES un exec: darle una clase propia partiría la bitácora del plano de actuar
+	// en dos, y la mitad automática es justo la que nadie miró ejecutarse (I16).
+	//
+	// EL TEXTO NO NOMBRA UNA PERSONA, y por eso está redactado distinto de los otros tres: acá
+	// `quien` es el principal de la política (`auto-heal`), no alguien sentado en otra máquina. Un
+	// aviso que dijera «auto-heal está ejecutando comandos» se lee como si hubiera un humano
+	// llamado así; decir que es automático es la única forma de que la persona sepa que no hay a
+	// quién preguntarle.
+	avisoPolitica = avisoDeAcceso{"corrió una acción automática de mantenimiento en esta máquina.", fleet.HechoCanalExec}
 )
 
 // encolarAvisoDeAcceso le manda al agente el aviso que `avisa` promete (A57).

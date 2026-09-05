@@ -367,6 +367,32 @@ groups:
       # La política está viva pero NO PUEDE actuar: su principal perdió la concesión `exec`, o el
       # comando dejó de estar en su allowlist. Es una alarma apagada, y una alarma apagada en
       # silencio es la razón por la que existe la mitad de este slice.
+      # UNA POLÍTICA QUE APUNTA A UNA MÁQUINA CUYO DUEÑO DIJO QUE NO (A91).
+      #
+      # NO ES UNA FALLA, y por eso es `info` y no `warning`: el eje de consentimiento hizo
+      # exactamente lo que promete. Lo que esta alerta existe para contestar es otra cosa — la
+      # decisión de endurecer `exec` y el auto-heal bajo `pide`/`prohibido` (A86, A91) se tomó
+      # pesando dos errores con la regla «el que elegimos SE NOTA: el auto-heal deja de actuar y
+      # alguien lo ve». Ese «alguien lo ve» NO EXISTÍA: no había métrica ni alerta de un rechazo
+      # por consentimiento, así que la premisa de la decisión era falsa. Esto es el mecanismo.
+      #
+      # LA VENTANA ES LARGA A PROPÓSITO: `increase[24h] > 0` con `for: 6h` significa «esto viene
+      # pasando desde hace rato», no «pasó una vez». Una política frenada por consentimiento es un
+      # ESTADO —dura hasta que alguien cambie el grado o saque la máquina del alcance— y avisar de
+      # cada tick serían 288 notificaciones por día, que es cómo se apaga un canal.
+      #
+      # LO QUE NO DICE: en qué máquina. La métrica no lleva etiqueta `device` a propósito (ver
+      # contarPolitica: cardinalidad políticas × máquinas × resultados, con dos mil máquinas de
+      # horizonte). El journal la nombra y `musubi_fleet_cronologia` también.
+      - alert: PoliticaFrenadaPorConsentimiento
+        expr: increase(musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}[24h]) > 0
+        for: 6h
+        labels: { severity: info }
+        annotations:
+          summary: "Una política no actúa sobre alguna máquina porque su dueño no lo permite."
+          nota: "El eje funcionó: `prohibido` o `pide` frenaron el auto-heal. Lo que hay que resolver es la CONTRADICCIÓN entre una política que apunta a esa máquina y un grado que no la deja: o el dueño la baja a `avisa`, o la política deja de incluirla. Mientras siga así, esa máquina no se auto-cura y nadie más lo va a notar."
+          runbook: "deploy/RUNBOOK.md#politicafrenadaporconsentimiento"
+
       - alert: PoliticaSinPermiso
         expr: increase(musubi_fleet_policy_actions_total{result=~"rechazada|sin_principal"}[1h]) > 0
         for: 5m

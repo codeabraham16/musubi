@@ -291,7 +291,24 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 }
 
 // contarPolitica anota una acción de auto-heal.
-// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento".
+// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento" |
+// "consentimiento_prohibido" | "consentimiento_pide".
+//
+// LOS DOS ÚLTIMOS SON EL MECANISMO DE A91, Y HAY QUE DECIR POR QUÉ HACÍAN FALTA. La decisión de
+// endurecer se tomó pesando dos errores con la regla «el que elegimos SE NOTA: el auto-heal deja
+// de actuar y alguien lo ve». Ese «alguien lo ve» no existía: no había métrica ni alerta de un
+// rechazo por consentimiento, así que lo único que avisaba era el texto de un rechazo RPC pedido a
+// mano. Una premisa sin mecanismo es una premisa falsa, y sobre ella se decidió.
+//
+// SE CUENTAN SEPARADOS —`prohibido` y `pide`— porque cuestan distinto y se arreglan distinto:
+// `prohibido` es una decisión firme del dueño y no hay nada que hacer; `pide` es la puerta que
+// quedó abierta (podría preguntarse y actuar en el tick siguiente), así que su contador mide
+// exactamente cuánto se ganaría implementándola.
+//
+// NO LLEVAN ETIQUETA `device`, Y ES DELIBERADO. La pregunta «¿en qué máquina?» la contesta el
+// journal —`avisarUnaVez` la nombra— y `musubi_fleet_cronologia`. Sumar `device` acá haría la
+// cardinalidad políticas × máquinas × resultados, y este diseño apunta a dos mil máquinas: la
+// serie que sirve para ver QUE pasa no tiene que ser la misma que dice DÓNDE.
 func (m *serverMetrics) contarPolitica(politica, resultado string) {
 	if m == nil {
 		return

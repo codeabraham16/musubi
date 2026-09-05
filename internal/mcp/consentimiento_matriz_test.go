@@ -73,6 +73,15 @@ func TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados(t *testing.T) {
 		// el código sino en la máquina — su dueño baja el grado a `avisa`, que es una decisión
 		// explícita y queda registrada.
 		//
+		// ESTA FRASE ERA FALSA CUANDO SE ESCRIBIÓ, Y HOY ES VERDAD. Medido el 2026-09-05: el
+		// auto-heal NO pasaba por el eje, así que una máquina en `pide` seguía recibiendo su exec
+		// igual —el costo declarado no se pagaba, y con eso se caía también el argumento «bloquear
+		// de más SE NOTA» con el que se eligió endurecer—. A91 (decisión de gio, el mismo día)
+		// puso la tercera compuerta en `actuarSiCorresponde`, y la fila de `pide` de
+		// TestElAutoHealPasaPorElEjeDeConsentimiento es la que ahora lo MIDE en vez de suponerlo.
+		// Se deja escrito porque un texto que pasó de falso a verdadero sin que nadie lo tocara es
+		// el caso donde más fácil se vuelve a mentir.
+		//
 		// Se eligió endurecer y no preguntar-por-comando porque endurecer NO INVENTA
 		// COMPORTAMIENTO: es la misma regla que el dominio ya aplica cuando no hay a quién
 		// preguntarle. Y porque los dos errores no cuestan igual — bloquear de más se nota, y
