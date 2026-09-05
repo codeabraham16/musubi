@@ -19,13 +19,34 @@ import (
 // de modo que el .mcp.json no necesita hardcodear la ruta del proyecto. Cae al
 // directorio actual como último recurso.
 func workspaceDir() string {
+	raiz, _ := workspaceDirConOrigen()
+	return raiz
+}
+
+// workspaceDirConOrigen devuelve la raíz Y POR QUÉ ES ÉSA, que es la mitad que faltaba.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL AVISO DE ARRANQUE DECÍA UNA CAUSA FALSA, Y ES LA QUE COSTÓ TRES HIPÓTESIS
+//
+// `avisarQueConfigGobierna` cerraba con «manda el del directorio de trabajo». En esta máquina eso
+// es FALSO: los daemons no tienen `MUSUBI_HOME` pero sí `CLAUDE_PROJECT_DIR`, así que la raíz sale
+// de la variable y el cwd sólo coincide por casualidad. Medido el 2026-09-05 en
+// `/proc/<pid>/environ`. El cabo A96 también lo creía y lo dejó escrito.
+//
+// Un diagnóstico que nombra la causa equivocada es peor que no tenerlo: manda a mirar el cwd, que
+// se puede cambiar, en vez de la variable, que es la que decide. Y esta línea existe justamente
+// para que nadie pierda el tiempo con la hipótesis equivocada.
+func workspaceDirConOrigen() (raiz, origen string) {
 	if home := os.Getenv("MUSUBI_HOME"); home != "" {
-		return home
+		return home, "MUSUBI_HOME"
 	}
 	if proj := os.Getenv("CLAUDE_PROJECT_DIR"); proj != "" {
-		return proj
+		return proj, "CLAUDE_PROJECT_DIR"
 	}
-	return "."
+	// EL ÚNICO CASO EN QUE EL CWD MANDA — y también el único en que una sombra puede tomar el
+	// mando: correr un comando desde $HOME sin ninguna de las dos variables toma $HOME como
+	// workspace, y ahí `ensureWorkspace` planta un config nuevo. Así nació la sombra de A96.
+	return ".", "el directorio actual (sin MUSUBI_HOME ni CLAUDE_PROJECT_DIR)"
 }
 
 // ensureWorkspace crea el directorio .musubi y un config.yaml por defecto si faltan.

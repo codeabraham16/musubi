@@ -60,7 +60,8 @@ func SecretoDeEnv(nombre string) (string, error) {
 	// intentos de diagnóstico el 2026-08-31 con todo lo demás verificado correcto (A89).
 	//
 	// POR QUÉ SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA: acá no hay un formato multi-token
-	// definido. El que SÍ existe —una lista de tokens, el más nuevo primero, para que una rotación
+	// definido. El que SÍ existe —una lista de tokens, el más VIEJO primero —se APENDEA (`apendarToken`), medido en
+	// `agent_token_test.go:56-58`— para que una rotación
 	// tenga fallback— es del token de DISPOSITIVO y lo lee `cmd/musubi/agent_token.go`, que es otra
 	// variable (`MUSUBI_DEVICE_TOKEN_FILE`). Quedarse con la primera línea acá inventaría ese
 	// formato para un camino que no lo tiene, y elegiría en silencio entre dos credenciales cuando

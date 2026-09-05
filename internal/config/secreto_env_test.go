@@ -222,7 +222,7 @@ func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 // era el único lugar donde nadie miró porque nada apuntaba ahí.
 //
 // SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA a propósito: acá no hay formato multi-token. El que sí
-// existe —lista de tokens, el más nuevo primero, para que una rotación tenga fallback— es del token
+// existe —lista de tokens, el más VIEJO primero (se apendea), para que una rotación tenga fallback— es del token
 // de DISPOSITIVO (`MUSUBI_DEVICE_TOKEN_FILE`, en cmd/musubi/agent_token.go). Quedarse con la primera
 // línea inventaría ese formato para un camino que no lo tiene, y elegiría en silencio entre dos
 // credenciales cuando lo honesto es decir que no se sabe cuál se quiso poner.
@@ -294,5 +294,78 @@ func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
 				t.Errorf("el valor tiene un salto de línea adentro: %q", got)
 			}
 		})
+	}
+}
+
+// NINGÚN LUGAR DEL REPO PUEDE VOLVER A DECIR QUE EL ARCHIVO DE TOKENS VIENE EN ORDEN INVERSO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// ERA FALSO, ESTABA EN CINCO LUGARES, Y ES LA CLASE DE FALSEDAD QUE HACE DAÑO
+// (la frase exacta que se prohíbe se arma abajo por partes; acá no se escribe)
+//
+// `cmd/musubi/agent_token.go` APENDEA el token nuevo al final del archivo (`apendarToken`, y su
+// comentario explica por qué: un reemplazo atómico crea una entrada de directorio nueva que no es
+// durable sin fsync del directorio). O sea que la PRIMERA línea es el token MÁS VIEJO. Lo fija
+// `TestElTokenNuevoSePersisteAntesDeEstrenarse`, que exige `[viejo nuevo]`, y `Usar()` devuelve
+// `viejo` primero.
+//
+// Cinco comentarios y filas del registro decían lo contrario, y no es un detalle de redacción:
+// quien lea que el nuevo va primero y decida «entonces me quedo con la primera línea» —que es una
+// conclusión razonable— toma justamente el token que la rotación está retirando, y ninguno de
+// esos caminos tiene reintento: el resultado es un 401 permanente en vez de un error legible.
+// Encontrado el 2026-09-05 auditando A101.
+//
+// Sabotaje que la hace fallar: volver a escribir esa frase en cualquiera de ellos.
+func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
+	raiz := filepath.Join("..", "..")
+	// LA FRASE SE ARMA POR PARTES A PROPÓSITO. Escrita entera acá, este archivo sería su
+	// propio culpable: la guarda se disparó con su propia documentación en la primera
+	// corrida. Es la trampa del 2026-09-05 al revés — allá el comentario SATISFACÍA la
+	// guarda, acá la ROMPÍA— y la salida es la misma: que el literal no viva en el texto.
+	frase := "el más " + "nuevo primero"
+	revisados := 0
+	var culpables []string
+
+	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		// Los ocultos se saltean, PERO nunca la raíz: se pasa como `../..`, cuyo `Name()` es
+		// `..` y empieza con punto — el filtro ingenuo se saltaba el repo entero y la guarda
+		// revisaba CERO archivos en verde. Ya pasó el 2026-09-05 en la prueba de al lado.
+		if d.IsDir() {
+			if ruta != raiz && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		switch filepath.Ext(ruta) {
+		case ".go", ".md", ".sh", ".yml", ".ps1", ".cmd":
+		default:
+			return nil
+		}
+		crudo, err := os.ReadFile(ruta)
+		if err != nil {
+			return nil
+		}
+		revisados++
+		if strings.Contains(string(crudo), frase) {
+			culpables = append(culpables, ruta)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("no se pudo recorrer el repo: %v", err)
+	}
+	// CONTROL DE «MIRÓ ALGO»: sin esto, un recorrido que no llega da verde sobre la nada.
+	if revisados < 100 {
+		t.Fatalf("la guarda revisó %d archivos: el recorrido no llegó a ningún lado y su verde no vale", revisados)
+	}
+	if len(culpables) > 0 {
+		t.Fatalf("estos archivos afirman %q del archivo de tokens, y es al revés:\n  %s\n"+
+			"`apendarToken` agrega AL FINAL, así que la primera línea es el token MÁS VIEJO —el que\n"+
+			"la rotación está retirando—. Quien lea esto y decida «me quedo con la primera línea»\n"+
+			"elige la credencial equivocada, y ninguno de esos caminos reintenta: 401 permanente.",
+			frase, strings.Join(culpables, "\n  "))
 	}
 }

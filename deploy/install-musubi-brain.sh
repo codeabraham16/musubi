@@ -85,11 +85,32 @@ else
 fi
 CFG="$BRAIN_HOME/.musubi/config.yaml"
 
-# ── 3. Bloque service (idempotente: siempre lo deja en el estado deseado) ────
-# 'service:' es el último bloque del config generado por 'musubi init'.
+# --- 3. Bloque service (idempotente: siempre lo deja en el estado deseado) ---
+#
+# SE BORRA SOLO EL BLOQUE service, NO DE AHI HASTA EL FINAL.
+#
+# Esto decia `sed -i '/^service:/,$d'` y se justificaba con "'service:' es el ultimo bloque del
+# config generado por 'musubi init'". Fue verdad y dejo de serlo: hoy `Default().Marshal()` pone
+# `service:` en la linea 119 y `sync:` en la 123 (medido el 2026-09-05). O sea que re-correr este
+# instalador BORRA la configuracion de sync que hubiera, sin decir nada.
+#
+# Hoy el dano es cero porque el cerebro no tiene bloque sync -- pero eso es una foto, no una
+# garantia, y es exactamente la forma que este repo persigue: un comentario que describe un estado
+# anterior y se lee como el actual. El `.bak` de al lado es la unica red, y se pisa en cada corrida.
+#
+# Se borra hasta la proxima clave de primer nivel (una linea que empieza sin espacio y no es
+# comentario), que es lo que "el bloque service" significa en YAML.
 log "Configurando bloque service (addr=$BRAIN_ADDR)"
 cp -f "$CFG" "$CFG.bak"
-sed -i '/^service:/,$d' "$CFG"
+awk '
+  /^service:/ { dentro=1; next }
+  dentro && /^[^[:space:]#]/ { dentro=0 }
+  !dentro
+' "$CFG" > "$CFG.sin-service"
+# `cat >` y no `mv`: conserva el inodo y la etiqueta del archivo. Es la leccion de A82 y la de
+# SELinux -- un `mv` crea una entrada nueva y le cambia el contexto al destino.
+cat "$CFG.sin-service" > "$CFG"
+rm -f "$CFG.sin-service"
 cat >> "$CFG" <<EOF
 service:
     enabled: true

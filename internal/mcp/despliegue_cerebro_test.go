@@ -130,3 +130,45 @@ func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 		t.Error("el script no exige el sha256 del binario: ya se desplegó una descarga truncada que reportó éxito")
 	}
 }
+
+// EL INSTALADOR DEL CEREBRO NO PUEDE BORRAR DE `service:` HASTA EL FINAL DEL ARCHIVO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UN COMENTARIO QUE FUE VERDAD Y DEJÓ DE SERLO, BORRANDO CONFIGURACIÓN EN SILENCIO
+//
+// `install-musubi-brain.sh` reescribe el bloque `service:` de forma idempotente, y lo hacía con
+// `sed -i '/^service:/,$d'` justificado así: «'service:' es el último bloque del config generado
+// por 'musubi init'». Fue cierto. Hoy `Default().Marshal()` pone `service:` en la línea 119 y
+// `sync:` en la 123 — medido el 2026-09-05 generando el archivo: el `sed` lo dejaba en 118 líneas
+// y el bloque `sync` desaparecía.
+//
+// O sea que RE-CORRER EL INSTALADOR borraba la configuración de sync del cerebro sin decir nada.
+// El daño de hoy es cero porque ese cerebro no tiene bloque sync, pero eso es una foto: cualquier
+// máquina que sí lo tenga lo pierde en el próximo despliegue, y el `.bak` de al lado se pisa en
+// cada corrida.
+//
+// Sabotaje que la hace fallar: volver a poner el `sed -i '/^service:/,$d'`.
+func TestElInstaladorDelCerebroNoSeComeLoQueVieneDespuesDeService(t *testing.T) {
+	guion := leerDeploy(t, "install-musubi-brain.sh")
+
+	for i, linea := range strings.Split(guion, "\n") {
+		desnuda := strings.TrimSpace(linea)
+		if strings.HasPrefix(desnuda, "#") {
+			continue
+		}
+		// El rango `/^service:/,$` es el que borra hasta el final. Se busca la TUBERÍA, no la
+		// palabra: `sed` y `service` sueltos aparecen en otros lados legítimamente.
+		if strings.Contains(linea, "sed") && strings.Contains(linea, "/^service:/,$") {
+			t.Fatalf("línea %d: el instalador volvió a borrar de `service:` hasta el final:\n  %s\n"+
+				"`service:` YA NO es el último bloque del config —`sync:` viene después— así que eso\n"+
+				"borra la configuración de sync del cerebro en cada re-despliegue, en silencio.",
+				i+1, desnuda)
+		}
+	}
+
+	// Y la contraparte: el bloque service se sigue reescribiendo. Sin esto, «arreglar» el sed
+	// borrándolo entero pasaría esta guarda dejando al cerebro sin su bloque service.
+	if !strings.Contains(guion, "service:") || !strings.Contains(guion, "enabled: true") {
+		t.Fatal("el instalador dejó de escribir el bloque `service:`: el cerebro no expondría su daemon")
+	}
+}

@@ -197,7 +197,13 @@ func avisarQueConfigGobierna(root string) {
 		fmt.Fprintf(os.Stderr, "musubi: configuración cargada de %s\n", ruta)
 	}
 	if sombra := config.ConfigSombra(root); sombra != "" {
-		fmt.Fprintf(os.Stderr, "musubi: OJO — también existe %s y NO gobierna a este proceso (manda el del directorio de trabajo)\n", sombra)
+		// SE DICE DE DÓNDE SALIÓ LA RAÍZ, no «del directorio de trabajo». Esa frase era falsa en
+		// la máquina donde más importaba: la raíz salía de CLAUDE_PROJECT_DIR y el cwd sólo
+		// coincidía. Mandar a mirar el cwd —que se puede cambiar— en vez de la variable —que es
+		// la que decide— es exactamente la hipótesis equivocada que este aviso viene a matar.
+		_, origen := workspaceDirConOrigen()
+		fmt.Fprintf(os.Stderr, "musubi: OJO — también existe %s y NO gobierna a este proceso "+
+			"(la raíz sale de %s)\n", sombra, origen)
 	}
 }
 

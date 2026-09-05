@@ -271,6 +271,20 @@ groups:
       # --- Temperatura ---
       # Sólo dispara donde hay sensor: la serie no existe en las máquinas sin él, así que esto
       # no alerta por ausencia de dato (que es justamente lo que un 0 inventado habría hecho).
+      #
+      # WINDOWS YA NO ESTÁ AFUERA, DESDE EL 2026-09-05. La anotación decía «os=windows — el sensor
+      # se saca por WMI y eso sigue abierto (A2)», y eso dejó de ser cierto el día que el agente
+      # nuevo llegó a `davantis-1`: `colector_windows.go` lee `MSAcpi_ThermalZoneTemperature` cada
+      # dos minutos y la serie existe. Un `ausente_en` que nombra un hueco que ya se tapó le dice
+      # a un operador que esa máquina NO está cubierta cuando sí lo está — es la misma familia que
+      # el resto del registro persigue: un texto que describe un estado anterior y se lee como el
+      # actual.
+      #
+      # LO QUE SIGUE SIN SABERSE, y no se disfraza: la zona térmica ACPI es GRUESA (escalones de
+      # 1 K; las tres primeras lecturas dieron 29,85 °C exacto) y puede ser de chasis y no de CPU,
+      # que es literalmente el defecto que ya se arregló del lado de Linux. Con 85 °C de umbral,
+      # un sensor de chasis NO va a disparar aunque el die esté ardiendo. O sea: la serie existe,
+      # la alerta la mira, y todavía no está medido que sirva para lo que hace falta en A79.
       - alert: TemperaturaAlta
         expr: (musubi_fleet_device_temperature_celsius > 85) unless on(project, device) (musubi_fleet_device_up == 0)
           unless on(project, device) (musubi_fleet_device_maintenance == 1)
@@ -278,7 +292,7 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "A {{ $value | printf \"%.0f\" }}°C."
-          ausente_en: "os=windows — el sensor se saca por WMI y eso sigue abierto (A2); tier=B — un host sondeado por SSH no expone su zona térmica."
+          ausente_en: "tier=B — un host sondeado por SSH no expone su zona térmica."
 
       # --- LA TRAMPA SILENCIOSA ---
       # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
