@@ -244,15 +244,65 @@ log "podando puntos de retorno viejos (retención $RETENER; se cambia con REDESP
 podar_puntos_de_retorno "snapshots pre-despliegue" "$(dirname "$RESPALDO")"  'pre-redespliegue-*.db' "$RESPALDO"
 podar_puntos_de_retorno "binarios apartados"       "$(dirname "$BIN_VIEJO")" 'musubi.antes-de-*'     "$BIN_VIEJO"
 
-echo
-aviso "El punto de retorno queda guardado. Para volver atrás A MANO:"
-echo "    systemctl stop ${SERVICIOS[*]}"
-echo "    cp -a $BIN_VIEJO $DESTINO"
-echo "    cp -a $RESPALDO $BASE && rm -f $BASE-wal $BASE-shm && chown musubi:musubi $BASE"
-echo "    systemctl start ${SERVICIOS[*]}"
-echo
-aviso "Los DE ESTA CORRIDA quedan: el esquema NO vuelve solo, y sin ese .db no hay vuelta. Los
-       anteriores más allá de los $RETENER más nuevos ya los podó este script (A87)."
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# LA RECETA DE VUELTA ATRÁS DEPENDE DE SI ESTA CORRIDA MIGRÓ, Y ANTES NO
+#
+# Se imprimía UNA sola receta, con el `cp -a $RESPALDO $BASE` incluido siempre. La mayoría de los
+# redespliegues NO migran —hoy fue 46 → 46—, y en ese caso restaurar la base es innecesario Y
+# destructivo: descarta todo lo que el cerebro escribió desde el despliegue. Medido a los seis
+# minutos de la corrida del 2026-09-05, comparando el snapshot contra la base viva:
+#
+#     tool_invocations  +57      device_commands  +5      screen_sessions  +1
+#
+# A ~9,5 invocaciones por minuto, una vuelta atrás hecha unas horas más tarde —que es CUÁNDO se
+# hacen, no en el minuto siguiente— tira miles de filas de la memoria compartida del equipo, y
+# nada avisa porque la línea peligrosa es la que se ve inofensiva.
+#
+# El guion ya sabe la respuesta: tiene $VERSION_BASE (el esquema del snapshot) y $ESQUEMA (el de
+# la base viva). No hacía falta ningún dato nuevo, sólo dejar de imprimir la receta que no es.
+#
+# El camino AUTOMÁTICO (`volver_atras`) sigue restaurando la base siempre, y ahí está bien: corre
+# DENTRO de la ventana del despliegue, donde el delta es de segundos y la migración puede haber
+# quedado a medio aplicar. Lo que se separa es el camino a mano, que es el que se usa tarde.#
+# ESTÁ EN UNA FUNCIÓN PARA QUE SE PUEDA PROBAR. `deploy/pruebas/receta-de-vuelta-atras.sh` la
+# EXTRAE de este archivo —no de una copia— y la corre con las dos combinaciones de esquema; la
+# corre `internal/mcp/despliegue_receta_test.go`, así que entra en CI. Una receta de vuelta atrás
+# que nadie ejercita es exactamente la clase de instrucción que se descubre estando mal el día que
+# hay que usarla, y ése es el peor día.
+imprimir_vuelta_atras(){
+  echo
+  if [[ "$VERSION_BASE" == "$ESQUEMA" ]]; then
+    aviso "El punto de retorno queda guardado. Para volver atrás A MANO (esta corrida NO migró: esquema $ESQUEMA en las dos puntas, así que la base NO se toca):"
+    echo "    systemctl stop ${SERVICIOS[*]}"
+    echo "    cp -a $BIN_VIEJO $DESTINO"
+    echo "    systemctl start ${SERVICIOS[*]}"
+    echo
+    # EL AVISO NO REESCRIBE EL COMANDO PELIGROSO, y eso es deliberado: lo tenía entre backticks
+    # «para explicar qué no hacer», y una línea entre backticks en una terminal es una línea lista
+    # para copiar. Se dice en palabras. Lo destapó la prueba, que no podía distinguir la receta de
+    # su propia advertencia — si una prueba no las distingue, un humano apurado tampoco.
+    aviso "NO HAY QUE RESTAURAR LA BASE en este caso, y la receta de arriba a propósito no lo
+         incluye: el binario viejo lee el esquema $ESQUEMA igual. Copiar el snapshot encima
+         descartaría todo lo que el cerebro escribió desde el despliegue —a ~9 invocaciones de
+         tool por minuto, miles de filas unas horas después—. El snapshot queda guardado igual,
+         por si hiciera falta comparar."
+  else
+    aviso "El punto de retorno queda guardado. Esta corrida MIGRÓ ($VERSION_BASE → $ESQUEMA), así que volver atrás el binario NO alcanza. A MANO:"
+    echo "    systemctl stop ${SERVICIOS[*]}"
+    echo "    cp -a $BIN_VIEJO $DESTINO"
+    echo "    cp -a $RESPALDO $BASE && rm -f $BASE-wal $BASE-shm && chown musubi:musubi $BASE"
+    echo "    systemctl start ${SERVICIOS[*]}"
+    echo
+    aviso "LA SEGUNDA LÍNEA TIENE UN COSTO Y HAY QUE SABERLO: restaurar el snapshot descarta lo que
+         el cerebro escribió desde el despliegue. Se paga porque el esquema $ESQUEMA no vuelve solo
+         a $VERSION_BASE y el binario viejo no sabe leerlo."
+  fi
+  echo
+  aviso "Los DE ESTA CORRIDA quedan: sin ese .db no hay vuelta de una migración. Los anteriores más
+         allá de los $RETENER más nuevos ya los podó este script (A87)."
+}
+
+imprimir_vuelta_atras
 
 # El exit va DESPUÉS del punto de retorno a propósito: quien corre esto necesita las instrucciones
 # de vuelta atrás en pantalla aunque la verificación haya salido mal — sobre todo si salió mal.
