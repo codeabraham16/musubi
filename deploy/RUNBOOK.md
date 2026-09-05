@@ -874,7 +874,14 @@ sale de la tool.
 
 Para actualizar:
 
-- **Linux (el propio servidor).** El cerebro y el agente comparten ejecutable: `deploy/redesplegar-cerebro.sh`.
+- **Linux (el propio servidor).** El cerebro y el agente comparten ejecutable. En la máquina se corre
+  `sudo /usr/local/sbin/redesplegar-cerebro.sh <binario-nuevo> <sha256>`, que es donde lo instala
+  `install-musubi-brain.sh` detrás de su compuerta de sha256. **No lo corras desde una copia suelta**:
+  la copia a mano que vivía en `/home/musubi/` quedó a la mitad del guion del repo y con su verificación
+  de la migración muerta durante seis redespliegues (A111) — un guion sin instalador no tiene cómo
+  actualizarse. `deploy/verificar-despliegue.sh` compara ahora el archivo instalado contra el repo, y
+  marca en rojo cualquier copia sobreviviente bajo `/home`: ese directorio lo escribe el uid con el que
+  corre `musubi_fleet_exec`, y esto se invoca con `sudo`.
 - **Windows.** Se cruza el binario nuevo a la máquina y se corre `cambiar-agente.cmd`, que lo
   reemplaza con prueba de latido y vuelta atrás. Ojo con el zombi: si un agente viejo quedó vivo
   desde `musubi.exe.viejo`, gana la carrera del latido y la máquina sigue figurando en la versión
