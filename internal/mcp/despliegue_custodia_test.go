@@ -261,12 +261,40 @@ func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 
+	// LAS COMILLAS SIMPLES CUENTAN, Y NO CONTARLAS ERA UN AGUJERO CON DIENTES.
+	//
+	// La primera versión aceptaba `"?`, o sea comillas dobles o nada. `- job_name: 'altura-db'` es
+	// YAML válido y es el estilo que usa media documentación de Prometheus — y quedaba INVISIBLE
+	// para esta guarda. Medido el 2026-09-05, en las dos direcciones:
+	//
+	//   · declarar un job con comillas simples y NO sumarlo a la alerta -> la guarda pasa en VERDE.
+	//     Es exactamente el agujero de A73, que es para lo que esta prueba existe.
+	//   · declararlo con comillas simples Y sumarlo a la alerta (lo correcto) -> la guarda FALLA,
+	//     diciendo «la alerta vigila el job "altura-db", que prometheus.yml no declara: nunca va a
+	//     existir y la alerta queda encendida para siempre».
+	//
+	// O sea que premiaba el defecto y castigaba el arreglo, con un mensaje que manda a sacar la
+	// línea correcta. Peor que no mirar.
+	// SE LEE EL VALOR ENTERO Y DESPUÉS SE LE SACAN LAS COMILLAS, en vez de describir con una clase
+	// de caracteres qué puede tener un nombre de job. Una clase se queda corta EN SILENCIO: con
+	// `[A-Za-z0-9_.-]+`, el job `"un.job.raro@2"` se leía como `un.job.raro` —cortado en el `@`— y
+	// el control de conteo tampoco lo veía, porque un nombre truncado sigue contando como uno.
+	// Leer hasta el fin de la línea no puede quedarse corto.
 	var declarados []string
-	for _, m := range regexp.MustCompile(`(?m)^\s*-\s*job_name:\s*"?([A-Za-z0-9_-]+)"?`).FindAllStringSubmatch(cfg, -1) {
-		declarados = append(declarados, m[1])
+	for _, m := range regexp.MustCompile(`(?m)^\s*-\s*job_name:\s*(.+?)\s*(?:#.*)?$`).FindAllStringSubmatch(cfg, -1) {
+		declarados = append(declarados, strings.Trim(m[1], `"'`))
 	}
 	if len(declarados) == 0 {
 		t.Fatal("no se encontró ningún job_name en prometheus.yml: el patrón se rompió y la prueba no probaría nada")
+	}
+	// Y EL CONTROL DE «LOS VI A TODOS», que es lo que faltaba: contar las líneas `job_name:` sin
+	// interpretar el valor. Si un estilo de comillas nuevo se le escapa al regex de arriba, esto lo
+	// dice en vez de dejar la diferencia en silencio — el modo de falla no era una aserción
+	// equivocada, era un recorrido que no llegaba.
+	if lineas := len(regexp.MustCompile(`(?m)^\s*-\s*job_name:`).FindAllString(cfg, -1)); lineas != len(declarados) {
+		t.Fatalf("prometheus.yml tiene %d líneas `job_name:` y el patrón sólo pudo leer %d nombres (%s):\n"+
+			"hay una forma de escribirlo que esta prueba no reconoce, así que esos jobs quedan sin vigilar\n"+
+			"y la guarda lo diría en verde.", lineas, len(declarados), strings.Join(declarados, ", "))
 	}
 
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
