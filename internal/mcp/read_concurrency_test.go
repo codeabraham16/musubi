@@ -56,6 +56,43 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// FTS (búsquedas puras, sin bumpAccess ni ledger). No muta nada; por eso es readOnly y la
 		// puede llamar una cabina (F1 · Lienzo como capacidad del cerebro).
 		"musubi_design": true,
+		// Inventario de la flota (track «Control de flota», S2): lee la tabla `devices` y no
+		// escribe nada. El campo `online` se CALCULA al servir (no hay columna ni UPDATE), así
+		// que listar la flota no muta ni una fila. readOnly ⇒ la puede llamar una cabina, que es
+		// justo el caso de uso: el panel que muestra las máquinas no escribe en ninguna.
+		"musubi_fleet_list": true,
+		// Telemetría de la flota (S4): lee la columna `last_sample` de `devices` y deriva los
+		// porcentajes al servir. No escribe: la muestra la estampa el LATIDO, por la otra puerta.
+		"musubi_fleet_metrics": true,
+		// La bitácora de ejecución remota (S5): lee device_commands y no escribe. Quien ESCRIBE
+		// es musubi_fleet_exec (que encola) y el agente por la otra puerta (que reporta).
+		"musubi_fleet_log": true,
+		// La bitácora de sesiones de pantalla (S6): lee screen_sessions y no escribe. Quien
+		// ESCRIBE es musubi_fleet_screen (que abre la sesión) y el agente por la otra puerta.
+		"musubi_fleet_sessions": true,
+		// La bitácora de sesiones de SHELL (S5b): lee shell_sessions y no escribe. El
+		// vencimiento se DERIVA al servir (quien lo estampa es el barrido de flota, por la otra
+		// puerta) y quien ESCRIBE la fila es musubi_fleet_shell. Estaba sin marcar mientras sus
+		// siete hermanas de flota sí lo estaban, y como readOnly gobierna la AUTORIZACIÓN, una
+		// cabina write=none veía la bitácora de comandos y no la de shells.
+		"musubi_fleet_shell_log": true,
+		// El inventario de SERVICIOS de la flota (S12): lee la tabla `services` y deriva el
+		// estado y el frescor al servir (no hay columna de estado ni UPDATE). Quien ESCRIBE es el
+		// LATIDO, por la puerta del dispositivo, y musubi_fleet_service_declare — que NO es
+		// readOnly y por eso está en mustWrite.
+		"musubi_fleet_services": true,
+		// La CRONOLOGÍA de una máquina (fase 5 · S11): lee las TRES bitácoras append-only
+		// (device_commands, screen_sessions, shell_sessions) y no escribe ninguna. El
+		// vencimiento de una sesión de pantalla se DERIVA al servir, igual que en
+		// musubi_fleet_sessions: no hay UPDATE que lo estampe. readOnly ⇒ la puede llamar una
+		// cabina, que es el caso de uso — investigar qué le pasó a un server no muta el server.
+		"musubi_fleet_cronologia": true,
+		// Fase 5 · S14 · el CRUCE con la memoria. Lee cinco superficies —las tres bitácoras,
+		// `services`, `observations` y `code_memory`— y no escribe ninguna. En particular NO
+		// bumpea acceso ni deja ledger sobre las observaciones que devuelve: es una lectura de
+		// correlación, no un recall, y contarla como uso inflaría la señal de «esta nota se
+		// usa» con cada investigación de una máquina.
+		"musubi_fleet_contexto": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
@@ -73,6 +110,13 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// del proyecto. Marcarlas readOnly las metería en la clase de lectura aislada, que es
 		// justo lo que no son.
 		"musubi_promote_skill", "musubi_install_skill",
+		// A64 — renombrar ESCRIBE la columna `name`. Marcarla readOnly la metería en la clase de
+		// lectura concurrente, que es justo lo que no es: dos renames a la vez sobre la misma
+		// máquina se pisarían.
+		"musubi_fleet_rename",
+		// S12 — declarar un servicio a mano ESCRIBE en la tabla `services`. Marcarla readOnly la
+		// metería en la clase de lectura aislada, que es justo lo que no es.
+		"musubi_fleet_service_declare",
 		"musubi_save_fact", "musubi_work", "musubi_workflow", "musubi_phase",
 		// El destilador y el afilador (Musubi Renaissance) escriben tarjetas + aristas en el acervo:
 		// jamás readOnly. Son lockSelf (I/O externa) pero eso es concurrencia, no autorización.

@@ -13,7 +13,7 @@ func vizNode(key, kind, name, path string) GraphNode {
 // centralidad (grado), módulo derivado del path, cap por límite (con Truncated + TotalNodes) y
 // aristas sin colgantes (ambos extremos incluidos).
 func TestCodeGraphVizRanksAndFilters(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestCodeGraphVizRanksAndFilters(t *testing.T) {
 // INVARIANTE: TotalEdges y EdgesTruncated describen las aristas igual que TotalNodes y
 // Truncated describen los nodos. TotalModules cuenta el grafo completo, no la muestra.
 func TestCodeGraphVizDeclaraTotalEdges(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestCodeGraphVizDeclaraTotalEdges(t *testing.T) {
 // colapsa por (kind, from, to), así que el TOTAL tiene que colapsarlas con el mismo criterio
 // — si no, el denominador crece con la cantidad de tenants y el numerador no lo alcanza nunca.
 func TestCodeGraphVizTotalEdgesDeduplica(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestCodeGraphVizTotalEdgesDeduplica(t *testing.T) {
 
 // TestCodeGraphVizEmptyNonNil: sin grafo, Nodes/Edges son slices no-nil (JSON [] y no null).
 func TestCodeGraphVizEmptyNonNil(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestCodeGraphVizEmptyNonNil(t *testing.T) {
 
 // TestExplainedByWeld: una decisión que menciona el símbolo/archivo se solda por FTS (F3).
 func TestExplainedByWeld(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,331 @@
+# alertmanager.yml — el tramo que faltaba entre «la alerta se evalúa» y «alguien se entera».
+#
+# Cierra A4 del track «Control de flota». Hasta acá las reglas de deploy/musubi-alerts.yml se
+# evaluaban y se veían en la UI de Prometheus (http://127.0.0.1:9099/alerts) y no notificaban a
+# ningún lado. Una alerta que no llega a nadie no es una alerta: es una página web que nadie abre.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# EL SECRETO NO VIVE ACÁ. Los tokens/URLs de los canales entran por variables de entorno del
+# servicio, igual que el bearer del cerebro (service.auth_token_env) y que el token de scrape
+# (credentials_file). Este archivo se puede commitear; el EnvironmentFile no.
+#
+#   /etc/musubi/alertmanager.env   (chmod 600, dueño root)
+#     TELEGRAM_BOT_TOKEN=123456:AA...
+#     TELEGRAM_CHAT_ID=-1001234567890
+#     SMTP_PASSWORD=...
+#
+# Instalación:
+#   1. Copiá este archivo a /etc/alertmanager/alertmanager.yml
+#   2. Escribí /etc/musubi/alertmanager.env con tus credenciales (chmod 600)
+#   3. Descomentá el bloque `alerting:` de prometheus.yml y recargá Prometheus (/-/reload)
+#   4. Ver deploy/RUNBOOK.md#alertmanager para el unit de systemd y la verificación
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # El agrupado es POR ALERTA Y POR MÁQUINA, no sólo por alerta: si 20 máquinas se quedan sin
+  # disco a la vez, querés 20 avisos identificables y no uno que diga "DiscoPorLlenarse (20)".
+  # Con `device` en el group_by, cada máquina tiene su hilo y se resuelve por separado.
+  #
+  # Y `project` VA DELANTE de `device` (Ola 1): dos clientes con una máquina del mismo nombre no
+  # pueden compartir hilo. Sin eso, el `srv-01` de uno y el `srv-01` del otro caen en el mismo
+  # grupo, y un `resolved` de uno cierra el aviso del otro — el peor de los finales, porque el
+  # que queda sin arreglar es el que deja de verse.
+  group_by: ['alertname', 'project', 'device']
+  group_wait: 30s        # espera inicial: junta las que llegan juntas (un host que se cae entero)
+  group_interval: 5m     # cada cuánto avisa de novedades DENTRO de un grupo ya notificado
+  repeat_interval: 4h    # cada cuánto insiste con algo que sigue firing
+  receiver: 'default'
+
+  routes:
+    # EL DEAD-MAN'S SWITCH VA PRIMERO Y SE VA POR SU PROPIO CAMINO.
+    #
+    # `MusubiSiempreViva` está SIEMPRE en firing, a propósito. Su valor no está en dispararse
+    # —eso no informa nada— sino en DEJAR DE LLEGAR: si el watchdog calla, lo que se rompió es la
+    # cadena de alertas (Prometheus caído, Alertmanager caído, la red del canal), y entonces el
+    # silencio de todas las demás NO significa que todo esté bien.
+    #
+    # Es la misma idea que la alerta FlotaSinTelemetria, un nivel más arriba: ahí el riesgo era
+    # que desaparecieran las series y las reglas dejaran de disparar; acá, que disparen y no
+    # salgan. Los dos son fallos que se ven como calma.
+    #
+    # Del otro lado hace falta algo que espere este latido y grite si no llega: un Healthchecks.io,
+    # un Dead Man's Snitch, o un cron propio.
+    #
+    # ── ESO YA EXISTE Y ESTÁ ANDANDO. Medido el 2026-09-04 en el servidor ───────────────────
+    #
+    #     alertmanager_notifications_total{integration="webhook"}         376
+    #     alertmanager_notifications_failed_total{integration="webhook"}    0
+    #
+    # `secretos/watchdog_url` y `secretos/watchdog_fail_url` existen, la ruta de abajo apunta a
+    # `watchdog` y entrega cada 5 minutos sin un solo fallo.
+    #
+    # Lo que sigue estaba escrito para el estado ANTERIOR —la ruta a `null`, sin watchdog— y se
+    # conserva porque explica POR QUÉ el receptor `null` sigue existiendo y qué pasa si alguien
+    # vuelve a él. Lo que NO puede seguir diciendo es «para reactivarlo, cambiá null por watchdog»:
+    # eso ya está hecho, y una instrucción para llegar a un estado en el que ya se está manda a
+    # alguien a «arreglar» algo que anda. Ver más abajo.
+    #
+    # LA RUTA APUNTABA A LA NADA MIENTRAS NO HUBO WATCHDOG EXTERNO, y eso NO era lo mismo que
+    # borrarla ni que dejarla rota. Las tres opciones se probaron; sólo una era correcta.
+    #
+    # ROTA (apuntando a un `url_file` que no existe) fue el estado real durante 32 horas: 387
+    # fallos de entrega, uno cada 5 minutos, en el log de un contenedor que nadie mira. Y con la
+    # regla CadenaDeAlertasFallando puesta, eso pasa a ser una alerta que dispara y NO SE APAGA
+    # NUNCA — y una alarma que no se apaga arreglando algo enseña a ignorar el canal entero.
+    #
+    # BORRADA fue peor, y se descubrió en el acto al intentarlo: `MusubiSiempreViva` está SIEMPRE
+    # en firing a propósito, así que sin ruta propia cae al receptor por defecto y el latido pasa
+    # a notificar por Telegram y al CRM cada 4 horas, para siempre. La misma alarma eterna, en el
+    # canal que sí se lee.
+    #
+    # A LA NADA es lo correcto: la alerta SE SIGUE VIENDO en el Alertmanager —el latido existe y
+    # se puede mirar— y no le llega a nadie. Es el patrón que usa kube-prometheus con su Watchdog.
+    #
+    # EL FALLO QUE ESTO CUBRE, y que el sistema no puede detectar desde adentro por definición:
+    # si se cae Prometheus, o el propio Alertmanager, o la red del canal, NINGUNA alerta sale — y
+    # ese silencio se ve igual que la calma. El watchdog externo es el único que lo ve, porque es
+    # el único que está afuera.
+    #
+    # PARA APAGARLO (no para prenderlo: ya está prendido) se cambia `watchdog` por `null` abajo.
+    # El latido sigue VIÉNDOSE en la interfaz de Alertmanager y no le llega a nadie — que es el
+    # patrón de kube-prometheus con su Watchdog, y la razón de que ese receptor exista.
+    #
+    # LO QUE NO HAY QUE HACER es borrar la ruta: `MusubiSiempreViva` está SIEMPRE en firing, así
+    # que sin ruta propia cae al receptor por defecto y el latido pasa a notificar por Telegram y
+    # al CRM cada 4 horas, para siempre.
+    - matchers:
+        - alertname = "MusubiSiempreViva"
+      receiver: 'watchdog'
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 5m   # corto: es un latido, no un aviso
+    # EL CASO QUE EL LATIDO SOLO NO CUBRE, y es el más probable de los dos.
+    #
+    # Si se cae Telegram —bot bloqueado, token vencido, la red del canal— con Prometheus y
+    # Alertmanager VIVOS, el latido de arriba sigue saliendo perfecto: el watchdog externo no se
+    # entera de nada. Y la alerta que SÍ lo vería, `CadenaDeAlertasFallando{integration="telegram"}`,
+    # es `severity: critical` y cae en la ruta de abajo, que entrega por... Telegram. Circular.
+    #
+    # Se corta mandándola TAMBIÉN al `/fail` del mismo check: hc-ping acepta `<uuid>/fail` y eso
+    # marca el check caído del lado de afuera, sin un servicio nuevo ni una cuenta más. `continue`
+    # en true a propósito: si Telegram está sólo parcialmente roto el aviso igual tiene que
+    # intentar salir por el canal normal, y el CRM tiene que registrar la fila.
+    #
+    # Va ANTES de la ruta de `critical` porque el primer match gana: al revés nunca se evaluaría.
+    - matchers:
+        - alertname = "CadenaDeAlertasFallando"
+        - integration = "telegram"
+      receiver: 'watchdog-fail'
+      continue: true
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Lo crítico insiste más seguido y no se agrupa con lo demás.
+    - matchers:
+        - severity = "critical"
+      receiver: 'default'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # `info` no despierta a nadie: se junta y se manda espaciado. Mezclarlo con lo crítico es la
+    # forma más rápida de que se silencie el canal entero.
+    - matchers:
+        - severity = "info"
+      receiver: 'default'
+      group_interval: 30m
+      repeat_interval: 24h
+
+inhibit_rules:
+  # Si la máquina está CAÍDA, no tiene sentido avisar además de su disco, su RAM y su temperatura:
+  # son la misma noticia contada cinco veces, y las cuatro de más entierran a la primera.
+  #
+  # QUÉ SIGNIFICA `equal` CUANDO EL LABEL NO ESTÁ, dicho porque no es obvio y porque de eso
+  # depende que esta regla sea segura: Alertmanager compara el VALOR del label en las dos puntas,
+  # y un label ausente vale «». O sea que dos alertas que NO tienen `device` cuentan como iguales
+  # y la inhibición sí se aplica entre ellas. `equal` acota por coincidencia de valor, no por
+  # presencia del label.
+  #
+  # Acá eso no hace daño porque el origen está fijado a `MaquinaCaida`, que sale de
+  # `musubi_fleet_device_up` y por lo tanto SIEMPRE trae `device`: nunca hay un origen con
+  # `device` vacío que pueda emparejarse con el resto del sistema. Si alguna vez MaquinaCaida
+  # pasara a poder dispararse sin `device` —una agregación, un `absent()`— esta regla silenciaría
+  # todo warning e info que tampoco lo tenga: el cerebro, Altura y el backup. Que es exactamente
+  # el fallo que tenía la regla de acá abajo.
+  #
+  # `AgenteCaidoConMaquinaViva` ES FUENTE TAMBIÉN, y no es simetría: cuando el agente deja de
+  # reportar, las series de disco, RAM y temperatura de esa máquina QUEDAN CONGELADAS con su
+  # último valor, y una comparación sobre un valor congelado se sostiene indefinidamente. O sea
+  # que la máquina viva sin agente produce exactamente el mismo eco que la caída — y con el
+  # agravante de que esos valores parecen frescos.
+  - source_matchers: [alertname =~ "MaquinaCaida|AgenteCaidoConMaquinaViva"]
+    target_matchers: [severity =~ "warning|info"]
+    equal: ['project', 'device']
+
+  # Lo mismo un nivel más arriba: si NO LLEGA NINGUNA métrica de flota, callar el resto de las
+  # alertas de flota — todas están ciegas y lo único accionable es FlotaSinTelemetria.
+  #
+  # ESTÁ ACOTADA A LA FLOTA POR `device != ""`, Y NO POR `equal`. Sin acotar —como estuvo— esta
+  # regla, al dispararse, callaba TODO warning e info DEL SISTEMA ENTERO: el cerebro, Altura, el
+  # backup off-host. Un problema de credenciales del scrape de flota apagaba el resto del panel.
+  #
+  # `equal` no sirve para arreglarlo, y conviene saber por qué antes de "mejorarlo": el origen es
+  # `absent(musubi_fleet_device_up)`, una serie SIN etiquetas de máquina, así que no tiene
+  # `device` con qué emparejar. Un `equal: ['device']` haría LO CONTRARIO de lo que se busca —
+  # `device=""` en el origen sólo casaría con los destinos que TAMPOCO lo tienen, o sea callaría
+  # al cerebro, a Altura y al backup, y dejaría pasar justo las alertas de flota que sí están
+  # ciegas. Peor que no tener la regla, porque además parece acotada.
+  #
+  # La presencia de `device` es el marcador de dominio que hay: sólo las series
+  # `musubi_fleet_device_*` y `musubi_fleet_service_*` lo llevan, y son exactamente las que
+  # desaparecen cuando el scrape pierde sus concesiones. Ninguna alerta del cerebro, de Altura ni
+  # del backup tiene `device`.
+  #
+  # QUEDAN FUERA A PROPÓSITO las alertas de flota que no viven de esas series
+  # (`PoliticaQueNoCura`, `PoliticaSinPermiso`, `AllowlistDeFlotaRechazando`): salen de
+  # `musubi_fleet_policy_actions_total` y `musubi_tool_rejections_total`, que siguen llegando por
+  # el scrape aunque no haya telemetría de ninguna máquina. No están ciegas: no hay que callarlas.
+  # Y queda fuera también `ReglasDelCerebroSinDesplegar` (warning, sin `device` porque sale de
+  # `absent(sum(prometheus_rule_group_rules{...}))`): mira las reglas CARGADAS, no la telemetría,
+  # así que una flota muda no la deja ciega y callarla escondería un despliegue viejo.
+  - source_matchers: [alertname = "FlotaSinTelemetria"]
+    target_matchers:
+      - severity =~ "warning|info"
+      - device != ""
+
+  # Y el clásico: lo crítico calla a lo warning DEL MISMO SÍNTOMA y máquina — DiscoCasiLleno
+  # calla a DiscoPorLlenarse.
+  #
+  # ════════════════════════════════════════════════════════════════════════════════════════════
+  # ESTABA EMPAREJANDO POR `alertname`, ASÍ QUE NO PODÍA DISPARARSE NUNCA
+  #
+  #     equal: ['alertname', 'project', 'device']
+  #
+  # Los dos escalones de un mismo síntoma SE LLAMAN DISTINTO por definición: ése es el punto de
+  # tener dos. `DiscoCasiLleno` y `DiscoPorLlenarse` —el ejemplo que este mismo comentario daba—
+  # nunca comparten `alertname`, así que la regla jamás casó. Contado sobre las 49 alertas del
+  # repo: NINGUNA existe a la vez en `critical` y en `warning`, o sea que el conjunto en el que
+  # esta inhibición podía aplicarse estaba VACÍO. Una regla muerta que se lee como una guarda
+  # activa es peor que no tenerla: todo el mundo asume que el escalón de abajo está callado.
+  #
+  # El emparejamiento correcto es por SÍNTOMA, que es una etiqueta que las dos puntas declaran a
+  # propósito (`sintoma: disco`, `sintoma: pooler_altura`).
+  #
+  # LOS `sintoma != ""` NO SON DE ADORNO, y es la misma trampa que este archivo ya documenta
+  # arriba: un label ausente vale «» y `equal` compara VALORES. Sin ese matcher, cualquier
+  # `critical` sin `sintoma` —MusubiDown, AlertmanagerCaido, FlotaSinTelemetria— callaría todo
+  # `warning` sin `sintoma` del mismo project/device, que es la mitad del panel. Acotado así,
+  # sólo participan los pares que alguien emparejó explícitamente.
+  - source_matchers: [severity = "critical", sintoma != ""]
+    target_matchers: [severity = "warning", sintoma != ""]
+    equal: ['sintoma', 'project', 'device']
+
+receivers:
+  # ─── El receptor real ──────────────────────────────────────────────────────────────────────
+  # Telegram porque no necesita un servidor de correo ni una cuenta de un SaaS, y porque el
+  # teléfono ya está en el bolsillo. Cambialo por lo que uses; lo que NO cambia es que el secreto
+  # entra por entorno.
+  - name: 'default'
+    telegram_configs:
+      - bot_token_file: /etc/musubi/telegram_bot_token   # chmod 600, root:root
+        # SIN chat_id VÁLIDO, ALERTMANAGER SE NIEGA A ARRANCAR (`missing chat_id on telegram_config`).
+        # Es el comportamiento correcto y conviene no "arreglarlo": un canal a medio configurar que
+        # arranca y se traga las alertas es peor que uno que no arranca y lo grita en el log.
+        # Lo sacás con /start a tu bot y luego getUpdates, o con @userinfobot.
+        # `preparar.sh` sustituye este 0 por el contenido de secretos/telegram_chat_id.
+        # NO va escrito acá: Alertmanager no soporta `chat_id_file`, así que el único modo de que
+        # un identificador personal no termine versionado en el repo es sustituirlo al instalar.
+        chat_id: 0
+        parse_mode: ''
+        # ─── EL MENSAJE ────────────────────────────────────────────────────────────────────
+        #
+        # LO PRIMERO QUE TIENE QUE DECIR ES SI ALGO EMPEZÓ O TERMINÓ, y la versión anterior no lo
+        # decía en ningún lado. `telegram_configs` manda las resoluciones por default, así que un
+        # aviso de «se arregló» llegaba BYTE POR BYTE IDÉNTICO a uno de «se rompió». Con eso, el
+        # canal no se puede leer: cada mensaje obliga a ir a mirar aunque sea una buena noticia.
+        #
+        # LO SEGUNDO ES NO REPETIR LO QUE NO CAMBIA. El agrupado junta por (alerta × máquina), y
+        # la plantilla vieja hacía `range .Alerts` imprimiendo la cabecera entera por cada una:
+        # cuatro servicios caídos eran cuatro bloques donde sólo variaba una línea. Con dieciséis
+        # es un muro que nadie lee. Ahora la cabecera va UNA vez y abajo va la lista de lo que
+        # varía — el servicio, o la política, o el resumen si no hay nada más específico.
+        #
+        # LA HORA VA EN LA ZONA DEL SERVIDOR (`.Local`), no en UTC: quien lee esto a las tres de
+        # la mañana no debería tener que restar husos.
+        #
+        # `severidad mixta` NO ES COSMÉTICO: si un grupo junta alertas de severidad distinta,
+        # `CommonLabels.severity` no existe y el template imprime `<no value>`. Se descubrió al
+        # renderizar la plantilla con datos de verdad, que es algo que nunca se había hecho.
+        #
+        # `→` Y `ⓘ` SON COSAS DISTINTAS Y ANTES SE DIBUJABAN IGUAL.
+        #
+        # La anotación `runbook` se venía usando para dos cosas: una referencia real a una sección
+        # de deploy/RUNBOOK.md, y una aclaración en prosa. Las dos salían con la misma flecha, así
+        # que en el teléfono una nota parecía un enlace que no llevaba a ningún lado. Ahora la
+        # prosa va en `nota` con otro símbolo, y `→` significa siempre «andá a leer esto».
+        #
+        # SIGUE EN TEXTO PLANO A PROPÓSITO. Con `parse_mode: HTML` un `&` o un `<` en cualquier
+        # resumen rompe el parseo y Telegram RECHAZA el mensaje entero: la alerta no llega. Un
+        # formato más lindo no vale una alerta perdida.
+        message: |
+          {{ if eq .Status "firing" }}🔴 EMPIEZA{{ else }}✅ SE RESOLVIÓ{{ end }} · {{ if .CommonLabels.severity }}{{ .CommonLabels.severity }}{{ else }}severidad mixta{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} casos{{ end }}
+          {{ .GroupLabels.alertname }}{{ if .GroupLabels.device }} — {{ .GroupLabels.device }}{{ end }}
+          {{ if eq (len .Alerts) 1 }}{{ with index .Alerts 0 }}
+          {{ .Annotations.summary }}
+          {{ if eq $.Status "firing" }}desde las {{ .StartsAt.Local.Format "15:04" }}{{ else }}duró {{ .EndsAt.Sub .StartsAt }}{{ end }}{{ if .Annotations.nota }}
+          ⓘ {{ .Annotations.nota }}{{ end }}{{ if .Annotations.runbook }}
+          → {{ .Annotations.runbook }}{{ end }}{{ end }}{{ else }}
+          {{ range .Alerts }}• {{ if .Labels.service }}{{ .Labels.service }}{{ else if .Labels.policy }}{{ .Labels.policy }}{{ else }}{{ .Annotations.summary }}{{ end }}
+          {{ end }}{{ with index .Alerts 0 }}{{ if eq $.Status "firing" }}desde las {{ .StartsAt.Local.Format "15:04" }}{{ else }}duró {{ .EndsAt.Sub .StartsAt }}{{ end }}{{ if .Annotations.nota }}
+          ⓘ {{ .Annotations.nota }}{{ end }}{{ if .Annotations.runbook }}
+          → {{ .Annotations.runbook }}{{ end }}{{ end }}{{ end }}
+    # ─── SEGUNDO CANAL: EL CRM ────────────────────────────────────────────────────────────
+    # Segundo canal para lo mismo que va a Telegram. Telegram avisa; el CRM deja HISTORIA
+    # consultable: qué alertó, sobre qué máquina, cuándo empezó y cuándo se resolvió.
+    #
+    # Va contra `POST /rest/v1/rpc/recibir_alerta` de Supabase. PostgREST mapea las claves de primer
+    # nivel del JSON de Alertmanager a los argumentos de esa función, así que el cuerpo entra tal
+    # cual — sin adaptador. Ver deploy/crm/alertas.sql.
+    #
+    # LA CLAVE ENTRA POR ARCHIVO, y NO por query string: en un `/rpc/`, PostgREST interpreta los
+    # parámetros de la URL como ARGUMENTOS de la función, así que un `?apikey=…` da HTTP 400
+    # (medido). Kong quiere el header `apikey` y PostgREST el `Authorization`, y los dos salen del
+    # mismo archivo — rotar la clave es reemplazar un archivo, sin tocar esta configuración.
+    #
+    # `send_resolved: true` a propósito, al revés que el watchdog: en el CRM interesa cerrar el par
+    # firing/resolved para poder preguntar "qué está activo AHORA" (ver la vista alertas_activas).
+    webhook_configs:
+      - url_file: /etc/musubi/crm_alertas_url
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/musubi/crm_anon_key
+          http_headers:
+            apikey:
+              files: [/etc/musubi/crm_anon_key]
+
+
+  # ─── El latido ─────────────────────────────────────────────────────────────────────────────
+  # Un GET periódico a un servicio externo que grita si deja de recibirlo. La URL es un secreto
+  # (quien la tenga puede silenciar el watchdog), así que también entra por archivo.
+  #
+  # Con url_file, Alertmanager relee el archivo en cada envío: rotar la URL no pide reinicio.
+  # EL RECEPTOR QUE NO MANDA A NINGÚN LADO. Existe para que una alerta pueda estar VISIBLE sin
+  # notificar, que no es lo mismo que no tener la alerta. Sin configs, Alertmanager la descarta a
+  # propósito, y el latido sigue apareciendo en su interfaz para quien lo quiera mirar.
+  - name: 'null'
+  - name: 'watchdog'
+    webhook_configs:
+      - url_file: /etc/musubi/watchdog_url   # p. ej. https://hc-ping.com/<uuid>
+        send_resolved: false
+  # El MISMO check que el de arriba, con `/fail` al final: no es una cuenta ni un servicio nuevo,
+  # es el otro extremo del mismo. Un ping acá lo marca CAÍDO en el acto, sin esperar a que venza
+  # el período. `send_resolved: false` por lo mismo que arriba: el que lo levanta es el latido
+  # siguiente, no un aviso de recuperación.
+  - name: 'watchdog-fail'
+    webhook_configs:
+      - url_file: /etc/musubi/watchdog_fail_url   # el mismo uuid + /fail
+        send_resolved: false

@@ -14,6 +14,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // respMarketplace arma el sobre JSON del endpoint de búsqueda del marketplace.
@@ -36,7 +37,7 @@ const skillDescubierta = `{
 // enabled controla sourcing.marketplace_enabled.
 func newServerConMarketplace(t *testing.T, marketURL string, enabled bool) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -65,7 +66,7 @@ func catalogoMP(skillsJSON string) string {
 // un endpoint live (liveURL).
 func newServerMPConCatalogo(t *testing.T, catalogURL, liveURL string) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

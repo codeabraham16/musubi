@@ -62,6 +62,9 @@ body{
   font-size:11px; letter-spacing:.6px; border:1px solid var(--glass-hi); color:var(--muted); font-family:var(--mono);}
 .pill.ok{color:var(--green); border-color:rgba(74,222,128,.4); background:rgba(74,222,128,.08);}
 .pill.warn{color:var(--amber); border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08);}
+.pill.nav{text-decoration:none; color:var(--purple); border-color:rgba(167,139,250,.38);
+  background:rgba(167,139,250,.10); transition:background .2s,color .2s;}
+.pill.nav:hover{background:rgba(167,139,250,.22); color:var(--txt);}
 .dot{width:7px; height:7px; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor;}
 .dot.live{animation:blink 2.4s ease-in-out infinite;}
 @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
@@ -188,6 +191,12 @@ body{
       <div class="col"><b id="synCount">—</b><span id="lblEdges">sinapsis</span></div>
       <div class="col"><b id="proj">—</b><span id="ver">—</span></div>
       <span class="pill"><span class="dot live" style="color:var(--teal)"></span><span id="liveTxt">en vivo</span></span>
+      <!-- A21 — el paso a la flota. VA EN ESTA CÁSCARA Y NO EN EL BUNDLE a propósito: la CI
+           reconstruye dashboard.bundle.js desde src/ y exige que no cambie ni un byte, así que
+           tocarlo para agregar un enlace habría sido un riesgo gratuito. Este archivo no entra en
+           esa verificación. Hasta ahora a /flota se llegaba escribiendo la URL: una pantalla a la
+           que sólo se llega de memoria es una pantalla que nadie mira. -->
+      <a class="pill nav" href="/flota" title="Flota de máquinas: métricas, capacidades y lo que actúa solo">▤ flota</a>
     </div>
   </div>
 

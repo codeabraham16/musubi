@@ -3,11 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // read_surface_class_test.go SELLA POR CONTRATO la clase "superficie de lectura aislada por
@@ -37,6 +41,56 @@ func seedVictim(t *testing.T, e *memory.DbEngine) {
 	}
 	if _, err := e.SaveFactFrom("web", "SharedEntity", "relates_to", "VICTIMFACT", "", nil); err != nil {
 		t.Fatal(err)
+	}
+	// Flota de web (track «Control de flota», S2): el INVENTARIO DE MÁQUINAS de otro proyecto
+	// —cuántas tiene, cómo se llaman, en qué IP viven— es reconocimiento puro. Que se filtre es
+	// peor que una fuga de memoria: le dibuja a un tenant el mapa de la infraestructura de otro.
+	if victima, err := e.AltaDevice(fleet.Device{
+		Name: "VICTIMDEVICE", ProjectID: "web", Tier: fleet.TierAgente,
+		// La máquina víctima admite metrics, exec, screen Y shell: el barrido cubre las cuatro
+		// superficies, y sin la capacidad en el DEVICE la compuerta cortaría por C5 (el aparato)
+		// antes que por la tenencia — probando otra vez la defensa equivocada.
+		Caps: []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreen, fleet.CapShell}, OS: "VICTIMOS",
+	}, "token-del-device-victima"); err != nil {
+		t.Fatal(err)
+	} else {
+		// Y su TELEMETRÍA (S4). El uso de recursos de la infraestructura de otro proyecto dice
+		// más de su negocio que el nombre de las máquinas: cuántos servidores, qué tan cargados,
+		// a qué hora. El marker va en `os`, que es lo del device que llega a la fila de métricas.
+		if _, err := e.LatirDevice(victima.ID, time.Now(), `{"tomada":"2026-08-26T12:00:00Z","num_cpu":64,"load1":42.5,"mem_total":999,"mem_usada":1}`); err != nil {
+			t.Fatal(err)
+		}
+		// Y su BITÁCORA DE EJECUCIÓN (S5). Qué comandos corre otro equipo en su infraestructura
+		// es lo más revelador de todo el track: nombres de servicios, rutas, scripts internos.
+		if _, err := e.EncolarComando(fleet.Comando{
+			DeviceID: victima.ID, ProjectID: "web", Principal: "alguien",
+			Argv: []string{"/opt/VICTIMSCRIPT.sh"}, Timeout: 30 * time.Second,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Y su bitácora de PANTALLA (S6). Quién mira la pantalla de qué máquina en otro tenant
+		// es información de personas, no sólo de infraestructura.
+		if _, err := e.AbrirSesionPantalla(fleet.SesionPantalla{
+			DeviceID: victima.ID, ProjectID: "web", Principal: "VICTIMMIRON",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Y su bitácora de SHELL (S5b). Quién tuvo un PROMPT en una máquina ajena es lo más
+		// revelador de las tres bitácoras: no dice qué comando corrió, dice que pudo correr
+		// cualquiera. El marker va en `principal`, que es lo que llega a la fila.
+		if _, err := e.AbrirSesionShell(fleet.SesionShell{
+			DeviceID: victima.ID, ProjectID: "web", Principal: "VICTIMPROMPT",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Y su INVENTARIO DE SERVICIOS (S12). Qué corre adentro de las máquinas de otro equipo
+		// —qué base de datos, qué bot, qué puente— es reconocimiento del mismo orden que la
+		// bitácora de comandos: nombra el software interno de otro tenant.
+		if _, err := e.AltaServicio(fleet.Servicio{
+			Nombre: "VICTIMSERVICIO", DeviceID: victima.ID, Clase: "systemd",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Ledger de uso de web (F0): el patrón de uso de OTRO proyecto —qué herramientas usa y con
 	// qué frecuencia— es información de negocio y no debe cruzarse. El marker va en la columna
@@ -101,11 +155,48 @@ func readSweepCases() []readSweepCase {
 		// code_graph_viz lee code_graph_nodes (marker el nombre de nodo de web).
 		{"musubi_brain_graph", map[string]any{}, "VICTIMOBS"},
 		{"musubi_code_graph_viz", map[string]any{}, "VictimCaller"},
+		// El inventario de la flota. Se pasa `project` a propósito: es el caso HOSTIL —el
+		// atacante DECLARA el tenant ajeno— y fleetReadScopeFor tiene que ignorarlo por ser
+		// read=own, mientras el admin federado (read=all) sí puede mirarlo.
+		{"musubi_fleet_list", map[string]any{"project": "web"}, "VICTIMDEVICE"},
+		// La telemetría del tenant ajeno. El caso hostil es el mismo: el atacante DECLARA el
+		// proyecto de la víctima y la compuerta tiene que ignorarlo.
+		{"musubi_fleet_metrics", map[string]any{"project": "web"}, "VICTIMOS"},
+		// La bitácora del tenant ajeno. Mismo caso hostil: el atacante DECLARA el proyecto.
+		{"musubi_fleet_log", map[string]any{"project": "web"}, "VICTIMSCRIPT"},
+		{"musubi_fleet_sessions", map[string]any{"project": "web"}, "VICTIMMIRON"},
+		// La bitácora de SHELL del tenant ajeno. Entra al barrido desde que la tool se marcó
+		// readOnly: lee `shell_sessions`, que tiene project_id, así que la clasificación que
+		// exige el guard de completitud es ésta y no la allowlist de "no lee tablas scopeadas".
+		{"musubi_fleet_shell_log", map[string]any{"project": "web"}, "VICTIMPROMPT"},
+		// El inventario de servicios del tenant ajeno. Mismo caso HOSTIL: el atacante DECLARA el
+		// proyecto de la víctima. Va al barrido y NO a noScopedRead, que es la salida falsa: la
+		// tabla `services` SÍ tiene project_id, y meterla en la allowlist apagaría la guarda de
+		// aislamiento sobre ella y quedaría verde para siempre mientras la fuga existe.
+		{"musubi_fleet_services", map[string]any{"project": "web"}, "VICTIMSERVICIO"},
+		// La CRONOLOGÍA de una máquina ajena (fase 5 · S11). Mismo caso HOSTIL: el atacante
+		// DECLARA el proyecto de la víctima Y el nombre de su máquina.
+		//
+		// EL MARCADOR ES `VICTIMSCRIPT` Y NO `VICTIMDEVICE` A PROPÓSITO: el nombre de la máquina
+		// es el ARGUMENTO que manda el atacante, así que un eco suyo en el mensaje de error se
+		// vería como fuga sin serlo — y peor, taparía la fuga de verdad detrás de un falso
+		// positivo permanente. El marcador tiene que ser algo que SÓLO se puede saber leyendo el
+		// dato ajeno, y el argv de un comando de web lo es.
+		{"musubi_fleet_cronologia", map[string]any{"device": "VICTIMDEVICE", "project": "web"}, "VICTIMSCRIPT"},
+		// Fase 5 · S14 · el CRUCE con la memoria del tenant ajeno, que es el caso más peligroso de
+		// todo el barrido: esta tool sale del plano de flota y va a leer `observations`. Si el
+		// scope de memoria se derivara del alcance de QUIEN PREGUNTA en vez del proyecto de la
+		// MÁQUINA, un atacante con una máquina propia se llevaría la memoria ajena por una puerta
+		// que ninguna de las guardas de recall vigila.
+		//
+		// El marcador es `VICTIMOBS` —una observación de web—, y el admin federado la ve por el
+		// enlace `ventana`: se sembró recién y la ventana default son 24 h.
+		{"musubi_fleet_contexto", map[string]any{"device": "VICTIMDEVICE", "project": "web"}, "VICTIMOBS"},
 	}
 }
 
 func TestReadSurfaceClassIsolation(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,14 +209,38 @@ func TestReadSurfaceClassIsolation(t *testing.T) {
 		raw, _ := json.Marshal(args)
 		params, _ := json.Marshal(CallToolRequest{Name: tool, Arguments: raw})
 		out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), p), params)
+		// UN ERROR TAMBIÉN ES UNA RESPUESTA, Y TAMBIÉN PUEDE FILTRAR. Antes esto abortaba el
+		// test, lo que dejaba fuera del barrido a toda tool que le NIEGUE el pedido al atacante
+		// en vez de devolverle una lista vacía —que es la forma más correcta de negar, y la que
+		// usa la cronología—. O sea que la conducta mejor era la que no se podía verificar.
+		//
+		// Se devuelve el texto del error para que la misma aserción de marcador corra sobre él:
+		// un mensaje que dijera «no existe ninguna máquina VICTIMDEVICE en el proyecto web»
+		// filtraría igual que una fila.
 		if rpcErr != nil {
-			t.Fatalf("%s: %+v", tool, rpcErr)
+			return fmt.Sprintf("%+v", rpcErr)
 		}
 		return out.(CallToolResponse).Content[0].Text
 	}
 
-	crm := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"} // atacante: otro proyecto
-	admin := &Principal{Name: "root", Role: RoleAdmin}                   // federado: control
+	// AL ATACANTE SE LE DA LA CAPACIDAD DE FLOTA A PROPÓSITO, y es la diferencia entre un test
+	// que prueba lo que dice y uno que pasa por la razón equivocada.
+	//
+	// Las tools de flota tienen DOS defensas encima: la tenencia (este barrido) y la compuerta
+	// de capacidades de S3. Si el atacante no tuviera `metrics`, la compuerta lo frenaría
+	// primero y el barrido quedaría verde AUNQUE la tenencia estuviera rota — probando la
+	// defensa equivocada. Con `metrics: ["*"]` en la mano, lo único que se interpone entre él y
+	// la telemetría de `web` es el aislamiento por proyecto, que es lo que este barrido existe
+	// para custodiar.
+	//
+	// El admin federado necesita las mismas concesiones por el otro lado: sin ellas el control
+	// («el dato existe y el filtro no rompe legacy») no podría verlo nunca. El rol admin NO
+	// otorga capacidades de flota — ésa es la valla C1 del track — así que hay que declararlas.
+	grantsDeFlota := map[fleet.Cap][]string{
+		fleet.CapMetrics: {"*"}, fleet.CapExec: {"*"}, fleet.CapScreen: {"*"}, fleet.CapShell: {"*"},
+	}
+	crm := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm", Fleet: grantsDeFlota} // atacante: otro proyecto
+	admin := &Principal{Name: "root", Role: RoleAdmin, Fleet: grantsDeFlota}                   // federado: control
 
 	for _, tc := range readSweepCases() {
 		// El atacante (crm) NUNCA debe ver el marcador de web.
@@ -144,7 +259,7 @@ func TestReadSurfaceClassIsolation(t *testing.T) {
 // scopeadas". Asi una tool de lectura nueva NO puede agregarse sin que alguien decida si necesita
 // scope de proyecto — cierra el whack-a-mole por contrato, no por vigilancia.
 func TestEveryReadOnlyToolClassified(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +304,10 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		// que si es por-proyecto son las DECISIONES sobre skills, y esta tool no las mira: si algun
 		// dia filtrara por ellas, hay que MOVERLA al barrido de aislamiento.
 		"musubi_list_skills": true,
-		"musubi_tokens":          true, // ledger de la sesion
-		"musubi_sync_status":     true, // estado del outbox (no por-proyecto)
-		"musubi_phase":           true, // pipeline de fases de la sesion
-		"musubi_whoami":          true, // identidad del propio principal (nunca datos de otro tenant)
+		"musubi_tokens":      true, // ledger de la sesion
+		"musubi_sync_status": true, // estado del outbox (no por-proyecto)
+		"musubi_phase":       true, // pipeline de fases de la sesion
+		"musubi_whoami":      true, // identidad del propio principal (nunca datos de otro tenant)
 		// Contadores EN MEMORIA del proceso (F5): no lee ninguna tabla, así que no hay nada que
 		// scopear. Y por invariante D5 nunca contiene un secreto, sólo conteos y TIPOS.
 		"musubi_cognition_stats": true,

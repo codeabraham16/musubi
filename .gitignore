@@ -72,3 +72,4 @@ coverage.html
 .musubi/templates/
 
 CLAUDE.md
+deploy/docker/.env

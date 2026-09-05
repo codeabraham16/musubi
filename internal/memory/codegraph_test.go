@@ -26,7 +26,7 @@ func seedGraph(t *testing.T, e *DbEngine) {
 }
 
 func TestCodeGraphQueries(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCodeGraphQueries(t *testing.T) {
 // proyectos con el MISMO node_key coexisten (UNIQUE por project_id) y cada credencial lee el
 // suyo, prefiriendo el propio sobre la fila sin atribuir.
 func TestCodeGraphProjectIsolation(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestCodeGraphProjectIsolation(t *testing.T) {
 // TestCodeGraphRefreshDeleteBySource valida el refresco incremental: re-derivar UN archivo deja
 // stale/actualizadas solo sus filas (por src_fingerprint), sin tocar las de archivos hermanos.
 func TestCodeGraphRefreshDeleteBySource(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

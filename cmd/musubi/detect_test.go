@@ -10,6 +10,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/detector"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // fakeStore implementa startupStore para tests deterministas del hook, sin DB real.
@@ -403,6 +404,7 @@ func TestDetectOutputHookModeSentinelPresente(t *testing.T) {
 	dir := crearGoProject(t)
 	crearSentinel(t, dir)
 	// Perfilar el proyecto para silenciar el bloque cognitivo de arranque.
+	memtest.Sembrar(t, dir)
 	engine, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatal(err)

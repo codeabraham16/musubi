@@ -175,11 +175,11 @@ func TestSDDCompleteAtomicityArtifactFirst(t *testing.T) {
 func TestSDDErrorPaths(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	cases := []map[string]interface{}{
-		{"action": "boom", "change": "c"},                        // action inválida
-		{"action": "start"},                                      // falta change
-		{"action": "next", "change": "noexiste"},                 // flujo inexistente
-		{"action": "complete", "change": "c", "phase": "spec"},   // falta summary (y no arrancó)
-		{"action": "complete", "change": "c", "summary": "x"},    // falta phase
+		{"action": "boom", "change": "c"},                      // action inválida
+		{"action": "start"},                                    // falta change
+		{"action": "next", "change": "noexiste"},               // flujo inexistente
+		{"action": "complete", "change": "c", "phase": "spec"}, // falta summary (y no arrancó)
+		{"action": "complete", "change": "c", "summary": "x"},  // falta phase
 	}
 	for i, args := range cases {
 		if _, e := call(t, s, "musubi_sdd", args); e == nil {

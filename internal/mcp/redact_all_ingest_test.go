@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestForceRedactCoversAllIngest valida que la redacción forzada server-side cubra TODO ingest
@@ -17,7 +18,7 @@ func TestForceRedactCoversAllIngest(t *testing.T) {
 	const secret = "AKIA1234567890ABCDEF" // regla aws-access-key, no allowlisted
 
 	setup := func(forceRedact bool) (*McpServer, *memory.DbEngine) {
-		engine, err := memory.NewDbEngine(t.TempDir())
+		engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 		if err != nil {
 			t.Fatal(err)
 		}

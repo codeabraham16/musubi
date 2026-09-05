@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // callDesign invoca musubi_design con el prompt/target dados bajo el principal p (nil = stdio local)
@@ -36,7 +37,7 @@ func callDesign(t *testing.T, s *McpServer, p *Principal, prompt, target string)
 // trae el núcleo estático (rol + principios + marca), aún sin acervo; (2) el corpus se lee SÓLO del
 // tenant `musubi-design`, sin filtrar memoria de otros proyectos, sin importar el caller.
 func TestDesignBriefTraeNucleoYAcervoScopeado(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestDesignBriefTraeNucleoYAcervoScopeado(t *testing.T) {
 // TestDesignTargetOrientaLaEntrega valida que el target elige el bloque 'emit' correcto y que un
 // target desconocido cae a 'any'.
 func TestDesignTargetOrientaLaEntrega(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestDesignTargetOrientaLaEntrega(t *testing.T) {
 // TestDesignEsLlamablePorReaderYCabina valida que, por ser readOnly, la puede invocar un principal
 // write=none (la cabina) — el uso pedido: diseñar "estando donde sea", incluso sin poder mutar.
 func TestDesignEsLlamablePorReaderYCabina(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func callDesignBrand(t *testing.T, s *McpServer, p *Principal, prompt, target, b
 // resuelve por el proyecto del principal, un cliente ve SU marca, Musubi ve la suya (índigo por default),
 // y un proyecto SIN marca NO hereda la identidad de nadie (ni Musubi ni otro cliente) — no se cruza.
 func TestDesignMarcaPorProyectoNoSeCruza(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestDesignMarcaPorProyectoNoSeCruza(t *testing.T) {
 // TestDesignBrandArgSoloReadAll valida que el arg `brand` (diseñar a nombre de otro proyecto) SÓLO lo
 // respeta un principal read=all (la sala de mando); un writer acotado lo ignora y usa su propia marca.
 func TestDesignBrandArgSoloReadAll(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestDesignBrandArgSoloReadAll(t *testing.T) {
 // TestDesignPrefiereTarjetasSobreBlobs valida F4: en el brief, una tarjeta CURADA (destilada) le gana el
 // lugar a un artículo CRUDO (ingested/) que matchea la misma consulta — así el destilado se surfacea.
 func TestDesignPrefiereTarjetasSobreBlobs(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +275,7 @@ func TestDesignPrefiereTarjetasSobreBlobs(t *testing.T) {
 // TestDesignMethodFallbackEstatico valida CAPA 2: sin sub-acervo `design-method/*`, los principios salen
 // de la const de fallback y method_source es "static" — el brief nunca queda sin método.
 func TestDesignMethodFallbackEstatico(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +295,7 @@ func TestDesignMethodFallbackEstatico(t *testing.T) {
 // TestDesignMethodDelAcervoVivo valida CAPA 2: con tarjetas `design-method/*` sembradas, los principios
 // salen del ACERVO (arbitrable), method_source es "corpus", y respetan el orden por importancia.
 func TestDesignMethodDelAcervoVivo(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +345,7 @@ func TestDesignMethodDelAcervoVivo(t *testing.T) {
 // TestDesignMethodExcluidoDelCorpus valida que el sub-acervo del método NO se duplica: una tarjeta
 // `design-method/*` que matchea el pedido viaja como `method[]`, NUNCA como patrón del corpus.
 func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +391,7 @@ func TestDesignMethodExcluidoDelCorpus(t *testing.T) {
 // pool de búsqueda y dejar el corpus de patrones vacío con degraded en falso. El pool se agranda para
 // dejar lugar a los patrones reales tras excluir el método.
 func TestDesignMethodNoStarveaCorpus(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +443,7 @@ func corpusIDs(hits []patronItem) []string {
 // RELLENO con los hex reales de ESA marca en el dialecto del target; una marca en prosa cae a la guía
 // genérica sin valores; y el naranja de un cliente nunca se cruza con el índigo de Musubi.
 func TestDesignEmitRellenaTokens(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

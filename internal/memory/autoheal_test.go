@@ -5,7 +5,7 @@ import "testing"
 // TestAutoHealRepairsLowRisk verifica que AutoHeal repara los checks de bajo riesgo
 // (acá: orphan_relations) y persiste el reporte final en MetaLastHealth (T5.4).
 func TestAutoHealRepairsLowRisk(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

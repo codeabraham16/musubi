@@ -467,11 +467,27 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	if !ok {
 		return nil, rpcErrorf(codeUnauthorized, "no se pudo atribuir el grafo a un proyecto (declará project_id o usá una credencial con proyecto)")
 	}
+	// Redacción forzada ANTES de persistir (Tramo 0 · M01, misma clase de agujero que cerró T17.2):
+	// el central redacta todo lo que entra de a uno (save_fact, save_code, ingest, distill) y esta
+	// puerta a granel entraba cruda. Un gist es el resumen de un archivo —ahí viven connection
+	// strings y claves hardcodeadas—, y el nombre de un símbolo puede ser la clave misma. Sólo se
+	// tapa TEXTO LIBRE: Key/Path/Kind/fingerprints de nodos y todos los campos de aristas son
+	// identificadores estructurales o etiquetas fijas (ProvExtracted) que otros códigos usan como
+	// clave; redactarlos rompería el grafo. redactIfForced es no-op en loopback e idempotente, así
+	// que un re-push del mismo grafo no cambia nada.
+	for i := range args.Nodes {
+		args.Nodes[i].Name = s.redactIfForced(args.Nodes[i].Name)
+	}
 	if err := s.engine.ReplaceProjectGraphFrom(origin, args.Nodes, args.Edges); err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al persistir el grafo federado: %v", err)
 	}
 	res := map[string]interface{}{"nodes": len(args.Nodes), "edges": len(args.Edges)}
 	if args.Gists != nil {
+		// Gist y Symbols: los mismos dos campos que save_code redacta de a uno.
+		for i := range *args.Gists {
+			(*args.Gists)[i].Gist = s.redactIfForced((*args.Gists)[i].Gist)
+			(*args.Gists)[i].Symbols = s.redactIfForced((*args.Gists)[i].Symbols)
+		}
 		if err := s.engine.ReplaceProjectCodeMemoryFrom(origin, *args.Gists); err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al persistir los gists federados: %v", err)
 		}

@@ -274,11 +274,21 @@ func TestPushGraphComprimeYLlegaCompleto(t *testing.T) {
 // crudos (5.194 nodos, 11.225 aristas, 113 gists) contra un tope de 4 MiB, y el central lo
 // rechazaba con -32700. Acá se fabrica un grafo que supera ese tope y se exige que cruce entero.
 func TestPushDelPorteDeProduccionCruzaEntero(t *testing.T) {
+	// EL PLAZO SE ESCALA BAJO `-race`, Y NO ES UN PARCHE (A53). Comprimir y serializar 5,2 MB con
+	// el detector encima tarda más de 90 s —medido: 93,04 s, con cero `DATA RACE` reportados—, así
+	// que con 60 s el test moría por `context deadline exceeded` y parecía una carrera. Este test
+	// no mide latencia: mide que un grafo del porte del de producción cruce ENTERO. Achicar el
+	// grafo no era opción, porque su razón de ser es superar `maxRequestBody`.
+	plazo := 60
+	if corriendoBajoDetector {
+		plazo = 300
+	}
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 60 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
+		reqTimeout: time.Duration(plazo) * time.Second, loopbackOnly: true}))
 	t.Cleanup(ts.Close)
 
-	c, err := NewSyncClient(config.SyncConfig{CentralURL: ts.URL, AllowInsecureToken: true, RequestTimeoutSeconds: 60})
+	c, err := NewSyncClient(config.SyncConfig{CentralURL: ts.URL, AllowInsecureToken: true, RequestTimeoutSeconds: plazo})
 	if err != nil {
 		t.Fatalf("NewSyncClient: %v", err)
 	}

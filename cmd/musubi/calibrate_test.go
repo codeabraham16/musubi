@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestSuggestedDivisorsUsaSugeridosYConservaFaltantes(t *testing.T) {
@@ -33,7 +34,7 @@ func TestSuggestedDivisorsUsaSugeridosYConservaFaltantes(t *testing.T) {
 }
 
 func TestGatherCalibrationTextsIncluyeCorpusBase(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

@@ -101,7 +101,7 @@ func (e *DbEngine) TopicDomainCounts() ([]DomainCount, error) {
 		            ELSE topic_key END AS domain,
 		       COUNT(*) AS c
 		FROM observations
-		WHERE `+visibleObsPredicate+`
+		WHERE ` + visibleObsPredicate + `
 		GROUP BY domain
 		ORDER BY c DESC, domain ASC`)
 	if err != nil {

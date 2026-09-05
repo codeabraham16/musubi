@@ -9,7 +9,7 @@ import (
 // otelDemoRun arranca un run a→b, completa a (opcionalmente failed) y devuelve el engine.
 func otelDemoRun(t *testing.T, runID string, aStatus string) *DbEngine {
 	t.Helper()
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestWorkflowTraceOTLPFailedStatus(t *testing.T) {
 }
 
 func TestWorkflowTraceOTLPSkipped(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestWorkflowTraceOTLPSkipped(t *testing.T) {
 }
 
 func TestWorkflowTraceOTLPUnknownRun(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

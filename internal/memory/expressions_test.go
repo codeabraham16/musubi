@@ -45,7 +45,7 @@ func TestEvalConditionErrors(t *testing.T) {
 }
 
 func TestWorkflowGatingSkipsBranch(t *testing.T) {
-	engine, _ := NewDbEngine(t.TempDir())
+	engine, _ := NewDbEngine(dirSembrado(t))
 	defer engine.Close()
 
 	// 'build' siempre; 'deploy' solo si build.result contiene "ok"; 'rollback' si NO.

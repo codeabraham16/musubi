@@ -193,7 +193,7 @@ func TestEntityContextProjectScope(t *testing.T) {
 	}
 }
 
-// TestFactsUnattributedVisibleToAll: los hechos sin atribuir ('' — legacy tras la migración v14, o
+// TestFactsUnattributedVisibleToAll: los hechos sin atribuir (” — legacy tras la migración v14, o
 // escritos por admin/stdio) son visibles a CUALQUIER proyecto (espacio federado compartido).
 func TestFactsUnattributedVisibleToAll(t *testing.T) {
 	e := newTestEngine(t)

@@ -8,13 +8,14 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestConflictsEnforcePrincipalScope valida el aislamiento de musubi_conflicts (Track 17
 // T17.1b-2): un principal acotado solo ve los conflictos cuya observación de ORIGEN (source) es
 // de SU proyecto; un admin ve federado. Guard de no-bleed de la superficie de conflictos.
 func TestConflictsEnforcePrincipalScope(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

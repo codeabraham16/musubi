@@ -7,7 +7,7 @@ import (
 // TestInitSchemaIdempotente verifica que initSchema se puede llamar dos veces
 // sin error (idempotencia mediante CREATE TABLE IF NOT EXISTS).
 func TestInitSchemaIdempotente(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestInitSchemaIdempotente(t *testing.T) {
 // TestSaveAndGetSkillDecisions verifica que SaveSkillDecision inserta filas y
 // GetSkillDecisions las recupera.
 func TestSaveAndGetSkillDecisions(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestSaveAndGetSkillDecisions(t *testing.T) {
 // TestSaveSkillDecisionAppendOnly verifica que varias llamadas con el mismo
 // skill_id crean filas separadas (log de sólo-inserción).
 func TestSaveSkillDecisionAppendOnly(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSaveSkillDecisionAppendOnly(t *testing.T) {
 // TestSkillDecisionNoValidationAtDBLayer verifica que la capa de DB acepta
 // cualquier valor de decision (la validación es responsabilidad del handler MCP).
 func TestSkillDecisionNoValidationAtDBLayer(t *testing.T) {
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

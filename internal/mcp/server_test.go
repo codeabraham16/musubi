@@ -8,12 +8,13 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // runRequests envía cada línea por Serve y devuelve las respuestas decodificadas.
 func runRequests(t *testing.T, lines ...string) []JsonRpcResponse {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("engine error: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // readiness_medido_test.go cubre el estado de madurez DESDE LA SUPERFICIE MCP (F3).
@@ -74,7 +75,7 @@ func TestReadinessAnunciadaYDeLectura(t *testing.T) {
 // El control positivo (el admin federado SÍ ve el dato) es lo que separa este test de uno que
 // pasaría con la tool rota devolviendo ceros para todo el mundo.
 func TestReadinessAcotadaAlProyecto(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

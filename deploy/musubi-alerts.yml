@@ -1,5 +1,12 @@
 # musubi-alerts.yml — reglas de alerta Prometheus para el cerebro central de Musubi (Track 18).
 #
+# despliegue: siempre
+#
+# Esta línea NO es decoración: `deploy/verificar-despliegue.sh` la lee para saber si un archivo
+# que no está cargado es una falla o una decisión. Sin ella, un archivo parkeado a propósito se
+# denuncia como drift y el informe entero empieza a ignorarse. Los valores son dos: `siempre`, o
+# `condicional — <la razón, en prosa>`.
+#
 # Cierra el hueco que marcó la auditoría: /metrics exponía contadores ricos (rechazos de cuota/
 # authz, outbox muerto, índice sin entrenar, staleness del backup) pero NADA disparaba sobre ellos
 # — operabilidad reactiva, no 24/7. Estas reglas hacen PAGINABLES los eventos de mayor consecuencia.
@@ -23,19 +30,49 @@ groups:
         annotations:
           summary: "El cerebro Musubi no responde al scrape (>5m)."
           runbook: "deploy/RUNBOOK.md#musubidown"
-
-      # --- DR: backup off-host (el CRÍTICO del baseline) ---
-      # age < 0  ⇒ nunca hubo un envío off-host exitoso (o no está configurado) — DR APAGADO.
-      # age > 48h ⇒ el timer dejó de shipear (dead-man's-switch).
-      - alert: MusubiBackupOffhostStale
-        expr: musubi_backup_offhost_age_seconds < 0 or musubi_backup_offhost_age_seconds > 172800
-        for: 10m
+      # ── El empuje OTLP se vigila a sí mismo (S11 · A46) ───────────────────────────────────
+      #
+      # Las TRES reglas se APAGAN SOLAS cuando el empuje está apagado, y eso no es casualidad:
+      # `musubi_push_failures_total` vale 0 con el empuje off, y `musubi_push_last_success_seconds`
+      # NO EXISTE hasta el primer empuje aceptado. Así que un despliegue que nunca encendió el
+      # empuje no recibe una sola alarma — que es la única forma de que estas reglas se puedan
+      # instalar SIEMPRE sin enseñarle a nadie a ignorar el canal.
+      - alert: MusubiPushOTLPFallando
+        expr: rate(musubi_push_failures_total[15m]) > 0
+        for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "El backup off-host de Musubi no shipea (nunca funcionó o >48h)."
-          runbook: "deploy/RUNBOOK.md#musubibackupoffhoststale"
+          summary: "El empuje OTLP de la flota no llega a destino."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpfallando"
 
-      # --- Sync: outbox muerto (observaciones 'shared' que agotaron reintentos) ---
+      # El empuje SE MURIÓ después de haber funcionado. Distinto del de arriba: acá no hay errores
+      # que contar porque puede que ni se esté intentando — el principal perdió su concesión
+      # `metrics` en una recarga en caliente, o la concesión quedó apuntando a un proyecto sin
+      # máquinas. Eso NO cuenta como fallo a propósito: `musubi_push_failures_total` significa «no
+      # llegó a destino», y acá ni se intentó llegar; contarlo rompería MusubiPushOTLPNuncaLlego,
+      # que separa «se cayó» de «nunca anduvo» justamente por ese contador.
+      #
+      # Desde A50 el LOG dice cuál de los tres modos es, y el runbook los tabula. La alerta detecta;
+      # el log diagnostica. Antes esta regla disparaba a los diez minutos y no había con qué seguir.
+      - alert: MusubiPushOTLPMudo
+        expr: musubi_push_last_success_seconds > 600
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El empuje OTLP funcionó alguna vez y hace más de 10 minutos que no."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpmudo"
+
+      # NUNCA funcionó: hay fallos y no hay un solo éxito. Es la firma exacta del Prometheus sin
+      # `--web.enable-otlp-receiver` (404 en cada POST) y del token mal puesto (401). Se separa de
+      # las otras dos porque el arreglo es completamente distinto: no se cayó nada, nunca anduvo.
+      - alert: MusubiPushOTLPNuncaLlego
+        expr: musubi_push_failures_total > 0 unless musubi_push_last_success_seconds
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El empuje OTLP nunca llegó a destino ni una vez: revisá --web.enable-otlp-receiver y el token."
+          runbook: "deploy/RUNBOOK.md#musubipushotlpnuncallego"
+
       - alert: MusubiOutboxDead
         expr: musubi_sync_outbox{state="dead"} > 0
         for: 15m
@@ -44,7 +81,106 @@ groups:
           summary: "Hay filas del outbox de sync muertas (agotaron reintentos)."
           runbook: "deploy/RUNBOOK.md#musubioutboxdead"
 
+      # EL ÚNICO TRABAJO PROGRAMADO DEL SERVIDOR, Y NADIE MIRABA SI SEGUÍA CORRIENDO.
+      #
+      # `musubi-backup.timer` (03:30) es el único `OnCalendar` de todo el repo. Su unidad no tiene
+      # `OnFailure`, y aunque lo tuviera no alcanzaría: UN TIMER QUE NO DISPARA NO FALLA. Un
+      # `systemctl mask`, una unidad deshabilitada por un upgrade del SO o un reloj corrido no
+      # producen ni un error — producen silencio, que es exactamente lo que este archivo existe
+      # para no confundir con calma.
+      #
+      # Y la serie que parecía cubrirlo no lo cubría: `musubi_backup_offhost_age_seconds` sale de
+      # una marca que SÓLO se escribe tras un envío afuera exitoso. En modo local-only —hoy la
+      # decisión vigente, con BACKUP_REMOTE vacío— vale -1 para siempre, indistinguible de «acá no
+      # hay backup». Por eso hace falta ésta, que responde la otra pregunta: ¿se tomó el snapshot?
+      #
+      # 26 h y no 24: el trabajo corre a las 03:30, así que a las 03:29 del día siguiente la edad
+      # ya roza las 24 h y un umbral justo daría un falso positivo cada madrugada. Con 26 avisa
+      # recién cuando se salteó una noche entera.
+      #
+      # El `-1` entra en la misma alerta a propósito: «nunca se tomó uno» es tan grave como «dejó
+      # de tomarse», y separarlos daría dos alertas para el mismo arreglo. Ver el runbook para el
+      # caso legítimo de un servidor recién instalado.
+      - alert: MusubiBackupLocalStale
+        expr: musubi_backup_local_age_seconds > 93600 or musubi_backup_local_age_seconds == -1
+        for: 3h
+        labels: { severity: critical }
+        annotations:
+          summary: "No hay snapshot de la base desde hace {{ $value | humanizeDuration }} (o nunca hubo)."
+          nota: "Es la memoria compartida de todo el equipo. Distinto de MusubiBackupOffhostStale, que avisa si el backup no SALE de la máquina; éste avisa si no se TOMA. Mirá `systemctl status musubi-backup.timer` y `journalctl -u musubi-backup.service -n 50`."
+          runbook: "deploy/RUNBOOK.md#musubibackuplocalstale"
+
+      # UNA FILA QUE MUERE ES RUIDOSA; UNA QUE ENVEJECE ES MUDA, Y ES PEOR.
+      #
+      # `MusubiOutboxDead` (arriba) mira las filas que AGOTARON sus reintentos. Pero una fila que
+      # no puede enviarse y tampoco muere se queda pendiente para siempre, y eso no lo miraba
+      # nadie: el gauge `musubi_sync_outbox_oldest_pending_age_seconds` se exporta desde hace
+      # tiempo y NINGUNA regla lo leía. Lo que se pierde mientras tanto es memoria de EQUIPO que
+      # no llega al cerebro central — cada uno sigue viendo su copia local y nadie nota el corte.
+      #
+      # El drenaje corre cada 30 s (`sync.drain_interval_seconds`), así que media hora de atraso
+      # son SESENTA drenajes perdidos: no es lentitud, es que algo dejó de andar. Con el `for` de
+      # 15 min, avisa a los 45 — tiempo de sobra para que un reinicio del central no despierte a
+      # nadie, y poco para enterarse el mismo día.
+      - alert: MusubiOutboxAtrasado
+        expr: musubi_sync_outbox_oldest_pending_age_seconds > 1800
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El sync lleva {{ $value | humanizeDuration }} sin drenar su fila más vieja."
+          nota: "Las observaciones compartidas se están quedando en el cerebro LOCAL: el equipo no las ve. Distinto de MusubiOutboxDead, que es cuando ya agotaron reintentos. Mirá si el central contesta y qué dice `musubi_sync_status`."
+          runbook: "deploy/RUNBOOK.md#musubioutboxatrasado"
+
       # --- Recall degradado: IVF sin entrenar con dataset grande (cae a full-scan) ---
+      # --- El exportador dejó afuera parte de la flota ---
+      #
+      # No es una alerta de rendimiento: es de COBERTURA. Lo que el exportador recorta no tiene
+      # serie, y una alerta no puede dispararse sobre una serie que no existe — así que el efecto
+      # de este truncado es que ServicioCaido (y las demás) dejan de cubrir a las máquinas o los
+      # servicios que quedaron afuera, en silencio y justo cuando la flota crece.
+      #
+      # Hasta la Ola 0 esto se avisaba con una línea `#` en el propio /metrics, que Prometheus
+      # descarta al parsear: el sistema sabía que había recortado y no había forma de que ese
+      # hecho llegara acá.
+      #
+      # `for: 15m` y no menos: el techo se cruza y se descruza solo cuando una máquina reporta un
+      # inventario más chico, y avisar del parpadeo sería ruido. Quince minutos es «se quedó así».
+      - alert: ExportacionTruncada
+        expr: musubi_fleet_export_truncated == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El exportador recorta la flota por el techo de {{ $labels.kind }}."
+          description: >-
+            Lo que queda afuera del export NO tiene serie en Prometheus, así que sus alertas no
+            pueden dispararse. No es que esté todo bien: es que no se está mirando.
+          runbook: "deploy/RUNBOOK.md#exportaciontruncada"
+
+      # --- Una ventana de mantenimiento que nadie cerró ---
+      #
+      # Una ventana silencia las alertas de esa máquina Y frena su auto-heal. O sea que una
+      # ventana olvidada no se nota: la máquina queda ciega y todo se ve en verde, que es
+      # exactamente el estado que este proyecto persigue.
+      #
+      # El dominio ya pone un techo duro de 24 h por ventana (fleet.MantenimientoMax), así que
+      # esto no puede pasar por un `hasta` mal escrito. Lo que SÍ puede pasar es que alguien
+      # encadene ventanas, o que un guion las renueve solo y nadie se acuerde de por qué.
+      #
+      # `for: 25h` y no menos: por debajo del techo de una ventana legítima esto sonaría en cada
+      # mantenimiento largo, y una alerta que suena cuando todo va bien enseña a ignorar el canal.
+      - alert: MantenimientoEterno
+        expr: musubi_fleet_device_maintenance == 1
+        for: 25h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lleva más de 25 horas en mantenimiento."
+          description: >-
+            Mientras la ventana esté activa esta máquina no alerta y su auto-heal no actúa. Una
+            ventana que nadie cierra es una máquina ciega con el panel en verde.
+          runbook: "deploy/RUNBOOK.md#mantenimientoeterno"
+
       - alert: MusubiVectorIndexUntrained
         expr: musubi_vector_index_trained == 0 and musubi_embeddings_active > 10000
         for: 15m
@@ -81,3 +217,153 @@ groups:
         annotations:
           summary: "Más del 20% de las tools/call fallan (sostenido 10m)."
           runbook: "deploy/RUNBOOK.md#musubitoolerrorratehigh"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════
+  # LA FLOTA (track «Control de flota»)
+  #
+  # Todas estas reglas dependen de que el scrape tenga concesiones de flota en principals.yaml
+  # (ver el encabezado de deploy/prometheus/prometheus.yml). Sin ellas no hay series y las
+  # alertas no disparan NI FALLAN — que es la trampa silenciosa que cierra FlotaSinTelemetria.
+  # ═══════════════════════════════════════════════════════════════════════════════════════════
+
+  - name: musubi-watchdog
+    rules:
+      # SIEMPRE EN FIRING, A PROPÓSITO. Su valor no está en dispararse: está en DEJAR DE LLEGAR.
+      #
+      # Todas las reglas de arriba comparten un punto ciego: si Prometheus muere, si Alertmanager
+      # muere, si el canal de notificación se cae, NINGUNA dispara — y el silencio se ve
+      # exactamente igual que "todo bien". Esta regla convierte ese silencio en una señal.
+      #
+      # Alertmanager la rutea a un receptor `watchdog` (ver deploy/prometheus/alertmanager.yml)
+      # que hace un ping periódico a un servicio externo. Ese servicio es el que grita cuando el
+      # ping falta. Sin ese otro lado, esta regla no hace nada: es media alarma.
+      - alert: MusubiSiempreViva
+        expr: vector(1)
+        labels: { severity: none }
+        annotations:
+          summary: "Latido de la cadena de alertas. Si DEJA de llegar, lo roto es el sistema de alertas y todo el resto está ciego."
+          runbook: "deploy/RUNBOOK.md#musubisiempreviva"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: CadenaDeAlertasFallando
+        # UN RECEPTOR QUE NO ENTREGA, MIENTRAS OTRO ENTREGA PERFECTO.
+        #
+        # Encontrado midiendo, no suponiendo: el receptor del dead-man's switch llevaba 32 horas
+        # fallando cada 5 minutos —387 errores— con el mismo Alertmanager mandando por Telegram
+        # sin un solo fallo. El error vivía en el log de un contenedor, que es donde las cosas
+        # van a no ser vistas.
+        #
+        # `by(integration)` y NO por `reason`: el motivo es útil en el mensaje, no para agrupar —
+        # un canal roto que rota entre `clientError` y `other` sería dos alertas distintas.
+        expr: sum by(integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "La cadena de alertas no entrega por {{ $labels.integration }}"
+          description: >-
+            {{ $value | printf "%.0f" }} envíos fallidos en 15 minutos. Los OTROS canales pueden
+            estar entregando bien: esta alerta llegó, así que al menos uno anda.
+          runbook: "deploy/RUNBOOK.md#cadenadealertasfallando"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # LO QUE FALTABA PARA QUE LA REGLA DE ARRIBA PUDIERA SIQUIERA DISPARARSE (A73)
+      #
+      # `CadenaDeAlertasFallando` mira `alertmanager_notifications_failed_total`, que sólo existe
+      # si Prometheus SCRAPEA al Alertmanager. El 2026-09-02 se midió que ese job no estaba
+      # desplegado: la regla llevaba días cargada y no podía dispararse nunca. Su guarda de repo
+      # pasaba en verde porque leía `deploy/prometheus/prometheus.yml`, y el servidor corría otro
+      # archivo.
+      #
+      # `absent()` conserva las etiquetas del matcher, así que `{{ $labels.job }}` nombra cuál
+      # EL ÚLTIMO ESLABÓN CAÍDO. `ScrapeQueElRepoDeclaraYNoExiste` (abajo) cubre «el job ni
+      # siquiera está configurado»; esto cubre la otra mitad, que es «está configurado y no
+      # contesta». Sin ninguna de las dos, Alertmanager se podía morir un domingo y no lo decía
+      # nada: se auditó el 2026-09-02 y `up{job="alertmanager"} == 0` no existía en ningún archivo.
+      #
+      # LEELA SABIENDO LO QUE NO PUEDE HACER, que es la parte honesta: si Alertmanager está caído,
+      # esta alerta NO se entrega — la entrega es justamente lo que está roto. Lo que sí hace es
+      # quedar FIRING y visible en Prometheus, que es donde la lee `deploy/verificar-despliegue.sh`
+      # y donde la ve quien abre el panel. El dead-man's-switch de verdad sigue siendo un watchdog
+      # EXTERNO (B13 en specs/control-de-flota/ABIERTO.md, despriorizado por gio): esto no lo
+      # reemplaza, lo hace visible sin salir del sistema.
+      - alert: AlertmanagerCaido
+        expr: up{job="alertmanager"} == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Alertmanager no contesta: ninguna alerta se está entregando a nadie."
+          nota: "Prometheus sigue evaluando y las alertas quedan FIRING en su UI, pero no salen ni a Telegram ni al CRM. Mientras dure, el único canal es mirar Prometheus. Ver deploy/RUNBOOK.md#alertmanagercaido"
+
+      # UNA CONFIGURACIÓN QUE NO RECARGÓ ES PEOR QUE UNA CAÍDA, porque no se ve. Si alguien escribe
+      # un YAML inválido y recarga, el proceso NO se muere: sigue corriendo con la configuración
+      # VIEJA. Todo parece normal —el target está up, las alertas evalúan— y sin embargo lo que
+      # corre no es lo que dice el repo. Las dos series ya están en el TSDB (prometheus.yml scrapea
+      # el job `alertmanager` con `regex: "up|alertmanager_.*"` y también se scrapea a sí mismo),
+      # así que esto no cuesta un scrape nuevo: son dos líneas sobre datos que ya se pagan.
+      - alert: ConfiguracionSinRecargar
+        expr: alertmanager_config_last_reload_successful == 0 or prometheus_config_last_reload_successful == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.job }} rechazó su última recarga: está corriendo una configuración vieja."
+          nota: "El proceso NO se cae ante un config inválido, sigue con el anterior — así que nada más lo delata. Revisá el log del servicio, corregí el archivo y recargá. Ver deploy/RUNBOOK.md#configuracionsinrecargar"
+
+      # falta. Los tres jobs son los que el repo declara en prometheus.yml, y una prueba los
+      # compara contra esta lista: agregar un scrape sin vigilarlo rompe la suite.
+      - alert: ScrapeQueElRepoDeclaraYNoExiste
+        expr: absent(up{job="musubi"}) or absent(up{job="prometheus"}) or absent(up{job="alertmanager"})
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El scrape `{{ $labels.job }}` no existe: lo que dependa de sus métricas está ciego, no en verde."
+          nota: "Es distinto de un target caído — `up == 0` significa «no contesta»; acá el job ni siquiera está configurado, así que ninguna regla que use sus métricas puede dispararse. Ver deploy/RUNBOOK.md#scrapequeelrepodeclaraynoexiste"
+
+      # CUATRO OJOS: ALGUIEN ESPERA Y NADIE LE AVISÓ A NADIE (Ola 2).
+      #
+      # La aprobación NO VIAJA. Musubi no le manda una notificación a quien puede aprobar, porque
+      # mandarla exigiría saber a quién —«quién tiene `shell` sobre esta máquina» es una consulta
+      # sobre principals.yaml que este track no invierte—. La consecuencia es concreta: una
+      # solicitud que nadie mira VENCE SOLA, y el control se degrada de «hacen falta dos personas»
+      # a «se niega con media hora de demora», que es peor que no tenerlo porque parece que anda.
+      #
+      # SIN `for:`, Y ES DELIBERADO. La serie ya mide una DURACIÓN —hace cuánto espera la más
+      # vieja—, así que un `for:` mediría el tiempo dos veces y retrasaría el aviso justo cuando
+      # la ventana entera son 30 minutos. Con el contador solo haría falta un `for:` y además
+      # dispararía por un flujo sano de solicitudes que entran y salen.
+      #
+      # 900 s = la mitad de la ventana: queda tiempo de sobra para atenderla antes de que venza y
+      # la persona tenga que volver a pedirla.
+      #
+      # NO se inhibe por mantenimiento: alguien trabado está trabado igual, y una ventana de
+      # mantenimiento no dice nada sobre si corresponde aprobar.
+      - alert: AprobacionDeCuatroOjosSinAtender
+        expr: max by (project) (musubi_fleet_approval_wait_seconds) > 900
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace {{ $value | humanizeDuration }} que alguien espera un segundo par de ojos en `{{ $labels.project }}`."
+          nota: "Musubi no le avisa a quien puede aprobar: la solicitud hay que ir a buscarla con `musubi_fleet_approvals`, y sólo la ve quien tiene la MISMA capacidad sobre esa máquina. Si vence, quien la pidió tiene que empezar de nuevo. Ver deploy/RUNBOOK.md#aprobaciondecuatroojossinatender"
+
+      # LA CUSTODIA CRUZADA, LA MITAD DE ESTE ARCHIVO. La otra vive en musubi-alerts-flota.yml y
+      # vigila a éste. El porqué del cruce está explicado allá, en el grupo `musubi-custodia`:
+      # un archivo que declara su propio conteo se despliega junto con el conteo y nunca falla.
+      #
+      # ESTE ARCHIVO SE INSTALA SIEMPRE; EL DE FLOTA NO, y de ahí sale la forma rara del `or`.
+      # Las reglas de flota se instalan sólo si el cerebro expone `musubi_fleet_*` (ver el
+      # encabezado de aquél y deploy/docker/preparar.sh), así que exigir que existan haría sonar
+      # esta alerta desde el día uno en cualquier cerebro sin plano de flota — que es exactamente
+      # el error que aquel encabezado explica y que este archivo no puede repetir.
+      #
+      # La precondición la responde la telemetría misma: si hay UNA máquina exportando, el plano
+      # de flota está desplegado y sus reglas TIENEN que estar cargadas. Sin máquinas, el `absent`
+      # queda apagado y sólo se comprueba el conteo si el archivo está.
+      - alert: ReglasDeFlotaSinDesplegar
+        expr: >-
+          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 24
+          or (absent(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"})
+          and on() (count(musubi_fleet_device_up) > 0))
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Las reglas de flota que corren no son las que declara el repo."
+          nota: "Quedó una versión vieja del archivo cargada. `deploy/verificar-despliegue.sh` dice exactamente cuáles reglas faltan o sobran. Ver deploy/RUNBOOK.md#reglasdeflotasindesplegar"

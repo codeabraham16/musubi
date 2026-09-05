@@ -1,0 +1,510 @@
+package fleet
+
+// Pruebas de la CRONOLOGÍA (fase 5 · S11): la línea de tiempo de una máquina.
+//
+// Lo que se custodia acá es el DOMINIO: qué se puede ver, qué se cuenta y en qué ventana. La
+// compuerta contra un principal de verdad vive en internal/mcp/fleet_cronologia_test.go.
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// Todo tipo de hecho MOSTRABLE tiene capacidad Y plano, y el que no es mostrable no tiene ninguna
+// de las dos. Es el guard de completitud del enum: un tipo nuevo sin clasificar queda invisible,
+// no público, y esta prueba obliga a que esa decisión sea explícita.
+//
+// Sabotaje: agregarle un `case` a CapDeHecho para HechoSinClasificar → falla acá.
+// Sabotaje: agregar un tipo a TiposDeHecho sin su case → falla acá.
+func TestCadaTipoDeHechoMostrableTieneCapacidadYPlano(t *testing.T) {
+	for _, tipo := range TiposDeHecho {
+		capacidad, tieneCap := CapDeHecho(tipo)
+		plano, tienePlano := PlanoDeHecho(tipo)
+
+		if tipo == HechoSinClasificar {
+			if tieneCap || tienePlano {
+				t.Errorf("%q NO puede ser mostrable: cap=%q(%v) plano=%q(%v)", tipo, capacidad, tieneCap, plano, tienePlano)
+			}
+			continue
+		}
+		if !tieneCap {
+			t.Errorf("el tipo %q no tiene capacidad asociada: quedaría invisible para todos", tipo)
+		}
+		if !tienePlano {
+			t.Errorf("el tipo %q no tiene plano: la respuesta lo dibujaría sin decir qué es", tipo)
+		}
+		if capacidad == "" || plano == "" {
+			t.Errorf("el tipo %q declara tener cap/plano pero vienen vacíos", tipo)
+		}
+	}
+}
+
+// Una operación interna que esta versión NO conoce no se le muestra a nadie, ni siquiera a quien
+// tenga todas las capacidades. El default es no mostrar.
+//
+// Sabotaje: en TipoDeArgv, devolver HechoComando en vez de HechoSinClasificar para lo desconocido
+// → una operación nueva del canal se le mostraría a todo el que pueda ejecutar, revelando el
+// plano al que pertenece antes de que nadie haya decidido quién puede verla.
+func TestUnaOperacionInternaDesconocidaNoSeLeMuestraANadie(t *testing.T) {
+	tipo := TipoDeArgv([]string{"musubi:todavia-no-existe", "x"})
+	if tipo != HechoSinClasificar {
+		t.Fatalf("una operación interna desconocida se clasificó como %q; tiene que ser %q", tipo, HechoSinClasificar)
+	}
+	if _, mostrable := CapDeHecho(tipo); mostrable {
+		t.Error("lo desconocido resultó mostrable: el default tiene que ser NO mostrar")
+	}
+}
+
+// Las operaciones internas cuyo plano SÍ se lee del argv están clasificadas, cada una en el suyo.
+// Sin esto, el fail-closed de arriba escondería la mitad de la cronología real y nadie lo notaría
+// hasta usarla.
+func TestLasOperacionesInternasDeHoyEstanClasificadas(t *testing.T) {
+	casos := map[string]struct {
+		tipo TipoDeHecho
+		cap  Cap
+	}{
+		OpPantalla: {HechoCanalPantalla, CapScreenView},
+		OpShell:    {HechoCanalShell, CapShell},
+	}
+	for op, quiero := range casos {
+		if OpsClasificadasPorFila[op] {
+			t.Fatalf("%s figura en OpsClasificadasPorFila y este test lo trata como deducible del argv", op)
+		}
+		tipo := TipoDeArgv([]string{op, "id"})
+		if tipo != quiero.tipo {
+			t.Errorf("%s se clasificó como %q, esperaba %q", op, tipo, quiero.tipo)
+		}
+		capacidad, mostrable := CapDeHecho(tipo)
+		if !mostrable || capacidad != quiero.cap {
+			t.Errorf("%s pide %q (mostrable=%v), esperaba %q", op, capacidad, mostrable, quiero.cap)
+		}
+		if plano, _ := PlanoDeHecho(tipo); plano != PlanoEntrar {
+			t.Errorf("%s cayó en el plano %q: estas operaciones internas son del plano de ENTRAR", op, plano)
+		}
+	}
+	// Y un comando de verdad NO es una operación interna.
+	if tipo := TipoDeArgv([]string{"systemctl", "restart", "nginx"}); tipo != HechoComando {
+		t.Errorf("un comando del host se clasificó como %q", tipo)
+	}
+}
+
+// EL AVISO DE UN EXEC NO ES UN HECHO DE PANTALLA, Y ANTES SÍ LO ERA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// `musubi:avisar` y `musubi:preguntar` los encolan los TRES caminos con el mismo argv, y
+// `TipoDeArgv` los mandaba a los tres a `HechoCanalPantalla`. Consecuencia medida en el código:
+// un principal con SÓLO `screen:view` sobre una máquina leía en su cronología, con el texto
+// entero, «Musubi: fulano está ejecutando comandos en esta máquina» y «...está abriendo una
+// terminal...» — dos planos que esa credencial no puede ver.
+//
+// La misma fila, con el mismo argv, tiene que pedir una capacidad DISTINTA según quién la encoló.
+// Por eso el plano viaja en la fila y no en el argv.
+//
+// Sabotaje que lo hace fallar: devolver HechoCanalPantalla para OpAvisar en TipoDeArgv, o hacer
+// que TipoDeComando ignore c.Clasificacion.
+func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
+	casos := []struct {
+		clase TipoDeHecho
+		cap   Cap
+		plano PlanoDeFlota
+	}{
+		{HechoCanalPantalla, CapScreenView, PlanoEntrar},
+		{HechoCanalShell, CapShell, PlanoEntrar},
+		{HechoCanalExec, CapExec, PlanoActuar},
+	}
+	for op := range OpsClasificadasPorFila {
+		// SIN etiqueta no se muestra a nadie: una fila anterior a la migración 46 pudo salir de
+		// cualquiera de los tres caminos, y no hay valor seguro que no sea esconderla.
+		if tipo := TipoDeArgv([]string{op, "texto"}); tipo != HechoSinClasificar {
+			t.Errorf("%s sin etiqueta se clasificó como %q: el argv no distingue el plano y adivinarlo filtra dos de los tres", op, tipo)
+		}
+		for _, c := range casos {
+			cmd := Comando{Argv: []string{op, "texto"}, Clasificacion: c.clase}
+			tipo := TipoDeComando(cmd)
+			if tipo != c.clase {
+				t.Errorf("%s encolado como %q se leyó como %q", op, c.clase, tipo)
+			}
+			capacidad, mostrable := CapDeHecho(tipo)
+			if !mostrable || capacidad != c.cap {
+				t.Errorf("%s en el plano %q pide %q (mostrable=%v), esperaba %q", op, c.clase, capacidad, mostrable, c.cap)
+			}
+			if plano, _ := PlanoDeHecho(tipo); plano != c.plano {
+				t.Errorf("%s en %q cayó en el plano %q, esperaba %q", op, c.clase, plano, c.plano)
+			}
+			// Y lo que de verdad importa: el hecho que llega a la cronología.
+			h := HechoDeComando(Comando{Argv: cmd.Argv, Clasificacion: c.clase}, "pc")
+			if cap, _ := CapDeHecho(h.Tipo); cap != c.cap {
+				t.Errorf("el Hecho de %s en %q pide %q, esperaba %q", op, c.clase, cap, c.cap)
+			}
+		}
+	}
+
+	// UNA ETIQUETA QUE ESTA VERSIÓN NO CONOCE NO SE USA A CIEGAS: cae al argv, que esconde.
+	raro := Comando{Argv: []string{OpAvisar, "x"}, Clasificacion: TipoDeHecho("plano_del_futuro")}
+	if tipo := TipoDeComando(raro); tipo != HechoSinClasificar {
+		t.Errorf("una clasificación desconocida se usó igual (%q): el fail-closed va en los dos sentidos", tipo)
+	}
+}
+
+// La contraseña de una sesión de pantalla NUNCA sale por el argv, en ninguna superficie.
+//
+// Sabotaje: que ArgvDeBitacora devuelva `argv` tal cual → falla acá, y la cronología entregaría
+// contraseñas de sesión a quien pueda leerla.
+func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
+	const secreto = "ContraseñaDeSesión123"
+	limpio := ArgvDeBitacora([]string{OpPantalla, "ses-42", secreto, "30m0s"})
+	if strings.Contains(strings.Join(limpio, " "), secreto) {
+		t.Fatalf("la contraseña sobrevivió al saneo: %v", limpio)
+	}
+	// El id se conserva a propósito: es con lo que se cruza contra la bitácora de pantalla.
+	if len(limpio) < 2 || limpio[1] != "ses-42" {
+		t.Errorf("se perdió el id de sesión, que es lo único que sirve para cruzar: %v", limpio)
+	}
+	// Un comando común no se toca.
+	crudo := []string{"journalctl", "-u", "nginx"}
+	if got := ArgvDeBitacora(crudo); strings.Join(got, " ") != strings.Join(crudo, " ") {
+		t.Errorf("un comando común no se debe tocar: %v", got)
+	}
+	// El hecho construido tampoco lo lleva: es la puerta por la que pasa TODA la cronología.
+	h := HechoDeComando(Comando{Argv: []string{OpPantalla, "ses-42", secreto}}, "pc")
+	if strings.Contains(strings.Join(h.Argv, " "), secreto) {
+		t.Fatalf("HechoDeComando dejó pasar la contraseña: %v", h.Argv)
+	}
+}
+
+// La ventana es SEMIABIERTA: incluye el comienzo y excluye el final. Dos ventanas consecutivas no
+// cuentan dos veces el hecho del borde.
+//
+// Sabotaje: usar `!t.After(v.Hasta)` en Contiene → el hecho de las 12:00 cae en las dos ventanas
+// y sumar los dos tramos da un total que no existe.
+func TestLaVentanaEsSemiabierta(t *testing.T) {
+	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	manana := Ventana{Desde: base.Add(-12 * time.Hour), Hasta: base}
+	tarde := Ventana{Desde: base, Hasta: base.Add(12 * time.Hour)}
+
+	if !tarde.Contiene(base) {
+		t.Error("el instante del borde tiene que caer en la ventana que EMPIEZA ahí")
+	}
+	if manana.Contiene(base) {
+		t.Error("el instante del borde NO puede caer también en la ventana que TERMINA ahí")
+	}
+	if manana.Contiene(base.Add(-13 * time.Hour)) {
+		t.Error("un instante anterior al `desde` no puede caer adentro")
+	}
+}
+
+// La ventana se lleva a la granularidad del ALMACENAMIENTO —el segundo— redondeando hacia AFUERA,
+// y una punta sin fracción no se mueve.
+//
+// Sabotaje: truncar las dos puntas hacia abajo → una ventana que termina «ahora» excluye lo que
+// acaba de pasar, y quien reinicia un servicio y entra a mirar ve la cronología vacía. Fue un bug
+// real de esta misma tanda, encontrado por el control POSITIVO del barrido de aislamiento.
+func TestLaVentanaSeNormalizaHaciaAfuera(t *testing.T) {
+	// Punta de arriba con fracción: se redondea hacia ARRIBA, así entra el hecho de ese segundo.
+	ahora := time.Date(2026, 8, 29, 22, 29, 58, 700_000_000, time.UTC)
+	v := Ventana{Desde: ahora.Add(-time.Hour), Hasta: ahora}.Normalizada()
+	hecho := time.Date(2026, 8, 29, 22, 29, 58, 0, time.UTC) // como lo guarda RFC3339: sin fracción
+	if !v.Contiene(hecho) {
+		t.Fatalf("el hecho de %s quedó afuera de una ventana que termina en %s", hecho.Format(time.RFC3339Nano), v.Hasta.Format(time.RFC3339Nano))
+	}
+
+	// Punta de abajo con fracción: se redondea hacia ABAJO, así no se pierde el hecho del borde.
+	v2 := Ventana{Desde: ahora, Hasta: ahora.Add(time.Hour)}.Normalizada()
+	if !v2.Contiene(hecho) {
+		t.Errorf("el hecho de %s quedó afuera de una ventana que empieza en %s", hecho.Format(time.RFC3339Nano), v2.Desde.Format(time.RFC3339Nano))
+	}
+
+	// Sin fracción NO se mueve, y eso es lo que conserva el mosaico.
+	entera := Ventana{
+		Desde: time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC),
+		Hasta: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	}
+	if n := entera.Normalizada(); !n.Desde.Equal(entera.Desde) || !n.Hasta.Equal(entera.Hasta) {
+		t.Errorf("una ventana en segundos enteros no se debe mover: %s→%s quedó %s→%s",
+			entera.Desde, entera.Hasta, n.Desde, n.Hasta)
+	}
+}
+
+// Una ventana mal armada NO se convierte en «traeme todo». Fail-closed.
+//
+// Sabotaje: que Valida devuelva nil siempre → un `desde` vacío consultaría desde el año cero.
+func TestUnaVentanaInvalidaNoSeConvierteEnTraemeTodo(t *testing.T) {
+	ahora := time.Now().UTC()
+	casos := map[string]Ventana{
+		"sin desde":      {Hasta: ahora},
+		"sin hasta":      {Desde: ahora.Add(-time.Hour)},
+		"vacía":          {},
+		"al revés":       {Desde: ahora, Hasta: ahora.Add(-time.Hour)},
+		"de largo cero":  {Desde: ahora, Hasta: ahora},
+		"más del máximo": {Desde: ahora.Add(-VentanaMax - time.Hour), Hasta: ahora},
+	}
+	for nombre, v := range casos {
+		if err := v.Valida(); err == nil {
+			t.Errorf("la ventana %q pasó la validación y no debería", nombre)
+		}
+	}
+	buena := VentanaHasta(ahora, 6*time.Hour)
+	if err := buena.Valida(); err != nil {
+		t.Errorf("una ventana buena fue rechazada: %v", err)
+	}
+	if d := buena.Duracion(); d != 6*time.Hour {
+		t.Errorf("duración = %s, esperaba 6h", d)
+	}
+}
+
+// VentanaHasta acota sola: pedir más del máximo da el máximo, no un error ni una ventana enorme.
+func TestVentanaHastaAplicaLosDefaults(t *testing.T) {
+	ahora := time.Now().UTC()
+	if d := VentanaHasta(ahora, 0).Duracion(); d != VentanaDefault {
+		t.Errorf("sin duración, esperaba el default %s, obtuve %s", VentanaDefault, d)
+	}
+	if d := VentanaHasta(ahora, 365*24*time.Hour).Duracion(); d != VentanaMax {
+		t.Errorf("pedir de más tiene que dar el máximo %s, obtuve %s", VentanaMax, d)
+	}
+}
+
+// El orden es del más nuevo al más viejo, y el desempate es ESTABLE: dos hechos del mismo instante
+// —lo que pasa cuando se abre una pantalla, porque la sesión y su comando de canal se escriben
+// juntos— tienen que salir siempre en el mismo orden.
+//
+// Sabotaje: sacar el desempate por referencia → el orden de esos dos depende del orden de lectura
+// y la lista se reordena sola entre llamadas.
+func TestOrdenarHechosEsEstableYDelMasNuevoAlMasViejo(t *testing.T) {
+	t0 := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	mismo := t0.Add(time.Hour)
+	arme := func() []Hecho {
+		return []Hecho{
+			{Cuando: t0, Referencia: "viejo"},
+			{Cuando: mismo, Referencia: "zzz"},
+			{Cuando: mismo, Referencia: "aaa"},
+			{Cuando: t0.Add(2 * time.Hour), Referencia: "nuevo"},
+		}
+	}
+	a, b := arme(), arme()
+	OrdenarHechos(a)
+	OrdenarHechos(b)
+
+	quiero := []string{"nuevo", "aaa", "zzz", "viejo"}
+	for i := range quiero {
+		if a[i].Referencia != quiero[i] {
+			t.Fatalf("orden = %s en la posición %d, esperaba %s", a[i].Referencia, i, quiero[i])
+		}
+		if b[i].Referencia != a[i].Referencia {
+			t.Fatalf("dos ordenamientos de la misma lista dieron distinto en la posición %d", i)
+		}
+	}
+}
+
+// La duración dice SI SE SABE. Un 0 devuelto a secas se dibuja como «duró nada» y lo que pasa es
+// que sigue en curso — el mismo cero mentiroso que persigue todo el track, en el eje del tiempo.
+//
+// Sabotaje: devolver sólo la duración → un comando pendiente se dibuja como instantáneo.
+func TestLaDuracionDiceSiSeSabe(t *testing.T) {
+	inicio := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	if _, hay := (Hecho{Cuando: inicio}).Duracion(); hay {
+		t.Error("un hecho sin `termino` no puede reportar duración: todavía está en curso")
+	}
+	d, hay := Hecho{Cuando: inicio, Termino: inicio.Add(90 * time.Second)}.Duracion()
+	if !hay || d != 90*time.Second {
+		t.Errorf("duración = %s (%v), esperaba 90s", d, hay)
+	}
+	// Un `termino` anterior al comienzo es dato corrupto, no una duración negativa.
+	if _, hay := (Hecho{Cuando: inicio, Termino: inicio.Add(-time.Minute)}).Duracion(); hay {
+		t.Error("un `termino` anterior al comienzo no puede dar una duración")
+	}
+}
+
+// Lo que la cronología NO vio se declara, y la lista no puede quedar vacía: una respuesta sin
+// huecos declarados se lee como «esto es todo lo que pasó».
+//
+// Sabotaje: devolver nil desde HuecosDeLaCronologia → falla acá.
+func TestLaCronologiaDeclaraLoQueNoVio(t *testing.T) {
+	huecos := HuecosDeLaCronologia()
+	if len(huecos) == 0 {
+		t.Fatal("la cronología tiene que declarar qué NO contiene")
+	}
+	junto := strings.ToLower(strings.Join(huecos, " | "))
+	for _, obligatorio := range []string{"serie temporal", "log", "servicio", "política", "contenido"} {
+		if !strings.Contains(junto, obligatorio) {
+			t.Errorf("falta declarar el hueco de %q en: %s", obligatorio, junto)
+		}
+	}
+}
+
+// UN COMANDO PENDIENTE Y VIEJO SE MUESTRA `expirado`, aunque la fila diga otra cosa.
+//
+// `expirado` sólo se ESTAMPA cuando el agente viene a pedir su cola. Si el agente no vuelve
+// nunca, nadie estampa nada — y la fila dice `pendiente` para siempre. Medido en producción:
+// cincuenta comandos de diez horas con una vida máxima de quince minutos.
+//
+// Sabotaje: que EstadoActual devuelva `c.Estado` a secas → falla acá.
+func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
+	ahora := time.Date(2026, 8, 30, 5, 0, 0, 0, time.UTC)
+
+	viejo := Comando{Estado: EstadoPendiente, Creado: ahora.Add(-10 * time.Hour)}
+	if got := viejo.EstadoActual(ahora); got != EstadoExpirado {
+		t.Errorf("un pendiente de 10 h se muestra %q, esperaba %q", got, EstadoExpirado)
+	}
+
+	// EL DE RECIÉN NO VENCE, y el control importa: sin él, un EstadoActual que devolviera
+	// `expirado` siempre pasaría la aserción de arriba.
+	nuevo := Comando{Estado: EstadoPendiente, Creado: ahora.Add(-time.Minute)}
+	if got := nuevo.EstadoActual(ahora); got != EstadoPendiente {
+		t.Errorf("un pendiente de 1 min se muestra %q, esperaba %q", got, EstadoPendiente)
+	}
+
+	// LO ENTREGADO NO VENCE POR ACÁ. Su reloj es el suyo —lo mide `Perdido` (A60)— y no la vida
+	// en la cola: marcar expirado a los 15 min haría que un comando legítimo de 9 minutos
+	// aparezca muerto mientras corre.
+	//
+	// Se le pone `Entregado` RECIÉN a propósito. Sin ese campo la fila cae por el agujero de
+	// datos de `Perdido` y la aserción pasaría sin probar nada de lo que dice probar.
+	corriendo := Comando{
+		Estado:    EstadoEntregado,
+		Creado:    ahora.Add(-10 * time.Hour),
+		Entregado: ahora.Add(-time.Minute),
+	}
+	if got := corriendo.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un entregado viejo se muestra %q: su reloj es el timeout, no ComandoVidaMax", got)
+	}
+
+	// Y lo terminado no se toca nunca.
+	listo := Comando{Estado: EstadoTerminado, Creado: ahora.Add(-10 * time.Hour)}
+	if got := listo.EstadoActual(ahora); got != EstadoTerminado {
+		t.Errorf("un terminado viejo se muestra %q", got)
+	}
+}
+
+// EL ORIGEN VACÍO NO ES «PERSONA», y ésa es toda la regla de A59.
+//
+// Las filas anteriores a la migración 41 no dicen quién las originó. Rellenarlas con `persona`
+// haría que cada disparo automático viejo figure como una acción humana — en la cronología de una
+// máquina eso es atribuirle a alguien algo que no hizo.
+//
+// Sabotaje: que `EsAutomatico` devuelva `o != OrigenPersona` (lista NEGRA en vez de blanca) → lo
+// desconocido pasa a contarse como automático, que es la mentira simétrica.
+func TestUnOrigenDesconocidoNoEsPersonaNiAutomatico(t *testing.T) {
+	if OrigenDesconocido.EsAutomatico() {
+		t.Error("lo desconocido no puede contarse como automático")
+	}
+	if OrigenPersona.EsAutomatico() {
+		t.Error("una persona no es automática")
+	}
+	if !OrigenPolitica.EsAutomatico() {
+		t.Error("una política SÍ es automática: si no, la columna no distingue nada")
+	}
+	// Y lo desconocido tampoco es persona: la comparación tiene que poder distinguirlos.
+	if OrigenDesconocido == OrigenPersona {
+		t.Error("desconocido y persona no pueden ser el mismo valor")
+	}
+}
+
+// Lo que no está en la lista se guarda como DESCONOCIDO, no como una categoría nueva.
+//
+// Fail-closed en el borde: un llamador futuro que mande `"cron"` no puede crear un valor que
+// ninguna superficie sabe dibujar. Lo desconocido ya tiene significado; lo inventado, no.
+//
+// Sabotaje: que `OrigenValido` devuelva `o` tal cual → falla acá.
+func TestUnOrigenRaroSeGuardaComoDesconocido(t *testing.T) {
+	for _, raro := range []OrigenComando{"cron", "PERSONA", "politica ", "robot"} {
+		if got := OrigenValido(raro); got != OrigenDesconocido {
+			t.Errorf("OrigenValido(%q) = %q, esperaba desconocido", raro, got)
+		}
+	}
+	for _, bueno := range []OrigenComando{OrigenPersona, OrigenPolitica} {
+		if got := OrigenValido(bueno); got != bueno {
+			t.Errorf("OrigenValido(%q) = %q: los válidos no se tocan", bueno, got)
+		}
+	}
+}
+
+// El hecho de la cronología ARRASTRA el origen del comando. Sin esto la columna existe en la
+// tabla y no llega a ninguna superficie — que es el patrón de A58, otra vez.
+//
+// Sabotaje: no copiar `Origen` en HechoDeComando → falla acá.
+func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
+	h := HechoDeComando(Comando{Argv: []string{"systemctl", "restart", "nginx"}, Origen: OrigenPolitica}, "pc")
+	if h.Origen != OrigenPolitica {
+		t.Errorf("el hecho perdió el origen: %q", h.Origen)
+	}
+	// Una sesión no tiene origen: la abre siempre alguien, y un campo vacío ahí se leería como
+	// «no se sabe» cuando sí se sabe.
+	if s := HechoDeSesionShell(SesionShell{}, "pc"); s.Origen != OrigenDesconocido {
+		t.Errorf("una sesión no debería llevar origen: %q", s.Origen)
+	}
+}
+
+// UN COMANDO ENTREGADO QUE NUNCA REPORTA TERMINA EN `perdido` (A60).
+//
+// El agente se lo llevó y se murió a mitad. `terminado` lo estampa el reporte, y ese reporte no va
+// a llegar nunca, así que la fila se quedaba en `entregado` PARA SIEMPRE — indistinguible de un
+// comando que está corriendo ahora mismo.
+//
+// Sabotaje: sacar la rama de `Perdido` en EstadoActual → falla el primer bloque.
+func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	muerto := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-EsperaMaxDeEntregado - time.Minute),
+	}
+	if got := muerto.EstadoActual(ahora); got != EstadoPerdido {
+		t.Errorf("un entregado que pasó la espera máxima se muestra %q, esperaba %q", got, EstadoPerdido)
+	}
+
+	// EL CONTROL POSITIVO: sin él, un Perdido que devolviera true siempre pasaría lo de arriba.
+	vivo := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-time.Minute),
+	}
+	if got := vivo.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un entregado de hace un minuto se muestra %q, esperaba %q", got, EstadoEntregado)
+	}
+}
+
+// EL ÚLTIMO DE UNA TANDA LARGA ESTÁ VIVO AUNQUE SU PROPIO TIMEOUT HAYA PASADO HACE RATO.
+//
+// Ésta es la prueba que existe por el error que casi se comete. La regla obvia para A60
+// —`entregado + timeout + margen`— es INCORRECTA: el agente corre la tanda EN ORDEN Y DE A UNO, y
+// el último de diez espera a los nueve de adelante antes de que su propio timeout empiece siquiera
+// a correr. Con la regla obvia, un comando de 30 s entregado hace una hora se dibujaría muerto
+// mientras está esperando su turno.
+//
+// Y ES EL ERROR CARO DE LOS DOS: un comando vivo marcado perdido manda a alguien a relanzarlo —dos
+// veces el mismo `systemctl`, dos veces el mismo borrado—. Uno perdido marcado tarde sólo se ve
+// tarde.
+//
+// Sabotaje: cambiar EsperaMaxDeEntregado por `c.Timeout + MargenDeReporte` → falla acá.
+func TestElUltimoDeUnaTandaLargaNoSeMarcaPerdidoMientrasEspera(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	// Nueve comandos de diez minutos por delante: casi hora y media de espera legítima.
+	esperando := Comando{
+		Estado:    EstadoEntregado,
+		Timeout:   30 * time.Second,
+		Entregado: ahora.Add(-89 * time.Minute),
+	}
+	if got := esperando.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("un comando esperando su turno en la tanda se muestra %q: la regla `timeout + margen` "+
+			"lo mata vivo, que es el error caro", got)
+	}
+}
+
+// UN `entregado` SIN FECHA DE ENTREGA ES UN AGUJERO DE DATOS, NO UN COMANDO MUERTO.
+//
+// Las filas anteriores a que el campo existiera no tienen `entregado`. Dibujarles `perdido` sería
+// inventar: no se sabe cuándo se las llevaron, así que no se puede saber si tardaron de más. Es la
+// misma regla que gobierna todo el track — un dato ausente no es un cero.
+//
+// Sabotaje: sacar la guarda de `Entregado.IsZero()` en Perdido → falla acá.
+func TestUnEntregadoSinFechaDeEntregaNoEsPerdido(t *testing.T) {
+	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
+
+	agujero := Comando{Estado: EstadoEntregado, Timeout: 30 * time.Second, Creado: ahora.Add(-10 * time.Hour)}
+	if got := agujero.EstadoActual(ahora); got != EstadoEntregado {
+		t.Errorf("una fila vieja sin fecha de entrega se muestra %q: un dato ausente no es un comando muerto", got)
+	}
+}

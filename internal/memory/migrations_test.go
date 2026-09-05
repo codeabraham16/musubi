@@ -15,7 +15,7 @@ import (
 // TestFreshDBStartsAtLatestVersion verifica que una base nueva quede en la última
 // versión de esquema conocida por el binario (no en 0).
 func TestFreshDBStartsAtLatestVersion(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

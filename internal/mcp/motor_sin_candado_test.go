@@ -11,6 +11,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del spec «El motor no traba la casa» (specs/motor-sin-candado/).
@@ -168,7 +169,7 @@ func sembrar(t *testing.T, s *McpServer, n int) {
 // expone CountObservations, que es lo que necesita exigeSembradas para verificar la precondición.
 func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.CognitionConfig, emb embedding.Provider) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -318,7 +319,7 @@ func TestG1ClasePorDefaultEsLaDeHoy(t *testing.T) {
 func TestG2EscriturasConcurrentesNoSePisan(t *testing.T) {
 	// El engine se arma acá y no con newTestServer porque la aserción necesita el *DbEngine
 	// concreto: s.engine es la interfaz StorageBackend y no expone CountObservations.
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -485,8 +486,10 @@ func TestG7ReaderSigueSinPoderLlamarAlMotor(t *testing.T) {
 // readOnly para un reader, así que la prueba pasaría igual marcando cualquier tool como readOnly.
 // Lo detectó el sabotaje «se marca musubi_recall como readOnly», que quedaba en verde.
 //
-// Estas son las 22 tools que un reader podía llamar antes de este spec. Si el conjunto cambia, la
-// prueba se rompe y hay que decidir a conciencia si el cambio se quería — que es el punto.
+// El conjunto arrancó en 22 tools y crece SÓLO por decisión explícita: cada agregado lleva su
+// comentario diciendo quién lo consume y por qué. Si el conjunto cambia sin que alguien toque
+// este mapa, la prueba se rompe y hay que decidir a conciencia si el cambio se quería — que es
+// el punto.
 func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	reader := &Principal{Name: "cabina", Role: RoleReader}
@@ -507,6 +510,63 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// F1 · Lienzo como capacidad: el motor de diseño es readOnly y se pensó para invocarse desde
 		// donde sea, incluso sin poder mutar; una cabina/reader TIENE que poder llamarlo.
 		"musubi_design": true,
+		// Track «Control de flota» (S2). AMPLIACIÓN DELIBERADA del conjunto: un reader ahora
+		// puede ver el INVENTARIO de la flota de su proyecto.
+		//
+		// Se decidió que sí, y el consumidor es el mismo que motivó `readiness` y `design`: la
+		// CABINA (read=all, write=none) es el panel que muestra las máquinas, y un panel que no
+		// puede listarlas no sirve de nada. Lo que ve es metadato operativo —nombre, tier, OS,
+		// dirección, si está en línea—, nunca la credencial: el inventario no expone el token ni
+		// su hash, y hay una prueba que lo fija (TestElTokenDelDispositivoNoApareceEnElInventario).
+		//
+		// Lo que un reader SIGUE sin poder es enrolar y revocar: ésas son admin, como
+		// musubi_token_new. Ver el inventario y poder tocarlo son cosas distintas, y este mapa es
+		// donde esa distinción queda escrita.
+		"musubi_fleet_list": true,
+		// S4 · telemetría. MISMO razonamiento que fleet_list —la cabina es el panel— pero con
+		// una diferencia que importa: acá el reader NO ve todo por el hecho de poder llamarla.
+		// La tool sólo devuelve las máquinas donde su credencial tiene concedida `metrics` en la
+		// sección `fleet:` de principals.yaml. Poder invocarla y poder ver algo son cosas
+		// distintas: sin concesiones, un reader llama y recibe una lista vacía.
+		"musubi_fleet_metrics": true,
+		// S5 · la bitácora. Mismo razonamiento que fleet_metrics, y con el mismo matiz: poder
+		// INVOCARLA no es poder ver algo. Sólo devuelve los comandos de máquinas sobre las que
+		// la credencial tiene `exec`, así que un reader sin concesiones llama y recibe vacío.
+		// EJECUTAR (musubi_fleet_exec) sigue exigiendo la capacidad, y no está en este mapa.
+		"musubi_fleet_log": true,
+		// S6 · la bitácora de pantalla. Mismo razonamiento y mismo matiz: invocarla no es ver
+		// nada. Sólo devuelve sesiones de máquinas sobre las que la credencial tiene `screen`.
+		// ABRIR una sesión (musubi_fleet_screen) exige la capacidad y NO está en este mapa.
+		"musubi_fleet_sessions": true,
+		// S5b · la bitácora de SHELL. AMPLIACIÓN DELIBERADA, y la que cierra la asimetría que
+		// nadie decidió: la de comandos (`musubi_fleet_log`) y la de pantallas ya estaban acá, y
+		// la de shells no — o sea que una cabina veía QUÉ se corrió y no QUIÉN tuvo un prompt,
+		// que es la mitad más grave de la misma auditoría. Mismo matiz que sus hermanas: poder
+		// INVOCARLA no es poder ver nada — sólo devuelve sesiones de máquinas sobre las que la
+		// credencial tiene `shell`, así que un reader sin concesiones llama y recibe vacío.
+		// ABRIR una shell (musubi_fleet_shell) exige la capacidad y NO está en este mapa.
+		"musubi_fleet_shell_log": true,
+		// S12 · el inventario de servicios. Mismo razonamiento que fleet_metrics y el mismo
+		// matiz: poder INVOCARLA no es poder ver nada. Sólo devuelve los servicios de máquinas
+		// sobre las que la credencial tiene `metrics`, así que un reader sin concesiones llama y
+		// recibe una lista vacía. DECLARAR un servicio (musubi_fleet_service_declare) es admin y
+		// NO está en este mapa.
+		"musubi_fleet_services": true,
+		// Fase 5 · S11 · la CRONOLOGÍA de una máquina. Mismo razonamiento que las otras cuatro
+		// lecturas de flota —la cabina es el panel, y un panel que no puede contar qué le pasó a
+		// una máquina no sirve para investigar nada—, con UN MATIZ PROPIO que conviene dejar
+		// escrito: acá un reader sin concesiones NO recibe una lista vacía, recibe una
+		// explicación de qué capacidad le falta.
+		//
+		// Es a propósito y es lo contrario de lo que hacen las otras: una lista vacía en una
+		// LÍNEA DE TIEMPO se lee como «no pasó nada en esa máquina», que es una conclusión, no
+		// una ausencia de datos. Las otras cuatro devuelven inventarios, donde el vacío se lee
+		// como vacío.
+		"musubi_fleet_cronologia": true,
+		// Fase 5 · S14 · el cruce con la memoria. Mismo razonamiento que la cronología, y con el
+		// mismo matiz propio: sin concesiones, un reader recibe la actividad en cero y sus
+		// contadores de ocultos en más de cero — que es la respuesta correcta, no una vacía.
+		"musubi_fleet_contexto": true,
 	}
 
 	for _, e := range s.tools {

@@ -14,7 +14,7 @@ func contains(xs []string, x string) bool {
 // hitlRun arma a → gate(await) → b y completa a. gateWhen es el `when` opcional del gate.
 func hitlRun(t *testing.T, runID, gateWhen string) *DbEngine {
 	t.Helper()
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

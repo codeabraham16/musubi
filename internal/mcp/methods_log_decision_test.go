@@ -6,12 +6,13 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // newServerConMemoria construye un McpServer con un DbEngine en directorio temporal.
 func newServerConMemoria(t *testing.T) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // shadow_test.go defiende la única propiedad que hace aceptable meter un LLM al lado del detector:
@@ -18,7 +19,7 @@ import (
 // detector va a relacionar. Devuelve el engine para poder mirar las dos tablas.
 func servidorConSombra(t *testing.T, motor *motorEspia) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestSombraConColaLlenaDescartaSinBloquear(t *testing.T) {
 // S5 — apagada (el default), la sombra no existe: ni worker, ni motor consultado. Encender un
 // tercer pilar por accidente sería gasto invisible.
 func TestSombraApagadaNoConsultaAlMotor(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

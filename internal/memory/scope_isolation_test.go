@@ -10,7 +10,7 @@ import (
 // solo devuelve las filas de ESE proyecto + las sin atribuir; federada (sin scope) ve todo.
 // Es el guard de regresión del cross-project bleed a nivel del motor.
 func TestReadIsolationByProjectScope(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

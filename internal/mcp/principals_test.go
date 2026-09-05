@@ -9,6 +9,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestHashTokenDeterministic(t *testing.T) {
@@ -114,7 +115,7 @@ func TestCanCall(t *testing.T) {
 // TestAuthzDispatch valida el gate de autorización en handleToolsCall: un reader es
 // rechazado (codeUnauthorized) al invocar una tool que muta, pero un writer la ejecuta.
 func TestAuthzDispatch(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

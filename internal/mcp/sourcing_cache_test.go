@@ -13,6 +13,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestSourcingCache verifica hit/miss, limpieza perezosa de entradas vencidas y el modo
@@ -54,7 +55,7 @@ func TestDiscoverSkillsUsaCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

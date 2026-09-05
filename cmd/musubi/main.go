@@ -87,6 +87,16 @@ func main() {
 	case "dashboard":
 		runDashboard(os.Args[2:])
 	case "version", "--version", "-v":
+		// `--esquema` imprime SÓLO el entero, para que un guion lo consuma sin parsear.
+		//
+		// La salida por default no cambia ni gana una línea: `redesplegar-cerebro.sh` la compara
+		// entera contra la versión que instaló, y `construir.sh` la imprime. Un segundo renglón
+		// acá rompería las dos, y el modo de falla sería un rollback automático en mitad de un
+		// despliegue que en realidad salió bien.
+		if len(os.Args) > 2 && os.Args[2] == "--esquema" {
+			fmt.Println(memory.EsquemaEsperado())
+			return
+		}
 		fmt.Printf("musubi %s\n", version)
 	case "update":
 		runUpdate()
@@ -96,6 +106,12 @@ func main() {
 		runCalibrate(os.Args[2:])
 	case "conflicts":
 		runConflicts(os.Args[2:])
+	case "shell":
+		// La terminal interactiva (S5b). Va como subcomando propio y no como una bandera de otro:
+		// es lo único de la CLI que toma el control de la terminal, y eso merece verse en el nombre.
+		runShell(os.Args[2:])
+	case "agent":
+		runAgent(os.Args[2:])
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -121,6 +137,10 @@ func printUsage() {
 	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
 	cmd("cerebro", "Canal MCP (stdio) al cerebro CENTRAL: consulta en vivo, no replica")
 	cmd("serve [--addr host:port]", "Servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
+
+	section("Flota")
+	cmd("agent [--brain <url>] [--once]", "Late contra el cerebro para que esta máquina figure en la flota")
+	cmd("shell <maquina> [--project <id>]", "Terminal interactiva en una máquina de la flota (exige la capacidad `shell`, aparte de `exec`)")
 
 	section("Memoria")
 	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
@@ -278,7 +298,7 @@ func runServe(args []string) {
 		autoBackfill(engine, embedder)
 	}
 
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithVersion(version))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 
 	// Un nodo que SIRVE sin sync saliente es TERMINAL — el caso del cerebro central: no tiene
@@ -287,6 +307,15 @@ func runServe(args []string) {
 	// `sync_status` contra el cerebro reportara miles de "pendientes de envío" — una señal de
 	// salud que MIENTE. Con sync configurado (un central encadenado a otro), encola normal.
 	engine.SetOutboxEnabled(cfg.Sync.HasDestination())
+
+	// Flota (S10): intervalo de sondeo, caducidad de las salidas de comandos y políticas de
+	// auto-heal. La validación SINTÁCTICA de las políticas es acá y es fatal — una política mal
+	// escrita no puede convertirse en una alarma que calla. La otra mitad (que su principal exista
+	// y tenga con qué actuar) la hace ListenAndServeHTTP cuando el registro ya está cargado.
+	if err := server.ConfigurarFlota(cfg.Fleet); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Shutdown graceful: ctx se cancela con SIGINT/SIGTERM; ListenAndServeHTTP retorna.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -373,7 +402,7 @@ func runDaemon() {
 	}
 
 	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")))
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")), mcp.WithVersion(version))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 	// El VERTEDERO del feed en vivo: sólo acá, no en runServe. El central ya reparte por HTTP;
 	// un daemon stdio no tiene por dónde sacar sus eventos y por eso el trabajo local no se veía.

@@ -90,7 +90,7 @@ func TestSaveObservationTypedUpsertUpdatesMemType(t *testing.T) {
 	}
 }
 
-// Un guardado SIN tipo (vía histórica, memType='') NO debe borrar el mem_type ya fijado por
+// Un guardado SIN tipo (vía histórica, memType=”) NO debe borrar el mem_type ya fijado por
 // un guardado tipado (preservación de clasificación en UPSERT).
 func TestUntypedUpsertPreservesMemType(t *testing.T) {
 	e := newTestEngine(t)

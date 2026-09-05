@@ -9,7 +9,7 @@ import (
 // counts de observations se acotan al proyecto del contexto (propias + sin atribuir); federado
 // cuenta todas. Es el guard de que un principal no ve el VOLUMEN de memoria de otros proyectos.
 func TestInsightsCtxScopesObservationCounts(t *testing.T) {
-	e, err := NewDbEngine(t.TempDir())
+	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

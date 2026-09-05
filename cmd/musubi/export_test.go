@@ -5,12 +5,13 @@ import (
 	"time"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestBuildExportSnapshot verifica que el snapshot reúna salud, insights, ledger y el
 // mapa de conocimiento por dominio a partir de un motor real (DB temporal).
 func TestBuildExportSnapshot(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestBuildExportSnapshot(t *testing.T) {
 // TestBuildExportSnapshotOrchestration verifica que el snapshot incluya el pilar de
 // orquestación: los runs de workflow (incluidos los flujos SDD) y la pizarra activa.
 func TestBuildExportSnapshotOrchestration(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestBuildExportSnapshotOrchestration(t *testing.T) {
 // Active y Visible coinciden por accidente y el test no prueba nada. La aserción de que
 // Active > Visible está justamente para que el test no pueda volverse vacuo en silencio.
 func TestSnapshotCoherenteEntreSusCifras(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,6 +19,7 @@ import (
 	"musubi/internal/cognition"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
 	"musubi/internal/skills"
@@ -72,6 +73,17 @@ func rpcErrorf(code int, format string, args ...interface{}) *RpcError {
 // Option es una función de configuración funcional para McpServer.
 // Se usa en NewMcpServer para configuración aditiva sin romper callers existentes.
 type Option func(*McpServer)
+
+// WithVersion le dice al servidor qué versión de Musubi es (A68).
+//
+// Entra por Option y no por una constante porque la versión se INYECTA en el build
+// (`-ldflags -X main.version`), y `internal/mcp` no puede leer una variable de `main`. Sin ella el
+// servidor no sabe su propia versión y `musubi_fleet_device_agent_stale` NO se emite para ninguna
+// máquina — a propósito: sin referencia, marcar a la flota entera sería culparla de un problema
+// del build propio. Lo custodia TestTodoServidorQueSeSirveDeclaraSuVersion.
+func WithVersion(v string) Option {
+	return func(s *McpServer) { s.version = v }
+}
 
 // WithSpoolLocal enciende el vertedero del feed en `dir`, para que un panel de ESTA máquina
 // pueda ver lo que hace un daemon stdio. Se usa en `musubi daemon`, no en `musubi serve`:
@@ -128,9 +140,16 @@ func WithMultiAgent(c config.MultiAgentConfig) Option {
 }
 
 type McpServer struct {
-	engine   memory.StorageBackend
-	resolver *skills.Resolver
-	embedder embedding.Provider
+	// vidaDeRed guarda, en memoria, si el tailnet ve a una máquina que no está latiendo.
+	// Ver internal/fleet/vidared.go: distingue «apagada» de «el agente no corre».
+	//
+	// EN MEMORIA Y NO EN LA BASE, por lo mismo que la ventana del aviso de exec y el token de una
+	// rotación: es un dato de segundos que se puede volver a medir, y una escritura por máquina y
+	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
+	vidaDeRed sync.Map
+	engine    memory.StorageBackend
+	resolver  *skills.Resolver
+	embedder  embedding.Provider
 	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
 	cognition cognition.Provider
 	// cognitionCfg trae las guardas de CALIDAD del 3er pilar (F3): el vocabulario controlado de
@@ -152,6 +171,79 @@ type McpServer struct {
 	// o no hay embebedor, y el motor de diseño cae al camino por similitud.
 	ejesVec map[string][]float32
 	ejesMu  sync.Mutex
+
+	// version es la versión de ESTE binario, inyectada por WithVersion desde main. Vacía o
+	// ilegible ("dev") ⇒ el exportador no puede comparar contra nada y apaga
+	// `musubi_fleet_device_agent_stale` para toda la flota (A68).
+	version string
+
+	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
+	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.
+	cpuRemotos contadoresRemotos
+
+	// ── El latido propio de la flota (S10) ──────────────────────────────────────────────────
+	// sondaIntervalo es cada cuánto se sale a medir a los dispositivos sin agente. 0 = apagado.
+	// Lo lee TAMBIÉN umbralEnLinea, porque el umbral de «caído» de un Tier B se deriva de acá:
+	// una máquina que se visita cada 5 min no puede tener datos más frescos que 5 min (I2).
+	sondaIntervalo time.Duration
+	// retencionSalidasDias es cuántos días viven stdout/stderr de los comandos. 0 = para siempre.
+	retencionSalidasDias int
+	// politicas son las reglas de auto-heal ya validadas. Vacío = ninguna (I15).
+	politicas []fleet.Politica
+	// buscarPrincipal resuelve un principal POR NOMBRE, sin token. Lo usan las políticas, que no
+	// presentan credencial: nombran a alguien de principals.yaml y actúan con su autoridad (I11).
+	// Se guarda el registro y no el principal ya resuelto porque el registro se recarga en
+	// caliente: revocar a alguien tiene que apagar, en el acto, lo que actuaba en su nombre.
+	buscarPrincipal principalResolver
+	// flotaBusy garantiza UN barrido de flota en vuelo. Con 40 máquinas por SSH, dos barridos
+	// solapados son 80 conexiones simultáneas contra la red de alguien (I5).
+	flotaBusy atomic.Bool
+	// ultimoDisparo lleva el cooldown por (política × máquina): "<politica>\x00<device_id>" ->
+	// time.Time. En memoria a propósito y anotado como tal: un reinicio del cerebro rearma los
+	// cooldowns, y el caso malo (reiniciar justo después de un disparo) es acotado y benigno.
+	ultimoDisparo sync.Map
+	// avisosDados evita repetir en cada tick un aviso de configuración que no es un evento sino
+	// un ESTADO (una política sin principal, un rechazo de compuerta). Clave -> true; se borra
+	// cuando la condición se resuelve, así que una recaída vuelve a avisar.
+	avisosDados sync.Map
+	// rotaciones guarda EN MEMORIA el token nuevo de cada rotación abierta, para poder repetirlo
+	// en cada latido hasta que el agente lo use. En la base sólo va su hash: un volcado de la
+	// base no puede ser un llavero. Ver internal/mcp/rotacion.go para el costo declarado.
+	rotaciones sync.Map
+	// ultimaPoda es cuándo se vaciaron por última vez las salidas viejas. La poda NO va en cada
+	// tick: es un UPDATE sobre la tabla de comandos y el tick es de minutos.
+	ultimaPoda time.Time
+	// ultimaPodaDePoliticas es el reloj PROPIO de la limpieza del estado de políticas. Tuvo el
+	// de las salidas —«sin repetir el reloj»— y eso la dejaba sin correr NUNCA en un despliegue
+	// que apaga la retención de salidas: ese camino sale antes de darle cuerda al reloj. Son dos
+	// retenciones distintas y ahora tienen dos relojes. Ver podarEstadoDePoliticasSiToca.
+	ultimaPodaDePoliticas time.Time
+	// ── El empuje OTLP de la telemetría de flota (S11) ──────────────────────────────────────
+	// empujeCfg es la configuración del empuje ya validada. Endpoint vacío = apagado, que es el
+	// default: encender una salida de datos hacia afuera es una decisión que alguien toma.
+	empujeCfg config.OTLPPushConfig
+	// empujador es el cliente saliente, construido UNA vez en el arranque (con su Timeout y con
+	// el secreto ya resuelto). nil = el empuje está apagado o no validó.
+	empujador *empujadorOTLP
+	// empujeBusy garantiza UN empuje en vuelo. Un destino lento con un tick corto acumularía
+	// goroutines y payloads en memoria en un proceso que vive días. Mismo patrón que flotaBusy.
+	empujeBusy atomic.Bool
+	// empujeUltimoExito es el unix del último POST aceptado. 0 = NUNCA hubo uno, y ese 0 NO se
+	// exporta como una fecha: la serie se OMITE. Un «último éxito: hace 56 años» se lee como un
+	// bug del panel y no como «esto nunca funcionó», que es lo que en realidad pasó.
+	empujeUltimoExito atomic.Int64
+	// empujeFallos cuenta los empujes que no llegaron. De él vive la única forma de enterarse,
+	// desde el tirón, de que el empuje está muerto.
+	empujeFallos atomic.Int64
+	// empujeDatapoints es cuántos puntos llevó el último empuje. Un 0 sostenido significa que el
+	// lazo corre y no exporta nada — que es un fallo distinto de «no llega», y se ve distinto.
+	empujeDatapoints atomic.Int64
+
+	// shells son las sesiones de shell interactiva VIVAS de este proceso (S5b). En memoria a
+	// propósito: una sesión viva ES un proceso ssh hijo de este cerebro, así que si el cerebro
+	// muere la sesión muere con él. La BITÁCORA sí es durable — pero la bitácora es el registro,
+	// no el canal.
+	shells registroDeShells
 
 	// spool saca el feed a disco para los daemons que NO sirven HTTP. nil ⇒ apagado, que es
 	// lo correcto en el central: ahí ya hay suscriptores por HTTP y escribir además a disco

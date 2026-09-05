@@ -84,7 +84,7 @@ func TestAutonomiaInvalidaRechazadaPorLaTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	_, e := call(t, s, "musubi_work", map[string]interface{}{
 		"action": "plan", "batch": "malo",
-		"units":  []map[string]string{{"title": "x", "autonomy": "L9"}},
+		"units": []map[string]string{{"title": "x", "autonomy": "L9"}},
 	})
 	if e == nil {
 		t.Fatal("un autonomy inválido debe rechazarse al postear")
@@ -100,7 +100,7 @@ func TestCicloL2PorLaTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_work", map[string]interface{}{
 		"action": "plan", "batch": "l2",
-		"units":  []map[string]string{{"title": "arreglar", "spec": "con revisión", "autonomy": "L2"}},
+		"units": []map[string]string{{"title": "arreglar", "spec": "con revisión", "autonomy": "L2"}},
 	}); e != nil {
 		t.Fatalf("plan: %+v", e)
 	}
@@ -167,7 +167,7 @@ func TestL1ReportaPorLaTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_work", map[string]interface{}{
 		"action": "plan", "batch": "l1",
-		"units":  []map[string]string{{"title": "auditar", "spec": "no toques nada", "autonomy": "L1"}},
+		"units": []map[string]string{{"title": "auditar", "spec": "no toques nada", "autonomy": "L1"}},
 	}); e != nil {
 		t.Fatalf("plan: %+v", e)
 	}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "fuente": "colector externo (script bash) que corría fuera del repo hasta 2026-08",
+  "capturado": "2026-08-28",
+  "total_campos": 22,
+  "campos": [
+    {"campo": "ts",            "destino": "tomada",           "motivo": ""},
+    {"campo": "cpu_pct",       "destino": "cpu_pct",          "motivo": ""},
+    {"campo": "cpus",          "destino": "num_cpu",          "motivo": ""},
+    {"campo": "load1",         "destino": "load1",            "motivo": ""},
+    {"campo": "load5",         "destino": "load5",            "motivo": ""},
+    {"campo": "load15",        "destino": "load15",           "motivo": ""},
+    {"campo": "mem_total",     "destino": "mem_total",        "motivo": ""},
+    {"campo": "mem_used",      "destino": "mem_usada",        "motivo": ""},
+    {"campo": "mem_free",      "destino": "mem_libre",        "motivo": ""},
+    {"campo": "swap_total",    "destino": "swap_total",       "motivo": ""},
+    {"campo": "swap_used",     "destino": "swap_usada",       "motivo": ""},
+    {"campo": "disk_total",    "destino": "disco_total",      "motivo": ""},
+    {"campo": "disk_used",     "destino": "disco_usado",      "motivo": ""},
+    {"campo": "disk_avail",    "destino": "disco_disponible", "motivo": ""},
+    {"campo": "uptime",        "destino": "uptime_seg",       "motivo": ""},
+    {"campo": "temp",          "destino": "temp_c",           "motivo": ""},
+    {"campo": "procs",         "destino": "num_procesos",     "motivo": ""},
+    {"campo": "hostname",      "destino": "", "motivo": "Identidad, y la identidad sale del TOKEN, nunca del cuerpo (invariante B4/D5). agent_test.go prohíbe la subcadena 'hostname' en el JSON entero del latido."},
+    {"campo": "os",            "destino": "", "motivo": "Es un dato del ALTA (columna devices.os), no de la medición. Como además es un label de Prometheus, dejar que la máquina lo reporte sería dejarla re-etiquetarse sola."},
+    {"campo": "arch",          "destino": "", "motivo": "Mismo argumento que os: se declara al enrolar y no cambia entre latidos; una máquina que lo reporta puede contradecir su propia fila."},
+    {"campo": "ip",            "destino": "", "motivo": "Ya viaja, por otra puerta: el campo 'direccion' del cuerpo del latido, acotado por recortar() en fleet_http.go. Meterlo en la Muestra sería una segunda fuente de verdad para lo mismo."},
+    {"campo": "agent_version", "destino": "", "motivo": "Ya viaja como 'version' en el cuerpo del latido y se guarda en devices.agent_version. No es una medición del host: es lo que el agente dice de sí mismo."}
+  ]
+}

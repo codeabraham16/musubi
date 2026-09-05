@@ -23,7 +23,7 @@ import (
 // persona: el campo existe en la tabla desde la migración v16 y `musubi_recall` ya lo
 // devuelve, pero el grafo no lo traía, así que dibujar el cerebro por autor obligaba a
 // deducir la identidad leyendo el TEXTO de cada nota. Va `omitempty` a propósito: las filas
-// anteriores a v16 tienen author vacío, y "sin atribución" no es lo mismo que "autor = ''".
+// anteriores a v16 tienen author vacío, y "sin atribución" no es lo mismo que "autor = ”".
 type BrainNeuron struct {
 	ID          string  `json:"id"`
 	Topic       string  `json:"topic"`

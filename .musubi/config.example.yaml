@@ -139,4 +139,106 @@ mode: local # local | team
 #   drain_interval_seconds: 10
 #   allow_insecure_token: true # sólo si el transporte ya cifra (p. ej. una malla WireGuard/tailnet)
 
+# --- Flota de máquinas (track «Control de flota», S10) --------------------------------------------
+# El LATIDO PROPIO del cerebro sobre la flota: sondear a los que no tienen agente, dejar caducar las
+# salidas de comandos y, si se declaran, aplicar políticas de auto-heal.
+#
+# OJO: hay otro `fleet:` en este archivo, adentro de `cognition:`, y es otra cosa completamente
+# distinta (la flota ordenada de MOTORES LLM). Éste, de nivel superior, es la flota de MÁQUINAS.
+#
+# fleet:
+#   # Cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por SSH, Tier C por
+#   # ADB). Default 5 min; negativo lo desactiva.
+#   #
+#   # Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de esas
+#   # máquinas (3 × intervalo). Un dispositivo que se visita cada 5 min no puede tener datos más
+#   # frescos que 5 min, y darlo por caído a los 90 s —lo que se hacía antes de S10— pintaba de rojo
+#   # a routers perfectamente sanos hasta que alguien silenciaba la alerta.
+#   probe_minutes: 5
+#
+#   # Cuántos días vive el CONTENIDO de stdout/stderr de los comandos. Default 30; negativo = nunca
+#   # caducan. NO borra la fila: qué se ejecutó, quién y cuándo es permanente. Lo que caduca es la
+#   # salida, que es donde aparecen rutas, hostnames y a veces algo que no debería estar ahí.
+#   command_output_retention_days: 30
+#
+#   # --- Empuje OTLP de la telemetría de flota (S11) --------------------------------------------
+#   # NACE APAGADO (sin `endpoint` no existe), y así tiene que ser: encender una salida de datos
+#   # HACIA AFUERA es una decisión que alguien toma, no un default que se hereda al actualizar. El
+#   # tirón de /metrics sigue funcionando igual, encendido o apagado esto: el empuje no lo
+#   # reemplaza, es la MISMA exportación por otra boca (mismas máquinas, mismas series, mismos
+#   # labels).
+#   #
+#   # EL EMPUJE EXPORTA CON LA AUTORIDAD DE ALGUIEN. Un lazo de fondo no presenta credencial, así
+#   # que `principal` es OBLIGATORIO y no tiene default posible: el default sería «todos los
+#   # tenants». Se exporta exactamente lo que ese principal puede ver, con la misma compuerta que
+#   # /metrics. Si no existe en principals.yaml, o no tiene ninguna concesión `metrics`, EL
+#   # SERVIDOR NO ARRANCA — un empuje mudo se ve, desde afuera, idéntico a todo tranquilo.
+#   #
+#   # DEL OTRO LADO HACE FALTA UN PASO: Prometheus NO acepta OTLP por defecto. Tiene que correr con
+#   # `--web.enable-otlp-receiver` (ya está en deploy/prometheus/install-musubi-prometheus.sh y en
+#   # deploy/docker/compose.yml) y el path es /api/v1/otlp/v1/metrics. Sin el flag, el POST devuelve
+#   # 404 y el empuje muere en silencio con esta configuración perfecta.
+#   #
+#   # Y SI EL MISMO PROMETHEUS SCRAPEA /metrics Y RECIBE EL PUSH, las series de flota entran por dos
+#   # caminos y las 12 reglas de alerta disparan DOBLE. La receta para evitarlo está escrita en
+#   # deploy/prometheus/prometheus.yml. Es una decisión, no un descubrimiento.
+#   otlp:
+#     endpoint: http://127.0.0.1:9099/api/v1/otlp/v1/metrics
+#     principal: prometheus         # con la autoridad de QUIÉN se exporta (obligatorio)
+#     interval_seconds: 30          # default 30 (la cadencia del scrape); negativo lo apaga
+#     timeout_seconds: 10           # default 10. Tiene que ser MENOR que el intervalo, y el
+#                                   # arranque lo exige: si no, cada empuje lento se come el
+#                                   # siguiente tick y el lazo pasa la vida salteando
+#     auth_token_env: MUSUBI_OTLP_TOKEN   # el NOMBRE de la variable con el bearer del destino. El
+#                                   # secreto entra por referencia y nunca se escribe acá; una URL
+#                                   # con usuario:clave se RECHAZA al arrancar
+#     # allow_insecure_token: true  # sólo para un destino http:// que NO sea loopback. Fail-closed
+#                                   # a propósito: ahí el bearer viajaría en texto plano
+#
+#   # --- Políticas de auto-heal ---------------------------------------------------------------
+#   # NACEN APAGADAS. Sin esta sección no existen, y así tiene que ser: sondear y podar son
+#   # mantenimiento, pero ejecutar comandos sin una persona detrás es una decisión que alguien tiene
+#   # que tomar a mano.
+#   #
+#   # UNA POLÍTICA NO TIENE AUTORIDAD PROPIA. Nombra un principal de principals.yaml y actúa con la
+#   # suya: la misma compuerta (tenencia ∧ concesión ∧ aparato), la misma allowlist, la misma
+#   # bitácora que las personas. Si ese principal no tiene `exec` sobre esa máquina, la política no
+#   # hace nada — y si lo revocás, la política se apaga sola.
+#   #
+#   # Al arrancar se valida TODO: principal inexistente, principal sin ninguna concesión `exec`,
+#   # condición mal escrita o nombres repetidos impiden servir. Una alarma muerta que nadie sabe que
+#   # está muerta es peor que no tener alarma.
+#   policies:
+#     - name: vaciar-journal
+#       principal: auto-heal        # ...y ESTE principal es el que decide qué puede hacer
+#       when: disco_libre_pct       # disco_pct | disco_libre_pct | mem_pct | cpu_pct |
+#                                   # carga_por_core | temp_c
+#       threshold: 10
+#       devices: ["nas-casa"]       # selectores, igual que en las concesiones ("*" = todas)
+#       run: ["journalctl", "--vacuum-size=200M"]
+#       cooldown_minutes: 60        # default 30. Mínimo 1: sin espera dispara en cada tick, porque
+#                                   # la métrica no baja hasta que el comando termine
+#
+#   # EL SENTIDO DE LA COMPARACIÓN LO DA LA CONDICIÓN, no una perilla aparte: `disco_libre_pct`
+#   # dispara al BAJAR de `threshold` (es lo que QUEDA escribible) y todas las demás al superarlo.
+#   # Se mira lo escribible y no lo usado porque la reserva de root (~5 %) no es ninguna de las dos
+#   # cosas: un disco «al 92 % usado» puede tener 0 bytes para una aplicación.
+#
+#   # Un dato que NO SE PUDO MEDIR nunca dispara nada. Una máquina Windows no tiene load average
+#   # —no es que valga 0.00, es que no existe—, y una sin sensor no está a 0 °C.
+#
+# El principal de la política, en .musubi/principals.yaml. `fleet_exec_allow` es lo que hace que
+# `auto-heal` pueda ejecutar en todas las máquinas y aun así SÓLO pueda correr journalctl:
+#
+#   - name: auto-heal
+#     token_sha256: "<sha256>"      # ...aunque una política no presenta token: se la nombra
+#     role: writer
+#     project_id: casa
+#     fleet:
+#       exec: ["*"]
+#     fleet_exec_allow:
+#       "*": ["journalctl"]         # la sección entera es el opt-in y, una vez presente, es
+#                                   # EXHAUSTIVA: una máquina sin entrada propia y sin "*" no
+#                                   # permite NADA. Una lista vacía significa cero comandos.
+
 skills_auto_resolve: true

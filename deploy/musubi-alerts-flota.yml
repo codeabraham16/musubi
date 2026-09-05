@@ -1,0 +1,516 @@
+# musubi-alerts-flota.yml — las alertas del track «Control de flota».
+#
+# despliegue: condicional — sólo si el cerebro expone `musubi_fleet_*`.
+#
+# Sin plano de flota, `FlotaSinTelemetria` es `absent(...)` y dispara desde el día uno, para
+# siempre.
+#
+# La lee `deploy/verificar-despliegue.sh` para no denunciar como drift un archivo que está sin
+# cargar a propósito.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ ESTÁN EN UN ARCHIVO APARTE
+#
+# Estas reglas miran métricas que sólo existen si el cerebro desplegado TIENE el plano de flota.
+# Cargarlas contra un cerebro que no lo tiene no es inocuo: `FlotaSinTelemetria` es
+# `absent(musubi_fleet_device_up)`, así que **dispara de inmediato y para siempre** — una alarma
+# falsa desde el día uno, que es exactamente lo que enseña a ignorar las alarmas.
+#
+# `preparar.sh` le pregunta al cerebro si expone `musubi_fleet_*` y sólo instala este archivo si
+# la respuesta es sí. Si no, lo deja al lado con otro nombre y lo dice. La regla no está mal: le
+# falta su precondición, y esa distinción tiene que ser visible.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+
+groups:
+  # ════════════════════════════════════════════════════════════════════════════════════════
+  # UNA MÁQUINA CAÍDA NO ES UNA MÁQUINA CON LA CPU AL 100 %
+  #
+  # Prometheus conserva la última muestra de una serie hasta que caduca. Cuando un agente muere,
+  # sus series NO desaparecen: se CONGELAN. Y una comparación sobre un valor congelado se sostiene
+  # para siempre, así que el `for:` —que exige que la condición dure— la confirma en vez de
+  # filtrarla.
+  #
+  # MEDIDO EN PRODUCCIÓN el 2026-09-02: `davantis-1` se cayó y el tablero mostró TRES alertas para
+  # un solo evento — `MaquinaCaida` (verdadera), más `CPUSostenida` y `MaquinaLateSinMedir`
+  # disparando sobre la última muestra que llegó antes de morir. Dos de las tres describían una
+  # máquina que no estaba.
+  #
+  # Por eso toda regla que lea una serie de la MUESTRA (o de los servicios) lleva:
+  #
+  #     unless on(project, device) (musubi_fleet_device_up == 0)
+  #
+  # EL JOIN LLEVA `project` Y NO SÓLO `device` (Ola 1 del plan empresa, 2026-09-03).
+  #
+  # Con un solo tenant las dos formas se comportan igual, y por eso el error es invisible HOY: el
+  # día que dos clientes tengan cada uno un `srv-01`, `on(device)` empareja muchos-con-muchos y
+  # Prometheus NO evalúa la regla — la descarta entera con un error. O sea que `MaquinaCaida`
+  # dejaría de vigilar A TODA LA FLOTA, no sólo a esas dos máquinas, y el síntoma sería silencio.
+  #
+  # `project` está en las cuatro etiquetas de toda serie de flota (device, project, tier, os), así
+  # que ponerlo no cuesta nada hoy y evita el modo de falla más caro de mañana. Lo custodia
+  # `TestNingunJoinDeFlotaEmparejaSoloPorDevice`.
+  #
+  # El patrón ya existía —`ServicioCaido` lo usaba desde S12— y estaba aplicado en 3 de 14 reglas.
+  # Lo custodia `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`, así que la regla número 15
+  # no puede nacer sin él.
+  #
+  # LO QUE ESTO **NO** SILENCIA, y es la razón de que sea `unless` y no un `and up == 1`:
+  # `MaquinaCaida` y `FlotaSinTelemetria` siguen intactas. No se pierde el aviso — se pierde el
+  # eco. Y `MaquinaLateSinMedir` recupera su significado literal: «late PERO dejó de medir», que
+  # de una máquina que no late no se puede afirmar.
+  #
+  # EL CASO INCÓMODO, dicho para que nadie lo redescubra: si una máquina se cae PORQUE se le llenó
+  # el disco, `DiscoPorLlenarse` deja de sonar y sólo queda `MaquinaCaida`. Se aceptó a sabiendas:
+  # sobre una máquina que no está no se puede accionar nada, el dato sigue en Prometheus, y el
+  # runbook de `MaquinaCaida` manda a mirar la última muestra. Un aviso que no se puede atender
+  # sólo entrena a ignorar el canal.
+  # ════════════════════════════════════════════════════════════════════════════════════════
+  - name: musubi-flota
+    rules:
+      # --- La máquina dejó de latir ---
+      # up == 0 lo deriva el cerebro con su propio umbral (90s = 3 latidos), así que esto no
+      # duplica el criterio: lo reexporta.
+      # `up == 0` DECÍA DOS COSAS DISTINTAS Y MANDABA AL LUGAR EQUIVOCADO (Ola 3).
+      #
+      # Vale 0 cuando la máquina está apagada **y también** cuando la máquina está perfecta y el
+      # agente no está corriendo. Son dos problemas, se arreglan en dos lugares, y esta alerta
+      # disparaba igual para los dos: mandaba a revisar el hardware de una máquina encendida.
+      #
+      # Ya costó caro dos veces. `gio` figuró caída TRES DÍAS respondiendo al ping en 145 ms: el
+      # agente arranca al iniciar sesión y nadie había iniciado sesión. Y el 2026-09-04, en plena
+      # investigación de quince cortes de energía en `davantis-1`, la máquina estaba ENCENDIDA
+      # —`tailscale ping` contestaba en 55 ms— y lo único muerto era el agente.
+      #
+      # `musubi_fleet_net_up` lo contesta: el cerebro le pregunta al tailnet por las
+      # máquinas que NO están latiendo. Las dos reglas son MUTUAMENTE EXCLUYENTES por
+      # construcción —`unless` y `and` sobre la misma condición—, así que no hace falta ninguna
+      # inhibición entre ellas y nunca llegan las dos.
+      #
+      # SI LA SERIE FALTA, `unless` no quita nada y esta alerta se comporta EXACTAMENTE como
+      # antes. Es la propiedad que hace seguro el cambio: donde no se puede medir —un cerebro sin
+      # tailnet, una máquina que no está en él— el eje se apaga solo en vez de callar la alerta.
+      - alert: MaquinaCaida
+        expr: musubi_fleet_device_up == 0 unless on(project, device) musubi_fleet_net_up == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "No late hace más de 5 minutos, y el cerebro tampoco la alcanza por la red."
+          nota: "La máquina no está: apagada, sin red, o revocada (musubi_fleet_list --include_revoked). Si el cerebro NO puede consultar el tailnet, esta alerta también aparece sin haber podido comprobarlo — su ausencia de `musubi_fleet_net_up` lo dice. Ver deploy/RUNBOOK.md#maquinacaida-en-un-equipo-windows-mir-esto-primero"
+
+      # --- La máquina está viva y el agente no ---
+      - alert: AgenteCaidoConMaquinaViva
+        expr: musubi_fleet_device_up == 0 and on(project, device) musubi_fleet_net_up == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente no late, pero la máquina SÍ está en la red: lo caído es el agente."
+          nota: "No mires el hardware. En Windows la tarea programada arranca AL INICIAR SESIÓN: si la máquina reinició y nadie entró, el agente no corre. `Get-ScheduledTask 'Musubi Agente de Flota' | Get-ScheduledTaskInfo` lo dice, y `deploy/diagnostico-cortes-windows.ps1` lo trae junto con todo lo demás. Ver deploy/RUNBOOK.md#agentecaidoconmaquinaviva"
+
+      # --- La máquina se REINICIÓ ---
+      #
+      # ESTA REGLA NACIÓ DE UN AGUJERO MEDIDO (A79), Y SU PRIMERA VERSIÓN ESTABA MAL.
+      #
+      # El 2026-09-03, persiguiendo por qué `davantis-1` se había caído, el registro de eventos de
+      # Windows mostró TRECE apagones sucios en diez días —evento 41, doce con `BugcheckCode=0`, o
+      # sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada:
+      # `musubi_fleet_device_uptime_seconds` se exportaba desde el principio y NINGUNA de las 22
+      # reglas lo miraba.
+      #
+      # Lo peor no era que faltara la alerta: `MaquinaCaida` SÍ disparó cada vez y se apagó sola a
+      # los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se resuelven solos
+      # se leen como ruido de red, no como «esta PC se está cayendo».
+      #
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # POR QUÉ NO ES `resets(...[24h]) >= 2`, QUE ES LO QUE ESCRIBÍ PRIMERO
+      #
+      # Porque se midió antes de desplegarla y NO HABRÍA DISPARADO NI UNA VEZ. Sobre los datos
+      # reales de `davantis-1`, `resets(uptime[24h])` tocó un máximo de **1** en diez días: 0 de
+      # 69 horas llegaron a 2. Los dos reinicios que Prometheus tiene guardados están a **44 horas**
+      # uno del otro (08-31 21:41 y 09-02 17:26), así que ninguna ventana de 24 h contiene dos.
+      #
+      # Contar es lo correcto conceptualmente y lo que el dato no sostiene: para que una ventana de
+      # 24 h vea el patrón, los cortes tienen que caer juntos, y acá caen espaciados. Agrandar la
+      # ventana tampoco: el TSDB de este Prometheus **arranca el 2026-08-31 17:44** —perdió su
+      # historia ese día, con retención declarada de 90 d—, así que un `[7d]` mide tres días y
+      # miente sobre los otros cuatro.
+      #
+      # Lo que el dato SÍ sostiene es la caída del uptime, y se ve limpia: 39,4 h → 0,41 h, y
+      # 37,9 h → 0,14 h. Sin huecos: el agente sobrevive al reinicio y reporta el arranque nuevo.
+      # Así que la regla dispara por ARRANQUE RECIENTE, una vez por reinicio, y el patrón se lee
+      # en el historial de la alerta en vez de en una ventana que no alcanza. **Contar sigue siendo
+      # mejor y el runbook dice cómo hacerlo a mano**; lo que no se puede es fingir que la ventana
+      # de 24 h lo hace.
+      #
+      # LLEVA LA GUARDA, y acá no es cosmética: una máquina que se muere JUSTO DESPUÉS de arrancar
+      # congela su uptime en un valor chico, y sin la guarda esta comparación se sostendría para
+      # siempre sobre un número que ya no se mueve. Es exactamente la trampa de las series
+      # congeladas, con la vuelta de tuerca de que acá el umbral es un piso y no un techo.
+      - alert: MaquinaSeReinicio
+        expr: >-
+          (musubi_fleet_device_uptime_seconds < 1800)
+            unless on(project, device) (musubi_fleet_device_up == 0)
+            unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        # Sin `for`: el evento dura lo que dura el arranque, y esperar cinco minutos para avisar de
+        # algo que pasó hace tres es perder la mitad de la ventana. El techo de 1800 s ya es la
+        # ventana: el aviso vive media hora y se apaga solo.
+        labels:
+          severity: warning
+        annotations:
+          summary: "Arrancó hace {{ $value | humanizeDuration }}: se reinició."
+          description: >-
+            Un reinicio que la flota vio. Si nadie lo pidió, la causa está afuera del sistema
+            operativo mucho más seguido que adentro. El runbook trae cómo distinguirlo en dos
+            comandos, y cómo contar los anteriores.
+          runbook: "deploy/RUNBOOK.md#maquinasereinicio"
+          # `altura-db` late con su token (es un Tier B SIN shell: address vacío), y el guion que
+          # arma esa muestra no llena `uptime_seg`. Cero es el centinela de «no medido», así que la
+          # serie no existe. NO es un límite de la plataforma —`/proc/uptime` está ahí— sino de ese
+          # empujador en particular; queda anotado en A80 para que la excusa no se vuelva eterna.
+          ausente_en: "tier=B — altura-db empuja su propia muestra y ese guion no manda uptime_seg; el 0 se lee «no medido» y la serie no existe. Arreglable, no estructural: ver A80."
+
+      # --- El agente late pero dejó de MEDIR ---
+      # Es el fallo silencioso que un `up` no detecta: el proceso vive, el colector murió. Sin
+      # esta regla, el panel muestra la última muestra buena para siempre y parece sana.
+      - alert: MaquinaLateSinMedir
+        expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Late, pero su última muestra tiene {{ $value | humanizeDuration }}."
+          nota: "El agente vive y el colector no. Mirá su salida: puede ser un OS sin colector, o /proc inaccesible."
+
+      # --- Disco ---
+      # Se alerta sobre AVAILABLE, no sobre usado. No es lo mismo: el kernel reserva ~5% para
+      # root, así que un disco "al 92% usado" puede tener 0 bytes escribibles para una aplicación.
+      - alert: DiscoPorLlenarse
+        # EL UMBRAL SUBIÓ DE 0.10 A 0.15 AL ABSORBER LA ALERTA DE `alerter.py` (A33).
+        #
+        # No fue un ajuste de gusto: al ir a apagar la regla duplicada resultó que NO era la
+        # misma. `alerter.py` avisaba al 85 % usado; ésta, con 0.10, recién al 90 %. Apagar la
+        # vieja sin mirar habría bajado la sensibilidad cinco puntos sin que nadie lo notara —
+        # exactamente la clase de pérdida silenciosa que una "limpieza de duplicados" produce.
+        #
+        # Medido al decidirlo: `kernelos-pc` (hoy `davantis-1`) estaba al 86,6 % usado, o sea en la
+        # zona ciega entre los dos umbrales. Con 0.15 esa máquina alerta, y tiene que alertar.
+        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.15) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 15m
+        # `sintoma` EMPAREJA ESTA ALERTA CON SU ESCALÓN CRÍTICO, y no es decorativo: la inhibición
+        # «lo crítico calla a lo warning» de alertmanager.yml usa ESTA etiqueta y no `alertname`,
+        # porque los dos escalones de un mismo síntoma se llaman distinto por definición. Con
+        # `equal: ['alertname', ...]` no podía casar nunca — ver el comentario de esa regla.
+        labels: { severity: warning, sintoma: disco }
+        annotations:
+          summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
+          nota: "OJO: es espacio DISPONIBLE, no 'no usado'. La reserva de root no cuenta."
+
+      - alert: DiscoCasiLleno
+        expr: (musubi_fleet_device_disk_available_bytes / musubi_fleet_device_disk_total_bytes < 0.03) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 5m
+        labels: { severity: critical, sintoma: disco }
+        annotations:
+          summary: "Queda {{ $value | humanizePercentage }} de disco escribible."
+
+      # --- Memoria y CPU sostenidas ---
+      # `for` largo a propósito: un pico de 5 minutos es trabajo, no un incidente. Lo que importa
+      # es lo sostenido.
+      - alert: MemoriaSostenida
+        expr: (musubi_fleet_device_memory_used_bytes / musubi_fleet_device_memory_total_bytes > 0.92) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 20m
+        labels: { severity: warning }
+        annotations:
+          summary: "Lleva 20 min con la RAM al {{ $value | humanizePercentage }}."
+          nota: "Usada = total - MemAvailable, así que el page cache NO cuenta: esto es presión real."
+
+      - alert: CPUSostenida
+        expr: (musubi_fleet_device_cpu_percent > 90) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Lleva 30 min con la CPU al {{ $value | printf \"%.0f\" }}%."
+
+      # --- Carga por core ---
+      # Normalizada por CPUs: una carga de 8 es normal en 12 cores y grave en 2.
+      - alert: CargaPorCoreAlta
+        expr: (musubi_fleet_device_load5 / musubi_fleet_device_cpus > 2) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 20m
+        labels: { severity: warning }
+        annotations:
+          summary: "Carga a 5 min de {{ $value | printf \"%.1f\" }}× la cantidad de cores."
+          ausente_en: "os=windows — el load average es un concepto de UNIX y ahí no existe; emitir un 0 lo haría indistinguible de una máquina ociosa."
+
+      # --- Temperatura ---
+      # Sólo dispara donde hay sensor: la serie no existe en las máquinas sin él, así que esto
+      # no alerta por ausencia de dato (que es justamente lo que un 0 inventado habría hecho).
+      - alert: TemperaturaAlta
+        expr: (musubi_fleet_device_temperature_celsius > 85) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "A {{ $value | printf \"%.0f\" }}°C."
+          ausente_en: "os=windows — el sensor se saca por WMI y eso sigue abierto (A2); tier=B — un host sondeado por SSH no expone su zona térmica."
+
+      # --- LA TRAMPA SILENCIOSA ---
+      # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
+      # TODAS las series de flota desaparecen y las alertas de arriba dejan de disparar — sin
+      # que nada falle. Una alerta que se apaga sola es peor que no tenerla.
+      - alert: FlotaSinTelemetria
+        expr: absent(musubi_fleet_device_up)
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "No llega NINGUNA métrica de flota: el resto de las alertas de flota están ciegas."
+          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
+
+      # --- EL AGENTE SE QUEDÓ ATRÁS (A68) ---
+      #
+      # Nació de un caso medido: el cerebro en 0.130.0 y los dos Windows en 0.106.0, veinticuatro
+      # versiones atrás, descubierto DE CASUALIDAD mirando otra cosa. El costo fue concreto: A67 se
+      # desplegó y no podía correr en las dos máquinas para las que se escribió, porque su binario
+      # no tenía la capacidad — y nada lo habría dicho. Un agente atrasado se veía idéntico a uno
+      # al día.
+      #
+      # EL `for` LARGO ES LA REGLA, NO UN AJUSTE DE GUSTO. Bumpear VERSION y redesplegar el cerebro
+      # deja a la flota legítimamente atrasada hasta que alguien cruce el binario a cada máquina, y
+      # eso es trabajo manual en Windows. Seis horas dejan pasar el flujo normal —bump, despliegue,
+      # actualización el mismo día— y marcan lo que se quedó de verdad.
+      #
+      # La serie compara NÚCLEOS semver: dos commits del mismo release no son un agente atrasado.
+      # Ver internal/fleet/version.go, que explica lo que esto NO puede ver.
+      - alert: AgenteDesactualizado
+        expr: (musubi_fleet_device_agent_stale == 1) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "Su agente corre un release distinto del cerebro."
+          nota: "Cuál versión corre cada máquina sale de `musubi_fleet_list` — la versión no viaja como etiqueta a propósito. Ver deploy/RUNBOOK.md#agentedesactualizado"
+          ausente_en: "tier=B — un Tier B no corre nuestro binario, así que no hay versión que comparar."
+
+
+  # ── El auto-heal se vigila a sí mismo (S10 · A10) ─────────────────────────────────────────
+
+  - name: musubi-politicas
+    rules:
+      # UNA POLÍTICA QUE ACTÚA Y NO CURA ES PEOR QUE NO TENER POLÍTICA.
+      #
+      # El auto-heal tapa el síntoma: la alerta de disco/memoria deja de dispararse porque la
+      # política la baja justo a tiempo, una y otra vez, y nadie se entera de que hay un problema
+      # de fondo. Un `journalctl --vacuum` cada hora durante una semana no es mantenimiento: es
+      # algo que escribe log sin parar y que nadie fue a mirar.
+      #
+      # El umbral está atado al cooldown mínimo razonable: más de 3 acciones en 6 h significa que
+      # la condición vuelve a cruzarse apenas se suelta el cooldown.
+      - alert: PoliticaQueNoCura
+        expr: increase(musubi_fleet_policy_actions_total{result="ok"}[6h]) > 3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "La política {{ $labels.policy }} actuó {{ $value | printf \"%.0f\" }} veces en 6 h: está tapando el síntoma, no curándolo."
+          runbook: "deploy/RUNBOOK.md#politicaquenocura"
+
+      # UNA MÁQUINA QUE NO ALCANZA LO QUE NECESITA ALCANZAR (A67).
+      #
+      # Nace de un caso concreto: el relay propio se veía sano por las tres vías que existían —dos
+      # contenedores arriba y sus tres puertos contestando— y NINGÚN cliente llegaba. El chequeo
+      # sondeaba desde el propio servidor, que es el único lugar desde el que siempre anda.
+      #
+      # Esta regla mira la sonda que toma CADA MÁQUINA, así que un `0` significa «desde acá no se
+      # llega». La causa puede ser el destino caído o la red de esa máquina —un VPN que se come la
+      # ruta fue la real— y por eso el summary nombra la máquina y no el destino: quien atiende
+      # tiene que ir a mirar ESA máquina.
+      #
+      # AUSENTE NO DISPARA: una máquina sin destinos configurados no emite la serie, así que no
+      # entra acá. Si emitiera 0, toda la flota sin configurar sonaría desde el día uno — que es
+      # exactamente cómo se le enseña a alguien a ignorar las alarmas.
+      - alert: MaquinaQueNoAlcanzaSuDestino
+        expr: (musubi_fleet_device_reach_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "No alcanza alguno de los destinos que le declararon. Cuál, en `no_alcanza` de musubi_fleet_list."
+          nota: "El destino puede estar caído, o la red de ESA máquina puede estar cortando la ruta (un VPN con todo el tráfico capturado es la causa más común)."
+          runbook: "deploy/RUNBOOK.md#maquinaquenoalcanzasudestino"
+          ausente_en: "sin-declarar — la sonda mira los destinos de MUSUBI_ALCANCE y es opt-in por máquina (A67): nadie le pidió que mirara no es lo mismo que no llega."
+
+      # La política está viva pero NO PUEDE actuar: su principal perdió la concesión `exec`, o el
+      # comando dejó de estar en su allowlist. Es una alarma apagada, y una alarma apagada en
+      # silencio es la razón por la que existe la mitad de este slice.
+      - alert: PoliticaSinPermiso
+        expr: increase(musubi_fleet_policy_actions_total{result=~"rechazada|sin_principal"}[1h]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "La política {{ $labels.policy }} quiso actuar y NO PUDO ({{ $labels.result }}): quedó inerte."
+          nota: "Revisá la sección `fleet:` y `fleet_exec_allow:` del principal de esa política en principals.yaml."
+          runbook: "deploy/RUNBOOK.md#politicasinpermiso"
+
+      # Credenciales bien configuradas que chocan contra su propia allowlist. NO es un intento de
+      # intrusión —para llegar acá ya había que tener `exec` sobre esa máquina— y por eso va
+      # aparte de los rechazos de authz: mezclarlos entrena a ignorar los dos.
+      - alert: AllowlistDeFlotaRechazando
+        expr: increase(musubi_tool_rejections_total{reason="fleet_allowlist"}[1h]) > 5
+        for: 15m
+        labels: { severity: info }
+        annotations:
+          summary: "Varios exec de flota rechazados por allowlist en 1 h: o alguien necesita un comando más, o un script quedó viejo."
+
+  # ── El latido de la cadena de alertas (S10 · I18) ─────────────────────────────────────────
+
+      # ── Qué corre ADENTRO de cada máquina (A43) ───────────────────────────────────────────
+      #
+      # Las tres se apagan solas si nadie reporta servicios: sin la serie, la expresión no
+      # matchea nada. Un despliegue que todavía no enumera no recibe una sola alarma.
+      - alert: ServicioCaido
+        # `unless on(project, device) musubi_fleet_device_up == 0` es la mitad que importa: si la MÁQUINA
+        # está caída, todos sus servicios lo están, y avisar por cada uno convierte una caída en
+        # cincuenta mensajes. Que la máquina se cayó ya lo dice MaquinaCaida.
+        expr: (musubi_fleet_service_up == 0) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "El servicio {{ $labels.service }} no está corriendo."
+          runbook: "deploy/RUNBOOK.md#serviciocaido"
+          ausente_en: "tier=B — un Tier B no reporta servicios: no corre nuestro agente y el sondeo por SSH no los enumera."
+
+      # ANDA A LOS TUMBOS: está corriendo AHORA y se reinició varias veces en la última hora. Es
+      # el estado que `up` no puede mostrar — en cada instante el servicio está arriba.
+      - alert: ServicioReiniciandose
+        expr: (increase(musubi_fleet_service_restarts_total[1h]) > 5) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} se reinició {{ $value | printf \"%.0f\" }} veces en una hora."
+          runbook: "deploy/RUNBOOK.md#servicioreiniciandose"
+          # A76 AFINÓ ESTA RAZÓN, y no el selector. El cabo suponía que había que acotarla a «los
+          # servicios del SCM»; es al revés — el selector sólo se consulta cuando la serie ESTÁ
+          # AUSENTE (verificar-cobertura.sh), así que en una Windows que reporta contenedores la
+          # serie existe, la máquina cuenta como cubierta y esta excusa no se mira. Lo que había
+          # que corregir es la prosa, que presentaba al SCM como la historia completa.
+          ausente_en: "os=windows — el SCM no expone cuántas veces se reinició un servicio, y un 0 inventado se leería «nunca se reinició». OJO: desde A76 una Windows SÍ reporta sus contenedores, y un contenedor sí expone reinicios — así que ver esta excusa disparar sobre una Windows significa que esa máquina no corre ninguno, y eso es un dato, no una laguna; tier=B — un Tier B no reporta servicios."
+
+      # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
+      # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
+      - alert: ServicioSinNoticias
+        expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace más de 30 min que no reporta el estado de {{ $labels.service }}."
+          runbook: "deploy/RUNBOOK.md#serviciosinnoticias"
+          ausente_en: "tier=B — un Tier B no reporta servicios."
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: MaquinaSinInventario
+        # UNA MÁQUINA CON AGENTE QUE NO DICE QUÉ CORRE ADENTRO.
+        #
+        # Nació de una auditoría, no de una hipótesis: `kernelos-pc` (hoy `davantis-1`) figuraba en
+        # línea, latiendo cada 30 s, y con CERO servicios. Resultó ser un binario anterior a la
+        # enumeración — pero el síntoma es idéntico al de un enumerador roto, y al de una
+        # fuente que falló y abortó el inventario a propósito. Las tres causas piden lo mismo:
+        # que alguien mire.
+        #
+        # `== 1` y no `unless` sobre el up: una máquina CAÍDA no tiene por qué reportar
+        # inventario, y alertar de eso sería duplicar MaquinaCaida con otro nombre.
+        #
+        # Sólo Tier A: un Tier B no corre nuestro binario y no tiene con qué enumerarse.
+        expr: >-
+          (musubi_fleet_device_up{tier="A"} == 1)
+            unless on(project, device) count by(project, device) (musubi_fleet_service_up)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Late pero no dice qué corre adentro."
+          description: >-
+            La máquina reporta su telemetría y no su inventario de servicios. Sostenido 15 minutos,
+            que es el triple del reenvío periódico del inventario.
+          runbook: "deploy/RUNBOOK.md#maquinasininventario"
+
+      # ── El RENDIMIENTO de un servicio (fase 4) ────────────────────────────────────────────
+      #
+      # Estas tres miran algo que `musubi_fleet_service_up` NO PUEDE VER: un servicio cuyo proceso
+      # está perfectamente vivo mientras hace mal su trabajo. Para un bot es la única señal que
+      # importa — systemd lo ve corriendo tanto si contesta bien como si contesta cualquier cosa.
+      #
+      # LAS TRES SE APAGAN SOLAS donde no aplican: `musubi_fleet_service_handled` está AUSENTE en
+      # todo servicio que no reporte rendimiento, que es la enorme mayoría. Un servicio de systemd
+      # no dispara ninguna de éstas nunca, y por eso se pueden instalar siempre.
+      - alert: ServicioFallandoPorDentro
+        # Sobre la ventana que el propio colector declaró, no sobre una inventada acá.
+        expr: >
+          (100 * musubi_fleet_service_failed / musubi_fleet_service_handled > 20
+          and musubi_fleet_service_handled > 10)
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} corre y falla más de 1 de cada 5."
+          runbook: "deploy/RUNBOOK.md#serviciofallandopordentro"
+          ausente_en: "sin-declarar — el conteo de atendidos/fallados lo empuja cada servicio y es opt-in; tier=B — un Tier B no reporta servicios."
+
+      # EL COLECTOR SE MURIÓ, que NO es lo mismo que «el servicio no tuvo trabajo». La diferencia
+      # es exactamente por qué el colector empuja un 0 en vez de callarse: con el 0, la serie
+      # existe y vale cero; sin colector, la serie DESAPARECE. Esta regla mira la desaparición.
+      - alert: ColectorDeRendimientoMudo
+        expr: (musubi_fleet_service_last_report_seconds > 600 and on(project, device, service) musubi_fleet_service_handled) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} reportaba rendimiento y hace más de 10 minutos que no."
+          runbook: "deploy/RUNBOOK.md#colectorderendimientomudo"
+          ausente_en: "sin-declarar — sólo aplica a los servicios que YA empujaban rendimiento, que es opt-in; tier=B — un Tier B no reporta servicios."
+
+      - alert: ServicioLento
+        expr: (musubi_fleet_service_latency_p95_ms > 5000) unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El p95 de {{ $labels.service }} pasa los 5 segundos."
+          runbook: "deploy/RUNBOOK.md#serviciolento"
+          ausente_en: "sin-declarar — la latencia la empuja cada servicio con el colector de rendimiento, que es opt-in; tier=B — un Tier B no reporta servicios."
+
+  # ── LA CUSTODIA CRUZADA (A73) ─────────────────────────────────────────────────────────────
+  #
+  # Este grupo no vigila a la flota: vigila al OTRO ARCHIVO DE REGLAS. Y eso tiene una razón
+  # exacta que vale entender antes de tocarlo.
+  #
+  # A73 salió de un caso real: `TestLaCadenaDeAlertasSeVigilaASiMisma` pasaba en verde mientras el
+  # job `alertmanager` NO estaba desplegado, así que `CadenaDeAlertasFallando` —la alerta que
+  # vigila que las alertas se entreguen— no podía dispararse nunca. La guarda leía el repo; el
+  # servidor corría otro archivo. Había 29 reglas cargadas contra 31 en el repo.
+  #
+  # POR QUÉ CRUZADO Y NO CADA ARCHIVO SOBRE SÍ MISMO. Un archivo que declara su propio conteo se
+  # despliega junto con el conteo: las dos mitades se mueven a la vez y la comprobación nunca
+  # falla. Cruzándolos, un despliegue a medias rompe la simetría en la dirección que sea — se
+  # copió éste y no aquél, o al revés— y alguno de los dos grita.
+  #
+  # EL NÚMERO NO PUEDE PUDRIRSE EN EL REPO: lo calcula
+  # `TestCadaArchivoDeReglasCustodiaElConteoDelOtro` a partir del YAML, así que agregar una alerta
+  # sin actualizar el conteo rompe la suite acá abajo, en el repo, antes de llegar a producción.
+  - name: musubi-custodia
+    rules:
+      - alert: ReglasDelCerebroSinDesplegar
+        # `absent(sum(...))` cubre «el archivo no está cargado» y el `!=` cubre «está cargado pero
+        # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.
+        expr: >-
+          absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}))
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 20
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Las reglas del cerebro que corren no son las que declara el repo."
+          nota: "O el archivo no está cargado, o quedó una versión vieja. `deploy/verificar-despliegue.sh` dice exactamente cuáles faltan o sobran. Ver deploy/RUNBOOK.md#reglasdelcerebrosindesplegar"

@@ -1,0 +1,37 @@
+# musubi-alerts-backup-offhost.yml — la alerta del backup FUERA del host.
+#
+# despliegue: condicional — sólo si el backup tiene un destino fuera del host (BACKUP_REMOTE).
+#
+# Hoy no lo tiene: es una decisión declarada del operador (A37).
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ ESTÁ EN UN ARCHIVO APARTE
+#
+# `musubi-backup` admite un modo local-only DECLARADO (`BACKUP_ALLOW_LOCAL_ONLY=1`): el snapshot
+# queda en el mismo disco, a conciencia. Es una decisión legítima, pero contra esa configuración
+# `musubi_backup_offhost_age_seconds` vale -1 PARA SIEMPRE, y esta regla dispararía todos los
+# días sin que haya nada que arreglar.
+#
+# Una alarma que no se puede apagar arreglando algo no es una alarma: es ruido que enseña a
+# ignorar el canal, y se lleva puestas a las demás. Mismo criterio que las reglas de flota.
+#
+# `preparar.sh` mira `BACKUP_REMOTE` en el env del backup y sólo instala este archivo si hay un
+# destino off-host configurado. El día que lo configures, vuelve sola.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+
+groups:
+  - name: musubi-backup-offhost
+    rules:
+
+      # --- DR: backup off-host (el CRÍTICO del baseline) ---
+      # age < 0  ⇒ nunca hubo un envío off-host exitoso (o no está configurado) — DR APAGADO.
+      # age > 48h ⇒ el timer dejó de shipear (dead-man's-switch).
+      - alert: MusubiBackupOffhostStale
+        expr: musubi_backup_offhost_age_seconds < 0 or musubi_backup_offhost_age_seconds > 172800
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "El backup off-host de Musubi no shipea (nunca funcionó o >48h)."
+          runbook: "deploy/RUNBOOK.md#musubibackupoffhoststale"
+
+      # --- Sync: outbox muerto (observaciones 'shared' que agotaron reintentos) ---

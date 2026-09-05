@@ -1,0 +1,109 @@
+# musubi-alerts-altura.yml — el plano de APLICACIÓN de la base gestionada de Altura.
+#
+# despliegue: condicional — sólo si existe el scrape `altura-db`.
+#
+# Sin él estas reglas no tienen datos y enmudecen sin fallar, que es peor que no instalarlas: se
+# ven puestas.
+#
+# Va en /etc/prometheus/rules/. Se instala SÓLO si existe el scrape `altura-db`; sin él estas
+# reglas no tienen datos y enmudecen sin fallar, que es peor que no instalarlas: se ven puestas.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# EL TECHO SALE DEL ENDPOINT, NO DE UN NÚMERO ESCRITO A MANO
+#
+# Es la corrección más importante de este archivo. El alerter que reemplaza tenía esto:
+#
+#     UMBRALES_SUPABASE = [ ("pooler_conns", 350, "Conexiones del pooler (de 400)") ]
+#
+# con `pooler_conns = sum(pgbouncer_pools_server_used_connections)`. Dos números tipeados a mano,
+# y los dos hablan de cosas distintas:
+#
+#   - El 400 es `pgbouncer_config_max_client_connections`: el límite del lado CLIENTE.
+#   - Lo que sumaba es del lado SERVIDOR — las conexiones que el pooler abre CONTRA postgres, que
+#     es un pool aparte y mucho más chico. Medido el 2026-08-28: `free_servers` 50, `used_servers`
+#     0, y las tres sumas en 0.
+#
+# O sea que la alerta vigilaba un número que tendría que multiplicarse por siete para tocar su
+# umbral. Nunca sonó, y «nunca sonó» se lee igual que «todo bien».
+#
+# Acá el denominador es la métrica que el propio pgbouncer publica. Si Supabase cambia el plan y
+# el límite pasa de 400 a 1000, la alerta se ajusta sola. Un umbral cuyo denominador está tipeado
+# en otro archivo es un umbral que caduca sin avisar.
+
+groups:
+  - name: altura-db
+    rules:
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: AlturaEndpointMudo
+        # PRIMERO ÉSTA, y no es orden estético: todas las de abajo dependen de que el scrape
+        # llegue. Sin esta regla, un endpoint caído apaga las otras tres en silencio — no
+        # disparan, porque no hay serie con la que dispararse.
+        expr: up{job="altura-db"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El endpoint de métricas de la base de Altura no contesta"
+          description: >-
+            Hace 5 minutos que el scrape falla. Mientras dure, TODAS las alertas de esta base
+            están mudas.
+          runbook: "deploy/RUNBOOK.md#alturaendpointmudo"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: AlturaPoolerLlenandose
+        # El numerador y el denominador salen los DOS del endpoint. `used_clients` es lo que el
+        # límite de 400 realmente acota, a diferencia de lo que miraba el colector viejo.
+        expr: >-
+          pgbouncer_used_clients{job="altura-db"}
+            / pgbouncer_config_max_client_connections{job="altura-db"} > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          # Empareja con AlturaPoolerCaido para la inhibición por síntoma (ver alertmanager.yml):
+          # si el pooler NO RESPONDE, «se está llenando» es la misma noticia contada peor.
+          sintoma: pooler_altura
+        annotations:
+          summary: "El pooler de Altura está al {{ $value | humanizePercentage }} de su límite de clientes"
+          description: >-
+            Sostenido 10 minutos. Cuando llegue al 100 %, las conexiones nuevas se rechazan y la
+            aplicación ve errores de conexión, no lentitud.
+          runbook: "deploy/RUNBOOK.md#alturapoolerllenandose"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: AlturaPoolerCaido
+        # `pgbouncer_up` es del propio exporter y dice si pudo hablar con el pooler. Es distinto
+        # de `up`: el endpoint puede contestar perfecto y el pooler estar muerto.
+        expr: pgbouncer_up{job="altura-db"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          sintoma: pooler_altura
+        annotations:
+          summary: "El pooler de Altura no responde"
+          description: >-
+            El endpoint contesta pero el pooler no. La base puede estar viva y ser inalcanzable
+            para la aplicación, que va por el pooler.
+          runbook: "deploy/RUNBOOK.md#alturapoolercaido"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - alert: AlturaBaseCreciendoRapido
+        # NO es un umbral de tamaño: el tamaño «normal» de una base depende de la base, y un
+        # número absoluto acá habría que ajustarlo a mano cada tanto — o sea, caducaría igual que
+        # el 400. Lo que sí se puede afirmar sin conocer la base es la FORMA de la curva: crecer
+        # un 20 % en un día es una anomalía en cualquier base que no está migrando.
+        #
+        # `datname="postgres"` y no la suma: template0 y template1 son plantillas del motor, no
+        # datos de nadie, y sumarlas movía el número sin que nada hubiera pasado.
+        expr: >-
+          (pg_database_size_bytes{job="altura-db", datname="postgres"}
+            - pg_database_size_bytes{job="altura-db", datname="postgres"} offset 1d)
+            / (pg_database_size_bytes{job="altura-db", datname="postgres"} offset 1d) > 0.20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La base de Altura creció {{ $value | humanizePercentage }} en 24 h"
+          description: >-
+            El disco de esa máquina lo vigila Musubi por separado; esto avisa ANTES, cuando el
+            crecimiento todavía es una curva y no un disco lleno.
+          runbook: "deploy/RUNBOOK.md#alturabasecreciendorapido"

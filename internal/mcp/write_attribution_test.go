@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestWriteAttributionFromPrincipal valida que la ATRIBUCIÓN de escritura se derive de la
@@ -16,7 +17,7 @@ import (
 // proyecto declarando project_id; su credencial manda. admin/legacy sí fija el origen explícito
 // (ingest del central). Se comprueba vía la visibilidad de lectura ya acotada por proyecto.
 func TestWriteAttributionFromPrincipal(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

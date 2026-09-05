@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,5 +131,40 @@ func TestValidBearer(t *testing.T) {
 		if got := validBearer(c.header, c.want); got != c.ok {
 			t.Errorf("validBearer(%q, %q) = %v, esperaba %v", c.header, c.want, got, c.ok)
 		}
+	}
+}
+
+// UN `principals_file` RELATIVO SE RESUELVE CONTRA EL WORKSPACE, NO CONTRA EL CWD.
+//
+// El hueco que cierra es silencioso y caro. `principals_file: ".musubi/principals.yaml"` es lo
+// que cualquiera escribe a mano; resuelto contra el directorio de trabajo del proceso —que en un
+// servicio de systemd es `/`, porque el unit de deploy no fija WorkingDirectory— apunta a un
+// archivo que no existe. Y loadPrincipals con un archivo inexistente NO FALLA: devuelve el
+// registro LEGACY. El cerebro arranca bien, sirve bien, y toda la identidad por-miembro se
+// degrada en silencio a UN SOLO bearer admin-federado que ve todos los proyectos.
+//
+// Sabotaje que la hace fallar: devolver cfg.PrincipalsFile tal cual (como era antes).
+func TestUnPrincipalsFileRelativoCuelgaDelWorkspaceYNoDelDirectorioDeTrabajo(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+
+	rel := s.principalsPath(config.ServiceConfig{PrincipalsFile: ".musubi/principals.yaml"})
+	if !filepath.IsAbs(rel) {
+		t.Fatalf("la ruta resuelta %q sigue siendo relativa: depende del directorio desde el que se lanzó el proceso", rel)
+	}
+	if !strings.HasPrefix(rel, s.projectPath) {
+		t.Errorf("la ruta resuelta %q no cuelga del workspace %q: un servicio con otro WorkingDirectory leería OTRO registro y caería a modo legacy sin decir nada", rel, s.projectPath)
+	}
+
+	// Una ruta ABSOLUTA se respeta tal cual: es la vía para tener el registro fuera del
+	// workspace (p. ej. en /etc), y cambiarla rompería despliegues reales.
+	abs := filepath.Join(t.TempDir(), "principals.yaml")
+	if got := s.principalsPath(config.ServiceConfig{PrincipalsFile: abs}); got != abs {
+		t.Errorf("una ruta absoluta se reescribió: %q -> %q", abs, got)
+	}
+
+	// Y el default sigue siendo el de siempre.
+	def := s.principalsPath(config.ServiceConfig{})
+	if def != filepath.Join(s.projectPath, ".musubi", "principals.yaml") {
+		t.Errorf("cambió el default: %q", def)
 	}
 }

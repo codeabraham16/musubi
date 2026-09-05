@@ -88,6 +88,20 @@ type serverMetrics struct {
 	// DEGRADA al orden model-free y devuelve ok. Sin este contador, el sistema dejaría de usar el
 	// juez sin que nadie pudiera enterarse.
 	motorDenied atomic.Int64
+	// execAllowDenied cuenta los exec frenados por la ALLOWLIST de la credencial (S10, I8-I10).
+	// Va aparte de authzDenied porque significa otra cosa: authz es «no podés tocar esa máquina»
+	// y esto es «podés, pero no ESE comando». Confundirlos haría que un token bien configurado
+	// que choca contra su propia allowlist se lea como un intento de intrusión.
+	execAllowDenied atomic.Int64
+	// politicaStats cuenta las acciones del AUTO-HEAL por política y resultado (S10, I19).
+	// Clave: "<politica>\x00<resultado>" -> *atomic.Int64.
+	//
+	// A PROPÓSITO SIN LA ETIQUETA DE MÁQUINA. El resto de las series de flota se filtran por la
+	// credencial del scrape (ver renderFlota), pero las políticas son configuración del cerebro y
+	// no cuelgan de ninguna concesión: etiquetar la máquina acá le entregaría el inventario de un
+	// tenant a cualquier scraper. La alerta necesita saber QUE una política actúa en loop; CUÁL
+	// máquina lo dice la bitácora, que sí está compuertada.
+	politicaStats sync.Map
 
 	gaugeCache domainGaugeCache // cache TTL de OperationalStats para no re-COUNT en cada scrape
 }
@@ -246,6 +260,83 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"authz\"} %d\n", m.authzDenied.Load())
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"quota\"} %d\n", m.quotaExceeded.Load())
 	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"motor_quota\"} %d\n", m.motorDenied.Load())
+	fmt.Fprintf(b, "musubi_tool_rejections_total{reason=\"fleet_allowlist\"} %d\n", m.execAllowDenied.Load())
+	m.renderPoliticas(b)
+}
+
+// contarPolitica anota una acción de auto-heal.
+// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento".
+func (m *serverMetrics) contarPolitica(politica, resultado string) {
+	if m == nil {
+		return
+	}
+	clave := politica + "\x00" + resultado
+	v, _ := m.politicaStats.LoadOrStore(clave, new(atomic.Int64))
+	v.(*atomic.Int64).Add(1)
+}
+
+// sembrarPoliticas crea EN CERO las series de cada política configurada.
+//
+// EL CERO Y EL SILENCIO NO SON LO MISMO, y hasta acá el código no cumplía lo que su propio
+// comentario prometía: `politicaStats` declaraba desde S10 que la serie se emite aunque valga
+// cero «una vez que hay políticas configuradas», pero nada la sembraba — el mapa nacía vacío,
+// `renderPoliticas` cortaba, y la serie no existía hasta la PRIMERA acción.
+//
+// El costo era exacto y medible: las dos alertas que viven de esta serie son `increase(...)`, y
+// un `increase()` sobre una serie ausente no devuelve nada. O sea que no podían distinguir «no
+// actuó ninguna política» de «el cerebro dejó de exportar» — que es la distinción entera por la
+// que existe el comentario. Se vio al reiniciar el cerebro después de configurar la primera
+// política real: la serie que acababa de aparecer desapareció, y ningún log lo dijo.
+//
+// Se siembran los CUATRO resultados posibles y no sólo los que hoy miran las alertas: una alerta
+// nueva sobre `error` se encontraría con el mismo agujero, y sembrar de menos lo dejaría abierto
+// para la próxima.
+func (m *serverMetrics) sembrarPoliticas(nombres []string) {
+	if m == nil {
+		return
+	}
+	for _, n := range nombres {
+		for _, r := range []string{"ok", "rechazada", "sin_principal", "error", "mantenimiento"} {
+			// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene
+			// contando, o una recarga de configuración borraría la historia de la ventana.
+			m.politicaStats.LoadOrStore(n+"\x00"+r, new(atomic.Int64))
+		}
+	}
+}
+
+// renderPoliticas emite el contador de acciones automáticas.
+//
+// SE EMITE AUNQUE VALGA CERO una vez que hay políticas configuradas, porque el silencio y el cero
+// no son lo mismo: una serie AUSENTE hace que `rate()` no devuelva nada y la alerta de I19 no
+// pueda distinguir «no actuó» de «el cerebro dejó de exportar». Es la misma trampa que
+// FlotaSinTelemetria cierra un nivel más arriba.
+func (m *serverMetrics) renderPoliticas(b *strings.Builder) {
+	type fila struct {
+		politica, resultado string
+		n                   int64
+	}
+	var filas []fila
+	m.politicaStats.Range(func(k, v interface{}) bool {
+		partes := strings.SplitN(k.(string), "\x00", 2)
+		if len(partes) == 2 {
+			filas = append(filas, fila{partes[0], partes[1], v.(*atomic.Int64).Load()})
+		}
+		return true
+	})
+	if len(filas) == 0 {
+		return
+	}
+	sort.Slice(filas, func(i, j int) bool {
+		if filas[i].politica != filas[j].politica {
+			return filas[i].politica < filas[j].politica
+		}
+		return filas[i].resultado < filas[j].resultado
+	})
+	b.WriteString("# HELP musubi_fleet_policy_actions_total Acciones de política automática (auto-heal), por política y resultado.\n")
+	b.WriteString("# TYPE musubi_fleet_policy_actions_total counter\n")
+	for _, f := range filas {
+		fmt.Fprintf(b, "musubi_fleet_policy_actions_total{policy=%q,result=%q} %d\n", f.politica, f.resultado, f.n)
+	}
 }
 
 // renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un
@@ -292,6 +383,41 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	b.WriteString("# HELP musubi_backup_offhost_age_seconds Antigüedad del último backup off-host exitoso (-1 si nunca/no configurado).\n")
 	b.WriteString("# TYPE musubi_backup_offhost_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_backup_offhost_age_seconds %d\n", st.BackupOffhostAgeSec)
+	b.WriteString("# HELP musubi_backup_local_age_seconds Antigüedad del último snapshot LOCAL (-1 si nunca). Dice si el timer corre; el de off-host dice si el backup sale de la máquina.\n")
+	b.WriteString("# TYPE musubi_backup_local_age_seconds gauge\n")
+	fmt.Fprintf(b, "musubi_backup_local_age_seconds %d\n", st.BackupLocalAgeSec)
+}
+
+// renderEmpuje emite las TRES series de auto-vigilancia del empuje OTLP (S11).
+//
+// POR QUÉ SALEN POR EL TIRÓN Y NO VIAJAN EN EL PROPIO EMPUJE: un mecanismo de monitoreo cuya
+// única forma de avisar de su propia muerte es él mismo no avisa nunca. Si el POST no llega, un
+// contador de fallos que viajara adentro del POST tampoco llega. Es el mismo punto ciego que
+// FlotaSinTelemetria cierra un nivel más abajo.
+//
+// Se emiten SÓLO si el empuje está configurado —nadie necesita tres series en cero en un cerebro
+// que no empuja— y, una vez configurado, se emiten SIEMPRE aunque valgan cero: el silencio y el
+// cero no son lo mismo, y una serie ausente hace que `rate()` no devuelva nada. Mismo criterio
+// que renderPoliticas.
+//
+// La excepción es last_success, que se OMITE mientras nunca haya habido un empuje aceptado. Un 0
+// ahí sería el unix epoch, o sea «último éxito: hace 56 años» — que se lee como un bug del panel
+// y no como «esto nunca funcionó», que es lo que realmente pasó.
+func (s *McpServer) renderEmpuje(b *strings.Builder, ahora time.Time) {
+	if !s.empujeCfg.Activo() {
+		return
+	}
+	if ultimo := s.empujeUltimoExito.Load(); ultimo > 0 {
+		b.WriteString("# HELP musubi_push_last_success_seconds Segundos desde el último empuje OTLP aceptado. AUSENTE si nunca hubo uno.\n")
+		b.WriteString("# TYPE musubi_push_last_success_seconds gauge\n")
+		fmt.Fprintf(b, "musubi_push_last_success_seconds %d\n", int64(ahora.Sub(time.Unix(ultimo, 0)).Seconds()))
+	}
+	b.WriteString("# HELP musubi_push_failures_total Empujes OTLP que no llegaron a destino.\n")
+	b.WriteString("# TYPE musubi_push_failures_total counter\n")
+	fmt.Fprintf(b, "musubi_push_failures_total %d\n", s.empujeFallos.Load())
+	b.WriteString("# HELP musubi_push_datapoints Puntos que llevó el último empuje. Un 0 sostenido = el empujador corre y no exporta nada.\n")
+	b.WriteString("# TYPE musubi_push_datapoints gauge\n")
+	fmt.Fprintf(b, "musubi_push_datapoints %d\n", s.empujeDatapoints.Load())
 }
 
 // statusRecorder envuelve un ResponseWriter para capturar el código de estado emitido

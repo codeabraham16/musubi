@@ -7,13 +7,14 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestToolSyncPullScoped valida el tool musubi_sync_pull (C5.3b): devuelve la memoria 'shared' del
 // proyecto de la CREDENCIAL (aislamiento T17-19; nada cross-tenant), en orden de rowid, y respeta el
 // cursor after_rowid para paginar. Es el server side del sync entrante.
 func TestToolSyncPullScoped(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

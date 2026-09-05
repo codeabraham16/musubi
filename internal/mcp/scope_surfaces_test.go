@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // TestReadSurfacesEnforcePrincipalScope valida el wiring principal→scope (Track 17) end-to-end
@@ -15,7 +16,7 @@ import (
 // (+ lo sin atribuir); un admin ve todo. Cubre search_keyword y memory_expand (no necesitan
 // embedder; la semántica se cubre a nivel motor en internal/memory/scope_isolation_test.go).
 func TestReadSurfacesEnforcePrincipalScope(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

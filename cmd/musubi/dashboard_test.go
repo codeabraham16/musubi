@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func TestDashboardSnapshotEndpoint(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestDashboardSnapshotEndpoint(t *testing.T) {
 }
 
 func TestDashboardIndexServesHTML(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestDashboardIndexServesHTML(t *testing.T) {
 // TestDashboardCodeLens valida el backend de la lente "código": el snapshot trae el grafo de
 // código y /api/explained devuelve las memorias que explican un símbolo (weld on-hover).
 func TestDashboardCodeLens(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestIsLoopbackAddr(t *testing.T) {
 // del endpoint — el snapshot lo servía capado a 300 porque viajaba en cada sondeo, y con más
 // de 300 memorias eso significaba que la pantalla nunca podía mostrar el acervo completo.
 func TestDashboardGrafoSinTope(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestDashboardGrafoSinTope(t *testing.T) {
 // TestDashboardPulseEsChico: el pulso es lo que se pide cada 5 s, así que su tamaño es su
 // contrato. Con 420 memorias el snapshot arrastra el grafo entero y el pulso no.
 func TestDashboardPulseEsChico(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,189 @@
+# musubi-recording.yml — recording rules para el reporte de SLA por cliente.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# POR QUÉ RECORDING RULES Y NO UNA CONSULTA AD HOC
+#
+# Un MSP factura contra un número, y un número que se calcula distinto cada vez que alguien lo
+# pide no se puede facturar. `avg_over_time(...[30d])` escrito a mano en un panel da un resultado
+# que depende de cuándo se lo miró, de qué rango tenía el gráfico y de si quien lo escribió puso
+# 30d o 720h. Precalculado acá, el mismo mes da el mismo número dos veces.
+#
+# Y hay una razón de costo: `[30d]` sobre las series de una flota grande es una consulta pesada
+# que Prometheus repetiría en cada refresco del panel. Como recording rule se evalúa una vez cada
+# cinco minutos.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# LO QUE ESTOS NÚMEROS NO DICEN, Y HAY QUE DECIRLO ANTES DE MANDARLOS A UN CLIENTE
+#
+#   · `musubi_fleet_service_up` SE REPUBLICA CON HORA FRESCA MIENTRAS EL AGENTE ESTÁ MUERTO. Es
+#     el ÚLTIMO ESTADO CONOCIDO, no una medición — el propio HELP del exportador lo dice: «NO dice
+#     si ese reporte es reciente». Medido el 2026-09-04: `davantis-1` estuvo caída de 15:51 a
+#     21:21 UTC (`musubi_fleet_device_up` = 0 las seis horas) y sus 64 servicios publicaron `1`
+#     durante TODA la ventana. Sin la guarda de abajo, esas seis horas entran al promedio como
+#     disponibilidad medida: el «uno inventado», simétrico al cero mentiroso.
+#   · `musubi_fleet_device_up` es «el agente late», no «la máquina anda». En un Windows sin
+#     `-AlArranque` el agente vive mientras haya sesión iniciada: una máquina reiniciada de
+#     madrugada figura caída y está perfectamente encendida. Para esas máquinas el número mide
+#     disponibilidad DEL AGENTE.
+#   · Si Prometheus estuvo caído, el promedio tiene un hueco y `avg_over_time` lo IGNORA en vez
+#     de contarlo como caída. O sea que el número es optimista, no pesimista, y quien lo firme
+#     tiene que saberlo. `musubi:device_up:cobertura30d` dice cuánto de la ventana se midió de
+#     verdad, POR MÁQUINA — sin eso, «100 % disponible» y «casi no medimos» se dibujan igual.
+#   · La retención de Prometheus acota la ventana real: con 90 días de retención, un `[30d]` es
+#     honesto y un reporte anual no se puede producir. La Ola 4 sube la retención a 400 días.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+groups:
+  - name: musubi-sla
+    interval: 5m
+    rules:
+      # ── PRIMERO, UNA MÁQUINA = UNA SERIE ────────────────────────────────────────────────────
+      #
+      # `musubi_fleet_device_up` llega DUPLICADO por máquina, y eso rompía todo lo de abajo. Las
+      # series traen la etiqueta `instance` que agrega Prometheus, y hay dos valores conviviendo:
+      # `musubi-otlp-push` (el camino vivo) y `musubi-brain` (el scrape, del que esta familia se
+      # descarta a propósito en prometheus.yml). Las del scrape son residuo anterior a ese
+      # descarte y siguen dentro de la ventana de 30 días.
+      #
+      # MEDIDO EN PRODUCCIÓN el 2026-09-04, y no es cosmético:
+      #
+      #   musubi:project_up:min30d  =  0.1018      ← el «peor equipo» del reporte
+      #
+      # Ese 10,2 % es `kernelos-pc` POR EL CAMINO MUERTO. La misma máquina, por el camino vivo,
+      # está en 84,7 %. O sea que la métrica insignia —la que contesta la pregunta de un cliente
+      # enojado— señalaba un fantasma, y el promedio del cliente (0,7577) venía arrastrado por
+      # los mismos duplicados.
+      #
+      # `max by(...)` colapsa los dos caminos EN CADA INSTANTE y se queda con el que dice que la
+      # máquina estaba viva, que es lo correcto: dos transportes de la misma verdad no son dos
+      # observaciones independientes que haya que promediar.
+      #
+      # Se graba como serie propia y no se resuelve con una subconsulta adentro de cada regla por
+      # COSTO: una subconsulta `[30d:5m]` son 8.640 evaluaciones por máquina y por regla, cada
+      # cinco minutos. Con las cuatro máquinas de hoy da igual; con las 2.000 por célula que
+      # apunta el plan, no. El precio de hacerlo así se DICE: las ventanas de abajo se llenan
+      # desde el día en que esto se despliega, y hasta entonces `cobertura30d` lo va a mostrar en
+      # vez de esconderlo.
+      - record: musubi:device_up:norm
+        expr: max by(device, project, os, tier) (musubi_fleet_device_up)
+
+      # LA GUARDA DE FRESCURA VA ACÁ, y no es la misma discusión que la de `instance`.
+      #
+      # Las 24 alertas de flota llevan `unless on(project, device) (musubi_fleet_device_up == 0)`
+      # y estas reglas no la llevaban: un servicio de una máquina cuyo agente está muerto sigue
+      # publicando su último estado con hora fresca, así que entraba al promedio como si alguien
+      # lo hubiera medido. Ver la tercera viñeta del encabezado, con la medición.
+      #
+      # LA GUARDA SOLA NO ALCANZA, Y POR ESO VIENE EN PAR CON LA COBERTURA. Al excluir la máquina
+      # caída, la serie no vale 0: DESAPARECE. Y `avg_over_time` ignora los huecos, que es el
+      # mismo modo de falla que el encabezado ya confiesa para «Prometheus caído» — un `avg30d` de
+      # 1.0 calculado sobre 62 minutos medidos se dibuja idéntico a uno sobre 43.200. La guarda
+      # sola movería el defecto de lugar en vez de cerrarlo.
+      - record: musubi:service_up:norm
+        expr: max by(device, project, os, tier, service, class) (musubi_fleet_service_up)
+          unless on(project, device) (musubi_fleet_device_up == 0)
+
+      # ── CUÁNTO DE LA VENTANA SE MIDIÓ DE VERDAD ─────────────────────────────────────────────
+      #
+      # Esto reemplaza a `musubi:device_up:sin_datos30d`, que NO PODÍA FUNCIONAR:
+      #
+      #   expr: absent_over_time(musubi_fleet_device_up[30d]) or vector(0)
+      #
+      # `absent_over_time` devuelve UNA serie SIN ETIQUETAS, y vale 1 sólo si el selector entero
+      # —la flota completa— no tuvo ni una muestra en 30 días. No puede nombrar una máquina
+      # porque no lleva `device`, y su único caso de disparo es que Prometheus lleve un mes
+      # muerto, en cuyo caso tampoco habría nadie grabando esta regla. Verificado en producción:
+      # valía 0, sin etiqueta `device`, y no hay forma de que valga otra cosa.
+      #
+      # El comentario del encabezado repetía la misma creencia. La pregunta de verdad no es
+      # binaria —«¿hubo algún dato?»— sino cuantitativa: ¿sobre qué parte de la ventana se
+      # calculó ese promedio? A 5m de intervalo, 30 días son 8.640 muestras.
+      #
+      # MEDIDO: la cobertura real de la flota va de 16 a 172 horas sobre 720. O sea que los
+      # `avg30d` de hoy se calculan sobre entre el 2 % y el 24 % del mes y se presentan como el
+      # mes entero. Ése es exactamente el «100 % disponible» que no se distingue de «no medimos»,
+      # y ahora tiene un número al lado.
+      - record: musubi:device_up:cobertura30d
+        expr: count_over_time(musubi:device_up:norm[30d]) / 8640
+
+      # ── Y RECIÉN AHORA, LOS PROMEDIOS ───────────────────────────────────────────────────────
+      #
+      # Todos leen `:norm`, nunca la métrica cruda: una sola de estas reglas mirando el original
+      # vuelve a traer los duplicados, y el número malo no se ve distinto del bueno.
+
+      # Por MÁQUINA. El `avg_over_time` de un gauge 0/1 es la fracción de tiempo en 1, o sea la
+      # disponibilidad. Conserva las etiquetas de máquina, así que el reporte puede filtrar por
+      # `project`, `tier` u `os` sin recalcular nada.
+      - record: musubi:device_up:avg7d
+        expr: avg_over_time(musubi:device_up:norm[7d])
+      - record: musubi:device_up:avg30d
+        expr: avg_over_time(musubi:device_up:norm[30d])
+
+      # Por CLIENTE. `avg by(project)` promedia las máquinas entre sí: es la disponibilidad media
+      # de la flota de ese cliente, no la del peor equipo. Las dos cosas se preguntan distinto y
+      # el reporte tiene que decir cuál está mostrando.
+      - record: musubi:project_up:avg30d
+        expr: avg by(project) (avg_over_time(musubi:device_up:norm[30d]))
+
+      # Y el PEOR equipo de cada cliente, que es la pregunta que hace un cliente enojado. Sin
+      # esto, una flota de 40 máquinas con una caída una semana entera sigue mostrando 99,6 %.
+      #
+      # ES LA MÁS SENSIBLE A LOS DUPLICADOS, porque `min` no los promedia: se queda con el peor,
+      # y el peor era siempre el camino muerto. Un `min` es un buscador de valores atípicos, así
+      # que cualquier serie basura que entre a este cálculo GANA.
+      - record: musubi:project_up:min30d
+        expr: min by(project) (avg_over_time(musubi:device_up:norm[30d]))
+
+      # La cobertura del cliente es la PEOR de sus máquinas, no el promedio: un reporte se firma
+      # con el dato más flojo que lo sostiene, no con el más favorable.
+      - record: musubi:project_up:cobertura30d
+        expr: min by(project) (musubi:device_up:cobertura30d)
+
+      # Servicios declarados. Misma lógica; se separa porque un servicio puede estar caído en una
+      # máquina que anda, y mezclarlos daría un promedio que no significa nada.
+      #
+      # OJO CON LO QUE `up` NO DICE: un servicio `ocioso` o `desconocido` NO emite esta serie a
+      # propósito (A70), así que su ausencia acá no es 0 % de disponibilidad — es que no se puede
+      # afirmar nada. `musubi_fleet_service_declared` dice cuáles existen.
+      - record: musubi:service_up:avg30d
+        expr: avg_over_time(musubi:service_up:norm[30d])
+
+      # LA OTRA MITAD DE LA GUARDA: cuánto de la ventana se midió DE VERDAD, por servicio.
+      #
+      # Es la misma cuenta que `musubi:device_up:cobertura30d` un plano más adentro, y existe por
+      # la misma razón: sin ella, «100 % disponible» y «casi no medimos» se dibujan igual. Con la
+      # guarda puesta arriba, las horas en que el agente estuvo muerto ya no inflan el promedio —
+      # pero tampoco lo bajan, así que hace falta un número que diga sobre qué se calculó.
+      #
+      # A 5m de intervalo, 30 días son 8.640 muestras.
+      - record: musubi:service_up:cobertura30d
+        expr: count_over_time(musubi:service_up:norm[30d]) / 8640
+
+      # Por cliente, la PEOR de sus servicios: un reporte se firma con el dato más flojo que lo
+      # sostiene. Mismo criterio que `musubi:project_up:cobertura30d`.
+      #
+      # ════════════════════════════════════════════════════════════════════════════════════════
+      # ESTA COBERTURA NO SIGNIFICA LO MISMO QUE LA DE MÁQUINAS, Y HAY QUE LEERLA DISTINTO
+      #
+      # `musubi_fleet_device_up` se emite SIEMPRE (0 o 1), así que la cobertura de una máquina es
+      # tiempo medido, y punto. `musubi_fleet_service_up` NO: está ausente a propósito para
+      # `ocioso` y para `desconocido` —eso es A70 y su continuación—, porque de un servicio
+      # apagado porque nadie lo pidió no se puede afirmar disponibilidad.
+      #
+      # Así que esta serie cuenta AFIRMACIONES DE DISPONIBILIDAD, no tiempo medido, y su valor
+      # bajo mezcla dos causas que no son la misma:
+      #
+      #   · la máquina no estaba reportando          -> hueco real de medición
+      #   · el servicio estuvo ocioso por diseño     -> no había nada que afirmar
+      #
+      # MEDIDO el 2026-09-04, unas horas después de ponerla: 15 de 200 series muy por debajo del
+      # techo, y las cinco peores son todas ociosas por diseño —`MapsBroker`, `whesvc`,
+      # `edgeupdate`, los updaters de Google—. O sea que este `min` va a estar dominado por un
+      # actualizador de Windows apagado, no por un hueco. Es cierto y no informa.
+      #
+      # SE DEJA IGUAL Y NO SE «ARREGLA» CON UNA CUARTA REGLA: separar las dos causas exige contar
+      # contra `musubi_fleet_service_declared` (que sí está siempre), y eso contestaría otra
+      # pregunta —«¿estaba la máquina reportando?»—, que es exactamente la que ya contesta
+      # `musubi:project_up:cobertura30d`. Para saber si se perdió la medición, mirá ÉSA. Ésta
+      # sirve por servicio, para leer un `avg30d` sabiendo sobre cuántas afirmaciones se calculó.
+      - record: musubi:project_service_up:cobertura30d
+        expr: min by(project) (musubi:service_up:cobertura30d)

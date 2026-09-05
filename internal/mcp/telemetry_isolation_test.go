@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // insightsAs invoca musubi_insights como el principal dado y devuelve el reporte decodeado.
@@ -29,7 +30,7 @@ func insightsAs(t *testing.T, s *McpServer, p *Principal) memory.InsightsReport 
 // de telemetría/decisiones: resolve_telemetry no lee ni resuelve el log de otro proyecto, e
 // insights acota hotspots, conteo de errores y decisiones a la credencial.
 func TestTelemetryAndDecisionsEnforceProjectScope(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestTelemetryAndDecisionsEnforceProjectScope(t *testing.T) {
 // compartida (forceRedact) y lo atribuye al proyecto de la credencial (no al espacio federado).
 func TestLogErrorRedactsAndAttributes(t *testing.T) {
 	const secret = "AKIA1234567890ABCDEF" // matchea aws-access-key, no está en la allowlist
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

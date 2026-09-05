@@ -50,7 +50,7 @@ type GraphResult struct {
 	Facts  []Fact `json:"facts"`
 }
 
-// SaveFact guarda una tripleta en el espacio FEDERADO (project_id=''): el comportamiento
+// SaveFact guarda una tripleta en el espacio FEDERADO (project_id=”): el comportamiento
 // histórico (stdio local, admin). Es un fino wrapper sobre SaveFactFrom.
 func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
 	return e.SaveFactFrom("", subject, predicate, object, validFrom, singleValued)
@@ -63,10 +63,10 @@ func (e *DbEngine) SaveFact(subject, predicate, object, validFrom string, single
 // puede coexistir en varios proyectos. Si el predicado es single-valued (∈ singleValued,
 // case-insensitive) invalida los hechos vivos del mismo (sujeto, predicado) con OTRO objeto
 // DENTRO DEL MISMO PROYECTO (cardinalidad ESTRICTA por proyecto): un save en el proyecto A nunca
-// cierra la ventana de un hecho vivo de B ni de los legacy ''. validFrom (ISO opcional) marca
+// cierra la ventana de un hecho vivo de B ni de los legacy ”. validFrom (ISO opcional) marca
 // desde cuándo el hecho es verdad; ausente/ inválido → ahora. Re-afirmar un triplete invalidado
-// lo revive. originProjectID '' ⇒ espacio federado histórico (admin/stdio); en ese caso la
-// cardinalidad se acota a '' y el comportamiento es bit-idéntico al previo a v14.
+// lo revive. originProjectID ” ⇒ espacio federado histórico (admin/stdio); en ese caso la
+// cardinalidad se acota a ” y el comportamiento es bit-idéntico al previo a v14.
 func (e *DbEngine) SaveFactFrom(originProjectID, subject, predicate, object, validFrom string, singleValued []string) (SaveFactResult, error) {
 	return e.SaveFactFromSourced(originProjectID, subject, predicate, object, validFrom, "agent", singleValued)
 }

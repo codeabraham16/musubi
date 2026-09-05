@@ -275,9 +275,30 @@ jobs:
     #                  por diseño.
     #   G702/G703/G704 taint analysis EXPERIMENTAL (command-injection/path-traversal/SSRF): FP
     #                  masivo para una CLI que lee archivos del operador y corre git/tailscale.
+    #   G705           XSS via taint: la CUARTA del mismo motor experimental. Ver abajo.
     # El único hit del ruleset curado (VACUUM INTO, que no admite parámetros enlazados) lleva un
-    # #nosec G201 justificado en el código. @latest como govulncheck: el ruleset acotado limita el
-    # riesgo de drift entre versiones.
+    # #nosec G201 justificado en el código.
+    #
+    # ────────────────────────────────────────────────────────────────────────────────────────
+    # POR QUÉ ESTO YA NO VA CON @latest
+    #
+    # Acá decía «@latest como govulncheck: el ruleset acotado limita el riesgo de drift entre
+    # versiones». Eso resultó falso, y la primera corrida de este job lo demostró: gosec sumó
+    # G705 upstream, cayó dentro de la banda severity>=medium/confidence=high, y el job se puso
+    # rojo sin que cambiara UNA línea de este repo. Un `-exclude` es una lista NEGRA, y una lista
+    # negra no puede acotar a una herramienta que agrega reglas — la de mañana tampoco está.
+    #
+    # Y no es lo mismo que govulncheck. Ahí lo que cambia son los DATOS (un CVE nuevo), y que
+    # cambien es justamente el punto; por eso va @latest y con continue-on-error, «una noticia,
+    # no un defecto». Acá lo que cambia es la DEFINICIÓN del gate, y este job bloquea. Un gate
+    # cuyo criterio se mueve solo no lockea ningún cero.
+    #
+    # SOBRE G705 EN PARTICULAR, la evidencia de cuánto pesa su veredicto: marcó
+    # shell_agente_http.go —el cuerpo que le manda TECLAS al agente— y NO marcó shell_relay.go,
+    # que devuelve la salida cruda del pty al operador y es el de los dos que lleva contenido
+    # elegido por quien esté del otro lado. Misma forma, mismo `w.Write` de bytes manchados;
+    # señaló el menos expuesto. Los dos declaran octet-stream y ahora mandan nosniff, que es el
+    # endurecimiento de verdad y que este motor no mira.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -289,9 +310,9 @@ jobs:
 
       - name: gosec
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
           "$(go env GOPATH)/bin/gosec" -quiet -severity=medium -confidence=high \
-            -exclude=G104,G202,G204,G301,G302,G306,G304,G702,G703,G704 ./...
+            -exclude=G104,G202,G204,G301,G302,G306,G304,G702,G703,G704,G705 ./...
 
   # ---------------------------------------------------------------------------------------------
   # EL PANEL. Hasta ahora NINGÚN job tocaba node, así que el frontend del dashboard viajaba sin red

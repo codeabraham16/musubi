@@ -57,8 +57,101 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	// v28 = libro de evidencia del MODO SOMBRA: las dos lecturas de un par (model-free y motor)
 	//       lado a lado. La del motor se descarta; la tabla existe para poder recalibrar los
 	//       umbrales con pares etiquetados, que eran 8.
-	if latestSchemaVersion() != 28 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 28", latestSchemaVersion())
+	// v29 = registro de la FLOTA: el dispositivo como entidad de primera clase (track «Control de
+	//       flota», S1). Sin columna `online` —se deriva de last_seen—, sin el token crudo —sólo
+	//       su SHA-256— y sin borrado físico —revocar es una bandera, para que la auditoría
+	//       sobreviva a la baja.
+	// v30 = la ÚLTIMA muestra de cada máquina de la flota (S4). Una COLUMNA y no una tabla de
+	//       series: Musubi guarda el presente de la flota; la historia, si hace falta, la guarda
+	//       Prometheus. Se escribe en el mismo UPDATE que ya estampa last_seen.
+	// v31 = BITÁCORA DE EJECUCIÓN REMOTA (S5). La tabla más sensible del esquema: quién pidió
+	//       correr qué en qué máquina ajena. La fila se crea AL ENCOLAR, no al terminar, para que
+	//       un pedido que nunca se completó quede igual registrado.
+	// v32 = BITÁCORA DE SESIONES DE PANTALLA (S6) + el rustdesk_id de cada máquina. La tabla NO
+	//       tiene columna para la contraseña, ni en claro ni hasheada: guardarla sería un llavero
+	//       de acceso a la flota entera, y hashearla no serviría (quien verifica es RustDesk).
+	// v33 = COOLDOWN PERSISTENTE DE LAS POLÍTICAS DE FLOTA (S10b). Hasta acá el cooldown vivía
+	//       sólo en memoria, así que reiniciar el cerebro lo rearmaba entero — y reiniciar es lo
+	//       primero que alguien hace justo cuando algo va mal, que es cuando las políticas están
+	//       disparando. Clave compuesta (política, máquina): el cooldown es por par.
+	// v34 = BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b). El registro más sensible del
+	//       esquema, y lo que NO tiene es su diseño: no hay columna para el contenido de la
+	//       sesión. Grabar lo que alguien teclea en una terminal es una decisión legal antes que
+	//       técnica. Se guarda que HUBO acceso: quién, dónde, cuándo y por cuánto.
+	// v35 = PROCEDENCIA DEL rustdesk_id (S6b). Ese id lo REPORTA la máquina, así que es entrada
+	//       no confiable: se guarda CUÁNDO cambió y cuál era el anterior. La colisión —dos
+	//       máquinas diciendo ser la misma— NO se guarda: se deriva, como el «en línea».
+	// v36 = INVENTARIO DE SERVICIOS POR MÁQUINA (S12): qué corre ADENTRO de cada máquina de la
+	//       flota. Lo que NO tiene es su diseño, y son tres ausencias: ninguna columna de estado
+	//       (se deriva de `last_health` y de la edad de `last_report`, igual que el «en línea»),
+	//       ninguna serie temporal (B5: la historia la guarda Prometheus) y ninguna foreign key
+	//       (no hay ni una en el repo; la integridad se sostiene en el alta, copiando el
+	//       project_id del device). El único es (project_id, device_id, name): el nombre de un
+	//       servicio sólo es único DENTRO de su máquina.
+	// v37 = QUIÉN PUSO CADA SERVICIO EN EL INVENTARIO (`services.declared`), porque eso decide
+	//       quién puede sacarlo. La poda por ausencia da de baja lo que la máquina dejó de
+	//       reportar, y sin esta columna se llevaba puesto lo DECLARADO A MANO — que es, por
+	//       definición, lo que ningún enumerador ve: un Tier B que no enumera, un bot, un puente.
+	//       El backfill marca declaradas las filas con `last_report IS NULL`, que es la firma
+	//       exacta del alta a mano: el agente siempre escribe la fecha del latido.
+	// v38 = QUÉ SE LE DEBE A QUIEN ESTÁ EN LA MÁQUINA (`devices.consentimiento`) y SI HAY ALGUIEN
+	//       A QUIEN PREGUNTARLE (`devices.puede_preguntar`). Son dos columnas y no una porque son
+	//       hechos de dueños distintos: la primera es una POLÍTICA que escribe quien administra;
+	//       la segunda es una CAPACIDAD MEDIDA que reporta el agente. El dominio las cruza —
+	//       `pide` sobre una máquina que no puede preguntar se degrada a PROHIBIDO, no a libre—.
+	//       `consentimiento` arranca VACÍO y no en un grado: el default vive en el dominio, y
+	//       tenerlo también acá dejaría las filas viejas atrás el día que cambie.
+	// v39 = EL ENFRIAMIENTO DE UNA POLÍTICA DEJA DE SER POR MÁQUINA (`fleet_policy_state.alcance`,
+	//       y la PK pasa a ser (policy, device_id, alcance)). Era el bloqueo anotado de A44 y era
+	//       real: dos políticas sobre servicios distintos de la MISMA máquina caían en la misma
+	//       fila, así que reiniciar uno dejaba muda a la política del otro durante todo el
+	//       cooldown — y el segundo se quedaba caído por haber actuado sobre el primero. Se
+	//       RECREA la tabla porque SQLite no sabe cambiar una PRIMARY KEY; lo existente se copia
+	//       con `alcance = ''`, que es lo que corresponde a los cooldowns de políticas de host.
+	//       Se llama `alcance` y no `servicio` a propósito: lo que representa es QUÉ toca la
+	//       política adentro de la máquina, y lo próximo que se vigile ahí (un contenedor, un
+	//       montaje, una interfaz) va a querer el mismo espaciado sin migrar de nuevo.
+	// v40 = CÓMO CONTESTÓ EL USUARIO cuando hubo que pedirle permiso (`screen_sessions.
+	//       consentimiento`). Columna propia y no un texto adentro de `error`: «me dijeron que no»
+	//       NO es un error, es el sistema funcionando, y las tres formas de no conceder —negada,
+	//       sin_respuesta, no_se_pudo— se arreglan distinto. Vacía es el valor de casi todas las
+	//       filas y significa «no hizo falta preguntar».
+	// v41 = QUIÉN ORIGINÓ EL COMANDO (`device_commands.origen`): una persona o una regla. Se
+	//       GUARDA en vez de derivarse porque es un hecho del pasado: hoy la diferencia se lee del
+	//       nombre del principal, y las políticas se agregan y se sacan, así que un comando de
+	//       hace tres meses se etiquetaría mal. EL DEFAULT '' SIGNIFICA «NO SE SABE» Y NO
+	//       «PERSONA» — rellenar las filas viejas con `persona` le atribuiría a alguien cada
+	//       disparo automático anterior a esta migración.
+	// v42 = VENTANAS DE MANTENIMIENTO (`device_maintenance`). Es un hecho del DOMINIO y no un
+	//       silence de Alertmanager, porque un silence calla el aviso y no frena las POLÍTICAS:
+	//       un reinicio planificado dispara `servicio_caido`, el auto-heal levanta el servicio en
+	//       mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Append-only
+	//       como las otras dos bitácoras: cancelar una ventana es escribir otra fila.
+	// v43 = ROTACIÓN DEL TOKEN DE UN DISPOSITIVO (`token_sha256_nuevo`, `rotacion_vence`). Los
+	//       DOS hashes valen durante la ventana porque el agente se entera del nuevo en la
+	//       RESPUESTA de un latido, o sea después de haber usado el viejo: sin solapamiento
+	//       quedaría afuera entre que lo recibe y lo guarda. Vencida, la rotación se ABANDONA
+	//       (sigue el viejo) en vez de completarse a la fuerza — rotar es higiene, y para la
+	//       emergencia está revocar, que es instantáneo y no depende de que el agente coopere.
+	// v44 = APROBACIÓN DE CUATRO OJOS (`devices.requiere_aprobacion`, `fleet_approvals`). Es un
+	//       TERCER eje: las capacidades dicen quién puede, el consentimiento qué se le debe a
+	//       quien está en la máquina, y esto CUÁNTAS PERSONAS hacen falta. Ninguno de los otros
+	//       dos puede expresarlo, y en un servidor de producción —donde no hay nadie sentado— el
+	//       consentimiento no protege a nadie mientras una sola persona con `shell` hace lo que
+	//       quiera. Append-only: usar una aprobación la marca `usada`, no la borra, porque «esta
+	//       sesión la aprobó fulano» es el hecho que el control existe para dejar escrito.
+	// v45 = `pide` EN LA SHELL (`shell_sessions.consentimiento`). El grado promete «tiene que
+	//       aceptar; sin respuesta no hay sesión» y ese camino no preguntaba nada: mandaba un
+	//       aviso que el usuario no podía contestar y abría el prompt igual, porque
+	//       AvisaAlUsuario() es true para `pide` también. La columna sostiene el flujo de dos
+	//       llamadas que pantalla ya tenía.
+	// v46 = EL PLANO DEL COMANDO (`device_commands.plano`). Los tres caminos —pantalla, shell y
+	//       exec— encolan `musubi:avisar` con el MISMO argv, y la cronología clasificaba los tres
+	//       como plomería de pantalla: un principal con sólo `screen:view` leía «fulano está
+	//       ejecutando comandos acá» y «...abriendo una terminal...». El argv no los distingue y
+	//       el texto es de presentación, así que el plano lo declara quien encola.
+	if latestSchemaVersion() != 46 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 46", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

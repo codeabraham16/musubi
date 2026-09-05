@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // El limiter cuenta por ventana deslizante: permite hasta max, rechaza el excedente, y libera
@@ -69,7 +70,7 @@ func TestQuotaLimiterDisabledAndPerKey(t *testing.T) {
 // La cuota se aplica POR PRINCIPAL en el dispatch: superarla devuelve codeQuotaExceeded, tras
 // autorizar (la credencial es válida) y ANTES de ejecutar el handler.
 func TestQuotaEnforcedPerPrincipal(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestQuotaEnforcedPerPrincipal(t *testing.T) {
 
 // Sin principal (stdio local confiable) NO hay cuota, aunque esté configurada.
 func TestQuotaSkippedWithoutPrincipal(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

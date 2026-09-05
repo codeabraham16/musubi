@@ -1,0 +1,68 @@
+# altura-db.yml — el plano de APLICACIÓN de la base gestionada de Altura.
+#
+# Va en /etc/prometheus/scrapes/altura-db.yml. Se carga por el glob `scrape_config_files` de
+# prometheus.yml, con la misma lógica que las reglas: cada sitio instala los que le tocan, y este
+# archivo NO viaja en el repo con la referencia real adentro (por eso el `.ejemplo`).
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# POR QUÉ ESTO EXISTE SI MUSUBI YA MIDE ESA MÁQUINA
+#
+# Musubi la mide como MÁQUINA: CPU, memoria, disco, carga. Eso viaja por el plano de flota, con
+# su identidad, sus capacidades y su `MaquinaCaida`. Lo que NO entra ahí es el plano de
+# APLICACIÓN —el tamaño de la base, el pooler— porque no son vitales de un host y `fleet.Muestra`
+# no los modela a propósito: la tool de Musubi dice, y sostiene, que guarda el PRESENTE y que la
+# serie temporal la guarda Prometheus.
+#
+# Así que cada uno hace lo suyo sobre la misma máquina, y NO es duplicación: son datos distintos.
+# La regla del track sigue siendo «un solo productor POR DATO», y por eso este scrape TIRA todo
+# `node_*` — esos son los vitales del host, y de ésos el productor es Musubi. Sin ese descarte
+# habría dos series de memoria para la misma máquina y las alertas saldrían dobles, que es
+# exactamente lo que pasó el 2026-08-28 al encender el empuje OTLP.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# EL `keep` NO ES AHORRO, ES DISCIPLINA
+#
+# El endpoint publica 1382 series, y 658 de ellas son cubetas de histogramas del plano HTTP que
+# nadie de acá mira. Traer todo «por las dudas» es cómo una base de series temporales se llena de
+# datos que nadie consultó nunca. Se queda lo que tiene una pregunta detrás.
+#
+# `up` SE QUEDA SÍ O SÍ: es la serie sintética que dice si el scrape llegó, y descartarla haría
+# que un endpoint caído se vea igual que uno sano. Los metric_relabel_configs se aplican también
+# a las sintéticas, así que sacarla del `keep` la borra.
+
+scrape_configs:
+  - job_name: altura-db
+    scheme: https
+    metrics_path: /customer/v1/privileged/metrics
+    # El secreto NUNCA en este archivo: mismo patrón «token por referencia» que el job del
+    # cerebro. El archivo va con dueño prometheus y modo 600.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/altura-db.token
+
+    # El scrape es más lento que el resto a propósito: el endpoint CACHEA su respuesta y refresca
+    # cada ~62 s (medido: 62, 66, 62). Pedirlo cada 30 s traería el mismo cuerpo dos veces —
+    # ancho de banda y CPU por una lectura que no cambió.
+    scrape_interval: 60s
+    scrape_timeout: 30s
+
+    static_configs:
+      # ⚠ REEMPLAZAR por la referencia real del proyecto.
+      - targets: ["TU-REFERENCIA.supabase.co"]
+        labels:
+          # `device` LO MISMO QUE EL NOMBRE EN LA FLOTA. Es lo que permite cruzar estas series con
+          # las de Musubi en una misma consulta: `musubi_fleet_device_up{device="supabase-altura"}`
+          # y `pgbouncer_used_clients{device="supabase-altura"}` hablan de la misma máquina.
+          device: supabase-altura
+
+    metric_relabel_configs:
+      # Lo que se queda, y nada más. `node_*` queda AFUERA por no estar acá: de los vitales del
+      # host el productor es Musubi.
+      - source_labels: [__name__]
+        regex: "up|pg_.*|pgbouncer_.*"
+        action: keep
+      # Las dos etiquetas que Supabase pone en CADA serie son constantes —siempre la misma
+      # referencia— así que no distinguen nada y sí ensucian: la referencia del proyecto es la
+      # mitad de la URL de la base, y no tiene por qué estar en cada punto de una serie temporal.
+      - regex: "supabase_project_ref|supabase_identifier"
+        action: labeldrop

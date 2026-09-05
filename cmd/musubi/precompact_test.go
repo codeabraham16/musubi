@@ -54,7 +54,7 @@ func TestPrecompactMandaACuarentenaYNoAlLibroMayor(t *testing.T) {
 	}
 	// Nombrar save_observation está bien —y hace falta— sólo si es para PROHIBIRLO.
 	if i := strings.Index(ctx, "musubi_save_observation"); i >= 0 {
-		alrededor := ctx[max0(i-40) : min0(i+40, len(ctx))]
+		alrededor := ctx[max0(i-40):min0(i+40, len(ctx))]
 		if !strings.Contains(alrededor, "NO") {
 			t.Errorf("se nombra musubi_save_observation sin prohibirlo explícitamente: %q", alrededor)
 		}

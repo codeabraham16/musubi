@@ -1067,6 +1067,573 @@
       }
     },
     {
+      "name": "musubi_fleet_enroll",
+      "description": "ADMIN. Da de alta una MÁQUINA en el plano de control y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). tier decide qué se le puede pedir: A = agente nativo (metrics, exec, screen) · B = por protocolo SSH/SNMP/MQTT, sin binario en el device (metrics, exec — NO screen: un router no tiene framebuffer) · C = móvil (metrics, screen — NO exec). Conceder una capacidad que el tier no sabe honrar FALLA acá, no cuando alguien la use. El proyecto sale de tu credencial, no de lo que declares (salvo write=any). IMPORTANTE: el token que devuelve sirve ÚNICAMENTE para POST /fleet/heartbeat; NO autentica en /mcp, para que comprometer una máquina de la flota no entregue la memoria del equipo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Dirección por la que se lo alcanza (normalmente la IP del tailnet)"
+          },
+          "arch": {
+            "type": "string",
+            "description": "amd64 | arm64 | ..."
+          },
+          "caps": {
+            "type": "array",
+            "description": "Capacidades concedidas: metrics, exec, screen. Vacío = ninguna (fail-closed)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo (único dentro del proyecto; es la clave humana para dirigirle comandos)"
+          },
+          "os": {
+            "type": "string",
+            "description": "linux | windows | darwin | android | ios"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any; uno acotado enrola en el suyo"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Etiquetas libres para agrupar (sala, cliente, criticidad)"
+          },
+          "tier": {
+            "type": "string",
+            "description": "A|agente (nativo) · B|protocolo (SSH/SNMP/MQTT/Redfish) · C|movil"
+          }
+        },
+        "required": [
+          "name",
+          "tier"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_list",
+      "description": "Lista la FLOTA del proyecto: qué máquinas hay, de qué tier, con qué capacidades y cuáles están en línea. `online` se DERIVA de la última señal de vida con un umbral (default 90 s = 3 latidos), no es un estado guardado: una máquina que muere de golpe no puede dejar un booleano en true. Devuelve también silencio_segundos y nunca_latio. Un principal acotado ve su proyecto; sólo read=all puede pedir el de otro.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_revoked": {
+            "type": "boolean",
+            "description": "Incluir las máquinas dadas de baja (default false)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a listar. Sólo lo respeta un principal read=all"
+          },
+          "umbral_segundos": {
+            "type": "number",
+            "description": "Cuánto silencio se tolera antes de dar una máquina por caída (default 90)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_metrics",
+      "description": "Telemetría de la FLOTA: CPU, RAM (usada Y libre, que no son complementarias), procesos, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. `mem_usada` sale de MemAvailable y `mem_libre` es MemFree: NO son complementarias y en un Linux sano difieren en varios GB, porque el page cache vive en el medio. `num_procesos` cuenta PROCESOS, no hilos. Lo que no se midió viaja como null en TODOS los campos, y las dos superficies coinciden en cuáles: `mem_libre` (ausente en Windows y macOS), `num_procesos` (ausente en macOS), `num_cpu` y `uptime_seg`, y los pares de memoria y disco, que se compuertan por SU TOTAL y no por su propio valor — `disco_libre: 0` en un disco lleno es un cero MEDIDO y sale como 0, que es justo el número por el que suena la alarma. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_exec",
+      "description": "Ejecuta un comando en una MÁQUINA de la flota y espera el resultado. Requiere que tu credencial tenga la capacidad `exec` SOBRE ESA MÁQUINA (sección `fleet:` de principals.yaml): ser admin de la memoria NO alcanza. Se pasa un ARGV, no una cadena: [\"systemctl\",\"restart\",\"nginx\"], y si querés una shell la pedís explícita con [\"sh\",\"-c\",\"...\"] — así el comando registrado en la bitácora es exactamente el comando corrido. TODO pedido queda auditado desde ANTES de ejecutarse, con quién lo pidió. El comando vence si el agente no lo levanta en 15 min (no se ejecuta una semana después), tiene timeout obligatorio, y su salida se acota a 64 KiB con marca de truncado. exit_code viaja null mientras no haya terminado: 'todavía no' y 'terminó con 0' son cosas distintas.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "description": "El comando como lista: [\"ls\",\"-la\",\"/tmp\"]. NO una cadena"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "no_wait": {
+            "type": "boolean",
+            "description": "Encolar y volver sin esperar el resultado"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          },
+          "timeout_seg": {
+            "type": "number",
+            "description": "Segundos antes de matar el comando (default 30, máximo 600)"
+          }
+        },
+        "required": [
+          "device",
+          "argv"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell",
+      "description": "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero. EL CONSENTIMIENTO SÍ SE CONSULTA desde A75 (2026-09-03): una máquina en `prohibido` no abre el prompt, y en `avisa` se le notifica a quien la está usando. Y si la máquina está marcada con musubi_fleet_require_approval, la sesión exige CUATRO OJOS: un segundo principal, con `shell` sobre esa misma máquina y distinto de vos, tiene que aprobarla con musubi_fleet_approve. El primer intento devuelve un id de solicitud y NO abre nada; nadie recibe una notificación, así que avisale vos a quien pueda aprobarla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "columnas": {
+            "type": "number",
+            "description": "Ancho de la terminal (default 80)"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "filas": {
+            "type": "number",
+            "description": "Alto de la terminal (default 24). Se fija al abrir y no se redimensiona"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell_log",
+      "description": "La BITÁCORA de sesiones de shell interactiva: quién tuvo un prompt, en qué máquina, cuándo y por cuánto tiempo. Sólo muestra las máquinas sobre las que tenés `shell`. Registra QUE hubo acceso, nunca QUÉ se tecleó: grabar el contenido de una terminal ajena es una decisión legal que nadie tomó. El estado se DERIVA al leer, así que una sesión que venció aparece como vencida aunque nadie la haya ido a marcar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas sesiones devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_log",
+      "description": "La BITÁCORA de ejecución remota: quién ejecutó qué, en qué máquina, cuándo y cómo salió. Sólo muestra los comandos de máquinas sobre las que tenés `exec` — saber qué se corrió en un servidor es casi tan revelador como poder correrlo. La bitácora es PERMANENTE; la salida (stdout/stderr) caduca y se poda, porque puede traer secretos. Informa cuántas entradas quedaron ocultas por permiso.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas entradas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_screen",
+      "description": "Abre una SESIÓN DE PANTALLA sobre una máquina (RustDesk self-hosted) y devuelve la contraseña UNA SOLA VEZ. Requiere la capacidad `screen` sobre ESA máquina — que es un permiso distinto de `exec`: mirar y tocar no son lo mismo. La contraseña se acuña por sesión, dura poco (default 30 min, máximo 4 h) y viaja a la máquina dentro del comando `musubi:pantalla` de la cola: queda en la fila de ese comando SÓLO hasta que el agente lo levanta —en ese mismo instante se tapa en la base, conservando el id de sesión— y ninguna bitácora ni superficie de lectura la muestra. La tabla de sesiones no tiene dónde guardarla, ni en claro ni hasheada. El vencimiento lo aplica el AGENTE, así que la sesión se cierra aunque el cerebro se caiga. Un dispositivo de Tier B (por protocolo) nunca tiene pantalla. IMPORTANTE: el consentimiento del usuario sentado frente a la máquina lo aplica RustDesk con su propia configuración, no Musubi. ⚠ ESTA SESIÓN LE CUESTA A LA MÁQUINA SU CONTRASEÑA DE RUSTDESK: el cliente tiene UNA sola ranura de contraseña permanente y Musubi la usa de borrador. Al vencer la sesión se reemplaza por una al azar que nadie conoce —dejarla vacía abriría la máquina— así que la contraseña que haya puesto el dueño se pierde y hay que volver a ponerla a mano. Musubi NO la guarda ni la puede restituir hoy (A84). En una máquina ajena, decilo antes de abrir la sesión: desde la silla de esa persona es indistinguible de «RustDesk me cambia la contraseña solo».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "minutos": {
+            "type": "number",
+            "description": "Cuánto vale la sesión (default 30, máximo 240)"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_sessions",
+      "description": "Quién estuvo ADENTRO de tus máquinas y por dónde: pantallas y shells en UNA sola lista, más nuevas primero. `modalidad` es `pantalla` o `shell` y cambia qué significa todo lo demás — una shell abierta y una pantalla abierta no son el mismo riesgo. `abierta` es DERIVADO y no el estado guardado: una sesión puede figurar `activa` habiendo vencido sin que nadie la marcara, y dibujar el estado crudo mostraría gente adentro de máquinas de las que ya salió. LA COMPUERTA ES POR MODALIDAD: las pantallas piden `screen:view` sobre esa máquina y las shells piden `shell`. No se generaliza a una sola capacidad a propósito — usar `screen` para las dos dejaría ver quién tuvo un prompt a alguien que no puede abrir uno. Devuelve cuántas quedaron fuera por permiso, sin nombrarlas. NO guarda lo que pasó adentro de la sesión: eso es contenido, y esta es la bitácora de accesos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_cronologia",
+      "description": "QUÉ LE PASÓ A UNA MÁQUINA en una ventana de tiempo: comandos, sesiones de pantalla y sesiones de shell CRUZADOS en una sola línea de tiempo, del más nuevo al más viejo. Es la pregunta que se hace de verdad cuando algo anda mal («¿qué le hicimos a este server el martes?») y que hoy exige llamar a tres bitácoras distintas y ordenarlas a mano. LA COMPUERTA ES POR HECHO Y NO POR LA LISTA: cada línea pide SU capacidad —`exec` los comandos, `screen:view` las pantallas, `shell` las shells—, así que dos personas distintas ven dos cronologías distintas de la misma máquina y ninguna de las dos ve de más. Un hecho que esta versión no sabe clasificar NO SE MUESTRA A NADIE y se cuenta aparte: el default es no mostrar. LAS POLÍTICAS APARECEN COMO LO QUE SON: su acción se encola en la misma bitácora que la de una persona (I16) y ahora se DISTINGUE al leer — `origen` es `persona` o `politica`, y `automatico` es el booleano que se pregunta de verdad. LOS DOS VIAJAN EN NULL CUANDO NO SE SABE, jamás como `persona`: los comandos anteriores a la migración 41 no dicen quién los originó, y dibujarlos como manuales le atribuiría a alguien cada disparo automático viejo. LO QUE ESTA LISTA NO CONTIENE VIAJA EN LA RESPUESTA (`no_visto`), y hay que leerlo antes de concluir nada: no hay serie temporal (Musubi guarda el presente; la historia la guarda Prometheus), no hay logs del host, no hay historial de salud de servicios ni de disparos de política que no encolaron comando, y no hay contenido de sesiones. Una cronología vacía significa «no pasó nada DE LO QUE YO MIRO», no «no pasó nada». Los tres contadores se leen distinto: `truncado` = hubo más adentro de la ventana (subí `limite`), `ocultos_por_permiso` = hubo más y no los podés ver (pedí la capacidad), `sin_clasificar` = hubo más y este cerebro no sabe qué son (actualizalo). Una máquina REVOCADA conserva su cronología: la revocación es el kill-switch para operar, no para auditar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339 (ej: 2026-08-25T14:00:00Z). Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio: la cronología es de UNA máquina; para la vista por plano están musubi_fleet_log y musubi_fleet_sessions"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo (sin `desde`), mira las 24 h anteriores a ese momento: es lo que se pide investigando hacia atrás desde el incidente"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`: mandar las dos cosas es un error, no algo que se resuelva eligiendo una"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántos hechos devolver (default 50, máximo 300). Si el tope corta algo que estaba adentro de la ventana, `truncado` viene en true"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre de máquina existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_contexto",
+      "description": "CRUZA lo que le pasó a una máquina con lo que el equipo SABÍA: la actividad de la ventana (comandos, pantallas, shells) junto a las notas de la memoria y los archivos de código que se tocaron en ese mismo rato. Es la pregunta que ningún panel de monitoreo puede contestar —«¿por qué esta máquina anda distinta desde el martes?»— porque ninguno tiene al lado la memoria del equipo. ES CORRELACIÓN, NO CAUSA, y la respuesta lo dice: Musubi junta los hechos y declara CÓMO enlazó cada uno; quien concluye es quien lee. Una tool que adivinara la causa mandaría a alguien a arreglar lo que no está roto. CADA HALLAZGO TRAE SU `enlace`, que es el campo que más importa: `termino` = el texto NOMBRA la máquina o uno de sus servicios (es evidencia, aunque puede ser homónimo); `ventana` = SÓLO coincide en el tiempo y en el proyecto (no es evidencia de nada por sí solo). Mezclarlos sería la mentira de esta tool. LOS TÉRMINOS SALEN DEL INVENTARIO, no del texto de los comandos: el nombre de la máquina y sus servicios, que son pocos, exactos y explicables — sacar palabras de un argv produce basura (`cmd`, `type`, `/c`) y una lista con ruido hace que se deje de mirar la herramienta. Se devuelven declarados, para que puedas juzgar si un enlace vale. LA COMPUERTA APLICA A LOS TÉRMINOS: la lista de servicios de una máquina exige `metrics`, así que sin esa capacidad los términos de servicio no se arman y la respuesta marca `servicios_ocultos: true` en vez de devolver una lista corta que se leería como «esta máquina no corre nada». La actividad se compuerta hecho por hecho, igual que musubi_fleet_cronologia. La memoria se lee en el proyecto de LA MÁQUINA, no en el alcance de quien pregunta: traer notas de otro tenant no sería una fuga pero sí una respuesta falsa. Para la línea de tiempo completa está musubi_fleet_cronologia; ésta devuelve el resumen y el cruce.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339. Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo, mira las 24 h anteriores a ese momento"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_rename",
+      "description": "**admin**: le cambia el NOMBRE a una máquina CONSERVANDO SU ID — y con él su bitácora entera, sus sesiones, su inventario de servicios y su token (el agente sigue latiendo sin reinstalar nada). Antes de esto, cambiar un nombre obligaba a dar de baja y volver a enrolar, lo que daba un id nuevo: la máquina aparecía vacía y todo su historial quedaba colgando de un device revocado. RENOMBRAR NO ES COSMÉTICO, ES UN CAMBIO DE AUTORIZACIÓN DISFRAZADO: tres cosas de este sistema indexan por NOMBRE y ninguna por id — las concesiones de capacidad de `principals.yaml`, la allowlist de comandos por máquina (`exec_allow`) y el alcance de las políticas. Renombrar puede SACARLE `exec` a alguien, DÁRSELO, o meter una máquina adentro del alcance de una política que la va a tocar sola, todo en silencio. POR ESO NO RENOMBRA EN EL PRIMER LLAMADO: informa qué credenciales y políticas nombran el nombre viejo (las que van a dejar de alcanzarla) Y las que ya nombran el nombre NUEVO (cuya autorización la máquina HEREDA sin que nadie se la haya dado, que es el sentido que a nadie se le ocurre mirar), dice qué editar en cada archivo, y se planta. Con `confirmar: true` renombra. NO EDITA `principals.yaml`: eso sería el cerebro cambiando la credencial de una persona, y las concesiones se escriben a mano a propósito. El rename queda en el log del cerebro con las dos puntas, porque es de las pocas operaciones que no deja rastro en ninguna tabla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirmar": {
+            "type": "boolean",
+            "description": "Sin esto NO renombra: devuelve el informe de impacto y se planta. El default de «no lo pensé» es que no pase nada"
+          },
+          "device": {
+            "type": "string",
+            "description": "El nombre ACTUAL de la máquina"
+          },
+          "nuevo": {
+            "type": "string",
+            "description": "El nombre nuevo. Único dentro del proyecto, sin caracteres de control, comas ni comillas: viaja a las etiquetas de Prometheus y a los selectores de principals.yaml"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device",
+          "nuevo"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_probe",
+      "description": "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente), Tier B por EXPOSICIÓN (bases gestionadas y appliances que no dan shell y sí publican un endpoint de métricas: se declaran en `.musubi/flota-exposicion.yaml` y eso ES lo que elige el transporte) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada — y sigue en null si dos sondeos caen dentro del CACHÉ de un endpoint de exposición (medido: ~62 s en una base gestionada), porque ahí tampoco hubo dos lecturas distintas. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Sondear una sola máquina"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_services",
+      "description": "Qué CORRE ADENTRO de cada máquina de la flota: units de systemd, servicios de Windows, contenedores. Requiere la capacidad `metrics` SOBRE CADA MÁQUINA (sección `fleet:` de principals.yaml): qué corre en un host es telemetría del host, del mismo peso que su uso de CPU — accionar sobre un servicio sigue siendo `exec`, con su allowlist por comando. `estado` es corriendo | detenido | fallado | desconocido, y `desconocido` NO ES `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído. Un servicio DECLARADO Y TODAVÍA SIN MEDIR es un estado legítimo y distinto de «caído»: viaja con `ultimo_reporte` en null. `fresco` dice si el último reporte entra en el umbral de esa máquina — un servicio con noticias de hace dos días no está corriendo, está sin noticias. Guarda el PRESENTE, no la historia: no hay serie temporal (ésa la guarda Prometheus). Devuelve además cuántos servicios quedaron fuera por permiso, sin nombrarlos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "incluir_revocados": {
+            "type": "boolean",
+            "description": "Incluir los servicios dados de baja Y los de máquinas revocadas (default false). Son dos bajas distintas: `revocado` es del SERVICIO (se dejó de usar en una máquina que sigue viva) y `device_revocado` es de la MÁQUINA (salió de la flota con todo adentro; sólo aparece cuando es true). Leer el historial de una máquina revocada exige la MISMA concesión `metrics` que hacía falta cuando estaba viva: la revocación levanta el kill-switch para operar, no para auditar."
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_service_declare",
+      "description": "ADMIN. Declara A MANO un servicio que corre en una máquina de la flota: un Tier B que no enumera solo, un bot, un puente. El servicio hereda el proyecto DE SU MÁQUINA, nunca del pedido. Nace en estado `desconocido` y con `ultimo_reporte` en null — «declarado y todavía sin medir» es un estado legítimo, no una falla — y pasa a tener estado cuando la máquina lo reporte. El nombre es único DENTRO de su máquina: dos hosts pueden correr cada uno su `postgres`. Lo declarado a mano NO lo poda el latido de la máquina —sale del inventario cuando lo saca una persona—, y volver a declarar uno que se dio de baja lo reactiva. Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clase": {
+            "type": "string",
+            "description": "Quién lo supervisa: systemd | windows | docker. Vacío = no declarada"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina en la que corre"
+          },
+          "nombre": {
+            "type": "string",
+            "description": "La unit, el servicio o el contenedor. Por ejemplo \"postgresql.service\""
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "device",
+          "nombre"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_rotate",
+      "description": "ADMIN. Rota el token de una máquina SIN tocarla y sin re-enrolarla. Hasta ahora rotar era revocar + enrolar + ir a la máquina a pegar el token nuevo; con cuarenta máquinas eso no se hace, y una auditoría pide rotación demostrable. Los DOS tokens valen hasta que el agente late con el nuevo (ahí el viejo deja de valer) o hasta que vence la ventana (24 h por default; ahí la rotación se ABANDONA y el viejo sigue). El solapamiento no es descuido: el agente recibe el token nuevo en la RESPUESTA de un latido, o sea después de haber usado el viejo, así que sin ventana quedaría afuera entre que lo recibe y lo guarda. EL TOKEN NUEVO VIVE EN MEMORIA DEL CEREBRO, no en la base: en reposo hay hashes y no credenciales, y un volcado de la base no puede ser un llavero. El costo está declarado: si el cerebro se reinicia, la rotación se pierde y hay que volver a pedirla — el token viejo sigue valiendo, así que la máquina nunca queda afuera. NO ES LA HERRAMIENTA DE LA EMERGENCIA: si el token se FILTRÓ, lo que corta en el acto es musubi_fleet_revoke, que no depende de que el agente coopere. Rotar es higiene, y por eso puede esperar a que el agente conteste.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "horas": {
+            "type": "integer",
+            "description": "Cuánto se le ofrece el token nuevo al agente. Default 24"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_maintenance",
+      "description": "Declara una VENTANA DE MANTENIMIENTO sobre una máquina: «de acá a tantos minutos, ésta va a estar rara a propósito». Mientras la ventana esté activa pasan DOS cosas, y la segunda es la que un `silence` de Alertmanager no puede: las reglas que miran `musubi_fleet_device_maintenance` no alertan, Y las políticas de auto-heal NO ACTÚAN sobre esa máquina. Sin esto, un reinicio planificado dispara `servicio_caido`, la política levanta el servicio en mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Compuerta: `metrics` sobre ESA máquina — quien puede mirar su telemetría puede decir que va a estar rara; no hace falta ser admin ni tener `exec`, porque declarar una ventana no ejecuta nada. TECHO DURO DE 24 HORAS por ventana, y no es burocracia: una ventana silencia y frena el auto-heal, así que una olvidada es una máquina ciega con el panel en verde. Si el mantenimiento sigue, se declara otra. `MantenimientoEterno` avisa a las 25 h. Para retirarla antes de tiempo, pasá `cancelar` con el id que devolvió el alta: la fila NO se borra, se marca —la cronología se construye sólo sobre tablas que no se editan, y «lo cancelaron a los diez minutos» explica el comportamiento de esa máquina mejor que la ausencia de toda fila.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cancelar": {
+            "type": "string",
+            "description": "id de una ventana activa, para retirarla antes de tiempo. Excluyente con `minutos`"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "minutos": {
+            "type": "integer",
+            "description": "Cuánto dura la ventana, desde ahora. Máximo 1440 (24 h)"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué. Queda en la cronología de la máquina (máx. 200 caracteres)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_consent",
+      "description": "ADMIN. Fija QUÉ SE LE DEBE a la persona que está usando una máquina cuando alguien pide entrar. Es un EJE SEPARADO de las capacidades: `screen` decide quién PUEDE entrar; esto decide qué pasa con quien está adentro, y lo responde el dueño de la máquina, no quien administra la flota. Cuatro grados ORDENADOS: `libre` (ni se entera), `avisa` (se le notifica, no puede negarse), `pide` (tiene que aceptar) y `prohibido` (no se abre NUNCA, aunque la capacidad esté perfectamente concedida). Cuando dos fuentes discrepan gana LA MÁS RESTRICTIVA: una máquina puede endurecer lo que el proyecto dijo, jamás aflojarlo. Sin declarar rige `avisa` — no `libre`, porque la ausencia de configuración no puede ser la opción menos segura. OJO con `pide` sobre una máquina que no puede preguntarle a nadie (un servidor sin escritorio): se endurece a `prohibido` y NO se afloja a `libre`, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra. GOBIERNA LOS TRES CAMINOS desde 2026-09-03 (A75), y cada uno como corresponde a su forma: `musubi_fleet_screen` y `musubi_fleet_shell` aplican la tabla entera —son SESIONES, así que el aviso es por sesión y no por tecla—; `musubi_fleet_exec` aplica el techo (`prohibido` rechaza) y avisa UNA VEZ POR VENTANA de una hora por máquina, no una vez por comando: un exec es de una sola vez, y veinte ventanitas seguidas es exactamente cómo se le enseña a alguien a poner `libre` en todas sus máquinas. Donde el agente no sabe notificar, el comando corre igual y la constancia va al log: `avisa` no bloquea, y prometer una notificación que no se puede entregar es lo que este eje viene a evitar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "grado": {
+            "type": "string",
+            "description": "libre | avisa | pide | prohibido"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device",
+          "grado"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_require_approval",
+      "description": "ADMIN. Decide si una máquina exige CUATRO OJOS: que un segundo principal apruebe cada sesión de `shell` o `screen` sobre ella. Es un TERCER EJE, distinto de los otros dos: las capacidades deciden QUIÉN puede entrar, el consentimiento decide QUÉ SE LE DEBE a quien está usando la máquina, y esto decide CUÁNTAS PERSONAS hacen falta. Ninguno de los otros dos puede expresarlo — y en un servidor de producción, donde no hay nadie sentado enfrente, el consentimiento no protege a nadie mientras una sola persona con `shell` puede hacer cualquier cosa y la bitácora lo cuenta DESPUÉS. Quien aprueba necesita LA MISMA capacidad sobre ESA máquina (no `admin`): la barra es «podría haberlo hecho por su cuenta», así que aprobar no le concede nada nuevo; lo único que se agrega es que sean dos. Y NADIE puede aprobar su propia solicitud. Viene APAGADO y se enciende máquina por máquina, que es como se sabe cuáles importan: encenderlo en toda la flota deja a cada una esperando un par de ojos que nadie sabe que tiene que dar, y la salida que la gente encuentra es apagar el control entero. ⚠ Si en la práctica hay UNA sola persona con esa capacidad, encender esto deja la máquina sin acceso interactivo: cuatro ojos con un solo par no es un control lento, es un candado. ⚠⚠ CUATRO OJOS NO CUBRE `musubi_fleet_exec`, y eso importa más de lo que parece: si ese principal no tiene una sección `exec_allow` en principals.yaml, `exec` acepta CUALQUIER argv sobre esa máquina — o sea `bash -c '...'`, que es una shell con otro nombre y sin segunda persona. Marcar una máquina sin acotarle `exec` a una allowlist deja el control puesto en la puerta de adelante y la de atrás abierta. `metrics` tampoco se toca, pero ése sólo lee.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          },
+          "requerir": {
+            "type": "boolean",
+            "description": "true enciende los cuatro ojos, false los apaga. SIN DEFAULT: omitirlo es un error, porque un campo olvidado que significara false apagaría el control por distracción"
+          }
+        },
+        "required": [
+          "device",
+          "requerir"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_approve",
+      "description": "Sos la SEGUNDA PERSONA: aprobás o negás la solicitud de otro para abrir una sesión en una máquina marcada con musubi_fleet_require_approval. Exige LA MISMA capacidad que la sesión pedida sobre ESA máquina —no `admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada que no tuvieras. NO PODÉS APROBAR TU PROPIA SOLICITUD: eso son dos ojos, no cuatro. La aprobación es de UN SOLO USO y vence con la solicitud (30 min): habilita esa sesión y ninguna más. Un «no» VALE HASTA QUE VENZA la solicitud y no se puede volver a pedir en el acto — si volver a pedirlo funcionara, el control se degradaría a «pedir hasta que alguien diga que sí», que es como el cansancio vence a los cuatro ojos en cualquier organización. A quien pidió la sesión NO se le avisa: la va a encontrar cuando vuelva a pedirla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "aprobar": {
+            "type": "boolean",
+            "description": "true concede, false niega. SIN DEFAULT: omitirlo es un error, porque negar por distracción le gasta la ventana a otro"
+          },
+          "nota": {
+            "type": "string",
+            "description": "Por qué. Un «no» sin motivo manda a la otra persona a preguntar por otro lado"
+          },
+          "solicitud": {
+            "type": "string",
+            "description": "El id que devolvió el intento de abrir la sesión"
+          }
+        },
+        "required": [
+          "solicitud",
+          "aprobar"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_approvals",
+      "description": "Qué solicitudes de CUATRO OJOS están esperando una segunda persona. Existe porque la aprobación NO VIAJA: no hay notificación a quien puede aprobar —mandarla exigiría saber a quién, y eso es una consulta sobre principals.yaml que este track no invierte—, así que sin esta lista una solicitud que nadie mira vence sola y el control se vuelve una negación con demora. SÓLO muestra las que VOS podrías resolver (tenés esa capacidad sobre esa máquina); las demás se cuentan en `fuera_de_tu_alcance` en vez de desaparecer, porque una lista vacía significa «ninguna que yo pueda aprobar», no «no hay nadie esperando». Cada fila dice `podes_aprobarla`: la tuya propia figura en false, porque nadie aprueba su propia solicitud.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_revoke",
+      "description": "ADMIN. KILL-SWITCH de una máquina: su token deja de autenticar en el acto y su fila QUEDA para la auditoría (no se borra: perder a quién pertenecía la telemetría es justo lo que no querés después de un incidente). Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo a dar de baja"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
       "name": "musubi_token_revoke",
       "description": "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
       "inputSchema": {

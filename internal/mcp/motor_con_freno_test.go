@@ -12,6 +12,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 
 	_ "modernc.org/sqlite" // para leer el ledger crudo y verificar el outcome exacto (M9)
 )
@@ -27,7 +28,7 @@ const preguntaSembrada = "candado del despacho"
 // maxPorHora Y MEMORIA SEMBRADA. Devuelve también el engine para poder mirar el ledger.
 func servidorConFreno(t *testing.T, motor cognition.Provider, maxPorHora int) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestM2RecallSinPresupuestoDegrada(t *testing.T) {
 // estaría estrangulando una tool gratis.
 func TestM3RecallModelFreeNoGastaPresupuesto(t *testing.T) {
 	motor := &motorEspia{respuesta: `["c","b","a"]`}
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
@@ -263,6 +264,7 @@ func TestM8SemanticaDelCeroYDelNegativo(t *testing.T) {
 func TestM9ElRechazoQuedaEnElLedgerConOutcomePropio(t *testing.T) {
 	motor := &motorEspia{respuesta: "una respuesta"}
 	dir := t.TempDir()
+	memtest.Sembrar(t, dir)
 	engine, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)

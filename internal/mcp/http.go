@@ -225,6 +225,31 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", s.readyzHandler)
 
+	// LA PUERTA DEL DISPOSITIVO (track «Control de flota»). Autentica contra la tabla `devices`,
+	// NO contra el registro de principals: una credencial de máquina no abre /mcp y una de
+	// persona no abre esto. La separación y su porqué están en fleet_http.go — en dos líneas:
+	// un agente corre en la superficie más expuesta de la flota, y su credencial no puede ser
+	// la llave de la memoria de la empresa. Comparte el `limiter` con /mcp a propósito.
+	mux.HandleFunc(fleetHeartbeatPath, s.handlerLatido(limiter))
+	// Y la contraparte: por acá el agente reporta cómo salió un comando (S5). Mismo almacén de
+	// credenciales, mismo limiter.
+	mux.HandleFunc(fleetResultPath, s.handlerResultado(limiter))
+	// La puerta del RENDIMIENTO (fase 4): salud para servicios DECLARADOS que ninguna máquina
+	// enumera —un bot, un puente—. Mismo token que el latido; ni poda ni estampa señal de vida.
+	mux.HandleFunc(fleetSaludPath, s.handlerSaludDeServicios(limiter))
+
+	// EL RELAY DE SHELL INTERACTIVA (S5b). OJO: estas tres rutas autentican PERSONAS (registro de
+	// principals), al revés que las dos de arriba, que autentican DISPOSITIVOS (tabla `devices`).
+	// Están pegadas en el mux y son puertas distintas; el detalle, en shell_relay.go.
+	mux.HandleFunc(shellOutPath, s.handlerShellOut(opt))
+	mux.HandleFunc(shellInPath, s.handlerShellIn(opt))
+	mux.HandleFunc(shellClosePath, s.handlerShellClose(opt))
+	// Y las dos del AGENTE (S5c), que vuelven a autenticar DISPOSITIVOS. Por ellas viaja todo lo
+	// que la persona teclea, así que su guarda central no es «¿el token vale?» sino «¿esta sesión
+	// es de ESTA máquina?». Ver shell_agente_http.go.
+	mux.HandleFunc(shellAgenteEntradaPath, s.handlerShellAgenteEntrada(limiter))
+	mux.HandleFunc(shellAgenteSalidaPath, s.handlerShellAgenteSalida(limiter))
+
 	// Auto-update del cuerpo por la malla: sirve manifest + binarios desde bodyDir, sin
 	// auth (la frontera es el tailnet, como /readyz). Solo si está configurado.
 	if opt.bodyDir != "" {
@@ -241,17 +266,40 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		}
+		// El principal se CAPTURA, no se descarta. Antes alcanzaba con «¿es válido?» porque
+		// todo lo que se exportaba era del propio servidor; desde el track de flota la salida
+		// incluye telemetría POR MÁQUINA, y qué máquinas se ven depende de quién scrapea.
+		var quien *Principal
 		if opt.registry != nil {
-			if _, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization"))); !ok {
+			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			if !ok {
 				deny()
 				return
 			}
-		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
-			deny()
-			return
+			quien = p
+		} else if opt.token != "" {
+			if !validBearer(r.Header.Get("Authorization"), opt.token) {
+				deny()
+				return
+			}
+			// Token legacy: admin federado SIN capacidades de flota (C1). No ve ninguna máquina,
+			// y el render lo dice en un comentario en vez de quedarse mudo.
+			read, write := capsFromRole(RoleAdmin)
+			quien = &Principal{Name: "legacy", Role: RoleAdmin, Read: read, Write: write}
 		}
+		// quien == nil sólo en loopback sin auth: confianza local, ve todo. Misma regla que el
+		// resto del código (canCall, isAdmin, PuedeSobreDevice).
+
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte(metrics.render(s.engine)))
+		salida := metrics.render(s.engine)
+		var b strings.Builder
+		b.WriteString(salida)
+		ahora := time.Now()
+		renderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe)
+		// La AUTO-VIGILANCIA del empuje sale por el tirón, no por el empuje: un mecanismo de
+		// monitoreo cuya única forma de avisar de su propia muerte es él mismo no avisa nunca.
+		s.renderEmpuje(&b, ahora)
+		_, _ = w.Write([]byte(b.String()))
 	})
 
 	// /api/actores — el CENSO: quién llama al cerebro, del ledger histórico. Es la contraparte
@@ -468,11 +516,35 @@ func resolveServiceAuth(cfg config.ServiceConfig) (token string, loopback bool, 
 
 // principalsPath resuelve la ruta del registro de principals: cfg.PrincipalsFile si está
 // seteada, si no el default .musubi/principals.yaml bajo la raíz del proyecto (MUSUBI_HOME).
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UNA RUTA RELATIVA SE RESUELVE CONTRA EL WORKSPACE, NUNCA CONTRA EL CWD DEL PROCESO.
+//
+// Antes se devolvía cfg.PrincipalsFile tal cual, y eso abría un hueco silencioso y feo. El
+// `principals_file: ".musubi/principals.yaml"` que cualquiera escribe a mano se resolvía contra
+// el directorio de trabajo del proceso — que en un servicio de systemd es `/`, porque el unit de
+// deploy/install-musubi-brain.sh no fija WorkingDirectory.
+//
+// Y el fallo NO es ruidoso: loadPrincipals con un archivo inexistente NO falla, devuelve el
+// registro LEGACY. O sea que el cerebro arranca perfecto, sirve perfecto, y toda la identidad
+// por-miembro se degrada en silencio a UN SOLO bearer admin-federado que ve todos los proyectos.
+// Hay un WARNING para binds no-loopback (isRemoteLegacyTenancy) y strict_tenancy lo rechaza, pero
+// depender de que alguien lea un warning de arranque para no perder el aislamiento entre tenants
+// es apoyar una garantía de seguridad sobre la atención de una persona.
+//
+// Lo encontró un e2e de S9b: el mismo binario, la misma config y otro directorio de trabajo se
+// negó a arrancar porque leyó OTRO registro. Se negó porque había una política que validar; sin
+// políticas habría arrancado, y nadie se habría enterado.
+// ────────────────────────────────────────────────────────────────────────────────────────────
 func (s *McpServer) principalsPath(cfg config.ServiceConfig) string {
-	if strings.TrimSpace(cfg.PrincipalsFile) != "" {
-		return cfg.PrincipalsFile
+	p := strings.TrimSpace(cfg.PrincipalsFile)
+	if p == "" {
+		return filepath.Join(s.projectPath, ".musubi", "principals.yaml")
 	}
-	return filepath.Join(s.projectPath, ".musubi", "principals.yaml")
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(s.projectPath, p)
 }
 
 // validBearer compara en tiempo constante el header Authorization contra el token
@@ -486,13 +558,82 @@ func validBearer(authHeader, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// proxiesConfiables son los CIDR desde los que se acepta `X-Forwarded-For`. Vacío ⇒ no se lee el
+// header nunca, que es el default y el único comportamiento seguro sin configurar.
+//
+// Es una variable de paquete y no un campo del servidor porque `clientIP` la consultan cuatro
+// puertas distintas (el MCP, el latido, el resultado y la shell del agente) y pasarla por cada
+// firma haría que la próxima puerta se olvide. Se fija UNA vez al arrancar.
+var proxiesConfiables []*net.IPNet
+
 // clientIP devuelve la IP del cliente (sin el puerto) para el lockout anti fuerza-bruta.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ EL HEADER SE LEE SÓLO DESDE UN ORIGEN DECLARADO
+//
+// `X-Forwarded-For` lo escribe QUIEN LLAMA. Leerlo sin acotar el origen convierte el lockout en
+// decorativo: quien está probando tokens manda una IP inventada distinta en cada intento y no se
+// bloquea nunca. Por eso el default es no mirarlo, y encenderlo exige nombrar los CIDR.
+//
+// Y se recorre DE DERECHA A IZQUIERDA saltando proxies confiables. La cadena es
+// `cliente, proxy1, proxy2`: el primero por la izquierda lo puso el cliente y puede ser mentira
+// entera; el primero por la DERECHA que no sea un proxy confiable es el último salto que un
+// proxy nuestro vio de verdad, y es lo más cerca del cliente real que se puede afirmar.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
+	if len(proxiesConfiables) == 0 || !ipConfiable(host) {
+		return host
+	}
+	partes := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(partes) - 1; i >= 0; i-- {
+		cand := strings.TrimSpace(partes[i])
+		if cand == "" || net.ParseIP(cand) == nil {
+			continue // basura en el header: se ignora, no se confía
+		}
+		if !ipConfiable(cand) {
+			return cand
+		}
+	}
+	// Todos los saltos son proxies nuestros (o el header vino vacío): la IP directa es lo mejor
+	// que hay, y es la de un proxy — que es la verdad, aunque no sirva para distinguir clientes.
 	return host
+}
+
+// ipConfiable dice si una IP está en alguno de los CIDR declarados.
+func ipConfiable(ip string) bool {
+	dir := net.ParseIP(ip)
+	if dir == nil {
+		return false
+	}
+	for _, red := range proxiesConfiables {
+		if red.Contains(dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// fijarProxiesConfiables parsea los CIDR de la config. Fail-closed: un CIDR ilegible es error de
+// arranque y no una lista a medias, por la misma razón que el resto del arranque — una lista a
+// medias deja el lockout mirando la IP equivocada sin que nadie se entere.
+func fijarProxiesConfiables(cidrs []string) error {
+	redes := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, red, err := net.ParseCIDR(c)
+		if err != nil {
+			return fmt.Errorf("service.trusted_proxies: %q no es un CIDR válido (ej: 10.0.0.0/8): %w", c, err)
+		}
+		redes = append(redes, red)
+	}
+	proxiesConfiables = redes
+	return nil
 }
 
 // bearerToken extrae el token de un header "Authorization: Bearer <token>" ("" si no
@@ -536,10 +677,23 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 			resolver = registry
 		}
 	}
+	// Las POLÍTICAS DE FLOTA (S10) se atan al registro recién acá, que es cuando existe, y su
+	// validación restante es de ARRANQUE: una política que nombra a un principal inexistente, o a
+	// uno sin ninguna concesión `exec`, impide servir. Está garantizadamente muerta, y una alarma
+	// muerta que nadie sabe que está muerta es peor que no tener alarma.
+	if err := s.vincularRegistroDeFlota(resolver); err != nil {
+		return err
+	}
 	// Tenancy en bind remoto (Track 18): "legacy admin-federado" = sin registro de principals (o
 	// solo el bearer legacy) ⇒ un token con acceso TOTAL a todos los proyectos. En un bind
 	// no-loopback eso es infra compartida SIN aislamiento por miembro. StrictTenancy lo rechaza al
 	// arranque (fail-closed opt-in); apagado, un WARNING siempre lo hace visible.
+	// Los proxies confiables se fijan ANTES de servir: el lockout los consulta desde la primera
+	// request, y un CIDR ilegible tiene que impedir arrancar, no descubrirse con la primera IP
+	// mal atribuida.
+	if err := fijarProxiesConfiables(cfg.TrustedProxies); err != nil {
+		return err
+	}
 	if isRemoteLegacyTenancy(loopback, registry) {
 		if cfg.StrictTenancy {
 			return fmt.Errorf("strict_tenancy: un bind no-loopback (%q) exige un registro de principals con al menos un miembro; configurá principals.yaml (musubi token new) o desactivá service.strict_tenancy a conciencia", cfg.Addr)
@@ -597,6 +751,17 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	if reload != nil {
 		go reload.watch(ctx)
 	}
+	// El LATIDO PROPIO DE LA FLOTA (S10): sondea a los que no tienen agente, poda las salidas
+	// viejas y aplica las políticas. Arranca acá y no en el entrypoint por la misma razón que el
+	// watch del registro: recién acá el registro existe, y una política sin registro no tiene a
+	// quién nombrar. No-op si el intervalo está en 0 (sondeo desactivado a mano).
+	go s.RunFlotaScheduler(ctx, s.sondaIntervalo)
+	// Y EL EMPUJE OTLP (S11), acá y por lo mismo: recién en este punto el registro existe, y un
+	// empujador sin registro no tiene a quién nombrar — y un empujador sin principal exportaría la
+	// telemetría de todos los tenants. En su PROPIO ticker: la cadencia del export es la del scrape
+	// (30 s) y la del sondeo es la del gasto de SSH (5 min). No-op si el empuje está apagado, que
+	// es el default.
+	go s.RunEmpujeOTLP(ctx)
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {

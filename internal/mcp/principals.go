@@ -7,7 +7,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
+
+	"musubi/internal/fleet"
 
 	"gopkg.in/yaml.v3"
 )
@@ -58,7 +62,35 @@ type Principal struct {
 	Role      string // conservado para logs y compat; el comportamiento lo deciden Read/Write
 	Read      string // ReadOwn | ReadAll
 	Write     string // WriteNone | WriteOwn | WriteAny
-	hash      string // hex del SHA-256 del token (nunca el token crudo)
+	// Fleet es el TERCER EJE (track «Control de flota», S3): qué puede pedirle esta persona a
+	// qué MÁQUINAS. Read/Write hablan de la memoria y no saben decir «mira las métricas de las
+	// 40, ejecuta en tres, no abre la pantalla de ninguna».
+	//
+	// Es un mapa capacidad -> selectores de máquina (nombres, o el comodín "*"). NIL O AUSENTE
+	// SIGNIFICA NINGUNA CAPACIDAD SOBRE NINGUNA MÁQUINA — nunca "todas". Esa asimetría es
+	// deliberada y es la valla del track: un admin de la memoria no se convierte, de rebote, en
+	// root de la flota. Ver fleet_authz.go.
+	Fleet map[fleet.Cap][]string
+	// ExecAllow ACOTA la capacidad `exec` a una lista de comandos, por máquina (S10, I7-I10).
+	// Mapa: selector de máquina (nombre exacto, o "*") -> comandos permitidos (argv[0] exacto).
+	//
+	// NO OTORGA NADA. Se evalúa DESPUÉS de la compuerta de tres lados, jamás en su lugar: nadie
+	// gana acceso por figurar acá. Y vive en la CREDENCIAL y no en el dispositivo a propósito —
+	// un techo declarado por la máquina lo declara la máquina que se supone acotada, así que una
+	// máquina comprometida se auto-otorgaría todo y el control valdría cero.
+	//
+	// NIL ⇒ SIN RESTRICCIÓN: `exec` sigue significando exactamente lo que significaba antes de
+	// que esta función existiera, así que estrenarla no le rompe la configuración a nadie. Pero
+	// NO-NIL ⇒ EXHAUSTIVA: una máquina sin entrada y sin "*" de respaldo no permite nada. La
+	// sección entera es el opt-in; una vez adentro, no hay huecos silenciosos.
+	ExecAllow map[string][]string
+	// Expires es cuándo deja de valer esta credencial. CERO ⇒ no vence.
+	//
+	// Un token que vale para siempre es lo que un auditor mira primero (SOC2 CC6.1, ISO A.5.17):
+	// una credencial filtrada hace tres meses sigue abriendo la puerta hoy, y la única forma de
+	// cerrarla es que alguien se acuerde de borrar la línea a mano.
+	Expires time.Time
+	hash    string // hex del SHA-256 del token (nunca el token crudo)
 }
 
 // capsFromRole traduce el rol histórico al par (alcance, autoridad). Es la tabla de
@@ -108,6 +140,28 @@ type principalEntry struct {
 	// (sala de mando: read=all + write=own; cabina: read=all + write=none).
 	Read  string `yaml:"read,omitempty"`
 	Write string `yaml:"write,omitempty"`
+	// Fleet: capacidad -> lista de máquinas. Opcional; AUSENTE = ninguna capacidad de flota.
+	// Los valores son nombres de dispositivo o el comodín "*". Se escribe como lista siempre
+	// (`exec: ["*"]`), no como escalar: un tipo por campo evita el YAML que a veces es string y
+	// a veces lista, que es de donde salen los parseos frágiles.
+	Fleet map[string][]string `yaml:"fleet,omitempty"`
+	// ExecAllow acota `exec` a ciertos comandos por máquina. Opcional; AUSENTE = sin restricción
+	// (ver el campo homónimo de Principal para por qué la ausencia acá SÍ significa "todo",
+	// al revés que en `fleet:`). La clave es un nombre de máquina o "*"; el valor, los argv[0]
+	// permitidos, exactos.
+	//
+	//	fleet_exec_allow:
+	//	  nas-casa: ["systemctl", "journalctl"]
+	//	  "*":      ["uptime", "df"]
+	ExecAllow map[string][]string `yaml:"fleet_exec_allow,omitempty"`
+	// Expires es la fecha de vencimiento de la credencial, en RFC3339 (`2026-12-31T23:59:59Z`).
+	// Opcional; AUSENTE ⇒ no vence, que es como se comportaba todo el registro hasta hoy y por
+	// eso ningún principals.yaml existente cambia de significado al estrenar esto.
+	//
+	// Es texto y no time.Time acá a propósito: una fecha ilegible tiene que poder DISTINGUIRSE
+	// de una ausente, y `yaml` con un time.Time convierte «basura» en «cero» sin decir nada —
+	// o sea, convierte un error de configuración en una credencial eterna.
+	Expires string `yaml:"expires,omitempty"`
 }
 
 type principalsFileYAML struct {
@@ -207,21 +261,206 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		if projectID == "" && read == ReadOwn {
 			return nil, fmt.Errorf("principal %q: project_id es obligatorio cuando read=own (sin proyecto, el recall no tiene a qué acotarse y vería todos los proyectos)", name)
 		}
+		// Tercer eje (S3): capacidades de flota. Validación estricta acá, en el borde, para que
+		// hacia adentro sólo circulen capacidades conocidas — un `fleet: {root: ["*"]}` mal
+		// escrito tiene que ser un error de arranque, no un permiso que silenciosamente no
+		// aplica (o peor, uno que alguien cree que aplica).
+		grants, err := parsearFleet(name, p.Fleet)
+		if err != nil {
+			return nil, err
+		}
+		permitidos, err := parsearExecAllow(name, p.ExecAllow)
+		if err != nil {
+			return nil, err
+		}
+		// UNA FECHA ILEGIBLE ES UN ERROR DE ARRANQUE, no un principal sin vencimiento.
+		//
+		// Es la misma regla fail-closed que gobierna el resto de este archivo, y acá importa más
+		// que en ningún otro campo: un `expires: 2026-13-45` que se ignorara en silencio
+		// produciría exactamente lo contrario de lo que quiso quien lo escribió — una credencial
+		// ETERNA donde alguien pidió una que venza. El modo de falla de un typo tiene que ser que
+		// el cerebro no arranque, no que la puerta quede abierta para siempre.
+		vence, err := parsearVencimiento(name, p.Expires)
+		if err != nil {
+			return nil, err
+		}
 		reg.principals = append(reg.principals, Principal{
 			Name:      name,
 			ProjectID: projectID,
 			Role:      role,
 			Read:      read,
 			Write:     write,
+			Fleet:     grants,
+			ExecAllow: permitidos,
+			Expires:   vence,
 			hash:      h,
 		})
 	}
 	return reg, nil
 }
 
+// parsearFleet valida la sección `fleet:` de un principal y la lleva al dominio.
+//
+// FAIL-CLOSED EN LOS DOS SENTIDOS, y conviene ver que son distintos:
+//   - Sección ausente o vacía ⇒ mapa nil ⇒ NINGUNA capacidad. La ausencia nunca significa "todas".
+//   - Capacidad desconocida ⇒ ERROR DE ARRANQUE, no se ignora. Un `root: ["*"]` mal escrito que
+//     se descartara en silencio deja a alguien creyendo que otorgó algo. Preferible que el
+//     servidor se niegue a arrancar con un registro que no significa lo que su autor cree.
+//
+// Una capacidad declarada con lista VACÍA también es error: `exec: []` se lee como una intención
+// a medio escribir, y adivinar cuál era no es tarea del parser.
+func parsearFleet(nombrePrincipal string, raw map[string][]string) (map[fleet.Cap][]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[fleet.Cap][]string, len(raw))
+	for clave, maquinas := range raw {
+		caps, err := fleet.NormalizarCaps([]string{clave})
+		if err != nil || len(caps) != 1 {
+			return nil, fmt.Errorf("principal %q: capacidad de flota inválida %q (usá metrics, exec o screen)", nombrePrincipal, clave)
+		}
+		limpias := make([]string, 0, len(maquinas))
+		for _, m := range maquinas {
+			if m = strings.TrimSpace(m); m != "" {
+				limpias = append(limpias, m)
+			}
+		}
+		if len(limpias) == 0 {
+			return nil, fmt.Errorf("principal %q: la capacidad %q no nombra ninguna máquina (usá [\"*\"] para todas, o quitá la línea para no otorgarla)", nombrePrincipal, clave)
+		}
+		out[caps[0]] = limpias
+	}
+	return out, nil
+}
+
+// parsearExecAllow valida la sección `fleet_exec_allow:` y la lleva al dominio.
+//
+// LA ASIMETRÍA CON parsearFleet ES DELIBERADA Y CONVIENE VERLA DE FRENTE. Allá la ausencia
+// significa NINGUNA capacidad; acá significa NINGUNA restricción. No es una inconsistencia: son
+// dos cosas distintas. `fleet:` OTORGA —y lo que otorga tiene que escribirse—; esto RECORTA algo
+// que ya fue otorgado. Un recorte que se aplicara por default rompería, el día que se estrena, la
+// configuración de todo el que ya tenía `exec` andando.
+//
+// Lo que sí es igual de estricto es todo lo demás, porque ahí sí se pierden cosas en silencio:
+//   - Lista VACÍA (`nas: []`) ⇒ CERO COMANDOS. Nunca "todos". Es el bug clásico de las
+//     allowlists, el `len == 0 ⇒ pasa todo` que parece defensivo y es exactamente lo contrario.
+//   - Una vez que la sección existe, es EXHAUSTIVA: una máquina sin entrada y sin "*" no permite
+//     nada (lo aplica argvPermitido, no este parser).
+func parsearExecAllow(nombrePrincipal string, raw map[string][]string) (map[string][]string, error) {
+	if len(raw) == 0 {
+		return nil, nil // sin sección ⇒ sin restricción
+	}
+	out := make(map[string][]string, len(raw))
+	for maquina, comandos := range raw {
+		m := strings.TrimSpace(maquina)
+		if m == "" {
+			return nil, fmt.Errorf("principal %q: fleet_exec_allow tiene una clave vacía (usá el nombre de una máquina, o \"*\")", nombrePrincipal)
+		}
+		limpios := make([]string, 0, len(comandos))
+		for _, c := range comandos {
+			if c = strings.TrimSpace(c); c != "" {
+				limpios = append(limpios, c)
+			}
+		}
+		// Una lista vacía es LEGAL y significa cero comandos: es cómo se apaga `exec` sobre una
+		// máquina puntual sin sacarla de la concesión. Se acepta y NO se descarta la clave —
+		// descartarla la volvería "sin entrada", que con "*" presente significaría otra cosa.
+		out[m] = limpios
+	}
+	return out, nil
+}
+
+// avisosDeInterpretes devuelve las líneas de advertencia para allowlists que contienen un
+// intérprete. NO es un error: `bash` en una allowlist puede ser justo lo que alguien quiso. Pero
+// una allowlist se escribe una vez y se lee dentro de dos años, y para entonces `["sh"]` se lee
+// como una restricción cuando en realidad no restringe nada (I10b).
+//
+// Devuelve strings en vez de logear para que sea una función pura y se pueda probar.
+func avisosDeInterpretes(p Principal) []string {
+	var avisos []string
+	for maquina, comandos := range p.ExecAllow {
+		for _, c := range comandos {
+			if fleet.EsInterprete(c) {
+				avisos = append(avisos, fmt.Sprintf(
+					"principal %q, máquina %q: la allowlist permite %q, que puede LANZAR cualquier otro comando — esa entrada no restringe nada",
+					p.Name, maquina, c))
+			}
+		}
+	}
+	sort.Strings(avisos) // el recorrido de un mapa es aleatorio; un log que cambia de orden en cada arranque no se puede diffear
+	return avisos
+}
+
+// porNombre busca un principal por su nombre declarado. Lo usan las POLÍTICAS de flota (S10),
+// que no presentan un token: nombran a alguien de principals.yaml y actúan con su autoridad.
+//
+// Devuelve una COPIA. Sin ella, quien la reciba tendría un puntero al snapshot vigente del
+// registro, y el registro se recarga en caliente cada 10 s: una política podría quedarse
+// evaluando contra una credencial que ya se revocó. Con copia, cada evaluación resuelve de nuevo.
+// impactoDeNombre recorre el registro buscando quién NOMBRA esta máquina (A64).
+//
+// NO cuenta el comodín `*`: una concesión sobre todas las máquinas sobrevive a cualquier rename y
+// listarla sería ruido que tapa lo que sí importa. Lo que importa es exactamente lo que se rompe:
+// las que nombran a ESTA.
+func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
+	var imp ImpactoDeNombre
+	if r == nil || strings.TrimSpace(device) == "" {
+		return imp
+	}
+	for i := range r.principals {
+		p := &r.principals[i]
+		for _, selectores := range p.Fleet {
+			for _, sel := range selectores {
+				if sel == device {
+					imp.Concesiones = append(imp.Concesiones, p.Name)
+					goto allow
+				}
+			}
+		}
+	allow:
+		if _, hay := p.ExecAllow[device]; hay {
+			imp.Allowlists = append(imp.Allowlists, p.Name)
+		}
+	}
+	return imp
+}
+
+func (r *PrincipalRegistry) porNombre(nombre string) (*Principal, bool) {
+	for i := range r.principals {
+		if r.principals[i].Name == nombre {
+			cp := r.principals[i]
+			return &cp, true
+		}
+	}
+	return nil, false
+}
+
 // resolve autentica un bearer contra el registro. Devuelve el principal y true si el token
 // matchea una entrada; el token legacy matchea como principal admin ("legacy"). La
 // comparación es en tiempo constante (no filtra por timing qué entrada matcheó).
+// parsearVencimiento lleva el `expires:` del YAML al dominio. Vacío ⇒ cero ⇒ no vence.
+func parsearVencimiento(nombre, valor string) (time.Time, error) {
+	valor = strings.TrimSpace(valor)
+	if valor == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, valor)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("principal %q: `expires: %s` no es una fecha RFC3339 (ej: 2026-12-31T23:59:59Z): %w", nombre, valor, err)
+	}
+	return t, nil
+}
+
+// ahoraParaVencimiento es el reloj del registro, como variable para que las pruebas puedan fijarlo.
+// Una prueba de vencimiento contra el reloj real o duerme, o depende de fechas escritas a mano que
+// caducan — y una prueba que empieza a fallar sola en 2027 se borra en vez de arreglarse.
+var ahoraParaVencimiento = time.Now
+
+// Vencida dice si la credencial ya no vale. Cero ⇒ nunca vence.
+func (p Principal) Vencida(ahora time.Time) bool {
+	return !p.Expires.IsZero() && !ahora.Before(p.Expires)
+}
+
 func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 	if token == "" {
 		return nil, false
@@ -234,6 +473,15 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 		}
 	}
 	if match != nil {
+		// EL VENCIMIENTO SE MIRA ACÁ Y NO EN LA COMPUERTA: acá es donde una credencial deja de
+		// ser una identidad. Mirarlo más arriba dejaría a cada llamador con la obligación de
+		// acordarse, y el que se olvide no falla — pasa.
+		//
+		// Devuelve el MISMO (nil, false) que un token desconocido, a propósito: distinguir
+		// «vencido» de «no existe» le diría a quien prueba tokens que ése existió alguna vez.
+		if match.Vencida(ahoraParaVencimiento()) {
+			return nil, false
+		}
 		return match, true
 	}
 	if r.legacyHash != "" && subtle.ConstantTimeCompare([]byte(h), []byte(r.legacyHash)) == 1 {

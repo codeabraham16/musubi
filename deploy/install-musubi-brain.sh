@@ -27,6 +27,17 @@ ENV_FILE="/etc/musubi/musubi.env"
 BIN="/usr/local/bin/musubi"
 UNIT="/etc/systemd/system/musubi-brain.service"
 PORT="${BRAIN_ADDR##*:}"
+# sha256 de deploy/musubi-backup.sh que ESTE instalador acepta instalar. Es el único origen honesto
+# del checksum: un .sha256 publicado junto al script en `main` lo controla el mismo que controla el
+# script (main no tiene branch protection), así que no verificaría nada. El pin vive acá, en el
+# archivo que el operador ya confía porque lo corre con sudo desde su clone. Si cambiás
+# deploy/musubi-backup.sh, actualizá este valor: sha256sum deploy/musubi-backup.sh
+BACKUP_SHA256="631b9bdbe55851911ec02f46724595eddcbf70a35973a6bfe692229024e44498"
+BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh"
+BACKUP_BIN="/usr/local/bin/musubi-backup"
+# Directorio del propio instalador: cuando se corre desde el clone (sudo ./install-musubi-brain.sh),
+# musubi-backup.sh está al lado y no hace falta bajar nada de la red.
+AQUI="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo /nonexistent)"
 
 log(){ printf '\033[36m▶ %s\033[0m\n' "$*"; }
 ok(){  printf '\033[32m✓ %s\033[0m\n' "$*"; }
@@ -83,6 +94,13 @@ cat >> "$CFG" <<EOF
 service:
     enabled: true
     addr: "$BRAIN_ADDR"
+    # OLA 0 DEL PLAN EMPRESA (2026-09-03): fail-closed contra el modo legacy en bind remoto.
+    # Sin registro de principals (o con solo el bearer legacy), un bind no-loopback es un unico
+    # token con acceso TOTAL a todos los proyectos. Apagado, el cerebro solo lo AVISA en el log
+    # al arrancar —y un aviso en un log que nadie lee es lo mismo que nada—. Encendido, se niega
+    # a servir hasta que exista principals.yaml con al menos un miembro. Hoy es un cinturon que
+    # no aprieta: el registro existe. El dia que alguien lo borre, esto lo va a decir en la cara.
+    strict_tenancy: true
     auth_token_env: "MUSUBI_TOKEN"
     allow_insecure_token: true
     request_timeout_seconds: 60
@@ -141,9 +159,30 @@ ok "Servicio systemd habilitado y arrancado"
 # (musubi backup = VACUUM INTO) y lo shipa a BACKUP_REMOTE. Runbook de restore en
 # docs/Server_Brain_Onboarding.md.
 log "Instalando backup programado (musubi-backup.timer)"
-if curl -fsSL "https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh" -o /usr/local/bin/musubi-backup; then
-  chmod 0755 /usr/local/bin/musubi-backup
-  command -v restorecon &>/dev/null && restorecon -v /usr/local/bin/musubi-backup || true
+# El script lo va a ejecutar un timer como $BRAIN_USER, con el EnvironmentFile del cerebro cargado
+# (token incluido). Por eso NUNCA se instala sin verificar el sha256 contra $BACKUP_SHA256 — mismo
+# criterio que el binario en el paso 1. Fuente preferida: el archivo hermano del clone (sin red).
+# Fallback: bajarlo de main — y verificarlo igual, porque main no está protegido.
+tmpbk="$(mktemp)"
+if [ -f "$AQUI/musubi-backup.sh" ]; then
+  cp "$AQUI/musubi-backup.sh" "$tmpbk"
+  origen_bk="$AQUI/musubi-backup.sh"
+elif curl -fsSL "$BACKUP_SCRIPT_URL" -o "$tmpbk"; then
+  origen_bk="$BACKUP_SCRIPT_URL"
+else
+  rm -f "$tmpbk"; origen_bk=""
+fi
+if [ -n "$origen_bk" ]; then
+  got_bk="$(sha256sum "$tmpbk" | awk '{print $1}')"
+  if [ "$got_bk" != "$BACKUP_SHA256" ]; then
+    rm -f "$tmpbk"
+    die "musubi-backup.sh NO coincide con el sha256 que espera este instalador (origen=$origen_bk want=$BACKUP_SHA256 got=$got_bk). NO se instaló. Si vos cambiaste deploy/musubi-backup.sh, actualizá BACKUP_SHA256 en este instalador (sha256sum deploy/musubi-backup.sh). Si NO lo tocaste, alguien cambió el script: revisá 'git log -p deploy/musubi-backup.sh' antes de seguir."
+  fi
+  ok "Checksum de musubi-backup.sh verificado ($origen_bk)"
+  # 'install' (no 'mv') aplica el contexto SELinux del destino; igual forzamos restorecon (gotcha Fase 1).
+  install -m 0755 "$tmpbk" "$BACKUP_BIN"
+  rm -f "$tmpbk"
+  command -v restorecon &>/dev/null && restorecon -v "$BACKUP_BIN" || true
   # Config de backup en el EnvironmentFile (idempotente: no pisa valores ya presentes).
   if ! grep -q '^BACKUP_' "$ENV_FILE" 2>/dev/null; then
     cat >> "$ENV_FILE" <<EOF
@@ -171,7 +210,7 @@ Group=$BRAIN_USER
 Environment=MUSUBI_HOME=$BRAIN_HOME
 Environment=MUSUBI_BIN=$BIN
 EnvironmentFile=$ENV_FILE
-ExecStart=/usr/local/bin/musubi-backup
+ExecStart=$BACKUP_BIN
 EOF
   cat > /etc/systemd/system/musubi-backup.timer <<EOF
 [Unit]
@@ -188,7 +227,7 @@ EOF
   systemctl enable --now musubi-backup.timer
   ok "Backup diario habilitado (03:30). CONFIGURÁ BACKUP_REMOTE en $ENV_FILE (si no, la unidad falla-cerrado; o seteá BACKUP_ALLOW_LOCAL_ONLY=1)."
 else
-  log "No se pudo bajar musubi-backup.sh; instalá el timer a mano (ver docs/Server_Brain_Onboarding.md)."
+  log "No hay musubi-backup.sh junto al instalador y no se pudo bajar de $BACKUP_SCRIPT_URL; instalá el timer a mano (ver docs/Server_Brain_Onboarding.md)."
 fi
 
 # ── 6. Firewall de la malla (best-effort) ───────────────────────────────────
@@ -212,7 +251,13 @@ else
 fi
 
 echo
-ok "CEREBRO LISTO. Token para los clientes (guardalo seguro):"
-cat "$ENV_FILE"
+# El token NO se imprime: quedaría en el scrollback de la terminal y en el log de cualquier sesión
+# ssh grabada. Mismo criterio que deploy/docker/preparar.sh: se muestra SOLO su sha256 (que es
+# además el token_sha256 que va en principals.yaml) y la ruta, y el operador lo lee cuando lo
+# necesita. Se hashea el VALOR del token, no el archivo entero (que también lleva las BACKUP_*).
+TOKEN_SHA="$(sed -n 's/^MUSUBI_TOKEN=//p' "$ENV_FILE" | head -n1 | tr -d '\n' | sha256sum | cut -d' ' -f1)"
+ok "CEREBRO LISTO. El token está en $ENV_FILE (modo 600, NO se imprime acá)."
+echo "  token_sha256: $TOKEN_SHA"
+echo "  Para leerlo cuando lo necesités:  sudo cat $ENV_FILE"
 echo
 echo "Siguiente: en cada dispositivo, connect-brain-linux.sh / connect-brain-windows.ps1"

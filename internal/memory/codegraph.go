@@ -48,7 +48,7 @@ func (e *DbEngine) UpsertPackageGraph(files []string, nodes []GraphNode, edges [
 // UpsertPackageGraphFrom persiste el grafo de un paquete con el project_id de ORIGEN explícito
 // (atribución multi-tenant). En UNA transacción: borra los nodos/aristas de los `files` dados
 // (delete-by-source) y reinserta los derivados con su src_fingerprint. Así el refresco es local
-// a los archivos cambiados y nunca deja filas stale. Los nodos package externos (path='') NO se
+// a los archivos cambiados y nunca deja filas stale. Los nodos package externos (path=”) NO se
 // borran (son compartidos entre archivos): se reinsertan por upsert. origin == "" ⇒ project_id
 // del engine.
 func (e *DbEngine) UpsertPackageGraphFrom(originProjectID string, files []string, nodes []GraphNode, edges []GraphEdge) error {
@@ -161,7 +161,7 @@ func (e *DbEngine) ReplaceProjectGraphFrom(originProjectID string, nodes []Graph
 }
 
 // GetGraphNodeCtx devuelve un nodo por su clave, acotado al proyecto de la credencial (Track
-// 17/18): con scope, sólo el nodo del proyecto pedido o el sin atribuir (''), PREFIRIENDO el
+// 17/18): con scope, sólo el nodo del proyecto pedido o el sin atribuir (”), PREFIRIENDO el
 // del proyecto. Ausencia de scope / Federate ⇒ federado (la primera fila de ese node_key).
 func (e *DbEngine) GetGraphNodeCtx(ctx context.Context, nodeKey string) (GraphNode, bool, error) {
 	sc := projectScopeFrom(ctx)
@@ -215,7 +215,7 @@ func (e *DbEngine) GraphOutEdgesCtx(ctx context.Context, fromKey string) ([]Grap
 }
 
 // GraphFileFingerprintsCtx devuelve path → src_fingerprint de los archivos presentes en el
-// grafo (nodos con path != ''), acotado a la credencial. Es la base de la reconciliación del
+// grafo (nodos con path != ”), acotado a la credencial. Es la base de la reconciliación del
 // índice incremental y del cómputo de frescura (Track 20 · F5): el propio grafo guardado ES el
 // estado anterior, así que no hace falta git ni un cursor de commit.
 func (e *DbEngine) GraphFileFingerprintsCtx(ctx context.Context) (map[string]string, error) {

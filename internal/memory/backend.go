@@ -14,7 +14,12 @@ package memory
 // Las firmas reflejan las de *DbEngine tal cual (incluido qué métodos toman context):
 // esto es un seam, no una reescritura — no cambia ningún comportamiento.
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"musubi/internal/fleet"
+)
 
 // ObservationStore — persistencia y búsqueda de observaciones (prosa + embeddings).
 type ObservationStore interface {
@@ -355,8 +360,200 @@ type OutboxStore interface {
 	RequeueDeadOutbox() (int, error)
 }
 
-// StorageBackend es la unión de todos los roles: el contrato que un backend completo
-// debe satisfacer. Embebe io.Closer-equivalente vía Close.
+// DeviceStore — el REGISTRO DE LA FLOTA (track «Control de flota»): dispositivos controlados,
+// su credencial y su última señal de vida. Ver internal/memory/devices.go y el dominio en
+// internal/fleet.
+//
+// Es un rol aparte y no métodos sueltos en otra interfaz porque la flota es un eje distinto de la
+// memoria: un consumidor que sólo administra máquinas (el plano de control) no tiene por qué
+// depender de saber recuperar observaciones, y al revés. Es la misma disciplina de "interfaces
+// chicas, compuestas" del resto de este archivo.
+type DeviceStore interface {
+	// AltaDevice registra un dispositivo. El id lo asigna el motor, NO el cliente; `token` es la
+	// credencial cruda y sólo se guarda su SHA-256.
+	AltaDevice(d fleet.Device, token string) (fleet.Device, error)
+	// DevicePorToken resuelve la identidad de un dispositivo desde su credencial. Es el camino
+	// que hace que un device no pueda afirmar ser otro.
+	DevicePorToken(token string) (fleet.Device, bool, error)
+	DevicePorNombre(projectID, name string) (fleet.Device, bool, error)
+	// ListarDevices devuelve la flota de UN proyecto (aislamiento por tenant).
+	ListarDevices(projectID string, incluirRevocados bool) ([]fleet.Device, error)
+	// LatirDevice estampa la última señal de vida. Devuelve si actualizó; que NO actualice no es
+	// un error (un agente revocado que todavía no se enteró es lo normal).
+	LatirDevice(id string, ahora time.Time, muestra string) (bool, error)
+	// LatirYTomarComandos es la del CAMINO CALIENTE: la señal de vida y la entrega de la cola en
+	// UNA transacción. La puerta del latido usa ésta y no las dos por separado, porque a 2000
+	// máquinas cada 30 s cada commit de más son ~67 fsync/s de más (ver latido.go).
+	//
+	// LatirDevice sigue existiendo y no es un duplicado: la sonda y el exec estampan vida SIN
+	// tener nada que entregar, y hacerlas pasar por acá les cobraría una transacción de cola que
+	// no necesitan.
+	LatirYTomarComandos(id string, ahora time.Time, muestra string, tope int) (bool, []fleet.Comando, error)
+	// ActualizarAutoreporte guarda la versión del agente y la dirección que la propia máquina
+	// reporta. Es la única escritura que un device hace sobre el registro, y sólo sobre su fila.
+	ActualizarAutoreporte(id, version, direccion string) error
+	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
+	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
+	ProyectosConDevices(tope int) ([]string, error)
+	// SesionesVivas lista el plano de ENTRAR de un proyecto por todas las modalidades, en una
+	// sola lista y con el nombre de cada máquina ya resuelto. Lee las dos tablas de sesión y NO
+	// las fusiona: sus comportamientos difieren donde importa (ver internal/fleet/sesion_viva.go).
+	SesionesVivas(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionViva, error)
+	// CronologiaDeDevice cruza los TRES registros append-only (comandos, pantallas, shells) de
+	// UNA máquina dentro de una ventana, del más nuevo al más viejo. La ventana va en el WHERE y
+	// no se filtra después: con el filtro en Go, un tope alcanzado devolvería vacío para una
+	// ventana vieja y ese vacío se lee como «no pasó nada». `truncado` dice si el tope cortó algo
+	// que estaba ADENTRO de la ventana.
+	CronologiaDeDevice(projectID, deviceID string, v fleet.Ventana, tope int, ahora time.Time) ([]fleet.Hecho, bool, error)
+	// ObservacionesEnVentana y CodigoTocadoEnVentana son las dos lecturas que la FLOTA le hace a
+	// la MEMORIA (fase 5 · S14): qué se escribió y qué código se tocó dentro de una ventana. El
+	// aislamiento por proyecto sale del ctx, igual que en el resto del recall — y OJO con las
+	// fechas: estas tablas guardan el formato de `CURRENT_TIMESTAMP` de SQLite, no RFC3339.
+	ObservacionesEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]Observation, error)
+	// ObservacionesQueNombran busca el término como FRASE, no como el OR de sus tokens: el
+	// enlace `termino` afirma que el texto NOMBRA algo de esa máquina, y con OR un servicio
+	// llamado `cognicion-db` quedaría enlazado a cualquier nota que diga «db».
+	ObservacionesQueNombran(ctx context.Context, termino string, tope int) ([]Observation, error)
+	CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]ArchivoTocado, error)
+	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
+	// false si no hay fila viva con ese id.
+	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
+	FijarCapacidadDePreguntar(deviceID string, puede bool) error
+	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
+	// alguien. Va aparte de la política porque son hechos de dueños distintos.
+	// ── Ejecución remota (S5) ──
+	// EncolarComando registra el pedido y lo deja pendiente. La fila se crea AL ENCOLAR: si nada
+	// más sale bien, el pedido queda auditado igual.
+	EncolarComando(c fleet.Comando) (fleet.Comando, error)
+	// TomarComandos entrega a una máquina lo que le toca y lo marca entregado, en UNA
+	// transacción (dos latidos concurrentes no pueden llevarse el mismo comando).
+	TomarComandos(deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error)
+	// GuardarResultado registra cómo salió. `deviceID` es la GUARDA: el comando tiene que ser de
+	// esa máquina, o se rechaza.
+	GuardarResultado(deviceID, comandoID string, exit *int, stdout, stderr, errCanal string, ahora time.Time) error
+	ComandoPorID(id string) (fleet.Comando, bool, error)
+	BitacoraDeComandos(projectID, deviceID string, tope int) ([]fleet.Comando, error)
+	// PodarSalidasDeComandos vacía stdout/stderr viejos SIN borrar la fila: la bitácora es
+	// permanente, la salida caduca.
+	PodarSalidasDeComandos(dias int, ahora time.Time) (int64, error)
+
+	// El cooldown de las políticas de flota, que tiene que sobrevivir a un reinicio del cerebro
+	// (S10b · A24): sin esto, reiniciar rearmaba todos los cooldowns, y reiniciar es lo primero
+	// que alguien hace justo cuando algo va mal.
+	CooldownsDePoliticas() (map[string]map[string]time.Time, error)
+	MarcarDisparoDePolitica(politica, deviceID, alcance string, cuando time.Time) error
+	PodarEstadoDePoliticas(vivas []string) (int64, error)
+
+	// La BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b). Ninguna de estas firmas tiene por dónde
+	// pasar el CONTENIDO de una sesión: lo que se guarda es que hubo acceso, no qué se tecleó.
+	AbrirSesionShell(s fleet.SesionShell) (fleet.SesionShell, error)
+	SesionShellPorID(id string) (fleet.SesionShell, bool, error)
+	TocarSesionShell(id string, ahora time.Time) error
+	CerrarSesionShell(id string, estado fleet.EstadoShell, motivo string, ahora time.Time) error
+	SesionShellAbiertaDe(principal, deviceID string, ahora time.Time) (fleet.SesionShell, bool, error)
+	BitacoraDeShell(projectID, deviceID string, tope int) ([]fleet.SesionShell, error)
+	CerrarSesionesShellVencidas(ahora time.Time) (int64, error)
+	// DevicePorID lo necesita el relay: una vez abierta la sesión, lo único que se guarda de la
+	// máquina es su id, y la concesión se re-evalúa contra el device en CADA request.
+	DevicePorID(id string) (fleet.Device, bool, error)
+	// ── Pantalla (S6) ──
+	// Ninguna de estas firmas recibe ni devuelve una contraseña: la garantía G1 se sostiene por
+	// construcción, no por disciplina.
+	AbrirSesionPantalla(s fleet.SesionPantalla) (fleet.SesionPantalla, error)
+	MarcarSesion(deviceID, sesionID string, estado fleet.EstadoSesion, errMsg string, ahora time.Time) error
+	// ResponderConsentimiento registra cómo contestó el usuario de la máquina (A57). La sesión
+	// tiene que ser de ESE device y estar todavía esperando: sólo se contesta una vez.
+	ResponderConsentimiento(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
+	// ResponderConsentimientoDeShell es el gemelo para el camino de shell. Existe porque `pide`
+	// prometía «tiene que aceptar; sin respuesta no hay sesión» y ese camino no preguntaba nada:
+	// abría el prompt y mandaba un aviso que la persona no podía contestar.
+	ResponderConsentimientoDeShell(deviceID, sesionID string, r fleet.RespuestaAviso, ahora time.Time) error
+	// SesionShellEsperandoDe acota por PRINCIPAL: el permiso se le dio a quien preguntó, y la
+	// pregunta que vio la persona lo nombraba.
+	SesionShellEsperandoDe(deviceID, principal string, ahora time.Time) (fleet.SesionShell, bool, error)
+	SesionesDePantalla(projectID, deviceID string, tope int, ahora time.Time) ([]fleet.SesionPantalla, error)
+	GuardarRustdeskID(deviceID, rid string) error
+	// QuienMasDiceSer deriva la COLISIÓN de rustdesk_id: qué otras máquinas reportan el mismo id.
+	// Devuelve los nombres del alcance de quien pregunta y un conteo de las de afuera — alcanza
+	// para decir «este id es ambiguo» sin nombrar la máquina de otro tenant.
+	QuienMasDiceSer(deviceID, rid, projectID string) ([]string, int, error)
+	// RevocarDevice es el kill-switch: deja de autenticar en el acto y la fila queda para la
+	// auditoría. ARRASTRA los servicios de esa máquina (S12), en la misma transacción.
+	RevocarDevice(projectID, name string) (bool, error)
+	// RenombrarDevice cambia el nombre CONSERVANDO EL ID, y con él la bitácora, las sesiones y
+	// el inventario de servicios. Dar de baja y volver a enrolar daba un id nuevo, o sea que
+	// cambiar un nombre costaba el historial entero (A64).
+	RenombrarDevice(projectID, viejo, nuevo string) (fleet.Device, error)
+}
+
+// ServiceStore es el inventario de QUÉ CORRE ADENTRO de cada máquina de la flota (S12): units de
+// systemd, servicios de Windows, contenedores.
+//
+// Es un rol APARTE de DeviceStore y no seis métodos más colgados de él, por la disciplina de
+// «interfaces chicas, compuestas» que ya sigue el resto del archivo: quien sólo necesita el
+// inventario de máquinas no tiene por qué depender del de servicios.
+//
+// Ninguna firma de acá recibe un `project_id` para ESCRIBIR: el proyecto de un servicio sale
+// siempre del device (que se resuelve adentro), nunca de lo que declare el llamador. Que no haya
+// por dónde pasarlo es la garantía, no la disciplina.
+type ServiceStore interface {
+	AltaServicio(s fleet.Servicio) (fleet.Servicio, error)
+	// ReportarServicios es la escritura del AGENTE: `deviceID` viene del TOKEN y acota TODO lo
+	// que se toca. Devuelve (nuevos, actualizados).
+	ReportarServicios(deviceID string, ahora time.Time, reportes []fleet.ReporteServicio) (int, int, error)
+	// ReportarSaludDeServicios actualiza salud SIN crear ni podar: es el camino de un colector
+	// externo para un servicio DECLARADO (un bot, un puente) que ninguna máquina enumera.
+	ReportarSaludDeServicios(deviceID string, ahora time.Time, reportes []fleet.ReporteServicio) (int, []string, error)
+	ListarServicios(projectID, deviceID string, incluirRevocados bool) ([]fleet.Servicio, error)
+	ServiciosDeDevice(deviceID string) ([]fleet.Servicio, error)
+	RevocarServiciosDeDevice(deviceID string) (int64, error)
+	// PodarServiciosAusentes saca lo que la máquina dejó de reportar. Una lista VACÍA no poda
+	// nada: «no reportó ninguno» es también lo que se ve cuando el agente arrancó a medias.
+	// `vacioAfirma` es la excepción y hay que ganársela: sólo cuando la máquina DIJO que no corre
+	// nada —el bloque vino y vino vacío— la lista vacía poda el inventario entero (A78).
+	PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error)
+
+	// ── Ventanas de mantenimiento (Ola 1) ───────────────────────────────────────────────────
+	// «De tal hora a tal hora esta máquina va a estar rara a propósito». Vive acá y no en un
+	// silence de Alertmanager porque un silence calla el aviso y NO frena las políticas: el
+	// auto-heal levantaría el servicio en mitad del mantenimiento y nadie se enteraría.
+	AbrirMantenimiento(m fleet.Mantenimiento) (fleet.Mantenimiento, error)
+	CancelarMantenimiento(deviceID, projectID, id string) (bool, error)
+	// DevicesEnMantenimiento devuelve el CONJUNTO de máquinas en ventana ahora. Conjunto y no
+	// lista de ventanas: los dos llamadores preguntan lo mismo, y dos copias de una comparación
+	// de bordes se separan.
+	DevicesEnMantenimiento(ahora time.Time) (map[string]bool, error)
+	MantenimientosDeDevice(deviceID string, tope int) ([]fleet.Mantenimiento, error)
+
+	// ── Rotación del token de un dispositivo (Ola 2) ────────────────────────────────────────
+	// Los DOS tokens valen durante la ventana porque el agente se entera del nuevo en la
+	// RESPUESTA de un latido, o sea después de haber usado el viejo: sin solapamiento quedaría
+	// afuera entre que lo recibe y lo guarda.
+	AbrirRotacion(deviceID string, vence time.Time) (string, error)
+	CompletarRotacion(deviceID string) error
+	AbandonarRotacionesVencidas(ahora time.Time) (int64, error)
+	DevicePorTokenConRotacion(token string) (fleet.Device, bool, bool, error)
+
+	// ── Aprobación de cuatro ojos (Ola 2) ───────────────────────────────────────────────────
+	// CUÁNTAS PERSONAS hacen falta para abrir una sesión. Es un eje aparte de las capacidades
+	// (quién puede) y del consentimiento (qué se le debe a quien está en la máquina): ninguno de
+	// los dos puede expresar «hace falta una segunda persona», y en un servidor de producción
+	// —donde no hay nadie sentado— el consentimiento no protege a nadie.
+	FijarAprobacion(deviceID string, requiere bool) (bool, error)
+	AbrirSolicitudDeAprobacion(s fleet.SolicitudDeAprobacion) (fleet.SolicitudDeAprobacion, error)
+	SolicitudDeAprobacionPorID(id string) (fleet.SolicitudDeAprobacion, bool, error)
+	// AprobacionVigenteDe acota por solicitante Y por capacidad: la aprobación se le dio a QUIEN
+	// pidió para hacer ESO. Sin los dos filtros, el permiso más barato habilita el más caro.
+	AprobacionVigenteDe(deviceID, solicitante string, cap fleet.Cap, ahora time.Time) (fleet.SolicitudDeAprobacion, bool, error)
+	ResolverAprobacion(id, aprobador, nota string, concede bool, ahora time.Time) (bool, error)
+	// ConsumirAprobacion gasta el permiso, y el un-solo-uso lo garantiza el WHERE del UPDATE.
+	// Si devuelve false, el llamador TIENE que negarse: significa que ya se usó o venció.
+	ConsumirAprobacion(id string, ahora time.Time) (bool, error)
+	AprobacionesPendientes(projectID string, ahora time.Time, tope int) ([]fleet.SolicitudDeAprobacion, error)
+}
+
+// StorageBackend es la unión de todos los roles: el contrato que un backend completo debe
+// satisfacer. Embebe io.Closer-equivalente vía Close.
 type StorageBackend interface {
 	ObservationStore
 	RecallEngine
@@ -378,6 +575,8 @@ type StorageBackend interface {
 	Calibrator
 	Insighter
 	OutboxStore
+	DeviceStore
+	ServiceStore
 
 	// Close libera los recursos del backend (espera trabajo en background y cierra
 	// la conexión subyacente).

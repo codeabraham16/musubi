@@ -9,7 +9,7 @@ import (
 // newTestEngine crea un DbEngine respaldado por un directorio temporal autolimpiable.
 func newTestEngine(t *testing.T) *DbEngine {
 	t.Helper()
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

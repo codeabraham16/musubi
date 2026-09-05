@@ -6,7 +6,7 @@ import "testing"
 // último. compensa es el mapa step→directiva (vacío = sin compensación).
 func sagaRun(t *testing.T, runID string, compensa map[string]string) *DbEngine {
 	t.Helper()
-	engine, err := NewDbEngine(t.TempDir())
+	engine, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}
