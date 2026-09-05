@@ -59,6 +59,55 @@ func TestElegirTemperaturaPrefiereElSensorDeCPUYNoElDeChasis(t *testing.T) {
 				"es que acpitz es la mala",
 		},
 		{
+			// EL SEGUNDO CASO MEDIDO, y el que destapó el defecto de abajo. Son las diez zonas
+			// reales de la workstation de desarrollo el 2026-09-05, en el orden en que las
+			// devolvió `os.ReadDir`. Tres de ellas —SEN2, SEN4, SEN5— marcan 50 miligrados:
+			// 0,05 °C, o sea sensores que no están midiendo.
+			nombre: "las diez zonas medidas en la workstation: gana el paquete de CPU",
+			texto: "acpitz 27800\nINT3400 Thermal 20000\nSEN1 41050\nSEN2 50\nSEN3 46050\n" +
+				"SEN4 50\nSEN5 50\nTCPU 46050\nTCPU_PCI 46000\nx86_pkg_temp 45000\n",
+			esp:    f(45),
+			porque: "x86_pkg_temp está en la lista de preferidas y gana por eso, no por posición",
+		},
+		{
+			// EL DEFECTO, aislado: sin ninguna zona preferida, el fallback era «la primera que no
+			// sea acpitz» recorrida en orden de ReadDir, y devolvía 0,05 °C — le ganaba incluso a
+			// la lectura de chasis que la lista manda dejar última. Un número con las unidades
+			// correctas, el rango sintácticamente válido y la forma de un dato, contestando otra
+			// pregunta: el MISMO defecto que este archivo vino a arreglar, un paso más adentro.
+			nombre: "sin zona preferida, un sensor apagado NO le gana a una lectura real",
+			texto:  "acpitz 27800\nsen2 50\nsen4 50\nint3400 thermal 20000\ntcpu 46050\n",
+			esp:    f(46.05),
+			porque: "el piso de la banda descarta los 0,05 °C, y entre las que quedan gana la más " +
+				"alta en vez de la primera del directorio",
+		},
+		{
+			nombre: "el fallback NO depende del orden: las mismas zonas al revés dan lo mismo",
+			texto:  "tcpu 46050\nint3400 thermal 20000\nsen4 50\nsen2 50\nacpitz 27800\n",
+			esp:    f(46.05),
+			porque: "el orden de ReadDir no significa nada — es el mismo error que hacía que " +
+				"thermal_zone0 pareciera la principal, y el fallback lo tenía adentro",
+		},
+		{
+			// LO QUE ESTE CASO GUARDA DE VERDAD ES EL VALOR, NO EL TIPO, y conviene decirlo:
+			// truncar el tipo a `campos[0]` deja esta prueba EN VERDE —lo corrí—, porque con una
+			// zona sola el tipo no decide nada y ningún tipo preferido lleva espacio. Lo que sí
+			// pone en rojo es tomar el valor de `campos[1]` en vez del último: `INT3400 Thermal
+			// 20000` tiene el número TERCERO, y una máquina real lo emite así.
+			nombre: "un `type` con espacio no se come el valor (el número va último, no segundo)",
+			texto:  "INT3400 Thermal 20000\n",
+			esp:    f(20),
+			porque: "`INT3400 Thermal` existe de verdad y el valor es el último campo; leer el " +
+				"segundo daría nil y la zona desaparecería en silencio",
+		},
+		{
+			nombre: "todas las zonas apagadas: nil, no 0,05",
+			texto:  "sen2 50\nsen4 50\nsen5 50\n",
+			esp:    nil,
+			porque: "«no lo pude medir» es un hueco en el gráfico; 0,05 °C se dibuja como una " +
+				"máquina a cero grados y no dispara `> 85` nunca",
+		},
+		{
 			nombre: "formato viejo: un número suelto sin tipo",
 			texto:  "27800\n",
 			esp:    f(27.8),

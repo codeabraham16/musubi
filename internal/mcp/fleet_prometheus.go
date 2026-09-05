@@ -445,7 +445,7 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load15) })},
 		{"musubi_fleet_device_uptime_seconds", "Segundos desde el arranque de la máquina.",
 			"s", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.UptimeSeg), m.UptimeSeg > 0 })},
-		{"musubi_fleet_device_temperature_celsius", "Primera zona térmica. AUSENTE si la máquina no expone sensor.",
+		{"musubi_fleet_device_temperature_celsius", "Zona térmica preferida por tipo (CPU antes que chasis); si ninguna, la más alta plausible. AUSENTE si la máquina no expone sensor.",
 			"Cel", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.TempC) })},
 		// El nombre viaja en INGLÉS aunque el campo de la muestra sea `num_procesos`: adentro el
 		// JSON está en castellano, y en Prometheus la convención del ecosistema es inglesa. El

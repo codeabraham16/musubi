@@ -27,8 +27,18 @@ func TestLaZonaTermicaDeWindowsSeLeeEnDecikelvin(t *testing.T) {
 	}{
 		{"una zona, valor de firmware real", "3032", 30.05, true},
 		{"con espacios y CRLF, como los devuelve PowerShell", "\r\n  3182  \r\n", 45.05, true},
-		{"varias zonas: se toma la PRIMERA plausible, igual que thermal_zone0 en Linux",
-			"3032\n3312\n", 30.05, true},
+		// CAMBIÓ EL 2026-09-05: antes este caso esperaba 30,05 —«la primera plausible, igual que
+		// thermal_zone0 en Linux»— y la premisa se cayó cuando Linux dejó de leer thermal_zone0.
+		// El orden en que el firmware lista sus zonas no significa nada, igual que no significaba
+		// nada el número de zona en /sys; apostar a la primera es la misma apuesta que ya salió mal.
+		{"varias zonas: gana la MÁS ALTA, no la primera — el orden del firmware no significa nada",
+			"3032\n3312\n", 58.05, true},
+		{"y no depende del orden: las mismas dos zonas al revés dan el mismo número",
+			"3312\n3032\n", 58.05, true},
+		{"un sensor clavado en 0,05 °C NO le gana a una lectura real (el piso de la banda)",
+			"2732\n3032\n", 30.05, true},
+		{"un sensor clavado en 0,05 °C solo se descarta entero, no se reporta como 0 grados",
+			"2732", 0, false},
 		{"un sensor apagado devuelve 0 dK, que son −273 °C y NO una máquina congelada",
 			"0", 0, false},
 		{"salida vacía: el firmware no publica la clase, que es el caso COMÚN", "", 0, false},
@@ -67,8 +77,24 @@ func TestLaZonaTermicaDeWindowsSeLeeEnDecikelvin(t *testing.T) {
 			"como una máquina bajo cero en vez de como una unidad mal leída", *v)
 	}
 
-	// Y que signifique LO MISMO que en Linux: los dos caminos rechazan lo implausible igual.
+	// Y QUE SIGNIFIQUE LO MISMO QUE EN LINUX. Esto no es redundante con los casos de arriba: es
+	// la prueba de que los DOS parsers comparten la banda, que es lo que se rompió una vez ya
+	// —`TempMaxPlausibleC` estuvo declarado en dos archivos a la vez— y lo que hace que
+	// `musubi_fleet_device_temperature_celsius` signifique una cosa sola cuando el gráfico apila
+	// una máquina Linux y una Windows en la misma serie.
 	if ParsearTempMiligrados("0") != nil || ParsearTempDecikelvin("0") != nil {
 		t.Error("un sensor en cero pasa por alguno de los dos caminos: la misma lectura tiene que dar nil en las dos plataformas")
+	}
+	// El piso, por los dos caminos, con la MISMA temperatura expresada en las dos unidades:
+	// 50 miligrados y 2732 decikelvin son los dos 0,05 °C. EL DÍGITO IMPORTA y me lo equivoqué
+	// una vez: 2731 dK son −0,05 °C, que el corte VIEJO (`c <= 0`) ya rechazaba, así que con 2731
+	// esta prueba pasaba con y sin el piso — verificado sabotando el corte y viendo verde.
+	if ParsearTempMiligrados("50") != nil || ParsearTempDecikelvin("2732") != nil {
+		t.Error("0,05 °C pasa por alguno de los dos caminos: es un sensor que no está midiendo, " +
+			"y aceptarlo lo pone a competir con una lectura real (medido en la workstation: SEN2/4/5 = 50 mC)")
+	}
+	// Y el techo, también por los dos: 200 °C en las dos unidades.
+	if ParsearTempMiligrados("200000") != nil || ParsearTempDecikelvin("4731") != nil {
+		t.Error("200 °C pasa por alguno de los dos caminos: la banda tiene que ser la misma en los dos parsers")
 	}
 }

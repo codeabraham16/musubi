@@ -269,12 +269,30 @@ var preferenciaDeZonaTermica = []string{
 // ElegirTemperatura elige la zona térmica que contesta «¿se está calentando esta máquina?».
 //
 // Recibe una línea por zona, `<type> <miligrados>`, y devuelve la primera que exista según
-// `preferenciaDeZonaTermica`; si ninguna preferida está, prefiere CUALQUIERA antes que `acpitz`,
-// y `acpitz` sólo si es la única. Tolera además el formato VIEJO —un número suelto sin tipo—
-// porque es lo que devuelve una máquina cuyo agente todavía no se actualizó.
+// `preferenciaDeZonaTermica`. Si ninguna preferida está, devuelve **la más alta** de las que no
+// son `acpitz`, y `acpitz` sólo si es lo único que quedó. Tolera además el formato VIEJO —un
+// número suelto sin tipo— porque es lo que devuelve una máquina cuyo agente todavía no se
+// actualizó.
 //
-// La plausibilidad la sigue decidiendo ParsearTempMiligrados: una zona presente pero en 0 se
-// descarta y se prueba la siguiente, en vez de dejar que un sensor apagado gane por preferencia.
+// EL FALLBACK TOMA LA MÁS ALTA, NO LA PRIMERA, Y ESO NO ES UN DETALLE. Tomar la primera dejaba
+// al arreglo dependiendo del orden de `os.ReadDir` —un orden que no significa nada, exactamente
+// el mismo error que hacía que `thermal_zone0` pareciera «la principal»—, y con eso alcanzaba
+// para que un sensor roto ganara. Medido el 2026-09-05 en la workstation de desarrollo, que
+// tiene diez zonas y NINGUNA preferida entre las primeras:
+//
+//	acpitz 27800 · INT3400 Thermal 20000 · SEN1 41050 · SEN2 50 ← · SEN3 46050
+//	SEN4 50 ← · SEN5 50 ← · TCPU 46050 · TCPU_PCI 46000 · x86_pkg_temp 45000
+//
+// Los tres `SEN` marcados dan 0,05 °C: son sensores que no están midiendo. Con «la primera que
+// no sea acpitz» y sin zona preferida, ElegirTemperatura devolvía 0,05 °C — un número con las
+// unidades correctas, el rango sintácticamente válido y la forma de un dato, que le ganaba
+// incluso a la lectura de chasis. Es el MISMO defecto que este archivo vino a arreglar, un paso
+// más adentro. Con «la más alta» ese sensor no puede ganarle a ninguna lectura real.
+//
+// LA DIRECCIÓN DEL ERROR ES DELIBERADA: entre equivocarse alto y equivocarse bajo, alto se
+// investiga y bajo no se ve. Una serie que subestima no dispara `> 85` nunca y en un panel se
+// dibuja como una máquina fresca, no como un hueco. El techo de plausibilidad de
+// ParsearTempMiligrados (150 °C) es lo que impide que esa elección se vuelva una falsa alarma.
 func ElegirTemperatura(texto string) *float64 {
 	type zona struct {
 		tipo string
@@ -294,8 +312,13 @@ func ElegirTemperatura(texto string) *float64 {
 			}
 			continue
 		}
+		// El TIPO es todo lo que no es el último campo: `INT3400 Thermal` existe y tiene un
+		// espacio (medido en la workstation), y quedarse con `campos[0]` lo truncaba a
+		// `int3400`. Hoy sería inocuo —ningún tipo preferido lleva espacio— pero es una trampa
+		// puesta para el día que alguien agregue uno.
 		if v := ParsearTempMiligrados(campos[len(campos)-1]); v != nil {
-			zonas = append(zonas, zona{tipo: strings.ToLower(campos[0]), val: v})
+			tipo := strings.ToLower(strings.Join(campos[:len(campos)-1], " "))
+			zonas = append(zonas, zona{tipo: tipo, val: v})
 		}
 	}
 	if len(zonas) == 0 {
@@ -308,25 +331,59 @@ func ElegirTemperatura(texto string) *float64 {
 			}
 		}
 	}
-	// Ninguna preferida: cualquiera antes que `acpitz`.
+	// Ninguna preferida: la MÁS ALTA que no sea `acpitz` (ver el doc de arriba: la primera
+	// dependía del orden de ReadDir y un sensor apagado le ganaba a una lectura real).
+	var mejor *float64
 	for _, z := range zonas {
-		if z.tipo != "acpitz" {
-			return z.val
+		if z.tipo == "acpitz" {
+			continue
+		}
+		if mejor == nil || *z.val > *mejor {
+			mejor = z.val
 		}
 	}
-	return zonas[0].val
+	if mejor != nil {
+		return mejor
+	}
+	// Sólo quedó `acpitz`: una lectura de chasis es mejor que ninguna, y se devuelve la más
+	// alta también acá para no reintroducir la dependencia del orden por la puerta de atrás.
+	for _, z := range zonas {
+		if mejor == nil || *z.val > *mejor {
+			mejor = z.val
+		}
+	}
+	return mejor
 }
 
 // ParsearTempMiligrados convierte el contenido de una zona térmica. Devuelve nil si no hay sensor
-// o si el valor es implausible: una lectura de 0 grados es casi siempre un sensor que no está
-// midiendo, no una máquina congelada.
+// o si el valor es implausible.
+//
+// EL PISO NO ES 0, Y POR QUÉ: el corte era `c <= 0`, y los sensores muertos de esta workstation
+// no reportan 0 sino `50` miligrados —0,05 °C—, así que pasaban el filtro entero y competían
+// como si midieran. Un `type` cualquiera de /sys/class/thermal en una máquina ENCENDIDA no baja
+// de esto: silicio que disipa está por encima del ambiente, y el ambiente de una máquina que
+// arranca no es glaciar. Lo que se rechaza acá no es «hace frío», es «este archivo existe pero
+// nadie lo está escribiendo».
+//
+// ES UNA HEURÍSTICA Y NO UNA GARANTÍA, dicho para que nadie confíe de más: un sensor clavado en
+// un valor plausible —27,85 °C es el caso real, ver A2 en las dos Windows— pasa por acá sin que
+// se lo pueda distinguir de una lectura buena. Eso NO se detecta con un sample; se detecta con
+// varianza a lo largo del tiempo, que es una pregunta para Prometheus y no para un parser.
+// TempMinPlausibleC y TempMaxPlausibleC son la banda, y viven acá porque las usan LOS DOS
+// parsers —éste y ParsearTempDecikelvin de Windows—. Un segundo par de constantes con el mismo
+// número es el defecto de este repo sembrado a mano: N lugares que deberían decir lo mismo.
+const (
+	TempMinPlausibleC = 5
+	TempMaxPlausibleC = 150
+)
+
 func ParsearTempMiligrados(texto string) *float64 {
 	mili, err := strconv.ParseFloat(strings.TrimSpace(texto), 64)
 	if err != nil {
 		return nil
 	}
 	c := mili / 1000
-	if c <= 0 || c > 150 {
+	if c < TempMinPlausibleC || c > TempMaxPlausibleC {
 		return nil
 	}
 	return &c
