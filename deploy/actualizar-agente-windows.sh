@@ -181,22 +181,50 @@ d=json.load(sys.stdin); print(d.get("command_id",""), d.get("estado",""))')
 }
 ps1(){ python3 -c 'import json,sys; print(json.dumps(["powershell","-NoProfile","-Command",sys.argv[1]]))' "$1"; }
 
-paso "3/5 · bajando el binario a $DEVICE y verificando el sha EN DESTINO"
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# LA DESCARGA LA HACE `musubi.exe fetch`, NO PowerShell — Y ES UN SOLO CAMINO A PROPÓSITO
+#
+# En `davantis-1` la lista blanca de NordVPN autoriza POR ARCHIVO (A31): el único ejecutable que
+# alcanza el tailnet es `musubi.exe` en su ruta exacta. `Invoke-WebRequest` corre desde
+# `powershell.exe` y muere con «Unable to connect» MIENTRAS el agente de esa misma máquina le late
+# al cerebro sin problema — medido el 2026-09-05.
+#
+# `musubi fetch` resuelve eso porque la descarga la hace el proceso que SÍ está autorizado. Su
+# allowlist acepta loopback o `100.64.0.0/10` y revalida en cada redirect (cmd/musubi/fetch.go),
+# así que no afloja nada: sigue sin poder salir del tailnet.
+#
+# SE INVOCA CON `Start-Process -RedirectStandardOutput` Y NO CON `cmd /c ... > archivo`. La
+# primera versión usaba `cmd`, y PowerShell la rechazó con «The string is missing the
+# terminator» — para pasarle a `cmd` una ruta entre comillas DENTRO de una cadena de PowerShell
+# hacen falta cuatro comillas seguidas, y ahí el parser no sabe cuál cierra. `Start-Process`
+# toma la ruta y los argumentos como valores, no como texto a re-parsear, así que no hay
+# anidamiento que equivocar. Y de paso da el ExitCode del proceso, que `cmd /c` se tragaba.
+#
+# SE USA EN LAS DOS MÁQUINAS Y NO SÓLO EN LA QUE LO NECESITA. Tener dos caminos de descarga
+# —`Invoke-WebRequest` acá, `fetch` allá— es exactamente la forma que este repo persigue: el que se
+# usa menos es el que se rompe sin que nadie se entere. La idea es de la sesión musubi-aa.
+paso "3/5 · bajando el binario a $DEVICE con su propio fetch, y verificando el sha EN DESTINO"
 llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
 if (-not $p) { "no encuentro el proceso musubi: sin el no se sabe donde esta instalado"; exit 1 }
 $d = Split-Path $p
-$ProgressPreference="SilentlyContinue"
-Invoke-WebRequest -UseBasicParsing http://'"$IP:$PUERTO"'/musubi.exe -OutFile "$d\musubi-nuevo.exe"
-$h=(Get-FileHash "$d\musubi-nuevo.exe" -Algorithm SHA256).Hash.ToLower()
-if ($h -ne "'"$SHA"'") { Remove-Item "$d\musubi-nuevo.exe" -Force; "SHA DISTINTO: $h -- BORRADO"; exit 1 }
-"sha ok, bytes: " + (Get-Item "$d\musubi-nuevo.exe").Length')" 300
+$n = Join-Path $d "musubi-nuevo.exe"
+$r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/musubi.exe" -RedirectStandardOutput $n -NoNewWindow -Wait -PassThru
+if ($r.ExitCode -ne 0) { Remove-Item $n -Force -EA SilentlyContinue; "fetch salio con " + $r.ExitCode; exit 1 }
+if (-not (Test-Path $n)) { "fetch no dejo archivo"; exit 1 }
+$h=(Get-FileHash $n -Algorithm SHA256).Hash.ToLower()
+if ($h -ne "'"$SHA"'") { Remove-Item $n -Force; "SHA DISTINTO: $h -- BORRADO"; exit 1 }
+"sha ok, bytes: " + (Get-Item $n).Length')" 300
 
 paso "4/5 · refrescando cambiar-agente.cmd (el de la máquina puede ser viejo)"
+# Mismo motivo que el paso 3: `curl.exe` tampoco está en la lista blanca de `davantis-1`.
 llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
 if (-not $p) { "no encuentro el proceso musubi: sin el no se sabe donde esta instalado"; exit 1 }
 $d = Split-Path $p
-curl.exe -fsS -o "$d\cambiar-agente.cmd" http://'"$IP:$PUERTO"'/cambiar-agente.cmd
-"cambiar-agente.cmd: " + (Get-Item "$d\cambiar-agente.cmd").Length + " bytes"')" 120
+$c = Join-Path $d "cambiar-agente.cmd.nuevo"
+$r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/cambiar-agente.cmd" -RedirectStandardOutput $c -NoNewWindow -Wait -PassThru
+if ($r.ExitCode -ne 0 -or -not (Test-Path $c) -or (Get-Item $c).Length -lt 100) { Remove-Item $c -Force -EA SilentlyContinue; "el cambiador no bajo entero"; exit 1 }
+Move-Item -Force $c (Join-Path $d "cambiar-agente.cmd")
+"cambiar-agente.cmd: " + (Get-Item (Join-Path $d "cambiar-agente.cmd")).Length + " bytes"')" 120
 
 paso "5/5 · lanzando el cambiador DESPEGADO (el paso 2 del .cmd mata al agente que corre esto)"
 llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
