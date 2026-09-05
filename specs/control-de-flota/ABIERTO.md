@@ -754,6 +754,59 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · LA PRIMERA AUDITORÍA CON `sabotaje.sh` ENCONTRÓ UNO REAL, y era el mismo defecto del
+día en código anterior.**
+
+Inventario: **2.751 pruebas, 679 con sabotaje declarado (24 %)** — `internal/fleet` 76 %,
+`internal/mcp` 40 %, `cmd/musubi` 25 %, `internal/memory` 7 %. De los 679, **650 tienen una frase**,
+**291 nombran un literal entre backticks** y **41 son mecánicamente aplicables** (el literal está una
+vez en un solo archivo de producción del paquete). De esos, 27 con verbo inequívoco.
+
+Resultado de los 27: **11 en rojo** (la guarda sirve), **12 «no compila»** con mi interpretación
+mecánica —que dice más de mi interpretación que del código—, **2 saltados** y **2 verdes**. De los dos
+verdes, uno era falso positivo del auditor: la frase decía «cambiarlo POR `/IM`», o sea que el literal
+era el DESTINO del sabotaje y no algo que sacar.
+
+**EL REAL**: `TestTrasUnCorteElAgenteSeRecuperaConElOtroTokenDelLlavero` declara dos sabotajes —«hacer
+que `Rechazado` devuelva siempre false», que sí la rompe, y «quitar el `if cred.Rechazado()` del case
+`res.revocado` del bucle», que **NO**—. Esa prueba ejercita `Rechazado()` DIRECTO y nunca el bucle, así
+que neutralizar el `if` del llamador la deja en verde. **Es exactamente el defecto que apareció el
+mismo día en el arreglo térmico**: la prueba mide la función y el doc promete que romper su CABLEADO la
+pone en rojo. La forma se repite porque es cómoda — probar una función pura es fácil, probar que
+alguien la llama es trabajo.
+
+Lo que se perdía: ese `if` rescata a la máquina que se cortó justo después de que el cerebro promoviera
+la rotación —el token viejo ya murió y el nuevo está en disco sin estrenar—. Sin él, ese caso es un 401
+eterno y una visita a la máquina; y en `davantis-1`, con 16 apagones en 11 días, no es teórico. Ahora
+`TestElBucleProbaraElOtroTokenAntesDeDarseDeBaja` ejercita el bucle y exige que presente LOS DOS tokens
+antes de rendirse.
+
+**TRES DEFECTOS DE LAS HERRAMIENTAS, todos encontrados usándolas:**
+- Mi driver de auditoría devolvió **25 veredictos que eran todos su propio bug de comillas** —el
+  literal interpolado en un one-liner de shell—, formateados en una tabla prolija con el nombre del
+  test al lado. O sea con la forma exacta de un resultado. Lo salvó imprimir caso por caso en vez del
+  agregado. Ahora el literal viaja por ARCHIVO y no toca el shell nunca.
+- `sabotaje.sh` restauraba el CONTENIDO y no el MODO: `cp` sobre un archivo que existe conserva los
+  permisos del destino, así que un sabotaje que reemplaza el archivo lo dejaba en 644 y el `restaurar`
+  no lo devolvía. **Le rompió una corrida a gio** con «Permission denied» sobre
+  `matar-zombis-agente.sh`, y la pista era peor que el error: `git status` marcaba `M` sin que
+  `git diff` mostrara nada, porque git guarda el modo. Lo encontró y arregló la otra sesión (`4536853`).
+- Mi propia prueba nueva salió INESTABLE: dejaba el bucle latiendo contra un `httptest.Server` que el
+  `defer` cerraba al salir. Pasaba casi siempre. **Lo cazó el control de `sabotaje.sh`, no yo**, en la
+  primera corrida después de escribirla. Se volvió determinista haciendo que los dos tokens den 401 —el
+  estado real de una revocación— con lo que el bucle se da de baja solo.
+
+**Y LA SÉPTIMA FORMA, que es la que queda abierta como método**: el verificador del verificador también
+miente con la forma correcta. Lo más cerca que llegamos de contestarla lo hizo la otra sesión: pasó por
+la herramienta sus nueve guardas **con respuesta ya conocida** —verificadas a mano antes— y las nueve
+dieron rojo con una primera línea distinta cada una. Un verificador se prueba contra casos cuya
+respuesta no sale de él.
+
+Falta la familia no-Go —46 guardas de `grep` sobre `.sh`, `.yml`, `.cmd` y `.md`, que es la del PEOR
+historial del día: las tres veces que un texto satisfizo una guarda sin que la cautela existiera
+(comentario, comentario, string de error) fueron de ésas—. La toma la otra sesión.
+
+
 **2026-09-05 · `deploy/pruebas/sabotaje.sh` — la disciplina de los sabotajes, mecanizada, porque
 declaré SEIS que no funcionaban en un día.**
 

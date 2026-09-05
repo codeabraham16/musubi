@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"musubi/internal/fleet"
+	"sync"
+	"time"
 )
 
 // credDePrueba es un llavero de un solo token sin archivo detrás: lo que necesita cualquier prueba
@@ -256,4 +258,86 @@ func leer(t *testing.T, ruta string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// EL CABLEADO: QUE EL BUCLE DE VERDAD CONSULTE EL LLAVERO ANTES DE DARSE DE BAJA
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ ESTA PRUEBA EXISTE, Y CÓMO SE ENCONTRÓ QUE FALTABA
+//
+// `TestTrasUnCorteElAgenteSeRecuperaConElOtroTokenDelLlavero` (arriba) declara DOS sabotajes:
+// «hacer que Rechazado devuelva siempre false» —que sí la rompe— y «quitar el
+// `if cred.Rechazado()` del case res.revocado del bucle», que **NO**. Esa prueba ejercita
+// `Rechazado()` DIRECTO y nunca el bucle, así que neutralizar el `if` del llamador la deja en verde.
+//
+// Lo destapó `deploy/pruebas/sabotaje.sh` el 2026-09-05, en su primera auditoría de las guardas
+// existentes: de 27 sabotajes declarados y mecánicamente aplicables, éste fue el único que resultó
+// inerte de verdad (el otro candidato era un falso positivo del auditor).
+//
+// Y ES EXACTAMENTE EL MISMO DEFECTO QUE APARECIÓ ESE MISMO DÍA EN EL ARREGLO TÉRMICO: la prueba
+// ejercita la función y el doc promete que romper su CABLEADO la pone en rojo. La forma se repite
+// porque es cómoda: probar una función pura es fácil, probar que alguien la llama es trabajo.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE SE PIERDE SI EL CABLEADO SE ROMPE, que es por qué vale la pena la prueba
+//
+// El `if` rescata a la máquina que se cortó justo después de que el cerebro promoviera la rotación:
+// el token viejo ya murió y el nuevo está en disco sin estrenar. Sin ese `if`, ese caso es un 401
+// eterno y una visita a la máquina — y en `davantis-1`, que tuvo 16 apagones en 11 días, ése no es
+// un escenario teórico.
+//
+// Sabotaje verificado: `if cred.Rechazado()` → `if false` en el `case res.revocado` de
+// bucleDeLatidos. Con eso el bucle se da de baja en el PRIMER 401 y nunca presenta el segundo token.
+func TestElBucleProbaraElOtroTokenAntesDeDarseDeBaja(t *testing.T) {
+	c, _ := credConArchivo(t, "msb_viejo", "msb_nuevo")
+
+	// LOS DOS TOKENS DAN 401, y eso es a propósito: es el estado en que el admin revocó de verdad
+	// —revocar borra los DOS hashes— así que el bucle prueba los dos y SE DA DE BAJA SOLO. Con eso
+	// la prueba termina sin dejar nada corriendo.
+	//
+	// La primera versión devolvía 200 al token nuevo para que «funcionara», y eso dejaba el bucle
+	// latiendo para siempre contra un `httptest.Server` que el `defer ts.Close()` cerraba al salir.
+	// Resultado: la prueba pasaba casi siempre y fallaba de vez en cuando, y el falso rojo lo cazó
+	// el control de `sabotaje.sh` —no yo— en la primera corrida después de escribirla. Una prueba
+	// inestable es peor que ninguna: enseña a correr la suite de nuevo hasta que salga verde.
+	//
+	// Lo que se custodia NO es que el segundo token sirva: es que el bucle LO PRESENTE antes de
+	// rendirse. Eso se ve igual con los dos rechazados, y así el caso es determinista.
+	var mu sync.Mutex
+	var presentados []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		presentados = append(presentados, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	listo := make(chan struct{})
+	go func() {
+		bucleDeLatidos(ts.URL, c, 10*time.Millisecond, 0, nil)
+		close(listo)
+	}()
+	select {
+	case <-listo:
+	case <-time.After(20 * time.Second):
+		t.Fatal("el bucle no terminó: con los dos tokens rechazados tiene que darse de baja")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(presentados) != 2 {
+		t.Fatalf("presentó %d token(s) —%v— y el llavero tenía DOS.\n"+
+			"  Con uno solo, el `if cred.Rechazado()` del case res.revocado no está haciendo su\n"+
+			"  trabajo: el agente se da de baja en el primer 401 y nunca estrena el token nuevo que\n"+
+			"  YA tiene en disco. Ése es el 401 eterno que obliga a ir a la máquina.", len(presentados), presentados)
+	}
+	if presentados[0] != "msb_viejo" {
+		t.Errorf("el primer token presentado fue %q y el orden del archivo manda", presentados[0])
+	}
+	if presentados[1] != "msb_nuevo" {
+		t.Errorf("tras el 401 presentó %q en vez del otro token del llavero: el fallback eligió mal",
+			presentados[1])
+	}
 }
