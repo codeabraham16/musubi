@@ -752,6 +752,45 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · A97 CERRADO EN EL MISMO ACTO — la ventana de mantenimiento no callaba su caso de portada.**
+
+`musubi_fleet_maintenance` se describe a sí misma con este ejemplo como su razón de ser: «**sin
+esto, un reinicio planificado dispara `servicio_caido`**». Un reinicio planificado es el motivo más
+común para declarar una ventana. Y **`MaquinaCaida` no miraba la serie**, así que disparaba a los
+cinco minutos igual: la ventana no hacía lo que su propio texto promete, precisamente en el caso con
+el que se explica.
+
+Medido sobre las 23 alertas del archivo: **18 llevaban la guarda y 5 no**, y la vecina de la misma
+familia —`MaquinaLateSinMedir`— sí la lleva. La intención nunca estuvo en duda; se había aplicado de
+a pedazos. Tres de las cinco correspondían: `MaquinaCaida`, `AgenteCaidoConMaquinaViva` (actualizar
+un agente ES mantenimiento, y el agente para mientras la máquina sigue en la red — que es
+literalmente la condición de esa regla; el 2026-09-05 se actualizaron dos agentes en Windows y esto
+era lo que iba a sonar) y `MaquinaSinInventario` (un agente recién instalado late antes de haber
+enumerado nada). Las otras dos no: `FlotaSinTelemetria` es global y sin etiqueta `device`, y las
+tres de políticas cuentan el motor y no una máquina — ahí la ventana ya corta la causa un nivel
+antes, porque las políticas no actúan.
+
+**Lo que queda como guarda es más importante que las tres líneas**: `TestTodaAlertaDeUnaMaquinaRespetaLaVentanaDeMantenimiento`
+exige que toda alerta nueva lleve la guarda **o esté en una lista de excepciones con su motivo
+escrito**, y falla también al revés —una excepción sobre una alerta que ya la tiene, o sobre una que
+ya no existe—. Sin eso, la regla 26 se agrega sin la línea y se descubre de madrugada, que es cómo
+se aprende a no declarar ventanas.
+
+**Y una honestidad que vale más que el arreglo**: la primera versión de la segunda prueba —la que
+exige `on(project, device)` en el operando— **pasaba en verde con la guarda escrita mal**. Buscaba
+el `on(...)` en todo el texto anterior a la métrica, y en `MaquinaCaida` ese texto ya tenía uno, el
+de la cláusula de `musubi_fleet_net_up`. Lo destapó correr el sabotaje y ver `ok`. Es la misma forma
+que este cabo: una prueba que afirma cubrir lo que no cubre. Quedó escrito dentro de la prueba, no
+borrado.
+
+Sale de aplicar sistemáticamente la pregunta que dejaron los cinco casos del día: **no «¿esto está
+mal?» sino «¿quién más hace esto, y tiene la misma guarda?»**. Cuatro ejes se revisaron y salieron
+limpios (`-trimpath` en los dos productores de artefactos, la REGLA DE LOS PARES en los tres
+colectores, el eje de consentimiento contra la telemetría —que su documentación acota a los tres
+caminos de acceso, no a la medición— y `Muestra.Valida()`, que el llamador aplica a los dos tiers).
+El quinto fue éste.
+
+
 **2026-09-05 · A86 CERRADO — `pide` sobre un `exec` se endurece a prohibido. Decisión de gio.**
 
 Era la tercera celda de la familia de A83/A85: `AvisaAlUsuario()` es true para `pide` —preguntar es

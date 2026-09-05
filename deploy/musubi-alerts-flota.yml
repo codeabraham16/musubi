@@ -90,7 +90,24 @@ groups:
       # antes. Es la propiedad que hace seguro el cambio: donde no se puede medir —un cerebro sin
       # tailnet, una máquina que no está en él— el eje se apaga solo en vez de callar la alerta.
       - alert: MaquinaCaida
-        expr: musubi_fleet_device_up == 0 unless on(project, device) musubi_fleet_net_up == 1
+        # LA VENTANA DE MANTENIMIENTO TIENE QUE CALLAR ESTA, Y ERA LA QUE NO LA MIRABA.
+        #
+        # `musubi_fleet_maintenance` se describe con este caso EXACTO como su razón de ser: «sin
+        # esto, un reinicio planificado dispara servicio_caido». Un reinicio planificado es el
+        # motivo más común para declarar una ventana — y `MaquinaCaida` disparaba a los cinco
+        # minutos igual, o sea que la ventana no hacía lo que su propio texto promete.
+        #
+        # Medido el 2026-09-05 sobre las 23 reglas del archivo: 18 llevaban la guarda y 5 no, y
+        # `MaquinaLateSinMedir` —la vecina, misma familia— sí la lleva. La intención estaba clara y
+        # aplicada de a pedazos. Ver A97.
+        #
+        # EL COSTO ESTÁ ASUMIDO Y DICHO: durante la ventana, una máquina que se muere de verdad no
+        # avisa. Es el trato de cualquier ventana de mantenimiento, dura como máximo 24 h, se
+        # declara con motivo y queda en la cronología. Las otras 18 reglas ya lo aceptaban.
+        expr: >-
+          musubi_fleet_device_up == 0
+          unless on(project, device) musubi_fleet_net_up == 1
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -99,7 +116,14 @@ groups:
 
       # --- La máquina está viva y el agente no ---
       - alert: AgenteCaidoConMaquinaViva
-        expr: musubi_fleet_device_up == 0 and on(project, device) musubi_fleet_net_up == 1
+        # Igual que su gemela de arriba, y acá el caso es todavía más directo: actualizar el agente
+        # es una actividad de mantenimiento, y el agente PARA mientras la máquina sigue en la red —
+        # que es literalmente la condición de esta regla. El 2026-09-05 se actualizó el agente en
+        # dos Windows y esto era lo que iba a sonar.
+        expr: >-
+          musubi_fleet_device_up == 0
+          and on(project, device) musubi_fleet_net_up == 1
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -424,9 +448,13 @@ groups:
         # inventario, y alertar de eso sería duplicar MaquinaCaida con otro nombre.
         #
         # Sólo Tier A: un Tier B no corre nuestro binario y no tiene con qué enumerarse.
+        # Y LA VENTANA DE MANTENIMIENTO TAMBIÉN LA CALLA: reinstalar el agente es mantenimiento, y
+        # un agente recién puesto late (`device_up == 1`) ANTES de haber enumerado nada — que es
+        # exactamente la condición de esta regla. Sin la guarda, arreglar dispara la alarma.
         expr: >-
           (musubi_fleet_device_up{tier="A"} == 1)
             unless on(project, device) count by(project, device) (musubi_fleet_service_up)
+            unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
         labels:
           severity: warning
