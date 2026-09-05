@@ -33,7 +33,11 @@ type LecturasProc struct {
 	Loadavg string // /proc/loadavg
 	Uptime  string // /proc/uptime
 	Df      string // salida de `df -B1 /` (o vacío)
-	TempMil string // /sys/class/thermal/thermal_zone0/temp, en miligrados
+	// TempMil lleva UNA LÍNEA POR ZONA TÉRMICA, `<type> <miligrados>`, y no el contenido de
+	// una sola. Quién de todas contesta la pregunta lo decide ElegirTemperatura, que es
+	// compartido: leer `thermal_zone0` fijo medía `acpitz` —estático— en vez del paquete de
+	// CPU. Se sigue aceptando un número suelto sin tipo: es el formato viejo.
+	TempMil string
 	// Procs es el LISTADO de /proc (un nombre por línea), no un archivo: local sale de
 	// os.ReadDir, remoto de `ls -1 /proc`. Se comparte como TEXTO —y no ya contado— para que el
 	// filtro difícil, «el nombre es todo dígitos», esté escrito UNA vez y lo usen las tres
@@ -56,7 +60,7 @@ func MuestraDesde(l LecturasProc, cpu *contadorCPU) Muestra {
 	ParsearLoadavg(l.Loadavg, &m)
 	m.UptimeSeg = ParsearUptime(l.Uptime)
 	ParsearDf(l.Df, &m)
-	m.TempC = ParsearTempMiligrados(l.TempMil)
+	m.TempC = ElegirTemperatura(l.TempMil)
 	m.NumProcesos = ContarPids(l.Procs)
 	return m
 }
@@ -227,6 +231,90 @@ func ParsearDf(texto string, m *Muestra) {
 			return
 		}
 	}
+}
+
+// ── Qué zona térmica se mira ─────────────────────────────────────────────────────────────────
+//
+// LEER `thermal_zone0` FIJO MIDE OTRA COSA, Y MIDE ALGO PLAUSIBLE — que es lo que lo hace peligroso.
+//
+// Medido en `musubi-server` el 2026-09-05, con tres zonas presentes:
+//
+//	thermal_zone0  acpitz          27,8 °C   ← lo que se leía
+//	thermal_zone1  pch_cannonlake  51,0 °C
+//	thermal_zone2  x86_pkg_temp    41,0 °C   ← el paquete de CPU, el que contesta la pregunta
+//
+// El síntoma que lo destapó no fue un error sino una QUIETUD: 91 puntos en tres horas con el
+// valor idéntico hasta la décima, en una máquina corriendo el cerebro, Prometheus y contenedores.
+// Un sensor real jitterea. `acpitz` es, en muchos equipos, un valor fijo del firmware o una
+// lectura de chasis — tiene las unidades correctas, el rango plausible y la forma de un dato, y
+// responde a otra pregunta. La serie existía, no alertaba nunca, y nadie podía saber por qué.
+//
+// Importa porque A79 dice que la térmica es la ÚNICA causa de los apagones de una máquina que la
+// flota podría ver sola. Una serie congelada no la ve.
+//
+// EL ORDEN ES POR `type` Y NO POR NÚMERO DE ZONA: el índice no significa nada —depende del orden
+// en que el kernel registró los drivers— y es exactamente lo que hizo que `zone0` pareciera «la
+// principal». `acpitz` va ÚLTIMO y no se descarta: en una máquina donde es lo único que hay, una
+// lectura de chasis es mejor que ninguna, y el fallback deja eso dicho en vez de devolver nil.
+var preferenciaDeZonaTermica = []string{
+	"x86_pkg_temp", // Intel: temperatura del paquete. La respuesta canónica a «¿está caliente?»
+	"coretemp",     // por núcleo, misma familia
+	"k10temp",      // AMD
+	"zenpower",     // AMD, driver alternativo
+	"cpu_thermal",  // ARM / Raspberry Pi
+	"cpu-thermal",  // la misma, con guion: los dos existen según kernel
+	"soc_thermal",  // SoC embebidos
+}
+
+// ElegirTemperatura elige la zona térmica que contesta «¿se está calentando esta máquina?».
+//
+// Recibe una línea por zona, `<type> <miligrados>`, y devuelve la primera que exista según
+// `preferenciaDeZonaTermica`; si ninguna preferida está, prefiere CUALQUIERA antes que `acpitz`,
+// y `acpitz` sólo si es la única. Tolera además el formato VIEJO —un número suelto sin tipo—
+// porque es lo que devuelve una máquina cuyo agente todavía no se actualizó.
+//
+// La plausibilidad la sigue decidiendo ParsearTempMiligrados: una zona presente pero en 0 se
+// descarta y se prueba la siguiente, en vez de dejar que un sensor apagado gane por preferencia.
+func ElegirTemperatura(texto string) *float64 {
+	type zona struct {
+		tipo string
+		val  *float64
+	}
+	var zonas []zona
+	for _, linea := range strings.Split(texto, "\n") {
+		linea = strings.TrimSpace(linea)
+		if linea == "" {
+			continue
+		}
+		campos := strings.Fields(linea)
+		if len(campos) == 1 {
+			// Formato viejo: un número suelto, sin tipo. Se acepta tal cual.
+			if v := ParsearTempMiligrados(campos[0]); v != nil {
+				zonas = append(zonas, zona{tipo: "", val: v})
+			}
+			continue
+		}
+		if v := ParsearTempMiligrados(campos[len(campos)-1]); v != nil {
+			zonas = append(zonas, zona{tipo: strings.ToLower(campos[0]), val: v})
+		}
+	}
+	if len(zonas) == 0 {
+		return nil
+	}
+	for _, preferida := range preferenciaDeZonaTermica {
+		for _, z := range zonas {
+			if z.tipo == preferida {
+				return z.val
+			}
+		}
+	}
+	// Ninguna preferida: cualquiera antes que `acpitz`.
+	for _, z := range zonas {
+		if z.tipo != "acpitz" {
+			return z.val
+		}
+	}
+	return zonas[0].val
 }
 
 // ParsearTempMiligrados convierte el contenido de una zona térmica. Devuelve nil si no hay sensor
