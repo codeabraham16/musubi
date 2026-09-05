@@ -748,6 +748,46 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · CERRADO — la fila del plano de acceso tiene tres escalones, el código la cumple entera y nada la sostenía.**
+
+Salió de leer de a pares los comentarios que argumentan un ORDEN, que es el instrumento que apareció
+persiguiendo A101. `methods_pantalla.go:85` y `methods_shell.go:72` dicen lo MISMO con todas las
+letras —«EL VETO DEL DUEÑO VA SOLO Y VA PRIMERO»— y `methods_pantalla.go:144` argumenta el lugar de
+los cuatro ojos con dos consecuencias de dominio. Lo que llamó la atención no fue el código: fue que
+tres comentarios distintos se tomen el trabajo de argumentar un orden.
+
+**LA FILA ES: veto del dueño → cuatro ojos → `pide`/`avisa`.** Cada escalón molesta a más gente que
+el anterior, y el orden es el que gasta el tiempo de la menor cantidad de personas posible:
+
+- el veto va solo y primero porque `prohibido` **no necesita a nadie** para decidir;
+- los cuatro ojos antes del aviso, porque si no la persona sentada recibe «alguien está por entrar»
+  y no entra nadie durante media hora — **un aviso de algo que no pasó enseña a ignorar los avisos**;
+- los cuatro ojos antes del `pide`, porque si no **se le gasta el «sí» a esa persona en una sesión
+  que puede no abrirse nunca: un permiso que se concede y se tira**. Y la próxima vez que se le
+  pregunte, ya aprendió que contestar no sirve.
+
+Ese último argumento es el mejor del día y no es técnico: es sobre **qué le enseña el sistema a la
+persona**. Ninguna guarda lo encuentra; sólo se ve leyendo por qué alguien eligió un orden.
+
+Se agregaron las DOS guardas que faltaban de las tres, cada una con su control positivo separado
+—sin ellos pasarían igual contra la feature entera apagada— y los sabotajes corridos antes de
+creerle al verde: `5ef31c5` (veto antes de cuatro ojos) y `8058369` (cuatro ojos antes del `pide`).
+De paso quedó verificado que **exec NO separa el veto y está bien**: los cuatro ojos aplican sólo a
+`shell` y `screen`, así que ahí no hay nada que ordenar antes.
+
+**NO QUEDA CABO ABIERTO, y la pregunta se planteó**: al invertir el orden, quien pide una shell sobre
+una máquina en `prohibido` recibe **«esperando aprobación» en vez de «prohibido»** —la puerta
+contesta y retorna antes de que corra el chequeo de consentimiento—, o sea que se le dice a alguien
+que espere algo que no va a pasar nunca. Eso NO es un cabo: es la consecuencia de una inversión que
+hoy no existe y que ya no se puede introducir en silencio. Lo que sí era un hueco es que nada de esto
+estuviera registrado, y eso es lo que arregla esta entrada.
+
+**Y una corrección de método**: mi propio comentario predijo que el síntoma de invertir sería «una
+fila de aprobación pendiente». El sabotaje mostró otro —que la llamada deja de dar error— y las dos
+aserciones se quedaron porque cubren inversiones DISTINTAS. El comentario dice lo medido, no lo que
+esperaba.
+
+
 **2026-09-05 · CERRADO — un archivo de secreto con dos líneas no da 401: hace que el pedido no salga.**
 
 Salió de verificar la contradicción de precedencia que otra sesión dejó en **A101**, y es un defecto
