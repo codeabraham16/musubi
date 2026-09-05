@@ -54,9 +54,16 @@ func runDashboard(args []string) {
 	if tokenEnv == "" {
 		tokenEnv = "MUSUBI_TOKEN"
 	}
-	tokenRelay, _ := config.SecretoDeEnv(tokenEnv) // el motivo de un vacío lo explica motivoSinRelay
+	// EL ERROR DEL ARCHIVO NO SE TIRA. Desde que el archivo le gana a la variable (A101), un
+	// `<VAR>_FILE` roto ya no cae a la variable: devuelve error y token vacío. Descartarlo acá
+	// haría que el riel dijera «falta $MUSUBI_TOKEN» con la variable PUESTA — una causa falsa que
+	// manda a arreglar lo que no está roto. Se dice en voz alta y se lleva al motivo.
+	tokenRelay, errToken := config.SecretoDeEnv(tokenEnv)
+	if errToken != nil {
+		fmt.Fprintf(os.Stderr, "musubi: %v\n", errToken)
+	}
 	relay := nuevoRelay(central, tokenRelay)
-	relay.explicarSinCentral(motivoSinRelay(central, tokenEnv))
+	relay.explicarSinCentral(motivoSinRelay(central, tokenEnv, errToken))
 
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
@@ -95,7 +102,7 @@ func runDashboard(args []string) {
 	if relay.url != "" {
 		fmt.Printf("Riel en vivo: central enlazado a %s\n", relay.host())
 	} else {
-		fmt.Printf("Riel en vivo: central apagado (%s)\n", motivoSinRelay(central, tokenEnv))
+		fmt.Printf("Riel en vivo: central apagado (%s)\n", motivoSinRelay(central, tokenEnv, errToken))
 	}
 	fmt.Printf("Riel en vivo: local siguiendo %s\n", dirSpool)
 	fmt.Println("Ctrl+C para detener.")
@@ -362,10 +369,17 @@ type dashboardPulse struct {
 
 // motivoSinRelay explica en una linea por que el riel quedo apagado. Decir "apagado" a secas
 // obliga a adivinar entre dos causas distintas con arreglos distintos.
-func motivoSinRelay(central, tokenEnv string) string {
+// UNA CREDENCIAL ROTA NO ES UNA CREDENCIAL QUE FALTA, y confundirlas manda a arreglar lo que no
+// está roto: con `<VAR>_FILE` apuntando a un archivo ilegible y `<VAR>` puesta, la versión anterior
+// decía «falta $MUSUBI_TOKEN» — y la variable estaba ahí. El error viaja desde el llamador, que es
+// el único que lo tuvo en la mano.
+func motivoSinRelay(central, tokenEnv string, errToken error) string {
 	falta := []string{}
 	if strings.TrimSpace(central) == "" {
 		falta = append(falta, "$MUSUBI_CENTRAL_URL / --central")
+	}
+	if errToken != nil {
+		return "la credencial está MAL configurada, no ausente: " + errToken.Error()
 	}
 	if tok, _ := config.SecretoDeEnv(tokenEnv); tok == "" {
 		falta = append(falta, "$"+tokenEnv)

@@ -33,29 +33,62 @@ if [ -z "$TOOL" ]; then
   exit 2
 fi
 
-# LA FUENTE DE LA CREDENCIAL SE NOMBRA, Y LA PRECEDENCIA SE AVISA (A65).
+# LA FUENTE DE LA CREDENCIAL SE NOMBRA, Y GANA EL ARCHIVO (A65, invertido por A101).
 #
-# `MUSUBI_TOKEN` GANA sobre `MUSUBI_TOKEN_FILE`, y eso es correcto —una variable puesta a mano es
-# una decisión más reciente que un archivo— pero es silencioso, y ahí está el problema: una
-# variable a medio setear de hace media hora le gana al archivo que acabás de crear, y el 401 que
-# vuelve no menciona ninguna de las dos.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# GANABA LA VARIABLE, Y SE DIO VUELTA EL 2026-09-05 — decisión de gio, cabo A101
 #
-# Costó cuatro intentos el 2026-08-31, con el YAML, el hash, la ruta, el proceso y la recarga
-# TODOS verificados correctos. La causa estaba en el shell, que era el único lugar donde nadie
-# miró porque nada apuntaba ahí.
-TOKEN="${MUSUBI_TOKEN:-}"
-FUENTE="la variable MUSUBI_TOKEN"
-if [ -z "$TOKEN" ] && [ -n "${MUSUBI_TOKEN_FILE:-}" ]; then
+# El argumento viejo era «una variable puesta a mano es una decisión más reciente que un archivo».
+# El nuevo no es una preferencia sino una propiedad del mecanismo: EL ARCHIVO ES EL ÚNICO DE LOS
+# DOS QUE PUEDE ROTAR. El cerebro ofrece un token nuevo y algo lo escribe en el archivo; una
+# variable ya está en el entorno de un proceso que arrancó, y ahí no llega nadie.
+#
+# Se pagó dos veces con la regla anterior. El 2026-08-31 costó cuatro intentos con el YAML, el
+# hash, la ruta, el proceso y la recarga TODOS verificados correctos — la causa estaba en el shell,
+# el único lugar donde nadie miró porque nada apuntaba ahí. Y el 2026-09-05 una `MUSUBI_TOKEN`
+# REVOCADA le ganó en silencio a un `MUSUBI_TOKEN_FILE` correcto, y el arreglo terminó siendo
+# `export MUSUBI_TOKEN="$(cat ~/.musubi/token)"`: rodear la precedencia en vez de usarla.
+#
+# `internal/config/secreto_env.go` hace exactamente lo mismo, y esa es la mitad que importa: los
+# dos caminos —el script y el binario— tienen que contestar igual, que es lo que A101 vino a cerrar.
+TOKEN=""
+FUENTE=""
+if [ -n "${MUSUBI_TOKEN_FILE:-}" ]; then
+  if [ ! -r "$MUSUBI_TOKEN_FILE" ]; then
+    echo "MUSUBI_TOKEN_FILE apunta a $MUSUBI_TOKEN_FILE y no se puede leer." >&2
+    echo "  NO se cae a MUSUBI_TOKEN: un archivo nombrado y roto es una configuración rota, y usar" >&2
+    echo "  otra credencial en silencio es cómo un 401 termina apuntando al lugar equivocado." >&2
+    exit 2
+  fi
+  # UN ARCHIVO DE VARIAS LÍNEAS SE RECHAZA, NO SE RECORTA (A101, dimensión 2).
+  #
+  # Esto mandaba la PRIMERA LÍNEA sin decir nada —medido el 2026-09-05: viajó un `Bearer` con el
+  # token viejo y el guion salió con exit=0—. Y la primera línea es el token MÁS VIEJO, porque el
+  # formato de lista se APENDEA: elegía justo el que la rotación estaba retirando.
+  #
+  # El formato de varios tokens existe SÓLO para MUSUBI_DEVICE_TOKEN_FILE, el del agente, que es el
+  # único con máquina para probar el siguiente cuando uno da 401. Acá no hay reintento: quedarse con
+  # una de las dos líneas es elegir credencial a ciegas.
+  LINEAS="$(grep -c '[^[:space:]]' "$MUSUBI_TOKEN_FILE" || true)"
+  if [ "${LINEAS:-0}" -gt 1 ]; then
+    echo "MUSUBI_TOKEN_FILE apunta a $MUSUBI_TOKEN_FILE y ese archivo tiene $LINEAS líneas no vacías." >&2
+    echo "  Este camino espera UN secreto y no una lista, y no tiene con qué probar el siguiente." >&2
+    echo "  Dejá una sola línea. (El formato de varios tokens es SÓLO de MUSUBI_DEVICE_TOKEN_FILE.)" >&2
+    exit 2
+  fi
   TOKEN="$(cat "$MUSUBI_TOKEN_FILE")"
   FUENTE="el archivo $MUSUBI_TOKEN_FILE"
+elif [ -n "${MUSUBI_TOKEN:-}" ]; then
+  TOKEN="$MUSUBI_TOKEN"
+  FUENTE="la variable MUSUBI_TOKEN"
 fi
 if [ -z "$TOKEN" ]; then
   echo "falta la credencial: exportá MUSUBI_TOKEN o MUSUBI_TOKEN_FILE" >&2
   exit 2
 fi
 if [ -n "${MUSUBI_TOKEN:-}" ] && [ -n "${MUSUBI_TOKEN_FILE:-}" ]; then
-  echo "aviso: MUSUBI_TOKEN y MUSUBI_TOKEN_FILE están las dos puestas. Se usa LA VARIABLE; el archivo ni se abre." >&2
-  echo "       Si querías el archivo: unset MUSUBI_TOKEN" >&2
+  echo "aviso: MUSUBI_TOKEN y MUSUBI_TOKEN_FILE están las dos puestas. Se usa EL ARCHIVO; la variable se ignora." >&2
+  echo "       Es el único de los dos que puede rotar. Si querías la variable: unset MUSUBI_TOKEN_FILE" >&2
 fi
 
 # El JSON se arma con python y no con printf: los argumentos llevan comillas, y concatenar a mano
@@ -98,7 +131,7 @@ if codigo == "401":
         "   1. la credencial es buena pero el cerebro TODAVÍA NO LA RECARGÓ. El vigía mira el\n"
         "      mtime de principals.yaml cada 10 s: si la acabás de dar de alta, esperá y reintentá.\n"
         "   2. estás mandando otra credencial de la que creés. Mirá la línea «se usó» de arriba:\n"
-        "      MUSUBI_TOKEN le gana a MUSUBI_TOKEN_FILE, y una variable vieja gana en silencio.\n"
+        "      MUSUBI_TOKEN_FILE le gana a MUSUBI_TOKEN, y un archivo viejo gana en silencio.\n"
         "   3. el principal fue revocado, o su token_sha256 no es el SHA-256 de este token."
         % (fuente, largo))
 

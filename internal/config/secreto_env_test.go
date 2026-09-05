@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -41,7 +42,16 @@ func TestSecretoDeEnvCaeAlArchivoCuandoLaVariableNoEsta(t *testing.T) {
 	}
 }
 
-func TestSecretoDeEnvLaVariableDirectaLeGanaAlArchivo(t *testing.T) {
+// EL ARCHIVO LE GANA A LA VARIABLE — decidido por gio el 2026-09-05 (A101).
+//
+// El argumento no es de gusto sino de mecanismo: el archivo es el ÚNICO de los dos que puede rotar.
+// El cerebro ofrece un token nuevo en la respuesta del latido y el agente lo apenda al archivo; una
+// variable ya está en el entorno de un proceso que arrancó, y ahí no llega nadie. El mismo día se
+// pagó: un `MUSUBI_TOKEN` REVOCADO en la terminal le ganó en silencio a un `MUSUBI_TOKEN_FILE`
+// correcto.
+//
+// Sabotaje que la hace fallar: volver a mirar la variable antes que el archivo.
+func TestSecretoDeEnvElArchivoLeGanaALaVariable(t *testing.T) {
 	dir := t.TempDir()
 	ruta := filepath.Join(dir, "token")
 	if err := os.WriteFile(ruta, []byte("del-archivo"), 0o600); err != nil {
@@ -50,9 +60,59 @@ func TestSecretoDeEnvLaVariableDirectaLeGanaAlArchivo(t *testing.T) {
 	t.Setenv("PRUEBA_TOKEN", "de-la-variable")
 	t.Setenv("PRUEBA_TOKEN_FILE", ruta)
 
-	got, _ := SecretoDeEnv("PRUEBA_TOKEN")
-	if got != "de-la-variable" {
-		t.Fatalf("la variable directa tiene que ganar; se obtuvo %q", got)
+	got, err := SecretoDeEnv("PRUEBA_TOKEN")
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if got != "del-archivo" {
+		t.Fatalf("el archivo tiene que ganar —es el único que puede rotar—; se obtuvo %q", got)
+	}
+}
+
+// LA MITAD QUE DE VERDAD PUEDE MORDER: archivo ROTO más variable BUENA tiene que dar ERROR.
+//
+// Es la parte peligrosa de invertir la precedencia. Si `SecretoDeEnv` cayera a la variable cuando
+// el archivo nombrado no se puede leer, una configuración rota se convertiría en una credencial
+// silenciosa DISTINTA de la que se pidió — y con la variable buena puesta ni siquiera fallaría,
+// así que nadie se enteraría de que el archivo está roto hasta la próxima rotación, cuando ya no
+// hay a qué volver. Es el defecto de A89 entrando por la puerta de al lado.
+//
+// Es el hermano de `cmd/musubi/agent_token_fuente_test.go`, que ya fija esto del lado del agente.
+//
+// Sabotaje que la hace fallar: que el error del archivo caiga a la variable en vez de propagarse.
+func TestSecretoDeEnvConArchivoRotoNoCaeALaVariable(t *testing.T) {
+	t.Setenv("PRUEBA_TOKEN", "de-la-variable")
+	t.Setenv("PRUEBA_TOKEN_FILE", filepath.Join(t.TempDir(), "no-existe"))
+
+	got, err := SecretoDeEnv("PRUEBA_TOKEN")
+	if err == nil {
+		t.Fatalf("con el archivo roto tiene que fallar y NO usar la variable; devolvió %q sin error", got)
+	}
+	if got != "" {
+		t.Fatalf("además del error devolvió %q: un secreto y un error a la vez invita a usar el secreto", got)
+	}
+	if !strings.Contains(err.Error(), "PRUEBA_TOKEN_FILE") {
+		t.Fatalf("el error tiene que nombrar la variable culpable, dijo: %v", err)
+	}
+}
+
+// Y lo mismo con el archivo de VARIAS LÍNEAS: la variable buena no lo rescata. Decidido junto con
+// la precedencia (A101, dimensión 2): un archivo de secreto es UNA línea, y el formato de lista
+// existe SÓLO para `MUSUBI_DEVICE_TOKEN_FILE`, que es el que tiene máquina para usarlo.
+func TestSecretoDeEnvConArchivoDeVariasLineasTampocoCaeALaVariable(t *testing.T) {
+	ruta := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(ruta, []byte("uno\ndos\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRUEBA_TOKEN", "de-la-variable")
+	t.Setenv("PRUEBA_TOKEN_FILE", ruta)
+
+	got, err := SecretoDeEnv("PRUEBA_TOKEN")
+	if err == nil {
+		t.Fatalf("un archivo de dos líneas tiene que fallar; devolvió %q", got)
+	}
+	if got != "" {
+		t.Fatalf("devolvió %q junto con el error", got)
 	}
 }
 
@@ -367,5 +427,32 @@ func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
 			"la rotación está retirando—. Quien lea esto y decida «me quedo con la primera línea»\n"+
 			"elige la credencial equivocada, y ninguno de esos caminos reintenta: 401 permanente.",
 			frase, strings.Join(culpables, "\n  "))
+	}
+}
+
+// LA PRUEBA DE COMPORTAMIENTO DE LA PRECEDENCIA TIENE QUE SEGUIR EXISTIENDO Y SER EJECUTABLE.
+//
+// `deploy/pruebas/precedencia-del-token.sh` levanta un oidor, corre `musubi-tool.sh` de verdad y
+// MIRA QUÉ BEARER LLEGÓ. Es la única forma de custodiar la mitad de A101 que vive en bash, y es de
+// comportamiento a propósito: el 2026-09-05 se auditaron las 46 guardas de grep sobre archivos de
+// despliegue y SIETE no se ponían rojas con su propio sabotaje, todas porque el texto que buscaban
+// vivía donde no decide nada. La palabra «archivo» aparece decenas de veces en ese guion y ninguna
+// elige la credencial que sale por el socket.
+//
+// El bit de ejecución importa tanto como el archivo: una comprobación que hay que invocar con
+// `bash` de por medio se corre menos, y la que no se corre no existe.
+//
+// Sabotaje que la hace fallar: borrar el guion, o quitarle el bit de ejecución.
+func TestLaPruebaDeComportamientoDeLaPrecedenciaSigueEnPie(t *testing.T) {
+	ruta := filepath.Join("..", "..", "deploy", "pruebas", "precedencia-del-token.sh")
+	fi, err := os.Stat(ruta)
+	if err != nil {
+		t.Fatalf("falta %s: %v\nSin ella, la precedencia de A101 queda custodiada sólo del lado de Go,\n"+
+			"y la mitad que decidió mal dos veces vive en bash.", ruta, err)
+	}
+	// NTFS no tiene el bit y git en Windows no lo preserva: ahí la aserción sería siempre falsa,
+	// dijera lo que dijera el repo. La que importa —que el guion ESTÉ— corre en las tres.
+	if runtime.GOOS != "windows" && fi.Mode()&0o111 == 0 {
+		t.Errorf("%s no es ejecutable", ruta)
 	}
 }

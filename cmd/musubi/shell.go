@@ -39,7 +39,14 @@ import (
 // runShell abre una sesión interactiva y conecta la terminal local con ella.
 func runShell(args []string) {
 	cerebro := strings.TrimSpace(os.Getenv(envCerebro))
-	token, _ := config.SecretoDeEnv("MUSUBI_TOKEN")
+	// UN ARCHIVO DE TOKEN ROTO SE DICE Y SE PARA. Desde A101 el archivo le gana a la variable, así
+	// que descartar este error dejaría a la shell saliendo sin credencial y contestando un 401 que
+	// no nombra la causa — con la variable puesta, además, apuntando al lugar equivocado.
+	token, errToken := config.SecretoDeEnv("MUSUBI_TOKEN")
+	if errToken != nil {
+		fmt.Fprintf(os.Stderr, "musubi shell: %v\n", errToken)
+		os.Exit(1)
+	}
 	var maquina, proyecto string
 
 	for i := 0; i < len(args); i++ {
@@ -51,7 +58,11 @@ func runShell(args []string) {
 			}
 		case "--token-env":
 			if i+1 < len(args) {
-				token, _ = config.SecretoDeEnv(args[i+1])
+				var err error
+				if token, err = config.SecretoDeEnv(args[i+1]); err != nil {
+					fmt.Fprintf(os.Stderr, "musubi shell: %v\n", err)
+					os.Exit(1)
+				}
 				i++
 			}
 		case "--project":

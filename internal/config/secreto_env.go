@@ -21,20 +21,45 @@ const SufijoArchivoDeSecreto = "_FILE"
 // fallando su drain cada 30 s contra el central durante horas. Una recomendación que sólo entiende
 // la mitad del sistema es peor que no darla. Ver el cabo A89.
 //
-// Precedencia: la variable directa gana sobre el archivo, igual que en `musubi-tool.sh`, porque
-// algo puesto a mano en el entorno es una decisión más explícita que un archivo que quedó ahí.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// PRECEDENCIA: GANA EL ARCHIVO — decidido por gio el 2026-09-05, cerrando A101
 //
-// Devuelve error SÓLO si el archivo fue nombrado y no se pudo leer: eso es una configuración rota y
+// Este helper hacía ganar a la VARIABLE, copiando a `musubi-tool.sh`, con el argumento «algo puesto
+// a mano en el entorno es una decisión más explícita que un archivo que quedó ahí». `agent_token.go`
+// hacía lo contrario, y SU argumento es mejor porque no es una preferencia sino una propiedad del
+// mecanismo: **el archivo es el único de los dos que puede rotar**. El cerebro ofrece un token nuevo
+// en la respuesta del latido y el agente lo apenda al archivo; una variable ya está en el entorno de
+// un proceso que arrancó, y ahí no llega nadie. Si están las dos puestas, la que manda tiene que ser
+// la que puede sobrevivir a una rotación.
+//
+// LO PAGAMOS EL MISMO DÍA. La terminal de gio tenía un `MUSUBI_TOKEN` REVOCADO que le ganó en
+// silencio a un `MUSUBI_TOKEN_FILE` correcto; el arreglo terminó siendo derivar la variable del
+// archivo (`export MUSUBI_TOKEN="$(cat ~/.musubi/token)"`), o sea RODEAR la precedencia en vez de
+// usarla. Con archivo-gana, ese rodeo sobra.
+//
+// LO QUE SE PIERDE, dicho para que nadie lo redescubra: ya no se puede pisar un archivo con una
+// variable para probar con otro principal. Eso se hace con `--token-env <OTRA_VAR>`, que los cuatro
+// comandos que lo ofrecen ya soportan y es como está usado hoy en esta máquina.
+//
+// EL RIESGO QUE QUEDA, acotado a propósito: un `_FILE` legible pero VIEJO le gana en silencio a una
+// variable buena. Acotado porque los dos modos ruidosos ya están cubiertos —un archivo ilegible es
+// error, y uno de varias líneas también—, así que el silencio sólo ocurre con un archivo bien
+// formado y desactualizado.
+//
+// Devuelve error SÓLO si el archivo fue nombrado y no se pudo usar: eso es una configuración rota y
 // merece ruido, no un secreto vacío que después falla como un 401 sin explicación.
 func SecretoDeEnv(nombre string) (string, error) {
 	if nombre == "" {
 		return "", nil
 	}
-	if v := strings.TrimSpace(os.Getenv(nombre)); v != "" {
-		return v, nil
-	}
+	// EL ARCHIVO PRIMERO. Si está nombrado, DECIDE — incluso para fallar: caer a la variable
+	// cuando el archivo está roto convertiría una configuración rota en una credencial silenciosa
+	// distinta de la que se pidió, que es el defecto de A89 entrando por la puerta de al lado.
 	ruta := strings.TrimSpace(os.Getenv(nombre + SufijoArchivoDeSecreto))
 	if ruta == "" {
+		if v := strings.TrimSpace(os.Getenv(nombre)); v != "" {
+			return v, nil
+		}
 		return "", nil
 	}
 	datos, err := os.ReadFile(ruta)
@@ -60,9 +85,9 @@ func SecretoDeEnv(nombre string) (string, error) {
 	// intentos de diagnóstico el 2026-08-31 con todo lo demás verificado correcto (A89).
 	//
 	// POR QUÉ SE RECHAZA Y NO SE ADIVINA LA PRIMERA LÍNEA: acá no hay un formato multi-token
-	// definido. El que SÍ existe —una lista de tokens, el más VIEJO primero —se APENDEA (`apendarToken`), medido en
-	// `agent_token_test.go:56-58`— para que una rotación
-	// tenga fallback— es del token de DISPOSITIVO y lo lee `cmd/musubi/agent_token.go`, que es otra
+	// definido. El que SÍ existe —una lista de tokens, el más VIEJO primero, porque `apendarToken`
+	// agrega al final (medido en `agent_token_test.go:56-58`), para que una rotación tenga
+	// fallback— es del token de DISPOSITIVO y lo lee `cmd/musubi/agent_token.go`, que es otra
 	// variable (`MUSUBI_DEVICE_TOKEN_FILE`). Quedarse con la primera línea acá inventaría ese
 	// formato para un camino que no lo tiene, y elegiría en silencio entre dos credenciales cuando
 	// lo honesto es decir que no se sabe cuál quiso poner.

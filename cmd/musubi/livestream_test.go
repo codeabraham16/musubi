@@ -245,13 +245,35 @@ func TestSinEnlaceElRielExplicaPorQue(t *testing.T) {
 // R5 · motivoSinRelay nombra LO QUE FALTA, no "apagado" a secas: son dos causas con dos arreglos.
 func TestMotivoSinRelayNombraLoQueFalta(t *testing.T) {
 	t.Setenv("MUSUBI_TEST_TOKEN_RIEL", "")
-	if m := motivoSinRelay("", "MUSUBI_TEST_TOKEN_RIEL"); !strings.Contains(m, "MUSUBI_CENTRAL_URL") || !strings.Contains(m, "MUSUBI_TEST_TOKEN_RIEL") {
+	if m := motivoSinRelay("", "MUSUBI_TEST_TOKEN_RIEL", nil); !strings.Contains(m, "MUSUBI_CENTRAL_URL") || !strings.Contains(m, "MUSUBI_TEST_TOKEN_RIEL") {
 		t.Fatalf("con las dos cosas ausentes el motivo tiene que nombrarlas: %q", m)
 	}
 	t.Setenv("MUSUBI_TEST_TOKEN_RIEL", "hay-token")
-	m := motivoSinRelay("", "MUSUBI_TEST_TOKEN_RIEL")
+	m := motivoSinRelay("", "MUSUBI_TEST_TOKEN_RIEL", nil)
 	if !strings.Contains(m, "MUSUBI_CENTRAL_URL") || strings.Contains(m, "MUSUBI_TEST_TOKEN_RIEL") {
 		t.Fatalf("con el token puesto sólo falta la URL: %q", m)
+	}
+}
+
+// UNA CREDENCIAL ROTA NO SE PUEDE REPORTAR COMO UNA QUE FALTA (A101).
+//
+// Desde que el archivo le gana a la variable, un `<VAR>_FILE` ilegible devuelve error y token
+// vacío. Si ese error se descarta —como se hacía—, el riel diría «falta $MUSUBI_TOKEN» CON LA
+// VARIABLE PUESTA: una causa falsa que manda a arreglar lo que no está roto, que es exactamente el
+// modo de fallo que A89 cerró.
+//
+// Sabotaje que la hace fallar: que `motivoSinRelay` ignore el error y siga mirando sólo si el token
+// está vacío.
+func TestMotivoSinRelayDistingueRotaDeAusente(t *testing.T) {
+	t.Setenv("MUSUBI_TEST_TOKEN_RIEL", "hay-token-en-la-variable")
+	roto := fmt.Errorf("MUSUBI_TEST_TOKEN_RIEL_FILE apunta a %q y no se pudo leer", "/no/existe")
+
+	m := motivoSinRelay("http://central", "MUSUBI_TEST_TOKEN_RIEL", roto)
+	if strings.Contains(m, "falta") {
+		t.Fatalf("con la credencial ROTA el motivo no puede decir que falta algo: %q", m)
+	}
+	if !strings.Contains(m, "no se pudo leer") {
+		t.Fatalf("el motivo tiene que llevar la causa real, dijo: %q", m)
 	}
 }
 
