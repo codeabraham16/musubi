@@ -109,17 +109,22 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	quemarCPU(60 * time.Millisecond)
 	m2, _ := c.Tomar()
 
-	type capacidad struct{ cpu, carga, memoria, disco, temp, procesos, memLibre bool }
+	type capacidad struct{ cpu, carga, memoria, disco, tempPosible, procesos, memLibre bool }
 	esperado := map[string]capacidad{
-		// temp: depende del hardware, no del OS, así que la tabla dice false y no se afirma.
+		// tempPosible: si este SO tiene un CAMINO para leer la temperatura, no si ESTA máquina la
+		// expone — eso depende del hardware. El campo se llamaba `temp`, decía `false` en las tres
+		// filas «porque depende del hardware» y NO SE COMPROBABA EN NINGUNA PARTE: una columna de
+		// una tabla que el propio slice declara como «una PRUEBA, no un README», y que era un
+		// README. Se notó al agregar el colector de Windows (A2): la fila quedó vieja y la suite
+		// siguió verde. Lo que SÍ se puede afirmar es la mitad negativa — ver abajo.
 		// memLibre: sólo Linux la tiene sin mentir. En Windows el candidato es
 		// MEMORYSTATUSEX.ullAvailPhys, que es el análogo de MemAvailable y NO de MemFree; en
 		// macOS haría falta host_statistics64 (mach). En los dos, medir de más sería mentir.
 		// procesos: Linux cuenta /proc, Windows usa K32GetPerformanceInfo, y macOS necesitaría un
 		// fork+exec por latido en el proceso que corre en todas las máquinas.
-		"linux":   {cpu: true, carga: true, memoria: true, disco: true, temp: false, procesos: true, memLibre: true},
-		"windows": {cpu: true, carga: false, memoria: true, disco: true, temp: false, procesos: true, memLibre: false},
-		"darwin":  {cpu: false, carga: true, memoria: false, disco: true, temp: false, procesos: false, memLibre: false},
+		"linux":   {cpu: true, carga: true, memoria: true, disco: true, tempPosible: true, procesos: true, memLibre: true},
+		"windows": {cpu: true, carga: false, memoria: true, disco: true, tempPosible: true, procesos: true, memLibre: false},
+		"darwin":  {cpu: false, carga: true, memoria: false, disco: true, tempPosible: false, procesos: false, memLibre: false},
 	}
 	quiero, hay := esperado[runtime.GOOS]
 	if !hay {
@@ -156,6 +161,36 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 		t.Errorf("%s: mide mem_libre = %v, la tabla dice %v — si es Windows o macOS, lo que se está "+
 			"reportando NO es MemFree sino su primo el «disponible», y son cosas distintas",
 			runtime.GOOS, got, quiero.memLibre)
+	}
+
+	// LA TEMPERATURA SE AFIRMA POR LA MITAD QUE SÍ DEPENDE DEL SISTEMA OPERATIVO.
+	//
+	// «Esta máquina reporta temperatura» no se puede exigir: depende de si el firmware expone el
+	// sensor, y un runner de CI casi nunca lo hace. Por eso la fila anterior decía `false` en las
+	// tres y no comprobaba nada — con lo cual la columna no significaba nada.
+	//
+	// Lo que SÍ es un hecho del SO es si existe un CAMINO para leerla, y de ahí salen las dos
+	// mitades que se pueden afirmar:
+	//
+	//	tempPosible=false  ->  el campo tiene que ser nil SIEMPRE. Es la mitad que caza un colector
+	//	                       nuevo que empieza a emitir algo sin que nadie actualice la tabla.
+	//	tempPosible=true   ->  puede ser nil (sin sensor, el caso común) pero si trae valor tiene
+	//	                       que ser PLAUSIBLE. Es la mitad que caza una unidad mal leída — los
+	//	                       −243 °C de restar Kelvin sin dividir por 10 pasarían por acá.
+	//
+	// Sabotaje que la hace fallar: poner tempPosible:true en darwin, o devolver un valor fuera de
+	// rango desde cualquier colector.
+	if !quiero.tempPosible {
+		if m.TempC != nil {
+			t.Errorf("%s: reportó temperatura (%.1f °C) y la tabla dice que este SO no tiene cómo leerla — "+
+				"o se agregó un colector y nadie actualizó la tabla, o se está emitiendo otra cosa",
+				runtime.GOOS, *m.TempC)
+		}
+	} else if m.TempC != nil {
+		if c := *m.TempC; c <= 0 || c > TempMaxPlausibleC {
+			t.Errorf("%s: reportó %.1f °C, que está fuera de rango. Un negativo grande es la firma de "+
+				"una unidad mal leída (Kelvin sin dividir), no de una máquina fría", runtime.GOOS, c)
+		}
 	}
 }
 
