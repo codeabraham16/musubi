@@ -39,8 +39,14 @@
 # dice «carpeta equivocada», dice algo sobre escritura, y manda a buscar permisos.
 #
 # `cambiar-agente.cmd` ya usa `%~dp0` por esta misma razón y lo tiene documentado; este guion lo
-# ignoraba. La carpeta se deriva del PATH DEL PROCESO que está corriendo, que es lo único que no
-# depende de quién ejecuta.
+# ignoraba. La carpeta se deriva del PATH DEL PROCESO que está corriendo.
+#
+# CORRECCIÓN DEL 2026-09-05: «el path del proceso» NO alcanza, y afirmarlo acá como invariante fue
+# lo que produjo el incidente. En `davantis-1` corren DOCE procesos `musubi.exe` en DOS carpetas
+# —el agente de flota y la app de escritorio, que levanta sus propios `daemon` y `cerebro`— y
+# `Select-Object -First 1` eligió la equivocada: la actualización entera fue a parar a la app.
+# Ahora la carpeta se elige por `device.token`, y ante 0 o ante 2 el guion SE PARA. Ver el RESOLVER
+# más abajo.
 #
 # Uso:  MUSUBI_TOKEN_FILE=/ruta/al/token ./actualizar-agente-windows.sh gio [commit]
 set -euo pipefail
@@ -145,14 +151,22 @@ try: d=json.load(sys.stdin)
 except Exception: sys.exit()
 for c in d.get("comandos", []):
     if c.get("command_id") == sys.argv[1]:
-        print("%s\t%s\t%s" % (c.get("estado",""), c.get("exit_code"), (c.get("stdout") or "").strip().replace("\n"," ⏎ ")[:200]))
+        # stderr Y error VAN, no sólo stdout. Sin ellos, un PowerShell que rompe por sintaxis, un
+        # Start-Process que no encuentra el .exe, o el timeout del ejecutor —que escribe `error` y
+        # deja `exit_code` en None— salían como un «exit=1» MUDO, con la línea de salida vacía.
+        # El JSON que este guion ya descarga los trae (methods_exec.go:481-486); los tiraba acá.
+        malo = " ".join(x for x in [(c.get("stderr") or "").strip(), (c.get("error") or "").strip()] if x)
+        print("%s\t%s\t%s\t%s" % (c.get("estado",""), c.get("exit_code"),
+              (c.get("stdout") or "").strip().replace("\n"," ⏎ ")[:500],
+              malo.replace("\n"," ⏎ ")[:500]))
         break' "$cid")"
     if [[ -n "$r" ]]; then
-      local est ec out
-      IFS=$'\t' read -r est ec out <<< "$r"
+      local est ec out malo
+      IFS=$'\t' read -r est ec out malo <<< "$r"
       if [[ "$est" == "terminado" ]]; then
         [[ -n "$out" ]] && echo "   $out"
         if [[ "$ec" != "0" ]]; then
+          [[ -n "$malo" ]] && printf '   \033[31m%s\033[0m\n' "$malo" >&2
           rojo "el paso terminó con exit=$ec — no se sigue"
           return 1
         fi
@@ -177,9 +191,40 @@ import json,sys
 d=json.load(sys.stdin); print(d.get("command_id",""), d.get("estado",""))')
   [[ -n "$cid" ]] || { rojo "el cerebro no devolvió un command_id"; echo "$r" >&2; return 1; }
   echo "   encolado $cid ($est)"
-  esperar_comando "$cid" 180
+  # LA PACIENCIA SALE DEL PRESUPUESTO QUE SE PIDIÓ, no de un 180 fijo. Con el 300 del paso 3, el
+  # guion se rendía a los 180 s CON EL COMANDO TODAVÍA CORRIENDO, y el `trap limpiar` bajaba el
+  # servidor HTTP debajo de un `fetch` a medio bajar. Es el mismo modo de falla que las líneas de
+  # arriba dicen haber arreglado, entrando por la puerta de al lado.
+  esperar_comando "$cid" $(( $2 + 60 ))
 }
 ps1(){ python3 -c 'import json,sys; print(json.dumps(["powershell","-NoProfile","-Command",sys.argv[1]]))' "$1"; }
+
+# ── QUÉ CARPETA ES LA DEL AGENTE, CUANDO HAY MÁS DE UN musubi.exe CORRIENDO ──────────────────
+#
+# La primera versión decía `Get-Process musubi | Select-Object -First 1`. En `davantis-1` eso
+# eligió la carpeta EQUIVOCADA y el 2026-09-05 la actualización entera fue a parar a la app de
+# escritorio (`AppData\Local\Programs\musubi`) en vez de al agente de flota
+# (`AppData\Local\Musubi`). El agente quedó intacto —seguía reportando la versión vieja— y lo
+# único que evitó romper la app de escritorio fue una casualidad: su carpeta no tiene
+# `device.token`, así que el paso [4] del cambiador falló y su rollback la devolvió.
+#
+# Lo peor es que este repo YA SABÍA que había dos: `cambiar-agente.cmd` nombra la carpeta de la
+# app de escritorio explícitamente, para no matarla con un `taskkill /IM`. La cautela estaba
+# escrita en un archivo y ausente en su hermano de al lado.
+#
+# EL DISCRIMINANTE ES `device.token`, no el orden de los procesos: la carpeta del agente es la
+# única que tiene la credencial del dispositivo — es el mismo archivo que el paso [4] del
+# cambiador usa para probar el binario nuevo. Y ante 0 o ante 2, SE PARA: elegir a ciegas es
+# exactamente lo que produjo este defecto.
+RESOLVER='$cands = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | ForEach-Object { Split-Path $_.Path } | Sort-Object -Unique)
+if ($cands.Count -eq 0) { "no hay ningun proceso musubi corriendo: sin el no se sabe donde esta instalado el agente"; exit 1 }
+$conToken = @($cands | Where-Object { Test-Path (Join-Path $_ "device.token") })
+if ($conToken.Count -eq 0) { "hay " + $cands.Count + " carpeta(s) con musubi.exe corriendo y NINGUNA tiene device.token, asi que ninguna es el agente de flota: " + ($cands -join ", "); exit 1 }
+if ($conToken.Count -gt 1) { "hay " + $conToken.Count + " instalaciones con device.token y no se cual es el agente: " + ($conToken -join ", ") + ". No elijo a ciegas"; exit 1 }
+$d = $conToken[0]
+"carpeta del agente: " + $d
+'
+
 
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # LA DESCARGA LA HACE `musubi.exe fetch`, NO PowerShell — Y ES UN SOLO CAMINO A PROPÓSITO
@@ -204,10 +249,7 @@ ps1(){ python3 -c 'import json,sys; print(json.dumps(["powershell","-NoProfile",
 # —`Invoke-WebRequest` acá, `fetch` allá— es exactamente la forma que este repo persigue: el que se
 # usa menos es el que se rompe sin que nadie se entere. La idea es de la sesión musubi-aa.
 paso "3/5 · bajando el binario a $DEVICE con su propio fetch, y verificando el sha EN DESTINO"
-llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
-if (-not $p) { "no encuentro el proceso musubi: sin el no se sabe donde esta instalado"; exit 1 }
-$d = Split-Path $p
-$n = Join-Path $d "musubi-nuevo.exe"
+llamar "$(ps1 "$RESOLVER"'$n = Join-Path $d "musubi-nuevo.exe"
 $r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/musubi.exe" -RedirectStandardOutput $n -NoNewWindow -Wait -PassThru
 if ($r.ExitCode -ne 0) { Remove-Item $n -Force -EA SilentlyContinue; "fetch salio con " + $r.ExitCode; exit 1 }
 if (-not (Test-Path $n)) { "fetch no dejo archivo"; exit 1 }
@@ -217,21 +259,17 @@ if ($h -ne "'"$SHA"'") { Remove-Item $n -Force; "SHA DISTINTO: $h -- BORRADO"; e
 
 paso "4/5 · refrescando cambiar-agente.cmd (el de la máquina puede ser viejo)"
 # Mismo motivo que el paso 3: `curl.exe` tampoco está en la lista blanca de `davantis-1`.
-llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
-if (-not $p) { "no encuentro el proceso musubi: sin el no se sabe donde esta instalado"; exit 1 }
-$d = Split-Path $p
-$c = Join-Path $d "cambiar-agente.cmd.nuevo"
+llamar "$(ps1 "$RESOLVER"'$c = Join-Path $d "cambiar-agente.cmd.nuevo"
 $r = Start-Process -FilePath (Join-Path $d "musubi.exe") -ArgumentList "fetch","http://'"$IP:$PUERTO"'/cambiar-agente.cmd" -RedirectStandardOutput $c -NoNewWindow -Wait -PassThru
 if ($r.ExitCode -ne 0 -or -not (Test-Path $c) -or (Get-Item $c).Length -lt 100) { Remove-Item $c -Force -EA SilentlyContinue; "el cambiador no bajo entero"; exit 1 }
 Move-Item -Force $c (Join-Path $d "cambiar-agente.cmd")
 "cambiar-agente.cmd: " + (Get-Item (Join-Path $d "cambiar-agente.cmd")).Length + " bytes"')" 120
 
 paso "5/5 · lanzando el cambiador DESPEGADO (el paso 2 del .cmd mata al agente que corre esto)"
-llamar "$(ps1 '$p = Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
-if (-not $p) { "no encuentro el proceso musubi"; exit 1 }
-$d = Split-Path $p
-Start-Process -FilePath "cmd.exe" -ArgumentList "/c","$d\\cambiar-agente.cmd" -WindowStyle Hidden
-"lanzado desde $d"')" 30
+llamar "$(ps1 "$RESOLVER"'$cmdPath = Join-Path $d "cambiar-agente.cmd"
+if (-not (Test-Path $cmdPath)) { "no esta el cambiador en " + $cmdPath; exit 1 }
+Start-Process -FilePath "cmd.exe" -ArgumentList "/c",$cmdPath -WindowStyle Hidden
+"lanzado desde " + $d')" 30
 
 paso "esperando que $DEVICE vuelva a latir con $VERSION"
 for i in $(seq 1 20); do
