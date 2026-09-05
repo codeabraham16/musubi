@@ -19,8 +19,12 @@ import (
 //
 // ANTES DE LEER un archivo, Musubi mira su memoria de código: si ya tiene un gist FRESCO lo
 // inyecta (para no re-leer el archivo entero), si está desactualizado avisa, y si no hay gist y el
-// archivo es grande recuerda guardarlo. Con el opt-in MUSUBI_CODEGRAPH_HOOK suma la ESTRUCTURA
-// sacada del grafo, para navegarlo sin abrirlo.
+// archivo es grande recuerda guardarlo. Suma además la ESTRUCTURA sacada del grafo, para navegarlo
+// sin abrirlo (encendido por default desde el 2026-09-05; se apaga con MUSUBI_CODEGRAPH_HOOK=0).
+//
+// LAS TRES SUPERFICIES DICEN SI ESTÁN AL DÍA. Cada una deriva de un archivo que pudo cambiar
+// después, y la diferencia entre «esto es el archivo» y «esto es lo que el archivo era» es la que
+// decide si el agente vuelve a mirar. Ver medirFrescura.
 //
 // ANTES DE ESCRIBIRLO contesta la otra pregunta —"¿qué se rompe si toco esto?"— con el RADIO DE
 // IMPACTO: qué símbolos del archivo tienen callers, cuántos de ellos son de producción y cuántos
@@ -92,7 +96,7 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	// —"profundizá con musubi_impact"—, o sea en el turno equivocado: para cuando el agente decide
 	// cambiar una firma, ese texto quedó veinte mensajes atrás.
 	if esEdicion(in.ToolName) {
-		m := impactMessage(store, key)
+		m := impactMessage(store, root, key)
 		if m == "" {
 			return ""
 		}
@@ -117,12 +121,13 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 		parts = append(parts, m)
 	}
 	// Grafo de código (F2-B): la palanca de tokens — inyecta la ESTRUCTURA del archivo (imports +
-	// símbolos con sus callers/callees) para navegarlo sin leerlo. OPT-IN por env var
-	// MUSUBI_CODEGRAPH_HOOK (default OFF: no cambia la experiencia actual); aun encendido, solo
-	// dispara si el archivo está indexado (musubi_codegraph_index), así que es inerte hasta que
-	// haya grafo.
+	// símbolos con sus callers/callees) para navegarlo sin leerlo. VIENE ENCENDIDO desde el
+	// 2026-09-05, con MUSUBI_CODEGRAPH_HOOK=0 como apagador (ver codegraphHookEnabled, que explica
+	// la medición detrás del cambio). Este comentario decía «OPT-IN … default OFF» al lado del
+	// gate que ya devolvía true, que es cómo se lee un default nuevo como si fuera el viejo.
+	// Dispara sólo si el archivo está indexado, así que es inerte en un repo sin grafo.
 	if codegraphHookEnabled() {
-		if m := codeGraphMessage(store, key); m != "" {
+		if m := codeGraphMessage(store, root, key); m != "" {
 			_, _ = store.LedgerAdd(in.SessionID, "precheck_codegraph", memory.EstimateTokens(m))
 			parts = append(parts, m)
 		}
@@ -162,17 +167,93 @@ const (
 	maxGraphRefs    = 5
 )
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LA FRESCURA DEL GRAFO SE DICE, NO SE SUPONE — Y ESTE ARCHIVO YA LO HACÍA BIEN EN UN LADO
+//
+// Las tres superficies del hook inyectan algo derivado de un archivo, así que las tres pueden
+// estar viejas. `codeMemoryMessage` lo trata desde el primer día: compara la huella y si no
+// coincide AVISA en vez de callar. Las dos del grafo no lo hacían, y decían lo contrario de lo
+// que sabían: «está indexado: navegá su estructura SIN leerlo» y «tocarlo no arrastra a nadie
+// conocido», las dos afirmadas sin mirar el disco.
+//
+// Mientras estaba OPT-IN el hueco no costaba nada. El 2026-09-05 el default pasó a ENCENDIDO
+// (ver codegraphHookEnabled) y se empezó a pagar en CADA lectura. Medido ese día en este repo:
+// 798 archivos con huella, 791 al día y 7 viejos — cuatro de los siete cambiados por el mismo
+// despliegue que encendió el hook. En concreto, un Read de internal/fleet/procparse.go inyectaba
+// una lista de diez símbolos SIN `ElegirTemperatura`, que es justo la función que ese despliegue
+// agregó y que reemplazó a `ParsearTempMiligrados` como punto de entrada. La ventana llega a las
+// 6 h que dura el reindexado (Maintenance.GraphIndexHours).
+//
+// Y la tool equivalente SÍ lo marca (`cgView` → `Stale: s.cgStale(n)`), o sea que la señal
+// existía y este camino la tiraba: N superficies que deberían decir lo mismo, N-1 lo decían.
+//
+// NO SE SUPRIME EL MENSAJE CUANDO ESTÁ VIEJO. Los callers y callees no se pueden sacar del
+// archivo que se está leyendo —viven en otros archivos— así que siguen valiendo. Lo que se
+// retira es la INVITACIÓN a no leer, que es la parte que se vuelve una trampa.
+type frescuraDelGrafo int
+
+const (
+	grafoAlDia    frescuraDelGrafo = iota // se comparó la huella y coincide
+	grafoCambiado                         // se comparó la huella y NO coincide: el archivo cambió
+	grafoSinSaber                         // no se pudo comparar: sin archivo, o sin huella guardada
+)
+
+// medirFrescura compara la huella del archivo EN DISCO con la que guardaron sus nodos.
+//
+// Devuelve grafoSinSaber y no grafoCambiado cuando el archivo no se puede leer, porque son cosas
+// distintas y se arreglan distinto: «cambió» se arregla reindexando, «no está» quiere decir que
+// el grafo tiene un fantasma o que este binario está mirando otro árbol. Confundirlas mandaría a
+// reindexar a alguien cuyo problema es otro.
+func medirFrescura(root, key string, nodes []memory.GraphNode) frescuraDelGrafo {
+	actual, err := memory.FileFingerprint(root, key)
+	if err != nil || actual == "" {
+		return grafoSinSaber
+	}
+	// SIN HUELLA GUARDADA NO HAY «AL DÍA», Y ESTE ERA EL MISMO DEFECTO OTRA VEZ. La primera
+	// versión saltaba los nodos sin `SrcFingerprint` —para no poner en rojo un grafo indexado
+	// antes de que se guardaran huellas— y devolvía grafoAlDia, con lo cual el mensaje afirmaba
+	// «su huella COINCIDE con el archivo en disco» sin haber comparado nada. Lo destapó una
+	// prueba existente, que arma sus nodos sin huella y pasaba en verde leyendo esa afirmación.
+	// Un dato ausente que se lee como confirmación es exactamente lo que este hook vino a dejar
+	// de hacer.
+	comparadas := 0
+	for _, n := range nodes {
+		if n.SrcFingerprint == "" {
+			continue
+		}
+		comparadas++
+		if n.SrcFingerprint != actual {
+			return grafoCambiado
+		}
+	}
+	if comparadas == 0 {
+		return grafoSinSaber
+	}
+	return grafoAlDia
+}
+
 // codeGraphMessage arma el contexto de ESTRUCTURA de un archivo desde el grafo de código: sus
 // imports y sus funciones/métodos con a quién llaman y quién los llama. "" si el archivo no está
 // indexado (inerte hasta correr musubi_codegraph_index). Model-free: solo recorre el grafo.
-func codeGraphMessage(store codeStore, key string) string {
+func codeGraphMessage(store codeStore, root, key string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
 	if err != nil || len(nodes) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Musubi — grafo de código] «%s» está indexado: navegá su estructura SIN leerlo.", key)
+	switch medirFrescura(root, key, nodes) {
+	case grafoAlDia:
+		fmt.Fprintf(&b, "[Musubi — grafo de código] «%s» está indexado y su huella COINCIDE con el archivo en disco: navegá su estructura SIN leerlo.", key)
+	case grafoCambiado:
+		fmt.Fprintf(&b, "[Musubi — grafo de código] «%s» está indexado pero el archivo CAMBIÓ desde entonces: "+
+			"esta lista puede faltar símbolos nuevos y nombrar borrados, así que NO reemplaza la lectura que estás "+
+			"haciendo. Los callers/callees sí siguen valiendo (no salen de este archivo). Reindexá con musubi_codegraph_index.", key)
+	case grafoSinSaber:
+		fmt.Fprintf(&b, "[Musubi — grafo de código] «%s» está en el grafo pero NO pude verificar su frescura "+
+			"—el archivo no se pudo leer, o se indexó sin guardar huella—: puede estar al día o de hace horas. "+
+			"Tomá esto como una pista, no como el archivo.", key)
+	}
 
 	if fe, _ := store.GraphOutEdgesCtx(ctx, key); len(fe) > 0 {
 		var imps []string
@@ -232,11 +313,24 @@ func esEdicion(tool string) bool {
 // justamente lo que uno quiere saber antes de cambiarlo, y cuesta una línea decirlo. Callar ahí
 // sería confundir "no hay riesgo" con "no sé", que es la distinción que el resto de esta memoria
 // se toma el trabajo de mantener.
-func impactMessage(store codeStore, key string) string {
+func impactMessage(store codeStore, root, key string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
 	if err != nil || len(nodes) == 0 {
 		return ""
+	}
+	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque el mensaje no describe: TRANQUILIZA.
+	// «Ningún símbolo tiene callers: tocarlo no arrastra a nadie conocido» es una afirmación de
+	// seguridad, y sobre un grafo viejo es falsa en la dirección que duele — el caller nuevo es
+	// exactamente el que el grafo todavía no vio. Y esto corre antes de CADA edición, o sea en el
+	// momento en que alguien va a decidir si mira quién depende de lo que está por cambiar.
+	frescura := medirFrescura(root, key, nodes)
+	reserva := ""
+	switch frescura {
+	case grafoCambiado:
+		reserva = " · OJO: el archivo cambió desde que se indexó, así que esto puede estar incompleto — un caller nuevo no aparece acá"
+	case grafoSinSaber:
+		reserva = " · OJO: no pude verificar la frescura del grafo (sin archivo en disco o sin huella guardada), así que no sé si está al día"
 	}
 
 	type simboloConectado struct {
@@ -263,8 +357,14 @@ func impactMessage(store codeStore, key string) string {
 		return ""
 	}
 	if len(conectados) == 0 {
-		return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers en el grafo: "+
-			"tocarlo no arrastra a nadie conocido.", key)
+		// La versión al día afirma; las otras dos dicen lo que saben y lo que no. La diferencia
+		// entre «no arrastra a nadie» y «el grafo no conoce a nadie, y está viejo» es toda.
+		if frescura == grafoAlDia {
+			return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers en el grafo, "+
+				"y su huella coincide con el disco: tocarlo no arrastra a nadie conocido.", key)
+		}
+		return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers EN EL GRAFO%s. "+
+			"No lo leas como «no arrastra a nadie»: leelo como «el grafo no sabe».", key, reserva)
 	}
 
 	// Ordena por callers DE PRODUCCIÓN, no por callers a secas. Medido sobre este mismo repo: los
@@ -281,7 +381,7 @@ func impactMessage(store codeStore, key string) string {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Musubi — radio de impacto] Vas a editar «%s». Según el grafo, esto cuelga de sus símbolos:", key)
+	fmt.Fprintf(&b, "[Musubi — radio de impacto] Vas a editar «%s». Según el grafo%s, esto cuelga de sus símbolos:", key, reserva)
 	mostrados := conectados
 	if len(mostrados) > maxSimbolosImpacto {
 		mostrados = mostrados[:maxSimbolosImpacto]
