@@ -199,31 +199,12 @@ d=json.load(sys.stdin); print(d.get("command_id",""), d.get("estado",""))')
 }
 ps1(){ python3 -c 'import json,sys; print(json.dumps(["powershell","-NoProfile","-Command",sys.argv[1]]))' "$1"; }
 
-# ── QUÉ CARPETA ES LA DEL AGENTE, CUANDO HAY MÁS DE UN musubi.exe CORRIENDO ──────────────────
-#
-# La primera versión decía `Get-Process musubi | Select-Object -First 1`. En `davantis-1` eso
-# eligió la carpeta EQUIVOCADA y el 2026-09-05 la actualización entera fue a parar a la app de
-# escritorio (`AppData\Local\Programs\musubi`) en vez de al agente de flota
-# (`AppData\Local\Musubi`). El agente quedó intacto —seguía reportando la versión vieja— y lo
-# único que evitó romper la app de escritorio fue una casualidad: su carpeta no tiene
-# `device.token`, así que el paso [4] del cambiador falló y su rollback la devolvió.
-#
-# Lo peor es que este repo YA SABÍA que había dos: `cambiar-agente.cmd` nombra la carpeta de la
-# app de escritorio explícitamente, para no matarla con un `taskkill /IM`. La cautela estaba
-# escrita en un archivo y ausente en su hermano de al lado.
-#
-# EL DISCRIMINANTE ES `device.token`, no el orden de los procesos: la carpeta del agente es la
-# única que tiene la credencial del dispositivo — es el mismo archivo que el paso [4] del
-# cambiador usa para probar el binario nuevo. Y ante 0 o ante 2, SE PARA: elegir a ciegas es
-# exactamente lo que produjo este defecto.
-RESOLVER='$cands = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | ForEach-Object { Split-Path $_.Path } | Sort-Object -Unique)
-if ($cands.Count -eq 0) { "no hay ningun proceso musubi corriendo: sin el no se sabe donde esta instalado el agente"; exit 1 }
-$conToken = @($cands | Where-Object { Test-Path (Join-Path $_ "device.token") })
-if ($conToken.Count -eq 0) { "hay " + $cands.Count + " carpeta(s) con musubi.exe corriendo y NINGUNA tiene device.token, asi que ninguna es el agente de flota: " + ($cands -join ", "); exit 1 }
-if ($conToken.Count -gt 1) { "hay " + $conToken.Count + " instalaciones con device.token y no se cual es el agente: " + ($conToken -join ", ") + ". No elijo a ciegas"; exit 1 }
-$d = $conToken[0]
-"carpeta del agente: " + $d
-'
+# `RESOLVER` (qué carpeta es la del agente) y `CLASIFICAR` (quién corre el binario nuevo y quién
+# quedó de antes) viven en el lib porque `matar-zombis-agente.sh` necesita EXACTAMENTE los mismos.
+# Tenerlos duplicados es programar la próxima divergencia, y ya nos pasó tres veces con estos
+# mismos guiones — el lib lo cuenta en su cabecera.
+# shellcheck source=deploy/lib-agente-windows.sh
+source "$REPO/deploy/lib-agente-windows.sh"
 
 
 # ────────────────────────────────────────────────────────────────────────────────────────────
@@ -320,33 +301,36 @@ for m in d.get("devices", []):
     # registrada con `-MultipleInstances IgnoreNew`— la máquina queda SIN AGENTE y este guion la
     # declara actualizada igual. El verde lo daría un campo que la prueba también escribe.
     paso "confirmando EN LA MÁQUINA que quedó un agente vivo, no sólo una versión escrita"
-    if llamar "$(ps1 "$RESOLVER"'$exe = Join-Path $d "musubi.exe"
-$sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+    if llamar "$(ps1 "$RESOLVER$CLASIFICAR"'$sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 if ($sha -ne "'"$SHA"'") { "el musubi.exe de la carpeta NO es el que se instalo (sha " + $sha + "): el cambiador no llego a ponerlo o algo lo piso"; exit 1 }
-$escrito = (Get-Item $exe).LastWriteTime
-$todos  = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
-$nuevos = @($todos | Where-Object { $_.StartTime -gt $escrito })
-$tarea  = (schtasks /query /tn "Musubi Agente de Flota" /fo list 2>&1 | Out-String)
-$estado = (($tarea -split "`r?`n" | Where-Object { $_ -match "Status|Estado" }) -join " ").Trim()
-if ($todos.Count -eq 0) { "NO hay ningun proceso corriendo desde " + $exe + " -- la version nueva la escribio el latido de PRUEBA del cambiador, no un agente vivo. Tarea: " + $estado; exit 1 }
-if ($nuevos.Count -eq 0) { "hay " + $todos.Count + " proceso(s) desde " + $exe + " y TODOS arrancaron ANTES de que ese archivo se escribiera (" + $escrito + "): corren la imagen VIEJA, que ya no esta en disco, y la version que reporta la fila es la de ellos. Tarea: " + $estado; exit 1 }
-$zombis = @($todos | Where-Object { $_.StartTime -lt $escrito })
+if ($todos.Count -eq 0) { "NO hay ningun proceso corriendo desde " + $exe + " ni desde " + $viejo + " -- la version nueva la escribio el latido de PRUEBA del cambiador, no un agente vivo. Tarea: " + $estado; exit 1 }
+if ($nuevos.Count -eq 0) { "hay " + $todos.Count + " proceso(s) del agente y TODOS arrancaron ANTES de que el binario se escribiera (" + $cuando + "): corren la imagen VIEJA, que ya no esta en disco, y la version que reporta la fila es la de ellos. Procesos: " + $detalle + " | Tarea: " + $estado; exit 1 }
 if ($zombis.Count -gt 0) {
   # UN ZOMBI VIVO HACE FALLAR, NO ADVERTIR. Corre la imagen ANTERIOR —que ya no esta en disco— y
   # sigue latiendo: puede ganar la proxima escritura de la fila y dejar al cerebro reportando la
   # version vieja sobre una maquina que si se actualizo. Paso el 2026-09-05 y confundio el
   # diagnostico durante horas. Ademas significa que el paso [1] del cambiador no logro matarlo.
   # EL BINARIO YA ESTA PUESTO: esto no se arregla volviendo a correr el actualizador.
-  ($zombis | ForEach-Object { "zombi pid " + $_.Id + " arrancado " + $_.StartTime + " (el binario se escribio " + $escrito + ")" }) -join " | "
-  "El binario NUEVO ya esta instalado y verificado por sha. Lo que falta es matar esos procesos: Stop-Process -Id <pid> -Force"
+  "quedaron " + $zombis.Count + " zombi(s) del binario anterior. Binario instalado " + $cuando + ". Procesos: " + $detalle
   exit 1
 }
 "agente NUEVO vivo: " + $nuevos.Count + " proceso(s), todos arrancados despues de instalar el binario, y sin zombis | " + $estado')" 60; then
       ok "ACTUALIZADA a $VERSION, con agente vivo confirmado en la máquina"
       exit 0
     fi
-    rojo "la versión llegó pero NO quedó ningún agente corriendo: el cambiador probó el binario y la tarea no arrancó"
-    echo "    Arrancala a mano:  schtasks /run /tn \"Musubi Agente de Flota\"" >&2
+    # ESTE MENSAJE NO DIAGNOSTICA: EL DE ARRIBA YA LO HIZO, Y MIDIENDO.
+    #
+    # La versión anterior afirmaba acá «el cambiador probó el binario y la tarea no arrancó» y
+    # mandaba a correr `schtasks /run`. Eso es UNA de las cuatro razones por las que la
+    # confirmación puede fallar, y el 2026-09-05, con la máquina en otra de las cuatro —quedaban
+    # zombis—, la línea de PowerShell dijo «lo que falta es matar esos procesos» y esta línea la
+    # tapó con una causa falsa y un remedio que EMPEORA el caso: `schtasks /run` agrega un proceso
+    # más y deja al zombi vivo. Un mensaje genérico encima de uno preciso es peor que ninguno.
+    rojo "la versión llegó pero la confirmación EN LA MÁQUINA falló. La razón exacta es la línea de arriba"
+    echo "    · si dice ZOMBIS         →  ./deploy/matar-zombis-agente.sh $DEVICE" >&2
+    echo "    · si dice que NO hay ningún proceso  →  la tarea no arrancó; en la máquina:" >&2
+    echo "        schtasks /run /tn \"Musubi Agente de Flota\"" >&2
+    echo "    · si dice que el sha NO coincide     →  mirá $DEVICE:<carpeta>\\cambio.log (¿hubo rollback?)" >&2
     exit 1
   fi
 done
