@@ -931,6 +931,17 @@ declara el repo**. Cada archivo de reglas vigila el conteo del OTRO, cruzado a p
 archivo que declara su propio conteo se despliega junto con el conteo, las dos mitades se mueven a
 la vez y la comprobación no falla nunca.
 
+> **El cruce no alcanza, y hay que saberlo antes de confiar en un verde de estas tres (A113).** El
+> párrafo de arriba explica por qué un archivo no puede declarar su propio conteo. Cierto — pero
+> **el despliegue copia los archivos JUNTOS**, así que el mismo defecto reaparece un piso más
+> arriba: envejecen juntos y sus dos números se siguen dando la razón. Medido el 2026-09-05: el
+> `musubi-alerts.yml` desplegado difería del repo en UN renglón —`!= 24` contra `!= 27`, con los
+> dos archivos pesando los mismos 23912 bytes— y `ReglasDeFlotaSinDesplegar` estaba **en verde**
+> mientras faltaban tres reglas, entre ellas `ReglasDelSlaSinDesplegar`, o sea la que habría
+> avisado del otro hueco. Estuvo así desde el 4-09. **Un verde de estas tres significa «los dos
+> archivos coinciden entre sí», no «coinciden con el repo».** Lo segundo sólo lo contesta
+> `verificar-despliegue.sh`, y por eso existe `ComparacionRepoServidorSinCorrer`.
+
 Primero, qué falta y en qué dirección:
 
 ```bash
@@ -1005,6 +1016,79 @@ signifiquen algo. Medido el mismo día, los `avg30d` se publicaban rotulados «a
 **11,9 h de historia — el 1,65 % de la ventana**, porque el TSDB había perdido su historia el
 2026-08-31. La cobertura existe como serie (`musubi:service_up:cobertura30d`) y **ninguna alerta la
 lee**: eso sigue abierto en A93.
+
+## ComparacionRepoServidorSinCorrer
+
+**Hace más de 26 h que nadie compara el repo contra el servidor.** No dice que algo esté mal: dice
+que **dejamos de mirar**, que es el estado en el que todo lo demás de esta página se pudre sin ruido.
+
+Por qué tiene su propia alerta y no alcanza con las tres de arriba: aquéllas comparan los archivos
+desplegados **entre sí**, y se despliegan juntos, así que envejecen juntos y siguen coincidiendo
+(ver la salvedad en `ReglasDeFlotaSinDesplegar`). La única punta que **no** se copia a la máquina es
+el repo, y la única cosa que lo compara contra producción es `verificar-despliegue.sh`. Hasta el
+2026-09-05 eso corría sólo cuando alguien se acordaba: cero menciones en `.github/`, cero timers y
+cero cron, en las dos máquinas — y mientras tanto las reglas llevaban un día desplegadas a medias y
+el guion del redespliegue tres días viejo con su verificación de la migración muerta.
+
+Qué hacer, en orden:
+
+```bash
+# 1. Comparar ahora y latir. Esto solo ya apaga la alerta si el problema era que nadie corría.
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/comparar-y-latir.sh
+
+# 2. Si lo de arriba anduvo, la pregunta es por qué dejó de correr solo.
+systemctl --user status musubi-comparar.timer
+journalctl --user -u musubi-comparar.service -n 50
+```
+
+Las causas, en orden de frecuencia esperada: **la máquina que compara estuvo apagada** (es una
+estación de trabajo, no un servidor — por eso esta alerta la evalúa el Prometheus del servidor y no
+ella misma); **el timer se deshabilitó** en un upgrade o a mano; **el `ssh` dejó de funcionar sin
+clave**, y ahí el verificador no puede ni empezar; o **el empuje del latido falla** aunque la
+comparación ande, en cuyo caso `comparar-y-latir.sh` lo dice por stderr con el código HTTP.
+
+**No la silencies sin mirar `journalctl`.** Una comparación que no corre no rompe nada hoy, y ése
+es justamente el problema: la próxima divergencia va a entrar igual de callada que las dos que
+motivaron esto.
+
+## ProduccionDivergeDelRepo
+
+**La última comparación encontró divergencia**: lo que corre en el servidor no es lo que el repo
+declara. La alerta no dice qué; lo dice el verificador, eslabón por eslabón:
+
+```bash
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+Cada línea en rojo trae **qué** difiere y **en qué dirección**. Lo más común, por lo visto hasta
+hoy: reglas de alerta a medio desplegar (copiar los archivos y recargar — ver
+`ReglasDeFlotaSinDesplegar`), y guiones derivados viejos (`/usr/local/bin/musubi-backup`,
+`/usr/local/sbin/redesplegar-cerebro.sh`), que se arreglan corriendo el instalador, no copiando a
+mano: **un guion sin instalador es exactamente cómo se produjo A111**.
+
+Una divergencia puede ser deliberada — algo que se está desplegando en este momento. En ese caso la
+alerta se apaga sola cuando la próxima comparación coincide. Si es deliberada y va a durar, la
+decisión se escribe en `specs/control-de-flota/ABIERTO.md`, no se silencia acá.
+
+## DespliegueConEslabonesSinVerificar
+
+**La última comparación no pudo mirar algunos eslabones** (salida 2 del verificador). No es un verde
+con asterisco y no es lo mismo que divergencia: es **«no vi»**, y se arregla distinto que «vi algo
+mal». Tienen alertas separadas por eso, y por el mismo motivo el verificador les da códigos de
+salida distintos — confundirlos es cómo se coló el verde que dejó `CadenaDeAlertasFallando` sin
+desplegar durante semanas (A73).
+
+```bash
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+Los eslabones sin verificar salen marcados con **`?`** y cada uno dice qué falta para poder
+preguntarle. Las causas habituales: Prometheus o Alertmanager no contestaron (escuchan sólo en
+loopback: hace falta `MUSUBI_SSH` o el túnel), falta el bearer si el endpoint pide credencial, o el
+`ssh` no está pasando sin clave.
 
 ## MaquinaSeReinicio
 

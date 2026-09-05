@@ -1,0 +1,53 @@
+# musubi-comparar.service — compara el repo contra el servidor y empuja el latido (A115).
+#
+# UNIDAD DE USUARIO, no de sistema, y no es un detalle de comodidad: corre desde el árbol del repo
+# del usuario y usa SU clave ssh. Una unidad de sistema tendría que llevar una credencial propia
+# para entrar al servidor, que es más superficie por ninguna ventaja.
+#
+# INSTALACIÓN (en la máquina que tiene el repo Y ssh al cerebro):
+#
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|@REPO@|$PWD|" deploy/systemd/musubi-comparar.service > ~/.config/systemd/user/musubi-comparar.service
+#   cp deploy/systemd/musubi-comparar.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now musubi-comparar.timer
+#   loginctl enable-linger "$(id -un)"     # si no, se muere al cerrar sesión
+#
+# El `enable-linger` NO es opcional y su falta es silenciosa: sin él la unidad de usuario se apaga
+# al cerrar sesión, el timer deja de disparar, y lo único que se ve es que las alertas de
+# despliegue quedan calladas — que es indistinguible de «todo bien». Por eso existe
+# `ComparacionRepoServidorSinCorrer`: es lo que convierte ese silencio en ruido.
+
+[Unit]
+Description=Compara lo que el repo declara contra lo que el servidor corre, y late
+Documentation=file://%h/musubi/deploy/RUNBOOK.md
+# Sin red no hay ssh y no hay nada que comparar. No es fatal —el timer reintenta— pero evita
+# un fallo ruidoso en cada arranque.
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+Environment=MUSUBI_SSH=musubi-server
+ExecStart=@REPO@/deploy/comparar-y-latir.sh
+
+# EL CÓDIGO DE SALIDA 1 NO ES UN FALLO DE LA UNIDAD, Y ESTO IMPORTA.
+#
+# `comparar-y-latir.sh` sale con el código del verificador: 1 = producción diverge, 2 = quedaron
+# eslabones sin verificar. Los dos son resultados VÁLIDOS de una corrida que anduvo perfecto — y
+# quien reporta la divergencia es la alerta que mira el latido, no systemd. Sin esta línea, la
+# unidad quedaría `failed` cada vez que hay drift y alguien terminaría deshabilitando el timer
+# para que deje de molestar, apagando de paso la única comparación que existe.
+#
+# Un fallo DE VERDAD —el guion no arranca, no hay ssh, el repo no está— sale con 2 del propio
+# guion antes de comparar... y ahí está el punto: 2 es ambiguo entre «no pude preguntar» y «no
+# pude arrancar», y las dos merecen mirarse. Por eso 2 SÍ deja la unidad en `failed`, y 1 no.
+SuccessExitStatus=1
+
+# El guion ya escribe a stdout/stderr; systemd lo manda al journal. Se lee con:
+#   journalctl --user -u musubi-comparar.service -n 50
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

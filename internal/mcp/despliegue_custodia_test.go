@@ -622,3 +622,91 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 	}
 	t.Logf("%d destinos instalados comprobados contra la tabla, %d filas de la tabla con archivo presente", comprobados, filas)
 }
+
+// TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas — el acoplamiento nuevo de A115.
+//
+// EL CABO QUE ESTO CIERRA ES EL DE SIEMPRE, UN PISO MÁS ARRIBA. `comparar-y-latir.sh` empuja dos
+// gauges y tres alertas de `musubi-alerts.yml` los miran. Los nombres viven en DOS archivos que
+// nadie compara, en dos lenguajes distintos —un sobre JSON y una expresión PromQL—, así que
+// renombrar la métrica en el guion no rompe nada visible: el empuje sigue andando, las alertas
+// siguen cargadas, y quedan mirando una serie que ya no llega. **Y el modo de falla es el peor
+// que hay acá: las tres alertas se quedan CALLADAS**, que es exactamente lo que significan cuando
+// todo está bien. `ComparacionRepoServidorSinCorrer` tiene un brazo `absent(...)` y taparía el
+// caso —dispararía—, pero las otras dos no, y una alarma que se apaga por renombre es la forma
+// que A73 vino a cerrar.
+//
+// SE MIRA DONDE DECIDE, NO DONDE SE MENCIONA. En el guion los nombres salen del campo `"name"`
+// del sobre OTLP, que es lo único que viaja; el encabezado los NOMBRA en prosa —explica por qué
+// el timestamp va explícito— y esa mención no empuja nada. En el archivo de alertas salen de la
+// expresión y no de las anotaciones. Es la lección dominante del 2026-09-05, y acá tenía dos
+// puertas de entrada.
+func TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas(t *testing.T) {
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "comparar-y-latir.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/comparar-y-latir.sh: %v", err)
+	}
+	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
+	}
+
+	// ── Lo que el guion EMPUJA: el campo "name" del sobre, en líneas que no son comentario ──
+	empujadas := map[string]bool{}
+	reNombre := regexp.MustCompile(`"name"\s*:\s*"(musubi_[a-z0-9_]+)"`)
+	for _, linea := range strings.Split(string(guion), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(linea), "#") {
+			continue
+		}
+		for _, m := range reNombre.FindAllStringSubmatch(linea, -1) {
+			empujadas[m[1]] = true
+		}
+	}
+	if len(empujadas) == 0 {
+		t.Fatal("no encontré ninguna métrica en el sobre OTLP de deploy/comparar-y-latir.sh " +
+			"(un campo `\"name\": \"musubi_...\"` fuera de comentarios). O el guion dejó de empujar " +
+			"—y entonces las tres alertas de A115 miran una serie que nadie escribe— o cambió de " +
+			"forma y esta guarda mira donde ya no se decide")
+	}
+
+	// ── Lo que las alertas MIRAN: sólo el bloque `expr:`, nunca las anotaciones ─────────────
+	miradas := map[string]bool{}
+	reMetrica := regexp.MustCompile(`\bmusubi_verificacion_[a-z0-9_]+`)
+	reCorte := regexp.MustCompile(`^(for|labels|annotations|keep_firing_for)\s*:|^- alert:`)
+	dentro := false
+	for _, linea := range strings.Split(string(alertas), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if i := strings.Index(codigo, "#"); i == 0 {
+			continue
+		}
+		if strings.HasPrefix(codigo, "expr:") {
+			dentro = true
+		} else if dentro && reCorte.MatchString(codigo) {
+			dentro = false
+		}
+		if dentro {
+			for _, m := range reMetrica.FindAllString(codigo, -1) {
+				miradas[m] = true
+			}
+		}
+	}
+
+	// ── Las dos direcciones. Cada una es un defecto distinto y se arregla distinto ──────────
+	for m := range empujadas {
+		if !miradas[m] {
+			t.Errorf("`comparar-y-latir.sh` empuja %s y NINGUNA expresión de musubi-alerts.yml la mira.\n"+
+				"Una métrica que se empuja y nadie lee es trabajo que se paga y no se cobra — y si "+
+				"reemplazó a la que sí se leía, las alertas de A115 quedaron calladas mirando una "+
+				"serie muerta, que es indistinguible de «todo bien».", m)
+		}
+	}
+	for m := range miradas {
+		if !empujadas[m] {
+			t.Errorf("una alerta de musubi-alerts.yml mira %s y `comparar-y-latir.sh` NO la empuja.\n"+
+				"Esa alerta no puede dispararse nunca: es el defecto exacto de A73 —una regla cargada "+
+				"sobre una métrica que no existe se ve igual que una regla en verde—.\n"+
+				"O se renombró la métrica en el guion y no acá, o la alerta se escribió contra una "+
+				"serie que nadie produce.", m)
+		}
+	}
+	t.Logf("%d métrica(s) empujada(s) y las mismas %d miradas por las alertas", len(empujadas), len(miradas))
+}
