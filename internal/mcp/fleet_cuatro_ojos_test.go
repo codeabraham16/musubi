@@ -826,3 +826,130 @@ func TestApagarElControlDevuelveElAcceso(t *testing.T) {
 		t.Fatalf("con el control apagado la sesión sigue sin abrir: la máquina quedó encerrada — %v", jsonOf(t, res))
 	}
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// EL VETO DEL DUEÑO VA ANTES QUE LOS CUATRO OJOS, Y NADIE CRUZABA LAS DOS COSAS
+//
+// `methods_pantalla.go:85` y `methods_shell.go:72` dicen lo MISMO con todas las letras —«EL VETO
+// DEL DUEÑO VA SOLO Y VA PRIMERO»— y los dos explican por qué: `prohibido` no necesita a NADIE
+// para decidir, así que pedirle a un segundo operador que apruebe una sesión que igual no se va a
+// abrir es hacerle perder el tiempo Y, DE PASO, CONTARLE QUE ALGUIEN LO INTENTÓ.
+//
+// El orden real es el que afirman —veto en :92 y :76, cuatro ojos en :157 y :105— pero NINGUNA
+// prueba cruzaba `prohibido` con la marca de cuatro ojos, así que la propiedad estaba escrita dos
+// veces, argumentada como «un arreglo, no un detalle», y sin nada que la sostenga. Encontrado el
+// 2026-09-05 leyendo de a pares los comentarios que argumentan un ORDEN, que es el único
+// instrumento que encuentra esta clase: el código de los dos archivos se ve bien por separado.
+//
+// LO QUE PASA AL INVERTIRLO ES PEOR DE LO QUE YO PREDIJE, Y LO CORRIJO PORQUE LO MEDÍ.
+//
+// Escribí que el síntoma era «una fila de aprobación pendiente sobre una sesión que no se abre
+// nunca». Corrí el sabotaje —mover `puertaDeCuatroOjos` arriba del veto, en la shell— y lo que
+// falló primero fue otra aserción: **la llamada dejó de dar error**. La puerta de cuatro ojos
+// devuelve una respuesta de «esperando aprobación» y RETORNA, así que el chequeo de consentimiento
+// no llega a correr: quien pidió la shell recibe «esperando» en vez de «prohibido».
+//
+// La máquina sigue protegida —cuando el segundo operador apruebe, el veto rechaza en la llamada
+// siguiente— pero se pagan tres cosas en vez de una: el pedido dice el estado equivocado, se
+// arrastra a una persona a decidir sobre algo que no puede pasar, y de paso se le cuenta que
+// alguien lo intentó. El eje `prohibido` está descrito como «no se abre NUNCA»; contestar
+// «esperando» es contestar otra cosa.
+//
+// POR ESO LAS DOS ASERCIONES SE QUEDAN. La del error cubre esta inversión; la del conteo de
+// solicitudes cubre la otra —una donde el veto sí corra pero DESPUÉS de haber creado la fila—, que
+// el sabotaje que probé no produce. Ninguna de las dos es redundante y ninguna cubre a la otra.
+//
+// Es la quinta vez en el día que correr el sabotaje enseña algo que el comentario había adivinado.
+// Se deja escrito lo que pasó, no lo que yo esperaba.
+//
+// EL CONTROL POSITIVO NO ES OPCIONAL ACÁ. Sin él, esta prueba pasaría igual contra una puerta de
+// cuatro ojos que no crea ninguna solicitud nunca — o sea sobre la feature entera rota.
+//
+// Sabotaje verificado que la pone en rojo: mover `puertaDeCuatroOjos` ARRIBA del chequeo de
+// consentimiento, en cualquiera de los dos caminos.
+func TestUnProhibidoNoLeHaceGastarElTiempoAlSegundoParDeOjos(t *testing.T) {
+	for _, c := range []struct {
+		camino string
+		tool   string
+	}{
+		{"pantalla", "musubi_fleet_screen"},
+		{"shell", "musubi_fleet_shell"},
+	} {
+		t.Run(c.camino, func(t *testing.T) {
+			s := newTestServer(t, embedding.NoopProvider{})
+			// La máquina sabe preguntar, para que el `prohibido` sea el declarado y no una
+			// degradación de `pide`: si midiera la degradación, esta prueba pasaría por otro motivo.
+			d, p := maquinaConGrado(t, s, fleet.ConsentimientoProhibido)
+			if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			marcarCuatroOjos(t, s, "casa", d.Name)
+
+			ahora := time.Now()
+			antes, err := s.engine.AprobacionesPendientes("casa", ahora, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, e := callAsPrincipal(t, s, p, c.tool, map[string]any{"device": d.Name})
+			if e == nil {
+				t.Fatalf("%s abrió sobre una máquina en `prohibido`: el veto del dueño es el candado que "+
+					"no se abre nunca", c.camino)
+			}
+			if !strings.Contains(strings.ToLower(e.Message), "prohibido") {
+				t.Errorf("el rechazo no nombra el consentimiento, así que manda a revisar el lugar "+
+					"equivocado —típicamente `principals.yaml`, buscando un permiso que ya está: %v", e.Message)
+			}
+
+			despues, err := s.engine.AprobacionesPendientes("casa", ahora, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(despues) != len(antes) {
+				t.Errorf("se creó %d solicitud(es) de aprobación sobre una máquina en `prohibido`.\n"+
+					"  El segundo par de ojos va a recibir un pedido por una sesión que NO puede abrirse, y de\n"+
+					"  paso se enteró de que alguien lo intentó. Los comentarios de methods_pantalla.go:85 y\n"+
+					"  methods_shell.go:72 dicen los dos que el veto va PRIMERO justamente por esto: revisá que\n"+
+					"  `puertaDeCuatroOjos` siga DESPUÉS del chequeo de consentimiento.",
+					len(despues)-len(antes))
+			}
+		})
+	}
+}
+
+// EL CONTROL POSITIVO, SEPARADO PARA QUE SE VEA QUE EXISTE.
+//
+// La misma máquina y la misma marca, pero en `libre`: ahí la solicitud SÍ tiene que aparecer. Sin
+// esta mitad, la prueba de arriba pasaría contra una puerta de cuatro ojos que nunca crea nada —
+// es decir, en verde sobre la feature entera apagada, que es el modo de falla que este archivo
+// entero persigue.
+func TestConLaMaquinaEnLibreLosCuatroOjosSiPidenAprobacion(t *testing.T) {
+	for _, c := range []struct {
+		camino string
+		tool   string
+	}{
+		{"pantalla", "musubi_fleet_screen"},
+		{"shell", "musubi_fleet_shell"},
+	} {
+		t.Run(c.camino, func(t *testing.T) {
+			s := newTestServer(t, embedding.NoopProvider{})
+			d, p := maquinaConGrado(t, s, fleet.ConsentimientoLibre)
+			marcarCuatroOjos(t, s, "casa", d.Name)
+
+			if _, e := callAsPrincipal(t, s, p, c.tool, map[string]any{"device": d.Name}); e != nil {
+				// Un pendiente NO es un error: la puerta devuelve una respuesta sin el artefacto de
+				// acceso. Si vuelve error, es otra cosa y hay que verla.
+				t.Fatalf("%s devolvió error en vez de quedar esperando aprobación: %+v", c.camino, e)
+			}
+			pend, err := s.engine.AprobacionesPendientes("casa", time.Now(), 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pend) == 0 {
+				t.Fatalf("con la marca puesta y la máquina en `libre` no se creó ninguna solicitud: la " +
+					"puerta de cuatro ojos no está pidiendo nada, y entonces la prueba de arriba pasaría " +
+					"por el motivo equivocado")
+			}
+		})
+	}
+}
