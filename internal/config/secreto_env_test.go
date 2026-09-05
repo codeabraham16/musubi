@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,5 +130,78 @@ func TestConfigSombraNoSeDelataASiMismo(t *testing.T) {
 	}
 	if got := ConfigSombra(home); got != "" {
 		t.Fatalf("el proyecto es el home: no hay sombra. Devolvió %q", got)
+	}
+}
+
+// ── A101: que nadie más vuelva a leer un token nombrado sin el respaldo del archivo ──────────
+//
+// El cabo A89 arregló DOS lugares (NewSyncClient y nuevoEmpujadorOTLP) y la pregunta que rinde no
+// era «¿esto está mal?» sino «¿quién más hace esto?». Eran seis: `resolveServiceAuth` en el mismo
+// http.go que se había tocado, provision, el canal `musubi cerebro`, el dashboard y la shell.
+//
+// Esta guarda es esa pregunta hecha permanente: un campo que NOMBRA una variable de entorno con un
+// token —`AuthTokenEnv`, `TokenEnv`— no se puede leer con `os.Getenv` a secas, porque así el
+// archivo `<VAR>_FILE` no existe para ese camino y el operador que siguió la recomendación queda
+// sin credencial y sin aviso.
+//
+// Sabotaje que la hace fallar: volver a poner `os.Getenv(cfg.AuthTokenEnv)` en cualquier lado.
+func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
+	var revisados int
+	var culpables []string
+
+	raiz := filepath.Join("..", "..")
+	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// Los directorios ocultos se saltean ENTEROS: `.claude/worktrees/` guarda copias
+			// completas del repo de sesiones viejas, y revisarlas daba 129 «culpables» que no
+			// existen en el árbol de verdad. Una guarda que grita sobre código que nadie despliega
+			// se desactiva sola.
+			// `ruta != raiz` importa: la raíz se pasa como "../.." y su Name() es "..", que empieza
+			// con punto — sin esta condición el recorrido se saltea el repo ENTERO y revisa cero
+			// archivos. Lo cazó el control de «miró algo» de abajo, que es exactamente para esto.
+			if ruta != raiz && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			switch d.Name() {
+			case "node_modules", "vendor", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(ruta)
+		if err != nil {
+			return err
+		}
+		revisados++
+		for i, linea := range strings.Split(string(b), "\n") {
+			if !strings.Contains(linea, "os.Getenv(") {
+				continue
+			}
+			if !strings.Contains(linea, "AuthTokenEnv") && !strings.Contains(linea, "TokenEnv") {
+				continue
+			}
+			culpables = append(culpables, fmt.Sprintf("%s:%d — %s", ruta, i+1, strings.TrimSpace(linea)))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("no pude recorrer el repo: %v", err)
+	}
+
+	// CONTROL DE «MIRÓ ALGO». El modo de falla más común de una guarda como ésta no es una
+	// aserción equivocada: es un recorrido que no llega y deja el verde sobre la nada.
+	if revisados < 100 {
+		t.Fatalf("sólo revisé %d archivos .go: el recorrido no llegó, así que este verde no dice nada", revisados)
+	}
+	if len(culpables) > 0 {
+		t.Fatalf("hay %d lugar(es) leyendo un token NOMBRADO con os.Getenv a secas, sin el respaldo\n"+
+			"`<VAR>_FILE`. Usá config.SecretoDeEnv (cabos A89/A101):\n  %s",
+			len(culpables), strings.Join(culpables, "\n  "))
 	}
 }

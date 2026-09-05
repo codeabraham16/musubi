@@ -2,7 +2,6 @@ package cognition
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"musubi/internal/config"
@@ -72,7 +71,14 @@ func newBaseProvider(cfg config.CognitionConfig) (Provider, error) {
 		// yaml, para no versionar secretos. Puede quedar vacía para backends locales sin auth.
 		apiKey := ""
 		if cfg.AuthTokenEnv != "" {
-			apiKey = os.Getenv(cfg.AuthTokenEnv)
+			// La variable O el archivo `<VAR>_FILE`, como el resto (cabos A89/A101). Un error acá
+			// es una ruta nombrada que no se pudo leer: eso es config rota y no un backend sin
+			// auth, así que se dice en voz alta en vez de degradar a «sin credencial».
+			k, err := config.SecretoDeEnv(cfg.AuthTokenEnv)
+			if err != nil {
+				return nil, fmt.Errorf("cognition.auth_token_env: %w", err)
+			}
+			apiKey = k
 		}
 		timeout := time.Duration(cfg.RequestTimeoutSeconds) * time.Second
 		return NewOpenAICompatProvider(cfg.Endpoint, cfg.Model, apiKey, timeout), nil

@@ -2,8 +2,8 @@ package provision
 
 import (
 	"fmt"
-	"os"
-	"strings"
+
+	"musubi/internal/config"
 )
 
 // Prober sondea el alcance de red desde el proceso musubi. Lo implementa netProber (real,
@@ -178,7 +178,13 @@ func selfCheck(rep *Report, v Verifier, opts Options) bool {
 		return false
 	}
 
-	token := strings.TrimSpace(os.Getenv(opts.TokenEnv))
+	token, terr := config.SecretoDeEnv(opts.TokenEnv)
+	if terr != nil {
+		rep.Steps = append(rep.Steps, StepResult{
+			Name: "auth", Status: StatusError, Detail: terr.Error(),
+		})
+		return false
+	}
 	if token == "" {
 		rep.Steps = append(rep.Steps, StepResult{
 			Name:   "auth",

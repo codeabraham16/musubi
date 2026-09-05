@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"musubi/internal/config"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,7 +39,7 @@ import (
 // runShell abre una sesión interactiva y conecta la terminal local con ella.
 func runShell(args []string) {
 	cerebro := strings.TrimSpace(os.Getenv(envCerebro))
-	token := strings.TrimSpace(os.Getenv("MUSUBI_TOKEN"))
+	token, _ := config.SecretoDeEnv("MUSUBI_TOKEN")
 	var maquina, proyecto string
 
 	for i := 0; i < len(args); i++ {
@@ -50,7 +51,7 @@ func runShell(args []string) {
 			}
 		case "--token-env":
 			if i+1 < len(args) {
-				token = strings.TrimSpace(os.Getenv(args[i+1]))
+				token, _ = config.SecretoDeEnv(args[i+1])
 				i++
 			}
 		case "--project":

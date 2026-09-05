@@ -522,7 +522,11 @@ func writeHTTPJSON(w http.ResponseWriter, resp JsonRpcResponse) {
 func resolveServiceAuth(cfg config.ServiceConfig) (token string, loopback bool, err error) {
 	loopback = isLoopbackHost(cfg.Addr)
 	if cfg.AuthTokenEnv != "" {
-		token = strings.TrimSpace(os.Getenv(cfg.AuthTokenEnv))
+		// Acepta la variable O el archivo `<VAR>_FILE`, igual que el resto (cabo A89/A101).
+		token, err = config.SecretoDeEnv(cfg.AuthTokenEnv)
+		if err != nil {
+			return "", loopback, err
+		}
 		// Nombrar la env var señala intención de exigir auth. Si está vacía/ausente,
 		// fail-closed: arrancar sin auth violaría esa intención en silencio.
 		if token == "" {

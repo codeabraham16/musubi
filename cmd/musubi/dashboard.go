@@ -54,7 +54,8 @@ func runDashboard(args []string) {
 	if tokenEnv == "" {
 		tokenEnv = "MUSUBI_TOKEN"
 	}
-	relay := nuevoRelay(central, os.Getenv(tokenEnv))
+	tokenRelay, _ := config.SecretoDeEnv(tokenEnv) // el motivo de un vacío lo explica motivoSinRelay
+	relay := nuevoRelay(central, tokenRelay)
 	relay.explicarSinCentral(motivoSinRelay(central, tokenEnv))
 
 	root := workspaceDir()
@@ -366,7 +367,7 @@ func motivoSinRelay(central, tokenEnv string) string {
 	if strings.TrimSpace(central) == "" {
 		falta = append(falta, "$MUSUBI_CENTRAL_URL / --central")
 	}
-	if strings.TrimSpace(os.Getenv(tokenEnv)) == "" {
+	if tok, _ := config.SecretoDeEnv(tokenEnv); tok == "" {
 		falta = append(falta, "$"+tokenEnv)
 	}
 	return "falta " + strings.Join(falta, " y ")
