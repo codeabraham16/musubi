@@ -431,3 +431,194 @@ func TestLaVersionDeGoNoDiverge(t *testing.T) {
 	}
 	t.Logf("%d pines de go-version comprobados contra go.mod (%s)", vistos, quiere)
 }
+
+// TestElPinDelGuionDeRedespliegueEsElVerdadero — el hermano del pin del backup (A111).
+//
+// EL CABO, MEDIDO EL 2026-09-05: de los dos guiones derivados que viven en el servidor,
+// `/usr/local/bin/musubi-backup` coincidía BYTE A BYTE con `deploy/musubi-backup.sh` y
+// `/home/musubi/redesplegar-cerebro.sh` tenía 9690 bytes contra 19469 del repo — con su
+// verificación de la migración muerta (`[[ "$ESQUEMA" -ge 37 ]]` con la base ya en 46: vacuamente
+// cierta), que pasó así en los seis redespliegues del 4 y el 5.
+//
+// La diferencia entre el que se mantuvo al día y el que no NO fue el cuidado de nadie: fue que uno
+// lo instalaba `install-musubi-brain.sh` detrás de una compuerta de sha256 y el otro llegaba a
+// mano. Es la lección de siempre —el hermano sin la guarda—, y por eso el arreglo fue darle al
+// redespliegue el mismo instalador, que trae consigo el mismo pin escrito a mano, que se pudre
+// igual. De ahí esta prueba.
+//
+// Y ACÁ EL PIN PODRIDO CUESTA MÁS QUE EN EL BACKUP: este guion reemplaza el binario del cerebro y
+// se corre como root, así que un `die` del instalador deja al servidor sin ninguna forma
+// verificada de actualizarse — y la salida a mano es justamente la que produjo la deriva.
+func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/redesplegar-cerebro.sh: %v", err)
+	}
+	real := fmt.Sprintf("%x", sha256.Sum256(guion))
+
+	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^REDESPLIEGUE_SHA256="([a-f0-9]{64})"`).FindSubmatch(inst)
+	if m == nil {
+		t.Fatal("install-musubi-brain.sh no declara REDESPLIEGUE_SHA256=\"<sha256>\": o se quitó la " +
+			"verificación del guion de redespliegue —y entonces se instala sin verificar el archivo " +
+			"que reemplaza el binario del cerebro corriendo como root— o cambió de forma y esta " +
+			"guarda dejó de mirar donde debe")
+	}
+	if pin := string(m[1]); pin != real {
+		t.Errorf("el pin del guion de redespliegue quedó viejo:\n"+
+			"  install-musubi-brain.sh dice:        %s\n"+
+			"  deploy/redesplegar-cerebro.sh es:    %s\n"+
+			"Alguien editó el guion y no actualizó el pin. El instalador hace `die` y el servidor "+
+			"queda sin guion de redespliegue verificado — y la salida a mano es exactamente lo que "+
+			"produjo A111.\nArreglo:  sha256sum deploy/redesplegar-cerebro.sh", pin, real)
+	}
+}
+
+// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
+// corta cuando alguien agregue el tercero (A111).
+//
+// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
+// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
+// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
+// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
+// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
+//
+// LA FUENTE MECÁNICA ES EL INSTALADOR: todo lo que llega al servidor con `install` está declarado
+// ahí, con su destino. Esta prueba lo lee, resuelve cada variable de destino, y exige que aparezca
+// en la tabla del verificador. El binario del cerebro es la única excepción y está nombrada abajo
+// con su razón; cualquier destino NUEVO rompe la prueba hasta que alguien decida qué hacer con él.
+func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
+	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
+	}
+	verif, err := os.ReadFile(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/verificar-despliegue.sh: %v", err)
+	}
+
+	// Las asignaciones literales del instalador, para poder resolver "$BACKUP_BIN" → la ruta.
+	rutaDe := map[string]string{}
+	for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"$]*)"`).FindAllSubmatch(inst, -1) {
+		rutaDe[string(m[1])] = string(m[2])
+	}
+
+	// Sólo el `install` de CÓDIGO. Las líneas de comentario que citan el comando —y hay varias,
+	// porque el instalador explica por qué usa `install` y no `mv`— no instalan nada, y contarlas
+	// sería la falla de siempre: una guarda satisfecha por un texto que no decide.
+	var destinos []string
+	for _, linea := range strings.Split(string(inst), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if strings.HasPrefix(codigo, "#") {
+			continue
+		}
+		m := regexp.MustCompile(`\binstall\s+-m\s+[0-7]{3,4}\s+(?:-o\s+\S+\s+)?(?:-g\s+\S+\s+)?"[^"]+"\s+"\$([A-Z_]+)"`).FindStringSubmatch(codigo)
+		if m != nil {
+			destinos = append(destinos, m[1])
+		}
+	}
+	if len(destinos) == 0 {
+		t.Fatal("no encontré ningún `install -m ... \"$DESTINO\"` en install-musubi-brain.sh: o el " +
+			"instalador dejó de instalar por ahí y esta guarda mira donde ya no se decide, o cambió " +
+			"de forma. En cualquiera de los dos casos la lista de guiones derivados quedó sin fuente")
+	}
+
+	// LA ÚNICA EXCEPCIÓN, con su razón. El binario del cerebro no se compara por sha contra el
+	// repo porque el repo no lo trae: se compila. Su deriva la mira la sección «versión del
+	// cerebro» de `verificar-despliegue.sh`, que le pregunta `musubi version` y la cruza contra
+	// VERSION. Es otra pregunta, no una menos.
+	const binarioDelCerebro = "BIN"
+
+	// LA TABLA SE EXTRAE ANTES Y LA MEMBRESÍA SE PREGUNTA ADENTRO DE ELLA, no en todo el archivo.
+	// Preguntar `strings.Contains(verificador, ruta)` habría dejado que un COMENTARIO que nombra la
+	// ruta satisficiera la guarda sin comparar nada — que es el defecto dominante del 2026-09-05
+	// (siete guardas en verde sobre su propio sabotaje, todas por un texto que vivía donde no
+	// decide) y sería especialmente ridículo acá, en la guarda que existe para cerrarlo.
+	tabla := regexp.MustCompile(`(?s)GUIONES_DERIVADOS="(.*?)"`).FindStringSubmatch(string(verif))
+	if tabla == nil {
+		t.Fatal("verificar-despliegue.sh ya no declara GUIONES_DERIVADOS=\"...\": la tabla cambió de " +
+			"forma y esta guarda —y el arreglo de A111— dejaron de tener dónde apoyarse")
+	}
+
+	sort.Strings(destinos)
+	comprobados := 0
+	for _, v := range destinos {
+		if v == binarioDelCerebro {
+			continue
+		}
+		ruta, ok := rutaDe[v]
+		if !ok {
+			t.Errorf("el instalador instala en $%s y no encuentro su asignación literal: no puedo "+
+				"saber qué ruta es, así que tampoco puedo comprobar que alguien la compare", v)
+			continue
+		}
+		// LA CLASE, NO EL CASO: ningún destino de instalación puede colgar de /home.
+		// Se pregunta ANTES que la pertenencia a la tabla a propósito: una ruta bajo /home está mal
+		// aunque alguien la compare, y agregarla a la tabla no la lava — sería un rojo contestado con
+		// el arreglo equivocado.
+		//
+		// El arreglo de A111 movió `redesplegar-cerebro.sh` del home de `musubi` a /usr/local/sbin
+		// porque se corre con `sudo` y vivía en un directorio que escribe el uid 1000 — el mismo con
+		// el que corre `musubi_fleet_exec`, o sea que quien alcance el canal del agente podía dejar
+		// código escrito ahí y esperar al próximo redespliegue.
+		//
+		// MEDIDO EN EL SERVIDOR EL 2026-09-05, y esto es lo que convierte el caso en una clase: en
+		// `/home/musubi` hay DIECISÉIS archivos ejecutables `.sh`/`.py` con la misma forma
+		// —`arreglar-principals.py`, `backup-secrets.sh`, `b1-instalar-timer.sh`, `b1-adjudicar.sh`,
+		// entre otros—. Ninguno lo corre root hoy por systemd ni por cron (verificado: las dos
+		// unidades que apuntan a /home corren con `User=musubi`, y no hay nada en /etc/cron.d, en
+		// /etc/crontab ni en el cron de root), así que la exposición de hoy es exactamente una: un
+		// humano haciendo `sudo` sobre un archivo que el uid del agente puede reescribir. Pero nada
+		// impide la siguiente, y custodiar «el redespliegue está en /usr/local/sbin» habría cerrado
+		// el caso dejando la clase abierta — que es el defecto que este repo repite.
+		if strings.HasPrefix(ruta, "/home/") {
+			t.Errorf("el instalador instala %s (en $%s), que cuelga de /home.\n"+
+				"Un archivo bajo /home lo escribe el dueño de ese home; si además se corre con `sudo` "+
+				"—o lo lee algo privilegiado— es un camino de escalada, y en este servidor no es "+
+				"teórico: `musubi_fleet_exec` corre como ese mismo uid.\n"+
+				"Arreglo: instalalo bajo /usr/local/bin o /usr/local/sbin, que son de root", ruta, v)
+			continue
+		}
+
+		// Se busca `|<ruta>` y dentro de `tabla[1]`: así es como la tabla la escribe —después del
+		// archivo del repo— y ahí es donde la ruta DECIDE que se compare algo.
+		if !strings.Contains(tabla[1], "|"+ruta) {
+			t.Errorf("`install-musubi-brain.sh` instala %s (en $%s) y `verificar-despliegue.sh` NO lo "+
+				"compara contra el repo.\nEs A111 otra vez con otro archivo: un guion que llega al "+
+				"servidor y que nada cruza contra su fuente se queda viejo en silencio, y no hay "+
+				"daemon que lo relea —el archivo ES lo que corre—.\nArreglo: agregá la fila "+
+				"`<archivo del repo>|%s` a GUIONES_DERIVADOS en deploy/verificar-despliegue.sh", ruta, v, ruta)
+			continue
+		}
+		comprobados++
+	}
+	if comprobados == 0 {
+		t.Fatal("no quedó ningún destino que comprobar después de descontar el binario del cerebro: " +
+			"esta prueba estaría en verde sin haber mirado nada")
+	}
+
+	// La tabla al revés: que cada archivo que declara exista. Una fila que apunta a un archivo
+	// borrado compara contra la nada, y el verificador lo diría en rojo recién en el servidor.
+	filas := 0
+	for _, fila := range strings.Split(tabla[1], "\n") {
+		fila = strings.TrimSpace(fila)
+		if fila == "" {
+			continue
+		}
+		partes := strings.SplitN(fila, "|", 2)
+		if len(partes) != 2 {
+			t.Errorf("fila mal formada en GUIONES_DERIVADOS: %q (se espera `<archivo del repo>|<ruta en el servidor>`)", fila)
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("..", "..", partes[0])); err != nil {
+			t.Errorf("GUIONES_DERIVADOS declara %q y ese archivo no existe en el repo: la comparación "+
+				"no tiene contra qué correr", partes[0])
+			continue
+		}
+		filas++
+	}
+	t.Logf("%d destinos instalados comprobados contra la tabla, %d filas de la tabla con archivo presente", comprobados, filas)
+}

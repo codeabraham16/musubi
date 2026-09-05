@@ -35,6 +35,15 @@ PORT="${BRAIN_ADDR##*:}"
 BACKUP_SHA256="631b9bdbe55851911ec02f46724595eddcbf70a35973a6bfe692229024e44498"
 BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh"
 BACKUP_BIN="/usr/local/bin/musubi-backup"
+# sha256 de deploy/redesplegar-cerebro.sh, mismo criterio y mismo motivo que el de arriba — con
+# una razón MÁS fuerte: este guion reemplaza el binario del cerebro y se corre como root, así que
+# es el peor archivo del despliegue para instalar sin verificar. Si lo cambiás, actualizá esto:
+# sha256sum deploy/redesplegar-cerebro.sh
+REDESPLIEGUE_SHA256="2515c9d46d83d67a02350b2f3382e8af27ca3e29b436fd91cf185f31495baa01"
+REDESPLIEGUE_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/redesplegar-cerebro.sh"
+# /usr/local/sbin y no el home de $BRAIN_USER: lo corre root, así que no puede vivir donde escribe
+# un usuario sin privilegios. El porqué largo está en el paso 5c.
+REDESPLIEGUE_BIN="/usr/local/sbin/redesplegar-cerebro.sh"
 # Directorio del propio instalador: cuando se corre desde el clone (sudo ./install-musubi-brain.sh),
 # musubi-backup.sh está al lado y no hace falta bajar nada de la red.
 AQUI="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo /nonexistent)"
@@ -249,6 +258,55 @@ EOF
   ok "Backup diario habilitado (03:30). CONFIGURÁ BACKUP_REMOTE en $ENV_FILE (si no, la unidad falla-cerrado; o seteá BACKUP_ALLOW_LOCAL_ONLY=1)."
 else
   log "No hay musubi-backup.sh junto al instalador y no se pudo bajar de $BACKUP_SCRIPT_URL; instalá el timer a mano (ver docs/Server_Brain_Onboarding.md)."
+fi
+
+# ── 5c. El guion de REDESPLIEGUE (A111) ──────────────────────────────────────
+# POR QUÉ ESTE PASO EXISTE, que es la lección y no el trámite.
+#
+# Hasta el 2026-09-05 este instalador ponía UN guion derivado —musubi-backup— y `redesplegar-
+# cerebro.sh` llegaba a mano. Medido ese día: el que tenía instalador coincidía BYTE A BYTE con el
+# repo, y el que llegaba a mano estaba a 9690 bytes contra 19469, con su verificación de la
+# migración muerta (`[[ "$ESQUEMA" -ge 37 ]]` con la base ya en 46: vacuamente cierta, pasaba sin
+# comprobar nada, y pasó así en seis redespliegues). La diferencia entre los dos no fue el cuidado
+# de nadie: fue que uno tenía compuerta de sha256 y el otro no tenía nada.
+#
+# Y VA A /usr/local/sbin, NO AL HOME DE $BRAIN_USER, donde estaba. Este guion se corre con sudo, y
+# un archivo que ejecuta root desde un directorio que escribe un usuario sin privilegios es un
+# camino de escalada. Acá no es teórico: `musubi_fleet_exec` corre en este servidor como ese mismo
+# usuario, así que quien alcance el canal del agente podía dejar código escrito ahí y esperar al
+# próximo redespliegue. La copia vieja NO se borra sola —es un archivo que puso una persona— pero
+# se avisa fuerte, y `verificar-despliegue.sh` la marca en rojo hasta que no esté.
+log "Instalando el guion de redespliegue del cerebro"
+tmprd="$(mktemp)"
+if [ -f "$AQUI/redesplegar-cerebro.sh" ]; then
+  cp "$AQUI/redesplegar-cerebro.sh" "$tmprd"
+  origen_rd="$AQUI/redesplegar-cerebro.sh"
+elif curl -fsSL "$REDESPLIEGUE_SCRIPT_URL" -o "$tmprd"; then
+  origen_rd="$REDESPLIEGUE_SCRIPT_URL"
+else
+  rm -f "$tmprd"; origen_rd=""
+fi
+if [ -n "$origen_rd" ]; then
+  got_rd="$(sha256sum "$tmprd" | awk '{print $1}')"
+  if [ "$got_rd" != "$REDESPLIEGUE_SHA256" ]; then
+    rm -f "$tmprd"
+    die "redesplegar-cerebro.sh NO coincide con el sha256 que espera este instalador (origen=$origen_rd want=$REDESPLIEGUE_SHA256 got=$got_rd). NO se instaló. Si vos cambiaste deploy/redesplegar-cerebro.sh, actualizá REDESPLIEGUE_SHA256 en este instalador (sha256sum deploy/redesplegar-cerebro.sh). Si NO lo tocaste, alguien cambió el guion que reemplaza el binario del cerebro corriendo como root: revisá 'git log -p deploy/redesplegar-cerebro.sh' antes de seguir."
+  fi
+  ok "Checksum de redesplegar-cerebro.sh verificado ($origen_rd)"
+  # 0755 root:root a propósito: lo LEE y lo corre root, y no lo escribe nadie más.
+  install -m 0755 -o root -g root "$tmprd" "$REDESPLIEGUE_BIN"
+  rm -f "$tmprd"
+  command -v restorecon &>/dev/null && restorecon -v "$REDESPLIEGUE_BIN" || true
+  ok "Redespliegue disponible:  sudo $REDESPLIEGUE_BIN /ruta/al/binario-nuevo <sha256>"
+  # La copia vieja en el home del usuario del cerebro. No se borra —la puso una persona— pero
+  # dejarla callada sería peor que no haberla movido: son dos guiones que hacen lo mismo y sólo
+  # uno se actualiza.
+  LEGADO_RD="/home/$BRAIN_USER/redesplegar-cerebro.sh"
+  if [ -e "$LEGADO_RD" ]; then
+    printf '\033[33m! Quedó la copia vieja en %s. Son dos cosas: alguien puede correr ÉSA sin notarlo (y no la actualiza nadie), y está en un directorio que escribe el usuario %s —el mismo con el que corre musubi_fleet_exec— para un guion que se invoca con sudo. Sacala:  sudo rm %s\033[0m\n' "$LEGADO_RD" "$BRAIN_USER" "$LEGADO_RD"
+  fi
+else
+  log "No hay redesplegar-cerebro.sh junto al instalador y no se pudo bajar de $REDESPLIEGUE_SCRIPT_URL; el cerebro queda instalado pero SIN guion de redespliegue (ver deploy/RUNBOOK.md)."
 fi
 
 # ── 6. Firewall de la malla (best-effort) ───────────────────────────────────

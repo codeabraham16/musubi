@@ -23,9 +23,14 @@
 #
 #   · El CONTENIDO de cada regla. Compara nombres y cantidades: una alerta cuyo umbral cambió en
 #     el repo y no en producción tiene el mismo nombre y no se ve desde acá.
-#   · Los archivos del servidor. Se le pregunta a Prometheus qué CARGÓ, que es la única respuesta
-#     que importa; un archivo correcto sin recargar no se distingue de uno viejo, y así tiene que
-#     ser.
+#   · Los archivos de CONFIGURACIÓN del servidor. Se le pregunta a Prometheus qué CARGÓ, que es la
+#     única respuesta que importa; un archivo correcto sin recargar no se distingue de uno viejo, y
+#     así tiene que ser. **Esa razón vale para lo que lee un daemon y NO para un guion de shell**:
+#     no hay nadie que lo relea, el archivo ES lo que corre en el momento en que se lo invoca. Por
+#     confundir los dos casos, el `redesplegar-cerebro.sh` del servidor quedó a la mitad del del
+#     repo y con su verificación de la migración muerta desde el esquema 38 —pasó así en los seis
+#     redespliegues del 4 y el 5 de septiembre de 2026 (A111)—, y este script, que existe justo
+#     para cruzar repo contra producción, no lo miraba. Los guiones derivados SÍ se comparan, abajo.
 #   · Los scrapes de sitio (`/etc/prometheus/scrapes/*.yml`). Son por sitio a propósito y el repo
 #     sólo trae el `.ejemplo`, así que no hay contra qué compararlos.
 #   · Lo que corre en las máquinas de la flota. Eso lo dice `musubi_fleet_device_agent_stale` (A68).
@@ -712,6 +717,96 @@ else
     rojo "podman-restart del USUARIO está en «$PRESTART»: después de un reboot los contenedores rootless NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. El unit del sistema (hoy «${PRESTART_SIS:-?}») NO los cubre: son rootless. Arreglo: systemctl --user enable podman-restart.service"
   fi
 fi
+
+# ── Los guiones DERIVADOS: el archivo que se va a correr contra el que el repo declara ──────
+#
+# POR QUÉ ESTO ESTÁ ACÁ Y NO EN LA LISTA DE «lo que no se mira» (A111).
+#
+# El encabezado de este script dice que NO mira los archivos del servidor, y da la razón: se le
+# pregunta a Prometheus qué CARGÓ, porque un archivo correcto que el daemon no releyó se ve igual
+# que uno bueno. Esa razón es cierta para una configuración que un daemon lee al arrancar.
+#
+# PARA UN GUION DE SHELL NO APLICA, y confundir los dos casos costó lo siguiente: medido el
+# 2026-09-05, `/home/musubi/redesplegar-cerebro.sh` tenía 9690 bytes contra 19469 del repo, y su
+# verificación de la migración decía `[[ "$ESQUEMA" -ge 37 ]]` cuando la base ya iba por 46 — o
+# sea VACUAMENTE CIERTA: pasaba sin comprobar nada, y pasó así en los seis redespliegues del 4 y
+# del 5. El arreglo estaba en el repo hacía días. No hay daemon que relea un guion: el archivo ES
+# lo que corre, en el momento en que alguien lo invoca.
+#
+# Y LA DERIVA NO FUE GENERAL, QUE ES LO QUE LA HIZO INVISIBLE. De los dos guiones derivados,
+# `musubi-backup` coincidía byte a byte con el repo y el del redespliegue no. La diferencia no es
+# suerte: el backup lo instala `install-musubi-brain.sh` detrás de una compuerta de sha256, y el
+# del redespliegue llegó a mano y no lo instalaba nadie. Un guion sin instalador no tiene cómo
+# actualizarse, y sin esta sección tampoco tenía cómo delatarse.
+#
+# CUATRO RESPUESTAS Y NO DOS. «coincide», «difiere», «no está» y «no pude preguntar» se arreglan
+# de cuatro maneras distintas, y las últimas dos son las que un verificador tiende a confundir con
+# un verde. `corre_alla` se traga los errores con `|| true`, así que una respuesta VACÍA acá
+# significa «no pude preguntar» y sale por `dudoso`, nunca por verde.
+titulo "guiones derivados (el repo contra el archivo que se corre)"
+
+# sha_alla <ruta> — el sha256 del archivo en el servidor, o AUSENTE, o ILEGIBLE, o vacío si no se
+# pudo preguntar. Los tres estados van por stdout y el cuarto es la ausencia de stdout: mezclarlos
+# es exactamente cómo un chequeo remoto termina en verde sin haber mirado.
+sha_alla() {
+  corre_alla "if [ ! -e '$1' ]; then echo AUSENTE; elif [ ! -r '$1' ]; then echo ILEGIBLE; else sha256sum '$1' 2>/dev/null | awk '{print \$1}'; fi"
+}
+
+# La tabla de guiones derivados: <archivo del repo>|<ruta canónica en el servidor>.
+# La custodia `TestCadaGuionQueSeInstalaEnElServidorSeCompara`: todo destino que un instalador
+# escriba con `install` tiene que aparecer acá. Una lista a mano sin guarda es cómo se coló A93.
+GUIONES_DERIVADOS="deploy/musubi-backup.sh|/usr/local/bin/musubi-backup
+deploy/redesplegar-cerebro.sh|/usr/local/sbin/redesplegar-cerebro.sh"
+
+# Si falta `sha256sum` allá, TODAS las respuestas vienen vacías y todas dirían «no pude preguntar»
+# por la misma causa. Se pregunta una vez para poder nombrarla, en vez de repetir N veces un
+# diagnóstico que no distingue entre «no hay ssh» y «no hay sha256sum».
+HAY_SHA_ALLA="$(corre_alla 'command -v sha256sum >/dev/null 2>&1 && echo si')"
+
+while IFS='|' read -r rel destino; do
+  [ -n "$rel" ] || continue
+  if [ ! -f "$REPO/$rel" ]; then
+    rojo "$rel no existe en el repo, y $destino se compara contra él: o se renombró el guion y esta tabla quedó vieja, o se borró y el servidor sigue corriendo una copia que ya no tiene fuente"
+    continue
+  fi
+  SHA_REPO="$(sha256sum "$REPO/$rel" | awk '{print $1}')"
+  SHA_ALLA="$(sha_alla "$destino")"
+  case "$SHA_ALLA" in
+    "")
+      if [ "$HAY_SHA_ALLA" != "si" ] && [ -n "$SSH_HOST" ]; then
+        dudoso "no se pudo comparar $destino: en el servidor no hay \`sha256sum\` (probá con \`shasum -a 256\`, o corré esto EN el servidor)"
+      else
+        dudoso "no se pudo preguntar por $destino (hace falta correr esto EN el servidor, o con MUSUBI_SSH=<host>)"
+      fi ;;
+    AUSENTE)
+      rojo "$destino NO existe en el servidor. El repo declara $rel y allá no hay nada: si alguien necesita ese guion hoy, no lo tiene — y si tiene una copia en otra ruta, es una copia que nadie compara" ;;
+    ILEGIBLE)
+      dudoso "$destino existe pero no se pudo leer con el usuario de esta sesión: no se comparó" ;;
+    "$SHA_REPO")
+      verde "$destino coincide byte a byte con $rel" ;;
+    *)
+      rojo "$destino DIFIERE de $rel — allá $SHA_ALLA, acá $SHA_REPO. No hay daemon que relea un guion: eso es lo que corre la próxima vez que alguien lo invoque. Para ver qué cambió:  ${SSH_HOST:+ssh $SSH_HOST }cat $destino | diff - $REPO/$rel" ;;
+  esac
+done <<GUIONES
+$GUIONES_DERIVADOS
+GUIONES
+
+# LA COPIA VIEJA EN EL HOME DEL USUARIO DEL CEREBRO, que es una divergencia Y ADEMÁS otra cosa.
+#
+# `redesplegar-cerebro.sh` vivió en `/home/musubi/` y se corre con `sudo`. Esa combinación —un
+# archivo en un directorio que escribe el usuario `musubi`, ejecutado como root— es un camino de
+# escalada, y no es teórico en esta flota: `musubi_fleet_exec` en el servidor corre EXACTAMENTE
+# como `uid=1000(musubi)` (medido en A111). O sea que quien alcance el canal del agente puede
+# dejar código escrito ahí, y root lo corre en el próximo redespliegue. Por eso la ruta canónica
+# pasó a `/usr/local/sbin`, que es de root, y por eso una copia sobreviviente es ROJA aunque su
+# contenido esté al día: el problema no es qué dice, es quién puede reescribirla.
+LEGADO="/home/musubi/redesplegar-cerebro.sh"
+SHA_LEGADO="$(sha_alla "$LEGADO")"
+case "$SHA_LEGADO" in
+  "")       dudoso "no se pudo preguntar si quedó la copia vieja en $LEGADO" ;;
+  AUSENTE)  verde "no quedó ninguna copia de redespliegue en el home de \`musubi\` (la ruta canónica es /usr/local/sbin, que es de root)" ;;
+  *)        rojo "quedó una copia en $LEGADO. Son DOS cosas: alguien puede correr ésa en vez de la canónica sin notarlo, y está en un directorio que escribe el usuario \`musubi\` —el mismo uid con el que corre \`musubi_fleet_exec\`— para un guion que se invoca con sudo. Sacala:  ${SSH_HOST:+ssh $SSH_HOST }sudo rm $LEGADO" ;;
+esac
 
 # ── El veredicto ────────────────────────────────────────────────────────────────────────────
 if [ "$DIVERGE" -ne 0 ]; then
