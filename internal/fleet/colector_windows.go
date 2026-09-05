@@ -12,8 +12,9 @@ package fleet
 //
 //   - LOAD AVERAGE. No es que valga cero: el concepto no existe fuera de UNIX. Un 0.00 en cada
 //     máquina Windows de la flota sería indistinguible de una máquina ociosa.
-//   - TEMPERATURA. Se puede sacar por WMI (MSAcpi_ThermalZoneTemperature), pero WMI desde Go sin
-//     dependencias es COM crudo, y muchos equipos no exponen el sensor igual. Queda anotado.
+//   - TEMPERATURA: YA NO. Era A2, y su premisa se cayó — ver `temperaturaWindows` más abajo.
+//     Sigue siendo `nil` en la mayoría de los equipos, pero ahora eso es una MEDICIÓN («este
+//     firmware no publica la clase») y no una ausencia de código.
 //   - MEMORIA LIBRE (mem_libre). Y ésta es la que hay que leer despacio, porque el atajo está a
 //     un campo de distancia: MEMORYSTATUSEX.ullAvailPhys es el análogo de MemAvailable, NO de
 //     MemFree — incluye la standby list, que es cache reutilizable. Reportarlo como mem_libre
@@ -30,6 +31,8 @@ package fleet
 // en cualquier plataforma.
 
 import (
+	"context"
+	"os/exec"
 	"runtime"
 	"syscall"
 	"time"
@@ -89,6 +92,9 @@ type performanceInformation struct {
 
 type colectorWindows struct {
 	cpu contadorCPU
+	// La zona térmica NO se lee en cada muestra: ver temperaturaWindows.
+	tempUltima *float64
+	tempCuando time.Time
 }
 
 // NuevoColector devuelve el colector de este sistema operativo.
@@ -145,9 +151,64 @@ func (c *colectorWindows) Tomar() (Muestra, error) {
 		m.NumProcesos = int(pi.processCount)
 	}
 
-	// Load, temperatura y mem_libre quedan nil: ver el encabezado. La tentación concreta es
-	// emitir `mem.disponibleFisica` como mem_libre, y sería el bug de MemFree al revés.
+	// TEMPERATURA (A2). Sólo viaja si se acaba de medir — ver temperaturaWindows.
+	m.TempC = c.temperaturaWindows(m.Tomada)
+
+	// Load y mem_libre quedan nil: ver el encabezado. La tentación concreta es emitir
+	// `mem.disponibleFisica` como mem_libre, y sería el bug de MemFree al revés.
 	return m, nil
+}
+
+// tempCadaTanto es cada cuánto se le pregunta al firmware por la zona térmica.
+//
+// NO es el intervalo del latido (30 s) y la diferencia es plata ajena: cada lectura cuesta un
+// `powershell.exe` nuevo —fork, carga del runtime, ~300 ms de CPU— en la máquina de un cliente.
+// A 30 s serían ~2.900 arranques por día para un dato que se mueve en minutos.
+//
+// DOS MINUTOS Y NO CINCO, y el número sale de Prometheus y no del gusto: su ventana de obsolescencia
+// por default son 5 min, así que una serie que llega justo cada 5 se queda en el borde y parpadea.
+// A 2 min entra holgada y siguen siendo 4 veces menos arranques.
+const tempCadaTanto = 2 * time.Minute
+
+// temperaturaWindows devuelve la zona térmica SÓLO SI SE ACABA DE MEDIR.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LO CACHEADO NO SE PUBLICA, Y ÉSA ES LA DECISIÓN ENTERA
+//
+// La salida fácil sería guardar el último valor y ponerlo en cada muestra. Sería exactamente el
+// defecto que este repo persigue en todos lados: la `Muestra` lleva UN `Tomada` para todos sus
+// campos, así que un valor de hace dos minutos viajaría con el sello de hace un segundo. Es la
+// misma forma que la serie congelada de Prometheus, sólo que fabricada por nosotros — y la peor,
+// porque un dato viejo con cara de fresco no se cuestiona.
+//
+// Así que entre lectura y lectura el campo va `nil`, que es lo que el dominio ya sabe decir. La
+// serie sale más rala —una cada dos minutos en vez de una cada treinta segundos— y cada punto es
+// una medición de verdad. Un hueco honesto se lee; un número inventado, no.
+//
+// EL CACHÉ SIRVE PARA NO PREGUNTAR, NO PARA CONTESTAR. Se guarda el valor sólo para saber cuándo
+// toca volver a medir; lo que se devuelve es siempre la lectura de ESTE instante.
+func (c *colectorWindows) temperaturaWindows(ahora time.Time) *float64 {
+	if !c.tempCuando.IsZero() && ahora.Sub(c.tempCuando) < tempCadaTanto {
+		return nil // todavía no toca: se calla en vez de repetir lo de antes
+	}
+	c.tempCuando = ahora
+	// `root/WMI` y NO el namespace por default: MSAcpi_ThermalZoneTemperature no vive en
+	// root/cimv2, y pedirla ahí falla con «clase no válida» en TODA máquina — un error que se
+	// lee como «no hay sensor» y taparía el caso real.
+	const ps = `Get-CimInstance -Namespace root/WMI -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | ` +
+		`Select-Object -ExpandProperty CurrentTemperature`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	salida, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).Output()
+	if err != nil {
+		// NO se distingue «no hay sensor» de «falló la consulta», y es a propósito: las dos
+		// terminan en «no se sabe», que es lo único que un nil puede significar. Inventar dos
+		// caminos daría la ilusión de saber cuál fue.
+		c.tempUltima = nil
+		return nil
+	}
+	c.tempUltima = ParsearTempDecikelvin(string(salida))
+	return c.tempUltima
 }
 
 // leerDiscoWindows mide el volumen del sistema con GetDiskFreeSpaceExW, reproduciendo las mismas
