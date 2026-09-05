@@ -503,6 +503,28 @@ groups:
   # sin actualizar el conteo rompe la suite acá abajo, en el repo, antes de llegar a producción.
   - name: musubi-custodia
     rules:
+      # LA DEL SLA VIVE ACÁ Y NO EN musubi-alerts.yml, Y ESO NO ES ARBITRARIO: este archivo se
+      # instala SÓLO si el cerebro expone flota (ver preparar.sh), y las 11 recording rules del SLA
+      # miden series de flota. O sea que la condición «hay flota» ya la garantiza el hecho de que
+      # esta regla exista, y por eso la expresión puede ser la simple —`absent(...) or != 11`— sin
+      # el `and on() (count(musubi_fleet_device_up) > 0)` que ReglasDeFlotaSinDesplegar necesita.
+      #
+      # POR QUÉ HACÍA FALTA (A93, medido el 2026-09-05): de las tres familias de reglas, el SLA era
+      # la ÚNICA sin red. `musubi-recording.yml` no lo copiaba ningún guion y no lo contaba ninguna
+      # alerta; las otras dos se custodian cruzadas justamente contra esto. Se veía en las edades:
+      # `musubi:device_up:norm` tenía 11,9 h de historia y `musubi:service_up:cobertura30d` 6,25 h
+      # —tres instalaciones a mano en tres momentos distintos—, y ese mismo despliegue había
+      # cambiado el archivo. Lo que se le firma a un cliente no puede ser lo único sin guarda.
+      - alert: ReglasDelSlaSinDesplegar
+        expr: >-
+          absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-recording\\.yml;.*"}))
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-recording\\.yml;.*"}) != 11
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Las recording rules del SLA que corren no son las que declara el repo."
+          nota: "O el archivo no está cargado, o quedó una versión vieja. Es el número que se le factura a un cliente: un avg30d viejo sigue dando un resultado plausible, así que esta alerta es la única señal. `deploy/verificar-despliegue.sh` lo compara contra el repo. Ver deploy/RUNBOOK.md#reglasdelslasindesplegar"
+
       - alert: ReglasDelCerebroSinDesplegar
         # `absent(sum(...))` cubre «el archivo no está cargado» y el `!=` cubre «está cargado pero
         # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.

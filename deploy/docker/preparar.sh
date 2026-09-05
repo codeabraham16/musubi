@@ -122,11 +122,22 @@ BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:7717}"
 if [ -s "$DEST/musubi.token" ] &&
    curl -fsS -m 10 -H "Authorization: Bearer $(cat "$DEST/musubi.token")" "$BRAIN_URL/metrics" 2>/dev/null | grep -q "^musubi_fleet_"; then
 	install -m 0644 "$REPO/deploy/musubi-alerts-flota.yml" "$DEST/rules/musubi-alerts-flota.yml"
+	# EL SLA VA ATADO A LA FLOTA Y NO SUELTO (A93). Sus 11 recording rules derivan de
+	# `musubi_fleet_*`, así que sin flota no producirían nada; y su guarda cruzada
+	# (`ReglasDelSlaSinDesplegar`) vive en el archivo de flota, o sea que instalar uno sin el otro
+	# deja la guarda sin qué custodiar o el SLA sin quién lo custodie. Van juntos.
+	#
+	# Hasta hoy NADIE lo copiaba: se instalaba a mano, en tres momentos distintos, y se veía en las
+	# edades de las series (11,9 h contra 6,25 h de historia para reglas del mismo archivo).
+	install -m 0644 "$REPO/deploy/musubi-recording.yml" "$DEST/rules/musubi-recording.yml"
 	echo "→ reglas de flota: INSTALADAS (el cerebro expone musubi_fleet_*)"
+	echo "→ recording rules del SLA: INSTALADAS"
 	HAY_FLOTA=1
 else
 	rm -f "$DEST/rules/musubi-alerts-flota.yml"
+	rm -f "$DEST/rules/musubi-recording.yml"
 	install -m 0644 "$REPO/deploy/musubi-alerts-flota.yml" "$DEST/musubi-alerts-flota.yml.cuando-haya-flota"
+	install -m 0644 "$REPO/deploy/musubi-recording.yml"    "$DEST/musubi-recording.yml.cuando-haya-flota"
 	echo "→ reglas de flota: NO instaladas — el cerebro desplegado no expone musubi_fleet_*."
 	echo "  Quedan en $DEST/musubi-alerts-flota.yml.cuando-haya-flota. Volvé a correr este script"
 	echo "  cuando despliegues un binario con el plano de flota."

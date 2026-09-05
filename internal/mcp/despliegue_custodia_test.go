@@ -95,6 +95,9 @@ func exprDeAlerta(a archivoDeReglas, alerta string) (string, bool) {
 func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
+	// El SLA son recording rules, no alertas, pero `cuentaDeReglas` cuenta entradas de `rules:` y
+	// no le importa el campo — así que el mismo mecanismo sirve para custodiarlo (A93).
+	sla, _ := cargarReglas(t, "musubi-recording.yml")
 
 	casos := []struct {
 		alerta   string
@@ -104,6 +107,9 @@ func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	}{
 		{"ReglasDeFlotaSinDesplegar", base, flota, "musubi-alerts-flota.yml"},
 		{"ReglasDelCerebroSinDesplegar", flota, base, "musubi-alerts.yml"},
+		// A93 · el SLA era la única de las tres familias sin nadie que la contara. Su guarda vive
+		// en el archivo de FLOTA, que es el que se instala junto con él.
+		{"ReglasDelSlaSinDesplegar", flota, sla, "musubi-recording.yml"},
 	}
 	reNumero := regexp.MustCompile(`!=\s*(\d+)`)
 	for _, c := range casos {
@@ -149,6 +155,9 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-flota",
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-politicas",
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-custodia",
+		// El del SLA. Va acá porque es donde se prueba que un matcher no se lleve grupos ajenos, y
+		// `musubi-recording.yml` es el nombre que MÁS se parece a los otros dos sin ser ninguno.
+		"/etc/prometheus/rules/musubi-recording.yml;musubi-sla",
 	}
 	reMatcher := regexp.MustCompile(`rule_group=~"([^"]+)"`)
 
@@ -159,6 +168,7 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 	}{
 		{"ReglasDeFlotaSinDesplegar", base, "musubi-alerts-flota.yml"},
 		{"ReglasDelCerebroSinDesplegar", flota, "musubi-alerts.yml"},
+		{"ReglasDelSlaSinDesplegar", flota, "musubi-recording.yml"},
 	}
 	for _, c := range casos {
 		expr, ok := exprDeAlerta(c.en, c.alerta)

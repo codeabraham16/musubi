@@ -1,5 +1,13 @@
 # musubi-recording.yml — recording rules para el reporte de SLA por cliente.
 #
+# despliegue: condicional — sólo si el cerebro expone `musubi_fleet_*` (va atado a
+# musubi-alerts-flota.yml, que es donde vive su guarda cruzada `ReglasDelSlaSinDesplegar`).
+#
+# ESTA LÍNEA NO ES METADATO DECORATIVO: `deploy/verificar-despliegue.sh` la lee para decidir si un
+# archivo ausente es un ROJO o un gris legítimo. Los otros tres archivos de reglas la tenían y éste
+# no, así que el SLA no podía ni entrar a esa conversación — la tercera capa de A93, junto con que
+# ningún guion lo instalaba y ninguna alerta lo contaba.
+#
 # ════════════════════════════════════════════════════════════════════════════════════════════
 # POR QUÉ RECORDING RULES Y NO UNA CONSULTA AD HOC
 #

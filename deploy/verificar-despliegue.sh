@@ -306,6 +306,46 @@ else
   dudoso "no se pudo confirmar si CadenaDeAlertasFallando, FlotaSinTelemetria y ReglasDelCerebroSinDesplegar están cargadas: no hay lista de reglas que mirar"
 fi
 
+# (a quater) LAS RECORDING RULES DEL SLA ─────────────────────────────────────────────────────
+# TODO LO DE ARRIBA ES CIEGO A ESTE ARCHIVO, y por eso hace falta un bloque aparte.
+#
+# `CARGADAS` filtra por `type == "alerting"` y `TODAS_DECLARADAS` hace glob de `musubi-alerts*.yml`:
+# las once recording rules del SLA no aparecen en ninguna de las dos listas. Y son el número que se
+# le FACTURA a un cliente. A93, medido el 2026-09-05: ningún guion las instalaba, ninguna alerta las
+# contaba, y las edades de las series delataban tres instalaciones a mano en tres momentos distintos
+# (11,9 h de historia en una regla y 6,25 h en otra del mismo archivo).
+#
+# Lo que hace peligroso al caso es que un `avg30d` viejo sigue devolviendo un número plausible: no
+# hay síntoma. Así que la comparación es contra el repo y por conteo, igual que las otras dos.
+N_SLA_REPO="$(grep -cE '^[[:space:]]*-[[:space:]]+record:' "$REPO/deploy/musubi-recording.yml" || true)"
+if [ -z "$REGLAS_JSON" ]; then
+  dudoso "no se contaron las recording rules del SLA: no hay lista de reglas que mirar (el repo declara $N_SLA_REPO)"
+else
+  N_SLA_VIVAS="$(printf '%s' "$REGLAS_JSON" | python3 -c '
+import sys, json
+try:
+    g = json.load(sys.stdin)["data"]["groups"]
+except Exception:
+    print(""); sys.exit(0)
+print(sum(1 for x in g if "musubi-recording.yml" in x.get("file", "")
+          for r in x["rules"] if r.get("type") == "recording"))
+' 2>/dev/null)"
+  : "${N_SLA_VIVAS:=}"
+  if [ -z "$N_SLA_VIVAS" ]; then
+    dudoso "no pude contar las recording rules del SLA en la respuesta de Prometheus (el repo declara $N_SLA_REPO)"
+  elif [ "$N_SLA_VIVAS" = "$N_SLA_REPO" ]; then
+    verde "SLA: $N_SLA_VIVAS recording rules cargadas, las mismas $N_SLA_REPO que declara el repo"
+  elif [ "$N_SLA_VIVAS" = 0 ] && [ "$HAY_FLOTA" = no ]; then
+    gris "SLA sin cargar, y así corresponde: musubi-recording.yml es condicional y el cerebro no expone musubi_fleet_*"
+  elif [ "$N_SLA_VIVAS" = 0 ] && [ "$HAY_FLOTA" = indeterminado ]; then
+    dudoso "el SLA no está cargado y no pude resolver si correspondía (musubi-recording.yml es condicional y no pude preguntar por musubi_fleet_device_up)"
+  elif [ "$N_SLA_VIVAS" = 0 ]; then
+    rojo "el SLA NO está cargado y su condición SÍ se cumple: las $N_SLA_REPO recording rules de musubi-recording.yml quedaron sin desplegar, y los avg30d que se le muestran al cliente no existen o los está calculando otra cosa"
+  else
+    rojo "el SLA tiene $N_SLA_VIVAS recording rules cargadas y el repo declara $N_SLA_REPO: quedó una versión vieja del archivo. El número que se factura sigue saliendo plausible, así que esto es la única señal"
+  fi
+fi
+
 # (b) LOS TARGETS: quién está siendo scrapeado y quién no ────────────────────────────────────
 # Un target caído no es «una métrica menos»: toda alerta que dependa de él deja de poder disparar,
 # y en la UI eso se ve igual que «todo tranquilo».

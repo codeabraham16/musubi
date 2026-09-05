@@ -74,8 +74,20 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Las métricas que las reglas nombran salen del REPO, no de una lista escrita a mano acá: una
 # lista a mano se queda vieja el día que alguien agrega una regla, y el verificador la ignoraría.
+#
+# Y EL MISMO ARGUMENTO UN NIVEL ARRIBA: la lista de ARCHIVOS también era a mano, y también se quedó
+# vieja. `musubi-recording.yml` no estaba, así que las métricas de las que dependen las once
+# recording rules del SLA no se verificaban — y el SLA es lo que se le factura a un cliente. Si una
+# de sus entradas deja de existir, las reglas siguen evaluándose, no dan error, y el `avg30d` sale
+# de un promedio sobre nada. Se agrega acá porque es exactamente lo que este bloque dice hacer.
+# Ver A93.
+#
+# Sólo aporta sus ENTRADAS y no sus salidas: la regex pide `_` después de `musubi`, así que
+# `musubi:device_up:norm` (dos puntos, no guion bajo) no matchea. Es lo que se quiere — preguntarle
+# a Prometheus por una serie que él mismo produce no verifica nada de la cobertura.
 METRICAS="$(grep -hoE '\b(musubi|alertmanager|prometheus)_[a-z0-9_]+\b' \
-  "$REPO"/deploy/musubi-alerts.yml "$REPO"/deploy/musubi-alerts-flota.yml | sort -u)"
+  "$REPO"/deploy/musubi-alerts.yml "$REPO"/deploy/musubi-alerts-flota.yml \
+  "$REPO"/deploy/musubi-recording.yml | sort -u)"
 
 {
   printf 'P=%s\n' "$PROM_URL"

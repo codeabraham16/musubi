@@ -806,7 +806,9 @@ MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
 
 ## ReglasDelCerebroSinDesplegar
 
-Las dos son la misma cosa mirada desde cada lado: **lo que Prometheus tiene cargado no es lo que
+## ReglasDelSlaSinDesplegar
+
+Las tres son la misma cosa mirada desde cada lado: **lo que Prometheus tiene cargado no es lo que
 declara el repo**. Cada archivo de reglas vigila el conteo del OTRO, cruzado a propósito — un
 archivo que declara su propio conteo se despliega junto con el conteo, las dos mitades se mueven a
 la vez y la comprobación no falla nunca.
@@ -840,6 +842,51 @@ MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
 regla y no actualizó el conteo del archivo que la custodia. Eso lo detecta la suite
 (`TestCadaArchivoDeReglasCustodiaElConteoDelOtro`) antes de llegar a producción, así que si suena
 en producción es que se desplegó sin correr las pruebas.
+
+### Lo específico del SLA, que es distinto de las otras dos
+
+`ReglasDelSlaSinDesplegar` cuenta las **11 recording rules** de `musubi-recording.yml`, y se agregó
+el 2026-09-05 (A93) porque era **la única de las tres familias sin nadie que la contara**: ningún
+guion la instalaba, ninguna alerta la vigilaba, y `verificar-despliegue.sh` era ciego a ella —su
+conteo filtra `type == "alerting"` y su glob es `musubi-alerts*.yml`, así que las once no aparecían
+en ninguna lista. Se veía en las edades de las series: 11,9 h de historia en una regla y 6,25 h en
+otra **del mismo archivo**, o sea tres instalaciones a mano en tres momentos distintos.
+
+**Por qué importa más que las otras dos, y no menos**: éste es el número que se le factura a un
+cliente, y un `avg30d` calculado sobre una versión vieja del archivo **sigue devolviendo un
+resultado plausible**. No hay síntoma. Un panel con 92 % se ve igual esté bien o mal, así que esta
+alerta es la única señal que existe.
+
+**Va atado a las reglas de flota**, no suelto: sus once reglas derivan de `musubi_fleet_*` y su
+guarda vive dentro de `musubi-alerts-flota.yml`, así que `preparar.sh` instala los dos juntos o
+ninguno. Si aparece cargado uno sin el otro, es que alguien copió a mano.
+
+```bash
+# copiar los tres, que es como se despliegan
+scp deploy/musubi-alerts.yml deploy/musubi-alerts-flota.yml deploy/musubi-recording.yml \
+    musubi-server:/tmp/
+ssh musubi-server 'for f in musubi-alerts.yml musubi-alerts-flota.yml musubi-recording.yml; do
+  cat "/tmp/$f" > "$HOME/musubi-prometheus/rules/$f"; done
+  curl -sS -X POST http://127.0.0.1:9099/-/reload'
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+**Ojo con una trampa al recargar el SLA**: una recording rule que cambia de nombre **no borra la
+serie vieja**. La serie anterior se queda en el TSDB, deja de recibir puntos, y un panel que la
+consulte sigue dibujando el último valor con `last_over_time` — que es el mismo modo de falla que
+las series congeladas de la flota. Después de renombrar, confirmá que la vieja dejó de crecer:
+
+```bash
+# reemplazá <serie> por el nombre ANTERIOR
+curl -sG --data-urlencode 'query=count_over_time(<serie>[1h])' \
+  http://127.0.0.1:9099/api/v1/query
+```
+
+**Y lo que esta alerta NO cubre**: que las once reglas estén cargadas no dice que sus números
+signifiquen algo. Medido el mismo día, los `avg30d` se publicaban rotulados «a 30 días» sobre
+**11,9 h de historia — el 1,65 % de la ventana**, porque el TSDB había perdido su historia el
+2026-08-31. La cobertura existe como serie (`musubi:service_up:cobertura30d`) y **ninguna alerta la
+lee**: eso sigue abierto en A93.
 
 ## MaquinaSeReinicio
 
