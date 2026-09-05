@@ -282,7 +282,26 @@ for m in d.get("devices", []):
     if m.get("name")==sys.argv[1]:
         print(m.get("agent_version") or "")' "$DEVICE")"
   printf '   [%3ds] %s reporta: %s\n' "$((i*15))" "$DEVICE" "${V:-(sin respuesta)}"
-  [[ "$V" == "$VERSION" ]] && { ok "ACTUALIZADA a $VERSION"; exit 0; }
+  if [[ "$V" == "$VERSION" ]]; then
+    # EL VERDE NO LO PUEDE DAR LA VERSIÓN SOLA (A98). El paso [4] del cambiador corre
+    # `musubi.exe agent --once` para PROBAR el binario nuevo, y ese latido de prueba YA escribe la
+    # versión nueva en la fila del cerebro. O sea que si el paso [5] falla —`schtasks /run` no
+    # arranca la tarea, por ejemplo porque la instancia anterior todavía se está apagando y está
+    # registrada con `-MultipleInstances IgnoreNew`— la máquina queda SIN AGENTE y este guion la
+    # declara actualizada igual. El verde lo daría un campo que la prueba también escribe.
+    paso "confirmando EN LA MÁQUINA que quedó un agente vivo, no sólo una versión escrita"
+    if llamar "$(ps1 "$RESOLVER"'$vivos = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $d "musubi.exe") })
+$tarea = (schtasks /query /tn "Musubi Agente de Flota" /fo list 2>&1 | Out-String)
+$estado = (($tarea -split "`r?`n" | Where-Object { $_ -match "Status|Estado" }) -join " ").Trim()
+if ($vivos.Count -eq 0) { "NO hay ningun proceso corriendo desde " + $d + " -- la version nueva la escribio el latido de PRUEBA del cambiador, no un agente vivo. Tarea: " + $estado; exit 1 }
+"agente vivo: " + $vivos.Count + " proceso(s) en " + $d + " | " + $estado')" 60; then
+      ok "ACTUALIZADA a $VERSION, con agente vivo confirmado en la máquina"
+      exit 0
+    fi
+    rojo "la versión llegó pero NO quedó ningún agente corriendo: el cambiador probó el binario y la tarea no arrancó"
+    echo "    Arrancala a mano:  schtasks /run /tn \"Musubi Agente de Flota\"" >&2
+    exit 1
+  fi
 done
 rojo "no llegó a $VERSION en 5 min. Mirá el log EN LA MÁQUINA:"
 echo "    <carpeta-de-instalacion>\\cambio.log   (dice si hizo ROLLBACK y por qué)"
