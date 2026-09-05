@@ -299,12 +299,43 @@ Dos capas complementarias:
 
 ### Orquestación de workflows
 
-Musubi coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está
-listo y **recuerda el progreso entre sesiones** (estado en SQLite, resumible).
+Son **dos capas** y conviene no confundirlas: **SDD** es el flujo que se usa todos los días, y el
+**motor DAG** es la maquinaria de abajo — que además acepta un grafo propio, hoy detrás de una
+variable de entorno.
 
-> ⚠️ **La puerta de esta sección está cerrada por defecto.** El motor corre —`musubi_sdd` lo usa y
-> los `workflow_runs` de la base salen de ahí—, pero la tool que acepta *tu* grafo,
-> `musubi_workflow`, está entre las nueve dormidas: para el yaml de acá abajo hace falta
+#### SDD — el flujo guiado (`musubi_sdd`)
+
+Es la puerta viva: **todos los `workflow_runs` de la base salen de acá.** No se escribe YAML — a
+partir del nombre de un cambio, Musubi arma la cadena canónica y te guía fase por fase:
+
+`proposal` → `spec` → `design` → `tasks` → `implement` → `verify` → `archive`
+
+Las cuatro primeras son documentales y traen plantilla en `.musubi/templates/sdd/<fase>.md`; las tres
+últimas son acción, no documento.
+
+**Lo que lo separa de un checklist es la fusión memoria ↔ orquestación.** Al cerrar una fase con
+`action=complete` se persiste su **contrato de resultado** —`summary`, `artifacts`, `risks`,
+`next_recommended`— como una observación bajo `sdd/<cambio>/<fase>`. Las fases siguientes recuperan
+esos artefactos **por referencia** con `musubi_recall` (~300 tokens) en vez de releer los archivos
+(3.000–15.000 tokens). Musubi secuencia y recuerda; el agente ejecuta.
+
+El `run_id` es determinista (`sdd-<slug-del-cambio>`), así que el flujo es **resumible entre
+sesiones** y no hay dos runs para el mismo cambio.
+
+```text
+action=start    change=…                    → arranca y devuelve la fase activa
+action=complete change=… phase=… summary=…  → cierra la fase y devuelve la siguiente
+action=next | action=status  change=…       → reconsulta sin cerrar nada
+```
+
+#### El motor DAG por debajo (`musubi_workflow`)
+
+Coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está listo y
+**recuerda el progreso entre sesiones** (estado en SQLite, resumible). SDD es un caso particular de
+esto: una cadena lineal que Musubi genera por vos.
+
+> ⚠️ **Esta capa está cerrada por defecto.** El motor corre —es el que ejecuta SDD—, pero la tool que
+> acepta *tu* grafo está entre las nueve dormidas: para el yaml de acá abajo hace falta
 > `MUSUBI_TOOLS_ALL=1`. Sin esa variable, lo único que corre es la cadena fija de SDD.
 
 ```yaml
