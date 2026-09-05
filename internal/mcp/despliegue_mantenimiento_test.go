@@ -42,6 +42,10 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// corta la causa DOS niveles antes — durante el mantenimiento la política no se evalúa
 	// (`contarPolitica(pol, "mantenimiento")`), así que el contador de consentimiento no se mueve.
 	"PoliticaFrenadaPorConsentimiento": "cuenta rechazos por consentimiento del motor de políticas, no el estado de una máquina",
+	// Mira la cobertura del SLA por PROYECTO, no por máquina: una ventana de mantenimiento en un
+	// equipo no explica que el TSDB haya perdido datos, y suprimirla por eso taparía justo el caso
+	// que la alerta existe para ver.
+	"CoberturaDelSlaSeCayo": "mira la cobertura del SLA por proyecto, no el estado de una máquina",
 
 	// Las de custodia miran `prometheus_rule_group_rules`: hablan del DESPLIEGUE de los archivos de
 	// reglas, no de ninguna máquina. Una ventana de mantenimiento sobre un equipo no tiene nada que

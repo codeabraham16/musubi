@@ -231,6 +231,56 @@ musubi_fleet_log --project <proyecto> --limite 50
 **Qué hacer:** buscar la causa (el servicio que llena el disco, el proceso que come RAM), no
 subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
 
+## CoberturaDelSlaSeCayo
+
+**La cobertura del SLA cayó más de 5 puntos en 6 horas.** Mientras el TSDB acumula historia la
+cobertura **sólo sube**, así que una caída es una pérdida de datos, no una etapa.
+
+### Las tres causas, y las tres se arreglan
+
+```bash
+# 1 · ¿el TSDB perdió su historia? El bloque más viejo dice desde cuándo hay datos.
+curl -s http://127.0.0.1:9099/api/v1/status/tsdb | python3 -m json.tool | head -30
+# y el arranque real de la serie:
+curl -sG --data-urlencode 'query=min_over_time(timestamp(musubi:device_up:norm)[30d:1h])' \
+  http://127.0.0.1:9099/api/v1/query
+
+# 2 · ¿se cortó el scrape del cerebro?
+curl -sG --data-urlencode 'query=up{job=~"musubi.*"}' http://127.0.0.1:9099/api/v1/query
+
+# 3 · ¿las recording rules se recargaron con otra definición?
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh   # compara las 14 contra el repo
+```
+
+### Lo que hace esta alerta y lo que NO hace
+
+**NO existe una alerta de «cobertura baja», y es deliberado.** Una cobertura baja no se puede apagar
+arreglando algo: la única salida es que pase el tiempo. Una alarma que no se apaga actuando es cómo
+se enseña a ignorar un canal — y este repo ya lo pagó: trece `MaquinaCaida` que aparecían y se
+resolvían solas se leyeron como ruido de red durante diez días (**A79**). Así que la cobertura baja
+no avisa: **se expresa en el dato**.
+
+### Cómo se expresa en el dato: `:sla30d` contra `:avg30d`
+
+Hay dos familias de series y significan cosas distintas:
+
+| serie | qué es | cuándo usarla |
+|---|---|---|
+| `musubi:*:avg30d` | el promedio sobre lo que HAYA en la ventana | diagnóstico, nunca un reporte |
+| `musubi:*:sla30d` | el mismo número, **pero sólo existe si la cobertura llega a 0,95** | lo que se le muestra a un cliente |
+
+Cuando la cobertura no alcanza, `:sla30d` **desaparece**: un panel dibuja un hueco, que es la
+verdad, en vez de un porcentaje que no se puede sostener. **Un reporte tiene que leer `:sla30d`.**
+
+**Por qué 0,95**: con `interval: 5m`, 30 días son 8.640 muestras, así que el 5 % son **36 horas sin
+medir**. Un SLA de uptime se escribe contra presupuestos mucho más ajustados —99,9 % son 43 minutos
+al mes—, o sea que un mes con día y medio DESCONOCIDO no puede sostener una afirmación de ese orden.
+Por encima de 0,95 el faltante es más chico que el propio presupuesto de error.
+
+**Si `:sla30d` no existe en ninguna parte**, mirá primero si las reglas están cargadas
+(`ReglasDelSlaSinDesplegar`): «ausente porque la cobertura no alcanza» y «ausente porque el archivo
+no se desplegó» se ven idénticas desde un panel y se arreglan al revés.
+
 ## PoliticaFrenadaPorConsentimiento
 
 **`info`, y a propósito: no es una falla.** El eje de consentimiento hizo exactamente lo que

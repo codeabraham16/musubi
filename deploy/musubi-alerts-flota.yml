@@ -384,6 +384,28 @@ groups:
       # LO QUE NO DICE: en qué máquina. La métrica no lleva etiqueta `device` a propósito (ver
       # contarPolitica: cardinalidad políticas × máquinas × resultados, con dos mil máquinas de
       # horizonte). El journal la nombra y `musubi_fleet_cronologia` también.
+      # LA COBERTURA DEL SLA SE CAYÓ, QUE NO ES LO MISMO QUE ESTAR BAJA (A93).
+      #
+      # NO HAY ALERTA DE «cobertura baja» a propósito: no se apaga arreglando algo —la única salida
+      # es que pase el tiempo— y una alarma que no se apaga actuando es cómo se enseña a ignorar un
+      # canal. Este repo ya lo pagó: trece `MaquinaCaida` que aparecían y se resolvían solas se
+      # leyeron como ruido de red durante diez días (A79).
+      #
+      # LO ACCIONABLE ES LA CAÍDA. Mientras el TSDB acumula historia la cobertura sólo SUBE, así que
+      # un `delta` negativo significa que algo se rompió: el TSDB perdió datos (le pasó el
+      # 2026-08-31), el scrape se cortó, o las reglas se recargaron con otra definición. Las tres se
+      # arreglan, y ninguna es «esperar».
+      #
+      # `for: 30m` sobre una ventana de 6 h: la caída tiene que sostenerse, para no disparar por un
+      # hueco de un scrape.
+      - alert: CoberturaDelSlaSeCayo
+        expr: delta(musubi:project_up:cobertura30d[6h]) < -0.05
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La cobertura del SLA de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
+          nota: "Mientras el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida: revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
+
       - alert: PoliticaFrenadaPorConsentimiento
         expr: increase(musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}[24h]) > 0
         for: 6h
@@ -572,7 +594,7 @@ groups:
       - alert: ReglasDelSlaSinDesplegar
         expr: >-
           absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-recording\\.yml;.*"}))
-          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-recording\\.yml;.*"}) != 11
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-recording\\.yml;.*"}) != 14
         for: 30m
         labels: { severity: warning }
         annotations:

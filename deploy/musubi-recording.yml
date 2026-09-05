@@ -193,5 +193,51 @@ groups:
       # pregunta —«¿estaba la máquina reportando?»—, que es exactamente la que ya contesta
       # `musubi:project_up:cobertura30d`. Para saber si se perdió la medición, mirá ÉSA. Ésta
       # sirve por servicio, para leer un `avg30d` sabiendo sobre cuántas afirmaciones se calculó.
+      # ══════════════════════════════════════════════════════════════════════════════════════
+      # `:sla30d` ES EL NÚMERO QUE SE PUEDE DEFENDER. `:avg30d` ES EL DIAGNÓSTICO.
+      #
+      # A93, segunda mitad. Medido el 2026-09-05: los `avg30d` se publicaban rotulados «a 30 días»
+      # calculados sobre 11,9 h de historia — el 1,65 % de la ventana— porque el TSDB perdió la suya
+      # el 2026-08-31. Las cuatro series de `:cobertura30d` YA existían y no las leía nadie: ni una
+      # alerta, ni un panel, ni un guion. El repo no tiene consumidor del SLA todavía, así que el
+      # riesgo es FUTURO y el mecanismo tiene que sobrevivir a quien construya el reporte.
+      #
+      # Y ÉSE ES EL PUNTO: quien lo construya va a escribir `avg30d`, porque es el nombre que suena
+      # a lo que busca. Un número al que hay que acordarse de pedirle su cobertura al lado es un
+      # número que se va a publicar solo. Así que la defensibilidad viaja EN LA SERIE: `:sla30d`
+      # existe únicamente cuando la ventana está suficientemente cubierta, y cuando no, DESAPARECE.
+      # Un panel dibuja un hueco, que es la verdad, en vez de un 92 % que no se puede sostener.
+      #
+      # POR QUÉ 0,95 Y NO OTRO NÚMERO: con `interval: 5m`, 30 días son 8.640 muestras, así que el
+      # 5 % son 36 horas sin medir. Un SLA de uptime se escribe contra presupuestos mucho más
+      # ajustados —99,9 % son 43 minutos al mes—, o sea que un mes con día y medio DESCONOCIDO no
+      # puede sostener ninguna afirmación de ese orden. Por encima de 0,95 el faltante es más chico
+      # que el propio presupuesto de error y el promedio sigue siendo honesto.
+      #
+      # EL UMBRAL ESTÁ ESCRITO TRES VECES Y ESO ES UN RIESGO CONOCIDO: lo custodia
+      # `TestTodasLasSeriesDeSlaUsanElMismoUmbralDeCobertura`, porque tres números que deberían ser
+      # el mismo es exactamente cómo uno se queda viejo. En YAML no hay constantes; la guarda es el
+      # sustituto.
+      #
+      # NO HAY ALERTA DE «COBERTURA BAJA», Y ES DELIBERADO. No se puede apagar arreglando algo: la
+      # única salida es que pase el tiempo, y una alarma que no se apaga actuando es cómo se enseña
+      # a ignorar un canal —este repo ya lo pagó con `MaquinaCaida` trece veces—. Lo que SÍ es
+      # accionable es que la cobertura CAIGA, porque eso significa que algo se rompió: eso lo vigila
+      # `CoberturaDelSlaSeCayo` en musubi-alerts-flota.yml.
+      - record: musubi:device_up:sla30d
+        expr: >-
+          musubi:device_up:avg30d
+          and on(project, device, os, tier) (musubi:device_up:cobertura30d >= 0.95)
+
+      - record: musubi:project_up:sla30d
+        expr: >-
+          musubi:project_up:avg30d
+          and on(project) (musubi:project_up:cobertura30d >= 0.95)
+
+      - record: musubi:service_up:sla30d
+        expr: >-
+          musubi:service_up:avg30d
+          and on(project, device, os, tier, service, class) (musubi:service_up:cobertura30d >= 0.95)
+
       - record: musubi:project_service_up:cobertura30d
         expr: min by(project) (musubi:service_up:cobertura30d)
