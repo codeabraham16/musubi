@@ -313,6 +313,7 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 
 	lineas := strings.Split(string(crudo), "\n")
 	tablas, filasVistas := 0, 0
+	revisadas := map[int]bool{}
 	esperadas, encabezadoEn := 0, 0
 	for i, l := range lineas {
 		switch {
@@ -326,6 +327,7 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 			}
 		case esperadas > 0 && esFila(l):
 			filasVistas++
+			revisadas[i] = true
 			if n := celdas(l); n != esperadas {
 				t.Errorf("ABIERTO.md línea %d: la fila tiene %d celdas y su encabezado (línea %d) "+
 					"declara %d.\n    %s\n  Markdown DESCARTA la celda de más sin avisar, así que el "+
@@ -376,5 +378,45 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 	if tablas < 3 || filasVistas < 30 {
 		t.Fatalf("se reconocieron %d tabla(s) y %d fila(s) en ABIERTO.md, y son al menos 3 y 30: "+
 			"cambió el formato del archivo y esta guarda dejó de mirar", tablas, filasVistas)
+	}
+
+	// CONTROL DE COBERTURA: TODA FILA CON IDENTIFICADOR TIENE QUE HABER SIDO REVISADA.
+	//
+	// «3 tablas y 30 filas» NO ALCANZABA, y se midió el 2026-09-05: la tabla de la sección 1 estaba
+	// PARTIDA en la fila de A92 —le faltaba la barra de cierre y su celda de dueño, y detrás venía un
+	// blockquote de corrección metido adentro de la tabla— así que el recorrido la daba por terminada
+	// ahí y las DIECISÉIS filas siguientes (A93 … A111) no se revisaban. Con 4 tablas y 47 filas
+	// contadas, el control seguía en verde: contaba contra un número fijo que ya estaba superado.
+	//
+	// Y NO ERA SÓLO LA PRUEBA. En Markdown un blanco TERMINA la tabla, así que esas dieciséis filas
+	// se dibujaban como texto suelto con barras verticales — la mitad reciente del registro dejó de
+	// leerse como registro, que es exactamente el daño que B20 ya había medido con una celda.
+	//
+	// Este control cuenta lo revisado contra lo que el archivo TIENE, que es la única cuenta que no
+	// envejece: cada fila `| A<n> |` o `| B<n> |` tiene que estar entre las visitadas, y si falta, se
+	// la NOMBRA — que es lo que convierte «algo no se revisó» en «buscá la fila anterior a A93».
+	//
+	// Sabotaje que la hace fallar: quitarle la barra de cierre a cualquier fila que no sea la última
+	// de su tabla, o meter una línea en blanco entre dos filas.
+	idDeFila := regexp.MustCompile(`^\| ([AB]\d+) \|`)
+	var sinRevisar []string
+	primera := 0
+	for i, l := range lineas {
+		if m := idDeFila.FindStringSubmatch(l); m != nil && !revisadas[i] {
+			if primera == 0 {
+				primera = i + 1
+			}
+			sinRevisar = append(sinRevisar, m[1])
+		}
+	}
+	if len(sinRevisar) > 0 {
+		t.Errorf("ABIERTO.md: %d fila(s) con número de registro NO se revisaron: %v.\n"+
+			"  La primera está en la línea %d. El recorrido dio la tabla por terminada antes de "+
+			"llegar, y en Markdown esas filas TAMPOCO se dibujan como tabla: se ven como texto suelto "+
+			"con barras verticales, así que el registro deja de leerse justo en lo más reciente.\n"+
+			"  Mirá la fila ANTERIOR a la primera que falta: o le falta la barra de cierre, o hay un "+
+			"blanco, un blockquote o prosa metidos adentro de la tabla. Una corrección va PLEGADA "+
+			"adentro de la celda de su fila, nunca como bloque suelto entre filas.",
+			len(sinRevisar), sinRevisar, primera)
 	}
 }
