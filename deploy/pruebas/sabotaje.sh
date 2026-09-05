@@ -54,9 +54,21 @@ SABOTAJE="${4:?falta el comando que aplica el sabotaje}"
 
 RESPALDO="$(mktemp)"
 cp -- "$ARCHIVO" "$RESPALDO"
+# EL MODO SE GUARDA APARTE, PORQUE `cp` SOBRE UN ARCHIVO QUE EXISTE NO LO TOCA.
+#
+# Medido el 2026-09-05 y costó una corrida de gio: un sabotaje que reescribe el archivo con
+# `grep -v ... > tmp && mv tmp archivo` no lo edita, lo REEMPLAZA, y el archivo nuevo trae el modo
+# del umask (644). El `cp` de restaurar devuelve el CONTENIDO —y por eso `git status` quedó
+# limpio en contenido— pero conserva los permisos del destino, o sea los del sabotaje. El guion
+# quedó sin bit de ejecución y la siguiente corrida murió con `Permission denied`, que manda a
+# mirar cualquier cosa menos acá.
+#
+# Es la forma de siempre una vuelta más adentro: la herramienta que existe para no dejar el
+# sabotaje puesto lo dejaba puesto en la dimensión que no estaba mirando.
+MODO="$(stat -c %a -- "$ARCHIVO")"
 # EL RESTORE VA EN UN TRAP Y NO AL FINAL: si algo de acá falla —o alguien corta con Ctrl-C— el
 # sabotaje queda puesto en el árbol, y ése es el peor desenlace posible de esta herramienta.
-restaurar() { cp -- "$RESPALDO" "$ARCHIVO"; rm -f -- "$RESPALDO"; }
+restaurar() { cp -- "$RESPALDO" "$ARCHIVO"; chmod -- "$MODO" "$ARCHIVO"; rm -f -- "$RESPALDO"; }
 trap restaurar EXIT INT TERM
 
 corrida() { go test "$PKG" -run "$PATRON" -count=1 2>&1; }
