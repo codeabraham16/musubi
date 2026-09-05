@@ -49,6 +49,7 @@ PKG="${1:?falta el paquete, ej ./internal/fleet}"
 PATRON="${2:?falta el patrón del test}"
 ARCHIVO="${3:?falta el archivo a sabotear}"
 SABOTAJE="${4:?falta el comando que aplica el sabotaje}"
+ARREGLO="${5:-}"   # opcional: un cambio CORRECTO que la guarda tiene que seguir aceptando (falla 7)
 
 [[ -r "$ARCHIVO" ]] || { echo "✗ no puedo leer $ARCHIVO"; exit 2; }
 
@@ -142,4 +143,42 @@ echo "  ── motivo (la primera línea de cada fallo, para poder compararlos) 
 awk '/^\s*--- FAIL: /{t=$3; got=0; next}
      t!="" && got==0 && /_test\.go:[0-9]+:/{sub(/^[ \t]+/,""); print "      " t " · " substr($0,1,150); got=1}' <<<"$CON"
 echo
-echo "✓ el sabotaje funciona. Se restaura el archivo."
+echo "  ✓ el sabotaje funciona"
+
+# ── 4 · LA OTRA DIRECCIÓN: ¿LA GUARDA CASTIGA EL ARREGLO? (falla 7) ────────────────────────────
+if [[ -z "$ARREGLO" ]]; then
+  echo
+  echo "✓ listo. Se restaura el archivo."
+  echo "! NO SE PROBÓ LA OTRA DIRECCIÓN: sin un quinto argumento no se sabe si esta guarda castiga"
+  echo "  un cambio CORRECTO. Una guarda invertida contesta bien al sabotaje y manda a sacar la línea"
+  echo "  buena — ver la falla 7 en la cabecera. Vale pasarle uno cuando el valor tenga formas"
+  echo "  legítimas alternativas (comillas simples en YAML, un nombre con caracteres raros, un alias)."
+  exit 0
+fi
+
+cp -- "$RESPALDO" "$ARCHIVO"; chmod -- "$MODO" "$ARCHIVO"
+if ! bash -c "$ARREGLO" -- "$ARCHIVO"; then
+  echo "✗ el comando del ARREGLO falló: no se aplicó nada."
+  exit 1
+fi
+if cmp -s -- "$ARCHIVO" "$RESPALDO"; then
+  echo "✗ EL ARREGLO NO CAMBIÓ EL ARCHIVO: sin cambio no se prueba la otra dirección."
+  exit 1
+fi
+if ! compila; then
+  echo "✗ el ARREGLO no compila: tiene que ser un cambio LEGÍTIMO, no otro sabotaje."
+  go vet "$PKG" 2>&1 | head -5 | sed 's/^/    /'
+  exit 1
+fi
+ARR="$(corrida)"
+if grep -qE '^[[:space:]]*--- FAIL: ' <<<"$ARR"; then
+  echo "✗ LA GUARDA CASTIGA EL ARREGLO (falla 7): se pone en ROJO con un cambio correcto."
+  echo "  Es PEOR que no mirar: premia el defecto y manda a sacar la línea buena. Típicamente la"
+  echo "  guarda describe el valor de más cerca de lo que el formato permite — una clase de"
+  echo "  caracteres, o unas comillas concretas donde el formato acepta varias formas."
+  grep -E '^[[:space:]]*--- FAIL: |_test\.go:[0-9]+:' <<<"$ARR" | head -6 | sed 's/^/      /'
+  exit 1
+fi
+echo "  ✓ y NO castiga el arreglo: con el cambio correcto sigue en verde"
+echo
+echo "✓ las dos direcciones. Se restaura el archivo."

@@ -755,6 +755,40 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · LA SÉPTIMA FORMA: «LA GUARDA VE AL REVÉS», y la dirección que ningún sabotaje puede probar.**
+
+La encontró la otra sesión en A105 y es una categoría que no teníamos: una guarda que **premia el
+defecto y castiga el arreglo**. El patrón de `TestLosJobsVigiladosSonLosQueElRepoDeclara` aceptaba
+`"?` —comillas dobles o nada— así que un `- job_name: 'altura-db'`, que es YAML válido y el estilo de
+media documentación de Prometheus, era INVISIBLE. Medido en las dos direcciones:
+
+- declararlo con comillas simples y **no** sumarlo a la alerta → **VERDE**, o sea el agujero exacto
+  que la guarda existe para tapar, entrando por la puerta que no mira;
+- declararlo con comillas simples **y** sumarlo, o sea hacer lo correcto → **ROJO**, con un mensaje
+  que manda a sacar la línea buena.
+
+**ES PEOR QUE NO MIRAR**, y lo importante para el método es que **un sabotaje no la puede detectar**:
+un sabotaje pregunta «¿se pone roja cuando rompo algo?», y una guarda invertida contesta bien a eso.
+La pregunta que la caza es la simétrica: **«¿se queda VERDE cuando hago lo correcto?»**.
+
+Por eso `deploy/pruebas/sabotaje.sh` acepta ahora un QUINTO argumento opcional: un comando que aplica
+un cambio **correcto**, que se corre en su propia ronda después del sabotaje. Si la guarda se pone en
+rojo con él, es la falla 7 y el guion lo nombra así. Y cuando no se le pasa, **lo dice**: «no se probó
+la otra dirección», con la pista de cuándo conviene —valores con formas legítimas alternativas:
+comillas simples en YAML, un nombre con caracteres raros, un alias—.
+
+Se validó contra el arreglo del par, que es el caso que la capacidad existe para cubrir: sabotaje
+(job con comillas simples sin vigilar) → **rojo, nombrando el job**; arreglo (el mismo job con
+comillas simples, sumado a la alerta) → **verde**. Las dos direcciones sobre una guarda con respuesta
+conocida, que es la forma de probar un verificador sin que la respuesta salga de él.
+
+**Y UNA LECCIÓN DE LA OTRA SESIÓN QUE VALE PARA CUALQUIER GUARDA DE FORMATO**: al arreglar el patrón,
+su sabotaje siguiente salió rojo **por el motivo equivocado** —una clase `[A-Za-z0-9_.-]+` leyó
+`un.job.raro@2` cortado en el `@`, y el control de conteo no lo vio porque un nombre truncado sigue
+contando como uno—. La formulación: **describir con una clase de caracteres qué puede tener un valor
+se queda corto en silencio; leer hasta el fin de línea no puede quedarse corto.**
+
+
 **2026-09-05 · LA PRIMERA AUDITORÍA CON `sabotaje.sh` ENCONTRÓ UNO REAL, y era el mismo defecto del
 día en código anterior.**
 
