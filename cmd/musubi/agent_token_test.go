@@ -239,7 +239,7 @@ func TestElLatidoTraeElTokenDeUnaRotacionEnCurso(t *testing.T) {
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
 	t.Cleanup(func() { enumerarServicios = anterior })
 
-	res := latir(ts.URL+"/fleet/heartbeat", "tok-viejo", nil)
+	res := latir(ts.URL+"/fleet/heartbeat", "tok-viejo", "", nil)
 	if !res.ok {
 		t.Fatalf("el latido falló: %+v", res)
 	}

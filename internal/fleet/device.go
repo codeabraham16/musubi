@@ -159,6 +159,22 @@ type Device struct {
 	// como si hubiera alguien del otro lado.
 	PuedePreguntar bool
 
+	// MotivoNoPreguntar dice POR QUÉ no puede, cuando no puede (A99). Lo reporta el agente en el
+	// latido y ANTES SE TIRABA: se usaba para una línea de log «una vez por máquina» y no se
+	// guardaba, así que a la pregunta «¿por qué esta máquina no puede preguntar?» el sistema no
+	// sabía responder — para averiguarlo en `gio` hubo que leer `avisador_windows.go` y deducirlo.
+	// Las tres causas se arreglan distinto: no hay escritorio (nada que hacer), falta la
+	// herramienta de diálogo (instalar un paquete), o el agente corre como servicio (cambiar el
+	// lanzador). Vacío = no lo dijo, que NO es lo mismo que «no hay motivo».
+	MotivoNoPreguntar string
+
+	// TokenFuente dice de dónde salió la credencial de esta máquina (A102): `archivo` o `variable`,
+	// vacío si el agente no lo dijo. Lo reporta el agente porque el cerebro no lo puede averiguar
+	// de ninguna otra forma, y decide algo que importa: con `variable` una rotación NO se puede
+	// completar —un proceso no reescribe su propio entorno— y el token queda visible en el entorno
+	// del proceso. Ver fleet.CredencialRotable.
+	TokenFuente string
+
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió
 	Revoked    bool

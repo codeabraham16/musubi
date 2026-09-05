@@ -1689,6 +1689,59 @@ func schemaMigrations() []migration {
 					"plano TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 47,
+			name:    "lo_que_el_agente_dijo_y_se_tiraba",
+			// DOS HECHOS QUE EL AGENTE REPORTA, QUE EL CEREBRO USABA UNA VEZ Y NO GUARDABA.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// SON DOS COLUMNAS EN UNA MIGRACIÓN PORQUE SON EL MISMO DEFECTO (A99 y A102)
+			//
+			// Las dos vienen en el latido, las dos se usan para UNA línea de log «una vez por
+			// máquina», y ninguna se persiste. Así que a las dos preguntas que contestan —«¿por qué
+			// esta máquina no puede preguntar?» y «¿por qué su token no puede rotar?»— el sistema
+			// no sabe responder, aunque el agente se lo dijo.
+			//
+			// El costo se pagó las dos veces. Para A99: para saber por qué `gio` no puede preguntar
+			// hubo que LEER `avisador_windows.go` y deducir que corre en la sesión 0. Para A102: para
+			// saber por qué la rotación de `davantis-1` no se completaba hubo que LEER UN .cmd EN LA
+			// MÁQUINA. Las dos respuestas estaban en un latido que el cerebro descartó.
+			//
+			// `motivo_no_preguntar` — TRES causas que se arreglan distinto y desde afuera se ven
+			// idénticas: no hay escritorio (nada que hacer), falta la herramienta de diálogo
+			// (instalar un paquete), o el agente corre como servicio (cambiar el lanzador). Sin el
+			// motivo, `puede_preguntar = 0` es un cero sin explicación en toda la flota.
+			//
+			// `token_fuente` — de dónde salió la credencial. `archivo` puede rotar; `variable` NO,
+			// porque un proceso no reescribe su propio entorno, y además el token queda visible en
+			// el entorno del proceso. Es el mecanismo de A88 mirado desde el otro lado.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// EL DEFAULT ES EL VACÍO Y SIGNIFICA «NO LO DIJO», y ésa es la parte que importa
+			//
+			// Para las dos, un booleano no alcanza. Un agente VIEJO no manda estos campos, y leer
+			// su silencio como «no puede rotar» o «no hay escritorio» sería ACUSAR a toda la flota
+			// desplegada de un defecto que nadie midió — el error simétrico al de arrancar en 1, que
+			// afirmaría una capacidad que nadie midió. El vacío es el único valor honesto para una
+			// fila anterior a esta migración.
+			//
+			// Es el mismo criterio con el que `consentimiento` arrancó vacío en vez de con un grado
+			// (migración 38), y por la misma razón: un default que el dominio resuelve es un default
+			// en un solo lugar; uno escrito en la base son dos que se pueden desincronizar.
+			//
+			// NO HAY BACKFILL POSIBLE y no se intenta. Ningún dato existente dice de dónde salió el
+			// token de una máquina ni por qué no puede preguntar: inventarlo con una heurística
+			// —«las Windows probablemente por variable»— sería exactamente el tipo de dato plausible
+			// y falso que este plano existe para no producir. Se llena cuando el agente lo reporte.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "motivo_no_preguntar",
+					"motivo_no_preguntar TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "token_fuente",
+					"token_fuente TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

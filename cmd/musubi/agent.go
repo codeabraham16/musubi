@@ -208,7 +208,7 @@ func runAgent(args []string) {
 	col := fleet.NuevoColector()
 
 	if unaVez {
-		res := latir(base, cred.Usar(), tomarMuestra(col))
+		res := latir(base, cred.Usar(), cred.Fuente(), tomarMuestra(col))
 		fmt.Println(res.describir())
 		atenderComandos(base, cred.Actual(), res.comandos)
 		// CON --once TAMBIÉN SE GUARDA UNA ROTACIÓN OFRECIDA. Es un solo latido, así que no llega
@@ -317,7 +317,7 @@ func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Durat
 		case <-tick.C:
 		}
 
-		res := latir(base, cred.Usar(), tomarMuestra(col))
+		res := latir(base, cred.Usar(), cred.Fuente(), tomarMuestra(col))
 		switch {
 		case res.revocado:
 			// ANTES DE DARSE DE BAJA SE PRUEBA EL OTRO TOKEN DEL LLAVERO, si el archivo tenía dos.
@@ -417,7 +417,7 @@ func clienteParaElCerebro(nombre string) *http.Client {
 // latir hace UN POST, con la muestra si hay. El cuerpo lleva MEDICIONES y nunca IDENTIDAD: no
 // hay ningún campo con el que el dispositivo pueda decir quién es (invariante B4/D5). Quién es
 // lo decide el token, del lado del cerebro.
-func latir(base, token string, m *fleet.Muestra) resultadoLatido {
+func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido {
 	// El cuerpo lleva la muestra y el autorreporte (qué build corre, por dónde se la alcanza).
 	// Ni un campo de identidad: quién es lo decide el token, del lado del cerebro.
 	carga := map[string]any{"version": version}
@@ -442,6 +442,20 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	carga["puede_preguntar"] = cap.Puede
 	if !cap.Puede && cap.Motivo != "" {
 		carga["motivo_no_preguntar"] = cap.Motivo
+	}
+	// DE DÓNDE SALIÓ LA CREDENCIAL (A102). Va porque el cerebro no lo puede averiguar de ninguna
+	// otra forma: una máquina que recibió su token por VARIABLE no puede completar una rotación —un
+	// proceso no reescribe su propio entorno— y desde afuera late igual que una que sí puede. La
+	// rotación vence siempre y el síntoma no señala la causa.
+	//
+	// Medido el 2026-09-05: para descubrirlo en `davantis-1` hubo que LEER UN .cmd EN LA MÁQUINA.
+	// Con esto se le pregunta al cerebro.
+	//
+	// SE OMITE SI ESTÁ VACÍA en vez de mandar "": el campo es opcional para que un agente viejo
+	// —que no lo manda— se distinga de uno nuevo, y mandar vacío desde acá borraría esa distinción
+	// del lado del cerebro. Es el mismo criterio que el puntero de `puede_preguntar`.
+	if fuenteDelToken != "" {
+		carga["token_fuente"] = fuenteDelToken
 	}
 	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
 	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su

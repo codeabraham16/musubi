@@ -27,7 +27,7 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 
 // columnasDevice es la lista de columnas en el orden que espera escanearDevice. Una sola copia:
 // que el SELECT y el Scan se desincronicen es el bug clásico de esta capa.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion`
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -427,12 +427,14 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		consent          string
 		puedePreguntar   int
 		requiereAprob    int
+		motivoNoPreg     string
+		tokenFuente      string
 	)
 	if err := row.Scan(
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
-		&consent, &puedePreguntar, &requiereAprob,
+		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice
@@ -447,6 +449,10 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 	d.Consentimiento = fleet.Consentimiento(consent)
 	d.PuedePreguntar = puedePreguntar != 0
 	d.RequiereAprobacion = requiereAprob != 0
+	// Igual que `consentimiento`: se leen CRUDOS y el dominio resuelve el vacío. Un valor que no
+	// se entiende no se corrige acá — corregirlo en la lectura esconde que alguien lo escribió.
+	d.MotivoNoPreguntar = motivoNoPreg
+	d.TokenFuente = tokenFuente
 	if tags != "" {
 		d.Tags = strings.Split(tags, ",")
 	}
@@ -521,6 +527,38 @@ func (e *DbEngine) FijarCapacidadDePreguntar(deviceID string, puede bool) error 
 	if _, err := e.db.Exec(
 		`UPDATE devices SET puede_preguntar = ? WHERE id = ? AND revoked = 0`, v, deviceID); err != nil {
 		return fmt.Errorf("error al fijar la capacidad de preguntar: %w", err)
+	}
+	return nil
+}
+
+// FijarMotivoNoPreguntar guarda POR QUÉ esta máquina no puede preguntar (A99).
+//
+// VA SEPARADO DE `FijarCapacidadDePreguntar` a propósito, aunque los dos salgan del mismo latido: el
+// booleano se escribe SIEMPRE que cambie y el motivo sólo cuando hay uno. Juntarlos obligaría a
+// decidir qué hacer con un motivo vacío sobre una máquina que sí puede preguntar —borrarlo o
+// conservarlo— y las dos opciones esconden algo. Separados, cada escritura dice una sola cosa.
+func (e *DbEngine) FijarMotivoNoPreguntar(deviceID, motivo string) error {
+	if _, err := e.db.Exec(
+		`UPDATE devices SET motivo_no_preguntar = ? WHERE id = ? AND revoked = 0`, motivo, deviceID); err != nil {
+		return fmt.Errorf("error al fijar el motivo de no poder preguntar: %w", err)
+	}
+	return nil
+}
+
+// FijarFuenteDeCredencial guarda de dónde salió el token de esta máquina (A102).
+//
+// RECHAZA UN VALOR QUE EL DOMINIO NO CONOCE en vez de guardarlo. Una fila con un texto que nadie
+// puede interpretar se lee después como si significara algo, y este campo se va a usar para decidir
+// si una máquina puede completar una rotación: un valor basura ahí es peor que el vacío, porque el
+// vacío YA significa «no lo dijo» y se trata como tal.
+func (e *DbEngine) FijarFuenteDeCredencial(deviceID, fuente string) error {
+	if !fleet.FuenteDeCredencialValida(fuente) {
+		return fmt.Errorf("fuente de credencial desconocida: %q (esperaba %q, %q o vacío)",
+			fuente, fleet.CredencialDeArchivo, fleet.CredencialDeVariable)
+	}
+	if _, err := e.db.Exec(
+		`UPDATE devices SET token_fuente = ? WHERE id = ? AND revoked = 0`, fuente, deviceID); err != nil {
+		return fmt.Errorf("error al fijar la fuente de la credencial: %w", err)
 	}
 	return nil
 }

@@ -90,6 +90,16 @@ type cuerpoLatido struct {
 	// `prohibido` en toda la flota es un cero sin explicación, y las tres causas posibles —no hay
 	// escritorio, falta un paquete, el agente corre como servicio— se arreglan distinto.
 	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
+	// TokenFuente dice de dónde salió la credencial del agente: `archivo` o `variable` (A102). El
+	// cerebro NO lo puede averiguar de ninguna otra forma, y decide algo que importa: con
+	// `variable` una rotación no se puede completar —un proceso no reescribe su propio entorno— así
+	// que la rotación vence siempre y desde afuera esa máquina late igual que una que sí puede.
+	//
+	// SIN PUNTERO, y la asimetría con `PuedePreguntar` es deliberada: acá el vacío ya es un tercer
+	// estado con significado —«no lo dijo»— porque es un string y no un bool. El agente lo omite
+	// cuando no lo sabe, y un agente viejo no lo manda: los dos casos llegan como "" y se tratan
+	// igual, que es lo correcto. Un puntero agregaría una distinción sin consecuencia.
+	TokenFuente string `json:"token_fuente,omitempty"`
 }
 
 // El CONTRATO del latido —qué contesta el cerebro y qué lee el agente— vive en
@@ -325,6 +335,18 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 		if *cuerpo.PuedePreguntar != d.PuedePreguntar {
 			_ = s.engine.FijarCapacidadDePreguntar(d.ID, *cuerpo.PuedePreguntar)
 		}
+		// EL MOTIVO SE GUARDA (A99), y antes sólo se logueaba. Se escribe cuando VIENE, y no se
+		// borra cuando no viene: un agente que dejó de mandarlo —o uno viejo— no es evidencia de
+		// que el motivo desapareció. Lo que lo invalida es que la máquina pase a poder preguntar,
+		// y eso se maneja abajo.
+		if cuerpo.MotivoNoPreguntar != "" && cuerpo.MotivoNoPreguntar != d.MotivoNoPreguntar {
+			_ = s.engine.FijarMotivoNoPreguntar(d.ID, recortar(cuerpo.MotivoNoPreguntar, fleet.AvisoTextoMax))
+		}
+		if *cuerpo.PuedePreguntar && d.MotivoNoPreguntar != "" {
+			// Ya puede: el motivo viejo pasó a ser falso y dejarlo puesto sería peor que no
+			// tenerlo — alguien leería «corre como servicio» sobre una máquina que ya no.
+			_ = s.engine.FijarMotivoNoPreguntar(d.ID, "")
+		}
 		if !*cuerpo.PuedePreguntar && cuerpo.MotivoNoPreguntar != "" {
 			// UNA VEZ POR MÁQUINA Y NO POR LATIDO. Es un ESTADO —el agente corre como servicio,
 			// falta zenity— que dura hasta que alguien cambie algo, y un aviso cada 30 s deja de
@@ -336,6 +358,30 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 			})
 		} else if *cuerpo.PuedePreguntar {
 			s.avisosDados.Delete("no_puede_preguntar\x00" + d.ID)
+		}
+	}
+	// DE DÓNDE SALIÓ LA CREDENCIAL (A102). Fuera del `if` de `puede_preguntar` porque son hechos
+	// independientes: un agente puede reportar uno y no el otro, y anidarlos haría que perder uno
+	// pierda el otro.
+	//
+	// SÓLO SE ESCRIBE SI CAMBIÓ, igual que el resto del latido: son 30 s por máquina y esto cambia
+	// cuando alguien reinstala, o sea casi nunca. Y un valor DESCONOCIDO no se guarda: el setter lo
+	// rechaza, y acá se avisa una vez para que un agente que manda basura no pase inadvertido.
+	if cuerpo.TokenFuente != "" && cuerpo.TokenFuente != d.TokenFuente {
+		if err := s.engine.FijarFuenteDeCredencial(d.ID, cuerpo.TokenFuente); err != nil {
+			s.avisarUnaVez("token_fuente_rara\x00"+d.ID, func() {
+				logx.Warn("flota: el agente reportó una fuente de credencial que no se entiende; no se guarda",
+					"device", d.Name, "recibido", recortar(cuerpo.TokenFuente, 40), "error", err)
+			})
+		} else if cuerpo.TokenFuente == fleet.CredencialDeVariable {
+			// UNA VEZ POR MÁQUINA. Es un ESTADO —dura hasta que alguien cambie el lanzador— y un
+			// aviso por latido son 2.880 líneas por día, que es cómo se entierra la que importa.
+			s.avisarUnaVez("token_no_rotable\x00"+d.ID, func() {
+				logx.Warn("flota: esta máquina recibió su token por VARIABLE, así que una rotación no se puede completar",
+					"device", d.Name,
+					"nota", "un proceso no puede reescribir su propio entorno; el lanzador tiene que pasar "+
+						"MUSUBI_DEVICE_TOKEN_FILE con la RUTA del archivo. Ver A102")
+			})
 		}
 	}
 	// EL INVENTARIO DE SERVICIOS VA ANTES DEL CORTE POR «no vino muestra», por el mismo motivo

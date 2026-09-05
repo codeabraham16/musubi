@@ -150,8 +150,15 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       como plomería de pantalla: un principal con sólo `screen:view` leía «fulano está
 	//       ejecutando comandos acá» y «...abriendo una terminal...». El argv no los distingue y
 	//       el texto es de presentación, así que el plano lo declara quien encola.
-	if latestSchemaVersion() != 46 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 46", latestSchemaVersion())
+	// v47 = LO QUE EL AGENTE DIJO Y SE TIRABA (`devices.motivo_no_preguntar`, `devices.token_fuente`).
+	//       Las dos venían en el latido, se usaban para UNA línea de log «una vez por máquina» y no
+	//       se persistían — así que a «¿por qué esta máquina no puede preguntar?» (A99) y «¿por qué
+	//       su token no puede rotar?» (A102) el sistema no sabía responder, aunque el agente se lo
+	//       había dicho. El costo se pagó las dos veces leyendo código y leyendo un .cmd EN la
+	//       máquina. Las dos arrancan VACÍAS y el vacío significa «no lo dijo»: leer el silencio de
+	//       un agente viejo como «no puede» sería acusar a la flota de un defecto que nadie midió.
+	if latestSchemaVersion() != 47 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 47", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

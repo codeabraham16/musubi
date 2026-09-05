@@ -104,7 +104,7 @@ func TestLosCuatroCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
 	t.Cleanup(func() { enumerarServicios = anterior })
 
-	res := latir(ts.URL+"/fleet/heartbeat", "tok", nil)
+	res := latir(ts.URL+"/fleet/heartbeat", "tok", "", nil)
 	if !res.ok {
 		t.Fatalf("el latido falló: %+v", res)
 	}

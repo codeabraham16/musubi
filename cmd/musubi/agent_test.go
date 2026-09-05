@@ -41,7 +41,7 @@ func TestElLatidoLlevaElTokenEnElHeaderYUnCuerpoChico(t *testing.T) {
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
 	t.Cleanup(func() { enumerarServicios = anteriorEnum })
 
-	res := latir(ts.URL+"/fleet/heartbeat", "tok-abc", nil)
+	res := latir(ts.URL+"/fleet/heartbeat", "tok-abc", "", nil)
 	if !res.ok {
 		t.Fatalf("el latido falló: %+v", res)
 	}
@@ -173,7 +173,7 @@ func TestUn401SeClasificaComoRevocadoYNoComoFalloTransitorio(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(c.status)
 		}))
-		res := latir(ts.URL, "tok", nil)
+		res := latir(ts.URL, "tok", "", nil)
 		ts.Close()
 		if res.ok != c.quieroOK || res.revocado != c.quieroRevocado {
 			t.Errorf("status %d: ok=%v revocado=%v, esperaba ok=%v revocado=%v",
@@ -191,7 +191,7 @@ func TestElCerebroInalcanzableEsReintentableNoRevocado(t *testing.T) {
 	url := ts.URL
 	ts.Close()
 
-	res := latir(url, "tok", nil)
+	res := latir(url, "tok", "", nil)
 	if res.ok {
 		t.Fatal("un cerebro caído no debería dar un latido exitoso")
 	}
@@ -450,7 +450,7 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 
 	cpu := 12.5
 	m := &fleet.Muestra{Tomada: time.Now().UTC(), CPUPct: &cpu, NumCPU: 4, MemTotal: 100, MemUsada: 10}
-	if res := latir(ts.URL, "tok", m); !res.ok {
+	if res := latir(ts.URL, "tok", "", m); !res.ok {
 		t.Fatalf("el latido con muestra falló: %+v", res)
 	}
 
@@ -570,7 +570,7 @@ func TestSinColectorElAgenteLateIgualYNoMandaCeros(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
-	if res := latir(ts.URL, "tok", tomarMuestra(colectorRoto{})); !res.ok {
+	if res := latir(ts.URL, "tok", "", tomarMuestra(colectorRoto{})); !res.ok {
 		t.Fatalf("sin colector, el agente dejó de latir: %+v", res)
 	}
 }
@@ -640,7 +640,7 @@ func TestElAgenteUsaLaRutaCorrectaParaCadaCosa(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	if res := latir(ts.URL, "tok", nil); !res.ok {
+	if res := latir(ts.URL, "tok", "", nil); !res.ok {
 		t.Fatalf("el latido no llegó a su ruta: %+v", res)
 	}
 	if err := reportar(ts.URL, "tok", resultadoDeComando{ComandoID: "x"}); err != nil {

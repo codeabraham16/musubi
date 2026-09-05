@@ -392,6 +392,29 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 				}
 				return 0, true
 			}},
+		// SI EL TOKEN DE ESTA MÁQUINA PUEDE ROTAR (A102).
+		//
+		// AUSENTE CUANDO EL AGENTE NO LO DIJO, y eso no es un detalle: `0` significa «reportó que su
+		// token vino por variable y NO puede rotar», que es una acusación concreta. Un agente viejo
+		// no manda el campo, y publicar 0 por su silencio marcaría como defectuosa a media flota sin
+		// que nadie lo haya medido. Es la regla de este plano: AUSENTE NO ES CERO.
+		//
+		// Con `variable` el token además queda en el ENTORNO del proceso, donde lo lee cualquier
+		// proceso del mismo usuario y donde sobrevive a que alguien arregle el archivo — el mecanismo
+		// exacto de A88, mirado desde el otro lado.
+		{"musubi_fleet_device_token_rotable",
+			"1 si el token del dispositivo vino por ARCHIVO y una rotación se puede completar; 0 si vino por variable de entorno y no. AUSENTE si el agente no lo reporta (agente viejo): un 0 inventado acusaría a la máquina de algo que nadie midió.",
+			"", true,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				rotable, seSabe := fleet.CredencialRotable(d.TokenFuente)
+				if !seSabe {
+					return 0, false
+				}
+				if rotable {
+					return 1, true
+				}
+				return 0, true
+			}},
 		{"musubi_fleet_device_up",
 			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
 			"", false,
