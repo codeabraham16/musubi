@@ -3,6 +3,7 @@ package main
 // Pruebas de A54: el agente declara lo que va a tocar y el despliegue lo verifica.
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -363,37 +364,99 @@ func TestSinXDGRuntimeDirElVerificadorNoSeQuedaCiego(t *testing.T) {
 // con forma de respuesta que no aplica a nada. Dar una instrucción equivocada con confianza es el
 // modo de falla exacto que A54 documenta; repetirlo adentro del arreglo sería el colmo.
 //
-// La prueba mira la DECLARACIÓN y no la salida, porque la salida se compila para linux acá. Lo
-// que se custodia es que la rama exista y que el binario cruce a las tres plataformas.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ESTA PRUEBA MIRABA EL TEXTO DEL ARCHIVO, Y UN COMENTARIO LA SATISFACÍA
 //
-// Sabotaje que la hace fallar: quitar la guarda `runtime.GOOS != "linux"` de
-// revisarBlindajeDelAgente.
+// La versión anterior leía `blindaje.go`, cortaba el cuerpo de `revisarBlindajeDelAgente` y pedía
+// que contuviera el literal `runtime.GOOS != "linux"`. El 2026-09-05 se midió el hueco con el
+// sabotaje más plausible que hay —comentar la guarda para probar el otro camino:
+//
+//	// if runtime.GOOS != "linux" {
+//	if false {
+//
+// El paquete COMPILA, el binario vuelve a emitir directivas de systemd sobre rutas con backslash
+// —el defecto exacto que esta prueba dice cubrir— y la prueba quedaba en VERDE, porque el literal
+// seguía ahí, en el comentario. Es la falla 2 de `deploy/pruebas/sabotaje.sh` y la forma dominante
+// de este repo: una señal con la forma de la respuesta, contestando otra pregunta.
+//
+// Ahora mide CONDUCTA a través del seam `sistemaDelAgente`. Eso cierra las dos direcciones:
+//   - un comentario ya no la engaña, porque nadie lee el texto;
+//   - y una reescritura legítima (un `switch runtime.GOOS`, un helper `esLinux()`, un build tag)
+//     tampoco la pone en rojo, que es el riesgo simétrico —la falla 7— de toda guarda de texto.
+//
+// Sabotaje que la hace fallar: en `revisarBlindajeDelAgente`, `if sistemaDelAgente != "linux"` →
+// `if false` (o borrar el bloque entero, que también compila porque el seam sigue teniendo lector).
 func TestElVerificadorSeCallaFueraDeLinux(t *testing.T) {
-	crudo, err := os.ReadFile("blindaje.go")
+	for _, so := range []string{"windows", "darwin"} {
+		t.Run(so, func(t *testing.T) {
+			salida, codigo := conSistema(t, so, revisarBlindajeDelAgente)
+
+			// SALE CON 0: no tener nada que revisar NO es una falla, y devolver 1 pondría en rojo
+			// un despliegue sano de Windows para siempre.
+			if codigo != 0 {
+				t.Errorf("en %s devolvió %d: no encontrar nada que revisar no es una falla, y un "+
+					"código distinto de cero deja en rojo un despliegue sano", so, codigo)
+			}
+			// Y NO EMITE NADA DE SYSTEMD. Ésta es la aserción que de verdad importa: es el consejo
+			// equivocado dicho con confianza, y es lo que el usuario ve.
+			for _, prohibido := range []string{"ReadWritePaths", "ProtectHome", "systemctl", "drop-in"} {
+				if strings.Contains(salida, prohibido) {
+					t.Errorf("en %s la herramienta habló de %q:\n%s", so, prohibido, salida)
+				}
+			}
+			if !strings.Contains(salida, so) {
+				t.Errorf("en %s no dijo de qué sistema estaba hablando; el usuario queda sin saber "+
+					"por qué no revisó nada:\n%s", so, salida)
+			}
+		})
+	}
+
+	// LA OTRA DIRECCIÓN, ADENTRO DE LA PRUEBA: en Linux la guarda NO se activa. Sin esto, un
+	// `return 0` incondicional al principio de la función pasaría los dos casos de arriba — el
+	// verificador no revisaría nunca nada, en ninguna máquina, y esta prueba lo aplaudiría.
+	//
+	// Correr el camino de Linux es seguro y rápido: `revisarBlindaje` sólo hace `os.Stat` y
+	// `hayEnPath` sólo hace `exec.LookPath`. No ejecuta nada ni escribe nada.
+	salida, _ := conSistema(t, "linux", revisarBlindajeDelAgente)
+	if strings.Contains(salida, "no lo tiene") {
+		t.Errorf("en linux la herramienta se calló como si estuviera en otro sistema: la guarda "+
+			"quedó incondicional y el verificador no revisa nada en ninguna parte:\n%s", salida)
+	}
+}
+
+// conSistema corre f con el seam del sistema operativo puesto en so, y devuelve lo que imprimió.
+//
+// Captura os.Stdout porque lo que se custodia es LO QUE EL USUARIO VE: la función no devuelve su
+// texto, lo imprime. Una prueba que sólo mirara el código de salida daría verde con el consejo
+// equivocado igual, que es el defecto original una vuelta más adentro.
+func conSistema(t *testing.T, so string, f func() int) (string, int) {
+	t.Helper()
+
+	anterior := sistemaDelAgente
+	sistemaDelAgente = so
+	t.Cleanup(func() { sistemaDelAgente = anterior })
+
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("no se pudo abrir el pipe para capturar la salida: %v", err)
 	}
-	fuente := string(crudo)
-	i := strings.Index(fuente, "func revisarBlindajeDelAgente()")
-	if i < 0 {
-		t.Fatal("no existe revisarBlindajeDelAgente: la prueba no está mirando nada")
-	}
-	cuerpo := fuente[i:]
-	if fin := strings.Index(cuerpo, "\nfunc "); fin > 0 {
-		cuerpo = cuerpo[:fin]
-	}
-	if !strings.Contains(cuerpo, `runtime.GOOS != "linux"`) {
-		t.Errorf("el verificador no se calla fuera de Linux: en un Windows emitiría directivas de "+
-			"systemd sobre rutas con backslash, que es un consejo equivocado dicho con confianza.\n%s",
-			cuerpo)
-	}
-	// Y sale con 0: no tener nada que revisar NO es una falla, y devolver 1 pondría en rojo un
-	// despliegue sano de Windows para siempre.
-	guarda := cuerpo[strings.Index(cuerpo, `runtime.GOOS != "linux"`):]
-	if cierre := strings.Index(guarda, "\n\t}"); cierre > 0 {
-		guarda = guarda[:cierre]
-	}
-	if !strings.Contains(guarda, "return 0") {
-		t.Errorf("la rama de no-Linux no devuelve 0: un Windows sano quedaría en rojo.\n%s", guarda)
-	}
+	stdoutAnterior := os.Stdout
+	os.Stdout = w
+
+	// EL LECTOR VA EN SU PROPIA GOROUTINE Y ARRANCA ANTES: un pipe tiene buffer acotado (64 KiB en
+	// Linux), así que leer después de que f() termine se cuelga si el informe fuera más largo.
+	hecho := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		hecho <- b.String()
+	}()
+
+	codigo := f()
+
+	os.Stdout = stdoutAnterior
+	_ = w.Close()
+	salida := <-hecho
+	_ = r.Close()
+	return salida, codigo
 }

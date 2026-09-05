@@ -314,6 +314,25 @@ func dirDeRuntime() string {
 	return ""
 }
 
+// sistemaDelAgente es el seam del sistema operativo, y no es ceremonia: es la ÚNICA manera de
+// probar que este verificador se calla fuera de Linux.
+//
+// LA GUARDA ANTERIOR ERA DE TEXTO Y UN COMENTARIO LA SATISFACÍA. `TestElVerificadorSeCallaFueraDeLinux`
+// leía este archivo y pedía el literal `runtime.GOOS != "linux"` en el cuerpo de la función. El
+// 2026-09-05 se midió el hueco: con
+//
+//	// if runtime.GOOS != "linux" {   (comentado para probar el camino de linux desde otra plataforma)
+//	if false {
+//
+// el paquete COMPILA, un Windows vuelve a emitir `ReadWritePaths=C:\Users\...` —el defecto exacto
+// que la guarda dice cubrir— y la prueba queda en VERDE. Un debug commiteado sin querer es un
+// defecto plausible, y la red no estaba.
+//
+// Con el seam la prueba EJECUTA la función con otro sistema y mide lo que hace. Eso cierra dos
+// cosas a la vez: un comentario ya no la engaña, y una reescritura legítima —un `switch`, un
+// helper `esLinux()`, un build tag— tampoco la pone en rojo, porque ya no juzga el texto.
+var sistemaDelAgente = runtime.GOOS
+
 // revisarBlindajeDelAgente es lo que corre `musubi agent --revisar-blindaje`.
 func revisarBlindajeDelAgente() int {
 	// FUERA DE LINUX ESTO NO TIENE NADA QUE DECIR, y decirlo igual sería peor que callarse:
@@ -323,9 +342,9 @@ func revisarBlindajeDelAgente() int {
 	// archivo existe para cerrar; repetirlo acá adentro sería el colmo.
 	//
 	// Sale con 0: no encontrar nada que revisar NO es una falla.
-	if runtime.GOOS != "linux" {
+	if sistemaDelAgente != "linux" {
 		fmt.Printf("El confinamiento que esta herramienta revisa es el de systemd, y %s no lo tiene.\n",
-			runtime.GOOS)
+			sistemaDelAgente)
 		fmt.Println("  Acá el agente corre sin namespace de montaje propio: lo que lo limita son")
 		fmt.Println("  los permisos del usuario con el que arranca, y eso se mira con las")
 		fmt.Println("  herramientas del sistema, no con ésta.")
