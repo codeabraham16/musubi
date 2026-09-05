@@ -34,8 +34,22 @@ func TestElRedespliegueNoTipeaLaVersionDeEsquema(t *testing.T) {
 	}
 	guion := string(crudo)
 
-	if !strings.Contains(guion, "version --esquema") {
-		t.Error("el guion ya no le pregunta al binario a qué esquema apunta: la verificación de la migración volvió a depender de que alguien se acuerde")
+	// TIENE QUE ESTAR EN UNA SUSTITUCIÓN QUE CAPTURE LA SALIDA, NO EN CUALQUIER LUGAR DEL TEXTO.
+	//
+	// `strings.Contains` a secas pasaba en verde con el sabotaje declarado. `version --esquema`
+	// aparece TRES veces en el guion: en un comentario que explica el arreglo, en el mensaje de
+	// aviso de cuando el binario no sabe contestar, y —la única que decide algo— en la asignación
+	// de `$ESPERADO`. Cambiar esa asignación por `ESPERADO=46`, que es exactamente el defecto que
+	// esta prueba existe para prohibir, dejaba las otras dos en pie y la guarda en verde.
+	// Medido el 2026-09-05; cuarto caso del día de un texto que NOMBRA la cautela y la satisface.
+	//
+	// La propiedad es estructural: el guion tiene que EJECUTAR al binario y quedarse con lo que
+	// contesta, o sea `$(… version --esquema …)`. Un comentario y un mensaje no ejecutan nada.
+	invoca := regexp.MustCompile(`\$\([^)]*version --esquema`)
+	if !invoca.MatchString(codigoDe(guion)) {
+		t.Error("el guion ya no EJECUTA `version --esquema` para saber a qué esquema apunta el binario\n" +
+			"(nombrarlo en un comentario o en un mensaje no cuenta): la verificación de la migración\n" +
+			"volvió a depender de que alguien se acuerde de actualizar un número")
 	}
 
 	// Un número comparado contra `$ESQUEMA` es exactamente la forma que se quiere prohibir. No se
@@ -99,8 +113,22 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 	}
 	guion := string(crudo)
 
-	if !strings.Contains(guion, "GOHOSTOS") {
-		t.Error("construir.sh ya no compara la plataforma destino con la del host: una compilación cruzada vuelve a terminar en rojo sobre un binario que salió bien")
+	// LA COMPARACIÓN TIENE QUE SER UNA CONDICIÓN, NO UNA MENCIÓN.
+	//
+	// `strings.Contains(guion, "GOHOSTOS")` se satisface con la línea que calcula `DESTINO_OS`
+	// —que nombra `GOHOSTOS` como valor por defecto— y con cualquier comentario. Medido el
+	// 2026-09-05 con el sabotaje declarado: cambiar el `if` entero por `if true; then` deja la
+	// guarda en VERDE, y eso es exactamente el defecto que existe para prohibir — en una
+	// compilación cruzada intenta correr un binario de Windows en Linux y la corrida termina en
+	// rojo sobre un binario que salió bien.
+	//
+	// La propiedad es que exista una CONDICIÓN que compare las dos dimensiones —sistema y
+	// arquitectura— del destino contra las del host.
+	condicion := regexp.MustCompile(`(?m)^\s*if\s.*DESTINO_OS.*GOHOSTOS.*DESTINO_ARCH.*GOHOSTARCH`)
+	if !condicion.MatchString(codigoDe(guion)) {
+		t.Error("construir.sh ya no CONDICIONA nada a que la plataforma destino sea la del host\n" +
+			"(nombrar GOHOSTOS en el valor por defecto de DESTINO_OS no alcanza): una compilación\n" +
+			"cruzada vuelve a intentar ejecutar el binario y termina en rojo sobre algo que salió bien")
 	}
 	// El `sha256sum` tiene que quedar FUERA del condicional: es lo que el otro lado usa para
 	// verificar, y perderlo en una compilación cruzada es perder justo el dato del caso remoto.
