@@ -96,9 +96,29 @@ func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 	// dispara la vuelta atrás. La primera versión de esta prueba sólo buscaba los nombres de las
 	// variables, y pasaba en verde con el `is-active` de vuelta — porque los nombres seguían
 	// apareciendo en la línea de comparación. Una guarda que busca cadenas y no efecto no protege.
+	// LOS INODOS TIENEN QUE ESTAR EN LA CONDICIÓN, NO EN EL MENSAJE — y esta guarda decía haber
+	// arreglado eso y no lo había arreglado.
+	//
+	// Su comentario anterior contaba, correctamente, que buscar los nombres de las variables en
+	// todo el archivo la dejaba pasar con el `is-active` de vuelta. El arreglo fue exigir los tres
+	// tokens EN LA MISMA LÍNEA. No alcanza, y se midió el 2026-09-05 con el sabotaje declarado:
+	//
+	//   [[ "$INODO_PROC" == "$INODO_DISCO" ]] || volver_atras "…(inodo $INODO_PROC vs $INODO_DISCO)…"
+	//
+	// cambiado por `systemctl is-active --quiet musubi-brain || volver_atras "…mismo mensaje…"`
+	// deja una línea que TODAVÍA tiene los tres tokens —porque el mensaje de diagnóstico nombra
+	// las dos variables— y la guarda pasaba en verde sobre un redespliegue que vuelve a decidir
+	// por `is-active`, que es lo que la cabecera del guion dice que ya falló en este servidor.
+	//
+	// La propiedad es POSICIONAL: los inodos van en lo que se evalúa, o sea ANTES del
+	// `volver_atras`. Lo que viene después es el texto para el humano y no decide nada.
 	comparacion := false
 	for _, l := range strings.Split(texto, "\n") {
-		if strings.Contains(l, "INODO_PROC") && strings.Contains(l, "INODO_DISCO") && strings.Contains(l, "volver_atras") {
+		i := strings.Index(l, "volver_atras")
+		if i < 0 {
+			continue
+		}
+		if condicion := l[:i]; strings.Contains(condicion, "INODO_PROC") && strings.Contains(condicion, "INODO_DISCO") {
 			comparacion = true
 		}
 	}
