@@ -568,6 +568,14 @@ func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interf
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al diagnosticar: %v", err)
 	}
+	// «¿Cuál config.yaml manda acá?» (A96). Va en las dos profundidades porque cuesta dos lecturas
+	// de archivo, y porque la pregunta se hace justo cuando se está apurado.
+	if c := memory.CheckConfigQueGobierna(s.projectPath); c.Code != "" {
+		rep.Checks = append(rep.Checks, c)
+		if c.Status != "ok" {
+			rep.Status = "issues"
+		}
+	}
 	// Exponer last_maintenance para visibilidad del ciclo (T5.1). El struct embebido
 	// promueve los campos de DiagnoseReport, así que el contrato existente no cambia;
 	// solo se suma un campo extra.

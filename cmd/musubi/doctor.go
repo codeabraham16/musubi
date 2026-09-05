@@ -40,6 +40,10 @@ func configChecks(root string) []memory.CheckResult {
 	return []memory.CheckResult{
 		{Code: cognitionGatewayCheckCode, Status: cg.Status, Message: cg.Message},
 		{Code: embeddingGatewayCheckCode, Status: eg.Status, Message: eg.Message},
+		// «¿Cuál config.yaml manda acá?» (A96). Sale de internal/memory y no de acá para que la
+		// CLI y la tool MCP contesten LO MISMO: poner el check en un solo camino es el defecto
+		// que abrió este cabo, una fila más adentro.
+		memory.CheckConfigQueGobierna(root),
 	}
 }
 
