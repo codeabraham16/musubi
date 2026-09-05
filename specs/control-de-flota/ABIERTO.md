@@ -747,6 +747,49 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · A100 CERRADO EN EL MISMO ACTO — una prueba que no compila no falla, y `go test` contesta `ok`.**
+
+Encontrado por otra sesión sobre su propio trabajo: escribió cinco pruebas del actualizador del
+agente en `despliegue_agente_windows_test.go`, y **un archivo terminado en `_windows_test.go` lleva
+restricción de build IMPLÍCITA por GOOS**, sin ninguna línea `//go:build`. En Linux no compila.
+`go test` dijo `ok`, `go vet` pasó, y las cinco pruebas **no existían** — sólo aparecieron
+preguntando `go list -f '{{.IgnoredGoFiles}}'`.
+
+**Demostrado de nuevo acá al escribir la guarda**: un archivo con una sola prueba que hace
+`t.Fatal` incondicional, y `go test -run` de esa prueba contesta `ok ... [no tests to run]`.
+
+«¿Pasan las pruebas?» y «¿existen las pruebas?» son preguntas distintas, y `ok` contesta las dos
+igual. Es doblemente traicionero al nombrar una prueba SOBRE algo de Windows, que es justo cuando
+uno quiere esa palabra en el nombre. Vale igual para `_linux`, `_darwin`, `_amd64`, `_arm64` y
+cualquier GOOS/GOARCH pegado antes del `_test.go`.
+
+**EL REPO YA CONOCÍA LA MITAD DE ESTO Y LE FALTABA LA PEOR.** `internal/fleet/tempwindows.go` se
+llama así —y no `colector_windows.go`— exactamente para no quedar detrás del tag, y su comentario
+dice que era «la tercera vez que un símbolo detrás de `//go:build windows` deja sin verificar al
+paquete entero». Pero eso es para el CÓDIGO. Para las PRUEBAS es peor: un símbolo que no compila lo
+denuncia el compilador en algún lado; una prueba que no compila **no denuncia nada**, porque su
+ausencia se ve idéntica a su éxito.
+
+Se barrió el repo entero y no había ningún otro caso: `colector_linux_test.go` sí compila acá, y las
+cuatro pruebas detrás de tags explícitos están bien —`race` lo define `go test -race`, `treesitter`
+lo enciende el job de polyglot, y `sonda_diseno_test.go` está afuera **a propósito** y con su motivo
+escrito en su propia cabecera («es un instrumento y no una compuerta»; CI no puede depender de la red
+ni de una credencial).
+
+**La guarda que queda vale más que el hallazgo**, y es una regla sola: ninguna prueba puede quedar
+excluida en linux/amd64 sin tags, que es donde corre CI. Cubre de un saque los dos caminos —el
+sufijo implícito del nombre y un `//go:build` explícito— porque los dos terminan en lo mismo: código
+de prueba que en CI no existe. Evalúa las restricciones con `go/build/constraint`, no con un regex,
+y las exenciones llevan su motivo. Tres sabotajes verificados, incluido reproducir el accidente
+original.
+
+**La regla de método que dejó, y es la tercera del día:** cuando escribís una guarda, **corré su
+sabotaje ANTES de creerle al verde** — el verde de una guarda nueva no distingue «no hay defecto» de
+«no estoy mirando». Hoy costó cuatro veces: el sabotaje térmico que salió verde, el `on(project,
+device)` que se satisfacía con el `on` de otra cláusula, el regex del eje que un COMENTARIO
+contentaba, y la guarda de la tabla que se apagaba en la primera línea en blanco.
+
+
 **2026-09-05 · A97 CERRADO EN EL MISMO ACTO — la ventana de mantenimiento no callaba su caso de portada.**
 
 `musubi_fleet_maintenance` se describe a sí misma con este ejemplo como su razón de ser: «**sin
