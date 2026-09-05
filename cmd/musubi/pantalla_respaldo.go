@@ -72,7 +72,8 @@ const envRespaldoPantalla = "MUSUBI_PANTALLA_RESPALDO"
 // en el RustDesk.toml real `password` aparece arriba de todo, antes de cualquier sección.
 var campoPassword = regexp.MustCompile(`(?m)^[ \t]*password[ \t]*=.*$`)
 
-// passPrevia es lo que había en UN archivo antes de que la sesión lo pisara.
+// passPrevia es lo que había en UN archivo antes de que la sesión lo pisara, y lo que la sesión
+// dejó puesto en su lugar.
 type passPrevia struct {
 	Ruta string `json:"ruta"`
 	// Linea es la línea `password = '...'` completa y sin interpretar. Va vacía cuando el
@@ -80,6 +81,20 @@ type passPrevia struct {
 	// y «había esto» se cierran distinto —uno se puede scramblear tranquilo, el otro no—.
 	Linea string `json:"linea,omitempty"`
 	Habia bool   `json:"habia"`
+
+	// Puesta es la línea que quedó DESPUÉS de aplicar la contraseña de sesión, y existe para
+	// contestar una sola pregunta al cerrar: ¿esto sigue siendo lo que puso Musubi?
+	//
+	// SIN ESTE CAMPO, RESTITUIR ERA UN PISÓN MÁS. La primera versión devolvía el valor viejo
+	// incondicionalmente, así que si el dueño de la máquina cambiaba su contraseña permanente
+	// DURANTE la sesión —que es el momento más natural para hacerlo, porque es cuando está
+	// adentro— el vencimiento se la borraba y le devolvía la anterior. Arreglaba el caso que
+	// motivó todo y reintroducía el mismo daño por una puerta más chica.
+	//
+	// No es la contraseña ni se puede volver atrás desde acá: es el blob cifrado tal como lo
+	// escribió RustDesk, que sirve para COMPARAR y para nada más. Vacío en marcas escritas por
+	// la versión anterior, y ahí se restituye como antes: no saber no puede significar perder.
+	Puesta string `json:"puesta,omitempty"`
 }
 
 // respaldoPantalla es la marca de que hay una sesión abierta y qué hay que devolver al cerrarla.
@@ -220,6 +235,9 @@ func loQueCambio(antes []passPrevia) []passPrevia {
 		if hay == p.Habia && ahora == p.Linea {
 			continue
 		}
+		// Se anota lo que quedó puesto, no sólo lo que había. Es lo que al cerrar distingue
+		// «esto sigue siendo de Musubi» de «el dueño puso lo suyo mientras tanto».
+		p.Puesta = ahora
 		out = append(out, p)
 	}
 	return out
