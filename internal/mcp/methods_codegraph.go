@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"musubi/internal/codeintel"
 	"musubi/internal/logx"
@@ -379,6 +381,15 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 	} else {
 		res, err = s.indexAllPackages(ctx)
 	}
+	// De QUÉ ÁRBOL es este índice. Se registra al indexar y no al consultar porque es un hecho del
+	// momento del índice, no del momento de la pregunta: registrarlo tarde diría el commit de HOY
+	// sobre un grafo derivado la semana pasada, que es peor que no decir nada.
+	if err == nil {
+		if head := s.commitDeHEAD(); head != "" {
+			_ = s.engine.SetMeta(memory.MetaCodegraphHead, head)
+			res["indexed_head"] = head
+		}
+	}
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al indexar el grafo de código: %v", err)
 	}
@@ -485,6 +496,88 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	return jsonResult(res)
 }
 
+// commitDeHEAD devuelve el commit corto del árbol indexado, o "" si no hay git, no es un repo o el
+// comando falla. Es informativo: NUNCA rompe el índice. Se acota con timeout porque corre dentro
+// del indexado y un git colgado (un lock, un FS de red) no puede arrastrar al grafo con él.
+func (s *McpServer) commitDeHEAD() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", s.projectPath, "rev-parse", "--short", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// pathConocido marca si el ARCHIVO del node_key existe en este árbol (indexado o en disco), aunque
+// el símbolo no. Es interno: se saca de la respuesta antes de devolverla.
+//
+// Separa las dos mitades del miss, que piden trato distinto. `code_context` suelda memoria por
+// RUTA, así que para «pkg/a.go#func:Nope» —archivo real, nombre mal— una nota sobre `pkg/a.go` sigue
+// siendo pertinente y hay que devolverla; para una ruta inventada, esa misma bibliografía es ruido
+// presentado como respuesta. Un `explained_by` binario (siempre o nunca) se equivoca en una de las
+// dos, y el «nunca» rompería el weld que TestCodeContextWeldsMemory custodia desde F3.
+const pathConocido = "_path_conocido"
+
+// pistaDelMiss arma la respuesta de un símbolo NO encontrado explicando POR QUÉ no está.
+//
+// UN `found:false` DESNUDO ENSEÑA A NO CONFIAR EN LA HERRAMIENTA. El grafo indexa el árbol que está
+// CHECKOUTEADO, así que un símbolo de otra rama no está — y eso no es un grafo roto, es un grafo
+// de otro árbol. Medido el 2026-09-03 en este repo: `SSHFalsoParaTest` devolvía `found:false`
+// estando sano, porque vive en `feat/control-de-flota` (95 commits y 334 archivos fuera del índice
+// de `main`). Sin una pista, la lectura natural es «el grafo no sabe», se vuelve a `grep`, y la
+// herramienta queda condenada por un miss que era correcto.
+//
+// Las tres pistas se ordenan de la más accionable a la menos: si el archivo está indexado, el
+// nombre está mal escrito (y se listan los símbolos que SÍ tiene); si existe en disco pero no en el
+// grafo, falta indexar; si no existe, es de otro árbol. `indexed_head` viaja siempre que se sepa.
+func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]interface{} {
+	res := map[string]interface{}{"found": false, "key": symbol}
+
+	if head, ok, _ := s.engine.GetMeta(memory.MetaCodegraphHead); ok && head != "" {
+		res["indexed_head"] = head
+	}
+
+	// El node_key es 'path#kind:name': sin '#' no hay archivo del que hablar.
+	i := strings.Index(symbol, "#")
+	if i <= 0 {
+		res["hint"] = "el formato del node_key es 'path#kind:name' (ej. 'internal/mcp/methods.go#func:toolSaveCode'); pedí musubi_code_graph con 'path' para ver los símbolos de un archivo"
+		return res
+	}
+	archivo := symbol[:i]
+
+	if syms, err := s.engine.ListGraphNodesForFileCtx(ctx, archivo); err == nil && len(syms) > 0 {
+		nombres := make([]string, 0, len(syms))
+		for _, n := range syms {
+			nombres = append(nombres, n.Name)
+		}
+		res["hint"] = "«" + archivo + "» SÍ está indexado pero no tiene ese símbolo: revisá el nombre (los métodos van 'Tipo.Metodo')"
+		res["symbols_in_file"] = nombres
+		res[pathConocido] = true
+		return res
+	}
+
+	// El archivo no está en el grafo. Que exista o no en disco separa «falta indexar» de «otra rama».
+	if _, err := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo))); err == nil {
+		res[pathConocido] = true
+		// Y si existe pero su LENGUAJE no se indexa, indexar no lo va a arreglar nunca. El grafo
+		// deriva del AST: Go siempre, y TS/TSX/JS/JSX/Py sólo con `-tags treesitter`. C/C++, SQL,
+		// Java y demás no entran por `IndexableForGraph`, que filtra por extensión. Se documentó el
+		// 2026-08-15 al mirar el árbol del juego de gio, donde la pestaña «Código» salía vacía y
+		// nadie sabía por qué; mandarlo a re-indexar sería mandarlo a perder el tiempo.
+		if !codeintel.IndexableForGraph(archivo) {
+			res["hint"] = "«" + archivo + "» existe, pero su lenguaje NO entra al grafo: se deriva del AST y sólo cubre .go (y TS/TSX/JS/JSX/Py con -tags treesitter). Re-indexar no lo va a agregar; para este archivo usá musubi_recall_code, que es agnóstico del lenguaje"
+			return res
+		}
+		res["hint"] = "«" + archivo + "» existe en disco pero NO está en el grafo: corré musubi_codegraph_index (mode='incremental')"
+		return res
+	}
+	res["hint"] = "«" + archivo + "» no existe en el árbol indexado. El grafo indexa la rama CHECKOUTEADA: si el símbolo vive en otra rama, no está acá y el miss es correcto"
+	res[pathConocido] = false
+	return res
+}
+
 func (s *McpServer) toolCodeGraph(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Symbol string `json:"symbol"`
@@ -502,7 +595,9 @@ func (s *McpServer) toolCodeGraph(ctx context.Context, raw json.RawMessage) (int
 			return nil, rpcErrorf(codeInternalError, "error al leer el nodo: %v", err)
 		}
 		if !ok {
-			return jsonResult(map[string]interface{}{"found": false, "key": args.Symbol})
+			p := s.pistaDelMiss(scoped, args.Symbol)
+			delete(p, pathConocido) // señal interna: no viaja en la respuesta
+			return jsonResult(p)
 		}
 		out, _ := s.engine.GraphOutEdgesCtx(scoped, args.Symbol)
 		in, _ := s.engine.GraphInEdgesCtx(scoped, args.Symbol)
@@ -549,6 +644,15 @@ func (s *McpServer) toolCodeGraph(ctx context.Context, raw json.RawMessage) (int
 			if e.Kind == codeintel.EdgeImports {
 				imports = append(imports, e.ToKey)
 			}
+		}
+		// Mismo criterio que el miss por símbolo: un archivo sin símbolos devolvía dos listas vacías
+		// y ninguna explicación, que se lee igual que «este archivo no tiene nada».
+		if len(views) == 0 {
+			p := s.pistaDelMiss(scoped, key+"#")
+			p["path"] = key
+			delete(p, "key")
+			delete(p, pathConocido)
+			return jsonResult(p)
 		}
 		return jsonResult(map[string]interface{}{"path": key, "symbols": views, "imports": imports})
 	}
@@ -773,8 +877,37 @@ func (s *McpServer) toolCodeContext(ctx context.Context, raw json.RawMessage) (i
 		}
 		resp["callees"] = callees
 		resp["callers"] = callers
+		// El weld: decisiones/gotchas que explican este símbolo (derivado, scopeado).
+		resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+		return jsonResult(resp)
 	}
-	// El weld: decisiones/gotchas que explican este símbolo (derivado, scopeado).
-	resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+
+	// NO ENCONTRADO: la misma pista que el resto del grafo, y SIN bibliografía.
+	//
+	// `explained_by` vivía FUERA del `if found`, así que un símbolo inventado volvía con
+	// `found:false` Y hasta cinco documentos que «lo explican». Lo diagnosticó el EMISARIO el
+	// 2026-08-09 y seguía vivo un mes después; medido el 2026-09-03 con el binario de este cambio,
+	// `inventado/no/existe.go#func:FuncionQueNuncaExistio` devolvía SIETE documentos — entre ellos
+	// la propia auditoría que reportaba el defecto.
+	//
+	// El daño no es el ruido: es que `found:false` con siete referencias al lado SE LEE COMO QUE LA
+	// TOOL CONTESTÓ. Contesta el PORQUÉ de algo que no existe, sin decir que no existe. Es la tesis
+	// del emisario —«si el mensaje que explica un ok necesita un O para escribirse, no es ok: es
+	// blind»— aplicada a esta respuesta: `found:false` significaba «no indexado O no existe», y la
+	// bibliografía empujaba a leerlo como lo primero.
+	p := s.pistaDelMiss(scoped, args.Symbol)
+	resp["hint"] = p["hint"]
+	if h, ok := p["indexed_head"]; ok {
+		resp["indexed_head"] = h
+	}
+	if sf, ok := p["symbols_in_file"]; ok {
+		resp["symbols_in_file"] = sf
+	}
+	// El weld sobrevive cuando el ARCHIVO es real: una nota sobre `pkg/a.go` explica algo aunque el
+	// nombre del símbolo esté mal escrito. Se corta sólo cuando la ruta no existe en este árbol, que
+	// es el caso donde la bibliografía no habla de nada.
+	if conocido, _ := p[pathConocido].(bool); conocido {
+		resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+	}
 	return jsonResult(resp)
 }

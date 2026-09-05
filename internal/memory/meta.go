@@ -22,6 +22,14 @@ const MetaLastHealth = "last_health"
 // detecta drift del stack) y musubi_save_skill (que la actualiza al guardar).
 const MetaStackFingerprint = "skills_stack"
 
+// MetaCodegraphHead es la clave de meta donde el indexador del grafo de código deja el commit
+// (git rev-parse --short HEAD) del árbol que indexó. Existe porque el grafo indexa lo que está
+// CHECKOUTEADO y es ciego a las otras ramas: medido el 2026-09-03 en este repo, 95 commits y 334
+// archivos de `feat/control-de-flota` no estaban en el grafo de `main`, y un `found:false` desnudo
+// se leía como «el grafo no sabe» cuando la verdad era «estás en otra rama». Con el commit
+// guardado, el miss puede decir de qué árbol es el índice. Vacío si no hay git o no es un repo.
+const MetaCodegraphHead = "codegraph_head"
+
 // GetMeta devuelve el valor de una clave de metadatos (ok=false si no existe).
 func (e *DbEngine) GetMeta(key string) (string, bool, error) {
 	var v string

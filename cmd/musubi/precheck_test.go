@@ -247,18 +247,35 @@ func TestPrecheckSurfacesCodeGraphWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestPrecheckCodeGraphOffByDefault(t *testing.T) {
-	// Sin MUSUBI_CODEGRAPH_HOOK: aunque el archivo esté indexado, NO se inyecta el grafo.
-	// Hermético: forzamos el var a vacío (off) para no depender del ambiente del runner —
-	// si quien corre los tests tiene el opt-in ENCENDIDO en su entorno, el default debe seguir
-	// verificándose igual.
+// El default se INVIRTIÓ el 2026-09-03: el grafo se inyecta salvo que lo apaguen. Medido contra el
+// ledger del central (14 días): 161 escrituras al grafo contra 14 lecturas, y tres tools del grafo
+// con CERO invocaciones. Un default apagado no era neutral, era la decisión de que no se usara.
+//
+// Hermético en las dos direcciones: se fuerza el var (a vacío acá, a "0" en el test de al lado) para
+// no heredar el entorno del runner — si quien corre los tests lo tiene apagado, el default nuevo
+// tiene que verificarse igual.
+func TestPrecheckCodeGraphOnByDefault(t *testing.T) {
 	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "")
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a\nfunc Alpha(){ beta() }\nfunc beta(){}\n")
+	store := graphStore()
+	in := `{"tool_name":"Read","tool_input":{"file_path":"a.go"},"session_id":"s"}`
+	_, ctx := hookAdditionalContext(t, precheckOutput(store, root, strings.NewReader(in)))
+	if !strings.Contains(ctx, "grafo de código") {
+		t.Errorf("sin decir nada, el grafo debe inyectarse, obtuve %q", ctx)
+	}
+}
+
+// Y el escape: un default nuevo sin apagador es un default impuesto. Quien mida que en su repo no le
+// conviene tiene que poder salirse sin parchear el binario.
+func TestPrecheckCodeGraphSeApagaExplicitamente(t *testing.T) {
+	t.Setenv("MUSUBI_CODEGRAPH_HOOK", "0")
 	root := t.TempDir()
 	writeFile(t, root, "a.go", "package a\nfunc Alpha(){}\n")
 	store := graphStore()
 	in := `{"tool_name":"Read","tool_input":{"file_path":"a.go"},"session_id":"s"}`
 	out := precheckOutput(store, root, strings.NewReader(in))
 	if strings.Contains(out, "grafo de código") {
-		t.Errorf("sin el env var de opt-in el grafo NO debe inyectarse, obtuve %q", out)
+		t.Errorf("con MUSUBI_CODEGRAPH_HOOK=0 el grafo NO debe inyectarse, obtuve %q", out)
 	}
 }
