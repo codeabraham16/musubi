@@ -160,5 +160,30 @@ groups:
 
       # Por cliente, la PEOR de sus servicios: un reporte se firma con el dato más flojo que lo
       # sostiene. Mismo criterio que `musubi:project_up:cobertura30d`.
+      #
+      # ════════════════════════════════════════════════════════════════════════════════════════
+      # ESTA COBERTURA NO SIGNIFICA LO MISMO QUE LA DE MÁQUINAS, Y HAY QUE LEERLA DISTINTO
+      #
+      # `musubi_fleet_device_up` se emite SIEMPRE (0 o 1), así que la cobertura de una máquina es
+      # tiempo medido, y punto. `musubi_fleet_service_up` NO: está ausente a propósito para
+      # `ocioso` y para `desconocido` —eso es A70 y su continuación—, porque de un servicio
+      # apagado porque nadie lo pidió no se puede afirmar disponibilidad.
+      #
+      # Así que esta serie cuenta AFIRMACIONES DE DISPONIBILIDAD, no tiempo medido, y su valor
+      # bajo mezcla dos causas que no son la misma:
+      #
+      #   · la máquina no estaba reportando          -> hueco real de medición
+      #   · el servicio estuvo ocioso por diseño     -> no había nada que afirmar
+      #
+      # MEDIDO el 2026-09-04, unas horas después de ponerla: 15 de 200 series muy por debajo del
+      # techo, y las cinco peores son todas ociosas por diseño —`MapsBroker`, `whesvc`,
+      # `edgeupdate`, los updaters de Google—. O sea que este `min` va a estar dominado por un
+      # actualizador de Windows apagado, no por un hueco. Es cierto y no informa.
+      #
+      # SE DEJA IGUAL Y NO SE «ARREGLA» CON UNA CUARTA REGLA: separar las dos causas exige contar
+      # contra `musubi_fleet_service_declared` (que sí está siempre), y eso contestaría otra
+      # pregunta —«¿estaba la máquina reportando?»—, que es exactamente la que ya contesta
+      # `musubi:project_up:cobertura30d`. Para saber si se perdió la medición, mirá ÉSA. Ésta
+      # sirve por servicio, para leer un `avg30d` sabiendo sobre cuántas afirmaciones se calculó.
       - record: musubi:project_service_up:cobertura30d
         expr: min by(project) (musubi:service_up:cobertura30d)
