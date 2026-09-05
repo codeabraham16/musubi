@@ -62,14 +62,14 @@ func (s *McpServer) canalDelAgente(d fleet.Device, id string, ahora time.Time) (
 }
 
 // handlerShellAgenteEntrada entrega al agente lo que la persona tecleó (long-poll).
-func (s *McpServer) handlerShellAgenteEntrada(limiter *authLimiter) http.HandlerFunc {
+func (s *McpServer) handlerShellAgenteEntrada(limiter *authLimiter, auditoria *registroDeAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		d, ok := s.deviceDeRequest(limiter, w, r)
+		d, ok := s.deviceDeRequest(limiter, auditoria, w, r)
 		if !ok {
 			return
 		}
@@ -99,14 +99,14 @@ func (s *McpServer) handlerShellAgenteEntrada(limiter *authLimiter) http.Handler
 }
 
 // handlerShellAgenteSalida recibe del agente lo que imprimió el pty.
-func (s *McpServer) handlerShellAgenteSalida(limiter *authLimiter) http.HandlerFunc {
+func (s *McpServer) handlerShellAgenteSalida(limiter *authLimiter, auditoria *registroDeAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		d, ok := s.deviceDeRequest(limiter, w, r)
+		d, ok := s.deviceDeRequest(limiter, auditoria, w, r)
 		if !ok {
 			return
 		}
@@ -147,19 +147,37 @@ const salidaMaxPorTramo = 256 * 1024
 
 // deviceDeRequest autentica contra la tabla `devices`, con el mismo limiter y el mismo motivo
 // único de rechazo que el latido: un 401 no puede ser un oráculo de qué tokens existen.
-func (s *McpServer) deviceDeRequest(limiter *authLimiter, w http.ResponseWriter, r *http.Request) (fleet.Device, bool) {
+func (s *McpServer) deviceDeRequest(limiter *authLimiter, auditoria *registroDeAuth, w http.ResponseWriter, r *http.Request) (fleet.Device, bool) {
 	ip := clientIP(r)
-	if limiter.locked(ip, time.Now()) {
-		http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-		return fleet.Device{}, false
-	}
-	d, ok, err := s.engine.DevicePorToken(bearerToken(r.Header.Get("Authorization")))
+	// EL CANDADO VA DESPUÉS DE MIRAR EL TOKEN, igual que en el endpoint MCP (A88). Acá el orden
+	// original tenía una razón mejor —DevicePorToken consulta la base, y el candado ahorraba esa
+	// consulta durante una inundación— pero el precio era el mismo y peor ubicado: el candado es
+	// POR IP, así que un proceso roto en una máquina de la flota dejaba afuera al AGENTE de esa
+	// misma máquina, con su token de device perfectamente válido, y la sesión de shell se caía
+	// sola sin que nada dijera por qué. Un SELECT por índice cuesta microsegundos; que un agente
+	// legítimo no pueda entrar cuesta una sesión.
+	bearer := bearerToken(r.Header.Get("Authorization"))
+	d, ok, err := s.engine.DevicePorToken(bearer)
 	if err != nil {
 		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
 		return fleet.Device{}, false
 	}
 	if !ok {
-		limiter.fail(ip, time.Now())
+		ahora := time.Now()
+		motivo := motivoCredencialDesconocida
+		if bearer == "" {
+			motivo = motivoSinCredencial
+			s.metrics.authSinCredencial.Add(1)
+		} else {
+			s.metrics.authDesconocida.Add(1)
+		}
+		limiter.fail(ip, ahora)
+		auditoria.fallo(ahora, ip, motivo, r.URL.Path, r.Header.Get("User-Agent"))
+		if limiter.locked(ip, ahora) {
+			s.metrics.authBloqueado.Add(1)
+			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+			return fleet.Device{}, false
+		}
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, motivoRechazo, http.StatusUnauthorized)
 		return fleet.Device{}, false

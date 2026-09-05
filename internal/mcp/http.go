@@ -137,6 +137,8 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	metrics := s.metrics
 	// Lockout contra fuerza bruta del bearer (16.1e): 5 fallos por IP ⇒ 60s de bloqueo.
 	limiter := newAuthLimiter(5, time.Minute)
+	// Quién está fallando (A88): una línea por IP por minuto, con el conteo de las calladas.
+	auditoriaAuth := nuevoRegistroDeAuth(time.Minute, 1024)
 	mux := http.NewServeMux()
 
 	// Endpoint MCP, envuelto en observabilidad (correlation ID + métricas por resultado).
@@ -156,31 +158,50 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// Autenticación. Con registro de principals (16.1c): el bearer debe resolver a un
 		// principal (o al token legacy) — si no, 401. Sin registro (modo legacy): un único
 		// token, comparado en tiempo constante. El principal resuelto viaja en el ctx.
-		// Lockout anti fuerza-bruta (16.1e): si la IP acumuló demasiados 401, se rechaza con
-		// 429 antes de tocar el token; un auth OK resetea su contador.
+		//
+		// EL CANDADO SE MIRA DESPUÉS DEL TOKEN, NO ANTES (A88, 2026-09-05). La primera versión
+		// rechazaba con 429 sin mirar la credencial, y eso convertía la defensa en un arma contra
+		// el vecino: el candado es POR IP, así que un cliente roto —un daemon local al que le
+		// sacaron la variable de entorno— disparando ~2 fallos por minuto dejó horas afuera a la
+		// persona que compartía esa máquina, con un token perfectamente válido en la mano.
+		//
+		// Mirar el token primero no le regala nada a quien prueba: resolve() es un hash y una
+		// comparación en tiempo constante, sin I/O ni escrituras, y una credencial que ACIERTA no
+		// es un ataque por definición. El que falla sigue viendo 429 cuando agota sus intentos, y
+		// un 429 no distingue «token equivocado» de «IP castigada», así que tampoco aprende nada.
 		authActive := opt.registry != nil || opt.token != ""
 		ip := clientIP(r)
-		if authActive && limiter.locked(ip, time.Now()) {
-			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-			return
-		}
 		var principal *Principal
-		if opt.registry != nil {
-			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+		if authActive {
+			bearer := bearerToken(r.Header.Get("Authorization"))
+			ok := false
+			if opt.registry != nil {
+				principal, ok = opt.registry.resolve(bearer)
+			} else {
+				ok = validBearer(r.Header.Get("Authorization"), opt.token)
+			}
 			if !ok {
-				limiter.fail(ip, time.Now())
+				ahora := time.Now()
+				motivo := motivoCredencialDesconocida
+				if bearer == "" {
+					motivo = motivoSinCredencial
+					metrics.authSinCredencial.Add(1)
+				} else {
+					metrics.authDesconocida.Add(1)
+				}
+				limiter.fail(ip, ahora)
+				// La atribución va al LOG y no a una etiqueta de la métrica: una serie por IP es
+				// cardinalidad sin techo, y encima la escribiría el atacante.
+				auditoriaAuth.fallo(ahora, ip, motivo, r.URL.Path, r.Header.Get("User-Agent"))
+				if limiter.locked(ip, ahora) {
+					metrics.authBloqueado.Add(1)
+					http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+					return
+				}
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			principal = p
-		} else if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
-			limiter.fail(ip, time.Now())
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if authActive {
 			limiter.reset(ip)
 		}
 		if r.Method == http.MethodGet {
@@ -247,8 +268,8 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// Y las dos del AGENTE (S5c), que vuelven a autenticar DISPOSITIVOS. Por ellas viaja todo lo
 	// que la persona teclea, así que su guarda central no es «¿el token vale?» sino «¿esta sesión
 	// es de ESTA máquina?». Ver shell_agente_http.go.
-	mux.HandleFunc(shellAgenteEntradaPath, s.handlerShellAgenteEntrada(limiter))
-	mux.HandleFunc(shellAgenteSalidaPath, s.handlerShellAgenteSalida(limiter))
+	mux.HandleFunc(shellAgenteEntradaPath, s.handlerShellAgenteEntrada(limiter, auditoriaAuth))
+	mux.HandleFunc(shellAgenteSalidaPath, s.handlerShellAgenteSalida(limiter, auditoriaAuth))
 
 	// Auto-update del cuerpo por la malla: sirve manifest + binarios desde bodyDir, sin
 	// auth (la frontera es el tailnet, como /readyz). Solo si está configurado.

@@ -74,6 +74,24 @@ type serverMetrics struct {
 	unauthorized atomic.Int64 // subconjunto 401, útil para detectar fuerza bruta
 	serverError  atomic.Int64 // respuestas 5xx
 
+	// DESGLOSE DE LOS 401 POR MOTIVO (A88). `unauthorized` solo dice «alguien falló» y con eso no
+	// se puede decidir nada: un cliente propio al que le sacaron la variable de entorno y alguien
+	// probando tokens producen el mismo número. Estos dos separan los dos mundos, y la cardinalidad
+	// tiene techo (son dos series, no una por IP).
+	authSinCredencial atomic.Int64 // request sin cabecera Authorization
+	authDesconocida   atomic.Int64 // credencial presentada y no reconocida (o vencida)
+	// authBloqueado cuenta los 429 del candado anti fuerza-bruta. Va aparte de los 401 porque
+	// significa otra cosa: no es «tu credencial está mal», es «esta IP ya agotó sus intentos».
+	authBloqueado atomic.Int64
+	//
+	// OJO AL COMPARAR CON DATOS ANTERIORES AL 2026-09-05: `unauthorized` cuenta RESPUESTAS 401, no
+	// fallos de auth, y al mover el candado detrás del token (A88) el QUINTO fallo de cada ciclo
+	// pasó de contestar 401 a contestar 429. O sea que `unauthorized` bajó ~20 % para el mismo
+	// volumen de fallos, sin que nada mejorara. La serie continua y comparable de acá en adelante
+	// es `musubi_auth_failures_total`, que cuenta el FALLO y no la respuesta: no le importa si el
+	// candado ya estaba puesto. Cambiar un comportamiento y romper en silencio la serie que lo
+	// medía es la forma más cara de arreglar algo.
+
 	toolHist  latencyHistogram // latencia AGREGADA de cada tools/call (handler)
 	toolOK    atomic.Int64     // tools/call que devolvieron resultado
 	toolError atomic.Int64     // tools/call que devolvieron un RpcError
@@ -193,6 +211,14 @@ func (m *serverMetrics) render(engine memory.StorageBackend) string {
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"client_error\"} %d\n", m.clientError.Load())
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"unauthorized\"} %d\n", m.unauthorized.Load())
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"server_error\"} %d\n", m.serverError.Load())
+
+	b.WriteString("# HELP musubi_auth_failures_total Rechazos de autenticación por motivo. Sin etiqueta de IP a propósito: la atribución va al log (A88).\n")
+	b.WriteString("# TYPE musubi_auth_failures_total counter\n")
+	fmt.Fprintf(&b, "musubi_auth_failures_total{motivo=\"%s\"} %d\n", motivoSinCredencial, m.authSinCredencial.Load())
+	fmt.Fprintf(&b, "musubi_auth_failures_total{motivo=\"%s\"} %d\n", motivoCredencialDesconocida, m.authDesconocida.Load())
+	b.WriteString("# HELP musubi_auth_lockouts_total Requests rechazadas con 429 por el candado anti fuerza-bruta.\n")
+	b.WriteString("# TYPE musubi_auth_lockouts_total counter\n")
+	fmt.Fprintf(&b, "musubi_auth_lockouts_total %d\n", m.authBloqueado.Load())
 
 	b.WriteString("# HELP musubi_tool_calls_total Invocaciones de tools/call por resultado (agregado).\n")
 	b.WriteString("# TYPE musubi_tool_calls_total counter\n")

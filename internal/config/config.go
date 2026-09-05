@@ -1235,6 +1235,42 @@ func (c Config) Marshal() ([]byte, error) {
 
 // Load lee projectPath/.musubi/config.yaml aplicando defaults para campos ausentes.
 // Si el archivo no existe, devuelve la configuración por defecto sin error.
+// ConfigPath devuelve la ruta del config.yaml que gobierna a un proyecto. Existe para poder
+// DECIRLA en voz alta al arrancar (cabo A96): `Load` resuelve la ruta desde el projectPath —o sea,
+// desde el cwd del proceso— y si el archivo no está devuelve los defaults en silencio, así que
+// desde afuera no hay forma de saber cuál de los `.musubi/config.yaml` de la máquina mandó.
+func ConfigPath(projectPath string) string {
+	return filepath.Join(projectPath, DirName, ConfigFile)
+}
+
+// ConfigSombra devuelve la ruta de OTRO config.yaml que existe en el home y que NO es el que
+// gobierna a este proceso, o "" si no hay tal cosa.
+//
+// POR QUÉ: el 2026-09-05 se diagnosticó una tormenta de 401 leyendo `~/.musubi/config.yaml`, donde
+// `sync.enabled` es false, mientras el daemon corría con cwd en el repo y obedecía a
+// `<repo>/.musubi/config.yaml`, donde es true. La conclusión —«el sync está apagado, no pueden ser
+// los daemons»— era exactamente al revés, y descartó la causa correcta con algo que se siente como
+// evidencia dura: el archivo existe, el campo está ahí, y dice algo terminante. Una lectura
+// equivocada no falla: cierra la investigación.
+func ConfigSombra(projectPath string) string {
+	gobierna, err := filepath.Abs(ConfigPath(projectPath))
+	if err != nil {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	otro := filepath.Join(home, DirName, ConfigFile)
+	if otro == gobierna {
+		return ""
+	}
+	if _, err := os.Stat(otro); err != nil {
+		return ""
+	}
+	return otro
+}
+
 func Load(projectPath string) (Config, error) {
 	cfg := Default()
 	path := filepath.Join(projectPath, DirName, ConfigFile)

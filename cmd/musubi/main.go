@@ -177,6 +177,30 @@ func printUsage() {
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
 // como proceso one-shot e imprime un resumen en stdout.
+// avisarQueConfigGobierna escribe en stderr, al arrancar, CUÁL config.yaml se cargó — y avisa si
+// hay otro en el home que no gobierna (cabo A96, salida b).
+//
+// Es una línea y habría cortado en el minuto uno un diagnóstico que llevó horas: el daemon MCP
+// corre con cwd en el proyecto, así que obedece a `<repo>/.musubi/config.yaml`, pero quien
+// diagnostica abre `~/.musubi/config.yaml` porque es el que se conoce. Los dos existen y hoy
+// difieren justo en `sync.enabled`. Decirlo cuesta nada; no decirlo costó tres hipótesis falsas.
+func avisarQueConfigGobierna(root string) {
+	ruta := config.ConfigPath(root)
+	// Absoluta a propósito: una ruta relativa en una línea de diagnóstico deja al que la lee
+	// adivinando desde dónde, que es exactamente la ambigüedad que este aviso viene a matar.
+	if abs, err := filepath.Abs(ruta); err == nil {
+		ruta = abs
+	}
+	if _, err := os.Stat(ruta); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: sin config propia en %s — corriendo con los valores por defecto\n", ruta)
+	} else {
+		fmt.Fprintf(os.Stderr, "musubi: configuración cargada de %s\n", ruta)
+	}
+	if sombra := config.ConfigSombra(root); sombra != "" {
+		fmt.Fprintf(os.Stderr, "musubi: OJO — también existe %s y NO gobierna a este proceso (manda el del directorio de trabajo)\n", sombra)
+	}
+}
+
 func runMaintain() {
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
@@ -188,6 +212,7 @@ func runMaintain() {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
@@ -240,6 +265,7 @@ func runServe(args []string) {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 
 	// Overrides por flag: --addr <host:port> (o --addr=...) habilita el modo servicio
 	// con esa dirección; --enable lo habilita con la addr de la config.
@@ -358,6 +384,7 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 
 	// Proveedor de embeddings con auto-detección + degradación elegante (16.2f): enciende la
 	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.
