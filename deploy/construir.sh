@@ -61,7 +61,24 @@ else
   echo "! sin clave pública de release: este binario NO va a poder auto-actualizarse (a propósito)" >&2
 fi
 
-go build -ldflags "$LDFLAGS" -o "$SALIDA" ./cmd/musubi
+# `-trimpath` NO ES COSMÉTICO: SIN ÉL, EL MISMO COMMIT DA BINARIOS DISTINTOS
+#
+# Go empotra la ruta de compilación en el binario, así que dos compilaciones del MISMO commit
+# hechas en carpetas distintas salen con sha256 distinto. Medido el 2026-09-04, dos worktrees del
+# commit 8bb1e98:
+#
+#   sin -trimpath   996ffe97f534143f…   y   ca660b1675d746fd…     ← distintos
+#   con -trimpath   a2996572df2fc2aa…   y   a2996572df2fc2aa…     ← idénticos
+#
+# Lo que se pierde sin esto es la pregunta que uno quiere hacerle a un sha: «¿este binario es el
+# commit que dice ser?». Sin reproducibilidad el sha sólo contesta «¿llegó entero el archivo que
+# serví?» —integridad de transporte, útil pero mucho menos—, y dos personas que compilan el mismo
+# commit no pueden compararse entre sí. Importa más todavía donde la autorización es POR HASH: A31
+# describe reautorizar hash por hash en AppLocker/WDAC, y un hash que cambia por la carpeta donde
+# se compiló hace ese trámite imposible de automatizar.
+#
+# El costo es cero: `-trimpath` sólo quita rutas absolutas del binario.
+go build -trimpath -ldflags "$LDFLAGS" -o "$SALIDA" ./cmd/musubi
 echo "✓ $SALIDA"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
