@@ -285,7 +285,22 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 
 	// `| a | b |` son 2 celdas: se cuentan los separadores internos, que es lo que usa el
 	// renderizador para decidir dónde corta.
-	celdas := func(l string) int { return strings.Count(strings.TrimSpace(l), "|") - 1 }
+	//
+	// UN `\|` NO ES UN SEPARADOR, y contarlo como tal fue un falso POSITIVO medido el 2026-09-05:
+	// la fila de A98 llevaba `Get-Process musubi \| Select-Object` y esta cuenta la daba por rota
+	// cuando ya estaba arreglada. GFM respeta la barra invertida DENTRO de un code span, que es
+	// justamente donde hace falta — los backticks NO protegen el pipe, y ahí estaba el defecto
+	// original.
+	celdas := func(l string) int {
+		l = strings.TrimSpace(l)
+		n := 0
+		for i := 0; i < len(l); i++ {
+			if l[i] == '|' && (i == 0 || l[i-1] != '\\') {
+				n++
+			}
+		}
+		return n - 1
+	}
 	// El separador de un encabezado es la línea de guiones: `|---|---|`.
 	esSeparador := func(l string) bool {
 		l = strings.TrimSpace(l)
@@ -319,6 +334,37 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 					"columna que corresponda, o dale a la tabla la columna que le falta.",
 					i+1, n, encabezadoEn, esperadas, recorte(strings.TrimSpace(l), 110))
 			}
+		case esperadas > 0 && strings.TrimSpace(l) == "":
+			// UNA LÍNEA EN BLANCO ADENTRO DE UNA TABLA LA PARTE EN DOS, Y ESO ES PEOR QUE UNA CELDA
+			// PERDIDA: en Markdown la tabla TERMINA ahí, así que las filas que siguen se renderizan
+			// como texto suelto con barras verticales. Y para esta prueba era peor todavía: al ver
+			// el blanco daba la tabla por terminada y dejaba de revisar, o sea que se ponía EN VERDE
+			// sobre todo lo que venía después.
+			//
+			// Medido el 2026-09-05: había NUEVE líneas en blanco adentro de la tabla de la sección 1,
+			// y la primera estaba a catorce filas del encabezado — así que A77, A79, A88, A89, A96,
+			// A90..A95, A98 y A99 no se revisaban Y no renderizaban como tabla. Entre ellas, la de
+			// A98, con una celda de más que el renderizador se come. Es el mismo defecto que B20 ya
+			// registró, y esta prueba existía para atraparlo.
+			//
+			// Un blanco ANTES de un encabezado o del final de la sección sí es legítimo: la tabla se
+			// terminó de verdad. La diferencia es si DESPUÉS del blanco siguen viniendo filas.
+			siguen := false
+			for j := i + 1; j < len(lineas); j++ {
+				if strings.TrimSpace(lineas[j]) == "" {
+					continue
+				}
+				siguen = esFila(lineas[j]) && !esSeparador(lineas[j])
+				break
+			}
+			if siguen {
+				t.Errorf("ABIERTO.md línea %d: hay una línea EN BLANCO adentro de la tabla que empieza "+
+					"en la línea %d, y después del blanco siguen viniendo filas.\n"+
+					"  Markdown TERMINA la tabla en el blanco, así que todo lo que sigue se dibuja como "+
+					"texto suelto con barras verticales en vez de como filas — el registro entero deja de "+
+					"leerse. Sacá la línea en blanco.", i+1, encabezadoEn)
+			}
+			esperadas = 0
 		case esperadas > 0:
 			esperadas = 0 // se terminó la tabla
 		}
