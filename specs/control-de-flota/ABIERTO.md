@@ -758,6 +758,53 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · AUDITORÍA DE SABOTAJES DECLARADOS, CERRADA: 73 corridos entre dos sesiones, 8 cabos
+reales — y el auditor se equivocó tanto como el código.**
+
+Reparto: **27 guardas de Go** (acá) y **46 sobre archivos no-Go** —`.sh`, `.yml`, `.cmd`, `.md`—
+(`musubi-81`). Resultado combinado: **8 cabos reales** (A105, A106, los cuatro de A107, A108, y el
+cableado del llavero del agente) y el resto verificadas.
+
+**LOS 27 DE GO**: 19 verificadas en rojo con mensajes distintos —incluidas las dos de autorización,
+que son las que más importan: «FUGA: alguien con el id de una sesión AJENA pudo hablarle» y «la
+intrusa recibió 200; esperaba 410»—, **1 cabo real** (el cableado del `if cred.Rechazado()`), 2
+saltadas por ambigüedad mecánica, y **1 que sigue sin compilar** con cualquier neutralización que
+probé. Los 12 «no compila» de la primera pasada eran **mi interpretación**, no el código: reemplazar
+la condición por `false` en vez de borrar la línea convirtió 8 en rojos, y los otros pedían un
+reemplazo diseñado a mano.
+
+**EL PATRÓN ÚNICO DE LOS 7 NO-GO, que vale más que los siete arreglos**: la guarda pregunta si un
+TEXTO está, y el texto está donde no decide nada. Un archivo de despliegue tiene tres clases de texto
+—lo que se ejecuta, lo que se le dice al humano, y lo que se comenta— y sólo la primera cambia el
+comportamiento. Cuatro variantes: **el comentario** (4 de 7; una era un comentario que decía «esta
+guarda se arregló para no dejarse satisfacer por un comentario»), **el mensaje de error** (los tres
+tokens en la misma línea no alcanzan si el mensaje los repite), **el prefijo** (`"atendidas":
+len(PUERTOS)` lo satisface `len(PUERTOS) - len(caidos)`, que significa lo contrario) y **el vecino**
+(tres cadenas sueltas pueden vivir en tres bloques distintos). Y la trampa **se agrava sola**: cuanto
+mejor documentado el arreglo, más lugares donde la cadena aparece sin decidir nada. Este repo
+documenta muy bien.
+
+**EL AUDITOR SE EQUIVOCA TANTO COMO EL CÓDIGO, Y EN LA MISMA DIRECCIÓN.** En las dos auditorías,
+**uno de cada dos «verdes» intermedios era un error del auditor**. Los míos, nombrados: renombré un
+campo a `no_puedo_ver_renombrado` —que CONTIENE `no_puedo_ver`, así que la guarda con `Contains`
+siguió verde con razón: el prefijo, que el par había nombrado una hora antes y yo repetí—; y saqué
+`AND device_id = ?` de un UPDATE cuando el sabotaje declarado eran DOS cambios juntos, que aplicados
+de verdad sí la ponen en rojo. Los del par: un ancla en un archivo que la guarda no lee, un comentario
+que la guarda descarta a propósito, un `poner` con un segundo escritor más abajo, y un nombre de test
+TRUNCADO por su extractor —que lo cazó el control de «cero pruebas seleccionadas»—.
+
+**La regla que queda: ningún verde se registra como cabo sin que otro lo lea.** Ahora con número.
+
+**Y UNA GUARDA QUE NO SE CONSTRUYÓ, a propósito.** Iba a exigir que toda prueba que lea `deploy/`
+filtre comentarios (el helper `codigoDe`). Antes de escribirla revisé cómo el par había arreglado
+A106 y era **posicional** —mirar sólo lo anterior a `volver_atras`—, no filtrar comentarios. La
+propiedad no es «filtra comentarios», es «mira sólo lo que decide», y tiene al menos tres
+implementaciones legítimas: filtrar comentarios, truncar posicionalmente, y parsear estructuralmente
+(`yaml.Unmarshal`). Una guarda que exija UNA habría marcado como defectuoso un arreglo correcto — la
+falla 7 que se acababa de agregar a la herramienta, cometida por quien la agregó. **No es mecanizable
+como guarda, y ése es el hallazgo**: sirve como heurística para elegir qué LEER, no para exigir.
+
+
 **2026-09-05 · LA SÉPTIMA FORMA: «LA GUARDA VE AL REVÉS», y la dirección que ningún sabotaje puede probar.**
 
 La encontró la otra sesión en A105 y es una categoría que no teníamos: una guarda que **premia el
