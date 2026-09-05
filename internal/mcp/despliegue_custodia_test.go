@@ -710,3 +710,80 @@ func TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas(t *testing.T) {
 	}
 	t.Logf("%d métrica(s) empujada(s) y las mismas %d miradas por las alertas", len(empujadas), len(miradas))
 }
+
+// TestLasAlertasDelLatidoLeenLaSerieConLastOverTime — el defecto que sólo se vio corriéndolo.
+//
+// UNA SERIE EMPUJADA NO ESTÁ CASI NUNCA. Prometheus la marca rancia ~5 minutos después de cada
+// empuje y desaparece del vector instantáneo. Medido el 2026-09-05 contra el servidor, el mismo
+// dato consultado en cuatro instantes: a los 58 s presente; a los 308 s, 508 s y 608 s AUSENTE,
+// mientras `last_over_time(...[7d])` lo encontraba en los cuatro. Y `comparar-y-latir.sh` late
+// cada SEIS HORAS.
+//
+// ESCRITAS CON LA MÉTRICA PELADA, LAS TRES ALERTAS ESTABAN ROTAS EN LAS DOS DIRECCIONES A LA VEZ:
+//
+//	· `ComparacionRepoServidorSinCorrer` disparaba a los cinco minutos de CADA latido, por su
+//	  brazo `absent()` — un falso positivo cada 6 h para siempre, que es cómo se enseña a ignorar
+//	  un canal (los trece `MaquinaCaida` de A79).
+//	· `ProduccionDivergeDelRepo` y `DespliegueConEslabonesSinVerificar` NO PODÍAN DISPARARSE
+//	  NUNCA: su `for` de 30 min no llega a cumplirse antes de que la serie se evapore. Y el modo
+//	  de falla es mudo — `max()` sobre una serie rancia no da 0, no da NADA, y una expresión sin
+//	  resultado no alerta.
+//
+// NINGUNA LECTURA DEL YAML LO MOSTRABA: las tres expresiones se leen perfectamente bien y dicen
+// lo que uno quiere que digan. Se vio porque se corrió y la alerta apareció disparando con el
+// latido recién empujado. Por eso esta guarda es sobre la FORMA de la expresión y no sobre su
+// sentido: el sentido ya era correcto.
+func TestLasAlertasDelLatidoLeenLaSerieConLastOverTime(t *testing.T) {
+	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
+	}
+
+	// Sólo el bloque `expr:`. Estas métricas se nombran también en comentarios —el que explica
+	// esta misma medición las cita— y ahí no deciden nada.
+	reCorte := regexp.MustCompile(`^(for|labels|annotations|keep_firing_for)\s*:|^- alert:`)
+	// La forma buena: la métrica va DENTRO de last_over_time( o absent_over_time( y con rango.
+	reEnvuelta := regexp.MustCompile(`(last_over_time|absent_over_time)\(\s*musubi_verificacion_[a-z0-9_]+\s*\[`)
+	reCruda := regexp.MustCompile(`musubi_verificacion_[a-z0-9_]+`)
+
+	dentro, vistas := false, 0
+	for n, linea := range strings.Split(string(alertas), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if strings.HasPrefix(codigo, "#") {
+			continue
+		}
+		if strings.HasPrefix(codigo, "expr:") {
+			dentro = true
+		} else if dentro && reCorte.MatchString(codigo) {
+			dentro = false
+		}
+		if !dentro {
+			continue
+		}
+		// Se tachan las apariciones bien envueltas y se mira si sobra alguna: contar unas y otras
+		// por separado daría verde en una línea que tenga una envuelta y una pelada.
+		crudas := len(reCruda.FindAllString(codigo, -1))
+		if crudas == 0 {
+			continue
+		}
+		vistas += crudas
+		if envueltas := len(reEnvuelta.FindAllString(codigo, -1)); envueltas < crudas {
+			t.Errorf("musubi-alerts.yml:%d lee una serie del latido SIN `last_over_time`/`absent_over_time`:\n"+
+				"  %s\n"+
+				"Una serie EMPUJADA se pone rancia ~5 min después de cada empuje y el latido es cada 6 h, "+
+				"así que en el vector instantáneo no está casi nunca. Escrita así, la alerta o dispara "+
+				"en falso el 99%% del tiempo (si pregunta por `absent`) o no puede dispararse jamás "+
+				"(si su `for` es más largo que los 5 min de vida de la serie). Las dos fallas son mudas "+
+				"al leer el YAML: la expresión se lee bien.\n"+
+				"Arreglo: envolvela — `last_over_time(<metrica>[7d])`, o `absent_over_time(<metrica>[7d])`.",
+				n+1, codigo)
+		}
+	}
+	if vistas == 0 {
+		t.Fatal("no encontré ninguna serie `musubi_verificacion_*` en las expresiones de " +
+			"musubi-alerts.yml: o las alertas del latido de A115 se fueron —y entonces la " +
+			"comparación repo↔servidor volvió a no tener quien la vigile— o cambiaron de nombre y " +
+			"esta guarda quedó mirando al vacío en verde")
+	}
+	t.Logf("%d lectura(s) de la serie del latido, todas envueltas", vistas)
+}
