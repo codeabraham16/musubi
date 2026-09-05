@@ -199,15 +199,28 @@ type cgNodeView struct {
 // que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
 // archivo AUSENTE o ilegible cuenta como stale (nodo fantasma): mostrar código borrado como
 // fresco era un bug de correctitud — impact/callers apuntarían a símbolos que ya no existen.
+// arbolFueraDeAlcance dice si este servidor NO tiene en disco el árbol que su grafo describe.
+//
+// En el central COMPARTIDO el grafo es FEDERADO: los nodos vienen de otros proyectos y sus archivos
+// no están acá, así que TODA pregunta al disco sobre un path del grafo contesta lo mismo —«no
+// está»— y esa respuesta no significa nada. Medido el 2026-09-05: el daemon corre con
+// MUSUBI_HOME=/home/musubi/musubi-brain, que sólo contiene `.musubi/` y ni siquiera es un repo git.
+//
+// ESTÁ EN UNA FUNCIÓN PORQUE SON TRES LOS QUE LA NECESITAN Y ERAN DOS LOS QUE LA TENÍAN. `cgStale`
+// y `graphFreshness` la comprobaban cada uno por su lado —«no inventar podredumbre»— y
+// `pistaDelMiss` no, así que en el central contestaba SIEMPRE la última de sus cuatro ramas: «no
+// existe en el árbol indexado […] el miss es correcto». Categórico, y falso cuando lo que pasa es
+// que el índice central está viejo. Con un nombre compartido, el día que la condición cambie,
+// cambia para los tres.
+func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }
+
 func (s *McpServer) cgStale(n memory.GraphNode) bool {
 	if n.Path == "" {
 		return false
 	}
-	// En el central COMPARTIDO (forceRedact) el grafo es FEDERADO: los nodos vienen de otros proyectos y
-	// sus archivos NO están en el disco del central, así que fingerprintear contra s.projectPath daría
-	// "fantasma"/stale para TODO y la cabina mostraría el código federado como podrido (auditoría #3).
-	// No se puede verificar frescura de un árbol remoto ⇒ no marcarlo stale.
-	if s.forceRedact {
+	// No se puede verificar frescura de un árbol que no está en disco ⇒ no marcarlo stale, que
+	// mostraría el código federado como podrido (auditoría #3).
+	if s.arbolFueraDeAlcance() {
 		return false
 	}
 	cur, err := memory.FileFingerprint(s.projectPath, n.Path)
@@ -529,9 +542,13 @@ const pathConocido = "_path_conocido"
 // de `main`). Sin una pista, la lectura natural es «el grafo no sabe», se vuelve a `grep`, y la
 // herramienta queda condenada por un miss que era correcto.
 //
-// Las tres pistas se ordenan de la más accionable a la menos: si el archivo está indexado, el
-// nombre está mal escrito (y se listan los símbolos que SÍ tiene); si existe en disco pero no en el
-// grafo, falta indexar; si no existe, es de otro árbol. `indexed_head` viaja siempre que se sepa.
+// Las pistas se ordenan de la más accionable a la menos: si el archivo está indexado, el nombre
+// está mal escrito (y se listan los símbolos que SÍ tiene); si existe en disco pero no en el grafo,
+// falta indexar; si no existe, es de otro árbol. `indexed_head` viaja siempre que se sepa.
+//
+// Y ANTES DE LAS DOS QUE MIRAN EL DISCO va la pregunta de si este servidor TIENE disco que mirar:
+// en el central no lo tiene, y sin esa guarda las dos últimas ramas eran inalcanzables y todo miss
+// terminaba afirmando «es de otra rama». Ver arbolFueraDeAlcance.
 func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]interface{} {
 	res := map[string]interface{}{"found": false, "key": symbol}
 
@@ -554,6 +571,25 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 		}
 		res["hint"] = "«" + archivo + "» SÍ está indexado pero no tiene ese símbolo: revisá el nombre (los métodos van 'Tipo.Metodo')"
 		res["symbols_in_file"] = nombres
+		res[pathConocido] = true
+		return res
+	}
+
+	// LAS DOS PISTAS QUE SIGUEN LE PREGUNTAN AL DISCO, Y ACÁ EL DISCO PUEDE NO SABER NADA.
+	//
+	// Sin el árbol de fuentes, `os.Stat` falla SIEMPRE y las dos ramas útiles quedan inalcanzables:
+	// todo miss caía en la última, que afirma «no existe en el árbol indexado […] el miss es
+	// correcto» y manda a buscar en otra rama. Es la peor de las cuatro respuestas justo donde
+	// menos se puede comprobar: en el central lo que suele faltar es un `musubi_codegraph_push`,
+	// no una rama. Caso medido el 2026-09-05: `internal/fleet/tempwindows.go` existe en el commit
+	// desplegado y tiene CERO nodos en el grafo del central, que es de antes del despliegue.
+	//
+	// Y `pathConocido` queda en true a propósito: el recorte de bibliografía se diseñó para rutas
+	// INVENTADAS, y acá no se puede distinguir una inventada de una real. Cortar el weld por las
+	// dudas esconde memoria que sí explica el código —«tempwindows.go» tiene 1 observación en el
+	// central y «procparse.go» 4—, y el default de este archivo, cuando no se sabe, es no callar.
+	if s.arbolFueraDeAlcance() {
+		res["hint"] = "«" + archivo + "» no está en el grafo de ESTE cerebro, y acá no se puede decir por qué: es el central, su grafo es federado y no tiene el árbol de fuentes en disco, así que no distingue «falta empujar el grafo» de «es de otra rama». Empujá el grafo del proyecto (musubi_codegraph_push) o preguntale al cerebro local del repo"
 		res[pathConocido] = true
 		return res
 	}
@@ -687,9 +723,9 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 // disco). Es la señal de "conviene re-indexar" que expone map (Track 20 · F5), a granularidad de
 // archivo (barata: una pasada de stat sobre los paths del grafo).
 func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
-	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
-	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
-	if s.forceRedact {
+	// Igual que cgStale: sin el árbol en disco la frescura por fingerprint no aplica (todo saldría
+	// fantasma). No inventar podredumbre. #3
+	if s.arbolFueraDeAlcance() {
 		return 0, 0
 	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)

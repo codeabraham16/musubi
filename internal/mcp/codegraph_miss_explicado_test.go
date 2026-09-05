@@ -315,3 +315,66 @@ func gitInit(t *testing.T, dir string) {
 		}
 	}
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// G10 — EN EL CENTRAL, LAS DOS PISTAS QUE MIRAN EL DISCO NO PUEDEN CONTESTAR, Y ANTES CONTESTABAN
+//
+// El central es infra compartida: su grafo es FEDERADO —los nodos vienen de otros proyectos— y NO
+// tiene el árbol de fuentes en disco. Medido el 2026-09-05: el daemon corre con
+// MUSUBI_HOME=/home/musubi/musubi-brain, que sólo contiene `.musubi/` y ni siquiera es un repo git.
+// Ahí `os.Stat` falla SIEMPRE, así que dos de las cuatro ramas de pistaDelMiss eran inalcanzables y
+// TODO miss caía en la última: «no existe en el árbol indexado […] el miss es correcto». Categórico,
+// y falso: en el central lo que suele faltar es un `musubi_codegraph_push`, no una rama. El caso
+// real de ese día fue `internal/fleet/tempwindows.go`, que existía en el commit desplegado y tenía
+// cero nodos en el grafo del central.
+//
+// El defecto es de la familia que este repo persigue por partida doble: `cgStale` y
+// `graphFreshness` ya comprobaban esta condición cada uno por su lado —«no inventar podredumbre»—
+// y `pistaDelMiss` era la tercera que la necesitaba y no la tenía. Ahora las tres comparten
+// `arbolFueraDeAlcance`.
+//
+// Sabotaje verificado que lo pone en rojo: que `arbolFueraDeAlcance` devuelva `false` siempre.
+func TestEnElCentralElMissNoAfirmaQueElArchivoEsDeOtraRama(t *testing.T) {
+	s, dir := proyectoIndexado(t)
+
+	// El archivo EXISTE en disco y no está en el grafo: es el caso donde el central se equivoca,
+	// porque su respuesta no depende del disco pero la escribe como si dependiera.
+	writeFile(t, filepath.Join(dir, "otro", "z.go"), "package otro\n\nfunc Zeta() {}\n")
+	const simbolo = "otro/z.go#func:Zeta"
+
+	// ── local: ve el disco, así que manda a indexar (el contraste que hace valer lo de abajo) ──
+	local := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": simbolo}))
+	hintLocal, _ := local["hint"].(string)
+	if !contieneAlguna(hintLocal, "codegraph_index") {
+		t.Fatalf("con el árbol en disco la pista tiene que ser «indexá», obtuve %q", hintLocal)
+	}
+
+	// ── central: el MISMO símbolo, y ya no puede decir por qué ──────────────────────────────────
+	s.forceRedact = true
+	central := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": simbolo}))
+	hint, _ := central["hint"].(string)
+	if hint == "" {
+		t.Fatal("un miss sin hint es el defecto que este archivo custodia")
+	}
+	// LO QUE NO PUEDE DECIR. Ésta es la afirmación que mandaba a buscar en otra rama a alguien cuyo
+	// problema era un grafo sin empujar.
+	if contieneAlguna(hint, "el miss es correcto", "no existe en el árbol indexado") {
+		t.Errorf("sin el árbol en disco el central NO puede afirmar que el símbolo es de otra rama, obtuve %q", hint)
+	}
+	// Y lo que SÍ tiene que decir: de quién es la ignorancia, y cuál es la acción.
+	if !contieneAlguna(hint, "codegraph_push") {
+		t.Errorf("la pista del central tiene que nombrar la acción que sí sirve, obtuve %q", hint)
+	}
+
+	// EL WELD DE MEMORIA NO SE CORTA. El recorte de bibliografía se diseñó para rutas INVENTADAS, y
+	// acá no se puede distinguir una inventada de una real: cortarlo por las dudas esconde memoria
+	// que sí explica el código. Se mira por `code_context`, que es quien suelda.
+	cc := decodeCG(t, mustCall(t, s, "musubi_code_context", map[string]interface{}{"symbol": simbolo}))
+	if _, hay := cc["explained_by"]; !hay {
+		t.Errorf("el central no puede saber si la ruta es real, así que el weld se mantiene: %v", cc)
+	}
+	// Y la señal interna sigue sin filtrarse, como en G9.
+	if _, hay := central[pathConocido]; hay {
+		t.Errorf("el camino nuevo filtró la señal interna: %v", central)
+	}
+}
