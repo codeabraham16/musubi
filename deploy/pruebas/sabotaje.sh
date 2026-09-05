@@ -6,7 +6,8 @@
 # POR QUÉ EXISTE: EL 2026-09-05 DECLARÉ SEIS SABOTAJES QUE NO FUNCIONABAN
 #
 # Este repo pide que toda guarda tenga un sabotaje que la ponga en rojo, y que el sabotaje COMPILE.
-# La disciplina es buena y aplicarla a mano falla de seis formas distintas, todas medidas ese día:
+# La disciplina es buena y aplicarla a mano falla de OCHO formas distintas, todas medidas en este
+# repo — las seis primeras ese día, las dos últimas el 2026-09-05 a la tarde:
 #
 #   1. LA GUARDA NO MIRA EL CAMINO QUE EL SABOTAJE TOCA. Deshacer el arreglo térmico entero dejaba
 #      la prueba en verde, porque ejercitaba la función directo y nunca a su llamador.
@@ -21,8 +22,18 @@
 #      lo que pase: «el sabotaje funcionó» y «el árbol no compila» se leen igual.
 #   6. DOS SABOTAJES DISTINTOS FALLABAN CON EL MISMO MENSAJE, y se contaron como dos. Eran uno
 #      mal medido, y lo único que lo mostró fue correr el control SIN sabotaje.
+#   7. LA GUARDA VE AL REVÉS: premia el defecto y castiga el arreglo. Un sabotaje NO puede
+#      detectarlo —contesta bien— y sólo lo muestra la pregunta simétrica: «¿sigue en VERDE cuando
+#      hago lo correcto?». Es lo que mide el quinto argumento (sección 4, abajo).
+#   8. LA GUARDA ES NEGATIVA Y EL SABOTAJE FUE EN LA DIRECCIÓN QUE NO EXISTE. Una aserción que dice
+#      «esto NO puede aparecer» no se sabotea SACANDO lo prohibido: eso es un no-op, y su verde no
+#      dice «la guarda no cubre», dice «no la toqué». Se sabotea AGREGÁNDOLO. Medido en
+#      `TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta`, que prohíbe `taskkill /IM
+#      musubi.exe` en una línea ejecutable: neutralizar el patrón la dejaba en verde; agregar la
+#      línea prohibida la puso en rojo en el acto. Le pasó también al agente que audita: dos de sus
+#      veredictos «VERDE» del día eran esto y no un hueco.
 #
-# Las seis tienen la misma forma que el resto de los defectos de este repo: una señal con la forma
+# Las ocho tienen la misma forma que el resto de los defectos de este repo: una señal con la forma
 # de la respuesta, contestando otra pregunta. Un verde nuevo no distingue «no hay defecto» de «no
 # estoy mirando», y un rojo nuevo no distingue «la guarda funcionó» de «rompí el build».
 #
@@ -129,10 +140,19 @@ echo "  ✓ el sabotaje se aplicó y COMPILA"
 CON="$(corrida)"
 FALLOS="$(grep -E '^\s*--- FAIL: ' <<<"$CON" | sed -E 's/^\s*--- FAIL: ([^ ]+).*/\1/')"
 if [[ -z "$FALLOS" ]]; then
-  echo "✗ EL SABOTAJE NO LA PONE EN ROJO: la guarda no cubre lo que su doc dice que cubre."
-  echo "  Es la falla más silenciosa de todas, porque el verde se lee como «no hay defecto»."
-  echo "  Arreglá la guarda, o dejá ESCRITO adentro que este sabotaje NO funciona y por qué —"
-  echo "  un doc que nombra un sabotaje inerte enseña a confiar en una red que no está."
+  echo "✗ EL SABOTAJE NO LA PONE EN ROJO."
+  echo "  Es el desenlace más silencioso de todos, porque el verde se lee como «no hay defecto»."
+  echo
+  echo "  ANTES DE CULPAR A LA GUARDA, DESCARTÁ QUE EL SABOTAJE SEA EL EQUIVOCADO:"
+  echo "   · ¿LA GUARDA ES NEGATIVA? (falla 8) Si la aserción dice «esto NO puede aparecer», sacar"
+  echo "     lo prohibido es un NO-OP y este verde no significa nada. Hay que AGREGARLO."
+  echo "   · ¿LE APUNTASTE A LA PRUEBA HERMANA? (falla 1) La que ejercita el MÉTODO queda en verde"
+  echo "     cuando el sabotaje toca a su LLAMADOR. Buscá quién más se pone rojo con este cambio:"
+  echo "         grep -rn '<el símbolo sabateado>' --include='*_test.go' ."
+  echo
+  echo "  Si el sabotaje era el correcto: arreglá la guarda, o dejá ESCRITO adentro que este"
+  echo "  sabotaje NO funciona y por qué — un doc que nombra un sabotaje inerte enseña a confiar"
+  echo "  en una red que no está."
   exit 1
 fi
 echo "  ✓ ROJO, y falla en:"

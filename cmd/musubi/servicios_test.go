@@ -756,7 +756,30 @@ func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
 // salida 78» es justo lo que uno quiere ver al lado de un servicio que anda a los tumbos. Lo que
 // cambia es el VEREDICTO, no el dato.
 //
-// Sabotaje: sacar el `if !vivo` de parsearLaunchctl → com.ejemplo.revivido vuelve a `fallado`.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// EL SABOTAJE QUE ESTE DOC NOMBRABA NO COMPILA, Y POR ESO NO DECÍA NADA
+//
+// Decía «sacar el `if !vivo` de parsearLaunchctl», y eso NO PUEDE compilar: `vivo` tiene
+// exactamente UN lector en toda la función —esta guarda—, así que borrarla le saca el único uso a
+// la variable y Go corta con `declared and not used: vivo`. Un rojo por build roto se lee igual
+// que un rojo por guarda que funciona (la falla 5 de deploy/pruebas/sabotaje.sh), así que el doc
+// mandaba a comprobar la red con un gesto que nunca la comprueba.
+//
+// Y EL HERMANO DICE LA MISMA FRASE Y AHÍ ES CIERTA: internal/memory/latido_test.go tiene un
+// `if !vivo` idéntico y su doc también ofrece «o borrar ese if» — ahí SÍ compila y SÍ da rojo,
+// porque en ese archivo `vivo` se vuelve a leer más abajo. La misma oración, verdadera en un lado
+// y falsa en el otro, y la diferencia no es la guarda: es cuántos lectores tiene la variable.
+//
+// Sabotajes MEDIDOS el 2026-09-05: los dos compilan y los dos hacen fallar la aserción de abajo
+// («un servicio CON PID quedó "fallado" por un código de salida viejo»).
+//   - apagarle la entrada: borrar el `vivo = true` de parsearLaunchctl
+//   - invertir la condición: `if !vivo` → `if vivo`
+//
+// Los dos fallan con el MISMO mensaje, así que son UN defecto escrito de dos formas —«el código de
+// salida pisa el corriendo»—, no dos hallazgos.
+//
+// La otra dirección también está medida: con `if vivo == false` —la misma condición escrita
+// distinto— la prueba sigue en VERDE, así que la guarda juzga conducta y no texto.
 func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
 	// Formato real: PID, último código de salida, etiqueta. La fila del medio es el caso: tiene
 	// PID (está corriendo AHORA) y arrastra el código de una caída anterior.
