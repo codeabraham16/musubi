@@ -294,12 +294,18 @@ Dos capas complementarias:
   comunidad (≈1.7 M indexadas) **filtradas por tu stack**. Lee de un catálogo estático cosechado
   (cero rate limit) con fallback a la API en vivo. Es **solo de descubrimiento**: devuelve metadatos
   y el enlace de GitHub para que los revises e instales por tu cuenta — Musubi **nunca** baja,
-  ejecuta ni instala el `SKILL.md`.
+  ejecuta ni instala el `SKILL.md`. **Doble candado hoy:** es opt-in (`sourcing.marketplace_enabled`)
+  *y* la tool está dormida, así que además pide `MUSUBI_TOOLS_ALL=1`.
 
 ### Orquestación de workflows
 
 Musubi coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está
 listo y **recuerda el progreso entre sesiones** (estado en SQLite, resumible).
+
+> ⚠️ **La puerta de esta sección está cerrada por defecto.** El motor corre —`musubi_sdd` lo usa y
+> los `workflow_runs` de la base salen de ahí—, pero la tool que acepta *tu* grafo,
+> `musubi_workflow`, está entre las nueve dormidas: para el yaml de acá abajo hace falta
+> `MUSUBI_TOOLS_ALL=1`. Sin esa variable, lo único que corre es la cadena fija de SDD.
 
 ```yaml
 # .musubi/workflows/feature.yaml
@@ -344,6 +350,15 @@ en `internal/mcp/tools_dormidas_test.go`:
 
 Abajo se nombran igual donde hacen falta para explicar un flujo: **si una de esas nueve aparece en la
 tabla, hoy no se puede invocar sin esa variable.**
+
+Tres de ellas son la puerta de secciones enteras de este README, y **no son el mismo caso**. Lo que
+importa no es si la tool responde, sino si el FLUJO tiene otra entrada:
+
+| Dormida | ¿El flujo sigue vivo? | Por dónde entra hoy |
+|---|---|---|
+| `musubi_promote` | **sí, entero** | con `team_mode: true` —el default de los repos activos— `musubi_save_observation` ya nace `shared` y el sync la despacha sola (1.238 de 1.371 notas en este repo). `promote` quedó para el caso raro de una nota que nació local |
+| `musubi_discover_skills` | **no, y tampoco antes** | ya era **opt-in** por `sourcing.marketplace_enabled`, así que la dormancia es el segundo candado de una puerta que la mayoría de las instalaciones nunca abrió. La solapa Comunidad del cuerpo tampoco la usa: lista el arsenal con `musubi_list_skills` |
+| `musubi_workflow` | **el motor sí; tu DAG no** | `musubi_sdd` corre el mismo motor —los `workflow_runs` de la base son todos suyos— pero con una definición **fija**: `SDDWorkflowDef` arma la cadena explorar→planear→codear→verificar y nunca lee `.musubi/workflows/`. Un grafo propio no tiene hoy ninguna puerta abierta |
 
 
 | Dominio | Herramientas |
