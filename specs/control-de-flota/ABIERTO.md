@@ -754,6 +754,49 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-05 · `deploy/pruebas/sabotaje.sh` — la disciplina de los sabotajes, mecanizada, porque
+declaré SEIS que no funcionaban en un día.**
+
+Este repo pide que toda guarda tenga un sabotaje que la ponga en rojo y que el sabotaje COMPILE. La
+disciplina es correcta y aplicarla a mano falló de seis formas distintas, todas medidas ese día — y
+las seis tienen la misma forma que el resto de los defectos del track: **una señal con la forma de la
+respuesta, contestando otra pregunta**.
+
+1. **La guarda no mira el camino que el sabotaje toca.** Deshacer el arreglo térmico entero dejaba la
+   prueba en verde: ejercitaba la función directo y nunca a su llamador.
+2. **La guarda se satisface con un TEXTO.** Un regex de `ConsentimientoEfectivo\(` lo contentaba un
+   COMENTARIO, así que borrar el `switch` entero no rompía nada. Pasó **tres veces** en el día:
+   comentario, comentario, y el string de un mensaje de error (esa tercera la encontró la otra sesión
+   sobre su propio trabajo). Se arregla mirando estructura y no texto — `go/ast` del lado de Go, un
+   helper `codigoDe` del lado de shell.
+3. **La guarda mira un vecino.** Buscar `on(project, device)` en todo el texto anterior a la métrica
+   lo satisfacía el `on(...)` de OTRA cláusula.
+4. **La guarda deja de mirar.** Una línea en blanco le daba la tabla por terminada, y todo lo que
+   venía después quedaba sin revisar, en verde.
+5. **El rojo era un build roto.** Con el paquete sin compilar `go test` sale distinto de cero pase lo
+   que pase, así que «el sabotaje funcionó» y «el árbol no compila» se leen igual. Lo midió la otra
+   sesión: corrió ocho sabotajes con el build roto (por trabajo mío en vuelo) y tres dieron falso rojo.
+6. **Dos sabotajes distintos fallaban con el MISMO mensaje** y se contaron como dos. Eran uno mal
+   medido, y lo único que lo mostró fue el control SIN sabotaje.
+
+**LO QUE EL GUION EXIGE, una cosa por cada falla:** control sin sabotaje que PASE (6) y que seleccione
+al menos una prueba (el falso verde de A100); que compile antes y después (5); que el archivo de
+verdad CAMBIE —si el patrón ya no matcha, el rojo sería de otra cosa—; `--- FAIL: <nombre>` y no un
+exit code (5); y **la primera línea de cada fallo IMPRESA** (6), que es lo que distingue dos
+sabotajes de uno contado dos veces. Restaura con `trap`, porque un sabotaje que queda puesto es peor
+que no haberlo corrido.
+
+Probado contra sus seis modos: uno que funciona, uno que no (el del tipo truncado, que declaré mal),
+patrón vacío, build roto, sabotaje que no cambia nada, y control ya en rojo. Y escribiéndolo cometí
+uno más, que quedó anotado adentro: los backticks de un `echo` entre comillas dobles se EJECUTAN, así
+que el mensaje del build roto salía con la salida de `go test` incrustada en el medio — justo en el
+momento en que hay que leerlo con atención.
+
+**La regla que queda, con el agregado de la otra sesión:** el verde de una guarda nueva no distingue
+«no hay defecto» de «no estoy mirando», y el rojo no distingue «la guarda funcionó» de «rompí el
+build». No escribir la consecuencia que se ESPERA: escribir la que salió.
+
+
 **2026-09-05 · CERRADO — la fila del plano de acceso tiene tres escalones, el código la cumple entera y nada la sostenía.**
 
 Salió de leer de a pares los comentarios que argumentan un ORDEN, que es el instrumento que apareció
