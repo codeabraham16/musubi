@@ -953,3 +953,96 @@ func TestConLaMaquinaEnLibreLosCuatroOjosSiPidenAprobacion(t *testing.T) {
 		})
 	}
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Y LA TERCERA DE LA FILA: LOS CUATRO OJOS VAN ANTES DE MOLESTAR AL DUEÑO
+//
+// `methods_pantalla.go:144` lo argumenta con dos consecuencias distintas, y las dos son de dominio:
+//
+//   - si los cuatro ojos fueran DESPUÉS del aviso, la persona sentada en la máquina recibiría
+//     «alguien está por entrar» y no entraría nadie durante media hora, porque la sesión todavía
+//     tiene que esperar a un segundo operador. Un aviso de algo que no pasó enseña a ignorar los
+//     avisos;
+//   - si fueran DESPUÉS del `pide`, se le gastaría el «sí» a esa persona en una sesión que puede no
+//     abrirse nunca: UN PERMISO QUE SE CONCEDE Y SE TIRA.
+//
+// La fila completa queda: veto del dueño → cuatro ojos → `pide`/`avisa`. Cada escalón molesta a más
+// gente que el anterior, y el orden es exactamente el que gasta el tiempo de la menor cantidad de
+// personas posible.
+//
+// NADIE CRUZABA `pide` CON LA MARCA. `TestConCuatroOjosElPrimerPedidoNoAcunaContrasena` usa
+// `pantallaConCuatroOjos`, que enrola SIN fijar grado, así que la máquina queda en el default y no
+// se encolaría ninguna pregunta ni con el orden invertido. Es la misma forma que esa prueba ya
+// aprendió a los golpes en su propio comentario —«la declaración del sabotaje y lo que la prueba
+// miraba no coincidían»— sólo que un eje más allá.
+//
+// Sabotaje verificado: mover `puertaDeCuatroOjos` DEBAJO de la rama de `pide`.
+func TestLosCuatroOjosVanAntesDeGastarleElSiAlDuenoDeLaMaquina(t *testing.T) {
+	for _, c := range []struct {
+		camino string
+		tool   string
+	}{
+		{"pantalla", "musubi_fleet_screen"},
+		{"shell", "musubi_fleet_shell"},
+	} {
+		t.Run(c.camino, func(t *testing.T) {
+			s := newTestServer(t, embedding.NoopProvider{})
+			// `pide` DE VERDAD: la máquina sabe preguntar, así que el grado no se degrada a
+			// `prohibido`. Sin esto la prueba mediría la degradación y pasaría por otro motivo.
+			d, p := maquinaConGrado(t, s, fleet.ConsentimientoPide)
+			if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			marcarCuatroOjos(t, s, "casa", d.Name)
+
+			res, e := callAsPrincipal(t, s, p, c.tool, map[string]any{"device": d.Name})
+			if e != nil {
+				t.Fatalf("%s devolvió error en vez de quedar esperando aprobación: %+v", c.camino, e)
+			}
+			if est, _ := jsonOf(t, res)["estado"].(string); est != string(fleet.AprobacionPendiente) {
+				t.Errorf("estado = %q y se esperaba %q: con la marca puesta lo primero que corresponde "+
+					"es esperar al segundo operador", est, fleet.AprobacionPendiente)
+			}
+
+			preguntas, _ := preguntasYAvisosEncolados(t, s, d.ID)
+			if preguntas != 0 {
+				t.Errorf("se le encoló %d pregunta(s) al dueño de la máquina ANTES de que el segundo "+
+					"operador aprobara.\n"+
+					"  Si el dueño dice que sí y después la aprobación no llega, ese «sí» se tira — un\n"+
+					"  permiso concedido para una sesión que no se abrió. Y la próxima vez que se le\n"+
+					"  pregunte, ya aprendió que contestar no sirve.\n"+
+					"  Revisá que `puertaDeCuatroOjos` siga ARRIBA de la rama de `pide`.", preguntas)
+			}
+		})
+	}
+}
+
+// EL CONTROL POSITIVO DE LA ANTERIOR: la misma máquina en `pide` y SIN la marca sí pregunta.
+//
+// Sin esto, la prueba de arriba pasaría contra un `pide` que dejó de preguntar del todo —o sea con
+// el eje entero roto, que es justo el defecto de A85— y el verde diría lo contrario de la verdad.
+func TestSinLaMarcaUnPideSiLePreguntaAlDueno(t *testing.T) {
+	for _, c := range []struct {
+		camino string
+		tool   string
+	}{
+		{"pantalla", "musubi_fleet_screen"},
+		{"shell", "musubi_fleet_shell"},
+	} {
+		t.Run(c.camino, func(t *testing.T) {
+			s := newTestServer(t, embedding.NoopProvider{})
+			d, p := maquinaConGrado(t, s, fleet.ConsentimientoPide)
+			if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			// SIN marcarCuatroOjos: es la única diferencia con la de arriba.
+			if _, e := callAsPrincipal(t, s, p, c.tool, map[string]any{"device": d.Name}); e != nil {
+				t.Fatalf("%s: %+v", c.camino, e)
+			}
+			if preguntas, _ := preguntasYAvisosEncolados(t, s, d.ID); preguntas == 0 {
+				t.Fatalf("un `pide` sin cuatro ojos NO le preguntó al dueño: el eje está roto (A85), y " +
+					"entonces la prueba de arriba pasaría por el motivo equivocado")
+			}
+		})
+	}
+}
