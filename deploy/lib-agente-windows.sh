@@ -27,12 +27,35 @@
 # app de escritorio explícitamente, para no matarla con un `taskkill /IM`. La cautela estaba
 # escrita en un archivo y ausente en su hermano de al lado.
 #
+# SE ENUMERA POR LA HOJA DE LA RUTA Y NO POR `Get-Process musubi`, Y ESTO TIENE MEDICIÓN.
+#
+# musubi-00 corrió los cuatro métodos contra `davantis-1` el 2026-09-05:
+#
+#     Get-Process musubi                 -> 14   (3 agentes + 11 de la app de escritorio)
+#     Get-Process 'musubi.exe'           ->  0
+#     Win32_Process Name='musubi.exe'    -> 14
+#     Win32_Process por ExecutablePath   ->  3   <- sólo los agentes
+#
+# O sea que `Get-Process musubi` SÍ devuelve el caso normal — la corrección importa, porque el
+# error opuesto sería creer que no sirve para nada. Lo que NO devuelve es el proceso que quedó
+# corriendo desde `musubi.exe.viejo`: `Get-Process` matchea `ProcessName`, que es el nombre del
+# archivo sin su ÚLTIMA extensión, así que ese proceso se llama `musubi.exe` y no `musubi`. Y
+# `Win32_Process` con `Name='musubi.exe'` tampoco lo ve, porque su `Name` es `musubi.exe.viejo`:
+# LOS DOS MÉTODOS QUE UNO ELIGE PRIMERO pierden exactamente el caso central. El único robusto es
+# filtrar por la RUTA del ejecutable.
+#
+# Y el caso importa acá arriba, no sólo en la clasificación: si los únicos procesos del agente son
+# zombis de `.viejo` —el cambiador renombró, instaló, y `schtasks /run` falló—, un resolver que
+# mire `Get-Process musubi` no encuentra la carpeta, y `matar-zombis-agente.sh` queda ciego JUSTO
+# en el estado para el que existe.
+#
 # EL DISCRIMINANTE ES `device.token`, no el orden de los procesos: la carpeta del agente es la
 # única que tiene la credencial del dispositivo — es el mismo archivo que el paso [4] del
 # cambiador usa para probar el binario nuevo. Y ante 0 o ante 2, SE PARA: elegir a ciegas es
 # exactamente lo que produjo este defecto.
-RESOLVER='$cands = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path } | ForEach-Object { Split-Path $_.Path } | Sort-Object -Unique)
-if ($cands.Count -eq 0) { "no hay ningun proceso musubi corriendo: sin el no se sabe donde esta instalado el agente"; exit 1 }
+RESOLVER='$ErrorActionPreference = "SilentlyContinue"
+$cands = @(Get-Process | Where-Object { $_.Path } | Where-Object { (Split-Path $_.Path -Leaf) -eq "musubi.exe" -or (Split-Path $_.Path -Leaf) -eq "musubi.exe.viejo" } | ForEach-Object { Split-Path $_.Path } | Sort-Object -Unique)
+if ($cands.Count -eq 0) { "no hay ningun proceso corriendo desde un musubi.exe (ni desde un musubi.exe.viejo): sin el no se sabe donde esta instalado el agente"; exit 1 }
 $conToken = @($cands | Where-Object { Test-Path (Join-Path $_ "device.token") })
 if ($conToken.Count -eq 0) { "hay " + $cands.Count + " carpeta(s) con musubi.exe corriendo y NINGUNA tiene device.token, asi que ninguna es el agente de flota: " + ($cands -join ", "); exit 1 }
 if ($conToken.Count -gt 1) { "hay " + $conToken.Count + " instalaciones con device.token y no se cual es el agente: " + ($conToken -join ", ") + ". No elijo a ciegas"; exit 1 }

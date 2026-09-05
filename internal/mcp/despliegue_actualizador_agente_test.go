@@ -265,6 +265,46 @@ func TestLosDosGuionesDeWindowsCarganElMismoLibYNoUnaCopia(t *testing.T) {
 // condición de `$todos`.
 func TestLaClasificacionVeTambienAlZombiDelBinarioRenombrado(t *testing.T) {
 	lib := leerDeploy(t, "lib-agente-windows.sh")
+
+	// EL RESOLVER TAMBIÉN, Y NO ES UNA COPIA DE LA MISMA REGLA POR PRURITO. Si los únicos procesos
+	// del agente son zombis de `.viejo` —el cambiador renombró, instaló, y `schtasks /run` falló—
+	// un resolver que enumere `Get-Process musubi` no encuentra la carpeta, y el matador queda
+	// ciego JUSTO en el estado para el que existe.
+	//
+	// SE MIRA LA LÍNEA DEL FILTRO Y NO EL BLOQUE ENTERO. La primera versión buscaba
+	// `musubi.exe.viejo` en todo el resolver y el MENSAJE DE ERROR lo nombra («no hay ningun
+	// proceso corriendo desde un musubi.exe ni desde un musubi.exe.viejo»), así que sacárselo al
+	// filtro dejaba la guarda en verde. Tercera vez en el día que un texto que NOMBRA la cautela
+	// la satisface sin que exista: primero un comentario, después otro comentario, ahora la
+	// cadena de un error.
+	res := codigoDe(lib[strings.Index(lib, "RESOLVER='"):strings.Index(lib, "CLASIFICAR='")])
+	// La ASIGNACIÓN, no cualquier línea que mencione `$cands`: la primera versión se quedaba con
+	// la última —un mensaje de error que también lo nombra— y daba rojo por el motivo equivocado.
+	// El control sin sabotaje fue lo único que lo mostró.
+	filtro := ""
+	for _, linea := range strings.Split(res, "\n") {
+		if strings.Contains(linea, "$cands = ") {
+			filtro = linea
+			break
+		}
+	}
+	if filtro == "" {
+		t.Fatal("no encuentro la línea que arma `$cands` en el resolver: ¿cambió el lib?")
+	}
+	if !strings.Contains(filtro, "musubi.exe.viejo") {
+		t.Fatalf("el filtro del resolver no busca procesos de `musubi.exe.viejo`:\n  %s\n"+
+			"Si los únicos que quedan son zombis del binario renombrado —el cambiador renombró,\n"+
+			"instaló, y `schtasks /run` falló— no encuentra la carpeta, y el matador queda ciego\n"+
+			"justo en el estado para el que existe.", strings.TrimSpace(filtro))
+	}
+	for _, linea := range []string{filtro} {
+		if strings.Contains(linea, "Get-Process musubi") {
+			t.Fatalf("el resolver volvió a enumerar por nombre de proceso:\n  %s\n"+
+				"`Get-Process musubi` devuelve el caso normal (medido: 14 en davantis-1) pero NUNCA al\n"+
+				"proceso de `musubi.exe.viejo`, que se llama `musubi.exe`. Se enumera por RUTA.",
+				strings.TrimSpace(linea))
+		}
+	}
 	i := strings.Index(lib, "CLASIFICAR='")
 	if i < 0 {
 		t.Fatal("el lib ya no define `CLASIFICAR`: es el bloque que separa al agente nuevo del zombi")
