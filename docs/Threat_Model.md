@@ -165,9 +165,10 @@ riesgo ausente.
 - **El gate por device del acceso híbrido no existe todavía.** El proposal declara relay público
   «SÓLO para devices marcados, con su propio gate» (`specs/control-de-flota/proposal.md:75`); en
   código no hay ninguna marca por máquina — al relay lo alcanza cualquiera que tenga su clave.
-- **El consentimiento cubre `exec` y `shell`, pero `pide` sólo lo honra pantalla.** *(Este punto
-  estaba vencido en tres afirmaciones y se corrigió el 2026-09-04; lo que decía antes está al final,
-  porque su forma importa más que su contenido.)*
+- **El consentimiento gobierna los tres caminos, y `pide` ya se honra en los tres.** *(Este punto
+  estuvo vencido dos veces: en tres afirmaciones hasta el 2026-09-04, y otra vez el 2026-09-05
+  cuando A85 y A86 cambiaron el comportamiento que describía. Lo que decía antes está resumido al
+  final, porque su forma importa más que su contenido.)*
 
   El eje —`libre` < `avisa` < `pide` < `prohibido`— **lo consultan los tres caminos**:
   `musubi_fleet_exec` (`internal/mcp/methods_exec.go:60`), `musubi_fleet_shell`
@@ -175,20 +176,38 @@ riesgo ausente.
   (`internal/mcp/methods_pantalla.go:92`, `:162` y `:178`). `prohibido` cierra los tres y `avisa`
   notifica en los tres.
 
-  **`pide` es la excepción, y falla de la peor manera: parece honrado y no lo está.**
+  **`pide` ERA la excepción, y fallaba de la peor manera: parecía honrado y no lo estaba.**
   `AvisaAlUsuario()` devuelve true también para `pide` —su propio doc lo dice, «preguntar es avisar
-  y algo más»— así que el camino de la shell, que sólo tiene ramas de `avisa`, le manda a la persona
-  una NOTIFICACIÓN que no puede contestar mientras el operador ya tiene el prompt. Sólo pantalla
-  implementa la mitad que pregunta (`methods_pantalla.go:178`). El grado promete «tiene que aceptar;
-  sin respuesta, no hay sesión» y en una shell eso no pasa.
+  y algo más»— así que los caminos que sólo tenían ramas de `avisa` le mandaban a la persona una
+  NOTIFICACIÓN que no podía contestar mientras el operador ya estaba adentro. El grado promete
+  «tiene que aceptar; sin respuesta, no hay sesión», y eso no pasaba.
 
-  **Es LATENTE hoy**: las cuatro máquinas de la flota están sin declarar, o sea en `avisa`. Nadie lo
-  está sufriendo, y por eso no lo destapó ningún incidente sino un barrido.
+  **CERRADO EN LOS TRES CAMINOS, y cada uno como corresponde a su forma:**
 
-  **NO es una decisión abierta: es un defecto, y está en curso.** El texto anterior lo remitía a A75
-  como «decisión abierta, no bug», y A75 se CERRÓ ENTERO el 2026-09-03 por decisión de gio. Un
-  agujero descrito correctamente, etiquetado como decidido y apuntando a un cabo cerrado es la forma
-  más eficiente de que nadie vaya a mirarlo: quien lo lee concluye que alguien ya lo pensó.
+  - `musubi_fleet_screen` siempre lo implementó (`methods_pantalla.go:178`).
+  - `musubi_fleet_shell` lo implementa desde **A85** (2026-09-04): flujo de dos llamadas, la sesión
+    queda en `esperando_permiso` SIN tocar SSH y el prompt se entrega recién si dijeron que sí.
+  - `musubi_fleet_exec` **se endurece a `prohibido`** desde **A86** (2026-09-05, decisión de gio).
+    No pregunta, y ésa es la diferencia que importa: una shell es una SESIÓN y tiene dónde esperar
+    la respuesta; un exec es una orden suelta y no. Preguntar por comando metería un diálogo de
+    hasta minuto y medio en cada orden de una ráfaga. Endurecer no inventa comportamiento nuevo —es
+    la misma regla que el dominio ya aplica cuando no hay a quién preguntarle— y sesga el error
+    hacia el lado que SE NOTA: bloquear de más rompe el auto-heal y alguien lo ve; ejecutar sin
+    preguntar no se nota nunca. **Lo que se paga está dicho**: una máquina en `pide` no recibe
+    auto-heal, y la salida es de su dueño —bajarla a `avisa`—, no del código.
+
+  La matriz **caminos × grados** (`internal/mcp/consentimiento_matriz_test.go`) ejerce las doce
+  celdas y las deja escritas; la asimetría exec/shell vive ahí y un cambio de comportamiento se ve
+  en esa tabla antes que en producción.
+
+  **LO QUE CONVIENE NO OLVIDAR DE CÓMO ESTUVO ROTO**, porque la forma se repite y el contenido ya no
+  aplica: (1) el texto original remitía a A75 como «decisión abierta, no bug», y A75 se había
+  CERRADO entero — un agujero descrito correctamente, etiquetado como decidido y apuntando a un cabo
+  cerrado es la forma más eficiente de que nadie vaya a mirarlo, porque quien lo lee concluye que
+  alguien ya lo pensó. (2) La guarda que existía recorría los TRES CAMINOS y daba tranquilidad por
+  haber generalizado, pero fijaba `avisa` en las tres filas y nunca probaba `pide`: generalizaba
+  sobre una dimensión de dos, y una tabla que cubre la mitad de una matriz se siente igual de
+  completa que una que la cubre entera.
 
   **Y ADEMÁS LAS DOS REFERENCIAS DE LÍNEA HABÍAN VENCIDO** —`:81` apunta hoy a un comentario y
   `:148` a la mitad de una frase—, que es el modo de falla propio de citar líneas en prosa: no rompe

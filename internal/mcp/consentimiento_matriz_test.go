@@ -61,17 +61,29 @@ func TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados(t *testing.T) {
 		{"shell", fleet.ConsentimientoPide, celda{pregunta: true},
 			"el grado promete «tiene que aceptar. Sin respuesta, no hay sesión»"},
 		{"pantalla", fleet.ConsentimientoPide, celda{pregunta: true}, ""},
-		// EXEC EN `pide` ES LA CELDA ABIERTA, Y SE ESCRIBE COMO ESTÁ, NO COMO DEBERÍA SER.
+		// EXEC EN `pide` NO ABRE. A86, decidido por gio el 2026-09-05.
 		//
-		// Hoy se comporta como `avisa`: notifica y ejecuta. Eso NO está declarado en ninguna
-		// parte —el doc de aplicarConsentimientoDeExec enumera `prohibido`, `avisa` y `libre` y
-		// se saltea `pide`—, así que es el mismo accidente que tenía la shell, en el tercer
-		// camino. No se «arregla» acá porque las dos salidas son decisiones de política y no de
-		// código: endurecerlo a `prohibido` rompería el auto-heal en cualquier máquina en `pide`,
-		// y preguntar por comando pone un diálogo de minuto y medio en el camino de una sola
-		// orden. Queda en A86, y esta fila lo deja MEDIDO en vez de supuesto.
-		{"exec", fleet.ConsentimientoPide, celda{abre: true, avisa: true},
-			"CELDA ABIERTA (A86): hoy `pide` en exec se comporta como `avisa`, y no está declarado"},
+		// Esta fila decía lo contrario, y con razón: hasta ayer `pide` en exec se comportaba como
+		// `avisa` —notificaba y ejecutaba— y la celda lo dejaba MEDIDO en vez de supuesto,
+		// justamente porque las dos salidas eran de política y no de código. Ya se eligió:
+		// endurecer.
+		//
+		// Lo que se pagó por elegir así, escrito acá para que el próximo no lo descubra
+		// desplegando: se ROMPE el auto-heal en cualquier máquina en `pide`. La salida no está en
+		// el código sino en la máquina — su dueño baja el grado a `avisa`, que es una decisión
+		// explícita y queda registrada.
+		//
+		// Se eligió endurecer y no preguntar-por-comando porque endurecer NO INVENTA
+		// COMPORTAMIENTO: es la misma regla que el dominio ya aplica cuando no hay a quién
+		// preguntarle. Y porque los dos errores no cuestan igual — bloquear de más se nota, y
+		// ejecutar sin preguntar no se nota nunca.
+		//
+		// LA ASIMETRÍA CON SHELL ES DELIBERADA Y ES LA LÍNEA QUE ESTA FILA CUSTODIA: `shell` en
+		// `pide` PREGUNTA y espera (A85) porque abre una sesión, que tiene dónde esperar la
+		// respuesta; `exec` es una orden suelta y no. Si algún día exec aprende a esperar, esta
+		// celda cambia a `pregunta: true` y el cambio se ve acá.
+		{"exec", fleet.ConsentimientoPide, celda{},
+			"A86: exec en `pide` se endurece a prohibido — no tiene dónde esperar un sí"},
 
 		// prohibido: el candado del dueño, y puede más que la capacidad.
 		{"exec", fleet.ConsentimientoProhibido, celda{}, ""},

@@ -712,7 +712,6 @@
 
 | A77 | **Dos máquinas del tailnet no están en la flota, y la `raspberrypi` sí sostiene algo** | El tailnet tiene cinco nodos y la flota cuatro devices: **`davantis` (esta máquina, la de desarrollo) y `raspberrypi` no están enroladas**. No es una omisión inocua: el 2026-09-02 se descubrió que el `musubi` local de `davantis` era **`0.107.0` del 27 de agosto —veintitrés versiones atrás—** y que su daemon MCP no arrancaba (`el esquema de la base es más nuevo que este binario`). El fail-closed de las migraciones hizo su trabajo y dijo qué hacer, pero **nadie lo dijo antes**: es A68 otra vez, y `musubi_fleet_device_agent_stale` **no lo cubre** justamente porque esa máquina no está en la flota. La decisión sobre `davantis` no es obvia y por eso sigue siendo cabo y no tarea: enrolar la máquina de desarrollo la mete en el mismo tablero que la producción, con su ruido; no enrolarla deja fuera del radar al equipo desde el que se opera todo. **LA PREGUNTA DE LA `raspberrypi` YA NO ESTÁ ABIERTA — medida el 2026-09-04 y la respuesta es SÍ.** (1) Ni el repo ni la configuración de `musubi-server` (`monitoring/`, `musubi-prometheus/`, `/etc/musubi`) la nombran una sola vez: **nada de Musubi depende de ella**, así que si muere no se cae nada nuestro. (2) Pero ella sí sirve algo: está en línea, con conexión **directa** desde una IP pública DISTINTA de la de `musubi-server` —`108.188.145.244` contra `68.200.128.120`—, o sea que **está en otro sitio, no en la misma LAN**. Tiene el 22 abierto (sin acceso desde acá: `Permission denied (publickey,password)`) y el **8080 sirviendo un `BaseHTTP/0.6` de Python 3.9.2** que a un `GET /` sin credenciales contesta **`200 OK` con `response_code: ERROR_NO_CMD`**: es un endpoint que **espera comandos** y procesó el pedido sin pedir nada. No se probó ningún comando —la pregunta era si sostiene algo, no qué se le puede hacer—, y con eso alcanza. **Lo que queda para gio es una decisión, ya no una averiguación**: hay un receptor de comandos vivo en otro sitio, fuera del inventario, sin alertas y sin nadie que sepa qué corre ahí. | **gio** (qué hacer con la `raspberrypi`; enrolar `davantis` sigue sin asignar) |
 | A79 | **Una máquina que se reinicia sola no producía ninguna alerta, y el uptime se exportaba desde el principio** | `musubi_fleet_device_uptime_seconds` estaba en las 21 series de flota desde que existe el exportador y **ninguna de las 22 reglas lo miraba**. Encontrado el 2026-09-03 leyendo el registro de eventos de `davantis-1` mientras se perseguía un cuelgue: **trece apagones sucios en diez días** —evento 41, doce con `BugcheckCode=0`, o sea sin pantalla azul: a la máquina la cortaron—. La flota los vio todos y no dijo nada. **Y lo peor no es que faltara la alerta**: `MaquinaCaida` SÍ disparó cada vez y se resolvió sola a los pocos minutos, cuando la máquina volvía. Trece avisos que aparecen y se apagan solos se leen como ruido de red, no como «esta PC se está cayendo» — el patrón sólo existe si alguien lo cuenta, y contar es justo lo que un humano no hace. **Se cerró el mismo día** con `MaquinaSeReinicio` (`uptime < 1800` con la guarda de máquina caída, y su sección de runbook), que sube las reglas de flota a 23. **La primera versión de esa regla contaba (`resets(...[24h]) >= 2`) y no servía**: medida contra los datos reales antes de desplegarla, `resets` tocó un máximo de 1 en diez días —0 de 69 horas llegaron a 2— porque los cortes de esa máquina caen a 44 horas uno de otro, y agrandar la ventana tampoco iba porque el TSDB de este Prometheus arranca el 2026-08-31 17:44 (perdió su historia ese día, con retención declarada de 90 d). La versión que quedó se probó al revés: habría disparado en los DOS reinicios guardados y en ninguna otra muestra de tres días. **Lo que queda abierto es la causa, y no es de software**: `BugcheckCode=0` y cero errores de WHEA dejan afuera al sistema operativo —fuente, corriente de pared, térmica o un cuelgue duro—, y la térmica es la única que la flota podría ver sola. ~~**No puede**: `musubi_fleet_device_temperature_celsius` la reporta UNA sola máquina de tres, y `davantis-1` no es esa.~~ **2026-09-05 — MEDIO DESTRABADO, y lo que queda trabado es justo la máquina de esta fila.** Se implementó la temperatura en Windows (A2) y se corrió en hardware real: `gio` reporta **27,85 °C**, verificado contra una consulta directa a WMI en esa misma máquina (`CurrentTemperature=3010` decikelvin = 27,85 °C exactos). La serie pasó de **1 de 4 máquinas a 2 de 4**. Pero `davantis-1` **sigue afuera y no por falta de código**: su agente no se puede actualizar por el canal —ver A31, medido el mismo día—, así que la única causa de A79 que la flota podría ver sola sigue sin poder verse EN LA MÁQUINA QUE TIENE LOS QUINCE APAGONES. Los dos cabos se tocan acá: A79 espera una medición que A31 impide entregar. | **gio** (el hardware) |
-| A86 | **`pide` sobre un `exec` tampoco pregunta, y eso NO está declarado en ninguna parte** | Es la misma forma que A85 en el tercer camino: `AvisaAlUsuario()` es true para `pide` —es `nivel >= avisa`— así que `aplicarConsentimientoDeExec` cae en su rama de `avisa`, encola el aviso estrangulado y **ejecuta el comando**. El grado promete «tiene que aceptar. Sin respuesta, no hay sesión». **Lo que lo distingue de A85 es que acá NO se arregló, y a propósito**: el doc de esa función enumera `prohibido`, `avisa` y `libre` y se saltea `pide`, así que hoy no hay una decisión escrita — hay un accidente. Y las dos salidas posibles son de POLÍTICA, no de código: (a) endurecer `pide` a `prohibido` para exec es consistente con la regla que el dominio ya aplica cuando no hay a quién preguntarle, pero **rompe el auto-heal** en cualquier máquina en `pide`, que es automatización corriendo sin nadie mirando; (b) preguntar por comando pone un diálogo de hasta minuto y medio en el camino de una sola orden, y un exec viene en ráfagas — es la misma razón por la que A75 le puso estrangulador al aviso. **La celda está MEDIDA, no supuesta**: la matriz caminos × grados de `TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados` la ejerce y la deja escrita como está, con el porqué al lado, para que un cambio de comportamiento se vea. | **gio** (decisión de política) |
 ## 2 · Decisiones de NO hacer (revisables, no pendientes)
 
 | # | Qué | Por qué no |
@@ -740,6 +739,52 @@
 | B9 | **Alertas por-tenant** | Las reglas de flota se evalúan sobre las series que la credencial del scrape puede ver, así que un despliegue con varios tenants necesitaría un Prometheus (o un principal) por tenant. Hoy hay uno. **Se revisa el día que dos tenants compartan cerebro y no quieran compartir alertas.** |
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
+
+**2026-09-05 · A86 CERRADO — `pide` sobre un `exec` se endurece a prohibido. Decisión de gio.**
+
+Era la tercera celda de la familia de A83/A85: `AvisaAlUsuario()` es true para `pide` —preguntar es
+avisar y algo más— así que `aplicarConsentimientoDeExec` caía en su rama de `avisa`, encolaba el
+aviso estrangulado y **ejecutaba igual**. La persona sentada enfrente recibía una notificación QUE
+NO PODÍA CONTESTAR con el comando ya corrido, y el grado promete lo contrario con todas las letras.
+
+La fila no se arregló cuando se abrió, y a propósito: las dos salidas eran de POLÍTICA y no de
+código, con costos reales de los dos lados. Se eligió **endurecer**, y las razones quedan escritas
+porque el costo es real y alguien lo va a sentir:
+
+- **Endurecer no inventa comportamiento.** Es exactamente la regla que el dominio ya aplica cuando
+  no hay a quién preguntarle (`AplicarACapacidadDePreguntar` convierte `pide` en `prohibido` si la
+  máquina no sabe notificar). Acá la máquina SÍ sabe preguntar, pero el camino de exec no tiene
+  dónde esperar la respuesta; el efecto para quien escribió `pide` es el mismo y su intención se
+  cumple.
+- **Los dos errores no cuestan igual.** Bloquear de más SE NOTA —el auto-heal deja de actuar y
+  alguien lo ve—; ejecutar sin preguntar no se nota nunca. Un grado que promete permiso y no lo pide
+  es la forma de falla que este eje entero viene a cerrar.
+- **Preguntar por comando** cumplía el grado al pie de la letra y metía un diálogo de hasta minuto y
+  medio en el camino de UNA orden. Un exec viene en ráfagas —es la misma razón por la que A75 le
+  puso estrangulador al aviso— así que con auto-heal alguien recibe decenas de prompts y aprende a
+  apretar «permitir» sin leer, que es peor que no preguntar.
+
+**LO QUE SE PAGA, DICHO ACÁ PARA QUE NADIE LO DESCUBRA DESPLEGANDO**: una máquina en `pide` deja de
+recibir auto-heal por `exec`. La salida no está en el código sino en la máquina — su dueño la baja a
+`avisa`, que es una decisión explícita y queda registrada.
+
+**LA ASIMETRÍA CON SHELL ES DELIBERADA**: `shell` en `pide` PREGUNTA y espera (A85) porque abre una
+SESIÓN, que tiene dónde esperar; `exec` es una orden suelta y no. Esa línea la custodia la celda
+`exec/pide` de `TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados`, que antes afirmaba el
+comportamiento viejo —lo dejaba MEDIDO en vez de supuesto— y ahora afirma el nuevo. Si algún día
+exec aprende a esperar, la celda cambia a `pregunta: true` y el cambio se ve ahí antes que en
+producción. **Sabotaje verificado**: quitar la rama de `PideAprobacion()` compila y pone en rojo esa
+celda y sólo esa.
+
+**Y SE ACTUALIZARON LAS DOS SUPERFICIES QUE LO DESCRIBÍAN MAL**, que es donde este cambio se lee sin
+mirar el código: la descripción de `musubi_fleet_consent` (que enumeraba el comportamiento de exec
+sin nombrar `pide`) y el punto del `docs/Threat_Model.md`, que quedó vencido por SEGUNDA vez en dos
+días —lo había corregido A85 el 04-09 y A86 lo volvió a mover—. Del texto viejo se conservó la
+lección de forma, que sigue valiendo aunque su contenido ya no: una guarda que recorría los tres
+caminos daba tranquilidad por haber generalizado, pero fijaba `avisa` en las tres filas y nunca
+probaba `pide` — generalizaba sobre una dimensión de dos, y media matriz se siente igual de completa
+que la matriz.
+
 
 **2026-09-05 · A2 CERRADO — la temperatura en Windows, y la predicción de la propia fila era falsa.**
 

@@ -63,6 +63,45 @@ func (s *McpServer) aplicarConsentimientoDeExec(d fleet.Device, p *Principal, no
 		return rpcErrorf(codeUnauthorized,
 			"no se ejecuta en %q: %v. El grado configurado en esta máquina es %q; si además figura como que no puede preguntar, un `pide` se endurece a prohibido a propósito — quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra.",
 			nombre, fleet.ErrConsentimientoProhibido, d.Consentimiento)
+	case consent.PideAprobacion():
+		// A86 · `pide` SOBRE UN EXEC NO EJECUTA. Decisión de gio, 2026-09-05.
+		//
+		// Hasta acá esta rama no existía y `pide` caía en las de `avisa` —`AvisaAlUsuario()` es
+		// true para `pide`, porque preguntar es avisar y algo más—, así que el cerebro encolaba
+		// una notificación y ejecutaba en el acto. La persona sentada enfrente recibía un aviso
+		// QUE NO PODÍA CONTESTAR mientras el comando ya había corrido, y el grado promete lo
+		// contrario con todas las letras: «tiene que aceptar. Sin respuesta, no hay sesión».
+		//
+		// SE ENDURECE A PROHIBIDO EN VEZ DE PREGUNTAR POR COMANDO, y las dos salidas eran reales:
+		//
+		//	preguntar por comando  cumple el grado al pie de la letra, y mete un diálogo de hasta
+		//	                       minuto y medio en el camino de UNA orden. Un exec viene en
+		//	                       ráfagas —es la misma razón por la que A75 le puso estrangulador
+		//	                       al aviso—, así que con auto-heal alguien recibe decenas de
+		//	                       prompts y aprende a apretar «permitir» sin leer.
+		//	endurecer              no ejecuta. Rompe el auto-heal en una máquina en `pide`.
+		//
+		// Se eligió endurecer porque NO INVENTA COMPORTAMIENTO: es exactamente la regla que el
+		// dominio ya aplica cuando no hay a quién preguntarle (`AplicarACapacidadDePreguntar`
+		// convierte `pide` en `prohibido` si la máquina no sabe notificar). Acá la máquina SÍ sabe
+		// preguntar, pero el camino de exec no tiene dónde esperar la respuesta; el efecto sobre
+		// quien pidió `pide` es el mismo, y su intención —que nadie entre sin permiso— se cumple.
+		//
+		// Y porque los dos errores no cuestan igual: bloquear de más SE NOTA —el auto-heal deja de
+		// actuar y alguien lo ve—, mientras que ejecutar sin preguntar no se nota nunca. Un grado
+		// que promete permiso y no lo pide es la forma de falla que este eje entero viene a cerrar.
+		//
+		// LA SALIDA ESTÁ EN LA MÁQUINA, NO ACÁ: quien quiera auto-heal sobre ella baja su grado a
+		// `avisa`, que es una decisión explícita de su dueño y queda registrada. Shell sí pregunta
+		// (A85) porque abre una sesión, que tiene dónde esperar; exec no.
+		return rpcErrorf(codeUnauthorized,
+			"no se ejecuta en %q: el grado de consentimiento de esta máquina es %q, que exige que "+
+				"su usuario ACEPTE antes de que alguien entre — y `exec` no tiene dónde esperar esa "+
+				"respuesta: es una orden suelta, no una sesión. Se trata como `prohibido`, que es lo "+
+				"mismo que el dominio hace cuando no hay a quién preguntarle. Salidas: abrí una shell "+
+				"(`musubi_fleet_shell`), que SÍ pregunta y espera; o bajá el grado de la máquina a "+
+				"`avisa` si querés que se ejecute avisando.",
+			nombre, d.Consentimiento)
 	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
 		// El agente de esta máquina no sabe notificar. Se ejecuta igual —`avisa` no bloquea— y la
 		// constancia queda en el log, una vez por máquina: prometer una notificación que no se
