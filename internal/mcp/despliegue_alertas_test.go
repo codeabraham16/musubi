@@ -242,11 +242,34 @@ func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 	}
 	texto := string(prom)
 
-	tieneDrop := strings.Contains(texto, "metric_relabel_configs") &&
-		strings.Contains(texto, `regex: "musubi_fleet_(device|service)_.*"`) &&
-		strings.Contains(texto, "action: drop")
+	// LAS TRES PIEZAS TIENEN QUE ESTAR EN EL MISMO BLOQUE, Y EN CÓDIGO.
+	//
+	// La versión anterior buscaba las tres SUELTAS en todo el archivo, y eso falla de dos maneras
+	// que se midieron el 2026-09-05 con el sabotaje declarado:
+	//
+	//   · `metric_relabel_configs` aparece en un COMENTARIO que explica la receta (línea 62), así
+	//     que renombrar los dos bloques REALES dejaba la guarda en verde — con el empuje
+	//     encendido, cada máquina mandaría dos series y cada alerta de flota saldría duplicada.
+	//   · aunque no hubiera comentario, las tres cadenas podrían vivir en scrapes DISTINTOS: el
+	//     `action: drop` de un job y el `regex` de otro darían por buena una receta que no existe.
+	//
+	// Se mira el bloque: desde cada `metric_relabel_configs:` de código hasta el próximo
+	// `- job_name:`, que es donde empieza otro scrape.
+	codigo := codigoDe(texto)
+	tieneDrop := false
+	for _, tramo := range strings.Split(codigo, "metric_relabel_configs:")[1:] {
+		if i := strings.Index(tramo, "- job_name:"); i > 0 {
+			tramo = tramo[:i]
+		}
+		if strings.Contains(tramo, `regex: "musubi_fleet_(device|service)_.*"`) && strings.Contains(tramo, "action: drop") {
+			tieneDrop = true
+		}
+	}
 	if !tieneDrop {
-		t.Error("el scrape ya no descarta las dos familias empujadas (`device_` y `service_`): con el empuje encendido, cada máquina tendría dos series y cada alerta de flota saldría duplicada")
+		t.Error("ningún `metric_relabel_configs` del scrape descarta las dos familias empujadas\n" +
+			"(`device_` y `service_`) con `action: drop` EN EL MISMO BLOQUE — nombrarlo en un\n" +
+			"comentario, o tener el regex en un scrape y el drop en otro, no arma la receta.\n" +
+			"Con el empuje encendido, cada máquina tendría dos series y cada alerta de flota saldría duplicada")
 	}
 
 	// Y LA MITAD OPUESTA, que es la que faltaba: el drop no puede ser TAN ancho como para tirar
