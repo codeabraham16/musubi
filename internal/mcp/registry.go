@@ -1017,7 +1017,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_map",
-				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y cuántos archivos están 'stale' (cambiaron desde el índice) o 'ghosts' (borrados) — si son >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`>0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},
