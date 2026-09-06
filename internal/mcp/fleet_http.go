@@ -75,6 +75,19 @@ type cuerpoLatido struct {
 	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
 	// castellano a propósito: `nombre`, no `name`.
 	Servicios []fleet.ReporteServicio `json:"servicios,omitempty"`
+	// ServiciosOmitidos es CUÁNTOS NO ENTRARON en la lista de arriba (A116).
+	//
+	// El latido lleva un techo (`fleet.ServiciosPorLatido`) y el agente ordena por prioridad
+	// —fallado, detenido, corriendo, desconocido— antes de recortar. Sin este número, una lista
+	// TRUNCADA de 64 es idéntica a un inventario COMPLETO de 64 desde acá, y la diferencia no es
+	// académica: la poda por ausencia da de baja lo que no vino, así que el cerebro no se queda
+	// sin ver lo que falta —ANOTA que dejó de existir—. Medido el 2026-09-05 en `davantis-1`:
+	// 26 servicios de clase `docker` y 87 de Windows marcados `revoked = 1` por esa rotación,
+	// entre ellos los 11 contenedores de `altura-erp`, que estaban corriendo.
+	//
+	// Un agente viejo no lo manda y llega 0, que es el comportamiento de antes. No es una
+	// regresión —es el estado actual— y lo que delata a esos agentes es `musubi_fleet_device_agent_stale`.
+	ServiciosOmitidos int `json:"servicios_omitidos,omitempty"`
 	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
 	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
 	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va
@@ -387,7 +400,7 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	// EL INVENTARIO DE SERVICIOS VA ANTES DEL CORTE POR «no vino muestra», por el mismo motivo
 	// que el autorreporte: una máquina en un OS sin colector puede saber perfectamente qué corre
 	// adentro suyo, y salir por el `return` de abajo la dejaría sin inventario para siempre.
-	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios)
+	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios, cuerpo.ServiciosOmitidos)
 
 	if len(cuerpo.Muestra) == 0 || string(cuerpo.Muestra) == "null" {
 		return "", "", notaServicios
@@ -448,7 +461,7 @@ const latidoMaxBytes = fleet.MuestraMaxBytes + fleet.ServiciosPorLatido*fleet.Sa
 // La asimetría con la muestra: si el bloque se pasa del techo se descarta ENTERO en vez de
 // truncarse. Un inventario a medias haría que la poda por ausencia diera de baja los servicios
 // que quedaron afuera del corte, que es peor que no actualizar nada.
-func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio) string {
+func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio, omitidos int) string {
 	// AUSENTE Y VACÍO NO SON LO MISMO, y toda A78 vive en esa distinción.
 	//
 	// `nil` es «el bloque no vino»: el latido de siempre, sin novedad de inventario. No hay nada
@@ -477,6 +490,14 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 	// columna «admite / puedo» del panel— y seis bucles exhaustivos en tres paquetes.
 	if !d.Permite(fleet.CapMetrics) {
 		return "descartados: esta máquina no tiene concedida la capacidad `metrics`"
+	}
+
+	// SE REGISTRA EL RECORTE ANTES QUE NADA, y con el 0 incluido. Es lo que permite preguntarle a
+	// la flota entera «¿quién tiene el inventario incompleto?» en vez de descubrirlo contando en
+	// una máquina, de casualidad, que es como se encontró (A116). Si falla, se sigue: perder el
+	// inventario porque no se pudo anotar su metadato sería cambiar un dato incompleto por ninguno.
+	if err := s.engine.FijarServiciosOmitidos(d.ID, omitidos); err != nil {
+		logx.Warn("no se pudo registrar el recorte del inventario", "device", d.ID, "err", err)
 	}
 
 	ahora := time.Now()
@@ -509,6 +530,30 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 	// es una máquina diciendo «no corre nada»: es un lote roto, y ésos no podan —que es la guarda
 	// que existía desde antes y sigue entera.
 	vacioAfirma := len(reportes) == 0
+
+	// UNA LISTA RECORTADA NO AUTORIZA A PODAR, Y ES LA MITAD QUE IMPORTA DE A116.
+	//
+	// La poda se apoya en una afirmación: «lo que no vino, ya no corre». Con un techo de por
+	// medio esa afirmación es FALSA — lo que no vino puede ser simplemente lo que no entró—, y el
+	// resultado no es una ceguera sino un registro equivocado: el cerebro anota `revoked = 1`
+	// sobre servicios que están corriendo. Medido en `davantis-1`, que reporta exactamente 64:
+	// 26 de clase `docker` y 87 de Windows dados de baja por la rotación del recorte, entre ellos
+	// los 11 contenedores de `altura-erp`.
+	//
+	// No se puede podar «sólo los que sí vinieron»: el cerebro no sabe CUÁLES son los omitidos,
+	// sólo cuántos. Así que la única respuesta correcta es no podar. Lo que llegó SÍ se guarda
+	// —esa parte es verdad y sirve—; lo que se suspende es la única operación que afirma algo
+	// sobre lo que NO llegó.
+	//
+	// Es la misma regla que ya está escrita en `cmd/musubi/servicios.go` para una fuente rota
+	// («el inventario se manda COMPLETO o NO SE MANDA»), aplicada al hermano que se había
+	// quedado afuera. Acá no se puede no mandar —el techo es permanente y esa máquina no
+	// reportaría nunca—, así que la lista viaja anotada y lo que se apaga es la poda.
+	if omitidos > 0 {
+		return fmt.Sprintf("guardados: %d nuevo(s), %d actualizado(s). PODA SUSPENDIDA: la máquina reportó %d servicio(s) y omitió %d por el techo del latido, así que «lo que no vino» no significa «ya no corre». Subí el techo o filtrá lo que no vale enumerar; mientras tanto el inventario de esta máquina está INCOMPLETO y lo dice `musubi_fleet_device_services_omitted`.",
+			nuevos, actualizados, len(reportes), omitidos)
+	}
+
 	podados, _ := s.engine.PodarServiciosAusentes(d.ID, vivos, vacioAfirma)
 	if vacioAfirma {
 		return fmt.Sprintf("inventario VACÍO reportado: %d servicio(s) dado(s) de baja. La máquina dice que no corre nada; en un sistema real eso casi siempre es un enumerador roto.", podados)

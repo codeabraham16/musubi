@@ -125,8 +125,13 @@ var ultimoInventario struct {
 // NO entra el PID ni el detalle a propósito. Un servicio que se reinicia cambia de pid cada vez,
 // y meterlo en la huella haría que «cambió» sea verdad siempre — que es exactamente el problema
 // que esto viene a resolver.
-func huellaDelInventario(lista []fleet.ReporteServicio) string {
+func huellaDelInventario(lista []fleet.ReporteServicio, omitidos int) string {
 	h := sha256.New()
+	// EL RECORTE ENTRA EN LA HUELLA (A116). El inventario se manda sólo cuando cambió, y
+	// `omitidos` decide si el cerebro puede podar. Si no entrara acá, una máquina que deja de
+	// truncar —o que empieza a hacerlo— sin que cambien los 64 visibles se quedaría con el valor
+	// viejo del otro lado, y la poda seguiría suspendida (o habilitada) por un dato vencido.
+	fmt.Fprintf(h, "omitidos=%d\n", omitidos)
 	for _, r := range lista {
 		fmt.Fprintf(h, "%s\x00%s\x00%s\n", r.Nombre, r.Clase, r.Salud.Estado)
 	}
@@ -155,7 +160,7 @@ func huellaDelInventario(lista []fleet.ReporteServicio) string {
 // `confirmar` es nil cuando no hay nada que mandar. Llamarlo es obligación del llamador y sólo
 // después de que el cerebro haya aceptado el latido: sellar antes es exactamente el bug que esto
 // cierra, una vuelta más adelante.
-func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar func()) {
+func serviciosDelLatido() (lista []fleet.ReporteServicio, omitidos int, mandar bool, confirmar func()) {
 	crudos, err := enumerarServicios()
 	if err != nil {
 		// CADA HORA Y NO UNA VEZ POR VIDA DEL PROCESO.
@@ -165,7 +170,7 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 		// tiene que sonar mientras dura.
 		avisarCada("servicios-enumerar", time.Hour,
 			"no se pudieron enumerar los servicios de esta máquina: %v", err)
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	lista, afuera := serviciosParaElLatido(crudos)
 	if afuera > 0 {
@@ -176,11 +181,11 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 			len(crudos), len(lista), afuera)
 	}
 
-	huella := huellaDelInventario(lista)
+	huella := huellaDelInventario(lista, afuera)
 	ultimoInventario.Lock()
 	defer ultimoInventario.Unlock()
 	if huella == ultimoInventario.huella && time.Since(ultimoInventario.enviado) < intervaloInventarioCompleto {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	// NUNCA nil cuando hay que mandar: `nil` se serializa como `null` y del otro lado eso no es
 	// «una lista vacía», es «no vino el campo». Una máquina donde no corre nada de lo que miramos
@@ -188,7 +193,7 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 	if lista == nil {
 		lista = []fleet.ReporteServicio{}
 	}
-	return lista, true, func() {
+	return lista, afuera, true, func() {
 		ultimoInventario.Lock()
 		defer ultimoInventario.Unlock()
 		ultimoInventario.huella = huella

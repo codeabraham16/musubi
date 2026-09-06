@@ -423,6 +423,10 @@ type DeviceStore interface {
 	// Los dos hechos que el agente reporta y que antes se tiraban (A99 y A102).
 	FijarMotivoNoPreguntar(deviceID, motivo string) error
 	FijarFuenteDeCredencial(deviceID, fuente string) error
+	// FijarServiciosOmitidos guarda cuántos servicios no entraron en el último inventario (A116).
+	// Se llama SIEMPRE que llega un inventario, incluido el 0: un número que sólo se escribe
+	// cuando hay recorte no puede decir que el recorte terminó.
+	FijarServiciosOmitidos(deviceID string, omitidos int) error
 	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
 	// alguien. Va aparte de la política porque son hechos de dueños distintos.
 	// ── Ejecución remota (S5) ──

@@ -85,7 +85,7 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 		ultimoInventario.Unlock()
 	})
 
-	primero, mandar, confirmar := serviciosDelLatido()
+	primero, _, mandar, confirmar := serviciosDelLatido()
 	if !mandar || len(primero) != 1 {
 		t.Fatalf("el PRIMER latido no llevó el inventario (mandar=%v, %d servicios): la máquina nunca reportaría lo que corre", mandar, len(primero))
 	}
@@ -93,12 +93,12 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 	// SIN CONFIRMAR TODAVÍA NO SE SELLÓ, y eso es la mitad de A78: el sello dice «el cerebro se lo
 	// llevó», no «yo lo armé». Un latido que se armó y no llegó tiene que volver a intentarlo.
 	// Sabotaje: sellar dentro de serviciosDelLatido, como antes → esto pasa a devolver nil.
-	if _, otraVez, _ := serviciosDelLatido(); !otraVez {
+	if _, _, otraVez, _ := serviciosDelLatido(); !otraVez {
 		t.Error("el inventario se dio por enviado ANTES de que el cerebro lo aceptara: si ese latido falla, el inventario no vuelve a viajar hasta que cambie")
 	}
 
 	confirmar()
-	if _, segundo, _ := serviciosDelLatido(); segundo {
+	if _, _, segundo, _ := serviciosDelLatido(); segundo {
 		t.Error("el latido volvió a mandar el inventario después de confirmado y sin que cambiara nada: son 7 KB cada diez segundos por máquina")
 	}
 
@@ -109,7 +109,7 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoFallado},
 		}}, nil
 	}
-	if cambiado, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
+	if cambiado, _, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
 		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
 	}
 }
@@ -137,7 +137,7 @@ func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 		ultimoInventario.Unlock()
 	})
 
-	lista, mandar, confirmar := serviciosDelLatido()
+	lista, _, mandar, confirmar := serviciosDelLatido()
 	if !mandar {
 		t.Fatal("un inventario VACÍO no se manda: la máquina queda muda para siempre mientras el agente cree que reportó (A78)")
 	}

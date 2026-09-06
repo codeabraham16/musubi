@@ -174,6 +174,13 @@ type Device struct {
 	// completar —un proceso no reescribe su propio entorno— y el token queda visible en el entorno
 	// del proceso. Ver fleet.CredencialRotable.
 	TokenFuente string
+	// ServiciosOmitidos es CUÁNTOS servicios NO entraron en el último inventario que mandó esta
+	// máquina (A116). El latido lleva un techo y el agente ordena por prioridad antes de cortar.
+	//
+	// 0 significa «no recortó»: el inventario está completo. Cualquier valor mayor significa que
+	// el inventario que el cerebro tiene de esta máquina es PARCIAL — y por eso la poda por
+	// ausencia queda suspendida mientras dure: «lo que no vino» deja de significar «ya no corre».
+	ServiciosOmitidos int
 
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió

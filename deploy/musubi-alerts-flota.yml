@@ -497,6 +497,51 @@ groups:
           ausente_en: "tier=B — un Tier B no reporta servicios."
 
       # ────────────────────────────────────────────────────────────────────────────────────
+      # EL INVENTARIO ESTÁ INCOMPLETO Y HASTA HOY NO LO DECÍA NADIE (A116)
+      #
+      # El latido lleva un techo (`fleet.ServiciosPorLatido`) y el agente ordena por prioridad
+      # —fallado, detenido, corriendo, desconocido— antes de recortar. El número de omitidos lo
+      # calculaba el agente y lo escribía en SU log, en la máquina, una vez por arranque: donde
+      # nadie mira. Desde el cerebro, una lista truncada de 64 y un inventario completo de 64 eran
+      # el mismo mensaje.
+      #
+      # Y no era una ceguera sino una AFIRMACIÓN FALSA: la poda da de baja lo que no vino, así que
+      # el cerebro anotaba `revoked = 1` sobre servicios que estaban corriendo. Medido el
+      # 2026-09-05 en `davantis-1`, que reporta exactamente 64: 26 de clase `docker` y 87 de
+      # Windows revocados por la rotación del recorte, entre ellos los 11 contenedores de
+      # `altura-erp`. Desde A116 la poda se SUSPENDE mientras haya recorte, así que el registro
+      # dejó de mentir — pero el inventario sigue incompleto, y eso es lo que dice esta alerta.
+      #
+      # LAS TRES QUE LEEN ESA LISTA COMO SI FUERA EL INVENTARIO son `ServicioCaido`,
+      # `ServicioSinNoticias` y `MaquinaSinInventario`, las tres de este mismo archivo. Ninguna
+      # está mal escrita; todas deciden sobre un universo recortado sin saberlo. Ésta es la única
+      # que puede decírselo a alguien.
+      #
+      # `> 0` y no un umbral: no hay un número de servicios invisibles que esté bien. Y `for` de
+      # 1 h porque el arreglo no es urgente ni automático —subir el techo o filtrar el ruido son
+      # decisiones— y una alarma que aparece a los cinco minutos de cada reinicio se ignora.
+      #
+      # Y LAS DOS GUARDAS DE SIEMPRE, que acá no son ceremonia. `services_omitted` es un valor
+      # REPORTADO: se congela con el último latido, así que una máquina muerta lo sigue publicando
+      # tal cual y esta regla dispararía sobre el recuerdo de una máquina que ya no está — dos
+      # alertas para un solo evento, con `MaquinaCaida` diciendo lo que de verdad pasa. Y una
+      # ventana de mantenimiento la calla por lo mismo que a sus 18 hermanas (A97). Lo cazó
+      # `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida` sobre esta misma regla, recién
+      # escrita.
+      - alert: InventarioDeServiciosIncompleto
+        expr: >-
+          musubi_fleet_device_services_omitted > 0
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} servicio(s) de esta máquina no entran en el latido: el inventario del cerebro está incompleto."
+          nota: "El agente prioriza fallados y detenidos, así que lo que falta son los que están CORRIENDO BIEN — justo los que uno no extraña hasta que los necesita. Mientras dure, la poda por ausencia está suspendida para esta máquina, o sea que el inventario tampoco se limpia solo. Ver deploy/RUNBOOK.md#inventariodeserviciosincompleto"
+          runbook: "deploy/RUNBOOK.md#inventariodeserviciosincompleto"
+          ausente_en: "tier=B — un Tier B no reporta servicios."
+
+      # ────────────────────────────────────────────────────────────────────────────────────
       - alert: MaquinaSinInventario
         # UNA MÁQUINA CON AGENTE QUE NO DICE QUÉ CORRE ADENTRO.
         #

@@ -157,8 +157,17 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       había dicho. El costo se pagó las dos veces leyendo código y leyendo un .cmd EN la
 	//       máquina. Las dos arrancan VACÍAS y el vacío significa «no lo dijo»: leer el silencio de
 	//       un agente viejo como «no puede» sería acusar a la flota de un defecto que nadie midió.
-	if latestSchemaVersion() != 47 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 47", latestSchemaVersion())
+	// v48 = CUÁNTOS SERVICIOS NO ENTRARON (`devices.servicios_omitidos`). El latido lleva un techo
+	//       y el agente cortaba la lista escribiendo el número en su propio log, en la máquina,
+	//       una vez por arranque: donde nadie mira. Del lado del cerebro, 64 truncados y 64
+	//       completos eran el mismo mensaje — y como la poda da de baja lo que no vino, no era una
+	//       ceguera sino una afirmación falsa: 26 servicios `docker` y 87 de Windows anotados como
+	//       revocados en `davantis-1`, entre ellos 11 contenedores que estaban corriendo (A116).
+	//       Arranca en 0 y el 0 significa «no recortó»: acá la ambigüedad con «no lo dijo» SÍ es
+	//       aceptable —al revés que en v47— porque un agente viejo que trunca deja el 0, que es
+	//       exactamente el comportamiento de hoy; no se pierde nada que ahora exista.
+	if latestSchemaVersion() != 48 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 48", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

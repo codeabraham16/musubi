@@ -673,6 +673,45 @@ conocer la base es la forma de la curva.
 4. El disco de esa máquina lo vigila Musubi por separado (`musubi_fleet_device_disk_*` con
    `device="supabase-altura"`). Esta alerta llega **antes**, cuando todavía es una curva.
 
+## InventarioDeServiciosIncompleto
+
+**Esta máquina tiene más servicios de los que entran en un latido**, así que el inventario que el
+cerebro tiene de ella está incompleto. El agente prioriza fallados y detenidos antes de recortar,
+o sea que **lo que falta son los que están corriendo bien** — justo los que nadie extraña hasta que
+los necesita.
+
+Cuántos y cuáles se ven así:
+
+```bash
+# cuántos faltan, en toda la flota
+musubi_fleet_device_services_omitted > 0        # en Prometheus
+
+# qué sí llegó (ojo: los revocados están escondidos por default)
+musubi_fleet_services --project <proj> --device <maq> --incluir_revocados true
+```
+
+**Mientras dure, la poda por ausencia está SUSPENDIDA para esta máquina** y eso es deliberado: con
+un techo de por medio, «lo que no vino» deja de significar «ya no corre», y podar sobre una lista
+recortada no produce una ceguera sino un registro equivocado — el cerebro anotaría `revoked = 1`
+sobre servicios que están corriendo. Pasó: el 2026-09-05, antes de este arreglo, `davantis-1` tenía
+26 servicios `docker` y 87 de Windows marcados como revocados por la rotación del recorte, entre
+ellos los 11 contenedores de `altura-erp`. El efecto secundario de la suspensión es que **el
+inventario de esa máquina tampoco se limpia solo**: un servicio que de verdad desaparezca va a
+quedar figurando hasta que el recorte se resuelva.
+
+Las dos salidas, y las dos son decisiones:
+
+1. **Subir el techo** (`fleet.ServiciosPorLatido`). Un latido no puede crecer sin límite —el
+   inventario ya casi rompió una guarda de tamaño del cuerpo una vez— así que subirlo tiene costo
+   en bytes por máquina y por latido.
+2. **Filtrar lo que no vale enumerar.** En un escritorio Windows la mayoría de los 64 son ruido del
+   sistema operativo. Es más barato y de menor alcance, pero es una decisión sobre qué merece
+   verse: un filtro mal puesto esconde un servicio real y no lo dice nadie.
+
+**Lo que NO hay que hacer es silenciarla y seguir.** Las tres alertas que leen esa lista como si
+fuera el inventario —`ServicioCaido`, `ServicioSinNoticias` y `MaquinaSinInventario`— siguen
+decidiendo sobre un universo recortado, y ninguna de las tres puede notarlo por su cuenta.
+
 ## MaquinaSinInventario
 
 Una máquina de Tier A late —o sea, el agente corre y llega al cerebro— y no reporta ningún

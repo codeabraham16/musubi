@@ -415,6 +415,27 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 				}
 				return 0, true
 			}},
+		// CUÁNTOS SERVICIOS NO ENTRARON EN EL ÚLTIMO INVENTARIO (A116).
+		//
+		// SIEMPRE PRESENTE, INCLUIDO EL 0, y acá el criterio es el OPUESTO al de `token_rotable`
+		// de arriba — vale explicar por qué, porque las dos reglas conviven en el mismo archivo.
+		// Allá el 0 sería una acusación («no puede rotar») que nadie midió, así que la ausencia es
+		// lo honesto. Acá el 0 dice «no recortó», que es lo que hace HOY un agente viejo: no se
+		// afirma nada que no esté pasando. Y si esta serie desapareciera cuando el inventario está
+		// completo, `absent()` no distinguiría «está completo» de «esta máquina no reporta», que es
+		// justamente la confusión que esta métrica existe para deshacer.
+		//
+		// Un valor > 0 significa que el inventario que el cerebro tiene de esa máquina es PARCIAL,
+		// y que la poda por ausencia está suspendida ahí: «lo que no vino» dejó de significar «ya
+		// no corre». Sin esta serie eso sólo se ve contando a mano en la máquina correcta, que es
+		// como se encontró — de casualidad, después de que una limpieza pedida por otra razón
+		// cambiara los números.
+		{"musubi_fleet_device_services_omitted",
+			"Cuántos servicios NO entraron en el último inventario de esta máquina por el techo del latido. 0 = el inventario está completo. Mayor que 0 = el inventario del cerebro es PARCIAL y la poda por ausencia está suspendida para esa máquina.",
+			"", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				return float64(d.ServiciosOmitidos), true
+			}},
 		{"musubi_fleet_device_up",
 			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
 			"", false,

@@ -467,9 +467,22 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	// VA AUNQUE ESTÉ VACÍA, y `confirmar` se llama recién cuando el cerebro aceptó (A78). El
 	// `len(svs) > 0` que había acá se contradecía en silencio con el sellado de adentro: una
 	// lista vacía se daba por enviada y no se enviaba, para siempre.
-	svs, mandarInventario, confirmarInventario := serviciosDelLatido()
+	svs, omitidos, mandarInventario, confirmarInventario := serviciosDelLatido()
 	if mandarInventario {
 		carga["servicios"] = svs
+		// EL RECORTE VIAJA CON LA LISTA (A116). Sin este número, una lista truncada de 64 es
+		// indistinguible de un inventario completo de 64 del lado del cerebro — y como la poda
+		// da de baja lo que no vino, el cerebro no se queda sin ver los que faltan: ANOTA que
+		// dejaron de existir. Medido en davantis-1: 26 servicios `docker` y 87 de Windows
+		// marcados `revoked = 1` por esa rotación, entre ellos los 11 contenedores de
+		// `altura-erp`, que estaban corriendo.
+		//
+		// Va sólo cuando se manda el inventario porque la poda sólo corre cuando llega una lista.
+		// Y va sólo si hubo recorte: `omitempty` del otro lado, así que un inventario completo
+		// pesa exactamente lo que pesaba antes.
+		if omitidos > 0 {
+			carga["servicios_omitidos"] = omitidos
+		}
 	}
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {

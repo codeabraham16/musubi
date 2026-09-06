@@ -1742,6 +1742,44 @@ func schemaMigrations() []migration {
 					"token_fuente TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 48,
+			name:    "cuantos_servicios_no_entraron",
+			// EL RECORTE DEL LATIDO, QUE HASTA HOY NO SALÍA DE LA MÁQUINA (A116).
+			//
+			// El latido lleva un techo de servicios (`fleet.ServiciosPorLatido`) y el agente
+			// ordena por prioridad antes de cortar. El número de omitidos lo CALCULABA el agente
+			// y lo escribía en su propio log, en la máquina, una vez por arranque del proceso:
+			// donde nadie mira. Del lado del cerebro, una lista truncada de 64 y un inventario
+			// completo de 64 eran el mismo mensaje.
+			//
+			// Y no era una ceguera, era una AFIRMACIÓN FALSA: la poda da de baja lo que no vino,
+			// así que el cerebro anotaba `revoked = 1` sobre servicios que estaban corriendo.
+			// Medido el 2026-09-05 en `davantis-1`, que reporta exactamente 64: 26 de clase
+			// `docker` y 87 de Windows revocados por la rotación del recorte, entre ellos los 11
+			// contenedores de `altura-erp`.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// POR QUÉ UNA COLUMNA Y NO SÓLO LA NOTA DEL LATIDO
+			//
+			// La nota la lee quien esté mirando ese latido en ese momento. Lo que hace falta es
+			// que la pregunta «¿qué máquinas de la flota tienen el inventario incompleto?» se
+			// pueda hacer sin adivinar cuál mirar — el defecto se encontró en `davantis-1` por
+			// casualidad, contando, después de que una limpieza pedida por otra razón cambiara
+			// los números. Con la columna sale por `musubi_fleet_device_services_omitted` y la
+			// ve una alerta.
+			//
+			// EL DEFAULT ES 0 Y SIGNIFICA «NO RECORTÓ», que es distinto de «no lo dijo» — y acá
+			// esa ambigüedad es aceptable y en A99/A102 no lo era. La diferencia: un agente viejo
+			// que trunca deja el 0, o sea el comportamiento de HOY, que es el que ya tenemos; no
+			// se pierde nada que ahora exista. Leerlo como «no lo dijo» exigiría un puntero y una
+			// tercera rama en cada consumidor para describir un estado transitorio que
+			// `musubi_fleet_device_agent_stale` ya delata por su cuenta.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "servicios_omitidos",
+					"servicios_omitidos INTEGER NOT NULL DEFAULT 0")
+			},
+		},
 	}
 }
 
