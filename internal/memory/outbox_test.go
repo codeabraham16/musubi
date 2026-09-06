@@ -150,8 +150,12 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       como plomería de pantalla: un principal con sólo `screen:view` leía «fulano está
 	//       ejecutando comandos acá» y «...abriendo una terminal...». El argv no los distingue y
 	//       el texto es de presentación, así que el plano lo declara quien encola.
-	if latestSchemaVersion() != 46 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 46", latestSchemaVersion())
+	// v47 = EL PANEL DEJA DE SER UN ECO (`model`/`evidence` en posturas y votos, `gated_choice`
+	//       en debates). Dos jueces del mismo modelo no son dos opiniones, y el tally contaba
+	//       filas: un lente que corrio los tests pesaba igual que uno que opino. Los campos
+	//       pudieron nacer OBLIGATORIOS porque las tres tablas del debate estaban en cero filas.
+	if latestSchemaVersion() != 47 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 47", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

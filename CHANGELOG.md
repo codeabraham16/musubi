@@ -7,6 +7,50 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El panel deja de ser un eco: modelo por juez, clase de evidencia y una compuerta.** Dos
+  problemas distintos que caían en las mismas dos tablas, y por eso van en una sola migración
+  (esquema **46 → 47**).
+
+  **Uno: dos jueces del mismo modelo no son dos opiniones.** La skill le daba a cada escéptico un
+  LENTE distinto y nada le daba un MODELO distinto. Peor: aunque alguien los lanzara con modelos
+  distintos, no había dónde guardarlo — `debate_postures` tenía `{round, agent, stance, created_at}`
+  y ni una columna de modelo. «Este cambio lo revisaron tres modelos distintos» era **inverificable
+  a posteriori**.
+
+  **Dos: un hallazgo con evidencia real pesaba lo mismo que una opinión.** El tally cuenta filas con
+  `GROUP BY choice`: un lente que corrió los tests pesaba igual que uno que leyó el diff y opinó, y
+  que uno que no pudo comprobar nada. La skill ya nombraba el riesgo en prosa —«un panel que opina
+  sin haber corrido nada es teatro de verificación»— **sin ningún mecanismo que lo hiciera cumplir**.
+
+  - `model` y `evidence` **nacen obligatorios** en `post` y `vote`, y `evidence` ∈ {`deterministica`,
+    `inferida`, `ninguna`}. Se pudo porque las tres tablas estaban en **cero filas** (medido en las
+    seis bases locales): sin datos vivos no hace falta default piadoso ni período de gracia.
+  - **La compuerta** (`gated_choice` al abrir): un veredicto aprobatorio no cierra si **ningún** voto
+    declaró evidencia determinística. Con tres propiedades que la separan de un candado, y que se
+    sostienen juntas: 🔴 **rechazar NUNCA lleva compuerta** —si eso fallara, lo construido sería una
+    máquina de aprobar por incapacidad—; **un solo** voto determinístico la desarma; y **no
+    reemplaza al quórum**, corre después. Sin `gated_choice`, todo es un no-op: **los nueve tests
+    preexistentes pasan sin tocarles una aserción**.
+  - ⚠️ El modelo va en su **propio campo** y no dentro de `agent`. `agent` es la clave única de las
+    dos tablas: un lente que cambiara de modelo entre rondas dejaría de ser el mismo votante y su
+    voto se **sumaría** en vez de reemplazar, inflando el total en silencio.
+  - **Límite honesto:** la clase de evidencia es una **declaración, no una prueba**. Detecta al panel
+    que no verificó nada; no al que miente.
+  - 11 sabotajes, cada invariante visto en ROJO.
+
+### Fixed
+- 🔴 **El golden de tools era ciego para las nueve tools dormidas, y no podía ponerse rojo.** La
+  regla 5 del repo dice que al cambiar una tool hay que regenerar el golden «o el build queda verde
+  y mal». Pero el golden congela `handleToolsList()`, que **filtra las dormidas**: se le cambió el
+  contrato a `musubi_debate` —dos campos OBLIGATORIOS nuevos—, se corrió con `-update` y **el
+  archivo no se movió un byte**.
+
+  Ahora hay un segundo golden con el catálogo COMPLETO (101 tools contra 92). Verificado con el
+  sabotaje que corresponde: al tocar la descripción de una tool dormida, el golden viejo sigue en
+  `ok` y el nuevo se pone en `FAIL`. Dormir una tool es una decisión sobre su VISIBILIDAD; no
+  debería ser también una decisión sobre si su contrato está protegido.
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed
