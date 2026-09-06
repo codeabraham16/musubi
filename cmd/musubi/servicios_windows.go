@@ -36,7 +36,10 @@ func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
 	// tipo de arranque: cero es «terminó bien» —se apagó porque nadie lo necesitaba— y cualquier
 	// otro (1067 murió, 1077 nunca arrancó desde el boot) es una falla de verdad. `Get-Service`
 	// no expone ese campo, y por eso se cambia de fuente.
-	const ps = `Get-CimInstance Win32_Service | Select-Object Name,State,StartMode,ExitCode | ConvertTo-Csv -NoTypeInformation`
+	// `PathName` es lo que permite distinguir un servicio QUE VIENE CON WINDOWS de uno que
+	// alguien instaló, sin una lista de nombres a mano — ver `deWindowsYSano` en
+	// servicios_parsers.go para por qué esa distinción hace falta (A116).
+	const ps = `Get-CimInstance Win32_Service | Select-Object Name,State,StartMode,ExitCode,PathName | ConvertTo-Csv -NoTypeInformation`
 	ahora := time.Now()
 	salida, err := salidaDeComando("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
 	if err != nil {

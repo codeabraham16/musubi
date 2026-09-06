@@ -704,9 +704,30 @@ Las dos salidas, y las dos son decisiones:
 1. **Subir el techo** (`fleet.ServiciosPorLatido`). Un latido no puede crecer sin límite —el
    inventario ya casi rompió una guarda de tamaño del cuerpo una vez— así que subirlo tiene costo
    en bytes por máquina y por latido.
-2. **Filtrar lo que no vale enumerar.** En un escritorio Windows la mayoría de los 64 son ruido del
-   sistema operativo. Es más barato y de menor alcance, pero es una decisión sobre qué merece
-   verse: un filtro mal puesto esconde un servicio real y no lo dice nadie.
+2. **Filtrar lo que no vale enumerar** — hecho para Windows el 2026-09-05, ver abajo.
+
+### Qué NO enumera el agente en Windows, y por qué
+
+Dos reglas de **alcance**, distintas del techo: son estables, explicables y están acá.
+
+- **Sólo los `Automatic`.** Un servicio Manual y detenido es lo normal; Windows trae cientos. El
+  filtro va antes de mirar el `ExitCode` porque un Manual apagado reporta `1077` («nunca se intentó
+  arrancar»), que en un Automatic es una falla y en un Manual no — ponerlo al revés costó 75
+  alarmas falsas.
+- **La plomería del sistema operativo que está corriendo bien.** Se reconoce por dónde ejecuta
+  (`PathName` bajo `<unidad>:\Windows\`), no por una lista de nombres: una lista se pudre con cada
+  versión de Windows y esconde justo lo que no previó. `RpcSs`, `DcomLaunch`, `EventLog`,
+  `Winmgmt`, `gpsvc` corriendo no informan nada y le comían el presupuesto del latido a `Tailscale`,
+  al antivirus y a los contenedores.
+
+**Dos cosas que esa segunda regla NO hace, y son deliberadas.** La plomería **rota** sí viaja: un
+`Dhcp` detenido o fallado es exactamente lo que el inventario existe para mostrar. Y si el servicio
+no dice desde dónde ejecuta, **se reporta igual** — esconder algo porque faltó un campo es
+indistinguible de que no exista, y nadie lo va a ir a buscar.
+
+**Si un servicio de Windows no aparece**, la pregunta en orden es: ¿es `Automatic`? ¿está corriendo
+y ejecuta desde `C:\Windows`? Si las dos son sí, no aparece a propósito. Si no, mirá
+`musubi_fleet_device_services_omitted` — puede ser el techo y no el alcance.
 
 **Lo que NO hay que hacer es silenciarla y seguir.** Las tres alertas que leen esa lista como si
 fuera el inventario —`ServicioCaido`, `ServicioSinNoticias` y `MaquinaSinInventario`— siguen

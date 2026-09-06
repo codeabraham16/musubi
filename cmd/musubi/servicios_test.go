@@ -896,3 +896,74 @@ func TestSePideLaMarcaDeCaidaASystemd(t *testing.T) {
 		}
 	}
 }
+
+// TestElAlcanceDeWindowsDejaAfueraLaPlomeriaSanaYNADAMAS — la mitad de alcance de A116.
+//
+// UN ESCRITORIO WINDOWS TIENE ~64 SERVICIOS `Automatic` y casi todos son plomería del sistema
+// operativo corriendo bien. Medido el 2026-09-05 en `davantis-1`, que reportaba exactamente 64 —el
+// techo del latido—: `RpcSs`, `DcomLaunch`, `EventLog`, `Winmgmt`, `gpsvc`, `Dhcp`, `Dnscache`… y
+// entre todo eso, apretados contra el tope, los que un humano sí quiere ver: `Tailscale`, el
+// antivirus, los contenedores. Los 11 de `altura-erp` no entraban.
+//
+// LAS TRES PROPIEDADES QUE SE PRUEBAN, y las tres son la misma cautela mirada de distintos lados:
+//
+//	· la plomería SANA se va                    — es lo que libera el presupuesto
+//	· la plomería ROTA se queda                 — un `Dhcp` detenido es justo lo que hay que ver
+//	· lo que NO es de Windows se queda siempre  — sano o roto, alguien lo instaló a propósito
+//
+// Y LA CUARTA, QUE ES LA QUE MÁS IMPORTA: sin `PathName` no se filtra nada. Esconder un servicio
+// porque faltó un campo es indistinguible de que no exista, y es el modo de falla que este archivo
+// entero existe para no cometer.
+//
+// Se lee desde Linux —igual que `TestElParserDeWindowsSeLeeDesdeLinux`— porque el parser es una
+// función pura sobre el CSV. Un `_windows_test.go` no compilaría acá y `go test` diría «ok» sobre
+// pruebas que no existen, que ya pasó en este repo.
+func TestElAlcanceDeWindowsDejaAfueraLaPlomeriaSanaYNADAMAS(t *testing.T) {
+	const csv = `"Name","State","StartMode","ExitCode","PathName"
+"RpcSs","Running","Auto","0","C:\Windows\system32\svchost.exe -k rpcss -p"
+"Dhcp","Stopped","Auto","1067","C:\WINDOWS\system32\svchost.exe -k LocalServiceNetworkRestricted"
+"Tailscale","Running","Auto","0","""C:\Program Files\Tailscale\tailscaled.exe"""
+"NordUpdaterService","Stopped","Auto","1067","C:\Program Files\NordVPN\NordUpdateService.exe"
+"SinRuta","Running","Auto","0",""
+"EnOtraUnidad","Running","Auto","0","D:\Windows\system32\svchost.exe -k algo"
+`
+	rs := parsearServiciosWindows(csv, time.Now())
+	// EL CONTROL SIN EL CUAL ESTA PRUEBA MIENTE. Un CSV mal formado hace que el parser devuelva
+	// nil, y entonces TODA aserción de la forma «X no está» pasa —por ausencia, no por acierto—.
+	// Pasó al escribirla: un `\"` en vez de `""` rompió el CSV y las dos primeras comprobaciones
+	// dieron verde sobre una lista vacía.
+	if len(rs) == 0 {
+		t.Fatal("el parser no devolvió NADA: el CSV de esta prueba está mal formado y las " +
+			"aserciones de «no está» pasarían por ausencia. Sin esto, la prueba se aprueba sola")
+	}
+	vistos := map[string]fleet.EstadoServicio{}
+	for _, r := range rs {
+		vistos[r.Nombre] = r.Salud.Estado
+	}
+
+	if _, hay := vistos["RpcSs"]; hay {
+		t.Error("`RpcSs` corriendo desde C:\\Windows es plomería sana y se reportó igual: el " +
+			"presupuesto del latido se lo sigue comiendo el sistema operativo")
+	}
+	if _, hay := vistos["EnOtraUnidad"]; hay {
+		t.Error("un servicio de Windows en D: se reportó: la regla está clavada a C: y el sistema " +
+			"no siempre está ahí")
+	}
+	if vistos["Dhcp"] != fleet.EstadoFallado {
+		t.Errorf("`Dhcp` DETENIDO con ExitCode 1067 tiene que viajar y llegó como %q: se está "+
+			"escondiendo justo lo que el inventario existe para mostrar", vistos["Dhcp"])
+	}
+	if _, hay := vistos["Tailscale"]; !hay {
+		t.Error("`Tailscale` corriendo desde Program Files se filtró: la regla está dejando afuera " +
+			"lo que alguien instaló a propósito, que es exactamente lo contrario de lo que busca")
+	}
+	if _, hay := vistos["NordUpdaterService"]; !hay {
+		t.Error("un servicio de tercero DETENIDO se filtró")
+	}
+	// LA CUARTA, Y LA QUE NO SE PUEDE AFLOJAR.
+	if _, hay := vistos["SinRuta"]; !hay {
+		t.Error("un servicio SIN `PathName` se filtró. Falta un campo y el servicio desaparece: " +
+			"desde afuera eso es indistinguible de que no exista, y nadie lo va a ir a buscar. " +
+			"La regla tiene que fallar hacia MOSTRAR")
+	}
+}
