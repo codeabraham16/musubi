@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,19 +55,17 @@ type MedicionArnes struct {
 	Criterio       string `json:"criterio"`
 }
 
-// reVuelta reconoce la convención de topic de F4: «... · vuelta k/K · ...».
-var reVuelta = regexp.MustCompile(`vuelta\s+(\d+)\s*/\s*(\d+)`)
-
 // vueltasDeTopics extrae el número de vuelta de cada topic que siga la convención. Devuelve una
 // lista ordenada. Los topics que no la siguen se ignoran: son debates de antes de F4, o de otra
 // cosa, y contarlos como «vuelta 1» inflaría la medición con lo que no se está midiendo.
 func vueltasDeTopics(topics []string) []int {
 	var out []int
 	for _, t := range topics {
-		if m := reVuelta.FindStringSubmatch(t); m != nil {
-			if k, err := strconv.Atoi(m[1]); err == nil {
-				out = append(out, k)
-			}
+		// La convención la define memory.VueltaDelTopic, que es también la que el motor hace
+		// cumplir al abrir. Una segunda regex acá mediría la convención vieja el día que la
+		// otra cambie, y las dos seguirían andando.
+		if k, _, ok := memory.VueltaDelTopic(t); ok {
+			out = append(out, k)
 		}
 	}
 	sort.Ints(out)

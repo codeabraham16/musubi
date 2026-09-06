@@ -3,6 +3,8 @@ package memory
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -112,11 +114,51 @@ type TallyResult struct {
 	Gated bool `json:"gated,omitempty"`
 }
 
+// reVueltaDeTopic reconoce la convención del bucle de corrección: «... · vuelta k/K · ...».
+//
+// La convención vive ACÁ, en una sola definición, porque la leen dos consumidores: este motor
+// —que la hace cumplir— y `musubi arnes` —que mide cuántas vueltas toma una corrección—. Con
+// dos regex separadas, endurecer una dejaría a la otra midiendo la convención vieja, y esa
+// desincronización es invisible: las dos siguen andando y contestan cosas distintas.
+var reVueltaDeTopic = regexp.MustCompile(`vuelta\s+(\d+)\s*/\s*(\d+)`)
+
+// VueltaDelTopic extrae (vuelta, tope) de un topic que siga la convención del bucle de
+// corrección. `ok` es false si el topic no la sigue — un debate suelto, o uno anterior a la
+// convención— y en ese caso no hay nada que hacer cumplir.
+func VueltaDelTopic(topic string) (vuelta, tope int, ok bool) {
+	m := reVueltaDeTopic.FindStringSubmatch(topic)
+	if m == nil {
+		return 0, 0, false
+	}
+	k, err1 := strconv.Atoi(m[1])
+	t, err2 := strconv.Atoi(m[2])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return k, t, true
+}
+
 // OpenDebate crea un debate 'open' con current_round=1. rounds se clampa a >=1; quorum es el
 // mínimo de votos de un choice ganador (0 = sin piso, gana la mayoría estricta).
 func (e *DbEngine) OpenDebate(topic string, rounds, quorum int, gatedChoice string) (Debate, error) {
 	if topic == "" {
 		return Debate{}, fmt.Errorf("open requiere 'topic'")
+	}
+	// EL TOPE DEL BUCLE DE CORRECCIÓN SE HACE CUMPLIR, NO SE PIDE POR FAVOR.
+	//
+	// La instrucción decía «K=3 vueltas, y agotarlo es un rechazo», y nada en el código impedía
+	// abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de corregir.
+	// El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
+	// apruebe para terminar, que es lo mismo que el tope existe para evitar.
+	//
+	// El motor no necesita estado nuevo para sostenerlo: el topic ya declara la vuelta y su
+	// tope, y negarse a abrir falla del lado seguro —un debate que no existe no puede aprobar
+	// nada—.
+	if k, tope, ok := VueltaDelTopic(topic); ok && k > tope {
+		return Debate{}, fmt.Errorf(
+			"el bucle de corrección se agotó: la vuelta %d pasa el tope de %d que declara el topic. "+
+				"El veredicto es RECHAZADO POR AGOTAMIENTO — no se abre otra vuelta; escalá a una "+
+				"persona con el estado completo (hallazgos abiertos y los debates previos)", k, tope)
 	}
 	if rounds < 1 {
 		rounds = 1

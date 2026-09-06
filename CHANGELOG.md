@@ -8,6 +8,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
+  `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código
+  impedía abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de
+  corregir. El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
+  apruebe para terminar, que es exactamente lo que el tope existe para evitar.
+
+  Ahora `OpenDebate` se niega a abrir un debate cuyo topic declare una vuelta por encima de su
+  propio tope, con un error que dice qué pasó y qué hacer. No hace falta estado nuevo: el topic
+  ya declara `vuelta k/K`, y negarse a abrir falla del lado seguro —un debate que no existe no
+  puede aprobar nada—. La convención pasa a tener UNA definición (`memory.VueltaDelTopic`), que
+  es la misma que `musubi arnes` usa para medir: con dos regex separadas, endurecer una dejaría
+  a la otra midiendo la convención vieja, y las dos seguirían andando.
+
+  El mensaje va en el error y no en las reglas de la skill a propósito: el error cuesta tokens
+  sólo cuando se dispara, y las reglas los cuestan en cada turno.
 - 🔴 **La profundidad de revisión estaba calibrada a ojo, y medirla mostró que no distinguía
   nada.** Los cortes de `codeintel.Profundidad` se eligieron cuando la función se escribió, sin
   una distribución que los respaldara. Medido ahora sobre los **108 PRs reales** de este repo
