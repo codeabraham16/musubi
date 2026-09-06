@@ -254,6 +254,23 @@ func runAgent(args []string) {
 // prueba pueda ver QUÉ ESPERA se pidió sin tener que esperarla.
 var nuevoTimer = time.NewTimer
 
+// inventarioDelLatido es el seam del inventario de servicios, por la misma razón que nuevoTimer y
+// con el costo MEDIDO: `serviciosDelLatido` enumera los servicios del sistema operativo en CADA
+// latido y tarda ~3 s por vuelta en una máquina Windows real (3,13 s y 2,84 s, cronometradas). El
+// resto del latido es ruido al lado: la capacidad de avisar sale cacheada en 2,7 ms y el POST
+// tarda 1,7 ms.
+//
+// Eso rompía una prueba que no tiene nada que ver con servicios. El test del kill-switch necesita
+// DOS latidos para poder afirmar algo —uno que pasa y otro revocado— así que pagaba ~6 s contra su
+// propio plazo de 5 y fallaba. Y como el costo depende de la máquina, en CI se leía como FLAKY:
+// verde a las 22:31 y rojo a las 13:49 sobre el MISMO commit. La prueba medía cuánto tarda el
+// sistema operativo en listar servicios, no si el bucle se detiene cuando lo revocan.
+//
+// Apagarlo en esa prueba no le saca nada a lo que la prueba afirma: qué lleva el cuerpo del latido
+// no cambia el momento en que el bucle decide detenerse. Que el inventario viaje bien es otra
+// afirmación y tiene sus propios tests en servicios_test.go.
+var inventarioDelLatido = serviciosDelLatido
+
 // azarDelAgente es la ÚNICA fuente de aleatoriedad del agente: un número en [0, 1).
 //
 // Es `var` por la misma razón que enumerarServicios: para que las pruebas lo claven y el jitter
@@ -453,7 +470,7 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	// VA AUNQUE ESTÉ VACÍA, y `confirmar` se llama recién cuando el cerebro aceptó (A78). El
 	// `len(svs) > 0` que había acá se contradecía en silencio con el sellado de adentro: una
 	// lista vacía se daba por enviada y no se enviaba, para siempre.
-	svs, mandarInventario, confirmarInventario := serviciosDelLatido()
+	svs, mandarInventario, confirmarInventario := inventarioDelLatido()
 	if mandarInventario {
 		carga["servicios"] = svs
 	}
