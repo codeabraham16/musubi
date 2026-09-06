@@ -97,6 +97,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   mismo bloque `Rules` que F2, F3 y F4, y sumar un cuarto editor del mismo texto multiplicaría el
   conflicto de merge sin necesidad.
 
+### Changed
+- **El bucle de corrección deja de girar.** `adversarial-review` ordenaba, textualmente: *«iterá
+  (fix → re-debate) **hasta que el cambio sobreviva**»*. Tres defectos en una frase: **sin tope** de
+  vueltas, **sin alcance decreciente** —cada vuelta re-litigaba todo desde cero, incluidos los
+  hallazgos ya resueltos— y **sin salida definida**: la única condición de corte escrita era el
+  éxito.
+
+  Y el riesgo real no es girar para siempre: es que el agente, cansado, **apruebe**. Que es justo
+  lo que el paso anterior intenta evitar con «la postura por defecto es rechazar».
+
+  - **K = 3 vueltas** (2 si el cambio es trivial). Al agotarlas, el veredicto es **RECHAZADO POR
+    AGOTAMIENTO** y escala a una persona con el estado completo. El cansancio no aprueba.
+  - **Alcance decreciente**: a la vuelta k+1 sólo van los hallazgos **abiertos**.
+  - 🔴 **El bucle exterior es de DEBATES, no de rondas**, y eso no es una preferencia. Un tally con
+    máximo estricto —y `no_real` ganando **es** un ganador— ejecuta `UPDATE debates SET
+    status='closed'`; sobre un cerrado, `post`, `vote` y `advance` devuelven error y **ninguna
+    acción lo revive**. El camino obvio («una ronda más, y el tope lo hace cumplir `rounds`») no
+    existe. Ahora hay un test que lo sostiene: si alguien hiciera que `advance` reviviera un
+    cerrado, la skill quedaría enseñando algo falso en silencio.
+  - El estado entre debates viaja en el `topic`, que es texto libre y `action=status` devuelve
+    entero: `«<el cambio> · vuelta k/K · abiertos: <lente#hallazgo, …> · previo: <debate_id>»`.
+    La cadena queda auditable **sin tocar el esquema**.
+  - **Límite honesto:** el tope es **instruido, no exigido**. Nada en el código impide abrir la
+    vuelta K+1; es el trade-off consciente de esta fase.
+  - 7 sabotajes en ROJO. El que más importa es la **aserción negativa**: la frase sin tope no puede
+    volver por una reescritura futura. Va acompañada de las positivas porque, sola, la cumpliría
+    también alguien que borre el paso entero.
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed
