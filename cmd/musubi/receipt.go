@@ -119,6 +119,12 @@ func receiptEmit(args []string) {
 				i++
 				by = args[i]
 			}
+		default:
+			// UNA BANDERA DESCONOCIDA NO PUEDE TERMINAR EN UN RECIBO APROBADO. Este parser las
+			// descartaba en silencio y seguía con el default `approved`, así que un
+			// `receipt emit --help` —o cualquier tipeo— OTORGABA el permiso de entrega. Pasó.
+			fmt.Fprintf(os.Stderr, "argumento desconocido %q\nuso: musubi receipt emit [--verdict approved|rejected] [--reason \"...\"] [--by <quién>]\n", args[i])
+			os.Exit(2)
 		}
 	}
 	if verdict != receipt.Approved && verdict != receipt.Rejected {
@@ -199,7 +205,7 @@ func receiptShow() {
 		fp = ""
 	}
 	fmt.Printf("veredicto : %s\n", r.Verdict)
-	fmt.Printf("huella    : %s\n", r.Fingerprint[:12])
+	fmt.Printf("huella    : %s\n", corta(r.Fingerprint))
 	fmt.Printf("HEAD      : %s\n", shortHead(r.Head))
 	fmt.Printf("emitido   : %s por %s\n", r.IssuedAt.Format(time.RFC3339), orNone(r.IssuedBy))
 	if r.Reason != "" {
@@ -409,4 +415,19 @@ func receiptVerify(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("✓", d.Reason)
+}
+
+// corta recorta una huella para mostrarla SIN asumir su largo.
+//
+// El recibo se decodifica de `meta`, o sea de un texto que alguien puede haber editado a mano:
+// asumir 64 caracteres es asumir que nadie lo tocó nunca. Con una huella corta,
+// `r.Fingerprint[:12]` panica — y se cae justo el comando que sirve para DIAGNOSTICAR.
+func corta(fp string) string {
+	if len(fp) > 12 {
+		return fp[:12]
+	}
+	if fp == "" {
+		return "(sin huella)"
+	}
+	return fp
 }

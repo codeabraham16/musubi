@@ -7,6 +7,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
+  - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
+    llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan
+    prefiere —podar lo que el **código ya ejecuta**: la profundidad no se explica, se lee de
+    `revision`— y quedó en **4.979**, con margen 21. Como `rules_too_long` es un *warning* y
+    `report.OK()` sólo mira errores, **un umbral que nada puede hacer fallar se cruza y nadie se
+    entera**: ahora hay un test que lo hace fallar.
+  - **Un merge limpio no es evidencia de nada.** `debate_test.go` fusionó las dos ramas sin un
+    solo conflicto y **no compilaba**: el test que agregó F4 usaba las firmas que F3 había
+    cambiado. Lo detectó `go vet`, no git.
+  - **La renumeración de los pasos, con sus referencias internas.** F2 inserta un paso y corre
+    todos los demás; F3 y F4 editan el CONTENIDO de esos mismos pasos. Quedarse con un lado
+    perdía el otro entero y compilaba igual. Además hay referencias internas («va por el paso 7»)
+    que había que mover con ellos.
+  - **El golden completo se puso rojo al integrar** —F2 y F3 tocan descripciones distintas— que es
+    exactamente para lo que se agregó.
+- **`receipt emit` ignoraba las banderas desconocidas y aprobaba igual.** En el comando cuyo único
+  trabajo es otorgar permiso de entrega, «bandera desconocida ⇒ apruebo» es el default al revés.
+  Pasó de verdad: un `receipt emit --help` emitió un recibo aprobado. Ahora sale con error.
+- **`receipt show` panicaba con una huella corta.** Hacía `r.Fingerprint[:12]` sobre un valor que
+  se decodifica de `meta` —o sea de un texto que alguien puede editar—, así que se caía justo el
+  comando que sirve para diagnosticar.
+- **La skill ya ordena congelar el hallazgo** antes de que entre al debate (era el hueco que F5
+  dejó declarado).
+
 ### Added
 - **El gate de revisión post-apply: la revisión se ofrece cuando todavía es barata.** Musubi ya
   tenía el mecanismo (`adversarial-review`, `musubi_debate`) y la autoridad (el recibo de RDD), pero

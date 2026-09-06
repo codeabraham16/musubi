@@ -463,3 +463,24 @@ func TestAdversarialReviewNoOrdenaUnBucleSinTope(t *testing.T) {
 			"estricto cierra el debate y ninguna acción lo revive")
 	}
 }
+
+// EL PRESUPUESTO DE LA SKILL SE MIDE EN CADA PR, NO SE DESCUBRE EN EL CUARTO.
+//
+// Cuatro de las seis fases de este track escriben en el mismo campo `Rules`, y ninguna podía
+// ver el problema mirándose a sí misma: la suma cruzó el umbral `rules_too_long` recién al
+// integrarlas. Se resolvió podando lo que el CÓDIGO ya ejecuta —la profundidad no se explica,
+// se lee de `revision`— y quedó con poco margen.
+//
+// `rules_too_long` es un WARNING y `report.OK()` sólo mira errores, así que el gate de calidad
+// no se pone rojo por esto: un umbral que nada puede hacer fallar se cruza y nadie se entera.
+// Este test es lo que lo hace fallar.
+func TestElPresupuestoDeLasRulesNoSeCruzaEnSilencio(t *testing.T) {
+	for nombre, sk := range skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}})) {
+		n := len([]rune(sk.Rules))
+		if n > skills.RulesMaxChars {
+			t.Errorf("las rules de %q miden %d runas y el umbral es %d (sobran %d). "+
+				"Podá lo que el código ya ejecuta antes de agregar más texto.",
+				nombre, n, skills.RulesMaxChars, n-skills.RulesMaxChars)
+		}
+	}
+}
