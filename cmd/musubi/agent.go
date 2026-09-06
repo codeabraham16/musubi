@@ -299,10 +299,16 @@ func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Durat
 	// EL TIMER SALE DE UN SEAM, Y NO ES CEREMONIA: ES LA ÚNICA MANERA DE PROBAR ESTO.
 	//
 	// La primera versión de la prueba medía el reloj de pared —«el primer latido tardó al menos
-	// el desfase»— y era HUECA: el arranque del agente gasta ~2,4 s antes del primer POST
-	// (idRustdeskLocal y direccionPropia salen a preguntarle cosas al sistema), así que cualquier
-	// umbral chico se cumple solo, con desfase o sin él. Se midió: con `NewTimer(0)` el primer
-	// latido llegó igual a los 2,37 s contra un umbral de 150 ms, y la prueba pasaba en verde.
+	// el desfase»— y era HUECA: el primer POST tarda segundos en salir pase lo que pase, así que
+	// cualquier umbral chico se cumple solo, con desfase o sin él. Se midió: con `NewTimer(0)` el
+	// primer latido llegó igual a los 2,37 s contra un umbral de 150 ms, y la prueba pasaba en
+	// verde.
+	//
+	// ⚠️ ESTE COMENTARIO ATRIBUÍA ESOS SEGUNDOS A idRustdeskLocal Y direccionPropia, Y ERA FALSO.
+	// Se cronometró: esas dos salen en MICROSEGUNDOS. El costo es `serviciosDelLatido`, que
+	// enumera los servicios del sistema operativo en cada latido (3,13 s y 2,84 s medidos en una
+	// máquina Windows real). Queda escrito porque yo cité esta línea como evidencia sin
+	// cronometrarla y me llevó a un arreglo peor: un comentario del repo NO es una medición.
 	//
 	// Subir el umbral por encima del ruido haría la prueba lenta y flaky en CI. Mirar la
 	// DURACIÓN QUE SE PIDE en vez de la que se sufre la vuelve exacta y de microsegundos.
