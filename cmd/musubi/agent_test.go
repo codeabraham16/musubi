@@ -397,6 +397,11 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	// EL INVENTARIO SE APAGA. Enumerar los servicios del sistema cuesta ~3 s por latido (medido)
+	// y este test necesita DOS, así que sin esto la prueba tarda ~6 s contra su propio plazo de 5
+	// y falla — no por el kill-switch, sino por lo que tarda el sistema operativo en contestar.
+	sinInventario(t)
+
 	listo := make(chan struct{})
 	go func() {
 		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
@@ -712,4 +717,21 @@ func TestElClienteDelLatidoDeclaraElNombreYNoApagaLaVerificacion(t *testing.T) {
 	if c.Timeout != 10*time.Second {
 		t.Errorf("Timeout = %v, esperaba 10s: el timeout corto es lo que evita que los latidos se apilen", c.Timeout)
 	}
+}
+
+// sinInventario apaga la enumeración de servicios durante el test, y no es una comodidad: es lo
+// que separa «el bucle se detiene cuando lo revocan» de «el sistema operativo lista rápido».
+//
+// Enumerar cuesta ~3 s por latido en una máquina Windows real (3,13 s y 2,84 s, cronometradas:
+// el resto del latido son milisegundos). Cualquier prueba que necesite más de un latido termina
+// midiendo la máquina en vez de la lógica, y como el costo depende del host, en CI eso se lee
+// como flaky en vez de como determinista.
+//
+// Usa `enumerarServicios`, que YA era el seam de esto y ya se stubbea más arriba en este mismo
+// archivo con el mismo razonamiento. Dos formas de apagar lo mismo en un archivo es una de más.
+func sinInventario(t *testing.T) {
+	t.Helper()
+	anterior := enumerarServicios
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
+	t.Cleanup(func() { enumerarServicios = anterior })
 }
