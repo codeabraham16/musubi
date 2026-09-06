@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -55,7 +57,51 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 // están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
 // destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
 // que es justo la clase de "se arregla solo más tarde" que nadie verifica.
+// errFueraDelProyecto lo devuelve la guarda de contención. Es un centinela para que un llamador
+// pueda distinguirlo de un error de disco: los dos hacen saltar el paquete, pero uno es una falla y
+// el otro es la política funcionando.
+var errFueraDelProyecto = errors.New("la ruta cae fuera del árbol del proyecto")
+
+// dentroDelProyecto dice si `p` —relativo a projectPath, o absoluto— cae DENTRO del árbol del
+// proyecto. Es la guarda de contención del grafo de código.
+//
+// ⚠️ POR QUÉ EXISTE. Medido el 2026-09-05 en el repo de Musubi: 264 nodos con ruta absoluta de OTRO
+// repo (C:/Proyectos/musubi-body/...) vivían en el grafo de este proyecto, con project_id='musubi'.
+// Entraron porque nada verificaba la contención: `memory.NormalizeCodePath` devuelve la ruta
+// ABSOLUTA cuando el archivo no cuelga de la raíz —no falla, no avisa— y de ahí en adelante la clave
+// absoluta se propaga sola. Peor: el índice INCREMENTAL deriva sus directorios sucios de las rutas
+// YA guardadas, así que un solo nodo ajeno hace que la próxima corrida re-derive el paquete ajeno
+// ENTERO y plante más. Por eso limpiar sin blindar no alcanza: el siguiente tick lo replanta.
+//
+// La comparación se hace con filepath.Rel y no con strings.HasPrefix sobre la raíz, porque el prefijo
+// textual da falsos positivos: "C:/Proyectos/Musubi-otro" empieza con "C:/Proyectos/Musubi". Y el
+// rechazo mira `..` como SEGMENTO, no como prefijo de texto: un directorio llamado "..datos" es
+// legítimo y HasPrefix(rel, "..") lo tumbaría.
+//
+// Con projectPath vacío NO se juzga: hay instancias (varios tests, y el bind compartido) que se
+// construyen sin árbol, y ahí toda ruta saldría fuera. Inventar contención donde no hay raíz
+// rompería lo que hoy funciona sin proteger nada.
+func (s *McpServer) dentroDelProyecto(p string) bool {
+	if strings.TrimSpace(s.projectPath) == "" {
+		return true
+	}
+	abs := p
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(s.projectPath, abs)
+	}
+	rel, err := filepath.Rel(s.projectPath, abs)
+	if err != nil {
+		return false // otra unidad de disco: Rel no puede relacionarlas
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unresolved int, err error) {
+	// La guarda va ANTES del ReadDir: el directorio ajeno EXISTE en disco, así que el error de
+	// lectura nunca iba a frenarlo.
+	if !s.dentroDelProyecto(dir) {
+		return 0, fmt.Errorf("%w: %s", errFueraDelProyecto, dir)
+	}
 	absDir := dir
 	if !filepath.IsAbs(absDir) {
 		absDir = filepath.Join(s.projectPath, dir)

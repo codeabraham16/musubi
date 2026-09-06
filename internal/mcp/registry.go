@@ -776,7 +776,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"path":    {Type: "string", Description: "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"},
+						"path":    {Type: "string", Description: "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"},
 						"gist":    {Type: "string", Description: "Resumen corto de qué hace el archivo"},
 						"symbols": {Type: "string", Description: "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"},
 					},

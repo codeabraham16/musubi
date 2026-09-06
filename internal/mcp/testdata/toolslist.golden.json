@@ -684,7 +684,7 @@
           },
           "path": {
             "type": "string",
-            "description": "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"
+            "description": "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"
           },
           "symbols": {
             "type": "string",
