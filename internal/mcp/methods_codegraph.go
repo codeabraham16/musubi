@@ -335,9 +335,16 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 	dirs, _ := s.walkSourceTree()
 	pkgs := 0
 	var pendientes []string
+	var salteados []string
 	for dir := range dirs {
 		unresolved, err := s.refreshCodeGraphPkg(ctx, dir)
 		if err != nil {
+			// EL SALTEO SE DECLARA, no se traga. Antes este `continue` era mudo y la respuesta
+			// decía {"packages": N} contando SÓLO los que salieron bien, sin decir nunca cuántos
+			// se encontraron: un full que cubría una fracción del repo reportaba éxito, y el
+			// agujero se leía después como «el grafo no conoce ese símbolo». Mismo principio que
+			// el recorte de #332.
+			salteados = append(salteados, fmt.Sprintf("%s: %v", dir, err))
 			continue
 		}
 		pkgs++
@@ -348,10 +355,51 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 	// Segunda pasada: ahora el grafo tiene TODOS los símbolos del módulo, así que lo que en la
 	// primera vuelta apuntaba a un paquete todavía no indexado ya resuelve.
 	for _, dir := range pendientes {
-		_, _ = s.refreshCodeGraphPkg(ctx, dir)
+		if _, err := s.refreshCodeGraphPkg(ctx, dir); err != nil {
+			salteados = append(salteados, fmt.Sprintf("%s (2da pasada): %v", dir, err))
+		}
 	}
+	// El derivador que escribió estas filas queda registrado: es lo que le permite al índice
+	// incremental darse cuenta, más adelante, de que el derivador cambió.
+	_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
+
 	nodes, edges := s.graphSize(s.scopedCtx(ctx))
-	return map[string]interface{}{"packages": pkgs, "nodes": nodes, "edges": edges}, nil
+	res := map[string]interface{}{
+		"packages":       pkgs,
+		"total_packages": len(dirs),
+		"nodes":          nodes,
+		"edges":          edges,
+	}
+	if len(salteados) > 0 {
+		res["skipped"] = len(salteados)
+		res["skipped_dirs"] = recortarMotivos(salteados, 10)
+		res["skipped_truncated"] = len(salteados) > 10
+	}
+	return res, nil
+}
+
+// debeSellarDerivador decide si el sello del derivador puede avanzar tras una barrida.
+//
+// Va en su propia función porque es la regla que más caro sale equivocar y la más difícil de
+// ejercitar desde afuera: hacer fallar un directorio de verdad pide permisos del sistema de
+// archivos y sale distinto en cada plataforma. Acá la regla se afirma directo.
+//
+// SELLAR CON FALLIDOS ES LA TRAMPA. Si el sello avanza mientras quedaron directorios sin derivar,
+// la próxima corrida ve la versión al día, vuelve a saltearlos por fingerprint —su contenido no
+// cambió— y quedan derivados por el motor viejo PARA SIEMPRE. Que es, letra por letra, el modo de
+// falla que esta puerta vino a cerrar.
+func debeSellarDerivador(derivadorCambio bool, fallidos int) bool {
+	return derivadorCambio && fallidos == 0
+}
+
+// recortarMotivos acota una lista de motivos a n, declarando el recorte con una última entrada en
+// vez de cortar callado: una lista truncada que no dice que lo está se lee como completa.
+func recortarMotivos(xs []string, n int) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	out := append([]string{}, xs[:n]...)
+	return append(out, fmt.Sprintf("… y %d más", len(xs)-n))
 }
 
 // indexIncremental reconcilia el grafo con el working tree sin re-derivar todo (Track 20 · F5):
@@ -365,9 +413,23 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	_, diskFiles := s.walkSourceTree()
+	dirsDisco, diskFiles := s.walkSourceTree()
 
 	dirtyDirs := map[string]bool{}
+
+	// EL DERIVADOR CAMBIÓ ⇒ TODO ES SUCIO, UNA VEZ. El fingerprint es el sha256 del contenido, así
+	// que sigue al input y no a quien lo deriva: sin esta puerta, una mejora del derivador jamás
+	// alcanza a un archivo que no cambió y el grafo queda con regiones escritas por versiones
+	// distintas, sin que nada lo declare. Ya pasó —seis paquetes quedaron sin aristas cross-paquete
+	// durante tres semanas porque sus filas eran de catorce horas antes de que existiera el
+	// resolvedor— y sólo se descubrió midiendo a mano. Ver codeintel.GraphDeriverVersion.
+	derivadorViejo, _, _ := s.engine.GetMeta(memory.MetaCodegraphDeriver)
+	derivadorCambio := derivadorViejo != codeintel.GraphDeriverVersion
+	if derivadorCambio {
+		for dir := range dirsDisco {
+			dirtyDirs[dir] = true
+		}
+	}
 	var ghostPaths []string
 	skipped := 0
 	for path, fp := range stored {
@@ -401,16 +463,41 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 		}
 	}
 	refreshed := 0
+	var fallidos []string
 	for dir := range dirtyDirs {
 		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
 			refreshed++
+		} else {
+			fallidos = append(fallidos, fmt.Sprintf("%s: %v", dir, err))
 		}
 	}
+
+	// EL SELLO SE MUEVE SÓLO SI LA BARRIDA SALIÓ ENTERA. Sellar con directorios fallidos los
+	// condenaría a no reintentarse NUNCA: la próxima corrida vería la versión al día, volvería a
+	// saltearlos por fingerprint, y quedarían derivados por el motor viejo para siempre. Que es
+	// exactamente el modo de falla que esta puerta vino a cerrar.
+	if debeSellarDerivador(derivadorCambio, len(fallidos)) {
+		_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
+	}
+
 	nodes, edges := s.graphSize(scoped)
-	return map[string]interface{}{
+	res := map[string]interface{}{
 		"mode": "incremental", "packages": refreshed, "pruned": pruned,
 		"skipped": skipped, "nodes": nodes, "edges": edges,
-	}, nil
+	}
+	if derivadorCambio {
+		// Se declara, porque cambia el costo de la corrida de golpe y sin aviso se lee como un
+		// cuelgue: una barrida entera donde se esperaba un incremental barato.
+		res["deriver_changed"] = true
+		res["deriver_from"] = derivadorViejo
+		res["deriver_to"] = codeintel.GraphDeriverVersion
+	}
+	if len(fallidos) > 0 {
+		res["failed"] = len(fallidos)
+		res["failed_dirs"] = recortarMotivos(fallidos, 10)
+		res["failed_truncated"] = len(fallidos) > 10
+	}
+	return res, nil
 }
 
 func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {

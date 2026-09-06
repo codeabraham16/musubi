@@ -30,6 +30,12 @@ const MetaStackFingerprint = "skills_stack"
 // guardado, el miss puede decir de qué árbol es el índice. Vacío si no hay git o no es un repo.
 const MetaCodegraphHead = "codegraph_head"
 
+// MetaCodegraphDeriver guarda la versión del derivador que escribió el grafo. Cuando no coincide
+// con la del binario que corre, el índice incremental re-deriva TODO una vez: las filas viejas las
+// escribió un derivador que no sabía emitir lo que el nuevo emite, y el fingerprint por contenido
+// no lo puede notar porque el archivo no cambió. Ver codeintel.GraphDeriverVersion.
+const MetaCodegraphDeriver = "codegraph_deriver"
+
 // GetMeta devuelve el valor de una clave de metadatos (ok=false si no existe).
 func (e *DbEngine) GetMeta(key string) (string, bool, error) {
 	var v string
