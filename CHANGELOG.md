@@ -7,6 +7,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El hallazgo no muta entre que se emite y se vota.** Un hallazgo se emite en un momento y se
+  juzga en otro, con una ronda de crítica cruzada en el medio, y entre esos dos momentos nada
+  garantizaba que el texto siguiera siendo el mismo. Peor: `PostPosture` hace
+  `ON CONFLICT ... DO UPDATE SET stance=excluded.stance`, así que **re-postear con la misma
+  etiqueta reemplaza la postura anterior en silencio**, sin error y sin rastro. El tally es
+  determinista sobre los VOTOS, pero no sobre el TEXTO que esos votos juzgaban: el recuento puede
+  ser perfectamente fiel a una discusión que ya no existe.
+
+  Un hallazgo congelado es una tripleta —id estable, huella del cuerpo canonizado, huella del árbol
+  contra el que se emitió— con dos comandos nuevos: `musubi receipt freeze --id <debate>/<lente>` y
+  `receipt verify`, con el cuerpo por **stdin**.
+
+  - **El cuerpo NO se guarda, sólo su huella.** No es ahorro de espacio: obliga a que quien verifica
+    tenga el texto en la mano. Un verificador que puede leer el texto del propio registro no está
+    verificando, se está mirando al espejo.
+  - **Canonizar CRLF y el salto final, y NADA más.** Las dos mitades importan: sin normalizar los
+    finales de línea, en Windows cada verificación diría «mutó» y el mecanismo se apaga en una
+    semana; normalizando de más —espacio interno, mayúsculas— «el índice puede estar vacío» y «el
+    índice **no** puede estar vacío» darían la misma huella y el congelado pasaría a **aprobar
+    mutaciones reales**. El banco sabotea las dos.
+  - **Tres motivos de rechazo distintos**, porque cada uno pide una acción distinta: congelar,
+    re-emitir, re-verificar. Colapsarlos haría que el agente reintente la acción equivocada.
+  - **Sinergia con el alcance decreciente:** la poda por árbol es media respuesta al «a la vuelta
+    k+1 sólo van los hallazgos abiertos» — tras un fix el árbol cambia y los viejos se caen solos.
+  - 🔴 **No se tocó `Compute` ni `Check`.** El plan proponía generalizar la aridad de `Compute`; no
+    se hizo, porque su propia regla es más fuerte —la función nueva va aparte aunque duplique
+    líneas— y porque si su salida cambiara un byte, **todos los recibos vigentes se invalidarían y
+    los push se bloquearían**. Queda una línea base con hexes literales, obtenidos corriéndola
+    ANTES de tocar nada.
+  - 11 sabotajes en ROJO y 7 casos verificados de punta a punta con un binario real.
+
+  Pendiente declarado: la skill todavía no ordena congelar. Cablear `adversarial-review` toca el
+  mismo bloque `Rules` que F2, F3 y F4, y sumar un cuarto editor del mismo texto multiplicaría el
+  conflicto de merge sin necesidad.
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed

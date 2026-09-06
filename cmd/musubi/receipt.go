@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,7 +76,7 @@ func openReceiptStore() (*memory.DbEngine, string, error) {
 
 func runReceipt(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: musubi receipt <emit|check|show|install-hook|uninstall-hook>")
+		fmt.Fprintln(os.Stderr, "uso: musubi receipt <emit|check|show|freeze|verify|install-hook|uninstall-hook>")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -85,6 +86,10 @@ func runReceipt(args []string) {
 		receiptCheck()
 	case "show":
 		receiptShow()
+	case "freeze":
+		receiptFreeze(args[1:])
+	case "verify":
+		receiptVerify(args[1:])
 	case "install-hook":
 		receiptInstallHook(false)
 	case "uninstall-hook":
@@ -286,4 +291,122 @@ func orNone(s string) string {
 		return "(anónimo)"
 	}
 	return s
+}
+
+// ─── HALLAZGOS CONGELADOS (F5) ──────────────────────────────────────────────────────────
+//
+// `receipt freeze` y `receipt verify` aplican RDD a los HALLAZGOS de un panel, no al árbol.
+// Son subcomandos NUEVOS y no tocan `receiptCheck` ni `receipt.Check`: el hook pre-push está
+// instalado y vivo, y ése es el camino que decide si esta gente puede pushear.
+//
+// El cuerpo entra por STDIN a propósito. Pasarlo por bandera lo metería en la línea de
+// comandos —y en el historial del shell, y en los logs— y además obligaría a escapar un texto
+// multilínea, que es exactamente la forma del hallazgo típico.
+
+// idDeArgs extrae --id de los argumentos.
+func idDeArgs(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--id" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// cuerpoDeStdin lee el cuerpo del hallazgo.
+func cuerpoDeStdin() (string, error) {
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("no pude leer el cuerpo del hallazgo por stdin: %w", err)
+	}
+	return string(data), nil
+}
+
+// abrirHallazgos abre la memoria, deriva la huella del árbol y lee la colección congelada.
+func abrirHallazgos() (*memory.DbEngine, string, map[string]receipt.Finding, error) {
+	eng, root, err := openReceiptStore()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	fp, _, ferr := treeFingerprint(context.Background(), root)
+	if ferr != nil {
+		eng.Close()
+		return nil, "", nil, fmt.Errorf("no pude calcular la huella del árbol: %w", ferr)
+	}
+	raw, _, _ := eng.GetMeta(receipt.FindingsMetaKey)
+	return eng, fp, receipt.DecodeFindings(raw), nil
+}
+
+// receiptFreeze congela un hallazgo: id + huella del cuerpo + huella del árbol de HOY.
+func receiptFreeze(args []string) {
+	id := idDeArgs(args)
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "uso: musubi receipt freeze --id <debate>/<lente>   (el cuerpo va por stdin)")
+		os.Exit(2)
+	}
+	cuerpo, err := cuerpoDeStdin()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	eng, fp, cong, err := abrirHallazgos()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer eng.Close()
+
+	// Podar ANTES de agregar: tras un fix el árbol cambia y los hallazgos de la vuelta previa
+	// se caen solos, así que la vuelta siguiente arranca sólo con lo de hoy. Es media respuesta
+	// al alcance decreciente, sin que nadie tenga que acordarse de limpiar.
+	cong, podados := receipt.PodarPorArbol(cong, fp)
+
+	f, err := receipt.Congelar(id, cuerpo, fp, time.Now())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	cong[f.ID] = f
+
+	raw, err := receipt.EncodeFindings(cong)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := eng.SetMeta(receipt.FindingsMetaKey, raw); err != nil {
+		fmt.Fprintln(os.Stderr, "no pude guardar los hallazgos congelados:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("hallazgo %s congelado (cuerpo %s, árbol %s)\n", f.ID, shortHead(f.BodyHash), shortHead(f.Tree))
+	if podados > 0 {
+		fmt.Printf("se podaron %d hallazgo(s) de un árbol anterior: el código cambió debajo.\n", podados)
+	}
+	fmt.Println("el cuerpo NO se guarda: para verificarlo hay que volver a tenerlo.")
+}
+
+// receiptVerify comprueba que un cuerpo sea el que se congeló, sobre el mismo árbol.
+func receiptVerify(args []string) {
+	id := idDeArgs(args)
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "uso: musubi receipt verify --id <debate>/<lente>   (el cuerpo va por stdin)")
+		os.Exit(2)
+	}
+	cuerpo, err := cuerpoDeStdin()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	eng, fp, cong, err := abrirHallazgos()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer eng.Close()
+
+	d := receipt.Verificar(cong, id, cuerpo, fp)
+	if !d.Allowed {
+		fmt.Fprintln(os.Stderr, "✗", d.Reason)
+		os.Exit(1)
+	}
+	fmt.Println("✓", d.Reason)
 }
