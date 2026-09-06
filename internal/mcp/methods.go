@@ -868,6 +868,10 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 		Agent  string `json:"agent"`
 		Stance string `json:"stance"`
 		Choice string `json:"choice"`
+		// Model y Evidence viajan en post y vote; GatedChoice sólo en open.
+		Model       string `json:"model"`
+		Evidence    string `json:"evidence"`
+		GatedChoice string `json:"gated_choice"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -877,18 +881,18 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 
 	switch action := strings.TrimSpace(args.Action); action {
 	case "open":
-		d, err := s.engine.OpenDebate(args.Topic, args.Rounds, args.Quorum)
+		d, err := s.engine.OpenDebate(args.Topic, args.Rounds, args.Quorum, strings.TrimSpace(args.GatedChoice))
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo abrir el debate: %v", err)
 		}
 		return jsonResult(map[string]interface{}{"debate": d,
-			"note": "postea las posturas de la ronda 1 con action=post (id, agent, stance); tras N posturas, action=advance para pasar a la siguiente ronda con las posturas previas como material de crítica"})
+			"note": "postea las posturas de la ronda 1 con action=post (id, agent, stance, model, evidence); tras N posturas, action=advance para pasar a la siguiente ronda con las posturas previas como material de crítica. model y evidence son OBLIGATORIOS: dos jueces del mismo modelo no son dos opiniones, y una opinión no pesa lo mismo que una comprobación"})
 
 	case "post":
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "post requiere 'id' (el debate)")
 		}
-		if err := s.engine.PostPosture(args.ID, args.Agent, args.Stance); err != nil {
+		if err := s.engine.PostPosture(args.ID, args.Agent, args.Stance, strings.TrimSpace(args.Model), strings.TrimSpace(args.Evidence)); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo postear: %v", err)
 		}
 		return textResult("Postura registrada."), nil
@@ -908,7 +912,7 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "vote requiere 'id' (el debate)")
 		}
-		if err := s.engine.CastVote(args.ID, args.Agent, args.Choice); err != nil {
+		if err := s.engine.CastVote(args.ID, args.Agent, args.Choice, strings.TrimSpace(args.Model), strings.TrimSpace(args.Evidence)); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo votar: %v", err)
 		}
 		return textResult("Voto registrado."), nil

@@ -73,6 +73,19 @@ type turnInput struct {
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
 func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, stdin io.Reader) string {
+	return turnOutputWith(store, loopCfg, pipeCfg, maCfg, memCfg, nil, stdin)
+}
+
+// turnOutputWith es turnOutput con la sonda de git EXPLÍCITA, para el gate de
+// revisión. Sólo el hook real (runTurn) pasa una sonda viva; sin ella el gate queda
+// mudo.
+//
+// Por qué la sonda es un parámetro y no algo que el gate deduzca solo: sin ella,
+// medir "cuánto trabajo sin revisar hay" desde un test sería medir el árbol REAL,
+// que cambia mientras los tests corren — y un banco cuyo resultado depende de si
+// guardaste un archivo hace diez segundos no mide nada. Con la sonda afuera, la
+// política se prueba con entradas fijas y el resto del loop no se entera.
+func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -111,6 +124,11 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	if loopCfg.CaptureReminder {
 		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, in.SessionID, loopCfg)})
 	}
+	// El gate de revisión va ÚLTIMO a propósito: es el único bloque del turno que pide
+	// una acción sobre el trabajo YA HECHO, y el final del contexto es la posición que
+	// mejor se lee. Los demás bloques son material para lo que viene; éste es una
+	// interrupción, y una interrupción sepultada a la mitad no interrumpe nada.
+	blocks = append(blocks, accountedBlock{"review_gate", buildReviewGate(store, in.SessionID, probe)})
 	return assembleAccounted(store, "UserPromptSubmit", in.SessionID, blocks)
 }
 
@@ -485,7 +503,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, os.Stdin)
+	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}

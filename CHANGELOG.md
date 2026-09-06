@@ -7,6 +7,247 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
+  `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
+  no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se
+  inyectó nunca, es un problema de cableado», mandando a arreglar algo que funciona.
+
+  Es **exactamente la confusión que `musubi arnes` existe para evitar**, una capa más abajo: un cero
+  que sirve a la vez de valor de fallo y de valor tranquilizador. Ahora el gate cuenta las veces que
+  **midió**, no sólo las que habló, y hay tres veredictos donde había dos: `APAGADO` (nunca midió) ·
+  `EN REPOSO` (midió N veces y no tuvo nada que avisar) · `IGNORADO` (avisó y nadie lo siguió).
+  Verificado de punta a punta con los tres casos.
+- **Ocho tests del paquete `mcp` se ponían rojos si tenías `MUSUBI_TOOLS_ALL=1`.** Es un
+  interruptor **documentado** —devuelve al catálogo las nueve tools dormidas sin recompilar— y
+  media docena de tests afirman sobre la FORMA de ese catálogo heredando la variable del entorno.
+  Resultado: **rojos en la máquina de quien la usa, verdes en CI**, que no la tiene. El peor rojo
+  posible: el que sólo ve quien trabaja, y que por eso se aprende a ignorar.
+
+  Se arregla en el nivel correcto —un `TestMain` del paquete, no test por test— porque lo que se
+  hereda no es el dato de un caso sino la configuración global sobre la que casi todos afirman.
+  Verificado: sin el `TestMain` caen 8; con él, 0.
+- **El gate avisaba sobre su propio workspace.** En un repo recién creado, `.musubi/config.yaml` y
+  `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
+  justo el umbral. El gate se avisaba a sí mismo, y un aviso que salta por el ruido de la propia
+  herramienta es el que enseña a ignorar la herramienta.
+- **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
+  - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
+    llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan
+    prefiere —podar lo que el **código ya ejecuta**: la profundidad no se explica, se lee de
+    `revision`— y quedó en **4.979**, con margen 21. Como `rules_too_long` es un *warning* y
+    `report.OK()` sólo mira errores, **un umbral que nada puede hacer fallar se cruza y nadie se
+    entera**: ahora hay un test que lo hace fallar.
+  - **Un merge limpio no es evidencia de nada.** `debate_test.go` fusionó las dos ramas sin un
+    solo conflicto y **no compilaba**: el test que agregó F4 usaba las firmas que F3 había
+    cambiado. Lo detectó `go vet`, no git.
+  - **La renumeración de los pasos, con sus referencias internas.** F2 inserta un paso y corre
+    todos los demás; F3 y F4 editan el CONTENIDO de esos mismos pasos. Quedarse con un lado
+    perdía el otro entero y compilaba igual. Además hay referencias internas («va por el paso 7»)
+    que había que mover con ellos.
+  - **El golden completo se puso rojo al integrar** —F2 y F3 tocan descripciones distintas— que es
+    exactamente para lo que se agregó.
+- **`receipt emit` ignoraba las banderas desconocidas y aprobaba igual.** En el comando cuyo único
+  trabajo es otorgar permiso de entrega, «bandera desconocida ⇒ apruebo» es el default al revés.
+  Pasó de verdad: un `receipt emit --help` emitió un recibo aprobado. Ahora sale con error.
+- **`receipt show` panicaba con una huella corta.** Hacía `r.Fingerprint[:12]` sobre un valor que
+  se decodifica de `meta` —o sea de un texto que alguien puede editar—, así que se caía justo el
+  comando que sirve para diagnosticar.
+- **La skill ya ordena congelar el hallazgo** antes de que entre al debate (era el hueco que F5
+  dejó declarado).
+
+### Added
+- **El gate de revisión post-apply: la revisión se ofrece cuando todavía es barata.** Musubi ya
+  tenía el mecanismo (`adversarial-review`, `musubi_debate`) y la autoridad (el recibo de RDD), pero
+  nada CONECTABA el momento en que hay algo que revisar con el momento en que se revisa. El único
+  gate vivía en el pre-push, o sea que avisaba cuando ya se terminó de trabajar y lo único que uno
+  quiere es entregar — el peor momento posible para pedir una revisión.
+
+  Ahora el hook `UserPromptSubmit` le pregunta a **git** —no al modelo, no a una heurística— cuánto
+  trabajo de producción hay encima del último commit. Si cruza el umbral (**2 archivos** o **40
+  líneas**; `_test.go`, `.md` e imágenes no cuentan) y ningún recibo cubre ese estado exacto,
+  inyecta **una vez por sesión** un bloque que nombra la skill y el comando.
+
+  - **No bloquea nada, y es a propósito.** No decide si el cambio está bien: eso es juicio, y el
+    juicio se delega. Lo único que aporta es la OPORTUNIDAD.
+  - **Falla abierto**: fuera de un repo git, con git colgado o sin memoria, calla. Apagalo con
+    `MUSUBI_REVIEW_GATE=0`, que se lee ANTES de gastar un solo subproceso.
+  - **El costo, medido** (mediana de 9 corridas; el presupuesto del hook es de 10 s): piso 181 ms ·
+    sesión ya avisada **+9 ms** (el corte barato funciona) · avisa +60 ms · con un recibo vigente
+    +155 ms. Ese último es el camino caro y conviene decirlo: con el recibo al día el gate
+    recalcula la huella en cada turno, así que **hacer lo correcto sale más caro**. Es 1,5 % del
+    presupuesto, no se optimizó todavía.
+  - 17 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. Uno salió **vacuo** en la primera vuelta y el hallazgo quedó en el código: en la
+    forma simple de renombre de git (`viejo => nuevo`) separar no hace falta —el nombre nuevo ya va
+    último—, pero en la forma con llaves (`docs/{a.md => b.md}`) la extensión queda `.md}` y **un
+    doc renombrado contaba como producción**.
+
+- **`musubi arnes`: medir si el arnés de revisión se encendió de verdad.** Todo el resto de este
+  track mejora un arnés que hoy corre **cero veces**. El modo de falla dominante de este repo está
+  medido y tiene nombre —*se construye y no se enciende*— así que cerrar un plan sobre encendido
+  sin la pieza que comprueba el encendido sería, exactamente, repetirlo.
+
+  Cuatro preguntas, cada una con su fuente:
+
+  | | de dónde sale |
+  |---|---|
+  | ¿el gate disparó? | tokens de la superficie `review_gate` en el ledger |
+  | ¿alguien lo obedeció? | llamadas a `musubi_debate` en el uso de tools |
+  | ¿los debates cierran? | filas de `debates` cerradas contra abiertas |
+  | ¿cuántas vueltas toma una corrección? | las cadenas `vuelta k/K` del `topic` |
+
+  - 🔴 **Lo que más importa no es medir, es DISTINGUIR.** Un cero significa dos cosas opuestas que
+    piden lo contrario una de la otra: si el bloque **nunca se inyectó**, el problema es el
+    mecanismo y hay que arreglarlo; si se inyectó y **nadie lo siguió**, el problema es la
+    hipótesis y hay que **dejar de agregar piezas**. Confundirlas es exactamente cómo se termina
+    poniéndole la séptima pieza a algo que nadie iba a usar. Por eso hay cuatro veredictos
+    —APAGADO, SE USA SIN EL GATE, IGNORADO, A MEDIO CAMINO, ENCENDIDO— y no un porcentaje.
+  - **El criterio de éxito está escrito EN EL CÓDIGO, antes de medir:** si a las dos semanas el
+    gate disparó y `musubi_debate` sigue en cero, el problema no era el catálogo ni el texto de la
+    skill. Escribirlo ahora es lo que evita explicar el cero a posteriori.
+  - **El K=3 de las vueltas es un juicio, no una medición**, y el comando lo dice mientras no haya
+    cadenas que contar — en vez de mostrar un cero mudo.
+  - 7 sabotajes en ROJO. El que sostiene la fase es el primero: que los dos ceros no den el mismo
+    veredicto.
+
+- **El hallazgo no muta entre que se emite y se vota.** Un hallazgo se emite en un momento y se
+  juzga en otro, con una ronda de crítica cruzada en el medio, y entre esos dos momentos nada
+  garantizaba que el texto siguiera siendo el mismo. Peor: `PostPosture` hace
+  `ON CONFLICT ... DO UPDATE SET stance=excluded.stance`, así que **re-postear con la misma
+  etiqueta reemplaza la postura anterior en silencio**, sin error y sin rastro. El tally es
+  determinista sobre los VOTOS, pero no sobre el TEXTO que esos votos juzgaban: el recuento puede
+  ser perfectamente fiel a una discusión que ya no existe.
+
+  Un hallazgo congelado es una tripleta —id estable, huella del cuerpo canonizado, huella del árbol
+  contra el que se emitió— con dos comandos nuevos: `musubi receipt freeze --id <debate>/<lente>` y
+  `receipt verify`, con el cuerpo por **stdin**.
+
+  - **El cuerpo NO se guarda, sólo su huella.** No es ahorro de espacio: obliga a que quien verifica
+    tenga el texto en la mano. Un verificador que puede leer el texto del propio registro no está
+    verificando, se está mirando al espejo.
+  - **Canonizar CRLF y el salto final, y NADA más.** Las dos mitades importan: sin normalizar los
+    finales de línea, en Windows cada verificación diría «mutó» y el mecanismo se apaga en una
+    semana; normalizando de más —espacio interno, mayúsculas— «el índice puede estar vacío» y «el
+    índice **no** puede estar vacío» darían la misma huella y el congelado pasaría a **aprobar
+    mutaciones reales**. El banco sabotea las dos.
+  - **Tres motivos de rechazo distintos**, porque cada uno pide una acción distinta: congelar,
+    re-emitir, re-verificar. Colapsarlos haría que el agente reintente la acción equivocada.
+  - **Sinergia con el alcance decreciente:** la poda por árbol es media respuesta al «a la vuelta
+    k+1 sólo van los hallazgos abiertos» — tras un fix el árbol cambia y los viejos se caen solos.
+  - 🔴 **No se tocó `Compute` ni `Check`.** El plan proponía generalizar la aridad de `Compute`; no
+    se hizo, porque su propia regla es más fuerte —la función nueva va aparte aunque duplique
+    líneas— y porque si su salida cambiara un byte, **todos los recibos vigentes se invalidarían y
+    los push se bloquearían**. Queda una línea base con hexes literales, obtenidos corriéndola
+    ANTES de tocar nada.
+  - 11 sabotajes en ROJO y 7 casos verificados de punta a punta con un binario real.
+
+  Pendiente declarado: la skill todavía no ordena congelar. Cablear `adversarial-review` toca el
+  mismo bloque `Rules` que F2, F3 y F4, y sumar un cuarto editor del mismo texto multiplicaría el
+  conflicto de merge sin necesidad.
+
+### Changed
+- **El bucle de corrección deja de girar.** `adversarial-review` ordenaba, textualmente: *«iterá
+  (fix → re-debate) **hasta que el cambio sobreviva**»*. Tres defectos en una frase: **sin tope** de
+  vueltas, **sin alcance decreciente** —cada vuelta re-litigaba todo desde cero, incluidos los
+  hallazgos ya resueltos— y **sin salida definida**: la única condición de corte escrita era el
+  éxito.
+
+  Y el riesgo real no es girar para siempre: es que el agente, cansado, **apruebe**. Que es justo
+  lo que el paso anterior intenta evitar con «la postura por defecto es rechazar».
+
+  - **K = 3 vueltas** (2 si el cambio es trivial). Al agotarlas, el veredicto es **RECHAZADO POR
+    AGOTAMIENTO** y escala a una persona con el estado completo. El cansancio no aprueba.
+  - **Alcance decreciente**: a la vuelta k+1 sólo van los hallazgos **abiertos**.
+  - 🔴 **El bucle exterior es de DEBATES, no de rondas**, y eso no es una preferencia. Un tally con
+    máximo estricto —y `no_real` ganando **es** un ganador— ejecuta `UPDATE debates SET
+    status='closed'`; sobre un cerrado, `post`, `vote` y `advance` devuelven error y **ninguna
+    acción lo revive**. El camino obvio («una ronda más, y el tope lo hace cumplir `rounds`») no
+    existe. Ahora hay un test que lo sostiene: si alguien hiciera que `advance` reviviera un
+    cerrado, la skill quedaría enseñando algo falso en silencio.
+  - El estado entre debates viaja en el `topic`, que es texto libre y `action=status` devuelve
+    entero: `«<el cambio> · vuelta k/K · abiertos: <lente#hallazgo, …> · previo: <debate_id>»`.
+    La cadena queda auditable **sin tocar el esquema**.
+  - **Límite honesto:** el tope es **instruido, no exigido**. Nada en el código impide abrir la
+    vuelta K+1; es el trade-off consciente de esta fase.
+  - 7 sabotajes en ROJO. El que más importa es la **aserción negativa**: la frase sin tope no puede
+    volver por una reescritura futura. Va acompañada de las positivas porque, sola, la cumpliría
+    también alguien que borre el paso entero.
+
+- **El panel deja de ser un eco: modelo por juez, clase de evidencia y una compuerta.** Dos
+  problemas distintos que caían en las mismas dos tablas, y por eso van en una sola migración
+  (esquema **46 → 47**).
+
+  **Uno: dos jueces del mismo modelo no son dos opiniones.** La skill le daba a cada escéptico un
+  LENTE distinto y nada le daba un MODELO distinto. Peor: aunque alguien los lanzara con modelos
+  distintos, no había dónde guardarlo — `debate_postures` tenía `{round, agent, stance, created_at}`
+  y ni una columna de modelo. «Este cambio lo revisaron tres modelos distintos» era **inverificable
+  a posteriori**.
+
+  **Dos: un hallazgo con evidencia real pesaba lo mismo que una opinión.** El tally cuenta filas con
+  `GROUP BY choice`: un lente que corrió los tests pesaba igual que uno que leyó el diff y opinó, y
+  que uno que no pudo comprobar nada. La skill ya nombraba el riesgo en prosa —«un panel que opina
+  sin haber corrido nada es teatro de verificación»— **sin ningún mecanismo que lo hiciera cumplir**.
+
+  - `model` y `evidence` **nacen obligatorios** en `post` y `vote`, y `evidence` ∈ {`deterministica`,
+    `inferida`, `ninguna`}. Se pudo porque las tres tablas estaban en **cero filas** (medido en las
+    seis bases locales): sin datos vivos no hace falta default piadoso ni período de gracia.
+  - **La compuerta** (`gated_choice` al abrir): un veredicto aprobatorio no cierra si **ningún** voto
+    declaró evidencia determinística. Con tres propiedades que la separan de un candado, y que se
+    sostienen juntas: 🔴 **rechazar NUNCA lleva compuerta** —si eso fallara, lo construido sería una
+    máquina de aprobar por incapacidad—; **un solo** voto determinístico la desarma; y **no
+    reemplaza al quórum**, corre después. Sin `gated_choice`, todo es un no-op: **los nueve tests
+    preexistentes pasan sin tocarles una aserción**.
+  - ⚠️ El modelo va en su **propio campo** y no dentro de `agent`. `agent` es la clave única de las
+    dos tablas: un lente que cambiara de modelo entre rondas dejaría de ser el mismo votante y su
+    voto se **sumaría** en vez de reemplazar, inflando el total en silencio.
+  - **Límite honesto:** la clase de evidencia es una **declaración, no una prueba**. Detecta al panel
+    que no verificó nada; no al que miente.
+  - 11 sabotajes, cada invariante visto en ROJO.
+
+### Fixed
+- 🔴 **El golden de tools era ciego para las nueve tools dormidas, y no podía ponerse rojo.** La
+  regla 5 del repo dice que al cambiar una tool hay que regenerar el golden «o el build queda verde
+  y mal». Pero el golden congela `handleToolsList()`, que **filtra las dormidas**: se le cambió el
+  contrato a `musubi_debate` —dos campos OBLIGATORIOS nuevos—, se corrió con `-update` y **el
+  archivo no se movió un byte**.
+
+  Ahora hay un segundo golden con el catálogo COMPLETO (101 tools contra 92). Verificado con el
+  sabotaje que corresponde: al tocar la descripción de una tool dormida, el golden viejo sigue en
+  `ok` y el nuevo se pone en `FAIL`. Dormir una tool es una decisión sobre su VISIBILIDAD; no
+  debería ser también una decisión sobre si su contrato está protegido.
+
+- **La profundidad de la revisión sale del cambio, no del criterio de nadie.** `adversarial-review`
+  sugería el mismo panel para todo —`rounds=2`, `quorum=2 de 3`—: un typo en un comentario y una
+  refactorización con cuarenta llamadores recibían el mismo tribunal. Un criterio que no distingue
+  no es un criterio, y el costo cae siempre del mismo lado: **revisar de más enseña a saltearse la
+  revisión**.
+
+  `musubi_detect_changes` devuelve ahora `revision`: **siete señales enteras** del propio cambio
+  (archivos, líneas, símbolos, paquetes, callers y paquetes en el radio de impacto, y si hay
+  borrados), puntuadas por **escalones** 0-2 sobre un total de 13, con el desglose para poder
+  rehacer la cuenta a mano. De ahí sale el panel: `minima` 1/1/1 · `estandar` 3/2/2 · `profunda`
+  5/2/3. Escalones y no una curva continua a propósito: un número que no se puede recomputar de
+  cabeza no se discute, se obedece o se ignora.
+
+  - **Todo estaba y nada se juntaba.** El diff, los símbolos, `GraphImpactCtx`, la cobertura del
+    índice: las cinco piezas existían y **no había una sola ruta de código donde un `FileDiff`
+    terminara en una llamada al grafo**. Esta es esa ruta.
+  - 🔴 **El cero del radio era ambiguo, y ahora se desambigua.** Preguntarle al grafo por un símbolo
+    sin nodo devuelve cero callers — lo mismo que por uno al que no llama nadie. Ese cero es el
+    valor de fallo disfrazado de valor tranquilizador. Ahora se comprueba que el nodo EXISTA antes
+    de creerle; si el grafo no cubre algo, el nivel **no puede bajar a `minima`** y el motivo va
+    escrito. Consecuencia que conviene aceptar de entrada: en este repo `minima` va a ser raro
+    hasta que alguien indexe.
+  - **El borrado era el punto ciego.** `parseHunkNewRange` descarta los hunks de borrado puro (y
+    hace bien: los rangos son coordenadas del estado nuevo). Efecto lateral: borrar doscientas
+    líneas medía igual que no tocar nada. `FileDiff` gana `Agregadas`/`Borradas` y `líneas` es la
+    suma de las dos.
+  - **El techo de dos rondas no es un gusto:** es lo que el motor de debate soporta. Con más,
+    `AdvanceDebate` se vuelve un no-op mudo y el panel *cree* que debatió.
+  - 14 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. `Rules` de `adversarial-review` pasa de 3.120 a 3.936 runas (umbral 5.000).
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed

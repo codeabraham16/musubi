@@ -270,10 +270,12 @@ type WorkStore interface {
 // DebateStore — subsistema de debate multi-agente (Society of Minds) model-free: rondas de
 // posturas atribuidas + tally determinista por mayoría/quórum.
 type DebateStore interface {
-	OpenDebate(topic string, rounds, quorum int) (Debate, error)
-	PostPosture(debateID, agent, stance string) error
+	// gatedChoice: el choice que no puede ganar sin al menos un voto con evidencia
+	// deterministica. Vacio = sin compuerta = el comportamiento de siempre.
+	OpenDebate(topic string, rounds, quorum int, gatedChoice string) (Debate, error)
+	PostPosture(debateID, agent, stance, model, evidence string) error
 	AdvanceDebate(debateID string) (int, []DebatePosture, error)
-	CastVote(debateID, agent, choice string) error
+	CastVote(debateID, agent, choice, model, evidence string) error
 	TallyDebate(debateID string) (TallyResult, Debate, error)
 	DebateStatus(debateID string) (Debate, []DebatePosture, []DebateVote, error)
 }

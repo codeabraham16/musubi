@@ -416,3 +416,71 @@ func TestManagedSkillCorruptPreserved(t *testing.T) {
 		t.Error("un archivo corrupto debe preservarse (no pisarse)")
 	}
 }
+
+// ★ EL BUCLE DE CORRECCIÓN TIENE TOPE, Y ESO SE CUIDA CON UNA ASERCIÓN NEGATIVA.
+//
+// La skill ordenaba, textualmente, «iterá (fix → re-debate) HASTA QUE EL CAMBIO SOBREVIVA».
+// Tres defectos en una frase: sin tope de vueltas, sin alcance decreciente (cada vuelta
+// re-litigaba todo desde cero, incluidos los hallazgos ya resueltos) y sin salida definida —
+// la única condición de corte escrita era el éxito.
+//
+// El riesgo real no es girar para siempre: es que el agente, cansado, APRUEBE. Que es justo
+// lo que el paso anterior intenta evitar con «la postura por defecto es rechazar».
+//
+// La aserción NEGATIVA es la que importa acá, y por eso va acompañada: sola, la cumpliría
+// también alguien que borre el paso entero. Las dos juntas dicen «el bucle existe Y está
+// acotado», que es lo que hay que sostener contra una reescritura futura.
+func TestAdversarialReviewNoOrdenaUnBucleSinTope(t *testing.T) {
+	m := skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}}))
+	rev, ok := m["adversarial-review"]
+	if !ok {
+		t.Fatal("falta la skill adversarial-review en el bundle")
+	}
+
+	// La negativa: la orden sin salida no puede volver por ninguna reescritura.
+	if strings.Contains(rev.Rules, "hasta que el cambio sobreviva") {
+		t.Error("volvió el bucle sin tope: «iterá hasta que el cambio sobreviva» no tiene condición de corte " +
+			"salvo el éxito, y un bucle cuya única salida es aprobar termina aprobando")
+	}
+
+	// Y la positiva, para que la negativa no se cumpla por omisión.
+	for _, must := range []struct{ frag, porque string }{
+		{"vuelta k/K", "el bucle necesita un contador visible en el topic para poder auditarse"},
+		{"RECHAZADO POR AGOTAMIENTO", "agotar las vueltas tiene que ser un veredicto, no un limbo"},
+		{"sólo van los hallazgos ABIERTOS", "sin alcance decreciente, cada vuelta re-litiga lo ya resuelto"},
+		{"EL CANSANCIO NO APRUEBA", "hay que nombrar el riesgo real, que no es girar sino ceder"},
+	} {
+		if !strings.Contains(rev.Rules, must.frag) {
+			t.Errorf("falta %q en la skill: %s", must.frag, must.porque)
+		}
+	}
+
+	// La forma del bucle es un DEBATE nuevo, no una ronda más. Está sostenido por
+	// TestUnDebateCerradoNoRevivePorNingunCamino: si la skill dijera «una ronda más», estaría
+	// enseñando algo que el motor rechaza con un error.
+	if !strings.Contains(rev.Rules, "UN DEBATE NUEVO") {
+		t.Error("la skill tiene que decir que la vuelta siguiente es un debate NUEVO: un tally con máximo " +
+			"estricto cierra el debate y ninguna acción lo revive")
+	}
+}
+
+// EL PRESUPUESTO DE LA SKILL SE MIDE EN CADA PR, NO SE DESCUBRE EN EL CUARTO.
+//
+// Cuatro de las seis fases de este track escriben en el mismo campo `Rules`, y ninguna podía
+// ver el problema mirándose a sí misma: la suma cruzó el umbral `rules_too_long` recién al
+// integrarlas. Se resolvió podando lo que el CÓDIGO ya ejecuta —la profundidad no se explica,
+// se lee de `revision`— y quedó con poco margen.
+//
+// `rules_too_long` es un WARNING y `report.OK()` sólo mira errores, así que el gate de calidad
+// no se pone rojo por esto: un umbral que nada puede hacer fallar se cruza y nadie se entera.
+// Este test es lo que lo hace fallar.
+func TestElPresupuestoDeLasRulesNoSeCruzaEnSilencio(t *testing.T) {
+	for nombre, sk := range skillsByName(cognitiveSkills([]detector.StackResult{{Ecosystem: "Go"}})) {
+		n := len([]rune(sk.Rules))
+		if n > skills.RulesMaxChars {
+			t.Errorf("las rules de %q miden %d runas y el umbral es %d (sobran %d). "+
+				"Podá lo que el código ya ejecuta antes de agregar más texto.",
+				nombre, n, skills.RulesMaxChars, n-skills.RulesMaxChars)
+		}
+	}
+}
