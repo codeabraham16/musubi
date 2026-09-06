@@ -208,3 +208,48 @@ func TestDebateNoVotesNoConsensus(t *testing.T) {
 		t.Error("sin votos el debate sigue open")
 	}
 }
+
+// UN DEBATE CERRADO NO REVIVE POR NINGÚN CAMINO, y eso decide la FORMA del bucle de
+// corrección, no sólo una guarda más.
+//
+// El camino obvio para «corregir e iterar» es «una ronda más del mismo debate, y el tope lo
+// hace cumplir `rounds`, que ya existe». No funciona, y el motivo es estructural: cuando hay
+// máximo estricto con quórum —y no_real ganando ES un ganador— TallyDebate ejecuta
+// UPDATE debates SET status='closed'. A partir de ahí no hay acción que lo reabra.
+//
+// O sea: el bucle exterior es un bucle de DEBATES, no de rondas. La skill instruye eso, y
+// esta prueba es lo que sostiene la instrucción: si alguien hiciera que advance (o cualquier
+// otra) reviviera un cerrado, la skill quedaría enseñando algo falso EN SILENCIO.
+func TestUnDebateCerradoNoRevivePorNingunCamino(t *testing.T) {
+	e := newTestEngine(t)
+	d, err := e.OpenDebate("¿sobrevive el cambio?", 3, 0)
+	if err != nil {
+		t.Fatalf("OpenDebate: %v", err)
+	}
+	if err := e.CastVote(d.ID, "correctitud", "no_real"); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+	res, _, err := e.TallyDebate(d.ID)
+	if err != nil {
+		t.Fatalf("tally: %v", err)
+	}
+	// Precondición del sabotaje: si el debate NO quedó cerrado, lo de abajo no prueba nada.
+	if !res.Decided || res.Winner != "no_real" {
+		t.Fatalf("precondición: el tally tenía que cerrar con no_real, obtuve %+v", res)
+	}
+
+	if err := e.PostPosture(d.ID, "beto", "tarde"); err == nil {
+		t.Error("postear en un debate cerrado debe fallar")
+	}
+	if err := e.CastVote(d.ID, "beto", "real"); err == nil {
+		t.Error("votar en un debate cerrado debe fallar: si se pudiera, el veredicto persistido dejaría de ser definitivo")
+	}
+	if _, _, err := e.AdvanceDebate(d.ID); err == nil {
+		t.Error("avanzar un debate cerrado debe fallar: es el camino por el que alguien intentaría «una vuelta más» sobre el mismo debate")
+	}
+	// Lo que SÍ tiene que seguir andando: leerlo. La vuelta siguiente necesita el estado
+	// del debate previo para armar su topic, y sin status esa cadena no se puede auditar.
+	if _, _, _, err := e.DebateStatus(d.ID); err != nil {
+		t.Errorf("un debate cerrado tiene que poder leerse: es de donde sale el estado de la vuelta siguiente; %v", err)
+	}
+}
