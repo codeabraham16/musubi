@@ -7,6 +7,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`musubi arnes`: medir si el arnés de revisión se encendió de verdad.** Todo el resto de este
+  track mejora un arnés que hoy corre **cero veces**. El modo de falla dominante de este repo está
+  medido y tiene nombre —*se construye y no se enciende*— así que cerrar un plan sobre encendido
+  sin la pieza que comprueba el encendido sería, exactamente, repetirlo.
+
+  Cuatro preguntas, cada una con su fuente:
+
+  | | de dónde sale |
+  |---|---|
+  | ¿el gate disparó? | tokens de la superficie `review_gate` en el ledger |
+  | ¿alguien lo obedeció? | llamadas a `musubi_debate` en el uso de tools |
+  | ¿los debates cierran? | filas de `debates` cerradas contra abiertas |
+  | ¿cuántas vueltas toma una corrección? | las cadenas `vuelta k/K` del `topic` |
+
+  - 🔴 **Lo que más importa no es medir, es DISTINGUIR.** Un cero significa dos cosas opuestas que
+    piden lo contrario una de la otra: si el bloque **nunca se inyectó**, el problema es el
+    mecanismo y hay que arreglarlo; si se inyectó y **nadie lo siguió**, el problema es la
+    hipótesis y hay que **dejar de agregar piezas**. Confundirlas es exactamente cómo se termina
+    poniéndole la séptima pieza a algo que nadie iba a usar. Por eso hay cuatro veredictos
+    —APAGADO, SE USA SIN EL GATE, IGNORADO, A MEDIO CAMINO, ENCENDIDO— y no un porcentaje.
+  - **El criterio de éxito está escrito EN EL CÓDIGO, antes de medir:** si a las dos semanas el
+    gate disparó y `musubi_debate` sigue en cero, el problema no era el catálogo ni el texto de la
+    skill. Escribirlo ahora es lo que evita explicar el cero a posteriori.
+  - **El K=3 de las vueltas es un juicio, no una medición**, y el comando lo dice mientras no haya
+    cadenas que contar — en vez de mostrar un cero mudo.
+  - 7 sabotajes en ROJO. El que sostiene la fase es el primero: que los dos ceros no den el mismo
+    veredicto.
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed

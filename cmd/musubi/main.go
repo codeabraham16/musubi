@@ -54,6 +54,8 @@ func main() {
 		runDetect()
 	case "turn":
 		runTurn()
+	case "arnes":
+		runArnes(os.Args[2:])
 	case "receipt":
 		runReceipt(os.Args[2:])
 	case "precheck":
