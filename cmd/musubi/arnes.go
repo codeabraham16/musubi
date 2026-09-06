@@ -45,6 +45,7 @@ const ventanaPorDefecto = 14
 // MedicionArnes son las cuatro señales, ya recolectadas.
 type MedicionArnes struct {
 	Dias           int    `json:"dias"`
+	Evaluaciones   int    `json:"evaluaciones_del_gate"`
 	TokensGate     int    `json:"tokens_review_gate"`
 	LlamadasDebate int    `json:"llamadas_musubi_debate"`
 	Abiertos       int    `json:"debates_abiertos"`
@@ -80,8 +81,16 @@ func vueltasDeTopics(topics []string) []int {
 // Los cuatro estados no son grados de lo mismo: cada uno pide una acción distinta.
 func veredictoArnes(m MedicionArnes) (veredicto, diagnostico string) {
 	switch {
+	// EL TERCER CERO, que este comando no veía y encontré corriéndolo: el gate midió el árbol,
+	// no tenía nada que avisar y por eso no imputó tokens. Leer eso como «no se inyectó nunca»
+	// manda a revisar un cableado que funciona. Es la misma confusión que este comando existe
+	// para evitar, una capa más abajo.
+	case m.TokensGate == 0 && m.Evaluaciones > 0 && m.LlamadasDebate == 0:
+		return "EN REPOSO", fmt.Sprintf("el gate CORRIÓ %d vez/veces y no tuvo nada que avisar: el árbol estuvo "+
+			"limpio o por debajo del umbral (2 archivos de producción o 40 líneas). El cableado funciona; "+
+			"todavía no hay evidencia sobre si alguien lo seguiría.", m.Evaluaciones)
 	case m.TokensGate == 0 && m.LlamadasDebate == 0:
-		return "APAGADO", "el bloque del gate no se inyectó NI UNA VEZ (0 tokens en la superficie review_gate). " +
+		return "APAGADO", "el bloque del gate no se inyectó NI UNA VEZ y NUNCA llegó a medir el árbol. " +
 			"Antes de tocar la skill: comprobá que el hook UserPromptSubmit corra el binario nuevo, y que " +
 			"MUSUBI_REVIEW_GATE no esté en 0. El problema es de cableado, no de texto."
 	case m.TokensGate == 0 && m.LlamadasDebate > 0:
@@ -132,6 +141,12 @@ func runArnes(args []string) {
 	if l, lerr := eng.LedgerStatus(); lerr == nil {
 		m.TokensGate = l.Surfaces["review_gate"]
 	}
+	// Y CUÁNTAS VECES CORRIÓ, que es distinto de cuántas veces habló.
+	if raw, ok, merr := eng.GetMeta("loop_reviewgate_evaluado"); merr == nil && ok {
+		if n, cerr := strconv.Atoi(strings.TrimSpace(raw)); cerr == nil {
+			m.Evaluaciones = n
+		}
+	}
 	// 2) ¿Alguien lo obedeció?
 	if filas, uerr := eng.ToolUsage(ctx, dias); uerr == nil {
 		for _, f := range filas {
@@ -154,6 +169,7 @@ func runArnes(args []string) {
 		return
 	}
 	fmt.Printf("Arnés de revisión — ventana de %d día(s)\n\n", m.Dias)
+	fmt.Printf("  0. ¿el gate llegó a correr?   %s\n", conCero(m.Evaluaciones, "mediciones del árbol"))
 	fmt.Printf("  1. ¿el gate disparó?          %s\n", conCero(m.TokensGate, "tokens en la superficie review_gate"))
 	fmt.Printf("  2. ¿alguien lo obedeció?      %s\n", conCero(m.LlamadasDebate, "llamadas a musubi_debate"))
 	fmt.Printf("  3. ¿los debates cierran?      %d cerrado(s), %d abierto(s)\n", m.Cerrados, m.Abiertos)

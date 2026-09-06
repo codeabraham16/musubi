@@ -335,3 +335,21 @@ func TestG10TurnOutputSinSondaNoTraeElGate(t *testing.T) {
 		t.Errorf("sin sonda el gate no debe aparecer (es lo que mantiene a los demás tests independientes del árbol real); obtuve:\n%s", ctx)
 	}
 }
+
+// G11: el gate no avisa sobre su PROPIO workspace.
+//
+// Encontrado en una prueba de punta a punta: en un repo recién creado, `.musubi/config.yaml` y
+// `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
+// justo el umbral. O sea que el gate se avisaba a sí mismo. Un aviso que salta por el ruido de la
+// propia herramienta es el que enseña a ignorar la herramienta.
+func TestG11ElGateNoCuentaSuPropioWorkspace(t *testing.T) {
+	for _, ruta := range []string{".musubi/config.yaml", ".musubi/config.example.yaml", "sub/.musubi/config.yaml"} {
+		if esProduccion(ruta) {
+			t.Errorf("%q es estado de Musubi, no código de producción de nadie", ruta)
+		}
+	}
+	// Pero un archivo que sólo MENCIONA musubi sigue contando: la exclusión es del directorio.
+	if !esProduccion("internal/musubi/motor.go") {
+		t.Error("la exclusión es del directorio .musubi/, no de todo lo que se llame musubi")
+	}
+}

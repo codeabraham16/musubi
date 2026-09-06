@@ -107,6 +107,10 @@ func TestElGoldenCompletoVeMasQueElVisible(t *testing.T) {
 		}
 		return bytes.Count(b, []byte(`"name":`))
 	}
+	// El VISIBLE se mide con el entorno FIJADO. Sin esto, en una máquina que ya tenga
+	// MUSUBI_TOOLS_ALL=1 puesto los dos lados dan 101 y este test se pone rojo — el mismo
+	// defecto contra el que existe, cometido en el propio archivo.
+	t.Setenv("MUSUBI_TOOLS_ALL", "")
 	visible := cuantas()
 	t.Setenv("MUSUBI_TOOLS_ALL", "1")
 	completo := cuantas()

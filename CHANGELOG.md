@@ -8,6 +8,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
+  `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
+  no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se
+  inyectó nunca, es un problema de cableado», mandando a arreglar algo que funciona.
+
+  Es **exactamente la confusión que `musubi arnes` existe para evitar**, una capa más abajo: un cero
+  que sirve a la vez de valor de fallo y de valor tranquilizador. Ahora el gate cuenta las veces que
+  **midió**, no sólo las que habló, y hay tres veredictos donde había dos: `APAGADO` (nunca midió) ·
+  `EN REPOSO` (midió N veces y no tuvo nada que avisar) · `IGNORADO` (avisó y nadie lo siguió).
+  Verificado de punta a punta con los tres casos.
+- **Ocho tests del paquete `mcp` se ponían rojos si tenías `MUSUBI_TOOLS_ALL=1`.** Es un
+  interruptor **documentado** —devuelve al catálogo las nueve tools dormidas sin recompilar— y
+  media docena de tests afirman sobre la FORMA de ese catálogo heredando la variable del entorno.
+  Resultado: **rojos en la máquina de quien la usa, verdes en CI**, que no la tiene. El peor rojo
+  posible: el que sólo ve quien trabaja, y que por eso se aprende a ignorar.
+
+  Se arregla en el nivel correcto —un `TestMain` del paquete, no test por test— porque lo que se
+  hereda no es el dato de un caso sino la configuración global sobre la que casi todos afirman.
+  Verificado: sin el `TestMain` caen 8; con él, 0.
+- **El gate avisaba sobre su propio workspace.** En un repo recién creado, `.musubi/config.yaml` y
+  `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
+  justo el umbral. El gate se avisaba a sí mismo, y un aviso que salta por el ruido de la propia
+  herramienta es el que enseña a ignorar la herramienta.
 - **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
   - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
     llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan

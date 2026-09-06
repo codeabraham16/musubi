@@ -125,3 +125,36 @@ func TestM8ElCeroSeDiceConLetras(t *testing.T) {
 		t.Errorf("un número normal no; obtuve %q", s)
 	}
 }
+
+// --- M9 🔴: el TERCER cero — el gate corrió y no tuvo nada que avisar ---------------------
+//
+// Este test existe porque el comando falló su propia prueba en producción. Corrí `musubi arnes`
+// contra el repo de verdad, el árbol estaba limpio, el gate midió y no habló —comportamiento
+// correcto— y el veredicto dijo APAGADO: «el problema es de cableado». Mandaba a arreglar algo
+// que funcionaba.
+//
+// Es exactamente la confusión que este comando existe para evitar, una capa más abajo: un cero
+// que sirve a la vez de valor de fallo y de valor tranquilizador. Por eso el gate ahora cuenta
+// las veces que MIDIÓ, no sólo las que habló.
+func TestM9ElGateQueCorrioYCalloNoEsElGateQueNuncaCorrio(t *testing.T) {
+	nuncaCorrio, _ := veredictoArnes(MedicionArnes{Evaluaciones: 0, TokensGate: 0, LlamadasDebate: 0})
+	corrioYCallo, diag := veredictoArnes(MedicionArnes{Evaluaciones: 42, TokensGate: 0, LlamadasDebate: 0})
+
+	if nuncaCorrio == corrioYCallo {
+		t.Fatalf("«nunca midió» y «midió 42 veces y no tuvo nada que decir» piden acciones OPUESTAS "+
+			"—arreglar el cableado contra esperar— y no pueden dar el mismo veredicto (%q)", nuncaCorrio)
+	}
+	if nuncaCorrio != "APAGADO" {
+		t.Errorf("sin una sola medición el veredicto es APAGADO, obtuve %q", nuncaCorrio)
+	}
+	if corrioYCallo != "EN REPOSO" {
+		t.Errorf("con mediciones y sin avisos el veredicto es EN REPOSO, obtuve %q", corrioYCallo)
+	}
+	// Y no puede sugerir que el cableado esté mal, que es lo que hacía.
+	if strings.Contains(diag, "cableado, no de texto") {
+		t.Errorf("EN REPOSO no manda a revisar el cableado: funciona. Obtuve %q", diag)
+	}
+	if !strings.Contains(diag, "42") {
+		t.Errorf("el diagnóstico tiene que decir CUÁNTAS veces corrió, o el «en reposo» no se puede auditar; obtuve %q", diag)
+	}
+}

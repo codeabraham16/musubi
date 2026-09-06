@@ -40,6 +40,18 @@ import (
 // SANGRA entre sesiones y una sesión nueva nace creyendo que ya avisó.
 const metaReviewGateInjected = "loop_reviewgate_injected"
 
+// metaReviewGateEvaluado cuenta cuántas veces el gate MIDIÓ el árbol, hable o no.
+//
+// Sin esto, «cero tokens en review_gate» significa DOS cosas incompatibles: que el gate
+// nunca corrió (problema de cableado) o que corrió y no tenía nada que avisar porque el
+// árbol estaba limpio (comportamiento correcto). Es exactamente el mismo defecto que este
+// track persigue en todos lados — un cero que sirve de valor de fallo y de valor
+// tranquilizador— y lo encontré corriendo `musubi arnes` contra el repo de verdad.
+//
+// No lleva sufijo de sesión a propósito: es un acumulado del workspace, y la pregunta que
+// contesta («¿esto llegó a correr alguna vez?») no es por sesión.
+const metaReviewGateEvaluado = "loop_reviewgate_evaluado"
+
 const (
 	// Umbrales. Cualquiera de los dos alcanza: dos archivos de producción tocados ya
 	// es un cambio con superficie, y cuarenta líneas en UN archivo también. Exigir las
@@ -123,6 +135,14 @@ func esProduccion(ruta string) bool {
 		return false
 	}
 	if strings.HasSuffix(p, "_test.go") {
+		return false
+	}
+	// El propio workspace de Musubi no es código de producción de nadie. Sin esto, en cualquier
+	// proyecto donde `.musubi/config.yaml` quede sin trackear el gate avisa sobre SUS PROPIOS
+	// archivos — y un aviso que salta por el ruido de la herramienta es el que enseña a ignorar
+	// la herramienta. Medido de punta a punta: dos archivos de `.musubi/` alcanzaban para
+	// cruzar el umbral en un repo recién creado.
+	if strings.HasPrefix(p, ".musubi/") || strings.Contains(p, "/.musubi/") {
 		return false
 	}
 	switch filepath.Ext(p) {
@@ -272,6 +292,10 @@ func buildReviewGate(store turnStore, sessionID string, probe gateProbe) string 
 	if err != nil {
 		return "" // sin repo, o git no contesta: el gate no es motivo para romper nada
 	}
+	// Llegar hasta acá es haber MEDIDO el árbol. Se anota antes de decidir si hay algo que
+	// decir, porque la pregunta que este contador contesta es «¿el gate corre?», no «¿avisó?».
+	evaluado, _ := readIntMeta(store, metaReviewGateEvaluado)
+	_ = store.SetMeta(metaReviewGateEvaluado, strconv.Itoa(evaluado+1))
 	if !t.cruzaUmbral() {
 		return ""
 	}
