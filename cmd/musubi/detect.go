@@ -281,6 +281,27 @@ func resumirStack(resultados []detector.StackResult) string {
 // assembleHookContext combina los bloques no vacíos (en orden) en el envelope
 // JSON de hookSpecificOutput para el evento eventName (ej. "SessionStart" o
 // "UserPromptSubmit"). Devuelve "" si no hay nada que inyectar.
+// eventosQueLlevanContexto son los eventos de hook cuyo hookSpecificOutput ACEPTA el campo
+// additionalContext. No es una lista de preferencias: es el contrato del otro lado.
+//
+// POR QUE EXISTE. El hook PreCompact estuvo tres semanas muerto sin que nadie lo notara.
+// "PreCompact" no esta en el enum del validador, asi que Claude Code descartaba el envelope
+// entero, en silencio, en cada compactacion. Y el test de ese hook seguia en VERDE porque
+// verificaba NUESTRO json —que el campo dijera "PreCompact"— en vez de verificar que el otro
+// lado lo aceptara. Un test que espera el proxy en vez de la cosa.
+//
+// Un evento que no este en este mapa no se emite y se avisa por stderr. Preferir mudo y
+// ruidoso antes que un envelope que se descarta callado.
+var eventosQueLlevanContexto = map[string]bool{
+	"SessionStart":     true, // verificado en vivo: el priming del arranque llega
+	"UserPromptSubmit": true, // verificado en vivo: la memoria por turno llega
+	"PreToolUse":       true, // lo usa precheck.go junto a permissionDecision
+	"PostToolUse":      true, // documentado en el esquema del validador
+	"PostToolBatch":    true, // documentado en el esquema del validador
+	"Stop":             true, // documentado en el esquema del validador
+	"SubagentStop":     true, // documentado en el esquema del validador
+}
+
 func assembleHookContext(eventName string, bloques ...string) string {
 	var partes []string
 	for _, b := range bloques {
@@ -289,6 +310,16 @@ func assembleHookContext(eventName string, bloques ...string) string {
 		}
 	}
 	if len(partes) == 0 {
+		return ""
+	}
+	// LA GUARDA. Claude Code valida hookSpecificOutput.hookEventName contra un enum y, si el
+	// evento no figura, descarta el objeto ENTERO sin que el hook se entere: sale por stdout,
+	// nadie lo lee, y el subcomando termina con exito. Emitir para un evento que no lleva
+	// contexto es estrictamente peor que no emitir, porque ademas imprime un error de
+	// validacion en cada disparo.
+	if !eventosQueLlevanContexto[eventName] {
+		fmt.Fprintf(os.Stderr, "musubi: el evento %q no admite additionalContext; el bloque NO se emite "+
+			"(el envelope habria sido descartado en silencio)\n", eventName)
 		return ""
 	}
 	contexto := strings.Join(partes, "\n\n")

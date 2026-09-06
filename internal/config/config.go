@@ -263,6 +263,17 @@ type LoopConfig struct {
 	// ReminderAfterTurns es la cantidad de turnos sin guardar tras la cual se inyecta
 	// el recordatorio de captura (default 5).
 	ReminderAfterTurns int `yaml:"reminder_after_turns"`
+	// DurableNudgeAfterTurns es la cantidad de turnos de una sesion tras la cual se
+	// inyecta, UNA sola vez, el aviso de bajar lo durable a CUARENTENA (default 20).
+	// Un valor negativo lo apaga; 0 significa "usar el default", como el resto de los
+	// numericos de esta seccion.
+	//
+	// El umbral es un PROXY y conviene decirlo: lo que habria que medir es "la
+	// conversacion esta por compactarse", y eso Musubi no lo puede ver —el tamano del
+	// contexto no llega a los hooks—. La cantidad de turnos es lo mas cercano que hay.
+	// El aviso vivia en el hook PreCompact, que era el instante exacto; ese evento no
+	// admite inyectar contexto al modelo, asi que el instante exacto no esta disponible.
+	DurableNudgeAfterTurns int `yaml:"durable_nudge_after_turns"`
 	// DeltaInjection inyecta por turno SOLO la memoria nueva o modificada respecto
 	// de lo ya inyectado en la sesión (en vez de re-inyectar todo cada turno).
 	// Ahorra tokens y evita churnear el contexto (cache-considerate) (default true).
@@ -1180,12 +1191,13 @@ func Default() Config {
 			Shadow: ShadowConfig{Queue: 64},
 		},
 		Loop: LoopConfig{
-			PerTurnRecall:      true,
-			RecallBudget:       250,
-			SurfaceConflicts:   true,
-			CaptureReminder:    true,
-			ReminderAfterTurns: 5,
-			DeltaInjection:     true,
+			PerTurnRecall:          true,
+			RecallBudget:           250,
+			SurfaceConflicts:       true,
+			CaptureReminder:        true,
+			ReminderAfterTurns:     5,
+			DurableNudgeAfterTurns: 20,
+			DeltaInjection:         true,
 		},
 		Pipeline: PipelineConfig{
 			Enabled: true,
@@ -1534,6 +1546,9 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Loop.ReminderAfterTurns == 0 {
 			c.Loop.ReminderAfterTurns = d.Loop.ReminderAfterTurns
+		}
+		if c.Loop.DurableNudgeAfterTurns == 0 {
+			c.Loop.DurableNudgeAfterTurns = d.Loop.DurableNudgeAfterTurns
 		}
 	}
 
