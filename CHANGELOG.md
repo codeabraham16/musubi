@@ -7,6 +7,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La profundidad de la revisión sale del cambio, no del criterio de nadie.** `adversarial-review`
+  sugería el mismo panel para todo —`rounds=2`, `quorum=2 de 3`—: un typo en un comentario y una
+  refactorización con cuarenta llamadores recibían el mismo tribunal. Un criterio que no distingue
+  no es un criterio, y el costo cae siempre del mismo lado: **revisar de más enseña a saltearse la
+  revisión**.
+
+  `musubi_detect_changes` devuelve ahora `revision`: **siete señales enteras** del propio cambio
+  (archivos, líneas, símbolos, paquetes, callers y paquetes en el radio de impacto, y si hay
+  borrados), puntuadas por **escalones** 0-2 sobre un total de 13, con el desglose para poder
+  rehacer la cuenta a mano. De ahí sale el panel: `minima` 1/1/1 · `estandar` 3/2/2 · `profunda`
+  5/2/3. Escalones y no una curva continua a propósito: un número que no se puede recomputar de
+  cabeza no se discute, se obedece o se ignora.
+
+  - **Todo estaba y nada se juntaba.** El diff, los símbolos, `GraphImpactCtx`, la cobertura del
+    índice: las cinco piezas existían y **no había una sola ruta de código donde un `FileDiff`
+    terminara en una llamada al grafo**. Esta es esa ruta.
+  - 🔴 **El cero del radio era ambiguo, y ahora se desambigua.** Preguntarle al grafo por un símbolo
+    sin nodo devuelve cero callers — lo mismo que por uno al que no llama nadie. Ese cero es el
+    valor de fallo disfrazado de valor tranquilizador. Ahora se comprueba que el nodo EXISTA antes
+    de creerle; si el grafo no cubre algo, el nivel **no puede bajar a `minima`** y el motivo va
+    escrito. Consecuencia que conviene aceptar de entrada: en este repo `minima` va a ser raro
+    hasta que alguien indexe.
+  - **El borrado era el punto ciego.** `parseHunkNewRange` descarta los hunks de borrado puro (y
+    hace bien: los rangos son coordenadas del estado nuevo). Efecto lateral: borrar doscientas
+    líneas medía igual que no tocar nada. `FileDiff` gana `Agregadas`/`Borradas` y `líneas` es la
+    suma de las dos.
+  - **El techo de dos rondas no es un gusto:** es lo que el motor de debate soporta. Con más,
+    `AdvanceDebate` se vuelve un no-op mudo y el panel *cree* que debatió.
+  - 14 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. `Rules` de `adversarial-review` pasa de 3.120 a 3.936 runas (umbral 5.000).
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed
