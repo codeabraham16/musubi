@@ -737,13 +737,15 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	if god == nil {
 		god = []memory.GraphDegree{}
 	}
-	entry, _ := s.engine.GraphEntryPointsCtx(scoped, 25)
+	const tapaEntry = 25
+	entry, totalEntry, _ := s.engine.GraphEntryPointsCtx(scoped, tapaEntry)
 	if entry == nil {
 		entry = []string{}
 	}
 	stale, ghosts, missing := s.graphFreshness(scoped)
 	return jsonResult(map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
+		"total_entry_points": totalEntry, "entry_points_truncated": totalEntry > len(entry),
 		"stale": stale, "ghosts": ghosts, "missing": missing,
 	})
 }

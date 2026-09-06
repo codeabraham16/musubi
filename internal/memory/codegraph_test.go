@@ -66,9 +66,12 @@ func TestCodeGraphQueries(t *testing.T) {
 	}
 
 	// Entry points: main (nadie lo llama). helper y worker SÍ son llamados.
-	ep, err := e.GraphEntryPointsCtx(ctx, 10)
+	ep, totalEp, err := e.GraphEntryPointsCtx(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if totalEp != len(ep) {
+		t.Errorf("total = %d con %d devueltos: sin recorte tienen que coincidir", totalEp, len(ep))
 	}
 	epset := map[string]bool{}
 	for _, k := range ep {
