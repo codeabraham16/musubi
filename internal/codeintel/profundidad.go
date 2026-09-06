@@ -63,9 +63,16 @@ type Senales struct {
 	// Del grafo de código: el radio de impacto del cambio.
 	CallersEnRadio  int `json:"callers_en_radio"`
 	PaquetesEnRadio int `json:"paquetes_en_radio"`
-	// Séptima: si el cambio BORRA. Va aparte porque un borrado no deja rastro en las otras —
-	// un hunk que sólo borra produce cero líneas nuevas y cero símbolos nuevos, así que sin
-	// esta señal el cambio más destructivo posible puntúa como el más inocente.
+	// Séptima: si el cambio SACA código, no si tocó una línea que existía.
+	//
+	// La distinción no es un matiz — es la diferencia entre una señal y una constante. En un
+	// diff unificado, MODIFICAR una línea se representa como un borrado más un agregado, así
+	// que «hay al menos una línea borrada» es cierto en casi todo cambio: medido sobre los PRs
+	// de este repo, se encendía en el 83%. Una señal que se enciende cuatro de cada cinco veces
+	// no ordena nada; le suma un punto a todo el mundo y desplaza la escala entera.
+	//
+	// Lo que sí es raro y sí importa —un archivo borrado entero, o uno donde el cambio saca más
+	// de lo que pone— pasa en el 12%. Eso es lo que mide ahora.
 	HayBorrados bool `json:"hay_borrados"`
 
 	// RadioCiego es el PISO DE HONESTIDAD, y no es una señal más: dice que el radio de impacto
@@ -105,25 +112,56 @@ func escalon(valor, bajo, alto int) int {
 	}
 }
 
+// Los escalones y los cortes, CALIBRADOS CONTRA LOS PRs DE ESTE REPO (2026-09-06).
+//
+// La primera versión eligió estos números a ojo, y la medición mostró lo caro que sale: sobre
+// los 108 PRs reales —descontados los back-merges, que no son un PR sino «todo lo que main
+// ganó», y los duplicados— el reparto era 1% mínima / 30% estándar / 67% profunda. Dos de cada
+// tres cambios pedían el panel más caro, así que el número había dejado de ser una decisión.
+//
+// La causa era que cada `alto` estaba POR DEBAJO de la mediana observada: `lineas` topeaba en
+// 200 con una mediana de 373, `simbolos` en 9 con una mediana de 15. Seis de cada diez PRs
+// sacaban el máximo en esas dos, y una señal que casi siempre topea no ordena nada.
+//
+// Ahora cada borde sale de un cuantil medido —`bajo` cerca del P33, `alto` cerca del P75— y se
+// redondea a un número que una persona pueda rehacer de cabeza, que es la razón de ser de los
+// escalones. Reparto resultante: 22% / 49% / 28%.
+//
+// AL RECALIBRAR: la medición se rehace con el grafo indexado (sin él las dos señales del radio
+// dan 0 y todo puntaje es un piso), sobre el diff de cada merge contra su primer padre, y
+// llamando a estas mismas funciones. Una reimplementación mediría otra cosa.
+const (
+	archivosBajo, archivosAlto = 4, 12
+	lineasBajo, lineasAlto     = 150, 800
+	simbolosBajo, simbolosAlto = 7, 40
+	paquetesBajo, paquetesAlto = 2, 5
+	callersBajo, callersAlto   = 4, 35
+	radioPkgBajo, radioPkgAlto = 1, 2
+
+	// Los cortes de nivel sobre el total de 0..13.
+	corteMinima   = 2
+	corteEstandar = 7
+)
+
 // Profundidad convierte las señales en un nivel de revisión.
 //
 // El total va de 0 a 13 (seis señales de hasta 2 puntos, más la de borrados). Los cortes:
 //
 //	0-2   mínima     1 juez  · 1 ronda  · quórum 1
-//	3-6   estándar   3 jueces· 2 rondas · quórum 2
-//	>=7   profunda   5 jueces· 2 rondas · quórum 3
+//	3-7   estándar   3 jueces· 2 rondas · quórum 2
+//	>=8   profunda   5 jueces· 2 rondas · quórum 3
 func Profundidad(s Senales) Veredicto {
 	puntoBorrados := 0
 	if s.HayBorrados {
 		puntoBorrados = 1
 	}
 	senales := []Senal{
-		{"archivos", fmt.Sprint(s.Archivos), escalon(s.Archivos, 2, 9)},
-		{"lineas", fmt.Sprint(s.Lineas), escalon(s.Lineas, 30, 200)},
-		{"simbolos", fmt.Sprint(s.Simbolos), escalon(s.Simbolos, 2, 9)},
-		{"paquetes", fmt.Sprint(s.Paquetes), escalon(s.Paquetes, 1, 3)},
-		{"callers_en_radio", fmt.Sprint(s.CallersEnRadio), escalon(s.CallersEnRadio, 0, 9)},
-		{"paquetes_en_radio", fmt.Sprint(s.PaquetesEnRadio), escalon(s.PaquetesEnRadio, 1, 3)},
+		{"archivos", fmt.Sprint(s.Archivos), escalon(s.Archivos, archivosBajo, archivosAlto)},
+		{"lineas", fmt.Sprint(s.Lineas), escalon(s.Lineas, lineasBajo, lineasAlto)},
+		{"simbolos", fmt.Sprint(s.Simbolos), escalon(s.Simbolos, simbolosBajo, simbolosAlto)},
+		{"paquetes", fmt.Sprint(s.Paquetes), escalon(s.Paquetes, paquetesBajo, paquetesAlto)},
+		{"callers_en_radio", fmt.Sprint(s.CallersEnRadio), escalon(s.CallersEnRadio, callersBajo, callersAlto)},
+		{"paquetes_en_radio", fmt.Sprint(s.PaquetesEnRadio), escalon(s.PaquetesEnRadio, radioPkgBajo, radioPkgAlto)},
 		{"hay_borrados", fmt.Sprint(s.HayBorrados), puntoBorrados},
 	}
 
@@ -134,9 +172,9 @@ func Profundidad(s Senales) Veredicto {
 
 	v := Veredicto{Puntos: puntos, Senales: senales}
 	switch {
-	case puntos <= 2:
+	case puntos <= corteMinima:
 		v.Nivel = NivelMinimo
-	case puntos <= 6:
+	case puntos <= corteEstandar:
 		v.Nivel = NivelEstandar
 	default:
 		v.Nivel = NivelProfundo
@@ -193,6 +231,10 @@ func panelDe(n NivelRevision) Panel {
 // borrados. Las dos del radio (callers y paquetes) las completa quien tenga el grafo a mano:
 // esta función no va a buscar nada, para poder correr donde no hay base ni MCP.
 //
+// `Lineas` suma agregadas Y borradas: sin eso, un hunk de borrado puro —que no deja rango
+// nuevo— mediría igual que no tocar nada. Ese punto ciego lo cubre ESTA cuenta, no la séptima
+// señal; por eso la séptima puede permitirse ser exigente.
+//
 // Los binarios se saltean, igual que en detect_changes: no tienen líneas ni símbolos que
 // revisar y contarlos como archivo inflaría la señal más barata de inflar.
 func SenalesDelDiff(files []FileDiff, simbolos int) Senales {
@@ -205,9 +247,14 @@ func SenalesDelDiff(files []FileDiff, simbolos int) Senales {
 		s.Archivos++
 		s.Lineas += fd.Agregadas + fd.Borradas
 		paquetes[directorioDe(fd.Path)] = true
-		// Un archivo borrado entero y un hunk que sólo borra cuentan lo mismo acá: los dos son
-		// la forma de cambio que menos rastro deja en las otras señales.
-		if fd.Borradas > 0 || fd.ChangeType == ChangeDeleted {
+		// El predicado se evalúa POR ARCHIVO, no sobre el total del cambio: el acto destructivo
+		// es que UN archivo pierda su contenido, y un PR que borra un módulo mientras agrega
+		// otro más grande lo escondería si se sumara todo antes de comparar.
+		//
+		// `Borradas > Agregadas` es lo que distingue sacar de editar: una modificación aporta
+		// un borrado y un agregado por línea, así que empata; sólo sale positivo cuando el
+		// cambio se lleva más de lo que trae.
+		if fd.ChangeType == ChangeDeleted || fd.Borradas > fd.Agregadas {
 			s.HayBorrados = true
 		}
 	}
