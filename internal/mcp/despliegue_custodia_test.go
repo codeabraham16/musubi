@@ -787,3 +787,94 @@ func TestLasAlertasDelLatidoLeenLaSerieConLastOverTime(t *testing.T) {
 	}
 	t.Logf("%d lectura(s) de la serie del latido, todas envueltas", vistas)
 }
+
+// TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo — A109 aplicado a la CLASE.
+//
+// EL CABO, Y ES SOBRE UNA GUARDA MÍA. A109 encontró que `avisarQueConfigGobierna` cerraba con
+// «manda el del directorio de trabajo» y midió que es FALSO donde más importa: los daemons de esta
+// máquina corren SIN `MUSUBI_HOME` pero CON `CLAUDE_PROJECT_DIR`, así que la raíz sale de la
+// variable y el cwd sólo coincide. Se corrigió, y la guarda que se escribió
+// —`TestElOrigenDeLaRaizSeDiceYNoSeAdivina`— prueba el COMPORTAMIENTO de `workspaceDirConOrigen`.
+//
+// Eso no cubre la afirmación escrita en otro lado, y por eso sobrevivió una: el check
+// `config_que_gobierna` de `internal/memory/doctor_config.go` —que existe justamente para
+// contestar «¿cuál config manda acá?»— terminaba con la misma frase. Encontrado el 2026-09-05
+// corriéndolo, no leyéndolo. La lección aprendida de un lado y no del hermano, otra vez.
+//
+// SE MIRAN LOS LITERALES DE CADENA Y NO LOS COMENTARIOS, y no es por comodidad: el defecto es lo
+// que se le DICE al operador. Un comentario que explica por qué la frase está prohibida —como éste—
+// no manda a nadie a mirar el cwd. Mirar el archivo entero pondría en rojo su propia documentación,
+// que es la trampa en la que cayó la guarda gemela de A109 en su primera corrida.
+func TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo(t *testing.T) {
+	// SE PROHÍBE LA PROPIEDAD, NO UNA REDACCIÓN — y esto lo enseñó el sabotaje de esta misma
+	// guarda. La primera versión buscaba la cadena exacta `manda el del directorio de trabajo`,
+	// que es como lo decía `avisarQueConfigGobierna`. El defecto real que la motivó decía «el que
+	// manda ES EL del directorio de trabajo», con dos palabras de más, y la guarda NO lo cazaba:
+	// habría pasado en verde sobre la instancia que la hizo existir. Ahora se busca la relación
+	// —«manda» cerca de «directorio de trabajo»— y no una frase.
+	//
+	// Y se juntan TODOS los literales del archivo antes de buscar, porque un mensaje largo se
+	// escribe concatenado en varias líneas: partido en dos literales, ninguno contendría la
+	// relación entera y el archivo pasaría entero.
+	reProhibida := regexp.MustCompile(`(?i)manda[^"]{0,40}` + "directorio de " + "trabajo")
+	// Un literal de cadena de Go, en una línea que no es comentario.
+	reLiteral := regexp.MustCompile(`"[^"]*"`)
+
+	raiz := filepath.Join("..", "..")
+	revisados := 0
+	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "worktrees", ".claude":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		b, e := os.ReadFile(ruta)
+		if e != nil {
+			return nil
+		}
+		revisados++
+		var literales []string
+		primera := 0
+		for n, linea := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(linea), "//") {
+				continue
+			}
+			for _, lit := range reLiteral.FindAllString(linea, -1) {
+				if primera == 0 && reProhibida.MatchString(strings.Join(append(literales, lit), " ")) {
+					primera = n + 1
+				}
+				literales = append(literales, lit)
+			}
+		}
+		{
+			blob := strings.Join(literales, " ")
+			if m := reProhibida.FindString(blob); m != "" {
+				t.Errorf("%s:%d le dice al operador que decide el directorio de trabajo:\n  %s\n"+
+					"Es FALSO donde más importa: un daemon sin MUSUBI_HOME y con CLAUDE_PROJECT_DIR "+
+					"toma la raíz de la VARIABLE, y el cwd sólo coincide (medido en /proc/<pid>/environ, "+
+					"A109). Un diagnóstico que nombra la causa equivocada manda a mirar el cwd —que se "+
+					"puede cambiar— en vez de la variable, que decide.\n"+
+					"Arreglo: nombrá la raíz resuelta y de dónde salió (`workspaceDirConOrigen`), o "+
+					"apuntá a donde eso se dice, en vez de afirmar una causa que este código no conoce.",
+					ruta, primera, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("recorriendo el repo: %v", err)
+	}
+	if revisados < 50 {
+		t.Fatalf("sólo se revisaron %d archivos .go: el recorrido no está mirando el repo y esta "+
+			"guarda pasaría en verde sin haber leído nada", revisados)
+	}
+	t.Logf("%d archivos .go de producción revisados", revisados)
+}

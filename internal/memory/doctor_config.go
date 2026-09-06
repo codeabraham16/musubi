@@ -9,6 +9,19 @@ import (
 	"musubi/internal/config"
 )
 
+// NO NOMBRA EL CWD COMO CAUSA, Y ESO ES UN ARREGLO Y NO UN MATIZ (A109 aplicado a su hermano).
+//
+// Esta función cerraba con «el que manda es el del directorio de trabajo». A109 midió que esa
+// frase es FALSA en la máquina donde más importa —los daemons corren sin `MUSUBI_HOME` pero con
+// `CLAUDE_PROJECT_DIR`, así que la raíz sale de la VARIABLE y el cwd sólo coincide— y la corrigió
+// en `cmd/musubi/main.go`. Acá sobrevivió: la guarda de A109 prueba el comportamiento de
+// `workspaceDirConOrigen` y no que la afirmación falsa no esté escrita en otro lado.
+//
+// Y este check no puede saber la causa: recibe la raíz ya resuelta, no cómo se resolvió. Así que
+// dice lo que SÍ sabe —cuál gobierna— y apunta a donde la causa se dice, en vez de adivinarla. Un
+// diagnóstico que nombra la causa equivocada manda a mirar el cwd, que se puede cambiar, en vez de
+// la variable, que decide.
+//
 // CheckConfigQueGobierna contesta «¿cuál config.yaml manda acá?» — la pregunta que el sistema no
 // sabía contestar y que costó tres hipótesis falsas el 2026-09-05 (cabo A96, salida a).
 //
@@ -51,8 +64,9 @@ func CheckConfigQueGobierna(projectPath string) CheckResult {
 	return CheckResult{Code: code, Status: "warning",
 		Message: fmt.Sprintf(
 			"gobierna %s, pero también existe %s y su bloque sync DIFIERE (%s). "+
-				"Quien diagnostique abriendo el segundo va a leer lo contrario de lo que hace este proceso: "+
-				"el que manda es el del directorio de trabajo",
+				"Quien diagnostique abriendo el segundo va a leer lo contrario de lo que hace este proceso. "+
+				"El que manda es el de la RAÍZ que este proceso resolvió; de dónde salió esa raíz "+
+				"—MUSUBI_HOME, CLAUDE_PROJECT_DIR o el directorio actual— lo dice la primera línea del arranque",
 			ruta, sombra, strings.Join(dif, "; ")),
 	}
 }
