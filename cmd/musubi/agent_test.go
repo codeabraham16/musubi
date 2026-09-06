@@ -408,7 +408,18 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 		if n := latidos.Load(); n != 2 {
 			t.Errorf("latió %d veces, esperaba detenerse en el segundo (el revocado)", n)
 		}
-	case <-time.After(5 * time.Second):
+	// EL MARGEN SALE DE UNA MEDICIÓN, NO DE UN NÚMERO REDONDO.
+	//
+	// Cinco segundos no alcanzaban, y no por el kill-switch: este mismo archivo ya documenta
+	// —veinte líneas más arriba— que el arranque del agente gasta ~2,4 s antes del primer POST
+	// porque idRustdeskLocal y direccionPropia salen a preguntarle cosas al sistema. La prueba
+	// necesita DOS latidos, así que su presupuesto era exactamente el costo, con cero holgura.
+	//
+	// Medido en una máquina con 91 servicios y NordVPN activo: el bucle SÍ se detiene, y tarda
+	// 5,76 s. En los runners de CI pasaba (menos que preguntarle al sistema), así que fallaba
+	// SÓLO en las máquinas de desarrollo — que es la peor forma de rojo: la que enseña a
+	// ignorar el rojo. El invariante que se prueba no cambió; el reloj sí.
+	case <-time.After(30 * time.Second):
 		t.Fatal("el agente siguió latiendo tras ser revocado: el kill-switch no se entiende desde la máquina")
 	}
 }
