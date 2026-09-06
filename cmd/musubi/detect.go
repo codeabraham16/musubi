@@ -166,16 +166,33 @@ type accountedBlock struct {
 // (memoria no disponible), solo ensambla sin contabilizar.
 func assembleAccounted(store ledgerStore, eventName, sessionID string, blocks []accountedBlock) string {
 	texts := make([]string, 0, len(blocks))
+	cobrables := make([]accountedBlock, 0, len(blocks))
 	for _, b := range blocks {
 		if strings.TrimSpace(b.text) == "" {
 			continue
 		}
-		if store != nil {
+		texts = append(texts, b.text)
+		cobrables = append(cobrables, b)
+	}
+
+	// SE ENSAMBLA PRIMERO Y SE COBRA DESPUÉS, y el orden importa. Antes se imputaba dentro del
+	// bucle, o sea ANTES de saber si el envelope iba a salir: un evento que no lleva contexto —o
+	// un error al serializar— dejaba el bloque contabilizado en el ledger sin que un solo token
+	// hubiera entrado al contexto. El gasto reportado por `musubi_tokens` era mayor que el real,
+	// que es la peor dirección para un medidor: hace ajustar presupuestos contra humo.
+	//
+	// El caso no era teórico. El hook PreCompact estuvo tres semanas imputando su bloque mientras
+	// Claude Code descartaba el envelope entero.
+	out := assembleHookContext(eventName, texts...)
+	if out == "" {
+		return ""
+	}
+	if store != nil {
+		for _, b := range cobrables {
 			_, _ = store.LedgerAdd(sessionID, b.surface, memory.EstimateTokens(b.text))
 		}
-		texts = append(texts, b.text)
 	}
-	return assembleHookContext(eventName, texts...)
+	return out
 }
 
 // buildHealthContext surfacea (T5.4) los problemas que la auto-curación NO pudo reparar

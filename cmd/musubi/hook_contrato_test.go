@@ -125,3 +125,36 @@ func TestTodoEventoQueSeEmiteEnElPaqueteEstaEnLaLista(t *testing.T) {
 		}
 	}
 }
+
+// EL LEDGER NO COBRA LO QUE NO ENTRÓ.
+//
+// assembleAccounted imputaba dentro del bucle, o sea antes de saber si el envelope iba a salir. Con
+// la lista blanca eso se volvió agudo: la guarda devuelve "" DESPUÉS de que el ledger ya cobró. El
+// medidor reportaba de más, que es la peor dirección posible: hace ajustar presupuestos contra humo.
+func TestElLedgerNoCobraUnEnvelopeQueNoSale(t *testing.T) {
+	store := newFakeTurnStore()
+	out := assembleAccounted(store, "PreCompact", "s1", []accountedBlock{
+		{surface: "una_superficie", text: "un bloque con texto de verdad"},
+	})
+	if out != "" {
+		t.Fatalf("PreCompact no lleva contexto: no debe salir envelope, obtuve %q", out)
+	}
+	if len(store.ledger) != 0 {
+		t.Errorf("se imputaron tokens de un bloque que nunca entró al contexto: %v", store.ledger)
+	}
+}
+
+// La otra mitad del invariante: cuando el envelope SÍ sale, el cobro tiene que ocurrir. Sin esto,
+// "no cobrar nunca" pasaría el test de arriba y el ledger quedaría en cero para siempre.
+func TestElLedgerSiCobraUnEnvelopeQueSale(t *testing.T) {
+	store := newFakeTurnStore()
+	out := assembleAccounted(store, "UserPromptSubmit", "s1", []accountedBlock{
+		{surface: "una_superficie", text: "un bloque con texto de verdad"},
+	})
+	if out == "" {
+		t.Fatal("UserPromptSubmit sí lleva contexto: el envelope tiene que salir")
+	}
+	if store.ledger["una_superficie"] <= 0 {
+		t.Errorf("el bloque entró al contexto y no se imputó: %v", store.ledger)
+	}
+}
