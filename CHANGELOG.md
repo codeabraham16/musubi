@@ -7,6 +7,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El gate de revisión post-apply: la revisión se ofrece cuando todavía es barata.** Musubi ya
+  tenía el mecanismo (`adversarial-review`, `musubi_debate`) y la autoridad (el recibo de RDD), pero
+  nada CONECTABA el momento en que hay algo que revisar con el momento en que se revisa. El único
+  gate vivía en el pre-push, o sea que avisaba cuando ya se terminó de trabajar y lo único que uno
+  quiere es entregar — el peor momento posible para pedir una revisión.
+
+  Ahora el hook `UserPromptSubmit` le pregunta a **git** —no al modelo, no a una heurística— cuánto
+  trabajo de producción hay encima del último commit. Si cruza el umbral (**2 archivos** o **40
+  líneas**; `_test.go`, `.md` e imágenes no cuentan) y ningún recibo cubre ese estado exacto,
+  inyecta **una vez por sesión** un bloque que nombra la skill y el comando.
+
+  - **No bloquea nada, y es a propósito.** No decide si el cambio está bien: eso es juicio, y el
+    juicio se delega. Lo único que aporta es la OPORTUNIDAD.
+  - **Falla abierto**: fuera de un repo git, con git colgado o sin memoria, calla. Apagalo con
+    `MUSUBI_REVIEW_GATE=0`, que se lee ANTES de gastar un solo subproceso.
+  - **El costo, medido** (mediana de 9 corridas; el presupuesto del hook es de 10 s): piso 181 ms ·
+    sesión ya avisada **+9 ms** (el corte barato funciona) · avisa +60 ms · con un recibo vigente
+    +155 ms. Ese último es el camino caro y conviene decirlo: con el recibo al día el gate
+    recalcula la huella en cada turno, así que **hacer lo correcto sale más caro**. Es 1,5 % del
+    presupuesto, no se optimizó todavía.
+  - 17 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. Uno salió **vacuo** en la primera vuelta y el hallazgo quedó en el código: en la
+    forma simple de renombre de git (`viejo => nuevo`) separar no hace falta —el nombre nuevo ya va
+    último—, pero en la forma con llaves (`docs/{a.md => b.md}`) la extensión queda `.md}` y **un
+    doc renombrado contaba como producción**.
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed
