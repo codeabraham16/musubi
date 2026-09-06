@@ -1689,6 +1689,56 @@ func schemaMigrations() []migration {
 					"plano TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version: 47,
+			name:    "panel_con_modelo_y_evidencia",
+			// DOS JUECES DEL MISMO MODELO NO SON DOS OPINIONES, Y UNA OPINION NO PESA LO MISMO
+			// QUE UNA COMPROBACION.
+			//
+			// ────────────────────────────────────────────────────────────────────────────────
+			// Son dos problemas distintos que caen en las mismas dos tablas, y por eso van en
+			// una sola migración.
+			//
+			// UNO. La skill le da a cada escéptico un LENTE distinto y nada le da un MODELO
+			// distinto. Peor: aunque alguien los lanzara con modelos distintos, el sistema no
+			// guardaba nada de eso —`debate_postures` tenía {round, agent, stance, created_at}
+			// y ni una columna de modelo—. La frase «este cambio lo revisaron tres modelos
+			// distintos» era inverificable a posteriori: no había dónde leerla.
+			//
+			// DOS. El tally cuenta filas con GROUP BY choice, así que un lente que corrió los
+			// tests pesa exactamente igual que uno que leyó el diff y opinó, y que uno que no
+			// pudo comprobar nada. La skill ya nombraba el riesgo en prosa —«un panel que opina
+			// sin haber corrido nada es teatro de verificación»— sin ningún mecanismo que lo
+			// hiciera cumplir.
+			//
+			// POR QUE LOS CAMPOS PUEDEN NACER OBLIGATORIOS. Las tres tablas del debate están en
+			// CERO filas (medido en las seis bases locales el 2026-09-06). Sin datos vivos no
+			// hace falta plan de migración, ni default piadoso, ni período de gracia: la
+			// validación puede exigirlos desde el primer post. Con datos, no se podría.
+			//
+			// EL DEFAULT ES CADENA VACIA Y NO UN VALOR PIADOSO. Vacío significa «no se declaró»,
+			// y para la compuerta eso vale lo mismo que «no verifiqué nada» — que es el
+			// fail-closed correcto. Un default como 'deterministica' habría desarmado la
+			// compuerta con cada fila vieja, o sea justo al revés.
+			//
+			// gated_choice VA EN `debates` Y NO EN LOS VOTOS porque es una propiedad del DEBATE:
+			// se declara al abrirlo, antes de saber quién va a votar qué. Declararla después
+			// sería mover el arco con la pelota en el aire.
+			up: func(x execQuerier) error {
+				for _, c := range []struct{ tabla, col, ddl string }{
+					{"debate_postures", "model", "model TEXT NOT NULL DEFAULT ''"},
+					{"debate_postures", "evidence", "evidence TEXT NOT NULL DEFAULT ''"},
+					{"debate_votes", "model", "model TEXT NOT NULL DEFAULT ''"},
+					{"debate_votes", "evidence", "evidence TEXT NOT NULL DEFAULT ''"},
+					{"debates", "gated_choice", "gated_choice TEXT NOT NULL DEFAULT ''"},
+				} {
+					if err := agregarColumnaSiFalta(x, c.tabla, c.col, c.ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
