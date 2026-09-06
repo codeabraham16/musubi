@@ -93,7 +93,7 @@ flowchart LR
     class CC cc; class M mm; class DB db;
 ```
 
-Cinco hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
+Cuatro hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
 agente (gist de código, contexto por turno) se **mide** y se inyecta como **delta** — solo lo nuevo
 respecto del turno anterior.
 
@@ -180,11 +180,11 @@ go build -o musubi ./cmd/musubi
 - Escribe las **skills cognitivas** de arranque en `.musubi/skills/` y los **templates SDD**
   (proposal, spec, design, tasks) en `.musubi/templates/sdd/`.
 - Genera/mergea `.mcp.json` para que el agente **cargue el servidor `musubi` automáticamente**.
-- Inyecta cinco **hooks** en `.claude/settings.json` (Claude Code) y protege la base en `.gitignore`.
+- Inyecta cuatro **hooks** en `.claude/settings.json` (Claude Code) y protege la base en `.gitignore`.
 
 | Agente | Config MCP | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreCompact · PreToolUse (dos matchers: Read, y edición) · Stop |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (dos matchers: Read, y edición) · Stop |
 | `cursor` | `.cursor/mcp.json` | — (Cursor no tiene sistema de hooks) |
 
 ```bash
