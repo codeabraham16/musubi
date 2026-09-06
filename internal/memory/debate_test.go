@@ -222,11 +222,11 @@ func TestDebateNoVotesNoConsensus(t *testing.T) {
 // otra) reviviera un cerrado, la skill quedaría enseñando algo falso EN SILENCIO.
 func TestUnDebateCerradoNoRevivePorNingunCamino(t *testing.T) {
 	e := newTestEngine(t)
-	d, err := e.OpenDebate("¿sobrevive el cambio?", 3, 0)
+	d, err := e.OpenDebate("¿sobrevive el cambio?", 3, 0, "")
 	if err != nil {
 		t.Fatalf("OpenDebate: %v", err)
 	}
-	if err := e.CastVote(d.ID, "correctitud", "no_real"); err != nil {
+	if err := e.CastVote(d.ID, "correctitud", "no_real", "m", EvidenciaInferida); err != nil {
 		t.Fatalf("vote: %v", err)
 	}
 	res, _, err := e.TallyDebate(d.ID)
@@ -238,10 +238,10 @@ func TestUnDebateCerradoNoRevivePorNingunCamino(t *testing.T) {
 		t.Fatalf("precondición: el tally tenía que cerrar con no_real, obtuve %+v", res)
 	}
 
-	if err := e.PostPosture(d.ID, "beto", "tarde"); err == nil {
+	if err := e.PostPosture(d.ID, "beto", "tarde", "m", EvidenciaInferida); err == nil {
 		t.Error("postear en un debate cerrado debe fallar")
 	}
-	if err := e.CastVote(d.ID, "beto", "real"); err == nil {
+	if err := e.CastVote(d.ID, "beto", "real", "m", EvidenciaInferida); err == nil {
 		t.Error("votar en un debate cerrado debe fallar: si se pudiera, el veredicto persistido dejaría de ser definitivo")
 	}
 	if _, _, err := e.AdvanceDebate(d.ID); err == nil {
