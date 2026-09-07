@@ -120,6 +120,59 @@ var ultimoInventario struct {
 	enviado time.Time
 }
 
+// intervaloEnumeracion acota cada cuánto se SALE A PREGUNTARLE al sistema operativo qué corre.
+//
+// SON DOS FRENOS DISTINTOS Y ANTES HABÍA UNO SOLO. `intervaloInventarioCompleto` frena el ENVÍO;
+// esto frena la PREGUNTA. Sin este, el agente enumeraba en cada latido —cada 30 s— para casi
+// siempre concluir que nada cambió y no mandar nada.
+//
+// Y preguntar no es gratis: en Windows la enumeración lanza PowerShell y pide `Win32_Service` por
+// WMI, y eso tarda ~3 s por vuelta (3,13 s y 2,84 s, cronometradas; el resto del latido son
+// milisegundos). Un proceso de PowerShell arrancando cada medio minuto, todo el día, en cada
+// máquina de la flota. No se puede abaratar sin perder `ExitCode`, que es lo único que separa «se
+// apagó porque nadie lo necesitaba» de «murió con 1067» — y eso costó dieciséis alarmas falsas de
+// aprender (A70), así que el que se acota es el ritmo, no la fuente.
+//
+// EL CANJE, dicho para que quede: enumerar más seguido no hace que el inventario viaje más
+// seguido; sólo hace que un CAMBIO se note antes. Con un minuto, un servicio que se cae se ve en
+// menos de un minuto en vez de en menos de treinta segundos, y el envío periódico de los 5
+// minutos no se toca. Se paga medio segundo de latencia de detección por la mitad del gasto.
+const intervaloEnumeracion = time.Minute
+
+// ultimaEnumeracion es la respuesta anterior del sistema operativo, con su hora. Se guarda el
+// error igual que la lista: un sistema que no contesta tampoco tiene que ser interrogado cada 30 s.
+var ultimaEnumeracion struct {
+	sync.Mutex
+	cuando time.Time
+	lista  []fleet.ReporteServicio
+	err    error
+}
+
+// enumerarConCache devuelve lo que el sistema contestó la última vez si todavía es reciente, y
+// recién si no, vuelve a preguntar. Es el único lugar desde donde se llama a `enumerarServicios`
+// en el camino del latido.
+func enumerarConCache() ([]fleet.ReporteServicio, error) {
+	ultimaEnumeracion.Lock()
+	defer ultimaEnumeracion.Unlock()
+	if !ultimaEnumeracion.cuando.IsZero() && time.Since(ultimaEnumeracion.cuando) < intervaloEnumeracion {
+		return ultimaEnumeracion.lista, ultimaEnumeracion.err
+	}
+	lista, err := enumerarServicios()
+	ultimaEnumeracion.cuando = time.Now()
+	ultimaEnumeracion.lista, ultimaEnumeracion.err = lista, err
+	return lista, err
+}
+
+// olvidarEnumeracion tira la respuesta guardada y obliga a preguntar de nuevo en la próxima vuelta.
+// La usan las pruebas que cambian lo que el sistema contesta a mitad de camino: sin esto verían la
+// respuesta vieja, que es justamente lo que la caché hace bien en producción.
+func olvidarEnumeracion() {
+	ultimaEnumeracion.Lock()
+	defer ultimaEnumeracion.Unlock()
+	ultimaEnumeracion.cuando = time.Time{}
+	ultimaEnumeracion.lista, ultimaEnumeracion.err = nil, nil
+}
+
 // huellaDelInventario resume lo que importa para decidir si cambió: los nombres y sus estados.
 //
 // NO entra el PID ni el detalle a propósito. Un servicio que se reinicia cambia de pid cada vez,
@@ -156,7 +209,7 @@ func huellaDelInventario(lista []fleet.ReporteServicio) string {
 // después de que el cerebro haya aceptado el latido: sellar antes es exactamente el bug que esto
 // cierra, una vuelta más adelante.
 func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar func()) {
-	crudos, err := enumerarServicios()
+	crudos, err := enumerarConCache()
 	if err != nil {
 		// CADA HORA Y NO UNA VEZ POR VIDA DEL PROCESO.
 		//

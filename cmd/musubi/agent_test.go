@@ -75,14 +75,10 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoCorriendo},
 		}}, nil
 	}
-	ultimoInventario.Lock()
-	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-	ultimoInventario.Unlock()
+	reiniciarFrenos()
 	t.Cleanup(func() {
 		enumerarServicios = anterior
-		ultimoInventario.Lock()
-		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-		ultimoInventario.Unlock()
+		reiniciarFrenos()
 	})
 
 	primero, mandar, confirmar := serviciosDelLatido()
@@ -109,6 +105,9 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoFallado},
 		}}, nil
 	}
+	// En producción esto lo hace el reloj: la caché de enumeración dura un minuto, así que el
+	// cambio se ve en la primera vuelta posterior. Acá se fuerza para no dormir un minuto.
+	olvidarEnumeracion()
 	if cambiado, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
 		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
 	}
@@ -127,14 +126,10 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
-	ultimoInventario.Lock()
-	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-	ultimoInventario.Unlock()
+	reiniciarFrenos()
 	t.Cleanup(func() {
 		enumerarServicios = anterior
-		ultimoInventario.Lock()
-		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-		ultimoInventario.Unlock()
+		reiniciarFrenos()
 	})
 
 	lista, mandar, confirmar := serviciosDelLatido()
@@ -727,4 +722,17 @@ func sinInventario(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
 	t.Cleanup(func() { enumerarServicios = anterior })
+}
+
+// reiniciarFrenos pone en cero los DOS frenos del inventario, que son distintos y se olvidan por
+// separado: `ultimoInventario` frena el ENVÍO (huella + intervaloInventarioCompleto) y
+// `ultimaEnumeracion` frena la PREGUNTA al sistema operativo (intervaloEnumeracion).
+//
+// Van juntos acá porque son globales del paquete: una prueba que olvida uno hereda el estado de la
+// anterior, y eso se ve como un test que falla según el orden en que corra la suite.
+func reiniciarFrenos() {
+	ultimoInventario.Lock()
+	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+	ultimoInventario.Unlock()
+	olvidarEnumeracion()
 }
