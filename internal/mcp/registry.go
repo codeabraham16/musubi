@@ -779,7 +779,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"path":    {Type: "string", Description: "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"},
+						"path":    {Type: "string", Description: "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"},
 						"gist":    {Type: "string", Description: "Resumen corto de qué hace el archivo"},
 						"symbols": {Type: "string", Description: "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"},
 					},
@@ -1020,7 +1020,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_map",
-				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y cuántos archivos están 'stale' (cambiaron desde el índice) o 'ghosts' (borrados) — si son >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`>0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},

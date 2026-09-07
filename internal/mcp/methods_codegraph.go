@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -55,7 +57,51 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 // están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
 // destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
 // que es justo la clase de "se arregla solo más tarde" que nadie verifica.
+// errFueraDelProyecto lo devuelve la guarda de contención. Es un centinela para que un llamador
+// pueda distinguirlo de un error de disco: los dos hacen saltar el paquete, pero uno es una falla y
+// el otro es la política funcionando.
+var errFueraDelProyecto = errors.New("la ruta cae fuera del árbol del proyecto")
+
+// dentroDelProyecto dice si `p` —relativo a projectPath, o absoluto— cae DENTRO del árbol del
+// proyecto. Es la guarda de contención del grafo de código.
+//
+// ⚠️ POR QUÉ EXISTE. Medido el 2026-09-05 en el repo de Musubi: 264 nodos con ruta absoluta de OTRO
+// repo (C:/Proyectos/musubi-body/...) vivían en el grafo de este proyecto, con project_id='musubi'.
+// Entraron porque nada verificaba la contención: `memory.NormalizeCodePath` devuelve la ruta
+// ABSOLUTA cuando el archivo no cuelga de la raíz —no falla, no avisa— y de ahí en adelante la clave
+// absoluta se propaga sola. Peor: el índice INCREMENTAL deriva sus directorios sucios de las rutas
+// YA guardadas, así que un solo nodo ajeno hace que la próxima corrida re-derive el paquete ajeno
+// ENTERO y plante más. Por eso limpiar sin blindar no alcanza: el siguiente tick lo replanta.
+//
+// La comparación se hace con filepath.Rel y no con strings.HasPrefix sobre la raíz, porque el prefijo
+// textual da falsos positivos: "C:/Proyectos/Musubi-otro" empieza con "C:/Proyectos/Musubi". Y el
+// rechazo mira `..` como SEGMENTO, no como prefijo de texto: un directorio llamado "..datos" es
+// legítimo y HasPrefix(rel, "..") lo tumbaría.
+//
+// Con projectPath vacío NO se juzga: hay instancias (varios tests, y el bind compartido) que se
+// construyen sin árbol, y ahí toda ruta saldría fuera. Inventar contención donde no hay raíz
+// rompería lo que hoy funciona sin proteger nada.
+func (s *McpServer) dentroDelProyecto(p string) bool {
+	if strings.TrimSpace(s.projectPath) == "" {
+		return true
+	}
+	abs := p
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(s.projectPath, abs)
+	}
+	rel, err := filepath.Rel(s.projectPath, abs)
+	if err != nil {
+		return false // otra unidad de disco: Rel no puede relacionarlas
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unresolved int, err error) {
+	// La guarda va ANTES del ReadDir: el directorio ajeno EXISTE en disco, así que el error de
+	// lectura nunca iba a frenarlo.
+	if !s.dentroDelProyecto(dir) {
+		return 0, fmt.Errorf("%w: %s", errFueraDelProyecto, dir)
+	}
 	absDir := dir
 	if !filepath.IsAbs(absDir) {
 		absDir = filepath.Join(s.projectPath, dir)
@@ -682,19 +728,31 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 	return jsonResult(map[string]interface{}{"symbol": args.Symbol, "callers": callers, "count": len(callers)})
 }
 
-// graphFreshness cuenta, sobre los archivos presentes en el grafo scopeado, cuántos están STALE
-// (fingerprint del disco distinto al guardado) y cuántos son FANTASMA (ausentes/ilegibles en
-// disco). Es la señal de "conviene re-indexar" que expone map (Track 20 · F5), a granularidad de
-// archivo (barata: una pasada de stat sobre los paths del grafo).
-func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
+// graphFreshness cuenta, sobre el proyecto scopeado, cuántos archivos están STALE (fingerprint del
+// disco distinto al guardado), cuántos son FANTASMA (en el grafo pero ausentes/ilegibles en disco) y
+// cuántos son AUSENTES (indexables en disco y sin un solo nodo). Es la señal de "conviene
+// re-indexar" que expone map (Track 20 · F5), a granularidad de archivo.
+//
+// ⚠️ POR QUÉ EXISTE `missing`, Y POR QUÉ NO ALCANZABA CON stale+ghosts: los dos primeros se derivan
+// recorriendo `stored`, o sea LOS ARCHIVOS QUE YA ESTÁN EN EL GRAFO. Su dominio es el grafo, no el
+// repo — así que un archivo que nunca se indexó no puede salir stale ni fantasma POR CONSTRUCCIÓN, y
+// map informaba `stale:N, ghosts:0` sin mencionarlo. Medido el 2026-09-05 en este mismo repo: 213 de
+// 798 `.go` (26,7%) sin un solo nodo, `internal/fleet` entero entre ellos (62 archivos), y map decía
+// `ghosts:0`. Una señal de salud ciega a la peor clase de problema es peor que no tener señal: se
+// lee como "el grafo está bien".
+//
+// El denominador sale de walkSourceTree —LA MISMA enumeración que usa el indexador, con sus mismas
+// exclusiones (vendor, testdata, node_modules, dist, coverage, ocultos)— y no de una propia: contra
+// un denominador inventado, `missing` mediría el desacuerdo entre dos listas en vez de la ceguera.
+func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missing int) {
 	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
 	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
 	if s.forceRedact {
-		return 0, 0
+		return 0, 0, 0
 	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	for path, fp := range stored {
 		cur, ferr := memory.FileFingerprint(s.projectPath, path)
@@ -706,7 +764,13 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
 			stale++
 		}
 	}
-	return stale, ghosts
+	_, enDisco := s.walkSourceTree()
+	for key := range enDisco {
+		if _, ok := stored[key]; !ok {
+			missing++
+		}
+	}
+	return stale, ghosts, missing
 }
 
 func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
@@ -719,14 +783,16 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	if god == nil {
 		god = []memory.GraphDegree{}
 	}
-	entry, _ := s.engine.GraphEntryPointsCtx(scoped, 25)
+	const tapaEntry = 25
+	entry, totalEntry, _ := s.engine.GraphEntryPointsCtx(scoped, tapaEntry)
 	if entry == nil {
 		entry = []string{}
 	}
-	stale, ghosts := s.graphFreshness(scoped)
+	stale, ghosts, missing := s.graphFreshness(scoped)
 	return jsonResult(map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
-		"stale": stale, "ghosts": ghosts,
+		"total_entry_points": totalEntry, "entry_points_truncated": totalEntry > len(entry),
+		"stale": stale, "ghosts": ghosts, "missing": missing,
 	})
 }
 

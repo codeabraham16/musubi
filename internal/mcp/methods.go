@@ -1791,6 +1791,17 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 		return nil, rpcErrorf(codeInvalidParams, "path y gist son obligatorios")
 	}
 
+	// CONTENCIÓN: la ruta tiene que colgar del árbol de ESTE proyecto. Absoluta está bien mientras
+	// caiga adentro —NormalizeCodePath la vuelve relativa—; lo que se rechaza es apuntar a otro
+	// árbol, porque NormalizeCodePath conserva la absoluta en silencio y la clave ajena queda
+	// guardada bajo este project_id. Ver dentroDelProyecto: así se contaminó el grafo con 264 nodos
+	// de otro repo.
+	if !s.dentroDelProyecto(args.Path) {
+		return nil, rpcErrorf(codeInvalidParams,
+			"path cae fuera del árbol de este proyecto (%s): la memoria de código de un proyecto no "+
+				"guarda archivos de otro", args.Path)
+	}
+
 	// Clave normalizada (relativa a la raíz) para que el hook PreToolUse encuentre
 	// lo que guarda la tool. Fingerprint best-effort del contenido actual.
 	key := memory.NormalizeCodePath(s.projectPath, args.Path)

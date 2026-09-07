@@ -185,7 +185,7 @@ type CodeGraphStore interface {
 	// GraphTopByDegreeCtx devuelve los N nodos con mayor grado CALLS (god-nodes), scopeado (F2).
 	GraphTopByDegreeCtx(ctx context.Context, n int) ([]GraphDegree, error)
 	// GraphEntryPointsCtx devuelve funcs/métodos sin callers internos (entry points), scopeado (F2).
-	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error)
+	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, int, error)
 	// ListGraphNodesForFileCtx devuelve los símbolos de un archivo, scopeado (F2).
 	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]GraphNode, error)
 	// ListGraphFuncsInDirsCtx devuelve las funcs top-level de un conjunto de directorios (no

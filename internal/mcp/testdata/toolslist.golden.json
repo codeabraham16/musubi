@@ -684,7 +684,7 @@
           },
           "path": {
             "type": "string",
-            "description": "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"
+            "description": "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"
           },
           "symbols": {
             "type": "string",
@@ -996,7 +996,7 @@
     },
     {
       "name": "musubi_map",
-      "description": "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y cuántos archivos están 'stale' (cambiaron desde el índice) o 'ghosts' (borrados) — si son \u003e0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+      "description": "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`\u003e0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es \u003e0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
       "inputSchema": {
         "type": "object",
         "properties": {}
