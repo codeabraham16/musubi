@@ -27,6 +27,24 @@ type SymbolIndex interface {
 	LookupFunc(importPath, name string) (key string, ok bool)
 }
 
+// GraphDeriverVersion identifica la versión del DERIVADOR del grafo, y hay que SUBIRLA cada vez
+// que el derivador aprende a emitir algo que antes no emitía.
+//
+// POR QUÉ EXISTE. El índice incremental salta todo archivo cuyo src_fingerprint coincida con el del
+// disco, y ese fingerprint es el sha256 del CONTENIDO: sigue al input, no a quien lo deriva. O sea
+// que una mejora del derivador NUNCA alcanza a un archivo que no cambió, y el grafo queda con
+// regiones derivadas por versiones distintas sin que nada lo diga.
+//
+// No es hipotético. El resolvedor cross-paquete nació el 2026-08-14 a las 17:20 (#309) y seis
+// paquetes —privacy, provision, detector, cognition, redact, skillsource— tenían sus filas escritas
+// ESE MISMO DÍA a las 03:20, catorce horas antes. Sus 47 archivos no cambiaron ni un byte desde
+// entonces, así que el incremental los saltea para siempre y sus llamadas cross-paquete no existen
+// para el grafo. Se leía como «el algoritmo falla en algunos paquetes» y era dato viejo.
+//
+// Subir esta constante hace que el próximo índice incremental re-derive TODO una vez y después
+// vuelva a ser barato. Es preferible a un re-índice manual que nadie se acuerda de correr.
+const GraphDeriverVersion = "2-crosspkg"
+
 // ModuleIndex es la implementación EN MEMORIA de SymbolIndex: se arma con los nodos ya derivados
 // (el camino del índice completo). El camino incremental arma otra implementación desde la base.
 type ModuleIndex struct {
