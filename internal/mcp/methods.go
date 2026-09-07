@@ -134,6 +134,13 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
 	readOnly := s.toolReadOnly[callReq.Name]
+	// Escalón de sólo lectura: se corta ACÁ, con el nombre de la tool ya resuelto, para que el
+	// error pueda nombrarla. Va antes de la autorización y del candado porque no depende de quién
+	// llama ni de la concurrencia: la base no se puede escribir y punto. No es la garantía —eso
+	// lo hace `PRAGMA query_only` del lado de SQLite— sino la explicación.
+	if rpcErr, cortado := s.interceptarSoloLectura(ctx, callReq.Name); cortado {
+		return nil, rpcErr
+	}
 	// Autorización por rol (Track 16 F1 16.1c): en modo serve hay un principal en el ctx
 	// (lo autenticó el transporte HTTP). Un reader solo puede tools de lectura. En stdio
 	// local no hay principal ⇒ acceso pleno (confianza local). Se chequea ANTES de tomar

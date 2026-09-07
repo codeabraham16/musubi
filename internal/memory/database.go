@@ -57,6 +57,13 @@ type DbEngine struct {
 	// observación y hacía que `sync_status` contra el cerebro reportara miles de "pendientes de
 	// envío": una señal de salud que MIENTE, y que ya mandó a investigar un problema inexistente.
 	outboxEnabled bool
+
+	// soloLectura marca un engine abierto por NewDbEngineSoloLectura: la base es más nueva que
+	// este binario pero su piso de lectura lo alcanza. No es el que impide escribir —eso lo hace
+	// `PRAGMA query_only` en el DSN, del lado de SQLite— sino el que deja que los de arriba lo
+	// DIGAN antes de intentarlo, para que el error sea una explicación y no un rechazo del motor
+	// a mitad de una operación. Ver solo_lectura.go.
+	soloLectura bool
 }
 
 // SetOutboxEnabled decide si los guardados 'shared' se encolan para el central. Desde que

@@ -8,6 +8,53 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede
+  consultar.** Con el piso grabado en la base, `musubi daemon` deja de tener dos respuestas para
+  tres situaciones. Los tres estados, y que sean tres es el punto:
+
+  | estado | qué hace |
+  |---|---|
+  | sano | migra, lee y escribe |
+  | **sólo lectura** | **lee; toda tool que muta se rechaza nombrando el motivo** |
+  | degradado | no hay memoria; contesta el protocolo y rechaza todo |
+
+  Verificado con el binario real contra una base marcada `v49` (piso 43, binario en v48):
+  `initialize` declara `musubi/readonly` con **36 tools servibles**, `musubi_recall` **devuelve la
+  nota sembrada**, y `musubi_save_observation` vuelve con `-32005` y una explicación.
+
+  **La garantía la da SQLite, no nuestra disciplina.** `PRAGMA query_only = 1` va en el DSN, así
+  que lo hereda cada conexión del pool, y el constructor además **verifica que quedó puesto** en
+  vez de confiar en que el driver aplicó el `_pragma`. Una lista de funciones-que-no-llamamos
+  habría envejecido en la primera escritura nueva que alguien agregue.
+
+  **El hallazgo que casi lo deja en teatro: `musubi_recall` NO es `readOnly`.** Y con razón —
+  escribe: refuerza el acceso de lo que devolvió, y ese error era *fatal* para la consulta—. La
+  primera versión del escalón rechazó la tool de lectura principal. Medido sobre el registro, sólo
+  **tres** tools tienen esa forma: `musubi_recall` y `musubi_memory_expand` (`bumpAccess`) y
+  `musubi_recall_code` (`LedgerAdd`). Su escritura es telemetría, no parte de la respuesta.
+
+  Se arregló en los dos niveles: la capa de memoria **omite** esas escrituras cuando la base es de
+  sólo lectura —los mismos ítems, en el mismo orden, sin la señal de refuerzo de esa sesión— y el
+  registro de tools gana un cuarto eje, `roClass`, con el mismo patrón que `lockClass`: el cero se
+  deriva de `readOnly` (fail-safe, una tool nueva no entra al modo por olvido) y
+  `roLeeConEscrituraIncidental` lo declara para esas tres. Marcar `readOnly` a `musubi_recall`
+  habría sido más corto y **estaba descartado de antes**: ese eje decide autorización, y la abriría
+  a los principales `reader`.
+
+  No es un duplicado de `RecallOptions.NoBump`: eso es una *preferencia* por llamada que la capa
+  MCP no pasa nunca; esto es una *capacidad* del engine que ningún caller puede olvidarse de
+  declarar, y cubre además a `ExpandMemory`, que no tiene opciones donde ponerla.
+
+  `servirSoloLectura` es una función aparte y no una rama de `runDaemon`, porque lo que la
+  distingue no es una opción de más sino **todo lo que no arranca**: mantenimiento, grafo,
+  destilado, ledger de uso, vertedero del feed, outbox y cognición. Escrito como rama, cada
+  scheduler nuevo quedaría corriendo también acá contra una base que no se puede escribir.
+
+  Ocho invariantes (R1–R8) con seis sabotajes, cada uno rojo en el suyo. R8 corre `runDaemon` en un
+  subproceso real. **Y el escenario de D5 tuvo que corregirse**: desde que las bases graban su
+  piso, una base más nueva que este binario alcanza ya no cae en degradado sino en el escalón; el
+  caso degradado es ahora el de una base *sin evidencia* de piso, y así se arma.
+
 - **La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en
   dos situaciones distintas.** `ErrSchemaTooNew` es un booleano: o el binario llega al esquema de
   la base, o se niega. Eso trata igual a una base que cambió de forma y a una que sólo sumó
