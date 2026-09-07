@@ -7,6 +7,48 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La identidad del binario viaja en el handshake: hasta acá ningún camino del protocolo decía
+  qué build había enfrente.** `serverInfo.version` contestaba el literal `"1.0.0"` desde siempre,
+  mientras `s.version` —la versión real, ya inyectada por `WithVersion` desde `main`— existía y
+  no se usaba. `musubi_whoami` tampoco la llevaba.
+
+  Eso no era cosmético. Medido el 2026-09-07 hay **tres builds hablándose en la malla al mismo
+  tiempo** —`0.133.0-main` en la sala de mando, `0.131.0-flota` en el cerebro central y
+  `0.130.0-flota` en el daemon que levanta el gateway de Telegram, este último con el ejecutable
+  ya borrado del disco— y **cuatro tools con JSON distinto** entre dos de ellos. El agente veía
+  dos descripciones de la misma tool y nada le decía cuál era la vieja: la causa mecánica es que
+  la identidad no viajaba.
+
+  Ahora hay un objeto `buildid.Identity` con `version`, `commit`, `dirty`, `schema`, `capver`,
+  `tools_count`, `catalog_sha256` y `go`. Va en `_meta` del `initialize` —y no dentro de
+  `serverInfo`, cuya forma la fija el spec de MCP y donde un campo propio es donde un cliente
+  estricto se rompe—, y `serverInfo.version` pasa a llevar la versión de verdad. Se expone
+  también por `musubi version --json`.
+
+  **La regla de la pieza: lo que se puede DERIVAR no se tipea.** El commit y el estado del árbol
+  salen de `runtime/debug` (los graba el toolchain); el esquema, de la última migración que el
+  binario conoce; el catálogo se cuenta y se hashea sobre el registro real, con la MISMA regla de
+  visibilidad que `tools/list` —una tool dormida no entra— para que el número describa lo que
+  alguien realmente sirve. Lo único escrito a mano es `Capver`, a propósito: declara semántica,
+  que ningún dato del binario puede inferir, y lleva su bitácora de una línea por bump.
+
+  **Lo que NO está, y por qué.** No hay `branch` ni `canal`: Go no los graba en el build info, así
+  que incluirlos exigiría tipearlos por ldflags, que es exactamente lo que esta pieza viene a
+  eliminar. Un campo tipeado que nadie actualiza miente peor que un campo ausente.
+
+  La salida por defecto de `musubi version` **no cambia ni gana una línea**: `redesplegar-cerebro.sh`
+  la compara entera contra la versión que instaló, y un renglón de más ahí se leería como un
+  rollback en mitad de un despliegue que en realidad salió bien. Por eso `--json` es una bandera,
+  igual que `--esquema`.
+
+  Cinco invariantes con su sabotaje visto en rojo, cada uno atacando el suyo y ninguno salpicando
+  a los demás. El primero se descubrió **vacuo**: el sabotaje escribía a mano el esquema actual y
+  el test quedaba verde. Ninguna prueba en un solo instante puede separar «derivado» de «tipeado
+  con el valor que hoy es correcto», así que el test declara ese límite en vez de aparentar que
+  prueba más de lo que prueba — lo que garantiza es detección en la deriva, que es el único
+  momento en que una constante tipeada hace daño.
+
 ### Fixed
 - **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
   `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código

@@ -75,8 +75,26 @@ func noCtx(h func(json.RawMessage) (interface{}, *RpcError)) toolHandler {
 	}
 }
 
-// handleInitialize responde el handshake MCP (initialize).
+// handleInitialize responde el handshake MCP (initialize), y es el ÚNICO lugar del protocolo
+// donde este binario puede decir quién es antes de que le pidan nada.
+//
+// ANTES ACÁ HABÍA UN LITERAL. `serverInfo.version` decía "1.0.0" desde siempre, mientras
+// `s.version` —la versión real, inyectada por WithVersion desde main— existía y no se usaba. Con
+// tres builds distintos hablándose en la malla, eso convertía la única pregunta útil («¿cuál de
+// estas dos descripciones de la misma tool es la vieja?») en una que nadie podía contestar.
+//
+// EL OBJETO COMPLETO VA EN `_meta` Y NO DENTRO DE serverInfo: la forma de serverInfo la fija el
+// spec de MCP y meterle campos propios es donde un cliente estricto se rompe. `_meta` es el
+// sobre que el propio spec reserva para extensiones, así que un cliente que no lo entiende lo
+// ignora y sigue viendo el serverInfo de siempre, ahora con la versión de verdad.
 func (s *McpServer) handleInitialize() interface{} {
+	id := s.Identity()
+	version := id.Version
+	if version == "" {
+		// Un servidor construido sin WithVersion —los tests, y nada más— no sabe qué versión es.
+		// Decirlo es correcto; inventar un número sería la falla que esta pieza vino a arreglar.
+		version = "unknown"
+	}
 	return map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
@@ -84,7 +102,10 @@ func (s *McpServer) handleInitialize() interface{} {
 		},
 		"serverInfo": map[string]string{
 			"name":    "musubi-core",
-			"version": "1.0.0",
+			"version": version,
+		},
+		"_meta": map[string]interface{}{
+			"musubi/identity": id,
 		},
 	}
 }
