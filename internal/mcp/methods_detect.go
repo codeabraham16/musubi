@@ -211,6 +211,12 @@ func (s *McpServer) profundidadDe(ctx context.Context, diffs []codeintel.FileDif
 		if fd.Binary {
 			continue
 		}
+		// Un archivo que NO PUEDE tener radio -un README, un YAML- no deja el radio ciego:
+		// no hay nada que el grafo pudiera haber sabido de el. Lo que si cuenta es codigo
+		// que este build no indexa, porque ahi el cero significa "no pude medir".
+		if !codeintel.PuedeTenerRadio(fd.Path) {
+			continue
+		}
 		if !codeintel.IndexableForGraph(fd.Path) {
 			noIndexables++
 			continue
@@ -249,7 +255,7 @@ func (s *McpServer) profundidadDe(ctx context.Context, diffs []codeintel.FileDif
 	// 3) El piso de honestidad, con su motivo concreto.
 	var faltas []string
 	if noIndexables > 0 {
-		faltas = append(faltas, fmt.Sprintf("%d archivo(s) que el grafo no indexa", noIndexables))
+		faltas = append(faltas, fmt.Sprintf("%d archivo(s) de codigo que el grafo no indexa", noIndexables))
 	}
 	if archivosSinNodo > 0 {
 		faltas = append(faltas, fmt.Sprintf("%d archivo(s) sin un solo nodo en el grafo", archivosSinNodo))

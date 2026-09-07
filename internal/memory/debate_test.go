@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Escenario (a): ciclo completo 3 agentes × 2 rondas con quórum → gana la mayoría y cierra.
 func TestDebateFullCycleMajorityWins(t *testing.T) {
@@ -251,5 +254,80 @@ func TestUnDebateCerradoNoRevivePorNingunCamino(t *testing.T) {
 	// del debate previo para armar su topic, y sin status esa cadena no se puede auditar.
 	if _, _, _, err := e.DebateStatus(d.ID); err != nil {
 		t.Errorf("un debate cerrado tiene que poder leerse: es de donde sale el estado de la vuelta siguiente; %v", err)
+	}
+}
+
+// --- D1: el tope del bucle de corrección se hace CUMPLIR ---------------------------------
+//
+// La instrucción decía «K=3 vueltas, y agotarlo es un rechazo» y nada lo sostenía: abrir la
+// vuelta K+1 dependía del criterio de quien estaba, justamente, cansado de corregir. El riesgo
+// de un bucle sin salida no es girar para siempre — es que el agente ceda y apruebe para
+// terminar, que es lo mismo que el tope existe para evitar.
+
+func TestD1PasarseDelTopeNoAbreOtraVuelta(t *testing.T) {
+	e := newTestEngine(t)
+	topic := "calibrar la profundidad · vuelta 4/3 · abiertos: seguridad#1 · previo: abc"
+
+	_, err := e.OpenDebate(topic, 2, 2, "")
+	if err == nil {
+		t.Fatal("la vuelta 4 de un tope de 3 no puede abrir un debate: agotar el tope ES el rechazo")
+	}
+	// Y el error tiene que DECIR qué pasó y qué hacer. Un «error» a secas empuja a probar otra
+	// redacción del topic hasta que entre, que es la salida que el tope quiere cerrar.
+	for _, debeDecir := range []string{"agotó", "RECHAZADO POR AGOTAMIENTO", "escalá"} {
+		if !strings.Contains(err.Error(), debeDecir) {
+			t.Errorf("el error debe mencionar %q; dijo: %v", debeDecir, err)
+		}
+	}
+}
+
+// D2: la ÚLTIMA vuelta permitida sí abre. Sin esta mitad, un motor que rechazara todo pasaría
+// D1 y habría roto el bucle entero.
+func TestD2LaUltimaVueltaPermitidaSiAbre(t *testing.T) {
+	e := newTestEngine(t)
+	for _, topic := range []string{
+		"un cambio · vuelta 1/3 · abiertos: - · previo: -",
+		"un cambio · vuelta 3/3 · abiertos: perf#2 · previo: abc",
+	} {
+		if _, err := e.OpenDebate(topic, 2, 2, ""); err != nil {
+			t.Errorf("%q debía abrir sin problema, obtuve: %v", topic, err)
+		}
+	}
+}
+
+// D3: un topic que no sigue la convención no se ve afectado. La compuerta se aplica a lo que
+// DECLARA estar en un bucle de corrección, no a todo debate.
+func TestD3UnTopicSinLaConvencionNoSeToca(t *testing.T) {
+	e := newTestEngine(t)
+	for _, topic := range []string{
+		"¿el índice nuevo mejora el recall?",
+		"migrar a la versión 4/3 del protocolo", // parecido, pero no dice «vuelta»
+	} {
+		if _, err := e.OpenDebate(topic, 2, 2, ""); err != nil {
+			t.Errorf("%q no declara un bucle de corrección y debía abrir: %v", topic, err)
+		}
+	}
+}
+
+// D4: la convención tiene UNA definición. `musubi arnes` mide las vueltas con la misma función
+// que el motor usa para hacerlas cumplir; con dos regex separadas, endurecer una dejaría a la
+// otra midiendo la convención vieja y las dos seguirían andando.
+func TestD4LaConvencionSeLeeIgualEnLosDosLados(t *testing.T) {
+	casos := []struct {
+		topic         string
+		k, tope       int
+		sigueLaConven bool
+	}{
+		{"x · vuelta 2/3 · y", 2, 3, true},
+		{"x · vuelta  10 / 4 · y", 10, 4, true},
+		{"x · sin convención · y", 0, 0, false},
+		{"versión 4/3", 0, 0, false},
+	}
+	for _, c := range casos {
+		k, tope, ok := VueltaDelTopic(c.topic)
+		if ok != c.sigueLaConven || k != c.k || tope != c.tope {
+			t.Errorf("VueltaDelTopic(%q) = (%d,%d,%v), quería (%d,%d,%v)",
+				c.topic, k, tope, ok, c.k, c.tope, c.sigueLaConven)
+		}
 	}
 }

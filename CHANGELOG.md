@@ -8,6 +8,59 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
+  `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código
+  impedía abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de
+  corregir. El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
+  apruebe para terminar, que es exactamente lo que el tope existe para evitar.
+
+  Ahora `OpenDebate` se niega a abrir un debate cuyo topic declare una vuelta por encima de su
+  propio tope, con un error que dice qué pasó y qué hacer. No hace falta estado nuevo: el topic
+  ya declara `vuelta k/K`, y negarse a abrir falla del lado seguro —un debate que no existe no
+  puede aprobar nada—. La convención pasa a tener UNA definición (`memory.VueltaDelTopic`), que
+  es la misma que `musubi arnes` usa para medir: con dos regex separadas, endurecer una dejaría
+  a la otra midiendo la convención vieja, y las dos seguirían andando.
+
+  El mensaje va en el error y no en las reglas de la skill a propósito: el error cuesta tokens
+  sólo cuando se dispara, y las reglas los cuestan en cada turno.
+- 🔴 **La profundidad de revisión estaba calibrada a ojo, y medirla mostró que no distinguía
+  nada.** Los cortes de `codeintel.Profundidad` se eligieron cuando la función se escribió, sin
+  una distribución que los respaldara. Medido ahora sobre los **108 PRs reales** de este repo
+  —con el grafo indexado, descontados los back-merges (que no son un PR sino «todo lo que main
+  ganó») y los duplicados— el reparto era **1 % mínima · 30 % estándar · 67 % profunda**: dos de
+  cada tres cambios pedían el panel más caro. Un criterio que casi siempre contesta lo mismo
+  dejó de ser un criterio.
+
+  Tres causas independientes, cada una medida:
+
+  1. **Los escalones estaban por debajo de la mediana.** `lineas` topeaba en 200 con una mediana
+     de 373; `simbolos` en 9 con una mediana de 15. Seis de cada diez PRs sacaban el máximo en
+     esas dos. Ahora cada borde sale de un cuantil observado (P33 / P75) y se redondea a un
+     número que una persona pueda rehacer de cabeza, que es la razón de ser de los escalones.
+  2. **`hay_borrados` no medía lo que decía.** En un diff unificado, MODIFICAR una línea es un
+     borrado más un agregado, así que «hay al menos una línea borrada» era cierto en el **83 %**
+     de los PRs: una constante disfrazada de señal, que le sumaba un punto a todo el mundo. Lo
+     que la señal existe para ver —un archivo borrado entero, o uno que saca más de lo que
+     pone— pasa en el **12 %**, y eso es lo que mide ahora. El punto ciego original (el hunk que
+     sólo borra) lo cubre `lineas`, que desde F2 suma agregadas Y borradas.
+  3. **Tocar un README volvía inalcanzable el panel más barato.** El piso de honestidad usaba
+     `IndexableForGraph` para decidir si el radio quedó ciego, y esa función contesta otra
+     pregunta: «¿el indexador debe recolectar este archivo?». Con eso, un CHANGELOG.md caía en
+     la misma bolsa que un `.ts` sin indexar. Medido: el **84 %** de los PRs tocaba algún archivo
+     no indexable y en el **62 %** ése era el ÚNICO motivo de ceguera, con el código enteramente
+     cubierto. Un PR de 0 puntos terminaba en `estandar` por un `.md`. La función nueva
+     `PuedeTenerRadio` separa «no es código» (no hay nada que saber) de «es código que este
+     build no indexa» (ahí no saber es real), y **ante la duda cuenta como código**, que es el
+     error barato.
+
+  Reparto resultante, misma población y mismas funciones de producción: **22 % · 49 % · 28 %**.
+  La ceguera del radio baja de 88 % a 36 %, y lo que queda es ceguera de verdad —símbolos que ya
+  no existen en el `HEAD` de hoy—. 17 sabotajes verificados en rojo, cada uno atacando el
+  invariante que su test declara.
+
+  **Un test de este mismo track medía el proxy y no la cosa**, y se descubrió saboteándolo:
+  congelaba la tabla de escalones llamando a `escalon()` con números escritos a mano, así que
+  mover una constante calibrada lo dejaba verde. Ahora pasa por `Profundidad` y lee el desglose.
 - 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
   `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
   no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se

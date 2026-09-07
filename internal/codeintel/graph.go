@@ -477,3 +477,41 @@ func sortEdges(e []Edge) []Edge {
 	})
 	return e
 }
+
+// sinRadioPosible son las extensiones de archivos que NO son código fuente: documentación,
+// configuración, datos y assets. Ninguno puede tener un nodo en el grafo, ni ahora ni nunca.
+var sinRadioPosible = map[string]bool{
+	".md": true, ".markdown": true, ".txt": true, ".rst": true, ".adoc": true,
+	".yaml": true, ".yml": true, ".json": true, ".toml": true, ".ini": true,
+	".cfg": true, ".conf": true, ".env": true, ".properties": true,
+	".csv": true, ".tsv": true, ".xml": true, ".lock": true, ".sum": true,
+	".html": true, ".htm": true, ".css": true, ".scss": true, ".sass": true,
+	".svg": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".webp": true, ".ico": true, ".pdf": true, ".golden": true,
+}
+
+// PuedeTenerRadio dice si tiene sentido preguntarle al grafo por el radio de impacto de este
+// archivo. NO es lo mismo que IndexableForGraph, y confundirlas cuesta caro.
+//
+// IndexableForGraph contesta «¿el indexador debe recolectar esto?» — hoy, en la práctica, «¿es
+// .go?». Usarla para decidir si el radio quedó CIEGO mete en la misma bolsa dos cosas opuestas:
+// un `.ts` que sí es código y este build no sabe leer (ahí no saber es real) y un CHANGELOG.md
+// que no es código y jamás va a tener un nodo (ahí no hay nada que saber).
+//
+// Medido sobre los 131 merges de este repo: el 84% tocaba algún archivo no indexable, y en el
+// 62% ése era el ÚNICO motivo de ceguera — el código estaba enteramente cubierto. Como el piso
+// de honestidad impide bajar a «mínima» cuando el radio está ciego, el efecto neto era que
+// tocar un README volvía inalcanzable el panel más barato. Un nivel que nunca se dispara
+// informa exactamente tan poco como uno que siempre se dispara.
+//
+// ANTE LA DUDA, CÓDIGO. Una extensión desconocida devuelve true —o sea, cuenta para la ceguera
+// si el grafo no la cubre—, que es el error barato: revisar de más. La lista enumera lo que NO
+// es código justamente para que agregar un lenguaje nuevo no lo vuelva invisible por olvido.
+func PuedeTenerRadio(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" {
+		// Sin extensión: LICENSE, Dockerfile, Makefile, VERSION. Nada de eso entra al grafo.
+		return false
+	}
+	return !sinRadioPosible[ext]
+}

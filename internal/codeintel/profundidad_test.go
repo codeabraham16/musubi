@@ -27,11 +27,11 @@ func TestP1CadaSenalPuedeSubirElNivelPorSiSola(t *testing.T) {
 		senal string
 		s     Senales
 	}{
-		{"archivos", Senales{Archivos: 3}},
-		{"lineas", Senales{Lineas: 31}},
-		{"simbolos", Senales{Simbolos: 3}},
-		{"paquetes", Senales{Paquetes: 2}},
-		{"callers_en_radio", Senales{CallersEnRadio: 1}},
+		{"archivos", Senales{Archivos: 5}},
+		{"lineas", Senales{Lineas: 151}},
+		{"simbolos", Senales{Simbolos: 8}},
+		{"paquetes", Senales{Paquetes: 3}},
+		{"callers_en_radio", Senales{CallersEnRadio: 5}},
 		{"paquetes_en_radio", Senales{PaquetesEnRadio: 2}},
 		{"hay_borrados", Senales{HayBorrados: true}},
 	}
@@ -56,31 +56,61 @@ func TestP1CadaSenalPuedeSubirElNivelPorSiSola(t *testing.T) {
 	}
 }
 
-// --- P2: los escalones son EXACTAMENTE los de la tabla ---------------------------------
+// --- P2: los escalones calibrados son los que están EN VIGENCIA ------------------------
+//
+// Este test medía el proxy y no la cosa: llamaba a `escalon()` con números escritos a mano y
+// comprobaba su aritmética, que nunca estuvo en duda. Lo que importa es OTRA cosa —que
+// `Profundidad` aplique esos bordes— y eso no lo tocaba: mover una constante calibrada lo
+// dejaba verde. Se descubrió saboteándolo, que es para lo que sirve el sabotaje.
+//
+// Ahora cada caso arma unas Senales reales, las pasa por Profundidad y lee el punto del
+// desglose. Los bordes van escritos, no leídos de las constantes: un test que toma el mismo
+// número que el código no puede detectar que el número cambió.
 
-func TestP2LosEscalonesCaenDondeDiceLaTabla(t *testing.T) {
+func TestP2LosEscalonesCalibradosEstanEnVigencia(t *testing.T) {
 	casos := []struct {
-		nombre           string
-		bajo, alto       int
-		enBajo, sobreDos int
+		senal      string
+		poner      func(*Senales, int)
+		bajo, alto int
 	}{
-		{"archivos/simbolos", 2, 9, 2, 10},
-		{"lineas", 30, 200, 30, 201},
-		{"paquetes", 1, 3, 1, 4},
-		{"callers", 0, 9, 0, 10},
+		{"archivos", func(s *Senales, v int) { s.Archivos = v }, 4, 12},
+		{"lineas", func(s *Senales, v int) { s.Lineas = v }, 150, 800},
+		{"simbolos", func(s *Senales, v int) { s.Simbolos = v }, 7, 40},
+		{"paquetes", func(s *Senales, v int) { s.Paquetes = v }, 2, 5},
+		{"callers_en_radio", func(s *Senales, v int) { s.CallersEnRadio = v }, 4, 35},
+		{"paquetes_en_radio", func(s *Senales, v int) { s.PaquetesEnRadio = v }, 1, 2},
 	}
+
+	punto := func(v Veredicto, nombre string) (int, bool) {
+		for _, x := range v.Senales {
+			if x.Nombre == nombre {
+				return x.Punto, true
+			}
+		}
+		return 0, false
+	}
+
 	for _, c := range casos {
-		if got := escalon(c.enBajo, c.bajo, c.alto); got != 0 {
-			t.Errorf("%s: el borde de abajo (%d) debe puntuar 0, obtuve %d", c.nombre, c.enBajo, got)
+		bordes := []struct {
+			valor, quiero int
+			que           string
+		}{
+			{c.bajo, 0, "el borde de abajo puntúa 0"},
+			{c.bajo + 1, 1, "uno más que el borde de abajo puntúa 1"},
+			{c.alto, 1, "el borde de arriba todavía puntúa 1"},
+			{c.alto + 1, 2, "pasado el borde de arriba puntúa 2"},
 		}
-		if got := escalon(c.enBajo+1, c.bajo, c.alto); got != 1 {
-			t.Errorf("%s: uno más que el borde (%d) debe puntuar 1, obtuve %d", c.nombre, c.enBajo+1, got)
-		}
-		if got := escalon(c.alto, c.bajo, c.alto); got != 1 {
-			t.Errorf("%s: el borde de arriba (%d) debe puntuar 1, obtuve %d", c.nombre, c.alto, got)
-		}
-		if got := escalon(c.sobreDos, c.bajo, c.alto); got != 2 {
-			t.Errorf("%s: pasado el borde (%d) debe puntuar 2, obtuve %d", c.nombre, c.sobreDos, got)
+		for _, b := range bordes {
+			var sen Senales
+			c.poner(&sen, b.valor)
+			v := Profundidad(sen)
+			got, hallada := punto(v, c.senal)
+			if !hallada {
+				t.Fatalf("%s: la señal no aparece en el desglose", c.senal)
+			}
+			if got != b.quiero {
+				t.Errorf("%s=%d: %s — quería %d, obtuve %d", c.senal, b.valor, b.que, b.quiero, got)
+			}
 		}
 	}
 }
@@ -108,7 +138,7 @@ func TestP4LosCortesDeNivel(t *testing.T) {
 	casos := []struct {
 		puntosBuscados int
 		quiero         NivelRevision
-	}{{0, NivelMinimo}, {2, NivelMinimo}, {3, NivelEstandar}, {6, NivelEstandar}, {7, NivelProfundo}, {13, NivelProfundo}}
+	}{{0, NivelMinimo}, {2, NivelMinimo}, {3, NivelEstandar}, {7, NivelEstandar}, {8, NivelProfundo}, {13, NivelProfundo}}
 	for _, c := range casos {
 		s := senalesQueSuman(c.puntosBuscados)
 		v := Profundidad(s)
@@ -126,12 +156,12 @@ func TestP4LosCortesDeNivel(t *testing.T) {
 func senalesQueSuman(n int) Senales {
 	// Cada entrada sube UN punto sobre la anterior.
 	escalera := []func(*Senales){
-		func(s *Senales) { s.Archivos = 3 }, func(s *Senales) { s.Archivos = 10 },
-		func(s *Senales) { s.Lineas = 31 }, func(s *Senales) { s.Lineas = 201 },
-		func(s *Senales) { s.Simbolos = 3 }, func(s *Senales) { s.Simbolos = 10 },
-		func(s *Senales) { s.Paquetes = 2 }, func(s *Senales) { s.Paquetes = 4 },
-		func(s *Senales) { s.CallersEnRadio = 1 }, func(s *Senales) { s.CallersEnRadio = 10 },
-		func(s *Senales) { s.PaquetesEnRadio = 2 }, func(s *Senales) { s.PaquetesEnRadio = 4 },
+		func(s *Senales) { s.Archivos = 5 }, func(s *Senales) { s.Archivos = 13 },
+		func(s *Senales) { s.Lineas = 151 }, func(s *Senales) { s.Lineas = 801 },
+		func(s *Senales) { s.Simbolos = 8 }, func(s *Senales) { s.Simbolos = 41 },
+		func(s *Senales) { s.Paquetes = 3 }, func(s *Senales) { s.Paquetes = 6 },
+		func(s *Senales) { s.CallersEnRadio = 5 }, func(s *Senales) { s.CallersEnRadio = 36 },
+		func(s *Senales) { s.PaquetesEnRadio = 2 }, func(s *Senales) { s.PaquetesEnRadio = 3 },
 		func(s *Senales) { s.HayBorrados = true },
 	}
 	var s Senales
@@ -263,8 +293,11 @@ func TestP8SenalesDelDiffCuentaArchivosPaquetesYLineas(t *testing.T) {
 	if s.Simbolos != 7 {
 		t.Errorf("los símbolos entran por parámetro: quería 7, obtuve %d", s.Simbolos)
 	}
-	if s.HayBorrados != true {
-		t.Error("uno de los archivos borra 2 líneas")
+	// Y NO enciende la séptima señal: los tres archivos agregan más de lo que sacan. Antes de
+	// calibrar esto daba true —bastaba una línea borrada— y por eso la señal valía lo mismo que
+	// una constante. Ver TestP10.
+	if s.HayBorrados {
+		t.Error("agregar 10 y borrar 2 es MODIFICAR, no sacar: la séptima señal no debe encenderse")
 	}
 }
 
@@ -285,5 +318,74 @@ func TestP9ElDesgloseSumaElTotal(t *testing.T) {
 		if len(v.Senales) != 7 {
 			t.Errorf("son siete señales, el desglose trae %d", len(v.Senales))
 		}
+	}
+}
+
+// --- P10: modificar no es borrar --------------------------------------------------------
+//
+// EL INVARIANTE QUE FALTABA, y el que hizo que la séptima señal valiera lo mismo que una
+// constante durante toda su primera versión.
+//
+// En un diff unificado, cambiar una línea se escribe como un borrado seguido de un agregado.
+// Entonces «hay al menos una línea borrada» —que era el predicado— es cierto en casi todo
+// cambio: medido sobre los PRs de este repo, el 83%. Una señal así no ordena; le suma un punto
+// a todo el mundo, y el único efecto es que la escala entera se corre para arriba.
+//
+// Nada de eso se veía en un test: los casos que había usaban un borrado PURO (agregadas 0),
+// donde los dos predicados —el flojo y el estricto— dan lo mismo. El invariante hay que
+// atacarlo por el lado donde se diferencian, que es la modificación normal.
+func TestP10ModificarNoEsBorrar(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		fd       FileDiff
+		enciende bool
+		porque   string
+	}{
+		{
+			"una modificación normal", // agrega más de lo que saca
+			FileDiff{Path: "internal/a.go", ChangeType: ChangeModified, Agregadas: 40, Borradas: 12},
+			false, "reescribir doce líneas y sumar cuarenta no saca nada del sistema",
+		},
+		{
+			"una línea cambiada", // el caso mínimo, y el más frecuente de todos
+			FileDiff{Path: "internal/a.go", ChangeType: ChangeModified, Agregadas: 1, Borradas: 1},
+			false, "un renglón editado es la forma más común de cambio que existe",
+		},
+		{
+			"un archivo nuevo",
+			FileDiff{Path: "internal/nuevo.go", ChangeType: ChangeAdded, Agregadas: 200},
+			false, "agregar no es sacar",
+		},
+		{
+			"el archivo se vació",
+			FileDiff{Path: "internal/a.go", ChangeType: ChangeModified, Agregadas: 2, Borradas: 180},
+			true, "sacar 180 y poner 2 es desmantelar el archivo",
+		},
+		{
+			"un archivo borrado entero",
+			FileDiff{Path: "internal/viejo.go", ChangeType: ChangeDeleted, Borradas: 90},
+			true, "el archivo dejó de existir",
+		},
+	}
+	for _, c := range casos {
+		got := SenalesDelDiff([]FileDiff{c.fd}, 0).HayBorrados
+		if got != c.enciende {
+			t.Errorf("%s: la séptima señal dio %v y debía dar %v — %s", c.nombre, got, c.enciende, c.porque)
+		}
+	}
+}
+
+// P10b: el predicado se evalúa POR ARCHIVO, no sobre el total.
+//
+// Sin esto, un PR que borra un módulo entero mientras agrega otro más grande sumaría 300
+// agregadas contra 200 borradas y saldría limpio, tapando el único acto que la señal existe
+// para ver.
+func TestP10ElBorradoDeUnArchivoNoLoTapaOtroQueCrece(t *testing.T) {
+	files := []FileDiff{
+		{Path: "internal/nuevo.go", ChangeType: ChangeAdded, Agregadas: 300},
+		{Path: "internal/viejo.go", ChangeType: ChangeDeleted, Borradas: 200},
+	}
+	if !SenalesDelDiff(files, 0).HayBorrados {
+		t.Error("un archivo borrado sigue siendo un borrado aunque el PR sume líneas en total")
 	}
 }
