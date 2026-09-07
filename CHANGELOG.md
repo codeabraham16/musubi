@@ -8,6 +8,44 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El daemon dejó de morirse mudo: cuando la memoria no abre, ahora atiende degradado.** Hasta
+  acá, cualquier fallo de `NewDbEngine` mataba el proceso con `os.Exit(1)` y el diagnóstico por
+  stderr. Medido el 2026-09-07 contra una base marcada `v999` con un binario que llega a la
+  migración 47, mandándole al daemon un `initialize`:
+
+  ```
+  exit=1
+  STDOUT (lo que ve el cliente MCP): 0 bytes
+  STDERR: el esquema de la base es más nuevo que este binario: la base está en el esquema
+          v999 pero este binario solo llega a v47; actualizá musubi
+  ```
+
+  El mensaje era bueno y salía por el único canal que el cliente MCP no le muestra al agente.
+  **Cero bytes de protocolo es indistinguible de «musubi no está instalado»**, y las dos
+  situaciones piden acciones opuestas: una se arregla actualizando el binario, la otra
+  instalándolo. Y no es sólo el esquema: por ese mismo camino morían mudos el disco lleno, la
+  base corrupta y el permiso denegado.
+
+  Ahora el daemon levanta un servidor degradado que (1) **contesta el handshake** declarando la
+  causa en `_meta` bajo `musubi/degraded`, junto a la identidad de build; (2) **lista el mismo
+  catálogo** que un servidor sano —verificado por huella, no sólo por conteo—, porque una lista
+  vacía sería la misma mentira con otra cara: las tools existen, lo que falta es con qué
+  trabajar; y (3) **rechaza cada `tools/call`** con el código propio `-32004` y un mensaje que
+  nombra la versión del binario, la causa textual y que el binario está instalado y respondiendo.
+
+  No despacha nada: el handler tocaría un engine `nil`, el `recover` de `Dispatch` lo convertiría
+  en «error interno inesperado» y estaríamos de vuelta en un mensaje que no dice nada. Tampoco hay
+  un engine falso de por medio: un stub que devolviera vacío dejaría al agente leyendo «no hay
+  memoria sobre eso» —una respuesta que se lee como un dato— en vez de «no pude mirar».
+
+  El mismo experimento, contra el binario ya corregido: `exit=0` y **106.551 bytes** por stdout,
+  con el `catalog_sha256` idéntico al del servidor sano. El aviso por stderr se conserva: es lo
+  que ve el operador, y cambiarlo por otro canal mudo no era el punto.
+
+  Cinco invariantes (D1–D5), cada uno visto en rojo bajo un sabotaje que ataca al suyo. D5 corre
+  `runDaemon` en un **subproceso real** con sus pipes, porque el defecto vivía entre el `os.Exit`
+  y el cliente: un test sobre una función interna habría medido el proxy y no la cosa.
+
 - **La identidad del binario viaja en el handshake: hasta acá ningún camino del protocolo decía
   qué build había enfrente.** `serverInfo.version` contestaba el literal `"1.0.0"` desde siempre,
   mientras `s.version` —la versión real, ya inyectada por `WithVersion` desde `main`— existía y

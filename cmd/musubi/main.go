@@ -384,11 +384,23 @@ func runDaemon() {
 	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.
 	embedder := resolveEmbedder(cfg, root)
 
-	// Cargar motor de base de datos local
+	// Cargar motor de base de datos local.
+	//
+	// SI FALLA, EL DAEMON NO SE MUERE: ATIENDE DEGRADADO. Acá había un os.Exit(1) con el error a
+	// stderr, y eso le dejaba al cliente MCP cero bytes de protocolo — medido: `initialize`
+	// contra una base más nueva devolvía 0 bytes por stdout y exit 1. Para el agente eso es
+	// idéntico a «musubi no está instalado», y las dos cosas piden acciones opuestas. El
+	// servidor degradado habla el protocolo, lista el mismo catálogo y rechaza cada tools/call
+	// nombrando la causa. Ver internal/mcp/degradado.go.
+	//
+	// El aviso por stderr se conserva: es lo que ve el operador en el log del cliente MCP, y
+	// dejarlo de escribir sería cambiar un canal mudo por otro.
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "musubi: sirviendo en MODO DEGRADADO (el protocolo responde; las tools no)\n")
+		mcp.NewServidorDegradado(root, version, err).Start()
+		return
 	}
 	defer engine.Close()
 	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).

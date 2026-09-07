@@ -95,6 +95,14 @@ func (s *McpServer) handleInitialize() interface{} {
 		// Decirlo es correcto; inventar un número sería la falla que esta pieza vino a arreglar.
 		version = "unknown"
 	}
+	meta := map[string]interface{}{
+		"musubi/identity": id,
+	}
+	// Un servidor sin memoria lo DICE en el handshake, no recién cuando alguien intenta usarlo.
+	// La clave no aparece en un servidor sano: su ausencia es la señal de que todo está bien.
+	if deg := s.metaDegradacion(); deg != nil {
+		meta["musubi/degraded"] = deg
+	}
 	return map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
@@ -104,9 +112,7 @@ func (s *McpServer) handleInitialize() interface{} {
 			"name":    "musubi-core",
 			"version": version,
 		},
-		"_meta": map[string]interface{}{
-			"musubi/identity": id,
-		},
+		"_meta": meta,
 	}
 }
 
