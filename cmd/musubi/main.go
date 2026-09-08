@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
@@ -97,6 +99,23 @@ func main() {
 		// despliegue que en realidad salió bien.
 		if len(os.Args) > 2 && os.Args[2] == "--esquema" {
 			fmt.Println(memory.EsquemaEsperado())
+			return
+		}
+		// `--json` imprime la identidad COMPLETA de este binario, derivada y no tipeada. Es lo
+		// que un guion de despliegue tiene que comparar en vez de la cadena de versión: la
+		// versión sola no dice a qué esquema migra ni qué catálogo expone, que son las dos cosas
+		// que rompen cuando dos máquinas de la malla no corren el mismo build.
+		//
+		// Va como bandera y no como renglón nuevo de la salida normal por el mismo motivo que
+		// --esquema: `redesplegar-cerebro.sh` compara la salida por default ENTERA.
+		if len(os.Args) > 2 && os.Args[2] == "--json" {
+			n, sha := mcp.CatalogFingerprint()
+			b, err := json.MarshalIndent(buildid.Derive(version, n, sha), "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "no pude serializar la identidad: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(b))
 			return
 		}
 		fmt.Printf("musubi %s\n", version)
