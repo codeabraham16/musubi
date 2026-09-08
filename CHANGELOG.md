@@ -8,6 +8,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina
+  que queda afuera.** El `capver` existía desde que existe `buildid` y **nadie lo leía** — el modo
+  de falla que este repo persigue: se construye y no se enciende. Ahora tiene un consumidor.
+
+  `[CapverMin, Capver]` es una banda y no un número porque con un solo valor cualquier cambio de
+  contrato obliga a actualizar toda la malla el mismo día — el mismo cutover duro que el piso de
+  lectura acaba de sacar del esquema. `CapverMin` sube, nunca baja, y subirla es **retirar
+  soporte**: por eso lleva su propia bitácora, para que el día que una máquina vieja deje de poder
+  hablar sea una decisión con fecha y no el efecto lateral de haber tocado `Capver`.
+
+  El agente declara su capver en el latido; el cerebro lo compara, lo guarda por máquina
+  (`devices.capver`, migración 49) y responde en el campo `protocolo` cuando queda afuera. El
+  agente **lo imprime**, por el mismo motivo que ya imprime las notas de `muestra` y `servicios`:
+  quien puede actualizar esa máquina es quien la mira desde ahí, no quien lee los logs del cerebro.
+
+  **El latido NO se rechaza por esto, y la decisión es la pieza.** Una máquina rechazada deja de
+  latir, y dejar de latir se ve *exactamente igual* que estar apagada: el problema quedaría
+  invisible justo para quien puede arreglarlo. Queda viva, en la flota, con su problema escrito.
+
+  **`0` no es «capver cero», es «no declara»**, y se contesta con otro texto. Un agente anterior a
+  esta pieza no manda el campo; decirle que «habla un contrato viejo» sería un diagnóstico falso
+  para el mismo remedio. Es la misma regla que ya gobierna `puede_preguntar`, donde el nil se
+  distingue del `false` explícito.
+
+  **Y de paso cierra un agujero que el propio repo ya había documentado — para la otra mitad del
+  mensaje.** `internal/fleet/protocolo.go` existe porque la RESPUESTA del latido vivía escrita dos
+  veces, y eso costó dos features en silencio (`token_nuevo`, que dejaba la rotación de token sin
+  poder completarse nunca, y `servicios`, cuyo único propósito era que un inventario descartado no
+  desapareciera en silencio — y desaparecía en silencio). **El PEDIDO tenía el mismo problema y se
+  había pasado por alto**: el agente lo armaba como un `map[string]any` anónimo y el cerebro lo
+  leía con un struct privado. Un map es todavía peor que un struct duplicado: no tiene nombres de
+  campo que el compilador pueda mirar, así que un typo en la clave compila, arranca y responde 200
+  con el campo perdido. Ahora los dos lados usan `fleet.CuerpoLatido`.
+
+  Las dos guardas del repo hicieron su trabajo sobre este cambio y las dos exigían una decisión
+  escrita, no una línea: `capver` entró a la lista blanca del cuerpo tras el examen que esa prueba
+  pide —no dice quién es la máquina, dice qué contrato habla, y la única fila que puede tocar sigue
+  siendo la del token—, y `protocolo` tuvo que declararse consumido *y* sostenerse con la prueba
+  que verifica que llega de verdad, que pasó de cuatro campos a cinco.
+
+  B1–B5 con sus cinco sabotajes, cada uno rojo sólo en el suyo. B5 mide la **escritura** y no el
+  valor: un UPDATE que reasigna la fila a sí misma la deja idéntica y cuesta lo mismo —página
+  sucia, frame de WAL y fsync—, así que se cuenta con el espía de escrituras que ya vigila el
+  camino caliente del latido.
+
 - **El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede
   consultar.** Con el piso grabado en la base, `musubi daemon` deja de tener dos respuestas para
   tres situaciones. Los tres estados, y que sean tres es el punto:

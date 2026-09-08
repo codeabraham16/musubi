@@ -124,6 +124,12 @@ func (x *espiaDeEscrituras) ActualizarAutoreporte(id, version, direccion string)
 	return err
 }
 
+func (x *espiaDeEscrituras) ActualizarCapver(id string, capver int) error {
+	err := x.StorageBackend.ActualizarCapver(id, capver)
+	x.anotar("ActualizarCapver", true)
+	return err
+}
+
 func (x *espiaDeEscrituras) FijarCapacidadDePreguntar(deviceID string, puede bool) error {
 	err := x.StorageBackend.FijarCapacidadDePreguntar(deviceID, puede)
 	x.anotar("FijarCapacidadDePreguntar", true)

@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/fleet"
 )
 
@@ -426,15 +427,25 @@ func clienteParaElCerebro(nombre string) *http.Client {
 func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	// El cuerpo lleva la muestra y el autorreporte (qué build corre, por dónde se la alcanza).
 	// Ni un campo de identidad: quién es lo decide el token, del lado del cerebro.
-	carga := map[string]any{"version": version}
+	// SE ARMA CON EL TIPO DEL CONTRATO, no con un map. El `map[string]any` que estaba acá era la
+	// misma falla que el struct anónimo de la respuesta —dos formas del mismo mensaje sin nada que
+	// las ate— y peor: un map no tiene ni nombres de campo que el compilador pueda mirar, así que
+	// un typo en la clave compila, arranca y responde 200 con el campo perdido. El porqué largo
+	// está en internal/fleet/protocolo.go.
+	carga := fleet.CuerpoLatido{Version: version, Capver: buildid.Capver}
 	if rid := idRustdeskLocal(); rid != "" {
-		carga["rustdesk_id"] = rid
+		carga.RustdeskID = rid
 	}
 	if m != nil {
-		carga["muestra"] = m
+		// La muestra viaja CRUDA porque su techo es suyo (ver el campo en el contrato). Si no se
+		// puede serializar, se manda el latido sin ella: perder la telemetría de un ciclo es
+		// mejor que perder la señal de vida.
+		if txt, err := m.Serializar(); err == nil {
+			carga.Muestra = json.RawMessage(txt)
+		}
 	}
 	if d := direccionPropia(); d != "" {
-		carga["direccion"] = d
+		carga.Direccion = d
 	}
 	// LA CAPACIDAD DE PREGUNTAR (A57), MEDIDA EN ESTA MÁQUINA. Va SIEMPRE, aunque sea `false`:
 	// el campo es opcional en el cuerpo justamente para que un agente VIEJO —que no lo manda— se
@@ -445,9 +456,9 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	// cero sin explicación, y las tres causas —no hay escritorio, falta un paquete, el agente
 	// corre como servicio— se arreglan distinto.
 	cap := medirCapacidadDeAvisar()
-	carga["puede_preguntar"] = cap.Puede
+	carga.PuedePreguntar = &cap.Puede
 	if !cap.Puede && cap.Motivo != "" {
-		carga["motivo_no_preguntar"] = cap.Motivo
+		carga.MotivoNoPreguntar = cap.Motivo
 	}
 	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
 	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su
@@ -461,7 +472,7 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	// lista vacía se daba por enviada y no se enviaba, para siempre.
 	svs, mandarInventario, confirmarInventario := serviciosDelLatido()
 	if mandarInventario {
-		carga["servicios"] = svs
+		carga.Servicios = svs
 	}
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
@@ -502,6 +513,13 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 			// `servicios` se imprime por el mismo motivo que `muestra`, y es la razón por la
 			// que el cerebro lo manda: quien administra ESTA máquina no ve los logs del cerebro,
 			// así que un inventario rechazado tiene que verse acá o no se ve en ningún lado.
+			// EL CONTRATO. Se imprime por el mismo motivo que las otras dos: quien puede
+			// actualizar esta máquina es quien la mira desde acá, no quien lee los logs del
+			// cerebro. Un capver fuera de banda que sólo quedara del otro lado sería otra vez el
+			// modo de falla que este archivo viene esquivando.
+			if r.Protocolo != "" {
+				motivo += " · protocolo " + r.Protocolo
+			}
 			if r.Servicios != "" {
 				motivo += " · servicios " + r.Servicios
 			}

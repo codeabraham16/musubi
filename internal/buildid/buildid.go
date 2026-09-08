@@ -42,6 +42,33 @@ import (
 //	    puede afirmar algo sobre el otro.
 const Capver = 1
 
+// CapverMin es el capver MÁS VIEJO que este binario todavía atiende. Junto con Capver forma la
+// BANDA `[CapverMin, Capver]`: un par que declara un capver dentro de la banda puede hablar con
+// éste; uno afuera, no, y hay que decirle cuál de los dos lados le falta.
+//
+// POR QUÉ UNA BANDA Y NO UN NÚMERO. Con un solo valor, cualquier cambio de contrato obliga a
+// actualizar toda la malla el mismo día — que es exactamente el cutover duro que el piso de
+// lectura acaba de sacar del esquema. La banda dice hasta dónde atrás se sigue atendiendo, y por
+// eso se puede desplegar el central primero y las máquinas después.
+//
+// SUBE, NUNCA BAJA, Y SUBIRLA ES RETIRAR SOPORTE. El día que una máquina vieja deje de poder
+// hablar es el día que alguien mueve esta constante, y por eso lleva su propia bitácora: el
+// cambio tiene que ser una decisión con fecha, no un efecto lateral de haber tocado Capver.
+//
+// Bitácora — una línea por bump, y las viejas no se borran:
+//
+//	1 · 2026-09-07 · Nace con la banda. Igual a Capver porque no hay ningún capver anterior que
+//	    retirar: 1 es el primer valor que existió.
+const CapverMin = 1
+
+// EnLaBanda dice si `capver` cae dentro de lo que ESTE binario atiende.
+//
+// Un 0 NO está en la banda, y es a propósito: significa «no declara», que es lo que manda un par
+// anterior a que el capver existiera. Tratarlo como 1 sería inventarle una capacidad que nadie
+// afirmó — la misma regla que gobierna `PuedePreguntar` en el latido, donde el nil se distingue
+// del false explícito.
+func EnLaBanda(capver int) bool { return capver >= CapverMin && capver <= Capver }
+
 // Identity es lo que un extremo publica sobre sí mismo. Cruza el borde MCP y la red, así que
 // lleva tags JSON explícitos: sin ellos Go emitiría "Version"/"Schema" en mayúscula y un receptor
 // que parsea en minúscula NO falla, guarda un objeto con todos los campos vacíos y la falla se

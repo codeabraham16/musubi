@@ -1874,6 +1874,24 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version:        49,
+			name:           "capver_por_maquina",
+			readCompatible: true,
+			// EL CAPVER QUE DECLARA CADA MÁQUINA, GUARDADO DONDE YA VIVE SU AUTORREPORTE.
+			//
+			// `devices.agent_ver` dice qué BUILD corre; esto dice qué CONTRATO habla, que no es lo
+			// mismo: dos builds distintos pueden compartir capver, y ése es el punto de tener la
+			// banda. Sin guardarlo, la pregunta «¿qué máquinas no pueden hablar mi protocolo?»
+			// sólo se puede contestar esperando el próximo latido de cada una.
+			//
+			// ES readCompatible: ningún camino de lectura filtra por esta columna, así que un
+			// binario anterior devuelve exactamente las mismas filas de `devices` que hoy. El
+			// default 0 significa «no declara», igual que en el cuerpo del latido.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "capver", "capver INTEGER NOT NULL DEFAULT 0")
+			},
+		},
 	}
 }
 
