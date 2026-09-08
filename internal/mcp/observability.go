@@ -386,6 +386,9 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	b.WriteString("# HELP musubi_backup_local_age_seconds Antigüedad del último snapshot LOCAL (-1 si nunca). Dice si el timer corre; el de off-host dice si el backup sale de la máquina.\n")
 	b.WriteString("# TYPE musubi_backup_local_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_backup_local_age_seconds %d\n", st.BackupLocalAgeSec)
+	b.WriteString("# HELP musubi_maintenance_age_seconds Antigüedad del último ciclo de memoria —consolidar, olvidar, purgar— (-1 si nunca). Un cerebro que dejó de mantenerse responde igual que uno sano: sin esta serie no hay forma de notarlo.\n")
+	b.WriteString("# TYPE musubi_maintenance_age_seconds gauge\n")
+	fmt.Fprintf(b, "musubi_maintenance_age_seconds %d\n", st.MaintenanceAgeSec)
 }
 
 // renderEmpuje emite las TRES series de auto-vigilancia del empuje OTLP (S11).

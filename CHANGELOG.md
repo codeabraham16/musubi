@@ -8,6 +8,48 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace.** `runServe` no
+  arrancaba el ciclo de memoria —consolidar, olvidar, purgar— y sin embargo ya recibía
+  `WithMaintenance(cfg.Maintenance)`: la config estaba cableada desde siempre y **el consumidor no
+  existía**. No hay ningún comentario que lo excluyera a propósito.
+
+  **Cómo se veía eso, medido en el central el 2026-09-07.** El ciclo *sí* corría —`last_maintenance`
+  marcaba 31 h contra un intervalo de 24 h, o sea el diente de sierra normal del ticker— pero lo
+  corría **otro proceso**. La cadena, medida por `/proc`:
+
+  ```
+  musubi-gateway.service  →  main.py  →  /usr/local/bin/musubi daemon (pid 2892216, 6d 07h)
+                                              └─ abre /home/musubi/musubi-brain/.musubi/memory.db
+  ```
+
+  `musubi serve` arranca **1** scheduler (sólo el destilado); `musubi daemon` arranca **4**,
+  incluido el de mantenimiento. Así que la memoria del cerebro se mantenía como efecto secundario
+  de que **el bot de Telegram estuviera vivo**. Parar el bot —una operación perfectamente
+  razonable, es un bot de chat— dejaba la memoria sin consolidar, sin olvidar y sin purgar, y nada
+  lo decía. En el servidor no hay ningún timer ni crontab de `musubi maintain`: el único timer de
+  Musubi es el del backup.
+
+  Ahora `runServe` arranca el scheduler y su corrida de arranque, con el mismo gate de config que
+  `runDaemon`. **Dos procesos no se pisan**: `RunScheduledMaintenance` toma el candado de despacho
+  y consulta `MaintenanceDue` contra `last_maintenance` **en la base**, así que el que llega
+  segundo ve que no corresponde y no hace nada — la coordinación es del dato, no del proceso.
+
+  **Van sólo el mantenimiento y su corrida de arranque, no los otros tres schedulers del daemon**:
+  el del grafo indexa el árbol *checkouteado* y en un servidor no hay proyecto que indexar; el de
+  sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo programado sin nadie que
+  lo pidiera.
+
+  Y una serie nueva para que el silencio no pueda volver a esconderse:
+  **`musubi_maintenance_age_seconds`**, con la convención de `musubi_backup_local_age_seconds` —
+  **`-1` si nunca**, que distingue «nunca corrió» de «corrió hace 0 segundos», las dos respuestas
+  más distintas posibles. Un cerebro que dejó de mantenerse responde exactamente igual que uno
+  sano: la memoria sigue contestando, sólo deja de envejecer bien.
+
+  M1–M3 con tres sabotajes, cada uno rojo sólo en el suyo. M3 vigila las tres construcciones por
+  separado y la tercera es la que evita el arreglo simétrico y equivocado: el escalón de sólo
+  lectura **no** debe arrancar el ciclo, porque su base se abre con `PRAGMA query_only` y sería
+  trabajo programado para fallar cada vez.
+
 - **La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina
   que queda afuera.** El `capver` existía desde que existe `buildid` y **nadie lo leía** — el modo
   de falla que este repo persigue: se construye y no se enciende. Ahora tiene un consumidor.

@@ -360,6 +360,37 @@ func runServe(args []string) {
 		go server.RunDistillScheduler(ctx, time.Duration(cfg.Maintenance.AutoDistillMinutes*float64(time.Minute)), cfg.Maintenance.AutoDistillBatch)
 	}
 
+	// EL CEREBRO MANTIENE SU PROPIA MEMORIA. Acá no había nada, y `serve` ya recibía
+	// `WithMaintenance(cfg.Maintenance)`: la config estaba cableada y el consumidor no existía.
+	//
+	// CÓMO SE VEÍA ESO, medido en el central el 2026-09-07. El ciclo SÍ corría —`last_maintenance`
+	// marcaba 31 h contra un intervalo de 24 h, o sea el diente de sierra normal— pero lo corría
+	// otro proceso: `musubi-gateway.service` (el bot de Telegram) lanza `main.py`, que lanza
+	// `/usr/local/bin/musubi daemon`, y ESE daemon abre la misma base y sí arranca los cuatro
+	// schedulers. La memoria del cerebro se mantenía como efecto secundario de que un bot de chat
+	// estuviera vivo. Parar el bot —una operación perfectamente razonable— dejaba la memoria sin
+	// consolidar, sin olvidar y sin purgar, sin que nada lo dijera.
+	//
+	// DOS PROCESOS NO SE PISAN: RunScheduledMaintenance toma el candado de despacho y consulta
+	// MaintenanceDue contra `last_maintenance` en la BASE, así que el que llega segundo ve que no
+	// corresponde y no hace nada. La coordinación es del dato, no del proceso.
+	//
+	// VAN SÓLO EL MANTENIMIENTO Y SU CORRIDA DE ARRANQUE, y no los otros tres schedulers del
+	// daemon: el del grafo indexa el árbol CHECKOUTEADO y en un servidor no hay proyecto que
+	// indexar; el de sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo
+	// programado sin nadie que lo pidió.
+	if cfg.Maintenance.AutoIntervalHours > 0 {
+		go func() {
+			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
+			} else if ran {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d evictadas, %d purgadas\n",
+					rep.Consolidate.Merged, rep.Decay.Archived, rep.Evicted, rep.Purged)
+			}
+		}()
+		go server.RunMaintenanceScheduler(ctx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
+	}
+
 	if err := server.ListenAndServeHTTP(ctx, svc); err != nil {
 		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
 		os.Exit(1)
