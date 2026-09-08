@@ -488,8 +488,14 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
+	// `capver` entra a la lista blanca tras el mismo examen, y la respuesta es la misma: NO dice
+	// quién es esta máquina. Dice qué CONTRATO habla —una capacidad de sí misma, como `version`—
+	// y la única fila que puede tocar sigue siendo la del token presentado. La diferencia con
+	// `version` es lo que hace que exista: dos builds distintos pueden hablar el mismo capver, así
+	// que el cerebro no puede derivarlo de la versión aunque la tenga.
 	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
+		"capver": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -545,7 +551,8 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
 	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
+		"capver": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)

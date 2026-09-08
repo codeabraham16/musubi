@@ -162,8 +162,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       el binario viejo no puede derivarlo: no conoce las migraciones futuras. Va en una
 	//       tabla y no en `PRAGMA application_id` porque el default del PRAGMA es 0 y 0 también
 	//       sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número.
-	if latestSchemaVersion() != 48 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 48", latestSchemaVersion())
+	// v49 = EL CAPVER POR MÁQUINA (`devices.capver`). `agent_version` dice qué BUILD corre; esto
+	//       dice qué CONTRATO habla, y no es lo mismo: dos builds distintos pueden compartir
+	//       capver, que es justamente el punto de tener una banda [CapverMin, Capver]. Sin la
+	//       columna, «¿qué máquinas no pueden hablar mi protocolo?» sólo se contesta esperando el
+	//       próximo latido de cada una. readCompatible: ningún camino de lectura filtra por ella.
+	if latestSchemaVersion() != 49 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 49", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

@@ -132,12 +132,15 @@ type Device struct {
 	Name      string // legible, único dentro del proyecto
 	ProjectID string // tenancy: el mismo eje que aísla la memoria (A6)
 	Tier      Tier
-	Caps      []Cap    // capacidades CONCEDIDAS; el cero no permite nada (A5)
-	OS        string   // linux | windows | darwin | android | ios | otro
-	Arch      string   // amd64 | arm64 | ...
-	Address   string   // dirección por la que se lo alcanza (normalmente el tailnet)
-	AgentVer  string   // versión del agente, vacío en Tier B
-	Tags      []string // etiquetas libres para agrupar (sala, cliente, criticidad)
+	Caps      []Cap  // capacidades CONCEDIDAS; el cero no permite nada (A5)
+	OS        string // linux | windows | darwin | android | ios | otro
+	Arch      string // amd64 | arm64 | ...
+	Address   string // dirección por la que se lo alcanza (normalmente el tailnet)
+	AgentVer  string // versión del agente, vacío en Tier B
+	// Capver es el CONTRATO que declara el agente, no su versión de producto: dos builds
+	// distintos pueden hablar el mismo capver. 0 = no lo declara (agente anterior a la banda).
+	Capver int
+	Tags   []string // etiquetas libres para agrupar (sala, cliente, criticidad)
 
 	// Consentimiento es la POLÍTICA: qué se le debe a quien está usando esta máquina cuando
 	// alguien pide entrar. Vacío = no declarado, y lo resuelve el default del dominio — no se
