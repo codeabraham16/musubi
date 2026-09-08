@@ -2713,9 +2713,21 @@ func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcEr
 
 	// 2) Modo LIVE (fallback): pega a la API del marketplace. API key opcional vía env var
 	// (sube el rate limit); vacío => tier anónimo.
+	// LA VARIABLE O EL ARCHIVO `<VAR>_FILE` (A89/A101). Acá había un `os.Getenv` pelado, dentro
+	// del daemon: con `<VAR>_FILE` puesto y la variable vacía, esto caía al tier anónimo en
+	// silencio y el síntoma era un rate limit, no una config mal leída.
+	//
+	// A DIFERENCIA DE embedding/cognition, ACÁ EL VACÍO SÍ ES VÁLIDO: sin key se usa el tier
+	// anónimo a propósito. Pero un archivo NOMBRADO que no se puede leer no es «sin key», es
+	// config rota — y se dice, aunque no se aborte: cortar el descubrimiento de skills por esto
+	// sería peor que degradar.
 	var apiKey string
 	if s.sourcing.MarketplaceAPIKeyEnv != "" {
-		apiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)
+		k, err := config.SecretoDeEnv(s.sourcing.MarketplaceAPIKeyEnv)
+		if err != nil {
+			logx.Warn("marketplace_api_key_env nombra un archivo que no se pudo leer; sigo con el tier anónimo", "error", err)
+		}
+		apiKey = k
 	}
 
 	// Caché por (URL, query, limit): las queries de descubrimiento se repiten (la derivada
