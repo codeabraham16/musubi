@@ -8,6 +8,60 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en
+  dos situaciones distintas.** `ErrSchemaTooNew` es un booleano: o el binario llega al esquema de
+  la base, o se niega. Eso trata igual a una base que cambió de forma y a una que sólo sumó
+  columnas, y obliga a un cutover duro de toda la malla por cada migración — aunque **41 de las 47
+  migraciones (87%) no le cambian el resultado a ninguna consulta existente**.
+
+  Cada migración declara ahora `readCompatible`, y el piso de lectura se **deriva**: es la
+  migración no-compatible más alta. Medido sobre la lista real, **el piso es la v43**; el binario
+  va por la v48. Un binario de v43 en adelante puede leer una base v48 y devolver exactamente las
+  mismas filas.
+
+  **La definición es estrecha a propósito, y el caso que la fija es la v22.** Su propio comentario
+  la llama «aditiva» —y lo es, en el sentido de que `ADD COLUMN NOT NULL DEFAULT` no hace una
+  pasada de escritura—. Pero desde la v22 existen filas con `quarantined = 1` y el predicado de
+  visibilidad pasó a ser `archived = 0 AND superseded_by IS NULL AND quarantined = 0`: un binario
+  v21 no tiene ese tercer filtro y devolvería contenido de LLM en cuarentena como si fuera memoria
+  verificada. Son dos sentidos distintos de «aditiva» y el que importa acá es el del lector.
+
+  Las seis que rompen lectura, cada una con su razón medida: v13 y v14 (las tablas se reconstruyen
+  y pasan a estar partidas por `project_id`), v17 (el índice FTS se rehace como external-content y
+  se borran los triggers del binario anterior), v22 (la cuarentena), v39 (`fleet_policy_state` se
+  reconstruye con `alcance` en la clave) y **v43** (durante la rotación el dispositivo se autentica
+  por `token_sha256_nuevo` —`internal/memory/rotacion.go:135`—, así que un lector viejo, que sólo
+  mira `token_sha256`, contesta que no existe).
+
+  **El cero de Go es `false` = «no compatible», y es deliberado**: el mismo fail-safe que
+  `toolEntry.readOnly`. Una migración nueva que nadie clasificó sube el piso y hace que los
+  binarios viejos se nieguen, que es el lado seguro del error.
+
+  El piso lo graba en la base el binario que migra (`schema_floor`, migración 48), porque el
+  binario viejo no puede derivarlo: no conoce las migraciones futuras. **Va en una tabla y no en
+  `PRAGMA application_id`** —que está libre y sería más barato— porque el default del PRAGMA es 0 y
+  0 también sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número, o sea
+  el valor de fallo sería el tranquilizador. Con una tabla, ausente es ausente y el lector se niega
+  por falta de evidencia. Se re-graba en cada arranque, no sólo cuando hay migraciones pendientes:
+  si no, toda base que hoy existe se quedaría sin piso para siempre.
+
+  **El alcance del piso es general, no «sólo la memoria».** Acotarlo a `observations`/`relations`/
+  `embeddings`/`code_*` daba un piso de 22 en vez de 43 y dejaría leer a muchos más binarios; se
+  descartó porque ese número sólo sería cierto mientras el modo sólo-lectura no sirviera jamás una
+  lectura de flota, y ese acoplamiento no está escrito en ningún lado. Si algún día hace falta, el
+  camino es un segundo piso con su propio alcance declarado, no reinterpretar éste.
+
+  `ErrEsquemaLegible` viaja **envuelto junto a** `ErrSchemaTooNew` (Go admite varios `%w`), así que
+  todo caller que ya preguntaba por ese error sigue viendo lo mismo.
+
+  **Lo que esto todavía NO hace, dicho claro:** ningún caller abre en sólo lectura. Esta entrega es
+  la evidencia y la distinción; servir la lectura —engine con `PRAGMA query_only`, y el escalón MCP
+  que expone sólo las tools de lectura— es lo que sigue. Por eso el mensaje del error habla de una
+  capacidad («sus datos son LEGIBLES para él») y no de un comportamiento.
+
+  Cinco invariantes (P1–P5) con sus sabotajes, cada uno rojo sólo en el suyo. P2 es el que atrapa
+  un piso **tipeado**: es el único que corre la derivación sobre una lista cuya respuesta no es 43.
+
 - **El daemon dejó de morirse mudo: cuando la memoria no abre, ahora atiende degradado.** Hasta
   acá, cualquier fallo de `NewDbEngine` mataba el proceso con `os.Exit(1)` y el diagnóstico por
   stderr. Medido el 2026-09-07 contra una base marcada `v999` con un binario que llega a la
