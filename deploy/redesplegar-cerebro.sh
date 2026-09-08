@@ -39,6 +39,26 @@ DESTINO="/usr/local/bin/musubi"
 HOME_CEREBRO="${MUSUBI_HOME:-/home/musubi/musubi-brain}"
 BASE="$HOME_CEREBRO/.musubi/memory.db"
 SERVICIOS=(musubi-brain musubi-agente musubi-dashboard)
+# ── Y LAS UNIDADES DE USUARIO, QUE ESTE GUION IGNORABA Y TAMBIÉN CORREN ESTE BINARIO ─────────
+#
+# Medido el 2026-09-08 en el central, con el redespliegue anterior ya hecho:
+#
+#	pid 2892216  musubi daemon      exe: /usr/local/bin/musubi (deleted)   ← 6 días
+#	pid 1048700  musubi serve       exe: /usr/local/bin/musubi
+#	pid 1048702  musubi dashboard   exe: /usr/local/bin/musubi
+#	pid 1121750  musubi agent       exe: /usr/local/bin/musubi
+#
+# El del binario BORRADO es un `musubi daemon` que lanza `musubi-gateway.service` —el bot de
+# Telegram— como su servidor MCP. Este guion reiniciaba tres unidades y ninguna era ésa, así que
+# ese proceso sobrevivía a cada despliegue corriendo el ejecutable anterior. Y no es un detalle
+# de higiene: hasta que se desplegó el arreglo del ciclo de memoria, ESE proceso era el ÚNICO que
+# corría el mantenimiento del cerebro.
+#
+# VAN APARTE Y NO EN SERVICIOS porque son unidades de USUARIO (uid 1000), no del sistema: un
+# `systemctl stop musubi-gateway` como root no las encuentra. Hay que ir por `--user` con su
+# XDG_RUNTIME_DIR, que —contra lo que decía nuestra nota— SÍ funciona sin sesión interactiva.
+SERVICIOS_USUARIO=(musubi-gateway musubi-whatsapp)
+UID_MUSUBI=1000
 
 [[ $EUID -eq 0 ]] || die "hay que correrlo como root: reemplaza $DESTINO y reinicia unidades del sistema"
 [[ -n "$NUEVO" && -f "$NUEVO" ]] || die "uso: sudo $0 /ruta/al/binario-nuevo <sha256-esperado>"
@@ -162,6 +182,50 @@ ok "el cerebro contesta sano (HTTP 200 en /healthz)"
 for u in "${SERVICIOS[@]}"; do
   systemctl is-active --quiet "$u" && ok "$u activo" || aviso "$u NO quedó activo — miralo con: journalctl -u $u -n 30"
 done
+
+# ── Las unidades de USUARIO que corren este mismo binario ────────────────────────────────────
+#
+# Se reinician DESPUÉS de que el cerebro quedó verificado: si algo salió mal arriba, ya volvimos
+# atrás y estas unidades nunca se tocaron. Reiniciarlas antes sería apagar el bot para después
+# descubrir que el despliegue no servía.
+log "reiniciando las unidades de usuario que corren este binario"
+for u in "${SERVICIOS_USUARIO[@]}"; do
+  if sudo -u "#$UID_MUSUBI" XDG_RUNTIME_DIR="/run/user/$UID_MUSUBI" systemctl --user restart "$u" 2>/dev/null; then
+    ok "$u reiniciado (toma el binario nuevo)"
+  else
+    SALIDA=1
+    aviso "no se pudo reiniciar $u. Queda corriendo el ejecutable ANTERIOR (borrado del disco). Mirá:
+    sudo -u '#$UID_MUSUBI' XDG_RUNTIME_DIR=/run/user/$UID_MUSUBI systemctl --user status $u"
+  fi
+done
+
+# ── NADIE PUEDE QUEDAR CORRIENDO EL BINARIO BORRADO ──────────────────────────────────────────
+#
+# Ésta es la comprobación que hace innecesario acordarse de la lista de arriba. Las listas
+# envejecen —la de este guion se quedó tres años sin el gateway— y la próxima unidad que alguien
+# agregue tampoco va a estar. Esto no mira una lista: mira el KERNEL. Cualquier proceso cuyo
+# ejecutable sea el que acabamos de reemplazar y ya no exista en disco aparece acá, se llame como
+# se llame y lo lance quien lo lance.
+#
+# No vuelve atrás el despliegue —el cerebro está sano y volver sería peor— pero termina en 1: un
+# proceso viejo escribiendo sobre una base recién migrada es exactamente el estado que este repo
+# no quiere descubrir por casualidad tres semanas después.
+REZAGADOS=""
+for d in /proc/[0-9]*; do
+  exe="$(readlink "$d/exe" 2>/dev/null)" || continue
+  case "$exe" in
+    "$DESTINO (deleted)") REZAGADOS="$REZAGADOS ${d#/proc/}" ;;
+  esac
+done
+if [[ -n "$REZAGADOS" ]]; then
+  SALIDA=1
+  aviso "quedan procesos corriendo el binario ANTERIOR (borrado del disco):$REZAGADOS
+  Escriben sobre una base que este despliegue acaba de migrar. Identificalos con:
+    for p in$REZAGADOS; do tr '\\0' ' ' < /proc/\$p/cmdline; echo; done
+  y reiniciá la unidad que los lanza."
+else
+  ok "ningún proceso quedó en el binario anterior"
+fi
 
 echo
 ok "REDESPLIEGUE COMPLETO — $VERSION_NUEVA"

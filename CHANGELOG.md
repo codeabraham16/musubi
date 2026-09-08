@@ -7,6 +7,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El redespliegue del cerebro dejaba procesos corriendo el binario anterior, y uno de ellos era
+  el que sostenía la memoria.** Medido en el central el 2026-09-08, con el despliegue anterior ya
+  hecho:
+
+  ```
+  pid 2892216  musubi daemon      exe: /usr/local/bin/musubi (deleted)   ← 6 días
+  pid 1048700  musubi serve       exe: /usr/local/bin/musubi
+  pid 1048702  musubi dashboard   exe: /usr/local/bin/musubi
+  pid 1121750  musubi agent       exe: /usr/local/bin/musubi
+  ```
+
+  El del ejecutable **borrado** es un `musubi daemon` que lanza `musubi-gateway.service` —el bot de
+  Telegram— como su servidor MCP. `redesplegar-cerebro.sh` reiniciaba tres unidades y ninguna era
+  ésa, así que ese proceso sobrevivía a cada despliegue con el binario anterior. No es higiene: es
+  el proceso que hasta ahora corría el único ciclo de mantenimiento de la memoria del cerebro.
+
+  El guion no podía encontrarlo aunque quisiera: `musubi-gateway` y `musubi-whatsapp` son unidades
+  de **usuario** (uid 1000), no del sistema, así que un `systemctl stop` como root no las ve. Van
+  ahora en su propia lista y se reinician **después** de que el cerebro quedó verificado — antes
+  sería apagar el bot para después descubrir que el despliegue no servía.
+
+  Y de paso, una corrección a nuestra propia nota: `systemctl --user` **sí** funciona por SSH no
+  interactivo, siempre que se le pase `XDG_RUNTIME_DIR=/run/user/<uid>`.
+
+- **Y una comprobación que hace innecesario acordarse de esa lista.** Las listas envejecen —ésta se
+  quedó sin el gateway y nadie lo notó— así que el guion ya no mira una lista sino el **kernel**:
+  recorre `/proc/*/exe` y falla si quedó cualquier proceso cuyo ejecutable sea el que se acaba de
+  reemplazar y ya no exista en disco, se llame como se llame y lo lance quien lo lance.
+
+  No vuelve atrás el despliegue —el cerebro está sano y volver sería peor— pero termina en 1: un
+  proceso viejo escribiendo sobre una base recién migrada es exactamente el estado que no se quiere
+  descubrir por casualidad tres semanas después. El detector se verificó **contra el servidor
+  real**, donde encontró el único proceso rezagado que hay.
+
+
 ### Added
 - **El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace.** `runServe` no
   arrancaba el ciclo de memoria —consolidar, olvidar, purgar— y sin embargo ya recibía
