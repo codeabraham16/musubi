@@ -769,6 +769,39 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-08 · LA DIVERGENCIA DE PRODUCCIÓN QUE ARRASTRABA DESDE EL 6, CERRADA — Y ERA LA ALERTA
+DE A116 LA QUE FALTABA.**
+
+`musubi-alerts-flota.yml` estaba desplegado A MEDIAS: **27 de 28**. La que faltaba era
+`InventarioDeServiciosIncompleto` — o sea **la alerta que avisa que el inventario de servicios
+viene truncado**. A116 cerró ese defecto en el repo el 5-09 y su alarma nunca llegó al servidor,
+así que el agujero seguía siendo invisible en producción con el cabo marcado cerrado.
+
+**LA FORENSE ES EXACTA Y VALE COMO MÉTODO.** El archivo del servidor tenía mtime `09-05 18:58`, que
+es el minuto de `bf79e64`; `20caf21` (A116) entró a las `20:19` y nunca se copió. O sea: el servidor
+estaba **exactamente un commit atrás en ese archivo**, y eso se pudo afirmar sin consultar el
+servidor — sólo cruzando el mtime contra `git log --date=format:'%H:%M'`. El `git diff bf79e64 HEAD`
+del archivo dio **45 líneas, +1 alerta, 0 borradas**: puramente aditivo, que es lo que hizo barato
+decidir desplegarlo.
+
+**CÓMO SE DESPLEGÓ, PORQUE EL MÉTODO ES LA MITAD DEL CABO.** Con `cat > destino` y NO con
+`cp`/`scp`/`install`: el archivo vive bind-montado en el contenedor de Prometheus con etiqueta
+`container_file_t`, y un archivo NUEVO nace `user_home_t`, que el contenedor no puede leer. Verificado
+después: sha idéntico al del repo **y** `ls -Z` seguía dando `container_file_t`.
+
+**Y LA VERIFICACIÓN NO FUE EL `reload`, FUE EL CONTEO.** `deploy/docker/preparar.sh:190` ya lo dejaba
+escrito: «Prometheus informa el reload como EXITOSO y se queda con CERO reglas cargadas». Un
+`reload → 200` no prueba nada. Se preguntó por el resultado:
+`curl -s .../api/v1/rules | grep -c InventarioDeServiciosIncompleto` → **1**.
+
+**EL CABO QUE ESTO DEJA ABIERTO NO ES ÉSTE, ES POR QUÉ TARDÓ TRES DÍAS EN VERSE.**
+`deploy/docker/preparar.sh:124` instala este archivo con `install -m 0644` —el método que rompe la
+etiqueta, en el guion oficial— y sobre todo: **desplegar una regla nueva depende de que alguien
+se acuerde de correr `preparar.sh`**. La comparación repo↔servidor sí corre sola desde A115, y de
+hecho fue la que lo cazó; lo que no corre solo es el ARREGLO. Queda dicho acá y no en una fila
+nueva porque es la misma familia de A115, ya registrada.
+
+
 **2026-09-05 · AUDITORÍA DE SABOTAJES DECLARADOS, CERRADA: 73 corridos entre dos sesiones, 8 cabos
 reales — y el auditor se equivocó tanto como el código.**
 
