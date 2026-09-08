@@ -118,6 +118,12 @@ func clampLimit(limit int) int {
 }
 
 func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage) (interface{}, *RpcError) {
+	// Escalón degradado: sin memoria no se despacha NADA, ni siquiera para averiguar si la tool
+	// existe. Va antes de todo lo demás porque cada paso de acá abajo —el índice, la
+	// autorización, el ledger de uso— asume un engine que en este estado es nil.
+	if rpcErr, degradado := s.interceptarDegradado(ctx, params); degradado {
+		return nil, rpcErr
+	}
 	var callReq CallToolRequest
 	if err := json.Unmarshal(params, &callReq); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid params: %v", err)

@@ -44,6 +44,12 @@ const (
 	// general se libera en segundos y ésta en la hora, y quien la recibe puede querer seguir con
 	// las tools model-free en vez de esperar.
 	codeMotorQuota = -32003
+	// codeDegraded (rango server-error) = el servidor está vivo pero SIN MEMORIA: la apertura de
+	// la base falló y está atendiendo en modo degradado. Código propio y no codeInternalError
+	// porque no es un fallo del pedido —el pedido está perfecto— sino un estado declarado del
+	// servidor, y porque el remedio es del operador (actualizar el binario, liberar disco), no
+	// del que llamó. Ver degradado.go.
+	codeDegraded = -32004
 )
 
 type JsonRpcRequest struct {
@@ -176,6 +182,12 @@ type McpServer struct {
 	// ilegible ("dev") ⇒ el exportador no puede comparar contra nada y apaga
 	// `musubi_fleet_device_agent_stale` para toda la flota (A68).
 	version string
+
+	// degradado, cuando NO es nil, es la razón por la que este servidor no tiene memoria: la
+	// abrió alguien y falló. Un servidor así habla el protocolo completo —contesta initialize
+	// y lista el mismo catálogo— pero rechaza toda tools/call nombrando esta causa, en vez de
+	// despachar contra un engine nil. Ver degradado.go.
+	degradado error
 
 	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
 	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.
