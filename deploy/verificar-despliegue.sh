@@ -605,7 +605,10 @@ titulo "versión"
 
 VER_REPO="$(tr -d '[:space:]' < "$REPO/VERSION")"
 if [ -n "$SSH_HOST" ]; then
-  VER_VIVA="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'musubi version 2>/dev/null' | awk '{print $2}')"
+  # `-n` por la misma razón que en `corre_alla`: ninguno de los `ssh` de este guion quiere stdin,
+  # salvo el de la línea ~140 que SÍ le pipea `config_curl`. Ponerlo en los que no lo necesitan es
+  # lo que evita que el defecto vuelva el día que alguien mueva esta línea adentro de un bucle.
+  VER_VIVA="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'musubi version 2>/dev/null' | awk '{print $2}')"
 else
   VER_VIVA="$(musubi version 2>/dev/null | awk '{print $2}')"
 fi
@@ -644,7 +647,7 @@ fi
 printf '\n\033[1mpostura de transporte\033[0m\n'
 CFG_REMOTO="${MUSUBI_CFG:-/home/musubi/musubi-brain/.musubi/config.yaml}"
 if [ -n "$SSH_HOST" ]; then
-  POSTURA_TLS="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
+  POSTURA_TLS="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
     "grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' $(printf '%q' "$CFG_REMOTO") 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
 else
   POSTURA_TLS="$(grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' "$CFG_REMOTO" 2>/dev/null | tr -d ' ' || true)"
@@ -683,7 +686,21 @@ fi
 printf '\n\033[1mvuelve sola de un reboot\033[0m\n'
 corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
   if [ -n "$SSH_HOST" ]; then
-    ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
+    # EL `-n` NO ES DECORACIÓN: SIN ÉL ESTE INFORME DEJA DE MIRAR COSAS Y NO LO DICE.
+    #
+    # `ssh` sin `-n` lee stdin y se lo lleva entero. Cuando `corre_alla` se llama DESDE ADENTRO de
+    # un bucle que lee de un heredoc —el de «guiones derivados», línea ~766— el primer `ssh` se
+    # come el resto de la lista, el `read` no encuentra más renglones y el bucle termina.
+    #
+    # No falla: TERMINA. No hay línea roja, ni amarilla, ni verde — no hay línea. Medido el
+    # 2026-09-08: las últimas 3 corridas compararon `/usr/local/bin/musubi-backup` y NUNCA
+    # `/usr/local/sbin/redesplegar-cerebro.sh`, que es exactamente el archivo cuya deriva FUE A111.
+    # O sea que el agujero que A111 cerró volvió a quedar sin vigilancia, y el informe se veía igual.
+    #
+    # Es intermitente porque depende de si el `ssh` alcanza a leer antes de que el `read` lo haga,
+    # y por eso pasó tres corridas sin que nadie lo notara. La cabecera de este guion ya lo dice
+    # con todas las letras: «un informe que calla lo que no mira se lee como si lo hubiera mirado».
+    ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
   else
     eval "$1" 2>/dev/null || true
   fi

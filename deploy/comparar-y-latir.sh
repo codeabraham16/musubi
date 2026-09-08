@@ -68,6 +68,46 @@ if [ ! -x "$REPO/deploy/verificar-despliegue.sh" ]; then
   exit 2
 fi
 
+# ── 0 · LA ESPERA DE RED, QUE `After=network-online.target` NO HACE ──────────────────────────
+#
+# EL 2026-09-08 ESTA UNIDAD QUEDÓ `failed` A LOS 4 m 53 s DE UN ARRANQUE. El timer tiene
+# `Persistent=true`, así que al encender recupera el disparo perdido; el tailnet todavía no estaba
+# ruteable y el primer `ssh` murió con `Network is unreachable` en menos de un segundo. No esperó
+# nada: se rindió de una.
+#
+# EL `After=network-online.target` DE LA UNIDAD NO PROTEGE, POR TRES MOTIVOS INDEPENDIENTES:
+#   1. Es una unidad de USUARIO, y en ese manager `network-online.target` es `not-found`
+#      (`systemctl --user show network-online.target -p LoadState` → not-found). Medido.
+#   2. Le falta el `Wants=`. Un `After=` suelto sólo ORDENA contra algo que ya esté en la
+#      transacción; nadie tira ese target, así que sería no-op aun en un manager de sistema.
+#      Los otros cinco lugares del repo que lo usan escriben LAS DOS líneas.
+#   3. Aunque las dos anteriores se arreglaran, seguiría sin servir: el destino es una IP de
+#      tailnet (100.64/10) y `network-online.target` nunca prometió que Tailscale esté arriba.
+#      En esta máquina `tailscale-wait-online.service` está *disabled*.
+#
+# Así que la espera se hace ACÁ, donde se puede medir y probar, y no en una directiva que se lee
+# como una guarda. El default es NO esperar: una corrida a mano tiene que fallar rápido como
+# siempre. La unidad opta por la espera poniendo `MUSUBI_ESPERA_RED`.
+ESPERA_RED="${MUSUBI_ESPERA_RED:-0}"
+if [ "$ESPERA_RED" -gt 0 ] 2>/dev/null; then
+  T0="$(date +%s)"
+  AVISADO=0
+  until ssh -n -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; do
+    if [ "$(( $(date +%s) - T0 ))" -ge "$ESPERA_RED" ]; then
+      printf '✘ %s sigue sin contestar después de %ss de espera — sigo igual, para que el fallo se VEA\n' \
+        "$HOST" "$ESPERA_RED" >&2
+      break
+    fi
+    if [ "$AVISADO" -eq 0 ]; then
+      printf '· %s todavía no contesta; espero hasta %ss (arranque: el tailnet tarda en levantar)\n' \
+        "$HOST" "$ESPERA_RED" >&2
+      AVISADO=1
+    fi
+    sleep 5
+  done
+  [ "$AVISADO" -eq 1 ] && printf '· seguí a los %ss\n' "$(( $(date +%s) - T0 ))" >&2
+fi
+
 # ── 1 · La comparación ──────────────────────────────────────────────────────────────────────
 # La salida se muestra ENTERA: este guion no resume nada. Un resumen es una segunda opinión sobre
 # lo que el verificador ya dijo, y dos fuentes de verdad sobre la misma pregunta se pudren.
@@ -109,9 +149,28 @@ case "$HTTP" in
     ;;
   "")
     printf '\n\033[31m✘ el latido NO se empujó: no hubo respuesta de %s\033[0m\n' "$HOST" >&2
-    printf '  Es un fallo REAL y no cosmético: sin latido, `ComparacionRepoServidorSinCorrer` va a\n' >&2
-    printf '  disparar en unas horas diciendo que nadie comparó, cuando en verdad sí se comparó y el\n' >&2
-    printf '  resultado fue %s. Probá:  ssh %s curl -sS %s/-/ready\n' "$CODIGO" "$HOST" "$PROM_URL" >&2
+    # EL TEXTO SE BIFURCA POR EL CÓDIGO, Y NO ES UN DETALLE DE REDACCIÓN.
+    #
+    # Este mensaje estaba escrito para UN caso —la comparación anduvo y sólo falló el POST— y se
+    # imprimía FIJO también cuando el corte era aguas arriba. El 2026-09-08 el guion afirmó «en
+    # verdad sí se comparó y el resultado fue 2» en la corrida donde no comparó NADA: los mismos
+    # `ssh` que no llegaron al POST tampoco habían llegado a Prometheus. Seis renglones más arriba
+    # decía «no se contaron las reglas», «no se miraron los targets», «Prometheus no contestó».
+    #
+    # Quien leyera el journal cuando sonara la alerta iba a buscar por qué el verificador quedó en
+    # 2 —o sea, un problema de despliegue— en vez de por qué se cortó la red. Un guion que se
+    # contradice a sí mismo en la misma salida manda a investigar la pista equivocada.
+    if [ "$CODIGO" -eq 2 ]; then
+      printf '  Y el MISMO corte se llevó puesta la comparación: el resultado %s de acá NO significa\n' "$CODIGO" >&2
+      printf '  «producción diverge», significa «no se pudo preguntar». Arriba está, renglón por\n' >&2
+      printf '  renglón, qué quedó sin mirar. No hay nada que reportar todavía: hay que volver a\n' >&2
+      printf '  correrlo con red antes de sacar cualquier conclusión sobre el despliegue.\n' >&2
+    else
+      printf '  Es un fallo REAL y no cosmético: sin latido, `ComparacionRepoServidorSinCorrer` va a\n' >&2
+      printf '  disparar en unas horas diciendo que nadie comparó, cuando en verdad sí se comparó y el\n' >&2
+      printf '  resultado fue %s.\n' "$CODIGO" >&2
+    fi
+    printf '  Probá:  ssh %s curl -sS %s/-/ready\n' "$HOST" "$PROM_URL" >&2
     ;;
   *)
     printf '\n\033[31m✘ el latido NO se empujó: Prometheus contestó HTTP %s\033[0m\n' "$HTTP" >&2
