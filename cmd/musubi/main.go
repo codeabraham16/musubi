@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -398,6 +399,21 @@ func runDaemon() {
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
+		// ESCALÓN DE SÓLO LECTURA, ANTES DE DARSE POR VENCIDO. Si la base es más nueva pero su
+		// piso declara que este binario la lee bien, se abre sin migrarla y se sirve lo que se
+		// puede. Es el estado del medio: no trabaja, pero tampoco deja al agente sin memoria.
+		if errors.Is(err, memory.ErrEsquemaLegible) {
+			if ro, roErr := memory.NewDbEngineSoloLectura(root); roErr == nil {
+				fmt.Fprintf(os.Stderr, "musubi: sirviendo en SÓLO LECTURA (las tools de lectura funcionan; las que escriben, no)\n")
+				servirSoloLectura(ro, root, cfg, embedder, err)
+				return
+			} else {
+				// La base se declaraba legible y no se pudo abrir igual: se dice y se cae al
+				// modo degradado. Tragarlo dejaría un daemon degradado sin explicación, que es
+				// justo lo que esta serie vino a sacar.
+				fmt.Fprintf(os.Stderr, "musubi: la base se declaraba legible pero no abrió en sólo lectura: %v\n", roErr)
+			}
+		}
 		fmt.Fprintf(os.Stderr, "musubi: sirviendo en MODO DEGRADADO (el protocolo responde; las tools no)\n")
 		mcp.NewServidorDegradado(root, version, err).Start()
 		return
@@ -577,4 +593,36 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 	// Sync ENTRANTE (C5.3b): baja la memoria shared del proyecto DESDE el central. RunInboundScheduler
 	// gatea internamente en team_mode (un proyecto local no baja nada). Mismo intervalo que el drain.
 	go server.RunInboundScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
+}
+
+// servirSoloLectura atiende con la memoria abierta en el escalón de sólo lectura.
+//
+// ES UNA FUNCIÓN APARTE Y NO UNA RAMA DENTRO DE runDaemon a propósito: lo que la distingue no es
+// una opción de más, es TODO LO QUE NO ARRANCA. Escrito como rama, cada scheduler nuevo que
+// alguien agregue abajo quedaría corriendo también acá, contra una base que no se puede escribir,
+// y el error saldría del motor SQLite a los minutos y en un log que nadie mira.
+//
+// LO QUE NO ARRANCA, Y POR QUÉ CADA UNO:
+//   - mantenimiento, grafo y destilado: los tres ESCRIBEN. Un ciclo cognitivo sobre una base que
+//     no entiende del todo sería peor que no correrlo.
+//   - ledger de uso y vertedero del feed: escriben también, y su valor es el registro histórico,
+//     que es justo lo que no se debe ensuciar desde un binario desactualizado.
+//   - outbox: encolar desde acá propagaría el malentendido a la malla.
+//   - cognición: el motor no es de lectura y su cuota se lleva en la base.
+//
+// El único que sí va es el embedder, porque la búsqueda semántica es una LECTURA (el vector de la
+// consulta se calcula en memoria y no se guarda).
+func servirSoloLectura(eng *memory.DbEngine, root string, cfg config.Config, embedder embedding.Provider, causa error) {
+	defer eng.Close()
+	eng.SetProjectID(resolveProjectID(cfg, root))
+	srv := mcp.NewMcpServer(eng, root, embedder,
+		mcp.WithVersion(version),
+		mcp.WithSoloLectura(causa.Error()),
+		mcp.WithSourcing(cfg.Sourcing),
+		mcp.WithMemory(cfg.Memory),
+		mcp.WithGraph(cfg.Graph),
+		mcp.WithConflicts(cfg.Conflicts),
+		mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()),
+	)
+	srv.Start()
 }

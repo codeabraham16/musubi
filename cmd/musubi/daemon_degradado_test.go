@@ -46,6 +46,13 @@ func baseIncompatible(t *testing.T) string {
 	if _, err := db.Exec(`PRAGMA user_version = 999`); err != nil {
 		t.Fatalf("adelantar user_version: %v", err)
 	}
+	// Y SE LE BORRA EL PISO DE LECTURA, porque si no este escenario ya NO es el degradado.
+	// Desde que las bases graban su piso, una base más nueva cuyo piso este binario alcanza se
+	// abre en SÓLO LECTURA, que es otro estado. El caso degradado es el de una base SIN evidencia
+	// —migrada por un binario anterior a esa pieza—, y así se arma.
+	if _, err := db.Exec(`DELETE FROM schema_floor`); err != nil {
+		t.Fatalf("borrar el piso de lectura: %v", err)
+	}
 	var v int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatalf("releer user_version: %v", err)
