@@ -14,6 +14,15 @@ import (
 // mixta (laptop/PC/central con binarios de distinta versión).
 var ErrSchemaTooNew = errors.New("el esquema de la base es más nuevo que este binario")
 
+// ErrEsquemaLegible acompaña a ErrSchemaTooNew cuando la base, aun siendo más nueva, declara un
+// piso de lectura que este binario alcanza: no se puede migrar ni escribir, pero SÍ leer.
+//
+// Va como error aparte y ENVUELTO JUNTO a ErrSchemaTooNew —Go admite varios %w— para que todo el
+// código que ya preguntaba `errors.Is(err, ErrSchemaTooNew)` siga viendo lo mismo. Si fuera un
+// error suelto, cada caller existente pasaría a tratar la base legible como un fallo desconocido,
+// que es peor que el estado anterior: hoy al menos sabe que el esquema es el problema.
+var ErrEsquemaLegible = errors.New("la base se puede leer, no escribir")
+
 // migrations.go implementa el versionado de esquema de Musubi sobre el PRAGMA
 // user_version de SQLite (un entero en el header de la base). Antes el esquema se
 // creaba ad-hoc con CREATE ... IF NOT EXISTS + ADD COLUMN hardcodeados: no había
@@ -36,10 +45,40 @@ type execQuerier interface {
 
 // migration es un paso de esquema versionado. `version` debe ser estrictamente
 // creciente y único; `up` aplica el cambio sobre la transacción de esa migración.
+//
+// readCompatible declara si un binario que sólo conoce hasta la migración ANTERIOR puede seguir
+// LEYENDO esta base correctamente. Es lo que alimenta el piso de lectura (ver pisoDeLectura).
+//
+// LA DEFINICIÓN, Y ES ESTRECHA A PROPÓSITO: una migración es readCompatible cuando un binario
+// anterior, abriendo la base en sólo lectura, devuelve para TODA consulta que sabía hacer
+// exactamente las mismas filas que devolvería el binario que la aplicó. No alcanza con que la
+// migración no reescriba datos: si a partir de ella pueden APARECER filas que el lector viejo no
+// sabe filtrar, no es readCompatible aunque su DDL sea un puro ADD COLUMN.
+//
+//	El caso que fija el criterio es la v22. Su propio comentario la llama «aditiva», y lo es en
+//	el sentido de que ADD COLUMN NOT NULL DEFAULT no hace una pasada de escritura. Pero desde
+//	la v22 existen filas con quarantined=1, y el predicado de visibilidad pasó a ser
+//	`archived = 0 AND superseded_by IS NULL AND quarantined = 0`. Un binario v21 no tiene ese
+//	tercer filtro y devolvería contenido de LLM en cuarentena como si fuera memoria verificada.
+//	Dos sentidos distintos de «aditiva», y el que importa acá es el del lector.
+//
+// EL CERO DE GO ES `false`, O SEA «NO COMPATIBLE», Y ESO ES DELIBERADO. Es el mismo fail-safe que
+// `toolEntry.readOnly`: una migración nueva que nadie clasificó sube el piso y hace que los
+// binarios viejos se nieguen, que es el lado seguro del error. Marcarla `true` es una afirmación
+// que hay que ganarse mirando si alguna consulta EXISTENTE cambia de resultado.
+//
+// EL ALCANCE ES GENERAL, NO «SÓLO LA MEMORIA». Se evaluó acotar el piso a las tablas de la memoria
+// —observations, relations, embeddings, code_*— porque da un piso mucho más bajo (22 en vez de 43)
+// y dejaría leer a más binarios. Se descartó: ese piso sólo sería cierto si el modo sólo-lectura
+// jamás sirviera una lectura de flota, y ese acoplamiento no está escrito en ningún lado. Un
+// número que depende de una promesa tácita es la clase de dato que después alguien cita como
+// medición. Si algún día hace falta, el camino es un SEGUNDO piso declarado con su propio alcance,
+// no reinterpretar éste.
 type migration struct {
-	version int
-	name    string
-	up      func(execQuerier) error
+	version        int
+	name           string
+	readCompatible bool
+	up             func(execQuerier) error
 }
 
 // schemaMigrations devuelve las migraciones conocidas por este binario, en orden
@@ -48,8 +87,9 @@ type migration struct {
 func schemaMigrations() []migration {
 	return []migration{
 		{
-			version: 1,
-			name:    "baseline",
+			version:        1,
+			name:           "baseline",
+			readCompatible: true,
 			// Baseline = el esquema histórico completo (tablas/índices/triggers) +
 			// las columnas de eficiencia de memoria. Todo es IF NOT EXISTS / ADD COLUMN
 			// guardado, así que correrla sobre una base preexistente (v0.14, user_version=0)
@@ -62,8 +102,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 2,
-			name:    "idx_obs_archived",
+			version:        2,
+			name:           "idx_obs_archived",
+			readCompatible: true,
 			// Índice por `archived`: acelera la purga de retención (WHERE archived=1)
 			// y el scan del olvido (WHERE archived=0). Primera migración post-baseline:
 			// alcanza también a bases ya migradas a v1 (que no re-ejecutan la baseline).
@@ -73,8 +114,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 3,
-			name:    "archived_at",
+			version:        3,
+			name:           "archived_at",
+			readCompatible: true,
 			// Columna archived_at: marca CUÁNDO se archivó una observación, para que la
 			// purga de retención cuente la ventana DESDE el archivado (período de gracia
 			// real) y no desde el último acceso. Backfill de las ya archivadas con su
@@ -88,8 +130,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 4,
-			name:    "work_lease_ttl",
+			version:        4,
+			name:           "work_lease_ttl",
+			readCompatible: true,
 			// Lease/TTL para claims huérfanos en la pizarra: sin esto, una unidad que un
 			// agente reclama y luego abandona (crash/timeout) queda 'claimed' para siempre
 			// y ningún otro agente puede retomarla (bug de liveness). Columnas aditivas:
@@ -122,8 +165,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 5,
-			name:    "relations_bitemporal",
+			version:        5,
+			name:           "relations_bitemporal",
+			readCompatible: true,
 			// Modelo bi-temporal del grafo de hechos: sin esto, save_fact solo ACUMULA
 			// tripletas y nunca retira ninguna, así que (Ana,trabaja_en,Acme) y
 			// (Ana,trabaja_en,Globex) conviven como si ambas fueran verdad. Columnas:
@@ -150,8 +194,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 6,
-			name:    "run_events_journal",
+			version:        6,
+			name:           "run_events_journal",
+			readCompatible: true,
 			// Journal append-only del motor de workflows: hasta ahora workflow_runs solo
 			// guardaba un snapshot mutable, sin idempotencia (un complete repetido
 			// sobrescribía) ni historia (no se podía auditar/exportar/replay). run_events
@@ -179,8 +224,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 7,
-			name:    "observations_mem_type",
+			version:        7,
+			name:           "observations_mem_type",
+			readCompatible: true,
 			// Tipo de memoria (semantic/episodic/procedural, estilo LangMem): sin esto todas
 			// las observaciones se olvidan con la misma curva. mem_type es un enum model-free
 			// que el agente declara al guardar y que modula la saliencia del olvido (episódico
@@ -192,8 +238,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 8,
-			name:    "work_bids",
+			version:        8,
+			name:           "work_bids",
+			readCompatible: true,
 			// Contract-Net bidding en la pizarra multi-agente: sin esto las unidades se
 			// asignan solo por claim de orden de llegada (first-come). work_bids registra las
 			// OFERTAS de los agentes por unidad; el orquestador adjudica (award) a la mejor.
@@ -217,8 +264,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 9,
-			name:    "debate",
+			version:        9,
+			name:           "debate",
+			readCompatible: true,
 			// Debate topology (multi-agent debate / Society of Minds) como subsistema
 			// model-free: sin esto el patrón solo existe como prosa en la skill
 			// adversarial-review (sin persistencia del voto ni reproducibilidad). Tres tablas:
@@ -269,8 +317,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 10,
-			name:    "observations_scope_project",
+			version:        10,
+			name:           "observations_scope_project",
+			readCompatible: true,
 			// Fundación del CEREBRO HÍBRIDO local+central: sin esto una observación no sabe
 			// si es privada del proyecto o compartible a la memoria central, ni de qué
 			// proyecto proviene. Dos columnas aditivas:
@@ -291,8 +340,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 11,
-			name:    "outbox",
+			version:        11,
+			name:           "outbox",
+			readCompatible: true,
 			// Cerebro híbrido F2: OUTBOX DURABLE para el sync SALIENTE offline-first. Sin esto una
 			// observación promovida a 'shared' no tiene forma de sincronizarse al cerebro central
 			// que sobreviva a un crash o a un corte de red. El outbox es el patrón transaccional
@@ -326,8 +376,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 12,
-			name:    "embeddings_model_id",
+			version:        12,
+			name:           "embeddings_model_id",
+			readCompatible: true,
 			// Contrato de vector + PROCEDENCIA (Track 16 / Producible F2.2). Sin esto un vector
 			// no sabía QUÉ modelo lo produjo, así que al cambiar de embedder los vectores viejos
 			// (otra procedencia) se comparaban por coseno con los nuevos y CORROMPÍAN el recall
@@ -346,6 +397,9 @@ func schemaMigrations() []migration {
 		{
 			version: 13,
 			name:    "code_memory_project_id",
+			// NO readCompatible: code_memory se reconstruye y pasa a estar partida por project_id: un lector sin ese
+			// filtro devuelve la memoria de codigo de OTROS proyectos.
+			readCompatible: false,
 			// Aislamiento multi-tenant de la memoria de código (Track 17). No es SOLO aislamiento:
 			// con PRIMARY KEY(path), dos proyectos con el mismo path (p.ej. internal/auth.go)
 			// colisionaban en el ON CONFLICT(path) y se PISABAN el gist entre sí — corrupción
@@ -381,6 +435,9 @@ func schemaMigrations() []migration {
 		{
 			version: 14,
 			name:    "relations_project_id",
+			// NO readCompatible: relations se reconstruye con project_id y ademas barre las huerfanas: un lector viejo
+			// devuelve relaciones de otros proyectos, y cuenta distinto.
+			readCompatible: false,
 			// Aislamiento multi-tenant del GRAFO DE HECHOS (Track 17). Como en code_memory (v13),
 			// no es sólo fuga de lectura: con UNIQUE(from_id,predicate,to_id) el MISMO triple no
 			// podía coexistir entre proyectos, y —peor— la invalidación por cardinalidad de un
@@ -437,8 +494,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 15,
-			name:    "telemetry_decisions_project_id",
+			version:        15,
+			name:           "telemetry_decisions_project_id",
+			readCompatible: true,
 			// Aislamiento multi-tenant del subsistema de TELEMETRÍA y DECISIONES (Track 18). La
 			// auditoría de re-medición marcó que telemetry_logs y skill_decisions eran las dos
 			// tablas de lectura SIN project_id: resolve_telemetry leía/persistía logs crudos de
@@ -464,8 +522,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 16,
-			name:    "observations_author",
+			version:        16,
+			name:           "observations_author",
+			readCompatible: true,
 			// Atribución por PERSONA (C5.1 del track captura-automatica de equipo). La memoria
 			// compartida ya se atribuye al PROYECTO (project_id, v10) pero no a la persona que la
 			// aportó: en un cerebro de equipo no se distingue lo que aprendió Ana de lo de Juan. author
@@ -481,6 +540,9 @@ func schemaMigrations() []migration {
 		{
 			version: 17,
 			name:    "fts_external_content",
+			// NO readCompatible: el indice FTS se tira y se rehace como external-content, y se borran los triggers que
+			// mantenia el binario anterior.
+			readCompatible: false,
 			// La FTS pasa de REGULAR (guardaba su propia copia del contenido) a EXTERNAL-CONTENT
 			// (lee el contenido de `observations` por rowid). Elimina la duplicación del texto en
 			// disco. Cambia el DDL, los 3 triggers (patrón external-content: el 'delete' toma los
@@ -539,8 +601,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 18,
-			name:    "code_graph",
+			version:        18,
+			name:           "code_graph",
+			readCompatible: true,
 			// GRAFO DE CÓDIGO derivado del AST (Track 20 · F1). Dos tablas nuevas —nodos y
 			// aristas— scopeadas por project_id, con el mismo patrón de tenancy que code_memory
 			// (v13) y relations (v14): project_id NOT NULL DEFAULT '' sentinel (SQLite trata cada
@@ -594,8 +657,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 19,
-			name:    "sync_seq",
+			version:        19,
+			name:           "sync_seq",
+			readCompatible: true,
 			// SECUENCIA DE SYNC MONÓTONA (auditoría 2026-07-26 #4). El pull entrante paginaba por
 			// `rowid`, que NO cambia en un UPDATE (el UPSERT reescribe in-place) ⇒ las EDICIONES de una
 			// obs shared ya sincronizada nunca se re-bajaban (mirror stale). Peor: `rowid` puede CAMBIAR
@@ -617,8 +681,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 20,
-			name:    "relations_source",
+			version:        20,
+			name:           "relations_source",
+			readCompatible: true,
 			// PROCEDENCIA DE ARISTAS (pilar Cognición · F0). El grafo de hechos DEBE poder
 			// distinguir QUIÉN afirmó cada arista para auditarla, excluirla del baseline
 			// model-free y revertirla: 'agent' (un caller humano/agente vía musubi_save_fact),
@@ -641,8 +706,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 21,
-			name:    "observation_origins",
+			version:        21,
+			name:           "observation_origins",
+			readCompatible: true,
 			// ANCLAS AL ESTADO DEL PROYECTO. Una observación puede declarar de qué archivos
 			// habla; se guarda el fingerprint de cada uno y el recall lo re-deriva del disco
 			// para MARCAR la nota si cambió. Cierra el hueco que el detector de conflictos no
@@ -674,6 +740,10 @@ func schemaMigrations() []migration {
 		{
 			version: 22,
 			name:    "observation_provenance_quarantine",
+			// NO readCompatible: desde aca existen filas quarantined=1 y el predicado de visibilidad suma
+			// `quarantined = 0`: un lector v21 devuelve contenido de LLM en cuarentena como si
+			// fuera memoria verificada. Ver la nota del campo en el struct `migration`.
+			readCompatible: false,
 			// CUARENTENA DE ESCRITURA Y PROCEDENCIA (Murallas 2+3 · F4). Hasta acá una
 			// observación no decía de dónde salió su contenido. `author` existe pero es
 			// otra cosa: la atribución por credencial del Track C5 (QUÉ persona o máquina
@@ -712,8 +782,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 23,
-			name:    "tool_invocations_ledger",
+			version:        23,
+			name:           "tool_invocations_ledger",
+			readCompatible: true,
 			// LEDGER DE USO (F0 del track «Potencia medida»). Hasta acá Musubi no podía
 			// responder cuáles de sus tools se usan: el histograma por-tool de
 			// observability.go vive en memoria y se resetea en cada reinicio, /metrics pide
@@ -757,8 +828,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 24,
-			name:    "skill_usage_counters",
+			version:        24,
+			name:           "skill_usage_counters",
+			readCompatible: true,
 			// EL ARSENAL SE MIDE (§7 del track «Forja global»). Hasta acá nadie podía decir qué
 			// skill vale la pena: `skill_decisions` guarda «acepté o rechacé INSTALARLA», y
 			// `tool_invocations` no guarda argumentos —a propósito, es una garantía de
@@ -800,8 +872,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 25,
-			name:    "work_claim_log",
+			version:        25,
+			name:           "work_claim_log",
+			readCompatible: true,
 			// LA ESCALADA TIENE QUE CONTAR QUÉ PASÓ. Cuando una unidad agota sus reintentos, el
 			// dead-letter escribía un string FIJO: «lease agotado: superó el máximo de reintentos».
 			// El humano que lo lee no sabe lo único que importa para decidir: si cinco agentes
@@ -828,8 +901,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 26,
-			name:    "work_autonomy",
+			version:        26,
+			name:           "work_autonomy",
+			readCompatible: true,
 			// CUÁNTA AUTONOMÍA TIENE ESTA TAREA ERA UNA PREGUNTA QUE NADIE PODÍA HACER. El cerebro
 			// sabía QUIÉN opera (el rol del token: reader/writer/admin) y eso es una propiedad de la
 			// CREDENCIAL, no del trabajo. Un mismo agente, con el mismo token, puede tener encargado
@@ -866,8 +940,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 27,
-			name:    "relation_signals_split",
+			version:        27,
+			name:           "relation_signals_split",
+			readCompatible: true,
 			// `confidence` SIGNIFICABA DOS COSAS DISTINTAS SEGÚN LA FILA, y nadie podía notarlo desde
 			// afuera. En una relación PENDIENTE era `max(léxico, coseno)`; en una auto-resuelta era el
 			// léxico a secas. Un mismo 0,86 podía ser «comparten muchos trigramas» o «el coseno entre
@@ -899,8 +974,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 28,
-			name:    "shadow_verdicts",
+			version:        28,
+			name:           "shadow_verdicts",
+			readCompatible: true,
 			// LA MESA DONDE EL MOTOR HABLA Y NADIE LE HACE CASO.
 			//
 			// El detector de conflictos decide model-free y esa decisión es la que vale. Esta tabla
@@ -949,8 +1025,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 29,
-			name:    "devices_registro_de_flota",
+			version:        29,
+			name:           "devices_registro_de_flota",
+			readCompatible: true,
 			// EL REGISTRO DE LA FLOTA (track «Control de flota», slice S1).
 			//
 			// Hasta acá una máquina existía en Musubi sólo como ORIGEN de sync de memoria: un
@@ -1016,8 +1093,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 30,
-			name:    "devices_ultima_muestra",
+			version:        30,
+			name:           "devices_ultima_muestra",
+			readCompatible: true,
 			// LA ÚLTIMA MUESTRA DE CADA MÁQUINA (track «Control de flota», S4).
 			//
 			// UNA COLUMNA, NO UNA TABLA DE SERIES. Es la decisión de diseño del slice y conviene
@@ -1037,8 +1115,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 31,
-			name:    "device_commands_bitacora",
+			version:        31,
+			name:           "device_commands_bitacora",
+			readCompatible: true,
 			// LA BITÁCORA DE EJECUCIÓN REMOTA (track «Control de flota», S5).
 			//
 			// Es la tabla más sensible que tiene este esquema: guarda quién pidió correr qué, en
@@ -1089,8 +1168,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 32,
-			name:    "screen_sessions_bitacora",
+			version:        32,
+			name:           "screen_sessions_bitacora",
+			readCompatible: true,
 			// LA BITÁCORA DE SESIONES DE PANTALLA (S6).
 			//
 			// LO QUE ESTA TABLA NO TIENE ES SU RAZÓN DE SER: **no hay columna para la
@@ -1133,8 +1213,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 33,
-			name:    "fleet_policy_state",
+			version:        33,
+			name:           "fleet_policy_state",
+			readCompatible: true,
 			// EL COOLDOWN DE LAS POLÍTICAS, QUE HASTA ACÁ VIVÍA SÓLO EN MEMORIA (S10b · A24).
 			//
 			// El cooldown es lo único que separa «una política que corrige algo» de «una tormenta
@@ -1166,8 +1247,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 34,
-			name:    "shell_sessions_bitacora",
+			version:        34,
+			name:           "shell_sessions_bitacora",
+			readCompatible: true,
 			// LA BITÁCORA DE SESIONES DE SHELL INTERACTIVA (S5b).
 			//
 			// Es el registro más sensible del esquema, y por eso conviene decir qué NO tiene:
@@ -1206,8 +1288,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 35,
-			name:    "rustdesk_id_procedencia",
+			version:        35,
+			name:           "rustdesk_id_procedencia",
+			readCompatible: true,
 			// DE DÓNDE VIENE EL `rustdesk_id` DE UNA MÁQUINA (S6b · A13).
 			//
 			// Ese id lo REPORTA la propia máquina en su latido, así que es entrada no confiable:
@@ -1239,8 +1322,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 36,
-			name:    "services_inventario_por_maquina",
+			version:        36,
+			name:           "services_inventario_por_maquina",
+			readCompatible: true,
 			// QUÉ CORRE ADENTRO DE CADA MÁQUINA DE LA FLOTA (S12).
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1306,8 +1390,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 37,
-			name:    "services_declared_no_los_poda_el_latido",
+			version:        37,
+			name:           "services_declared_no_los_poda_el_latido",
+			readCompatible: true,
 			// QUIÉN PUSO LA FILA, PORQUE ESO DECIDE QUIÉN PUEDE SACARLA.
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1346,8 +1431,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 38,
-			name:    "consentimiento_por_maquina",
+			version:        38,
+			name:           "consentimiento_por_maquina",
+			readCompatible: true,
 			// QUÉ SE LE DEBE A LA PERSONA QUE ESTÁ EN LA MÁQUINA, Y SI HAY ALGUIEN A QUIEN
 			// PREGUNTARLE.
 			//
@@ -1389,6 +1475,9 @@ func schemaMigrations() []migration {
 		{
 			version: 39,
 			name:    "cooldown_de_politica_por_alcance",
+			// NO readCompatible: fleet_policy_state se reconstruye con `alcance` en la clave: una lectura vieja por
+			// (policy, device_id) ya no identifica una sola fila.
+			readCompatible: false,
 			// EL ENFRIAMIENTO DEJA DE SER POR MÁQUINA Y PASA A SER POR LO QUE LA POLÍTICA TOCA.
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1446,8 +1535,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 40,
-			name:    "consentimiento_en_la_sesion_de_pantalla",
+			version:        40,
+			name:           "consentimiento_en_la_sesion_de_pantalla",
+			readCompatible: true,
 			// CÓMO CONTESTÓ EL USUARIO CUANDO HUBO QUE PREGUNTARLE (A57).
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1473,8 +1563,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 41,
-			name:    "origen_del_comando",
+			version:        41,
+			name:           "origen_del_comando",
+			readCompatible: true,
 			// QUIÉN LO ORIGINÓ: una persona o una regla (A59).
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1501,8 +1592,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 42,
-			name:    "ventanas_de_mantenimiento",
+			version:        42,
+			name:           "ventanas_de_mantenimiento",
+			readCompatible: true,
 			// LA VENTANA DE MANTENIMIENTO ES UN HECHO DEL DOMINIO, NO UN SILENCE DE ALERTMANAGER.
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1549,6 +1641,10 @@ func schemaMigrations() []migration {
 		{
 			version: 43,
 			name:    "rotacion_del_token_de_dispositivo",
+			// NO readCompatible: durante la rotacion el dispositivo se autentica por token_sha256_nuevo
+			// (internal/memory/rotacion.go:135): un lector viejo, que solo mira token_sha256,
+			// NO lo encuentra y contesta que no existe.
+			readCompatible: false,
 			// ROTAR UN TOKEN SIN REINSTALAR EL AGENTE (Ola 2 del plan empresa).
 			//
 			// Hasta acá el token de un device se escribía UNA vez, al enrolar, y se vaciaba al
@@ -1575,8 +1671,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 44,
-			name:    "aprobacion_de_cuatro_ojos",
+			version:        44,
+			name:           "aprobacion_de_cuatro_ojos",
+			readCompatible: true,
 			// LA SEGUNDA PERSONA (Ola 2 del plan empresa).
 			//
 			// Una shell interactiva se saltea cualquier allowlist de comandos, y hasta acá una
@@ -1631,8 +1728,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 45,
-			name:    "consentimiento_en_la_shell",
+			version:        45,
+			name:           "consentimiento_en_la_shell",
+			readCompatible: true,
 			// `pide` SOBRE UNA SHELL NO PREGUNTABA NADA Y SE ABRÍA IGUAL.
 			//
 			// `AvisaAlUsuario()` es true para `pide` también —es `nivel >= avisa`—, así que el
@@ -1654,8 +1752,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 46,
-			name:    "plano_del_comando",
+			version:        46,
+			name:           "plano_del_comando",
+			readCompatible: true,
 			// EL AVISO DE UN EXEC SE LEÍA COMO PANTALLA, Y LO VEÍA CUALQUIERA CON `screen:view`.
 			//
 			// ────────────────────────────────────────────────────────────────────────────────
@@ -1690,8 +1789,9 @@ func schemaMigrations() []migration {
 			},
 		},
 		{
-			version: 47,
-			name:    "panel_con_modelo_y_evidencia",
+			version:        47,
+			name:           "panel_con_modelo_y_evidencia",
+			readCompatible: true,
 			// DOS JUECES DEL MISMO MODELO NO SON DOS OPINIONES, Y UNA OPINION NO PESA LO MISMO
 			// QUE UNA COMPROBACION.
 			//
@@ -1739,7 +1839,129 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version:        48,
+			name:           "schema_read_floor",
+			readCompatible: true,
+			// EL PISO DE LECTURA, GRABADO EN LA BASE PARA QUE UN BINARIO VIEJO PUEDA LEERLO.
+			//
+			// La guarda de compatibilidad hacia adelante es un booleano: o el binario llega al
+			// esquema de la base, o se niega. Eso trata igual dos situaciones muy distintas —una
+			// base que cambió de forma y una que sólo sumó columnas— y obliga a un cutover duro
+			// de toda la malla por cada migración, aunque el 87% de ellas (41 de 47, medido) no
+			// cambie una sola lectura.
+			//
+			// El piso lo DERIVA el binario que migra (`pisoDeLectura`: la migración no-compatible
+			// más alta) y lo deja acá, porque el binario viejo no puede derivarlo: no conoce las
+			// migraciones futuras. Es el único dato de esta pieza que tiene que viajar por la
+			// base y no por el código.
+			//
+			// EN UNA TABLA Y NO EN `PRAGMA application_id`. El PRAGMA está libre y sería más
+			// barato, pero su valor por defecto es 0 y 0 también sería un piso válido: «ausente»
+			// y «cualquier binario puede leer» serían el mismo número, o sea el valor de fallo
+			// sería el tranquilizador. Con una tabla, ausente es ausente, y el lector viejo
+			// puede negarse por falta de evidencia en vez de por un cero que se lee como permiso.
+			//
+			// CHECK (id = 1) para que sea una fila y no una bitácora: si hubiera varias, «el
+			// piso» pasaría a depender de cuál se lee.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`CREATE TABLE IF NOT EXISTS schema_floor (
+					id            INTEGER PRIMARY KEY CHECK (id = 1),
+					read_floor    INTEGER NOT NULL,
+					set_by_schema INTEGER NOT NULL,
+					set_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				)`)
+				return err
+			},
+		},
+		{
+			version:        49,
+			name:           "capver_por_maquina",
+			readCompatible: true,
+			// EL CAPVER QUE DECLARA CADA MÁQUINA, GUARDADO DONDE YA VIVE SU AUTORREPORTE.
+			//
+			// `devices.agent_ver` dice qué BUILD corre; esto dice qué CONTRATO habla, que no es lo
+			// mismo: dos builds distintos pueden compartir capver, y ése es el punto de tener la
+			// banda. Sin guardarlo, la pregunta «¿qué máquinas no pueden hablar mi protocolo?»
+			// sólo se puede contestar esperando el próximo latido de cada una.
+			//
+			// ES readCompatible: ningún camino de lectura filtra por esta columna, así que un
+			// binario anterior devuelve exactamente las mismas filas de `devices` que hoy. El
+			// default 0 significa «no declara», igual que en el cuerpo del latido.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "capver", "capver INTEGER NOT NULL DEFAULT 0")
+			},
+		},
 	}
+}
+
+// pisoDeLectura es la migración más baja que un binario tiene que conocer para poder LEER una
+// base migrada por `migs` sin devolver datos distintos.
+//
+// Se deriva: es la versión más alta entre las migraciones NO readCompatible. Por debajo de ella
+// hay al menos un cambio que le mueve el resultado a una consulta existente; de ella para arriba,
+// todo lo que se agregó es invisible para el lector viejo y no le cambia ninguna respuesta.
+//
+// Cero significa «ninguna migración rompe lectura», no «no se sabe»: el caso «no se sabe» no
+// existe acá porque la lista siempre está completa en el binario que la calcula. El «no se sabe»
+// aparece del otro lado —al LEER el piso de una base que no lo tiene grabado— y ahí se distingue
+// con un booleano, no con un cero.
+func pisoDeLectura(migs []migration) int {
+	piso := 0
+	for _, m := range migs {
+		if !m.readCompatible && m.version > piso {
+			piso = m.version
+		}
+	}
+	return piso
+}
+
+// PisoDeLectura es el piso que declara ESTE binario, para diagnóstico y para el despliegue.
+func PisoDeLectura() int { return pisoDeLectura(schemaMigrations()) }
+
+// registrarPisoDeLectura deja en la base el piso derivado por el binario que acaba de migrar.
+//
+// Se llama DESPUÉS de aplicar las migraciones y no dentro del runner: `applyMigrations` corre
+// también con migraciones sintéticas en los tests, sobre bases donde `schema_floor` no existe, y
+// un runner que escribiera ahí dejaría de ser el runner puro que esos tests ejercitan.
+//
+// El fallo NO es fatal para el que escribe —la base quedó migrada y usable— pero sí se propaga:
+// un piso que no se grabó deja a los binarios viejos sin evidencia, y prefiero enterarme al
+// escribir que descubrirlo cuando otro se niegue a abrir.
+func registrarPisoDeLectura(db *sql.DB, migs []migration) error {
+	piso := pisoDeLectura(migs)
+	alcanzado := 0
+	for _, m := range migs {
+		if m.version > alcanzado {
+			alcanzado = m.version
+		}
+	}
+	_, err := db.Exec(`INSERT INTO schema_floor (id, read_floor, set_by_schema, set_at)
+		VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			read_floor    = excluded.read_floor,
+			set_by_schema = excluded.set_by_schema,
+			set_at        = excluded.set_at`, piso, alcanzado)
+	if err != nil {
+		return fmt.Errorf("error al grabar el piso de lectura: %w", err)
+	}
+	return nil
+}
+
+// leerPisoDeLectura devuelve el piso grabado en la base. El segundo valor distingue «no hay piso
+// grabado» de «el piso es 0», que son cosas distintas y se leerían igual con un solo int: la
+// primera es una base migrada por un binario anterior a esta pieza —sin evidencia, hay que
+// negarse— y la segunda sería un permiso amplio.
+//
+// No devuelve error a propósito: cualquier fallo —tabla ausente, fila ausente, base ilegible— es
+// la MISMA respuesta operativa («no hay evidencia»), y darle tres formas al mismo no-sé invita a
+// que algún caller trate una de ellas como un sí.
+func leerPisoDeLectura(db *sql.DB) (int, bool) {
+	var piso int
+	if err := db.QueryRow(`SELECT read_floor FROM schema_floor WHERE id = 1`).Scan(&piso); err != nil {
+		return 0, false
+	}
+	return piso, true
 }
 
 // EsquemaEsperado es la versión de esquema a la que apunta ESTE binario.
@@ -1770,7 +1992,14 @@ func latestSchemaVersion() int {
 // runMigrations aplica al esquema activo las migraciones que falten, según el
 // PRAGMA user_version de la base.
 func runMigrations(db *sql.DB) error {
-	return applyMigrations(db, schemaMigrations())
+	migs := schemaMigrations()
+	if err := applyMigrations(db, migs); err != nil {
+		return err
+	}
+	// El piso se re-graba en CADA arranque y no sólo cuando hubo migraciones que aplicar: si no,
+	// una base ya migrada por un binario anterior a esta pieza se quedaría para siempre sin piso
+	// —nadie volvería a tocarla— y los binarios viejos no tendrían de dónde sacar la evidencia.
+	return registrarPisoDeLectura(db, migs)
 }
 
 // applyMigrations es el runner: lee user_version y aplica, en orden, cada migración
@@ -1795,6 +2024,24 @@ func applyMigrations(db *sql.DB, migs []migration) error {
 		}
 	}
 	if current > latest {
+		// DOS SITUACIONES DISTINTAS QUE ANTES SE CONTESTABAN IGUAL. Si el piso grabado en la base
+		// está a la altura de este binario, la base es MÁS NUEVA pero SE PUEDE LEER: lo único que
+		// cambió desde acá para arriba es invisible para este lector. Se sigue devolviendo un
+		// error —abrir para escribir sería un error— pero uno que el caller puede distinguir para
+		// ofrecer sólo lectura en vez de negarse del todo.
+		//
+		// Sin piso grabado no hay evidencia, y la falta de evidencia se responde con el NO de
+		// siempre: una base migrada por un binario anterior a esta pieza no dice nada sobre qué
+		// puede leer quien la abre.
+		if piso, hay := leerPisoDeLectura(db); hay && latest >= piso {
+			// El texto describe una CAPACIDAD, no una promesa: dice que los datos son legibles
+			// para este binario, no que alguien los vaya a servir. Hoy ningún caller abre en
+			// sólo lectura todavía, y un mensaje que dijera «se abre en sólo lectura» sería
+			// exactamente la clase de afirmación que después se cita como si fuera el
+			// comportamiento.
+			return fmt.Errorf("%w: %w: la base está en el esquema v%d y este binario llega a v%d, pero el piso de lectura de la base es v%d y este binario lo alcanza: sus datos son LEGIBLES para él, aunque no puede migrarla ni escribirla",
+				ErrSchemaTooNew, ErrEsquemaLegible, current, latest, piso)
+		}
 		return fmt.Errorf("%w: la base está en el esquema v%d pero este binario solo llega a v%d; actualizá musubi", ErrSchemaTooNew, current, latest)
 	}
 	for _, m := range migs {

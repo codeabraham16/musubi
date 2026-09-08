@@ -15,11 +15,11 @@ import (
 // con la guarda de contención puesta.
 //
 // El mecanismo tiene dos mitades que se pisaban entre sí:
-//   1. Un nodo de otro árbol no está en el walk del proyecto, así que el incremental lo clasifica
-//      FANTASMA y lo poda. Esa mitad ya funcionaba.
-//   2. Pero acto seguido metía el directorio del fantasma en `dirtyDirs` —para soltar aristas
-//      colgantes— y `dirExists` decía que sí, porque el directorio ajeno EXISTE de verdad. Lo
-//      re-derivaba en el mismo tick y los nodos volvían. Neto: cero.
+//  1. Un nodo de otro árbol no está en el walk del proyecto, así que el incremental lo clasifica
+//     FANTASMA y lo poda. Esa mitad ya funcionaba.
+//  2. Pero acto seguido metía el directorio del fantasma en `dirtyDirs` —para soltar aristas
+//     colgantes— y `dirExists` decía que sí, porque el directorio ajeno EXISTE de verdad. Lo
+//     re-derivaba en el mismo tick y los nodos volvían. Neto: cero.
 //
 // Con `dentroDelProyecto` la segunda mitad se corta y la poda queda firme. Esto es lo que convierte
 // la limpieza de un DELETE a mano contra la base en una corrida normal de la herramienta.

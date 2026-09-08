@@ -8,6 +8,232 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace.** `runServe` no
+  arrancaba el ciclo de memoria —consolidar, olvidar, purgar— y sin embargo ya recibía
+  `WithMaintenance(cfg.Maintenance)`: la config estaba cableada desde siempre y **el consumidor no
+  existía**. No hay ningún comentario que lo excluyera a propósito.
+
+  **Cómo se veía eso, medido en el central el 2026-09-07.** El ciclo *sí* corría —`last_maintenance`
+  marcaba 31 h contra un intervalo de 24 h, o sea el diente de sierra normal del ticker— pero lo
+  corría **otro proceso**. La cadena, medida por `/proc`:
+
+  ```
+  musubi-gateway.service  →  main.py  →  /usr/local/bin/musubi daemon (pid 2892216, 6d 07h)
+                                              └─ abre /home/musubi/musubi-brain/.musubi/memory.db
+  ```
+
+  `musubi serve` arranca **1** scheduler (sólo el destilado); `musubi daemon` arranca **4**,
+  incluido el de mantenimiento. Así que la memoria del cerebro se mantenía como efecto secundario
+  de que **el bot de Telegram estuviera vivo**. Parar el bot —una operación perfectamente
+  razonable, es un bot de chat— dejaba la memoria sin consolidar, sin olvidar y sin purgar, y nada
+  lo decía. En el servidor no hay ningún timer ni crontab de `musubi maintain`: el único timer de
+  Musubi es el del backup.
+
+  Ahora `runServe` arranca el scheduler y su corrida de arranque, con el mismo gate de config que
+  `runDaemon`. **Dos procesos no se pisan**: `RunScheduledMaintenance` toma el candado de despacho
+  y consulta `MaintenanceDue` contra `last_maintenance` **en la base**, así que el que llega
+  segundo ve que no corresponde y no hace nada — la coordinación es del dato, no del proceso.
+
+  **Van sólo el mantenimiento y su corrida de arranque, no los otros tres schedulers del daemon**:
+  el del grafo indexa el árbol *checkouteado* y en un servidor no hay proyecto que indexar; el de
+  sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo programado sin nadie que
+  lo pidiera.
+
+  Y una serie nueva para que el silencio no pueda volver a esconderse:
+  **`musubi_maintenance_age_seconds`**, con la convención de `musubi_backup_local_age_seconds` —
+  **`-1` si nunca**, que distingue «nunca corrió» de «corrió hace 0 segundos», las dos respuestas
+  más distintas posibles. Un cerebro que dejó de mantenerse responde exactamente igual que uno
+  sano: la memoria sigue contestando, sólo deja de envejecer bien.
+
+  M1–M3 con tres sabotajes, cada uno rojo sólo en el suyo. M3 vigila las tres construcciones por
+  separado y la tercera es la que evita el arreglo simétrico y equivocado: el escalón de sólo
+  lectura **no** debe arrancar el ciclo, porque su base se abre con `PRAGMA query_only` y sería
+  trabajo programado para fallar cada vez.
+
+- **La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina
+  que queda afuera.** El `capver` existía desde que existe `buildid` y **nadie lo leía** — el modo
+  de falla que este repo persigue: se construye y no se enciende. Ahora tiene un consumidor.
+
+  `[CapverMin, Capver]` es una banda y no un número porque con un solo valor cualquier cambio de
+  contrato obliga a actualizar toda la malla el mismo día — el mismo cutover duro que el piso de
+  lectura acaba de sacar del esquema. `CapverMin` sube, nunca baja, y subirla es **retirar
+  soporte**: por eso lleva su propia bitácora, para que el día que una máquina vieja deje de poder
+  hablar sea una decisión con fecha y no el efecto lateral de haber tocado `Capver`.
+
+  El agente declara su capver en el latido; el cerebro lo compara, lo guarda por máquina
+  (`devices.capver`, migración 49) y responde en el campo `protocolo` cuando queda afuera. El
+  agente **lo imprime**, por el mismo motivo que ya imprime las notas de `muestra` y `servicios`:
+  quien puede actualizar esa máquina es quien la mira desde ahí, no quien lee los logs del cerebro.
+
+  **El latido NO se rechaza por esto, y la decisión es la pieza.** Una máquina rechazada deja de
+  latir, y dejar de latir se ve *exactamente igual* que estar apagada: el problema quedaría
+  invisible justo para quien puede arreglarlo. Queda viva, en la flota, con su problema escrito.
+
+  **`0` no es «capver cero», es «no declara»**, y se contesta con otro texto. Un agente anterior a
+  esta pieza no manda el campo; decirle que «habla un contrato viejo» sería un diagnóstico falso
+  para el mismo remedio. Es la misma regla que ya gobierna `puede_preguntar`, donde el nil se
+  distingue del `false` explícito.
+
+  **Y de paso cierra un agujero que el propio repo ya había documentado — para la otra mitad del
+  mensaje.** `internal/fleet/protocolo.go` existe porque la RESPUESTA del latido vivía escrita dos
+  veces, y eso costó dos features en silencio (`token_nuevo`, que dejaba la rotación de token sin
+  poder completarse nunca, y `servicios`, cuyo único propósito era que un inventario descartado no
+  desapareciera en silencio — y desaparecía en silencio). **El PEDIDO tenía el mismo problema y se
+  había pasado por alto**: el agente lo armaba como un `map[string]any` anónimo y el cerebro lo
+  leía con un struct privado. Un map es todavía peor que un struct duplicado: no tiene nombres de
+  campo que el compilador pueda mirar, así que un typo en la clave compila, arranca y responde 200
+  con el campo perdido. Ahora los dos lados usan `fleet.CuerpoLatido`.
+
+  Las dos guardas del repo hicieron su trabajo sobre este cambio y las dos exigían una decisión
+  escrita, no una línea: `capver` entró a la lista blanca del cuerpo tras el examen que esa prueba
+  pide —no dice quién es la máquina, dice qué contrato habla, y la única fila que puede tocar sigue
+  siendo la del token—, y `protocolo` tuvo que declararse consumido *y* sostenerse con la prueba
+  que verifica que llega de verdad, que pasó de cuatro campos a cinco.
+
+  B1–B5 con sus cinco sabotajes, cada uno rojo sólo en el suyo. B5 mide la **escritura** y no el
+  valor: un UPDATE que reasigna la fila a sí misma la deja idéntica y cuesta lo mismo —página
+  sucia, frame de WAL y fsync—, así que se cuenta con el espía de escrituras que ya vigila el
+  camino caliente del latido.
+
+- **El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede
+  consultar.** Con el piso grabado en la base, `musubi daemon` deja de tener dos respuestas para
+  tres situaciones. Los tres estados, y que sean tres es el punto:
+
+  | estado | qué hace |
+  |---|---|
+  | sano | migra, lee y escribe |
+  | **sólo lectura** | **lee; toda tool que muta se rechaza nombrando el motivo** |
+  | degradado | no hay memoria; contesta el protocolo y rechaza todo |
+
+  Verificado con el binario real contra una base marcada `v49` (piso 43, binario en v48):
+  `initialize` declara `musubi/readonly` con **36 tools servibles**, `musubi_recall` **devuelve la
+  nota sembrada**, y `musubi_save_observation` vuelve con `-32005` y una explicación.
+
+  **La garantía la da SQLite, no nuestra disciplina.** `PRAGMA query_only = 1` va en el DSN, así
+  que lo hereda cada conexión del pool, y el constructor además **verifica que quedó puesto** en
+  vez de confiar en que el driver aplicó el `_pragma`. Una lista de funciones-que-no-llamamos
+  habría envejecido en la primera escritura nueva que alguien agregue.
+
+  **El hallazgo que casi lo deja en teatro: `musubi_recall` NO es `readOnly`.** Y con razón —
+  escribe: refuerza el acceso de lo que devolvió, y ese error era *fatal* para la consulta—. La
+  primera versión del escalón rechazó la tool de lectura principal. Medido sobre el registro, sólo
+  **tres** tools tienen esa forma: `musubi_recall` y `musubi_memory_expand` (`bumpAccess`) y
+  `musubi_recall_code` (`LedgerAdd`). Su escritura es telemetría, no parte de la respuesta.
+
+  Se arregló en los dos niveles: la capa de memoria **omite** esas escrituras cuando la base es de
+  sólo lectura —los mismos ítems, en el mismo orden, sin la señal de refuerzo de esa sesión— y el
+  registro de tools gana un cuarto eje, `roClass`, con el mismo patrón que `lockClass`: el cero se
+  deriva de `readOnly` (fail-safe, una tool nueva no entra al modo por olvido) y
+  `roLeeConEscrituraIncidental` lo declara para esas tres. Marcar `readOnly` a `musubi_recall`
+  habría sido más corto y **estaba descartado de antes**: ese eje decide autorización, y la abriría
+  a los principales `reader`.
+
+  No es un duplicado de `RecallOptions.NoBump`: eso es una *preferencia* por llamada que la capa
+  MCP no pasa nunca; esto es una *capacidad* del engine que ningún caller puede olvidarse de
+  declarar, y cubre además a `ExpandMemory`, que no tiene opciones donde ponerla.
+
+  `servirSoloLectura` es una función aparte y no una rama de `runDaemon`, porque lo que la
+  distingue no es una opción de más sino **todo lo que no arranca**: mantenimiento, grafo,
+  destilado, ledger de uso, vertedero del feed, outbox y cognición. Escrito como rama, cada
+  scheduler nuevo quedaría corriendo también acá contra una base que no se puede escribir.
+
+  Ocho invariantes (R1–R8) con seis sabotajes, cada uno rojo en el suyo. R8 corre `runDaemon` en un
+  subproceso real. **Y el escenario de D5 tuvo que corregirse**: desde que las bases graban su
+  piso, una base más nueva que este binario alcanza ya no cae en degradado sino en el escalón; el
+  caso degradado es ahora el de una base *sin evidencia* de piso, y así se arma.
+
+- **La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en
+  dos situaciones distintas.** `ErrSchemaTooNew` es un booleano: o el binario llega al esquema de
+  la base, o se niega. Eso trata igual a una base que cambió de forma y a una que sólo sumó
+  columnas, y obliga a un cutover duro de toda la malla por cada migración — aunque **41 de las 47
+  migraciones (87%) no le cambian el resultado a ninguna consulta existente**.
+
+  Cada migración declara ahora `readCompatible`, y el piso de lectura se **deriva**: es la
+  migración no-compatible más alta. Medido sobre la lista real, **el piso es la v43**; el binario
+  va por la v48. Un binario de v43 en adelante puede leer una base v48 y devolver exactamente las
+  mismas filas.
+
+  **La definición es estrecha a propósito, y el caso que la fija es la v22.** Su propio comentario
+  la llama «aditiva» —y lo es, en el sentido de que `ADD COLUMN NOT NULL DEFAULT` no hace una
+  pasada de escritura—. Pero desde la v22 existen filas con `quarantined = 1` y el predicado de
+  visibilidad pasó a ser `archived = 0 AND superseded_by IS NULL AND quarantined = 0`: un binario
+  v21 no tiene ese tercer filtro y devolvería contenido de LLM en cuarentena como si fuera memoria
+  verificada. Son dos sentidos distintos de «aditiva» y el que importa acá es el del lector.
+
+  Las seis que rompen lectura, cada una con su razón medida: v13 y v14 (las tablas se reconstruyen
+  y pasan a estar partidas por `project_id`), v17 (el índice FTS se rehace como external-content y
+  se borran los triggers del binario anterior), v22 (la cuarentena), v39 (`fleet_policy_state` se
+  reconstruye con `alcance` en la clave) y **v43** (durante la rotación el dispositivo se autentica
+  por `token_sha256_nuevo` —`internal/memory/rotacion.go:135`—, así que un lector viejo, que sólo
+  mira `token_sha256`, contesta que no existe).
+
+  **El cero de Go es `false` = «no compatible», y es deliberado**: el mismo fail-safe que
+  `toolEntry.readOnly`. Una migración nueva que nadie clasificó sube el piso y hace que los
+  binarios viejos se nieguen, que es el lado seguro del error.
+
+  El piso lo graba en la base el binario que migra (`schema_floor`, migración 48), porque el
+  binario viejo no puede derivarlo: no conoce las migraciones futuras. **Va en una tabla y no en
+  `PRAGMA application_id`** —que está libre y sería más barato— porque el default del PRAGMA es 0 y
+  0 también sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número, o sea
+  el valor de fallo sería el tranquilizador. Con una tabla, ausente es ausente y el lector se niega
+  por falta de evidencia. Se re-graba en cada arranque, no sólo cuando hay migraciones pendientes:
+  si no, toda base que hoy existe se quedaría sin piso para siempre.
+
+  **El alcance del piso es general, no «sólo la memoria».** Acotarlo a `observations`/`relations`/
+  `embeddings`/`code_*` daba un piso de 22 en vez de 43 y dejaría leer a muchos más binarios; se
+  descartó porque ese número sólo sería cierto mientras el modo sólo-lectura no sirviera jamás una
+  lectura de flota, y ese acoplamiento no está escrito en ningún lado. Si algún día hace falta, el
+  camino es un segundo piso con su propio alcance declarado, no reinterpretar éste.
+
+  `ErrEsquemaLegible` viaja **envuelto junto a** `ErrSchemaTooNew` (Go admite varios `%w`), así que
+  todo caller que ya preguntaba por ese error sigue viendo lo mismo.
+
+  **Lo que esto todavía NO hace, dicho claro:** ningún caller abre en sólo lectura. Esta entrega es
+  la evidencia y la distinción; servir la lectura —engine con `PRAGMA query_only`, y el escalón MCP
+  que expone sólo las tools de lectura— es lo que sigue. Por eso el mensaje del error habla de una
+  capacidad («sus datos son LEGIBLES para él») y no de un comportamiento.
+
+  Cinco invariantes (P1–P5) con sus sabotajes, cada uno rojo sólo en el suyo. P2 es el que atrapa
+  un piso **tipeado**: es el único que corre la derivación sobre una lista cuya respuesta no es 43.
+
+- **El daemon dejó de morirse mudo: cuando la memoria no abre, ahora atiende degradado.** Hasta
+  acá, cualquier fallo de `NewDbEngine` mataba el proceso con `os.Exit(1)` y el diagnóstico por
+  stderr. Medido el 2026-09-07 contra una base marcada `v999` con un binario que llega a la
+  migración 47, mandándole al daemon un `initialize`:
+
+  ```
+  exit=1
+  STDOUT (lo que ve el cliente MCP): 0 bytes
+  STDERR: el esquema de la base es más nuevo que este binario: la base está en el esquema
+          v999 pero este binario solo llega a v47; actualizá musubi
+  ```
+
+  El mensaje era bueno y salía por el único canal que el cliente MCP no le muestra al agente.
+  **Cero bytes de protocolo es indistinguible de «musubi no está instalado»**, y las dos
+  situaciones piden acciones opuestas: una se arregla actualizando el binario, la otra
+  instalándolo. Y no es sólo el esquema: por ese mismo camino morían mudos el disco lleno, la
+  base corrupta y el permiso denegado.
+
+  Ahora el daemon levanta un servidor degradado que (1) **contesta el handshake** declarando la
+  causa en `_meta` bajo `musubi/degraded`, junto a la identidad de build; (2) **lista el mismo
+  catálogo** que un servidor sano —verificado por huella, no sólo por conteo—, porque una lista
+  vacía sería la misma mentira con otra cara: las tools existen, lo que falta es con qué
+  trabajar; y (3) **rechaza cada `tools/call`** con el código propio `-32004` y un mensaje que
+  nombra la versión del binario, la causa textual y que el binario está instalado y respondiendo.
+
+  No despacha nada: el handler tocaría un engine `nil`, el `recover` de `Dispatch` lo convertiría
+  en «error interno inesperado» y estaríamos de vuelta en un mensaje que no dice nada. Tampoco hay
+  un engine falso de por medio: un stub que devolviera vacío dejaría al agente leyendo «no hay
+  memoria sobre eso» —una respuesta que se lee como un dato— en vez de «no pude mirar».
+
+  El mismo experimento, contra el binario ya corregido: `exit=0` y **106.551 bytes** por stdout,
+  con el `catalog_sha256` idéntico al del servidor sano. El aviso por stderr se conserva: es lo
+  que ve el operador, y cambiarlo por otro canal mudo no era el punto.
+
+  Cinco invariantes (D1–D5), cada uno visto en rojo bajo un sabotaje que ataca al suyo. D5 corre
+  `runDaemon` en un **subproceso real** con sus pipes, porque el defecto vivía entre el `os.Exit`
+  y el cliente: un test sobre una función interna habría medido el proxy y no la cosa.
+
 - **La identidad del binario viaja en el handshake: hasta acá ningún camino del protocolo decía
   qué build había enfrente.** `serverInfo.version` contestaba el literal `"1.0.0"` desde siempre,
   mientras `s.version` —la versión real, ya inyectada por `WithVersion` desde `main`— existía y

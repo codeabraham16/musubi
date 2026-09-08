@@ -79,6 +79,35 @@ func (e *DbEngine) MetaDue(key string, intervalHours float64) (bool, error) {
 	return time.Since(last).Hours() >= intervalHours, nil
 }
 
+// MetaEdadSegundos devuelve hace cuántos segundos se marcó una tarea throttled, o -1 si nunca se
+// marcó (o si la marca quedó ilegible).
+//
+// EL -1 NO ES UN DETALLE: distingue «nunca corrió» de «corrió hace 0 segundos», que con un entero
+// pelado serían el mismo número — y son las dos respuestas más distintas posibles. Es la misma
+// convención que ya usan musubi_backup_local_age_seconds y su par off-host.
+//
+// Una marca ilegible cuenta como «nunca» y no como un error: para quien mira la métrica, una marca
+// que no se puede leer y una que no está significan lo mismo —no hay evidencia de que la tarea
+// haya corrido— y darle un tercer valor sólo agregaría un caso que nadie va a alertar.
+func (e *DbEngine) MetaEdadSegundos(key string) int64 {
+	v, ok, err := e.GetMeta(key)
+	if err != nil || !ok {
+		return -1
+	}
+	t, perr := time.Parse(time.RFC3339, v)
+	if perr != nil {
+		return -1
+	}
+	return int64(time.Since(t).Seconds())
+}
+
+// MantenimientoEdadSegundos es MetaEdadSegundos para el ciclo de memoria. Existe como método
+// propio porque `metaLastMaintenance` no se exporta: sin esto, el caller de afuera tendría que
+// escribir el nombre de la clave a mano, que es como se desincronizan dos lados.
+func (e *DbEngine) MantenimientoEdadSegundos() int64 {
+	return e.MetaEdadSegundos(metaLastMaintenance)
+}
+
 // MarkMetaNow registra que una tarea throttled acaba de correr.
 func (e *DbEngine) MarkMetaNow(key string) error {
 	return e.SetMeta(key, time.Now().UTC().Format(time.RFC3339))

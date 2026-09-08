@@ -154,8 +154,21 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       en debates). Dos jueces del mismo modelo no son dos opiniones, y el tally contaba
 	//       filas: un lente que corrio los tests pesaba igual que uno que opino. Los campos
 	//       pudieron nacer OBLIGATORIOS porque las tres tablas del debate estaban en cero filas.
-	if latestSchemaVersion() != 47 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 47", latestSchemaVersion())
+	// v48 = EL PISO DE LECTURA, GRABADO EN LA BASE (`schema_floor`). La guarda de compatibilidad
+	//       hacia adelante era un booleano —o el binario llega al esquema, o se niega—, así que
+	//       trataba igual a una base que cambió de forma y a una que sólo sumó columnas, y
+	//       obligaba a un cutover duro de toda la malla por cada migración. El piso lo deriva el
+	//       binario que migra (la migración no-readCompatible más alta) y lo deja grabado, porque
+	//       el binario viejo no puede derivarlo: no conoce las migraciones futuras. Va en una
+	//       tabla y no en `PRAGMA application_id` porque el default del PRAGMA es 0 y 0 también
+	//       sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número.
+	// v49 = EL CAPVER POR MÁQUINA (`devices.capver`). `agent_version` dice qué BUILD corre; esto
+	//       dice qué CONTRATO habla, y no es lo mismo: dos builds distintos pueden compartir
+	//       capver, que es justamente el punto de tener una banda [CapverMin, Capver]. Sin la
+	//       columna, «¿qué máquinas no pueden hablar mi protocolo?» sólo se contesta esperando el
+	//       próximo latido de cada una. readCompatible: ningún camino de lectura filtra por ella.
+	if latestSchemaVersion() != 49 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 49", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

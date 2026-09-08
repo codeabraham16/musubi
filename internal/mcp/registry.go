@@ -59,11 +59,36 @@ const (
 // se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
 // trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
 // MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.
+// roClass dice si una tool sirve cuando la base NO se puede escribir (escalón de sólo lectura).
+//
+// ES UN CUARTO EJE, Y NACE DEL MISMO PROBLEMA QUE lockClass: `readOnly` ya gobernaba autorización
+// y candado, y usarlo también para esto forzaba un canje falso. `musubi_recall` NO es readOnly a
+// propósito —escribe: refuerza el acceso de lo que devolvió— y marcarla readOnly para destrabar el
+// modo sólo-lectura además se la abriría a los principales `reader`, que es justo lo que el repo
+// ya decidió que no.
+//
+// Pero su escritura es INCIDENTAL: telemetría de refuerzo, no parte de la respuesta. Medido sobre
+// el registro, son sólo TRES las tools con esa forma —`musubi_recall` y `musubi_memory_expand`
+// (bumpAccess) y `musubi_recall_code` (LedgerAdd)—, y sin ellas el escalón de sólo lectura sería
+// teatro: rechazaría la tool de lectura principal.
+type roClass int
+
+const (
+	// roDesdeReadOnly es el cero de Go: sirve en sólo lectura si y sólo si es readOnly. Fail-safe
+	// —una tool nueva no entra al modo sin que alguien lo afirme— y no obliga a tocar las 80.
+	roDesdeReadOnly roClass = iota
+	// roLeeConEscrituraIncidental: sirve en sólo lectura aunque no sea readOnly, porque lo único
+	// que escribe es telemetría que la propia capa de memoria omite en ese modo. Marcarla acá sin
+	// que esa omisión exista haría fallar la tool desde SQLite, no desde el despacho.
+	roLeeConEscrituraIncidental
+)
+
 type toolEntry struct {
 	Tool
 	handler  toolHandler
 	readOnly bool
 	lock     lockClass
+	ro       roClass
 	dormant  bool
 }
 
@@ -95,6 +120,21 @@ func (s *McpServer) handleInitialize() interface{} {
 		// Decirlo es correcto; inventar un número sería la falla que esta pieza vino a arreglar.
 		version = "unknown"
 	}
+	meta := map[string]interface{}{
+		"musubi/identity": id,
+	}
+	// Un servidor sin memoria lo DICE en el handshake, no recién cuando alguien intenta usarlo.
+	// La clave no aparece en un servidor sano: su ausencia es la señal de que todo está bien.
+	if deg := s.metaDegradacion(); deg != nil {
+		meta["musubi/degraded"] = deg
+	}
+	// Y si tiene memoria pero no la puede escribir, también lo dice acá. Las dos claves son
+	// excluyentes en la práctica —un servidor degradado no tiene engine que consultar— pero no se
+	// las escribe como un if/else: son dos hechos independientes, y atarlos haría que agregar un
+	// tercer estado obligue a reescribir esta rama.
+	if ro := s.metaSoloLectura(); ro != nil {
+		meta["musubi/readonly"] = ro
+	}
 	return map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
@@ -104,9 +144,7 @@ func (s *McpServer) handleInitialize() interface{} {
 			"name":    "musubi-core",
 			"version": version,
 		},
-		"_meta": map[string]interface{}{
-			"musubi/identity": id,
-		},
+		"_meta": meta,
 	}
 }
 
@@ -183,6 +221,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"query"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolRecall,
 			// El juez read-time (rerankIfEnabled) llama al motor por red desde adentro de este
 			// handler. Con el candado del despacho tomado, una sola llamada lenta deja al servidor
@@ -228,6 +267,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"ids"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolMemoryExpand,
 		},
 		{
@@ -822,6 +862,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"path"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolRecallCode,
 		},
 		{

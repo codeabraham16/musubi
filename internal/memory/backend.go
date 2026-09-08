@@ -394,6 +394,9 @@ type DeviceStore interface {
 	// ActualizarAutoreporte guarda la versión del agente y la dirección que la propia máquina
 	// reporta. Es la única escritura que un device hace sobre el registro, y sólo sobre su fila.
 	ActualizarAutoreporte(id, version, direccion string) error
+	// ActualizarCapver guarda el CONTRATO que declara la máquina, aparte de su versión de
+	// producto: dos builds distintos pueden hablar el mismo capver.
+	ActualizarCapver(id string, capver int) error
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)

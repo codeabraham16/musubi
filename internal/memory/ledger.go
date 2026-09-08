@@ -122,6 +122,13 @@ func (e *DbEngine) LedgerReset() error {
 // activa sin reiniciar (caller sin id de hook) y el SessionID queda vacío, que es
 // la señal de "esto es un acumulado, no una sesión" — ver el encabezado del archivo.
 func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error) {
+	// En sólo lectura el ledger no se toca: es telemetría del ahorro, no parte de ninguna
+	// respuesta. Se devuelve lo que hay hoy —una lectura— para que el caller no tenga que
+	// distinguir el modo. Sin esta guarda, `musubi_recall_code` intentaría escribir y `query_only`
+	// lo rechazaría, dejando fuera de servicio a otra tool que es puramente de lectura.
+	if e.soloLectura {
+		return e.loadLedger()
+	}
 	l, err := e.loadLedger()
 	if err != nil {
 		return TokenLedger{}, err
