@@ -94,6 +94,44 @@ rojo()  { printf '  \033[31m✘ %s\033[0m\n' "$1"; DIVERGE=1; }
 verde() { printf '  \033[32m✔ %s\033[0m\n' "$1"; }
 gris()  { printf '  \033[90m· %s\033[0m\n' "$1"; }
 titulo(){ printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+# detalle — imprime QUÉ, renglón por renglón, DESDE ESTA SHELL Y NO DESDE UN PROCESO EFÍMERO.
+#
+# LA MITAD ACCIONABLE DEL INFORME NO LLEGABA AL JOURNAL, Y ESO COSTÓ TRES DÍAS.
+#
+# Acá había cinco `printf '%s\n' "$x" | sed 's/^/      falta: /'`. Funcionan perfecto en una
+# terminal. Bajo systemd NO: journald resuelve a qué unidad pertenece cada línea leyendo
+# `/proc/<pid>/cgroup` CUANDO LA RECIBE, y `sed` —un proceso de pipeline que vive milisegundos—
+# **ya murió**. Medido el 2026-09-08 sobre el journal real de `musubi-comparar.service`:
+#
+#     journalctl --user -u musubi-comparar.service | grep -cE 'falta:|firing:|down:|sobra:'  ->  0
+#     journalctl --user                            | grep -cE 'falta:|firing:|down:|sobra:'  -> 42
+#
+# Y los metadatos de una de esas 42 lo dicen entero: `_COMM=sed`, `_SYSTEMD_UNIT` **ausente**,
+# `_SYSTEMD_USER_UNIT` **ausente**, `_SYSTEMD_CGROUP` **ausente**. Sobrevive `SYSLOG_IDENTIFIER`
+# porque va en el fd del stream y no se resuelve desde `/proc`.
+#
+# EL DAÑO NO ES COSMÉTICO. El unit file documenta `journalctl --user -u musubi-comparar.service`
+# como LA forma de leer esto. Quien la seguía veía «desplegado A MEDIAS: faltan 1 de 28» y **nunca
+# el nombre**; veía «disparadas ahora:» seguido de nada; no veía qué target estaba caído. El
+# titular llegaba y el nombre no, así que para saber qué hacer había que volver a correrlo A MANO
+# — que es exactamente el paso manual que este guion existe para eliminar. La regla que faltaba
+# era `InventarioDeServiciosIncompleto`, y estuvo tres días escrita en el journal sin que la
+# lectura documentada pudiera mostrarla.
+#
+# `printf` es un BUILTIN: lo ejecuta bash, que vive toda la corrida, así que journald sí puede
+# resolver su cgroup. El `while` va con un here-string y no con un pipe, por dos motivos: un pipe
+# metería la lectura en una subshell efímera —el defecto de nuevo— y además `ssh` sin `-n` ya nos
+# enseñó lo que cuesta que un bucle comparta stdin con otro (ver `corre_alla`).
+detalle() {
+	prefijo="$1"
+	while IFS= read -r _linea; do
+		[ -n "$_linea" ] || continue
+		printf '      %s%s\n' "$prefijo" "$_linea"
+	done <<DETALLE
+$2
+DETALLE
+}
 # dudoso — lo que NO SE PUDO comprobar. No es verde ni rojo: es «no vi», y sale con 2. Existe
 # porque el modo de falla que trajo este script hasta acá es siempre el mismo: una consulta que no
 # se pudo hacer y un informe que igual terminó en verde.
@@ -260,7 +298,7 @@ for g in d:
       verde "$N_CARGADAS reglas cargadas; el repo declara $N_DECLARADAS y las $N_OBLIGATORIAS que se despliegan «siempre» están todas (el resto es condicional; el detalle, en la sección 2)"
     else
       rojo "faltan $n_faltan_obl de las $N_OBLIGATORIAS reglas que se despliegan «siempre» (hay $N_CARGADAS cargadas contra $N_DECLARADAS declaradas):"
-      printf '%s\n' "$faltan_obl" | sed 's/^/      falta: /'
+      detalle 'falta: ' "$faltan_obl"
     fi
   fi
 fi
@@ -380,7 +418,7 @@ for t in mal:
       verde "$n_up/$n_tot targets up"
     else
       rojo "$n_up/$n_tot targets up — los que no responden dejan ciegas a las alertas que dependen de ellos:"
-      printf '%s\n' "$TARGETS" | tail -n +2 | sed 's/^/      down: /'
+      detalle 'down: ' "$(printf '%s\n' "$TARGETS" | tail -n +2)"
     fi
   fi
 fi
@@ -409,7 +447,7 @@ for nombre, n in sorted(c.items()):
       gris "ninguna alerta disparada en este momento"
     else
       gris "disparadas ahora (estado del minuto, no divergencia con el repo):"
-      printf '%s\n' "$lista" | sed 's/^/      firing: /'
+      detalle 'firing: ' "$lista"
     fi
   fi
 fi
@@ -523,7 +561,7 @@ for f in "$REPO"/deploy/musubi-alerts*.yml; do
     esac
   else
     rojo "$nombre — desplegado A MEDIAS: faltan $n_faltan de $n_declara"
-    printf '%s\n' "$faltan" | sed 's/^/      falta: /'
+    detalle 'falta: ' "$faltan"
   fi
 
   sobran="$(comm -13 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
@@ -536,7 +574,7 @@ done
 huerfanas="$(comm -13 <(printf '%s\n' "$TODAS_DECLARADAS") <(printf '%s\n' "$CARGADAS"))"
 if [ -n "$huerfanas" ]; then
   rojo "hay reglas CARGADAS que el repo ya no tiene (quedaron de un despliegue anterior):"
-  printf '%s\n' "$huerfanas" | sed 's/^/      sobra: /'
+  detalle 'sobra: ' "$huerfanas"
 fi
 
 # ── 3 · LOS SCRAPES ─────────────────────────────────────────────────────────────────────────

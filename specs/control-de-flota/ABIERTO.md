@@ -794,12 +794,40 @@ escrito: «Prometheus informa el reload como EXITOSO y se queda con CERO reglas 
 `reload → 200` no prueba nada. Se preguntó por el resultado:
 `curl -s .../api/v1/rules | grep -c InventarioDeServiciosIncompleto` → **1**.
 
-**EL CABO QUE ESTO DEJA ABIERTO NO ES ÉSTE, ES POR QUÉ TARDÓ TRES DÍAS EN VERSE.**
-`deploy/docker/preparar.sh:124` instala este archivo con `install -m 0644` —el método que rompe la
-etiqueta, en el guion oficial— y sobre todo: **desplegar una regla nueva depende de que alguien
-se acuerde de correr `preparar.sh`**. La comparación repo↔servidor sí corre sola desde A115, y de
-hecho fue la que lo cazó; lo que no corre solo es el ARREGLO. Queda dicho acá y no en una fila
-nueva porque es la misma familia de A115, ya registrada.
+**POR QUÉ TARDÓ TRES DÍAS EN VERSE — CERRADO EL MISMO DÍA, Y LA CAUSA NO ERA LA QUE PARECÍA.**
+
+Primero acusé a `deploy/docker/preparar.sh:124`, que instala este archivo con `install -m 0644`.
+**Era falso y se midió**: existe `poner()` (`:45`) que hace `cat > destino` para los mounts de
+ARCHIVO, y el comentario de `:66` explica que `install` es CORRECTO para `rules/` porque es un
+mount de DIRECTORIO —un inodo nuevo adentro sí lo ve el contenedor— y el `chcon -R -t
+container_file_t "$DEST"` de `:194` repara la etiqueta en la misma corrida. El guion está bien.
+
+La causa real estaba en el INFORME, no en el despliegue. `verificar-despliegue.sh` detectó la
+divergencia el 6, el 7 y el 8 —o sea que la parte automática funcionó— pero decía «desplegado A
+MEDIAS: faltan 1 de 28» **sin el nombre**. El nombre lo imprimían cinco
+`printf '%s\n' "$x" | sed 's/^/      falta: /'`, y bajo systemd eso NO LLEGA: journald resuelve la
+unidad de cada línea leyendo `/proc/<pid>/cgroup` al recibirla, y `sed` —proceso de pipeline que
+vive milisegundos— ya murió. Medido: **0 líneas de detalle con `journalctl -u` contra 42 sin
+`-u`**, y los metadatos de una de ellas dan `_COMM=sed` con `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT` y
+`_SYSTEMD_CGROUP` **los tres ausentes**. Sobrevive `SYSLOG_IDENTIFIER` porque va en el fd del
+stream y no se resuelve desde `/proc`.
+
+**El titular llegaba y lo accionable no.** El unit file documenta `journalctl --user -u
+musubi-comparar.service` como LA forma de leer esto, así que para saber QUÉ regla faltaba había que
+volver a correr el guion A MANO — el paso manual que A115 existe para eliminar. La detección
+automática funcionaba y era inútil.
+
+Arreglado con `detalle()`, que imprime con `printf` —un BUILTIN, o sea que escribe bash, que vive
+toda la corrida—. Verificado con las dos formas en LA MISMA unidad transitoria y la misma corrida:
+con `-u` aparece sólo la del builtin; sin `-u`, las dos. La guarda es
+`TestElDetalleDelInformeLoEscribeLaShellYNoUnProcesoEfimero`, y es de la CLASE: prohíbe cualquier
+pipeline a nivel de sentencia hacia un filtro externo en los dos guiones que corren bajo la unidad
+—porque si su stdout no se captura con `$(...)`, va al journal—, además de exigir que los prefijos
+de detalle salgan por `detalle`. Tres sabotajes en rojo.
+
+**LA LECCIÓN: «lo detecta pero no se arregla solo» era el diagnóstico equivocado.** Se arreglaba a
+mano porque el informe automático no alcanzaba para actuar, no porque faltara automatizar el
+arreglo. Un informe al que hay que re-correr para entenderlo no es un informe automático.
 
 
 **2026-09-05 · AUDITORÍA DE SABOTAJES DECLARADOS, CERRADA: 73 corridos entre dos sesiones, 8 cabos
