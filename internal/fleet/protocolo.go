@@ -138,10 +138,14 @@ const PrefijoRespuestaPermiso = "musubi-permiso: "
 // pueda mirar, así que un typo en la clave («capver» vs «cap_ver») compila, arranca y responde
 // 200 con el campo perdido.
 // ────────────────────────────────────────────────────────────────────────────────────────────
-// CuerpoLatido es lo ÚNICO que un dispositivo puede mandar. Tiene un solo campo, y esa pobreza
-// es el invariante B4/D5: no hay dónde poner un `device_id`, un `name` ni un `project`. La
-// identidad sale del token y de ningún otro lado, así que una máquina no puede reportar las
-// métricas de otra ni aunque quiera.
+
+// CuerpoLatido es lo ÚNICO que un dispositivo puede mandar, y lo que NO tiene es el invariante
+// B4/D5: no hay dónde poner un `device_id`, un `name` ni un `project`. Todos sus campos son cosas
+// que la máquina sabe DE SÍ MISMA; ninguno dice QUIÉN ES. La identidad sale del token y de ningún
+// otro lado, así que una máquina no puede reportar las métricas de otra ni aunque quiera.
+//
+// (La línea en blanco de arriba no es estética: sin ella el bloque de la nota queda pegado a este
+// comentario y pasa a ser el doc del tipo, que entonces no empieza por su nombre —ST1021—.)
 type CuerpoLatido struct {
 	// Muestra viaja como RawMessage y NO como *fleet.Muestra para poder pesarla CRUDA: el techo
 	// de la telemetría es suyo (MuestraMaxBytes ≈ 4 KiB) y tiene que seguir siendo suyo

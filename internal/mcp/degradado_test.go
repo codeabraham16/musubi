@@ -10,13 +10,13 @@ import (
 	"musubi/internal/embedding"
 )
 
-// causaDePrueba es deliberadamente irrepetible: si alguna de estas afirmaciones pasara por
+// errDePrueba es deliberadamente irrepetible: si alguna de estas afirmaciones pasara por
 // casualidad —un mensaje genérico que contenga la palabra «esquema», por ejemplo— no habría forma
 // de que contenga esta frase.
-var causaDePrueba = errors.New("la base está en el esquema v999 pero este binario solo llega a v47")
+var errDePrueba = errors.New("la base está en el esquema v999 pero este binario solo llega a v47")
 
 func servidorDegradadoDePrueba() *McpServer {
-	return NewServidorDegradado(t8Dir, "0.0.0-degradado-de-prueba", causaDePrueba)
+	return NewServidorDegradado(t8Dir, "0.0.0-degradado-de-prueba", errDePrueba)
 }
 
 // t8Dir es un projectPath cualquiera: el servidor degradado no toca el disco.
@@ -61,9 +61,9 @@ func TestD1ElDegradadoContestaElHandshakeYDeclaraLaCausa(t *testing.T) {
 	if sobre.Result.Meta.Degraded == nil {
 		t.Fatal("el handshake no declaró la degradación: el cliente no puede distinguirlo de un servidor sano")
 	}
-	if !strings.Contains(sobre.Result.Meta.Degraded.Reason, causaDePrueba.Error()) {
+	if !strings.Contains(sobre.Result.Meta.Degraded.Reason, errDePrueba.Error()) {
 		t.Errorf("la causa declarada no es la real:\n  dice:    %q\n  esperaba que contuviera: %q",
-			sobre.Result.Meta.Degraded.Reason, causaDePrueba.Error())
+			sobre.Result.Meta.Degraded.Reason, errDePrueba.Error())
 	}
 	if sobre.Result.Meta.Degraded.ToolsUsable {
 		t.Error("el servidor degradado declaró tools_usable=true")
@@ -129,7 +129,7 @@ func TestD3ElDegradadoRechazaTodaLlamadaNombrandoLaCausa(t *testing.T) {
 			t.Errorf("%s: código %d, esperaba codeDegraded (%d) — %q",
 				tool, resp.Error.Code, codeDegraded, resp.Error.Message)
 		}
-		if !strings.Contains(resp.Error.Message, causaDePrueba.Error()) {
+		if !strings.Contains(resp.Error.Message, errDePrueba.Error()) {
 			t.Errorf("%s: el error no nombra la causa:\n  %q", tool, resp.Error.Message)
 		}
 	}
