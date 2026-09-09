@@ -322,7 +322,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	if strings.TrimSpace(args.ID) == "" {
 		id, deduped, err := s.engine.SaveObservationDedupedTypedFromWithOrigins(origin, author, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
 		if err != nil {
-			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
+			return nil, errorDeGuardado(err)
 		}
 		if deduped {
 			return textResult("Observación ya existente, no se duplicó (id: " + id + ")."), nil
@@ -338,9 +338,28 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
 		}
-		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
+		return nil, errorDeGuardado(err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
+}
+
+// errorDeGuardado traduce un fallo de guardado al código JSON-RPC que corresponde. Lo que se
+// decide acá no es el texto del mensaje: es DE QUIÉN ES LA CULPA, y de eso depende que quien está
+// del otro lado del cable reintente o se rinda.
+//
+// Un cliente de sync trata los códigos permanentes como «reenviar esto no va a servir» ⇒
+// dead-letter, y todo lo demás como «el central está teniendo un mal día» ⇒ reintentar con
+// backoff, sin tope por conteo. Así que emitir «error interno» para el rechazo de una guarda no es
+// una imprecisión de redacción: convierte una fila muerta en una fila inmortal.
+//
+// El default sigue siendo codeInternalError A PROPÓSITO. Sólo se degrada a «culpa del llamador»
+// lo que una guarda rechazó mirando el pedido; ante un error desconocido —disco, contención, un
+// bug nuestro— mentir en la otra dirección haría que el cliente TIRE memoria que era buena.
+func errorDeGuardado(err error) *RpcError {
+	if errors.Is(err, memory.ErrPayloadInvalido) {
+		return rpcErrorf(codeInvalidParams, "%v", err)
+	}
+	return rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 }
 
 // toolPromote marca una observación como 'shared' (memoria híbrida local+central). Muta,

@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Un rechazo de guarda salía como «error interno del servidor», y el nodo que lo recibía lo
+  reintentaba para siempre.** Medido el 2026-09-08 en `kernelos-pc`: **605 intentos en 74 h** contra
+  una observación que el central nunca iba a aceptar, reintentándose cada 5 minutos sin que nada
+  fuera a cambiar jamás.
+
+  Son dos decisiones correctas que se contradecían. `syncclient.go` clasifica `-32603` como
+  TRANSITORIO a propósito —un `SQLITE_BUSY` del central no puede costar memoria— y su comentario se
+  apoya en que «el outbox corta solo al llegar a `max_attempts`». Pero `scheduler.go` eliminó ese
+  tope, también a propósito: un central inalcanzable por horas tampoco puede costar memoria. Cada
+  una se defiende sola; juntas, la cota en la que se apoyaba la primera dejó de existir. Lo que
+  quedó no fue reintentar de más: fue reintentar para siempre.
+
+  El arreglo no toca ninguna de las dos políticas —las dos son correctas— sino la mentira que las
+  hacía chocar: el central declaraba «me rompí yo» cuando en realidad había MIRADO el pedido y lo
+  había rechazado. Ahora un rechazo determinista viaja como `-32602`, que el cliente ya trata como
+  definitivo, y la fila muere en el primer intento con su razón guardada en `last_error`. La
+  memoria no se pierde: queda local y en dead-letter, rescatable con `musubi_sync_requeue`.
+
+  El default sigue siendo «error interno» a propósito. Sólo se degrada a culpa del llamador lo que
+  una guarda rechazó mirando el pedido; mentir en la otra dirección haría que un cliente TIRE
+  memoria buena porque al central se le llenó el disco.
 - **El redespliegue del cerebro dejaba procesos corriendo el binario anterior, y uno de ellos era
   el que sostenía la memoria.** Medido en el central el 2026-09-08, con el despliegue anterior ya
   hecho:

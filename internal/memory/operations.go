@@ -20,6 +20,25 @@ import (
 // dueño. Fail-closed: se rechaza en vez de corromper en silencio.
 var ErrCrossTenant = errors.New("la observación pertenece a otro proyecto")
 
+// ErrPayloadInvalido marca los rechazos que NO se arreglan reenviando lo mismo: una guarda miró el
+// pedido y dijo que no. Existe para que el borde MCP pueda traducirlos a un código JSON-RPC
+// PERMANENTE en vez de a «error interno».
+//
+// POR QUÉ ES UNA CLASE Y NO UN CASO SUELTO. El outbox de un nodo remoto clasifica por código:
+// permanente ⇒ dead-letter, cualquier otro ⇒ reintentar con backoff y —a propósito— SIN tope por
+// conteo (ver scheduler.drainOutboxOnce: un central inalcanzable por horas no puede costar
+// memoria). Esa política es correcta, y es exactamente por eso que un rechazo determinista que
+// salga como -32603 «error interno del servidor» no se reintenta unas veces de más: se reintenta
+// PARA SIEMPRE. Medido el 2026-09-08 en kernelos-pc: 605 intentos en 74 h contra una observación
+// que el central nunca iba a aceptar, y que ninguna espera podía volver aceptable.
+//
+// LA ASIMETRÍA ES LA INVERSA DE LA DEL CLIENTE, y por eso hay que ser tacaño al sumar miembros.
+// Allá, ante la duda, se reintenta: tirar memoria es irreversible. Acá, ante la duda, se dice
+// «error interno»: decirle «tu pedido está mal» a alguien cuando en realidad se llenó el disco
+// haría que el que llama TIRE memoria buena. Así que a esta clase entra sólo lo que una guarda
+// rechazó MIRANDO EL PEDIDO, nunca un fallo de infraestructura.
+var ErrPayloadInvalido = errors.New("pedido inválido")
+
 type Observation struct {
 	ID        string `json:"id"`
 	TopicKey  string `json:"topic_key"`

@@ -350,8 +350,20 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 // justo en el sync inicial grande de una máquina nueva, que es cuando más contención hay y cuando
 // menos perdonable es perder memoria.
 //
-// La asimetría manda: reintentar de más es barato y ACOTADO (el outbox corta solo al llegar a
-// max_attempts); tirar la memoria es irreversible. Ante un error que no conocemos, se reintenta.
+// La asimetría manda: tirar la memoria es irreversible y reintentar de más es barato. Ante un
+// error que no conocemos, se reintenta.
+//
+// ⚠️ PERO ESTA LISTA CARGA MÁS PESO DEL QUE PARECE, y la versión anterior de este comentario lo
+// escondía: decía que reintentar era «ACOTADO, porque el outbox corta solo al llegar a
+// max_attempts». Ese tope YA NO EXISTE — scheduler.drainOutboxOnce lo eliminó a propósito, para
+// que un central caído por horas tampoco cueste memoria. Las dos decisiones son correctas y
+// juntas dejaron un hueco: lo que no está en esta lista no se reintenta de más, se reintenta PARA
+// SIEMPRE. Medido el 2026-09-08 en kernelos-pc: 605 intentos en 74 h contra un rechazo
+// determinista que el central anunciaba como -32603.
+//
+// O sea: sacar un código de acá no es «insistir un poco más», y meter uno de más no es «rendirse
+// un poco antes» — es memoria perdida. El otro lado de esa cuerda es memory.ErrPayloadInvalido:
+// el central sólo dice «culpa tuya» de lo que una guarda rechazó MIRANDO el pedido.
 //
 // La cuota (-32002) ya se había carveado a mano por esta misma razón (Track 19), caso por caso.
 // Esto arregla la FORMA, no un caso más: cualquier código nuevo del central nace transitorio.

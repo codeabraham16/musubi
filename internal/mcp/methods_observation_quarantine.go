@@ -61,6 +61,11 @@ func (s *McpServer) toolProposeObservation(ctx context.Context, raw json.RawMess
 		if errors.Is(err, memory.ErrInvalidConfidence) {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
+		// Misma razón, otra guarda: un content que se comió su sobre es un rechazo determinista
+		// del pedido, no un fallo del servidor. Ver memory.ErrPayloadInvalido.
+		if errors.Is(err, memory.ErrPayloadInvalido) {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
 		return nil, rpcErrorf(codeInternalError, "error al proponer observación: %v", err)
 	}
 
