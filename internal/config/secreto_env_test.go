@@ -6,9 +6,31 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// fijarHome apunta el home del proceso a `dir` EN TODAS LAS PLATAFORMAS.
+//
+// `t.Setenv("HOME", ...)` a secas NO ALCANZA EN WINDOWS, y eso dejó dos guardas de A96 mudas ahí
+// durante cinco días: `os.UserHomeDir()` lee `$HOME` en Unix y `%USERPROFILE%` en Windows, así que
+// una prueba que sólo fija `HOME` corre contra el home REAL del runner —donde no hay ningún
+// `.musubi/config.yaml`— y `ConfigSombra` devuelve "" con razón. La guarda no fallaba por un bug:
+// fallaba porque el escenario nunca se armó.
+//
+// Lo destapó `test-cross (windows-latest)` al abrir el PR #426. No se había visto antes porque una
+// rama de larga vida SIN PR es invisible para CI (`ci.yml:14-21`), así que las pruebas
+// multiplataforma nunca habían corrido sobre esta rama.
+//
+// Se fijan LAS DOS variables en todas las plataformas y no un `if runtime.GOOS`: una condición acá
+// significa que la mitad del código de la prueba sólo se ejercita en un sistema, que es la forma en
+// que este defecto entró.
+func fijarHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
 
 func TestSecretoDeEnvLeeLaVariableDirecta(t *testing.T) {
 	t.Setenv("PRUEBA_TOKEN", "  valor-directo  ")
@@ -156,7 +178,7 @@ func TestConfigPathCuelgaDelProyectoYNoDelHome(t *testing.T) {
 // un valor terminante y descarta la causa correcta.
 func TestConfigSombraDelataAlConfigDelHomeQueNoGobierna(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	fijarHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, DirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +194,7 @@ func TestConfigSombraDelataAlConfigDelHomeQueNoGobierna(t *testing.T) {
 }
 
 func TestConfigSombraCallaSiNoHayOtro(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	fijarHome(t, t.TempDir())
 	if got := ConfigSombra(t.TempDir()); got != "" {
 		t.Fatalf("sin config en el home no hay nada que avisar; devolvió %q", got)
 	}
@@ -181,7 +203,7 @@ func TestConfigSombraCallaSiNoHayOtro(t *testing.T) {
 // Si el proyecto ES el home, no hay dos configs: no se avisa de sí mismo.
 func TestConfigSombraNoSeDelataASiMismo(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	fijarHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, DirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +356,14 @@ func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
 						"causa NO está — %s", got, c.porque)
 				}
 				// El mensaje tiene que servirle a quien lo lee: la variable, el archivo, y qué hacer.
-				for _, aguja := range []string{"PRUEBA_SECRETO_FILE", ruta, "una sola línea"} {
+				//
+				// LA RUTA SE BUSCA COMO EL MENSAJE LA ESCRIBE, o sea CITADA. El error usa `%q` a
+				// propósito —una ruta con un espacio al final, o vacía, es un bug clásico de
+				// variable de entorno y sin comillas es invisible—, y `%q` ESCAPA las barras
+				// invertidas: en Windows la ruta sale `"C:\\Users\\..."` y buscar la cruda no la
+				// encuentra. Eso puso en rojo a `test-cross (windows-latest)` el 2026-09-09 sobre
+				// un mensaje que estaba bien: lo naive era la comparación, no el error.
+				for _, aguja := range []string{"PRUEBA_SECRETO_FILE", strconv.Quote(ruta), "una sola línea"} {
 					if !strings.Contains(err.Error(), aguja) {
 						t.Errorf("el error no menciona %q, así que no alcanza para arreglarlo: %v", aguja, err)
 					}
