@@ -950,7 +950,28 @@ SHA_LEGADO="$(sha_alla "$LEGADO")"
 case "$SHA_LEGADO" in
   "")       dudoso "no se pudo preguntar si quedó la copia vieja en $LEGADO" ;;
   AUSENTE)  verde "no quedó ninguna copia de redespliegue en el home de \`musubi\` (la ruta canónica es /usr/local/sbin, que es de root)" ;;
-  *)        rojo "quedó una copia en $LEGADO. Son DOS cosas: alguien puede correr ésa en vez de la canónica sin notarlo, y está en un directorio que escribe el usuario \`musubi\` —el mismo uid con el que corre \`musubi_fleet_exec\`— para un guion que se invoca con sudo. Sacala:  ${SSH_HOST:+ssh $SSH_HOST }sudo rm $LEGADO" ;;
+  # EL COMANDO QUE SE SUGIERE VA SIN `sudo`, Y EL PROPIO DIAGNÓSTICO DE ARRIBA DICE POR QUÉ.
+  #
+  # Decía `sudo rm`, y eso fallaba de dos formas distintas el 2026-09-09:
+  #
+  #   $ ssh musubi-server sudo rm /home/musubi/redesplegar-cerebro.sh
+  #   sudo: a terminal is required to read the password; either use ssh's -t option…
+  #
+  # (1) Un `ssh` no interactivo no tiene TTY, así que `sudo` no puede pedir la contraseña — haría
+  # falta `ssh -t`. (2) Y sobre todo: EL `sudo` NO HACE FALTA. Este hallazgo dice, con todas las
+  # letras, que el archivo «está en un directorio que escribe el usuario `musubi`». Si `musubi`
+  # escribe ahí, `musubi` lo borra: para desenlazar un archivo manda el permiso del DIRECTORIO, no
+  # el del archivo. Medido: `/home/musubi` es `drwx------ musubi musubi`, y la sesión entra como
+  # `musubi`.
+  #
+  # O sea que la sugerencia se contradecía con su propia medición, y encima no corría. Un informe
+  # que nombra bien el problema y manda a un comando que falla gasta la confianza que se ganó en la
+  # línea anterior — y lo peor es que el que lo lee no sabe si falló el diagnóstico o el remedio.
+  #
+  # `-f` y no `rm` a secas: si una corrida anterior con sudo dejó el archivo de root, `rm` pediría
+  # confirmación por escribir sobre algo protegido y en un pipe eso se cuelga. El desenlace igual
+  # funciona, porque lo autoriza el directorio.
+  *)        rojo "quedó una copia en $LEGADO. Son DOS cosas: alguien puede correr ésa en vez de la canónica sin notarlo, y está en un directorio que escribe el usuario \`musubi\` —el mismo uid con el que corre \`musubi_fleet_exec\`— para un guion que se invoca con sudo. Sacala:  ${SSH_HOST:+ssh $SSH_HOST }rm -f $LEGADO" ;;
 esac
 
 # ── El veredicto ────────────────────────────────────────────────────────────────────────────
