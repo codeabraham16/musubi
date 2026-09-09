@@ -138,7 +138,32 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	// lectores concurrentes y un escritor a la vez, con espera en vez de
 	// "database is locked". Necesario para que varios sub-agentes coordinen sobre
 	// la misma pizarra (work_units) sin colisionar.
-	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	//
+	// ⚠️ `_txlock=immediate` NO ES DECORACIÓN, Y BUSY_TIMEOUT SOLO NO ALCANZA. Sin él,
+	// `db.Begin()` abre una transacción DIFERIDA: nace lectora y se sube a escritora en el
+	// primer INSERT. Si entre la lectura y esa subida otra conexión escribió, SQLite devuelve
+	// SQLITE_BUSY_SNAPSHOT — y ese busy NO lo reintenta `busy_timeout`, vuelve al instante,
+	// porque el snapshot de la transacción ya quedó viejo y esperar no lo arreglaría. O sea:
+	// los 5 segundos de arriba no se aplicaban JUSTO en el caso para el que uno los pone, que
+	// es el patrón leer-y-después-escribir de `saveObservation`.
+	//
+	// Con `immediate`, `Begin()` toma el lock de escritura desde el arranque: no hay subida, y
+	// el busy que queda SÍ es de los que `busy_timeout` espera. Costó siete semanas verlo: el
+	// canario `bench-scale` llevaba 8 corridas en rojo desde 2026-07-20 rotulado «la búsqueda
+	// vectorial dejó de escalar sublinealmente», y en realidad reventaba SEMBRANDO en la fila
+	// ~11.200, cuando al cruzar ExactThreshold (10.000) el propio engine lanza el entrenamiento
+	// del índice vectorial en segundo plano y aparece el segundo escritor.
+	//
+	// Las dos mitades tienen banco propio en txlock_test.go (X1–X3), cada una vista en rojo bajo
+	// su sabotaje: sacar `_txlock=immediate` y sacar `busy_timeout`.
+	//
+	// LO QUE ESTO **NO** CUESTA, porque es la primera objeción que da: `immediate` hace que toda
+	// transacción tome el lock de escritura al nacer, así que una transacción de SÓLO LECTURA
+	// pasaría a serializarse contra las demás. Medido el 2026-09-09: no hay ninguna. Las 21
+	// transacciones explícitas del paquete escriben —todas commitean— y las lecturas sueltas van
+	// por `db.Query` fuera de transacción, que este pragma no toca. El engine de sólo lectura
+	// (solo_lectura.go) tiene su propio DSN y a propósito no lo lleva.
+	dsn := dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)

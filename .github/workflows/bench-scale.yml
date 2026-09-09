@@ -14,6 +14,11 @@ on:
 jobs:
   bench-scale:
     runs-on: ubuntu-latest
+    # Medido en local (i7-7700K) el 2026-09-09, la primera vez que el job llegó a medir:
+    # el paso vectorial tarda 337 s y el de Maintain 941 s — 21 min los dos juntos. Un
+    # runner estándar de GitHub es más lento, así que el techo se pone con holgura, pero
+    # ACOTADO: sin esto, un cuelgue se come las 6 h de default sin decir nada.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -29,8 +34,22 @@ jobs:
         env:
           MUSUBI_BENCH_SCALE: '1'
         run: |
-          out=$(go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x -timeout=30m ./internal/memory/)
-          echo "$out"
+          # LA SALIDA SE IMPRIME ANTES DE JUZGARLA, y no al revés. La forma anterior era
+          # `out=$(go test …)` seguida de `echo "$out"`: con `bash -e`, si el benchmark falla el
+          # step muere EN la asignación y el echo nunca corre. Este job estuvo 8 corridas en rojo
+          # desde 2026-07-20 mostrando sólo el script y ninguna salida — la evidencia se perdía
+          # justo cuando hacía falta, y por eso costó siete semanas ver que no era una regresión
+          # de escala sino un SQLITE_BUSY sembrando. `tee` la imprime primero; PIPESTATUS conserva
+          # el código real de `go test`, que el pipe se comería.
+          set +e
+          go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x -timeout=30m ./internal/memory/ 2>&1 | tee bench-vector.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "ERROR: el benchmark salió $rc — NO llegó a medir. Lo de arriba es el motivo, no una regresión de escala."
+            exit 1
+          fi
+          out=$(cat bench-vector.txt)
           b10=$(echo "$out" | awk '/SearchVector\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           b100=$(echo "$out" | awk '/SearchVector\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=10000:  ${b10:-<vacío>}"
@@ -50,8 +69,22 @@ jobs:
         env:
           MUSUBI_BENCH_SCALE: '1'
         run: |
-          out=$(go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x -timeout=30m ./internal/memory/)
-          echo "$out"
+          # Misma corrección que el paso de arriba: la salida se imprime ANTES de juzgarla.
+          #
+          # Y `-timeout=60m`, no 30m: medido en local tarda 941 s (15,7 min), así que 30m dejaba
+          # el margen dentro del ruido de un runner compartido. Un timeout de Go acá no sería un
+          # falso positivo silencioso —el chequeo de `rc` de abajo dice que NO llegó a medir— pero
+          # volvería a dejar el canario en rojo permanente, que es justo el modo de falla que este
+          # arreglo vino a sacar.
+          set +e
+          go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x -timeout=60m ./internal/memory/ 2>&1 | tee bench-maintain.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "ERROR: el benchmark salió $rc — NO llegó a medir. Lo de arriba es el motivo, no una regresión de escala."
+            exit 1
+          fi
+          out=$(cat bench-maintain.txt)
           b10=$(echo "$out" | awk '/Maintain\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           b100=$(echo "$out" | awk '/Maintain\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=10000:  ${b10:-<vacío>}"

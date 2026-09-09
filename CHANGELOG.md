@@ -26,6 +26,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
 
 ### Fixed
+- **El canario de escala llevaba siete semanas cantando la canción equivocada, y por eso nadie lo
+  oyó.** `bench-scale` acumulaba 8 corridas en rojo desde 2026-07-20 con el rótulo «la búsqueda
+  vectorial dejó de escalar sublinealmente a 100k (¿IVF caído a full-scan?)». Medido: el invariante
+  estaba **sano todo ese tiempo** — el ratio real es **3,42x contra un umbral de 6**, con la teoría
+  prediciendo √10 ≈ 3,16. El benchmark nunca llegaba a medir: reventaba SEMBRANDO, en la fila
+  ~11.200, con `SQLITE_BUSY`.
+
+  **La causa, y por qué `busy_timeout` no la cubría.** Al cruzar `ExactThreshold` (10.000 filas) el
+  propio engine lanza el entrenamiento del índice vectorial en segundo plano — y ese entrenador
+  escribe. Aparece un segundo escritor justo donde antes había uno. `db.Begin()` abría una
+  transacción **diferida**: nace lectora y se sube a escritora en el primer INSERT, que es el patrón
+  exacto de `saveObservation`. Si entre la lectura y la subida otra conexión escribió, SQLite
+  devuelve `SQLITE_BUSY_SNAPSHOT`, y ese busy **no lo reintenta `busy_timeout`**: vuelve al instante,
+  porque el snapshot ya quedó viejo y esperar no lo arreglaría. Los 5 segundos configurados no se
+  aplicaban justo en el caso para el que uno los pone. El arreglo es `_txlock=immediate` en el DSN:
+  `Begin()` toma el lock de escritura desde el arranque, no hay subida, y el busy que queda sí es de
+  los que la espera cubre. Con eso, `n=100000` pasó por primera vez.
+
+  **Y el canario dejó de comerse su propia evidencia.** Los dos pasos hacían `out=$(go test …)`
+  seguido de `echo "$out"`: bajo `bash -e`, si el benchmark falla el step muere EN la asignación y
+  el echo nunca corre. Ocho corridas mostraron el script y ninguna salida — la evidencia se perdía
+  justo cuando hacía falta, y ahí se fueron las siete semanas. Ahora van con `tee` (imprime antes de
+  juzgar) y `PIPESTATUS` (conserva el código real, que el pipe se comía), y un fallo de sembrado
+  dice que **no llegó a medir**, en vez de hacerse pasar por una regresión de escala.
+
+  Las dos mitades del arreglo tienen banco propio en `internal/memory/txlock_test.go` (X1–X3), cada
+  una vista en rojo bajo su sabotaje: sacar `_txlock=immediate` (X1, X2 y X3) y sacar el
+  `busy_timeout` (X1 y X3, con X2 verde a propósito).
+
+  El segundo paso del canario, `Maintain`, también midió por primera vez: **10,98x contra un umbral
+  de 20** (lineal ≈ 10x, cuadrático ≈ 100x) — sano, igual que el primero. Y ese número trajo un
+  ajuste que no es cosmético: tarda 941 s en local, así que el `-timeout=30m` del paso quedaba
+  dentro del ruido de un runner compartido. Pasa a 60m, con `timeout-minutes: 90` en el job para que
+  un cuelgue no se coma las 6 h de default. Un canario que expira sigue siendo un canario en rojo
+  permanente.
+
 - **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
   guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
   `saveObservation`, «donde nace el contenido». Pero `PromoteObservation` es un `UPDATE` por id que
