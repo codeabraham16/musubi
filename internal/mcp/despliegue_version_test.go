@@ -48,6 +48,26 @@ import (
 //   - EXIT 2, no verde: hacer que el verificador conteste `true` a todo. El arnés lo detecta por
 //     su control —la forma mala conocida tiene que seguir rechazada— y sale por «falló la
 //     medición», que es distinto de «falló el guión». Sin ese control su verde no valdría nada.
+//   - ROJO: devolverle a `nucleo_de_version` de `verificar-despliegue.sh` su implementación de una
+//     línea. Nombró las CUATRO divergencias, una por una.
+//
+// Y EL HERMANO, QUE ES LA SEGUNDA MITAD DE ESTA GUARDA. `deploy/verificar-despliegue.sh`
+// reimplementa `NucleoDeVersion` en shell —no puede llamar al de verdad: corre sin Go, a veces
+// contra un servidor que tampoco lo tiene—, y divergía en TRES cosas, todas medidas el
+// 2026-09-09 y todas dando FALSO ROJO («producción diverge del repo») sobre un binario del
+// release CORRECTO:
+//
+//	`${VER_VIVA%%-*}` sin validar que queden tres componentes  →  `0.139.7.abc1234` entero
+//	sin sacar el prefijo `v`                                    →  `v0.106.0-28-gdf2ec21` → `v0.106.0`
+//	cortando sólo en `-` y no en `-` o `+`                      →  `0.130.0+build5` entero
+//
+// Las dos últimas son las DOS familias que el Go declara tolerar y que están enroladas en
+// producción. Quedó tapado porque ese día el rojo era cierto por otro motivo (0.139.6 ≠ 0.139.7):
+// la causa buena escondida atrás de una verdadera. Ahora el arnés EXTRAE esa función del archivo
+// de producción y corre las dos implementaciones contra la MISMA tabla — la de
+// `internal/fleet/version_test.go` más las formas que rompieron algo. Y el verificador pasó a
+// contestar `dudoso` cuando no puede parsear, en vez de `rojo "diverge"`: no poder comparar no es
+// lo mismo que comparar y que dé distinto.
 //
 // Y UN DEFECTO PROPIO QUE APARECIÓ CORRIENDO EL SEGUNDO, dejado escrito porque es de la familia
 // que este repo persigue: el verificador separaba sus campos con TAB, y bash COLAPSA las corridas
@@ -80,6 +100,7 @@ func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 		"sin track → el guión se niega",
 		"(parseable)",
 		"la forma mala conocida",
+		"los dos parsers coinciden",
 	} {
 		if !strings.Contains(string(salida), senal) {
 			t.Fatalf("el arnés terminó en 0 pero no dijo %q, así que no ejercitó lo que dice:\n%s", senal, salida)

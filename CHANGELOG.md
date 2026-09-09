@@ -51,6 +51,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   corridos; el tercero sale en 2 y no en rojo, para distinguir «falló el guión» de «falló la
   medición».
 
+- **Y el hermano: `verificar-despliegue.sh` reportaba «producción diverge del repo» sobre un binario
+  del release correcto.** Reimplementa `NucleoDeVersion` en shell —no puede llamar al de verdad:
+  corre sin Go, a veces contra un servidor que tampoco lo tiene— y divergía en tres cosas, las tres
+  dando falso rojo: `${VER_VIVA%%-*}` sin validar que queden tres componentes (`0.139.7.abc1234`
+  quedaba entero), sin sacar el prefijo `v` (`v0.106.0-28-gdf2ec21` → `v0.106.0`) y cortando sólo en
+  `-` y no en `-` o `+` (`0.130.0+build5` entero). Las dos últimas son las **dos familias que el Go
+  declara tolerar** y que están enroladas en producción.
+
+  Quedó tapado porque el día que se midió el rojo era cierto por otro motivo (`0.139.6` ≠ `0.139.7`):
+  la causa buena escondida detrás de una verdadera. Y el mensaje nombraba la causa equivocada —decía
+  «diverge» cuando lo que pasaba era «no puedo parsear esto»—, que manda a arreglar lo que no está
+  roto.
+
+  Ahora el verificador contesta **`dudoso`** cuando no puede parsear, por la misma razón que ya
+  aplicaba al `VER_VIVA` vacío: no poder comparar no es lo mismo que comparar y que dé distinto. Y
+  el arnés **extrae esa función del archivo de producción** y corre las dos implementaciones contra
+  la misma tabla, así que una divergencia futura se ve. Sabotaje: devolverle su versión de una
+  línea; nombra las cuatro discrepancias, una por una.
+
 - **`/readyz` sondeaba con una lectura, y por eso el central pasó once horas diciendo «listo»
   mientras no se podía guardar nada.** El 2026-08-23 `save_observation` colgaba 150 s,
   `memory_expand` y `token_list` 30 s, y `/readyz` contestaba 200 en 0,1 s todo el tiempo: las

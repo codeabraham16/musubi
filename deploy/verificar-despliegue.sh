@@ -136,6 +136,42 @@ DETALLE
 # porque el modo de falla que trajo este script hasta acá es siempre el mismo: una consulta que no
 # se pudo hacer y un informe que igual terminó en verde.
 dudoso(){ printf '  \033[33m? %s\033[0m\n' "$1"; SIN_VERIFICAR=1; }
+
+# nucleo_de_version — el MISMO núcleo que `fleet.NucleoDeVersion`, y por eso está escrito acá con
+# su tabla al lado en `deploy/pruebas/version-parseable.sh`, que corre LAS DOS y las compara.
+#
+# ESTO ES UNA REIMPLEMENTACIÓN Y NO SE PUEDE EVITAR: el verificador corre sin Go —a veces contra un
+# servidor que no lo tiene— así que no puede llamar al parser de verdad. Lo que sí se puede evitar
+# es que las dos DIVERJAN sin que nadie se entere, y eso es lo que custodia el arnés.
+#
+# Divergía en tres cosas, las tres medidas el 2026-09-09, y las tres daban FALSO ROJO sobre un
+# binario del release correcto:
+#
+#   · `${VER_VIVA%%-*}` no valida que queden TRES componentes, así que `0.139.7.abc1234` —lo que
+#     emite construir.sh sin track— devolvía la cadena entera como «núcleo».
+#   · no sacaba el prefijo `v`, así que `v0.106.0-28-gdf2ec21` daba `v0.106.0`. Esa familia
+#     (`git describe`) es una de las DOS que el Go declara tolerar, y está enrolada en producción.
+#   · cortaba sólo en `-` y no en `-` o `+`, así que `0.130.0+build5` devolvía la cadena entera.
+#
+# Devuelve 1 cuando no puede parsear. Un núcleo vacío NO alcanza para señalarlo: el llamador lo
+# compararía contra `VERSION` y daría distinto, o sea que volvería a decir «diverge».
+nucleo_de_version() {
+  # El orden es el del Go: espacios, después el prefijo `v`, después el corte.
+  _v="$(printf '%s' "$1" | tr -d '[:space:]')"
+  _v="${_v#v}"
+  _v="${_v%%[-+]*}"
+  # EXACTAMENTE tres. El primer `case` descarta cuatro o más —que es la forma que emite
+  # `construir.sh` sin track— y el segundo exige que haya tres.
+  case "$_v" in *.*.*.*) return 1 ;; esac
+  case "$_v" in *.*.*) : ;; *) return 1 ;; esac
+  _a="${_v%%.*}"; _r="${_v#*.}"; _b="${_r%%.*}"; _c="${_r#*.}"
+  # Cada componente por separado, y no la concatenación: con `0..0` la concatenación da `00`,
+  # que es numérica y no vacía, así que un solo chequeo sobre el pegado lo daría por bueno.
+  for _p in "$_a" "$_b" "$_c"; do
+    case "$_p" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  printf '%s.%s.%s' "$_a" "$_b" "$_c"
+}
 # tibio — una POSTURA que no es del gusto de nadie pero que HOY es la configuración elegida. No es
 # rojo (nada divergió del repo) y no puede ser verde (el riesgo existe). Sale por su propia
 # variable para que el veredicto no mezcle «esto se desplegó mal» con «esto está así a propósito y
@@ -692,11 +728,24 @@ if [ -z "$VER_VIVA" ]; then
 else
   # Se compara el NÚCLEO, por lo mismo que agent_stale (A68): el cerebro se redespliega varias
   # veces por día desde commits distintos del mismo release, y comparar commits daría rojo siempre.
-  nucleo="${VER_VIVA%%-*}"
-  if [ "$nucleo" = "$VER_REPO" ]; then
-    verde "cerebro en $VER_VIVA — mismo release que el repo ($VER_REPO)"
+  if nucleo="$(nucleo_de_version "$VER_VIVA")"; then
+    if [ "$nucleo" = "$VER_REPO" ]; then
+      verde "cerebro en $VER_VIVA — mismo release que el repo ($VER_REPO)"
+    else
+      rojo "cerebro en $VER_VIVA y el repo declara $VER_REPO"
+    fi
   else
-    rojo "cerebro en $VER_VIVA y el repo declara $VER_REPO"
+    # NO PODER PARSEAR NO ES DIVERGIR, Y DECIRLO MAL MANDA A ARREGLAR LO QUE NO ESTÁ ROTO.
+    #
+    # Antes esto caía en el `else` de arriba y salía `rojo "cerebro en X y el repo declara Y"`. Con
+    # una versión de cuatro componentes —lo que emite `construir.sh` sin track— el núcleo quedaba
+    # siendo la cadena ENTERA, nunca igualaba a `VERSION`, y un binario del release CORRECTO se
+    # reportaba como «producción diverge del repo». Falso rojo, y con la causa equivocada escrita.
+    #
+    # Es `dudoso` y no `rojo` por la misma razón que el `VER_VIVA` vacío de arriba: no poder
+    # comparar no es lo mismo que comparar y que dé distinto. Y el aviso es real, no cosmético —
+    # esa forma además apaga `musubi_fleet_device_agent_stale` para TODA la flota.
+    dudoso "la versión del cerebro ($VER_VIVA) no se puede parsear: no se comparó contra el repo ($VER_REPO). Se espera MAJOR.MINOR.PATCH con lo demás detrás de un \`-\` o un \`+\`; una versión de cuatro componentes sale de \`construir.sh\` sin track, y esa forma además apaga \`musubi_fleet_device_agent_stale\` para toda la flota"
   fi
 fi
 

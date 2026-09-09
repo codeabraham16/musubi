@@ -50,7 +50,7 @@ git -C "$CLON" checkout --quiet "$SHA" || { echo "✗ no se pudo posicionar en $
 # El guión QUE SE PRUEBA es el del árbol de trabajo, commiteado adentro del clon para que el árbol
 # quede limpio: si quedara sin commitear, el caso «limpio» arrancaría sucio y mediría otra cosa.
 cp -- "$RAIZ/deploy/construir.sh" "$CLON/deploy/construir.sh"
-git -C "$CLON" -c user.email=arnes@local -c user.name=arnes commit -q -am "el construir.sh a probar" 2>/dev/null
+git -C "$CLON" -c user.email=arnes@local -c user.name=arnes commit -q -am "el construir.sh a probar" >/dev/null 2>&1
 [[ -z "$(git -C "$CLON" status --porcelain)" ]] || { echo "✗ el clon no quedó limpio"; exit 2; }
 
 version_de() { "$1" version 2>/dev/null | awk '{print $2}'; }
@@ -143,3 +143,66 @@ done <<< "$SALIDA"
 
 [[ $fallo -eq 0 ]] || exit 1
 echo "✓ las formas que construir.sh puede emitir son TODAS parseables, y la mala sigue rechazada"
+
+# ── 5 · LAS DOS IMPLEMENTACIONES DEL MISMO PARSER, CONTRA LA MISMA TABLA ──────────────────────
+#
+# `deploy/verificar-despliegue.sh` NO PUEDE LLAMAR AL PARSER DE VERDAD: corre sin Go, a veces
+# contra un servidor que tampoco lo tiene. Así que lo reimplementa en shell, y eso no se puede
+# evitar. Lo que sí se puede evitar es que las dos DIVERJAN sin que nadie se entere.
+#
+# Divergían en TRES cosas el 2026-09-09, y las tres daban FALSO ROJO —«producción diverge del
+# repo»— sobre un binario del release CORRECTO: no validaba que quedaran tres componentes, no
+# sacaba el prefijo `v` (la familia `git describe`, enrolada en producción) y cortaba sólo en `-`
+# y no en `-` o `+`. Quedó tapado porque ese día el rojo era cierto por otro motivo: la causa
+# buena escondida atrás de una verdadera.
+#
+# La función se EXTRAE del archivo de producción y se corre, como hace `guiones-derivados.sh`. Un
+# grep quedaría satisfecho con que el nombre aparezca.
+echo "  · comparando las dos implementaciones del parser"
+# DEL ÁRBOL DE TRABAJO Y NO DEL CLON, por lo mismo que `construir.sh`: el clon está en HEAD,
+# así que extraer de ahí verificaría la versión VIEJA de la función — verde sobre código que
+# no es el que se está por commitear.
+eval "$(sed -n '/^nucleo_de_version() {/,/^}/p' "$RAIZ/deploy/verificar-despliegue.sh")" 2>/dev/null || {
+  echo "✗ no pude extraer nucleo_de_version de verificar-despliegue.sh"; exit 2; }
+type nucleo_de_version >/dev/null 2>&1 || { echo "✗ nucleo_de_version no quedó definida tras extraerla"; exit 2; }
+
+# LA TABLA ES LA DE `internal/fleet/version_test.go` más las formas que rompieron algo. Si el Go
+# suma un caso y el shell no lo sigue, esto se pone rojo.
+TABLA=(
+  "0.130.0-flota.38a0a9f"   # la que deriva construir.sh
+  "v0.106.0-28-gdf2ec21"    # la vieja de git describe
+  "0.130.0"                 # pelada
+  "  0.130.0-flota.x  "     # con espacios alrededor
+  "0.130.0-sucio"           # árbol sucio
+  "0.130.0+build5"          # metadata semver
+  "0.130.0.1"               # cuatro componentes
+  "dev"                     # sin ldflags
+  "0..0"                    # componente vacío
+  "0.139.6.7e2d211"         # LA QUE APAGÓ LA FLOTA
+)
+SAL_GO="$( cd "$CLON" && go run ./cmd/zz_arnes_version "${TABLA[@]}" 2>&1 )" || {
+  echo "✗ el verificador Go falló sobre la tabla:"; sed 's/^/    /' <<<"$SAL_GO"; exit 2; }
+
+difieren=0
+comparados=0
+while IFS="|" read -r v nucleo ok; do
+  [[ -n "$v$nucleo$ok" ]] || continue
+  if s_n="$(nucleo_de_version "$v")"; then s_ok=true; else s_ok=false; s_n=""; fi
+  comparados=$((comparados+1))
+  if [[ "$s_ok" != "$ok" || ( "$ok" == "true" && "$s_n" != "$nucleo" ) ]]; then
+    echo "✗ los dos parsers NO coinciden sobre «$v»:"
+    echo "    fleet.NucleoDeVersion  → (${nucleo:-<vacío>}, $ok)"
+    echo "    nucleo_de_version (sh) → (${s_n:-<vacío>}, $s_ok)"
+    echo "  verificar-despliegue.sh decide con el de shell, así que una divergencia acá es un"
+    echo "  veredicto distinto sobre si producción coincide con el repo."
+    difieren=1
+  fi
+done <<< "$SAL_GO"
+
+# CONTROL: si la tabla no llegó entera, el verde de arriba no dice nada.
+if [[ "$comparados" -ne "${#TABLA[@]}" ]]; then
+  echo "✗ se compararon $comparados de ${#TABLA[@]} casos: la tabla no llegó entera y este verde no vale"
+  exit 2
+fi
+[[ $difieren -eq 0 ]] || exit 1
+echo "  ✓ los dos parsers coinciden en los ${#TABLA[@]} casos de la tabla"
