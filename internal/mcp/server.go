@@ -159,8 +159,13 @@ type McpServer struct {
 	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
 	vidaDeRed sync.Map
 	engine    memory.StorageBackend
-	resolver  *skills.Resolver
-	embedder  embedding.Provider
+	// sondaEscritura es el estado del sondeo de ESCRITURA de /readyz (ver observability.go). Vive
+	// acá y no en el handler porque tiene que sobrevivir entre pedidos: es lo que evita lanzar una
+	// goroutine nueva por cada sondeo mientras una escritura está colgada. El cero vale como
+	// «todavía no se midió nada».
+	sondaEscritura sondaDeEscritura
+	resolver       *skills.Resolver
+	embedder       embedding.Provider
 	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
 	cognition cognition.Provider
 	// cognitionCfg trae las guardas de CALIDAD del 3er pilar (F3): el vocabulario controlado de

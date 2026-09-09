@@ -26,6 +26,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
 
 ### Fixed
+- **`/readyz` sondeaba con una lectura, y por eso el central pasó once horas diciendo «listo»
+  mientras no se podía guardar nada.** El 2026-08-23 `save_observation` colgaba 150 s,
+  `memory_expand` y `token_list` 30 s, y `/readyz` contestaba 200 en 0,1 s todo el tiempo: las
+  lecturas andaban perfecto. La falla no la detectó la sonda — la detectó alguien que intentó
+  guardar. **Una sonda que mide lo que no falla no es una sonda, es un tranquilizante**, y para un
+  cerebro «listo» significa que ACEPTA MEMORIA.
+
+  Ahora el sondeo escribe: una sola fila de `meta` que se pisa a sí misma, así que preguntar seguido
+  no ensucia la base ni la hace crecer. El 503 declara **cuál** sonda falló (`motor`, `lectura` o
+  `escritura`) y el detalle, porque estos incidentes se investigan después de reiniciar, cuando ya no
+  hay nada que reproducir. Un nodo abierto en sólo lectura —base más nueva que el binario— sigue
+  reportándose listo y lo dice en el cuerpo: es un estado declarado, no una falla.
+
+  **Tres decisiones que no son obvias**, y que el banco fija:
+
+  - **El tope de espera (8 s) tiene que superar el `busy_timeout` del DSN (5 s.)** Una escritura
+    legítimamente contendida espera hasta ese busy_timeout antes de conseguir su turno, así que un
+    tope menor convertiría la carga normal en una alarma. Y tiene que ser finito, que es el punto:
+    sin corte, la sonda se cuelga junto con la escritura y el cuelgue sigue invisible un escalón más
+    arriba.
+  - **El estado del sondeo sobrevive entre pedidos.** Si la escritura cuelga, una goroutine por
+    pedido dejaría una colgada por cada sondeo: con un monitor cada 15 s son 2.640 en once horas. La
+    sonda pasaría de diagnosticar el problema a agravarlo. Con estado hay **una sola**.
+  - **Y por eso el timeout NO limpia la marca de «en vuelo»**: la goroutine sigue colgada de verdad.
+    Se limpia cuando la escritura termina —si termina—, y ahí el nodo vuelve a verde solo, sin que
+    nadie lo reinicie.
+
+  Banco en `internal/mcp/readyz_escritura_test.go` (S1–S6), los seis vistos en rojo bajo un sabotaje
+  que ataca su propio invariante: volver la sonda a una lectura, limpiar la marca en el timeout, no
+  limpiarla nunca, asumir que el timeout está bien, ignorar el error de escritura, y no reportar
+  listo nunca. Vale la pena el detalle de que **bajo el primer sabotaje el test viejo `TestReadyz`
+  sigue en VERDE**: era ciego a este defecto por construcción, que es exactamente por qué duró tanto.
+
 - **El canario de escala llevaba siete semanas cantando la canción equivocada, y por eso nadie lo
   oyó.** `bench-scale` tiene **8 corridas en toda su historia y las 8 son rojas** (2026-07-20 a
   2026-09-07): no se rompió en julio, nunca estuvo verde ni una vez. Todas bajo el rótulo «la búsqueda

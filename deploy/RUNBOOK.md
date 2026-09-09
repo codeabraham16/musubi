@@ -13,6 +13,12 @@ Diagnóstico rápido (siempre): `musubi doctor` (en el host del cerebro) da un p
 2. Verificá el tailnet (`tailscale status`) y que el puerto responda: `curl -sS localhost:7717/readyz`.
 3. `systemctl restart musubi-brain` si el proceso murió; confirmá `readyz` en 200.
 
+> ℹ️ **`/readyz` ahora prueba la ESCRITURA, no sólo la lectura.** Un 200 significa que el cerebro
+> acepta memoria; un 503 trae `"sonda"` (`lectura` / `escritura` / `motor`) y el detalle. Antes
+> sondeaba con una lectura y por eso el 2026-08-23 devolvió 200 durante **once horas** en las que no
+> se podía guardar nada. Si ves `{"sonda":"escritura","detalle":"...sin responder desde hace..."}`,
+> ésa es la firma de aquel incidente y ya no hace falta descubrirla intentando guardar algo.
+
 ## MusubiBackupOffhostStale
 **Qué significa:** el backup off-host **nunca funcionó** (`age < 0`) o **dejó de shipear** (`> 48h`). El CRÍTICO del baseline: perder el disco = perder toda la memoria compartida.
 **Acción:**

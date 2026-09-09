@@ -3,7 +3,7 @@ package mcp
 // Observabilidad del modo servicio (Track 4 / T4.4): health/readiness, métricas y
 // correlation IDs. Todo stdlib + el uuid ya presente; cero dependencias nuevas.
 //   - GET /healthz  -> liveness (200 si el proceso responde).
-//   - GET /readyz   -> readiness (200 si el motor/DB responde; 503 si no).
+//   - GET /readyz   -> readiness (200 si el motor ESCRIBE; 503 si no, con la sonda que falló).
 //   - GET /metrics  -> contadores en formato texto Prometheus (auth si hay token).
 // Cada request al MCP recibe un correlation ID (header X-Request-Id: el entrante si
 // viene, o uno nuevo) que se devuelve en la respuesta.
@@ -457,15 +457,129 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 }
 
-// readyzHandler responde readiness: sondea el motor con una lectura barata (GetMeta).
-// 503 si el backend no responde, para que un orquestador no rutee tráfico todavía.
+// claveSondaReadyz es la fila de `meta` que /readyz usa para sondear. Una sola clave que se pisa a
+// sí misma: sondear no ensucia la base ni la hace crecer, por seguido que se pregunte.
+const claveSondaReadyz = "__readyz_probe__"
+
+// topeSondaEscritura es cuánto espera /readyz a que la escritura de sondeo termine antes de declarar
+// el nodo NO listo.
+//
+// TIENE QUE SUPERAR EL `busy_timeout` DEL DSN (5 s, ver internal/memory/database.go), y el número no
+// se eligió de lejos: una escritura legítimamente contendida espera hasta ese busy_timeout antes de
+// conseguir su turno, así que un tope menor convertiría la carga normal en una alarma. Y tiene que
+// ser FINITO, que es el punto entero de todo esto.
+const topeSondaEscritura = 8 * time.Second
+
+// sondaDeEscritura guarda, entre pedidos, el estado del sondeo de escritura de /readyz.
+//
+// POR QUÉ HAY ESTADO Y NO UNA ESCRITURA SUELTA POR PEDIDO. Si la escritura cuelga —el modo de falla
+// que este sondeo existe para detectar— una goroutine por pedido dejaría una goroutine colgada por
+// cada sondeo: con un monitor preguntando cada 15 s, son 2.640 en once horas. Con este estado hay
+// UNA sola: la primera que se cuelga queda marcada `enVuelo`, y los sondeos siguientes ven la marca
+// y responden al instante sin lanzar otra.
+//
+// Y por eso el timeout NO limpia `enVuelo`: la goroutine sigue colgada de verdad, así que decir que
+// no hay nada en vuelo haría que el próximo sondeo lance otra, y otra. Se limpia cuando la escritura
+// termina —si termina—, y ahí el nodo vuelve a reportarse listo solo, sin que nadie lo toque.
+type sondaDeEscritura struct {
+	mu      sync.Mutex
+	enVuelo bool
+	desde   time.Time
+	medida  bool // ¿ya terminó alguna? distingue «recién arrancó» de «la última salió mal»
+	ok      bool
+	detalle string
+}
+
+// verificar corre —o consulta— el sondeo de escritura. `escribir` es la escritura de verdad y
+// `ahora` se inyecta para que el banco pueda mover el reloj sin dormir.
+func (sd *sondaDeEscritura) verificar(escribir func() error, tope time.Duration, ahora func() time.Time) (bool, string) {
+	sd.mu.Lock()
+	if sd.enVuelo {
+		colgada := ahora().Sub(sd.desde)
+		medida, ok, detalle := sd.medida, sd.ok, sd.detalle
+		sd.mu.Unlock()
+		if colgada >= tope {
+			return false, fmt.Sprintf("hay una escritura de sondeo sin responder desde hace %s", colgada.Round(time.Second))
+		}
+		// Hay otro sondeo en curso y todavía dentro del tope. No se lanza uno nuevo —sería duplicar
+		// la escritura por cada pedido concurrente— y se responde con lo último que se midió. Si no
+		// se midió nada todavía, el nodo recién arrancó y se le concede el beneficio de la duda.
+		if !medida {
+			return true, ""
+		}
+		return ok, detalle
+	}
+	sd.enVuelo = true
+	sd.desde = ahora()
+	sd.mu.Unlock()
+
+	hecho := make(chan error, 1)
+	go func() {
+		err := escribir()
+		sd.mu.Lock()
+		sd.enVuelo = false
+		sd.medida = true
+		sd.ok = err == nil
+		sd.detalle = ""
+		if err != nil {
+			sd.detalle = "la escritura de sondeo falló: " + err.Error()
+		}
+		sd.mu.Unlock()
+		hecho <- err
+	}()
+
+	select {
+	case err := <-hecho:
+		if err != nil {
+			return false, "la escritura de sondeo falló: " + err.Error()
+		}
+		return true, ""
+	case <-time.After(tope):
+		return false, fmt.Sprintf("la escritura de sondeo no respondió en %s", tope)
+	}
+}
+
+// readyzHandler responde readiness sondeando LA ESCRITURA, no sólo la lectura.
+//
+// POR QUÉ, Y QUÉ COSTÓ AVERIGUARLO. Antes sondeaba con `GetMeta`, una lectura barata. El 2026-08-23
+// el cerebro central pasó ONCE HORAS sin poder guardar nada —`save_observation` colgaba 150 s— y
+// `/readyz` devolvió 200 todo ese tiempo, porque las lecturas andaban perfecto. Nadie se enteró por
+// la sonda: se notó porque alguien intentó guardar. Una sonda que mide lo que no falla no es una
+// sonda, es un tranquilizante. Para un cerebro, «listo» significa que ACEPTA MEMORIA.
+//
+// El sondeo escribe una sola fila de `meta` que se pisa a sí misma, así que preguntar seguido no
+// ensucia nada. Un nodo abierto en SÓLO LECTURA (base más nueva que el binario) sigue reportándose
+// listo y lo declara en el cuerpo: es un estado conocido y declarado, no una falla.
 func (s *McpServer) readyzHandler(w http.ResponseWriter, _ *http.Request) {
-	if _, _, err := s.engine.GetMeta("__readyz_probe__"); err != nil {
-		w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
+
+	noListo := func(sonda, detalle string) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"status":"unavailable"}` + "\n"))
+		_, _ = fmt.Fprintf(w, "{\"status\":\"unavailable\",\"sonda\":%q,\"detalle\":%q}\n", sonda, detalle)
+	}
+
+	if s.engine == nil {
+		noListo("motor", "el servidor no tiene memoria conectada")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+
+	if _, _, err := s.engine.GetMeta(claveSondaReadyz); err != nil {
+		noListo("lectura", err.Error())
+		return
+	}
+
+	if s.soloLectura() {
+		_, _ = w.Write([]byte(`{"status":"ready","escritura":"no aplica: la base es más nueva que este binario (sólo lectura)"}` + "\n"))
+		return
+	}
+
+	escribir := func() error {
+		return s.engine.SetMeta(claveSondaReadyz, time.Now().UTC().Format(time.RFC3339Nano))
+	}
+	if ok, detalle := s.sondaEscritura.verificar(escribir, topeSondaEscritura, time.Now); !ok {
+		noListo("escritura", detalle)
+		return
+	}
+
 	_, _ = w.Write([]byte(`{"status":"ready"}` + "\n"))
 }
