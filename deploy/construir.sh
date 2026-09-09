@@ -25,7 +25,7 @@
 # commit existía y se podía mirar. Un build sucio rompe eso, así que lo dice en su propio nombre —
 # no se prohíbe (a veces hace falta probar algo rápido), se DECLARA.
 #
-# Uso:   ./deploy/construir.sh [etiqueta-del-track] [ruta-de-salida]
+# Uso:   ./deploy/construir.sh <etiqueta-del-track> [ruta-de-salida]
 # Ej:    ./deploy/construir.sh rename /tmp/musubi-rename
 set -euo pipefail
 
@@ -59,6 +59,41 @@ ESTADO="$(git status --porcelain --untracked-files=normal 2>/dev/null)"
 
 ETIQUETA="${1:-}"
 SALIDA="${2:-./musubi}"
+
+# EL TRACK NO ES OPCIONAL, Y ESO SE APRENDIÓ APAGANDO UNA ALERTA DE LA FLOTA ENTERA ─────────────
+#
+# La línea de abajo arma `<VERSION>[-<track>].<commit>`, así que con el track VACÍO el guión
+# desaparece y quedan CUATRO componentes separados por punto: `0.139.6.7e2d211`.
+#
+# Esa forma NO LA PARSEA NUESTRO PROPIO CÓDIGO. `fleet.NucleoDeVersion` corta en el primer `-`,
+# parte por `.` y exige exactamente tres; con cuatro devuelve `ok=false`. Y `VersionDelAgenteDifiere`
+# le pregunta AL CEREBRO PRIMERO: si la versión del cerebro no parsea, contesta `comparable=false`
+# para TODAS las máquinas, así que `musubi_fleet_device_agent_stale` deja de emitirse para la flota
+# entera. No cae una máquina: se apaga la serie que dice cuáles están atrasadas.
+#
+# MEDIDO EL 2026-09-09, y lo provocó este guión con un argumento omitido:
+#
+#     20:30 UTC  ·  3 series de agent_stale
+#     20:39 UTC  ·  redespliegue del cerebro con `0.139.6.7e2d211`
+#     21:00 UTC  ·  0 series
+#
+# El binario que se reemplazó era `0.139.3-main.326e411` y parseaba. La diferencia entera fue el
+# primer argumento.
+#
+# SE FALLA EN VEZ DE PONER UN DEFAULT, y es la decisión del bloque. Un default —`sintrack`, o el
+# nombre de la rama— haría que el binario parsee y esconde la pregunta que importa: de qué track
+# salió lo que se está por desplegar, que es justamente lo que la versión existe para declarar. Un
+# guión que no puede contestarla tiene que parar, no adivinar. Ningún llamador del repo omite el
+# track (`flota`, `arnes`, `rename`), así que esto no rompe ninguno: sólo cierra la puerta por la
+# que entré yo a mano.
+if [[ -z "$ETIQUETA" ]]; then
+  echo "falta la etiqueta del track, y no tiene default a propósito." >&2
+  echo "  Sin ella la versión sale como '${BASE}.${COMMIT}' —cuatro componentes— y esa forma NO la" >&2
+  echo "  parsea fleet.NucleoDeVersion, así que el cerebro deja de poder comparar versiones y" >&2
+  echo "  'musubi_fleet_device_agent_stale' se apaga para TODA la flota (medido el 2026-09-09)." >&2
+  echo "  Usá: $0 <track> [ruta-de-salida]     ej: $0 main /tmp/musubi-nuevo" >&2
+  exit 1
+fi
 VERSION="${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}"
 
 echo "▶ versión: $VERSION"
