@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/fleet"
 	"musubi/internal/memory"
 )
@@ -438,6 +439,9 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			"Cuántos servicios NO entraron en el último inventario de esta máquina por el techo del latido. 0 = el inventario está completo. Mayor que 0 = el inventario del cerebro es PARCIAL y la poda por ausencia está suspendida para esa máquina.",
 			"", false,
 			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.Capver < buildid.CapverConInventarioExplicado {
+					return 0, false // no sabe contar lo que recortó: ausente, no cero
+				}
 				return float64(d.ServiciosOmitidos), true
 			}},
 		// EL FALLO DEL ENUMERADOR, QUE ANTES SÓLO EXISTÍA EN EL LOG DE LA MÁQUINA.
@@ -460,6 +464,24 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			"1 si esta máquina NO PUDO enumerar sus servicios en su último latido, 0 si pudo. Cuando es 1 el inventario dejó de viajar entero —el agente manda la lista completa o no la manda— así que lo guardado no se pierde pero envejece, y a los 30 min salta `ServicioSinNoticias` por cada servicio conocido. POR QUÉ no pudo se mira en `musubi_fleet_list`: el motivo es texto libre de la máquina y como etiqueta sería cardinalidad sin techo.",
 			"", false,
 			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				// EL 0 SÓLO VALE SI LA MÁQUINA SABE DECIR QUE NO (capver >= 2).
+				//
+				// Un agente anterior no manda `servicios_error`, así que llega `""` — idéntico al
+				// `""` de uno que enumeró bien. Devolver 0 ahí es afirmar «enumeró» sobre una
+				// máquina que nunca contestó la pregunta, y `MaquinaNoPuedeEnumerar` queda VERDE
+				// POR IGNORANCIA. Como la alerta dispara con `== 1`, ese falso 0 es una alerta
+				// PERDIDA y no una falsa: silenciosa.
+				//
+				// Medido el 2026-09-09: las cuatro máquinas de la flota con la serie en 0, dos de
+				// ellas con agentes que no conocen el campo, y una sin agente ninguno.
+				//
+				// Se OMITE en vez de inventar un tercer valor: es la regla que ya gobierna este
+				// exportador —un dato ausente no es un cero—, y del lado de Prometheus «no sé» se
+				// pregunta con `absent()`, que es su forma natural. Un `-1` habría que enseñárselo
+				// a cada regla que la use, y la que se olvide lo lee como un número.
+				if d.Capver < buildid.CapverConInventarioExplicado {
+					return 0, false
+				}
 				if d.ServiciosError != "" {
 					return 1, true
 				}

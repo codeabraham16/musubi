@@ -40,7 +40,33 @@ import (
 //	1 · 2026-09-07 · La identidad de build viaja en el handshake MCP. Antes de esto el protocolo
 //	    no publicaba versión de ninguna clase, así que 1 es el primer valor con el que un extremo
 //	    puede afirmar algo sobre el otro.
-const Capver = 1
+//	2 · 2026-09-09 · El latido lleva tres campos nuevos: `servicios_omitidos` (cuántos servicios
+//	    no entraron en la lista), `servicios_error` (por qué la máquina no pudo enumerar) y
+//	    `token_fuente` (de dónde sacó su credencial). Los tres entraron en `663d5a0` SIN tocar
+//	    esta constante, y el costo fue concreto: `davantis-1` y `musubi-server` declaraban los dos
+//	    capver=1 hablando contratos distintos, así que el cerebro no podía saber que el `""` de
+//	    `servicios_error` de uno significaba «no pude enumerar: no» y el del otro «mi binario no
+//	    sabe decírtelo». `MaquinaNoPuedeEnumerar` quedaba VERDE por ignorancia, y como dispara con
+//	    `== 1`, el falso 0 es una alerta perdida y no una falsa.
+//	    `CapverMin` NO se mueve: un agente que declare 1 sigue siendo atendido, que es para lo que
+//	    existe la banda. Lo custodia `TestElCapverSubeCuandoSeMueveElContratoDelLatido`.
+const Capver = 2
+
+// CapverConInventarioExplicado es el capver desde el cual un agente SABE contar lo que no mandó y
+// SABE decir por qué no pudo enumerar — o sea desde el cual `servicios_omitidos` y
+// `servicios_error` significan algo cuando llegan vacíos.
+//
+// EXISTE PORQUE UN CERO Y UN «NO SÉ DECIRTELO» SE VEÍAN IGUAL. Un agente anterior a 2 no manda
+// esos campos, así que el cerebro los lee como 0 y `""` — exactamente lo mismo que un agente
+// nuevo que enumeró bien y no recortó nada. El exportador usa esta constante para OMITIR las
+// series de esas máquinas en vez de publicar un 0, que es la regla que ya gobierna el resto del
+// exportador: un dato ausente no es un cero.
+//
+// NO ES `Capver` A SECAS, y la diferencia importa el día del próximo bump: cuando Capver pase a 3
+// esta constante se queda en 2, porque un agente en 2 SIGUE sabiendo contestar estas dos
+// preguntas. Lo que se fija acá es desde cuándo existe la CAPACIDAD, no cuál es el último
+// contrato.
+const CapverConInventarioExplicado = 2
 
 // CapverMin es el capver MÁS VIEJO que este binario todavía atiende. Junto con Capver forma la
 // BANDA `[CapverMin, Capver]`: un par que declara un capver dentro de la banda puede hablar con

@@ -8,6 +8,44 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Changed
+- **`Capver` sube a 2, y ahora algo lo obliga.** `buildid.go` dice, tres líneas arriba de la
+  constante, «sube cuando cambia el CONTRATO». El 2026-09-09 esa regla se incumplió **en el mismo
+  archivo donde está escrita**: `663d5a0` le agregó tres campos a `CuerpoLatido`
+  —`servicios_omitidos`, `servicios_error`, `token_fuente`— y dejó `Capver` en 1.
+
+  **No falló el conocimiento ni la documentación: falló que nada convertía esa frase en una
+  guarda.** `EnLaBanda()` custodia que un capver esté *dentro* del rango; nadie custodiaba que el
+  rango *suba* cuando el contrato cambia.
+
+  **Lo que costó, medido**: `davantis-1` (0.139.1, sin el campo) y `musubi-server` (0.139.6, con él)
+  declaraban los dos `capver=1` hablando contratos distintos, así que el cerebro no podía
+  distinguirlos — y `musubi_fleet_device_services_unknown` devolvía `0` en cuanto
+  `servicios_error` venía vacío, que es lo que manda un agente que **no conoce el campo**. Las
+  cuatro máquinas de la flota con la serie en 0, y dos de esos ceros no significaban nada.
+  `MaquinaNoPuedeEnumerar` dispara con `== 1`, así que el falso 0 era una alerta **perdida**, no
+  una falsa.
+
+  **`CapverMin` no se mueve**: la banda `[1, 2]` sigue atendiendo a los agentes viejos, que es
+  exactamente para lo que existe. Subir `Capver` no retira soporte; retirarlo es mover `CapverMin`,
+  que es otra decisión y tiene su propia bitácora.
+
+  **La guarda fija el conjunto de campos a un valor de capver**, no cuenta nada. Contar campos
+  contra líneas de bitácora no pasa el sabotaje inverso —subir `Capver` sin tocar campos es
+  legítimo, el contrato puede moverse en otro lado— y custodiaría «dos archivos cambian juntos»,
+  que es otra cosa. Se fijan los **tags JSON y los tipos**, no los nombres Go: lo que viaja es el
+  tag, así que renombrar el campo dejando el tag igual no es un cambio de contrato, y cambiar el
+  tag dejando el nombre **sí** lo es. Cuatro sabotajes corridos, los cuatro en su dirección.
+
+  **No hay `pin[1]`, y no es un olvido**: a la hora en que se declaró `Capver = 1` (09:09)
+  `CuerpoLatido` no existía como tipo — nació once minutos después, en `77c7ca5`. Antes el cuerpo
+  era un mapa, así que no hay conjunto de campos que fijar. Escribir uno reconstruido sería
+  inventar un registro histórico.
+
+  **Y el exportador deja de publicar un cero que significa «no sé»**: `services_unknown` y
+  `services_omitted` se **omiten** para un agente por debajo del capver 2, siguiendo la regla que ya
+  gobierna el resto del exportador —un dato ausente no es un cero—. Del lado de Prometheus «no sé»
+  se pregunta con `absent()`.
+
 - **`sync.max_attempts` dejó de mentir.** Su documentación decía «la cantidad de intentos
   transitorios antes de mandar la fila a dead-letter», y hace tiempo que no hace nada: nació en F2
   como el cortacircuito del outbox y `sync-hardening` se lo quitó a propósito (R3), porque un
