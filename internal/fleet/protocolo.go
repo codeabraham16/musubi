@@ -197,6 +197,30 @@ type CuerpoLatido struct {
 	// VIVE ACÁ Y NO EN UN MAPA porque el sobre pasó a ser tipado (#413/#419): una clave de mapa
 	// mal escrita viaja igual y se descarta del otro lado sin decir nada.
 	ServiciosOmitidos int `json:"servicios_omitidos,omitempty"`
+	// ServiciosError dice POR QUÉ esta máquina no pudo enumerar sus servicios, cuando no pudo.
+	//
+	// NO ES EL HERMANO DE `ServiciosOmitidos`, ES SU OPUESTO, y por eso son dos campos y no uno:
+	// `omitidos` es «enumeré bien y no entró todo» (el techo del latido), esto es «no pude
+	// enumerar». El primero permite guardar lo que llegó y suspender la poda; el segundo significa
+	// que NO VIAJA NADA. Meterlos en un solo campo obligaría al cerebro a adivinar cuál de los dos
+	// es, que es la ambigüedad que los dos existen para cerrar.
+	//
+	// CUANDO ESTO VIENE, `Servicios` ES nil A PROPÓSITO. El agente aborta el lote cuando una fuente
+	// falla —el inventario se manda COMPLETO o no se manda— y el cerebro no poda ante `nil`. Eso ya
+	// estaba bien. Lo que faltaba es que el cerebro pueda DECIR POR QUÉ está callada esa máquina:
+	// sin este campo, el silencio de un enumerador roto es idéntico al de un inventario estable.
+	//
+	// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias` de la misma máquina,
+	// 61 horas sin reportar servicios, con el agente vivo y mandando CPU y uptime. Sesenta y cuatro
+	// alertas para una causa, y ninguna la nombra.
+	//
+	// STRING Y NO BOOL, por el mismo criterio que `MotivoNoPreguntar`: las causas se arreglan
+	// distinto —falta un binario, WMI no contesta, el usuario no tiene permiso— y un booleano
+	// obligaría a entrar a la máquina para averiguar cuál es, que es el paso manual que esto
+	// elimina. El vacío significa «no lo dijo»: un agente viejo no manda el campo y llega "",
+	// idéntico a uno nuevo que enumeró bien. Esa ambigüedad es aceptable acá porque las dos
+	// significan lo mismo para el consumidor: no hay una falla que reportar.
+	ServiciosError string `json:"servicios_error,omitempty"`
 	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
 	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
 	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va

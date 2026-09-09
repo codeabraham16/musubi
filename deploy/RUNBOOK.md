@@ -544,9 +544,38 @@ mostrar: en cada instante el servicio está arriba.
 3. El contador es del supervisor y se reinicia cuando se reinicia la máquina: un pico después de
    un reboot no significa lo mismo que uno en una máquina con semanas de uptime.
 
+## MaquinaNoPuedeEnumerar
+
+El agente está **vivo** —late, manda CPU y uptime— pero su enumerador de servicios falla, así que
+**el inventario dejó de viajar entero**.
+
+No se pierde nada: el agente manda la lista COMPLETA o no la manda, y el cerebro no poda ante un
+inventario ausente. Lo que el cerebro tiene guardado sigue ahí, pero **envejece sin actualizarse**,
+y a los 30 minutos saltaría `ServicioSinNoticias` por CADA servicio conocido. Por eso esa alerta
+está callada para esta máquina mientras ésta dispara: no son 64 problemas, es uno.
+
+Medido el 2026-09-09 en `davantis-1` antes de que esta alerta existiera: **64 alertas
+`ServicioSinNoticias`**, todas de la misma máquina, 61 horas sin reportar, y ninguna nombraba la
+causa. Para saber qué pasaba había que entrar a la máquina.
+
+1. **Leé el motivo, que ya viaja**: `musubi_fleet_list` trae `servicios_error` de esa máquina. Es
+   el error textual del enumerador, no una categoría.
+2. Las causas se arreglan distinto, y por eso se guarda el texto y no un booleano:
+   - **falta un binario** (`systemctl`, `docker`, `podman` no está en el PATH del agente);
+   - **WMI no contesta** en Windows — el enumerador lanza PowerShell y pide `Win32_Service`;
+   - **permisos**: el usuario del agente no puede enumerar (típico si alguien cambió de `-AlArranque`
+     a tarea por sesión, o al revés).
+3. Si el motivo no alcanza, mirá el log del agente EN la máquina: avisa una vez por hora mientras
+   dure (`avisarCada("servicios-enumerar", ...)`).
+4. Cuando se arregla, el campo se vacía en el siguiente latido y las dos alertas se apagan solas —
+   el motivo se escribe SIEMPRE, incluido el vacío, justamente para que eso pase.
+
 ## ServicioSinNoticias
 
 La máquina late pero hace más de 30 minutos que no manda el estado de sus servicios.
+
+> Si ves esto multiplicado por todos los servicios de UNA máquina, mirá primero
+> `MaquinaNoPuedeEnumerar`: es la misma causa contada muchas veces, y esa alerta la nombra.
 
 El agente reenvía el inventario cuando CAMBIA, más un piso periódico (`fleet.InventarioCada`), así
 que 30 minutos de silencio son varios reenvíos perdidos. **No sabemos cómo está ese servicio**, y

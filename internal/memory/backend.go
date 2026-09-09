@@ -432,6 +432,9 @@ type DeviceStore interface {
 	// Se llama SIEMPRE que llega un inventario, incluido el 0: un número que sólo se escribe
 	// cuando hay recorte no puede decir que el recorte terminó.
 	FijarServiciosOmitidos(deviceID string, omitidos int) error
+	// FijarServiciosError guarda POR QUÉ una máquina no pudo enumerar sus servicios, o "" si pudo.
+	// Es el opuesto de `FijarServiciosOmitidos`: aquél es «no entró todo», éste es «no vino nada».
+	FijarServiciosError(deviceID, motivo string) error
 	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
 	// alguien. Va aparte de la política porque son hechos de dueños distintos.
 	// ── Ejecución remota (S5) ──

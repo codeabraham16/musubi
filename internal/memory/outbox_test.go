@@ -201,8 +201,19 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	// `if m.version <= current { continue }`: dejarlas duplicadas no habría fallado, habría dejado
 	// migraciones MUERTAS en silencio — en los DOS sentidos, según por qué rama hubiera venido la
 	// base. La v52 es la mitad que la renumeración sola no cubre.
-	if latestSchemaVersion() != 52 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 52", latestSchemaVersion())
+	// v53 = POR QUÉ ESTA MÁQUINA NO PUEDE ENUMERAR (`devices.servicios_error`). Cuando el
+	//       enumerador falla, el agente NO manda el inventario —a propósito: media lista haría que
+	//       el cerebro pode lo que no vino— y lo escribe en SU log, una vez por hora. Desde el
+	//       cerebro ese silencio era idéntico al de un inventario que no cambió, así que una
+	//       máquina rota se veía igual que una sana y estable. Medido el 2026-09-09 en
+	//       `davantis-1`: 64 alertas `ServicioSinNoticias` —una por servicio conocido—, 61 horas
+	//       sin reportar, con el agente vivo y mandando CPU y uptime. Sesenta y cuatro alertas para
+	//       UNA causa, y ninguna la nombra. Guarda el MOTIVO y no un booleano porque las causas se
+	//       arreglan distinto, y un `true` obligaría a entrar a la máquina para saber cuál es — que
+	//       es el paso manual que esto elimina. readCompatible: ADD COLUMN, ninguna consulta
+	//       existente cambia de resultado.
+	if latestSchemaVersion() != 53 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 53", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

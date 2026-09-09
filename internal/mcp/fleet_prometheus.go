@@ -440,6 +440,31 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
 				return float64(d.ServiciosOmitidos), true
 			}},
+		// EL FALLO DEL ENUMERADOR, QUE ANTES SÓLO EXISTÍA EN EL LOG DE LA MÁQUINA.
+		//
+		// Es el OPUESTO de `services_omitted`, no su hermano: aquél es «enumeré bien y no entró
+		// todo», éste es «no pude enumerar», o sea que no viajó NADA. Del lado del cerebro ese
+		// silencio era idéntico al de un inventario estable.
+		//
+		// MEDIDO EN `davantis-1` EL 2026-09-09: 64 alertas `ServicioSinNoticias` —una por servicio
+		// conocido—, 61 horas sin reportar, con el agente vivo y mandando CPU y uptime. Sesenta y
+		// cuatro alertas para UNA causa, y ninguna la nombra. Con esta serie la causa tiene UNA
+		// alerta propia, y `ServicioSinNoticias` se calla para esa máquina — igual que ya se calla
+		// cuando la máquina está caída o en mantenimiento, y por el mismo motivo: no son 64
+		// problemas, es uno.
+		//
+		// EL MOTIVO NO VA COMO ETIQUETA. Es texto libre que escribe la máquina y su cardinalidad no
+		// la elige nadie de este lado — sería la misma decisión que ya se tomó para el desglose de
+		// servicios. Cuál es se mira en `musubi_fleet_list`, que es donde vive el texto.
+		{"musubi_fleet_device_services_unknown",
+			"1 si esta máquina NO PUDO enumerar sus servicios en su último latido, 0 si pudo. Cuando es 1 el inventario dejó de viajar entero —el agente manda la lista completa o no la manda— así que lo guardado no se pierde pero envejece, y a los 30 min salta `ServicioSinNoticias` por cada servicio conocido. POR QUÉ no pudo se mira en `musubi_fleet_list`: el motivo es texto libre de la máquina y como etiqueta sería cardinalidad sin techo.",
+			"", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.ServiciosError != "" {
+					return 1, true
+				}
+				return 0, true
+			}},
 		{"musubi_fleet_device_up",
 			"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.",
 			"", false,

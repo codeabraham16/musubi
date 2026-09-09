@@ -487,13 +487,54 @@ groups:
       # El inventario de esa máquina dejó de llegar aunque la máquina late. Distinto de
       # ServicioCaido: acá no sabemos cómo está el servicio, y no saber no es estar bien.
       - alert: ServicioSinNoticias
+        # EL TERCER `unless` ES LA DIFERENCIA ENTRE UNA ALARMA Y RUIDO.
+        #
+        # Los dos primeros ya existían por el mismo motivo: una máquina caída o en mantenimiento no
+        # tiene 64 servicios con problema, tiene UNO. El tercero cubre el caso que faltaba: cuando
+        # el enumerador de la máquina se rompe, el inventario deja de viajar entero y TODOS sus
+        # servicios envejecen a la vez.
+        #
+        # MEDIDO EL 2026-09-09 EN `davantis-1`: 64 de estas disparando, todas de la misma máquina,
+        # 61 horas sin reportar, con el agente vivo y mandando CPU y uptime. Sesenta y cuatro
+        # alertas para una causa, y ninguna la nombra. Eso es exactamente cómo se le enseña a
+        # alguien a ignorar un canal — los trece `MaquinaCaida` de A79 dejaron esa lección.
+        #
+        # No se pierde nada al callarlas: `MaquinaNoPuedeEnumerar` dispara en su lugar Y dice por
+        # qué, que es lo que ninguna de las 64 podía decir.
         expr: (musubi_fleet_service_last_report_seconds > 1800) unless on(project, device) (musubi_fleet_device_up == 0)
           unless on(project, device) (musubi_fleet_device_maintenance == 1)
+          unless on(project, device) (musubi_fleet_device_services_unknown == 1)
         for: 10m
         labels: { severity: warning }
         annotations:
           summary: "Hace más de 30 min que no reporta el estado de {{ $labels.service }}."
           runbook: "deploy/RUNBOOK.md#serviciosinnoticias"
+          ausente_en: "tier=B — un Tier B no reporta servicios."
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # LA MÁQUINA NO PUEDE ENUMERAR, Y ESO SÓLO SE SABÍA ENTRANDO A LA MÁQUINA
+      #
+      # Cuando `enumerarServicios` falla, el agente NO manda el inventario —a propósito: media
+      # lista haría que el cerebro pode lo que no vino— y lo escribe en SU log, una vez por hora.
+      # Desde el cerebro ese silencio era idéntico al de un inventario que no cambió.
+      #
+      # Lo único que se veía era `ServicioSinNoticias` a los 30 minutos, multiplicado por cada
+      # servicio conocido, y sin la causa. Esta alerta es UNA, llega antes, y la nombra.
+      - alert: MaquinaNoPuedeEnumerar
+        # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`
+        # cuando esta alerta se escribió sin él: la serie se CONGELA cuando la máquina muere, así
+        # que sin la guarda esto dispararía sobre la última muestra que llegó antes de morir — dos
+        # alertas para un solo evento, con `MaquinaCaida` ya diciendo lo que pasa. Es exactamente el
+        # ruido que esta alerta viene a REDUCIR, reproducido un piso más arriba.
+        expr: musubi_fleet_device_services_unknown == 1
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.device }} no puede enumerar sus servicios: su inventario dejó de viajar."
+          nota: "El agente está VIVO —esto no dice nada de la máquina— pero su enumerador falla, así que el inventario no se manda y lo que el cerebro tiene envejece sin actualizarse. No se poda nada, así que no se pierde: queda viejo. POR QUÉ falla lo dice `musubi_fleet_list` en el campo `servicios_error` de esa máquina; las causas típicas se arreglan distinto (falta un binario, WMI no contesta, el usuario no tiene permiso). Mientras esto dispara, `ServicioSinNoticias` está callada para esta máquina a propósito: son 64 síntomas de un problema."
+          runbook: "deploy/RUNBOOK.md#maquinanopuedeenumerar"
           ausente_en: "tier=B — un Tier B no reporta servicios."
 
       # ────────────────────────────────────────────────────────────────────────────────────

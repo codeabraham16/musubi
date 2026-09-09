@@ -163,6 +163,36 @@ func enumerarConCache() ([]fleet.ReporteServicio, error) {
 	return lista, err
 }
 
+// motivoDeEnumeracionFallida dice POR QUÉ no se pudo enumerar, o "" si la última vez anduvo.
+//
+// EXISTE PORQUE «NO PUDE ENUMERAR» SÓLO SE ESCRIBÍA EN EL LOG DE LA MÁQUINA, Y ESO NO LO LEE NADIE.
+//
+// Cuando `enumerarServicios` falla, `serviciosDelLatido` devuelve `mandar=false` y el inventario NO
+// viaja — eso está bien y es deliberado: mandar media lista haría que el cerebro pode lo que no
+// vino. Pero del lado del cerebro ese silencio es IDÉNTICO al de un inventario que no cambió, así
+// que una máquina que no puede enumerar se ve exactamente igual que una sana y estable. La única
+// señal era `musubi_fleet_service_last_report_seconds` creciendo, y eso llega a los 30 minutos
+// convertido en UNA ALERTA POR SERVICIO.
+//
+// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias`, todas de la misma
+// máquina, 61 horas sin reportar un solo servicio — con el agente vivo (latido de hace 4,8 s) y
+// mandando CPU y uptime sin problema. Sesenta y cuatro alertas para UNA causa, y ninguna de las 64
+// la nombra. Eso no es una alarma, es ruido que enseña a ignorar el canal — la misma lección que
+// dejaron los trece `MaquinaCaida` de A79.
+//
+// SE LEE DE LA CACHÉ Y NO SE PASA POR PARÁMETRO a propósito: `enumerarConCache` ya guarda el error
+// junto a la lista (arriba), así que el dato existe y agregarle un quinto valor de retorno a
+// `serviciosDelLatido` sería una segunda fuente de la misma verdad — y esa firma acaba de costar
+// cuatro sitios en el merge con main. Se deriva del hecho ya establecido.
+func motivoDeEnumeracionFallida() string {
+	ultimaEnumeracion.Lock()
+	defer ultimaEnumeracion.Unlock()
+	if ultimaEnumeracion.err == nil {
+		return ""
+	}
+	return ultimaEnumeracion.err.Error()
+}
+
 // olvidarEnumeracion tira la respuesta guardada y obliga a preguntar de nuevo en la próxima vuelta.
 // La usan las pruebas que cambian lo que el sistema contesta a mitad de camino: sin esto verían la
 // respuesta vieja, que es justamente lo que la caché hace bien en producción.

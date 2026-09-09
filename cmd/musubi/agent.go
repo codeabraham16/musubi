@@ -504,6 +504,19 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 		// mal escrita viaja igual y se descarta del otro lado sin decir nada.
 		carga.ServiciosOmitidos = omitidos
 	}
+	// EL FALLO DE ENUMERACIÓN VIAJA SIEMPRE, TAMBIÉN —Y SOBRE TODO— CUANDO NO HAY INVENTARIO.
+	//
+	// Va FUERA del `if mandarInventario` a propósito: es el único caso en que hay algo que decir
+	// justamente porque NO se manda nada. Adentro del `if` no se emitiría nunca en el caso que
+	// importa, que es el error más fácil de cometer acá.
+	//
+	// Sin esto, del lado del cerebro «el enumerador de esta máquina está roto» y «el inventario no
+	// cambió» son el MISMO silencio. Medido en `davantis-1` el 2026-09-09: 61 horas sin reportar
+	// servicios con el agente vivo, y 64 alertas `ServicioSinNoticias` —una por servicio— sin que
+	// ninguna nombrara la causa.
+	//
+	// `omitempty`: una máquina sana no agrega un solo byte al latido.
+	carga.ServiciosError = motivoDeEnumeracionFallida()
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
 		cuerpo = bytes.NewReader(b)

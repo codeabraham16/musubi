@@ -184,6 +184,18 @@ type Device struct {
 	// el inventario que el cerebro tiene de esta máquina es PARCIAL — y por eso la poda por
 	// ausencia queda suspendida mientras dure: «lo que no vino» deja de significar «ya no corre».
 	ServiciosOmitidos int
+	// ServiciosError es POR QUÉ esta máquina no pudo enumerar sus servicios, cuando no pudo.
+	//
+	// NO ES LO MISMO QUE `ServiciosOmitidos`, ES SU OPUESTO: aquél es «enumeré bien y no entró
+	// todo» y éste es «no pude enumerar», o sea que NO VIAJÓ NADA. El agente aborta el lote cuando
+	// una fuente falla —el inventario se manda completo o no se manda— y el cerebro no poda ante un
+	// inventario ausente. Eso ya estaba bien; lo que faltaba era poder DECIR por qué esa máquina
+	// está callada.
+	//
+	// Vacío significa «no hay falla que reportar». Medido en `davantis-1` el 2026-09-09: 61 horas
+	// sin reportar servicios con el agente vivo, y 64 alertas `ServicioSinNoticias` —una por
+	// servicio— sin que ninguna nombrara la causa.
+	ServiciosError string
 
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió

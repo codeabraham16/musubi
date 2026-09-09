@@ -2006,6 +2006,40 @@ func schemaMigrations() []migration {
 				return err
 			},
 		},
+		{
+			version:        53,
+			name:           "por_que_esta_maquina_no_puede_enumerar",
+			readCompatible: true,
+			// EL FALLO DEL ENUMERADOR, QUE HASTA HOY SÓLO EXISTÍA EN EL LOG DE LA MÁQUINA.
+			//
+			// Cuando `enumerarServicios` falla, el agente NO manda el inventario —a propósito: media
+			// lista haría que el cerebro pode lo que no vino— y avisa una vez por hora en su propio
+			// log. Del lado del cerebro ese silencio es IDÉNTICO al de un inventario que no cambió,
+			// así que una máquina con el enumerador roto se ve exactamente igual que una sana.
+			//
+			// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias` —una por
+			// servicio conocido—, 61 horas sin reportar, con el agente vivo (latido de hace 4,8 s) y
+			// mandando CPU y uptime sin problema. Sesenta y cuatro alertas para UNA causa, y ninguna
+			// la nombra. Eso no es una alarma: es ruido que enseña a ignorar el canal, la misma
+			// lección que dejaron los trece `MaquinaCaida` de A79.
+			//
+			// GUARDA EL MOTIVO Y NO UN BOOLEANO por el mismo criterio que `motivo_no_preguntar`: las
+			// causas se arreglan distinto —falta un binario, WMI no contesta, el usuario no tiene
+			// permiso— y un `true` obligaría a entrar a la máquina para saber cuál es, que es
+			// justamente el paso manual que esto elimina.
+			//
+			// Arranca VACÍA y el vacío significa «no hay falla que reportar»: un agente viejo que no
+			// manda el campo y uno nuevo que enumeró bien llegan los dos como "", y para el
+			// consumidor eso quiere decir lo mismo. La ambigüedad es aceptable acá —al revés que en
+			// `motivo_no_preguntar`— porque no hay ninguna acción que dependa de distinguirlas.
+			//
+			// ES readCompatible: ADD COLUMN sobre `devices` con default, y ninguna consulta
+			// existente cambia de resultado.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "servicios_error",
+					"servicios_error TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

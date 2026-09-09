@@ -335,6 +335,34 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	// SÓLO SE ESCRIBE SI CAMBIÓ, igual que el resto del latido: son 30 s por máquina y esto cambia
 	// cuando alguien reinstala, o sea casi nunca. Y un valor DESCONOCIDO no se guarda: el setter lo
 	// rechaza, y acá se avisa una vez para que un agente que manda basura no pase inadvertido.
+	// EL FALLO DEL ENUMERADOR SE GUARDA SIEMPRE, INCLUIDO EL VACÍO.
+	//
+	// Un `if != ""` acá dejaría el motivo viejo puesto cuando una máquina SE ARREGLA, y su alerta
+	// no se apagaría nunca — que es la misma trampa que documenta `FijarServiciosOmitidos`: un
+	// valor que sólo se escribe cuando hay problema no puede decir que el problema se fue.
+	//
+	// Se escribe sólo cuando CAMBIA para no pegarle a la fila en cada latido: son 2.880 UPDATE por
+	// día por máquina, y el valor cambia una vez por semana en el peor caso.
+	//
+	// NO devuelve error hacia arriba: vale el mismo invariante D7 que el resto del latido. Que no
+	// se pueda anotar por qué una máquina no enumera no puede tirar el latido de una máquina viva.
+	if cuerpo.ServiciosError != d.ServiciosError {
+		if err := s.engine.FijarServiciosError(d.ID, cuerpo.ServiciosError); err != nil {
+			logx.Warn("flota: no se pudo anotar por qué esta máquina no enumera sus servicios",
+				"device", d.Name, "error", err)
+		} else if cuerpo.ServiciosError != "" {
+			// UNA VEZ POR MÁQUINA Y POR MOTIVO: es un ESTADO que dura hasta que alguien entre a
+			// arreglarlo, y un aviso por latido son 2.880 líneas por día — así se entierra la que
+			// importa. La clave lleva el motivo para que un fallo DISTINTO sí vuelva a avisar.
+			s.avisarUnaVez("servicios_error\x00"+d.ID+"\x00"+cuerpo.ServiciosError, func() {
+				logx.Warn("flota: esta máquina NO PUEDE ENUMERAR sus servicios, así que su inventario dejó de viajar",
+					"device", d.Name, "motivo", recortar(cuerpo.ServiciosError, 200),
+					"nota", "el inventario se manda COMPLETO o no se manda, así que el cerebro no poda —lo que "+
+						"tiene guardado no se pierde—, pero envejece: a los 30 min salta `ServicioSinNoticias` "+
+						"por CADA servicio conocido. La que nombra la causa es `MaquinaNoPuedeEnumerar`")
+			})
+		}
+	}
 	if cuerpo.TokenFuente != "" && cuerpo.TokenFuente != d.TokenFuente {
 		if err := s.engine.FijarFuenteDeCredencial(d.ID, cuerpo.TokenFuente); err != nil {
 			s.avisarUnaVez("token_fuente_rara\x00"+d.ID, func() {
