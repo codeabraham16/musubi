@@ -185,7 +185,7 @@ type CodeGraphStore interface {
 	// GraphTopByDegreeCtx devuelve los N nodos con mayor grado CALLS (god-nodes), scopeado (F2).
 	GraphTopByDegreeCtx(ctx context.Context, n int) ([]GraphDegree, error)
 	// GraphEntryPointsCtx devuelve funcs/métodos sin callers internos (entry points), scopeado (F2).
-	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error)
+	GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, int, error)
 	// ListGraphNodesForFileCtx devuelve los símbolos de un archivo, scopeado (F2).
 	ListGraphNodesForFileCtx(ctx context.Context, path string) ([]GraphNode, error)
 	// ListGraphFuncsInDirsCtx devuelve las funcs top-level de un conjunto de directorios (no
@@ -270,10 +270,12 @@ type WorkStore interface {
 // DebateStore — subsistema de debate multi-agente (Society of Minds) model-free: rondas de
 // posturas atribuidas + tally determinista por mayoría/quórum.
 type DebateStore interface {
-	OpenDebate(topic string, rounds, quorum int) (Debate, error)
-	PostPosture(debateID, agent, stance string) error
+	// gatedChoice: el choice que no puede ganar sin al menos un voto con evidencia
+	// deterministica. Vacio = sin compuerta = el comportamiento de siempre.
+	OpenDebate(topic string, rounds, quorum int, gatedChoice string) (Debate, error)
+	PostPosture(debateID, agent, stance, model, evidence string) error
 	AdvanceDebate(debateID string) (int, []DebatePosture, error)
-	CastVote(debateID, agent, choice string) error
+	CastVote(debateID, agent, choice, model, evidence string) error
 	TallyDebate(debateID string) (TallyResult, Debate, error)
 	DebateStatus(debateID string) (Debate, []DebatePosture, []DebateVote, error)
 }
@@ -392,6 +394,9 @@ type DeviceStore interface {
 	// ActualizarAutoreporte guarda la versión del agente y la dirección que la propia máquina
 	// reporta. Es la única escritura que un device hace sobre el registro, y sólo sobre su fila.
 	ActualizarAutoreporte(id, version, direccion string) error
+	// ActualizarCapver guarda el CONTRATO que declara la máquina, aparte de su versión de
+	// producto: dos builds distintos pueden hablar el mismo capver.
+	ActualizarCapver(id string, capver int) error
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)

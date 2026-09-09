@@ -267,6 +267,11 @@ func TestLoadLoopCaptureDefaults(t *testing.T) {
 	if cfg.Loop.ReminderAfterTurns != 5 {
 		t.Errorf("esperaba reminder_after_turns 5 por defecto, obtuve %d", cfg.Loop.ReminderAfterTurns)
 	}
+	// Sin esta afirmacion el default se puede mover sin que nada avise, y con el se mueve el
+	// unico momento en que el aviso de bajar lo durable llega a existir.
+	if cfg.Loop.DurableNudgeAfterTurns != 20 {
+		t.Errorf("esperaba durable_nudge_after_turns 20 por defecto, obtuve %d", cfg.Loop.DurableNudgeAfterTurns)
+	}
 }
 
 func TestLoadPipelineDefaults(t *testing.T) {

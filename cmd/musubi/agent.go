@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/fleet"
 )
 
@@ -299,10 +300,16 @@ func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Durat
 	// EL TIMER SALE DE UN SEAM, Y NO ES CEREMONIA: ES LA ÚNICA MANERA DE PROBAR ESTO.
 	//
 	// La primera versión de la prueba medía el reloj de pared —«el primer latido tardó al menos
-	// el desfase»— y era HUECA: el arranque del agente gasta ~2,4 s antes del primer POST
-	// (idRustdeskLocal y direccionPropia salen a preguntarle cosas al sistema), así que cualquier
-	// umbral chico se cumple solo, con desfase o sin él. Se midió: con `NewTimer(0)` el primer
-	// latido llegó igual a los 2,37 s contra un umbral de 150 ms, y la prueba pasaba en verde.
+	// el desfase»— y era HUECA: el primer POST tarda segundos en salir pase lo que pase, así que
+	// cualquier umbral chico se cumple solo, con desfase o sin él. Se midió: con `NewTimer(0)` el
+	// primer latido llegó igual a los 2,37 s contra un umbral de 150 ms, y la prueba pasaba en
+	// verde.
+	//
+	// ⚠️ ESTE COMENTARIO ATRIBUÍA ESOS SEGUNDOS A idRustdeskLocal Y direccionPropia, Y ERA FALSO.
+	// Se cronometró: esas dos salen en MICROSEGUNDOS. El costo es `serviciosDelLatido`, que
+	// enumera los servicios del sistema operativo en cada latido (3,13 s y 2,84 s medidos en una
+	// máquina Windows real). Queda escrito porque yo cité esta línea como evidencia sin
+	// cronometrarla y me llevó a un arreglo peor: un comentario del repo NO es una medición.
 	//
 	// Subir el umbral por encima del ruido haría la prueba lenta y flaky en CI. Mirar la
 	// DURACIÓN QUE SE PIDE en vez de la que se sufre la vuelve exacta y de microsegundos.
@@ -420,15 +427,25 @@ func clienteParaElCerebro(nombre string) *http.Client {
 func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido {
 	// El cuerpo lleva la muestra y el autorreporte (qué build corre, por dónde se la alcanza).
 	// Ni un campo de identidad: quién es lo decide el token, del lado del cerebro.
-	carga := map[string]any{"version": version}
+	// SE ARMA CON EL TIPO DEL CONTRATO, no con un map. El `map[string]any` que estaba acá era la
+	// misma falla que el struct anónimo de la respuesta —dos formas del mismo mensaje sin nada que
+	// las ate— y peor: un map no tiene ni nombres de campo que el compilador pueda mirar, así que
+	// un typo en la clave compila, arranca y responde 200 con el campo perdido. El porqué largo
+	// está en internal/fleet/protocolo.go.
+	carga := fleet.CuerpoLatido{Version: version, Capver: buildid.Capver}
 	if rid := idRustdeskLocal(); rid != "" {
-		carga["rustdesk_id"] = rid
+		carga.RustdeskID = rid
 	}
 	if m != nil {
-		carga["muestra"] = m
+		// La muestra viaja CRUDA porque su techo es suyo (ver el campo en el contrato). Si no se
+		// puede serializar, se manda el latido sin ella: perder la telemetría de un ciclo es
+		// mejor que perder la señal de vida.
+		if txt, err := m.Serializar(); err == nil {
+			carga.Muestra = json.RawMessage(txt)
+		}
 	}
 	if d := direccionPropia(); d != "" {
-		carga["direccion"] = d
+		carga.Direccion = d
 	}
 	// LA CAPACIDAD DE PREGUNTAR (A57), MEDIDA EN ESTA MÁQUINA. Va SIEMPRE, aunque sea `false`:
 	// el campo es opcional en el cuerpo justamente para que un agente VIEJO —que no lo manda— se
@@ -439,9 +456,9 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	// cero sin explicación, y las tres causas —no hay escritorio, falta un paquete, el agente
 	// corre como servicio— se arreglan distinto.
 	cap := medirCapacidadDeAvisar()
-	carga["puede_preguntar"] = cap.Puede
+	carga.PuedePreguntar = &cap.Puede
 	if !cap.Puede && cap.Motivo != "" {
-		carga["motivo_no_preguntar"] = cap.Motivo
+		carga.MotivoNoPreguntar = cap.Motivo
 	}
 	// DE DÓNDE SALIÓ LA CREDENCIAL (A102). Va porque el cerebro no lo puede averiguar de ninguna
 	// otra forma: una máquina que recibió su token por VARIABLE no puede completar una rotación —un
@@ -454,9 +471,9 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	// SE OMITE SI ESTÁ VACÍA en vez de mandar "": el campo es opcional para que un agente viejo
 	// —que no lo manda— se distinga de uno nuevo, y mandar vacío desde acá borraría esa distinción
 	// del lado del cerebro. Es el mismo criterio que el puntero de `puede_preguntar`.
-	if fuenteDelToken != "" {
-		carga["token_fuente"] = fuenteDelToken
-	}
+	// Campo del struct y no clave de mapa: el sobre pasó a ser `fleet.CuerpoLatido` tipado al
+	// mergear con main. El `omitempty` del campo conserva la omisión que este comentario explica.
+	carga.TokenFuente = fuenteDelToken
 	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
 	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su
 	// propia puerta sería un segundo camino de autoridad para el mismo dato.
@@ -469,7 +486,7 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	// lista vacía se daba por enviada y no se enviaba, para siempre.
 	svs, omitidos, mandarInventario, confirmarInventario := serviciosDelLatido()
 	if mandarInventario {
-		carga["servicios"] = svs
+		carga.Servicios = svs
 		// EL RECORTE VIAJA CON LA LISTA (A116). Sin este número, una lista truncada de 64 es
 		// indistinguible de un inventario completo de 64 del lado del cerebro — y como la poda
 		// da de baja lo que no vino, el cerebro no se queda sin ver los que faltan: ANOTA que
@@ -478,11 +495,14 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 		// `altura-erp`, que estaban corriendo.
 		//
 		// Va sólo cuando se manda el inventario porque la poda sólo corre cuando llega una lista.
-		// Y va sólo si hubo recorte: `omitempty` del otro lado, así que un inventario completo
-		// pesa exactamente lo que pesaba antes.
-		if omitidos > 0 {
-			carga["servicios_omitidos"] = omitidos
-		}
+		// Y `omitempty` del otro lado, así que un inventario completo pesa exactamente lo que
+		// pesaba antes.
+		//
+		// El merge con main cambió el sobre de un `map[string]any` a `fleet.CuerpoLatido` tipado
+		// (#413/#419), así que esto pasó de una clave suelta a un campo del struct — y por eso el
+		// campo hubo que agregarlo en `internal/fleet/protocolo.go`. Es mejor: una clave de mapa
+		// mal escrita viaja igual y se descarta del otro lado sin decir nada.
+		carga.ServiciosOmitidos = omitidos
 	}
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
@@ -523,6 +543,13 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 			// `servicios` se imprime por el mismo motivo que `muestra`, y es la razón por la
 			// que el cerebro lo manda: quien administra ESTA máquina no ve los logs del cerebro,
 			// así que un inventario rechazado tiene que verse acá o no se ve en ningún lado.
+			// EL CONTRATO. Se imprime por el mismo motivo que las otras dos: quien puede
+			// actualizar esta máquina es quien la mira desde acá, no quien lee los logs del
+			// cerebro. Un capver fuera de banda que sólo quedara del otro lado sería otra vez el
+			// modo de falla que este archivo viene esquivando.
+			if r.Protocolo != "" {
+				motivo += " · protocolo " + r.Protocolo
+			}
 			if r.Servicios != "" {
 				motivo += " · servicios " + r.Servicios
 			}

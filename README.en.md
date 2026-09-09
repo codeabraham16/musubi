@@ -93,7 +93,7 @@ flowchart LR
     class CC cc; class M mm; class DB db;
 ```
 
-Three hooks feed the daemon; the daemon speaks MCP and persists everything to SQLite. What flows
+Four hooks feed the daemon; the daemon speaks MCP and persists everything to SQLite. What flows
 back to the agent (code gist, per-turn context) is **measured** and injected as a **delta** — only
 what's new relative to the previous turn.
 
@@ -172,11 +172,11 @@ go build -o musubi ./cmd/musubi
 - Writes the starter **cognitive skills** into `.musubi/skills/` and the **SDD templates**
   (proposal, spec, design, tasks) into `.musubi/templates/sdd/`.
 - Generates/merges `.mcp.json` so the agent **loads the `musubi` server automatically**.
-- Injects three **hooks** into `.claude/settings.json` (Claude Code) and protects the DB via `.gitignore`.
+- Injects four **hooks** into `.claude/settings.json` (Claude Code) and protects the DB via `.gitignore`.
 
 | Agent | MCP config | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse(Read) |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (two matchers: Read, and edits) · Stop |
 | `cursor` | `.cursor/mcp.json` | — (Cursor has no hook system) |
 
 ```bash
@@ -324,7 +324,29 @@ explore → plan → code → verify, reminding the agent of the phase each turn
 
 ## MCP tools
 
-The server exposes **84 tools**, grouped by domain:
+The server exposes **75 tools**, grouped by domain. There are 84 registered: nine are **dormant**
+and `tools/list` does not return them, because their context cost was not paid back by their measured
+use. They wake up without recompiling via `MUSUBI_TOOLS_ALL=1`, and the list lives next to its reason
+in `internal/mcp/tools_dormidas_test.go`:
+
+> `musubi_save_fact` · `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_debate` ·
+> `musubi_promote` · `musubi_workflow` · `musubi_resolve_skills` · `musubi_detect_stack` ·
+> `musubi_discover_skills`
+
+Dormant is not retired: a dormant tool is still implemented, tested and **dispatchable by name** — the
+only thing it loses is its slot in the catalog, so an agent that never sees it listed will never reach
+for it. They are still named below wherever they are needed to explain a flow.
+
+Three of them gate whole sections of this README, and **they are not the same case**. What matters is
+not whether the tool answers, but whether the FLOW has another way in:
+
+| Dormant | Is the flow still alive? | How you get in today |
+|---|---|---|
+| `musubi_promote` | **yes, entirely** | with `team_mode: true` — the default in active repos — `musubi_save_observation` is born `shared` and sync ships it on its own (1,238 of 1,371 notes in this repo). `promote` is left for the rare note that was born local |
+| `musubi_discover_skills` | **no, and it wasn't before either** | it was already **opt-in** via `sourcing.marketplace_enabled`, so dormancy is the second lock on a door most installs never opened. The body's Community tab doesn't use it either: it lists the arsenal with `musubi_list_skills` |
+| `musubi_workflow` | **the engine yes; your DAG no** | `musubi_sdd` runs the same engine — every `workflow_runs` row in the DB is its own — but with a **fixed** definition: `SDDWorkflowDef` builds the explore→plan→code→verify chain and never reads `.musubi/workflows/`. A graph of your own has no open door today |
+
+The domain table below lists every tool, dormant ones included:
 
 | Domain | Tools |
 |---------|--------------|
@@ -425,6 +447,16 @@ Binary
 
 `musubi daemon` speaks JSON-RPC 2.0 over stdin/stdout and honors `MUSUBI_HOME` to pin the workspace
 (by default, the project directory via `CLAUDE_PROJECT_DIR`).
+
+**To talk to a central brain** — which is what enables the hybrid sync, identity and access, and the
+`cerebro` command — two environment variables are required:
+
+| Variable | What it is |
+|---|---|
+| `MUSUBI_CENTRAL_URL` | the brain's URL (e.g. `http://100.79.126.62:7717`). Without it the channel to the central brain never starts |
+| `MUSUBI_TOKEN` | the per-member token issued by `musubi token new`; the writer's `project_id` comes from it |
+
+`musubi provision` sets both and verifies the connection end to end.
 
 ---
 

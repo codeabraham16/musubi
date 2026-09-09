@@ -60,11 +60,36 @@ const (
 // se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
 // trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
 // MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.
+// roClass dice si una tool sirve cuando la base NO se puede escribir (escalón de sólo lectura).
+//
+// ES UN CUARTO EJE, Y NACE DEL MISMO PROBLEMA QUE lockClass: `readOnly` ya gobernaba autorización
+// y candado, y usarlo también para esto forzaba un canje falso. `musubi_recall` NO es readOnly a
+// propósito —escribe: refuerza el acceso de lo que devolvió— y marcarla readOnly para destrabar el
+// modo sólo-lectura además se la abriría a los principales `reader`, que es justo lo que el repo
+// ya decidió que no.
+//
+// Pero su escritura es INCIDENTAL: telemetría de refuerzo, no parte de la respuesta. Medido sobre
+// el registro, son sólo TRES las tools con esa forma —`musubi_recall` y `musubi_memory_expand`
+// (bumpAccess) y `musubi_recall_code` (LedgerAdd)—, y sin ellas el escalón de sólo lectura sería
+// teatro: rechazaría la tool de lectura principal.
+type roClass int
+
+const (
+	// roDesdeReadOnly es el cero de Go: sirve en sólo lectura si y sólo si es readOnly. Fail-safe
+	// —una tool nueva no entra al modo sin que alguien lo afirme— y no obliga a tocar las 80.
+	roDesdeReadOnly roClass = iota
+	// roLeeConEscrituraIncidental: sirve en sólo lectura aunque no sea readOnly, porque lo único
+	// que escribe es telemetría que la propia capa de memoria omite en ese modo. Marcarla acá sin
+	// que esa omisión exista haría fallar la tool desde SQLite, no desde el despacho.
+	roLeeConEscrituraIncidental
+)
+
 type toolEntry struct {
 	Tool
 	handler  toolHandler
 	readOnly bool
 	lock     lockClass
+	ro       roClass
 	dormant  bool
 }
 
@@ -76,8 +101,41 @@ func noCtx(h func(json.RawMessage) (interface{}, *RpcError)) toolHandler {
 	}
 }
 
-// handleInitialize responde el handshake MCP (initialize).
+// handleInitialize responde el handshake MCP (initialize), y es el ÚNICO lugar del protocolo
+// donde este binario puede decir quién es antes de que le pidan nada.
+//
+// ANTES ACÁ HABÍA UN LITERAL. `serverInfo.version` decía "1.0.0" desde siempre, mientras
+// `s.version` —la versión real, inyectada por WithVersion desde main— existía y no se usaba. Con
+// tres builds distintos hablándose en la malla, eso convertía la única pregunta útil («¿cuál de
+// estas dos descripciones de la misma tool es la vieja?») en una que nadie podía contestar.
+//
+// EL OBJETO COMPLETO VA EN `_meta` Y NO DENTRO DE serverInfo: la forma de serverInfo la fija el
+// spec de MCP y meterle campos propios es donde un cliente estricto se rompe. `_meta` es el
+// sobre que el propio spec reserva para extensiones, así que un cliente que no lo entiende lo
+// ignora y sigue viendo el serverInfo de siempre, ahora con la versión de verdad.
 func (s *McpServer) handleInitialize() interface{} {
+	id := s.Identity()
+	version := id.Version
+	if version == "" {
+		// Un servidor construido sin WithVersion —los tests, y nada más— no sabe qué versión es.
+		// Decirlo es correcto; inventar un número sería la falla que esta pieza vino a arreglar.
+		version = "unknown"
+	}
+	meta := map[string]interface{}{
+		"musubi/identity": id,
+	}
+	// Un servidor sin memoria lo DICE en el handshake, no recién cuando alguien intenta usarlo.
+	// La clave no aparece en un servidor sano: su ausencia es la señal de que todo está bien.
+	if deg := s.metaDegradacion(); deg != nil {
+		meta["musubi/degraded"] = deg
+	}
+	// Y si tiene memoria pero no la puede escribir, también lo dice acá. Las dos claves son
+	// excluyentes en la práctica —un servidor degradado no tiene engine que consultar— pero no se
+	// las escribe como un if/else: son dos hechos independientes, y atarlos haría que agregar un
+	// tercer estado obligue a reescribir esta rama.
+	if ro := s.metaSoloLectura(); ro != nil {
+		meta["musubi/readonly"] = ro
+	}
 	return map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
@@ -85,8 +143,9 @@ func (s *McpServer) handleInitialize() interface{} {
 		},
 		"serverInfo": map[string]string{
 			"name":    "musubi-core",
-			"version": "1.0.0",
+			"version": version,
 		},
+		"_meta": meta,
 	}
 }
 
@@ -163,6 +222,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"query"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolRecall,
 			// El juez read-time (rerankIfEnabled) llama al motor por red desde adentro de este
 			// handler. Con el candado del despacho tomado, una sola llamada lenta deja al servidor
@@ -208,6 +268,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"ids"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolMemoryExpand,
 		},
 		{
@@ -708,18 +769,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_debate",
-				Description: "Debate multi-agente (Society of Minds), andamiaje EJECUTABLE y DETERMINISTA model-free: Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas y CUENTA los votos; los sub-agentes (LLM) producen posturas, críticas y votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás como material de CRÍTICA a la ronda siguiente; repetís post→advance hasta agotar rondas; 4) cada agente action=vote (id, agent, choice); 5) action=tally (id) recuenta DETERMINISTA: gana el choice con máximo ESTRICTO que alcance el quórum → cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: advance+re-votar, o deferí a musubi_judge). action=status (id) da el estado completo. El juicio SEMÁNTICO se queda en el LLM. action ∈ {open, post, advance, vote, tally, status}.",
+				Description: "Debate multi-agente (Society of Minds), andamiaje EJECUTABLE y DETERMINISTA model-free: Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas y CUENTA los votos; los sub-agentes (LLM) producen posturas, críticas y votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás como material de CRÍTICA a la ronda siguiente; repetís post→advance hasta agotar rondas; 4) cada agente action=vote (id, agent, choice); 5) action=tally (id) recuenta DETERMINISTA: gana el choice con máximo ESTRICTO que alcance el quórum → cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: advance+re-votar, o deferí a musubi_judge). action=status (id) da el estado completo. El juicio SEMÁNTICO se queda en el LLM. MODEL Y EVIDENCE SON OBLIGATORIOS en post y vote. `model`: qué modelo produjo la postura o el voto —dos jueces del MISMO modelo no son dos opiniones, y sin esta columna la frase «esto lo revisaron tres modelos distintos» es inverificable a posteriori—. ⚠️ NO lo codifiques dentro de `agent` (seguridad@sonnet): `agent` es la clave ÚNICA de las dos tablas, así que un lente que cambia de modelo entre rondas deja de ser el mismo votante y su voto se SUMA en vez de reemplazar, inflando el total en silencio. `evidence` ∈ {deterministica (corrió las comprobaciones y tiene la salida), inferida (leyó y razonó, sin ejecutar), ninguna (no pudo comprobar nada — es una respuesta válida)}. En open, `gated_choice` opcional: el choice que NO puede ganar sin al menos un voto con evidencia deterministica. Con gated_choice=<tu veredicto aprobatorio>, un panel que opinó sin correr nada no cierra y el tally devuelve gated=true. Rechazar NUNCA lleva compuerta —un panel que no pudo verificar nada tiene que poder rechazar igual— y UN solo voto deterministico la desarma, sin reemplazar al quórum. Sin gated_choice, el comportamiento es el de siempre. Límite honesto: la clase de evidencia es una DECLARACION, no una prueba; detecta al panel que no verificó, no al que miente. action ∈ {open, post, advance, vote, tally, status}.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "open | post | advance | vote | tally | status"},
-						"id":     {Type: "string", Description: "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"},
-						"topic":  {Type: "string", Description: "Para open: la pregunta/tema del debate"},
-						"rounds": {Type: "number", Description: "Para open: tope de rondas de debate (>=1)"},
-						"quorum": {Type: "number", Description: "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"},
-						"agent":  {Type: "string", Description: "Para post/vote: etiqueta del sub-agente participante"},
-						"stance": {Type: "string", Description: "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"},
-						"choice": {Type: "string", Description: "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"},
+						"action":       {Type: "string", Description: "open | post | advance | vote | tally | status"},
+						"id":           {Type: "string", Description: "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"},
+						"topic":        {Type: "string", Description: "Para open: la pregunta/tema del debate"},
+						"rounds":       {Type: "number", Description: "Para open: tope de rondas de debate (>=1)"},
+						"quorum":       {Type: "number", Description: "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"},
+						"agent":        {Type: "string", Description: "Para post/vote: etiqueta del sub-agente participante"},
+						"stance":       {Type: "string", Description: "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"},
+						"choice":       {Type: "string", Description: "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"},
+						"model":        {Type: "string", Description: "Para post/vote (OBLIGATORIO): el modelo que produjo la postura o el voto. No lo metas dentro de 'agent'"},
+						"evidence":     {Type: "string", Description: "Para post/vote (OBLIGATORIO): deterministica | inferida | ninguna"},
+						"gated_choice": {Type: "string", Description: "Para open (opcional): el choice que no puede ganar sin al menos un voto con evidencia deterministica"},
 					},
 				},
 			},
@@ -777,7 +841,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"path":    {Type: "string", Description: "Ruta del archivo (relativa a la raíz del proyecto o absoluta)"},
+						"path":    {Type: "string", Description: "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"},
 						"gist":    {Type: "string", Description: "Resumen corto de qué hace el archivo"},
 						"symbols": {Type: "string", Description: "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"},
 					},
@@ -799,6 +863,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Required: []string{"path"},
 				},
 			},
+			ro:      roLeeConEscrituraIncidental,
 			handler: s.toolRecallCode,
 		},
 		{
@@ -857,7 +922,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_detect_changes",
-				Description: "DISPARADOR: ANTES de cerrar un cambio —al abrir el PR, o en la fase verify de SDD— para saber QUÉ verificar y QUÉ decisión guardada pudo quedar obsoleta. No es una tool de exploración: se invoca sobre un diff que ya existe. Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+				Description: "DISPARADOR: ANTES de cerrar un cambio —al abrir el PR, o en la fase verify de SDD— para saber QUÉ verificar y QUÉ decisión guardada pudo quedar obsoleta. No es una tool de exploración: se invoca sobre un diff que ya existe. Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Devuelve ADEMAS `revision`: cuanta revision pide el cambio, DERIVADA del cambio mismo y no del criterio de nadie — siete senales enteras (archivos, lineas, simbolos, paquetes, callers y paquetes en el radio de impacto, y si el cambio SACA codigo -un archivo borrado entero, o uno que saca mas de lo que pone: modificar una linea NO cuenta-) puntuadas por escalones 0-2 sobre un total de 13, CALIBRADOS contra los PRs reales de este repo, con su desglose para que la cuenta se pueda rehacer a mano. De ahi sale el panel del debate: minima 1 juez/1 ronda/quorum 1, estandar 3/2/2, profunda 5/2/3. Usalo para dimensionar `musubi_debate` en vez de pedir siempre el mismo panel. OJO con `radio_ciego`: si el grafo no cubre algun archivo o simbolo de CODIGO tocado, el nivel NO puede bajar a minima y el motivo va escrito, porque un radio 0 sin cobertura no dice «no arrastra a nadie» sino «no puedo saberlo». Un README o un YAML no cuentan: no son codigo cuyo radio quedo sin medir, son archivos sin radio. Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1018,7 +1083,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_map",
-				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports) y cuántos archivos están 'stale' (cambiaron desde el índice) o 'ghosts' (borrados) — si son >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`>0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},

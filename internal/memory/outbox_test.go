@@ -150,24 +150,59 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       como plomería de pantalla: un principal con sólo `screen:view` leía «fulano está
 	//       ejecutando comandos acá» y «...abriendo una terminal...». El argv no los distingue y
 	//       el texto es de presentación, así que el plano lo declara quien encola.
-	// v47 = LO QUE EL AGENTE DIJO Y SE TIRABA (`devices.motivo_no_preguntar`, `devices.token_fuente`).
+	// v47 = EL PANEL DEJA DE SER UN ECO (`model`/`evidence` en posturas y votos, `gated_choice`
+	//       en debates). Dos jueces del mismo modelo no son dos opiniones, y el tally contaba
+	//       filas: un lente que corrio los tests pesaba igual que uno que opino. Los campos
+	//       pudieron nacer OBLIGATORIOS porque las tres tablas del debate estaban en cero filas.
+	// v48 = EL PISO DE LECTURA, GRABADO EN LA BASE (`schema_floor`). La guarda de compatibilidad
+	//       hacia adelante era un booleano —o el binario llega al esquema, o se niega—, así que
+	//       trataba igual a una base que cambió de forma y a una que sólo sumó columnas, y
+	//       obligaba a un cutover duro de toda la malla por cada migración. El piso lo deriva el
+	//       binario que migra (la migración no-readCompatible más alta) y lo deja grabado, porque
+	//       el binario viejo no puede derivarlo: no conoce las migraciones futuras. Va en una
+	//       tabla y no en `PRAGMA application_id` porque el default del PRAGMA es 0 y 0 también
+	//       sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número.
+	// v49 = EL CAPVER POR MÁQUINA (`devices.capver`). `agent_version` dice qué BUILD corre; esto
+	//       dice qué CONTRATO habla, y no es lo mismo: dos builds distintos pueden compartir
+	//       capver, que es justamente el punto de tener una banda [CapverMin, Capver]. Sin la
+	//       columna, «¿qué máquinas no pueden hablar mi protocolo?» sólo se contesta esperando el
+	//       próximo latido de cada una. readCompatible: ningún camino de lectura filtra por ella.
+	// v50 = LO QUE EL AGENTE DIJO Y SE TIRABA (`devices.motivo_no_preguntar`, `devices.token_fuente`).
 	//       Las dos venían en el latido, se usaban para UNA línea de log «una vez por máquina» y no
 	//       se persistían — así que a «¿por qué esta máquina no puede preguntar?» (A99) y «¿por qué
 	//       su token no puede rotar?» (A102) el sistema no sabía responder, aunque el agente se lo
 	//       había dicho. El costo se pagó las dos veces leyendo código y leyendo un .cmd EN la
 	//       máquina. Las dos arrancan VACÍAS y el vacío significa «no lo dijo»: leer el silencio de
 	//       un agente viejo como «no puede» sería acusar a la flota de un defecto que nadie midió.
-	// v48 = CUÁNTOS SERVICIOS NO ENTRARON (`devices.servicios_omitidos`). El latido lleva un techo
+	//       readCompatible: es ADD COLUMN sobre `devices` y ninguna consulta existente filtra por
+	//       ellas, así que un lector anterior devuelve las mismas filas.
+	// v51 = CUÁNTOS SERVICIOS NO ENTRARON (`devices.servicios_omitidos`). El latido lleva un techo
 	//       y el agente cortaba la lista escribiendo el número en su propio log, en la máquina,
 	//       una vez por arranque: donde nadie mira. Del lado del cerebro, 64 truncados y 64
 	//       completos eran el mismo mensaje — y como la poda da de baja lo que no vino, no era una
 	//       ceguera sino una afirmación falsa: 26 servicios `docker` y 87 de Windows anotados como
 	//       revocados en `davantis-1`, entre ellos 11 contenedores que estaban corriendo (A116).
 	//       Arranca en 0 y el 0 significa «no recortó»: acá la ambigüedad con «no lo dijo» SÍ es
-	//       aceptable —al revés que en v47— porque un agente viejo que trunca deja el 0, que es
+	//       aceptable —al revés que en v50— porque un agente viejo que trunca deja el 0, que es
 	//       exactamente el comportamiento de hoy; no se pierde nada que ahora exista.
-	if latestSchemaVersion() != 48 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 48", latestSchemaVersion())
+	//       readCompatible: mismo criterio que v50.
+	//
+	// v52 = REPARAR LA BIFURCACIÓN DE 47 Y 48. Renumerar las de flota arregla las bases que venían
+	//       por main, y NO las que ya habían pasado por las 47/48 de flota: para ésas el aplicador
+	//       saltea las de main —`if m.version <= current { continue }`— y se quedan sin
+	//       `schema_floor` ni las columnas del panel, con `user_version` diciendo que todo se
+	//       aplicó. Medido el 2026-09-09 sobre una copia real en esquema 48: «error al grabar el
+	//       piso de lectura: no such table: schema_floor», o sea una base que el binario NO ABRE.
+	//       Repite el DDL de las dos (idempotente por construcción) en vez de invocarlas: una
+	//       migración que llama a otra ata dos versiones que después nadie puede mover aparte.
+	//
+	// LAS v50 Y v51 ERAN LA 47 Y LA 48 EN LA RAMA DE FLOTA Y SE RENUMERARON AL MERGEAR. Las dos
+	// ramas estrenaron 47 y 48 en paralelo con contenido distinto, y el aplicador saltea con
+	// `if m.version <= current { continue }`: dejarlas duplicadas no habría fallado, habría dejado
+	// migraciones MUERTAS en silencio — en los DOS sentidos, según por qué rama hubiera venido la
+	// base. La v52 es la mitad que la renumeración sola no cubre.
+	if latestSchemaVersion() != 52 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 52", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

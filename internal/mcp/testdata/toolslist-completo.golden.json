@@ -1,0 +1,2018 @@
+{
+  "tools": [
+    {
+      "name": "musubi_save_observation",
+      "description": "Guarda una observación persistente o lección de aprendizaje. Si hay un proveedor de embeddings configurado, indexa el contenido para búsqueda semántica.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Contenido completo de la observación o lección"
+          },
+          "id": {
+            "type": "string",
+            "description": "Identificador único opcional; si se omite se genera un UUID y se deduplica por contenido"
+          },
+          "importance": {
+            "type": "number",
+            "description": "Peso opcional (\u003e0, default 1.0) que prioriza la observación en el recall"
+          },
+          "mem_type": {
+            "type": "string",
+            "description": "Tipo de memoria opcional: 'semantic' (hechos/conocimiento estable), 'episodic' (eventos puntuales, se olvidan antes) o 'procedural' (cómo hacer algo, más durable). Modula el olvido. Vacío/desconocido = sin tipo (olvido neutro)."
+          },
+          "origin_paths": {
+            "type": "array",
+            "description": "Opcional: de qué habla esta observación, como 'ruta/al/archivo.go' o —mejor— 'ruta/al/archivo.go#NombreDelSimbolo'. Se guarda el fingerprint del contenido y el recall lo re-deriva del disco: si cambió, la observación se devuelve MARCADA como posiblemente rancia. Sirve para notas de estado ('X está pendiente', 'Y funciona así') que se vencen cuando el código se mueve. PREFERÍ EL SÍMBOLO: un archivo grande cambia todo el tiempo por motivos ajenos a la nota y la marca se vuelve ruido, mientras que el símbolo cambia cuando cambia lo que la nota describe (y aguanta que se le desplacen las líneas). PARA UN MÉTODO, USÁ LA FORMA CALIFICADA 'archivo.go#Tipo.Metodo' — es la MISMA clave que devuelve musubi_code_graph (sin el prefijo 'method:'), y es la que distingue métodos homónimos: 'archivo.go#Close' a secas cubre TODOS los Close del archivo, así que la marca salta por cambios que la nota no describe. Símbolos soportados en Go, TS/JS y Python (el calificador de método, sólo en Go). Máximo 10; anclar a una ruta o un símbolo inexistente es error.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "description": "Opcional: tenant DESTINO de la escritura, para sembrar un acervo compartido (ej. 'musubi-design'). Es un ORIGEN DECLARADO que sólo respeta una credencial write=any; una write=own lo ignora y escribe en el suyo, así que no abre la muralla entre proyectos. Vacío ⇒ el proyecto de la credencial."
+          },
+          "topic_key": {
+            "type": "string",
+            "description": "Clave de agrupación temática (ej. architecture/auth)"
+          }
+        },
+        "required": [
+          "topic_key",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall",
+      "description": "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Texto de la consulta"
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Medido 2026-08-10 contra la memoria real: pone lo correcto primero (+114 % en el primer resultado) y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo. Cuando el juez corre, la respuesta trae `reranked: true` y los items del tope vienen SIN `score`: el orden pasa a ser del juez, y re-ordenar por el puntaje model-free deshace su trabajo."
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "Techo de tokens del resultado (opcional; usa el default de la config)"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "musubi_ask",
+      "description": "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "La pregunta a responder con la memoria del proyecto"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "Techo de tokens de memoria a recuperar como contexto (opcional)"
+          }
+        },
+        "required": [
+          "question"
+        ]
+      }
+    },
+    {
+      "name": "musubi_memory_expand",
+      "description": "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "description": "Lista de ids de observaciones a expandir",
+            "items": {
+              "type": "string",
+              "description": "id de observación"
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "description": "Techo opcional de tokens a hidratar; recorta para no desbordar el contexto (0 = sin límite)"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      }
+    },
+    {
+      "name": "musubi_maintain",
+      "description": "DISPARADOR: corré esto DESPUÉS de una carga masiva —un ingest grande, una importación, una tanda de capturas— sin esperar al ciclo automático de 24 h. Ése es el único momento en que el ciclo automático llega tarde: la consolidación es lo que evita que el recall se llene de casi-duplicados justo cuando acabás de meter mucho. Fuera de ese caso no hace falta invocarla. Auto-mantenimiento de la memoria (model-free): fusiona observaciones casi-duplicadas y archiva las memorias frías de baja saliencia para mantener el recall filoso. Throttled: si el último mantenimiento fue hace poco devuelve un no-op (skipped) en vez de re-correr el ciclo (consolidación + VACUUM). Pasá force=true para ignorar el throttle. Devuelve un resumen.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "Si es true, corre el ciclo aunque el throttle indique que no toca todavía."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_save_fact",
+      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Entidad objeto (ej. 'JWT')"
+          },
+          "predicate": {
+            "type": "string",
+            "description": "Relación (ej. 'usa', 'depende_de')"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Entidad sujeto (ej. 'auth')"
+          },
+          "valid_from": {
+            "type": "string",
+            "description": "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."
+          }
+        },
+        "required": [
+          "subject",
+          "predicate",
+          "object"
+        ]
+      }
+    },
+    {
+      "name": "musubi_propose_facts",
+      "description": "PROPONE hechos (tripletas) que VOS (el agente-LLM) extrajiste, al grafo, en CUARENTENA: entran con procedencia 'llm-extract:*', NO son autoritativos, NO aparecen en recall_facts por default y NO invalidan nada. Es cognición 'caller-borrowed': Musubi no llama a ningún LLM, vos aportás las tripletas. Para volver autoritativa una propuesta, corroborála con musubi_save_fact (el mismo triple); para revisarlas, usá recall_facts con include_proposed=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "facts": {
+            "type": "array",
+            "description": "Lote de tripletas propuestas (al menos una). Cada ítem es un objeto {subject, predicate, object, valid_from?} con los mismos significados que musubi_save_fact.",
+            "items": {
+              "type": "object",
+              "description": "tripleta {subject, predicate, object, valid_from?}"
+            }
+          },
+          "model": {
+            "type": "string",
+            "description": "Opcional: id del modelo que extrajo las tripletas, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."
+          }
+        },
+        "required": [
+          "facts"
+        ]
+      }
+    },
+    {
+      "name": "musubi_cognition_stats",
+      "description": "Contadores del pilar de Cognición: hits/misses del caché y su tasa de acierto, cuántas veces actuó el portero de privacidad y qué TIPOS de secreto tapó (nunca los valores), escaladas del router de flota y qué circuitos están abiertos. Read-only: leer no resetea nada. Con la cognición apagada devuelve enabled=false, que es un estado normal y no un error. Sirve para responder con datos si el caché rinde, si el portero actúa seguido o nunca, y qué motor de la flota se está cayendo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_tool_usage",
+      "description": "Qué herramientas de Musubi se usan DE VERDAD: invocaciones, errores, rechazos, latencia media y p95 por tool, en una ventana de días. Sale del ledger persistente, así que sobrevive a los reinicios (a diferencia de los contadores de /metrics, que se resetean y ni siquiera existen en modo stdio). Read-only. Sirve para decidir con datos qué maquinaria gana su lugar y cuál nadie invoca — y para ver dónde se va la latencia.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "number",
+            "description": "Ventana en días hacia atrás (default 30)."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_readiness",
+      "description": "Qué tan lista está ESTA instalación, medido por lo que HIZO y no por lo que alguien declara. Cinco dimensiones, todas sacadas de datos que el cerebro ya registra: si lo invocan de verdad (ledger de uso), si esas invocaciones salen bien (errores y rechazos), si hay memoria viva y se la mantiene, si las contradicciones detectadas se arbitran o sólo se acumulan, y si el código está indexado. LA REGLA QUE LO HACE ÚTIL: una señal NO OBSERVADA puntúa CERO y no se saltea — no medir no puede subir el puntaje, que es como un indicador se convierte en una medalla. Cada dimensión devuelve la EVIDENCIA cruda con la que se calculó, y dice por qué puntuó cero cuando no hay dato: los umbrales son convenciones discutibles, los números no. Read-only y acotada al proyecto de la credencial. Sirve para responder «¿esto ya sirve?» con datos, y para comparar proyectos dentro del cerebro central.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "number",
+            "description": "Ventana en días para las dimensiones que salen del ledger (default 30)."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_skill_usage",
+      "description": "Qué pasó con cada skill del arsenal cuando se activó: cuántas veces matcheó, por qué evidencia (alcance declarado, glob real o comodín '*'), cuántas veces viajó su cuerpo y cuántas se lo pidieron por nombre. Marca tres patrones —muerta, candidata a retiro, candidata a alcance declarado— pero no retira ni apaga nada. No recibe parámetros. Read-only. OJO: mide activación y pedido; si una skill SIRVIÓ no se puede medir sin juicio, y esta tool no lo finge.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_propose_observation",
+      "description": "PROPONE una observación al libro mayor en CUARENTENA. Usala para TODO contenido generado por un LLM — incluida una respuesta de musubi_ask que quieras conservar. Entra con procedencia 'llm:\u003cmodelo\u003e', NO aparece en ningún recall, NO se puede promover a 'shared' y NO viaja al cerebro central. Para volverla visible hay que corroborarla con musubi_corroborate, que CONSERVA el sello de procedencia. Si el contenido lo decidió una persona o lo derivó código sin modelo, no uses esta tool: usá musubi_save_observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confidence": {
+            "type": "number",
+            "description": "Opcional (default 0.5): cuánta confianza le tenés, en [0,1]. Fuera de rango se RECHAZA, no se recorta. Mandá 0 explícito si no le creés nada."
+          },
+          "content": {
+            "type": "string",
+            "description": "El contenido propuesto."
+          },
+          "mem_type": {
+            "type": "string",
+            "description": "Opcional: 'semantic' | 'episodic' | 'procedural', igual que en musubi_save_observation."
+          },
+          "model": {
+            "type": "string",
+            "description": "Opcional: id del modelo que generó el contenido, para la procedencia (ej. 'claude-opus-4-8'). Vacío → 'caller'."
+          },
+          "topic_key": {
+            "type": "string",
+            "description": "Clave de agrupación temática, igual que en musubi_save_observation (ej. architecture/auth)."
+          }
+        },
+        "required": [
+          "topic_key",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "musubi_corroborate",
+      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID de la observación en cuarentena (el que devolvió musubi_propose_observation)."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall_facts",
+      "description": "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "description": "Opcional: marca ISO para consulta point-in-time (devuelve los hechos válidos en ese instante). Inválido → verdad actual."
+          },
+          "entity": {
+            "type": "string",
+            "description": "Entidad desde la que recorrer el grafo"
+          },
+          "include_proposed": {
+            "type": "boolean",
+            "description": "Opcional (default false): incluye las aristas PROPUESTAS por un LLM ('llm-extract:*'), que por default están en cuarentena. Para revisar propuestas antes de corroborarlas con musubi_save_fact."
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Profundidad del recorrido BFS (opcional; usa el default de la config). Ignorado con rank='pagerank'."
+          },
+          "rank": {
+            "type": "string",
+            "description": "Opcional: '' o 'bfs' (default, recorrido en anchura) | 'pagerank' (recall asociativo: rankea por relevancia multi-hop a la entidad). Compone con as_of (PageRank point-in-time)."
+          },
+          "to": {
+            "type": "string",
+            "description": "Opcional: si se indica, devuelve el CAMINO más corto (cadena de hechos) entre entity y esta entidad ('¿cómo se conectan?') en vez de la vecindad. Compone con as_of (camino point-in-time)."
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      }
+    },
+    {
+      "name": "musubi_entity_context",
+      "description": "Ensambla TODO el contexto de una entidad en una sola consulta barata en tokens: sus HECHOS del grafo + los GISTS de las observaciones (prosa) que la mencionan. Es el puente grafo\u003c-\u003eprosa; para el contenido completo de una observación usá musubi_memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "Entidad cuyo contexto se quiere reconstruir"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Profundidad del grafo (opcional; usa el default de la config)"
+          }
+        },
+        "required": [
+          "entity"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_semantic",
+      "description": "Busca observaciones por similitud semántica. Recibe TEXTO; el servidor genera el embedding. Requiere un proveedor de embeddings configurado. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Número máximo de resultados (por defecto 5)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto de consulta a buscar semánticamente"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_keyword",
+      "description": "Busca observaciones por texto completo (FTS5 de SQLite). Funciona siempre, sin necesidad de embeddings. Devuelve gists (titulares) por id; hidratá el contenido completo con musubi_recall o musubi_memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Número máximo de resultados (por defecto 5)"
+          },
+          "query_text": {
+            "type": "string",
+            "description": "Texto o palabras clave a buscar"
+          }
+        },
+        "required": [
+          "query_text"
+        ]
+      }
+    },
+    {
+      "name": "musubi_log_error",
+      "description": "Registra un error de compilación o testeo capturado para el bucle de telemetría.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "error_message": {
+            "type": "string",
+            "description": "Detalle completo del compilador o linter"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Ruta del archivo que causó el error"
+          },
+          "suggested_patch": {
+            "type": "string",
+            "description": "Parche correctivo sugerido (opcional)"
+          }
+        },
+        "required": [
+          "file_path",
+          "error_message"
+        ]
+      }
+    },
+    {
+      "name": "musubi_resolve_telemetry",
+      "description": "Marca un log de telemetría como resuelto una vez corregido el error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "ID del log de telemetría a marcar como resuelto"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_resolve_skills",
+      "description": "Resuelve las skills activas para lo que estás por hacer, junto con la telemetría sin resolver. Se puede preguntar por ARCHIVOS (skills atadas a un tipo de archivo) y/o declarando la FASE o la FORMA de la tarea (skills que se activan por el momento del trabajo, no por el archivo: planificar, revisar, auditar, orquestar). Al menos uno de los tres es obligatorio.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Cuánto cuerpo traer. 'auto' (default): el cuerpo viaja sólo con las skills que matchearon por un glob real o por el alcance que declaraste; las que entraron sólo por su comodín '*' llegan con nombre, descripción y 'cuando'. 'full': todos los cuerpos. 'summary': ninguno. Para pedir un cuerpo omitido usá musubi_list_skills con query:\"\u003cnombre\u003e\""
+          },
+          "modified_files": {
+            "type": "array",
+            "description": "Listado de archivos que van a ser modificados o leídos",
+            "items": {
+              "type": "string",
+              "description": "Ruta o nombre del archivo"
+            }
+          },
+          "phase": {
+            "type": "string",
+            "description": "Fase del trabajo, declarada por vos: 'phase:planning' (antes de tocar nada), 'phase:implementing' (escribiendo el cambio) o 'phase:reviewing' (cerrándolo)"
+          },
+          "task": {
+            "type": "string",
+            "description": "Forma de la tarea, declarada por vos: 'task:audit' (auditar un codebase o un área) o 'task:orchestration' (tarea grande y paralelizable)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_detect_stack",
+      "description": "Detecta el stack/ecosistema del proyecto actual (lenguajes y frameworks) inspeccionando archivos de manifiesto. No recibe parámetros. Devuelve JSON para que el agente investigue mejores prácticas oficiales y luego guarde skills con musubi_save_skill.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_save_skill",
+      "description": "Guarda una skill generada como {name}.yaml en .musubi/skills/ y crea el sentinel para no re-generar. IMPORTANTE: usar solo después de confirmar las reglas con el usuario. Por defecto NO sobrescribe skills existentes (pasa overwrite=true para forzar).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "always_because": {
+            "type": "string",
+            "description": "Sólo si un trigger es '*': POR QUÉ la skill aplica siempre (ej. 'se activa por tipo de tarea, no por archivo'). Sin esto, un '*' no se puede promover al arsenal compartido."
+          },
+          "capabilities": {
+            "type": "array",
+            "description": "Herramientas requeridas en PATH (opcional)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Descripción breve de la skill (opcional)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre slug de la skill (solo letras minúsculas, números y guiones)"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Si es true, sobrescribe una skill existente (por defecto false)"
+          },
+          "rules": {
+            "type": "string",
+            "description": "Reglas de la skill en texto plano (mínimo 20 caracteres)"
+          },
+          "triggers": {
+            "type": "array",
+            "description": "Globs que activan la skill (ej. '*.go')",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          }
+        },
+        "required": [
+          "name",
+          "triggers",
+          "rules"
+        ]
+      }
+    },
+    {
+      "name": "musubi_search_skills",
+      "description": "Busca skills aplicables al proyecto actual desde el catálogo remoto. Filtra por ecosistema, dependencias, triggers y capabilities, y EXCLUYE las skills que el usuario ya rechazó (aprende de musubi_log_skill_decision). Devuelve candidatos con evidencia de aplicabilidad.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Cantidad máxima de resultados (usa MaxCandidates de la config por defecto)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto libre para filtrar candidatos por nombre o descripción (opcional)"
+          },
+          "stack": {
+            "type": "string",
+            "description": "Filtrar por ecosistema específico (ej. 'Go', 'Node.js') (opcional)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_discover_skills",
+      "description": "Descubre Agent Skills (SKILL.md) de la comunidad, filtradas por el stack del proyecto. Si no se pasa 'query', la deriva del stack detectado. Lee un catálogo curado y estático por default (cero rate limit) y cae a la API del marketplace en vivo si el catálogo no está disponible. Devuelve candidatos con su 'githubUrl' para que el usuario los REVISE e instale: Musubi NO instala ni ejecuta nada (contenido no confiable). Opt-in (sourcing.marketplace_enabled); degrada con gracia si está deshabilitado o la red cae.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Cantidad máxima de resultados (1-100, por defecto 20)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto de búsqueda (opcional; por defecto se deriva del stack del proyecto)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_list_skills",
+      "description": "Lista skills guardadas. Con source=local (default) las de este proyecto (.musubi/skills/); con source=central el ARSENAL del cerebro, marcando cada una con installed:true|false; con source=all las locales más las del arsenal que falten. Es el paso previo a musubi_install_skill, que exige el nombre exacto. Distinta de musubi_search_skills, que puntúa un catálogo REMOTO para recomendar. Devuelve un array (vacío si no hay ninguna); una skill con YAML inválido se saltea sin tumbar el resto.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de resultados; ausente o ≤ 0 devuelve todas (opcional)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Filtra por subcadena en nombre o descripción, sin distinguir mayúsculas (opcional)"
+          },
+          "source": {
+            "type": "string",
+            "description": "De dónde listar: 'local' (default, el disco de este proyecto), 'central' (el arsenal) o 'all' (ambas, sin duplicar lo ya instalado). 'central' y 'all' requieren sync.central_url configurado y fallan explícitamente si no lo está"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_promote_skill",
+      "description": "Sube una skill LOCAL al arsenal del cerebro central, para que quede disponible al arrancar cualquier otro proyecto. Explícita a propósito: nada sube solo, la curaduría es del dueño. Requiere sync.central_url configurado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Slug de la skill local a promover"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Reemplaza la del arsenal si ya existe (default false)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_install_skill",
+      "description": "Baja una skill del arsenal del cerebro central y la escribe en este proyecto, marcada como adoptada. Pasa por el mismo gate de calidad y la misma guarda de rutas que musubi_save_skill. Requiere sync.central_url configurado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Slug exacto de la skill en el arsenal"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Reemplaza la local si ya existe (default false)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_log_skill_decision",
+      "description": "Registra una decisión de skill (aceptada o rechazada) en el log persistente de SQLite. Útil para auditar qué skills se adoptaron y por qué.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "Decisión tomada: 'accepted' o 'rejected'"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre legible de la skill (opcional si se provee skill_id)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Justificación de la decisión (opcional)"
+          },
+          "skill_id": {
+            "type": "string",
+            "description": "Identificador slug de la skill (ej. 'go-gin')"
+          }
+        },
+        "required": [
+          "skill_id",
+          "decision"
+        ]
+      }
+    },
+    {
+      "name": "musubi_conflicts",
+      "description": "Lista las relaciones semánticas entre observaciones que esperan tu veredicto (status pending). Úsalo para revisar posibles contradicciones y luego resolvé con musubi_judge. SIN ARGUMENTOS devuelve la cola COMPLETA, que en una memoria grande son centenas de relaciones: si sólo querés el número para un panel, pedí count_only=true — medido en el cerebro central, la lista entera pesa 77 KB, y bajarla para leer un contador es el desperdicio más caro de esta tool. `count` es SIEMPRE el total que matchea los filtros aunque `limit` recorte la lista, y si se recortó viene `truncated:true`. OJO CON min_confidence: en una relación PENDIENTE la confianza es max(léxico, coseno), y el coseno entre documentos SIN relación ya llega a 0,88 — así que un umbral alto NO trae «las contradicciones más seguras» sino las más PARECIDAS. Sirve para acotar el payload, no como ranking de gravedad. Desde la v27 cada relación trae las DOS señales por separado (`lex` y `cosine`), y `min_lex` filtra por la léxica sola, que es la que significa algo estable. Las relaciones detectadas ANTES de la v27 no tienen el desglose: vienen sin esos campos, que es «no se sabe» y no «cero».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "count_only": {
+            "type": "boolean",
+            "description": "true = devolvé sólo el conteo, sin las relaciones. Para paneles que muestran un número."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Tope de relaciones devueltas (0 = sin tope). NO afecta a `count`, que sigue siendo el total."
+          },
+          "min_confidence": {
+            "type": "number",
+            "description": "Descarta las de confianza menor, entre 0 y 1. Acota el payload; no es un ranking de gravedad (ver la descripción de la tool). Para TRIAR usá min_lex."
+          },
+          "min_lex": {
+            "type": "number",
+            "description": "Filtra por el SOLAPE LÉXICO solo (0 a 1): comparten trigramas. Es la señal estable y el filtro que sirve para triar, a diferencia de min_confidence. Descarta las relaciones detectadas antes de la v27, que no guardan el desglose — no se puede afirmar que superan un umbral que nadie midió."
+          },
+          "order": {
+            "type": "string",
+            "description": "recent (default, más nuevas primero) | confidence (mayor confianza primero) | oldest (FIFO, la pendiente más vieja primero). SI VAS A DRENAR LA COLA CON UN `limit`, USÁ oldest: los otros dos órdenes son ESTABLES, así que pedir siempre las primeras N devuelve siempre las mismas N y el fondo de la cola queda inalcanzable por construcción. Cuando eso pasa, la respuesta te lo avisa con `oldest_pending_at` y `tail_hint`."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_judge",
+      "description": "Emite el veredicto de una relación entre dos observaciones (resolución de conflictos model-free). relation ∈ {related, compatible, scoped, conflicts_with, supersedes, not_conflict}. Si es 'supersedes', la observación target queda oculta del recall.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Justificación breve (opcional)"
+          },
+          "relation": {
+            "type": "string",
+            "description": "Veredicto: related | compatible | scoped | conflicts_with | supersedes | not_conflict"
+          },
+          "relation_id": {
+            "type": "string",
+            "description": "ID de la relación a juzgar (de musubi_conflicts o de la respuesta de save)"
+          }
+        },
+        "required": [
+          "relation_id",
+          "relation"
+        ]
+      }
+    },
+    {
+      "name": "musubi_doctor",
+      "description": "Diagnostica y repara la base de memoria (integridad SQLite, índice FTS, digests, relaciones huérfanas, esquema). Sin args: diagnóstico completo. Con 'deep: false': pulso de salud barato, sin las pasadas caras. Con 'check': corre ese check. Con 'repair: true' y 'check': repara (mode plan|dry-run|apply; default dry-run). 'apply' hace un backup previo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "check": {
+            "type": "string",
+            "description": "Código del check (ej. fts_consistency, missing_digests, orphan_relations). Opcional."
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "false = pulso rápido: saltea db_integrity, fts_consistency y stale_gists (las tres pasadas caras, ~675 ms). Ausente o true = diagnóstico completo. Usá false para sondeos periódicos; true cuando el resultado se va a creer."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Modo de reparación: plan | dry-run | apply (default dry-run)."
+          },
+          "repair": {
+            "type": "boolean",
+            "description": "Si es true, repara el check indicado (requiere 'check')."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_phase",
+      "description": "Pipeline por fases del loop dirigido (model-free): Musubi secuencia la tarea por fases (explore→plan→code→verify) y te recuerda la fase actual en cada turno. action ∈ {status, start, advance, set, clear}. 'start' requiere 'task'; 'set' requiere 'phase'. Llamá action=advance al terminar cada fase.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "status | start | advance | set | clear (default status)"
+          },
+          "phase": {
+            "type": "string",
+            "description": "Fase destino dentro de la secuencia (requerido para set)"
+          },
+          "task": {
+            "type": "string",
+            "description": "Nombre de la tarea (requerido para start)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_work",
+      "description": "Pizarra compartida para orquestar SUB-AGENTES en paralelo (model-free). Protocolo: 1) el principal descompone y postea unidades con action=plan; 2) lanza N sub-agentes (Task tool + mcpServers:[musubi]); cada uno hace action=claim (toma una unidad atómicamente con un LEASE), la ejecuta y action=complete con su result; 3) el principal monitorea con action=status y consolida al estar todas done. El claim devuelve la unidad + fencing_token; el sub-agente DEBE renovar con action=heartbeat (id, agent, fencing_token) o la unidad se recicla al vencer el lease (at-least-once: el trabajo debe ser idempotente). action=savings estima los tokens ahorrados por delegar. CONTRACT-NET (cuando los agentes difieren en aptitud): action=bid (id, agent, bid=score MAYOR es mejor, note opcional) → el principal ve action=bids y adjudica con action=award (id) al mejor; el ganador queda claimed (con lease/fencing). AUTONOMÍA DECLARADA: cada unidad lleva su techo en `autonomy` (L1 = sólo reporta · L2 = arregla pero el cierre necesita la firma de OTRO · L3 = desatendido; ausente ⇒ L3, el comportamiento de siempre) y al cerrar el agente declara `effect` (report = no cambié nada | apply = cambié algo; ausente ⇒ apply). Cerrar con effect=apply exige L3, o L2 con una firma VIGENTE puesta por action=approve (id, reviewer ≠ dueño) sobre ESE intento: si a la unidad le vence el lease y la retoma otro, la firma se invalida sola y el trabajo nuevo no cierra amparado por la revisión del viejo. Cerrar como failed nunca se frena. action ∈ {plan, claim, heartbeat, complete, approve, status, savings, clear, bid, award, bids}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "plan | claim | heartbeat | complete | approve | status | savings | clear | bid | award | bids"
+          },
+          "agent": {
+            "type": "string",
+            "description": "Para claim/heartbeat/complete: etiqueta del sub-agente (dueño del lease)"
+          },
+          "batch": {
+            "type": "string",
+            "description": "ID del batch (plan: opcional, se genera; claim/status/clear: el batch objetivo; claim vacío toma de cualquiera)"
+          },
+          "bid": {
+            "type": "number",
+            "description": "Para bid: score de la oferta del agente (MAYOR = mejor aptitud/confianza para la unidad)"
+          },
+          "effect": {
+            "type": "string",
+            "description": "Para complete: qué HIZO el agente — report (no cambié nada: diagnóstico, hallazgos) | apply (cambié algo). Ausente ⇒ apply, que es fail-closed: quien no declara se trata como quien tocó. Una unidad L1 rechaza apply; una L2 lo exige firmado"
+          },
+          "fencing_token": {
+            "type": "number",
+            "description": "Para heartbeat/complete: el fencing_token que devolvió el claim/award (defiende contra un agente expropiado que revive)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Para heartbeat/complete/approve/bid/award/bids: ID de la unidad"
+          },
+          "note": {
+            "type": "string",
+            "description": "Para bid: nota opcional que justifica la oferta"
+          },
+          "result": {
+            "type": "string",
+            "description": "Para complete: resultado/resumen producido por el sub-agente"
+          },
+          "reviewer": {
+            "type": "string",
+            "description": "Para approve: quién firma la revisión. NO puede ser el dueño de la unidad — el que hace no puede ser el que aprueba"
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "units": {
+            "type": "array",
+            "description": "Para plan: lista de unidades [{title, spec, autonomy}] a postear. `autonomy` (L1|L2|L3) es el techo de lo que el sub-agente puede hacer solo; ausente ⇒ L3",
+            "items": {
+              "type": "object",
+              "description": "unidad de trabajo {title, spec, autonomy}"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_debate",
+      "description": "Debate multi-agente (Society of Minds), andamiaje EJECUTABLE y DETERMINISTA model-free: Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas y CUENTA los votos; los sub-agentes (LLM) producen posturas, críticas y votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás como material de CRÍTICA a la ronda siguiente; repetís post→advance hasta agotar rondas; 4) cada agente action=vote (id, agent, choice); 5) action=tally (id) recuenta DETERMINISTA: gana el choice con máximo ESTRICTO que alcance el quórum → cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: advance+re-votar, o deferí a musubi_judge). action=status (id) da el estado completo. El juicio SEMÁNTICO se queda en el LLM. MODEL Y EVIDENCE SON OBLIGATORIOS en post y vote. `model`: qué modelo produjo la postura o el voto —dos jueces del MISMO modelo no son dos opiniones, y sin esta columna la frase «esto lo revisaron tres modelos distintos» es inverificable a posteriori—. ⚠️ NO lo codifiques dentro de `agent` (seguridad@sonnet): `agent` es la clave ÚNICA de las dos tablas, así que un lente que cambia de modelo entre rondas deja de ser el mismo votante y su voto se SUMA en vez de reemplazar, inflando el total en silencio. `evidence` ∈ {deterministica (corrió las comprobaciones y tiene la salida), inferida (leyó y razonó, sin ejecutar), ninguna (no pudo comprobar nada — es una respuesta válida)}. En open, `gated_choice` opcional: el choice que NO puede ganar sin al menos un voto con evidencia deterministica. Con gated_choice=\u003ctu veredicto aprobatorio\u003e, un panel que opinó sin correr nada no cierra y el tally devuelve gated=true. Rechazar NUNCA lleva compuerta —un panel que no pudo verificar nada tiene que poder rechazar igual— y UN solo voto deterministico la desarma, sin reemplazar al quórum. Sin gated_choice, el comportamiento es el de siempre. Límite honesto: la clase de evidencia es una DECLARACION, no una prueba; detecta al panel que no verificó, no al que miente. action ∈ {open, post, advance, vote, tally, status}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "open | post | advance | vote | tally | status"
+          },
+          "agent": {
+            "type": "string",
+            "description": "Para post/vote: etiqueta del sub-agente participante"
+          },
+          "choice": {
+            "type": "string",
+            "description": "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Para post/vote (OBLIGATORIO): deterministica | inferida | ninguna"
+          },
+          "gated_choice": {
+            "type": "string",
+            "description": "Para open (opcional): el choice que no puede ganar sin al menos un voto con evidencia deterministica"
+          },
+          "id": {
+            "type": "string",
+            "description": "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"
+          },
+          "model": {
+            "type": "string",
+            "description": "Para post/vote (OBLIGATORIO): el modelo que produjo la postura o el voto. No lo metas dentro de 'agent'"
+          },
+          "quorum": {
+            "type": "number",
+            "description": "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"
+          },
+          "rounds": {
+            "type": "number",
+            "description": "Para open: tope de rondas de debate (\u003e=1)"
+          },
+          "stance": {
+            "type": "string",
+            "description": "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"
+          },
+          "topic": {
+            "type": "string",
+            "description": "Para open: la pregunta/tema del debate"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_workflow",
+      "description": "Motor de orquestación DAG model-free: Musubi NO ejecuta los steps — define el grafo, persiste el run en SQLite (resumible entre sesiones) y devuelve qué steps están ready; VOS ejecutás y reportás. Loop: action=start (run_id + `workflow` id de .musubi/workflows/\u003cid\u003e.yaml, o `definition` YAML inline) → ready; ejecutás y action=complete (run_id, step, result[, status done|failed, idempotency_key]) → nuevos ready; action=next reconsulta; action=status estado completo; action=resume retoma en otra sesión. Un step queda ready cuando sus `needs` están done/skipped; puede llevar `when` (gate condicional, se salta si es falsa) y `repeat_while`+`max_iterations` (loop). Features avanzadas activadas por el YAML del step, que la RESPUESTA te va guiando cuando el run se pausa: SAGA (`compensate` → action=rollback devuelve el plan LIFO; reportás cada undo con action=compensated); HITL (`await` pausa el run en waiting_input → action=provide con input y status); verificación Reflexion (`verify`: complete deja el step en `verifying` hasta action=verify con verdict pass|fail — fail reabre para reintentar hasta max_iterations; el candidato queda CONGELADO: no podés re-completar un step en `verifying`, y con `verify_target` (globs de archivos, soporta `**`) Musubi deriva la identidad del DISCO al congelar y la RE-DERIVA al emitir el veredicto — si los archivos cambiaron, tu pass no se aplica y el gate se reabre, porque revisaste otra cosa); auditoría con action=journal (traza append-only) y action=otel (export OTLP). Si un step failed bloquea todo progreso, el run pasa a `failed`; action=abort lo cierra a `aborted` (ambos aún compensables con rollback). action=validate valida sin correr; action=list lista runs. action ∈ {start, next, complete, status, resume, validate, list, journal, otel, rollback, abort, compensated, provide, verify}. Las respuestas incrementales omiten `definition` (inmutable tras start); usá status/resume para el snapshot completo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "start | next | complete | status | resume | validate | list | journal | otel | rollback | abort | compensated | provide | verify"
+          },
+          "definition": {
+            "type": "string",
+            "description": "Para start: definición YAML inline (alternativa a 'workflow')"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Para complete (opcional): clave de idempotencia; reintentar con la misma clave es un no-op seguro"
+          },
+          "input": {
+            "type": "string",
+            "description": "Para provide (HITL): la decisión/dato del humano que resuelve el gate en espera"
+          },
+          "result": {
+            "type": "string",
+            "description": "Para complete: resultado/resumen del step"
+          },
+          "run_id": {
+            "type": "string",
+            "description": "Identificador del run (lo elegís vos; persiste y permite resume)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "step": {
+            "type": "string",
+            "description": "Para complete: id del step que terminaste"
+          },
+          "target_digest": {
+            "type": "string",
+            "description": "Para verify (opcional): digest del candidato que verificaste, tal como vino en el step_verifying del journal. Ata el veredicto a ESOS bytes: si el candidato cambió, el veredicto se rechaza en vez de dar por bueno algo que nadie revisó"
+          },
+          "verdict": {
+            "type": "string",
+            "description": "Para verify: pass (la verificación pasó → done) | fail (falló → reflexión + reintento). La reflexión va en 'result'"
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Para start: id del workflow en .musubi/workflows/\u003cid\u003e.yaml"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_tokens",
+      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "status | reset (default status)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_save_code",
+      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "gist": {
+            "type": "string",
+            "description": "Resumen corto de qué hace el archivo"
+          },
+          "path": {
+            "type": "string",
+            "description": "Ruta del archivo, relativa a la raíz del proyecto (una absoluta sirve si cae DENTRO del proyecto; apuntar a otro árbol se rechaza)"
+          },
+          "symbols": {
+            "type": "string",
+            "description": "Símbolos clave y sus líneas, p.ej. 'Load() L10; parse() L42' (opcional, para lecturas dirigidas luego)"
+          }
+        },
+        "required": [
+          "path",
+          "gist"
+        ]
+      }
+    },
+    {
+      "name": "musubi_recall_code",
+      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo (el caso típico es preguntarle al cerebro CENTRAL por un archivo que vive en otra máquina) — el gist puede seguir sirviendo, pero nadie lo verificó. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "Opcional: sha256 en hex del contenido ACTUAL del archivo. Sirve para que un servidor que no ve tu disco (el cerebro central) pueda igual decirte si el gist está fresco, en vez de responder 'unknown'. Es para llamadores PROGRAMÁTICOS (hooks, puentes, otro daemon) que ya tienen el contenido en la mano: si sos un agente y tendrías que leer el archivo para hashearlo, no lo mandes — leer el archivo es justo lo que esta tool viene a evitar."
+          },
+          "path": {
+            "type": "string",
+            "description": "Ruta del archivo a recordar"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    {
+      "name": "musubi_insights",
+      "description": "Resumen de observabilidad activa (model-free): estado de la memoria (observaciones totales/activas/archivadas), hotspots de archivos con más errores no resueltos, decisiones de skills (aceptadas/rechazadas por su decisión más reciente), último mantenimiento y salud del ciclo. Sin parámetros. Útil para ver de un vistazo qué aprendió Musubi del proyecto.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_sdd",
+      "description": "Flujo SDD guiado (Spec-Driven Development) sobre el motor DAG, model-free. Arma el workflow canónico de un cambio —proposal→spec→design→tasks→implement→verify→archive— sin escribir YAML y te guía fase por fase (devuelve la directiva + la plantilla en .musubi/templates/sdd/). Al cerrar una fase con action=complete persiste su CONTRATO (summary + artifacts + risks + next_recommended) en memoria bajo sdd/\u003cchange\u003e/\u003cphase\u003e, que las fases siguientes recuperan con musubi_recall en vez de releer archivos. Resumible entre sesiones. Protocolo: action=start (change) → fase activa; action=complete (change, phase, summary[, artifacts, risks, next_recommended]) → siguiente fase; action=next/status reconsulta. action ∈ {start, next, complete, status}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "start | next | complete | status"
+          },
+          "artifacts": {
+            "type": "array",
+            "description": "Para complete: artefactos producidos (rutas/ids)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "change": {
+            "type": "string",
+            "description": "Nombre del cambio/feature (identifica el flujo; se normaliza a slug)"
+          },
+          "next_recommended": {
+            "type": "string",
+            "description": "Para complete: siguiente paso recomendado"
+          },
+          "phase": {
+            "type": "string",
+            "description": "Para complete: fase que cerrás (proposal|spec|design|tasks|implement|verify|archive)"
+          },
+          "risks": {
+            "type": "array",
+            "description": "Para complete: riesgos detectados",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Para complete: done | failed (default done)"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Para complete: resumen ejecutivo del resultado de la fase (obligatorio)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_author_skill",
+      "description": "Creación AVANZADA de skills (model-free): valida una skill contra las best-practices de Agent Skills (description disparadora en 3ª persona ≤1024 chars, name sin reservadas, triggers acotados, rules concisas con ejemplo, sin anti-patrones) y devuelve un REPORTE SCOREADO (0-100 + errores que bloquean + warnings + fixes) SIN guardar (save=false, default) para iterar; con save=true guarda SOLO si pasa el gate. Derivá las rules de FUENTES CONFIABLES (doc oficial + repos reputados: anthropics/skills, awesome-cursorrules); pasá source_url y su tier (official\u003ecurated\u003ecommunity). Usalo antes de musubi_save_skill.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "always_because": {
+            "type": "string",
+            "description": "Sólo si un trigger es '*': POR QUÉ la skill aplica siempre (mínimo 20 caracteres). Declararlo apaga el warning 'triggers_over_broad' y es lo único que permite promoverla al arsenal compartido."
+          },
+          "capabilities": {
+            "type": "array",
+            "description": "Herramientas requeridas en PATH (opcional)",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Description en TERCERA persona que dice QUÉ hace + CUÁNDO usarla (cláusula 'Use when …'); es el disparador. ≤1024 chars."
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre slug de la skill (minúsculas, números y guiones; gerundio recomendado, ej. 'processing-go-files')"
+          },
+          "rules": {
+            "type": "string",
+            "description": "Reglas concisas y accionables, idealmente con un ejemplo (bloque de código). Derivalas de doc oficial del stack."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Si es true, guarda la skill si pasa el gate; si es false (default) solo devuelve el reporte de calidad"
+          },
+          "source_url": {
+            "type": "string",
+            "description": "URL de la fuente de la que derivaste la skill (para el tier de confiabilidad; opcional)"
+          },
+          "triggers": {
+            "type": "array",
+            "description": "Globs acotados que activan la skill (ej. '*.go'); evitá '*' (dispara siempre). Si de verdad aplica siempre, poné '*' Y declaralo en always_because.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          }
+        },
+        "required": [
+          "name",
+          "rules"
+        ]
+      }
+    },
+    {
+      "name": "musubi_detect_changes",
+      "description": "DISPARADOR: ANTES de cerrar un cambio —al abrir el PR, o en la fase verify de SDD— para saber QUÉ verificar y QUÉ decisión guardada pudo quedar obsoleta. No es una tool de exploración: se invoca sobre un diff que ya existe. Inteligencia de cambios de código (model-free): corre `git diff` y, para cada archivo tocado, RE-DERIVA sus símbolos del contenido ACTUAL (go/ast para .go; escáner liviano para ts/js/py) — nunca de datos guardados, así el diff y los símbolos nunca se desalinean. Devuelve, por archivo: change_type, los símbolos afectados por los hunks, si su gist de memoria de código quedó stale (fingerprint), y qué observaciones/decisiones lo referencian. Es la forma de acotar QUÉ verificar y QUÉ decisión quedó potencialmente obsoleta tras un cambio (útil en la fase verify de SDD). Devuelve ADEMAS `revision`: cuanta revision pide el cambio, DERIVADA del cambio mismo y no del criterio de nadie — siete senales enteras (archivos, lineas, simbolos, paquetes, callers y paquetes en el radio de impacto, y si el cambio SACA codigo -un archivo borrado entero, o uno que saca mas de lo que pone: modificar una linea NO cuenta-) puntuadas por escalones 0-2 sobre un total de 13, CALIBRADOS contra los PRs reales de este repo, con su desglose para que la cuenta se pueda rehacer a mano. De ahi sale el panel del debate: minima 1 juez/1 ronda/quorum 1, estandar 3/2/2, profunda 5/2/3. Usalo para dimensionar `musubi_debate` en vez de pedir siempre el mismo panel. OJO con `radio_ciego`: si el grafo no cubre algun archivo o simbolo de CODIGO tocado, el nivel NO puede bajar a minima y el motivo va escrito, porque un radio 0 sin cobertura no dice «no arrastra a nadie» sino «no puedo saberlo». Un README o un YAML no cuentan: no son codigo cuyo radio quedo sin medir, son archivos sin radio. Solo-lectura. ref opcional (base de comparación; default working tree vs HEAD); staged opcional (compara el índice).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "Base de comparación del diff (ej. 'HEAD~1', 'main'); opcional, default working tree vs HEAD"
+          },
+          "staged": {
+            "type": "boolean",
+            "description": "Si es true, compara el índice (git diff --staged); opcional"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_promote",
+      "description": "Promueve una observación LOCAL (privada del proyecto) a SHARED, marcándola como candidata a la memoria central del cerebro híbrido. Es idempotente: promover una ya compartida es un no-op exitoso. Requiere el id de la observación (el que devuelve musubi_save_observation o un recall). No sincroniza nada por sí solo: sólo cambia el scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID de la observación a promover a 'shared'"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_sync_status",
+      "description": "Salud del sync saliente del cerebro híbrido (F2): cuántas observaciones 'shared' están pendientes de enviar al cerebro central, cuántas ya se enviaron, cuántas quedaron en dead-letter, la antigüedad de la más vieja pendiente y el último error. Read-only, sin parámetros.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_sync_requeue",
+      "description": "Reintenta el envío de las observaciones que quedaron en dead-letter del sync saliente (F2): las devuelve a la cola de envío al cerebro central. Útil tras un corte del central o de la VPN. Sin parámetros; devuelve cuántas re-encoló.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_sync_pull",
+      "description": "Sync ENTRANTE del cerebro híbrido (C5.3): devuelve un lote de la memoria 'shared' del proyecto de la credencial (aislado por tenant) con rowid mayor a after_rowid, para que un cliente en team mode la baje e ingiera localmente y su recall la surfacee sola. Read-only. Parámetros: after_rowid (cursor, 0 = desde el principio), limit (tope del lote, default 200). Devuelve {items, next_cursor}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "after_rowid": {
+            "type": "integer",
+            "description": "cursor: solo devuelve observaciones con rowid mayor a este (0 = desde el principio)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "tope de observaciones en el lote (default 200)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_codegraph_index",
+      "description": "Indexa el GRAFO DE CÓDIGO del proyecto (Track 20): deriva del AST (model-free) los símbolos y aristas (IMPORTS/CONTAINS/CALLS) y los persiste, para consultarlos SIN leer archivos. mode='full' (default) re-deriva TODOS los paquetes: corré esto la primera vez. mode='incremental' reconcilia BARATO con el working tree — sólo re-deriva los paquetes con archivos modificados/nuevos, PODA los de archivos borrados y salta lo sin cambios (ideal tras editar unos pocos archivos). Salta .git/.musubi/vendor/testdata. Devuelve {packages, nodes, edges} (incremental agrega pruned y skipped).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "'full' (default): re-deriva todo el repo. 'incremental': sólo lo cambiado desde el último índice (más barato)."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_codegraph_push",
+      "description": "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "edges": {
+            "type": "array",
+            "description": "aristas del grafo de código a federar",
+            "items": {
+              "type": "object",
+              "description": ""
+            }
+          },
+          "gists": {
+            "type": "array",
+            "description": "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada",
+            "items": {
+              "type": "object",
+              "description": ""
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "description": "nodos del grafo de código a federar",
+            "items": {
+              "type": "object",
+              "description": ""
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "description": "proyecto destino (opcional; sólo lo respeta una credencial write=any; un write=own usa siempre el suyo)"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges"
+        ]
+      }
+    },
+    {
+      "name": "musubi_code_graph",
+      "description": "Consulta el grafo de código SIN leer archivos (Track 20). Con 'symbol' (node_key 'path#kind:name') devuelve el nodo + sus callees (a quién llama), callers (quién lo llama) e imports de su archivo. Con 'path' devuelve los símbolos que contiene el archivo + sus imports. Marca 'stale' si el archivo cambió desde que se indexó (conviene re-indexar). Salida compacta (claves, no cuerpos): la forma barata en tokens de navegar el código. Si NO encuentra lo pedido, dice POR QUÉ ('hint'): si el archivo está indexado y qué símbolos sí tiene, si existe en disco, y de qué commit es el índice ('indexed_head') — un miss en otra rama no es un grafo roto.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Ruta de un archivo (alternativa a symbol): devuelve sus símbolos e imports"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/mcp/methods.go#func:toolSaveCode')"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_code_graph_viz",
+      "description": "Grafo de CÓDIGO renderizable en UNA llamada (Track 20): nodos (símbolos, con key/kind/name/path/degree) + aristas (CALLS/IMPORTS/CONTAINS), scopeado al proyecto. Es la fuente para dibujar el grafo de código (a diferencia de musubi_code_graph, que es vecindad-por-símbolo). Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve los top-N nodos por grado (default 400, parámetro `limit`) y sólo las aristas con AMBOS extremos entre ellos, así que se recortan mucho más que los nodos — con 400 de 8193 nodos pueden quedar 1149 aristas de 17661. Leé `total_nodes`/`truncated`, `total_edges`/`edges_truncated` y `total_modules` para el tamaño real.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de nodos (default 400)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_brain_graph",
+      "description": "Grafo de MEMORIA renderizable en UNA llamada: neuronas (observaciones, con id/topic/domain/author/importance/heat/gist) + sinapsis (relaciones related/compatible/supersedes/conflicts_with…). Es el gemelo de memoria de musubi_code_graph_viz — la fuente para dibujar el grafo del cerebro. Read-only. ⚠️ EL LARGO DE LOS ARRAYS NO ES EL TOTAL: devuelve las top-N neuronas por saliencia (default 300, parámetro `limit`) y sólo las sinapsis con AMBOS extremos entre ellas, así que las aristas se recortan MUCHÍSIMO más que los nodos — con 300 de 3660 neuronas pueden quedar 486 sinapsis de 3620. Para saber el tamaño real leé `total_neurons`/`truncated` y `total_synapses`/`synapses_truncated`; NO concluyas de un `synapses` corto o vacío que la memoria no tiene relaciones.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Máximo de neuronas (default 300)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_impact",
+      "description": "'¿Qué se rompe si cambio esto?' (Track 20): devuelve el cierre TRANSITIVO de callers de un símbolo (quién lo llama directa o indirectamente), recorriendo el grafo de CALLS hacia atrás (BFS acotado, model-free). Útil antes de modificar una función para dimensionar el blast radius. Requiere que el grafo esté indexado (musubi_codegraph_index).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_depth": {
+            "type": "number",
+            "description": "Profundidad máxima del recorrido (opcional, default 5)"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "node_key del símbolo a analizar ('path#kind:name')"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    },
+    {
+      "name": "musubi_map",
+      "description": "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`\u003e0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es \u003e0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_code_context",
+      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/memory/codemem.go#func:SaveCodeMemory')"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    },
+    {
+      "name": "musubi_whoami",
+      "description": "Devuelve la IDENTIDAD del principal autenticado: nombre (persona), proyecto y capacidades (read: own|all, write: none|own|any). Read-only; cualquier principal puede llamarla (incluida la cabina write=none). La usa el cuerpo (musubi-body) para mostrar con qué identidad está conectado al cerebro de empresa. La identidad se deriva server-side del token, nunca del cliente. En stdio local (sin token) devuelve authenticated=false.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_token_new",
+      "description": "ADMIN. Da de alta un miembro del cerebro central y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). name identifica a la persona (clave de cuota + atribución). ALCANCE y AUTORIDAD son ejes independientes: read = own|all (ve su proyecto | ve todos) y write = none|own|any (no muta | muta sólo lo suyo | muta cualquiera declarándolo). role (reader|writer|admin, default writer) es sólo el atajo para los pares comunes; read/write declarados mandan. project es obligatorio salvo cabina (write=none). Requiere principal admin: la usa el panel de administración del cuerpo para no mintear por terminal. Surte efecto en ≤10s (recarga en caliente).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del miembro (identidad de la persona; único)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id que se le atribuye (aísla su recall). Obligatorio salvo cabina (write=none)"
+          },
+          "read": {
+            "type": "string",
+            "description": "Alcance de LECTURA: own | all (default: del rol). all = ve todos los proyectos"
+          },
+          "role": {
+            "type": "string",
+            "description": "Atajo: reader | writer | admin (default writer). Fija los defaults de read/write"
+          },
+          "write": {
+            "type": "string",
+            "description": "Autoridad de ESCRITURA: none | own | any (default: del rol)"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_token_list",
+      "description": "ADMIN. Lista los miembros del cerebro central SIN los tokens: name, proyecto, rol y capacidades EFECTIVAS (read: own|all, write: none|own|any). Requiere principal admin. La usa el panel de administración del cuerpo para mostrar quién tiene acceso y con qué poder.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_fleet_enroll",
+      "description": "ADMIN. Da de alta una MÁQUINA en el plano de control y devuelve su token UNA SOLA vez (el registro sólo guarda su SHA-256). tier decide qué se le puede pedir: A = agente nativo (metrics, exec, screen) · B = por protocolo SSH/SNMP/MQTT, sin binario en el device (metrics, exec — NO screen: un router no tiene framebuffer) · C = móvil (metrics, screen — NO exec). Conceder una capacidad que el tier no sabe honrar FALLA acá, no cuando alguien la use. El proyecto sale de tu credencial, no de lo que declares (salvo write=any). IMPORTANTE: el token que devuelve sirve ÚNICAMENTE para POST /fleet/heartbeat; NO autentica en /mcp, para que comprometer una máquina de la flota no entregue la memoria del equipo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Dirección por la que se lo alcanza (normalmente la IP del tailnet)"
+          },
+          "arch": {
+            "type": "string",
+            "description": "amd64 | arm64 | ..."
+          },
+          "caps": {
+            "type": "array",
+            "description": "Capacidades concedidas: metrics, exec, screen. Vacío = ninguna (fail-closed)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo (único dentro del proyecto; es la clave humana para dirigirle comandos)"
+          },
+          "os": {
+            "type": "string",
+            "description": "linux | windows | darwin | android | ios"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any; uno acotado enrola en el suyo"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Etiquetas libres para agrupar (sala, cliente, criticidad)"
+          },
+          "tier": {
+            "type": "string",
+            "description": "A|agente (nativo) · B|protocolo (SSH/SNMP/MQTT/Redfish) · C|movil"
+          }
+        },
+        "required": [
+          "name",
+          "tier"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_list",
+      "description": "Lista la FLOTA del proyecto: qué máquinas hay, de qué tier, con qué capacidades y cuáles están en línea. `online` se DERIVA de la última señal de vida con un umbral (default 90 s = 3 latidos), no es un estado guardado: una máquina que muere de golpe no puede dejar un booleano en true. Devuelve también silencio_segundos y nunca_latio. Un principal acotado ve su proyecto; sólo read=all puede pedir el de otro.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_revoked": {
+            "type": "boolean",
+            "description": "Incluir las máquinas dadas de baja (default false)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a listar. Sólo lo respeta un principal read=all"
+          },
+          "umbral_segundos": {
+            "type": "number",
+            "description": "Cuánto silencio se tolera antes de dar una máquina por caída (default 90)"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_metrics",
+      "description": "Telemetría de la FLOTA: CPU, RAM (usada Y libre, que no son complementarias), procesos, disco, carga, uptime y temperatura de cada máquina, tal como reportó en su último latido. Sólo aparecen las máquinas donde TU credencial tiene concedida la capacidad `metrics` (ver la sección `fleet:` de principals.yaml): ver el inventario y ver el estado son permisos distintos. Los campos que no se pudieron medir viajan como null, NUNCA como 0 — un cero inventado es indistinguible de uno medido. `cpu_pct` es null en el primer latido de un agente (el porcentaje es una derivada y hace falta una lectura anterior). El disco trae usado Y libre porque no suman el total: el kernel reserva ~5 % para root. `mem_usada` sale de MemAvailable y `mem_libre` es MemFree: NO son complementarias y en un Linux sano difieren en varios GB, porque el page cache vive en el medio. `num_procesos` cuenta PROCESOS, no hilos. Lo que no se midió viaja como null en TODOS los campos, y las dos superficies coinciden en cuáles: `mem_libre` (ausente en Windows y macOS), `num_procesos` (ausente en macOS), `num_cpu` y `uptime_seg`, y los pares de memoria y disco, que se compuertan por SU TOTAL y no por su propio valor — `disco_libre: 0` en un disco lleno es un cero MEDIDO y sale como 0, que es justo el número por el que suena la alarma. Devuelve además cuántas máquinas quedaron fuera por permiso y cuántas aún no reportaron.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_exec",
+      "description": "Ejecuta un comando en una MÁQUINA de la flota y espera el resultado. Requiere que tu credencial tenga la capacidad `exec` SOBRE ESA MÁQUINA (sección `fleet:` de principals.yaml): ser admin de la memoria NO alcanza. Se pasa un ARGV, no una cadena: [\"systemctl\",\"restart\",\"nginx\"], y si querés una shell la pedís explícita con [\"sh\",\"-c\",\"...\"] — así el comando registrado en la bitácora es exactamente el comando corrido. TODO pedido queda auditado desde ANTES de ejecutarse, con quién lo pidió. El comando vence si el agente no lo levanta en 15 min (no se ejecuta una semana después), tiene timeout obligatorio, y su salida se acota a 64 KiB con marca de truncado. exit_code viaja null mientras no haya terminado: 'todavía no' y 'terminó con 0' son cosas distintas.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "description": "El comando como lista: [\"ls\",\"-la\",\"/tmp\"]. NO una cadena"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "no_wait": {
+            "type": "boolean",
+            "description": "Encolar y volver sin esperar el resultado"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          },
+          "timeout_seg": {
+            "type": "number",
+            "description": "Segundos antes de matar el comando (default 30, máximo 600)"
+          }
+        },
+        "required": [
+          "device",
+          "argv"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell",
+      "description": "Abre una SHELL INTERACTIVA (pty) en una máquina de la flota y devuelve cómo hablarle. Requiere la capacidad `shell` SOBRE ESA MÁQUINA, que es una capacidad APARTE de `exec` y NO se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Hoy funciona en Tier B (por SSH). La sesión tiene DOS techos que aplica el cerebro: vida máxima (2 h) e inactividad (15 min), y una sola sesión viva por persona y máquina. Queda auditada desde ANTES de conectar: quién, dónde, cuándo y por cuánto. El CONTENIDO no se graba. El session_id NO es un token: cada request del stream exige tu bearer y se re-autoriza, así que revocarte corta el prompt abierto. ⚠ LA SHELL CORRE COMO EL USUARIO QUE EJECUTA EL AGENTE (Tier A) O COMO EL USUARIO SSH (Tier B): si el agente corre como un servicio de systemd, es una shell de root. Conceder `shell` sobre una máquina es conceder ese usuario, entero. EL CONSENTIMIENTO SÍ SE CONSULTA desde A75 (2026-09-03): una máquina en `prohibido` no abre el prompt, y en `avisa` se le notifica a quien la está usando. Y si la máquina está marcada con musubi_fleet_require_approval, la sesión exige CUATRO OJOS: un segundo principal, con `shell` sobre esa misma máquina y distinto de vos, tiene que aprobarla con musubi_fleet_approve. El primer intento devuelve un id de solicitud y NO abre nada; nadie recibe una notificación, así que avisale vos a quien pueda aprobarla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "columnas": {
+            "type": "number",
+            "description": "Ancho de la terminal (default 80)"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "filas": {
+            "type": "number",
+            "description": "Alto de la terminal (default 24). Se fija al abrir y no se redimensiona"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_shell_log",
+      "description": "La BITÁCORA de sesiones de shell interactiva: quién tuvo un prompt, en qué máquina, cuándo y por cuánto tiempo. Sólo muestra las máquinas sobre las que tenés `shell`. Registra QUE hubo acceso, nunca QUÉ se tecleó: grabar el contenido de una terminal ajena es una decisión legal que nadie tomó. El estado se DERIVA al leer, así que una sesión que venció aparece como vencida aunque nadie la haya ido a marcar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas sesiones devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_log",
+      "description": "La BITÁCORA de ejecución remota: quién ejecutó qué, en qué máquina, cuándo y cómo salió. Sólo muestra los comandos de máquinas sobre las que tenés `exec` — saber qué se corrió en un servidor es casi tan revelador como poder correrlo. La bitácora es PERMANENTE; la salida (stdout/stderr) caduca y se poda, porque puede traer secretos. Informa cuántas entradas quedaron ocultas por permiso.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas entradas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_screen",
+      "description": "Abre una SESIÓN DE PANTALLA sobre una máquina (RustDesk self-hosted) y devuelve la contraseña UNA SOLA VEZ. Requiere la capacidad `screen` sobre ESA máquina — que es un permiso distinto de `exec`: mirar y tocar no son lo mismo. La contraseña se acuña por sesión, dura poco (default 30 min, máximo 4 h) y viaja a la máquina dentro del comando `musubi:pantalla` de la cola: queda en la fila de ese comando SÓLO hasta que el agente lo levanta —en ese mismo instante se tapa en la base, conservando el id de sesión— y ninguna bitácora ni superficie de lectura la muestra. La tabla de sesiones no tiene dónde guardarla, ni en claro ni hasheada. El vencimiento lo aplica el AGENTE, así que la sesión se cierra aunque el cerebro se caiga. Un dispositivo de Tier B (por protocolo) nunca tiene pantalla. IMPORTANTE: el consentimiento del usuario sentado frente a la máquina lo aplica RustDesk con su propia configuración, no Musubi. ⚠ ESTA SESIÓN LE CUESTA A LA MÁQUINA SU CONTRASEÑA DE RUSTDESK: el cliente tiene UNA sola ranura de contraseña permanente y Musubi la usa de borrador. Al vencer la sesión se reemplaza por una al azar que nadie conoce —dejarla vacía abriría la máquina— así que la contraseña que haya puesto el dueño se pierde y hay que volver a ponerla a mano. Musubi NO la guarda ni la puede restituir hoy (A84). En una máquina ajena, decilo antes de abrir la sesión: desde la silla de esa persona es indistinguible de «RustDesk me cambia la contraseña solo».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "minutos": {
+            "type": "number",
+            "description": "Cuánto vale la sesión (default 30, máximo 240)"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué necesitás la sesión. SÓLO se usa si la máquina exige cuatro ojos: es lo único que va a leer quien apruebe, y sin esto decide a ciegas"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_sessions",
+      "description": "Quién estuvo ADENTRO de tus máquinas y por dónde: pantallas y shells en UNA sola lista, más nuevas primero. `modalidad` es `pantalla` o `shell` y cambia qué significa todo lo demás — una shell abierta y una pantalla abierta no son el mismo riesgo. `abierta` es DERIVADO y no el estado guardado: una sesión puede figurar `activa` habiendo vencido sin que nadie la marcara, y dibujar el estado crudo mostraría gente adentro de máquinas de las que ya salió. LA COMPUERTA ES POR MODALIDAD: las pantallas piden `screen:view` sobre esa máquina y las shells piden `shell`. No se generaliza a una sola capacidad a propósito — usar `screen` para las dos dejaría ver quién tuvo un prompt a alguien que no puede abrir uno. Devuelve cuántas quedaron fuera por permiso, sin nombrarlas. NO guarda lo que pasó adentro de la sesión: eso es contenido, y esta es la bitácora de accesos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Filtrar por una máquina, por su NOMBRE (el que muestra musubi_fleet_list), no por su id"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántas devolver (default 20, máximo 200)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_cronologia",
+      "description": "QUÉ LE PASÓ A UNA MÁQUINA en una ventana de tiempo: comandos, sesiones de pantalla y sesiones de shell CRUZADOS en una sola línea de tiempo, del más nuevo al más viejo. Es la pregunta que se hace de verdad cuando algo anda mal («¿qué le hicimos a este server el martes?») y que hoy exige llamar a tres bitácoras distintas y ordenarlas a mano. LA COMPUERTA ES POR HECHO Y NO POR LA LISTA: cada línea pide SU capacidad —`exec` los comandos, `screen:view` las pantallas, `shell` las shells—, así que dos personas distintas ven dos cronologías distintas de la misma máquina y ninguna de las dos ve de más. Un hecho que esta versión no sabe clasificar NO SE MUESTRA A NADIE y se cuenta aparte: el default es no mostrar. LAS POLÍTICAS APARECEN COMO LO QUE SON: su acción se encola en la misma bitácora que la de una persona (I16) y ahora se DISTINGUE al leer — `origen` es `persona` o `politica`, y `automatico` es el booleano que se pregunta de verdad. LOS DOS VIAJAN EN NULL CUANDO NO SE SABE, jamás como `persona`: los comandos anteriores a la migración 41 no dicen quién los originó, y dibujarlos como manuales le atribuiría a alguien cada disparo automático viejo. LO QUE ESTA LISTA NO CONTIENE VIAJA EN LA RESPUESTA (`no_visto`), y hay que leerlo antes de concluir nada: no hay serie temporal (Musubi guarda el presente; la historia la guarda Prometheus), no hay logs del host, no hay historial de salud de servicios ni de disparos de política que no encolaron comando, y no hay contenido de sesiones. Una cronología vacía significa «no pasó nada DE LO QUE YO MIRO», no «no pasó nada». Los tres contadores se leen distinto: `truncado` = hubo más adentro de la ventana (subí `limite`), `ocultos_por_permiso` = hubo más y no los podés ver (pedí la capacidad), `sin_clasificar` = hubo más y este cerebro no sabe qué son (actualizalo). Una máquina REVOCADA conserva su cronología: la revocación es el kill-switch para operar, no para auditar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339 (ej: 2026-08-25T14:00:00Z). Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio: la cronología es de UNA máquina; para la vista por plano están musubi_fleet_log y musubi_fleet_sessions"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo (sin `desde`), mira las 24 h anteriores a ese momento: es lo que se pide investigando hacia atrás desde el incidente"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`: mandar las dos cosas es un error, no algo que se resuelva eligiendo una"
+          },
+          "limite": {
+            "type": "number",
+            "description": "Cuántos hechos devolver (default 50, máximo 300). Si el tope corta algo que estaba adentro de la ventana, `truncado` viene en true"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre de máquina existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_contexto",
+      "description": "CRUZA lo que le pasó a una máquina con lo que el equipo SABÍA: la actividad de la ventana (comandos, pantallas, shells) junto a las notas de la memoria y los archivos de código que se tocaron en ese mismo rato. Es la pregunta que ningún panel de monitoreo puede contestar —«¿por qué esta máquina anda distinta desde el martes?»— porque ninguno tiene al lado la memoria del equipo. ES CORRELACIÓN, NO CAUSA, y la respuesta lo dice: Musubi junta los hechos y declara CÓMO enlazó cada uno; quien concluye es quien lee. Una tool que adivinara la causa mandaría a alguien a arreglar lo que no está roto. CADA HALLAZGO TRAE SU `enlace`, que es el campo que más importa: `termino` = el texto NOMBRA la máquina o uno de sus servicios (es evidencia, aunque puede ser homónimo); `ventana` = SÓLO coincide en el tiempo y en el proyecto (no es evidencia de nada por sí solo). Mezclarlos sería la mentira de esta tool. LOS TÉRMINOS SALEN DEL INVENTARIO, no del texto de los comandos: el nombre de la máquina y sus servicios, que son pocos, exactos y explicables — sacar palabras de un argv produce basura (`cmd`, `type`, `/c`) y una lista con ruido hace que se deje de mirar la herramienta. Se devuelven declarados, para que puedas juzgar si un enlace vale. LA COMPUERTA APLICA A LOS TÉRMINOS: la lista de servicios de una máquina exige `metrics`, así que sin esa capacidad los términos de servicio no se arman y la respuesta marca `servicios_ocultos: true` en vez de devolver una lista corta que se leería como «esta máquina no corre nada». La actividad se compuerta hecho por hecho, igual que musubi_fleet_cronologia. La memoria se lee en el proyecto de LA MÁQUINA, no en el alcance de quien pregunta: traer notas de otro tenant no sería una fuga pero sí una respuesta falsa. Para la línea de tiempo completa está musubi_fleet_cronologia; ésta devuelve el resumen y el cruce.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desde": {
+            "type": "string",
+            "description": "Comienzo de la ventana, RFC3339. Con `hasta` define la ventana exacta; solo, va desde ahí hasta ahora"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina. Obligatorio"
+          },
+          "hasta": {
+            "type": "string",
+            "description": "Fin de la ventana, RFC3339. Solo, mira las 24 h anteriores a ese momento"
+          },
+          "horas": {
+            "type": "number",
+            "description": "Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all. Hace falta si el mismo nombre existe en dos proyectos que alcanzás"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_rename",
+      "description": "**admin**: le cambia el NOMBRE a una máquina CONSERVANDO SU ID — y con él su bitácora entera, sus sesiones, su inventario de servicios y su token (el agente sigue latiendo sin reinstalar nada). Antes de esto, cambiar un nombre obligaba a dar de baja y volver a enrolar, lo que daba un id nuevo: la máquina aparecía vacía y todo su historial quedaba colgando de un device revocado. RENOMBRAR NO ES COSMÉTICO, ES UN CAMBIO DE AUTORIZACIÓN DISFRAZADO: tres cosas de este sistema indexan por NOMBRE y ninguna por id — las concesiones de capacidad de `principals.yaml`, la allowlist de comandos por máquina (`exec_allow`) y el alcance de las políticas. Renombrar puede SACARLE `exec` a alguien, DÁRSELO, o meter una máquina adentro del alcance de una política que la va a tocar sola, todo en silencio. POR ESO NO RENOMBRA EN EL PRIMER LLAMADO: informa qué credenciales y políticas nombran el nombre viejo (las que van a dejar de alcanzarla) Y las que ya nombran el nombre NUEVO (cuya autorización la máquina HEREDA sin que nadie se la haya dado, que es el sentido que a nadie se le ocurre mirar), dice qué editar en cada archivo, y se planta. Con `confirmar: true` renombra. NO EDITA `principals.yaml`: eso sería el cerebro cambiando la credencial de una persona, y las concesiones se escriben a mano a propósito. El rename queda en el log del cerebro con las dos puntas, porque es de las pocas operaciones que no deja rastro en ninguna tabla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirmar": {
+            "type": "boolean",
+            "description": "Sin esto NO renombra: devuelve el informe de impacto y se planta. El default de «no lo pensé» es que no pase nada"
+          },
+          "device": {
+            "type": "string",
+            "description": "El nombre ACTUAL de la máquina"
+          },
+          "nuevo": {
+            "type": "string",
+            "description": "El nombre nuevo. Único dentro del proyecto, sin caracteres de control, comas ni comillas: viaja a las etiquetas de Prometheus y a los selectores de principals.yaml"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device",
+          "nuevo"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_probe",
+      "description": "Sale a MEDIR los dispositivos que NO corren un agente: Tier B por SSH (routers, NAS, servers sin agente), Tier B por EXPOSICIÓN (bases gestionadas y appliances que no dan shell y sí publican un endpoint de métricas: se declaran en `.musubi/flota-exposicion.yaml` y eso ES lo que elige el transporte) y Tier C por ADB (Android, que es Linux y tiene el mismo /proc). Guarda lo que trae y estampa la señal de vida SÓLO si llegó. Los Tier A se saltean: reportan solos con `musubi agent`. Requiere la capacidad `metrics` sobre cada máquina. Es «ir a buscar»; para LEER lo último traído está musubi_fleet_metrics — separarlas evita que una lectura barata se vuelva impredecible. `cpu_pct` es null en el PRIMER sondeo de cada dispositivo: el porcentaje es una derivada — y sigue en null si dos sondeos caen dentro del CACHÉ de un endpoint de exposición (medido: ~62 s en una base gestionada), porque ahí tampoco hubo dos lecturas distintas. Un iPhone no se puede sondear: iOS no expone /proc ni permite ejecutar nada sin un MDM, y eso está declarado, no disimulado.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Sondear una sola máquina"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_services",
+      "description": "Qué CORRE ADENTRO de cada máquina de la flota: units de systemd, servicios de Windows, contenedores. Requiere la capacidad `metrics` SOBRE CADA MÁQUINA (sección `fleet:` de principals.yaml): qué corre en un host es telemetría del host, del mismo peso que su uso de CPU — accionar sobre un servicio sigue siendo `exec`, con su allowlist por comando. `estado` es corriendo | detenido | fallado | desconocido, y `desconocido` NO ES `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído. Un servicio DECLARADO Y TODAVÍA SIN MEDIR es un estado legítimo y distinto de «caído»: viaja con `ultimo_reporte` en null. `fresco` dice si el último reporte entra en el umbral de esa máquina — un servicio con noticias de hace dos días no está corriendo, está sin noticias. Guarda el PRESENTE, no la historia: no hay serie temporal (ésa la guarda Prometheus). Devuelve además cuántos servicios quedaron fuera por permiso, sin nombrarlos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de una máquina concreta. Vacío = todas las que puedas ver"
+          },
+          "incluir_revocados": {
+            "type": "boolean",
+            "description": "Incluir los servicios dados de baja Y los de máquinas revocadas (default false). Son dos bajas distintas: `revocado` es del SERVICIO (se dejó de usar en una máquina que sigue viva) y `device_revocado` es de la MÁQUINA (salió de la flota con todo adentro; sólo aparece cuando es true). Leer el historial de una máquina revocada exige la MISMA concesión `metrics` que hacía falta cuando estaba viva: la revocación levanta el kill-switch para operar, no para auditar."
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id a consultar. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_service_declare",
+      "description": "ADMIN. Declara A MANO un servicio que corre en una máquina de la flota: un Tier B que no enumera solo, un bot, un puente. El servicio hereda el proyecto DE SU MÁQUINA, nunca del pedido. Nace en estado `desconocido` y con `ultimo_reporte` en null — «declarado y todavía sin medir» es un estado legítimo, no una falla — y pasa a tener estado cuando la máquina lo reporte. El nombre es único DENTRO de su máquina: dos hosts pueden correr cada uno su `postgres`. Lo declarado a mano NO lo poda el latido de la máquina —sale del inventario cuando lo saca una persona—, y volver a declarar uno que se dio de baja lo reactiva. Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clase": {
+            "type": "string",
+            "description": "Quién lo supervisa: systemd | windows | docker. Vacío = no declarada"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina en la que corre"
+          },
+          "nombre": {
+            "type": "string",
+            "description": "La unit, el servicio o el contenedor. Por ejemplo \"postgresql.service\""
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "device",
+          "nombre"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_rotate",
+      "description": "ADMIN. Rota el token de una máquina SIN tocarla y sin re-enrolarla. Hasta ahora rotar era revocar + enrolar + ir a la máquina a pegar el token nuevo; con cuarenta máquinas eso no se hace, y una auditoría pide rotación demostrable. Los DOS tokens valen hasta que el agente late con el nuevo (ahí el viejo deja de valer) o hasta que vence la ventana (24 h por default; ahí la rotación se ABANDONA y el viejo sigue). El solapamiento no es descuido: el agente recibe el token nuevo en la RESPUESTA de un latido, o sea después de haber usado el viejo, así que sin ventana quedaría afuera entre que lo recibe y lo guarda. EL TOKEN NUEVO VIVE EN MEMORIA DEL CEREBRO, no en la base: en reposo hay hashes y no credenciales, y un volcado de la base no puede ser un llavero. El costo está declarado: si el cerebro se reinicia, la rotación se pierde y hay que volver a pedirla — el token viejo sigue valiendo, así que la máquina nunca queda afuera. NO ES LA HERRAMIENTA DE LA EMERGENCIA: si el token se FILTRÓ, lo que corta en el acto es musubi_fleet_revoke, que no depende de que el agente coopere. Rotar es higiene, y por eso puede esperar a que el agente conteste.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "horas": {
+            "type": "integer",
+            "description": "Cuánto se le ofrece el token nuevo al agente. Default 24"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_maintenance",
+      "description": "Declara una VENTANA DE MANTENIMIENTO sobre una máquina: «de acá a tantos minutos, ésta va a estar rara a propósito». Mientras la ventana esté activa pasan DOS cosas, y la segunda es la que un `silence` de Alertmanager no puede: las reglas que miran `musubi_fleet_device_maintenance` no alertan, Y las políticas de auto-heal NO ACTÚAN sobre esa máquina. Sin esto, un reinicio planificado dispara `servicio_caido`, la política levanta el servicio en mitad del mantenimiento, y el silence sólo garantiza que nadie se entere. Compuerta: `metrics` sobre ESA máquina — quien puede mirar su telemetría puede decir que va a estar rara; no hace falta ser admin ni tener `exec`, porque declarar una ventana no ejecuta nada. TECHO DURO DE 24 HORAS por ventana, y no es burocracia: una ventana silencia y frena el auto-heal, así que una olvidada es una máquina ciega con el panel en verde. Si el mantenimiento sigue, se declara otra. `MantenimientoEterno` avisa a las 25 h. Para retirarla antes de tiempo, pasá `cancelar` con el id que devolvió el alta: la fila NO se borra, se marca —la cronología se construye sólo sobre tablas que no se editan, y «lo cancelaron a los diez minutos» explica el comportamiento de esa máquina mejor que la ausencia de toda fila.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cancelar": {
+            "type": "string",
+            "description": "id de una ventana activa, para retirarla antes de tiempo. Excluyente con `minutos`"
+          },
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "minutos": {
+            "type": "integer",
+            "description": "Cuánto dura la ventana, desde ahora. Máximo 1440 (24 h)"
+          },
+          "motivo": {
+            "type": "string",
+            "description": "Para qué. Queda en la cronología de la máquina (máx. 200 caracteres)"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id de la máquina. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_consent",
+      "description": "ADMIN. Fija QUÉ SE LE DEBE a la persona que está usando una máquina cuando alguien pide entrar. Es un EJE SEPARADO de las capacidades: `screen` decide quién PUEDE entrar; esto decide qué pasa con quien está adentro, y lo responde el dueño de la máquina, no quien administra la flota. Cuatro grados ORDENADOS: `libre` (ni se entera), `avisa` (se le notifica, no puede negarse), `pide` (tiene que aceptar) y `prohibido` (no se abre NUNCA, aunque la capacidad esté perfectamente concedida). Cuando dos fuentes discrepan gana LA MÁS RESTRICTIVA: una máquina puede endurecer lo que el proyecto dijo, jamás aflojarlo. Sin declarar rige `avisa` — no `libre`, porque la ausencia de configuración no puede ser la opción menos segura. OJO con `pide` sobre una máquina que no puede preguntarle a nadie (un servidor sin escritorio): se endurece a `prohibido` y NO se afloja a `libre`, porque quien escribió `pide` pidió que nadie entre sin permiso, y si el permiso no se puede pedir, no se entra. GOBIERNA LOS TRES CAMINOS desde 2026-09-03 (A75), y cada uno como corresponde a su forma: `musubi_fleet_screen` y `musubi_fleet_shell` aplican la tabla entera —son SESIONES, así que el aviso es por sesión y no por tecla—; `musubi_fleet_exec` aplica el techo (`prohibido` rechaza), **trata `pide` como `prohibido`** y avisa UNA VEZ POR VENTANA de una hora por máquina, no una vez por comando: un exec es de una sola vez, y veinte ventanitas seguidas es exactamente cómo se le enseña a alguien a poner `libre` en todas sus máquinas. LO DE `pide` EN EXEC ES LA ASIMETRÍA A TENER PRESENTE (A86, decidido por gio el 2026-09-05): una shell es una SESIÓN y tiene dónde esperar el sí, así que pregunta de verdad; un exec es una orden suelta y no lo tiene, así que en vez de prometer un permiso que no puede pedir NO EJECUTA. Consecuencia práctica: una máquina en `pide` NO recibe auto-heal — ni pedido a mano ni disparado por una política (A91: el barrido pasa por este mismo eje, y un temporizador no tiene dónde esperar un sí) — si la querés automatizada, bajala a `avisa`, que es una decisión tuya y queda registrada. Donde el agente no sabe notificar, el comando corre igual y la constancia va al log: `avisa` no bloquea, y prometer una notificación que no se puede entregar es lo que este eje viene a evitar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "grado": {
+            "type": "string",
+            "description": "libre | avisa | pide | prohibido"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        },
+        "required": [
+          "device",
+          "grado"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_require_approval",
+      "description": "ADMIN. Decide si una máquina exige CUATRO OJOS: que un segundo principal apruebe cada sesión de `shell` o `screen` sobre ella. Es un TERCER EJE, distinto de los otros dos: las capacidades deciden QUIÉN puede entrar, el consentimiento decide QUÉ SE LE DEBE a quien está usando la máquina, y esto decide CUÁNTAS PERSONAS hacen falta. Ninguno de los otros dos puede expresarlo — y en un servidor de producción, donde no hay nadie sentado enfrente, el consentimiento no protege a nadie mientras una sola persona con `shell` puede hacer cualquier cosa y la bitácora lo cuenta DESPUÉS. Quien aprueba necesita LA MISMA capacidad sobre ESA máquina (no `admin`): la barra es «podría haberlo hecho por su cuenta», así que aprobar no le concede nada nuevo; lo único que se agrega es que sean dos. Y NADIE puede aprobar su propia solicitud. Viene APAGADO y se enciende máquina por máquina, que es como se sabe cuáles importan: encenderlo en toda la flota deja a cada una esperando un par de ojos que nadie sabe que tiene que dar, y la salida que la gente encuentra es apagar el control entero. ⚠ Si en la práctica hay UNA sola persona con esa capacidad, encender esto deja la máquina sin acceso interactivo: cuatro ojos con un solo par no es un control lento, es un candado. ⚠⚠ CUATRO OJOS NO CUBRE `musubi_fleet_exec`, y eso importa más de lo que parece: si ese principal no tiene una sección `exec_allow` en principals.yaml, `exec` acepta CUALQUIER argv sobre esa máquina — o sea `bash -c '...'`, que es una shell con otro nombre y sin segunda persona. Marcar una máquina sin acotarle `exec` a una allowlist deja el control puesto en la puerta de adelante y la de atrás abierta. `metrics` tampoco se toca, pero ése sólo lee.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Nombre de la máquina"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          },
+          "requerir": {
+            "type": "boolean",
+            "description": "true enciende los cuatro ojos, false los apaga. SIN DEFAULT: omitirlo es un error, porque un campo olvidado que significara false apagaría el control por distracción"
+          }
+        },
+        "required": [
+          "device",
+          "requerir"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_approve",
+      "description": "Sos la SEGUNDA PERSONA: aprobás o negás la solicitud de otro para abrir una sesión en una máquina marcada con musubi_fleet_require_approval. Exige LA MISMA capacidad que la sesión pedida sobre ESA máquina —no `admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada que no tuvieras. NO PODÉS APROBAR TU PROPIA SOLICITUD: eso son dos ojos, no cuatro. La aprobación es de UN SOLO USO y vence con la solicitud (30 min): habilita esa sesión y ninguna más. Un «no» VALE HASTA QUE VENZA la solicitud y no se puede volver a pedir en el acto — si volver a pedirlo funcionara, el control se degradaría a «pedir hasta que alguien diga que sí», que es como el cansancio vence a los cuatro ojos en cualquier organización. A quien pidió la sesión NO se le avisa: la va a encontrar cuando vuelva a pedirla.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "aprobar": {
+            "type": "boolean",
+            "description": "true concede, false niega. SIN DEFAULT: omitirlo es un error, porque negar por distracción le gasta la ventana a otro"
+          },
+          "nota": {
+            "type": "string",
+            "description": "Por qué. Un «no» sin motivo manda a la otra persona a preguntar por otro lado"
+          },
+          "solicitud": {
+            "type": "string",
+            "description": "El id que devolvió el intento de abrir la sesión"
+          }
+        },
+        "required": [
+          "solicitud",
+          "aprobar"
+        ]
+      }
+    },
+    {
+      "name": "musubi_fleet_approvals",
+      "description": "Qué solicitudes de CUATRO OJOS están esperando una segunda persona. Existe porque la aprobación NO VIAJA: no hay notificación a quien puede aprobar —mandarla exigiría saber a quién, y eso es una consulta sobre principals.yaml que este track no invierte—, así que sin esta lista una solicitud que nadie mira vence sola y el control se vuelve una negación con demora. SÓLO muestra las que VOS podrías resolver (tenés esa capacidad sobre esa máquina); las demás se cuentan en `fuera_de_tu_alcance` en vez de desaparecer, porque una lista vacía significa «ninguna que yo pueda aprobar», no «no hay nadie esperando». Cada fila dice `podes_aprobarla`: la tuya propia figura en false, porque nadie aprueba su propia solicitud.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "project_id. Sólo lo respeta un principal read=all"
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_fleet_revoke",
+      "description": "ADMIN. KILL-SWITCH de una máquina: su token deja de autenticar en el acto y su fila QUEDA para la auditoría (no se borra: perder a quién pertenecía la telemetría es justo lo que no querés después de un incidente). Requiere principal admin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del dispositivo a dar de baja"
+          },
+          "project": {
+            "type": "string",
+            "description": "project_id del dispositivo. Sólo lo respeta un principal write=any"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_token_revoke",
+      "description": "ADMIN. Da de baja un miembro por nombre: su token deja de autenticar. Requiere principal admin. No permite revocarte a vos mismo (evita el lockout del único admin). Surte efecto en ≤10s (recarga en caliente).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nombre del miembro a revocar"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "musubi_ingest_url",
+      "description": "Ingiere un link (video de YouTube/redes vía yt-dlp, o cualquier artículo web vía go-trafilatura embebido) y devuelve su texto + metadata (título/autor/fecha/idioma/duración). Para video usa los subtítulos existentes; si no hay y whisper.cpp está configurado, transcribe el audio local. Con save=true persiste el texto como memoria durable bajo ingested/\u003cplataforma\u003e/\u003cid\u003e, IDEMPOTENTE (re-ingerir la misma URL no duplica); por defecto solo devuelve el texto. Seguro en infra compartida: rechaza URLs que resuelven a destinos internos (guarda SSRF). Degrada blando: si falta yt-dlp o la plataforma bloquea (IG/FB/X piden cookies), devuelve un aviso en 'note', no un error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "as": {
+            "type": "string",
+            "description": "Forzar la ruta: 'article' o 'video'; opcional, default auto por el host"
+          },
+          "cookies_file": {
+            "type": "string",
+            "description": "Ruta a un archivo de cookies Netscape para yt-dlp; opcional"
+          },
+          "cookies_from_browser": {
+            "type": "string",
+            "description": "Navegador del que tomar cookies (chrome, firefox…) para plataformas que piden sesión (IG/FB/X); opcional"
+          },
+          "lang": {
+            "type": "string",
+            "description": "Idioma(s) de subtítulos preferidos, coma-separados (ej. 'es,en'); opcional"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "Opcional: proyecto de ORIGEN al que atribuir la ingesta guardada. Sólo lo respeta un principal write=any (la sala de mando); un principal acotado lo ignora y usa su propio proyecto. Sirve para ingerir a un tenant COMPARTIDO como 'musubi-design' (el acervo del motor de diseño). Default: tu proyecto."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Si es true, guarda el texto en la memoria del cerebro (idempotente); default false (solo devolver)"
+          },
+          "url": {
+            "type": "string",
+            "description": "La URL a ingerir (video, red social o artículo)"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "name": "musubi_design",
+      "description": "El MOTOR DE DISEÑO de Musubi (pilar 'Musubi Renaissance'), invocable desde CUALQUIER proyecto (o sin proyecto). Dado un pedido en lenguaje libre ('una pantalla de login oscura para finanzas', 'un dashboard de ventas'), devuelve un BRIEF de diseño en tres capas: la MATERIA PRIMA + el MÉTODO universal recallados del acervo de diseño compartido (rol de diseñador senior, principios anti-genérico, patrones de sistemas de diseño/tokens/layout/tipografía/color/accesibilidad) MÁS la MARCA del proyecto (resuelta por tu credencial: la de Musubi por default, la de otro proyecto si tenés acceso). Es model-free: el cerebro NO dibuja ni llama a un LLM — ensambla el conocimiento y VOS (el agente que la llamó) componés el diseño con ese brief. Pasá 'target' para orientar la ENTREGA: painter (spec de bloques del cuerpo) | web (React/Tailwind + tokens, para CRM/Altura) | html (mock autocontenido) | any (default). 'brand' opcional para diseñar a nombre de otro proyecto. Tras el brief, expandí 1-2 ids del corpus con musubi_memory_expand si querés el patrón completo, y entregá el diseño.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "brand": {
+            "type": "string",
+            "description": "Opcional: proyecto cuya MARCA aplicar (ej. 'crm', 'altura'). Por default la marca sale de TU proyecto (el del token); pasar 'brand' para diseñar a nombre de otro proyecto SÓLO lo respeta un principal read=all (la sala de mando). La identidad de un proyecto nunca se cruza a otro."
+          },
+          "change": {
+            "type": "string",
+            "description": "Opcional, para un REDISEÑO: qué se ATACA ('cambiar el modelo y las cuadrículas', 'no se puede comparar nada', 'no me dice qué hacer'). Determina QUÉ dimensiones mueven las formas candidatas —densidad, comparación, decisión, profundidad, guía, presencia, estado en vivo—, así que dos pedidos distintos reciben propuestas distintas en vez de las mismas tres de siempre."
+          },
+          "keep": {
+            "type": "string",
+            "description": "Opcional, para un REDISEÑO: qué se CONSERVA — la esencia, la identidad, lo que ya funciona, y de qué forma parte hoy la pantalla ('hoy es una tabla densa'). El motor lo usa para saber de dónde ALEJARSE al proponer formas, y lo sirve como bloque para que no se pise lo que no había que tocar. Sin esto, la mitad de 'conservar' se pierde: la consulta se recorta a 2 oraciones para buscar en el acervo."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Cuántos patrones del acervo traer (default 6, máximo 100)."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Descripción en lenguaje libre de lo que querés diseñar (tipo de pantalla, tono, contexto)."
+          },
+          "sketch": {
+            "type": "boolean",
+            "description": "Opcional: si es true, el brief incluye un BOCETO SVG de cada forma candidata para mostrárselos a la persona y que elija UNO antes de componer. Apagado por default porque cuesta presupuesto y sólo sirve en un rediseño; los dibuja el motor —no quien compone— para que las tres sean comparables, y la cantidad de filas de cada uno sale del alto de fila de su registro, así que la densidad se VE."
+          },
+          "target": {
+            "type": "string",
+            "description": "Formato de ENTREGA que orienta el brief: 'painter' (spec de bloques del cuerpo/Lienzo) | 'web' (React + Tailwind + tokens, para CRM/Altura) | 'html' (mock HTML autocontenido) | 'any' (default: el caller elige el mejor)."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      }
+    },
+    {
+      "name": "musubi_distill",
+      "description": "DESTILADOR del acervo de diseño (pilar 'Musubi Renaissance'): pase OFFLINE que convierte los artículos crudos ingeridos (blobs `ingested/*` del acervo `musubi-design`) en TARJETAS curadas y cortas (`design-corpus/*`) que el motor de diseño surfacea ANTES que los blobs. Cada blob se destila con el motor de cognición en 1-6 lecciones genéricas y reusables, embebidas para búsqueda. IDEMPOTENTE y reanudable: marca cada blob con una arista de procedencia `derived_from`, procesa de a tandas (default 6) y no reprocesa lo ya hecho — corré en bucle hasta que 'remaining' llegue a 0. Requiere admin y un motor de cognición configurado (opt-in: sin motor, falla explícito). Pasá `dry_run:true` para ver qué se destilaría sin escribir, o `limit` para el tamaño de la tanda (máx 25).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Si es true, lista los blobs que se destilarían SIN llamar al motor ni escribir nada."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Cuántos blobs destilar en esta tanda (default 6, máximo 25). Cada blob es una llamada al motor; tandas grandes tardan más."
+          }
+        }
+      }
+    },
+    {
+      "name": "musubi_sharpen",
+      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Si es true, lista los pares candidatos por coseno SIN llamar al juez ni archivar nada."
+          },
+          "floor": {
+            "type": "number",
+            "description": "Piso de coseno para proponer un par al juez (default 0.84). Más bajo = más pares candidatos."
+          },
+          "pairs": {
+            "type": "number",
+            "description": "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."
+          }
+        }
+      }
+    }
+  ]
+}

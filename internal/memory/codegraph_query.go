@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -156,11 +157,12 @@ func (e *DbEngine) GraphTopByDegreeCtx(ctx context.Context, n int) ([]GraphDegre
 	return out, rows.Err()
 }
 
-// GraphEntryPointsCtx devuelve funcs/métodos que NADIE llama internamente (posibles puntos de
+// GraphEntryPointsCtx devuelve los `limit` funcs/métodos que NADIE llama internamente MÁS
+// PROMETEDORES —ordenados por grado de salida— y, aparte, CUÁNTOS hay en total (posibles puntos de
 // entrada: main, handlers, exports usados desde afuera, tests), acotado a `limit`. Se computa
 // como la diferencia de conjuntos en Go (funcs − destinos de CALLS) para no complicar el SQL con
 // scope en dos tablas.
-func (e *DbEngine) GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, error) {
+func (e *DbEngine) GraphEntryPointsCtx(ctx context.Context, limit int) ([]string, int, error) {
 	if limit <= 0 {
 		limit = 25
 	}
@@ -170,49 +172,91 @@ func (e *DbEngine) GraphEntryPointsCtx(ctx context.Context, limit int) ([]string
 	rows, err := e.db.QueryContext(ctx,
 		`SELECT node_key FROM code_graph_nodes WHERE kind IN ('func','method')`+nClause+` ORDER BY node_key`, nArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("error al listar funcs: %w", err)
+		return nil, 0, fmt.Errorf("error al listar funcs: %w", err)
 	}
 	defer rows.Close()
 	var funcs []string
 	for rows.Next() {
 		var k string
 		if err := rows.Scan(&k); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		funcs = append(funcs, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Destinos de CALLS (los que SÍ son llamados).
 	eClause, eArgs := sc.scopeClause("")
 	crows, err := e.db.QueryContext(ctx,
 		`SELECT DISTINCT to_key FROM code_graph_edges WHERE kind='CALLS'`+eClause, eArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("error al listar llamados: %w", err)
+		return nil, 0, fmt.Errorf("error al listar llamados: %w", err)
 	}
 	defer crows.Close()
 	called := map[string]bool{}
 	for crows.Next() {
 		var k string
 		if err := crows.Scan(&k); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		called[k] = true
 	}
 	if err := crows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var out []string
+	// GRADO DE SALIDA: cuántas cosas llama cada uno. Es lo que separa un entry point de verdad
+	// —main, un handler— de una función que nadie llama porque el grafo no capturó a su llamador.
+	gClause, gArgs := sc.scopeClause("")
+	grows, err := e.db.QueryContext(ctx,
+		`SELECT from_key, COUNT(*) FROM code_graph_edges WHERE kind='CALLS'`+gClause+` GROUP BY from_key`, gArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error al contar llamadas salientes: %w", err)
+	}
+	defer grows.Close()
+	grado := map[string]int{}
+	for grows.Next() {
+		var k string
+		var n int
+		if err := grows.Scan(&k, &n); err != nil {
+			return nil, 0, err
+		}
+		grado[k] = n
+	}
+	if err := grows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var sinLlamador []string
 	for _, f := range funcs {
 		if !called[f] {
-			out = append(out, f)
-			if len(out) >= limit {
-				break
-			}
+			sinLlamador = append(sinLlamador, f)
 		}
 	}
-	return out, nil
+	// ⚠️ Acá había un `break` al llegar a `limit` sobre la lista ALFABÉTICA, y eso no devolvía
+	// entry points: devolvía una rebanada arbitraria. Medido el 2026-09-05 en el repo de Musubi,
+	// 3.851 de 6.710 funcs/métodos (57,4%) no tienen llamador —el grafo no captura la mayoría de
+	// las llamadas—, así que "los primeros 25 por orden de clave" eran 25 de 3.851 elegidos por el
+	// abecedario. Peor: unos nodos con ruta ABSOLUTA ordenaban antes que `cmd/` e `internal/`
+	// (porque 'C' < 'c') y se comían los 25 lugares.
+	//
+	// Ordenar por grado descendente hace aflorar lo que la descripción promete. Con los mismos
+	// datos: main (27 llamadas salientes), toolDesign (28), toolIngestURL (16), toolSaveCode (13).
+	// El desempate por clave lo deja DETERMINISTA: sin él, dos nodos de igual grado se alternarían
+	// entre corridas y el informe parecería cambiar solo.
+	sort.SliceStable(sinLlamador, func(i, j int) bool {
+		gi, gj := grado[sinLlamador[i]], grado[sinLlamador[j]]
+		if gi != gj {
+			return gi > gj
+		}
+		return sinLlamador[i] < sinLlamador[j]
+	})
+
+	total := len(sinLlamador)
+	if len(sinLlamador) > limit {
+		sinLlamador = sinLlamador[:limit]
+	}
+	return sinLlamador, total, nil
 }
 
 // ListGraphFuncsInDirsCtx devuelve las funcs TOP-LEVEL que viven en un conjunto de directorios

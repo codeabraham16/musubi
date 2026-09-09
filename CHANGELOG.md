@@ -7,6 +7,682 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **`sync.max_attempts` dejó de mentir.** Su documentación decía «la cantidad de intentos
+  transitorios antes de mandar la fila a dead-letter», y hace tiempo que no hace nada: nació en F2
+  como el cortacircuito del outbox y `sync-hardening` se lo quitó a propósito (R3), porque un
+  central caído por horas no puede costar memoria compartida. Medido: no la lee nadie salvo el
+  rellenador de defaults, ninguna tool la reporta, y `TestDrainTransientNeverDies` ya fija el
+  comportamiento correcto poniéndola en 2 y drenando 4 veces.
+
+  **No es prolijidad, y por eso el cambio existe:** esa frase es exactamente la que `syncclient.go`
+  citaba para justificar que reintentar de más era «barato y ACOTADO». Sobre una cota que ya no
+  existía, un rechazo determinista se reintentó 605 veces en 74 h. Lo que reemplazó a la cota no es
+  otro tope sino visibilidad — `doctor` lo señala con `outbox_stall`, y se rescata con
+  `musubi_sync_requeue`.
+
+  **Se conserva el campo en vez de borrarlo**, y también es deliberado: el YAML no se parsea en modo
+  estricto, así que un `max_attempts: 5` ya escrito —el config del cerebro central lo tiene—
+  seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
+
+### Fixed
+- **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
+  guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
+  `saveObservation`, «donde nace el contenido». Pero `PromoteObservation` es un `UPDATE` por id que
+  no pasa por ahí — exactamente el argumento por el que la guarda de CUARENTENA ya había tenido que
+  ponerse en `PromoteObservationCtx`, porque la promoción tampoco pasa por el predicado de
+  visibilidad.
+
+  Sin la guarda, una observación local guardada por un binario anterior se marcaba `shared`, se
+  encolaba, el central la rechazaba por su propia guarda y moría en dead-letter. Nadie perdía
+  memoria, pero quedaba una fila que decía ser memoria de equipo y nunca iba a llegar al equipo — y
+  el usuario se enteraba por el `doctor` horas después, no por el error de la operación que lo
+  causó.
+
+  **Sólo si todavía no es `shared`, y es deliberado.** Promover una ya-shared es un no-op
+  documentado e idempotente; hacerlo fallar rompería ese contrato para las filas que ya están del
+  otro lado —guardadas antes de que la guarda existiera— sin evitar ningún daño, porque el cruce ya
+  ocurrió. Lo que esta guarda impide es la decisión NUEVA de compartir contenido dañado, no el
+  registro de una vieja.
+- **11 observaciones que alguien marcó como importantes estaban rankeadas como si no lo fueran, y
+  el arreglo estaba a la vista.** El `doctor` ya las contaba: de las 73 que se guardaron con el
+  sobre de la llamada adentro del `content`, 11 todavía declaran ahí qué `importance` se les pidió
+  —1.5, 1.6, 1.9, 2.0— mientras su columna dice **1.0**, el default y el valor más común de toda la
+  memoria. El recall ordena por `importance`: se hundieron en el montón justo las que alguien marcó
+  para no perder.
+
+  La nota de diseño daba tres razones para no reparar, y las tres siguen siendo ciertas — pero las
+  tres hablan de **lavar el texto**, no de corregir la columna. Contra una reparación que toca sólo
+  `importance`: no hay falso verde (el check sigue contando las 73, porque el sobre sigue ahí), no
+  se borra evidencia (el número se lee del sobre y el sobre se queda), y el `content_hash` no cambia
+  (`ContentHash` deriva sólo del content, así que el dedup sigue reconociendo la fila). El diseño
+  había empaquetado dos reparaciones y rechazado ambas porque una es peligrosa.
+
+  `musubi doctor --repair swallowed_envelope` ahora devuelve ese número y no toca una coma del
+  texto. Como el hash no cambia, la corrección **no viaja al central** —y no podría: el central
+  rechazaría ese push con su propia guarda del sobre—, así que se corre en cada cerebro.
+
+  De paso, el número pasa a leerse **sólo de la cola después del último `</content>`** y no de todo
+  el texto: desde que ese valor se escribe, una observación que documente este mismo defecto podría
+  citar un `<importance>` en su prosa y hacer que la reparación escriba algo que nadie pidió.
+- **Un rechazo de guarda salía como «error interno del servidor», y el nodo que lo recibía lo
+  reintentaba para siempre.** Medido el 2026-09-08 en `kernelos-pc`: **605 intentos en 74 h** contra
+  una observación que el central nunca iba a aceptar, reintentándose cada 5 minutos sin que nada
+  fuera a cambiar jamás.
+
+  Son dos decisiones correctas que se contradecían. `syncclient.go` clasifica `-32603` como
+  TRANSITORIO a propósito —un `SQLITE_BUSY` del central no puede costar memoria— y su comentario se
+  apoya en que «el outbox corta solo al llegar a `max_attempts`». Pero `scheduler.go` eliminó ese
+  tope, también a propósito: un central inalcanzable por horas tampoco puede costar memoria. Cada
+  una se defiende sola; juntas, la cota en la que se apoyaba la primera dejó de existir. Lo que
+  quedó no fue reintentar de más: fue reintentar para siempre.
+
+  El arreglo no toca ninguna de las dos políticas —las dos son correctas— sino la mentira que las
+  hacía chocar: el central declaraba «me rompí yo» cuando en realidad había MIRADO el pedido y lo
+  había rechazado. Ahora un rechazo determinista viaja como `-32602`, que el cliente ya trata como
+  definitivo, y la fila muere en el primer intento con su razón guardada en `last_error`. La
+  memoria no se pierde: queda local y en dead-letter, rescatable con `musubi_sync_requeue`.
+
+  El default sigue siendo «error interno» a propósito. Sólo se degrada a culpa del llamador lo que
+  una guarda rechazó mirando el pedido; mentir en la otra dirección haría que un cliente TIRE
+  memoria buena porque al central se le llenó el disco.
+- **El redespliegue del cerebro dejaba procesos corriendo el binario anterior, y uno de ellos era
+  el que sostenía la memoria.** Medido en el central el 2026-09-08, con el despliegue anterior ya
+  hecho:
+
+  ```
+  pid 2892216  musubi daemon      exe: /usr/local/bin/musubi (deleted)   ← 6 días
+  pid 1048700  musubi serve       exe: /usr/local/bin/musubi
+  pid 1048702  musubi dashboard   exe: /usr/local/bin/musubi
+  pid 1121750  musubi agent       exe: /usr/local/bin/musubi
+  ```
+
+  El del ejecutable **borrado** es un `musubi daemon` que lanza `musubi-gateway.service` —el bot de
+  Telegram— como su servidor MCP. `redesplegar-cerebro.sh` reiniciaba tres unidades y ninguna era
+  ésa, así que ese proceso sobrevivía a cada despliegue con el binario anterior. No es higiene: es
+  el proceso que hasta ahora corría el único ciclo de mantenimiento de la memoria del cerebro.
+
+  El guion no podía encontrarlo aunque quisiera: `musubi-gateway` y `musubi-whatsapp` son unidades
+  de **usuario** (uid 1000), no del sistema, así que un `systemctl stop` como root no las ve. Van
+  ahora en su propia lista y se reinician **después** de que el cerebro quedó verificado — antes
+  sería apagar el bot para después descubrir que el despliegue no servía.
+
+  Y de paso, una corrección a nuestra propia nota: `systemctl --user` **sí** funciona por SSH no
+  interactivo, siempre que se le pase `XDG_RUNTIME_DIR=/run/user/<uid>`.
+
+- **Y una comprobación que hace innecesario acordarse de esa lista.** Las listas envejecen —ésta se
+  quedó sin el gateway y nadie lo notó— así que el guion ya no mira una lista sino el **kernel**:
+  recorre `/proc/*/exe` y falla si quedó cualquier proceso cuyo ejecutable sea el que se acaba de
+  reemplazar y ya no exista en disco, se llame como se llame y lo lance quien lo lance.
+
+  No vuelve atrás el despliegue —el cerebro está sano y volver sería peor— pero termina en 1: un
+  proceso viejo escribiendo sobre una base recién migrada es exactamente el estado que no se quiere
+  descubrir por casualidad tres semanas después. El detector se verificó **contra el servidor
+  real**, donde encontró el único proceso rezagado que hay.
+
+
+### Added
+- **El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace.** `runServe` no
+  arrancaba el ciclo de memoria —consolidar, olvidar, purgar— y sin embargo ya recibía
+  `WithMaintenance(cfg.Maintenance)`: la config estaba cableada desde siempre y **el consumidor no
+  existía**. No hay ningún comentario que lo excluyera a propósito.
+
+  **Cómo se veía eso, medido en el central el 2026-09-07.** El ciclo *sí* corría —`last_maintenance`
+  marcaba 31 h contra un intervalo de 24 h, o sea el diente de sierra normal del ticker— pero lo
+  corría **otro proceso**. La cadena, medida por `/proc`:
+
+  ```
+  musubi-gateway.service  →  main.py  →  /usr/local/bin/musubi daemon (pid 2892216, 6d 07h)
+                                              └─ abre /home/musubi/musubi-brain/.musubi/memory.db
+  ```
+
+  `musubi serve` arranca **1** scheduler (sólo el destilado); `musubi daemon` arranca **4**,
+  incluido el de mantenimiento. Así que la memoria del cerebro se mantenía como efecto secundario
+  de que **el bot de Telegram estuviera vivo**. Parar el bot —una operación perfectamente
+  razonable, es un bot de chat— dejaba la memoria sin consolidar, sin olvidar y sin purgar, y nada
+  lo decía. En el servidor no hay ningún timer ni crontab de `musubi maintain`: el único timer de
+  Musubi es el del backup.
+
+  Ahora `runServe` arranca el scheduler y su corrida de arranque, con el mismo gate de config que
+  `runDaemon`. **Dos procesos no se pisan**: `RunScheduledMaintenance` toma el candado de despacho
+  y consulta `MaintenanceDue` contra `last_maintenance` **en la base**, así que el que llega
+  segundo ve que no corresponde y no hace nada — la coordinación es del dato, no del proceso.
+
+  **Van sólo el mantenimiento y su corrida de arranque, no los otros tres schedulers del daemon**:
+  el del grafo indexa el árbol *checkouteado* y en un servidor no hay proyecto que indexar; el de
+  sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo programado sin nadie que
+  lo pidiera.
+
+  Y una serie nueva para que el silencio no pueda volver a esconderse:
+  **`musubi_maintenance_age_seconds`**, con la convención de `musubi_backup_local_age_seconds` —
+  **`-1` si nunca**, que distingue «nunca corrió» de «corrió hace 0 segundos», las dos respuestas
+  más distintas posibles. Un cerebro que dejó de mantenerse responde exactamente igual que uno
+  sano: la memoria sigue contestando, sólo deja de envejecer bien.
+
+  M1–M3 con tres sabotajes, cada uno rojo sólo en el suyo. M3 vigila las tres construcciones por
+  separado y la tercera es la que evita el arreglo simétrico y equivocado: el escalón de sólo
+  lectura **no** debe arrancar el ciclo, porque su base se abre con `PRAGMA query_only` y sería
+  trabajo programado para fallar cada vez.
+
+- **La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina
+  que queda afuera.** El `capver` existía desde que existe `buildid` y **nadie lo leía** — el modo
+  de falla que este repo persigue: se construye y no se enciende. Ahora tiene un consumidor.
+
+  `[CapverMin, Capver]` es una banda y no un número porque con un solo valor cualquier cambio de
+  contrato obliga a actualizar toda la malla el mismo día — el mismo cutover duro que el piso de
+  lectura acaba de sacar del esquema. `CapverMin` sube, nunca baja, y subirla es **retirar
+  soporte**: por eso lleva su propia bitácora, para que el día que una máquina vieja deje de poder
+  hablar sea una decisión con fecha y no el efecto lateral de haber tocado `Capver`.
+
+  El agente declara su capver en el latido; el cerebro lo compara, lo guarda por máquina
+  (`devices.capver`, migración 49) y responde en el campo `protocolo` cuando queda afuera. El
+  agente **lo imprime**, por el mismo motivo que ya imprime las notas de `muestra` y `servicios`:
+  quien puede actualizar esa máquina es quien la mira desde ahí, no quien lee los logs del cerebro.
+
+  **El latido NO se rechaza por esto, y la decisión es la pieza.** Una máquina rechazada deja de
+  latir, y dejar de latir se ve *exactamente igual* que estar apagada: el problema quedaría
+  invisible justo para quien puede arreglarlo. Queda viva, en la flota, con su problema escrito.
+
+  **`0` no es «capver cero», es «no declara»**, y se contesta con otro texto. Un agente anterior a
+  esta pieza no manda el campo; decirle que «habla un contrato viejo» sería un diagnóstico falso
+  para el mismo remedio. Es la misma regla que ya gobierna `puede_preguntar`, donde el nil se
+  distingue del `false` explícito.
+
+  **Y de paso cierra un agujero que el propio repo ya había documentado — para la otra mitad del
+  mensaje.** `internal/fleet/protocolo.go` existe porque la RESPUESTA del latido vivía escrita dos
+  veces, y eso costó dos features en silencio (`token_nuevo`, que dejaba la rotación de token sin
+  poder completarse nunca, y `servicios`, cuyo único propósito era que un inventario descartado no
+  desapareciera en silencio — y desaparecía en silencio). **El PEDIDO tenía el mismo problema y se
+  había pasado por alto**: el agente lo armaba como un `map[string]any` anónimo y el cerebro lo
+  leía con un struct privado. Un map es todavía peor que un struct duplicado: no tiene nombres de
+  campo que el compilador pueda mirar, así que un typo en la clave compila, arranca y responde 200
+  con el campo perdido. Ahora los dos lados usan `fleet.CuerpoLatido`.
+
+  Las dos guardas del repo hicieron su trabajo sobre este cambio y las dos exigían una decisión
+  escrita, no una línea: `capver` entró a la lista blanca del cuerpo tras el examen que esa prueba
+  pide —no dice quién es la máquina, dice qué contrato habla, y la única fila que puede tocar sigue
+  siendo la del token—, y `protocolo` tuvo que declararse consumido *y* sostenerse con la prueba
+  que verifica que llega de verdad, que pasó de cuatro campos a cinco.
+
+  B1–B5 con sus cinco sabotajes, cada uno rojo sólo en el suyo. B5 mide la **escritura** y no el
+  valor: un UPDATE que reasigna la fila a sí misma la deja idéntica y cuesta lo mismo —página
+  sucia, frame de WAL y fsync—, así que se cuenta con el espía de escrituras que ya vigila el
+  camino caliente del latido.
+
+- **El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede
+  consultar.** Con el piso grabado en la base, `musubi daemon` deja de tener dos respuestas para
+  tres situaciones. Los tres estados, y que sean tres es el punto:
+
+  | estado | qué hace |
+  |---|---|
+  | sano | migra, lee y escribe |
+  | **sólo lectura** | **lee; toda tool que muta se rechaza nombrando el motivo** |
+  | degradado | no hay memoria; contesta el protocolo y rechaza todo |
+
+  Verificado con el binario real contra una base marcada `v49` (piso 43, binario en v48):
+  `initialize` declara `musubi/readonly` con **36 tools servibles**, `musubi_recall` **devuelve la
+  nota sembrada**, y `musubi_save_observation` vuelve con `-32005` y una explicación.
+
+  **La garantía la da SQLite, no nuestra disciplina.** `PRAGMA query_only = 1` va en el DSN, así
+  que lo hereda cada conexión del pool, y el constructor además **verifica que quedó puesto** en
+  vez de confiar en que el driver aplicó el `_pragma`. Una lista de funciones-que-no-llamamos
+  habría envejecido en la primera escritura nueva que alguien agregue.
+
+  **El hallazgo que casi lo deja en teatro: `musubi_recall` NO es `readOnly`.** Y con razón —
+  escribe: refuerza el acceso de lo que devolvió, y ese error era *fatal* para la consulta—. La
+  primera versión del escalón rechazó la tool de lectura principal. Medido sobre el registro, sólo
+  **tres** tools tienen esa forma: `musubi_recall` y `musubi_memory_expand` (`bumpAccess`) y
+  `musubi_recall_code` (`LedgerAdd`). Su escritura es telemetría, no parte de la respuesta.
+
+  Se arregló en los dos niveles: la capa de memoria **omite** esas escrituras cuando la base es de
+  sólo lectura —los mismos ítems, en el mismo orden, sin la señal de refuerzo de esa sesión— y el
+  registro de tools gana un cuarto eje, `roClass`, con el mismo patrón que `lockClass`: el cero se
+  deriva de `readOnly` (fail-safe, una tool nueva no entra al modo por olvido) y
+  `roLeeConEscrituraIncidental` lo declara para esas tres. Marcar `readOnly` a `musubi_recall`
+  habría sido más corto y **estaba descartado de antes**: ese eje decide autorización, y la abriría
+  a los principales `reader`.
+
+  No es un duplicado de `RecallOptions.NoBump`: eso es una *preferencia* por llamada que la capa
+  MCP no pasa nunca; esto es una *capacidad* del engine que ningún caller puede olvidarse de
+  declarar, y cubre además a `ExpandMemory`, que no tiene opciones donde ponerla.
+
+  `servirSoloLectura` es una función aparte y no una rama de `runDaemon`, porque lo que la
+  distingue no es una opción de más sino **todo lo que no arranca**: mantenimiento, grafo,
+  destilado, ledger de uso, vertedero del feed, outbox y cognición. Escrito como rama, cada
+  scheduler nuevo quedaría corriendo también acá contra una base que no se puede escribir.
+
+  Ocho invariantes (R1–R8) con seis sabotajes, cada uno rojo en el suyo. R8 corre `runDaemon` en un
+  subproceso real. **Y el escenario de D5 tuvo que corregirse**: desde que las bases graban su
+  piso, una base más nueva que este binario alcanza ya no cae en degradado sino en el escalón; el
+  caso degradado es ahora el de una base *sin evidencia* de piso, y así se arma.
+
+- **La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en
+  dos situaciones distintas.** `ErrSchemaTooNew` es un booleano: o el binario llega al esquema de
+  la base, o se niega. Eso trata igual a una base que cambió de forma y a una que sólo sumó
+  columnas, y obliga a un cutover duro de toda la malla por cada migración — aunque **41 de las 47
+  migraciones (87%) no le cambian el resultado a ninguna consulta existente**.
+
+  Cada migración declara ahora `readCompatible`, y el piso de lectura se **deriva**: es la
+  migración no-compatible más alta. Medido sobre la lista real, **el piso es la v43**; el binario
+  va por la v48. Un binario de v43 en adelante puede leer una base v48 y devolver exactamente las
+  mismas filas.
+
+  **La definición es estrecha a propósito, y el caso que la fija es la v22.** Su propio comentario
+  la llama «aditiva» —y lo es, en el sentido de que `ADD COLUMN NOT NULL DEFAULT` no hace una
+  pasada de escritura—. Pero desde la v22 existen filas con `quarantined = 1` y el predicado de
+  visibilidad pasó a ser `archived = 0 AND superseded_by IS NULL AND quarantined = 0`: un binario
+  v21 no tiene ese tercer filtro y devolvería contenido de LLM en cuarentena como si fuera memoria
+  verificada. Son dos sentidos distintos de «aditiva» y el que importa acá es el del lector.
+
+  Las seis que rompen lectura, cada una con su razón medida: v13 y v14 (las tablas se reconstruyen
+  y pasan a estar partidas por `project_id`), v17 (el índice FTS se rehace como external-content y
+  se borran los triggers del binario anterior), v22 (la cuarentena), v39 (`fleet_policy_state` se
+  reconstruye con `alcance` en la clave) y **v43** (durante la rotación el dispositivo se autentica
+  por `token_sha256_nuevo` —`internal/memory/rotacion.go:135`—, así que un lector viejo, que sólo
+  mira `token_sha256`, contesta que no existe).
+
+  **El cero de Go es `false` = «no compatible», y es deliberado**: el mismo fail-safe que
+  `toolEntry.readOnly`. Una migración nueva que nadie clasificó sube el piso y hace que los
+  binarios viejos se nieguen, que es el lado seguro del error.
+
+  El piso lo graba en la base el binario que migra (`schema_floor`, migración 48), porque el
+  binario viejo no puede derivarlo: no conoce las migraciones futuras. **Va en una tabla y no en
+  `PRAGMA application_id`** —que está libre y sería más barato— porque el default del PRAGMA es 0 y
+  0 también sería un piso válido: «ausente» y «cualquiera puede leer» serían el mismo número, o sea
+  el valor de fallo sería el tranquilizador. Con una tabla, ausente es ausente y el lector se niega
+  por falta de evidencia. Se re-graba en cada arranque, no sólo cuando hay migraciones pendientes:
+  si no, toda base que hoy existe se quedaría sin piso para siempre.
+
+  **El alcance del piso es general, no «sólo la memoria».** Acotarlo a `observations`/`relations`/
+  `embeddings`/`code_*` daba un piso de 22 en vez de 43 y dejaría leer a muchos más binarios; se
+  descartó porque ese número sólo sería cierto mientras el modo sólo-lectura no sirviera jamás una
+  lectura de flota, y ese acoplamiento no está escrito en ningún lado. Si algún día hace falta, el
+  camino es un segundo piso con su propio alcance declarado, no reinterpretar éste.
+
+  `ErrEsquemaLegible` viaja **envuelto junto a** `ErrSchemaTooNew` (Go admite varios `%w`), así que
+  todo caller que ya preguntaba por ese error sigue viendo lo mismo.
+
+  **Lo que esto todavía NO hace, dicho claro:** ningún caller abre en sólo lectura. Esta entrega es
+  la evidencia y la distinción; servir la lectura —engine con `PRAGMA query_only`, y el escalón MCP
+  que expone sólo las tools de lectura— es lo que sigue. Por eso el mensaje del error habla de una
+  capacidad («sus datos son LEGIBLES para él») y no de un comportamiento.
+
+  Cinco invariantes (P1–P5) con sus sabotajes, cada uno rojo sólo en el suyo. P2 es el que atrapa
+  un piso **tipeado**: es el único que corre la derivación sobre una lista cuya respuesta no es 43.
+
+- **El daemon dejó de morirse mudo: cuando la memoria no abre, ahora atiende degradado.** Hasta
+  acá, cualquier fallo de `NewDbEngine` mataba el proceso con `os.Exit(1)` y el diagnóstico por
+  stderr. Medido el 2026-09-07 contra una base marcada `v999` con un binario que llega a la
+  migración 47, mandándole al daemon un `initialize`:
+
+  ```
+  exit=1
+  STDOUT (lo que ve el cliente MCP): 0 bytes
+  STDERR: el esquema de la base es más nuevo que este binario: la base está en el esquema
+          v999 pero este binario solo llega a v47; actualizá musubi
+  ```
+
+  El mensaje era bueno y salía por el único canal que el cliente MCP no le muestra al agente.
+  **Cero bytes de protocolo es indistinguible de «musubi no está instalado»**, y las dos
+  situaciones piden acciones opuestas: una se arregla actualizando el binario, la otra
+  instalándolo. Y no es sólo el esquema: por ese mismo camino morían mudos el disco lleno, la
+  base corrupta y el permiso denegado.
+
+  Ahora el daemon levanta un servidor degradado que (1) **contesta el handshake** declarando la
+  causa en `_meta` bajo `musubi/degraded`, junto a la identidad de build; (2) **lista el mismo
+  catálogo** que un servidor sano —verificado por huella, no sólo por conteo—, porque una lista
+  vacía sería la misma mentira con otra cara: las tools existen, lo que falta es con qué
+  trabajar; y (3) **rechaza cada `tools/call`** con el código propio `-32004` y un mensaje que
+  nombra la versión del binario, la causa textual y que el binario está instalado y respondiendo.
+
+  No despacha nada: el handler tocaría un engine `nil`, el `recover` de `Dispatch` lo convertiría
+  en «error interno inesperado» y estaríamos de vuelta en un mensaje que no dice nada. Tampoco hay
+  un engine falso de por medio: un stub que devolviera vacío dejaría al agente leyendo «no hay
+  memoria sobre eso» —una respuesta que se lee como un dato— en vez de «no pude mirar».
+
+  El mismo experimento, contra el binario ya corregido: `exit=0` y **106.551 bytes** por stdout,
+  con el `catalog_sha256` idéntico al del servidor sano. El aviso por stderr se conserva: es lo
+  que ve el operador, y cambiarlo por otro canal mudo no era el punto.
+
+  Cinco invariantes (D1–D5), cada uno visto en rojo bajo un sabotaje que ataca al suyo. D5 corre
+  `runDaemon` en un **subproceso real** con sus pipes, porque el defecto vivía entre el `os.Exit`
+  y el cliente: un test sobre una función interna habría medido el proxy y no la cosa.
+
+- **La identidad del binario viaja en el handshake: hasta acá ningún camino del protocolo decía
+  qué build había enfrente.** `serverInfo.version` contestaba el literal `"1.0.0"` desde siempre,
+  mientras `s.version` —la versión real, ya inyectada por `WithVersion` desde `main`— existía y
+  no se usaba. `musubi_whoami` tampoco la llevaba.
+
+  Eso no era cosmético. Medido el 2026-09-07 hay **tres builds hablándose en la malla al mismo
+  tiempo** —`0.133.0-main` en la sala de mando, `0.131.0-flota` en el cerebro central y
+  `0.130.0-flota` en el daemon que levanta el gateway de Telegram, este último con el ejecutable
+  ya borrado del disco— y **cuatro tools con JSON distinto** entre dos de ellos. El agente veía
+  dos descripciones de la misma tool y nada le decía cuál era la vieja: la causa mecánica es que
+  la identidad no viajaba.
+
+  Ahora hay un objeto `buildid.Identity` con `version`, `commit`, `dirty`, `schema`, `capver`,
+  `tools_count`, `catalog_sha256` y `go`. Va en `_meta` del `initialize` —y no dentro de
+  `serverInfo`, cuya forma la fija el spec de MCP y donde un campo propio es donde un cliente
+  estricto se rompe—, y `serverInfo.version` pasa a llevar la versión de verdad. Se expone
+  también por `musubi version --json`.
+
+  **La regla de la pieza: lo que se puede DERIVAR no se tipea.** El commit y el estado del árbol
+  salen de `runtime/debug` (los graba el toolchain); el esquema, de la última migración que el
+  binario conoce; el catálogo se cuenta y se hashea sobre el registro real, con la MISMA regla de
+  visibilidad que `tools/list` —una tool dormida no entra— para que el número describa lo que
+  alguien realmente sirve. Lo único escrito a mano es `Capver`, a propósito: declara semántica,
+  que ningún dato del binario puede inferir, y lleva su bitácora de una línea por bump.
+
+  **Lo que NO está, y por qué.** No hay `branch` ni `canal`: Go no los graba en el build info, así
+  que incluirlos exigiría tipearlos por ldflags, que es exactamente lo que esta pieza viene a
+  eliminar. Un campo tipeado que nadie actualiza miente peor que un campo ausente.
+
+  La salida por defecto de `musubi version` **no cambia ni gana una línea**: `redesplegar-cerebro.sh`
+  la compara entera contra la versión que instaló, y un renglón de más ahí se leería como un
+  rollback en mitad de un despliegue que en realidad salió bien. Por eso `--json` es una bandera,
+  igual que `--esquema`.
+
+  Cinco invariantes con su sabotaje visto en rojo, cada uno atacando el suyo y ninguno salpicando
+  a los demás. El primero se descubrió **vacuo**: el sabotaje escribía a mano el esquema actual y
+  el test quedaba verde. Ninguna prueba en un solo instante puede separar «derivado» de «tipeado
+  con el valor que hoy es correcto», así que el test declara ese límite en vez de aparentar que
+  prueba más de lo que prueba — lo que garantiza es detección en la deriva, que es el único
+  momento en que una constante tipeada hace daño.
+
+### Fixed
+- **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
+  `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código
+  impedía abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de
+  corregir. El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
+  apruebe para terminar, que es exactamente lo que el tope existe para evitar.
+
+  Ahora `OpenDebate` se niega a abrir un debate cuyo topic declare una vuelta por encima de su
+  propio tope, con un error que dice qué pasó y qué hacer. No hace falta estado nuevo: el topic
+  ya declara `vuelta k/K`, y negarse a abrir falla del lado seguro —un debate que no existe no
+  puede aprobar nada—. La convención pasa a tener UNA definición (`memory.VueltaDelTopic`), que
+  es la misma que `musubi arnes` usa para medir: con dos regex separadas, endurecer una dejaría
+  a la otra midiendo la convención vieja, y las dos seguirían andando.
+
+  El mensaje va en el error y no en las reglas de la skill a propósito: el error cuesta tokens
+  sólo cuando se dispara, y las reglas los cuestan en cada turno.
+- 🔴 **La profundidad de revisión estaba calibrada a ojo, y medirla mostró que no distinguía
+  nada.** Los cortes de `codeintel.Profundidad` se eligieron cuando la función se escribió, sin
+  una distribución que los respaldara. Medido ahora sobre los **108 PRs reales** de este repo
+  —con el grafo indexado, descontados los back-merges (que no son un PR sino «todo lo que main
+  ganó») y los duplicados— el reparto era **1 % mínima · 30 % estándar · 67 % profunda**: dos de
+  cada tres cambios pedían el panel más caro. Un criterio que casi siempre contesta lo mismo
+  dejó de ser un criterio.
+
+  Tres causas independientes, cada una medida:
+
+  1. **Los escalones estaban por debajo de la mediana.** `lineas` topeaba en 200 con una mediana
+     de 373; `simbolos` en 9 con una mediana de 15. Seis de cada diez PRs sacaban el máximo en
+     esas dos. Ahora cada borde sale de un cuantil observado (P33 / P75) y se redondea a un
+     número que una persona pueda rehacer de cabeza, que es la razón de ser de los escalones.
+  2. **`hay_borrados` no medía lo que decía.** En un diff unificado, MODIFICAR una línea es un
+     borrado más un agregado, así que «hay al menos una línea borrada» era cierto en el **83 %**
+     de los PRs: una constante disfrazada de señal, que le sumaba un punto a todo el mundo. Lo
+     que la señal existe para ver —un archivo borrado entero, o uno que saca más de lo que
+     pone— pasa en el **12 %**, y eso es lo que mide ahora. El punto ciego original (el hunk que
+     sólo borra) lo cubre `lineas`, que desde F2 suma agregadas Y borradas.
+  3. **Tocar un README volvía inalcanzable el panel más barato.** El piso de honestidad usaba
+     `IndexableForGraph` para decidir si el radio quedó ciego, y esa función contesta otra
+     pregunta: «¿el indexador debe recolectar este archivo?». Con eso, un CHANGELOG.md caía en
+     la misma bolsa que un `.ts` sin indexar. Medido: el **84 %** de los PRs tocaba algún archivo
+     no indexable y en el **62 %** ése era el ÚNICO motivo de ceguera, con el código enteramente
+     cubierto. Un PR de 0 puntos terminaba en `estandar` por un `.md`. La función nueva
+     `PuedeTenerRadio` separa «no es código» (no hay nada que saber) de «es código que este
+     build no indexa» (ahí no saber es real), y **ante la duda cuenta como código**, que es el
+     error barato.
+
+  Reparto resultante, misma población y mismas funciones de producción: **22 % · 49 % · 28 %**.
+  La ceguera del radio baja de 88 % a 36 %, y lo que queda es ceguera de verdad —símbolos que ya
+  no existen en el `HEAD` de hoy—. 17 sabotajes verificados en rojo, cada uno atacando el
+  invariante que su test declara.
+
+  **Un test de este mismo track medía el proxy y no la cosa**, y se descubrió saboteándolo:
+  congelaba la tabla de escalones llamando a `escalon()` con números escritos a mano, así que
+  mover una constante calibrada lo dejaba verde. Ahora pasa por `Profundidad` y lee el desglose.
+- 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
+  `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
+  no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se
+  inyectó nunca, es un problema de cableado», mandando a arreglar algo que funciona.
+
+  Es **exactamente la confusión que `musubi arnes` existe para evitar**, una capa más abajo: un cero
+  que sirve a la vez de valor de fallo y de valor tranquilizador. Ahora el gate cuenta las veces que
+  **midió**, no sólo las que habló, y hay tres veredictos donde había dos: `APAGADO` (nunca midió) ·
+  `EN REPOSO` (midió N veces y no tuvo nada que avisar) · `IGNORADO` (avisó y nadie lo siguió).
+  Verificado de punta a punta con los tres casos.
+- **Ocho tests del paquete `mcp` se ponían rojos si tenías `MUSUBI_TOOLS_ALL=1`.** Es un
+  interruptor **documentado** —devuelve al catálogo las nueve tools dormidas sin recompilar— y
+  media docena de tests afirman sobre la FORMA de ese catálogo heredando la variable del entorno.
+  Resultado: **rojos en la máquina de quien la usa, verdes en CI**, que no la tiene. El peor rojo
+  posible: el que sólo ve quien trabaja, y que por eso se aprende a ignorar.
+
+  Se arregla en el nivel correcto —un `TestMain` del paquete, no test por test— porque lo que se
+  hereda no es el dato de un caso sino la configuración global sobre la que casi todos afirman.
+  Verificado: sin el `TestMain` caen 8; con él, 0.
+- **El gate avisaba sobre su propio workspace.** En un repo recién creado, `.musubi/config.yaml` y
+  `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
+  justo el umbral. El gate se avisaba a sí mismo, y un aviso que salta por el ruido de la propia
+  herramienta es el que enseña a ignorar la herramienta.
+- **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
+  - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
+    llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan
+    prefiere —podar lo que el **código ya ejecuta**: la profundidad no se explica, se lee de
+    `revision`— y quedó en **4.979**, con margen 21. Como `rules_too_long` es un *warning* y
+    `report.OK()` sólo mira errores, **un umbral que nada puede hacer fallar se cruza y nadie se
+    entera**: ahora hay un test que lo hace fallar.
+  - **Un merge limpio no es evidencia de nada.** `debate_test.go` fusionó las dos ramas sin un
+    solo conflicto y **no compilaba**: el test que agregó F4 usaba las firmas que F3 había
+    cambiado. Lo detectó `go vet`, no git.
+  - **La renumeración de los pasos, con sus referencias internas.** F2 inserta un paso y corre
+    todos los demás; F3 y F4 editan el CONTENIDO de esos mismos pasos. Quedarse con un lado
+    perdía el otro entero y compilaba igual. Además hay referencias internas («va por el paso 7»)
+    que había que mover con ellos.
+  - **El golden completo se puso rojo al integrar** —F2 y F3 tocan descripciones distintas— que es
+    exactamente para lo que se agregó.
+- **`receipt emit` ignoraba las banderas desconocidas y aprobaba igual.** En el comando cuyo único
+  trabajo es otorgar permiso de entrega, «bandera desconocida ⇒ apruebo» es el default al revés.
+  Pasó de verdad: un `receipt emit --help` emitió un recibo aprobado. Ahora sale con error.
+- **`receipt show` panicaba con una huella corta.** Hacía `r.Fingerprint[:12]` sobre un valor que
+  se decodifica de `meta` —o sea de un texto que alguien puede editar—, así que se caía justo el
+  comando que sirve para diagnosticar.
+- **La skill ya ordena congelar el hallazgo** antes de que entre al debate (era el hueco que F5
+  dejó declarado).
+
+### Added
+- **El gate de revisión post-apply: la revisión se ofrece cuando todavía es barata.** Musubi ya
+  tenía el mecanismo (`adversarial-review`, `musubi_debate`) y la autoridad (el recibo de RDD), pero
+  nada CONECTABA el momento en que hay algo que revisar con el momento en que se revisa. El único
+  gate vivía en el pre-push, o sea que avisaba cuando ya se terminó de trabajar y lo único que uno
+  quiere es entregar — el peor momento posible para pedir una revisión.
+
+  Ahora el hook `UserPromptSubmit` le pregunta a **git** —no al modelo, no a una heurística— cuánto
+  trabajo de producción hay encima del último commit. Si cruza el umbral (**2 archivos** o **40
+  líneas**; `_test.go`, `.md` e imágenes no cuentan) y ningún recibo cubre ese estado exacto,
+  inyecta **una vez por sesión** un bloque que nombra la skill y el comando.
+
+  - **No bloquea nada, y es a propósito.** No decide si el cambio está bien: eso es juicio, y el
+    juicio se delega. Lo único que aporta es la OPORTUNIDAD.
+  - **Falla abierto**: fuera de un repo git, con git colgado o sin memoria, calla. Apagalo con
+    `MUSUBI_REVIEW_GATE=0`, que se lee ANTES de gastar un solo subproceso.
+  - **El costo, medido** (mediana de 9 corridas; el presupuesto del hook es de 10 s): piso 181 ms ·
+    sesión ya avisada **+9 ms** (el corte barato funciona) · avisa +60 ms · con un recibo vigente
+    +155 ms. Ese último es el camino caro y conviene decirlo: con el recibo al día el gate
+    recalcula la huella en cada turno, así que **hacer lo correcto sale más caro**. Es 1,5 % del
+    presupuesto, no se optimizó todavía.
+  - 17 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. Uno salió **vacuo** en la primera vuelta y el hallazgo quedó en el código: en la
+    forma simple de renombre de git (`viejo => nuevo`) separar no hace falta —el nombre nuevo ya va
+    último—, pero en la forma con llaves (`docs/{a.md => b.md}`) la extensión queda `.md}` y **un
+    doc renombrado contaba como producción**.
+
+- **`musubi arnes`: medir si el arnés de revisión se encendió de verdad.** Todo el resto de este
+  track mejora un arnés que hoy corre **cero veces**. El modo de falla dominante de este repo está
+  medido y tiene nombre —*se construye y no se enciende*— así que cerrar un plan sobre encendido
+  sin la pieza que comprueba el encendido sería, exactamente, repetirlo.
+
+  Cuatro preguntas, cada una con su fuente:
+
+  | | de dónde sale |
+  |---|---|
+  | ¿el gate disparó? | tokens de la superficie `review_gate` en el ledger |
+  | ¿alguien lo obedeció? | llamadas a `musubi_debate` en el uso de tools |
+  | ¿los debates cierran? | filas de `debates` cerradas contra abiertas |
+  | ¿cuántas vueltas toma una corrección? | las cadenas `vuelta k/K` del `topic` |
+
+  - 🔴 **Lo que más importa no es medir, es DISTINGUIR.** Un cero significa dos cosas opuestas que
+    piden lo contrario una de la otra: si el bloque **nunca se inyectó**, el problema es el
+    mecanismo y hay que arreglarlo; si se inyectó y **nadie lo siguió**, el problema es la
+    hipótesis y hay que **dejar de agregar piezas**. Confundirlas es exactamente cómo se termina
+    poniéndole la séptima pieza a algo que nadie iba a usar. Por eso hay cuatro veredictos
+    —APAGADO, SE USA SIN EL GATE, IGNORADO, A MEDIO CAMINO, ENCENDIDO— y no un porcentaje.
+  - **El criterio de éxito está escrito EN EL CÓDIGO, antes de medir:** si a las dos semanas el
+    gate disparó y `musubi_debate` sigue en cero, el problema no era el catálogo ni el texto de la
+    skill. Escribirlo ahora es lo que evita explicar el cero a posteriori.
+  - **El K=3 de las vueltas es un juicio, no una medición**, y el comando lo dice mientras no haya
+    cadenas que contar — en vez de mostrar un cero mudo.
+  - 7 sabotajes en ROJO. El que sostiene la fase es el primero: que los dos ceros no den el mismo
+    veredicto.
+
+- **El hallazgo no muta entre que se emite y se vota.** Un hallazgo se emite en un momento y se
+  juzga en otro, con una ronda de crítica cruzada en el medio, y entre esos dos momentos nada
+  garantizaba que el texto siguiera siendo el mismo. Peor: `PostPosture` hace
+  `ON CONFLICT ... DO UPDATE SET stance=excluded.stance`, así que **re-postear con la misma
+  etiqueta reemplaza la postura anterior en silencio**, sin error y sin rastro. El tally es
+  determinista sobre los VOTOS, pero no sobre el TEXTO que esos votos juzgaban: el recuento puede
+  ser perfectamente fiel a una discusión que ya no existe.
+
+  Un hallazgo congelado es una tripleta —id estable, huella del cuerpo canonizado, huella del árbol
+  contra el que se emitió— con dos comandos nuevos: `musubi receipt freeze --id <debate>/<lente>` y
+  `receipt verify`, con el cuerpo por **stdin**.
+
+  - **El cuerpo NO se guarda, sólo su huella.** No es ahorro de espacio: obliga a que quien verifica
+    tenga el texto en la mano. Un verificador que puede leer el texto del propio registro no está
+    verificando, se está mirando al espejo.
+  - **Canonizar CRLF y el salto final, y NADA más.** Las dos mitades importan: sin normalizar los
+    finales de línea, en Windows cada verificación diría «mutó» y el mecanismo se apaga en una
+    semana; normalizando de más —espacio interno, mayúsculas— «el índice puede estar vacío» y «el
+    índice **no** puede estar vacío» darían la misma huella y el congelado pasaría a **aprobar
+    mutaciones reales**. El banco sabotea las dos.
+  - **Tres motivos de rechazo distintos**, porque cada uno pide una acción distinta: congelar,
+    re-emitir, re-verificar. Colapsarlos haría que el agente reintente la acción equivocada.
+  - **Sinergia con el alcance decreciente:** la poda por árbol es media respuesta al «a la vuelta
+    k+1 sólo van los hallazgos abiertos» — tras un fix el árbol cambia y los viejos se caen solos.
+  - 🔴 **No se tocó `Compute` ni `Check`.** El plan proponía generalizar la aridad de `Compute`; no
+    se hizo, porque su propia regla es más fuerte —la función nueva va aparte aunque duplique
+    líneas— y porque si su salida cambiara un byte, **todos los recibos vigentes se invalidarían y
+    los push se bloquearían**. Queda una línea base con hexes literales, obtenidos corriéndola
+    ANTES de tocar nada.
+  - 11 sabotajes en ROJO y 7 casos verificados de punta a punta con un binario real.
+
+  Pendiente declarado: la skill todavía no ordena congelar. Cablear `adversarial-review` toca el
+  mismo bloque `Rules` que F2, F3 y F4, y sumar un cuarto editor del mismo texto multiplicaría el
+  conflicto de merge sin necesidad.
+
+### Changed
+- **El bucle de corrección deja de girar.** `adversarial-review` ordenaba, textualmente: *«iterá
+  (fix → re-debate) **hasta que el cambio sobreviva**»*. Tres defectos en una frase: **sin tope** de
+  vueltas, **sin alcance decreciente** —cada vuelta re-litigaba todo desde cero, incluidos los
+  hallazgos ya resueltos— y **sin salida definida**: la única condición de corte escrita era el
+  éxito.
+
+  Y el riesgo real no es girar para siempre: es que el agente, cansado, **apruebe**. Que es justo
+  lo que el paso anterior intenta evitar con «la postura por defecto es rechazar».
+
+  - **K = 3 vueltas** (2 si el cambio es trivial). Al agotarlas, el veredicto es **RECHAZADO POR
+    AGOTAMIENTO** y escala a una persona con el estado completo. El cansancio no aprueba.
+  - **Alcance decreciente**: a la vuelta k+1 sólo van los hallazgos **abiertos**.
+  - 🔴 **El bucle exterior es de DEBATES, no de rondas**, y eso no es una preferencia. Un tally con
+    máximo estricto —y `no_real` ganando **es** un ganador— ejecuta `UPDATE debates SET
+    status='closed'`; sobre un cerrado, `post`, `vote` y `advance` devuelven error y **ninguna
+    acción lo revive**. El camino obvio («una ronda más, y el tope lo hace cumplir `rounds`») no
+    existe. Ahora hay un test que lo sostiene: si alguien hiciera que `advance` reviviera un
+    cerrado, la skill quedaría enseñando algo falso en silencio.
+  - El estado entre debates viaja en el `topic`, que es texto libre y `action=status` devuelve
+    entero: `«<el cambio> · vuelta k/K · abiertos: <lente#hallazgo, …> · previo: <debate_id>»`.
+    La cadena queda auditable **sin tocar el esquema**.
+  - **Límite honesto:** el tope es **instruido, no exigido**. Nada en el código impide abrir la
+    vuelta K+1; es el trade-off consciente de esta fase.
+  - 7 sabotajes en ROJO. El que más importa es la **aserción negativa**: la frase sin tope no puede
+    volver por una reescritura futura. Va acompañada de las positivas porque, sola, la cumpliría
+    también alguien que borre el paso entero.
+
+- **El panel deja de ser un eco: modelo por juez, clase de evidencia y una compuerta.** Dos
+  problemas distintos que caían en las mismas dos tablas, y por eso van en una sola migración
+  (esquema **46 → 47**).
+
+  **Uno: dos jueces del mismo modelo no son dos opiniones.** La skill le daba a cada escéptico un
+  LENTE distinto y nada le daba un MODELO distinto. Peor: aunque alguien los lanzara con modelos
+  distintos, no había dónde guardarlo — `debate_postures` tenía `{round, agent, stance, created_at}`
+  y ni una columna de modelo. «Este cambio lo revisaron tres modelos distintos» era **inverificable
+  a posteriori**.
+
+  **Dos: un hallazgo con evidencia real pesaba lo mismo que una opinión.** El tally cuenta filas con
+  `GROUP BY choice`: un lente que corrió los tests pesaba igual que uno que leyó el diff y opinó, y
+  que uno que no pudo comprobar nada. La skill ya nombraba el riesgo en prosa —«un panel que opina
+  sin haber corrido nada es teatro de verificación»— **sin ningún mecanismo que lo hiciera cumplir**.
+
+  - `model` y `evidence` **nacen obligatorios** en `post` y `vote`, y `evidence` ∈ {`deterministica`,
+    `inferida`, `ninguna`}. Se pudo porque las tres tablas estaban en **cero filas** (medido en las
+    seis bases locales): sin datos vivos no hace falta default piadoso ni período de gracia.
+  - **La compuerta** (`gated_choice` al abrir): un veredicto aprobatorio no cierra si **ningún** voto
+    declaró evidencia determinística. Con tres propiedades que la separan de un candado, y que se
+    sostienen juntas: 🔴 **rechazar NUNCA lleva compuerta** —si eso fallara, lo construido sería una
+    máquina de aprobar por incapacidad—; **un solo** voto determinístico la desarma; y **no
+    reemplaza al quórum**, corre después. Sin `gated_choice`, todo es un no-op: **los nueve tests
+    preexistentes pasan sin tocarles una aserción**.
+  - ⚠️ El modelo va en su **propio campo** y no dentro de `agent`. `agent` es la clave única de las
+    dos tablas: un lente que cambiara de modelo entre rondas dejaría de ser el mismo votante y su
+    voto se **sumaría** en vez de reemplazar, inflando el total en silencio.
+  - **Límite honesto:** la clase de evidencia es una **declaración, no una prueba**. Detecta al panel
+    que no verificó nada; no al que miente.
+  - 11 sabotajes, cada invariante visto en ROJO.
+
+### Fixed
+- 🔴 **El golden de tools era ciego para las nueve tools dormidas, y no podía ponerse rojo.** La
+  regla 5 del repo dice que al cambiar una tool hay que regenerar el golden «o el build queda verde
+  y mal». Pero el golden congela `handleToolsList()`, que **filtra las dormidas**: se le cambió el
+  contrato a `musubi_debate` —dos campos OBLIGATORIOS nuevos—, se corrió con `-update` y **el
+  archivo no se movió un byte**.
+
+  Ahora hay un segundo golden con el catálogo COMPLETO (101 tools contra 92). Verificado con el
+  sabotaje que corresponde: al tocar la descripción de una tool dormida, el golden viejo sigue en
+  `ok` y el nuevo se pone en `FAIL`. Dormir una tool es una decisión sobre su VISIBILIDAD; no
+  debería ser también una decisión sobre si su contrato está protegido.
+
+- **La profundidad de la revisión sale del cambio, no del criterio de nadie.** `adversarial-review`
+  sugería el mismo panel para todo —`rounds=2`, `quorum=2 de 3`—: un typo en un comentario y una
+  refactorización con cuarenta llamadores recibían el mismo tribunal. Un criterio que no distingue
+  no es un criterio, y el costo cae siempre del mismo lado: **revisar de más enseña a saltearse la
+  revisión**.
+
+  `musubi_detect_changes` devuelve ahora `revision`: **siete señales enteras** del propio cambio
+  (archivos, líneas, símbolos, paquetes, callers y paquetes en el radio de impacto, y si hay
+  borrados), puntuadas por **escalones** 0-2 sobre un total de 13, con el desglose para poder
+  rehacer la cuenta a mano. De ahí sale el panel: `minima` 1/1/1 · `estandar` 3/2/2 · `profunda`
+  5/2/3. Escalones y no una curva continua a propósito: un número que no se puede recomputar de
+  cabeza no se discute, se obedece o se ignora.
+
+  - **Todo estaba y nada se juntaba.** El diff, los símbolos, `GraphImpactCtx`, la cobertura del
+    índice: las cinco piezas existían y **no había una sola ruta de código donde un `FileDiff`
+    terminara en una llamada al grafo**. Esta es esa ruta.
+  - 🔴 **El cero del radio era ambiguo, y ahora se desambigua.** Preguntarle al grafo por un símbolo
+    sin nodo devuelve cero callers — lo mismo que por uno al que no llama nadie. Ese cero es el
+    valor de fallo disfrazado de valor tranquilizador. Ahora se comprueba que el nodo EXISTA antes
+    de creerle; si el grafo no cubre algo, el nivel **no puede bajar a `minima`** y el motivo va
+    escrito. Consecuencia que conviene aceptar de entrada: en este repo `minima` va a ser raro
+    hasta que alguien indexe.
+  - **El borrado era el punto ciego.** `parseHunkNewRange` descarta los hunks de borrado puro (y
+    hace bien: los rangos son coordenadas del estado nuevo). Efecto lateral: borrar doscientas
+    líneas medía igual que no tocar nada. `FileDiff` gana `Agregadas`/`Borradas` y `líneas` es la
+    suma de las dos.
+  - **El techo de dos rondas no es un gusto:** es lo que el motor de debate soporta. Con más,
+    `AdvanceDebate` se vuelve un no-op mudo y el panel *cree* que debatió.
+  - 14 sabotajes, cada invariante visto en ROJO bajo una mutación que ataca EL invariante que su
+    test declara. `Rules` de `adversarial-review` pasa de 3.120 a 3.936 runas (umbral 5.000).
+
 ## [0.131.0] - 2026-09-03
 
 ### Changed

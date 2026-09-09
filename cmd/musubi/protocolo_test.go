@@ -47,6 +47,10 @@ func TestNingunCampoDeLaRespuestaDelLatidoSePierdeEnSilencio(t *testing.T) {
 	// Los que el agente sí consume, cada uno verificado de verdad más abajo.
 	consumidos := map[string]bool{
 		"muestra": true, "servicios": true, "comandos": true, "token_nuevo": true,
+		// `protocolo` dice que el capver de este agente quedó fuera de la banda del cerebro. Se
+		// consume imprimiéndolo, por el mismo motivo que `muestra` y `servicios`: quien puede
+		// actualizar esta máquina es quien la mira desde acá.
+		"protocolo": true,
 	}
 
 	tipo := reflect.TypeOf(fleet.RespuestaLatido{})
@@ -75,19 +79,20 @@ func TestNingunCampoDeLaRespuestaDelLatidoSePierdeEnSilencio(t *testing.T) {
 	}
 }
 
-// LOS CUATRO CAMPOS QUE EL AGENTE CONSUME LLEGAN DE VERDAD, y no sólo están declarados arriba.
+// LOS CINCO CAMPOS QUE EL AGENTE CONSUME LLEGAN DE VERDAD, y no sólo están declarados arriba.
 //
 // La lista de `consumidos` de la prueba anterior es una afirmación; ésta es la que la sostiene. Sin
 // ella, alguien podría agregar un nombre a esa lista para callar el rojo sin cablear nada — que es
 // exactamente el atajo que convierte una guarda en decoración.
 //
-// Sabotaje que la hace fallar: quitar cualquiera de los cuatro del decode de latir().
-func TestLosCuatroCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
+// Sabotaje que la hace fallar: quitar cualquiera de los cinco del decode de latir().
+func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	cuerpo, err := json.Marshal(fleet.RespuestaLatido{
 		OK: true, Device: "pc-gio", Project: "casa",
 		Muestra:    "guardada",
 		Servicios:  "descartados: falta la capacidad `services`",
 		TokenNuevo: "msb_el_rotado",
+		Protocolo:  "capver 0 fuera de la banda del cerebro (1..1)",
 		Comandos:   []fleet.ComandoParaElAgente{{ID: "cmd-1", Argv: []string{"uptime"}, TimeoutSeg: 30}},
 	})
 	if err != nil {
@@ -122,6 +127,11 @@ func TestLosCuatroCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	}
 	if res.tokenNuevo != "msb_el_rotado" {
 		t.Errorf("`token_nuevo` no llegó: %q", res.tokenNuevo)
+	}
+	if !strings.Contains(res.motivo, "fuera de la banda") {
+		t.Errorf("`protocolo` no llegó al texto que ve la máquina: %q — es el campo que existe "+
+			"para que un agente que no puede hablar el contrato se entere DESDE su lado, en vez "+
+			"de que el problema viva sólo en los logs del cerebro", res.motivo)
 	}
 }
 

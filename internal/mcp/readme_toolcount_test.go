@@ -15,7 +15,30 @@ import (
 // actualizar el README en el mismo commit.
 func TestReadmeToolCountMatchesRegistry(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	want := len(s.tools)
+
+	// SE CUENTA LO QUE tools/list DEVUELVE, no lo que el registro contiene. Son dos números
+	// distintos y los dos son ciertos: hay 84 tools registradas y el catálogo lista 75, porque
+	// nueve están DORMIDAS (toolEntry.dormant). Una dormida sigue siendo despachable por nombre;
+	// lo único que pierde es el lugar en el listado.
+	//
+	// Acá iba `len(s.tools)`, o sea las registradas. Con eso, un README que decía la verdad
+	// —«el servidor expone 75 herramientas»— ponía el test en ROJO, y la única forma de tenerlo
+	// verde era escribir 84 y dejar al lector esperando nueve tools que su agente nunca le va a
+	// ofrecer. El test empujaba a mentir; ahora afirma el número del que habla el README.
+	t.Setenv("MUSUBI_TOOLS_ALL", "") // el catálogo por defecto, sin la salida de emergencia
+	listado, ok := s.handleToolsList().(map[string]interface{})
+	if !ok {
+		t.Fatal("tools/list no devolvió el mapa esperado")
+	}
+	expuestas, ok := listado["tools"].([]Tool)
+	if !ok {
+		t.Fatal("tools/list no devolvió una lista de Tool")
+	}
+	want := len(expuestas)
+	// Sin este piso, un registro vacío haría pasar el test con cualquier README que dijera 0.
+	if want == 0 {
+		t.Fatal("el catálogo salió vacío: el test no estaría verificando nada")
+	}
 
 	// LOS DOS READMEs. Antes esta guarda sólo miraba el español, y el inglés se fue a la deriva
 	// sin que nadie se enterara: llegó a decir 27 cuando había 66, con una tabla que se había

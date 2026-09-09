@@ -75,14 +75,10 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoCorriendo},
 		}}, nil
 	}
-	ultimoInventario.Lock()
-	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-	ultimoInventario.Unlock()
+	reiniciarFrenos()
 	t.Cleanup(func() {
 		enumerarServicios = anterior
-		ultimoInventario.Lock()
-		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-		ultimoInventario.Unlock()
+		reiniciarFrenos()
 	})
 
 	primero, _, mandar, confirmar := serviciosDelLatido()
@@ -109,6 +105,9 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 			Salud: fleet.SaludServicio{Tomada: time.Now(), Estado: fleet.EstadoFallado},
 		}}, nil
 	}
+	// En producción esto lo hace el reloj: la caché de enumeración dura un minuto, así que el
+	// cambio se ve en la primera vuelta posterior. Acá se fuerza para no dormir un minuto.
+	olvidarEnumeracion()
 	if cambiado, _, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
 		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
 	}
@@ -127,14 +126,10 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
-	ultimoInventario.Lock()
-	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-	ultimoInventario.Unlock()
+	reiniciarFrenos()
 	t.Cleanup(func() {
 		enumerarServicios = anterior
-		ultimoInventario.Lock()
-		ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
-		ultimoInventario.Unlock()
+		reiniciarFrenos()
 	})
 
 	lista, _, mandar, confirmar := serviciosDelLatido()
@@ -397,6 +392,11 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	// EL INVENTARIO SE APAGA. Enumerar los servicios del sistema cuesta ~3 s por latido (medido)
+	// y este test necesita DOS, así que sin esto la prueba tarda ~6 s contra su propio plazo de 5
+	// y falla — no por el kill-switch, sino por lo que tarda el sistema operativo en contestar.
+	sinInventario(t)
+
 	listo := make(chan struct{})
 	go func() {
 		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
@@ -408,6 +408,10 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 		if n := latidos.Load(); n != 2 {
 			t.Errorf("latió %d veces, esperaba detenerse en el segundo (el revocado)", n)
 		}
+	// El plazo vuelve a ser CORTO, y eso es lo que lo hace útil: con el inventario apagado el
+	// bucle se detiene en milisegundos, así que cinco segundos es holgura de sobra y sigue
+	// pudiendo fallar si algún día el kill-switch se cuelga. Un plazo de 30 s sobre una prueba
+	// de milisegundos no puede ponerse rojo por lentitud — que era justo lo que se quería ver.
 	case <-time.After(5 * time.Second):
 		t.Fatal("el agente siguió latiendo tras ser revocado: el kill-switch no se entiende desde la máquina")
 	}
@@ -484,8 +488,14 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
+	// `capver` entra a la lista blanca tras el mismo examen, y la respuesta es la misma: NO dice
+	// quién es esta máquina. Dice qué CONTRATO habla —una capacidad de sí misma, como `version`—
+	// y la única fila que puede tocar sigue siendo la del token presentado. La diferencia con
+	// `version` es lo que hace que exista: dos builds distintos pueden hablar el mismo capver, así
+	// que el cerebro no puede derivarlo de la versión aunque la tenga.
 	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
+		"capver": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -541,7 +551,8 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
 	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true}
+		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
+		"capver": true}
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)
@@ -701,4 +712,34 @@ func TestElClienteDelLatidoDeclaraElNombreYNoApagaLaVerificacion(t *testing.T) {
 	if c.Timeout != 10*time.Second {
 		t.Errorf("Timeout = %v, esperaba 10s: el timeout corto es lo que evita que los latidos se apilen", c.Timeout)
 	}
+}
+
+// sinInventario apaga la enumeración de servicios durante el test, y no es una comodidad: es lo
+// que separa «el bucle se detiene cuando lo revocan» de «el sistema operativo lista rápido».
+//
+// Enumerar cuesta ~3 s por latido en una máquina Windows real (3,13 s y 2,84 s, cronometradas:
+// el resto del latido son milisegundos). Cualquier prueba que necesite más de un latido termina
+// midiendo la máquina en vez de la lógica, y como el costo depende del host, en CI eso se lee
+// como flaky en vez de como determinista.
+//
+// Usa `enumerarServicios`, que YA era el seam de esto y ya se stubbea más arriba en este mismo
+// archivo con el mismo razonamiento. Dos formas de apagar lo mismo en un archivo es una de más.
+func sinInventario(t *testing.T) {
+	t.Helper()
+	anterior := enumerarServicios
+	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
+	t.Cleanup(func() { enumerarServicios = anterior })
+}
+
+// reiniciarFrenos pone en cero los DOS frenos del inventario, que son distintos y se olvidan por
+// separado: `ultimoInventario` frena el ENVÍO (huella + intervaloInventarioCompleto) y
+// `ultimaEnumeracion` frena la PREGUNTA al sistema operativo (intervaloEnumeracion).
+//
+// Van juntos acá porque son globales del paquete: una prueba que olvida uno hereda el estado de la
+// anterior, y eso se ve como un test que falla según el orden en que corra la suite.
+func reiniciarFrenos() {
+	ultimoInventario.Lock()
+	ultimoInventario.huella, ultimoInventario.enviado = "", time.Time{}
+	ultimoInventario.Unlock()
+	olvidarEnumeracion()
 }

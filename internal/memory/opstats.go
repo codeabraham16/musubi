@@ -34,6 +34,10 @@ type OpStats struct {
 	OutboxOldestAgeSec  int64 // antigüedad de la pendiente más vieja (0 si no hay): mide atraso del sync
 	BackupOffhostAgeSec int64 // antigüedad del último backup off-host EXITOSO; -1 si no hay marca (T18)
 	BackupLocalAgeSec   int64 // antigüedad del último SNAPSHOT local; -1 si no hay marca. Distinto del de arriba: éste dice si el timer corre, aquél si el backup sale de la máquina
+	// MaintenanceAgeSec dice hace cuánto corrió el ciclo de memoria (consolidar/olvidar/purgar);
+	// -1 si nunca. Sin esta serie, un cerebro que dejó de mantenerse se ve EXACTAMENTE igual que uno
+	// que se mantiene: la memoria sigue respondiendo, sólo deja de envejecer bien.
+	MaintenanceAgeSec int64
 }
 
 // OperationalStats reúne las métricas operativas del motor para /metrics. Hace unas pocas
@@ -79,6 +83,7 @@ func (e *DbEngine) OperationalStats() (OpStats, error) {
 	// arriba vale -1 para siempre, así que sin ésta el único trabajo programado del servidor no
 	// tenía ninguna señal: ni al fallar (nadie recoge su exit code) ni al dejar de dispararse.
 	st.BackupLocalAgeSec = -1
+	st.MaintenanceAgeSec = e.MantenimientoEdadSegundos()
 	if e.path != "" {
 		dir := filepath.Join(filepath.Dir(e.path), "backups")
 		if fi, statErr := os.Stat(filepath.Join(dir, offhostMarkerName)); statErr == nil {

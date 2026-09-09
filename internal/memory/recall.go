@@ -944,6 +944,19 @@ func (e *DbEngine) bumpAccess(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	// EN SÓLO LECTURA NO HAY REFUERZO QUE ESCRIBIR, Y EL RECALL NO DEPENDE DE ÉL. Sin esta
+	// guarda, `PRAGMA query_only` haría fallar este UPDATE y —como su error es fatal para
+	// Recall— la tool de lectura principal quedaría inservible justo en el modo que existe para
+	// poder leer. Lo que se pierde es la señal de refuerzo de esta sesión, no la respuesta: los
+	// mismos ítems, en el mismo orden.
+	//
+	// NO ES UN DUPLICADO DE RecallOptions.NoBump, aunque se parezcan. NoBump es una PREFERENCIA
+	// por llamada, que el caller pide (hoy sólo el harness de recalleval) y que la capa MCP no
+	// pasa nunca; esto es una CAPACIDAD del engine, que ningún caller puede olvidarse de declarar.
+	// Y cubre también a ExpandMemory, que llama acá y no tiene opciones donde poner un NoBump.
+	if e.soloLectura {
+		return nil
+	}
 	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {

@@ -45,6 +45,8 @@ const (
 	metaPhaseInjected     = "loop_phase_injected"     // fingerprint de la fase ya inyectada (delta)
 	metaConflictsInjected = "loop_conflicts_injected" // cantidad de conflictos ya avisada (delta)
 	metaBatchInjected     = "loop_batch_injected"     // fingerprint del batch ya inyectado (delta)
+	metaDurableNudged     = "loop_durable_nudged"     // sesion ya avisada de bajar lo durable a cuarentena
+	metaLoopTurnsSession  = "loop_turns_session"      // turnos totales de la sesion (proxy de "va a compactar")
 )
 
 // turnSurfaceChanged indica si el payload de una superficie por turno difiere de lo
@@ -73,6 +75,19 @@ type turnInput struct {
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
 func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, stdin io.Reader) string {
+	return turnOutputWith(store, loopCfg, pipeCfg, maCfg, memCfg, nil, stdin)
+}
+
+// turnOutputWith es turnOutput con la sonda de git EXPLÍCITA, para el gate de
+// revisión. Sólo el hook real (runTurn) pasa una sonda viva; sin ella el gate queda
+// mudo.
+//
+// Por qué la sonda es un parámetro y no algo que el gate deduzca solo: sin ella,
+// medir "cuánto trabajo sin revisar hay" desde un test sería medir el árbol REAL,
+// que cambia mientras los tests corren — y un banco cuyo resultado depende de si
+// guardaste un archivo hace diez segundos no mide nada. Con la sonda afuera, la
+// política se prueba con entradas fijas y el resto del loop no se entera.
+func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
@@ -94,6 +109,10 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	// Directiva de brevedad del gobernador (T9.5): recorta tokens de SALIDA. Opt-in;
 	// en "auto" solo aparece cuando el gasto ya cruzó el presupuesto, junto a la alerta.
 	blocks = append(blocks, accountedBlock{"turn_brevity", buildBrevityNudge(store, in.SessionID, brevity, budget)})
+	// Aviso de bajar lo durable a cuarentena. Vivia en el hook PreCompact —el instante
+	// exacto— y nunca llego: ese evento no admite additionalContext. Aca dispara por
+	// turnos, que es un proxy, pero un aviso a destiempo le gana a ninguno.
+	blocks = append(blocks, accountedBlock{surfaceDurableNudge, buildDurableNudge(store, in.SessionID, loopCfg.DurableNudgeAfterTurns)})
 	if pipeCfg.Enabled {
 		blocks = append(blocks, accountedBlock{"turn_phase", buildTurnPhase(store, in.SessionID)})
 	}
@@ -111,6 +130,11 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 	if loopCfg.CaptureReminder {
 		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, in.SessionID, loopCfg)})
 	}
+	// El gate de revisión va ÚLTIMO a propósito: es el único bloque del turno que pide
+	// una acción sobre el trabajo YA HECHO, y el final del contexto es la posición que
+	// mejor se lee. Los demás bloques son material para lo que viene; éste es una
+	// interrupción, y una interrupción sepultada a la mitad no interrumpe nada.
+	blocks = append(blocks, accountedBlock{"review_gate", buildReviewGate(store, in.SessionID, probe)})
 	return assembleAccounted(store, "UserPromptSubmit", in.SessionID, blocks)
 }
 
@@ -261,6 +285,66 @@ func buildCaptureReminder(store turnStore, sessionID string, cfg config.LoopConf
 	}
 	_ = store.SetMeta(turnsKey, strconv.Itoa(turns))
 	return ""
+}
+
+// surfaceDurableNudge es la superficie del ledger a la que se imputa el aviso durable.
+// Antes se llamaba "precompact_capture" y se imputaba desde el hook PreCompact; ese hook
+// contabilizaba el bloque ANTES de ensamblar el envelope, asi que sumaba tokens al ledger
+// que jamas entraban al contexto. El nombre cambia junto con el lugar donde de verdad llega.
+const surfaceDurableNudge = "durable_nudge"
+
+// buildDurableNudge inyecta UNA sola vez por sesion el aviso de bajar lo durable del tramo a
+// CUARENTENA, cuando la sesion ya lleva afterTurns turnos.
+//
+// ES EL AVISO QUE VIVIA EN EL HOOK PreCompact Y QUE NUNCA LLEGO. Ese evento disparaba en el
+// instante exacto —justo antes de que el modelo escriba el resumen— pero no admite
+// additionalContext: Claude Code descartaba el envelope entero, callado. Aca el disparador es
+// la cantidad de turnos, un PROXY de "esta por compactarse", porque el tamano del contexto no
+// llega a los hooks. Avisa antes de la perdida, que es lo que importaba, aunque no en el
+// instante justo.
+//
+// NO SE SUPERPONE con buildCaptureReminder, y la diferencia es de procedencia, no de estilo:
+// aquel apunta a musubi_save_observation (lo que la persona dijo, se sella human) y este a
+// musubi_propose_observation (sintesis del modelo, se sella llm y va a cuarentena). Guardar
+// una sintesis propia como testimonio humano seria mentir sobre de donde salio.
+func buildDurableNudge(store turnStore, sessionID string, afterTurns int) string {
+	if afterTurns <= 0 {
+		return ""
+	}
+	// Clave con prefijo de sesion: sin eso el contador SANGRA entre sesiones y una sesion
+	// nueva heredaria los turnos de la anterior, disparando el aviso sin actividad propia.
+	// Es el mismo bug que ya se corrigio en buildCaptureReminder.
+	key := metaLoopTurnsSession + ":" + sessionID
+	turns, _ := readIntMeta(store, key)
+	turns++
+	_ = store.SetMeta(key, strconv.Itoa(turns))
+	if turns < afterTurns {
+		return ""
+	}
+	if prev, ok, _ := store.GetMeta(metaDurableNudged); ok && prev == sessionID {
+		return "" // ya avisado en esta sesion: repetirlo seria ruido, no insistencia
+	}
+	_ = store.SetMeta(metaDurableNudged, sessionID)
+	return durableNudgeText()
+}
+
+// durableNudgeText es el texto del aviso. Estatico y acotado: el criterio de que merece
+// guardarse lo pone el agente, que es el que estuvo en la conversacion.
+//
+// El ultimo parrafo no es relleno. Sin el, esto se vuelve una fabrica de sintesis vacias en
+// cuarentena, y cada una es un item que despues alguien arbitra a mano. La cola de conflictos
+// es un recurso escaso.
+func durableNudgeText() string {
+	return `[Musubi — bajá lo durable] Esta sesión ya es larga, y lo que viene después es un resumen que escribe el modelo: las decisiones concretas y su porqué son lo primero que se diluye. Es buen momento para bajar lo durable, antes de perderlo.
+
+GUARDALO CON musubi_propose_observation, NO con musubi_save_observation. Lo que escribas acá es una síntesis TUYA, no algo que la persona dijo: propose la deja en cuarentena con procedencia llm, invisible al recall hasta que alguien la corrobore. Guardarla con save_observation la sellaría como testimonio humano y sería mentir sobre de dónde salió.
+
+Sólo esto, y sólo si pasó de verdad:
+- Decisiones tomadas en este tramo, con su porqué (y lo que se descartó, que es lo que nadie vuelve a escribir).
+- Gotchas o hallazgos no obvios que costaron encontrar.
+- Estado del trabajo: qué quedó a medias y cuál es el próximo paso.
+
+Si en este tramo no se decidió ni se aprendió nada, NO guardes nada. Una síntesis vacía en cuarentena es ruido que después hay que arbitrar a mano.`
 }
 
 // readIntMeta lee una clave de meta como entero (ok=false si no existe o no parsea).
@@ -485,7 +569,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutput(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, os.Stdin)
+	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin)
 	if out != "" {
 		fmt.Println(out)
 	}

@@ -127,13 +127,35 @@ func (e *DbEngine) PromoteObservation(id string) error {
 	// debe viajar al cerebro compartido. Se lee el contenido, se redacta, y se reescribe junto con
 	// gist/hash/tokens derivados del texto limpio. Idempotente: redactar algo ya redactado es no-op
 	// (el hash no cambia ⇒ el outbox no re-encola).
-	var content string
-	if err := tx.QueryRow(`SELECT content FROM observations WHERE id=?`, id).Scan(&content); err != nil {
+	var content, scopeActual string
+	if err := tx.QueryRow(`SELECT content, scope FROM observations WHERE id=?`, id).Scan(&content, &scopeActual); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %s", ErrObservationNotFound, id)
 		}
 		return fmt.Errorf("error al leer observación a promover: %w", err)
 	}
+
+	// EL SOBRE DE LA LLAMADA TAMPOCO CRUZA A 'shared', y la guarda va acá por la misma razón por la
+	// que la de cuarentena vive en PromoteObservationCtx: promover es un UPDATE por id que NO pasa
+	// por saveObservation, así que la guarda que se puso allá —donde nace el contenido— no lo ve.
+	// Es la segunda puerta del mismo cuarto.
+	//
+	// LO QUE PASARÍA SIN ESTO: la fila se marca 'shared', se encola, el central la rechaza por su
+	// propia guarda y muere en dead-letter. Nadie pierde memoria, pero queda una fila que dice ser
+	// memoria de equipo y nunca va a llegar al equipo — y el usuario se entera por el `doctor`
+	// horas después, en vez de por el error de la operación que la causó.
+	//
+	// SÓLO SI TODAVÍA NO ES 'shared', Y ES DELIBERADO. Promover una ya-shared es un no-op
+	// documentado e idempotente; hacerlo fallar rompería ese contrato para las 73 filas que ya
+	// están del otro lado —guardadas antes de que la guarda existiera— sin evitar ningún daño,
+	// porque el cruce ya ocurrió. Lo que esta guarda impide es la decisión NUEVA de compartir
+	// contenido dañado, no el registro de una vieja.
+	if scopeActual != ScopeShared {
+		if comido, detalle := SobreDeLlamadaComido(content); comido {
+			return ErrSobreDeLlamada(detalle)
+		}
+	}
+
 	clean, _ := redact.Redact(content)
 	if _, err := tx.Exec(
 		`UPDATE observations SET scope=?, content=?, gist=?, content_hash=?, tokens=? WHERE id=?`,

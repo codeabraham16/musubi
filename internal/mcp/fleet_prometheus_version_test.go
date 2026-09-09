@@ -153,26 +153,68 @@ func TestLaVersionDelAgenteNoEntraComoEtiqueta(t *testing.T) {
 // ve exactamente igual que «no hay ningún agente atrasado». Es el modo de fallo que este track
 // persigue desde S4, y acá volvería a entrar por la puerta de atrás.
 //
-// Sabotaje: sacar `mcp.WithVersion(version)` de cualquiera de las dos construcciones → falla acá.
+// Sabotaje: sacar `mcp.WithVersion(version)` de cualquiera de las TRES construcciones de
+// `cmd/musubi/main.go` (daemon, serve, sólo lectura) → falla acá. Verificado en las tres el
+// 2026-09-07, después de pasar la guarda de leer un renglón a leer la llamada entera.
 func TestTodoServidorQueSeSirveDeclaraSuVersion(t *testing.T) {
 	crudo, err := os.ReadFile("../../cmd/musubi/main.go")
 	if err != nil {
 		t.Fatalf("no se pudo leer cmd/musubi/main.go: %v", err)
 	}
+	// SE MIRA LA LLAMADA ENTERA, NO LA LÍNEA. Antes esto exigía `WithVersion` en el MISMO renglón
+	// que `NewMcpServer`, y eso daba un falso positivo con cualquier construcción escrita en
+	// varias líneas —que es como se escribe una con muchas options—. La guarda obligaba a
+	// renglones de 800 caracteres para no fallar, y el próximo que la partiera en varias líneas
+	// habría visto un rojo sin entender qué le faltaba. El invariante no cambia; lo que cambia es
+	// que ahora se mide la llamada y no su primer renglón.
 	construcciones := 0
-	for _, l := range strings.Split(string(crudo), "\n") {
-		if !strings.Contains(l, "mcp.NewMcpServer(") {
-			continue
+	src := string(crudo)
+	for i := 0; ; {
+		j := strings.Index(src[i:], "mcp.NewMcpServer(")
+		if j < 0 {
+			break
 		}
+		ini := i + j
+		// Cerrar por paréntesis balanceados desde el de apertura: es el final REAL de la llamada.
+		// Si por lo que sea no cierra, se toma hasta el fin del archivo, que hace fallar la guarda
+		// en vez de darla por cumplida — un no-sé no puede leerse como un sí.
+		abre := ini + strings.Index(src[ini:], "(")
+		nivel, fin := 0, len(src)
+		for k := abre; k < len(src); k++ {
+			switch src[k] {
+			case '(':
+				nivel++
+			case ')':
+				nivel--
+				if nivel == 0 {
+					fin = k + 1
+				}
+			}
+			if nivel == 0 && k >= abre {
+				break
+			}
+		}
+		llamada := src[ini:fin]
 		construcciones++
-		if !strings.Contains(l, "mcp.WithVersion(") {
+		if !strings.Contains(llamada, "mcp.WithVersion(") {
 			t.Errorf("una construcción del servidor no declara su versión:\n  %s\n"+
 				"Sin ella `musubi_fleet_device_agent_stale` no se emite para NINGUNA máquina, y una "+
-				"serie ausente se lee igual que «no hay ningún agente atrasado».", strings.TrimSpace(l))
+				"serie ausente se lee igual que «no hay ningún agente atrasado».",
+				strings.TrimSpace(primeraLinea(llamada)))
 		}
+		i = fin
 	}
 	if construcciones == 0 {
 		t.Fatal("no se encontró ninguna construcción de McpServer en cmd/musubi/main.go: la guarda " +
 			"quedó mirando un archivo que cambió de forma, y una guarda que no encuentra nada pasa siempre")
 	}
+}
+
+// primeraLinea recorta un fragmento a su primer renglón, para que el mensaje de error señale la
+// construcción sin volcar sus veinte options.
+func primeraLinea(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

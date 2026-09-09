@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>84 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>75 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -93,7 +93,7 @@ flowchart LR
     class CC cc; class M mm; class DB db;
 ```
 
-Tres hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
+Cuatro hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
 agente (gist de código, contexto por turno) se **mide** y se inyecta como **delta** — solo lo nuevo
 respecto del turno anterior.
 
@@ -162,6 +162,14 @@ Variables del instalador: `MUSUBI_SCOPE` (local|global), `MUSUBI_DIR` (carpeta d
 go build -o musubi ./cmd/musubi
 ```
 
+> ⚠️ Ese binario sale **capado** respecto del que se publica en las releases: sin el build tag
+> `treesitter`, los lenguajes que no son Go quedan en solo-símbolos y el grafo de código no deriva
+> nada (`internal/codeintel/treesit_off.go`). Para el equivalente al de release:
+>
+> ```bash
+> go build -tags 'treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python' -o musubi ./cmd/musubi
+> ```
+
 ---
 
 ## Cómo funciona
@@ -172,11 +180,11 @@ go build -o musubi ./cmd/musubi
 - Escribe las **skills cognitivas** de arranque en `.musubi/skills/` y los **templates SDD**
   (proposal, spec, design, tasks) en `.musubi/templates/sdd/`.
 - Genera/mergea `.mcp.json` para que el agente **cargue el servidor `musubi` automáticamente**.
-- Inyecta tres **hooks** en `.claude/settings.json` (Claude Code) y protege la base en `.gitignore`.
+- Inyecta cuatro **hooks** en `.claude/settings.json` (Claude Code) y protege la base en `.gitignore`.
 
 | Agente | Config MCP | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse(Read) |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (dos matchers: Read, y edición) · Stop |
 | `cursor` | `.cursor/mcp.json` | — (Cursor no tiene sistema de hooks) |
 
 ```bash
@@ -286,12 +294,49 @@ Dos capas complementarias:
   comunidad (≈1.7 M indexadas) **filtradas por tu stack**. Lee de un catálogo estático cosechado
   (cero rate limit) con fallback a la API en vivo. Es **solo de descubrimiento**: devuelve metadatos
   y el enlace de GitHub para que los revises e instales por tu cuenta — Musubi **nunca** baja,
-  ejecuta ni instala el `SKILL.md`.
+  ejecuta ni instala el `SKILL.md`. **Doble candado hoy:** es opt-in (`sourcing.marketplace_enabled`)
+  *y* la tool está dormida, así que además pide `MUSUBI_TOOLS_ALL=1`.
 
 ### Orquestación de workflows
 
-Musubi coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está
-listo y **recuerda el progreso entre sesiones** (estado en SQLite, resumible).
+Son **dos capas** y conviene no confundirlas: **SDD** es el flujo que se usa todos los días, y el
+**motor DAG** es la maquinaria de abajo — que además acepta un grafo propio, hoy detrás de una
+variable de entorno.
+
+#### SDD — el flujo guiado (`musubi_sdd`)
+
+Es la puerta viva: **todos los `workflow_runs` de la base salen de acá.** No se escribe YAML — a
+partir del nombre de un cambio, Musubi arma la cadena canónica y te guía fase por fase:
+
+`proposal` → `spec` → `design` → `tasks` → `implement` → `verify` → `archive`
+
+Las cuatro primeras son documentales y traen plantilla en `.musubi/templates/sdd/<fase>.md`; las tres
+últimas son acción, no documento.
+
+**Lo que lo separa de un checklist es la fusión memoria ↔ orquestación.** Al cerrar una fase con
+`action=complete` se persiste su **contrato de resultado** —`summary`, `artifacts`, `risks`,
+`next_recommended`— como una observación bajo `sdd/<cambio>/<fase>`. Las fases siguientes recuperan
+esos artefactos **por referencia** con `musubi_recall` (~300 tokens) en vez de releer los archivos
+(3.000–15.000 tokens). Musubi secuencia y recuerda; el agente ejecuta.
+
+El `run_id` es determinista (`sdd-<slug-del-cambio>`), así que el flujo es **resumible entre
+sesiones** y no hay dos runs para el mismo cambio.
+
+```text
+action=start    change=…                    → arranca y devuelve la fase activa
+action=complete change=… phase=… summary=…  → cierra la fase y devuelve la siguiente
+action=next | action=status  change=…       → reconsulta sin cerrar nada
+```
+
+#### El motor DAG por debajo (`musubi_workflow`)
+
+Coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te dice qué está listo y
+**recuerda el progreso entre sesiones** (estado en SQLite, resumible). SDD es un caso particular de
+esto: una cadena lineal que Musubi genera por vos.
+
+> ⚠️ **Esta capa está cerrada por defecto.** El motor corre —es el que ejecuta SDD—, pero la tool que
+> acepta *tu* grafo está entre las nueve dormidas: para el yaml de acá abajo hace falta
+> `MUSUBI_TOOLS_ALL=1`. Sin esa variable, lo único que corre es la cadena fija de SDD.
 
 ```yaml
 # .musubi/workflows/feature.yaml
@@ -325,17 +370,37 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **84 herramientas**, agrupadas por dominio:
+El servidor expone **75 herramientas**, agrupadas por dominio. Hay 84 registradas: nueve están
+**dormidas** y `tools/list` no las devuelve, porque su costo en contexto no se pagaba con su uso
+medido. Se despiertan sin recompilar con `MUSUBI_TOOLS_ALL=1`, y la lista vive con su motivo al lado
+en `internal/mcp/tools_dormidas_test.go`:
+
+> `musubi_save_fact` · `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_debate` ·
+> `musubi_promote` · `musubi_workflow` · `musubi_resolve_skills` · `musubi_detect_stack` ·
+> `musubi_discover_skills`
+
+Abajo se nombran igual donde hacen falta para explicar un flujo: **si una de esas nueve aparece en la
+tabla, hoy no se puede invocar sin esa variable.**
+
+Tres de ellas son la puerta de secciones enteras de este README, y **no son el mismo caso**. Lo que
+importa no es si la tool responde, sino si el FLUJO tiene otra entrada:
+
+| Dormida | ¿El flujo sigue vivo? | Por dónde entra hoy |
+|---|---|---|
+| `musubi_promote` | **sí, entero** | con `team_mode: true` —el default de los repos activos— `musubi_save_observation` ya nace `shared` y el sync la despacha sola (1.238 de 1.371 notas en este repo). `promote` quedó para el caso raro de una nota que nació local |
+| `musubi_discover_skills` | **no, y tampoco antes** | ya era **opt-in** por `sourcing.marketplace_enabled`, así que la dormancia es el segundo candado de una puerta que la mayoría de las instalaciones nunca abrió. La solapa Comunidad del cuerpo tampoco la usa: lista el arsenal con `musubi_list_skills` |
+| `musubi_workflow` | **el motor sí; tu DAG no** | `musubi_sdd` corre el mismo motor —los `workflow_runs` de la base son todos suyos— pero con una definición **fija**: `SDDWorkflowDef` arma la cadena explorar→planear→codear→verificar y nunca lee `.musubi/workflows/`. Un grafo propio no tiene hoy ninguna puerta abierta |
+
 
 | Dominio | Herramientas |
 |---------|--------------|
-| **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
+| **Memoria** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` · `musubi_brain_graph` |
 | **Diseño** | `musubi_design` (el motor de diseño como capacidad: arma un brief anclado en el acervo `musubi-design` para que el caller componga; invocable desde cualquier proyecto, model-free) · `musubi_distill` (destilador OFFLINE del acervo: convierte los blobs `ingested/*` en tarjetas curadas `design-corpus/*`; admin, opt-in, idempotente y reanudable) · `musubi_sharpen` (afilador OFFLINE: junta las tarjetas gemelas por coseno con un juez LLM — MERGE archiva la más débil, KEEP las conserva; admin, opt-in, conservador y reversible) |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) · `musubi_ask` (respuesta razonada sobre la memoria, RAG; opt-in) |
 | **Cuarentena de escritura** | `musubi_propose_observation` (todo lo que generó un LLM entra acá, invisible al recall) · `musubi_corroborate` (única salida; conserva el sello de procedencia) |
 | **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
-| **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
+| **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_code_graph_viz` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
 | **Skills** | `musubi_detect_stack` · `musubi_search_skills` · `musubi_list_skills` · `musubi_promote_skill` · `musubi_install_skill` · `musubi_save_skill` · `musubi_resolve_skills` · `musubi_skill_usage` (qué pasó con cada skill al activarse) · `musubi_log_skill_decision` · `musubi_discover_skills` (marketplace) · `musubi_author_skill` |
 | **Ingesta** | `musubi_ingest_url` (links/media → cerebro) |
@@ -343,7 +408,7 @@ El servidor expone **84 herramientas**, agrupadas por dominio:
 | **Sync híbrido** (cerebro central) | `musubi_promote` · `musubi_sync_status` · `musubi_sync_requeue` · `musubi_sync_pull` |
 | **Telemetría y salud** | `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_doctor` · `musubi_maintain` · `musubi_insights` · `musubi_tool_usage` (qué herramientas se usan de verdad; ledger persistente) · `musubi_readiness` (qué tan lista está la instalación, medido por lo que HIZO; una señal no observada puntúa cero) |
 | **Conflictos de memoria** | `musubi_conflicts` · `musubi_judge` |
-| **Flota** (control de dispositivos) | `musubi_fleet_enroll` (**admin**: da de alta una máquina y entrega su token una sola vez; el tier decide qué se le puede pedir) · `musubi_fleet_list` (inventario con `online` DERIVADO de la última señal de vida, no guardado) · `musubi_fleet_metrics` (telemetría del host: CPU, RAM, disco, carga, uptime; sólo las máquinas donde tu credencial tiene concedida `metrics`) · `musubi_fleet_exec` (ejecuta un ARGV en una máquina y espera el resultado; exige la capacidad `exec` sobre ESA máquina) · `musubi_fleet_log` (la bitácora: quién ejecutó qué, dónde y cómo salió — permanente, mientras la salida caduca) · `musubi_fleet_shell` (SHELL INTERACTIVA sobre SSH; exige la capacidad `shell`, que es APARTE de `exec` y no se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Dos techos que aplica el cerebro: vida máxima e inactividad) · `musubi_fleet_shell_log` (quién tuvo un prompt, dónde y por cuánto; el CONTENIDO no se graba) · `musubi_fleet_screen` (sesión de pantalla sobre RustDesk self-hosted: la contraseña se acuña por sesión, dura poco y **Musubi no la guarda**) · `musubi_fleet_sessions` (quién pidió mirar qué pantalla) · `musubi_fleet_cronologia` (QUÉ LE PASÓ a una máquina en una ventana: comandos, pantallas y shells CRUZADOS en una sola línea de tiempo. La compuerta es POR HECHO y no por la lista —`exec` los comandos, `screen:view` las pantallas, `shell` las shells—, así que dos personas ven dos cronologías distintas de la misma máquina y ninguna ve de más. Lo que la lista NO contiene viaja en la respuesta: una cronología vacía significa «no pasó nada DE LO QUE YO MIRO», no «no pasó nada») · `musubi_fleet_contexto` (CRUZA lo que le pasó a una máquina con lo que el equipo SABÍA: la actividad de la ventana junto a las notas de la memoria y el código tocado en ese mismo rato. Es CORRELACIÓN, NO CAUSA, y cada hallazgo trae su `enlace` —`termino` si el texto NOMBRA la máquina o uno de sus servicios, `ventana` si sólo coincide en el tiempo—: mezclarlos convertiría cualquier coincidencia en una pista. Los términos salen del INVENTARIO, no del texto de los comandos, y se declaran para que puedas juzgar el enlace) · `musubi_fleet_probe` (sale a medir lo que no corre un agente: Tier B por SSH, Android por ADB) · `musubi_fleet_services` (qué CORRE adentro de cada máquina —units, servicios de Windows, contenedores—; se gatea con `metrics` sobre cada máquina, y `desconocido` NO es `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído) · `musubi_fleet_service_declare` (**admin**: declara a mano lo que ninguna máquina enumera sola —un Tier B, un bot, un puente—; hereda el proyecto DE SU MÁQUINA y nace «declarado y todavía sin medir», que es un estado legítimo. Lo declarado a mano NO lo poda el latido de la máquina —sale del inventario cuando lo saca una persona—, y volver a declarar uno dado de baja lo reactiva) · `musubi_fleet_consent` (**admin**: qué se le debe a la persona que está USANDO la máquina cuando alguien pide entrar. Es un eje SEPARADO de las capacidades: `screen` decide quién puede entrar, esto decide qué pasa con quien está adentro. `libre` · `avisa` · `pide` · `prohibido`, y cuando dos fuentes discrepan gana la MÁS RESTRICTIVA — una máquina endurece lo que el proyecto dijo, nunca lo afloja. `pide` sobre una máquina sin nadie a quien preguntarle se endurece a `prohibido` y no se afloja a `libre`) · `musubi_fleet_rename` (**admin**: le cambia el NOMBRE a una máquina CONSERVANDO SU ID —y con él su bitácora, sus sesiones, sus servicios y su token—. Renombrar NO es cosmético: tres cosas indexan por NOMBRE y ninguna por id —las concesiones de `principals.yaml`, la allowlist por comando y el alcance de las políticas—, así que puede sacarle `exec` a alguien o dárselo en silencio. Por eso NO renombra en el primer llamado: informa qué credenciales y políticas nombran el nombre viejo Y el nuevo —cuya autorización la máquina heredaría—, dice qué editar, y se planta hasta que le pases `confirmar`) · `musubi_fleet_require_approval` (**admin**: enciende CUATRO OJOS sobre una máquina — que un segundo principal apruebe cada `shell` o `screen`. Es un TERCER eje: las capacidades dicen quién puede, el consentimiento qué se le debe a quien está en la máquina, y esto CUÁNTAS PERSONAS hacen falta. Viene apagado y se enciende máquina por máquina; ⚠ con una sola persona con esa capacidad, encenderlo es un candado, no un control lento) · `musubi_fleet_approve` (sos la segunda persona: exige LA MISMA capacidad que la sesión pedida —no `admin`: la barra es «podrías haberlo hecho vos»— y NADIE aprueba la suya. De un solo uso, y un «no» vale hasta que la solicitud vence: si se pudiera volver a pedir en el acto, el control sería «pedir hasta que alguien diga que sí») · `musubi_fleet_approvals` (qué está esperando un segundo par de ojos; la aprobación NO VIAJA, así que hay que venir a mirarla. Sólo muestra lo que VOS podrías aprobar, y cuenta aparte lo que dejó afuera) · `musubi_fleet_revoke` (**admin**: kill-switch; la fila queda para la auditoría). El token de un dispositivo **no** autentica en `/mcp`: late contra `POST /fleet/heartbeat` y nada más, para que comprometer una máquina de la flota no entregue la memoria del equipo |
+| **Flota** (control de dispositivos) | `musubi_fleet_enroll` (**admin**: da de alta una máquina y entrega su token una sola vez; el tier decide qué se le puede pedir) · `musubi_fleet_list` (inventario con `online` DERIVADO de la última señal de vida, no guardado) · `musubi_fleet_metrics` (telemetría del host: CPU, RAM, disco, carga, uptime; sólo las máquinas donde tu credencial tiene concedida `metrics`) · `musubi_fleet_exec` (ejecuta un ARGV en una máquina y espera el resultado; exige la capacidad `exec` sobre ESA máquina) · `musubi_fleet_log` (la bitácora: quién ejecutó qué, dónde y cómo salió — permanente, mientras la salida caduca) · `musubi_fleet_shell` (SHELL INTERACTIVA sobre SSH; exige la capacidad `shell`, que es APARTE de `exec` y no se deriva de ella: quien obtiene un prompt corre lo que quiera, así que gatearla con `exec` volvería decoración la allowlist de comandos. Dos techos que aplica el cerebro: vida máxima e inactividad) · `musubi_fleet_shell_log` (quién tuvo un prompt, dónde y por cuánto; el CONTENIDO no se graba) · `musubi_fleet_screen` (sesión de pantalla sobre RustDesk self-hosted: la contraseña se acuña por sesión, dura poco y **Musubi no la guarda**) · `musubi_fleet_sessions` (quién pidió mirar qué pantalla) · `musubi_fleet_cronologia` (QUÉ LE PASÓ a una máquina en una ventana: comandos, pantallas y shells CRUZADOS en una sola línea de tiempo. La compuerta es POR HECHO y no por la lista —`exec` los comandos, `screen:view` las pantallas, `shell` las shells—, así que dos personas ven dos cronologías distintas de la misma máquina y ninguna ve de más. Lo que la lista NO contiene viaja en la respuesta: una cronología vacía significa «no pasó nada DE LO QUE YO MIRO», no «no pasó nada») · `musubi_fleet_contexto` (CRUZA lo que le pasó a una máquina con lo que el equipo SABÍA: la actividad de la ventana junto a las notas de la memoria y el código tocado en ese mismo rato. Es CORRELACIÓN, NO CAUSA, y cada hallazgo trae su `enlace` —`termino` si el texto NOMBRA la máquina o uno de sus servicios, `ventana` si sólo coincide en el tiempo—: mezclarlos convertiría cualquier coincidencia en una pista. Los términos salen del INVENTARIO, no del texto de los comandos, y se declaran para que puedas juzgar el enlace) · `musubi_fleet_probe` (sale a medir lo que no corre un agente: Tier B por SSH, Android por ADB) · `musubi_fleet_services` (qué CORRE adentro de cada máquina —units, servicios de Windows, contenedores—; se gatea con `metrics` sobre cada máquina, y `desconocido` NO es `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído) · `musubi_fleet_service_declare` (**admin**: declara a mano lo que ninguna máquina enumera sola —un Tier B, un bot, un puente—; hereda el proyecto DE SU MÁQUINA y nace «declarado y todavía sin medir», que es un estado legítimo. Lo declarado a mano NO lo poda el latido de la máquina —sale del inventario cuando lo saca una persona—, y volver a declarar uno dado de baja lo reactiva) · `musubi_fleet_consent` (**admin**: qué se le debe a la persona que está USANDO la máquina cuando alguien pide entrar. Es un eje SEPARADO de las capacidades: `screen` decide quién puede entrar, esto decide qué pasa con quien está adentro. `libre` · `avisa` · `pide` · `prohibido`, y cuando dos fuentes discrepan gana la MÁS RESTRICTIVA — una máquina endurece lo que el proyecto dijo, nunca lo afloja. `pide` sobre una máquina sin nadie a quien preguntarle se endurece a `prohibido` y no se afloja a `libre`) · `musubi_fleet_rename` (**admin**: le cambia el NOMBRE a una máquina CONSERVANDO SU ID —y con él su bitácora, sus sesiones, sus servicios y su token—. Renombrar NO es cosmético: tres cosas indexan por NOMBRE y ninguna por id —las concesiones de `principals.yaml`, la allowlist por comando y el alcance de las políticas—, así que puede sacarle `exec` a alguien o dárselo en silencio. Por eso NO renombra en el primer llamado: informa qué credenciales y políticas nombran el nombre viejo Y el nuevo —cuya autorización la máquina heredaría—, dice qué editar, y se planta hasta que le pases `confirmar`) · `musubi_fleet_require_approval` (**admin**: enciende CUATRO OJOS sobre una máquina — que un segundo principal apruebe cada `shell` o `screen`. Es un TERCER eje: las capacidades dicen quién puede, el consentimiento qué se le debe a quien está en la máquina, y esto CUÁNTAS PERSONAS hacen falta. Viene apagado y se enciende máquina por máquina; ⚠ con una sola persona con esa capacidad, encenderlo es un candado, no un control lento) · `musubi_fleet_approve` (sos la segunda persona: exige LA MISMA capacidad que la sesión pedida —no `admin`: la barra es «podrías haberlo hecho vos»— y NADIE aprueba la suya. De un solo uso, y un «no» vale hasta que la solicitud vence: si se pudiera volver a pedir en el acto, el control sería «pedir hasta que alguien diga que sí») · `musubi_fleet_approvals` (qué está esperando un segundo par de ojos; la aprobación NO VIAJA, así que hay que venir a mirarla. Sólo muestra lo que VOS podrías aprobar, y cuenta aparte lo que dejó afuera) · `musubi_fleet_revoke` (**admin**: kill-switch; la fila queda para la auditoría) · `musubi_fleet_rotate` (**admin**: rota el token de una máquina SIN tocarla ni re-enrolarla; los DOS tokens valen hasta que el agente late con el nuevo, así que rotar cuarenta máquinas deja de exigir ir a cada una) · `musubi_fleet_maintenance` (declara una VENTANA de mantenimiento: «de acá a tantos minutos, ésta va a estar rara a propósito». No sólo calla las alertas — eso lo hace un `silence` cualquiera— sino que además lo deja escrito como intención, para que después se sepa que la rareza estaba planeada). El token de un dispositivo **no** autentica en `/mcp`: late contra `POST /fleet/heartbeat` y nada más, para que comprometer una máquina de la flota no entregue la memoria del equipo |
 | **Identidad y acceso** (cerebro central) | `musubi_whoami` (¿quién soy? read-only) · `musubi_token_new` · `musubi_token_list` · `musubi_token_revoke` (**admin**: alta/baja de miembros por la red, la contracara de `musubi token`) |
 
 > Los tres pilares de Musubi: **Memoria** (ledger durable + grafo bi-temporal + recall model-free),
@@ -593,7 +658,13 @@ model-free. El LLM es un acelerador, nunca el camino crítico.
 
 Otros bloques disponibles (con defaults): `maintenance` (consolidación + olvido + retención),
 `graph`, `conflicts`, `pipeline`, `multiagent`, `vector_index` (índice IVF), `startup`, `update`,
-`sync` (cerebro central) y `service` (transporte HTTP opt-in, solo loopback).
+`sync` (cerebro central) y `service` (transporte HTTP opt-in).
+
+`service` tiene seguridad por capas y conviene no resumirla como «solo loopback»: con un bind
+loopback (el default) no exige auth y se defiende del DNS-rebinding validando Host y Origin; con un
+bind **no-loopback** exige un bearer token (`service.auth_token_env`) y **se niega a arrancar sin
+él**. Es el camino por el que corre un cerebro central, y ahí el servidor además fuerza la redacción
+del lado del servidor.
 
 ---
 
@@ -603,13 +674,20 @@ Otros bloques disponibles (con defaults): `maintenance` (consolidación + olvido
 Instalación
   setup [--agent <claude|cursor>]   Inyecta Musubi en el proyecto (workspace + MCP + hooks)
   init                              Inicializa solo el workspace .musubi/ (config + DB)
+  provision [--brain ...]           Une esta máquina al cerebro central (red + .mcp.json + verificación)
 
 Servidor MCP
   daemon                            Servidor MCP sobre stdin/stdout (lo usa el agente)
-  serve [--addr host:port]          Servidor MCP sobre HTTP (opt-in; solo loopback)
+  cerebro                           Canal MCP (stdio) al cerebro CENTRAL: consulta en vivo, no replica
+  serve [--addr host:port]          Servidor MCP sobre HTTP (modo servicio, opt-in)
+                                    loopback: sin auth · no-loopback: EXIGE bearer token
 
 Memoria
   maintain                          Fusiona casi-duplicados y archiva memorias frías
+  backup [--out <dir>]              Snapshot consistente de la base (VACUUM INTO)
+  token <new|list|revoke>           Gestiona el registro de identidad del cerebro (tokens por-miembro)
+  embed                             Rellena los embeddings pendientes de la base
+  conflicts <backfill|shadow>       Reconstruye el desglose de relaciones · lee el modo sombra
   doctor                            Diagnostica/repara la base de memoria
   export [--out <ruta>]             Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards
   dashboard [--addr ...] [--no-open] UI local de la memoria en vivo (solo lectura · loopback · 0 tokens)
@@ -620,13 +698,35 @@ Catálogo de skills
   catalog merge <url>               Obtiene y fusiona un catálogo remoto
   catalog harvest                   Cosecha un catálogo estático del marketplace
 
+Ingesta
+  ingest [--as ...] [--save] <url>  Convierte un link (video/red social/artículo) en texto
+
 Binario
   update                            Descarga el último release, verifica checksum y se auto-reemplaza
+  fetch <url>                       Baja una URL del tailnet a stdout (transporte de auto-update)
+  receipt <emit|check|show>         Gate de entrega: el push exige un recibo para ESTA huella
   version                           Muestra la versión del binario
+
+Hooks (uso interno de Claude Code)
+  detect [--hook-mode]              SessionStart: auto-descubrimiento + priming
+  turn --hook-mode                  UserPromptSubmit: inyecta contexto relevante al prompt
+  precheck --hook-mode              PreToolUse: gist antes de leer; radio de impacto antes de editar
+  capture --hook-mode               Stop: captura los commits nuevos como memoria
+  precompact --hook-mode            PreCompact: avisa de bajar lo durable antes de que se resuma
 ```
 
 `musubi daemon` habla JSON-RPC 2.0 por stdin/stdout y respeta `MUSUBI_HOME` para fijar el
 workspace (por defecto, el directorio del proyecto vía `CLAUDE_PROJECT_DIR`).
+
+**Para hablar con un cerebro central** —lo que habilita el bloque «Sync híbrido», el de «Identidad y
+acceso» y el comando `cerebro`— hacen falta dos variables de entorno:
+
+| Variable | Qué es |
+|---|---|
+| `MUSUBI_CENTRAL_URL` | la URL del cerebro (ej. `http://100.79.126.62:7717`). Sin ella, el canal al central no arranca |
+| `MUSUBI_TOKEN` | el token por-miembro que emite `musubi token new`; de él sale el `project_id` del que escribe |
+
+`musubi provision` las deja configuradas y verifica la conexión de punta a punta.
 
 ---
 
@@ -656,9 +756,14 @@ vez (`--apply` persiste los divisores) y es la **única** parte de Musubi que ha
 ## Desarrollo
 
 ```bash
-go build -o musubi ./cmd/musubi   # compilar
+go build -o musubi ./cmd/musubi   # compilar (capado: ver «Desde fuente»)
 go test ./...                     # suite completa
 go test -race ./...               # con detector de carreras (como en CI)
+
+# el grafo de código POLYGLOT vive detrás de un build tag, y CI lo corre aparte:
+TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'
+go build -tags "$TAGS" ./cmd/musubi
+go test  -tags "$TAGS" ./internal/codeintel/ ./internal/mcp/
 ```
 
 ```
@@ -669,7 +774,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 84 herramientas MCP
+  mcp/             # servidor JSON-RPC 2.0 + las 75 herramientas MCP (84 registradas − 9 dormidas)
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

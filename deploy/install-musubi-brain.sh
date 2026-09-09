@@ -39,7 +39,7 @@ BACKUP_BIN="/usr/local/bin/musubi-backup"
 # una razón MÁS fuerte: este guion reemplaza el binario del cerebro y se corre como root, así que
 # es el peor archivo del despliegue para instalar sin verificar. Si lo cambiás, actualizá esto:
 # sha256sum deploy/redesplegar-cerebro.sh
-REDESPLIEGUE_SHA256="2515c9d46d83d67a02350b2f3382e8af27ca3e29b436fd91cf185f31495baa01"
+REDESPLIEGUE_SHA256="25b33075d0223fd7ced084e0304be317588f73e5e4d03b68c2f13caa5cb22029"
 REDESPLIEGUE_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/redesplegar-cerebro.sh"
 # /usr/local/sbin y no el home de $BRAIN_USER: lo corre root, así que no puede vivir donde escribe
 # un usuario sin privilegios. El porqué largo está en el paso 5c.

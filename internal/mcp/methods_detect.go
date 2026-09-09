@@ -32,9 +32,18 @@ type fileChange struct {
 
 // detectReport es la salida compacta de detect_changes.
 type detectReport struct {
-	Files   []fileChange `json:"files"`
-	Summary string       `json:"summary"`
+	Files    []fileChange        `json:"files"`
+	Summary  string              `json:"summary"`
+	Revision codeintel.Veredicto `json:"revision"`
 }
+
+// Cotas del sondeo al grafo. detect_changes corre seguido y el BFS de impacto es lo mas caro
+// que hace: sin tope, un cambio que toca cien simbolos dispara cien recorridos.
+const (
+	topeSimbolosSondeados = 25
+	profundidadRadio      = 3
+	topeNodosRadio        = 200
+)
 
 // runnerFor devuelve el Runner inyectado (tests) o uno real sobre projectPath.
 func (s *McpServer) runnerFor() codeintel.Runner {
@@ -68,6 +77,9 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 
 	report := detectReport{Files: make([]fileChange, 0, len(diffs))}
 	changedFiles, changedSymbols := 0, 0
+	// Las claves de NODO de los simbolos tocados, que es distinto de su Ref: el grafo indexa
+	// por `path#kind:nombre`. Se juntan mientras se recorre para no releer los archivos.
+	var clavesGrafo []string
 	for _, fd := range diffs {
 		if fd.Binary {
 			continue
@@ -93,6 +105,7 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 				for _, sym := range codeintel.SymbolsInRanges(syms, fd.NewRanges) {
 					fc.ChangedSymbols = append(fc.ChangedSymbols, sym.Ref())
 					paraBuscar = append(paraBuscar, sym.Name)
+					clavesGrafo = append(clavesGrafo, codeintel.SymbolKey(fd.Path, sym.Kind, sym.Ref()))
 				}
 				fc.GistStale = s.gistStale(scoped, key, fd.Path)
 			}
@@ -104,7 +117,10 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 		report.Files = append(report.Files, fc)
 	}
 
-	report.Summary = fmt.Sprintf("%d archivo(s) cambiados, %d símbolo(s) afectados.", changedFiles, changedSymbols)
+	report.Revision = s.profundidadDe(scoped, diffs, changedSymbols, clavesGrafo)
+	report.Summary = fmt.Sprintf("%d archivo(s) cambiados, %d símbolo(s) afectados. Revisión sugerida: %s (%d/13 puntos) — %d juez/jueces, %d ronda(s), quórum %d.",
+		changedFiles, changedSymbols, report.Revision.Nivel, report.Revision.Puntos,
+		report.Revision.Panel.Jueces, report.Revision.Panel.Rondas, report.Revision.Panel.Quorum)
 	return jsonResult(report)
 }
 
@@ -165,4 +181,116 @@ func (s *McpServer) relatedMemory(ctx context.Context, key string, symbols []str
 	}
 	sort.Strings(out)
 	return out
+}
+
+// profundidadDe completa las señales del diff con las dos que salen del grafo y devuelve el
+// veredicto de cuánta revisión pide el cambio.
+//
+// 🔴 EL CERO DEL RADIO ES AMBIGUO, Y ACÁ SE DESAMBIGUA. Preguntarle al grafo por un símbolo que
+// no tiene nodo devuelve cero callers — exactamente lo mismo que preguntarle por uno al que no
+// llama nadie. Ese cero es el valor de fallo disfrazado de valor tranquilizador: si se le cree,
+// un cambio en código sin indexar puntúa como el más inocuo posible.
+//
+// Por eso antes de creerle a un cero se comprueba que el nodo EXISTA. Si no existe —o si el
+// archivo ni siquiera es indexable, o si el grafo no contesta— el radio queda declarado CIEGO y
+// el nivel no puede bajar a mínima. El motivo viaja en el veredicto: subir el nivel en silencio
+// dejaría al que lee sin poder distinguir «el cambio es grande» de «el índice está flojo».
+func (s *McpServer) profundidadDe(ctx context.Context, diffs []codeintel.FileDiff, simbolos int, claves []string) codeintel.Veredicto {
+	sen := codeintel.SenalesDelDiff(diffs, simbolos)
+
+	cobertura, err := s.engine.GraphFileFingerprintsCtx(ctx)
+	if err != nil {
+		sen.RadioCiego = true
+		sen.MotivoCiego = "el grafo no contestó por su cobertura"
+		return codeintel.Profundidad(sen)
+	}
+
+	// 1) Cobertura por ARCHIVO: qué tocamos que el grafo nunca vio.
+	noIndexables, archivosSinNodo := 0, 0
+	for _, fd := range diffs {
+		if fd.Binary {
+			continue
+		}
+		// Un archivo que NO PUEDE tener radio -un README, un YAML- no deja el radio ciego:
+		// no hay nada que el grafo pudiera haber sabido de el. Lo que si cuenta es codigo
+		// que este build no indexa, porque ahi el cero significa "no pude medir".
+		if !codeintel.PuedeTenerRadio(fd.Path) {
+			continue
+		}
+		if !codeintel.IndexableForGraph(fd.Path) {
+			noIndexables++
+			continue
+		}
+		if _, visto := cobertura[fd.Path]; !visto {
+			archivosSinNodo++
+		}
+	}
+
+	// 2) Radio por SÍMBOLO, sólo sobre los que sí tienen nodo.
+	radio := map[string]bool{}
+	simbolosSinNodo, sondeados, truncado := 0, 0, 0
+	for _, k := range claves {
+		if sondeados >= topeSimbolosSondeados {
+			truncado = len(claves) - sondeados
+			break
+		}
+		if _, hay, gerr := s.engine.GetGraphNodeCtx(ctx, k); gerr != nil || !hay {
+			simbolosSinNodo++
+			continue
+		}
+		sondeados++
+		callers, cerr := s.engine.GraphImpactCtx(ctx, k, profundidadRadio, topeNodosRadio)
+		if cerr != nil {
+			simbolosSinNodo++
+			continue
+		}
+		for _, c := range callers {
+			radio[c] = true
+		}
+	}
+
+	sen.CallersEnRadio = len(radio)
+	sen.PaquetesEnRadio = len(paquetesDe(radio))
+
+	// 3) El piso de honestidad, con su motivo concreto.
+	var faltas []string
+	if noIndexables > 0 {
+		faltas = append(faltas, fmt.Sprintf("%d archivo(s) de codigo que el grafo no indexa", noIndexables))
+	}
+	if archivosSinNodo > 0 {
+		faltas = append(faltas, fmt.Sprintf("%d archivo(s) sin un solo nodo en el grafo", archivosSinNodo))
+	}
+	if simbolosSinNodo > 0 {
+		faltas = append(faltas, fmt.Sprintf("%d símbolo(s) sin nodo", simbolosSinNodo))
+	}
+	if len(faltas) > 0 {
+		sen.RadioCiego = true
+		sen.MotivoCiego = strings.Join(faltas, ", ")
+	}
+
+	v := codeintel.Profundidad(sen)
+	// El tope NO se calla. Un recorte silencioso se lee como «se miró todo» justo cuando es lo
+	// contrario, y el que decide el panel merece saber que el radio está sub-contado.
+	if truncado > 0 {
+		v.Motivos = append(v.Motivos, fmt.Sprintf("el radio está SUB-CONTADO: se sondearon %d símbolos y quedaron %d afuera por el tope", sondeados, truncado))
+	}
+	return v
+}
+
+// paquetesDe agrupa las claves de nodo del radio por paquete. Una clave es `path#kind:nombre`,
+// así que el paquete es el directorio de la parte anterior al `#`.
+func paquetesDe(radio map[string]bool) map[string]bool {
+	pkgs := map[string]bool{}
+	for k := range radio {
+		ruta := k
+		if i := strings.Index(ruta, "#"); i >= 0 {
+			ruta = ruta[:i]
+		}
+		if i := strings.LastIndex(ruta, "/"); i >= 0 {
+			pkgs[ruta[:i]] = true
+		} else {
+			pkgs[ruta] = true
+		}
+	}
+	return pkgs
 }

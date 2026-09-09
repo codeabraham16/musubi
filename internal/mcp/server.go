@@ -44,6 +44,17 @@ const (
 	// general se libera en segundos y ésta en la hora, y quien la recibe puede querer seguir con
 	// las tools model-free en vez de esperar.
 	codeMotorQuota = -32003
+	// codeDegraded (rango server-error) = el servidor está vivo pero SIN MEMORIA: la apertura de
+	// la base falló y está atendiendo en modo degradado. Código propio y no codeInternalError
+	// porque no es un fallo del pedido —el pedido está perfecto— sino un estado declarado del
+	// servidor, y porque el remedio es del operador (actualizar el binario, liberar disco), no
+	// del que llamó. Ver degradado.go.
+	codeDegraded = -32004
+	// codeReadOnly (rango server-error) = el servidor TIENE memoria y la lee bien, pero no puede
+	// escribirla: la base la migró un binario más nuevo y sólo alcanza su piso de lectura.
+	// Separado de codeDegraded porque describe un servidor que SÍ sirve —las tools de lectura
+	// funcionan— y quien lo recibe puede seguir trabajando en vez de darse por muerto.
+	codeReadOnly = -32005
 )
 
 type JsonRpcRequest struct {
@@ -177,6 +188,17 @@ type McpServer struct {
 	// `musubi_fleet_device_agent_stale` para toda la flota (A68).
 	version string
 
+	// degradado, cuando NO es nil, es la razón por la que este servidor no tiene memoria: la
+	// abrió alguien y falló. Un servidor así habla el protocolo completo —contesta initialize
+	// y lista el mismo catálogo— pero rechaza toda tools/call nombrando esta causa, en vez de
+	// despachar contra un engine nil. Ver degradado.go.
+	degradado error
+
+	// motivoSoloLectura es TEXTO explicativo del escalón de sólo lectura, no su interruptor: el
+	// modo lo decide el engine (ver solo_lectura.go). Lo pasa main, que es quien tiene el error
+	// con los dos números de esquema.
+	motivoSoloLectura string
+
 	// cpuRemotos lleva el estado de la derivada de CPU por dispositivo SIN agente (S7b/S8). En
 	// Tier A ese estado vive en el agente; en Tier B/C no hay agente, así que lo lleva el cerebro.
 	cpuRemotos contadoresRemotos
@@ -297,6 +319,9 @@ type McpServer struct {
 	// toolLock[name] pisa ese default SÓLO para la concurrencia. Ausente ⇒ lockFromReadOnly,
 	// el comportamiento histórico. Ver lockClass en registry.go.
 	toolLock map[string]lockClass
+	// toolRO: qué tools siguen sirviendo con la base en sólo lectura, para las que no se
+	// deriva de readOnly. Ver roClass en registry.go.
+	toolRO map[string]roClass
 	// dispatchMu hace seguro el dispatch concurrente (transporte HTTP): las tools que
 	// mutan toman Lock (serializadas, RMW-safe); las de solo-lectura toman RLock
 	// (concurrentes entre sí). En stdio (un goroutine) está siempre libre, costo nulo.
@@ -449,6 +474,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	// toolLock sólo guarda las clases DISTINTAS del cero: un miss devuelve lockFromReadOnly, que es
 	// el default correcto. Así el mapa queda del tamaño de lo que realmente se declaró.
 	s.toolLock = make(map[string]lockClass)
+	s.toolRO = make(map[string]roClass)
 	for i := range s.tools {
 		s.toolIndex[s.tools[i].Name] = s.tools[i].handler
 		if s.tools[i].readOnly {
@@ -456,6 +482,11 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		}
 		if s.tools[i].lock != lockFromReadOnly {
 			s.toolLock[s.tools[i].Name] = s.tools[i].lock
+		}
+		// Igual que toolLock: sólo se guardan las clases DISTINTAS del cero, así el mapa queda
+		// del tamaño de lo que realmente se declaró y un miss devuelve el default correcto.
+		if s.tools[i].ro != roDesdeReadOnly {
+			s.toolRO[s.tools[i].Name] = s.tools[i].ro
 		}
 	}
 	return s

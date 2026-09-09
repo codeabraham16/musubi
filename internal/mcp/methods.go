@@ -118,6 +118,12 @@ func clampLimit(limit int) int {
 }
 
 func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage) (interface{}, *RpcError) {
+	// Escalón degradado: sin memoria no se despacha NADA, ni siquiera para averiguar si la tool
+	// existe. Va antes de todo lo demás porque cada paso de acá abajo —el índice, la
+	// autorización, el ledger de uso— asume un engine que en este estado es nil.
+	if rpcErr, degradado := s.interceptarDegradado(ctx, params); degradado {
+		return nil, rpcErr
+	}
 	var callReq CallToolRequest
 	if err := json.Unmarshal(params, &callReq); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid params: %v", err)
@@ -128,6 +134,13 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 		return nil, rpcErrorf(codeMethodNotFound, "Tool not found: %s", callReq.Name)
 	}
 	readOnly := s.toolReadOnly[callReq.Name]
+	// Escalón de sólo lectura: se corta ACÁ, con el nombre de la tool ya resuelto, para que el
+	// error pueda nombrarla. Va antes de la autorización y del candado porque no depende de quién
+	// llama ni de la concurrencia: la base no se puede escribir y punto. No es la garantía —eso
+	// lo hace `PRAGMA query_only` del lado de SQLite— sino la explicación.
+	if rpcErr, cortado := s.interceptarSoloLectura(ctx, callReq.Name); cortado {
+		return nil, rpcErr
+	}
 	// Autorización por rol (Track 16 F1 16.1c): en modo serve hay un principal en el ctx
 	// (lo autenticó el transporte HTTP). Un reader solo puede tools de lectura. En stdio
 	// local no hay principal ⇒ acceso pleno (confianza local). Se chequea ANTES de tomar
@@ -309,7 +322,7 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	if strings.TrimSpace(args.ID) == "" {
 		id, deduped, err := s.engine.SaveObservationDedupedTypedFromWithOrigins(origin, author, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
 		if err != nil {
-			return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
+			return nil, errorDeGuardado(err)
 		}
 		if deduped {
 			return textResult("Observación ya existente, no se duplicó (id: " + id + ")."), nil
@@ -325,9 +338,28 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
 		}
-		return nil, rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
+		return nil, errorDeGuardado(err)
 	}
 	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
+}
+
+// errorDeGuardado traduce un fallo de guardado al código JSON-RPC que corresponde. Lo que se
+// decide acá no es el texto del mensaje: es DE QUIÉN ES LA CULPA, y de eso depende que quien está
+// del otro lado del cable reintente o se rinda.
+//
+// Un cliente de sync trata los códigos permanentes como «reenviar esto no va a servir» ⇒
+// dead-letter, y todo lo demás como «el central está teniendo un mal día» ⇒ reintentar con
+// backoff, sin tope por conteo. Así que emitir «error interno» para el rechazo de una guarda no es
+// una imprecisión de redacción: convierte una fila muerta en una fila inmortal.
+//
+// El default sigue siendo codeInternalError A PROPÓSITO. Sólo se degrada a «culpa del llamador»
+// lo que una guarda rechazó mirando el pedido; ante un error desconocido —disco, contención, un
+// bug nuestro— mentir en la otra dirección haría que el cliente TIRE memoria que era buena.
+func errorDeGuardado(err error) *RpcError {
+	if errors.Is(err, memory.ErrPayloadInvalido) {
+		return rpcErrorf(codeInvalidParams, "%v", err)
+	}
+	return rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
 }
 
 // toolPromote marca una observación como 'shared' (memoria híbrida local+central). Muta,
@@ -876,6 +908,10 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 		Agent  string `json:"agent"`
 		Stance string `json:"stance"`
 		Choice string `json:"choice"`
+		// Model y Evidence viajan en post y vote; GatedChoice sólo en open.
+		Model       string `json:"model"`
+		Evidence    string `json:"evidence"`
+		GatedChoice string `json:"gated_choice"`
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -885,18 +921,18 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 
 	switch action := strings.TrimSpace(args.Action); action {
 	case "open":
-		d, err := s.engine.OpenDebate(args.Topic, args.Rounds, args.Quorum)
+		d, err := s.engine.OpenDebate(args.Topic, args.Rounds, args.Quorum, strings.TrimSpace(args.GatedChoice))
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo abrir el debate: %v", err)
 		}
 		return jsonResult(map[string]interface{}{"debate": d,
-			"note": "postea las posturas de la ronda 1 con action=post (id, agent, stance); tras N posturas, action=advance para pasar a la siguiente ronda con las posturas previas como material de crítica"})
+			"note": "postea las posturas de la ronda 1 con action=post (id, agent, stance, model, evidence); tras N posturas, action=advance para pasar a la siguiente ronda con las posturas previas como material de crítica. model y evidence son OBLIGATORIOS: dos jueces del mismo modelo no son dos opiniones, y una opinión no pesa lo mismo que una comprobación"})
 
 	case "post":
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "post requiere 'id' (el debate)")
 		}
-		if err := s.engine.PostPosture(args.ID, args.Agent, args.Stance); err != nil {
+		if err := s.engine.PostPosture(args.ID, args.Agent, args.Stance, strings.TrimSpace(args.Model), strings.TrimSpace(args.Evidence)); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo postear: %v", err)
 		}
 		return textResult("Postura registrada."), nil
@@ -916,7 +952,7 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 		if strings.TrimSpace(args.ID) == "" {
 			return nil, rpcErrorf(codeInvalidParams, "vote requiere 'id' (el debate)")
 		}
-		if err := s.engine.CastVote(args.ID, args.Agent, args.Choice); err != nil {
+		if err := s.engine.CastVote(args.ID, args.Agent, args.Choice, strings.TrimSpace(args.Model), strings.TrimSpace(args.Evidence)); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "no se pudo votar: %v", err)
 		}
 		return textResult("Voto registrado."), nil
@@ -1793,6 +1829,17 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	}
 	if strings.TrimSpace(args.Path) == "" || strings.TrimSpace(args.Gist) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "path y gist son obligatorios")
+	}
+
+	// CONTENCIÓN: la ruta tiene que colgar del árbol de ESTE proyecto. Absoluta está bien mientras
+	// caiga adentro —NormalizeCodePath la vuelve relativa—; lo que se rechaza es apuntar a otro
+	// árbol, porque NormalizeCodePath conserva la absoluta en silencio y la clave ajena queda
+	// guardada bajo este project_id. Ver dentroDelProyecto: así se contaminó el grafo con 264 nodos
+	// de otro repo.
+	if !s.dentroDelProyecto(args.Path) {
+		return nil, rpcErrorf(codeInvalidParams,
+			"path cae fuera del árbol de este proyecto (%s): la memoria de código de un proyecto no "+
+				"guarda archivos de otro", args.Path)
 	}
 
 	// Clave normalizada (relativa a la raíz) para que el hook PreToolUse encuentre

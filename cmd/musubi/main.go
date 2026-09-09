@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
@@ -54,6 +57,8 @@ func main() {
 		runDetect()
 	case "turn":
 		runTurn()
+	case "arnes":
+		runArnes(os.Args[2:])
 	case "receipt":
 		runReceipt(os.Args[2:])
 	case "precheck":
@@ -95,6 +100,23 @@ func main() {
 		// despliegue que en realidad salió bien.
 		if len(os.Args) > 2 && os.Args[2] == "--esquema" {
 			fmt.Println(memory.EsquemaEsperado())
+			return
+		}
+		// `--json` imprime la identidad COMPLETA de este binario, derivada y no tipeada. Es lo
+		// que un guion de despliegue tiene que comparar en vez de la cadena de versión: la
+		// versión sola no dice a qué esquema migra ni qué catálogo expone, que son las dos cosas
+		// que rompen cuando dos máquinas de la malla no corren el mismo build.
+		//
+		// Va como bandera y no como renglón nuevo de la salida normal por el mismo motivo que
+		// --esquema: `redesplegar-cerebro.sh` compara la salida por default ENTERA.
+		if len(os.Args) > 2 && os.Args[2] == "--json" {
+			n, sha := mcp.CatalogFingerprint()
+			b, err := json.MarshalIndent(buildid.Derive(version, n, sha), "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "no pude serializar la identidad: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(b))
 			return
 		}
 		fmt.Printf("musubi %s\n", version)
@@ -370,6 +392,37 @@ func runServe(args []string) {
 		go server.RunDistillScheduler(ctx, time.Duration(cfg.Maintenance.AutoDistillMinutes*float64(time.Minute)), cfg.Maintenance.AutoDistillBatch)
 	}
 
+	// EL CEREBRO MANTIENE SU PROPIA MEMORIA. Acá no había nada, y `serve` ya recibía
+	// `WithMaintenance(cfg.Maintenance)`: la config estaba cableada y el consumidor no existía.
+	//
+	// CÓMO SE VEÍA ESO, medido en el central el 2026-09-07. El ciclo SÍ corría —`last_maintenance`
+	// marcaba 31 h contra un intervalo de 24 h, o sea el diente de sierra normal— pero lo corría
+	// otro proceso: `musubi-gateway.service` (el bot de Telegram) lanza `main.py`, que lanza
+	// `/usr/local/bin/musubi daemon`, y ESE daemon abre la misma base y sí arranca los cuatro
+	// schedulers. La memoria del cerebro se mantenía como efecto secundario de que un bot de chat
+	// estuviera vivo. Parar el bot —una operación perfectamente razonable— dejaba la memoria sin
+	// consolidar, sin olvidar y sin purgar, sin que nada lo dijera.
+	//
+	// DOS PROCESOS NO SE PISAN: RunScheduledMaintenance toma el candado de despacho y consulta
+	// MaintenanceDue contra `last_maintenance` en la BASE, así que el que llega segundo ve que no
+	// corresponde y no hace nada. La coordinación es del dato, no del proceso.
+	//
+	// VAN SÓLO EL MANTENIMIENTO Y SU CORRIDA DE ARRANQUE, y no los otros tres schedulers del
+	// daemon: el del grafo indexa el árbol CHECKOUTEADO y en un servidor no hay proyecto que
+	// indexar; el de sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo
+	// programado sin nadie que lo pidió.
+	if cfg.Maintenance.AutoIntervalHours > 0 {
+		go func() {
+			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
+			} else if ran {
+				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d evictadas, %d purgadas\n",
+					rep.Consolidate.Merged, rep.Decay.Archived, rep.Evicted, rep.Purged)
+			}
+		}()
+		go server.RunMaintenanceScheduler(ctx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
+	}
+
 	if err := server.ListenAndServeHTTP(ctx, svc); err != nil {
 		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
 		os.Exit(1)
@@ -396,11 +449,38 @@ func runDaemon() {
 	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.
 	embedder := resolveEmbedder(cfg, root)
 
-	// Cargar motor de base de datos local
+	// Cargar motor de base de datos local.
+	//
+	// SI FALLA, EL DAEMON NO SE MUERE: ATIENDE DEGRADADO. Acá había un os.Exit(1) con el error a
+	// stderr, y eso le dejaba al cliente MCP cero bytes de protocolo — medido: `initialize`
+	// contra una base más nueva devolvía 0 bytes por stdout y exit 1. Para el agente eso es
+	// idéntico a «musubi no está instalado», y las dos cosas piden acciones opuestas. El
+	// servidor degradado habla el protocolo, lista el mismo catálogo y rechaza cada tools/call
+	// nombrando la causa. Ver internal/mcp/degradado.go.
+	//
+	// El aviso por stderr se conserva: es lo que ve el operador en el log del cliente MCP, y
+	// dejarlo de escribir sería cambiar un canal mudo por otro.
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
-		os.Exit(1)
+		// ESCALÓN DE SÓLO LECTURA, ANTES DE DARSE POR VENCIDO. Si la base es más nueva pero su
+		// piso declara que este binario la lee bien, se abre sin migrarla y se sirve lo que se
+		// puede. Es el estado del medio: no trabaja, pero tampoco deja al agente sin memoria.
+		if errors.Is(err, memory.ErrEsquemaLegible) {
+			if ro, roErr := memory.NewDbEngineSoloLectura(root); roErr == nil {
+				fmt.Fprintf(os.Stderr, "musubi: sirviendo en SÓLO LECTURA (las tools de lectura funcionan; las que escriben, no)\n")
+				servirSoloLectura(ro, root, cfg, embedder, err)
+				return
+			} else {
+				// La base se declaraba legible y no se pudo abrir igual: se dice y se cae al
+				// modo degradado. Tragarlo dejaría un daemon degradado sin explicación, que es
+				// justo lo que esta serie vino a sacar.
+				fmt.Fprintf(os.Stderr, "musubi: la base se declaraba legible pero no abrió en sólo lectura: %v\n", roErr)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "musubi: sirviendo en MODO DEGRADADO (el protocolo responde; las tools no)\n")
+		mcp.NewServidorDegradado(root, version, err).Start()
+		return
 	}
 	defer engine.Close()
 	// Estampar el proyecto de origen en las observaciones (memoria híbrida local+central).
@@ -577,4 +657,36 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 	// Sync ENTRANTE (C5.3b): baja la memoria shared del proyecto DESDE el central. RunInboundScheduler
 	// gatea internamente en team_mode (un proyecto local no baja nada). Mismo intervalo que el drain.
 	go server.RunInboundScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
+}
+
+// servirSoloLectura atiende con la memoria abierta en el escalón de sólo lectura.
+//
+// ES UNA FUNCIÓN APARTE Y NO UNA RAMA DENTRO DE runDaemon a propósito: lo que la distingue no es
+// una opción de más, es TODO LO QUE NO ARRANCA. Escrito como rama, cada scheduler nuevo que
+// alguien agregue abajo quedaría corriendo también acá, contra una base que no se puede escribir,
+// y el error saldría del motor SQLite a los minutos y en un log que nadie mira.
+//
+// LO QUE NO ARRANCA, Y POR QUÉ CADA UNO:
+//   - mantenimiento, grafo y destilado: los tres ESCRIBEN. Un ciclo cognitivo sobre una base que
+//     no entiende del todo sería peor que no correrlo.
+//   - ledger de uso y vertedero del feed: escriben también, y su valor es el registro histórico,
+//     que es justo lo que no se debe ensuciar desde un binario desactualizado.
+//   - outbox: encolar desde acá propagaría el malentendido a la malla.
+//   - cognición: el motor no es de lectura y su cuota se lleva en la base.
+//
+// El único que sí va es el embedder, porque la búsqueda semántica es una LECTURA (el vector de la
+// consulta se calcula en memoria y no se guarda).
+func servirSoloLectura(eng *memory.DbEngine, root string, cfg config.Config, embedder embedding.Provider, causa error) {
+	defer eng.Close()
+	eng.SetProjectID(resolveProjectID(cfg, root))
+	srv := mcp.NewMcpServer(eng, root, embedder,
+		mcp.WithVersion(version),
+		mcp.WithSoloLectura(causa.Error()),
+		mcp.WithSourcing(cfg.Sourcing),
+		mcp.WithMemory(cfg.Memory),
+		mcp.WithGraph(cfg.Graph),
+		mcp.WithConflicts(cfg.Conflicts),
+		mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()),
+	)
+	srv.Start()
 }

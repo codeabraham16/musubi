@@ -27,7 +27,11 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 
 // columnasDevice es la lista de columnas en el orden que espera escanearDevice. Una sola copia:
 // que el SELECT y el Scan se desincronicen es el bug clásico de esta capa.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos`
+// EL ORDEN DE ESTA LISTA ES EL DEL Scan DE ABAJO, y el merge de las dos ramas agregó columnas por
+// los dos lados: `motivo_no_preguntar`/`token_fuente` (A99, A102) y `servicios_omitidos` (A116) de
+// la rama de flota, y `capver` (#419) de main. Van todas, y `capver` va ÚLTIMA para que el orden
+// del Scan siga el mismo criterio que trae main.
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos, capver`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -360,6 +364,27 @@ func (e *DbEngine) ActualizarAutoreporte(id, version, direccion string) error {
 	return nil
 }
 
+// ActualizarCapver guarda el CONTRATO que declara una máquina.
+//
+// Va aparte de ActualizarAutoreporte y no como un tercer parámetro suyo porque son dos hechos
+// distintos con ritmos distintos: la versión cambia en cada actualización del agente y el capver
+// sólo cuando cambia el protocolo. Mezclarlos obligaría a que quien toca uno mande el otro, y el
+// que no lo tenga a mano mandaría un cero — que acá significa «no declara» y borraría el dato.
+//
+// El 0 SÍ se escribe: un agente que se degrada a un build sin capver tiene que dejar de figurar
+// como si hablara el contrato. Lo que evita la reescritura es el `if` del llamador, que compara
+// contra la fila que ya leyó.
+func (e *DbEngine) ActualizarCapver(id string, capver int) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if _, err := e.db.Exec(`UPDATE devices SET capver = ? WHERE id = ? AND revoked = 0`, capver, id); err != nil {
+		return fmt.Errorf("error al registrar el capver de %q: %w", id, err)
+	}
+	return nil
+}
+
 // ProyectosConDevices lista los proyectos que tienen al menos una máquina ACTIVA, ordenados.
 //
 // La usa el export a Prometheus de un principal federado (read=all), que no tiene un proyecto
@@ -435,7 +460,7 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
-		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos,
+		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos, &d.Capver,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice

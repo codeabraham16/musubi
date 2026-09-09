@@ -28,6 +28,16 @@ type FileDiff struct {
 	ChangeType string      `json:"change_type"`
 	NewRanges  []LineRange `json:"new_ranges"`
 	Binary     bool        `json:"binary,omitempty"`
+
+	// Agregadas y Borradas son el conteo de líneas del cuerpo del diff.
+	//
+	// POR QUÉ NO ALCANZA CON NewRanges: un hunk que SÓLO borra no aporta rango nuevo y
+	// parseHunkNewRange lo descarta a propósito (los rangos son coordenadas del estado nuevo, y
+	// un borrado no tiene estado nuevo). Correcto para cruzar hunks con símbolos, y engañoso
+	// para medir el TAMAÑO del cambio: sin estos contadores, borrar doscientas líneas mide
+	// exactamente igual que no tocar nada.
+	Agregadas int `json:"agregadas"`
+	Borradas  int `json:"borradas"`
 }
 
 var reHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
@@ -39,6 +49,7 @@ var reHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 func ParseUnifiedDiff(gitOut string) []FileDiff {
 	var files []FileDiff
 	var cur *FileDiff
+	enHunk := false
 	flush := func() {
 		if cur != nil {
 			files = append(files, *cur)
@@ -49,6 +60,7 @@ func ParseUnifiedDiff(gitOut string) []FileDiff {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			flush()
+			enHunk = false
 			cur = &FileDiff{ChangeType: ChangeModified}
 			if a, b, ok := parseDiffGitPaths(line); ok {
 				cur.OldPath, cur.Path = a, b
@@ -75,9 +87,17 @@ func ParseUnifiedDiff(gitOut string) []FileDiff {
 				cur.OldPath = strings.TrimPrefix(line, "--- a/")
 			}
 		case strings.HasPrefix(line, "@@"):
+			enHunk = true
 			if r, ok := parseHunkNewRange(line); ok {
 				cur.NewRanges = append(cur.NewRanges, r)
 			}
+		// El conteo va sólo DENTRO de un hunk: fuera, un "+++"/"---" o cualquier preámbulo
+		// contaría como línea de contenido. Los encabezados de archivo ya se consumieron en los
+		// casos de arriba, pero "--- /dev/null" y "+++ /dev/null" no, así que se descartan acá.
+		case enHunk && strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			cur.Agregadas++
+		case enHunk && strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			cur.Borradas++
 		}
 	}
 	flush()

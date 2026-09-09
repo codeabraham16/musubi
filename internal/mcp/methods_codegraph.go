@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -55,7 +57,51 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 // están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
 // destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
 // que es justo la clase de "se arregla solo más tarde" que nadie verifica.
+// errFueraDelProyecto lo devuelve la guarda de contención. Es un centinela para que un llamador
+// pueda distinguirlo de un error de disco: los dos hacen saltar el paquete, pero uno es una falla y
+// el otro es la política funcionando.
+var errFueraDelProyecto = errors.New("la ruta cae fuera del árbol del proyecto")
+
+// dentroDelProyecto dice si `p` —relativo a projectPath, o absoluto— cae DENTRO del árbol del
+// proyecto. Es la guarda de contención del grafo de código.
+//
+// ⚠️ POR QUÉ EXISTE. Medido el 2026-09-05 en el repo de Musubi: 264 nodos con ruta absoluta de OTRO
+// repo (C:/Proyectos/musubi-body/...) vivían en el grafo de este proyecto, con project_id='musubi'.
+// Entraron porque nada verificaba la contención: `memory.NormalizeCodePath` devuelve la ruta
+// ABSOLUTA cuando el archivo no cuelga de la raíz —no falla, no avisa— y de ahí en adelante la clave
+// absoluta se propaga sola. Peor: el índice INCREMENTAL deriva sus directorios sucios de las rutas
+// YA guardadas, así que un solo nodo ajeno hace que la próxima corrida re-derive el paquete ajeno
+// ENTERO y plante más. Por eso limpiar sin blindar no alcanza: el siguiente tick lo replanta.
+//
+// La comparación se hace con filepath.Rel y no con strings.HasPrefix sobre la raíz, porque el prefijo
+// textual da falsos positivos: "C:/Proyectos/Musubi-otro" empieza con "C:/Proyectos/Musubi". Y el
+// rechazo mira `..` como SEGMENTO, no como prefijo de texto: un directorio llamado "..datos" es
+// legítimo y HasPrefix(rel, "..") lo tumbaría.
+//
+// Con projectPath vacío NO se juzga: hay instancias (varios tests, y el bind compartido) que se
+// construyen sin árbol, y ahí toda ruta saldría fuera. Inventar contención donde no hay raíz
+// rompería lo que hoy funciona sin proteger nada.
+func (s *McpServer) dentroDelProyecto(p string) bool {
+	if strings.TrimSpace(s.projectPath) == "" {
+		return true
+	}
+	abs := p
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(s.projectPath, abs)
+	}
+	rel, err := filepath.Rel(s.projectPath, abs)
+	if err != nil {
+		return false // otra unidad de disco: Rel no puede relacionarlas
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unresolved int, err error) {
+	// La guarda va ANTES del ReadDir: el directorio ajeno EXISTE en disco, así que el error de
+	// lectura nunca iba a frenarlo.
+	if !s.dentroDelProyecto(dir) {
+		return 0, fmt.Errorf("%w: %s", errFueraDelProyecto, dir)
+	}
 	absDir := dir
 	if !filepath.IsAbs(absDir) {
 		absDir = filepath.Join(s.projectPath, dir)
@@ -302,9 +348,16 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 	dirs, _ := s.walkSourceTree()
 	pkgs := 0
 	var pendientes []string
+	var salteados []string
 	for dir := range dirs {
 		unresolved, err := s.refreshCodeGraphPkg(ctx, dir)
 		if err != nil {
+			// EL SALTEO SE DECLARA, no se traga. Antes este `continue` era mudo y la respuesta
+			// decía {"packages": N} contando SÓLO los que salieron bien, sin decir nunca cuántos
+			// se encontraron: un full que cubría una fracción del repo reportaba éxito, y el
+			// agujero se leía después como «el grafo no conoce ese símbolo». Mismo principio que
+			// el recorte de #332.
+			salteados = append(salteados, fmt.Sprintf("%s: %v", dir, err))
 			continue
 		}
 		pkgs++
@@ -315,10 +368,51 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 	// Segunda pasada: ahora el grafo tiene TODOS los símbolos del módulo, así que lo que en la
 	// primera vuelta apuntaba a un paquete todavía no indexado ya resuelve.
 	for _, dir := range pendientes {
-		_, _ = s.refreshCodeGraphPkg(ctx, dir)
+		if _, err := s.refreshCodeGraphPkg(ctx, dir); err != nil {
+			salteados = append(salteados, fmt.Sprintf("%s (2da pasada): %v", dir, err))
+		}
 	}
+	// El derivador que escribió estas filas queda registrado: es lo que le permite al índice
+	// incremental darse cuenta, más adelante, de que el derivador cambió.
+	_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
+
 	nodes, edges := s.graphSize(s.scopedCtx(ctx))
-	return map[string]interface{}{"packages": pkgs, "nodes": nodes, "edges": edges}, nil
+	res := map[string]interface{}{
+		"packages":       pkgs,
+		"total_packages": len(dirs),
+		"nodes":          nodes,
+		"edges":          edges,
+	}
+	if len(salteados) > 0 {
+		res["skipped"] = len(salteados)
+		res["skipped_dirs"] = recortarMotivos(salteados, 10)
+		res["skipped_truncated"] = len(salteados) > 10
+	}
+	return res, nil
+}
+
+// debeSellarDerivador decide si el sello del derivador puede avanzar tras una barrida.
+//
+// Va en su propia función porque es la regla que más caro sale equivocar y la más difícil de
+// ejercitar desde afuera: hacer fallar un directorio de verdad pide permisos del sistema de
+// archivos y sale distinto en cada plataforma. Acá la regla se afirma directo.
+//
+// SELLAR CON FALLIDOS ES LA TRAMPA. Si el sello avanza mientras quedaron directorios sin derivar,
+// la próxima corrida ve la versión al día, vuelve a saltearlos por fingerprint —su contenido no
+// cambió— y quedan derivados por el motor viejo PARA SIEMPRE. Que es, letra por letra, el modo de
+// falla que esta puerta vino a cerrar.
+func debeSellarDerivador(derivadorCambio bool, fallidos int) bool {
+	return derivadorCambio && fallidos == 0
+}
+
+// recortarMotivos acota una lista de motivos a n, declarando el recorte con una última entrada en
+// vez de cortar callado: una lista truncada que no dice que lo está se lee como completa.
+func recortarMotivos(xs []string, n int) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	out := append([]string{}, xs[:n]...)
+	return append(out, fmt.Sprintf("… y %d más", len(xs)-n))
 }
 
 // indexIncremental reconcilia el grafo con el working tree sin re-derivar todo (Track 20 · F5):
@@ -332,9 +426,23 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	_, diskFiles := s.walkSourceTree()
+	dirsDisco, diskFiles := s.walkSourceTree()
 
 	dirtyDirs := map[string]bool{}
+
+	// EL DERIVADOR CAMBIÓ ⇒ TODO ES SUCIO, UNA VEZ. El fingerprint es el sha256 del contenido, así
+	// que sigue al input y no a quien lo deriva: sin esta puerta, una mejora del derivador jamás
+	// alcanza a un archivo que no cambió y el grafo queda con regiones escritas por versiones
+	// distintas, sin que nada lo declare. Ya pasó —seis paquetes quedaron sin aristas cross-paquete
+	// durante tres semanas porque sus filas eran de catorce horas antes de que existiera el
+	// resolvedor— y sólo se descubrió midiendo a mano. Ver codeintel.GraphDeriverVersion.
+	derivadorViejo, _, _ := s.engine.GetMeta(memory.MetaCodegraphDeriver)
+	derivadorCambio := derivadorViejo != codeintel.GraphDeriverVersion
+	if derivadorCambio {
+		for dir := range dirsDisco {
+			dirtyDirs[dir] = true
+		}
+	}
 	var ghostPaths []string
 	skipped := 0
 	for path, fp := range stored {
@@ -368,16 +476,41 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 		}
 	}
 	refreshed := 0
+	var fallidos []string
 	for dir := range dirtyDirs {
 		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
 			refreshed++
+		} else {
+			fallidos = append(fallidos, fmt.Sprintf("%s: %v", dir, err))
 		}
 	}
+
+	// EL SELLO SE MUEVE SÓLO SI LA BARRIDA SALIÓ ENTERA. Sellar con directorios fallidos los
+	// condenaría a no reintentarse NUNCA: la próxima corrida vería la versión al día, volvería a
+	// saltearlos por fingerprint, y quedarían derivados por el motor viejo para siempre. Que es
+	// exactamente el modo de falla que esta puerta vino a cerrar.
+	if debeSellarDerivador(derivadorCambio, len(fallidos)) {
+		_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
+	}
+
 	nodes, edges := s.graphSize(scoped)
-	return map[string]interface{}{
+	res := map[string]interface{}{
 		"mode": "incremental", "packages": refreshed, "pruned": pruned,
 		"skipped": skipped, "nodes": nodes, "edges": edges,
-	}, nil
+	}
+	if derivadorCambio {
+		// Se declara, porque cambia el costo de la corrida de golpe y sin aviso se lee como un
+		// cuelgue: una barrida entera donde se esperaba un incremental barato.
+		res["deriver_changed"] = true
+		res["deriver_from"] = derivadorViejo
+		res["deriver_to"] = codeintel.GraphDeriverVersion
+	}
+	if len(fallidos) > 0 {
+		res["failed"] = len(fallidos)
+		res["failed_dirs"] = recortarMotivos(fallidos, 10)
+		res["failed_truncated"] = len(fallidos) > 10
+	}
+	return res, nil
 }
 
 func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
@@ -718,19 +851,36 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 	return jsonResult(map[string]interface{}{"symbol": args.Symbol, "callers": callers, "count": len(callers)})
 }
 
-// graphFreshness cuenta, sobre los archivos presentes en el grafo scopeado, cuántos están STALE
-// (fingerprint del disco distinto al guardado) y cuántos son FANTASMA (ausentes/ilegibles en
-// disco). Es la señal de "conviene re-indexar" que expone map (Track 20 · F5), a granularidad de
-// archivo (barata: una pasada de stat sobre los paths del grafo).
-func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
-	// Igual que cgStale: sin el árbol en disco la frescura por fingerprint no aplica (todo saldría
-	// fantasma). No inventar podredumbre. #3
+// graphFreshness cuenta, sobre el proyecto scopeado, cuántos archivos están STALE (fingerprint del
+// disco distinto al guardado), cuántos son FANTASMA (en el grafo pero ausentes/ilegibles en disco) y
+// cuántos son AUSENTES (indexables en disco y sin un solo nodo). Es la señal de "conviene
+// re-indexar" que expone map (Track 20 · F5), a granularidad de archivo.
+//
+// ⚠️ POR QUÉ EXISTE `missing`, Y POR QUÉ NO ALCANZABA CON stale+ghosts: los dos primeros se derivan
+// recorriendo `stored`, o sea LOS ARCHIVOS QUE YA ESTÁN EN EL GRAFO. Su dominio es el grafo, no el
+// repo — así que un archivo que nunca se indexó no puede salir stale ni fantasma POR CONSTRUCCIÓN, y
+// map informaba `stale:N, ghosts:0` sin mencionarlo. Medido el 2026-09-05 en este mismo repo: 213 de
+// 798 `.go` (26,7%) sin un solo nodo, `internal/fleet` entero entre ellos (62 archivos), y map decía
+// `ghosts:0`. Una señal de salud ciega a la peor clase de problema es peor que no tener señal: se
+// lee como "el grafo está bien".
+//
+// El denominador sale de walkSourceTree —LA MISMA enumeración que usa el indexador, con sus mismas
+// exclusiones (vendor, testdata, node_modules, dist, coverage, ocultos)— y no de una propia: contra
+// un denominador inventado, `missing` mediría el desacuerdo entre dos listas en vez de la ceguera.
+func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missing int) {
+	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
+	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
+	//
+	// Se conserva `arbolFueraDeAlcance()` de esta rama y no el `s.forceRedact` pelado de main: son
+	// lo mismo —el helper es literalmente `return s.forceRedact`— pero el nombre dice POR QUÉ se
+	// mira, y los otros cinco usos de este archivo ya van por ahí. Dos formas de preguntar lo
+	// mismo en el mismo archivo es como una de las dos se queda vieja.
 	if s.arbolFueraDeAlcance() {
-		return 0, 0
+		return 0, 0, 0
 	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	for path, fp := range stored {
 		cur, ferr := memory.FileFingerprint(s.projectPath, path)
@@ -742,7 +892,13 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts int) {
 			stale++
 		}
 	}
-	return stale, ghosts
+	_, enDisco := s.walkSourceTree()
+	for key := range enDisco {
+		if _, ok := stored[key]; !ok {
+			missing++
+		}
+	}
+	return stale, ghosts, missing
 }
 
 func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
@@ -755,14 +911,16 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	if god == nil {
 		god = []memory.GraphDegree{}
 	}
-	entry, _ := s.engine.GraphEntryPointsCtx(scoped, 25)
+	const tapaEntry = 25
+	entry, totalEntry, _ := s.engine.GraphEntryPointsCtx(scoped, tapaEntry)
 	if entry == nil {
 		entry = []string{}
 	}
-	stale, ghosts := s.graphFreshness(scoped)
+	stale, ghosts, missing := s.graphFreshness(scoped)
 	return jsonResult(map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
-		"stale": stale, "ghosts": ghosts,
+		"total_entry_points": totalEntry, "entry_points_truncated": totalEntry > len(entry),
+		"stale": stale, "ghosts": ghosts, "missing": missing,
 	})
 }
 

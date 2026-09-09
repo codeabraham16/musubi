@@ -190,3 +190,35 @@ import (
 		t.Error("un archivo no-Go no debe devolver imports")
 	}
 }
+
+// --- PuedeTenerRadio: no es código ≠ no lo pude medir -----------------------------------
+
+func TestPuedeTenerRadioSeparaDocsDeCodigo(t *testing.T) {
+	casos := []struct {
+		path   string
+		quiero bool
+		porque string
+	}{
+		{"CHANGELOG.md", false, "la documentación no tiene radio, y eso es un hecho conocido"},
+		{"docs/guia.markdown", false, "idem"},
+		{".github/workflows/release.yml", false, "un YAML de CI no entra al grafo"},
+		{"package.json", false, "config"},
+		{"go.sum", false, "manifiesto de dependencias"},
+		{"assets/logo.svg", false, "asset"},
+		{"internal/mcp/testdata/x.golden", false, "fixture"},
+		{"LICENSE", false, "sin extensión: nada de eso entra al grafo"},
+		{"Dockerfile", false, "idem"},
+		{"VERSION", false, "idem"},
+
+		{"internal/memory/store.go", true, "es código, y el grafo lo indexa"},
+		{"web/app.ts", true, "es código: que este build no lo indexe es OTRA cosa, y ahí la ceguera es real"},
+		{"scripts/deploy.py", true, "idem"},
+		{"src/main.rs", true, "ANTE LA DUDA, CÓDIGO: una extensión que no está en la lista cuenta"},
+		{"a.lenguajeQueNoExisteTodavia", true, "el error barato es revisar de más"},
+	}
+	for _, c := range casos {
+		if got := PuedeTenerRadio(c.path); got != c.quiero {
+			t.Errorf("PuedeTenerRadio(%q) = %v, quería %v — %s", c.path, got, c.quiero, c.porque)
+		}
+	}
+}

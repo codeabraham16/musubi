@@ -1,5 +1,7 @@
 package fleet
 
+import "encoding/json"
+
 // protocolo.go es el CONTRATO del latido: lo que el cerebro responde y lo que el agente lee.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -47,6 +49,13 @@ type RespuestaLatido struct {
 	// —el que administra ESA máquina— es justamente el que no ve los logs del cerebro. Vacío = el
 	// agente no mandó ninguno.
 	Servicios string `json:"servicios,omitempty"`
+	// Protocolo dice qué pasó con el CONTRATO, por el mismo motivo que `Muestra` y `Servicios`:
+	// que la máquina lo vea desde su lado. Vacío = el capver declarado cae dentro de la banda del
+	// cerebro y no hay nada que decir.
+	//
+	// EL LATIDO NO SE RECHAZA POR ESTO, y la decisión importa: una máquina rechazada desaparece de
+	// la flota, y desaparecer se lee igual que «apagada». Queda visible, con su problema escrito.
+	Protocolo string `json:"protocolo,omitempty"`
 	// Motivo viaja SÓLO en el 401 y es el mismo texto para todos los rechazos (B3).
 	Motivo string `json:"motivo,omitempty"`
 	// TokenNuevo es la credencial de una rotación en curso, y viaja SÓLO mientras la rotación
@@ -115,3 +124,102 @@ type ResultadoDeComando struct {
 // "musubi-permiso:concedida", se rompe; si lo perdiera el cerebro, sigue funcionando. Un modo de
 // falla que depende de QUÉ LADO se equivoca es de los más difíciles de razonar.
 const PrefijoRespuestaPermiso = "musubi-permiso: "
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL CUERPO DEL LATIDO TAMBIÉN ESTABA ESCRITO DOS VECES, Y ESO ES LO QUE ARREGLA ESTE TIPO
+//
+// La nota de arriba cuenta cómo la RESPUESTA vivía duplicada y qué costó. El PEDIDO tenía el
+// mismo problema y se pasó por alto: el agente lo armaba como un `map[string]any` anónimo en
+// cmd/musubi/agent.go y el cerebro lo leía con un struct privado en internal/mcp/fleet_http.go.
+// Dos formas del mismo mensaje, sin nada que las ate — y `encoding/json` descarta en silencio lo
+// que el receptor no declara, igual que del otro lado.
+//
+// Un map es todavía peor que un struct duplicado: no tiene ni nombres de campo que el compilador
+// pueda mirar, así que un typo en la clave («capver» vs «cap_ver») compila, arranca y responde
+// 200 con el campo perdido.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+// CuerpoLatido es lo ÚNICO que un dispositivo puede mandar, y lo que NO tiene es el invariante
+// B4/D5: no hay dónde poner un `device_id`, un `name` ni un `project`. Todos sus campos son cosas
+// que la máquina sabe DE SÍ MISMA; ninguno dice QUIÉN ES. La identidad sale del token y de ningún
+// otro lado, así que una máquina no puede reportar las métricas de otra ni aunque quiera.
+//
+// (La línea en blanco de arriba no es estética: sin ella el bloque de la nota queda pegado a este
+// comentario y pasa a ser el doc del tipo, que entonces no empieza por su nombre —ST1021—.)
+type CuerpoLatido struct {
+	// Muestra viaja como RawMessage y NO como *fleet.Muestra para poder pesarla CRUDA: el techo
+	// de la telemetría es suyo (MuestraMaxBytes ≈ 4 KiB) y tiene que seguir siendo suyo
+	// aunque el cuerpo entero haya crecido para hacerle lugar al inventario de servicios. Con un
+	// solo techo compartido, una muestra de 100 KiB entraría por la puerta que se abrió para las
+	// units, y el tope de la telemetría se habría aflojado sin que nadie lo decidiera.
+	Muestra json.RawMessage `json:"muestra"`
+	// Version y Direccion son lo que la máquina sabe de SÍ MISMA y el cerebro no puede
+	// averiguar solo: qué build del agente corre y por qué dirección se la alcanza.
+	//
+	// Que el device escriba en su propia fila NO rompe B4/D5. El invariante es que no puede
+	// decir QUIÉN ES —eso sale del token—, no que no pueda decir CÓMO ESTÁ. Sin campos de
+	// identidad acá, la única fila que estos valores pueden tocar es la del token presentado.
+	Version string `json:"version"`
+	// Capver es la versión de CAPACIDADES del protocolo que habla ESTE agente. El cerebro la
+	// compara contra su banda [CapverMin, Capver] y contesta en `Protocolo` cuando queda afuera.
+	//
+	// NO ES LA VERSIÓN DEL PRODUCTO, y por eso viaja aparte de `Version`: dos builds con versiones
+	// distintas pueden hablar el mismo contrato, y ése es justamente el punto —permite desplegar
+	// sin romper—. Un agente anterior a esta pieza no manda el campo y queda en 0, que significa
+	// «no declara» y NO «versión cero»: el cerebro lo trata como fuera de banda porque nadie
+	// afirmó nada, no porque haya afirmado algo viejo.
+	Capver    int    `json:"capver,omitempty"`
+	Direccion string `json:"direccion"`
+	// RustdeskID es el identificador PÚBLICO del cliente de pantalla (S6). No es un secreto: sin
+	// la contraseña de sesión no sirve para entrar, y sin él quien mira no sabe a qué conectarse.
+	RustdeskID string `json:"rustdesk_id"`
+	// Servicios es QUÉ CORRE ADENTRO de esta máquina (S12): sus units, sus contenedores.
+	//
+	// No rompe B4/D5 por la misma razón que `version` y `direccion`: un fleet.ReporteServicio no
+	// tiene NINGÚN campo de identidad —ni device, ni project, ni id— así que lo único que estas
+	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
+	// castellano a propósito: `nombre`, no `name`.
+	Servicios []ReporteServicio `json:"servicios,omitempty"`
+	// ServiciosOmitidos es CUÁNTOS NO ENTRARON en la lista de arriba (A116).
+	//
+	// El latido lleva un techo (`ServiciosPorLatido`) y el agente ordena por prioridad —fallado,
+	// detenido, corriendo, desconocido— antes de recortar. Sin este número, una lista TRUNCADA de
+	// 64 es idéntica a un inventario COMPLETO de 64 del lado del cerebro, y la diferencia no es
+	// académica: la poda por ausencia da de baja lo que no vino, así que el cerebro no se queda
+	// sin ver lo que falta —ANOTA que dejó de existir—. Medido el 2026-09-05 en `davantis-1`: 26
+	// servicios de clase `docker` y 87 de Windows marcados `revoked = 1` por esa rotación, entre
+	// ellos los 11 contenedores de `altura-erp`, que estaban corriendo.
+	//
+	// `omitempty`: un inventario completo pesa exactamente lo que pesaba antes. Un agente viejo no
+	// lo manda y llega 0, que es el comportamiento previo — no es una regresión, es el estado
+	// actual, y a esos agentes los delata `musubi_fleet_device_agent_stale`.
+	//
+	// VIVE ACÁ Y NO EN UN MAPA porque el sobre pasó a ser tipado (#413/#419): una clave de mapa
+	// mal escrita viaja igual y se descarta del otro lado sin decir nada.
+	ServiciosOmitidos int `json:"servicios_omitidos,omitempty"`
+	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
+	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
+	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va
+	// a pedir.
+	//
+	// PUNTERO Y NO bool, y ésa es la diferencia que importa: un agente VIEJO no manda el campo, y
+	// con un bool pelado eso sería indistinguible de un agente nuevo que midió y dijo que no. El
+	// nil se saltea y conserva lo que hubiera; el `false` explícito SÍ escribe. Sin esto, la
+	// primera flota con agentes mezclados vería a los viejos «declarando» que no pueden preguntar
+	// cuando en realidad no opinaron.
+	PuedePreguntar *bool `json:"puede_preguntar,omitempty"`
+	// MotivoNoPreguntar dice POR QUÉ no puede, cuando no puede. Sin él, un `pide` endurecido a
+	// `prohibido` en toda la flota es un cero sin explicación, y las tres causas posibles —no hay
+	// escritorio, falta un paquete, el agente corre como servicio— se arreglan distinto.
+	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
+	// TokenFuente dice de dónde salió la credencial del agente: `archivo` o `variable` (A102). El
+	// cerebro NO lo puede averiguar de ninguna otra forma, y decide algo que importa: con
+	// `variable` una rotación no se puede completar —un proceso no reescribe su propio entorno— así
+	// que la rotación vence siempre y desde afuera esa máquina late igual que una que sí puede.
+	//
+	// SIN PUNTERO, y la asimetría con `PuedePreguntar` es deliberada: acá el vacío ya es un tercer
+	// estado con significado —«no lo dijo»— porque es un string y no un bool. El agente lo omite
+	// cuando no lo sabe, y un agente viejo no lo manda: los dos casos llegan como "" y se tratan
+	// igual, que es lo correcto. Un puntero agregaría una distinción sin consecuencia.
+	TokenFuente string `json:"token_fuente,omitempty"`
+}

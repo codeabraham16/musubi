@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/buildid"
 	"musubi/internal/fleet"
 	"musubi/internal/logx"
 )
@@ -45,75 +46,6 @@ import (
 // fleetHeartbeatPath es la ruta del latido. Bajo /fleet/ para que la separación se vea en el
 // mapa de rutas y no sólo en este comentario.
 const fleetHeartbeatPath = "/fleet/heartbeat"
-
-// cuerpoLatido es lo ÚNICO que un dispositivo puede mandar. Tiene un solo campo, y esa pobreza
-// es el invariante B4/D5: no hay dónde poner un `device_id`, un `name` ni un `project`. La
-// identidad sale del token y de ningún otro lado, así que una máquina no puede reportar las
-// métricas de otra ni aunque quiera.
-type cuerpoLatido struct {
-	// Muestra viaja como RawMessage y NO como *fleet.Muestra para poder pesarla CRUDA: el techo
-	// de la telemetría es suyo (fleet.MuestraMaxBytes ≈ 4 KiB) y tiene que seguir siendo suyo
-	// aunque el cuerpo entero haya crecido para hacerle lugar al inventario de servicios. Con un
-	// solo techo compartido, una muestra de 100 KiB entraría por la puerta que se abrió para las
-	// units, y el tope de la telemetría se habría aflojado sin que nadie lo decidiera.
-	Muestra jsonpkg.RawMessage `json:"muestra"`
-	// Version y Direccion son lo que la máquina sabe de SÍ MISMA y el cerebro no puede
-	// averiguar solo: qué build del agente corre y por qué dirección se la alcanza.
-	//
-	// Que el device escriba en su propia fila NO rompe B4/D5. El invariante es que no puede
-	// decir QUIÉN ES —eso sale del token—, no que no pueda decir CÓMO ESTÁ. Sin campos de
-	// identidad acá, la única fila que estos valores pueden tocar es la del token presentado.
-	Version   string `json:"version"`
-	Direccion string `json:"direccion"`
-	// RustdeskID es el identificador PÚBLICO del cliente de pantalla (S6). No es un secreto: sin
-	// la contraseña de sesión no sirve para entrar, y sin él quien mira no sabe a qué conectarse.
-	RustdeskID string `json:"rustdesk_id"`
-	// Servicios es QUÉ CORRE ADENTRO de esta máquina (S12): sus units, sus contenedores.
-	//
-	// No rompe B4/D5 por la misma razón que `version` y `direccion`: un fleet.ReporteServicio no
-	// tiene NINGÚN campo de identidad —ni device, ni project, ni id— así que lo único que estas
-	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
-	// castellano a propósito: `nombre`, no `name`.
-	Servicios []fleet.ReporteServicio `json:"servicios,omitempty"`
-	// ServiciosOmitidos es CUÁNTOS NO ENTRARON en la lista de arriba (A116).
-	//
-	// El latido lleva un techo (`fleet.ServiciosPorLatido`) y el agente ordena por prioridad
-	// —fallado, detenido, corriendo, desconocido— antes de recortar. Sin este número, una lista
-	// TRUNCADA de 64 es idéntica a un inventario COMPLETO de 64 desde acá, y la diferencia no es
-	// académica: la poda por ausencia da de baja lo que no vino, así que el cerebro no se queda
-	// sin ver lo que falta —ANOTA que dejó de existir—. Medido el 2026-09-05 en `davantis-1`:
-	// 26 servicios de clase `docker` y 87 de Windows marcados `revoked = 1` por esa rotación,
-	// entre ellos los 11 contenedores de `altura-erp`, que estaban corriendo.
-	//
-	// Un agente viejo no lo manda y llega 0, que es el comportamiento de antes. No es una
-	// regresión —es el estado actual— y lo que delata a esos agentes es `musubi_fleet_device_agent_stale`.
-	ServiciosOmitidos int `json:"servicios_omitidos,omitempty"`
-	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
-	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
-	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va
-	// a pedir.
-	//
-	// PUNTERO Y NO bool, y ésa es la diferencia que importa: un agente VIEJO no manda el campo, y
-	// con un bool pelado eso sería indistinguible de un agente nuevo que midió y dijo que no. El
-	// nil se saltea y conserva lo que hubiera; el `false` explícito SÍ escribe. Sin esto, la
-	// primera flota con agentes mezclados vería a los viejos «declarando» que no pueden preguntar
-	// cuando en realidad no opinaron.
-	PuedePreguntar *bool `json:"puede_preguntar,omitempty"`
-	// MotivoNoPreguntar dice POR QUÉ no puede, cuando no puede. Sin él, un `pide` endurecido a
-	// `prohibido` en toda la flota es un cero sin explicación, y las tres causas posibles —no hay
-	// escritorio, falta un paquete, el agente corre como servicio— se arreglan distinto.
-	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
-	// TokenFuente dice de dónde salió la credencial del agente: `archivo` o `variable` (A102). El
-	// cerebro NO lo puede averiguar de ninguna otra forma, y decide algo que importa: con
-	// `variable` una rotación no se puede completar —un proceso no reescribe su propio entorno— así
-	// que la rotación vence siempre y desde afuera esa máquina late igual que una que sí puede.
-	//
-	// SIN PUNTERO, y la asimetría con `PuedePreguntar` es deliberada: acá el vacío ya es un tercer
-	// estado con significado —«no lo dijo»— porque es un string y no un bool. El agente lo omite
-	// cuando no lo sabe, y un agente viejo no lo manda: los dos casos llegan como "" y se tratan
-	// igual, que es lo correcto. Un puntero agregaría una distinción sin consecuencia.
-	TokenFuente string `json:"token_fuente,omitempty"`
-}
 
 // El CONTRATO del latido —qué contesta el cerebro y qué lee el agente— vive en
 // internal/fleet/protocolo.go, en UN solo tipo que usan los dos lados. Estaba duplicado acá y en
@@ -201,7 +133,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 				logx.Info("flota: rotación de token completada; el token anterior dejó de valer", "device", d.Name)
 			}
 		}
-		muestraJSON, notaMuestra, notaServicios := s.leerCuerpoDelLatido(r, d)
+		muestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)
 
 		// UNA SOLA TRANSACCIÓN PARA LAS DOS ESCRITURAS QUE SIEMPRE OCURREN: la señal de vida y
 		// el paso por la cola (que vence lo viejo y marca entregado lo que se lleva). Eran dos
@@ -232,7 +164,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		}
 
 		resp := fleet.RespuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
-			Muestra: notaMuestra, Servicios: notaServicios}
+			Muestra: notaMuestra, Servicios: notaServicios, Protocolo: notaProtocolo}
 		// EL TOKEN NUEVO VIAJA MIENTRAS EL AGENTE SIGA LATIENDO CON EL VIEJO, y deja de viajar en
 		// cuanto late con el nuevo (ahí la rotación ya se completó unas líneas más arriba).
 		//
@@ -262,9 +194,9 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 // capacidad que falta descartan la MEDICIÓN, no el LATIDO. Estar viva y saber medirse son cosas
 // distintas, y un agente con el colector roto no debe desaparecer del inventario — es
 // precisamente cuando más querés verlo.
-func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, notaMuestra, notaServicios string) {
+func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, notaMuestra, notaServicios, notaProtocolo string) {
 	if r.Body == nil || r.ContentLength == 0 {
-		return "", "", ""
+		return "", "", "", notaProtocolo
 	}
 	// D6 — el cuerpo está ACOTADO. Un agente corre en la superficie más expuesta de la flota;
 	// un cuerpo sin tope es un DoS con forma de telemetría. El techo general del transporte
@@ -276,15 +208,15 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	// entraba. Los dos techos siguen existiendo por separado y cada uno acota lo suyo.
 	crudo, err := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1))
 	if err != nil {
-		return "", "descartada: no se pudo leer el cuerpo", ""
+		return "", "descartada: no se pudo leer el cuerpo", "", notaProtocolo
 	}
 	if len(crudo) > latidoMaxBytes {
-		return "", "descartada: cuerpo demasiado grande", ""
+		return "", "descartada: cuerpo demasiado grande", "", notaProtocolo
 	}
 
-	var cuerpo cuerpoLatido
+	var cuerpo fleet.CuerpoLatido
 	if err := jsonpkg.Unmarshal(crudo, &cuerpo); err != nil {
-		return "", "descartada: JSON inválido", ""
+		return "", "descartada: JSON inválido", "", notaProtocolo
 	}
 	// EL AUTORREPORTE VA ANTES DEL CORTE POR «no vino muestra», y el orden es el invariante.
 	//
@@ -313,6 +245,29 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	direccion := strings.TrimSpace(recortar(cuerpo.Direccion, 128))
 	if (version != "" && version != d.AgentVer) || (direccion != "" && direccion != d.Address) {
 		_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)
+	}
+	// EL CONTRATO, QUE NO ES LA VERSIÓN. Dos builds distintos pueden hablar el mismo capver —ése
+	// es el punto de tener una banda— así que se compara aparte y se guarda aparte.
+	//
+	// Mismo criterio de escritura que el autorreporte: sólo si cambió. El capver de una máquina
+	// cambia cuando alguien la actualiza a un build con otro contrato, o sea casi nunca, y un
+	// UPDATE por latido en una flota de 2000 máquinas es el fsync que la Ola 0 sacó del camino
+	// caliente.
+	if cuerpo.Capver != d.Capver {
+		_ = s.engine.ActualizarCapver(d.ID, cuerpo.Capver)
+	}
+	// Y SE LE CONTESTA, aunque el latido se acepte igual. Rechazarlo haría desaparecer a la
+	// máquina de la flota, y desaparecer se lee igual que «apagada»: el problema quedaría
+	// invisible justo para quien puede arreglarlo. Queda viva y con su problema escrito, que es
+	// la misma regla que ya gobierna las notas de `muestra` y `servicios`.
+	if !buildid.EnLaBanda(cuerpo.Capver) {
+		if cuerpo.Capver == 0 {
+			notaProtocolo = fmt.Sprintf("este agente no declara capver; el cerebro habla %d..%d — actualizá musubi en esta máquina",
+				buildid.CapverMin, buildid.Capver)
+		} else {
+			notaProtocolo = fmt.Sprintf("capver %d fuera de la banda del cerebro (%d..%d)",
+				cuerpo.Capver, buildid.CapverMin, buildid.Capver)
+		}
 	}
 	// Mismo criterio para el id de RustDesk, que también viene en cada latido de una máquina con
 	// escritorio remoto. Saltearlo cuando no cambió no pierde nada: el UPDATE de
@@ -403,38 +358,38 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios, cuerpo.ServiciosOmitidos)
 
 	if len(cuerpo.Muestra) == 0 || string(cuerpo.Muestra) == "null" {
-		return "", "", notaServicios
+		return "", "", notaServicios, notaProtocolo
 	}
 	// EL TECHO DE LA MUESTRA ES SUYO Y SE MIDE SOBRE EL JSON CRUDO. Medirlo después de
 	// deserializar no serviría de nada: los campos que la struct no conoce se pierden en el
 	// camino, así que un cuerpo con 4 MiB de basura adentro de `muestra` volvería a pesar 300
 	// bytes justo antes de que alguien lo mire.
 	if len(cuerpo.Muestra) > fleet.MuestraMaxBytes {
-		return "", "descartada: cuerpo demasiado grande", notaServicios
+		return "", "descartada: cuerpo demasiado grande", notaServicios, notaProtocolo
 	}
 
 	// D8 — LA CAPACIDAD NO ES DECORATIVA. Una máquina a la que no se le concedió `metrics`
 	// late (sigue viva) pero su medición se descarta. Sin esto, conceder capacidades sería un
 	// gesto sin efecto y el inventario diría una cosa mientras la base guarda otra.
 	if !d.Permite(fleet.CapMetrics) {
-		return "", "descartada: esta máquina no tiene concedida la capacidad `metrics`", notaServicios
+		return "", "descartada: esta máquina no tiene concedida la capacidad `metrics`", notaServicios, notaProtocolo
 	}
 
 	var m fleet.Muestra
 	if err := jsonpkg.Unmarshal(cuerpo.Muestra, &m); err != nil {
-		return "", "descartada: JSON inválido", notaServicios
+		return "", "descartada: JSON inválido", notaServicios, notaProtocolo
 	}
 	// El agente es un cliente y su muestra es entrada NO CONFIABLE, aunque su credencial sea
 	// válida: una máquina comprometida puede reportar 900 % de CPU para ensuciar un panel o
 	// disparar alertas. No se corrige el valor —eso escondería el problema—, se rechaza entera.
 	if err := m.Valida(); err != nil {
-		return "", "descartada: " + err.Error(), notaServicios
+		return "", "descartada: " + err.Error(), notaServicios, notaProtocolo
 	}
 	texto, err := m.Serializar()
 	if err != nil {
-		return "", "descartada: no se pudo serializar", notaServicios
+		return "", "descartada: no se pudo serializar", notaServicios, notaProtocolo
 	}
-	return texto, "guardada", notaServicios
+	return texto, "guardada", notaServicios, notaProtocolo
 }
 
 // latidoMaxBytes es el techo del CUERPO ENTERO del latido.
