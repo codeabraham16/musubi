@@ -1,0 +1,33 @@
+# musubi-comparar.timer — dispara la comparación repo↔servidor (A115).
+#
+# CADA 6 HORAS Y NO UNA VEZ POR DÍA, con la alerta en 26 h: eso deja MARGEN PARA FALLAR.
+# Con un disparo diario y un umbral de 26 h, una sola corrida perdida —la máquina apagada esa
+# tarde— ya enciende la alarma, y una alarma que suena por un caso normal es cómo se enseña a
+# ignorar un canal (los trece `MaquinaCaida` de A79). Con cuatro disparos por día hacen falta
+# CUATRO seguidos perdidos para llegar a las 26 h, o sea que la alerta significa «esta máquina
+# lleva más de un día sin comparar», que es la afirmación que queremos poder hacer.
+#
+# NO se corre más seguido: cada corrida abre varias sesiones ssh al cerebro y consulta las APIs de
+# Prometheus y Alertmanager. Cada 6 h es barato y suficiente — el drift que esto caza se mide en
+# días, no en minutos.
+
+[Unit]
+Description=Comparación periódica repo↔servidor
+Documentation=file://%h/musubi/deploy/RUNBOOK.md
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:07:00
+
+# ARRANCA DESFASADO Y NO EN PUNTO: a las 03:30 corre el backup del cerebro y a las 04:30/04:35 los
+# timers de extracción del servidor. Compartir minuto con ellos mezclaría la carga y, peor, haría
+# que una corrida lenta pareciera culpa de esto.
+RandomizedDelaySec=5m
+
+# LA LÍNEA QUE HACE QUE ESTO SIRVA EN UNA ESTACIÓN DE TRABAJO. Sin `Persistent`, un disparo que
+# cae con la máquina apagada simplemente NO OCURRE — y en un equipo que se apaga de noche eso
+# significa perder la mitad de las corridas sin que nada lo diga. Con `Persistent`, al encender
+# se ejecuta el que se perdió.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

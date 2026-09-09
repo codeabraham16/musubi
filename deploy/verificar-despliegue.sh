@@ -23,9 +23,14 @@
 #
 #   · El CONTENIDO de cada regla. Compara nombres y cantidades: una alerta cuyo umbral cambió en
 #     el repo y no en producción tiene el mismo nombre y no se ve desde acá.
-#   · Los archivos del servidor. Se le pregunta a Prometheus qué CARGÓ, que es la única respuesta
-#     que importa; un archivo correcto sin recargar no se distingue de uno viejo, y así tiene que
-#     ser.
+#   · Los archivos de CONFIGURACIÓN del servidor. Se le pregunta a Prometheus qué CARGÓ, que es la
+#     única respuesta que importa; un archivo correcto sin recargar no se distingue de uno viejo, y
+#     así tiene que ser. **Esa razón vale para lo que lee un daemon y NO para un guion de shell**:
+#     no hay nadie que lo relea, el archivo ES lo que corre en el momento en que se lo invoca. Por
+#     confundir los dos casos, el `redesplegar-cerebro.sh` del servidor quedó a la mitad del del
+#     repo y con su verificación de la migración muerta desde el esquema 38 —pasó así en los seis
+#     redespliegues del 4 y el 5 de septiembre de 2026 (A111)—, y este script, que existe justo
+#     para cruzar repo contra producción, no lo miraba. Los guiones derivados SÍ se comparan, abajo.
 #   · Los scrapes de sitio (`/etc/prometheus/scrapes/*.yml`). Son por sitio a propósito y el repo
 #     sólo trae el `.ejemplo`, así que no hay contra qué compararlos.
 #   · Lo que corre en las máquinas de la flota. Eso lo dice `musubi_fleet_device_agent_stale` (A68).
@@ -89,6 +94,44 @@ rojo()  { printf '  \033[31m✘ %s\033[0m\n' "$1"; DIVERGE=1; }
 verde() { printf '  \033[32m✔ %s\033[0m\n' "$1"; }
 gris()  { printf '  \033[90m· %s\033[0m\n' "$1"; }
 titulo(){ printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+# detalle — imprime QUÉ, renglón por renglón, DESDE ESTA SHELL Y NO DESDE UN PROCESO EFÍMERO.
+#
+# LA MITAD ACCIONABLE DEL INFORME NO LLEGABA AL JOURNAL, Y ESO COSTÓ TRES DÍAS.
+#
+# Acá había cinco `printf '%s\n' "$x" | sed 's/^/      falta: /'`. Funcionan perfecto en una
+# terminal. Bajo systemd NO: journald resuelve a qué unidad pertenece cada línea leyendo
+# `/proc/<pid>/cgroup` CUANDO LA RECIBE, y `sed` —un proceso de pipeline que vive milisegundos—
+# **ya murió**. Medido el 2026-09-08 sobre el journal real de `musubi-comparar.service`:
+#
+#     journalctl --user -u musubi-comparar.service | grep -cE 'falta:|firing:|down:|sobra:'  ->  0
+#     journalctl --user                            | grep -cE 'falta:|firing:|down:|sobra:'  -> 42
+#
+# Y los metadatos de una de esas 42 lo dicen entero: `_COMM=sed`, `_SYSTEMD_UNIT` **ausente**,
+# `_SYSTEMD_USER_UNIT` **ausente**, `_SYSTEMD_CGROUP` **ausente**. Sobrevive `SYSLOG_IDENTIFIER`
+# porque va en el fd del stream y no se resuelve desde `/proc`.
+#
+# EL DAÑO NO ES COSMÉTICO. El unit file documenta `journalctl --user -u musubi-comparar.service`
+# como LA forma de leer esto. Quien la seguía veía «desplegado A MEDIAS: faltan 1 de 28» y **nunca
+# el nombre**; veía «disparadas ahora:» seguido de nada; no veía qué target estaba caído. El
+# titular llegaba y el nombre no, así que para saber qué hacer había que volver a correrlo A MANO
+# — que es exactamente el paso manual que este guion existe para eliminar. La regla que faltaba
+# era `InventarioDeServiciosIncompleto`, y estuvo tres días escrita en el journal sin que la
+# lectura documentada pudiera mostrarla.
+#
+# `printf` es un BUILTIN: lo ejecuta bash, que vive toda la corrida, así que journald sí puede
+# resolver su cgroup. El `while` va con un here-string y no con un pipe, por dos motivos: un pipe
+# metería la lectura en una subshell efímera —el defecto de nuevo— y además `ssh` sin `-n` ya nos
+# enseñó lo que cuesta que un bucle comparta stdin con otro (ver `corre_alla`).
+detalle() {
+	prefijo="$1"
+	while IFS= read -r _linea; do
+		[ -n "$_linea" ] || continue
+		printf '      %s%s\n' "$prefijo" "$_linea"
+	done <<DETALLE
+$2
+DETALLE
+}
 # dudoso — lo que NO SE PUDO comprobar. No es verde ni rojo: es «no vi», y sale con 2. Existe
 # porque el modo de falla que trajo este script hasta acá es siempre el mismo: una consulta que no
 # se pudo hacer y un informe que igual terminó en verde.
@@ -255,7 +298,7 @@ for g in d:
       verde "$N_CARGADAS reglas cargadas; el repo declara $N_DECLARADAS y las $N_OBLIGATORIAS que se despliegan «siempre» están todas (el resto es condicional; el detalle, en la sección 2)"
     else
       rojo "faltan $n_faltan_obl de las $N_OBLIGATORIAS reglas que se despliegan «siempre» (hay $N_CARGADAS cargadas contra $N_DECLARADAS declaradas):"
-      printf '%s\n' "$faltan_obl" | sed 's/^/      falta: /'
+      detalle 'falta: ' "$faltan_obl"
     fi
   fi
 fi
@@ -306,6 +349,46 @@ else
   dudoso "no se pudo confirmar si CadenaDeAlertasFallando, FlotaSinTelemetria y ReglasDelCerebroSinDesplegar están cargadas: no hay lista de reglas que mirar"
 fi
 
+# (a quater) LAS RECORDING RULES DEL SLA ─────────────────────────────────────────────────────
+# TODO LO DE ARRIBA ES CIEGO A ESTE ARCHIVO, y por eso hace falta un bloque aparte.
+#
+# `CARGADAS` filtra por `type == "alerting"` y `TODAS_DECLARADAS` hace glob de `musubi-alerts*.yml`:
+# las once recording rules del SLA no aparecen en ninguna de las dos listas. Y son el número que se
+# le FACTURA a un cliente. A93, medido el 2026-09-05: ningún guion las instalaba, ninguna alerta las
+# contaba, y las edades de las series delataban tres instalaciones a mano en tres momentos distintos
+# (11,9 h de historia en una regla y 6,25 h en otra del mismo archivo).
+#
+# Lo que hace peligroso al caso es que un `avg30d` viejo sigue devolviendo un número plausible: no
+# hay síntoma. Así que la comparación es contra el repo y por conteo, igual que las otras dos.
+N_SLA_REPO="$(grep -cE '^[[:space:]]*-[[:space:]]+record:' "$REPO/deploy/musubi-recording.yml" || true)"
+if [ -z "$REGLAS_JSON" ]; then
+  dudoso "no se contaron las recording rules del SLA: no hay lista de reglas que mirar (el repo declara $N_SLA_REPO)"
+else
+  N_SLA_VIVAS="$(printf '%s' "$REGLAS_JSON" | python3 -c '
+import sys, json
+try:
+    g = json.load(sys.stdin)["data"]["groups"]
+except Exception:
+    print(""); sys.exit(0)
+print(sum(1 for x in g if "musubi-recording.yml" in x.get("file", "")
+          for r in x["rules"] if r.get("type") == "recording"))
+' 2>/dev/null)"
+  : "${N_SLA_VIVAS:=}"
+  if [ -z "$N_SLA_VIVAS" ]; then
+    dudoso "no pude contar las recording rules del SLA en la respuesta de Prometheus (el repo declara $N_SLA_REPO)"
+  elif [ "$N_SLA_VIVAS" = "$N_SLA_REPO" ]; then
+    verde "SLA: $N_SLA_VIVAS recording rules cargadas, las mismas $N_SLA_REPO que declara el repo"
+  elif [ "$N_SLA_VIVAS" = 0 ] && [ "$HAY_FLOTA" = no ]; then
+    gris "SLA sin cargar, y así corresponde: musubi-recording.yml es condicional y el cerebro no expone musubi_fleet_*"
+  elif [ "$N_SLA_VIVAS" = 0 ] && [ "$HAY_FLOTA" = indeterminado ]; then
+    dudoso "el SLA no está cargado y no pude resolver si correspondía (musubi-recording.yml es condicional y no pude preguntar por musubi_fleet_device_up)"
+  elif [ "$N_SLA_VIVAS" = 0 ]; then
+    rojo "el SLA NO está cargado y su condición SÍ se cumple: las $N_SLA_REPO recording rules de musubi-recording.yml quedaron sin desplegar, y los avg30d que se le muestran al cliente no existen o los está calculando otra cosa"
+  else
+    rojo "el SLA tiene $N_SLA_VIVAS recording rules cargadas y el repo declara $N_SLA_REPO: quedó una versión vieja del archivo. El número que se factura sigue saliendo plausible, así que esto es la única señal"
+  fi
+fi
+
 # (b) LOS TARGETS: quién está siendo scrapeado y quién no ────────────────────────────────────
 # Un target caído no es «una métrica menos»: toda alerta que dependa de él deja de poder disparar,
 # y en la UI eso se ve igual que «todo tranquilo».
@@ -335,7 +418,7 @@ for t in mal:
       verde "$n_up/$n_tot targets up"
     else
       rojo "$n_up/$n_tot targets up — los que no responden dejan ciegas a las alertas que dependen de ellos:"
-      printf '%s\n' "$TARGETS" | tail -n +2 | sed 's/^/      down: /'
+      detalle 'down: ' "$(printf '%s\n' "$TARGETS" | tail -n +2)"
     fi
   fi
 fi
@@ -347,14 +430,46 @@ if [ "$PROM_VIVO" != si ]; then
   dudoso "no se miró qué alertas están disparadas: Prometheus no contestó"
 else
   pedir_http "$PROM_URL/api/v1/alerts"
+  # LA LÍNEA DICE QUÉ ALERTA **Y EN QUÉ MÁQUINA**, PORQUE EL NOMBRE SOLO NO SIRVE PARA ACTUAR.
+  #
+  # Acá había un `Counter` por `alertname` que TIRABA `device` y `project`. El informe decía
+  # `firing: AgenteCaidoConMaquinaViva (1)` y quien lo leía no sabía en cuál de las cuatro
+  # máquinas — o sea el mismo defecto que el commit de ayer (8f2fb99) arregló para `falta:`:
+  # «el titular llega y lo accionable no». `detalle` tiene cinco call sites y CUATRO ya llevaban
+  # identidad; éste era el que faltaba. La guarda estaba en N-1 de N, en el mismo archivo y un
+  # día después.
+  #
+  # EL TECHO SE DECLARA, NO SE APLICA EN SILENCIO. Una tormenta de cuarenta máquinas no puede
+  # tapar el resto del informe, pero un recorte mudo se lee como «son cinco» — que es la misma
+  # mentira que este guion existe para no decir. Por eso sale «y N más».
   DISPARADAS="$(python3 -c '
 import sys, json
-from collections import Counter
+from collections import defaultdict
 a = json.load(sys.stdin)["data"]["alerts"]
 print("OK")
-c = Counter(x["labels"].get("alertname", "?") for x in a if x.get("state") == "firing")
-for nombre, n in sorted(c.items()):
-    print("%s (%d)" % (nombre, n))
+TECHO = 5
+g = defaultdict(list)
+for x in a:
+    if x.get("state") != "firing":
+        continue
+    l = x.get("labels", {})
+    # `device` es la etiqueta de las alertas de flota; `instance` la de las de scrape; `job` el
+    # ultimo recurso. Se prueban en ese orden porque es el de mayor a menor especificidad, y una
+    # alerta del cerebro (sin device) tiene que seguir saliendo aunque sea sin identidad.
+    quien = l.get("device") or l.get("instance") or l.get("job") or ""
+    proy = l.get("project", "")
+    if quien and proy:
+        quien = "%s/%s" % (proy, quien)
+    g[l.get("alertname", "?")].append(quien)
+for nombre in sorted(g):
+    n = len(g[nombre])
+    quienes = sorted(q for q in g[nombre] if q)
+    if not quienes:
+        print("%s (%d)" % (nombre, n))
+    elif len(quienes) <= TECHO:
+        print("%s (%d) - %s" % (nombre, n, ", ".join(quienes)))
+    else:
+        print("%s (%d) - %s y %d mas" % (nombre, n, ", ".join(quienes[:TECHO]), len(quienes) - TECHO))
 ' <"$CUERPO" 2>/dev/null)"
   if [ "$HTTP_CODIGO" != 200 ] || [ "$(printf '%s\n' "$DISPARADAS" | head -1)" != OK ]; then
     rojo "no se pudo leer $PROM_URL/api/v1/alerts (HTTP $HTTP_CODIGO): no se sabe si hay algo disparado"
@@ -364,7 +479,7 @@ for nombre, n in sorted(c.items()):
       gris "ninguna alerta disparada en este momento"
     else
       gris "disparadas ahora (estado del minuto, no divergencia con el repo):"
-      printf '%s\n' "$lista" | sed 's/^/      firing: /'
+      detalle 'firing: ' "$lista"
     fi
   fi
 fi
@@ -478,7 +593,7 @@ for f in "$REPO"/deploy/musubi-alerts*.yml; do
     esac
   else
     rojo "$nombre — desplegado A MEDIAS: faltan $n_faltan de $n_declara"
-    printf '%s\n' "$faltan" | sed 's/^/      falta: /'
+    detalle 'falta: ' "$faltan"
   fi
 
   sobran="$(comm -13 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
@@ -491,7 +606,7 @@ done
 huerfanas="$(comm -13 <(printf '%s\n' "$TODAS_DECLARADAS") <(printf '%s\n' "$CARGADAS"))"
 if [ -n "$huerfanas" ]; then
   rojo "hay reglas CARGADAS que el repo ya no tiene (quedaron de un despliegue anterior):"
-  printf '%s\n' "$huerfanas" | sed 's/^/      sobra: /'
+  detalle 'sobra: ' "$huerfanas"
 fi
 
 # ── 3 · LOS SCRAPES ─────────────────────────────────────────────────────────────────────────
@@ -560,7 +675,10 @@ titulo "versión"
 
 VER_REPO="$(tr -d '[:space:]' < "$REPO/VERSION")"
 if [ -n "$SSH_HOST" ]; then
-  VER_VIVA="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'musubi version 2>/dev/null' | awk '{print $2}')"
+  # `-n` por la misma razón que en `corre_alla`: ninguno de los `ssh` de este guion quiere stdin,
+  # salvo el de la línea ~140 que SÍ le pipea `config_curl`. Ponerlo en los que no lo necesitan es
+  # lo que evita que el defecto vuelva el día que alguien mueva esta línea adentro de un bucle.
+  VER_VIVA="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'musubi version 2>/dev/null' | awk '{print $2}')"
 else
   VER_VIVA="$(musubi version 2>/dev/null | awk '{print $2}')"
 fi
@@ -599,7 +717,7 @@ fi
 printf '\n\033[1mpostura de transporte\033[0m\n'
 CFG_REMOTO="${MUSUBI_CFG:-/home/musubi/musubi-brain/.musubi/config.yaml}"
 if [ -n "$SSH_HOST" ]; then
-  POSTURA_TLS="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
+  POSTURA_TLS="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
     "grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' $(printf '%q' "$CFG_REMOTO") 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
 else
   POSTURA_TLS="$(grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' "$CFG_REMOTO" 2>/dev/null | tr -d ' ' || true)"
@@ -638,7 +756,21 @@ fi
 printf '\n\033[1mvuelve sola de un reboot\033[0m\n'
 corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
   if [ -n "$SSH_HOST" ]; then
-    ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
+    # EL `-n` NO ES DECORACIÓN: SIN ÉL ESTE INFORME DEJA DE MIRAR COSAS Y NO LO DICE.
+    #
+    # `ssh` sin `-n` lee stdin y se lo lleva entero. Cuando `corre_alla` se llama DESDE ADENTRO de
+    # un bucle que lee de un heredoc —el de «guiones derivados», línea ~766— el primer `ssh` se
+    # come el resto de la lista, el `read` no encuentra más renglones y el bucle termina.
+    #
+    # No falla: TERMINA. No hay línea roja, ni amarilla, ni verde — no hay línea. Medido el
+    # 2026-09-08: las últimas 3 corridas compararon `/usr/local/bin/musubi-backup` y NUNCA
+    # `/usr/local/sbin/redesplegar-cerebro.sh`, que es exactamente el archivo cuya deriva FUE A111.
+    # O sea que el agujero que A111 cerró volvió a quedar sin vigilancia, y el informe se veía igual.
+    #
+    # Es intermitente porque depende de si el `ssh` alcanza a leer antes de que el `read` lo haga,
+    # y por eso pasó tres corridas sin que nadie lo notara. La cabecera de este guion ya lo dice
+    # con todas las letras: «un informe que calla lo que no mira se lee como si lo hubiera mirado».
+    ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
   else
     eval "$1" 2>/dev/null || true
   fi
@@ -672,6 +804,175 @@ else
     rojo "podman-restart del USUARIO está en «$PRESTART»: después de un reboot los contenedores rootless NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. El unit del sistema (hoy «${PRESTART_SIS:-?}») NO los cubre: son rootless. Arreglo: systemctl --user enable podman-restart.service"
   fi
 fi
+
+# ── Los guiones DERIVADOS: el archivo que se va a correr contra el que el repo declara ──────
+#
+# POR QUÉ ESTO ESTÁ ACÁ Y NO EN LA LISTA DE «lo que no se mira» (A111).
+#
+# El encabezado de este script dice que NO mira los archivos del servidor, y da la razón: se le
+# pregunta a Prometheus qué CARGÓ, porque un archivo correcto que el daemon no releyó se ve igual
+# que uno bueno. Esa razón es cierta para una configuración que un daemon lee al arrancar.
+#
+# PARA UN GUION DE SHELL NO APLICA, y confundir los dos casos costó lo siguiente: medido el
+# 2026-09-05, `/home/musubi/redesplegar-cerebro.sh` tenía 9690 bytes contra 19469 del repo, y su
+# verificación de la migración decía `[[ "$ESQUEMA" -ge 37 ]]` cuando la base ya iba por 46 — o
+# sea VACUAMENTE CIERTA: pasaba sin comprobar nada, y pasó así en los seis redespliegues del 4 y
+# del 5. El arreglo estaba en el repo hacía días. No hay daemon que relea un guion: el archivo ES
+# lo que corre, en el momento en que alguien lo invoca.
+#
+# Y LA DERIVA NO FUE GENERAL, QUE ES LO QUE LA HIZO INVISIBLE. De los dos guiones derivados,
+# `musubi-backup` coincidía byte a byte con el repo y el del redespliegue no. La diferencia no es
+# suerte: el backup lo instala `install-musubi-brain.sh` detrás de una compuerta de sha256, y el
+# del redespliegue llegó a mano y no lo instalaba nadie. Un guion sin instalador no tiene cómo
+# actualizarse, y sin esta sección tampoco tenía cómo delatarse.
+#
+# CUATRO RESPUESTAS Y NO DOS. «coincide», «difiere», «no está» y «no pude preguntar» se arreglan
+# de cuatro maneras distintas, y las últimas dos son las que un verificador tiende a confundir con
+# un verde. `corre_alla` se traga los errores con `|| true`, así que una respuesta VACÍA acá
+# significa «no pude preguntar» y sale por `dudoso`, nunca por verde.
+titulo "guiones derivados (el repo contra el archivo que se corre)"
+
+# sha_alla <ruta> — el sha256 del archivo en el servidor, o AUSENTE, o ILEGIBLE, o vacío si no se
+# pudo preguntar. Los tres estados van por stdout y el cuarto es la ausencia de stdout: mezclarlos
+# es exactamente cómo un chequeo remoto termina en verde sin haber mirado.
+sha_alla() {
+  corre_alla "if [ ! -e '$1' ]; then echo AUSENTE; elif [ ! -r '$1' ]; then echo ILEGIBLE; else sha256sum '$1' 2>/dev/null | awk '{print \$1}'; fi"
+}
+
+# La tabla de guiones derivados: <archivo del repo>|<ruta canónica en el servidor>.
+# La custodia `TestCadaGuionQueSeInstalaEnElServidorSeCompara`: todo destino que un instalador
+# escriba con `install` tiene que aparecer acá. Una lista a mano sin guarda es cómo se coló A93.
+GUIONES_DERIVADOS="deploy/musubi-backup.sh|/usr/local/bin/musubi-backup
+deploy/redesplegar-cerebro.sh|/usr/local/sbin/redesplegar-cerebro.sh"
+
+# Si falta `sha256sum` allá, TODAS las respuestas vienen vacías y todas dirían «no pude preguntar»
+# por la misma causa. Se pregunta una vez para poder nombrarla, en vez de repetir N veces un
+# diagnóstico que no distingue entre «no hay ssh» y «no hay sha256sum».
+HAY_SHA_ALLA="$(corre_alla 'command -v sha256sum >/dev/null 2>&1 && echo si')"
+
+while IFS='|' read -r rel destino; do
+  [ -n "$rel" ] || continue
+  if [ ! -f "$REPO/$rel" ]; then
+    rojo "$rel no existe en el repo, y $destino se compara contra él: o se renombró el guion y esta tabla quedó vieja, o se borró y el servidor sigue corriendo una copia que ya no tiene fuente"
+    continue
+  fi
+  SHA_REPO="$(sha256sum "$REPO/$rel" | awk '{print $1}')"
+  SHA_ALLA="$(sha_alla "$destino")"
+  case "$SHA_ALLA" in
+    "")
+      if [ "$HAY_SHA_ALLA" != "si" ] && [ -n "$SSH_HOST" ]; then
+        dudoso "no se pudo comparar $destino: en el servidor no hay \`sha256sum\` (probá con \`shasum -a 256\`, o corré esto EN el servidor)"
+      else
+        dudoso "no se pudo preguntar por $destino (hace falta correr esto EN el servidor, o con MUSUBI_SSH=<host>)"
+      fi ;;
+    AUSENTE)
+      rojo "$destino NO existe en el servidor. El repo declara $rel y allá no hay nada: si alguien necesita ese guion hoy, no lo tiene — y si tiene una copia en otra ruta, es una copia que nadie compara" ;;
+    ILEGIBLE)
+      dudoso "$destino existe pero no se pudo leer con el usuario de esta sesión: no se comparó" ;;
+    "$SHA_REPO")
+      verde "$destino coincide byte a byte con $rel" ;;
+    *)
+      rojo "$destino DIFIERE de $rel — allá $SHA_ALLA, acá $SHA_REPO. No hay daemon que relea un guion: eso es lo que corre la próxima vez que alguien lo invoque. Para ver qué cambió:  ${SSH_HOST:+ssh $SSH_HOST }cat $destino | diff - $REPO/$rel" ;;
+  esac
+done <<GUIONES
+$GUIONES_DERIVADOS
+GUIONES
+
+# ── LOS ARCHIVOS DE REGLAS, POR CONTENIDO Y NO SÓLO POR NOMBRE ───────────────────────────────
+#
+# LA SECCIÓN 2 COMPARA LOS **NOMBRES** DE LAS REGLAS CARGADAS. ESO DEJA PASAR EL CASO QUE MÁS
+# DUELE: mismo juego de nombres, distinto NÚMERO adentro.
+#
+# Ya pasó tres veces. La tercera fue el 2026-09-08 y la causé yo desplegando a mano: copié
+# `musubi-alerts-flota.yml` (27→28 reglas) y NO su hermano `musubi-alerts.yml`, que es el que
+# lleva el umbral cruzado `!= 28`. El informe decía `✔ musubi-alerts.yml — sus 23 reglas están
+# cargadas` —cierto, los 23 nombres estaban— mientras el archivo desplegado difería en el renglón
+# que decide, y `ReglasDeFlotaSinDesplegar` quedó disparando con razón sin que el verificador
+# pudiera explicar por qué. La segunda fue el 2026-09-05: `!= 24` contra `!= 27`, **con los dos
+# archivos pesando los mismos 23912 bytes**.
+#
+# Y LA PREMISA QUE SOSTENÍA TODO ESTO NO LA CUSTODIABA NADA. `musubi-alerts.yml:374-377` dice que
+# las dos guardas cruzadas funcionan porque «el despliegue copia los dos archivos JUNTOS, así que
+# envejecen juntos». Es cierto para `preparar.sh`, que los instala en el mismo bloque — y es una
+# CONVENCIÓN DEL PROCEDIMIENTO, no una guarda: un despliegue a mano de un solo archivo la rompe, y
+# nada se enteraba. Comparar por sha256 no impide romperla; hace que romperla se VEA, que es lo
+# único que este guion puede prometer.
+#
+# El sha es válido porque los archivos se copian VERBATIM (`preparar.sh` usa `install`, sin
+# sustituciones). El único que se edita al instalar es `alertmanager.yml` —el `chat_id`— y ése no
+# está acá.
+DIR_REGLAS_ALLA="$(corre_alla 'for d in "$HOME/musubi-prometheus/rules" /etc/musubi-prometheus/rules /etc/prometheus/rules; do [ -d "$d" ] && { printf "%s\n" "$d"; break; }; done')"
+if [ -z "$DIR_REGLAS_ALLA" ]; then
+  # NO SE CALLA. Un «no encontré dónde mirar» que no se dice se lee como «miré y estaba bien»,
+  # que es el defecto que este guion entero viene a cerrar.
+  dudoso "no se encontró el directorio de reglas en el servidor (probé \$HOME/musubi-prometheus/rules, /etc/musubi-prometheus/rules y /etc/prometheus/rules): los archivos de reglas se compararon sólo por NOMBRE, así que un umbral cambiado con los mismos nombres NO se habría visto"
+elif [ "$HAY_SHA_ALLA" != si ]; then
+  dudoso "no se compararon los archivos de reglas por contenido: en el servidor no hay \`sha256sum\`"
+else
+  for f_r in "$REPO"/deploy/musubi-alerts*.yml "$REPO"/deploy/musubi-recording.yml; do
+    [ -f "$f_r" ] || continue
+    nombre_r="$(basename "$f_r")"
+    cond_r="$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f_r" | head -1)"
+    sha_repo_r="$(sha256sum "$f_r" | awk '{print $1}')"
+    sha_serv_r="$(sha_alla "$DIR_REGLAS_ALLA/$nombre_r")"
+    case "$sha_serv_r" in
+      "")
+        dudoso "no se pudo preguntar por $nombre_r en $DIR_REGLAS_ALLA: no se comparó su contenido" ;;
+      AUSENTE)
+        # Que no esté puede ser correcto: los condicionales sólo se instalan si su condición se
+        # cumple. La diferencia la declara el propio archivo, igual que en la sección 2.
+        case "$cond_r" in
+          siempre) rojo "$nombre_r NO está en $DIR_REGLAS_ALLA y se declara «siempre»: el archivo que el repo da por desplegado no existe en el servidor" ;;
+          condicional*) gris "$nombre_r — no está en el servidor, y así corresponde: $cond_r" ;;
+          *) rojo "$nombre_r no está en el servidor y no declara su condición de despliegue (# despliegue:)" ;;
+        esac ;;
+      ILEGIBLE)
+        dudoso "$nombre_r existe en $DIR_REGLAS_ALLA pero no se pudo leer con el usuario de esta sesión: no se comparó" ;;
+      "$sha_repo_r")
+        verde "$nombre_r coincide byte a byte con deploy/$nombre_r" ;;
+      *)
+        rojo "$nombre_r DIFIERE del repo — allá $sha_serv_r, acá $sha_repo_r. Ojo: sus reglas pueden figurar CARGADAS más arriba y ser cierto, porque eso compara NOMBRES; lo que cambia acá es el contenido —un umbral, un \`for:\`, una anotación—. Para ver qué:  ${SSH_HOST:+ssh $SSH_HOST }cat $DIR_REGLAS_ALLA/$nombre_r | diff - $REPO/deploy/$nombre_r" ;;
+    esac
+  done
+fi
+
+# LA COPIA VIEJA EN EL HOME DEL USUARIO DEL CEREBRO, que es una divergencia Y ADEMÁS otra cosa.
+#
+# `redesplegar-cerebro.sh` vivió en `/home/musubi/` y se corre con `sudo`. Esa combinación —un
+# archivo en un directorio que escribe el usuario `musubi`, ejecutado como root— es un camino de
+# escalada, y no es teórico en esta flota: `musubi_fleet_exec` en el servidor corre EXACTAMENTE
+# como `uid=1000(musubi)` (medido en A111). O sea que quien alcance el canal del agente puede
+# dejar código escrito ahí, y root lo corre en el próximo redespliegue. Por eso la ruta canónica
+# pasó a `/usr/local/sbin`, que es de root, y por eso una copia sobreviviente es ROJA aunque su
+# contenido esté al día: el problema no es qué dice, es quién puede reescribirla.
+LEGADO="/home/musubi/redesplegar-cerebro.sh"
+SHA_LEGADO="$(sha_alla "$LEGADO")"
+case "$SHA_LEGADO" in
+  "")       dudoso "no se pudo preguntar si quedó la copia vieja en $LEGADO" ;;
+  AUSENTE)  verde "no quedó ninguna copia de redespliegue en el home de \`musubi\` (la ruta canónica es /usr/local/sbin, que es de root)" ;;
+  # EL COMANDO QUE SE SUGIERE VA SIN `sudo`, Y EL PROPIO DIAGNÓSTICO DE ARRIBA DICE POR QUÉ.
+  #
+  # Decía `sudo rm`, y eso fallaba de dos formas distintas el 2026-09-09:
+  #
+  #   $ ssh musubi-server sudo rm /home/musubi/redesplegar-cerebro.sh
+  #   sudo: a terminal is required to read the password; either use ssh's -t option…
+  #
+  # (1) Un `ssh` no interactivo no tiene TTY, así que `sudo` no puede pedir la contraseña — haría
+  # falta `ssh -t`. (2) Y sobre todo: EL `sudo` NO HACE FALTA. Este hallazgo dice, con todas las
+  # letras, que el archivo «está en un directorio que escribe el usuario `musubi`». Si `musubi`
+  # escribe ahí, `musubi` lo borra: para desenlazar un archivo manda el permiso del DIRECTORIO, no
+  # el del archivo. Medido: `/home/musubi` es `drwx------ musubi musubi`, y la sesión entra como
+  # `musubi`.
+  #
+  # O sea que la sugerencia se contradecía con su propia medición, y encima no corría. Un informe
+  # que nombra bien el problema y manda a un comando que falla gasta la confianza que se ganó en la
+  # línea anterior — y lo peor es que el que lo lee no sabe si falló el diagnóstico o el remedio.
+  #
+  # `-f` y no `rm` a secas: si una corrida anterior con sudo dejó el archivo de root, `rm` pediría
+  # confirmación por escribir sobre algo protegido y en un pipe eso se cuelga. El desenlace igual
+  # funciona, porque lo autoriza el directorio.
+  *)        rojo "quedó una copia en $LEGADO. Son DOS cosas: alguien puede correr ésa en vez de la canónica sin notarlo, y está en un directorio que escribe el usuario \`musubi\` —el mismo uid con el que corre \`musubi_fleet_exec\`— para un guion que se invoca con sudo. Sacala:  ${SSH_HOST:+ssh $SSH_HOST }rm -f $LEGADO" ;;
+esac
 
 # ── El veredicto ────────────────────────────────────────────────────────────────────────────
 if [ "$DIVERGE" -ne 0 ]; then

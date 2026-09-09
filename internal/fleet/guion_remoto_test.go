@@ -50,7 +50,11 @@ var seccionesDelGuion = []struct {
 	{"/proc/loadavg", "Loadavg"},
 	{"/proc/uptime", "Uptime"},
 	{"df -B1 /", "Df"},
-	{"thermal_zone0/temp", "TempMil"},
+	// El marcador es el GLOB, no `thermal_zone0`: desde el 2026-09-05 el guion enumera TODAS
+	// las zonas y emite `<type> <miligrados>` por línea, porque leer la 0 fija medía `acpitz`
+	// —estático— en vez del paquete de CPU. La posición de la sección NO cambió, que es lo
+	// único que esta tabla custodia.
+	{"/sys/class/thermal/thermal_zone*/", "TempMil"},
 	{"^processor /proc/cpuinfo", "NumCPU"},
 	{"ls -1 /proc", "Procs"},
 }

@@ -998,3 +998,110 @@ func TestUnServicioDesconocidoNoEmiteLaSerieDeUp(t *testing.T) {
 		t.Error("el servicio FALLADO no salió en 0: esconder lo desconocido no puede esconder lo caído, que es lo que la alerta existe para ver")
 	}
 }
+
+// cuerpoDeServiciosRecortado arma un latido que además DECLARA que la lista viene truncada.
+func cuerpoDeServiciosRecortado(omitidos int, reportes ...fleet.ReporteServicio) string {
+	b, _ := json.Marshal(map[string]any{"servicios": reportes, "servicios_omitidos": omitidos})
+	return string(b)
+}
+
+// TestUnInventarioRECORTADONoAutorizaAPodar — la mitad que importa de A116.
+//
+// LA PODA SE APOYA EN UNA AFIRMACIÓN: «lo que no vino, ya no corre». Con un techo de por medio esa
+// afirmación es FALSA —lo que no vino puede ser lo que no entró— y el resultado no es una ceguera
+// sino un registro equivocado: el cerebro anota `revoked = 1` sobre servicios que están corriendo.
+//
+// MEDIDO EL 2026-09-05 EN `davantis-1`, que reporta exactamente 64 —el techo—: 26 servicios de
+// clase `docker` y 87 de Windows dados de baja por la rotación del recorte, entre ellos los 11
+// contenedores de `altura-erp`. No es que el cerebro no los viera: anotó que dejaron de existir.
+//
+// Y NO SE PUEDE PODAR «SÓLO LOS QUE SÍ VINIERON»: el cerebro sabe CUÁNTOS faltan, no CUÁLES. La
+// única respuesta correcta es no podar. Lo que llegó sí se guarda —eso es verdad y sirve—; lo que
+// se suspende es la única operación que afirma algo sobre lo que NO llegó.
+//
+// Sabotaje: quitar el `if omitidos > 0 { return ... }` de `guardarServiciosDelLatido`.
+func TestUnInventarioRECORTADONoAutorizaAPodar(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	// Tres servicios, inventario COMPLETO.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "b", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "c", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 3 {
+		t.Fatalf("se registraron %d de 3", n)
+	}
+
+	// El siguiente latido trae SÓLO `a` y `b`, pero DICE que omitió uno. `c` no puede darse de
+	// baja: su ausencia ya no significa nada.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServiciosRecortado(1,
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "b", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 3 {
+		t.Fatalf("con la lista RECORTADA quedaron %d servicios y tenían que quedar 3: la poda dio "+
+			"de baja algo que la máquina nunca dijo que se hubiera ido", n)
+	}
+
+	// Y EL CONTROL EN LA OTRA DIRECCIÓN, sin el cual esta prueba no distingue «la poda respeta el
+	// recorte» de «la poda no funciona»: el mismo latido SIN recorte sí tiene que podar.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+		fleet.ReporteServicio{Nombre: "b", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if n := cuantosServicios(t, s); n != 2 {
+		t.Fatalf("sin recorte quedaron %d servicios y tenían que quedar 2: la poda dejó de podar "+
+			"del todo, que no es el arreglo — es el defecto opuesto", n)
+	}
+}
+
+// TestElRecorteDelInventarioSeGuardaYSEBORRACuandoDejaDeHaberlo — A116, la parte que se pudre sola.
+//
+// Un valor que sólo se escribe CUANDO HAY PROBLEMA no puede decir que el problema se fue. Si
+// `FijarServiciosOmitidos` se llamara sólo con `omitidos > 0`, una máquina que deja de recortar
+// —porque alguien subió el techo o filtró el ruido— se quedaría con el número viejo puesto y la
+// poda suspendida PARA SIEMPRE sobre una condición que ya no existe. Y el síntoma sería el
+// contrario del original: servicios que ya no corren, vivos en el inventario para siempre.
+//
+// Sabotaje: envolver la llamada a `FijarServiciosOmitidos` en un `if omitidos > 0`.
+func TestElRecorteDelInventarioSeGuardaYSEBORRACuandoDejaDeHaberlo(t *testing.T) {
+	s, ts, tokenDevice, _ := servidorConFlota(t)
+
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServiciosRecortado(12,
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if d := deviceDePrueba(t, s); d.ServiciosOmitidos != 12 {
+		t.Fatalf("el recorte guardado es %d y la máquina reportó 12: el número no viajó, así que "+
+			"nadie fuera de esa máquina puede saber que su inventario está incompleto", d.ServiciosOmitidos)
+	}
+
+	// Y AHORA DEJA DE RECORTAR. Tiene que volver a 0.
+	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
+		fleet.ReporteServicio{Nombre: "a", Salud: saludViva(fleet.EstadoCorriendo)},
+	)); code != http.StatusOK {
+		t.Fatalf("%d %s", code, b)
+	}
+	if d := deviceDePrueba(t, s); d.ServiciosOmitidos != 0 {
+		t.Fatalf("la máquina dejó de recortar y el registro sigue en %d: la poda de esa máquina "+
+			"queda suspendida para siempre sobre una condición que ya no existe", d.ServiciosOmitidos)
+	}
+}
+
+// deviceDePrueba devuelve la única máquina que `servidorConFlota` enrola, leída del almacén.
+func deviceDePrueba(t *testing.T, s *McpServer) fleet.Device {
+	t.Helper()
+	ds, err := s.engine.ListarDevices("casa", false)
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("esperaba 1 device en el proyecto de prueba: %v (err=%v)", len(ds), err)
+	}
+	return ds[0]
+}

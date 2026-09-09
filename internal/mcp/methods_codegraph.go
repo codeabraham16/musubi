@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,15 +246,28 @@ type cgNodeView struct {
 // que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
 // archivo AUSENTE o ilegible cuenta como stale (nodo fantasma): mostrar código borrado como
 // fresco era un bug de correctitud — impact/callers apuntarían a símbolos que ya no existen.
+// arbolFueraDeAlcance dice si este servidor NO tiene en disco el árbol que su grafo describe.
+//
+// En el central COMPARTIDO el grafo es FEDERADO: los nodos vienen de otros proyectos y sus archivos
+// no están acá, así que TODA pregunta al disco sobre un path del grafo contesta lo mismo —«no
+// está»— y esa respuesta no significa nada. Medido el 2026-09-05: el daemon corre con
+// MUSUBI_HOME=/home/musubi/musubi-brain, que sólo contiene `.musubi/` y ni siquiera es un repo git.
+//
+// ESTÁ EN UNA FUNCIÓN PORQUE SON TRES LOS QUE LA NECESITAN Y ERAN DOS LOS QUE LA TENÍAN. `cgStale`
+// y `graphFreshness` la comprobaban cada uno por su lado —«no inventar podredumbre»— y
+// `pistaDelMiss` no, así que en el central contestaba SIEMPRE la última de sus cuatro ramas: «no
+// existe en el árbol indexado […] el miss es correcto». Categórico, y falso cuando lo que pasa es
+// que el índice central está viejo. Con un nombre compartido, el día que la condición cambie,
+// cambia para los tres.
+func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }
+
 func (s *McpServer) cgStale(n memory.GraphNode) bool {
 	if n.Path == "" {
 		return false
 	}
-	// En el central COMPARTIDO (forceRedact) el grafo es FEDERADO: los nodos vienen de otros proyectos y
-	// sus archivos NO están en el disco del central, así que fingerprintear contra s.projectPath daría
-	// "fantasma"/stale para TODO y la cabina mostraría el código federado como podrido (auditoría #3).
-	// No se puede verificar frescura de un árbol remoto ⇒ no marcarlo stale.
-	if s.forceRedact {
+	// No se puede verificar frescura de un árbol que no está en disco ⇒ no marcarlo stale, que
+	// mostraría el código federado como podrido (auditoría #3).
+	if s.arbolFueraDeAlcance() {
 		return false
 	}
 	cur, err := memory.FileFingerprint(s.projectPath, n.Path)
@@ -273,9 +287,14 @@ func (s *McpServer) cgView(n memory.GraphNode) cgNodeView {
 // uno en disco. Salta directorios ocultos (.git/.musubi), vendor, testdata, node_modules y salidas
 // generadas (dist/coverage) — evita indexar bundles minificados. Es la fuente común del índice full
 // (usa los dirs) y del incremental (compara los file-keys contra el grafo).
-func (s *McpServer) walkSourceTree() (dirs map[string]bool, fileKeys map[string]bool) {
+//
+// Devuelve TAMBIÉN qué dejó afuera por lenguaje, contado por extensión. Sin eso, indexar un repo
+// que el binario no entiende y uno vacío dan la misma respuesta —«0 nodos»— y las dos se leen como
+// «no hay nada que indexar». El caso real que lo motivó: Altura-erp, 547 archivos, 0 indexables.
+func (s *McpServer) walkSourceTree() (dirs map[string]bool, fileKeys map[string]bool, ignorados map[string]int) {
 	dirs = map[string]bool{}
 	fileKeys = map[string]bool{}
+	ignorados = map[string]int{}
 	_ = filepath.WalkDir(s.projectPath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort: saltar lo ilegible sin abortar el índice
@@ -295,10 +314,12 @@ func (s *McpServer) walkSourceTree() (dirs map[string]bool, fileKeys map[string]
 				dirs[filepath.ToSlash(rel)] = true
 			}
 			fileKeys[memory.NormalizeCodePath(s.projectPath, p)] = true
+		} else if ext := strings.ToLower(filepath.Ext(d.Name())); ext != "" {
+			ignorados[ext]++
 		}
 		return nil
 	})
-	return dirs, fileKeys
+	return dirs, fileKeys, ignorados
 }
 
 // dirExists indica si un directorio del paquete (relativo con "/", o absoluto) existe en disco.
@@ -332,7 +353,7 @@ func (s *McpServer) graphSize(scoped context.Context) (nodes, edges int) {
 // La segunda pasada NO re-deriva todo: sólo los paquetes que reportaron pendientes sin resolver.
 // Y re-derivar es idempotente (borra por src_path y re-inserta), así que repetir uno no duplica nada.
 func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
-	dirs, _ := s.walkSourceTree()
+	dirs, _, ignorados := s.walkSourceTree()
 	pkgs := 0
 	var pendientes []string
 	var salteados []string
@@ -364,6 +385,10 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 	_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
 
 	nodes, edges := s.graphSize(s.scopedCtx(ctx))
+	// LOS DOS INFORMES SON DE RAMAS DISTINTAS Y CUENTAN COSAS DISTINTAS, así que van los dos:
+	// `skipped*` (main) dice qué directorios NO SE PUDIERON derivar, y `reportarIgnorados` (esta
+	// rama) dice qué archivos quedaron afuera POR LENGUAJE. Confundirlos sería volver a la
+	// ambigüedad que las dos vinieron a cerrar: «no pude» y «no entiendo» se arreglan distinto.
 	res := map[string]interface{}{
 		"packages":       pkgs,
 		"total_packages": len(dirs),
@@ -375,6 +400,7 @@ func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{
 		res["skipped_dirs"] = recortarMotivos(salteados, 10)
 		res["skipped_truncated"] = len(salteados) > 10
 	}
+	reportarIgnorados(res, ignorados)
 	return res, nil
 }
 
@@ -402,6 +428,31 @@ func recortarMotivos(xs []string, n int) []string {
 	return append(out, fmt.Sprintf("… y %d más", len(xs)-n))
 }
 
+// reportarIgnorados agrega al resultado del índice QUÉ quedó afuera por lenguaje.
+//
+// Sin esto, «indexé un repo que este binario no entiende» y «no había nada que indexar» devuelven
+// lo mismo —0 paquetes, 0 nodos— y las dos se leen como la segunda. El caso que lo motivó está
+// medido: Altura-erp, 547 archivos fuente, 0 indexables, un grafo de 1.878 nodos que quedó de una
+// corrida vieja y ocho días de atraso que nadie vio.
+//
+// Sólo se agregan las claves cuando hay algo que decir: un repo Go puro no paga ruido.
+func reportarIgnorados(res map[string]interface{}, ignorados map[string]int) {
+	total := 0
+	for _, n := range ignorados {
+		total += n
+	}
+	if total == 0 {
+		return
+	}
+	res["archivos_ignorados_por_lenguaje"] = total
+	res["ignorados_por_extension"] = ignorados
+	if len(res) > 0 {
+		if p, ok := res["packages"].(int); ok && p == 0 {
+			res["hint"] = "no se indexó ningún paquete y se ignoraron " + strconv.Itoa(total) + " archivos por su extensión: este binario no entiende esos lenguajes. Si esperabas que sí, fijate si se compiló con -tags treesitter (musubi version lo dice)"
+		}
+	}
+}
+
 // indexIncremental reconcilia el grafo con el working tree sin re-derivar todo (Track 20 · F5):
 // compara el src_fingerprint guardado por archivo contra el actual del disco y sólo re-deriva los
 // paquetes con archivos MODIFICADOS o NUEVOS, PODA los FANTASMA (en el grafo, ausentes en disco)
@@ -413,7 +464,9 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	dirsDisco, diskFiles := s.walkSourceTree()
+	// `walkSourceTree` devuelve tres valores desde que esta rama agregó `ignorados` (qué quedó
+	// afuera por lenguaje); main usa `dirsDisco` para el barrido del derivador. Los dos hacen falta.
+	dirsDisco, diskFiles, ignorados := s.walkSourceTree()
 
 	dirtyDirs := map[string]bool{}
 
@@ -497,6 +550,9 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 		res["failed_dirs"] = recortarMotivos(fallidos, 10)
 		res["failed_truncated"] = len(fallidos) > 10
 	}
+	// Mismo criterio que en el índice completo: `failed` es «no pude derivar» e `ignorados` es
+	// «no entiendo ese lenguaje». Son dos hechos distintos y se informan por separado.
+	reportarIgnorados(res, ignorados)
 	return res, nil
 }
 
@@ -662,9 +718,13 @@ const pathConocido = "_path_conocido"
 // de `main`). Sin una pista, la lectura natural es «el grafo no sabe», se vuelve a `grep`, y la
 // herramienta queda condenada por un miss que era correcto.
 //
-// Las tres pistas se ordenan de la más accionable a la menos: si el archivo está indexado, el
-// nombre está mal escrito (y se listan los símbolos que SÍ tiene); si existe en disco pero no en el
-// grafo, falta indexar; si no existe, es de otro árbol. `indexed_head` viaja siempre que se sepa.
+// Las pistas se ordenan de la más accionable a la menos: si el archivo está indexado, el nombre
+// está mal escrito (y se listan los símbolos que SÍ tiene); si existe en disco pero no en el grafo,
+// falta indexar; si no existe, es de otro árbol. `indexed_head` viaja siempre que se sepa.
+//
+// Y ANTES DE LAS DOS QUE MIRAN EL DISCO va la pregunta de si este servidor TIENE disco que mirar:
+// en el central no lo tiene, y sin esa guarda las dos últimas ramas eran inalcanzables y todo miss
+// terminaba afirmando «es de otra rama». Ver arbolFueraDeAlcance.
 func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]interface{} {
 	res := map[string]interface{}{"found": false, "key": symbol}
 
@@ -691,6 +751,25 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 		return res
 	}
 
+	// LAS DOS PISTAS QUE SIGUEN LE PREGUNTAN AL DISCO, Y ACÁ EL DISCO PUEDE NO SABER NADA.
+	//
+	// Sin el árbol de fuentes, `os.Stat` falla SIEMPRE y las dos ramas útiles quedan inalcanzables:
+	// todo miss caía en la última, que afirma «no existe en el árbol indexado […] el miss es
+	// correcto» y manda a buscar en otra rama. Es la peor de las cuatro respuestas justo donde
+	// menos se puede comprobar: en el central lo que suele faltar es un `musubi_codegraph_push`,
+	// no una rama. Caso medido el 2026-09-05: `internal/fleet/tempwindows.go` existe en el commit
+	// desplegado y tiene CERO nodos en el grafo del central, que es de antes del despliegue.
+	//
+	// Y `pathConocido` queda en true a propósito: el recorte de bibliografía se diseñó para rutas
+	// INVENTADAS, y acá no se puede distinguir una inventada de una real. Cortar el weld por las
+	// dudas esconde memoria que sí explica el código —«tempwindows.go» tiene 1 observación en el
+	// central y «procparse.go» 4—, y el default de este archivo, cuando no se sabe, es no callar.
+	if s.arbolFueraDeAlcance() {
+		res["hint"] = "«" + archivo + "» no está en el grafo de ESTE cerebro, y acá no se puede decir por qué: es el central, su grafo es federado y no tiene el árbol de fuentes en disco, así que no distingue «falta empujar el grafo» de «es de otra rama». Empujá el grafo del proyecto (musubi_codegraph_push) o preguntale al cerebro local del repo"
+		res[pathConocido] = true
+		return res
+	}
+
 	// El archivo no está en el grafo. Que exista o no en disco separa «falta indexar» de «otra rama».
 	if _, err := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo))); err == nil {
 		res[pathConocido] = true
@@ -700,7 +779,15 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 		// 2026-08-15 al mirar el árbol del juego de gio, donde la pestaña «Código» salía vacía y
 		// nadie sabía por qué; mandarlo a re-indexar sería mandarlo a perder el tiempo.
 		if !codeintel.IndexableForGraph(archivo) {
-			res["hint"] = "«" + archivo + "» existe, pero su lenguaje NO entra al grafo: se deriva del AST y sólo cubre .go (y TS/TSX/JS/JSX/Py con -tags treesitter). Re-indexar no lo va a agregar; para este archivo usá musubi_recall_code, que es agnóstico del lenguaje"
+			// EL TEXTO NO RECITA LA LISTA: pregunta si ESTE binario tiene el motor. Recitarla es
+			// prosa que envejece —y acá envejecía en la peor dirección, porque nombraba lenguajes
+			// que el binario por default NO cubre y mandaba a buscar el problema al lugar
+			// equivocado. Lo que le sirve a quien lee es su propio binario, no la lista teórica.
+			if codeintel.PolyglotHabilitado() {
+				res["hint"] = "«" + archivo + "» existe, pero su lenguaje NO entra al grafo ni siquiera en este binario, que SÍ tiene tree-sitter. Re-indexar no lo va a agregar; para este archivo usá musubi_recall_code, que es agnóstico del lenguaje"
+			} else {
+				res["hint"] = "«" + archivo + "» existe, pero su lenguaje NO entra al grafo en ESTE binario, que se compiló SIN tree-sitter (sólo deriva .go). Puede que un binario con -tags treesitter sí lo cubra: fijate con `musubi version`. Mientras tanto usá musubi_recall_code, que es agnóstico del lenguaje"
+			}
 			return res
 		}
 		res["hint"] = "«" + archivo + "» existe en disco pero NO está en el grafo: corré musubi_codegraph_index (mode='incremental')"
@@ -812,7 +899,25 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 	if callers == nil {
 		callers = []string{}
 	}
-	return jsonResult(map[string]interface{}{"symbol": args.Symbol, "callers": callers, "count": len(callers)})
+	// «CERO LLAMADORES» Y «NO ESTÁ EN EL GRAFO» SE VEÍAN IGUAL, Y SON LO OPUESTO.
+	//
+	// Con la lista vacía, esta tool devolvía `count: 0` y nada más. Para un símbolo que de verdad
+	// no tiene llamadores eso es la respuesta correcta —«podés tocarlo tranquilo»—; para uno que
+	// nunca entró al grafo, que es TODO lo que no sea Go en un binario sin tree-sitter, es una
+	// mentira con la misma forma exacta, y la más cara: dice «no rompe nada» sobre lo que no miró.
+	//
+	// La pista ya existía y ya la usaban las otras TRES tools que consultan el grafo
+	// (toolCodeGraph en sus dos modos y toolCodeContext). Ésta era la hermana que no aprendió.
+	if len(callers) == 0 {
+		if _, ok, err := s.engine.GetGraphNodeCtx(scoped, args.Symbol); err == nil && !ok {
+			p := s.pistaDelMiss(scoped, args.Symbol)
+			delete(p, pathConocido) // señal interna: no viaja en la respuesta
+			p["callers"] = callers
+			p["count"] = 0
+			return jsonResult(p)
+		}
+	}
+	return jsonResult(map[string]interface{}{"symbol": args.Symbol, "callers": callers, "count": len(callers), "found": true})
 }
 
 // graphFreshness cuenta, sobre el proyecto scopeado, cuántos archivos están STALE (fingerprint del
@@ -834,7 +939,12 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missing int) {
 	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
 	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
-	if s.forceRedact {
+	//
+	// Se conserva `arbolFueraDeAlcance()` de esta rama y no el `s.forceRedact` pelado de main: son
+	// lo mismo —el helper es literalmente `return s.forceRedact`— pero el nombre dice POR QUÉ se
+	// mira, y los otros cinco usos de este archivo ya van por ahí. Dos formas de preguntar lo
+	// mismo en el mismo archivo es como una de las dos se queda vieja.
+	if s.arbolFueraDeAlcance() {
 		return 0, 0, 0
 	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
@@ -851,7 +961,8 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missi
 			stale++
 		}
 	}
-	_, enDisco := s.walkSourceTree()
+	// Tres valores desde que esta rama agregó `ignorados`; acá sólo interesa el mapa de archivos.
+	_, enDisco, _ := s.walkSourceTree()
 	for key := range enDisco {
 		if _, ok := stored[key]; !ok {
 			missing++

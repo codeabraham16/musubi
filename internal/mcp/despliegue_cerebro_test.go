@@ -96,9 +96,29 @@ func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 	// dispara la vuelta atrás. La primera versión de esta prueba sólo buscaba los nombres de las
 	// variables, y pasaba en verde con el `is-active` de vuelta — porque los nombres seguían
 	// apareciendo en la línea de comparación. Una guarda que busca cadenas y no efecto no protege.
+	// LOS INODOS TIENEN QUE ESTAR EN LA CONDICIÓN, NO EN EL MENSAJE — y esta guarda decía haber
+	// arreglado eso y no lo había arreglado.
+	//
+	// Su comentario anterior contaba, correctamente, que buscar los nombres de las variables en
+	// todo el archivo la dejaba pasar con el `is-active` de vuelta. El arreglo fue exigir los tres
+	// tokens EN LA MISMA LÍNEA. No alcanza, y se midió el 2026-09-05 con el sabotaje declarado:
+	//
+	//   [[ "$INODO_PROC" == "$INODO_DISCO" ]] || volver_atras "…(inodo $INODO_PROC vs $INODO_DISCO)…"
+	//
+	// cambiado por `systemctl is-active --quiet musubi-brain || volver_atras "…mismo mensaje…"`
+	// deja una línea que TODAVÍA tiene los tres tokens —porque el mensaje de diagnóstico nombra
+	// las dos variables— y la guarda pasaba en verde sobre un redespliegue que vuelve a decidir
+	// por `is-active`, que es lo que la cabecera del guion dice que ya falló en este servidor.
+	//
+	// La propiedad es POSICIONAL: los inodos van en lo que se evalúa, o sea ANTES del
+	// `volver_atras`. Lo que viene después es el texto para el humano y no decide nada.
 	comparacion := false
 	for _, l := range strings.Split(texto, "\n") {
-		if strings.Contains(l, "INODO_PROC") && strings.Contains(l, "INODO_DISCO") && strings.Contains(l, "volver_atras") {
+		i := strings.Index(l, "volver_atras")
+		if i < 0 {
+			continue
+		}
+		if condicion := l[:i]; strings.Contains(condicion, "INODO_PROC") && strings.Contains(condicion, "INODO_DISCO") {
 			comparacion = true
 		}
 	}
@@ -108,5 +128,47 @@ func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 	// Y el sha256 del binario es obligatorio: una descarga truncada devuelve éxito igual.
 	if !strings.Contains(texto, "SHA_ESPERADO") || !strings.Contains(texto, "sha256sum") {
 		t.Error("el script no exige el sha256 del binario: ya se desplegó una descarga truncada que reportó éxito")
+	}
+}
+
+// EL INSTALADOR DEL CEREBRO NO PUEDE BORRAR DE `service:` HASTA EL FINAL DEL ARCHIVO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UN COMENTARIO QUE FUE VERDAD Y DEJÓ DE SERLO, BORRANDO CONFIGURACIÓN EN SILENCIO
+//
+// `install-musubi-brain.sh` reescribe el bloque `service:` de forma idempotente, y lo hacía con
+// `sed -i '/^service:/,$d'` justificado así: «'service:' es el último bloque del config generado
+// por 'musubi init'». Fue cierto. Hoy `Default().Marshal()` pone `service:` en la línea 119 y
+// `sync:` en la 123 — medido el 2026-09-05 generando el archivo: el `sed` lo dejaba en 118 líneas
+// y el bloque `sync` desaparecía.
+//
+// O sea que RE-CORRER EL INSTALADOR borraba la configuración de sync del cerebro sin decir nada.
+// El daño de hoy es cero porque ese cerebro no tiene bloque sync, pero eso es una foto: cualquier
+// máquina que sí lo tenga lo pierde en el próximo despliegue, y el `.bak` de al lado se pisa en
+// cada corrida.
+//
+// Sabotaje que la hace fallar: volver a poner el `sed -i '/^service:/,$d'`.
+func TestElInstaladorDelCerebroNoSeComeLoQueVieneDespuesDeService(t *testing.T) {
+	guion := leerDeploy(t, "install-musubi-brain.sh")
+
+	for i, linea := range strings.Split(guion, "\n") {
+		desnuda := strings.TrimSpace(linea)
+		if strings.HasPrefix(desnuda, "#") {
+			continue
+		}
+		// El rango `/^service:/,$` es el que borra hasta el final. Se busca la TUBERÍA, no la
+		// palabra: `sed` y `service` sueltos aparecen en otros lados legítimamente.
+		if strings.Contains(linea, "sed") && strings.Contains(linea, "/^service:/,$") {
+			t.Fatalf("línea %d: el instalador volvió a borrar de `service:` hasta el final:\n  %s\n"+
+				"`service:` YA NO es el último bloque del config —`sync:` viene después— así que eso\n"+
+				"borra la configuración de sync del cerebro en cada re-despliegue, en silencio.",
+				i+1, desnuda)
+		}
+	}
+
+	// Y la contraparte: el bloque service se sigue reescribiendo. Sin esto, «arreglar» el sed
+	// borrándolo entero pasaría esta guarda dejando al cerebro sin su bloque service.
+	if !strings.Contains(guion, "service:") || !strings.Contains(guion, "enabled: true") {
+		t.Fatal("el instalador dejó de escribir el bloque `service:`: el cerebro no expondría su daemon")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/config"
 	"musubi/internal/memory"
 )
 
@@ -53,9 +54,19 @@ func runCalibrate(args []string) {
 		}
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	// LA VARIABLE O EL ARCHIVO `<VAR>_FILE` (A89/A101). El cuarto sitio de la misma regla: acá el
+	// `os.Getenv` pelado hacía que con `ANTHROPIC_API_KEY_FILE` puesto el mensaje de abajo dijera
+	// «requiere ANTHROPIC_API_KEY» teniendo la credencial ahí al lado, sin leer. Es una
+	// herramienta a mano y no rompe nada en producción, pero una regla que se aplica en unos
+	// caminos y no en otros vuelve por el que quedó afuera.
+	apiKey, err := config.SecretoDeEnv("ANTHROPIC_API_KEY")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi calibrate: %v\n", err)
+		os.Exit(1)
+	}
+	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "musubi calibrate es OPT-IN: requiere ANTHROPIC_API_KEY.")
+		fmt.Fprintln(os.Stderr, "musubi calibrate es OPT-IN: requiere ANTHROPIC_API_KEY (o ANTHROPIC_API_KEY_FILE).")
 		fmt.Fprintln(os.Stderr, "Usa el endpoint count_tokens de Anthropic para medir la precisión del estimador.")
 		fmt.Fprintln(os.Stderr, "El server MCP sigue offline/model-free; esto es solo una herramienta manual.")
 		os.Exit(1)

@@ -29,6 +29,28 @@ if not exist "%DIR%\musubi-nuevo.exe" (
   exit /b 2
 )
 
+REM ESTA CARPETA TIENE QUE SER LA DEL AGENTE, Y SE COMPRUEBA ANTES DE TOCAR LA TAREA.
+REM
+REM %~dp0 dice desde donde corre este archivo, pero NO dice que sea el agente. Y el paso [1] para
+REM la tarea POR NOMBRE GLOBAL ("Musubi Agente de Flota"), que es unica por maquina: o sea que una
+REM copia de este .cmd en CUALQUIER carpeta puede parar al agente de verdad y despues cambiar un
+REM binario que no es el suyo.
+REM
+REM Paso el 2026-09-05 en davantis-1. El conductor eligio la carpeta de la app de escritorio
+REM (AppData\Local\Programs\musubi) en vez de la del agente (AppData\Local\Musubi), copio este
+REM .cmd ahi y lo lanzo: paro la tarea del agente REAL y cambio el musubi.exe de la app. Lo unico
+REM que evito el destrozo fue una casualidad -- esa carpeta no tiene device.token, asi que el
+REM paso [4] no pudo probar el binario nuevo y el rollback lo devolvio. Una casualidad no es una
+REM defensa: ahora es un candado.
+REM
+REM device.token es el discriminante porque es la credencial del dispositivo, el mismo archivo que
+REM el paso [4] usa para probar. Donde no esta, no hay agente que actualizar.
+if not exist "%DIR%\device.token" (
+  echo NO ES LA CARPETA DEL AGENTE: falta device.token en %DIR% >> "%LOG%"
+  echo No se toca la tarea ni ningun binario. >> "%LOG%"
+  exit /b 5
+)
+
 echo [1] deteniendo la tarea >> "%LOG%"
 schtasks /end /tn "%TAREA%" >> "%LOG%" 2>&1
 

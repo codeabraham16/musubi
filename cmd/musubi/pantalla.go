@@ -150,9 +150,24 @@ func cerrarSesionPantalla(motivo string) {
 	}
 
 	restituidos := 0
+	respetados := 0
 	for _, p := range previas {
 		if !p.Habia {
 			continue
+		}
+		// ¿SIGUE SIENDO LO QUE PUSO MUSUBI? Si el dueño de la máquina cambió su contraseña
+		// permanente mientras la sesión estaba abierta —el momento más natural para hacerlo,
+		// porque es cuando está adentro— devolverle la anterior sería el mismo daño que este
+		// archivo entero viene a evitar, sólo que por una puerta más chica. Gana lo que él puso.
+		//
+		// La comparación es contra el blob CIFRADO tal cual, sin entenderlo. `Puesta` vacío es
+		// una marca de la versión anterior: ahí se restituye como antes, porque no saber no
+		// puede significar perder.
+		if p.Puesta != "" {
+			if ahora, hay := leerCampoPassword(p.Ruta); hay && ahora != p.Puesta {
+				respetados++
+				continue
+			}
 		}
 		if err := escribirCampoPassword(p.Ruta, p.Linea); err != nil {
 			fmt.Fprintf(os.Stderr, "%s no se pudo devolver la contraseña anterior de RustDesk: %v\n", cYellow("!"), err)
@@ -160,10 +175,17 @@ func cerrarSesionPantalla(motivo string) {
 		}
 		restituidos++
 	}
+	if respetados > 0 {
+		// SE DICE, porque desde afuera «no pasó nada» y «se respetó lo tuyo» se ven igual.
+		fmt.Printf("%s la contraseña de RustDesk cambió durante la sesión: se deja la que pusiste, no se restituye la anterior\n", cDim("■"))
+	}
 
-	if restituidos == 0 {
+	if restituidos == 0 && respetados == 0 {
 		// No había nada que devolver —o no se pudo—, así que la puerta se cierra con un valor que
 		// nadie conoce. Es el comportamiento de siempre, ahora acotado a su caso.
+		//
+		// `respetados` cuenta acá: si el dueño puso su contraseña durante la sesión, la puerta YA
+		// está cerrada con algo que él eligió, y scramblear sería borrársela.
 		nueva, err := fleet.NuevaPassPantalla()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s no se pudo cerrar la sesión de pantalla: %v\n", cYellow("!"), err)

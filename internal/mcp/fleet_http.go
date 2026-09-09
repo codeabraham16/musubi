@@ -303,6 +303,18 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 		if *cuerpo.PuedePreguntar != d.PuedePreguntar {
 			_ = s.engine.FijarCapacidadDePreguntar(d.ID, *cuerpo.PuedePreguntar)
 		}
+		// EL MOTIVO SE GUARDA (A99), y antes sólo se logueaba. Se escribe cuando VIENE, y no se
+		// borra cuando no viene: un agente que dejó de mandarlo —o uno viejo— no es evidencia de
+		// que el motivo desapareció. Lo que lo invalida es que la máquina pase a poder preguntar,
+		// y eso se maneja abajo.
+		if cuerpo.MotivoNoPreguntar != "" && cuerpo.MotivoNoPreguntar != d.MotivoNoPreguntar {
+			_ = s.engine.FijarMotivoNoPreguntar(d.ID, recortar(cuerpo.MotivoNoPreguntar, fleet.AvisoTextoMax))
+		}
+		if *cuerpo.PuedePreguntar && d.MotivoNoPreguntar != "" {
+			// Ya puede: el motivo viejo pasó a ser falso y dejarlo puesto sería peor que no
+			// tenerlo — alguien leería «corre como servicio» sobre una máquina que ya no.
+			_ = s.engine.FijarMotivoNoPreguntar(d.ID, "")
+		}
 		if !*cuerpo.PuedePreguntar && cuerpo.MotivoNoPreguntar != "" {
 			// UNA VEZ POR MÁQUINA Y NO POR LATIDO. Es un ESTADO —el agente corre como servicio,
 			// falta zenity— que dura hasta que alguien cambie algo, y un aviso cada 30 s deja de
@@ -316,10 +328,62 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 			s.avisosDados.Delete("no_puede_preguntar\x00" + d.ID)
 		}
 	}
+	// DE DÓNDE SALIÓ LA CREDENCIAL (A102). Fuera del `if` de `puede_preguntar` porque son hechos
+	// independientes: un agente puede reportar uno y no el otro, y anidarlos haría que perder uno
+	// pierda el otro.
+	//
+	// SÓLO SE ESCRIBE SI CAMBIÓ, igual que el resto del latido: son 30 s por máquina y esto cambia
+	// cuando alguien reinstala, o sea casi nunca. Y un valor DESCONOCIDO no se guarda: el setter lo
+	// rechaza, y acá se avisa una vez para que un agente que manda basura no pase inadvertido.
+	// EL FALLO DEL ENUMERADOR SE GUARDA SIEMPRE, INCLUIDO EL VACÍO.
+	//
+	// Un `if != ""` acá dejaría el motivo viejo puesto cuando una máquina SE ARREGLA, y su alerta
+	// no se apagaría nunca — que es la misma trampa que documenta `FijarServiciosOmitidos`: un
+	// valor que sólo se escribe cuando hay problema no puede decir que el problema se fue.
+	//
+	// Se escribe sólo cuando CAMBIA para no pegarle a la fila en cada latido: son 2.880 UPDATE por
+	// día por máquina, y el valor cambia una vez por semana en el peor caso.
+	//
+	// NO devuelve error hacia arriba: vale el mismo invariante D7 que el resto del latido. Que no
+	// se pueda anotar por qué una máquina no enumera no puede tirar el latido de una máquina viva.
+	if cuerpo.ServiciosError != d.ServiciosError {
+		if err := s.engine.FijarServiciosError(d.ID, cuerpo.ServiciosError); err != nil {
+			logx.Warn("flota: no se pudo anotar por qué esta máquina no enumera sus servicios",
+				"device", d.Name, "error", err)
+		} else if cuerpo.ServiciosError != "" {
+			// UNA VEZ POR MÁQUINA Y POR MOTIVO: es un ESTADO que dura hasta que alguien entre a
+			// arreglarlo, y un aviso por latido son 2.880 líneas por día — así se entierra la que
+			// importa. La clave lleva el motivo para que un fallo DISTINTO sí vuelva a avisar.
+			s.avisarUnaVez("servicios_error\x00"+d.ID+"\x00"+cuerpo.ServiciosError, func() {
+				logx.Warn("flota: esta máquina NO PUEDE ENUMERAR sus servicios, así que su inventario dejó de viajar",
+					"device", d.Name, "motivo", recortar(cuerpo.ServiciosError, 200),
+					"nota", "el inventario se manda COMPLETO o no se manda, así que el cerebro no poda —lo que "+
+						"tiene guardado no se pierde—, pero envejece: a los 30 min salta `ServicioSinNoticias` "+
+						"por CADA servicio conocido. La que nombra la causa es `MaquinaNoPuedeEnumerar`")
+			})
+		}
+	}
+	if cuerpo.TokenFuente != "" && cuerpo.TokenFuente != d.TokenFuente {
+		if err := s.engine.FijarFuenteDeCredencial(d.ID, cuerpo.TokenFuente); err != nil {
+			s.avisarUnaVez("token_fuente_rara\x00"+d.ID, func() {
+				logx.Warn("flota: el agente reportó una fuente de credencial que no se entiende; no se guarda",
+					"device", d.Name, "recibido", recortar(cuerpo.TokenFuente, 40), "error", err)
+			})
+		} else if cuerpo.TokenFuente == fleet.CredencialDeVariable {
+			// UNA VEZ POR MÁQUINA. Es un ESTADO —dura hasta que alguien cambie el lanzador— y un
+			// aviso por latido son 2.880 líneas por día, que es cómo se entierra la que importa.
+			s.avisarUnaVez("token_no_rotable\x00"+d.ID, func() {
+				logx.Warn("flota: esta máquina recibió su token por VARIABLE, así que una rotación no se puede completar",
+					"device", d.Name,
+					"nota", "un proceso no puede reescribir su propio entorno; el lanzador tiene que pasar "+
+						"MUSUBI_DEVICE_TOKEN_FILE con la RUTA del archivo. Ver A102")
+			})
+		}
+	}
 	// EL INVENTARIO DE SERVICIOS VA ANTES DEL CORTE POR «no vino muestra», por el mismo motivo
 	// que el autorreporte: una máquina en un OS sin colector puede saber perfectamente qué corre
 	// adentro suyo, y salir por el `return` de abajo la dejaría sin inventario para siempre.
-	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios)
+	notaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios, cuerpo.ServiciosOmitidos)
 
 	if len(cuerpo.Muestra) == 0 || string(cuerpo.Muestra) == "null" {
 		return "", "", notaServicios, notaProtocolo
@@ -380,7 +444,7 @@ const latidoMaxBytes = fleet.MuestraMaxBytes + fleet.ServiciosPorLatido*fleet.Sa
 // La asimetría con la muestra: si el bloque se pasa del techo se descarta ENTERO en vez de
 // truncarse. Un inventario a medias haría que la poda por ausencia diera de baja los servicios
 // que quedaron afuera del corte, que es peor que no actualizar nada.
-func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio) string {
+func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.ReporteServicio, omitidos int) string {
 	// AUSENTE Y VACÍO NO SON LO MISMO, y toda A78 vive en esa distinción.
 	//
 	// `nil` es «el bloque no vino»: el latido de siempre, sin novedad de inventario. No hay nada
@@ -409,6 +473,14 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 	// columna «admite / puedo» del panel— y seis bucles exhaustivos en tres paquetes.
 	if !d.Permite(fleet.CapMetrics) {
 		return "descartados: esta máquina no tiene concedida la capacidad `metrics`"
+	}
+
+	// SE REGISTRA EL RECORTE ANTES QUE NADA, y con el 0 incluido. Es lo que permite preguntarle a
+	// la flota entera «¿quién tiene el inventario incompleto?» en vez de descubrirlo contando en
+	// una máquina, de casualidad, que es como se encontró (A116). Si falla, se sigue: perder el
+	// inventario porque no se pudo anotar su metadato sería cambiar un dato incompleto por ninguno.
+	if err := s.engine.FijarServiciosOmitidos(d.ID, omitidos); err != nil {
+		logx.Warn("no se pudo registrar el recorte del inventario", "device", d.ID, "err", err)
 	}
 
 	ahora := time.Now()
@@ -441,6 +513,30 @@ func (s *McpServer) guardarServiciosDelLatido(d fleet.Device, reportes []fleet.R
 	// es una máquina diciendo «no corre nada»: es un lote roto, y ésos no podan —que es la guarda
 	// que existía desde antes y sigue entera.
 	vacioAfirma := len(reportes) == 0
+
+	// UNA LISTA RECORTADA NO AUTORIZA A PODAR, Y ES LA MITAD QUE IMPORTA DE A116.
+	//
+	// La poda se apoya en una afirmación: «lo que no vino, ya no corre». Con un techo de por
+	// medio esa afirmación es FALSA — lo que no vino puede ser simplemente lo que no entró—, y el
+	// resultado no es una ceguera sino un registro equivocado: el cerebro anota `revoked = 1`
+	// sobre servicios que están corriendo. Medido en `davantis-1`, que reporta exactamente 64:
+	// 26 de clase `docker` y 87 de Windows dados de baja por la rotación del recorte, entre ellos
+	// los 11 contenedores de `altura-erp`.
+	//
+	// No se puede podar «sólo los que sí vinieron»: el cerebro no sabe CUÁLES son los omitidos,
+	// sólo cuántos. Así que la única respuesta correcta es no podar. Lo que llegó SÍ se guarda
+	// —esa parte es verdad y sirve—; lo que se suspende es la única operación que afirma algo
+	// sobre lo que NO llegó.
+	//
+	// Es la misma regla que ya está escrita en `cmd/musubi/servicios.go` para una fuente rota
+	// («el inventario se manda COMPLETO o NO SE MANDA»), aplicada al hermano que se había
+	// quedado afuera. Acá no se puede no mandar —el techo es permanente y esa máquina no
+	// reportaría nunca—, así que la lista viaja anotada y lo que se apaga es la poda.
+	if omitidos > 0 {
+		return fmt.Sprintf("guardados: %d nuevo(s), %d actualizado(s). PODA SUSPENDIDA: la máquina reportó %d servicio(s) y omitió %d por el techo del latido, así que «lo que no vino» no significa «ya no corre». Subí el techo o filtrá lo que no vale enumerar; mientras tanto el inventario de esta máquina está INCOMPLETO y lo dice `musubi_fleet_device_services_omitted`.",
+			nuevos, actualizados, len(reportes), omitidos)
+	}
+
 	podados, _ := s.engine.PodarServiciosAusentes(d.ID, vivos, vacioAfirma)
 	if vacioAfirma {
 		return fmt.Sprintf("inventario VACÍO reportado: %d servicio(s) dado(s) de baja. La máquina dice que no corre nada; en un sistema real eso casi siempre es un enumerador roto.", podados)

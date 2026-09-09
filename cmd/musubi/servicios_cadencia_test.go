@@ -81,7 +81,7 @@ func TestUnSistemaQueNoContestaTampocoSeInterrogaEnCadaLatido(t *testing.T) {
 	veces := espiaEnumeracion(t, nil, errors.New("systemd no contesta"))
 
 	for i := 0; i < 5; i++ {
-		lista, mandar, _ := serviciosDelLatido()
+		lista, _, mandar, _ := serviciosDelLatido()
 		if mandar || lista != nil {
 			t.Fatalf("con la enumeración rota no hay nada que mandar, y devolvió mandar=%v lista=%v", mandar, lista)
 		}
@@ -102,7 +102,7 @@ func TestUnCambioViajaApenasSeVuelveAPreguntar(t *testing.T) {
 		reiniciarFrenos()
 	})
 
-	_, mandar, confirmar := serviciosDelLatido()
+	_, _, mandar, confirmar := serviciosDelLatido()
 	if !mandar {
 		t.Fatal("el primer inventario tiene que viajar")
 	}
@@ -110,7 +110,7 @@ func TestUnCambioViajaApenasSeVuelveAPreguntar(t *testing.T) {
 
 	// El servicio se cae, pero todavía no venció la caché: el agente no puede saberlo.
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return unServicio(fleet.EstadoFallado), nil }
-	if _, mandar, _ := serviciosDelLatido(); mandar {
+	if _, _, mandar, _ := serviciosDelLatido(); mandar {
 		t.Error("mandó un cambio que todavía no podía haber visto: la caché no se está usando")
 	}
 
@@ -120,7 +120,7 @@ func TestUnCambioViajaApenasSeVuelveAPreguntar(t *testing.T) {
 	ultimaEnumeracion.cuando = time.Now().Add(-intervaloEnumeracion - time.Second)
 	ultimaEnumeracion.Unlock()
 
-	lista, mandar, _ := serviciosDelLatido()
+	lista, _, mandar, _ := serviciosDelLatido()
 	if !mandar {
 		t.Fatal("el servicio se cayó y el inventario no viajó: quedaría hasta 5 minutos sin verse")
 	}

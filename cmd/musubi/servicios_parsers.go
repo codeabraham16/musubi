@@ -95,6 +95,20 @@ func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServ
 		}
 		salida := tomar(f, "exitcode")
 		estado := estadoDeWindows(tomar(f, "state"), salida)
+		// EL ALCANCE, QUE NO ES EL TECHO (A116). Un escritorio Windows tiene ~64 servicios
+		// `Automatic` y casi todos son plomería del sistema operativo corriendo bien: `RpcSs`,
+		// `DcomLaunch`, `EventLog`, `Winmgmt`, `gpsvc`. Enumerarlos no informa y le come el
+		// presupuesto del latido a lo que sí —`Tailscale`, los contenedores, el antivirus—.
+		//
+		// ESTO NO ES EL RECORTE Y LA DIFERENCIA IMPORTA. El techo del latido corta por prioridad
+		// y desempata ALFABÉTICAMENTE, así que qué se pierde depende de cómo se llame y cambia
+		// solo: es arbitrario y silencioso, y por eso `servicios_omitidos` existe para contarlo.
+		// Esto es una regla de ALCANCE: estable, explicable y escrita en el RUNBOOK, igual que el
+		// filtro de `Automatic` de arriba, que ya deja afuera cientos sin que nadie los cuente.
+		// Lo que el alcance excluye no está «omitido»: no es parte del inventario, a propósito.
+		if deWindowsYSano(tomar(f, "pathname"), estado) {
+			continue
+		}
 		rs = append(rs, fleet.ReporteServicio{
 			Nombre: nombre,
 			Clase:  "windows",
@@ -326,4 +340,35 @@ func fechaDeSystemd(s string) *time.Time {
 		}
 	}
 	return nil
+}
+
+// deWindowsYSano dice si un servicio VIENE CON WINDOWS y además está corriendo bien (A116).
+//
+// LA REGLA ES MECÁNICA Y NO UNA LISTA DE NOMBRES: los servicios que trae el sistema operativo
+// ejecutan desde `%SystemRoot%` —casi todos `C:\Windows\system32\svchost.exe -k algo`—, y lo
+// que instaló alguien vive en `C:\Program Files` o similar. Una lista a mano se pudre con cada
+// versión de Windows y, peor, esconde exactamente lo que no previó; es el defecto de A93.
+//
+// SÓLO SE EXCLUYE SI ADEMÁS ESTÁ SANO. Un `Dhcp` corriendo no dice nada; un `Dhcp` detenido o
+// fallado sí, y ésos siguen viajando. La pregunta que el inventario responde es «¿qué está mal
+// acá?» antes que «¿qué hay acá?».
+//
+// FALLA HACIA MOSTRAR, y es la decisión que importa: si no vino `PathName` —un agente contra un
+// Windows que no lo expone, una consulta que cambió— el servicio SE REPORTA. Esconder algo porque
+// faltó un dato es la forma de error que este archivo entero existe para no cometer: un servicio
+// invisible por un campo vacío no se distingue de uno que no existe.
+func deWindowsYSano(pathName string, estado fleet.EstadoServicio) bool {
+	if estado != fleet.EstadoCorriendo {
+		return false
+	}
+	ruta := strings.ToLower(strings.TrimSpace(pathName))
+	ruta = strings.TrimPrefix(ruta, `"`)
+	if ruta == "" {
+		return false
+	}
+	// `c:\windows\` con la unidad variable: el sistema no siempre está en C:.
+	if len(ruta) < 4 || ruta[1] != ':' {
+		return false
+	}
+	return strings.HasPrefix(ruta[2:], `\windows\`)
 }

@@ -163,6 +163,36 @@ func enumerarConCache() ([]fleet.ReporteServicio, error) {
 	return lista, err
 }
 
+// motivoDeEnumeracionFallida dice POR QUÉ no se pudo enumerar, o "" si la última vez anduvo.
+//
+// EXISTE PORQUE «NO PUDE ENUMERAR» SÓLO SE ESCRIBÍA EN EL LOG DE LA MÁQUINA, Y ESO NO LO LEE NADIE.
+//
+// Cuando `enumerarServicios` falla, `serviciosDelLatido` devuelve `mandar=false` y el inventario NO
+// viaja — eso está bien y es deliberado: mandar media lista haría que el cerebro pode lo que no
+// vino. Pero del lado del cerebro ese silencio es IDÉNTICO al de un inventario que no cambió, así
+// que una máquina que no puede enumerar se ve exactamente igual que una sana y estable. La única
+// señal era `musubi_fleet_service_last_report_seconds` creciendo, y eso llega a los 30 minutos
+// convertido en UNA ALERTA POR SERVICIO.
+//
+// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias`, todas de la misma
+// máquina, 61 horas sin reportar un solo servicio — con el agente vivo (latido de hace 4,8 s) y
+// mandando CPU y uptime sin problema. Sesenta y cuatro alertas para UNA causa, y ninguna de las 64
+// la nombra. Eso no es una alarma, es ruido que enseña a ignorar el canal — la misma lección que
+// dejaron los trece `MaquinaCaida` de A79.
+//
+// SE LEE DE LA CACHÉ Y NO SE PASA POR PARÁMETRO a propósito: `enumerarConCache` ya guarda el error
+// junto a la lista (arriba), así que el dato existe y agregarle un quinto valor de retorno a
+// `serviciosDelLatido` sería una segunda fuente de la misma verdad — y esa firma acaba de costar
+// cuatro sitios en el merge con main. Se deriva del hecho ya establecido.
+func motivoDeEnumeracionFallida() string {
+	ultimaEnumeracion.Lock()
+	defer ultimaEnumeracion.Unlock()
+	if ultimaEnumeracion.err == nil {
+		return ""
+	}
+	return ultimaEnumeracion.err.Error()
+}
+
 // olvidarEnumeracion tira la respuesta guardada y obliga a preguntar de nuevo en la próxima vuelta.
 // La usan las pruebas que cambian lo que el sistema contesta a mitad de camino: sin esto verían la
 // respuesta vieja, que es justamente lo que la caché hace bien en producción.
@@ -178,8 +208,13 @@ func olvidarEnumeracion() {
 // NO entra el PID ni el detalle a propósito. Un servicio que se reinicia cambia de pid cada vez,
 // y meterlo en la huella haría que «cambió» sea verdad siempre — que es exactamente el problema
 // que esto viene a resolver.
-func huellaDelInventario(lista []fleet.ReporteServicio) string {
+func huellaDelInventario(lista []fleet.ReporteServicio, omitidos int) string {
 	h := sha256.New()
+	// EL RECORTE ENTRA EN LA HUELLA (A116). El inventario se manda sólo cuando cambió, y
+	// `omitidos` decide si el cerebro puede podar. Si no entrara acá, una máquina que deja de
+	// truncar —o que empieza a hacerlo— sin que cambien los 64 visibles se quedaría con el valor
+	// viejo del otro lado, y la poda seguiría suspendida (o habilitada) por un dato vencido.
+	fmt.Fprintf(h, "omitidos=%d\n", omitidos)
 	for _, r := range lista {
 		fmt.Fprintf(h, "%s\x00%s\x00%s\n", r.Nombre, r.Clase, r.Salud.Estado)
 	}
@@ -208,7 +243,10 @@ func huellaDelInventario(lista []fleet.ReporteServicio) string {
 // `confirmar` es nil cuando no hay nada que mandar. Llamarlo es obligación del llamador y sólo
 // después de que el cerebro haya aceptado el latido: sellar antes es exactamente el bug que esto
 // cierra, una vuelta más adelante.
-func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar func()) {
+// Los dos lados agregaron algo distinto acá y las dos cosas se conservan: `omitidos` (A116, el
+// recorte que tiene que VIAJAR) de esta rama, y la caché de enumeración (#410 de main, para no
+// preguntarle al sistema en cada latido).
+func serviciosDelLatido() (lista []fleet.ReporteServicio, omitidos int, mandar bool, confirmar func()) {
 	crudos, err := enumerarConCache()
 	if err != nil {
 		// CADA HORA Y NO UNA VEZ POR VIDA DEL PROCESO.
@@ -218,7 +256,7 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 		// tiene que sonar mientras dura.
 		avisarCada("servicios-enumerar", time.Hour,
 			"no se pudieron enumerar los servicios de esta máquina: %v", err)
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	lista, afuera := serviciosParaElLatido(crudos)
 	if afuera > 0 {
@@ -229,11 +267,11 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 			len(crudos), len(lista), afuera)
 	}
 
-	huella := huellaDelInventario(lista)
+	huella := huellaDelInventario(lista, afuera)
 	ultimoInventario.Lock()
 	defer ultimoInventario.Unlock()
 	if huella == ultimoInventario.huella && time.Since(ultimoInventario.enviado) < intervaloInventarioCompleto {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	// NUNCA nil cuando hay que mandar: `nil` se serializa como `null` y del otro lado eso no es
 	// «una lista vacía», es «no vino el campo». Una máquina donde no corre nada de lo que miramos
@@ -241,7 +279,7 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, mandar bool, confirmar
 	if lista == nil {
 		lista = []fleet.ReporteServicio{}
 	}
-	return lista, true, func() {
+	return lista, afuera, true, func() {
 		ultimoInventario.Lock()
 		defer ultimoInventario.Unlock()
 		ultimoInventario.huella = huella

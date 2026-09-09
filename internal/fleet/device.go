@@ -162,6 +162,41 @@ type Device struct {
 	// como si hubiera alguien del otro lado.
 	PuedePreguntar bool
 
+	// MotivoNoPreguntar dice POR QUÉ no puede, cuando no puede (A99). Lo reporta el agente en el
+	// latido y ANTES SE TIRABA: se usaba para una línea de log «una vez por máquina» y no se
+	// guardaba, así que a la pregunta «¿por qué esta máquina no puede preguntar?» el sistema no
+	// sabía responder — para averiguarlo en `gio` hubo que leer `avisador_windows.go` y deducirlo.
+	// Las tres causas se arreglan distinto: no hay escritorio (nada que hacer), falta la
+	// herramienta de diálogo (instalar un paquete), o el agente corre como servicio (cambiar el
+	// lanzador). Vacío = no lo dijo, que NO es lo mismo que «no hay motivo».
+	MotivoNoPreguntar string
+
+	// TokenFuente dice de dónde salió la credencial de esta máquina (A102): `archivo` o `variable`,
+	// vacío si el agente no lo dijo. Lo reporta el agente porque el cerebro no lo puede averiguar
+	// de ninguna otra forma, y decide algo que importa: con `variable` una rotación NO se puede
+	// completar —un proceso no reescribe su propio entorno— y el token queda visible en el entorno
+	// del proceso. Ver fleet.CredencialRotable.
+	TokenFuente string
+	// ServiciosOmitidos es CUÁNTOS servicios NO entraron en el último inventario que mandó esta
+	// máquina (A116). El latido lleva un techo y el agente ordena por prioridad antes de cortar.
+	//
+	// 0 significa «no recortó»: el inventario está completo. Cualquier valor mayor significa que
+	// el inventario que el cerebro tiene de esta máquina es PARCIAL — y por eso la poda por
+	// ausencia queda suspendida mientras dure: «lo que no vino» deja de significar «ya no corre».
+	ServiciosOmitidos int
+	// ServiciosError es POR QUÉ esta máquina no pudo enumerar sus servicios, cuando no pudo.
+	//
+	// NO ES LO MISMO QUE `ServiciosOmitidos`, ES SU OPUESTO: aquél es «enumeré bien y no entró
+	// todo» y éste es «no pude enumerar», o sea que NO VIAJÓ NADA. El agente aborta el lote cuando
+	// una fuente falla —el inventario se manda completo o no se manda— y el cerebro no poda ante un
+	// inventario ausente. Eso ya estaba bien; lo que faltaba era poder DECIR por qué esa máquina
+	// está callada.
+	//
+	// Vacío significa «no hay falla que reportar». Medido en `davantis-1` el 2026-09-09: 61 horas
+	// sin reportar servicios con el agente vivo, y 64 alertas `ServicioSinNoticias` —una por
+	// servicio— sin que ninguna nombrara la causa.
+	ServiciosError string
+
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió
 	Revoked    bool

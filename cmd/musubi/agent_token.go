@@ -41,6 +41,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"musubi/internal/fleet"
 )
 
 // credencial es el llavero del agente y cuál está usando.
@@ -80,6 +82,23 @@ func cargarCredencial() (*credencial, error) {
 		return &credencial{tokens: []string{t}, probado: make([]bool, 1)}, nil
 	}
 	return nil, nil
+}
+
+// Fuente dice de DÓNDE salió el token, y con eso si una rotación se puede adoptar.
+//
+// LA DECISIÓN VIVE EN UN SOLO LUGAR A PROPÓSITO: `cargarCredencial` ya eligió el camino y dejó la
+// prueba en `ruta` —vacía cuando vino por variable, porque ahí no hay dónde escribir—. Volver a
+// mirar el entorno para contestar esto sería una SEGUNDA decisión sobre lo mismo, y este repo pasó
+// el día arreglando defectos de esa forma exacta: dos lugares que deciden igual hasta que uno
+// cambia. Se deriva del hecho ya establecido.
+func (c *credencial) Fuente() string {
+	if c == nil {
+		return ""
+	}
+	if c.ruta != "" {
+		return fleet.CredencialDeArchivo
+	}
+	return fleet.CredencialDeVariable
 }
 
 // tokensDeArchivo parte el contenido en tokens, uno por línea.

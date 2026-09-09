@@ -168,6 +168,10 @@ var seriesSoloDelScrape = []string{
 	nombreAprobPendientes,
 	nombreAprobEspera,
 	nombreVidaDeRed,
+	// Sale de observability.go y no de este archivo, que es exactamente por lo que faltó acá
+	// durante meses: la custodia leía UN archivo y esta serie vive en otro. Es la de mayor
+	// consecuencia de las cinco —tres alertas cuelgan de ella y no tiene copia por OTLP—.
+	nombrePoliticaAcciones,
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
@@ -356,7 +360,7 @@ type serieDeFlota struct {
 	Valor  func(d fleet.Device, m *fleet.Muestra) (float64, bool)
 }
 
-// seriesDeFlota devuelve las 21 series en orden estable: las TRES que salen de la fila del device
+// seriesDeFlota devuelve las 24 series en orden estable: las TRES que salen de la fila del device
 // (up, last_seen, agent_stale) y las 18 que salen de la MUESTRA.
 //
 // `ahora` e `intervaloSonda` entran por parámetro porque tres series son relativas al reloj (up,
@@ -388,6 +392,75 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			"", true,
 			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
 				if enMantenimiento[d.ID] {
+					return 1, true
+				}
+				return 0, true
+			}},
+		// SI EL TOKEN DE ESTA MÁQUINA PUEDE ROTAR (A102).
+		//
+		// AUSENTE CUANDO EL AGENTE NO LO DIJO, y eso no es un detalle: `0` significa «reportó que su
+		// token vino por variable y NO puede rotar», que es una acusación concreta. Un agente viejo
+		// no manda el campo, y publicar 0 por su silencio marcaría como defectuosa a media flota sin
+		// que nadie lo haya medido. Es la regla de este plano: AUSENTE NO ES CERO.
+		//
+		// Con `variable` el token además queda en el ENTORNO del proceso, donde lo lee cualquier
+		// proceso del mismo usuario y donde sobrevive a que alguien arregle el archivo — el mecanismo
+		// exacto de A88, mirado desde el otro lado.
+		{"musubi_fleet_device_token_rotable",
+			"1 si el token del dispositivo vino por ARCHIVO y una rotación se puede completar; 0 si vino por variable de entorno y no. AUSENTE si el agente no lo reporta (agente viejo): un 0 inventado acusaría a la máquina de algo que nadie midió.",
+			"", true,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				rotable, seSabe := fleet.CredencialRotable(d.TokenFuente)
+				if !seSabe {
+					return 0, false
+				}
+				if rotable {
+					return 1, true
+				}
+				return 0, true
+			}},
+		// CUÁNTOS SERVICIOS NO ENTRARON EN EL ÚLTIMO INVENTARIO (A116).
+		//
+		// SIEMPRE PRESENTE, INCLUIDO EL 0, y acá el criterio es el OPUESTO al de `token_rotable`
+		// de arriba — vale explicar por qué, porque las dos reglas conviven en el mismo archivo.
+		// Allá el 0 sería una acusación («no puede rotar») que nadie midió, así que la ausencia es
+		// lo honesto. Acá el 0 dice «no recortó», que es lo que hace HOY un agente viejo: no se
+		// afirma nada que no esté pasando. Y si esta serie desapareciera cuando el inventario está
+		// completo, `absent()` no distinguiría «está completo» de «esta máquina no reporta», que es
+		// justamente la confusión que esta métrica existe para deshacer.
+		//
+		// Un valor > 0 significa que el inventario que el cerebro tiene de esa máquina es PARCIAL,
+		// y que la poda por ausencia está suspendida ahí: «lo que no vino» dejó de significar «ya
+		// no corre». Sin esta serie eso sólo se ve contando a mano en la máquina correcta, que es
+		// como se encontró — de casualidad, después de que una limpieza pedida por otra razón
+		// cambiara los números.
+		{"musubi_fleet_device_services_omitted",
+			"Cuántos servicios NO entraron en el último inventario de esta máquina por el techo del latido. 0 = el inventario está completo. Mayor que 0 = el inventario del cerebro es PARCIAL y la poda por ausencia está suspendida para esa máquina.",
+			"", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				return float64(d.ServiciosOmitidos), true
+			}},
+		// EL FALLO DEL ENUMERADOR, QUE ANTES SÓLO EXISTÍA EN EL LOG DE LA MÁQUINA.
+		//
+		// Es el OPUESTO de `services_omitted`, no su hermano: aquél es «enumeré bien y no entró
+		// todo», éste es «no pude enumerar», o sea que no viajó NADA. Del lado del cerebro ese
+		// silencio era idéntico al de un inventario estable.
+		//
+		// MEDIDO EN `davantis-1` EL 2026-09-09: 64 alertas `ServicioSinNoticias` —una por servicio
+		// conocido—, 61 horas sin reportar, con el agente vivo y mandando CPU y uptime. Sesenta y
+		// cuatro alertas para UNA causa, y ninguna la nombra. Con esta serie la causa tiene UNA
+		// alerta propia, y `ServicioSinNoticias` se calla para esa máquina — igual que ya se calla
+		// cuando la máquina está caída o en mantenimiento, y por el mismo motivo: no son 64
+		// problemas, es uno.
+		//
+		// EL MOTIVO NO VA COMO ETIQUETA. Es texto libre que escribe la máquina y su cardinalidad no
+		// la elige nadie de este lado — sería la misma decisión que ya se tomó para el desglose de
+		// servicios. Cuál es se mira en `musubi_fleet_list`, que es donde vive el texto.
+		{"musubi_fleet_device_services_unknown",
+			"1 si esta máquina NO PUDO enumerar sus servicios en su último latido, 0 si pudo. Cuando es 1 el inventario dejó de viajar entero —el agente manda la lista completa o no la manda— así que lo guardado no se pierde pero envejece, y a los 30 min salta `ServicioSinNoticias` por cada servicio conocido. POR QUÉ no pudo se mira en `musubi_fleet_list`: el motivo es texto libre de la máquina y como etiqueta sería cardinalidad sin techo.",
+			"", false,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.ServiciosError != "" {
 					return 1, true
 				}
 				return 0, true
@@ -445,7 +518,7 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 			"", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.Load15) })},
 		{"musubi_fleet_device_uptime_seconds", "Segundos desde el arranque de la máquina.",
 			"s", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.UptimeSeg), m.UptimeSeg > 0 })},
-		{"musubi_fleet_device_temperature_celsius", "Primera zona térmica. AUSENTE si la máquina no expone sensor.",
+		{"musubi_fleet_device_temperature_celsius", "Zona térmica preferida por tipo (CPU antes que chasis); si ninguna, la más alta plausible. AUSENTE si la máquina no expone sensor.",
 			"Cel", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.TempC) })},
 		// El nombre viaja en INGLÉS aunque el campo de la muestra sea `num_procesos`: adentro el
 		// JSON está en castellano, y en Prometheus la convención del ecosistema es inglesa. El

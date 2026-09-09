@@ -189,9 +189,22 @@ func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.
 		t.Error("la copia de la clave PRIVADA no se instala con 0600: el original queda 0644 y copiarlo tal cual esparce el permiso flojo")
 	}
 	// Y la salvedad, con todas las letras.
-	for _, quiero := range []string{"NO protege", "BACKUP_REMOTE"} {
-		if !strings.Contains(texto, quiero) {
-			t.Errorf("preparar.sh no dice %q: presentaría como respaldo algo que vive en el mismo disco que el original", quiero)
+	// LA SALVEDAD TIENE QUE ESTAR DONDE EL OPERADOR LA LEE, NO EN UN COMENTARIO DEL CÓDIGO.
+	//
+	// La versión anterior buscaba «NO protege» en TODO el archivo, y esa cadena exacta —con las
+	// dos mayúsculas— vive en UN SOLO lugar: el comentario que explica la decisión. El LEEME dice
+	// «No protege» y el `ok` dice «no protege». O sea que borrar las DOS salvedades que el
+	// operador ve —la del LEEME que queda al lado de la copia, y la de la línea de salida— dejaba
+	// la guarda en verde, sostenida por el comentario. Medido el 2026-09-05, y es el sexto caso
+	// del día de un texto que NOMBRA la cautela y la satisface sin que exista.
+	//
+	// Se mira sin comentarios y sin distinguir mayúsculas: lo que importa es que el guion se lo
+	// DIGA a alguien.
+	visible := codigoDe(texto)
+	for _, quiero := range []string{"no protege", "BACKUP_REMOTE"} {
+		if !strings.Contains(strings.ToLower(visible), strings.ToLower(quiero)) {
+			t.Errorf("preparar.sh no le DICE al operador %q fuera de un comentario: presentaría como\n"+
+				"respaldo algo que vive en el mismo disco que el original", quiero)
 		}
 	}
 }
@@ -226,12 +239,19 @@ func TestElColectorDelRelayCuentaLasSondasIntentadasYNoLasQueContestaron(t *test
 		t.Fatalf("no se pudo leer el colector del relay: %v", err)
 	}
 	src := string(b)
-	for _, q := range []struct{ frag, porque string }{
-		{`"atendidas": len(PUERTOS)`, "atendidas son las sondas INTENTADAS; contar sólo las que contestaron hace que fallidas las supere y el cerebro descarte el reporte entero"},
-		{`"fallidas": len(caidos)`, "fallidas tiene que ser el subconjunto que falló de esas mismas sondas"},
+	// SE EXIGE LA EXPRESIÓN COMPLETA, NO UN PREFIJO SUYO.
+	//
+	// `strings.Contains` con `"atendidas": len(PUERTOS)` se satisface con
+	// `"atendidas": len(PUERTOS) - fallidas`, que es EXACTAMENTE el defecto que esta prueba
+	// prohíbe —contar sólo los puertos que contestaron— escrito de otra forma. Medido el
+	// 2026-09-05 con el sabotaje declarado. Un prefijo no identifica un valor: hay infinitas
+	// expresiones que empiezan igual y significan lo contrario.
+	for _, q := range []struct{ pat, porque string }{
+		{`"atendidas":\s*len\(PUERTOS\)\s*,`, "atendidas son las sondas INTENTADAS; contar sólo las que contestaron hace que fallidas las supere y el cerebro descarte el reporte entero"},
+		{`"fallidas":\s*len\(caidos\)\s*,`, "fallidas tiene que ser el subconjunto que falló de esas mismas sondas"},
 	} {
-		if !strings.Contains(src, q.frag) {
-			t.Errorf("el colector del relay ya no dice %s: %s", q.frag, q.porque)
+		if !regexp.MustCompile(q.pat).MatchString(src) {
+			t.Errorf("el colector del relay ya no dice `%s` y nada más que eso: %s", q.pat, q.porque)
 		}
 	}
 	// Y que no vuelva el contador disjunto que causaba el rechazo.

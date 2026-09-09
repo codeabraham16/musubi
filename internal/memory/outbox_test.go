@@ -167,8 +167,53 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       capver, que es justamente el punto de tener una banda [CapverMin, Capver]. Sin la
 	//       columna, «¿qué máquinas no pueden hablar mi protocolo?» sólo se contesta esperando el
 	//       próximo latido de cada una. readCompatible: ningún camino de lectura filtra por ella.
-	if latestSchemaVersion() != 49 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 49", latestSchemaVersion())
+	// v50 = LO QUE EL AGENTE DIJO Y SE TIRABA (`devices.motivo_no_preguntar`, `devices.token_fuente`).
+	//       Las dos venían en el latido, se usaban para UNA línea de log «una vez por máquina» y no
+	//       se persistían — así que a «¿por qué esta máquina no puede preguntar?» (A99) y «¿por qué
+	//       su token no puede rotar?» (A102) el sistema no sabía responder, aunque el agente se lo
+	//       había dicho. El costo se pagó las dos veces leyendo código y leyendo un .cmd EN la
+	//       máquina. Las dos arrancan VACÍAS y el vacío significa «no lo dijo»: leer el silencio de
+	//       un agente viejo como «no puede» sería acusar a la flota de un defecto que nadie midió.
+	//       readCompatible: es ADD COLUMN sobre `devices` y ninguna consulta existente filtra por
+	//       ellas, así que un lector anterior devuelve las mismas filas.
+	// v51 = CUÁNTOS SERVICIOS NO ENTRARON (`devices.servicios_omitidos`). El latido lleva un techo
+	//       y el agente cortaba la lista escribiendo el número en su propio log, en la máquina,
+	//       una vez por arranque: donde nadie mira. Del lado del cerebro, 64 truncados y 64
+	//       completos eran el mismo mensaje — y como la poda da de baja lo que no vino, no era una
+	//       ceguera sino una afirmación falsa: 26 servicios `docker` y 87 de Windows anotados como
+	//       revocados en `davantis-1`, entre ellos 11 contenedores que estaban corriendo (A116).
+	//       Arranca en 0 y el 0 significa «no recortó»: acá la ambigüedad con «no lo dijo» SÍ es
+	//       aceptable —al revés que en v50— porque un agente viejo que trunca deja el 0, que es
+	//       exactamente el comportamiento de hoy; no se pierde nada que ahora exista.
+	//       readCompatible: mismo criterio que v50.
+	//
+	// v52 = REPARAR LA BIFURCACIÓN DE 47 Y 48. Renumerar las de flota arregla las bases que venían
+	//       por main, y NO las que ya habían pasado por las 47/48 de flota: para ésas el aplicador
+	//       saltea las de main —`if m.version <= current { continue }`— y se quedan sin
+	//       `schema_floor` ni las columnas del panel, con `user_version` diciendo que todo se
+	//       aplicó. Medido el 2026-09-09 sobre una copia real en esquema 48: «error al grabar el
+	//       piso de lectura: no such table: schema_floor», o sea una base que el binario NO ABRE.
+	//       Repite el DDL de las dos (idempotente por construcción) en vez de invocarlas: una
+	//       migración que llama a otra ata dos versiones que después nadie puede mover aparte.
+	//
+	// LAS v50 Y v51 ERAN LA 47 Y LA 48 EN LA RAMA DE FLOTA Y SE RENUMERARON AL MERGEAR. Las dos
+	// ramas estrenaron 47 y 48 en paralelo con contenido distinto, y el aplicador saltea con
+	// `if m.version <= current { continue }`: dejarlas duplicadas no habría fallado, habría dejado
+	// migraciones MUERTAS en silencio — en los DOS sentidos, según por qué rama hubiera venido la
+	// base. La v52 es la mitad que la renumeración sola no cubre.
+	// v53 = POR QUÉ ESTA MÁQUINA NO PUEDE ENUMERAR (`devices.servicios_error`). Cuando el
+	//       enumerador falla, el agente NO manda el inventario —a propósito: media lista haría que
+	//       el cerebro pode lo que no vino— y lo escribe en SU log, una vez por hora. Desde el
+	//       cerebro ese silencio era idéntico al de un inventario que no cambió, así que una
+	//       máquina rota se veía igual que una sana y estable. Medido el 2026-09-09 en
+	//       `davantis-1`: 64 alertas `ServicioSinNoticias` —una por servicio conocido—, 61 horas
+	//       sin reportar, con el agente vivo y mandando CPU y uptime. Sesenta y cuatro alertas para
+	//       UNA causa, y ninguna la nombra. Guarda el MOTIVO y no un booleano porque las causas se
+	//       arreglan distinto, y un `true` obligaría a entrar a la máquina para saber cuál es — que
+	//       es el paso manual que esto elimina. readCompatible: ADD COLUMN, ninguna consulta
+	//       existente cambia de resultado.
+	if latestSchemaVersion() != 53 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 53", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

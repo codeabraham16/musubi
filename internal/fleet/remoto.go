@@ -304,7 +304,10 @@ const guionLecturaProc = `cat /proc/stat 2>/dev/null; echo '` + separadorProc + 
 	`cat /proc/loadavg 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`cat /proc/uptime 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`df -B1 / 2>/dev/null; echo '` + separadorProc + `'; ` +
-	`cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; echo '` + separadorProc + `'; ` +
+	// Una línea por zona, `<type> <miligrados>` — el MISMO formato que produce el colector
+	// local, para que ElegirTemperatura sea uno solo. Antes leía `thermal_zone0` fijo, que en
+	// muchas máquinas es `acpitz` y no se mueve nunca.
+	`for z in /sys/class/thermal/thermal_zone*/; do t=$(cat "$z/type" 2>/dev/null); v=$(cat "$z/temp" 2>/dev/null); [ -n "$t" ] && [ -n "$v" ] && echo "$t $v"; done 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`grep -c ^processor /proc/cpuinfo 2>/dev/null; echo '` + separadorProc + `'; ` +
 	`ls -1 /proc 2>/dev/null`
 

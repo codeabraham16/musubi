@@ -110,7 +110,9 @@ chown -R "$PROM_USER:$PROM_USER" "$ETC"
 log "Validando config y reglas con promtool"
 /usr/local/bin/promtool check config "$ETC/prometheus.yml" >/dev/null || die "prometheus.yml inválido"
 /usr/local/bin/promtool check rules "$ETC/rules/musubi-alerts.yml" >/dev/null || die "musubi-alerts.yml inválido"
-ok "Config y 7 reglas válidas"
+# El conteo se DERIVA del archivo y no se escribe a mano: decía «7 reglas» sobre un archivo que
+# ya tenía 23, porque un número tipeado envejece solo y nadie lo vuelve a mirar.
+ok "Config y $(grep -c '^[[:space:]]*- alert:' "$ETC/rules/musubi-alerts.yml") reglas válidas"
 
 # ── 7. Servicio systemd ──────────────────────────────────────────────────────
 #

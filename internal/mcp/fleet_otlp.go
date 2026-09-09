@@ -38,7 +38,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -326,9 +325,13 @@ func nuevoEmpujadorOTLP(cfg config.OTLPPushConfig) (*empujadorOTLP, error) {
 	}
 	token := ""
 	if env := strings.TrimSpace(cfg.AuthTokenEnv); env != "" {
-		token = os.Getenv(env)
+		v, err := config.SecretoDeEnv(env)
+		if err != nil {
+			return nil, fmt.Errorf("fleet.otlp.auth_token_env: %v", err)
+		}
+		token = v
 		if token == "" {
-			return nil, fmt.Errorf("fleet.otlp.auth_token_env nombra a %q y esa variable está vacía: el empuje saldría sin credencial y el destino contestaría 401 para siempre. Exportála, o sacá auth_token_env si el destino no autentica", env)
+			return nil, fmt.Errorf("fleet.otlp.auth_token_env nombra a %s y no hay valor: el empuje saldría sin credencial y el destino contestaría 401 para siempre. Exportála, o sacá auth_token_env si el destino no autentica", config.NombresDeSecreto(env))
 		}
 	}
 	return &empujadorOTLP{

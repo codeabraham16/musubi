@@ -17,6 +17,7 @@ package fleet
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -43,7 +44,7 @@ func (c *colectorLinux) Tomar() (Muestra, error) {
 		Meminfo: leerArchivo("/proc/meminfo"),
 		Loadavg: leerArchivo("/proc/loadavg"),
 		Uptime:  leerArchivo("/proc/uptime"),
-		TempMil: leerArchivo("/sys/class/thermal/thermal_zone0/temp"),
+		TempMil: leerZonasTermicas(),
 		Procs:   listarProc(),
 		NumCPU:  runtime.NumCPU(),
 	}
@@ -111,4 +112,37 @@ func leerDisco(m *Muestra) {
 		m.DiscoUsado = (st.Blocks - st.Bfree) * tam
 	}
 	m.DiscoDisponible = st.Bavail * tam
+}
+
+// leerZonasTermicas devuelve una línea por zona, `<type> <miligrados>`.
+//
+// Se enumeran TODAS y elige ElegirTemperatura, en vez de leer `thermal_zone0` como hacía antes:
+// el número de zona no significa nada —depende del orden en que el kernel registró los drivers—
+// y en musubi-server la 0 era `acpitz`, un valor que no se movió en tres horas mientras el
+// paquete de CPU estaba 13 grados más arriba. Ver el comentario de preferenciaDeZonaTermica.
+//
+// Una zona sin `type` legible se salta: sin tipo no se puede preferir, y un valor anónimo
+// compitiendo con uno nombrado es cómo vuelve el problema que esto arregla.
+func leerZonasTermicas() string {
+	entradas, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range entradas {
+		if !strings.HasPrefix(e.Name(), "thermal_zone") {
+			continue
+		}
+		base := filepath.Join("/sys/class/thermal", e.Name())
+		tipo := strings.TrimSpace(leerArchivo(filepath.Join(base, "type")))
+		temp := strings.TrimSpace(leerArchivo(filepath.Join(base, "temp")))
+		if tipo == "" || temp == "" {
+			continue
+		}
+		b.WriteString(tipo)
+		b.WriteByte(' ')
+		b.WriteString(temp)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

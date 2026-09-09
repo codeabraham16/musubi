@@ -1892,6 +1892,154 @@ func schemaMigrations() []migration {
 				return agregarColumnaSiFalta(x, "devices", "capver", "capver INTEGER NOT NULL DEFAULT 0")
 			},
 		},
+		{
+			// ERAN LA 47 Y LA 48 EN LA RAMA DE FLOTA, Y SE RENUMERARON AL MERGEAR.
+			//
+			// Las dos ramas estrenaron 47 y 48 EN PARALELO con contenido distinto: acá vivían
+			// `lo_que_el_agente_dijo_y_se_tiraba` y `cuantos_servicios_no_entraron`, y en main
+			// `panel_con_modelo_y_evidencia`, `schema_read_floor` y `capver_por_maquina`.
+			//
+			// DEJARLAS DUPLICADAS NO HABRÍA FALLADO, Y ÉSE ERA EL PELIGRO: el aplicador saltea con
+			// `if m.version <= current { continue }`, así que sobre cualquier base que ya hubiera
+			// pasado por las 47/48 de main estas dos quedaban MUERTAS en silencio — sin columna,
+			// sin error, y con `user_version` diciendo que todo se aplicó.
+			version:        50,
+			name:           "lo_que_el_agente_dijo_y_se_tiraba",
+			readCompatible: true,
+			// DOS HECHOS QUE EL AGENTE REPORTA, QUE EL CEREBRO USABA UNA VEZ Y NO GUARDABA.
+			//
+			// `MotivoNoPreguntar` viajaba en el latido, alimentaba UNA línea de `logx.Info` «una vez
+			// por máquina» y se tiraba; `token_fuente` igual. Así que a «¿por qué esta máquina no
+			// puede preguntar?» (A99) y «¿por qué su token no puede rotar?» (A102) el sistema no
+			// sabía responder aunque el agente ya se lo había dicho. Las dos veces el costo se pagó
+			// leyendo código y leyendo un `.cmd` EN la máquina.
+			//
+			// LAS DOS ARRANCAN VACÍAS Y EL VACÍO SIGNIFICA «NO LO DIJO», no «no puede»: leer el
+			// silencio de un agente viejo como una incapacidad sería acusar a la flota de un
+			// defecto que nadie midió.
+			//
+			// ES readCompatible: son dos ADD COLUMN sobre `devices` con default, y ninguna consulta
+			// existente filtra por ellas — un binario anterior devuelve exactamente las mismas
+			// filas. No es el caso de la v22, donde la columna nueva entró en el predicado de
+			// visibilidad y un lector viejo habría servido filas que no sabía descartar.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "motivo_no_preguntar",
+					"motivo_no_preguntar TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "token_fuente",
+					"token_fuente TEXT NOT NULL DEFAULT ''")
+			},
+		},
+		{
+			version:        51,
+			name:           "cuantos_servicios_no_entraron",
+			readCompatible: true,
+			// EL RECORTE DEL LATIDO, QUE HASTA HOY NO SALÍA DE LA MÁQUINA (A116).
+			//
+			// El latido lleva un techo (`fleet.ServiciosPorLatido` = 64) y el agente cortaba la
+			// lista escribiendo el número en su propio log, en la máquina, una vez por arranque:
+			// donde nadie mira. Del lado del cerebro, 64 truncados y 64 completos eran el MISMO
+			// mensaje — y como la poda por ausencia da de baja lo que no vino, eso no era una
+			// ceguera sino una AFIRMACIÓN FALSA: 26 servicios `docker` y 87 de Windows anotados
+			// como revocados en `davantis-1`, entre ellos los 11 contenedores de `altura-erp`, que
+			// estaban corriendo.
+			//
+			// Arranca en 0 y el 0 significa «no recortó». Acá la ambigüedad con «no lo dijo» SÍ es
+			// aceptable —al revés que en la v50— porque un agente viejo que trunca deja el 0, que
+			// es exactamente el comportamiento de hoy: no se pierde nada que ahora exista.
+			//
+			// ES readCompatible: mismo criterio que la v50.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "servicios_omitidos",
+					"servicios_omitidos INTEGER NOT NULL DEFAULT 0")
+			},
+		},
+		{
+			// LA REPARACIÓN DE LA BIFURCACIÓN, Y NO ES TEÓRICA: SIN ESTO EL MERGE DEJA BASES QUE
+			// NO SE PUEDEN ABRIR.
+			//
+			// Las dos ramas estrenaron 47 y 48 en paralelo. Renumerar las de flota a 50/51 arregla
+			// las bases que venían por main, pero NO las que ya pasaron por las 47/48 de flota:
+			// para ésas, `if m.version <= current { continue }` saltea las 47 y 48 de main, que son
+			// las que crean `schema_floor` y las columnas del panel. Y el aplicador igual deja
+			// `user_version` en la última, así que la base queda marcada COMO SI TODO SE HUBIERA
+			// APLICADO.
+			//
+			// MEDIDO EL 2026-09-09 sobre una copia real de una base de esta rama en esquema 48:
+			//
+			//	Error al abrir la base de datos: error al grabar el piso de lectura:
+			//	SQL logic error: no such table: schema_floor
+			//	user_version = 51
+			//
+			// O sea: no es una degradación silenciosa, es una base que el binario no abre — y con
+			// el número diciendo que está al día. El diagnóstico costaría lo mismo que costó A111.
+			//
+			// SE PUEDE CORRER SIEMPRE porque los dos cuerpos de main son idempotentes por
+			// construcción (`agregarColumnaSiFalta` y `CREATE TABLE IF NOT EXISTS`): sobre una base
+			// que vino por main esto es un no-op, y sobre una que vino por flota la completa. Se
+			// REPITE el DDL en vez de llamar a las migraciones de arriba a propósito: una migración
+			// que invoca a otra ata dos versiones que después nadie puede mover por separado.
+			version:        52,
+			name:           "reparar_la_bifurcacion_de_47_y_48",
+			readCompatible: true,
+			up: func(x execQuerier) error {
+				// De la 47 de main: el panel deja de ser un eco.
+				for _, c := range []struct{ tabla, col, ddl string }{
+					{"debate_postures", "model", "model TEXT NOT NULL DEFAULT ''"},
+					{"debate_postures", "evidence", "evidence TEXT NOT NULL DEFAULT ''"},
+					{"debate_votes", "model", "model TEXT NOT NULL DEFAULT ''"},
+					{"debate_votes", "evidence", "evidence TEXT NOT NULL DEFAULT ''"},
+					{"debates", "gated_choice", "gated_choice TEXT NOT NULL DEFAULT ''"},
+				} {
+					if err := agregarColumnaSiFalta(x, c.tabla, c.col, c.ddl); err != nil {
+						return err
+					}
+				}
+				// De la 48 de main: el piso de lectura grabado en la base.
+				_, err := x.Exec(`CREATE TABLE IF NOT EXISTS schema_floor (
+					id            INTEGER PRIMARY KEY CHECK (id = 1),
+					read_floor    INTEGER NOT NULL,
+					set_by_schema INTEGER NOT NULL,
+					set_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				)`)
+				return err
+			},
+		},
+		{
+			version:        53,
+			name:           "por_que_esta_maquina_no_puede_enumerar",
+			readCompatible: true,
+			// EL FALLO DEL ENUMERADOR, QUE HASTA HOY SÓLO EXISTÍA EN EL LOG DE LA MÁQUINA.
+			//
+			// Cuando `enumerarServicios` falla, el agente NO manda el inventario —a propósito: media
+			// lista haría que el cerebro pode lo que no vino— y avisa una vez por hora en su propio
+			// log. Del lado del cerebro ese silencio es IDÉNTICO al de un inventario que no cambió,
+			// así que una máquina con el enumerador roto se ve exactamente igual que una sana.
+			//
+			// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias` —una por
+			// servicio conocido—, 61 horas sin reportar, con el agente vivo (latido de hace 4,8 s) y
+			// mandando CPU y uptime sin problema. Sesenta y cuatro alertas para UNA causa, y ninguna
+			// la nombra. Eso no es una alarma: es ruido que enseña a ignorar el canal, la misma
+			// lección que dejaron los trece `MaquinaCaida` de A79.
+			//
+			// GUARDA EL MOTIVO Y NO UN BOOLEANO por el mismo criterio que `motivo_no_preguntar`: las
+			// causas se arreglan distinto —falta un binario, WMI no contesta, el usuario no tiene
+			// permiso— y un `true` obligaría a entrar a la máquina para saber cuál es, que es
+			// justamente el paso manual que esto elimina.
+			//
+			// Arranca VACÍA y el vacío significa «no hay falla que reportar»: un agente viejo que no
+			// manda el campo y uno nuevo que enumeró bien llegan los dos como "", y para el
+			// consumidor eso quiere decir lo mismo. La ambigüedad es aceptable acá —al revés que en
+			// `motivo_no_preguntar`— porque no hay ninguna acción que dependa de distinguirlas.
+			//
+			// ES readCompatible: ADD COLUMN sobre `devices` con default, y ninguna consulta
+			// existente cambia de resultado.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "servicios_error",
+					"servicios_error TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

@@ -223,9 +223,15 @@ const (
 // TiposDeHecho es el enum entero. Existe para que una prueba pueda recorrerlo y exigir que cada
 // tipo tenga capacidad y plano — sin eso, un tipo nuevo se agrega y nadie se entera de que quedó
 // sin compuerta hasta que alguien lo ve en una respuesta.
+// Faltaba HechoCanalExec, y la ausencia es EXACTAMENTE lo que esta lista existe para impedir: el
+// enum declara siete tipos y acá había seis, así que la prueba de conformidad —la que exige que
+// cada tipo tenga capacidad y plano— recorría 6 de 7 y no podía ver el séptimo. No hubo daño
+// visible porque CapDeHecho(HechoCanalExec) devuelve CapExec, la misma que HechoComando, que sí
+// estaba; o sea que la compuerta de algunPlanoVisible daba el mismo resultado por accidente. Un
+// tipo nuevo con capacidad propia no habría tenido esa suerte.
 var TiposDeHecho = []TipoDeHecho{
 	HechoComando, HechoPantalla, HechoShell,
-	HechoCanalPantalla, HechoCanalShell, HechoSinClasificar,
+	HechoCanalPantalla, HechoCanalShell, HechoCanalExec, HechoSinClasificar,
 }
 
 // CapDeHecho dice QUÉ CAPACIDAD hace falta para ver este hecho. El segundo valor en false

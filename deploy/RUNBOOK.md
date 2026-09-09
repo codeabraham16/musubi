@@ -231,6 +231,117 @@ musubi_fleet_log --project <proyecto> --limite 50
 **Qué hacer:** buscar la causa (el servicio que llena el disco, el proceso que come RAM), no
 subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
 
+## CoberturaDelSlaSeCayo
+
+**La cobertura del SLA cayó más de 5 puntos en 6 horas.** Mientras el TSDB acumula historia la
+cobertura **sólo sube**, así que una caída es una pérdida de datos, no una etapa.
+
+### Las tres causas, y las tres se arreglan
+
+```bash
+# 1 · ¿el TSDB perdió su historia? El bloque más viejo dice desde cuándo hay datos.
+curl -s http://127.0.0.1:9099/api/v1/status/tsdb | python3 -m json.tool | head -30
+# y el arranque real de la serie:
+curl -sG --data-urlencode 'query=min_over_time(timestamp(musubi:device_up:norm)[30d:1h])' \
+  http://127.0.0.1:9099/api/v1/query
+
+# 2 · ¿se cortó el scrape del cerebro?
+curl -sG --data-urlencode 'query=up{job=~"musubi.*"}' http://127.0.0.1:9099/api/v1/query
+
+# 3 · ¿las recording rules se recargaron con otra definición?
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh   # compara las 14 contra el repo
+```
+
+### Lo que hace esta alerta y lo que NO hace
+
+**NO existe una alerta de «cobertura baja», y es deliberado.** Una cobertura baja no se puede apagar
+arreglando algo: la única salida es que pase el tiempo. Una alarma que no se apaga actuando es cómo
+se enseña a ignorar un canal — y este repo ya lo pagó: trece `MaquinaCaida` que aparecían y se
+resolvían solas se leyeron como ruido de red durante diez días (**A79**). Así que la cobertura baja
+no avisa: **se expresa en el dato**.
+
+### Cómo se expresa en el dato: `:sla30d` contra `:avg30d`
+
+Hay dos familias de series y significan cosas distintas:
+
+| serie | qué es | cuándo usarla |
+|---|---|---|
+| `musubi:*:avg30d` | el promedio sobre lo que HAYA en la ventana | diagnóstico, nunca un reporte |
+| `musubi:*:sla30d` | el mismo número, **pero sólo existe si la cobertura llega a 0,95** | lo que se le muestra a un cliente |
+
+Cuando la cobertura no alcanza, `:sla30d` **desaparece**: un panel dibuja un hueco, que es la
+verdad, en vez de un porcentaje que no se puede sostener. **Un reporte tiene que leer `:sla30d`.**
+
+**Por qué 0,95**: con `interval: 5m`, 30 días son 8.640 muestras, así que el 5 % son **36 horas sin
+medir**. Un SLA de uptime se escribe contra presupuestos mucho más ajustados —99,9 % son 43 minutos
+al mes—, o sea que un mes con día y medio DESCONOCIDO no puede sostener una afirmación de ese orden.
+Por encima de 0,95 el faltante es más chico que el propio presupuesto de error.
+
+**Si `:sla30d` no existe en ninguna parte**, mirá primero si las reglas están cargadas
+(`ReglasDelSlaSinDesplegar`): «ausente porque la cobertura no alcanza» y «ausente porque el archivo
+no se desplegó» se ven idénticas desde un panel y se arreglan al revés.
+
+## PoliticaFrenadaPorConsentimiento
+
+**`info`, y a propósito: no es una falla.** El eje de consentimiento hizo exactamente lo que
+promete — la máquina está en `prohibido` (el candado del dueño) o en `pide` (exige que su usuario
+acepte, y un barrido por temporizador no tiene dónde esperar esa respuesta), así que el auto-heal
+no actuó.
+
+**Lo que hay que resolver es una CONTRADICCIÓN, no un error**: hay una política que apunta a esa
+máquina y un grado que no la deja. Mientras siga así, esa máquina **no se auto-cura y nadie más lo
+va a notar** — que es precisamente el motivo de que esta alerta exista.
+
+### Por qué existe esta alerta
+
+La decisión de endurecer `exec` bajo `pide` (**A86**) y de que el eje gobierne al auto-heal
+(**A91**) se tomó pesando dos errores con esta regla: *«los dos errores no cuestan igual: bloquear
+de más SE NOTA —el auto-heal deja de actuar y alguien lo ve—, y ejecutar sin preguntar no se nota
+nunca»*. Medido el 2026-09-05: **ese «alguien lo ve» no existía.** No había métrica ni alerta de un
+rechazo por consentimiento, así que lo único que avisaba era el texto de un rechazo RPC de un `exec`
+pedido a mano. La premisa era falsa y la decisión se había tomado sobre ella. Esto es el mecanismo
+que la vuelve verdadera.
+
+### Qué mirar
+
+La métrica **no lleva etiqueta `device`** —cardinalidad políticas × máquinas × resultados, con dos
+mil máquinas de horizonte—, así que dice QUE pasa y no DÓNDE. El dónde está en el journal, que lo
+nombra una vez y no en cada tick:
+
+```bash
+ssh musubi-server 'journalctl -u musubi-brain --since "24 hours ago" | grep -i "frenada por el consentimiento\|exige que su usuario"'
+```
+
+Y qué grado tiene cada máquina, con el efectivo al lado:
+
+```bash
+./deploy/musubi-tool.sh musubi_fleet_list | python3 -c 'import sys,json
+for d in json.load(sys.stdin)["devices"]:
+    print(f"{d[\"name\"]:16} declarado={d.get(\"consentimiento\",\"-\"):10} efectivo={d.get(\"consentimiento_efectivo\",\"-\")}")'
+```
+
+**Los dos resultados se cuentan separados y significan cosas distintas:**
+
+- `consentimiento_prohibido` — decisión firme del dueño. No hay nada que arreglar en el código: o se
+  baja el grado, o la política deja de incluir a esa máquina. Dejarlo así es válido **si es
+  deliberado**; lo que no es válido es que nadie sepa.
+- `consentimiento_pide` — es **la puerta que quedó abierta**. Se podría encolar un
+  `musubi:preguntar` y actuar en el tick siguiente si la respuesta llegó, pero eso exige guardar y
+  expirar el estado de una aprobación por (política × máquina), que es un mecanismo entero y no una
+  rama de un `switch`. Este contador mide exactamente cuánto se ganaría implementándolo: si está en
+  cero, no vale la pena.
+
+### Lo que NO hay que hacer
+
+**Bajar la máquina a `avisa` «para que el auto-heal siga funcionando» sin preguntarle a su dueño.**
+El grado lo responde quien usa la máquina, no quien administra la flota — es el motivo por el que
+`musubi_fleet_consent` es ADMIN y no `screen`. Si el que entra pudiera aflojar la política, el eje
+entero sería decoración.
+
+**Ojo con el efectivo contra el declarado**: `puede_preguntar = false` endurece un `pide` a
+`prohibido` sola, así que una máquina puede estar frenada por un grado que nadie eligió. Eso es
+**A94** y se ve en la columna `efectivo` del comando de arriba.
+
 ## PoliticaSinPermiso
 
 Una política quiso actuar y **no pudo**: quedó inerte. Las dos causas, en orden de frecuencia:
@@ -433,9 +544,38 @@ mostrar: en cada instante el servicio está arriba.
 3. El contador es del supervisor y se reinicia cuando se reinicia la máquina: un pico después de
    un reboot no significa lo mismo que uno en una máquina con semanas de uptime.
 
+## MaquinaNoPuedeEnumerar
+
+El agente está **vivo** —late, manda CPU y uptime— pero su enumerador de servicios falla, así que
+**el inventario dejó de viajar entero**.
+
+No se pierde nada: el agente manda la lista COMPLETA o no la manda, y el cerebro no poda ante un
+inventario ausente. Lo que el cerebro tiene guardado sigue ahí, pero **envejece sin actualizarse**,
+y a los 30 minutos saltaría `ServicioSinNoticias` por CADA servicio conocido. Por eso esa alerta
+está callada para esta máquina mientras ésta dispara: no son 64 problemas, es uno.
+
+Medido el 2026-09-09 en `davantis-1` antes de que esta alerta existiera: **64 alertas
+`ServicioSinNoticias`**, todas de la misma máquina, 61 horas sin reportar, y ninguna nombraba la
+causa. Para saber qué pasaba había que entrar a la máquina.
+
+1. **Leé el motivo, que ya viaja**: `musubi_fleet_list` trae `servicios_error` de esa máquina. Es
+   el error textual del enumerador, no una categoría.
+2. Las causas se arreglan distinto, y por eso se guarda el texto y no un booleano:
+   - **falta un binario** (`systemctl`, `docker`, `podman` no está en el PATH del agente);
+   - **WMI no contesta** en Windows — el enumerador lanza PowerShell y pide `Win32_Service`;
+   - **permisos**: el usuario del agente no puede enumerar (típico si alguien cambió de `-AlArranque`
+     a tarea por sesión, o al revés).
+3. Si el motivo no alcanza, mirá el log del agente EN la máquina: avisa una vez por hora mientras
+   dure (`avisarCada("servicios-enumerar", ...)`).
+4. Cuando se arregla, el campo se vacía en el siguiente latido y las dos alertas se apagan solas —
+   el motivo se escribe SIEMPRE, incluido el vacío, justamente para que eso pase.
+
 ## ServicioSinNoticias
 
 La máquina late pero hace más de 30 minutos que no manda el estado de sus servicios.
+
+> Si ves esto multiplicado por todos los servicios de UNA máquina, mirá primero
+> `MaquinaNoPuedeEnumerar`: es la misma causa contada muchas veces, y esa alerta la nombra.
 
 El agente reenvía el inventario cuando CAMBIA, más un piso periódico (`fleet.InventarioCada`), así
 que 30 minutos de silencio son varios reenvíos perdidos. **No sabemos cómo está ese servicio**, y
@@ -561,6 +701,66 @@ conocer la base es la forma de la curva.
    sin purga son lo habitual.
 4. El disco de esa máquina lo vigila Musubi por separado (`musubi_fleet_device_disk_*` con
    `device="supabase-altura"`). Esta alerta llega **antes**, cuando todavía es una curva.
+
+## InventarioDeServiciosIncompleto
+
+**Esta máquina tiene más servicios de los que entran en un latido**, así que el inventario que el
+cerebro tiene de ella está incompleto. El agente prioriza fallados y detenidos antes de recortar,
+o sea que **lo que falta son los que están corriendo bien** — justo los que nadie extraña hasta que
+los necesita.
+
+Cuántos y cuáles se ven así:
+
+```bash
+# cuántos faltan, en toda la flota
+musubi_fleet_device_services_omitted > 0        # en Prometheus
+
+# qué sí llegó (ojo: los revocados están escondidos por default)
+musubi_fleet_services --project <proj> --device <maq> --incluir_revocados true
+```
+
+**Mientras dure, la poda por ausencia está SUSPENDIDA para esta máquina** y eso es deliberado: con
+un techo de por medio, «lo que no vino» deja de significar «ya no corre», y podar sobre una lista
+recortada no produce una ceguera sino un registro equivocado — el cerebro anotaría `revoked = 1`
+sobre servicios que están corriendo. Pasó: el 2026-09-05, antes de este arreglo, `davantis-1` tenía
+26 servicios `docker` y 87 de Windows marcados como revocados por la rotación del recorte, entre
+ellos los 11 contenedores de `altura-erp`. El efecto secundario de la suspensión es que **el
+inventario de esa máquina tampoco se limpia solo**: un servicio que de verdad desaparezca va a
+quedar figurando hasta que el recorte se resuelva.
+
+Las dos salidas, y las dos son decisiones:
+
+1. **Subir el techo** (`fleet.ServiciosPorLatido`). Un latido no puede crecer sin límite —el
+   inventario ya casi rompió una guarda de tamaño del cuerpo una vez— así que subirlo tiene costo
+   en bytes por máquina y por latido.
+2. **Filtrar lo que no vale enumerar** — hecho para Windows el 2026-09-05, ver abajo.
+
+### Qué NO enumera el agente en Windows, y por qué
+
+Dos reglas de **alcance**, distintas del techo: son estables, explicables y están acá.
+
+- **Sólo los `Automatic`.** Un servicio Manual y detenido es lo normal; Windows trae cientos. El
+  filtro va antes de mirar el `ExitCode` porque un Manual apagado reporta `1077` («nunca se intentó
+  arrancar»), que en un Automatic es una falla y en un Manual no — ponerlo al revés costó 75
+  alarmas falsas.
+- **La plomería del sistema operativo que está corriendo bien.** Se reconoce por dónde ejecuta
+  (`PathName` bajo `<unidad>:\Windows\`), no por una lista de nombres: una lista se pudre con cada
+  versión de Windows y esconde justo lo que no previó. `RpcSs`, `DcomLaunch`, `EventLog`,
+  `Winmgmt`, `gpsvc` corriendo no informan nada y le comían el presupuesto del latido a `Tailscale`,
+  al antivirus y a los contenedores.
+
+**Dos cosas que esa segunda regla NO hace, y son deliberadas.** La plomería **rota** sí viaja: un
+`Dhcp` detenido o fallado es exactamente lo que el inventario existe para mostrar. Y si el servicio
+no dice desde dónde ejecuta, **se reporta igual** — esconder algo porque faltó un campo es
+indistinguible de que no exista, y nadie lo va a ir a buscar.
+
+**Si un servicio de Windows no aparece**, la pregunta en orden es: ¿es `Automatic`? ¿está corriendo
+y ejecuta desde `C:\Windows`? Si las dos son sí, no aparece a propósito. Si no, mirá
+`musubi_fleet_device_services_omitted` — puede ser el techo y no el alcance.
+
+**Lo que NO hay que hacer es silenciarla y seguir.** Las tres alertas que leen esa lista como si
+fuera el inventario —`ServicioCaido`, `ServicioSinNoticias` y `MaquinaSinInventario`— siguen
+decidiendo sobre un universo recortado, y ninguna de las tres puede notarlo por su cuenta.
 
 ## MaquinaSinInventario
 
@@ -763,7 +963,14 @@ sale de la tool.
 
 Para actualizar:
 
-- **Linux (el propio servidor).** El cerebro y el agente comparten ejecutable: `deploy/redesplegar-cerebro.sh`.
+- **Linux (el propio servidor).** El cerebro y el agente comparten ejecutable. En la máquina se corre
+  `sudo /usr/local/sbin/redesplegar-cerebro.sh <binario-nuevo> <sha256>`, que es donde lo instala
+  `install-musubi-brain.sh` detrás de su compuerta de sha256. **No lo corras desde una copia suelta**:
+  la copia a mano que vivía en `/home/musubi/` quedó a la mitad del guion del repo y con su verificación
+  de la migración muerta durante seis redespliegues (A111) — un guion sin instalador no tiene cómo
+  actualizarse. `deploy/verificar-despliegue.sh` compara ahora el archivo instalado contra el repo, y
+  marca en rojo cualquier copia sobreviviente bajo `/home`: ese directorio lo escribe el uid con el que
+  corre `musubi_fleet_exec`, y esto se invoca con `sudo`.
 - **Windows.** Se cruza el binario nuevo a la máquina y se corre `cambiar-agente.cmd`, que lo
   reemplaza con prueba de latido y vuelta atrás. Ojo con el zombi: si un agente viejo quedó vivo
   desde `musubi.exe.viejo`, gana la carrera del latido y la máquina sigue figurando en la versión
@@ -806,10 +1013,23 @@ MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
 
 ## ReglasDelCerebroSinDesplegar
 
-Las dos son la misma cosa mirada desde cada lado: **lo que Prometheus tiene cargado no es lo que
+## ReglasDelSlaSinDesplegar
+
+Las tres son la misma cosa mirada desde cada lado: **lo que Prometheus tiene cargado no es lo que
 declara el repo**. Cada archivo de reglas vigila el conteo del OTRO, cruzado a propósito — un
 archivo que declara su propio conteo se despliega junto con el conteo, las dos mitades se mueven a
 la vez y la comprobación no falla nunca.
+
+> **El cruce no alcanza, y hay que saberlo antes de confiar en un verde de estas tres (A113).** El
+> párrafo de arriba explica por qué un archivo no puede declarar su propio conteo. Cierto — pero
+> **el despliegue copia los archivos JUNTOS**, así que el mismo defecto reaparece un piso más
+> arriba: envejecen juntos y sus dos números se siguen dando la razón. Medido el 2026-09-05: el
+> `musubi-alerts.yml` desplegado difería del repo en UN renglón —`!= 24` contra `!= 27`, con los
+> dos archivos pesando los mismos 23912 bytes— y `ReglasDeFlotaSinDesplegar` estaba **en verde**
+> mientras faltaban tres reglas, entre ellas `ReglasDelSlaSinDesplegar`, o sea la que habría
+> avisado del otro hueco. Estuvo así desde el 4-09. **Un verde de estas tres significa «los dos
+> archivos coinciden entre sí», no «coinciden con el repo».** Lo segundo sólo lo contesta
+> `verificar-despliegue.sh`, y por eso existe `ComparacionRepoServidorSinCorrer`.
 
 Primero, qué falta y en qué dirección:
 
@@ -840,6 +1060,124 @@ MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
 regla y no actualizó el conteo del archivo que la custodia. Eso lo detecta la suite
 (`TestCadaArchivoDeReglasCustodiaElConteoDelOtro`) antes de llegar a producción, así que si suena
 en producción es que se desplegó sin correr las pruebas.
+
+### Lo específico del SLA, que es distinto de las otras dos
+
+`ReglasDelSlaSinDesplegar` cuenta las **11 recording rules** de `musubi-recording.yml`, y se agregó
+el 2026-09-05 (A93) porque era **la única de las tres familias sin nadie que la contara**: ningún
+guion la instalaba, ninguna alerta la vigilaba, y `verificar-despliegue.sh` era ciego a ella —su
+conteo filtra `type == "alerting"` y su glob es `musubi-alerts*.yml`, así que las once no aparecían
+en ninguna lista. Se veía en las edades de las series: 11,9 h de historia en una regla y 6,25 h en
+otra **del mismo archivo**, o sea tres instalaciones a mano en tres momentos distintos.
+
+**Por qué importa más que las otras dos, y no menos**: éste es el número que se le factura a un
+cliente, y un `avg30d` calculado sobre una versión vieja del archivo **sigue devolviendo un
+resultado plausible**. No hay síntoma. Un panel con 92 % se ve igual esté bien o mal, así que esta
+alerta es la única señal que existe.
+
+**Va atado a las reglas de flota**, no suelto: sus once reglas derivan de `musubi_fleet_*` y su
+guarda vive dentro de `musubi-alerts-flota.yml`, así que `preparar.sh` instala los dos juntos o
+ninguno. Si aparece cargado uno sin el otro, es que alguien copió a mano.
+
+```bash
+# copiar los tres, que es como se despliegan
+scp deploy/musubi-alerts.yml deploy/musubi-alerts-flota.yml deploy/musubi-recording.yml \
+    musubi-server:/tmp/
+ssh musubi-server 'for f in musubi-alerts.yml musubi-alerts-flota.yml musubi-recording.yml; do
+  cat "/tmp/$f" > "$HOME/musubi-prometheus/rules/$f"; done
+  curl -sS -X POST http://127.0.0.1:9099/-/reload'
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+**Ojo con una trampa al recargar el SLA**: una recording rule que cambia de nombre **no borra la
+serie vieja**. La serie anterior se queda en el TSDB, deja de recibir puntos, y un panel que la
+consulte sigue dibujando el último valor con `last_over_time` — que es el mismo modo de falla que
+las series congeladas de la flota. Después de renombrar, confirmá que la vieja dejó de crecer:
+
+```bash
+# reemplazá <serie> por el nombre ANTERIOR
+curl -sG --data-urlencode 'query=count_over_time(<serie>[1h])' \
+  http://127.0.0.1:9099/api/v1/query
+```
+
+**Y lo que esta alerta NO cubre**: que las once reglas estén cargadas no dice que sus números
+signifiquen algo. Medido el mismo día, los `avg30d` se publicaban rotulados «a 30 días» sobre
+**11,9 h de historia — el 1,65 % de la ventana**, porque el TSDB había perdido su historia el
+2026-08-31. La cobertura existe como serie (`musubi:service_up:cobertura30d`) y **ninguna alerta la
+lee**: eso sigue abierto en A93.
+
+## ComparacionRepoServidorSinCorrer
+
+**Hace más de 26 h que nadie compara el repo contra el servidor.** No dice que algo esté mal: dice
+que **dejamos de mirar**, que es el estado en el que todo lo demás de esta página se pudre sin ruido.
+
+Por qué tiene su propia alerta y no alcanza con las tres de arriba: aquéllas comparan los archivos
+desplegados **entre sí**, y se despliegan juntos, así que envejecen juntos y siguen coincidiendo
+(ver la salvedad en `ReglasDeFlotaSinDesplegar`). La única punta que **no** se copia a la máquina es
+el repo, y la única cosa que lo compara contra producción es `verificar-despliegue.sh`. Hasta el
+2026-09-05 eso corría sólo cuando alguien se acordaba: cero menciones en `.github/`, cero timers y
+cero cron, en las dos máquinas — y mientras tanto las reglas llevaban un día desplegadas a medias y
+el guion del redespliegue tres días viejo con su verificación de la migración muerta.
+
+Qué hacer, en orden:
+
+```bash
+# 1. Comparar ahora y latir. Esto solo ya apaga la alerta si el problema era que nadie corría.
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/comparar-y-latir.sh
+
+# 2. Si lo de arriba anduvo, la pregunta es por qué dejó de correr solo.
+systemctl --user status musubi-comparar.timer
+journalctl --user -u musubi-comparar.service -n 50
+```
+
+Las causas, en orden de frecuencia esperada: **la máquina que compara estuvo apagada** (es una
+estación de trabajo, no un servidor — por eso esta alerta la evalúa el Prometheus del servidor y no
+ella misma); **el timer se deshabilitó** en un upgrade o a mano; **el `ssh` dejó de funcionar sin
+clave**, y ahí el verificador no puede ni empezar; o **el empuje del latido falla** aunque la
+comparación ande, en cuyo caso `comparar-y-latir.sh` lo dice por stderr con el código HTTP.
+
+**No la silencies sin mirar `journalctl`.** Una comparación que no corre no rompe nada hoy, y ése
+es justamente el problema: la próxima divergencia va a entrar igual de callada que las dos que
+motivaron esto.
+
+## ProduccionDivergeDelRepo
+
+**La última comparación encontró divergencia**: lo que corre en el servidor no es lo que el repo
+declara. La alerta no dice qué; lo dice el verificador, eslabón por eslabón:
+
+```bash
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+Cada línea en rojo trae **qué** difiere y **en qué dirección**. Lo más común, por lo visto hasta
+hoy: reglas de alerta a medio desplegar (copiar los archivos y recargar — ver
+`ReglasDeFlotaSinDesplegar`), y guiones derivados viejos (`/usr/local/bin/musubi-backup`,
+`/usr/local/sbin/redesplegar-cerebro.sh`), que se arreglan corriendo el instalador, no copiando a
+mano: **un guion sin instalador es exactamente cómo se produjo A111**.
+
+Una divergencia puede ser deliberada — algo que se está desplegando en este momento. En ese caso la
+alerta se apaga sola cuando la próxima comparación coincide. Si es deliberada y va a durar, la
+decisión se escribe en `specs/control-de-flota/ABIERTO.md`, no se silencia acá.
+
+## DespliegueConEslabonesSinVerificar
+
+**La última comparación no pudo mirar algunos eslabones** (salida 2 del verificador). No es un verde
+con asterisco y no es lo mismo que divergencia: es **«no vi»**, y se arregla distinto que «vi algo
+mal». Tienen alertas separadas por eso, y por el mismo motivo el verificador les da códigos de
+salida distintos — confundirlos es cómo se coló el verde que dejó `CadenaDeAlertasFallando` sin
+desplegar durante semanas (A73).
+
+```bash
+cd <el árbol del repo>
+MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh
+```
+
+Los eslabones sin verificar salen marcados con **`?`** y cada uno dice qué falta para poder
+preguntarle. Las causas habituales: Prometheus o Alertmanager no contestaron (escuchan sólo en
+loopback: hace falta `MUSUBI_SSH` o el túnel), falta el bearer si el endpoint pide credencial, o el
+`ssh` no está pasando sin clave.
 
 ## MaquinaSeReinicio
 

@@ -271,3 +271,51 @@ func TestWriteMCPConfigAbsoluto(t *testing.T) {
 		t.Errorf("modo absoluto debería incluir MUSUBI_HOME: %s", s)
 	}
 }
+
+// EL AVISO DE ARRANQUE TIENE QUE NOMBRAR LA CAUSA REAL DE LA RAÍZ.
+//
+// Su versión anterior cerraba con «manda el del directorio de trabajo», y en la máquina donde más
+// importaba eso era FALSO: los daemons corren sin `MUSUBI_HOME` pero con `CLAUDE_PROJECT_DIR`, así
+// que la raíz sale de la variable y el cwd sólo coincide. Medido el 2026-09-05 en
+// `/proc/<pid>/environ`; el propio cabo A96 lo creía al revés. Un diagnóstico que nombra la causa
+// equivocada manda a mirar el cwd —que se puede cambiar— en vez de la variable —que decide—, que
+// es justo la hipótesis que ese aviso existe para matar.
+//
+// Sabotaje que la hace fallar: que `workspaceDirConOrigen` devuelva el mismo origen en los tres
+// casos, o que vuelva a preferir CLAUDE_PROJECT_DIR sobre MUSUBI_HOME.
+func TestElOrigenDeLaRaizSeDiceYNoSeAdivina(t *testing.T) {
+	casos := []struct {
+		nombre, musubiHome, claudeDir, raiz, origen string
+	}{
+		{"MUSUBI_HOME gana", "/tmp/uno", "/tmp/dos", "/tmp/uno", "MUSUBI_HOME"},
+		{"sin MUSUBI_HOME manda CLAUDE_PROJECT_DIR", "", "/tmp/dos", "/tmp/dos", "CLAUDE_PROJECT_DIR"},
+		{"sin ninguna, el cwd", "", "", ".", "el directorio actual"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			t.Setenv("MUSUBI_HOME", c.musubiHome)
+			t.Setenv("CLAUDE_PROJECT_DIR", c.claudeDir)
+			raiz, origen := workspaceDirConOrigen()
+			if raiz != c.raiz {
+				t.Errorf("raíz = %q, se esperaba %q", raiz, c.raiz)
+			}
+			if !strings.Contains(origen, c.origen) {
+				t.Errorf("origen = %q; tiene que nombrar %q — si no, el aviso manda a mirar\n"+
+					"el lugar equivocado, que es el defecto que vino a arreglar", origen, c.origen)
+			}
+		})
+	}
+
+	// Y LOS TRES ORÍGENES TIENEN QUE SER DISTINTOS ENTRE SÍ. Un aviso que dice lo mismo en los
+	// tres casos no informa nada, y pasaría las aserciones de arriba si la cadena fuera genérica.
+	vistos := map[string]bool{}
+	for _, c := range casos {
+		t.Setenv("MUSUBI_HOME", c.musubiHome)
+		t.Setenv("CLAUDE_PROJECT_DIR", c.claudeDir)
+		_, origen := workspaceDirConOrigen()
+		if vistos[origen] {
+			t.Fatalf("dos casos distintos dan el mismo origen %q: el aviso no distingue nada", origen)
+		}
+		vistos[origen] = true
+	}
+}

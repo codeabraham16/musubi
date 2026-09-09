@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"musubi/internal/embedding"
 	"musubi/internal/memory"
 )
 
@@ -34,8 +35,22 @@ func TestElRedespliegueNoTipeaLaVersionDeEsquema(t *testing.T) {
 	}
 	guion := string(crudo)
 
-	if !strings.Contains(guion, "version --esquema") {
-		t.Error("el guion ya no le pregunta al binario a qué esquema apunta: la verificación de la migración volvió a depender de que alguien se acuerde")
+	// TIENE QUE ESTAR EN UNA SUSTITUCIÓN QUE CAPTURE LA SALIDA, NO EN CUALQUIER LUGAR DEL TEXTO.
+	//
+	// `strings.Contains` a secas pasaba en verde con el sabotaje declarado. `version --esquema`
+	// aparece TRES veces en el guion: en un comentario que explica el arreglo, en el mensaje de
+	// aviso de cuando el binario no sabe contestar, y —la única que decide algo— en la asignación
+	// de `$ESPERADO`. Cambiar esa asignación por `ESPERADO=46`, que es exactamente el defecto que
+	// esta prueba existe para prohibir, dejaba las otras dos en pie y la guarda en verde.
+	// Medido el 2026-09-05; cuarto caso del día de un texto que NOMBRA la cautela y la satisface.
+	//
+	// La propiedad es estructural: el guion tiene que EJECUTAR al binario y quedarse con lo que
+	// contesta, o sea `$(… version --esquema …)`. Un comentario y un mensaje no ejecutan nada.
+	invoca := regexp.MustCompile(`\$\([^)]*version --esquema`)
+	if !invoca.MatchString(codigoDe(guion)) {
+		t.Error("el guion ya no EJECUTA `version --esquema` para saber a qué esquema apunta el binario\n" +
+			"(nombrarlo en un comentario o en un mensaje no cuenta): la verificación de la migración\n" +
+			"volvió a depender de que alguien se acuerde de actualizar un número")
 	}
 
 	// Un número comparado contra `$ESQUEMA` es exactamente la forma que se quiere prohibir. No se
@@ -99,8 +114,22 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 	}
 	guion := string(crudo)
 
-	if !strings.Contains(guion, "GOHOSTOS") {
-		t.Error("construir.sh ya no compara la plataforma destino con la del host: una compilación cruzada vuelve a terminar en rojo sobre un binario que salió bien")
+	// LA COMPARACIÓN TIENE QUE SER UNA CONDICIÓN, NO UNA MENCIÓN.
+	//
+	// `strings.Contains(guion, "GOHOSTOS")` se satisface con la línea que calcula `DESTINO_OS`
+	// —que nombra `GOHOSTOS` como valor por defecto— y con cualquier comentario. Medido el
+	// 2026-09-05 con el sabotaje declarado: cambiar el `if` entero por `if true; then` deja la
+	// guarda en VERDE, y eso es exactamente el defecto que existe para prohibir — en una
+	// compilación cruzada intenta correr un binario de Windows en Linux y la corrida termina en
+	// rojo sobre un binario que salió bien.
+	//
+	// La propiedad es que exista una CONDICIÓN que compare las dos dimensiones —sistema y
+	// arquitectura— del destino contra las del host.
+	condicion := regexp.MustCompile(`(?m)^\s*if\s.*DESTINO_OS.*GOHOSTOS.*DESTINO_ARCH.*GOHOSTARCH`)
+	if !condicion.MatchString(codigoDe(guion)) {
+		t.Error("construir.sh ya no CONDICIONA nada a que la plataforma destino sea la del host\n" +
+			"(nombrar GOHOSTOS en el valor por defecto de DESTINO_OS no alcanza): una compilación\n" +
+			"cruzada vuelve a intentar ejecutar el binario y termina en rojo sobre algo que salió bien")
 	}
 	// El `sha256sum` tiene que quedar FUERA del condicional: es lo que el otro lado usa para
 	// verificar, y perderlo en una compilación cruzada es perder justo el dato del caso remoto.
@@ -144,36 +173,81 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 		t.Fatalf("no pude leer prometheus.yml: %v", err)
 	}
 	// El regex ACTIVO, no el comentado: una línea de ejemplo no descarta nada.
+	//
+	// LAXO EN LA FORMA, DURO EN EL HECHO. Antes esto buscaba el `regex:` hasta 4 líneas por
+	// encima del `action: drop` y, si no lo encontraba, hacía `t.Skip`. Las dos mitades estaban
+	// mal y se tapaban entre sí: meter cuatro comentarios entre las dos líneas —un NO-OP para
+	// Prometheus, el descarte sigue igual de activo— hacía que el parser no viera el regex, y el
+	// Skip apagaba la prueba ENTERA reportando PASS. Medido.
+	//
+	// Ahora la presencia del descarte se detecta APARTE de poder leer su regex, y no encontrar el
+	// regex de un descarte que existe es un fallo duro: es el parser roto, no «no aplica».
 	var activo string
+	var hayDescarte bool
 	lineas := strings.Split(string(promYml), "\n")
 	for i, l := range lineas {
 		if !strings.Contains(l, "action: drop") || strings.HasPrefix(strings.TrimSpace(l), "#") {
 			continue
 		}
-		for j := i - 1; j >= 0 && j > i-5; j-- {
+		hayDescarte = true
+		// Hacia atrás hasta el borde del bloque —otro `- ` de la lista, u otro `action:`— en vez
+		// de un tope de líneas, que es lo que el relleno rompía. Los comentarios se saltean.
+		for j := i - 1; j >= 0; j-- {
 			tr := strings.TrimSpace(lineas[j])
-			if strings.HasPrefix(tr, "regex:") && !strings.HasPrefix(tr, "#") {
+			if strings.HasPrefix(tr, "#") || tr == "" {
+				continue
+			}
+			if strings.HasPrefix(tr, "regex:") {
 				activo = strings.Trim(strings.TrimSpace(strings.TrimPrefix(tr, "regex:")), `"`)
+				break
+			}
+			if strings.HasPrefix(tr, "- ") || strings.HasPrefix(tr, "action:") {
+				break
 			}
 		}
 	}
-	if activo == "" {
-		t.Skip("no hay ningún descarte activo en el scrape: esta guarda no aplica")
-	}
-	re, err := regexp.Compile("^(?:" + activo + ")$")
-	if err != nil {
-		t.Fatalf("el regex del descarte no compila (%q): %v", activo, err)
+	if hayDescarte && activo == "" {
+		t.Fatal("hay un `action: drop` activo en prometheus.yml y no pude leer su `regex:`. NO es «no aplica»: es que este parser dejó de encontrarlo, y mientras tanto el descarte sigue descartando. Arreglá el parser antes de creerle al verde")
 	}
 
-	// (1) Lo que sólo sale por el scrape no puede caer en el descarte.
-	for _, n := range seriesSoloDelScrape {
-		if re.MatchString(n) {
-			t.Errorf("el cerebro emite %q SÓLO por el scrape y el descarte (%s) lo agarra: esa serie no llega a Prometheus, y la alerta que la consuma no va a disparar nunca — sin un solo error", n, activo)
+	// (1) Lo que sólo sale por el scrape no puede caer en el descarte. Sólo esta mitad depende de
+	// que exista un descarte; la (2) corre siempre.
+	if activo != "" {
+		re, err := regexp.Compile("^(?:" + activo + ")$")
+		if err != nil {
+			t.Fatalf("el regex del descarte no compila (%q): %v", activo, err)
 		}
+		for _, n := range seriesSoloDelScrape {
+			if re.MatchString(n) {
+				t.Errorf("el cerebro emite %q SÓLO por el scrape y el descarte (%s) lo agarra: esa serie no llega a Prometheus, y la alerta que la consuma no va a disparar nunca — sin un solo error", n, activo)
+			}
+		}
+	} else {
+		t.Log("no hay descarte activo en el scrape: la mitad (1) no aplica. La (2) corre igual.")
 	}
 
-	// (2) Y no puede haber series sin declarar. Se comparan los literales del exportador contra
-	// la unión de las dos declaraciones.
+	// (2) Y no puede haber series sin declarar.
+	//
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// ESTA MITAD LEÍA UN ARCHIVO Y ESTABA DOBLEMENTE CIEGA
+	//
+	// Antes hacía `os.ReadFile("fleet_prometheus.go")` y buscaba `"(musubi_fleet_[a-z_]+)"`.
+	// No custodiaba lo que decía custodiar, por dos motivos a la vez:
+	//
+	//   1. Leía UN archivo de los veinte que emiten series de flota. `nombrePoliticaAcciones`
+	//      sale de observability.go, así que era invisible para esta guarda.
+	//   2. Y aunque hubiera leído el archivo correcto, el patrón exigía que el nombre fuera una
+	//      cadena ENTERA entre comillas. Una serie emitida con `Fprintf("%s{policy=%q}", ...)`
+	//      o nombrada en su línea `# HELP` no matchea ese patrón NUNCA.
+	//
+	// Consecuencia medida: ensanchar el descarte del scrape a `musubi_fleet_.*` —el error exacto
+	// que ya se cometió el 2026-08-31— pasaba en VERDE, y se llevaba puesta la única serie de la
+	// familia sin copia por OTLP, con tres alertas colgando.
+	//
+	// Ensanchar el grep no es el arreglo: `musubi_fleet_*` es TAMBIÉN el prefijo de las tools de
+	// flota del registry, así que barrer el paquete inunda de falsos positivos que no son series.
+	// La única fuente de verdad es la SALIDA, donde un nombre de tool no aparece jamás. Así que
+	// se renderiza /metrics igual que el handler de http.go: los tres renders, en ese orden.
 	declaradas := map[string]bool{}
 	for _, n := range seriesSoloDelScrape {
 		declaradas[n] = true
@@ -181,17 +255,54 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 	for _, s := range seriesDeFlota(time.Now(), time.Minute, "dev", nil) {
 		declaradas[s.Nombre] = true
 	}
-	fuente, err := os.ReadFile("fleet_prometheus.go")
-	if err != nil {
-		t.Fatalf("no pude leer el exportador: %v", err)
+
+	srv := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+	maquinaConMuestra(t, srv, "casa", "pc-gio", *muestraDePrueba(), ahora)
+	// Sin política sembrada `renderPoliticas` corta antes de emitir, y la serie que esta guarda
+	// dejó pasar durante meses volvería a ser invisible — ahora por falta de datos en vez de por
+	// el patrón. Sembrar es lo que hace que la prueba EJERZA el camino que dice cubrir.
+	srv.metrics.sembrarPoliticas([]string{"nginx-vivo"})
+
+	var render strings.Builder
+	render.WriteString(srv.metrics.render(srv.engine))
+	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, nil)
+	srv.renderEmpuje(&render, ahora)
+
+	// En el formato de exposición el nombre aparece de tres formas: al principio de una muestra,
+	// detrás de `# HELP` y detrás de `# TYPE`. Se toman las tres.
+	emitidas := map[string]bool{}
+	for _, l := range strings.Split(render.String(), "\n") {
+		l = strings.TrimSpace(l)
+		if resto, ok := strings.CutPrefix(l, "# HELP "); ok {
+			l = resto
+		} else if resto, ok := strings.CutPrefix(l, "# TYPE "); ok {
+			l = resto
+		} else if strings.HasPrefix(l, "#") || l == "" {
+			continue
+		}
+		if i := strings.IndexAny(l, "{ "); i >= 0 {
+			l = l[:i]
+		}
+		if strings.HasPrefix(l, "musubi_fleet_") {
+			emitidas[l] = true
+		}
 	}
-	nombres := regexp.MustCompile(`"(musubi_fleet_[a-z_]+)"`).FindAllStringSubmatch(string(fuente), -1)
-	if len(nombres) < 3 {
-		t.Fatalf("sólo se detectaron %d series en el exportador; el patrón se rompió y esta prueba no probaría nada", len(nombres))
+
+	// PISO: si el render se rompe o deja de cubrir un camino, el mapa queda corto y el bucle de
+	// abajo no recorre nada. Una prueba que pasa sobre cero series es el mismo agujero de antes.
+	if len(emitidas) < 5 {
+		t.Fatalf("sólo se emitieron %d series musubi_fleet_* en el render; la prueba no probaría nada", len(emitidas))
 	}
-	for _, m := range nombres {
-		if !declaradas[m[1]] {
-			t.Errorf("el exportador nombra %q y no está declarada ni en seriesDeFlota (viaja por OTLP) ni en seriesSoloDelScrape: nadie sabe si el descarte se la lleva", m[1])
+	// PIN DE LA REGRESIÓN: ésta es la serie que la versión anterior no podía ver, por vivir en
+	// otro archivo y salir por Fprintf. Si deja de aparecer acá, volvimos al agujero exacto.
+	if !emitidas[nombrePoliticaAcciones] {
+		t.Errorf("%s no aparece en el render: es la única serie de flota sin copia por OTLP, y es la que esta guarda no veía. Si el render dejó de cubrir observability.go, el agujero volvió", nombrePoliticaAcciones)
+	}
+
+	for n := range emitidas {
+		if !declaradas[n] {
+			t.Errorf("/metrics emite %q y no está declarada ni en seriesDeFlota (viaja por OTLP) ni en seriesSoloDelScrape: nadie sabe si el descarte se la lleva", n)
 		}
 	}
 }

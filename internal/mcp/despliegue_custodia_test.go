@@ -95,6 +95,9 @@ func exprDeAlerta(a archivoDeReglas, alerta string) (string, bool) {
 func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
+	// El SLA son recording rules, no alertas, pero `cuentaDeReglas` cuenta entradas de `rules:` y
+	// no le importa el campo — así que el mismo mecanismo sirve para custodiarlo (A93).
+	sla, _ := cargarReglas(t, "musubi-recording.yml")
 
 	casos := []struct {
 		alerta   string
@@ -104,6 +107,9 @@ func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	}{
 		{"ReglasDeFlotaSinDesplegar", base, flota, "musubi-alerts-flota.yml"},
 		{"ReglasDelCerebroSinDesplegar", flota, base, "musubi-alerts.yml"},
+		// A93 · el SLA era la única de las tres familias sin nadie que la contara. Su guarda vive
+		// en el archivo de FLOTA, que es el que se instala junto con él.
+		{"ReglasDelSlaSinDesplegar", flota, sla, "musubi-recording.yml"},
 	}
 	reNumero := regexp.MustCompile(`!=\s*(\d+)`)
 	for _, c := range casos {
@@ -149,6 +155,9 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-flota",
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-politicas",
 		"/etc/prometheus/rules/musubi-alerts-flota.yml;musubi-custodia",
+		// El del SLA. Va acá porque es donde se prueba que un matcher no se lleve grupos ajenos, y
+		// `musubi-recording.yml` es el nombre que MÁS se parece a los otros dos sin ser ninguno.
+		"/etc/prometheus/rules/musubi-recording.yml;musubi-sla",
 	}
 	reMatcher := regexp.MustCompile(`rule_group=~"([^"]+)"`)
 
@@ -159,6 +168,7 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 	}{
 		{"ReglasDeFlotaSinDesplegar", base, "musubi-alerts-flota.yml"},
 		{"ReglasDelCerebroSinDesplegar", flota, "musubi-alerts.yml"},
+		{"ReglasDelSlaSinDesplegar", flota, "musubi-recording.yml"},
 	}
 	for _, c := range casos {
 		expr, ok := exprDeAlerta(c.en, c.alerta)
@@ -251,12 +261,40 @@ func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 
+	// LAS COMILLAS SIMPLES CUENTAN, Y NO CONTARLAS ERA UN AGUJERO CON DIENTES.
+	//
+	// La primera versión aceptaba `"?`, o sea comillas dobles o nada. `- job_name: 'altura-db'` es
+	// YAML válido y es el estilo que usa media documentación de Prometheus — y quedaba INVISIBLE
+	// para esta guarda. Medido el 2026-09-05, en las dos direcciones:
+	//
+	//   · declarar un job con comillas simples y NO sumarlo a la alerta -> la guarda pasa en VERDE.
+	//     Es exactamente el agujero de A73, que es para lo que esta prueba existe.
+	//   · declararlo con comillas simples Y sumarlo a la alerta (lo correcto) -> la guarda FALLA,
+	//     diciendo «la alerta vigila el job "altura-db", que prometheus.yml no declara: nunca va a
+	//     existir y la alerta queda encendida para siempre».
+	//
+	// O sea que premiaba el defecto y castigaba el arreglo, con un mensaje que manda a sacar la
+	// línea correcta. Peor que no mirar.
+	// SE LEE EL VALOR ENTERO Y DESPUÉS SE LE SACAN LAS COMILLAS, en vez de describir con una clase
+	// de caracteres qué puede tener un nombre de job. Una clase se queda corta EN SILENCIO: con
+	// `[A-Za-z0-9_.-]+`, el job `"un.job.raro@2"` se leía como `un.job.raro` —cortado en el `@`— y
+	// el control de conteo tampoco lo veía, porque un nombre truncado sigue contando como uno.
+	// Leer hasta el fin de la línea no puede quedarse corto.
 	var declarados []string
-	for _, m := range regexp.MustCompile(`(?m)^\s*-\s*job_name:\s*"?([A-Za-z0-9_-]+)"?`).FindAllStringSubmatch(cfg, -1) {
-		declarados = append(declarados, m[1])
+	for _, m := range regexp.MustCompile(`(?m)^\s*-\s*job_name:\s*(.+?)\s*(?:#.*)?$`).FindAllStringSubmatch(cfg, -1) {
+		declarados = append(declarados, strings.Trim(m[1], `"'`))
 	}
 	if len(declarados) == 0 {
 		t.Fatal("no se encontró ningún job_name en prometheus.yml: el patrón se rompió y la prueba no probaría nada")
+	}
+	// Y EL CONTROL DE «LOS VI A TODOS», que es lo que faltaba: contar las líneas `job_name:` sin
+	// interpretar el valor. Si un estilo de comillas nuevo se le escapa al regex de arriba, esto lo
+	// dice en vez de dejar la diferencia en silencio — el modo de falla no era una aserción
+	// equivocada, era un recorrido que no llegaba.
+	if lineas := len(regexp.MustCompile(`(?m)^\s*-\s*job_name:`).FindAllString(cfg, -1)); lineas != len(declarados) {
+		t.Fatalf("prometheus.yml tiene %d líneas `job_name:` y el patrón sólo pudo leer %d nombres (%s):\n"+
+			"hay una forma de escribirlo que esta prueba no reconoce, así que esos jobs quedan sin vigilar\n"+
+			"y la guarda lo diría en verde.", lineas, len(declarados), strings.Join(declarados, ", "))
 	}
 
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
@@ -392,4 +430,451 @@ func TestLaVersionDeGoNoDiverge(t *testing.T) {
 			"prueba sobra y hay que borrarla a conciencia, no dejarla pasando en verde sobre nada)")
 	}
 	t.Logf("%d pines de go-version comprobados contra go.mod (%s)", vistos, quiere)
+}
+
+// TestElPinDelGuionDeRedespliegueEsElVerdadero — el hermano del pin del backup (A111).
+//
+// EL CABO, MEDIDO EL 2026-09-05: de los dos guiones derivados que viven en el servidor,
+// `/usr/local/bin/musubi-backup` coincidía BYTE A BYTE con `deploy/musubi-backup.sh` y
+// `/home/musubi/redesplegar-cerebro.sh` tenía 9690 bytes contra 19469 del repo — con su
+// verificación de la migración muerta (`[[ "$ESQUEMA" -ge 37 ]]` con la base ya en 46: vacuamente
+// cierta), que pasó así en los seis redespliegues del 4 y el 5.
+//
+// La diferencia entre el que se mantuvo al día y el que no NO fue el cuidado de nadie: fue que uno
+// lo instalaba `install-musubi-brain.sh` detrás de una compuerta de sha256 y el otro llegaba a
+// mano. Es la lección de siempre —el hermano sin la guarda—, y por eso el arreglo fue darle al
+// redespliegue el mismo instalador, que trae consigo el mismo pin escrito a mano, que se pudre
+// igual. De ahí esta prueba.
+//
+// Y ACÁ EL PIN PODRIDO CUESTA MÁS QUE EN EL BACKUP: este guion reemplaza el binario del cerebro y
+// se corre como root, así que un `die` del instalador deja al servidor sin ninguna forma
+// verificada de actualizarse — y la salida a mano es justamente la que produjo la deriva.
+func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/redesplegar-cerebro.sh: %v", err)
+	}
+	real := fmt.Sprintf("%x", sha256.Sum256(guion))
+
+	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^REDESPLIEGUE_SHA256="([a-f0-9]{64})"`).FindSubmatch(inst)
+	if m == nil {
+		t.Fatal("install-musubi-brain.sh no declara REDESPLIEGUE_SHA256=\"<sha256>\": o se quitó la " +
+			"verificación del guion de redespliegue —y entonces se instala sin verificar el archivo " +
+			"que reemplaza el binario del cerebro corriendo como root— o cambió de forma y esta " +
+			"guarda dejó de mirar donde debe")
+	}
+	if pin := string(m[1]); pin != real {
+		t.Errorf("el pin del guion de redespliegue quedó viejo:\n"+
+			"  install-musubi-brain.sh dice:        %s\n"+
+			"  deploy/redesplegar-cerebro.sh es:    %s\n"+
+			"Alguien editó el guion y no actualizó el pin. El instalador hace `die` y el servidor "+
+			"queda sin guion de redespliegue verificado — y la salida a mano es exactamente lo que "+
+			"produjo A111.\nArreglo:  sha256sum deploy/redesplegar-cerebro.sh", pin, real)
+	}
+}
+
+// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
+// corta cuando alguien agregue el tercero (A111).
+//
+// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
+// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
+// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
+// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
+// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
+//
+// LA FUENTE MECÁNICA ES EL INSTALADOR: todo lo que llega al servidor con `install` está declarado
+// ahí, con su destino. Esta prueba lo lee, resuelve cada variable de destino, y exige que aparezca
+// en la tabla del verificador. El binario del cerebro es la única excepción y está nombrada abajo
+// con su razón; cualquier destino NUEVO rompe la prueba hasta que alguien decida qué hacer con él.
+func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
+	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
+	}
+	verif, err := os.ReadFile(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/verificar-despliegue.sh: %v", err)
+	}
+
+	// Las asignaciones literales del instalador, para poder resolver "$BACKUP_BIN" → la ruta.
+	rutaDe := map[string]string{}
+	for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"$]*)"`).FindAllSubmatch(inst, -1) {
+		rutaDe[string(m[1])] = string(m[2])
+	}
+
+	// Sólo el `install` de CÓDIGO. Las líneas de comentario que citan el comando —y hay varias,
+	// porque el instalador explica por qué usa `install` y no `mv`— no instalan nada, y contarlas
+	// sería la falla de siempre: una guarda satisfecha por un texto que no decide.
+	var destinos []string
+	for _, linea := range strings.Split(string(inst), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if strings.HasPrefix(codigo, "#") {
+			continue
+		}
+		m := regexp.MustCompile(`\binstall\s+-m\s+[0-7]{3,4}\s+(?:-o\s+\S+\s+)?(?:-g\s+\S+\s+)?"[^"]+"\s+"\$([A-Z_]+)"`).FindStringSubmatch(codigo)
+		if m != nil {
+			destinos = append(destinos, m[1])
+		}
+	}
+	if len(destinos) == 0 {
+		t.Fatal("no encontré ningún `install -m ... \"$DESTINO\"` en install-musubi-brain.sh: o el " +
+			"instalador dejó de instalar por ahí y esta guarda mira donde ya no se decide, o cambió " +
+			"de forma. En cualquiera de los dos casos la lista de guiones derivados quedó sin fuente")
+	}
+
+	// LA ÚNICA EXCEPCIÓN, con su razón. El binario del cerebro no se compara por sha contra el
+	// repo porque el repo no lo trae: se compila. Su deriva la mira la sección «versión del
+	// cerebro» de `verificar-despliegue.sh`, que le pregunta `musubi version` y la cruza contra
+	// VERSION. Es otra pregunta, no una menos.
+	const binarioDelCerebro = "BIN"
+
+	// LA TABLA SE EXTRAE ANTES Y LA MEMBRESÍA SE PREGUNTA ADENTRO DE ELLA, no en todo el archivo.
+	// Preguntar `strings.Contains(verificador, ruta)` habría dejado que un COMENTARIO que nombra la
+	// ruta satisficiera la guarda sin comparar nada — que es el defecto dominante del 2026-09-05
+	// (siete guardas en verde sobre su propio sabotaje, todas por un texto que vivía donde no
+	// decide) y sería especialmente ridículo acá, en la guarda que existe para cerrarlo.
+	tabla := regexp.MustCompile(`(?s)GUIONES_DERIVADOS="(.*?)"`).FindStringSubmatch(string(verif))
+	if tabla == nil {
+		t.Fatal("verificar-despliegue.sh ya no declara GUIONES_DERIVADOS=\"...\": la tabla cambió de " +
+			"forma y esta guarda —y el arreglo de A111— dejaron de tener dónde apoyarse")
+	}
+
+	sort.Strings(destinos)
+	comprobados := 0
+	for _, v := range destinos {
+		if v == binarioDelCerebro {
+			continue
+		}
+		ruta, ok := rutaDe[v]
+		if !ok {
+			t.Errorf("el instalador instala en $%s y no encuentro su asignación literal: no puedo "+
+				"saber qué ruta es, así que tampoco puedo comprobar que alguien la compare", v)
+			continue
+		}
+		// LA CLASE, NO EL CASO: ningún destino de instalación puede colgar de /home.
+		// Se pregunta ANTES que la pertenencia a la tabla a propósito: una ruta bajo /home está mal
+		// aunque alguien la compare, y agregarla a la tabla no la lava — sería un rojo contestado con
+		// el arreglo equivocado.
+		//
+		// El arreglo de A111 movió `redesplegar-cerebro.sh` del home de `musubi` a /usr/local/sbin
+		// porque se corre con `sudo` y vivía en un directorio que escribe el uid 1000 — el mismo con
+		// el que corre `musubi_fleet_exec`, o sea que quien alcance el canal del agente podía dejar
+		// código escrito ahí y esperar al próximo redespliegue.
+		//
+		// MEDIDO EN EL SERVIDOR EL 2026-09-05, y esto es lo que convierte el caso en una clase: en
+		// `/home/musubi` hay DIECISÉIS archivos ejecutables `.sh`/`.py` con la misma forma
+		// —`arreglar-principals.py`, `backup-secrets.sh`, `b1-instalar-timer.sh`, `b1-adjudicar.sh`,
+		// entre otros—. Ninguno lo corre root hoy por systemd ni por cron (verificado: las dos
+		// unidades que apuntan a /home corren con `User=musubi`, y no hay nada en /etc/cron.d, en
+		// /etc/crontab ni en el cron de root), así que la exposición de hoy es exactamente una: un
+		// humano haciendo `sudo` sobre un archivo que el uid del agente puede reescribir. Pero nada
+		// impide la siguiente, y custodiar «el redespliegue está en /usr/local/sbin» habría cerrado
+		// el caso dejando la clase abierta — que es el defecto que este repo repite.
+		if strings.HasPrefix(ruta, "/home/") {
+			t.Errorf("el instalador instala %s (en $%s), que cuelga de /home.\n"+
+				"Un archivo bajo /home lo escribe el dueño de ese home; si además se corre con `sudo` "+
+				"—o lo lee algo privilegiado— es un camino de escalada, y en este servidor no es "+
+				"teórico: `musubi_fleet_exec` corre como ese mismo uid.\n"+
+				"Arreglo: instalalo bajo /usr/local/bin o /usr/local/sbin, que son de root", ruta, v)
+			continue
+		}
+
+		// Se busca `|<ruta>` y dentro de `tabla[1]`: así es como la tabla la escribe —después del
+		// archivo del repo— y ahí es donde la ruta DECIDE que se compare algo.
+		if !strings.Contains(tabla[1], "|"+ruta) {
+			t.Errorf("`install-musubi-brain.sh` instala %s (en $%s) y `verificar-despliegue.sh` NO lo "+
+				"compara contra el repo.\nEs A111 otra vez con otro archivo: un guion que llega al "+
+				"servidor y que nada cruza contra su fuente se queda viejo en silencio, y no hay "+
+				"daemon que lo relea —el archivo ES lo que corre—.\nArreglo: agregá la fila "+
+				"`<archivo del repo>|%s` a GUIONES_DERIVADOS en deploy/verificar-despliegue.sh", ruta, v, ruta)
+			continue
+		}
+		comprobados++
+	}
+	if comprobados == 0 {
+		t.Fatal("no quedó ningún destino que comprobar después de descontar el binario del cerebro: " +
+			"esta prueba estaría en verde sin haber mirado nada")
+	}
+
+	// La tabla al revés: que cada archivo que declara exista. Una fila que apunta a un archivo
+	// borrado compara contra la nada, y el verificador lo diría en rojo recién en el servidor.
+	filas := 0
+	for _, fila := range strings.Split(tabla[1], "\n") {
+		fila = strings.TrimSpace(fila)
+		if fila == "" {
+			continue
+		}
+		partes := strings.SplitN(fila, "|", 2)
+		if len(partes) != 2 {
+			t.Errorf("fila mal formada en GUIONES_DERIVADOS: %q (se espera `<archivo del repo>|<ruta en el servidor>`)", fila)
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("..", "..", partes[0])); err != nil {
+			t.Errorf("GUIONES_DERIVADOS declara %q y ese archivo no existe en el repo: la comparación "+
+				"no tiene contra qué correr", partes[0])
+			continue
+		}
+		filas++
+	}
+	t.Logf("%d destinos instalados comprobados contra la tabla, %d filas de la tabla con archivo presente", comprobados, filas)
+}
+
+// TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas — el acoplamiento nuevo de A115.
+//
+// EL CABO QUE ESTO CIERRA ES EL DE SIEMPRE, UN PISO MÁS ARRIBA. `comparar-y-latir.sh` empuja dos
+// gauges y tres alertas de `musubi-alerts.yml` los miran. Los nombres viven en DOS archivos que
+// nadie compara, en dos lenguajes distintos —un sobre JSON y una expresión PromQL—, así que
+// renombrar la métrica en el guion no rompe nada visible: el empuje sigue andando, las alertas
+// siguen cargadas, y quedan mirando una serie que ya no llega. **Y el modo de falla es el peor
+// que hay acá: las tres alertas se quedan CALLADAS**, que es exactamente lo que significan cuando
+// todo está bien. `ComparacionRepoServidorSinCorrer` tiene un brazo `absent(...)` y taparía el
+// caso —dispararía—, pero las otras dos no, y una alarma que se apaga por renombre es la forma
+// que A73 vino a cerrar.
+//
+// SE MIRA DONDE DECIDE, NO DONDE SE MENCIONA. En el guion los nombres salen del campo `"name"`
+// del sobre OTLP, que es lo único que viaja; el encabezado los NOMBRA en prosa —explica por qué
+// el timestamp va explícito— y esa mención no empuja nada. En el archivo de alertas salen de la
+// expresión y no de las anotaciones. Es la lección dominante del 2026-09-05, y acá tenía dos
+// puertas de entrada.
+func TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas(t *testing.T) {
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "comparar-y-latir.sh"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/comparar-y-latir.sh: %v", err)
+	}
+	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
+	}
+
+	// ── Lo que el guion EMPUJA: el campo "name" del sobre, en líneas que no son comentario ──
+	empujadas := map[string]bool{}
+	reNombre := regexp.MustCompile(`"name"\s*:\s*"(musubi_[a-z0-9_]+)"`)
+	for _, linea := range strings.Split(string(guion), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(linea), "#") {
+			continue
+		}
+		for _, m := range reNombre.FindAllStringSubmatch(linea, -1) {
+			empujadas[m[1]] = true
+		}
+	}
+	if len(empujadas) == 0 {
+		t.Fatal("no encontré ninguna métrica en el sobre OTLP de deploy/comparar-y-latir.sh " +
+			"(un campo `\"name\": \"musubi_...\"` fuera de comentarios). O el guion dejó de empujar " +
+			"—y entonces las tres alertas de A115 miran una serie que nadie escribe— o cambió de " +
+			"forma y esta guarda mira donde ya no se decide")
+	}
+
+	// ── Lo que las alertas MIRAN: sólo el bloque `expr:`, nunca las anotaciones ─────────────
+	miradas := map[string]bool{}
+	reMetrica := regexp.MustCompile(`\bmusubi_verificacion_[a-z0-9_]+`)
+	reCorte := regexp.MustCompile(`^(for|labels|annotations|keep_firing_for)\s*:|^- alert:`)
+	dentro := false
+	for _, linea := range strings.Split(string(alertas), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if i := strings.Index(codigo, "#"); i == 0 {
+			continue
+		}
+		if strings.HasPrefix(codigo, "expr:") {
+			dentro = true
+		} else if dentro && reCorte.MatchString(codigo) {
+			dentro = false
+		}
+		if dentro {
+			for _, m := range reMetrica.FindAllString(codigo, -1) {
+				miradas[m] = true
+			}
+		}
+	}
+
+	// ── Las dos direcciones. Cada una es un defecto distinto y se arregla distinto ──────────
+	for m := range empujadas {
+		if !miradas[m] {
+			t.Errorf("`comparar-y-latir.sh` empuja %s y NINGUNA expresión de musubi-alerts.yml la mira.\n"+
+				"Una métrica que se empuja y nadie lee es trabajo que se paga y no se cobra — y si "+
+				"reemplazó a la que sí se leía, las alertas de A115 quedaron calladas mirando una "+
+				"serie muerta, que es indistinguible de «todo bien».", m)
+		}
+	}
+	for m := range miradas {
+		if !empujadas[m] {
+			t.Errorf("una alerta de musubi-alerts.yml mira %s y `comparar-y-latir.sh` NO la empuja.\n"+
+				"Esa alerta no puede dispararse nunca: es el defecto exacto de A73 —una regla cargada "+
+				"sobre una métrica que no existe se ve igual que una regla en verde—.\n"+
+				"O se renombró la métrica en el guion y no acá, o la alerta se escribió contra una "+
+				"serie que nadie produce.", m)
+		}
+	}
+	t.Logf("%d métrica(s) empujada(s) y las mismas %d miradas por las alertas", len(empujadas), len(miradas))
+}
+
+// TestLasAlertasDelLatidoLeenLaSerieConLastOverTime — el defecto que sólo se vio corriéndolo.
+//
+// UNA SERIE EMPUJADA NO ESTÁ CASI NUNCA. Prometheus la marca rancia ~5 minutos después de cada
+// empuje y desaparece del vector instantáneo. Medido el 2026-09-05 contra el servidor, el mismo
+// dato consultado en cuatro instantes: a los 58 s presente; a los 308 s, 508 s y 608 s AUSENTE,
+// mientras `last_over_time(...[7d])` lo encontraba en los cuatro. Y `comparar-y-latir.sh` late
+// cada SEIS HORAS.
+//
+// ESCRITAS CON LA MÉTRICA PELADA, LAS TRES ALERTAS ESTABAN ROTAS EN LAS DOS DIRECCIONES A LA VEZ:
+//
+//	· `ComparacionRepoServidorSinCorrer` disparaba a los cinco minutos de CADA latido, por su
+//	  brazo `absent()` — un falso positivo cada 6 h para siempre, que es cómo se enseña a ignorar
+//	  un canal (los trece `MaquinaCaida` de A79).
+//	· `ProduccionDivergeDelRepo` y `DespliegueConEslabonesSinVerificar` NO PODÍAN DISPARARSE
+//	  NUNCA: su `for` de 30 min no llega a cumplirse antes de que la serie se evapore. Y el modo
+//	  de falla es mudo — `max()` sobre una serie rancia no da 0, no da NADA, y una expresión sin
+//	  resultado no alerta.
+//
+// NINGUNA LECTURA DEL YAML LO MOSTRABA: las tres expresiones se leen perfectamente bien y dicen
+// lo que uno quiere que digan. Se vio porque se corrió y la alerta apareció disparando con el
+// latido recién empujado. Por eso esta guarda es sobre la FORMA de la expresión y no sobre su
+// sentido: el sentido ya era correcto.
+func TestLasAlertasDelLatidoLeenLaSerieConLastOverTime(t *testing.T) {
+	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	if err != nil {
+		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
+	}
+
+	// Sólo el bloque `expr:`. Estas métricas se nombran también en comentarios —el que explica
+	// esta misma medición las cita— y ahí no deciden nada.
+	reCorte := regexp.MustCompile(`^(for|labels|annotations|keep_firing_for)\s*:|^- alert:`)
+	// La forma buena: la métrica va DENTRO de last_over_time( o absent_over_time( y con rango.
+	reEnvuelta := regexp.MustCompile(`(last_over_time|absent_over_time)\(\s*musubi_verificacion_[a-z0-9_]+\s*\[`)
+	reCruda := regexp.MustCompile(`musubi_verificacion_[a-z0-9_]+`)
+
+	dentro, vistas := false, 0
+	for n, linea := range strings.Split(string(alertas), "\n") {
+		codigo := strings.TrimSpace(linea)
+		if strings.HasPrefix(codigo, "#") {
+			continue
+		}
+		if strings.HasPrefix(codigo, "expr:") {
+			dentro = true
+		} else if dentro && reCorte.MatchString(codigo) {
+			dentro = false
+		}
+		if !dentro {
+			continue
+		}
+		// Se tachan las apariciones bien envueltas y se mira si sobra alguna: contar unas y otras
+		// por separado daría verde en una línea que tenga una envuelta y una pelada.
+		crudas := len(reCruda.FindAllString(codigo, -1))
+		if crudas == 0 {
+			continue
+		}
+		vistas += crudas
+		if envueltas := len(reEnvuelta.FindAllString(codigo, -1)); envueltas < crudas {
+			t.Errorf("musubi-alerts.yml:%d lee una serie del latido SIN `last_over_time`/`absent_over_time`:\n"+
+				"  %s\n"+
+				"Una serie EMPUJADA se pone rancia ~5 min después de cada empuje y el latido es cada 6 h, "+
+				"así que en el vector instantáneo no está casi nunca. Escrita así, la alerta o dispara "+
+				"en falso el 99%% del tiempo (si pregunta por `absent`) o no puede dispararse jamás "+
+				"(si su `for` es más largo que los 5 min de vida de la serie). Las dos fallas son mudas "+
+				"al leer el YAML: la expresión se lee bien.\n"+
+				"Arreglo: envolvela — `last_over_time(<metrica>[7d])`, o `absent_over_time(<metrica>[7d])`.",
+				n+1, codigo)
+		}
+	}
+	if vistas == 0 {
+		t.Fatal("no encontré ninguna serie `musubi_verificacion_*` en las expresiones de " +
+			"musubi-alerts.yml: o las alertas del latido de A115 se fueron —y entonces la " +
+			"comparación repo↔servidor volvió a no tener quien la vigile— o cambiaron de nombre y " +
+			"esta guarda quedó mirando al vacío en verde")
+	}
+	t.Logf("%d lectura(s) de la serie del latido, todas envueltas", vistas)
+}
+
+// TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo — A109 aplicado a la CLASE.
+//
+// EL CABO, Y ES SOBRE UNA GUARDA MÍA. A109 encontró que `avisarQueConfigGobierna` cerraba con
+// «manda el del directorio de trabajo» y midió que es FALSO donde más importa: los daemons de esta
+// máquina corren SIN `MUSUBI_HOME` pero CON `CLAUDE_PROJECT_DIR`, así que la raíz sale de la
+// variable y el cwd sólo coincide. Se corrigió, y la guarda que se escribió
+// —`TestElOrigenDeLaRaizSeDiceYNoSeAdivina`— prueba el COMPORTAMIENTO de `workspaceDirConOrigen`.
+//
+// Eso no cubre la afirmación escrita en otro lado, y por eso sobrevivió una: el check
+// `config_que_gobierna` de `internal/memory/doctor_config.go` —que existe justamente para
+// contestar «¿cuál config manda acá?»— terminaba con la misma frase. Encontrado el 2026-09-05
+// corriéndolo, no leyéndolo. La lección aprendida de un lado y no del hermano, otra vez.
+//
+// SE MIRAN LOS LITERALES DE CADENA Y NO LOS COMENTARIOS, y no es por comodidad: el defecto es lo
+// que se le DICE al operador. Un comentario que explica por qué la frase está prohibida —como éste—
+// no manda a nadie a mirar el cwd. Mirar el archivo entero pondría en rojo su propia documentación,
+// que es la trampa en la que cayó la guarda gemela de A109 en su primera corrida.
+func TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo(t *testing.T) {
+	// SE PROHÍBE LA PROPIEDAD, NO UNA REDACCIÓN — y esto lo enseñó el sabotaje de esta misma
+	// guarda. La primera versión buscaba la cadena exacta `manda el del directorio de trabajo`,
+	// que es como lo decía `avisarQueConfigGobierna`. El defecto real que la motivó decía «el que
+	// manda ES EL del directorio de trabajo», con dos palabras de más, y la guarda NO lo cazaba:
+	// habría pasado en verde sobre la instancia que la hizo existir. Ahora se busca la relación
+	// —«manda» cerca de «directorio de trabajo»— y no una frase.
+	//
+	// Y se juntan TODOS los literales del archivo antes de buscar, porque un mensaje largo se
+	// escribe concatenado en varias líneas: partido en dos literales, ninguno contendría la
+	// relación entera y el archivo pasaría entero.
+	reProhibida := regexp.MustCompile(`(?i)manda[^"]{0,40}` + "directorio de " + "trabajo")
+	// Un literal de cadena de Go, en una línea que no es comentario.
+	reLiteral := regexp.MustCompile(`"[^"]*"`)
+
+	raiz := filepath.Join("..", "..")
+	revisados := 0
+	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "worktrees", ".claude":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		b, e := os.ReadFile(ruta)
+		if e != nil {
+			return nil
+		}
+		revisados++
+		var literales []string
+		primera := 0
+		for n, linea := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(linea), "//") {
+				continue
+			}
+			for _, lit := range reLiteral.FindAllString(linea, -1) {
+				if primera == 0 && reProhibida.MatchString(strings.Join(append(literales, lit), " ")) {
+					primera = n + 1
+				}
+				literales = append(literales, lit)
+			}
+		}
+		{
+			blob := strings.Join(literales, " ")
+			if m := reProhibida.FindString(blob); m != "" {
+				t.Errorf("%s:%d le dice al operador que decide el directorio de trabajo:\n  %s\n"+
+					"Es FALSO donde más importa: un daemon sin MUSUBI_HOME y con CLAUDE_PROJECT_DIR "+
+					"toma la raíz de la VARIABLE, y el cwd sólo coincide (medido en /proc/<pid>/environ, "+
+					"A109). Un diagnóstico que nombra la causa equivocada manda a mirar el cwd —que se "+
+					"puede cambiar— en vez de la variable, que decide.\n"+
+					"Arreglo: nombrá la raíz resuelta y de dónde salió (`workspaceDirConOrigen`), o "+
+					"apuntá a donde eso se dice, en vez de afirmar una causa que este código no conoce.",
+					ruta, primera, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("recorriendo el repo: %v", err)
+	}
+	if revisados < 50 {
+		t.Fatalf("sólo se revisaron %d archivos .go: el recorrido no está mirando el repo y esta "+
+			"guarda pasaría en verde sin haber leído nada", revisados)
+	}
+	t.Logf("%d archivos .go de producción revisados", revisados)
 }

@@ -359,7 +359,7 @@ groups:
       # queda apagado y sólo se comprueba el conteo si el archivo está.
       - alert: ReglasDeFlotaSinDesplegar
         expr: >-
-          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 24
+          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 29
           or (absent(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"})
           and on() (count(musubi_fleet_device_up) > 0))
         for: 30m
@@ -367,3 +367,91 @@ groups:
         annotations:
           summary: "Las reglas de flota que corren no son las que declara el repo."
           nota: "Quedó una versión vieja del archivo cargada. `deploy/verificar-despliegue.sh` dice exactamente cuáles reglas faltan o sobran. Ver deploy/RUNBOOK.md#reglasdeflotasindesplegar"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # LAS TRES DE ABAJO SON LO ÚNICO DESATENDIDO CUYA EXPECTATIVA NO VIAJA CON LO QUE VIGILA (A115)
+      #
+      # Las guardas de arriba —`ReglasDeFlotaSinDesplegar` y su hermana en el archivo de flota— se
+      # custodian cruzadas, que fue la respuesta correcta de A93 a otra pregunta. **Pero el
+      # despliegue copia los dos archivos JUNTOS, así que envejecen juntos y sus dos números se
+      # siguen dando la razón.** Medido el 2026-09-05: el `musubi-alerts.yml` desplegado difería
+      # del repo en UN renglón —`!= 24` contra `!= 27`, con los dos archivos pesando los mismos
+      # 23912 bytes— y `ReglasDeFlotaSinDesplegar` estaba en VERDE mientras faltaban tres reglas,
+      # precisamente porque el despliegue entero estaba atrasado.
+      #
+      # Un número que viaja adentro de lo que vigila no lo vigila. Éstas no tienen ese problema
+      # porque su expectativa no es un número escrito en ningún archivo desplegado: es el RELOJ.
+      # Un timestamp no puede quedarse viejo y darse la razón a sí mismo.
+      #
+      # Quien las alimenta es `deploy/comparar-y-latir.sh`, que corre `verificar-despliegue.sh`
+      # —comparando contra el repo, la única punta que no se copia a la máquina— y empuja el
+      # resultado por OTLP.
+      - alert: ComparacionRepoServidorSinCorrer
+        # EL DEAD-MAN, Y ES LA MITAD QUE IMPORTA.
+        #
+        # Poner la comparación en un timer y nada más movería el silencio de lugar: en vez de
+        # «nadie se acordó» sería «el timer está muerto», igual de invisible. Esto lo hace ruidoso.
+        # Y el latido lo evalúa el Prometheus del SERVIDOR, así que si la máquina que compara se
+        # apaga —es una estación de trabajo, no un servidor— suena acá y no allá: la diferencia
+        # entre un dead-man y el vigilante adentro del cajón (B13).
+        #
+        # `absent_over_time(...)` cuenta: que la serie no exista NUNCA es el caso peor —nadie
+        # comparó jamás, o el TSDB perdió la historia— y sin ese brazo la alerta no podría
+        # dispararse en el único estado que de verdad importa. Es el defecto de A73.
+        #
+        # ── POR QUÉ `last_over_time` Y NO LA MÉTRICA PELADA. MEDIDO, NO SUPUESTO ──────────────
+        #
+        # Una serie EMPUJADA existe en el vector instantáneo sólo ~5 minutos después de cada
+        # empuje; pasado eso Prometheus la marca rancia y desaparece. Medido el 2026-09-05 contra
+        # este mismo servidor, consultando el mismo dato en cuatro instantes:
+        #
+        #     +58 s   instantáneo=presente    last_over_time[7d]=presente
+        #     +308 s  instantáneo=AUSENTE     last_over_time[7d]=presente
+        #     +608 s  instantáneo=AUSENTE     last_over_time[7d]=presente
+        #
+        # Y esto late cada 6 HORAS. Escrito con la métrica pelada, las tres alertas de este bloque
+        # estaban rotas **en las dos direcciones a la vez**: ésta disparaba a los cinco minutos de
+        # CADA latido —un falso positivo cada 6 h para siempre, que es cómo se enseña a ignorar un
+        # canal (los trece `MaquinaCaida` de A79)— y las otras dos NO PODÍAN DISPARARSE NUNCA,
+        # porque su `for: 30m` no llega a cumplirse antes de que la serie se evapore. Un `max()`
+        # sobre una serie rancia no da 0: no da NADA, y una expresión sin resultado no alerta.
+        #
+        # Se descubrió corriéndolo. Ninguna lectura del YAML lo mostraba: las tres expresiones se
+        # leen perfectamente bien. Lo custodia `TestLasAlertasDelLatidoLeenLaSerieConLastOverTime`.
+        expr: >-
+          absent_over_time(musubi_verificacion_despliegue_ultima_seconds[7d])
+          or (time() - max(last_over_time(musubi_verificacion_despliegue_ultima_seconds[7d]))) > 93600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace más de 26 h que nadie compara el repo contra el servidor."
+          nota: "La comparación repo↔producción es lo único que caza «arreglado en el repo, nunca llegado a la máquina». Corré `MUSUBI_SSH=musubi-server ./deploy/comparar-y-latir.sh` desde el árbol del repo, y mirá por qué dejó de correr sola. Ver deploy/RUNBOOK.md#comparacionreposervidorsincorrer"
+          runbook: "deploy/RUNBOOK.md#comparacionreposervidorsincorrer"
+
+      - alert: ProduccionDivergeDelRepo
+        # El resultado viaja EN el latido y no en un canal aparte: si «divergió» y «no corrió»
+        # compartieran señal, se leerían igual y se arreglan distinto.
+        #
+        # `last_over_time` por lo medido arriba: una serie empujada se pone rancia a los ~5 min
+        # y esto late cada 6 h, así que escrita pelada esta alerta NO PODÍA DISPARARSE NUNCA —
+        # su `for` de 30 min no llega a cumplirse antes de que la serie desaparezca—.
+        expr: max(last_over_time(musubi_verificacion_despliegue_resultado[7d])) == 1
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Lo que corre en el servidor no es lo que el repo declara."
+          nota: "La última comparación encontró divergencia. Corré `MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh` para ver QUÉ y en qué dirección: dice cada eslabón por separado. Ver deploy/RUNBOOK.md#producciondivergedelrepo"
+          runbook: "deploy/RUNBOOK.md#producciondivergedelrepo"
+
+      - alert: DespliegueConEslabonesSinVerificar
+        # Salida 2 del verificador: «no pude preguntar». NO comparte alerta con la divergencia, por
+        # el mismo motivo por el que no comparte código de salida — «vi algo mal» y «no vi» se
+        # arreglan distinto, y confundirlos es cómo se coló el verde que dejó
+        # `CadenaDeAlertasFallando` sin desplegar durante semanas (A73).
+        expr: max(last_over_time(musubi_verificacion_despliegue_resultado[7d])) == 2
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La última comparación no pudo mirar algunos eslabones."
+          nota: "No es un verde con asterisco: hay partes del despliegue que quedaron SIN comparar. La salida del verificador marca con «?» cuáles y qué falta para poder preguntarles. Ver deploy/RUNBOOK.md#despliegueconeslabonessinverificar"
+          runbook: "deploy/RUNBOOK.md#despliegueconeslabonessinverificar"

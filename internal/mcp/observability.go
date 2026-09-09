@@ -74,6 +74,24 @@ type serverMetrics struct {
 	unauthorized atomic.Int64 // subconjunto 401, útil para detectar fuerza bruta
 	serverError  atomic.Int64 // respuestas 5xx
 
+	// DESGLOSE DE LOS 401 POR MOTIVO (A88). `unauthorized` solo dice «alguien falló» y con eso no
+	// se puede decidir nada: un cliente propio al que le sacaron la variable de entorno y alguien
+	// probando tokens producen el mismo número. Estos dos separan los dos mundos, y la cardinalidad
+	// tiene techo (son dos series, no una por IP).
+	authSinCredencial atomic.Int64 // request sin cabecera Authorization
+	authDesconocida   atomic.Int64 // credencial presentada y no reconocida (o vencida)
+	// authBloqueado cuenta los 429 del candado anti fuerza-bruta. Va aparte de los 401 porque
+	// significa otra cosa: no es «tu credencial está mal», es «esta IP ya agotó sus intentos».
+	authBloqueado atomic.Int64
+	//
+	// OJO AL COMPARAR CON DATOS ANTERIORES AL 2026-09-05: `unauthorized` cuenta RESPUESTAS 401, no
+	// fallos de auth, y al mover el candado detrás del token (A88) el QUINTO fallo de cada ciclo
+	// pasó de contestar 401 a contestar 429. O sea que `unauthorized` bajó ~20 % para el mismo
+	// volumen de fallos, sin que nada mejorara. La serie continua y comparable de acá en adelante
+	// es `musubi_auth_failures_total`, que cuenta el FALLO y no la respuesta: no le importa si el
+	// candado ya estaba puesto. Cambiar un comportamiento y romper en silencio la serie que lo
+	// medía es la forma más cara de arreglar algo.
+
 	toolHist  latencyHistogram // latencia AGREGADA de cada tools/call (handler)
 	toolOK    atomic.Int64     // tools/call que devolvieron resultado
 	toolError atomic.Int64     // tools/call que devolvieron un RpcError
@@ -194,6 +212,14 @@ func (m *serverMetrics) render(engine memory.StorageBackend) string {
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"unauthorized\"} %d\n", m.unauthorized.Load())
 	fmt.Fprintf(&b, "musubi_http_requests_total{result=\"server_error\"} %d\n", m.serverError.Load())
 
+	b.WriteString("# HELP musubi_auth_failures_total Rechazos de autenticación por motivo. Sin etiqueta de IP a propósito: la atribución va al log (A88).\n")
+	b.WriteString("# TYPE musubi_auth_failures_total counter\n")
+	fmt.Fprintf(&b, "musubi_auth_failures_total{motivo=\"%s\"} %d\n", motivoSinCredencial, m.authSinCredencial.Load())
+	fmt.Fprintf(&b, "musubi_auth_failures_total{motivo=\"%s\"} %d\n", motivoCredencialDesconocida, m.authDesconocida.Load())
+	b.WriteString("# HELP musubi_auth_lockouts_total Requests rechazadas con 429 por el candado anti fuerza-bruta.\n")
+	b.WriteString("# TYPE musubi_auth_lockouts_total counter\n")
+	fmt.Fprintf(&b, "musubi_auth_lockouts_total %d\n", m.authBloqueado.Load())
+
 	b.WriteString("# HELP musubi_tool_calls_total Invocaciones de tools/call por resultado (agregado).\n")
 	b.WriteString("# TYPE musubi_tool_calls_total counter\n")
 	fmt.Fprintf(&b, "musubi_tool_calls_total{result=\"ok\"} %d\n", m.toolOK.Load())
@@ -265,7 +291,24 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 }
 
 // contarPolitica anota una acción de auto-heal.
-// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento".
+// resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento" |
+// "consentimiento_prohibido" | "consentimiento_pide".
+//
+// LOS DOS ÚLTIMOS SON EL MECANISMO DE A91, Y HAY QUE DECIR POR QUÉ HACÍAN FALTA. La decisión de
+// endurecer se tomó pesando dos errores con la regla «el que elegimos SE NOTA: el auto-heal deja
+// de actuar y alguien lo ve». Ese «alguien lo ve» no existía: no había métrica ni alerta de un
+// rechazo por consentimiento, así que lo único que avisaba era el texto de un rechazo RPC pedido a
+// mano. Una premisa sin mecanismo es una premisa falsa, y sobre ella se decidió.
+//
+// SE CUENTAN SEPARADOS —`prohibido` y `pide`— porque cuestan distinto y se arreglan distinto:
+// `prohibido` es una decisión firme del dueño y no hay nada que hacer; `pide` es la puerta que
+// quedó abierta (podría preguntarse y actuar en el tick siguiente), así que su contador mide
+// exactamente cuánto se ganaría implementándola.
+//
+// NO LLEVAN ETIQUETA `device`, Y ES DELIBERADO. La pregunta «¿en qué máquina?» la contesta el
+// journal —`avisarUnaVez` la nombra— y `musubi_fleet_cronologia`. Sumar `device` acá haría la
+// cardinalidad políticas × máquinas × resultados, y este diseño apunta a dos mil máquinas: la
+// serie que sirve para ver QUE pasa no tiene que ser la misma que dice DÓNDE.
 func (m *serverMetrics) contarPolitica(politica, resultado string) {
 	if m == nil {
 		return
@@ -332,12 +375,29 @@ func (m *serverMetrics) renderPoliticas(b *strings.Builder) {
 		}
 		return filas[i].resultado < filas[j].resultado
 	})
-	b.WriteString("# HELP musubi_fleet_policy_actions_total Acciones de política automática (auto-heal), por política y resultado.\n")
-	b.WriteString("# TYPE musubi_fleet_policy_actions_total counter\n")
+	fmt.Fprintf(b, "# HELP %s Acciones de política automática (auto-heal), por política y resultado.\n", nombrePoliticaAcciones)
+	fmt.Fprintf(b, "# TYPE %s counter\n", nombrePoliticaAcciones)
 	for _, f := range filas {
-		fmt.Fprintf(b, "musubi_fleet_policy_actions_total{policy=%q,result=%q} %d\n", f.politica, f.resultado, f.n)
+		fmt.Fprintf(b, "%s{policy=%q,result=%q} %d\n", nombrePoliticaAcciones, f.politica, f.resultado, f.n)
 	}
 }
+
+// nombrePoliticaAcciones es el contador de acciones de auto-heal.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ ES UNA CONSTANTE Y NO TRES LITERALES SUELTOS
+//
+// Es la ÚNICA serie `musubi_fleet_*` con UN SOLO PRODUCTOR: sale del scrape y el empuje OTLP no
+// la lleva. O sea que si el descarte del scrape se ensancha, desaparece — y tres alertas que la
+// consumen dejan de poder dispararse, sin un error.
+//
+// La guarda que existe para impedir eso (TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape) no
+// la veía, por dos motivos a la vez: leía sólo `fleet_prometheus.go`, y buscaba el nombre como
+// cadena entera entre comillas. Acá salía por `Fprintf` con el nombre pegado a `{`, y en otro
+// archivo. Con el nombre en una constante, declarada en `seriesSoloDelScrape` como sus hermanas,
+// la serie entra al mismo régimen que todas: nombrarla en un solo lugar es lo que permite
+// custodiarla.
+const nombrePoliticaAcciones = "musubi_fleet_policy_actions_total"
 
 // renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un
 // cache TTL (T17.5) para no re-ejecutar los COUNT O(n) en cada scrape. Best-effort: ante error se

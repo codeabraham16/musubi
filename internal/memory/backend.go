@@ -423,7 +423,18 @@ type DeviceStore interface {
 	// FijarConsentimiento escribe la POLÍTICA de consentimiento de una máquina (v38). Devuelve
 	// false si no hay fila viva con ese id.
 	FijarConsentimiento(deviceID string, c fleet.Consentimiento) (bool, error)
+
 	FijarCapacidadDePreguntar(deviceID string, puede bool) error
+	// Los dos hechos que el agente reporta y que antes se tiraban (A99 y A102).
+	FijarMotivoNoPreguntar(deviceID, motivo string) error
+	FijarFuenteDeCredencial(deviceID, fuente string) error
+	// FijarServiciosOmitidos guarda cuántos servicios no entraron en el último inventario (A116).
+	// Se llama SIEMPRE que llega un inventario, incluido el 0: un número que sólo se escribe
+	// cuando hay recorte no puede decir que el recorte terminó.
+	FijarServiciosOmitidos(deviceID string, omitidos int) error
+	// FijarServiciosError guarda POR QUÉ una máquina no pudo enumerar sus servicios, o "" si pudo.
+	// Es el opuesto de `FijarServiciosOmitidos`: aquél es «no entró todo», éste es «no vino nada».
+	FijarServiciosError(deviceID, motivo string) error
 	// FijarCapacidadDePreguntar guarda lo que el AGENTE reporta sobre si puede preguntarle a
 	// alguien. Va aparte de la política porque son hechos de dueños distintos.
 	// ── Ejecución remota (S5) ──

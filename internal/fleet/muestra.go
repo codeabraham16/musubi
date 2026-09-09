@@ -76,7 +76,11 @@ type Muestra struct {
 	Load15    *float64 `json:"load15"`
 	UptimeSeg uint64   `json:"uptime_seg"`
 
-	// TempC es la primera zona térmica. nil = la máquina no expone ninguna (D3).
+	// TempC es la zona térmica que mejor contesta «¿se está calentando esta máquina?»: la
+	// preferida por `type` si existe, y si no la más alta plausible que no sea de chasis. NO es
+	// «la primera»: leer thermal_zone0 fijo medía `acpitz` —estático— en muchos equipos. La
+	// regla es la MISMA en Linux y en Windows a propósito; ver ElegirTemperatura.
+	// nil = la máquina no expone ninguna (D3).
 	TempC *float64 `json:"temp_c"`
 
 	// NumProcesos son los PROCESOS, no los hilos. La diferencia no es cosmética: el 4º campo de

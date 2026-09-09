@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -48,9 +47,11 @@ type SyncClient struct {
 	http  *http.Client
 }
 
-// NewSyncClient construye el cliente desde la config. Resuelve el token desde os.Getenv(
-// AuthTokenEnv). Rechaza (errPermanent) un CentralURL http:// cuando AllowInsecureToken es
-// false, para no filtrar el token en texto plano (R9). Devuelve error si la URL es inválida.
+// NewSyncClient construye el cliente desde la config. Resuelve el token con
+// config.SecretoDeEnv(AuthTokenEnv), que acepta la variable directa o el archivo `<VAR>_FILE`.
+// Rechaza (errPermanent) un CentralURL http:// cuando AllowInsecureToken es false, para no filtrar
+// el token en texto plano (R9), y también un auth_token_env declarado que no resuelve a nada.
+// Devuelve error si la URL es inválida.
 func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 	base := strings.TrimRight(strings.TrimSpace(cfg.CentralURL), "/")
 	if base == "" {
@@ -66,7 +67,19 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 	}
 	token := ""
 	if cfg.AuthTokenEnv != "" {
-		token = os.Getenv(cfg.AuthTokenEnv)
+		v, err := config.SecretoDeEnv(cfg.AuthTokenEnv)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errPermanent, err)
+		}
+		// FALLAR CERRADO, igual que nuevoEmpujadorOTLP. Sin esta guarda el cliente se construía
+		// con token vacío, salía a la red SIN cabecera Authorization y el central contestaba 401
+		// en cada drain — para siempre, con la configuración «puesta» y nadie mirando. El
+		// 2026-09-05 eso corrió durante horas a razón de un 401 cada 30 s (cabo A89).
+		if v == "" {
+			return nil, fmt.Errorf("%w: sync.auth_token_env nombra a %s y no hay valor; el drain saldría sin credencial y el central contestaría 401 para siempre. Exportála, o sacá auth_token_env si el central no autentica",
+				errPermanent, config.NombresDeSecreto(cfg.AuthTokenEnv))
+		}
+		token = v
 	}
 	timeout := cfg.RequestTimeoutSeconds
 	if timeout <= 0 {

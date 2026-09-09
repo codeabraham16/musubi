@@ -25,6 +25,10 @@ const (
 	KindConst  = "const"
 	KindVar    = "var"
 	KindDef    = "def"
+	// KindDeclarado marca los símbolos que NO se derivaron del archivo: los DECLARÓ alguien en el
+	// gist. Se distinguen de los derivados a propósito — un consumidor tiene que poder saber que la
+	// fuente es una afirmación y no una lectura del AST. Ver simbolos_declarados.go.
+	KindDeclarado = "declarado"
 )
 
 // Symbol es una declaración top-level con su rango de líneas (1-based, inclusivo),

@@ -258,7 +258,7 @@ func TestUnaFuenteRotaNoSeLlevaAlLatido(t *testing.T) {
 	}
 	t.Cleanup(func() { enumerarServicios = anterior })
 
-	if svs, mandar, _ := serviciosDelLatido(); mandar || svs != nil {
+	if svs, _, mandar, _ := serviciosDelLatido(); mandar || svs != nil {
 		t.Errorf("con el enumerador roto se reportaron %d servicios", len(svs))
 	}
 }
@@ -359,7 +359,7 @@ func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
 		return []fleet.ReporteServicio{repDe("sshd", fleet.EstadoCorriendo)},
 			fmt.Errorf("podman está instalado y no se pudo consultar: %w", errors.New("permission denied"))
 	}
-	if lista, mandar, _ := serviciosDelLatido(); mandar || lista != nil {
+	if lista, _, mandar, _ := serviciosDelLatido(); mandar || lista != nil {
 		t.Fatalf("con la enumeración rota el latido llevó %d servicios: esa lista da de baja lo que no trae: %+v", len(lista), lista)
 	}
 }
@@ -756,7 +756,30 @@ func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
 // salida 78» es justo lo que uno quiere ver al lado de un servicio que anda a los tumbos. Lo que
 // cambia es el VEREDICTO, no el dato.
 //
-// Sabotaje: sacar el `if !vivo` de parsearLaunchctl → com.ejemplo.revivido vuelve a `fallado`.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// EL SABOTAJE QUE ESTE DOC NOMBRABA NO COMPILA, Y POR ESO NO DECÍA NADA
+//
+// Decía «sacar el `if !vivo` de parsearLaunchctl», y eso NO PUEDE compilar: `vivo` tiene
+// exactamente UN lector en toda la función —esta guarda—, así que borrarla le saca el único uso a
+// la variable y Go corta con `declared and not used: vivo`. Un rojo por build roto se lee igual
+// que un rojo por guarda que funciona (la falla 5 de deploy/pruebas/sabotaje.sh), así que el doc
+// mandaba a comprobar la red con un gesto que nunca la comprueba.
+//
+// Y EL HERMANO DICE LA MISMA FRASE Y AHÍ ES CIERTA: internal/memory/latido_test.go tiene un
+// `if !vivo` idéntico y su doc también ofrece «o borrar ese if» — ahí SÍ compila y SÍ da rojo,
+// porque en ese archivo `vivo` se vuelve a leer más abajo. La misma oración, verdadera en un lado
+// y falsa en el otro, y la diferencia no es la guarda: es cuántos lectores tiene la variable.
+//
+// Sabotajes MEDIDOS el 2026-09-05: los dos compilan y los dos hacen fallar la aserción de abajo
+// («un servicio CON PID quedó "fallado" por un código de salida viejo»).
+//   - apagarle la entrada: borrar el `vivo = true` de parsearLaunchctl
+//   - invertir la condición: `if !vivo` → `if vivo`
+//
+// Los dos fallan con el MISMO mensaje, así que son UN defecto escrito de dos formas —«el código de
+// salida pisa el corriendo»—, no dos hallazgos.
+//
+// La otra dirección también está medida: con `if vivo == false` —la misma condición escrita
+// distinto— la prueba sigue en VERDE, así que la guarda juzga conducta y no texto.
 func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
 	// Formato real: PID, último código de salida, etiqueta. La fila del medio es el caso: tiene
 	// PID (está corriendo AHORA) y arrastra el código de una caída anterior.
@@ -871,5 +894,76 @@ func TestSePideLaMarcaDeCaidaASystemd(t *testing.T) {
 		if !pedida {
 			t.Errorf("no se le pide %q a systemctl: sin esa propiedad `desde` queda nil para la mitad de los estados y nada falla", p)
 		}
+	}
+}
+
+// TestElAlcanceDeWindowsDejaAfueraLaPlomeriaSanaYNADAMAS — la mitad de alcance de A116.
+//
+// UN ESCRITORIO WINDOWS TIENE ~64 SERVICIOS `Automatic` y casi todos son plomería del sistema
+// operativo corriendo bien. Medido el 2026-09-05 en `davantis-1`, que reportaba exactamente 64 —el
+// techo del latido—: `RpcSs`, `DcomLaunch`, `EventLog`, `Winmgmt`, `gpsvc`, `Dhcp`, `Dnscache`… y
+// entre todo eso, apretados contra el tope, los que un humano sí quiere ver: `Tailscale`, el
+// antivirus, los contenedores. Los 11 de `altura-erp` no entraban.
+//
+// LAS TRES PROPIEDADES QUE SE PRUEBAN, y las tres son la misma cautela mirada de distintos lados:
+//
+//	· la plomería SANA se va                    — es lo que libera el presupuesto
+//	· la plomería ROTA se queda                 — un `Dhcp` detenido es justo lo que hay que ver
+//	· lo que NO es de Windows se queda siempre  — sano o roto, alguien lo instaló a propósito
+//
+// Y LA CUARTA, QUE ES LA QUE MÁS IMPORTA: sin `PathName` no se filtra nada. Esconder un servicio
+// porque faltó un campo es indistinguible de que no exista, y es el modo de falla que este archivo
+// entero existe para no cometer.
+//
+// Se lee desde Linux —igual que `TestElParserDeWindowsSeLeeDesdeLinux`— porque el parser es una
+// función pura sobre el CSV. Un `_windows_test.go` no compilaría acá y `go test` diría «ok» sobre
+// pruebas que no existen, que ya pasó en este repo.
+func TestElAlcanceDeWindowsDejaAfueraLaPlomeriaSanaYNADAMAS(t *testing.T) {
+	const csv = `"Name","State","StartMode","ExitCode","PathName"
+"RpcSs","Running","Auto","0","C:\Windows\system32\svchost.exe -k rpcss -p"
+"Dhcp","Stopped","Auto","1067","C:\WINDOWS\system32\svchost.exe -k LocalServiceNetworkRestricted"
+"Tailscale","Running","Auto","0","""C:\Program Files\Tailscale\tailscaled.exe"""
+"NordUpdaterService","Stopped","Auto","1067","C:\Program Files\NordVPN\NordUpdateService.exe"
+"SinRuta","Running","Auto","0",""
+"EnOtraUnidad","Running","Auto","0","D:\Windows\system32\svchost.exe -k algo"
+`
+	rs := parsearServiciosWindows(csv, time.Now())
+	// EL CONTROL SIN EL CUAL ESTA PRUEBA MIENTE. Un CSV mal formado hace que el parser devuelva
+	// nil, y entonces TODA aserción de la forma «X no está» pasa —por ausencia, no por acierto—.
+	// Pasó al escribirla: un `\"` en vez de `""` rompió el CSV y las dos primeras comprobaciones
+	// dieron verde sobre una lista vacía.
+	if len(rs) == 0 {
+		t.Fatal("el parser no devolvió NADA: el CSV de esta prueba está mal formado y las " +
+			"aserciones de «no está» pasarían por ausencia. Sin esto, la prueba se aprueba sola")
+	}
+	vistos := map[string]fleet.EstadoServicio{}
+	for _, r := range rs {
+		vistos[r.Nombre] = r.Salud.Estado
+	}
+
+	if _, hay := vistos["RpcSs"]; hay {
+		t.Error("`RpcSs` corriendo desde C:\\Windows es plomería sana y se reportó igual: el " +
+			"presupuesto del latido se lo sigue comiendo el sistema operativo")
+	}
+	if _, hay := vistos["EnOtraUnidad"]; hay {
+		t.Error("un servicio de Windows en D: se reportó: la regla está clavada a C: y el sistema " +
+			"no siempre está ahí")
+	}
+	if vistos["Dhcp"] != fleet.EstadoFallado {
+		t.Errorf("`Dhcp` DETENIDO con ExitCode 1067 tiene que viajar y llegó como %q: se está "+
+			"escondiendo justo lo que el inventario existe para mostrar", vistos["Dhcp"])
+	}
+	if _, hay := vistos["Tailscale"]; !hay {
+		t.Error("`Tailscale` corriendo desde Program Files se filtró: la regla está dejando afuera " +
+			"lo que alguien instaló a propósito, que es exactamente lo contrario de lo que busca")
+	}
+	if _, hay := vistos["NordUpdaterService"]; !hay {
+		t.Error("un servicio de tercero DETENIDO se filtró")
+	}
+	// LA CUARTA, Y LA QUE NO SE PUEDE AFLOJAR.
+	if _, hay := vistos["SinRuta"]; !hay {
+		t.Error("un servicio SIN `PathName` se filtró. Falta un campo y el servicio desaparece: " +
+			"desde afuera eso es indistinguible de que no exista, y nadie lo va a ir a buscar. " +
+			"La regla tiene que fallar hacia MOSTRAR")
 	}
 }

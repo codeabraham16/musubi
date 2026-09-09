@@ -124,4 +124,90 @@ func TestNingunaReglaPromediaUnaSerieCongelableSinDecirloDeQue(t *testing.T) {
 	if promedios < 2 {
 		t.Fatalf("sólo %d reglas promedian sobre una `:norm`; el patrón se rompió", promedios)
 	}
+
+	// ── (c) y toda familia que promedia tiene su `:sla30d` ACOTADO POR SU COBERTURA ───────────
+	//
+	// A93, segunda mitad. (b) exige que la cobertura EXISTA; esto exige que alguien la USE. Medido
+	// el 2026-09-05: las cuatro `:cobertura30d` existían y no las leía nada —ni una alerta, ni un
+	// panel, ni un guion— mientras los `avg30d` se publicaban rotulados «a 30 días» sobre el 1,65 %
+	// de la ventana. Una cobertura que nadie consume es la mitad de la reparación otra vez.
+	//
+	// EL MECANISMO TIENE QUE SOBREVIVIR A QUIEN CONSTRUYA EL REPORTE, que todavía no existe: va a
+	// escribir `avg30d`, porque es el nombre que suena a lo que busca. Un número al que hay que
+	// acordarse de pedirle su cobertura al lado se publica solo. Por eso la defensibilidad viaja EN
+	// LA SERIE: `:sla30d` desaparece cuando la ventana no alcanza, y un panel dibuja un hueco.
+	for nombre, expr := range reglas {
+		if !strings.Contains(expr, "avg_over_time(") || !strings.Contains(expr, ":norm[") {
+			continue
+		}
+		familia := nombre[:strings.LastIndex(nombre, ":")]
+		sla, hay := reglas[familia+":sla30d"]
+		if !hay {
+			t.Errorf("%s promedia sobre una serie normalizada y NO existe %s:sla30d.\n"+
+				"  Su `:cobertura30d` existe y nadie la lee, que es la mitad de la reparación otra vez.\n"+
+				"  Quien construya el reporte va a escribir `avg30d` porque es el nombre que suena a lo\n"+
+				"  que busca; la defensibilidad tiene que viajar en la serie, no en la memoria de nadie.",
+				nombre, familia)
+			continue
+		}
+		// Y que de verdad se ACOTE con la cobertura de SU familia: un `:sla30d` que sea una copia
+		// del promedio es peor que no tenerlo, porque su nombre promete lo que no cumple.
+		if !strings.Contains(sla, familia+":cobertura30d") {
+			t.Errorf("%s:sla30d no nombra %s:cobertura30d, así que no está acotado por nada.\n"+
+				"  Su nombre promete «el número que se puede defender» y sería una copia de %s.",
+				familia, familia, nombre)
+		}
+	}
+}
+
+// LOS TRES UMBRALES DE COBERTURA SON EL MISMO NÚMERO, Y EN YAML NO HAY CONSTANTES.
+//
+// `:sla30d` se define una vez por familia y cada una lleva el `>= 0.95` escrito a mano. Tres
+// números que deberían ser el mismo es exactamente cómo uno se queda viejo: alguien afloja el del
+// SLA de servicios «para que el reporte salga» y los otros dos siguen diciendo otra cosa, así que
+// el mismo mes tiene dos definiciones de defendible. Esta guarda es el sustituto de la constante
+// que el formato no tiene.
+//
+// Sabotaje: cambiar el umbral de UNA de las tres reglas.
+func TestTodasLasSeriesDeSlaUsanElMismoUmbralDeCobertura(t *testing.T) {
+	texto := leerDeploy(t, "musubi-recording.yml")
+	reUmbral := regexp.MustCompile(`:cobertura30d\s*>=\s*([0-9.]+)`)
+
+	umbrales := map[string][]string{} // valor -> qué reglas lo usan
+	for _, b := range strings.Split(texto, "- record:")[1:] {
+		nombre := strings.Fields(b)[0]
+		if !strings.HasSuffix(nombre, ":sla30d") {
+			continue
+		}
+		// Sin comentarios: un umbral citado en prosa no es el que se evalúa.
+		var utiles []string
+		for _, l := range strings.Split(b, "\n") {
+			if x := strings.TrimSpace(l); x != "" && !strings.HasPrefix(x, "#") {
+				utiles = append(utiles, x)
+			}
+		}
+		expr := strings.Join(utiles, " ")
+		m := reUmbral.FindStringSubmatch(expr)
+		if m == nil {
+			t.Errorf("%s no compara su cobertura contra ningún umbral: %s", nombre, expr)
+			continue
+		}
+		umbrales[m[1]] = append(umbrales[m[1]], nombre)
+	}
+
+	// CONTROL DE QUE MIRÓ ALGO: si las reglas se renombraran, el mapa quedaría vacío y esto pasaría
+	// en verde sin haber comparado un solo umbral.
+	total := 0
+	for _, rs := range umbrales {
+		total += len(rs)
+	}
+	if total < 3 {
+		t.Fatalf("se encontraron %d reglas `:sla30d` con umbral y son al menos tres: cambió la forma "+
+			"del archivo y esta guarda dejó de mirar", total)
+	}
+	if len(umbrales) > 1 {
+		t.Errorf("hay %d umbrales de cobertura distintos y tiene que ser UNO: %v\n"+
+			"  Dos definiciones de «defendible» en el mismo mes es lo que esta guarda existe para "+
+			"impedir, porque en YAML no hay constantes.", len(umbrales), umbrales)
+	}
 }

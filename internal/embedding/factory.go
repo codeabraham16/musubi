@@ -2,7 +2,6 @@ package embedding
 
 import (
 	"fmt"
-	"os"
 
 	"musubi/internal/config"
 )
@@ -40,11 +39,30 @@ func newBaseProvider(cfg config.EmbeddingConfig) (Provider, error) {
 		// La API key se lee de la env var nombrada en config (default OPENAI_API_KEY);
 		// nunca del yaml, para no versionar secretos. Puede quedar vacía para
 		// servidores locales compatibles que no exigen autenticación.
+		//
+		// LA VARIABLE O EL ARCHIVO `<VAR>_FILE`, IGUAL QUE EL RESTO (A89/A101).
+		//
+		// Acá había un `os.Getenv` pelado, y la regla del `_FILE` la tenía el hermano de al lado
+		// —`cognition/factory.go`, que la cita— y no ésta. La config nombra credenciales con TRES
+		// campos (`auth_token_env`, `api_key_env`, `marketplace_api_key_env`) y sólo el primero
+		// pasaba por `SecretoDeEnv`: diez sitios de un lado, cero del otro. Una regla que se aplica
+		// en un camino y no en su gemelo no es un bug puntual, es una regla sin dueño.
+		//
+		// Y acá era PEOR que el A89 original: con `OPENAI_API_KEY_FILE` puesto y la variable
+		// vacía, el provider se construía SIN error y con la key en blanco. El fallo llegaba
+		// después, lejos y disfrazado de «el backend rechaza», en vez de «tu config nombra un
+		// archivo que no leí».
 		envName := cfg.APIKeyEnv
 		if envName == "" {
 			envName = "OPENAI_API_KEY"
 		}
-		apiKey := os.Getenv(envName)
+		// Un error acá es una ruta NOMBRADA que no se pudo leer: eso es config rota, no un backend
+		// sin auth. Se dice en voz alta en vez de degradar a «sin credencial» — mismo criterio,
+		// palabra por palabra, que el de cognition.
+		apiKey, err := config.SecretoDeEnv(envName)
+		if err != nil {
+			return nil, fmt.Errorf("embedding.api_key_env: %w", err)
+		}
 		// Si base_url sigue siendo el default de Ollama, el usuario solo cambió el
 		// provider: lo tratamos como "sin definir" para caer al endpoint de OpenAI.
 		baseURL := cfg.BaseURL

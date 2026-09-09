@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"musubi/internal/config"
 	"net"
 	"net/http"
 	"os"
@@ -88,7 +89,11 @@ func runCerebro(args []string) {
 		fmt.Fprintln(os.Stderr, "musubi cerebro: falta la URL del cerebro (--url o $MUSUBI_CENTRAL_URL)")
 		os.Exit(1)
 	}
-	token := strings.TrimSpace(os.Getenv(*tokenEnv))
+	token, terr := config.SecretoDeEnv(*tokenEnv)
+	if terr != nil {
+		fmt.Fprintf(os.Stderr, "musubi cerebro: %v\n", terr)
+		os.Exit(1)
+	}
 	if token == "" {
 		// Fail-closed: sin credencial, el cerebro rechazaría TODO y el canal sería una sucesión de
 		// 401 silenciosos. Mejor no arrancar y decir exactamente qué falta.

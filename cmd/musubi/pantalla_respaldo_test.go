@@ -222,3 +222,57 @@ func TestUnaMarcaQueNoSePuedeLeerSeTrataComoSesionAbierta(t *testing.T) {
 		t.Error("con la marca ilegible no se cerró la sesión: la contraseña de sesión queda viva para siempre")
 	}
 }
+
+// EL CASO QUE ESTE ARREGLO VIENE A CUBRIR: el dueño cambia su contraseña permanente MIENTRAS la
+// sesión está abierta —que es cuando está adentro y por lo tanto cuando es natural hacerlo—. Al
+// vencer, gana la suya: ni se le devuelve la anterior ni se scramblea.
+func TestSiElDuenoLaCambiaDuranteLaSesionGanaLaSuya(t *testing.T) {
+	ruta := configFalsa(t, "enc_id = 'abc'\npassword = 'LA-VIEJA'\nsalt = 'sal'\n")
+	reg := rustdeskFalso(t, cuerpoQuePisaLaConfig(ruta))
+
+	res := aplicarSesionPantalla(comandoRecibido{
+		ID: "cmd-1", Argv: []string{"musubi:pantalla", "ses-1", "LaClaveDeSesion", "30m"}, TimeoutSeg: 30,
+	})
+	if res.Error != "" {
+		t.Fatalf("no se pudo aplicar: %s", res.Error)
+	}
+
+	// El dueño, adentro de la sesión, se pone la suya desde la ventana de RustDesk.
+	if err := os.WriteFile(ruta, []byte("enc_id = 'abc'\npassword = 'LA-QUE-YO-ELEGI'\nsalt = 'sal'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cerrarSesionPantalla("prueba")
+
+	got := leerArchivo(t, ruta)
+	if !strings.Contains(got, "password = 'LA-QUE-YO-ELEGI'") {
+		t.Errorf("se perdió la contraseña que puso el dueño durante la sesión:\n%s", got)
+	}
+	if strings.Contains(got, "LA-VIEJA") {
+		t.Errorf("se restituyó la anterior por encima de la del dueño:\n%s", got)
+	}
+	if n := strings.Count(leerRegistro(t, reg), "--password"); n != 1 {
+		t.Errorf("se esperaba UNA sola llamada a --password (la de aplicar); hubo %d — se scrambleó de más", n)
+	}
+}
+
+// Compatibilidad hacia atrás: una marca escrita por la versión anterior no tiene `puesta`. Ahí no
+// se puede comparar, y no saber no puede significar perder: se restituye como antes.
+func TestUnaMarcaVieja_SinPuesta_RestituyeIgual(t *testing.T) {
+	ruta := configFalsa(t, "enc_id = 'abc'\npassword = 'DE-SESION'\nsalt = 'sal'\n")
+	rustdeskFalso(t, "exit 0")
+	marcarSesionAbierta(false)
+
+	if err := guardarRespaldo(respaldoPantalla{
+		Sesion: "ses-vieja", Vence: time.Now().Add(-time.Hour),
+		Previas: []passPrevia{{Ruta: ruta, Linea: "password = 'LA-VIEJA'", Habia: true}}, // sin Puesta
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cerrarSesionColgadaDeArranque()
+
+	if got := leerArchivo(t, ruta); !strings.Contains(got, "password = 'LA-VIEJA'") {
+		t.Errorf("una marca sin `puesta` tiene que restituir como antes:\n%s", got)
+	}
+}

@@ -138,12 +138,31 @@ func TestArchivoAisladoLoDiceEnVezDeCallar(t *testing.T) {
 }
 
 // I4 — sin grafo, inerte. El hook corre en todos los repos, y la mayoría no indexó nada.
-func TestSinGrafoElRadioDeImpactoNoDiceNada(t *testing.T) {
+// ESTA PRUEBA AFIRMABA EL SILENCIO, Y EL SILENCIO ERA EL DEFECTO.
+//
+// Decía «un archivo fuera del grafo no debe producir salida» y estuvo en verde custodiando
+// exactamente lo que había que sacar: antes de EDITAR, callarse ocupa el lugar de «fijate quién
+// depende de esto» y se lee como que no arrastra a nadie. La función se cuidaba mucho de no
+// afirmar seguridad sobre un grafo VIEJO —«no lo leas como no arrastra a nadie, leelo como el
+// grafo no sabe»— y no decía nada cuando el archivo ni siquiera estaba, que es el caso común.
+//
+// Lo que sí sigue valiendo de la intención original es que no se vuelque el radio de impacto de
+// algo que no se conoce: por eso lo que sale es UN aviso corto, una vez por sesión, y no la
+// estructura del archivo. Ver avisoSinGrafo.
+func TestSinGrafoElRadioDeImpactoAvisaQueNoSabe(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "otro.go", "package p\nfunc x(){}\n")
 	in := `{"tool_name":"Edit","tool_input":{"file_path":"otro.go"},"session_id":"s"}`
-	if out := precheckOutput(cadenaStore(), root, strings.NewReader(in)); out != "" {
-		t.Errorf("un archivo fuera del grafo no debe producir salida, obtuve %q", out)
+	out := precheckOutput(cadenaStore(), root, strings.NewReader(in))
+	if out == "" {
+		t.Fatal("un archivo fuera del grafo tiene que DECIR que no se pudo mirar el radio de impacto: el silencio se lee como «no arrastra a nadie»")
+	}
+	if !strings.Contains(out, "codegraph_index") {
+		t.Errorf("es un .go, o sea un índice que falta y tiene arreglo: el aviso debe ofrecerlo; obtuve %q", out)
+	}
+	// Y no vuelca estructura de algo que no conoce: sigue siendo un aviso corto.
+	if len(out) > 600 {
+		t.Errorf("el aviso creció a %d caracteres; tiene que ser una línea, no un volcado", len(out))
 	}
 }
 

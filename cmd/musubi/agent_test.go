@@ -41,7 +41,7 @@ func TestElLatidoLlevaElTokenEnElHeaderYUnCuerpoChico(t *testing.T) {
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
 	t.Cleanup(func() { enumerarServicios = anteriorEnum })
 
-	res := latir(ts.URL+"/fleet/heartbeat", "tok-abc", nil)
+	res := latir(ts.URL+"/fleet/heartbeat", "tok-abc", "", nil)
 	if !res.ok {
 		t.Fatalf("el latido falló: %+v", res)
 	}
@@ -81,7 +81,7 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 		reiniciarFrenos()
 	})
 
-	primero, mandar, confirmar := serviciosDelLatido()
+	primero, _, mandar, confirmar := serviciosDelLatido()
 	if !mandar || len(primero) != 1 {
 		t.Fatalf("el PRIMER latido no llevó el inventario (mandar=%v, %d servicios): la máquina nunca reportaría lo que corre", mandar, len(primero))
 	}
@@ -89,12 +89,12 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 	// SIN CONFIRMAR TODAVÍA NO SE SELLÓ, y eso es la mitad de A78: el sello dice «el cerebro se lo
 	// llevó», no «yo lo armé». Un latido que se armó y no llegó tiene que volver a intentarlo.
 	// Sabotaje: sellar dentro de serviciosDelLatido, como antes → esto pasa a devolver nil.
-	if _, otraVez, _ := serviciosDelLatido(); !otraVez {
+	if _, _, otraVez, _ := serviciosDelLatido(); !otraVez {
 		t.Error("el inventario se dio por enviado ANTES de que el cerebro lo aceptara: si ese latido falla, el inventario no vuelve a viajar hasta que cambie")
 	}
 
 	confirmar()
-	if _, segundo, _ := serviciosDelLatido(); segundo {
+	if _, _, segundo, _ := serviciosDelLatido(); segundo {
 		t.Error("el latido volvió a mandar el inventario después de confirmado y sin que cambiara nada: son 7 KB cada diez segundos por máquina")
 	}
 
@@ -108,7 +108,7 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 	// En producción esto lo hace el reloj: la caché de enumeración dura un minuto, así que el
 	// cambio se ve en la primera vuelta posterior. Acá se fuerza para no dormir un minuto.
 	olvidarEnumeracion()
-	if cambiado, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
+	if cambiado, _, mandar, _ := serviciosDelLatido(); !mandar || len(cambiado) != 1 {
 		t.Error("el inventario cambió de estado y NO viajó: un servicio caído tardaría hasta 5 minutos en verse")
 	}
 }
@@ -132,7 +132,7 @@ func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 		reiniciarFrenos()
 	})
 
-	lista, mandar, confirmar := serviciosDelLatido()
+	lista, _, mandar, confirmar := serviciosDelLatido()
 	if !mandar {
 		t.Fatal("un inventario VACÍO no se manda: la máquina queda muda para siempre mientras el agente cree que reportó (A78)")
 	}
@@ -168,7 +168,7 @@ func TestUn401SeClasificaComoRevocadoYNoComoFalloTransitorio(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(c.status)
 		}))
-		res := latir(ts.URL, "tok", nil)
+		res := latir(ts.URL, "tok", "", nil)
 		ts.Close()
 		if res.ok != c.quieroOK || res.revocado != c.quieroRevocado {
 			t.Errorf("status %d: ok=%v revocado=%v, esperaba ok=%v revocado=%v",
@@ -186,7 +186,7 @@ func TestElCerebroInalcanzableEsReintentableNoRevocado(t *testing.T) {
 	url := ts.URL
 	ts.Close()
 
-	res := latir(url, "tok", nil)
+	res := latir(url, "tok", "", nil)
 	if res.ok {
 		t.Fatal("un cerebro caído no debería dar un latido exitoso")
 	}
@@ -443,6 +443,40 @@ func capturarSalida(t *testing.T, f func()) string {
 // ni proyecto: la identidad la decide el token del lado del cerebro.
 //
 // Sabotaje que la hace fallar: agregar cualquier campo de identidad al JSON que arma latir().
+// clavesPermitidasDelLatido es la lista blanca del invariante B4/D5: TODO lo que un dispositivo
+// puede mandar en el cuerpo de su latido.
+//
+// VIVE EN UNA SOLA FUNCIÓN PORQUE ESTABA ESCRITA DOS VECES, Y ESO YA COSTÓ.
+// `TestElCuerpoNoLlevaIdentidadNunca` y `TestUnCuerpoConServiciosSigueSinLlevarIdentidad` tenían
+// cada una su copia del mapa, y el 2026-09-09 se descubrió que a las DOS les faltaban los mismos
+// tres campos. Dos copias del mismo contrato no se contradicen: envejecen juntas y se dan la razón
+// —exactamente lo que `musubi-alerts.yml:374-377` documenta para las guardas cruzadas—.
+//
+// LOS TRES QUE FALTABAN, Y POR QUÉ NADIE LOS VIO. Los tres llevan `omitempty`, así que en una
+// máquina Linux sana salen vacíos y la guarda nunca los recibía. Lo destapó `test-cross
+// (windows-latest)`: ahí la enumeración de servicios FALLA de verdad, así que `servicios_error`
+// viajó y la lista lo rechazó. La guarda hizo exactamente lo suyo, y de paso mostró que
+// `servicios_omitidos` y `token_fuente` tampoco estaban declarados — esperando a la primera
+// máquina que recortara su inventario o recibiera el token por variable.
+//
+// EL EXAMEN QUE EL MENSAJE DE ERROR EXIGE, y para los tres la respuesta es la misma: NINGUNO dice
+// QUIÉN ES esta máquina.
+//
+//   - `servicios_omitidos` es un NÚMERO: cuántos no entraron por el techo del latido (A116).
+//   - `token_fuente` es `archivo` o `variable` (A102): de dónde salió SU credencial, no cuál es.
+//   - `servicios_error` es el error del enumerador de ESTA máquina, y merece el examen más largo
+//     de los tres porque es texto libre. Aunque una máquina comprometida escriba ahí el nombre de
+//     otra, no cambia nada: la fila que se toca la elige el TOKEN presentado, no el contenido del
+//     cuerpo. Es el mismo techo que ya tiene `rustdesk_id` —se puede desorientar a quien lee, no
+//     escribir en la fila ajena— y el cerebro además lo recorta a 500 antes de guardarlo.
+func clavesPermitidasDelLatido() map[string]bool {
+	return map[string]bool{
+		"muestra": true, "version": true, "direccion": true, "rustdesk_id": true,
+		"servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true, "capver": true,
+		"servicios_omitidos": true, "token_fuente": true, "servicios_error": true,
+	}
+}
+
 func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	var visto string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +488,7 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 
 	cpu := 12.5
 	m := &fleet.Muestra{Tomada: time.Now().UTC(), CPUPct: &cpu, NumCPU: 4, MemTotal: 100, MemUsada: 10}
-	if res := latir(ts.URL, "tok", m); !res.ok {
+	if res := latir(ts.URL, "tok", "", m); !res.ok {
 		t.Fatalf("el latido con muestra falló: %+v", res)
 	}
 
@@ -493,9 +527,7 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// y la única fila que puede tocar sigue siendo la del token presentado. La diferencia con
 	// `version` es lo que hace que exista: dos builds distintos pueden hablar el mismo capver, así
 	// que el cerebro no puede derivarlo de la versión aunque la tenga.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
-		"capver": true}
+	permitidas := clavesPermitidasDelLatido()
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -550,9 +582,7 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
-		"capver": true}
+	permitidas := clavesPermitidasDelLatido()
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)
@@ -581,7 +611,7 @@ func TestSinColectorElAgenteLateIgualYNoMandaCeros(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
-	if res := latir(ts.URL, "tok", tomarMuestra(colectorRoto{})); !res.ok {
+	if res := latir(ts.URL, "tok", "", tomarMuestra(colectorRoto{})); !res.ok {
 		t.Fatalf("sin colector, el agente dejó de latir: %+v", res)
 	}
 }
@@ -651,7 +681,7 @@ func TestElAgenteUsaLaRutaCorrectaParaCadaCosa(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	if res := latir(ts.URL, "tok", nil); !res.ok {
+	if res := latir(ts.URL, "tok", "", nil); !res.ok {
 		t.Fatalf("el latido no llegó a su ruta: %+v", res)
 	}
 	if err := reportar(ts.URL, "tok", resultadoDeComando{ComandoID: "x"}); err != nil {

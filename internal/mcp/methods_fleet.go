@@ -264,6 +264,22 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 			// Cuando los dos difieren, la máquina no puede preguntarle a nadie y un `pide` se
 			// endureció a `prohibido`. Verlo acá evita descubrirlo el día que una sesión no abre.
 			fila["consentimiento_efectivo"] = string(d.ConsentimientoEfectivo())
+			// POR QUÉ NO PUEDE PREGUNTAR (A99) y DE DÓNDE SALIÓ SU TOKEN (A102). Los dos van sólo
+			// cuando hay algo que decir: un campo vacío en cada fila de una flota de dos mil
+			// máquinas es ruido, y el vacío ya significa «no lo dijo», que es lo mismo que ausente.
+			//
+			// SE PONEN ACÁ Y NO EN UNA TOOL NUEVA porque la pregunta que contestan se hace mirando
+			// la flota: «¿cuáles no pueden rotar?» es una lectura de la lista, no una consulta a una
+			// máquina. Antes había que leer un .cmd EN cada máquina para saberlo.
+			if d.MotivoNoPreguntar != "" {
+				fila["motivo_no_preguntar"] = d.MotivoNoPreguntar
+			}
+			if d.TokenFuente != "" {
+				fila["token_fuente"] = d.TokenFuente
+				if rotable, seSabe := fleet.CredencialRotable(d.TokenFuente); seSabe {
+					fila["token_rotable"] = rotable
+				}
+			}
 			if d.Consentimiento != "" {
 				fila["consentimiento"] = string(d.Consentimiento)
 			}

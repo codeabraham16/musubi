@@ -187,7 +187,7 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 				runtime.GOOS, *m.TempC)
 		}
 	} else if m.TempC != nil {
-		if c := *m.TempC; c <= 0 || c > TempMaxPlausibleC {
+		if c := *m.TempC; c < TempMinPlausibleC || c > TempMaxPlausibleC {
 			t.Errorf("%s: reportó %.1f °C, que está fuera de rango. Un negativo grande es la firma de "+
 				"una unidad mal leída (Kelvin sin dividir), no de una máquina fría", runtime.GOOS, c)
 		}

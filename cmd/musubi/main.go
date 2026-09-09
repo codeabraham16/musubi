@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"musubi/internal/buildid"
+	"musubi/internal/codeintel"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
@@ -102,13 +103,15 @@ func main() {
 			fmt.Println(memory.EsquemaEsperado())
 			return
 		}
+		// LAS DOS BANDERAS SON DE RAMAS DISTINTAS Y LAS DOS SE CONSERVAN: `--json` (main, #413) y
+		// `--lenguajes` (esta rama). Comparten el motivo por el que NO son un renglón más de la
+		// salida normal: `redesplegar-cerebro.sh` compara la salida por default ENTERA, y un
+		// segundo renglón dispararía un rollback en mitad de un despliegue que salió bien.
+
 		// `--json` imprime la identidad COMPLETA de este binario, derivada y no tipeada. Es lo
 		// que un guion de despliegue tiene que comparar en vez de la cadena de versión: la
 		// versión sola no dice a qué esquema migra ni qué catálogo expone, que son las dos cosas
 		// que rompen cuando dos máquinas de la malla no corren el mismo build.
-		//
-		// Va como bandera y no como renglón nuevo de la salida normal por el mismo motivo que
-		// --esquema: `redesplegar-cerebro.sh` compara la salida por default ENTERA.
 		if len(os.Args) > 2 && os.Args[2] == "--json" {
 			n, sha := mcp.CatalogFingerprint()
 			b, err := json.MarshalIndent(buildid.Derive(version, n, sha), "", "  ")
@@ -117,6 +120,18 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Println(string(b))
+			return
+		}
+		// `--lenguajes` hace falta porque hoy no se puede saber: dos binarios que imprimen
+		// exactamente la misma versión indexan cantidades distintas según se hayan compilado con
+		// el tag `treesitter` o sin él, y cuando el grafo sale vacío no hay forma de distinguir
+		// «este repo no tiene código» de «este binario no entiende este código».
+		if len(os.Args) > 2 && os.Args[2] == "--lenguajes" {
+			if codeintel.PolyglotHabilitado() {
+				fmt.Println("go + poliglota (tree-sitter linkeado)")
+			} else {
+				fmt.Println("go")
+			}
 			return
 		}
 		fmt.Printf("musubi %s\n", version)
@@ -188,6 +203,7 @@ func printUsage() {
 	cmd("fetch <url>", "Baja una URL del tailnet a stdout (transporte de auto-update del cuerpo)")
 	cmd("receipt <emit|check|show|install-hook>", "Gate de entrega: el push exige un recibo para ESTA huella del árbol")
 	cmd("version", "Muestra la versión del binario")
+	cmd("version --lenguajes", "Dice qué lenguajes ENTIENDE este binario (depende de si se compiló con tree-sitter)")
 
 	section("Hooks (uso interno de Claude Code)")
 	cmd("detect [--hook-mode]", "Detecta el stack / SessionStart: auto-descubrimiento + priming")
@@ -199,6 +215,36 @@ func printUsage() {
 
 // runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
 // como proceso one-shot e imprime un resumen en stdout.
+// avisarQueConfigGobierna escribe en stderr, al arrancar, CUÁL config.yaml se cargó — y avisa si
+// hay otro en el home que no gobierna (cabo A96, salida b).
+//
+// Es una línea y habría cortado en el minuto uno un diagnóstico que llevó horas: el daemon MCP
+// corre con cwd en el proyecto, así que obedece a `<repo>/.musubi/config.yaml`, pero quien
+// diagnostica abre `~/.musubi/config.yaml` porque es el que se conoce. Los dos existen y hoy
+// difieren justo en `sync.enabled`. Decirlo cuesta nada; no decirlo costó tres hipótesis falsas.
+func avisarQueConfigGobierna(root string) {
+	ruta := config.ConfigPath(root)
+	// Absoluta a propósito: una ruta relativa en una línea de diagnóstico deja al que la lee
+	// adivinando desde dónde, que es exactamente la ambigüedad que este aviso viene a matar.
+	if abs, err := filepath.Abs(ruta); err == nil {
+		ruta = abs
+	}
+	if _, err := os.Stat(ruta); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: sin config propia en %s — corriendo con los valores por defecto\n", ruta)
+	} else {
+		fmt.Fprintf(os.Stderr, "musubi: configuración cargada de %s\n", ruta)
+	}
+	if sombra := config.ConfigSombra(root); sombra != "" {
+		// SE DICE DE DÓNDE SALIÓ LA RAÍZ, no «del directorio de trabajo». Esa frase era falsa en
+		// la máquina donde más importaba: la raíz salía de CLAUDE_PROJECT_DIR y el cwd sólo
+		// coincidía. Mandar a mirar el cwd —que se puede cambiar— en vez de la variable —que es
+		// la que decide— es exactamente la hipótesis equivocada que este aviso viene a matar.
+		_, origen := workspaceDirConOrigen()
+		fmt.Fprintf(os.Stderr, "musubi: OJO — también existe %s y NO gobierna a este proceso "+
+			"(la raíz sale de %s)\n", sombra, origen)
+	}
+}
+
 func runMaintain() {
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
@@ -210,6 +256,7 @@ func runMaintain() {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al arrancar base de datos: %v\n", err)
@@ -262,6 +309,7 @@ func runServe(args []string) {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 
 	// Overrides por flag: --addr <host:port> (o --addr=...) habilita el modo servicio
 	// con esa dirección; --enable lo habilita con la addr de la config.
@@ -411,6 +459,7 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "Error al cargar configuración: %v\n", err)
 		os.Exit(1)
 	}
+	avisarQueConfigGobierna(root)
 
 	// Proveedor de embeddings con auto-detección + degradación elegante (16.2f): enciende la
 	// semántica si hay tabla en la ubicación estándar; si no (o ante error), recall léxico.

@@ -180,6 +180,47 @@ type CuerpoLatido struct {
 	// filas pueden tocar es el inventario de la máquina del token presentado. Y los tags están en
 	// castellano a propósito: `nombre`, no `name`.
 	Servicios []ReporteServicio `json:"servicios,omitempty"`
+	// ServiciosOmitidos es CUÁNTOS NO ENTRARON en la lista de arriba (A116).
+	//
+	// El latido lleva un techo (`ServiciosPorLatido`) y el agente ordena por prioridad —fallado,
+	// detenido, corriendo, desconocido— antes de recortar. Sin este número, una lista TRUNCADA de
+	// 64 es idéntica a un inventario COMPLETO de 64 del lado del cerebro, y la diferencia no es
+	// académica: la poda por ausencia da de baja lo que no vino, así que el cerebro no se queda
+	// sin ver lo que falta —ANOTA que dejó de existir—. Medido el 2026-09-05 en `davantis-1`: 26
+	// servicios de clase `docker` y 87 de Windows marcados `revoked = 1` por esa rotación, entre
+	// ellos los 11 contenedores de `altura-erp`, que estaban corriendo.
+	//
+	// `omitempty`: un inventario completo pesa exactamente lo que pesaba antes. Un agente viejo no
+	// lo manda y llega 0, que es el comportamiento previo — no es una regresión, es el estado
+	// actual, y a esos agentes los delata `musubi_fleet_device_agent_stale`.
+	//
+	// VIVE ACÁ Y NO EN UN MAPA porque el sobre pasó a ser tipado (#413/#419): una clave de mapa
+	// mal escrita viaja igual y se descarta del otro lado sin decir nada.
+	ServiciosOmitidos int `json:"servicios_omitidos,omitempty"`
+	// ServiciosError dice POR QUÉ esta máquina no pudo enumerar sus servicios, cuando no pudo.
+	//
+	// NO ES EL HERMANO DE `ServiciosOmitidos`, ES SU OPUESTO, y por eso son dos campos y no uno:
+	// `omitidos` es «enumeré bien y no entró todo» (el techo del latido), esto es «no pude
+	// enumerar». El primero permite guardar lo que llegó y suspender la poda; el segundo significa
+	// que NO VIAJA NADA. Meterlos en un solo campo obligaría al cerebro a adivinar cuál de los dos
+	// es, que es la ambigüedad que los dos existen para cerrar.
+	//
+	// CUANDO ESTO VIENE, `Servicios` ES nil A PROPÓSITO. El agente aborta el lote cuando una fuente
+	// falla —el inventario se manda COMPLETO o no se manda— y el cerebro no poda ante `nil`. Eso ya
+	// estaba bien. Lo que faltaba es que el cerebro pueda DECIR POR QUÉ está callada esa máquina:
+	// sin este campo, el silencio de un enumerador roto es idéntico al de un inventario estable.
+	//
+	// MEDIDO EL 2026-09-09 EN `davantis-1`: 64 alertas `ServicioSinNoticias` de la misma máquina,
+	// 61 horas sin reportar servicios, con el agente vivo y mandando CPU y uptime. Sesenta y cuatro
+	// alertas para una causa, y ninguna la nombra.
+	//
+	// STRING Y NO BOOL, por el mismo criterio que `MotivoNoPreguntar`: las causas se arreglan
+	// distinto —falta un binario, WMI no contesta, el usuario no tiene permiso— y un booleano
+	// obligaría a entrar a la máquina para averiguar cuál es, que es el paso manual que esto
+	// elimina. El vacío significa «no lo dijo»: un agente viejo no manda el campo y llega "",
+	// idéntico a uno nuevo que enumeró bien. Esa ambigüedad es aceptable acá porque las dos
+	// significan lo mismo para el consumidor: no hay una falla que reportar.
+	ServiciosError string `json:"servicios_error,omitempty"`
 	// PuedePreguntar es una CAPACIDAD MEDIDA por el agente (A57): si en esta máquina hay dónde
 	// dibujar un diálogo Y con qué. No es configuración — un servidor sin escritorio no tiene
 	// dónde, y afirmarlo desde un archivo haría que un `pide` prometa un permiso que nunca se va
@@ -195,4 +236,14 @@ type CuerpoLatido struct {
 	// `prohibido` en toda la flota es un cero sin explicación, y las tres causas posibles —no hay
 	// escritorio, falta un paquete, el agente corre como servicio— se arreglan distinto.
 	MotivoNoPreguntar string `json:"motivo_no_preguntar,omitempty"`
+	// TokenFuente dice de dónde salió la credencial del agente: `archivo` o `variable` (A102). El
+	// cerebro NO lo puede averiguar de ninguna otra forma, y decide algo que importa: con
+	// `variable` una rotación no se puede completar —un proceso no reescribe su propio entorno— así
+	// que la rotación vence siempre y desde afuera esa máquina late igual que una que sí puede.
+	//
+	// SIN PUNTERO, y la asimetría con `PuedePreguntar` es deliberada: acá el vacío ya es un tercer
+	// estado con significado —«no lo dijo»— porque es un string y no un bool. El agente lo omite
+	// cuando no lo sabe, y un agente viejo no lo manda: los dos casos llegan como "" y se tratan
+	// igual, que es lo correcto. Un puntero agregaría una distinción sin consecuencia.
+	TokenFuente string `json:"token_fuente,omitempty"`
 }

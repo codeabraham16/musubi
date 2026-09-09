@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/config"
 	"musubi/internal/skillsource"
 )
 
@@ -164,12 +165,23 @@ func runHarvest(args []string) error {
 		return fmt.Errorf("no hay seeds para cosechar (usá --seeds a,b,c)")
 	}
 
+	// LA VARIABLE O EL ARCHIVO `<VAR>_FILE` (A89/A101). El tercero de los tres campos de config
+	// que nombran una credencial; los otros dos son `auth_token_env` (que sí pasaba por acá, en
+	// diez sitios) y `api_key_env`. El aviso de abajo decía «env %s vacía» y con `<VAR>_FILE`
+	// puesto eso era literalmente falso: la credencial estaba, en el archivo, sin leer.
 	apiKey := ""
 	if apiKeyEnv != "" {
-		apiKey = os.Getenv(apiKeyEnv)
+		k, err := config.SecretoDeEnv(apiKeyEnv)
+		if err != nil {
+			// Se NOMBRA la ruta rota en vez de reportarla como «sin key»: son dos problemas
+			// distintos y se arreglan distinto.
+			fmt.Fprintf(os.Stderr, "Aviso: %v; usando el tier anónimo (límite bajo).\n", err)
+		}
+		apiKey = k
 	}
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Aviso: sin API key (env %s vacía); usando el tier anónimo (límite bajo).\n", apiKeyEnv)
+		fmt.Fprintf(os.Stderr, "Aviso: sin API key (ni %s ni %s%s); usando el tier anónimo (límite bajo).\n",
+			apiKeyEnv, apiKeyEnv, config.SufijoArchivoDeSecreto)
 	}
 
 	// fetch ligado a baseURL+apiKey; el núcleo HarvestMarketplace es agnóstico de la red.

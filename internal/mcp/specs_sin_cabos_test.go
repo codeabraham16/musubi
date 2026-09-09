@@ -285,7 +285,22 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 
 	// `| a | b |` son 2 celdas: se cuentan los separadores internos, que es lo que usa el
 	// renderizador para decidir dónde corta.
-	celdas := func(l string) int { return strings.Count(strings.TrimSpace(l), "|") - 1 }
+	//
+	// UN `\|` NO ES UN SEPARADOR, y contarlo como tal fue un falso POSITIVO medido el 2026-09-05:
+	// la fila de A98 llevaba `Get-Process musubi \| Select-Object` y esta cuenta la daba por rota
+	// cuando ya estaba arreglada. GFM respeta la barra invertida DENTRO de un code span, que es
+	// justamente donde hace falta — los backticks NO protegen el pipe, y ahí estaba el defecto
+	// original.
+	celdas := func(l string) int {
+		l = strings.TrimSpace(l)
+		n := 0
+		for i := 0; i < len(l); i++ {
+			if l[i] == '|' && (i == 0 || l[i-1] != '\\') {
+				n++
+			}
+		}
+		return n - 1
+	}
 	// El separador de un encabezado es la línea de guiones: `|---|---|`.
 	esSeparador := func(l string) bool {
 		l = strings.TrimSpace(l)
@@ -298,6 +313,7 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 
 	lineas := strings.Split(string(crudo), "\n")
 	tablas, filasVistas := 0, 0
+	revisadas := map[int]bool{}
 	esperadas, encabezadoEn := 0, 0
 	for i, l := range lineas {
 		switch {
@@ -311,6 +327,7 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 			}
 		case esperadas > 0 && esFila(l):
 			filasVistas++
+			revisadas[i] = true
 			if n := celdas(l); n != esperadas {
 				t.Errorf("ABIERTO.md línea %d: la fila tiene %d celdas y su encabezado (línea %d) "+
 					"declara %d.\n    %s\n  Markdown DESCARTA la celda de más sin avisar, así que el "+
@@ -319,6 +336,37 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 					"columna que corresponda, o dale a la tabla la columna que le falta.",
 					i+1, n, encabezadoEn, esperadas, recorte(strings.TrimSpace(l), 110))
 			}
+		case esperadas > 0 && strings.TrimSpace(l) == "":
+			// UNA LÍNEA EN BLANCO ADENTRO DE UNA TABLA LA PARTE EN DOS, Y ESO ES PEOR QUE UNA CELDA
+			// PERDIDA: en Markdown la tabla TERMINA ahí, así que las filas que siguen se renderizan
+			// como texto suelto con barras verticales. Y para esta prueba era peor todavía: al ver
+			// el blanco daba la tabla por terminada y dejaba de revisar, o sea que se ponía EN VERDE
+			// sobre todo lo que venía después.
+			//
+			// Medido el 2026-09-05: había NUEVE líneas en blanco adentro de la tabla de la sección 1,
+			// y la primera estaba a catorce filas del encabezado — así que A77, A79, A88, A89, A96,
+			// A90..A95, A98 y A99 no se revisaban Y no renderizaban como tabla. Entre ellas, la de
+			// A98, con una celda de más que el renderizador se come. Es el mismo defecto que B20 ya
+			// registró, y esta prueba existía para atraparlo.
+			//
+			// Un blanco ANTES de un encabezado o del final de la sección sí es legítimo: la tabla se
+			// terminó de verdad. La diferencia es si DESPUÉS del blanco siguen viniendo filas.
+			siguen := false
+			for j := i + 1; j < len(lineas); j++ {
+				if strings.TrimSpace(lineas[j]) == "" {
+					continue
+				}
+				siguen = esFila(lineas[j]) && !esSeparador(lineas[j])
+				break
+			}
+			if siguen {
+				t.Errorf("ABIERTO.md línea %d: hay una línea EN BLANCO adentro de la tabla que empieza "+
+					"en la línea %d, y después del blanco siguen viniendo filas.\n"+
+					"  Markdown TERMINA la tabla en el blanco, así que todo lo que sigue se dibuja como "+
+					"texto suelto con barras verticales en vez de como filas — el registro entero deja de "+
+					"leerse. Sacá la línea en blanco.", i+1, encabezadoEn)
+			}
+			esperadas = 0
 		case esperadas > 0:
 			esperadas = 0 // se terminó la tabla
 		}
@@ -330,5 +378,45 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 	if tablas < 3 || filasVistas < 30 {
 		t.Fatalf("se reconocieron %d tabla(s) y %d fila(s) en ABIERTO.md, y son al menos 3 y 30: "+
 			"cambió el formato del archivo y esta guarda dejó de mirar", tablas, filasVistas)
+	}
+
+	// CONTROL DE COBERTURA: TODA FILA CON IDENTIFICADOR TIENE QUE HABER SIDO REVISADA.
+	//
+	// «3 tablas y 30 filas» NO ALCANZABA, y se midió el 2026-09-05: la tabla de la sección 1 estaba
+	// PARTIDA en la fila de A92 —le faltaba la barra de cierre y su celda de dueño, y detrás venía un
+	// blockquote de corrección metido adentro de la tabla— así que el recorrido la daba por terminada
+	// ahí y las DIECISÉIS filas siguientes (A93 … A111) no se revisaban. Con 4 tablas y 47 filas
+	// contadas, el control seguía en verde: contaba contra un número fijo que ya estaba superado.
+	//
+	// Y NO ERA SÓLO LA PRUEBA. En Markdown un blanco TERMINA la tabla, así que esas dieciséis filas
+	// se dibujaban como texto suelto con barras verticales — la mitad reciente del registro dejó de
+	// leerse como registro, que es exactamente el daño que B20 ya había medido con una celda.
+	//
+	// Este control cuenta lo revisado contra lo que el archivo TIENE, que es la única cuenta que no
+	// envejece: cada fila `| A<n> |` o `| B<n> |` tiene que estar entre las visitadas, y si falta, se
+	// la NOMBRA — que es lo que convierte «algo no se revisó» en «buscá la fila anterior a A93».
+	//
+	// Sabotaje que la hace fallar: quitarle la barra de cierre a cualquier fila que no sea la última
+	// de su tabla, o meter una línea en blanco entre dos filas.
+	idDeFila := regexp.MustCompile(`^\| ([AB]\d+) \|`)
+	var sinRevisar []string
+	primera := 0
+	for i, l := range lineas {
+		if m := idDeFila.FindStringSubmatch(l); m != nil && !revisadas[i] {
+			if primera == 0 {
+				primera = i + 1
+			}
+			sinRevisar = append(sinRevisar, m[1])
+		}
+	}
+	if len(sinRevisar) > 0 {
+		t.Errorf("ABIERTO.md: %d fila(s) con número de registro NO se revisaron: %v.\n"+
+			"  La primera está en la línea %d. El recorrido dio la tabla por terminada antes de "+
+			"llegar, y en Markdown esas filas TAMPOCO se dibujan como tabla: se ven como texto suelto "+
+			"con barras verticales, así que el registro deja de leerse justo en lo más reciente.\n"+
+			"  Mirá la fila ANTERIOR a la primera que falta: o le falta la barra de cierre, o hay un "+
+			"blanco, un blockquote o prosa metidos adentro de la tabla. Una corrección va PLEGADA "+
+			"adentro de la celda de su fila, nunca como bloque suelto entre filas.",
+			len(sinRevisar), sinRevisar, primera)
 	}
 }

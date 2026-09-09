@@ -70,14 +70,61 @@ func symbolMatches(s codeintel.Symbol, pedido string) bool {
 	return s.Name == pedido
 }
 
+// prefijoDeclarado marca los fingerprints calculados sobre símbolos DECLARADOS en el gist en vez
+// de derivados del archivo.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// VA EN EL FINGERPRINT Y NO EN UNA COLUMNA NUEVA, Y NO ES POR AHORRAR UNA MIGRACIÓN
+//
+// El ancla tiene que RE-CALCULARSE con la MISMA fuente con la que se capturó. Si no, pasa esto:
+// una nota anclada hoy a un símbolo de un `.jsx` usa lo declarado (el extractor no da nada); el
+// día que el binario se compile con tree-sitter, el extractor SÍ da algo, el re-cálculo cambia de
+// fuente, el hash cambia... y todas esas notas saltan a rancias a la vez, sin que nada haya
+// cambiado en el código. Es una marca de rancio masiva y falsa: justo el ruido que este mecanismo
+// existe para no producir, y encima disparada por un cambio de build.
+//
+// El prefijo hace que el fingerprint guardado DIGA con qué fuente se calculó, así que el
+// re-cálculo puede elegir la misma. Y es compatible hacia atrás sin tocar el esquema: los
+// fingerprints que ya están guardados no tienen prefijo, que es exactamente lo que significa
+// «derivado del archivo» — la única fuente que existía cuando se escribieron.
+const prefijoDeclarado = "d:"
+
+// fuenteDeSimbolos elige de dónde salen los símbolos de un archivo.
+type fuenteDeSimbolos int
+
+const (
+	fuenteAuto      fuenteDeSimbolos = iota // extractor y, si no da, lo declarado (captura)
+	fuenteDerivada                          // sólo el extractor (re-cálculo de un ancla sin prefijo)
+	fuenteDeclarada                         // sólo lo declarado (re-cálculo de un ancla con prefijo)
+)
+
+// symbolFingerprint es la forma DERIVADA: sólo el extractor, sin fallback. Es la que existía y la
+// que usan las pruebas del camino de Go, donde el extractor nunca falla.
 func symbolFingerprint(root, path, symbol string) (string, error) {
+	return symbolFingerprintCon(root, path, symbol, fuenteDerivada, nil)
+}
+
+func symbolFingerprintCon(root, path, symbol string, fuente fuenteDeSimbolos, declaradosDe func(string) []codeintel.Symbol) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 	if err != nil {
 		return "", err
 	}
 	content := string(data)
-	syms := codeintel.ExtractSymbols(path, content)
 	lineas := strings.Split(content, "\n")
+
+	// PRECEDENCIA: el extractor manda. Lo declarado es el fallback de lo que el extractor no vio,
+	// así que Go —donde el extractor nunca falla— no cambia en un solo caso. Lo declarado sólo
+	// puede AGREGAR anclas donde hoy hay un error.
+	var syms []codeintel.Symbol
+	usoDeclarados := false
+	if fuente != fuenteDeclarada {
+		syms = codeintel.ExtractSymbols(path, content)
+	}
+	if fuente != fuenteDerivada && !hayMatch(syms, symbol) && declaradosDe != nil {
+		if d := declaradosDe(path); len(d) > 0 && hayMatch(d, symbol) {
+			syms, usoDeclarados = d, true
+		}
+	}
 
 	h := sha256.New()
 	encontrado := false
@@ -99,16 +146,69 @@ func symbolFingerprint(root, path, symbol string) (string, error) {
 	if !encontrado {
 		return "", errSymbolNotFound
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	fp := hex.EncodeToString(h.Sum(nil))
+	if usoDeclarados {
+		fp = prefijoDeclarado + fp
+	}
+	return fp, nil
+}
+
+// hayMatch dice si alguno de los símbolos responde al pedido, con la misma regla que el hash.
+func hayMatch(syms []codeintel.Symbol, pedido string) bool {
+	for _, s := range syms {
+		if symbolMatches(s, pedido) {
+			return true
+		}
+	}
+	return false
 }
 
 // originFingerprint resuelve la identidad de un ancla, sea de archivo entero o de símbolo.
-func originFingerprint(root, ref string) (string, error) {
+//
+// `guardado` es el fingerprint que YA estaba (vacío al capturar por primera vez): de él sale con
+// qué fuente hay que re-calcular, para que un ancla no cambie de fuente a mitad de su vida. Ver
+// prefijoDeclarado.
+func originFingerprint(root, ref, guardado string, declaradosDe func(string) []codeintel.Symbol) (string, error) {
 	path, symbol := splitOriginRef(ref)
 	if symbol == "" {
 		return FileFingerprint(root, path)
 	}
-	return symbolFingerprint(root, path, symbol)
+	fuente := fuenteAuto
+	switch {
+	case guardado == "":
+		// Captura: se elige la mejor fuente disponible y el prefijo queda escrito.
+	case strings.HasPrefix(guardado, prefijoDeclarado):
+		fuente = fuenteDeclarada
+	default:
+		fuente = fuenteDerivada
+	}
+	return symbolFingerprintCon(root, path, symbol, fuente, declaradosDe)
+}
+
+// declaradosDesde devuelve un lector de símbolos DECLARADOS para un path, sobre cualquier cosa que
+// sepa consultar (una tx o la base). Cachea por path: una observación puede anclar hasta diez
+// rutas y el re-chequeo recorre muchas filas, y sin caché sería una consulta por cada una.
+//
+// Un error o un gist ausente devuelven nil, no un error: lo declarado es un FALLBACK, y que no
+// esté sólo significa que este camino no aporta nada — el llamador ya trata «no encontré el
+// símbolo» como el error que corresponde.
+func declaradosDesde(q interface {
+	QueryRow(string, ...interface{}) *sql.Row
+}) func(string) []codeintel.Symbol {
+	cache := map[string][]codeintel.Symbol{}
+	return func(path string) []codeintel.Symbol {
+		if v, ok := cache[path]; ok {
+			return v
+		}
+		var symbols string
+		if err := q.QueryRow(`SELECT COALESCE(symbols,'') FROM code_memory WHERE path = ? LIMIT 1`, path).Scan(&symbols); err != nil {
+			cache[path] = nil
+			return nil
+		}
+		syms := codeintel.ParseSymbolLine(symbols)
+		cache[path] = syms
+		return syms
+	}
 }
 
 // maxOriginPaths acota cuántos archivos puede anclar una observación. Excederlo es un
@@ -140,8 +240,9 @@ func saveObservationOrigins(tx *sql.Tx, obsID, root string, paths []string) erro
 	if err != nil {
 		return err
 	}
+	declarados := declaradosDesde(tx)
 	for _, rel := range limpias {
-		fp, ferr := originFingerprint(root, rel)
+		fp, ferr := originFingerprint(root, rel, "", declarados)
 		if errors.Is(ferr, errSymbolNotFound) {
 			p, sym := splitOriginRef(rel)
 			return fmt.Errorf(
@@ -229,16 +330,22 @@ func (e *DbEngine) staleOriginsFor(ids []string, root string) (map[string][]Stal
 	}
 	defer rows.Close()
 
-	actual := map[string]string{} // ruta → fingerprint vigente ("" = no existe)
+	actual := map[string]string{} // ruta+fuente → fingerprint vigente ("" = no existe)
+	declarados := declaradosDesde(e.db)
 	out := map[string][]StaleOrigin{}
 	for rows.Next() {
 		var obsID, path, guardado string
 		if err := rows.Scan(&obsID, &path, &guardado); err != nil {
 			return nil, err
 		}
-		vigente, calculado := actual[path]
+		// La clave del caché lleva la FUENTE, no sólo el path: dos observaciones pueden anclar
+		// la misma ruta con fuentes distintas (una capturada antes de que el extractor
+		// entendiera el lenguaje y otra después), y compartirles el resultado marcaría a una de
+		// las dos como rancia sin que nada haya cambiado.
+		ck := path + "\x00" + fuenteDelFingerprint(guardado)
+		vigente, calculado := actual[ck]
 		if !calculado {
-			fp, ferr := originFingerprint(root, path)
+			fp, ferr := originFingerprint(root, path, guardado, declarados)
 			switch {
 			case ferr == nil:
 				vigente = fp
@@ -249,7 +356,7 @@ func (e *DbEngine) staleOriginsFor(ids []string, root string) (map[string][]Stal
 			default:
 				vigente = guardado // E/S ajena al contenido: no marcar
 			}
-			actual[path] = vigente
+			actual[ck] = vigente
 		}
 		switch {
 		case vigente == "":
@@ -317,4 +424,13 @@ func StaleWarning(stale []StaleOrigin) string {
 		partes = append(partes, "ya no existe: "+strings.Join(faltantes, ", "))
 	}
 	return "⚠ posiblemente rancia (" + strings.Join(partes, "; ") + ") — "
+}
+
+// fuenteDelFingerprint reduce un fingerprint guardado a la etiqueta de su fuente, para poder
+// cachear por ella.
+func fuenteDelFingerprint(guardado string) string {
+	if strings.HasPrefix(guardado, prefijoDeclarado) {
+		return "declarado"
+	}
+	return "derivado"
 }

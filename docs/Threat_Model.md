@@ -165,30 +165,76 @@ riesgo ausente.
 - **El gate por device del acceso híbrido no existe todavía.** El proposal declara relay público
   «SÓLO para devices marcados, con su propio gate» (`specs/control-de-flota/proposal.md:75`); en
   código no hay ninguna marca por máquina — al relay lo alcanza cualquiera que tenga su clave.
-- **El consentimiento cubre `exec` y `shell`, pero `pide` sólo lo honra pantalla.** *(Este punto
-  estaba vencido en tres afirmaciones y se corrigió el 2026-09-04; lo que decía antes está al final,
-  porque su forma importa más que su contenido.)*
+- **El consentimiento gobierna los CUATRO caminos, y `pide` ya se honra en los cuatro.** *(Este
+  punto estuvo vencido TRES veces: en tres afirmaciones hasta el 2026-09-04; otra vez el
+  2026-09-05 cuando A85 y A86 cambiaron el comportamiento que describía; y una tercera el mismo día
+  cuando se descubrió que decía «tres caminos» y había un cuarto que no consultaba el eje. Lo que
+  decía antes está resumido al final, porque su forma importa más que su contenido.)*
 
-  El eje —`libre` < `avisa` < `pide` < `prohibido`— **lo consultan los tres caminos**:
+  El eje —`libre` < `avisa` < `pide` < `prohibido`— **lo consultan los cuatro caminos**:
   `musubi_fleet_exec` (`internal/mcp/methods_exec.go:60`), `musubi_fleet_shell`
-  (`internal/mcp/methods_shell.go:75` y `:116`) y `musubi_fleet_screen`
-  (`internal/mcp/methods_pantalla.go:92`, `:162` y `:178`). `prohibido` cierra los tres y `avisa`
-  notifica en los tres.
+  (`internal/mcp/methods_shell.go:75` y `:116`), `musubi_fleet_screen`
+  (`internal/mcp/methods_pantalla.go:92`, `:162` y `:178`) y **el auto-heal**
+  (`internal/mcp/politicas.go`, tercera compuerta de `actuarSiCorresponde`, desde **A91**).
+  `prohibido` cierra los cuatro y `avisa` notifica en los cuatro.
 
-  **`pide` es la excepción, y falla de la peor manera: parece honrado y no lo está.**
+  **EL CUARTO FALTABA, Y ES EL QUE NADIE MIRA EJECUTARSE.** Medido el 2026-09-05 corriendo el
+  barrido real: `libre`, `avisa`, `pide` y `prohibido` daban los cuatro «1 comando encolado», y bajo
+  `avisa` no se encolaba ningún aviso. El comentario de `actuarSiCorresponde` decía «LAS DOS
+  COMPUERTAS, LAS MISMAS QUE PARA UNA PERSONA» mientras una persona ya pasaba tres. Alcanzaba con
+  una política con `devices: ["*"]` para que el cerebro ejecutara en una máquina marcada
+  `prohibido`. Es la misma forma que A83 —la shell como tercer camino sin el aviso— y las dos veces
+  el camino nuevo llegó en un ARCHIVO nuevo: por eso la guarda de hoy no cuenta caminos sino que
+  exige que todo archivo que llame a `EncolarComando` llame también a `ConsentimientoEfectivo`
+  (`TestTodoArchivoQueLeHaceHacerAlgoAUnaMaquinaConoceElEjeDeConsentimiento`, por AST y no por
+  texto: la primera versión miraba el texto y un comentario la dejaba en verde).
+
+  **`pide` ERA la excepción, y fallaba de la peor manera: parecía honrado y no lo estaba.**
   `AvisaAlUsuario()` devuelve true también para `pide` —su propio doc lo dice, «preguntar es avisar
-  y algo más»— así que el camino de la shell, que sólo tiene ramas de `avisa`, le manda a la persona
-  una NOTIFICACIÓN que no puede contestar mientras el operador ya tiene el prompt. Sólo pantalla
-  implementa la mitad que pregunta (`methods_pantalla.go:178`). El grado promete «tiene que aceptar;
-  sin respuesta, no hay sesión» y en una shell eso no pasa.
+  y algo más»— así que los caminos que sólo tenían ramas de `avisa` le mandaban a la persona una
+  NOTIFICACIÓN que no podía contestar mientras el operador ya estaba adentro. El grado promete
+  «tiene que aceptar; sin respuesta, no hay sesión», y eso no pasaba.
 
-  **Es LATENTE hoy**: las cuatro máquinas de la flota están sin declarar, o sea en `avisa`. Nadie lo
-  está sufriendo, y por eso no lo destapó ningún incidente sino un barrido.
+  **CERRADO EN LOS TRES CAMINOS, y cada uno como corresponde a su forma:**
 
-  **NO es una decisión abierta: es un defecto, y está en curso.** El texto anterior lo remitía a A75
-  como «decisión abierta, no bug», y A75 se CERRÓ ENTERO el 2026-09-03 por decisión de gio. Un
-  agujero descrito correctamente, etiquetado como decidido y apuntando a un cabo cerrado es la forma
-  más eficiente de que nadie vaya a mirarlo: quien lo lee concluye que alguien ya lo pensó.
+  - `musubi_fleet_screen` siempre lo implementó (`methods_pantalla.go:178`).
+  - `musubi_fleet_shell` lo implementa desde **A85** (2026-09-04): flujo de dos llamadas, la sesión
+    queda en `esperando_permiso` SIN tocar SSH y el prompt se entrega recién si dijeron que sí.
+  - `musubi_fleet_exec` **se endurece a `prohibido`** desde **A86** (2026-09-05, decisión de gio).
+    No pregunta, y ésa es la diferencia que importa: una shell es una SESIÓN y tiene dónde esperar
+    la respuesta; un exec es una orden suelta y no. Preguntar por comando metería un diálogo de
+    hasta minuto y medio en cada orden de una ráfaga. Endurecer no inventa comportamiento nuevo —es
+    la misma regla que el dominio ya aplica cuando no hay a quién preguntarle— y sesga el error
+    hacia el lado que SE NOTA: bloquear de más rompe el auto-heal y alguien lo ve; ejecutar sin
+    preguntar no se nota nunca. **Lo que se paga está dicho**: una máquina en `pide` no recibe
+    auto-heal, y la salida es de su dueño —bajarla a `avisa`—, no del código.
+  - **el auto-heal** también, desde **A91** (2026-09-05, decisión de gio), con el mismo criterio y
+    por la misma razón elevada: un `exec` a mano al menos tiene una persona del otro lado que puede
+    reintentar; un barrido corre solo, así que actuar bajo `pide` sería romper la promesa sin nadie
+    que lo note.
+
+  **Y LA PREMISA DE ESA DECISIÓN NO ERA CIERTA CUANDO SE TOMÓ, lo que vale más que el arreglo.** El
+  argumento fue «bloquear de más SE NOTA: el auto-heal deja de actuar y alguien lo ve». Medido el
+  2026-09-05: no existía ninguna métrica ni alerta de un rechazo por consentimiento, así que lo
+  único que avisaba era el texto de un rechazo RPC pedido a mano — y el auto-heal, además, NO dejaba
+  de actuar. La decisión pudo ser la correcta; el mecanismo que la justificaba no existía. Ahora sí:
+  `musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}` cuenta `prohibido` y `pide`
+  SEPARADOS —el segundo mide cuánto se ganaría implementando la pregunta por política— y la alerta
+  `PoliticaFrenadaPorConsentimiento` los saca a la superficie con `for: 6h`, porque una política
+  frenada es un ESTADO y no un evento.
+
+  La matriz **caminos × grados** (`internal/mcp/consentimiento_matriz_test.go`) ejerce las doce
+  celdas y las deja escritas; la asimetría exec/shell vive ahí y un cambio de comportamiento se ve
+  en esa tabla antes que en producción.
+
+  **LO QUE CONVIENE NO OLVIDAR DE CÓMO ESTUVO ROTO**, porque la forma se repite y el contenido ya no
+  aplica: (1) el texto original remitía a A75 como «decisión abierta, no bug», y A75 se había
+  CERRADO entero — un agujero descrito correctamente, etiquetado como decidido y apuntando a un cabo
+  cerrado es la forma más eficiente de que nadie vaya a mirarlo, porque quien lo lee concluye que
+  alguien ya lo pensó. (2) La guarda que existía recorría los TRES CAMINOS y daba tranquilidad por
+  haber generalizado, pero fijaba `avisa` en las tres filas y nunca probaba `pide`: generalizaba
+  sobre una dimensión de dos, y una tabla que cubre la mitad de una matriz se siente igual de
+  completa que una que la cubre entera.
 
   **Y ADEMÁS LAS DOS REFERENCIAS DE LÍNEA HABÍAN VENCIDO** —`:81` apunta hoy a un comentario y
   `:148` a la mitad de una frase—, que es el modo de falla propio de citar líneas en prosa: no rompe

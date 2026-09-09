@@ -209,7 +209,7 @@ func runAgent(args []string) {
 	col := fleet.NuevoColector()
 
 	if unaVez {
-		res := latir(base, cred.Usar(), tomarMuestra(col))
+		res := latir(base, cred.Usar(), cred.Fuente(), tomarMuestra(col))
 		fmt.Println(res.describir())
 		atenderComandos(base, cred.Actual(), res.comandos)
 		// CON --once TAMBIÉN SE GUARDA UNA ROTACIÓN OFRECIDA. Es un solo latido, así que no llega
@@ -324,7 +324,7 @@ func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Durat
 		case <-tick.C:
 		}
 
-		res := latir(base, cred.Usar(), tomarMuestra(col))
+		res := latir(base, cred.Usar(), cred.Fuente(), tomarMuestra(col))
 		switch {
 		case res.revocado:
 			// ANTES DE DARSE DE BAJA SE PRUEBA EL OTRO TOKEN DEL LLAVERO, si el archivo tenía dos.
@@ -424,7 +424,7 @@ func clienteParaElCerebro(nombre string) *http.Client {
 // latir hace UN POST, con la muestra si hay. El cuerpo lleva MEDICIONES y nunca IDENTIDAD: no
 // hay ningún campo con el que el dispositivo pueda decir quién es (invariante B4/D5). Quién es
 // lo decide el token, del lado del cerebro.
-func latir(base, token string, m *fleet.Muestra) resultadoLatido {
+func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido {
 	// El cuerpo lleva la muestra y el autorreporte (qué build corre, por dónde se la alcanza).
 	// Ni un campo de identidad: quién es lo decide el token, del lado del cerebro.
 	// SE ARMA CON EL TIPO DEL CONTRATO, no con un map. El `map[string]any` que estaba acá era la
@@ -460,6 +460,20 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	if !cap.Puede && cap.Motivo != "" {
 		carga.MotivoNoPreguntar = cap.Motivo
 	}
+	// DE DÓNDE SALIÓ LA CREDENCIAL (A102). Va porque el cerebro no lo puede averiguar de ninguna
+	// otra forma: una máquina que recibió su token por VARIABLE no puede completar una rotación —un
+	// proceso no reescribe su propio entorno— y desde afuera late igual que una que sí puede. La
+	// rotación vence siempre y el síntoma no señala la causa.
+	//
+	// Medido el 2026-09-05: para descubrirlo en `davantis-1` hubo que LEER UN .cmd EN LA MÁQUINA.
+	// Con esto se le pregunta al cerebro.
+	//
+	// SE OMITE SI ESTÁ VACÍA en vez de mandar "": el campo es opcional para que un agente viejo
+	// —que no lo manda— se distinga de uno nuevo, y mandar vacío desde acá borraría esa distinción
+	// del lado del cerebro. Es el mismo criterio que el puntero de `puede_preguntar`.
+	// Campo del struct y no clave de mapa: el sobre pasó a ser `fleet.CuerpoLatido` tipado al
+	// mergear con main. El `omitempty` del campo conserva la omisión que este comentario explica.
+	carga.TokenFuente = fuenteDelToken
 	// QUÉ CORRE ADENTRO de esta máquina (S12 · A42). Va con la muestra y no por un camino aparte:
 	// el inventario tiene el mismo dueño que la telemetría —el token del dispositivo—, y darle su
 	// propia puerta sería un segundo camino de autoridad para el mismo dato.
@@ -470,10 +484,39 @@ func latir(base, token string, m *fleet.Muestra) resultadoLatido {
 	// VA AUNQUE ESTÉ VACÍA, y `confirmar` se llama recién cuando el cerebro aceptó (A78). El
 	// `len(svs) > 0` que había acá se contradecía en silencio con el sellado de adentro: una
 	// lista vacía se daba por enviada y no se enviaba, para siempre.
-	svs, mandarInventario, confirmarInventario := serviciosDelLatido()
+	svs, omitidos, mandarInventario, confirmarInventario := serviciosDelLatido()
 	if mandarInventario {
 		carga.Servicios = svs
+		// EL RECORTE VIAJA CON LA LISTA (A116). Sin este número, una lista truncada de 64 es
+		// indistinguible de un inventario completo de 64 del lado del cerebro — y como la poda
+		// da de baja lo que no vino, el cerebro no se queda sin ver los que faltan: ANOTA que
+		// dejaron de existir. Medido en davantis-1: 26 servicios `docker` y 87 de Windows
+		// marcados `revoked = 1` por esa rotación, entre ellos los 11 contenedores de
+		// `altura-erp`, que estaban corriendo.
+		//
+		// Va sólo cuando se manda el inventario porque la poda sólo corre cuando llega una lista.
+		// Y `omitempty` del otro lado, así que un inventario completo pesa exactamente lo que
+		// pesaba antes.
+		//
+		// El merge con main cambió el sobre de un `map[string]any` a `fleet.CuerpoLatido` tipado
+		// (#413/#419), así que esto pasó de una clave suelta a un campo del struct — y por eso el
+		// campo hubo que agregarlo en `internal/fleet/protocolo.go`. Es mejor: una clave de mapa
+		// mal escrita viaja igual y se descarta del otro lado sin decir nada.
+		carga.ServiciosOmitidos = omitidos
 	}
+	// EL FALLO DE ENUMERACIÓN VIAJA SIEMPRE, TAMBIÉN —Y SOBRE TODO— CUANDO NO HAY INVENTARIO.
+	//
+	// Va FUERA del `if mandarInventario` a propósito: es el único caso en que hay algo que decir
+	// justamente porque NO se manda nada. Adentro del `if` no se emitiría nunca en el caso que
+	// importa, que es el error más fácil de cometer acá.
+	//
+	// Sin esto, del lado del cerebro «el enumerador de esta máquina está roto» y «el inventario no
+	// cambió» son el MISMO silencio. Medido en `davantis-1` el 2026-09-09: 61 horas sin reportar
+	// servicios con el agente vivo, y 64 alertas `ServicioSinNoticias` —una por servicio— sin que
+	// ninguna nombrara la causa.
+	//
+	// `omitempty`: una máquina sana no agrega un solo byte al latido.
+	carga.ServiciosError = motivoDeEnumeracionFallida()
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
 		cuerpo = bytes.NewReader(b)
