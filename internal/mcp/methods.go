@@ -1803,9 +1803,16 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	// el llamador no los pasa: evita el string manual que se desincroniza. Si el llamador
 	// pasa symbols explícito, se respeta (compat hacia atrás).
 	symbols := args.Symbols
+	// symbolsDerivados dice si el EXTRACTOR entendió el archivo. Se separa de «el llamador no
+	// pasó símbolos» porque son cosas distintas y la respuesta las confundía: un `.rs`, un `.php`
+	// o un `.java` devuelven nil acá y el gist se guardaba con `ok:true` y símbolos en blanco,
+	// indistinguible de un archivo que de verdad no tiene símbolos. El que llama no tenía forma
+	// de saber que el sistema no lo entendió, así que no podía compensarlo pasándolos a mano.
+	symbolsDerivados := strings.TrimSpace(args.Symbols) != ""
 	if strings.TrimSpace(symbols) == "" {
 		if content, rerr := s.readProjectFile(args.Path); rerr == nil {
 			symbols = codeintel.FormatSymbols(codeintel.ExtractSymbols(key, content))
+			symbolsDerivados = strings.TrimSpace(symbols) != ""
 		}
 	}
 	// Redacción de TODO ingest al central (Track 17 T17.2): gist y symbols no pueden llevar un
@@ -1830,12 +1837,33 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 		return nil, rpcErrorf(codeInternalError, "error al guardar memoria de código: %v", err)
 	}
 	// Track 20 · F1: poblá el grafo de código del paquete como EFECTO del guardado del gist.
-	// Best-effort: sólo Go, y un fallo del derivado/persistido NO debe fallar el guardado del
-	// gist (que ya se commiteó). Las tools de consulta y el hook que responde son F2.
-	if strings.HasSuffix(strings.ToLower(key), ".go") {
+	// Best-effort: un fallo del derivado/persistido NO debe fallar el guardado del gist (que ya
+	// se commiteó). Las tools de consulta y el hook que responde son F2.
+	//
+	// LA CONDICIÓN ERA `.go` Y ESA ERA LA ÚNICA LÍNEA DEL ÁRBOL, FUERA DE internal/codeintel, QUE
+	// PREGUNTABA POR UN LENGUAJE. Medido: 1 afuera, 3 adentro del paquete.
+	//
+	// La consecuencia no era «TS se indexa un poco menos»: un repo SIN NINGÚN `.go` no tenía
+	// ningún mantenimiento automático del grafo, porque éste es el único disparador que corre
+	// solo. Medido en Altura-erp (el único producto no-Go): 1.878 nodos con el último
+	// `updated_at` ocho días atrás del último commit, y nadie lo tocó.
+	//
+	// `IndexableForGraph` es la misma pregunta que ya decide qué entra al grafo, así que esto
+	// deja de ser una segunda fuente de verdad sobre lo mismo: cuando la tabla de lenguajes crezca,
+	// este camino crece con ella en vez de quedarse atrás. Con el binario compilado sin el tag
+	// `treesitter` devuelve true igual para los poliglotas y el refresh no encuentra símbolos —
+	// que es exactamente lo que hay que hacer visible, y lo hace `codegraph_index`.
+	if codeintel.IndexableForGraph(key) {
 		_ = s.refreshCodeGraphForPackage(ctx, packageDirOf(key))
 	}
-	return jsonResult(map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens})
+	res := map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens, "symbols_derivados": symbolsDerivados}
+	if !symbolsDerivados {
+		// Se DICE, y se dice qué hacer. El gist quedó guardado igual —es texto y sirve—, lo que
+		// no hay es estructura, y sin estructura no se puede anclar una observación a un símbolo
+		// ni entrar al grafo. Que el llamador pueda pasarlos a mano es el arreglo disponible hoy.
+		res["symbols_hint"] = "el extractor no derivó símbolos de «" + cm.Path + "»: el gist se guardó, pero sin símbolos no se puede anclar una observación a una función ni construir el grafo. Podés pasarlos vos en 'symbols' con el formato 'Nombre L12; Tipo.Metodo L18'"
+	}
+	return jsonResult(res)
 }
 
 func (s *McpServer) toolRecallCode(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {

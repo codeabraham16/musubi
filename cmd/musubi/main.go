@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
@@ -97,6 +98,23 @@ func main() {
 			fmt.Println(memory.EsquemaEsperado())
 			return
 		}
+		// `--lenguajes` va como bandera propia POR LA MISMA RAZÓN que `--esquema`, y no como un
+		// renglón más: el comentario de arriba no es decorativo, `redesplegar-cerebro.sh` compara
+		// la salida ENTERA y un segundo renglón dispararía un rollback en mitad de un despliegue
+		// que salió bien.
+		//
+		// El dato hace falta porque hoy no se puede saber: dos binarios que imprimen exactamente
+		// la misma versión indexan cantidades distintas según se hayan compilado con el tag
+		// `treesitter` o sin él, y cuando el grafo sale vacío no hay forma de distinguir «este
+		// repo no tiene código» de «este binario no entiende este código».
+		if len(os.Args) > 2 && os.Args[2] == "--lenguajes" {
+			if codeintel.PolyglotHabilitado() {
+				fmt.Println("go + poliglota (tree-sitter linkeado)")
+			} else {
+				fmt.Println("go")
+			}
+			return
+		}
 		fmt.Printf("musubi %s\n", version)
 	case "update":
 		runUpdate()
@@ -166,6 +184,7 @@ func printUsage() {
 	cmd("fetch <url>", "Baja una URL del tailnet a stdout (transporte de auto-update del cuerpo)")
 	cmd("receipt <emit|check|show|install-hook>", "Gate de entrega: el push exige un recibo para ESTA huella del árbol")
 	cmd("version", "Muestra la versión del binario")
+	cmd("version --lenguajes", "Dice qué lenguajes ENTIENDE este binario (depende de si se compiló con tree-sitter)")
 
 	section("Hooks (uso interno de Claude Code)")
 	cmd("detect [--hook-mode]", "Detecta el stack / SessionStart: auto-descubrimiento + priming")
