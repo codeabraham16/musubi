@@ -27,7 +27,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Fixed
 - **El canario de escala llevaba siete semanas cantando la canción equivocada, y por eso nadie lo
-  oyó.** `bench-scale` acumulaba 8 corridas en rojo desde 2026-07-20 con el rótulo «la búsqueda
+  oyó.** `bench-scale` tiene **8 corridas en toda su historia y las 8 son rojas** (2026-07-20 a
+  2026-09-07): no se rompió en julio, nunca estuvo verde ni una vez. Todas bajo el rótulo «la búsqueda
   vectorial dejó de escalar sublinealmente a 100k (¿IVF caído a full-scan?)». Medido: el invariante
   estaba **sano todo ese tiempo** — el ratio real es **3,42x contra un umbral de 6**, con la teoría
   prediciendo √10 ≈ 3,16. El benchmark nunca llegaba a medir: reventaba SEMBRANDO, en la fila
@@ -51,9 +52,63 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   juzgar) y `PIPESTATUS` (conserva el código real, que el pipe se comía), y un fallo de sembrado
   dice que **no llegó a medir**, en vez de hacerse pasar por una regresión de escala.
 
-  Las dos mitades del arreglo tienen banco propio en `internal/memory/txlock_test.go` (X1–X3), cada
-  una vista en rojo bajo su sabotaje: sacar `_txlock=immediate` (X1, X2 y X3) y sacar el
-  `busy_timeout` (X1 y X3, con X2 verde a propósito).
+  **Y el mismo defecto estaba vivo en `ci.yml`, donde corre en cada PR** — o sea, cien veces más
+  seguido que el canario semanal. Los dos pasos de `bench-guard` tenían el `out=$(go test …)`
+  idéntico; ahora llevan `tee` + `PIPESTATUS` igual que el canario. Dos huecos más del mismo
+  archivo, encontrados por la misma revisión: el paso de `Maintain` heredaba el `success()`
+  implícito, así que un fallo del paso vectorial **salteaba el segundo canario entero** y la corrida
+  perdía el 100% de esa señal sin decirlo (ahora `if: ${{ !cancelled() }}`); y el techo del job era
+  `timeout-minutes: 90` contra dos pasos que suman 30m + 60m = **90 exactos**, sin margen para el
+  checkout ni la compilación — un corte del job llegaría ANTES de que el timeout de Go imprima nada.
+  Pasa a 120: el techo del job tiene que ser mayor que la suma, no igual.
+
+  Por último, el `awk` que extrae los B/op anclaba en `/n=10000-/`, y ese guión es el sufijo de
+  GOMAXPROCS **que Go omite cuando vale 1**: en un runner de un solo core la guarda no matchearía
+  nada y moriría diciendo «no se pudo medir». Ahora ancla al campo completo, con el sufijo opcional.
+
+  El banco vive en `internal/memory/txlock_test.go` y son cinco casos, cada invariante visto en rojo
+  bajo un sabotaje que lo ataca a él:
+
+  | sabotaje | X1 | X2 | X3 | X4 | X5 |
+  |---|---|---|---|---|---|
+  | sin `_txlock=immediate` | 🔴 | 🔴 | 🔴 | 🔴 | ✅ |
+  | sin `busy_timeout` | 🔴 | ✅ | 🔴 | ✅ | ✅ |
+  | el `Begin` de `Consolidate` antes del barrido | ✅ | ✅ | ✅ | ✅ | 🔴 |
+
+  X4 es el que faltaba y el que más importa: X1–X3 fabricaban el segundo escritor a mano, así que
+  ninguno ejercitaba al entrenador de fondo REAL — el escenario que de verdad rompió sólo lo cubría
+  el benchmark semanal, a 100.000 filas. Ahora falla en **0,19 s** bajo su sabotaje.
+
+  Tres correcciones más del banco, todas del mismo tipo: **una guarda que no puede ponerse roja no
+  verifica nada.** X2 tenía una aserción tautológica sobre una ruta que arma el propio helper. X3
+  comparaba contra un piso fijo de 100 ms, y esa constante tiene una asimetría fea — nunca da un
+  rojo falso, pero da VERDE falso en cuanto una escritura sin contención cruza los 100 ms por
+  lentitud de la máquina; bajo `-race`, que es como corre `test` en CI, eso pasa. Ahora el piso se
+  calibra contra una escritura sin contención medida en la misma máquina y en el mismo momento. Y
+  `esBaseBloqueada` clasificaba el busy por el TEXTO del error teniendo el código tipado disponible
+  (`modernc.org/sqlite/error.go:12-21`).
+
+  **Y el pragma trajo un costo propio, que una revisión adversarial del PR encontró y que se
+  arregla acá mismo.** `immediate` corre la ventana de exclusión hacia atrás, hasta el `Begin` — así
+  que abrir la transacción al principio de una función y escribir mucho después deja de ser gratis.
+  `Consolidate` hacía exactamente eso: abría antes del emparejamiento por trigramas, que es **CPU
+  pura y no toca la base**. Medido: a 40.000 observaciones sostenía el lock **8,9 s**, más que el
+  `busy_timeout(5000)`, y los demás escritores del proceso empezaban a fallar. Peor todavía, cuando
+  no hay duplicados —el régimen normal de una base ya consolidada— los tres `UPDATE` no se ejecutan
+  nunca: la transacción sostenía el lock durante todo el barrido para después commitear **cero
+  filas**. Era, literalmente, la transacción de sólo lectura que el comentario del DSN afirmaba que
+  no existía.
+
+  Ahora las fusiones se acumulan en memoria durante el barrido y la transacción se abre después,
+  sólo si hay algo que escribir. La secuencia de SQL es idéntica, y la regla queda escrita al lado
+  del DSN: **al agregar una transacción nueva, abrirla lo más tarde posible.**
+
+  De la misma revisión salió que el censo que respaldaba «`immediate` no serializa ninguna lectura»
+  decía 21 transacciones y **son 30**. La conclusión aguanta —las 30 escriben— pero el número era la
+  única evidencia del reclamo, así que ahora el comentario lleva el comando para rehacer la cuenta
+  en vez de pedir que se le crea. Y documenta la salida que el driver deja abierta para el día que
+  haga falta una de sólo lectura: `BeginTx` con `ReadOnly: true` esquiva `immediate`
+  (`modernc.org/sqlite@v1.58.0/tx.go:22-24`).
 
   El segundo paso del canario, `Maintain`, también midió por primera vez: **10,98x contra un umbral
   de 20** (lineal ≈ 10x, cuadrático ≈ 100x) — sano, igual que el primero. Y ese número trajo un

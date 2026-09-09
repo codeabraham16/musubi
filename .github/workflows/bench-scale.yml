@@ -18,7 +18,13 @@ jobs:
     # el paso vectorial tarda 337 s y el de Maintain 941 s — 21 min los dos juntos. Un
     # runner estándar de GitHub es más lento, así que el techo se pone con holgura, pero
     # ACOTADO: sin esto, un cuelgue se come las 6 h de default sin decir nada.
-    timeout-minutes: 90
+    #
+    # 120 y no 90: los `-timeout` de los dos pasos suman 30m + 60m = 90 EXACTOS, así que un
+    # techo de 90 no dejaba ni un segundo para el checkout, el setup-go y la compilación. Si
+    # los dos pasos se acercaran a su límite, el job se cortaría ANTES de que el timeout de Go
+    # imprima nada — y volveríamos a un rojo sin salida, que es el defecto que este archivo
+    # acaba de sacarse de encima. El techo del job tiene que ser MAYOR que la suma, no igual.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -36,8 +42,9 @@ jobs:
         run: |
           # LA SALIDA SE IMPRIME ANTES DE JUZGARLA, y no al revés. La forma anterior era
           # `out=$(go test …)` seguida de `echo "$out"`: con `bash -e`, si el benchmark falla el
-          # step muere EN la asignación y el echo nunca corre. Este job estuvo 8 corridas en rojo
-          # desde 2026-07-20 mostrando sólo el script y ninguna salida — la evidencia se perdía
+          # step muere EN la asignación y el echo nunca corre. Este job tuvo 8 corridas en toda su
+          # historia y las 8 fueron rojas —nunca estuvo verde— mostrando sólo el script y ninguna
+          # salida. Es decir: la guarda nació sin poder informar. La evidencia se perdía
           # justo cuando hacía falta, y por eso costó siete semanas ver que no era una regresión
           # de escala sino un SQLITE_BUSY sembrando. `tee` la imprime primero; PIPESTATUS conserva
           # el código real de `go test`, que el pipe se comería.
@@ -50,8 +57,11 @@ jobs:
             exit 1
           fi
           out=$(cat bench-vector.txt)
-          b10=$(echo "$out" | awk '/SearchVector\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
-          b100=$(echo "$out" | awk '/SearchVector\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          # El ancla va al CAMPO COMPLETO, no a un substring: Go escribe el sufijo `-N` con el
+          # GOMAXPROCS del runner y lo OMITE cuando vale 1, así que `/n=10000-/` no matchearía
+          # nada en una máquina de un solo core y el canario moriría diciendo «no se pudo medir».
+          b10=$(echo "$out" | awk '$1 ~ /^BenchmarkSearchVector\/n=10000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b100=$(echo "$out" | awk '$1 ~ /^BenchmarkSearchVector\/n=100000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=10000:  ${b10:-<vacío>}"
           echo "B/op n=100000: ${b100:-<vacío>}"
           awk -v a="$b10" -v b="$b100" 'BEGIN {
@@ -63,6 +73,12 @@ jobs:
           }'
 
       - name: Maintain complexity @ 100k (memoria sub-cuadrática)
+        # `!cancelled()` y no el `success()` implícito: son DOS canarios independientes, y sin
+        # esto un fallo del paso vectorial saltea éste por completo. O sea que la corrida perdía
+        # el 100% de la señal del segundo invariante sin decir que la había perdido — el mismo
+        # patrón de «la evidencia se pierde justo cuando hace falta» que tuvo a este job ocho
+        # corridas mudo. Se ejecuta igual y el job igual queda rojo por el paso que falló.
+        if: ${{ !cancelled() }}
         # Consolidate es el paso caro; su fix denso (T7.1) lo dejó ~lineal en memoria. Para un
         # salto 10x de n, lineal ≈ 10x y cuadrático ≈ 100x; el umbral 20 atrapa el regreso a
         # cuadrático a escala sin marcar el crecimiento lineal esperado.
@@ -85,8 +101,8 @@ jobs:
             exit 1
           fi
           out=$(cat bench-maintain.txt)
-          b10=$(echo "$out" | awk '/Maintain\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
-          b100=$(echo "$out" | awk '/Maintain\/n=100000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b10=$(echo "$out" | awk '$1 ~ /^BenchmarkMaintain\/n=10000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b100=$(echo "$out" | awk '$1 ~ /^BenchmarkMaintain\/n=100000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=10000:  ${b10:-<vacío>}"
           echo "B/op n=100000: ${b100:-<vacío>}"
           awk -v a="$b10" -v b="$b100" 'BEGIN {
