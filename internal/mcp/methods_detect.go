@@ -102,6 +102,19 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 		if fd.ChangeType != codeintel.ChangeDeleted {
 			if content, rerr := s.readProjectFile(fd.Path); rerr == nil {
 				syms := codeintel.ExtractSymbols(fd.Path, content)
+				// MISMA PRECEDENCIA QUE EN EL ANCLA: el extractor manda, y lo DECLARADO en el
+				// gist es el fallback de lo que el extractor no vio. Sin esto, un `.sql` o un
+				// `.rs` cambiado reportaba la lista de símbolos VACÍA — indistinguible de un
+				// cambio que no tocó ningún símbolo—, así que la respuesta más útil de esta tool
+				// (qué se movió y con qué nombre) no existía fuera de Go.
+				//
+				// Sólo se consulta cuando el extractor no dio nada: es una lectura por archivo
+				// cambiado y no vale pagarla cuando ya hay respuesta.
+				if len(syms) == 0 {
+					if cm, ok, cerr := s.engine.GetCodeMemoryCtx(scoped, key); cerr == nil && ok {
+						syms = codeintel.ParseSymbolLine(cm.Symbols)
+					}
+				}
 				for _, sym := range codeintel.SymbolsInRanges(syms, fd.NewRanges) {
 					fc.ChangedSymbols = append(fc.ChangedSymbols, sym.Ref())
 					paraBuscar = append(paraBuscar, sym.Name)

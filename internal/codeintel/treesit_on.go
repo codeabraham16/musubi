@@ -208,3 +208,6 @@ func firstNamedChildOfType(n *ts.Node, typ string, lang *ts.Language) *ts.Node {
 	}
 	return nil
 }
+
+// PolyglotHabilitado dice si ESTE binario linkeó tree-sitter. Ver treesit_off.go por el porqué.
+func PolyglotHabilitado() bool { return true }

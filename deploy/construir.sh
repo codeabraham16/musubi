@@ -120,10 +120,31 @@ fi
 
 # compilar() existe para poder RELINKEAR con otra versión sin repetir la receta. Cuesta ~3 s (la
 # compilación está en caché; lo que se paga es el link) y sólo se paga cuando hace falta.
+# TAGS es lo que hace que el binario ENTIENDA algo más que Go, y faltaba acá.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# EL BINARIO QUE SE CONSTRUÍA ACÁ NO ERA EL QUE SE PUBLICA
+#
+# `.github/workflows/release.yml` compila con estos tags desde siempre; este guion no los ponía.
+# O sea que el binario del release entiende TS/JS/TSX/Python y el que sale de acá —el que se usa
+# para desarrollar y el que va al cerebro por `redesplegar-cerebro.sh`— sólo entiende Go.
+#
+# Y la diferencia era INVISIBLE: los dos imprimen la misma versión. Medido sobre el binario del
+# árbol: `strings musubi | grep -c gotreesitter` daba 0. Cuando el grafo de un repo de TS salía
+# vacío, no había forma de distinguir «este repo no tiene código» de «este binario no lo entiende».
+# Por eso, junto con este cambio, `musubi version --lenguajes` responde esa pregunta.
+#
+# La lista está DOS VECES —acá y en release.yml— porque son dos sistemas distintos (bash y un
+# workflow de Actions) y no hay un lugar que los dos lean. Que estén duplicadas es exactamente la
+# forma de defecto que causó el resto de los arreglos de hoy, así que no queda librada a que
+# alguien se acuerde: `TestLosTagsDeConstruirIgualanAlosDelRelease` cruza las dos listas y falla
+# si divergen.
+TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'
+
 compilar() {
   local ld="-X main.version=$1"
   [[ -n "${MUSUBI_RELEASE_PUBKEY:-}" ]] && ld="$ld -X main.clavePublicaDeReleaseHex=$MUSUBI_RELEASE_PUBKEY"
-  go build -trimpath -ldflags "$ld" -o "$SALIDA" ./cmd/musubi
+  go build -trimpath -tags "$TAGS" -ldflags "$ld" -o "$SALIDA" ./cmd/musubi
 }
 compilar "$VERSION"
 

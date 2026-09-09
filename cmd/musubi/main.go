@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"musubi/internal/buildid"
+	"musubi/internal/codeintel"
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
@@ -102,13 +103,15 @@ func main() {
 			fmt.Println(memory.EsquemaEsperado())
 			return
 		}
+		// LAS DOS BANDERAS SON DE RAMAS DISTINTAS Y LAS DOS SE CONSERVAN: `--json` (main, #413) y
+		// `--lenguajes` (esta rama). Comparten el motivo por el que NO son un renglón más de la
+		// salida normal: `redesplegar-cerebro.sh` compara la salida por default ENTERA, y un
+		// segundo renglón dispararía un rollback en mitad de un despliegue que salió bien.
+
 		// `--json` imprime la identidad COMPLETA de este binario, derivada y no tipeada. Es lo
 		// que un guion de despliegue tiene que comparar en vez de la cadena de versión: la
 		// versión sola no dice a qué esquema migra ni qué catálogo expone, que son las dos cosas
 		// que rompen cuando dos máquinas de la malla no corren el mismo build.
-		//
-		// Va como bandera y no como renglón nuevo de la salida normal por el mismo motivo que
-		// --esquema: `redesplegar-cerebro.sh` compara la salida por default ENTERA.
 		if len(os.Args) > 2 && os.Args[2] == "--json" {
 			n, sha := mcp.CatalogFingerprint()
 			b, err := json.MarshalIndent(buildid.Derive(version, n, sha), "", "  ")
@@ -117,6 +120,18 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Println(string(b))
+			return
+		}
+		// `--lenguajes` hace falta porque hoy no se puede saber: dos binarios que imprimen
+		// exactamente la misma versión indexan cantidades distintas según se hayan compilado con
+		// el tag `treesitter` o sin él, y cuando el grafo sale vacío no hay forma de distinguir
+		// «este repo no tiene código» de «este binario no entiende este código».
+		if len(os.Args) > 2 && os.Args[2] == "--lenguajes" {
+			if codeintel.PolyglotHabilitado() {
+				fmt.Println("go + poliglota (tree-sitter linkeado)")
+			} else {
+				fmt.Println("go")
+			}
 			return
 		}
 		fmt.Printf("musubi %s\n", version)
@@ -188,6 +203,7 @@ func printUsage() {
 	cmd("fetch <url>", "Baja una URL del tailnet a stdout (transporte de auto-update del cuerpo)")
 	cmd("receipt <emit|check|show|install-hook>", "Gate de entrega: el push exige un recibo para ESTA huella del árbol")
 	cmd("version", "Muestra la versión del binario")
+	cmd("version --lenguajes", "Dice qué lenguajes ENTIENDE este binario (depende de si se compiló con tree-sitter)")
 
 	section("Hooks (uso interno de Claude Code)")
 	cmd("detect [--hook-mode]", "Detecta el stack / SessionStart: auto-descubrimiento + priming")
