@@ -96,7 +96,7 @@ func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	// —"profundizá con musubi_impact"—, o sea en el turno equivocado: para cuando el agente decide
 	// cambiar una firma, ese texto quedó veinte mensajes atrás.
 	if esEdicion(in.ToolName) {
-		m := impactMessage(store, root, key)
+		m := impactMessage(store, root, key, in.SessionID)
 		if m == "" {
 			return ""
 		}
@@ -313,11 +313,74 @@ func esEdicion(tool string) bool {
 // justamente lo que uno quiere saber antes de cambiarlo, y cuesta una línea decirlo. Callar ahí
 // sería confundir "no hay riesgo" con "no sé", que es la distinción que el resto de esta memoria
 // se toma el trabajo de mantener.
-func impactMessage(store codeStore, root, key string) string {
+// avisoSinGrafo dice, ANTES DE EDITAR, que el radio de impacto no se pudo mirar.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA LECCIÓN ESTABA APRENDIDA DE UN LADO Y NO DEL HERMANO
+//
+// `impactMessage` tiene una disciplina muy cuidada para el grafo VIEJO: cuando un archivo está
+// indexado y ninguno de sus símbolos tiene callers, no dice «no arrastra a nadie» sino «el grafo
+// no sabe», porque afirmar seguridad sobre datos rancios es falso justo en la dirección que
+// duele. Ese texto está escrito ahí abajo con todas las letras.
+//
+// Y cuando el archivo NO ESTÁ en el grafo —un `.sql`, un `.rs`, un `.php`, o cualquier cosa en un
+// binario compilado sin tree-sitter— la función devolvía "" y el hook entero se quedaba MUDO. El
+// silencio se lee como «no hay nada que decir», que es la misma afirmación de seguridad que el
+// caso de arriba se cuida tanto de no hacer, pero sin ni siquiera decirla. El caso raro estaba
+// tratado con cuidado y el caso común no estaba tratado.
+//
+// SE DICE UNA VEZ POR SESIÓN, Y ESE ES TODO EL PRESUPUESTO DE RUIDO. Este hook corre antes de
+// CADA edición: un aviso por archivo convertiría un proyecto de React o de SQL en una pared de
+// texto repetido, y una advertencia que aparece siempre se deja de leer —que es exactamente cómo
+// se pierde una advertencia que sí importa—. El dato no es del archivo, es del binario y del
+// proyecto, así que decirlo una vez alcanza. El ledger ya lleva la cuenta por sesión y se
+// reinicia solo al cambiar de sesión: `LedgerAdd` con 0 tokens LEE sin sumar (ver ledger.go, el
+// `if tokens > 0`), así que no hace falta ni una consulta nueva ni un método más en codeStore.
+//
+// SÓLO EN EL CAMINO DE EDICIÓN, a propósito. En la LECTURA el silencio no afirma nada peligroso
+// —igual vas a leer el archivo, y el gist y la telemetría hablan por su cuenta—; acá el silencio
+// ocupa el lugar de «fijate quién depende de esto antes de tocarlo».
+//
+// Sabotaje: hacer que devuelva "" siempre → vuelve el mudo. Sacarle la guarda del ledger → el
+// aviso se repite en cada edición.
+func avisoSinGrafo(store codeStore, key, sessionID string) string {
+	const superficie = "precheck_sin_grafo"
+	if l, err := store.LedgerAdd(sessionID, superficie, 0); err == nil {
+		if l.Surfaces[superficie] > 0 {
+			return "" // ya se dijo en esta sesión
+		}
+	}
+	// El aviso se CONTABILIZA acá adentro y no en el llamador, porque la superficie del ledger es
+	// la que gasta el presupuesto de una-vez-por-sesión. El llamador registra `precheck_impacto`,
+	// que es otra cosa: si la cuenta viviera allá, la guarda de arriba nunca vería su propia marca
+	// y el aviso se repetiría en cada edición — que es el defecto que este diseño evita.
+	marcar := func(m string) string {
+		_, _ = store.LedgerAdd(sessionID, superficie, memory.EstimateTokens(m))
+		return m
+	}
+	if codeintel.IndexableForGraph(key) {
+		// El lenguaje SÍ se cubre: esto es un índice que falta, y tiene arreglo.
+		return marcar(fmt.Sprintf("[Musubi — radio de impacto] «%s» no está en el grafo, así que no puedo decirte "+
+			"quién depende de lo que estás por cambiar. Su lenguaje SÍ se indexa: corré "+
+			"musubi_codegraph_index (mode='incremental'). Mi silencio hasta entonces no es «no arrastra a nadie».", key))
+	}
+	motor := "este binario se compiló SIN tree-sitter, así que sólo deriva .go"
+	if codeintel.PolyglotHabilitado() {
+		motor = "su lenguaje no entra al grafo ni en este binario, que sí tiene tree-sitter"
+	}
+	return marcar(fmt.Sprintf("[Musubi — radio de impacto] «%s» NO PUEDE estar en el grafo: %s. "+
+		"No tengo con qué decirte quién depende de esto, y no lo voy a repetir en esta sesión: "+
+		"tomá mi silencio en los demás archivos de este tipo como «no sé», nunca como «no arrastra a nadie».", key, motor))
+}
+
+func impactMessage(store codeStore, root, key, sessionID string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
-	if err != nil || len(nodes) == 0 {
+	if err != nil {
 		return ""
+	}
+	if len(nodes) == 0 {
+		return avisoSinGrafo(store, key, sessionID)
 	}
 	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque el mensaje no describe: TRANQUILIZA.
 	// «Ningún símbolo tiene callers: tocarlo no arrastra a nadie conocido» es una afirmación de
