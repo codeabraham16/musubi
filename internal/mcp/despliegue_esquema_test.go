@@ -173,32 +173,57 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 		t.Fatalf("no pude leer prometheus.yml: %v", err)
 	}
 	// El regex ACTIVO, no el comentado: una línea de ejemplo no descarta nada.
+	//
+	// LAXO EN LA FORMA, DURO EN EL HECHO. Antes esto buscaba el `regex:` hasta 4 líneas por
+	// encima del `action: drop` y, si no lo encontraba, hacía `t.Skip`. Las dos mitades estaban
+	// mal y se tapaban entre sí: meter cuatro comentarios entre las dos líneas —un NO-OP para
+	// Prometheus, el descarte sigue igual de activo— hacía que el parser no viera el regex, y el
+	// Skip apagaba la prueba ENTERA reportando PASS. Medido.
+	//
+	// Ahora la presencia del descarte se detecta APARTE de poder leer su regex, y no encontrar el
+	// regex de un descarte que existe es un fallo duro: es el parser roto, no «no aplica».
 	var activo string
+	var hayDescarte bool
 	lineas := strings.Split(string(promYml), "\n")
 	for i, l := range lineas {
 		if !strings.Contains(l, "action: drop") || strings.HasPrefix(strings.TrimSpace(l), "#") {
 			continue
 		}
-		for j := i - 1; j >= 0 && j > i-5; j-- {
+		hayDescarte = true
+		// Hacia atrás hasta el borde del bloque —otro `- ` de la lista, u otro `action:`— en vez
+		// de un tope de líneas, que es lo que el relleno rompía. Los comentarios se saltean.
+		for j := i - 1; j >= 0; j-- {
 			tr := strings.TrimSpace(lineas[j])
-			if strings.HasPrefix(tr, "regex:") && !strings.HasPrefix(tr, "#") {
+			if strings.HasPrefix(tr, "#") || tr == "" {
+				continue
+			}
+			if strings.HasPrefix(tr, "regex:") {
 				activo = strings.Trim(strings.TrimSpace(strings.TrimPrefix(tr, "regex:")), `"`)
+				break
+			}
+			if strings.HasPrefix(tr, "- ") || strings.HasPrefix(tr, "action:") {
+				break
 			}
 		}
 	}
-	if activo == "" {
-		t.Skip("no hay ningún descarte activo en el scrape: esta guarda no aplica")
-	}
-	re, err := regexp.Compile("^(?:" + activo + ")$")
-	if err != nil {
-		t.Fatalf("el regex del descarte no compila (%q): %v", activo, err)
+	if hayDescarte && activo == "" {
+		t.Fatal("hay un `action: drop` activo en prometheus.yml y no pude leer su `regex:`. NO es «no aplica»: es que este parser dejó de encontrarlo, y mientras tanto el descarte sigue descartando. Arreglá el parser antes de creerle al verde")
 	}
 
-	// (1) Lo que sólo sale por el scrape no puede caer en el descarte.
-	for _, n := range seriesSoloDelScrape {
-		if re.MatchString(n) {
-			t.Errorf("el cerebro emite %q SÓLO por el scrape y el descarte (%s) lo agarra: esa serie no llega a Prometheus, y la alerta que la consuma no va a disparar nunca — sin un solo error", n, activo)
+	// (1) Lo que sólo sale por el scrape no puede caer en el descarte. Sólo esta mitad depende de
+	// que exista un descarte; la (2) corre siempre.
+	if activo != "" {
+		re, err := regexp.Compile("^(?:" + activo + ")$")
+		if err != nil {
+			t.Fatalf("el regex del descarte no compila (%q): %v", activo, err)
 		}
+		for _, n := range seriesSoloDelScrape {
+			if re.MatchString(n) {
+				t.Errorf("el cerebro emite %q SÓLO por el scrape y el descarte (%s) lo agarra: esa serie no llega a Prometheus, y la alerta que la consuma no va a disparar nunca — sin un solo error", n, activo)
+			}
+		}
+	} else {
+		t.Log("no hay descarte activo en el scrape: la mitad (1) no aplica. La (2) corre igual.")
 	}
 
 	// (2) Y no puede haber series sin declarar.
