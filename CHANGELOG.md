@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **11 observaciones que alguien marcó como importantes estaban rankeadas como si no lo fueran, y
+  el arreglo estaba a la vista.** El `doctor` ya las contaba: de las 73 que se guardaron con el
+  sobre de la llamada adentro del `content`, 11 todavía declaran ahí qué `importance` se les pidió
+  —1.5, 1.6, 1.9, 2.0— mientras su columna dice **1.0**, el default y el valor más común de toda la
+  memoria. El recall ordena por `importance`: se hundieron en el montón justo las que alguien marcó
+  para no perder.
+
+  La nota de diseño daba tres razones para no reparar, y las tres siguen siendo ciertas — pero las
+  tres hablan de **lavar el texto**, no de corregir la columna. Contra una reparación que toca sólo
+  `importance`: no hay falso verde (el check sigue contando las 73, porque el sobre sigue ahí), no
+  se borra evidencia (el número se lee del sobre y el sobre se queda), y el `content_hash` no cambia
+  (`ContentHash` deriva sólo del content, así que el dedup sigue reconociendo la fila). El diseño
+  había empaquetado dos reparaciones y rechazado ambas porque una es peligrosa.
+
+  `musubi doctor --repair swallowed_envelope` ahora devuelve ese número y no toca una coma del
+  texto. Como el hash no cambia, la corrección **no viaja al central** —y no podría: el central
+  rechazaría ese push con su propia guarda del sobre—, así que se corre en cada cerebro.
+
+  De paso, el número pasa a leerse **sólo de la cola después del último `</content>`** y no de todo
+  el texto: desde que ese valor se escribe, una observación que documente este mismo defecto podría
+  citar un `<importance>` en su prosa y hacer que la reparación escriba algo que nadie pidió.
 - **Un rechazo de guarda salía como «error interno del servidor», y el nodo que lo recibía lo
   reintentaba para siempre.** Medido el 2026-09-08 en `kernelos-pc`: **605 intentos en 74 h** contra
   una observación que el central nunca iba a aceptar, reintentándose cada 5 minutos sin que nada

@@ -222,9 +222,12 @@ func TestElDoctorVeLasObservacionesConElSobreComido(t *testing.T) {
 		t.Errorf("el chequeo no contó 1 reparable — `sucia-ya-coincide` no lo es, porque su columna "+
 			"ya tiene el valor declarado: %s", r.Message)
 	}
-	if r.Repairable {
-		t.Error("el chequeo se declaró reparable y no tiene `apply`: reescribir el content cambia " +
-			"el content_hash, que es la clave del dedup y viaja en el sync")
+	// Con una fila recuperable el chequeo TIENE que ofrecerse a reparar. La reparación devuelve la
+	// importance declarada y NO toca el texto: por eso ya no vale la objeción del content_hash, que
+	// hablaba de lavar el content. Ver applySwallowedImportance.
+	if !r.Repairable {
+		t.Error("el chequeo no se declara reparable con una fila recuperable: el usuario no se " +
+			"entera de que su importance se le puede devolver")
 	}
 }
 
@@ -238,9 +241,12 @@ func TestElRegistryDelDoctorIncluyeElChequeoDelSobre(t *testing.T) {
 				t.Error("el chequeo recorre el content de las observaciones: tiene que ser `deep`, " +
 					"o el diagnóstico rápido paga un scan cada pocos segundos")
 			}
-			if c.apply != nil {
-				t.Error("el chequeo tiene `apply` y no debería: ver el comentario de " +
-					"checkSwallowedEnvelope — la reparación no puede devolver lo que nunca se escribió")
+			// El `apply` existe y es NARROW: devuelve la importance declarada y no toca el texto.
+			// Sin count, `Repair` lo rechaza como no reparable y el plan no puede prometer nada.
+			if c.apply == nil || c.count == nil {
+				t.Error("el chequeo no está cableado como reparable: `musubi doctor --repair " +
+					"swallowed_envelope` no llega a applySwallowedImportance, y las importances " +
+					"que todavía se pueden devolver se quedan enterradas")
 			}
 			return
 		}
