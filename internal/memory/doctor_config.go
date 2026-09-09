@@ -33,6 +33,7 @@ import (
 // check no es ok, así que un aviso permanente apagaría el canal entero, que es el defecto que este
 // repo persigue—. Se compara el bloque `sync`, que es donde difirieron de verdad: uno lo tenía
 // apagado y el otro encendido apuntando al central, y leer el equivocado invirtió la conclusión.
+
 // ConfigQueGobiernaCheckCode es el código del check, para poder pedirlo con `doctor --check`.
 const ConfigQueGobiernaCheckCode = "config_que_gobierna"
 

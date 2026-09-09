@@ -1263,8 +1263,6 @@ func (c Config) Marshal() ([]byte, error) {
 	return yaml.Marshal(c)
 }
 
-// Load lee projectPath/.musubi/config.yaml aplicando defaults para campos ausentes.
-// Si el archivo no existe, devuelve la configuración por defecto sin error.
 // ConfigPath devuelve la ruta del config.yaml que gobierna a un proyecto. Existe para poder
 // DECIRLA en voz alta al arrancar (cabo A96): `Load` resuelve la ruta desde el projectPath —o sea,
 // desde el cwd del proceso— y si el archivo no está devuelve los defaults en silencio, así que
@@ -1301,6 +1299,13 @@ func ConfigSombra(projectPath string) string {
 	return otro
 }
 
+// Load lee projectPath/.musubi/config.yaml aplicando defaults para campos ausentes.
+// Si el archivo no existe, devuelve la configuración por defecto sin error.
+//
+// Su doc había quedado HUÉRFANA arriba de `ConfigPath`: A88/A89 insertó esa función entre el
+// comentario y su cuerpo, así que `Load` quedó sin documentar y `ConfigPath` con un doc que
+// hablaba de otra. Nadie lo vio en cinco días porque una rama de larga vida SIN PR es invisible
+// para CI —lo dice `ci.yml:14-21`— y el lint sólo corre ahí.
 func Load(projectPath string) (Config, error) {
 	cfg := Default()
 	path := filepath.Join(projectPath, DirName, ConfigFile)

@@ -443,6 +443,40 @@ func capturarSalida(t *testing.T, f func()) string {
 // ni proyecto: la identidad la decide el token del lado del cerebro.
 //
 // Sabotaje que la hace fallar: agregar cualquier campo de identidad al JSON que arma latir().
+// clavesPermitidasDelLatido es la lista blanca del invariante B4/D5: TODO lo que un dispositivo
+// puede mandar en el cuerpo de su latido.
+//
+// VIVE EN UNA SOLA FUNCIÓN PORQUE ESTABA ESCRITA DOS VECES, Y ESO YA COSTÓ.
+// `TestElCuerpoNoLlevaIdentidadNunca` y `TestUnCuerpoConServiciosSigueSinLlevarIdentidad` tenían
+// cada una su copia del mapa, y el 2026-09-09 se descubrió que a las DOS les faltaban los mismos
+// tres campos. Dos copias del mismo contrato no se contradicen: envejecen juntas y se dan la razón
+// —exactamente lo que `musubi-alerts.yml:374-377` documenta para las guardas cruzadas—.
+//
+// LOS TRES QUE FALTABAN, Y POR QUÉ NADIE LOS VIO. Los tres llevan `omitempty`, así que en una
+// máquina Linux sana salen vacíos y la guarda nunca los recibía. Lo destapó `test-cross
+// (windows-latest)`: ahí la enumeración de servicios FALLA de verdad, así que `servicios_error`
+// viajó y la lista lo rechazó. La guarda hizo exactamente lo suyo, y de paso mostró que
+// `servicios_omitidos` y `token_fuente` tampoco estaban declarados — esperando a la primera
+// máquina que recortara su inventario o recibiera el token por variable.
+//
+// EL EXAMEN QUE EL MENSAJE DE ERROR EXIGE, y para los tres la respuesta es la misma: NINGUNO dice
+// QUIÉN ES esta máquina.
+//
+//   - `servicios_omitidos` es un NÚMERO: cuántos no entraron por el techo del latido (A116).
+//   - `token_fuente` es `archivo` o `variable` (A102): de dónde salió SU credencial, no cuál es.
+//   - `servicios_error` es el error del enumerador de ESTA máquina, y merece el examen más largo
+//     de los tres porque es texto libre. Aunque una máquina comprometida escriba ahí el nombre de
+//     otra, no cambia nada: la fila que se toca la elige el TOKEN presentado, no el contenido del
+//     cuerpo. Es el mismo techo que ya tiene `rustdesk_id` —se puede desorientar a quien lee, no
+//     escribir en la fila ajena— y el cerebro además lo recorta a 500 antes de guardarlo.
+func clavesPermitidasDelLatido() map[string]bool {
+	return map[string]bool{
+		"muestra": true, "version": true, "direccion": true, "rustdesk_id": true,
+		"servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true, "capver": true,
+		"servicios_omitidos": true, "token_fuente": true, "servicios_error": true,
+	}
+}
+
 func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	var visto string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -493,9 +527,7 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	// y la única fila que puede tocar sigue siendo la del token presentado. La diferencia con
 	// `version` es lo que hace que exista: dos builds distintos pueden hablar el mismo capver, así
 	// que el cerebro no puede derivarlo de la versión aunque la tenga.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
-		"capver": true}
+	permitidas := clavesPermitidasDelLatido()
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo trae una clave no declarada: %q. Si es legítima, sumala a la lista "+
@@ -550,9 +582,7 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	// capacidad medida —«hay dónde dibujar un diálogo acá»— y la segunda dice por qué no la hay.
 	// Como `version` y `direccion`, son lo que la máquina sabe DE SÍ MISMA y el cerebro no puede
 	// averiguar solo; la única fila que pueden tocar sigue siendo la del token presentado.
-	permitidas := map[string]bool{"muestra": true, "version": true, "direccion": true,
-		"rustdesk_id": true, "servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true,
-		"capver": true}
+	permitidas := clavesPermitidasDelLatido()
 	for k := range cuerpo {
 		if !permitidas[k] {
 			t.Errorf("el cuerpo con servicios trae una clave no declarada: %q\n%s", k, visto)

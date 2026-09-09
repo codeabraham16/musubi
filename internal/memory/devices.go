@@ -592,12 +592,6 @@ func (e *DbEngine) FijarFuenteDeCredencial(deviceID, fuente string) error {
 	return nil
 }
 
-// FijarServiciosOmitidos guarda cuántos servicios NO entraron en el último inventario (A116).
-//
-// SE ESCRIBE SIEMPRE QUE LLEGA UN INVENTARIO, incluido el 0. Un `if omitidos > 0` acá dejaría el
-// número viejo puesto cuando una máquina DEJA de recortar —porque alguien subió el techo o filtró
-// el ruido— y la poda quedaría suspendida para siempre sobre una condición que ya no existe. Un
-// valor que sólo se escribe cuando hay problema no puede decir que el problema se fue.
 // FijarServiciosError guarda POR QUÉ esta máquina no pudo enumerar sus servicios, o "" si pudo.
 //
 // SE ESCRIBE SIEMPRE QUE LLEGA UN LATIDO, incluido el vacío, y por el MISMO motivo que
@@ -620,6 +614,12 @@ func (e *DbEngine) FijarServiciosError(deviceID, motivo string) error {
 	return nil
 }
 
+// FijarServiciosOmitidos guarda cuántos servicios NO entraron en el último inventario (A116).
+//
+// SE ESCRIBE SIEMPRE QUE LLEGA UN INVENTARIO, incluido el 0. Un `if omitidos > 0` acá dejaría el
+// número viejo puesto cuando una máquina DEJA de recortar —porque alguien subió el techo o filtró
+// el ruido— y la poda quedaría suspendida para siempre sobre una condición que ya no existe. Un
+// valor que sólo se escribe cuando hay problema no puede decir que el problema se fue.
 func (e *DbEngine) FijarServiciosOmitidos(deviceID string, omitidos int) error {
 	if omitidos < 0 {
 		return fmt.Errorf("servicios omitidos negativo: %d", omitidos)
