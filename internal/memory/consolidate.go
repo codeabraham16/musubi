@@ -96,11 +96,31 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		return all[i].createdAt > all[j].createdAt
 	})
 
-	tx, err := e.db.Begin()
-	if err != nil {
-		return ConsolidateResult{}, fmt.Errorf("error al iniciar transacción: %w", err)
+	// LA TRANSACCIÓN NO SE ABRE ACÁ, Y ES DELIBERADO. El barrido por trigramas de abajo es CPU
+	// pura: no toca la base ni una vez (las lecturas ya ocurrieron arriba, en `all`). Tenerlo
+	// adentro de la transacción no costaba nada mientras `Begin()` era DIFERIDO —el lock de
+	// escritura se tomaba recién en el primer UPDATE, y sólo si había un duplicado—, pero desde
+	// que el DSN lleva `_txlock=immediate` (ver database.go) el lock se toma AL NACER. Con el
+	// Begin acá arriba, la ventana de exclusión se corría hacia atrás y abarcaba el barrido
+	// entero: medido, a 40.000 observaciones son 8,9 s con el lock tomado, o sea MÁS que el
+	// `busy_timeout(5000)` — y todo otro escritor del proceso empieza a fallar.
+	//
+	// Y hay un caso peor que la latencia: cuando NO hay duplicados —el régimen normal de una base
+	// ya consolidada— los tres UPDATE no se ejecutan nunca, así que la transacción sostenía el
+	// lock durante todo el barrido para después commitear CERO filas. Era, literalmente, la
+	// transacción de sólo lectura que el comentario del DSN afirma que no existe.
+	//
+	// Así que las fusiones se ACUMULAN en memoria durante el barrido y se aplican después, en el
+	// mismo orden, con la transacción abierta lo mínimo indispensable. El orden importa: un mismo
+	// canónico puede absorber varios duplicados y el UPDATE de acumulación se repite con el valor
+	// corriente, así que replicar la secuencia tal cual es lo que conserva la semántica.
+	type fusionPendiente struct {
+		canonID    string
+		access     int
+		importance float64
+		dupID      string
 	}
-	defer tx.Rollback()
+	var fusiones []fusionPendiente
 
 	// Bloqueo por trigramas para evitar el O(n²): en vez de comparar cada observación
 	// contra TODOS los canónicos, se indexan los trigramas de los canónicos y solo se
@@ -191,30 +211,47 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 		if o.importance > k.importance {
 			k.importance = o.importance
 		}
-		if _, err := tx.Exec(`UPDATE observations SET access_count=?, importance=? WHERE id=?`,
-			k.access, k.importance, k.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al actualizar canónico: %w", err)
-		}
-		// Soft-delete reversible (T5.5): en vez de borrar físicamente el duplicado, se
-		// archiva y se apunta al canónico. Queda oculto del recall (archived + superseded)
-		// pero recuperable; el borrado definitivo lo hace PurgeArchived tras el período de
-		// gracia de retención, que limpia relaciones y embeddings. Así una fusión por falso
-		// positivo de trigramas no pierde datos. archived_at = ahora arranca la ventana de
-		// gracia desde el archivado.
-		if _, err := tx.Exec(`UPDATE observations SET archived=1, archived_at=CURRENT_TIMESTAMP, superseded_by=? WHERE id=?`, k.id, o.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al archivar duplicado: %w", err)
-		}
-		// Re-apuntar los punteros superseded_by que apuntaban al duplicado hacia el canónico
-		// vivo (aplana la cadena; el duplicado ya quedó apuntando a k.id arriba).
-		if _, err := tx.Exec(`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, k.id, o.id); err != nil {
-			return ConsolidateResult{}, fmt.Errorf("error al re-apuntar punteros superseded_by: %w", err)
-		}
+		// Se anota la fusión con los valores YA acumulados; el SQL se emite abajo, fuera del
+		// barrido. Ver el comentario del `fusionPendiente` de arriba.
+		fusiones = append(fusiones, fusionPendiente{canonID: k.id, access: k.access, importance: k.importance, dupID: o.id})
 		removed = append(removed, o.id)
 		merged++
 	}
 
-	if err := tx.Commit(); err != nil {
-		return ConsolidateResult{}, fmt.Errorf("error al commitear consolidación: %w", err)
+	// Recién ahora se toma el lock de escritura, y sólo si hay algo que escribir. Sin fusiones no
+	// se abre transacción: antes se abría igual y se commiteaba vacía, que con `immediate` es
+	// tomar el lock para nada.
+	if len(fusiones) > 0 {
+		tx, err := e.db.Begin()
+		if err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al iniciar transacción: %w", err)
+		}
+		defer tx.Rollback()
+
+		for _, f := range fusiones {
+			if _, err := tx.Exec(`UPDATE observations SET access_count=?, importance=? WHERE id=?`,
+				f.access, f.importance, f.canonID); err != nil {
+				return ConsolidateResult{}, fmt.Errorf("error al actualizar canónico: %w", err)
+			}
+			// Soft-delete reversible (T5.5): en vez de borrar físicamente el duplicado, se
+			// archiva y se apunta al canónico. Queda oculto del recall (archived + superseded)
+			// pero recuperable; el borrado definitivo lo hace PurgeArchived tras el período de
+			// gracia de retención, que limpia relaciones y embeddings. Así una fusión por falso
+			// positivo de trigramas no pierde datos. archived_at = ahora arranca la ventana de
+			// gracia desde el archivado.
+			if _, err := tx.Exec(`UPDATE observations SET archived=1, archived_at=CURRENT_TIMESTAMP, superseded_by=? WHERE id=?`, f.canonID, f.dupID); err != nil {
+				return ConsolidateResult{}, fmt.Errorf("error al archivar duplicado: %w", err)
+			}
+			// Re-apuntar los punteros superseded_by que apuntaban al duplicado hacia el canónico
+			// vivo (aplana la cadena; el duplicado ya quedó apuntando a f.canonID arriba).
+			if _, err := tx.Exec(`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, f.canonID, f.dupID); err != nil {
+				return ConsolidateResult{}, fmt.Errorf("error al re-apuntar punteros superseded_by: %w", err)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return ConsolidateResult{}, fmt.Errorf("error al commitear consolidación: %w", err)
+		}
 	}
 
 	// Sacar los duplicados borrados del índice vectorial (post-commit), en lote: un solo

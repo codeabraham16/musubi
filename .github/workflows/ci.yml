@@ -166,10 +166,26 @@ jobs:
         # falsos positivos por ruido. (El fix asintótico de las postings de trigramas
         # —set-similarity-join— queda para T7.2; este guard protege lo ganado en T7.1.)
         run: |
-          out=$(go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x ./internal/memory/)
-          echo "$out"
-          b1=$(echo "$out" | awk '/Maintain\/n=1000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
-          b10=$(echo "$out" | awk '/Maintain\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          # LA SALIDA SE IMPRIME ANTES DE JUZGARLA. La forma anterior era `out=$(go test …)` y
+          # después `echo "$out"`: con `bash -e`, si el benchmark falla el step muere EN la
+          # asignación y el echo nunca corre — el log queda con el script y ninguna salida. Ese
+          # mismo defecto tuvo a `bench-scale` ocho corridas en rojo sin poder decir por qué, y acá
+          # es PEOR porque este job corre en cada PR. `tee` imprime primero; PIPESTATUS conserva el
+          # código real de `go test`, que el pipe se comería.
+          set +e
+          go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x ./internal/memory/ 2>&1 | tee bench-maintain.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "ERROR: el benchmark salió $rc — NO llegó a medir. Lo de arriba es el motivo, no una regresión de complejidad."
+            exit 1
+          fi
+          out=$(cat bench-maintain.txt)
+          # El ancla va al CAMPO COMPLETO, no a un substring: Go escribe el sufijo `-N` con el
+          # GOMAXPROCS del runner y lo OMITE cuando vale 1, así que `/n=1000-/` no matchearía nada
+          # en una máquina de un solo core y el guard moriría diciendo «no se pudo medir».
+          b1=$(echo "$out" | awk '$1 ~ /^BenchmarkMaintain\/n=1000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b10=$(echo "$out" | awk '$1 ~ /^BenchmarkMaintain\/n=10000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=1000:  ${b1:-<vacío>}"
           echo "B/op n=10000: ${b10:-<vacío>}"
           awk -v a="$b1" -v b="$b10" 'BEGIN {
@@ -189,10 +205,19 @@ jobs:
         # runners compartidos), no wall-time (Track 16 F3.3). El caso de escala n=100000 es
         # opt-in (MUSUBI_BENCH_SCALE) y NO corre en CI por el costo de sembrar 100k filas.
         run: |
-          out=$(go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x ./internal/memory/)
-          echo "$out"
-          b1=$(echo "$out" | awk '/SearchVector\/n=1000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
-          b10=$(echo "$out" | awk '/SearchVector\/n=10000-/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          # Misma corrección que el paso de arriba: la salida se imprime ANTES de juzgarla, y el
+          # ancla del awk va al campo completo para no depender del sufijo de GOMAXPROCS.
+          set +e
+          go test -run=NONE -bench='BenchmarkSearchVector' -benchmem -benchtime=1x ./internal/memory/ 2>&1 | tee bench-vector.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "ERROR: el benchmark salió $rc — NO llegó a medir. Lo de arriba es el motivo, no una regresión de escala."
+            exit 1
+          fi
+          out=$(cat bench-vector.txt)
+          b1=$(echo "$out" | awk '$1 ~ /^BenchmarkSearchVector\/n=1000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
+          b10=$(echo "$out" | awk '$1 ~ /^BenchmarkSearchVector\/n=10000(-[0-9]+)?$/ {for(i=1;i<=NF;i++) if($i=="B/op") print $(i-1)}')
           echo "B/op n=1000:  ${b1:-<vacío>}"
           echo "B/op n=10000: ${b10:-<vacío>}"
           awk -v a="$b1" -v b="$b10" 'BEGIN {
