@@ -430,14 +430,46 @@ if [ "$PROM_VIVO" != si ]; then
   dudoso "no se miró qué alertas están disparadas: Prometheus no contestó"
 else
   pedir_http "$PROM_URL/api/v1/alerts"
+  # LA LÍNEA DICE QUÉ ALERTA **Y EN QUÉ MÁQUINA**, PORQUE EL NOMBRE SOLO NO SIRVE PARA ACTUAR.
+  #
+  # Acá había un `Counter` por `alertname` que TIRABA `device` y `project`. El informe decía
+  # `firing: AgenteCaidoConMaquinaViva (1)` y quien lo leía no sabía en cuál de las cuatro
+  # máquinas — o sea el mismo defecto que el commit de ayer (8f2fb99) arregló para `falta:`:
+  # «el titular llega y lo accionable no». `detalle` tiene cinco call sites y CUATRO ya llevaban
+  # identidad; éste era el que faltaba. La guarda estaba en N-1 de N, en el mismo archivo y un
+  # día después.
+  #
+  # EL TECHO SE DECLARA, NO SE APLICA EN SILENCIO. Una tormenta de cuarenta máquinas no puede
+  # tapar el resto del informe, pero un recorte mudo se lee como «son cinco» — que es la misma
+  # mentira que este guion existe para no decir. Por eso sale «y N más».
   DISPARADAS="$(python3 -c '
 import sys, json
-from collections import Counter
+from collections import defaultdict
 a = json.load(sys.stdin)["data"]["alerts"]
 print("OK")
-c = Counter(x["labels"].get("alertname", "?") for x in a if x.get("state") == "firing")
-for nombre, n in sorted(c.items()):
-    print("%s (%d)" % (nombre, n))
+TECHO = 5
+g = defaultdict(list)
+for x in a:
+    if x.get("state") != "firing":
+        continue
+    l = x.get("labels", {})
+    # `device` es la etiqueta de las alertas de flota; `instance` la de las de scrape; `job` el
+    # ultimo recurso. Se prueban en ese orden porque es el de mayor a menor especificidad, y una
+    # alerta del cerebro (sin device) tiene que seguir saliendo aunque sea sin identidad.
+    quien = l.get("device") or l.get("instance") or l.get("job") or ""
+    proy = l.get("project", "")
+    if quien and proy:
+        quien = "%s/%s" % (proy, quien)
+    g[l.get("alertname", "?")].append(quien)
+for nombre in sorted(g):
+    n = len(g[nombre])
+    quienes = sorted(q for q in g[nombre] if q)
+    if not quienes:
+        print("%s (%d)" % (nombre, n))
+    elif len(quienes) <= TECHO:
+        print("%s (%d) - %s" % (nombre, n, ", ".join(quienes)))
+    else:
+        print("%s (%d) - %s y %d mas" % (nombre, n, ", ".join(quienes[:TECHO]), len(quienes) - TECHO))
 ' <"$CUERPO" 2>/dev/null)"
   if [ "$HTTP_CODIGO" != 200 ] || [ "$(printf '%s\n' "$DISPARADAS" | head -1)" != OK ]; then
     rojo "no se pudo leer $PROM_URL/api/v1/alerts (HTTP $HTTP_CODIGO): no se sabe si hay algo disparado"

@@ -311,30 +311,96 @@ func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 //
 // Sabotaje que la hace fallar: hacer que -AlArranque sea el camino por defecto, o borrar el
 // aviso que explica qué pasa si la máquina se reinicia.
+// bloqueQueEncierra devuelve el índice de la línea que ABRE el bloque `{ ... }` donde vive
+// `lineas[idx]`, o -1 si no está adentro de ninguno.
+//
+// EXISTE PORQUE `strings.Index` ANCLA EN LA PRIMERA OCURRENCIA, Y ESO NO ES UNA ESTRUCTURA.
+//
+// La guarda de abajo preguntaba «¿aparece `-UserId "SYSTEM"` DESPUÉS del primer
+// `if ($AlArranque)`?». Mientras hubo un solo `if ($AlArranque)` en el archivo la pregunta
+// coincidía con la propiedad. El 2026-09-01 `5183c26` insertó otro 162 líneas más arriba —para
+// el endurecimiento del token— y desde entonces el ancla apunta a la línea 143 mientras el `if`
+// que de verdad protege está en la 305. Medido el 2026-09-09 sobre el archivo real: offset del
+// ancla 8394 (línea 143), offset de SYSTEM 17604 (línea 312).
+//
+// La consecuencia: comentar el `if ($AlArranque) {` de la 305 —o sea, hacer que el registro como
+// SYSTEM sea INCONDICIONAL, que es exactamente lo que esta guarda existe para prohibir— la dejaba
+// en VERDE, porque 312 sigue siendo mayor que 143. Ocho días así, y es la ÚNICA guarda del repo
+// sobre el registro como SYSTEM.
+//
+// Caminar las llaves contesta la pregunta que importa —«¿está ADENTRO de ese bloque?»— y no se
+// rompe si mañana alguien agrega un tercer `if ($AlArranque)` en cualquier lado.
+//
+// LÍMITE DECLARADO: cuenta llaves sin entender literales de PowerShell, así que una `{` dentro de
+// un string la confundiría. Hoy no pasa (se comprueba abajo con un piso), y si pasara la guarda
+// FALLA en vez de pasar: la ambigüedad no puede resolverse en verde.
+func bloqueQueEncierra(lineas []string, idx int) int {
+	profundidad := 0
+	for i := idx - 1; i >= 0; i-- {
+		l := lineas[i]
+		for j := len(l) - 1; j >= 0; j-- {
+			switch l[j] {
+			case '}':
+				profundidad++
+			case '{':
+				if profundidad == 0 {
+					return i
+				}
+				profundidad--
+			}
+		}
+	}
+	return -1
+}
+
 func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
 	b, err := os.ReadFile("../../deploy/agente-windows.ps1")
 	if err != nil {
 		t.Fatalf("falta el instalador de Windows: %v", err)
 	}
-	ps := string(b)
+	// EL CÓDIGO, NO EL TEXTO. `#` es el comentario de PowerShell, y sin sacarlo estas tres
+	// comprobaciones se satisfacen con la línea COMENTADA — el defecto que A107 midió en 7 de 46
+	// guardas de este repo. Verificado el 2026-09-09: comentar el `Mal "-AlArranque exige
+	// administrador"` de la línea 307 y el `Write-Host "...va a figurar CAIDA..."` de la 323
+	// dejaba las dos aserciones en VERDE con el aviso ya invisible para quien instala.
+	ps := codigoDe(string(b))
+	lineas := strings.Split(ps, "\n")
 
 	if !strings.Contains(ps, "$AlArranque") {
 		t.Fatal("no existe la opción -AlArranque: una máquina que se reinicia y nadie loguea " +
 			"figura caída estando viva, y no hay forma declarada de evitarlo")
 	}
-	// SYSTEM sólo puede aparecer DENTRO de la rama opt-in. Si el bloque `if ($AlArranque)`
-	// desaparece, el registro como SYSTEM pasa a ser incondicional.
-	iRama := strings.Index(ps, "if ($AlArranque)")
-	iSystem := strings.Index(ps, `-UserId "SYSTEM"`)
-	if iRama < 0 || iSystem < 0 || iSystem < iRama {
-		t.Error("el registro como SYSTEM no está dentro de la rama opt-in: el default escalaría privilegios")
+
+	// SYSTEM sólo puede aparecer DENTRO de la rama opt-in. Se comprueba por ESTRUCTURA —qué
+	// bloque lo encierra— y no por orden de aparición: ver `bloqueQueEncierra`.
+	iSystem := -1
+	for i, l := range lineas {
+		if strings.Contains(l, `-UserId "SYSTEM"`) {
+			iSystem = i
+			break
+		}
 	}
+	if iSystem < 0 {
+		t.Fatal(`no se encontró -UserId "SYSTEM" en el código del instalador: o se renombró la ` +
+			`opción y esta guarda quedó vieja, o el registro al arranque desapareció`)
+	}
+	iAbre := bloqueQueEncierra(lineas, iSystem)
+	if iAbre < 0 {
+		t.Errorf(`-UserId "SYSTEM" (línea ~%d del código) no está adentro de NINGÚN bloque: `+
+			`el registro como SYSTEM sería incondicional y el default escalaría privilegios`, iSystem+1)
+	} else if !strings.Contains(lineas[iAbre], "$AlArranque") {
+		t.Errorf("el registro como SYSTEM está adentro de `%s` y no de un `if ($AlArranque)`: "+
+			"el default escalaría privilegios sin que nadie lo pida",
+			strings.TrimSpace(lineas[iAbre]))
+	}
+
 	// Y exige elevación explícitamente: registrar una tarea como SYSTEM sin admin falla con un
 	// error de PowerShell que no dice nada útil.
 	if !strings.Contains(ps, "-AlArranque exige administrador") {
 		t.Error("-AlArranque no comprueba admin antes de intentarlo")
 	}
-	// La consecuencia del default, dicha al usuario y no sólo en un comentario del código.
+	// La consecuencia del default, dicha al usuario y no sólo en un comentario del código —
+	// literalmente: por eso se busca en `codigoDe` y no en el texto crudo.
 	if !strings.Contains(ps, "va a figurar CAIDA en la flota estando viva") {
 		t.Error("el instalador no avisa qué pasa si la máquina se reinicia sin que nadie inicie sesión")
 	}
@@ -417,22 +483,57 @@ func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("falta el instalador de Windows: %v", err)
 	}
-	ps := string(b)
+	// El CÓDIGO, no el texto: mismo motivo que su hermana de arriba.
+	ps := codigoDe(string(b))
+	lineas := strings.Split(ps, "\n")
 
-	if !strings.Contains(ps, `SetAccessRuleProtection($true, $false)`) {
-		t.Skip("el instalador ya no corta la herencia del token; esta guarda dejó de aplicar")
+	// ACÁ HABÍA UN `t.Skip` Y SE SACÓ: UNA PRUEBA OMITIDA SE LEE IGUAL QUE UNA QUE NO EXISTE.
+	//
+	// Decía «el instalador ya no corta la herencia del token; esta guarda dejó de aplicar» y se
+	// disparaba con `strings.Contains(ps, "SetAccessRuleProtection($true, $false)")`. O sea que
+	// **sacarle el espacio** —`($true,$false)`, que PowerShell interpreta idéntico— desarmaba la
+	// guarda ENTERA en verde, con la regla de SYSTEM todavía en el archivo y sin que nadie viera
+	// un skip en la salida normal de `go test`. Un cambio NO-OP no puede apagar una guarda.
+	//
+	// Si de verdad se deja de cortar la herencia, esto tiene que ponerse ROJO y que alguien
+	// borre la guarda a mano: esa decisión se toma mirando, no por ausencia de un literal. Por eso
+	// el chequeo es laxo en la FORMA (se normalizan los espacios) y duro en el HECHO.
+	sinEspacios := strings.NewReplacer(" ", "", "\t", "").Replace(ps)
+	if !strings.Contains(sinEspacios, "SetAccessRuleProtection($true,$false)") {
+		t.Fatal("el instalador ya no corta la herencia del token (`SetAccessRuleProtection`). " +
+			"Si eso fue a propósito, borrá esta guarda explicando por qué; si no, volvé a ponerlo: " +
+			"sin cortar la herencia, el endurecimiento del token no existe")
 	}
-	if !strings.Contains(ps, `"NT AUTHORITY\SYSTEM", "FullControl", "Allow"`) {
+
+	regla := `"NT AUTHORITY\SYSTEM", "FullControl", "Allow"`
+	if !strings.Contains(ps, regla) {
 		t.Error("con -AlArranque la tarea corre como SYSTEM y el token queda ilegible para él: " +
 			"el agente muere al arrancar y la máquina figura caída sin ningún error")
 	}
 	// Y LA REGLA VA DENTRO DEL OPT-IN. Darle el token a SYSTEM en una instalación normal —donde la
 	// tarea corre como la persona— sería aflojar el endurecimiento sin que nadie lo pidiera.
-	i := strings.Index(ps, `"NT AUTHORITY\SYSTEM", "FullControl", "Allow"`)
-	antes := ps[:i]
-	if !strings.Contains(antes[max(0, len(antes)-400):], "if ($AlArranque)") {
-		t.Error("la regla de SYSTEM sobre el token no está dentro de `if ($AlArranque)`: " +
-			"una instalación normal no debería aflojar los permisos del token")
+	//
+	// SE PREGUNTA POR EL BLOQUE Y NO POR LOS 400 CARACTERES DE ANTES. La ventana fija tenía el
+	// mismo defecto que el `strings.Index` de la guarda de arriba, con otra cara: no mide
+	// pertenencia, mide cercanía. Mover la regla veinte líneas más abajo —fuera del `if`, pero
+	// cerca— la dejaba en verde.
+	iRegla := -1
+	for i, l := range lineas {
+		if strings.Contains(l, regla) {
+			iRegla = i
+			break
+		}
+	}
+	if iRegla >= 0 {
+		iAbre := bloqueQueEncierra(lineas, iRegla)
+		if iAbre < 0 || !strings.Contains(lineas[iAbre], "$AlArranque") {
+			abre := "(ningún bloque)"
+			if iAbre >= 0 {
+				abre = strings.TrimSpace(lineas[iAbre])
+			}
+			t.Errorf("la regla de SYSTEM sobre el token está adentro de `%s` y no de un "+
+				"`if ($AlArranque)`: una instalación normal no debería aflojar los permisos del token", abre)
+		}
 	}
 }
 
