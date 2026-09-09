@@ -81,12 +81,18 @@ func SobreDeLlamadaComido(content string) (bool, string) {
 // ErrSobreDeLlamada es el error con el que se rechaza un content que se comió su sobre. Nombra lo
 // que se tragó, porque el llamador tiene que poder reescribir la llamada sin adivinar: el texto se
 // cortó en el `</content>` y los campos de después nunca llegaron a sus columnas.
+//
+// ENVUELVE A ErrPayloadInvalido, y eso NO es decoración. Este rechazo es determinista: el mismo
+// texto vuelve a fallar igual dentro de un año. Sin el centinela, el borde MCP lo emitía como
+// -32603 «error interno», que para el outbox de un nodo remoto significa «el central se está
+// portando mal, insistí» — y el nodo insiste sin tope, por diseño. Ver ErrPayloadInvalido para la
+// medición de lo que costó eso.
 func ErrSobreDeLlamada(detalle string) error {
-	return fmt.Errorf("el `content` se comió el cierre de su propia llamada (%s). "+
+	return fmt.Errorf("%w: el `content` se comió el cierre de su propia llamada (%s). "+
 		"Los campos que venían después del sobre —importance, mem_type, origin_paths— NO se "+
 		"guardaron: quedaron como texto y sus columnas en el default, así que el recall los ordena "+
 		"mal. Volvé a llamar con el texto cortado antes de `%s` y esos valores como parámetros",
-		detalle, cierreDeContent)
+		ErrPayloadInvalido, detalle, cierreDeContent)
 }
 
 func primerosN(s string, n int) string {
