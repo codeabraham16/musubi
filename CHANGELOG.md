@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Changed
+- **`sync.max_attempts` dejó de mentir.** Su documentación decía «la cantidad de intentos
+  transitorios antes de mandar la fila a dead-letter», y hace tiempo que no hace nada: nació en F2
+  como el cortacircuito del outbox y `sync-hardening` se lo quitó a propósito (R3), porque un
+  central caído por horas no puede costar memoria compartida. Medido: no la lee nadie salvo el
+  rellenador de defaults, ninguna tool la reporta, y `TestDrainTransientNeverDies` ya fija el
+  comportamiento correcto poniéndola en 2 y drenando 4 veces.
+
+  **No es prolijidad, y por eso el cambio existe:** esa frase es exactamente la que `syncclient.go`
+  citaba para justificar que reintentar de más era «barato y ACOTADO». Sobre una cota que ya no
+  existía, un rechazo determinista se reintentó 605 veces en 74 h. Lo que reemplazó a la cota no es
+  otro tope sino visibilidad — `doctor` lo señala con `outbox_stall`, y se rescata con
+  `musubi_sync_requeue`.
+
+  **Se conserva el campo en vez de borrarlo**, y también es deliberado: el YAML no se parsea en modo
+  estricto, así que un `max_attempts: 5` ya escrito —el config del cerebro central lo tiene—
+  seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
+
 ### Fixed
 - **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
   guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en

@@ -555,8 +555,26 @@ type SyncConfig struct {
 	DrainIntervalSeconds int `yaml:"drain_interval_seconds"`
 	// BatchSize es el tope de filas reclamadas por tick (default 50).
 	BatchSize int `yaml:"batch_size"`
-	// MaxAttempts es la cantidad de intentos transitorios antes de mandar la fila a
-	// dead-letter (default 5).
+	// MaxAttempts YA NO HACE NADA, y se conserva a propósito.
+	//
+	// Nació en F2 del cerebro híbrido como el cortacircuito del outbox: a los N intentos
+	// transitorios, dead-letter. `sync-hardening` se lo quitó con todas las letras (R3: «el
+	// parámetro max_attempts NO DEBE causar que un fallo transitorio termine en dead»), porque un
+	// central caído por horas no puede costar memoria 'shared'. Desde entonces una fila muere sólo
+	// por un fallo PERMANENTE, y eso lo decide el código de error, no un contador. Lo fija
+	// TestDrainTransientNeverDies, que justamente la pone en 2 y drena 4 veces.
+	//
+	// POR QUÉ SIGUE ACÁ EN VEZ DE BORRARSE. Borrarla no le devolvería la verdad a nadie: el YAML no
+	// se parsea en modo estricto, así que un `max_attempts: 5` ya escrito —el config del cerebro
+	// central lo tiene— seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no
+	// sirve. Este comentario ES ese lugar, y el campo es lo que lo sostiene.
+	//
+	// Y NO ES PROLIJIDAD. La versión anterior de esta línea decía «la cantidad de intentos
+	// transitorios antes de mandar la fila a dead-letter», y ESA frase es la que syncclient.go
+	// citaba para justificar que reintentar de más era «barato y ACOTADO». Sobre una cota que ya no
+	// existía, un rechazo determinista se reintentó 605 veces en 74 h (medido el 2026-09-08). Lo
+	// que reemplazó a la cota no es otro tope sino VISIBILIDAD: el `doctor` lo señala con
+	// outbox_stall y se rescata con musubi_sync_requeue.
 	MaxAttempts int `yaml:"max_attempts"`
 	// BackoffBaseSeconds es la base del backoff exponencial entre reintentos (default 5).
 	BackoffBaseSeconds int `yaml:"backoff_base_seconds"`
