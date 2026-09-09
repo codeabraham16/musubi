@@ -26,6 +26,31 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
 
 ### Fixed
+- **Un argumento omitido en `construir.sh` apagó `musubi_fleet_device_agent_stale` para la flota
+  entera, y nada lo dijo.** El guión arma `<VERSION>[-<track>].<commit>`, así que con el track vacío
+  el guión desaparece y quedan cuatro componentes: `0.139.6.7e2d211`. `fleet.NucleoDeVersion` corta
+  en el primer `-`, parte por `.` y exige tres, y `VersionDelAgenteDifiere` le pregunta **al cerebro
+  primero**: si la versión del cerebro no parsea, contesta `comparable=false` para *todas* las
+  máquinas. No se cae una: se apaga la serie que dice cuáles están atrasadas.
+
+  **Medido el 2026-09-09**: 3 series a las 20:30 UTC, redespliegue del cerebro a las 20:39, 0 series
+  a las 21:00. El binario reemplazado era `0.139.3-main.326e411` y parseaba. La diferencia entera
+  fue el primer argumento.
+
+  **El track pasa a ser obligatorio y no se le pone un default**, que es la decisión del cambio. Un
+  default haría que la versión parsee y escondería la pregunta que importa —de qué track salió lo
+  que se despliega—, que es justamente lo que la versión existe para declarar. Ningún llamador del
+  repo lo omitía.
+
+  **La prueba que lo habría cazado ya existía y estaba verde**: `internal/fleet/version_test.go`
+  fija `{"0.130.0.1", "", false} // cuatro componentes`, pero como *entrada basura de afuera*, sin
+  conectarla con que es la salida de nuestro propio guión. Así que la guarda nueva no agrega más
+  casos a mano: `deploy/pruebas/version-parseable.sh` **corre** `construir.sh` en un clon —sin
+  track, con track, árbol limpio y sucio— y le pasa cada versión resultante al `NucleoDeVersion` de
+  verdad, con un control que exige que la forma mala conocida siga rechazada. Tres sabotajes
+  corridos; el tercero sale en 2 y no en rojo, para distinguir «falló el guión» de «falló la
+  medición».
+
 - **`/readyz` sondeaba con una lectura, y por eso el central pasó once horas diciendo «listo»
   mientras no se podía guardar nada.** El 2026-08-23 `save_observation` colgaba 150 s,
   `memory_expand` y `token_list` 30 s, y `/readyz` contestaba 200 en 0,1 s todo el tiempo: las
