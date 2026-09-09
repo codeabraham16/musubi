@@ -54,8 +54,9 @@ const (
 //
 // dormant es un TERCER eje —la VISIBILIDAD— y no toca ni la autorización ni la capacidad. Una tool
 // dormida sigue implementada, testeada y DESPACHABLE por tools/call; lo único que pierde es el
-// lugar que ocupaba en tools/list. Existe porque el catálogo se paga por sesión: medido en el
-// registro real, tools/list pesa ~56.700 caracteres (~15.700 tokens) y cada tool que nadie invoca
+// lugar que ocupaba en tools/list. Existe porque el catálogo se paga por sesión: medido sobre
+// testdata/toolslist.golden.json —que congela la salida real— tools/list pesa 91.114 caracteres
+// en JSON compacto (~25.000 tokens) sobre 75 tools visibles, y cada tool que nadie invoca
 // se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
 // trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
 // MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.

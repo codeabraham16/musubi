@@ -168,6 +168,10 @@ var seriesSoloDelScrape = []string{
 	nombreAprobPendientes,
 	nombreAprobEspera,
 	nombreVidaDeRed,
+	// Sale de observability.go y no de este archivo, que es exactamente por lo que faltó acá
+	// durante meses: la custodia leía UN archivo y esta serie vive en otro. Es la de mayor
+	// consecuencia de las cinco —tres alertas cuelgan de ella y no tiene copia por OTLP—.
+	nombrePoliticaAcciones,
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
@@ -356,7 +360,7 @@ type serieDeFlota struct {
 	Valor  func(d fleet.Device, m *fleet.Muestra) (float64, bool)
 }
 
-// seriesDeFlota devuelve las 21 series en orden estable: las TRES que salen de la fila del device
+// seriesDeFlota devuelve las 24 series en orden estable: las TRES que salen de la fila del device
 // (up, last_seen, agent_stale) y las 18 que salen de la MUESTRA.
 //
 // `ahora` e `intervaloSonda` entran por parámetro porque tres series son relativas al reloj (up,

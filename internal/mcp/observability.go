@@ -375,12 +375,29 @@ func (m *serverMetrics) renderPoliticas(b *strings.Builder) {
 		}
 		return filas[i].resultado < filas[j].resultado
 	})
-	b.WriteString("# HELP musubi_fleet_policy_actions_total Acciones de política automática (auto-heal), por política y resultado.\n")
-	b.WriteString("# TYPE musubi_fleet_policy_actions_total counter\n")
+	fmt.Fprintf(b, "# HELP %s Acciones de política automática (auto-heal), por política y resultado.\n", nombrePoliticaAcciones)
+	fmt.Fprintf(b, "# TYPE %s counter\n", nombrePoliticaAcciones)
 	for _, f := range filas {
-		fmt.Fprintf(b, "musubi_fleet_policy_actions_total{policy=%q,result=%q} %d\n", f.politica, f.resultado, f.n)
+		fmt.Fprintf(b, "%s{policy=%q,result=%q} %d\n", nombrePoliticaAcciones, f.politica, f.resultado, f.n)
 	}
 }
+
+// nombrePoliticaAcciones es el contador de acciones de auto-heal.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ ES UNA CONSTANTE Y NO TRES LITERALES SUELTOS
+//
+// Es la ÚNICA serie `musubi_fleet_*` con UN SOLO PRODUCTOR: sale del scrape y el empuje OTLP no
+// la lleva. O sea que si el descarte del scrape se ensancha, desaparece — y tres alertas que la
+// consumen dejan de poder dispararse, sin un error.
+//
+// La guarda que existe para impedir eso (TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape) no
+// la veía, por dos motivos a la vez: leía sólo `fleet_prometheus.go`, y buscaba el nombre como
+// cadena entera entre comillas. Acá salía por `Fprintf` con el nombre pegado a `{`, y en otro
+// archivo. Con el nombre en una constante, declarada en `seriesSoloDelScrape` como sus hermanas,
+// la serie entra al mismo régimen que todas: nombrarla en un solo lugar es lo que permite
+// custodiarla.
+const nombrePoliticaAcciones = "musubi_fleet_policy_actions_total"
 
 // renderDomainGauges agrega los gauges de dominio si el motor los expone y responde OK. Usa un
 // cache TTL (T17.5) para no re-ejecutar los COUNT O(n) en cada scrape. Best-effort: ante error se

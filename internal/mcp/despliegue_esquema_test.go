@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"musubi/internal/embedding"
 	"musubi/internal/memory"
 )
 
@@ -200,8 +201,28 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 		}
 	}
 
-	// (2) Y no puede haber series sin declarar. Se comparan los literales del exportador contra
-	// la unión de las dos declaraciones.
+	// (2) Y no puede haber series sin declarar.
+	//
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// ESTA MITAD LEÍA UN ARCHIVO Y ESTABA DOBLEMENTE CIEGA
+	//
+	// Antes hacía `os.ReadFile("fleet_prometheus.go")` y buscaba `"(musubi_fleet_[a-z_]+)"`.
+	// No custodiaba lo que decía custodiar, por dos motivos a la vez:
+	//
+	//   1. Leía UN archivo de los veinte que emiten series de flota. `nombrePoliticaAcciones`
+	//      sale de observability.go, así que era invisible para esta guarda.
+	//   2. Y aunque hubiera leído el archivo correcto, el patrón exigía que el nombre fuera una
+	//      cadena ENTERA entre comillas. Una serie emitida con `Fprintf("%s{policy=%q}", ...)`
+	//      o nombrada en su línea `# HELP` no matchea ese patrón NUNCA.
+	//
+	// Consecuencia medida: ensanchar el descarte del scrape a `musubi_fleet_.*` —el error exacto
+	// que ya se cometió el 2026-08-31— pasaba en VERDE, y se llevaba puesta la única serie de la
+	// familia sin copia por OTLP, con tres alertas colgando.
+	//
+	// Ensanchar el grep no es el arreglo: `musubi_fleet_*` es TAMBIÉN el prefijo de las tools de
+	// flota del registry, así que barrer el paquete inunda de falsos positivos que no son series.
+	// La única fuente de verdad es la SALIDA, donde un nombre de tool no aparece jamás. Así que
+	// se renderiza /metrics igual que el handler de http.go: los tres renders, en ese orden.
 	declaradas := map[string]bool{}
 	for _, n := range seriesSoloDelScrape {
 		declaradas[n] = true
@@ -209,17 +230,54 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 	for _, s := range seriesDeFlota(time.Now(), time.Minute, "dev", nil) {
 		declaradas[s.Nombre] = true
 	}
-	fuente, err := os.ReadFile("fleet_prometheus.go")
-	if err != nil {
-		t.Fatalf("no pude leer el exportador: %v", err)
+
+	srv := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+	maquinaConMuestra(t, srv, "casa", "pc-gio", *muestraDePrueba(), ahora)
+	// Sin política sembrada `renderPoliticas` corta antes de emitir, y la serie que esta guarda
+	// dejó pasar durante meses volvería a ser invisible — ahora por falta de datos en vez de por
+	// el patrón. Sembrar es lo que hace que la prueba EJERZA el camino que dice cubrir.
+	srv.metrics.sembrarPoliticas([]string{"nginx-vivo"})
+
+	var render strings.Builder
+	render.WriteString(srv.metrics.render(srv.engine))
+	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, nil)
+	srv.renderEmpuje(&render, ahora)
+
+	// En el formato de exposición el nombre aparece de tres formas: al principio de una muestra,
+	// detrás de `# HELP` y detrás de `# TYPE`. Se toman las tres.
+	emitidas := map[string]bool{}
+	for _, l := range strings.Split(render.String(), "\n") {
+		l = strings.TrimSpace(l)
+		if resto, ok := strings.CutPrefix(l, "# HELP "); ok {
+			l = resto
+		} else if resto, ok := strings.CutPrefix(l, "# TYPE "); ok {
+			l = resto
+		} else if strings.HasPrefix(l, "#") || l == "" {
+			continue
+		}
+		if i := strings.IndexAny(l, "{ "); i >= 0 {
+			l = l[:i]
+		}
+		if strings.HasPrefix(l, "musubi_fleet_") {
+			emitidas[l] = true
+		}
 	}
-	nombres := regexp.MustCompile(`"(musubi_fleet_[a-z_]+)"`).FindAllStringSubmatch(string(fuente), -1)
-	if len(nombres) < 3 {
-		t.Fatalf("sólo se detectaron %d series en el exportador; el patrón se rompió y esta prueba no probaría nada", len(nombres))
+
+	// PISO: si el render se rompe o deja de cubrir un camino, el mapa queda corto y el bucle de
+	// abajo no recorre nada. Una prueba que pasa sobre cero series es el mismo agujero de antes.
+	if len(emitidas) < 5 {
+		t.Fatalf("sólo se emitieron %d series musubi_fleet_* en el render; la prueba no probaría nada", len(emitidas))
 	}
-	for _, m := range nombres {
-		if !declaradas[m[1]] {
-			t.Errorf("el exportador nombra %q y no está declarada ni en seriesDeFlota (viaja por OTLP) ni en seriesSoloDelScrape: nadie sabe si el descarte se la lleva", m[1])
+	// PIN DE LA REGRESIÓN: ésta es la serie que la versión anterior no podía ver, por vivir en
+	// otro archivo y salir por Fprintf. Si deja de aparecer acá, volvimos al agujero exacto.
+	if !emitidas[nombrePoliticaAcciones] {
+		t.Errorf("%s no aparece en el render: es la única serie de flota sin copia por OTLP, y es la que esta guarda no veía. Si el render dejó de cubrir observability.go, el agujero volvió", nombrePoliticaAcciones)
+	}
+
+	for n := range emitidas {
+		if !declaradas[n] {
+			t.Errorf("/metrics emite %q y no está declarada ni en seriesDeFlota (viaja por OTLP) ni en seriesSoloDelScrape: nadie sabe si el descarte se la lleva", n)
 		}
 	}
 }

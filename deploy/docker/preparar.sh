@@ -122,7 +122,7 @@ BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:7717}"
 if [ -s "$DEST/musubi.token" ] &&
    curl -fsS -m 10 -H "Authorization: Bearer $(cat "$DEST/musubi.token")" "$BRAIN_URL/metrics" 2>/dev/null | grep -q "^musubi_fleet_"; then
 	install -m 0644 "$REPO/deploy/musubi-alerts-flota.yml" "$DEST/rules/musubi-alerts-flota.yml"
-	# EL SLA VA ATADO A LA FLOTA Y NO SUELTO (A93). Sus 11 recording rules derivan de
+	# EL SLA VA ATADO A LA FLOTA Y NO SUELTO (A93). Sus 14 recording rules derivan de
 	# `musubi_fleet_*`, así que sin flota no producirían nada; y su guarda cruzada
 	# (`ReglasDelSlaSinDesplegar`) vive en el archivo de flota, o sea que instalar uno sin el otro
 	# deja la guarda sin qué custodiar o el SLA sin quién lo custodie. Van juntos.
