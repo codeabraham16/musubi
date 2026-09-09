@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
+  guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
+  `saveObservation`, «donde nace el contenido». Pero `PromoteObservation` es un `UPDATE` por id que
+  no pasa por ahí — exactamente el argumento por el que la guarda de CUARENTENA ya había tenido que
+  ponerse en `PromoteObservationCtx`, porque la promoción tampoco pasa por el predicado de
+  visibilidad.
+
+  Sin la guarda, una observación local guardada por un binario anterior se marcaba `shared`, se
+  encolaba, el central la rechazaba por su propia guarda y moría en dead-letter. Nadie perdía
+  memoria, pero quedaba una fila que decía ser memoria de equipo y nunca iba a llegar al equipo — y
+  el usuario se enteraba por el `doctor` horas después, no por el error de la operación que lo
+  causó.
+
+  **Sólo si todavía no es `shared`, y es deliberado.** Promover una ya-shared es un no-op
+  documentado e idempotente; hacerlo fallar rompería ese contrato para las filas que ya están del
+  otro lado —guardadas antes de que la guarda existiera— sin evitar ningún daño, porque el cruce ya
+  ocurrió. Lo que esta guarda impide es la decisión NUEVA de compartir contenido dañado, no el
+  registro de una vieja.
 - **11 observaciones que alguien marcó como importantes estaban rankeadas como si no lo fueran, y
   el arreglo estaba a la vista.** El `doctor` ya las contaba: de las 73 que se guardaron con el
   sobre de la llamada adentro del `content`, 11 todavía declaran ahí qué `importance` se les pidió
