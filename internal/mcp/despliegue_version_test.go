@@ -61,9 +61,22 @@ import (
 //	sin sacar el prefijo `v`                                    →  `v0.106.0-28-gdf2ec21` → `v0.106.0`
 //	cortando sólo en `-` y no en `-` o `+`                      →  `0.130.0+build5` entero
 //
-// Las dos últimas son las DOS familias que el Go declara tolerar y que están enroladas en
-// producción. Quedó tapado porque ese día el rojo era cierto por otro motivo (0.139.6 ≠ 0.139.7):
-// la causa buena escondida atrás de una verdadera. Ahora el arnés EXTRAE esa función del archivo
+// EL ALCANCE, ACOTADO DESPUÉS DE MEDIRLO, porque la primera versión de este comentario decía algo
+// más fuerte y FALSO: «cualquier agente de la familia `git describe` ya lo disparaba». No.
+// `nucleo_de_version` tiene UN solo llamador y lo alimenta UNA sola variable, `VER_VIVA`, que sale
+// de `musubi version` EN EL SERVIDOR: la versión del CEREBRO. Ninguna versión de agente pasa por
+// ahí — a los agentes los compara `VersionDelAgenteDifiere` en Go, que sí saca el `v` y sí corta en
+// `+`. Así que las tres divergencias son alcanzables SÓLO cuando el CEREBRO tiene esa forma: hoy la
+// de cuatro componentes, que es la que se desplegó; las otras dos, si algún día se instala un
+// cerebro de la familia `git describe` (ninguna de las cuatro máquinas la usa hoy).
+//
+// Lo cazó la sesión musubi-89 al revisar el PR, y se corrige acá y no se borra porque es la misma
+// forma que este archivo persigue: un motivo declarado que no se cumple, adentro de la guarda
+// escrita para que los motivos se cumplan. La razón verdadera alcanza y sobra — dos
+// implementaciones de la misma función que discrepan, y la que DECIDE es la de shell.
+//
+// Quedó tapado porque ese día el rojo era cierto por otro motivo (0.139.6 ≠ 0.139.7): la causa
+// buena escondida atrás de una verdadera. Ahora el arnés EXTRAE esa función del archivo
 // de producción y corre las dos implementaciones contra la MISMA tabla — la de
 // `internal/fleet/version_test.go` más las formas que rompieron algo. Y el verificador pasó a
 // contestar `dudoso` cuando no puede parsear, en vez de `rojo "diverge"`: no poder comparar no es

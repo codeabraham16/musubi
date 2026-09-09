@@ -57,7 +57,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   dando falso rojo: `${VER_VIVA%%-*}` sin validar que queden tres componentes (`0.139.7.abc1234`
   quedaba entero), sin sacar el prefijo `v` (`v0.106.0-28-gdf2ec21` → `v0.106.0`) y cortando sólo en
   `-` y no en `-` o `+` (`0.130.0+build5` entero). Las dos últimas son las **dos familias que el Go
-  declara tolerar** y que están enroladas en producción.
+  declara tolerar**.
+
+  **El alcance, acotado después de medirlo**: `nucleo_de_version` tiene un solo llamador y lo
+  alimenta una sola variable, que sale de `musubi version` **en el servidor**. O sea que sólo ve la
+  versión del *cerebro*; a los agentes los compara el Go, que sí saca el `v` y sí corta en `+`. Las
+  tres divergencias son alcanzables cuando el cerebro tiene esa forma —hoy, la de cuatro
+  componentes— y no antes.
 
   Quedó tapado porque el día que se midió el rojo era cierto por otro motivo (`0.139.6` ≠ `0.139.7`):
   la causa buena escondida detrás de una verdadera. Y el mensaje nombraba la causa equivocada —decía
