@@ -878,6 +878,64 @@ done <<GUIONES
 $GUIONES_DERIVADOS
 GUIONES
 
+# ── LOS ARCHIVOS DE REGLAS, POR CONTENIDO Y NO SÓLO POR NOMBRE ───────────────────────────────
+#
+# LA SECCIÓN 2 COMPARA LOS **NOMBRES** DE LAS REGLAS CARGADAS. ESO DEJA PASAR EL CASO QUE MÁS
+# DUELE: mismo juego de nombres, distinto NÚMERO adentro.
+#
+# Ya pasó tres veces. La tercera fue el 2026-09-08 y la causé yo desplegando a mano: copié
+# `musubi-alerts-flota.yml` (27→28 reglas) y NO su hermano `musubi-alerts.yml`, que es el que
+# lleva el umbral cruzado `!= 28`. El informe decía `✔ musubi-alerts.yml — sus 23 reglas están
+# cargadas` —cierto, los 23 nombres estaban— mientras el archivo desplegado difería en el renglón
+# que decide, y `ReglasDeFlotaSinDesplegar` quedó disparando con razón sin que el verificador
+# pudiera explicar por qué. La segunda fue el 2026-09-05: `!= 24` contra `!= 27`, **con los dos
+# archivos pesando los mismos 23912 bytes**.
+#
+# Y LA PREMISA QUE SOSTENÍA TODO ESTO NO LA CUSTODIABA NADA. `musubi-alerts.yml:374-377` dice que
+# las dos guardas cruzadas funcionan porque «el despliegue copia los dos archivos JUNTOS, así que
+# envejecen juntos». Es cierto para `preparar.sh`, que los instala en el mismo bloque — y es una
+# CONVENCIÓN DEL PROCEDIMIENTO, no una guarda: un despliegue a mano de un solo archivo la rompe, y
+# nada se enteraba. Comparar por sha256 no impide romperla; hace que romperla se VEA, que es lo
+# único que este guion puede prometer.
+#
+# El sha es válido porque los archivos se copian VERBATIM (`preparar.sh` usa `install`, sin
+# sustituciones). El único que se edita al instalar es `alertmanager.yml` —el `chat_id`— y ése no
+# está acá.
+DIR_REGLAS_ALLA="$(corre_alla 'for d in "$HOME/musubi-prometheus/rules" /etc/musubi-prometheus/rules /etc/prometheus/rules; do [ -d "$d" ] && { printf "%s\n" "$d"; break; }; done')"
+if [ -z "$DIR_REGLAS_ALLA" ]; then
+  # NO SE CALLA. Un «no encontré dónde mirar» que no se dice se lee como «miré y estaba bien»,
+  # que es el defecto que este guion entero viene a cerrar.
+  dudoso "no se encontró el directorio de reglas en el servidor (probé \$HOME/musubi-prometheus/rules, /etc/musubi-prometheus/rules y /etc/prometheus/rules): los archivos de reglas se compararon sólo por NOMBRE, así que un umbral cambiado con los mismos nombres NO se habría visto"
+elif [ "$HAY_SHA_ALLA" != si ]; then
+  dudoso "no se compararon los archivos de reglas por contenido: en el servidor no hay \`sha256sum\`"
+else
+  for f_r in "$REPO"/deploy/musubi-alerts*.yml "$REPO"/deploy/musubi-recording.yml; do
+    [ -f "$f_r" ] || continue
+    nombre_r="$(basename "$f_r")"
+    cond_r="$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f_r" | head -1)"
+    sha_repo_r="$(sha256sum "$f_r" | awk '{print $1}')"
+    sha_serv_r="$(sha_alla "$DIR_REGLAS_ALLA/$nombre_r")"
+    case "$sha_serv_r" in
+      "")
+        dudoso "no se pudo preguntar por $nombre_r en $DIR_REGLAS_ALLA: no se comparó su contenido" ;;
+      AUSENTE)
+        # Que no esté puede ser correcto: los condicionales sólo se instalan si su condición se
+        # cumple. La diferencia la declara el propio archivo, igual que en la sección 2.
+        case "$cond_r" in
+          siempre) rojo "$nombre_r NO está en $DIR_REGLAS_ALLA y se declara «siempre»: el archivo que el repo da por desplegado no existe en el servidor" ;;
+          condicional*) gris "$nombre_r — no está en el servidor, y así corresponde: $cond_r" ;;
+          *) rojo "$nombre_r no está en el servidor y no declara su condición de despliegue (# despliegue:)" ;;
+        esac ;;
+      ILEGIBLE)
+        dudoso "$nombre_r existe en $DIR_REGLAS_ALLA pero no se pudo leer con el usuario de esta sesión: no se comparó" ;;
+      "$sha_repo_r")
+        verde "$nombre_r coincide byte a byte con deploy/$nombre_r" ;;
+      *)
+        rojo "$nombre_r DIFIERE del repo — allá $sha_serv_r, acá $sha_repo_r. Ojo: sus reglas pueden figurar CARGADAS más arriba y ser cierto, porque eso compara NOMBRES; lo que cambia acá es el contenido —un umbral, un \`for:\`, una anotación—. Para ver qué:  ${SSH_HOST:+ssh $SSH_HOST }cat $DIR_REGLAS_ALLA/$nombre_r | diff - $REPO/deploy/$nombre_r" ;;
+    esac
+  done
+fi
+
 # LA COPIA VIEJA EN EL HOME DEL USUARIO DEL CEREBRO, que es una divergencia Y ADEMÁS otra cosa.
 #
 # `redesplegar-cerebro.sh` vivió en `/home/musubi/` y se corre con `sudo`. Esa combinación —un
