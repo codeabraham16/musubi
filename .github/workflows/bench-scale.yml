@@ -14,10 +14,16 @@ on:
 jobs:
   bench-scale:
     runs-on: ubuntu-latest
-    # Medido en local (i7-7700K) el 2026-09-09, la primera vez que el job llegó a medir:
-    # el paso vectorial tarda 337 s y el de Maintain 941 s — 21 min los dos juntos. Un
-    # runner estándar de GitHub es más lento, así que el techo se pone con holgura, pero
-    # ACOTADO: sin esto, un cuelgue se come las 6 h de default sin decir nada.
+    # MEDIDO ACÁ, NO ESTIMADO. La corrida 34387150955 (2026-09-09, la primera verde en la
+    # historia de este workflow) tardó **10 min 32 s el job entero**, los dos benchmarks a 100k
+    # incluidos. Vale la pena dejarlo escrito porque contradice lo que yo había supuesto: la
+    # primera versión de este comentario decía «un runner estándar de GitHub es más lento» y
+    # estimaba 21 min a partir del tiempo local (i7-7700K: 337 s el paso vectorial, 941 s el de
+    # Maintain). El runner es MÁS RÁPIDO, no más lento. La suposición estaba de más en un archivo
+    # cuyo defecto era, justamente, creerle a un rótulo que nadie había medido.
+    #
+    # El techo queda igual de holgado igual, porque su trabajo no es ajustarse al caso normal
+    # sino ACOTAR el anormal: sin él, un cuelgue se come las 6 h de default sin decir nada.
     #
     # 120 y no 90: los `-timeout` de los dos pasos suman 30m + 60m = 90 EXACTOS, así que un
     # techo de 90 no dejaba ni un segundo para el checkout, el setup-go y la compilación. Si
@@ -87,11 +93,13 @@ jobs:
         run: |
           # Misma corrección que el paso de arriba: la salida se imprime ANTES de juzgarla.
           #
-          # Y `-timeout=60m`, no 30m: medido en local tarda 941 s (15,7 min), así que 30m dejaba
-          # el margen dentro del ruido de un runner compartido. Un timeout de Go acá no sería un
-          # falso positivo silencioso —el chequeo de `rc` de abajo dice que NO llegó a medir— pero
-          # volvería a dejar el canario en rojo permanente, que es justo el modo de falla que este
-          # arreglo vino a sacar.
+          # Y `-timeout=60m`, no 30m. En local tarda 941 s (15,7 min) y 30m dejaba el margen
+          # dentro del ruido de un runner compartido. Medido después en CI (corrida 34387150955)
+          # el job entero da 10 min 32 s, o sea que 30m habrían alcanzado — pero el margen se
+          # queda: no cuesta nada cuando el paso corre bien, y un timeout de Go acá volvería a
+          # dejar el canario en rojo permanente, que es justo el modo de falla que este arreglo
+          # vino a sacar. (No sería un falso positivo silencioso: el chequeo de `rc` de abajo
+          # dice que NO llegó a medir.)
           set +e
           go test -run=NONE -bench='BenchmarkMaintain' -benchmem -benchtime=1x -timeout=60m ./internal/memory/ 2>&1 | tee bench-maintain.txt
           rc=${PIPESTATUS[0]}

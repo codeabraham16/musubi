@@ -113,9 +113,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   El segundo paso del canario, `Maintain`, también midió por primera vez: **10,98x contra un umbral
   de 20** (lineal ≈ 10x, cuadrático ≈ 100x) — sano, igual que el primero. Y ese número trajo un
   ajuste que no es cosmético: tarda 941 s en local, así que el `-timeout=30m` del paso quedaba
-  dentro del ruido de un runner compartido. Pasa a 60m, con `timeout-minutes: 90` en el job para que
-  un cuelgue no se coma las 6 h de default. Un canario que expira sigue siendo un canario en rojo
-  permanente.
+  dentro del ruido de un runner compartido. Pasa a 60m, con `timeout-minutes: 120` en el job para
+  que un cuelgue no se coma las 6 h de default. Un canario que expira sigue siendo un canario en
+  rojo permanente.
+
+  **Y el canario se corrió de verdad, no sólo en local.** Corrida `34387150955` sobre la rama, la
+  primera de las nueve de su historia que termina en verde: `SearchVector` **2,9x** (umbral 6) y
+  `Maintain` **10,7x** (umbral 20). El job entero tardó **10 min 32 s** — que de paso desmintió una
+  suposición que yo mismo había escrito en el archivo: «un runner de GitHub es más lento» y una
+  estimación de 21 min a partir del tiempo local. Es más rápido. La frase se reemplazó por el número
+  medido, porque una suposición sin medir es exactamente el defecto que este cambio vino a sacar.
 
 - **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
   guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
