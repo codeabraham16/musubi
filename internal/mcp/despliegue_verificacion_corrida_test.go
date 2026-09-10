@@ -26,6 +26,15 @@ package mcp
 //     y el `ok "Checksum verificado"`: imprimía que verificó sin verificar nada.
 //  4. EL REDESPLIEGUE DEL CEREBRO con el sha esperado ADOPTANDO el del binario que le pasan.
 //  5. QUE «NO PUDE MEDIR» FRENE ANTES DE MIRAR EL BINARIO, y no se disfrace de «no coincide».
+//
+// RONDA 3 — LO QUE LA BARRIDA NO MIRABA. Corría SIEMPRE con MODO_SHA=falla: ejercitaba «no pude
+// medir» y nunca «medí y NO coincide». Son dos ramas distintas del guion, y una vía de escape
+// puesta en la segunda le era invisible POR CONSTRUCCIÓN — medido: `&& [ -z
+// "${MUSUBI_IGUAL_INSTALA:-}" ]` pegado a la comparación dejaba la barrida entera en verde. Ahora
+// las dos barridas —la del paso 1 y la del relay— corren los DOS caminos que tienen que frenar.
+// Y la guarda de forma del sha, que sólo miraba que el guion no nombrara el sha del binario, no
+// veía que se DEGRADARA el regex (`{7,}` por `{64}`, o `.` por `[0-9a-f]`): se le agregaron las
+// tres entradas que sólo pasan si el guion sigue exigiendo 64 hexadecimales exactos.
 
 import (
 	"archive/tar"
@@ -210,9 +219,18 @@ func arnesDelPaso1(t *testing.T, dir, destino, stubs string) (string, string) {
 // esa variable. Y los tres lugares donde el guion afirma por escrito que no existe una variable
 // para saltear la verificación seguían afirmándolo sin nada que lo sostuviera.
 //
-// Acá el caso que TIENE que frenar (el .sha256 no baja y el operador no dio el sha) se corre una
-// vez por cada variable de entorno que el bloque lee y nadie le asigna, y por cada valor con el
-// que alguien prende una bandera. Si alguna instala, hay una vía de escape.
+// Acá el caso que TIENE que frenar se corre una vez por cada variable de entorno que el bloque lee
+// y nadie le asigna, y por cada valor con el que alguien prende una bandera. Si alguna instala, hay
+// una vía de escape.
+//
+// Y SE CORRE POR LOS DOS CAMINOS QUE TIENEN QUE FRENAR, que es la fuga que esta ronda cierra. La
+// barrida iba SIEMPRE con MODO_SHA=falla: ejercitaba «no pude medir» y NUNCA «medí y NO coincide».
+// Los dos terminan en un `die`, pero son ramas distintas del guion, y cualquier vía de escape que
+// viva en la segunda le era invisible POR CONSTRUCCIÓN. Medido: agregarle a la comparación un
+// `&& [ -z "${MUSUBI_IGUAL_INSTALA:-}" ]` dejaba la barrida entera en verde, porque con el .sha256
+// caído el guion muere antes de llegar a esa línea.
+//
+// El hermano es MODO_SHA=otro: el .sha256 baja, tiene forma de sha256 y NO es el del binario.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
 	const carga = "#!/bin/sh\necho \"musubi 0.0.0-de-prueba\"\n"
 	shaCarga := fmt.Sprintf("%x", sha256.Sum256([]byte(carga)))
@@ -254,31 +272,44 @@ func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
 	}
 	t.Logf("entradas de entorno derivadas del bloque: %v", candidatas)
 
-	for _, v := range candidatas {
-		for _, valor := range valoresDeEncendido {
-			t.Run(v+"="+valor, func(t *testing.T) {
-				dir, destino, prologo, bloque := preparar(t)
-				c := correrArnes(t, dir, []string{prologo, bloque}, []string{
-					"MODO_SHA=falla", // el .sha256 no baja: NADIE puede verificar
-					"SHA_BUENO=" + shaCarga,
-					"CARGA=" + filepath.Join(dir, "carga"),
-					v + "=" + valor,
+	for _, m := range losDosCaminosQueFrenan {
+		for _, v := range candidatas {
+			for _, valor := range valoresDeEncendido {
+				t.Run(m.modo+"/"+v+"="+valor, func(t *testing.T) {
+					dir, destino, prologo, bloque := preparar(t)
+					c := correrArnes(t, dir, []string{prologo, bloque}, []string{
+						"MODO_SHA=" + m.modo,
+						"SHA_BUENO=" + shaCarga,
+						"CARGA=" + filepath.Join(dir, "carga"),
+						v + "=" + valor,
+					})
+					if _, err := os.Stat(destino); err == nil {
+						t.Errorf("con %s=%s y %s, el binario del cerebro QUEDÓ INSTALADO sin que nadie "+
+							"comparara nada.\nEso es una vía de escape fail-open: una variable de entorno "+
+							"que apaga la verificación. Termina copiada en un runbook y de ahí en todas "+
+							"las máquinas, mientras el guion sigue diciendo que no existe.\n"+
+							"La salida para el operador es DAR el sha (MUSUBI_BIN_SHA256), nunca saltear "+
+							"la comprobación.\nsalida del guion:\n%s", v, valor, m.porque, c.salida)
+					}
+					if c.err == nil {
+						t.Errorf("con %s=%s y %s el guion salió con código 0: no frenó.\n%s",
+							v, valor, m.porque, c.salida)
+					}
 				})
-				if _, err := os.Stat(destino); err == nil {
-					t.Errorf("con %s=%s y el .sha256 caído, el binario del cerebro QUEDÓ INSTALADO sin "+
-						"que nadie comparara nada.\nEso es una vía de escape fail-open: una variable de "+
-						"entorno que apaga la verificación. Termina copiada en un runbook y de ahí en "+
-						"todas las máquinas, mientras el guion sigue diciendo que no existe.\n"+
-						"La salida para el operador es DAR el sha (MUSUBI_BIN_SHA256), nunca saltear la "+
-						"comprobación.\nsalida del guion:\n%s", v, valor, c.salida)
-				}
-				if c.err == nil {
-					t.Errorf("con %s=%s el guion salió con código 0 sin poder verificar: no frenó.\n%s",
-						v, valor, c.salida)
-				}
-			})
+			}
 		}
 	}
+}
+
+// losDosCaminosQueFrenan — las DOS respuestas distintas que el guion tiene que dar, y que hay que
+// barrer por separado.
+//
+// «No pude medir» y «medí y no coincide» viven en ramas DISTINTAS del bloque. Barrer sólo la
+// primera deja la segunda sin nadie mirando: una vía de escape puesta ahí no la ve ninguna corrida
+// de esta prueba, y la de FORMA tampoco si la comparación sigue existiendo y dominando.
+var losDosCaminosQueFrenan = []struct{ modo, porque string }{
+	{"falla", "el .sha256 no bajó y el operador no dio el sha (NADIE puede verificar)"},
+	{"otro", "el .sha256 bajó, tiene forma de sha256 y NO es el del binario (se midió y difiere)"},
 }
 
 // TestNingunaVariableDeEntornoSalteaLaVerificacionDelRelay — EL HERMANO de la barrida de arriba.
@@ -288,9 +319,11 @@ func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
 // lo que venga de un release ajeno. Cerrar el paso 1 y dejar éste abierto es exactamente la forma
 // en que este repo pierde: la lección aprendida de un lado y no del hermano.
 //
-// El caso que tiene que frenar acá es una versión SIN fila en PINES_RUSTDESK y sin
-// RUSTDESK_SHA256: no hay ningún número contra el cual comparar, así que no se instala nada — y
-// además se frena ANTES de bajar seis megas.
+// Y ACÁ TAMBIÉN SE BARREN LOS DOS CAMINOS QUE FRENAN, por la misma razón que en el paso 1: una
+// versión SIN fila en PINES_RUSTDESK y sin RUSTDESK_SHA256 es «no pude medir» —no hay ningún
+// número contra el cual comparar, y se frena ANTES de bajar seis megas—; un RUSTDESK_SHA256 con
+// forma de sha256 que no es el del zip es «medí y NO coincide», que es otra rama del guion. Barrer
+// una sola deja la otra sin nadie mirando.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelRelay(t *testing.T) {
 	const rel = "rustdesk/install-rustdesk-relay.sh"
 	guion := leerGuionDeDespliegue(t, rel)
@@ -347,21 +380,35 @@ cp `+shQuote(cargaP)+` "$destino"
 	}
 	t.Logf("entradas de entorno derivadas del bloque: %v", candidatas)
 
-	for _, v := range candidatas {
-		for _, valor := range valoresDeEncendido {
-			t.Run(v+"="+valor, func(t *testing.T) {
-				dir, destino, prologo := preparar(t, "9.9.9-sin-fila")
-				r := correrArnes(t, dir, []string{prologo, bloque}, []string{v + "=" + valor})
-				if _, err := os.Stat(filepath.Join(destino, "hbbs")); err == nil {
-					t.Errorf("con %s=%s y una versión sin pin, hbbs quedó INSTALADO sin que nadie "+
-						"comparara nada — y queda corriendo como unidad systemd de este servidor.\n"+
-						"salida del guion:\n%s", v, valor, r.salida)
-				}
-				if r.err == nil {
-					t.Errorf("con %s=%s el guion salió con código 0 sin poder verificar: no frenó.\n%s",
-						v, valor, r.salida)
-				}
-			})
+	const shaCeros = "0000000000000000000000000000000000000000000000000000000000000000"
+	caminos := []struct {
+		nombre string
+		antes  []string // entorno que arma el caso ANTES de la variable barrida
+		porque string
+	}{
+		{"sin-pin", nil, "una versión sin fila en PINES_RUSTDESK y sin RUSTDESK_SHA256 (no pude medir)"},
+		{"no-coincide", []string{"RUSTDESK_SHA256=" + shaCeros},
+			"un sha256 con forma válida que NO es el del zip (medí y difiere)"},
+	}
+
+	for _, cam := range caminos {
+		for _, v := range candidatas {
+			for _, valor := range valoresDeEncendido {
+				t.Run(cam.nombre+"/"+v+"="+valor, func(t *testing.T) {
+					dir, destino, prologo := preparar(t, "9.9.9-sin-fila")
+					r := correrArnes(t, dir, []string{prologo, bloque},
+						append(append([]string{}, cam.antes...), v+"="+valor))
+					if _, err := os.Stat(filepath.Join(destino, "hbbs")); err == nil {
+						t.Errorf("con %s=%s y %s, hbbs quedó INSTALADO sin que nadie comparara nada — y "+
+							"queda corriendo como unidad systemd de este servidor.\nsalida del guion:\n%s",
+							v, valor, cam.porque, r.salida)
+					}
+					if r.err == nil {
+						t.Errorf("con %s=%s y %s el guion salió con código 0: no frenó.\n%s",
+							v, valor, cam.porque, r.salida)
+					}
+				})
+			}
 		}
 	}
 }
@@ -405,6 +452,21 @@ func TestCuandoNoPudoMedirElGuionFrenaAntesDeMirarElBinario(t *testing.T) {
 			"MUSUBI_BIN_SHA256 con el nombre del archivo pegado no es un sha256: es «no pude medir» " +
 				"disfrazado de medición, y no se distingue de un binario adulterado si el mensaje dice " +
 				"«no coincide»"},
+		// Los tres de abajo NO abren el fail-open: los tres frenan igual. Miden que el guion siga
+		// sabiendo CUÁL de las dos cosas pasó. Debilitar el regex de forma —`{7,}` en vez de `{64}`,
+		// o `.` en vez de `[0-9a-f]`— quedaba verde con las cinco filas de antes, porque comparar
+		// cualquier basura contra el sha real también da distinto y también muere. Lo que se pierde es
+		// el diagnóstico, que es lo único que le queda al operador.
+		{"el operador pegó un sha cortado a 7", "falla", "0000000", false,
+			"siete hexadecimales no son un sha256: si el mensaje trae el sha del binario es porque el " +
+				"guion aceptó la forma y comparó, y le va a decir «no coincide» a alguien que en " +
+				"realidad copió mal"},
+		{"el operador pegó un sha de 65", "falla", shaCeros + "0", false,
+			"un carácter de más tampoco es un sha256, y el `$` del final es lo único que lo caza"},
+		{"lo que llegó tiene 64 caracteres pero no son hexadecimales", "falla",
+			"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", false,
+			"64 de largo no alcanza: si el guion no mira que sean [0-9a-f], una respuesta de 64 bytes " +
+				"de un portal cautivo pasa por medición"},
 		{"CONTROL: el .sha256 es válido y NO coincide", "otro", "", true,
 			"acá sí se midieron las dos cosas y difieren: el mensaje TIENE que traer el sha real del " +
 				"binario, que es el dato con el que el operador averigua qué bajó. Sin este control, la " +
