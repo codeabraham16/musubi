@@ -329,16 +329,96 @@ func TestQ7ConfianzaFueraDeRangoSeRechaza(t *testing.T) {
 // --- Taxonomía: cerrada, sin defaults silenciosos ---------------------------------------------
 
 func TestTaxonomiaDeProcedenciaEsCerrada(t *testing.T) {
-	for _, p := range []string{provenanceHuman, provenanceDeterministic, "llm:groq/llama-3.3", "llm:x"} {
+	// 'llm:ollama:qwen' es VÁLIDO y está acá a propósito: los dos puntos son legítimos dentro del
+	// nombre del modelo. Lo que se rechaza abajo es repetir el PREFIJO, no el separador — sin este
+	// caso, "prohibir el segundo ':'" pasaría el test y rompería a los modelos con namespace.
+	for _, p := range []string{provenanceHuman, provenanceDeterministic, "llm:groq/llama-3.3", "llm:x", "llm:ollama:qwen"} {
 		if !validProvenance(p) {
 			t.Errorf("%q debería ser una procedencia válida", p)
 		}
 	}
 	// 'llm:' pelado NO alcanza: sin el modelo, el sello no es auditable.
-	for _, p := range []string{"", "humano", "LLM:x", "llm:", "llm:   ", "maquina", "agent"} {
+	// 'llm:llm:x' tampoco: nombra como modelo a algo que ya es una procedencia, así que el sello
+	// deja de decir qué modelo escribió. Es la forma que se encontró en el libro mayor.
+	for _, p := range []string{"", "humano", "LLM:x", "llm:", "llm:   ", "maquina", "agent", "llm:llm:x", "llm:llm:", "llm:llm:claude-opus-5"} {
 		if validProvenance(p) {
 			t.Errorf("%q NO debería ser una procedencia válida", p)
 		}
+	}
+}
+
+// LA GUARDA TIENE QUE CORRER, no solamente existir. Este test es el que faltaba: durante toda la
+// fase F4 `validProvenance` estuvo definida, con su test de arriba en verde, y sin un solo caller
+// de producción — el grafo de código lo decía («1 directo, 0 fuera de tests») y nadie lo miró. Por
+// eso `llm:llm:claude-opus-5` entró al libro mayor pasando por encima de una taxonomía que el
+// comentario del archivo describe como CERRADA.
+//
+// Ataca el camino de ESCRITURA, no la función: le pega directo a saveObservation, que es el único
+// INSERT que escribe la columna. Un test que sólo llamara a validProvenance volvería a quedar
+// verde el día que alguien desconecte la llamada otra vez.
+func TestLaTaxonomiaEstaCableadaAlCaminoDeEscritura(t *testing.T) {
+	e := newTestEngine(t)
+
+	// Control primero: con un sello VÁLIDO el mismo camino escribe. Sin esto, un saveObservation
+	// roto por cualquier otro motivo haría pasar el test por la razón equivocada.
+	bueno := &obsStamp{provenance: "llm:modelo-de-prueba", confidence: 0.5, quarantined: true}
+	if err := e.saveObservation("sello-bueno", "t/x", "contenido con sello válido", 1.0, true, "", ScopeLocal, "", "", nil, nil, bueno); err != nil {
+		t.Fatalf("control: un sello válido debía escribirse, obtuve %v", err)
+	}
+
+	for _, malo := range []string{"llm:llm:claude-opus-5", "llm:", "maquina", ""} {
+		id := "sello-malo-" + malo
+		stamp := &obsStamp{provenance: malo, confidence: 0.5, quarantined: true}
+		err := e.saveObservation(id, "t/x", "contenido con sello inválido", 1.0, true, "", ScopeLocal, "", "", nil, nil, stamp)
+		if !errors.Is(err, ErrInvalidProvenance) {
+			t.Errorf("procedencia %q: esperaba ErrInvalidProvenance en el camino de escritura, obtuve %v", malo, err)
+		}
+		// Y no alcanza con que devuelva error: la fila NO puede quedar escrita.
+		var n int
+		if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatalf("contar: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("procedencia %q: rechazó pero dejó %d fila(s) escritas", malo, n)
+		}
+	}
+}
+
+// ProposeObservation recibe el MODELO, no la procedencia armada. Si el caller manda
+// 'llm:claude-opus-5' —una confusión razonable, y la que efectivamente ocurrió— el sello saldría
+// 'llm:llm:claude-opus-5'. Se rechaza en vez de recortarse en silencio, igual que la confianza
+// fuera de rango: recortar convierte el error del caller en un dato plausible y equivocado.
+func TestProposeRechazaUnModeloQueYaTraeElPrefijo(t *testing.T) {
+	e := newTestEngine(t)
+
+	for _, modelo := range []string{"llm:claude-opus-5", "llm:x"} {
+		id, err := e.ProposeObservation("", "", "t/x", "propuesta con modelo mal armado", modelo, 0.7, "", nil)
+		if !errors.Is(err, ErrInvalidProvenance) {
+			t.Errorf("modelo %q: esperaba ErrInvalidProvenance, obtuve err=%v id=%q", modelo, err, id)
+		}
+		if id != "" {
+			t.Errorf("modelo %q: rechazó pero devolvió un id %q", modelo, id)
+		}
+	}
+
+	// El mensaje tiene que nombrar la equivocación del caller. Un 'procedencia inválida' pelado lo
+	// deja adivinando qué mandó mal, y el valor que mandó ni siquiera aparece en el sello final.
+	_, err := e.ProposeObservation("", "", "t/x", "propuesta", "llm:claude-opus-5", 0.7, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "prefijo") {
+		t.Errorf("el error debe nombrar el prefijo duplicado, obtuve %v", err)
+	}
+
+	// Control: un modelo con dos puntos que NO es el prefijo sigue funcionando.
+	id, err := e.ProposeObservation("", "", "t/x", "propuesta con modelo namespaced", "ollama:qwen", 0.7, "", nil)
+	if err != nil {
+		t.Fatalf("control: 'ollama:qwen' es un modelo legítimo y no debía rechazarse: %v", err)
+	}
+	prov, _, _, err := e.ObservationStamp(id)
+	if err != nil {
+		t.Fatalf("ObservationStamp: %v", err)
+	}
+	if prov != "llm:ollama:qwen" {
+		t.Errorf("sello = %q, esperaba %q", prov, "llm:ollama:qwen")
 	}
 }
 

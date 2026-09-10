@@ -64,6 +64,38 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
 
 ### Fixed
+- **La taxonomía de procedencia estaba definida, testeada y desconectada: no la llamaba nadie.**
+  `validProvenance` existía desde F4 con su comentario diciendo «taxonomía CERRADA. Un valor fuera
+  del conjunto es un error, no un default silencioso», su test `TestTaxonomiaDeProcedenciaEsCerrada`
+  en verde, y **cero callers de producción**. El propio grafo de código lo decía —«1 directo, 0
+  fuera de tests»— y nadie lo miró. La columna `provenance` se escribía sin pasar por ninguna
+  validación.
+
+  Cómo se descubrió: apareció una fila con procedencia `llm:llm:claude-opus-5` (topic
+  `cuerpo/11-banco-hermetica`, 2026-09-10 12:11:23). `ProposeObservation` recibe el MODELO y le
+  pega el prefijo, así que un caller que manda `llm:claude-opus-5` —una confusión razonable—
+  produce el prefijo duplicado. El sello deja de decir qué modelo escribió, que es lo único para lo
+  que existe.
+
+  **Una guarda desconectada es peor que ninguna**, y por eso el arreglo no es endurecer la función:
+  es cablearla. La validación vive ahora en `saveObservation`, el único INSERT que escribe esa
+  columna, y `ProposeObservation` **rechaza** un modelo que ya trae el prefijo en vez de recortarlo
+  en silencio — la misma razón que la confianza fuera de rango: recortar convierte el error de
+  quien llama en un dato plausible y equivocado guardado para siempre.
+
+  Los dos puntos siguen siendo legítimos DENTRO del modelo (`llm:ollama:qwen`,
+  `llm:groq/llama-3.3`): lo que se rechaza es repetir el prefijo, no el separador. Ese caso está en
+  el test a propósito, y el cuarto sabotaje lo prueba: prohibir el segundo `:` —el arreglo
+  ingenuo— pasa el test del prefijo duplicado y rompe a todos los modelos con namespace.
+
+  Cuatro sabotajes, los cuatro vistos en rojo contra el invariante que atacan: desconectar la
+  llamada del camino de escritura, volver a la regla laxa de antes, recortar en silencio, y
+  prohibir el segundo `:`. El test nuevo le pega a `saveObservation` y no a `validProvenance`,
+  porque un test que sólo llamara a la función volvería a quedar verde el día que alguien
+  desconecte la llamada otra vez.
+
+  ⚠️ Queda una fila con el sello mal formado en el libro mayor local. El arreglo impide que entren
+  nuevas; no lava las viejas.
 - **`matar-zombis-agente.sh` no mataba nada: un `\"` en una rama que no se ejecutaba rompía todo el
   bloque.** En una cadena de PowerShell con comillas dobles el escape es el **backtick**, no la barra
   invertida, así que ese `\"` cerraba la cadena y dejaba el resto suelto. Medido en `davantis-1` el

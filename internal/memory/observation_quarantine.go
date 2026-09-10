@@ -59,13 +59,25 @@ type obsStamp struct {
 }
 
 // validProvenance valida contra la taxonomía cerrada.
+//
+// EL PREFIJO APARECE EXACTAMENTE UNA VEZ. `llm:llm:claude-opus-5` se lee razonable y no lo es:
+// nombra como MODELO a algo que ya es una procedencia, así que el sello deja de decir qué modelo
+// escribió — que es lo único que el sello existe para decir. Antes pasaba porque acá sólo se
+// exigía que después de `llm:` quedara algo no vacío, y con esa regla el valor era válido por
+// construcción. Hay una fila así en el libro mayor (topic `cuerpo/11-banco-hermetica`,
+// 2026-09-10 12:11:23); así se descubrió.
+//
+// Los dos puntos SÍ son legítimos dentro del modelo (`llm:ollama:qwen`, `llm:groq/llama-3.3`): lo
+// que se rechaza es repetir el prefijo, no el separador.
 func validProvenance(p string) bool {
 	switch {
 	case p == provenanceHuman, p == provenanceDeterministic:
 		return true
 	case strings.HasPrefix(p, provenanceLLMPrefix):
-		// 'llm:' pelado no alcanza: sin el modelo el sello no es auditable.
-		return strings.TrimSpace(strings.TrimPrefix(p, provenanceLLMPrefix)) != ""
+		modelo := strings.TrimSpace(strings.TrimPrefix(p, provenanceLLMPrefix))
+		// 'llm:' pelado no alcanza: sin el modelo el sello no es auditable. Y un modelo que
+		// vuelve a empezar con 'llm:' es el prefijo duplicado, no un modelo.
+		return modelo != "" && !strings.HasPrefix(modelo, provenanceLLMPrefix)
 	default:
 		return false
 	}
@@ -94,6 +106,14 @@ func (e *DbEngine) ProposeObservation(originProjectID, author, topicKey, content
 	if model == "" {
 		// Mismo default que toolProposeFacts: el caller es el que aportó el texto.
 		model = "caller"
+	}
+	// El caller manda el MODELO, no la procedencia armada. Un 'llm:claude-opus-5' acá produciría
+	// 'llm:llm:claude-opus-5', y se RECHAZA en vez de recortarse por la misma razón que la
+	// confianza fuera de rango: recortar en silencio convierte el error de quien llama en un dato
+	// plausible y equivocado guardado para siempre. El error nombra la equivocación del caller —
+	// "ya trae el prefijo" — en vez de un 'procedencia inválida' que lo dejaría adivinando.
+	if strings.HasPrefix(model, provenanceLLMPrefix) {
+		return "", fmt.Errorf("%w: el modelo ya trae el prefijo %q (%q). Mandá sólo el modelo", ErrInvalidProvenance, provenanceLLMPrefix, model)
 	}
 	stamp := &obsStamp{
 		provenance:  provenanceLLMPrefix + model,
