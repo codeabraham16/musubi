@@ -15,6 +15,9 @@
 #   BRAIN_ADDR      dirección de bind (tailnet-only vía fw)      (default: 0.0.0.0:7717)
 #   MUSUBI_VERSION  tag de release o "latest"                   (default: latest)
 #   MUSUBI_REPO     owner/repo de las releases                  (default: codeabraham16/musubi)
+#   MUSUBI_BIN_SHA256  sha256 del binario que el operador espera, para cuando el .sha256 del
+#                      release no se puede bajar o no se le quiere confiar. NO existe una
+#                      variable para SALTEAR la verificación: el porqué está en el paso 1.
 #
 set -euo pipefail
 
@@ -72,12 +75,64 @@ fi
 log "Descargando binario ($ARCH): $URL"
 tmp="$(mktemp)"; tmpsha="$(mktemp)"
 curl -fsSL "$URL" -o "$tmp"
-if curl -fsSL "$URL.sha256" -o "$tmpsha" && [ -s "$tmpsha" ]; then
-  want="$(awk '{print $1}' "$tmpsha")"
-  got="$(sha256sum "$tmp" | awk '{print $1}')"
-  [ "$want" = "$got" ] || die "Checksum no coincide (want=$want got=$got)"
-  ok "Checksum verificado"
+# EL BINARIO DEL CEREBRO NO SE INSTALA SIN VERIFICAR.
+#
+# Acá había un `if` SIN `else`: si el `.sha256` no bajaba —o bajaba vacío— el bloque no entraba y
+# el `install` de abajo se hacía IGUAL, en silencio. Fail-OPEN sobre el archivo más privilegiado
+# del despliegue, que además corre como servicio. Y era el hermano sin la guarda de los tres que
+# baja este instalador: el guion de backup (BACKUP_SHA256) y el de redespliegue
+# (REDESPLIEGUE_SHA256) tienen pin duro, y el comentario de éste último dice, sobre un guion MENOS
+# privilegiado que este binario, que es «el peor archivo del despliegue para instalar sin
+# verificar».
+#
+# POR QUÉ NO LLEVA UN PIN DURO COMO SUS DOS HERMANOS. El pin de ellos funciona porque esos archivos
+# viven en ESTE commit: el número es computable al escribirlo y una prueba de Go lo custodia contra
+# pudrirse. El binario es el artefacto de un release FUTURO —con MUSUBI_VERSION=latest ni siquiera
+# se sabe cuál—, así que un pin acá congelaría el instalador en una versión y convertiría cada
+# release en una edición de este archivo.
+#
+# Y LA URL VERSIONADA NO REEMPLAZA AL CHECKSUM: nombra el asset, no atestigua sus bytes. Una
+# descarga truncada, un proxy o portal cautivo que contesta 200 con HTML, y un asset RE-SUBIDO
+# sobre el mismo tag (los assets de un release de GitHub son mutables para cualquiera con write —
+# el tag no) pasan los tres por una URL versionada perfecta.
+#
+# QUÉ VERIFICA Y QUÉ NO. El `.sha256` lo publica `release.yml` al lado de cada asset, en la misma
+# corrida que lo compila (`sha256sum "$asset" > "$asset.sha256"`). Sale del mismo origen que el
+# binario, así que NO defiende contra quien controle el release entero; para eso está
+# MUSUBI_BIN_SHA256, que trae el número por un camino que elige el operador. Sí defiende contra
+# todo lo demás, y su ausencia significa «no pude medir», que no es lo mismo que «medí y está
+# bien»: por eso frena.
+#
+# NO HAY VÍA DE ESCAPE FAIL-OPEN, A PROPÓSITO. Un `MUSUBI_SIN_VERIFICAR=1` termina copiado en un
+# runbook —y de ahí en el próximo, y en el de la máquina siguiente— y a partir de ese momento la
+# verificación está muerta en todas partes mientras se ve viva. Es la forma exacta de A111: una
+# comprobación vacuamente cierta que pasó en seis redespliegues sin comprobar nada. La salida para
+# el operador es DAR el sha que espera, no saltear la comprobación — que es además la forma que ya
+# tiene `redesplegar-cerebro.sh`, donde el sha esperado es un argumento obligatorio.
+if [ -n "${MUSUBI_BIN_SHA256:-}" ]; then
+  want="$(printf '%s' "$MUSUBI_BIN_SHA256" | tr 'A-Z' 'a-z')"
+  origen_sha="MUSUBI_BIN_SHA256 (dado por el operador)"
+elif curl -fsSL "$URL.sha256" -o "$tmpsha" && [ -s "$tmpsha" ]; then
+  want="$(awk '{print $1}' "$tmpsha" | tr 'A-Z' 'a-z')"
+  origen_sha="$URL.sha256"
+else
+  rm -f "$tmp" "$tmpsha"
+  die "NO se verificó el binario del cerebro y por eso NO se instaló: $URL.sha256 no bajó o vino vacío, y no hay MUSUBI_BIN_SHA256. Sin ese número no se distingue un binario íntegro de una descarga truncada o de un asset re-subido, y esto es lo que va a correr como servicio en el cerebro. Salidas: (a) reintentá, si fue la red; (b) si el release no publicó su .sha256, miralo en la corrida de release.yml del tag; (c) conseguí el sha del asset por un camino que confíes y pasalo:  MUSUBI_BIN_SHA256=<sha256> sudo $0"
 fi
+# Un `want` que no tiene forma de sha256 es «no pude medir» disfrazado de medición: pasa cuando el
+# .sha256 vino con HTML de un portal cautivo, o cuando el operador pegó de más. Compararlo contra
+# $got daría distinto y moriría igual, pero con el mensaje equivocado —«no coincide», que manda a
+# buscar un binario adulterado— en vez del que corresponde.
+if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+  rm -f "$tmp" "$tmpsha"
+  die "NO se verificó el binario del cerebro y por eso NO se instaló: lo que llegó de $origen_sha no tiene forma de sha256 (${want:0:80}). Si viene de la red, en el medio contestó algo que no era el archivo (un proxy, un portal cautivo). Revisalo a mano:  curl -fsSL $URL.sha256"
+fi
+got="$(sha256sum "$tmp" | awk '{print $1}')"
+if [ "$want" != "$got" ]; then
+  rm -f "$tmp" "$tmpsha"
+  die "El binario del cerebro NO coincide con su checksum (origen=$origen_sha want=$want got=$got). NO se instaló. O la descarga se truncó, o el asset del release no es el que produjo esa corrida: NO lo instales a mano hasta saber cuál de las dos es."
+fi
+ok "Checksum del binario verificado ($origen_sha)"
 # 'install' (no 'mv') aplica el contexto correcto del destino; igual forzamos restorecon.
 install -m 0755 "$tmp" "$BIN"
 rm -f "$tmp" "$tmpsha"

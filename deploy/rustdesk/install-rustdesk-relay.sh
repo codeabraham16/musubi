@@ -44,7 +44,6 @@ if [[ -z "$BIND" ]]; then
     aviso "Para el acceso híbrido pasá --bind <ip> a conciencia (leé deploy/rustdesk/README.md)."
   fi
 fi
-
 # ── Binarios ─────────────────────────────────────────────────────────────────
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -52,6 +51,34 @@ case "$ARCH" in
   aarch64) PAQUETE="rustdesk-server-linux-arm64v8.zip" ;;
   *) die "arquitectura no soportada por los binarios oficiales: $ARCH" ;;
 esac
+
+# EL PAQUETE DEL RELAY TAMPOCO SE INSTALA SIN VERIFICAR (hermano del paso 1 de
+# deploy/install-musubi-brain.sh).
+#
+# Hasta acá no se verificaba NADA: se bajaba el zip de un release ajeno y se instalaban `hbbs` y
+# `hbbr` —que quedan corriendo como unidades systemd de este servidor— con lo que viniera. Es el
+# mismo fail-open que tenía el binario del cerebro, un piso más abajo en privilegio pero con la
+# agravante de que el origen no es nuestro.
+#
+# EL PIN VIVE ACÁ, y no hay alternativa: rustdesk NO publica checksums en sus releases (medido el
+# 2026-09-10: los 18 assets del tag 1.1.14 son .deb y .zip, ni un .sha256 ni un SHA256SUMS). Es el
+# mismo criterio que BACKUP_SHA256 en install-musubi-brain.sh — el número vive en el archivo que el
+# operador ya confía porque lo corre con sudo desde su clone— y acá además es la única opción.
+# Estos dos se computaron bajando los zips oficiales el 2026-09-10.
+# Para sumar una versión: bajá el zip, `sha256sum`, y agregá la fila.
+PINES_RUSTDESK="
+1.1.14 rustdesk-server-linux-amd64.zip bfee54d3c5dce834ef00906b412d0e8738712d7d9f07393b9ce66d998833d540
+1.1.14 rustdesk-server-linux-arm64v8.zip d19fdb711621ad96e794ebc7899dc80d6829c9ae871483df520fb78a48c2d7ac
+"
+# Se resuelve ANTES de bajar seis megas: si no hay pin, el operador se entera ya.
+# RUSTDESK_SHA256 es la salida para una versión sin fila —el operador DA el sha, no saltea la
+# comprobación—. No hay variable para instalar sin verificar, por el mismo motivo que en el
+# instalador del cerebro: una puerta así termina copiada en un runbook y la verificación queda
+# muerta en todas las máquinas mientras se ve viva.
+QUIERO_SHA="${RUSTDESK_SHA256:-$(printf '%s' "$PINES_RUSTDESK" | awk -v v="$VERSION" -v p="$PAQUETE" '$1==v && $2==p {print $3}')}"
+if [[ ! "$QUIERO_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+  die "no tengo sha256 con el que verificar rustdesk-server $VERSION / $PAQUETE, así que NO instalo nada. Estos binarios quedan como servicios systemd de este servidor y rustdesk no publica checksums, así que sin este número no hay forma de saber qué se instaló. Salidas: (a) usá una versión con pin (hoy: $(printf '%s' "$PINES_RUSTDESK" | awk 'NF{printf "%s ", $1}' | tr ' ' '\n' | sort -u | tr '\n' ' ')); (b) bajá el zip por un camino que confíes, sacale el sha256 y agregá la fila a PINES_RUSTDESK acá; (c) para una corrida sola:  RUSTDESK_SHA256=<sha256> sudo $0"
+fi
 
 id -u "$USUARIO" &>/dev/null || useradd --system --home-dir "$DESTINO" --shell /usr/sbin/nologin "$USUARIO"
 mkdir -p "$DESTINO"
@@ -62,6 +89,9 @@ if [[ ! -x "$DESTINO/hbbs" ]]; then
   curl -fsSL -o "$tmp/s.zip" \
     "https://github.com/rustdesk/rustdesk-server/releases/download/$VERSION/$PAQUETE" \
     || die "no se pudo descargar el relay"
+  TENGO_SHA="$(sha256sum "$tmp/s.zip" | awk '{print $1}')"
+  [[ "$TENGO_SHA" == "$QUIERO_SHA" ]] || die "el paquete de rustdesk-server $VERSION NO coincide con el sha256 esperado (quiero=$QUIERO_SHA tengo=$TENGO_SHA). NO se instaló nada. O la descarga se truncó, o el asset del release cambió: no lo desempaquetes a mano hasta saber cuál de las dos es."
+  ok "checksum del paquete verificado ($PAQUETE)"
   ( cd "$tmp" && unzip -q s.zip )
   find "$tmp" -type f \( -name hbbs -o -name hbbr \) -exec install -m 0755 {} "$DESTINO"/ \;
   [[ -x "$DESTINO/hbbs" && -x "$DESTINO/hbbr" ]] || die "el paquete no traía hbbs/hbbr"
