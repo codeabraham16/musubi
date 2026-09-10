@@ -30,12 +30,19 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
-// serviciosPorExportar es el techo de servicios que salen a métricas POR PROYECTO y por scrape.
-// No es el mismo techo que `fleet.ServiciosPorLatido` (que acota UN latido de UNA máquina): éste
-// protege a Prometheus de una flota entera.
+// serviciosPorProyectoDefault es el techo de servicios que UN PROYECTO aporta al export cuando la
+// configuración no dice otra cosa. No es el mismo techo que `fleet.ServiciosPorLatido` (que acota
+// UN latido de UNA máquina): éste protege a Prometheus de un tenant entero.
+//
+// ES UN DEFAULT Y YA NO UNA VERDAD CLAVADA EN EL BINARIO: se sube con
+// `fleet.services_per_project_export` (negativo = sin techo). Con el número en una constante, un
+// proyecto de 4000 servicios sólo se arreglaba recompilando, y mientras tanto los servicios de
+// más NO TENÍAN SERIE — o sea que `ServicioCaido` no los cubría, que desde afuera se ve igual que
+// todo bien.
 //
 // Cuando se corta, SE DICE. Un recorte silencioso deja series que desaparecen sin que nadie sepa
 // por qué, y eso se lee como «ese servicio ya no existe» — que es una afirmación, no un silencio.
@@ -51,7 +58,7 @@ import (
 //
 // Por proyecto, un tenant grande no puede dejar ciego a otro — que con un techo compartido era
 // exactamente lo que pasaba, y sin que ninguno de los dos se enterara.
-const serviciosPorExportar = 2000
+const serviciosPorProyectoDefault = 2000
 
 // servicioExportable ata un servicio a la máquina donde corre. Los dos hacen falta para las
 // etiquetas: el nombre del servicio solo no identifica nada en una flota.
@@ -61,22 +68,52 @@ type servicioExportable struct {
 }
 
 // serviciosVisiblesParaMetricas devuelve los servicios de las máquinas YA compuertadas.
-func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.Device) (out []servicioExportable, truncado bool) {
+//
+// `techo` es el máximo POR PROYECTO; <= 0 lo desactiva. Un proyecto que se pasa se corta a sí
+// mismo y el barrido SIGUE con los demás.
+//
+// DEVUELVE DOS HECHOS DISTINTOS Y NO UNO. `truncado` es «medí y CORTÉ»; `ilegible` es «NO PUDE
+// MEDIR». Antes había un solo bool y el error de lectura caía en un `continue` mudo, así que un
+// proyecto que no se pudo leer salía por el export como `kind="services"} 0` — o sea, el sistema
+// afirmaba «no hubo recorte» sobre una parte de la flota que ni siquiera había mirado. Un cero
+// tiene que significar «medí y está bien», nunca «no pude medir».
+func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.Device, techo int) (out []servicioExportable, truncado bool, ilegible bool) {
 	contadoPorProyecto := map[string]int{}
 	// Se agrupa por proyecto para no pedirle a la base una vez por máquina: `ListarServicios`
 	// trae los del proyecto entero y acá se filtra por las máquinas que pasaron la compuerta.
+	//
+	// EL ORDEN DE RECORRIDO SALE DE `vistos` Y NO DE RECORRER EL MAP, y ésta es la mitad que
+	// faltaba: `devicesVisiblesParaMetricas` ordena por (proyecto, nombre) con un sort.Slice, y
+	// agrupar en un map TIRA ese orden — el range sobre un map de Go arranca en un bucket al azar
+	// en cada llamada. Ordenar y después perder el orden es peor que no ordenar, porque parece
+	// hecho: el bloque de servicios de /metrics salía barajado en cada scrape, y un diff entre dos
+	// /metrics —que es cómo se depura un export— no servía para nada.
 	porProyecto := map[string][]fleet.Device{}
+	var orden []string
 	for _, d := range vistos {
+		if _, yaVisto := porProyecto[d.ProjectID]; !yaVisto {
+			orden = append(orden, d.ProjectID)
+		}
 		porProyecto[d.ProjectID] = append(porProyecto[d.ProjectID], d)
 	}
-	for proy, devices := range porProyecto {
+	for _, proy := range orden {
+		devices := porProyecto[proy]
 		porID := make(map[string]fleet.Device, len(devices))
 		for _, d := range devices {
 			porID[d.ID] = d
 		}
 		servicios, err := engine.ListarServicios(proy, "", false)
 		if err != nil {
-			continue // un proyecto ilegible no puede tumbar el scrape entero
+			// UN PROYECTO ILEGIBLE NO PUEDE TUMBAR EL SCRAPE ENTERO — pero tampoco puede pasar
+			// por «no hubo corte». Los servicios de este proyecto NO se exportan, así que no
+			// tienen serie, así que `ServicioCaido` no los cubre: exactamente el daño que la
+			// serie de truncado existe para hacer visible. Se sigue con los demás proyectos Y
+			// se levanta la mano.
+			ilegible = true
+			logx.Error("export de flota: no se pudieron listar los servicios de un proyecto; sus servicios NO se exportan y quedan sin serie (ninguna alerta los cubre)",
+				"project", proy, "error", err,
+				"serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
 		}
 		for _, sv := range servicios {
 			d, ok := porID[sv.DeviceID]
@@ -88,7 +125,7 @@ func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.
 			}
 			// EL TECHO SE CUENTA POR PROYECTO, no sobre `out`: con un contador global el
 			// primer tenant en ser barrido se comía el cupo y los demás quedaban sin series.
-			if contadoPorProyecto[d.ProjectID] >= serviciosPorExportar {
+			if techo > 0 && contadoPorProyecto[d.ProjectID] >= techo {
 				truncado = true
 				continue
 			}
@@ -99,7 +136,7 @@ func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.
 	// `truncado` y no `false`: con el corte viejo la función salía por un `return out, true`
 	// temprano, así que el final podía devolver false sin mentir. Ahora el recorte NO corta el
 	// recorrido —sigue para contar los otros proyectos—, y un `false` acá borraría el hecho.
-	return out, truncado
+	return out, truncado, ilegible
 }
 
 // serieDeServicio es la misma forma que serieDeFlota, para un servicio.
@@ -297,29 +334,34 @@ func labelsDeServicio(sv fleet.Servicio, d fleet.Device) [][2]string {
 	return append(out, [2]string{"service", sv.Nombre}, [2]string{"class", sv.Clase})
 }
 
-// renderServicios escribe el bloque de servicios en el formato de exposición.
-// serviciosTruncados responde si el techo POR PROYECTO recortó algo, sin escribir nada.
+// renderServicios escribe el bloque de servicios en el formato de exposición y DEVUELVE los dos
+// hechos que la serie de truncado necesita.
 //
-// Es una segunda pasada sobre la misma consulta y se acepta a propósito: la alternativa era que
-// renderServicios devolviera el dato y que renderFlota lo llamara ANTES de emitir las series de
-// máquina, lo que cambiaría el orden del exposition format que ya está probado. Un barrido más
-// por scrape es barato al lado de reordenar la salida.
-func serviciosTruncados(engine memory.StorageBackend, vistos []fleet.Device) bool {
-	_, truncado := serviciosVisiblesParaMetricas(engine, vistos)
-	return truncado
-}
-
-func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) {
-	svs, truncado := serviciosVisiblesParaMetricas(engine, vistos)
+// Hasta acá el dato lo recuperaba un SEGUNDO barrido idéntico (`serviciosTruncados`), justificado
+// en que devolverlo obligaría a renderFlota a llamar a esto ANTES de las series de máquina y eso
+// cambiaría el orden del exposition format. No hace falta ninguna de las dos cosas: renderFlota
+// bufferea este bloque, emite la serie de truncado en su lugar de siempre y después vuelca el
+// buffer. Mismo orden byte a byte, un barrido en vez de dos, y —lo que importa— un solo lugar
+// donde puede perderse el hecho de que un proyecto no se pudo leer.
+func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time, techo int) (truncado bool, ilegible bool) {
+	svs, truncado, ilegible := serviciosVisiblesParaMetricas(engine, vistos, techo)
 	if len(svs) == 0 {
-		return
+		// Los hechos salen igual: «no exporté ni un servicio» no borra «no pude leer un
+		// proyecto». Un `return` pelado acá sería otra forma del mismo cero que miente.
+		return truncado, ilegible
 	}
 	if truncado {
-		fmt.Fprintf(b, "# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO; hay más.\n", serviciosPorExportar)
+		// EL COMENTARIO SE QUEDA PERO YA NO ES LA SEÑAL: Prometheus descarta las líneas `#` al
+		// parsear, así que esto sólo lo lee quien hace `curl /metrics` a mano. Lo que alerta es
+		// `musubi_fleet_export_truncated{kind="services"}`. El número que se imprime es el techo
+		// VIGENTE y no la constante, porque es configurable: imprimir 2000 cuando la perilla dice
+		// otra cosa manda a buscar el problema al lugar equivocado.
+		fmt.Fprintf(b, "# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO (techo `fleet.services_per_project_export`); hay más.\n", techo)
 	}
 	for _, s := range seriesDeServicio() {
 		escribirGaugeDeServicios(b, svs, s, ahora)
 	}
+	return truncado, ilegible
 }
 
 func escribirGaugeDeServicios(b *strings.Builder, svs []servicioExportable, s serieDeServicio, ahora time.Time) {

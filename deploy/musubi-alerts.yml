@@ -151,10 +151,13 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "El exportador recorta la flota por el techo de {{ $labels.kind }}."
+          summary: "El exportador deja afuera parte de la flota ({{ $labels.kind }})."
           description: >-
             Lo que queda afuera del export NO tiene serie en Prometheus, así que sus alertas no
             pueden dispararse. No es que esté todo bien: es que no se está mirando.
+            `kind=projects` y `kind=services` son TECHOS y se suben con un número;
+            `kind=unreadable` NO es un techo —parte de la flota no se pudo LEER— y mientras dure,
+            el 0 de los otros dos significa «no medí» y no «no hubo corte».
           runbook: "deploy/RUNBOOK.md#exportaciontruncada"
 
       # --- Una ventana de mantenimiento que nadie cerró ---

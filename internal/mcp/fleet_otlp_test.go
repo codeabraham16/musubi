@@ -305,7 +305,7 @@ func TestArmarPayloadConPrincipalNilNoExporta(t *testing.T) {
 	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
 	maquinaConMuestra(t, s, "cliente-acme", "server-acme", muestraSana(40, ahora), ahora)
 
-	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, nil, ahora, 0, versionDePrueba)
+	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, nil, ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err == nil {
 		t.Fatalf("un principal nil produjo un payload de %d puntos en vez de un error:\n%s", puntos, cuerpo)
 	}
@@ -332,7 +332,7 @@ func TestElEmpujeNoCruzaTenants(t *testing.T) {
 		Name: "prom", Role: RoleReader, Read: ReadOwn, ProjectID: "casa",
 		Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"*"}},
 	}
-	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, acotado, ahora, 0, versionDePrueba)
+	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, acotado, ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil || puntos == 0 {
 		t.Fatalf("no se armó el payload del principal acotado: %v (%d puntos)", err, puntos)
 	}
@@ -350,7 +350,7 @@ func TestElEmpujeNoCruzaTenants(t *testing.T) {
 		Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"pc-gio"}},
 	}
 	maquinaConMuestra(t, s, "casa", "nas", muestraSana(40, ahora), ahora)
-	cuerpo, _, _, err = armarPayloadOTLP(s.engine, unaSola, ahora, 0, versionDePrueba)
+	cuerpo, _, _, err = armarPayloadOTLP(s.engine, unaSola, ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestElProyectoDeLaSerieSaleDeLaFilaYNoDeLoQueDeclaraLaMaquina(t *testing.T)
 		t.Fatalf("el latido falló: %d %s", code, cuerpo)
 	}
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), time.Now(), 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), time.Now(), 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,10 +501,10 @@ func TestElEmpujeYElScrapeExportanLasMismasSeriesYLosMismosValores(t *testing.T)
 
 	p := ptrPrincipal(principalDePrometheus())
 	var b strings.Builder
-	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, nil)
+	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault)
 	delScrape := seriesDelScrape(b.String())
 
-	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, versionDePrueba)
+	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +546,7 @@ func TestUnValorDesconocidoNoViajaComoCeroEnElPayload(t *testing.T) {
 		DiscoTotal: 1000, DiscoUsado: 100, DiscoDisponible: 850,
 	}, ahora)
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +583,7 @@ func TestUnUpEnCeroViajaConSuCero(t *testing.T) {
 	// Latió hace una hora: para su umbral está caída.
 	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora.Add(-time.Hour)), ahora.Add(-time.Hour))
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestElPayloadNoTomaLabelsDelAutorreporte(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,7 +838,7 @@ func TestElEmpujeNoLlevaLasMetricasDelServidor(t *testing.T) {
 	ahora := time.Now()
 	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +867,7 @@ func TestElSobreOTLPTieneLaFormaDeLaEspecificacion(t *testing.T) {
 	ahora := time.Now()
 	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 
-	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, puntos, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +955,7 @@ func TestElPayloadUsaUnSoloReloj(t *testing.T) {
 	maquinaConMuestra(t, s, "casa", "pc-gio", muestraSana(40, ahora), ahora)
 	maquinaConMuestra(t, s, "casa", "nas", muestraSana(50, ahora), ahora)
 
-	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	cuerpo, _, _, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,15 +1055,15 @@ func TestUnBarridoTruncadoSeAnuncia(t *testing.T) {
 		latir(t, s, d.ID, muestraSana(40, ahora), ahora)
 	}
 
-	_, _, truncado, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba)
+	_, _, truncado, err := armarPayloadOTLP(s.engine, ptrPrincipal(principalDePrometheus()), ahora, 0, versionDePrueba, serviciosPorProyectoDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !truncado {
-		t.Fatalf("con %d proyectos el barrido tenía que dar truncado", proyectosParaExportar+1)
+	if !truncado.Proyectos {
+		t.Fatalf("con %d proyectos el barrido tenía que dar truncado por PROYECTOS", proyectosParaExportar+1)
 	}
 	s.empujarUnaVez(context.Background(), ahora)
-	if _, avisado := s.avisosDados.Load("empuje_truncado"); !avisado {
+	if _, avisado := s.avisosDados.Load("empuje_truncado_proyectos"); !avisado {
 		t.Error("se truncó el barrido y no se avisó: media flota sin exportar y nadie enterado")
 	}
 }

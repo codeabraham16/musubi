@@ -170,16 +170,18 @@ func atributosDeServicioOTLP(sv fleet.Servicio, d fleet.Device) []otlpAtributo {
 }
 
 func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string) (cuerpo []byte, puntos int, truncado bool, err error) {
+	intervaloSonda time.Duration, versionCerebro string, techoServicios int) (cuerpo []byte, puntos int, truncado truncadoDeExport, err error) {
 
 	// EL RECHAZO DEL nil ES EL INVARIANTE CENTRAL DEL ARCHIVO (ver el encabezado). No se degrada
 	// a «ve todo» como el stdio local: acá nadie está sentado en la máquina, y lo que hay del otro
 	// lado es una salida de datos hacia afuera.
 	if p == nil {
-		return nil, 0, false, fmt.Errorf("el empuje OTLP no tiene principal: exportaría la telemetría de TODOS los proyectos. Declará `fleet.otlp.principal` en el config y ese principal en principals.yaml con `fleet: {metrics: [\"*\"]}`")
+		return nil, 0, truncado, fmt.Errorf("el empuje OTLP no tiene principal: exportaría la telemetría de TODOS los proyectos. Declará `fleet.otlp.principal` en el config y ese principal en principals.yaml con `fleet: {metrics: [\"*\"]}`")
 	}
 
-	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)
+	truncado.Proyectos = truncadoProyectos
+	truncado.Ilegible = ilegible
 	// Mismo criterio que el scrape: un error leyendo las ventanas no apaga las alertas de nadie.
 	enMantenimiento, errMant := engine.DevicesEnMantenimiento(ahora)
 	if errMant != nil {
@@ -222,8 +224,17 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Mismas máquinas ya compuertadas, mismo sello de
 	// tiempo: un empuje con dos relojes deja las series de servicio desalineadas de las de la
 	// máquina donde corren, y cualquier consulta que las cruce da vacío.
-	svs, truncadoSvs := serviciosVisiblesParaMetricas(engine, vistos)
-	truncado = truncado || truncadoSvs
+	// LAS DOS MITADES NO SE FUSIONAN. Antes esto era `truncado = truncado || truncadoSvs`, y el
+	// único aviso de esta boca decía «se barrieron los primeros proyectos y hay más» imprimiendo
+	// `proyectosParaExportar`. O sea que cuando el que cortaba era el techo de SERVICIOS —el que
+	// se cruza de verdad, y con una perilla que lo arregla— el operador leía la causa equivocada
+	// y iba a la perilla equivocada.
+	svs, truncadoSvs, ilegibleSvs := serviciosVisiblesParaMetricas(engine, vistos, techoServicios)
+	truncado.Servicios = truncadoSvs
+	// Y TAMPOCO SE FUSIONA CON «NO PUDE LEER». Un proyecto ilegible no es un techo cruzado: se
+	// arregla mirando la base, no subiendo un número. Que las dos bocas compartan el mismo
+	// `truncadoDeExport` es lo que impide que el scrape lo reporte y el empuje no.
+	truncado.Ilegible = truncado.Ilegible || ilegibleSvs
 	for _, serie := range seriesDeServicio() {
 		var datos []otlpDataPoint
 		for _, e := range svs {
@@ -464,25 +475,26 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	// credencial ya revocada. Y una política fantasma queda inerte (falla cerrada), pero un
 	// empujador fantasma SIGUE MANDANDO DATOS.
 	p, ok := s.principalDelEmpuje()
-	if !ok {
-		// Mismo criterio que las políticas: revocado y vencido apagan el empuje igual, y se
-		// arreglan en dos lugares distintos. El lookup de diagnóstico es el único que ve la
-		// credencial muerta; el que decide (porNombre, arriba) ya la negó.
+	s.avisoMientras("empuje_sin_principal", !ok, func() {
+		// Mismo criterio que las políticas: revocado y vencido apagan el empuje igual, pero se
+		// arreglan en dos lugares distintos, así que el aviso tiene que decir CUÁL de los dos es.
+		// El lookup de diagnóstico es el único que ve la credencial muerta; el que decide
+		// (porNombre, arriba) ya la negó. Va acá adentro y no afuera para no resolverlo en cada
+		// tick sano: el closure sólo corre cuando el aviso de verdad se emite.
 		nota := "el principal ya no está en principals.yaml"
 		if s.buscarPrincipal == nil {
 			nota = "no hay registro de principals cargado"
-		} else if p, hay := s.buscarPrincipal.porNombreAunqueVencida(strings.TrimSpace(s.empujeCfg.Principal)); hay && p.Vencida(ahoraParaVencimiento()) {
-			nota = "la credencial VENCIÓ el " + p.Expires.UTC().Format(time.RFC3339) + "; renovále el `expires:`"
+		} else if pv, hay := s.buscarPrincipal.porNombreAunqueVencida(strings.TrimSpace(s.empujeCfg.Principal)); hay && pv.Vencida(ahoraParaVencimiento()) {
+			nota = "la credencial VENCIÓ el " + pv.Expires.UTC().Format(time.RFC3339) + "; renovále el `expires:`"
 		}
-		s.avisarUnaVez("empuje_sin_principal", func() {
-			logx.Warn("empuje OTLP: no se empuja nada (no se repite este aviso hasta que se resuelva)",
-				"principal", s.empujeCfg.Principal, "nota", nota)
-		})
+		logx.Warn("empuje OTLP: no se empuja nada (no se repite este aviso hasta que se resuelva)",
+			"principal", s.empujeCfg.Principal, "nota", nota)
+	})
+	if !ok {
 		s.empujeDatapoints.Store(0)
 		s.empujeFallos.Add(1)
 		return
 	}
-	s.avisosDados.Delete("empuje_sin_principal")
 
 	// LA MISMA COMPROBACIÓN QUE EL ARRANQUE, PERO EN CADA TICK (A50).
 	//
@@ -497,32 +509,51 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	// NO CUENTA UN FALLO: `musubi_push_failures_total` significa «no llegó a destino», y acá no se
 	// intentó llegar. Ensuciar ese contador rompería MusubiPushOTLPNuncaLlego, que distingue «se
 	// cayó» de «nunca anduvo» justamente por él.
-	if len(p.Fleet[fleet.CapMetrics]) == 0 {
-		s.avisarUnaVez("empuje_sin_concesion", func() {
-			logx.Error("empuje OTLP: el principal existe pero ya NO tiene ninguna concesión `metrics` en su sección `fleet:`; no se exporta ni una máquina (no se repite este aviso hasta que se resuelva)",
-				"principal", s.empujeCfg.Principal,
-				"arreglo", "devolvele `fleet: {metrics: [\"*\"]}` en principals.yaml; las capacidades de flota NO se derivan del rol")
-		})
+	sinConcesion := len(p.Fleet[fleet.CapMetrics]) == 0
+	s.avisoMientras("empuje_sin_concesion", sinConcesion, func() {
+		logx.Error("empuje OTLP: el principal existe pero ya NO tiene ninguna concesión `metrics` en su sección `fleet:`; no se exporta ni una máquina (no se repite este aviso hasta que se resuelva)",
+			"principal", s.empujeCfg.Principal,
+			"arreglo", "devolvele `fleet: {metrics: [\"*\"]}` en principals.yaml; las capacidades de flota NO se derivan del rol")
+	})
+	if sinConcesion {
 		s.empujeDatapoints.Store(0)
 		return
 	}
-	s.avisosDados.Delete("empuje_sin_concesion")
 
-	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, s.version)
+	cuerpo, puntos, truncado, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, s.version, s.techoServiciosPorProyecto)
 	if err != nil {
 		logx.Error("empuje OTLP: no se pudo armar el payload", "error", err)
 		s.empujeDatapoints.Store(0)
 		s.empujeFallos.Add(1)
 		return
 	}
-	if truncado {
-		// El push no tiene dónde poner un comentario que el parser ignore —el scrape sí—, así que
-		// el aviso va al log. Una vez: es un estado, no un evento.
-		s.avisarUnaVez("empuje_truncado", func() {
-			logx.Warn("empuje OTLP: se barrieron los primeros proyectos y hay más; la telemetría del resto no se está empujando",
-				"proyectos", proyectosParaExportar)
-		})
-	}
+	// CADA TECHO AVISA POR SEPARADO, Y CADA AVISO NOMBRA SU PROPIA PERILLA.
+	//
+	// Había UN solo aviso para los dos techos y su texto era el de proyectos («se barrieron los
+	// primeros proyectos y hay más», imprimiendo `proyectosParaExportar`). Cuando el que cortaba
+	// era el de SERVICIOS —el que se cruza de verdad—, el log nombraba la causa equivocada: quien
+	// lo leía miraba cuántos tenants tenía, veía 3, y descartaba el aviso. Dos claves distintas en
+	// `avisosDados` además hacen que un techo no se coma el aviso del otro: con una sola clave, el
+	// primero en cortar dejaba mudo al segundo hasta que se resolviera el primero.
+	s.avisoMientras("empuje_truncado_servicios", truncado.Servicios, func() {
+		logx.Warn("empuje OTLP: algún PROYECTO pasó el techo de SERVICIOS exportables; sus servicios de más no viajan y, sin serie, ServicioCaido no los cubre",
+			"techo_servicios_por_proyecto", s.techoServiciosPorProyecto,
+			"perilla", "fleet.services_per_project_export (negativo = sin techo)",
+			"serie", nombreExportTruncado+`{kind="services"}`)
+	})
+	s.avisoMientras("empuje_truncado_proyectos", truncado.Proyectos, func() {
+		logx.Warn("empuje OTLP: se barrieron los primeros PROYECTOS y hay más; la telemetría de los tenants que quedaron afuera no se está empujando",
+			"proyectos_por_scrape", proyectosParaExportar,
+			"perilla", "ninguna: `proyectosParaExportar` es una constante de compilación (internal/mcp/fleet_prometheus.go)",
+			"serie", nombreExportTruncado+`{kind="projects"}`)
+	})
+	// EL TERCERO NO ES UN TECHO. Los dos de arriba se arreglan con un número; éste se arregla
+	// mirando la base. Si compartieran aviso, el operador subiría una perilla que no cambia nada.
+	s.avisoMientras("empuje_truncado_ilegible", truncado.Ilegible, func() {
+		logx.Error("empuje OTLP: parte de la flota NO SE PUDO LEER (proyectos, máquinas, servicios o aprobaciones); eso NO es un techo y no se arregla con una perilla: mientras dure, el 0 de los otros dos `kind` significa «no medí» y no «no hubo corte»",
+			"arreglo", "mirá el log por `export de flota:` — cada línea dice qué proyecto y qué error",
+			"serie", nombreExportTruncado+`{kind="unreadable"}`)
+	})
 	s.empujeDatapoints.Store(int64(puntos))
 	if len(cuerpo) == 0 {
 		// Nada visible para ese principal: no se manda un sobre vacío. Pero SE DICE (A50). Este
@@ -530,14 +561,14 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 		// existe y tiene su concesión, sólo que apunta a proyectos donde no hay ni una máquina
 		// —alguien renombró el proyecto, o el barrido todavía no vio a nadie—. Desde afuera es
 		// idéntico a los otros dos: cero puntos, cero fallos, silencio.
-		s.avisarUnaVez("empuje_vacio", func() {
+		s.avisoMientras("empuje_vacio", true, func() {
 			logx.Warn("empuje OTLP: el principal tiene concesión `metrics` pero no alcanza a NINGUNA máquina; no se manda un sobre vacío (no se repite este aviso hasta que vuelva a haber puntos)",
 				"principal", s.empujeCfg.Principal,
 				"concesion", strings.Join(p.Fleet[fleet.CapMetrics], ","))
 		})
 		return
 	}
-	s.avisosDados.Delete("empuje_vacio")
+	s.avisoMientras("empuje_vacio", false, nil) // se rearma: volvió a haber puntos
 
 	if err := s.empujador.enviar(ctx, cuerpo); err != nil {
 		s.empujeFallos.Add(1)

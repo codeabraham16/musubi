@@ -392,6 +392,33 @@ func (s *McpServer) avisarUnaVez(clave string, emitir func()) {
 	emitir()
 }
 
+// avisoMientras es avisarUnaVez CON SU REARME PEGADO, y existe porque el rearme se puede borrar.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EL REARME NO PUEDE VIVIR EN UNA RAMA `else`
+//
+// La forma anterior era `if condicion { avisarUnaVez(k, ...) } else { avisosDados.Delete(k) }`,
+// repetida en cinco lugares. Un saboteador borró las dos ramas `else` del empuje y TODA la suite
+// quedó en verde: un techo que se cruza y se arregla dejaba su aviso mudo para siempre, así que
+// el PRÓXIMO corte del mismo techo pasaba en silencio — y eso no se ve, porque lo que falta es
+// una línea de log que nadie está esperando.
+//
+// Acá el rearme no es una rama que se pueda borrar: es la mitad `else` de una sola función, y
+// borrarla se lleva puesto el aviso, que sí tiene guarda. Un solo lugar donde equivocarse en vez
+// de uno por condición, que además es la forma del defecto «la guarda está en N-1 de N caminos».
+//
+// `emitir` puede ser nil cuando sólo interesa el rearme (un camino que ya salió por otro lado).
+func (s *McpServer) avisoMientras(clave string, activo bool, emitir func()) {
+	if !activo {
+		s.avisosDados.Delete(clave)
+		return
+	}
+	if emitir == nil {
+		return
+	}
+	s.avisarUnaVez(clave, emitir)
+}
+
 // cargarCooldowns siembra el mapa en memoria con lo que haya en la base (A24).
 //
 // SIN ESTO, EL COOLDOWN ES UNA GARANTÍA QUE DURA LO QUE DURE EL PROCESO. Y el reinicio no es un
