@@ -374,6 +374,73 @@ if [ -n "${MUSUBI_REF_SALIDA:-}" ]; then
     dudoso "no se pudo escribir la referencia en $MUSUBI_REF_SALIDA: quien late no va a poder decir contra qué se comparó"
 fi
 
+# `corre_alla` VIVE ACÁ ARRIBA Y NO EN LA SECCIÓN DE LOS GUIONES DERIVADOS, que es donde nació:
+# la comprobación del esquema la necesita y tiene que correr ANTES del corte por Prometheus.
+corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
+  if [ -n "$SSH_HOST" ]; then
+    # EL `-n` NO ES DECORACIÓN: SIN ÉL ESTE INFORME DEJA DE MIRAR COSAS Y NO LO DICE.
+    #
+    # `ssh` sin `-n` lee stdin y se lo lleva entero. Cuando `corre_alla` se llama DESDE ADENTRO de
+    # un bucle que lee de un heredoc —el de «guiones derivados», línea ~766— el primer `ssh` se
+    # come el resto de la lista, el `read` no encuentra más renglones y el bucle termina.
+    #
+    # No falla: TERMINA. No hay línea roja, ni amarilla, ni verde — no hay línea. Medido el
+    # 2026-09-08: las últimas 3 corridas compararon `/usr/local/bin/musubi-backup` y NUNCA
+    # `/usr/local/sbin/redesplegar-cerebro.sh`, que es exactamente el archivo cuya deriva FUE A111.
+    # O sea que el agujero que A111 cerró volvió a quedar sin vigilancia, y el informe se veía igual.
+    #
+    # Es intermitente porque depende de si el `ssh` alcanza a leer antes de que el `read` lo haga,
+    # y por eso pasó tres corridas sin que nadie lo notara. La cabecera de este guion ya lo dice
+    # con todas las letras: «un informe que calla lo que no mira se lee como si lo hubiera mirado».
+    ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
+  else
+    eval "$1" 2>/dev/null || true
+  fi
+}
+
+# ── 5b · EL ESQUEMA DE LA BASE CONTRA EL QUE EL BINARIO ESPERA ──────────────────────────────
+#
+# NADIE COMPARABA ESTO, y es la razón por la que «falta el redespliegue» pudo quedar escrito en
+# TRES filas del registro sin que nada lo contradijera: la única forma de saber a qué esquema
+# apunta el cerebro era entrar a mano.
+#
+# ES UNA PREGUNTA DISTINTA DE LA VERSIÓN. Dos binarios del mismo release corren el mismo esquema,
+# sí — pero el modo de falla que importa es otro: el binario nuevo instalado y la MIGRACIÓN QUE NO
+# CORRIÓ. Ahí la versión coincide y la base se quedó atrás, que es exactamente lo que A111 dice que
+# el guion de redespliegue dejó de verificar.
+#
+# EL NÚMERO DE LA BASE SE LEE DEL ENCABEZADO, no con `sqlite3`: en este cerebro `sqlite3` NO ESTÁ
+# INSTALADO (medido el 2026-09-10), que es probablemente por qué la verificación de A111 estaba
+# muerta. `user_version` son cuatro bytes big-endian en el offset 60 del archivo, así que alcanzan
+# `dd` y `od`, que sí están en cualquier lado.
+#
+# SI DIFIEREN ES `dudoso` Y NO `rojo`, y el motivo es honesto: en modo WAL un `PRAGMA user_version`
+# recién escrito vive en el WAL hasta el checkpoint, así que el encabezado puede estar atrasado
+# minutos después de una migración QUE SÍ CORRIÓ. Desde el encabezado solo no se puede distinguir
+# «la migración no corrió» de «corrió y todavía no se checkpointeó», y decir «rojo» sobre esa
+# ambigüedad mandaría a arreglar lo que no está roto. Los dos números salen impresos, que es lo
+# que hace falta para decidir.
+titulo "esquema de la base"
+
+BRAIN_DB="${MUSUBI_BRAIN_DB:-/home/musubi/musubi-brain/.musubi/memory.db}"
+ESQ_BIN="$(corre_alla 'musubi version --esquema 2>/dev/null' | tr -dc '0-9')"
+ESQ_HEX="$(corre_alla "dd if=$BRAIN_DB bs=1 skip=60 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n'")"
+ESQ_DB=""
+case "$ESQ_HEX" in
+  *[!0-9a-fA-F]*|"") ;;
+  *) ESQ_DB=$(( 16#$ESQ_HEX )) ;;
+esac
+
+if [ -z "$ESQ_BIN" ]; then
+  dudoso "el binario del cerebro no supo decir a qué esquema apunta (\`musubi version --esquema\`): sin ese número no hay contra qué comparar la base"
+elif [ -z "$ESQ_DB" ]; then
+  dudoso "no se pudo leer el esquema de la base en $BRAIN_DB: el binario apunta al $ESQ_BIN y la base no contestó. Si la ruta es otra, pasala con MUSUBI_BRAIN_DB"
+elif [ "$ESQ_BIN" = "$ESQ_DB" ]; then
+  verde "la base está en el esquema $ESQ_DB, que es al que apunta el binario"
+else
+  dudoso "el binario apunta al esquema $ESQ_BIN y el encabezado de la base dice $ESQ_DB. O la migración no corrió —y entonces el cerebro está corriendo contra una base vieja— o corrió recién y el número todavía está en el WAL sin checkpointear. Para decidir: si hace rato que se desplegó, es lo primero"
+fi
+
 # ── 1 · LA CADENA DE ALERTAS, ESLABÓN POR ESLABÓN ───────────────────────────────────────────
 # Va PRIMERO a propósito. Si Prometheus no contesta, las comparaciones de abajo no pueden decir
 # nada y el script corta; que corte DESPUÉS de haber nombrado el eslabón roto es la diferencia
@@ -867,6 +934,11 @@ else
   fi
 fi
 
+# EL ESQUEMA DE LA BASE SE COMPARA MÁS ABAJO (sección «esquema de la base»), y no acá al lado de
+# la versión, porque necesita `corre_alla` y esa función se define recién en la sección de los
+# guiones derivados. Son preguntas distintas: la versión dice qué binario corre, el esquema dice si
+# la migración de ese binario llegó a la base.
+
 # ── Postura de transporte: ¿el bearer viaja cifrado? ────────────────────────────────────────
 #
 # NO es una comprobación de deriva: el repo no declara TLS, así que nada está "mal desplegado".
@@ -921,27 +993,6 @@ fi
 # Es ROJO y no amarillo: no es «no pude preguntar», es una divergencia real contra el estado que
 # el despliegue declara querer.
 printf '\n\033[1mvuelve sola de un reboot\033[0m\n'
-corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
-  if [ -n "$SSH_HOST" ]; then
-    # EL `-n` NO ES DECORACIÓN: SIN ÉL ESTE INFORME DEJA DE MIRAR COSAS Y NO LO DICE.
-    #
-    # `ssh` sin `-n` lee stdin y se lo lleva entero. Cuando `corre_alla` se llama DESDE ADENTRO de
-    # un bucle que lee de un heredoc —el de «guiones derivados», línea ~766— el primer `ssh` se
-    # come el resto de la lista, el `read` no encuentra más renglones y el bucle termina.
-    #
-    # No falla: TERMINA. No hay línea roja, ni amarilla, ni verde — no hay línea. Medido el
-    # 2026-09-08: las últimas 3 corridas compararon `/usr/local/bin/musubi-backup` y NUNCA
-    # `/usr/local/sbin/redesplegar-cerebro.sh`, que es exactamente el archivo cuya deriva FUE A111.
-    # O sea que el agujero que A111 cerró volvió a quedar sin vigilancia, y el informe se veía igual.
-    #
-    # Es intermitente porque depende de si el `ssh` alcanza a leer antes de que el `read` lo haga,
-    # y por eso pasó tres corridas sin que nadie lo notara. La cabecera de este guion ya lo dice
-    # con todas las letras: «un informe que calla lo que no mira se lee como si lo hubiera mirado».
-    ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" "$1" 2>/dev/null || true
-  else
-    eval "$1" 2>/dev/null || true
-  fi
-}
 LINGER="$(corre_alla 'loginctl show-user "$(id -un)" --property=Linger 2>/dev/null')"
 # LOS DOS UNITS POR SEPARADO, y el que manda es el de USUARIO. Los contenedores de acá son
 # rootless (corren como el usuario del cerebro, no como root), así que el `podman-restart` del
