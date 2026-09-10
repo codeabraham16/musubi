@@ -74,7 +74,11 @@ PINES_RUSTDESK="
 # RUSTDESK_SHA256 es la salida para una versión sin fila —el operador DA el sha, no saltea la
 # comprobación—. No hay variable para instalar sin verificar, por el mismo motivo que en el
 # instalador del cerebro: una puerta así termina copiada en un runbook y la verificación queda
-# muerta en todas las máquinas mientras se ve viva.
+# muerta en todas las máquinas mientras se ve viva. Y eso NO es una promesa escrita: en
+# internal/mcp, despliegue_verificacion_forma_test.go exige que el `install` de hbbs/hbbr esté
+# dominado por la comparación del sha256 —envolver esto en un `if` nuevo lo rompe aunque el `if`
+# venga apagado— y despliegue_verificacion_corrida_test.go corre el caso que tiene que frenar una
+# vez por cada variable de entorno que este bloque lee.
 QUIERO_SHA="${RUSTDESK_SHA256:-$(printf '%s' "$PINES_RUSTDESK" | awk -v v="$VERSION" -v p="$PAQUETE" '$1==v && $2==p {print $3}')}"
 if [[ ! "$QUIERO_SHA" =~ ^[0-9a-f]{64}$ ]]; then
   die "no tengo sha256 con el que verificar rustdesk-server $VERSION / $PAQUETE, así que NO instalo nada. Estos binarios quedan como servicios systemd de este servidor y rustdesk no publica checksums, así que sin este número no hay forma de saber qué se instaló. Salidas: (a) usá una versión con pin (hoy: $(printf '%s' "$PINES_RUSTDESK" | awk 'NF{printf "%s ", $1}' | tr ' ' '\n' | sort -u | tr '\n' ' ')); (b) bajá el zip por un camino que confíes, sacale el sha256 y agregá la fila a PINES_RUSTDESK acá; (c) para una corrida sola:  RUSTDESK_SHA256=<sha256> sudo $0"

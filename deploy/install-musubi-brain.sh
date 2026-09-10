@@ -17,7 +17,11 @@
 #   MUSUBI_REPO     owner/repo de las releases                  (default: codeabraham16/musubi)
 #   MUSUBI_BIN_SHA256  sha256 del binario que el operador espera, para cuando el .sha256 del
 #                      release no se puede bajar o no se le quiere confiar. NO existe una
-#                      variable para SALTEAR la verificación: el porqué está en el paso 1.
+#                      variable para SALTEAR la verificación, y esto NO es una promesa escrita:
+#                      lo sostienen dos pruebas en internal/mcp/despliegue_verificacion_*_test.go
+#                      —una exige que ningún `install` sea alcanzable sin haber comparado el
+#                      sha256, y otra corre el caso que tiene que frenar una vez por cada
+#                      variable de entorno que el bloque lee—. El porqué está en el paso 1.
 #
 set -euo pipefail
 
@@ -38,11 +42,16 @@ PORT="${BRAIN_ADDR##*:}"
 BACKUP_SHA256="631b9bdbe55851911ec02f46724595eddcbf70a35973a6bfe692229024e44498"
 BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh"
 BACKUP_BIN="/usr/local/bin/musubi-backup"
+# Las unidades del timer, en variables y no escritas en el `cat >`: así el paso 5b se puede
+# EJECUTAR entero en un arnés de prueba apuntando a un directorio temporal. Un bloque que sólo se
+# puede leer se custodia con grep, y un grep lo satisface un comentario.
+BACKUP_UNIT="/etc/systemd/system/musubi-backup.service"
+BACKUP_TIMER="/etc/systemd/system/musubi-backup.timer"
 # sha256 de deploy/redesplegar-cerebro.sh, mismo criterio y mismo motivo que el de arriba — con
 # una razón MÁS fuerte: este guion reemplaza el binario del cerebro y se corre como root, así que
 # es el peor archivo del despliegue para instalar sin verificar. Si lo cambiás, actualizá esto:
 # sha256sum deploy/redesplegar-cerebro.sh
-REDESPLIEGUE_SHA256="25b33075d0223fd7ced084e0304be317588f73e5e4d03b68c2f13caa5cb22029"
+REDESPLIEGUE_SHA256="e988c1d8cc2c4759b558ae48b106d2289450834c6d9340320e51be0f35a92f3a"
 REDESPLIEGUE_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/redesplegar-cerebro.sh"
 # /usr/local/sbin y no el home de $BRAIN_USER: lo corre root, así que no puede vivir donde escribe
 # un usuario sin privilegios. El porqué largo está en el paso 5c.
@@ -103,7 +112,22 @@ curl -fsSL "$URL" -o "$tmp"
 # todo lo demás, y su ausencia significa «no pude medir», que no es lo mismo que «medí y está
 # bien»: por eso frena.
 #
-# NO HAY VÍA DE ESCAPE FAIL-OPEN, A PROPÓSITO. Un `MUSUBI_SIN_VERIFICAR=1` termina copiado en un
+# NO HAY VÍA DE ESCAPE FAIL-OPEN, Y NO ALCANZA CON ESCRIBIRLO ACÁ. Esto mismo estaba afirmado en
+# tres lugares —esta línea, la cabecera del guion y el commit que lo cerró— sostenido por CERO
+# código: se envolvió todo este bloque en un `if` guardado por una variable nueva, con un `else`
+# que sólo loguea, y las ocho pruebas del paso 1 siguieron en verde porque ninguna exportaba esa
+# variable. Un doc que miente es peor que uno que falta: el que lo lee deja de buscar.
+#
+# LO QUE LO SOSTIENE HOY, en internal/mcp:
+#   despliegue_verificacion_forma_test.go   — ningún `install` de este repo es alcanzable sin que
+#                                             una comparación del sha256 lo domine. Envolver esto
+#                                             en un `if` nuevo rompe la dominancia aunque el `if`
+#                                             venga apagado.
+#   despliegue_verificacion_corrida_test.go — corre el caso que tiene que frenar una vez por cada
+#                                             variable de entorno que este bloque LEE (la lista se
+#                                             deriva del guion, no está escrita en la prueba).
+#
+# Un `MUSUBI_SIN_VERIFICAR=1` termina copiado en un
 # runbook —y de ahí en el próximo, y en el de la máquina siguiente— y a partir de ese momento la
 # verificación está muerta en todas partes mientras se ve viva. Es la forma exacta de A111: una
 # comprobación vacuamente cierta que pasó en seis redespliegues sin comprobar nada. La salida para
@@ -283,7 +307,7 @@ BACKUP_METHOD=rsync
 BACKUP_RETENTION_DAYS=14
 EOF
   fi
-  cat > /etc/systemd/system/musubi-backup.service <<EOF
+  cat > "$BACKUP_UNIT" <<EOF
 [Unit]
 Description=Musubi backup del cerebro central (snapshot off-host)
 After=musubi-brain.service
@@ -297,7 +321,7 @@ Environment=MUSUBI_BIN=$BIN
 EnvironmentFile=$ENV_FILE
 ExecStart=$BACKUP_BIN
 EOF
-  cat > /etc/systemd/system/musubi-backup.timer <<EOF
+  cat > "$BACKUP_TIMER" <<EOF
 [Unit]
 Description=Musubi backup diario del cerebro central
 
