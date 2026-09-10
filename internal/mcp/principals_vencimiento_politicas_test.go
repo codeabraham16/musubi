@@ -254,3 +254,71 @@ func comandosDePolitica(t *testing.T, s *McpServer) int {
 	}
 	return n
 }
+
+// EL CAMINO QUE CORRE DE VERDAD: el envoltorio con recarga en caliente.
+//
+// En producción `s.buscarPrincipal` NO es un *PrincipalRegistry pelado: http.go arma un
+// *reloadableRegistry —el que recarga principals.yaml por mtime— y mete ESE en el campo. Todo lo
+// de arriba ejercita el registro directo, así que la guarda del vencimiento podía desaparecer del
+// único camino que corre sin que nada se pusiera rojo.
+//
+// MEDIDO antes de escribir esta prueba, sobre b976d9e: con `reloadableRegistry.porNombre`
+// delegando en `porNombreAunqueVencida` —un identificador de diferencia, y el agujero entero de
+// vuelta por el camino de producción— `go test ./internal/mcp/` daba `ok`. Es la forma del defecto
+// dominante de este repo: la guarda puesta en N-1 de N caminos, y el que faltaba era el que corre.
+//
+// Sabotaje que la hace fallar: en principals_reload.go, que rr.porNombre delegue en
+// reg.porNombreAunqueVencida.
+func TestElEnvoltorioDeProduccionTampocoDejaActuarAUnaVencida(t *testing.T) {
+	vence := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	contratista := autoHeal()
+	contratista.Expires = vence
+
+	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(contratista))
+
+	// LA LÍNEA QUE IMPORTA: el campo pasa a llevar lo MISMO que le pone http.go en producción.
+	// Si esta prueba se rompe porque cambió cómo se arma el registro allá, el arreglo es hacerla
+	// seguir a producción — no volver al registro pelado, que es lo que dejó pasar el agujero.
+	s.buscarPrincipal = newReloadableRegistry(
+		filepath.Join(t.TempDir(), "principals.yaml"), "",
+		registroDePrueba(contratista), time.Now(),
+	)
+
+	ahora := time.Now()
+	latir(t, s, d.ID, muestraSana(95, ahora), ahora)
+	base := comandosDePolitica(t, s)
+
+	// ── VIGENTE: el control positivo. Sin él, todo lo de abajo pasaría con un motor muerto.
+	relojDeVencimiento(t, vence.Add(-time.Hour))
+	if !s.politicaPuedeActuar(politicaDeMemoria2(), d) {
+		t.Fatal("con la credencial VIGENTE el envoltorio ya dice que no puede actuar: la prueba no ejercita el vencimiento")
+	}
+	if n := s.aplicarPoliticas("casa", ahora); n != 1 {
+		t.Fatalf("con la credencial VIGENTE la política tendría que actuar por el envoltorio; actuó %d veces", n)
+	}
+	conVigente := comandosDePolitica(t, s)
+	if conVigente != base+1 {
+		t.Fatalf("con la credencial VIGENTE tendría que encolarse 1 comando; se encolaron %d", conVigente-base)
+	}
+
+	// ── VENCIDA. Mismo envoltorio, mismo snapshot, misma máquina: lo único que cambia es el reloj.
+	relojDeVencimiento(t, vence.Add(time.Second))
+	if s.politicaPuedeActuar(politicaDeMemoria2(), d) {
+		t.Error("POR EL ENVOLTORIO DE PRODUCCIÓN el indicador dice que una credencial VENCIDA puede actuar")
+	}
+
+	// La condición tiene que seguir dándose, o esto pasaría por la guarda de muestra rancia (I13).
+	despues := ahora.Add(70 * time.Minute)
+	latir(t, s, d.ID, muestraSana(95, despues), despues)
+	d2, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
+	if v, dispara := politicaDeMemoria2().Dispara(d2.UltimaMuestra); !dispara {
+		t.Fatalf("la condición tiene que seguir cumpliéndose (mem=%v) o la prueba no dice nada", v)
+	}
+
+	if n := s.aplicarPoliticas("casa", despues); n != 0 {
+		t.Errorf("POR EL ENVOLTORIO DE PRODUCCIÓN la política EJECUTÓ %d vez/veces con una credencial VENCIDA", n)
+	}
+	if n := comandosDePolitica(t, s); n != conVigente {
+		t.Errorf("POR EL ENVOLTORIO DE PRODUCCIÓN se encolaron %d comando(s) con una credencial VENCIDA", n-conVigente)
+	}
+}
