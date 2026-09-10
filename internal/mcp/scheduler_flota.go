@@ -239,6 +239,51 @@ func (s *McpServer) RunFlotaScheduler(ctx context.Context, interval time.Duratio
 	}
 }
 
+// proyectosParaVigilar acota cuántos tenants se BARREN por tick. Es el mismo número que
+// `proyectosParaExportar` y NO es el mismo techo, y por eso ahora tiene su propio nombre.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// UN TECHO DE EXPORTACIÓN NO PUEDE GOBERNAR QUÉ MÁQUINAS SE VIGILAN
+//
+// Los dos barridos de acá abajo —la SONDA y las POLÍTICAS de auto-heal— usaban literalmente
+// `proyectosParaExportar`, que existe para acotar la CARDINALIDAD de un scrape de Prometheus.
+// Son dos preguntas sin nada que ver: cuántas series aguanta el scrape, y cuántos tenants hay que
+// vigilar y reparar. Compartir la constante significaba que bajar el techo del export apagaba en
+// silencio la vigilancia de los tenants que quedaban afuera — sin serie, sin aviso y sin que el
+// que tocó el número tuviera cómo saberlo.
+//
+// EL NÚMERO NO CAMBIA EN ESTE COMMIT, A PROPÓSITO. Subirlo cambia el fan-out de un barrido que
+// abre conexiones a máquinas reales (más tenants por tick, ticks más largos, más SSH en vuelo), y
+// eso es una decisión de operación que se toma mirando la flota, no una que se cuela en un
+// arreglo de guardas. Lo que sí cambia es que ahora es un techo PROPIO —moverlo del lado del
+// export ya no mueve esto— y que cuando corta, SE DICE.
+const proyectosParaVigilar = 64
+
+// proyectosAVigilar lista los tenants del barrido y AVISA cuando el techo los recorta.
+//
+// El recorte era mudo en los dos barridos: los tenants que quedaban afuera no se sondeaban y sus
+// políticas no corrían, o sea que sus máquinas no estaban «vigiladas en amarillo», estaban sin
+// vigilar y en verde. El aviso usa avisoMientras, así que se dice una vez y se rearma solo cuando
+// la flota vuelve a entrar en el techo.
+func (s *McpServer) proyectosAVigilar(barrido string) ([]string, error) {
+	// Se pide UNO MÁS que el techo para poder distinguir «entra justo» de «hay más».
+	proyectos, err := s.engine.ProyectosConDevices(proyectosParaVigilar + 1)
+	if err != nil {
+		return nil, err
+	}
+	recorto := len(proyectos) > proyectosParaVigilar
+	if recorto {
+		proyectos = proyectos[:proyectosParaVigilar]
+	}
+	s.avisoMientras("barrido_truncado:"+barrido, recorto, func() {
+		logx.Error("flota: hay más tenants con máquinas de los que entran en un barrido; los que quedan afuera NO se vigilan y NO se reparan, y desde afuera eso se ve igual que todo bien",
+			"barrido", barrido,
+			"tenants_por_barrido", proyectosParaVigilar,
+			"perilla", "ninguna: `proyectosParaVigilar` es una constante de compilación (internal/mcp/scheduler_flota.go). NO es el techo del export.")
+	})
+	return proyectos, nil
+}
+
 // barrerFlotaUnaVez hace UN barrido completo: sondear, evaluar políticas, podar.
 func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 	// I5 — un barrido que sigue corriendo no arranca otro. Con 40 máquinas por SSH, dos barridos
@@ -251,7 +296,7 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 	defer s.flotaBusy.Store(false)
 
 	inicio := time.Now()
-	proyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar)
+	proyectos, err := s.proyectosAVigilar("sonda")
 	if err != nil {
 		logx.Error("flota: no se pudieron listar los proyectos con dispositivos", "error", err)
 		return
@@ -445,7 +490,9 @@ func (s *McpServer) podarEstadoDePoliticasSiToca(ahora time.Time) {
 // ellas. Las que SÍ laten se olvidan, para que su serie desaparezca en vez de quedarse en el
 // último valor conocido.
 func (s *McpServer) medirVidaDeRedDeLosCaidos(ctx context.Context, ahora time.Time) {
-	proyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar)
+	// EL HERMANO DEL DE ARRIBA, y usaba la misma constante del export por la misma razón: se
+	// copió. Los dos barridos entran por la misma función para que el próximo no se olvide.
+	proyectos, err := s.proyectosAVigilar("vida-de-red")
 	if err != nil {
 		return
 	}

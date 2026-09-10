@@ -87,7 +87,7 @@ func TestElTechoDeServiciosEsPorProyectoYNoDejaCiegoAlOtroTenant(t *testing.T) {
 		t.Fatalf("no se pudieron reportar los servicios del proyecto chico: %v", err)
 	}
 
-	svs, truncado := serviciosVisiblesParaMetricas(s.engine, devicesDeTodos(t, s), techoDeLaPrueba)
+	svs, truncado, _ := serviciosVisiblesParaMetricas(s.engine, devicesDeTodos(t, s), techoDeLaPrueba)
 	if !truncado {
 		t.Fatal("el proyecto grande pasó su techo y el exportador no lo declaró truncado")
 	}
@@ -116,6 +116,6 @@ func itoaCorto(n int) string {
 
 func devicesDeTodos(t *testing.T, s *McpServer) []fleet.Device {
 	t.Helper()
-	vistos, _ := devicesVisiblesParaMetricas(s.engine, ptrPrincipal(principalDePrometheus()))
+	vistos, _, _ := devicesVisiblesParaMetricas(s.engine, ptrPrincipal(principalDePrometheus()))
 	return vistos
 }
