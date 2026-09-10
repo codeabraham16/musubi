@@ -30,12 +30,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 var (
-	encabezadoFuera = regexp.MustCompile(`(?i)^#+\s*lo que queda fuera`)
+	// EL ENCABEZADO PUEDE VENIR NUMERADO, Y ÉSE ERA LA MITAD DE UN AGUJERO.
+	//
+	// Hasta el 2026-09-10 esto era `^#+\s*lo que queda fuera`, que rechaza
+	// `## 2 · Lo que queda fuera (y va a `ABIERTO.md`)` — la forma que usan los `spec.md` del
+	// track. La otra mitad estaba en el glob de abajo, que miraba sólo `tasks.md`. **Las dos
+	// secciones afectadas fallaban por los DOS motivos a la vez**, así que arreglar uno solo no
+	// habría cambiado nada y la auditoría anterior las dio por barridas: es la forma exacta de
+	// «una guarda presente en N-1 de N caminos», con los dos agujeros tapándose entre sí.
+	encabezadoFuera = regexp.MustCompile(`(?i)^#+\s*(?:\d+\s*[·.)\-]\s*)?lo que queda fuera`)
 	// Un ítem de primer nivel: `- **algo**`. Las continuaciones van indentadas y no cuentan.
 	itemDeCabo = regexp.MustCompile(`^- \*\*`)
 	// Las marcas que dan por CUBIERTO un cabo. `S7c` y `S5b` incluidos: el sufijo es parte del
@@ -44,17 +53,20 @@ var (
 )
 
 func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
-	specs, err := filepath.Glob(filepath.Join("..", "..", "specs", "flota-*", "tasks.md"))
+	// TODO EL TRACK, NO SÓLO `tasks.md`. Los ocho cabos que se destaparon el 2026-09-10 vivían en
+	// dos `spec.md`, y un cabo declarado fuera de alcance vale lo mismo esté en el archivo que
+	// esté: el que lo lee no sabe cuál de los dos abrió.
+	specs, err := filepath.Glob(filepath.Join("..", "..", "specs", "flota-*", "*.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Si el glob deja de encontrar los specs (se movieron, se renombraron), la prueba pasaría
 	// vacía y en verde — el modo de fallo más peligroso que puede tener un barrido.
-	if len(specs) < 10 {
-		t.Fatalf("sólo se encontraron %d specs de flota; el barrido no está mirando donde cree", len(specs))
+	if len(specs) < 35 {
+		t.Fatalf("sólo se encontraron %d archivos de spec de flota; el barrido no está mirando donde cree", len(specs))
 	}
 
-	huerfanos := 0
+	huerfanos, secciones, items := 0, 0, 0
 	for _, ruta := range specs {
 		crudo, err := os.ReadFile(ruta)
 		if err != nil {
@@ -64,11 +76,15 @@ func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
 		for n, linea := range strings.Split(string(crudo), "\n") {
 			if strings.HasPrefix(linea, "#") {
 				dentro = encabezadoFuera.MatchString(linea)
+				if dentro {
+					secciones++
+				}
 				continue
 			}
 			if !dentro || !itemDeCabo.MatchString(linea) {
 				continue
 			}
+			items++
 			if tieneCasa.MatchString(linea) {
 				continue
 			}
@@ -81,29 +97,257 @@ func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
 				ruta, n+1, corto)
 		}
 	}
+
+	// CERO TIENE QUE SIGNIFICAR «MIRÉ Y ESTÁ LIMPIO», NUNCA «NO PUDE MIRAR».
+	//
+	// Sin esto, aflojar `encabezadoFuera` hasta que no matchee nada —o renombrar las secciones—
+	// deja la prueba en verde habiendo barrido CERO ítems, que es indistinguible de «no hay cabos
+	// sueltos». Es el defecto que acaba de costar ocho cabos invisibles, así que la cuenta de lo
+	// que el barrido ENCONTRÓ es parte de la guarda y no una estadística.
+	if secciones < 12 || items < 40 {
+		t.Fatalf("el barrido reconoció %d sección(es) «Lo que queda fuera» y %d ítem(s) en %d archivos, y son al menos 12 y 40: "+
+			"cambió la forma de los specs y esta guarda dejó de mirar — un cero acá NO es «no hay cabos sueltos»",
+			secciones, items, len(specs))
+	}
 	if huerfanos == 0 {
-		t.Logf("%d specs de flota barridos, cero cabos sin registro", len(specs))
+		t.Logf("%d archivos de spec de flota barridos, %d secciones «Lo que queda fuera», %d ítems, cero cabos sin registro",
+			len(specs), secciones, items)
 	}
 }
 
 // El registro tiene que seguir EXISTIENDO y conservar sus dos tablas. Si alguien lo borra o lo
 // vacía, la prueba de arriba seguiría en verde (los specs no cambiaron) mientras el archivo al
 // que mandan sus mensajes deja de decir nada.
+//
+// ESTA PRUEBA ERAN CUATRO `strings.Contains` Y NO SERVÍA PARA LO QUE DICE SU NOMBRE.
+//
+// Dos de los cuatro fragmentos eran `"| A"` y `"| B"`, buscados en el archivo ENTERO. Con eso:
+//
+//   - la tabla 1 reducida a UNA SOLA FILA la dejaba en verde — que es justo el «alguien vació la
+//     tabla» que el comentario dice cubrir;
+//   - y ni siquiera hacía falta una fila: `"| A"` matchea en cualquier renglón de prosa de la
+//     sección 3 que lleve una barra y una A, y este archivo tiene decenas de bloques con tablas
+//     y con código adentro. O sea que el vacío total de las dos tablas también podía pasar.
+//
+// «El registro sigue en pie» no es «el archivo menciona una barra»: es que sus tablas tengan
+// ENCABEZADO, filas con número, y una celda de estado que diga de quién es cada cabo. Eso es lo
+// que se afirma acá, y por eso la guarda parsea en vez de buscar texto.
+//
+// Sabotaje que la hace fallar: borrar las filas de cualquiera de las dos tablas, o dejar vacía la
+// celda de estado de una fila de la tabla 1.
 func TestElRegistroDeAbiertosSigueEnPie(t *testing.T) {
-	crudo, err := os.ReadFile(filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md"))
-	if err != nil {
-		t.Fatalf("no se pudo leer el registro de abiertos: %v", err)
+	texto := registroDeAbiertos(t)
+
+	// Las cuatro secciones, EN ORDEN. El orden importa porque los dos parseos de abajo cortan el
+	// archivo por estos límites: si se cruzan, se estaría leyendo una tabla como si fuera la otra.
+	secciones := []string{
+		"## 1 · Con slice asignado",
+		"## 2 · Decisiones de NO hacer",
+		"## 3 · Cerrado en este track",
+		"## Cómo se usa este archivo",
 	}
-	texto := string(crudo)
-	for _, quiero := range []struct{ frag, porque string }{
-		{"## 1 · Con slice asignado", "la tabla de lo que SÍ se va a hacer"},
-		{"## 2 · Decisiones de NO hacer", "la tabla de lo declarado fuera, con su condición de revisión"},
-		{"| A", "no queda ni un cabo con dueño: o se terminó todo, o alguien vació la tabla"},
-		{"| B", "no queda ni una decisión de no-hacer: sospechoso"},
-	} {
-		if !strings.Contains(texto, quiero.frag) {
-			t.Errorf("ABIERTO.md perdió %q — %s", quiero.frag, quiero.porque)
+	corte := make([]int, len(secciones))
+	previo := -1
+	for i, s := range secciones {
+		corte[i] = strings.Index(texto, s)
+		if corte[i] < 0 {
+			t.Fatalf("ABIERTO.md perdió la sección %q: el registro dejó de tener la forma que sus propias reglas describen", s)
 		}
+		if corte[i] <= previo {
+			t.Fatalf("la sección %q de ABIERTO.md no está después de %q: las secciones se reordenaron y este barrido leería una tabla por otra", s, secciones[i-1])
+		}
+		previo = corte[i]
+	}
+
+	// Las dos tablas vivas, con lo que cada una promete.
+	for _, tabla := range []struct {
+		nombre     string
+		cuerpo     string
+		encabezado string
+		prefijo    string
+		piso       int
+		celdas     int
+		porque     string
+	}{
+		{
+			nombre: "1 · Con slice asignado", cuerpo: texto[corte[0]:corte[1]],
+			encabezado: "| # | Qué falta | Por qué no está | Slice |",
+			prefijo:    "A", piso: 20, celdas: 4,
+			porque: "no queda ni un cabo con dueño: o se terminó todo, o alguien vació la tabla",
+		},
+		{
+			nombre: "2 · Decisiones de NO hacer", cuerpo: texto[corte[1]:corte[2]],
+			encabezado: "| # | Qué | Por qué no |",
+			prefijo:    "B", piso: 15, celdas: 3,
+			porque: "no queda ni una decisión de no-hacer: sospechoso",
+		},
+	} {
+		if !strings.Contains(tabla.cuerpo, tabla.encabezado) {
+			t.Errorf("la tabla «%s» de ABIERTO.md perdió su encabezado %q.\n  Sin encabezado no hay columnas, y las guardas que cuentan celdas dejan de tener contra qué contar.",
+				tabla.nombre, tabla.encabezado)
+		}
+		fila := regexp.MustCompile(`(?m)^\| (` + tabla.prefijo + `\d+) \|`)
+		filas := fila.FindAllStringSubmatch(tabla.cuerpo, -1)
+		if len(filas) < tabla.piso {
+			t.Errorf("la tabla «%s» de ABIERTO.md tiene %d fila(s) y el piso es %d — %s.\n  Un registro con la tabla vaciada se lee igual que uno donde no queda nada abierto, y son cosas opuestas.",
+				tabla.nombre, len(filas), tabla.piso, tabla.porque)
+		}
+		for _, l := range strings.Split(tabla.cuerpo, "\n") {
+			if !fila.MatchString(l) {
+				continue
+			}
+			c := celdasDeFila(l)
+			if len(c) != tabla.celdas {
+				continue // lo cuenta TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado, con su mensaje
+			}
+			for j, celda := range c {
+				if strings.TrimSpace(celda) == "" {
+					t.Errorf("la fila %s de la tabla «%s» tiene la celda %d VACÍA.\n  «Nada queda abierto sin dueño» es la primera línea de este archivo: una celda vacía es un cabo sin dueño con cara de fila completa.",
+						strings.TrimSpace(c[0]), tabla.nombre, j+1)
+				}
+			}
+		}
+	}
+
+	// Las reglas son la parte del archivo que las guardas citan en sus mensajes. Si desaparecen,
+	// cada «anotalo en ABIERTO.md» manda a un lugar que ya no explica cómo se anota.
+	reglas := texto[corte[3]:]
+	for i := 1; i <= 6; i++ {
+		if !strings.Contains(reglas, "\n"+strconv.Itoa(i)+". ") {
+			t.Errorf("«Cómo se usa este archivo» perdió la regla %d.\n  Las guardas del track mandan a leerla; una regla que no está se lee como una regla que no existe.", i)
+		}
+	}
+}
+
+// celdasDeFila parte una fila de tabla en sus celdas REALES: las barras escapadas (`\|`) son texto
+// —GFM las respeta adentro de un code span— y no separan nada. Es la misma cuenta que hace
+// TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado, y por el mismo falso positivo medido: la fila
+// de A98 lleva `Get-Process musubi \| Select-Object` en su celda.
+func celdasDeFila(l string) []string {
+	l = strings.TrimSpace(l)
+	var celdas []string
+	var actual strings.Builder
+	for i := 0; i < len(l); i++ {
+		if l[i] == '|' && (i == 0 || l[i-1] != '\\') {
+			celdas = append(celdas, actual.String())
+			actual.Reset()
+			continue
+		}
+		actual.WriteByte(l[i])
+	}
+	celdas = append(celdas, actual.String())
+	// La primera y la última son lo de afuera de las barras de los extremos.
+	if len(celdas) < 3 {
+		return nil
+	}
+	return celdas[1 : len(celdas)-1]
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LA REGLA 1 NO TENÍA GUARDA, Y ERA LA MÁS ROTA DE LAS SEIS
+//
+// «Al cerrar un slice, BORRAR su línea de la tabla 1» se cumplió a mano hasta que dejó de
+// cumplirse. Medido el 2026-09-10: **21 de las 48 filas** de la tabla 1 declaraban en su propia
+// celda de estado que el cabo ya estaba cerrado. La tabla que contesta «¿qué falta?» contestaba
+// con un 44 % de ruido, y quien contara filas para dimensionar lo que queda contaba casi el doble.
+//
+// Y no era sólo ruido: **A99 y A102 decían «✔ cerrado; falta el redespliegue»**, que es una
+// contradicción en cuatro palabras. Un barrido que filtre las filas SIN «cerrado» no las ve, y uno
+// que filtre las que LO tienen las borra siendo cabos vivos. La palabra tapaba las dos lecturas.
+//
+// POR QUÉ NO ES UN grep DE «cerrado» SOBRE LA CELDA
+//
+// Porque ese grep tiene un falso positivo REAL y puesto: la celda de estado de **A31** arrastra
+// párrafos de medición, y adentro dice «`VerificarFirma` **falla cerrado** y lo dice con todas las
+// letras» — el modo de fallo de una verificación de firma, no el estado de un cabo. Una guarda que
+// acusa a una fila correcta se termina apagando, y este repo ya midió siete guardas satisfechas
+// por un comentario, un mensaje de error o un prefijo: preguntar por la palabra donde no decide
+// nada es el defecto, no el descuido.
+//
+// Así que la guarda mira la CABEZA DEL VEREDICTO de la columna que decide (la última de la tabla 1,
+// «Slice»): su primera oración, que es lo que el lector toma como estado de la fila. Ahí «cerrado»
+// sí es un estado. Los dos controles están clavados: los veredictos reales tienen que dispararla, y
+// la celda de A31 no.
+//
+// Sabotaje que la hace fallar: ponerle `| — (cerrado) |` a cualquier fila de la tabla 1.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+var (
+	// El vocabulario con el que ESTE archivo declara resuelta una fila. No se inventó ninguno: los
+	// tres salen de las 22 celdas de estado que estaban puestas el 2026-09-10 («— (cerrado)»,
+	// «✔ cerrado el 2026-09-05», «(decisión tomada: cerrado)», «(nada pendiente; queda como
+	// registro)»). Agregar uno es una decisión visible acá, no un patrón más ancho.
+	veredictoDeCierre = regexp.MustCompile(`(?i)\bcerrad[oa]s?\b|\bnada pendiente\b|\bqueda como registro\b`)
+	enfasisMarkdown   = regexp.MustCompile("[*~`✔]+")
+	filaDeTabla1      = regexp.MustCompile(`^\| (A\d+) \|`)
+)
+
+// cabezaDelVeredicto devuelve la primera oración de la celda de estado, sin el énfasis de Markdown.
+// Es lo que un lector toma como VEREDICTO de la fila; lo que venga detrás es la medición que la
+// sostiene, y ahí las palabras no deciden.
+func cabezaDelVeredicto(celda string) string {
+	limpia := strings.TrimSpace(enfasisMarkdown.ReplaceAllString(celda, ""))
+	if i := strings.Index(limpia, ". "); i >= 0 {
+		return limpia[:i]
+	}
+	return strings.TrimSuffix(limpia, ".")
+}
+
+func TestNingunaFilaDeLaTabla1SeDeclaraCerrada(t *testing.T) {
+	texto := registroDeAbiertos(t)
+
+	// CONTROL POSITIVO: los veredictos que REALMENTE estuvieron puestos tienen que dispararla.
+	// Sin esto, aflojar `veredictoDeCierre` o `cabezaDelVeredicto` deja la prueba en verde para
+	// siempre sin mirar nada, que es la forma en que estas guardas se apagan solas.
+	for _, real := range []string{
+		"— (cerrado)",
+		"✔ cerrado el 2026-09-05, repo y máquina",
+		"**gio** ✔ cerrado; falta el redespliegue",
+		"**gio** (decisión tomada: cerrado y verificado en vivo)",
+		"**gio** (nada pendiente; queda como registro)",
+	} {
+		if !veredictoDeCierre.MatchString(cabezaDelVeredicto(real)) {
+			t.Fatalf("el reconocedor ya no ve como cierre %q, que es una celda que ESTUVO puesta en la tabla 1.\n  Se aflojó, y con eso esta prueba dejó de poder fallar.", real)
+		}
+	}
+	// CONTROL NEGATIVO — EL FALSO POSITIVO CONOCIDO, CLAVADO CON EL TEXTO REAL DE A31.
+	// «falla cerrado» es cómo se comporta `VerificarFirma`, no el estado del cabo. Si alguien
+	// reescribe esta guarda como un grep de la celda entera, ESTE control es el que lo frena.
+	a31 := "~~**acción del operador** (cuesta plata y trámite)~~ **YA NO CUESTA PLATA — ver abajo.** " +
+		"**Medido de nuevo el 2026-09-01**: `VerificarFirma` **falla cerrado** y lo dice con todas las letras."
+	if veredictoDeCierre.MatchString(cabezaDelVeredicto(a31)) {
+		t.Fatal("la guarda da por CERRADA la celda de A31, que dice «`VerificarFirma` falla cerrado».\n  Está preguntando por la palabra y no por el veredicto: es el falso positivo que esta prueba existe para no tener.")
+	}
+
+	desde := inicioTabla1.FindStringIndex(texto)
+	hasta := regexp.MustCompile(`(?m)^## 2 ·`).FindStringIndex(texto)
+	if desde == nil || hasta == nil || hasta[0] <= desde[0] {
+		t.Fatalf("no se encontraron las secciones «## 1 ·» y «## 2 ·» de ABIERTO.md; el barrido no está mirando donde cree")
+	}
+
+	revisadas := 0
+	for _, l := range strings.Split(texto[desde[0]:hasta[0]], "\n") {
+		m := filaDeTabla1.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		c := celdasDeFila(l)
+		if len(c) < 2 {
+			continue
+		}
+		revisadas++
+		cabeza := cabezaDelVeredicto(c[len(c)-1])
+		if veredictoDeCierre.MatchString(cabeza) {
+			t.Errorf("la fila **%s** de la tabla 1 declara en su columna de estado que el cabo está resuelto:\n    %s\n"+
+				"  La regla 1 de este archivo dice que al cerrar un slice se BORRA su línea de la tabla 1 y su texto baja a la sección 3.\n"+
+				"  Una fila cerrada adentro de la tabla que contesta «¿qué falta?» es una respuesta falsa, y encima rompe el conteo: el 2026-09-10 eran 21 de 48.\n"+
+				"  Si el cabo NO está cerrado del todo, el estado tiene que decir qué falta (así se arreglaron A99 y A102, que decían «cerrado; falta el redespliegue»).",
+				m[1], cabeza)
+		}
+	}
+	// CERO FILAS REVISADAS NO ES «TODO LIMPIO»: es que el parseo dejó de encontrar la tabla.
+	if revisadas < 20 {
+		t.Fatalf("sólo se revisaron %d fila(s) de la tabla 1 y el piso es 20: cambió el formato del archivo y esta guarda dejó de mirar", revisadas)
 	}
 }
 

@@ -100,11 +100,21 @@ cerebro, los techos de vida e inactividad — y que **no se guarda ninguna crede
 
 ## 3 · Lo que queda fuera (va a `ABIERTO.md`)
 
-- **Tier A (agente con pty propio)** — necesita abrir `/dev/ptmx` y forkear un shell en la máquina
-  remota. Sin cgo son ioctls a mano, y en Windows es ConPTY, que es otro mundo. **→ S5c.**
-- **Cliente Windows en modo crudo** — la CLI necesita poner la terminal en raw. En unix son dos
-  ioctls de termios; en la consola de Windows es `SetConsoleMode`. **→ S5c.**
-- **Grabación del contenido de la sesión** — misma decisión legal que A14, mismo dueño.
-- **Reconexión a una sesión viva** — ver T10: sale caro y su beneficio es comodidad.
-- **Redimensionado de la ventana (SIGWINCH)** — el tamaño se fija al abrir. Sin esto `top` se
-  dibuja con el ancho inicial si alguien agranda la ventana a mitad de sesión. **→ S5c.**
+Cada ítem dice acá su número de registro o el slice que lo hizo. Hasta el 2026-09-10 ninguno lo
+decía, y **esta sección entera era invisible** para `TestNingunCaboDeFlotaSeQuedaSinRegistro` por
+dos motivos a la vez: el barrido globeaba sólo `tasks.md`, y su regex de encabezado rechazaba
+`## 3 · Lo que queda fuera` por el número y el punto medio.
+
+- ~~**Tier A (agente con pty propio)**~~ — **HECHO en S5c** (cierra **A25**): a un Tier A no le
+  entra nadie, así que el canal es un encuentro y el pty lo abre el agente con `script`.
+- **Cliente Windows en modo crudo** (**A26**) — la CLI necesita poner la terminal en raw. En unix
+  son dos ioctls de termios; en la consola de Windows es `SetConsoleMode`. **Slice S5d**, no S5c
+  como decía este renglón: S5c cerró Tier A y esto siguió abierto.
+- **Grabación del contenido de la sesión** (**B10**) — misma decisión legal que **A14**, mismo
+  dueño: nadie.
+- **Reconexión a una sesión viva** (**B11**) — ver T10: sale caro y su beneficio es comodidad. Se
+  revisa si las desconexiones resultan frecuentes en uso real.
+- **Redimensionado de la ventana (SIGWINCH)** (**A27**) — el tamaño se fija al abrir. Sin esto
+  `top` se dibuja con el ancho inicial si alguien agranda la ventana a mitad de sesión. **Slice
+  S5d**, y su fila ya mide por qué no alcanza con querer: en Tier B el pty lo posee el `sshd`
+  remoto, así que no tenemos su descriptor maestro.
