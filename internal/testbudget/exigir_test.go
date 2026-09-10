@@ -8,13 +8,16 @@ import (
 )
 
 func politicaFija(techo time.Duration) func() (Politica, error) {
-	return func() (Politica, error) { return Politica{Timeout: techo, MargenMinimo: 2.0}, nil }
+	return func() (Politica, error) {
+		return Politica{Timeout: techo, MargenMinimo: 2.0, UmbralLineasTest: 10000}, nil
+	}
 }
 
 // EL DEFAULT DE GO NO ALCANZA, Y LA CORRIDA SE ENTERA EN EL PRIMER SEGUNDO.
 //
-// Lo que decide es el string vacío / no vacío que hace `os.Exit(1)` en los dos TestMain
-// (internal/mcp y internal/memory). La aserción mira ESO, no el texto del mensaje.
+// Lo que decide es el string vacío / no vacío que hace `os.Exit(1)` en el TestMain de cada
+// paquete caro (quiénes son los enumera TestLosPaquetesCarosLlamanAlGuard, no una lista escrita
+// acá). La aserción mira ESO, no el texto del mensaje.
 //
 // El caso «10m» es el del cabo: es el default EXACTO de Go, el que usa cualquiera que corra
 // `go test -race ./...` a secas.
@@ -42,7 +45,7 @@ func TestElDefaultDeGoBajoRaceEsInsuficiente(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			motivo := decidirTimeout(c.bajoDetector, c.timeout, c.timeoutLeido, politicaFija(techo))
+			motivo := decidirTimeout(c.bajoDetector, c.timeout, c.timeoutLeido, "no pude leer el flag", politicaFija(techo))
 			if (motivo != "") != c.quieroMotivo {
 				t.Fatalf("decidirTimeout(bajoDetector=%v, timeout=%v, leido=%v) dio %q; quería motivo=%v",
 					c.bajoDetector, c.timeout, c.timeoutLeido, motivo, c.quieroMotivo)
@@ -54,7 +57,7 @@ func TestElDefaultDeGoBajoRaceEsInsuficiente(t *testing.T) {
 // El mensaje tiene que nombrar el techo que hay que pasar: si dijera sólo «insuficiente», el
 // que lo lee vuelve a adivinar y no arreglamos nada.
 func TestElMotivoNombraElTechoQueFalta(t *testing.T) {
-	motivo := decidirTimeout(true, 10*time.Minute, true, politicaFija(30*time.Minute))
+	motivo := decidirTimeout(true, 10*time.Minute, true, "", politicaFija(30*time.Minute))
 	if motivo == "" {
 		t.Fatal("10m bajo -race contra un techo de 30m tiene que dar motivo")
 	}
@@ -70,7 +73,7 @@ func TestElMotivoNombraElTechoQueFalta(t *testing.T) {
 // poder mirar es peor que no tenerlo: nadie se entera de que se apagó.
 func TestPoliticaIlegibleEsMotivo(t *testing.T) {
 	roto := func() (Politica, error) { return Politica{}, errors.New("borré el archivo") }
-	if motivo := decidirTimeout(true, 45*time.Minute, true, roto); motivo == "" {
+	if motivo := decidirTimeout(true, 45*time.Minute, true, "", roto); motivo == "" {
 		t.Fatal("con la política ilegible el guard dio VERDE: tendría que ser un motivo")
 	}
 }

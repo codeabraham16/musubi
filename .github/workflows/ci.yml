@@ -98,6 +98,12 @@ jobs:
       #
       # Corre después del paso de tests y no adentro: si la suite falla, lo que importa es el
       # fallo, no el presupuesto. `if: success()` es el default y queda explícito por eso.
+      #
+      # ESTE PASO NO SE PUEDE BORRAR EN SILENCIO. Borrarlo dejaba todo el aparato en el repo sin
+      # que corriera nunca, y nada se ponía rojo. Ahora lo exige TestElCiEjecutaElGuardDelMargen,
+      # que no busca el NOMBRE del paso —un nombre se cambia sin cambiar nada— sino la cadena:
+      # la corrida de arriba guarda su salida con `tee`, y algún paso posterior del MISMO job le
+      # pasa ESE archivo al guard, sin `continue-on-error` ni `if: false`.
       - name: Presupuesto de pruebas (margen medido)
         if: success()
         shell: bash

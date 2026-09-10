@@ -43,3 +43,14 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// Y esto exige que lo de arriba HAYA PASADO DE VERDAD en esta corrida.
+//
+// El TestMain corre antes de que exista un *testing.T: si alguien le borra la llamada, o le
+// borra el flag.Parse() que la hace posible (sin él el flag vale 0, que significa «sin límite»,
+// y el guard queda mudo), la suite pasa igual y nadie se entera. Esto lo convierte en rojo.
+func TestElGuardDelPresupuestoCorrioEnTestMain(t *testing.T) {
+	if err := testbudget.ErrorSiElGuardNoCorrio(os.Args); err != nil {
+		t.Fatal(err)
+	}
+}

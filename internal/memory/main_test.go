@@ -18,9 +18,11 @@ import (
 // mismo «panic: test timed out» ilegible, y la lección estaría aprendida de un lado y no del
 // hermano.
 //
-// Los DOS paquetes que pasan la mitad del techo lo miran. Los demás están un orden de magnitud
-// más abajo y no lo necesitan; cuando alguno suba, el guard de CI (internal/testbudget, que
-// juzga la corrida REAL) es el que lo va a nombrar — este de acá sólo mejora el mensaje.
+// QUIÉNES LO MIRAN NO SE ESCRIBE ACÁ. Esa frase —«los dos paquetes caros»— era todo lo que
+// sostenía al hermano, y sacarle esta llamada a cualquiera de los dos dejaba todo en verde.
+// Ahora el conjunto lo ENUMERA TestLosPaquetesCarosLlamanAlGuard, del código de test que tiene
+// cada paquete contra UMBRAL_GUARDA_LINEAS_TEST; hoy da internal/mcp, internal/memory y
+// cmd/musubi, y el que crezca mañana lo nombra sola.
 func TestMain(m *testing.M) {
 	// flag.Parse() antes de leer -test.timeout: testing.Init() ya registró el flag, pero quien
 	// lo PARSEA es m.Run(), y para entonces ya sería tarde para avisar.
@@ -30,4 +32,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Exit(m.Run())
+}
+
+// Y esto exige que lo de arriba HAYA PASADO DE VERDAD en esta corrida.
+//
+// El TestMain corre antes de que exista un *testing.T: si alguien le borra la llamada, o le
+// borra el flag.Parse() que la hace posible (sin él el flag vale 0, que significa «sin límite»,
+// y el guard queda mudo), la suite pasa igual y nadie se entera. Esto lo convierte en rojo.
+func TestElGuardDelPresupuestoCorrioEnTestMain(t *testing.T) {
+	if err := testbudget.ErrorSiElGuardNoCorrio(os.Args); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -35,9 +35,39 @@ import (
 // la ÚNICA fuente del número: el ci.yml lo lee para armar el `-timeout` y este paquete lo lee
 // para juzgar el margen, así que no hay forma de que las dos mitades se desincronicen.
 type Politica struct {
-	Timeout      time.Duration // RACE_TIMEOUT: lo que se le pasa a `go test -timeout`.
-	MargenMinimo float64       // MARGEN_MINIMO: TECHO/MÁS_LENTO mínimo aceptable.
+	Timeout          time.Duration // RACE_TIMEOUT: lo que se le pasa a `go test -timeout`.
+	MargenMinimo     float64       // MARGEN_MINIMO: TECHO/MÁS_LENTO mínimo aceptable.
+	UmbralLineasTest int           // UMBRAL_GUARDA_LINEAS_TEST: desde cuántas líneas de test un paquete tiene que llevar el guard.
 }
+
+// UNA POLÍTICA TIENE QUE PODER PONERSE ROJA. Los rangos de acá abajo no son paranoia de
+// validación: son el agujero medido. Un MARGEN_MINIMO de 1,01 o un RACE_TIMEOUT de 500h apagan
+// el guard PARA SIEMPRE y pasan verde, y quedan escritos en el archivo que se supone que es la
+// política — o sea que el aparato entero sigue ahí, corriendo, sin poder decir que no.
+//
+// Una política que no puede fallar nunca no es una política: es un adorno con costo de CI.
+const (
+	// MargenMinimoPiso — por debajo de 1,5 el guard deja de significar algo. 1,5 es lo mínimo
+	// honesto que se le puede pedir a un runner compartido: que un runner un 50 % más lento que
+	// el de hoy todavía termine. (Hoy se exige 2,0.)
+	MargenMinimoPiso = 1.5
+	// MargenMinimoTecho — por arriba de 10 ninguna suite real entra, así que CI quedaría rojo
+	// permanentemente y lo primero que se hace con un rojo permanente es apagarlo.
+	MargenMinimoTecho = 10.0
+	// TimeoutPiso — el techo tiene que ser MAYOR que el default de Go (10m por paquete). Un
+	// RACE_TIMEOUT igual o menor no compra nada: es el default con más pasos.
+	TimeoutPiso = 10 * time.Minute
+	// TimeoutTecho — 2h. Un cuelgue de verdad quema el techo entero de un runner; más de dos
+	// horas ya no es «un margen generoso», es no tener techo (y el job de GitHub muere a las 6h
+	// de todas formas, sin decir por qué).
+	TimeoutTecho = 2 * time.Hour
+	// UmbralLineasPiso / UmbralLineasTecho — el umbral que decide QUÉ paquetes tienen que llevar
+	// el guard. Subirlo es la forma barata de sacar paquetes de la lista sin tocarlos: con
+	// 15.000 líneas de tope, cmd/musubi (13.092 líneas, 118,2 s bajo -race) no se puede dejar
+	// afuera moviendo un número.
+	UmbralLineasPiso  = 1000
+	UmbralLineasTecho = 15000
+)
 
 // Paquete es un paquete que REPORTÓ segundos. Un paquete sin tests o servido del caché no
 // entra acá: no midió nada, y contarlo como 0 s sería inventar un verde.
@@ -67,7 +97,7 @@ func CargarPolitica(ruta string) (Politica, error) {
 		return Politica{}, fmt.Errorf("no se pudo leer la política de presupuesto en %q: %w", ruta, err)
 	}
 	var p Politica
-	var vistoTimeout, vistoMargen bool
+	var vistoTimeout, vistoMargen, vistoUmbral bool
 	for _, linea := range strings.Split(string(b), "\n") {
 		linea = strings.TrimSpace(linea)
 		if linea == "" || strings.HasPrefix(linea, "#") {
@@ -85,8 +115,12 @@ func CargarPolitica(ruta string) (Politica, error) {
 			if err != nil {
 				return Politica{}, fmt.Errorf("%s: RACE_TIMEOUT=%q no es una duración de Go: %w", ruta, valor, err)
 			}
-			if d <= 0 {
-				return Politica{}, fmt.Errorf("%s: RACE_TIMEOUT=%q tiene que ser positivo", ruta, valor)
+			if d < TimeoutPiso || d > TimeoutTecho {
+				return Politica{}, fmt.Errorf("%s: RACE_TIMEOUT=%v está fuera del rango honesto "+
+					"[%v, %v]. Por debajo del default de Go (10m por paquete) el techo no compra "+
+					"nada; por arriba de %v deja de ser un techo —un cuelgue quemaría el runner "+
+					"entero— y además apaga el guard del margen, que pasaría a estar verde con "+
+					"cualquier medición", ruta, d, TimeoutPiso, TimeoutTecho, TimeoutTecho)
 			}
 			p.Timeout, vistoTimeout = d, true
 		case "MARGEN_MINIMO":
@@ -94,10 +128,25 @@ func CargarPolitica(ruta string) (Politica, error) {
 			if err != nil {
 				return Politica{}, fmt.Errorf("%s: MARGEN_MINIMO=%q no es un número: %w", ruta, valor, err)
 			}
-			if f <= 1 {
-				return Politica{}, fmt.Errorf("%s: MARGEN_MINIMO=%v tiene que ser > 1 (un margen de 1 es no tener margen)", ruta, f)
+			if f < MargenMinimoPiso || f > MargenMinimoTecho {
+				return Politica{}, fmt.Errorf("%s: MARGEN_MINIMO=%v está fuera del rango honesto "+
+					"[%v, %v]. Un margen apenas mayor que 1 es no tener margen: el guard queda "+
+					"verde para siempre y el aparato entero pasa a ser decoración; uno mayor que "+
+					"%v no lo pasa ninguna suite real y un rojo permanente termina apagado",
+					ruta, f, MargenMinimoPiso, MargenMinimoTecho, MargenMinimoTecho)
 			}
 			p.MargenMinimo, vistoMargen = f, true
+		case "UMBRAL_GUARDA_LINEAS_TEST":
+			n, err := strconv.Atoi(valor)
+			if err != nil {
+				return Politica{}, fmt.Errorf("%s: UMBRAL_GUARDA_LINEAS_TEST=%q no es un entero: %w", ruta, valor, err)
+			}
+			if n < UmbralLineasPiso || n > UmbralLineasTecho {
+				return Politica{}, fmt.Errorf("%s: UMBRAL_GUARDA_LINEAS_TEST=%d está fuera del "+
+					"rango honesto [%d, %d]: subirlo es la forma barata de sacar un paquete caro "+
+					"de la enumeración sin tocarlo", ruta, n, UmbralLineasPiso, UmbralLineasTecho)
+			}
+			p.UmbralLineasTest, vistoUmbral = n, true
 		}
 	}
 	// UNA CLAVE QUE FALTA ES UN ERROR, NO UN CERO. Si RACE_TIMEOUT desapareciera del archivo,
@@ -107,6 +156,9 @@ func CargarPolitica(ruta string) (Politica, error) {
 	}
 	if !vistoMargen {
 		return Politica{}, fmt.Errorf("%s: falta MARGEN_MINIMO", ruta)
+	}
+	if !vistoUmbral {
+		return Politica{}, fmt.Errorf("%s: falta UMBRAL_GUARDA_LINEAS_TEST", ruta)
 	}
 	return p, nil
 }

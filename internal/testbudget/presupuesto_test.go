@@ -193,16 +193,47 @@ func TestPoliticaDelRepoSeLee(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no se pudo cargar %s del repo: %v", NombreArchivoPolitica, err)
 	}
-	if p.Timeout <= 0 {
-		t.Errorf("RACE_TIMEOUT = %v, tiene que ser positivo", p.Timeout)
-	}
-	if p.MargenMinimo <= 1 {
-		t.Errorf("MARGEN_MINIMO = %v, tiene que ser > 1", p.MargenMinimo)
-	}
 	// El techo tiene que ser mayor que el default de Go: si fuera <= 10m, pasarlo explícitamente
 	// no arreglaría nada y el `-timeout` de CI sería decorativo.
-	if p.Timeout <= 10*time.Minute {
-		t.Errorf("RACE_TIMEOUT = %v <= el default de Go (10m): un techo así no agrega nada", p.Timeout)
+	if p.Timeout < TimeoutPiso || p.Timeout > TimeoutTecho {
+		t.Errorf("RACE_TIMEOUT = %v, fuera de [%v, %v]", p.Timeout, TimeoutPiso, TimeoutTecho)
+	}
+	if p.MargenMinimo < MargenMinimoPiso || p.MargenMinimo > MargenMinimoTecho {
+		t.Errorf("MARGEN_MINIMO = %v, fuera de [%v, %v]", p.MargenMinimo, MargenMinimoPiso, MargenMinimoTecho)
+	}
+	if p.UmbralLineasTest < UmbralLineasPiso || p.UmbralLineasTest > UmbralLineasTecho {
+		t.Errorf("UMBRAL_GUARDA_LINEAS_TEST = %d, fuera de [%d, %d]",
+			p.UmbralLineasTest, UmbralLineasPiso, UmbralLineasTecho)
+	}
+}
+
+// UNA POLÍTICA DEGRADADA HASTA SER INOFENSIVA ES UN ERROR, NO UNA POLÍTICA.
+//
+// Éste era el agujero: el guard exigía «margen > 1» y «techo > 10m», así que un MARGEN_MINIMO de
+// 1,01 o un RACE_TIMEOUT de 500h lo apagaban PARA SIEMPRE y pasaban verde. El aparato entero
+// seguía corriendo en cada PR sin poder decir que no — el peor de los dos mundos: el costo de la
+// guarda sin la guarda.
+func TestUnaPoliticaDegradadaNoPasa(t *testing.T) {
+	dir := t.TempDir()
+	casos := map[string]string{
+		"margen apenas mayor que 1":     "RACE_TIMEOUT=40m\nMARGEN_MINIMO=1.01\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"margen de 1,4":                 "RACE_TIMEOUT=40m\nMARGEN_MINIMO=1.4\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"margen inalcanzable":           "RACE_TIMEOUT=40m\nMARGEN_MINIMO=50\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"techo de 500h":                 "RACE_TIMEOUT=500h\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"techo por debajo del de Go":    "RACE_TIMEOUT=5m\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"umbral que no alcanza a nadie": "RACE_TIMEOUT=40m\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=1000000\n",
+		"sin umbral":                    "RACE_TIMEOUT=40m\nMARGEN_MINIMO=2.0\n",
+	}
+	for nombre, contenido := range casos {
+		t.Run(nombre, func(t *testing.T) {
+			ruta := dir + "/" + strings.ReplaceAll(nombre, " ", "_") + ".env"
+			escribir(t, ruta, contenido)
+			p, err := CargarPolitica(ruta)
+			if err == nil {
+				t.Fatalf("CargarPolitica aceptó una política que apaga el guard: %+v", p)
+			}
+			t.Logf("rojo (correcto): %v", err)
+		})
 	}
 }
 
@@ -210,10 +241,10 @@ func TestPoliticaDelRepoSeLee(t *testing.T) {
 func TestPoliticaIncompletaEsError(t *testing.T) {
 	dir := t.TempDir()
 	casos := map[string]string{
-		"sin RACE_TIMEOUT":         "MARGEN_MINIMO=2.0\n",
-		"sin MARGEN_MINIMO":        "RACE_TIMEOUT=30m\n",
-		"timeout no parseable":     "RACE_TIMEOUT=veinte\nMARGEN_MINIMO=2.0\n",
-		"margen de 1 no es margen": "RACE_TIMEOUT=30m\nMARGEN_MINIMO=1.0\n",
+		"sin RACE_TIMEOUT":         "MARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"sin MARGEN_MINIMO":        "RACE_TIMEOUT=30m\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"timeout no parseable":     "RACE_TIMEOUT=veinte\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"margen de 1 no es margen": "RACE_TIMEOUT=30m\nMARGEN_MINIMO=1.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
 		"todo comentado":           "# RACE_TIMEOUT=30m\n# MARGEN_MINIMO=2.0\n",
 	}
 	for nombre, contenido := range casos {
