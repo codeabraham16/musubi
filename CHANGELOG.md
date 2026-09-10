@@ -7,6 +7,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El firmador de releases no veía a Windows, así que firmar no habría arreglado `musubi update`
+  en esta plataforma.** `deploy/firmar-release.sh` decide qué archivo del directorio es un asset con
+  una lista blanca, y esa lista era el patrón `^musubi(-[a-z0-9]+)+(\.exe)?$` — sensible a
+  mayúsculas y con un guion obligatorio. `release.yml` publica los binarios de Windows como
+  `Musubi.exe` y `Musubi-arm64.exe`, con mayúscula y el primero sin ningún guion: **ninguno de los
+  dos casaba**. El manifiesto salía sin ellos y `ShaDeAsset` no los encontraba, así que
+  `musubi update` en Windows se negaba a instalar un release que estaba bien firmado.
+
+  **El defecto es invisible desde cada lado por separado**, y por eso duró: el guion no falla —firma
+  lo que casa y calla lo que no— y `AssetName` tampoco, porque devuelve el nombre correcto. Sólo
+  aparece cruzándolos. La lista pasa a nombrar los seis assets uno por uno, y
+  `TestElFirmadorCubreLosAssetsReales` la pinea contra `AssetName` en las dos direcciones: falta uno
+  y falla; sobra uno —algo que firmaríamos y publicaríamos sin que nadie lo baje— y también.
+
+- **Y el guion moría en Windows antes de llegar a firmar, con la clave privada montada.** Invocaba
+  `python3`, que en Windows existe como alias de ejecución de la Microsoft Store: `command -v` lo
+  encuentra y devuelve 0, pero al ejecutarlo imprime «no se encontró Python» y no corre nada. Ahora
+  el intérprete **se elige probándolo**, no preguntando si el archivo existe.
+
+  Tres sabotajes, los tres vistos en rojo contra su propio invariante: volver al patrón viejo
+  (nombra `Musubi.exe` y `Musubi-arm64.exe`), agregar un asset que nadie descarga, y **renombrar el
+  bloque `ASSETS`** — este último es el control, y sin él el test quedaría verde sobre una lista
+  vacía afirmando que vigila algo.
+
+
 ## [0.140.0] - 2026-09-10
 
 ### Added
