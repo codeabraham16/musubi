@@ -132,7 +132,7 @@ func reglasGrabadasDelRepo(t *testing.T) map[string]reglaGrabada {
 func alertasCrudasDelRepo(t *testing.T) []alertaCruda {
 	t.Helper()
 	var out []alertaCruda
-	for _, f := range archivosDeAlertas {
+	for _, f := range archivosDeAlertasDelRepo(t) {
 		ruta := filepath.Join("..", "..", "deploy", f)
 		crudo, err := os.ReadFile(ruta)
 		if err != nil {
@@ -964,7 +964,7 @@ func alertasEnMira(t *testing.T) ([]alertaCruda, map[string]reglaGrabada) {
 	}
 	todas := alertasCrudasDelRepo(t)
 	if len(todas) < 10 {
-		t.Fatalf("sólo leí %d alertas de %v; el barrido dejó de mirar", len(todas), archivosDeAlertas)
+		t.Fatalf("sólo leí %d alertas de %v; el barrido dejó de mirar", len(todas), archivosDeAlertasDelRepo(t))
 	}
 	var mira []alertaCruda
 	for _, a := range todas {
@@ -1184,7 +1184,7 @@ func textoDe(n *nodoProm) string {
 // dos alertas de cobertura.
 func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 	mira, _ := alertasEnMira(t)
-	revisadas := 0
+	revisadas, conVentana := 0, 0
 	for _, a := range mira {
 		arbol, err := parsearProm(a.Expr)
 		if err != nil {
@@ -1196,24 +1196,42 @@ func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 			t.Errorf("%s (%s): no pude leer una de sus ventanas: %v", a.Nombre, a.Archivo, err)
 			continue
 		}
-		if len(vents) == 0 {
-			t.Errorf("%s (%s) mira una serie grabada SIN ventana de rango: %q\n"+
-				"  Sin ventana no se puede acotar cuánto tiempo puede sostenerse la condición, así que "+
-				"tampoco se puede juzgar el `for:`. Y una alerta de NIVEL sobre el SLA no es "+
-				"accionable: lo accionable es la CAÍDA.", a.Nombre, a.Archivo, a.Expr)
-			continue
-		}
-		menor := vents[0]
-		for _, v := range vents[1:] {
-			if v < menor {
-				menor = v
+		// EL TECHO DEL PLAZO SALE DE LA VENTANA, Y UNA ALERTA SIN VENTANA NO TIENE TECHO.
+		//
+		// Lo que hace inalcanzable a un `for:` es que la condición SE APAGUE SOLA: `delta(X[6h])`
+		// vuelve a cero cuando la caída sale de esas seis horas, así que un `for` de 30d nunca se
+		// cumple. Una alerta de NIVEL —`musubi:device_up:cobertura30d < 0.5`— no tiene ese
+		// mecanismo: el nivel se queda donde está indefinidamente, así que CUALQUIER `for` finito
+		// se cumple. Su techo es infinito, y eso es una MEDICIÓN, no un encogimiento de hombros.
+		//
+		// La versión anterior de esta guarda trataba «no hay ventana» como error y le agregaba un
+		// juicio de producto («una alerta de NIVEL sobre el SLA no es accionable»). Medido: eso
+		// rechazaba en ROJO una alerta perfectamente sana —`musubi:device_up:cobertura30d < 0.5`
+		// con `for: 2h`— sin ninguna escapatoria escrita. Un falso positivo así no se discute: se
+		// apaga la guarda entera, y con ella los tres sabotajes que sí agarra.
+		//
+		// Que las DOS alertas de cobertura tengan que ser de CAÍDA y no de NIVEL ya lo sostiene
+		// `TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee` (verificado: cambiarlas a
+		// `musubi:project_service_up:cobertura30d < 0.95` da rojo ahí). Ésa es la guarda que
+		// decide la FORMA; ésta decide las MAGNITUDES y no tiene por qué opinar de la otra cosa.
+		conTecho := len(vents) > 0
+		var menor time.Duration
+		if conTecho {
+			menor = vents[0]
+			for _, v := range vents[1:] {
+				if v < menor {
+					menor = v
+				}
 			}
 		}
 		if !a.TienePlazo {
+			donde := "Sin ventana en la expresión el plazo es la única defensa contra el ruido"
+			if conTecho {
+				donde = fmt.Sprintf("Sobre una ventana de %s el plazo es parte de la decisión", menor)
+			}
 			t.Errorf("%s (%s) no declara `for:`.\n"+
-				"  Sobre una ventana de %s el plazo es parte de la decisión: sin él la alerta dispara "+
-				"en la primera evaluación que cruce el umbral. Declaralo, aunque sea `for: 0s`.",
-				a.Nombre, a.Archivo, menor)
+				"  %s: sin él la alerta dispara en la primera evaluación que cruce el umbral. "+
+				"Declaralo, aunque sea `for: 0s`.", a.Nombre, a.Archivo, donde)
 			continue
 		}
 		plazo, err := duracionProm(a.Plazo)
@@ -1222,6 +1240,11 @@ func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 			continue
 		}
 		revisadas++
+		if !conTecho {
+			// Plazo finito contra techo infinito: se cumple. Medido y sano, no salteado.
+			continue
+		}
+		conVentana++
 		if plazo >= menor {
 			t.Errorf("%s (%s) TIENE UN PLAZO QUE NO PUEDE CUMPLIRSE: `for: %s` sobre una ventana de %s.\n"+
 				"  La condición se mide sobre %s: cuando la caída sale de esa ventana, la condición se "+
@@ -1233,6 +1256,16 @@ func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 	}
 	if revisadas == 0 {
 		t.Fatalf("no se revisó ni un `for:`. La guarda quedó muda.")
+	}
+	// Y ADEMÁS: que se hayan revisado plazos no alcanza. La comparación que agarra el sabotaje del
+	// `for: 30d` es plazo-contra-ventana, y ésa sólo corre sobre alertas CON ventana. Si un día
+	// todas las alertas en mira son de nivel, `revisadas` sigue subiendo y esta guarda no midió
+	// nada de lo que existe para medir. Son dos —las de cobertura, ambas `delta(...[6h])`—.
+	if conVentana < 2 {
+		t.Fatalf("sólo %d alerta(s) con ventana llegaron a la comparación plazo-contra-ventana.\n"+
+			"  Eran dos —`CoberturaDelSlaSeCayo` y `CoberturaDelSlaDeServiciosSeCayo`, las dos sobre "+
+			"`[6h]`—. Menos que eso es «no pude medir», no «está bien»: el sabotaje del `for: 30d` "+
+			"sólo lo agarra esta comparación.", conVentana)
 	}
 }
 

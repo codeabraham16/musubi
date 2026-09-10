@@ -35,14 +35,48 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// archivosDeAlertas son los cuatro que pueden contener una alerta. Escrita a mano y con control:
-// si aparece un quinto y nadie lo agrega, el barrido no lo lee — por eso abajo hay un piso de
-// alertas parseadas que lo delata.
-var archivosDeAlertas = []string{
-	"musubi-alerts.yml",
-	"musubi-alerts-flota.yml",
-	"musubi-alerts-backup-offhost.yml",
-	"musubi-alerts-altura.yml",
+// archivosDeAlertas son los archivos que pueden contener una alerta, DESCUBIERTOS POR EL MISMO
+// GLOB CON EL QUE PROMETHEUS LAS CARGA. No es una lista escrita a mano, y eso es el punto.
+//
+// Antes eran cuatro nombres a mano, con un «piso de alertas parseadas» de guardia. El piso no
+// alcanzaba: sigue habiendo cientos de alertas en los cuatro archivos viejos, así que un QUINTO
+// archivo —`deploy/musubi-alerts-sla.yml`, digamos— con una alerta inalcanzable adentro lo deja
+// intacto y todo el barrido queda en verde. Medido: la alerta
+// `delta(musubi:project_service_up:cobertura30d[6h]) < -5` + `for: 30d`, o sea los dos sabotajes
+// juntos, puesta en un quinto archivo, pasaba VERDE por las tres guardas de alcanzabilidad.
+//
+// Y ese quinto archivo NO es hipotético: `deploy/prometheus/prometheus.yml` carga las reglas con
+// `rule_files: [/etc/prometheus/rules/*.yml]` —un GLOB, y a propósito: con una ruta fija
+// `preparar.sh` copiaba el archivo de flota y Prometheus lo ignoraba en silencio—. Y
+// `verificar-despliegue.sh` también compara por `musubi-alerts*.yml`. O sea que el despliegue
+// evalúa por glob y la guarda leía por lista: cualquier archivo nuevo nace desplegado y sin medir.
+//
+// La lección del repo aplicada tal cual: a una lista de nombres siempre le falta el próximo. Se
+// dejó de mirar la lista y se mira la forma que decide, que es la misma que mira Prometheus.
+var globDeArchivosDeAlertas = "musubi-alerts*.yml"
+
+func archivosDeAlertasDelRepo(t *testing.T) []string {
+	t.Helper()
+	rutas, err := filepath.Glob(filepath.Join("..", "..", "deploy", globDeArchivosDeAlertas))
+	if err != nil {
+		t.Fatalf("no pude expandir %s: %v", globDeArchivosDeAlertas, err)
+	}
+	var out []string
+	for _, r := range rutas {
+		out = append(out, filepath.Base(r))
+	}
+	sort.Strings(out)
+	// UN CERO ACÁ NO ES «NO HAY ALERTAS MAL». Es «no pude medir»: el glob no encontró nada porque
+	// alguien movió deploy/, renombró los archivos o corrió la prueba desde otro directorio. Los
+	// cuatro históricos son el piso; si un día se consolidan en menos, hay que bajarlo A MANO y
+	// mirando, que es exactamente la revisión que este Fatalf existe para forzar.
+	if len(out) < 4 {
+		t.Fatalf("el glob deploy/%s encontró %d archivo(s) de alertas: %v.\n"+
+			"  Eran cuatro por lo menos. Cero o pocos acá no significa «no hay alertas rotas», "+
+			"significa QUE NO PUDE MEDIR — y un verde sobre eso no vale nada.",
+			globDeArchivosDeAlertas, len(out), out)
+	}
+	return out
 }
 
 // grabacionesDelSla devuelve nombre -> expresión de cada `- record:` de musubi-recording.yml.
@@ -80,7 +114,7 @@ func grabacionesDelSla(t *testing.T) map[string]string {
 func alertasDeTodosLosArchivos(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, f := range archivosDeAlertas {
+	for _, f := range archivosDeAlertasDelRepo(t) {
 		a, _ := cargarReglas(t, f)
 		for _, g := range a.Groups {
 			for _, r := range g.Rules {
@@ -132,7 +166,7 @@ func TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee(t *testing.T) {
 			"acá no significaría nada.", len(resumenes), resumenes)
 	}
 	if len(alertas) < 10 {
-		t.Fatalf("sólo se parsearon %d alertas de %v; el barrido dejó de mirar", len(alertas), archivosDeAlertas)
+		t.Fatalf("sólo se parsearon %d alertas de %v; el barrido dejó de mirar", len(alertas), archivosDeAlertasDelRepo(t))
 	}
 
 	for _, serie := range resumenes {
