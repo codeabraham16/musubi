@@ -111,8 +111,22 @@ fi
 # ── 1 · La comparación ──────────────────────────────────────────────────────────────────────
 # La salida se muestra ENTERA: este guion no resume nada. Un resumen es una segunda opinión sobre
 # lo que el verificador ya dijo, y dos fuentes de verdad sobre la misma pregunta se pudren.
-MUSUBI_SSH="$HOST" "$REPO/deploy/verificar-despliegue.sh"
+# LA REFERENCIA VIAJA POR ARCHIVO, NO POR LA SALIDA. El verificador escribe acá contra qué árbol
+# comparó; se hace `source` y no se parsea nada. Ver el bloque del canal en verificar-despliegue.sh.
+REF_ENV="$(mktemp)"
+trap 'rm -f "$REF_ENV"' EXIT
+MUSUBI_REF_SALIDA="$REF_ENV" MUSUBI_SSH="$HOST" "$REPO/deploy/verificar-despliegue.sh"
 CODIGO=$?
+
+# `REF_CONFIABLE` vacío significa QUE NO SE SUPO, y no «no era confiable»: un verificador viejo no
+# escribe el archivo. Los dos son distintos y la diferencia decide si la serie sale o no sale —
+# la regla del export de este repo: si el valor es DESCONOCIDO, la línea NO SE EMITE. Un 0
+# inventado sería indistinguible de un 0 medido, que es la alerta perdida de siempre.
+REF_CONFIABLE=""
+if [ -s "$REF_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$REF_ENV" 2>/dev/null || REF_CONFIABLE=""
+fi
 
 # ── 2 · El latido ───────────────────────────────────────────────────────────────────────────
 # `service.name` → label `job` y `service.instance.id` → label `instance`, que es como el receptor
@@ -124,6 +138,26 @@ QUIEN="$(hostname -s 2>/dev/null || echo desconocido)"
 # `timeUnixNano` va como STRING. Mandarlo como número hace que Prometheus conteste 400 y el empuje
 # muera en silencio con la configuración perfecta — está medido y escrito en internal/mcp/fleet_otlp.go.
 NANOS="${AHORA}000000000"
+
+# AUSENTE cuando no se supo, presente cuando sí. Se arma como fragmento porque el sobre es un
+# heredoc y meterle un `if` adentro obligaría a escribir el JSON dos veces — que es la forma en la
+# que este contrato ya perdió campos una vez.
+METRICA_REF=""
+if [ -n "$REF_CONFIABLE" ]; then
+  # SE ARMA CON HEREDOC Y NO CON UNA CADENA CON COMILLAS ESCAPADAS, por el mismo motivo que el
+  # sobre de abajo. `TestNingunBloqueDePowerShellEscapaComillasConBarra` delimita los bloques de
+  # PowerShell por una comilla doble pegada a una simple, y el `trap` de arriba produce ese par al
+  # cerrar; desde ahi la guarda lee como PowerShell todo el bash que sigue. Una comilla escapada
+  # con barra aca caeria adentro de ese bloque falso. El heredoc no lleva escapes y ademas se lee
+  # igual que el JSON que produce.
+  METRICA_REF="$(cat <<JSONREF
+,
+  {"name":"musubi_verificacion_referencia_confiable",
+   "description":"1 si se comparo contra origin/main limpio y recien traido, 0 si el arbol no era esa referencia. AUSENTE si el verificador no lo dijo",
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$REF_CONFIABLE}]}}
+JSONREF
+)"
+fi
 PAYLOAD="$(cat <<JSON
 {"resourceMetrics":[{"resource":{"attributes":[
   {"key":"service.name","value":{"stringValue":"musubi-verificador"}},
@@ -134,7 +168,7 @@ PAYLOAD="$(cat <<JSON
    "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$AHORA}]}},
   {"name":"musubi_verificacion_despliegue_resultado",
    "description":"0 coincide, 1 diverge, 2 quedaron eslabones sin verificar",
-   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$CODIGO}]}}]}]}]}
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$CODIGO}]}}$METRICA_REF]}]}]}
 JSON
 )"
 

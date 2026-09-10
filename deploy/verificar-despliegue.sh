@@ -287,6 +287,10 @@ printf '\033[1mverificar-despliegue\033[0m — repo %s contra %s\n' "$REPO" "${S
 titulo "la referencia (contra qué se compara todo lo de abajo)"
 
 REF_EDAD_MAX_H="${MUSUBI_REF_EDAD_MAX_H:-24}"
+# Arranca en 0 y SÓLO el camino verde lo sube. Al revés —arrancar en 1 y bajarlo— cada rama nueva
+# de este bloque nacería confiable por omisión, que es como se pierde una guarda al agregar un caso.
+REF_CONFIABLE=0
+REF_RAMA=""; REF_HEAD=""; REF_ATRAS=""; REF_ADELANTE=""; REF_SUCIO=""
 
 if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   dudoso "el árbol de $REPO no es un repositorio git: se compara contra los archivos que haya ahí, sin saber de qué commit salieron"
@@ -328,6 +332,7 @@ else
     fi
 
     if [ "$REF_ATRAS" = "0" ] && [ "$REF_ADELANTE" = "0" ] && [ "$REF_SUCIO" = "0" ]; then
+      REF_CONFIABLE=1
       verde "el árbol es origin/main exacto ($REF_MAIN) y está limpio: todo lo de abajo compara contra eso"
     else
       MOTIVO=""
@@ -339,9 +344,34 @@ else
     fi
 
     if [ -n "$REF_EDAD_H" ] && [ "$REF_EDAD_H" -gt "$REF_EDAD_MAX_H" ]; then
+      REF_CONFIABLE=0
       dudoso "la referencia origin/main se trajo hace ${REF_EDAD_H} h (el techo es ${REF_EDAD_MAX_H} h): compararse contra ella es compararse contra un main viejo"
     fi
   fi
+fi
+
+# EL CANAL A QUIEN LATE. `comparar-y-latir.sh` empuja un latido con el resultado de esta corrida y
+# hasta hoy no podía decir CONTRA QUÉ se comparó, así que su «coincide» valía lo mismo parado en
+# main que parado en una rama de hace un mes.
+#
+# NO SE PARSEA LA SALIDA HUMANA Y NO SE RECALCULA DEL OTRO LADO. Las dos son formas conocidas de
+# romperse acá: parsear el informe es el productor y el parser sin nadie en el medio, y recalcular
+# la referencia en el otro guion es el contrato escrito dos veces, que ya le costó dos campos al
+# latido. Se escribe un archivo `KEY=valor` que el otro lado hace `source`: un solo productor, y
+# ningún parser que se pueda desfasar.
+#
+# NO SE ESCRIBE SI NADIE LO PIDIÓ (la variable vacía): un archivo suelto que nadie lee es basura,
+# y uno que aparece sin que lo pidan es una sorpresa en el directorio de otro.
+if [ -n "${MUSUBI_REF_SALIDA:-}" ]; then
+  {
+    printf 'REF_CONFIABLE=%s\n' "$REF_CONFIABLE"
+    printf 'REF_RAMA=%s\n'      "${REF_RAMA:-desconocida}"
+    printf 'REF_HEAD=%s\n'      "${REF_HEAD:-desconocido}"
+    printf 'REF_ATRAS=%s\n'     "${REF_ATRAS:-}"
+    printf 'REF_ADELANTE=%s\n'  "${REF_ADELANTE:-}"
+    printf 'REF_SUCIO=%s\n'     "${REF_SUCIO:-}"
+  } > "$MUSUBI_REF_SALIDA" 2>/dev/null || \
+    dudoso "no se pudo escribir la referencia en $MUSUBI_REF_SALIDA: quien late no va a poder decir contra qué se comparó"
 fi
 
 # ── 1 · LA CADENA DE ALERTAS, ESLABÓN POR ESLABÓN ───────────────────────────────────────────
