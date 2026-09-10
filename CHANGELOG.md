@@ -64,6 +64,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
 
 ### Fixed
+- **`matar-zombis-agente.sh` no mataba nada: un `\"` en una rama que no se ejecutaba rompía todo el
+  bloque.** En una cadena de PowerShell con comillas dobles el escape es el **backtick**, no la barra
+  invertida, así que ese `\"` cerraba la cadena y dejaba el resto suelto. Medido en `davantis-1` el
+  2026-09-10: `UnexpectedToken`, y el paso 2 murió sin ejecutar una línea.
+
+  **Lo grave es dónde estaba**: en la rama `$nuevos.Count -eq 0`, que *no se tomó* —la máquina sí
+  tenía el proceso nuevo—. PowerShell parsea el bloque entero antes de correr nada, así que un error
+  de sintaxis en una rama muerta se llevó puesta la viva. El paso 1 había identificado el zombi
+  correctamente.
+
+  **Por qué se coló**: el mismo `\"` es *correcto* en las cadenas de bash de ese mismo archivo —el
+  JSON de `musubi_fleet_log`, los `echo` del final— y las dos clases conviven en el mismo renglón.
+  Por eso la guarda nueva no es un grep del archivo, que se pondría rojo sobre los `echo` que están
+  bien: **extrae los bloques de PowerShell** y mira sólo esos.
+
+  **El primer escáner que escribí dio verde sobre el archivo con el bug**, y queda escrito porque es
+  la lección: seguía el estado de comillas de bash carácter por carácter y el `$( … )` anidado se lo
+  desordenaba. Lo cacé corriéndolo contra una copia del archivo roto antes de creerle al verde.
+
 - **Un argumento omitido en `construir.sh` apagó `musubi_fleet_device_agent_stale` para la flota
   entera, y nada lo dijo.** El guión arma `<VERSION>[-<track>].<commit>`, así que con el track vacío
   el guión desaparece y quedan cuatro componentes: `0.139.6.7e2d211`. `fleet.NucleoDeVersion` corta

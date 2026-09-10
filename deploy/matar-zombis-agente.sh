@@ -117,8 +117,27 @@ fi
 paso "2/3 · matando SÓLO los arrancados antes del binario instalado"
 # LA GUARDA QUE IMPORTA: si no hay ningún proceso del binario nuevo, matar a los viejos deja la
 # máquina SIN AGENTE y sin canal para arreglarla. En ese caso no se mata: se arranca la tarea.
+#
+# LAS COMILLAS DE ADENTRO VAN DOBLADAS (`""`) Y NO CON BARRA (`\"`), Y ESTO COSTÓ UNA CORRIDA.
+#
+# En una cadena de PowerShell con comillas dobles el carácter de escape es el BACKTICK, no la
+# barra invertida. Un `\"` no escapa nada: la comilla CIERRA la cadena ahí y lo que sigue queda
+# suelto. Medido en `davantis-1` el 2026-09-10:
+#
+#     + FullyQualifiedErrorId : UnexpectedToken) [], ParentContainsErrorRecordException
+#     ✗ no se mató nada
+#
+# Y LO QUE LO HACE PEOR: esa comilla está en la rama `$nuevos.Count -eq 0`, que NO SE EJECUTÓ —la
+# máquina sí tenía el proceso nuevo—. PowerShell PARSEA EL BLOQUE ENTERO antes de correr nada, así
+# que un error de sintaxis en una rama muerta se lleva puesta la rama viva. El paso 1 había
+# identificado el zombi correctamente; el paso 2 murió sin ejecutar una sola línea.
+#
+# El escape con barra es correcto en las cadenas de BASH de este mismo archivo (el JSON de
+# `musubi_fleet_log`, los `echo` del final), y esa es exactamente la razón por la que se cuela acá:
+# el mismo par de caracteres significa cosas distintas según en qué lenguaje esté la cadena, y las
+# dos viven en el mismo renglón del guion.
 llamar "$(ps1 "$RESOLVER$CLASIFICAR"'if ($zombis.Count -eq 0) { "no hay zombis"; exit 0 }
-if ($nuevos.Count -eq 0) { "hay " + $zombis.Count + " proceso(s) viejo(s) y NINGUNO del binario nuevo: matarlos deja la maquina SIN AGENTE y sin canal. Arranca la tarea primero (schtasks /run /tn \"Musubi Agente de Flota\"). Procesos: " + $detalle; exit 1 }
+if ($nuevos.Count -eq 0) { "hay " + $zombis.Count + " proceso(s) viejo(s) y NINGUNO del binario nuevo: matarlos deja la maquina SIN AGENTE y sin canal. Arranca la tarea primero (schtasks /run /tn ""Musubi Agente de Flota""). Procesos: " + $detalle; exit 1 }
 $ids = (($zombis | ForEach-Object { $_.Id }) -join ",")
 $orden = "Start-Sleep -Seconds 8; Stop-Process -Id " + $ids + " -Force -ErrorAction SilentlyContinue"
 Start-Process -FilePath "powershell" -ArgumentList "-NoProfile","-Command",$orden -WindowStyle Hidden
