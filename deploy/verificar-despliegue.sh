@@ -441,6 +441,68 @@ else
   dudoso "el binario apunta al esquema $ESQ_BIN y el encabezado de la base dice $ESQ_DB. O la migración no corrió —y entonces el cerebro está corriendo contra una base vieja— o corrió recién y el número todavía está en el WAL sin checkpointear. Para decidir: si hace rato que se desplegó, es lo primero"
 fi
 
+# ── 5c · LAS UNIDADES DE ESTA MÁQUINA CONTRA LAS QUE EL REPO DECLARA ────────────────────────
+#
+# EL VIGÍA COMPARABA LOS GUIONES DEL SERVIDOR Y ERA CIEGO A LOS SUYOS. `deploy/systemd/` declara
+# las unidades y nadie comprobaba que la copia instalada siguiera siendo esa. La deriva ahí es
+# especialmente silenciosa: una unidad editada a mano sigue corriendo, y lo único que se nota es
+# que algo dejó de pasar.
+#
+# SE COMPARAN SÓLO LOS NOMBRES QUE EL REPO DECLARA, y no todo lo que empiece con `musubi-`. No es
+# prolijidad: en esta máquina hay un `musubi-mc.service` que es un SERVIDOR DE MINECRAFT. Un
+# barrido por prefijo lo reportaría como unidad de Musubi sin declarar, y una guarda que grita
+# sobre algo ajeno se aprende a ignorar.
+#
+# UNA UNIDAD QUE NO ESTÁ NO ES UN ERROR: no todas van en todas las máquinas. Lo que sí es un aviso
+# es que NINGUNA esté — ahí o esta máquina no es la que corre el vigía, o el timer nunca se
+# instaló, y sin timer esto sólo corre cuando alguien se acuerda, que es justo lo que A115 vino a
+# eliminar.
+#
+# VA ACÁ ARRIBA, ANTES DEL CORTE POR PROMETHEUS, por el mismo motivo que la sección del esquema:
+# comparar dos archivos locales no necesita que Prometheus conteste.
+titulo "unidades de systemd de esta máquina"
+
+UNIDADES_DIR="${MUSUBI_UNIDADES_DIR:-$HOME/.config/systemd/user}"
+UNIDADES_INSTALADAS=0
+UNIDADES_DECLARADAS=0
+for _u in "$REPO"/deploy/systemd/*.service "$REPO"/deploy/systemd/*.timer; do
+  [ -f "$_u" ] || continue
+  UNIDADES_DECLARADAS=$((UNIDADES_DECLARADAS + 1))
+  _n="$(basename "$_u")"
+  _i="$UNIDADES_DIR/$_n"
+  if [ ! -f "$_i" ]; then
+    gris "$_n — no está instalada acá, y no todas las unidades van en todas las máquinas"
+    continue
+  fi
+  UNIDADES_INSTALADAS=$((UNIDADES_INSTALADAS + 1))
+  # SE NORMALIZA LA INSTALADA HACIA LA PLANTILLA, Y NO AL REVÉS. La tentación es sustituir
+  # `@REPO@` por `$REPO` en la plantilla y comparar; no sirve, y el motivo se ve corriendo esto
+  # desde un worktree: `@REPO@` aparece TAMBIÉN en el comentario de instalación, así que la
+  # comparación pasaría a depender de DÓNDE vive el repo y toda unidad diría «difiere» por estar
+  # mirando desde otra carpeta. Al revés —tomar la ruta que la propia unidad declara en
+  # `WorkingDirectory=` y devolverla a `@REPO@`— la comparación queda entre dos plantillas y no
+  # depende de la ubicación de nadie.
+  _ruta="$(sed -n "s|^WorkingDirectory=||p" "$_i" | head -1)"
+  if [ -n "$_ruta" ]; then
+    _norm="$(sed "s|$_ruta|@REPO@|g" "$_i")"
+  else
+    _norm="$(cat "$_i")"
+  fi
+  if diff -q <(printf "%s\n" "$_norm") "$_u" >/dev/null 2>&1; then
+    verde "$_n coincide con deploy/systemd/"
+  else
+    rojo "$_n instalada difiere de deploy/systemd/$_n — una unidad editada a mano sigue corriendo y sólo se nota porque algo deja de pasar"
+    detalle "unidad: " "$(diff <(printf "%s\n" "$_norm") "$_u" 2>/dev/null | head -20)"
+  fi
+done
+if [ "$UNIDADES_DECLARADAS" -eq 0 ]; then
+  # «el repo no declara unidades» y «ninguna está instalada» son cosas distintas, y decirlas igual
+  # mandaria a instalar algo que no existe.
+  gris "el repo no declara ninguna unidad en deploy/systemd/: no hay nada que comparar"
+elif [ "$UNIDADES_INSTALADAS" -eq 0 ]; then
+  dudoso "ninguna unidad de deploy/systemd/ está instalada en $UNIDADES_DIR: o esta máquina no es la que corre el vigía, o el timer nunca se instaló — y sin timer esta comparación sólo corre cuando alguien se acuerda"
+fi
+
 # ── 1 · LA CADENA DE ALERTAS, ESLABÓN POR ESLABÓN ───────────────────────────────────────────
 # Va PRIMERO a propósito. Si Prometheus no contesta, las comparaciones de abajo no pueden decir
 # nada y el script corta; que corte DESPUÉS de haber nombrado el eslabón roto es la diferencia
