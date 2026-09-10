@@ -370,6 +370,14 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 			quar = 1
 		}
 	}
+	// LA TAXONOMÍA SE VALIDA ACÁ, que es el único INSERT que escribe la columna `provenance` de
+	// `observations`. Hasta ahora `validProvenance` existía, tenía su test en verde y NO LA LLAMABA
+	// NADIE: el grafo de código lo decía sin que nadie lo mirara — «1 directo, 0 fuera de tests».
+	// Una guarda definida y desconectada es peor que ninguna, porque su test verde afirma que algo
+	// se está cuidando. Así entró `llm:llm:claude-opus-5` al libro mayor.
+	if !validProvenance(prov) {
+		return fmt.Errorf("%w: %q", ErrInvalidProvenance, prov)
+	}
 	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, provenance, confidence, quarantined)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
