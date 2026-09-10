@@ -148,7 +148,10 @@ func TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee(t *testing.T) {
 				"  Es el resumen por proyecto que se le factura a un cliente y su medición puede "+
 				"perderse entera en silencio.\n"+
 				"  La hermana es `CoberturaDelSlaSeCayo` en deploy/musubi-alerts-flota.yml: calcá su "+
-				"forma —`delta(<serie>[6h]) < -0.05`, `for: 30m`— y no inventes otra.", serie)
+				"forma —`delta(<serie>[6h]) < -0.05`, `for: 30m`— y no inventes otra.\n"+
+				"  Y OJO CON LAS UNIDADES al calcarla: la cobertura es un RATIO en [0,1] («5 puntos» "+
+				"son 0,05) y el `for` tiene que caber en la ventana; las dos cosas las mide "+
+				"TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable.", serie)
 			continue
 		}
 		for _, nombre := range lectoras {
@@ -167,7 +170,15 @@ func verificarFormaDeLaAlertaDeCobertura(t *testing.T, alerta, expr, serie strin
 	// —la única salida es esperar— y una alarma así enseña a ignorar el canal (A79, trece
 	// `MaquinaCaida`). Además el `min` de servicios lo domina un servicio ocioso por diseño (A70),
 	// así que su nivel es bajo y no informa; su caída sí.
-	reCaida := regexp.MustCompile(`(?:delta|idelta|deriv)\(\s*` + regexp.QuoteMeta(serie) + `\s*\[`)
+	// OJO CON ESTA LISTA: acepta `deriv` A PROPÓSITO, y no es un descuido — un `deriv` con el
+	// umbral bien escalado (por segundo) es una alerta legítima. Lo que NO puede hacer esta lista
+	// es decir si el umbral está en las unidades de la función: `deriv(...) < -0.05` pasó por acá
+	// en verde y no podía disparar nunca. Esa pregunta —la de las MAGNITUDES— no se contesta con
+	// una lista de formas y por eso no se contesta acá: la contesta
+	// `TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable`
+	// (internal/mcp/alertas_umbral_alcanzable_test.go), que deriva el rango de la serie del propio
+	// musubi-recording.yml. Esto de acá sólo distingue VARIACIÓN de NIVEL.
+	reCaida := regexp.MustCompile(`(?:delta|idelta|deriv|rate|irate|increase)\(\s*` + regexp.QuoteMeta(serie) + `\s*\[`)
 	if !reCaida.MatchString(plano) {
 		t.Errorf("%s nombra %s pero no mira su VARIACIÓN en el tiempo: %q\n"+
 			"  Mientras el TSDB acumula historia la cobertura sólo sube, así que lo accionable es "+
