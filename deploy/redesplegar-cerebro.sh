@@ -62,6 +62,14 @@ UID_MUSUBI=1000
 
 [[ $EUID -eq 0 ]] || die "hay que correrlo como root: reemplaza $DESTINO y reinicia unidades del sistema"
 [[ -n "$NUEVO" && -f "$NUEVO" ]] || die "uso: sudo $0 /ruta/al/binario-nuevo <sha256-esperado>"
+# EL SHA ESPERADO ES OBLIGATORIO Y TIENE QUE VENIR DE AFUERA. Convertir este `die` en un
+# `|| SHA_ESPERADO="$(sha256sum "$NUEVO" ...)"` deja la comparación de abajo comparando el archivo
+# contra sí mismo: vacuamente cierta, imposible de poner en rojo, e idéntica a una que funciona.
+# Es A111 letra por letra: la comparación del esquema contra un número tipeado a mano, que con la
+# base ya ocho migraciones más arriba pasó seis redespliegues sin comprobar nada.
+# Lo sostienen, en internal/mcp: despliegue_verificacion_forma_test.go (una comparación no puede
+# tener sus dos lados salidos del `sha256sum` del mismo artefacto) y
+# despliegue_verificacion_corrida_test.go (corre este tramo sin sha y exige que frene).
 [[ -n "$SHA_ESPERADO" ]] || die "falta el sha256 esperado. NO se despliega un binario sin verificar: una descarga truncada devuelve éxito igual (ya pasó)"
 
 # ── El binario es el que se verificó, y no otro ──────────────────────────────────────────────

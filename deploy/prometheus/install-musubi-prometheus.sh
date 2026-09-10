@@ -65,6 +65,16 @@ log "Descargando Prometheus v$PROM_VERSION ($ARCH)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$BASE/${NAME}.tar.gz" -o "$tmp/prom.tar.gz"
 # Prometheus publica sha256sums.txt en cada release; verificamos contra él (no hash hardcodeado).
+#
+# LOS DOS `die` DE ABAJO SON LA COMPUERTA, no adorno del `ok`. Se los borró a los dos —dejando el
+# `curl`, el `awk` y el `ok "Checksum verificado"`— y el paquete de pruebas entero quedó verde: el
+# guion IMPRIMÍA que verificó sin verificar nada, e instalaba prometheus/promtool como servicio de
+# este servidor con lo que viniera. El `want` VACÍO es el caso que menos se ve y el que más
+# importa: significa que el awk no encontró la fila —cambió el nombre del asset, o contestó un
+# portal cautivo—, o sea «no pude medir», que no es «medí y está bien».
+# Hoy lo sostienen, en internal/mcp: despliegue_verificacion_forma_test.go (ningún `install`
+# alcanzable sin una comparación del sha que lo domine) y despliegue_verificacion_corrida_test.go
+# (corre este bloque con un curl de mentira y mira si los binarios quedaron puestos).
 curl -fsSL "$BASE/sha256sums.txt" -o "$tmp/sha256sums.txt"
 want="$(awk -v f="${NAME}.tar.gz" '$2==f{print $1}' "$tmp/sha256sums.txt")"
 [ -n "$want" ] || die "No encontré el checksum de ${NAME}.tar.gz en sha256sums.txt"
