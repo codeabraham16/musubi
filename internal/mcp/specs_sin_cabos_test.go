@@ -100,6 +100,17 @@ func celdasDeFila(l string) []string {
 
 var enfasisMarkdown = regexp.MustCompile("[*~`✔]+")
 
+// tramoDeCodigo es un code span de Markdown con su contenido.
+var tramoDeCodigo = regexp.MustCompile("`[^`]*`")
+
+// sinCodigo reemplaza los code spans por un espacio. Ahí adentro viven nombres de función y rutas
+// —`TestAlgoDesplegado`, `rustdesk-relay-instalado.sh`—, que terminan como un participio sin ser
+// uno. Quien pregunte por la FORMA de una palabra tiene que sacarlos antes; quien pregunte por un
+// número de esquema o un nombre de prueba, no.
+func sinCodigo(s string) string {
+	return tramoDeCodigo.ReplaceAllString(s, " ")
+}
+
 // sinEnfasis normaliza una celda para poder LEERLA: le saca el énfasis de Markdown y el padding.
 // Es lo que hace que `| **A99** |`, `|  A99  |` y `| A99 |` sean el mismo dato.
 func sinEnfasis(celda string) string {
@@ -239,11 +250,20 @@ var (
 	// mensaje que dice qué archivo y qué línea.
 	encabezadoSospechoso = regexp.MustCompile(`(?i)^#+.*(?:queda fuera|fuera de alcance|fuera del alcance|excluid)`)
 
-	// UNA VIÑETA ES UNA VIÑETA. `-`, `*` o `+`, con o sin negrita, con o sin indentación, y con o
-	// sin tachado. Antes sólo contaba `- **`, así que el asterisco, el ítem sin negrita y el
-	// indentado no sólo escapaban a la revisión: **ni siquiera sumaban al contador**, con lo cual
-	// el piso tampoco los veía. Tres formas invisibles a la vez.
-	vinetaDeCabo = regexp.MustCompile(`^\s*[-*+]\s+\S`)
+	// UNA VIÑETA ES UNA VIÑETA — Y LA LISTA ORDENADA TAMBIÉN ES UNA LISTA.
+	//
+	// Antes sólo contaba `- **`, así que el asterisco, el ítem sin negrita y el indentado no sólo
+	// escapaban a la revisión: **ni siquiera sumaban al contador**, con lo cual el piso tampoco
+	// los veía. Se arregló para `-`, `*` y `+` … y quedó afuera la OTRA mitad de la gramática de
+	// listas de Markdown: la ordenada. Medido el 2026-09-10 — dos cabos escritos como
+	// `1. **…**` / `2. **…**` sin número de registro pasaban en VERDE, el conteo seguía diciendo
+	// 66 ítems, y encima el segundo se pegaba como línea de continuación del ítem anterior y
+	// heredaba SU registro.
+	//
+	// Por eso esto ya no es una colección de marcadores que alguien fue agregando de a uno: es la
+	// gramática de viñetas de CommonMark completa —bullet (`-` `*` `+`) y ordenada (`N.` `N)`)—,
+	// que es la lista de formas que el formato define. No hay una séptima.
+	vinetaDeCabo = regexp.MustCompile(`^\s*(?:[-*+]|\d{1,9}[.)])\s+\S`)
 )
 
 // marcaDeRegistro es UNA de las cosas que un ítem declarado fuera de alcance puede decir para
@@ -574,18 +594,51 @@ var (
 	// una decisión visible acá, y NO agregarla hace que la guarda falle en vez de pasar.
 	asignacionPendiente = regexp.MustCompile(`(?i)^(?:S\d+[a-z]?|sin asignar|gio|acción del operador|accion del operador)\b`)
 
-	// El vocabulario de cierre. Ya NO es el mecanismo —lo es `asignacionPendiente`— sino la red
-	// que agarra el cierre escondido en el CALIFICADOR de una asignación válida, que es como
-	// escapaban 18 de 22 filas. Puede seguir estando incompleto sin que eso abra la puerta: una
-	// palabra que no esté acá tiene que pasar igual por la cabeza, y ahí falla.
-	veredictoDeCierre = regexp.MustCompile(`(?i)\bcerrad[oa]s?\b|\bnada pendiente\b|\bqueda como registro\b|\bhech[oa]s?\b|\bresuelt[oa]s?\b|\bcompletad[oa]s?\b|\blist[o]s?\b|\bya sali[oó]|\bterminad[oa]s?\b|\bsaldad[oa]s?\b`)
+	// EL CIERRE ESCONDIDO EN EL CALIFICADOR, Y POR QUÉ ESTO DEJÓ DE SER UNA LISTA DE PALABRAS.
+	//
+	// `asignacionPendiente` cierra el caso en que la palabra de cierre REEMPLAZA al dueño. No
+	// cierra el que de verdad pasó: A99, A102 y A116 tenían dueño —`**gio** — …`— y el cierre
+	// venía DETRÁS. Ahí el único que decide es este reconocedor, y mientras fue una lista de
+	// diez palabras se lo evadía con la once: se midió el 2026-09-10 que 20 de 20 redacciones
+	// («finiquitado», «clausurado», «zanjado», «liquidado», «archivado», «cumplido»,
+	// «implementado y verificado», …) pasaban en VERDE detrás de un `**gio** —` legítimo.
+	//
+	// El arreglo no es una lista más larga: es dejar de preguntar por la palabra y preguntar por
+	// la FORMA GRAMATICAL con la que el castellano dice «esto ya se hizo».
+	//
+	//   (a) `participioPerfectivo` — la clase PRODUCTIVA: todo participio regular en -ado/-ido
+	//       (con sus femeninos y plurales). Es de donde salen las palabras nuevas, así que una
+	//       que nadie escribió todavía cae acá sin que haya que anticiparla. Se piden 3+ letras
+	//       de raíz para no comerse `nada`, `cada` ni `vida`.
+	//   (b) los IRREGULARES, que por definición no son productivos y sí son una lista cerrada:
+	//       hecho, resuelto, puesto, visto, muerto, dicho, escrito, abierto, cubierto, roto, dado.
+	//   (c) las locuciones que no son participio ninguno («nada pendiente», «ya salió»).
+	//
+	// LO QUE ESTO TODAVÍA NO AGARRA, dicho acá y no escondido: una perífrasis sin participio
+	// («ya está», «sin novedad», «se hizo», «quedó atrás», «funcionando en las 4 máquinas»).
+	// La columna que decide es prosa libre y la prosa libre no se clasifica entera; lo que la
+	// acota es el tope de 220 caracteres y `asignacionPendiente`.
+	// OJO CON `\b` Y LAS VOCALES ACENTUADAS: el `\w` de RE2 es ASCII, así que en «salió» la `ó` NO
+	// es carácter de palabra y `\b` detrás de ella no casa al final del texto. Por eso las
+	// locuciones se arman SIN el `\b` de cierre y los participios CON él.
+	participioPerfectivo = `\b(?:\w{3,}(?:ad|id)[oa]s?|hech[oa]s?|resuelt[oa]s?|puest[oa]s?|vist[oa]s?|muert[oa]s?|dich[oa]s?|escrit[oa]s?|abiert[oa]s?|cubiert[oa]s?|rot[oa]s?|dad[oa]s?|list[oa]s?)\b`
+	locucionesDeCierre   = `\b(?:nada pendiente|queda como registro|ya sali[oó]|ya est[áa]|sin novedad|se hizo|qued[óo] atr[áa]s|no queda nada)`
+
+	veredictoDeCierre = regexp.MustCompile(`(?i)` + participioPerfectivo + `|(?i)` + locucionesDeCierre)
 
 	// abreConCierre: la celda ARRANCA declarando un estado en vez de un dueño. Se usa sólo para
 	// dar un mensaje mejor, y en la tabla 2, donde la columna que decide es prosa.
 	abreConCierre = regexp.MustCompile(`(?i)^[\s—–\-(«"'*~✔•]*(?:ya\s+)?(?:est[áa]\s+|qued[óo]\s+|fue\s+|son\s+)?(?:cerrad[oa]s?|hech[oa]s?|resuelt[oa]s?|completad[oa]s?|list[o]s?|terminad[oa]s?|nada pendiente|queda como registro|decisión tomada)\b`)
 
-	// El objetivo de un despliegue citado en la celda que decide.
-	esquemaObjetivo = regexp.MustCompile(`(?i)\besquema\s+\*{0,2}(\d+)`)
+	// EL OBJETIVO DE UN DESPLIEGUE CITADO EN LA CELDA QUE DECIDE.
+	//
+	// Decía sólo `esquema`, y el registro llama a la misma cosa de las dos maneras —la fila de
+	// A99 dice «esquema **53**; la columna es de la migración 50»—. Medido el 2026-09-10:
+	// `(migración **49**)` en la columna que decide pasaba en VERDE, que es el defecto de A116
+	// exacto escrito con la palabra hermana. Ahora usa la MISMA alternancia que `citaDeEsquema`,
+	// que ya la tenía: las dos preguntas al repo se hacen con el mismo vocabulario, y no hay una
+	// que conozca un sinónimo que a la otra le falta.
+	esquemaObjetivo = regexp.MustCompile(`(?i)\b(?:esquema|migraci[oó]n)e?s?\s+\*{0,2}(\d+)`)
 )
 
 // LA COLUMNA QUE DECIDE NO ES UN LUGAR PARA PROSA.
@@ -678,7 +731,9 @@ func TestNingunaFilaDeLaTabla1SeDeclaraCerrada(t *testing.T) {
 			continue
 		}
 
-		if motivo := porQueNoEsUnaAsignacionViva(celda); motivo != "" {
+		// Se le pasa la celda CRUDA: `porQueNoEsUnaAsignacionViva` necesita ver los backticks para
+		// poder sacar los tramos de código antes de preguntar por la forma de las palabras.
+		if motivo := porQueNoEsUnaAsignacionViva(f.crudas[iSlice]); motivo != "" {
 			t.Errorf("la fila **%s** (línea %d) no declara un dueño VIVO en su columna «Slice»: %s\n    %s\n"+
 				"  La regla 1 dice que al cerrar un slice se BORRA su línea de la tabla 1 y su texto baja a la sección 3.\n"+
 				"  Una fila cerrada adentro de la tabla que contesta «¿qué falta?» es una respuesta falsa, y encima rompe el conteo: el 2026-09-10 eran 21 de 48.\n"+
@@ -689,17 +744,30 @@ func TestNingunaFilaDeLaTabla1SeDeclaraCerrada(t *testing.T) {
 		// EL OBJETIVO DE UN DESPLIEGUE ENVEJECE, Y ENVEJECE HACIA EL LADO TRANQUILIZADOR.
 		// A116 mandaba desplegar «el cerebro a esquema 48» con el repo en 53, y la 48 de hoy es
 		// otra migración. Un objetivo viejo que además señala otra cosa no falla: tranquiliza.
+		//
+		// SE MIRA EL NÚMERO MÁS ALTO DE LA CELDA, NO CADA NÚMERO. La celda que decide nombra el
+		// destino y, a veces, de dónde viene: A99 dice «esquema **53**; la columna es de la
+		// migración 50». Exigirle a CADA número que sea el máximo acusa esa fila, que es correcta
+		// —medido: el 2026-09-10 se rompió así y hubo que revertirlo—. El destino es el más nuevo
+		// que la celda nombra; los otros son de dónde se viene. Y mirar sólo la palabra «esquema»
+		// tampoco servía: `(migración **49**)` es el mismo defecto con la palabra hermana, y
+		// pasaba en VERDE.
+		objetivo, hayObjetivo := 0, false
 		for _, m := range esquemaObjetivo.FindAllStringSubmatch(celda, -1) {
 			n, err := strconv.Atoi(m[1])
 			if err != nil {
 				continue
 			}
-			if n != esquemaMax {
-				t.Errorf("la fila **%s** (línea %d) manda desplegar a «esquema %d» y el repo está en **%d**.\n"+
-					"  Es el defecto de A116 exacto: un objetivo obsoleto en la columna que decide, y encima la migración %d de hoy es otra cosa.\n"+
-					"  El número sale de `internal/memory/migrations.go`, no de un informe.",
-					f.id(), f.linea, n, esquemaMax, n)
+			hayObjetivo = true
+			if n > objetivo {
+				objetivo = n
 			}
+		}
+		if hayObjetivo && objetivo != esquemaMax {
+			t.Errorf("la fila **%s** (línea %d) manda desplegar a «esquema/migración %d» y el repo está en **%d**.\n"+
+				"  Es el defecto de A116 exacto: un objetivo obsoleto en la columna que decide, y encima la migración %d de hoy es otra cosa.\n"+
+				"  El número sale de `internal/memory/migrations.go`, no de un informe.",
+				f.id(), f.linea, objetivo, esquemaMax, objetivo)
 		}
 	}
 	// CERO FILAS REVISADAS NO ES «TODO LIMPIO»: es que el parseo dejó de encontrar la tabla.
@@ -717,7 +785,12 @@ func TestNingunaFilaDeLaTabla1SeDeclaraCerrada(t *testing.T) {
 //  2. ¿El calificador que sigue al dueño declara un cierre? Es donde escapaban 18 de 22 filas,
 //     escribiendo el veredicto en la segunda oración.
 func porQueNoEsUnaAsignacionViva(celda string) string {
-	limpia := sinEnfasis(celda)
+	// UN VEREDICTO ES PROSA, NO UN IDENTIFICADOR. La morfología de participio mira el final de
+	// las palabras, y un `TestLoQueSeaDesplegado` o un `deploy/rustdesk-relay-instalado.sh`
+	// terminan igual que el participio que buscamos sin decir NADA del estado del cabo. Medido:
+	// `TestUnaPruebaQueNoExisteEnNingunLado` hacía saltar la guarda por «…nLado». Los tramos de
+	// código se sacan antes de preguntar, que es donde el registro pone nombres y rutas.
+	limpia := sinEnfasis(sinCodigo(celda))
 	desnuda := strings.TrimLeft(limpia, "(—–- ")
 	m := asignacionPendiente.FindString(desnuda)
 	if m == "" {
@@ -943,23 +1016,77 @@ func TestElRegistroNoCitaEsquemasNiPruebasQueNoExisten(t *testing.T) {
 	// La excepción no es una lista de nombres: es que el párrafo DIGA que no existe. La única cita
 	// fantasma que este archivo tiene es justamente la historia del error, y su párrafo dice «esa
 	// función NO existe en el repo». Quien quiera citar un fantasma tiene que decir que lo es.
+	// LA EXCEPCIÓN TIENE QUE ESTAR DONDE DECIDE, NO EN EL VECINO.
+	//
+	// Esto miraba «¿el PÁRRAFO dice "no existe"?», y una tabla de Markdown es UN párrafo: sus 31
+	// filas no tienen renglón en blanco entre sí. La tabla 1 dice «no existe» seis veces —`load1`
+	// **no existe** en Windows, `stty` que no existe en la consola, una unidad que en esta PC no
+	// existe…—, todas hablando de otra cosa. Resultado medido el 2026-09-10: el cruce estaba
+	// MUERTO para las 31 filas de la tabla 1, y citar un `TestQueNoExisteEnNingunLado` en la
+	// columna que decide pasaba en VERDE. 28 de 75 citas del archivo quedaban exentas así.
+	//
+	// Es el defecto que este repo ya pagó dos veces: la guarda pregunta por un texto que no
+	// decide nada, satisfecho por un comentario, un mensaje o el vecino. Ahora la exención se
+	// pide en la UNIDAD donde vive la cita: si la línea es una fila de tabla, la celda; si no, la
+	// oración. Un «no existe» a seis celdas de distancia ya no exime a nadie.
 	reales := pruebasDelArbol(t)
 	citadas := 0
-	for _, parrafo := range strings.Split(texto, "\n\n") {
-		declaraAusencia := strings.Contains(strings.ToLower(parrafo), "no existe")
-		for _, nombre := range citaDePrueba.FindAllString(parrafo, -1) {
-			citadas++
-			if reales[nombre] || declaraAusencia {
-				continue
+	{
+		for _, unidad := range unidadesDeCita(texto) {
+			declaraAusencia := strings.Contains(strings.ToLower(unidad), "no existe")
+			for _, nombre := range citaDePrueba.FindAllString(unidad, -1) {
+				citadas++
+				if reales[nombre] || declaraAusencia {
+					continue
+				}
+				t.Errorf("ABIERTO.md cita `%s`, que no existe en el árbol.\n"+
+					"  Es la tercera de la serie de `cerrarSesionesColgadas`: un doc que nombra código inexistente hace que nadie vaya a mirar lo que sí hay.\n"+
+					"  O corregís el nombre, o —si estás contando la historia de un nombre que se fue— decilo EN LA MISMA CELDA (o la misma oración): «no existe». Un «no existe» en la fila de al lado ya no alcanza.", nombre)
 			}
-			t.Errorf("ABIERTO.md cita `%s`, que no existe en el árbol.\n"+
-				"  Es la tercera de la serie de `cerrarSesionesColgadas`: un doc que nombra código inexistente hace que nadie vaya a mirar lo que sí hay.\n"+
-				"  O corregís el nombre, o —si estás contando la historia de un nombre que se fue— decilo en el mismo párrafo: «no existe».", nombre)
 		}
 	}
 	if citadas < 30 {
 		t.Fatalf("sólo se reconocieron %d citas de pruebas en ABIERTO.md y hay más de 30: cambió cómo el registro las escribe y este cruce dejó de medir", citadas)
 	}
+}
+
+// unidadesDeCita parte el registro en las unidades dentro de las cuales una excepción vale.
+//
+// EL DEFECTO QUE ARREGLA, EXACTO: la exención se pedía «en el mismo párrafo», con los párrafos
+// cortados por `\n\n`. **Una tabla de Markdown no tiene renglones en blanco**, así que las 31
+// filas de la tabla 1 eran UN párrafo, y ese párrafo dice «no existe» seis veces hablando de otras
+// cosas (`load1` no existe en Windows, `stty` no existe en la consola, una unidad que en esta PC
+// no existe). Con eso el cruce de nombres de prueba estaba MUERTO para toda la tabla: 28 de las 75
+// citas del archivo quedaban exentas por el vecino. Medido el 2026-09-10.
+//
+// La regla es entonces: **la prosa se agrupa por párrafo, la tabla por celda**. El párrafo sigue
+// siendo la unidad de la prosa porque ahí es donde el registro escribe de verdad su excepción —la
+// cita va en una oración y el «no existe» en la siguiente, y las dos citas legítimas de
+// `TestElTokenNuevoSePersisteAntesDeEstrenarse` tienen esa forma—. Lo que deja de valer es que una
+// celda exima a otra.
+func unidadesDeCita(texto string) []string {
+	var out []string
+	var prosa []string
+	cerrarProsa := func() {
+		if len(prosa) > 0 {
+			out = append(out, strings.Join(prosa, "\n"))
+			prosa = nil
+		}
+	}
+	for _, parrafo := range strings.Split(texto, "\n\n") {
+		for _, linea := range strings.Split(parrafo, "\n") {
+			if esFilaMD(linea) && !esSeparadorMD(linea) {
+				if celdas := celdasDeFila(linea); celdas != nil {
+					cerrarProsa()
+					out = append(out, celdas...)
+					continue
+				}
+			}
+			prosa = append(prosa, linea)
+		}
+		cerrarProsa()
+	}
+	return out
 }
 
 // pruebasDelArbol junta los nombres de TODA función `TestXxx` del repo.
