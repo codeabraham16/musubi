@@ -239,6 +239,18 @@ subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
 
 ## CoberturaDelSlaSeCayo
 
+> **Si venís a TOCAR el umbral o el `for` de esta alerta o de su hermana de servicios, leé esto
+> primero.** La cobertura es un **ratio en [0,1]**: «5 puntos» se escriben `-0.05`, no `-5`. Un
+> `-5` no puede cruzarse nunca —`delta` de un ratio vive en [-1,1]— y la alerta queda muda con
+> exactamente el mismo aspecto que una sana. Lo mismo con `deriv`/`rate`, que son **por segundo**:
+> el umbral de un `delta` queda cuatro órdenes de magnitud afuera. Y el `for` tiene que ser
+> **menor que la ventana** (`30m` contra `[6h]`): un `for: 30d` sobre una ventana de seis horas no
+> late jamás. Las tres cosas las mide `TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable` y
+> `TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable`
+> (`internal/mcp/alertas_umbral_alcanzable_test.go`), que derivan el rango de la serie de
+> `musubi-recording.yml` y de `deploy/rangos-de-series.yml`. Las tres estuvieron puestas y en
+> verde, así que no son hipotéticas.
+
 **La cobertura del SLA cayó más de 5 puntos en 6 horas.** Mientras el TSDB acumula historia la
 cobertura **sólo sube**, así que una caída es una pérdida de datos, no una etapa.
 
@@ -286,6 +298,56 @@ Por encima de 0,95 el faltante es más chico que el propio presupuesto de error.
 **Si `:sla30d` no existe en ninguna parte**, mirá primero si las reglas están cargadas
 (`ReglasDelSlaSinDesplegar`): «ausente porque la cobertura no alcanza» y «ausente porque el archivo
 no se desplegó» se ven idénticas desde un panel y se arreglan al revés.
+
+## CoberturaDelSlaDeServiciosSeCayo
+
+**La hermana de la de arriba, un plano más adentro: la cobertura del SLA de SERVICIOS de un cliente
+cayó más de 5 puntos en 6 horas.** Es el otro número que se factura, y hasta A93 nadie lo miraba:
+`musubi:project_service_up:cobertura30d` existía y **no la leía ninguna alerta**.
+
+### Descartá lo barato PRIMERO
+
+```bash
+# 0 · ¿apareció un servicio nuevo? Entra con cobertura 0 y arrastra el `min` del proyecto hacia
+#     abajo sin que se haya perdido un solo dato. Es la causa más común y NO es una pérdida.
+curl -sG --data-urlencode 'query=bottomk(5, musubi:service_up:cobertura30d)' \
+  http://127.0.0.1:9099/api/v1/query
+# el servicio que gana ese `bottomk` es el que define el número del proyecto.
+```
+
+Si el peor servicio es uno recién declarado —o uno **ocioso por diseño**: `MapsBroker`, `whesvc`,
+los updaters de Google, que no emiten a propósito (**A70**)—, no hay nada que arreglar y la alerta
+se apaga sola cuando ese servicio acumula ventana.
+
+### Por qué `musubi:project_up:min30d` y `musubi:device_up:avg7d` NO tienen alerta
+
+No es un olvido: es una decisión, y está escrita y custodiada en `seriesSinLectorConMotivo`
+(`internal/mcp/alertas_umbral_alcanzable_test.go`), donde una guarda exige que **toda** serie
+grabada tenga un lector o un motivo escrito. En corto: un umbral de **nivel** sobre un promedio de
+30 días no se apaga actuando —sólo esperando—, y lo accionable (una máquina caída ahora) ya lo
+avisa `MaquinaCaida` en 90 segundos; y un umbral de **caída** sobre esas series sería inalcanzable,
+porque seis horas de caída mueven un `[30d]` unos 0,008. Lo que sí les puede pasar —perder la
+medición— lo avisa esta alerta, porque la cobertura desciende del mismo `musubi:device_up:norm`.
+
+### Y si no es eso, son las mismas tres de `CoberturaDelSlaSeCayo`
+
+TSDB que perdió historia, scrape cortado, o reglas recargadas con otra definición. Los tres
+comandos están en esa sección, unas líneas más arriba.
+
+### Lo que esta alerta NO dice
+
+**No dice que un servicio esté caído.** Eso es `ServicioCaido`, y son dos preguntas distintas: ésta
+mide **cuánto se está midiendo**. La diferencia no es retórica — un servicio que dejó de reportar
+**conserva su último estado** en la tabla cruda, así que contar `musubi_fleet_service_up == 0` da
+fallas fantasma, y contar `== 1` da disponibilidad inventada (el 2026-09-04, los 64 servicios de una
+máquina muerta publicaron `1` durante seis horas). Por eso la alerta lee la serie grabada, que
+desciende de `musubi:service_up:norm`: ésa lleva la guarda de frescura y **colapsa los dos caminos
+de `instance`** —scrape y push— con `max by(...)`. Sobre la métrica cruda, un `min` se queda con el
+camino muerto: así fue como el «peor equipo» del reporte marcó 10,2 % siendo 84,7 %.
+
+**Y no preguntes frescura con `timestamp(last_over_time(X[30d]))`**: devuelve la hora de EVALUACIÓN,
+no la de la última muestra, así que una serie muerta contesta «hace 0 min». Acá la frescura viaja
+adentro del `count_over_time` de la cobertura: si dejan de entrar muestras, el conteo baja.
 
 ## PoliticaFrenadaPorConsentimiento
 

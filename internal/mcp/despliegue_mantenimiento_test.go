@@ -46,6 +46,11 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// equipo no explica que el TSDB haya perdido datos, y suprimirla por eso taparía justo el caso
 	// que la alerta existe para ver.
 	"CoberturaDelSlaSeCayo": "mira la cobertura del SLA por proyecto, no el estado de una máquina",
+	// Misma familia, un plano más adentro: es el `min` por PROYECTO de la cobertura de
+	// servicios. Una ventana de mantenimiento en un equipo no explica que se haya perdido la
+	// medición del cliente entero, y suprimirla por eso taparía justo el caso que la alerta
+	// existe para ver — con el agravante de que este número es el que se factura.
+	"CoberturaDelSlaDeServiciosSeCayo": "mira la cobertura del SLA de servicios por proyecto, no el estado de una máquina",
 
 	// Las de custodia miran `prometheus_rule_group_rules`: hablan del DESPLIEGUE de los archivos de
 	// reglas, no de ninguna máquina. Una ventana de mantenimiento sobre un equipo no tiene nada que
