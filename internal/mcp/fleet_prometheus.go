@@ -248,13 +248,29 @@ const (
 // topeDeAprobacionesPorProyecto es el TERCER techo del exportador, y el único que sigue sin
 // perilla ni serie propia. Estaba escrito como un `200` pelado adentro de la llamada.
 //
-// Su daño es mucho más chico que el de los otros dos, y por eso queda así por ahora: pasarse
-// significa que el conteo de pendientes de ese proyecto se queda corto y que la espera más vieja
-// puede no ser la más vieja de verdad — la alerta que cuelga de esto dispara igual, sólo que con
-// un número menor al real. No hace DESAPARECER ninguna serie, que es lo que hacen los otros dos.
+// SU DAÑO DEPENDE DE LA COMPUERTA, Y ESO NO ESTABA MEDIDO. Acá decía que pasarse sólo deja el
+// conteo corto y que «la espera más vieja puede no ser la más vieja de verdad». Lo segundo es
+// falso y lo primero es incompleto:
+//
+//   - `AprobacionesPendientes` pide `ORDER BY creada ASC LIMIT ?` (internal/memory/aprobaciones.go),
+//     así que la más vieja SIEMPRE entra en la página. Con una credencial que ve todo el proyecto
+//     el único daño es el conteo, que se clava en el tope.
+//
+//   - PERO EL TOPE LO APLICA EL ALMACÉN SOBRE EL PROYECTO ENTERO Y LA COMPUERTA CORRE DESPUÉS,
+//     acá abajo, con `visibles[sol.DeviceID]`. Una credencial que ve pocas máquinas de un
+//     proyecto con más de `topeDeAprobacionesPorProyecto` pendientes puede recibir una página
+//     entera de solicitudes que no ve NINGUNA, y entonces sale `musubi_fleet_approval_pending 0`
+//     y `musubi_fleet_approval_wait_seconds 0` — y el HELP de esa serie dice, con todas las
+//     letras, «0 = no hay ninguna esperando». Ahí el techo sí hace desaparecer el hecho: es un
+//     cero que significa «no sé», que es exactamente lo que este archivo existe para no emitir.
+//
+// QUEDA ASÍ EN ESTA RONDA, A PROPÓSITO Y ESCRITO: el arreglo no es una guarda, es un cuarto
+// `kind` en `musubi_fleet_export_truncated` con su aviso y su perilla —o mejor, aplicar el tope
+// después de la compuerta— y eso cambia el contrato de /metrics y del empuje OTLP, que no es algo
+// que se cuele en una ronda de guardas. Anotado en specs/control-de-flota/ABIERTO.md como A123.
 //
 // Tener nombre es la mitad barata del arreglo: un `200` adentro de una llamada no se puede ni
-// buscar. La otra mitad —perilla, serie y aviso, como los otros dos techos— queda anotada.
+// buscar.
 const topeDeAprobacionesPorProyecto = 200
 
 func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) (ilegible bool) {
@@ -384,10 +400,13 @@ func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios int) 
 // cortó.
 //
 // El apagado NO nombra ningún número: decir «2000, pero desactivado» manda a alguien a buscar un
-// corte a 2000 que no puede ocurrir.
+// corte a 2000 que no puede ocurrir. Y NINGUNO quiere decir ninguno: la frase decía «este punto
+// no puede valer 1» —el 1 es el valor del gauge, no un techo— y ese dígito alcanzaba para que la
+// única regla que se puede medir sobre esta rama («acá no hay ningún número que sea un techo»)
+// tuviera una excepción, o sea para que no se pudiera medir. Se dice con palabras.
 func describirTechoDeServicios(techoServicios int) string {
 	if techoServicios <= 0 {
-		return "el techo de servicios, que está DESACTIVADO (`fleet.services_per_project_export` negativo), así que este punto no puede valer 1"
+		return "el techo de servicios, que está DESACTIVADO (`fleet.services_per_project_export` negativo), así que este punto no puede encenderse"
 	}
 	return fmt.Sprintf("de %d servicios (techo `fleet.services_per_project_export`)", techoServicios)
 }

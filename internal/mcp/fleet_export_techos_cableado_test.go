@@ -665,23 +665,47 @@ func literalIzquierdo(e ast.Expr) (string, bool) {
 // está DESACTIVADO. Un HELP que dice 2000 cuando la perilla vale 300 manda a quien lee la alerta
 // a buscar 2000 servicios que no existen.
 //
-// LA ASERCIÓN NO BUSCA UN TEXTO: EXTRAE LOS NÚMEROS y exige que el conjunto sea exactamente el
-// que corresponde. Con techo vigente: {proyectosParaExportar, techo}. Con el techo desactivado:
-// {proyectosParaExportar} y NINGÚN otro — porque nombrar un número al lado de la palabra
-// «desactivado» es peor que no nombrarlo. Una lista de textos prohibidos («que no diga 2000»)
-// siempre le erra a la próxima forma; el conjunto de números no.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LO PERMITIDO SE CALCULABA COMO LA INTERSECCIÓN DE DOS MUESTRAS, Y ESO NO ES UNA DERIVACIÓN
 //
-// Sabotaje que la pone roja: en describirTechoDeServicios, devolver la constante en cualquiera de
-// las dos ramas.
+// La versión anterior rendía el HELP con dos techos (317 y 4321), tomaba los números que los dos
+// rendidos tenían EN COMÚN —«eso es la prosa»— y le permitía a la rama del apagado nombrar
+// cualquiera de ellos. El problema es que `proyectosParaExportar` (64) también está en los dos,
+// porque el HELP lo nombra siempre y con razón. O sea que 64 caía adentro del conjunto permitido
+// POR CONSTRUCCIÓN. Sabotaje medido, en verde: hacer que la rama `techoServicios <= 0` de
+// `describirTechoDeServicios` devuelva «de 64 servicios (techo …, DESACTIVADO)». La guarda
+// pasaba y /metrics anunciaba un techo que no es.
+//
+// AHORA NO SE COMPARAN CONJUNTOS: SE MIDE UNA PROPIEDAD, en dos pasos.
+//
+//  1. QUÉ PARTE DEL HELP HABLA DEL TECHO se deriva por diferencia, no se busca por texto: se
+//     rinde el HELP con dos techos vigentes y con el techo apagado, y lo que los tres rendidos
+//     tienen igual adelante y atrás es prosa. Lo que queda en el medio ES la frase del techo, sin
+//     que nadie tenga que enumerar qué números son de la prosa —el 64 de los proyectos incluido—.
+//
+//  2. EL NÚMERO DE ESA FRASE TIENE QUE SER EL TECHO EFECTIVO, y «efectivo» se mide corriendo el
+//     recorte: se le dan más servicios que el techo al mismo `serviciosVisiblesParaMetricas` que
+//     usa el exportador y se cuenta en cuántos cortó. Con el techo apagado no corta en ninguno,
+//     así que NO HAY ningún número que pueda ser el techo, y la frase no puede nombrar ninguno.
+//
+// El sabotaje de arriba cae en (2): un exportador con el techo apagado no corta en ningún
+// número, así que 64 —que es el techo de PROYECTOS y está en la línea con todo derecho— no
+// puede ser el techo de servicios de nadie.
 func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
-	// DOS techos, ninguno igual a ninguna constante del exportador. Comparar dos rendidos es lo
-	// que hace que la prosa del HELP —que también tiene dígitos: «1 si el exportador…»— se
-	// cancele sola, sin tener que enumerar qué números son de la prosa y cuáles del techo.
-	const techoA, techoB = 317, 4321
+	// DOS techos vigentes distintos entre sí y distintos de las constantes del exportador. Que
+	// sean chicos es a propósito: el techo se mide CORRIENDO el recorte, y para eso hay que dar
+	// de alta más servicios que el techo.
+	const techoA, techoB = 3, 5
 	for _, n := range []int{techoA, techoB} {
 		if n == serviciosPorProyectoDefault || n == proyectosParaExportar {
 			t.Fatalf("el techo de prueba %d coincide con una constante del exportador y haría inútil la comparación", n)
 		}
+		if n <= 0 {
+			t.Fatalf("el techo de prueba %d no es un techo vigente", n)
+		}
+	}
+	if techoA == techoB {
+		t.Fatalf("los dos techos de prueba son el mismo (%d): sin diferencia entre los rendidos no se puede aislar la frase del techo", techoA)
 	}
 
 	help := func(techo int) string {
@@ -694,34 +718,42 @@ func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
 		return lineas[0]
 	}
 
-	numsA, numsB := numerosDe(help(techoA)), numerosDe(help(techoB))
-	// (a) Cada rendido nombra SU techo y no el otro. Un HELP clavado en la constante no nombra
-	//     ninguno de los dos y cae acá.
-	if !tieneNumero(numsA, techoA) {
-		t.Errorf("con el techo vigente en %d el # HELP no nombra ese número (nombra %v): quien lea la alerta va a buscar un corte en un número que no rige.\n%s", techoA, numsA, help(techoA))
-	}
-	if tieneNumero(numsA, techoB) {
-		t.Errorf("el # HELP del techo %d nombra %d, que no rige:\n%s", techoA, techoB, help(techoA))
-	}
-	if !tieneNumero(numsB, techoB) {
-		t.Errorf("con el techo vigente en %d el # HELP no nombra ese número (nombra %v):\n%s", techoB, numsB, help(techoB))
-	}
-	if tieneNumero(numsB, techoA) {
-		t.Errorf("el # HELP del techo %d nombra %d, que no rige:\n%s", techoB, techoA, help(techoB))
-	}
+	// (a) LA FRASE DEL TECHO, aislada por diferencia entre los tres rendidos.
+	const apagado = 0
+	helps := []string{help(techoA), help(techoB), help(apagado)}
+	frases := frasesQueDependenDelTecho(t, helps)
+	fraseA, fraseB, fraseApagado := frases[0], frases[1], frases[2]
 
-	// (b) LA RAMA DEL APAGADO, que es la que más fácil se pasa por alto y la que el sabotaje
-	//     también tocó: sin techo, el HELP no puede introducir NINGÚN número propio. Lo que le
-	//     queda permitido es exactamente lo que los dos rendidos de arriba tienen en común (la
-	//     prosa y el techo de proyectos), y eso se calcula, no se enumera.
-	comun := numerosComunes(numsA, numsB)
-	for _, n := range numerosDe(help(0)) {
-		if !tieneNumero(comun, n) {
-			t.Errorf("con el techo DESACTIVADO el # HELP nombra %d, que no es ni la prosa ni el techo de proyectos. Decir un número al lado de «desactivado» manda a alguien a buscar un corte que no puede ocurrir:\n%s", n, help(0))
+	// (b) CADA FRASE NOMBRA EXACTAMENTE EL TECHO QUE DE VERDAD CORTA — el que se mide corriendo
+	//     el recorte, no el que se le pasó al render. Un HELP clavado en la constante no depende
+	//     del techo, así que su frase no nombra ninguno de los dos y cae acá.
+	for _, c := range []struct {
+		techo int
+		frase string
+	}{{techoA, fraseA}, {techoB, fraseB}} {
+		efectivo, corto := techoEfectivoDeServicios(t, c.techo)
+		if !corto {
+			t.Fatalf("con el techo en %d y más servicios que eso el exportador no recortó: la prueba no está midiendo lo que cree", c.techo)
+		}
+		if got := numerosDe(c.frase); !mismosNumeros(got, []int{efectivo}) {
+			t.Errorf("con el techo vigente en %d —el exportador corta en %d— la parte del # HELP que habla del techo nombra %v:\n  frase: %q\n  quien lea la alerta va a buscar un corte en un número que no rige.",
+				c.techo, efectivo, got, c.frase)
 		}
 	}
 
-	// (c) EL COMENTARIO DEL BLOQUE DE SERVICIOS ES EL HERMANO: mismo número, otro archivo, y el
+	// (c) CON EL TECHO APAGADO NO HAY NINGÚN NÚMERO QUE PUEDA SER EL TECHO, así que la frase no
+	//     puede nombrar ninguno. Ésta es la rama que más fácil se pasa por alto y la que el
+	//     sabotaje tocó: decir un número al lado de «desactivado» —incluso uno que exista en
+	//     otra parte del HELP, como el techo de proyectos— manda a alguien a buscar un corte que
+	//     no puede ocurrir.
+	if _, corto := techoEfectivoDeServicios(t, apagado); corto {
+		t.Fatalf("con el techo en %d el exportador igual recortó: entonces sí hay un techo y esta rama no es «apagado»", apagado)
+	}
+	if got := numerosDe(fraseApagado); len(got) != 0 {
+		t.Errorf("con el techo DESACTIVADO la parte del # HELP que habla del techo nombra %v, y no hay ningún corte que pueda ocurrir en ese número:\n  frase: %q\n  si hace falta hablar del valor de la perilla, decilo con palabras («negativo», «sin techo»).", got, fraseApagado)
+	}
+
+	// (d) EL COMENTARIO DEL BLOQUE DE SERVICIOS ES EL HERMANO: mismo número, otro archivo, y el
 	//     sabotaje tocó los dos. Acá la línea no tiene prosa con dígitos, así que se puede exigir
 	//     el conjunto exacto.
 	for _, techo := range []int{2, 4} {
@@ -740,6 +772,92 @@ func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
 			}
 		}
 	}
+}
+
+// techoEfectivoDeServicios MIDE en cuántos servicios corta el exportador con ese techo, corriendo
+// el mismo recorte que corre en producción.
+//
+// Es lo que separa «el HELP nombra el parámetro que le pasaron» de «el HELP nombra el número en
+// el que se recorta de verdad». Devuelve además si hubo corte: con el techo apagado no hay
+// ninguno, y entonces NINGÚN número puede ser «el techo».
+func techoEfectivoDeServicios(t *testing.T, techo int) (efectivo int, corto bool) {
+	t.Helper()
+	s := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+	d := maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+	// SIEMPRE por encima del techo, sea cual sea: si con más servicios que el techo no corta, es
+	// que no hay techo. Derivarlo del parámetro y no clavar un número evita que la medición
+	// dependa de que alguien se acuerde de subirlo cuando cambien los techos de prueba.
+	cuantos := techo + 2
+	if cuantos < 2 {
+		cuantos = 2
+	}
+	serviciosDePrueba(t, s, d, cuantos, ahora)
+	svs, truncado, ilegible := serviciosVisiblesParaMetricas(s.engine, []fleet.Device{d}, techo)
+	if ilegible {
+		t.Fatalf("techo %d: el almacén de prueba se declaró ilegible; la medición no vale", techo)
+	}
+	return len(svs), truncado
+}
+
+// frasesQueDependenDelTecho aísla, en cada rendido, el pedazo que CAMBIA con el techo.
+//
+// Se deriva por diferencia y no se busca por texto: lo que todos los rendidos tienen igual
+// adelante y atrás es prosa —el «1 si el exportador…», los 64 proyectos, el `kind=unreadable`—, y
+// lo que queda en el medio es lo único que habla del techo de servicios. Así la guarda no tiene
+// que enumerar qué números de la línea son de quién, que es justo lo que la versión anterior
+// intentaba hacer con una intersección y le salía mal.
+//
+// Si los rendidos no se pueden separar así —porque el prefijo y el sufijo se pisan— es ROJO con
+// su motivo: una frase que no se pudo aislar es «no pude medir», no «está bien».
+func frasesQueDependenDelTecho(t *testing.T, rendidos []string) []string {
+	t.Helper()
+	if len(rendidos) < 2 {
+		t.Fatalf("hacen falta al menos dos rendidos para poder diferenciarlos")
+	}
+	pre := len(prefijoComun(rendidos))
+	// El sufijo se calcula sobre lo que sobra después del prefijo, para que los dos no se pisen.
+	restos := make([]string, len(rendidos))
+	for i, r := range rendidos {
+		runas := []rune(r)
+		if len(runas) < pre {
+			t.Fatalf("no pude aislar la frase del techo en %q", r)
+		}
+		restos[i] = string(runas[pre:])
+	}
+	suf := len(sufijoComun(restos))
+	out := make([]string, len(restos))
+	for i, r := range restos {
+		runas := []rune(r)
+		out[i] = string(runas[:len(runas)-suf])
+	}
+	return out
+}
+
+func prefijoComun(xs []string) []rune {
+	comun := []rune(xs[0])
+	for _, x := range xs[1:] {
+		r := []rune(x)
+		n := 0
+		for n < len(comun) && n < len(r) && comun[n] == r[n] {
+			n++
+		}
+		comun = comun[:n]
+	}
+	return comun
+}
+
+func sufijoComun(xs []string) []rune {
+	comun := []rune(xs[0])
+	for _, x := range xs[1:] {
+		r := []rune(x)
+		n := 0
+		for n < len(comun) && n < len(r) && comun[len(comun)-1-n] == r[len(r)-1-n] {
+			n++
+		}
+		comun = comun[len(comun)-n:]
+	}
+	return comun
 }
 
 func tieneNumero(xs []int, n int) bool {

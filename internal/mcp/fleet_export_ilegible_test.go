@@ -36,7 +36,6 @@ package mcp
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -183,30 +182,262 @@ func TestConTodoLegibleElExportDeclaraQueNoHuboNadaIlegible(t *testing.T) {
 // mira es agregar un dato a un archivo: `ExportacionTruncada` compara la serie ENTERA contra 1,
 // sin filtrar por kind, y esta guarda impide que alguien la acote a los dos kinds viejos «para
 // ser más preciso» y deje al tercero mudo.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA GUARDA LEÍA LA REGLA VECINA, NO LA SUYA (medido, y en verde sobre la alerta rota)
+//
+// Se anclaba con `strings.Index(reglas, "alert: ExportacionTruncada")` —match de PREFIJO sobre el
+// YAML crudo— y después tomaba la PRIMERA línea que empezara con `expr:` a partir de ahí. Ninguna
+// de las dos cosas identifica una regla:
+//
+//   - el prefijo matchea `alert: ExportacionTruncadaProlongada`, una hermana perfectamente
+//     legítima, y si la hermana está ARRIBA la guarda se queda con la hermana;
+//   - «la primera línea `expr:` que venga después» es CERCANÍA DE LÍNEAS, no pertenencia: alcanza
+//     con que alguien reordene los campos de la regla, o meta cualquier cosa en el medio, para
+//     que la guarda mida otra expresión.
+//
+// Sabotaje medido, con los dos cambios plausibles a la vez: la alerta real acotada a
+// `{kind=~"projects|services"}` (o sea, `kind="unreadable"` ya no la dispara) y una hermana
+// `ExportacionTruncadaProlongada` agregada arriba. La guarda leía la hermana y daba VERDE sobre
+// la alerta rota — que es el caso exacto que existe para impedir.
+//
+// AHORA SE PARSEA EL YAML y la regla se identifica por su nombre EXACTO. Y el filtro tampoco se
+// busca como texto: se parsean los selectores de la expresión y se mira si ALGUNO acota `kind`,
+// venga como `=`, `!=`, `=~` o `!~`, con espacios o sin ellos, en el selector de la métrica o en
+// otro. Lo que no se puede parsear es rojo con su motivo, no verde.
 func TestLaAlertaDeTruncadoNoFiltraPorKindYPorEsoCubreAlIlegible(t *testing.T) {
-	crudo, err := os.ReadFile("../../deploy/musubi-alerts.yml")
-	if err != nil {
-		t.Fatalf("no se pudo leer las reglas: %v", err)
-	}
-	reglas := string(crudo)
-	i := strings.Index(reglas, "alert: ExportacionTruncada")
-	if i < 0 {
-		t.Fatal("no está la alerta ExportacionTruncada en deploy/musubi-alerts.yml")
-	}
-	expr := ""
-	for _, l := range strings.Split(reglas[i:], "\n") {
-		if s := strings.TrimSpace(l); strings.HasPrefix(s, "expr:") {
-			expr = strings.TrimSpace(strings.TrimPrefix(s, "expr:"))
-			break
-		}
-	}
-	if expr == "" {
-		t.Fatal("ExportacionTruncada no tiene expr")
-	}
-	if !strings.Contains(expr, nombreExportTruncado) {
+	reglas, _ := cargarReglas(t, "musubi-alerts.yml")
+	expr := exprDeLaUnicaAlerta(t, reglas, "ExportacionTruncada")
+
+	if !mencionaMetrica(expr, nombreExportTruncado) {
 		t.Fatalf("la alerta ya no mira %s: %q", nombreExportTruncado, expr)
 	}
-	if strings.Contains(expr, "kind=") {
-		t.Errorf("la alerta filtra por kind (%q): el día que se agregue un cuarto motivo de recorte va a nacer mudo, que es como nació `kind=\"unreadable\"` en el diseño original", expr)
+
+	ms, err := matchersDePromQL(expr)
+	if err != nil {
+		// ROJO EXPLÍCITO. Una expresión que la guarda no sabe leer es «no pude medir», y eso no
+		// se parece en nada a «no filtra por kind». Callarse acá sería volver a la fuga.
+		t.Fatalf("no pude parsear la expresión de ExportacionTruncada (%q): %v\n"+
+			"  Mientras no se pueda parsear, NADIE está midiendo que la alerta cubra `kind=\"unreadable\"`.", expr, err)
+	}
+	for _, m := range ms {
+		if m.etiqueta != "kind" {
+			continue
+		}
+		t.Errorf("la alerta acota `kind` (%s%s%q) en %q: el día que se agregue un cuarto motivo de recorte va a nacer mudo, que es como nació `kind=\"unreadable\"` en el diseño original.\n"+
+			"  Con un filtro de kind, la serie que dice «no pude leer parte de la flota» puede quedarse en 1 para siempre sin disparar nada.",
+			m.etiqueta, m.op, m.valor, expr)
+	}
+}
+
+// exprDeLaUnicaAlerta devuelve la expr de la alerta que se llama EXACTAMENTE `nombre`.
+//
+// Exige que haya exactamente una: cero es «esta guarda dejó de medir algo» y dos es «la guarda no
+// sabe cuál de las dos midió». Las dos cosas son rojo, no verde.
+func exprDeLaUnicaAlerta(t *testing.T, a archivoDeReglas, nombre string) string {
+	t.Helper()
+	var exprs []string
+	for _, g := range a.Groups {
+		for _, r := range g.Rules {
+			if r.Alert == nombre {
+				exprs = append(exprs, r.Expr)
+			}
+		}
+	}
+	switch len(exprs) {
+	case 1:
+		return exprs[0]
+	case 0:
+		t.Fatalf("no hay ninguna alerta que se llame exactamente %q en deploy/musubi-alerts.yml.\n"+
+			"  Si se renombró, esta guarda dejó de custodiar nada: apuntala al nombre nuevo.", nombre)
+	default:
+		t.Fatalf("hay %d alertas que se llaman %q: no puedo saber cuál es la que tiene que cubrir `kind=\"unreadable\"`", len(exprs), nombre)
+	}
+	return ""
+}
+
+// matcherDeEtiqueta es un matcher de selector ya parseado: `kind=~"projects|services"` ⇒
+// {etiqueta: "kind", op: "=~", valor: "projects|services"}.
+type matcherDeEtiqueta struct {
+	etiqueta string
+	op       string
+	valor    string
+}
+
+// matchersDePromQL parsea TODOS los selectores de una expresión y devuelve sus matchers.
+//
+// SE PARSEA, NO SE BUSCA UN TEXTO. `strings.Contains(expr, "kind=")` no ve `kind !=`, no ve
+// `kind =~` con espacios y no ve un segundo selector metido con `unless`; y cada forma que se le
+// agregue a esa lista le va a faltar la siguiente. Acá se recorre la expresión: los literales de
+// string se saltean enteros —adentro de un literal una llave o una coma no abren ni separan
+// nada— y cada bloque `{…}` se parte en matchers de verdad.
+//
+// Lo que NO se puede parsear devuelve error para que el que llama lo haga ROJO. Una expresión que
+// la guarda no entiende es «no pude medir»; devolver «no encontré matchers» sería verde silencioso.
+func matchersDePromQL(expr string) ([]matcherDeEtiqueta, error) {
+	r := []rune(expr)
+	var out []matcherDeEtiqueta
+	for i := 0; i < len(r); i++ {
+		switch r[i] {
+		case '"', '\'', '`':
+			fin, err := finDeLiteral(r, i)
+			if err != nil {
+				return nil, err
+			}
+			i = fin
+		case '}':
+			return nil, fmt.Errorf("`}` en la posición %d sin `{` que lo abra", i)
+		case '{':
+			cuerpo, fin, err := cuerpoDeSelector(r, i)
+			if err != nil {
+				return nil, err
+			}
+			ms, err := matchersDeCuerpo(cuerpo)
+			if err != nil {
+				return nil, fmt.Errorf("selector `{%s}`: %w", cuerpo, err)
+			}
+			out = append(out, ms...)
+			i = fin
+		}
+	}
+	return out, nil
+}
+
+// finDeLiteral devuelve el índice de la comilla que cierra el literal que abre en `i`.
+func finDeLiteral(r []rune, i int) (int, error) {
+	comilla := r[i]
+	for j := i + 1; j < len(r); j++ {
+		// Los literales con backtick de PromQL son crudos: ahí `\` no escapa nada.
+		if comilla != '`' && r[j] == '\\' {
+			j++
+			continue
+		}
+		if r[j] == comilla {
+			return j, nil
+		}
+	}
+	return 0, fmt.Errorf("literal de string sin cerrar desde la posición %d", i)
+}
+
+// cuerpoDeSelector devuelve lo que hay entre el `{` de `i` y su `}`, y el índice de ese `}`.
+func cuerpoDeSelector(r []rune, i int) (string, int, error) {
+	var cuerpo []rune
+	for j := i + 1; j < len(r); j++ {
+		switch r[j] {
+		case '"', '\'', '`':
+			fin, err := finDeLiteral(r, j)
+			if err != nil {
+				return "", 0, err
+			}
+			cuerpo = append(cuerpo, r[j:fin+1]...)
+			j = fin
+		case '{':
+			return "", 0, fmt.Errorf("`{` anidado en la posición %d", j)
+		case '}':
+			return string(cuerpo), j, nil
+		default:
+			cuerpo = append(cuerpo, r[j])
+		}
+	}
+	return "", 0, fmt.Errorf("selector sin cerrar desde la posición %d", i)
+}
+
+// matchersDeCuerpo parte el interior de un selector en sus matchers.
+func matchersDeCuerpo(cuerpo string) ([]matcherDeEtiqueta, error) {
+	var out []matcherDeEtiqueta
+	for _, parte := range partirEnComas(cuerpo) {
+		if strings.TrimSpace(parte) == "" {
+			continue
+		}
+		m, err := parsearMatcher(parte)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// partirEnComas corta por las comas que están FUERA de un literal.
+func partirEnComas(s string) []string {
+	r := []rune(s)
+	var partes []string
+	inicio := 0
+	for i := 0; i < len(r); i++ {
+		switch r[i] {
+		case '"', '\'', '`':
+			if fin, err := finDeLiteral(r, i); err == nil {
+				i = fin
+			}
+		case ',':
+			partes = append(partes, string(r[inicio:i]))
+			inicio = i + 1
+		}
+	}
+	return append(partes, string(r[inicio:]))
+}
+
+// parsearMatcher lee `etiqueta OP "valor"`. Los cuatro operadores son TODA la gramática de un
+// matcher de PromQL; cualquier otra cosa es error, o sea rojo.
+func parsearMatcher(s string) (matcherDeEtiqueta, error) {
+	t := strings.TrimSpace(s)
+	fin := 0
+	for fin < len(t) && esRuneDeIdentificador(rune(t[fin])) {
+		fin++
+	}
+	etiqueta := t[:fin]
+	if etiqueta == "" {
+		return matcherDeEtiqueta{}, fmt.Errorf("matcher %q: no empieza con un nombre de etiqueta", s)
+	}
+	resto := strings.TrimSpace(t[fin:])
+	for _, op := range []string{"=~", "!~", "!=", "="} {
+		if !strings.HasPrefix(resto, op) {
+			continue
+		}
+		valor, err := literalPelado(strings.TrimSpace(strings.TrimPrefix(resto, op)))
+		if err != nil {
+			return matcherDeEtiqueta{}, fmt.Errorf("matcher %q: %w", s, err)
+		}
+		return matcherDeEtiqueta{etiqueta: etiqueta, op: op, valor: valor}, nil
+	}
+	return matcherDeEtiqueta{}, fmt.Errorf("matcher %q: después de la etiqueta %q no hay ninguno de los cuatro operadores (`=`, `!=`, `=~`, `!~`)", s, etiqueta)
+}
+
+// literalPelado exige que `s` sea EXACTAMENTE un literal de string y devuelve su contenido.
+func literalPelado(s string) (string, error) {
+	r := []rune(s)
+	if len(r) == 0 || (r[0] != '"' && r[0] != '\'' && r[0] != '`') {
+		return "", fmt.Errorf("el valor %q no es un literal de string", s)
+	}
+	fin, err := finDeLiteral(r, 0)
+	if err != nil {
+		return "", err
+	}
+	if fin != len(r)-1 {
+		return "", fmt.Errorf("el valor %q tiene texto después del literal", s)
+	}
+	return string(r[1:fin]), nil
+}
+
+func esRuneDeIdentificador(c rune) bool {
+	return c == '_' || c == ':' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
+}
+
+// mencionaMetrica dice si `expr` nombra la métrica como TOKEN y no como pedazo de otro nombre:
+// `musubi_fleet_export_truncated_total` no es `musubi_fleet_export_truncated`.
+func mencionaMetrica(expr, metrica string) bool {
+	for i := 0; ; {
+		j := strings.Index(expr[i:], metrica)
+		if j < 0 {
+			return false
+		}
+		ini := i + j
+		fin := ini + len(metrica)
+		antes := ini == 0 || !esRuneDeIdentificador(rune(expr[ini-1]))
+		despues := fin == len(expr) || !esRuneDeIdentificador(rune(expr[fin]))
+		if antes && despues {
+			return true
+		}
+		i = fin
 	}
 }
