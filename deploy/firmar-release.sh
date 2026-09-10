@@ -34,8 +34,19 @@ VERSION="${1:-}"; CLAVE="${2:-}"; DIR="${3:-}"
 MODO=$(stat -c %a "$CLAVE")
 case "$MODO" in 400|600) ;; *) echo "la clave privada tiene modo $MODO: ponela en 600 antes de firmar" >&2; exit 2;; esac
 
+# EL INTÉRPRETE SE ELIGE PROBÁNDOLO, NO PREGUNTANDO SI EXISTE. En Windows, `python3` existe como
+# un alias de ejecución de la Microsoft Store: `command -v python3` lo encuentra y `command -v`
+# devuelve 0, pero al ejecutarlo imprime «no se encontró Python» y no corre nada. Un guion que se
+# conforma con que el archivo exista muere ahí, en la máquina de quien publica, con la clave
+# privada montada. Por eso se le pide que ejecute algo antes de creerle.
+PY_BIN=""
+for c in python3 python; do
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys" >/dev/null 2>&1; then PY_BIN="$c"; break; fi
+done
+[ -n "$PY_BIN" ] || { echo "no encuentro un python que ejecute (probé python3 y python)" >&2; exit 2; }
+
 echo "▶ armando el manifiesto de $VERSION"
-python3 - "$VERSION" "$DIR" <<'PY' > "$DIR/manifest.json"
+"$PY_BIN" - "$VERSION" "$DIR" <<'PY' > "$DIR/manifest.json"
 import hashlib, json, os, re, sys
 version, d = sys.argv[1], sys.argv[2]
 
@@ -53,7 +64,20 @@ version, d = sys.argv[1], sys.argv[2]
 #
 # Así que se nombra lo que es un asset, y lo demás no entra ni por descuido.
 # ════════════════════════════════════════════════════════════════════════════════════════
-ES_ASSET = re.compile(r"^musubi(-[a-z0-9]+)+(\.exe)?$")
+# SE NOMBRAN UNO POR UNO, y no con un patrón. Acá había un `^musubi(-[a-z0-9]+)+(\.exe)?$` que
+# parecía cubrirlos a todos y dejaba afuera a los DOS de Windows: `release.yml` los publica como
+# `Musubi.exe` y `Musubi-arm64.exe` —con mayúscula, y el primero sin ningún guion—, así que el
+# patrón no casaba con ninguno. El manifiesto salía sin ellos, `ShaDeAsset` no los encontraba, y
+# `musubi update` en Windows se negaba a instalar un release perfectamente firmado. Nadie lo vio
+# porque el guion no falla: firma lo que casa y calla lo que no.
+#
+# La lista está pineada contra `selfupdate.AssetName` por TestElFirmadorCubreLosAssetsReales: si
+# alguien agrega una plataforma y no la agrega acá, el test lo dice antes que el usuario.
+ASSETS = {
+    "Musubi.exe", "Musubi-arm64.exe",
+    "musubi-linux-amd64", "musubi-linux-arm64",
+    "musubi-darwin-amd64", "musubi-darwin-arm64",
+}
 
 # Y ADEMÁS: si hay algo con pinta de secreto en el directorio, se ABORTA en vez de saltearlo.
 # Saltearlo en silencio dejaría a alguien firmando con la clave al lado sin enterarse nunca de
@@ -66,7 +90,7 @@ if malos:
 
 assets = {}
 for n in sorted(os.listdir(d)):
-    if not ES_ASSET.match(n):
+    if n not in ASSETS:
         continue
     p = os.path.join(d, n)
     if not os.path.isfile(p):
@@ -74,14 +98,14 @@ for n in sorted(os.listdir(d)):
     with open(p, "rb") as f:
         assets[n] = hashlib.sha256(f.read()).hexdigest()
 if not assets:
-    sys.exit("no hay ningún asset que firmar en %s (se esperan archivos `musubi-<plataforma>-<arch>`)" % d)
+    sys.exit("no hay ningún asset que firmar en %s (se esperan los assets que publica release.yml)" % d)
 # separators sin espacios: la MISMA forma canónica que produce json.Marshal en Go, que es contra
 # la que se verifica. Un espacio de más acá es una firma que no valida allá.
 sys.stdout.write(json.dumps({"version": version, "assets": assets}, sort_keys=True, separators=(",", ":")))
 PY
 
 echo "▶ firmando"
-python3 - "$CLAVE" "$DIR/manifest.json" <<'PY' > "$DIR/manifest.json.sig"
+"$PY_BIN" - "$CLAVE" "$DIR/manifest.json" <<'PY' > "$DIR/manifest.json.sig"
 import sys
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
