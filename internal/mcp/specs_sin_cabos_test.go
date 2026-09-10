@@ -52,6 +52,31 @@ package mcp
 //     nada. Así se pudrieron A99, A102 y A116: apuntaban a una migración que ya no era.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// TERCERA RONDA (2026-09-10): LO QUE QUEDÓ DECLARADO Y NO CERRADO, Y UN HUECO DEL MAPA
+//
+// La segunda ronda dejó tres cosas dichas en un comentario y no arregladas. Las tres se midieron
+// otra vez, en verde, y se cierran acá:
+//
+//  10. LA TABLA 2 SEGUÍA CON UNA LISTA DE PALABRAS. `abreConCierre` era «cerrado, hecho, resuelto,
+//      completado, listo, terminado…»: nueve palabras sacadas de las celdas que ya estaban, que es
+//      el defecto que la tabla 1 arregló en la ronda 2 y que acá quedó puesto. «Finiquitado en
+//      S12.» y «Ya se implementó y quedó andando.» pasaban en verde. Ahora se pregunta por la
+//      MORFOLOGÍA —participio perfectivo o pretérito perfecto simple—, con la familia de la
+//      deliberación («decidido», «descartado», «se midió») excusada porque en ESA tabla es el
+//      contenido correcto. Ver el bloque de `hechoConsumadoAlAbrir`.
+//  11. `tieneCasa` DABA POR REGISTRADO UN ÍTEM POR MENCIONAR UN NÚMERO. La marca principal era
+//      «un tramo en negrita que contenga algo con forma de número de registro», así que
+//      `**La API expone A1 y B2 como campos JSON.**` tenía casa sin estar anotado en ningún lado.
+//      Ahora la cita tiene que ser el TOKEN que el track usa para citar el registro —el número
+//      ocupando todo el tramo en negrita, `(**A42**)`, `(**A17 → S7c**)`, `**A1/A2/A3**`—, no un
+//      número suelto adentro de una oración. Medido sobre los 66 ítems reales: ninguno cambia.
+//  12. UNA SECCIÓN ESCRITA COMO PÁRRAFO NO LA CONTABA NADIE. `flota-pantalla-sin-motor/tasks.md`
+//      escribe su «Lo que queda fuera» sin viñetas, así que el barrido decía «0 ítems, cero cabos
+//      sin registro» sobre un texto que no había mirado, y el piso por archivo tampoco lo cubría
+//      porque el archivo no estaba en la tabla. Ahora, cuando una sección no tiene NI UNA viñeta,
+//      su párrafo vale como un cabo y se le pide registro igual; y el archivo tiene su piso.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
 	"fmt"
@@ -284,8 +309,6 @@ var marcasDeRegistro = []struct {
 	nombre string
 	re     *regexp.Regexp
 }{
-	{"un número de registro en negrita (**A17**, **B4**, **S7c**)",
-		regexp.MustCompile(`\*\*[^*]*\b[ABS]\d+[a-z]?\b[^*]*\*\*`)},
 	{"HECHO/HECHA EN un slice",
 		regexp.MustCompile(`\b(?:HECH[OA]S?|HIZO)\b\*{0,2}\s+en\s+\*{0,2}[SU]\d+`)},
 	{"DESCARTADO EN un slice",
@@ -298,7 +321,49 @@ var marcasDeRegistro = []struct {
 		regexp.MustCompile(`\*\*despliegue\*\*|\bmaterial de despliegue\b`)},
 }
 
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA CITA DE REGISTRO ES UN TOKEN, NO UN NÚMERO SUELTO EN LA PROSA
+//
+// La marca más usada era `\*\*[^*]*\b[ABS]\d+[a-z]?\b[^*]*\*\*`: «cualquier tramo en negrita que
+// mencione algo con forma de número de registro». Eso no pregunta por la forma que ASIGNA el cabo,
+// pregunta por un texto que aparece en la prosa. Medido el 2026-09-10 con seis variaciones, y
+// cinco escapaban; la más limpia:
+//
+//	- **La API expone A1 y B2 como campos JSON.**
+//
+// Ese ítem no está registrado en ningún lado: nombra dos identificadores del producto que resultan
+// tener forma de número de registro, y con eso se daba por anotado. Igual pasaba con
+// `**el umbral de B5 minutos**` o `**Se documenta en A4 de otro track**`.
+//
+// La forma que DECIDE es la que el track usa para citar el registro y que se lee de un vistazo: el
+// número —solo, o encadenado con otros— OCUPANDO TODO el tramo en negrita, como en `(**A42**)`,
+// `(**A17 → S7c**)`, `**A1/A2/A3**` o `cierra **A25**`. Un tramo en negrita que además tiene prosa
+// adentro no es una cita: es una oración que menciona un número.
+//
+// Se midió sobre los 66 ítems reales del track antes de ponerla: ninguno cambia de veredicto.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+var (
+	tramoEnNegrita = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	// El tramo entero, sin prosa: uno o más números encadenados con `→`, `/`, `,`, `;`, `+` o «y».
+	soloCitaDeRegistro = regexp.MustCompile(`^[ABS]\d+[a-z]?(?:\s*(?:[/,;+]|y|→|->|➜)\s*[ABS]\d+[a-z]?)*$`)
+)
+
+// citaElRegistro dice si el ítem lleva un número de registro CITADO —el tramo en negrita es el
+// número y nada más—, y no sólo un número mencionado adentro de una oración.
+func citaElRegistro(item string) bool {
+	for _, m := range tramoEnNegrita.FindAllStringSubmatch(item, -1) {
+		if soloCitaDeRegistro.MatchString(strings.TrimSpace(m[1])) {
+			return true
+		}
+	}
+	return false
+}
+
 func tieneCasa(item string) bool {
+	if citaElRegistro(item) {
+		return true
+	}
 	for _, m := range marcasDeRegistro {
 		if m.re.MatchString(item) {
 			return true
@@ -316,13 +381,18 @@ func tieneCasa(item string) bool {
 // Un piso por archivo no tiene ese margen: la sección que se pierde se pierde EN SU ARCHIVO, y el
 // mensaje dice cuál. Los números son los que hay hoy; bajarlos es una decisión visible acá.
 var pisoPorArchivo = map[string]struct{ secciones, items int }{
-	"specs/flota-agente-y-latido/tasks.md":        {1, 3},
-	"specs/flota-alertas-y-politicas/spec.md":     {1, 3},
-	"specs/flota-empuje-otlp/tasks.md":            {1, 8},
-	"specs/flota-exec-auditado/tasks.md":          {1, 4},
-	"specs/flota-movil-y-sonda/tasks.md":          {1, 4},
-	"specs/flota-panel/tasks.md":                  {1, 4},
-	"specs/flota-pantalla-rustdesk/tasks.md":      {1, 4},
+	"specs/flota-agente-y-latido/tasks.md":    {1, 3},
+	"specs/flota-alertas-y-politicas/spec.md": {1, 3},
+	"specs/flota-empuje-otlp/tasks.md":        {1, 8},
+	"specs/flota-exec-auditado/tasks.md":      {1, 4},
+	"specs/flota-movil-y-sonda/tasks.md":      {1, 4},
+	"specs/flota-panel/tasks.md":              {1, 4},
+	"specs/flota-pantalla-rustdesk/tasks.md":  {1, 4},
+	// EL ÚNICO ARCHIVO DEL TRACK CON SECCIÓN Y SIN PISO — el hueco lo encontró el verificador el
+	// 2026-09-10 y no era de nadie. Su «Lo que queda fuera» no tiene viñetas: es un párrafo suelto,
+	// y un párrafo suelto no lo contaba nadie. Ahora vale como UN cabo (ver `cerrarSeccion`), así
+	// que su piso es 1 y renombrar o vaciar la sección se pone rojo como en los otros catorce.
+	"specs/flota-pantalla-sin-motor/tasks.md":     {1, 1},
 	"specs/flota-registro-dispositivos/tasks.md":  {1, 4},
 	"specs/flota-scopes-de-token/tasks.md":        {1, 3},
 	"specs/flota-servicios/tasks.md":              {1, 9},
@@ -397,23 +467,49 @@ func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
 		c := cuenta{}
 		dentro := false
 		var actual *cabo
+		// El párrafo que abre la sección, antes de la primera viñeta. Ver `cerrarSeccion`.
+		var preambulo *cabo
+		vinetasEnLaSeccion := 0
+
+		revisar := func(item *cabo) {
+			c.items++
+			if !tieneCasa(item.texto) {
+				huerfanos++
+				t.Errorf("%s:%d — cabo sin registro:\n    %s\n  Anotalo en specs/control-de-flota/ABIERTO.md (tabla 1 con slice, o tabla 2 con la condición bajo la que se revisa) y nombrá acá su número, o decí en qué slice se HIZO o se DESCARTÓ.",
+					item.ruta, item.linea, recorte(strings.TrimSpace(strings.ReplaceAll(item.texto, "\n", " ")), 110))
+			}
+		}
 
 		cerrar := func() {
 			if actual == nil {
 				return
 			}
-			c.items++
-			if !tieneCasa(actual.texto) {
-				huerfanos++
-				t.Errorf("%s:%d — cabo sin registro:\n    %s\n  Anotalo en specs/control-de-flota/ABIERTO.md (tabla 1 con slice, o tabla 2 con la condición bajo la que se revisa) y nombrá acá su número, o decí en qué slice se HIZO o se DESCARTÓ.",
-					actual.ruta, actual.linea, recorte(strings.TrimSpace(strings.ReplaceAll(actual.texto, "\n", " ")), 110))
-			}
+			revisar(actual)
 			actual = nil
+		}
+
+		// UNA SECCIÓN SIN NI UNA VIÑETA NO ES UNA SECCIÓN LIMPIA: ES UNA QUE NO SE ENTENDIÓ.
+		//
+		// `specs/flota-pantalla-sin-motor/tasks.md` escribe su «Lo que queda fuera» como un párrafo
+		// suelto, sin viñetas. El barrido contaba 0 ítems, 0 huérfanos y decía «cero cabos sin
+		// registro» — verde silencioso sobre un texto que no había mirado. Y el piso por archivo
+		// tampoco lo cubría, porque el archivo no estaba en la tabla.
+		//
+		// El párrafo de apertura de una sección que SÍ tiene viñetas es otra cosa —en
+		// `flota-shell-interactiva/spec.md` es una nota de método, no un cabo—, así que sólo se
+		// revisa cuando la sección entera no tuvo ni una viñeta: ahí el párrafo ES el contenido.
+		cerrarSeccion := func() {
+			cerrar()
+			if preambulo != nil && vinetasEnLaSeccion == 0 {
+				revisar(preambulo)
+			}
+			preambulo = nil
+			vinetasEnLaSeccion = 0
 		}
 
 		for n, linea := range lineas {
 			if strings.HasPrefix(linea, "#") {
-				cerrar()
+				cerrarSeccion()
 				dentro = encabezadoFuera.MatchString(linea)
 				if dentro {
 					c.secciones++
@@ -434,14 +530,22 @@ func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
 			}
 			if vinetaDeCabo.MatchString(linea) {
 				cerrar()
+				vinetasEnLaSeccion++
 				actual = &cabo{ruta: ruta, linea: n + 1, texto: linea}
 				continue
 			}
 			if actual != nil {
 				actual.texto += "\n" + linea
+				continue
+			}
+			// Prosa suelta: cuelga del preámbulo de la sección.
+			if preambulo == nil {
+				preambulo = &cabo{ruta: ruta, linea: n + 1, texto: linea}
+			} else {
+				preambulo.texto += "\n" + linea
 			}
 		}
-		cerrar()
+		cerrarSeccion()
 		visto[clave(ruta)] = c
 		totalSecciones += c.secciones
 		totalItems += c.items
@@ -626,9 +730,21 @@ var (
 
 	veredictoDeCierre = regexp.MustCompile(`(?i)` + participioPerfectivo + `|(?i)` + locucionesDeCierre)
 
-	// abreConCierre: la celda ARRANCA declarando un estado en vez de un dueño. Se usa sólo para
-	// dar un mensaje mejor, y en la tabla 2, donde la columna que decide es prosa.
-	abreConCierre = regexp.MustCompile(`(?i)^[\s—–\-(«"'*~✔•]*(?:ya\s+)?(?:est[áa]\s+|qued[óo]\s+|fue\s+|son\s+)?(?:cerrad[oa]s?|hech[oa]s?|resuelt[oa]s?|completad[oa]s?|list[o]s?|terminad[oa]s?|nada pendiente|queda como registro|decisión tomada)\b`)
+	// LA APERTURA DE LA CELDA: LOS AUXILIARES QUE VIENEN ANTES DEL VERBO QUE DECIDE.
+	//
+	// «Ya se implementó», «Ya está hecho», «Quedó resuelto», «Fue descartado»: la palabra que dice
+	// si el ítem existe viene DETRÁS de una cadena de auxiliares. Se comen acá para poder mirar el
+	// verbo. `no` NO está en la lista a propósito: «No se implementó porque…» es una razón, no un
+	// cierre, y meterlo lo daría vuelta.
+	auxiliaresAlAbrir = regexp.MustCompile(`(?i)^(?:(?:ya|se|est[áa]|est[áa]n|qued[óo]|quedaron|fue|fueron|son|ha|han)\s+)*`)
+
+	// La primera palabra de lo que queda, sin la puntuación pegada.
+	palabraSuelta = regexp.MustCompile(`^[\p{L}\p{M}]+`)
+
+	// Las locuciones de cierre que NO son un verbo, ancladas al arranque. `ya est[áa]` pide
+	// puntuación o fin de texto detrás porque suelto se come «Ya está en el backlog», que no
+	// cierra nada.
+	locucionAlAbrir = regexp.MustCompile(`(?i)^(?:nada pendiente|queda como registro|ya sali[oó]|sin novedad|se hizo|qued[óo] atr[áa]s|no queda nada|decisi[óo]n tomada|ya est[áa](?:[.,;:!]|$))`)
 
 	// EL OBJETIVO DE UN DESPLIEGUE CITADO EN LA CELDA QUE DECIDE.
 	//
@@ -794,7 +910,10 @@ func porQueNoEsUnaAsignacionViva(celda string) string {
 	desnuda := strings.TrimLeft(limpia, "(—–- ")
 	m := asignacionPendiente.FindString(desnuda)
 	if m == "" {
-		if abreConCierre.MatchString(desnuda) {
+		// `false`: en la tabla 1 «decidido»/«descartado» TAMPOCO son un dueño. La excepción de la
+		// familia de la deliberación existe para la tabla 2, donde esas palabras son el contenido
+		// correcto de la celda. Acá sólo se elige el texto del mensaje.
+		if hechoConsumadoAlAbrir(desnuda, false) != "" {
 			return "arranca declarando un ESTADO y no un dueño"
 		}
 		return "no arranca con un slice, `sin asignar`, `gio` ni `acción del operador`"
@@ -802,6 +921,118 @@ func porQueNoEsUnaAsignacionViva(celda string) string {
 	calificador := desnuda[len(m):]
 	if hit := veredictoDeCierre.FindString(calificador); hit != "" {
 		return fmt.Sprintf("detrás del dueño declara el cabo resuelto (%q)", hit)
+	}
+	return ""
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// «ESTO YA PASÓ», POR MORFOLOGÍA Y NO POR VOCABULARIO
+//
+// `abreConCierre` era una lista de nueve palabras —cerrado, hecho, resuelto, completado, listo,
+// terminado…— sacadas de las celdas que ya estaban. Es el mismo defecto que la tabla 1 pagó y
+// arregló: **una lista de palabras malas siempre le falta la próxima**. Medido el 2026-09-10 sobre
+// la tabla 2, que era lo único que todavía dependía de ella: «Finiquitado en S12.» y «Ya se
+// implementó y quedó andando.» al arranque de la celda pasaban en VERDE.
+//
+// La pregunta ya no es qué palabra es, sino con qué FORMA el castellano declara un hecho
+// consumado. Son dos, y las dos son productivas —de ahí salen las palabras que nadie escribió
+// todavía—:
+//
+//   - el participio perfectivo regular (-ado/-ido, con femeninos y plurales), que es de donde
+//     vienen «finiquitado», «zanjado», «liquidado», «archivado», «implementado»;
+//   - el pretérito perfecto simple de 3ª persona (-ó, -aron, -ieron): «se implementó», «salió».
+//
+// LOS IRREGULARES QUE NO ENTRAN, Y POR QUÉ — ES DONDE ESTABAN LOS FALSOS POSITIVOS.
+// `participioPerfectivo` (tabla 1) lista once irregulares. Acá se miran sólo `hecho` y `resuelto`.
+// Los otros nueve abren oraciones perfectamente sanas en una celda que explica una razón:
+// «**Dado** que el relay se corta…», «**Puesto** que hbbs no expone API…», «**Visto** el costo…»,
+// «**Dicho** esto…», «**Vista** del CRM…», «**Lista** blanca de comandos…». Son conjunciones,
+// marcadores de discurso y sustantivos, no veredictos. Fuera de la cabeza de la celda no molestan
+// —por eso la tabla 1 sí los usa—, pero en la cabeza acusarían a filas correctas.
+//
+// LA FAMILIA DE LA DELIBERACIÓN, QUE ES CONTENIDO CORRECTO Y NO UN CIERRE.
+// «**Decidido** por gio el 2026-08-29: Prometheus + Alertmanager es el autoritativo» es la cabeza
+// REAL de B20, y es exactamente lo que la tabla 2 existe para decir. «Se midió y son 67 usos», «Se
+// probó con dropbear», «Descartado por costo» son lo mismo: hablan de lo que se hizo CON LA
+// DECISIÓN, no de que el ítem exista. Por eso hay una lista —de formas BUENAS, como la de la tabla
+// 1— con los lemas de esa familia. Una que falte se pone ROJA en vez de pasar, y agregarla es una
+// decisión visible acá; el mensaje de la guarda lo dice con todas las letras.
+//
+// LO QUE ESTO NO AGARRA, DICHO ACÁ: sólo se mira la CABEZA de la celda (hasta el primer punto). El
+// veredicto escondido en la tercera oración de una celda de 4000 caracteres de prosa se escapa. En
+// la tabla 1 eso se cerró con el tope de 220 caracteres sobre la columna que decide; la columna
+// «Por qué no» de la tabla 2 es prosa larga por diseño y no admite ese tope.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+// irregularesQueSiCierran: los dos participios irregulares que en la CABEZA de una celda no
+// significan otra cosa. Ver arriba por qué los otros nueve quedaron afuera.
+var irregularesQueSiCierran = map[string]bool{
+	"hecho": true, "hecha": true, "hechos": true, "hechas": true,
+	"resuelto": true, "resuelta": true, "resueltos": true, "resueltas": true,
+	"listo": true, "listos": true, // «lista»/«listas» no: es un sustantivo
+}
+
+// lemasDeDeliberación: lo que se hace CON una decisión. No dicen que el ítem exista.
+var lemasDeDeliberacion = []string{
+	"decid", "decisi", "descart", "rechaz", "desestim", "posterg", "declin",
+	"prefer", "prefir", "elegi", "eligi", "optad", "optó", "optaron", "acord",
+	"evalu", "consider", "medi", "midi", "midió", "prob", "intent", "discut",
+	"analiz", "revis",
+}
+
+// esHechoConsumado dice si UNA palabra declara un hecho ya pasado, por su forma.
+func esHechoConsumado(p string) bool {
+	if irregularesQueSiCierran[p] {
+		return true
+	}
+	r := []rune(p)
+	for _, suf := range []string{"ados", "adas", "idos", "idas", "ado", "ada", "ido", "ida"} {
+		// 3+ letras de raíz para no comerse «nada», «cada», «vida», «duda».
+		if strings.HasSuffix(p, suf) && len(r)-len([]rune(suf)) >= 3 {
+			return true
+		}
+	}
+	if strings.HasSuffix(p, "ó") && len(r) >= 3 {
+		return true
+	}
+	for _, suf := range []string{"aron", "ieron"} {
+		if strings.HasSuffix(p, suf) && len(r)-len([]rune(suf)) >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+// esDeliberacion dice si la palabra viene de la familia «lo que hicimos con la decisión».
+func esDeliberacion(p string) bool {
+	for _, lema := range lemasDeDeliberacion {
+		if strings.HasPrefix(p, lema) {
+			return true
+		}
+	}
+	return false
+}
+
+// hechoConsumadoAlAbrir devuelve la palabra (o locución) con la que la celda ARRANCA declarando un
+// hecho consumado, y "" si abre con otra cosa. `exceptuarDeliberacion` excusa a la familia
+// «decidido / descartado / se midió …», que es el contenido correcto de la tabla 2.
+func hechoConsumadoAlAbrir(cabeza string, exceptuarDeliberacion bool) string {
+	s := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(cabeza), " \t—–-(«\"'*~✔•"))
+	bajo := strings.ToLower(s)
+	resto := auxiliaresAlAbrir.ReplaceAllString(bajo, "")
+	if p := palabraSuelta.FindString(resto); p != "" && esHechoConsumado(p) {
+		if exceptuarDeliberacion && esDeliberacion(p) {
+			return ""
+		}
+		return p
+	}
+	// Las locuciones se miran DESPUÉS del verbo: así «Ya está hecho» resuelve por «hecho» y «Ya
+	// está decidido» se excusa por «decidido», en vez de quedar los dos atrapados por «ya está».
+	if loc := locucionAlAbrir.FindString(bajo); loc != "" {
+		if exceptuarDeliberacion && esDeliberacion(loc) {
+			return ""
+		}
+		return loc
 	}
 	return ""
 }
@@ -835,9 +1066,41 @@ func TestNingunaFilaDeLaTabla2EsUnCementerio(t *testing.T) {
 		t.Fatal("la tabla 2 perdió su columna «Por qué no»")
 	}
 
-	// CONTROL POSITIVO de los dos reconocedores, con las formas que evadirían a mano.
-	if !abreConCierre.MatchString("— (cerrado)") || !abreConCierre.MatchString("Ya está hecho en S12.") {
-		t.Fatal("`abreConCierre` dejó de ver un cierre declarado al principio de la celda: se aflojó")
+	// CONTROL POSITIVO — las formas que estuvieron puestas Y las que evadieron a la lista de nueve
+	// palabras. Las dos últimas se midieron en verde el 2026-09-10 contra la versión anterior.
+	for _, cierre := range []string{
+		"— (cerrado)",
+		"Ya está hecho en S12.",
+		"Finiquitado en S12.",
+		"Ya se implementó y quedó andando.",
+		"Zanjado con el despliegue del 2026-09-08.",
+		"Quedó liquidado por S12b.",
+		"Fue archivado: ya está en producción.",
+		"Nada pendiente.",
+	} {
+		if hechoConsumadoAlAbrir(cierre, true) == "" {
+			t.Fatalf("el reconocedor ya no ve como CIERRE la cabeza %q, que es una que estuvo puesta o que evadió a la lista de nueve palabras.\n  Se aflojó, y con eso esta prueba dejó de poder fallar.", cierre)
+		}
+	}
+	// CONTROL NEGATIVO — LAS CABEZAS REALES DE ESTA TABLA, Y LA FAMILIA DE LA DELIBERACIÓN.
+	// «Decidido por gio…» es la cabeza REAL de B20: una guarda que la acusa se termina apagando.
+	for _, sana := range []string{
+		"Decidido por gio el 2026-08-29: Prometheus + Alertmanager es el autoritativo para ALERTAR.",
+		"Descartado por costo: serían las primeras foreign keys del repo.",
+		"Se midió el 2026-09-01 y son 67 usos en 17 archivos.",
+		"Se probó contra dropbear y no cambia nada.",
+		"No se implementó porque el caso real todavía no apareció.",
+		"Daría los tres OS de una y sería la 7ª dependencia directa.",
+		"El agregado del host primero.",
+		"Nada de webhooks ni de «apagar la máquina» como primitiva.",
+		"Dado que el relay se corta, la sesión MUERE.",
+		"Puesto que hbbs no expone API, no es viable.",
+		"Lista blanca de comandos: va con S10.",
+		"Ya está en el backlog de otro track.",
+	} {
+		if v := hechoConsumadoAlAbrir(sana, true); v != "" {
+			t.Fatalf("la guarda acusa de cementerio a la cabeza %q por %q, y es una razón correcta —o la familia de la deliberación, que es lo que esta tabla existe para decir—.\n  Una guarda que acusa filas correctas se termina apagando.", sana, v)
+		}
 	}
 	if condicionDeRevision.MatchString("no hay condición: esto no se toca más") {
 		t.Fatal("`condicionDeRevision` da por buena una celda sin condición: se aflojó")
@@ -854,10 +1117,12 @@ func TestNingunaFilaDeLaTabla2EsUnCementerio(t *testing.T) {
 		if p := strings.Index(cabeza, ". "); p >= 0 {
 			cabeza = cabeza[:p]
 		}
-		if abreConCierre.MatchString(cabeza) {
-			t.Errorf("la fila **%s** de la tabla 2 (línea %d) ARRANCA declarándose cerrada:\n    %s\n"+
-				"  La tabla 2 dice qué se decidió NO hacer, no qué se hizo. Si se hizo, la fila se borra y su texto baja a la sección 3, igual que en la tabla 1 (regla 1).",
-				f.id(), f.linea, recorte(cabeza, 140))
+		if v := hechoConsumadoAlAbrir(cabeza, true); v != "" {
+			t.Errorf("la fila **%s** de la tabla 2 (línea %d) ARRANCA declarando un hecho consumado (%q):\n    %s\n"+
+				"  La tabla 2 dice qué se decidió NO hacer, no qué se hizo. Si se hizo, la fila se borra y su texto baja a la sección 3, igual que en la tabla 1 (regla 1).\n"+
+				"  Esto ya NO es una lista de palabras: se pregunta por la FORMA —participio perfectivo o pretérito— así que una redacción nueva («finiquitado», «zanjado») falla en vez de pasar.\n"+
+				"  Si el verbo dice lo que se hizo CON LA DECISIÓN y no que el ítem exista (medir, probar, descartar, decidir…), su lema va en `lemasDeDeliberacion`, acá, a la vista.",
+				f.id(), f.linea, v, recorte(cabeza, 140))
 		}
 		if !condicionDeRevision.MatchString(celda) {
 			t.Errorf("la fila **%s** de la tabla 2 (línea %d) no dice bajo qué condición se revisa.\n"+
