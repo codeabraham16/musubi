@@ -20,6 +20,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +40,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
 	"musubi/internal/logx"
+	"musubi/internal/memory"
 )
 
 // metricsDeVerdad hace el GET a /metrics con la credencial de Prometheus y devuelve el cuerpo.
@@ -272,28 +277,73 @@ func valorDeClaveEnLog(texto, clave string) (string, bool) {
 // vuelva a hablar. Un `else` borrado, un `Delete` con la clave mal escrita o un rearme puesto
 // después de un `return` fallan todos igual.
 //
-// CUBRE LOS CINCO HERMANOS del empuje, no los dos que el sabotaje tocó: `empuje_sin_principal`,
-// `empuje_sin_concesion`, `empuje_vacio`, `empuje_truncado_servicios` y
-// `empuje_truncado_proyectos`. El defecto dominante de este repo es la guarda que está en N-1 de
-// N caminos, y dos de cinco es peor que eso.
-func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
-	ahora := time.Now()
-	type par struct {
-		romper, arreglar func(t *testing.T, s *McpServer)
-	}
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// RONDA 3 — LA TABLA ESCRITA A MANO SIEMPRE LE FALTA EL PRÓXIMO, Y EL PRÓXIMO YA HABÍA NACIDO
+//
+// La ronda 2 dejó esta tabla con CINCO filas y en el mismo commit agregó un SEXTO aviso al
+// empuje (`empuje_truncado_ilegible`). Devolver ese call site a la forma vieja —
+// `if cond { avisarUnaVez(k, …) }`, sin rearme— dejaba el paquete entero en VERDE. Es
+// literalmente el defecto dominante del repo (la guarda que está en N-1 de N caminos), con el
+// agravante de que el hermano descubierto lo agregó el mismo commit que escribió la guarda.
+//
+// AGREGAR LA SEXTA FILA NO ARREGLA NADA: le faltaría el séptimo. Lo que cierra el agujero es
+// DERIVAR la lista. `clavesDeAvisoDelArchivo` parsea el AST de fleet_otlp.go y saca TODAS las
+// claves de `avisarUnaVez`/`avisoMientras` que emite ese archivo —en `empujarUnaVez` o en
+// cualquier helper suyo—, y `TestTodoAvisoDelEmpujeTieneCasoDeRearme` exige que el conjunto
+// derivado y el de la tabla sean EXACTAMENTE el mismo. Un aviso nuevo nace ROJO con el nombre de
+// su clave y su línea en el mensaje; una fila que sobra también, así que la tabla tampoco se
+// pudre en la otra dirección.
+//
+// Y LO QUE NO SE PUDO DERIVAR ES ROJO, NO VERDE: si la clave de un call site no es un literal
+// (ni un literal concatenado, que es como se arma `empuje_permanente:`), la prueba falla
+// diciendo el archivo y la línea. Un parser que se calla ante lo que no entiende es una guarda
+// que se apaga sola con la próxima forma.
 
-	casos := []struct {
-		clave string
-		// nuevo devuelve un par romper/arreglar CON SU PROPIO ESTADO, porque el ciclo se recorre
-		// dos veces: romper, arreglar, romper. Un `romper` que no se puede repetir mediría media
-		// prueba (que el mapa se limpió) y no la que importa (que el aviso vuelve a salir).
-		nuevo func() par
-	}{
+// casoDeRearme es UN aviso del empuje con la manera de provocarlo y la de resolverlo.
+type casoDeRearme struct {
+	clave string
+	// prefijo: la clave que termina en `avisosDados` es `clave + algo variable` (el texto del
+	// error). Se busca por prefijo y no por igualdad.
+	prefijo bool
+	// nuevo devuelve un par romper/arreglar CON SU PROPIO ESTADO, porque el ciclo se recorre dos
+	// veces: romper, arreglar, romper. Un `romper` que no se puede repetir mediría media prueba
+	// (que el mapa se limpió) y no la que importa (que el aviso vuelve a salir).
+	nuevo func() parDeRearme
+}
+
+type parDeRearme struct {
+	romper, arreglar func(t *testing.T, s *McpServer)
+	// destino, si no es nil, es el receptor OTLP que este caso necesita en lugar del que contesta
+	// 200 siempre. Lo devuelve `nuevo` porque el estado del receptor es parte del estado del caso.
+	destino func(t *testing.T) string
+}
+
+// hayAvisoConClave dice si `avisosDados` tiene esa clave (o alguna que empiece con ella).
+func hayAvisoConClave(s *McpServer, c casoDeRearme) bool {
+	if !c.prefijo {
+		_, dado := s.avisosDados.Load(c.clave)
+		return dado
+	}
+	hay := false
+	s.avisosDados.Range(func(k, _ any) bool {
+		if clave, ok := k.(string); ok && strings.HasPrefix(clave, c.clave) {
+			hay = true
+			return false
+		}
+		return true
+	})
+	return hay
+}
+
+// casosDeRearmeDelEmpuje es LA LISTA DE CASOS, y que esté completa no lo sostiene la memoria de
+// quien la lee: lo sostiene TestTodoAvisoDelEmpujeTieneCasoDeRearme contra el AST del código.
+func casosDeRearmeDelEmpuje(ahora time.Time) []casoDeRearme {
+	return []casoDeRearme{
 		{
 			clave: "empuje_truncado_servicios",
-			nuevo: func() par {
+			nuevo: func() parDeRearme {
 				preparado := false
-				return par{
+				return parDeRearme{
 					romper: func(t *testing.T, s *McpServer) {
 						if !preparado {
 							d := maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
@@ -308,9 +358,9 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 		},
 		{
 			clave: "empuje_truncado_proyectos",
-			nuevo: func() par {
+			nuevo: func() parDeRearme {
 				preparado, n, ultimo := false, 0, ""
-				return par{
+				return parDeRearme{
 					romper: func(t *testing.T, s *McpServer) {
 						if !preparado {
 							// Justo en el techo: todavía NO trunca.
@@ -333,10 +383,30 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 			},
 		},
 		{
+			// EL SEXTO HERMANO, el que la tabla escrita a mano no tenía. No es un techo: se
+			// provoca con un almacén que no se deja leer y se resuelve devolviéndolo a la
+			// normalidad, sin tocar ninguna perilla.
+			clave: "empuje_truncado_ilegible",
+			nuevo: func() parDeRearme {
+				var sano memory.StorageBackend
+				return parDeRearme{
+					romper: func(t *testing.T, s *McpServer) {
+						if sano == nil {
+							d := maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+							serviciosDePrueba(t, s, d, 4, ahora)
+							sano = s.engine
+						}
+						s.engine = almacenQueNoSeDejaLeer{StorageBackend: sano, rompe: "servicios", proyecto: "casa"}
+					},
+					arreglar: func(t *testing.T, s *McpServer) { s.engine = sano },
+				}
+			},
+		},
+		{
 			clave: "empuje_vacio",
-			nuevo: func() par {
+			nuevo: func() parDeRearme {
 				n, ultimo := 0, ""
-				return par{
+				return parDeRearme{
 					// Sin ninguna máquina visible, el sobre sale vacío y no se manda.
 					romper: func(t *testing.T, s *McpServer) {
 						if ultimo == "" {
@@ -357,9 +427,9 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 		},
 		{
 			clave: "empuje_sin_concesion",
-			nuevo: func() par {
+			nuevo: func() parDeRearme {
 				preparado := false
-				return par{
+				return parDeRearme{
 					romper: func(t *testing.T, s *McpServer) {
 						if !preparado {
 							maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
@@ -377,9 +447,9 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 		},
 		{
 			clave: "empuje_sin_principal",
-			nuevo: func() par {
+			nuevo: func() parDeRearme {
 				preparado := false
-				return par{
+				return parDeRearme{
 					romper: func(t *testing.T, s *McpServer) {
 						if !preparado {
 							maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
@@ -395,23 +465,63 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 				}
 			},
 		},
+		{
+			// EL SÉPTIMO, y el único que NO se rearma con `avisoMientras`: su clave lleva pegado
+			// el texto del error, así que el rearme es `rearmarAvisos("empuje_permanente:")` y
+			// vive DESPUÉS del envío exitoso. Otro mecanismo, y por eso hay que medirlo igual: es
+			// el que se puede borrar sin tocar ninguna condición.
+			clave:   "empuje_permanente:",
+			prefijo: true,
+			nuevo: func() parDeRearme {
+				var estado atomic.Int64
+				estado.Store(http.StatusOK)
+				preparado := false
+				return parDeRearme{
+					destino: func(t *testing.T) string {
+						ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							_, _ = io.Copy(io.Discard, r.Body)
+							w.WriteHeader(int(estado.Load()))
+						}))
+						t.Cleanup(ts.Close)
+						return ts.URL
+					},
+					romper: func(t *testing.T, s *McpServer) {
+						if !preparado {
+							maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+							preparado = true
+						}
+						// 404: Prometheus corriendo sin --web.enable-otlp-receiver. Permanente.
+						estado.Store(http.StatusNotFound)
+					},
+					arreglar: func(t *testing.T, s *McpServer) { estado.Store(http.StatusOK) },
+				}
+			},
+		},
 	}
+}
 
-	for _, c := range casos {
+func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
+	ahora := time.Now()
+	for _, c := range casosDeRearmeDelEmpuje(ahora) {
 		t.Run(c.clave, func(t *testing.T) {
-			destino := nuevoReceptor(t, http.StatusOK)
-			s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
 			p := c.nuevo()
+			url := ""
+			if p.destino != nil {
+				url = p.destino(t)
+			} else {
+				url = nuevoReceptor(t, http.StatusOK).URL
+			}
+			s := prepararEmpuje(t, url, registroDePrueba(principalDePrometheus()), nil)
 
 			p.romper(t, s)
 			s.empujarUnaVez(context.Background(), ahora)
-			if _, dado := s.avisosDados.Load(c.clave); !dado {
+			if !hayAvisoConClave(s, c) {
 				t.Fatalf("la condición de %q no dejó el aviso dado: la prueba no está midiendo lo que cree", c.clave)
 			}
 
 			p.arreglar(t, s)
 			s.empujarUnaVez(context.Background(), ahora)
-			if _, dado := s.avisosDados.Load(c.clave); dado {
+			if hayAvisoConClave(s, c) {
 				t.Fatalf("%q siguió marcado como avisado después de resolverse: el aviso queda MUDO para siempre y el próximo episodio del mismo problema pasa en silencio", c.clave)
 			}
 
@@ -427,6 +537,125 @@ func TestLosAvisosDelEmpujeSeRearmanAlResolverse(t *testing.T) {
 				t.Errorf("el mismo problema volvió a ocurrir y el empuje no dijo nada: %q se rearmó en el mapa pero el aviso no volvió a salir", c.clave)
 			}
 		})
+	}
+}
+
+// TestTodoAvisoDelEmpujeTieneCasoDeRearme ES LA GUARDA DE LA GUARDA.
+//
+// No prueba el empuje: prueba que la tabla de arriba cubra TODOS los avisos que el empuje emite.
+// El conjunto de la derecha sale del AST del archivo, así que el aviso que se agregue mañana nace
+// con su fila exigida y con su clave y su línea escritas en el mensaje del fallo.
+func TestTodoAvisoDelEmpujeTieneCasoDeRearme(t *testing.T) {
+	enElCodigo := clavesDeAvisoDelArchivo(t, "fleet_otlp.go")
+	if len(enElCodigo) == 0 {
+		t.Fatal("no se encontró NI UN aviso en fleet_otlp.go: o los avisos se mudaron de archivo —y entonces esta guarda dejó de mirar donde se decide— o el parser dejó de reconocer las llamadas. Las dos cosas son un agujero, y ninguna es un verde")
+	}
+
+	enLaTabla := map[string]bool{}
+	for _, c := range casosDeRearmeDelEmpuje(time.Now()) {
+		if enLaTabla[c.clave] {
+			t.Errorf("`casosDeRearmeDelEmpuje` tiene %q dos veces", c.clave)
+		}
+		enLaTabla[c.clave] = true
+	}
+
+	for _, k := range enElCodigo {
+		if !enLaTabla[k.clave] {
+			t.Errorf("el empuje emite el aviso %q (%s) y NINGÚN caso de `casosDeRearmeDelEmpuje` lo lleva a su condición:\n"+
+				"  nadie está midiendo que se rearme al resolverse, así que se puede volver a la forma sin rearme —`if cond { avisarUnaVez(…) }`— con la suite entera en verde.\n"+
+				"  Agregale una fila con su `romper` y su `arreglar`; si la clave se arma concatenando, marcá `prefijo: true`.", k.clave, k.pos)
+		}
+		delete(enLaTabla, k.clave)
+	}
+	for k := range enLaTabla {
+		t.Errorf("`casosDeRearmeDelEmpuje` tiene un caso para %q y fleet_otlp.go no emite ningún aviso con esa clave:\n"+
+			"  o la clave se renombró —y entonces la fila está midiendo un aviso que no existe, o sea nada— o el aviso se borró y la fila sobra.", k)
+	}
+}
+
+// claveDeAviso es un call site de `avisarUnaVez`/`avisoMientras` con su clave ya derivada.
+type claveDeAviso struct {
+	clave string
+	pos   string
+}
+
+// clavesDeAvisoDelArchivo saca del AST todas las claves de aviso que emite un archivo del paquete.
+//
+// SE PARSEA, NO SE BUSCA UN TEXTO. Un grep por `avisoMientras("` le erra a la llamada que gofmt
+// parte en dos líneas, a la que usa comillas invertidas y a la que concatena; y peor: un grep que
+// no matchea devuelve «no hay avisos», que es verde. Acá lo que no se entiende es ROJO — si la
+// clave de una llamada no se puede derivar, la prueba falla con el archivo y la línea.
+func clavesDeAvisoDelArchivo(t *testing.T, archivo string) []claveDeAviso {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, archivo, nil, 0)
+	if err != nil {
+		t.Fatalf("no se pudo parsear %s: %v", archivo, err)
+	}
+	vistas := map[string]bool{}
+	var out []claveDeAviso
+	ast.Inspect(f, func(n ast.Node) bool {
+		llamada, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := llamada.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel.Name != "avisarUnaVez" && sel.Sel.Name != "avisoMientras" {
+			return true
+		}
+		if len(llamada.Args) == 0 {
+			t.Errorf("%s: %s sin argumentos", fset.Position(llamada.Pos()), sel.Sel.Name)
+			return true
+		}
+		clave, ok := literalIzquierdo(llamada.Args[0])
+		if !ok {
+			// ROJO EXPLÍCITO. Un aviso cuya clave no se puede leer del código es un aviso que
+			// esta guarda no le puede exigir a la tabla; callarse acá sería exactamente la fuga
+			// que la guarda existe para cerrar.
+			t.Errorf("%s: no pude derivar la clave de este %s.\n"+
+				"  Mientras no se pueda leer del código, NADIE está exigiendo que ese aviso se rearme al resolverse.\n"+
+				"  Usá un literal —o un literal concatenado, que se lee como prefijo— de primer argumento.", fset.Position(llamada.Pos()), sel.Sel.Name)
+			return true
+		}
+		if vistas[clave] {
+			return true
+		}
+		vistas[clave] = true
+		out = append(out, claveDeAviso{clave: clave, pos: fset.Position(llamada.Pos()).String()})
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].clave < out[j].clave })
+	return out
+}
+
+// literalIzquierdo devuelve el literal de string de una expresión, o el literal MÁS A LA IZQUIERDA
+// de una concatenación (`"empuje_permanente:" + err.Error()` ⇒ `empuje_permanente:`), que es el
+// prefijo con el que la clave entra a `avisosDados`.
+func literalIzquierdo(e ast.Expr) (string, bool) {
+	for {
+		switch v := e.(type) {
+		case *ast.BasicLit:
+			if v.Kind != token.STRING {
+				return "", false
+			}
+			s, err := strconv.Unquote(v.Value)
+			if err != nil {
+				return "", false
+			}
+			return s, true
+		case *ast.BinaryExpr:
+			if v.Op != token.ADD {
+				return "", false
+			}
+			e = v.X
+		case *ast.ParenExpr:
+			e = v.X
+		default:
+			return "", false
+		}
 	}
 }
 
