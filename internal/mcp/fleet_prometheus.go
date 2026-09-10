@@ -68,7 +68,7 @@ const proyectosParaExportar = 64
 type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
 
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup) {
+	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios int) {
 	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
 	// Un error leyendo las ventanas NO puede convertirse en «todas en mantenimiento» (apagaría
 	// las alertas de la flota entera) ni hacer fallar el scrape. Se sigue con el mapa vacío, que
@@ -102,11 +102,11 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	//
 	// `truncadoDeProyectos` se resuelve acá porque lo de servicios lo sabe renderServicios; se le
 	// pasa para que la serie salga UNA vez con sus dos `kind`, en vez de dos series parecidas.
-	renderTruncado(b, truncado, serviciosTruncados(engine, vistos))
+	renderTruncado(b, truncado, serviciosTruncados(engine, vistos, techoServicios), techoServicios)
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
-	renderServicios(b, engine, vistos, ahora)
+	renderServicios(b, engine, vistos, ahora, techoServicios)
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
 	// compuertadas, por lo mismo que servicios.
 	renderAprobaciones(b, engine, vistos, ahora)
@@ -294,16 +294,45 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 // problema no se puede graficar ni distinguir de «el exportador no corrió».
 const nombreExportTruncado = "musubi_fleet_export_truncated"
 
+// truncadoDeExport dice CUÁL de los dos techos del exportador cortó, POR SEPARADO.
+//
+// Era un solo `bool` fusionado con `truncado = truncado || truncadoSvs`, y la fusión borraba
+// justo el dato accionable: los dos techos se arreglan distinto —uno es la perilla
+// `fleet.services_per_project_export`, el otro es `proyectosParaExportar`, una constante de
+// compilación— así que un aviso que no dice cuál se cortó manda a la perilla equivocada. Un aviso
+// que nombra el techo equivocado es PEOR que no avisar: el que lo lee sube un número, no ve
+// ningún cambio, y concluye que la alerta miente.
+type truncadoDeExport struct {
+	// Proyectos: se pasó de `proyectosParaExportar` tenants con máquinas en este barrido.
+	Proyectos bool
+	// Servicios: algún proyecto pasó el techo de servicios exportables.
+	Servicios bool
+}
+
+// Hubo responde si se recortó algo, sin decir qué. Es lo único para lo que sirve el bool fusionado
+// —decidir si hay que avisar—; QUÉ avisar sale de los campos.
+func (t truncadoDeExport) Hubo() bool { return t.Proyectos || t.Servicios }
+
 // renderTruncado emite la serie con un punto por dimensión recortable.
-func renderTruncado(b *strings.Builder, proyectos, servicios bool) {
+//
+// `techoServicios` entra por parámetro y no se lee de una constante porque es CONFIGURABLE: el
+// HELP tiene que nombrar el techo VIGENTE. Un HELP que dice 2000 cuando
+// `fleet.services_per_project_export` vale 300 manda a quien lee la alerta a buscar 2000
+// servicios que no existen. `techoServicios <= 0` es «sin techo», y entonces `kind="services"` no
+// puede valer 1: se dice así en vez de nombrar un número que no rige.
+func renderTruncado(b *strings.Builder, proyectos, servicios bool, techoServicios int) {
 	unoSi := func(v bool) string {
 		if v {
 			return "1"
 		}
 		return "0"
 	}
-	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota por un techo. `kind=projects`: se pasó de %d proyectos por scrape. `kind=services`: algún proyecto pasó de %d servicios. Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
-		nombreExportTruncado, proyectosParaExportar, serviciosPorExportar, nombreExportTruncado)
+	techoSvs := fmt.Sprintf("de %d servicios (techo `fleet.services_per_project_export`)", techoServicios)
+	if techoServicios <= 0 {
+		techoSvs = "el techo de servicios, que está DESACTIVADO (`fleet.services_per_project_export` negativo), así que este punto no puede valer 1"
+	}
+	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota por un techo. `kind=projects`: se pasó de %d proyectos por scrape (techo de compilación, ver proyectosParaExportar). `kind=services`: algún proyecto pasó %s. Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
+		nombreExportTruncado, proyectosParaExportar, techoSvs, nombreExportTruncado)
 	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(proyectos))
 	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(servicios))
 }

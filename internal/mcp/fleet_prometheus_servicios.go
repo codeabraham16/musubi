@@ -33,9 +33,15 @@ import (
 	"musubi/internal/memory"
 )
 
-// serviciosPorExportar es el techo de servicios que salen a métricas POR PROYECTO y por scrape.
-// No es el mismo techo que `fleet.ServiciosPorLatido` (que acota UN latido de UNA máquina): éste
-// protege a Prometheus de una flota entera.
+// serviciosPorProyectoDefault es el techo de servicios que UN PROYECTO aporta al export cuando la
+// configuración no dice otra cosa. No es el mismo techo que `fleet.ServiciosPorLatido` (que acota
+// UN latido de UNA máquina): éste protege a Prometheus de un tenant entero.
+//
+// ES UN DEFAULT Y YA NO UNA VERDAD CLAVADA EN EL BINARIO: se sube con
+// `fleet.services_per_project_export` (negativo = sin techo). Con el número en una constante, un
+// proyecto de 4000 servicios sólo se arreglaba recompilando, y mientras tanto los servicios de
+// más NO TENÍAN SERIE — o sea que `ServicioCaido` no los cubría, que desde afuera se ve igual que
+// todo bien.
 //
 // Cuando se corta, SE DICE. Un recorte silencioso deja series que desaparecen sin que nadie sepa
 // por qué, y eso se lee como «ese servicio ya no existe» — que es una afirmación, no un silencio.
@@ -51,7 +57,7 @@ import (
 //
 // Por proyecto, un tenant grande no puede dejar ciego a otro — que con un techo compartido era
 // exactamente lo que pasaba, y sin que ninguno de los dos se enterara.
-const serviciosPorExportar = 2000
+const serviciosPorProyectoDefault = 2000
 
 // servicioExportable ata un servicio a la máquina donde corre. Los dos hacen falta para las
 // etiquetas: el nombre del servicio solo no identifica nada en una flota.
@@ -61,15 +67,30 @@ type servicioExportable struct {
 }
 
 // serviciosVisiblesParaMetricas devuelve los servicios de las máquinas YA compuertadas.
-func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.Device) (out []servicioExportable, truncado bool) {
+//
+// `techo` es el máximo POR PROYECTO; <= 0 lo desactiva. Un proyecto que se pasa se corta a sí
+// mismo y el barrido SIGUE con los demás.
+func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.Device, techo int) (out []servicioExportable, truncado bool) {
 	contadoPorProyecto := map[string]int{}
 	// Se agrupa por proyecto para no pedirle a la base una vez por máquina: `ListarServicios`
 	// trae los del proyecto entero y acá se filtra por las máquinas que pasaron la compuerta.
+	//
+	// EL ORDEN DE RECORRIDO SALE DE `vistos` Y NO DE RECORRER EL MAP, y ésta es la mitad que
+	// faltaba: `devicesVisiblesParaMetricas` ordena por (proyecto, nombre) con un sort.Slice, y
+	// agrupar en un map TIRA ese orden — el range sobre un map de Go arranca en un bucket al azar
+	// en cada llamada. Ordenar y después perder el orden es peor que no ordenar, porque parece
+	// hecho: el bloque de servicios de /metrics salía barajado en cada scrape, y un diff entre dos
+	// /metrics —que es cómo se depura un export— no servía para nada.
 	porProyecto := map[string][]fleet.Device{}
+	var orden []string
 	for _, d := range vistos {
+		if _, yaVisto := porProyecto[d.ProjectID]; !yaVisto {
+			orden = append(orden, d.ProjectID)
+		}
 		porProyecto[d.ProjectID] = append(porProyecto[d.ProjectID], d)
 	}
-	for proy, devices := range porProyecto {
+	for _, proy := range orden {
+		devices := porProyecto[proy]
 		porID := make(map[string]fleet.Device, len(devices))
 		for _, d := range devices {
 			porID[d.ID] = d
@@ -88,7 +109,7 @@ func serviciosVisiblesParaMetricas(engine memory.StorageBackend, vistos []fleet.
 			}
 			// EL TECHO SE CUENTA POR PROYECTO, no sobre `out`: con un contador global el
 			// primer tenant en ser barrido se comía el cupo y los demás quedaban sin series.
-			if contadoPorProyecto[d.ProjectID] >= serviciosPorExportar {
+			if techo > 0 && contadoPorProyecto[d.ProjectID] >= techo {
 				truncado = true
 				continue
 			}
@@ -304,18 +325,23 @@ func labelsDeServicio(sv fleet.Servicio, d fleet.Device) [][2]string {
 // renderServicios devolviera el dato y que renderFlota lo llamara ANTES de emitir las series de
 // máquina, lo que cambiaría el orden del exposition format que ya está probado. Un barrido más
 // por scrape es barato al lado de reordenar la salida.
-func serviciosTruncados(engine memory.StorageBackend, vistos []fleet.Device) bool {
-	_, truncado := serviciosVisiblesParaMetricas(engine, vistos)
+func serviciosTruncados(engine memory.StorageBackend, vistos []fleet.Device, techo int) bool {
+	_, truncado := serviciosVisiblesParaMetricas(engine, vistos, techo)
 	return truncado
 }
 
-func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) {
-	svs, truncado := serviciosVisiblesParaMetricas(engine, vistos)
+func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time, techo int) {
+	svs, truncado := serviciosVisiblesParaMetricas(engine, vistos, techo)
 	if len(svs) == 0 {
 		return
 	}
 	if truncado {
-		fmt.Fprintf(b, "# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO; hay más.\n", serviciosPorExportar)
+		// EL COMENTARIO SE QUEDA PERO YA NO ES LA SEÑAL: Prometheus descarta las líneas `#` al
+		// parsear, así que esto sólo lo lee quien hace `curl /metrics` a mano. Lo que alerta es
+		// `musubi_fleet_export_truncated{kind="services"}`. El número que se imprime es el techo
+		// VIGENTE y no la constante, porque es configurable: imprimir 2000 cuando la perilla dice
+		// otra cosa manda a buscar el problema al lugar equivocado.
+		fmt.Fprintf(b, "# musubi_fleet_service: se exportaron los primeros %d servicios POR PROYECTO (techo `fleet.services_per_project_export`); hay más.\n", techo)
 	}
 	for _, s := range seriesDeServicio() {
 		escribirGaugeDeServicios(b, svs, s, ahora)

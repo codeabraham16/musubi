@@ -1258,9 +1258,12 @@ dispararse: no es que esté todo bien, es que no se está mirando.
 
 La etiqueta `kind` dice cuál techo se cruzó:
 
-- **`kind="services"`** → algún proyecto pasó los **2000 servicios** exportables. El techo es
-  **por proyecto** (lo era total hasta la Ola 0, y con el total un tenant grande dejaba ciego a
-  uno chico sin que ninguno se enterara). Quién lo cruzó:
+- **`kind="services"`** → algún proyecto pasó su techo de servicios exportables (**default
+  2000**). El techo es **por proyecto** (lo era total hasta la Ola 0, y con el total un tenant
+  grande dejaba ciego a uno chico sin que ninguno se enterara) y **es una perilla**:
+  `fleet.services_per_project_export` en `.musubi/config.yaml` (negativo = sin techo). El número
+  que rige lo imprime el `# HELP` de la serie en `/metrics`, así que no hace falta adivinarlo.
+  Quién lo cruzó:
 
   ```
   musubi_fleet_list                 # cuántas máquinas por proyecto
@@ -1278,10 +1281,19 @@ La etiqueta `kind` dice cuál techo se cruzó:
 - **`kind="projects"`** → hay más de **64 proyectos** con máquinas. Ese techo protege al scrape
   de convertirse en un escaneo sin fin de la base, y se cruza recién con muchos tenants.
 
-**Los dos techos están en el código** (`internal/mcp/fleet_prometheus_servicios.go` y
-`internal/mcp/fleet_prometheus.go`) y subirlos es un cambio con prueba, no una variable de
-entorno: el que los sube tiene que medir qué le hace a la cardinalidad de Prometheus. Referencia:
-2000 servicios × 7 series por servicio son 14.000 series por proyecto.
+**Los dos techos NO se suben igual, y por eso la etiqueta `kind` importa:**
+
+| techo | quién lo gobierna | avisa al cortar |
+|---|---|---|
+| servicios por proyecto | `fleet.services_per_project_export` (config, recarga con reinicio del cerebro) | serie `kind="services"` + log del empuje, que nombra esta perilla |
+| proyectos por scrape | `proyectosParaExportar`, constante en `internal/mcp/fleet_prometheus.go` | serie `kind="projects"` + log del empuje, que dice explícitamente que no hay perilla |
+
+Un aviso que nombra el techo equivocado es peor que no avisar: el que lo lee sube un número, no ve
+ningún cambio y concluye que la alerta miente. Por eso cada mitad avisa por separado.
+
+Subir el de servicios sigue sin ser gratis: el que lo sube tiene que medir qué le hace a la
+cardinalidad de Prometheus. Referencia: 2000 servicios × 7 series por servicio son 14.000 series
+por proyecto, y una serie que deja de recibir datos no se borra.
 
 **Lo que NO es:** un problema de rendimiento del cerebro. El recorte ocurre al armar la respuesta,
 así que el scrape sigue siendo rápido — ése es justamente el motivo por el que el techo existe y

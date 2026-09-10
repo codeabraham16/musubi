@@ -59,6 +59,7 @@ const podaCadaTanto = time.Hour
 func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 	s.sondaIntervalo = cfg.EffectiveProbeInterval()
 	s.retencionSalidasDias = cfg.EffectiveOutputRetentionDays()
+	s.techoServiciosPorProyecto = cfg.EffectiveServicesPerProjectExport()
 
 	politicas := make([]fleet.Politica, 0, len(cfg.Policies))
 	vistos := make(map[string]bool, len(cfg.Policies))
