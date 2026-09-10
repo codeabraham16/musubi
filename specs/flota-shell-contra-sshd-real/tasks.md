@@ -93,6 +93,7 @@ pty maestro.
 
 ## Lo que queda fuera
 
-- Un `sshd` con **PAM**, contraseñas, o `ForceCommand` — este corre sin root y sin PAM a propósito.
-- Un host **remoto de verdad** (latencia, MTU, cortes): esto fue loopback.
-- Otras implementaciones de servidor (dropbear, el `sshd` de un router, Windows OpenSSH).
+- Un `sshd` con **PAM**, contraseñas, o `ForceCommand` (**B18**) — este corre sin root y sin PAM a
+  propósito, que es lo que permite levantarlo sin instalar nada.
+- Un host **remoto de verdad** (latencia, MTU, cortes) (**B14**): esto fue loopback.
+- Otras implementaciones de servidor (**B15**): dropbear, el `sshd` de un router, Windows OpenSSH.
