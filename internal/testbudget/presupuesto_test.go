@@ -258,6 +258,79 @@ func TestPoliticaIncompletaEsError(t *testing.T) {
 	}
 }
 
+// EL TECHO TAMBIÉN SE APAGA HACIÉNDOLO ENORME, Y ERA UN AGUJERO MEDIDO.
+//
+// El rango honesto de la política es [10m, 2h]. Adentro de ese rango —y por lo tanto legal—
+// entra RACE_TIMEOUT=2h: contra el paquete más lento medido en este repo (internal/mcp, 1059 s
+// en `./...`) eso da 6,8× de margen cuando la política exige 2,0×. El guard del margen quedaba
+// VERDE POR AMPLITUD DEL RANGO —no por estar bien— y la suite podía triplicarse sin que nada
+// dijera nada. Un rango es un número tipeado contra otro número tipeado: no sabe cuánto tarda
+// la suite, y por eso el tope de verdad se mide contra la corrida.
+//
+// Los casos van pegados al umbral de los DOS lados con la misma medición, así que un juez que
+// contestara siempre lo mismo falla en uno.
+func TestUnTechoQueSobraTantoQueNoPuedePonerseRojo(t *testing.T) {
+	const masLento = "1059.0" // internal/mcp bajo -race en `./...`, 2026-09-10
+	casos := []struct {
+		nombre      string
+		techo       string
+		quieroDeMas bool
+	}{
+		{"el techo de hoy (40m) tiene margen y no sobra", "40m", false},
+		{"2h es legal en el rango y sobra 6,8x contra el 2,0x exigido", "2h", true},
+		{"justo en el tope (3x el margen exigido) todavia pasa", "105m", false},
+		{"apenas por encima del tope ya no", "110m", true},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			p := politica(c.techo, 2.0)
+			v, err := Analizar(salidaCon("musubi/internal/mcp", masLento, "musubi/internal/logx", "1.2"), p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.TechoDeMas() != c.quieroDeMas {
+				t.Fatalf("con techo %s el margen medido es %.2f× (mínimo exigido %.2f×, tope %.2f×) "+
+					"y TechoDeMas() = %v, quiero %v",
+					c.techo, v.Margen, p.MargenMinimo, p.MargenMinimo*FactorTechoMaximo,
+					v.TechoDeMas(), c.quieroDeMas)
+			}
+			if !c.quieroDeMas {
+				return
+			}
+			// Y no se confunde con el otro rojo: el defecto es que el guard del margen NO se
+			// puede poner rojo nunca, no que se esté poniendo.
+			if v.Rojo() {
+				t.Fatal("Rojo() dio true: este caso es «el techo sobra», no «el margen se comió»")
+			}
+			if !strings.Contains(v.Informe(), "dejó de ser un techo") {
+				t.Errorf("el informe no dice por qué:\n%s", v.Informe())
+			}
+		})
+	}
+}
+
+// El techo que HOY tiene el repo tiene que estar de los dos lados del rango medido: ni comido
+// ni sobredimensionado contra la peor medición fechada en la política.
+func TestElTechoDelRepoNoSobraContraLaPeorMedicion(t *testing.T) {
+	p, err := CargarPoliticaDelRepo(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := Analizar(salidaCon("musubi/internal/mcp", "1059.0"), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Rojo() {
+		t.Errorf("el techo del repo no alcanza para la peor medición fechada: %s", v.Informe())
+	}
+	if v.TechoDeMas() {
+		t.Errorf("el techo del repo sobra tanto que el guard del margen no se puede poner rojo: %s",
+			v.Informe())
+	}
+	t.Logf("margen %.2f× (mínimo %.2f×, tope %.2f×)", v.Margen, p.MargenMinimo,
+		p.MargenMinimo*FactorTechoMaximo)
+}
+
 func escribir(t *testing.T, ruta, contenido string) {
 	t.Helper()
 	if err := os.WriteFile(ruta, []byte(contenido), 0o644); err != nil {

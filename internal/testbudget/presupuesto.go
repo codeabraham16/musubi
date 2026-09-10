@@ -60,7 +60,24 @@ const (
 	// TimeoutTecho — 2h. Un cuelgue de verdad quema el techo entero de un runner; más de dos
 	// horas ya no es «un margen generoso», es no tener techo (y el job de GitHub muere a las 6h
 	// de todas formas, sin decir por qué).
+	//
+	// OJO: ESTE RANGO SOLO NO ALCANZA, Y ERA UN AGUJERO MEDIDO. Un rango es un número tipeado
+	// contra otro número tipeado: no sabe cuánto tarda la suite. Con RACE_TIMEOUT=2h —legal acá
+	// dentro— e internal/mcp en 1059 s, el margen sale 6,8× contra el 2,0× que exige la política,
+	// o sea que el guard del margen queda VERDE POR AMPLITUD DEL RANGO y no por estar bien: la
+	// suite podría triplicarse sin que nada dijera nada. El tope de verdad es FactorTechoMaximo,
+	// más abajo, que se mide contra la corrida en vez de tipearse.
 	TimeoutTecho = 2 * time.Hour
+	// FactorTechoMaximo — cuántas veces el margen MEDIDO puede pasar al margen EXIGIDO antes de
+	// que el techo deje de ser un techo.
+	//
+	// El guard del margen mira una sola dirección: que el techo no se quede corto. La otra
+	// dirección también apaga el aparato, sólo que en silencio — un techo enorme hace que
+	// TECHO/MÁS_LENTO sea siempre cómodo y el rojo se vuelve inalcanzable. Con 3 el techo puede
+	// sobrar hasta el triple de lo que la política pide (hoy: hasta 6,0× cuando se exige 2,0×,
+	// y el medido es 2,27×), que es holgura de sobra para el ruido de un runner compartido, y
+	// deja de tapar el caso en que alguien «arregla» un rojo subiendo el número.
+	FactorTechoMaximo = 3.0
 	// UmbralLineasPiso / UmbralLineasTecho — el umbral que decide QUÉ paquetes tienen que llevar
 	// el guard. Subirlo es la forma barata de sacar paquetes de la lista sin tocarlos: con
 	// 15.000 líneas de tope, cmd/musubi (13.092 líneas, 118,2 s bajo -race) no se puede dejar
@@ -86,6 +103,17 @@ type Veredicto struct {
 
 // Rojo dice si el margen medido se comió el umbral de la política.
 func (v Veredicto) Rojo() bool { return v.Margen < v.Politica.MargenMinimo }
+
+// TechoDeMas es la MISMA pregunta del otro lado: si el techo sobra tanto contra lo que la
+// corrida acaba de medir, el guard del margen no se puede poner rojo nunca y el aparato entero
+// pasa a ser decoración con costo de CI.
+//
+// Se mide contra la corrida y no contra un rango tipeado a propósito: [10m, 2h] es un par de
+// números que no sabe cuánto tarda la suite, y adentro de ese rango entra un techo que da 6,8×
+// de margen contra el 2,0× exigido.
+func (v Veredicto) TechoDeMas() bool {
+	return v.Margen > v.Politica.MargenMinimo*FactorTechoMaximo
+}
 
 // NombreArchivoPolitica es el archivo de política, en la raíz del repo.
 const NombreArchivoPolitica = "presupuesto-de-pruebas.env"
@@ -283,13 +311,23 @@ func (v Veredicto) Informe() string {
 		v.MasLento.Nombre, v.MasLento.Duracion.Seconds(),
 		100*v.MasLento.Duracion.Seconds()/v.Politica.Timeout.Seconds())
 	fmt.Fprintf(&b, "  margen medido: %.2f× (mínimo exigido %.2f×)\n", v.Margen, v.Politica.MargenMinimo)
-	if v.Rojo() {
+	switch {
+	case v.Rojo():
 		fmt.Fprintf(&b, "ERROR: el margen se comió el umbral. %s tarda %.1fs y con un techo de %s "+
 			"un runner %.2f× más lento ya no termina. Arreglo: abaratar el paquete (medir POR QUÉ "+
 			"tardó, como hizo A45 con las migraciones) o subir RACE_TIMEOUT en %s con el motivo escrito.\n",
 			v.MasLento.Nombre, v.MasLento.Duracion.Seconds(), v.Politica.Timeout,
 			v.Politica.MargenMinimo, NombreArchivoPolitica)
-	} else {
+	case v.TechoDeMas():
+		fmt.Fprintf(&b, "ERROR: el techo dejó de ser un techo. RACE_TIMEOUT=%s da %.2f× de margen "+
+			"sobre el paquete más lento medido (%s, %.1fs) y la política exige %.2f×: sobra más de "+
+			"%.0f veces lo pedido, así que este guard no se puede poner rojo NUNCA y sólo cuesta "+
+			"minutos de CI. Arreglo: bajar RACE_TIMEOUT en %s a la medición × %.2f (≈%s).\n",
+			v.Politica.Timeout, v.Margen, v.MasLento.Nombre, v.MasLento.Duracion.Seconds(),
+			v.Politica.MargenMinimo, FactorTechoMaximo, NombreArchivoPolitica,
+			v.Politica.MargenMinimo,
+			(time.Duration(float64(v.MasLento.Duracion) * v.Politica.MargenMinimo)).Round(time.Minute))
+	default:
 		fmt.Fprint(&b, "OK: el presupuesto tiene margen.\n")
 	}
 	return b.String()

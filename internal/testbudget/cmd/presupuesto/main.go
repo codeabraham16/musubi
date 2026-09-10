@@ -71,7 +71,9 @@ func ejecutar(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprint(stdout, v.Informe())
-	if v.Rojo() {
+	// LAS DOS DIRECCIONES. Que el techo se quede corto (Rojo) y que sobre tanto que el guard no
+	// se pueda poner rojo nunca (TechoDeMas) apagan el mismo aparato; la segunda, en silencio.
+	if v.Rojo() || v.TechoDeMas() {
 		return 1
 	}
 	return 0
