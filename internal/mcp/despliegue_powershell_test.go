@@ -99,14 +99,60 @@ import (
 //
 // que es siempre verdadera (`-and` liga más fuerte que `-or`). No era una redundancia inofensiva:
 // LEÍA como un filtro y no filtraba nada, en el instalador que corre un cliente. Se saca la
-// condición y se guarda que no vuelva: de CADA `if`/`elseif` de CADA pieza de PowerShell de las
-// cuatro clases se evalúa la condición —partida por `-or` y `-and`, con la precedencia real— y se
-// falla si es constante, verdadera o falsa. No se busca el texto `-or $true`: se busca una
-// condición que no decide nada, que es lo que el defecto ES.
+// condición y se guarda que no vuelva: no se busca el texto `-or $true`, se busca una expresión
+// que no decide nada, que es lo que el defecto ES.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// REESCRITURA 3 (2026-09-10, ronda adversaria fina). Las cinco fugas que quedaban eran todas «el
+// mismo defecto escrito de otra manera», y ninguna se cierra agregando esa manera a una lista:
+//
+//  1. `Where-Object { $_.Path -eq '…' -or $true }` (`cambiar-agente.cmd:69`), el filtro que
+//     decide qué procesos recibe `Stop-Process -Force`. La guarda de la condición constante
+//     recorría `if`/`elseif` y nada más. Ahora no recorre construcciones: recorre TODAS las
+//     regiones balanceadas del código —cada `( )` y cada `{ }`— y evalúa cada sentencia. De ahí
+//     salen, sin nombrarlos, el `Where-Object`, el `?{ }`, el `.Where({ })`, el `-Filter { }`
+//     y el ternario.
+//  2. `while (algo -or $true)`. El `while` estaba afuera a propósito, porque `while ($true)` es
+//     un bucle legítimo. Los dos casos SE DISTINGUEN y por eso se pueden separar: afuera de un
+//     `if`/`elseif` hace falta que la expresión sea COMPUESTA (que combine operandos con un
+//     operador booleano en nivel cero). `while ($true)` no lo es y sigue verde.
+//  3. EL LANZADOR CON ARGUMENTOS PROPIOS delante de `powershell` en un `.cmd`/`.bat`
+//     (`start "" powershell …`, `start "" /wait powershell …`, `cmd /c powershell …`). Se
+//     salteaba un `start`/`call` PELADO y se exigía que el token siguiente fuera el programa.
+//     Ahora se prueban TODAS las posiciones donde puede empezar el programa detrás de un
+//     lanzador, porque una vez que `CommandLineToArgvW` sacó las comillas el título de `start`
+//     no se distingue del programa. Y si se reconoce la invocación y NO se puede leer el guion,
+//     eso es ROJO: «no pude medir» y «medí y está bien» no son el mismo resultado.
+//  4. LA CADENA DE HELPERS DE BASH, sin cierre transitivo: `ps2(){ ps1 "$1"; }` y después llamar
+//     con `ps2` quedaba verde, mientras que llamar a `ps1` directo daba rojo. Ahora se itera
+//     hasta punto fijo, igual que el extractor de Go ya hacía con sus `envoltorios` — era la
+//     misma idea aplicada de un lado y no del hermano. De paso apareció que `palabraAnterior`
+//     miraba otra vez un prefijo: `VEREDICTO=$(ps1 '…')` no coincidía con ningún helper.
+//  5. EL ARGV EN UN SLICE, del lado de Go: `argv := []string{"-NoProfile","-Command",guion}` y
+//     `exec.Command("powershell", argv...)` extraía CERO piezas, y el control al revés del
+//     inventario sólo dispara con N>=1, así que un archivo nuevo era invisible por partida
+//     doble. Ahora el slice se desarma, y una llamada que le pasa `powershell` a otra función y
+//     de la que no se pudo leer el guion es ROJA con el motivo escrito.
+//
+// Y DE PASO, EL PLEGADO SE ANIMA A UNA COMPARACIÓN: `-or $true -eq $true` y `-or 1 -eq 1` se
+// plantaban antes del `-eq`. Se pliega SÓLO la comparación entre DOS LITERALES —dos números o
+// dos booleanos—, que es la única que se puede calcular sin saber nada del entorno; con una
+// variable de un lado la respuesta sigue siendo «no sé» y no se reporta.
+//
+// UN FALSO POSITIVO SERÍA PEOR QUE UNA FUGA, porque una guarda que se pone roja sobre código
+// sano termina apagada. Controles corridos VERDES contra esta versión, en los cuatro lenguajes:
+// `while ($true)`, `do { } while ($i -gt 0)`, dos `Where-Object` que sí filtran, un `switch` con
+// ramas `$true`/`$false`, un `$flag = $true` adentro del cuerpo de un `if`, un `if` usado como
+// expresión; `start "" notepad.exe`, `call :subrutina`, `cmd /c copy`, un `echo` que nombra a
+// PowerShell, `powershell -File guion.ps1` y un `\"` escrito en un `.cmd` (que le llega a
+// PowerShell como `"`, o sea correcto); el `trap 'rm -rf "$TMP"' EXIT` y dos funciones de bash
+// que NOMBRAN a `ps1` adentro de un mensaje sin llamarlo (no son helpers, y su literal no se
+// mira); `exec.LookPath("powershell.exe")`, `exec.Command("powershell", …, "-File", ruta)` y un
+// `[]string{…}` limpio pasado con `...`.
 //
 // SABOTAJES CORRIDOS CONTRA ESTA VERSIÓN, a mano y restaurados con `cp` (no con `git checkout`,
 // que no conoce un archivo nuevo): ver el mensaje del commit. Los cinco de arriba dan ROJO, más
-// los cinco de la reescritura 1, y el `trap` de bash sigue en verde.
+// los cinco de la reescritura 1 y los cinco de la reescritura 2.
 func TestNingunPowerShellDeDeployEscapaComillasConBarra(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 
@@ -128,15 +174,11 @@ func TestNingunPowerShellDeDeployEscapaComillasConBarra(t *testing.T) {
 	}
 
 	// Las variables de bash que GUARDAN PowerShell (`RESOLVER`, `CLASIFICAR`, `VEREDICTO`) y los
-	// helpers que se lo PASAN a `powershell` (`ps1(){ ... }`). Los dos se descubren leyendo los
-	// archivos: ni una lista de nombres ni un prefijo.
-	variablesPS := variablesDeBashQueGuardanPowerShell(shs, fuentes)
-	helpers := map[string]bool{}
-	for _, ruta := range shs {
-		for h := range funcionesDeBashQueInvocanPowerShell(fuentes[ruta]) {
-			helpers[h] = true
-		}
-	}
+	// helpers que se lo PASAN a `powershell` (`ps1(){ ... }`, y los que se lo pasan a `ps1`).
+	// Los dos se descubren leyendo los archivos, y los dos hasta PUNTO FIJO: ni una lista de
+	// nombres, ni un prefijo, ni un solo eslabón de la cadena.
+	helpers := helpersDeBashQueTerminanEnPowerShell(shs, fuentes)
+	variablesPS := variablesDeBashQueGuardanPowerShell(shs, fuentes, helpers)
 
 	// unidades[ruta] = cuántas piezas de PowerShell REALES se miraron en ese archivo.
 	unidades := map[string]int{}
@@ -166,9 +208,17 @@ func TestNingunPowerShellDeDeployEscapaComillasConBarra(t *testing.T) {
 	// (c) — los `.cmd` y los `.bat`, en el argumento del `-Command` de `powershell`.
 	for _, ruta := range cmds {
 		src := fuentes[ruta]
-		for _, inv := range comandosPowerShellDeCmd(src) {
+		invocaciones, opacos := comandosPowerShellDeCmd(src)
+		for _, inv := range invocaciones {
 			unidades[ruta]++
 			revisarPowerShell(t, ruta, inv.texto, func(int) int { return inv.linea })
+		}
+		for _, op := range opacos {
+			t.Errorf("%s:%d — acá se invoca a PowerShell y NO PUDE LEER EL GUION:\n\n  %s\n\n"+
+				"Eso no es «está limpio», es «no pude medir», y son cosas opuestas: si el guion "+
+				"trae un `\\\"` esta guarda no lo va a ver. Escribí el guion en el `-Command` (o "+
+				"pasalo con `-File guion.ps1`, que el `.ps1` se mira entero por su cuenta).",
+				ruta, op.linea, op.argv)
 		}
 	}
 
@@ -214,16 +264,22 @@ func informarBarra(t *testing.T, ruta string, linea int, recorte string) {
 
 func informarCondicion(t *testing.T, ruta string, linea int, cond, veredicto string) {
 	t.Helper()
-	t.Errorf("%s:%d — condición de PowerShell CONSTANTE: %s.\n\n"+
-		"  if (%s)\n\n"+
-		"Una condición que no decide nada es un defecto propio, no una redundancia: LEE como un "+
-		"filtro y no filtra. Así estuvo `agente-windows.ps1` hasta el 2026-09-10 con\n"+
+	t.Errorf("%s:%d — expresión de PowerShell CONSTANTE: %s.\n\n"+
+		"  %s\n\n"+
+		"Una expresión que combina operandos y no decide nada es un defecto propio, no una "+
+		"redundancia: LEE como un filtro y no filtra. Así estuvo `agente-windows.ps1` hasta el "+
+		"2026-09-10 con\n"+
 		"  if ($LASTEXITCODE -ne 0 -and $error[0] -match \"forbidden|10013\" -or $true)\n"+
 		"—`-and` liga más fuerte que `-or`, así que la condición entera era `(...) -or $true`—, en "+
-		"el instalador que corre un cliente.\n"+
-		"Si la rama tiene que correr siempre, SACÁ EL `if` y dejá el cuerpo. Si tiene que filtrar, "+
-		"escribí el filtro que de verdad filtra: borrar sólo el `-or $true` habría APAGADO el "+
-		"consejo, que no es lo mismo que dejar el filtro que aparenta.",
+		"el instalador que corre un cliente. Y así estuvo `cambiar-agente.cmd` cuando alguien le "+
+		"agregó un `-or $true` al `Where-Object` que decide QUÉ PROCESOS recibe `Stop-Process "+
+		"-Force`: ese filtro que no filtra mata todos los procesos de la máquina.\n"+
+		"Si la rama tiene que correr siempre, SACÁ EL `if` (o el filtro) y dejá el cuerpo. Si "+
+		"tiene que filtrar, escribí el filtro que de verdad filtra: borrar sólo el `-or $true` "+
+		"habría APAGADO el consejo, que no es lo mismo que dejar el filtro que aparenta.\n"+
+		"Ojo: `while ($true)` NO es esto y no pone roja la guarda — un bucle no promete filtrar. "+
+		"Lo que se reporta afuera de un `if`/`elseif` es la expresión COMPUESTA que pliega a "+
+		"constante, que es el mismo defecto con otro disfraz.",
 		ruta, linea, veredicto, strings.Join(strings.Fields(cond), " "))
 }
 
@@ -324,11 +380,22 @@ func verificarInventario(t *testing.T, raiz string, shs, ps1s, cmds []string, un
 	if t.Failed() {
 		return
 	}
+	// LOS CEROS TAMBIÉN SE IMPRIMEN. `musubi-setup.bat` está en el inventario con mínimo 0 —hoy
+	// nombra a PowerShell en un `echo` y no lo invoca— y no aparecía en esta línea: un archivo
+	// ausente de la cobertura no se distingue de uno que nunca se miró, y así un «no pude medir»
+	// se lee como «medí y está bien». Un cero MEDIDO se dice.
 	total := 0
-	nombres := make([]string, 0, len(unidades))
+	nombres := make([]string, 0, len(unidades)+len(inventarioPowerShell))
+	dicho := map[string]bool{}
 	for ruta, n := range unidades {
 		total += n
+		dicho[ruta] = true
 		nombres = append(nombres, fmt.Sprintf("%s=%d", filepath.Base(ruta), n))
+	}
+	for _, e := range inventarioPowerShell {
+		if !dicho[e.ruta] {
+			nombres = append(nombres, fmt.Sprintf("%s=0", filepath.Base(e.ruta)))
+		}
 	}
 	sort.Strings(nombres)
 	t.Logf("PowerShell mirado: %d piezas · %s", total, strings.Join(nombres, " "))
@@ -567,46 +634,198 @@ type condicionPS struct {
 	veredicto      string
 }
 
-// `while ($true)` es un bucle legítimo y no entra: acá se miran `if` y `elseif`, que son los que
-// prometen filtrar.
-var ifDePowerShell = regexp.MustCompile(`(?i)(^|[^\w$-])(elseif|if)[ \t]*\(`)
-
-// condicionesConstantes evalúa la condición de cada `if`/`elseif` y devuelve las que valen
-// siempre lo mismo. Se trabaja sobre la MÁSCARA —o sea sobre el código, sin las cadenas ni los
-// comentarios— así que ni un `if (` escrito adentro de un mensaje se cuenta, ni un `$true`
-// adentro de una cadena hace pasar por constante a una condición que no lo es.
+// RONDA 3. LA VERSIÓN ANTERIOR RECORRÍA `if`/`elseif` Y NADA MÁS, y por ahí entraron dos veces el
+// MISMO defecto:
+//
+//   - `Get-Process | Where-Object { $_.Path -eq '...' -or $true } | Stop-Process -Force`
+//     (`cambiar-agente.cmd:69`). El filtro que decide QUÉ PROCESOS SE MATAN no es un `if`: es el
+//     bloque de un `Where-Object`. Con el `-or $true` el `.cmd` mata todos los procesos de la
+//     máquina, y la guarda daba PASS imprimiendo `cambiar-agente.cmd=1` en cobertura: la pieza se
+//     extrajo, se escaneó, y la condición constante no se reportó.
+//   - `while ($algo -or $true)`. El `while` estaba excluido A PROPÓSITO porque `while ($true)` es
+//     un bucle legítimo — y eso es cierto de la condición que ES sólo `$true`, no de la condición
+//     COMPUESTA que pliega a constante, que no es un bucle sino este defecto disfrazado.
+//
+// AGREGAR `Where-Object` Y `while` A UNA LISTA NO CIERRA NADA: falta `?{ }`, `.Where({ })`, el
+// ternario `? :`, `-Filter { }`, y el que se invente mañana. Así que no se listan construcciones:
+// se recorren TODAS las regiones balanceadas del código —cada `( )` y cada `{ }`— y en cada una
+// se evalúa cada SENTENCIA. Lo que se pregunta es lo que el defecto ES: una expresión que combina
+// operandos con operadores booleanos —o sea que LEE como una decisión— y que sin embargo vale
+// siempre lo mismo.
+//
+// Y LOS DOS CASOS SE DISTINGUEN, que es lo que permite cerrar el `while` sin gritar en falso:
+// afuera de un `if`/`elseif` hace falta que la expresión sea COMPUESTA (que tenga un operador
+// booleano en nivel cero). `while ($true)` no lo es y queda verde; `while ($x -or $true)` sí y da
+// rojo. Adentro de un `if`/`elseif` alcanza con que sea constante, porque un `if ($true)` es el
+// mismo defecto sin disfraz.
 func condicionesConstantes(src, mascara string) []condicionPS {
 	var out []condicionPS
-	for _, m := range ifDePowerShell.FindAllStringSubmatchIndex(mascara, -1) {
-		abre := m[1] - 1 // el `(` es el último carácter del match
-		if abre < 0 || abre >= len(mascara) || mascara[abre] != '(' {
-			continue
-		}
-		prof, cierra := 0, -1
-		for k := abre; k < len(mascara); k++ {
-			switch mascara[k] {
-			case '(':
-				prof++
-			case ')':
-				prof--
-				if prof == 0 {
-					cierra = k
-				}
+	for _, r := range regionesDePowerShell(mascara) {
+		for _, st := range sentenciasDeRegion(mascara, r.abre+1, r.cierra) {
+			expr := mascara[st.ini:st.fin]
+			if !r.deIf && !hayOperadorBooleanoEnNivelCero(expr) {
+				continue
 			}
-			if cierra >= 0 {
-				break
+			v, ok := veredictoDeCondicion(expr)
+			if !ok {
+				continue
 			}
+			out = append(out, condicionPS{desplazamiento: st.ini, texto: src[st.ini:st.fin], veredicto: v})
 		}
-		if cierra < 0 {
-			continue
-		}
-		v, ok := veredictoDeCondicion(mascara[abre+1 : cierra])
-		if !ok {
-			continue
-		}
-		out = append(out, condicionPS{desplazamiento: m[2], texto: src[abre+1 : cierra], veredicto: v})
 	}
 	return out
+}
+
+type regionPS struct {
+	abre, cierra int  // índices del delimitador de apertura y del de cierre, en la máscara
+	deIf         bool // el `(` de un `if`/`elseif`
+}
+
+// palabraDeCondicion son las que abren un `(` que es UNA CONDICIÓN Y NADA MÁS. No es la lista de
+// las construcciones que se miran —se miran todas—: es la lista de las que además no necesitan
+// que la expresión sea compuesta.
+var palabraDeCondicion = map[string]bool{"if": true, "elseif": true}
+
+// regionesDePowerShell devuelve TODOS los grupos balanceados `( )` y `{ }` del código. De ahí
+// salen, sin nombrarlas, la condición de un `if`, la de un `while`/`until`, el bloque de un
+// `Where-Object` o de un `?`, el de un `.Where({ })`, el de un `-Filter`, y el ternario.
+func regionesDePowerShell(mascara string) []regionPS {
+	var out []regionPS
+	type apertura struct {
+		ind int
+		c   byte
+	}
+	var pila []apertura
+	for i := 0; i < len(mascara); i++ {
+		switch mascara[i] {
+		case '(', '{':
+			pila = append(pila, apertura{i, mascara[i]})
+		case ')', '}':
+			if len(pila) == 0 {
+				continue
+			}
+			p := pila[len(pila)-1]
+			pila = pila[:len(pila)-1]
+			if (p.c == '(') != (mascara[i] == ')') {
+				continue // delimitadores cruzados: no se inventa una región
+			}
+			out = append(out, regionPS{
+				abre:   p.ind,
+				cierra: i,
+				deIf:   p.c == '(' && palabraDeCondicion[strings.ToLower(palabraPegadaAntes(mascara, p.ind))],
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].abre < out[j].abre })
+	return out
+}
+
+// palabraPegadaAntes devuelve la palabra que está justo antes de `hasta`, salteando espacios.
+func palabraPegadaAntes(s string, hasta int) string {
+	k := hasta - 1
+	for k >= 0 && strings.ContainsRune(" \t", rune(s[k])) {
+		k--
+	}
+	fin := k + 1
+	for k >= 0 && esLetraOGuionBajo(s[k]) {
+		k--
+	}
+	return s[k+1 : fin]
+}
+
+func esLetraOGuionBajo(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+type tramoPS struct{ ini, fin int }
+
+// sentenciasDeRegion parte el contenido de una región en las SENTENCIAS que la componen: un `;`
+// en nivel cero, o un salto de línea que no venga después de un continuador. Sin esto, un bloque
+// de varias sentencias se evaluaría como una sola expresión y un `$foo -or` de una línea se
+// juntaría con un `$true` de otra: eso sería un rojo sobre código sano.
+func sentenciasDeRegion(mascara string, ini, fin int) []tramoPS {
+	var out []tramoPS
+	prof := 0
+	arranque := ini
+	for i := ini; i < fin; i++ {
+		switch mascara[i] {
+		case '(', '{', '[':
+			prof++
+		case ')', '}', ']':
+			prof--
+		case ';':
+			if prof == 0 {
+				out = append(out, tramoPS{arranque, i})
+				arranque = i + 1
+			}
+		case '\n':
+			if prof == 0 && !sigueLaSentencia(mascara[arranque:i]) {
+				out = append(out, tramoPS{arranque, i})
+				arranque = i + 1
+			}
+		}
+	}
+	return append(out, tramoPS{arranque, fin})
+}
+
+// sigueLaSentencia dice si la línea queda ABIERTA, o sea si el salto de línea NO termina la
+// sentencia. Son las reglas de PowerShell: la línea que termina en un operador, en una coma, en
+// una tubería, en un delimitador que abre o en un backtick continúa en la siguiente.
+func sigueLaSentencia(linea string) bool {
+	l := strings.TrimRight(linea, " \t\r")
+	if l == "" {
+		return true
+	}
+	switch l[len(l)-1] {
+	case '|', ',', '(', '{', '[', '=', '`', '+', '*', '/', '%', '&', '!', ':':
+		return true
+	}
+	campos := strings.Fields(l)
+	return len(campos) > 0 && esOperadorBooleanoPS(campos[len(campos)-1])
+}
+
+// operadoresBooleanosPS es el juego de operadores de PowerShell que hacen que una expresión LEA
+// como una decisión. Es la lista de operadores DEL LENGUAJE, no una lista de formas del bug.
+var operadoresBooleanosPS = map[string]bool{
+	"-or": true, "-and": true, "-xor": true, "-not": true,
+	"-eq": true, "-ne": true, "-lt": true, "-le": true, "-gt": true, "-ge": true,
+	"-ieq": true, "-ine": true, "-ilt": true, "-ile": true, "-igt": true, "-ige": true,
+	"-ceq": true, "-cne": true, "-clt": true, "-cle": true, "-cgt": true, "-cge": true,
+	"-is": true, "-isnot": true, "-like": true, "-notlike": true, "-match": true, "-notmatch": true,
+	"-contains": true, "-notcontains": true, "-in": true, "-notin": true,
+}
+
+func esOperadorBooleanoPS(tok string) bool { return operadoresBooleanosPS[strings.ToLower(tok)] }
+
+// hayOperadorBooleanoEnNivelCero dice si la expresión combina operandos AFUERA de todo paréntesis
+// y de toda llave. Es lo que separa `while ($true)` —un bucle, que no promete filtrar nada— de
+// `while ($x -or $true)`, que promete y no cumple.
+func hayOperadorBooleanoEnNivelCero(s string) bool {
+	prof := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '{', '[':
+			prof++
+			continue
+		case ')', '}', ']':
+			prof--
+			continue
+		}
+		if prof != 0 || s[i] != '-' {
+			continue
+		}
+		if i > 0 && !strings.ContainsRune(" \t\r\n)]", rune(s[i-1])) {
+			continue
+		}
+		fin := i + 1
+		for fin < len(s) && esLetraOGuionBajo(s[fin]) {
+			fin++
+		}
+		if esOperadorBooleanoPS(s[i:fin]) {
+			return true
+		}
+	}
+	return false
 }
 
 // veredictoDeCondicion aplica la precedencia REAL de PowerShell: `-and` liga más fuerte que
@@ -670,7 +889,79 @@ func valorConstante(s string) (bool, bool) {
 	case "$false", "0":
 		return false, true
 	}
+	return comparacionEntreLiterales(s)
+}
+
+// comparacionesPS son los operadores de comparación de PowerShell y su versión canónica: `-ieq`
+// (el default) y `-ceq` (sensible a mayúsculas) comparan igual cuando los dos lados son números
+// o booleanos, que es el único caso que acá se pliega.
+var comparacionesPS = map[string]string{
+	"-eq": "eq", "-ieq": "eq", "-ceq": "eq",
+	"-ne": "ne", "-ine": "ne", "-cne": "ne",
+	"-lt": "lt", "-ilt": "lt", "-clt": "lt",
+	"-le": "le", "-ile": "le", "-cle": "le",
+	"-gt": "gt", "-igt": "gt", "-cgt": "gt",
+	"-ge": "ge", "-ige": "ge", "-cge": "ge",
+}
+
+// comparacionEntreLiterales cierra `-or $true -eq $true` y `-or 1 -eq 1`, que hasta la ronda 3
+// quedaban verdes porque el plegado se plantaba antes del `-eq`. NO ES UNA CARRERA ARMAMENTISTA:
+// se pliega SÓLO la comparación entre DOS LITERALES —dos números o dos booleanos—, que es la
+// única que se puede calcular sin saber nada del entorno. En cuanto un lado es una variable, una
+// llamada o una cadena (que en la máscara ya no está), la respuesta es «no sé» y no se reporta.
+func comparacionEntreLiterales(s string) (bool, bool) {
+	for op, canonico := range comparacionesPS {
+		partes := partirEnNivelCero(s, op)
+		if len(partes) != 2 {
+			continue
+		}
+		izq, okI := literalDePowerShell(partes[0])
+		der, okD := literalDePowerShell(partes[1])
+		if !okI || !okD || izq.booleano != der.booleano {
+			return false, false
+		}
+		switch canonico {
+		case "eq":
+			return izq.numero == der.numero, true
+		case "ne":
+			return izq.numero != der.numero, true
+		case "lt":
+			return izq.numero < der.numero, true
+		case "le":
+			return izq.numero <= der.numero, true
+		case "gt":
+			return izq.numero > der.numero, true
+		case "ge":
+			return izq.numero >= der.numero, true
+		}
+	}
 	return false, false
+}
+
+type literalPS struct {
+	numero   float64
+	booleano bool
+}
+
+// literalDePowerShell reconoce un operando que no depende de NADA: un número escrito o `$true` /
+// `$false`. Cualquier otra cosa —una variable, una propiedad, una llamada, o el hueco que dejó
+// una cadena al enmascararse— es «no sé».
+func literalDePowerShell(s string) (literalPS, bool) {
+	s = strings.TrimSpace(s)
+	for strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") && parentesisBalanceados(s[1:len(s)-1]) {
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	switch strings.ToLower(s) {
+	case "$true":
+		return literalPS{numero: 1, booleano: true}, true
+	case "$false":
+		return literalPS{numero: 0, booleano: true}, true
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return literalPS{}, false
+	}
+	return literalPS{numero: n}, true
 }
 
 func cortarPrefijoDePalabra(s, pref string) (string, bool) {
@@ -700,22 +991,24 @@ func parentesisBalanceados(s string) bool {
 	return prof == 0
 }
 
-// partirEnNivelCero parte por un operador de PowerShell (`-or`, `-and`) sólo fuera de paréntesis.
+// partirEnNivelCero parte por un operador de PowerShell (`-or`, `-and`, `-eq`, …) sólo afuera de
+// los paréntesis, las llaves y los corchetes: adentro de un `{ }` hay otra región, que se mira
+// por su cuenta, y contarla también acá duplicaría el hallazgo o juntaría dos sentencias.
 func partirEnNivelCero(s, op string) []string {
 	var out []string
 	prof, ini := 0, 0
 	bajo := strings.ToLower(s)
 	for i := 0; i < len(s); {
 		switch s[i] {
-		case '(':
+		case '(', '{', '[':
 			prof++
-		case ')':
+		case ')', '}', ']':
 			prof--
 		}
 		if prof == 0 && strings.HasPrefix(bajo[i:], op) &&
-			(i == 0 || strings.ContainsRune(" \t\r\n)", rune(s[i-1]))) {
+			(i == 0 || strings.ContainsRune(" \t\r\n)]", rune(s[i-1]))) {
 			fin := i + len(op)
-			if fin >= len(s) || strings.ContainsRune(" \t\r\n(", rune(s[fin])) {
+			if fin >= len(s) || strings.ContainsRune(" \t\r\n([", rune(s[fin])) {
 				out = append(out, s[ini:i])
 				i = fin
 				ini = fin
@@ -898,8 +1191,22 @@ func palabraAnterior(src string, hasta int) string {
 	if fin <= k+1 {
 		return ""
 	}
-	// `llamar "$(ps1 '...'` — la palabra anterior viene con todo lo que bash le pega adelante.
-	return strings.TrimLeft(src[k+1:fin], "$(`|;&{\"'")
+	// EL NOMBRE DEL COMANDO ES LA COLA DE LA PALABRA, no lo que quede después de sacarle una
+	// lista de prefijos. `TrimLeft("$(`|;&{\"'")` servía para `"$(ps1 '…'` y no para
+	// `VEREDICTO=$(ps1 '…'`, que llegaba entero y no coincidía con ningún helper: otra vez el
+	// prefijo decidiendo algo que no decide. Ahora se toma la última corrida de caracteres de
+	// nombre, que es lo que bash va a ejecutar sea cual sea lo que tenga pegado adelante.
+	palabra := src[k+1 : fin]
+	ini := len(palabra)
+	for ini > 0 && esCaracterDeNombreBash(palabra[ini-1]) {
+		ini--
+	}
+	return palabra[ini:]
+}
+
+func esCaracterDeNombreBash(c byte) bool {
+	return c == '_' || c == '-' || c == '.' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // cmdletDePowerShell reconoce un `Verbo-Sustantivo` de PowerShell, que es la marca que ningún
@@ -945,14 +1252,13 @@ var asignacionDeBash = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)=[^= \t]*$`)
 // variablesDeBashQueGuardanPowerShell propaga hasta punto fijo, y ENTRE ARCHIVOS: `RESOLVER` y
 // `CLASIFICAR` se definen en `lib-agente-windows.sh` y se usan en los dos guiones que hacen
 // `source` de él, así que mirar un archivo por vez no alcanza.
-func variablesDeBashQueGuardanPowerShell(shs []string, fuentes map[string]string) map[string]bool {
+func variablesDeBashQueGuardanPowerShell(shs []string, fuentes map[string]string, helpers map[string]bool) map[string]bool {
 	vars := map[string]bool{}
-	sinHelpers := map[string]bool{}
 	for vuelta := 0; vuelta < 8; vuelta++ {
 		antes := len(vars)
 		for _, ruta := range shs {
 			for _, lit := range literalesDeBash(fuentes[ruta]) {
-				if !literalEsPowerShell(lit, vars, sinHelpers) {
+				if !literalEsPowerShell(lit, vars, helpers) {
 					continue
 				}
 				if m := asignacionDeBash.FindStringSubmatch(lit.prefijo); m != nil {
@@ -972,17 +1278,56 @@ var mencionaPowerShell = regexp.MustCompile(`(?i)\bpowershell(\.exe)?\b`)
 
 var argumentoPosicionalDeBash = regexp.MustCompile(`\$\{?1\}?|\$@|argv\[1\]`)
 
-// funcionesDeBashQueInvocanPowerShell descubre, LEYENDO EL ARCHIVO, qué funciones terminan
+// helpersDeBashQueTerminanEnPowerShell descubre, LEYENDO LOS ARCHIVOS, qué funciones terminan
 // pasándole su argumento a `powershell`. En este repo es `ps1(){ python3 -c '... json.dumps(
 // ["powershell","-NoProfile","-Command",sys.argv[1]]) ...' "$1"; }`, definida por separado en dos
 // guiones. Nadie la nombra en esta guarda: si mañana se llama distinto, o aparece otra, se
 // descubre igual. Una lista de nombres siempre le falta el próximo.
 //
-// HACEN FALTA LAS DOS COSAS —nombrar a `powershell` Y usar el argumento— y el nombre tiene que
+// HACEN FALTA LAS DOS COSAS —llegar a `powershell` Y usar el argumento— y el nombre tiene que
 // estar en CÓDIGO, no en un comentario. Con la sola mención alcanzaba para que `esperar_comando`
 // pasara por helper: adentro tiene un comentario que dice «un PowerShell que rompe por sintaxis».
-func funcionesDeBashQueInvocanPowerShell(src string) map[string]bool {
+//
+// RONDA 3: EL PUNTO FIJO. La versión anterior sólo veía el PRIMER eslabón —la función que nombra
+// a `powershell` en su cuerpo—, así que `ps2(){ ps1 "$1"; }` y después `llamar "$(ps2 'BLOQUE')"`
+// quedaba en VERDE con el defecto puesto, mientras que llamar a `ps1` directo daba ROJO. Una
+// cadena de helpers es una relación TRANSITIVA y hay que cerrarla: una función que le pasa su
+// argumento a un helper YA CONOCIDO es un helper. Se itera hasta que no aparece ninguno nuevo,
+// exactamente como el extractor de Go ya hacía con sus `envoltorios`. Era la misma idea aplicada
+// de un lado y no del hermano.
+//
+// Y SE MIRAN TODOS LOS ARCHIVOS JUNTOS, porque `ps1` se define en un guion y se usa en otro.
+func helpersDeBashQueTerminanEnPowerShell(shs []string, fuentes map[string]string) map[string]bool {
+	type definicion struct{ nombre, cuerpo string }
+	var defs []definicion
+	for _, ruta := range shs {
+		for _, d := range definicionesDeBash(fuentes[ruta]) {
+			defs = append(defs, definicion{d.nombre, d.cuerpo})
+		}
+	}
 	out := map[string]bool{}
+	for vuelta := 0; vuelta < 8; vuelta++ {
+		antes := len(out)
+		for _, d := range defs {
+			if out[d.nombre] || !argumentoPosicionalDeBash.MatchString(d.cuerpo) {
+				continue
+			}
+			codigo := sinComentarios(d.cuerpo)
+			if mencionaPowerShell.MatchString(codigo) || invocaAUnHelper(codigo, out, d.nombre) {
+				out[d.nombre] = true
+			}
+		}
+		if len(out) == antes {
+			break
+		}
+	}
+	return out
+}
+
+type definicionBash struct{ nombre, cuerpo string }
+
+func definicionesDeBash(src string) []definicionBash {
+	var out []definicionBash
 	lineas := strings.Split(src, "\n")
 	for i, l := range lineas {
 		m := definicionDeFuncionBash.FindStringSubmatch(l)
@@ -995,12 +1340,56 @@ func funcionesDeBashQueInvocanPowerShell(src string) map[string]bool {
 			cuerpo += "\n" + lineas[j]
 			prof += strings.Count(lineas[j], "{") - strings.Count(lineas[j], "}")
 		}
-		if mencionaPowerShell.MatchString(sinComentarios(cuerpo)) &&
-			argumentoPosicionalDeBash.MatchString(cuerpo) {
-			out[m[1]] = true
-		}
+		out = append(out, definicionBash{nombre: m[1], cuerpo: cuerpo})
 	}
 	return out
+}
+
+// invocaAUnHelper dice si el cuerpo LLAMA a un helper conocido. Tiene que estar en POSICIÓN DE
+// COMANDO: nombrarlo adentro de un mensaje (`die "no encontre ps1"`) no ejecuta nada, y contarlo
+// convertiría en helper a cualquier función que hable de otra. Es la misma regla que ya cierra el
+// `REM ... PowerShell ...` de los `.cmd` y el comentario de `esperar_comando`.
+func invocaAUnHelper(codigo string, helpers map[string]bool, propio string) bool {
+	for h := range helpers {
+		if h == propio {
+			continue // la recursión no agrega un eslabón
+		}
+		if seLlamaComoComando(codigo, h) {
+			return true
+		}
+	}
+	return false
+}
+
+func seLlamaComoComando(codigo, nombre string) bool {
+	for i := 0; i+len(nombre) <= len(codigo); {
+		j := strings.Index(codigo[i:], nombre)
+		if j < 0 {
+			return false
+		}
+		p := i + j
+		fin := p + len(nombre)
+		cierra := fin >= len(codigo) || !esCaracterDeNombreBash(codigo[fin])
+		if cierra && arrancaUnComando(codigo, p) {
+			return true
+		}
+		i = p + 1
+	}
+	return false
+}
+
+// arrancaUnComando mira lo que hay antes: bash empieza un comando al principio de una línea o
+// después de `;`, `|`, `&`, `(`, `$(`, `{` o un backtick. Cualquier otra cosa —una letra, una
+// comilla, un `=`— quiere decir que el nombre está adentro de otro token.
+func arrancaUnComando(codigo string, p int) bool {
+	k := p - 1
+	for k >= 0 && strings.ContainsRune(" \t", rune(codigo[k])) {
+		k--
+	}
+	if k < 0 {
+		return true
+	}
+	return strings.ContainsRune("\n;|&({`", rune(codigo[k]))
 }
 
 // sinComentarios saca lo que va de un `#` al final de la línea. Es la misma marca de comentario
@@ -1053,38 +1442,127 @@ type invocacionCmd struct {
 // Y LA PALABRA `powershell` TIENE QUE ESTAR EN POSICIÓN DE COMANDO. Buscarla en cualquier lado
 // hacía que `REM ... PowerShell 5.1 y cmd.exe ...` —un comentario de `cambiar-agente.cmd:11`—
 // entrara como una pieza de PowerShell de más. Un comentario no ejecuta nada.
-func comandosPowerShellDeCmd(src string) []invocacionCmd {
+// RONDA 3. LA POSICIÓN DE COMANDO NO ES SIEMPRE LA PRIMERA. La versión anterior salteaba un
+// `start`/`call`/`@call` PELADO y después exigía que el token siguiente fuera `powershell`. Tres
+// formas quedaron verdes con el defecto puesto: `start "" powershell …`, `start "" /wait
+// powershell …` y `cmd /c powershell …` — el título de `start` y los switches del lanzador
+// corren el programa uno o dos lugares.
+//
+// Y ACÁ NO SE PUEDE SABER CUÁL ES EL TÍTULO: `CommandLineToArgvW` ya sacó las comillas, y
+// `start "titulo" prog` y `start prog arg` llegan como la misma lista de tokens. Así que no se
+// adivina UNA lectura: se prueban TODAS las posiciones en las que el programa puede empezar
+// después de un lanzador (sus switches gratis, y hasta dos tokens más: el título y el valor de
+// un switch). Sobra-medir es barato —el texto se escanea y no pasa nada—; no medir es el defecto.
+//
+// Y SI DESPUÉS DE TODO ESO SE INVOCA A POWERSHELL Y NO SE PUDO SACAR EL GUION, ESO ES ROJO, no
+// verde: un cero que significa «no pude medir» leído como «medí y está bien» es exactamente lo
+// que dejó a `musubi-setup.bat` sin aparecer siquiera en la línea de cobertura.
+func comandosPowerShellDeCmd(src string) ([]invocacionCmd, []opacoCmd) {
 	var out []invocacionCmd
+	var opacos []opacoCmd
 	for _, lg := range lineasLogicasDeCmd(src) {
 		for _, seg := range segmentosDeCmd(lg.texto) {
 			args := argvDeWindows(seg)
-			for len(args) > 0 && esArranqueDeCmd(args[0]) {
-				args = args[1:]
-			}
-			if len(args) == 0 || !esPowerShellElPrograma(args[0]) {
-				continue
-			}
-			if ps, ok := guionDeArgv(args[1:]); ok {
-				out = append(out, invocacionCmd{linea: lg.linea, texto: ps})
+			for _, i := range arranquesDeComando(args) {
+				if !esPowerShellElPrograma(args[i]) {
+					continue
+				}
+				if ps, ok := guionDeArgv(args[i+1:]); ok {
+					out = append(out, invocacionCmd{linea: lg.linea, texto: ps})
+				} else if !hayBanderaDeArchivo(args[i+1:]) {
+					// `-File guion.ps1` no entra acá: ese guion es un `.ps1` y se mira ENTERO
+					// por su cuenta. Lo que entra es un `powershell` cuyo guion no se pudo ver.
+					opacos = append(opacos, opacoCmd{linea: lg.linea, argv: strings.Join(args[i:], " ")})
+				}
+				break
 			}
 		}
 	}
+	return out, opacos
+}
+
+// opacoCmd es una invocación de PowerShell que se reconoció y NO se pudo leer. Se reporta en
+// rojo: es la diferencia entre «medí y está limpio» y «no pude medir».
+type opacoCmd struct {
+	linea int
+	argv  string
+}
+
+// arranquesDeComando devuelve los índices donde puede empezar el PROGRAMA de un segmento de cmd.
+// El 0 siempre; y detrás de cada lanzador (`start`, `call`, `cmd`) los lugares a los que puede
+// haber corrido el programa: sus switches no cuentan, y se permiten hasta dos tokens más (el
+// título de `start` y el valor de un switch como `/d ruta`). Los lanzadores anidan
+// (`start "" cmd /c powershell …`), así que se sigue en profundidad.
+func arranquesDeComando(args []string) []int {
+	vistos := map[int]bool{}
+	var out []int
+	var caminar func(i, prof int)
+	caminar = func(i, prof int) {
+		if i >= len(args) || vistos[i] {
+			return
+		}
+		vistos[i] = true
+		out = append(out, i)
+		if prof >= 3 || !esLanzadorDeCmd(args[i]) {
+			return
+		}
+		saltados := 0
+		for j := i + 1; j < len(args) && saltados <= 2; j++ {
+			caminar(j, prof+1)
+			if !esInterruptorDeCmd(args[j]) {
+				saltados++
+			}
+		}
+	}
+	caminar(0, 0)
+	sort.Ints(out)
 	return out
+}
+
+// esLanzadorDeCmd son los programas de cmd que corren OTRO programa. Es la gramática de cmd.exe,
+// que es cerrada y está documentada — no una lista de formas del bug.
+func esLanzadorDeCmd(arg string) bool {
+	switch nombreDelPrograma(strings.TrimPrefix(arg, "@")) {
+	case "start", "call", "cmd", "cmd.exe":
+		return true
+	}
+	return false
+}
+
+func esInterruptorDeCmd(arg string) bool { return arg != "" && arg[0] == '/' }
+
+// hayBanderaDeArchivo dice si la invocación usa `-File`, o sea si el guion es un `.ps1` — que se
+// mira entero por su cuenta y por eso no sacar texto de acá está MEDIDO y no es un hueco.
+func hayBanderaDeArchivo(args []string) bool {
+	for _, a := range args {
+		if len(a) < 2 || (a[0] != '-' && a[0] != '/') {
+			continue
+		}
+		if n := strings.ToLower(a[1:]); n != "" && strings.HasPrefix("file", n) {
+			return true
+		}
+	}
+	return false
 }
 
 // esPowerShellElPrograma mira el PROGRAMA que se ejecuta, con ruta y extensión: en cmd tanto
 // `powershell` como `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` son lo mismo.
 func esPowerShellElPrograma(arg string) bool {
-	arg = strings.ToLower(arg)
+	switch nombreDelPrograma(arg) {
+	case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+		return true
+	}
+	return false
+}
+
+// nombreDelPrograma se queda con el último tramo de la ruta, en minúscula: en cmd tanto
+// `powershell` como `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` son lo mismo.
+func nombreDelPrograma(arg string) string {
+	arg = strings.ToLower(strings.Trim(arg, `"`))
 	if i := strings.LastIndexAny(arg, `\/`); i >= 0 {
 		arg = arg[i+1:]
 	}
-	return arg == "powershell" || arg == "powershell.exe" || arg == "pwsh" || arg == "pwsh.exe"
-}
-
-func esArranqueDeCmd(arg string) bool {
-	a := strings.ToLower(arg)
-	return a == "start" || a == "call" || a == "@call"
+	return arg
 }
 
 // segmentosDeCmd parte una línea lógica en los comandos que cmd va a correr: `&`, `&&`, `|` y
@@ -1378,7 +1856,79 @@ func piezasDePowerShellEnGo(t *testing.T, raiz string, gos []string) []piezaGo {
 		}
 		return out[i].linea < out[j].linea
 	})
+
+	// EL CONTROL DE «NO PUDE MEDIR». Una llamada que le pasa `powershell` a otra función y de la
+	// que no salió ni una pieza ni un envoltorio es un CERO QUE NO ES UN CERO: no quiere decir
+	// «acá no hay defecto», quiere decir «no sé qué guion corre». Con el argv adentro de un slice
+	// que no se puede resolver, eso pasaba en silencio y encima el archivo quedaba fuera del
+	// control al revés del inventario, que sólo mira los que rindieron N>=1.
+	for _, rel := range gos {
+		ast.Inspect(archivos[rel], func(nodo ast.Node) bool {
+			fd, ok := nodo.(*ast.FuncDecl)
+			if !ok {
+				return true
+			}
+			ast.Inspect(fd, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				motivo, opaca := llamadaOpacaAPowerShell(c, fd, envoltorios, vistas)
+				if !opaca {
+					return true
+				}
+				p := fset.Position(c.Pos())
+				t.Errorf("%s:%d — acá se le pasa `powershell` a %s y NO PUDE LEER EL GUION (%s).\n\n"+
+					"Eso no es «está limpio», es «no pude medir», y son cosas opuestas: si el "+
+					"guion trae un `\\\"` adentro de un raw string, esta guarda no lo va a ver, y "+
+					"el archivo tampoco entra por el control al revés del inventario, que sólo "+
+					"mira los que rindieron al menos una pieza.\n"+
+					"Escribí el argv en la llamada (`exec.Command(\"powershell\", \"-NoProfile\", "+
+					"\"-Command\", guion)`), o armá el guion en una cadena que se pueda seguir "+
+					"desde acá, o pasalo con `-File guion.ps1` — un `.ps1` se mira entero.",
+					rel, p.Line, nombreDeLaFuncion(c.Fun), motivo)
+				return true
+			})
+			return false
+		})
+	}
 	return out
+}
+
+// llamadaOpacaAPowerShell dice si esta llamada invoca a PowerShell y su guion NO se pudo leer.
+// Es deliberadamente corta para no gritar en falso:
+//   - `exec.LookPath("powershell.exe")` no lleva argv y no entra;
+//   - `-File guion.ps1` no entra: ese guion es un `.ps1` y se mira entero por su cuenta;
+//   - un envoltorio (`runPowerShell(script string)`) no entra: su guion se mira en el llamador.
+func llamadaOpacaAPowerShell(c *ast.CallExpr, fd *ast.FuncDecl, envoltorios map[string]map[int]bool, vistas map[token.Pos]piezaGo) (string, bool) {
+	args := argumentosEfectivos(c)
+	idx := -1
+	for i, a := range args {
+		if s, ok := literalDeCadena(a); ok && nombreDePowerShell.MatchString(s) {
+			idx = i
+		}
+	}
+	if idx < 0 || idx == len(args)-1 {
+		return "", false // no se invoca, o se invoca sin argv (`LookPath`)
+	}
+	for _, a := range args[idx+1:] {
+		if s, ok := literalDeCadena(a); ok && hayBanderaDeArchivo([]string{s}) {
+			return "", false
+		}
+	}
+	guiones := guionesDeLaLlamada(c, envoltorios)
+	if len(guiones) == 0 {
+		return "el argv no se pudo desarmar: no aparece ningún `-Command`", true
+	}
+	for _, g := range guiones {
+		if _, ok := indiceDeParametro(fd, g); ok {
+			return "", false // es un envoltorio: el guion se mira en quien lo llama
+		}
+		if _, hay := vistas[g.Pos()]; hay {
+			return "", false
+		}
+	}
+	return "el argumento del `-Command` no se pudo resolver a un texto", true
 }
 
 func largoEnvoltorios(e map[string]map[int]bool) int {
@@ -1394,20 +1944,21 @@ func largoEnvoltorios(e map[string]map[int]bool) int {
 // ocupa el lugar del parámetro de un envoltorio ya conocido.
 func guionesDeLaLlamada(c *ast.CallExpr, envoltorios map[string]map[int]bool) []ast.Expr {
 	var out []ast.Expr
+	args := argumentosEfectivos(c)
 	esPS := false
-	for _, a := range c.Args {
+	for _, a := range args {
 		if s, ok := literalDeCadena(a); ok && nombreDePowerShell.MatchString(s) {
 			esPS = true
 		}
 	}
 	if esPS {
-		for i, a := range c.Args {
+		for i, a := range args {
 			s, ok := literalDeCadena(a)
 			if !ok || !banderaDeComando(s) {
 				continue
 			}
-			if i+1 < len(c.Args) {
-				out = append(out, c.Args[i+1])
+			if i+1 < len(args) {
+				out = append(out, args[i+1])
 			}
 		}
 	}
@@ -1419,6 +1970,75 @@ func guionesDeLaLlamada(c *ast.CallExpr, envoltorios map[string]map[int]bool) []
 		}
 	}
 	return out
+}
+
+// argumentosEfectivos devuelve EL ARGV QUE RECIBE EL PROGRAMA, no la lista de expresiones que
+// alguien escribió en la llamada.
+//
+// RONDA 3. Antes se miraban los `c.Args` tal cual, así que buscar los literales `powershell` y
+// `-Command` entre ellos dejaba en VERDE la forma más natural de escribir lo mismo:
+//
+//	args := []string{"-NoProfile", "-Command", guion}
+//	exec.Command("powershell", args...)
+//
+// De ahí salían CERO piezas, y el control al revés —«se extrajeron N y el archivo no está en el
+// inventario»— sólo dispara con N>=1: un archivo nuevo con el argv en un slice era invisible por
+// partida doble. Acá se desarma el slice: el `xs...` de una llamada, y también un `[]string{…}`
+// pasado como un argumento más. Lo que NO se pueda desarmar queda opaco y lo agarra el control
+// de «no pude medir» de más abajo, que es rojo y no verde.
+func argumentosEfectivos(c *ast.CallExpr) []ast.Expr {
+	var out []ast.Expr
+	for _, a := range c.Args {
+		if elems, ok := elementosDeSliceDeCadenas(a); ok {
+			out = append(out, elems...)
+			continue
+		}
+		// Lo que no se pudo desarmar viaja tal cual: opaco, y el control de «no pude medir»
+		// se encarga de que eso sea ROJO y no un cero silencioso.
+		out = append(out, a)
+	}
+	return out
+}
+
+// elementosDeSliceDeCadenas devuelve los elementos de un `[]string{…}`, siguiendo la variable
+// hasta su declaración cuando hace falta.
+func elementosDeSliceDeCadenas(e ast.Expr) ([]ast.Expr, bool) {
+	switch v := e.(type) {
+	case *ast.CompositeLit:
+		if !esArregloDeCadenas(v.Type) {
+			return nil, false
+		}
+		return v.Elts, true
+	case *ast.Ident:
+		if v.Obj == nil {
+			return nil, false
+		}
+		switch d := v.Obj.Decl.(type) {
+		case *ast.ValueSpec:
+			for i, n := range d.Names {
+				if n.Name == v.Name && i < len(d.Values) {
+					return elementosDeSliceDeCadenas(d.Values[i])
+				}
+			}
+		case *ast.AssignStmt:
+			for i, l := range d.Lhs {
+				id, ok := l.(*ast.Ident)
+				if ok && id.Name == v.Name && i < len(d.Rhs) {
+					return elementosDeSliceDeCadenas(d.Rhs[i])
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+func esArregloDeCadenas(t ast.Expr) bool {
+	arr, ok := t.(*ast.ArrayType)
+	if !ok || arr.Len != nil {
+		return false
+	}
+	id, ok := arr.Elt.(*ast.Ident)
+	return ok && id.Name == "string"
 }
 
 func nombreDeLaFuncion(f ast.Expr) string {
